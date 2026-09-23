@@ -17,6 +17,9 @@ gradient_enabled = true
 [bar_overrides]
 text_shadow = true
 text_shadow_color = "#00000080"
+# dim_text (#707090) sits at 2.99:1 on the gradient bar midpoint; nudge
+# the bottom-bar label color just past the 3:1 large-text minimum.
+url_color = "#7C7C9E"
 
 [geometry]
 tab_row_height = 0

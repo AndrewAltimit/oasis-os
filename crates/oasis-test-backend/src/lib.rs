@@ -8,10 +8,19 @@
 //! [`DrawCommand`] history recording and clip/translate stack support, useful
 //! for verifying that `SdiBackend` default method implementations produce the
 //! expected sequence of primitive draw calls.
+//!
+//! [`ClipAuditBackend`] checks that code drawing into a host-provided region
+//! (an app inside a window) never puts visible pixels outside it.
+//!
+//! [`conformance`] holds the shared draw scenarios that real pixel backends
+//! (SDL3, the UE5 software framebuffer) run to prove they render alike.
 
+mod audit;
+pub mod conformance;
 mod mock;
 mod recording;
 
+pub use audit::{ClipAuditBackend, ClipViolation, DrawnRect, DrawnText};
 pub use mock::MockSdiCore;
 pub use recording::RecordingBackend;
 

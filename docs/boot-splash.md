@@ -1,7 +1,7 @@
 # Boot Splash
 
 Desktop boot is a **functional** splash: the 6.5-second animation runs
-in the foreground while `main.rs` performs real initialization work
+in the foreground while `Shell::boot` performs real initialization work
 between animation frames. Each BIOS-phase line reports the result of a
 completed probe or registration step, and the splash-phase warms heavy
 subsystems (wallpaper, cursor, shader bridge, SDI layout, audio) so the
@@ -139,8 +139,12 @@ fades directly to black without the 0.3s transition.
 ## Related files
 
 - **Animation:** `crates/oasis-app/src/boot_splash.rs`
-- **Orchestration:** `crates/oasis-app/src/main.rs`
-  (`splash_wait!`, `splash_set_line!`, `splash_status!` macros)
+- **Orchestration:** `Shell::boot` in `crates/oasis-app/src/shell.rs`
+  reports progress through the `BootObserver` trait (`status`,
+  `bios_line`, `wait_until`); `main.rs`'s `SplashObserver` forwards it
+  to the animation. `BootSplash::render_at` renders any point of the
+  animation deterministically (used by the e2e tests, see
+  [testing.md](testing.md)).
 - **System probes:** `crates/oasis-app/src/sysinfo.rs`
-- **Warm-up helpers:** `main::prewarm_glyph_cache`,
-  `main::format_thousands`
+- **Warm-up helpers:** `shell::prewarm_glyph_cache`,
+  `shell::format_thousands`

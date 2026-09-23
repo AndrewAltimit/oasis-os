@@ -597,15 +597,62 @@ impl SkinTheme {
     ///
     /// These are advisory: stylized skins may fail intentionally, so
     /// callers surface them as warnings, never errors.
+    ///
+    /// Assumes the clock sits in the top status bar; use
+    /// [`validate_contrast_placed`](Self::validate_contrast_placed) when
+    /// the skin's `clock_in_bottombar` feature is known.
     pub fn validate_contrast(&self) -> Vec<ContrastWarning> {
+        self.validate_contrast_placed(false)
+    }
+
+    /// [`validate_contrast`](Self::validate_contrast), checking the clock
+    /// against the bar it is actually drawn on (`clock_in_bottombar`).
+    pub fn validate_contrast_placed(&self, clock_in_bottombar: bool) -> Vec<ContrastWarning> {
+        self.contrast_report(clock_in_bottombar)
+            .into_iter()
+            .filter(|c| c.ratio < c.required)
+            .collect()
+    }
+
+    /// Contrast ratio of every checked text/background pair, whether or
+    /// not it meets its WCAG minimum (`required`).
+    ///
+    /// `clock_in_bottombar` selects which bar backdrop the clock is
+    /// measured against; the other bar is then checked with its remaining
+    /// text (battery label for the status bar).
+    pub fn contrast_report(&self, clock_in_bottombar: bool) -> Vec<ContrastWarning> {
         let bg = self.background_color();
         let ui = self.to_ui_theme();
         let at = crate::active_theme::ActiveTheme::from_skin(self);
 
-        // Effective (opaque) backdrops for surfaces with alpha.
-        let statusbar_bg = composite_over(at.bar.statusbar_bg, bg);
-        let bottombar_bg = composite_over(at.bar.bg, bg);
+        // Effective (opaque) backdrops for surfaces with alpha. Bars with
+        // a vertical gradient are measured at its midpoint, where the
+        // text baseline sits.
+        let bar_backdrop = |flat: Color, top: Option<Color>, bottom: Option<Color>| {
+            let flat = composite_over(flat, bg);
+            match (top, bottom) {
+                (Some(t), Some(b)) => composite_over(t, flat).lerp(composite_over(b, flat), 0.5),
+                _ => flat,
+            }
+        };
+        let statusbar_bg = bar_backdrop(
+            at.bar.statusbar_bg,
+            at.bar.statusbar_gradient_top,
+            at.bar.statusbar_gradient_bottom,
+        );
+        let bottombar_bg = bar_backdrop(at.bar.bg, at.bar.gradient_top, at.bar.gradient_bottom);
         let selection_bg = composite_over(at.app.selected_bg, composite_over(at.app.bg, bg));
+
+        let (clock_label, clock_bg) = if clock_in_bottombar {
+            ("clock on bottom bar", bottombar_bg)
+        } else {
+            ("status bar text on status bar", statusbar_bg)
+        };
+        let (status_label, status_fg) = if clock_in_bottombar {
+            ("status bar text on status bar", at.bar.battery_color)
+        } else {
+            ("battery text on status bar", at.bar.battery_color)
+        };
 
         let pairs: &[(&str, Color, Color, f64)] = &[
             // Base palette on the shell background.
@@ -629,12 +676,8 @@ impl SkinTheme {
                 selection_bg,
                 3.0,
             ),
-            (
-                "status bar text on status bar",
-                at.bar.clock_color,
-                statusbar_bg,
-                3.0,
-            ),
+            (clock_label, at.bar.clock_color, clock_bg, 3.0),
+            (status_label, status_fg, statusbar_bg, 3.0),
             (
                 "bottom bar text on bottom bar",
                 at.bar.url_color,
@@ -643,17 +686,13 @@ impl SkinTheme {
             ),
         ];
 
-        let mut warnings = Vec::new();
-        for &(label, fg, backdrop, required) in pairs {
-            let ratio = contrast_ratio(composite_over(fg, backdrop), backdrop);
-            if ratio < required {
-                warnings.push(ContrastWarning {
-                    pair: label.to_string(),
-                    ratio,
-                    required,
-                });
-            }
-        }
-        warnings
+        pairs
+            .iter()
+            .map(|&(label, fg, backdrop, required)| ContrastWarning {
+                pair: label.to_string(),
+                ratio: contrast_ratio(composite_over(fg, backdrop), backdrop),
+                required,
+            })
+            .collect()
     }
 }

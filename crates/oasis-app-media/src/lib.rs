@@ -10,15 +10,18 @@ use oasis_app_core::file_viewer::{
     join_path, list_directory, parent_dir, view_audio_file, view_generic_file, view_image_file,
 };
 use oasis_app_core::render::{
-    draw_content_windowed, hide_app_sdi, render_app_chrome, render_content_sdi,
+    WindowedMetrics, draw_content_windowed, hide_app_sdi, render_app_chrome, render_content_sdi,
+    windowed_line_at,
 };
 use oasis_app_core::{App, AppAction, ContentState};
+use oasis_skin::SimpleRng;
 use oasis_types::backend::TextureId;
 use oasis_types::input::Button;
 use oasis_vfs::Vfs;
 
 pub mod image;
 mod music_ui;
+pub mod palette;
 mod photo_ui;
 
 /// File-browsing app implementing the `App` trait.
@@ -36,13 +39,19 @@ pub struct BrowsingApp {
     playlist_index: usize,
     /// Whether playlist plays in shuffle order.
     shuffle: bool,
+    /// PRNG picking the next shuffled track. Also stepped once per
+    /// `tick`, so the sequence depends on when the user skips.
+    rng: SimpleRng,
+    /// Playlist indices played before the current one in shuffle mode,
+    /// so "previous" retraces the shuffled order.
+    shuffle_history: Vec<usize>,
     /// Zoom level for photo viewer (1 = fit, 2 = 2x, etc.).
     zoom_level: u32,
     /// Image rotation in degrees (0, 90, 180, 270).
     rotation: u16,
     /// Whether slideshow mode is active.
     slideshow: bool,
-    /// Frame counter for slideshow timing.
+    /// Milliseconds the current slide has been shown (slideshow mode).
     slideshow_timer: u32,
     /// Decoded pixel buffer for the currently viewed image (photo mode).
     /// Populated by `open_file`; the backend owns the GPU texture, keyed
@@ -67,6 +76,21 @@ pub struct BrowsingApp {
     track_title: Option<String>,
     track_duration_str: Option<String>,
     track_size_bytes: Option<usize>,
+    /// Host-reported `(position_ms, duration_ms)` of the current track,
+    /// read from [`MEDIA_POSITION_PATH`] in `tick`. `None` until the
+    /// host reports a position for *this* file (the progress bar is
+    /// hidden meanwhile).
+    playback: Option<(u64, u64)>,
+    /// Layout metrics of the last windowed listing draw (click
+    /// hit-testing has no theme).
+    windowed_metrics: Cell<WindowedMetrics>,
+    /// A click activated the selected listing entry; opened on the next
+    /// `refresh` (the first hook with VFS access).
+    pending_activate: bool,
+    /// Listing line hit by the previous click: clicking the same line
+    /// again opens it (double-click without timing info, as in the File
+    /// Manager).
+    last_click_line: Option<usize>,
 }
 
 /// How files should be viewed when opened.
@@ -105,6 +129,8 @@ impl BrowsingApp {
             playlist: Vec::new(),
             playlist_index: 0,
             shuffle: false,
+            rng: SimpleRng::new(0x05A1_5EED),
+            shuffle_history: Vec::new(),
             zoom_level: 1,
             rotation: 0,
             slideshow: false,
@@ -115,7 +141,48 @@ impl BrowsingApp {
             track_title: None,
             track_duration_str: None,
             track_size_bytes: None,
+            playback: None,
+            windowed_metrics: Cell::new(WindowedMetrics::default()),
+            pending_activate: false,
+            last_click_line: None,
         }
+    }
+
+    /// Host-reported `(position_ms, duration_ms)` for the open track, or
+    /// `None` when no real position is known.
+    pub fn playback(&self) -> Option<(u64, u64)> {
+        self.playback
+    }
+
+    /// Record the host's playback position for the open track.
+    ///
+    /// A zero duration means "unknown" and clears the position. Hosts
+    /// that hold the app directly can call this instead of the
+    /// [`MEDIA_POSITION_PATH`] IPC file.
+    pub fn set_playback(&mut self, position_ms: u64, duration_ms: u64) {
+        self.playback = (duration_ms > 0).then_some((position_ms.min(duration_ms), duration_ms));
+    }
+
+    /// Poll [`MEDIA_POSITION_PATH`] (`<position_ms> <duration_ms> <path>`)
+    /// and adopt it when it refers to the open track. A missing report
+    /// leaves the position untouched (a host may use
+    /// [`set_playback`](Self::set_playback) instead); a report for a
+    /// different file clears it. Returns `true` when the displayed
+    /// position changed.
+    fn poll_playback(&mut self, vfs: &dyn Vfs) -> bool {
+        let before = self.playback;
+        let Some(viewing) = self.content.viewing_file.as_deref() else {
+            self.playback = None;
+            return self.playback != before;
+        };
+        let Ok(data) = vfs.read(MEDIA_POSITION_PATH) else {
+            return false;
+        };
+        match parse_position_report(&String::from_utf8_lossy(&data), viewing) {
+            Some((pos, dur)) => self.set_playback(pos, dur),
+            None => self.playback = None,
+        }
+        self.playback != before
     }
 
     /// Decoded image for the currently viewed photo, if any.
@@ -255,22 +322,43 @@ impl BrowsingApp {
         }
     }
 
-    /// Play the next track in the playlist.
+    /// Play the next track in the playlist (a random other track when
+    /// shuffle is on).
     fn playlist_next(&mut self, vfs: &dyn Vfs) {
-        if self.playlist.is_empty() {
+        let len = self.playlist.len();
+        if len == 0 {
             return;
         }
-        self.playlist_index = (self.playlist_index + 1) % self.playlist.len();
+        self.playlist_index = if self.shuffle && len > 1 {
+            // Uniform over the other len-1 tracks: never repeats the
+            // current one. High LCG bits; the low ones cycle quickly.
+            let pick = (self.rng.next_u32() >> 16) as usize % (len - 1);
+            let next = if pick >= self.playlist_index {
+                pick + 1
+            } else {
+                pick
+            };
+            self.shuffle_history.push(self.playlist_index);
+            next
+        } else {
+            (self.playlist_index + 1) % len
+        };
         let path = self.playlist[self.playlist_index].clone();
         self.open_file(vfs, &path);
     }
 
-    /// Play the previous track in the playlist.
+    /// Play the previous track in the playlist (retracing the shuffled
+    /// order when shuffle is on).
     fn playlist_prev(&mut self, vfs: &dyn Vfs) {
         if self.playlist.is_empty() {
             return;
         }
-        if self.playlist_index == 0 {
+        if self.shuffle
+            && let Some(prev) = self.shuffle_history.pop()
+            && prev < self.playlist.len()
+        {
+            self.playlist_index = prev;
+        } else if self.playlist_index == 0 {
             self.playlist_index = self.playlist.len() - 1;
         } else {
             self.playlist_index -= 1;
@@ -328,11 +416,13 @@ impl BrowsingApp {
         };
         let files = list_directory(vfs, &dir);
         let image_exts = [".png", ".jpg", ".jpeg", ".bmp", ".gif"];
+        // Listing rows are `name  (size)`: match the extension on the name
+        // alone, so `notes.png.txt` or `.jpgs/` are not treated as images.
         let images: Vec<String> = files
             .iter()
             .filter(|f| {
-                let lower = f.to_lowercase();
-                image_exts.iter().any(|ext| lower.contains(ext)) && !f.ends_with('/')
+                let name = f.split("  (").next().unwrap_or(f).to_lowercase();
+                image_exts.iter().any(|ext| name.ends_with(ext))
             })
             .cloned()
             .collect();
@@ -379,6 +469,7 @@ impl BrowsingApp {
         self.track_title = None;
         self.track_duration_str = None;
         self.track_size_bytes = None;
+        self.playback = None;
 
         let data = match vfs.read(path) {
             Ok(d) => d,
@@ -546,6 +637,26 @@ fn format_duration(secs: u32) -> String {
 /// `play_file <path>` / `stop` requests from the same path.
 pub const MEDIA_REQUEST_PATH: &str = "/var/audio/request";
 
+/// VFS path where the audio host reports the Music Player track's real
+/// playback position, as `<position_ms> <duration_ms> <path>` (the
+/// values of `AudioBackend::position_ms` / `duration_ms`). The path
+/// field lets the app ignore a stale report for a previous track.
+pub const MEDIA_POSITION_PATH: &str = "/var/audio/position";
+
+/// Parse a [`MEDIA_POSITION_PATH`] report, returning
+/// `(position_ms, duration_ms)` when it refers to `viewing` and the
+/// duration is known (non-zero).
+fn parse_position_report(report: &str, viewing: &str) -> Option<(u64, u64)> {
+    let mut parts = report.trim().splitn(3, ' ');
+    let pos = parts.next()?.parse::<u64>().ok()?;
+    let dur = parts.next()?.parse::<u64>().ok()?;
+    let path = parts.next()?;
+    (path == viewing && dur > 0).then_some((pos, dur))
+}
+
+/// How long each photo stays on screen in slideshow mode.
+pub const SLIDESHOW_INTERVAL_MS: u32 = 5_000;
+
 impl App for BrowsingApp {
     fn title(&self) -> &str {
         &self.content.title
@@ -570,6 +681,7 @@ impl App for BrowsingApp {
     ) -> oasis_types::error::Result<()> {
         // File listing: default content renderer.
         if self.content.viewing_file.is_none() {
+            self.windowed_metrics.set(WindowedMetrics::from_theme(at));
             return draw_content_windowed(&self.content, cx, cy, cw, ch, backend, at);
         }
         match self.viewer_mode {
@@ -582,6 +694,16 @@ impl App for BrowsingApp {
     }
     fn hide_sdi(&self, sdi: &mut oasis_sdi::SdiRegistry) {
         hide_app_sdi(sdi);
+    }
+    fn release_resources(&mut self, backend: &mut dyn oasis_types::backend::SdiBackend) {
+        // The photo texture (and any parked stale ones) would otherwise
+        // stay in the backend's texture table after the window closes.
+        if let Some(t) = self.cached_photo_texture.take() {
+            let _ = backend.destroy_texture(t);
+        }
+        for t in self.stale_photo_textures.get_mut().drain(..) {
+            let _ = backend.destroy_texture(t);
+        }
     }
     fn take_pending_request(&mut self) -> Option<(String, String)> {
         self.content.pending_vfs_request.take()
@@ -597,6 +719,43 @@ impl App for BrowsingApp {
     }
     fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
         self
+    }
+
+    /// Windowed listing: a click selects an entry, a second click on it
+    /// (a double-click) opens it like Confirm.
+    fn handle_click(
+        &mut self,
+        _lx: i32,
+        ly: i32,
+        _cw: u32,
+        ch: u32,
+        fullscreen: bool,
+    ) -> AppAction {
+        if fullscreen || self.content.viewing_file.is_some() || self.content.browse_dir.is_none() {
+            return AppAction::None;
+        }
+        let Some(idx) = windowed_line_at(&self.content, ch, self.windowed_metrics.get(), ly) else {
+            return AppAction::None;
+        };
+        if self.last_click_line == Some(idx) && idx == self.content.scroll + self.content.cursor {
+            self.last_click_line = None;
+            self.pending_activate = true;
+            return AppAction::None;
+        }
+        self.last_click_line = Some(idx);
+        if idx >= self.content.scroll {
+            self.content.cursor = idx - self.content.scroll;
+        } else {
+            self.content.scroll = idx;
+            self.content.cursor = 0;
+        }
+        AppAction::None
+    }
+
+    fn refresh(&mut self, vfs: &dyn Vfs) {
+        if std::mem::take(&mut self.pending_activate) {
+            self.enter_selected(vfs);
+        }
     }
 
     fn handle_input(&mut self, button: &Button, vfs: &dyn Vfs) -> AppAction {
@@ -661,6 +820,7 @@ impl App for BrowsingApp {
             // Music mode: Select toggles shuffle.
             Button::Select if matches!(self.viewer_mode, ViewerMode::Audio) => {
                 self.shuffle = !self.shuffle;
+                self.shuffle_history.clear();
                 AppAction::None
             },
             // Photo mode: Square rotates, L/R cycle zoom, Start toggles slideshow.
@@ -700,6 +860,31 @@ impl App for BrowsingApp {
             },
             _ => AppAction::None,
         }
+    }
+
+    fn tick(&mut self, dt_ms: u32, vfs: &dyn Vfs) -> bool {
+        // Mix frame timing into the shuffle sequence.
+        self.rng.next_u32();
+
+        if matches!(self.viewer_mode, ViewerMode::Audio) {
+            return self.poll_playback(vfs);
+        }
+
+        if !self.slideshow
+            || !matches!(self.viewer_mode, ViewerMode::Image)
+            || self.content.viewing_file.is_none()
+        {
+            return false;
+        }
+        self.slideshow_timer = self.slideshow_timer.saturating_add(dt_ms);
+        if self.slideshow_timer < SLIDESHOW_INTERVAL_MS {
+            return false;
+        }
+        // Restart the interval rather than carrying the remainder: after
+        // a long stall this advances one slide, not a burst of them.
+        self.slideshow_timer = 0;
+        self.navigate_image(vfs, true);
+        true
     }
 
     fn browse_dir(&self) -> Option<&str> {
@@ -959,6 +1144,48 @@ mod tests {
     }
 
     #[test]
+    fn windowed_click_selects_then_double_click_opens() {
+        let vfs = setup_vfs();
+        let mut app = BrowsingApp::music_player("/apps/music", &vfs);
+        let ch = 220;
+        let idx = app
+            .content
+            .lines
+            .iter()
+            .position(|l| l.starts_with("ambient_dawn.mp3"))
+            .expect("track listed");
+        let (_, y, _) = oasis_app_core::render::windowed_line_origin(
+            &app.content,
+            0,
+            0,
+            ch,
+            &oasis_skin::ActiveTheme::default(),
+            idx,
+        )
+        .expect("visible");
+        // First click only selects.
+        app.handle_click(10, y + 2, 300, ch, false);
+        app.refresh(&vfs);
+        assert_eq!(app.content.scroll + app.content.cursor, idx);
+        assert!(app.content.viewing_file.is_none());
+        // Second click on the same line opens it (and asks to play).
+        app.handle_click(10, y + 2, 300, ch, false);
+        app.refresh(&vfs);
+        assert_eq!(
+            app.content.viewing_file.as_deref(),
+            Some("/home/user/music/ambient_dawn.mp3")
+        );
+        assert!(app.content.pending_vfs_request.is_some());
+        // Clicks are ignored while a track is open, and in fullscreen.
+        app.handle_click(10, y + 2, 300, ch, false);
+        app.refresh(&vfs);
+        assert_eq!(
+            app.content.viewing_file.as_deref(),
+            Some("/home/user/music/ambient_dawn.mp3")
+        );
+    }
+
+    #[test]
     fn music_open_emits_play_ipc() {
         let vfs = setup_vfs();
         let mut app = BrowsingApp::music_player("/apps/music", &vfs);
@@ -1042,6 +1269,89 @@ mod tests {
     }
 
     #[test]
+    fn slideshow_advances_on_wall_time() {
+        let mut vfs = setup_vfs();
+        oasis_vfs::Vfs::write(&mut vfs, "/home/user/photos/beach.png", b"fake png 2").unwrap();
+        let mut app = BrowsingApp::photo_viewer("/apps/photos", &vfs);
+        app.open_file(&vfs, "/home/user/photos/beach.png");
+
+        // Slideshow off: time passes, nothing happens.
+        assert!(!app.tick(SLIDESHOW_INTERVAL_MS * 2, &vfs));
+        assert_eq!(app.viewing_file(), Some("/home/user/photos/beach.png"));
+
+        app.handle_input(&Button::Start, &vfs);
+        // Just under one interval at 60 fps: still on the first slide.
+        let mut t = 0;
+        while t + 16 < SLIDESHOW_INTERVAL_MS {
+            assert!(!app.tick(16, &vfs), "no redraw between slides");
+            t += 16;
+        }
+        assert_eq!(app.viewing_file(), Some("/home/user/photos/beach.png"));
+        assert!(app.tick(16, &vfs), "advancing a slide requests a redraw");
+        assert_eq!(app.viewing_file(), Some("/home/user/photos/sunset.png"));
+        // Same cadence at 10 fps, and it wraps around.
+        for _ in 0..(SLIDESHOW_INTERVAL_MS / 100) {
+            app.tick(100, &vfs);
+        }
+        assert_eq!(app.viewing_file(), Some("/home/user/photos/beach.png"));
+    }
+
+    fn music_with_playlist(n: usize) -> (MemoryVfs, BrowsingApp) {
+        let mut vfs = setup_vfs();
+        let mut app = BrowsingApp::music_player("/apps/music", &vfs);
+        for i in 0..n {
+            let path = format!("/home/user/music/track{i}.mp3");
+            oasis_vfs::Vfs::write(&mut vfs, &path, b"fake mp3").unwrap();
+            app.playlist.push(path);
+        }
+        let first = app.playlist[0].clone();
+        app.open_file(&vfs, &first);
+        (vfs, app)
+    }
+
+    #[test]
+    fn shuffle_picks_random_other_tracks() {
+        let (vfs, mut app) = music_with_playlist(6);
+        app.handle_input(&Button::Select, &vfs); // Shuffle on.
+        let mut order = vec![app.playlist_index];
+        for _ in 0..60 {
+            app.handle_input(&Button::Right, &vfs);
+            assert_ne!(Some(&app.playlist_index), order.last(), "no repeats");
+            assert!(app.playlist_index < 6);
+            order.push(app.playlist_index);
+        }
+        let sequential: Vec<usize> = (0..order.len()).map(|i| i % 6).collect();
+        assert_ne!(order, sequential, "shuffle must not play in order");
+        for track in 0..6 {
+            assert!(order.contains(&track), "track {track} never played");
+        }
+        // Previous retraces the shuffled order.
+        let last = order.len() - 1;
+        app.handle_input(&Button::Left, &vfs);
+        assert_eq!(app.playlist_index, order[last - 1]);
+        app.handle_input(&Button::Left, &vfs);
+        assert_eq!(app.playlist_index, order[last - 2]);
+    }
+
+    #[test]
+    fn shuffle_off_plays_in_order() {
+        let (vfs, mut app) = music_with_playlist(3);
+        app.handle_input(&Button::Right, &vfs);
+        assert_eq!(app.playlist_index, 1);
+        app.handle_input(&Button::Right, &vfs);
+        app.handle_input(&Button::Right, &vfs);
+        assert_eq!(app.playlist_index, 0);
+    }
+
+    #[test]
+    fn shuffle_single_track_stays_put() {
+        let (vfs, mut app) = music_with_playlist(1);
+        app.handle_input(&Button::Select, &vfs);
+        app.handle_input(&Button::Right, &vfs);
+        assert_eq!(app.playlist_index, 0);
+    }
+
+    #[test]
     fn photo_cancel_resets_state() {
         let vfs = setup_vfs();
         let mut app = BrowsingApp::photo_viewer("/apps/photos", &vfs);
@@ -1052,5 +1362,189 @@ mod tests {
         assert_eq!(app.rotation(), 0);
         assert_eq!(app.zoom_level(), 1);
         assert!(!app.slideshow_active());
+    }
+
+    // -- Theming + playback progress --
+
+    use oasis_skin::ActiveTheme;
+    use oasis_test_backend::{DrawCommand, RecordingBackend};
+    use oasis_types::backend::Color;
+
+    const W: u32 = 400;
+    const H: u32 = 240;
+
+    fn skin_theme(name: &str) -> ActiveTheme {
+        let skin = oasis_skin::builtin::load_builtin(name).expect("skin");
+        ActiveTheme::from_skin(&skin.theme)
+    }
+
+    fn draw_cmds(app: &BrowsingApp, at: &ActiveTheme) -> Vec<DrawCommand> {
+        let mut backend = RecordingBackend::new(W, H);
+        app.draw_windowed(0, 0, W, H, &mut backend, at)
+            .expect("draw");
+        backend.commands().to_vec()
+    }
+
+    /// Color of the first full-window fill (the app background).
+    fn background(cmds: &[DrawCommand]) -> Color {
+        cmds.iter()
+            .find_map(|c| match c {
+                DrawCommand::FillRect { w, h, color, .. } if *w == W && *h == H => Some(*color),
+                _ => None,
+            })
+            .expect("background fill")
+    }
+
+    fn open_music() -> (MemoryVfs, BrowsingApp) {
+        let vfs = setup_vfs();
+        let mut app = BrowsingApp::music_player("/apps/music", &vfs);
+        app.open_file(&vfs, "/home/user/music/ambient_dawn.mp3");
+        (vfs, app)
+    }
+
+    #[test]
+    fn music_background_follows_skin() {
+        let (_vfs, app) = open_music();
+        let light = skin_theme("paper");
+        let dark = skin_theme("classic");
+        let (bl, bd) = (
+            background(&draw_cmds(&app, &light)),
+            background(&draw_cmds(&app, &dark)),
+        );
+        assert_ne!(
+            bl, bd,
+            "light and dark skins must paint different backgrounds"
+        );
+        assert_eq!(bl, light.app.bg);
+        assert_eq!(bd, dark.app.bg);
+    }
+
+    #[test]
+    fn photo_background_follows_skin() {
+        let vfs = setup_vfs();
+        let mut app = BrowsingApp::photo_viewer("/apps/photos", &vfs);
+        app.open_file(&vfs, "/home/user/photos/sunset.png");
+        let light = skin_theme("paper");
+        let dark = skin_theme("classic");
+        assert_ne!(
+            background(&draw_cmds(&app, &light)),
+            background(&draw_cmds(&app, &dark))
+        );
+        // The undecodable placeholder message is centered using the
+        // measured width.
+        let cmds = draw_cmds(&app, &dark);
+        let (x, text) = cmds
+            .iter()
+            .find_map(|c| match c {
+                DrawCommand::DrawText { text, x, .. } if text.contains("preview") => {
+                    Some((*x, text.clone()))
+                },
+                _ => None,
+            })
+            .expect("placeholder text");
+        let w = oasis_types::backend::bitmap_measure_text(&text, dark.font_body) as i32;
+        assert!((x - (W as i32 - w) / 2).abs() <= 1, "x={x} w={w}");
+    }
+
+    #[test]
+    fn music_progress_hidden_until_position_known() {
+        let (_vfs, mut app) = open_music();
+        let at = skin_theme("classic");
+        let colors = palette::MusicColors::from_theme(&at);
+        let rest = draw_cmds(&app, &at);
+        assert!(
+            !rest
+                .iter()
+                .any(|c| matches!(c, DrawCommand::FillRect { h: 4, .. })),
+            "no fake progress bar"
+        );
+
+        app.set_playback(30_000, 120_000);
+        let cmds = draw_cmds(&app, &at);
+        let track_w = cmds
+            .iter()
+            .find_map(|c| match c {
+                DrawCommand::FillRect { w, h: 4, color, .. } if *color == colors.progress_track => {
+                    Some(*w)
+                },
+                _ => None,
+            })
+            .expect("progress track drawn");
+        let fill_w = cmds
+            .iter()
+            .find_map(|c| match c {
+                DrawCommand::FillRect { w, h: 4, color, .. } if *color == colors.progress_fill => {
+                    Some(*w)
+                },
+                _ => None,
+            })
+            .expect("progress fill drawn");
+        assert_eq!(fill_w, music_ui::progress_width(30_000, 120_000, track_w));
+        assert!((fill_w as i32 - track_w as i32 / 4).abs() <= 1);
+        assert!(
+            cmds.iter()
+                .any(|c| matches!(c, DrawCommand::DrawText { text, .. } if text == "0:30 / 2:00"))
+        );
+    }
+
+    #[test]
+    fn position_report_parsing() {
+        let p = "/home/user/music/a.mp3";
+        assert_eq!(
+            parse_position_report("1500 90000 /home/user/music/a.mp3", p),
+            Some((1500, 90000))
+        );
+        assert_eq!(
+            parse_position_report("1500 90000 /other.mp3", p),
+            None,
+            "stale track"
+        );
+        assert_eq!(
+            parse_position_report("1500 0 /home/user/music/a.mp3", p),
+            None,
+            "unknown dur"
+        );
+        assert_eq!(parse_position_report("garbage", p), None);
+        assert_eq!(parse_position_report("", p), None);
+    }
+
+    #[test]
+    fn tick_polls_host_position() {
+        let (mut vfs, mut app) = open_music();
+        oasis_vfs::Vfs::mkdir(&mut vfs, "/var").unwrap();
+        oasis_vfs::Vfs::mkdir(&mut vfs, "/var/audio").unwrap();
+        // No report yet: nothing changes, bar stays hidden.
+        assert!(!app.tick(16, &vfs));
+        assert_eq!(app.playback(), None);
+
+        let report = "5000 10000 /home/user/music/ambient_dawn.mp3";
+        oasis_vfs::Vfs::write(&mut vfs, MEDIA_POSITION_PATH, report.as_bytes()).unwrap();
+        assert!(app.tick(16, &vfs), "new position requests a redraw");
+        assert_eq!(app.playback(), Some((5000, 10000)));
+        assert!(!app.tick(16, &vfs), "unchanged position");
+
+        // Opening another track discards the old position; the stale
+        // report (for the previous file) is ignored.
+        app.open_file(&vfs, "/home/user/music/nightfall_theme.mp3");
+        assert_eq!(app.playback(), None);
+        app.tick(16, &vfs);
+        assert_eq!(app.playback(), None);
+    }
+
+    #[test]
+    fn music_ui_uses_theme_fonts() {
+        let (_vfs, app) = open_music();
+        let at = skin_theme("classic");
+        let cmds = draw_cmds(&app, &at);
+        let size_of = |needle: &str| {
+            cmds.iter().find_map(|c| match c {
+                DrawCommand::DrawText {
+                    text, font_size, ..
+                } if text.starts_with(needle) => Some(*font_size),
+                _ => None,
+            })
+        };
+        assert_eq!(size_of("Now Playing"), Some(at.font_hint));
+        assert_eq!(size_of("ambient_dawn"), Some(at.font_body));
     }
 }

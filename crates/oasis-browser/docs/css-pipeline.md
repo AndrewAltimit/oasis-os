@@ -116,10 +116,23 @@ beats stylesheet rules unless the stylesheet uses `!important`.
 
 ## `var()` and `calc()`
 
-- **`var(--name, fallback)`** is resolved by `cascade/var_resolve.rs`
-  which walks up the DOM looking for an ancestor that defined
-  `--name` in its `custom_properties` map. Custom properties always
-  inherit, so the lookup is very cheap.
+- **`var(--name, fallback)`**: any declaration whose value contains
+  `var(` anywhere (inside `calc()`, `rgb()`, gradients, `color-mix()`,
+  shorthands, ...) is stored by the parser as
+  `CssValue::Unresolved(raw_text)` and is not shorthand-expanded. At
+  computed-value time `cascade/var_resolve.rs` substitutes the
+  element's custom properties textually (nested fallbacks, chained
+  references), and the result is re-parsed with the property's normal
+  parser plus shorthand expansion (memoised per thread by property +
+  substituted text). A declaration that can't be resolved (missing
+  property without fallback, cycle) is *invalid at computed-value
+  time* and behaves as `unset`: inherited properties take the parent's
+  value, others their initial value.
+- **Custom properties** are case-sensitive (`--Foo` ≠ `--foo`). Their
+  own `var()` references are substituted on the element that declares
+  them, so children inherit computed values; every member of a
+  reference cycle becomes invalid (guaranteed-invalid), while a
+  referrer outside the cycle can still use its fallback.
 - **`calc(...)`** is parsed eagerly by the value parser into a small
   expression tree, then evaluated when the surrounding length is
   resolved (so `calc(100% - 16px)` knows the containing-block width at

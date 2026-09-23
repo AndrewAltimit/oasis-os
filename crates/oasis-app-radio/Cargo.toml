@@ -14,6 +14,11 @@ oasis-sdi = { workspace = true }
 oasis-skin = { workspace = true }
 oasis-vfs = { workspace = true }
 oasis-audio = { workspace = true }
+oasis-ui = { workspace = true }
 
 [lints]
 workspace = true
+
+[dev-dependencies]
+oasis-test-backend = { workspace = true }
+oasis-app-core = { workspace = true, features = ["testing"] }

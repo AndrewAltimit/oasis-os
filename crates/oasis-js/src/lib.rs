@@ -5,7 +5,7 @@
 //! `eval`. The engine ships the full browser-facing API that
 //! `oasis-browser` needs: `console`, `fetch`, `localStorage`, timers,
 //! retained event dispatch, and a raw `with_context` escape hatch that
-//! `oasis-browser`'s `js_dom.rs` uses to install DOM bindings.
+//! `oasis-browser`'s `js_dom` module uses to install DOM bindings.
 //!
 //! The same engine now runs on every supported target, including PSP.
 //! On `mipsel-sony-psp` the QuickJS C sources are compiled through
@@ -26,8 +26,10 @@ mod storage;
 mod timers;
 
 pub use console::{ConsoleEntry, ConsoleLevel};
-pub use engine::JsEngine;
+pub use engine::{JsEngine, MAX_MICROTASKS_PER_DRAIN};
 pub use fetch::{FetchHandler, FetchRequest, FetchResponse, MockFetchHandler};
 pub use rquickjs;
-pub use storage::LocalStorage;
-pub use timers::TimerQueue;
+pub use storage::{
+    DEFAULT_STORAGE_QUOTA_BYTES, DOM_EXCEPTION_SHIM, LocalStorage, OriginStorage, QuotaExceeded,
+};
+pub use timers::{FiredTimer, MAX_LIVE_TIMERS, MIN_INTERVAL_MS, TimerQueue};

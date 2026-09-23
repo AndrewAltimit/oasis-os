@@ -34,7 +34,7 @@ pub(crate) const MAX_TREE_LINES: usize = 16;
 /// length used by the file manager).
 const FM_MENU_MAX_LABELS: usize = 6;
 /// Maximum number of dropdown rows pooled as SDI objects.
-const FM_DROPDOWN_MAX_ROWS: usize = 8;
+const FM_DROPDOWN_MAX_ROWS: usize = 12;
 
 // Re-exported for use in `lib.rs` tests that need to mirror the renderer's
 // hit-test geometry exactly.
@@ -747,7 +747,15 @@ mod private {
     }
 }
 
+/// Default hint line under the dual-panel view.
+const DUAL_HINT: &str = "L/R=panel  \u{25b3}=del  \u{25a1}=new  F2=rename  Start=copy/paste";
+
 impl FileManagerApp {
+    /// The last operation's feedback, or `default` when there is none.
+    pub(crate) fn status_or(&self, default: &str) -> String {
+        self.status.clone().unwrap_or_else(|| default.to_string())
+    }
+
     /// Draw dual-panel layout to backend (windowed mode).
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn draw_windowed_dual(
@@ -836,7 +844,7 @@ impl FileManagerApp {
 
         let scroll_y = cy + ch as i32 - 14;
         backend.draw_text(
-            "L/R=panel  \u{25b3}=del  \u{25a1}=mkdir  View>Grid  Cancel=back",
+            &self.status_or(DUAL_HINT),
             cx + 4,
             scroll_y,
             10,
@@ -999,8 +1007,7 @@ impl FileManagerApp {
             sdi.create("app_scroll");
         }
         if let Ok(obj) = sdi.get_mut("app_scroll") {
-            obj.text =
-                Some("L/R=panel  \u{25b3}=del  \u{25a1}=mkdir  View>Grid  Cancel=back".to_string());
+            obj.text = Some(self.status_or(DUAL_HINT));
             obj.x = 8;
             obj.y = at.screen_h as i32 - 14;
             obj.font_size = at.font_hint;
@@ -1330,7 +1337,7 @@ impl FileManagerApp {
         ensure_text(
             sdi,
             "app_xp_status_text",
-            &format!("{count} object(s)"),
+            &self.status_or(&format!("{count} object(s)")),
             g.menu_x + 4,
             g.status_y + 1,
             status_style,
@@ -1530,7 +1537,7 @@ impl FileManagerApp {
         let count = panel.lines.iter().filter(|l| l.trim() != "..").count();
         backend.fill_rect(g.menu_x, g.status_y, g.menu_w, g.status_h, colors.status_bg)?;
         backend.draw_text(
-            &format!("{count} object(s)"),
+            &self.status_or(&format!("{count} object(s)")),
             g.menu_x + 4,
             g.status_y + 1,
             at.font_hint,

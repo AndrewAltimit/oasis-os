@@ -70,5 +70,5 @@ knots to be aware of:
 `crates/oasis-backend-psp/src/app_states.rs` means the JS engine is
 only constructed the first time the user opens the browser app — so
 boot-time cost is zero. DOM bindings are shared code with the other
-backends (`oasis-browser/src/js_dom.rs`) enabled via the `javascript`
+backends (`oasis-browser/src/js_dom/`) enabled via the `javascript`
 feature.

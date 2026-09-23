@@ -72,17 +72,18 @@ impl WindowManager {
             }
 
             // Title text.
-            if window.sdi_suffixes().contains(&"title_text") {
-                let (text_x, avail_w) = window
-                    .title_text_x(theme)
-                    .unwrap_or((tx + 4, tw.saturating_sub(8)));
+            if window.sdi_suffixes().contains(&"title_text")
+                && let Some(layout) = window.title_layout(theme)
+            {
+                let text_x = layout.x;
+                let avail_w = layout.text_w;
                 let text_y = ty + (th as i32 - theme.titlebar_font_size as i32) / 2 - 1;
                 let obj = sdi.create(window.sdi_name("title_text"));
                 obj.x = text_x;
                 obj.y = text_y;
                 obj.w = avail_w;
                 obj.h = th;
-                obj.text = Some(window.title.clone());
+                obj.text = Some(layout.text.clone());
                 obj.font_size = theme.titlebar_font_size;
                 obj.text_color = theme.titlebar_text_color;
                 obj.color = Color::rgba(0, 0, 0, 0);
@@ -94,7 +95,7 @@ impl WindowManager {
                     sobj.y = text_y + 1;
                     sobj.w = avail_w;
                     sobj.h = th;
-                    sobj.text = Some(window.title.clone());
+                    sobj.text = Some(layout.text);
                     sobj.font_size = theme.titlebar_font_size;
                     sobj.text_color = theme.title_text_shadow_color;
                     sobj.color = Color::rgba(0, 0, 0, 0);
@@ -204,6 +205,48 @@ impl WindowManager {
         }
     }
 
+    /// Rebuild every window's SDI objects from the current theme. Call
+    /// after [`WindowManager::set_theme`]: chrome colors, sizes, radii and
+    /// fonts are baked into the objects when a window is created, so open
+    /// windows would otherwise keep the previous skin's look. Geometry,
+    /// state (minimized / kiosk), z-order and focus are kept; running
+    /// open/minimize animations are finished and closing ghosts dropped.
+    pub fn restyle_windows(&mut self, sdi: &mut SdiRegistry) {
+        let ids: Vec<_> = self.windows.iter().map(|w| w.id.clone()).collect();
+        for id in &ids {
+            if self.anim.is_animating(id) {
+                self.finish_animation(id, sdi);
+            }
+        }
+        self.flush_closing(None, sdi);
+        self.hover_button = None;
+        for window in &self.windows {
+            self.destroy_sdi_objects(window, sdi);
+            self.create_sdi_objects(window, sdi);
+            self.layout_window_sdi(window, sdi);
+            let minimized = window.state == super::window::WindowState::Minimized;
+            for suffix in window.sdi_suffixes() {
+                if (minimized || (window.fullscreen_kiosk && *suffix != "content"))
+                    && let Ok(obj) = sdi.get_mut(&window.sdi_name(suffix))
+                {
+                    obj.visible = false;
+                }
+            }
+        }
+        // Restore z-order (new objects were appended on top) and the
+        // active / inactive titlebar colors.
+        match self.active_window.clone() {
+            Some(active) => self.focus_window_internal(&active, sdi),
+            None => {
+                for window in &self.windows {
+                    for suffix in window.sdi_suffixes() {
+                        let _ = sdi.move_to_top(&window.sdi_name(suffix));
+                    }
+                }
+            },
+        }
+    }
+
     /// Destroy all SDI objects for a window.
     pub(crate) fn destroy_sdi_objects(
         &self,
@@ -217,12 +260,23 @@ impl WindowManager {
     }
 
     /// Reposition all SDI objects based on window's current geometry.
-    pub(crate) fn update_sdi_positions(&self, id: &str, sdi: &mut SdiRegistry) {
-        let window = match self.windows.iter().find(|w| w.id == id) {
-            Some(w) => w,
-            None => return,
-        };
+    ///
+    /// Any open/minimize/restore animation running on the window is
+    /// finished first: a logical geometry change supersedes it.
+    pub(crate) fn update_sdi_positions(&mut self, id: &str, sdi: &mut SdiRegistry) {
+        if self.anim.is_animating(id) {
+            self.finish_animation(id, sdi);
+        }
+        if let Some(window) = self.windows.iter().find(|w| w.id == id) {
+            self.layout_window_sdi(window, sdi);
+        }
+    }
 
+    /// Position every SDI object of `window` from its current geometry.
+    ///
+    /// Animations call this with a temporary copy of the window carrying
+    /// the interpolated geometry.
+    pub(crate) fn layout_window_sdi(&self, window: &super::window::Window, sdi: &mut SdiRegistry) {
         let theme = &self.theme;
 
         // Frame.
@@ -243,22 +297,21 @@ impl WindowManager {
                 obj.w = tw;
                 obj.h = th;
             }
-            let (text_x, avail_w) = window
-                .title_text_x(theme)
-                .unwrap_or((tx + 4, tw.saturating_sub(8)));
-            let text_y = ty + (th as i32 - theme.titlebar_font_size as i32) / 2 - 1;
-            if let Ok(obj) = sdi.get_mut(&window.sdi_name("title_text")) {
-                obj.x = text_x;
-                obj.y = text_y;
-                obj.w = avail_w;
-                obj.h = th;
-            }
-            // Title shadow.
-            if let Ok(obj) = sdi.get_mut(&window.sdi_name("title_shadow")) {
-                obj.x = text_x + 1;
-                obj.y = text_y + 1;
-                obj.w = avail_w;
-                obj.h = th;
+            // Title text: re-layout, since a new width can change both the
+            // centered position and the ellipsis truncation.
+            if let Some(layout) = window.title_layout(theme) {
+                let text_y = ty + (th as i32 - theme.titlebar_font_size as i32) / 2 - 1;
+                for (suffix, off) in [("title_text", 0), ("title_shadow", 1)] {
+                    if let Ok(obj) = sdi.get_mut(&window.sdi_name(suffix)) {
+                        obj.x = layout.x + off;
+                        obj.y = text_y + off;
+                        obj.w = layout.text_w;
+                        obj.h = th;
+                        if obj.text.as_deref() != Some(layout.text.as_str()) {
+                            obj.text = Some(layout.text.clone());
+                        }
+                    }
+                }
             }
             // Separator.
             if let Ok(obj) = sdi.get_mut(&window.sdi_name("separator")) {

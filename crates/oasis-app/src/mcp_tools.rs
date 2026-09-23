@@ -91,8 +91,7 @@ pub struct AppDispatcher<'a> {
     pub open_runners: &'a mut Vec<(String, AppRunner)>,
     pub cmd_reg: &'a mut CommandRegistry,
     pub cwd: &'a mut String,
-    pub skin: &'a mut Skin,
-    pub active_theme: &'a mut ActiveTheme,
+    pub skin: &'a Skin,
     pub browser_config: &'a mut BrowserConfig,
     pub platform: &'a DesktopPlatform,
     pub tls_provider: &'a RustlsTlsProvider,
@@ -103,6 +102,12 @@ pub struct AppDispatcher<'a> {
     pub screen_w: u32,
     pub screen_h: u32,
     pub activity: &'a mut AgentActivity,
+    /// Skin resolved by a `run_command` skin swap, applied by the caller
+    /// after the poll (it needs the whole `AppState`).
+    pub pending_skin: Option<Skin>,
+    /// Windows closed by `close_window`; the caller finishes the shell-side
+    /// cleanup (runner, radio / music, mode) after the poll.
+    pub closed_windows: Vec<String>,
 }
 
 fn arg_str(args: &Value, key: &str) -> Option<String> {
@@ -213,7 +218,13 @@ impl AppDispatcher<'_> {
         }
         match op {
             "focus" => wm_result(self.wm.focus_window(&id, self.sdi), format!("focused {id}")),
-            "close" => wm_result(self.wm.close_window(&id, self.sdi), format!("closed {id}")),
+            "close" => {
+                let res = self.wm.close_window(&id, self.sdi);
+                if res.is_ok() {
+                    self.closed_windows.push(id.clone());
+                }
+                wm_result(res, format!("closed {id}"))
+            },
             "minimize" => wm_result(
                 self.wm.minimize_window(&id, self.sdi),
                 format!("minimized {id}"),
@@ -240,8 +251,11 @@ impl AppDispatcher<'_> {
             return ToolResult::error(format!("no window with id '{id}'"));
         };
         // move_window takes a delta; convert absolute target to a delta.
-        let dx = (x - win.x as i64) as i32;
-        let dy = (y - win.y as i64) as i32;
+        // Bound the target first: the WM clamps the result on screen, but
+        // the delta itself must not overflow (`x: i64::MAX` panicked).
+        const LIMIT: i64 = 1 << 20;
+        let dx = (x.clamp(-LIMIT, LIMIT) - i64::from(win.x)) as i32;
+        let dy = (y.clamp(-LIMIT, LIMIT) - i64::from(win.y)) as i32;
         wm_result(
             self.wm.move_window(&id, dx, dy, self.sdi),
             format!("moved {id} toward ({x}, {y})"),
@@ -288,10 +302,8 @@ impl AppDispatcher<'_> {
             result,
             self.browser,
             self.skin,
-            self.active_theme,
-            self.browser_config,
-            self.wm,
             self.sdi,
+            &mut self.pending_skin,
         );
         ToolResult::text(text)
     }
@@ -356,6 +368,13 @@ impl AppDispatcher<'_> {
                 let Ok(n) = channel.parse::<u32>() else {
                     return ToolResult::error("tv channel must be a number");
                 };
+                // The guide owns the channel catalogs; the shell resolves
+                // the request against it (tv_controller::tune).
+                if !self.open_runners.iter().any(|(_, r)| r.title == "TV Guide") {
+                    return ToolResult::error(
+                        "the TV Guide is not open (open_app 'TV Guide' first)",
+                    );
+                }
                 (
                     oasis_core::apps::tv_guide::TV_REQUEST_PATH,
                     format!("tune_ch:{n}"),
@@ -397,7 +416,7 @@ impl AppDispatcher<'_> {
         };
         // Force alpha opaque (the framebuffer has no real transparency).
         let mut opaque = rgba;
-        for px in opaque.chunks_exact_mut(4) {
+        for px in opaque.as_chunks_mut::<4>().0 {
             px[3] = 255;
         }
         let mut png_bytes: Vec<u8> = Vec::new();

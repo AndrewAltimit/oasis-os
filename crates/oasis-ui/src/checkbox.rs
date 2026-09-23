@@ -2,6 +2,7 @@
 
 use crate::context::DrawContext;
 use crate::layout;
+use crate::states::{WidgetState, WidgetStateColors};
 use crate::widget::Widget;
 use oasis_types::error::Result;
 
@@ -24,6 +25,10 @@ pub struct Checkbox {
     pub disabled: bool,
     /// Whether the checkbox has keyboard focus (draws a focus ring).
     pub focused: bool,
+    /// Whether the pointer is over the checkbox.
+    pub hovered: bool,
+    /// Whether the checkbox is being pressed.
+    pub pressed: bool,
 }
 
 /// Size of the checkbox box in pixels.
@@ -39,7 +44,14 @@ impl Checkbox {
             label: label.into(),
             disabled: false,
             focused: false,
+            hovered: false,
+            pressed: false,
         }
+    }
+
+    /// Resolved interaction state (Disabled > Pressed > Hover > Normal).
+    pub fn state(&self) -> WidgetState {
+        WidgetState::from_flags(self.hovered, self.pressed, self.disabled)
     }
 
     /// Toggle the checked state. Returns the new state.
@@ -163,6 +175,36 @@ mod tests {
         assert!(backend.fill_rect_count() > 0);
     }
 
+    fn with_state(checked: bool, st: WidgetState) -> Checkbox {
+        let mut c = Checkbox::new("S", checked);
+        c.hovered = st == WidgetState::Hover;
+        c.pressed = st == WidgetState::Pressed;
+        c.disabled = st == WidgetState::Disabled;
+        c
+    }
+
+    #[test]
+    fn each_state_has_distinct_fill() {
+        for checked in [false, true] {
+            crate::test_utils::assert_states_distinct(|st, ctx| {
+                with_state(checked, st).draw(ctx, 0, 0, 100, 20).unwrap();
+            });
+        }
+    }
+
+    #[test]
+    fn resting_fill_unchanged() {
+        let theme = Theme::dark();
+        let fills = crate::test_utils::fill_colors_of(|ctx| {
+            Checkbox::new("S", false).draw(ctx, 0, 0, 100, 20).unwrap();
+        });
+        assert!(fills.contains(&theme.input_bg));
+        let fills = crate::test_utils::fill_colors_of(|ctx| {
+            Checkbox::new("S", true).draw(ctx, 0, 0, 100, 20).unwrap();
+        });
+        assert!(fills.contains(&theme.accent));
+    }
+
     #[test]
     fn draw_all_themes_no_panic() {
         crate::test_utils::test_draw_all_themes(|ctx| {
@@ -188,10 +230,11 @@ impl Widget for Checkbox {
         let box_y = y + layout::center(h, BOX_SIZE);
 
         // Box background.
+        let state = self.state();
         let box_bg = if self.checked {
-            ctx.theme.accent
+            WidgetStateColors::accent_bg(ctx.theme, state)
         } else {
-            ctx.theme.input_bg
+            WidgetStateColors::input_bg(ctx.theme, state)
         };
         ctx.backend
             .fill_rounded_rect(x, box_y, BOX_SIZE, BOX_SIZE, radius, box_bg)?;

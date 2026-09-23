@@ -4,7 +4,7 @@
 use std::os::raw::c_char;
 
 #[cfg(feature = "_video")]
-use crate::handle::{OasisInstance, c_str_to_str, with_instance, with_instance_ref};
+use crate::handle::{OasisInstance, c_str_to_str, ffi_guard, with_instance, with_instance_ref};
 
 /// Background decode thread state.
 #[cfg(feature = "_video")]
@@ -101,13 +101,15 @@ pub(crate) fn stop_video_thread(instance: &mut OasisInstance) {
 #[cfg(feature = "_video")]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn oasis_video_play(handle: *mut OasisInstance, path: *const c_char) -> i32 {
-    // SAFETY: Caller guarantees pointer is null or a valid C string per function safety contract.
-    let Some(path_str) = (unsafe { c_str_to_str(path) }) else {
-        return -1;
-    };
+    ffi_guard("oasis_video_play", -1, || {
+        // SAFETY: Caller guarantees pointer is null or a valid C string per function safety contract.
+        let Some(path_str) = (unsafe { c_str_to_str(path) }) else {
+            return -1;
+        };
 
-    // SAFETY: Caller guarantees `handle` is valid and non-null per function safety contract.
-    unsafe { with_instance(handle, -1, |instance| video_play_inner(instance, path_str)) }
+        // SAFETY: Caller guarantees `handle` is valid and non-null per function safety contract.
+        unsafe { with_instance(handle, -1, |instance| video_play_inner(instance, path_str)) }
+    })
 }
 
 #[cfg(feature = "_video")]
@@ -165,13 +167,15 @@ fn video_play_inner(instance: &mut OasisInstance, path_str: &str) -> i32 {
 #[cfg(feature = "_video")]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn oasis_video_stop(handle: *mut OasisInstance) {
-    // SAFETY: Caller guarantees `handle` is valid and non-null per function safety contract.
-    unsafe {
-        with_instance(handle, (), |instance| {
-            stop_video_thread(instance);
-            log::info!("oasis_video_stop: stopped");
-        });
-    }
+    ffi_guard("oasis_video_stop", (), || {
+        // SAFETY: Caller guarantees `handle` is valid and non-null per function safety contract.
+        unsafe {
+            with_instance(handle, (), |instance| {
+                stop_video_thread(instance);
+                log::info!("oasis_video_stop: stopped");
+            });
+        }
+    })
 }
 
 /// Check whether video is currently playing.
@@ -184,12 +188,14 @@ pub unsafe extern "C" fn oasis_video_stop(handle: *mut OasisInstance) {
 #[cfg(feature = "_video")]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn oasis_video_is_playing(handle: *mut OasisInstance) -> i32 {
-    // SAFETY: Caller guarantees `handle` is valid and non-null per function safety contract.
-    unsafe {
-        with_instance_ref(handle, 0, |instance| {
-            i32::from(instance.video_state.is_some())
-        })
-    }
+    ffi_guard("oasis_video_is_playing", 0, || {
+        // SAFETY: Caller guarantees `handle` is valid and non-null per function safety contract.
+        unsafe {
+            with_instance_ref(handle, 0, |instance| {
+                i32::from(instance.video_state.is_some())
+            })
+        }
+    })
 }
 
 /// Poll the latest decoded video frame.
@@ -216,39 +222,44 @@ pub unsafe extern "C" fn oasis_video_next_frame(
     out_w: *mut u32,
     out_h: *mut u32,
 ) -> i32 {
-    // SAFETY: Caller guarantees `handle` is valid and non-null per function safety contract.
-    unsafe {
-        with_instance_ref(handle, -1, |instance| {
-            let Some(state) = &instance.video_state else {
-                return -1;
-            };
+    ffi_guard("oasis_video_next_frame", -1, || {
+        // SAFETY: Caller guarantees `handle` is valid and non-null per function safety contract.
+        unsafe {
+            with_instance_ref(handle, -1, |instance| {
+                let Some(state) = &instance.video_state else {
+                    return -1;
+                };
 
-            let frame = match state.latest_frame.lock() {
-                Ok(mut slot) => slot.take(),
-                Err(_) => return -1,
-            };
+                let frame = match state.latest_frame.lock() {
+                    Ok(mut slot) => slot.take(),
+                    Err(_) => return -1,
+                };
 
-            match frame {
-                Some(f) => {
-                    let byte_len = (f.width * f.height * 4) as usize;
-                    if buf.is_null() || f.rgba.len() != byte_len || (buf_size as usize) < byte_len {
-                        return -1;
-                    }
-                    // SAFETY: Caller provides buf_size; we verified buf_size >= byte_len
-                    // and byte_len == f.rgba.len(), so the copy is within bounds.
-                    std::ptr::copy_nonoverlapping(f.rgba.as_ptr(), buf, byte_len);
-                    if !out_w.is_null() {
-                        *out_w = f.width;
-                    }
-                    if !out_h.is_null() {
-                        *out_h = f.height;
-                    }
-                    1
-                },
-                None => 0,
-            }
-        })
-    }
+                match frame {
+                    Some(f) => {
+                        let byte_len = (f.width * f.height * 4) as usize;
+                        if buf.is_null()
+                            || f.rgba.len() != byte_len
+                            || (buf_size as usize) < byte_len
+                        {
+                            return -1;
+                        }
+                        // SAFETY: Caller provides buf_size; we verified buf_size >= byte_len
+                        // and byte_len == f.rgba.len(), so the copy is within bounds.
+                        std::ptr::copy_nonoverlapping(f.rgba.as_ptr(), buf, byte_len);
+                        if !out_w.is_null() {
+                            *out_w = f.width;
+                        }
+                        if !out_h.is_null() {
+                            *out_h = f.height;
+                        }
+                        1
+                    },
+                    None => 0,
+                }
+            })
+        }
+    })
 }
 
 /// Drain decoded audio samples into a host buffer.
@@ -269,63 +280,57 @@ pub unsafe extern "C" fn oasis_video_get_audio(
     buf: *mut f32,
     max_samples: u32,
 ) -> i32 {
-    if buf.is_null() {
-        return -1;
-    }
+    ffi_guard("oasis_video_get_audio", -1, || {
+        if buf.is_null() {
+            return -1;
+        }
 
-    // SAFETY: Caller guarantees `handle` is valid and non-null per function safety contract.
-    unsafe {
-        with_instance_ref(handle, -1, |instance| {
-            let Some(state) = &instance.video_state else {
-                return -1;
-            };
-
-            let mut ring = match state.audio_buffer.lock() {
-                Ok(r) => r,
-                Err(_) => return -1,
-            };
-
-            let mut written = 0u32;
-            let max = max_samples as usize;
-
-            while written < max_samples {
-                let chunk = match ring.front() {
-                    Some(c) => c,
-                    None => break,
+        // SAFETY: Caller guarantees `handle` is valid and non-null per function safety contract.
+        unsafe {
+            with_instance_ref(handle, -1, |instance| {
+                let Some(state) = &instance.video_state else {
+                    return -1;
                 };
 
-                let remaining = max - written as usize;
-                let available = chunk.pcm_f32.len();
+                let mut ring = match state.audio_buffer.lock() {
+                    Ok(r) => r,
+                    Err(_) => return -1,
+                };
 
-                if available <= remaining {
-                    // Copy entire chunk.
-                    // SAFETY: Caller guarantees destination buffer has sufficient space.
+                let mut written = 0u32;
+                let max = max_samples as usize;
+
+                // `front_mut` both checks for and borrows the next chunk, so no
+                // "non-empty" invariant has to be re-asserted after a copy.
+                while written < max_samples {
+                    let Some(chunk) = ring.front_mut() else {
+                        break;
+                    };
+
+                    let remaining = max - written as usize;
+                    let take = chunk.pcm_f32.len().min(remaining);
+
+                    // SAFETY: Caller guarantees `buf` holds `max_samples` f32s, and
+                    // `written + take <= max_samples`, so the copy stays in bounds.
                     std::ptr::copy_nonoverlapping(
                         chunk.pcm_f32.as_ptr(),
                         buf.add(written as usize),
-                        available,
+                        take,
                     );
-                    written += available as u32;
-                    ring.pop_front();
-                } else {
-                    // Partial copy -- take what fits and drain consumed samples.
-                    // SAFETY: Caller guarantees destination buffer has sufficient space.
-                    std::ptr::copy_nonoverlapping(
-                        chunk.pcm_f32.as_ptr(),
-                        buf.add(written as usize),
-                        remaining,
-                    );
-                    written += remaining as u32;
-                    // Remove consumed samples from the front of this chunk.
-                    let chunk = ring
-                        .front_mut()
-                        .expect("ring buffer non-empty after front() check");
-                    chunk.pcm_f32.drain(..remaining);
-                    break;
+                    written += take as u32;
+
+                    if take == chunk.pcm_f32.len() {
+                        // Whole chunk consumed.
+                        ring.pop_front();
+                    } else {
+                        // Partial copy -- drain the consumed samples and stop.
+                        chunk.pcm_f32.drain(..take);
+                        break;
+                    }
                 }
-            }
 
-            written as i32
-        })
-    }
+                written as i32
+            })
+        }
+    })
 }

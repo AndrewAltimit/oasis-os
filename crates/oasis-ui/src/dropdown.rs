@@ -2,6 +2,7 @@
 
 use crate::context::DrawContext;
 use crate::layout;
+use crate::states::{WidgetState, WidgetStateColors};
 use crate::widget::Widget;
 use oasis_types::error::Result;
 
@@ -30,6 +31,15 @@ pub struct Dropdown {
     pub placeholder: String,
     /// Whether the dropdown has keyboard focus (rings the header row).
     pub focused: bool,
+    /// Whether the pointer is over the header row.
+    pub hovered: bool,
+    /// Whether the header row is being pressed.
+    pub pressed: bool,
+    /// Whether the dropdown is disabled ([`toggle`](Self::toggle) is a
+    /// no-op and the header is greyed out).
+    pub disabled: bool,
+    /// Index of the open menu's option under the pointer, if any.
+    pub hovered_index: Option<usize>,
 }
 
 impl Dropdown {
@@ -41,7 +51,31 @@ impl Dropdown {
             open: false,
             placeholder: String::new(),
             focused: false,
+            hovered: false,
+            pressed: false,
+            disabled: false,
+            hovered_index: None,
         }
+    }
+
+    /// Resolved interaction state of the header row.
+    pub fn state(&self) -> WidgetState {
+        WidgetState::from_flags(self.hovered, self.pressed, self.disabled)
+    }
+
+    /// Index of the open menu option containing local offset `dy`
+    /// (pixels from the top of the widget, i.e. including the header).
+    pub fn option_at(&self, ctx: &DrawContext<'_>, dy: i32) -> Option<usize> {
+        if !self.open {
+            return None;
+        }
+        let row_h = Self::row_height(ctx) as i32;
+        let rel = dy - row_h;
+        if rel < 0 {
+            return None;
+        }
+        let i = (rel / row_h) as usize;
+        (i < self.options.len()).then_some(i)
     }
 
     /// Return the currently selected option text, or the placeholder.
@@ -72,7 +106,14 @@ impl Dropdown {
 
     /// Toggle the open/closed state.
     pub fn toggle(&mut self) {
+        if self.disabled {
+            self.open = false;
+            return;
+        }
         self.open = !self.open;
+        if !self.open {
+            self.hovered_index = None;
+        }
     }
 
     /// Height of each item row.
@@ -259,6 +300,58 @@ mod tests {
         assert!(!backend.has_text("Beta"));
         assert!(!backend.has_text("Gamma"));
     }
+
+    #[test]
+    fn each_header_state_has_distinct_fill() {
+        crate::test_utils::assert_states_distinct(|st, ctx| {
+            let mut d = Dropdown::new(sample_options());
+            d.hovered = st == WidgetState::Hover;
+            d.pressed = st == WidgetState::Pressed;
+            d.disabled = st == WidgetState::Disabled;
+            d.draw(ctx, 0, 0, 200, 20).unwrap();
+        });
+    }
+
+    #[test]
+    fn hovered_row_is_highlighted() {
+        let theme = Theme::dark();
+        let draw = |hover: Option<usize>| {
+            crate::test_utils::fill_colors_of(|ctx| {
+                let mut d = Dropdown::new(sample_options());
+                d.open = true;
+                d.hovered_index = hover;
+                d.draw(ctx, 0, 0, 200, 80).unwrap();
+            })
+        };
+        let rest = draw(None);
+        let hovered = draw(Some(2));
+        let hover_fill = WidgetStateColors::row_bg(&theme, false, true).unwrap();
+        assert!(!rest.contains(&hover_fill));
+        assert!(hovered.contains(&hover_fill));
+    }
+
+    #[test]
+    fn option_at_maps_rows() {
+        let theme = Theme::dark();
+        let mut backend = MockBackend::new();
+        let ctx = DrawContext::new(&mut backend, &theme);
+        let mut d = Dropdown::new(sample_options());
+        let row_h = Dropdown::row_height(&ctx) as i32;
+        assert_eq!(d.option_at(&ctx, row_h + 1), None, "closed");
+        d.open = true;
+        assert_eq!(d.option_at(&ctx, 1), None, "header");
+        assert_eq!(d.option_at(&ctx, row_h + 1), Some(0));
+        assert_eq!(d.option_at(&ctx, row_h * 3 + 1), Some(2));
+        assert_eq!(d.option_at(&ctx, row_h * 9), None);
+    }
+
+    #[test]
+    fn disabled_toggle_stays_closed() {
+        let mut d = Dropdown::new(sample_options());
+        d.disabled = true;
+        d.toggle();
+        assert!(!d.open);
+    }
 }
 
 impl Widget for Dropdown {
@@ -280,13 +373,25 @@ impl Widget for Dropdown {
         let ty_off = layout::center(row_h, text_h);
 
         // -- Header row --
+        let state = self.state();
+        ctx.backend.fill_rounded_rect(
+            x,
+            y,
+            w,
+            row_h,
+            radius,
+            WidgetStateColors::input_bg(ctx.theme, state),
+        )?;
+        let header_border = if state.is_disabled() {
+            WidgetStateColors::border(ctx.theme, state)
+        } else {
+            ctx.theme.input_border
+        };
         ctx.backend
-            .fill_rounded_rect(x, y, w, row_h, radius, ctx.theme.input_bg)?;
-        ctx.backend
-            .stroke_rounded_rect(x, y, w, row_h, radius, 1, ctx.theme.input_border)?;
+            .stroke_rounded_rect(x, y, w, row_h, radius, 1, header_border)?;
 
         // Keyboard focus ring around the header row.
-        if self.focused {
+        if self.focused && !self.disabled {
             crate::focus::FocusStyle::from_theme(ctx.theme).draw(ctx.backend, x, y, w, row_h)?;
         }
 
@@ -296,7 +401,7 @@ impl Widget for Dropdown {
             x + 6,
             y + ty_off,
             fs,
-            if self.options.is_empty() {
+            if self.options.is_empty() || self.disabled {
                 ctx.theme.text_disabled
             } else {
                 ctx.theme.text_primary
@@ -339,15 +444,13 @@ impl Widget for Dropdown {
             for (i, option) in self.options.iter().enumerate() {
                 let iy = menu_y + (i as u32 * row_h) as i32;
 
-                // Highlight selected row.
-                if i == self.selected {
-                    ctx.backend.fill_rect(
-                        x + 1,
-                        iy,
-                        w.saturating_sub(2),
-                        row_h,
-                        ctx.theme.accent_subtle,
-                    )?;
+                // Highlight selected / hovered row.
+                let hovered = self.hovered_index == Some(i);
+                if let Some(fill) =
+                    WidgetStateColors::row_bg(ctx.theme, i == self.selected, hovered)
+                {
+                    ctx.backend
+                        .fill_rect(x + 1, iy, w.saturating_sub(2), row_h, fill)?;
                 }
 
                 ctx.backend.draw_text_ellipsis(

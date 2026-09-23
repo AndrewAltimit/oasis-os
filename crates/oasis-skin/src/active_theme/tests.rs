@@ -803,7 +803,7 @@ focus_ring_offset = 4
             ),
             (
                 "macos",
-                "#F5F5F780|#2C2C2EFF|#1D1D1FFF|#007AFF1E|#86868BFF|#1D1D1FFF|#007AFF40|#FFFFFFFF|#F5F5F7FF|#007AFFFF|#FFFFFFFF|#E8E8E8FF|#007AFFDC",
+                "#F5F5F780|#2C2C2EFF|#1D1D1FFF|#007AFF1E|#86868BFF|#F5F5F7FF|#007AFF40|#FFFFFFFF|#F5F5F7FF|#007AFFFF|#FFFFFFFF|#E8E8E8FF|#007AFFDC",
             ),
             (
                 "gnome",

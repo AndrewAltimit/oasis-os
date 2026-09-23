@@ -412,7 +412,13 @@ impl BootSplash {
 
     /// Render a single splash frame at the current elapsed time.
     fn render_frame(&self, backend: &mut impl SdiBackend) -> Result<()> {
-        let elapsed = self.elapsed();
+        self.render_at(backend, self.elapsed())
+    }
+
+    /// Render the splash frame for splash time `elapsed` (seconds) without
+    /// presenting it. Deterministic: lets tests inspect any point of the
+    /// animation regardless of wall-clock time.
+    pub fn render_at(&self, backend: &mut impl SdiBackend, elapsed: f32) -> Result<()> {
         backend.clear(Color::rgb(5, 5, 5))?;
 
         // Phase 1: BIOS screen (0.0 - 3.6s)
@@ -510,8 +516,8 @@ fn generate_vignette_texture(
 
     for y in 0..h {
         for x in 0..w {
-            let dx = x as f32 - cx;
-            let dy = y as f32 - cy;
+            let dx = x as f32 + 0.5 - cx;
+            let dy = y as f32 + 0.5 - cy;
             let dist = (dx * dx + dy * dy).sqrt();
             let alpha = if dist <= inner_r {
                 0.0

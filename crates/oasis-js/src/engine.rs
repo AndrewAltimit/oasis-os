@@ -1,16 +1,24 @@
 use std::cell::RefCell;
 use std::rc::Rc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use rquickjs::{Context, Runtime};
 
 use crate::console::{ConsoleBuffer, ConsoleEntry, ConsoleLevel};
 use crate::fetch::{FetchHandler, SharedFetchHandler};
 use crate::storage::{LocalStorage, SharedStorage};
-use crate::timers::TimerQueue;
+use crate::timers::{FiredTimer, TimerQueue};
 
 /// Default maximum JS execution time per eval call (5 seconds).
 const DEFAULT_MAX_EXEC_MS: u64 = 5_000;
+
+/// Maximum number of promise jobs (microtasks) run by a single drain.
+///
+/// A self-perpetuating chain (`function f(){ Promise.resolve().then(f) }`)
+/// never empties the job queue; each job is short, so the time-based
+/// interrupt alone would let it spin for the whole deadline. The cap
+/// bounds the work per drain; leftover jobs run on the next drain.
+pub const MAX_MICROTASKS_PER_DRAIN: usize = 10_000;
 
 // `JsValue` and `JsError` live in `crate::types` so the boa-backed
 // engine can return the same types without pulling in rquickjs. The
@@ -92,30 +100,27 @@ impl JsEngine {
         self.max_exec_ms = ms;
     }
 
+    /// Current per-call execution budget in milliseconds.
+    pub fn max_exec_ms(&self) -> u64 {
+        self.max_exec_ms
+    }
+
     /// Evaluate a JavaScript source string and return the result.
     ///
     /// Execution is interrupted if it exceeds the configured time limit
     /// (default 5s), preventing infinite loops from freezing the host.
+    /// The microtask drain that follows shares the same deadline and is
+    /// additionally capped at [`MAX_MICROTASKS_PER_DRAIN`] jobs.
     pub fn eval(&self, script: &str) -> Result<JsValue, JsError> {
-        // Install a time-based interrupt handler.
-        let deadline = Instant::now() + std::time::Duration::from_millis(self.max_exec_ms);
-        self.runtime
-            .set_interrupt_handler(Some(Box::new(move || Instant::now() >= deadline)));
+        let deadline = self.install_deadline();
 
         let result = self.context.with(|ctx| {
             let result: Result<rquickjs::Value<'_>, rquickjs::Error> = ctx.eval(script);
             // Drain microtask queue (promise callbacks) after eval.
-            while ctx.execute_pending_job() {}
+            self.drain_jobs(&ctx, deadline);
             match result {
                 Ok(val) => Ok(convert_value(&val)),
-                Err(err) => {
-                    let js_err = convert_error(&ctx, err);
-                    self.console_buf.borrow_mut().push(ConsoleEntry {
-                        level: ConsoleLevel::Error,
-                        message: js_err.to_string(),
-                    });
-                    Err(js_err)
-                },
+                Err(err) => Err(self.log_error(&ctx, err)),
             }
         });
 
@@ -156,26 +161,119 @@ impl JsEngine {
     ///
     /// Call this once per frame from the host (e.g. browser widget
     /// tick).  Returns the number of callbacks that fired.
+    ///
+    /// Each callback runs under its own execution deadline (see
+    /// [`set_max_exec_ms`](Self::set_max_exec_ms)) and is followed by a
+    /// bounded microtask drain. Callbacks are invoked through a
+    /// pre-compiled dispatcher, so firing a timer never re-parses JS
+    /// source.
     pub fn tick_timers(&self, dt_ms: f64) -> usize {
-        let callbacks = self.timer_queue.borrow_mut().tick(dt_ms);
-        let count = callbacks.len();
-        for cb in callbacks {
-            // Errors in timer callbacks are logged to the console
-            // buffer by `eval`, so we can ignore them here.
-            let _ = self.eval(&cb);
+        let fired = self.timer_queue.borrow_mut().tick_fired(dt_ms);
+        let count = fired.len();
+        for timer in fired {
+            self.fire_timer(timer);
         }
         // Drain the promise microtask queue after timer callbacks.
         self.drain_microtasks();
         count
     }
 
-    /// Execute all pending microtasks (promise continuations).
+    /// Invoke one fired timer's stored callback under a deadline.
+    /// Exceptions are logged to the console buffer.
+    fn fire_timer(&self, timer: FiredTimer) {
+        let deadline = self.install_deadline();
+        self.context.with(|ctx| {
+            let res: rquickjs::Result<()> = ctx
+                .globals()
+                .get::<_, rquickjs::Function>(crate::console::FIRE_TIMER_FN)
+                .and_then(|f| f.call((timer.id, timer.repeat)));
+            if let Err(err) = res {
+                self.log_error(&ctx, err);
+            }
+            self.drain_jobs(&ctx, deadline);
+        });
+        self.runtime.set_interrupt_handler(None);
+    }
+
+    /// Execute pending microtasks (promise continuations).
     ///
     /// QuickJS buffers resolved-promise `.then()` callbacks internally.
     /// Call this after any JS execution that may have created or
     /// resolved promises to ensure they run synchronously.
-    pub fn drain_microtasks(&self) {
-        self.context.with(|ctx| while ctx.execute_pending_job() {});
+    ///
+    /// The drain is bounded: it stops after [`MAX_MICROTASKS_PER_DRAIN`]
+    /// jobs or when the execution deadline (see
+    /// [`set_max_exec_ms`](Self::set_max_exec_ms)) passes, whichever
+    /// comes first; the interrupt handler also aborts a single job that
+    /// runs past the deadline. Returns the number of jobs executed.
+    pub fn drain_microtasks(&self) -> usize {
+        let deadline = self.install_deadline();
+        let n = self.context.with(|ctx| self.drain_jobs(&ctx, deadline));
+        self.runtime.set_interrupt_handler(None);
+        n
+    }
+
+    /// Run a closure with access to the raw rquickjs context under the
+    /// execution watchdog.
+    ///
+    /// Identical to [`with_context`](Self::with_context) except that the
+    /// time-based interrupt handler (see
+    /// [`set_max_exec_ms`](Self::set_max_exec_ms)) is armed for the
+    /// duration of `f`, so JS invoked from inside `f` (event handlers,
+    /// callbacks) cannot hang the host: a runaway handler is aborted with
+    /// an uncatchable `InternalError: interrupted`. JS exceptions that
+    /// escape `f` are logged to the console buffer and returned as
+    /// `Err`.
+    pub fn with_context_guarded<R, F>(&self, f: F) -> Result<R, JsError>
+    where
+        F: FnOnce(rquickjs::Ctx<'_>) -> rquickjs::Result<R>,
+    {
+        self.install_deadline();
+        let result = self
+            .context
+            .with(|ctx| f(ctx.clone()).map_err(|e| self.log_error(&ctx, e)));
+        self.runtime.set_interrupt_handler(None);
+        result
+    }
+
+    /// Arm the interrupt handler with a deadline `max_exec_ms` from now
+    /// and return that deadline.
+    fn install_deadline(&self) -> Instant {
+        let deadline = Instant::now() + Duration::from_millis(self.max_exec_ms);
+        self.runtime
+            .set_interrupt_handler(Some(Box::new(move || Instant::now() >= deadline)));
+        deadline
+    }
+
+    /// Run pending jobs until the queue is empty, the job cap is hit, or
+    /// `deadline` passes. Logs a console warning when cut off.
+    fn drain_jobs(&self, ctx: &rquickjs::Ctx<'_>, deadline: Instant) -> usize {
+        let mut n = 0;
+        while ctx.execute_pending_job() {
+            n += 1;
+            if n >= MAX_MICROTASKS_PER_DRAIN || Instant::now() >= deadline {
+                // Remaining jobs (if any) stay queued for the next drain.
+                self.console_buf.borrow_mut().push(ConsoleEntry {
+                    level: ConsoleLevel::Warn,
+                    message: format!(
+                        "microtask drain cut off after {n} jobs                          (runaway promise chain?)"
+                    ),
+                });
+                break;
+            }
+        }
+        n
+    }
+
+    /// Convert an rquickjs error to a [`JsError`] and log it to the
+    /// console buffer at error level.
+    fn log_error(&self, ctx: &rquickjs::Ctx<'_>, err: rquickjs::Error) -> JsError {
+        let js_err = convert_error(ctx, err);
+        self.console_buf.borrow_mut().push(ConsoleEntry {
+            level: ConsoleLevel::Error,
+            message: js_err.to_string(),
+        });
+        js_err
     }
 
     /// Run a closure with access to the raw rquickjs context.
@@ -614,6 +712,170 @@ mod tests {
             "should interrupt within reasonable time, took {}ms",
             elapsed.as_millis()
         );
+    }
+
+    // -- Watchdog tests --
+
+    #[test]
+    fn guarded_context_interrupts_infinite_loop() {
+        let mut engine = JsEngine::new(8 * 1024 * 1024).unwrap();
+        engine.set_max_exec_ms(50);
+        engine.eval("function spin() { while (true) {} }").unwrap();
+        let start = Instant::now();
+        let result = engine.with_context_guarded(|ctx| {
+            let f: rquickjs::Function = ctx.globals().get("spin")?;
+            f.call::<_, ()>(())
+        });
+        assert!(result.is_err(), "runaway handler must be interrupted");
+        assert!(
+            start.elapsed() < Duration::from_millis(2_000),
+            "took {:?}",
+            start.elapsed()
+        );
+        // The interrupt handler is cleared afterwards: the engine is
+        // still usable and not permanently interrupted.
+        assert_eq!(engine.eval("1 + 1").unwrap(), JsValue::Int(2));
+    }
+
+    #[test]
+    fn guarded_context_passes_through_results() {
+        let engine = JsEngine::new(8 * 1024 * 1024).unwrap();
+        let v = engine
+            .with_context_guarded(|ctx| ctx.eval::<i32, _>("6 * 7"))
+            .unwrap();
+        assert_eq!(v, 42);
+    }
+
+    #[test]
+    fn runaway_promise_chain_is_cut_off() {
+        let mut engine = JsEngine::new(8 * 1024 * 1024).unwrap();
+        engine.set_max_exec_ms(2_000);
+        let start = Instant::now();
+        // Never-ending microtask chain: each job queues the next.
+        engine
+            .eval(
+                "var __n = 0; \
+                 function f() { __n++; Promise.resolve().then(f); } \
+                 f();",
+            )
+            .unwrap();
+        assert!(start.elapsed() < Duration::from_millis(3_000));
+        let n = match engine.eval("__n").unwrap() {
+            JsValue::Int(n) => n as usize,
+            other => panic!("unexpected {other:?}"),
+        };
+        assert!(n <= MAX_MICROTASKS_PER_DRAIN + 1, "ran {n} jobs");
+        assert!(
+            engine
+                .console_output()
+                .iter()
+                .any(|e| e.level == ConsoleLevel::Warn && e.message.contains("microtask")),
+            "cut-off should be reported"
+        );
+        // Explicit drains are bounded too.
+        let ran = engine.drain_microtasks();
+        assert!(ran <= MAX_MICROTASKS_PER_DRAIN, "drained {ran}");
+    }
+
+    #[test]
+    fn nan_interval_does_not_spin() {
+        let engine = JsEngine::new(8 * 1024 * 1024).unwrap();
+        engine
+            .eval(
+                "var __ticks = 0; \
+                 setInterval(function(){ __ticks++; }, NaN); \
+                 setInterval(function(){ __ticks++; }, -1); \
+                 setInterval(function(){ __ticks++; }, 0);",
+            )
+            .unwrap();
+        // One huge frame: every interval fires at most once.
+        assert_eq!(engine.tick_timers(10_000.0), 3);
+        assert_eq!(engine.eval("__ticks").unwrap(), JsValue::Int(3));
+        // Below the 4 ms clamp nothing fires.
+        assert_eq!(engine.tick_timers(1.0), 0);
+        assert_eq!(engine.tick_timers(3.0), 3);
+    }
+
+    #[test]
+    fn timer_cap_refuses_extra_timers() {
+        let engine = JsEngine::new(8 * 1024 * 1024).unwrap();
+        let v = engine
+            .eval(
+                "var ids = []; \
+                 for (var i = 0; i < 1500; i++) ids.push(setTimeout(function(){}, 1e6)); \
+                 ids.filter(function(x){ return x === 0; }).length",
+            )
+            .unwrap();
+        assert_eq!(v, JsValue::Int(500));
+        let warns = engine
+            .console_output()
+            .iter()
+            .filter(|e| e.level == ConsoleLevel::Warn)
+            .count();
+        assert_eq!(warns, 1, "cap warning is emitted once");
+        // Refused registrations must not leak callback globals.
+        assert_eq!(
+            engine.eval("typeof globalThis.__oasis_timer_cb_0").unwrap(),
+            JsValue::String("undefined".into())
+        );
+    }
+
+    #[test]
+    fn runaway_timer_callback_is_interrupted() {
+        let mut engine = JsEngine::new(8 * 1024 * 1024).unwrap();
+        engine.set_max_exec_ms(50);
+        engine
+            .eval("setTimeout(function(){ while(true){} }, 0); var __after = 0;")
+            .unwrap();
+        engine
+            .eval("setTimeout(function(){ __after = 1; }, 0);")
+            .unwrap();
+        let start = Instant::now();
+        assert_eq!(engine.tick_timers(0.0), 2);
+        assert!(start.elapsed() < Duration::from_millis(2_000));
+        // The second timer still ran after the first was interrupted.
+        assert_eq!(engine.eval("__after").unwrap(), JsValue::Int(1));
+        assert!(
+            engine
+                .console_output()
+                .iter()
+                .any(|e| e.level == ConsoleLevel::Error),
+            "interrupt is logged"
+        );
+    }
+
+    #[test]
+    fn timer_callback_exception_logged_and_global_cleaned() {
+        let engine = JsEngine::new(8 * 1024 * 1024).unwrap();
+        engine
+            .eval("var __tid = setTimeout(function(){ throw new Error('kaboom'); }, 0);")
+            .unwrap();
+        engine.tick_timers(0.0);
+        assert!(
+            engine
+                .console_output()
+                .iter()
+                .any(|e| e.level == ConsoleLevel::Error && e.message.contains("kaboom"))
+        );
+        assert_eq!(
+            engine
+                .eval("typeof globalThis['__oasis_timer_cb_' + __tid]")
+                .unwrap(),
+            JsValue::String("undefined".into())
+        );
+    }
+
+    #[test]
+    fn fire_timer_dispatcher_is_not_overwritable() {
+        let engine = JsEngine::new(8 * 1024 * 1024).unwrap();
+        engine
+            .eval(
+                "try { globalThis.__oasis_fire_timer = function(){}; } catch (e) {} \
+                 setTimeout(function(){ console.log('ran'); }, 0);",
+            )
+            .unwrap();
+        engine.tick_timers(0.0);
+        assert!(engine.console_output().iter().any(|e| e.message == "ran"));
     }
 
     #[test]

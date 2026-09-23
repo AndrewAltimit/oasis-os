@@ -3,7 +3,7 @@
 //! Functions that convert parsed `CssValue` representations into concrete
 //! computed values (pixel lengths, colors, dimensions, etc.).
 
-use super::types::{BorderStyle, Dimension, FontWeight, GridTrackSize, current_root_font_size};
+use super::types::{BorderStyle, Dimension, FontWeight, current_root_font_size};
 use crate::css::parser::{CssColor, CssValue, LengthUnit};
 use oasis_types::backend::Color;
 
@@ -517,162 +517,6 @@ fn parse_calc_atom(
     }
 }
 
-/// Parse a grid-template-columns or grid-template-rows value.
-pub(super) fn parse_grid_template(value: &CssValue, parent_font_size: f32) -> Vec<GridTrackSize> {
-    match value {
-        CssValue::Keyword(kw) if kw == "none" => Vec::new(),
-        CssValue::Keyword(kw) if kw == "auto" => vec![GridTrackSize::Auto],
-        CssValue::Keyword(kw) => parse_grid_template_str(kw, parent_font_size),
-        CssValue::String(s) => parse_grid_template_str(s, parent_font_size),
-        CssValue::Length(n, unit) => {
-            let px = match unit {
-                LengthUnit::Px => *n,
-                LengthUnit::Em => *n * parent_font_size,
-                LengthUnit::Rem => *n * current_root_font_size(),
-                LengthUnit::Pt => *n * 1.333,
-                LengthUnit::Ex => *n * parent_font_size * 0.5,
-                LengthUnit::Ch => *n * parent_font_size * 0.5,
-            };
-            vec![GridTrackSize::Px(px)]
-        },
-        CssValue::Number(n) => vec![GridTrackSize::Px(*n)],
-        CssValue::Multiple(vals) => {
-            let mut tracks = Vec::new();
-            for v in vals {
-                match v {
-                    CssValue::Keyword(kw) if kw == "auto" => tracks.push(GridTrackSize::Auto),
-                    CssValue::Keyword(kw) => {
-                        if let Some(t) = parse_single_track_str(kw) {
-                            tracks.push(t);
-                        }
-                    },
-                    CssValue::Length(px, LengthUnit::Px) => {
-                        tracks.push(GridTrackSize::Px(*px));
-                    },
-                    CssValue::Number(n) => tracks.push(GridTrackSize::Px(*n)),
-                    CssValue::String(s) => {
-                        if let Some(t) = parse_single_track_str(s) {
-                            tracks.push(t);
-                        }
-                    },
-                    _ => {},
-                }
-            }
-            tracks
-        },
-        _ => Vec::new(),
-    }
-}
-
-fn parse_single_track_str(s: &str) -> Option<GridTrackSize> {
-    let s = s.trim();
-    if s == "auto" {
-        Some(GridTrackSize::Auto)
-    } else if let Some(inner) = s.strip_prefix("minmax(").and_then(|r| r.strip_suffix(')')) {
-        parse_minmax_args(inner)
-    } else if let Some(fr) = s.strip_suffix("fr") {
-        fr.trim().parse::<f32>().ok().map(GridTrackSize::Fr)
-    } else if let Some(px) = s.strip_suffix("px") {
-        px.trim().parse::<f32>().ok().map(GridTrackSize::Px)
-    } else if let Ok(n) = s.parse::<f32>() {
-        Some(GridTrackSize::Px(n))
-    } else {
-        None
-    }
-}
-
-/// Parse the arguments inside a `minmax(min, max)` function call.
-fn parse_minmax_args(inner: &str) -> Option<GridTrackSize> {
-    let (min_str, max_str) = inner.split_once(',')?;
-    let min_str = min_str.trim();
-    let max_str = max_str.trim();
-
-    // Parse min: px, numeric, or auto.
-    let min_px = if min_str == "auto" {
-        0.0
-    } else if let Some(v) = min_str.strip_suffix("px") {
-        v.trim().parse::<f32>().ok()?
-    } else if let Ok(n) = min_str.parse::<f32>() {
-        n
-    } else {
-        return None;
-    };
-
-    // Parse max: auto, fr, or px.
-    let max_px = if max_str == "auto" {
-        f32::MAX
-    } else if max_str.ends_with("fr") {
-        // `fr` in max position: treat as flexible (expand to available).
-        f32::MAX
-    } else if let Some(v) = max_str.strip_suffix("px") {
-        v.trim().parse::<f32>().ok()?
-    } else if let Ok(n) = max_str.parse::<f32>() {
-        n
-    } else {
-        return None;
-    };
-
-    Some(GridTrackSize::Minmax(min_px, max_px))
-}
-
-fn parse_grid_template_str(s: &str, _parent_font_size: f32) -> Vec<GridTrackSize> {
-    let s = s.trim();
-    if s == "none" {
-        return Vec::new();
-    }
-    let mut tracks = Vec::new();
-    let mut remainder = s;
-    while !remainder.is_empty() {
-        remainder = remainder.trim_start();
-        if remainder.starts_with("repeat(") {
-            // Find the matching closing paren for this repeat() block.
-            if let Some(close) = remainder.find(')') {
-                let inner = &remainder["repeat(".len()..close];
-                if let Some((cs, vs)) = inner.split_once(',')
-                    && let Ok(count) = cs.trim().parse::<usize>()
-                    && let Some(track) = parse_single_track_str(vs.trim())
-                {
-                    for _ in 0..count {
-                        tracks.push(track);
-                    }
-                }
-                remainder = &remainder[close + 1..];
-            } else {
-                break;
-            }
-        } else if remainder.starts_with("minmax(") {
-            // Find the matching closing paren for this minmax() block.
-            if let Some(close) = remainder.find(')') {
-                let token = &remainder[..=close];
-                if let Some(track) = parse_single_track_str(token) {
-                    tracks.push(track);
-                }
-                remainder = &remainder[close + 1..];
-            } else {
-                break;
-            }
-        } else {
-            // Take the next whitespace-delimited token.
-            let token = match remainder.find(char::is_whitespace) {
-                Some(pos) => {
-                    let t = &remainder[..pos];
-                    remainder = &remainder[pos..];
-                    t
-                },
-                None => {
-                    let t = remainder;
-                    remainder = "";
-                    t
-                },
-            };
-            if let Some(track) = parse_single_track_str(token) {
-                tracks.push(track);
-            }
-        }
-    }
-    tracks
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -683,40 +527,6 @@ mod tests {
         assert_eq!(keyword_color("navy"), Some(Color::rgb(0, 0, 128)),);
         assert_eq!(keyword_color("transparent"), Some(Color::rgba(0, 0, 0, 0)),);
         assert_eq!(keyword_color("nonexistent"), None);
-    }
-
-    #[test]
-    fn parse_grid_template_compound_repeat() {
-        // Single repeat block (already worked).
-        let tracks = parse_grid_template_str("repeat(3, 1fr)", 16.0);
-        assert_eq!(tracks, vec![GridTrackSize::Fr(1.0); 3]);
-
-        // Compound: repeat() followed by a fixed track.
-        let tracks = parse_grid_template_str("repeat(3, 1fr) 20px", 16.0);
-        assert_eq!(
-            tracks,
-            vec![
-                GridTrackSize::Fr(1.0),
-                GridTrackSize::Fr(1.0),
-                GridTrackSize::Fr(1.0),
-                GridTrackSize::Px(20.0),
-            ]
-        );
-
-        // Fixed track followed by repeat().
-        let tracks = parse_grid_template_str("100px repeat(2, auto)", 16.0);
-        assert_eq!(
-            tracks,
-            vec![
-                GridTrackSize::Px(100.0),
-                GridTrackSize::Auto,
-                GridTrackSize::Auto
-            ]
-        );
-
-        // "none" returns empty.
-        let tracks = parse_grid_template_str("none", 16.0);
-        assert!(tracks.is_empty());
     }
 
     // -- calc() tests ---------------------------------------------------

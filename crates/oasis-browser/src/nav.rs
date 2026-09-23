@@ -185,14 +185,15 @@ impl NavigationController {
              <h1>Bookmarks</h1><ul>",
         );
         for bm in &self.bookmarks {
+            let label = if bm.title.is_empty() {
+                &bm.url
+            } else {
+                &bm.title
+            };
             html.push_str(&format!(
                 "<li><a href=\"{}\">{}</a></li>",
-                bm.url,
-                if bm.title.is_empty() {
-                    &bm.url
-                } else {
-                    &bm.title
-                }
+                escape_html(&bm.url),
+                escape_html(label)
             ));
         }
         html.push_str("</ul></body></html>");
@@ -206,14 +207,15 @@ impl NavigationController {
              <h1>History</h1><ul>",
         );
         for entry in self.history() {
+            let label = if entry.title.is_empty() {
+                &entry.url
+            } else {
+                &entry.title
+            };
             html.push_str(&format!(
                 "<li><a href=\"{}\">{}</a></li>",
-                entry.url,
-                if entry.title.is_empty() {
-                    &entry.url
-                } else {
-                    &entry.title
-                }
+                escape_html(&entry.url),
+                escape_html(label)
             ));
         }
         html.push_str("</ul></body></html>");
@@ -221,9 +223,38 @@ impl NavigationController {
     }
 }
 
+/// Escape text for an HTML text node or a double-quoted attribute. Page
+/// titles and URLs are page-controlled; unescaped, a title such as
+/// `</a><script>...` would run script inside the internal pages.
+fn escape_html(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        match c {
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            '"' => out.push_str("&quot;"),
+            '\'' => out.push_str("&#39;"),
+            c => out.push(c),
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn internal_pages_escape_page_controlled_text() {
+        let mut nav = NavigationController::new("about:home");
+        nav.navigate("http://a.test/?q=\"x\"", "</a><script>alert(1)</script>");
+        nav.navigate("http://b.test/", "B");
+        let html = nav.history_page_html();
+        assert!(!html.contains("<script>"), "{html}");
+        assert!(html.contains("&lt;/a&gt;&lt;script&gt;"), "{html}");
+        assert!(html.contains("q=&quot;x&quot;"), "{html}");
+    }
 
     #[test]
     fn navigate_pushes_to_back_stack() {

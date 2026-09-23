@@ -14,5 +14,8 @@ oasis-sdi = { workspace = true }
 log = { workspace = true }
 web-time = { workspace = true }
 
+[dev-dependencies]
+oasis-test-backend = { workspace = true }
+
 [lints]
 workspace = true

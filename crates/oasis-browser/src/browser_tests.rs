@@ -3317,3 +3317,368 @@ fn is_print_only_media_query_matches_print_variants_only() {
     ));
     assert!(!BrowserWidget::is_print_only_media_query(""));
 }
+
+// ---------------------------------------------------------------
+// JS watchdog: runaway event handlers must not freeze the host
+// ---------------------------------------------------------------
+
+#[cfg(feature = "javascript")]
+#[test]
+fn js_click_handler_infinite_loop_is_interrupted() {
+    let vfs = MemoryVfs::new();
+    let mut browser = make_browser();
+    browser.set_window(0, 0, 800, 600);
+    browser.load_html(
+        "<html><body>\
+         <div id=\"spin\" style=\"width:200px;height:60px\" \
+              onclick=\"this.setAttribute('data-hit','1'); while(1){}\">spin</div>\
+         <div id=\"ok\" style=\"width:200px;height:60px\" \
+              onclick=\"this.setAttribute('data-hit','1')\">ok</div>\
+         </body></html>",
+        "test://js-watchdog",
+    );
+    // Short budget so the test doesn't wait out the 5 s default.
+    browser
+        .js_engine
+        .as_mut()
+        .expect("javascript engine")
+        .set_max_exec_ms(100);
+
+    let doc = browser.document.as_ref().expect("doc");
+    let spin = doc.get_element_by_id("spin").expect("spin");
+    let ok = doc.get_element_by_id("ok").expect("ok");
+
+    let (sx, sy) = node_center(&browser, spin);
+    let start = std::time::Instant::now();
+    browser.handle_click(sx, sy, &vfs);
+    let elapsed = start.elapsed();
+    assert!(
+        elapsed < std::time::Duration::from_secs(3),
+        "runaway onclick should be interrupted, took {elapsed:?}"
+    );
+
+    // The handler ran up to the loop, and the engine is still usable
+    // for the next event.
+    let hit = |browser: &BrowserWidget, nid: crate::html::dom::NodeId| {
+        let doc = browser.document.as_ref().expect("doc");
+        match &doc.nodes[nid].kind {
+            crate::html::dom::NodeKind::Element(e) => e.get_attribute("data-hit").is_some(),
+            _ => false,
+        }
+    };
+    assert!(hit(&browser, spin), "handler should have started");
+    let (ox, oy) = node_center(&browser, ok);
+    browser.handle_click(ox, oy, &vfs);
+    assert!(hit(&browser, ok), "engine must stay usable after interrupt");
+}
+
+// ---------------------------------------------------------------
+// Idle-frame elision: wants_frame()
+// ---------------------------------------------------------------
+
+/// Tick + paint the way a host's frame loop does, until the widget stops
+/// asking for frames. Returns the number of frames painted.
+fn settle(browser: &mut BrowserWidget, vfs: &dyn Vfs, backend: &mut MockBackend) -> usize {
+    let mut drawn = 0;
+    for _ in 0..500 {
+        browser.tick(vfs);
+        if !browser.wants_frame() {
+            return drawn;
+        }
+        browser.paint(backend).unwrap();
+        drawn += 1;
+        std::thread::sleep(std::time::Duration::from_millis(2));
+    }
+    panic!("browser never settled");
+}
+
+#[test]
+fn static_page_stops_wanting_frames() {
+    let vfs = test_vfs();
+    let mut browser = make_browser();
+    browser.set_window(0, 0, 480, 272);
+    browser.navigate_vfs("vfs://sites/home/index.html", &vfs);
+    assert!(browser.wants_frame(), "a fresh page must be painted");
+
+    let mut backend = MockBackend::new();
+    settle(&mut browser, &vfs, &mut backend);
+    for _ in 0..10 {
+        browser.tick(&vfs);
+        assert!(!browser.wants_frame(), "static page must elide frames");
+    }
+    // The host re-sends the same window rect on every drawn frame; that
+    // is not a change.
+    browser.set_window(0, 0, 480, 272);
+    assert!(!browser.wants_frame());
+}
+
+/// `@import` inside a `vfs://` linked sheet is followed too (the VFS
+/// sheets load on `tick`, not on the I/O thread).
+#[test]
+fn vfs_linked_stylesheet_imports_are_followed() {
+    let mut vfs = MemoryVfs::new();
+    vfs.mkdir("/sites").unwrap();
+    vfs.mkdir("/sites/imp").unwrap();
+    vfs.write(
+        "/sites/imp/index.html",
+        b"<html><head><link rel=\"stylesheet\" href=\"main.css\"></head>\
+          <body><p class=\"a\">HiddenByImport</p><p>Visible</p></body></html>",
+    )
+    .unwrap();
+    vfs.write("/sites/imp/main.css", b"@import 'a.css'; p { color: red; }")
+        .unwrap();
+    vfs.write("/sites/imp/a.css", b".a { display: none; }")
+        .unwrap();
+    let mut browser = make_browser();
+    browser.set_window(0, 0, 480, 272);
+    browser.navigate_vfs("vfs://sites/imp/index.html", &vfs);
+    let mut backend = MockBackend::new();
+    settle(&mut browser, &vfs, &mut backend);
+    let mut frame = MockBackend::new();
+    browser.full_repaint_needed = true;
+    browser.paint(&mut frame).unwrap();
+    let texts: Vec<String> = frame
+        .calls
+        .iter()
+        .filter_map(|c| match c {
+            crate::test_utils::DrawCall::DrawText { text, .. } => Some(text.clone()),
+            _ => None,
+        })
+        .collect();
+    assert!(texts.iter().any(|t| t.contains("Visible")), "{texts:?}");
+    assert!(
+        !texts.iter().any(|t| t.contains("HiddenByImport")),
+        "{texts:?}"
+    );
+}
+
+/// With `smooth_scroll` on, scroll input only sets a velocity that
+/// `ScrollState::tick` turns into movement; the widget never ticked it,
+/// so smooth-scrolling configs could not scroll at all.
+#[test]
+fn smooth_scroll_moves_and_settles() {
+    let mut vfs = MemoryVfs::new();
+    vfs.mkdir("/sites").unwrap();
+    vfs.mkdir("/sites/long").unwrap();
+    let body: String = (0..200).map(|i| format!("<p>Line {i}</p>")).collect();
+    vfs.write(
+        "/sites/long/index.html",
+        format!("<html><body>{body}</body></html>").as_bytes(),
+    )
+    .unwrap();
+    let mut config = BrowserConfig::default();
+    config.smooth_scroll = true;
+    let mut browser = BrowserWidget::new(config);
+    browser.set_window(0, 0, 480, 272);
+    browser.navigate_vfs("vfs://sites/long/index.html", &vfs);
+    let mut backend = MockBackend::new();
+    settle(&mut browser, &vfs, &mut backend);
+
+    browser.handle_input(&InputEvent::MouseWheel { delta: 2 }, &vfs);
+    assert!(
+        browser.wants_frame(),
+        "a smooth scroll in motion wants frames"
+    );
+    let drawn = settle(&mut browser, &vfs, &mut backend);
+    assert!(drawn > 1, "the scroll animates over several frames");
+    assert!(
+        browser.scroll().scroll_y > 0,
+        "smooth scroll moved the page"
+    );
+    assert!(!browser.wants_frame(), "and settles");
+}
+
+/// Going back to a page that fell out of the resource cache refetches
+/// it; that load used to push a fresh history entry, wiping the forward
+/// stack (Forward did nothing after such a Back).
+#[test]
+fn back_after_cache_eviction_keeps_forward_history() {
+    let vfs = test_vfs();
+    let mut browser = make_browser();
+    browser.navigate_vfs("vfs://sites/home/index.html", &vfs);
+    browser.navigate_vfs("vfs://sites/home/page2.html", &vfs);
+    browser.cache.clear();
+    browser.go_back(&vfs);
+    assert_eq!(browser.current_url(), Some("vfs://sites/home/index.html"));
+    assert!(browser.navigation().can_go_forward(), "forward entry kept");
+    browser.go_forward(&vfs);
+    assert_eq!(browser.current_url(), Some("vfs://sites/home/page2.html"));
+}
+
+/// Reload keeps the history entry (no duplicate) and the scroll offset.
+#[test]
+fn reload_keeps_history_and_scroll() {
+    let vfs = test_vfs();
+    let mut browser = make_browser();
+    browser.navigate_vfs("vfs://sites/home/index.html", &vfs);
+    browser.navigate_vfs("vfs://sites/home/page2.html", &vfs);
+    browser.reload(&vfs);
+    assert_eq!(browser.current_url(), Some("vfs://sites/home/page2.html"));
+    browser.go_back(&vfs);
+    assert_eq!(
+        browser.current_url(),
+        Some("vfs://sites/home/index.html"),
+        "reload added no history entry"
+    );
+    assert!(!browser.navigation().can_go_back());
+}
+
+/// A page whose display list records nothing (empty body, zero-size
+/// content) used to keep `wants_frame` true forever: an empty display
+/// list was taken to mean "not recorded yet", so the host never elided a
+/// frame while such a page was open.
+#[test]
+fn page_that_draws_nothing_stops_wanting_frames() {
+    let mut vfs = MemoryVfs::new();
+    vfs.mkdir("/sites").unwrap();
+    vfs.mkdir("/sites/blank").unwrap();
+    vfs.write(
+        "/sites/blank/index.html",
+        b"<html><head><title>Blank</title></head><body></body></html>",
+    )
+    .unwrap();
+    let mut browser = make_browser();
+    browser.set_window(0, 0, 480, 272);
+    browser.navigate_vfs("vfs://sites/blank/index.html", &vfs);
+    assert!(browser.wants_frame(), "a fresh page must be painted");
+    let mut backend = MockBackend::new();
+    let drawn = settle(&mut browser, &vfs, &mut backend);
+    assert!(drawn >= 1, "the fresh page must be painted once");
+    for _ in 0..10 {
+        browser.tick(&vfs);
+        assert!(!browser.wants_frame(), "blank page must elide frames");
+    }
+}
+
+#[test]
+fn window_moves_and_resizes_want_a_frame() {
+    let vfs = test_vfs();
+    let mut browser = make_browser();
+    browser.set_window(0, 0, 480, 272);
+    browser.navigate_vfs("vfs://sites/home/index.html", &vfs);
+    let mut backend = MockBackend::new();
+    settle(&mut browser, &vfs, &mut backend);
+
+    browser.set_window(10, 10, 480, 272);
+    assert!(browser.wants_frame(), "window move must repaint");
+    settle(&mut browser, &vfs, &mut backend);
+
+    browser.set_window(10, 10, 400, 272);
+    assert!(browser.wants_frame(), "window resize must relayout");
+    settle(&mut browser, &vfs, &mut backend);
+    assert!(!browser.wants_frame());
+}
+
+#[test]
+fn scroll_wants_frame_until_painted() {
+    let mut vfs = MemoryVfs::new();
+    vfs.mkdir("/sites").unwrap();
+    vfs.mkdir("/sites/long").unwrap();
+    let body: String = (0..200).map(|i| format!("<p>Line {i}</p>")).collect();
+    let html = format!("<html><body>{body}</body></html>");
+    vfs.write("/sites/long/index.html", html.as_bytes())
+        .unwrap();
+
+    let mut browser = make_browser();
+    browser.set_window(0, 0, 480, 272);
+    browser.navigate_vfs("vfs://sites/long/index.html", &vfs);
+    let mut backend = MockBackend::new();
+    settle(&mut browser, &vfs, &mut backend);
+
+    browser.handle_input(&InputEvent::ButtonPress(Button::Down), &vfs);
+    assert!(browser.wants_frame(), "scrolling must repaint");
+    let drawn = settle(&mut browser, &vfs, &mut backend);
+    assert!(drawn >= 1);
+    assert!(!browser.wants_frame(), "scroll replay must settle");
+}
+
+#[test]
+fn image_finishing_loading_wants_a_frame() {
+    let vfs = test_vfs_with_image();
+    let mut browser = make_browser();
+    browser.set_window(0, 0, 480, 272);
+    browser.navigate_vfs("vfs://sites/img/index.html", &vfs);
+    let mut backend = MockBackend::new();
+
+    // Host loop: tick every frame, paint only frames that want it. The
+    // frame on which the image lands must be one that gets painted.
+    let mut saw_decode = false;
+    for _ in 0..500 {
+        let before = browser.decoded_images.len();
+        browser.tick(&vfs);
+        if browser.decoded_images.len() > before {
+            assert!(browser.wants_frame(), "decoded image must be painted");
+            saw_decode = true;
+        }
+        if browser.wants_frame() {
+            browser.paint(&mut backend).unwrap();
+        } else if saw_decode {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(2));
+    }
+    assert!(saw_decode, "image never decoded");
+    assert!(
+        !browser.image_textures.is_empty() || !browser.image_atlas.is_empty(),
+        "image must have been uploaded by a painted frame"
+    );
+    settle(&mut browser, &vfs, &mut backend);
+    assert!(!browser.wants_frame(), "loaded page must go idle");
+}
+
+// -------------------------------------------------------------------
+// TLS provider lifetime vs. the background I/O thread
+// -------------------------------------------------------------------
+
+#[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
+mod tls_lifetime {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    use oasis_types::backend::NetworkStream;
+
+    use super::*;
+
+    struct DropFlagProvider(Arc<AtomicBool>);
+
+    impl Drop for DropFlagProvider {
+        fn drop(&mut self) {
+            self.0.store(true, Ordering::SeqCst);
+        }
+    }
+
+    impl oasis_net::tls::TlsProvider for DropFlagProvider {
+        fn connect_tls(
+            &self,
+            stream: Box<dyn NetworkStream>,
+            _server_name: &str,
+        ) -> oasis_types::error::Result<Box<dyn NetworkStream>> {
+            Ok(stream)
+        }
+    }
+
+    #[test]
+    fn io_thread_shares_tls_provider_by_arc() {
+        let mut browser = make_browser();
+        let a_dropped = Arc::new(AtomicBool::new(false));
+        browser.set_tls_provider(Box::new(DropFlagProvider(Arc::clone(&a_dropped))));
+        assert!(browser.ensure_io_thread());
+        // Widget + I/O worker each hold a strong reference (previously the
+        // worker held a raw pointer, which dangled after set_tls_provider).
+        assert_eq!(Arc::strong_count(browser.tls.as_ref().unwrap()), 2);
+
+        // Replacing the provider while the worker is idle retires the worker
+        // (so the next request picks up the new provider); the old provider is
+        // freed only once the worker has been joined.
+        let b_dropped = Arc::new(AtomicBool::new(false));
+        browser.set_tls_provider(Box::new(DropFlagProvider(Arc::clone(&b_dropped))));
+        assert!(browser.io_thread.is_none());
+        assert!(a_dropped.load(Ordering::SeqCst));
+        assert!(!b_dropped.load(Ordering::SeqCst));
+
+        assert!(browser.ensure_io_thread());
+        assert_eq!(Arc::strong_count(browser.tls.as_ref().unwrap()), 2);
+        drop(browser);
+        assert!(b_dropped.load(Ordering::SeqCst));
+    }
+}

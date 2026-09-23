@@ -158,13 +158,15 @@ impl TreeBuilder {
                 // Step 13.6: create a clone of node, replace the
                 // entry in active formatting and open elements, then
                 // let node be the clone.
-                let (tag, attrs) = {
-                    let data = self
-                        .doc
-                        .element(node)
-                        .expect("open element must be element");
-                    (data.tag.clone(), data.attributes.clone())
+                // Open elements are always element nodes; if that invariant
+                // is ever broken, abandon the algorithm rather than panic on
+                // untrusted markup. The tree is still well-formed here (every
+                // move so far was a detach + append).
+                let Some(data) = self.doc.element(node) else {
+                    log::warn!("adoption agency: non-element on open stack; aborting");
+                    return;
                 };
+                let (tag, attrs) = (data.tag.clone(), data.attributes.clone());
                 let mut new_data = ElementData::new(tag);
                 new_data.attributes = attrs;
                 let clone = self.doc.add_node(NodeKind::Element(new_data));
@@ -194,13 +196,14 @@ impl TreeBuilder {
             self.doc.append_child(common_ancestor, last_node);
 
             // Step 15: create a clone of formatting element.
-            let (fmt_tag, fmt_attrs) = {
-                let data = self
-                    .doc
-                    .element(formatting_element)
-                    .expect("formatting element must be element");
-                (data.tag.clone(), data.attributes.clone())
+            let Some(data) = self.doc.element(formatting_element) else {
+                // Unreachable in practice (the entry matched `subject` by tag),
+                // but degrade gracefully instead of panicking on hostile input.
+                log::warn!("adoption agency: formatting entry is not an element; aborting");
+                self.active_formatting.remove(fmt_list_pos);
+                return;
             };
+            let (fmt_tag, fmt_attrs) = (data.tag.clone(), data.attributes.clone());
             let mut new_fmt = ElementData::new(fmt_tag);
             new_fmt.attributes = fmt_attrs;
             let fmt_clone = self.doc.add_node(NodeKind::Element(new_fmt));
@@ -244,6 +247,40 @@ impl TreeBuilder {
         }
     }
 
+    /// Push a just-inserted formatting element onto the list of active
+    /// formatting elements.
+    ///
+    /// - An element that could not be pushed onto the open-elements
+    ///   stack (nesting cap reached) is not tracked: it can never be
+    ///   "open", so tracking it would make every later
+    ///   [`Self::reconstruct_formatting`] clone it again, blowing the
+    ///   node count up quadratically on pathological input.
+    /// - Noah's Ark clause (WHATWG §13.2.4.3): at most three entries
+    ///   with the same tag and attributes; the earliest is dropped.
+    pub(crate) fn push_active_formatting(&mut self, id: super::super::dom::NodeId) {
+        if self.open_elements.last() != Some(&id) {
+            return;
+        }
+        let same = |a: &ElementData, b: &ElementData| {
+            a.tag == b.tag
+                && a.attributes.len() == b.attributes.len()
+                && a.attributes.iter().all(|x| b.attributes.contains(x))
+        };
+        if let Some(new) = self.doc.element(id) {
+            let matching: Vec<usize> = self
+                .active_formatting
+                .iter()
+                .enumerate()
+                .filter(|&(_, &fid)| self.doc.element(fid).is_some_and(|e| same(e, new)))
+                .map(|(i, _)| i)
+                .collect();
+            if matching.len() >= 3 {
+                self.active_formatting.remove(matching[0]);
+            }
+        }
+        self.active_formatting.push(id);
+    }
+
     /// Simplified reconstruction of active formatting elements.
     pub(crate) fn reconstruct_formatting(&mut self) {
         if self.active_formatting.is_empty() {
@@ -257,6 +294,11 @@ impl TreeBuilder {
             .collect();
 
         for id in to_reopen {
+            // At the nesting cap a clone would not be pushed onto the
+            // stack either, and would just be cloned again next time.
+            if self.open_elements.len() >= super::MAX_NESTING_DEPTH {
+                break;
+            }
             let (tag, attrs) = if let Some(data) = self.doc.element(id) {
                 (data.tag.clone(), data.attributes.clone())
             } else {

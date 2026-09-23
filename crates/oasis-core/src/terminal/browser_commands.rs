@@ -34,56 +34,66 @@ impl Command for BrowseCmd {
 
     fn usage(&self) -> &str {
         "browse <url> | browse bookmarks | browse history | browse home | \
-         browse back | browse forward | browse reader | browse sandbox <url>"
+         browse back | browse forward | browse reload | browse reader | \
+         browse sandbox <url>"
     }
 
     fn category(&self) -> &str {
         "browser"
     }
 
-    fn execute(&self, args: &[&str], _env: &mut Environment<'_>) -> Result<CommandOutput> {
+    fn execute(&self, args: &[&str], env: &mut Environment<'_>) -> Result<CommandOutput> {
         if args.is_empty() {
             return Ok(CommandOutput::Text(
                 "Usage: browse <url>\n\
                  Subcommands: bookmarks, history, home, back, forward, \
-                 reader, sandbox <url>"
+                 reload, reader, sandbox <url>"
                     .to_string(),
             ));
         }
 
-        match args[0] {
-            "bookmarks" => Ok(CommandOutput::Text(
-                "[browser] Opening bookmarks page...".to_string(),
-            )),
-            "history" => Ok(CommandOutput::Text(
-                "[browser] Opening history page...".to_string(),
-            )),
-            "home" => Ok(CommandOutput::Text(
-                "[browser] Navigating to home page...".to_string(),
-            )),
-            "back" => Ok(CommandOutput::Text(
-                "[browser] Navigating back...".to_string(),
-            )),
-            "forward" => Ok(CommandOutput::Text(
-                "[browser] Navigating forward...".to_string(),
-            )),
-            "reader" => Ok(CommandOutput::Text(
-                "[browser] Toggling reader mode...".to_string(),
-            )),
+        let (request, message) = match args[0] {
+            "bookmarks" => ("bookmarks".to_string(), "Opening bookmarks page..."),
+            "history" => ("history".to_string(), "Opening history page..."),
+            "home" => ("home".to_string(), "Navigating to home page..."),
+            "back" => ("back".to_string(), "Navigating back..."),
+            "forward" => ("forward".to_string(), "Navigating forward..."),
+            "reload" => ("reload".to_string(), "Reloading..."),
+            "reader" => ("reader".to_string(), "Toggling reader mode..."),
             "sandbox" => {
                 if args.len() < 2 {
                     return Ok(CommandOutput::Text(
                         "Usage: browse sandbox <url>".to_string(),
                     ));
                 }
-                Ok(CommandOutput::Text(format!(
+                queue_browser_request(env, &format!("sandbox {}", args[1]))?;
+                return Ok(CommandOutput::Text(format!(
                     "[browser] Opening {} in sandbox mode...",
                     args[1]
-                )))
+                )));
             },
-            url => Ok(CommandOutput::Text(format!("[browser] Opening {}...", url))),
+            url => {
+                queue_browser_request(env, &format!("open {url}"))?;
+                return Ok(CommandOutput::Text(format!("[browser] Opening {url}...")));
+            },
+        };
+        queue_browser_request(env, &request)?;
+        Ok(CommandOutput::Text(format!("[browser] {message}")))
+    }
+}
+
+/// VFS file the `browse` command queues its request in (`open <url>`,
+/// `back`, `reload`, ...); the desktop shell opens the browser and
+/// applies it on its next frame.
+pub const BROWSER_REQUEST_PATH: &str = "/var/browser/request";
+
+fn queue_browser_request(env: &mut Environment<'_>, request: &str) -> Result<()> {
+    for dir in ["/var", "/var/browser"] {
+        if !env.vfs.exists(dir) {
+            env.vfs.mkdir(dir)?;
         }
     }
+    env.vfs.write(BROWSER_REQUEST_PATH, request.as_bytes())
 }
 
 // -------------------------------------------------------------------
@@ -482,6 +492,19 @@ mod tests {
         };
         assert!(s.contains("sandbox"));
         assert!(s.contains("https://untrusted.example"));
+    }
+
+    #[test]
+    fn browse_queues_a_host_request() {
+        let (reg, mut vfs) = setup();
+        let request =
+            |vfs: &MemoryVfs| String::from_utf8(vfs.read(BROWSER_REQUEST_PATH).unwrap()).unwrap();
+        exec(&reg, &mut vfs, "browse https://example.com/a").unwrap();
+        assert_eq!(request(&vfs), "open https://example.com/a");
+        exec(&reg, &mut vfs, "browse reload").unwrap();
+        assert_eq!(request(&vfs), "reload");
+        exec(&reg, &mut vfs, "browse sandbox vfs://x").unwrap();
+        assert_eq!(request(&vfs), "sandbox vfs://x");
     }
 
     #[test]

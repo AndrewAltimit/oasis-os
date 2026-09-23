@@ -3,7 +3,6 @@ use std::sync::mpsc;
 use oasis_audio::RadioManager;
 use oasis_audio::radio::archive::ArchiveCatalog;
 use oasis_audio::radio::source::RadioSource;
-use oasis_backend_sdl::SdlAudioBackend;
 use oasis_core::active_theme::ActiveTheme;
 use oasis_core::apps::AppRunner;
 use oasis_core::backend::AudioTrackId;
@@ -20,7 +19,7 @@ use oasis_core::plugin::PluginManager;
 use oasis_core::skin::Skin;
 use oasis_core::startmenu::StartMenuState;
 use oasis_core::statusbar::StatusBar;
-use oasis_core::terminal::CommandRegistry;
+use oasis_core::terminal::{CommandRegistry, ShellSession};
 use oasis_core::toast::ToastManager;
 use oasis_core::transfer::FtpServer;
 use oasis_core::transition;
@@ -65,10 +64,11 @@ pub struct UiLayer {
 pub struct TerminalLayer {
     pub cmd_reg: CommandRegistry,
     pub cwd: String,
-    pub input_buf: String,
+    /// Input line editor, tab completion and persistent history.
+    pub session: ShellSession,
     pub output_lines: Vec<String>,
     pub scroll_offset: usize,
-    /// Set when output_lines or input_buf changes; cleared after sync.
+    /// Set when output_lines or the input line changes; cleared after sync.
     pub dirty: bool,
     /// Signature of the content last synced to the windowed terminal
     /// runner: (lines len, scroll offset, input buffer, first line, last
@@ -85,9 +85,19 @@ pub struct TerminalLayer {
     pub sdi_signature: Option<u64>,
 }
 
-/// Networking: TCP backend, remote listener/client, FTP, TLS.
+/// Networking: TCP backends, remote listener/client, FTP, TLS.
+///
+/// A `StdNetworkBackend` holds at most one listening socket, so every
+/// server gets its own backend: sharing one made `ftp start` replace the
+/// remote terminal's socket (both servers then accepted each other's
+/// clients).
 pub struct NetworkLayer {
+    /// Outbound connections (`remote` client).
     pub backend: StdNetworkBackend,
+    /// Listening socket of the remote terminal (`listen`).
+    pub listener_backend: StdNetworkBackend,
+    /// Listening socket of the FTP server (`ftp start`).
+    pub ftp_backend: StdNetworkBackend,
     pub listener: Option<RemoteListener>,
     pub ftp_server: Option<FtpServer>,
     pub remote_client: Option<RemoteClient>,
@@ -100,6 +110,10 @@ pub struct ContentLayer {
     pub open_runners: Vec<(String, AppRunner)>,
     pub browser: Option<BrowserWidget>,
     pub fullscreen_app: Option<String>,
+    /// Runners of apps closed this frame, waiting for the shell to release
+    /// their backend resources (`AppRunner::release_resources`) before
+    /// they are dropped. Input handlers have no backend access.
+    pub retired_runners: Vec<AppRunner>,
 }
 
 /// All mutable application state except `backend`, `sdi`, and `vfs`
@@ -149,7 +163,17 @@ pub struct AppState {
     pub archive_catalog: Option<ArchiveCatalog>,
     pub pending_catalog_fetch: Option<mpsc::Receiver<Result<CatalogFetchResult, String>>>,
     pub pending_source_fetch: Option<mpsc::Receiver<Result<TrackFetchResult, String>>>,
-    pub audio_backend: SdlAudioBackend,
+    /// Audio output: the SDL device in the desktop binary, a recording
+    /// fake in the headless e2e harness.
+    pub audio_backend: Box<dyn crate::audio_out::ShellAudio>,
+    /// Never start network fetches (TV catalogs / video downloads, radio
+    /// streams). Set by the headless harness so scenarios are hermetic
+    /// and deterministic; always `false` in the desktop binary.
+    pub offline: bool,
+    /// Directory "Save as custom skin" writes skins into (`skins/` next
+    /// to the binary's working directory; a temp dir in the headless
+    /// harness so tests never write into the repository).
+    pub custom_skin_root: std::path::PathBuf,
     pub toasts: ToastManager,
     /// UI sound events queued by input/toast chokepoints this frame,
     /// drained once per frame by `ui_sfx::tick`.
@@ -303,7 +327,7 @@ mod tests {
         let _terminal = TerminalLayer {
             cmd_reg: CommandRegistry::new(),
             cwd: "/".to_string(),
-            input_buf: String::new(),
+            session: ShellSession::new(),
             output_lines: Vec::new(),
             scroll_offset: 0,
             dirty: true,
@@ -313,6 +337,8 @@ mod tests {
 
         let _net = NetworkLayer {
             backend: StdNetworkBackend::new(),
+            listener_backend: StdNetworkBackend::new(),
+            ftp_backend: StdNetworkBackend::new(),
             listener: None,
             ftp_server: None,
             remote_client: None,
@@ -324,6 +350,7 @@ mod tests {
             open_runners: Vec::new(),
             browser: None,
             fullscreen_app: None,
+            retired_runners: Vec::new(),
         };
     }
 }

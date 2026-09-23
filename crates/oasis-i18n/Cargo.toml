@@ -11,6 +11,8 @@ documentation = "https://docs.rs/oasis-i18n"
 [dependencies]
 toml = { workspace = true }
 serde = { workspace = true }
+oasis-types = { workspace = true }
+log = { workspace = true }
 
 [lints]
 workspace = true

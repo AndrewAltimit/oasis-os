@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-OASIS_OS is an embeddable operating system framework in Rust (edition 2024). It provides a skinnable shell with a scene-graph UI, command interpreter, virtual file system, browser engine (HTML/CSS/Gemini), plugin system, and remote terminal. It renders to any pixel buffer + input stream. Built from scratch in Rust starting early 2026, inspired by PSP homebrew shells like PSIX. Sixteen built-in skins are implemented; 13 of them also ship as external TOML files in `skins/` (the other 3 — `corrupted`, `desktop`, `modern` — are built-in only).
+OASIS_OS is an embeddable operating system framework in Rust (edition 2024). It provides a skinnable shell with a scene-graph UI, command interpreter, virtual file system, browser engine (HTML/CSS/Gemini), plugin system, and remote terminal. It renders to any pixel buffer + input stream. Built from scratch in Rust starting early 2026, inspired by PSP homebrew shells like PSIX. Seventeen built-in skins are implemented; 14 of them also ship as external TOML files in `skins/` (the other 3 — `corrupted`, `desktop`, `modern` — are built-in only).
 
 Default virtual resolution is 480x272 (PSP native). Skins may override this (e.g. modern=800x600, xp=1024x768); the backend canvas/window scales to match.
 
@@ -13,8 +13,10 @@ Default virtual resolution is 480x272 (PSP native). Skins may override this (e.g
 All CI commands run inside Docker containers. For local development you can run cargo directly (SDL3 is compiled from source automatically via the `build-from-source` feature), or use the Docker wrapper.
 
 ```bash
-# Build (desktop)
+# Build (desktop). Default features need system ffmpeg dev libs (video-decode-ffmpeg);
+# without them (e.g. local Windows) use the openh264 fallback:
 cargo build --release -p oasis-app
+cargo build -p oasis-app --no-default-features --features javascript,video-decode
 
 # Build via Docker (matches CI exactly)
 docker compose --profile ci run --rm rust-ci cargo build --workspace --release
@@ -52,7 +54,7 @@ cd crates/oasis-backend-psp && RUST_PSP_BUILD_STD=1 cargo psp --release
 cd crates/oasis-plugin-psp && RUST_PSP_BUILD_STD=1 cargo psp --release
 
 # Build UE5 FFI shared library
-cargo build --release -p oasis-ffi
+cargo build --profile release-ffi -p oasis-ffi
 
 # Build WASM backend (requires wasm-pack)
 ./scripts/build-wasm.sh          # debug build
@@ -90,19 +92,19 @@ oasis-types     (foundation: Color, Button, InputEvent, backend traits, error ty
 ├── oasis-net        (TCP networking, PSK auth, remote terminal, FTP)
 ├── oasis-mcp        (optional MCP control server: Streamable HTTP + JSON-RPC, agent tool dispatch)
 ├── oasis-audio      (audio manager, playlist, MP3 ID3 parsing)
-├── oasis-ui         (32 widgets: Button, Card, TabBar, ListView, flex layout, etc.)
-├── oasis-wm         (window manager: drag/resize, hit testing, decorations)
-├── oasis-skin       (TOML skin engine, 16 skins, theme derivation)
-├── oasis-terminal   (90+ commands across 17+ modules, shell features)
+├── oasis-ui         (29 Widget impls + ListView/MenuBar/NinePatch/icons/flex+grid layout)
+├── oasis-wm         (window manager: drag/resize, hit testing, decorations, snapping, tiling, animations)
+├── oasis-skin       (TOML skin engine, 17 built-in skins, theme derivation)
+├── oasis-terminal   (~95 commands + 18 shell builtins, line editing, completion, jobs, scripting)
 ├── oasis-browser    (HTML/CSS/Gemini: DOM, CSS cascade+@media, layout engine, @font-face web fonts (fontdue TTF/OTF rasterizer, font registry, glyph texture cache), full 2D CSS transforms + 3D transform functions (rotateX/Y/Z, translate3d, scale3d, rotate3d, matrix3d, perspective()) with screen-space perspective projection from ancestor `perspective:`, transform-style: preserve-3d propagation, transform-origin Z, perspective-origin, and backface-visibility culling, Canvas 2D path API, SVG paths/groups, light compositor, z-index stacking contexts, nested scroll containers, form elements with select dropdown + label association, hover-triggered CSS transitions, soft hyphens, bidi text, JS DOM bindings)
 ├── oasis-js         (JavaScript engine: QuickJS-NG via rquickjs on all backends incl. PSP)
-├── oasis-video      (MP4/H.264+AAC decode; StreamingBuffer sliding-window; features: h264, no-std-demux, video-decode)
+├── oasis-video      (MP4/H.264+AAC decode; StreamingBuffer sliding-window; features: h264, ffmpeg, no-std-demux)
 ├── oasis-vector     (vector graphics: scene graph, path ops, icons, frame-driven animations)
 ├── oasis-shader     (animated shader wallpapers: Shadertoy-style fragment shaders)
 ├── oasis-rasterize  (software rasterizer for CPU-side rendering)
 ├── oasis-i18n       (internationalization support)
-├── oasis-test-backend (mock backend for testing)
-├── oasis-app-core   (shared app framework: AppTrait, common utilities)
+├── oasis-test-backend (mock/recording backends for testing)
+├── oasis-app-core   (shared app framework: `App` trait, `AppAction`, render helpers)
 ├── oasis-app-games  (Games app)
 ├── oasis-app-paint  (Paint app)
 ├── oasis-app-text-editor (Text Editor app)
@@ -118,12 +120,13 @@ oasis-types     (foundation: Color, Button, InputEvent, backend traits, error ty
 ├── oasis-app-system-monitor  (System Monitor app)
 └── oasis-core       (coordination only: dashboard, agent, plugin, script, terminal; all apps live in oasis-app-* crates)
     ├── oasis-backend-sdl  (SDL3 desktop/Pi rendering + input + audio)
-    │   └── oasis-app      (binary entry points: oasis-app, oasis-screenshot; oasis-video[video-decode])
+    │   └── oasis-app      (lib `oasis_app::Shell` + headless e2e harness; binaries oasis-app, oasis-screenshot; features video-decode-ffmpeg (default) / video-decode (openh264), skin-dev, mcp)
     ├── oasis-backend-wasm (Canvas 2D + DOM input + Web Audio; iframe overlay drives a Browser pane and a YouTube embed; YouTube search + thumbnail grid via Invidious; feature: wasm-youtube)
     ├── oasis-backend-ue5  (software RGBA framebuffer for Unreal Engine 5)
-    │   └── oasis-ffi      (cdylib C-ABI for UE5 integration; oasis-video[video-decode])
-    ├── oasis-backend-psp  (excluded from workspace, PSP hardware; oasis-video[no-std-demux])
-    └── oasis-plugin-psp   (excluded from workspace, kernel-mode PRX overlay)
+    │   └── oasis-ffi      (cdylib C-ABI for UE5 integration; features video-decode / video-decode-ffmpeg)
+    ├── oasis-backend-psp  (in the workspace `exclude` list, PSP hardware; oasis-video[no-std-demux])
+    └── oasis-plugin-psp   (standalone, not in the workspace; kernel-mode PRX overlay)
+oasis-usb-host  (standalone binary, rusb only: host side of the PSP USB thin client)
 ```
 
 ### PSP (target-specific architecture)
@@ -159,7 +162,7 @@ URL for fresh 302 redirects. Full details in
 
 `oasis-types/src/backend/` defines the only abstraction boundary between core and platform (re-exported by `oasis-core`):
 - `SdiCore` -- required rendering (13 methods: init, clear, blit, fill_rect, draw_text, swap_buffers, load_texture, destroy_texture, set_clip_rect, reset_clip_rect, measure_text, read_pixels, shutdown)
-- `SdiBackend` -- a marker super-trait with no methods of its own. A blanket impl satisfies it for any type that implements `SdiCore` plus all nine extension traits: `SdiShapes`, `SdiGradients`, `SdiAlpha`, `SdiText`, `SdiTextures`, `SdiClipTransform`, `SdiVector`, `SdiBatch`, `SdiRenderTarget`. The extensions live under `oasis-types/src/backend/extensions/` (one file per trait, re-exported via `extensions/mod.rs`) and total ~55 default-impl methods (shapes, gradients, alpha/blend, text styling, texture management, clipping/transforms, vector path ops, batched submission, offscreen render targets). `SdiBatch` in particular provides `begin_batch`/`flush_batch` plus `submit_rect_batch`/`submit_text_batch` for batched rect and text geometry submission (backends can override with GPU geometry calls).
+- `SdiBackend` -- a marker super-trait with no methods of its own. A blanket impl satisfies it for any type that implements `SdiCore` plus all nine extension traits: `SdiShapes`, `SdiGradients`, `SdiAlpha`, `SdiText`, `SdiTextures`, `SdiClipTransform`, `SdiVector`, `SdiBatch`, `SdiRenderTarget`. The extensions live under `oasis-types/src/backend/extensions/` (one file per trait, re-exported via `extensions/mod.rs`) and total 53 default-impl methods (shapes, gradients, alpha/blend, text styling, texture management, clipping/transforms, vector path ops, batched submission, offscreen render targets); two further optional traits, `SdiBlendMode` and `SdiGeometry`, are not part of `SdiBackend`. `SdiBatch` in particular provides `begin_batch`/`flush_batch` plus `submit_rect_batch`/`submit_text_batch` for batched rect and text geometry submission (backends can override with GPU geometry calls).
 - `InputBackend` -- input polling (returns `Vec<InputEvent>`)
 - `NetworkBackend` -- TCP networking
 - `AudioBackend` -- audio playback
@@ -175,24 +178,28 @@ The framework lives in 50 crate directories under `crates/`:
 
 Each module below is its own crate (previously all in oasis-core):
 
-- **oasis-types** -- Foundation types: `Color`, `Button`, `InputEvent`, backend traits (`SdiCore`, `SdiBackend`, `InputBackend`, `NetworkBackend`, `AudioBackend`), error types, TLS, bitmap font metrics, `geometry.rs` (shared shape algorithms)
+- **oasis-types** -- Foundation types: `Color`, `Button`, `InputEvent` (incl. raw `Key` + `Modifiers` events, `Key::legacy_press` gamepad-twin table, `KeyTwinFilter`), backend traits (`SdiCore`, `SdiBackend`, `InputBackend`, `NetworkBackend`, `AudioBackend`), error types, TLS, bitmap font metrics, `geometry.rs` (shared shape algorithms)
 - **oasis-sdi** -- Scene Display Interface: named objects with position, size, color, texture, text, z-order, gradients, rounded corners, shadows
-- **oasis-skin** -- Data-driven TOML skin system with 16 built-in skins (13 of which also ship as external TOML in `skins/`; the other 3 — `corrupted`, `desktop`, `modern` — are built-in only). Theme derivation from 9 base colors.
-- **oasis-browser** -- Embeddable HTML/CSS/Gemini rendering engine: WHATWG HTML, full CSS cascade with `@media` / `@container` / `@layer` / `@supports` / `@scope` / CSS Nesting / `:has()`, viewport-aware stylesheet parsing, 2D + 3D transforms, `@font-face` web fonts, canvas + SVG, HTTP/1.1 + HTTP/2 over rustls, cookies, CSP, reader mode, forms, bookmarks. **Feature catalogue:** [`docs/browser-engine.md`](docs/browser-engine.md). **Backlog:** [`docs/browser-backlog.md`](docs/browser-backlog.md).
-- **oasis-js** -- QuickJS-NG via `rquickjs` on every target (desktop / WASM / UE5 / PSP). DOM bindings (`getElementById`, `querySelector`, `fetch`, `setTimeout`, `localStorage`, event bubbling, …) feature-gated as `javascript`. PSP cross-compile is non-trivial (pspdev toolchain, `-msingle-float`, `psp-ld`, hand-rolled libc shim) — see [`docs/javascript-engine.md`](docs/javascript-engine.md).
-- **oasis-ui** -- 32 reusable widgets: Button, Card, TabBar, Panel, InputField, ListView, ScrollView, ProgressBar, Toggle, NinePatch, flex layout, Accordion, Avatar, Badge, Checkbox, ColorPicker, ContextMenu, DatePicker, Divider, Dropdown, Icon, Modal, Radio, RichText, Slider, SpinBox, Spinner, SplitPane, Table, Toast, Tooltip, TreeView
+- **oasis-skin** -- Data-driven TOML skin system with 17 built-in skins (14 of which also ship as external TOML in `skins/`; the other 3 — `corrupted`, `desktop`, `modern` — are built-in only). Theme derivation from 9 base colors.
+- **oasis-browser** -- Embeddable HTML/CSS/Gemini rendering engine: WHATWG HTML, full CSS cascade with `@media` / `@container` / `@layer` / `@supports` / `@scope` / CSS Nesting / `:has()`, viewport-aware stylesheet parsing, CSS Grid, `var()` substituted at computed-value time, 2D + 3D transforms, `@font-face` web fonts, canvas + SVG, HTTP/1.1 + HTTP/2 over rustls (8 MB decompressed-body cap), cookies, CSP, origin-checked `fetch` + per-origin quota'd Web Storage (JS glue in `src/js_dom/`), reader mode, forms, bookmarks. **Feature catalogue:** [`docs/browser-engine.md`](docs/browser-engine.md). **Backlog:** [`docs/browser-backlog.md`](docs/browser-backlog.md).
+- **oasis-js** -- QuickJS-NG via `rquickjs` on every target (desktop / WASM / UE5 / PSP). DOM bindings (`getElementById`, `querySelector`, `fetch`, `setTimeout`, `localStorage`, event bubbling, …) feature-gated as `javascript`. An execution watchdog (`JsEngine::with_context_guarded`, bounded microtask drains, timer limits) keeps runaway scripts from freezing the shell. PSP cross-compile is non-trivial (pspdev toolchain, `-msingle-float`, `psp-ld`, hand-rolled libc shim) — see [`docs/javascript-engine.md`](docs/javascript-engine.md).
+- **oasis-ui** -- 29 types implementing `Widget` (Button, Card, TabBar, Panel, InputField, ScrollView, ProgressBar, Toggle, Accordion, Avatar, Badge, Checkbox, ColorPicker, ContextMenu, DatePicker, Divider, Dropdown, Modal, RadioGroup, RichText, Slider, SpinBox, Spinner, SplitPane, Table, TextBlock, ToastStack, Tooltip, TreeView) plus ListView, MenuBar, NinePatch, IconAtlas, flex/grid layout, focus and animation helpers. Catalogue: [`docs/ui-widgets.md`](docs/ui-widgets.md)
 - **oasis-vfs** -- Virtual file system: `MemoryVfs` (in-RAM), `RealVfs` (disk), `GameAssetVfs` (UE5 with overlay writes)
-- **oasis-terminal** -- Command interpreter with 90+ commands across 17 modules (core, text, file, system, dev, fun, security, doc, audio, network, skin, UI, plus agent/plugin/script/transfer/update registered by oasis-core). Shell features: variable expansion, glob expansion, aliases, history, piping
-- **oasis-wm** -- Window manager (window configs, hit testing, drag/resize, minimize/maximize/close)
+- **oasis-terminal** -- Command interpreter: ~95 registered commands (core, platform, remote, network, audio, radio, skin, text, file, system, dev, fun, UI, security, doc; plus agent/plugin/script/transfer/update/tv/browser registered by oasis-core) and 18 shell builtins. Shell features: variables, globs, aliases, piping, one script engine (`script.rs`: if/while/until/for/case) for inline and `run` scripts, `cmd &` jobs, and a `ShellSession` (`session.rs`) with readline editing, tab completion and persistent history
+- **oasis-wm** -- Window manager (window configs, hit testing, drag/resize, minimize/maximize/close, edge snapping, tiling, open/close/minimize animations). See [`docs/window-manager.md`](docs/window-manager.md)
 - **oasis-net** -- TCP networking with PSK authentication, remote terminal, FTP transfer
 - **oasis-mcp** -- Optional MCP control server (off by default). Minimal Streamable-HTTP transport + JSON-RPC 2.0 / MCP dispatch over a non-blocking `NetworkStream`; app-agnostic (depends only on `oasis-types`) with a `ToolDispatcher` callback the app implements in `crates/oasis-app/src/mcp_tools.rs`. Lets an on-device agent drive the shell. See [`docs/mcp-server.md`](docs/mcp-server.md)
 - **oasis-audio** -- Audio manager with playlist, shuffle/repeat modes, MP3 ID3 tag parsing
 - **oasis-platform** -- Platform service traits: PowerService, TimeService, UsbService, NetworkService, OskService
-- **oasis-video** -- MP4 / H.264 + AAC decode pipeline. Feature flags: `h264` (openh264 + symphonia demux/AAC), `no-std-demux` (PSP-safe `demux_lite::Mp4Lite`), `video-decode` (re-exports `SoftwareVideoDecoder` for desktop/UE5). Desktop progressive streaming + PSP in-memory ME-hardware pipeline are documented in [`docs/video-streaming.md`](docs/video-streaming.md) and [`docs/psp-architecture.md`](docs/psp-architecture.md) §Video Streaming.
+- **oasis-video** -- MP4 / H.264 + AAC decode pipeline. Feature flags: `h264` (openh264 + symphonia demux/AAC), `ffmpeg` (statically linked ffmpeg; mutually exclusive with `h264`), `no-std-demux` (PSP-safe `demux_lite::Mp4Lite`). `video-decode` / `video-decode-ffmpeg` are features of `oasis-app` / `oasis-ffi` that select `h264` / `ffmpeg`. Desktop progressive streaming + PSP in-memory ME-hardware pipeline are documented in [`docs/video-streaming.md`](docs/video-streaming.md) and [`docs/psp-architecture.md`](docs/psp-architecture.md) §Video Streaming.
 - **oasis-vector** -- Resolution-independent vector graphics: scene graph with path-based drawing operations (fill, stroke, arcs, beziers), Altimit-style dashboard icons, and frame-driven animations. Integrates via `SdiBackend` vector graphics trait extensions
 - **oasis-shader** -- Animated shader wallpapers: Shadertoy-style fragment shaders (voronoi, city lights, ocean waves, calm waves, Balatro)
-- **oasis-app-core** -- Shared app framework: `AppTrait`, common utilities for extracted app crates
+- **oasis-app-core** -- Shared app framework: the `App` trait (input, `handle_key`, `accepts_text`, `tick`, `wants_frame`, `apply_vfs_ops`, SDI + windowed rendering), `AppAction`, render helpers. Guide: [`docs/writing-apps.md`](docs/writing-apps.md)
 - **oasis-app-*** -- 13 extracted app crates: `oasis-app-games`, `oasis-app-paint`, `oasis-app-text-editor`, `oasis-app-calculator`, `oasis-app-media` (Music Player + Photo Viewer), `oasis-app-tv-guide`, `oasis-app-radio`, `oasis-app-settings`, `oasis-app-file-manager`, `oasis-app-browser`, `oasis-app-network`, `oasis-app-package-manager`, `oasis-app-system-monitor`
+- **oasis-rasterize** -- Shared software rasterizer (span/row fast paths) used by the UE5, SDL and WASM backends
+- **oasis-i18n** -- Internationalization framework
+- **oasis-test-backend** -- Mock and recording `SdiBackend` implementations for tests
+- **oasis-usb-host** -- Standalone host binary (rusb) that streams frames to / reads input from the PSP USB thin client (`oasis-usb-client-psp`)
 - **oasis-core** -- Coordination layer: dashboard, agent/MCP, plugin, scripting, status/bottom bars, desktop taskbar, in-core Terminal app. All other apps live in `oasis-app-*` crates; `oasis-core` no longer ships any app implementations beyond the Terminal delegate (which the desktop input pipeline pumps `set_lines` into) and the `SimpleApp` placeholder used by the plugin system for dynamically registered apps.
 
 ### Font Rendering
@@ -201,7 +208,7 @@ Proportional bitmap font rendering from glyph ink bounds. `oasis-types` provides
 
 ### FFI Boundary (oasis-ffi)
 
-Exports C-ABI functions: `oasis_create`, `oasis_destroy`, `oasis_tick`, `oasis_send_input`, `oasis_get_buffer`, `oasis_get_dirty`, `oasis_send_command`, `oasis_free_string`, `oasis_set_vfs_root`, `oasis_register_callback`, `oasis_add_vfs_file`. This is how UE5 (or any C-compatible host) embeds OASIS_OS.
+Exports C-ABI functions: `oasis_create`, `oasis_create_full`, `oasis_destroy`, `oasis_tick`, `oasis_send_input`, `oasis_get_buffer`, `oasis_get_dirty`, `oasis_send_command`, `oasis_free_string`, `oasis_set_vfs_root`, `oasis_register_callback`, `oasis_add_vfs_file`; audio: `oasis_audio_load`, `oasis_audio_play`, `oasis_audio_pause`, `oasis_audio_resume`, `oasis_audio_stop`, `oasis_audio_set_volume`, `oasis_audio_get_volume`, `oasis_audio_is_playing`, `oasis_set_audio_callback`; video (feature `video-decode`/`video-decode-ffmpeg`): `oasis_video_play`, `oasis_video_stop`, `oasis_video_next_frame`, `oasis_video_get_audio`, `oasis_video_is_playing`. This is how UE5 (or any C-compatible host) embeds OASIS_OS. Reference: [`docs/ffi-integration.md`](docs/ffi-integration.md).
 
 ## Code Conventions
 
@@ -210,7 +217,8 @@ Exports C-ABI functions: `oasis_create`, `oasis_destroy`, `oasis_tick`, `oasis_s
 - Clippy warnings are CI errors (`-D warnings`)
 - Workspace lints: `clone_on_ref_ptr`, `dbg_macro`, `todo`, `unimplemented` = warn; `unsafe_op_in_unsafe_fn` = warn; `unwrap_used` = deny
 - All unsafe blocks require `// SAFETY:` comments
-- Tests are in-module (`#[cfg(test)] mod tests`), not in a separate `tests/` directory
+- Unit tests are in-module (`#[cfg(test)] mod tests`); add new tests there. A few crates also have `tests/` integration suites (oasis-browser, oasis-terminal, oasis-test-backend, oasis-vfs, oasis-wm) and criterion `benches/`
+- User-flow / wiring changes in the desktop shell get an end-to-end scenario in `crates/oasis-app/tests/e2e_*.rs` using `oasis_app::harness::Harness` (see [`docs/testing.md`](docs/testing.md))
 - Dual-licensed: Unlicense + MIT
 
 ## Docker Services
@@ -225,7 +233,8 @@ Exports C-ABI functions: `oasis_create`, `oasis_destroy`, `oasis_tick`, `oasis_s
 Key documentation files for agents and contributors. Read these for deeper context on specific topics rather than loading everything into every conversation.
 
 ### Architecture & Design
-- [`docs/design.md`](docs/design.md) -- Technical design document v2.4 (~1500 lines, comprehensive architecture)
+- [`docs/README.md`](docs/README.md) -- Index of every document under `docs/`
+- [`docs/design.md`](docs/design.md) -- Technical design document v2.6 (~1400 lines, comprehensive architecture)
 - [`docs/browser-engine.md`](docs/browser-engine.md) -- Browser feature catalogue (HTTP, HTML, CSS, layout, fonts, chrome, JS bindings)
 - [`docs/javascript-engine.md`](docs/javascript-engine.md) -- QuickJS-NG integration and PSP cross-compile
 - [`docs/psp-architecture.md`](docs/psp-architecture.md) -- PSP two-binary split, GU, TLS 1.3, ME video decode
@@ -239,6 +248,11 @@ Key documentation files for agents and contributors. Read these for deeper conte
 
 ### Guides
 - [`docs/getting-started.md`](docs/getting-started.md) -- Getting started guide
+- [`docs/writing-apps.md`](docs/writing-apps.md) -- `App` trait lifecycle, hooks, idle-frame rules, minimal example app
+- [`docs/testing.md`](docs/testing.md) -- Test layers and the headless shell e2e harness (`oasis_app::harness`): drive the real shell (click, key, type, open apps, pixels, drawn text, captured audio)
+- [`docs/ui-widgets.md`](docs/ui-widgets.md) -- `oasis-ui` widget catalogue
+- [`docs/window-manager.md`](docs/window-manager.md) -- `WindowManager` API, snapping, shortcuts, animations
+- [`docs/wasm-backend.md`](docs/wasm-backend.md) -- WASM build, serving, input mapping, iframe overlay
 - [`docs/adding-commands.md`](docs/adding-commands.md) -- How to add terminal commands
 - [`docs/terminal-commands.md`](docs/terminal-commands.md) -- Catalog of built-in terminal commands grouped by module
 - [`docs/skin-authoring.md`](docs/skin-authoring.md) -- Skin creation with full TOML reference

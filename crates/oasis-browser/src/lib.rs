@@ -18,7 +18,7 @@
 //!   `crates/oasis-backend-psp/.cargo/config.toml`), so `oasis-js` and
 //!   its full `JsEngine` API are available on `mipsel-sony-psp` too.
 //!   The `javascript` feature is still off on PSP by default while
-//!   `js_dom.rs` is audited for the mipsel target; once that's done
+//!   `js_dom/` is audited for the mipsel target; once that's done
 //!   the PSP browser will pick up inline `<script>` and DOM bindings
 //!   unchanged from desktop/WASM/UE5. Standalone evaluation is already
 //!   reachable via `cmd_server.rs`'s `js <code>` TCP command.
@@ -53,7 +53,7 @@
 //! PSP opts out: the backend reports `supports_render_targets() = false`
 //! so replay falls back to plain opacity stacking — pages still render,
 //! but blend modes, filters, and masks do not apply. See
-//! `docs/compositor-overhaul-plan.md` §3.6 for the phased revisit plan.
+//! `docs/archive/compositor-overhaul-plan.md` §3.6 for the phased revisit plan.
 
 pub mod config;
 pub(crate) mod css;
@@ -309,6 +309,11 @@ pub struct BrowserWidget {
     /// DOM node currently under the cursor (for `:hover`).
     hover_node: Option<NodeId>,
 
+    /// Last pointer position (screen coordinates) seen via
+    /// `CursorMove`, used to route wheel events to the nested scroll
+    /// container under the pointer.
+    last_cursor: Option<(i32, i32)>,
+
     /// DOM node that currently has keyboard/tab focus (for `:focus`).
     focused_node: Option<NodeId>,
 
@@ -338,22 +343,26 @@ pub struct BrowserWidget {
     /// Background I/O thread for non-blocking HTTP requests.
     /// Lazily created on first network request.
     ///
-    /// **Drop order**: `io_thread` is declared before `tls` so it is
-    /// dropped first. `IoThread::drop()` closes the sender channel and
-    /// joins the worker thread, ensuring it has fully exited before the
-    /// `TlsProvider` is freed.
+    /// The worker owns an `Arc` clone of `tls`, so replacing or
+    /// dropping `tls` never frees a provider the worker still uses.
     #[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
     io_thread: Option<loader::io_thread::IoThread>,
 
     /// Optional TLS provider for HTTPS and Gemini connections.
     ///
-    /// **Drop order**: Must be declared after `io_thread` so it outlives
-    /// the I/O worker thread (see `SharedTlsProvider` safety invariant).
-    tls: Option<Box<dyn oasis_net::tls::TlsProvider>>,
+    /// Reference-counted so the I/O thread and page `fetch()` handlers
+    /// can share it safely.
+    tls: Option<std::sync::Arc<dyn oasis_net::tls::TlsProvider>>,
 
     /// Pending page load request ID (in-flight on the I/O thread).
     #[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
     pending_page_load: Option<loader::io_thread::IoRequestId>,
+
+    /// URL of the in-flight [`Self::pending_page_load`], so a failed
+    /// async load can render its error page under the URL the user
+    /// actually asked for (keeping it in the URL bar and history).
+    #[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
+    pending_page_url: Option<String>,
 
     /// In-flight image requests on the I/O thread, keyed by request ID
     /// mapped to the resolved image URL.
@@ -422,6 +431,18 @@ pub struct BrowserWidget {
     /// back into DOM order at cascade time.
     external_stylesheet_positions: Vec<NodeId>,
 
+    /// Raw CSS text of each arrived `external_stylesheets` entry, kept
+    /// so the sheet can be re-parsed when the viewport changes (media
+    /// queries are evaluated at parse time).
+    external_stylesheet_sources: Vec<Option<String>>,
+
+    /// Window size the current author sheets were parsed for.
+    styled_viewport: (u32, u32),
+
+    /// Whether any author sheet of the current page uses `@media`, i.e.
+    /// a viewport change may change which rules apply.
+    media_dependent_css: bool,
+
     /// In-flight external stylesheet requests on the I/O thread, keyed
     /// by request ID mapped to the `external_stylesheets` slot index.
     #[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
@@ -431,6 +452,11 @@ pub struct BrowserWidget {
     /// `tick()` which holds the active VFS handle.
     #[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
     pending_vfs_stylesheets: Vec<(usize, ResourceRequest)>,
+
+    /// `@import`ed stylesheet URLs already requested for the current
+    /// page (dedupes imports and bounds import chains and cycles).
+    #[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
+    imported_stylesheet_urls: HashSet<String>,
 
     /// Set once any external stylesheet has arrived that was not yet
     /// applied to the cascade. A later `tick` call re-runs cascade +
@@ -563,6 +589,13 @@ pub struct BrowserWidget {
     /// Rebuilt only when layout changes; replayed on each frame.
     display_list: paint::display_list::DisplayList,
 
+    /// Set when the display list was invalidated (navigation, restyle)
+    /// and not yet re-recorded by `paint`. Tracked separately from
+    /// `display_list.is_empty()`: a page that records no items at all
+    /// (an empty `<body>`, a page of blank space) has an empty list
+    /// after recording too, and must not keep requesting frames.
+    display_list_stale: bool,
+
     /// Scroll Y position at which the display list was last recorded.
     /// When scroll changes, we replay with adjusted offsets instead of
     /// rebuilding. A full rebuild is forced when layout changes.
@@ -649,6 +682,7 @@ impl BrowserWidget {
             last_layout_w: 480,
             visited_urls: HashSet::new(),
             hover_node: None,
+            last_cursor: None,
             focused_node: None,
             body_node_id: None,
             decoded_images: HashMap::new(),
@@ -659,6 +693,8 @@ impl BrowserWidget {
             tls: None,
             #[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
             pending_page_load: None,
+            #[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
+            pending_page_url: None,
             #[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
             pending_io_images: HashMap::new(),
             #[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
@@ -679,10 +715,15 @@ impl BrowserWidget {
             cached_author_sheet_positions: Vec::new(),
             external_stylesheets: Vec::new(),
             external_stylesheet_positions: Vec::new(),
+            external_stylesheet_sources: Vec::new(),
+            styled_viewport: (480, 272),
+            media_dependent_css: false,
             #[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
             pending_io_stylesheets: std::collections::HashMap::new(),
             #[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
             pending_vfs_stylesheets: Vec::new(),
+            #[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
+            imported_stylesheet_urls: HashSet::new(),
             pending_external_css_apply: false,
             cached_inline_styles: Vec::new(),
             cached_selector_index: None,
@@ -701,7 +742,7 @@ impl BrowserWidget {
             #[cfg(feature = "javascript")]
             js_nav_actions: std::rc::Rc::new(std::cell::RefCell::new(Vec::new())),
             #[cfg(feature = "javascript")]
-            js_local_storage: std::rc::Rc::new(std::cell::RefCell::new(HashMap::new())),
+            js_local_storage: std::rc::Rc::default(),
             #[cfg(feature = "javascript")]
             js_dom_dirty: std::rc::Rc::new(std::cell::Cell::new(false)),
             #[cfg(feature = "javascript")]
@@ -725,6 +766,7 @@ impl BrowserWidget {
             page_errors: Vec::new(),
             form_manager: forms::FormManager::new(),
             display_list: paint::display_list::DisplayList::new(),
+            display_list_stale: false,
             display_list_scroll_y: 0,
             display_list_scroll_x: 0,
             link_map_scroll_y: 0,
@@ -738,8 +780,25 @@ impl BrowserWidget {
     }
 
     /// Attach a TLS provider for HTTPS and Gemini support.
+    ///
+    /// Safe to call at any time, including while the background I/O
+    /// thread is running: the thread holds its own `Arc` clone, so the
+    /// previous provider stays alive until the thread is done with it.
+    /// If the I/O thread is idle it is retired so the next network
+    /// request respawns it with the new provider; if requests are in
+    /// flight it keeps the old provider until it is next recreated.
     pub fn set_tls_provider(&mut self, provider: Box<dyn oasis_net::tls::TlsProvider>) {
-        self.tls = Some(provider);
+        self.tls = Some(std::sync::Arc::from(provider));
+        #[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
+        if self
+            .io_thread
+            .as_ref()
+            .is_some_and(|io| io.in_flight() == 0)
+        {
+            // Idle worker is parked in `recv()`; dropping closes its
+            // channel and the join returns promptly.
+            self.io_thread = None;
+        }
     }
 
     /// Install a diagnostic log hook. The browser fires it at key
@@ -779,9 +838,70 @@ impl BrowserWidget {
         self.scroll.set_viewport_width(w as i32);
     }
 
+    /// Adopt the chrome colors of `themed` (a config built for a new
+    /// skin theme, [`BrowserConfig::from_skin_theme`]) while keeping this
+    /// session's features, zoom and limits. Hosts call it on a skin swap
+    /// so an open browser doesn't keep the previous skin's chrome.
+    pub fn apply_chrome_theme(&mut self, themed: &BrowserConfig) {
+        let c = &mut self.config;
+        c.chrome_bg = themed.chrome_bg;
+        c.chrome_text = themed.chrome_text;
+        c.chrome_button_bg = themed.chrome_button_bg;
+        c.chrome_button_hover = themed.chrome_button_hover;
+        c.url_bar_bg = themed.url_bar_bg;
+        c.url_bar_text = themed.url_bar_text;
+        c.status_bar_bg = themed.status_bar_bg;
+        c.status_bar_text = themed.status_bar_text;
+        c.default_link_color = themed.default_link_color;
+        c.use_themed_chrome = themed.use_themed_chrome;
+        self.full_repaint_needed = true;
+    }
+
     /// Returns whether the layout tree needs rebuilding.
     pub fn is_layout_dirty(&self) -> bool {
         self.layout_dirty
+    }
+
+    /// Whether the next [`Self::paint`] would draw something different
+    /// from the last one, i.e. the host must not elide the frame.
+    ///
+    /// Call after [`Self::tick`] (which folds finished image decodes,
+    /// stylesheet arrivals, CSS animation/transition steps and fired JS
+    /// timers into the dirty flags below) and after input dispatch. A
+    /// page still loading counts as changing: the chrome shows progress
+    /// and resources land without further input. Pending JS timers alone
+    /// don't: `tick` keeps running them on elided frames, and one that
+    /// fires marks the layout dirty.
+    ///
+    /// A fresh navigation or restyle invalidates the display list;
+    /// the frame that re-records it is wanted, later ones are not (even
+    /// when the page records no display items at all).
+    pub fn wants_frame(&self) -> bool {
+        let repaint_pending = self.layout_dirty
+            || self.full_repaint_needed
+            || !self.dirty_rects.is_empty()
+            || self.image_info_dirty
+            || (self.layout_root.is_some() && self.display_list_stale)
+            // Scroll not yet painted (`paint` syncs the link-map offset
+            // on every scroll replay or re-record).
+            || self.link_map_scroll_y != self.scroll.scroll_y
+            || self.link_map_scroll_x != self.scroll.scroll_x;
+        let loading = self.state == LoadingState::Loading
+            || !self.pending_images.is_empty()
+            || self.pending_external_css_apply;
+        #[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
+        let loading = loading
+            || self.pending_page_load.is_some()
+            || !self.pending_io_images.is_empty()
+            || self.image_decode_in_flight > 0
+            || !self.pending_io_stylesheets.is_empty()
+            || !self.pending_vfs_stylesheets.is_empty();
+        let animating = self.animation_engine.has_active()
+            || self.transition_engine.has_active()
+            || self.scroll.is_animating();
+        #[cfg(feature = "javascript")]
+        let animating = animating || !self.deferred_scripts.is_empty();
+        repaint_pending || loading || animating
     }
 
     /// Mark a screen-space rectangle as needing repaint.
@@ -803,6 +923,10 @@ impl BrowserWidget {
             self.layout_dirty = false;
             return false;
         }
+
+        // A resize can flip `@media` conditions: re-parse and re-cascade
+        // before laying out at the new size.
+        self.restyle_for_viewport_if_needed();
 
         self.refresh_image_info();
         let doc = self
@@ -1007,3 +1131,6 @@ impl BrowserWidget {
 #[cfg(test)]
 #[path = "browser_tests.rs"]
 mod tests;
+
+#[cfg(all(test, not(any(target_arch = "wasm32", feature = "psp"))))]
+mod e2e_tests;

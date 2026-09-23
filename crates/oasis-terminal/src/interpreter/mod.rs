@@ -34,9 +34,11 @@ use oasis_types::error::Result;
 // - builtins.rs: help, which, function, return, break, continue, local,
 //                history, set, unset, env, alias, unalias, list_commands,
 //                completions
-// - script.rs:   run, execute_script_block, collect_loop_body,
-//                execute_if_block, execute_case_block,
-//                execute_script_line, eval_condition
+// - jobs.rs:     background jobs (`cmd &`), jobs, fg, bg, kill %N,
+//                poll_jobs
+// - script.rs:   run, statement splitting, the control-flow parser
+//                (if/elif/else, while/until, for, case) and executor
+//                shared by scripts and inline one-liners
 
 #[cfg(test)]
 mod tests_basic;

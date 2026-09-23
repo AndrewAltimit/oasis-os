@@ -9,6 +9,7 @@ use std::collections::HashMap;
 
 use oasis_types::error::{OasisError, Result};
 
+use crate::jobs::JobManager;
 use crate::types::{
     Command, CommandOutput, Environment, MAX_CALL_DEPTH, MAX_HISTORY, ShellFunction,
 };
@@ -36,6 +37,13 @@ pub struct CommandRegistry {
     /// Each scope maps variable names to their saved values
     /// (None = was unset).
     pub(crate) local_scopes: RefCell<Vec<HashMap<String, Option<String>>>>,
+    /// Nesting depth of [`CommandRegistry::execute`] calls (0 = idle).
+    /// Only depth-0 (interactive) lines are recorded in the history.
+    pub(crate) exec_depth: Cell<usize>,
+    /// Background jobs queued with a trailing `&`.
+    pub(crate) jobs: RefCell<JobManager>,
+    /// Nesting depth of `run <script>` calls.
+    pub(crate) script_depth: Cell<usize>,
 }
 
 impl CommandRegistry {
@@ -57,6 +65,9 @@ impl CommandRegistry {
             break_flag: Cell::new(false),
             continue_flag: Cell::new(false),
             local_scopes: RefCell::new(Vec::new()),
+            exec_depth: Cell::new(0),
+            jobs: RefCell::new(JobManager::new()),
+            script_depth: Cell::new(0),
         }
     }
 
@@ -260,6 +271,37 @@ impl CommandRegistry {
         self.history.borrow().clone()
     }
 
+    /// Replace the command history (e.g. with entries loaded from disk).
+    ///
+    /// Blank entries are dropped and at most the newest 500 (`MAX_HISTORY`)
+    /// entries are kept.
+    pub fn set_history(&self, entries: Vec<String>) {
+        let mut entries: Vec<String> = entries
+            .into_iter()
+            .map(|e| e.trim().to_string())
+            .filter(|e| !e.is_empty())
+            .collect();
+        if entries.len() > MAX_HISTORY {
+            entries.drain(..entries.len() - MAX_HISTORY);
+        }
+        *self.history.borrow_mut() = entries;
+    }
+
+    /// Visit the history (oldest first) without cloning it.
+    pub fn with_history<R>(&self, f: impl FnOnce(&[String]) -> R) -> R {
+        f(&self.history.borrow())
+    }
+
+    /// Names of all registered commands, shell builtins, aliases and
+    /// functions (unsorted; used for tab completion).
+    pub fn completion_names(&self) -> Vec<String> {
+        let mut names: Vec<String> = self.commands.keys().cloned().collect();
+        names.extend(crate::types::BUILTIN_NAMES.iter().map(|s| s.to_string()));
+        names.extend(self.aliases.borrow().keys().cloned());
+        names.extend(self.functions.borrow().keys().cloned());
+        names
+    }
+
     /// Push a command to history.
     pub(crate) fn push_history(&self, line: &str) {
         let mut hist = self.history.borrow_mut();
@@ -348,7 +390,12 @@ impl CommandRegistry {
     fn resolve_var(&self, name: &str, vars: &HashMap<String, String>, cwd: &str) -> String {
         match name {
             "CWD" => cwd.to_string(),
-            "?" => self.last_exit_code.get().to_string(),
+            // The status of the previous command (the chain executor
+            // updates `?` once a pipeline finishes).
+            "?" => vars
+                .get("?")
+                .cloned()
+                .unwrap_or_else(|| self.last_exit_code.get().to_string()),
             _ => vars.get(name).cloned().unwrap_or_default(),
         }
     }

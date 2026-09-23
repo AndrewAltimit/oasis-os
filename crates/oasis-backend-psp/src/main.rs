@@ -264,7 +264,10 @@ fn psp_main() {
         "user"
     };
     let initial_lines = vec![
-        format!("OASIS_OS v0.1.0 [PSP] ({mode_label} mode)"),
+        format!(
+            "OASIS_OS v{} [PSP] ({mode_label} mode)",
+            env!("CARGO_PKG_VERSION")
+        ),
         format!(
             "CPU: {}MHz  Bus: {}MHz  ME: {}MHz",
             sysinfo.cpu_mhz, sysinfo.bus_mhz, sysinfo.me_mhz,
@@ -878,6 +881,8 @@ fn psp_main() {
         // to prevent Z-order flickering over the video frame.
         if !video_fullscreen {
             let _ = sdi.draw_overlay_layer(&mut backend);
+            // Status bar battery / AC glyphs (vector art over the bar).
+            let _ = oasis_core::statusbar::render_status_glyphs(&mut backend, &sdi);
         }
 
         // Post-SDI overlays drawn directly on the backend.

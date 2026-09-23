@@ -1850,3 +1850,258 @@ mod prop {
         );
     }
 }
+
+// -------------------------------------------------------------------
+// Deterministic no-panic fuzzing
+// -------------------------------------------------------------------
+
+/// Deterministic, dependency-free fuzz pass over the HTML parser.
+///
+/// Seeds are the `#data` inputs from the vendored html5lib
+/// tree-construction fixtures plus a handful of adversarial snippets.
+/// A seeded xorshift PRNG applies structural mutations (splicing tag
+/// fragments, cross-seed crossover, duplication, truncation, random
+/// Unicode) and every result is run through the tokenizer + tree
+/// builder. The only assertion is "does not panic" (plus a basic
+/// sanity check on the resulting DOM), so any `expect`/index panic
+/// reachable from untrusted markup fails the test with the offending
+/// input in the message.
+mod fuzz {
+    use super::super::super::tokenizer::Tokenizer;
+    use super::TreeBuilder;
+
+    const FIXTURE: &str =
+        include_str!("../../../tests/fixtures/html5lib/tree_construction_basic.dat");
+
+    /// Extra seeds that target the historically fragile paths:
+    /// adoption agency, foster parenting, templates, foreign content,
+    /// raw-text states, and character references.
+    const EXTRA_SEEDS: &[&str] = &[
+        "<a><p><b><i><div>x</a>y</div></i></b></p>",
+        "<b><p></b></p><i><table><tr><td></i>z",
+        "<table><b><tr><td>a</b>c</td></tr>d</table>",
+        "<template><tr><td>a</template><td>b",
+        "<svg><foreignObject><p>x</svg><math><mtext><b>y</math>",
+        "<select><option>a<optgroup><option>b</select><keygen>",
+        "<script>if (a < b) { document.write('</scr'+'ipt>'); }</script>",
+        "<style>p{color:red}</style><textarea></b>&amp;</textarea>",
+        "<!DOCTYPE html><html><head><title>&lt;x&gt;&#x41;&#65;&notanentity;</title>",
+        "<frameset><frame><noframes></frameset></html><!-- trailing -->",
+        "<form><form><input><button><form></button></form>",
+        "<h1><h2><h3>x</h1></h3><dd><dt><li>y",
+        "<ruby>a<rt>b<rp>c</ruby><nobr><nobr>z",
+        "<body><body><html x=1><head></head><p>",
+    ];
+
+    /// Snippets spliced into inputs by the mutator.
+    const FRAGMENTS: &[&str] = &[
+        "<",
+        ">",
+        "</",
+        "/>",
+        "<!--",
+        "-->",
+        "<!DOCTYPE",
+        "<![CDATA[",
+        "]]>",
+        "&",
+        "&amp;",
+        "&#",
+        "&#x",
+        ";",
+        "\"",
+        "'",
+        "=",
+        "<a>",
+        "</a>",
+        "<b>",
+        "</b>",
+        "<i>",
+        "</i>",
+        "<p>",
+        "</p>",
+        "<div>",
+        "</div>",
+        "<table>",
+        "</table>",
+        "<tr>",
+        "<td>",
+        "</td>",
+        "<th>",
+        "<tbody>",
+        "<caption>",
+        "<colgroup>",
+        "<col>",
+        "<template>",
+        "</template>",
+        "<svg>",
+        "</svg>",
+        "<math>",
+        "</math>",
+        "<foreignObject>",
+        "<desc>",
+        "<mi>",
+        "<select>",
+        "<option>",
+        "<optgroup>",
+        "<form>",
+        "</form>",
+        "<li>",
+        "<dd>",
+        "<dt>",
+        "<h1>",
+        "</h2>",
+        "<script>",
+        "</script>",
+        "<style>",
+        "</style>",
+        "<textarea>",
+        "<title>",
+        "<plaintext>",
+        "<xmp>",
+        "<iframe>",
+        "<noscript>",
+        "<frameset>",
+        "<html>",
+        "</html>",
+        "<head>",
+        "</head>",
+        "<body>",
+        "</body>",
+        "<br>",
+        "</br>",
+        "<img src=x>",
+        "<input type=hidden>",
+        "<nobr>",
+        "<marquee>",
+        "<object>",
+        "<applet>",
+        "<button>",
+        "<ruby>",
+        "<rt>",
+        "<rp>",
+        "<hr>",
+        "<image>",
+        "<isindex>",
+        "\0",
+        "\u{fffd}",
+        "\r\n",
+        "\t",
+        " ",
+    ];
+
+    /// Minimal xorshift64* PRNG (deterministic across platforms).
+    struct Rng(u64);
+
+    impl Rng {
+        fn next(&mut self) -> u64 {
+            let mut x = self.0;
+            x ^= x >> 12;
+            x ^= x << 25;
+            x ^= x >> 27;
+            self.0 = x;
+            x.wrapping_mul(0x2545_F491_4F6C_DD1D)
+        }
+
+        fn below(&mut self, n: usize) -> usize {
+            if n == 0 {
+                0
+            } else {
+                (self.next() % n as u64) as usize
+            }
+        }
+    }
+
+    fn seeds() -> Vec<String> {
+        let mut out = Vec::new();
+        let mut lines = FIXTURE.lines();
+        while let Some(line) = lines.next() {
+            if line == "#data" {
+                let mut data = String::new();
+                for l in lines.by_ref() {
+                    if l.starts_with('#') {
+                        break;
+                    }
+                    if !data.is_empty() {
+                        data.push('\n');
+                    }
+                    data.push_str(l);
+                }
+                out.push(data);
+            }
+        }
+        assert!(out.len() >= 5, "fixture seeds not found");
+        out.extend(EXTRA_SEEDS.iter().map(|s| s.to_string()));
+        out
+    }
+
+    /// Nearest char boundary at or below `i`.
+    fn boundary(s: &str, mut i: usize) -> usize {
+        i = i.min(s.len());
+        while !s.is_char_boundary(i) {
+            i -= 1;
+        }
+        i
+    }
+
+    fn mutate(rng: &mut Rng, input: &str, seeds: &[String]) -> String {
+        let mut s = input.to_string();
+        let rounds = 1 + rng.below(6);
+        for _ in 0..rounds {
+            let at = boundary(&s, rng.below(s.len() + 1));
+            match rng.below(7) {
+                // Insert a structural fragment.
+                0 | 1 => s.insert_str(at, FRAGMENTS[rng.below(FRAGMENTS.len())]),
+                // Delete a span.
+                2 => {
+                    let end = boundary(&s, at + rng.below(16));
+                    s.replace_range(at..end.max(at), "");
+                },
+                // Duplicate a span (deep nesting / repeated end tags).
+                3 => {
+                    let end = boundary(&s, at + rng.below(32));
+                    let span = s[at..end.max(at)].repeat(1 + rng.below(8));
+                    s.insert_str(at, &span);
+                },
+                // Crossover with another seed.
+                4 => {
+                    let other = &seeds[rng.below(seeds.len())];
+                    let from = boundary(other, rng.below(other.len() + 1));
+                    s.insert_str(at, &other[from..]);
+                },
+                // Truncate (unterminated tags, comments, entities).
+                5 => s.truncate(at),
+                // Random Unicode scalar (including controls and surrogate-adjacent).
+                _ => {
+                    let c = char::from_u32(rng.below(0x11_0000) as u32).unwrap_or('\u{fffd}');
+                    s.insert(at, c);
+                },
+            }
+            // Keep inputs bounded so the pass stays fast in debug builds.
+            if s.len() > 4096 {
+                let cut = boundary(&s, 4096);
+                s.truncate(cut);
+            }
+        }
+        s
+    }
+
+    #[test]
+    fn mutated_html5lib_inputs_never_panic() {
+        const ITERATIONS: usize = 5_000;
+        let seeds = seeds();
+        let mut rng = Rng(0x0A51_5F00_D5EE_D001);
+        for i in 0..ITERATIONS {
+            let base = &seeds[i % seeds.len()];
+            let input = mutate(&mut rng, base, &seeds);
+            let result = std::panic::catch_unwind(|| {
+                let tokens = Tokenizer::new(&input).tokenize();
+                TreeBuilder::build(tokens)
+            });
+            match result {
+                Ok(doc) => assert!(!doc.nodes.is_empty(), "empty DOM for input #{i}"),
+                Err(_) => panic!("HTML parser panicked on fuzz input #{i}: {input:?}"),
+            }
+        }
+    }
+}

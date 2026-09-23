@@ -14,6 +14,7 @@ use crate::backend::SdiBackend;
 use crate::dashboard::AppEntry;
 use crate::vfs::Vfs;
 
+use super::app_trait::AppAction;
 use super::registry::{create_app_delegate, create_app_delegate_for_file};
 
 /// Runtime state for a launched application screen.
@@ -39,6 +40,10 @@ pub struct AppRunner {
     pub(crate) pending_vfs_request: Option<(String, String)>,
     /// Extracted app implementation (Some for migrated apps).
     pub(crate) delegate: Option<Box<dyn super::app_trait::App>>,
+    /// Whether the app's visible content may have changed since the host
+    /// last drew it (see [`Self::wants_frame`] / [`Self::mark_drawn`]).
+    /// Set conservatively by every mutating entry point.
+    pub(crate) redraw_pending: bool,
 }
 
 impl AppRunner {
@@ -71,6 +76,7 @@ impl AppRunner {
             cursor: 0,
             pending_vfs_request: None,
             delegate: Some(delegate),
+            redraw_pending: true,
         }
     }
 
@@ -107,6 +113,7 @@ impl AppRunner {
             cursor: 0,
             pending_vfs_request: None,
             delegate: Some(delegate),
+            redraw_pending: true,
         }
     }
 
@@ -125,6 +132,7 @@ impl AppRunner {
             cursor: 0,
             pending_vfs_request: None,
             delegate: Some(delegate),
+            redraw_pending: true,
         }
     }
 
@@ -134,6 +142,109 @@ impl AppRunner {
             simple.set_lines(lines, scroll_offset);
         }
         self.sync_from_delegate();
+    }
+
+    /// Advance the app's time-driven state by `dt_ms` (see
+    /// [`crate::apps::App::tick`]). Hosts call this once per frame for
+    /// every open runner, whether or not the frame is drawn.
+    pub fn tick(&mut self, dt_ms: u32, vfs: &dyn Vfs) {
+        if let Some(ref mut app) = self.delegate
+            && app.tick(dt_ms, vfs)
+        {
+            self.redraw_pending = true;
+            self.sync_from_delegate();
+        }
+    }
+
+    /// Take the app's pending self-close request (see
+    /// [`crate::apps::App::take_close_request`]). Hosts poll this once per
+    /// frame after [`Self::apply_vfs_ops`] and [`Self::tick`] and, when it
+    /// returns `true`, close the runner as for `AppAction::Exit`.
+    pub fn take_close_request(&mut self) -> bool {
+        self.delegate
+            .as_mut()
+            .is_some_and(|app| app.take_close_request())
+    }
+
+    /// Destroy the app's backend resources before the runner is dropped
+    /// (see [`crate::apps::App::release_resources`]).
+    pub fn release_resources(&mut self, backend: &mut dyn SdiBackend) {
+        if let Some(ref mut app) = self.delegate {
+            app.release_resources(backend);
+        }
+    }
+
+    /// Ask the app whether its window may close now (titlebar close
+    /// button; see [`crate::apps::App::on_close_requested`]). Returns
+    /// `AppAction::Exit` to close; any other action keeps it open.
+    pub fn request_close(&mut self, vfs: &dyn Vfs) -> AppAction {
+        let Some(app) = self.delegate.as_mut() else {
+            return AppAction::Exit;
+        };
+        let action = app.on_close_requested(vfs);
+        if action != AppAction::Exit {
+            self.redraw_pending = true;
+            self.sync_from_delegate();
+        }
+        action
+    }
+
+    /// Whether the app's window needs to be redrawn: its content changed
+    /// since the last [`Self::mark_drawn`], or the app animates
+    /// continuously ([`crate::apps::App::wants_frame`]).
+    ///
+    /// Hosts with idle-frame elision OR this over every visible window.
+    pub fn wants_frame(&self) -> bool {
+        self.redraw_pending || self.delegate.as_ref().is_some_and(|app| app.wants_frame())
+    }
+
+    /// Record that the host just drew this runner's current content.
+    pub fn mark_drawn(&mut self) {
+        self.redraw_pending = false;
+    }
+
+    /// Force a redraw of this runner's window on the next frame (for
+    /// hosts that mutate app state behind the runner's back).
+    pub fn request_redraw(&mut self) {
+        self.redraw_pending = true;
+    }
+
+    /// Set a Terminal runner's text cursor column (characters) within the
+    /// trailing prompt line; `None` hides it. No-op for other runners.
+    pub fn set_terminal_cursor(&mut self, col: Option<usize>) {
+        // Downcast directly: `delegate_as_mut` would flag a redraw even when
+        // the cursor didn't move.
+        if let Some(simple) = self.delegate.as_mut().and_then(|app| {
+            app.as_any_mut()
+                .downcast_mut::<super::simple_app::SimpleApp>()
+        }) && simple.set_prompt_cursor(col)
+        {
+            // Cursor-only moves don't change the synced lines, so the
+            // idle-frame check would otherwise skip them.
+            self.redraw_pending = true;
+        }
+    }
+
+    /// Sync terminal scrollback plus a trailing prompt line into a
+    /// Terminal runner, incrementally (see
+    /// [`SimpleApp::sync_terminal_lines`](super::simple_app::SimpleApp::sync_terminal_lines)).
+    ///
+    /// Same result as `set_lines(output + [prompt], scroll_offset)`
+    /// without deep-copying the scrollback — neither into the delegate nor
+    /// into the mirrored `lines` field. Returns the number of lines cloned
+    /// into the delegate (0 if this runner is not a Terminal).
+    pub fn sync_terminal_lines(
+        &mut self,
+        output: &[String],
+        prompt: &str,
+        scroll_offset: usize,
+    ) -> usize {
+        let cloned = match self.delegate_as_mut::<super::simple_app::SimpleApp>() {
+            Some(simple) => simple.sync_terminal_lines(output, prompt, scroll_offset),
+            None => 0,
+        };
+        self.sync_from_delegate();
+        cloned
     }
 
     /// Render app content directly into a windowed content area.
@@ -163,11 +274,26 @@ impl AppRunner {
     /// This keeps the legacy `title`, `lines`, `browse_dir`, `viewing_file`
     /// fields in sync after delegate calls, for backward compatibility with
     /// external code that reads these fields directly.
+    ///
+    /// Marks the runner for redraw when any mirrored field changed.
     pub(crate) fn sync_from_delegate(&mut self) {
         if let Some(ref app) = self.delegate {
-            self.lines = app.lines().to_vec();
-            self.browse_dir = app.browse_dir().map(String::from);
-            self.viewing_file = app.viewing_file().map(String::from);
+            // Incremental: after an append only the new lines are cloned
+            // (a to_vec() here deep-copied the whole scrollback on every
+            // input event while a terminal window was open).
+            let old_len = self.lines.len();
+            let cloned = super::simple_app::sync_lines(&mut self.lines, app.lines());
+            let browse_dir = app.browse_dir();
+            let viewing_file = app.viewing_file();
+            let changed = cloned > 0
+                || self.lines.len() != old_len
+                || self.browse_dir.as_deref() != browse_dir
+                || self.viewing_file.as_deref() != viewing_file;
+            if changed {
+                self.browse_dir = browse_dir.map(String::from);
+                self.viewing_file = viewing_file.map(String::from);
+                self.redraw_pending = true;
+            }
         }
     }
 
@@ -180,10 +306,18 @@ impl AppRunner {
     }
 
     /// Get a mutable reference to the delegate app, downcasting with `as_any_mut()`.
+    ///
+    /// Conservatively marks the runner for redraw on a successful downcast
+    /// (the caller may change anything the app draws).
     pub fn delegate_as_mut<T: 'static>(&mut self) -> Option<&mut T> {
-        self.delegate
+        let app = self
+            .delegate
             .as_mut()
-            .and_then(|app| app.as_any_mut().downcast_mut::<T>())
+            .and_then(|app| app.as_any_mut().downcast_mut::<T>());
+        if app.is_some() {
+            self.redraw_pending = true;
+        }
+        app
     }
 }
 
@@ -254,6 +388,44 @@ mod tests {
         let vfs = setup_vfs();
         let runner = AppRunner::launch(&make_app("Settings"), &vfs);
         assert!(runner.lines.iter().any(|l| l.contains("480")));
+    }
+
+    #[test]
+    fn terminal_cursor_move_requests_redraw() {
+        let vfs = setup_vfs();
+        let mut runner = AppRunner::launch(&make_app("Terminal"), &vfs);
+        runner.set_terminal_cursor(Some(4));
+        runner.mark_drawn();
+        runner.set_terminal_cursor(Some(4));
+        assert!(!runner.wants_frame(), "unchanged cursor must stay idle");
+        runner.set_terminal_cursor(Some(3));
+        assert!(runner.wants_frame(), "cursor-only move must redraw");
+    }
+
+    #[test]
+    fn terminal_sync_one_line_does_not_clone_scrollback() {
+        let vfs = setup_vfs();
+        let mut runner = AppRunner::launch(&make_app("Terminal"), &vfs);
+        let mut output: Vec<String> = (0..2000).map(|i| format!("out {i}")).collect();
+        runner.sync_terminal_lines(&output, "> ", 0);
+        assert_eq!(runner.lines.len(), 2001);
+        let mirror_ptr = runner.lines[500].as_ptr();
+
+        output.push("one more".into());
+        let cloned = runner.sync_terminal_lines(&output, "> ls", 0);
+        assert_eq!(cloned, 2, "new line + prompt only");
+        assert_eq!(runner.lines.len(), 2002);
+        assert_eq!(runner.lines[2000], "one more");
+        assert_eq!(runner.lines[2001], "> ls");
+        assert_eq!(
+            runner.lines[500].as_ptr(),
+            mirror_ptr,
+            "mirrored lines field must be updated in place, not re-cloned"
+        );
+        let app = runner
+            .delegate_as::<crate::apps::simple_app::SimpleApp>()
+            .expect("terminal delegate");
+        assert_eq!(app.content.lines, runner.lines);
     }
 
     #[test]
@@ -337,6 +509,139 @@ mod tests {
 
         runner.handle_input(&Button::Cancel, &vfs);
         assert_eq!(runner.browse_dir.as_deref(), Some("/"));
+    }
+
+    #[test]
+    fn idle_runner_stops_wanting_frames() {
+        let vfs = setup_vfs();
+        let mut runner = AppRunner::launch(&make_app("Terminal"), &vfs);
+        assert!(runner.wants_frame(), "a new window must be drawn once");
+        runner.mark_drawn();
+        for _ in 0..10 {
+            runner.tick(16, &vfs);
+            runner.apply_vfs_ops(&mut setup_vfs());
+        }
+        assert!(!runner.wants_frame(), "an idle terminal elides frames");
+    }
+
+    #[test]
+    fn input_and_content_changes_request_a_frame() {
+        let vfs = setup_vfs();
+        let mut runner = AppRunner::launch(&make_app("Terminal"), &vfs);
+        runner.mark_drawn();
+
+        runner.handle_text_input('a');
+        assert!(runner.wants_frame(), "typing redraws");
+        runner.mark_drawn();
+
+        runner.handle_input(&Button::Down, &vfs);
+        assert!(runner.wants_frame(), "navigation redraws");
+        runner.mark_drawn();
+
+        let output = vec!["$ ls".to_string(), "readme.txt".to_string()];
+        runner.sync_terminal_lines(&output, "> ", 0);
+        assert!(runner.wants_frame(), "new terminal output redraws");
+        runner.mark_drawn();
+
+        // Re-syncing identical content through a refresh is not a change.
+        runner.refresh_app(&vfs);
+        assert!(!runner.wants_frame());
+    }
+
+    #[test]
+    fn unchanged_refresh_does_not_request_a_frame() {
+        let vfs = setup_vfs();
+        let mut runner = AppRunner::launch(&make_app("Internet Radio"), &vfs);
+        runner.mark_drawn();
+        // Hosts refresh the radio every frame; identical status = no redraw.
+        for _ in 0..5 {
+            runner.refresh_radio(&vfs);
+        }
+        assert!(!runner.wants_frame());
+    }
+
+    #[test]
+    fn ticking_game_requests_frames_only_when_it_moves() {
+        let vfs = setup_vfs();
+        let mut runner = AppRunner::launch(&make_app("Games"), &vfs);
+        runner.handle_input(&Button::Confirm, &vfs); // Snake.
+        runner.mark_drawn();
+        // One 60 Hz step: the snake (one cell / 100 ms) hasn't moved yet.
+        runner.tick(17, &vfs);
+        assert!(!runner.wants_frame());
+        // Keep ticking at 60 fps with no input: it moves on its own.
+        let mut ticks = 0;
+        while !runner.wants_frame() {
+            runner.tick(16, &vfs);
+            ticks += 1;
+            assert!(ticks < 20, "snake must step within ~100 ms");
+        }
+    }
+
+    /// Minimal app that asks to close itself from `tick`.
+    #[derive(Debug)]
+    struct SelfClosingApp {
+        lines: Vec<String>,
+        close: bool,
+    }
+
+    impl App for SelfClosingApp {
+        fn title(&self) -> &str {
+            "Self Closing"
+        }
+        fn path(&self) -> &str {
+            "/apps/Self Closing"
+        }
+        fn handle_input(&mut self, _button: &Button, _vfs: &dyn Vfs) -> AppAction {
+            AppAction::None
+        }
+        fn update_sdi(&mut self, _sdi: &mut SdiRegistry, _at: &ActiveTheme) {}
+        fn draw_windowed(
+            &self,
+            _cx: i32,
+            _cy: i32,
+            _cw: u32,
+            _ch: u32,
+            _backend: &mut dyn SdiBackend,
+            _at: &ActiveTheme,
+        ) -> crate::error::Result<()> {
+            Ok(())
+        }
+        fn hide_sdi(&self, _sdi: &mut SdiRegistry) {}
+        fn tick(&mut self, _dt_ms: u32, _vfs: &dyn Vfs) -> bool {
+            self.close = true;
+            false
+        }
+        fn take_close_request(&mut self) -> bool {
+            std::mem::take(&mut self.close)
+        }
+        fn lines(&self) -> &[String] {
+            &self.lines
+        }
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
+        }
+        fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+            self
+        }
+    }
+
+    #[test]
+    fn take_close_request_forwards_to_delegate() {
+        let vfs = setup_vfs();
+        let mut runner = AppRunner::from_delegate(Box::new(SelfClosingApp {
+            lines: Vec::new(),
+            close: false,
+        }));
+        assert!(!runner.take_close_request());
+        runner.tick(16, &vfs);
+        assert!(runner.take_close_request());
+        assert!(!runner.take_close_request(), "request is consumed");
+
+        // Apps that never self-close keep the default.
+        let mut terminal = AppRunner::launch(&make_app("Terminal"), &vfs);
+        terminal.tick(16, &vfs);
+        assert!(!terminal.take_close_request());
     }
 
     #[test]

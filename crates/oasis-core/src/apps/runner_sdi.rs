@@ -16,50 +16,24 @@ impl AppRunner {
 
     /// Hide all app-related SDI objects.
     pub fn hide_sdi(sdi: &mut SdiRegistry) {
-        let fixed = [
-            "app_bg",
-            "app_title_bg",
-            "app_title_text",
-            "app_scroll",
-            "app_divider",
-            "app_sel_bg",
-            "app_sel_accent",
-        ];
-        for name in &fixed {
-            if let Ok(obj) = sdi.get_mut(name) {
-                obj.visible = false;
-            }
-        }
-        // Hide up to a generous upper bound (handles all resolutions).
-        for i in 0..100 {
-            let name = format!("app_line_{i}");
-            if !sdi.contains(&name) {
-                break;
-            }
-            if let Ok(obj) = sdi.get_mut(&name) {
-                obj.visible = false;
-            }
-        }
-        for i in 0..100 {
-            let lp = format!("app_lp_line_{i}");
-            if !sdi.contains(&lp) {
-                break;
-            }
-            let rp = format!("app_rp_line_{i}");
-            if let Ok(obj) = sdi.get_mut(&lp) {
-                obj.visible = false;
-            }
-            if let Ok(obj) = sdi.get_mut(&rp) {
-                obj.visible = false;
-            }
-        }
+        // Generic chrome + line pools (change-detecting: this runs every
+        // frame outside app mode and must leave an idle scene clean).
+        oasis_app_core::render::hide_app_sdi(sdi);
 
-        // Hide TV Guide objects.
-        oasis_app_tv_guide::TvGuideState::hide_sdi(sdi);
+        // Hide TV Guide objects. Both TV Guide render paths (grid and
+        // expanded video) create `tv_hdr_bg` before any other `tv_*`
+        // object, so until it exists there is nothing to hide — skip the
+        // ~200 name formats + lookups the full pass costs every frame.
+        if sdi.contains("tv_hdr_bg") {
+            oasis_app_tv_guide::TvGuideState::hide_sdi(sdi);
+        }
 
         // Hide Text Editor Notepad chrome. The authoritative cleanup
         // lives on the text-editor crate, which owns the pool sizes
-        // for the menu/dropdown/line slots.
-        oasis_app_text_editor::hide_notepad_sdi_objects(sdi);
+        // for the menu/dropdown/line slots. `np_menu_bg` is the first
+        // `np_*` object its renderer creates (same skip as above).
+        if sdi.contains("np_menu_bg") {
+            oasis_app_text_editor::hide_notepad_sdi_objects(sdi);
+        }
     }
 }

@@ -1,5 +1,5 @@
 # viewport 480x272
-fill_rect 0, 0, 480, 708, Color { r: 250, g: 250, b: 250, a: 255 }
+fill_rect 0, 0, 480, 618, Color { r: 250, g: 250, b: 250, a: 255 }
 fill_rect 0, 0, 480, 44, Color { r: 34, g: 34, b: 34, a: 255 }
 draw_text "Tech ", 8, 8, 11, Color { r: 255, g: 255, b: 255, a: 255 }
 draw_text "Tech ", 9, 8, 11, Color { r: 255, g: 255, b: 255, a: 255 }
@@ -40,152 +40,96 @@ draw_text "· ", 142, 92, 6, Color { r: 119, g: 119, b: 119, a: 255 }
 draw_text "2 ", 160, 92, 6, Color { r: 119, g: 119, b: 119, a: 255 }
 draw_text "hours ", 172, 92, 6, Color { r: 119, g: 119, b: 119, a: 255 }
 draw_text "ago", 208, 92, 6, Color { r: 119, g: 119, b: 119, a: 255 }
-fill_rect 1, 1, 302, 143, Color { r: 255, g: 255, b: 255, a: 255 }
-fill_rect 0, 0, 304, 1, Color { r: 221, g: 221, b: 221, a: 255 }
-fill_rect 303, 0, 1, 145, Color { r: 221, g: 221, b: 221, a: 255 }
-fill_rect 0, 144, 304, 1, Color { r: 221, g: 221, b: 221, a: 255 }
-fill_rect 0, 0, 1, 145, Color { r: 221, g: 221, b: 221, a: 255 }
-draw_text "Inside ", 9, 9, 9, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "Inside ", 10, 9, 9, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "the ", 51, 9, 9, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "the ", 52, 9, 9, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "new ", 75, 9, 9, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "new ", 76, 9, 9, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "scheduler", 99, 9, 9, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "scheduler", 100, 9, 9, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "The ", 9, 31, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "release ", 33, 31, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "brings ", 81, 31, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "changes ", 123, 31, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "to ", 171, 31, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "the", 189, 31, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-fill_rect 207, 31, 54, 12, Color { r: 128, g: 128, b: 128, a: 255 }
-fill_rect 207, 31, 54, 12, Color { r: 128, g: 128, b: 128, a: 255 }
-draw_text "sched_ext", 207, 31, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "subsystem, ", 9, 43, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "letting", 75, 43, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "developers ", 117, 43, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "plug ", 183, 43, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "in ", 213, 43, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "BPF-based", 231, 43, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "schedulers ", 9, 55, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "without ", 75, 55, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "recompiling ", 123, 55, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "the", 195, 55, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "kernel.", 213, 55, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "Core ", 9, 75, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "maintainers ", 39, 75, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "emphasised ", 111, 75, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "that", 177, 75, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "the ", 201, 75, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "new ", 225, 75, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "APIs", 249, 75, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "are ", 9, 87, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "experimental", 33, 87, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "experimental", 34, 87, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text ", ", 105, 87, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "but", 117, 87, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "early ", 135, 87, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "benchmarks ", 171, 87, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "show", 237, 87, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "latency", 9, 99, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "improvements ", 51, 99, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "on ", 129, 99, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "mixed ", 147, 99, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "workloads.", 183, 99, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "Read ", 9, 119, 6, Color { r: 119, g: 119, b: 119, a: 255 }
-draw_text "more ", 39, 119, 6, Color { r: 119, g: 119, b: 119, a: 255 }
-draw_text "→", 69, 119, 6, Color { r: 119, g: 119, b: 119, a: 255 }
-fill_rect 1, 154, 302, 114, Color { r: 255, g: 255, b: 255, a: 255 }
-fill_rect 0, 153, 304, 1, Color { r: 221, g: 221, b: 221, a: 255 }
-fill_rect 303, 153, 1, 116, Color { r: 221, g: 221, b: 221, a: 255 }
-fill_rect 0, 268, 304, 1, Color { r: 221, g: 221, b: 221, a: 255 }
-fill_rect 0, 153, 1, 116, Color { r: 221, g: 221, b: 221, a: 255 }
-draw_text "Rust ", 9, 162, 9, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "Rust ", 10, 162, 9, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "in ", 39, 162, 9, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "in ", 40, 162, 9, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "the ", 57, 162, 9, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "the ", 58, 162, 9, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "kernel ", 81, 162, 9, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "kernel ", 82, 162, 9, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "expands", 123, 162, 9, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "expands", 124, 162, 9, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "Rust ", 9, 184, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "support ", 39, 184, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "has ", 87, 184, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "landed ", 111, 184, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "for", 153, 184, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "additional ", 171, 184, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "driver", 237, 184, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "subsystems. ", 9, 196, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "The", 81, 196, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "maintainers ", 99, 196, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "expect ", 171, 196, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "more ", 213, 196, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "drivers", 243, 196, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "to", 9, 208, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "migrate ", 21, 208, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "over ", 69, 208, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "the ", 99, 208, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "next ", 123, 208, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "two ", 153, 208, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "cycles.", 177, 208, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-fill_rect 19, 228, 3, 24, Color { r: 128, g: 128, b: 128, a: 255 }
-draw_text "“The ", 32, 228, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "safety ", 74, 228, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "wins ", 116, 228, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "are", 146, 228, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "real,” ", 164, 228, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "said ", 218, 228, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "one", 248, 228, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "contributor.", 32, 240, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-fill_rect 329, 142, 150, 204, Color { r: 255, g: 255, b: 255, a: 255 }
-fill_rect 328, 141, 152, 1, Color { r: 221, g: 221, b: 221, a: 255 }
-fill_rect 479, 141, 1, 206, Color { r: 221, g: 221, b: 221, a: 255 }
-fill_rect 328, 346, 152, 1, Color { r: 221, g: 221, b: 221, a: 255 }
-fill_rect 328, 141, 1, 206, Color { r: 221, g: 221, b: 221, a: 255 }
-draw_text "Trending", 0, 10, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "Trending", 1, 10, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "•", 20, 33, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "Why ", 40, 33, 8, Color { r: 0, g: 102, b: 204, a: 255 }
-fill_rect 40, 39, 26, 1, Color { r: 0, g: 102, b: 204, a: 255 }
-draw_text "syscalls", 64, 33, 8, Color { r: 0, g: 102, b: 204, a: 255 }
-fill_rect 64, 39, 52, 1, Color { r: 0, g: 102, b: 204, a: 255 }
-draw_text "are ", 40, 45, 8, Color { r: 0, g: 102, b: 204, a: 255 }
-fill_rect 40, 51, 25, 1, Color { r: 0, g: 102, b: 204, a: 255 }
-draw_text "getting", 64, 45, 8, Color { r: 0, g: 102, b: 204, a: 255 }
-fill_rect 64, 51, 47, 1, Color { r: 0, g: 102, b: 204, a: 255 }
-draw_text "cheaper", 40, 57, 8, Color { r: 0, g: 102, b: 204, a: 255 }
-fill_rect 40, 63, 49, 1, Color { r: 0, g: 102, b: 204, a: 255 }
-draw_text "•", 20, 69, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "io_uring ", 40, 69, 8, Color { r: 0, g: 102, b: 204, a: 255 }
-fill_rect 40, 75, 57, 1, Color { r: 0, g: 102, b: 204, a: 255 }
-draw_text "at ", 94, 69, 8, Color { r: 0, g: 102, b: 204, a: 255 }
-fill_rect 94, 75, 18, 1, Color { r: 0, g: 102, b: 204, a: 255 }
-draw_text "5", 112, 69, 8, Color { r: 0, g: 102, b: 204, a: 255 }
-fill_rect 112, 75, 7, 1, Color { r: 0, g: 102, b: 204, a: 255 }
-draw_text "years", 40, 81, 8, Color { r: 0, g: 102, b: 204, a: 255 }
-fill_rect 40, 87, 35, 1, Color { r: 0, g: 102, b: 204, a: 255 }
-draw_text "•", 20, 93, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "WebAssembly", 40, 93, 8, Color { r: 0, g: 102, b: 204, a: 255 }
-fill_rect 40, 99, 77, 1, Color { r: 0, g: 102, b: 204, a: 255 }
-draw_text "component ", 40, 105, 8, Color { r: 0, g: 102, b: 204, a: 255 }
-fill_rect 40, 111, 68, 1, Color { r: 0, g: 102, b: 204, a: 255 }
-draw_text "model", 100, 105, 8, Color { r: 0, g: 102, b: 204, a: 255 }
-fill_rect 100, 111, 34, 1, Color { r: 0, g: 102, b: 204, a: 255 }
-draw_text "Newsletter", 0, 127, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "Newsletter", 1, 127, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-fill_rect 0, 150, 168, 18, Color { r: 255, g: 255, b: 255, a: 255 }
-fill_rect 0, 150, 168, 1, Color { r: 118, g: 118, b: 118, a: 255 }
-fill_rect 0, 150, 1, 18, Color { r: 118, g: 118, b: 118, a: 255 }
-fill_rect 0, 167, 168, 1, Color { r: 200, g: 200, b: 200, a: 255 }
-fill_rect 167, 150, 1, 18, Color { r: 200, g: 200, b: 200, a: 255 }
-draw_text "you@example.com", 3, 155, 8, Color { r: 160, g: 160, b: 160, a: 255 }
-fill_rect 0, 168, 86, 20, Color { r: 239, g: 239, b: 239, a: 255 }
-fill_rect 0, 168, 86, 1, Color { r: 255, g: 255, b: 255, a: 255 }
-fill_rect 0, 168, 1, 20, Color { r: 255, g: 255, b: 255, a: 255 }
-fill_rect 0, 187, 86, 1, Color { r: 160, g: 160, b: 160, a: 255 }
-fill_rect 85, 168, 1, 20, Color { r: 160, g: 160, b: 160, a: 255 }
-draw_text "Subscribe", 12, 174, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-# totals fill_rect=47 draw_text=142 other=0
+fill_rect 9, 134, 302, 155, Color { r: 255, g: 255, b: 255, a: 255 }
+fill_rect 8, 133, 304, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 311, 133, 1, 157, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 8, 289, 304, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 8, 133, 1, 157, Color { r: 221, g: 221, b: 221, a: 255 }
+draw_text "Inside ", 17, 142, 9, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "Inside ", 18, 142, 9, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "the ", 59, 142, 9, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "the ", 60, 142, 9, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "new ", 83, 142, 9, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "new ", 84, 142, 9, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "scheduler", 107, 142, 9, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "scheduler", 108, 142, 9, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "The ", 17, 164, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "release ", 41, 164, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "brings ", 89, 164, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "changes ", 131, 164, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "to ", 179, 164, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "the ", 197, 164, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+fill_rect 221, 164, 54, 12, Color { r: 128, g: 128, b: 128, a: 255 }
+fill_rect 221, 164, 54, 12, Color { r: 128, g: 128, b: 128, a: 255 }
+draw_text "sched_ext", 221, 164, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "subsystem, ", 17, 176, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "letting ", 83, 176, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "developers ", 131, 176, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "plug ", 197, 176, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "in", 227, 176, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "BPF-based ", 17, 188, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "schedulers ", 77, 188, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "without ", 143, 188, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "recompiling ", 191, 188, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "the", 263, 188, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "kernel.", 17, 200, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "Core ", 17, 220, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "maintainers ", 47, 220, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "emphasised ", 119, 220, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "that ", 185, 220, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "the ", 215, 220, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "new ", 239, 220, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "APIs", 263, 220, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "are ", 17, 232, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "experimental", 41, 232, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "experimental", 42, 232, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text ", ", 113, 232, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "but ", 125, 232, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "early ", 149, 232, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "benchmarks ", 185, 232, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "show", 251, 232, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "latency ", 17, 244, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "improvements ", 65, 244, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "on ", 143, 244, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "mixed ", 161, 244, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "workloads.", 197, 244, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "Read ", 17, 264, 6, Color { r: 119, g: 119, b: 119, a: 255 }
+draw_text "more ", 47, 264, 6, Color { r: 119, g: 119, b: 119, a: 255 }
+draw_text "→", 77, 264, 6, Color { r: 119, g: 119, b: 119, a: 255 }
+fill_rect 321, 134, 150, 204, Color { r: 255, g: 255, b: 255, a: 255 }
+fill_rect 320, 133, 152, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 471, 133, 1, 206, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 320, 338, 152, 1, Color { r: 221, g: 221, b: 221, a: 255 }
+fill_rect 320, 133, 1, 206, Color { r: 221, g: 221, b: 221, a: 255 }
+draw_text "Trending", 329, 153, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "Trending", 330, 153, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "•", 349, 176, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "Why ", 369, 176, 8, Color { r: 0, g: 102, b: 204, a: 255 }
+fill_rect 369, 182, 26, 1, Color { r: 0, g: 102, b: 204, a: 255 }
+draw_text "syscalls", 393, 176, 8, Color { r: 0, g: 102, b: 204, a: 255 }
+fill_rect 393, 182, 52, 1, Color { r: 0, g: 102, b: 204, a: 255 }
+draw_text "are ", 369, 188, 8, Color { r: 0, g: 102, b: 204, a: 255 }
+fill_rect 369, 194, 25, 1, Color { r: 0, g: 102, b: 204, a: 255 }
+draw_text "getting", 393, 188, 8, Color { r: 0, g: 102, b: 204, a: 255 }
+fill_rect 393, 194, 47, 1, Color { r: 0, g: 102, b: 204, a: 255 }
+draw_text "cheaper", 369, 200, 8, Color { r: 0, g: 102, b: 204, a: 255 }
+fill_rect 369, 206, 49, 1, Color { r: 0, g: 102, b: 204, a: 255 }
+draw_text "•", 349, 212, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "io_uring ", 369, 212, 8, Color { r: 0, g: 102, b: 204, a: 255 }
+fill_rect 369, 218, 57, 1, Color { r: 0, g: 102, b: 204, a: 255 }
+draw_text "at ", 423, 212, 8, Color { r: 0, g: 102, b: 204, a: 255 }
+fill_rect 423, 218, 18, 1, Color { r: 0, g: 102, b: 204, a: 255 }
+draw_text "5", 441, 212, 8, Color { r: 0, g: 102, b: 204, a: 255 }
+fill_rect 441, 218, 7, 1, Color { r: 0, g: 102, b: 204, a: 255 }
+draw_text "years", 369, 224, 8, Color { r: 0, g: 102, b: 204, a: 255 }
+fill_rect 369, 230, 35, 1, Color { r: 0, g: 102, b: 204, a: 255 }
+draw_text "•", 349, 236, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "WebAssembly", 369, 236, 8, Color { r: 0, g: 102, b: 204, a: 255 }
+fill_rect 369, 242, 77, 1, Color { r: 0, g: 102, b: 204, a: 255 }
+draw_text "component ", 369, 248, 8, Color { r: 0, g: 102, b: 204, a: 255 }
+fill_rect 369, 254, 68, 1, Color { r: 0, g: 102, b: 204, a: 255 }
+draw_text "model", 429, 248, 8, Color { r: 0, g: 102, b: 204, a: 255 }
+fill_rect 429, 254, 34, 1, Color { r: 0, g: 102, b: 204, a: 255 }
+draw_text "Newsletter", 329, 270, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "Newsletter", 330, 270, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+# totals fill_rect=31 draw_text=102 other=0

@@ -270,8 +270,11 @@ impl Url {
             return Some(self.clone());
         }
 
-        // Absolute URL (has scheme) -- return as-is.
-        if relative.contains("://") {
+        // Absolute URL (starts with a scheme) -- return as-is. Only a
+        // leading `scheme:` counts: a relative reference may carry
+        // `://` in its query (`login?next=http://x/`) and must still
+        // resolve against the base.
+        if has_scheme(relative) {
             return Url::parse(relative);
         }
 
@@ -288,10 +291,15 @@ impl Url {
         }
 
         // Query-only.
-        if let Some(query) = relative.strip_prefix('?') {
+        if let Some(rest) = relative.strip_prefix('?') {
+            // `?q=1#frag`: the fragment belongs in `fragment`, not the query.
+            let (query, fragment) = match rest.find('#') {
+                Some(i) => (&rest[..i], Some(rest[i + 1..].to_string())),
+                None => (rest, None),
+            };
             let mut resolved = self.clone();
             resolved.query = Some(query.to_string());
-            resolved.fragment = None;
+            resolved.fragment = fragment;
             return Some(resolved);
         }
 
@@ -371,6 +379,19 @@ impl fmt::Display for Url {
 // ---------------------------------------------------------------------------
 // Path helpers
 // ---------------------------------------------------------------------------
+
+/// Whether `s` begins with a URI scheme (`ALPHA *( ALPHA / DIGIT / "+" /
+/// "-" / "." ) ":"`, RFC 3986 §3.1), i.e. is an absolute reference
+/// rather than a relative one.
+fn has_scheme(s: &str) -> bool {
+    let Some(colon) = s.find(':') else {
+        return false;
+    };
+    let scheme = &s[..colon];
+    let mut chars = scheme.chars();
+    chars.next().is_some_and(|c| c.is_ascii_alphabetic())
+        && chars.all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.'))
+}
 
 /// Split a (possibly relative) path string into `(path, query, fragment)`.
 fn split_path_query_fragment(s: &str) -> (String, Option<String>, Option<String>) {
@@ -836,6 +857,21 @@ mod tests {
     }
 
     #[test]
+    fn resolve_relative_with_url_in_query() {
+        let base = Url::parse("http://example.com/a/page.html").unwrap();
+        let resolved = base.resolve("login?next=http://other.test/x").unwrap();
+        assert_eq!(resolved.host, "example.com");
+        assert_eq!(resolved.path, "/a/login");
+        assert_eq!(resolved.query.as_deref(), Some("next=http://other.test/x"));
+        let resolved = base.resolve("/go?to=https://other.test/").unwrap();
+        assert_eq!(resolved.host, "example.com");
+        assert_eq!(resolved.path, "/go");
+        // A real absolute URL still wins.
+        let resolved = base.resolve("HTTPS://other.test/p").unwrap();
+        assert_eq!(resolved.host, "other.test");
+    }
+
+    #[test]
     fn resolve_dotdot_in_relative_paths() {
         let base = Url::parse("http://example.com/a/b/c.html").unwrap();
         let resolved = base.resolve("../../d.html").unwrap();
@@ -925,6 +961,24 @@ mod tests {
         assert_eq!(resolved.path, "/search");
         assert_eq!(resolved.query, Some("q=new".to_string()));
         assert_eq!(resolved.fragment, None);
+    }
+
+    #[test]
+    fn resolve_query_only_with_fragment() {
+        let base = Url::parse("http://example.com/search?old=1#s").unwrap();
+        let resolved = base.resolve("?q=new#results").unwrap();
+        assert_eq!(resolved.path, "/search");
+        assert_eq!(resolved.query, Some("q=new".to_string()));
+        assert_eq!(resolved.fragment, Some("results".to_string()));
+        assert_eq!(
+            resolved.to_string(),
+            "http://example.com/search?q=new#results"
+        );
+
+        // Empty query with a fragment still splits correctly.
+        let resolved = base.resolve("?#top").unwrap();
+        assert_eq!(resolved.query, Some(String::new()));
+        assert_eq!(resolved.fragment, Some("top".to_string()));
     }
 
     #[test]

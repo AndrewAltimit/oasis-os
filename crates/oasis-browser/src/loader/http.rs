@@ -29,8 +29,9 @@ const MAX_BODY_SIZE: usize = 8 * 1024 * 1024;
 /// unbounded header block before the `\r\n\r\n` terminator.
 const MAX_HEADER_SIZE: usize = 16_384;
 
-/// Maximum number of redirects to follow.
-const MAX_REDIRECTS: u8 = 5;
+/// Default maximum number of redirects to follow
+/// (`BrowserConfig::max_redirects` overrides it for page loads).
+pub const MAX_REDIRECTS: u8 = 5;
 
 /// TCP connect timeout.
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
@@ -206,6 +207,67 @@ pub fn http_request_full(
     extra_headers: &[(&str, &str)],
     tls: Option<&dyn TlsProvider>,
 ) -> Result<(ResourceResponse, Vec<(String, String)>)> {
+    http_request_inner(method, url, body, extra_headers, tls, None, MAX_REDIRECTS)
+}
+
+/// Like [`http_request_full`] but follows at most `max_redirects`
+/// redirects (0 = none) before failing with "too many redirects".
+pub fn http_request_full_limited(
+    method: &str,
+    url: &Url,
+    body: Option<&[u8]>,
+    extra_headers: &[(&str, &str)],
+    tls: Option<&dyn TlsProvider>,
+    max_redirects: u8,
+) -> Result<(ResourceResponse, Vec<(String, String)>)> {
+    http_request_inner(method, url, body, extra_headers, tls, None, max_redirects)
+}
+
+/// Policy hooks for [`http_request_guarded`].
+///
+/// Used by the JS `fetch()` binding to keep page-initiated requests off
+/// loopback / private networks even via redirects or DNS rebinding.
+pub struct RequestGuard<'a> {
+    /// Consulted before following each redirect; `false` aborts the
+    /// request with an error.
+    pub redirect_ok: &'a dyn Fn(&Url) -> bool,
+    /// Consulted with the resolved peer address right before every TCP
+    /// connect; `false` aborts the request with an error. Guarded
+    /// requests also bypass the keep-alive pool so every request is
+    /// checked against a fresh resolution.
+    pub addr_ok: &'a dyn Fn(std::net::IpAddr) -> bool,
+}
+
+/// Like [`http_request_full`] but enforces a [`RequestGuard`] on every
+/// redirect hop and connection.
+pub fn http_request_guarded(
+    method: &str,
+    url: &Url,
+    body: Option<&[u8]>,
+    extra_headers: &[(&str, &str)],
+    tls: Option<&dyn TlsProvider>,
+    guard: &RequestGuard<'_>,
+) -> Result<(ResourceResponse, Vec<(String, String)>)> {
+    http_request_inner(
+        method,
+        url,
+        body,
+        extra_headers,
+        tls,
+        Some(guard),
+        MAX_REDIRECTS,
+    )
+}
+
+fn http_request_inner(
+    method: &str,
+    url: &Url,
+    body: Option<&[u8]>,
+    extra_headers: &[(&str, &str)],
+    tls: Option<&dyn TlsProvider>,
+    guard: Option<&RequestGuard<'_>>,
+    max_redirects: u8,
+) -> Result<(ResourceResponse, Vec<(String, String)>)> {
     if url.scheme == "https" && tls.is_none() {
         return Ok((https_error_page(url, url), Vec::new()));
     }
@@ -221,13 +283,15 @@ pub fn http_request_full(
     let mut current_method = method.to_string();
     let mut current_body: Option<Vec<u8>> = body.map(|b| b.to_vec());
 
-    for _ in 0..MAX_REDIRECTS {
+    // The initial request plus up to `max_redirects` followed redirects.
+    for _ in 0..=max_redirects {
         let resp = do_request_with_method(
             &current_method,
             &current_url,
             current_body.as_deref(),
             extra_headers,
             tls,
+            guard.map(|g| g.addr_ok),
         )?;
 
         if is_redirect(resp.status_code)
@@ -237,6 +301,13 @@ pub fn http_request_full(
             current_url = current_url.resolve(&location).ok_or_else(|| {
                 OasisError::Backend(format!("bad redirect Location: {location}").into())
             })?;
+            if let Some(g) = guard
+                && !(g.redirect_ok)(&current_url)
+            {
+                return Err(OasisError::Backend(
+                    format!("redirect to {current_url} blocked by request policy").into(),
+                ));
+            }
             if current_url.scheme == "https" && tls.is_none() {
                 return Ok((https_error_page(url, &current_url), Vec::new()));
             }
@@ -302,6 +373,7 @@ fn do_request_with_method(
     body: Option<&[u8]>,
     extra_headers: &[(&str, &str)],
     tls: Option<&dyn TlsProvider>,
+    addr_ok: Option<&dyn Fn(std::net::IpAddr) -> bool>,
 ) -> Result<HttpResponse> {
     let host = &url.host;
     let is_https = url.scheme == "https";
@@ -311,7 +383,7 @@ fn do_request_with_method(
     if is_https {
         let tls_provider = tls.ok_or_else(|| OasisError::Backend("TLS not available".into()))?;
 
-        let stream = tcp_connect(host, port)?;
+        let stream = tcp_connect(host, port, addr_ok)?;
         // Wrap the TcpStream as a NetworkStream, then upgrade to TLS
         // while offering ALPN. If the server picks `h2`, route the
         // request through the HTTP/2 driver; otherwise fall through
@@ -330,9 +402,10 @@ fn do_request_with_method(
     } else {
         // Try a pooled connection first, but only for idempotent methods.
         // Re-sending a POST/PUT/PATCH on a stale connection could cause
-        // duplicate side-effects on the server.
+        // duplicate side-effects on the server. Guarded requests never
+        // reuse (or feed) the pool: every connect must pass `addr_ok`.
         let is_idempotent = matches!(method, "GET" | "HEAD" | "OPTIONS" | "TRACE");
-        let pooled = if is_idempotent {
+        let pooled = if is_idempotent && addr_ok.is_none() {
             CONN_POOL.with(|pool| pool.borrow_mut().take(host, port))
         } else {
             None
@@ -349,11 +422,13 @@ fn do_request_with_method(
             }
         }
 
-        let mut stream = tcp_connect(host, port)?;
+        let mut stream = tcp_connect(host, port, addr_ok)?;
         send_request(&mut stream, method, url, body, extra_headers, is_https)?;
         let raw = read_response(&mut stream)?;
         let resp = parse_response(&raw)?;
-        maybe_return_to_pool(&resp, host, port, stream);
+        if addr_ok.is_none() {
+            maybe_return_to_pool(&resp, host, port, stream);
+        }
         Ok(resp)
     }
 }
@@ -386,7 +461,15 @@ fn maybe_return_to_pool(resp: &HttpResponse, host: &str, port: u16, stream: TcpS
 }
 
 /// Open a TCP connection with a connect timeout.
-fn tcp_connect(host: &str, port: u16) -> Result<TcpStream> {
+///
+/// When `addr_ok` is given, the resolved peer address must pass it or
+/// the connect is refused (checked on the exact address we dial, so a
+/// DNS answer cannot change between the check and the connect).
+fn tcp_connect(
+    host: &str,
+    port: u16,
+    addr_ok: Option<&dyn Fn(std::net::IpAddr) -> bool>,
+) -> Result<TcpStream> {
     use std::net::ToSocketAddrs;
 
     let addr = format!("{host}:{port}")
@@ -394,6 +477,14 @@ fn tcp_connect(host: &str, port: u16) -> Result<TcpStream> {
         .map_err(|e| OasisError::Backend(format!("DNS resolution failed: {e}").into()))?
         .next()
         .ok_or_else(|| OasisError::Backend(format!("no addresses for {host}:{port}").into()))?;
+
+    if let Some(check) = addr_ok
+        && !check(addr.ip())
+    {
+        return Err(OasisError::Backend(
+            format!("connection to {} blocked by request policy", addr.ip()).into(),
+        ));
+    }
 
     let stream = TcpStream::connect_timeout(&addr, CONNECT_TIMEOUT)
         .map_err(|e| OasisError::Backend(format!("TCP connect failed: {e}").into()))?;
@@ -483,6 +574,8 @@ fn read_response(stream: &mut impl Read) -> Result<Vec<u8>> {
     let mut body_start: Option<usize> = None;
     let mut expected_body_len: Option<usize> = None;
     let mut is_chunked = false;
+    // Offset (within the body) of the next unparsed chunk-size line.
+    let mut chunk_cursor = 0usize;
     loop {
         match stream.read(&mut chunk) {
             Ok(0) => break,
@@ -530,16 +623,14 @@ fn read_response(stream: &mut impl Read) -> Result<Vec<u8>> {
                             break;
                         }
                     } else if is_chunked {
-                        // Chunked: stop after the final `0\r\n\r\n` marker.
-                        // Only check the tail of the buffer to avoid false
-                        // positives from binary data containing the same
-                        // byte sequence mid-stream.
-                        let chunk_data = &buf[bs..];
-                        if chunk_data.ends_with(b"\r\n0\r\n\r\n")
-                            || chunk_data.ends_with(b"\r\n0\r\n")
-                            || chunk_data.ends_with(b"0\r\n\r\n")
-                            || (chunk_data.starts_with(b"0\r\n") && chunk_data.len() <= 5)
-                        {
+                        // Chunked: walk the chunk framing and stop once the
+                        // terminating zero-size chunk (plus trailers) has
+                        // fully arrived. Matching byte patterns at the tail
+                        // of the buffer is not enough: a chunk whose data
+                        // ends in "0\r\n" looks like the terminator when a
+                        // read happens to stop right after it.
+                        if let Some(end) = scan_chunked(&buf[bs..], &mut chunk_cursor) {
+                            buf.truncate(bs + end);
                             break;
                         }
                     }
@@ -557,6 +648,47 @@ fn read_response(stream: &mut impl Read) -> Result<Vec<u8>> {
         }
     }
     Ok(buf)
+}
+
+/// Incrementally scan a chunked transfer-encoded body.
+///
+/// `cursor` is the offset of the first chunk-size line not yet known to
+/// be complete; it advances over every fully received chunk so repeated
+/// calls (one per socket read) stay linear. Returns the total length of
+/// the chunked body — through the zero-size chunk and its trailer
+/// section — once it has fully arrived, or `None` while more data is
+/// needed. Malformed framing ends the scan at the data received so far
+/// so the caller stops reading and `decode_chunked` reports the error.
+fn scan_chunked(data: &[u8], cursor: &mut usize) -> Option<usize> {
+    loop {
+        let rest = data.get(*cursor..)?;
+        let Some(line_len) = find_subsequence(rest, b"\r\n") else {
+            // A chunk-size line is a few hex digits plus optional
+            // extensions; anything this long without CRLF is garbage.
+            return (rest.len() > 1024).then_some(data.len());
+        };
+        let size_str = std::str::from_utf8(&rest[..line_len]).unwrap_or("");
+        let size_str = size_str.split(';').next().unwrap_or("").trim();
+        let Ok(size) = usize::from_str_radix(size_str, 16) else {
+            return Some(data.len());
+        };
+        let data_start = *cursor + line_len + 2;
+        if size == 0 {
+            // Trailer section: header lines, then an empty line.
+            let trailers = data.get(data_start..)?;
+            if trailers.starts_with(b"\r\n") {
+                return Some(data_start + 2);
+            }
+            return find_subsequence(trailers, b"\r\n\r\n").map(|i| data_start + i + 4);
+        }
+        let Some(next) = data_start.checked_add(size).and_then(|e| e.checked_add(2)) else {
+            return Some(data.len());
+        };
+        if next > data.len() {
+            return None;
+        }
+        *cursor = next;
+    }
 }
 
 /// Parse raw bytes into status code, headers, and body.
@@ -669,32 +801,31 @@ fn decode_body(headers: &[(String, String)], body: Vec<u8>) -> Result<Vec<u8>> {
     };
 
     match encoding.as_str() {
-        "gzip" => {
-            let mut decoder = GzDecoder::new(&body[..]);
-            let mut decompressed = Vec::new();
-            decoder
-                .read_to_end(&mut decompressed)
-                .map_err(|e| OasisError::Backend(format!("gzip decode: {e}").into()))?;
-            Ok(decompressed)
-        },
-        "deflate" => {
-            let mut decoder = DeflateDecoder::new(&body[..]);
-            let mut decompressed = Vec::new();
-            decoder
-                .read_to_end(&mut decompressed)
-                .map_err(|e| OasisError::Backend(format!("deflate decode: {e}").into()))?;
-            Ok(decompressed)
-        },
-        "br" => {
-            let mut decoder = BrotliDecoder::new(&body[..], 4096);
-            let mut decompressed = Vec::new();
-            decoder
-                .read_to_end(&mut decompressed)
-                .map_err(|e| OasisError::Backend(format!("brotli decode: {e}").into()))?;
-            Ok(decompressed)
-        },
+        "gzip" => read_decoded_bounded(GzDecoder::new(&body[..]), "gzip"),
+        "deflate" => read_decoded_bounded(DeflateDecoder::new(&body[..]), "deflate"),
+        "br" => read_decoded_bounded(BrotliDecoder::new(&body[..], 4096), "brotli"),
         _ => Ok(body),
     }
+}
+
+/// Drain a decompressor, refusing output larger than [`MAX_BODY_SIZE`].
+///
+/// The compressed body is already capped, but a few KB of gzip can expand to
+/// gigabytes (a "decompression bomb"), so the decoded size is capped too.
+/// Reading at most `MAX_BODY_SIZE + 1` bytes lets us tell "exactly at the
+/// limit" from "over it" without ever buffering more than that.
+fn read_decoded_bounded(decoder: impl Read, name: &str) -> Result<Vec<u8>> {
+    let mut decompressed = Vec::new();
+    decoder
+        .take(MAX_BODY_SIZE as u64 + 1)
+        .read_to_end(&mut decompressed)
+        .map_err(|e| OasisError::Backend(format!("{name} decode: {e}").into()))?;
+    if decompressed.len() > MAX_BODY_SIZE {
+        return Err(OasisError::Backend(
+            format!("{name} decode: decompressed body exceeds 8 MB limit").into(),
+        ));
+    }
+    Ok(decompressed)
 }
 
 /// Parse the HTTP status code from the status line.
@@ -1127,5 +1258,103 @@ mod tests {
         let err = parse_response(&huge).unwrap_err();
         let msg = err.to_string();
         assert!(msg.contains("16 KB"), "expected header limit error: {msg}");
+    }
+
+    // -- Decompression bomb protection --
+
+    fn gzip(data: &[u8]) -> Vec<u8> {
+        use std::io::Write as _;
+        let mut enc = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+        enc.write_all(data).unwrap();
+        enc.finish().unwrap()
+    }
+
+    fn encoding(value: &str) -> Vec<(String, String)> {
+        vec![("content-encoding".to_string(), value.to_string())]
+    }
+
+    /// Decoded size well beyond the cap: 12 MiB of zeros vs an 8 MiB limit.
+    const BOMB_SIZE: usize = 12 * 1024 * 1024;
+
+    #[test]
+    fn gzip_body_round_trips() {
+        let body = gzip(b"<html>hello</html>");
+        let out = decode_body(&encoding("gzip"), body).unwrap();
+        assert_eq!(out, b"<html>hello</html>");
+    }
+
+    #[test]
+    fn gzip_bomb_is_rejected() {
+        assert!(BOMB_SIZE > MAX_BODY_SIZE);
+        let body = gzip(&vec![0u8; BOMB_SIZE]);
+        // The compressed form is tiny, so it passes the wire-size limit...
+        assert!(body.len() < 64 * 1024, "compressed {} bytes", body.len());
+        // ...but decoding it must fail rather than allocate 12 MiB+.
+        let err = decode_body(&encoding("gzip"), body).unwrap_err();
+        assert!(err.to_string().contains("exceeds 8 MB"), "{err}");
+    }
+
+    #[test]
+    fn gzip_body_exactly_at_limit_is_accepted() {
+        let body = gzip(&vec![0u8; MAX_BODY_SIZE]);
+        let out = decode_body(&encoding("gzip"), body).unwrap();
+        assert_eq!(out.len(), MAX_BODY_SIZE);
+    }
+
+    #[test]
+    fn deflate_bomb_is_rejected() {
+        use std::io::Write as _;
+        let mut enc =
+            flate2::write::DeflateEncoder::new(Vec::new(), flate2::Compression::default());
+        enc.write_all(&vec![0u8; BOMB_SIZE]).unwrap();
+        let body = enc.finish().unwrap();
+        let err = decode_body(&encoding("deflate"), body).unwrap_err();
+        assert!(err.to_string().contains("exceeds 8 MB"), "{err}");
+    }
+
+    #[test]
+    fn brotli_bomb_is_rejected() {
+        use std::io::Write as _;
+        let mut body = Vec::new();
+        {
+            let mut enc = brotli::CompressorWriter::new(&mut body, 4096, 5, 22);
+            enc.write_all(&vec![0u8; BOMB_SIZE]).unwrap();
+        }
+        let err = decode_body(&encoding("br"), body).unwrap_err();
+        assert!(err.to_string().contains("exceeds 8 MB"), "{err}");
+    }
+
+    #[test]
+    fn parse_response_rejects_gzip_bomb() {
+        let body = gzip(&vec![0u8; BOMB_SIZE]);
+        let mut raw = format!(
+            "HTTP/1.1 200 OK\r\nContent-Encoding: gzip\r\nContent-Length: {}\r\n\r\n",
+            body.len()
+        )
+        .into_bytes();
+        raw.extend_from_slice(&body);
+        assert!(parse_response(&raw).is_err());
+    }
+
+    #[test]
+    fn scan_chunked_waits_for_the_real_terminator() {
+        let mut cur = 0;
+        // Chunk data ending in "0\r\n" must not look like the end.
+        let partial = b"10\r\nabcdefghijklm0\r\n\r\n";
+        assert_eq!(scan_chunked(partial, &mut cur), None);
+        let mut full = partial.to_vec();
+        full.extend_from_slice(b"3\r\nxyz\r\n0\r\n\r\nNEXT");
+        assert_eq!(scan_chunked(&full, &mut cur), Some(full.len() - 4));
+    }
+
+    #[test]
+    fn scan_chunked_handles_trailers_and_garbage() {
+        let mut cur = 0;
+        let body = b"2\r\nhi\r\n0\r\nX-T: 1\r\n\r\n";
+        assert_eq!(scan_chunked(body, &mut cur), Some(body.len()));
+        let mut cur = 0;
+        assert_eq!(scan_chunked(b"zz\r\n", &mut cur), Some(4));
+        let mut cur = 0;
+        assert_eq!(scan_chunked(b"0\r\n", &mut cur), None);
     }
 }

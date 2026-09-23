@@ -11,6 +11,27 @@ use super::manager::{CASCADE_OFFSET, WindowManager};
 use super::window::{Geometry, Window, WindowConfig, WindowId, WindowState};
 
 impl WindowManager {
+    /// Change a window's title (titlebar text and taskbar label).
+    /// Returns `false` if there is no such window; setting the current
+    /// title again is a no-op.
+    pub fn set_window_title(&mut self, id: &str, title: &str, sdi: &mut SdiRegistry) -> bool {
+        let Some(window) = self.windows.iter_mut().find(|w| w.id == id) else {
+            return false;
+        };
+        if window.title != title {
+            window.title = title.to_string();
+            // A running open/minimize animation lays the window out from
+            // a copy every tick (which carries the new title); don't cut
+            // it short.
+            if !self.anim.is_animating(id)
+                && let Some(window) = self.windows.iter().find(|w| w.id == id)
+            {
+                self.layout_window_sdi(window, sdi);
+            }
+        }
+        true
+    }
+
     /// Create a new window and register its SDI objects.
     pub fn create_window(
         &mut self,
@@ -34,6 +55,10 @@ impl WindowManager {
             },
         };
 
+        // A window with this id may still be fading out; drop its ghost
+        // so the two don't share SDI objects.
+        self.flush_closing(Some(&config.id), sdi);
+
         let window = Window::new(config, x, y, &self.theme);
         let is_modal = window.modal;
 
@@ -50,6 +75,7 @@ impl WindowManager {
 
         // Focus the new window (will respect z-order groups).
         self.focus_window_internal(&id, sdi);
+        self.animate_open(&id, sdi);
 
         Ok(id)
     }
@@ -63,6 +89,11 @@ impl WindowManager {
                 let _ = sdi.destroy(&name);
             }
         }
+        for window in &windows {
+            self.anim.cancel(&window.id);
+        }
+        self.anim_visual.clear();
+        self.flush_closing(None, sdi);
         self.drag = None;
         self.active_window = None;
         self.hide_modal_overlay(sdi);
@@ -77,9 +108,14 @@ impl WindowManager {
             .ok_or_else(|| OasisError::Wm(WmError::WindowNotFound { id: id.to_string() }))?;
 
         let was_modal = self.windows[idx].modal;
-        let window = &self.windows[idx];
-        self.destroy_sdi_objects(window, sdi);
-        self.windows.remove(idx);
+        let window = self.windows.remove(idx);
+        self.anim_visual.retain(|(wid, _)| *wid != id);
+        // With motion on, the SDI objects outlive the window until the
+        // close animation ends (see `motion.rs`).
+        if !self.animate_close(&window) {
+            self.anim.cancel(id);
+            self.destroy_sdi_objects(&window, sdi);
+        }
 
         // Cancel any drag on this window.
         if let Some(ref drag) = self.drag {
@@ -92,9 +128,19 @@ impl WindowManager {
             }
         }
 
-        // Update active window.
+        // Focus passes to the topmost *visible* window: a minimized one
+        // must not become the (invisible) keyboard target.
         if self.active_window.as_deref() == Some(id) {
-            self.active_window = self.windows.last().map(|w| w.id.clone());
+            self.active_window = None;
+            if let Some(next) = self
+                .windows
+                .iter()
+                .rev()
+                .find(|w| w.state != WindowState::Minimized)
+                .map(|w| w.id.clone())
+            {
+                self.focus_window_internal(&next, sdi);
+            }
         }
 
         // Hide modal overlay if no more modal windows remain.
@@ -129,11 +175,15 @@ impl WindowManager {
         }
         window.state = WindowState::Minimized;
 
-        // Hide all SDI objects.
-        for suffix in window.sdi_suffixes() {
-            let name = window.sdi_name(suffix);
-            if let Ok(obj) = sdi.get_mut(&name) {
-                obj.visible = false;
+        // Hide all SDI objects (after the minimize animation, if any).
+        if !self.animate_minimize(id, sdi)
+            && let Some(window) = self.windows.iter().find(|w| w.id == id)
+        {
+            for suffix in window.sdi_suffixes() {
+                let name = window.sdi_name(suffix);
+                if let Ok(obj) = sdi.get_mut(&name) {
+                    obj.visible = false;
+                }
             }
         }
 
@@ -163,13 +213,17 @@ impl WindowManager {
             ));
         }
 
-        // Save geometry for restore.
-        window.saved_geometry = Some(Geometry {
-            x: window.x,
-            y: window.y,
-            w: window.outer_w,
-            h: window.outer_h,
-        });
+        // Save geometry for restore -- unless already maximized, where the
+        // current geometry *is* the maximized one and `saved_geometry`
+        // already holds the geometry to restore to.
+        if window.state != WindowState::Maximized || window.saved_geometry.is_none() {
+            window.saved_geometry = Some(Geometry {
+                x: window.x,
+                y: window.y,
+                w: window.outer_w,
+                h: window.outer_h,
+            });
+        }
 
         window.x = 0;
         window.y = self.theme.maximize_top_inset as i32;
@@ -212,6 +266,9 @@ impl WindowManager {
         }
 
         self.update_sdi_positions(id, sdi);
+        if was_minimized {
+            self.animate_unminimize(id, sdi);
+        }
 
         Ok(())
     }

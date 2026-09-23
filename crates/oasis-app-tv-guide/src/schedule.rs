@@ -28,15 +28,34 @@ pub fn schedule_at(catalog: &ChannelCatalog, unix_time: u64) -> Option<ScheduleS
     }
 
     let playlist = deterministic_shuffle(&catalog.episodes, channel_seed(catalog.channel_number));
-    let cycle_duration = catalog.total_duration_secs as u64;
+    slot_in_cycle(&playlist, cycle_secs(&playlist), unix_time)
+}
+
+/// Length of one schedule cycle: the sum of the whole-second episode
+/// durations the slots are laid out with.
+///
+/// This must be the sum of the per-episode `as u64` durations, not the
+/// truncated sum of the fractional ones: with fractional durations the
+/// latter is up to one second per episode longer, and the positions past
+/// the last slot produced a phantom episode "starting now" (or, for a
+/// sub-second episode, a zero-length slot that hung the grid's range walk).
+fn cycle_secs(playlist: &[VideoEpisode]) -> u64 {
+    playlist.iter().map(|ep| ep.duration_secs as u64).sum()
+}
+
+/// The slot playing at `unix_time` in a cycle of `cycle_duration` seconds.
+fn slot_in_cycle(
+    playlist: &[VideoEpisode],
+    cycle_duration: u64,
+    unix_time: u64,
+) -> Option<ScheduleSlot> {
     if cycle_duration == 0 {
         return None;
     }
-
     let position_in_cycle = unix_time % cycle_duration;
     let mut elapsed = 0u64;
 
-    for episode in &playlist {
+    for episode in playlist {
         let ep_duration = episode.duration_secs as u64;
         if ep_duration == 0 {
             continue;
@@ -52,15 +71,8 @@ pub fn schedule_at(catalog: &ChannelCatalog, unix_time: u64) -> Option<ScheduleS
         }
         elapsed += ep_duration;
     }
-
-    // Fallback: should not reach here if durations are consistent,
-    // but return last episode if rounding causes a gap.
-    playlist.last().map(|ep| ScheduleSlot {
-        episode: ep.clone(),
-        start_time: unix_time,
-        elapsed_secs: 0,
-        remaining_secs: ep.duration_secs as u64,
-    })
+    // Unreachable: the cycle is exactly the sum of the slot lengths.
+    None
 }
 
 /// Generate schedule for a channel over a time range.
@@ -83,7 +95,7 @@ pub fn schedule_range(
         let Some(slot) = schedule_at(catalog, t) else {
             break;
         };
-        let next_t = slot.start_time + slot.episode.duration_secs as u64;
+        let next_t = (slot.start_time + slot.episode.duration_secs as u64).max(t + 1);
         slots.push(slot);
         // Advance to the next episode's start.
         t = next_t;
@@ -211,7 +223,7 @@ impl CachedSchedule {
         }
         let playlist =
             deterministic_shuffle(&catalog.episodes, channel_seed(catalog.channel_number));
-        let cycle_duration = catalog.total_duration_secs as u64;
+        let cycle_duration = cycle_secs(&playlist);
         if cycle_duration == 0 {
             return None;
         }
@@ -223,32 +235,7 @@ impl CachedSchedule {
 
     /// Compute what's playing at a given Unix timestamp.
     pub fn at(&self, unix_time: u64) -> Option<ScheduleSlot> {
-        let position_in_cycle = unix_time % self.cycle_duration;
-        let mut elapsed = 0u64;
-
-        for episode in &self.playlist {
-            let ep_duration = episode.duration_secs as u64;
-            if ep_duration == 0 {
-                continue;
-            }
-            if elapsed + ep_duration > position_in_cycle {
-                let ep_elapsed = position_in_cycle - elapsed;
-                return Some(ScheduleSlot {
-                    episode: episode.clone(),
-                    start_time: unix_time - ep_elapsed,
-                    elapsed_secs: ep_elapsed,
-                    remaining_secs: ep_duration - ep_elapsed,
-                });
-            }
-            elapsed += ep_duration;
-        }
-
-        self.playlist.last().map(|ep| ScheduleSlot {
-            episode: ep.clone(),
-            start_time: unix_time,
-            elapsed_secs: 0,
-            remaining_secs: ep.duration_secs as u64,
-        })
+        slot_in_cycle(&self.playlist, self.cycle_duration, unix_time)
     }
 
     /// Generate schedule slots covering `[start_time, end_time)`.
@@ -262,7 +249,7 @@ impl CachedSchedule {
             let Some(slot) = self.at(t) else {
                 break;
             };
-            let next_t = slot.start_time + slot.episode.duration_secs as u64;
+            let next_t = (slot.start_time + slot.episode.duration_secs as u64).max(t + 1);
             slots.push(slot);
             t = next_t;
         }

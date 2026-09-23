@@ -76,9 +76,32 @@ impl FormManager {
                     *v = value.to_string();
                     return;
                 },
+                FormElement::HiddenInput { name: n, value: v } if n == name => {
+                    *v = value.to_string();
+                    return;
+                },
                 _ => {},
             }
         }
+    }
+
+    /// Adopt a text value written outside the form manager (a script
+    /// setting `input.value`). Returns `true` when it differed; when the
+    /// element has focus its caret moves to the end of the new value.
+    pub fn adopt_value(&mut self, form_id: usize, name: &str, value: &str) -> bool {
+        if self.get_value(form_id, name).is_none_or(|v| v == value) {
+            return false;
+        }
+        self.set_value(form_id, name, value);
+        let focused =
+            self.focused_form == Some(form_id) && self.focused_element.as_deref() == Some(name);
+        let len = self
+            .get_value(form_id, name)
+            .map_or(0, |v| v.chars().count());
+        if focused && let Some(form) = self.forms.get_mut(form_id) {
+            form.cursor = len;
+        }
+        true
     }
 
     /// Get the value of a named text element.
@@ -105,6 +128,57 @@ impl FormManager {
                 name: n, checked, ..
             } = elem
                 && n == name
+            {
+                *checked = !*checked;
+                return;
+            }
+        }
+    }
+
+    /// Whether the focused element is a `<select>` (arrow keys then
+    /// change its selection instead of scrolling the page).
+    pub fn focused_is_select(&self) -> bool {
+        let (Some(fi), Some(name)) = (self.focused_form, self.focused_element.as_deref()) else {
+            return false;
+        };
+        self.forms.get(fi).is_some_and(|f| {
+            f.elements()
+                .iter()
+                .any(|e| matches!(e, FormElement::SelectBox { .. }) && e.name() == Some(name))
+        })
+    }
+
+    /// Whether the focused element takes typed text (text input or
+    /// textarea), as opposed to a checkbox, radio, select or button.
+    pub fn focused_accepts_text(&self) -> bool {
+        let (Some(fi), Some(name)) = (self.focused_form, self.focused_element.as_deref()) else {
+            return false;
+        };
+        self.forms.get(fi).is_some_and(|f| {
+            f.elements().iter().any(|e| {
+                matches!(
+                    e,
+                    FormElement::TextInput { .. } | FormElement::TextArea { .. }
+                ) && e.name() == Some(name)
+            })
+        })
+    }
+
+    /// Toggle the checkbox with the given `name` *and* `value` (several
+    /// checkboxes may share a name, e.g. `tags=a` / `tags=b`).
+    pub fn toggle_checkbox_value(&mut self, form_id: usize, name: &str, value: &str) {
+        let Some(form) = self.forms.get_mut(form_id) else {
+            return;
+        };
+        for elem in &mut form.elements {
+            if let FormElement::Checkbox {
+                name: n,
+                value: v,
+                checked,
+                ..
+            } = elem
+                && n == name
+                && v == value
             {
                 *checked = !*checked;
                 return;
@@ -162,6 +236,17 @@ impl FormManager {
     /// Runs validation first. If any errors are found the errors are
     /// stored in `self.validation_errors` and `None` is returned.
     pub fn submit(&mut self, form_id: usize) -> Option<FormData> {
+        self.submit_with_submitter(form_id, None)
+    }
+
+    /// Like [`Self::submit`], but on behalf of a submit button: its
+    /// `name=value` pair (when it has a name) is appended to the form
+    /// data set, as HTML requires for the submitter.
+    pub fn submit_with_submitter(
+        &mut self,
+        form_id: usize,
+        submitter: Option<(&str, &str)>,
+    ) -> Option<FormData> {
         let form = self.forms.get(form_id)?;
         let errors = super::validation::validate_form(&form.elements);
         if !errors.is_empty() {
@@ -169,8 +254,14 @@ impl FormManager {
             return None;
         }
         self.validation_errors.clear();
+        let mut fields = form.collect();
+        if let Some((name, value)) = submitter
+            && !name.is_empty()
+        {
+            fields.push((name.to_string(), value.to_string()));
+        }
         Some(FormData {
-            fields: form.collect(),
+            fields,
             method: form.method,
             action: form.action.clone(),
         })

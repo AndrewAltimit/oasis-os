@@ -33,6 +33,21 @@ pub fn http_request_full(
     extra_headers: &[(&str, &str)],
     tls: Option<&dyn TlsProvider>,
 ) -> Result<(ResourceResponse, Vec<(String, String)>)> {
+    http_request_guarded(method, url, body, extra_headers, tls, &|_| true)
+}
+
+/// Like [`http_request_full`] but consults `redirect_ok` before following
+/// each redirect; `false` aborts with an error. (PSP resolves hosts inside
+/// `TlsProvider::connect_tcp`, so there is no per-connect address hook
+/// here, unlike the desktop client's `RequestGuard`.)
+pub fn http_request_guarded(
+    method: &str,
+    url: &Url,
+    body: Option<&[u8]>,
+    extra_headers: &[(&str, &str)],
+    tls: Option<&dyn TlsProvider>,
+    redirect_ok: &dyn Fn(&Url) -> bool,
+) -> Result<(ResourceResponse, Vec<(String, String)>)> {
     if url.scheme != "http" && url.scheme != "https" {
         return Err(OasisError::Backend(
             format!("unsupported scheme for PSP HTTP client: {}", url.scheme).into(),
@@ -47,7 +62,8 @@ pub fn http_request_full(
     let mut current_method = method.to_string();
     let mut current_body: Option<Vec<u8>> = body.map(|b| b.to_vec());
 
-    for _ in 0..MAX_REDIRECTS {
+    // The initial request plus up to MAX_REDIRECTS followed redirects.
+    for _ in 0..=MAX_REDIRECTS {
         let resp = do_request(
             tls_provider,
             &current_method,
@@ -62,6 +78,11 @@ pub fn http_request_full(
                 current_url = current_url.resolve(&location).ok_or_else(|| {
                     OasisError::Backend(format!("bad redirect Location: {location}").into())
                 })?;
+                if !redirect_ok(&current_url) {
+                    return Err(OasisError::Backend(
+                        format!("redirect to {current_url} blocked by request policy").into(),
+                    ));
+                }
                 // 307/308 must preserve the original method and body.
                 // 301/302/303 convert to GET and drop the body.
                 if !matches!(resp.status_code, 307 | 308) {

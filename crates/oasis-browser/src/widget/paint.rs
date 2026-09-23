@@ -81,6 +81,9 @@ impl BrowserWidget {
         #[cfg(feature = "web-fonts")]
         self.load_web_fonts(vfs);
 
+        // Advance smooth scrolling (a no-op unless `smooth_scroll`).
+        self.scroll.tick();
+
         // Compute frame delta for animations/transitions.
         let now = web_time::Instant::now();
         let dt_ms = self
@@ -170,9 +173,15 @@ impl BrowserWidget {
 
         // Execute deferred scripts after first paint.
         #[cfg(feature = "javascript")]
-        if !self.deferred_scripts.is_empty() && !self.display_list.is_empty() {
+        if !self.deferred_scripts.is_empty() && !self.display_list_stale {
             self.execute_deferred_scripts();
         }
+
+        // Timer callbacks and deferred scripts mutate the JS-side
+        // document; pull those mutations into the rendered document
+        // (re-cascade + relayout) or they never reach the screen.
+        #[cfg(feature = "javascript")]
+        self.apply_js_dom_mutations();
 
         // Process pending JS navigation actions.
         #[cfg(feature = "javascript")]
@@ -239,8 +248,10 @@ impl BrowserWidget {
         if let Some(layout) = &self.layout_root {
             // Rebuild display list when layout changed or on first paint.
             // The display list is also cleared by load_html on navigation.
-            let needs_rebuild =
-                layout_changed || self.display_list.is_empty() || self.full_repaint_needed;
+            let needs_rebuild = layout_changed
+                || self.display_list_stale
+                || self.display_list.is_empty()
+                || self.full_repaint_needed;
 
             // Capture dirty rects before clearing them.
             let has_dirty_rects = !self.dirty_rects.is_empty();
@@ -477,6 +488,12 @@ impl BrowserWidget {
                     )?;
                 }
             }
+        }
+
+        // Whatever path ran above, the display list now matches the
+        // current layout.
+        if self.layout_root.is_some() {
+            self.display_list_stale = false;
         }
 
         // Paint SVG/Canvas elements that can't be represented in the display list.

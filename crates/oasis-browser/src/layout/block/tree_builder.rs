@@ -81,29 +81,102 @@ pub(super) fn build_children(
 ) -> Vec<LayoutBox> {
     let mut boxes = Vec::with_capacity(children.len());
     for &child_id in children {
-        if let Some(lb) = build_box_for_node(doc, child_id, styles, base_url, image_info) {
-            boxes.push(lb);
-        }
+        build_box_for_node(doc, child_id, styles, base_url, image_info, &mut boxes);
     }
     boxes
 }
 
-/// Build a single layout box for a DOM node. Returns `None` for
-/// `display: none`, comments, and nodes without styles.
+/// Build the layout box for a DOM node and append it to `out`. Nothing
+/// is appended for `display: none`, comments, and nodes without styles.
+///
+/// This is the recursive step of layout-tree construction, so its stack
+/// frame (plus `build_children`'s) is multiplied by the DOM depth, up to
+/// the tree builder's nesting cap. A `LayoutBox` is ~1.7 KB, so the
+/// frame must not hold any by value: all per-element work lives in the
+/// out-of-line [`begin_box_for_node`], which hands back heap boxes, and
+/// the final move into `out` happens in [`push_box`]. This took a
+/// 256-deep page from ~12 KB of stack per level (overflowing a 1 MiB
+/// Windows main thread) to a few hundred bytes.
 fn build_box_for_node(
     doc: &Document,
     node_id: NodeId,
     styles: &[Option<ComputedStyle>],
     base_url: Option<&str>,
     image_info: &HashMap<String, (u32, u32)>,
-) -> Option<LayoutBox> {
+    out: &mut Vec<LayoutBox>,
+) {
+    match begin_box_for_node(doc, node_id, styles, base_url, image_info) {
+        BoxStart::Skip => {},
+        BoxStart::Leaf(lb) => push_box(out, lb),
+        BoxStart::Container {
+            mut lb,
+            before,
+            after,
+        } => {
+            // Collect child IDs to avoid holding a borrow on the node
+            // while recursing into `build_children`.
+            let child_ids = doc.get(node_id).children.clone();
+            let mut child_boxes = build_children(doc, &child_ids, styles, base_url, image_info);
+
+            // Insert ::before and ::after pseudo-element boxes.
+            if let Some(before) = before {
+                insert_box(&mut child_boxes, 0, before);
+            }
+            if let Some(after) = after {
+                push_box(&mut child_boxes, after);
+            }
+
+            lb.children = wrap_anonymous(child_boxes, &lb.style);
+            push_box(out, lb);
+        },
+    }
+}
+
+/// Move a heap layout box into `out` (out of line so the by-value
+/// temporary never lands in the recursive frame).
+#[inline(never)]
+fn push_box(out: &mut Vec<LayoutBox>, lb: Box<LayoutBox>) {
+    out.push(*lb);
+}
+
+/// [`push_box`] at an index.
+#[inline(never)]
+fn insert_box(out: &mut Vec<LayoutBox>, index: usize, lb: Box<LayoutBox>) {
+    out.insert(index, *lb);
+}
+
+/// First, non-recursive half of [`build_box_for_node`].
+enum BoxStart {
+    /// No box (`display: none`, comments, closed `<details>` content…).
+    Skip,
+    /// A finished box with no DOM children to recurse into.
+    Leaf(Box<LayoutBox>),
+    /// A box whose DOM children still have to be built, plus its
+    /// `::before` / `::after` boxes.
+    Container {
+        lb: Box<LayoutBox>,
+        before: Option<Box<LayoutBox>>,
+        after: Option<Box<LayoutBox>>,
+    },
+}
+
+#[inline(never)]
+fn begin_box_for_node(
+    doc: &Document,
+    node_id: NodeId,
+    styles: &[Option<ComputedStyle>],
+    base_url: Option<&str>,
+    image_info: &HashMap<String, (u32, u32)>,
+) -> BoxStart {
     let node = doc.get(node_id);
 
     match &node.kind {
         NodeKind::Element(elem) => {
-            let style = styles.get(node_id)?.clone()?;
+            let Some(style) = styles.get(node_id).and_then(Option::clone) else {
+                return BoxStart::Skip;
+            };
             if style.display == Display::None {
-                return None;
+                return BoxStart::Skip;
             }
 
             // Hide children of closed <details> (except <summary>).
@@ -115,7 +188,7 @@ fn build_box_for_node(
                 && parent_elem.tag == TagName::Details
                 && parent_elem.get_attribute("open").is_none()
             {
-                return None;
+                return BoxStart::Skip;
             }
 
             // Determine box type.
@@ -137,7 +210,7 @@ fn build_box_for_node(
                 let replaced = ReplacedContent::Canvas { state };
                 let mut lb = LayoutBox::new(BoxType::Replaced(replaced), style, Some(node_id));
                 lb.children = Vec::new();
-                return Some(lb);
+                return BoxStart::Leaf(Box::new(lb));
             }
 
             // Handle <svg> as a replaced element.
@@ -149,7 +222,7 @@ fn build_box_for_node(
                 };
                 let mut lb = LayoutBox::new(BoxType::Replaced(replaced), style, Some(node_id));
                 lb.children = Vec::new();
-                return Some(lb);
+                return BoxStart::Leaf(Box::new(lb));
             }
 
             // Handle <textarea> as a replaced element.
@@ -172,7 +245,7 @@ fn build_box_for_node(
                 };
                 let mut lb = LayoutBox::new(BoxType::Replaced(replaced), style, Some(node_id));
                 lb.children = Vec::new();
-                return Some(lb);
+                return BoxStart::Leaf(Box::new(lb));
             }
 
             // Handle <select> specially: find selected/first <option> text.
@@ -186,7 +259,7 @@ fn build_box_for_node(
                 };
                 let mut lb = LayoutBox::new(BoxType::Replaced(replaced), style, Some(node_id));
                 lb.children = Vec::new();
-                return Some(lb);
+                return BoxStart::Leaf(Box::new(lb));
             }
 
             // Handle <button> specially: collect child text for label.
@@ -200,14 +273,14 @@ fn build_box_for_node(
                 let replaced = ReplacedContent::SubmitButton { label };
                 let mut lb = LayoutBox::new(BoxType::Replaced(replaced), style, Some(node_id));
                 lb.children = Vec::new();
-                return Some(lb);
+                return BoxStart::Leaf(Box::new(lb));
             }
 
             // Handle replaced elements.
             if let Some(replaced) = replaced_content(elem, base_url, image_info) {
                 let mut lb = LayoutBox::new(BoxType::Replaced(replaced), style, Some(node_id));
                 lb.children = Vec::new();
-                return Some(lb);
+                return BoxStart::Leaf(Box::new(lb));
             }
 
             let mut lb = LayoutBox::new(box_type, style.clone(), Some(node_id));
@@ -243,22 +316,11 @@ fn build_box_for_node(
                 }
             }
 
-            // Collect child IDs to avoid holding a borrow on `node`
-            // while recursing into `build_children`.
-            let child_ids = node.children.clone();
-            let mut child_boxes = build_children(doc, &child_ids, styles, base_url, image_info);
-
-            // Insert ::before and ::after pseudo-element boxes.
-            if let Some(before) = before_box {
-                child_boxes.insert(0, before);
+            BoxStart::Container {
+                lb: Box::new(lb),
+                before: before_box.map(Box::new),
+                after: after_box.map(Box::new),
             }
-            if let Some(after) = after_box {
-                child_boxes.push(after);
-            }
-
-            lb.children = wrap_anonymous(child_boxes, &lb.style);
-
-            Some(lb)
         },
         NodeKind::Text(text) => {
             // Skip whitespace-only text nodes that are between
@@ -269,7 +331,7 @@ fn build_box_for_node(
             if text.trim().is_empty() {
                 let dominated_by_blocks = has_block_sibling(doc, node_id);
                 if dominated_by_blocks {
-                    return None;
+                    return BoxStart::Skip;
                 }
             }
             let style = find_inherited_style(doc, node_id, styles);
@@ -277,9 +339,9 @@ fn build_box_for_node(
             inline_style.display = Display::Inline;
             let mut lb = LayoutBox::new(BoxType::Inline, inline_style, Some(node_id));
             lb.text = Some(text.clone());
-            Some(lb)
+            BoxStart::Leaf(Box::new(lb))
         },
-        NodeKind::Comment(_) | NodeKind::Document => None,
+        NodeKind::Comment(_) | NodeKind::Document => BoxStart::Skip,
     }
 }
 
@@ -601,6 +663,7 @@ fn find_inherited_style(
 ///
 /// This ensures the block formatting context only contains block-level
 /// boxes, as required by CSS 2.1.
+#[inline(never)]
 pub(super) fn wrap_anonymous(
     children: Vec<LayoutBox>,
     parent_style: &ComputedStyle,

@@ -201,9 +201,36 @@ codegen-units = 1
 panic = "abort"
 strip = true
 
+# Release build for the oasis-ffi shared library embedded in a host process
+# (UE5, C/C++). Identical to `release` except that panics unwind, so the
+# `catch_unwind` guard on every `extern "C"` export can contain them instead of
+# aborting the host. Build with `cargo build --profile release-ffi -p oasis-ffi`.
+[profile.release-ffi]
+inherits = "release"
+panic = "unwind"
+
 [profile.dev]
 opt-level = 0
 debug = true
+
+# Software video decode is unusable unoptimized: at opt-level 0 openh264
+# (its C decoder and the Rust YUV->RGBA converter) takes ~110 ms per 720p
+# frame vs ~3.5 ms optimized, so `cargo run` TV Guide playback decoded at
+# ~9 fps and stuttered.  Optimize just the codec crates in dev builds.
+[profile.dev.package.openh264]
+opt-level = 3
+
+[profile.dev.package.openh264-sys2]
+opt-level = 3
+
+[profile.dev.package.symphonia-core]
+opt-level = 3
+
+[profile.dev.package.symphonia-codec-aac]
+opt-level = 3
+
+[profile.dev.package.symphonia-format-isomp4]
+opt-level = 3
 
 [profile.asan]
 inherits = "dev"

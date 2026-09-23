@@ -4,7 +4,7 @@ use oasis_core::backend::{InputBackend, SdiCore};
 use oasis_core::input::{Button, InputEvent, Trigger};
 use oasis_core::platform::{PowerService, TimeService};
 
-use crate::handle::{OasisInstance, with_instance, with_instance_ref};
+use crate::handle::{OasisInstance, ffi_guard, with_instance, with_instance_ref};
 use crate::types::OASIS_CB_APP_LAUNCH;
 
 /// Nearest-neighbor upscale `src` (sw x sh RGBA) into `dst` (dw x dh RGBA),
@@ -47,15 +47,20 @@ fn upscale_nearest(src: &[u8], sw: u32, sh: u32, dst: &mut Vec<u8>, dw: u32, dh:
 /// Caller must ensure single-threaded access to the handle.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn oasis_tick(handle: *mut OasisInstance, delta_seconds: f32) {
-    // SAFETY: Caller guarantees `handle` is valid and non-null per function safety contract.
-    unsafe {
-        with_instance(handle, (), |instance| {
-            tick_inner(instance, delta_seconds);
-        });
-    }
+    ffi_guard("oasis_tick", (), || {
+        // SAFETY: Caller guarantees `handle` is valid and non-null per function safety contract.
+        unsafe {
+            with_instance(handle, (), |instance| {
+                tick_inner(instance, delta_seconds);
+            });
+        }
+    })
 }
 
 fn tick_inner(instance: &mut OasisInstance, delta_seconds: f32) {
+    #[cfg(test)]
+    crate::handle::maybe_inject_panic();
+
     instance.shader_time += delta_seconds;
 
     // Process queued input events.
@@ -79,6 +84,26 @@ fn tick_inner(instance: &mut OasisInstance, delta_seconds: f32) {
                         },
                         _ => {},
                     }
+                }
+            },
+            // Pointer input on the dashboard, like the desktop shell: a
+            // click on an icon selects and launches it, pointer motion
+            // drives the icon hover lift. (These events used to be accepted
+            // by `oasis_send_input` and then silently dropped.)
+            InputEvent::PointerClick { x, y } => {
+                if let Some(ref mut dashboard) = instance.dashboard
+                    && let Some(idx) = dashboard.icon_at(*x, *y)
+                    && let Some(app) = dashboard.current_page_apps().get(idx)
+                {
+                    let title = app.title.clone();
+                    dashboard.selected = idx;
+                    pending_callbacks.push((OASIS_CB_APP_LAUNCH, title));
+                }
+            },
+            InputEvent::CursorMove { x, y } => {
+                if let Some(ref mut dashboard) = instance.dashboard {
+                    let hit = dashboard.icon_at(*x, *y);
+                    dashboard.set_hover(hit);
                 }
             },
             InputEvent::TriggerPress(Trigger::Right) => {
@@ -195,6 +220,8 @@ fn tick_inner(instance: &mut OasisInstance, delta_seconds: f32) {
     } else {
         let _ = instance.sdi.draw(&mut instance.backend);
     }
+    // Status bar battery / AC / Wi-Fi glyphs (vector art over the bar).
+    let _ = oasis_core::statusbar::render_status_glyphs(&mut instance.backend, &instance.sdi);
 
     let _ = instance.backend.swap_buffers();
 }
@@ -217,22 +244,24 @@ pub unsafe extern "C" fn oasis_get_buffer(
     out_width: *mut u32,
     out_height: *mut u32,
 ) -> *const u8 {
-    // SAFETY: Caller guarantees `handle` is valid and non-null per function safety contract.
-    unsafe {
-        with_instance_ref(handle, std::ptr::null(), |instance| {
-            // SAFETY: Pointer is either null (handled by `as_mut()` returning None)
-            // or valid per caller.
-            if let Some(w) = out_width.as_mut() {
-                *w = instance.width;
-            }
-            // SAFETY: Pointer is either null (handled by `as_mut()` returning None)
-            // or valid per caller.
-            if let Some(h) = out_height.as_mut() {
-                *h = instance.height;
-            }
-            instance.backend.buffer().as_ptr()
-        })
-    }
+    ffi_guard("oasis_get_buffer", std::ptr::null(), || {
+        // SAFETY: Caller guarantees `handle` is valid and non-null per function safety contract.
+        unsafe {
+            with_instance_ref(handle, std::ptr::null(), |instance| {
+                // SAFETY: Pointer is either null (handled by `as_mut()` returning None)
+                // or valid per caller.
+                if let Some(w) = out_width.as_mut() {
+                    *w = instance.width;
+                }
+                // SAFETY: Pointer is either null (handled by `as_mut()` returning None)
+                // or valid per caller.
+                if let Some(h) = out_height.as_mut() {
+                    *h = instance.height;
+                }
+                instance.backend.buffer().as_ptr()
+            })
+        }
+    })
 }
 
 /// Check whether the framebuffer has changed since the last read.
@@ -242,14 +271,16 @@ pub unsafe extern "C" fn oasis_get_buffer(
 /// `handle` must be valid and non-null.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn oasis_get_dirty(handle: *mut OasisInstance) -> bool {
-    // SAFETY: Caller guarantees `handle` is valid and non-null per function safety contract.
-    unsafe {
-        with_instance(handle, false, |instance| {
-            let dirty = instance.backend.is_dirty();
-            if dirty {
-                instance.backend.clear_dirty();
-            }
-            dirty
-        })
-    }
+    ffi_guard("oasis_get_dirty", false, || {
+        // SAFETY: Caller guarantees `handle` is valid and non-null per function safety contract.
+        unsafe {
+            with_instance(handle, false, |instance| {
+                let dirty = instance.backend.is_dirty();
+                if dirty {
+                    instance.backend.clear_dirty();
+                }
+                dirty
+            })
+        }
+    })
 }

@@ -1,7 +1,8 @@
 # JavaScript
 
 JavaScript support is **feature-gated** behind `feature = "javascript"`
-and lives almost entirely in `src/js_dom.rs` (~110 KB). The runtime is
+and lives almost entirely in the `src/js_dom/` module (Rust bindings
+plus `bootstrap.js` / `canvas.js` / `compat_shims.js`). The runtime is
 [QuickJS-NG](https://github.com/quickjs-ng/quickjs) wrapped by
 [`rquickjs`](https://docs.rs/rquickjs), re-exported through the sibling
 crate `oasis-js`.
@@ -146,6 +147,6 @@ relayout if any DOM mutation happened.
 
 ## Tests
 
-- `js_dom` itself does not contain unit tests — it is exercised through
-  `tests/browser_integration.rs` and through running real pages.
+- `js_dom/tests.rs` holds the binding unit tests; the module is also
+  exercised through `browser_tests.rs` and through running real pages.
 - The `oasis-js` crate has its own test suite for the runtime layer.

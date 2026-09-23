@@ -9,7 +9,8 @@
 //! ## Message framing
 //! Each message starts with a 4-byte header: [type: u8, flags: u8, len: u16].
 //! `len` is the payload length (excluding the header itself).
-//! Max payload = 16380 bytes (fits in one USB transfer with header).
+//! Max message = 16380 bytes (4-byte header + [`MAX_CHUNK_PAYLOAD`] = 16376
+//! bytes of payload), which fits in one 16 KiB USB transfer.
 
 /// PSP display dimensions
 pub const DISPLAY_WIDTH: u32 = 480;
@@ -121,6 +122,78 @@ pub const MAX_CHUNK_PAYLOAD: usize = 16376;
 /// Number of chunks per frame: ceil(278528 / 16376) = 18
 pub const CHUNKS_PER_FRAME: usize = FRAME_SIZE_STRIDE.div_ceil(MAX_CHUNK_PAYLOAD);
 
+/// Size of the host receive buffer (one USB transfer).
+pub const MAX_TRANSFER: usize = 16384;
+
+/// USB bulk max packet size. A transfer that is an exact multiple of this
+/// needs a zero-length packet to terminate, which the PSP driver does not
+/// handle -- so encoders append one padding byte instead.
+pub const BULK_PACKET_SIZE: usize = 512;
+
+/// Encode a framed message (header + payload) ready to write to EP2.
+///
+/// Rejects payloads larger than [`MAX_CHUNK_PAYLOAD`] (previously the
+/// length was cast straight to `u16`, silently truncating the header's
+/// `payload_len` for oversized payloads). If the packet length is an exact
+/// multiple of [`BULK_PACKET_SIZE`] a single `0` padding byte is appended
+/// (not counted in `payload_len`) to avoid needing a ZLP.
+pub fn encode_msg(msg_type: u8, flags: u8, payload: &[u8]) -> Result<Vec<u8>, String> {
+    if payload.len() > MAX_CHUNK_PAYLOAD {
+        return Err(format!(
+            "payload too large: {} bytes (max {MAX_CHUNK_PAYLOAD})",
+            payload.len()
+        ));
+    }
+    let header = MsgHeader {
+        msg_type,
+        flags,
+        payload_len: payload.len() as u16,
+    };
+    let mut packet = Vec::with_capacity(MsgHeader::SIZE + payload.len() + 1);
+    packet.extend_from_slice(&header.to_bytes());
+    packet.extend_from_slice(payload);
+    if packet.len().is_multiple_of(BULK_PACKET_SIZE) {
+        packet.push(0);
+    }
+    Ok(packet)
+}
+
+/// Decode a framed message received on EP1.
+///
+/// Returns the header and the payload slice. Trailing bytes after the
+/// declared payload (e.g. ZLP-avoidance padding) are ignored.
+pub fn decode_msg(buf: &[u8]) -> Result<(MsgHeader, &[u8]), String> {
+    let header =
+        MsgHeader::from_bytes(buf).ok_or_else(|| format!("Short message: {} bytes", buf.len()))?;
+    let total = MsgHeader::SIZE + header.payload_len as usize;
+    if buf.len() < total {
+        return Err(format!("Truncated: got {}, expected {total}", buf.len()));
+    }
+    Ok((header, &buf[MsgHeader::SIZE..total]))
+}
+
+/// Split a frame into `(chunk_index, bytes)` pieces of at most
+/// [`MAX_CHUNK_PAYLOAD`] bytes.
+///
+/// Errors if the frame would need more chunks than fit in the `u8` chunk
+/// index carried in the header's `flags` byte (previously `send_frame`
+/// overflowed the index -- a panic in debug builds, a silent wrap to
+/// chunk 0 in release).
+pub fn frame_chunks(pixels: &[u8]) -> Result<Vec<(u8, &[u8])>, String> {
+    let count = pixels.len().div_ceil(MAX_CHUNK_PAYLOAD);
+    if count > usize::from(u8::MAX) + 1 {
+        return Err(format!(
+            "frame too large: {} bytes needs {count} chunks (max 256)",
+            pixels.len()
+        ));
+    }
+    Ok(pixels
+        .chunks(MAX_CHUNK_PAYLOAD)
+        .enumerate()
+        .map(|(i, c)| (i as u8, c))
+        .collect())
+}
+
 // ---------------------------------------------------------------------------
 // PSP button bitmasks (matches psp::sys::CtrlButtons)
 // ---------------------------------------------------------------------------
@@ -231,5 +304,142 @@ impl InputState {
             self.analog_y,
             self.battery,
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn msg_header_round_trip_little_endian() {
+        let h = MsgHeader {
+            msg_type: cmd::FRAME_CHUNK,
+            flags: 7,
+            payload_len: 0x1234,
+        };
+        let bytes = h.to_bytes();
+        assert_eq!(bytes, [cmd::FRAME_CHUNK, 7, 0x34, 0x12]);
+        let back = MsgHeader::from_bytes(&bytes).expect("decodes");
+        assert_eq!(back.msg_type, cmd::FRAME_CHUNK);
+        assert_eq!(back.flags, 7);
+        assert_eq!({ back.payload_len }, 0x1234);
+    }
+
+    #[test]
+    fn msg_header_rejects_truncated_input() {
+        for len in 0..MsgHeader::SIZE {
+            assert!(
+                MsgHeader::from_bytes(&[0xAA; 4][..len]).is_none(),
+                "len {len}"
+            );
+        }
+        // Extra bytes are fine (the header is a prefix).
+        assert!(MsgHeader::from_bytes(&[1, 2, 3, 4, 5]).is_some());
+    }
+
+    #[test]
+    fn input_state_round_trip() {
+        let s = InputState {
+            buttons: buttons::CROSS | buttons::UP | buttons::NOTE,
+            analog_x: 12,
+            analog_y: 250,
+            battery: 87,
+            _pad: 0,
+        };
+        let bytes = s.to_bytes();
+        assert_eq!(&bytes[..4], &{ s.buttons }.to_le_bytes());
+        let back = InputState::from_bytes(&bytes).expect("decodes");
+        assert_eq!({ back.buttons }, { s.buttons });
+        assert_eq!(back.analog_x, 12);
+        assert_eq!(back.analog_y, 250);
+        assert_eq!(back.battery, 87);
+    }
+
+    #[test]
+    fn input_state_rejects_truncated_input() {
+        let bytes = InputState::default().to_bytes();
+        for len in 0..InputState::SIZE {
+            assert!(InputState::from_bytes(&bytes[..len]).is_none(), "len {len}");
+        }
+    }
+
+    #[test]
+    fn encode_decode_round_trip() {
+        let payload: Vec<u8> = (0..100u8).collect();
+        let packet = encode_msg(rsp::ECHO, 3, &payload).expect("encodes");
+        assert_eq!(packet.len(), MsgHeader::SIZE + payload.len());
+        let (h, body) = decode_msg(&packet).expect("decodes");
+        assert_eq!(h.msg_type, rsp::ECHO);
+        assert_eq!(h.flags, 3);
+        assert_eq!(body, &payload[..]);
+    }
+
+    #[test]
+    fn encode_pads_exact_bulk_packet_multiples() {
+        // 4-byte header + 508 payload = 512 -> one pad byte appended.
+        let packet = encode_msg(cmd::FRAME_CHUNK, 0, &[0x55; 508]).expect("encodes");
+        assert_eq!(packet.len(), 513);
+        // The pad byte is not part of the payload.
+        let (h, body) = decode_msg(&packet).expect("decodes");
+        assert_eq!({ h.payload_len }, 508);
+        assert_eq!(body.len(), 508);
+        // Non-multiples are not padded.
+        assert_eq!(encode_msg(cmd::PING, 0, &[]).expect("encodes").len(), 4);
+    }
+
+    #[test]
+    fn encode_rejects_oversized_payload() {
+        let max = vec![0u8; MAX_CHUNK_PAYLOAD];
+        let packet = encode_msg(cmd::FRAME_CHUNK, 0, &max).expect("max fits");
+        assert!(packet.len() <= MAX_TRANSFER);
+        // Previously `len as u16` silently truncated e.g. 65540 -> 4.
+        assert!(encode_msg(cmd::FRAME_CHUNK, 0, &[0u8; MAX_CHUNK_PAYLOAD + 1]).is_err());
+        assert!(encode_msg(cmd::FRAME_CHUNK, 0, &vec![0u8; 65_540]).is_err());
+    }
+
+    #[test]
+    fn decode_rejects_short_and_truncated_messages() {
+        assert!(decode_msg(&[]).is_err());
+        assert!(decode_msg(&[rsp::INPUT_STATE, 0, 8]).is_err());
+        // Header claims 8 payload bytes but only 5 arrived.
+        let mut packet = MsgHeader::new(rsp::INPUT_STATE, 8).to_bytes().to_vec();
+        packet.extend_from_slice(&[1, 2, 3, 4, 5]);
+        assert!(decode_msg(&packet).is_err());
+        packet.extend_from_slice(&[6, 7, 8]);
+        let (_, body) = decode_msg(&packet).expect("complete message");
+        assert_eq!(InputState::from_bytes(body).expect("state").analog_x, 5);
+    }
+
+    #[test]
+    fn frame_chunks_cover_full_frame() {
+        let frame = vec![0xABu8; FRAME_SIZE_STRIDE];
+        let chunks = frame_chunks(&frame).expect("frame fits");
+        assert_eq!(chunks.len(), CHUNKS_PER_FRAME);
+        assert_eq!(CHUNKS_PER_FRAME, 18);
+        for (i, (idx, c)) in chunks.iter().enumerate() {
+            assert_eq!(*idx as usize, i);
+            assert!(c.len() <= MAX_CHUNK_PAYLOAD);
+        }
+        let total: usize = chunks.iter().map(|(_, c)| c.len()).sum();
+        assert_eq!(total, FRAME_SIZE_STRIDE);
+        assert!(frame_chunks(&[]).expect("empty ok").is_empty());
+    }
+
+    #[test]
+    fn frame_chunks_rejects_index_overflow() {
+        let ok = vec![0u8; MAX_CHUNK_PAYLOAD * 256];
+        assert_eq!(frame_chunks(&ok).expect("256 chunks fit").len(), 256);
+        let too_big = vec![0u8; MAX_CHUNK_PAYLOAD * 256 + 1];
+        assert!(frame_chunks(&too_big).is_err());
+    }
+
+    #[test]
+    fn button_format_names() {
+        assert_eq!(buttons::format(0), "(none)");
+        assert_eq!(
+            buttons::format(buttons::START | buttons::L_TRIGGER),
+            "START+L"
+        );
     }
 }

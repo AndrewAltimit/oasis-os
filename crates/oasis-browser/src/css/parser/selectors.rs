@@ -142,40 +142,20 @@ impl CssParser {
                         CssToken::Function(name) => {
                             self.advance();
                             let lc = name.to_ascii_lowercase();
-                            if lc == "not" {
-                                // Parse :not(selector-list). Selectors
-                                // Level 4 allows a comma-separated list
-                                // of compound selectors here.
-                                let inner_list = self.parse_compound_selector_list();
-                                self.skip_whitespace();
-                                if self.peek() == &CssToken::CloseParen {
-                                    self.advance();
-                                }
-                                parts.push(SimpleSelector::Not(inner_list));
-                            } else if lc == "is" || lc == "where" {
-                                // Parse :is(selector-list) / :where(selector-list)
-                                let inner_list = self.parse_compound_selector_list();
-                                self.skip_whitespace();
-                                if self.peek() == &CssToken::CloseParen {
-                                    self.advance();
-                                }
-                                if lc == "is" {
-                                    parts.push(SimpleSelector::Is(inner_list));
-                                } else {
-                                    parts.push(SimpleSelector::Where(inner_list));
-                                }
-                            } else if lc == "has" {
-                                // Parse :has(relative-selector-list).
-                                let inner_list = self.parse_relative_selector_list();
-                                self.skip_whitespace();
-                                if self.peek() == &CssToken::CloseParen {
-                                    self.advance();
-                                }
-                                parts.push(SimpleSelector::Has(inner_list));
-                            } else {
-                                // Functional pseudo-class like :nth-child(2n+1)
-                                let arg = self.consume_until_close_paren();
-                                parts.push(SimpleSelector::PseudoClassFn(lc, arg));
+                            let nests = matches!(lc.as_str(), "not" | "is" | "where" | "has");
+                            if nests && self.nesting >= super::MAX_CSS_NESTING {
+                                // Too deep: drop the argument and match
+                                // nothing (`:is()` with an empty list).
+                                self.skip_to_matching_close_paren();
+                                parts.push(SimpleSelector::Is(Vec::new()));
+                                continue;
+                            }
+                            if nests {
+                                self.nesting += 1;
+                            }
+                            self.parse_selector_function(&lc, &mut parts);
+                            if nests {
+                                self.nesting -= 1;
                             }
                         },
                         _ => {},
@@ -194,6 +174,66 @@ impl CssParser {
             None
         } else {
             Some(CompoundSelector { parts })
+        }
+    }
+
+    /// Skip past the `)` closing the function whose name token was just
+    /// consumed, stepping over nested parentheses / functions.
+    fn skip_to_matching_close_paren(&mut self) {
+        let mut depth = 0usize;
+        loop {
+            match self.peek() {
+                CssToken::Eof => break,
+                CssToken::OpenParen | CssToken::Function(_) => depth += 1,
+                CssToken::CloseParen => {
+                    if depth == 0 {
+                        self.advance();
+                        break;
+                    }
+                    depth -= 1;
+                },
+                _ => {},
+            }
+            self.advance();
+        }
+    }
+
+    /// Parse the argument of a functional pseudo-class (after its name
+    /// token) and push the resulting simple selector.
+    fn parse_selector_function(&mut self, lc: &str, parts: &mut Vec<SimpleSelector>) {
+        if lc == "not" {
+            // Parse :not(selector-list). Selectors Level 4 allows a
+            // comma-separated list of compound selectors here.
+            let inner_list = self.parse_compound_selector_list();
+            self.skip_whitespace();
+            if self.peek() == &CssToken::CloseParen {
+                self.advance();
+            }
+            parts.push(SimpleSelector::Not(inner_list));
+        } else if lc == "is" || lc == "where" {
+            // Parse :is(selector-list) / :where(selector-list)
+            let inner_list = self.parse_compound_selector_list();
+            self.skip_whitespace();
+            if self.peek() == &CssToken::CloseParen {
+                self.advance();
+            }
+            if lc == "is" {
+                parts.push(SimpleSelector::Is(inner_list));
+            } else {
+                parts.push(SimpleSelector::Where(inner_list));
+            }
+        } else if lc == "has" {
+            // Parse :has(relative-selector-list).
+            let inner_list = self.parse_relative_selector_list();
+            self.skip_whitespace();
+            if self.peek() == &CssToken::CloseParen {
+                self.advance();
+            }
+            parts.push(SimpleSelector::Has(inner_list));
+        } else {
+            // Functional pseudo-class like :nth-child(2n+1)
+            let arg = self.consume_until_close_paren();
+            parts.push(SimpleSelector::PseudoClassFn(lc.to_string(), arg));
         }
     }
 

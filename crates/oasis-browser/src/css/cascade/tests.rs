@@ -1148,12 +1148,11 @@ fn prefers_color_scheme_dark_rejected() {
 
 #[test]
 fn cyclic_var_does_not_stack_overflow() {
-    // `--a` references itself -- should resolve to empty (not crash).
+    // `--a` references itself -- invalid at computed-value time (no crash).
     let mut props = rustc_hash::FxHashMap::default();
     props.insert("--a".to_string(), "var(--a)".to_string());
-    let val = CssValue::Var("--a".to_string(), None);
-    let resolved = var_resolve::resolve_css_var(&val, &props);
-    assert_eq!(resolved, CssValue::Keyword(String::new()));
+    let resolved = var_resolve::substitute_vars("var(--a)", &props);
+    assert_eq!(resolved, None);
 }
 
 #[test]
@@ -1162,9 +1161,8 @@ fn indirect_cyclic_var_does_not_stack_overflow() {
     let mut props = rustc_hash::FxHashMap::default();
     props.insert("--a".to_string(), "var(--b)".to_string());
     props.insert("--b".to_string(), "var(--a)".to_string());
-    let val = CssValue::Var("--a".to_string(), None);
-    let resolved = var_resolve::resolve_css_var(&val, &props);
-    assert_eq!(resolved, CssValue::Keyword(String::new()));
+    let resolved = var_resolve::substitute_vars("var(--a)", &props);
+    assert_eq!(resolved, None);
 }
 
 // -- Selector index tests (Phase 2) ----------------------------------
@@ -3210,5 +3208,149 @@ mod container_query_cascade_tests {
             CssValue::LightDark(CssColor::new(255, 0, 0, 255), CssColor::new(0, 0, 255, 255));
         style.apply_declaration("color", &value, 16.0);
         assert_eq!(style.color, Color::rgba(255, 0, 0, 255));
+    }
+}
+
+// -- var() computed-value-time substitution ---------------------------
+
+mod var_substitution {
+    use super::*;
+    use crate::css::values::BackgroundImage;
+    use crate::html::tokenizer::Tokenizer;
+    use crate::html::tree_builder::TreeBuilder;
+
+    /// Cascade `css` over `html` and return the style of `#id`.
+    fn style_of(html: &str, css: &str, id: &str) -> ComputedStyle {
+        let doc = TreeBuilder::build(Tokenizer::new(html).tokenize());
+        let sheet = Stylesheet::parse(css);
+        let styles = style_tree(&doc, &[&sheet], &[], &ctx());
+        let node = doc.get_element_by_id(id).expect("element with id");
+        styles[node].clone().expect("element style")
+    }
+
+    fn one(css: &str) -> ComputedStyle {
+        style_of("<div id=\"t\"></div>", css, "t")
+    }
+
+    #[test]
+    fn var_inside_calc() {
+        let s = one(":root { --gap: 6px } #t { margin-left: calc(var(--gap) * 2) }");
+        assert!((s.margin_left - 12.0).abs() < 0.01, "got {}", s.margin_left);
+    }
+
+    #[test]
+    fn var_inside_rgb() {
+        let s = one(":root { --r: 200; --b: 10 } #t { color: rgb(var(--r), 0, var(--b)) }");
+        assert_eq!(s.color, Color::rgb(200, 0, 10));
+    }
+
+    #[test]
+    fn var_inside_gradient() {
+        let s = one(":root { --from: red; --to: #0000ff } \
+             #t { background-image: linear-gradient(var(--from), var(--to)) }");
+        let BackgroundImage::Gradient(g) = &s.background_image else {
+            panic!("expected gradient, got {:?}", s.background_image);
+        };
+        assert_eq!(
+            g.stops.first().map(|st| st.color),
+            Some(Color::rgb(255, 0, 0))
+        );
+        assert_eq!(
+            g.stops.last().map(|st| st.color),
+            Some(Color::rgb(0, 0, 255))
+        );
+    }
+
+    #[test]
+    fn var_inside_color_mix() {
+        let s = one(":root { --a: red } #t { color: color-mix(in srgb, var(--a), blue) }");
+        assert_ne!(s.color, Color::BLACK, "color-mix with var() should resolve");
+        assert!(s.color.r > 0 && s.color.b > 0, "got {:?}", s.color);
+    }
+
+    #[test]
+    fn shorthand_with_var_expands_after_substitution() {
+        let s = one(":root { --pad: 4px 8px } #t { padding: var(--pad) }");
+        assert!((s.padding_top - 4.0).abs() < 0.01);
+        assert!((s.padding_right - 8.0).abs() < 0.01);
+        assert!((s.padding_left - 8.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn custom_property_names_are_case_sensitive() {
+        let s = one(":root { --Accent: #ff0000; --accent: #00ff00 } \
+             #t { color: var(--Accent); background-color: var(--accent) }");
+        assert_eq!(s.color, Color::rgb(255, 0, 0));
+        assert_eq!(s.background_color, Color::rgb(0, 255, 0));
+    }
+
+    #[test]
+    fn cycle_falls_back_for_outside_referrers() {
+        let s = one(":root { --a: var(--b); --b: var(--a) } \
+             #t { color: var(--a, #00ff00); margin-left: var(--b, 3px) }");
+        assert_eq!(s.color, Color::rgb(0, 255, 0));
+        assert!((s.margin_left - 3.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn fallback_of_fallback() {
+        let s = one(":root { --c: #0000ff } #t { color: var(--x, var(--y, var(--c))) }");
+        assert_eq!(s.color, Color::rgb(0, 0, 255));
+    }
+
+    #[test]
+    fn nested_var_in_fallback_with_calc() {
+        let s = one(":root { --unit: 5px } #t { width: var(--missing, calc(var(--unit) * 3)) }");
+        assert_eq!(s.width, crate::css::values::Dimension::Px(15.0));
+    }
+
+    #[test]
+    fn iacvt_inherited_property_inherits() {
+        // `color` is inherited: an invalid var() behaves as `unset`, i.e.
+        // the parent's colour — not the earlier `blue` declaration.
+        let s = style_of(
+            "<div id=\"p\"><span id=\"c\"></span></div>",
+            "#p { color: #ff0000 } #c { color: blue } #c { color: var(--nope) }",
+            "c",
+        );
+        assert_eq!(s.color, Color::rgb(255, 0, 0));
+    }
+
+    #[test]
+    fn iacvt_non_inherited_property_is_initial() {
+        let s = style_of(
+            "<div id=\"p\"><div id=\"c\"></div></div>",
+            "#p { margin-left: 9px } #c { margin-left: 4px; margin-left: var(--nope) }",
+            "c",
+        );
+        assert!(s.margin_left.abs() < 0.01, "got {}", s.margin_left);
+    }
+
+    #[test]
+    fn children_inherit_substituted_custom_properties() {
+        // `--b` is computed on the parent (1px); redefining `--a` on the
+        // child must not change the inherited `--b`.
+        let s = style_of(
+            "<div id=\"p\"><div id=\"c\"></div></div>",
+            "#p { --a: 1px; --b: var(--a) } #c { --a: 2px; margin-left: var(--b) }",
+            "c",
+        );
+        assert!((s.margin_left - 1.0).abs() < 0.01, "got {}", s.margin_left);
+    }
+
+    #[test]
+    fn unset_keyword_uses_parent_for_inherited() {
+        let s = style_of(
+            "<div id=\"p\"><span id=\"c\"></span></div>",
+            "#p { color: #00ff00 } #c { color: red; color: unset }",
+            "c",
+        );
+        assert_eq!(s.color, Color::rgb(0, 255, 0));
+    }
+
+    #[test]
+    fn pseudo_content_from_var() {
+        let s = one(":root { --icon: \"*\" } #t::before { content: var(--icon) }");
+        assert_eq!(s.before_content.as_deref(), Some("*"));
     }
 }

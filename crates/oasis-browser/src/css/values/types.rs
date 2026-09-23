@@ -756,14 +756,91 @@ pub struct BoxShadow {
     pub inset: bool,
 }
 
+/// One side of a `minmax()` track sizing function.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum TrackBreadth {
+    /// Absolute length in px (em/rem/pt are resolved at parse time).
+    Px(f32),
+    /// Percentage of the grid container's content box in that axis.
+    Percent(f32),
+    /// Flexible `fr` factor (only valid as the max side).
+    Fr(f32),
+    Auto,
+    MinContent,
+    MaxContent,
+}
+
 /// A single CSS Grid track size.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum GridTrackSize {
     Px(f32),
+    /// Percentage of the grid container's content box in that axis.
+    Percent(f32),
     Fr(f32),
     Auto,
-    /// `minmax(min_px, max_px)` — max is `f32::MAX` for `auto`.
-    Minmax(f32, f32),
+    MinContent,
+    MaxContent,
+    /// `fit-content(<length>)` — the limit in px.
+    FitContent(f32),
+    /// `minmax(min, max)`.
+    Minmax(TrackBreadth, TrackBreadth),
+}
+
+/// The `repeat(auto-fill | auto-fit, ...)` part of a track list. The
+/// repetition count depends on the container size, so it is resolved at
+/// layout time (CSS Grid §7.2.3.2).
+#[derive(Debug, Clone, PartialEq)]
+pub struct GridAutoRepeat {
+    /// Index into [`GridTemplate::tracks`] where the repeated tracks go.
+    pub insert_at: usize,
+    /// The repeated track list (one repetition).
+    pub tracks: Vec<GridTrackSize>,
+    /// `auto-fit` (empty repeated tracks collapse) vs `auto-fill`.
+    pub fit: bool,
+}
+
+/// A computed `grid-template-columns` / `grid-template-rows` value.
+///
+/// Derefs to the fixed (non-auto-repeat) track list so simple templates
+/// read like a plain slice.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct GridTemplate {
+    /// Explicit tracks, with any integer `repeat()` already expanded.
+    pub tracks: Vec<GridTrackSize>,
+    /// At most one `repeat(auto-fill | auto-fit, ...)` block.
+    pub auto_repeat: Option<GridAutoRepeat>,
+}
+
+impl From<Vec<GridTrackSize>> for GridTemplate {
+    fn from(tracks: Vec<GridTrackSize>) -> Self {
+        Self {
+            tracks,
+            auto_repeat: None,
+        }
+    }
+}
+
+impl std::ops::Deref for GridTemplate {
+    type Target = [GridTrackSize];
+
+    fn deref(&self) -> &[GridTrackSize] {
+        &self.tracks
+    }
+}
+
+/// A grid placement line (`grid-column-start` etc.).
+#[derive(Debug, Clone, PartialEq, Default)]
+pub enum GridLine {
+    #[default]
+    Auto,
+    /// 1-based line number; negative values count back from the end of
+    /// the explicit grid (`-1` is the last explicit line).
+    Line(i32),
+    /// `span <n>`.
+    Span(u32),
+    /// A custom ident — resolved against `grid-template-areas`
+    /// (`<name>`, `<name>-start`, `<name>-end`).
+    Named(String),
 }
 
 /// A CSS transform function.

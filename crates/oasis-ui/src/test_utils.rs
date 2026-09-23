@@ -107,6 +107,69 @@ impl MockBackend {
     }
 }
 
+impl MockBackend {
+    /// Colors of every `FillRect` call, in draw order.
+    pub fn fill_colors(&self) -> Vec<Color> {
+        self.calls
+            .iter()
+            .filter_map(|c| match c {
+                DrawCall::FillRect { color, .. } => Some(*color),
+                _ => None,
+            })
+            .collect()
+    }
+}
+
+/// Draw a widget once per [`WidgetState`](crate::states::WidgetState)
+/// and assert that every state produced a distinct sequence of fill
+/// colors (i.e. each interaction state is visually distinguishable).
+///
+/// The closure receives the state to render and a fresh context.
+pub fn assert_states_distinct(
+    mut f: impl FnMut(crate::states::WidgetState, &mut crate::context::DrawContext<'_>),
+) {
+    use crate::states::WidgetState;
+    let theme = crate::theme::Theme::dark();
+    let states = [
+        WidgetState::Normal,
+        WidgetState::Hover,
+        WidgetState::Pressed,
+        WidgetState::Disabled,
+    ];
+    let fills: Vec<Vec<Color>> = states
+        .iter()
+        .map(|&st| {
+            let mut backend = MockBackend::new();
+            {
+                let mut ctx = crate::context::DrawContext::new(&mut backend, &theme);
+                f(st, &mut ctx);
+            }
+            backend.fill_colors()
+        })
+        .collect();
+    for i in 0..states.len() {
+        for j in (i + 1)..states.len() {
+            assert_ne!(
+                fills[i], fills[j],
+                "{:?} and {:?} rendered identical fills",
+                states[i], states[j]
+            );
+        }
+    }
+}
+
+/// Run `f` against a fresh dark-theme context and return the fill colors
+/// it emitted. Helper for "resting rendering unchanged" assertions.
+pub fn fill_colors_of(f: impl FnOnce(&mut crate::context::DrawContext<'_>)) -> Vec<Color> {
+    let theme = crate::theme::Theme::dark();
+    let mut backend = MockBackend::new();
+    {
+        let mut ctx = crate::context::DrawContext::new(&mut backend, &theme);
+        f(&mut ctx);
+    }
+    backend.fill_colors()
+}
+
 /// Return all built-in themes for exhaustive widget testing.
 pub fn all_themes() -> [crate::theme::Theme; 7] {
     use crate::theme::Theme;

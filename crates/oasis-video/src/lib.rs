@@ -140,6 +140,34 @@ pub struct SoftwareVideoDecoder {
     /// Buffered audio packets encountered while reading video.
     #[cfg(not(feature = "ffmpeg"))]
     audio_queue: VecDeque<DemuxedPacket>,
+    /// Video keyframes as `(decode_secs, seek_secs)` pairs, ascending (see
+    /// [`demux_lite::TrackInfo::keyframe_times`]).  Symphonia ignores
+    /// `stss`, so [`seek`](Self::seek) uses this to land on a keyframe
+    /// instead of mid-GOP.  Empty when unknown.
+    #[cfg(not(feature = "ffmpeg"))]
+    keyframes: Vec<(f64, f64)>,
+    /// Discard video packets until the next IDR (after open, seek, or a
+    /// decoder resync).  Feeding openh264 P/B-frames whose references it
+    /// never saw only produces errors.
+    #[cfg(all(not(feature = "ffmpeg"), feature = "h264"))]
+    awaiting_idr: bool,
+    /// Pictures drained from the decoder's reorder buffer at end of stream.
+    #[cfg(all(not(feature = "ffmpeg"), feature = "h264"))]
+    flushed_frames: VecDeque<VideoFrame>,
+    /// Timestamp and spacing of the last video packet (for flushed frames).
+    #[cfg(all(not(feature = "ffmpeg"), feature = "h264"))]
+    last_video_ts: (f64, f64),
+    /// Whether the demuxer has run out of video packets.
+    #[cfg(all(not(feature = "ffmpeg"), feature = "h264"))]
+    video_eof: bool,
+    /// Timestamps of packets fed to the decoder whose pictures have not
+    /// come out yet.  With B-frames the decoder emits pictures in display
+    /// order a few packets after they were fed, so a picture takes the
+    /// smallest pending timestamp -- not the timestamp of the packet that
+    /// happened to release it (which ran every frame late by the reorder
+    /// depth and started post-seek playback one frame past the keyframe).
+    #[cfg(all(not(feature = "ffmpeg"), feature = "h264"))]
+    pending_pts: Vec<f64>,
 }
 
 impl SoftwareVideoDecoder {
@@ -156,8 +184,12 @@ impl SoftwareVideoDecoder {
 
         #[cfg(not(feature = "ffmpeg"))]
         {
-            let demuxer = Mp4Demuxer::open_stream(source)?;
-            Self::from_demuxer(demuxer)
+            let (demuxer, keyframes) = Mp4Demuxer::open_stream_scanned(source, |data| {
+                find_top_level_atom(data, b"moov").map(keyframes_from_moov)
+            })?;
+            let mut dec = Self::from_demuxer(demuxer)?;
+            dec.keyframes = keyframes.unwrap_or_default();
+            Ok(dec)
         }
     }
 
@@ -173,6 +205,22 @@ impl SoftwareVideoDecoder {
     ) -> Result<Self, VideoError> {
         let demuxer = Mp4Demuxer::open_stream_with_avcc(source, avcc)?;
         Self::from_demuxer(demuxer)
+    }
+
+    /// Open from a streaming source using a pre-fetched `moov` atom (the
+    /// complete atom, header included).
+    ///
+    /// Like [`open_stream_with_avcc`](Self::open_stream_with_avcc) (no
+    /// full-file scan), and additionally indexes the video keyframes so
+    /// [`seek`](Self::seek) lands on a keyframe.
+    #[cfg(not(feature = "ffmpeg"))]
+    pub fn open_stream_with_moov(
+        source: Box<dyn VideoSource>,
+        moov: &[u8],
+    ) -> Result<Self, VideoError> {
+        let mut dec = Self::open_stream_with_avcc(source, find_avcc_in_mp4(moov))?;
+        dec.keyframes = keyframes_from_moov(moov);
+        Ok(dec)
     }
 
     /// Open an MP4 from a byte buffer.
@@ -217,6 +265,17 @@ impl SoftwareVideoDecoder {
             audio_channels,
             video_queue: VecDeque::new(),
             audio_queue: VecDeque::new(),
+            keyframes: Vec::new(),
+            #[cfg(feature = "h264")]
+            awaiting_idr: true,
+            #[cfg(feature = "h264")]
+            flushed_frames: VecDeque::new(),
+            #[cfg(feature = "h264")]
+            last_video_ts: (0.0, 0.0),
+            #[cfg(feature = "h264")]
+            video_eof: false,
+            #[cfg(feature = "h264")]
+            pending_pts: Vec::new(),
         })
     }
 
@@ -277,103 +336,92 @@ impl SoftwareVideoDecoder {
             if self.h264.is_none() {
                 return Err(VideoError::NoTrack("no video track".into()));
             }
-
-            // Two-phase decode strategy for openh264 (Baseline-only decoder):
-            //
-            // Phase 1 (initial sync): If error_streak > 5 and we have NOT
-            //   yet produced any frames, reinit + skip to IDR. This handles
-            //   the post-seek case where the decoder needs a clean IDR.
-            //
-            // Phase 2 (steady state): Once frames have been produced, DON'T
-            //   reinit on errors — just skip failed packets. openh264 can
-            //   decode IDR frames and some P-frames from Main/High profile
-            //   content, producing ~5-10 fps even when many frames fail.
-            //   The old approach of reiniting every 6 errors would burn
-            //   60-180 packets scanning for the next IDR, causing ~5s gaps.
-            const MAX_SKIP: u32 = 600;
-
-            let h264 = self
-                .h264
-                .as_mut()
-                .expect("h264 decoder verified present above");
-
-            // Phase 1: initial sync (only before first successful frame).
-            if h264.error_streak > 5 && self.video_width == 0 {
-                log::info!(
-                    "H264: initial sync reinit (error_streak={})",
-                    h264.error_streak,
-                );
-                h264.reinit()?;
-                self.demuxer.reset_params();
-                let params = self.demuxer.parameter_sets().map(|p| p.to_vec());
-                let mut skipped_to_idr = 0u32;
-                loop {
-                    let packet = match self.next_packet_for(TrackKind::Video)? {
-                        Some(p) => p,
-                        None => return Ok(None),
-                    };
-                    skipped_to_idr += 1;
-                    if Self::contains_idr(&packet.data) {
-                        log::info!("H264: found IDR after skipping {skipped_to_idr} packets");
-                        let decode_data = if let Some(ref ps) = params {
-                            let mut buf = Vec::with_capacity(ps.len() + packet.data.len());
-                            buf.extend_from_slice(ps);
-                            buf.extend_from_slice(&packet.data);
-                            buf
-                        } else {
-                            packet.data.clone()
-                        };
-                        let h264 = self
-                            .h264
-                            .as_mut()
-                            .expect("h264 decoder verified present above");
-                        if let Some(frame) = h264.decode(&decode_data)? {
-                            if frame.width > 0 && frame.height > 0 {
-                                self.video_width = frame.width;
-                                self.video_height = frame.height;
-                            }
-                            return Ok(Some(VideoFrame {
-                                rgba: frame.rgba,
-                                width: frame.width,
-                                height: frame.height,
-                                timestamp_secs: packet.timestamp_secs,
-                            }));
-                        }
-                        break; // IDR didn't produce frame — fall through.
-                    }
-                    if skipped_to_idr > MAX_SKIP {
-                        return Err(VideoError::SkipLimit);
-                    }
-                }
+            if let Some(frame) = self.flushed_frames.pop_front() {
+                return Ok(Some(frame));
+            }
+            if self.video_eof {
+                return Ok(None);
             }
 
-            // Phase 2: tolerant decode — skip failed packets, return any
-            // successfully decoded frame. No reinit during steady-state
-            // playback; openh264 naturally produces frames at IDR boundaries
-            // even in Main/High profile content.
+            // Packets examined without producing a frame before giving up
+            // with `SkipLimit` (the caller keeps audio going and retries).
+            const MAX_SKIP: u32 = 600;
+            // Consecutive decode errors after which the decoder is rebuilt
+            // and restarted at the next IDR.  A few isolated errors are
+            // tolerated (concealment keeps producing pictures); a streak
+            // means the reference chain or the decoder state is gone.
+            const RESYNC_ERRORS: u32 = 3;
+
             let mut skipped = 0u32;
             loop {
-                let packet = match self.next_packet_for(TrackKind::Video)? {
-                    Some(p) => p,
-                    None => return Ok(None),
+                let Some(packet) = self.next_packet_for(TrackKind::Video)? else {
+                    return Ok(self.flush_video_at_eof());
+                };
+                self.note_video_ts(packet.timestamp_secs);
+
+                let is_idr = Self::contains_idr(&packet.data);
+                if self.awaiting_idr && !is_idr {
+                    skipped += 1;
+                    if skipped > MAX_SKIP {
+                        return Err(VideoError::SkipLimit);
+                    }
+                    continue;
+                }
+                if self.awaiting_idr {
+                    self.awaiting_idr = false;
+                    if skipped > 0 {
+                        log::info!("H264: synced at IDR after skipping {skipped} packets");
+                    }
+                }
+
+                // Every IDR carries SPS/PPS so a decoder that lost its
+                // parameter sets (reinit, internal error reset) recovers at
+                // the next keyframe instead of failing every later packet.
+                let with_params;
+                let data: &[u8] = match self.demuxer.parameter_sets() {
+                    Some(ps) if is_idr && !Self::contains_nal_type(&packet.data, NAL_SPS) => {
+                        with_params = [ps, packet.data.as_slice()].concat();
+                        &with_params
+                    },
+                    _ => &packet.data,
                 };
 
+                self.pending_pts.push(packet.timestamp_secs);
                 let h264 = self
                     .h264
                     .as_mut()
                     .expect("h264 decoder verified present above");
-
-                if let Some(frame) = h264.decode(&packet.data)? {
+                if let Some(frame) = h264.decode(data)? {
                     if frame.width > 0 && frame.height > 0 {
                         self.video_width = frame.width;
                         self.video_height = frame.height;
                     }
+                    let ts = pop_min_pts(&mut self.pending_pts).unwrap_or(packet.timestamp_secs);
                     return Ok(Some(VideoFrame {
                         rgba: frame.rgba,
                         width: frame.width,
                         height: frame.height,
-                        timestamp_secs: packet.timestamp_secs,
+                        timestamp_secs: ts,
                     }));
+                }
+
+                if h264.last_failed {
+                    // The packet produced no picture and never will.
+                    self.pending_pts.pop();
+                } else if self.pending_pts.len() > MAX_REORDER_DEPTH {
+                    // A picture was dropped without an error; don't let its
+                    // stale timestamp shift every later frame.
+                    pop_min_pts(&mut self.pending_pts);
+                }
+
+                if h264.last_failed && h264.error_streak >= RESYNC_ERRORS {
+                    log::info!(
+                        "H264: {} consecutive decode errors, resyncing at next IDR",
+                        h264.error_streak,
+                    );
+                    h264.reinit()?;
+                    self.awaiting_idr = true;
+                    self.pending_pts.clear();
                 }
 
                 skipped += 1;
@@ -384,18 +432,71 @@ impl SoftwareVideoDecoder {
         }
     }
 
+    /// Record a video packet timestamp (for timing frames flushed at EOF).
+    #[cfg(all(not(feature = "ffmpeg"), feature = "h264"))]
+    fn note_video_ts(&mut self, ts: f64) {
+        let (last, dur) = self.last_video_ts;
+        let step = ts - last;
+        let dur = if step > 0.0 && step < 1.0 { step } else { dur };
+        self.last_video_ts = (ts, dur);
+    }
+
+    /// At end of stream, drain the pictures still in the H.264 reorder
+    /// buffer and return the first of them.
+    #[cfg(all(not(feature = "ffmpeg"), feature = "h264"))]
+    fn flush_video_at_eof(&mut self) -> Option<VideoFrame> {
+        if !self.video_eof {
+            self.video_eof = true;
+            let (last_ts, dur) = self.last_video_ts;
+            if let Some(h264) = self.h264.as_mut() {
+                for (i, frame) in h264.flush().into_iter().enumerate() {
+                    let ts = pop_min_pts(&mut self.pending_pts)
+                        .unwrap_or(last_ts + dur * (i + 1) as f64);
+                    self.flushed_frames.push_back(VideoFrame {
+                        rgba: frame.rgba,
+                        width: frame.width,
+                        height: frame.height,
+                        timestamp_secs: ts,
+                    });
+                }
+            }
+            self.pending_pts.clear();
+        }
+        self.flushed_frames.pop_front()
+    }
+
+    /// The time to seek the demuxer to for a request of `secs`: the seek
+    /// time of the last keyframe starting at or before `secs` (the first
+    /// keyframe if `secs` precedes it), or `secs` when no index is known.
+    #[cfg(not(feature = "ffmpeg"))]
+    pub fn keyframe_seek_target(&self, secs: f64) -> f64 {
+        let n = self
+            .keyframes
+            .partition_point(|&(decode, _)| decode <= secs);
+        match n {
+            0 => self.keyframes.first().map_or(secs, |&(_, seek)| seek),
+            n => self.keyframes[n - 1].1,
+        }
+    }
+
     /// Check if an Annex-B bitstream contains an IDR NAL unit (type 5).
     #[cfg(feature = "h264")]
     fn contains_idr(data: &[u8]) -> bool {
+        Self::contains_nal_type(data, NAL_IDR)
+    }
+
+    /// Check if an Annex-B bitstream contains a NAL unit of type `nal_type`.
+    #[cfg(feature = "h264")]
+    fn contains_nal_type(data: &[u8], nal_type: u8) -> bool {
         let mut i = 0;
         while i + 4 <= data.len() {
             if data[i] == 0 && data[i + 1] == 0 && data[i + 2] == 0 && data[i + 3] == 1 {
-                if i + 4 < data.len() && (data[i + 4] & 0x1F) == 5 {
+                if i + 4 < data.len() && (data[i + 4] & 0x1F) == nal_type {
                     return true;
                 }
                 i += 4;
             } else if data[i] == 0 && data[i + 1] == 0 && data[i + 2] == 1 {
-                if i + 3 < data.len() && (data[i + 3] & 0x1F) == 5 {
+                if i + 3 < data.len() && (data[i + 3] & 0x1F) == nal_type {
                     return true;
                 }
                 i += 3;
@@ -504,7 +605,25 @@ impl SoftwareVideoDecoder {
         {
             self.video_queue.clear();
             self.audio_queue.clear();
-            self.demuxer.seek(secs)
+            let target = self.keyframe_seek_target(secs);
+            if (target - secs).abs() > 0.05 {
+                log::info!("seek {secs:.2}s -> keyframe at {target:.2}s");
+            }
+            self.demuxer.seek(target)?;
+            #[cfg(feature = "h264")]
+            {
+                // Pictures still in the reorder buffer belong to the old
+                // position; restart the decoder at the next IDR.
+                if let Some(h264) = self.h264.as_mut() {
+                    h264.reinit()?;
+                }
+                self.awaiting_idr = true;
+                self.flushed_frames.clear();
+                self.video_eof = false;
+                self.last_video_ts = (0.0, 0.0);
+                self.pending_pts.clear();
+            }
+            Ok(())
         }
     }
 
@@ -532,9 +651,77 @@ impl SoftwareVideoDecoder {
 
         #[cfg(not(feature = "ffmpeg"))]
         {
-            (self.audio_sample_rate, self.audio_channels)
+            // The decoder refines rate/channels from the first decoded
+            // frame (e.g. a mono stream in a 2-channel sample entry).
+            match &self.aac {
+                Some(aac) => (aac.sample_rate(), aac.channels()),
+                None => (self.audio_sample_rate, self.audio_channels),
+            }
         }
     }
+}
+
+/// Most pictures an H.264 decoder may hold for reordering
+/// (`max_dec_frame_buffering` is at most 16).
+#[cfg(all(not(feature = "ffmpeg"), feature = "h264"))]
+const MAX_REORDER_DEPTH: usize = 16;
+
+/// Remove and return the smallest timestamp in `pending`.
+#[cfg(all(not(feature = "ffmpeg"), feature = "h264"))]
+fn pop_min_pts(pending: &mut Vec<f64>) -> Option<f64> {
+    let idx = pending
+        .iter()
+        .enumerate()
+        .min_by(|a, b| a.1.total_cmp(b.1))
+        .map(|(i, _)| i)?;
+    Some(pending.swap_remove(idx))
+}
+
+/// H.264 NAL unit type of an IDR slice.
+#[cfg(feature = "h264")]
+const NAL_IDR: u8 = 5;
+/// H.264 NAL unit type of a sequence parameter set.
+#[cfg(feature = "h264")]
+const NAL_SPS: u8 = 7;
+
+/// Find a top-level MP4 atom (e.g. `moov`) in a complete file buffer and
+/// return it including its header.
+#[cfg(not(feature = "ffmpeg"))]
+fn find_top_level_atom<'a>(data: &'a [u8], fourcc: &[u8; 4]) -> Option<&'a [u8]> {
+    let mut pos = 0usize;
+    while pos.checked_add(8)? <= data.len() {
+        let size32 = u32::from_be_bytes([data[pos], data[pos + 1], data[pos + 2], data[pos + 3]]);
+        let size = match size32 {
+            0 => data.len() - pos,
+            1 => {
+                let b = data.get(pos + 8..pos + 16)?;
+                usize::try_from(u64::from_be_bytes([
+                    b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7],
+                ]))
+                .ok()?
+            },
+            n => n as usize,
+        };
+        if size < 8 {
+            return None;
+        }
+        let end = pos.checked_add(size)?;
+        if &data[pos + 4..pos + 8] == fourcc {
+            return data.get(pos..end);
+        }
+        pos = end;
+    }
+    None
+}
+
+/// Video keyframe `(decode_secs, seek_secs)` pairs from raw moov bytes.
+#[cfg(not(feature = "ffmpeg"))]
+fn keyframes_from_moov(moov: &[u8]) -> Vec<(f64, f64)> {
+    demux_lite::parse_moov_tracks(moov)
+        .ok()
+        .and_then(|(video, _)| video)
+        .map(|v| v.keyframe_times())
+        .unwrap_or_default()
 }
 
 #[cfg(test)]
@@ -706,6 +893,83 @@ mod tests {
                 last_audio_ts = chunk.timestamp_secs;
             }
         }
+    }
+
+    #[test]
+    #[cfg(feature = "h264")]
+    fn decodes_every_frame_including_reorder_tail() {
+        // The decoder runs without per-packet flushing (required for
+        // B-frame streams); the pictures still buffered at end of stream
+        // must be drained so no frame is lost.
+        let mut dec = SoftwareVideoDecoder::open(fixture_bytes()).expect("open failed");
+        let mut count = 0u32;
+        while let Some(_frame) = dec.next_video_frame().expect("decode error") {
+            count += 1;
+        }
+        assert_eq!(count, 30, "fixture has 30 video samples");
+    }
+
+    #[test]
+    #[cfg(not(feature = "ffmpeg"))]
+    fn open_builds_keyframe_index() {
+        let dec = SoftwareVideoDecoder::open(fixture_bytes()).expect("open failed");
+        // Keyframes at 0.0s and 1.0s: requests snap back to the keyframe
+        // at or before them (mid-sample seek times).
+        let first = 512.0 / 15360.0;
+        let second = (15.0 * 1024.0 + 512.0) / 15360.0;
+        assert!((dec.keyframe_seek_target(0.5) - first).abs() < 1e-9);
+        assert!((dec.keyframe_seek_target(1.0) - second).abs() < 1e-9);
+        assert!((dec.keyframe_seek_target(1.7) - second).abs() < 1e-9);
+    }
+
+    #[test]
+    #[cfg(not(feature = "ffmpeg"))]
+    fn open_stream_with_moov_builds_keyframe_index() {
+        let data = fixture_bytes();
+        let moov = find_top_level_atom(&data, b"moov").expect("moov").to_vec();
+        let dec = SoftwareVideoDecoder::open_stream_with_moov(Box::new(Cursor::new(data)), &moov)
+            .expect("open failed");
+        let second = (15.0 * 1024.0 + 512.0) / 15360.0;
+        assert!((dec.keyframe_seek_target(1.5) - second).abs() < 1e-9);
+    }
+
+    #[test]
+    #[cfg(feature = "h264")]
+    fn seek_mid_gop_starts_at_keyframe_with_aligned_audio() {
+        // Symphonia ignores stss; without snapping, a seek to 1.5s lands on
+        // a P-frame and video only resumes at the next keyframe while
+        // audio runs from 1.5s. With snapping both start at the 1.0s IDR.
+        let mut dec = SoftwareVideoDecoder::open(fixture_bytes()).expect("open failed");
+        dec.seek(1.5).expect("seek failed");
+        let frame = dec
+            .next_video_frame()
+            .expect("decode error")
+            .expect("no frame after seek");
+        assert!(
+            (0.95..1.2).contains(&frame.timestamp_secs),
+            "first frame after seek at {}",
+            frame.timestamp_secs
+        );
+        let audio = dec
+            .next_buffered_audio()
+            .or_else(|| dec.next_audio_samples().expect("audio decode error"));
+        let audio = audio.expect("no audio after seek");
+        assert!(
+            (0.9..1.1).contains(&audio.timestamp_secs),
+            "first audio after seek at {}",
+            audio.timestamp_secs
+        );
+    }
+
+    #[test]
+    #[cfg(not(feature = "ffmpeg"))]
+    fn find_top_level_atom_walks_boxes() {
+        let data = fixture_bytes();
+        let moov = find_top_level_atom(&data, b"moov").expect("moov");
+        assert_eq!(&moov[4..8], b"moov");
+        assert_eq!(moov.len(), 2235);
+        assert!(find_top_level_atom(&data, b"zzzz").is_none());
+        assert!(find_top_level_atom(&[0, 0, 0, 3, b'b', b'a', b'd', b'!'], b"moov").is_none());
     }
 
     // ------------------------------------------------------------------

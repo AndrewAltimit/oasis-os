@@ -696,4 +696,40 @@ mod tests {
         assert!(AUDIO_EVENTS.load(Ordering::SeqCst) >= 3);
         unsafe { oasis_destroy(handle) };
     }
+
+    #[test]
+    fn panic_in_export_returns_default_and_instance_survives() {
+        let handle = create_instance();
+
+        // A panic inside oasis_tick is contained (returns `()` without unwinding
+        // into the caller).
+        crate::handle::arm_panic_injection();
+        unsafe { oasis_tick(handle, 0.016) };
+
+        // A panic inside oasis_send_command yields the documented default (null).
+        crate::handle::arm_panic_injection();
+        let cmd = CString::new("help").unwrap();
+        let out = unsafe { oasis_send_command(handle, cmd.as_ptr()) };
+        assert!(out.is_null(), "panicking export must return its default");
+
+        // The handle is not poisoned: subsequent calls work normally.
+        let out = unsafe { oasis_send_command(handle, cmd.as_ptr()) };
+        assert!(!out.is_null());
+        let text = unsafe { CStr::from_ptr(out) }.to_str().unwrap().to_string();
+        assert!(!text.is_empty());
+        unsafe { oasis_free_string(out) };
+
+        unsafe { oasis_tick(handle, 1.0) };
+        assert!(unsafe { oasis_get_dirty(handle) });
+        unsafe { oasis_destroy(handle) };
+    }
+
+    #[test]
+    fn ffi_guard_passes_through_value_without_panic() {
+        assert_eq!(crate::handle::ffi_guard("test", 0u32, || 7), 7);
+        assert_eq!(
+            crate::handle::ffi_guard("test", 5u32, || panic!("boom {}", 1)),
+            5
+        );
+    }
 }

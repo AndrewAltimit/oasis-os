@@ -22,6 +22,12 @@ arena DOM and backend traits: [`adr/001-arena-based-dom.md`](adr/001-arena-based
   initial GET.
 - **Cookies, gzip, CSP.** Scripts/styles/connect-src enforced;
   img-src relaxed for practicality.
+- **Redirects** — page loads follow up to `BrowserConfig::max_redirects`
+  (default 5) redirects; script `fetch()` keeps the default.
+- **Background I/O thread** — network loads never block the UI thread.
+  Dropping the widget mid-load returns immediately: queued requests are
+  abandoned and a request still in flight finishes on the detached
+  worker, which then exits.
 
 ## HTML parser
 
@@ -33,10 +39,20 @@ arena DOM and backend traits: [`adr/001-arena-based-dom.md`](adr/001-arena-based
 
 ## CSS cascade & selectors
 
+- Linked stylesheets (`<link rel=stylesheet>`, network or `vfs://`)
+  follow their `@import` rules (nested, resolved against the sheet URL,
+  cascading before the importing sheet; print-only imports skipped; at
+  most 16 imported URLs per page). `@import` in inline `<style>` is not
+  followed.
+
 - Viewport-aware `@media` / `@supports` queries — window dimensions
   threaded into `Stylesheet::parse_with_viewport` so desktop
   breakpoints no longer collapse to the 480x272 default.
-- `var()` custom properties, `calc()`.
+- `var()` custom properties, `calc()`. `var()` is substituted at
+  computed-value time anywhere in a value (`calc(var(--gap) * 2)`,
+  `rgb(var(--r), 0, 0)`, gradients, shorthands) and re-parsed; names
+  are case-sensitive, cycles and missing references without fallback
+  are invalid at computed-value time (`unset` semantics).
 - `html { font-size: 62.5% }` resolution — the html element only uses
   the CSS "medium" 16 px baseline; `rem` units track html's computed
   font-size via a thread-local cell.
@@ -74,6 +90,13 @@ arena DOM and backend traits: [`adr/001-arena-based-dom.md`](adr/001-arena-based
   `content.x`, so a float inside a padded parent lands at the parent's
   content edge instead of overhanging at x=0 (the old.reddit
   `.midcol` vote-column bug).
+- **CSS Grid.** Paren-aware track lists (`repeat(3, minmax(0, 1fr))`,
+  `repeat(2, 1fr 2fr)`, `%` / `em` / `min-content` / `max-content` /
+  `fit-content()` tracks), `repeat(auto-fill | auto-fit, ...)` resolved
+  from the container width (auto-fit collapses empty tracks), line
+  placement with `span`, negative lines and `a / b` syntax, named
+  areas, and row/column auto-flow including `dense`. Subgrid is not
+  supported. See `crates/oasis-browser/docs/layout.md`.
 - **Inter-element whitespace.** A text node containing only whitespace
   between two inline siblings (`<a>x</a>\n<a>y</a>`) now emits a
   single `space_width` fragment into the line flow, per CSS 2.1 §16.6.
@@ -161,7 +184,14 @@ arena DOM and backend traits: [`adr/001-arena-based-dom.md`](adr/001-arena-based
   `Button::Confirm` route to the focused form element through
   `dispatch_form_key`, and in-flight values sync back to the DOM
   `value` attribute on each keystroke so the next relayout paints
-  the typed text.
+  the typed text. Clicking a field puts the caret at the end of its
+  value.
+- One form state with scripts: typed values are mirrored into the
+  script-side DOM too (so `input.value` reads them and a later script
+  DOM mutation doesn't wipe them), `input` events fire after the edit,
+  and values scripts write (`input.value = ...`, hidden inputs
+  included) are adopted by the `FormManager`, so they are edited and
+  submitted.
 - Form GET / POST submission; Enter on any text field submits the
   owning form.
 - Forms are rebuilt from the DOM on every page load via
@@ -189,8 +219,11 @@ to page scripts include:
   `querySelector`, `querySelectorAll`.
 - `textContent`, attributes, `innerHTML`, `classList`, `style`
   property.
-- `fetch()`, `setTimeout` / `setInterval`.
-- `localStorage` (persistent across navigations) / `sessionStorage`.
+- `fetch()` (Promise-based, same-origin / private-network policy — see
+  [`oasis-js.md`](oasis-js.md#storage-and-fetch)), `setTimeout` /
+  `setInterval`.
+- `localStorage` (persistent across navigations) / `sessionStorage`,
+  partitioned per origin with a 5 MiB quota.
 - `document.cookie` getter/setter, `history.pushState` /
   `replaceState`, `window.location` with assign/replace/reload.
 - Event dispatch with three-phase capture/target/bubble via
@@ -235,14 +268,26 @@ to page scripts include:
   via a "B" button that navigates to `vfs://bookmarks` (served inline
   from `nav::bookmarks_page_html()`).
 - Back / Forward / Home / Bookmark buttons, 28 px tall chrome, 14 px
-  labels vertically centered.
+  labels vertically centered. There is no Reload button; reload is a
+  key (below) or `browse reload`.
+- `vfs://history` serves the history page like `vfs://bookmarks`
+  (titles and URLs HTML-escaped).
+- Keyboard (`BrowserWidget::handle_key`, delivered by the shell before
+  the key's gamepad twin): F5 / Ctrl+R reload (no new history entry),
+  Alt+Left / Alt+Right back / forward, Ctrl+L / F6 focus the URL bar,
+  Page Up / Page Down and Home / End scroll while nothing is being
+  typed. Escape (Cancel) discards a URL-bar edit or leaves a focused
+  text field; otherwise the shell closes the browser window.
+- The shell titles the window `<page title> - Browser` (following
+  `document.title`) and re-themes the chrome of an open browser on a
+  skin swap (`apply_chrome_theme`).
 - Reader mode, link navigation.
 
 ## Related docs
 
 - [`browser-backlog.md`](browser-backlog.md) — remaining work and
   recently shipped epics.
-- [`compositor-overhaul-plan.md`](compositor-overhaul-plan.md) —
+- [`compositor-overhaul-plan.md`](archive/compositor-overhaul-plan.md) —
   compositor deep dive.
 - [`javascript-engine.md`](javascript-engine.md) — JS engine and PSP
   cross-compile specifics.

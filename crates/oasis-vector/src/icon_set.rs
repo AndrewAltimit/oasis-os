@@ -57,11 +57,47 @@ pub enum IconCategory {
     Weather,
     /// Terminal / console / shell.
     Terminal,
+    /// Package manager / app store / installer.
+    Packages,
+    /// System monitor / task manager / activity viewer.
+    Monitor,
+    /// Calculator.
+    Calculator,
+    /// Paint / drawing program.
+    Paint,
+    /// Text editor / notepad.
+    TextEditor,
+    /// Games / arcade.
+    Games,
     /// Fallback for apps that don't match any category.
     Generic,
 }
 
 impl IconCategory {
+    /// Every category, in declaration order.
+    pub const ALL: [IconCategory; 20] = [
+        Self::Browser,
+        Self::Files,
+        Self::Audio,
+        Self::Tv,
+        Self::Radio,
+        Self::Settings,
+        Self::Video,
+        Self::Home,
+        Self::Network,
+        Self::Power,
+        Self::Gallery,
+        Self::Weather,
+        Self::Terminal,
+        Self::Packages,
+        Self::Monitor,
+        Self::Calculator,
+        Self::Paint,
+        Self::TextEditor,
+        Self::Games,
+        Self::Generic,
+    ];
+
     /// Classify an app title into a semantic category. Case-insensitive,
     /// matches on substrings so "TV Guide" and "Tune Test Episode (TV)" both
     /// map to [`IconCategory::Tv`].
@@ -114,6 +150,24 @@ impl IconCategory {
         if t.contains("terminal") || t.contains("console") || t.contains("shell") {
             return Self::Terminal;
         }
+        if t.contains("package") || t.contains("app store") || t.contains("installer") {
+            return Self::Packages;
+        }
+        if t.contains("monitor") || t.contains("task manager") || t.contains("activity") {
+            return Self::Monitor;
+        }
+        if t.contains("calc") {
+            return Self::Calculator;
+        }
+        if t.contains("paint") || t.contains("draw") || t.contains("sketch") {
+            return Self::Paint;
+        }
+        if t.contains("editor") || t.contains("notepad") || t.contains("text") {
+            return Self::TextEditor;
+        }
+        if t.contains("game") || t.contains("arcade") {
+            return Self::Games;
+        }
         // Audio last: matches "music", "audio", "sound", "mp3".
         if t.contains("music") || t.contains("audio") || t.contains("sound") || t.contains("mp3") {
             return Self::Audio;
@@ -142,6 +196,12 @@ pub fn outline_icon(category: IconCategory, color: Color) -> IconDef {
         IconCategory::Gallery => outline_gallery(color),
         IconCategory::Weather => outline_weather(color),
         IconCategory::Terminal => outline_terminal(color),
+        IconCategory::Packages => outline_packages(color),
+        IconCategory::Monitor => outline_monitor(color),
+        IconCategory::Calculator => outline_calculator(color),
+        IconCategory::Paint => outline_paint(color),
+        IconCategory::TextEditor => outline_text_editor(color),
+        IconCategory::Games => outline_games(color),
         IconCategory::Generic => outline_generic(color),
     }
 }
@@ -457,7 +517,9 @@ fn outline_home(color: Color) -> IconDef {
 
 /// Wi-Fi: three concentric arcs + dot.
 fn outline_network(color: Color) -> IconDef {
-    // Arcs span roughly 30° to 150° (upper half, centred on bottom point).
+    // Arcs span roughly 206° to 334° (upper half, centred on the dot).
+    // Radii are sized so the outer arc's ends (and its stroke) stay inside
+    // the 24x24 box.
     let start = core::f32::consts::PI + 0.45;
     let end = core::f32::consts::TAU - 0.45;
     IconDef {
@@ -465,8 +527,8 @@ fn outline_network(color: Color) -> IconDef {
         ops: vec![
             VectorOp::StrokeArc {
                 cx: 12,
-                cy: 20,
-                radius: 14,
+                cy: 18,
+                radius: 11,
                 start_angle: start,
                 end_angle: end,
                 width: STROKE,
@@ -474,8 +536,8 @@ fn outline_network(color: Color) -> IconDef {
             },
             VectorOp::StrokeArc {
                 cx: 12,
-                cy: 20,
-                radius: 9,
+                cy: 18,
+                radius: 7,
                 start_angle: start,
                 end_angle: end,
                 width: STROKE,
@@ -483,8 +545,8 @@ fn outline_network(color: Color) -> IconDef {
             },
             VectorOp::StrokeArc {
                 cx: 12,
-                cy: 20,
-                radius: 4,
+                cy: 18,
+                radius: 3,
                 start_angle: start,
                 end_angle: end,
                 width: STROKE,
@@ -492,7 +554,7 @@ fn outline_network(color: Color) -> IconDef {
             },
             VectorOp::FillCircle {
                 cx: 12,
-                cy: 20,
+                cy: 18,
                 radius: 1,
                 color,
             },
@@ -620,6 +682,182 @@ fn outline_generic(color: Color) -> IconDef {
     }
 }
 
+/// Package: isometric box outline with the lid seams.
+fn outline_packages(color: Color) -> IconDef {
+    IconDef {
+        name: "outline_packages",
+        ops: vec![
+            VectorOp::StrokePolygon {
+                points: vec![(12, 2), (21, 7), (21, 17), (12, 22), (3, 17), (3, 7)],
+                width: STROKE,
+                color,
+            },
+            line(3, 7, 12, 12, STROKE, color),
+            line(12, 12, 21, 7, STROKE, color),
+            line(12, 12, 12, 22, STROKE, color),
+        ],
+        width: SIZE,
+        height: SIZE,
+    }
+}
+
+/// System monitor: display with a heartbeat trace and a stand.
+fn outline_monitor(color: Color) -> IconDef {
+    IconDef {
+        name: "outline_monitor",
+        ops: vec![
+            VectorOp::StrokeRoundedRect {
+                x: 2,
+                y: 3,
+                w: 20,
+                h: 14,
+                radius: 2,
+                width: STROKE,
+                color,
+            },
+            line(5, 10, 8, 10, STROKE, color),
+            line(8, 10, 10, 6, STROKE, color),
+            line(10, 6, 13, 14, STROKE, color),
+            line(13, 14, 15, 10, STROKE, color),
+            line(15, 10, 19, 10, STROKE, color),
+            line(12, 17, 12, 20, STROKE, color),
+            line(8, 21, 16, 21, STROKE, color),
+        ],
+        width: SIZE,
+        height: SIZE,
+    }
+}
+
+/// Calculator: body outline, display bar, 3x3 key dots.
+fn outline_calculator(color: Color) -> IconDef {
+    let mut ops = vec![
+        VectorOp::StrokeRoundedRect {
+            x: 5,
+            y: 2,
+            w: 14,
+            h: 20,
+            radius: 2,
+            width: STROKE,
+            color,
+        },
+        line(8, 6, 16, 6, STROKE, color),
+    ];
+    for row in 0..3 {
+        for col in 0..3 {
+            ops.push(VectorOp::FillCircle {
+                cx: 9 + col * 3,
+                cy: 11 + row * 3,
+                radius: 1,
+                color,
+            });
+        }
+    }
+    IconDef {
+        name: "outline_calculator",
+        ops,
+        width: SIZE,
+        height: SIZE,
+    }
+}
+
+/// Paint: artist's palette ring with paint dots and a thumb hole.
+fn outline_paint(color: Color) -> IconDef {
+    IconDef {
+        name: "outline_paint",
+        ops: vec![
+            VectorOp::StrokeCircle {
+                cx: 12,
+                cy: 12,
+                radius: 9,
+                width: STROKE,
+                color,
+            },
+            VectorOp::FillCircle {
+                cx: 8,
+                cy: 9,
+                radius: 1,
+                color,
+            },
+            VectorOp::FillCircle {
+                cx: 12,
+                cy: 7,
+                radius: 1,
+                color,
+            },
+            VectorOp::FillCircle {
+                cx: 16,
+                cy: 9,
+                radius: 1,
+                color,
+            },
+            VectorOp::StrokeCircle {
+                cx: 14,
+                cy: 15,
+                radius: 2,
+                width: STROKE,
+                color,
+            },
+        ],
+        width: SIZE,
+        height: SIZE,
+    }
+}
+
+/// Text editor: page with a folded corner and ruled text lines.
+fn outline_text_editor(color: Color) -> IconDef {
+    IconDef {
+        name: "outline_text_editor",
+        ops: vec![
+            VectorOp::StrokePolygon {
+                points: vec![(5, 2), (14, 2), (19, 7), (19, 22), (5, 22)],
+                width: STROKE,
+                color,
+            },
+            line(14, 2, 14, 7, STROKE, color),
+            line(14, 7, 19, 7, STROKE, color),
+            line(8, 11, 16, 11, STROKE, color),
+            line(8, 15, 16, 15, STROKE, color),
+            line(8, 19, 13, 19, STROKE, color),
+        ],
+        width: SIZE,
+        height: SIZE,
+    }
+}
+
+/// Games: gamepad outline with a d-pad and two face buttons.
+fn outline_games(color: Color) -> IconDef {
+    IconDef {
+        name: "outline_games",
+        ops: vec![
+            VectorOp::StrokeRoundedRect {
+                x: 2,
+                y: 7,
+                w: 20,
+                h: 11,
+                radius: 5,
+                width: STROKE,
+                color,
+            },
+            line(5, 12, 10, 12, STROKE, color),
+            line(7, 10, 7, 15, STROKE, color),
+            VectorOp::FillCircle {
+                cx: 15,
+                cy: 11,
+                radius: 1,
+                color,
+            },
+            VectorOp::FillCircle {
+                cx: 18,
+                cy: 14,
+                radius: 1,
+                color,
+            },
+        ],
+        width: SIZE,
+        height: SIZE,
+    }
+}
+
 // ---------------------------------------------------------------------------
 // SOLID SET — filled shapes, high-contrast.
 // ---------------------------------------------------------------------------
@@ -640,6 +878,12 @@ pub fn solid_icon(category: IconCategory, color: Color) -> IconDef {
         IconCategory::Gallery => solid_gallery(color),
         IconCategory::Weather => solid_weather(color),
         IconCategory::Terminal => solid_terminal(color),
+        IconCategory::Packages => solid_packages(color),
+        IconCategory::Monitor => solid_monitor(color),
+        IconCategory::Calculator => solid_calculator(color),
+        IconCategory::Paint => solid_paint(color),
+        IconCategory::TextEditor => solid_text_editor(color),
+        IconCategory::Games => solid_games(color),
         IconCategory::Generic => solid_generic(color),
     }
 }
@@ -962,44 +1206,27 @@ fn solid_home(color: Color) -> IconDef {
 
 /// Solid Wi-Fi: three filled wedges, strongest at outer.
 fn solid_network(color: Color) -> IconDef {
-    let start = core::f32::consts::PI + 0.35;
-    let end = core::f32::consts::TAU - 0.35;
+    // Two thick arcs over a dot. The sweep and radii keep the outer arc's
+    // ends (and its 3px stroke) inside the 24x24 box.
+    let start = core::f32::consts::PI + 0.5;
+    let end = core::f32::consts::TAU - 0.5;
+    let arc = |radius| VectorOp::StrokeArc {
+        cx: 12,
+        cy: 19,
+        radius,
+        start_angle: start,
+        end_angle: end,
+        width: 3,
+        color,
+    };
     IconDef {
         name: "solid_network",
         ops: vec![
-            // Outer wedge, clip inner two by painting smaller wedges over it in
-            // background — since we don't have path subtraction, stack stroked
-            // arcs with increasing width at three radii instead.
-            VectorOp::StrokeArc {
-                cx: 12,
-                cy: 20,
-                radius: 14,
-                start_angle: start,
-                end_angle: end,
-                width: 3,
-                color,
-            },
-            VectorOp::StrokeArc {
-                cx: 12,
-                cy: 20,
-                radius: 9,
-                start_angle: start,
-                end_angle: end,
-                width: 3,
-                color,
-            },
-            VectorOp::StrokeArc {
-                cx: 12,
-                cy: 20,
-                radius: 4,
-                start_angle: start,
-                end_angle: end,
-                width: 3,
-                color,
-            },
+            arc(12),
+            arc(7),
             VectorOp::FillCircle {
                 cx: 12,
-                cy: 20,
+                cy: 19,
                 radius: 2,
                 color,
             },
@@ -1130,6 +1357,201 @@ fn solid_generic(color: Color) -> IconDef {
     }
 }
 
+/// Solid package: filled isometric box with dark seams.
+fn solid_packages(color: Color) -> IconDef {
+    let cut = Color::rgba(0, 0, 0, 150);
+    IconDef {
+        name: "solid_packages",
+        ops: vec![
+            VectorOp::FillPolygon {
+                points: vec![(12, 2), (21, 7), (21, 17), (12, 22), (3, 17), (3, 7)],
+                color,
+            },
+            line(3, 7, 12, 12, 1, cut),
+            line(12, 12, 21, 7, 1, cut),
+            line(12, 12, 12, 22, 1, cut),
+        ],
+        width: SIZE,
+        height: SIZE,
+    }
+}
+
+/// Solid system monitor: filled display with a knocked-out trace.
+fn solid_monitor(color: Color) -> IconDef {
+    let cut = Color::rgba(0, 0, 0, 150);
+    IconDef {
+        name: "solid_monitor",
+        ops: vec![
+            VectorOp::FillRoundedRect {
+                x: 2,
+                y: 3,
+                w: 20,
+                h: 14,
+                radius: 2,
+                color,
+            },
+            line(5, 10, 8, 10, STROKE, cut),
+            line(8, 10, 10, 6, STROKE, cut),
+            line(10, 6, 13, 14, STROKE, cut),
+            line(13, 14, 15, 10, STROKE, cut),
+            line(15, 10, 19, 10, STROKE, cut),
+            VectorOp::FillRect {
+                x: 11,
+                y: 17,
+                w: 2,
+                h: 3,
+                color,
+            },
+            VectorOp::FillRect {
+                x: 7,
+                y: 20,
+                w: 10,
+                h: 2,
+                color,
+            },
+        ],
+        width: SIZE,
+        height: SIZE,
+    }
+}
+
+/// Solid calculator: filled body with a dark display and key grid.
+fn solid_calculator(color: Color) -> IconDef {
+    let cut = Color::rgba(0, 0, 0, 150);
+    let mut ops = vec![
+        VectorOp::FillRoundedRect {
+            x: 5,
+            y: 2,
+            w: 14,
+            h: 20,
+            radius: 2,
+            color,
+        },
+        VectorOp::FillRect {
+            x: 8,
+            y: 5,
+            w: 8,
+            h: 3,
+            color: cut,
+        },
+    ];
+    for row in 0..3 {
+        for col in 0..3 {
+            ops.push(VectorOp::FillRect {
+                x: 8 + col * 3,
+                y: 10 + row * 3,
+                w: 2,
+                h: 2,
+                color: cut,
+            });
+        }
+    }
+    IconDef {
+        name: "solid_calculator",
+        ops,
+        width: SIZE,
+        height: SIZE,
+    }
+}
+
+/// Solid paint: filled palette disc with knocked-out dots and thumb hole.
+fn solid_paint(color: Color) -> IconDef {
+    let cut = Color::rgba(0, 0, 0, 150);
+    let dot = |cx, cy, radius| VectorOp::FillCircle {
+        cx,
+        cy,
+        radius,
+        color: cut,
+    };
+    IconDef {
+        name: "solid_paint",
+        ops: vec![
+            VectorOp::FillCircle {
+                cx: 12,
+                cy: 12,
+                radius: 10,
+                color,
+            },
+            dot(8, 9, 2),
+            dot(12, 6, 2),
+            dot(16, 9, 2),
+            dot(14, 16, 2),
+        ],
+        width: SIZE,
+        height: SIZE,
+    }
+}
+
+/// Solid text editor: filled page with dark ruled lines.
+fn solid_text_editor(color: Color) -> IconDef {
+    let cut = Color::rgba(0, 0, 0, 150);
+    IconDef {
+        name: "solid_text_editor",
+        ops: vec![
+            VectorOp::FillPolygon {
+                points: vec![(5, 2), (14, 2), (19, 7), (19, 22), (5, 22)],
+                color,
+            },
+            VectorOp::FillTriangle {
+                points: [(14, 2), (19, 7), (14, 7)],
+                color: cut,
+            },
+            line(8, 11, 16, 11, 1, cut),
+            line(8, 14, 16, 14, 1, cut),
+            line(8, 17, 16, 17, 1, cut),
+            line(8, 20, 13, 20, 1, cut),
+        ],
+        width: SIZE,
+        height: SIZE,
+    }
+}
+
+/// Solid games: filled gamepad with a dark d-pad and buttons.
+fn solid_games(color: Color) -> IconDef {
+    let cut = Color::rgba(0, 0, 0, 150);
+    IconDef {
+        name: "solid_games",
+        ops: vec![
+            VectorOp::FillRoundedRect {
+                x: 2,
+                y: 7,
+                w: 20,
+                h: 11,
+                radius: 5,
+                color,
+            },
+            VectorOp::FillRect {
+                x: 4,
+                y: 11,
+                w: 6,
+                h: 2,
+                color: cut,
+            },
+            VectorOp::FillRect {
+                x: 6,
+                y: 9,
+                w: 2,
+                h: 6,
+                color: cut,
+            },
+            VectorOp::FillCircle {
+                cx: 15,
+                cy: 11,
+                radius: 1,
+                color: cut,
+            },
+            VectorOp::FillCircle {
+                cx: 18,
+                cy: 14,
+                radius: 1,
+                color: cut,
+            },
+        ],
+        width: SIZE,
+        height: SIZE,
+    }
+}
+
 // ---------------------------------------------------------------------------
 // PIXEL SET — 32x32 Windows 2000 pixel-art icons with baked-in window chrome.
 // ---------------------------------------------------------------------------
@@ -1164,6 +1586,12 @@ pub fn pixel_icon(category: IconCategory, color: Color) -> IconDef {
         IconCategory::Gallery => pixel_gallery(color),
         IconCategory::Weather => pixel_weather(color),
         IconCategory::Terminal => pixel_terminal(color),
+        IconCategory::Packages => pixel_packages(color),
+        IconCategory::Monitor => pixel_monitor(color),
+        IconCategory::Calculator => pixel_calculator(color),
+        IconCategory::Paint => pixel_paint(color),
+        IconCategory::TextEditor => pixel_text_editor(color),
+        IconCategory::Games => pixel_games(color),
         IconCategory::Generic => pixel_generic(color),
     }
 }
@@ -1588,9 +2016,259 @@ fn pixel_generic(color: Color) -> IconDef {
     }
 }
 
+/// Cardboard box with a lid band and packing tape.
+fn pixel_packages(color: Color) -> IconDef {
+    let mut ops = pixel_container().to_vec();
+    ops.push(px_rect(7, 12, 18, 13, color));
+    ops.push(px_rect(6, 9, 20, 4, color));
+    ops.push(px_rect(6, 13, 20, 1, PIXEL_BORDER));
+    ops.push(px_rect(15, 9, 2, 16, PIXEL_BODY));
+    IconDef {
+        name: "pixel_packages",
+        ops,
+        width: PIXEL_SIZE,
+        height: PIXEL_SIZE,
+    }
+}
+
+/// CRT monitor showing a bar chart, on a stand.
+fn pixel_monitor(color: Color) -> IconDef {
+    let mut ops = pixel_container().to_vec();
+    ops.push(px_rect(6, 8, 20, 14, color));
+    ops.push(px_rect(8, 10, 16, 10, PIXEL_BORDER));
+    ops.push(px_rect(10, 16, 2, 3, color));
+    ops.push(px_rect(13, 13, 2, 6, color));
+    ops.push(px_rect(16, 15, 2, 4, color));
+    ops.push(px_rect(19, 11, 2, 8, color));
+    ops.push(px_rect(14, 22, 4, 2, color));
+    ops.push(px_rect(11, 24, 10, 2, color));
+    IconDef {
+        name: "pixel_monitor",
+        ops,
+        width: PIXEL_SIZE,
+        height: PIXEL_SIZE,
+    }
+}
+
+/// Pocket calculator: display strip over a 3x3 keypad.
+fn pixel_calculator(color: Color) -> IconDef {
+    let mut ops = pixel_container().to_vec();
+    ops.push(px_rect(9, 8, 14, 19, color));
+    ops.push(px_rect(11, 10, 10, 4, PIXEL_BODY));
+    for row in 0..3 {
+        for col in 0..3 {
+            ops.push(px_rect(11 + col * 4, 16 + row * 3, 2, 2, PIXEL_BODY));
+        }
+    }
+    IconDef {
+        name: "pixel_calculator",
+        ops,
+        width: PIXEL_SIZE,
+        height: PIXEL_SIZE,
+    }
+}
+
+/// Stepped palette blob with three paint wells and a thumb hole.
+fn pixel_paint(color: Color) -> IconDef {
+    let mut ops = pixel_container().to_vec();
+    ops.push(px_rect(9, 8, 14, 2, color));
+    ops.push(px_rect(7, 10, 18, 14, color));
+    ops.push(px_rect(9, 24, 14, 2, color));
+    ops.push(px_rect(10, 12, 3, 3, PIXEL_BAND));
+    ops.push(px_rect(15, 11, 3, 3, Color::rgb(0xCC, 0x33, 0x33)));
+    ops.push(px_rect(20, 13, 3, 3, Color::rgb(0x33, 0x99, 0x33)));
+    ops.push(px_rect(11, 19, 3, 3, PIXEL_BODY));
+    IconDef {
+        name: "pixel_paint",
+        ops,
+        width: PIXEL_SIZE,
+        height: PIXEL_SIZE,
+    }
+}
+
+/// Notepad page with dark ruled lines.
+fn pixel_text_editor(color: Color) -> IconDef {
+    let mut ops = pixel_container().to_vec();
+    ops.push(px_rect(8, 8, 16, 19, color));
+    ops.push(px_rect(8, 8, 16, 2, PIXEL_BAND));
+    ops.push(px_rect(10, 13, 12, 1, PIXEL_BORDER));
+    ops.push(px_rect(10, 16, 12, 1, PIXEL_BORDER));
+    ops.push(px_rect(10, 19, 12, 1, PIXEL_BORDER));
+    ops.push(px_rect(10, 22, 8, 1, PIXEL_BORDER));
+    IconDef {
+        name: "pixel_text_editor",
+        ops,
+        width: PIXEL_SIZE,
+        height: PIXEL_SIZE,
+    }
+}
+
+/// Gamepad with grips, a d-pad and two face buttons.
+fn pixel_games(color: Color) -> IconDef {
+    let mut ops = pixel_container().to_vec();
+    ops.push(px_rect(6, 13, 20, 9, color));
+    ops.push(px_rect(7, 22, 5, 3, color));
+    ops.push(px_rect(20, 22, 5, 3, color));
+    ops.push(px_rect(9, 17, 5, 1, PIXEL_BORDER));
+    ops.push(px_rect(11, 15, 1, 5, PIXEL_BORDER));
+    ops.push(px_rect(19, 15, 2, 2, PIXEL_BAND));
+    ops.push(px_rect(22, 18, 2, 2, PIXEL_BAND));
+    IconDef {
+        name: "pixel_games",
+        ops,
+        width: PIXEL_SIZE,
+        height: PIXEL_SIZE,
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+/// Shorthand for a solid line.
+fn line(x1: i32, y1: i32, x2: i32, y2: i32, width: u16, color: Color) -> VectorOp {
+    VectorOp::Line {
+        x1,
+        y1,
+        x2,
+        y2,
+        width,
+        color,
+    }
+}
+
+/// Conservative pixel bounds `(min_x, min_y, max_x, max_y)` of a list of
+/// ops (max exclusive), or `None` for an empty list.
+///
+/// Strokes are assumed centred on their path (half the stroke width on
+/// each side); arcs are sampled along their sweep so a partial arc only
+/// contributes the part actually drawn. Group translates are applied.
+/// Used to verify glyphs stay inside their design box.
+pub fn ops_bounds(ops: &[VectorOp]) -> Option<(i32, i32, i32, i32)> {
+    let mut b: Option<(i32, i32, i32, i32)> = None;
+    let mut add = |x0: i32, y0: i32, x1: i32, y1: i32| {
+        b = Some(match b {
+            None => (x0, y0, x1, y1),
+            Some((a, bb, c, d)) => (a.min(x0), bb.min(y0), c.max(x1), d.max(y1)),
+        });
+    };
+    let half = |w: u16| (w as i32 + 1) / 2;
+    for op in ops {
+        match op {
+            VectorOp::FillRect { x, y, w, h, .. }
+            | VectorOp::StrokeRect { x, y, w, h, .. }
+            | VectorOp::FillRoundedRect { x, y, w, h, .. }
+            | VectorOp::StrokeRoundedRect { x, y, w, h, .. }
+            | VectorOp::RectGradient { x, y, w, h, .. } => {
+                add(*x, *y, x + *w as i32, y + *h as i32);
+            },
+            VectorOp::FillPolygon { points, .. } | VectorOp::PolygonGradient { points, .. } => {
+                for &(px, py) in points {
+                    add(px, py, px + 1, py + 1);
+                }
+            },
+            VectorOp::FillTriangle { points, .. } => {
+                for &(px, py) in points {
+                    add(px, py, px + 1, py + 1);
+                }
+            },
+            VectorOp::StrokePolygon { points, width, .. } => {
+                let h = half(*width);
+                for &(px, py) in points {
+                    add(px - h, py - h, px + h, py + h);
+                }
+            },
+            VectorOp::FillCircle { cx, cy, radius, .. } => {
+                let r = *radius as i32;
+                add(cx - r, cy - r, cx + r + 1, cy + r + 1);
+            },
+            VectorOp::StrokeCircle {
+                cx,
+                cy,
+                radius,
+                width,
+                ..
+            } => {
+                let r = *radius as i32 + half(*width);
+                add(cx - r, cy - r, cx + r, cy + r);
+            },
+            VectorOp::FillArc {
+                cx,
+                cy,
+                radius,
+                start_angle,
+                end_angle,
+                ..
+            }
+            | VectorOp::StrokeArc {
+                cx,
+                cy,
+                radius,
+                start_angle,
+                end_angle,
+                ..
+            } => {
+                let pad = match op {
+                    VectorOp::StrokeArc { width, .. } => half(*width) as f32,
+                    _ => {
+                        // A pie wedge also covers its centre.
+                        add(*cx, *cy, cx + 1, cy + 1);
+                        0.0
+                    },
+                };
+                let r = *radius as f32 + pad;
+                const STEPS: u32 = 32;
+                for i in 0..=STEPS {
+                    let a = start_angle + (end_angle - start_angle) * i as f32 / STEPS as f32;
+                    let px = (*cx as f32 + r * a.cos()).round() as i32;
+                    let py = (*cy as f32 + r * a.sin()).round() as i32;
+                    add(px, py, px, py);
+                }
+            },
+            VectorOp::Line {
+                x1,
+                y1,
+                x2,
+                y2,
+                width,
+                ..
+            }
+            | VectorOp::DashedLine {
+                x1,
+                y1,
+                x2,
+                y2,
+                width,
+                ..
+            } => {
+                let h = half(*width);
+                add(
+                    (*x1).min(*x2) - h,
+                    (*y1).min(*y2) - h,
+                    (*x1).max(*x2) + h,
+                    (*y1).max(*y2) + h,
+                );
+            },
+            VectorOp::Text {
+                text,
+                x,
+                y,
+                font_size,
+                ..
+            } => {
+                let fs = *font_size as i32;
+                add(*x, *y, x + text.chars().count() as i32 * fs, y + fs);
+            },
+            VectorOp::Group { ops, translate, .. } => {
+                if let Some((a, bb, c, d)) = ops_bounds(ops) {
+                    let (dx, dy) = *translate;
+                    add(a + dx, bb + dy, c + dx, d + dy);
+                }
+            },
+        }
+    }
+    b
+}
 
 /// Generate an 8-tooth gear silhouette as a polygon centred at `(cx, cy)`.
 ///
@@ -1711,22 +2389,7 @@ mod tests {
     #[test]
     fn outline_icons_produce_ops_for_all_categories() {
         let color = Color::WHITE;
-        for cat in [
-            IconCategory::Browser,
-            IconCategory::Files,
-            IconCategory::Audio,
-            IconCategory::Tv,
-            IconCategory::Radio,
-            IconCategory::Settings,
-            IconCategory::Video,
-            IconCategory::Home,
-            IconCategory::Network,
-            IconCategory::Power,
-            IconCategory::Gallery,
-            IconCategory::Weather,
-            IconCategory::Terminal,
-            IconCategory::Generic,
-        ] {
+        for cat in IconCategory::ALL {
             let icon = outline_icon(cat, color);
             assert!(!icon.ops.is_empty(), "no ops for {cat:?}");
             assert_eq!(icon.width, SIZE);
@@ -1737,27 +2400,110 @@ mod tests {
     #[test]
     fn solid_icons_produce_ops_for_all_categories() {
         let color = Color::WHITE;
-        for cat in [
-            IconCategory::Browser,
-            IconCategory::Files,
-            IconCategory::Audio,
-            IconCategory::Tv,
-            IconCategory::Radio,
-            IconCategory::Settings,
-            IconCategory::Video,
-            IconCategory::Home,
-            IconCategory::Network,
-            IconCategory::Power,
-            IconCategory::Gallery,
-            IconCategory::Weather,
-            IconCategory::Terminal,
-            IconCategory::Generic,
-        ] {
+        for cat in IconCategory::ALL {
             let icon = solid_icon(cat, color);
             assert!(!icon.ops.is_empty(), "no ops for {cat:?}");
             assert_eq!(icon.width, SIZE);
             assert_eq!(icon.height, SIZE);
         }
+    }
+
+    /// Titles of every app the shell registers (`oasis_core::apps` registry).
+    const BUILTIN_APP_TITLES: [&str; 15] = [
+        "File Manager",
+        "Settings",
+        "Network",
+        "Package Manager",
+        "Browser",
+        "System Monitor",
+        "Terminal",
+        "Music Player",
+        "Photo Viewer",
+        "Text Editor",
+        "Calculator",
+        "Paint",
+        "Games",
+        "Internet Radio",
+        "TV Guide",
+    ];
+
+    #[test]
+    fn no_builtin_app_maps_to_generic() {
+        for title in BUILTIN_APP_TITLES {
+            assert_ne!(
+                IconCategory::from_app_title(title),
+                IconCategory::Generic,
+                "{title} has no icon category"
+            );
+        }
+    }
+
+    #[test]
+    fn builtin_apps_get_distinct_categories() {
+        let mut seen = std::collections::HashSet::new();
+        for title in BUILTIN_APP_TITLES {
+            let cat = IconCategory::from_app_title(title);
+            assert!(seen.insert(format!("{cat:?}")), "{title} shares {cat:?}");
+        }
+    }
+
+    #[test]
+    fn classifier_routes_new_categories() {
+        use IconCategory::*;
+        for (title, cat) in [
+            ("Package Manager", Packages),
+            ("App Store", Packages),
+            ("System Monitor", Monitor),
+            ("Task Manager", Monitor),
+            ("Calculator", Calculator),
+            ("Paint", Paint),
+            ("Drawing Pad", Paint),
+            ("Text Editor", TextEditor),
+            ("Notepad", TextEditor),
+            ("Games", Games),
+            ("Arcade", Games),
+        ] {
+            assert_eq!(IconCategory::from_app_title(title), cat, "{title}");
+        }
+    }
+
+    #[test]
+    fn every_icon_stays_inside_its_box() {
+        let sets: [(&str, fn(IconCategory, Color) -> IconDef); 3] = [
+            ("outline", outline_icon),
+            ("solid", solid_icon),
+            ("pixel", pixel_icon),
+        ];
+        for (set, make) in sets {
+            for cat in IconCategory::ALL {
+                let icon = make(cat, Color::WHITE);
+                let (x0, y0, x1, y1) = ops_bounds(&icon.ops).expect("icon has ops");
+                assert!(
+                    x0 >= 0 && y0 >= 0 && x1 <= icon.width as i32 && y1 <= icon.height as i32,
+                    "{set} {cat:?} bounds ({x0},{y0})-({x1},{y1}) escape {}x{}",
+                    icon.width,
+                    icon.height
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn ops_bounds_samples_partial_arcs() {
+        // Upper half arc: contributes nothing below its centre line.
+        let arc = VectorOp::StrokeArc {
+            cx: 10,
+            cy: 10,
+            radius: 5,
+            start_angle: core::f32::consts::PI,
+            end_angle: core::f32::consts::TAU,
+            width: 2,
+            color: Color::WHITE,
+        };
+        let (x0, y0, x1, y1) = ops_bounds(&[arc]).expect("bounds");
+        assert_eq!((x0, y0, x1), (4, 4, 16));
+        assert!(y1 <= 10);
+        assert_eq!(ops_bounds(&[]), None);
     }
 
     #[test]
@@ -1825,22 +2571,7 @@ mod tests {
     #[test]
     fn pixel_icons_produce_ops_for_all_categories() {
         let color = Color::WHITE;
-        for cat in [
-            IconCategory::Browser,
-            IconCategory::Files,
-            IconCategory::Audio,
-            IconCategory::Tv,
-            IconCategory::Radio,
-            IconCategory::Settings,
-            IconCategory::Video,
-            IconCategory::Home,
-            IconCategory::Network,
-            IconCategory::Power,
-            IconCategory::Gallery,
-            IconCategory::Weather,
-            IconCategory::Terminal,
-            IconCategory::Generic,
-        ] {
+        for cat in IconCategory::ALL {
             let icon = pixel_icon(cat, color);
             // Every pixel icon must include the 4-rect chrome container plus at
             // least one glyph op.

@@ -22,18 +22,22 @@ use oasis_app_core::{App, AppAction};
 use oasis_sdi::SdiRegistry;
 use oasis_skin::ActiveTheme;
 use oasis_types::backend::SdiBackend;
-use oasis_types::input::Button;
+use oasis_types::input::{Button, Key, Modifiers};
 use oasis_ui::menu_bar::MenuHit;
 use oasis_vfs::Vfs;
 
 pub mod colors;
 pub(crate) mod commands;
+pub(crate) mod dialog;
 pub(crate) mod model;
+pub(crate) mod ops;
 pub(crate) mod state;
 pub(crate) mod view;
 
 pub use colors::FileManagerColors;
-pub use model::{FileOp, FilePanel, NavTarget, TreeEntry, ViewMode};
+pub use model::{
+    Clipboard, Dialog, FileOp, FilePanel, NamePurpose, NavTarget, TreeEntry, ViewMode,
+};
 pub use state::FileManagerApp;
 
 pub use oasis_app_core::file_viewer::{
@@ -41,6 +45,7 @@ pub use oasis_app_core::file_viewer::{
     view_image_file,
 };
 
+use dialog::{DialogClick, hide_dialog_sdi};
 use view::{
     FM_MENU_H, compute_explorer_geom, grid_hit_test, hide_dual_panel_sdi, hide_explorer_sdi,
     hide_menu_sdi, tree_hit_test,
@@ -59,6 +64,11 @@ impl App for FileManagerApp {
         if self.content.viewing_file.is_some() {
             return self.handle_file_viewer_input(button, vfs);
         }
+        if self.dialog.is_some() {
+            return self.handle_dialog_input(button);
+        }
+        // Operation feedback lasts until the next press.
+        self.status = None;
         if matches!(button, Button::Select) {
             self.toggle_view_mode();
             return AppAction::None;
@@ -69,8 +79,46 @@ impl App for FileManagerApp {
         }
     }
 
+    fn handle_text_input(&mut self, ch: char) {
+        self.dialog_type_char(ch);
+    }
+
+    fn handle_backspace(&mut self) {
+        self.dialog_backspace();
+    }
+
+    fn handle_key(&mut self, key: &Key, mods: Modifiers, _vfs: &dyn Vfs) -> Option<AppAction> {
+        self.handle_fm_key(key, mods)
+    }
+
+    fn accepts_text(&self) -> bool {
+        matches!(self.dialog, Some(Dialog::NameEntry { .. }))
+    }
+
+    fn apply_vfs_ops(&mut self, vfs: &mut dyn Vfs) -> bool {
+        self.apply_pending_ops(vfs)
+    }
+
+    fn tick(&mut self, dt_ms: u32, vfs: &dyn Vfs) -> bool {
+        self.rescan_elapsed_ms = self.rescan_elapsed_ms.saturating_add(dt_ms);
+        if self.rescan_elapsed_ms < state::RESCAN_INTERVAL_MS {
+            return false;
+        }
+        self.rescan_elapsed_ms = 0;
+        self.rescan(vfs)
+    }
+
     fn handle_click(&mut self, lx: i32, ly: i32, cw: u32, ch: u32, fullscreen: bool) -> AppAction {
         if self.content.viewing_file.is_some() {
+            return AppAction::None;
+        }
+        // An open dialog is modal: only its buttons react.
+        if self.dialog.is_some() {
+            match self.dialog_hit(lx, ly, cw, ch) {
+                DialogClick::Ok => self.commit_dialog(),
+                DialogClick::Cancel => self.cancel_dialog(),
+                DialogClick::None => {},
+            }
             return AppAction::None;
         }
         let title_h = self.content.cached_title_bar_height.max(16) as i32;
@@ -181,6 +229,7 @@ impl App for FileManagerApp {
             // explorer/dual/menu artefacts so they don't bleed through.
             hide_explorer_sdi(sdi);
             hide_menu_sdi(sdi);
+            hide_dialog_sdi(sdi);
             render_app_chrome(sdi, at);
             if !sdi.contains("app_title_text") {
                 sdi.create("app_title_text");
@@ -203,6 +252,7 @@ impl App for FileManagerApp {
                 self.update_sdi_explorer(sdi, at);
             },
         }
+        self.update_dialog_sdi(sdi, at);
     }
 
     fn draw_windowed(
@@ -220,15 +270,17 @@ impl App for FileManagerApp {
             return draw_content_windowed(&self.content, cx, cy, cw, ch, backend, at);
         }
         match self.view_mode {
-            ViewMode::Dual => self.draw_windowed_dual(cx, cy, cw, ch, backend, at),
-            ViewMode::Explorer => self.draw_windowed_explorer(cx, cy, cw, ch, backend, at),
+            ViewMode::Dual => self.draw_windowed_dual(cx, cy, cw, ch, backend, at)?,
+            ViewMode::Explorer => self.draw_windowed_explorer(cx, cy, cw, ch, backend, at)?,
         }
+        self.draw_dialog_windowed(cx, cy, cw, ch, backend, at)
     }
 
     fn hide_sdi(&self, sdi: &mut SdiRegistry) {
         hide_app_sdi(sdi);
         hide_explorer_sdi(sdi);
         hide_menu_sdi(sdi);
+        hide_dialog_sdi(sdi);
     }
 
     fn lines(&self) -> &[String] {
@@ -745,5 +797,277 @@ mod tests {
             .find(|e| e.label == "documents")
             .expect("documents row");
         assert_eq!(docs.path, "/home/user/documents");
+    }
+
+    // -- file operations ------------------------------------------------
+
+    /// Point panel `pi` at `dir` and put the cursor on entry `name`.
+    fn select(fm: &mut FileManagerApp, vfs: &MemoryVfs, pi: usize, dir: &str, name: &str) {
+        fm.active_panel = pi;
+        fm.panels[pi].navigate_to(dir, vfs);
+        let idx = fm.panels[pi]
+            .lines
+            .iter()
+            .position(|l| parse_entry(l).0 == name)
+            .expect("entry in listing");
+        fm.panels[pi].scroll = 0;
+        fm.panels[pi].cursor = idx;
+    }
+
+    fn key(fm: &mut FileManagerApp, vfs: &MemoryVfs, k: Key, mods: Modifiers) -> bool {
+        fm.handle_key(&k, mods, vfs).is_some()
+    }
+
+    #[test]
+    fn delete_requires_confirmation() {
+        let mut vfs = setup_vfs();
+        let mut fm = FileManagerApp::new("/apps/fm", &vfs);
+        select(&mut fm, &vfs, 0, "/home/user", "readme.txt");
+
+        fm.handle_input(&Button::Triangle, &vfs);
+        assert!(matches!(fm.dialog, Some(Dialog::ConfirmDelete { .. })));
+        assert!(!fm.apply_vfs_ops(&mut vfs), "nothing queued before confirm");
+        assert!(vfs.exists("/home/user/readme.txt"));
+
+        // Cancel keeps the file.
+        fm.handle_input(&Button::Cancel, &vfs);
+        assert!(fm.dialog.is_none());
+        fm.apply_vfs_ops(&mut vfs);
+        assert!(vfs.exists("/home/user/readme.txt"));
+
+        // Delete key + "n" also keeps it.
+        assert!(key(&mut fm, &vfs, Key::Delete, Modifiers::NONE));
+        assert!(key(&mut fm, &vfs, Key::Char('n'), Modifiers::NONE));
+        fm.apply_vfs_ops(&mut vfs);
+        assert!(vfs.exists("/home/user/readme.txt"));
+
+        // Delete key + "y" removes it and refreshes the listing.
+        key(&mut fm, &vfs, Key::Delete, Modifiers::NONE);
+        key(&mut fm, &vfs, Key::Char('y'), Modifiers::NONE);
+        assert!(fm.apply_vfs_ops(&mut vfs));
+        assert!(!vfs.exists("/home/user/readme.txt"));
+        assert!(!fm.panels[0].lines.iter().any(|l| l.contains("readme")));
+    }
+
+    #[test]
+    fn delete_directory_tree_after_confirm() {
+        let mut vfs = setup_vfs();
+        let mut fm = FileManagerApp::new("/apps/fm", &vfs);
+        select(&mut fm, &vfs, 0, "/", "home");
+        fm.handle_input(&Button::Triangle, &vfs);
+        fm.handle_input(&Button::Confirm, &vfs);
+        fm.apply_vfs_ops(&mut vfs);
+        assert!(!vfs.exists("/home"));
+        assert!(!vfs.exists("/home/user/readme.txt"));
+    }
+
+    #[test]
+    fn rename_via_f2_and_typing() {
+        let mut vfs = setup_vfs();
+        let mut fm = FileManagerApp::new("/apps/fm", &vfs);
+        select(&mut fm, &vfs, 0, "/home/user", "readme.txt");
+        assert!(!fm.accepts_text());
+
+        assert!(key(&mut fm, &vfs, Key::F(2), Modifiers::NONE));
+        assert!(fm.accepts_text());
+        for _ in 0.."readme.txt".len() {
+            fm.handle_backspace();
+        }
+        for ch in "notes.md".chars() {
+            // Printable keys fall through to handle_text_input.
+            assert!(!key(&mut fm, &vfs, Key::Char(ch), Modifiers::NONE));
+            fm.handle_text_input(ch);
+        }
+        assert!(key(&mut fm, &vfs, Key::Enter, Modifiers::NONE));
+        assert!(!fm.accepts_text());
+        fm.apply_vfs_ops(&mut vfs);
+        assert!(!vfs.exists("/home/user/readme.txt"));
+        assert_eq!(vfs.read("/home/user/notes.md").unwrap(), b"Hello!");
+    }
+
+    #[test]
+    fn rename_onto_existing_name_fails() {
+        let mut vfs = setup_vfs();
+        vfs.write("/home/user/other.txt", b"x").unwrap();
+        let mut fm = FileManagerApp::new("/apps/fm", &vfs);
+        select(&mut fm, &vfs, 0, "/home/user", "readme.txt");
+        fm.begin_rename();
+        if let Some(Dialog::NameEntry { text, .. }) = &mut fm.dialog {
+            *text = "other.txt".to_string();
+        }
+        fm.handle_input(&Button::Confirm, &vfs);
+        fm.apply_vfs_ops(&mut vfs);
+        assert_eq!(vfs.read("/home/user/readme.txt").unwrap(), b"Hello!");
+        assert_eq!(vfs.read("/home/user/other.txt").unwrap(), b"x");
+        assert!(fm.status.as_deref().is_some_and(|s| s.contains("exists")));
+    }
+
+    #[test]
+    fn invalid_name_keeps_prompt_open() {
+        let vfs = setup_vfs();
+        let mut fm = FileManagerApp::new("/apps/fm", &vfs);
+        fm.begin_new_folder();
+        if let Some(Dialog::NameEntry { text, .. }) = &mut fm.dialog {
+            *text = "a/b".to_string();
+        }
+        fm.handle_input(&Button::Confirm, &vfs);
+        assert!(fm.dialog.is_some());
+        assert!(fm.pending_ops.is_empty());
+    }
+
+    #[test]
+    fn copy_dir_tree_and_paste_into_other_panel() {
+        let mut vfs = setup_vfs();
+        vfs.write("/home/user/music/song.mp3", b"abc").unwrap();
+        let mut fm = FileManagerApp::new("/apps/fm", &vfs);
+        fm.view_mode = ViewMode::Dual;
+        fm.panels[1].navigate_to("/tmp", &vfs);
+        select(&mut fm, &vfs, 0, "/home", "user");
+
+        assert!(key(&mut fm, &vfs, Key::Char('c'), Modifiers::CTRL));
+        // Switch to the right panel (/tmp) and paste there.
+        fm.handle_input(&Button::Right, &vfs);
+        assert_eq!(fm.active_panel, 1);
+        assert!(key(&mut fm, &vfs, Key::Char('v'), Modifiers::CTRL));
+        assert!(fm.apply_vfs_ops(&mut vfs));
+
+        assert_eq!(vfs.read("/tmp/user/readme.txt").unwrap(), b"Hello!");
+        assert_eq!(vfs.read("/tmp/user/music/song.mp3").unwrap(), b"abc");
+        assert!(vfs.exists("/tmp/user/photos"));
+        // Source untouched, right panel shows the copy.
+        assert!(vfs.exists("/home/user/readme.txt"));
+        assert!(fm.panels[1].lines.iter().any(|l| l == "user/"));
+
+        // Pasting again picks a unique name.
+        key(&mut fm, &vfs, Key::Char('v'), Modifiers::CTRL);
+        fm.apply_vfs_ops(&mut vfs);
+        assert!(vfs.exists("/tmp/user (2)/music/song.mp3"));
+    }
+
+    #[test]
+    fn cut_paste_moves_and_clears_clipboard() {
+        let mut vfs = setup_vfs();
+        let mut fm = FileManagerApp::new("/apps/fm", &vfs);
+        fm.panels[1].navigate_to("/tmp", &vfs);
+        select(&mut fm, &vfs, 0, "/etc", "hostname");
+        key(&mut fm, &vfs, Key::Char('x'), Modifiers::CTRL);
+        fm.active_panel = 1;
+        key(&mut fm, &vfs, Key::Char('v'), Modifiers::CTRL);
+        fm.apply_vfs_ops(&mut vfs);
+        assert!(!vfs.exists("/etc/hostname"));
+        assert_eq!(vfs.read("/tmp/hostname").unwrap(), b"oasis");
+        assert!(fm.clipboard.is_none());
+        // The left panel's listing no longer shows the moved file.
+        assert!(!fm.panels[0].lines.iter().any(|l| l.contains("hostname")));
+    }
+
+    #[test]
+    fn menu_copy_paste_entries() {
+        let mut vfs = setup_vfs();
+        let mut fm = FileManagerApp::new("/apps/fm", &vfs);
+        select(&mut fm, &vfs, 0, "/etc", "hostname");
+        fm.run_menu_action("edit.copy");
+        fm.panels[0].navigate_to("/tmp", &vfs);
+        fm.run_menu_action("edit.paste");
+        fm.apply_vfs_ops(&mut vfs);
+        assert!(vfs.exists("/tmp/hostname"));
+        assert!(vfs.exists("/etc/hostname"));
+    }
+
+    #[test]
+    fn new_folder_names_are_unique() {
+        let mut vfs = setup_vfs();
+        let mut fm = FileManagerApp::new("/apps/fm", &vfs);
+        fm.panels[0].navigate_to("/tmp", &vfs);
+        for _ in 0..3 {
+            fm.handle_input(&Button::Square, &vfs);
+            assert!(fm.accepts_text());
+            fm.handle_input(&Button::Confirm, &vfs);
+            fm.apply_vfs_ops(&mut vfs);
+        }
+        assert!(vfs.exists("/tmp/new_folder"));
+        assert!(vfs.exists("/tmp/new_folder (2)"));
+        assert!(vfs.exists("/tmp/new_folder (3)"));
+        assert!(fm.panels[0].lines.iter().any(|l| l == "new_folder (3)/"));
+    }
+
+    #[test]
+    fn dialog_swallows_navigation() {
+        let vfs = setup_vfs();
+        let mut fm = FileManagerApp::new("/apps/fm", &vfs);
+        fm.view_mode = ViewMode::Dual;
+        fm.request_delete();
+        let before = fm.panels[0].cursor;
+        fm.handle_input(&Button::Down, &vfs);
+        assert!(key(&mut fm, &vfs, Key::Down, Modifiers::NONE));
+        assert_eq!(fm.panels[0].cursor, before);
+        assert!(fm.dialog.is_some());
+    }
+
+    #[test]
+    fn dialog_buttons_clickable() {
+        let mut vfs = setup_vfs();
+        let mut fm = FileManagerApp::new("/apps/fm", &vfs);
+        select(&mut fm, &vfs, 0, "/etc", "hostname");
+        fm.request_delete();
+        let g = crate::dialog::dialog_geom(0, 0, 400, 240);
+        fm.handle_click(g.ok.x + 2, g.ok.y + 2, 400, 240, false);
+        assert!(fm.dialog.is_none());
+        fm.apply_vfs_ops(&mut vfs);
+        assert!(!vfs.exists("/etc/hostname"));
+    }
+
+    #[test]
+    fn deleting_open_directory_moves_panel_up() {
+        let mut vfs = setup_vfs();
+        let mut fm = FileManagerApp::new("/apps/fm", &vfs);
+        fm.panels[1].navigate_to("/home/user/music", &vfs);
+        select(&mut fm, &vfs, 0, "/home", "user");
+        fm.request_delete();
+        fm.commit_dialog();
+        fm.apply_vfs_ops(&mut vfs);
+        assert_eq!(fm.panels[1].browse_dir, "/home");
+    }
+
+    #[test]
+    fn tick_picks_up_changes_made_by_other_apps() {
+        let mut vfs = setup_vfs();
+        let mut fm = FileManagerApp::new("/apps/fm", &vfs);
+        fm.panels[0].navigate_to("/home/user", &vfs);
+        fm.panels[1].navigate_to("/home/user/music", &vfs);
+        select(&mut fm, &vfs, 0, "/home/user", "readme.txt");
+
+        // Another app writes a file and removes the right panel's folder.
+        vfs.write("/home/user/a_new.txt", b"x").unwrap();
+        vfs.write("/home/user/b_new.txt", b"y").unwrap();
+        vfs.remove("/home/user/music").unwrap();
+
+        // Nothing happens before the rescan interval elapses.
+        assert!(!fm.tick(100, &vfs));
+        assert!(
+            !fm.panels[0]
+                .lines
+                .iter()
+                .any(|l| l.starts_with("a_new.txt"))
+        );
+        assert!(
+            fm.tick(state::RESCAN_INTERVAL_MS, &vfs),
+            "rescan reports a change"
+        );
+        assert!(
+            fm.panels[0]
+                .lines
+                .iter()
+                .any(|l| l.starts_with("a_new.txt"))
+        );
+        // The selection stays on the same entry although it moved down.
+        let p = &fm.panels[0];
+        assert!(p.lines[p.scroll + p.cursor].starts_with("readme.txt"));
+        assert_eq!(
+            fm.panels[1].browse_dir, "/home/user",
+            "vanished dir -> parent"
+        );
+        // Unchanged listings don't report a change.
+        assert!(!fm.tick(state::RESCAN_INTERVAL_MS, &vfs));
     }
 }

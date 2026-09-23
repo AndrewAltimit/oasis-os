@@ -13,6 +13,34 @@ use crate::types::{CommandOutput, Environment};
 
 use crate::registry::CommandRegistry;
 
+/// Flatten the outputs of several commands into one.
+///
+/// `None` entries are dropped. A single output is returned as-is. Multiple
+/// outputs have consecutive
+/// `Text` entries merged (newline-joined) and are wrapped in
+/// [`CommandOutput::Multi`] so signals survive alongside text.
+pub(crate) fn merge_outputs(outputs: Vec<CommandOutput>) -> CommandOutput {
+    let mut merged: Vec<CommandOutput> = Vec::new();
+    for output in outputs {
+        if matches!(output, CommandOutput::None) {
+            continue;
+        }
+        if let CommandOutput::Text(ref new_text) = output
+            && let Some(CommandOutput::Text(prev)) = merged.last_mut()
+        {
+            prev.push('\n');
+            prev.push_str(new_text);
+            continue;
+        }
+        merged.push(output);
+    }
+    match merged.len() {
+        0 => CommandOutput::None,
+        1 => merged.pop().unwrap_or(CommandOutput::None),
+        _ => CommandOutput::Multi(merged),
+    }
+}
+
 impl CommandRegistry {
     /// Parse and execute a command line.
     ///
@@ -20,6 +48,14 @@ impl CommandRegistry {
     /// (`$(...)`), aliases, command chaining (`;`, `&&`, `||`),
     /// pipes (`|`), input redirection (`<`), and output redirection
     /// (`>`, `>>`). Command names are case-insensitive.
+    ///
+    /// Lines containing compound commands (`if`, `while`, `until`, `for`,
+    /// `case`) run through the script engine. A trailing unquoted `&`
+    /// queues the line as a background job instead of running it (see
+    /// [`CommandRegistry::poll_jobs`]).
+    ///
+    /// Only top-level calls (not function bodies, `$(...)`, scripts or
+    /// jobs) are recorded in the history.
     pub fn execute(&self, line: &str, env: &mut Environment<'_>) -> Result<CommandOutput> {
         let trimmed = line.trim();
         if trimmed.is_empty() {
@@ -34,15 +70,58 @@ impl CommandRegistry {
             trimmed.to_string()
         };
 
-        // Push to history (after history expansion, before execution).
-        self.push_history(&line);
+        let depth = self.exec_depth.get();
+        if depth == 0 {
+            // Push to history (after history expansion, before execution).
+            self.push_history(&line);
+        }
 
         // Update $CWD before variable expansion.
         self.set_variable("CWD", &env.cwd);
-        self.last_exit_code.set(self.last_exit_code.get());
 
+        if let Some(cmd) = crate::pipeline::strip_background(&line) {
+            return Ok(self.queue_job(cmd));
+        }
+
+        self.exec_depth.set(depth + 1);
+        let result = if crate::script::is_compound(&line) {
+            self.execute_compound(&line, env)
+        } else {
+            self.execute_chain(&line, env)
+        };
+        self.exec_depth.set(depth);
+        if depth == 0 {
+            // A stray `break` / `continue` outside any loop must not leak
+            // into the next command line.
+            self.break_flag.set(false);
+            self.continue_flag.set(false);
+        }
+        result
+    }
+
+    /// Execute a line without history or job handling, as a nested
+    /// (non-top-level) call.
+    pub(crate) fn execute_nested(
+        &self,
+        line: &str,
+        env: &mut Environment<'_>,
+    ) -> Result<CommandOutput> {
+        let depth = self.exec_depth.get();
+        self.exec_depth.set(depth + 1);
+        let result = self.execute(line, env);
+        self.exec_depth.set(depth);
+        result
+    }
+
+    /// Execute a `;` / `&&` / `||` chain of pipelines (no compound
+    /// commands, no history).
+    pub(crate) fn execute_chain(
+        &self,
+        line: &str,
+        env: &mut Environment<'_>,
+    ) -> Result<CommandOutput> {
         // Split into chained segments (;, &&, ||).
-        let segments = split_chains(&line)?;
+        let segments = split_chains(line)?;
         let single_command = segments.len() == 1;
         let mut all_outputs: Vec<CommandOutput> = Vec::new();
 
@@ -59,11 +138,13 @@ impl CommandRegistry {
 
             // Reset exit code before pipeline so we can detect if the
             // pipeline sets a non-zero code (e.g. redirect capturing
-            // an error via was_error).
+            // an error via was_error). `$?` keeps the previous command's
+            // status until this one finishes (it used to be reset to 0
+            // here, so `cmd; echo $?` always printed 0).
             self.last_exit_code.set(0);
-            self.set_variable("?", "0");
             match self.execute_pipeline(&segment.command, env) {
                 Ok(output) => {
+                    self.set_variable("?", &self.last_exit_code.get().to_string());
                     match output {
                         CommandOutput::None => {},
                         other => all_outputs.push(other),
@@ -86,35 +167,7 @@ impl CommandRegistry {
             }
         }
 
-        // Flatten: if only one output, return it directly. If
-        // multiple, merge consecutive text outputs and wrap in Multi
-        // so signals are preserved alongside text.
-        if all_outputs.is_empty() {
-            Ok(CommandOutput::None)
-        } else if all_outputs.len() == 1 {
-            Ok(all_outputs
-                .into_iter()
-                .next()
-                .unwrap_or(CommandOutput::None))
-        } else {
-            // Merge consecutive Text entries to reduce Multi size.
-            let mut merged: Vec<CommandOutput> = Vec::new();
-            for output in all_outputs {
-                if let CommandOutput::Text(ref new_text) = output
-                    && let Some(CommandOutput::Text(prev)) = merged.last_mut()
-                {
-                    prev.push('\n');
-                    prev.push_str(new_text);
-                    continue;
-                }
-                merged.push(output);
-            }
-            if merged.len() == 1 {
-                Ok(merged.into_iter().next().unwrap_or(CommandOutput::None))
-            } else {
-                Ok(CommandOutput::Multi(merged))
-            }
-        }
+        Ok(merge_outputs(all_outputs))
     }
 
     /// Execute a pipeline: `cmd1 | cmd2 | cmd3`.
@@ -161,6 +214,24 @@ impl CommandRegistry {
         }
     }
 
+    /// Mark the current command as failed (exit status 1) without an error
+    /// message.
+    fn set_failed_status(&self) {
+        self.last_exit_code.set(1);
+        self.set_variable("?", "1");
+    }
+
+    /// Expand a raw redirect target: `$VAR` / `${VAR}` substitution, then
+    /// quote removal. Falls back to the trimmed raw text when it does not
+    /// tokenize to exactly one word.
+    fn redirect_target(&self, raw: &str, cwd: &str) -> String {
+        let expanded = self.expand_variables(raw.trim(), cwd);
+        match tokenize(&expanded) {
+            Ok(mut tokens) if tokens.len() == 1 => tokens.pop().unwrap_or(expanded),
+            _ => expanded.trim().to_string(),
+        }
+    }
+
     /// Execute a command, handling output redirection (`>`, `>>`,
     /// `2>`, `2>>`, `2>&1`).
     fn execute_with_redirect(
@@ -170,13 +241,26 @@ impl CommandRegistry {
     ) -> Result<CommandOutput> {
         let (cmd_part, redirections) = parse_redirect(cmd_str);
         let has_stderr_handling = redirections.stderr.is_some() || redirections.stderr_to_stdout;
+        // Redirect targets get the same variable expansion and quote
+        // removal as arguments (`> $DIR/out.txt`, `> "my file"`).
+        let stdin_target = redirections
+            .stdin
+            .map(|p| self.redirect_target(p, &env.cwd));
+        let stdout_target = redirections
+            .stdout
+            .as_ref()
+            .map(|r| (self.redirect_target(r.path, &env.cwd), r.append));
+        let stderr_target = redirections
+            .stderr
+            .as_ref()
+            .map(|r| (self.redirect_target(r.path, &env.cwd), r.append));
 
         // Clear stderr before each command.
         env.stderr.clear();
 
         // Handle stdin redirect: read file contents into env.stdin.
-        if let Some(stdin_path) = redirections.stdin {
-            let resolved = resolve_path(&env.cwd, stdin_path);
+        if let Some(stdin_path) = stdin_target {
+            let resolved = resolve_path(&env.cwd, &stdin_path);
             match env.vfs.read(&resolved) {
                 Ok(data) => {
                     env.stdin = Some(String::from_utf8_lossy(&data).into_owned());
@@ -198,9 +282,9 @@ impl CommandRegistry {
         // If no stderr redirect/merge, propagate errors normally.
         if !has_stderr_handling {
             let result = result?;
-            if let Some(redir) = redirections.stdout {
+            if let Some((path, append)) = stdout_target {
                 let text = output_to_text(&result);
-                write_redirect(&text, redir.path, redir.append, &env.cwd, env.vfs)?;
+                write_redirect(&text, &path, append, &env.cwd, env.vfs)?;
                 return Ok(CommandOutput::None);
             }
             return Ok(result);
@@ -240,23 +324,17 @@ impl CommandRegistry {
         };
 
         // Handle stdout redirect.
-        let result = if let Some(redir) = redirections.stdout {
+        let result = if let Some((path, append)) = stdout_target {
             let text = output_to_text(&result);
-            write_redirect(&text, redir.path, redir.append, &env.cwd, env.vfs)?;
+            write_redirect(&text, &path, append, &env.cwd, env.vfs)?;
             CommandOutput::None
         } else {
             result
         };
 
         // Handle stderr redirect.
-        if let Some(redir) = redirections.stderr {
-            write_redirect(
-                &captured_stderr,
-                redir.path,
-                redir.append,
-                &env.cwd,
-                env.vfs,
-            )?;
+        if let Some((path, append)) = stderr_target {
+            write_redirect(&captured_stderr, &path, append, &env.cwd, env.vfs)?;
         }
 
         // Preserve exit code: if command errored, keep it as exit
@@ -279,12 +357,6 @@ impl CommandRegistry {
         let trimmed = cmd_str.trim();
         if trimmed.is_empty() {
             return Ok(CommandOutput::None);
-        }
-
-        // Intercept control flow structures (if/for/while) before
-        // expansion.
-        if let Some(result) = crate::control_flow::parse_and_execute(trimmed, self, env) {
-            return result;
         }
 
         // Intercept `function` before variable expansion so the body
@@ -341,13 +413,31 @@ impl CommandRegistry {
             "break" => return self.execute_break(),
             "continue" => return self.execute_continue(),
             "local" => return self.execute_local(&args),
+            "jobs" => return self.execute_jobs(),
+            "fg" => return self.execute_fg(&args, env),
+            "bg" => return self.execute_bg(&args),
+            "kill" if args.iter().any(|a| a.starts_with('%')) => {
+                return self.execute_kill(&args);
+            },
+            "true" => return Ok(CommandOutput::None),
+            "false" => {
+                self.set_failed_status();
+                return Ok(CommandOutput::None);
+            },
             _ => {},
         }
 
         // Check registered commands first, then user-defined
         // functions.
         if let Some(cmd) = self.commands.get(name_lower.as_str()) {
-            return cmd.execute(&args, env);
+            let result = cmd.execute(&args, env);
+            // `test` reports its verdict as text; a `false` verdict is also
+            // a failing exit status so `test ... && cmd` / `||` behave.
+            if name_lower == "test" && matches!(&result, Ok(CommandOutput::Text(t)) if t == "false")
+            {
+                self.set_failed_status();
+            }
+            return result;
         }
 
         // Check user-defined functions.

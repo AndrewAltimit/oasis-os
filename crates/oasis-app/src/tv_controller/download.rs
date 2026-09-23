@@ -20,9 +20,13 @@ use super::streaming_buffer::StreamingInner;
 #[cfg(feature = "_video")]
 const STALL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(3);
 
-/// Maximum number of reconnect attempts on a stalled Range download.
+/// Maximum number of consecutive reconnect attempts on a Range download.
 #[cfg(feature = "_video")]
 const MAX_RECONNECTS: u32 = 5;
+
+/// Body bytes a connection must deliver before the reconnect budget resets.
+#[cfg(feature = "_video")]
+const RECONNECT_BUDGET_RESET_BYTES: u64 = 1024 * 1024;
 
 /// Download from a specific byte offset using HTTP Range request.
 /// Pushes data into the buffer starting at `start_offset`.
@@ -83,6 +87,7 @@ pub(crate) fn stream_download_range(
         }
 
         // Stream body with stall detection.
+        let connection_start = current_offset;
         log::info!(
             "TV: range body loop starting at {:.1}MB (reconnect {reconnects})",
             current_offset as f64 / (1024.0 * 1024.0),
@@ -102,23 +107,15 @@ pub(crate) fn stream_download_range(
                 return Ok(());
             }
             if buffer.should_throttle() {
-                // Don't reset stall timer during throttle -- if the decoder
-                // is truly stuck (not just slow), we need to detect the stall
-                // and reconnect rather than sleeping forever.
-                if last_data_time.elapsed() > STALL_TIMEOUT * 3 {
-                    log::warn!(
-                        "TV: stalled while throttling ({:.0}s no decoder progress), \
-                         forcing reconnect",
-                        last_data_time.elapsed().as_secs_f64(),
-                    );
-                    if reconnects >= MAX_RECONNECTS {
-                        buffer.set_error("stall during throttle, max reconnects exhausted".into());
-                        return Ok(());
-                    }
-                    reconnects += 1;
-                    drop(stream);
-                    continue 'outer;
-                }
+                // Throttled: the decoder is behind, which is normal -- 16 MB
+                // of lookahead is minutes of video.  Reconnecting can't help
+                // a slow (or stuck) decoder, and doing so after 9 s of
+                // throttle used to burn the whole reconnect budget within a
+                // few throttle cycles and then end the session with an
+                // error.  Just wait; cancellation is checked above, and if
+                // the server drops the idle connection the read below
+                // resumes from the frontier.
+                //
                 // Use condvar wait so the decoder can wake us immediately
                 // when it catches up, instead of fixed 100ms sleep.
                 let s = buffer.state.lock().unwrap_or_else(|e| e.into_inner());
@@ -136,6 +133,27 @@ pub(crate) fn stream_download_range(
                 was_throttled = false;
             }
             match stream.read(&mut buf) {
+                Ok(0) if current_offset < total_size => {
+                    // Closed early (e.g. an idle connection dropped by the
+                    // server during a long throttle): resume, don't treat
+                    // the short body as the end of the file.
+                    if reconnects >= MAX_RECONNECTS {
+                        log::warn!(
+                            "TV: range body closed early at {:.1}MB, max reconnects exhausted",
+                            current_offset as f64 / (1024.0 * 1024.0),
+                        );
+                        break 'outer; // partial success
+                    }
+                    reconnects += 1;
+                    log::info!(
+                        "TV: range body closed early at {:.1}MB of {:.1}MB, \
+                         reconnect {reconnects}/{MAX_RECONNECTS}",
+                        current_offset as f64 / (1024.0 * 1024.0),
+                        total_size as f64 / (1024.0 * 1024.0),
+                    );
+                    drop(stream);
+                    continue 'outer;
+                },
                 Ok(0) => {
                     log::info!(
                         "TV: range body EOF at {:.1}MB (received {:.1}MB from {:.1}MB)",
@@ -158,6 +176,12 @@ pub(crate) fn stream_download_range(
                     buffer.push(&buf[..n]);
                     last_data_time = std::time::Instant::now();
                     wb_backoff_ms = 1; // reset backoff on data
+                    // A connection that delivered real data has recovered:
+                    // the reconnect budget is for consecutive failures, not
+                    // for the lifetime of a long episode.
+                    if current_offset - connection_start > RECONNECT_BUDGET_RESET_BYTES {
+                        reconnects = 0;
+                    }
                 },
                 Err(e) => {
                     if is_would_block(&e) {
@@ -248,29 +272,35 @@ fn stream_download_inner(
     use oasis_core::net::TlsProvider;
     use std::sync::atomic::Ordering;
 
-    let stripped = url
-        .strip_prefix("https://")
-        .or_else(|| url.strip_prefix("http://"))
-        .ok_or_else(|| format!("unsupported URL scheme: {url}"))?;
-    let (host, path) = stripped
-        .split_once('/')
-        .map(|(h, p)| (h, format!("/{p}")))
-        .unwrap_or((stripped, "/".to_string()));
+    // Scheme, host and port come from the URL (a redirect may point at
+    // plain http:// or a non-default port); TLS only for https://.
+    let target = split_redirect_target(url).ok_or_else(|| format!("unsupported URL: {url}"))?;
+    let host = target.host.as_str();
 
     let mut net = oasis_core::net::StdNetworkBackend::new();
     let tcp = net
-        .connect(host, 443)
+        .connect(host, target.port)
         .map_err(|e| format!("connect: {e}"))?;
 
     // Force HTTP/1.1 ALPN — see comment in fetch_range_inner.
-    let mut stream = tls
-        .connect_tls_with_alpn(tcp, host, &[b"http/1.1"])
-        .map_err(|e| format!("TLS: {e}"))?
-        .stream;
+    let mut stream: Box<dyn oasis_core::backend::NetworkStream> = if target.is_https {
+        tls.connect_tls_with_alpn(tcp, host, &[b"http/1.1"])
+            .map_err(|e| format!("TLS: {e}"))?
+            .stream
+    } else {
+        tcp
+    };
 
+    let default_port = if target.is_https { 443 } else { 80 };
+    let host_header = if target.port == default_port {
+        host.to_string()
+    } else {
+        format!("{host}:{}", target.port)
+    };
     let request = format!(
-        "GET {path} HTTP/1.1\r\nHost: {host}\r\nUser-Agent: OASIS_OS/0.1\r\n\
-         Connection: close\r\nAccept: */*\r\n\r\n"
+        "GET {} HTTP/1.1\r\nHost: {host_header}\r\nUser-Agent: OASIS_OS/0.1\r\n\
+         Connection: close\r\nAccept: */*\r\n\r\n",
+        target.path,
     );
     let req_bytes = request.as_bytes();
     let mut written = 0;
@@ -395,6 +425,8 @@ fn stream_download_inner(
 
     // Stream remaining body into the shared buffer.
     let mut wb_backoff_ms = 1u64;
+    let mut last_data_time = std::time::Instant::now();
+    let mut was_throttled = false;
     loop {
         if buffer.is_cancelled() {
             log::info!("TV: download cancelled");
@@ -548,7 +580,18 @@ fn stream_download_inner(
                 .condvar
                 .wait_timeout(s, std::time::Duration::from_millis(50))
                 .unwrap_or_else(|e| e.into_inner());
+            was_throttled = true;
             continue;
+        }
+        // A throttle pause is the decoder being behind, not the network:
+        // restart the stall timer and the read deadline.  (Without this a
+        // pause longer than the deadline -- 16 MB of lookahead is minutes
+        // of low-bitrate video -- ended the session with "timeout
+        // downloading video" the moment the throttle lifted.)
+        if was_throttled {
+            was_throttled = false;
+            last_data_time = std::time::Instant::now();
+            deadline = last_data_time + std::time::Duration::from_secs(120);
         }
 
         if std::time::Instant::now() > deadline {
@@ -563,21 +606,51 @@ fn stream_download_inner(
                 // Reset deadline on successful data receipt so long
                 // videos (and intentional throttle pauses) don't hit the
                 // timeout.
-                deadline = std::time::Instant::now() + std::time::Duration::from_secs(120);
+                last_data_time = std::time::Instant::now();
+                deadline = last_data_time + std::time::Duration::from_secs(120);
             },
             Err(e) => {
                 if is_would_block(&e) {
+                    // No data for a while: the connection has stalled.
+                    // Resume from the last byte with a fresh Range request
+                    // (below) instead of waiting out the deadline.
+                    if content_length > 0 && last_data_time.elapsed() > STALL_TIMEOUT {
+                        log::warn!(
+                            "TV: linear download stalled ({:.0}s no data)",
+                            last_data_time.elapsed().as_secs_f64(),
+                        );
+                        break;
+                    }
                     std::thread::sleep(std::time::Duration::from_millis(wb_backoff_ms));
                     wb_backoff_ms = (wb_backoff_ms * 2).min(MAX_WOULD_BLOCK_BACKOFF_MS);
                     continue;
                 }
                 if buffer.bytes_received() > 0 {
+                    log::warn!("TV: linear download read error: {e}");
                     break;
                 }
                 buffer.finish();
                 return Err(format!("read: {e}"));
             },
         }
+    }
+
+    // The connection ended (closed, errored or stalled) before the whole
+    // body arrived: resume from the first missing byte with a Range
+    // request.  Previously this was treated as the end of the file, so a
+    // dropped connection cut the episode short.
+    let frontier = {
+        let s = buffer.state.lock().unwrap_or_else(|e| e.into_inner());
+        s.base_offset + s.buf.len() as u64
+    };
+    if content_length > 0 && frontier < content_length && !buffer.is_cancelled() {
+        log::warn!(
+            "TV: linear download ended at {:.1}MB of {:.1}MB, resuming via Range",
+            frontier as f64 / (1024.0 * 1024.0),
+            content_length as f64 / (1024.0 * 1024.0),
+        );
+        drop(stream);
+        return stream_download_range(original_url, tls, buffer, frontier, content_length);
     }
 
     let received = buffer.bytes_received();

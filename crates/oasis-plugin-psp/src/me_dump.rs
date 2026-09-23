@@ -71,7 +71,7 @@ unsafe extern "C" fn dump_thread_entry(
     // NOTE: Kernel K1 patches previously here have been REMOVED.
     // The root cause (EABI32 vs O32 ABI mismatch) is fixed in rust-psp
     // by adding i5/i6/i7 EABI mappers to 5+ arg PSP functions.
-    // See docs/psp-child-module-investigation.md for the full story.
+    // See docs/archive/psp-child-module-investigation.md for the full story.
 
     loop {
         // Wait for trigger.

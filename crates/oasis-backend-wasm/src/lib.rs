@@ -39,7 +39,9 @@ use oasis_core::sdi::SdiRegistry;
 use oasis_core::skin::Skin;
 use oasis_core::startmenu::{StartMenuAction, StartMenuState};
 use oasis_core::statusbar::StatusBar;
-use oasis_core::terminal::{CommandOutput, CommandRegistry, Environment, register_builtins};
+use oasis_core::terminal::{
+    CommandOutput, CommandRegistry, Environment, ShellSession, register_builtins,
+};
 use oasis_core::terminal_sdi;
 use oasis_core::toast::ToastManager;
 use oasis_core::transition::{self, TransitionState};
@@ -130,7 +132,8 @@ pub struct OasisWasm {
     active_transition: Option<TransitionState>,
     mode: Mode,
     cwd: String,
-    input_buf: String,
+    /// Terminal line editor, tab completion and persistent history.
+    shell: ShellSession,
     output_lines: Vec<String>,
     terminal_scroll_offset: usize,
     frame_counter: u64,
@@ -154,6 +157,9 @@ pub struct OasisWasm {
     shader_bridge: Option<shader_bridge::WasmShaderBridge>,
     /// Window id of the currently fullscreen-kiosk app (if any).
     fullscreen_app: Option<String>,
+    /// Drops the gamepad-style twin of a key press already consumed as a
+    /// shortcut or as typing (see `oasis_types::input::KeyTwinFilter`).
+    key_filter: oasis_core::input::KeyTwinFilter,
     /// In-flight YouTube search; backend polls each tick and publishes
     /// results to `/tmp/video_embed_results` so the embed app can
     /// re-render.
@@ -335,6 +341,10 @@ impl OasisWasm {
             skin_ref
         );
 
+        // Terminal line editor; restores history persisted in the VFS.
+        let shell = ShellSession::new();
+        shell.load_history(&cmd_reg, &vfs);
+
         Ok(OasisWasm {
             backend,
             input: input_backend,
@@ -365,7 +375,7 @@ impl OasisWasm {
             active_transition,
             mode: Mode::Dashboard,
             cwd: "/".to_string(),
-            input_buf: String::new(),
+            shell,
             output_lines: vec![
                 "OASIS_OS v1.0.0 -- Type 'help' for commands".to_string(),
                 "F1=terminal  F2=on-screen keyboard".to_string(),
@@ -385,6 +395,7 @@ impl OasisWasm {
             pending_tv_catalog: None,
             shader_bridge: shader_bridge::WasmShaderBridge::new(width, height),
             fullscreen_app: None,
+            key_filter: oasis_core::input::KeyTwinFilter::default(),
             #[cfg(feature = "wasm-youtube")]
             pending_youtube_search: None,
             #[cfg(feature = "wasm-youtube")]
@@ -404,7 +415,7 @@ impl OasisWasm {
     ///
     /// Call this from `requestAnimationFrame`. Processes input events,
     /// updates the scene graph, and renders to the canvas.
-    pub fn tick(&mut self, _delta_seconds: f32) {
+    pub fn tick(&mut self, delta_seconds: f32) {
         self.frame_counter += 1;
 
         // Update system info every ~60 frames (~1s at 60fps).
@@ -419,13 +430,11 @@ impl OasisWasm {
         let events = self.input.poll_events();
         for event in &events {
             self.mouse_cursor.handle_input(event);
-            match self.mode {
-                Mode::Osk => self.handle_osk_input(event),
-                Mode::Desktop => self.handle_desktop_input(event),
-                Mode::App => self.handle_app_input(event),
-                _ => self.handle_default_input(event),
-            }
+            self.handle_event(event);
         }
+
+        // Run the next queued background terminal job (`cmd &`), if any.
+        self.poll_terminal_jobs();
 
         // Process pending VFS requests from app runners (e.g. radio tune).
         // Skip TV Guide tune requests — they're handled by the dedicated video
@@ -460,6 +469,29 @@ impl OasisWasm {
                     let _ = self.vfs.write(&path, data.as_bytes());
                 }
             }
+
+            // Let open apps apply queued VFS mutations (file manager
+            // deletes / renames / copies, paint's binary BMP saves).
+            if let Some(ref mut runner) = self.app_runner {
+                runner.apply_vfs_ops(&mut self.vfs);
+            }
+            for (_, runner) in &mut self.open_runners {
+                runner.apply_vfs_ops(&mut self.vfs);
+            }
+
+            // Advance time-driven app state (game loops, slideshows) by
+            // the frame's wall time so it runs at a fixed rate
+            // independent of the display's refresh rate.
+            let dt_ms = (delta_seconds.max(0.0) * 1000.0).min(u32::MAX as f32) as u32;
+            if let Some(ref mut runner) = self.app_runner {
+                runner.tick(dt_ms, &self.vfs);
+            }
+            for (_, runner) in &mut self.open_runners {
+                runner.tick(dt_ms, &self.vfs);
+            }
+            // Apps that decided to close outside an input handler (Text
+            // Editor "Save & close" once the save above is written).
+            self.apply_app_close_requests();
 
             // Drive the YouTube search fetcher and let the embed app
             // pick up freshly-published results from VFS.
@@ -790,7 +822,9 @@ impl OasisWasm {
             }
         }
 
-        // Sync volume from guide state to the video element.
+        // Sync volume from guide state to the video element. Synced every
+        // frame (set_volume skips no-op writes) so a freshly created element
+        // picks up the guide's volume instead of the browser default of 100%.
         if self.video_player.is_active() {
             let runner = vfs_content::find_tv_guide_runner_wasm(
                 &mut self.app_runner,
@@ -798,7 +832,6 @@ impl OasisWasm {
             );
             if let Some(runner) = runner
                 && let Some(guide) = runner.tv_guide_state()
-                && guide.volume_changed
             {
                 self.video_player.set_volume(guide.volume as f64 / 100.0);
                 guide.volume_changed = false;
@@ -1269,11 +1302,13 @@ impl OasisWasm {
                 let cursor_visible = self.active_theme.terminal_cursor_blink_rate == 0
                     || (self.frame_counter / self.active_theme.terminal_cursor_blink_rate as u64)
                         .is_multiple_of(2);
-                terminal_sdi::setup_terminal_objects(
+                let (input_text, cursor_col) = self.shell.display();
+                terminal_sdi::setup_terminal_objects_with_cursor(
                     &mut self.sdi,
                     &self.output_lines,
                     &self.cwd,
-                    &self.input_buf,
+                    &input_text,
+                    cursor_col,
                     self.terminal_scroll_offset,
                     &self.active_theme,
                     cursor_visible,
@@ -1299,16 +1334,22 @@ impl OasisWasm {
                 AppRunner::hide_sdi(&mut self.sdi);
                 terminal_sdi::hide_media_page(&mut self.sdi);
 
-                // Sync terminal output to the windowed terminal runner.
+                // Sync terminal output to the windowed terminal runner
+                // (incremental: only new scrollback lines are cloned).
+                let focused = self.wm.active_window() == Some("terminal");
                 if let Some((_, runner)) = self
                     .open_runners
                     .iter_mut()
                     .find(|(id, _)| id == "terminal")
                 {
-                    let mut lines = self.output_lines.clone();
-                    let prompt = format!("> {}", self.input_buf);
-                    lines.push(prompt);
-                    runner.set_lines(lines, self.terminal_scroll_offset);
+                    let (input_text, cursor_col) = self.shell.display();
+                    let prompt = format!("> {input_text}");
+                    runner.sync_terminal_lines(
+                        &self.output_lines,
+                        &prompt,
+                        self.terminal_scroll_offset,
+                    );
+                    runner.set_terminal_cursor(focused.then_some(2 + cursor_col));
                 }
 
                 // Keep dashboard icons visible behind windows.
@@ -1574,6 +1615,38 @@ impl OasisWasm {
         if let Some(name) = pending_skin_swap {
             self.apply_skin_swap(&name);
         }
+        if let Err(e) = self.shell.save_history(&self.cmd_reg, &mut self.vfs) {
+            log::warn!("terminal history not saved: {e}");
+        }
+    }
+
+    /// Run the next queued background terminal job (`cmd &`), if any.
+    fn poll_terminal_jobs(&mut self) {
+        if self.cmd_reg.pending_jobs() == 0 {
+            return;
+        }
+        let output = {
+            let mut env = Environment {
+                cwd: self.cwd.clone(),
+                vfs: &mut self.vfs,
+                power: Some(&self.platform),
+                time: Some(&self.platform),
+                usb: Some(&self.platform),
+                network: Some(&self.platform),
+                tls: None,
+                stdin: None,
+                stderr: String::new(),
+            };
+            let output = self.cmd_reg.poll_jobs(&mut env);
+            self.cwd = env.cwd;
+            output
+        };
+        if let Some(output) = output {
+            if let Some(name) = self.process_command_output(Ok(output)) {
+                self.apply_skin_swap(&name);
+            }
+            vfs_content::trim_output(&mut self.output_lines);
+        }
     }
 
     /// Process a command result. Returns a pending skin swap name if applicable.
@@ -1612,6 +1685,10 @@ impl OasisWasm {
                     },
                     CommandSignal::SkinSwap { name } => {
                         return Some(name.clone());
+                    },
+                    CommandSignal::SdiInspect { name } => {
+                        let text = terminal_sdi::inspect_sdi(&self.sdi, name.as_deref());
+                        self.output_lines.extend(text.lines().map(str::to_string));
                     },
                     CommandSignal::ListenToggle { .. }
                     | CommandSignal::RemoteConnect { .. }

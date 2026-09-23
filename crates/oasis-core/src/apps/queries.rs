@@ -11,8 +11,18 @@ impl AppRunner {
     /// Accesses the `TvGuideApp` delegate and returns a reference to
     /// its inner `TvGuideState`. Used by external code (tv_controller,
     /// WASM backend) to inject catalogs and update fetch status.
+    ///
+    /// Unlike [`AppRunner::delegate_as_mut`] this does not schedule a
+    /// redraw: hosts poll it every frame, and the guide's visible changes
+    /// go through [`AppRunner::refresh_tv_text`] (or happen while video
+    /// playback already forces redraws).
     pub fn tv_guide_state(&mut self) -> Option<&mut oasis_app_tv_guide::guide::TvGuideState> {
-        self.delegate_as_mut::<oasis_app_tv_guide::TvGuideApp>()
+        self.delegate
+            .as_mut()
+            .and_then(|app| {
+                app.as_any_mut()
+                    .downcast_mut::<oasis_app_tv_guide::TvGuideApp>()
+            })
             .map(|app| &mut app.guide)
     }
 
@@ -87,11 +97,24 @@ impl AppRunner {
     ) -> AppAction {
         if let Some(ref mut app) = self.delegate {
             let action = app.handle_click(lx, ly, cw, ch, fullscreen);
+            self.redraw_pending = true;
             self.sync_from_delegate();
             return action;
         }
 
         AppAction::None
+    }
+
+    /// Let the delegate apply its queued VFS mutations (see
+    /// [`crate::apps::App::apply_vfs_ops`]). Hosts call this once per frame
+    /// for every open runner.
+    pub fn apply_vfs_ops(&mut self, vfs: &mut dyn Vfs) {
+        if let Some(ref mut app) = self.delegate
+            && app.apply_vfs_ops(vfs)
+        {
+            self.redraw_pending = true;
+            self.sync_from_delegate();
+        }
     }
 
     /// Forward an `App::refresh` call to the delegate. Apps that don't

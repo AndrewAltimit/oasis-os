@@ -34,6 +34,7 @@ pub use oasis_types::shadow;
 
 pub use oasis_audio as audio;
 pub use oasis_browser as browser;
+pub use oasis_i18n as i18n;
 pub use oasis_net as net;
 pub use oasis_platform as platform;
 pub use oasis_sdi as sdi;
@@ -67,6 +68,7 @@ pub mod statusbar;
 pub mod taskbar;
 pub mod terminal;
 pub mod terminal_sdi;
+pub mod text_fit;
 pub mod toast;
 pub mod transfer;
 pub mod transition;
@@ -95,7 +97,7 @@ pub mod prelude {
     pub use oasis_types::error::{OasisError, Result};
 
     // Input
-    pub use oasis_types::input::{Button, InputEvent, Trigger};
+    pub use oasis_types::input::{Button, InputEvent, Key, Modifiers, Trigger};
 
     // Configuration
     pub use oasis_types::config::OasisConfig;

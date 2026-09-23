@@ -7,7 +7,7 @@ use wasm_bindgen::prelude::*;
 use web_sys::{EventTarget, HtmlCanvasElement, KeyboardEvent, MouseEvent, WheelEvent};
 
 use oasis_types::backend::InputBackend;
-use oasis_types::input::{Button, InputEvent, Trigger};
+use oasis_types::input::{InputEvent, Key, Modifiers};
 
 // ---------------------------------------------------------------------------
 // WasmInputBackend
@@ -44,22 +44,15 @@ impl WasmInputBackend {
                 let Ok(ke) = e.dyn_into::<KeyboardEvent>() else {
                     return;
                 };
-                let mapped = map_keydown(&ke);
-                if mapped.is_some() {
+                let key_str = ke.key();
+                let code = ke.code();
+                let mods =
+                    mods_from_dom(ke.shift_key(), ke.ctrl_key(), ke.alt_key(), ke.meta_key());
+                if key_from_dom(&key_str, &code).is_some_and(|k| should_prevent_default(k, mods)) {
                     ke.prevent_default();
                 }
-                let mut q = ev.borrow_mut();
-                if let Some(input) = mapped {
-                    q.push(input);
-                }
-                // SDL fires TextInput separately from KeyDown, so a key
-                // like "e" generates both TriggerPress and TextInput.
-                // Replicate that here for printable characters.
-                let key = ke.key();
-                let chars: Vec<char> = key.chars().collect();
-                if chars.len() == 1 && !ke.ctrl_key() && !ke.alt_key() && !ke.meta_key() {
-                    q.push(InputEvent::TextInput(chars[0]));
-                }
+                ev.borrow_mut()
+                    .extend(keydown_events(&key_str, &code, mods));
             }) as Box<dyn FnMut(web_sys::Event)>);
             let _ = win_target
                 .add_event_listener_with_callback("keydown", closure.as_ref().unchecked_ref());
@@ -370,98 +363,121 @@ fn scale_touch(canvas: &HtmlCanvasElement, touch: &web_sys::Touch, cw: u32, ch: 
 // Key mapping
 // ---------------------------------------------------------------------------
 
-fn map_keydown(ke: &KeyboardEvent) -> Option<InputEvent> {
-    let key = ke.key();
-    match key.as_str() {
-        "ArrowUp" => Some(InputEvent::ButtonPress(Button::Up)),
-        "ArrowDown" => Some(InputEvent::ButtonPress(Button::Down)),
-        "ArrowLeft" => Some(InputEvent::ButtonPress(Button::Left)),
-        "ArrowRight" => Some(InputEvent::ButtonPress(Button::Right)),
-        "Enter" => Some(InputEvent::ButtonPress(Button::Confirm)),
-        "Escape" => Some(InputEvent::ButtonPress(Button::Cancel)),
-        " " => Some(InputEvent::ButtonPress(Button::Triangle)),
-        "Tab" => {
-            if ke.shift_key() {
-                Some(InputEvent::ShiftTab)
-            } else {
-                Some(InputEvent::Tab)
+/// Map a DOM `KeyboardEvent` (`key` + `code`) to a backend-independent
+/// [`Key`]. Pure so it can be unit-tested off-target.
+///
+/// Letters are lowercased; digit keys use `code` (`Digit1`) so Shift+1
+/// still reports `Key::Char('1')` like SDL does.
+pub(crate) fn key_from_dom(key: &str, code: &str) -> Option<Key> {
+    let k = match key {
+        "ArrowUp" => Key::Up,
+        "ArrowDown" => Key::Down,
+        "ArrowLeft" => Key::Left,
+        "ArrowRight" => Key::Right,
+        "Enter" => Key::Enter,
+        "Escape" => Key::Escape,
+        "Tab" => Key::Tab,
+        "Backspace" => Key::Backspace,
+        "Delete" => Key::Delete,
+        "Insert" => Key::Insert,
+        "Home" => Key::Home,
+        "End" => Key::End,
+        "PageUp" => Key::PageUp,
+        "PageDown" => Key::PageDown,
+        " " => Key::Space,
+        _ => {
+            if let Some(n) = key.strip_prefix('F').and_then(|n| n.parse::<u8>().ok()) {
+                return (1..=12).contains(&n).then_some(Key::F(n));
+            }
+            if let Some(d) = code.strip_prefix("Digit").and_then(|d| d.chars().next()) {
+                return Some(Key::Char(d));
+            }
+            let mut chars = key.chars();
+            let (Some(ch), None) = (chars.next(), chars.next()) else {
+                return None; // Named key we don't model (Shift, Unidentified, ...).
+            };
+            if ch.is_control() || ch.is_whitespace() {
+                return None;
+            }
+            let mut lower = ch.to_lowercase();
+            match (lower.next(), lower.next()) {
+                (Some(l), None) => Key::Char(l),
+                _ => Key::Char(ch),
             }
         },
-        "F1" => Some(InputEvent::ButtonPress(Button::Start)),
-        "F2" => Some(InputEvent::ButtonPress(Button::Select)),
-        "q" | "Q" => Some(InputEvent::TriggerPress(Trigger::Left)),
-        "e" | "E" => Some(InputEvent::TriggerPress(Trigger::Right)),
-        "Backspace" => Some(InputEvent::Backspace),
-        "F11" => Some(InputEvent::ToggleFullscreen),
-        _ => None,
+    };
+    Some(k)
+}
+
+/// Build [`Modifiers`] from DOM modifier flags.
+pub(crate) fn mods_from_dom(shift: bool, ctrl: bool, alt: bool, meta: bool) -> Modifiers {
+    let mut mods = Modifiers::NONE;
+    for (held, bit) in [
+        (shift, Modifiers::SHIFT),
+        (ctrl, Modifiers::CTRL),
+        (alt, Modifiers::ALT),
+        (meta, Modifiers::SUPER),
+    ] {
+        if held {
+            mods |= bit;
+        }
+    }
+    mods
+}
+
+/// Whether the browser's default action for this key press should be
+/// suppressed: keys with a gamepad-style twin (arrows, Space, Tab, ...),
+/// page-scrolling navigation keys, and Ctrl/Cmd+letter shortcuts (except
+/// Ctrl+R so page reload keeps working).
+pub(crate) fn should_prevent_default(key: Key, mods: Modifiers) -> bool {
+    if key.legacy_press(mods).is_some() {
+        return true;
+    }
+    match key {
+        Key::Delete | Key::Home | Key::End | Key::PageUp | Key::PageDown => true,
+        Key::Char(c) => (mods.ctrl() || mods.super_key()) && c.is_alphabetic() && c != 'r',
+        _ => false,
     }
 }
 
-fn map_keyup(ke: &KeyboardEvent) -> Option<InputEvent> {
-    let key = ke.key();
-    match key.as_str() {
-        "ArrowUp" => Some(InputEvent::ButtonRelease(Button::Up)),
-        "ArrowDown" => Some(InputEvent::ButtonRelease(Button::Down)),
-        "ArrowLeft" => Some(InputEvent::ButtonRelease(Button::Left)),
-        "ArrowRight" => Some(InputEvent::ButtonRelease(Button::Right)),
-        "Enter" => Some(InputEvent::ButtonRelease(Button::Confirm)),
-        "Escape" => Some(InputEvent::ButtonRelease(Button::Cancel)),
-        " " => Some(InputEvent::ButtonRelease(Button::Triangle)),
-        "Tab" => None, // Tab is handled on keydown only.
-        "F1" => Some(InputEvent::ButtonRelease(Button::Start)),
-        "F2" => Some(InputEvent::ButtonRelease(Button::Select)),
-        "q" | "Q" => Some(InputEvent::TriggerRelease(Trigger::Left)),
-        "e" | "E" => Some(InputEvent::TriggerRelease(Trigger::Right)),
-        _ => None,
+/// Events for a DOM `keydown`, in delivery order: [`InputEvent::Key`],
+/// its gamepad-style twin (if any), then [`InputEvent::TextInput`] for
+/// printable characters typed without Ctrl/Alt/Meta (mirroring SDL, which
+/// fires `TextInput` separately from `KeyDown`).
+pub(crate) fn keydown_events(key_str: &str, code: &str, mods: Modifiers) -> Vec<InputEvent> {
+    let mut out = Vec::with_capacity(3);
+    if let Some(key) = key_from_dom(key_str, code) {
+        out.push(InputEvent::Key { key, mods });
+        out.extend(key.legacy_press(mods));
     }
+    let mut chars = key_str.chars();
+    if let (Some(ch), None) = (chars.next(), chars.next())
+        && !mods.has_command()
+    {
+        out.push(InputEvent::TextInput(ch));
+    }
+    out
+}
+
+fn map_keyup(ke: &KeyboardEvent) -> Option<InputEvent> {
+    key_from_dom(&ke.key(), &ke.code())?.legacy_release()
 }
 
 // -----------------------------------------------------------------------
 // Tests -- pure functions testable on any target.
 // -----------------------------------------------------------------------
 
-/// Test helper: create a mock key string and call `map_keydown` logic.
-/// Since `map_keydown` takes a `KeyboardEvent` (WASM-only), we test the
-/// key string matching directly via this extracted helper.
+/// Test helper: the gamepad-style event for a `keydown` of `key` with no
+/// modifiers (the `KeyboardEvent` itself is WASM-only).
 #[cfg(test)]
 fn map_keydown_str(key: &str) -> Option<InputEvent> {
-    match key {
-        "ArrowUp" => Some(InputEvent::ButtonPress(Button::Up)),
-        "ArrowDown" => Some(InputEvent::ButtonPress(Button::Down)),
-        "ArrowLeft" => Some(InputEvent::ButtonPress(Button::Left)),
-        "ArrowRight" => Some(InputEvent::ButtonPress(Button::Right)),
-        "Enter" => Some(InputEvent::ButtonPress(Button::Confirm)),
-        "Escape" => Some(InputEvent::ButtonPress(Button::Cancel)),
-        " " => Some(InputEvent::ButtonPress(Button::Triangle)),
-        "Tab" => Some(InputEvent::Tab),
-        "F1" => Some(InputEvent::ButtonPress(Button::Start)),
-        "F2" => Some(InputEvent::ButtonPress(Button::Select)),
-        "q" | "Q" => Some(InputEvent::TriggerPress(Trigger::Left)),
-        "e" | "E" => Some(InputEvent::TriggerPress(Trigger::Right)),
-        "Backspace" => Some(InputEvent::Backspace),
-        "F11" => Some(InputEvent::ToggleFullscreen),
-        _ => None,
-    }
+    key_from_dom(key, "")?.legacy_press(Modifiers::NONE)
 }
 
 /// Test helper for key-up mapping.
 #[cfg(test)]
 fn map_keyup_str(key: &str) -> Option<InputEvent> {
-    match key {
-        "ArrowUp" => Some(InputEvent::ButtonRelease(Button::Up)),
-        "ArrowDown" => Some(InputEvent::ButtonRelease(Button::Down)),
-        "ArrowLeft" => Some(InputEvent::ButtonRelease(Button::Left)),
-        "ArrowRight" => Some(InputEvent::ButtonRelease(Button::Right)),
-        "Enter" => Some(InputEvent::ButtonRelease(Button::Confirm)),
-        "Escape" => Some(InputEvent::ButtonRelease(Button::Cancel)),
-        " " => Some(InputEvent::ButtonRelease(Button::Triangle)),
-        "Tab" => None, // Tab is handled on keydown only.
-        "F1" => Some(InputEvent::ButtonRelease(Button::Start)),
-        "F2" => Some(InputEvent::ButtonRelease(Button::Select)),
-        "q" | "Q" => Some(InputEvent::TriggerRelease(Trigger::Left)),
-        "e" | "E" => Some(InputEvent::TriggerRelease(Trigger::Right)),
-        _ => None,
-    }
+    key_from_dom(key, "")?.legacy_release()
 }
 
 #[cfg(test)]
@@ -470,6 +486,7 @@ mod tests {
 
     use super::scale_point_math;
     use super::*;
+    use oasis_types::input::{Button, Trigger};
 
     // -- Identity / no-letterbox scenarios --
 
@@ -932,5 +949,106 @@ mod tests {
         assert_eq!(map_keydown_str("e"), map_keydown_str("E"));
         assert_eq!(map_keyup_str("q"), map_keyup_str("Q"));
         assert_eq!(map_keyup_str("e"), map_keyup_str("E"));
+    }
+
+    // -- Raw Key mapping --
+
+    #[test]
+    fn dom_navigation_keys() {
+        assert_eq!(key_from_dom("Delete", "Delete"), Some(Key::Delete));
+        assert_eq!(key_from_dom("Home", "Home"), Some(Key::Home));
+        assert_eq!(key_from_dom("End", "End"), Some(Key::End));
+        assert_eq!(key_from_dom("PageUp", "PageUp"), Some(Key::PageUp));
+        assert_eq!(key_from_dom("PageDown", "PageDown"), Some(Key::PageDown));
+        assert_eq!(key_from_dom("Insert", "Insert"), Some(Key::Insert));
+        assert_eq!(key_from_dom(" ", "Space"), Some(Key::Space));
+        assert_eq!(key_from_dom("Enter", "NumpadEnter"), Some(Key::Enter));
+    }
+
+    #[test]
+    fn dom_function_keys() {
+        assert_eq!(key_from_dom("F1", "F1"), Some(Key::F(1)));
+        assert_eq!(key_from_dom("F12", "F12"), Some(Key::F(12)));
+        assert_eq!(key_from_dom("F13", "F13"), None);
+        // A plain capital "F" is a letter, not a function key.
+        assert_eq!(key_from_dom("F", "KeyF"), Some(Key::Char('f')));
+    }
+
+    #[test]
+    fn dom_printable_keys() {
+        assert_eq!(key_from_dom("S", "KeyS"), Some(Key::Char('s')));
+        assert_eq!(key_from_dom("z", "KeyZ"), Some(Key::Char('z')));
+        // Shift+1 reports "!" as key but Digit1 as code.
+        assert_eq!(key_from_dom("!", "Digit1"), Some(Key::Char('1')));
+        assert_eq!(key_from_dom("/", "Slash"), Some(Key::Char('/')));
+        assert_eq!(key_from_dom("Shift", "ShiftLeft"), None);
+        assert_eq!(key_from_dom("Unidentified", ""), None);
+    }
+
+    #[test]
+    fn dom_modifiers() {
+        assert_eq!(mods_from_dom(false, false, false, false), Modifiers::NONE);
+        assert_eq!(
+            mods_from_dom(true, true, false, true),
+            Modifiers::SHIFT | Modifiers::CTRL | Modifiers::SUPER
+        );
+        assert_eq!(mods_from_dom(false, false, true, false), Modifiers::ALT);
+    }
+
+    #[test]
+    fn keydown_events_order_key_twin_text() {
+        assert_eq!(
+            keydown_events("q", "KeyQ", Modifiers::NONE),
+            vec![
+                InputEvent::Key {
+                    key: Key::Char('q'),
+                    mods: Modifiers::NONE,
+                },
+                InputEvent::TriggerPress(Trigger::Left),
+                InputEvent::TextInput('q'),
+            ]
+        );
+        assert_eq!(
+            keydown_events(" ", "Space", Modifiers::NONE),
+            vec![
+                InputEvent::Key {
+                    key: Key::Space,
+                    mods: Modifiers::NONE,
+                },
+                InputEvent::ButtonPress(Button::Triangle),
+                InputEvent::TextInput(' '),
+            ]
+        );
+    }
+
+    #[test]
+    fn keydown_events_shortcut_has_no_text() {
+        assert_eq!(
+            keydown_events("s", "KeyS", Modifiers::CTRL),
+            vec![InputEvent::Key {
+                key: Key::Char('s'),
+                mods: Modifiers::CTRL,
+            }]
+        );
+        assert_eq!(
+            keydown_events("Tab", "Tab", Modifiers::SHIFT),
+            vec![
+                InputEvent::Key {
+                    key: Key::Tab,
+                    mods: Modifiers::SHIFT,
+                },
+                InputEvent::ShiftTab,
+            ]
+        );
+    }
+
+    #[test]
+    fn prevent_default_rules() {
+        assert!(should_prevent_default(Key::Space, Modifiers::NONE));
+        assert!(should_prevent_default(Key::PageDown, Modifiers::NONE));
+        assert!(should_prevent_default(Key::Char('s'), Modifiers::CTRL));
+        assert!(!should_prevent_default(Key::Char('r'), Modifiers::CTRL));
+        assert!(!should_prevent_default(Key::Char('a'), Modifiers::NONE));
+        assert!(!should_prevent_default(Key::F(5), Modifiers::NONE));
     }
 }

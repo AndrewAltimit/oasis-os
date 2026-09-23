@@ -79,7 +79,7 @@ src/
 ├── image.rs            format detection + decode dispatch
 ├── image_atlas.rs      texture atlas packing for many small images
 ├── gemini/             Gemini protocol parser + .gmi → HTML rasteriser
-├── js_dom.rs           QuickJS DOM bindings (feature = "javascript")
+├── js_dom/             QuickJS DOM bindings + JS bootstrap (feature = "javascript")
 ├── plugin.rs           per-URL-scheme plugin trait
 └── reader.rs           reader-mode extraction
 ```

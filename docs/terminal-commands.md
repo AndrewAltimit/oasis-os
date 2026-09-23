@@ -23,11 +23,95 @@ The terminal in `oasis-terminal/src/` supports:
 - glob expansion (`*.txt`, `dir/*`)
 - aliases via `Environment`
 - pipes (`cmd1 | cmd2`)
-- output redirection (`> file`, `>> file`)
-- command history with up/down recall
+- output redirection (`> file`, `>> file`, `2>`, `2>&1`)
+- command chaining (`;`, `&&`, `||`)
+- persistent command history (`history`, `!!`, `!N`, Up/Down, Ctrl+R)
+- control flow in one-liners and scripts (see below)
+- background jobs (`cmd &`, `jobs`, `fg`, `bg`, `kill %N`)
 
 `Environment::profile_paths()` and `populate_profile()` honour shell-like
 startup files for site-local aliases.
+
+### Line editing
+
+The interactive terminal (fullscreen and windowed, desktop and WASM) is a
+readline-style editor (`oasis-terminal/src/session.rs` wrapping
+`line_edit.rs`). Keyboard and gamepad share one input path, so the d-pad
+and face buttons keep working on controllers.
+
+| Key | Action |
+|---|---|
+| Left / Right (d-pad Left / Right) | Move the cursor |
+| Home / Ctrl+A, End / Ctrl+E | Start / end of line |
+| Ctrl+Left / Alt+B, Ctrl+Right / Alt+F | Word left / right |
+| Ctrl+B / Ctrl+F | Character left / right |
+| Backspace (Square), Delete / Ctrl+D | Delete before / under the cursor |
+| Ctrl+W, Ctrl+Backspace, Alt+Backspace | Delete the word before the cursor |
+| Ctrl+K / Ctrl+U | Kill to end / start of line |
+| Ctrl+Y | Paste the last killed text |
+| Ctrl+T | Swap the two characters before the cursor |
+| Up / Down (d-pad Up / Down), Ctrl+P / Ctrl+N | Previous / next history entry (Down past the newest restores the draft) |
+| Ctrl+R | Reverse incremental history search; Ctrl+R again = older match, Backspace edits the query, Enter runs the match, Esc / Ctrl+G cancel |
+| Tab | Complete command names (also after `\|`, `;`, `&`), `$VARIABLES` and VFS paths; ambiguous matches extend to the common prefix, a second Tab lists the candidates |
+| Ctrl+L | Clear the screen |
+| Ctrl+C | Abandon the line (echoed with `^C`) |
+| Enter (Cross) | Run the line |
+
+None of these collide with the window manager's Alt+Tab, Super+Arrow and
+Ctrl+Alt+Arrow/T shortcuts. The on-screen keyboard (Select / F2) is
+unchanged.
+
+History is shared with `history` / `!!` and persisted after every command
+to `/home/user/.oasis_history` in the VFS (newest 500 entries). It is
+reloaded at startup; since the desktop VFS is in-memory, it survives for
+the session unless the host persists the VFS. Only lines typed at the
+prompt are recorded, not commands run inside functions, `$(...)`,
+scripts or jobs.
+
+### Control flow
+
+One-liners and `run` scripts share one parser (`oasis-terminal/src/script.rs`),
+so everything below works both inline (`;`-separated) and across lines,
+nested to any depth:
+
+```sh
+if test -f /tmp/a; then echo file; elif test -d /tmp/a; then echo dir; else echo none; fi
+while test $N -lt 3; do echo $N; set N=$(expr $N + 1); done
+until test -f /tmp/ready; do sleep 1; done
+for f in *.txt 'a b' $LIST; do echo $f; done
+case $X in start|go) echo run;; stop) echo halt;; *) echo "?";; esac
+```
+
+- `;` and newlines separate statements; `;` inside quotes, `{ ... }`
+  function bodies and `$( ... )` does not.
+- Keywords may share a statement with the next command (`then echo x`,
+  `do body`, `else if ...`).
+- A condition is true when its last command succeeds (exit 0) and does not
+  print `false`, `1` or nothing (the built-in `test` prints `true` /
+  `false`). `! cmd` negates. Condition output is not shown.
+- `&&`, `||`, pipes and redirects work inside blocks; `for` word lists get
+  variable, `$(...)`, quote, brace and glob expansion.
+- `break`, `continue` and `return` work in loops and functions; `while` /
+  `until` stop after 1000 iterations with a warning.
+- Missing `fi` / `done` / `esac` or a stray keyword is a syntax error.
+- `#` comments and `\` line continuations are supported in scripts.
+
+### Background jobs
+
+The interpreter is synchronous and single-threaded (PSP, WASM), so a job
+is *deferred* rather than concurrent: `cmd &` queues the line and prints
+`[N] cmd`; the host runs the oldest runnable job on its next tick (one
+job per frame) and prints the job's output followed by
+`[N]+  Done  cmd` (or `Exit <code>`).
+
+| Builtin | Description |
+|---|---|
+| `jobs` | List queued / stopped jobs (`+` marks the most recent). |
+| `fg [%N]` | Run a job now, in the foreground (default: most recent). |
+| `bg [%N]` | Make a stopped job runnable again. |
+| `kill [-STOP\|-CONT\|-TERM] %N...` | Park (`-STOP`), resume (`-CONT`) or drop (default) jobs. `kill` without a `%` job spec falls through to any registered `kill` command. |
+
+Job specs: `%N`, `%%` / `%+` / `%` (most recent), `%-` (previous).
 
 ### SGR color output
 
@@ -148,11 +232,11 @@ VFS metadata only — there is no real Unix permission model behind these.
 
 | Command | Usage | Description |
 | --- | --- | --- |
-| `wm` | `wm [list\|close <id>\|focus <id>\|minimize <id>]` | Window manager control. |
-| `sdi` | `sdi [list\|get <name>]` | Inspect SDI scene objects. |
-| `theme` | `theme [show\|colors]` | Show the current theme. |
-| `notify` | `notify [--level info\|success\|warning\|error] <message>` | Show a notification. |
-| `screenshot` | `screenshot [path]` | Take a screenshot. |
+| `wm` | `wm [list\|close <id>\|focus <id>\|minimize <id>\|maximize <id>]` | Window manager control (the shell publishes `/var/wm/status` and applies `/var/wm/request`). |
+| `sdi` | `sdi [list\|get <name>]` | Inspect SDI scene objects: `list` prints every object (z-ordered, hidden ones marked); `get` prints all fields of one object (position, size, z, visibility, colors, text, texture, radius, gradient, stroke, shadow). Resolved by the host via `CommandSignal::SdiInspect`. |
+| `theme` | `theme [show\|colors]` | Show the current theme (skin name, resolution, base colors), from `/var/theme/current`, which the shell keeps up to date. |
+| `notify` | `notify [--level info\|success\|warning\|error] <message>` | Show a notification: queues `/var/notify/message`, which the shell shows as a toast. |
+| `screenshot` | `screenshot [path]` | Save the next presented frame to a VFS path (default `/tmp/screenshot.bmp`; PNG when the path ends in `.png`, else BMP). Queues `/var/screenshot/request`; the shell prints the result. |
 
 ## Skin management (`oasis-terminal/src/skin_commands.rs`)
 
@@ -231,7 +315,7 @@ the wire protocol and PSK auth.
 
 | Command | Usage | Description |
 | --- | --- | --- |
-| `browse` | `browse <url> \| browse bookmarks \| browse history \| browse home \| browse back \| browse forward \| browse reader \| browse sandbox <url>` | Open URL in browser or manage browser state. |
+| `browse` | `browse <url> \| browse bookmarks \| browse history \| browse home \| browse back \| browse forward \| browse reload \| browse reader \| browse sandbox <url>` | Open URL in browser or manage browser state. Queues `/var/browser/request`; the shell opens or focuses the browser window and applies it. |
 | `fetch` | `fetch <url>` / `fetch headers <url>` | Fetch URL and print raw response. |
 | `gemini` | `gemini <url>` | Open a Gemini URL in the browser. |
 | `curl` | `curl <url>` | Alias for `fetch`. |

@@ -227,6 +227,13 @@ impl WasmBackend {
     }
 
     /// Render a single glyph character to an offscreen canvas.
+    ///
+    /// The coverage comes from `oasis_rasterize::glyph_mask`, the one
+    /// definition of the bitmap font's scaled / bold / italic pixels that
+    /// the SDL and software backends draw too, so text looks the same on
+    /// every backend. (The canvas used to be painted per source bit here,
+    /// with its own italic cell width and a bold that only filled pixels
+    /// inside the scaled bit at sizes of 16 px and up.)
     fn render_glyph_to_canvas(
         &self,
         ch: char,
@@ -235,13 +242,8 @@ impl WasmBackend {
         bold: bool,
         italic: bool,
     ) -> Result<HtmlCanvasElement> {
-        let fs = font_size.max(1) as i32;
-        // Canvas size: character advance width + italic extra + bold extra.
-        let advance = font::glyph_advance_scaled(ch, font_size);
-        let italic_extra = if italic { fs as u32 / 4 } else { 0 };
-        let bold_extra = if bold { 1 } else { 0 };
-        let cw = (advance + italic_extra + bold_extra).max(1);
-        let ch_height = fs as u32;
+        let mut mask = Vec::new();
+        let (cw, ch_height) = oasis_rasterize::glyph_mask(ch, font_size, bold, italic, &mut mask);
 
         let offscreen = self.make_offscreen(cw, ch_height)?;
         let off_ctx = get_2d_context(&offscreen)?;
@@ -258,57 +260,9 @@ impl WasmBackend {
             )
         };
         off_ctx.set_fill_style_str(&css);
-
-        // Smooth-triangle glyphs get their own row-span path so the
-        // edges stay crisp instead of the 6-row bitmap scaling blocks.
-        if oasis_types::bitmap_font::is_smooth_triangle(ch) {
-            let gw = cw as i32;
-            let gh = ch_height as i32;
-            for y in 0..gh {
-                if let Some((x0, x1)) =
-                    oasis_types::bitmap_font::smooth_triangle_span(ch, y, gw, gh)
-                {
-                    let rw = (x1 - x0 + 1) as f64;
-                    off_ctx.fill_rect(x0 as f64, y as f64, rw, 1.0);
-                    if bold {
-                        // Shift-right span draw is equivalent to SDL's
-                        // per-pixel `x + 1` bold loop: both cover
-                        // [x0, x1 + 1] on this row.
-                        off_ctx.fill_rect((x0 + 1) as f64, y as f64, rw, 1.0);
-                    }
-                }
-            }
-            return Ok(offscreen);
-        }
-
-        let glyph = font::glyph(ch);
-        let (left_pad, _) = font::glyph_metrics(ch);
-        let left_pad = left_pad as i32;
-
-        for row in 0..8i32 {
-            let bits = glyph[row as usize];
-            if bits == 0 {
-                continue;
-            }
-            let oy0 = row * fs / 8;
-            let oy1 = (row + 1) * fs / 8;
-            let rh = (oy1 - oy0).max(1);
-            let italic_offset = if italic { (7 - row) * fs / 32 } else { 0 };
-            for col in 0..8i32 {
-                if bits & (0x80 >> col) != 0 {
-                    let src_col = col - left_pad;
-                    let ox0 = src_col * fs / 8;
-                    let ox1 = (src_col + 1) * fs / 8;
-                    let rw = (ox1 - ox0).max(1);
-                    let px = ox0 + italic_offset;
-                    let py = oy0;
-                    off_ctx.fill_rect(px as f64, py as f64, rw as f64, rh as f64);
-                    if bold {
-                        off_ctx.fill_rect((px + 1) as f64, py as f64, 1.0, rh as f64);
-                    }
-                }
-            }
-        }
+        oasis_rasterize::mask_runs(&mask, cw, |y, x0, x1| {
+            off_ctx.fill_rect(f64::from(x0), f64::from(y), f64::from(x1 - x0), 1.0);
+        });
         Ok(offscreen)
     }
 
@@ -656,11 +610,12 @@ impl SdiText for WasmBackend {
     }
 
     fn measure_text_height(&self, font_size: u16) -> u32 {
-        (f64::from(font_size) * 1.2).ceil() as u32
+        // Shared with the SDL and software backends.
+        oasis_rasterize::bitmap_line_height(font_size)
     }
 
     fn font_ascent(&self, font_size: u16) -> u32 {
-        (f64::from(font_size) * 0.85).ceil() as u32
+        oasis_rasterize::bitmap_ascent(font_size)
     }
 
     fn text_metrics(&self, text: &str, font_size: u16) -> TextMetrics {
@@ -1117,17 +1072,18 @@ mod tests {
 
     #[test]
     fn measure_text_height_formula() {
-        // measure_text_height returns ceil(font_size * 1.2)
-        assert_eq!((10.0_f64 * 1.2).ceil() as u32, 12);
-        assert_eq!((8.0_f64 * 1.2).ceil() as u32, 10);
-        assert_eq!((16.0_f64 * 1.2).ceil() as u32, 20);
+        // ceil(max(font_size, 8) * 1.2), shared with SDL / UE5.
+        assert_eq!(oasis_rasterize::bitmap_line_height(10), 12);
+        assert_eq!(oasis_rasterize::bitmap_line_height(8), 10);
+        assert_eq!(oasis_rasterize::bitmap_line_height(16), 20);
+        assert_eq!(oasis_rasterize::bitmap_line_height(6), 10);
     }
 
     #[test]
     fn font_ascent_formula() {
-        // font_ascent returns ceil(font_size * 0.85)
-        assert_eq!((10.0_f64 * 0.85).ceil() as u32, 9);
-        assert_eq!((12.0_f64 * 0.85).ceil() as u32, 11);
-        assert_eq!((16.0_f64 * 0.85).ceil() as u32, 14);
+        // ceil(max(font_size, 8) * 0.85), shared with SDL / UE5.
+        assert_eq!(oasis_rasterize::bitmap_ascent(10), 9);
+        assert_eq!(oasis_rasterize::bitmap_ascent(12), 11);
+        assert_eq!(oasis_rasterize::bitmap_ascent(16), 14);
     }
 }

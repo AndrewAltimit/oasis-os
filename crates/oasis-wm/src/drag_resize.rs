@@ -202,10 +202,17 @@ impl WindowManager {
                 // Actual drag movement invalidates any pending double-click.
                 // Jitter within DOUBLE_CLICK_RADIUS still counts as a steady
                 // click so release-then-reclick at the same spot toggles maximize.
+                let mut start_win_x = start_win_x;
+                let mut start_win_y = start_win_y;
                 if (x - start_cursor_x).abs() > DOUBLE_CLICK_RADIUS
                     || (y - start_cursor_y).abs() > DOUBLE_CLICK_RADIUS
                 {
                     self.last_titlebar_click = None;
+                    // Dragging a snapped window out restores its size.
+                    if let Some((nx, ny)) = self.unsnap_for_drag(window_id, start_cursor_x, sdi) {
+                        start_win_x = nx;
+                        start_win_y = ny;
+                    }
                 }
 
                 let raw_x = start_win_x + (x - start_cursor_x);
@@ -245,6 +252,7 @@ impl WindowManager {
                         }
                     }
                 }
+                self.update_drag_snap_preview(window_id.as_str(), x, y);
                 WmEvent::WindowMoved(window_id.clone())
             },
             DragState::Resizing {
@@ -260,22 +268,33 @@ impl WindowManager {
                 let (mut new_x, mut new_y, mut new_w, mut new_h) =
                     compute_resize(start_geometry, edge, dx, dy, &self.theme);
 
-                // Clamp resize to screen bounds.
+                // Keep the *dragged* edges from growing past the screen.
+                // Only the edges being dragged are clamped, and never
+                // further in than where they started: a window that is
+                // already partly off-screen (dragged there by its
+                // titlebar) must not jump or shrink below its minimum size
+                // when the user grabs the opposite, on-screen edge.
                 let sw = self.screen_w as i32;
                 let sh = self.screen_h as i32;
-                if new_x < 0 {
-                    new_w = new_w.saturating_sub((-new_x) as u32);
-                    new_x = 0;
+                let g = start_geometry;
+                let (drags_left, drags_right, drags_top, drags_bottom) = edge_sides(edge);
+                let left_limit = g.x.min(0);
+                let top_limit = g.y.min(0);
+                let right_limit = (g.x + g.w as i32).max(sw);
+                let bottom_limit = (g.y + g.h as i32).max(sh);
+                if drags_left && new_x < left_limit {
+                    new_w = new_w.saturating_sub((left_limit - new_x) as u32);
+                    new_x = left_limit;
                 }
-                if new_y < 0 {
-                    new_h = new_h.saturating_sub((-new_y) as u32);
-                    new_y = 0;
+                if drags_top && new_y < top_limit {
+                    new_h = new_h.saturating_sub((top_limit - new_y) as u32);
+                    new_y = top_limit;
                 }
-                if new_x + new_w as i32 > sw {
-                    new_w = (sw - new_x).max(0) as u32;
+                if drags_right && new_x + new_w as i32 > right_limit {
+                    new_w = (right_limit - new_x).max(0) as u32;
                 }
-                if new_y + new_h as i32 > sh {
-                    new_h = (sh - new_y).max(0) as u32;
+                if drags_bottom && new_y + new_h as i32 > bottom_limit {
+                    new_h = (bottom_limit - new_y).max(0) as u32;
                 }
 
                 if let Some(window) = self.windows.iter_mut().find(|w| w.id == *window_id) {
@@ -283,6 +302,9 @@ impl WindowManager {
                     window.y = new_y;
                     window.outer_w = new_w;
                     window.outer_h = new_h;
+                    // A hand-resized window is no longer snapped.
+                    window.snap_zone = None;
+                    window.pre_snap_geometry = None;
                 }
 
                 self.update_sdi_positions(window_id.as_str(), sdi);
@@ -291,16 +313,87 @@ impl WindowManager {
         }
     }
 
-    pub(crate) fn handle_release(&mut self) -> WmEvent {
+    pub(crate) fn handle_release(&mut self, sdi: &mut SdiRegistry) -> WmEvent {
         self.hover_button = None;
         if let Some(drag) = self.drag.take() {
             let id = match drag {
-                DragState::Moving { window_id, .. } => window_id,
+                DragState::Moving { window_id, .. } => {
+                    // Released inside a snap zone: snap the window there.
+                    if let Some(ev) = self.apply_drag_snap(window_id.as_str(), sdi) {
+                        return ev;
+                    }
+                    window_id
+                },
                 DragState::Resizing { window_id, .. } => window_id,
             };
+            self.snap.clear_preview();
             return WmEvent::WindowMoved(id);
         }
+        self.snap.clear_preview();
         WmEvent::None
+    }
+}
+
+impl WindowManager {
+    /// If the window being dragged is snapped or maximized, restore its
+    /// floating size so it detaches from the edge, keeping the grab point
+    /// under the cursor proportionally. Updates the drag state's origin and
+    /// returns the new drag origin `(start_win_x, start_win_y)`; `None` if
+    /// the window was floating.
+    fn unsnap_for_drag(
+        &mut self,
+        id: &WindowId,
+        start_cursor_x: i32,
+        sdi: &mut SdiRegistry,
+    ) -> Option<(i32, i32)> {
+        let window = self.windows.iter_mut().find(|w| w.id == *id)?;
+        let orig = if window.snap_zone.is_some() {
+            let g = window.pre_snap_geometry.take()?;
+            window.snap_zone = None;
+            g
+        } else if window.state == WindowState::Maximized {
+            // Dragging a maximized window by its titlebar un-maximizes it
+            // (otherwise a screen-sized window would slide off-screen while
+            // still claiming to be maximized).
+            let g = window.saved_geometry.take()?;
+            window.state = WindowState::Normal;
+            g
+        } else {
+            return None;
+        };
+        let old_w = window.outer_w.max(1) as i64;
+        let grab = i64::from(start_cursor_x - window.x);
+        let new_grab = (grab * i64::from(orig.w) / old_w) as i32;
+        window.x = start_cursor_x - new_grab;
+        window.outer_w = orig.w;
+        window.outer_h = orig.h;
+        let (nx, ny) = (window.x, window.y);
+        if let Some(DragState::Moving {
+            start_win_x,
+            start_win_y,
+            ..
+        }) = self.drag.as_mut()
+        {
+            *start_win_x = nx;
+            *start_win_y = ny;
+        }
+        self.update_sdi_positions(id.as_str(), sdi);
+        Some((nx, ny))
+    }
+}
+
+/// Which sides of the frame a resize handle moves:
+/// `(left, right, top, bottom)`.
+fn edge_sides(edge: ResizeEdge) -> (bool, bool, bool, bool) {
+    match edge {
+        ResizeEdge::North => (false, false, true, false),
+        ResizeEdge::South => (false, false, false, true),
+        ResizeEdge::East => (false, true, false, false),
+        ResizeEdge::West => (true, false, false, false),
+        ResizeEdge::NorthEast => (false, true, true, false),
+        ResizeEdge::NorthWest => (true, false, true, false),
+        ResizeEdge::SouthEast => (false, true, false, true),
+        ResizeEdge::SouthWest => (true, false, false, true),
     }
 }
 
@@ -1153,7 +1246,7 @@ mod tests {
         assert_eq!(wm.get_window("w1").unwrap().state, WindowState::Normal);
     }
 
-    // ---- Button order (minimize, maximize, close, left-to-right) ----
+    // ---- Button order (close at the corner on either side) ----
 
     #[test]
     fn button_order_right_side_is_minimize_maximize_close() {
@@ -1178,7 +1271,8 @@ mod tests {
     }
 
     #[test]
-    fn button_order_left_side_is_minimize_maximize_close() {
+    fn button_order_left_side_is_close_minimize_maximize() {
+        // macOS traffic-light order: close sits at the corner.
         let theme = crate::window::WmTheme {
             button_side: "left".to_string(),
             ..crate::window::WmTheme::default()
@@ -1193,12 +1287,12 @@ mod tests {
         let close_x = win.close_btn_rect(&wm.theme).unwrap().0;
 
         assert!(
-            min_x < max_x,
-            "minimize ({min_x}) should be left of maximize ({max_x})"
+            close_x < min_x,
+            "close ({close_x}) should be left of minimize ({min_x})"
         );
         assert!(
-            max_x < close_x,
-            "maximize ({max_x}) should be left of close ({close_x})"
+            min_x < max_x,
+            "minimize ({min_x}) should be left of maximize ({max_x})"
         );
     }
 

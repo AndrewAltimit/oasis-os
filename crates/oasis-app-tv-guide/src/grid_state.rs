@@ -9,6 +9,9 @@ use crate::grid_layout::{
 };
 use crate::schedule::{self, CachedSchedule};
 
+/// Initial TV Guide video volume (0–100).
+pub const DEFAULT_VOLUME: u8 = 25;
+
 /// Runtime state for the TV Guide app.
 pub struct TvGuideState {
     /// Channel configuration.
@@ -98,7 +101,7 @@ impl TvGuideState {
             preview_texture: None,
             download_status: None,
             video_expanded: false,
-            volume: 50,
+            volume: DEFAULT_VOLUME,
             volume_changed: false,
             colors: TvGuideColors::from_theme(at),
         }
@@ -166,6 +169,13 @@ impl TvGuideState {
     pub fn current_page(&self) -> usize {
         if self.channels.is_empty() {
             return 1;
+        }
+        // The rows scroll one at a time, so the window stops at
+        // `len - VISIBLE_ROWS`, which need not be a page boundary: report
+        // the last page once the last channel is visible (otherwise 12
+        // channels showed "PAGE 2/3" at the bottom and never 3/3).
+        if self.scroll_offset + VISIBLE_ROWS >= self.channels.len() {
+            return self.total_pages();
         }
         self.scroll_offset / VISIBLE_ROWS + 1
     }
@@ -367,8 +377,10 @@ impl TvGuideState {
         if self.tuned_channel.is_some() {
             let vr = volume_bar_rect(cw, ch, self.video_expanded);
             if lx >= vr.x && lx < vr.x + vr.w as i32 && ly >= vr.y && ly < vr.y + vr.h as i32 {
-                let frac = ((lx - vr.x) as f32 / vr.w as f32).clamp(0.0, 1.0);
-                self.volume = (frac * 100.0) as u8;
+                // Divide by w-1 so the rightmost pixel reaches 100%.
+                let span = vr.w.saturating_sub(1).max(1) as f32;
+                let frac = ((lx - vr.x) as f32 / span).clamp(0.0, 1.0);
+                self.volume = (frac * 100.0).round() as u8;
                 self.volume_changed = true;
                 return None;
             }
@@ -750,6 +762,18 @@ mod tests {
         assert!(state.volume <= 5); // should be near 0%
     }
 
+    #[test]
+    fn handle_click_volume_bar_right_edge_reaches_full() {
+        let mut state = state_with_catalog();
+        state.tuned_channel = Some(0);
+        state.video_expanded = true;
+
+        let (cw, ch) = (800u32, 600u32);
+        let vr = crate::grid_layout::volume_bar_rect(cw, ch, true);
+        state.handle_click(vr.x + vr.w as i32 - 1, vr.y, cw, ch, true);
+        assert_eq!(state.volume, 100);
+    }
+
     // -- video expand/collapse --
 
     #[test]
@@ -847,7 +871,7 @@ mod tests {
     #[test]
     fn new_state_defaults() {
         let state = default_state();
-        assert_eq!(state.volume, 50);
+        assert_eq!(state.volume, DEFAULT_VOLUME);
         assert!(!state.volume_changed);
         assert!(!state.video_expanded);
         assert!(state.preview_texture.is_none());

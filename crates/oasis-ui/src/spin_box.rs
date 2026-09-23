@@ -2,6 +2,7 @@
 
 use crate::context::DrawContext;
 use crate::layout;
+use crate::states::{WidgetState, WidgetStateColors};
 use crate::widget::Widget;
 use oasis_types::error::Result;
 
@@ -27,6 +28,19 @@ pub struct SpinBox {
     pub disabled: bool,
     /// Whether the spin box has keyboard focus (draws a focus ring).
     pub focused: bool,
+    /// Which step button (if any) is under the pointer.
+    pub hovered: Option<SpinBoxPart>,
+    /// Whether the hovered step button is being pressed.
+    pub pressed: bool,
+}
+
+/// One of the two step buttons of a [`SpinBox`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SpinBoxPart {
+    /// The left "-" (decrement) button.
+    Minus,
+    /// The right "+" (increment) button.
+    Plus,
 }
 
 impl SpinBox {
@@ -41,6 +55,26 @@ impl SpinBox {
             decimals: 0,
             disabled: false,
             focused: false,
+            hovered: None,
+            pressed: false,
+        }
+    }
+
+    /// Resolved interaction state of one step button.
+    pub fn part_state(&self, part: SpinBoxPart) -> WidgetState {
+        let hover = self.hovered == Some(part);
+        WidgetState::from_flags(hover, hover && self.pressed, self.disabled)
+    }
+
+    /// Which step button contains local offset `dx` (pixels from the
+    /// widget's left edge) for a spin box drawn `w` pixels wide.
+    pub fn part_at(dx: i32, w: u32) -> Option<SpinBoxPart> {
+        if dx >= 0 && dx < BUTTON_WIDTH as i32 {
+            Some(SpinBoxPart::Minus)
+        } else if dx >= w.saturating_sub(BUTTON_WIDTH) as i32 && dx < w as i32 {
+            Some(SpinBoxPart::Plus)
+        } else {
+            None
         }
     }
 
@@ -88,10 +122,24 @@ impl Widget for SpinBox {
         let fs = ctx.theme.font_size_md;
         let text_h = ctx.backend.measure_text_height(fs);
         let border = ctx.theme.interactive_border(self.disabled, false);
-        let bg = ctx.theme.surface;
+        let bg = if self.disabled {
+            WidgetStateColors::surface_bg(ctx.theme, WidgetState::Disabled)
+        } else {
+            ctx.theme.surface
+        };
 
         // Background.
         ctx.backend.fill_rect(x, y, w, h, bg)?;
+
+        // Hover / press fills for the step buttons (none at rest).
+        let plus_x = x + (w - BUTTON_WIDTH) as i32;
+        for (part, bx) in [(SpinBoxPart::Minus, x), (SpinBoxPart::Plus, plus_x)] {
+            let st = self.part_state(part);
+            if matches!(st, WidgetState::Hover | WidgetState::Pressed) {
+                let fill = WidgetStateColors::surface_bg(ctx.theme, st);
+                ctx.backend.fill_rect(bx, y, BUTTON_WIDTH, h, fill)?;
+            }
+        }
         ctx.backend.stroke_rect(x, y, w, h, 1, border)?;
 
         // Minus button.
@@ -106,7 +154,6 @@ impl Widget for SpinBox {
         ctx.backend.draw_text("-", minus_x, minus_y, fs, minus_fg)?;
 
         // Plus button.
-        let plus_x = x + (w - BUTTON_WIDTH) as i32;
         let plus_fg = ctx
             .theme
             .interactive_text(self.disabled || self.value >= self.max);
@@ -234,6 +281,37 @@ mod tests {
         assert!(backend.has_text("5"));
         assert!(backend.has_text("-"));
         assert!(backend.has_text("+"));
+    }
+
+    #[test]
+    fn each_state_has_distinct_fill() {
+        crate::test_utils::assert_states_distinct(|st, ctx| {
+            let mut s = SpinBox::new(0.0, 10.0);
+            s.set_value(5.0);
+            s.hovered = matches!(st, WidgetState::Hover | WidgetState::Pressed)
+                .then_some(SpinBoxPart::Plus);
+            s.pressed = st == WidgetState::Pressed;
+            s.disabled = st == WidgetState::Disabled;
+            s.draw(ctx, 0, 0, 80, 22).unwrap();
+        });
+    }
+
+    #[test]
+    fn resting_fill_is_surface_only() {
+        let theme = Theme::dark();
+        let fills = crate::test_utils::fill_colors_of(|ctx| {
+            SpinBox::new(0.0, 10.0).draw(ctx, 0, 0, 80, 22).unwrap();
+        });
+        assert_eq!(fills.first(), Some(&theme.surface));
+        assert!(!fills.contains(&WidgetStateColors::surface_bg(&theme, WidgetState::Hover)));
+    }
+
+    #[test]
+    fn part_at_hit_test() {
+        assert_eq!(SpinBox::part_at(2, 80), Some(SpinBoxPart::Minus));
+        assert_eq!(SpinBox::part_at(79, 80), Some(SpinBoxPart::Plus));
+        assert_eq!(SpinBox::part_at(40, 80), None);
+        assert_eq!(SpinBox::part_at(80, 80), None);
     }
 
     #[test]

@@ -37,7 +37,9 @@ mod var_resolve;
 #[cfg(test)]
 mod tests;
 
+use std::cell::RefCell;
 use std::collections::HashSet;
+use std::rc::Rc;
 
 #[cfg(feature = "parallel-style")]
 use std::cell::UnsafeCell;
@@ -47,7 +49,7 @@ use rustc_hash::FxHashMap;
 #[cfg(feature = "parallel-style")]
 use rayon::prelude::*;
 
-use super::parser::{Declaration, Stylesheet};
+use super::parser::{CssValue, Declaration, Stylesheet, parse_substituted_declaration};
 use super::values::ComputedStyle;
 use crate::html::dom::{Document, NodeId, NodeKind};
 
@@ -402,9 +404,64 @@ fn style_subtree(
     elements_styled: &mut u64,
     total_elements: u64,
 ) {
-    let node = &doc.nodes[node_id];
-
     // Only elements get computed styles.
+    if matches!(doc.nodes[node_id].kind, NodeKind::Element(_)) {
+        style_element(
+            doc,
+            node_id,
+            stylesheets,
+            index,
+            inline_map,
+            styles,
+            ctx,
+            tag_cache,
+            elements_styled,
+            total_elements,
+        );
+    }
+
+    // Recurse into children. Iterate by index to avoid cloning the Vec.
+    let num_children = doc.nodes[node_id].children.len();
+    for i in 0..num_children {
+        let child_id = doc.nodes[node_id].children[i];
+        style_subtree(
+            doc,
+            child_id,
+            stylesheets,
+            index,
+            inline_map,
+            styles,
+            ctx,
+            tag_cache,
+            elements_styled,
+            total_elements,
+        );
+    }
+}
+
+/// Compute and store the style of one element (the non-recursive half of
+/// [`style_subtree`]).
+///
+/// Out of line on purpose: `compute_style` and its ~1.5 KB
+/// `ComputedStyle` temporaries would otherwise sit in every frame of
+/// the depth-first recursion, overflowing a 1 MiB UI-thread stack on
+/// deeply nested (≤256-level) documents.
+#[cfg(not(feature = "parallel-style"))]
+#[allow(clippy::too_many_arguments)]
+#[inline(never)]
+fn style_element(
+    doc: &Document,
+    node_id: NodeId,
+    stylesheets: &[&Stylesheet],
+    index: &SelectorIndex,
+    inline_map: &FxHashMap<NodeId, &[Declaration]>,
+    styles: &mut [Option<ComputedStyle>],
+    ctx: &CascadeContext<'_>,
+    tag_cache: &mut FxHashMap<String, String>,
+    elements_styled: &mut u64,
+    total_elements: u64,
+) {
+    let node = &doc.nodes[node_id];
     if let NodeKind::Element(elem) = &node.kind {
         let parent_style = node.parent.and_then(|pid| styles[pid].as_ref());
         let style = compute_style(
@@ -443,24 +500,6 @@ fn style_subtree(
         if elements_styled.is_multiple_of(log_interval) {
             cascade_progress(*elements_styled, total_elements);
         }
-    }
-
-    // Recurse into children. Iterate by index to avoid cloning the Vec.
-    let num_children = doc.nodes[node_id].children.len();
-    for i in 0..num_children {
-        let child_id = doc.nodes[node_id].children[i];
-        style_subtree(
-            doc,
-            child_id,
-            stylesheets,
-            index,
-            inline_map,
-            styles,
-            ctx,
-            tag_cache,
-            elements_styled,
-            total_elements,
-        );
     }
 }
 
@@ -617,11 +656,16 @@ pub fn compute_style(
 
     // Pass 1: Apply custom property declarations (--*) to build the
     // properties map before resolving any var() references.
+    let mut declared_custom: Vec<&str> = Vec::new();
     for entry in &matched {
         if entry.property.starts_with("--") {
             style.apply_declaration(&entry.property, &entry.value, parent_font_size);
+            declared_custom.push(&entry.property);
         }
     }
+    // Substitute var() inside this element's own custom properties so
+    // descendants inherit computed (already substituted) values.
+    var_resolve::resolve_custom_properties(&mut style.custom_properties, &declared_custom);
 
     // Pass 2a: Apply `direction` before any other properties so that
     // inline-axis logical properties (margin-inline-start, etc.)
@@ -630,8 +674,13 @@ pub fn compute_style(
     // specificity, source order), so the last `direction` entry is
     // the cascade winner — apply only that one.
     if let Some(entry) = matched.iter().rfind(|e| e.property == "direction") {
-        let resolved = var_resolve::resolve_css_var(&entry.value, &style.custom_properties);
-        style.apply_declaration("direction", &resolved, parent_font_size);
+        apply_cascaded(
+            &mut style,
+            parent_style,
+            "direction",
+            &entry.value,
+            parent_font_size,
+        );
     }
 
     // Pass 2b: Apply font-size first so that em units in subsequent
@@ -640,8 +689,13 @@ pub fn compute_style(
     // other properties uses the element's own font-size).
     for entry in &matched {
         if entry.property == "font-size" {
-            let resolved = var_resolve::resolve_css_var(&entry.value, &style.custom_properties);
-            style.apply_declaration("font-size", &resolved, parent_font_size);
+            apply_cascaded(
+                &mut style,
+                parent_style,
+                "font-size",
+                &entry.value,
+                parent_font_size,
+            );
         }
     }
     let element_font_size = style.font_size;
@@ -658,8 +712,13 @@ pub fn compute_style(
         if entry.property == "line-height" {
             has_explicit_line_height = true;
         }
-        let resolved = var_resolve::resolve_css_var(&entry.value, &style.custom_properties);
-        style.apply_declaration(&entry.property, &resolved, element_font_size);
+        apply_cascaded(
+            &mut style,
+            parent_style,
+            &entry.property,
+            &entry.value,
+            element_font_size,
+        );
     }
 
     // CSS 2.1 §17.21: unitless line-height inherits the *factor*, not
@@ -684,4 +743,110 @@ pub fn compute_style(
     style.after_style = after_ps.map(Box::new);
 
     style
+}
+
+/// Apply one cascaded declaration to `style`.
+///
+/// [`CssValue::Unresolved`] values have their `var()` references
+/// substituted from `style`'s custom properties and are re-parsed with
+/// the property's normal parser (which may expand a shorthand into
+/// several longhands). A declaration that is invalid at computed-value
+/// time behaves as `unset` (CSS Variables §3.1). The CSS-wide `unset`
+/// and (for inherited properties) `inherit` keywords take their value
+/// from `parent`.
+pub(super) fn apply_cascaded(
+    style: &mut ComputedStyle,
+    parent: Option<&ComputedStyle>,
+    property: &str,
+    value: &CssValue,
+    font_size: f32,
+) {
+    let CssValue::Unresolved(text) = value else {
+        apply_value(style, parent, property, value, font_size);
+        return;
+    };
+    match var_resolve::substitute_vars(text, &style.custom_properties) {
+        Some(substituted) => {
+            for decl in parse_substituted_cached(property, &substituted).iter() {
+                apply_value(style, parent, &decl.property, &decl.value, font_size);
+            }
+        },
+        None => {
+            for decl in parse_substituted_cached(property, "unset").iter() {
+                apply_unset(style, parent, &decl.property);
+            }
+        },
+    }
+}
+
+/// Bound on [`SUBSTITUTED_CACHE`] entries before it is cleared.
+const SUBSTITUTED_CACHE_MAX: usize = 4096;
+
+/// Parsed declarations keyed by property, then by substituted value text.
+#[derive(Default)]
+struct SubstitutedCache {
+    entries: usize,
+    map: FxHashMap<String, FxHashMap<String, Rc<[Declaration]>>>,
+}
+
+thread_local! {
+    /// Parsed (and shorthand-expanded) substituted declarations. Design-
+    /// token CSS resolves the same handful of values for thousands of
+    /// elements, and parsing is pure, so each distinct value is tokenized
+    /// and parsed once per thread.
+    static SUBSTITUTED_CACHE: RefCell<SubstitutedCache> = RefCell::default();
+}
+
+fn parse_substituted_cached(property: &str, text: &str) -> Rc<[Declaration]> {
+    SUBSTITUTED_CACHE.with(|cache| {
+        let mut cache = cache.borrow_mut();
+        if let Some(hit) = cache.map.get(property).and_then(|m| m.get(text)) {
+            return Rc::clone(hit);
+        }
+        let parsed: Rc<[Declaration]> = parse_substituted_declaration(property, text).into();
+        if cache.entries >= SUBSTITUTED_CACHE_MAX {
+            cache.map.clear();
+            cache.entries = 0;
+        }
+        cache
+            .map
+            .entry(property.to_string())
+            .or_default()
+            .insert(text.to_string(), Rc::clone(&parsed));
+        cache.entries += 1;
+        parsed
+    })
+}
+
+fn apply_value(
+    style: &mut ComputedStyle,
+    parent: Option<&ComputedStyle>,
+    property: &str,
+    value: &CssValue,
+    font_size: f32,
+) {
+    if let CssValue::Keyword(kw) = value {
+        if kw.eq_ignore_ascii_case("unset") {
+            apply_unset(style, parent, property);
+            return;
+        }
+        if kw.eq_ignore_ascii_case("inherit")
+            && let Some(p) = parent
+            && style.inherit_property_from(property, p)
+        {
+            return;
+        }
+    }
+    style.apply_declaration(property, value, font_size);
+}
+
+/// `unset`: inherit for inherited properties, `initial` otherwise.
+fn apply_unset(style: &mut ComputedStyle, parent: Option<&ComputedStyle>, property: &str) {
+    let inherited = match parent {
+        Some(p) => style.inherit_property_from(property, p),
+        None => style.inherit_property_from(property, &ComputedStyle::default()),
+    };
+    if !inherited {
+        style.apply_declaration(property, &CssValue::Keyword("initial".into()), 0.0);
+    }
 }

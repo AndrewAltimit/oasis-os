@@ -78,8 +78,8 @@ impl SdiCore for SdlBackend {
             .backend_err()?;
 
         texture
-            .with_lock(None, |buffer: &mut [u8], _pitch: usize| {
-                buffer[..rgba_data.len()].copy_from_slice(rgba_data);
+            .with_lock(None, |buffer: &mut [u8], pitch: usize| {
+                copy_rows_to_pitch(buffer, pitch, rgba_data, width);
             })
             .backend_err()?;
 
@@ -144,24 +144,45 @@ impl SdiCore for SdlBackend {
     }
 
     fn read_pixels(&self, x: i32, y: i32, w: u32, h: u32) -> Result<Vec<u8>> {
-        let rect = Rect::new(x, y, w, h);
-        let surface = self.canvas.read_pixels(rect).backend_err()?;
+        // Always `w * h * 4` bytes, like every other backend: callers index
+        // the result as a `w`-wide image. SDL clips the read rect to the
+        // render target and returns only the intersection, so read that
+        // and place it at its offset; pixels outside the target stay 0.
+        let mut pixels = vec![0u8; w as usize * h as usize * 4];
+        let (tw, th) = self.canvas.output_size().backend_err()?;
+        let x0 = x.max(0);
+        let y0 = y.max(0);
+        let x1 = (x as i64 + w as i64).min(tw as i64) as i32;
+        let y1 = (y as i64 + h as i64).min(th as i64) as i32;
+        if x0 >= x1 || y0 >= y1 {
+            return Ok(pixels);
+        }
+        let rect = Rect::new(x0, y0, (x1 - x0) as u32, (y1 - y0) as u32);
+        // SDL returns the renderer's native format (commonly ARGB8888, i.e.
+        // B,G,R,A bytes in memory); normalize to RGBA byte order, which is
+        // what every caller (screenshots, MCP, tests) expects.
+        let surface = self
+            .canvas
+            .read_pixels(rect)
+            .backend_err()?
+            .convert_format(PixelFormat::RGBA32)
+            .backend_err()?;
         let pitch = surface.pitch() as usize;
-        let height = surface.height() as usize;
-        let width = surface.width() as usize;
-        let bpp = 4usize; // RGBA
+        let sh = surface.height() as usize;
+        let row_bytes = surface.width() as usize * 4;
         // SAFETY: The surface was just created by read_pixels and is not
         // shared; we only read the pixel data before it goes out of scope.
         let data = unsafe { surface.without_lock() }.ok_or_else(|| {
             oasis_core::error::OasisError::Backend("cannot lock surface pixels".into())
         })?;
-        // Copy pixel data row by row (pitch may differ from width * bpp).
-        let mut pixels = Vec::with_capacity(width * height * bpp);
-        for row in 0..height {
-            let start = row * pitch;
-            let end = start + width * bpp;
-            if end <= data.len() {
-                pixels.extend_from_slice(&data[start..end]);
+        // Copy row by row (the surface pitch may differ from width * 4).
+        let dst_stride = w as usize * 4;
+        let dst_x = (x0 - x) as usize * 4;
+        for row in 0..sh {
+            let src = row * pitch;
+            let dst = (row + (y0 - y) as usize) * dst_stride + dst_x;
+            if src + row_bytes <= data.len() && dst + row_bytes <= pixels.len() {
+                pixels[dst..dst + row_bytes].copy_from_slice(&data[src..src + row_bytes]);
             }
         }
         Ok(pixels)
@@ -212,8 +233,8 @@ impl SdlBackend {
         }
 
         texture
-            .with_lock(None, |buffer: &mut [u8], _pitch: usize| {
-                buffer[..rgba_data.len()].copy_from_slice(rgba_data);
+            .with_lock(None, |buffer: &mut [u8], pitch: usize| {
+                copy_rows_to_pitch(buffer, pitch, rgba_data, width);
             })
             .backend_err()?;
 
@@ -234,5 +255,51 @@ impl SdlBackend {
                 sdl3::sys::mouse::SDL_HideCursor();
             }
         }
+    }
+}
+
+/// Copy tightly packed RGBA rows (`width * 4` bytes each) into a locked
+/// texture buffer whose rows are `pitch` bytes apart.
+///
+/// Hardware renderers pad rows (Direct3D 11/12 use 256-byte alignment),
+/// so a flat `copy_from_slice` shears every texture whose row is not
+/// already a multiple of the padding into diagonal stripes.
+fn copy_rows_to_pitch(dst: &mut [u8], pitch: usize, rgba_data: &[u8], width: u32) {
+    let row_bytes = width as usize * 4;
+    if row_bytes == 0 {
+        return;
+    }
+    if pitch == row_bytes {
+        let n = rgba_data.len().min(dst.len());
+        dst[..n].copy_from_slice(&rgba_data[..n]);
+        return;
+    }
+    for (src_row, dst_row) in rgba_data.chunks_exact(row_bytes).zip(dst.chunks_mut(pitch)) {
+        let n = row_bytes.min(dst_row.len());
+        dst_row[..n].copy_from_slice(&src_row[..n]);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::copy_rows_to_pitch;
+
+    #[test]
+    fn copy_rows_honours_padded_pitch() {
+        // 3x2 image, 12-byte rows, into a 16-byte pitch buffer.
+        let src: Vec<u8> = (0..24).collect();
+        let mut dst = vec![0xAA; 32];
+        copy_rows_to_pitch(&mut dst, 16, &src, 3);
+        assert_eq!(&dst[..12], &src[..12]);
+        assert_eq!(&dst[12..16], &[0xAA; 4], "row padding untouched");
+        assert_eq!(&dst[16..28], &src[12..24]);
+    }
+
+    #[test]
+    fn copy_rows_tight_pitch_is_flat_copy() {
+        let src: Vec<u8> = (0..24).collect();
+        let mut dst = vec![0; 24];
+        copy_rows_to_pitch(&mut dst, 12, &src, 3);
+        assert_eq!(dst, src);
     }
 }

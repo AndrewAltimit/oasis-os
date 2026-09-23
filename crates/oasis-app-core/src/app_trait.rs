@@ -6,7 +6,7 @@
 use oasis_sdi::SdiRegistry;
 use oasis_skin::ActiveTheme;
 use oasis_types::backend::SdiBackend;
-use oasis_types::input::Button;
+use oasis_types::input::{Button, Key, Modifiers};
 use oasis_vfs::Vfs;
 
 use crate::AppAction;
@@ -32,6 +32,39 @@ pub trait App: std::fmt::Debug + Send {
 
     /// Handle backspace (delete last character). Default is no-op.
     fn handle_backspace(&mut self) {}
+
+    /// Handle a raw keyboard key press (shortcuts and navigation keys such
+    /// as Ctrl+S, Delete, Home/End, PageUp/PageDown, F-keys).
+    ///
+    /// Called by keyboard hosts (desktop SDL, WASM, FFI) for every key-down
+    /// while this app has focus, *before* the gamepad-style event the key
+    /// maps to (e.g. Enter -> [`Button::Confirm`] via `handle_input`,
+    /// Backspace -> `handle_backspace`). Never called on PSP / gamepad-only
+    /// hosts, so every feature must stay reachable through `handle_input`.
+    ///
+    /// Return `Some(action)` when the key was consumed: the host applies
+    /// `action` and drops the key's gamepad-style twin so the press is not
+    /// handled twice. Return `None` (the default) to let the key fall
+    /// through to the legacy handlers unchanged.
+    ///
+    /// Plain printable keys also arrive as [`Self::handle_text_input`];
+    /// text-entry apps should type from there and only claim `Key::Char`
+    /// here for modifier combinations (`mods.has_command()`).
+    fn handle_key(&mut self, _key: &Key, _mods: Modifiers, _vfs: &dyn Vfs) -> Option<AppAction> {
+        None
+    }
+
+    /// Whether this app is currently a text-entry target.
+    ///
+    /// While a text-accepting app has focus, keys that type a character
+    /// (letters, digits, Space) are treated purely as typing: the host
+    /// suppresses the gamepad-style shortcuts they would otherwise trigger
+    /// (Space -> Triangle, Q/E -> shoulder triggers / desktop switching).
+    /// May depend on internal state (e.g. only while a search box is
+    /// active). Default is `false`.
+    fn accepts_text(&self) -> bool {
+        false
+    }
 
     /// Handle a click/tap in the app content area.
     ///
@@ -65,6 +98,12 @@ pub trait App: std::fmt::Debug + Send {
     /// Hide all SDI objects created by this app.
     fn hide_sdi(&self, sdi: &mut SdiRegistry);
 
+    /// The app is closing: destroy every backend resource it created
+    /// (textures, render targets). Hosts call this exactly once, after
+    /// the window is gone and before the app is dropped -- the only point
+    /// where a closing app still has backend access. Default: no-op.
+    fn release_resources(&mut self, _backend: &mut dyn SdiBackend) {}
+
     /// Take any pending VFS IPC request (path, data).
     fn take_pending_request(&mut self) -> Option<(String, String)> {
         None
@@ -79,6 +118,68 @@ pub trait App: std::fmt::Debug + Send {
     ///
     /// Default implementation is a no-op.
     fn refresh(&mut self, _vfs: &dyn Vfs) {}
+
+    /// Apply VFS mutations the app has queued (deletes, renames, copies,
+    /// binary saves, ...).
+    ///
+    /// Every other hook only sees a shared `&dyn Vfs`, so apps that need to
+    /// change the file system queue the work from input handlers and the
+    /// host drains it here with mutable access, once per frame for every
+    /// open app. Returns `true` when anything was applied so the host can
+    /// re-sync cached state. Default is a no-op returning `false`.
+    fn apply_vfs_ops(&mut self, _vfs: &mut dyn Vfs) -> bool {
+        false
+    }
+
+    /// Advance time-driven state by `dt_ms` milliseconds of wall time.
+    ///
+    /// Hosts call this once per frame for every open app (windowed or
+    /// fullscreen, focused or not), *including frames whose redraw is
+    /// elided*, so game loops, slideshows and timers run at a fixed
+    /// wall-clock rate independent of the frame rate and of input.
+    /// Apps should accumulate `dt_ms` rather than count calls.
+    ///
+    /// Return `true` when the tick changed anything this app draws; the
+    /// host then schedules a redraw of the app's window. Default is a
+    /// no-op returning `false`.
+    fn tick(&mut self, _dt_ms: u32, _vfs: &dyn Vfs) -> bool {
+        false
+    }
+
+    /// Take a pending request to close this app.
+    ///
+    /// For closes decided *outside* an input handler -- e.g. "Save &
+    /// close", whose write only happens later in [`Self::apply_vfs_ops`].
+    /// Hosts poll this once per frame for every open app, after
+    /// `apply_vfs_ops` and [`Self::tick`], and close the app exactly as
+    /// if an input hook had returned [`AppAction::Exit`]. Returning `true`
+    /// consumes the request. Default is `false` (never self-closes).
+    fn take_close_request(&mut self) -> bool {
+        false
+    }
+
+    /// The user asked to close the app through the host's window chrome
+    /// (a titlebar close button) rather than through the app's own input.
+    ///
+    /// Return [`AppAction::Exit`] to close now; anything else keeps the
+    /// app open -- e.g. an editor with unsaved changes raises its
+    /// "Save / Discard / Cancel" prompt and closes later through its own
+    /// input or [`Self::take_close_request`]. Default: close immediately.
+    fn on_close_requested(&mut self, _vfs: &dyn Vfs) -> AppAction {
+        AppAction::Exit
+    }
+
+    /// Whether this app needs every frame drawn (continuous animation,
+    /// video, embedded content that repaints outside the app's control).
+    ///
+    /// Hosts with idle-frame elision skip redraws while nothing visible
+    /// changed; state changes caused by input, [`Self::tick`] returning
+    /// `true` or VFS operations are tracked by the host, so only content
+    /// that changes on its own every frame needs to return `true` here.
+    /// Default is `false`.
+    fn wants_frame(&self) -> bool {
+        false
+    }
 
     /// Content lines for the app (used by generic scroll/render logic).
     fn lines(&self) -> &[String];

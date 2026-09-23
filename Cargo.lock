@@ -976,11 +976,14 @@ dependencies = [
  "log",
  "oasis-app-media",
  "oasis-app-settings",
+ "oasis-app-system-monitor",
  "oasis-audio",
  "oasis-backend-sdl",
+ "oasis-backend-ue5",
  "oasis-core",
  "oasis-mcp",
  "oasis-shader",
+ "oasis-test-backend",
  "oasis-video",
  "png",
  "serde_json",
@@ -1004,7 +1007,9 @@ dependencies = [
  "oasis-app-core",
  "oasis-sdi",
  "oasis-skin",
+ "oasis-test-backend",
  "oasis-types",
+ "oasis-ui",
  "oasis-vfs",
  "thiserror",
 ]
@@ -1015,6 +1020,7 @@ version = "1.4.0"
 dependencies = [
  "oasis-sdi",
  "oasis-skin",
+ "oasis-test-backend",
  "oasis-types",
  "oasis-ui",
  "oasis-vfs",
@@ -1027,6 +1033,7 @@ dependencies = [
  "oasis-app-core",
  "oasis-sdi",
  "oasis-skin",
+ "oasis-test-backend",
  "oasis-types",
  "oasis-ui",
  "oasis-vfs",
@@ -1052,6 +1059,7 @@ dependencies = [
  "oasis-app-core",
  "oasis-sdi",
  "oasis-skin",
+ "oasis-test-backend",
  "oasis-types",
  "oasis-vfs",
  "png",
@@ -1086,7 +1094,9 @@ dependencies = [
  "oasis-app-core",
  "oasis-sdi",
  "oasis-skin",
+ "oasis-test-backend",
  "oasis-types",
+ "oasis-ui",
  "oasis-vfs",
 ]
 
@@ -1098,7 +1108,9 @@ dependencies = [
  "oasis-audio",
  "oasis-sdi",
  "oasis-skin",
+ "oasis-test-backend",
  "oasis-types",
+ "oasis-ui",
  "oasis-vfs",
 ]
 
@@ -1107,9 +1119,12 @@ name = "oasis-app-settings"
 version = "1.4.0"
 dependencies = [
  "oasis-app-core",
+ "oasis-i18n",
  "oasis-sdi",
  "oasis-skin",
+ "oasis-test-backend",
  "oasis-types",
+ "oasis-ui",
  "oasis-vfs",
 ]
 
@@ -1118,9 +1133,12 @@ name = "oasis-app-system-monitor"
 version = "1.4.0"
 dependencies = [
  "oasis-app-core",
+ "oasis-platform",
  "oasis-sdi",
  "oasis-skin",
+ "oasis-test-backend",
  "oasis-types",
+ "oasis-ui",
  "oasis-vfs",
 ]
 
@@ -1128,9 +1146,11 @@ dependencies = [
 name = "oasis-app-text-editor"
 version = "1.4.0"
 dependencies = [
+ "criterion",
  "oasis-app-core",
  "oasis-sdi",
  "oasis-skin",
+ "oasis-test-backend",
  "oasis-types",
  "oasis-ui",
  "oasis-vfs",
@@ -1174,10 +1194,13 @@ dependencies = [
  "env_logger",
  "log",
  "oasis-audio",
+ "oasis-backend-ue5",
  "oasis-core",
  "oasis-rasterize",
  "oasis-shader",
+ "oasis-test-backend",
  "oasis-types",
+ "png",
  "rmp3",
  "sdl3",
 ]
@@ -1269,6 +1292,7 @@ dependencies = [
  "oasis-app-tv-guide",
  "oasis-audio",
  "oasis-browser",
+ "oasis-i18n",
  "oasis-net",
  "oasis-platform",
  "oasis-sdi",
@@ -1304,6 +1328,8 @@ dependencies = [
 name = "oasis-i18n"
 version = "1.4.0"
 dependencies = [
+ "log",
+ "oasis-types",
  "serde",
  "toml",
 ]
@@ -1322,6 +1348,7 @@ name = "oasis-mcp"
 version = "1.4.0"
 dependencies = [
  "log",
+ "oasis-net",
  "oasis-types",
  "serde",
  "serde_json",
@@ -1352,6 +1379,7 @@ dependencies = [
 name = "oasis-rasterize"
 version = "1.4.0"
 dependencies = [
+ "criterion",
  "fontdue",
  "oasis-types",
 ]
@@ -1483,6 +1511,7 @@ version = "1.4.0"
 dependencies = [
  "log",
  "oasis-sdi",
+ "oasis-test-backend",
  "oasis-types",
  "web-time",
 ]

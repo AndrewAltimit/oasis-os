@@ -56,7 +56,7 @@ impl WindowManager {
         // Draw non-window base SDI objects (wallpaper, dashboard, bars, etc.);
         // window-owned objects are drawn per-window below instead. With no
         // windows open the filter would reject nothing, so skip it entirely.
-        if self.windows.is_empty() {
+        if self.windows.is_empty() && self.closing.is_empty() {
             sdi.draw_base_layer(backend)?;
         } else {
             sdi.draw_base_filtered(backend, |obj_name| !self.is_window_owned(obj_name))?;
@@ -68,7 +68,8 @@ impl WindowManager {
         // Draw each window's SDI objects then content in z-order.
         // This ensures the active (topmost) window renders over all others.
         for window in &self.windows {
-            if window.state == WindowState::Minimized {
+            // Minimized windows stay visible while they animate down.
+            if window.state == WindowState::Minimized && !self.window_animating(&window.id) {
                 continue;
             }
 
@@ -79,18 +80,36 @@ impl WindowManager {
                 sdi.draw_named(name, backend)?;
             }
 
-            // Draw clipped content inside the window.
-            let (cx, cy, cw, ch) = window.content_rect(&self.theme);
+            // Draw clipped content inside the window (at its animated
+            // geometry while an open/minimize/restore animation runs).
+            let (cx, cy, cw, ch) = match self.visual_geometry(id) {
+                Some(g) => window.content_rect_at(&self.theme, g),
+                None => window.content_rect(&self.theme),
+            };
             if cw > 0 && ch > 0 {
-                backend.set_clip_rect(cx, cy, cw, ch)?;
-                draw_content(&window.id, cx, cy, cw, ch, backend)?;
-                backend.reset_clip_rect()?;
+                // Push (not `set_clip_rect`): the backends' clip stack must
+                // know about the window clip, or an app's own push/pop pair
+                // restores "no clip" and the rest of its drawing spills over
+                // other windows and the desktop.
+                backend.push_clip_rect(cx, cy, cw, ch)?;
+                let drawn = draw_content(&window.id, cx, cy, cw, ch, backend);
+                backend.pop_clip_rect()?;
+                drawn?;
+            }
+        }
+
+        // Closing windows fade out on top (chrome only, content is gone).
+        for ghost in &self.closing {
+            let id = ghost.id.as_str();
+            for suffix in ghost.sdi_suffixes() {
+                let name = fmt_sdi_name(&mut name_buf, id, suffix);
+                sdi.draw_named(name, backend)?;
             }
         }
 
         // Draw non-window overlay SDI objects (cursor, start menu, toasts)
         // AFTER windows so they render on top.
-        if self.windows.is_empty() {
+        if self.windows.is_empty() && self.closing.is_empty() {
             sdi.draw_overlay_layer(backend)?;
         } else {
             sdi.draw_overlay_filtered(backend, |obj_name| !self.is_window_owned(obj_name))?;
@@ -123,7 +142,7 @@ impl WindowManager {
     /// Byte comparison against the live window ids — no prefix strings are
     /// built, and the scan is over the (small) window list, not the SDI scene.
     fn is_window_owned(&self, obj_name: &str) -> bool {
-        self.windows.iter().any(|w| {
+        self.windows.iter().chain(self.closing.iter()).any(|w| {
             let id = w.id.as_str();
             obj_name.len() > id.len()
                 && obj_name.as_bytes()[id.len()] == b'.'

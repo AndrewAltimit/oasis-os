@@ -9,6 +9,10 @@ repository.workspace = true
 authors.workspace = true
 documentation = "https://docs.rs/oasis-app"
 
+[lib]
+name = "oasis_app"
+path = "src/lib.rs"
+
 [[bin]]
 name = "oasis-app"
 path = "src/main.rs"
@@ -52,14 +56,20 @@ oasis-mcp = { workspace = true, optional = true }
 serde_json = { workspace = true, optional = true }
 oasis-app-settings = { workspace = true }
 oasis-app-media = { workspace = true }
+oasis-app-system-monitor = { workspace = true }
 oasis-audio = { workspace = true }
 oasis-backend-sdl = { path = "../oasis-backend-sdl" }
+# Software RGBA framebuffer behind the headless e2e harness (src/headless.rs).
+oasis-backend-ue5 = { workspace = true }
 oasis-shader = { workspace = true, features = ["gl-native"] }
 oasis-video = { workspace = true, optional = true }
 log = { workspace = true }
 env_logger = { workspace = true }
 anyhow = { workspace = true }
 png = { workspace = true }
+
+[dev-dependencies]
+oasis-test-backend = { workspace = true }
 
 [lints]
 workspace = true

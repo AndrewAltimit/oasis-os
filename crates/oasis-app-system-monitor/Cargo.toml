@@ -1,6 +1,6 @@
 [package]
 name = "oasis-app-system-monitor"
-description = "System Monitor app for OASIS_OS: platform/backend identification and uptime"
+description = "System Monitor app for OASIS_OS: platform info plus CPU / memory / battery / uptime gauges"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -13,6 +13,12 @@ oasis-types = { workspace = true }
 oasis-sdi = { workspace = true }
 oasis-skin = { workspace = true }
 oasis-vfs = { workspace = true }
+oasis-ui = { workspace = true }
+oasis-platform = { workspace = true }
 
 [lints]
 workspace = true
+
+[dev-dependencies]
+oasis-test-backend = { workspace = true }
+oasis-app-core = { workspace = true, features = ["testing"] }

@@ -945,3 +945,245 @@ fn script_break_outside_loop_noop() {
     let result = reg.execute("break", &mut env);
     assert!(result.is_ok());
 }
+
+// ===================================================================
+// Unified inline / script control flow (script.rs parser)
+// ===================================================================
+
+/// Registry with echo, the real dev commands (`test`, `expr`, ...) and
+/// the text commands (`wc`, `grep`, ...).
+fn make_full_reg() -> CommandRegistry {
+    let mut reg = CommandRegistry::new();
+    reg.register(Box::new(EchoCmd));
+    crate::register_dev_commands(&mut reg);
+    crate::register_text_commands(&mut reg);
+    reg
+}
+
+fn exec_text(reg: &CommandRegistry, line: &str) -> String {
+    let mut vfs = MemoryVfs::new();
+    vfs.mkdir("/tmp").unwrap();
+    let mut env = make_env(&mut vfs);
+    match reg.execute(line, &mut env).unwrap() {
+        CommandOutput::Text(t) => t,
+        CommandOutput::None => String::new(),
+        other => panic!("expected text, got {other:?}"),
+    }
+}
+
+#[test]
+fn inline_if_elif_else() {
+    let reg = make_full_reg();
+    let line = "if test 1 -eq 2; then echo one; elif test 2 -eq 2; then echo two; \
+                else echo three; fi";
+    assert_eq!(exec_text(&reg, line), "two");
+    let line = "if test 1 -eq 2; then echo one; elif test 2 -eq 3; then echo two; \
+                else echo three; fi";
+    assert_eq!(exec_text(&reg, line), "three");
+}
+
+#[test]
+fn inline_nested_if_does_not_stop_at_first_fi() {
+    let reg = make_full_reg();
+    let line = "if test a = a; then if test b = c; then echo inner; fi; echo after; fi";
+    assert_eq!(exec_text(&reg, line), "after");
+}
+
+#[test]
+fn inline_body_semicolon_inside_quotes_is_not_split() {
+    let reg = make_full_reg();
+    let line = "if test 1 -eq 1; then echo 'a; b'; echo \"c;d\"; fi";
+    assert_eq!(exec_text(&reg, line), "a; b\nc;d");
+}
+
+#[test]
+fn inline_while_and_until_loops() {
+    let reg = make_full_reg();
+    let line = "set N=0; while test $N -lt 3; do echo n$N; set N=$(expr $N + 1); done";
+    assert_eq!(exec_text(&reg, line), "n0\nn1\nn2");
+    let line = "set N=0; until test $N -eq 2; do echo u$N; set N=$(expr $N + 1); done";
+    assert_eq!(exec_text(&reg, line), "u0\nu1");
+}
+
+#[test]
+fn inline_for_expands_variables_and_quotes() {
+    let reg = make_full_reg();
+    reg.set_variable("LIST", "x y");
+    assert_eq!(
+        exec_text(&reg, "for w in $LIST 'a b' z; do echo [$w]; done"),
+        "[x]\n[y]\n[a b]\n[z]"
+    );
+}
+
+#[test]
+fn inline_case_with_alternation_and_default() {
+    let reg = make_full_reg();
+    reg.set_variable("X", "world");
+    let line = "case $X in hello) echo hi;; world|earth) echo planet;; *) echo other;; esac";
+    assert_eq!(exec_text(&reg, line), "planet");
+    reg.set_variable("X", "mars");
+    assert_eq!(exec_text(&reg, line), "other");
+}
+
+#[test]
+fn inline_nested_loops_with_break_and_continue() {
+    let reg = make_full_reg();
+    let line = "for a in 1 2 3; do if test $a -eq 2; then continue; fi; \
+                for b in x y z; do if test $b = y; then break; fi; echo $a$b; done; done";
+    assert_eq!(exec_text(&reg, line), "1x\n3x");
+}
+
+#[test]
+fn inline_condition_with_negation_and_chain() {
+    let reg = make_full_reg();
+    assert_eq!(
+        exec_text(&reg, "if ! test 1 -eq 2; then echo negated; fi"),
+        "negated"
+    );
+    // `&&` chains work inside bodies.
+    assert_eq!(
+        exec_text(&reg, "if test 1 -eq 1; then echo a && echo b; fi"),
+        "a\nb"
+    );
+}
+
+#[test]
+fn inline_syntax_error_is_reported() {
+    let reg = make_full_reg();
+    let mut vfs = MemoryVfs::new();
+    let mut env = make_env(&mut vfs);
+    let err = reg
+        .execute("if test 1 -eq 1; then echo x", &mut env)
+        .unwrap_err();
+    assert!(err.to_string().contains("fi"), "{err}");
+}
+
+#[test]
+fn function_body_with_control_flow() {
+    let reg = make_full_reg();
+    let mut vfs = MemoryVfs::new();
+    let mut env = make_env(&mut vfs);
+    reg.execute(
+        "function sign() { if test $1 -lt 0; then echo neg; else echo pos; fi }",
+        &mut env,
+    )
+    .unwrap();
+    assert_eq!(
+        assert_text!(reg.execute("sign -3", &mut env).unwrap()),
+        "neg"
+    );
+    assert_eq!(
+        assert_text!(reg.execute("sign 4", &mut env).unwrap()),
+        "pos"
+    );
+}
+
+#[test]
+fn script_same_line_then_do_and_pipes() {
+    let reg = make_full_reg();
+    let mut vfs = MemoryVfs::new();
+    vfs.mkdir("/tmp").unwrap();
+    let script = "for i in 1 2; do\n  if test $i -eq 2; then\n    echo two | wc -c\n  \
+                  fi\ndone\ncase b in\n  a) echo A ;;\n  b)\n    echo B\n    ;;\nesac";
+    let out = run_script(&reg, &mut vfs, script);
+    // The pipe ran: `wc -c` counted the 3 bytes echo produced.
+    assert_eq!(out, "3\nB");
+}
+
+#[test]
+fn script_nested_while_counts() {
+    let reg = make_full_reg();
+    let mut vfs = MemoryVfs::new();
+    vfs.mkdir("/tmp").unwrap();
+    let script = "set I=0\nwhile test $I -lt 2\ndo\n  set J=0\n  while test $J -lt 2\n  do\n    \
+                  echo $I$J\n    set J=$(expr $J + 1)\n  done\n  set I=$(expr $I + 1)\ndone";
+    assert_eq!(run_script(&reg, &mut vfs, script), "00\n01\n10\n11");
+}
+
+#[test]
+fn nested_execution_is_not_recorded_in_history() {
+    let reg = make_full_reg();
+    let mut vfs = MemoryVfs::new();
+    let mut env = make_env(&mut vfs);
+    reg.execute("function f() { echo inner }", &mut env)
+        .unwrap();
+    reg.execute("for x in 1 2; do f; done", &mut env).unwrap();
+    reg.execute("echo $(echo sub)", &mut env).unwrap();
+    assert_eq!(
+        reg.history(),
+        [
+            "function f() { echo inner }",
+            "for x in 1 2; do f; done",
+            "echo $(echo sub)"
+        ]
+    );
+}
+
+// -- Background jobs --
+
+#[test]
+fn background_job_is_deferred_until_poll() {
+    let reg = make_full_reg();
+    let mut vfs = MemoryVfs::new();
+    let mut env = make_env(&mut vfs);
+    let queued = assert_text!(reg.execute("echo later &", &mut env).unwrap());
+    assert_eq!(queued, "[1] echo later");
+    assert_eq!(reg.pending_jobs(), 1);
+
+    let listing = assert_text!(reg.execute("jobs", &mut env).unwrap());
+    assert_eq!(listing, "[1]+ Running   echo later");
+
+    let done = assert_text!(reg.poll_jobs(&mut env).unwrap());
+    assert_eq!(done, "later\n[1]+  Done      echo later");
+    assert!(reg.poll_jobs(&mut env).is_none());
+    assert!(matches!(
+        reg.execute("jobs", &mut env).unwrap(),
+        CommandOutput::None
+    ));
+}
+
+#[test]
+fn jobs_fg_bg_and_kill() {
+    let reg = make_full_reg();
+    let mut vfs = MemoryVfs::new();
+    let mut env = make_env(&mut vfs);
+    reg.execute("echo one &", &mut env).unwrap();
+    reg.execute("echo two &", &mut env).unwrap();
+    reg.execute("echo three &", &mut env).unwrap();
+
+    // Stop job 1: polling skips it and runs job 2.
+    let stopped = assert_text!(reg.execute("kill -STOP %1", &mut env).unwrap());
+    assert!(stopped.contains("Stopped"), "{stopped}");
+    let out = assert_text!(reg.poll_jobs(&mut env).unwrap());
+    assert!(out.starts_with("two\n"), "{out}");
+
+    // Kill job 3.
+    let killed = assert_text!(reg.execute("kill %3", &mut env).unwrap());
+    assert!(killed.contains("Terminated"), "{killed}");
+    let listing = assert_text!(reg.execute("jobs", &mut env).unwrap());
+    assert_eq!(listing, "[1]+ Stopped   echo one");
+
+    // bg makes it runnable again; fg runs it right away.
+    let bg = assert_text!(reg.execute("bg %1", &mut env).unwrap());
+    assert_eq!(bg, "[1]+ echo one &");
+    let fg = assert_text!(reg.execute("fg", &mut env).unwrap());
+    assert_eq!(fg, "echo one\none");
+    assert!(reg.execute("fg", &mut env).is_err());
+    assert!(reg.execute("kill %9", &mut env).is_err());
+}
+
+#[test]
+fn ampersand_inside_quotes_or_and_is_not_background() {
+    let reg = make_full_reg();
+    let mut vfs = MemoryVfs::new();
+    let mut env = make_env(&mut vfs);
+    assert_eq!(
+        assert_text!(reg.execute("echo 'a &'", &mut env).unwrap()),
+        "a &"
+    );
+    assert_eq!(
+        assert_text!(reg.execute("echo a && echo b", &mut env).unwrap()),
+        "a\nb"
+    );
+    assert_eq!(reg.pending_jobs(), 0);
+}

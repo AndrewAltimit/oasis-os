@@ -1,8 +1,9 @@
-use crate::highlight::{SyntaxTheme, highlight_line};
+use crate::colors::EditorColors;
 use crate::{EditorMode, FileType, TextEditorApp};
 use oasis_sdi::SdiRegistry;
 use oasis_skin::ActiveTheme;
 use oasis_types::backend::{Color, SdiBackend};
+use oasis_ui::menu_bar::MenuStyle;
 
 /// How many editor lines the SDI notepad renderer can show at once.
 /// Used for both sizing (we create objects up front) and teardown.
@@ -11,48 +12,141 @@ const NP_MAX_VISIBLE_LINES: usize = 64;
 impl TextEditorApp {
     /// Format the buffer lines with line numbers for display.
     pub fn format_display_lines(&self) -> Vec<String> {
-        self.buffer
-            .lines
-            .iter()
-            .enumerate()
-            .map(|(i, text)| {
-                let num = i + 1;
-                let marker = if i == self.cursor_line { ">" } else { " " };
-                format!("{marker}{num:>4} | {text}")
-            })
+        (0..self.buffer.line_count())
+            .map(|i| self.format_display_line(i))
             .collect()
     }
 
-    /// Clamp cursor column to the current line length.
-    pub(crate) fn clamp_cursor_col(&mut self) {
-        let len = self.buffer.line_len(self.cursor_line);
-        if self.cursor_col > len {
-            self.cursor_col = len;
+    /// Format one buffer line as `">   12 | text"` (marker on the cursor
+    /// line).
+    fn format_display_line(&self, i: usize) -> String {
+        let text = self.buffer.get_line(i).unwrap_or("");
+        let num = i + 1;
+        let marker = if i == self.cursor_line { ">" } else { " " };
+        format!("{marker}{num:>4} | {text}")
+    }
+
+    /// Text rows visible in the editor viewport: the last rendered
+    /// viewport, or the fullscreen layout estimate before the first draw
+    /// (minus the status line).
+    pub(crate) fn page_lines(&self) -> usize {
+        match self.viewport_lines.get() {
+            0 => self.content.cached_max_visible.max(2) - 1,
+            n => n,
         }
     }
 
     /// Ensure the cursor line is within the visible scroll window.
     pub(crate) fn ensure_cursor_visible(&mut self) {
-        let max_vis = self.content.cached_max_visible.max(1).saturating_sub(1); // reserve 1 line for status
+        let page = self.page_lines().max(1);
         if self.cursor_line < self.content.scroll {
             self.content.scroll = self.cursor_line;
-        } else if self.cursor_line >= self.content.scroll + max_vis {
-            self.content.scroll = self.cursor_line.saturating_sub(max_vis - 1);
+        } else if self.cursor_line >= self.content.scroll + page {
+            self.content.scroll = self.cursor_line + 1 - page;
         }
     }
 
-    /// Rebuild the display lines from the buffer and update
-    /// ContentState for rendering.
+    /// Short mode label for the status bar.
+    fn mode_label(&self) -> &'static str {
+        match self.mode {
+            EditorMode::Normal => "Normal",
+            EditorMode::Insert => "Insert",
+            EditorMode::Find => "Find",
+            EditorMode::Replace => "Replace",
+            EditorMode::GoToLine => "Go to",
+            EditorMode::SaveAs => "Save as",
+            EditorMode::Saving => "Save?",
+            EditorMode::ConfirmDiscard => "Unsaved",
+        }
+    }
+
+    /// Left status-bar text: the active prompt, a status message, or the
+    /// file summary.
+    pub(crate) fn status_left(&self, file_summary: bool) -> String {
+        let mode = self.mode_label();
+        match self.mode {
+            EditorMode::Find => return format!("{mode}  |  Find: {}_", self.find_query),
+            EditorMode::Replace => {
+                let (f, r) = if self.replace_focus {
+                    ("", "_")
+                } else {
+                    ("_", "")
+                };
+                return format!(
+                    "{mode}  |  Find: {}{f}  Replace: {}{r}  (Enter / Ctrl+Enter all)",
+                    self.find_query, self.replace_text
+                );
+            },
+            EditorMode::GoToLine => return format!("Go to line: {}_", self.prompt_input),
+            EditorMode::SaveAs => return format!("Save as: {}_", self.prompt_input),
+            EditorMode::ConfirmDiscard => {
+                return "Unsaved changes: [S]ave / [D]iscard / [Esc] Cancel".to_string();
+            },
+            _ => {},
+        }
+        if let Some(ref msg) = self.status_message {
+            return format!("{mode}  |  {msg}");
+        }
+        let lines = self.buffer.line_count();
+        if file_summary {
+            let file_label = match &self.file_path {
+                Some(fp) => fp.rsplit('/').next().unwrap_or(fp),
+                None => "(untitled)",
+            };
+            let mod_marker = if self.modified { "*" } else { "" };
+            format!("{mode}  |  {file_label}{mod_marker}  |  {lines} lines")
+        } else {
+            format!("{mode}  |  {lines} lines")
+        }
+    }
+
+    /// Right status-bar text: 1-based line and character column.
+    pub(crate) fn status_position(&self) -> String {
+        let line = self.buffer.get_line(self.cursor_line).unwrap_or("");
+        let col = line[..line.floor_char_boundary(self.cursor_col)]
+            .chars()
+            .count();
+        match self.selection() {
+            Some((s, e)) => {
+                let n = self.buffer.text_range(s, e).chars().count();
+                format!(
+                    "Ln {}, Col {}  ({n} selected)",
+                    self.cursor_line + 1,
+                    col + 1
+                )
+            },
+            None => format!("Ln {}, Col {}", self.cursor_line + 1, col + 1),
+        }
+    }
+
+    /// Byte range of `line_idx` covered by the selection, if any. The end
+    /// is `None` when the selection continues past the end of the line.
+    pub(crate) fn selection_on_line(&self, line_idx: usize) -> Option<(usize, Option<usize>)> {
+        let (s, e) = self.selection()?;
+        if line_idx < s.0 || line_idx > e.0 {
+            return None;
+        }
+        let from = if line_idx == s.0 { s.1 } else { 0 };
+        let to = if line_idx == e.0 { Some(e.1) } else { None };
+        Some((from, to))
+    }
+
+    /// Rebuild the listing-style display lines (`App::lines`) and update
+    /// ContentState.
+    ///
+    /// Only the visible window is formatted (plus the status line): this
+    /// runs on every key press, and formatting the whole buffer made each
+    /// keystroke O(file size).
     pub(crate) fn rebuild_display_lines(&mut self) {
-        let mut lines = self.format_display_lines();
+        let count = self.buffer.line_count();
+        let first = self.content.scroll.min(count);
+        let end = first.saturating_add(self.page_lines()).min(count);
+        let mut lines = std::mem::take(&mut self.content.lines);
+        lines.clear();
+        lines.extend((first..end).map(|i| self.format_display_line(i)));
 
         // Status bar line at the end.
-        let mode_str = match self.mode {
-            EditorMode::Normal => "NORMAL",
-            EditorMode::Insert => "INSERT",
-            EditorMode::Find => "FIND",
-            EditorMode::Saving => "SAVING",
-        };
+        let mode_str = self.mode_label().to_uppercase();
         let mod_str = if self.modified { " [Modified]" } else { "" };
         let pos_str = format!("Ln {}, Col {}", self.cursor_line + 1, self.cursor_col + 1);
         let status = if let Some(ref msg) = self.status_message {
@@ -98,24 +192,18 @@ impl TextEditorApp {
         backend: &mut dyn SdiBackend,
         at: &ActiveTheme,
     ) -> oasis_types::error::Result<()> {
-        let body_bg = Color::rgb(255, 255, 255);
-        let body_fg = Color::rgb(16, 16, 16);
-        let chrome_bg = Color::rgb(240, 240, 240);
-        let chrome_border = Color::rgb(180, 180, 180);
-        let status_bg = Color::rgb(224, 224, 230);
-        let status_fg = Color::rgb(32, 32, 32);
-        let selection_bg = Color::rgb(173, 214, 255);
+        let colors = EditorColors::from_theme(at);
+        let body_bg = colors.bg;
+        let body_fg = colors.text;
+        let selection_bg = colors.selection_bg;
+        let current_line_bg = colors.current_line_bg;
 
         // Menu bar at the very top: real widget with live drop-downs.
         let menu_h: u32 = 18;
         let menu_y = cy;
-        let menu_style = oasis_ui::menu_bar::MenuStyle::from_theme(&at.ui_theme);
+        let menu_style = colors.menu;
         self.menu
             .draw_bar(backend, cx, menu_y, cw, menu_h, &menu_style)?;
-        // Suppress unused warnings — still using these palette
-        // entries for text-area chrome below.
-        let _ = chrome_bg;
-        let _ = chrome_border;
 
         // Text area.
         let area_y = menu_y + menu_h as i32;
@@ -128,100 +216,107 @@ impl TextEditorApp {
         let pad_left = 8i32;
         let pad_top = 6i32;
 
-        // If the file type has syntax highlighting, walk block-comment
-        // state from the top of the buffer so multi-line comments
-        // render correctly after scrolling.
-        let theme = SyntaxTheme::default();
-        let mut in_block_comment = false;
-        for i in 0..self.content.scroll.min(self.buffer.line_count()) {
-            if self.file_type != FileType::Plain
-                && let Some(line_text) = self.buffer.get_line(i)
-            {
-                let (_, still_in) = highlight_line(line_text, self.file_type, in_block_comment);
-                in_block_comment = still_in;
-            }
-        }
-
         let max_lines = ((area_h as i32 - pad_top) / line_h).max(0) as usize;
+        self.viewport_lines.set(max_lines.max(1));
+        self.viewport_line_h.set(line_h);
+        let first = self.content.scroll;
         let visible = self
             .buffer
             .line_count()
-            .saturating_sub(self.content.scroll)
+            .saturating_sub(first)
             .min(max_lines);
 
-        for i in 0..visible {
-            let line_idx = self.content.scroll + i;
-            let y = area_y + pad_top + i as i32 * line_h;
+        // Syntax spans for the visible window come from the buffer's cache:
+        // block-comment state above the viewport is remembered per line and
+        // the window's spans are re-used until an edit or scroll.
+        let theme = &colors.syntax;
+        let highlighted = self.file_type != FileType::Plain;
+        let window = if highlighted { visible } else { 0 };
+        self.buffer
+            .with_visible_spans(self.file_type, first, window, |spans| {
+                for i in 0..visible {
+                    let line_idx = first + i;
+                    let y = area_y + pad_top + i as i32 * line_h;
 
-            // Selection/current-line highlight on the active line.
-            if line_idx == self.cursor_line {
-                backend.fill_rect(cx, y - 1, cw, line_h as u32, selection_bg)?;
-            }
-
-            let Some(line_text) = self.buffer.get_line(line_idx) else {
-                continue;
-            };
-
-            if self.file_type == FileType::Plain {
-                backend.draw_text(line_text, cx + pad_left, y, font_size, body_fg)?;
-            } else {
-                let (spans, still_in) = highlight_line(line_text, self.file_type, in_block_comment);
-                in_block_comment = still_in;
-                let mut text_x = cx + pad_left;
-                for span in &spans {
-                    let segment = &line_text[span.start..span.end];
-                    if segment.is_empty() {
-                        continue;
+                    // Current-line highlight on the active line.
+                    if line_idx == self.cursor_line {
+                        backend.fill_rect(cx, y - 1, cw, line_h as u32, current_line_bg)?;
                     }
-                    let color = theme.color_for(span.kind);
-                    backend.draw_text(segment, text_x, y, font_size, color)?;
-                    text_x += backend.measure_text(segment, font_size) as i32;
-                }
-            }
 
-            // Cursor caret on the active line — a solid 2px bar in
-            // Insert mode (blue, always visible), a dimmer grey bar
-            // in Normal mode. Kept opaque rather than blinking to
-            // avoid burning frame time on a redraw just for the
-            // caret.
-            if line_idx == self.cursor_line {
-                let prefix: String = line_text.chars().take(self.cursor_col).collect();
-                let caret_x = cx + pad_left + backend.measure_text(&prefix, font_size) as i32;
-                let (caret_color, caret_w) = if self.mode == EditorMode::Insert {
-                    (Color::rgb(0, 100, 220), 2u32)
-                } else {
-                    (Color::rgb(60, 60, 60), 2u32)
-                };
-                backend.fill_rect(caret_x, y - 1, caret_w, line_h as u32, caret_color)?;
-            }
-        }
+                    let Some(line_text) = self.buffer.get_line(line_idx) else {
+                        continue;
+                    };
+
+                    // Selection band behind the text.
+                    if let Some((from, to)) = self.selection_on_line(line_idx) {
+                        let from = line_text.floor_char_boundary(from);
+                        let x0 = backend.measure_text(&line_text[..from], font_size) as i32;
+                        let x1 = match to {
+                            Some(to) => {
+                                let to = line_text.floor_char_boundary(to);
+                                backend.measure_text(&line_text[..to], font_size) as i32
+                            },
+                            // Selected newline: extend a little past the text.
+                            None => backend.measure_text(line_text, font_size) as i32 + 6,
+                        };
+                        if x1 > x0 {
+                            backend.fill_rect(
+                                cx + pad_left + x0,
+                                y - 1,
+                                (x1 - x0) as u32,
+                                line_h as u32,
+                                selection_bg,
+                            )?;
+                        }
+                    }
+
+                    match spans.get(i) {
+                        Some(line_spans) => {
+                            let mut text_x = cx + pad_left;
+                            for span in line_spans {
+                                let segment = &line_text[span.start..span.end];
+                                if segment.is_empty() {
+                                    continue;
+                                }
+                                let color = theme.color_for(span.kind);
+                                backend.draw_text(segment, text_x, y, font_size, color)?;
+                                text_x += backend.measure_text(segment, font_size) as i32;
+                            }
+                        },
+                        None => {
+                            backend.draw_text(line_text, cx + pad_left, y, font_size, body_fg)?;
+                        },
+                    }
+
+                    // Cursor caret on the active line — a solid 2px bar,
+                    // accent-colored in Insert mode and dimmer in Normal
+                    // mode. Kept opaque rather than blinking to avoid
+                    // burning frame time on a redraw just for the caret.
+                    if line_idx == self.cursor_line {
+                        // Byte columns: the prefix is a zero-copy slice.
+                        let prefix = &line_text[..line_text.floor_char_boundary(self.cursor_col)];
+                        let caret_x =
+                            cx + pad_left + backend.measure_text(prefix, font_size) as i32;
+                        let caret_color = if self.mode == EditorMode::Insert {
+                            colors.caret
+                        } else {
+                            colors.caret_normal
+                        };
+                        backend.fill_rect(caret_x, y - 1, 2, line_h as u32, caret_color)?;
+                    }
+                }
+                Ok::<(), oasis_types::error::OasisError>(())
+            })?;
 
         // Status bar.
         let status_y = cy + ch as i32 - status_h as i32;
-        backend.fill_rect(cx, status_y, cw, status_h, status_bg)?;
-        backend.fill_rect(cx, status_y, cw, 1, chrome_border)?;
+        let status_fg = colors.status_text;
+        backend.fill_rect(cx, status_y, cw, status_h, colors.status_bg)?;
+        backend.fill_rect(cx, status_y, cw, 1, colors.border)?;
 
-        let mode_str = match self.mode {
-            EditorMode::Normal => "Normal",
-            EditorMode::Insert => "Insert",
-            EditorMode::Find => "Find",
-            EditorMode::Saving => "Save?",
-        };
-        let position = format!("Ln {}, Col {}", self.cursor_line + 1, self.cursor_col + 1);
-        let lines_total = format!("{} lines", self.buffer.line_count());
         // The file name lives here now that there's no inner title bar.
-        let file_label = match &self.file_path {
-            Some(fp) => fp.rsplit('/').next().unwrap_or(fp),
-            None => "(untitled)",
-        };
-        let mod_marker = if self.modified { "*" } else { "" };
-        let status_left = if let Some(ref msg) = self.status_message {
-            format!("{mode_str}  |  {msg}")
-        } else if self.mode == EditorMode::Find {
-            format!("{mode_str}  |  Find: {}_", self.find_query)
-        } else {
-            format!("{mode_str}  |  {file_label}{mod_marker}  |  {lines_total}")
-        };
+        let position = self.status_position();
+        let status_left = self.status_left(true);
         backend.draw_text(&status_left, cx + 6, status_y + 4, 11, status_fg)?;
 
         let pos_w = backend.measure_text(&position, 11);
@@ -240,136 +335,6 @@ impl TextEditorApp {
             self.menu
                 .draw_dropdown(backend, cx, menu_y, menu_h, &menu_style)?;
         }
-
-        Ok(())
-    }
-
-    /// Draw the editor content with syntax highlighting into a
-    /// windowed region using per-span colored `draw_text` calls.
-    #[allow(dead_code)]
-    pub(crate) fn draw_highlighted(
-        &self,
-        cx: i32,
-        cy: i32,
-        cw: u32,
-        ch: u32,
-        backend: &mut dyn SdiBackend,
-        at: &ActiveTheme,
-    ) -> oasis_types::error::Result<()> {
-        let font_size: u16 = 12;
-
-        // Title row.
-        let dir_suffix = if let Some(ref file) = self.content.viewing_file {
-            format!("  [{file}]")
-        } else {
-            self.content
-                .browse_dir
-                .as_deref()
-                .map(|d| format!("  [{d}]"))
-                .unwrap_or_default()
-        };
-        let title_text = format!("{}{dir_suffix}", self.content.title);
-        backend.draw_text(
-            &title_text,
-            cx + 4,
-            cy + 2,
-            font_size,
-            at.app.title_bar_text,
-        )?;
-
-        // Separator line.
-        backend.fill_rect(
-            cx,
-            cy + at.app.title_bar_height as i32 - 4,
-            cw,
-            1,
-            at.app.divider,
-        )?;
-
-        // Content area.
-        let line_h = at.terminal_line_height.max(12) as i32;
-        let content_top = cy + at.app.title_bar_height as i32;
-        let max_lines = ((ch as i32 - line_h - 4) / line_h).max(0) as usize;
-
-        let theme = SyntaxTheme::default();
-
-        // Track block-comment state across visible lines. We need to
-        // start from the first buffer line and track through to the
-        // scroll position so that multi-line comments render correctly.
-        let mut in_block_comment = false;
-        for i in 0..self.content.scroll.min(self.buffer.line_count()) {
-            if let Some(line_text) = self.buffer.get_line(i) {
-                let (_, still_in) = highlight_line(line_text, self.file_type, in_block_comment);
-                in_block_comment = still_in;
-            }
-        }
-
-        let visible = self
-            .buffer
-            .line_count()
-            .saturating_sub(self.content.scroll)
-            .min(max_lines);
-
-        for i in 0..visible {
-            let line_idx = self.content.scroll + i;
-            let y = content_top + i as i32 * line_h;
-
-            // Line number gutter: `>  1 | ` or `   1 | `.
-            let marker = if line_idx == self.cursor_line {
-                ">"
-            } else {
-                " "
-            };
-            let gutter = format!("{marker}{:>4} | ", line_idx + 1);
-
-            let gutter_color = if i == self.content.cursor {
-                at.app.selected_text
-            } else {
-                at.app.dim_text
-            };
-            backend.draw_text(&gutter, cx + 4, y, font_size, gutter_color)?;
-
-            let gutter_px = backend.measure_text(&gutter, font_size) as i32;
-
-            // Syntax-highlighted content.
-            if let Some(line_text) = self.buffer.get_line(line_idx) {
-                let (spans, still_in) = highlight_line(line_text, self.file_type, in_block_comment);
-                in_block_comment = still_in;
-
-                let mut text_x = cx + 4 + gutter_px;
-                for span in &spans {
-                    let segment = &line_text[span.start..span.end];
-                    if segment.is_empty() {
-                        continue;
-                    }
-                    let color = theme.color_for(span.kind);
-                    backend.draw_text(segment, text_x, y, font_size, color)?;
-                    text_x += backend.measure_text(segment, font_size) as i32;
-                }
-            } else {
-                in_block_comment = false;
-            }
-        }
-
-        // Status bar line (last display line).
-        let status_lines = &self.content.lines;
-        if let Some(status) = status_lines.last() {
-            let status_y = content_top + visible as i32 * line_h;
-            backend.draw_text(status, cx + 4, status_y, font_size, at.app.dim_text)?;
-        }
-
-        // Scroll indicator.
-        let scroll_text = if self.buffer.line_count() > max_lines {
-            format!(
-                "[{}/{}]  Cancel=back",
-                self.content.scroll + 1,
-                self.buffer.line_count().saturating_sub(max_lines) + 1,
-            )
-        } else {
-            "Cancel=back".to_string()
-        };
-        let scroll_y = cy + ch as i32 - 14;
-        backend.draw_text(&scroll_text, cx + 4, scroll_y, 10, at.app.dim_text)?;
 
         Ok(())
     }
@@ -398,13 +363,15 @@ impl TextEditorApp {
             }
         }
 
-        let body_bg = Color::rgb(255, 255, 255);
-        let body_fg = Color::rgb(16, 16, 16);
-        let chrome_bg = Color::rgb(240, 240, 240);
-        let chrome_border = Color::rgb(180, 180, 180);
-        let status_bg = Color::rgb(224, 224, 230);
-        let status_fg = Color::rgb(32, 32, 32);
-        let selection_bg = Color::rgb(173, 214, 255);
+        let colors = EditorColors::from_theme(at);
+        let body_bg = colors.bg;
+        let body_fg = colors.text;
+        let chrome_bg = colors.menu.bar_bg;
+        let chrome_border = colors.menu.bar_border;
+        let status_bg = colors.status_bg;
+        let status_fg = colors.status_text;
+        let selection_bg = colors.selection_bg;
+        let current_line_bg = colors.current_line_bg;
 
         let sw = at.screen_w;
         let sh = at.screen_h;
@@ -451,9 +418,9 @@ impl TextEditorApp {
             chrome_border,
             104,
         );
-        let label_hot_bg = Color::rgb(49, 106, 197);
-        let label_hot_text = Color::rgb(255, 255, 255);
-        let label_text = Color::rgb(40, 40, 40);
+        let label_hot_bg = colors.menu.label_hot_bg;
+        let label_hot_text = colors.menu.label_hot_text;
+        let label_text = colors.menu.label_text;
         let mut mx = 6i32;
         for (i, m) in self.menu.menus.iter().enumerate() {
             let label_w = m.label.chars().count() as i32 * 7 + 16;
@@ -491,7 +458,7 @@ impl TextEditorApp {
         // Drop-down overlay: a bordered rect + one item row per
         // entry. Rendered with higher z than the text area so items
         // float above buffer content.
-        self.render_dropdown_sdi(sdi, menu_y, menu_h);
+        self.render_dropdown_sdi(sdi, menu_y, menu_h, &colors.menu);
 
         // Text area background.
         rect(sdi, "np_area_bg", 0, area_y, sw, area_h, body_bg, 103);
@@ -502,6 +469,8 @@ impl TextEditorApp {
         let pad_left = 8i32;
         let max_lines = ((area_h as i32 - pad_top) / line_h as i32).max(0) as usize;
         let max_lines = max_lines.min(NP_MAX_VISIBLE_LINES);
+        self.viewport_lines.set(max_lines.max(1));
+        self.viewport_line_h.set(line_h as i32);
         let visible = self
             .buffer
             .line_count()
@@ -519,36 +488,68 @@ impl TextEditorApp {
             sel_y,
             sw,
             line_h,
-            selection_bg,
+            current_line_bg,
             104,
             sel_visible,
         );
 
-        // Syntax state across the scrolled-over lines.
-        let theme = SyntaxTheme::default();
-        let mut in_block_comment = false;
-        for i in 0..self.content.scroll.min(self.buffer.line_count()) {
-            if self.file_type != FileType::Plain
-                && let Some(line_text) = self.buffer.get_line(i)
-            {
-                let (_, still_in) = highlight_line(line_text, self.file_type, in_block_comment);
-                in_block_comment = still_in;
-            }
+        let theme = &colors.syntax;
+
+        // First-span color per visible line, from the highlight cache.
+        let mut first_colors = [None; NP_MAX_VISIBLE_LINES];
+        if self.file_type != FileType::Plain {
+            self.buffer
+                .with_visible_spans(self.file_type, self.content.scroll, visible, |spans| {
+                    for (slot, line_spans) in first_colors.iter_mut().zip(spans) {
+                        *slot = line_spans.first().map(|s| theme.color_for(s.kind));
+                    }
+                });
         }
 
         // Visible text lines.
         for i in 0..NP_MAX_VISIBLE_LINES {
             let name = format!("np_line_{i}");
+            let sel_name = format!("np_selrange_{i}");
             if i >= visible {
                 hide(sdi, &name);
+                hide(sdi, &sel_name);
                 continue;
             }
             let line_idx = self.content.scroll + i;
             let y = area_y + pad_top + i as i32 * line_h as i32;
             let Some(line_text) = self.buffer.get_line(line_idx) else {
                 hide(sdi, &name);
+                hide(sdi, &sel_name);
                 continue;
             };
+
+            // Selection band (7px per char, like the SDI caret).
+            match self.selection_on_line(line_idx) {
+                Some((from, to)) => {
+                    let chars_to = |col: usize| {
+                        line_text[..line_text.floor_char_boundary(col)]
+                            .chars()
+                            .count() as i32
+                    };
+                    let x0 = chars_to(from) * 7;
+                    let x1 = match to {
+                        Some(to) => chars_to(to) * 7,
+                        None => line_text.chars().count() as i32 * 7 + 6,
+                    };
+                    rect_visible(
+                        sdi,
+                        &sel_name,
+                        pad_left + x0,
+                        y - 1,
+                        (x1 - x0).max(0) as u32,
+                        line_h,
+                        selection_bg,
+                        104,
+                        x1 > x0,
+                    );
+                },
+                None => hide(sdi, &sel_name),
+            }
 
             // Single-color display for plain files or simple fallback.
             // Syntax highlighting in SDI mode would need one object per
@@ -558,31 +559,18 @@ impl TextEditorApp {
             } else {
                 line_text.to_string()
             };
-            let color = if self.file_type == FileType::Plain {
-                body_fg
-            } else {
-                // Rough: keyword-first color if the line starts with a
-                // recognized token, else body foreground. Cheap and
-                // visibly distinct from plain text.
-                let (spans, _still) = highlight_line(line_text, self.file_type, in_block_comment);
-                spans
-                    .first()
-                    .map(|s| theme.color_for(s.kind))
-                    .unwrap_or(body_fg)
-            };
+            // Rough: first-token color for highlighted files (cached
+            // spans), body foreground for plain text. Cheap and visibly
+            // distinct from plain text.
+            let color = first_colors.get(i).copied().flatten().unwrap_or(body_fg);
             text(sdi, &name, pad_left, y, 12, color, &display, 105);
-
-            if self.file_type != FileType::Plain {
-                let (_, still_in) = highlight_line(line_text, self.file_type, in_block_comment);
-                in_block_comment = still_in;
-            }
         }
 
         // Caret on active line (thin vertical bar).
         let caret_color = if self.mode == EditorMode::Insert {
-            Color::rgb(0, 100, 200)
+            colors.caret
         } else {
-            Color::rgb(60, 60, 60)
+            colors.caret_normal
         };
         let caret_visible = sel_visible;
         let caret_line = self.buffer.get_line(self.cursor_line).unwrap_or("");
@@ -590,7 +578,9 @@ impl TextEditorApp {
         // windowed path uses `measure_text` but we don't have a backend
         // here. 7px/char at size 12 is close enough for the SDI path
         // and matches the bitmap font used by the backends at this size.
-        let prefix_chars = caret_line.chars().take(self.cursor_col).count() as i32;
+        let prefix_chars = caret_line[..caret_line.floor_char_boundary(self.cursor_col)]
+            .chars()
+            .count() as i32;
         let caret_x = pad_left + prefix_chars * 7;
         let caret_y = area_y + pad_top + rel_line as i32 * line_h as i32 - 1;
         rect_visible(
@@ -623,23 +613,11 @@ impl TextEditorApp {
             status_y,
             sw,
             1,
-            chrome_border,
+            colors.border,
             104,
         );
 
-        let mode_str = match self.mode {
-            EditorMode::Normal => "Normal",
-            EditorMode::Insert => "Insert",
-            EditorMode::Find => "Find",
-            EditorMode::Saving => "Save?",
-        };
-        let status_left = if let Some(ref msg) = self.status_message {
-            format!("{mode_str}  |  {msg}")
-        } else if self.mode == EditorMode::Find {
-            format!("{mode_str}  |  Find: {}_", self.find_query)
-        } else {
-            format!("{mode_str}  |  {} lines", self.buffer.line_count())
-        };
+        let status_left = self.status_left(false);
         text(
             sdi,
             "np_status_left",
@@ -651,7 +629,7 @@ impl TextEditorApp {
             105,
         );
 
-        let position = format!("Ln {}, Col {}", self.cursor_line + 1, self.cursor_col + 1);
+        let position = self.status_position();
         let right_x = (sw as i32) - (position.chars().count() as i32 * 6) - 8;
         text(
             sdi,
@@ -668,7 +646,13 @@ impl TextEditorApp {
     /// Render the active drop-down (if any) as SDI objects. Uses a
     /// fixed `NP_MAX_ENTRIES` pool of item names so the registry
     /// churn stays bounded across frames.
-    fn render_dropdown_sdi(&self, sdi: &mut SdiRegistry, menu_y: i32, menu_h: u32) {
+    fn render_dropdown_sdi(
+        &self,
+        sdi: &mut SdiRegistry,
+        menu_y: i32,
+        menu_h: u32,
+        style: &MenuStyle,
+    ) {
         // Hide every pooled item first, then repopulate only the
         // slots we actually need this frame.
         for i in 0..NP_MAX_DROPDOWN_ENTRIES {
@@ -700,14 +684,14 @@ impl TextEditorApp {
         let dd_y = menu_y + menu_h as i32;
         let (dd_w, dd_h) = self.menu.dropdown_dimensions(menu);
 
-        let bg = Color::rgb(236, 236, 236);
-        let light = Color::rgb(255, 255, 255);
-        let dark = Color::rgb(105, 105, 105);
-        let item_text_color = Color::rgb(20, 20, 20);
-        let item_hot_bg = Color::rgb(49, 106, 197);
-        let item_hot_text = Color::rgb(255, 255, 255);
-        let disabled = Color::rgb(150, 150, 150);
-        let sep_color = Color::rgb(170, 170, 170);
+        let bg = style.dropdown_bg;
+        let light = style.dropdown_border_light;
+        let dark = style.dropdown_border_dark;
+        let item_text_color = style.item_text;
+        let item_hot_bg = style.item_hot_bg;
+        let item_hot_text = style.item_hot_text;
+        let disabled = style.item_disabled_text;
+        let sep_color = style.separator;
 
         // Background + bezel. Very high z so items float above the
         // text area (z=103) and line text (z=105).
@@ -853,8 +837,10 @@ pub fn hide_notepad_sdi_objects(sdi: &mut SdiRegistry) {
         if !sdi.contains(&name) {
             break;
         }
-        if let Ok(obj) = sdi.get_mut(&name) {
-            obj.visible = false;
+        for name in [name, format!("np_selrange_{i}")] {
+            if let Ok(obj) = sdi.get_mut(&name) {
+                obj.visible = false;
+            }
         }
     }
 }
@@ -928,5 +914,82 @@ fn text(
 fn hide(sdi: &mut SdiRegistry, name: &str) {
     if let Ok(obj) = sdi.get_mut(name) {
         obj.visible = false;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use oasis_app_core::App;
+    use oasis_sdi::SdiRegistry;
+    use oasis_skin::ActiveTheme;
+    use oasis_test_backend::{DrawCommand, RecordingBackend};
+    use oasis_types::backend::Color;
+
+    use crate::TextEditorApp;
+
+    fn dark_theme() -> ActiveTheme {
+        let mut at = ActiveTheme::default();
+        at.app.bg = Color::rgb(20, 22, 30);
+        at.app.text = Color::rgb(210, 210, 220);
+        at
+    }
+
+    fn fills(rec: &RecordingBackend) -> Vec<(i32, i32, u32, Color)> {
+        rec.commands()
+            .iter()
+            .filter_map(|c| match c {
+                DrawCommand::FillRect { x, y, w, color, .. } => Some((*x, *y, *w, *color)),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// The windowed text area must paint the skin's app background, not a
+    /// hardcoded white box.
+    #[test]
+    fn windowed_body_background_follows_dark_theme() {
+        let at = dark_theme();
+        let app = TextEditorApp::open_file("/a.rs", "fn main() {}\n// hi");
+        let mut rec = RecordingBackend::new(400, 300);
+        app.draw_windowed(0, 0, 400, 300, &mut rec, &at)
+            .expect("draw");
+        let fills = fills(&rec);
+        // Text area starts right under the 18px menu bar and spans the width.
+        let area = fills
+            .iter()
+            .find(|(x, y, w, _)| *x == 0 && *y == 18 && *w == 400)
+            .expect("text area fill");
+        assert_eq!(area.3, at.app.bg);
+        let white = Color::rgb(255, 255, 255);
+        assert!(
+            fills.iter().all(|f| f.3 != white || f.1 < 18),
+            "no white fills below the menu bar"
+        );
+    }
+
+    #[test]
+    fn windowed_text_uses_theme_text_color() {
+        let at = dark_theme();
+        let app = TextEditorApp::open_file("/a.txt", "plain words");
+        let mut rec = RecordingBackend::new(400, 300);
+        app.draw_windowed(0, 0, 400, 300, &mut rec, &at)
+            .expect("draw");
+        let text_color = rec.commands().iter().find_map(|c| match c {
+            DrawCommand::DrawText { text, color, .. } if text == "plain words" => Some(*color),
+            _ => None,
+        });
+        assert_eq!(text_color, Some(at.app.text));
+    }
+
+    #[test]
+    fn sdi_body_background_follows_dark_theme() {
+        let at = dark_theme();
+        let mut app = TextEditorApp::open_file("/a.txt", "x");
+        let mut sdi = SdiRegistry::new();
+        app.update_sdi(&mut sdi, &at);
+        let area = sdi.get("np_area_bg").expect("area");
+        assert_eq!(area.color, at.app.bg);
+        let line = sdi.get("np_line_0").expect("line");
+        assert_eq!(line.text_color, at.app.text);
     }
 }

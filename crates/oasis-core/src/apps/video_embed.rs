@@ -422,6 +422,12 @@ impl App for VideoEmbedApp {
         self.input_buf.push(ch);
     }
 
+    fn accepts_text(&self) -> bool {
+        // Search box is live in Search and Results (typing starts a new
+        // query); the Playing overlay ignores text.
+        self.state != EmbedState::Playing
+    }
+
     fn handle_backspace(&mut self) {
         if self.state == EmbedState::Playing {
             return;
@@ -448,6 +454,12 @@ impl App for VideoEmbedApp {
             }
         }
         AppAction::None
+    }
+
+    /// Thumbnails stream in and the embedded player repaints on its own,
+    /// neither of which the host can observe: redraw every frame.
+    fn wants_frame(&self) -> bool {
+        true
     }
 
     fn refresh(&mut self, vfs: &dyn Vfs) {

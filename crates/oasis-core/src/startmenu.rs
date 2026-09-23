@@ -115,7 +115,7 @@ impl StartMenuState {
         let pad = at.menu.pad_inner;
         let menu_h =
             header_h + (pad + rows as i32 * at.menu.item_row_height + pad) as u32 + footer_h;
-        let bar_y = (at.screen_h - at.bottombar_height) as i32;
+        let bar_y = at.screen_h.saturating_sub(at.bottombar_height) as i32;
         let btn_y = bar_y + 3;
         let menu_y = bar_y - menu_h as i32 - 2;
         Self {
@@ -137,7 +137,12 @@ impl StartMenuState {
     }
 
     /// Default set of start menu items with colors derived from the theme.
+    ///
+    /// Labels come from the active locale (`oasis_i18n`), so hosts rebuild
+    /// the menu after a locale change. Launch actions keep the English app
+    /// titles, which are identifiers.
     pub fn default_items(at: &ActiveTheme) -> Vec<StartMenuItem> {
+        use oasis_i18n::tr;
         let colors = &at.menu.item_colors;
         let color = |idx: usize| -> Color {
             colors
@@ -147,32 +152,32 @@ impl StartMenuState {
         };
         vec![
             StartMenuItem {
-                label: "Games".to_string(),
+                label: tr!("shell.start_games").to_string(),
                 action: StartMenuAction::LaunchApp("File Manager".to_string()),
                 color: color(0),
             },
             StartMenuItem {
-                label: "Music".to_string(),
+                label: tr!("shell.start_music").to_string(),
                 action: StartMenuAction::LaunchApp("Music Player".to_string()),
                 color: color(1),
             },
             StartMenuItem {
-                label: "Video".to_string(),
+                label: tr!("shell.start_video").to_string(),
                 action: StartMenuAction::LaunchApp("Photo Viewer".to_string()),
                 color: color(2),
             },
             StartMenuItem {
-                label: "Photos".to_string(),
+                label: tr!("shell.start_photos").to_string(),
                 action: StartMenuAction::LaunchApp("Photo Viewer".to_string()),
                 color: color(3),
             },
             StartMenuItem {
-                label: "Settings".to_string(),
+                label: tr!("app.settings").to_string(),
                 action: StartMenuAction::LaunchApp("Settings".to_string()),
                 color: color(4),
             },
             StartMenuItem {
-                label: "Exit".to_string(),
+                label: tr!("ui.exit").to_string(),
                 action: StartMenuAction::Exit,
                 color: color(5),
             },

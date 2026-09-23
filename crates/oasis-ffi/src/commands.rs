@@ -5,7 +5,7 @@ use std::os::raw::c_char;
 
 use oasis_core::terminal::{CommandOutput, Environment};
 
-use crate::handle::{OasisInstance, c_str_to_str, with_instance};
+use crate::handle::{OasisInstance, c_str_to_str, ffi_guard, with_instance};
 use crate::types::OASIS_CB_COMMAND_EXEC;
 
 /// Execute a terminal command and return the output as a C string.
@@ -25,20 +25,25 @@ pub unsafe extern "C" fn oasis_send_command(
     handle: *mut OasisInstance,
     cmd: *const c_char,
 ) -> *mut c_char {
-    // SAFETY: Caller guarantees pointer is null or a valid C string per function safety contract.
-    let Some(cmd_str) = (unsafe { c_str_to_str(cmd) }) else {
-        return std::ptr::null_mut();
-    };
+    ffi_guard("oasis_send_command", std::ptr::null_mut(), || {
+        // SAFETY: Caller guarantees pointer is null or a valid C string per function safety contract.
+        let Some(cmd_str) = (unsafe { c_str_to_str(cmd) }) else {
+            return std::ptr::null_mut();
+        };
 
-    // SAFETY: Caller guarantees `handle` is valid and non-null per function safety contract.
-    unsafe {
-        with_instance(handle, std::ptr::null_mut(), |instance| {
-            send_command_inner(instance, cmd_str)
-        })
-    }
+        // SAFETY: Caller guarantees `handle` is valid and non-null per function safety contract.
+        unsafe {
+            with_instance(handle, std::ptr::null_mut(), |instance| {
+                send_command_inner(instance, cmd_str)
+            })
+        }
+    })
 }
 
 fn send_command_inner(instance: &mut OasisInstance, cmd_str: &str) -> *mut c_char {
+    #[cfg(test)]
+    crate::handle::maybe_inject_panic();
+
     instance.fire_callback(OASIS_CB_COMMAND_EXEC, cmd_str);
 
     let mut env = Environment {
@@ -117,9 +122,17 @@ fn send_command_inner(instance: &mut OasisInstance, cmd_str: &str) -> *mut c_cha
 
     instance.cwd = env.cwd;
 
-    CString::new(output)
-        .map(|cs| cs.into_raw())
-        .unwrap_or(std::ptr::null_mut())
+    output_to_c_string(output).into_raw()
+}
+
+/// Convert command output to a C string. Interior NUL bytes (e.g. `cat` of a
+/// binary file) cannot be represented, so each is replaced with U+FFFD
+/// instead of failing the whole call -- NULL is reserved for invalid input.
+fn output_to_c_string(output: String) -> CString {
+    CString::new(output).unwrap_or_else(|e| {
+        let text = String::from_utf8_lossy(&e.into_vec()).replace('\0', "\u{FFFD}");
+        CString::new(text).unwrap_or_default()
+    })
 }
 
 /// Free a string previously returned by `oasis_send_command`.
@@ -129,8 +142,10 @@ fn send_command_inner(instance: &mut OasisInstance, cmd_str: &str) -> *mut c_cha
 /// `ptr` must be a pointer returned by `oasis_send_command`, or null.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn oasis_free_string(ptr: *mut c_char) {
-    if !ptr.is_null() {
-        // SAFETY: Reclaiming ownership of CString allocated by `CString::into_raw`.
-        drop(unsafe { CString::from_raw(ptr) });
-    }
+    ffi_guard("oasis_free_string", (), || {
+        if !ptr.is_null() {
+            // SAFETY: Reclaiming ownership of CString allocated by `CString::into_raw`.
+            drop(unsafe { CString::from_raw(ptr) });
+        }
+    })
 }

@@ -20,14 +20,21 @@ client are designed to be polled from the host's main loop.
 
 Sockets are switched to non-blocking mode on accept (`std_backend.rs:52`,
 `67`, `82`). `send` and `recv` return immediately, with `WouldBlock`
-translated into "no data yet". `connect` is the same shape but the meaning
-of `WouldBlock` is different: it indicates that the TCP handshake is in
-progress, not that there is no data — completion is observed by
-re-attempting the operation (or polling for writability) on the next tick,
-not by reading. TLS handshakes are the one place where the backend
-actually blocks the calling thread: they spin with a 1 ms sleep between
-iterations (`tls_rustls.rs:186`), so `RemoteClient::connect` will not
-return until the handshake completes or the 30 s deadline expires.
+translated into "no data yet". `connect` resolves the host with
+`ToSocketAddrs` (hostnames, IPv4 literals and IPv6 literals with or without
+brackets all work) and tries each resolved address with
+`TcpStream::connect_timeout`, so the TCP handshake blocks the caller for at
+most `DEFAULT_CONNECT_TIMEOUT` (10 s) per address (adjustable with
+`StdNetworkBackend::set_connect_timeout`); the stream is switched to
+non-blocking mode once connected. TLS handshakes also block the calling
+thread: they spin with a 1 ms sleep between iterations
+(`tls_rustls.rs:186`), so `RemoteClient::connect` will not return until the
+handshake completes or the 30 s deadline expires.
+
+`NetworkBackend::listen(port)` binds `0.0.0.0` (all interfaces).
+`StdNetworkBackend` additionally offers `listen_loopback(port)` (binds
+`127.0.0.1`) and `listen_on(ip, port)`; servers that do not authenticate
+their peers use the loopback variant.
 
 When the `tls-rustls` Cargo feature is enabled the backend wraps outbound
 streams with rustls and listeners accept TLS connections. Without the feature
@@ -47,9 +54,15 @@ at 1024 bytes (`listener.rs:16`); the client buffer caps at 16 KiB
 
 ### Server flow
 
-1. `start(backend)` calls `backend.listen(port)`. Up to 4 concurrent
-   connections by default (`listener.rs:13`, configurable via
-   `ListenerConfig`).
+1. `start(backend)` binds according to `ListenerConfig::bind`:
+   - `ListenerBind::Loopback` (the default) binds `127.0.0.1` only.
+   - `ListenerBind::AllInterfaces` binds `0.0.0.0` and **requires a
+     non-empty PSK**; `start` returns a config error otherwise. An empty PSK
+     means "no authentication", so it is never exposed to the network.
+
+   The terminal `listen <port>` command cannot supply a PSK and therefore
+   always listens on loopback. Up to 4 concurrent connections by default
+   (`listener.rs:13`, configurable via `ListenerConfig`).
 2. On accept, send the welcome line:
    - `OASIS_OS remote terminal\n> ` if no PSK is configured.
    - `AUTH_REQUIRED\n` if a PSK is configured.
@@ -204,8 +217,8 @@ Verbs:
 > line. Effective inline payload is therefore roughly
 > `1024 - 5 - len(path)` bytes, and the body cannot contain a literal
 > `\n` (it would be parsed as the end of the request and split the
-> payload across the next command). Exceeding the cap clears the read
-> buffer and replies `500 line too long`. There is no chunked /
+> payload across the next command). Exceeding the cap replies
+> `500 line too long` and closes the connection. There is no chunked /
 > multi-line upload mode today; for files larger than ~1 KiB or files
 > containing newlines, tunnel through the TLS-protected remote terminal
 > session instead and use shell redirection on the remote side.
@@ -214,10 +227,9 @@ Verbs:
 > integrators should be aware of, in addition to the plaintext-on-wire
 > warning above.
 >
-> 1. **Comparison is not constant-time.** The password check uses a
->    plain `==` byte-string comparison (`transfer/mod.rs:306`), unlike
->    the remote-terminal PSK path which uses an explicit constant-time
->    XOR loop (`listener.rs:32`).
+> 1. **Comparison is constant-time** (`constant_time_eq` in
+>    `transfer/mod.rs`), like the remote-terminal PSK check. Lines sent
+>    after the third failure on a connection are discarded.
 > 2. **No cross-connection brute-force protection.** The 3-attempt
 >    limit (`MAX_AUTH_FAILURES` at `transfer/mod.rs:152`) is tracked
 >    per-connection only (`FtpConnection::failed_attempts` at
@@ -245,13 +257,17 @@ Verbs:
 The service is integrated into the desktop binary via `FtpServer` in
 `oasis-app/src/app_state.rs`. The `ftp` terminal command starts and stops it,
 and the main loop polls connections each frame
-(`oasis-app/src/main.rs:622`). Status and request files live at
+(`Shell::step` in `oasis-app/src/shell.rs`). Status and request files live at
+
 `/var/ftp/status` and `/var/ftp/request` so headless drivers can inspect or
 trigger transfers via the VFS.
 
 Authentication is optional and password-based: `ftp start <port> --password
 <pass>` arms `FtpServer::with_password` (`transfer/mod.rs:203`). Without
-`--password` every accepted connection is immediately authenticated. The
+`--password` (or with an empty one) every accepted connection is
+immediately authenticated, so the server then binds **loopback only**
+(`NetworkBackend::listen_loopback`); with a password it listens on all
+interfaces. The
 protocol does **not** speak TLS, so the password and all subsequent traffic
 travel in plaintext — treat the service as trusted-LAN-only and never reuse
 a remote-terminal PSK as the FTP password. For authenticated, encrypted
@@ -262,9 +278,9 @@ remote terminal session instead.
 
 - All I/O is non-blocking — `poll()` everywhere returns immediately.
 - No internal thread spawn, no `tokio`, no `async`/`await`.
-- The TLS handshake and the `RemoteClient::connect` path are the only places
-  that block beyond a single syscall, and even those bound the wait with a
-  30 s deadline.
+- The TCP connect (10 s per resolved address), the TLS handshake and the
+  `RemoteClient::connect` path are the only places that block beyond a single
+  syscall, and all of them bound the wait with a deadline (TLS: 30 s).
 
 The expected integration is a single-threaded host loop: each frame, call
 `listener.poll()`, dispatch returned lines, call `client.poll()` for any open

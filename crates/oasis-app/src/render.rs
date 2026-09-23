@@ -1,9 +1,14 @@
 use oasis_backend_sdl::shader_bridge::Visibility;
 use oasis_core::apps::AppRunner;
+use oasis_core::backend::{Color, SdiBackend};
 use oasis_core::bottombar::{BottomBar, MediaTab};
+use oasis_core::browser::BrowserWidget;
 use oasis_core::sdi::SdiRegistry;
 use oasis_core::statusbar::StatusBar;
 use oasis_core::toast::ToastManager;
+use oasis_core::vfs::Vfs;
+use oasis_core::wm::DesktopManager;
+use oasis_core::wm::manager::WindowManager;
 use oasis_core::wm::window::{Window, WindowState, WmTheme};
 
 use crate::app_state::{AppState, Mode};
@@ -14,7 +19,7 @@ use oasis_core::terminal_sdi;
 /// This controls which UI elements are visible and positioned correctly
 /// each frame. The actual rendering (`backend.clear`, `sdi.draw`, etc.)
 /// remains in main.rs since it requires `&mut backend`.
-pub fn update_sdi(state: &mut AppState, sdi: &mut SdiRegistry) {
+pub fn update_sdi(state: &mut AppState, sdi: &mut SdiRegistry, vfs: &dyn Vfs) {
     // Advance animations each frame.
     state.ui.dashboard.tick_animation();
     state.ui.start_menu.tick_animation();
@@ -38,7 +43,12 @@ pub fn update_sdi(state: &mut AppState, sdi: &mut SdiRegistry) {
                 terminal_sdi::hide_media_page(sdi);
             } else {
                 state.ui.dashboard.hide_sdi(sdi);
-                terminal_sdi::update_media_page(sdi, &state.ui.bottom_bar, &state.active_theme);
+                terminal_sdi::update_media_page_with_vfs(
+                    sdi,
+                    &state.ui.bottom_bar,
+                    &state.active_theme,
+                    vfs,
+                );
             }
 
             state
@@ -74,6 +84,9 @@ pub fn update_sdi(state: &mut AppState, sdi: &mut SdiRegistry) {
             // other modes are covered by the `sdi_signature = None` reset
             // below; edits made *in* the terminal echo into the
             // scrollback and change the hash themselves.
+            // Input line as shown after the prompt (reverse-search aware) and
+            // the cursor column within it.
+            let (input_text, cursor_col) = state.terminal.session.display();
             let sig = {
                 use std::hash::{Hash, Hasher};
                 let at = &state.active_theme;
@@ -86,7 +99,8 @@ pub fn update_sdi(state: &mut AppState, sdi: &mut SdiRegistry) {
                     line.hash(&mut h);
                 }
                 term.cwd.hash(&mut h);
-                term.input_buf.hash(&mut h);
+                input_text.hash(&mut h);
+                cursor_col.hash(&mut h);
                 term.scroll_offset.hash(&mut h);
                 cursor_visible.hash(&mut h);
                 (
@@ -108,11 +122,12 @@ pub fn update_sdi(state: &mut AppState, sdi: &mut SdiRegistry) {
                 h.finish()
             };
             if state.terminal.sdi_signature != Some(sig) {
-                terminal_sdi::setup_terminal_objects(
+                terminal_sdi::setup_terminal_objects_with_cursor(
                     sdi,
                     &state.terminal.output_lines,
                     &state.terminal.cwd,
-                    &state.terminal.input_buf,
+                    &input_text,
+                    cursor_col,
                     state.terminal.scroll_offset,
                     &state.active_theme,
                     cursor_visible,
@@ -150,11 +165,13 @@ pub fn update_sdi(state: &mut AppState, sdi: &mut SdiRegistry) {
             // frames where the terminal actually changed — a mouse drag over
             // the desktop must not deep-copy 2000 lines per frame.
             if state.terminal.dirty {
+                let (input_text, cursor_col) = state.terminal.session.display();
+                let focused = state.wm.active_window() == Some("terminal");
                 let term = &state.terminal;
                 let changed = term.sync_signature.as_ref().is_none_or(|sig| {
                     sig.0 != term.output_lines.len()
                         || sig.1 != term.scroll_offset
-                        || sig.2 != term.input_buf
+                        || sig.2 != input_text
                         || Some(sig.3.as_str()) != term.output_lines.first().map(String::as_str)
                         || Some(sig.4.as_str()) != term.output_lines.last().map(String::as_str)
                 });
@@ -163,32 +180,32 @@ pub fn update_sdi(state: &mut AppState, sdi: &mut SdiRegistry) {
                     .open_runners
                     .iter_mut()
                     .find(|(id, _)| id == "terminal")
+                {
+                    // Cursor column within the prompt line ("> " + input),
+                    // drawn only while the terminal window has focus.
+                    runner.set_terminal_cursor(focused.then_some(2 + cursor_col));
                     // A freshly (re)opened runner has not received this
                     // content yet even if the signature matches — its line
                     // count (scrollback + prompt) gives that away.
-                    && (changed || runner.lines.len() != state.terminal.output_lines.len() + 1)
-                {
-                    let mut lines = state.terminal.output_lines.clone();
-                    let prompt = format!("> {}", state.terminal.input_buf);
-                    lines.push(prompt);
-                    runner.set_lines(lines, state.terminal.scroll_offset);
-                    state.terminal.sync_signature = Some((
-                        state.terminal.output_lines.len(),
-                        state.terminal.scroll_offset,
-                        state.terminal.input_buf.clone(),
-                        state
-                            .terminal
-                            .output_lines
-                            .first()
-                            .cloned()
-                            .unwrap_or_default(),
-                        state
-                            .terminal
-                            .output_lines
-                            .last()
-                            .cloned()
-                            .unwrap_or_default(),
-                    ));
+                    if changed || runner.lines.len() != state.terminal.output_lines.len() + 1 {
+                        // Incremental sync: only lines not already in the
+                        // runner are cloned (was a full scrollback clone
+                        // here plus another inside the runner).
+                        let prompt = format!("> {input_text}");
+                        runner.sync_terminal_lines(
+                            &state.terminal.output_lines,
+                            &prompt,
+                            state.terminal.scroll_offset,
+                        );
+                        let term = &state.terminal;
+                        state.terminal.sync_signature = Some((
+                            term.output_lines.len(),
+                            term.scroll_offset,
+                            input_text,
+                            term.output_lines.first().cloned().unwrap_or_default(),
+                            term.output_lines.last().cloned().unwrap_or_default(),
+                        ));
+                    }
                 }
                 state.terminal.dirty = false;
             }
@@ -278,6 +295,40 @@ pub fn update_sdi(state: &mut AppState, sdi: &mut SdiRegistry) {
     }
 }
 
+/// Draw the window manager's drag-to-snap preview: a translucent, outlined
+/// rectangle (tinted with the skin's active titlebar color) showing where
+/// the dragged window will land if released now. No-op when no window is
+/// being dragged into a snap zone.
+pub fn draw_snap_preview(
+    state: &AppState,
+    backend: &mut dyn SdiBackend,
+) -> oasis_core::error::Result<()> {
+    let Some(p) = state.wm.snap_preview() else {
+        return Ok(());
+    };
+    let theme = state.wm.theme();
+    let (fill, edge) = snap_preview_colors(theme.titlebar_active_color);
+    // Inset slightly so the outline stays visible at screen edges.
+    let inset = 4;
+    let (x, y) = (p.x + inset, p.y + inset);
+    let w = p.width.saturating_sub(inset as u32 * 2);
+    let h = p.height.saturating_sub(inset as u32 * 2);
+    if w == 0 || h == 0 {
+        return Ok(());
+    }
+    let radius = theme.frame_border_radius.max(4);
+    backend.fill_rounded_rect(x, y, w, h, radius, fill)?;
+    backend.stroke_rounded_rect(x, y, w, h, radius, 2, edge)
+}
+
+/// Fill and outline colors for the snap preview, derived from `base`.
+fn snap_preview_colors(base: Color) -> (Color, Color) {
+    (
+        Color::rgba(base.r, base.g, base.b, 70),
+        Color::rgba(base.r, base.g, base.b, 200),
+    )
+}
+
 /// Compute how much of the shader wallpaper can actually be seen this
 /// frame, from state the main loop already tracks (mode, window manager).
 ///
@@ -335,6 +386,39 @@ pub fn wallpaper_visibility(state: &AppState) -> Visibility {
     } else {
         Visibility::Visible
     }
+}
+
+/// Whether any visible window's content (painted through the WM draw
+/// callback, which the SDI dirty tracking can't see) needs this frame
+/// drawn: an ongoing drag/resize or window animation, a runner whose
+/// content changed or animates ([`AppRunner::wants_frame`]), or a browser
+/// with pending paint work ([`BrowserWidget::wants_frame`]).
+///
+/// Minimized windows and windows on other virtual desktops are not drawn,
+/// so their content can't need a frame (restoring one changes SDI state).
+/// Windows without a runner or browser paint only SDI objects.
+pub fn windows_want_frame(
+    wm: &WindowManager,
+    desktops: &DesktopManager,
+    runners: &[(String, AppRunner)],
+    browser: Option<&BrowserWidget>,
+) -> bool {
+    if wm.is_animating() || wm.is_dragging() {
+        return true;
+    }
+    wm.windows().iter().any(|win| {
+        let id = win.id.as_str();
+        if win.state == WindowState::Minimized || !desktops.is_visible(id) {
+            return false;
+        }
+        if id == "browser" {
+            return browser.is_some_and(BrowserWidget::wants_frame);
+        }
+        runners
+            .iter()
+            .find(|(rid, _)| rid == id)
+            .is_some_and(|(_, runner)| runner.wants_frame())
+    })
 }
 
 /// Whether a window's chrome provably paints every pixel of its outer
@@ -397,7 +481,6 @@ mod tests {
         }
     }
 
-    use oasis_core::backend::Color;
     use oasis_core::wm::window::{WindowConfig, WindowType};
 
     fn test_window(window_type: WindowType, x: i32, y: i32, w: u32, h: u32) -> Window {
@@ -419,6 +502,150 @@ mod tests {
         win.outer_w = w;
         win.outer_h = h;
         win
+    }
+
+    // -- windows_want_frame (idle-frame elision with open windows) --
+
+    fn open_window(wm: &mut WindowManager, sdi: &mut SdiRegistry, id: &str) {
+        let config = WindowConfig {
+            id: id.to_string(),
+            title: id.to_string(),
+            x: Some(20),
+            y: Some(20),
+            width: 200,
+            height: 120,
+            window_type: WindowType::AppWindow,
+            always_on_top: false,
+            modal: false,
+        };
+        wm.create_window(&config, sdi).expect("create window");
+    }
+
+    fn launch_runner(title: &str, vfs: &oasis_core::vfs::MemoryVfs) -> AppRunner {
+        let entry = oasis_core::dashboard::AppEntry {
+            title: title.to_string(),
+            path: format!("/apps/{title}"),
+            icon_png: Vec::new(),
+            color: Color::rgb(100, 100, 100),
+        };
+        AppRunner::launch(&entry, vfs)
+    }
+
+    /// Mimic a drawn frame: every visible runner's content is on screen.
+    fn draw_frame(runners: &mut [(String, AppRunner)]) {
+        for (_, runner) in runners {
+            runner.mark_drawn();
+        }
+    }
+
+    #[test]
+    fn idle_terminal_and_static_page_elide_frames() {
+        use oasis_core::browser::BrowserConfig;
+        use oasis_core::vfs::{MemoryVfs, Vfs};
+
+        let mut sdi = SdiRegistry::new();
+        let mut wm = WindowManager::new(480, 272);
+        let desktops = DesktopManager::new(1);
+        let mut vfs = MemoryVfs::new();
+        vfs.mkdir("/sites/home").expect("mkdir");
+        vfs.write(
+            "/sites/home/index.html",
+            b"<html><body><h1>Static</h1><p>Nothing moves.</p></body></html>",
+        )
+        .expect("write");
+
+        open_window(&mut wm, &mut sdi, "terminal");
+        open_window(&mut wm, &mut sdi, "browser");
+        let mut runners = vec![("terminal".to_string(), launch_runner("Terminal", &vfs))];
+        let mut browser = BrowserWidget::new(BrowserConfig::default());
+        browser.set_window(20, 40, 200, 100);
+        browser.navigate_vfs("vfs://sites/home/index.html", &vfs);
+
+        // Freshly opened content must be drawn.
+        assert!(windows_want_frame(&wm, &desktops, &runners, Some(&browser)));
+
+        // Host frame loop: tick, then draw only frames that want it.
+        let mut backend = oasis_test_backend::RecordingBackend::new(480, 272);
+        let mut drawn = 0;
+        let frames = 120;
+        for _ in 0..frames {
+            browser.tick(&vfs);
+            for (_, runner) in &mut runners {
+                runner.tick(16, &vfs);
+            }
+            if windows_want_frame(&wm, &desktops, &runners, Some(&browser)) {
+                browser.paint(&mut backend).expect("paint");
+                draw_frame(&mut runners);
+                drawn += 1;
+            }
+        }
+        assert!(
+            drawn <= 3,
+            "idle terminal + static page drew {drawn} of {frames} frames"
+        );
+
+        // Typing into the terminal window schedules a redraw ...
+        let output = vec!["$ echo hi".to_string(), "hi".to_string()];
+        runners[0].1.sync_terminal_lines(&output, "> ", 0);
+        assert!(windows_want_frame(&wm, &desktops, &runners, Some(&browser)));
+        draw_frame(&mut runners);
+        runners[0].1.handle_text_input('x');
+        assert!(windows_want_frame(&wm, &desktops, &runners, Some(&browser)));
+        draw_frame(&mut runners);
+        assert!(!windows_want_frame(
+            &wm,
+            &desktops,
+            &runners,
+            Some(&browser)
+        ));
+
+        // ... but not while its window is minimized (nothing is drawn).
+        wm.minimize_window("terminal", &mut sdi).expect("minimize");
+        runners[0].1.handle_text_input('y');
+        assert!(!windows_want_frame(
+            &wm,
+            &desktops,
+            &runners,
+            Some(&browser)
+        ));
+    }
+
+    #[test]
+    fn running_game_window_wants_frames_as_it_moves() {
+        let mut sdi = SdiRegistry::new();
+        let mut wm = WindowManager::new(480, 272);
+        let desktops = DesktopManager::new(1);
+        let vfs = oasis_core::vfs::MemoryVfs::new();
+        open_window(&mut wm, &mut sdi, "games");
+        let mut runners = vec![("games".to_string(), launch_runner("Games", &vfs))];
+        runners[0]
+            .1
+            .handle_input(&oasis_core::input::Button::Confirm, &vfs); // Snake.
+        draw_frame(&mut runners);
+
+        // 1 s at 60 fps with no input: the snake steps ~10 times, each
+        // step (and only a step) wants a frame.
+        let mut drawn = 0;
+        for _ in 0..60 {
+            for (_, runner) in &mut runners {
+                runner.tick(16, &vfs);
+            }
+            if windows_want_frame(&wm, &desktops, &runners, None) {
+                draw_frame(&mut runners);
+                drawn += 1;
+            }
+        }
+        assert!(
+            (8..=11).contains(&drawn),
+            "snake drew {drawn} frames in 1 s"
+        );
+    }
+
+    #[test]
+    fn snap_preview_colors_are_translucent_tint_of_base() {
+        let (fill, edge) = snap_preview_colors(Color::rgb(10, 20, 30));
+        assert_eq!((fill.r, fill.g, fill.b), (10, 20, 30));
+        assert!(fill.a < edge.a && edge.a < 255);
     }
 
     #[test]

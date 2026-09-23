@@ -1,17 +1,35 @@
 //! Video player ticking: frame upload, audio feed, untune detection, episode auto-advance.
 
 use crate::app_state::AppState;
-use oasis_core::backend::{AudioBackend, SdiBackend};
+use oasis_core::backend::SdiBackend;
 
 /// Tick video player: upload frames, collect audio chunks.
 pub(super) fn tick_video_player(state: &mut AppState, backend: &mut impl SdiBackend) {
-    let (texture, audio_output) = state.video_player.tick(backend);
+    let (texture, mut audio_output) = state.video_player.tick(backend);
+
+    // The guide's volume slider (0-100) scales the video audio on top of
+    // the system volume the audio backend applies.
+    #[cfg(feature = "_video")]
+    let gain = {
+        let runner = super::find_tv_guide_runner(
+            &mut state.content.app_runner,
+            &mut state.content.open_runners,
+        );
+        runner
+            .and_then(|r| r.tv_guide_state())
+            .map_or(1.0, |guide| {
+                guide.volume_changed = false;
+                guide_volume_gain(guide.volume)
+            })
+    };
 
     // Feed audio to the streaming track.
     if let Some(track) = state.tv_audio_track {
         let mut audio_chunks_fed = 0u32;
+        // Only the PCM path counts samples (MP3 chunks are opaque bytes).
+        #[cfg_attr(not(feature = "_video"), allow(unused_mut))]
         let mut audio_samples_fed = 0u64;
-        match &audio_output {
+        match &mut audio_output {
             #[cfg(not(feature = "_video"))]
             crate::video_player::AudioOutput::Mp3Chunks(chunks) => {
                 for chunk in chunks {
@@ -21,7 +39,8 @@ pub(super) fn tick_video_player(state: &mut AppState, backend: &mut impl SdiBack
             },
             #[cfg(feature = "_video")]
             crate::video_player::AudioOutput::PcmF32(chunks) => {
-                for chunk in chunks {
+                apply_gain(chunks, gain);
+                for chunk in chunks.iter() {
                     audio_samples_fed += chunk.pcm_f32.len() as u64;
                     if let Err(e) = state.audio_backend.feed_pcm_f32(
                         track,
@@ -94,6 +113,22 @@ pub(super) fn tick_video_player(state: &mut AppState, backend: &mut impl SdiBack
         }
         guide.preview_texture = texture;
         guide.download_status = download_status;
+    }
+}
+
+/// Linear gain for the guide's volume slider (0-100).
+#[cfg(feature = "_video")]
+fn guide_volume_gain(volume: u8) -> f32 {
+    f32::from(volume.min(100)) / 100.0
+}
+
+/// Scale decoded video audio by `gain` (a no-op at full volume).
+#[cfg(feature = "_video")]
+fn apply_gain(chunks: &mut [crate::video_player::SoftwareAudio], gain: f32) {
+    if gain < 1.0 {
+        for chunk in chunks {
+            chunk.pcm_f32.iter_mut().for_each(|s| *s *= gain);
+        }
     }
 }
 
@@ -224,4 +259,45 @@ pub(super) fn auto_advance_episode(state: &mut AppState, backend: &mut impl SdiB
 
     use oasis_core::apps::tv_guide::TV_REQUEST_PATH;
     runner.set_pending_request(TV_REQUEST_PATH.to_string(), data);
+}
+
+#[cfg(all(test, feature = "_video"))]
+mod tests {
+    use super::*;
+    use crate::video_player::SoftwareAudio;
+
+    fn chunk(samples: &[f32]) -> SoftwareAudio {
+        SoftwareAudio {
+            pcm_f32: samples.to_vec(),
+            channels: 2,
+            sample_rate: 48000,
+        }
+    }
+
+    #[test]
+    fn guide_volume_maps_to_linear_gain() {
+        assert_eq!(guide_volume_gain(0), 0.0);
+        assert_eq!(guide_volume_gain(25), 0.25);
+        assert_eq!(guide_volume_gain(100), 1.0);
+        // Out-of-range values clamp instead of amplifying.
+        assert_eq!(guide_volume_gain(255), 1.0);
+    }
+
+    #[test]
+    fn default_guide_volume_attenuates_video_audio() {
+        let gain = guide_volume_gain(oasis_core::apps::tv_guide::grid_state::DEFAULT_VOLUME);
+        let mut chunks = vec![chunk(&[1.0, -1.0, 0.5, -0.5]), chunk(&[0.8, 0.2])];
+        apply_gain(&mut chunks, gain);
+        assert_eq!(chunks[0].pcm_f32, [0.25, -0.25, 0.125, -0.125]);
+        assert_eq!(chunks[1].pcm_f32, [0.2, 0.05]);
+    }
+
+    #[test]
+    fn full_volume_leaves_samples_untouched_and_mute_silences() {
+        let mut chunks = vec![chunk(&[0.3, -0.7])];
+        apply_gain(&mut chunks, guide_volume_gain(100));
+        assert_eq!(chunks[0].pcm_f32, [0.3, -0.7]);
+        apply_gain(&mut chunks, guide_volume_gain(0));
+        assert!(chunks[0].pcm_f32.iter().all(|s| *s == 0.0));
+    }
 }

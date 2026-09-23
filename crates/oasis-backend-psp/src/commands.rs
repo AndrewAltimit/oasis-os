@@ -118,7 +118,11 @@ pub fn execute_command(cmd: &str, config: &mut psp::config::Config) -> CommandRe
                 String::from("Battery: N/A")
             };
             vec![
-                String::from("OASIS_OS v0.1.0 [PSP] (kernel mode)"),
+                String::from(concat!(
+                    "OASIS_OS v",
+                    env!("CARGO_PKG_VERSION"),
+                    " [PSP] (kernel mode)"
+                )),
                 String::from("Platform: mipsel-sony-psp"),
                 String::from("Display: 480x272 RGBA8888"),
                 String::from("Backend: sceGu hardware"),
@@ -223,7 +227,10 @@ pub fn execute_command(cmd: &str, config: &mut psp::config::Config) -> CommandRe
             String::from("  plugin remove  - Remove overlay PRX"),
             String::from("  plugin status  - Show load status"),
         ],
-        "version" => vec![String::from("OASIS_OS v0.1.0")],
+        "version" => vec![String::from(concat!(
+            "OASIS_OS v",
+            env!("CARGO_PKG_VERSION")
+        ))],
         "about" => vec![
             String::from("OASIS_OS -- Embeddable OS Framework"),
             String::from("PSP backend with GU rendering (kernel mode)"),

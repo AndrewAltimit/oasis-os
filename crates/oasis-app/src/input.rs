@@ -1,11 +1,10 @@
 use oasis_audio::RADIO_APP_TITLE;
 use oasis_core::apps::{AppAction, AppRunner};
 use oasis_core::bottombar::MediaTab;
-use oasis_core::input::{Button, InputEvent, Trigger};
+use oasis_core::input::{Button, InputEvent, Key, KeyTwinFilter, Modifiers, Trigger};
 use oasis_core::osk::{OskConfig, OskState};
 use oasis_core::sdi::SdiRegistry;
 use oasis_core::startmenu::StartMenuAction;
-use oasis_core::terminal::Environment;
 use oasis_core::transition;
 use oasis_core::ui_sound::UiSound;
 use oasis_core::vfs::MemoryVfs;
@@ -14,7 +13,21 @@ use oasis_core::wm::manager::WmEvent;
 use crate::app_state::{AppState, Mode};
 use oasis_core::terminal_sdi;
 
-use crate::{commands, icon_drag, launch};
+use crate::{commands, icon_drag, launch, terminal_input};
+
+/// Point the dashboard's hover highlight / lift at the icon under the
+/// pointer. `reachable` is false when something (a window) covers the
+/// icons at this point; an open start menu, the media tabs, or an icon
+/// drag also clear the hover.
+fn update_dashboard_hover(state: &mut AppState, x: i32, y: i32, reachable: bool) {
+    let target = (reachable
+        && !state.ui.start_menu.open
+        && state.ui.bottom_bar.active_tab == MediaTab::None
+        && !icon_drag::active(state))
+    .then(|| state.ui.dashboard.icon_at(x, y))
+    .flatten();
+    state.ui.dashboard.set_hover(target);
+}
 
 /// Launch the dashboard app at page index `idx` as a floating window.
 ///
@@ -76,7 +89,7 @@ fn apply_page_change_fade(state: &mut AppState) {
 fn stop_radio(state: &mut AppState) {
     let _ = state
         .radio_manager
-        .process_request("stop", &mut state.audio_backend);
+        .process_request("stop", state.audio_backend.as_mut());
     state.archive_catalog = None;
     state.pending_catalog_fetch = None;
     state.pending_source_fetch = None;
@@ -88,7 +101,7 @@ fn stop_radio(state: &mut AppState) {
 /// Stop the radio if the closing runner is the Internet Radio app.
 /// Closing the app window should also stop playback — otherwise audio
 /// keeps playing with no UI to control it.
-fn stop_radio_if_radio_runner(state: &mut AppState, id: &str) {
+pub(crate) fn stop_radio_if_radio_runner(state: &mut AppState, id: &str) {
     let is_radio = state
         .content
         .open_runners
@@ -103,7 +116,7 @@ fn stop_radio_if_radio_runner(state: &mut AppState, id: &str) {
 /// track. The app itself emits a `stop` VFS IPC on Cancel, but the
 /// window-manager close button bypasses that path — the runner is
 /// dropped before `tick()` gets another chance to read the IPC.
-fn stop_music_if_music_runner(state: &mut AppState, id: &str) {
+pub(crate) fn stop_music_if_music_runner(state: &mut AppState, id: &str) {
     const MUSIC_APP_TITLE: &str = "Music Player";
     let is_music = state
         .content
@@ -112,6 +125,77 @@ fn stop_music_if_music_runner(state: &mut AppState, id: &str) {
         .any(|(rid, runner)| rid == id && runner.title == MUSIC_APP_TITLE);
     if is_music {
         crate::media_controller::shutdown(state);
+    }
+}
+
+/// Id of the window whose titlebar close button is under `(x, y)` (only
+/// the topmost window at that point counts).
+fn close_button_under(state: &AppState, x: i32, y: i32) -> Option<String> {
+    let id = state.wm.window_at(x, y)?;
+    let win = state.wm.get_window(id).filter(|w| !w.fullscreen_kiosk)?;
+    let (bx, by, bw, bh) = win.close_btn_rect(state.wm.theme())?;
+    let hit = x >= bx && y >= by && x < bx + bw as i32 && y < by + bh as i32;
+    hit.then(|| id.to_string())
+}
+
+/// Where leaving the fullscreen terminal lands: back on the desktop while
+/// windows are on screen (the terminal can be entered from there, e.g. an
+/// app's "switch to terminal"), otherwise the dashboard. The dashboard
+/// mode does not route input to windows, so returning there with windows
+/// visible would leave them painted but unusable.
+fn home_mode(state: &AppState) -> Mode {
+    let windows_visible = state
+        .wm
+        .windows()
+        .iter()
+        .any(|w| w.state != oasis_core::wm::window::WindowState::Minimized);
+    if windows_visible {
+        Mode::Desktop
+    } else {
+        Mode::Dashboard
+    }
+}
+
+/// Drive the open start menu with a gamepad-style button (d-pad moves the
+/// highlight, Confirm picks, Cancel closes).
+fn start_menu_button(
+    btn: Button,
+    state: &mut AppState,
+    sdi: &mut SdiRegistry,
+    vfs: &MemoryVfs,
+) -> InputResult {
+    if matches!(btn, Button::Up | Button::Down) {
+        state.ui_sounds.push_nav(state.frame_counter);
+    }
+    let action = state.ui.start_menu.handle_input(&btn);
+    if action == StartMenuAction::Exit {
+        return InputResult::Quit;
+    }
+    if action != StartMenuAction::None {
+        handle_start_menu_action(&action, state, sdi, vfs);
+    }
+    InputResult::Continue
+}
+
+/// Whether the start menu is open and receiving the keyboard.
+fn start_menu_focused(state: &AppState) -> bool {
+    state.ui.start_menu.open && matches!(state.mode, Mode::Dashboard | Mode::Desktop)
+}
+
+/// Remove the windowed runner `id`, parking it until the shell releases
+/// its backend resources (see `ContentLayer::retired_runners`).
+fn retire_runner(state: &mut AppState, id: &str) {
+    let content = &mut state.content;
+    while let Some(idx) = content.open_runners.iter().position(|(rid, _)| rid == id) {
+        let (_, runner) = content.open_runners.remove(idx);
+        content.retired_runners.push(runner);
+    }
+}
+
+/// Remove the fullscreen (`Mode::App`) runner the same way.
+fn retire_fullscreen_runner(state: &mut AppState) {
+    if let Some(runner) = state.content.app_runner.take() {
+        state.content.retired_runners.push(runner);
     }
 }
 
@@ -136,24 +220,37 @@ pub fn handle_osk_input(
             },
             InputEvent::ButtonPress(btn) => {
                 osk_state.handle_input(btn);
+                let for_terminal = osk_state.config.title == TERMINAL_OSK_TITLE;
+                let back_to = if for_terminal {
+                    Mode::Terminal
+                } else {
+                    Mode::Dashboard
+                };
                 if let Some(text) = osk_state.confirmed_text() {
-                    state
-                        .terminal
-                        .output_lines
-                        .push(format!("[OSK] Input: {text}"));
-                    commands::trim_output(&mut state.terminal.output_lines);
+                    if for_terminal {
+                        // The OSK edited the prompt line: put it back.
+                        state.terminal.session.set_line(text);
+                    } else {
+                        state
+                            .terminal
+                            .output_lines
+                            .push(format!("[OSK] Input: {text}"));
+                        commands::trim_output(&mut state.terminal.output_lines);
+                    }
                     osk_state.hide_sdi(sdi);
                     state.osk = None;
-                    state.mode = Mode::Dashboard;
+                    state.mode = back_to;
                 } else if osk_state.is_cancelled() {
-                    state
-                        .terminal
-                        .output_lines
-                        .push("[OSK] Cancelled".to_string());
-                    commands::trim_output(&mut state.terminal.output_lines);
+                    if !for_terminal {
+                        state
+                            .terminal
+                            .output_lines
+                            .push("[OSK] Cancelled".to_string());
+                        commands::trim_output(&mut state.terminal.output_lines);
+                    }
                     osk_state.hide_sdi(sdi);
                     state.osk = None;
-                    state.mode = Mode::Dashboard;
+                    state.mode = back_to;
                 }
             },
             _ => {},
@@ -161,6 +258,12 @@ pub fn handle_osk_input(
     }
     InputResult::Continue
 }
+
+/// OSK title for the general-purpose keyboard (result echoed to the
+/// terminal scrollback).
+const DEFAULT_OSK_TITLE: &str = "On-Screen Keyboard";
+/// OSK title when it edits the terminal prompt (result returns to it).
+const TERMINAL_OSK_TITLE: &str = "Terminal Input";
 
 /// Handle input in Desktop (windowed WM) mode.
 pub fn handle_desktop_input(
@@ -219,10 +322,26 @@ pub fn handle_desktop_input(
                 {
                     // Minimized -- restore and focus.
                     let _ = state.wm.restore_window(&win_id, sdi);
+                    let _ = state.wm.focus_window(&win_id, sdi);
                 } else {
                     // Inactive, visible -- bring to front.
                     let _ = state.wm.focus_window(&win_id, sdi);
                 }
+                return InputResult::Continue;
+            }
+            // A titlebar close button asks the app first: an editor with
+            // unsaved changes answers with its prompt instead of closing
+            // (the WM would otherwise drop the window, and the edits, on
+            // the spot).
+            if let Some(id) = close_button_under(state, *x, *y)
+                && let Some((_, runner)) = state
+                    .content
+                    .open_runners
+                    .iter_mut()
+                    .find(|(rid, _)| *rid == id)
+                && runner.request_close(vfs) != AppAction::Exit
+            {
+                let _ = state.wm.focus_window(&id, sdi);
                 return InputResult::Continue;
             }
             let wm_event = state
@@ -236,7 +355,7 @@ pub fn handle_desktop_input(
                     }
                     stop_radio_if_radio_runner(state, &id);
                     stop_music_if_music_runner(state, &id);
-                    state.content.open_runners.retain(|(rid, _)| *rid != id);
+                    retire_runner(state, &id);
                     if id == "browser" {
                         state.content.browser = None;
                     }
@@ -263,12 +382,10 @@ pub fn handle_desktop_input(
                         // Apply any vfs work the click queued (e.g. file
                         // manager folder navigation).
                         runner.refresh_app(vfs);
-                        if action == AppAction::RequestFullscreen
-                            && state.content.fullscreen_app.is_none()
-                        {
-                            let _ = state.wm.enter_fullscreen(&id, sdi);
-                            state.content.fullscreen_app = Some(id.to_string());
-                        }
+                        // Clicks answer with the same actions as buttons: a
+                        // double-clicked file opens in its app, a
+                        // File > Close menu item closes the window.
+                        apply_window_action(action, id.to_string(), state, sdi, vfs);
                     }
                 },
                 WmEvent::DesktopClick(dx, dy) => {
@@ -296,6 +413,12 @@ pub fn handle_desktop_input(
         InputEvent::CursorMove { x, y } => {
             state.ui.taskbar.set_hover(*x, *y);
             state.ui.start_menu.set_hover(*x, *y);
+            // Desktop icons sit behind windows: only hover them where the
+            // pointer reaches the bare desktop.
+            let on_desktop =
+                oasis_core::wm::hit_test::hit_test(state.wm.windows(), *x, *y, state.wm.theme())
+                    == oasis_core::wm::HitRegion::Desktop;
+            update_dashboard_hover(state, *x, *y, on_desktop);
             if icon_drag::active(state) {
                 // Desktop-icon drag in progress: the press already missed
                 // every window, so the WM has nothing to track.
@@ -305,6 +428,14 @@ pub fn handle_desktop_input(
             state
                 .wm
                 .handle_input(&InputEvent::CursorMove { x: *x, y: *y }, sdi);
+            // Hover (links, status-bar URL, JS mouseover) and wheel
+            // routing to nested scroll containers need the pointer.
+            if !state.wm.is_dragging()
+                && state.wm.window_at(*x, *y) == Some("browser")
+                && let Some(ref mut bw) = state.content.browser
+            {
+                bw.handle_input(&InputEvent::CursorMove { x: *x, y: *y }, vfs);
+            }
         },
         InputEvent::PointerRelease { x, y } => {
             if icon_drag::active(state) {
@@ -329,8 +460,43 @@ pub fn handle_desktop_input(
                 state.content.fullscreen_app = Some(active_id);
             }
         },
+        // An open start menu owns the d-pad, Confirm and Cancel, ahead of
+        // the focused window.
+        InputEvent::ButtonPress(btn) if state.ui.start_menu.open => {
+            return start_menu_button(*btn, state, sdi, vfs);
+        },
+        // Text typed while the menu is open is not meant for the window.
+        InputEvent::TextInput(_) | InputEvent::Backspace if state.ui.start_menu.open => {},
         InputEvent::ButtonPress(Button::Cancel) => {
             if let Some(active_id) = state.wm.active_window().map(|s| s.to_string()) {
+                // App windows own Cancel: it backs out of dialogs, leaves
+                // viewers, untunes the TV and raises the Text Editor's
+                // unsaved-changes prompt. The window only closes when the
+                // app answers `Exit` (which every app does at top level).
+                // The browser and the windowed terminal are not `App`s and
+                // keep the plain close-on-Cancel behavior.
+                if active_id != "browser"
+                    && active_id != "terminal"
+                    && let Some((_, runner)) = state
+                        .content
+                        .open_runners
+                        .iter_mut()
+                        .find(|(id, _)| *id == active_id)
+                {
+                    let action = runner.handle_input(&Button::Cancel, vfs);
+                    apply_window_action(action, active_id, state, sdi, vfs);
+                    return InputResult::Continue;
+                }
+                // While the user is typing in the browser (URL bar or a
+                // page text field), Cancel ends the typing instead of
+                // closing the window.
+                if active_id == "browser"
+                    && let Some(ref mut bw) = state.content.browser
+                    && bw.accepts_text()
+                {
+                    bw.handle_input(&InputEvent::ButtonPress(Button::Cancel), vfs);
+                    return InputResult::Continue;
+                }
                 state.ui_sounds.push(UiSound::Close);
                 // If closing the fullscreen window, clear fullscreen state first.
                 if state.content.fullscreen_app.as_deref() == Some(active_id.as_str()) {
@@ -340,16 +506,19 @@ pub fn handle_desktop_input(
                 let _ = state.wm.close_window(&active_id, sdi);
                 stop_radio_if_radio_runner(state, &active_id);
                 stop_music_if_music_runner(state, &active_id);
-                state
-                    .content
-                    .open_runners
-                    .retain(|(rid, _)| *rid != active_id);
+                retire_runner(state, &active_id);
                 if active_id == "browser" {
                     state.content.browser = None;
                 }
                 if state.wm.window_count() == 0 {
                     state.mode = Mode::Dashboard;
                 }
+            } else if let Some(top) = state.wm.topmost_visible().map(str::to_string) {
+                // Nothing focused (e.g. after a click on the bare desktop)
+                // but windows are still on screen: focus the top one, so the
+                // next Cancel reaches it. Switching to the dashboard here
+                // would leave the windows painted but dead to input.
+                let _ = state.wm.focus_window(&top, sdi);
             } else {
                 state.mode = Mode::Dashboard;
             }
@@ -357,15 +526,21 @@ pub fn handle_desktop_input(
         InputEvent::ButtonPress(Button::Start) if !state.skin.features.window_manager => {
             state.mode = Mode::Terminal;
         },
+        // Windowed terminal: line editing (text, Backspace, Tab, d-pad,
+        // Confirm, Square) goes to the shell session.
+        InputEvent::TextInput(_)
+        | InputEvent::Backspace
+        | InputEvent::Tab
+        | InputEvent::ButtonPress(_)
+            if state.wm.active_window() == Some("terminal")
+                && terminal_input::handle_event(event, state, sdi, vfs) => {},
         InputEvent::TextInput(ch) => match state.wm.active_window() {
             Some("browser") => {
                 if let Some(ref mut bw) = state.content.browser {
                     bw.handle_input(&InputEvent::TextInput(*ch), vfs);
                 }
             },
-            Some("terminal") => {
-                state.terminal.input_buf.push(*ch);
-            },
+            Some("terminal") => {},
             Some(active_id) => {
                 if let Some((_, runner)) = state
                     .content
@@ -384,9 +559,7 @@ pub fn handle_desktop_input(
                     bw.handle_input(&InputEvent::Backspace, vfs);
                 }
             },
-            Some("terminal") => {
-                state.terminal.input_buf.pop();
-            },
+            Some("terminal") => {},
             Some(active_id) => {
                 if let Some((_, runner)) = state
                     .content
@@ -400,7 +573,16 @@ pub fn handle_desktop_input(
             None => {},
         },
         InputEvent::MouseWheel { delta } => {
-            match state.wm.active_window() {
+            // The wheel scrolls the window under the pointer (like desktop
+            // OSes), falling back to the focused window when the pointer
+            // is over the bare desktop. Scrolling never changes focus.
+            let (px, py) = (state.ui.mouse_cursor.x, state.ui.mouse_cursor.y);
+            let target = state
+                .wm
+                .window_at(px, py)
+                .or_else(|| state.wm.active_window())
+                .map(str::to_string);
+            match target.as_deref() {
                 Some("browser") => {
                     if let Some(ref mut bw) = state.content.browser {
                         bw.handle_input(&InputEvent::MouseWheel { delta: *delta }, vfs);
@@ -432,83 +614,14 @@ pub fn handle_desktop_input(
                     if let Some(ref mut bw) = state.content.browser {
                         bw.handle_input(&InputEvent::ButtonPress(*btn), vfs);
                     }
-                } else if active_id == "terminal" && *btn == Button::Confirm {
-                    // Execute command in windowed terminal.
-                    let line = state.terminal.input_buf.clone();
-                    state.terminal.input_buf.clear();
-                    state.terminal.scroll_offset = 0;
-                    if !line.is_empty() {
-                        state.terminal.output_lines.push(format!("> {line}"));
-                        let pending_skin_swap;
-                        {
-                            let mut env = Environment {
-                                cwd: state.terminal.cwd.clone(),
-                                vfs,
-                                power: Some(&state.platform),
-                                time: Some(&state.platform),
-                                usb: Some(&state.platform),
-                                network: None,
-                                tls: Some(&state.net.tls_provider),
-                                stdin: None,
-                                stderr: String::new(),
-                            };
-                            let result = state.terminal.cmd_reg.execute(&line, &mut env);
-                            state.terminal.cwd = env.cwd;
-                            pending_skin_swap = commands::process_command_output(result, state);
-                        }
-                        if let Some(name) = pending_skin_swap {
-                            commands::apply_skin_swap(&name, state, sdi, vfs);
-                        }
-                    }
-                    commands::trim_output(&mut state.terminal.output_lines);
                 } else if let Some((_, runner)) = state
                     .content
                     .open_runners
                     .iter_mut()
                     .find(|(id, _)| *id == active_id)
                 {
-                    match runner.handle_input(btn, vfs) {
-                        AppAction::Exit => {
-                            state.ui_sounds.push(UiSound::Close);
-                            if state.content.fullscreen_app.as_deref() == Some(active_id.as_str()) {
-                                let _ = state.wm.exit_fullscreen(&active_id, sdi);
-                                state.content.fullscreen_app = None;
-                            }
-                            let _ = state.wm.close_window(&active_id, sdi);
-                            stop_radio_if_radio_runner(state, &active_id);
-                            stop_music_if_music_runner(state, &active_id);
-                            state
-                                .content
-                                .open_runners
-                                .retain(|(rid, _)| *rid != active_id);
-                            if state.wm.window_count() == 0 {
-                                state.mode = Mode::Dashboard;
-                            }
-                        },
-                        AppAction::SwitchToTerminal => {
-                            state.mode = Mode::Terminal;
-                        },
-                        AppAction::RequestFullscreen => {
-                            if state.content.fullscreen_app.is_none() {
-                                let _ = state.wm.enter_fullscreen(&active_id, sdi);
-                                state.content.fullscreen_app = Some(active_id);
-                            }
-                        },
-                        AppAction::LaunchAppWithFile {
-                            app_title,
-                            file_path,
-                        } => {
-                            launch::launch_app_window_for_file(
-                                &app_title,
-                                &file_path,
-                                &mut state.wm,
-                                sdi,
-                                &mut state.content.open_runners,
-                                vfs,
-                            );
-                        },
-                        AppAction::None => {},
-                    }
+                    let action = runner.handle_input(btn, vfs);
+                    apply_window_action(action, active_id, state, sdi, vfs);
                 }
             }
         },
@@ -535,49 +648,353 @@ pub fn handle_app_input(
         match event {
             InputEvent::Quit => return InputResult::Quit,
             InputEvent::ButtonPress(btn) => {
-                let is_radio = runner.title == RADIO_APP_TITLE;
-                let is_music = runner.title == "Music Player";
-                match runner.handle_input(btn, vfs) {
-                    AppAction::Exit => {
-                        state.ui_sounds.push(UiSound::Close);
-                        AppRunner::hide_sdi(sdi);
-                        state.content.app_runner = None;
-                        state.mode = Mode::Dashboard;
-                        if is_radio {
-                            stop_radio(state);
-                        }
-                        if is_music {
-                            crate::media_controller::shutdown(state);
-                        }
-                    },
-                    AppAction::SwitchToTerminal => {
-                        AppRunner::hide_sdi(sdi);
-                        state.content.app_runner = None;
-                        state.mode = Mode::Terminal;
-                    },
-                    AppAction::LaunchAppWithFile {
-                        app_title,
-                        file_path,
-                    } => {
-                        // Replace the current fullscreen runner with the
-                        // target app, with the file pre-opened.
-                        AppRunner::hide_sdi(sdi);
-                        let entry = oasis_core::dashboard::AppEntry {
-                            title: app_title.clone(),
-                            path: format!("/apps/{app_title}"),
-                            icon_png: Vec::new(),
-                            color: oasis_core::backend::Color::rgb(100, 100, 100),
-                        };
-                        state.content.app_runner =
-                            Some(AppRunner::launch_with_file(&entry, &file_path, vfs));
-                    },
-                    AppAction::RequestFullscreen | AppAction::None => {},
-                }
+                let action = runner.handle_input(btn, vfs);
+                apply_fullscreen_action(action, state, sdi, vfs);
             },
             _ => {},
         }
     }
     InputResult::Continue
+}
+
+/// Close every open app that asked to close itself outside an input
+/// handler ([`AppRunner::take_close_request`], e.g. the Text Editor after
+/// "Save & close" is written). Call once per frame after the runners'
+/// `apply_vfs_ops` and `tick`.
+pub fn apply_app_close_requests(state: &mut AppState, sdi: &mut SdiRegistry, vfs: &MemoryVfs) {
+    if state
+        .content
+        .app_runner
+        .as_mut()
+        .is_some_and(AppRunner::take_close_request)
+    {
+        apply_fullscreen_action(AppAction::Exit, state, sdi, vfs);
+    }
+    let closing: Vec<String> = state
+        .content
+        .open_runners
+        .iter_mut()
+        .filter_map(|(id, runner)| runner.take_close_request().then(|| id.clone()))
+        .collect();
+    for id in closing {
+        apply_window_action(AppAction::Exit, id, state, sdi, vfs);
+    }
+}
+
+/// Apply an [`AppAction`] returned by the fullscreen (`Mode::App`) runner.
+fn apply_fullscreen_action(
+    action: AppAction,
+    state: &mut AppState,
+    sdi: &mut SdiRegistry,
+    vfs: &MemoryVfs,
+) {
+    let (is_radio, is_music) = state
+        .content
+        .app_runner
+        .as_ref()
+        .map_or((false, false), |r| {
+            (r.title == RADIO_APP_TITLE, r.title == "Music Player")
+        });
+    match action {
+        AppAction::Exit => {
+            state.ui_sounds.push(UiSound::Close);
+            AppRunner::hide_sdi(sdi);
+            retire_fullscreen_runner(state);
+            state.mode = Mode::Dashboard;
+            if is_radio {
+                stop_radio(state);
+            }
+            if is_music {
+                crate::media_controller::shutdown(state);
+            }
+        },
+        AppAction::SwitchToTerminal => {
+            AppRunner::hide_sdi(sdi);
+            retire_fullscreen_runner(state);
+            state.mode = Mode::Terminal;
+        },
+        AppAction::LaunchAppWithFile {
+            app_title,
+            file_path,
+        } => {
+            // Replace the current fullscreen runner with the
+            // target app, with the file pre-opened.
+            AppRunner::hide_sdi(sdi);
+            let entry = oasis_core::dashboard::AppEntry {
+                title: app_title.clone(),
+                path: format!("/apps/{app_title}"),
+                icon_png: Vec::new(),
+                color: oasis_core::backend::Color::rgb(100, 100, 100),
+            };
+            retire_fullscreen_runner(state);
+            state.content.app_runner = Some(AppRunner::launch_with_file(&entry, &file_path, vfs));
+        },
+        AppAction::RequestFullscreen | AppAction::None => {},
+    }
+}
+
+/// Apply an [`AppAction`] returned by the windowed runner `active_id`.
+fn apply_window_action(
+    action: AppAction,
+    active_id: String,
+    state: &mut AppState,
+    sdi: &mut SdiRegistry,
+    vfs: &MemoryVfs,
+) {
+    match action {
+        AppAction::Exit => {
+            state.ui_sounds.push(UiSound::Close);
+            if state.content.fullscreen_app.as_deref() == Some(active_id.as_str()) {
+                let _ = state.wm.exit_fullscreen(&active_id, sdi);
+                state.content.fullscreen_app = None;
+            }
+            let _ = state.wm.close_window(&active_id, sdi);
+            stop_radio_if_radio_runner(state, &active_id);
+            stop_music_if_music_runner(state, &active_id);
+            retire_runner(state, &active_id);
+            if state.wm.window_count() == 0 {
+                state.mode = Mode::Dashboard;
+            }
+        },
+        AppAction::SwitchToTerminal => {
+            state.mode = Mode::Terminal;
+        },
+        AppAction::RequestFullscreen => {
+            if state.content.fullscreen_app.is_none() {
+                let _ = state.wm.enter_fullscreen(&active_id, sdi);
+                state.content.fullscreen_app = Some(active_id);
+            }
+        },
+        AppAction::LaunchAppWithFile {
+            app_title,
+            file_path,
+        } => {
+            launch::launch_app_window_for_file(
+                &app_title,
+                &file_path,
+                &mut state.wm,
+                sdi,
+                &mut state.content.open_runners,
+                vfs,
+            );
+        },
+        AppAction::None => {},
+    }
+}
+
+/// Whether the current input target is a text-entry surface: the terminal
+/// (fullscreen or windowed), the browser while its URL bar / a form field
+/// has focus, or an app whose [`App::accepts_text`] is true.
+///
+/// [`App::accepts_text`]: oasis_core::apps::App::accepts_text
+pub fn text_focus(state: &AppState) -> bool {
+    match state.mode {
+        Mode::Terminal => true,
+        Mode::App => state
+            .content
+            .app_runner
+            .as_ref()
+            .is_some_and(AppRunner::accepts_text),
+        Mode::Desktop => match state.wm.active_window() {
+            Some("terminal") => true,
+            Some("browser") => state
+                .content
+                .browser
+                .as_ref()
+                .is_some_and(|bw| bw.accepts_text()),
+            Some(active_id) => state
+                .content
+                .open_runners
+                .iter()
+                .any(|(id, runner)| id == active_id && runner.accepts_text()),
+            None => false,
+        },
+        Mode::Dashboard | Mode::Osk => false,
+    }
+}
+
+/// Route a raw key press to the focused app's [`App::handle_key`].
+///
+/// Returns `true` when the app consumed the key (its action has been
+/// applied and the key's gamepad-style twin must be dropped).
+///
+/// [`App::handle_key`]: oasis_core::apps::App::handle_key
+fn route_key(
+    key: &Key,
+    mods: Modifiers,
+    state: &mut AppState,
+    sdi: &mut SdiRegistry,
+    vfs: &mut MemoryVfs,
+) -> bool {
+    match state.mode {
+        Mode::App => {
+            let Some(runner) = state.content.app_runner.as_mut() else {
+                return false;
+            };
+            let Some(action) = runner.handle_key(key, mods, vfs) else {
+                return false;
+            };
+            apply_fullscreen_action(action, state, sdi, vfs);
+            true
+        },
+        Mode::Desktop => {
+            // The browser takes its own keyboard shortcuts (reload,
+            // history, URL bar, paging); everything else reaches it as
+            // the legacy twin events.
+            if state.wm.active_window() == Some("browser") {
+                return state
+                    .content
+                    .browser
+                    .as_mut()
+                    .is_some_and(|bw| bw.handle_key(*key, mods, vfs));
+            }
+            // The browser and terminal windows are not `App`s; they keep
+            // using the legacy events.
+            let Some(active_id) = state
+                .wm
+                .active_window()
+                .filter(|id| *id != "browser" && *id != "terminal")
+                .map(str::to_string)
+            else {
+                return false;
+            };
+            let Some((_, runner)) = state
+                .content
+                .open_runners
+                .iter_mut()
+                .find(|(id, _)| *id == active_id)
+            else {
+                return false;
+            };
+            let Some(action) = runner.handle_key(key, mods, vfs) else {
+                return false;
+            };
+            runner.refresh_app(vfs);
+            apply_window_action(action, active_id, state, sdi, vfs);
+            true
+        },
+        Mode::Dashboard | Mode::Terminal | Mode::Osk => false,
+    }
+}
+
+/// Keyboard window management in desktop mode. Returns `true` when the
+/// key was a window-management shortcut (and has been handled):
+///
+/// | Shortcut | Action |
+/// |---|---|
+/// | Alt+Tab / Alt+Shift+Tab | Cycle focus forward / backward (minimized windows skipped) |
+/// | Super+Left/Right or Ctrl+Alt+Left/Right | Snap active window to that half (opposite half unsnaps) |
+/// | Super+Up or Ctrl+Alt+Up | Maximize active window |
+/// | Super+Down or Ctrl+Alt+Down | Restore a maximized/snapped window, else minimize |
+/// | Super+T or Ctrl+Alt+T | Cycle tiling layouts (last step returns to floating) |
+///
+/// Every combo includes Ctrl, Alt or Super, so a text-entry window keeps
+/// receiving plain Tab, arrows and letters. Ctrl+Alt+Arrow exists because
+/// desktop OSes commonly swallow Super+Arrow before it reaches the app.
+pub fn handle_wm_shortcut(
+    key: &Key,
+    mods: Modifiers,
+    state: &mut AppState,
+    sdi: &mut SdiRegistry,
+) -> bool {
+    use oasis_core::wm::KeyboardSnapDirection as Dir;
+
+    if !mods.has_command() || !state.skin.features.window_manager {
+        return false;
+    }
+    // A kiosk-fullscreen app owns the whole screen (and its keys).
+    if state.content.fullscreen_app.is_some() {
+        return false;
+    }
+    let alt_only = mods.only(Modifiers::ALT) || mods.only(Modifiers::ALT | Modifiers::SHIFT);
+    let wm_mod = mods.only(Modifiers::SUPER) || mods.only(Modifiers::CTRL | Modifiers::ALT);
+
+    match key {
+        Key::Tab if alt_only => {
+            // Modal dialogs keep focus until dismissed.
+            if !state.wm.has_modal() {
+                state.wm.cycle_focus(!mods.shift(), sdi);
+            }
+            true
+        },
+        Key::Left | Key::Right | Key::Up | Key::Down if wm_mod => {
+            let dir = match key {
+                Key::Left => Dir::Left,
+                Key::Right => Dir::Right,
+                Key::Up => Dir::Up,
+                _ => Dir::Down,
+            };
+            if let Some(active) = state.wm.active_window().map(str::to_string) {
+                state.wm.keyboard_snap_window(&active, dir, sdi);
+            }
+            true
+        },
+        Key::Char('t') if wm_mod => {
+            let msg = match state.wm.cycle_tiling(sdi) {
+                Some(layout) => format!("Tiling: {layout:?}"),
+                None => "Tiling off".to_string(),
+            };
+            state.toasts.show(
+                msg,
+                oasis_core::toast::ToastLevel::Info,
+                state.active_theme.toast.ttl,
+            );
+            true
+        },
+        _ => false,
+    }
+}
+
+/// Top-level per-event entry point used by the main loop.
+///
+/// Handles [`InputEvent::Key`] (routing it to the focused app and arming
+/// `key_filter` so the key's gamepad-style twin is dropped when the app
+/// consumed it or when it merely typed text into a text-entry target),
+/// then dispatches every other event to the handler for the current mode.
+pub fn handle_event(
+    event: &InputEvent,
+    key_filter: &mut KeyTwinFilter,
+    state: &mut AppState,
+    sdi: &mut SdiRegistry,
+    vfs: &mut MemoryVfs,
+) -> InputResult {
+    if key_filter.should_drop(event) {
+        return InputResult::Continue;
+    }
+    if let InputEvent::Key { key, mods } = event {
+        // Window-management shortcuts win over the focused app, like an
+        // OS-level hotkey. They all need Ctrl/Alt/Super, so plain keys
+        // (Tab, arrows, letters) still reach text-entry windows.
+        if state.mode == Mode::Desktop && handle_wm_shortcut(key, *mods, state, sdi) {
+            key_filter.suppress_twin(*key, *mods);
+            return InputResult::Continue;
+        }
+        // An open start menu takes the keyboard: the key's gamepad twin
+        // (arrows, Enter, Escape) navigates it instead of the focused app.
+        if start_menu_focused(state) {
+            return InputResult::Continue;
+        }
+        // Terminal line-editing shortcuts (Home/End/Delete, Ctrl+A/E/K/...,
+        // Ctrl+R search). Their twins (e.g. Ctrl+E's R-trigger) are dropped.
+        if terminal_input::focused(state)
+            && terminal_input::handle_key(*key, *mods, state, sdi, vfs)
+        {
+            key_filter.suppress_twin(*key, *mods);
+            return InputResult::Continue;
+        }
+        let typing = key.produces_text(*mods) && text_focus(state);
+        let consumed = route_key(key, *mods, state, sdi, vfs);
+        if consumed || typing {
+            key_filter.suppress_twin(*key, *mods);
+        }
+        return InputResult::Continue;
+    }
+    match state.mode {
+        Mode::Osk => handle_osk_input(event, state, sdi),
+        Mode::Desktop => handle_desktop_input(event, state, sdi, vfs),
+        Mode::App => handle_app_input(event, state, sdi, vfs),
+        _ => handle_default_input(event, state, sdi, vfs),
+    }
 }
 
 /// Handle input in Dashboard/Terminal modes and global keys.
@@ -589,6 +1006,14 @@ pub fn handle_default_input(
 ) -> InputResult {
     match event {
         InputEvent::Quit => return InputResult::Quit,
+        // An open start menu owns the d-pad, Confirm and Cancel (Cancel
+        // closes it): checked before the dashboard's own Confirm (launch
+        // the selected icon) and Cancel (quit) bindings.
+        InputEvent::ButtonPress(btn)
+            if state.mode == Mode::Dashboard && state.ui.start_menu.open =>
+        {
+            return start_menu_button(*btn, state, sdi, vfs);
+        },
         InputEvent::ButtonPress(Button::Cancel) if state.mode == Mode::Dashboard => {
             return InputResult::Quit;
         },
@@ -658,6 +1083,7 @@ pub fn handle_default_input(
         // Free-layout icon drag tracking (no-ops when nothing is armed).
         InputEvent::CursorMove { x, y } if state.mode == Mode::Dashboard => {
             icon_drag::on_move(state, *x, *y);
+            update_dashboard_hover(state, *x, *y, true);
             // Hover focus (B6): in free layout the selection follows the
             // pointer, driving the existing focus_scale / focus_glow /
             // selection-highlight micro-motion. Grid skins keep their
@@ -679,18 +1105,29 @@ pub fn handle_default_input(
         InputEvent::ButtonPress(Button::Start) => {
             state.mode = match state.mode {
                 Mode::Dashboard => Mode::Terminal,
-                Mode::Terminal => Mode::Dashboard,
+                Mode::Terminal => home_mode(state),
                 Mode::App => Mode::App,
                 Mode::Osk => Mode::Osk,
                 Mode::Desktop => Mode::Desktop,
             };
         },
         InputEvent::ButtonPress(Button::Select) if state.mode != Mode::Osk => {
+            // Opened from the terminal, the OSK edits the prompt line and
+            // hands the result back to it (see `handle_osk_input`).
+            let from_terminal = state.mode == Mode::Terminal;
+            let (title, initial) = if from_terminal {
+                (
+                    TERMINAL_OSK_TITLE,
+                    state.terminal.session.buffer().to_string(),
+                )
+            } else {
+                (DEFAULT_OSK_TITLE, String::new())
+            };
             let osk_cfg = OskConfig {
-                title: "On-Screen Keyboard".to_string(),
+                title: title.to_string(),
                 ..OskConfig::for_screen(state.active_theme.screen_w, state.active_theme.screen_h)
             };
-            state.osk = Some(OskState::new(osk_cfg, ""));
+            state.osk = Some(OskState::new(osk_cfg, &initial));
             state.mode = Mode::Osk;
             log::info!("OSK opened");
         },
@@ -718,22 +1155,6 @@ pub fn handle_default_input(
             state.ui.bottom_bar.r_pressed = false;
         },
 
-        // Start menu intercepts input when open.
-        InputEvent::ButtonPress(btn)
-            if state.mode == Mode::Dashboard && state.ui.start_menu.open =>
-        {
-            if matches!(btn, Button::Up | Button::Down) {
-                state.ui_sounds.push_nav(state.frame_counter);
-            }
-            let action = state.ui.start_menu.handle_input(btn);
-            if action == StartMenuAction::Exit {
-                return InputResult::Quit;
-            }
-            if action != StartMenuAction::None {
-                handle_start_menu_action(&action, state, sdi, vfs);
-            }
-        },
-
         // Dashboard input: D-pad navigation.
         InputEvent::ButtonPress(btn) if state.mode == Mode::Dashboard => match btn {
             Button::Up | Button::Down | Button::Left | Button::Right
@@ -757,48 +1178,17 @@ pub fn handle_default_input(
             _ => {},
         },
 
-        // Terminal input.
-        InputEvent::TextInput(ch) if state.mode == Mode::Terminal => {
-            state.terminal.input_buf.push(*ch);
-        },
-        InputEvent::Backspace if state.mode == Mode::Terminal => {
-            state.terminal.input_buf.pop();
-        },
-        InputEvent::ButtonPress(Button::Confirm) if state.mode == Mode::Terminal => {
-            let line = state.terminal.input_buf.clone();
-            state.terminal.input_buf.clear();
-            state.terminal.scroll_offset = 0;
-            if !line.is_empty() {
-                state.terminal.output_lines.push(format!("> {line}"));
-                let pending_skin_swap;
-                {
-                    let mut env = Environment {
-                        cwd: state.terminal.cwd.clone(),
-                        vfs,
-                        power: Some(&state.platform),
-                        time: Some(&state.platform),
-                        usb: Some(&state.platform),
-                        network: None,
-                        tls: Some(&state.net.tls_provider),
-                        stdin: None,
-                        stderr: String::new(),
-                    };
-                    let result = state.terminal.cmd_reg.execute(&line, &mut env);
-                    state.terminal.cwd = env.cwd;
-                    pending_skin_swap = commands::process_command_output(result, state);
-                }
-                if let Some(name) = pending_skin_swap {
-                    commands::apply_skin_swap(&name, state, sdi, vfs);
-                }
-            }
-            commands::trim_output(&mut state.terminal.output_lines);
-        },
-        InputEvent::ButtonPress(Button::Square) if state.mode == Mode::Terminal => {
-            state.terminal.input_buf.pop();
-        },
+        // Terminal input: line editing (text, Backspace, Tab, d-pad,
+        // Confirm, Square) goes to the shell session.
+        InputEvent::TextInput(_)
+        | InputEvent::Backspace
+        | InputEvent::Tab
+        | InputEvent::ButtonPress(_)
+            if state.mode == Mode::Terminal
+                && terminal_input::handle_event(event, state, sdi, vfs) => {},
         InputEvent::ButtonPress(Button::Cancel) if state.mode == Mode::Terminal => {
             terminal_sdi::set_terminal_visible(sdi, false);
-            state.mode = Mode::Dashboard;
+            state.mode = home_mode(state);
             state.ui_sounds.push(UiSound::Close);
         },
 
@@ -955,7 +1345,7 @@ mod tests {
             terminal: TerminalLayer {
                 cmd_reg: CommandRegistry::new(),
                 cwd: "/".to_string(),
-                input_buf: String::new(),
+                session: oasis_core::terminal::ShellSession::new(),
                 output_lines: Vec::new(),
                 scroll_offset: 0,
                 dirty: true,
@@ -964,6 +1354,8 @@ mod tests {
             },
             net: NetworkLayer {
                 backend: StdNetworkBackend::new(),
+                listener_backend: StdNetworkBackend::new(),
+                ftp_backend: StdNetworkBackend::new(),
                 listener: None,
                 ftp_server: None,
                 remote_client: None,
@@ -974,6 +1366,7 @@ mod tests {
                 open_runners: Vec::new(),
                 browser: None,
                 fullscreen_app: None,
+                retired_runners: Vec::new(),
             },
             osk: None,
             plugin_manager: oasis_core::plugin::PluginManager::new(),
@@ -995,7 +1388,9 @@ mod tests {
             archive_catalog: None,
             pending_catalog_fetch: None,
             pending_source_fetch: None,
-            audio_backend: SdlAudioBackend::new(),
+            audio_backend: Box::new(SdlAudioBackend::new()),
+            offline: true,
+            custom_skin_root: std::env::temp_dir().join("oasis-unit-skins"),
             toasts: oasis_core::toast::ToastManager::new(),
             ui_sounds: oasis_core::ui_sound::UiSoundQueue::new(),
             sfx: oasis_audio::sfx::SfxPlayer::new(),
@@ -1096,23 +1491,23 @@ mod tests {
         state.mode = Mode::Terminal;
         handle_default_input(&InputEvent::TextInput('h'), &mut state, &mut sdi, &mut vfs);
         handle_default_input(&InputEvent::TextInput('i'), &mut state, &mut sdi, &mut vfs);
-        assert_eq!(state.terminal.input_buf, "hi");
+        assert_eq!(state.terminal.session.buffer(), "hi");
     }
 
     #[test]
     fn terminal_backspace() {
         let (mut state, mut sdi, mut vfs) = make_test_state();
         state.mode = Mode::Terminal;
-        state.terminal.input_buf = "abc".to_string();
+        state.terminal.session.set_line("abc");
         handle_default_input(&InputEvent::Backspace, &mut state, &mut sdi, &mut vfs);
-        assert_eq!(state.terminal.input_buf, "ab");
+        assert_eq!(state.terminal.session.buffer(), "ab");
     }
 
     #[test]
     fn terminal_confirm_executes_command() {
         let (mut state, mut sdi, mut vfs) = make_test_state();
         state.mode = Mode::Terminal;
-        state.terminal.input_buf = "echo hello".to_string();
+        state.terminal.session.set_line("echo hello");
         handle_default_input(
             &InputEvent::ButtonPress(Button::Confirm),
             &mut state,
@@ -1120,7 +1515,7 @@ mod tests {
             &mut vfs,
         );
         // Input buffer should be cleared.
-        assert!(state.terminal.input_buf.is_empty());
+        assert!(state.terminal.session.buffer().is_empty());
         // The command prompt should be in output.
         assert!(
             state
@@ -1135,7 +1530,7 @@ mod tests {
     fn terminal_confirm_empty_noop() {
         let (mut state, mut sdi, mut vfs) = make_test_state();
         state.mode = Mode::Terminal;
-        state.terminal.input_buf.clear();
+        state.terminal.session.set_line("");
         handle_default_input(
             &InputEvent::ButtonPress(Button::Confirm),
             &mut state,
@@ -1173,14 +1568,14 @@ mod tests {
     fn terminal_square_deletes_char() {
         let (mut state, mut sdi, mut vfs) = make_test_state();
         state.mode = Mode::Terminal;
-        state.terminal.input_buf = "xyz".to_string();
+        state.terminal.session.set_line("xyz");
         handle_default_input(
             &InputEvent::ButtonPress(Button::Square),
             &mut state,
             &mut sdi,
             &mut vfs,
         );
-        assert_eq!(state.terminal.input_buf, "xy");
+        assert_eq!(state.terminal.session.buffer(), "xy");
     }
 
     // -- handle_osk_input --
@@ -1423,30 +1818,30 @@ mod tests {
         for ch in "hello world".chars() {
             handle_default_input(&InputEvent::TextInput(ch), &mut state, &mut sdi, &mut vfs);
         }
-        assert_eq!(state.terminal.input_buf, "hello world");
+        assert_eq!(state.terminal.session.buffer(), "hello world");
     }
 
     #[test]
     fn terminal_backspace_on_empty_is_noop() {
         let (mut state, mut sdi, mut vfs) = make_test_state();
         state.mode = Mode::Terminal;
-        state.terminal.input_buf.clear();
+        state.terminal.session.set_line("");
         handle_default_input(&InputEvent::Backspace, &mut state, &mut sdi, &mut vfs);
-        assert!(state.terminal.input_buf.is_empty());
+        assert!(state.terminal.session.buffer().is_empty());
     }
 
     #[test]
     fn terminal_square_on_empty_is_noop() {
         let (mut state, mut sdi, mut vfs) = make_test_state();
         state.mode = Mode::Terminal;
-        state.terminal.input_buf.clear();
+        state.terminal.session.set_line("");
         handle_default_input(
             &InputEvent::ButtonPress(Button::Square),
             &mut state,
             &mut sdi,
             &mut vfs,
         );
-        assert!(state.terminal.input_buf.is_empty());
+        assert!(state.terminal.session.buffer().is_empty());
     }
 
     #[test]
@@ -1537,6 +1932,38 @@ mod tests {
     }
 
     #[test]
+    fn dashboard_pointer_move_updates_hover() {
+        use oasis_core::dashboard::{AppEntry, DashboardConfig, DashboardState};
+        let (mut state, mut sdi, mut vfs) = make_test_state();
+        state.mode = Mode::Dashboard;
+        let cfg = DashboardConfig::from_features(
+            &oasis_core::skin::SkinFeatures::default(),
+            &state.active_theme,
+        );
+        let apps = (0..3)
+            .map(|i| AppEntry {
+                title: format!("App {i}"),
+                path: format!("/apps/app{i}"),
+                icon_png: Vec::new(),
+                color: oasis_core::backend::Color::WHITE,
+            })
+            .collect();
+        state.ui.dashboard = DashboardState::new(cfg, apps);
+        let (x, y, w, h) = state.ui.dashboard.icon_rect(1).unwrap();
+        let mut move_to = |state: &mut AppState, x: i32, y: i32| {
+            handle_default_input(&InputEvent::CursorMove { x, y }, state, &mut sdi, &mut vfs);
+        };
+        move_to(&mut state, x + w as i32 / 2, y + h as i32 / 2);
+        assert_eq!(state.ui.dashboard.hover_index, Some(1));
+        move_to(&mut state, -10, -10);
+        assert_eq!(state.ui.dashboard.hover_index, None);
+        // An open start menu takes the pointer.
+        state.ui.start_menu.open = true;
+        move_to(&mut state, x + w as i32 / 2, y + h as i32 / 2);
+        assert_eq!(state.ui.dashboard.hover_index, None);
+    }
+
+    #[test]
     fn desktop_cursor_move_does_not_change_mode() {
         let (mut state, mut sdi, mut vfs) = make_test_state();
         state.mode = Mode::Desktop;
@@ -1607,5 +2034,484 @@ mod tests {
             &mut vfs,
         );
         assert_eq!(result, InputResult::Continue);
+    }
+
+    // -- raw Key events / typing collisions --
+
+    /// Open `title` as a desktop window on a 4-desktop manager.
+    fn open_window(title: &str) -> (AppState, SdiRegistry, MemoryVfs) {
+        use oasis_core::dashboard::AppEntry;
+
+        let (mut state, mut sdi, vfs) = make_test_state();
+        state.ui.desktops = oasis_core::wm::DesktopManager::new(4);
+        let app = AppEntry {
+            title: title.to_string(),
+            path: format!("/apps/{title}"),
+            icon_png: Vec::new(),
+            color: oasis_core::backend::Color::rgb(100, 100, 100),
+        };
+        let result = launch::launch_app_window(
+            &app,
+            &mut state.wm,
+            &mut sdi,
+            &mut state.content.open_runners,
+            &mut state.content.browser,
+            &state.browser_config,
+            &vfs,
+            &state.net.tls_provider,
+            state.skin.features.window_manager,
+            &state.plugin_manager,
+        );
+        launch::apply_launch(result, &mut state.mode);
+        assert_eq!(state.mode, Mode::Desktop);
+        (state, sdi, vfs)
+    }
+
+    /// The event stream the SDL backend produces for typing `ch`.
+    fn sdl_typing(ch: char) -> Vec<InputEvent> {
+        let key = if ch == ' ' { Key::Space } else { Key::Char(ch) };
+        let mut events = vec![InputEvent::Key {
+            key,
+            mods: Modifiers::NONE,
+        }];
+        events.extend(key.legacy_press(Modifiers::NONE));
+        events.push(InputEvent::TextInput(ch));
+        events
+    }
+
+    #[test]
+    fn typing_qe_space_in_text_editor_fires_no_shortcuts() {
+        let (mut state, mut sdi, mut vfs) = open_window("Text Editor");
+        let win_id = state.wm.active_window().map(str::to_string);
+        assert!(text_focus(&state), "text editor must accept text");
+        let mut filter = KeyTwinFilter::default();
+        for ch in ['q', 'e', ' '] {
+            for ev in sdl_typing(ch) {
+                handle_event(&ev, &mut filter, &mut state, &mut sdi, &mut vfs);
+                // No trigger may switch the virtual desktop mid-stream.
+                assert_eq!(state.ui.desktops.active_desktop(), 0, "{ev:?}");
+            }
+        }
+        assert_eq!(state.mode, Mode::Desktop);
+        assert_eq!(state.wm.active_window().map(str::to_string), win_id);
+        let (_, runner) = state
+            .content
+            .open_runners
+            .iter_mut()
+            .find(|(id, _)| Some(&*id) == win_id.as_ref())
+            .expect("editor window still open");
+        // Sync the runner's cached display lines from the editor.
+        runner.refresh_app(&vfs);
+        // Space typed a space instead of Triangle opening Find mode.
+        let text = runner.lines.join("\n");
+        assert!(text.contains("qe "), "editor text: {text:?}");
+        assert!(!text.contains("Find:"), "Triangle leaked: {text:?}");
+    }
+
+    /// Launch another desktop window into an existing state.
+    fn launch_more(state: &mut AppState, sdi: &mut SdiRegistry, vfs: &MemoryVfs, title: &str) {
+        use oasis_core::dashboard::AppEntry;
+
+        let app = AppEntry {
+            title: title.to_string(),
+            path: format!("/apps/{title}"),
+            icon_png: Vec::new(),
+            color: oasis_core::backend::Color::rgb(100, 100, 100),
+        };
+        let result = launch::launch_app_window(
+            &app,
+            &mut state.wm,
+            sdi,
+            &mut state.content.open_runners,
+            &mut state.content.browser,
+            &state.browser_config,
+            vfs,
+            &state.net.tls_provider,
+            state.skin.features.window_manager,
+            &state.plugin_manager,
+        );
+        launch::apply_launch(result, &mut state.mode);
+    }
+
+    /// Feed a key (plus its legacy twin, as the SDL backend does).
+    fn press(
+        key: Key,
+        mods: Modifiers,
+        filter: &mut KeyTwinFilter,
+        state: &mut AppState,
+        sdi: &mut SdiRegistry,
+        vfs: &mut MemoryVfs,
+    ) {
+        let mut events = vec![InputEvent::Key { key, mods }];
+        events.extend(key.legacy_press(mods));
+        for ev in events {
+            handle_event(&ev, filter, state, sdi, vfs);
+        }
+    }
+
+    #[test]
+    fn alt_tab_cycles_focus_skipping_minimized() {
+        let (mut state, mut sdi, mut vfs) = open_window("Settings");
+        launch_more(&mut state, &mut sdi, &vfs, "Calculator");
+        launch_more(&mut state, &mut sdi, &vfs, "Text Editor");
+        assert_eq!(state.wm.window_count(), 3);
+        let ids: Vec<String> = state
+            .wm
+            .windows()
+            .iter()
+            .map(|w| w.id.to_string())
+            .collect();
+        state
+            .wm
+            .minimize_window(&ids[1], &mut sdi)
+            .expect("minimize");
+        let mut filter = KeyTwinFilter::default();
+        let mut seen = Vec::new();
+        for _ in 0..4 {
+            press(
+                Key::Tab,
+                Modifiers::ALT,
+                &mut filter,
+                &mut state,
+                &mut sdi,
+                &mut vfs,
+            );
+            seen.push(state.wm.active_window().map(str::to_string));
+        }
+        assert!(seen.iter().all(|a| a.as_deref() != Some(ids[1].as_str())));
+        assert!(seen.contains(&Some(ids[0].clone())));
+        assert!(seen.contains(&Some(ids[2].clone())));
+        // Alt+Shift+Tab goes back the other way.
+        let before = state.wm.active_window().map(str::to_string);
+        press(
+            Key::Tab,
+            Modifiers::ALT | Modifiers::SHIFT,
+            &mut filter,
+            &mut state,
+            &mut sdi,
+            &mut vfs,
+        );
+        assert_ne!(state.wm.active_window().map(str::to_string), before);
+    }
+
+    #[test]
+    fn plain_tab_in_text_editor_is_not_a_wm_shortcut() {
+        let (mut state, mut sdi, mut vfs) = open_window("Settings");
+        launch_more(&mut state, &mut sdi, &vfs, "Text Editor");
+        assert!(text_focus(&state));
+        let active = state.wm.active_window().map(str::to_string);
+        assert!(!handle_wm_shortcut(
+            &Key::Tab,
+            Modifiers::NONE,
+            &mut state,
+            &mut sdi
+        ));
+        assert!(!handle_wm_shortcut(
+            &Key::Left,
+            Modifiers::NONE,
+            &mut state,
+            &mut sdi
+        ));
+        assert!(!handle_wm_shortcut(
+            &Key::Char('t'),
+            Modifiers::SHIFT,
+            &mut state,
+            &mut sdi
+        ));
+        let mut filter = KeyTwinFilter::default();
+        press(
+            Key::Tab,
+            Modifiers::NONE,
+            &mut filter,
+            &mut state,
+            &mut sdi,
+            &mut vfs,
+        );
+        assert_eq!(state.wm.active_window().map(str::to_string), active);
+    }
+
+    #[test]
+    fn super_and_ctrl_alt_arrows_snap_active_window() {
+        let (mut state, mut sdi, mut vfs) = open_window("Settings");
+        let id = state
+            .wm
+            .active_window()
+            .map(str::to_string)
+            .expect("active");
+        let area = state.wm.work_area();
+        let mut filter = KeyTwinFilter::default();
+        press(
+            Key::Left,
+            Modifiers::SUPER,
+            &mut filter,
+            &mut state,
+            &mut sdi,
+            &mut vfs,
+        );
+        let w = state.wm.get_window(&id).expect("window");
+        assert_eq!((w.x, w.y, w.outer_w), (0, area.y, area.w / 2));
+        press(
+            Key::Up,
+            Modifiers::CTRL | Modifiers::ALT,
+            &mut filter,
+            &mut state,
+            &mut sdi,
+            &mut vfs,
+        );
+        assert_eq!(
+            state.wm.get_window(&id).expect("window").state,
+            oasis_core::wm::window::WindowState::Maximized
+        );
+        // Super+T toggles tiling on.
+        press(
+            Key::Char('t'),
+            Modifiers::SUPER,
+            &mut filter,
+            &mut state,
+            &mut sdi,
+            &mut vfs,
+        );
+        assert!(state.wm.tiling_layout().is_some());
+    }
+
+    #[test]
+    fn q_without_text_focus_still_switches_desktop() {
+        let (mut state, mut sdi, mut vfs) = open_window("Settings");
+        assert!(!text_focus(&state));
+        let mut filter = KeyTwinFilter::default();
+        for ev in sdl_typing('e') {
+            handle_event(&ev, &mut filter, &mut state, &mut sdi, &mut vfs);
+        }
+        assert_eq!(state.ui.desktops.active_desktop(), 1);
+    }
+
+    #[test]
+    fn gamepad_trigger_unaffected_by_text_focus() {
+        // A bare TriggerPress (PSP / gamepad, no preceding Key) is never
+        // filtered, even while a text window has focus.
+        let (mut state, mut sdi, mut vfs) = open_window("Text Editor");
+        let mut filter = KeyTwinFilter::default();
+        handle_event(
+            &InputEvent::TriggerPress(Trigger::Right),
+            &mut filter,
+            &mut state,
+            &mut sdi,
+            &mut vfs,
+        );
+        assert_eq!(state.ui.desktops.active_desktop(), 1);
+    }
+
+    /// Events a keyboard backend emits for one key press: `Key`, its
+    /// gamepad-style twin (if any), then `TextInput` for typing keys.
+    fn sdl_key(key: Key, mods: Modifiers) -> Vec<InputEvent> {
+        let mut events = vec![InputEvent::Key { key, mods }];
+        events.extend(key.legacy_press(mods));
+        if key.produces_text(mods) {
+            match key {
+                Key::Char(c) => events.push(InputEvent::TextInput(c)),
+                Key::Space => events.push(InputEvent::TextInput(' ')),
+                _ => {},
+            }
+        }
+        events
+    }
+
+    fn feed(
+        events: &[InputEvent],
+        filter: &mut KeyTwinFilter,
+        state: &mut AppState,
+        sdi: &mut SdiRegistry,
+        vfs: &mut MemoryVfs,
+    ) {
+        for ev in events {
+            handle_event(ev, filter, state, sdi, vfs);
+        }
+    }
+
+    #[test]
+    fn terminal_keyboard_line_editing_history_and_completion() {
+        let (mut state, mut sdi, mut vfs) = make_test_state();
+        state.mode = Mode::Terminal;
+        oasis_core::terminal::register_builtins(&mut state.terminal.cmd_reg);
+        let mut f = KeyTwinFilter::default();
+        for ch in "echo wrld".chars() {
+            feed(&sdl_typing(ch), &mut f, &mut state, &mut sdi, &mut vfs);
+        }
+        // Arrow keys arrive as Key + d-pad twin; the twin moves the cursor.
+        for _ in 0..3 {
+            feed(
+                &sdl_key(Key::Left, Modifiers::NONE),
+                &mut f,
+                &mut state,
+                &mut sdi,
+                &mut vfs,
+            );
+        }
+        feed(&sdl_typing('o'), &mut f, &mut state, &mut sdi, &mut vfs);
+        assert_eq!(state.terminal.session.buffer(), "echo world");
+        assert_eq!(state.terminal.session.cursor_col(), 7);
+        feed(
+            &sdl_key(Key::Home, Modifiers::NONE),
+            &mut f,
+            &mut state,
+            &mut sdi,
+            &mut vfs,
+        );
+        assert_eq!(state.terminal.session.cursor_col(), 0);
+        feed(
+            &sdl_key(Key::Char('e'), Modifiers::CTRL),
+            &mut f,
+            &mut state,
+            &mut sdi,
+            &mut vfs,
+        );
+        assert_eq!(state.terminal.session.cursor_col(), 10);
+
+        // Enter runs it and records it in the persisted history file.
+        feed(
+            &sdl_key(Key::Enter, Modifiers::NONE),
+            &mut f,
+            &mut state,
+            &mut sdi,
+            &mut vfs,
+        );
+        assert!(state.terminal.output_lines.iter().any(|l| l == "world"));
+        let saved = oasis_core::vfs::Vfs::read(&vfs, "/home/user/.oasis_history")
+            .expect("history file written");
+        assert_eq!(saved, b"echo world\n");
+
+        // Up recalls it.
+        feed(
+            &sdl_key(Key::Up, Modifiers::NONE),
+            &mut f,
+            &mut state,
+            &mut sdi,
+            &mut vfs,
+        );
+        assert_eq!(state.terminal.session.buffer(), "echo world");
+
+        // Ctrl+U clears; Tab completes a command name.
+        feed(
+            &sdl_key(Key::Char('u'), Modifiers::CTRL),
+            &mut f,
+            &mut state,
+            &mut sdi,
+            &mut vfs,
+        );
+        for ch in "hist".chars() {
+            feed(&sdl_typing(ch), &mut f, &mut state, &mut sdi, &mut vfs);
+        }
+        feed(
+            &sdl_key(Key::Tab, Modifiers::NONE),
+            &mut f,
+            &mut state,
+            &mut sdi,
+            &mut vfs,
+        );
+        assert_eq!(state.terminal.session.buffer(), "history ");
+
+        // Ctrl+C abandons the line with a ^C echo.
+        feed(
+            &sdl_key(Key::Char('c'), Modifiers::CTRL),
+            &mut f,
+            &mut state,
+            &mut sdi,
+            &mut vfs,
+        );
+        assert!(state.terminal.session.buffer().is_empty());
+        assert_eq!(
+            state.terminal.output_lines.last().map(String::as_str),
+            Some("> history ^C")
+        );
+        assert_eq!(state.mode, Mode::Terminal);
+    }
+
+    #[test]
+    fn windowed_terminal_ctrl_e_does_not_switch_desktop() {
+        let (mut state, mut sdi, mut vfs) = open_window("Terminal");
+        assert_eq!(state.wm.active_window(), Some("terminal"));
+        let mut f = KeyTwinFilter::default();
+        for ch in "ls".chars() {
+            feed(&sdl_typing(ch), &mut f, &mut state, &mut sdi, &mut vfs);
+        }
+        feed(
+            &sdl_key(Key::Char('a'), Modifiers::CTRL),
+            &mut f,
+            &mut state,
+            &mut sdi,
+            &mut vfs,
+        );
+        assert_eq!(state.terminal.session.cursor_col(), 0);
+        // Ctrl+E's twin is the R-trigger (next desktop); it must be dropped.
+        feed(
+            &sdl_key(Key::Char('e'), Modifiers::CTRL),
+            &mut f,
+            &mut state,
+            &mut sdi,
+            &mut vfs,
+        );
+        assert_eq!(state.terminal.session.cursor_col(), 2);
+        assert_eq!(state.ui.desktops.active_desktop(), 0);
+        // Gamepad d-pad still edits: Left moves the cursor.
+        handle_event(
+            &InputEvent::ButtonPress(Button::Left),
+            &mut f,
+            &mut state,
+            &mut sdi,
+            &mut vfs,
+        );
+        assert_eq!(state.terminal.session.cursor_col(), 1);
+        // Confirm runs the line in the windowed terminal.
+        handle_event(
+            &InputEvent::ButtonPress(Button::Confirm),
+            &mut f,
+            &mut state,
+            &mut sdi,
+            &mut vfs,
+        );
+        assert!(state.terminal.output_lines.iter().any(|l| l == "> ls"));
+    }
+
+    #[test]
+    fn terminal_background_job_runs_on_poll() {
+        let (mut state, mut sdi, mut vfs) = make_test_state();
+        state.mode = Mode::Terminal;
+        oasis_core::terminal::register_builtins(&mut state.terminal.cmd_reg);
+        crate::terminal_input::run_line("echo later &", &mut state, &mut sdi, &mut vfs);
+        assert!(!state.terminal.output_lines.iter().any(|l| l == "later"));
+        crate::terminal_input::poll_jobs(&mut state, &mut sdi, &mut vfs);
+        assert!(state.terminal.output_lines.iter().any(|l| l == "later"));
+        assert!(
+            state
+                .terminal
+                .output_lines
+                .iter()
+                .any(|l| l.contains("Done") && l.contains("echo later"))
+        );
+    }
+
+    #[test]
+    fn terminal_sdi_get_prints_fields() {
+        let (mut state, mut sdi, mut vfs) = make_test_state();
+        oasis_core::terminal::register_builtins(&mut state.terminal.cmd_reg);
+        sdi.create("probe").x = 42;
+        crate::terminal_input::run_line("sdi get probe", &mut state, &mut sdi, &mut vfs);
+        assert!(state.terminal.output_lines.iter().any(|l| l == "probe:"));
+        assert!(
+            state
+                .terminal
+                .output_lines
+                .iter()
+                .any(|l| l.contains("pos") && l.contains("42"))
+        );
+    }
+
+    #[test]
+    fn terminal_mode_has_text_focus() {
+        let (mut state, _sdi, _vfs) = make_test_state();
+        state.mode = Mode::Terminal;
+        assert!(text_focus(&state));
+        state.mode = Mode::Dashboard;
+        assert!(!text_focus(&state));
     }
 }

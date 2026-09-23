@@ -123,16 +123,7 @@ impl PspDevice {
 
     /// Send a framed message (header + payload) to the PSP.
     pub fn send_msg(&self, msg_type: u8, payload: &[u8]) -> Result<(), String> {
-        let header = MsgHeader::new(msg_type, payload.len() as u16);
-        let mut packet = Vec::with_capacity(MsgHeader::SIZE + payload.len() + 1);
-        packet.extend_from_slice(&header.to_bytes());
-        packet.extend_from_slice(payload);
-
-        // Avoid exact multiples of 512
-        if packet.len() % 512 == 0 {
-            packet.push(0);
-        }
-
+        let packet = protocol::encode_msg(msg_type, 0, payload)?;
         self.write(&packet, TIMEOUT)
             .map_err(|e| format!("Send msg: {e}"))?;
         Ok(())
@@ -140,24 +131,12 @@ impl PspDevice {
 
     /// Receive a framed message from the PSP.
     pub fn recv_msg(&self) -> Result<(u8, Vec<u8>), String> {
-        let mut buf = [0u8; 16384];
+        let mut buf = [0u8; protocol::MAX_TRANSFER];
         let n = self
             .read(&mut buf, TIMEOUT)
             .map_err(|e| format!("Recv msg: {e}"))?;
-
-        if n < MsgHeader::SIZE {
-            return Err(format!("Short message: {n} bytes"));
-        }
-
-        let header = MsgHeader::from_bytes(&buf).ok_or("Bad header")?;
-        let payload_len = header.payload_len as usize;
-        let total = MsgHeader::SIZE + payload_len;
-
-        if n < total {
-            return Err(format!("Truncated: got {n}, expected {total}"));
-        }
-
-        Ok((header.msg_type, buf[MsgHeader::SIZE..total].to_vec()))
+        let (header, payload) = protocol::decode_msg(&buf[..n])?;
+        Ok((header.msg_type, payload.to_vec()))
     }
 
     // -----------------------------------------------------------------------
@@ -177,20 +156,7 @@ impl PspDevice {
     ///
     /// `chunk_index` is 0..17. `pixels` is raw RGB565 data (max 16376 bytes).
     pub fn send_frame_chunk(&self, chunk_index: u8, pixels: &[u8]) -> Result<InputState, String> {
-        let header = MsgHeader {
-            msg_type: protocol::cmd::FRAME_CHUNK,
-            flags: chunk_index,
-            payload_len: pixels.len() as u16,
-        };
-        let mut packet = Vec::with_capacity(MsgHeader::SIZE + pixels.len() + 1);
-        packet.extend_from_slice(&header.to_bytes());
-        packet.extend_from_slice(pixels);
-
-        // Avoid ZLP
-        if packet.len() % 512 == 0 {
-            packet.push(0);
-        }
-
+        let packet = protocol::encode_msg(protocol::cmd::FRAME_CHUNK, chunk_index, pixels)?;
         self.write(&packet, TIMEOUT)
             .map_err(|e| format!("Send chunk {chunk_index}: {e}"))?;
 
@@ -215,17 +181,8 @@ impl PspDevice {
     /// `pixels` must be exactly `FRAME_SIZE_STRIDE` bytes (278,528).
     /// Returns the InputState from the final FRAME_DONE response.
     pub fn send_frame(&self, pixels: &[u8], frame_seq: u8) -> Result<InputState, String> {
-        let total = pixels.len();
-        let chunk_size = protocol::MAX_CHUNK_PAYLOAD;
-
-        let mut chunk_index: u8 = 0;
-        let mut offset = 0;
-
-        while offset < total {
-            let end = (offset + chunk_size).min(total);
-            self.send_frame_chunk(chunk_index, &pixels[offset..end])?;
-            chunk_index += 1;
-            offset = end;
+        for (chunk_index, chunk) in protocol::frame_chunks(pixels)? {
+            self.send_frame_chunk(chunk_index, chunk)?;
         }
 
         self.send_frame_done(frame_seq)

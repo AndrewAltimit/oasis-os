@@ -184,7 +184,7 @@ pub fn view_image_file(path: &str, data: &[u8]) -> Vec<String> {
 
     let size_kb = data.len() / 1024;
 
-    if data.len() >= 24 && &data[..8] == b"\x89PNG\r\n\x1a\n" {
+    if data.len() >= 26 && &data[..8] == b"\x89PNG\r\n\x1a\n" {
         let w = u32::from_be_bytes([data[16], data[17], data[18], data[19]]);
         let h = u32::from_be_bytes([data[20], data[21], data[22], data[23]]);
         let bit_depth = data[24];
@@ -208,7 +208,7 @@ pub fn view_image_file(path: &str, data: &[u8]) -> Vec<String> {
             lines.push(format!("  Dimensions:   {w} x {h} pixels"));
         }
         lines.push(format!("  File Size:    {size_kb} KB"));
-    } else if data.len() >= 6 && &data[..4] == b"GIF8" {
+    } else if data.len() >= 10 && &data[..4] == b"GIF8" {
         let w = u16::from_le_bytes([data[6], data[7]]);
         let h = u16::from_le_bytes([data[8], data[9]]);
         lines.push("  Format:       GIF".to_string());

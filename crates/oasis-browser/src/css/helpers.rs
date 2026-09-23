@@ -147,24 +147,28 @@ fn function_body<'a>(tokens: &[&'a CssToken]) -> Vec<&'a CssToken> {
 
 /// Split a function body by top-level commas, respecting nested parens.
 fn split_top_level_commas<'a>(tokens: &[&'a CssToken]) -> Vec<Vec<&'a CssToken>> {
-    let mut out: Vec<Vec<&CssToken>> = vec![Vec::new()];
+    // Accumulate the current segment separately so there is no
+    // "out is non-empty" invariant to assert on each push.
+    let mut out: Vec<Vec<&CssToken>> = Vec::new();
+    let mut current: Vec<&CssToken> = Vec::new();
     let mut depth: i32 = 0;
     for &t in tokens {
         match t {
             CssToken::OpenParen | CssToken::Function(_) => {
                 depth += 1;
-                out.last_mut().expect("at least one").push(t);
+                current.push(t);
             },
             CssToken::CloseParen => {
                 depth -= 1;
-                out.last_mut().expect("at least one").push(t);
+                current.push(t);
             },
             CssToken::Comma if depth == 0 => {
-                out.push(Vec::new());
+                out.push(std::mem::take(&mut current));
             },
-            _ => out.last_mut().expect("at least one").push(t),
+            _ => current.push(t),
         }
     }
+    out.push(current);
     out
 }
 

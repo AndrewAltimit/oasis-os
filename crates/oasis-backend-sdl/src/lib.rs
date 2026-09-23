@@ -9,7 +9,6 @@
 
 mod blitting;
 mod core_impl;
-mod font;
 mod glyph_cache;
 mod gradients;
 mod input;
@@ -26,9 +25,9 @@ use sdl3::render::{Canvas, FPoint, FRect, Texture, TextureCreator};
 use sdl3::video::{Window, WindowContext};
 
 use oasis_core::backend::{
-    ArcParams, BackendErrExt, BatchRect, BatchText, BlendMode, Color, DashStyle, RenderTargetId,
-    SdiAlpha, SdiBatch, SdiClipTransform, SdiCore, SdiRenderTarget, SdiShapes, SdiText,
-    SdiTextures, SdiVector, StrokeStyle, TextureId,
+    ArcParams, BackendErrExt, BatchRect, BatchText, BlendMode, Color, RenderTargetId, SdiAlpha,
+    SdiBatch, SdiClipTransform, SdiCore, SdiRenderTarget, SdiShapes, SdiText, SdiTextures,
+    SdiVector, StrokeStyle, TextureId,
 };
 use oasis_core::error::{OasisError, Result};
 use oasis_types::backend::stacks::{ClipPush, ClipStack, TranslateStack};
@@ -116,12 +115,13 @@ pub struct SdlBackend {
     /// and blend-mode calls. All canvas draw-color/blend changes must go
     /// through `set_color` (or reset this to `None`) to stay coherent.
     pub(crate) last_draw_color: Option<Color>,
-    /// Reusable scratch buffer for batched `draw_points` submissions
-    /// (circle / rounded-corner outlines plot hundreds of points per
-    /// call; one `SDL_RenderPoints` beats one FFI call per point).
-    pub(crate) point_batch: Vec<FPoint>,
+    /// Reusable scratch buffer for batched `fill_rects` submissions: the
+    /// scanline spans of filled and stroked shapes (rounded rects,
+    /// circles, rings, thick lines, triangles, polygons, arcs) go to SDL
+    /// in one call instead of one per row.
+    pub(crate) rect_batch: Vec<FRect>,
     /// Reusable scratch buffer for polygon fills: translated vertices.
-    /// Same reuse-instead-of-allocate pattern as `point_batch` —
+    /// Same reuse-instead-of-allocate pattern as `rect_batch` --
     /// `fill_polygon` previously allocated a fresh `Vec` per call.
     pub(crate) poly_points: Vec<(i32, i32)>,
     /// Reusable scratch buffer for polygon fills: per-scanline edge
@@ -146,7 +146,6 @@ impl SdlBackend {
             .build()
             .backend_err()?;
         let canvas: Canvas<Window> = window.into_canvas();
-        let texture_creator = canvas.texture_creator();
         let headless =
             std::env::var("SDL_RENDER_DRIVER").is_ok_and(|v| v.eq_ignore_ascii_case("software"));
         if !headless {
@@ -168,8 +167,58 @@ impl SdlBackend {
         let event_pump = sdl.event_pump().backend_err()?;
 
         log::info!("SDL3 backend initialized: {width}x{height}");
+        Ok(Self::from_canvas(canvas, event_pump, width, height))
+    }
 
-        Ok(Self {
+    /// Create a backend that renders without a visible window, for tests
+    /// and offscreen rendering.
+    ///
+    /// With `render_driver: None` the process-wide SDL hints are forced
+    /// (in-process, overriding any environment variables) to the
+    /// `offscreen` video driver and the `software` renderer, so this works
+    /// on a CI box with no display. `Some(driver)` keeps the platform
+    /// video driver and asks for that renderer (e.g. `"direct3d11"`,
+    /// `"opengl"`, `"vulkan"`) on a hidden window, to exercise a hardware
+    /// path such as padded texture pitches locally.
+    ///
+    /// SDL may only be initialized from one thread at a time: callers
+    /// creating several backends from test threads must serialize them
+    /// (and drop each backend before creating the next).
+    pub fn new_headless(width: u32, height: u32, render_driver: Option<&str>) -> Result<Self> {
+        use sdl3::hint::{self, Hint};
+        let (video_driver, renderer) = match render_driver {
+            None => (Some("offscreen"), "software"),
+            Some(driver) => (None, driver),
+        };
+        if let Some(v) = video_driver {
+            hint::set_with_priority("SDL_VIDEO_DRIVER", v, &Hint::Override);
+        }
+        hint::set_with_priority("SDL_RENDER_DRIVER", renderer, &Hint::Override);
+        let sdl = sdl3::init().backend_err()?;
+        let video = sdl.video().backend_err()?;
+        let window = video
+            .window("oasis-headless", width, height)
+            .hidden()
+            .build()
+            .backend_err()?;
+        let canvas: Canvas<Window> = window.into_canvas();
+        let event_pump = sdl.event_pump().backend_err()?;
+        log::info!(
+            "SDL3 headless backend initialized: {width}x{height} ({} renderer)",
+            canvas.renderer_name
+        );
+        Ok(Self::from_canvas(canvas, event_pump, width, height))
+    }
+
+    /// Name of the active SDL renderer (e.g. `"software"`,
+    /// `"direct3d11"`).
+    pub fn renderer_name(&self) -> &str {
+        &self.canvas.renderer_name
+    }
+
+    fn from_canvas(canvas: Canvas<Window>, event_pump: EventPump, width: u32, height: u32) -> Self {
+        let texture_creator = canvas.texture_creator();
+        Self {
             canvas,
             event_pump,
             textures: HashMap::new(),
@@ -187,11 +236,11 @@ impl SdlBackend {
             viewport_w: width,
             viewport_h: height,
             last_draw_color: None,
-            point_batch: Vec::new(),
+            rect_batch: Vec::new(),
             poly_points: Vec::new(),
             poly_xs: Vec::new(),
             texture_mods: HashMap::new(),
-        })
+        }
     }
 
     /// Access the underlying SDL window.
@@ -395,49 +444,11 @@ impl SdiVector for SdlBackend {
             color,
         )
     }
-
-    fn stroke_arc(
-        &mut self,
-        cx: i32,
-        cy: i32,
-        radius: u16,
-        start_angle: f32,
-        end_angle: f32,
-        width: u16,
-        color: Color,
-    ) -> Result<()> {
-        self.shape_stroke_arc(
-            ArcParams {
-                cx,
-                cy,
-                radius,
-                start_angle,
-                end_angle,
-            },
-            StrokeStyle { width, color },
-        )
-    }
-
-    fn stroke_line_dashed(
-        &mut self,
-        x1: i32,
-        y1: i32,
-        x2: i32,
-        y2: i32,
-        width: u16,
-        color: Color,
-        dash: u16,
-        gap: u16,
-    ) -> Result<()> {
-        self.shape_stroke_line_dashed(
-            x1,
-            y1,
-            x2,
-            y2,
-            StrokeStyle { width, color },
-            DashStyle { dash, gap },
-        )
-    }
+    // `stroke_arc` and `stroke_line_dashed` use the trait defaults, which
+    // decompose into `draw_line` -- the same pixels the software
+    // rasterizer produces (the old overrides thickened with parallel
+    // lines along a truncated integer normal, i.e. not at all on
+    // diagonals).
 }
 
 // -------------------------------------------------------------------
@@ -648,25 +659,29 @@ impl SdiBatch for SdlBackend {
 // SdiRenderTarget: Offscreen compositing layers (compositor PR4)
 // -------------------------------------------------------------------
 
-/// Map a CSS blend mode onto SDL3's built-in blend-mode enum.
+/// Map a CSS blend mode onto the SDL3 blend mode that composites a
+/// render target with it.
 ///
-/// SDL3 only ships a handful of blend modes natively: `NONE`, `BLEND`,
-/// `ADD`, `MOD`, `MUL`. Anything CSS-specific (`Overlay`, `ColorDodge`,
-/// the non-separable HSL modes, …) falls back to plain alpha blending
-/// for the moment — documented as accepted degradation in
-/// `docs/compositor-overhaul-plan.md` §3.4 step 4. A CPU compositor
-/// extension is queued for a follow-up PR.
-fn sdl_blend_for(mode: BlendMode) -> sdl3::render::BlendMode {
-    use sdl3::render::BlendMode as Sdl;
+/// Layer contents are straight-alpha primitives blended (`BLEND`) into a
+/// target cleared to transparent black, which leaves the target holding
+/// *premultiplied* colors (`rgb * a`). They must therefore be composited
+/// with premultiplied operators:
+///
+/// - `Normal` -> `BLEND_PREMULTIPLIED` (`dst = src + dst * (1 - srcA)`).
+///   Plain `BLEND` multiplied translucent layer content by its alpha a
+///   second time, so e.g. a 50% red fill inside an opacity layer came out
+///   at 25% (visibly darker than the same fill painted directly).
+/// - `Multiply` -> `MUL` (`dst = dst * src + dst * (1 - srcA)`), which is
+///   exactly CSS `multiply` for a premultiplied source, including the
+///   layer's transparent pixels, which leave the backdrop untouched.
+///
+/// SDL has no other CSS modes; they degrade to `Normal` (the software
+/// rasterizer does the same, so all backends agree).
+fn sdl_blend_for(mode: BlendMode) -> sdl3::sys::blendmode::SDL_BlendMode {
+    use sdl3::sys::blendmode as bm;
     match mode {
-        BlendMode::Normal => Sdl::Blend,
-        // SDL3 `MOD` is `dst * src`, matching CSS `multiply` closely enough
-        // for alpha-1 src. Non-unit alpha will drift but is still closer
-        // than plain alpha over.
-        BlendMode::Multiply => Sdl::Mod,
-        // Everything else: software path is TODO, degrade to standard
-        // alpha blending so the page still renders.
-        _ => Sdl::Blend,
+        BlendMode::Multiply => bm::SDL_BLENDMODE_MUL,
+        _ => bm::SDL_BLENDMODE_BLEND_PREMULTIPLIED,
     }
 }
 
@@ -695,6 +710,39 @@ impl SdiRenderTarget for SdlBackend {
         if raw_tex.is_null() {
             return Err(OasisError::Backend(
                 format!("SDL_CreateTexture (target {w}x{h}) failed").into(),
+            ));
+        }
+        // SDL leaves a new target texture's contents undefined, and the
+        // Direct3D 11 driver hands back recycled VRAM: a layer that draws
+        // nothing (or only part of its bounds) would composite whatever a
+        // previously destroyed same-size target held, e.g. last frame's
+        // `mask-image` layer showing up under a `filter: blur` element.
+        // Callers expect a fresh target to be fully transparent, so clear
+        // it once here, then restore whichever target was bound.
+        let restore: *mut sdl3::sys::render::SDL_Texture = self
+            .current_render_target
+            .and_then(|id| self.render_targets.get(&id))
+            .map_or(std::ptr::null_mut(), sdl_texture_raw);
+        // SAFETY: raw_renderer is the canvas's valid renderer; raw_tex was
+        // just created on it with TARGET access, and `restore` is either
+        // null (the window) or a live target texture owned by this backend.
+        // SDL_RenderClear ignores the blend mode and writes the draw color
+        // (transparent black) straight into the target.
+        let cleared = unsafe {
+            use sdl3::sys::render::{SDL_RenderClear, SDL_SetRenderDrawColor, SDL_SetRenderTarget};
+            let ok = SDL_SetRenderTarget(raw_renderer, raw_tex)
+                && SDL_SetRenderDrawColor(raw_renderer, 0, 0, 0, 0)
+                && SDL_RenderClear(raw_renderer);
+            SDL_SetRenderTarget(raw_renderer, restore) && ok
+        };
+        // The raw draw-color change bypassed the cached color.
+        self.last_draw_color = None;
+        if !cleared {
+            // SAFETY: raw_tex is the valid texture created above and is
+            // not referenced anywhere else yet.
+            unsafe { sdl3::sys::render::SDL_DestroyTexture(raw_tex) };
+            return Err(OasisError::Backend(
+                format!("clearing new render target ({w}x{h}) failed").into(),
             ));
         }
         // SAFETY: raw_tex is a valid SDL_Texture; wrap in Rust handle.
@@ -782,14 +830,28 @@ impl SdiRenderTarget for SdlBackend {
         let tex = render_targets.get_mut(&id.0).ok_or_else(|| {
             OasisError::Backend(format!("composite_render_target: unknown id {id:?}").into())
         })?;
-        tex.set_blend_mode(sdl_blend_for(blend));
+        // SAFETY: the raw pointer comes from a live texture owned by
+        // `render_targets` (borrowed above) and is only used for this call.
+        let premultiplied = unsafe {
+            sdl3::sys::render::SDL_SetTextureBlendMode(sdl_texture_raw(tex), sdl_blend_for(blend))
+        };
         let alpha = (opacity.clamp(0.0, 1.0) * 255.0).round() as u8;
+        if premultiplied {
+            // Opacity scales a premultiplied source uniformly: color and
+            // alpha alike.
+            tex.set_color_mod(alpha, alpha, alpha);
+        } else {
+            // Renderer without premultiplied / MUL support: straight alpha
+            // (translucent layer content comes out too dark).
+            tex.set_blend_mode(sdl3::render::BlendMode::Blend);
+            tex.set_color_mod(255, 255, 255);
+        }
         tex.set_alpha_mod(alpha);
-        tex.set_color_mod(255, 255, 255);
         let r = canvas
             .copy(tex, None, Some(frect(dst_x, dst_y, dst_w, dst_h)))
             .backend_err();
         tex.set_alpha_mod(255);
+        tex.set_color_mod(255, 255, 255);
         tex.set_blend_mode(sdl3::render::BlendMode::Blend);
         r
     }
@@ -1309,18 +1371,153 @@ mod tests {
         backend.swap_buffers().unwrap();
 
         let pixels = backend.read_pixels(0, 0, 64, 64).unwrap();
-        // read_pixels returns ABGR8888 format, 4 bytes per pixel.
-        // Check a sample pixel at (0,0).
+        // read_pixels returns RGBA bytes, 4 per pixel, regardless of the
+        // renderer's native format.
         assert_eq!(pixels.len(), 64 * 64 * 4);
-        // First pixel should be red (exact format depends on SDL).
-        // At minimum, the red channel should be 255 and blue should be 0.
-        let r = pixels[0];
-        let g = pixels[1];
-        let b = pixels[2];
-        assert!(
-            r > 200 || b > 200,
-            "red channel should be dominant: r={r} g={g} b={b}"
+        assert_eq!(
+            &pixels[..4],
+            &[255, 0, 0, 255],
+            "pixel (0,0) must be RGBA red"
         );
+    }
+
+    /// RGBA pattern where every pixel of a `w` x `h` image is distinct,
+    /// so a row-stride mismatch shows up as a mismatch rather than
+    /// happening to reproduce the same colours.
+    fn stride_pattern(w: u32, h: u32) -> Vec<u8> {
+        let mut px = Vec::with_capacity((w * h * 4) as usize);
+        for y in 0..h {
+            for x in 0..w {
+                px.extend_from_slice(&[(x * 6) as u8, (y * 40) as u8, 200, 255]);
+            }
+        }
+        px
+    }
+
+    /// Texture uploads must honour the locked texture's row pitch.
+    /// Hardware renderers (Direct3D 11/12, SDL GPU, Metal) commonly pad
+    /// rows to 64- or 256-byte boundaries, so a width whose row is not a
+    /// multiple of that (here 37 px = 148 bytes) turned every uploaded
+    /// image into diagonal stripes when the pitch was ignored. The
+    /// software renderer packs rows tightly, so run this under a
+    /// hardware `SDL_RENDER_DRIVER` to exercise the padded path.
+    #[test]
+    #[ignore]
+    fn render_texture_odd_width_honours_pitch() {
+        let mut backend = match try_create_backend() {
+            Some(b) => b,
+            None => return,
+        };
+        let (w, h) = (37u32, 6u32);
+        let pattern = stride_pattern(w, h);
+
+        let tex = backend.load_texture(w, h, &pattern).unwrap();
+        backend.clear(Color::BLACK).unwrap();
+        backend.blit(tex, 0, 0, w, h).unwrap();
+        assert_eq!(backend.read_pixels(0, 0, w, h).unwrap(), pattern);
+
+        // update_texture takes the same lock path.
+        let mut flipped = pattern.clone();
+        for px in flipped.chunks_exact_mut(4) {
+            px[2] = 40;
+        }
+        backend.update_texture(tex, w, h, &flipped).unwrap();
+        backend.clear(Color::BLACK).unwrap();
+        backend.blit(tex, 0, 0, w, h).unwrap();
+        assert_eq!(backend.read_pixels(0, 0, w, h).unwrap(), flipped);
+    }
+
+    #[test]
+    #[ignore]
+    fn render_target_composites_under_active_clip() {
+        let mut backend = match try_create_backend() {
+            Some(b) => b,
+            None => return,
+        };
+        backend.clear(Color::BLACK).unwrap();
+        // A browser window's content clip, away from the origin.
+        backend.set_clip_rect(20, 20, 40, 40).unwrap();
+        let rt = backend.create_render_target(13, 7).unwrap();
+        backend.bind_render_target(rt).unwrap();
+        backend
+            .fill_rect(0, 0, 13, 7, Color::rgb(0, 200, 0))
+            .unwrap();
+        backend.unbind_render_target().unwrap();
+        backend
+            .composite_render_target(rt, 30, 30, 13, 7, BlendMode::Normal, 1.0)
+            .unwrap();
+        backend.reset_clip_rect().unwrap();
+        let px = backend.read_pixels(30, 30, 13, 7).unwrap();
+        for (i, p) in px.chunks_exact(4).enumerate() {
+            assert_eq!(p, &[0, 200, 0, 255], "pixel {i} of the composited layer");
+        }
+    }
+
+    /// `mix-blend-mode: multiply` layers are bigger than their painted
+    /// content; the transparent remainder must not darken the backdrop.
+    #[test]
+    #[ignore]
+    fn render_target_multiply_keeps_transparent_pixels() {
+        let mut backend = match try_create_backend() {
+            Some(b) => b,
+            None => return,
+        };
+        backend.clear(Color::rgb(200, 200, 200)).unwrap();
+        let rt = backend.create_render_target(12, 12).unwrap();
+        backend.bind_render_target(rt).unwrap();
+        backend
+            .fill_rect(4, 4, 4, 4, Color::rgb(255, 128, 0))
+            .unwrap();
+        backend.unbind_render_target().unwrap();
+        backend
+            .composite_render_target(rt, 10, 10, 12, 12, BlendMode::Multiply, 1.0)
+            .unwrap();
+        // Transparent corner: backdrop unchanged.
+        assert_eq!(
+            &backend.read_pixels(10, 10, 1, 1).unwrap()[..],
+            &[200, 200, 200, 255]
+        );
+        // Painted center: backdrop * source.
+        let c = backend.read_pixels(15, 15, 1, 1).unwrap();
+        assert!(
+            c[0] >= 198 && (99..=101).contains(&c[1]) && c[2] == 0,
+            "{c:?}"
+        );
+    }
+
+    #[test]
+    #[ignore]
+    fn render_target_starts_transparent() {
+        let mut backend = match try_create_backend() {
+            Some(b) => b,
+            None => return,
+        };
+        // Churn some textures so a recycled allocation would carry junk.
+        for _ in 0..4 {
+            let rt = backend.create_render_target(13, 7).unwrap();
+            backend.bind_render_target(rt).unwrap();
+            backend
+                .fill_rect(0, 0, 13, 7, Color::rgb(255, 128, 0))
+                .unwrap();
+            backend.unbind_render_target().unwrap();
+            backend
+                .composite_render_target(rt, 0, 0, 13, 7, BlendMode::Normal, 1.0)
+                .unwrap();
+            backend.destroy_render_target(rt).unwrap();
+            backend.swap_buffers().unwrap();
+        }
+        backend.clear(Color::rgb(0, 0, 90)).unwrap();
+        let rt = backend.create_render_target(13, 7).unwrap();
+        // Draw nothing into it: compositing must leave the frame as-is.
+        backend.bind_render_target(rt).unwrap();
+        backend.unbind_render_target().unwrap();
+        backend
+            .composite_render_target(rt, 10, 10, 13, 7, BlendMode::Normal, 1.0)
+            .unwrap();
+        let px = backend.read_pixels(10, 10, 13, 7).unwrap();
+        for (i, p) in px.chunks_exact(4).enumerate() {
+            assert_eq!(p, &[0, 0, 90, 255], "pixel {i} under an empty layer");
+        }
     }
 
     #[test]

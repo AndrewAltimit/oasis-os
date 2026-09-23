@@ -32,8 +32,51 @@ symphonia decodes from the same buffer via `Read + Seek`.
   body data before seeking, preventing reads into empty buffer
   regions.
 - **Seek restart** — after probe discovers `moov`, the download
-  restarts from the estimated byte offset via a Range request.
-  Linear interpolation: `(seek_secs / duration) * file_size`.
+  restarts via a Range request just before (256 KB) the exact byte the
+  demuxer will read first: `demux_lite::seek_point_from_moov` finds the
+  video keyframe at or before the target in the sample tables and takes
+  the lower of its offset and the audio sample's at that time. Linear
+  interpolation (`(seek_secs / duration) * mdat_size`, 2 MB margin) is
+  only a fallback — on VBR video it can miss by many MB, and a restart
+  past the real sample makes every read land in the evicted region.
+- **Keyframe seek** — symphonia's isomp4 demuxer ignores `stss`, so a
+  raw seek lands mid-GOP. `SoftwareVideoDecoder` indexes keyframes from
+  the moov and snaps `seek()` back to the keyframe (the same one the
+  seek restart targets), so video starts immediately and audio starts
+  with it. Non-IDR packets before the first IDR are discarded, and every
+  IDR carries SPS/PPS so the decoder can resync after an error.
+- **openh264 flushing** — the decoder is built with `Flush::NoFlush`.
+  The crate default flushes the reorder buffer after every packet, which
+  on B-frame (Main/High profile) streams fails with `dsOutOfMemory` after
+  a few frames and then loses the parameter sets (video froze, playback
+  fell back to audio-only). Buffered pictures are drained at EOF.
+- **Stall recovery** — a demux read error ends the session (auto-advance
+  retunes) instead of spinning in audio-only mode. When the decoder runs
+  dry and a frame then arrives >300 ms late, the player resumes its clock
+  from that frame rather than skipping video ahead of the (also stalled)
+  audio.
+- **Resume** — if the linear download's connection closes, errors or
+  stalls (`STALL_TIMEOUT`) before `Content-Length`, it resumes from the
+  buffer frontier via `stream_download_range`, which also resumes a
+  Range body that closes early. Throttle pauses are never treated as
+  stalls (16 MB of lookahead is minutes of video), and the reconnect
+  budget resets once a connection delivers 1 MB. A server that answers
+  Range with `200` is handled by skipping the already-received prefix.
+- **Probe edge cases** — probe-mode reads within 64 KB past the download
+  frontier wait (≤10 s) for the real bytes once moov is retained, so the
+  atom headers right after moov are never read as zeros; reads inside a
+  top-level atom that claims to extend past a truncated file's end
+  return zeros during the probe so truncated files still open.
+- **End-to-end tests** — `tv_controller/e2e_tests.rs` serves fixtures from
+  an in-process HTTP server with scriptable misbehaviour (throttle, drop,
+  stall, ignored Range, redirect, 404, truncation) and drives the real
+  download, `StreamingBuffer` and `VideoPlayer` (virtual clock via
+  `VideoPlayer::tick_at`). Decoder-level e2e tests live in
+  `crates/oasis-video/tests/decode_e2e.rs`; fixtures in
+  `tests/fixtures/streaming/`.
+- **Dev builds** — the workspace optimizes the codec crates (openh264,
+  symphonia) even in the `dev` profile; unoptimized, 720p decode ran at
+  ~9 fps under `cargo run`.
 - **HTTPS ALPN pinning** — every blocking TLS client in the streaming
   path (`fetch_range_inner`, `open_range_connection_inner`,
   `stream_download_inner`, plus the catalog `https_get_body`) is an
