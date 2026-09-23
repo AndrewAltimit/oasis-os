@@ -84,9 +84,9 @@ impl WindowManager {
 
     /// Update the screen dimensions (e.g. after a live resolution change).
     ///
-    /// Existing windows keep their positions; callers can walk
-    /// [`WindowManager::windows`] and invoke `move_window(id, 0, 0, sdi)`
-    /// to clamp any window whose titlebar now falls off-screen. Cascade
+    /// Existing windows keep their geometry until the caller runs
+    /// [`WindowManager::fit_to_screen`], which refits maximized, snapped,
+    /// tiled and fullscreen windows and pulls off-screen ones back. Cascade
     /// position is reset so new windows open near the new viewport origin.
     pub fn set_screen_size(&mut self, screen_w: u32, screen_h: u32) {
         self.screen_w = screen_w;

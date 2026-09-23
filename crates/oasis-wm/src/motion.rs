@@ -69,16 +69,36 @@ impl WindowManager {
 
     /// Advance animations by the wall-clock time since the previous call.
     pub fn tick_animations(&mut self, sdi: &mut SdiRegistry) {
-        let now = web_time::Instant::now();
-        let delta = self
-            .anim_last_tick
-            .map(|t| {
-                now.duration_since(t)
-                    .as_millis()
-                    .min(u128::from(MAX_TICK_MS)) as u32
-            })
-            .unwrap_or(0);
-        self.anim_last_tick = Some(now);
+        self.tick_animations_at(web_time::Instant::now(), sdi);
+    }
+
+    /// Advance animations to time `now` (the host's frame clock; hosts
+    /// with a virtual clock get deterministic animations).
+    ///
+    /// Only whole milliseconds are consumed; the sub-millisecond remainder
+    /// carries over to the next call. (Resetting the clock every call used
+    /// to round every sub-millisecond frame down to 0 ms, so a host
+    /// looping faster than 1 kHz never finished an animation.)
+    pub fn tick_animations_at(&mut self, now: web_time::Instant, sdi: &mut SdiRegistry) {
+        let delta = match self.anim_last_tick {
+            Some(t) if now > t => {
+                let ms = now.duration_since(t).as_millis();
+                if ms >= u128::from(MAX_TICK_MS) {
+                    // Long stall: clamp the step and drop the backlog.
+                    self.anim_last_tick = Some(now);
+                    MAX_TICK_MS
+                } else {
+                    let ms = ms as u32;
+                    self.anim_last_tick = Some(t + std::time::Duration::from_millis(u64::from(ms)));
+                    ms
+                }
+            },
+            Some(_) => 0,
+            None => {
+                self.anim_last_tick = Some(now);
+                0
+            },
+        };
         self.tick_animations_by(delta, sdi);
     }
 
@@ -306,6 +326,25 @@ mod tests {
     fn frame_rect(sdi: &SdiRegistry, id: &str) -> (i32, i32, u32, u32, u8) {
         let f = sdi.get(&format!("{id}.frame")).expect("frame");
         (f.x, f.y, f.w, f.h, f.alpha)
+    }
+
+    #[test]
+    fn sub_millisecond_frames_still_finish_animations() {
+        let (mut wm, mut sdi) = animated_wm();
+        wm.create_window(&cfg("a"), &mut sdi).expect("create");
+        assert!(wm.is_animating());
+        let mut now = web_time::Instant::now();
+        // 20 s of 0.4 ms frames: each frame alone rounds down to 0 ms.
+        for _ in 0..50_000 {
+            now += std::time::Duration::from_micros(400);
+            wm.tick_animations_at(now, &mut sdi);
+            if !wm.is_animating() {
+                break;
+            }
+        }
+        assert!(!wm.is_animating(), "open animation never finished");
+        let w = wm.get_window("a").expect("a");
+        assert_eq!(frame_rect(&sdi, "a"), (w.x, w.y, w.outer_w, w.outer_h, 255));
     }
 
     #[test]

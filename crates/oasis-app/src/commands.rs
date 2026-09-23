@@ -272,6 +272,9 @@ pub fn apply_skin_object(
         bw.apply_chrome_theme(&state.browser_config);
     }
     state.wm.set_theme(swapped.theme.build_wm_theme());
+    // Open windows take the new skin's chrome and work area.
+    state.wm.restyle_windows(sdi);
+    state.wm.fit_to_screen(sdi);
 
     // Component SDI objects (dashboard icons, status/bottom bar,
     // taskbar, start menu, toasts) are NOT part of `skin.layout`, so
@@ -719,20 +722,11 @@ pub fn apply_resolution_change(
     );
 
     state.wm.set_screen_size(new_w, new_h);
-    // `set_screen_size` updates the viewport bounds but leaves open windows
-    // at their original coordinates. On a downward resize a window near the
-    // old right/bottom edge can end up fully off-screen and unreachable.
-    // `move_window(id, 0, 0, sdi)` is a no-op delta but runs the positions
-    // through `clamp_position`, which pulls each titlebar back on-screen.
-    let window_ids: Vec<String> = state
-        .wm
-        .windows()
-        .iter()
-        .map(|w| w.id.as_str().to_string())
-        .collect();
-    for id in window_ids {
-        let _ = state.wm.move_window(&id, 0, 0, sdi);
-    }
+    state.wm.restyle_windows(sdi);
+    // Refit open windows: maximized / snapped / tiled / fullscreen ones
+    // take the new screen's geometry and floating ones are pulled back on
+    // screen, so no titlebar or close button ends up out of reach.
+    state.wm.fit_to_screen(sdi);
     state.ui.mouse_cursor = CursorState::new(new_w, new_h);
     state.ui.mouse_cursor.scale = state.active_theme.cursor_scale;
 
@@ -885,16 +879,17 @@ pub fn poll_settings_ipc(
         let mut custom = state.skin.clone();
         custom.theme = theme;
         custom.manifest.name.clone_from(&name);
-        let dir = std::path::Path::new("skins").join(&name);
+        let dir = state.custom_skin_root.join(&name);
         match custom.save_to_directory(&dir) {
             Ok(()) => {
                 state
                     .terminal
                     .output_lines
                     .push(format!("Saved custom skin to {}", dir.display()));
-                // Swap by name through the normal resolution path so the
-                // running session uses exactly what was written to disk.
-                apply_skin_swap(&name, state, sdi, vfs);
+                // Swap to the written directory through the normal
+                // resolution path so the running session uses exactly what
+                // was written to disk.
+                apply_skin_swap(&dir.to_string_lossy(), state, sdi, vfs);
                 if state.skin.manifest.name == name {
                     crate::user_prefs::update(state, vfs, |p| p.skin = Some(name));
                 }
@@ -1458,6 +1453,7 @@ mod tests {
                 open_runners: Vec::new(),
                 browser: None,
                 fullscreen_app: None,
+                retired_runners: Vec::new(),
             },
             osk: None,
             plugin_manager: oasis_core::plugin::PluginManager::new(),
@@ -1481,6 +1477,7 @@ mod tests {
             pending_source_fetch: None,
             audio_backend: Box::new(SdlAudioBackend::new()),
             offline: true,
+            custom_skin_root: std::env::temp_dir().join("oasis-unit-skins"),
             toasts: oasis_core::toast::ToastManager::new(),
             ui_sounds: oasis_core::ui_sound::UiSoundQueue::new(),
             sfx: oasis_audio::sfx::SfxPlayer::new(),

@@ -53,7 +53,9 @@ Construction and configuration:
 
 ```rust,ignore
 let mut wm = WindowManager::with_theme(screen_w, screen_h, skin.theme.build_wm_theme());
-wm.set_screen_size(w, h);          // after a resolution change
+wm.set_screen_size(w, h);          // after a resolution change, then:
+wm.fit_to_screen(&mut sdi);        // refit maximized/snapped/tiled/kiosk windows,
+                                   // pull off-screen ones back into the work area
 wm.set_theme(theme);               // after a skin switch
 wm.set_snap_enabled(true);         // drag-to-edge snapping (on by default)
 wm.set_motion_enabled(!skin.features.reduced_motion); // animations (off by default)

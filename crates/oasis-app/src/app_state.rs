@@ -110,6 +110,10 @@ pub struct ContentLayer {
     pub open_runners: Vec<(String, AppRunner)>,
     pub browser: Option<BrowserWidget>,
     pub fullscreen_app: Option<String>,
+    /// Runners of apps closed this frame, waiting for the shell to release
+    /// their backend resources (`AppRunner::release_resources`) before
+    /// they are dropped. Input handlers have no backend access.
+    pub retired_runners: Vec<AppRunner>,
 }
 
 /// All mutable application state except `backend`, `sdi`, and `vfs`
@@ -166,6 +170,10 @@ pub struct AppState {
     /// streams). Set by the headless harness so scenarios are hermetic
     /// and deterministic; always `false` in the desktop binary.
     pub offline: bool,
+    /// Directory "Save as custom skin" writes skins into (`skins/` next
+    /// to the binary's working directory; a temp dir in the headless
+    /// harness so tests never write into the repository).
+    pub custom_skin_root: std::path::PathBuf,
     pub toasts: ToastManager,
     /// UI sound events queued by input/toast chokepoints this frame,
     /// drained once per frame by `ui_sfx::tick`.
@@ -342,6 +350,7 @@ mod tests {
             open_runners: Vec::new(),
             browser: None,
             fullscreen_app: None,
+            retired_runners: Vec::new(),
         };
     }
 }

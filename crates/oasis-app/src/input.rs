@@ -128,6 +128,77 @@ pub(crate) fn stop_music_if_music_runner(state: &mut AppState, id: &str) {
     }
 }
 
+/// Id of the window whose titlebar close button is under `(x, y)` (only
+/// the topmost window at that point counts).
+fn close_button_under(state: &AppState, x: i32, y: i32) -> Option<String> {
+    let id = state.wm.window_at(x, y)?;
+    let win = state.wm.get_window(id).filter(|w| !w.fullscreen_kiosk)?;
+    let (bx, by, bw, bh) = win.close_btn_rect(state.wm.theme())?;
+    let hit = x >= bx && y >= by && x < bx + bw as i32 && y < by + bh as i32;
+    hit.then(|| id.to_string())
+}
+
+/// Where leaving the fullscreen terminal lands: back on the desktop while
+/// windows are on screen (the terminal can be entered from there, e.g. an
+/// app's "switch to terminal"), otherwise the dashboard. The dashboard
+/// mode does not route input to windows, so returning there with windows
+/// visible would leave them painted but unusable.
+fn home_mode(state: &AppState) -> Mode {
+    let windows_visible = state
+        .wm
+        .windows()
+        .iter()
+        .any(|w| w.state != oasis_core::wm::window::WindowState::Minimized);
+    if windows_visible {
+        Mode::Desktop
+    } else {
+        Mode::Dashboard
+    }
+}
+
+/// Drive the open start menu with a gamepad-style button (d-pad moves the
+/// highlight, Confirm picks, Cancel closes).
+fn start_menu_button(
+    btn: Button,
+    state: &mut AppState,
+    sdi: &mut SdiRegistry,
+    vfs: &MemoryVfs,
+) -> InputResult {
+    if matches!(btn, Button::Up | Button::Down) {
+        state.ui_sounds.push_nav(state.frame_counter);
+    }
+    let action = state.ui.start_menu.handle_input(&btn);
+    if action == StartMenuAction::Exit {
+        return InputResult::Quit;
+    }
+    if action != StartMenuAction::None {
+        handle_start_menu_action(&action, state, sdi, vfs);
+    }
+    InputResult::Continue
+}
+
+/// Whether the start menu is open and receiving the keyboard.
+fn start_menu_focused(state: &AppState) -> bool {
+    state.ui.start_menu.open && matches!(state.mode, Mode::Dashboard | Mode::Desktop)
+}
+
+/// Remove the windowed runner `id`, parking it until the shell releases
+/// its backend resources (see `ContentLayer::retired_runners`).
+fn retire_runner(state: &mut AppState, id: &str) {
+    let content = &mut state.content;
+    while let Some(idx) = content.open_runners.iter().position(|(rid, _)| rid == id) {
+        let (_, runner) = content.open_runners.remove(idx);
+        content.retired_runners.push(runner);
+    }
+}
+
+/// Remove the fullscreen (`Mode::App`) runner the same way.
+fn retire_fullscreen_runner(state: &mut AppState) {
+    if let Some(runner) = state.content.app_runner.take() {
+        state.content.retired_runners.push(runner);
+    }
+}
+
 /// Result of handling a single input event.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InputResult {
@@ -149,24 +220,37 @@ pub fn handle_osk_input(
             },
             InputEvent::ButtonPress(btn) => {
                 osk_state.handle_input(btn);
+                let for_terminal = osk_state.config.title == TERMINAL_OSK_TITLE;
+                let back_to = if for_terminal {
+                    Mode::Terminal
+                } else {
+                    Mode::Dashboard
+                };
                 if let Some(text) = osk_state.confirmed_text() {
-                    state
-                        .terminal
-                        .output_lines
-                        .push(format!("[OSK] Input: {text}"));
-                    commands::trim_output(&mut state.terminal.output_lines);
+                    if for_terminal {
+                        // The OSK edited the prompt line: put it back.
+                        state.terminal.session.set_line(text);
+                    } else {
+                        state
+                            .terminal
+                            .output_lines
+                            .push(format!("[OSK] Input: {text}"));
+                        commands::trim_output(&mut state.terminal.output_lines);
+                    }
                     osk_state.hide_sdi(sdi);
                     state.osk = None;
-                    state.mode = Mode::Dashboard;
+                    state.mode = back_to;
                 } else if osk_state.is_cancelled() {
-                    state
-                        .terminal
-                        .output_lines
-                        .push("[OSK] Cancelled".to_string());
-                    commands::trim_output(&mut state.terminal.output_lines);
+                    if !for_terminal {
+                        state
+                            .terminal
+                            .output_lines
+                            .push("[OSK] Cancelled".to_string());
+                        commands::trim_output(&mut state.terminal.output_lines);
+                    }
                     osk_state.hide_sdi(sdi);
                     state.osk = None;
-                    state.mode = Mode::Dashboard;
+                    state.mode = back_to;
                 }
             },
             _ => {},
@@ -174,6 +258,12 @@ pub fn handle_osk_input(
     }
     InputResult::Continue
 }
+
+/// OSK title for the general-purpose keyboard (result echoed to the
+/// terminal scrollback).
+const DEFAULT_OSK_TITLE: &str = "On-Screen Keyboard";
+/// OSK title when it edits the terminal prompt (result returns to it).
+const TERMINAL_OSK_TITLE: &str = "Terminal Input";
 
 /// Handle input in Desktop (windowed WM) mode.
 pub fn handle_desktop_input(
@@ -232,10 +322,26 @@ pub fn handle_desktop_input(
                 {
                     // Minimized -- restore and focus.
                     let _ = state.wm.restore_window(&win_id, sdi);
+                    let _ = state.wm.focus_window(&win_id, sdi);
                 } else {
                     // Inactive, visible -- bring to front.
                     let _ = state.wm.focus_window(&win_id, sdi);
                 }
+                return InputResult::Continue;
+            }
+            // A titlebar close button asks the app first: an editor with
+            // unsaved changes answers with its prompt instead of closing
+            // (the WM would otherwise drop the window, and the edits, on
+            // the spot).
+            if let Some(id) = close_button_under(state, *x, *y)
+                && let Some((_, runner)) = state
+                    .content
+                    .open_runners
+                    .iter_mut()
+                    .find(|(rid, _)| *rid == id)
+                && runner.request_close(vfs) != AppAction::Exit
+            {
+                let _ = state.wm.focus_window(&id, sdi);
                 return InputResult::Continue;
             }
             let wm_event = state
@@ -249,7 +355,7 @@ pub fn handle_desktop_input(
                     }
                     stop_radio_if_radio_runner(state, &id);
                     stop_music_if_music_runner(state, &id);
-                    state.content.open_runners.retain(|(rid, _)| *rid != id);
+                    retire_runner(state, &id);
                     if id == "browser" {
                         state.content.browser = None;
                     }
@@ -354,6 +460,13 @@ pub fn handle_desktop_input(
                 state.content.fullscreen_app = Some(active_id);
             }
         },
+        // An open start menu owns the d-pad, Confirm and Cancel, ahead of
+        // the focused window.
+        InputEvent::ButtonPress(btn) if state.ui.start_menu.open => {
+            return start_menu_button(*btn, state, sdi, vfs);
+        },
+        // Text typed while the menu is open is not meant for the window.
+        InputEvent::TextInput(_) | InputEvent::Backspace if state.ui.start_menu.open => {},
         InputEvent::ButtonPress(Button::Cancel) => {
             if let Some(active_id) = state.wm.active_window().map(|s| s.to_string()) {
                 // App windows own Cancel: it backs out of dialogs, leaves
@@ -393,16 +506,19 @@ pub fn handle_desktop_input(
                 let _ = state.wm.close_window(&active_id, sdi);
                 stop_radio_if_radio_runner(state, &active_id);
                 stop_music_if_music_runner(state, &active_id);
-                state
-                    .content
-                    .open_runners
-                    .retain(|(rid, _)| *rid != active_id);
+                retire_runner(state, &active_id);
                 if active_id == "browser" {
                     state.content.browser = None;
                 }
                 if state.wm.window_count() == 0 {
                     state.mode = Mode::Dashboard;
                 }
+            } else if let Some(top) = state.wm.topmost_visible().map(str::to_string) {
+                // Nothing focused (e.g. after a click on the bare desktop)
+                // but windows are still on screen: focus the top one, so the
+                // next Cancel reaches it. Switching to the dashboard here
+                // would leave the windows painted but dead to input.
+                let _ = state.wm.focus_window(&top, sdi);
             } else {
                 state.mode = Mode::Dashboard;
             }
@@ -457,7 +573,16 @@ pub fn handle_desktop_input(
             None => {},
         },
         InputEvent::MouseWheel { delta } => {
-            match state.wm.active_window() {
+            // The wheel scrolls the window under the pointer (like desktop
+            // OSes), falling back to the focused window when the pointer
+            // is over the bare desktop. Scrolling never changes focus.
+            let (px, py) = (state.ui.mouse_cursor.x, state.ui.mouse_cursor.y);
+            let target = state
+                .wm
+                .window_at(px, py)
+                .or_else(|| state.wm.active_window())
+                .map(str::to_string);
+            match target.as_deref() {
                 Some("browser") => {
                     if let Some(ref mut bw) = state.content.browser {
                         bw.handle_input(&InputEvent::MouseWheel { delta: *delta }, vfs);
@@ -574,7 +699,7 @@ fn apply_fullscreen_action(
         AppAction::Exit => {
             state.ui_sounds.push(UiSound::Close);
             AppRunner::hide_sdi(sdi);
-            state.content.app_runner = None;
+            retire_fullscreen_runner(state);
             state.mode = Mode::Dashboard;
             if is_radio {
                 stop_radio(state);
@@ -585,7 +710,7 @@ fn apply_fullscreen_action(
         },
         AppAction::SwitchToTerminal => {
             AppRunner::hide_sdi(sdi);
-            state.content.app_runner = None;
+            retire_fullscreen_runner(state);
             state.mode = Mode::Terminal;
         },
         AppAction::LaunchAppWithFile {
@@ -601,6 +726,7 @@ fn apply_fullscreen_action(
                 icon_png: Vec::new(),
                 color: oasis_core::backend::Color::rgb(100, 100, 100),
             };
+            retire_fullscreen_runner(state);
             state.content.app_runner = Some(AppRunner::launch_with_file(&entry, &file_path, vfs));
         },
         AppAction::RequestFullscreen | AppAction::None => {},
@@ -625,10 +751,7 @@ fn apply_window_action(
             let _ = state.wm.close_window(&active_id, sdi);
             stop_radio_if_radio_runner(state, &active_id);
             stop_music_if_music_runner(state, &active_id);
-            state
-                .content
-                .open_runners
-                .retain(|(rid, _)| *rid != active_id);
+            retire_runner(state, &active_id);
             if state.wm.window_count() == 0 {
                 state.mode = Mode::Dashboard;
             }
@@ -846,6 +969,11 @@ pub fn handle_event(
             key_filter.suppress_twin(*key, *mods);
             return InputResult::Continue;
         }
+        // An open start menu takes the keyboard: the key's gamepad twin
+        // (arrows, Enter, Escape) navigates it instead of the focused app.
+        if start_menu_focused(state) {
+            return InputResult::Continue;
+        }
         // Terminal line-editing shortcuts (Home/End/Delete, Ctrl+A/E/K/...,
         // Ctrl+R search). Their twins (e.g. Ctrl+E's R-trigger) are dropped.
         if terminal_input::focused(state)
@@ -878,6 +1006,14 @@ pub fn handle_default_input(
 ) -> InputResult {
     match event {
         InputEvent::Quit => return InputResult::Quit,
+        // An open start menu owns the d-pad, Confirm and Cancel (Cancel
+        // closes it): checked before the dashboard's own Confirm (launch
+        // the selected icon) and Cancel (quit) bindings.
+        InputEvent::ButtonPress(btn)
+            if state.mode == Mode::Dashboard && state.ui.start_menu.open =>
+        {
+            return start_menu_button(*btn, state, sdi, vfs);
+        },
         InputEvent::ButtonPress(Button::Cancel) if state.mode == Mode::Dashboard => {
             return InputResult::Quit;
         },
@@ -969,18 +1105,29 @@ pub fn handle_default_input(
         InputEvent::ButtonPress(Button::Start) => {
             state.mode = match state.mode {
                 Mode::Dashboard => Mode::Terminal,
-                Mode::Terminal => Mode::Dashboard,
+                Mode::Terminal => home_mode(state),
                 Mode::App => Mode::App,
                 Mode::Osk => Mode::Osk,
                 Mode::Desktop => Mode::Desktop,
             };
         },
         InputEvent::ButtonPress(Button::Select) if state.mode != Mode::Osk => {
+            // Opened from the terminal, the OSK edits the prompt line and
+            // hands the result back to it (see `handle_osk_input`).
+            let from_terminal = state.mode == Mode::Terminal;
+            let (title, initial) = if from_terminal {
+                (
+                    TERMINAL_OSK_TITLE,
+                    state.terminal.session.buffer().to_string(),
+                )
+            } else {
+                (DEFAULT_OSK_TITLE, String::new())
+            };
             let osk_cfg = OskConfig {
-                title: "On-Screen Keyboard".to_string(),
+                title: title.to_string(),
                 ..OskConfig::for_screen(state.active_theme.screen_w, state.active_theme.screen_h)
             };
-            state.osk = Some(OskState::new(osk_cfg, ""));
+            state.osk = Some(OskState::new(osk_cfg, &initial));
             state.mode = Mode::Osk;
             log::info!("OSK opened");
         },
@@ -1006,22 +1153,6 @@ pub fn handle_default_input(
         },
         InputEvent::TriggerRelease(Trigger::Right) => {
             state.ui.bottom_bar.r_pressed = false;
-        },
-
-        // Start menu intercepts input when open.
-        InputEvent::ButtonPress(btn)
-            if state.mode == Mode::Dashboard && state.ui.start_menu.open =>
-        {
-            if matches!(btn, Button::Up | Button::Down) {
-                state.ui_sounds.push_nav(state.frame_counter);
-            }
-            let action = state.ui.start_menu.handle_input(btn);
-            if action == StartMenuAction::Exit {
-                return InputResult::Quit;
-            }
-            if action != StartMenuAction::None {
-                handle_start_menu_action(&action, state, sdi, vfs);
-            }
         },
 
         // Dashboard input: D-pad navigation.
@@ -1057,7 +1188,7 @@ pub fn handle_default_input(
                 && terminal_input::handle_event(event, state, sdi, vfs) => {},
         InputEvent::ButtonPress(Button::Cancel) if state.mode == Mode::Terminal => {
             terminal_sdi::set_terminal_visible(sdi, false);
-            state.mode = Mode::Dashboard;
+            state.mode = home_mode(state);
             state.ui_sounds.push(UiSound::Close);
         },
 
@@ -1235,6 +1366,7 @@ mod tests {
                 open_runners: Vec::new(),
                 browser: None,
                 fullscreen_app: None,
+                retired_runners: Vec::new(),
             },
             osk: None,
             plugin_manager: oasis_core::plugin::PluginManager::new(),
@@ -1258,6 +1390,7 @@ mod tests {
             pending_source_fetch: None,
             audio_backend: Box::new(SdlAudioBackend::new()),
             offline: true,
+            custom_skin_root: std::env::temp_dir().join("oasis-unit-skins"),
             toasts: oasis_core::toast::ToastManager::new(),
             ui_sounds: oasis_core::ui_sound::UiSoundQueue::new(),
             sfx: oasis_audio::sfx::SfxPlayer::new(),

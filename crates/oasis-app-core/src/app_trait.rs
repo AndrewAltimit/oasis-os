@@ -98,6 +98,12 @@ pub trait App: std::fmt::Debug + Send {
     /// Hide all SDI objects created by this app.
     fn hide_sdi(&self, sdi: &mut SdiRegistry);
 
+    /// The app is closing: destroy every backend resource it created
+    /// (textures, render targets). Hosts call this exactly once, after
+    /// the window is gone and before the app is dropped -- the only point
+    /// where a closing app still has backend access. Default: no-op.
+    fn release_resources(&mut self, _backend: &mut dyn SdiBackend) {}
+
     /// Take any pending VFS IPC request (path, data).
     fn take_pending_request(&mut self) -> Option<(String, String)> {
         None
@@ -150,6 +156,17 @@ pub trait App: std::fmt::Debug + Send {
     /// consumes the request. Default is `false` (never self-closes).
     fn take_close_request(&mut self) -> bool {
         false
+    }
+
+    /// The user asked to close the app through the host's window chrome
+    /// (a titlebar close button) rather than through the app's own input.
+    ///
+    /// Return [`AppAction::Exit`] to close now; anything else keeps the
+    /// app open -- e.g. an editor with unsaved changes raises its
+    /// "Save / Discard / Cancel" prompt and closes later through its own
+    /// input or [`Self::take_close_request`]. Default: close immediately.
+    fn on_close_requested(&mut self, _vfs: &dyn Vfs) -> AppAction {
+        AppAction::Exit
     }
 
     /// Whether this app needs every frame drawn (continuous animation,

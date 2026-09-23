@@ -92,6 +92,8 @@ pub struct BootOptions {
     pub settings_disk_path: Option<PathBuf>,
     /// Never start network fetches (see [`AppState::offline`]).
     pub offline: bool,
+    /// Where Settings saves custom skins (see [`AppState::custom_skin_root`]).
+    pub custom_skin_root: PathBuf,
     /// Load the sample media from the host disk in the background.
     pub load_disk_samples: bool,
     /// Create the software shader-wallpaper bridge.
@@ -153,6 +155,7 @@ impl BootOptions {
             boot_settings,
             settings_disk_path,
             offline: false,
+            custom_skin_root: PathBuf::from("skins"),
             load_disk_samples: true,
             shader_wallpaper: true,
             fixed_time: None,
@@ -180,6 +183,7 @@ impl BootOptions {
             boot_settings: SettingsStore::new(),
             settings_disk_path: None,
             offline: true,
+            custom_skin_root: hermetic_skin_root(),
             load_disk_samples: false,
             shader_wallpaper: false,
             fixed_time: None,
@@ -188,6 +192,18 @@ impl BootOptions {
             tv_timeout_secs: None,
         })
     }
+}
+
+/// A fresh per-boot temp directory for custom skins saved during a
+/// hermetic (harness) session, so tests never write into the repository.
+fn hermetic_skin_root() -> PathBuf {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static NEXT: AtomicU64 = AtomicU64::new(0);
+    std::env::temp_dir().join(format!(
+        "oasis-hermetic-skins-{}-{}",
+        std::process::id(),
+        NEXT.fetch_add(1, Ordering::Relaxed)
+    ))
 }
 
 /// Apply the skin's screen size to `config`: the skin's native size,
@@ -292,6 +308,7 @@ impl<B: ShellBackend> Shell<B> {
             boot_settings,
             settings_disk_path,
             offline,
+            custom_skin_root,
             load_disk_samples,
             shader_wallpaper,
             fixed_time,
@@ -581,6 +598,7 @@ impl<B: ShellBackend> Shell<B> {
                 open_runners: Vec::new(),
                 browser: None,
                 fullscreen_app: None,
+                retired_runners: Vec::new(),
             },
             osk: None,
             plugin_manager,
@@ -604,6 +622,7 @@ impl<B: ShellBackend> Shell<B> {
             pending_source_fetch: None,
             audio_backend: make_audio(),
             offline,
+            custom_skin_root,
             toasts: ToastManager::new(),
             ui_sounds: oasis_core::ui_sound::UiSoundQueue::new(),
             sfx: oasis_audio::sfx::SfxPlayer::new(),
@@ -937,6 +956,11 @@ impl<B: ShellBackend> Shell<B> {
         // Apps that decided to close outside an input handler (Text
         // Editor "Save & close" once the save above is written).
         input::apply_app_close_requests(state, sdi, vfs);
+        // Closed apps release their backend resources (textures) now that
+        // the backend is at hand, then drop.
+        for mut runner in state.content.retired_runners.drain(..) {
+            runner.release_resources(&mut self.backend);
+        }
 
         // Dispatch any Settings-app IPC requests (skin swap, resolution
         // change). Must run after the pending-VFS-request block above,
@@ -1014,7 +1038,7 @@ impl<B: ShellBackend> Shell<B> {
         state
             .wm
             .set_motion_enabled(!state.skin.features.reduced_motion);
-        state.wm.tick_animations(sdi);
+        state.wm.tick_animations_at(now, sdi);
 
         // Assemble entrance: slide the bars in and hide bar content while
         // the transition runs (no-op for fade/none entrances).
@@ -1304,6 +1328,9 @@ impl<B: ShellBackend> Shell<B> {
         // Persist any settings changed since the last periodic sync.
         self.settings_mirror.sync(&self.vfs);
 
+        for mut runner in self.state.content.retired_runners.drain(..) {
+            runner.release_resources(&mut self.backend);
+        }
         // Clean up video player before shutting down backend.
         self.state.video_player.stop(&mut self.backend);
         if let Some(track) = self.state.tv_audio_track.take() {

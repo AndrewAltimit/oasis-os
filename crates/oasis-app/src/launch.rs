@@ -7,7 +7,7 @@ use oasis_core::sdi::SdiRegistry;
 use oasis_core::transition;
 use oasis_core::vfs::MemoryVfs;
 use oasis_core::wm::manager::WindowManager;
-use oasis_core::wm::window::{WindowConfig, WindowType};
+use oasis_core::wm::window::{WindowConfig, WindowState, WindowType};
 
 use crate::app_state::Mode;
 
@@ -15,6 +15,19 @@ use crate::app_state::Mode;
 pub enum LaunchResult {
     Terminal,
     Desktop,
+}
+
+/// Bring an already-open window back to the user: restore it if it is
+/// minimized, then focus it. (Focusing alone would make a minimized,
+/// invisible window the keyboard target.)
+fn raise_window(wm: &mut WindowManager, id: &str, sdi: &mut SdiRegistry) {
+    if wm
+        .get_window(id)
+        .is_some_and(|w| w.state == WindowState::Minimized)
+    {
+        let _ = wm.restore_window(id, sdi);
+    }
+    let _ = wm.focus_window(id, sdi);
 }
 
 /// Launch an app as a floating window (Browser, generic app, or Terminal).
@@ -43,7 +56,7 @@ pub fn launch_app_window(
     if app.title == "Browser" {
         let win_id = "browser";
         if wm.get_window(win_id).is_some() {
-            let _ = wm.focus_window(win_id, sdi);
+            raise_window(wm, win_id, sdi);
         } else {
             let wc = WindowConfig {
                 id: win_id.to_string(),
@@ -69,7 +82,7 @@ pub fn launch_app_window(
 
     let win_id = app.title.to_lowercase().replace(' ', "_");
     if wm.get_window(&win_id).is_some() {
-        let _ = wm.focus_window(&win_id, sdi);
+        raise_window(wm, &win_id, sdi);
     } else {
         let wc = WindowConfig {
             id: win_id.clone(),
@@ -130,7 +143,7 @@ pub fn launch_app_window_for_file(
 
     if wm.get_window(&win_id).is_some() {
         // Replace the existing runner so the file is pre-loaded.
-        let _ = wm.focus_window(&win_id, sdi);
+        raise_window(wm, &win_id, sdi);
         if let Some(entry_mut) = open_runners.iter_mut().find(|(id, _)| *id == win_id) {
             let new_runner = AppRunner::launch_with_file(&entry, file_path, vfs);
             // Hand any pending GPU textures from the outgoing runner's

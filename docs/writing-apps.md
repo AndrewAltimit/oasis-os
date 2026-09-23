@@ -52,6 +52,8 @@ default; everything else is opt-in.
 | `refresh(&mut self, &dyn Vfs)` | no-op | Right after a forwarded click or a consumed key | Read-only follow-up (re-list a folder, reload state). Not a clock |
 | `apply_vfs_ops(&mut self, &mut dyn Vfs) -> bool` | `false` | Once per frame for every open app | The only hook with **mutable** VFS access: apply queued writes, deletes, renames, binary saves. Return `true` when something was applied |
 | `tick(&mut self, dt_ms: u32, &dyn Vfs) -> bool` | `false` | Once per frame for every open app, even on elided frames | Advance time-driven state by wall time; return `true` when something you draw changed |
+| `release_resources(&mut self, &mut dyn SdiBackend)` | no-op | Once, after the app's window closed and before the app is dropped | Destroy every texture / render target the app created (e.g. the Photo Viewer's image) |
+| `on_close_requested(&mut self, &dyn Vfs) -> AppAction` | `Exit` | The user clicked the window's titlebar close button | Return `Exit` to close now; anything else keeps the window open (e.g. raise an unsaved-changes prompt, as the Text Editor does) |
 | `wants_frame(&self) -> bool` | `false` | Idle-frame check | `true` only for content that changes on its own every frame (video) |
 | `lines(&self) -> &[String]` | required | Generic scroll / render helpers, terminal mirroring | |
 | `browse_dir` / `viewing_file` | `None` | Host queries | For file-browsing apps |
