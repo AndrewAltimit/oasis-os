@@ -165,6 +165,8 @@ jobs:
       # oasis-app` resolves features for oasis-app alone rather than the
       # whole workspace, so it would recompile every dependency with
       # fat LTO (~5 min) instead of reusing the build above.
+      # The wrapper adds the from-source libSDL3.so.0 dir to LD_LIBRARY_PATH
+      # (which `cargo run` did implicitly).
       - name: Screenshot tests (generate)
         timeout-minutes: 10
         run: |
@@ -172,7 +174,7 @@ jobs:
             -e SDL_VIDEODRIVER=dummy -e SDL_RENDER_DRIVER=software \
             -e OASIS_FIXED_TIME="2025-06-15 12:00:00" \
             -e OASIS_FIXED_FRAME=0 \
-            rust-ci ./target/release/screenshot-tests
+            rust-ci scripts/run-release-bin.sh screenshot-tests
 
       - name: Screenshot regression comparison
         if: always()
