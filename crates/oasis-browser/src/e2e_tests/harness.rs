@@ -15,8 +15,9 @@ use crate::test_utils::{DrawCall, MockBackend};
 use crate::{BrowserConfig, BrowserWidget};
 
 /// Upper bound on any single wait. Generous so slow CI machines don't
-/// flake, but finite so a regression fails instead of hanging.
-pub(crate) const DEADLINE: Duration = Duration::from_secs(10);
+/// flake (the parallel nextest pool has stretched a 2s debug page load
+/// past 20s), but finite so a regression fails instead of hanging.
+pub(crate) const DEADLINE: Duration = Duration::from_secs(60);
 
 // -------------------------------------------------------------------
 // HTTP server

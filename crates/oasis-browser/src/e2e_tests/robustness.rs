@@ -6,7 +6,7 @@ use std::time::{Duration, Instant};
 
 use oasis_types::input::{Button, InputEvent};
 
-use super::harness::{Reply, Session, TestServer};
+use super::harness::{DEADLINE, Reply, Session, TestServer};
 
 /// Serve `body` at `/page` and `<p>AfterOk</p>` at `/ok`; load the page
 /// in a fresh session on a thread with `stack` bytes of stack, drive a
@@ -60,7 +60,7 @@ fn ten_thousand_nested_divs() {
     html.push_str(&"</div>".repeat(10_000));
     html.push_str("</body></html>");
     let took = survive(html, UI_STACK);
-    assert!(took < Duration::from_secs(15), "took {took:?}");
+    assert!(took < DEADLINE, "took {took:?}");
 }
 
 #[test]
@@ -72,7 +72,7 @@ fn deeply_nested_inline_and_unclosed_tags() {
     html.push_str(&"</td></tr></table></select>".repeat(2_000));
     html.push_str("<table><tr><td><table><tr><td>".repeat(500).as_str());
     let took = survive(html, UI_STACK);
-    assert!(took < Duration::from_secs(15), "took {took:?}");
+    assert!(took < DEADLINE, "took {took:?}");
 }
 
 #[test]
@@ -85,7 +85,7 @@ fn giant_attribute_and_giant_text_run() {
     html.push_str(&"wordwithoutanybreakopportunity".repeat(20_000));
     html.push_str("</p></body></html>");
     let took = survive(html, UI_STACK);
-    assert!(took < Duration::from_secs(15), "took {took:?}");
+    assert!(took < DEADLINE, "took {took:?}");
 }
 
 #[test]
@@ -126,7 +126,7 @@ fn pathological_css() {
         inline = "color:red;".repeat(10_000),
     );
     let took = survive(html, UI_STACK);
-    assert!(took < Duration::from_secs(15), "took {took:?}");
+    assert!(took < DEADLINE, "took {took:?}");
 }
 
 #[test]
@@ -137,7 +137,7 @@ fn binary_garbage_and_truncated_markup() {
     bytes.extend_from_slice(b"<html><body><p>tail<script>var x = '");
     let body = String::from_utf8_lossy(&bytes).into_owned();
     let took = survive(body, UI_STACK);
-    assert!(took < Duration::from_secs(15), "took {took:?}");
+    assert!(took < DEADLINE, "took {took:?}");
 }
 
 #[test]
