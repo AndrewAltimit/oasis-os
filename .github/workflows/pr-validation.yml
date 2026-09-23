@@ -41,7 +41,7 @@ jobs:
     name: OASIS_OS CI
     needs: fork-guard
     runs-on: self-hosted
-    timeout-minutes: 60
+    timeout-minutes: 120
     steps:
       - name: Pre-checkout cleanup
         run: |
@@ -116,25 +116,37 @@ jobs:
           exit $FAIL
 
       # -- Tests -------------------------------------------------------------
+      # cargo-nextest runs all test binaries on one parallel pool (cargo test
+      # runs them serially; the oasis-app e2e suites take minutes each in
+      # debug). Doc-tests aren't supported by nextest, so they run after.
+      # A per-test hang guard lives in .config/nextest.toml.
       - name: Test
-        timeout-minutes: 15
+        timeout-minutes: 30
         run: |
           set -o pipefail
-          docker compose --profile ci run --rm rust-ci \
-            cargo test --workspace 2>&1 | tee test_output.txt
+          docker compose --profile ci run --rm rust-ci bash -c "
+            set -e
+            cargo nextest run --workspace --profile ci
+            cargo test --workspace --doc
+          " 2>&1 | tee test_output.txt
 
       # -- Build -------------------------------------------------------------
+      # Builds every workspace binary, including screenshot-tests below.
       - name: Build (release)
-        timeout-minutes: 15
+        timeout-minutes: 25
         run: docker compose --profile ci run --rm rust-ci cargo build --workspace --release
 
       # -- Screenshot Regression Tests ----------------------------------------
+      # Run the binary the release build just produced. `cargo run -p
+      # oasis-app` resolves features for oasis-app alone rather than the
+      # whole workspace, so it would recompile every dependency with
+      # fat LTO (~5 min) instead of reusing the build above.
       - name: Screenshot tests (generate)
-        timeout-minutes: 5
+        timeout-minutes: 10
         run: |
           docker compose --profile ci run --rm \
             -e SDL_VIDEODRIVER=dummy -e SDL_RENDER_DRIVER=software \
-            rust-ci cargo run -p oasis-app --bin screenshot-tests --release
+            rust-ci ./target/release/screenshot-tests
 
       - name: Upload screenshot report
         if: always()
@@ -146,6 +158,7 @@ jobs:
 
       # -- License / Advisory ------------------------------------------------
       - name: cargo-deny
+        timeout-minutes: 10
         run: docker compose --profile ci run --rm rust-ci cargo deny check
 
       # -- Benchmarks (regression gate) ----------------------------------------
@@ -209,15 +222,19 @@ jobs:
             echo "No test output available." >> $GITHUB_STEP_SUMMARY
             exit 0
           fi
-          PASS=$(grep -c '\.\.\.  *ok$' test_output.txt 2>/dev/null) || PASS=0
-          FAIL=$(grep -c 'FAILED$' test_output.txt 2>/dev/null) || FAIL=0
-          TOTAL=$((PASS + FAIL))
+          sed 's/\x1b\[[0-9;]*m//g' test_output.txt > test_output_plain.txt
           echo "### Test Summary" >> $GITHUB_STEP_SUMMARY
-          echo "| Metric | Count |" >> $GITHUB_STEP_SUMMARY
-          echo "|--------|-------|" >> $GITHUB_STEP_SUMMARY
-          echo "| Passed | $PASS |" >> $GITHUB_STEP_SUMMARY
-          echo "| Failed | $FAIL |" >> $GITHUB_STEP_SUMMARY
-          echo "| Total  | $TOTAL |" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          # nextest's final line, e.g. "Summary [ 312s] 9000 tests run: ..."
+          grep -E '^ *Summary \[' test_output_plain.txt | tail -1 \
+            >> $GITHUB_STEP_SUMMARY || true
+          # Doc-tests (cargo test) print one "test result:" line per crate.
+          DOC_PASS=$(grep -E '^test result:' test_output_plain.txt \
+            | awk '{s += $4} END {print s + 0}')
+          DOC_FAIL=$(grep -E '^test result:' test_output_plain.txt \
+            | awk '{s += $6} END {print s + 0}')
+          echo "Doc-tests: $DOC_PASS passed, $DOC_FAIL failed" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
 
       # -- PSP Backend Build -------------------------------------------------
       - name: Setup PSP SDK

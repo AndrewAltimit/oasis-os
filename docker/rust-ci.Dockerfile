@@ -48,6 +48,12 @@ RUN rustup install nightly \
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     cargo install cargo-deny --locked 2>/dev/null || true
 
+# Install cargo-nextest: the CI Test step runs test binaries in parallel
+# (cargo test runs them one after another, and the oasis-app e2e suites
+# alone take minutes each in debug). Not `|| true`: the Test step needs it.
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    cargo install cargo-nextest --locked
+
 # Non-root user (overridden by docker-compose USER_ID/GROUP_ID)
 RUN useradd -m -u 1000 ciuser \
     && mkdir -p /tmp/cargo && chmod 1777 /tmp/cargo

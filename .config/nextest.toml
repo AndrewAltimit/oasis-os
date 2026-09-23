@@ -1,0 +1,20 @@
+# cargo-nextest configuration (used by the CI Test step).
+#
+# nextest runs every test in its own process and schedules tests from all
+# binaries on one pool, so the slow oasis-app e2e suites overlap instead of
+# running back to back as they do under `cargo test`.
+#
+# Doc-tests are not supported by nextest; CI runs them separately with
+# `cargo test --workspace --doc`.
+
+[profile.default]
+# Report tests running longer than 60s; kill any test still running after
+# 5 periods (5 min) so a hung test fails fast instead of eating the whole
+# step timeout.
+slow-timeout = { period = "60s", terminate-after = 5 }
+
+[profile.ci]
+# Run everything and report all failures, not just the first one.
+fail-fast = false
+failure-output = "immediate-final"
+slow-timeout = { period = "60s", terminate-after = 5 }
