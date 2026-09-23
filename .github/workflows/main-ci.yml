@@ -206,7 +206,7 @@ jobs:
       # -- cargo-deny --------------------------------------------------------
       - name: cargo-deny
         timeout-minutes: 10
-        run: docker compose --profile ci run --rm rust-ci cargo deny check
+        run: docker compose --profile ci run --rm rust-ci scripts/cargo-deny.sh
 
       # -- Benchmarks (manual) -----------------------------------------------
       - name: Benchmarks
