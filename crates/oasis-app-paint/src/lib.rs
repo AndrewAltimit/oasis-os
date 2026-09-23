@@ -1124,7 +1124,7 @@ mod tests {
         draw_rect(&mut buf, 8, 8, 1, 1, 4, 3, c);
         // Top edge: y=1, x=1..4
         for x in 1..=4 {
-            assert_eq!(buf[1 * 8 + x], c);
+            assert_eq!(buf[8 + x], c);
         }
         // Bottom edge: y=3, x=1..4
         for x in 1..=4 {

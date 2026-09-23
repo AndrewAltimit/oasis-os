@@ -52,8 +52,10 @@ fn transparent_background_skipped() {
 #[test]
 fn opaque_background_painted() {
     let mut backend = MockBackend::new();
-    let mut style = ComputedStyle::default();
-    style.background_color = Color::rgb(255, 0, 0);
+    let style = ComputedStyle {
+        background_color: Color::rgb(255, 0, 0),
+        ..Default::default()
+    };
 
     let lb = make_block(10.0, 20.0, 100.0, 50.0, style);
     let link_map = HashMap::new();
@@ -87,10 +89,12 @@ fn zero_width_borders_skipped() {
 #[test]
 fn nonzero_borders_painted() {
     let mut backend = MockBackend::new();
-    let mut style = ComputedStyle::default();
-    style.border_top_width = 2.0;
-    style.border_top_style = BorderStyle::Solid;
-    style.border_top_color = Color::BLACK;
+    let style = ComputedStyle {
+        border_top_width: 2.0,
+        border_top_style: BorderStyle::Solid,
+        border_top_color: Color::BLACK,
+        ..Default::default()
+    };
 
     let mut lb = make_block(10.0, 10.0, 100.0, 50.0, style);
     lb.dimensions.border = EdgeSizes {
@@ -142,8 +146,10 @@ fn link_regions_recorded() {
 #[test]
 fn offscreen_above_viewport_culled() {
     let mut backend = MockBackend::new();
-    let mut style = ComputedStyle::default();
-    style.background_color = Color::rgb(255, 0, 0);
+    let style = ComputedStyle {
+        background_color: Color::rgb(255, 0, 0),
+        ..Default::default()
+    };
 
     let lb = make_block(0.0, -100.0, 100.0, 50.0, style);
     let link_map = HashMap::new();
@@ -160,8 +166,10 @@ fn offscreen_above_viewport_culled() {
 #[test]
 fn offscreen_below_viewport_culled() {
     let mut backend = MockBackend::new();
-    let mut style = ComputedStyle::default();
-    style.background_color = Color::rgb(0, 255, 0);
+    let style = ComputedStyle {
+        background_color: Color::rgb(0, 255, 0),
+        ..Default::default()
+    };
 
     let lb = make_block(0.0, 500.0, 100.0, 50.0, style);
     let link_map = HashMap::new();
@@ -178,8 +186,10 @@ fn offscreen_below_viewport_culled() {
 #[test]
 fn onscreen_box_not_culled() {
     let mut backend = MockBackend::new();
-    let mut style = ComputedStyle::default();
-    style.background_color = Color::rgb(0, 0, 255);
+    let style = ComputedStyle {
+        background_color: Color::rgb(0, 0, 255),
+        ..Default::default()
+    };
 
     let lb = make_block(0.0, 100.0, 100.0, 50.0, style);
     let link_map = HashMap::new();
@@ -368,17 +378,23 @@ fn perspective_ancestor_routes_3d_child_through_polygon_path() {
     // sees a non-trivial transform and goes through fill_polygon.
     let mut backend = MockBackend::new();
 
-    let mut child_style = ComputedStyle::default();
-    child_style.background_color = Color::rgb(255, 0, 0);
+    let child_style = ComputedStyle {
+        background_color: Color::rgb(255, 0, 0),
+        ..Default::default()
+    };
     let child = make_block(60.0, 60.0, 80.0, 80.0, child_style);
 
-    let mut parent_style = ComputedStyle::default();
-    parent_style.transforms = vec![TransformFunction::RotateY(45.0)];
+    let parent_style = ComputedStyle {
+        transforms: vec![TransformFunction::RotateY(45.0)],
+        ..Default::default()
+    };
     let mut parent = make_block(50.0, 50.0, 100.0, 100.0, parent_style);
     parent.children.push(child);
 
-    let mut grandparent_style = ComputedStyle::default();
-    grandparent_style.perspective = Some(800.0);
+    let grandparent_style = ComputedStyle {
+        perspective: Some(800.0),
+        ..Default::default()
+    };
     let mut grandparent = make_block(0.0, 0.0, 200.0, 200.0, grandparent_style);
     grandparent.children.push(parent);
 
@@ -409,12 +425,16 @@ fn perspective_ancestor_routes_3d_child_through_polygon_path() {
 fn flat_3d_child_without_perspective_uses_orthographic_path() {
     let mut backend = MockBackend::new();
 
-    let mut child_style = ComputedStyle::default();
-    child_style.background_color = Color::rgb(0, 255, 0);
+    let child_style = ComputedStyle {
+        background_color: Color::rgb(0, 255, 0),
+        ..Default::default()
+    };
     let child = make_block(10.0, 10.0, 80.0, 80.0, child_style);
 
-    let mut parent_style = ComputedStyle::default();
-    parent_style.transforms = vec![TransformFunction::RotateY(60.0)];
+    let parent_style = ComputedStyle {
+        transforms: vec![TransformFunction::RotateY(60.0)],
+        ..Default::default()
+    };
     let mut parent = make_block(0.0, 0.0, 100.0, 100.0, parent_style);
     parent.children.push(child);
 
@@ -430,13 +450,17 @@ fn flat_3d_child_without_perspective_uses_orthographic_path() {
 fn backface_visibility_hidden_culls_rotated_subtree() {
     let mut backend = MockBackend::new();
 
-    let mut child_style = ComputedStyle::default();
-    child_style.background_color = Color::rgb(0, 0, 255);
+    let child_style = ComputedStyle {
+        background_color: Color::rgb(0, 0, 255),
+        ..Default::default()
+    };
     let child = make_block(0.0, 0.0, 100.0, 100.0, child_style);
 
-    let mut parent_style = ComputedStyle::default();
-    parent_style.transforms = vec![TransformFunction::RotateY(180.0)];
-    parent_style.backface_visibility = BackfaceVisibility::Hidden;
+    let parent_style = ComputedStyle {
+        transforms: vec![TransformFunction::RotateY(180.0)],
+        backface_visibility: BackfaceVisibility::Hidden,
+        ..Default::default()
+    };
     let mut parent = make_block(0.0, 0.0, 100.0, 100.0, parent_style);
     parent.children.push(child);
 
@@ -450,19 +474,25 @@ fn backface_visibility_hidden_culls_rotated_subtree() {
 fn backface_hidden_child_culled_by_inherited_preserve_3d() {
     let mut backend = MockBackend::new();
 
-    let mut child_style = ComputedStyle::default();
-    child_style.background_color = Color::rgb(255, 0, 0);
-    child_style.backface_visibility = BackfaceVisibility::Hidden;
+    let child_style = ComputedStyle {
+        background_color: Color::rgb(255, 0, 0),
+        backface_visibility: BackfaceVisibility::Hidden,
+        ..Default::default()
+    };
     let child = make_block(0.0, 0.0, 80.0, 80.0, child_style);
 
-    let mut parent_style = ComputedStyle::default();
-    parent_style.transforms = vec![TransformFunction::RotateY(180.0)];
-    parent_style.transform_style = TransformStyle::Preserve3d;
+    let parent_style = ComputedStyle {
+        transforms: vec![TransformFunction::RotateY(180.0)],
+        transform_style: TransformStyle::Preserve3d,
+        ..Default::default()
+    };
     let mut parent = make_block(0.0, 0.0, 100.0, 100.0, parent_style);
     parent.children.push(child);
 
-    let mut gparent_style = ComputedStyle::default();
-    gparent_style.perspective = Some(800.0);
+    let gparent_style = ComputedStyle {
+        perspective: Some(800.0),
+        ..Default::default()
+    };
     let mut gparent = make_block(0.0, 0.0, 200.0, 200.0, gparent_style);
     gparent.children.push(parent);
 
@@ -476,23 +506,31 @@ fn backface_hidden_child_culled_by_inherited_preserve_3d() {
 fn preserve_3d_propagates_parent_matrix_to_children() {
     let mut backend = MockBackend::new();
 
-    let mut inner_style = ComputedStyle::default();
-    inner_style.background_color = Color::rgb(255, 255, 0);
+    let inner_style = ComputedStyle {
+        background_color: Color::rgb(255, 255, 0),
+        ..Default::default()
+    };
     let inner = make_block(10.0, 10.0, 40.0, 40.0, inner_style);
 
-    let mut parent_style = ComputedStyle::default();
-    parent_style.transforms = vec![TransformFunction::TranslateZ(50.0)];
+    let parent_style = ComputedStyle {
+        transforms: vec![TransformFunction::TranslateZ(50.0)],
+        ..Default::default()
+    };
     let mut parent = make_block(20.0, 20.0, 60.0, 60.0, parent_style);
     parent.children.push(inner);
 
-    let mut gparent_style = ComputedStyle::default();
-    gparent_style.transforms = vec![TransformFunction::RotateY(30.0)];
-    gparent_style.transform_style = TransformStyle::Preserve3d;
+    let gparent_style = ComputedStyle {
+        transforms: vec![TransformFunction::RotateY(30.0)],
+        transform_style: TransformStyle::Preserve3d,
+        ..Default::default()
+    };
     let mut gparent = make_block(50.0, 50.0, 100.0, 100.0, gparent_style);
     gparent.children.push(parent);
 
-    let mut ggparent_style = ComputedStyle::default();
-    ggparent_style.perspective = Some(800.0);
+    let ggparent_style = ComputedStyle {
+        perspective: Some(800.0),
+        ..Default::default()
+    };
     let mut ggparent = make_block(0.0, 0.0, 200.0, 200.0, ggparent_style);
     ggparent.children.push(gparent);
 
@@ -518,13 +556,17 @@ fn preserve_3d_propagates_parent_matrix_to_children() {
 fn preserve_3d_propagates_without_ancestor_perspective() {
     let mut backend = MockBackend::new();
 
-    let mut child_style = ComputedStyle::default();
-    child_style.background_color = Color::rgb(255, 0, 0);
+    let child_style = ComputedStyle {
+        background_color: Color::rgb(255, 0, 0),
+        ..Default::default()
+    };
     let child = make_block(10.0, 10.0, 80.0, 80.0, child_style);
 
-    let mut parent_style = ComputedStyle::default();
-    parent_style.transforms = vec![TransformFunction::RotateY(60.0)];
-    parent_style.transform_style = TransformStyle::Preserve3d;
+    let parent_style = ComputedStyle {
+        transforms: vec![TransformFunction::RotateY(60.0)],
+        transform_style: TransformStyle::Preserve3d,
+        ..Default::default()
+    };
     let mut parent = make_block(0.0, 0.0, 100.0, 100.0, parent_style);
     parent.children.push(child);
 
@@ -551,18 +593,24 @@ fn preserve_3d_propagates_without_ancestor_perspective() {
 fn preserve_3d_with_2d_only_transform_still_propagates() {
     let mut backend = MockBackend::new();
 
-    let mut grandchild_style = ComputedStyle::default();
-    grandchild_style.background_color = Color::rgb(0, 255, 0);
+    let grandchild_style = ComputedStyle {
+        background_color: Color::rgb(0, 255, 0),
+        ..Default::default()
+    };
     let grandchild = make_block(5.0, 5.0, 30.0, 30.0, grandchild_style);
 
-    let mut child_style = ComputedStyle::default();
-    child_style.transforms = vec![TransformFunction::RotateY(60.0)];
+    let child_style = ComputedStyle {
+        transforms: vec![TransformFunction::RotateY(60.0)],
+        ..Default::default()
+    };
     let mut child = make_block(20.0, 20.0, 40.0, 40.0, child_style);
     child.children.push(grandchild);
 
-    let mut parent_style = ComputedStyle::default();
-    parent_style.transforms = vec![TransformFunction::Rotate(45.0)];
-    parent_style.transform_style = TransformStyle::Preserve3d;
+    let parent_style = ComputedStyle {
+        transforms: vec![TransformFunction::Rotate(45.0)],
+        transform_style: TransformStyle::Preserve3d,
+        ..Default::default()
+    };
     let mut parent = make_block(0.0, 0.0, 100.0, 100.0, parent_style);
     parent.children.push(child);
 
@@ -604,13 +652,17 @@ fn near_camera_plane_background_skipped_not_saturated() {
         10000.0, 0.0, 0.0, 2.0e-6_f32,
     ];
 
-    let mut child_style = ComputedStyle::default();
-    child_style.background_color = Color::rgb(77, 88, 99);
+    let child_style = ComputedStyle {
+        background_color: Color::rgb(77, 88, 99),
+        ..Default::default()
+    };
     let child = make_block(50.0, 50.0, 100.0, 100.0, child_style);
 
-    let mut parent_style = ComputedStyle::default();
-    parent_style.transform_style = TransformStyle::Preserve3d;
-    parent_style.transforms = vec![TransformFunction::Matrix3d(pathological)];
+    let parent_style = ComputedStyle {
+        transform_style: TransformStyle::Preserve3d,
+        transforms: vec![TransformFunction::Matrix3d(pathological)],
+        ..Default::default()
+    };
     let mut parent = make_block(0.0, 0.0, 300.0, 300.0, parent_style);
     parent.children.push(child);
 
@@ -633,22 +685,30 @@ fn near_camera_plane_background_skipped_not_saturated() {
 fn flat_2d_child_between_3d_ancestor_and_grandchild_composes_into_ambient() {
     let mut backend = MockBackend::new();
 
-    let mut gchild_style = ComputedStyle::default();
-    gchild_style.background_color = Color::rgb(200, 150, 100);
+    let gchild_style = ComputedStyle {
+        background_color: Color::rgb(200, 150, 100),
+        ..Default::default()
+    };
     let gchild = make_block(100.0, 100.0, 20.0, 20.0, gchild_style);
 
-    let mut child_style = ComputedStyle::default();
-    child_style.transforms = vec![TransformFunction::Rotate(90.0)];
+    let child_style = ComputedStyle {
+        transforms: vec![TransformFunction::Rotate(90.0)],
+        ..Default::default()
+    };
     let mut child = make_block(100.0, 100.0, 100.0, 100.0, child_style);
     child.children.push(gchild);
 
-    let mut parent_style = ComputedStyle::default();
-    parent_style.transforms = vec![TransformFunction::RotateY(0.0)];
+    let parent_style = ComputedStyle {
+        transforms: vec![TransformFunction::RotateY(0.0)],
+        ..Default::default()
+    };
     let mut parent = make_block(50.0, 50.0, 300.0, 300.0, parent_style);
     parent.children.push(child);
 
-    let mut gp_style = ComputedStyle::default();
-    gp_style.perspective = Some(1_000_000.0);
+    let gp_style = ComputedStyle {
+        perspective: Some(1_000_000.0),
+        ..Default::default()
+    };
     let mut gp = make_block(0.0, 0.0, 400.0, 400.0, gp_style);
     gp.children.push(parent);
 
@@ -685,17 +745,23 @@ fn flat_2d_child_between_3d_ancestor_and_grandchild_composes_into_ambient() {
 fn steep_perspective_produces_trapezoidal_quad() {
     let mut backend = MockBackend::new();
 
-    let mut child_style = ComputedStyle::default();
-    child_style.background_color = Color::rgb(200, 100, 50);
+    let child_style = ComputedStyle {
+        background_color: Color::rgb(200, 100, 50),
+        ..Default::default()
+    };
     let child = make_block(0.0, 0.0, 100.0, 100.0, child_style);
 
-    let mut parent_style = ComputedStyle::default();
-    parent_style.transforms = vec![TransformFunction::RotateY(75.0)];
+    let parent_style = ComputedStyle {
+        transforms: vec![TransformFunction::RotateY(75.0)],
+        ..Default::default()
+    };
     let mut parent = make_block(0.0, 0.0, 100.0, 100.0, parent_style);
     parent.children.push(child);
 
-    let mut gparent_style = ComputedStyle::default();
-    gparent_style.perspective = Some(200.0);
+    let gparent_style = ComputedStyle {
+        perspective: Some(200.0),
+        ..Default::default()
+    };
     let mut gparent = make_block(0.0, 0.0, 300.0, 300.0, gparent_style);
     gparent.children.push(parent);
 
@@ -736,24 +802,32 @@ fn steep_perspective_produces_trapezoidal_quad() {
 fn preserve_3d_children_z_sorted_back_to_front() {
     let mut backend = MockBackend::new();
 
-    let mut front_style = ComputedStyle::default();
-    front_style.background_color = Color::rgb(0, 0, 255);
-    front_style.transforms = vec![TransformFunction::TranslateZ(100.0)];
+    let front_style = ComputedStyle {
+        background_color: Color::rgb(0, 0, 255),
+        transforms: vec![TransformFunction::TranslateZ(100.0)],
+        ..Default::default()
+    };
     let front = make_block(10.0, 10.0, 50.0, 50.0, front_style);
 
-    let mut back_style = ComputedStyle::default();
-    back_style.background_color = Color::rgb(255, 0, 0);
-    back_style.transforms = vec![TransformFunction::TranslateZ(-100.0)];
+    let back_style = ComputedStyle {
+        background_color: Color::rgb(255, 0, 0),
+        transforms: vec![TransformFunction::TranslateZ(-100.0)],
+        ..Default::default()
+    };
     let back = make_block(10.0, 10.0, 50.0, 50.0, back_style);
 
-    let mut parent_style = ComputedStyle::default();
-    parent_style.transform_style = TransformStyle::Preserve3d;
+    let parent_style = ComputedStyle {
+        transform_style: TransformStyle::Preserve3d,
+        ..Default::default()
+    };
     let mut parent = make_block(0.0, 0.0, 200.0, 200.0, parent_style);
     parent.children.push(front);
     parent.children.push(back);
 
-    let mut gparent_style = ComputedStyle::default();
-    gparent_style.perspective = Some(800.0);
+    let gparent_style = ComputedStyle {
+        perspective: Some(800.0),
+        ..Default::default()
+    };
     let mut gparent = make_block(0.0, 0.0, 400.0, 400.0, gparent_style);
     gparent.children.push(parent);
 
@@ -790,12 +864,16 @@ fn preserve_3d_children_z_sorted_back_to_front() {
 fn rotate_around_box_center_produces_symmetric_quad() {
     let mut backend = MockBackend::new();
 
-    let mut parent_style = ComputedStyle::default();
-    parent_style.transforms = vec![TransformFunction::Rotate(45.0)];
+    let parent_style = ComputedStyle {
+        transforms: vec![TransformFunction::Rotate(45.0)],
+        ..Default::default()
+    };
     let mut parent = make_block(100.0, 50.0, 80.0, 40.0, parent_style);
 
-    let mut child_style = ComputedStyle::default();
-    child_style.background_color = Color::rgb(10, 20, 30);
+    let child_style = ComputedStyle {
+        background_color: Color::rgb(10, 20, 30),
+        ..Default::default()
+    };
     let child = make_block(100.0, 50.0, 80.0, 40.0, child_style);
     parent.children.push(child);
 
@@ -831,12 +909,16 @@ fn rotate_around_box_center_produces_symmetric_quad() {
 fn rotated_parent_does_not_shift_child_offset() {
     let mut backend = MockBackend::new();
 
-    let mut child_style = ComputedStyle::default();
-    child_style.background_color = Color::rgb(240, 240, 240);
+    let child_style = ComputedStyle {
+        background_color: Color::rgb(240, 240, 240),
+        ..Default::default()
+    };
     let child = make_block(110.0, 110.0, 20.0, 20.0, child_style);
 
-    let mut parent_style = ComputedStyle::default();
-    parent_style.transforms = vec![TransformFunction::Rotate(180.0)];
+    let parent_style = ComputedStyle {
+        transforms: vec![TransformFunction::Rotate(180.0)],
+        ..Default::default()
+    };
     let mut parent = make_block(100.0, 100.0, 100.0, 100.0, parent_style);
     parent.children.push(child);
 
@@ -893,8 +975,10 @@ fn has_text_content_empty_block() {
 #[test]
 fn horizontal_rule_painted() {
     let mut backend = MockBackend::new();
-    let mut style = ComputedStyle::default();
-    style.border_top_color = Color::rgb(128, 128, 128);
+    let style = ComputedStyle {
+        border_top_color: Color::rgb(128, 128, 128),
+        ..Default::default()
+    };
 
     let mut lb = LayoutBox::new(
         BoxType::Replaced(ReplacedContent::HorizontalRule),
@@ -928,42 +1012,52 @@ fn static_position_no_stacking_context() {
 
 #[test]
 fn positioned_with_z_index_creates_stacking_context() {
-    let mut style = ComputedStyle::default();
-    style.position = Position::Relative;
-    style.z_index = 1;
-    style.z_index_auto = false;
+    let style = ComputedStyle {
+        position: Position::Relative,
+        z_index: 1,
+        z_index_auto: false,
+        ..Default::default()
+    };
     let lb = LayoutBox::new(BoxType::Block, style, None);
     assert!(creates_stacking_context(&lb));
 }
 
 #[test]
 fn opacity_creates_stacking_context() {
-    let mut style = ComputedStyle::default();
-    style.opacity = 0.5;
+    let style = ComputedStyle {
+        opacity: 0.5,
+        ..Default::default()
+    };
     let lb = LayoutBox::new(BoxType::Block, style, None);
     assert!(creates_stacking_context(&lb));
 }
 
 #[test]
 fn transform_creates_stacking_context() {
-    let mut style = ComputedStyle::default();
-    style.transforms = vec![TransformFunction::Translate(10.0, 0.0)];
+    let style = ComputedStyle {
+        transforms: vec![TransformFunction::Translate(10.0, 0.0)],
+        ..Default::default()
+    };
     let lb = LayoutBox::new(BoxType::Block, style, None);
     assert!(creates_stacking_context(&lb));
 }
 
 #[test]
 fn positioned_z_index_auto_no_stacking_context() {
-    let mut style = ComputedStyle::default();
-    style.position = Position::Relative;
+    let style = ComputedStyle {
+        position: Position::Relative,
+        ..Default::default()
+    };
     let lb = LayoutBox::new(BoxType::Block, style, None);
     assert!(!creates_stacking_context(&lb));
 }
 
 #[test]
 fn mix_blend_mode_triggers_compositing_layer() {
-    let mut style = ComputedStyle::default();
-    style.mix_blend_mode = crate::css::values::types::BlendMode::Multiply;
+    let style = ComputedStyle {
+        mix_blend_mode: crate::css::values::types::BlendMode::Multiply,
+        ..Default::default()
+    };
     let lb = LayoutBox::new(BoxType::Block, style, None);
     assert!(creates_stacking_context(&lb));
     assert!(creates_compositing_layer(&lb));
@@ -971,8 +1065,10 @@ fn mix_blend_mode_triggers_compositing_layer() {
 
 #[test]
 fn backdrop_filter_triggers_compositing_layer() {
-    let mut style = ComputedStyle::default();
-    style.backdrop_filters = vec![crate::css::values::FilterFunction::Blur(4.0)];
+    let style = ComputedStyle {
+        backdrop_filters: vec![crate::css::values::FilterFunction::Blur(4.0)],
+        ..Default::default()
+    };
     let lb = LayoutBox::new(BoxType::Block, style, None);
     assert!(creates_stacking_context(&lb));
     assert!(creates_compositing_layer(&lb));
@@ -980,8 +1076,10 @@ fn backdrop_filter_triggers_compositing_layer() {
 
 #[test]
 fn box_level_filter_triggers_compositing_layer() {
-    let mut style = ComputedStyle::default();
-    style.filters = vec![crate::css::values::FilterFunction::Grayscale(1.0)];
+    let style = ComputedStyle {
+        filters: vec![crate::css::values::FilterFunction::Grayscale(1.0)],
+        ..Default::default()
+    };
     let lb = LayoutBox::new(BoxType::Block, style, None);
     assert!(creates_stacking_context(&lb));
     assert!(creates_compositing_layer(&lb));
@@ -989,8 +1087,10 @@ fn box_level_filter_triggers_compositing_layer() {
 
 #[test]
 fn isolation_isolate_triggers_compositing_layer() {
-    let mut style = ComputedStyle::default();
-    style.isolation = crate::css::values::types::Isolation::Isolate;
+    let style = ComputedStyle {
+        isolation: crate::css::values::types::Isolation::Isolate,
+        ..Default::default()
+    };
     let lb = LayoutBox::new(BoxType::Block, style, None);
     assert!(creates_stacking_context(&lb));
     assert!(creates_compositing_layer(&lb));
@@ -998,8 +1098,10 @@ fn isolation_isolate_triggers_compositing_layer() {
 
 #[test]
 fn will_change_triggers_compositing_layer() {
-    let mut style = ComputedStyle::default();
-    style.will_change_promotes_layer = true;
+    let style = ComputedStyle {
+        will_change_promotes_layer: true,
+        ..Default::default()
+    };
     let lb = LayoutBox::new(BoxType::Block, style, None);
     assert!(creates_stacking_context(&lb));
     assert!(creates_compositing_layer(&lb));
@@ -1008,21 +1110,23 @@ fn will_change_triggers_compositing_layer() {
 #[test]
 fn mask_image_triggers_compositing_layer() {
     use crate::css::values::types::{GradientDirection, GradientStop, LinearGradient};
-    let mut style = ComputedStyle::default();
-    style.mask_image = crate::css::values::BackgroundImage::Gradient(LinearGradient {
-        direction: GradientDirection::ToBottom,
-        repeating: false,
-        stops: vec![
-            GradientStop {
-                color: Color::rgba(255, 255, 255, 255),
-                position: 0.0,
-            },
-            GradientStop {
-                color: Color::rgba(255, 255, 255, 0),
-                position: 1.0,
-            },
-        ],
-    });
+    let style = ComputedStyle {
+        mask_image: crate::css::values::BackgroundImage::Gradient(LinearGradient {
+            direction: GradientDirection::ToBottom,
+            repeating: false,
+            stops: vec![
+                GradientStop {
+                    color: Color::rgba(255, 255, 255, 255),
+                    position: 0.0,
+                },
+                GradientStop {
+                    color: Color::rgba(255, 255, 255, 0),
+                    position: 1.0,
+                },
+            ],
+        }),
+        ..Default::default()
+    };
     let lb = LayoutBox::new(BoxType::Block, style, None);
     assert!(
         creates_stacking_context(&lb),
@@ -1036,8 +1140,10 @@ fn mask_image_triggers_compositing_layer() {
 
 #[test]
 fn plain_opacity_stays_on_fast_path() {
-    let mut style = ComputedStyle::default();
-    style.opacity = 0.5;
+    let style = ComputedStyle {
+        opacity: 0.5,
+        ..Default::default()
+    };
     let lb = LayoutBox::new(BoxType::Block, style, None);
     assert!(creates_stacking_context(&lb));
     assert!(
@@ -1048,10 +1154,12 @@ fn plain_opacity_stays_on_fast_path() {
 
 #[test]
 fn positioned_z_index_zero_explicit_creates_stacking_context() {
-    let mut style = ComputedStyle::default();
-    style.position = Position::Relative;
-    style.z_index = 0;
-    style.z_index_auto = false;
+    let style = ComputedStyle {
+        position: Position::Relative,
+        z_index: 0,
+        z_index_auto: false,
+        ..Default::default()
+    };
     let lb = LayoutBox::new(BoxType::Block, style, None);
     assert!(creates_stacking_context(&lb));
 }
@@ -1061,22 +1169,28 @@ fn stacking_context_z_order() {
     let mut backend = MockBackend::new();
     let link_map = HashMap::new();
 
-    let mut root_style = ComputedStyle::default();
-    root_style.background_color = Color::rgba(0, 0, 0, 0);
+    let root_style = ComputedStyle {
+        background_color: Color::rgba(0, 0, 0, 0),
+        ..Default::default()
+    };
     let mut root = make_block(0.0, 0.0, 480.0, 272.0, root_style);
 
-    let mut style_a = ComputedStyle::default();
-    style_a.background_color = Color::rgb(255, 0, 0);
-    style_a.position = Position::Relative;
-    style_a.z_index = 2;
-    style_a.z_index_auto = false;
+    let style_a = ComputedStyle {
+        background_color: Color::rgb(255, 0, 0),
+        position: Position::Relative,
+        z_index: 2,
+        z_index_auto: false,
+        ..Default::default()
+    };
     let child_a = make_block(10.0, 10.0, 50.0, 50.0, style_a);
 
-    let mut style_b = ComputedStyle::default();
-    style_b.background_color = Color::rgb(0, 255, 0);
-    style_b.position = Position::Relative;
-    style_b.z_index = 1;
-    style_b.z_index_auto = false;
+    let style_b = ComputedStyle {
+        background_color: Color::rgb(0, 255, 0),
+        position: Position::Relative,
+        z_index: 1,
+        z_index_auto: false,
+        ..Default::default()
+    };
     let child_b = make_block(10.0, 70.0, 50.0, 50.0, style_b);
 
     root.children.push(child_a);
@@ -1114,31 +1228,41 @@ fn css21_painting_order_negative_normal_positioned_positive() {
     let mut backend = MockBackend::new();
     let link_map = HashMap::new();
 
-    let mut root_style = ComputedStyle::default();
-    root_style.background_color = Color::rgba(0, 0, 0, 0);
+    let root_style = ComputedStyle {
+        background_color: Color::rgba(0, 0, 0, 0),
+        ..Default::default()
+    };
     let mut root = make_block(0.0, 0.0, 480.0, 272.0, root_style);
 
-    let mut style_neg = ComputedStyle::default();
-    style_neg.background_color = Color::rgb(0, 0, 255);
-    style_neg.position = Position::Relative;
-    style_neg.z_index = -1;
-    style_neg.z_index_auto = false;
+    let style_neg = ComputedStyle {
+        background_color: Color::rgb(0, 0, 255),
+        position: Position::Relative,
+        z_index: -1,
+        z_index_auto: false,
+        ..Default::default()
+    };
     let child_neg = make_block(10.0, 10.0, 50.0, 50.0, style_neg);
 
-    let mut style_normal = ComputedStyle::default();
-    style_normal.background_color = Color::rgb(255, 255, 255);
+    let style_normal = ComputedStyle {
+        background_color: Color::rgb(255, 255, 255),
+        ..Default::default()
+    };
     let child_normal = make_block(10.0, 70.0, 50.0, 50.0, style_normal);
 
-    let mut style_auto = ComputedStyle::default();
-    style_auto.background_color = Color::rgb(255, 255, 0);
-    style_auto.position = Position::Relative;
+    let style_auto = ComputedStyle {
+        background_color: Color::rgb(255, 255, 0),
+        position: Position::Relative,
+        ..Default::default()
+    };
     let child_auto = make_block(10.0, 130.0, 50.0, 50.0, style_auto);
 
-    let mut style_pos = ComputedStyle::default();
-    style_pos.background_color = Color::rgb(255, 0, 0);
-    style_pos.position = Position::Relative;
-    style_pos.z_index = 1;
-    style_pos.z_index_auto = false;
+    let style_pos = ComputedStyle {
+        background_color: Color::rgb(255, 0, 0),
+        position: Position::Relative,
+        z_index: 1,
+        z_index_auto: false,
+        ..Default::default()
+    };
     let child_pos = make_block(10.0, 190.0, 50.0, 50.0, style_pos);
 
     root.children.push(child_pos);
@@ -1198,32 +1322,42 @@ fn preserve_3d_explicit_z_index_opts_out_of_z_sort() {
     // the regular CSS 2.1 stacking tiers instead.
     let mut backend = MockBackend::new();
 
-    let mut a_style = ComputedStyle::default();
-    a_style.background_color = Color::rgb(0, 255, 0);
-    a_style.transforms = vec![TransformFunction::TranslateZ(100.0)];
+    let a_style = ComputedStyle {
+        background_color: Color::rgb(0, 255, 0),
+        transforms: vec![TransformFunction::TranslateZ(100.0)],
+        ..Default::default()
+    };
     let child_a = make_block(10.0, 10.0, 50.0, 50.0, a_style);
 
-    let mut b_style = ComputedStyle::default();
-    b_style.background_color = Color::rgb(255, 0, 0);
-    b_style.transforms = vec![TransformFunction::TranslateZ(-100.0)];
+    let b_style = ComputedStyle {
+        background_color: Color::rgb(255, 0, 0),
+        transforms: vec![TransformFunction::TranslateZ(-100.0)],
+        ..Default::default()
+    };
     let child_b = make_block(10.0, 70.0, 50.0, 50.0, b_style);
 
-    let mut c_style = ComputedStyle::default();
-    c_style.background_color = Color::rgb(0, 0, 255);
-    c_style.position = Position::Relative;
-    c_style.z_index = 5;
-    c_style.z_index_auto = false;
+    let c_style = ComputedStyle {
+        background_color: Color::rgb(0, 0, 255),
+        position: Position::Relative,
+        z_index: 5,
+        z_index_auto: false,
+        ..Default::default()
+    };
     let child_c = make_block(10.0, 130.0, 50.0, 50.0, c_style);
 
-    let mut parent_style = ComputedStyle::default();
-    parent_style.transform_style = TransformStyle::Preserve3d;
+    let parent_style = ComputedStyle {
+        transform_style: TransformStyle::Preserve3d,
+        ..Default::default()
+    };
     let mut parent = make_block(0.0, 0.0, 200.0, 200.0, parent_style);
     parent.children.push(child_a);
     parent.children.push(child_b);
     parent.children.push(child_c);
 
-    let mut gparent_style = ComputedStyle::default();
-    gparent_style.perspective = Some(800.0);
+    let gparent_style = ComputedStyle {
+        perspective: Some(800.0),
+        ..Default::default()
+    };
     let mut gparent = make_block(0.0, 0.0, 400.0, 400.0, gparent_style);
     gparent.children.push(parent);
 

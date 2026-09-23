@@ -176,13 +176,12 @@ mod tests {
         // Blur(5) → brightness = 1 - 5*0.02 = 0.9, saturation = 1 - 5*0.05 = 0.75.
         // Should be slightly dimmer and less saturated than original.
         assert!(result.r < c.r, "red should be dimmer");
+        // Green and blue may shift either way, but the channels must move
+        // closer together (less saturated).
+        let spread = |c: Color| c.r.max(c.g).max(c.b) - c.r.min(c.g).min(c.b);
         assert!(
-            result.g < c.g || result.g >= c.g,
-            "green may shift either way"
-        );
-        assert!(
-            result.b >= c.b || result.b < c.b,
-            "blue may shift either way"
+            spread(result) < spread(c),
+            "should be less saturated: {result:?} vs {c:?}"
         );
         // Alpha is unchanged.
         assert_eq!(result.a, c.a);

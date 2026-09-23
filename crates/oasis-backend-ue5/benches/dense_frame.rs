@@ -16,6 +16,9 @@
 //! cargo bench -p oasis-backend-ue5 --bench dense_frame
 //! ```
 
+// Benchmark setup panics on failure, like a test.
+#![allow(clippy::unwrap_used)]
+
 use criterion::{Criterion, criterion_group, criterion_main};
 
 use oasis_backend_ue5::Ue5Backend;
@@ -31,12 +34,7 @@ fn dense_rects(n: usize) -> Vec<BatchRect> {
             y: ((i * 7) % 262) as i32,
             w: 8,
             h: 8,
-            color: Color::rgba(
-                (i * 11) as u8 & 0xFF,
-                (i * 17) as u8 & 0xFF,
-                (i * 23) as u8 & 0xFF,
-                255,
-            ),
+            color: Color::rgba((i * 11) as u8, (i * 17) as u8, (i * 23) as u8, 255),
         })
         .collect()
 }

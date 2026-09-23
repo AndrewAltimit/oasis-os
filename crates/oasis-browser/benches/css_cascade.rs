@@ -94,7 +94,8 @@ fn generate_css_with_vars(n: usize) -> String {
 fn bench_cascade_vars(c: &mut Criterion) {
     let mut group = c.benchmark_group("css_cascade_vars");
 
-    for (n_rules, n_elements) in [(100, 500)] {
+    {
+        let (n_rules, n_elements) = (100, 500);
         let css = generate_css_with_vars(n_rules);
         let html = generate_html_with_classes(n_elements);
         let label = format!("{n_rules}r_{n_elements}e");

@@ -20,10 +20,10 @@ impl Command for EchoCmd {
         "echo [text...]"
     }
     fn execute(&self, args: &[&str], env: &mut Environment<'_>) -> Result<CommandOutput> {
-        if args.is_empty() {
-            if let Some(ref stdin) = env.stdin {
-                return Ok(CommandOutput::Text(stdin.clone()));
-            }
+        if args.is_empty()
+            && let Some(ref stdin) = env.stdin
+        {
+            return Ok(CommandOutput::Text(stdin.clone()));
         }
         Ok(CommandOutput::Text(args.join(" ")))
     }

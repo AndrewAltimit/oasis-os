@@ -824,10 +824,10 @@ mod tests {
     fn extended_metrics_computed() {
         // © should have reasonable advance.
         let adv = glyph_advance('\u{00A9}');
-        assert!(adv >= 3 && adv <= 8, "© advance = {adv}");
+        assert!((3..=8).contains(&adv), "© advance = {adv}");
         // • bullet is small.
         let adv = glyph_advance('\u{2022}');
-        assert!(adv >= 3 && adv <= 8, "• advance = {adv}");
+        assert!((3..=8).contains(&adv), "• advance = {adv}");
     }
 
     #[test]
@@ -859,7 +859,7 @@ mod tests {
         assert!(pixels.len() > 10, "A should have many pixels");
         // All rows should be in 0..8.
         for &(_, row) in &pixels {
-            assert!(row >= 0 && row < 8);
+            assert!((0..8).contains(&row));
         }
     }
 

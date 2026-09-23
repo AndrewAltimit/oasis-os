@@ -112,6 +112,56 @@ impl Button {
     }
 }
 
+impl Widget for Button {
+    fn measure(&self, ctx: &DrawContext<'_>, _available_w: u32, _available_h: u32) -> (u32, u32) {
+        let text_w = ctx
+            .backend
+            .measure_text(&self.label, ctx.theme.font_size_md);
+        let text_h = ctx.backend.measure_text_height(ctx.theme.font_size_md);
+        (
+            text_w + self.padding.horizontal(),
+            text_h + self.padding.vertical(),
+        )
+    }
+
+    fn draw(&self, ctx: &mut DrawContext<'_>, x: i32, y: i32, w: u32, h: u32) -> Result<()> {
+        let radius = ctx.theme.border_radius_md;
+
+        // Background.
+        if let Some(bg) = self.bg_color(ctx.theme) {
+            ctx.backend.fill_rounded_rect(x, y, w, h, radius, bg)?;
+        }
+
+        // Outline border for Outline style.
+        if self.style == ButtonStyle::Outline {
+            let bc = if self.state == ButtonState::Disabled {
+                ctx.theme.border_subtle
+            } else {
+                ctx.theme.border
+            };
+            ctx.backend.stroke_rounded_rect(x, y, w, h, radius, 1, bc)?;
+        }
+
+        // Label.
+        let text_w = ctx
+            .backend
+            .measure_text(&self.label, ctx.theme.font_size_md);
+        let text_h = ctx.backend.measure_text_height(ctx.theme.font_size_md);
+        let tx = x + layout::center(w, text_w);
+        let ty = y + layout::center(h, text_h);
+        let color = self.text_color(ctx.theme);
+        ctx.backend
+            .draw_text(&self.label, tx, ty, ctx.theme.font_size_md, color)?;
+
+        // Keyboard focus ring (only when focused and interactive).
+        if self.focused && self.state != ButtonState::Disabled {
+            FocusStyle::from_theme(ctx.theme).draw(ctx.backend, x, y, w, h)?;
+        }
+
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -386,55 +436,5 @@ mod tests {
         }
         // Focused button emits additional fill_rects for the ring.
         assert!(with_focus.fill_rect_count() > backend.fill_rect_count());
-    }
-}
-
-impl Widget for Button {
-    fn measure(&self, ctx: &DrawContext<'_>, _available_w: u32, _available_h: u32) -> (u32, u32) {
-        let text_w = ctx
-            .backend
-            .measure_text(&self.label, ctx.theme.font_size_md);
-        let text_h = ctx.backend.measure_text_height(ctx.theme.font_size_md);
-        (
-            text_w + self.padding.horizontal(),
-            text_h + self.padding.vertical(),
-        )
-    }
-
-    fn draw(&self, ctx: &mut DrawContext<'_>, x: i32, y: i32, w: u32, h: u32) -> Result<()> {
-        let radius = ctx.theme.border_radius_md;
-
-        // Background.
-        if let Some(bg) = self.bg_color(ctx.theme) {
-            ctx.backend.fill_rounded_rect(x, y, w, h, radius, bg)?;
-        }
-
-        // Outline border for Outline style.
-        if self.style == ButtonStyle::Outline {
-            let bc = if self.state == ButtonState::Disabled {
-                ctx.theme.border_subtle
-            } else {
-                ctx.theme.border
-            };
-            ctx.backend.stroke_rounded_rect(x, y, w, h, radius, 1, bc)?;
-        }
-
-        // Label.
-        let text_w = ctx
-            .backend
-            .measure_text(&self.label, ctx.theme.font_size_md);
-        let text_h = ctx.backend.measure_text_height(ctx.theme.font_size_md);
-        let tx = x + layout::center(w, text_w);
-        let ty = y + layout::center(h, text_h);
-        let color = self.text_color(ctx.theme);
-        ctx.backend
-            .draw_text(&self.label, tx, ty, ctx.theme.font_size_md, color)?;
-
-        // Keyboard focus ring (only when focused and interactive).
-        if self.focused && self.state != ButtonState::Disabled {
-            FocusStyle::from_theme(ctx.theme).draw(ctx.backend, x, y, w, h)?;
-        }
-
-        Ok(())
     }
 }

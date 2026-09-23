@@ -65,6 +65,16 @@ impl Panel {
     }
 }
 
+impl Widget for Panel {
+    fn measure(&self, _ctx: &DrawContext<'_>, available_w: u32, available_h: u32) -> (u32, u32) {
+        (available_w, available_h)
+    }
+
+    fn draw(&self, ctx: &mut DrawContext<'_>, x: i32, y: i32, w: u32, h: u32) -> Result<()> {
+        self.draw_at(ctx, x, y, w, h)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -90,8 +100,10 @@ mod tests {
         let mut backend = MockBackend::new();
         {
             let mut ctx = DrawContext::new(&mut backend, &theme);
-            let mut panel = Panel::default();
-            panel.background = Some(Color::rgb(30, 30, 30));
+            let panel = Panel {
+                background: Some(Color::rgb(30, 30, 30)),
+                ..Default::default()
+            };
             panel.draw(&mut ctx, 0, 0, 200, 100).unwrap();
         }
         assert!(backend.fill_rect_count() > 0);
@@ -103,9 +115,11 @@ mod tests {
         let mut backend = MockBackend::new();
         {
             let mut ctx = DrawContext::new(&mut backend, &theme);
-            let mut panel = Panel::default();
-            panel.background = Some(Color::rgb(30, 30, 30));
-            panel.border = Some((1, Color::WHITE));
+            let panel = Panel {
+                background: Some(Color::rgb(30, 30, 30)),
+                border: Some((1, Color::WHITE)),
+                ..Default::default()
+            };
             panel.draw(&mut ctx, 0, 0, 200, 100).unwrap();
         }
         // Background fill + border (stroke_rect emits 4 fill_rects) → > 1.
@@ -118,9 +132,11 @@ mod tests {
         let mut backend = MockBackend::new();
         {
             let mut ctx = DrawContext::new(&mut backend, &theme);
-            let mut panel = Panel::default();
-            panel.elevation = 0;
-            panel.background = Some(Color::rgb(30, 30, 30));
+            let panel = Panel {
+                elevation: 0,
+                background: Some(Color::rgb(30, 30, 30)),
+                ..Default::default()
+            };
             panel.draw(&mut ctx, 0, 0, 200, 100).unwrap();
         }
         // Should not panic.
@@ -133,22 +149,14 @@ mod tests {
         let mut backend = MockBackend::new();
         {
             let mut ctx = DrawContext::new(&mut backend, &theme);
-            let mut panel = Panel::default();
-            panel.radius = 8;
-            panel.background = Some(Color::rgb(30, 30, 30));
+            let panel = Panel {
+                radius: 8,
+                background: Some(Color::rgb(30, 30, 30)),
+                ..Default::default()
+            };
             panel.draw(&mut ctx, 0, 0, 200, 100).unwrap();
         }
         // Should not panic; fill_rounded_rect falls back to fill_rect.
         assert!(backend.fill_rect_count() > 0);
-    }
-}
-
-impl Widget for Panel {
-    fn measure(&self, _ctx: &DrawContext<'_>, available_w: u32, available_h: u32) -> (u32, u32) {
-        (available_w, available_h)
-    }
-
-    fn draw(&self, ctx: &mut DrawContext<'_>, x: i32, y: i32, w: u32, h: u32) -> Result<()> {
-        self.draw_at(ctx, x, y, w, h)
     }
 }

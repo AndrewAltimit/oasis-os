@@ -670,7 +670,7 @@ mod tests {
         let buf = generate_from_config(4, 4, &at);
         // Row 0 (even) and row 1 (odd) should differ.
         let r0 = (buf[0], buf[1], buf[2]);
-        let r1_offset = (1 * 4 * 4) as usize; // row 1, col 0
+        let r1_offset = (4 * 4) as usize; // row 1, col 0
         let r1 = (buf[r1_offset], buf[r1_offset + 1], buf[r1_offset + 2]);
         // Odd rows are darkened.
         assert_ne!(r0, r1);

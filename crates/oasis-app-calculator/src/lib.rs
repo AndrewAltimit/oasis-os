@@ -1182,7 +1182,7 @@ mod tests {
 
     #[test]
     fn format_decimal() {
-        assert_eq!(format_number(3.14), "3.14");
+        assert_eq!(format_number(2.75), "2.75");
     }
 
     #[test]

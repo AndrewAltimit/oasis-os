@@ -2200,6 +2200,43 @@ fn hover_restyle_is_partial() {
 }
 
 #[test]
+fn page_swap_drops_stale_hover_and_focus_nodes() {
+    // Regression: hovering a node deep in a large page, then loading
+    // a smaller page, left `hover_node` pointing past the end of the
+    // new DOM and the next cursor move panicked with an out-of-bounds
+    // index in the `:hover` ancestor walk.
+    let paragraphs: String = (0..60).map(|i| format!("<p>Paragraph {i}</p>")).collect();
+    let big = format!(
+        "<html><head><style>a:hover {{ color: red; }}</style></head><body>         {paragraphs}<a href=\"link.html\">Link</a></body></html>"
+    );
+    let mut browser = BrowserWidget::new(BrowserConfig::default());
+    browser.load_html(&big, "file:///big.html");
+    let link_node = browser
+        .href_map
+        .keys()
+        .copied()
+        .max()
+        .expect("should have a link");
+    browser.hover_node = Some(link_node);
+    browser.focused_node = Some(link_node);
+
+    browser.load_html(
+        "<html><head><style>a:hover { color: red; }</style></head>         <body><p>Small</p></body></html>",
+        "file:///small.html",
+    );
+    let doc_len = browser.document.as_ref().expect("document").nodes.len();
+    assert!(
+        link_node >= doc_len,
+        "test needs a node id past the new DOM"
+    );
+    assert_eq!(browser.hover_node, None);
+    assert_eq!(browser.focused_node, None);
+
+    // A caller still holding the old id must not panic either.
+    browser.restyle_hover_affected(Some(link_node));
+}
+
+#[test]
 fn image_eviction_respects_budget() {
     // Directly test that decoded_image_lru eviction works by
     // inserting images that exceed the budget.
@@ -3379,14 +3416,12 @@ fn js_click_handler_infinite_loop_is_interrupted() {
 /// Tick + paint the way a host's frame loop does, until the widget stops
 /// asking for frames. Returns the number of frames painted.
 fn settle(browser: &mut BrowserWidget, vfs: &dyn Vfs, backend: &mut MockBackend) -> usize {
-    let mut drawn = 0;
-    for _ in 0..500 {
+    for drawn in 0..500 {
         browser.tick(vfs);
         if !browser.wants_frame() {
             return drawn;
         }
         browser.paint(backend).unwrap();
-        drawn += 1;
         std::thread::sleep(std::time::Duration::from_millis(2));
     }
     panic!("browser never settled");
@@ -3466,8 +3501,10 @@ fn smooth_scroll_moves_and_settles() {
         format!("<html><body>{body}</body></html>").as_bytes(),
     )
     .unwrap();
-    let mut config = BrowserConfig::default();
-    config.smooth_scroll = true;
+    let config = BrowserConfig {
+        smooth_scroll: true,
+        ..Default::default()
+    };
     let mut browser = BrowserWidget::new(config);
     browser.set_window(0, 0, 480, 272);
     browser.navigate_vfs("vfs://sites/long/index.html", &vfs);

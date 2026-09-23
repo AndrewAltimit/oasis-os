@@ -1575,8 +1575,8 @@ mod tests {
             let config = WindowConfig {
                 id: format!("w{i}"),
                 title: format!("W{i}"),
-                x: Some(i as i32 * 10),
-                y: Some(i as i32 * 10),
+                x: Some(i * 10),
+                y: Some(i * 10),
                 width: 100,
                 height: 80,
                 window_type: WindowType::AppWindow,

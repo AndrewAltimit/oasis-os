@@ -852,8 +852,10 @@ mod tests {
         let bar = BottomBar::new();
         let mut sdi = SdiRegistry::new();
         let at = crate::active_theme::ActiveTheme::default();
-        let mut feat = crate::skin::SkinFeatures::default();
-        feat.show_media_tabs = true;
+        let feat = crate::skin::SkinFeatures {
+            show_media_tabs: true,
+            ..Default::default()
+        };
         bar.update_sdi(&mut sdi, &at, &feat);
         assert!(sdi.contains("bar_bottom"));
         // bar_url is not created when bar_url_text is empty (default).
@@ -968,8 +970,10 @@ mod tests {
         let at = crate::active_theme::ActiveTheme::default();
 
         // First enable to create objects.
-        let mut feat = crate::skin::SkinFeatures::default();
-        feat.show_media_tabs = true;
+        let mut feat = crate::skin::SkinFeatures {
+            show_media_tabs: true,
+            ..Default::default()
+        };
         bar.update_sdi(&mut sdi, &at, &feat);
 
         // Now disable and verify they're hidden.
@@ -999,8 +1003,10 @@ mod tests {
         bar.active_tab = MediaTab::Audio;
         let mut sdi = SdiRegistry::new();
         let at = crate::active_theme::ActiveTheme::default();
-        let mut feat = crate::skin::SkinFeatures::default();
-        feat.show_media_tabs = true;
+        let feat = crate::skin::SkinFeatures {
+            show_media_tabs: true,
+            ..Default::default()
+        };
         bar.update_sdi(&mut sdi, &at, &feat);
 
         let audio_tab = sdi.get("bar_btab_0").unwrap();
@@ -1021,8 +1027,10 @@ mod tests {
         }));
         let mut sdi = SdiRegistry::new();
         let at = crate::active_theme::ActiveTheme::default();
-        let mut feat = crate::skin::SkinFeatures::default();
-        feat.clock_in_bottombar = true;
+        let feat = crate::skin::SkinFeatures {
+            clock_in_bottombar: true,
+            ..Default::default()
+        };
         bar.update_sdi(&mut sdi, &at, &feat);
 
         let clock = sdi.get("bar_bottom_clock").unwrap();
@@ -1037,8 +1045,10 @@ mod tests {
         let bar = BottomBar::new();
         let mut sdi = SdiRegistry::new();
         let at = crate::active_theme::ActiveTheme::default();
-        let mut feat = crate::skin::SkinFeatures::default();
-        feat.clock_in_bottombar = false;
+        let feat = crate::skin::SkinFeatures {
+            clock_in_bottombar: false,
+            ..Default::default()
+        };
         bar.update_sdi(&mut sdi, &at, &feat);
         // Object is not created when the feature is opted out.
         assert!(!sdi.contains("bar_bottom_clock"));

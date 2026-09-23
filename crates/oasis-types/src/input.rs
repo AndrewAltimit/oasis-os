@@ -485,6 +485,8 @@ mod tests {
     // -- Button properties --
 
     #[test]
+    // Exercises the derived `Clone` explicitly, not just `Copy`.
+    #[allow(clippy::clone_on_copy)]
     fn button_clone_and_copy() {
         let b = Button::Confirm;
         let b2 = b;

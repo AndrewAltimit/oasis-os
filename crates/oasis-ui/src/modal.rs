@@ -195,6 +195,109 @@ impl Modal {
     const BUTTON_H: u32 = 22;
 }
 
+impl Widget for Modal {
+    fn measure(&self, _ctx: &DrawContext<'_>, available_w: u32, available_h: u32) -> (u32, u32) {
+        // Modal occupies the full viewport (backdrop fills everything).
+        (available_w, available_h)
+    }
+
+    fn draw(&self, ctx: &mut DrawContext<'_>, x: i32, y: i32, w: u32, h: u32) -> Result<()> {
+        let pad = Self::PADDING;
+        let fs_title = ctx.theme.font_size_lg;
+        let fs_body = ctx.theme.font_size_md;
+        let title_h = ctx.backend.measure_text_height(fs_title);
+        let body_h = ctx.backend.measure_text_height(fs_body);
+        let radius = ctx.theme.border_radius_lg;
+
+        // Compute modal height from content.
+        let content_h =
+            pad as u32 + title_h + 4 + body_h + pad as u32 + Self::BUTTON_H + pad as u32;
+        let mw = Self::MODAL_WIDTH;
+        let mh = content_h;
+        let mx = x + layout::center(w, mw);
+        let my = y + layout::center(h, mh);
+
+        // -- Backdrop --
+        if self.show_backdrop {
+            ctx.backend.fill_rect(x, y, w, h, ctx.theme.overlay)?;
+        }
+
+        // -- Modal panel --
+        ctx.theme
+            .shadow_modal
+            .draw(ctx.backend, mx, my, mw, mh, radius)?;
+        ctx.backend
+            .fill_rounded_rect(mx, my, mw, mh, radius, ctx.theme.surface)?;
+        ctx.backend
+            .stroke_rounded_rect(mx, my, mw, mh, radius, 1, ctx.theme.border_subtle)?;
+
+        let mut cy = my + pad;
+
+        // -- Title --
+        ctx.backend
+            .draw_text(&self.title, mx + pad, cy, fs_title, ctx.theme.text_primary)?;
+        cy += title_h as i32 + 4;
+
+        // -- Body --
+        let body_w = mw.saturating_sub(pad as u32 * 2);
+        ctx.backend.draw_text_wrapped(
+            &self.body,
+            mx + pad,
+            cy,
+            fs_body,
+            ctx.theme.text_secondary,
+            body_w,
+            0,
+        )?;
+        cy += body_h as i32 + pad;
+
+        // -- Buttons (right-aligned row) --
+        if !self.buttons.is_empty() {
+            let btn_gap = 6i32;
+            let btn_pad_h = 12u32;
+            // Compute total buttons width.
+            let total_btn_w: u32 = self
+                .buttons
+                .iter()
+                .map(|b| ctx.backend.measure_text(b, fs_body) + btn_pad_h)
+                .sum::<u32>()
+                + (self.buttons.len().saturating_sub(1) as u32 * btn_gap as u32);
+
+            let mut bx = mx + mw as i32 - pad - total_btn_w as i32;
+            let btn_radius = ctx.theme.border_radius_md;
+
+            for (i, label) in self.buttons.iter().enumerate() {
+                let tw = ctx.backend.measure_text(label, fs_body);
+                let bw = tw + btn_pad_h;
+                let is_focused = i == self.focused_button;
+
+                let bg = if is_focused {
+                    ctx.theme.accent
+                } else {
+                    ctx.theme.button_bg
+                };
+                let fg = if is_focused {
+                    ctx.theme.text_on_accent
+                } else {
+                    ctx.theme.text_primary
+                };
+
+                ctx.backend
+                    .fill_rounded_rect(bx, cy, bw, Self::BUTTON_H, btn_radius, bg)?;
+
+                let text_ty = cy + layout::center(Self::BUTTON_H, body_h);
+                let text_tx = bx + layout::center(bw, tw);
+                ctx.backend
+                    .draw_text(label, text_tx, text_ty, fs_body, fg)?;
+
+                bx += bw as i32 + btn_gap;
+            }
+        }
+
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -546,108 +649,5 @@ mod tests {
         assert!(backend.has_text("A"));
         assert!(backend.has_text("B"));
         assert!(backend.has_text("C"));
-    }
-}
-
-impl Widget for Modal {
-    fn measure(&self, _ctx: &DrawContext<'_>, available_w: u32, available_h: u32) -> (u32, u32) {
-        // Modal occupies the full viewport (backdrop fills everything).
-        (available_w, available_h)
-    }
-
-    fn draw(&self, ctx: &mut DrawContext<'_>, x: i32, y: i32, w: u32, h: u32) -> Result<()> {
-        let pad = Self::PADDING;
-        let fs_title = ctx.theme.font_size_lg;
-        let fs_body = ctx.theme.font_size_md;
-        let title_h = ctx.backend.measure_text_height(fs_title);
-        let body_h = ctx.backend.measure_text_height(fs_body);
-        let radius = ctx.theme.border_radius_lg;
-
-        // Compute modal height from content.
-        let content_h =
-            pad as u32 + title_h + 4 + body_h + pad as u32 + Self::BUTTON_H + pad as u32;
-        let mw = Self::MODAL_WIDTH;
-        let mh = content_h;
-        let mx = x + layout::center(w, mw);
-        let my = y + layout::center(h, mh);
-
-        // -- Backdrop --
-        if self.show_backdrop {
-            ctx.backend.fill_rect(x, y, w, h, ctx.theme.overlay)?;
-        }
-
-        // -- Modal panel --
-        ctx.theme
-            .shadow_modal
-            .draw(ctx.backend, mx, my, mw, mh, radius)?;
-        ctx.backend
-            .fill_rounded_rect(mx, my, mw, mh, radius, ctx.theme.surface)?;
-        ctx.backend
-            .stroke_rounded_rect(mx, my, mw, mh, radius, 1, ctx.theme.border_subtle)?;
-
-        let mut cy = my + pad;
-
-        // -- Title --
-        ctx.backend
-            .draw_text(&self.title, mx + pad, cy, fs_title, ctx.theme.text_primary)?;
-        cy += title_h as i32 + 4;
-
-        // -- Body --
-        let body_w = mw.saturating_sub(pad as u32 * 2);
-        ctx.backend.draw_text_wrapped(
-            &self.body,
-            mx + pad,
-            cy,
-            fs_body,
-            ctx.theme.text_secondary,
-            body_w,
-            0,
-        )?;
-        cy += body_h as i32 + pad;
-
-        // -- Buttons (right-aligned row) --
-        if !self.buttons.is_empty() {
-            let btn_gap = 6i32;
-            let btn_pad_h = 12u32;
-            // Compute total buttons width.
-            let total_btn_w: u32 = self
-                .buttons
-                .iter()
-                .map(|b| ctx.backend.measure_text(b, fs_body) + btn_pad_h)
-                .sum::<u32>()
-                + (self.buttons.len().saturating_sub(1) as u32 * btn_gap as u32);
-
-            let mut bx = mx + mw as i32 - pad - total_btn_w as i32;
-            let btn_radius = ctx.theme.border_radius_md;
-
-            for (i, label) in self.buttons.iter().enumerate() {
-                let tw = ctx.backend.measure_text(label, fs_body);
-                let bw = tw + btn_pad_h;
-                let is_focused = i == self.focused_button;
-
-                let bg = if is_focused {
-                    ctx.theme.accent
-                } else {
-                    ctx.theme.button_bg
-                };
-                let fg = if is_focused {
-                    ctx.theme.text_on_accent
-                } else {
-                    ctx.theme.text_primary
-                };
-
-                ctx.backend
-                    .fill_rounded_rect(bx, cy, bw, Self::BUTTON_H, btn_radius, bg)?;
-
-                let text_ty = cy + layout::center(Self::BUTTON_H, body_h);
-                let text_tx = bx + layout::center(bw, tw);
-                ctx.backend
-                    .draw_text(label, text_tx, text_ty, fs_body, fg)?;
-
-                bx += bw as i32 + btn_gap;
-            }
-        }
-
-        Ok(())
     }
 }

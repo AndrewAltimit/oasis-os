@@ -97,6 +97,85 @@ impl InputField {
     }
 }
 
+impl Default for InputField {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Widget for InputField {
+    fn measure(&self, ctx: &DrawContext<'_>, available_w: u32, _available_h: u32) -> (u32, u32) {
+        let h = ctx.backend.measure_text_height(ctx.theme.font_size_md) + 8;
+        (available_w, h)
+    }
+
+    fn draw(&self, ctx: &mut DrawContext<'_>, x: i32, y: i32, w: u32, h: u32) -> Result<()> {
+        let radius = ctx.theme.border_radius_md;
+
+        // Background.
+        let state = self.state();
+        ctx.backend.fill_rounded_rect(
+            x,
+            y,
+            w,
+            h,
+            radius,
+            WidgetStateColors::input_bg(ctx.theme, state),
+        )?;
+
+        // Border.
+        let bc = if state.is_disabled() {
+            WidgetStateColors::border(ctx.theme, state)
+        } else if self.focused {
+            ctx.theme.input_border_focus
+        } else {
+            ctx.theme.input_border
+        };
+        ctx.backend.stroke_rounded_rect(x, y, w, h, radius, 1, bc)?;
+
+        // Keyboard focus ring (in addition to the focus-colored border).
+        if self.focused && !self.disabled {
+            crate::focus::FocusStyle::from_theme(ctx.theme).draw(ctx.backend, x, y, w, h)?;
+        }
+
+        // Text or placeholder.
+        let fs = ctx.theme.font_size_md;
+        let text_h = ctx.backend.measure_text_height(fs);
+        let ty = y + layout::center(h, text_h);
+        let tx = x + 4;
+        let max_w = w.saturating_sub(8);
+
+        if self.text.is_empty() {
+            ctx.backend.draw_text_ellipsis(
+                &self.placeholder,
+                tx,
+                ty,
+                fs,
+                ctx.theme.text_disabled,
+                max_w,
+            )?;
+        } else {
+            let display = self.display_text();
+            let fg = WidgetStateColors::content_text(ctx.theme, state);
+            ctx.backend
+                .draw_text_ellipsis(&display, tx, ty, fs, fg, max_w)?;
+
+            // Cursor.
+            if self.focused {
+                let before = &display[..display
+                    .char_indices()
+                    .nth(self.cursor_pos)
+                    .map(|(i, _)| i)
+                    .unwrap_or(display.len())];
+                let cursor_x = tx + ctx.backend.measure_text(before, fs) as i32;
+                ctx.backend
+                    .fill_rect(cursor_x, ty, 1, text_h, ctx.theme.text_primary)?;
+            }
+        }
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -385,84 +464,5 @@ mod tests {
             InputField::new().draw(ctx, 0, 0, 100, 20).unwrap();
         });
         assert_eq!(fills.first(), Some(&theme.input_bg));
-    }
-}
-
-impl Default for InputField {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl Widget for InputField {
-    fn measure(&self, ctx: &DrawContext<'_>, available_w: u32, _available_h: u32) -> (u32, u32) {
-        let h = ctx.backend.measure_text_height(ctx.theme.font_size_md) + 8;
-        (available_w, h)
-    }
-
-    fn draw(&self, ctx: &mut DrawContext<'_>, x: i32, y: i32, w: u32, h: u32) -> Result<()> {
-        let radius = ctx.theme.border_radius_md;
-
-        // Background.
-        let state = self.state();
-        ctx.backend.fill_rounded_rect(
-            x,
-            y,
-            w,
-            h,
-            radius,
-            WidgetStateColors::input_bg(ctx.theme, state),
-        )?;
-
-        // Border.
-        let bc = if state.is_disabled() {
-            WidgetStateColors::border(ctx.theme, state)
-        } else if self.focused {
-            ctx.theme.input_border_focus
-        } else {
-            ctx.theme.input_border
-        };
-        ctx.backend.stroke_rounded_rect(x, y, w, h, radius, 1, bc)?;
-
-        // Keyboard focus ring (in addition to the focus-colored border).
-        if self.focused && !self.disabled {
-            crate::focus::FocusStyle::from_theme(ctx.theme).draw(ctx.backend, x, y, w, h)?;
-        }
-
-        // Text or placeholder.
-        let fs = ctx.theme.font_size_md;
-        let text_h = ctx.backend.measure_text_height(fs);
-        let ty = y + layout::center(h, text_h);
-        let tx = x + 4;
-        let max_w = w.saturating_sub(8);
-
-        if self.text.is_empty() {
-            ctx.backend.draw_text_ellipsis(
-                &self.placeholder,
-                tx,
-                ty,
-                fs,
-                ctx.theme.text_disabled,
-                max_w,
-            )?;
-        } else {
-            let display = self.display_text();
-            let fg = WidgetStateColors::content_text(ctx.theme, state);
-            ctx.backend
-                .draw_text_ellipsis(&display, tx, ty, fs, fg, max_w)?;
-
-            // Cursor.
-            if self.focused {
-                let before = &display[..display
-                    .char_indices()
-                    .nth(self.cursor_pos)
-                    .map(|(i, _)| i)
-                    .unwrap_or(display.len())];
-                let cursor_x = tx + ctx.backend.measure_text(before, fs) as i32;
-                ctx.backend
-                    .fill_rect(cursor_x, ty, 1, text_h, ctx.theme.text_primary)?;
-            }
-        }
-        Ok(())
     }
 }

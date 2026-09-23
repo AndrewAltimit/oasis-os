@@ -188,6 +188,47 @@ fn scrolling_a_long_page_with_buttons_wheel_and_triggers() {
     s.assert_shows("row0");
 }
 
+/// Wikipedia's `html, body { height: 100% }` pins the root box to the
+/// viewport while the article overflows it. The document must still
+/// scroll to the end of the overflow, and the overflowing content must
+/// paint and take clicks (it used to be culled and missed by hit
+/// testing along with the viewport-sized root).
+#[test]
+fn page_overflowing_a_viewport_height_body_scrolls_paints_and_clicks() {
+    let server = TestServer::start(|req| match req.path() {
+        "/done" => Reply::html("<html><body><p>Arrived</p></body></html>"),
+        _ => {
+            let mut body = String::new();
+            for i in 0..300 {
+                body.push_str(&format!("<p>row{i}</p>"));
+            }
+            Reply::html(format!(
+                "<html><head><style>html, body {{ height: 100%; margin: 0 }}</style></head>                 <body>{body}<p><a href=\"/done\">LastLink</a></p></body></html>"
+            ))
+        },
+    });
+    let mut s = Session::new();
+    s.open(&server.url("/"));
+    s.assert_shows("row0");
+    assert!(
+        s.browser.scroll().max_scroll() > 1000,
+        "overflow must be scrollable; max_scroll={}",
+        s.browser.scroll().max_scroll()
+    );
+
+    for _ in 0..400 {
+        if s.browser.scroll().at_bottom() {
+            break;
+        }
+        s.input(InputEvent::MouseWheel { delta: 3 });
+    }
+    assert!(s.browser.scroll().at_bottom());
+    s.assert_shows("row299");
+    s.click_text("LastLink");
+    assert_eq!(s.url(), server.url("/done"));
+    s.assert_shows("Arrived");
+}
+
 #[test]
 fn wheel_over_nested_scroll_container_scrolls_it_then_the_page() {
     let server = TestServer::start(|_| {

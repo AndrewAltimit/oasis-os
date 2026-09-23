@@ -142,6 +142,7 @@ impl BrowserWidget {
     fn reset_for_navigation(&mut self) {
         self.state = LoadingState::Loading;
         self.selected_link = -1;
+        self.clear_node_references();
         self.reader_mode = false;
         self.reader_html = None;
         self.error_message = None;
@@ -165,6 +166,19 @@ impl BrowserWidget {
             self.pending_page_url = None;
             self.pending_io_images.clear();
         }
+    }
+
+    /// Drop every piece of state that names a node of the current
+    /// document by index. `NodeId`s are arena indices, so after the
+    /// document is replaced they point at unrelated nodes of the new
+    /// page — or past its end, which panics in the `:hover` / `:focus`
+    /// ancestor walks. Call whenever `self.document` is swapped.
+    fn clear_node_references(&mut self) {
+        self.hover_node = None;
+        self.focused_node = None;
+        self.tab_order.clear();
+        self.tab_focus_index = -1;
+        self.transition_engine = css::transition::TransitionEngine::new();
     }
 
     /// Navigate to a URL using the VFS as the resource source.
@@ -732,6 +746,9 @@ impl BrowserWidget {
             html::tree_builder::TreeBuilder::build(tokens)
         };
         self.diag(&format!("[BR] tree build done: {} nodes", doc.nodes.len()));
+        // The cascade below reads `hover_node`, so clear the previous
+        // page's node references before it runs.
+        self.clear_node_references();
 
         // 1b. Execute inline <script> blocks (if JS enabled).
         //
@@ -1048,7 +1065,7 @@ impl BrowserWidget {
         // `ScrollState` clamps against this height.
         if let Some(layout) = &self.layout_root {
             self.scroll
-                .set_content_height(layout.dimensions.margin_box().height as i32);
+                .set_content_height(layout.scrollable_height() as i32);
         }
         self.nested_scroll_offsets.clear();
         self.state = LoadingState::Idle;
@@ -2053,6 +2070,7 @@ impl BrowserWidget {
                 self.cached_inline_styles = Vec::new();
                 self.external_stylesheets = Vec::new();
                 self.external_stylesheet_positions = Vec::new();
+                self.clear_node_references();
                 self.document = Some(reader_doc);
                 self.styles = styles;
                 self.href_map = href_map;

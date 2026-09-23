@@ -44,6 +44,29 @@ impl Divider {
     }
 }
 
+impl Widget for Divider {
+    fn measure(&self, _ctx: &DrawContext<'_>, available_w: u32, available_h: u32) -> (u32, u32) {
+        match self.orientation {
+            DividerOrientation::Horizontal => (available_w, self.thickness as u32),
+            DividerOrientation::Vertical => (self.thickness as u32, available_h),
+        }
+    }
+
+    fn draw(&self, ctx: &mut DrawContext<'_>, x: i32, y: i32, w: u32, h: u32) -> Result<()> {
+        let color = self.color.unwrap_or(ctx.theme.border_subtle);
+        match self.orientation {
+            DividerOrientation::Horizontal => {
+                ctx.backend
+                    .draw_line(x, y, x + w as i32, y, self.thickness, color)
+            },
+            DividerOrientation::Vertical => {
+                ctx.backend
+                    .draw_line(x, y, x, y + h as i32, self.thickness, color)
+            },
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -162,28 +185,5 @@ mod tests {
         }
         // Should not panic.
         assert!(backend.fill_rect_count() > 0);
-    }
-}
-
-impl Widget for Divider {
-    fn measure(&self, _ctx: &DrawContext<'_>, available_w: u32, available_h: u32) -> (u32, u32) {
-        match self.orientation {
-            DividerOrientation::Horizontal => (available_w, self.thickness as u32),
-            DividerOrientation::Vertical => (self.thickness as u32, available_h),
-        }
-    }
-
-    fn draw(&self, ctx: &mut DrawContext<'_>, x: i32, y: i32, w: u32, h: u32) -> Result<()> {
-        let color = self.color.unwrap_or(ctx.theme.border_subtle);
-        match self.orientation {
-            DividerOrientation::Horizontal => {
-                ctx.backend
-                    .draw_line(x, y, x + w as i32, y, self.thickness, color)
-            },
-            DividerOrientation::Vertical => {
-                ctx.backend
-                    .draw_line(x, y, x, y + h as i32, self.thickness, color)
-            },
-        }
     }
 }

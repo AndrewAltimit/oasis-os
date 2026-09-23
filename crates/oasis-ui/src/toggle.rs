@@ -88,6 +88,43 @@ impl Toggle {
     }
 }
 
+impl Widget for Toggle {
+    fn measure(&self, _ctx: &DrawContext<'_>, _available_w: u32, _available_h: u32) -> (u32, u32) {
+        (28, 16)
+    }
+
+    fn draw(&self, ctx: &mut DrawContext<'_>, x: i32, y: i32, w: u32, h: u32) -> Result<()> {
+        let radius = h as u16 / 2;
+        let state = self.state();
+        let track = lerp_color(
+            ctx.theme.toggle_track_off,
+            ctx.theme.toggle_track_on,
+            self.progress,
+        );
+        let bg = WidgetStateColors::tinted(ctx.theme, track, state);
+        ctx.backend.fill_rounded_rect(x, y, w, h, radius, bg)?;
+
+        // Thumb circle.
+        let thumb_r = (h as i32 / 2) - 2;
+        let travel = w as i32 - h as i32;
+        let thumb_x = x + h as i32 / 2 + (travel as f32 * self.progress) as i32;
+        let thumb_y = y + h as i32 / 2;
+        let thumb = if state.is_disabled() {
+            WidgetStateColors::tinted(ctx.theme, ctx.theme.toggle_thumb, state)
+        } else {
+            ctx.theme.toggle_thumb
+        };
+        ctx.backend
+            .fill_circle(thumb_x, thumb_y, thumb_r as u16, thumb)?;
+
+        // Keyboard focus ring around the track.
+        if self.focused && !self.disabled {
+            crate::focus::FocusStyle::from_theme(ctx.theme).draw(ctx.backend, x, y, w, h)?;
+        }
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -217,7 +254,7 @@ mod tests {
             t.draw(&mut ctx, 0, 0, 28, 16).unwrap();
         }
         // Should complete without panic.
-        assert!(backend.calls.len() > 0);
+        assert!(!backend.calls.is_empty());
     }
 
     #[test]
@@ -229,7 +266,7 @@ mod tests {
             let t = Toggle::new(true);
             t.draw(&mut ctx, 0, 0, 28, 16).unwrap();
         }
-        assert!(backend.calls.len() > 0);
+        assert!(!backend.calls.is_empty());
     }
 
     #[test]
@@ -334,42 +371,5 @@ mod tests {
         }
         // Should draw without panic at midpoint progress.
         assert!(backend.fill_rect_count() > 0);
-    }
-}
-
-impl Widget for Toggle {
-    fn measure(&self, _ctx: &DrawContext<'_>, _available_w: u32, _available_h: u32) -> (u32, u32) {
-        (28, 16)
-    }
-
-    fn draw(&self, ctx: &mut DrawContext<'_>, x: i32, y: i32, w: u32, h: u32) -> Result<()> {
-        let radius = h as u16 / 2;
-        let state = self.state();
-        let track = lerp_color(
-            ctx.theme.toggle_track_off,
-            ctx.theme.toggle_track_on,
-            self.progress,
-        );
-        let bg = WidgetStateColors::tinted(ctx.theme, track, state);
-        ctx.backend.fill_rounded_rect(x, y, w, h, radius, bg)?;
-
-        // Thumb circle.
-        let thumb_r = (h as i32 / 2) - 2;
-        let travel = w as i32 - h as i32;
-        let thumb_x = x + h as i32 / 2 + (travel as f32 * self.progress) as i32;
-        let thumb_y = y + h as i32 / 2;
-        let thumb = if state.is_disabled() {
-            WidgetStateColors::tinted(ctx.theme, ctx.theme.toggle_thumb, state)
-        } else {
-            ctx.theme.toggle_thumb
-        };
-        ctx.backend
-            .fill_circle(thumb_x, thumb_y, thumb_r as u16, thumb)?;
-
-        // Keyboard focus ring around the track.
-        if self.focused && !self.disabled {
-            crate::focus::FocusStyle::from_theme(ctx.theme).draw(ctx.backend, x, y, w, h)?;
-        }
-        Ok(())
     }
 }

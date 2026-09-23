@@ -1318,6 +1318,7 @@ mod tests {
     }
 
     /// FNV-1a over an RGBA buffer, for pixel-exact golden comparisons.
+    #[cfg(target_arch = "x86_64")]
     fn fnv1a(bytes: &[u8]) -> u64 {
         let mut h: u64 = 0xcbf2_9ce4_8422_2325;
         for &b in bytes {
@@ -1397,10 +1398,10 @@ mod tests {
                 let pixels = r.render_shader(name, time, &params);
                 assert_eq!(pixels.len(), 64 * 64 * 4);
 
-                if let Some(ref p) = prev {
-                    if pixels != p.as_slice() {
-                        change_count += 1;
-                    }
+                if let Some(ref p) = prev
+                    && pixels != p.as_slice()
+                {
+                    change_count += 1;
                 }
                 prev = Some(pixels.to_vec());
             }

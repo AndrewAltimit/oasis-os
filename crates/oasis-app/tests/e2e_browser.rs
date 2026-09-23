@@ -25,6 +25,10 @@ use oasis_core::input::{Key, Modifiers};
 use oasis_core::vfs::Vfs;
 
 const DEADLINE: Duration = Duration::from_secs(15);
+/// How long `/slow` stalls before replying. Long enough that a close
+/// which joined the browser's I/O thread would be unmistakable even when
+/// a loaded CI pool stretches a non-blocking close to a second.
+const SLOW_REPLY: Duration = Duration::from_secs(6);
 
 // ---------------------------------------------------------------------------
 // Local HTTP server
@@ -237,7 +241,8 @@ fn form_pairs(s: &str) -> Vec<(String, String)> {
 }
 
 /// A small site: `/` links to `/b`, `/long` is a tall page, `/form`
-/// posts to `/submit`, `/blank` draws nothing, `/slow` stalls.
+/// posts to `/submit`, `/blank` draws nothing, `/slow` stalls for
+/// [`SLOW_REPLY`].
 fn site() -> Server {
     Server::start(|req| match req.path() {
         "/" => Reply::html(
@@ -292,8 +297,7 @@ fn site() -> Server {
              </script></body></html>",
         ),
         "/blank" => Reply::html("<html><head><title>Blank</title></head><body></body></html>"),
-        "/slow" => Reply::html("<html><body><p>slow-page</p></body></html>")
-            .delayed(Duration::from_millis(1500)),
+        "/slow" => Reply::html("<html><body><p>slow-page</p></body></html>").delayed(SLOW_REPLY),
         "/hover" => Reply::html(
             "<html><body><p><a href=\"/b\" onmouseover=\"document.getElementById('h')\
              .textContent = 'hovered-yes'\">hover-link</a></p><p id=\"h\">hovered-no</p>\
@@ -903,10 +907,10 @@ fn closing_the_browser_during_a_slow_load_is_prompt_and_clean() {
     let start = Instant::now();
     assert!(h.close_window("browser"));
     let took = start.elapsed();
-    assert!(
-        took < Duration::from_millis(500),
-        "closing blocked the UI for {took:?}"
-    );
+    // A close that waited on the I/O thread would take most of
+    // SLOW_REPLY; half of it leaves room for a loaded runner (a
+    // non-blocking close has read ~1s on a busy nextest pool).
+    assert!(took < SLOW_REPLY / 2, "closing blocked the UI for {took:?}");
     h.settle();
     assert!(h.state().content.browser.is_none());
     assert!(h.find_window("browser").is_none());

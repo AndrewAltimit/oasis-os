@@ -65,7 +65,7 @@ impl ComputedStyle {
         // Custom properties (--*) are stored in the properties map.
         if property.starts_with("--") {
             if let CssValue::String(ref raw) = *value {
-                self.custom_properties
+                std::sync::Arc::make_mut(&mut self.custom_properties)
                     .insert(property.to_string(), raw.clone());
             }
             return;

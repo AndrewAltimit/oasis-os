@@ -501,7 +501,7 @@ mod tests {
         let fg = Color::rgb(135, 135, 135);
         let bg = Color::rgb(255, 255, 255);
         let ratio = contrast_ratio(fg, bg);
-        assert!(ratio >= 3.0 && ratio < 4.5);
+        assert!((3.0..4.5).contains(&ratio));
         assert!(!meets_wcag_aa(fg, bg));
         assert!(meets_wcag_aa_large(fg, bg));
     }

@@ -226,6 +226,7 @@ pub(super) fn compare_layers(a: &MatchedDeclaration, b: &MatchedDeclaration) -> 
 /// `content`), sorts by cascade order, inherits from the originating
 /// element, and applies declarations. Returns `None` if no matching rule
 /// sets `content` to a string value (including empty string for clearfix).
+#[cfg(test)]
 pub(super) fn resolve_pseudo_style(
     doc: &Document,
     node_id: NodeId,
@@ -234,54 +235,101 @@ pub(super) fn resolve_pseudo_style(
     stylesheets: &[&Stylesheet],
     ctx: &CascadeContext<'_>,
 ) -> Option<ComputedStyle> {
+    let index = super::SelectorIndex::build(stylesheets);
+    let candidates = pseudo_element_candidates(doc, node_id, &index, &mut FxHashMap::default());
+    resolve_pseudo_style_indexed(
+        doc,
+        node_id,
+        pseudo,
+        element_style,
+        stylesheets,
+        &candidates,
+        ctx,
+    )
+}
+
+/// The rules with pseudo-element selectors that might apply to
+/// `node_id`, from `index`, in source order.
+pub(super) fn pseudo_element_candidates(
+    doc: &Document,
+    node_id: NodeId,
+    index: &super::index::SelectorIndex,
+    tag_cache: &mut FxHashMap<String, String>,
+) -> Vec<super::index::IndexedRule> {
+    let NodeKind::Element(elem) = &doc.nodes[node_id].kind else {
+        return Vec::new();
+    };
+    let tag = elem.tag.as_str();
+    let classes: Vec<&str> = elem
+        .get_attribute("class")
+        .unwrap_or("")
+        .split_whitespace()
+        .collect();
+    if !tag_cache.contains_key(tag) {
+        tag_cache.insert(tag.to_string(), tag.to_ascii_lowercase());
+    }
+    let tag_lower = tag_cache.get(tag).expect("just inserted");
+    index.pseudo_element_candidates(tag, tag_lower, elem.get_attribute("id"), &classes)
+}
+
+/// Resolve the `::before` / `::after` (`pseudo`) style of `node_id`
+/// from the pseudo-element rule `candidates` (see
+/// [`pseudo_element_candidates`]). Returns `None` when no rule gives it
+/// `content`.
+pub(super) fn resolve_pseudo_style_indexed(
+    doc: &Document,
+    node_id: NodeId,
+    pseudo: &str,
+    element_style: &ComputedStyle,
+    stylesheets: &[&Stylesheet],
+    candidates: &[super::index::IndexedRule],
+    ctx: &CascadeContext<'_>,
+) -> Option<ComputedStyle> {
     use super::super::values::Display;
 
     // Collect all matching declarations with cascade metadata.
     let mut matched: Vec<MatchedDeclaration> = Vec::new();
-    let mut source_order: usize = 0;
 
-    for (sheet_idx, stylesheet) in stylesheets.iter().enumerate() {
-        for rule in &stylesheet.rules {
-            let decl_base = source_order;
-            source_order += rule.declarations.len();
-
+    for entry in candidates {
+        let sheet_idx = entry.sheet_idx;
+        let rule = &stylesheets[sheet_idx].rules[entry.rule_idx];
+        let decl_base = entry.source_order_base;
+        for selector in &rule.selectors.selectors {
+            if selector_pseudo_element(selector) != Some(pseudo) {
+                continue;
+            }
             if let Some(cond) = &rule.container
                 && !container_condition_matches(doc, node_id, cond, ctx)
             {
-                continue;
+                break;
             }
             if let Some(scope) = &rule.scope
                 && !scope_condition_matches(doc, node_id, scope, ctx)
             {
+                break;
+            }
+            if !matches_selector_ignoring_pseudo(doc, node_id, selector, ctx) {
                 continue;
             }
-            for selector in &rule.selectors.selectors {
-                if selector_pseudo_element(selector) != Some(pseudo) {
-                    continue;
+            let specificity = selector.specificity();
+            let global_layer = rule.layer.and_then(|local| {
+                if let Some(glm) = ctx.global_layers {
+                    glm.get(&(sheet_idx as u16, local)).copied()
+                } else {
+                    Some(local)
                 }
-                if !matches_selector_ignoring_pseudo(doc, node_id, selector, ctx) {
-                    continue;
-                }
-                let specificity = selector.specificity();
-                let global_layer = rule.layer.and_then(|local| {
-                    if let Some(glm) = ctx.global_layers {
-                        glm.get(&(sheet_idx as u16, local)).copied()
-                    } else {
-                        Some(local)
-                    }
+            });
+            for (i, decl) in rule.declarations.iter().enumerate() {
+                matched.push(MatchedDeclaration {
+                    property: decl.property.clone(),
+                    value: decl.value.clone(),
+                    important: decl.important,
+                    origin: Origin::Stylesheet,
+                    specificity,
+                    source_order: decl_base + i,
+                    sheet_idx: sheet_idx as u16,
+                    layer: global_layer,
                 });
-                for (i, decl) in rule.declarations.iter().enumerate() {
-                    matched.push(MatchedDeclaration {
-                        property: decl.property.clone(),
-                        value: decl.value.clone(),
-                        important: decl.important,
-                        origin: Origin::Stylesheet,
-                        specificity,
-                        source_order: decl_base + i,
-                        sheet_idx: sheet_idx as u16,
-                        layer: global_layer,
-                    });
-                }
             }
         }
     }
@@ -1053,7 +1101,7 @@ pub(super) fn match_pseudo_class(
                     if nid == node_id {
                         return true;
                     }
-                    current = doc.nodes[nid].parent;
+                    current = doc.nodes.get(nid).and_then(|n| n.parent);
                 }
             }
             return false;

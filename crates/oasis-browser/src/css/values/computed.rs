@@ -1,5 +1,7 @@
 //! `ComputedStyle` struct definition, `Default` impl, and inheritance.
 
+use std::sync::Arc;
+
 use rustc_hash::FxHashMap;
 
 use oasis_types::backend::Color;
@@ -352,7 +354,12 @@ pub struct ComputedStyle {
     pub justify_items: JustifySelf,
 
     // -- CSS custom properties (--*) ------------------------------------
-    pub custom_properties: FxHashMap<String, String>,
+    /// Shared copy-on-write (`Arc::make_mut`): every element inherits
+    /// its parent's map, and design-system pages declare hundreds of
+    /// tokens on `:root` (Wikipedia: ~200), so a deep copy per inherited
+    /// style (and per layout box / text fragment cloning it) dominated
+    /// layout time.
+    pub custom_properties: Arc<FxHashMap<String, String>>,
 
     // -- Container queries ----------------------------------------------
     /// `container-type`. Default `Normal`. When set to `InlineSize` or
@@ -629,7 +636,7 @@ impl Default for ComputedStyle {
             justify_self: JustifySelf::Auto,
             justify_items: JustifySelf::Stretch,
 
-            custom_properties: FxHashMap::default(),
+            custom_properties: Arc::default(),
 
             container_type: ContainerType::Normal,
             container_name: Vec::new(),
@@ -858,7 +865,7 @@ impl ComputedStyle {
             text_rendering: parent.text_rendering,
             image_rendering: parent.image_rendering,
             // CSS custom properties always inherit.
-            custom_properties: parent.custom_properties.clone(),
+            custom_properties: Arc::clone(&parent.custom_properties),
             // Non-inherited properties keep CSS initial values.
             ..ComputedStyle::default()
         }
@@ -953,13 +960,15 @@ mod tests {
 
     #[test]
     fn inherit_copies_inheritable_properties() {
-        let mut parent = ComputedStyle::default();
-        parent.color = Color::rgb(255, 0, 0);
-        parent.font_size = 20.0;
-        parent.font_weight = FontWeight::BOLD;
-        parent.text_align = TextAlign::Center;
-        parent.visibility = Visibility::Hidden;
-        parent.list_style_type = ListStyleType::Square;
+        let parent = ComputedStyle {
+            color: Color::rgb(255, 0, 0),
+            font_size: 20.0,
+            font_weight: FontWeight::BOLD,
+            text_align: TextAlign::Center,
+            visibility: Visibility::Hidden,
+            list_style_type: ListStyleType::Square,
+            ..Default::default()
+        };
 
         let child = ComputedStyle::inherit(&parent);
 
@@ -986,8 +995,10 @@ mod tests {
             /// ComputedStyle::inherit preserves inheritable props.
             #[test]
             fn inherit_preserves_font_size(fs in 1.0f32..100.0) {
-                let mut parent = ComputedStyle::default();
-                parent.font_size = fs;
+                let parent = ComputedStyle {
+                    font_size: fs,
+                    ..Default::default()
+                };
                 let child = ComputedStyle::inherit(&parent);
                 prop_assert!(
                     (child.font_size - fs).abs() < 0.001,
@@ -1002,9 +1013,11 @@ mod tests {
                 mt in 1.0f32..100.0,
                 mr in 1.0f32..100.0,
             ) {
-                let mut parent = ComputedStyle::default();
-                parent.margin_top = mt;
-                parent.margin_right = mr;
+                let parent = ComputedStyle {
+                    margin_top: mt,
+                    margin_right: mr,
+                    ..Default::default()
+                };
                 let child = ComputedStyle::inherit(&parent);
                 prop_assert!(
                     child.margin_top.abs() < 0.001,

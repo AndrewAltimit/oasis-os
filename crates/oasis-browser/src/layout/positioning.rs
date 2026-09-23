@@ -234,9 +234,10 @@ mod tests {
     use crate::css::values::{ComputedStyle, Display};
 
     fn block_style() -> ComputedStyle {
-        let mut s = ComputedStyle::default();
-        s.display = Display::Block;
-        s
+        ComputedStyle {
+            display: Display::Block,
+            ..Default::default()
+        }
     }
 
     fn positioned_box(

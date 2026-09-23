@@ -178,8 +178,7 @@ impl MockBackend {
         for i in 0..line_vec.len() {
             let (ya, fs_a) = line_vec[i];
             let bottom_a = ya + fs_a as i32;
-            for j in (i + 1)..line_vec.len() {
-                let (yb, _) = line_vec[j];
+            for &(yb, _) in &line_vec[i + 1..] {
                 if yb < bottom_a {
                     overlaps.push((ya, yb));
                 } else {

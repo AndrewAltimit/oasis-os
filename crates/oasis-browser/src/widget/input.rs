@@ -604,8 +604,11 @@ impl BrowserWidget {
         for start in [old_focus, self.focused_node].into_iter().flatten() {
             let mut cur = Some(start);
             while let Some(nid) = cur {
+                let Some(node) = doc.nodes.get(nid) else {
+                    break;
+                };
                 affected.insert(nid);
-                cur = doc.nodes[nid].parent;
+                cur = node.parent;
             }
         }
 
@@ -1312,8 +1315,11 @@ impl BrowserWidget {
         for start in [old_hover, self.hover_node].into_iter().flatten() {
             let mut cur = Some(start);
             while let Some(nid) = cur {
+                let Some(node) = doc.nodes.get(nid) else {
+                    break;
+                };
                 affected.insert(nid);
-                cur = doc.nodes[nid].parent;
+                cur = node.parent;
             }
         }
 
@@ -1617,7 +1623,7 @@ impl BrowserWidget {
         let Some(rect) = target.and_then(|nid| Self::find_node_rect(layout, nid)) else {
             return false;
         };
-        let content_h = layout.dimensions.margin_box().height as i32;
+        let content_h = layout.scrollable_height() as i32;
         self.scroll.set_content_height(content_h);
         self.scroll.scroll_to(rect.y as i32);
         true

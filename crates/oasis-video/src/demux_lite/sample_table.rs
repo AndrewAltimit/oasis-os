@@ -487,7 +487,7 @@ mod tests {
         assert_eq!(sample_pts(&table, 0), 0);
         assert_eq!(sample_pts(&table, 1), 1000);
         assert_eq!(sample_pts(&table, 2), 2000);
-        assert_eq!(sample_pts(&table, 3), 3000 + 0); // first in 2nd run
+        assert_eq!(sample_pts(&table, 3), 3000); // first in 2nd run
         assert_eq!(sample_pts(&table, 4), 3000 + 2000);
     }
 

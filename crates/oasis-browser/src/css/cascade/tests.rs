@@ -421,28 +421,29 @@ fn element_defaults_applied() {
 
 #[test]
 fn non_element_nodes_get_no_style() {
-    let mut nodes = Vec::new();
-    // 0: Document root
-    nodes.push(Node {
-        kind: NodeKind::Document,
-        parent: None,
-        children: vec![1],
-    });
-    // 1: <html>
-    nodes.push(Node {
-        kind: NodeKind::Element(ElementData {
-            tag: TagName::Html,
-            attributes: vec![],
-        }),
-        parent: Some(0),
-        children: vec![2],
-    });
-    // 2: Text node
-    nodes.push(Node {
-        kind: NodeKind::Text("hello".to_string()),
-        parent: Some(1),
-        children: vec![],
-    });
+    let nodes = vec![
+        // 0: Document root
+        Node {
+            kind: NodeKind::Document,
+            parent: None,
+            children: vec![1],
+        },
+        // 1: <html>
+        Node {
+            kind: NodeKind::Element(ElementData {
+                tag: TagName::Html,
+                attributes: vec![],
+            }),
+            parent: Some(0),
+            children: vec![2],
+        },
+        // 2: Text node
+        Node {
+            kind: NodeKind::Text("hello".to_string()),
+            parent: Some(1),
+            children: vec![],
+        },
+    ];
 
     let doc = Document::from_nodes(nodes, 0);
     let sheet = Stylesheet {
@@ -1189,6 +1190,28 @@ fn selector_index_reduces_comparisons() {
 }
 
 #[test]
+fn selector_index_buckets_pseudo_element_rules() {
+    // Only rules with a pseudo-element selector are pseudo candidates,
+    // bucketed by their subject like ordinary rules, in source order.
+    let sheet = Stylesheet::parse(
+        ".foo { color: red; } .foo::before { content: 'a'; }          p::after { content: 'b'; } ::before { content: 'c'; } .bar::after { content: 'd'; }",
+    );
+    let index = SelectorIndex::build(&[&sheet]);
+    let rules: Vec<usize> = index
+        .pseudo_element_candidates("p", "p", None, &["foo"])
+        .iter()
+        .map(|r| r.rule_idx)
+        .collect();
+    assert_eq!(rules, vec![1, 2, 3], ".foo::before, p::after, ::before");
+    let rules: Vec<usize> = index
+        .pseudo_element_candidates("div", "div", None, &[])
+        .iter()
+        .map(|r| r.rule_idx)
+        .collect();
+    assert_eq!(rules, vec![3], "only the universal ::before");
+}
+
+#[test]
 fn selector_index_universal_rules() {
     let sheet = Stylesheet::parse("* { margin: 0; } .cls { color: red; }");
     let index = SelectorIndex::build(&[&sheet]);
@@ -1267,7 +1290,7 @@ fn test_body_has_default_margin() {
         &doc,
         body_id,
         None,
-        &[&ua],
+        &[ua],
         &index,
         &inline_map,
         &ctx,
@@ -2642,7 +2665,7 @@ mod prop_tests {
             b in arb_specificity(),
         ) {
             if a > b {
-                prop_assert!(!(b > a));
+                prop_assert!((b <= a));
             }
         }
     }
@@ -2992,7 +3015,7 @@ mod container_query_cascade_tests {
                 width: w,
                 height: h,
                 container_type: crate::css::values::types::ContainerType::Size,
-                custom_properties: rustc_hash::FxHashMap::default(),
+                custom_properties: Default::default(),
             },
         );
         l
@@ -3164,9 +3187,11 @@ mod container_query_cascade_tests {
         use crate::css::values::types::ContainerType;
         use crate::layout::box_model::{BoxType, Dimensions, LayoutBox, Rect};
 
-        let mut style = ComputedStyle::default();
-        style.container_type = ContainerType::InlineSize;
-        style.container_name = vec!["card".to_string()];
+        let style = ComputedStyle {
+            container_type: ContainerType::InlineSize,
+            container_name: vec!["card".to_string()],
+            ..Default::default()
+        };
 
         let mut child = LayoutBox::new(BoxType::Block, style, Some(7));
         child.dimensions = Dimensions {
@@ -3188,9 +3213,11 @@ mod container_query_cascade_tests {
         use super::super::super::parser::CssColor;
         use super::super::super::values::types::ColorScheme;
 
-        let mut style = ComputedStyle::default();
-        // Simulate color-scheme: dark on the element.
-        style.color_scheme = ColorScheme::Dark;
+        let mut style = ComputedStyle {
+            // Simulate color-scheme: dark on the element.
+            color_scheme: ColorScheme::Dark,
+            ..Default::default()
+        };
         let value =
             CssValue::LightDark(CssColor::new(255, 0, 0, 255), CssColor::new(0, 0, 255, 255));
         style.apply_declaration("color", &value, 16.0);
@@ -3202,8 +3229,10 @@ mod container_query_cascade_tests {
         use super::super::super::parser::CssColor;
         use super::super::super::values::types::ColorScheme;
 
-        let mut style = ComputedStyle::default();
-        style.color_scheme = ColorScheme::Light;
+        let mut style = ComputedStyle {
+            color_scheme: ColorScheme::Light,
+            ..Default::default()
+        };
         let value =
             CssValue::LightDark(CssColor::new(255, 0, 0, 255), CssColor::new(0, 0, 255, 255));
         style.apply_declaration("color", &value, 16.0);

@@ -677,11 +677,10 @@ mod tests {
                 }
                 // Advance n-1 times (first track already counted).
                 for _ in 0..n {
-                    if pl.advance() {
-                        if let Some(idx) = pl.current_index() {
+                    if pl.advance()
+                        && let Some(idx) = pl.current_index() {
                             visited.insert(idx);
                         }
-                    }
                 }
                 // All visited indices should be valid.
                 for &idx in &visited {

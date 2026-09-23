@@ -1604,7 +1604,7 @@ mod tests {
 
     #[test]
     fn app_no_runner_continues() {
-        let (mut state, mut sdi, mut vfs) = make_test_state();
+        let (mut state, mut sdi, vfs) = make_test_state();
         state.mode = Mode::App;
         state.content.app_runner = None;
         // Without a runner, all events (including Quit) are no-ops.
@@ -1615,7 +1615,7 @@ mod tests {
             &vfs,
         );
         assert_eq!(result, InputResult::Continue);
-        let result = handle_app_input(&InputEvent::Quit, &mut state, &mut sdi, &mut vfs);
+        let result = handle_app_input(&InputEvent::Quit, &mut state, &mut sdi, &vfs);
         assert_eq!(result, InputResult::Continue);
     }
 
@@ -2098,7 +2098,7 @@ mod tests {
             .content
             .open_runners
             .iter_mut()
-            .find(|(id, _)| Some(&*id) == win_id.as_ref())
+            .find(|(id, _)| Some(id) == win_id.as_ref())
             .expect("editor window still open");
         // Sync the runner's cached display lines from the editor.
         runner.refresh_app(&vfs);

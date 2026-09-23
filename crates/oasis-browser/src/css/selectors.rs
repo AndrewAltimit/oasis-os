@@ -508,7 +508,7 @@ mod tests {
     }
 
     /// Link `child` as a child of `parent` in the node slice.
-    fn link(nodes: &mut Vec<Node>, parent: usize, child: usize) {
+    fn link(nodes: &mut [Node], parent: usize, child: usize) {
         nodes[parent].children.push(child);
         nodes[child].parent = Some(parent);
     }

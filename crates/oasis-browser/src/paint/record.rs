@@ -198,14 +198,15 @@ fn record_box(
     let screen_x = layout_box.dimensions.content.x - ctx.scroll_x + (tx_off_x - offset_x) as f32;
     let box_right = screen_x + layout_box.dimensions.margin_box().width;
 
-    if box_bottom < 0.0 || screen_y > ctx.viewport_height {
+    // A box that doesn't clip may have descendants overflowing into the
+    // viewport even when its own box is off-screen (e.g. a `height: 100%`
+    // body holding the whole page), so only cull it when it can't.
+    let offscreen = box_bottom < 0.0
+        || screen_y > ctx.viewport_height
+        || box_right < 0.0
+        || screen_x > ctx.viewport_width;
+    if offscreen && (layout_box.clips_overflow() || layout_box.children.is_empty()) {
         // Close the sticky group opened above to keep the stack balanced.
-        if is_sticky {
-            dl.push(DisplayItem::PopSticky);
-        }
-        return;
-    }
-    if box_right < 0.0 || screen_x > ctx.viewport_width {
         if is_sticky {
             dl.push(DisplayItem::PopSticky);
         }
@@ -266,7 +267,9 @@ fn record_box(
         }
     }
 
-    let is_visible = layout_box.style.visibility == Visibility::Visible;
+    // An off-screen box that survived culling is only visited for its
+    // overflowing descendants; it paints nothing of its own.
+    let is_visible = layout_box.style.visibility == Visibility::Visible && !offscreen;
 
     // Track the current DOM node for hover color patching.
     let prev_node = ctx.current_node;
@@ -591,7 +594,7 @@ fn record_box(
 
     // Record link hit region.
     if let Some((ref href, link_node)) = ctx.current_link {
-        if layout_box.node == Some(link_node) || has_text_content(layout_box) {
+        if !offscreen && (layout_box.node == Some(link_node) || has_text_content(layout_box)) {
             let border = layout_box.dimensions.border_box();
             ctx.links.push(LinkRegion {
                 rect: Rect {
@@ -2463,10 +2466,12 @@ mod form_paint_tests {
     use crate::layout::box_model::{BoxType, Dimensions, LayoutBox, ReplacedContent};
 
     fn make_text_input_box(value: &str, focused: bool, caret: Option<Color>) -> (LayoutBox, bool) {
-        let mut style = ComputedStyle::default();
-        style.font_size = 12.0;
-        style.color = Color::rgb(0, 0, 0);
-        style.caret_color = caret;
+        let style = ComputedStyle {
+            font_size: 12.0,
+            color: Color::rgb(0, 0, 0),
+            caret_color: caret,
+            ..Default::default()
+        };
         let mut lb = LayoutBox::new(
             BoxType::Replaced(ReplacedContent::TextInput {
                 value: value.to_string(),

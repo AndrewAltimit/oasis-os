@@ -651,13 +651,8 @@ mod tests {
 
         // Subsequent polls return audio data.
         let mut total = Vec::new();
-        loop {
-            match src.poll().unwrap() {
-                Some(chunk) => {
-                    total.extend_from_slice(&chunk.data);
-                },
-                None => break,
-            }
+        while let Some(chunk) = src.poll().unwrap() {
+            total.extend_from_slice(&chunk.data);
         }
         assert_eq!(total.len(), 100);
         assert_eq!(src.state(), SourceState::Ended);
@@ -681,14 +676,9 @@ mod tests {
         assert_eq!(chunk.metadata.unwrap().title, "Artist - Song");
 
         // Drain remaining (may get more data or end).
-        loop {
-            match src.poll().unwrap() {
-                Some(chunk) => {
-                    // Subsequent chunks should NOT have metadata.
-                    assert!(chunk.metadata.is_none());
-                },
-                None => break,
-            }
+        while let Some(chunk) = src.poll().unwrap() {
+            // Subsequent chunks should NOT have metadata.
+            assert!(chunk.metadata.is_none());
         }
     }
 
@@ -703,11 +693,8 @@ mod tests {
 
         src.poll().unwrap(); // Send request.
         let mut received = 0;
-        loop {
-            match src.poll().unwrap() {
-                Some(chunk) => received += chunk.data.len(),
-                None => break,
-            }
+        while let Some(chunk) = src.poll().unwrap() {
+            received += chunk.data.len();
         }
         assert_eq!(received, 50);
         assert_eq!(src.state(), SourceState::Ended);
@@ -784,11 +771,8 @@ mod tests {
 
         src.poll().unwrap(); // Connecting.
         let mut total = 0;
-        loop {
-            match src.poll().unwrap() {
-                Some(chunk) => total += chunk.data.len(),
-                None => break,
-            }
+        while let Some(chunk) = src.poll().unwrap() {
+            total += chunk.data.len();
         }
         assert_eq!(total, 200);
         assert_eq!(src.state(), SourceState::Ended);
@@ -1117,17 +1101,12 @@ mod tests {
         // Phase 2: Streaming data.
         let mut total_data = Vec::new();
         let mut got_metadata = false;
-        loop {
-            match src.poll().unwrap() {
-                Some(chunk) => {
-                    if let Some(ref meta) = chunk.metadata {
-                        assert_eq!(meta.title, "Band - Song");
-                        got_metadata = true;
-                    }
-                    total_data.extend_from_slice(&chunk.data);
-                },
-                None => break,
+        while let Some(chunk) = src.poll().unwrap() {
+            if let Some(ref meta) = chunk.metadata {
+                assert_eq!(meta.title, "Band - Song");
+                got_metadata = true;
             }
+            total_data.extend_from_slice(&chunk.data);
         }
 
         // Phase 3: Verification.
@@ -1151,14 +1130,9 @@ mod tests {
         src.poll().unwrap(); // Send request.
         let mut received = 0;
         let mut polls = 0;
-        loop {
-            match src.poll().unwrap() {
-                Some(chunk) => {
-                    received += chunk.data.len();
-                    polls += 1;
-                },
-                None => break,
-            }
+        while let Some(chunk) = src.poll().unwrap() {
+            received += chunk.data.len();
+            polls += 1;
         }
         assert_eq!(received, 65536);
         assert!(polls > 1, "should take multiple polls for 64KB");

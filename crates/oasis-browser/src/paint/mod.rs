@@ -215,7 +215,7 @@ pub fn paint(
 
     Ok(PaintResult {
         links: ctx.links,
-        content_height: layout.dimensions.margin_box().height,
+        content_height: layout.scrollable_height(),
     })
 }
 
@@ -302,11 +302,13 @@ pub(super) fn paint_box(
     let screen_x = layout_box.dimensions.content.x - ctx.scroll_x;
     let box_right = screen_x + layout_box.dimensions.margin_box().width;
 
-    // Cull boxes that are entirely outside the viewport.
-    if box_bottom < 0.0 || screen_y > ctx.viewport_height {
-        return Ok(());
-    }
-    if box_right < 0.0 || screen_x > ctx.viewport_width {
+    // Cull boxes that are entirely outside the viewport, unless
+    // descendants may overflow into it (see `LayoutBox::clips_overflow`).
+    let offscreen = box_bottom < 0.0
+        || screen_y > ctx.viewport_height
+        || box_right < 0.0
+        || screen_x > ctx.viewport_width;
+    if offscreen && (layout_box.clips_overflow() || layout_box.children.is_empty()) {
         return Ok(());
     }
 
@@ -340,7 +342,9 @@ pub(super) fn paint_box(
         }
     }
 
-    let is_visible = layout_box.style.visibility == Visibility::Visible;
+    // An off-screen box that survived culling is only visited for its
+    // overflowing descendants; it paints nothing of its own.
+    let is_visible = layout_box.style.visibility == Visibility::Visible && !offscreen;
 
     // Track whether we just entered a link element.
     let entered_link = if let Some(node_id) = layout_box.node {
@@ -919,6 +923,7 @@ pub(super) fn paint_box(
 
     // Record a link hit region when leaving a link element.
     if let Some((ref href, link_node)) = ctx.current_link
+        && !offscreen
         && (layout_box.node == Some(link_node) || has_text_content(layout_box))
     {
         let border = layout_box.dimensions.border_box();

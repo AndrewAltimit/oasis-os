@@ -458,17 +458,17 @@ mod tests {
 
     impl NetworkStream for TcpNetworkStream {
         fn read(&mut self, buf: &mut [u8]) -> Result<usize> {
-            self.0.read(buf).map_err(|e| OasisError::Io(e))
+            self.0.read(buf).map_err(OasisError::Io)
         }
 
         fn write(&mut self, data: &[u8]) -> Result<usize> {
-            self.0.write(data).map_err(|e| OasisError::Io(e))
+            self.0.write(data).map_err(OasisError::Io)
         }
 
         fn close(&mut self) -> Result<()> {
             self.0
                 .shutdown(std::net::Shutdown::Both)
-                .map_err(|e| OasisError::Io(e))
+                .map_err(OasisError::Io)
         }
     }
 

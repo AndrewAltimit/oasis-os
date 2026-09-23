@@ -507,8 +507,10 @@ mod tests {
     #[test]
     fn constants_sensible() {
         assert_eq!(SLOT_DURATION, 1800); // 30 minutes
-        assert!(VISIBLE_TIME_SLOTS >= 3);
-        assert!(VISIBLE_ROWS >= 3);
-        assert!(MAX_CELLS >= 4);
+        const {
+            assert!(VISIBLE_TIME_SLOTS >= 3);
+            assert!(VISIBLE_ROWS >= 3);
+            assert!(MAX_CELLS >= 4);
+        }
     }
 }

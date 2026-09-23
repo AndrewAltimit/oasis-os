@@ -445,6 +445,8 @@ impl BrowserWidget {
         let start = web_time::Instant::now();
         #[cfg(not(feature = "psp"))]
         let budget = std::time::Duration::from_millis(budget_ms as u64);
+        #[cfg(feature = "psp")]
+        let _ = budget_ms;
 
         while let Some((resolved, request)) = self.pending_images.pop() {
             // Skip if already decoded (e.g. from cache).

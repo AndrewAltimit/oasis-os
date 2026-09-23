@@ -72,25 +72,25 @@ pub fn http_request_guarded(
             extra_headers,
         )?;
 
-        if is_redirect(resp.status_code) {
-            if let Some(location) = find_header(&resp.headers, "location") {
-                let location = location.to_string();
-                current_url = current_url.resolve(&location).ok_or_else(|| {
-                    OasisError::Backend(format!("bad redirect Location: {location}").into())
-                })?;
-                if !redirect_ok(&current_url) {
-                    return Err(OasisError::Backend(
-                        format!("redirect to {current_url} blocked by request policy").into(),
-                    ));
-                }
-                // 307/308 must preserve the original method and body.
-                // 301/302/303 convert to GET and drop the body.
-                if !matches!(resp.status_code, 307 | 308) {
-                    current_method = "GET".to_string();
-                    current_body = None;
-                }
-                continue;
+        if is_redirect(resp.status_code)
+            && let Some(location) = find_header(&resp.headers, "location")
+        {
+            let location = location.to_string();
+            current_url = current_url.resolve(&location).ok_or_else(|| {
+                OasisError::Backend(format!("bad redirect Location: {location}").into())
+            })?;
+            if !redirect_ok(&current_url) {
+                return Err(OasisError::Backend(
+                    format!("redirect to {current_url} blocked by request policy").into(),
+                ));
             }
+            // 307/308 must preserve the original method and body.
+            // 301/302/303 convert to GET and drop the body.
+            if !matches!(resp.status_code, 307 | 308) {
+                current_method = "GET".to_string();
+                current_body = None;
+            }
+            continue;
         }
 
         let content_type = find_header(&resp.headers, "content-type")

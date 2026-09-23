@@ -782,10 +782,12 @@ mod tests {
         let bar = StatusBar::new();
         let mut sdi = SdiRegistry::new();
         let at = crate::active_theme::ActiveTheme::default();
-        let mut feat = crate::skin::SkinFeatures::default();
-        feat.show_tabs = true;
-        feat.show_version = true;
-        feat.clock_in_bottombar = false;
+        let feat = crate::skin::SkinFeatures {
+            show_tabs: true,
+            show_version: true,
+            clock_in_bottombar: false,
+            ..Default::default()
+        };
         bar.update_sdi(&mut sdi, &at, &feat);
         assert!(sdi.contains("bar_top"));
         assert!(sdi.contains("bar_version"));
@@ -964,9 +966,11 @@ mod tests {
         let bar = StatusBar::new();
         let mut sdi = SdiRegistry::new();
         let at = crate::active_theme::ActiveTheme::default();
-        let mut feat = crate::skin::SkinFeatures::default();
-        feat.clock_in_bottombar = false;
-        feat.show_version = true;
+        let feat = crate::skin::SkinFeatures {
+            clock_in_bottombar: false,
+            show_version: true,
+            ..Default::default()
+        };
         bar.update_sdi(&mut sdi, &at, &feat);
 
         StatusBar::hide_sdi(&mut sdi);
@@ -984,8 +988,10 @@ mod tests {
         let at = crate::active_theme::ActiveTheme::default();
 
         // First enable to create objects.
-        let mut feat = crate::skin::SkinFeatures::default();
-        feat.show_tabs = true;
+        let mut feat = crate::skin::SkinFeatures {
+            show_tabs: true,
+            ..Default::default()
+        };
         bar.update_sdi(&mut sdi, &at, &feat);
 
         // Now disable and verify they're hidden.
@@ -1003,8 +1009,10 @@ mod tests {
         let at = crate::active_theme::ActiveTheme::default();
 
         // First enable to create objects.
-        let mut feat = crate::skin::SkinFeatures::default();
-        feat.show_version = true;
+        let mut feat = crate::skin::SkinFeatures {
+            show_version: true,
+            ..Default::default()
+        };
         bar.update_sdi(&mut sdi, &at, &feat);
 
         // Now disable and verify they're hidden.
@@ -1021,8 +1029,10 @@ mod tests {
         let at = crate::active_theme::ActiveTheme::default();
 
         // First enable to create objects (top-right rendering path).
-        let mut feat = crate::skin::SkinFeatures::default();
-        feat.clock_in_bottombar = false;
+        let mut feat = crate::skin::SkinFeatures {
+            clock_in_bottombar: false,
+            ..Default::default()
+        };
         bar.update_sdi(&mut sdi, &at, &feat);
 
         // Now disable and verify they're hidden.
@@ -1039,8 +1049,10 @@ mod tests {
         let at = crate::active_theme::ActiveTheme::default();
 
         // First enable to create objects.
-        let mut feat = crate::skin::SkinFeatures::default();
-        feat.show_version = true;
+        let mut feat = crate::skin::SkinFeatures {
+            show_version: true,
+            ..Default::default()
+        };
         bar.update_sdi(&mut sdi, &at, &feat);
 
         // Now disable and verify they're hidden.
@@ -1056,8 +1068,10 @@ mod tests {
         bar.active_tab = TopTab::Apps;
         let mut sdi = SdiRegistry::new();
         let at = crate::active_theme::ActiveTheme::default();
-        let mut feat = crate::skin::SkinFeatures::default();
-        feat.show_tabs = true;
+        let feat = crate::skin::SkinFeatures {
+            show_tabs: true,
+            ..Default::default()
+        };
         bar.update_sdi(&mut sdi, &at, &feat);
 
         let apps_tab = sdi.get("bar_tab_0").unwrap();
@@ -1072,8 +1086,10 @@ mod tests {
         bar.tab_texture_inactive = Some(TextureId(8));
         let mut sdi = SdiRegistry::new();
         let at = crate::active_theme::ActiveTheme::default();
-        let mut feat = crate::skin::SkinFeatures::default();
-        feat.show_tabs = true;
+        let feat = crate::skin::SkinFeatures {
+            show_tabs: true,
+            ..Default::default()
+        };
         bar.update_sdi(&mut sdi, &at, &feat);
 
         assert_eq!(sdi.get("bar_tab_bg_0").unwrap().texture, Some(TextureId(7)));
@@ -1091,8 +1107,10 @@ mod tests {
         let bar = StatusBar::new();
         let mut sdi = SdiRegistry::new();
         let at = crate::active_theme::ActiveTheme::default();
-        let mut feat = crate::skin::SkinFeatures::default();
-        feat.show_tabs = true;
+        let feat = crate::skin::SkinFeatures {
+            show_tabs: true,
+            ..Default::default()
+        };
         bar.update_sdi(&mut sdi, &at, &feat);
         // Simulate a layout.toml `texture =` assignment on the pill.
         sdi.get_mut("bar_tab_bg_0").unwrap().texture = Some(TextureId(42));
@@ -1109,8 +1127,10 @@ mod tests {
         let bar = StatusBar::new();
         let mut sdi = SdiRegistry::new();
         let at = crate::active_theme::ActiveTheme::default();
-        let mut feat = crate::skin::SkinFeatures::default();
-        feat.clock_in_bottombar = true;
+        let feat = crate::skin::SkinFeatures {
+            clock_in_bottombar: true,
+            ..Default::default()
+        };
         bar.update_sdi(&mut sdi, &at, &feat);
         // Either not created, or created and hidden.
         if let Ok(obj) = sdi.get("bar_clock") {
@@ -1132,8 +1152,10 @@ mod tests {
         bar.update_info(Some(&time), None);
         let mut sdi = SdiRegistry::new();
         let at = crate::active_theme::ActiveTheme::default();
-        let mut feat = crate::skin::SkinFeatures::default();
-        feat.clock_in_bottombar = false;
+        let feat = crate::skin::SkinFeatures {
+            clock_in_bottombar: false,
+            ..Default::default()
+        };
         bar.update_sdi(&mut sdi, &at, &feat);
 
         let clock_obj = sdi.get("bar_clock").unwrap();

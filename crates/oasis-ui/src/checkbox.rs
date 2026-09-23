@@ -63,6 +63,76 @@ impl Checkbox {
     }
 }
 
+impl Widget for Checkbox {
+    fn measure(&self, ctx: &DrawContext<'_>, _available_w: u32, _available_h: u32) -> (u32, u32) {
+        let fs = ctx.theme.font_size_md;
+        let text_w = ctx.backend.measure_text(&self.label, fs);
+        let text_h = ctx.backend.measure_text_height(fs);
+        let h = BOX_SIZE.max(text_h);
+        let w = BOX_SIZE + LABEL_GAP + text_w;
+        (w, h)
+    }
+
+    fn draw(&self, ctx: &mut DrawContext<'_>, x: i32, y: i32, _w: u32, h: u32) -> Result<()> {
+        let fs = ctx.theme.font_size_md;
+        let radius = ctx.theme.border_radius_sm;
+        let box_y = y + layout::center(h, BOX_SIZE);
+
+        // Box background.
+        let state = self.state();
+        let box_bg = if self.checked {
+            WidgetStateColors::accent_bg(ctx.theme, state)
+        } else {
+            WidgetStateColors::input_bg(ctx.theme, state)
+        };
+        ctx.backend
+            .fill_rounded_rect(x, box_y, BOX_SIZE, BOX_SIZE, radius, box_bg)?;
+
+        // Box border.
+        let border_color = ctx.theme.interactive_border(self.disabled, self.checked);
+        ctx.backend
+            .stroke_rounded_rect(x, box_y, BOX_SIZE, BOX_SIZE, radius, 1, border_color)?;
+
+        // Keyboard focus ring around the box.
+        if self.focused && !self.disabled {
+            crate::focus::FocusStyle::from_theme(ctx.theme).draw(
+                ctx.backend,
+                x,
+                box_y,
+                BOX_SIZE,
+                BOX_SIZE,
+            )?;
+        }
+
+        // Checkmark.
+        if self.checked {
+            let check_fs = fs.min(10);
+            let ch_w = ctx.backend.measure_text("\u{2713}", check_fs);
+            let ch_h = ctx.backend.measure_text_height(check_fs);
+            let cx = x + layout::center(BOX_SIZE, ch_w);
+            let cy = box_y + layout::center(BOX_SIZE, ch_h);
+            ctx.backend
+                .draw_text("\u{2713}", cx, cy, check_fs, ctx.theme.text_on_accent)?;
+        }
+
+        // Label.
+        if !self.label.is_empty() {
+            let text_h = ctx.backend.measure_text_height(fs);
+            let tx = x + BOX_SIZE as i32 + LABEL_GAP as i32;
+            let ty = y + layout::center(h, text_h);
+            ctx.backend.draw_text(
+                &self.label,
+                tx,
+                ty,
+                fs,
+                ctx.theme.interactive_text(self.disabled),
+            )?;
+        }
+
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -211,75 +281,5 @@ mod tests {
             let c = Checkbox::new("Test", true);
             c.draw(ctx, 0, 0, 200, 20).unwrap();
         });
-    }
-}
-
-impl Widget for Checkbox {
-    fn measure(&self, ctx: &DrawContext<'_>, _available_w: u32, _available_h: u32) -> (u32, u32) {
-        let fs = ctx.theme.font_size_md;
-        let text_w = ctx.backend.measure_text(&self.label, fs);
-        let text_h = ctx.backend.measure_text_height(fs);
-        let h = BOX_SIZE.max(text_h);
-        let w = BOX_SIZE + LABEL_GAP + text_w;
-        (w, h)
-    }
-
-    fn draw(&self, ctx: &mut DrawContext<'_>, x: i32, y: i32, _w: u32, h: u32) -> Result<()> {
-        let fs = ctx.theme.font_size_md;
-        let radius = ctx.theme.border_radius_sm;
-        let box_y = y + layout::center(h, BOX_SIZE);
-
-        // Box background.
-        let state = self.state();
-        let box_bg = if self.checked {
-            WidgetStateColors::accent_bg(ctx.theme, state)
-        } else {
-            WidgetStateColors::input_bg(ctx.theme, state)
-        };
-        ctx.backend
-            .fill_rounded_rect(x, box_y, BOX_SIZE, BOX_SIZE, radius, box_bg)?;
-
-        // Box border.
-        let border_color = ctx.theme.interactive_border(self.disabled, self.checked);
-        ctx.backend
-            .stroke_rounded_rect(x, box_y, BOX_SIZE, BOX_SIZE, radius, 1, border_color)?;
-
-        // Keyboard focus ring around the box.
-        if self.focused && !self.disabled {
-            crate::focus::FocusStyle::from_theme(ctx.theme).draw(
-                ctx.backend,
-                x,
-                box_y,
-                BOX_SIZE,
-                BOX_SIZE,
-            )?;
-        }
-
-        // Checkmark.
-        if self.checked {
-            let check_fs = fs.min(10);
-            let ch_w = ctx.backend.measure_text("\u{2713}", check_fs);
-            let ch_h = ctx.backend.measure_text_height(check_fs);
-            let cx = x + layout::center(BOX_SIZE, ch_w);
-            let cy = box_y + layout::center(BOX_SIZE, ch_h);
-            ctx.backend
-                .draw_text("\u{2713}", cx, cy, check_fs, ctx.theme.text_on_accent)?;
-        }
-
-        // Label.
-        if !self.label.is_empty() {
-            let text_h = ctx.backend.measure_text_height(fs);
-            let tx = x + BOX_SIZE as i32 + LABEL_GAP as i32;
-            let ty = y + layout::center(h, text_h);
-            ctx.backend.draw_text(
-                &self.label,
-                tx,
-                ty,
-                fs,
-                ctx.theme.interactive_text(self.disabled),
-            )?;
-        }
-
-        Ok(())
     }
 }

@@ -9,10 +9,8 @@ use super::streaming_buffer::*;
 // ---------------------------------------------------------------
 
 const _: () = {
-    fn assert_send_sync<T: Send + Sync>() {}
-    fn check() {
-        assert_send_sync::<StreamingBuffer>();
-    }
+    const fn assert_send_sync<T: Send + Sync>() {}
+    assert_send_sync::<StreamingBuffer>();
 };
 
 // ---------------------------------------------------------------
@@ -1286,17 +1284,17 @@ fn seek_then_read_at_various_positions() {
     // Read from middle.
     sb.seek(std::io::SeekFrom::Start(100)).unwrap();
     let mut buf = [0; 4];
-    sb.read(&mut buf).unwrap();
+    sb.read_exact(&mut buf).unwrap();
     assert_eq!(buf, [100, 101, 102, 103]);
 
     // Seek backward and read.
     sb.seek(std::io::SeekFrom::Start(0)).unwrap();
-    sb.read(&mut buf).unwrap();
+    sb.read_exact(&mut buf).unwrap();
     assert_eq!(buf, [0, 1, 2, 3]);
 
     // Seek to end.
     sb.seek(std::io::SeekFrom::Start(252)).unwrap();
-    sb.read(&mut buf).unwrap();
+    sb.read_exact(&mut buf).unwrap();
     assert_eq!(buf, [252, 253, 254, 255]);
 }
 
@@ -1615,13 +1613,13 @@ fn read_priority_header_then_moov_then_buffer() {
     // Read from position 0 -- should serve from retained header.
     sb.seek(std::io::SeekFrom::Start(0)).unwrap();
     let mut buf = [0; 8];
-    sb.read(&mut buf).unwrap();
+    sb.read_exact(&mut buf).unwrap();
     assert_eq!(&buf[4..8], b"ftyp", "should read from retained header");
 
     // Read from moov offset -- should serve from retained moov.
     sb.seek(std::io::SeekFrom::Start(moov_off)).unwrap();
     let mut buf = [0; 8];
-    sb.read(&mut buf).unwrap();
+    sb.read_exact(&mut buf).unwrap();
     assert_eq!(&buf[4..8], b"moov", "should read from retained moov");
 }
 

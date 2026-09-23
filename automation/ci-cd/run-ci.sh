@@ -10,8 +10,8 @@
 # Stages:
 #   autoformat    - cargo fmt --all (format in-place, no --check)
 #   format        - cargo fmt --all -- --check
-#   lint-basic    - cargo clippy --workspace -- -D warnings
-#   lint-full     - cargo clippy --workspace -- -D warnings (same as lint-basic)
+#   lint-basic    - cargo clippy --workspace --all-targets -- -D warnings
+#   lint-full     - cargo clippy --workspace --all-targets -- -D warnings (same as lint-basic)
 #   test          - cargo test --workspace
 #   build         - cargo build --workspace --release
 #   deny          - cargo deny check
@@ -41,7 +41,7 @@ run_autoformat() {
 }
 
 run_lint_basic() {
-    $DOCKER_RUN cargo clippy --workspace -- -D warnings
+    $DOCKER_RUN cargo clippy --workspace --all-targets -- -D warnings
 }
 
 run_test() {

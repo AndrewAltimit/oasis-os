@@ -1,5 +1,8 @@
 //! Benchmarks for VFS (MemoryVfs) operations.
 
+// Benchmark setup panics on failure, like a test.
+#![allow(clippy::unwrap_used)]
+
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use oasis_vfs::MemoryVfs;
 use oasis_vfs::Vfs;

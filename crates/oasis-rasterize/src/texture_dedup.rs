@@ -228,7 +228,7 @@ impl TextureDedup {
 
     /// Number of deduplicated textures currently tracked.
     #[cfg(test)]
-    pub fn len(&self) -> usize {
+    pub(crate) fn len(&self) -> usize {
         self.by_hash.len()
     }
 }

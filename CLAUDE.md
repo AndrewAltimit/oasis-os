@@ -37,12 +37,12 @@ cargo fmt --all -- --check
 cargo fmt --all
 
 # Lint (CI treats warnings as errors)
-cargo clippy --workspace -- -D warnings
+cargo clippy --workspace --all-targets -- -D warnings
 
 # Lint exactly as CI does — ALWAYS run this before opening a PR. The CI image
 # pins a specific Rust version (rust:1.93-slim), so a locally newer/older
 # toolchain can pass clippy while CI fails (lints change between releases).
-docker compose --profile ci run --rm rust-ci cargo clippy --workspace -- -D warnings
+docker compose --profile ci run --rm rust-ci cargo clippy --workspace --all-targets -- -D warnings
 
 # License/advisory audit
 cargo deny check
@@ -215,7 +215,7 @@ Exports C-ABI functions: `oasis_create`, `oasis_create_full`, `oasis_destroy`, `
 - MSRV: 1.91.0 (uses `str::floor_char_boundary`)
 - Max line width: 100 characters
 - Clippy warnings are CI errors (`-D warnings`)
-- Workspace lints: `clone_on_ref_ptr`, `dbg_macro`, `todo`, `unimplemented` = warn; `unsafe_op_in_unsafe_fn` = warn; `unwrap_used` = deny
+- Workspace lints: `clone_on_ref_ptr`, `dbg_macro`, `todo`, `unimplemented` = warn; `unsafe_op_in_unsafe_fn` = warn; `unwrap_used` = deny (`clippy.toml` allows it in `#[test]` / `#[cfg(test)]` code; CI lints all targets, so tests and benches must be clippy-clean too)
 - All unsafe blocks require `// SAFETY:` comments
 - Unit tests are in-module (`#[cfg(test)] mod tests`); add new tests there. A few crates also have `tests/` integration suites (oasis-browser, oasis-terminal, oasis-test-backend, oasis-vfs, oasis-wm) and criterion `benches/`
 - User-flow / wiring changes in the desktop shell get an end-to-end scenario in `crates/oasis-app/tests/e2e_*.rs` using `oasis_app::harness::Harness` (see [`docs/testing.md`](docs/testing.md))

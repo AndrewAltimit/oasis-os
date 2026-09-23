@@ -1147,17 +1147,20 @@ mod tests {
 
     /// Build a table style with default settings.
     fn table_style() -> ComputedStyle {
-        let mut s = ComputedStyle::default();
-        s.display = Display::Table;
-        s.border_collapse = BorderCollapse::Separate;
-        s.border_spacing = 0.0;
-        s
+        ComputedStyle {
+            display: Display::Table,
+            border_collapse: BorderCollapse::Separate,
+            border_spacing: 0.0,
+            ..Default::default()
+        }
     }
 
     /// Build a row box with the given cell children.
     fn make_row(cells: Vec<LayoutBox>) -> LayoutBox {
-        let mut s = ComputedStyle::default();
-        s.display = Display::TableRow;
+        let s = ComputedStyle {
+            display: Display::TableRow,
+            ..Default::default()
+        };
         let mut lb = LayoutBox::new(BoxType::TableRow, s, None);
         lb.children = cells;
         lb
@@ -1165,18 +1168,22 @@ mod tests {
 
     /// Build a simple cell with an explicit width.
     fn make_cell(width: f32) -> LayoutBox {
-        let mut s = ComputedStyle::default();
-        s.display = Display::TableCell;
-        s.width = Dimension::Px(width);
+        let s = ComputedStyle {
+            display: Display::TableCell,
+            width: Dimension::Px(width),
+            ..Default::default()
+        };
         LayoutBox::new(BoxType::TableCell, s, None)
     }
 
     /// Build a cell with explicit width and height.
     fn make_cell_wh(width: f32, height: f32) -> LayoutBox {
-        let mut s = ComputedStyle::default();
-        s.display = Display::TableCell;
-        s.width = Dimension::Px(width);
-        s.height = Dimension::Px(height);
+        let s = ComputedStyle {
+            display: Display::TableCell,
+            width: Dimension::Px(width),
+            height: Dimension::Px(height),
+            ..Default::default()
+        };
         LayoutBox::new(BoxType::TableCell, s, None)
     }
 
@@ -1227,10 +1234,9 @@ mod tests {
 
         // Row 1: one cell spanning 2 columns.
         let wide_cell = make_cell_with_spans(
-            &{
-                let mut s = ComputedStyle::default();
-                s.width = Dimension::Px(100.0);
-                s
+            &ComputedStyle {
+                width: Dimension::Px(100.0),
+                ..Default::default()
             },
             2,
             1,
@@ -1284,11 +1290,10 @@ mod tests {
 
         // Row 1: cell A (rowspan=2) + cell B.
         let cell_a = make_cell_with_spans(
-            &{
-                let mut s = ComputedStyle::default();
-                s.width = Dimension::Px(50.0);
-                s.height = Dimension::Px(60.0);
-                s
+            &ComputedStyle {
+                width: Dimension::Px(50.0),
+                height: Dimension::Px(60.0),
+                ..Default::default()
             },
             1,
             2,
@@ -1511,14 +1516,18 @@ mod tests {
 
         // Build cells with block children so they have measurable
         // positions after layout.
-        let mut c_style = ComputedStyle::default();
-        c_style.display = Display::TableCell;
-        c_style.width = Dimension::Px(50.0);
-        c_style.height = Dimension::Px(20.0);
+        let c_style = ComputedStyle {
+            display: Display::TableCell,
+            width: Dimension::Px(50.0),
+            height: Dimension::Px(20.0),
+            ..Default::default()
+        };
         let mut cell_1 = LayoutBox::new(BoxType::TableCell, c_style.clone(), None);
-        let mut inner_style = ComputedStyle::default();
-        inner_style.display = Display::Block;
-        inner_style.height = Dimension::Px(10.0);
+        let inner_style = ComputedStyle {
+            display: Display::Block,
+            height: Dimension::Px(10.0),
+            ..Default::default()
+        };
         cell_1.children = vec![LayoutBox::new(BoxType::Block, inner_style.clone(), None)];
 
         let mut cell_2 = LayoutBox::new(BoxType::TableCell, c_style, None);
@@ -1577,11 +1586,13 @@ mod tests {
 
         // Row with two cells of different heights.
         let cell1 = make_cell_wh(50.0, 40.0);
-        let mut cell2_style = ComputedStyle::default();
-        cell2_style.display = Display::TableCell;
-        cell2_style.width = Dimension::Px(50.0);
-        cell2_style.height = Dimension::Px(20.0);
-        cell2_style.vertical_align = VerticalAlign::Middle;
+        let cell2_style = ComputedStyle {
+            display: Display::TableCell,
+            width: Dimension::Px(50.0),
+            height: Dimension::Px(20.0),
+            vertical_align: VerticalAlign::Middle,
+            ..Default::default()
+        };
         let cell2 = LayoutBox::new(BoxType::TableCell, cell2_style, None);
 
         let row = make_row(vec![cell1, cell2]);
@@ -1605,8 +1616,10 @@ mod tests {
         // Simulate <tbody> wrapping a row (display: block wrapper).
         let cell = make_cell(50.0);
         let row = make_row(vec![cell]);
-        let mut tbody_style = ComputedStyle::default();
-        tbody_style.display = Display::Block;
+        let tbody_style = ComputedStyle {
+            display: Display::Block,
+            ..Default::default()
+        };
         let mut tbody = LayoutBox::new(BoxType::Block, tbody_style, None);
         tbody.children = vec![row];
 
@@ -1635,9 +1648,11 @@ mod tests {
         let inner_table = layout_table(&[inner_row], &style, 100.0, &m);
 
         // Outer table with a cell containing the inner table.
-        let mut outer_cell_style = ComputedStyle::default();
-        outer_cell_style.display = Display::TableCell;
-        outer_cell_style.width = Dimension::Px(120.0);
+        let outer_cell_style = ComputedStyle {
+            display: Display::TableCell,
+            width: Dimension::Px(120.0),
+            ..Default::default()
+        };
         let mut outer_cell = LayoutBox::new(BoxType::TableCell, outer_cell_style, None);
         outer_cell.children = vec![inner_table];
 
@@ -1716,8 +1731,10 @@ mod tests {
         let style = table_style();
 
         // A cell with no explicit width -- should expand to available.
-        let mut cell_style = ComputedStyle::default();
-        cell_style.display = Display::TableCell;
+        let cell_style = ComputedStyle {
+            display: Display::TableCell,
+            ..Default::default()
+        };
         let cell = LayoutBox::new(BoxType::TableCell, cell_style, None);
 
         let row = make_row(vec![cell]);

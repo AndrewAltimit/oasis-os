@@ -114,6 +114,107 @@ impl RadioGroup {
     }
 }
 
+impl Widget for RadioGroup {
+    fn measure(&self, ctx: &DrawContext<'_>, _available_w: u32, _available_h: u32) -> (u32, u32) {
+        if self.options.is_empty() {
+            return (0, 0);
+        }
+        let fs = ctx.theme.font_size_md;
+        let row_h = Self::row_height(ctx);
+
+        let max_label_w = self
+            .options
+            .iter()
+            .map(|o| ctx.backend.measure_text(o, fs))
+            .max()
+            .unwrap_or(0);
+        let w = CIRCLE_SIZE + LABEL_GAP + max_label_w;
+        let h = row_h * self.options.len() as u32
+            + ITEM_SPACING * self.options.len().saturating_sub(1) as u32;
+        (w, h)
+    }
+
+    fn draw(&self, ctx: &mut DrawContext<'_>, x: i32, y: i32, _w: u32, _h: u32) -> Result<()> {
+        let fs = ctx.theme.font_size_md;
+        let row_h = Self::row_height(ctx);
+        let text_h = ctx.backend.measure_text_height(fs);
+        let r = CIRCLE_SIZE / 2;
+
+        for (i, option) in self.options.iter().enumerate() {
+            let iy = y + (i as u32 * (row_h + ITEM_SPACING)) as i32;
+            let is_selected = i == self.selected;
+
+            // Outer circle (as rounded rect with full radius).
+            let circle_y = iy + layout::center(row_h, CIRCLE_SIZE);
+
+            // Interaction fill inside the ring. The resting state draws
+            // no fill (historical look); other states tint the input well.
+            let state = self.option_state(i);
+            if state != WidgetState::Normal {
+                ctx.backend.fill_rounded_rect(
+                    x,
+                    circle_y,
+                    CIRCLE_SIZE,
+                    CIRCLE_SIZE,
+                    r as u16,
+                    WidgetStateColors::input_bg(ctx.theme, state),
+                )?;
+            }
+
+            let border_color = ctx.theme.interactive_border(self.disabled, is_selected);
+            ctx.backend.stroke_rounded_rect(
+                x,
+                circle_y,
+                CIRCLE_SIZE,
+                CIRCLE_SIZE,
+                r as u16,
+                1,
+                border_color,
+            )?;
+
+            // Keyboard focus ring around the selected option's circle.
+            if self.focused && !self.disabled && is_selected {
+                crate::focus::FocusStyle::from_theme(ctx.theme).draw(
+                    ctx.backend,
+                    x,
+                    circle_y,
+                    CIRCLE_SIZE,
+                    CIRCLE_SIZE,
+                )?;
+            }
+
+            // Inner filled dot for selected.
+            if is_selected {
+                let dot_size = CIRCLE_SIZE.saturating_sub(6);
+                let dot_r = dot_size / 2;
+                let dot_x = x + layout::center(CIRCLE_SIZE, dot_size);
+                let dot_y = circle_y + layout::center(CIRCLE_SIZE, dot_size);
+                ctx.backend.fill_rounded_rect(
+                    dot_x,
+                    dot_y,
+                    dot_size,
+                    dot_size,
+                    dot_r as u16,
+                    ctx.theme.interactive_accent(self.disabled),
+                )?;
+            }
+
+            // Label text.
+            let tx = x + CIRCLE_SIZE as i32 + LABEL_GAP as i32;
+            let ty = iy + layout::center(row_h, text_h);
+            ctx.backend.draw_text(
+                option,
+                tx,
+                ty,
+                fs,
+                ctx.theme.interactive_text(self.disabled),
+            )?;
+        }
+
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -324,106 +425,5 @@ mod tests {
             let r = RadioGroup::new(sample());
             r.draw(ctx, 0, 0, 200, 100).unwrap();
         });
-    }
-}
-
-impl Widget for RadioGroup {
-    fn measure(&self, ctx: &DrawContext<'_>, _available_w: u32, _available_h: u32) -> (u32, u32) {
-        if self.options.is_empty() {
-            return (0, 0);
-        }
-        let fs = ctx.theme.font_size_md;
-        let row_h = Self::row_height(ctx);
-
-        let max_label_w = self
-            .options
-            .iter()
-            .map(|o| ctx.backend.measure_text(o, fs))
-            .max()
-            .unwrap_or(0);
-        let w = CIRCLE_SIZE + LABEL_GAP + max_label_w;
-        let h = row_h * self.options.len() as u32
-            + ITEM_SPACING * self.options.len().saturating_sub(1) as u32;
-        (w, h)
-    }
-
-    fn draw(&self, ctx: &mut DrawContext<'_>, x: i32, y: i32, _w: u32, _h: u32) -> Result<()> {
-        let fs = ctx.theme.font_size_md;
-        let row_h = Self::row_height(ctx);
-        let text_h = ctx.backend.measure_text_height(fs);
-        let r = CIRCLE_SIZE / 2;
-
-        for (i, option) in self.options.iter().enumerate() {
-            let iy = y + (i as u32 * (row_h + ITEM_SPACING)) as i32;
-            let is_selected = i == self.selected;
-
-            // Outer circle (as rounded rect with full radius).
-            let circle_y = iy + layout::center(row_h, CIRCLE_SIZE);
-
-            // Interaction fill inside the ring. The resting state draws
-            // no fill (historical look); other states tint the input well.
-            let state = self.option_state(i);
-            if state != WidgetState::Normal {
-                ctx.backend.fill_rounded_rect(
-                    x,
-                    circle_y,
-                    CIRCLE_SIZE,
-                    CIRCLE_SIZE,
-                    r as u16,
-                    WidgetStateColors::input_bg(ctx.theme, state),
-                )?;
-            }
-
-            let border_color = ctx.theme.interactive_border(self.disabled, is_selected);
-            ctx.backend.stroke_rounded_rect(
-                x,
-                circle_y,
-                CIRCLE_SIZE,
-                CIRCLE_SIZE,
-                r as u16,
-                1,
-                border_color,
-            )?;
-
-            // Keyboard focus ring around the selected option's circle.
-            if self.focused && !self.disabled && is_selected {
-                crate::focus::FocusStyle::from_theme(ctx.theme).draw(
-                    ctx.backend,
-                    x,
-                    circle_y,
-                    CIRCLE_SIZE,
-                    CIRCLE_SIZE,
-                )?;
-            }
-
-            // Inner filled dot for selected.
-            if is_selected {
-                let dot_size = CIRCLE_SIZE.saturating_sub(6);
-                let dot_r = dot_size / 2;
-                let dot_x = x + layout::center(CIRCLE_SIZE, dot_size);
-                let dot_y = circle_y + layout::center(CIRCLE_SIZE, dot_size);
-                ctx.backend.fill_rounded_rect(
-                    dot_x,
-                    dot_y,
-                    dot_size,
-                    dot_size,
-                    dot_r as u16,
-                    ctx.theme.interactive_accent(self.disabled),
-                )?;
-            }
-
-            // Label text.
-            let tx = x + CIRCLE_SIZE as i32 + LABEL_GAP as i32;
-            let ty = iy + layout::center(row_h, text_h);
-            ctx.backend.draw_text(
-                option,
-                tx,
-                ty,
-                fs,
-                ctx.theme.interactive_text(self.disabled),
-            )?;
-        }
-
-        Ok(())
     }
 }
