@@ -604,8 +604,11 @@ impl BrowserWidget {
         for start in [old_focus, self.focused_node].into_iter().flatten() {
             let mut cur = Some(start);
             while let Some(nid) = cur {
+                let Some(node) = doc.nodes.get(nid) else {
+                    break;
+                };
                 affected.insert(nid);
-                cur = doc.nodes[nid].parent;
+                cur = node.parent;
             }
         }
 
@@ -1312,8 +1315,11 @@ impl BrowserWidget {
         for start in [old_hover, self.hover_node].into_iter().flatten() {
             let mut cur = Some(start);
             while let Some(nid) = cur {
+                let Some(node) = doc.nodes.get(nid) else {
+                    break;
+                };
                 affected.insert(nid);
-                cur = doc.nodes[nid].parent;
+                cur = node.parent;
             }
         }
 

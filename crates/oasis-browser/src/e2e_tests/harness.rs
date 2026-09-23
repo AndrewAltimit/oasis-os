@@ -373,6 +373,7 @@ impl Session {
     /// [`DEADLINE`]. Prefer this over a fixed [`Session::run_for`] when
     /// asserting on async work (timers, fetches): a loaded CI runner can
     /// stretch wall-clock waits arbitrarily.
+    #[cfg(feature = "javascript")]
     #[track_caller]
     pub fn wait_for(&mut self, needle: &str) {
         let start = Instant::now();

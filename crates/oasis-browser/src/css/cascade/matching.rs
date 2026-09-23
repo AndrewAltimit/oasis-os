@@ -1053,7 +1053,7 @@ pub(super) fn match_pseudo_class(
                     if nid == node_id {
                         return true;
                     }
-                    current = doc.nodes[nid].parent;
+                    current = doc.nodes.get(nid).and_then(|n| n.parent);
                 }
             }
             return false;

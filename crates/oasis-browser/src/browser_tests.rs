@@ -2200,6 +2200,43 @@ fn hover_restyle_is_partial() {
 }
 
 #[test]
+fn page_swap_drops_stale_hover_and_focus_nodes() {
+    // Regression: hovering a node deep in a large page, then loading
+    // a smaller page, left `hover_node` pointing past the end of the
+    // new DOM and the next cursor move panicked with an out-of-bounds
+    // index in the `:hover` ancestor walk.
+    let paragraphs: String = (0..60).map(|i| format!("<p>Paragraph {i}</p>")).collect();
+    let big = format!(
+        "<html><head><style>a:hover {{ color: red; }}</style></head><body>         {paragraphs}<a href=\"link.html\">Link</a></body></html>"
+    );
+    let mut browser = BrowserWidget::new(BrowserConfig::default());
+    browser.load_html(&big, "file:///big.html");
+    let link_node = browser
+        .href_map
+        .keys()
+        .copied()
+        .max()
+        .expect("should have a link");
+    browser.hover_node = Some(link_node);
+    browser.focused_node = Some(link_node);
+
+    browser.load_html(
+        "<html><head><style>a:hover { color: red; }</style></head>         <body><p>Small</p></body></html>",
+        "file:///small.html",
+    );
+    let doc_len = browser.document.as_ref().expect("document").nodes.len();
+    assert!(
+        link_node >= doc_len,
+        "test needs a node id past the new DOM"
+    );
+    assert_eq!(browser.hover_node, None);
+    assert_eq!(browser.focused_node, None);
+
+    // A caller still holding the old id must not panic either.
+    browser.restyle_hover_affected(Some(link_node));
+}
+
+#[test]
 fn image_eviction_respects_budget() {
     // Directly test that decoded_image_lru eviction works by
     // inserting images that exceed the budget.
