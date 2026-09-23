@@ -60,14 +60,15 @@ fn set_timeout_fires_after_ticks_and_rerenders() {
             "<p id=\"t\">TimerPending</p>\
              <script>setTimeout(function () {\
                document.getElementById('t').textContent = 'TimerFired';\
-             }, 100);</script>",
+             }, 1500);</script>",
         )
     });
     let mut s = Session::new();
     s.open(&server.url("/"));
+    // The delay is long enough that loading the page on a busy CI
+    // runner cannot outrun it (a 100 ms timer fired before this check).
     s.assert_shows("TimerPending");
-    s.run_for(350);
-    s.assert_shows("TimerFired");
+    s.wait_for("TimerFired");
 }
 
 #[test]
@@ -83,8 +84,7 @@ fn set_interval_updates_accumulate() {
     });
     let mut s = Session::new();
     s.open(&server.url("/"));
-    s.run_for(400);
-    s.assert_shows("count3");
+    s.wait_for("count3");
 }
 
 #[test]
@@ -121,11 +121,10 @@ fn fetch_same_origin_allowed_cross_origin_blocked() {
     });
     let mut s = Session::new();
     s.open(&server.url("/"));
-    s.run_for(100);
-    s.assert_shows("got-SameOriginData");
-    s.assert_shows("b-blocked");
+    s.wait_for("got-SameOriginData");
+    s.wait_for("b-blocked");
+    s.wait_for("cors-OpenData");
     assert!(!s.shows("LEAKED"));
-    s.assert_shows("cors-OpenData");
 }
 
 #[test]
