@@ -18,3 +18,19 @@ slow-timeout = { period = "60s", terminate-after = 5 }
 fail-fast = false
 failure-output = "immediate-final"
 slow-timeout = { period = "60s", terminate-after = 5 }
+
+# The oasis-app integration suites each boot the whole shell in a debug
+# build, and several loop over every skin. Unthrottled, dozens of them
+# share the pool at once and the every-skin tests have been killed at the
+# 5-minute guard while unrelated wall-clock assertions stretched 2-10x.
+# Cap how many run together and give them a longer hang guard; the Test
+# step's own timeout still bounds the whole run. Overrides in the default
+# profile also apply to the ci profile.
+[test-groups]
+oasis-app-e2e = { max-threads = 8 }
+
+[[profile.default.overrides]]
+filter = 'package(oasis-app) & kind(test)'
+test-group = 'oasis-app-e2e'
+slow-timeout = { period = "60s", terminate-after = 10 }
+

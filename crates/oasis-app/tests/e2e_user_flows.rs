@@ -673,12 +673,21 @@ fn radio_tune_offline_reports_an_error_and_favorites_persist() {
     let mut h = boot("classic");
     assert!(h.click_app_icon("Internet Radio"));
     h.settle();
+    // Time each frame rather than the whole run: a blocking connect
+    // stalls one frame for its full timeout, while a loaded CI pool
+    // spreads scheduler stalls over every frame (30 frames have read >5s
+    // there with no blocking at all).
     let t0 = std::time::Instant::now();
     h.key(Key::Enter); // tune the selected station
-    h.run_frames(30);
+    let mut slowest = t0.elapsed();
+    for _ in 0..30 {
+        let t = std::time::Instant::now();
+        h.step(&[]);
+        slowest = slowest.max(t.elapsed());
+    }
     assert!(
-        t0.elapsed() < std::time::Duration::from_secs(5),
-        "tuning offline must not block the frame loop"
+        slowest < std::time::Duration::from_secs(3),
+        "tuning offline must not block the frame loop (slowest frame {slowest:?})"
     );
     h.render_now();
     let drawn = drawn_in_window(&mut h, "Internet Radio");
