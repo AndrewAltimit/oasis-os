@@ -872,9 +872,10 @@ mod tests {
     fn grid_all_cells_consistent_with_cell_rect() {
         let grid = GridLayout::new(3).with_gap(2, 2);
         let cells = grid.all_cells(10, 20, 200, 100, 6);
-        for i in 0..6 {
+        assert_eq!(cells.len(), 6);
+        for (i, cell) in cells.iter().enumerate() {
             let single = grid.cell_rect(i, 10, 20, 200, 100, 6).unwrap();
-            assert_eq!(cells[i], single);
+            assert_eq!(*cell, single);
         }
     }
 

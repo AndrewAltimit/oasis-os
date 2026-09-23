@@ -889,24 +889,30 @@ mod tests {
 
     #[test]
     fn adjust_master_ratio_clamp_high() {
-        let mut cfg = TilingConfig::default();
-        cfg.master_ratio = 0.85;
+        let mut cfg = TilingConfig {
+            master_ratio: 0.85,
+            ..Default::default()
+        };
         adjust_master_ratio(&mut cfg, 0.2);
         assert!((cfg.master_ratio - 0.9).abs() < f32::EPSILON);
     }
 
     #[test]
     fn adjust_master_ratio_clamp_low() {
-        let mut cfg = TilingConfig::default();
-        cfg.master_ratio = 0.15;
+        let mut cfg = TilingConfig {
+            master_ratio: 0.15,
+            ..Default::default()
+        };
         adjust_master_ratio(&mut cfg, -0.1);
         assert!((cfg.master_ratio - 0.1).abs() < 0.01);
     }
 
     #[test]
     fn adjust_master_ratio_normal() {
-        let mut cfg = TilingConfig::default();
-        cfg.master_ratio = 0.5;
+        let mut cfg = TilingConfig {
+            master_ratio: 0.5,
+            ..Default::default()
+        };
         adjust_master_ratio(&mut cfg, 0.05);
         assert!((cfg.master_ratio - 0.55).abs() < f32::EPSILON);
     }

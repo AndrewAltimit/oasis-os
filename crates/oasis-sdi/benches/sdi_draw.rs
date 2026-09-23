@@ -4,6 +4,9 @@
 //! against a no-op backend, so regressions in z-sorting, name lookups, and
 //! per-object dispatch are caught independently of any real renderer.
 
+// Benchmark setup panics on failure, like a test.
+#![allow(clippy::unwrap_used)]
+
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use oasis_sdi::registry::SdiRegistry;
 use oasis_types::backend::{
@@ -173,7 +176,7 @@ fn bench_draw_excluding_prefixes(c: &mut Criterion) {
             "btn_max",
             "content",
         ] {
-            let obj = reg.create(&format!("win{w}.{suffix}"));
+            let obj = reg.create(format!("win{w}.{suffix}"));
             obj.w = 100;
             obj.h = 80;
         }

@@ -652,7 +652,7 @@ fn draw_text_wrapped_long_word_gets_own_line() {
         .draw_text_wrapped("ABCDEFGH", 0, 0, 8, Color::WHITE, 24, 10)
         .unwrap();
     assert_eq!(h, 10); // Still one line (the word gets its own line)
-    assert!(b.calls().len() >= 1);
+    assert!(!b.calls().is_empty());
 }
 
 #[test]

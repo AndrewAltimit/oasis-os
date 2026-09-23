@@ -167,8 +167,8 @@ mod tests {
         let w: u32 = 3;
         let h: u32 = 2;
         let y = vec![128u8; (w * h) as usize];
-        let u = vec![128u8; ((w.div_ceil(2)) * ((h + 1) / 2)) as usize];
-        let v = vec![128u8; ((w.div_ceil(2)) * ((h + 1) / 2)) as usize];
+        let u = vec![128u8; ((w.div_ceil(2)) * h.div_ceil(2)) as usize];
+        let v = vec![128u8; ((w.div_ceil(2)) * h.div_ceil(2)) as usize];
         let rgba = yuv420_to_rgba(&y, &u, &v, w, h, w as usize, (w.div_ceil(2)) as usize);
         assert_eq!(rgba.len(), (w * h * 4) as usize);
         for pixel in rgba.chunks(4) {

@@ -119,6 +119,16 @@ impl<T> ListView<T> {
     }
 }
 
+impl<T> Widget for ListView<T> {
+    fn measure(&self, _ctx: &DrawContext<'_>, available_w: u32, _available_h: u32) -> (u32, u32) {
+        (available_w, self.content_height())
+    }
+
+    fn draw(&self, ctx: &mut DrawContext<'_>, x: i32, y: i32, w: u32, h: u32) -> Result<()> {
+        self.draw_at(ctx, x, y, w, h)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -210,6 +220,8 @@ mod tests {
 
     /// A render callback that actually draws the item text so we can
     /// assert on `draw_text` calls recorded by `MockBackend`.
+    // `&String` is `&T` for `ListView<String>`; the callback type fixes it.
+    #[allow(clippy::ptr_arg)]
     fn draw_render(
         item: &String,
         ctx: &mut DrawContext<'_>,
@@ -373,15 +385,5 @@ mod tests {
         assert_eq!(lv.index_at(100), None);
         lv.scroll_offset = 40;
         assert_eq!(lv.index_at(0), Some(2));
-    }
-}
-
-impl<T> Widget for ListView<T> {
-    fn measure(&self, _ctx: &DrawContext<'_>, available_w: u32, _available_h: u32) -> (u32, u32) {
-        (available_w, self.content_height())
-    }
-
-    fn draw(&self, ctx: &mut DrawContext<'_>, x: i32, y: i32, w: u32, h: u32) -> Result<()> {
-        self.draw_at(ctx, x, y, w, h)
     }
 }

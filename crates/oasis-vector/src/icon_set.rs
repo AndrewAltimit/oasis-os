@@ -2469,7 +2469,8 @@ mod tests {
 
     #[test]
     fn every_icon_stays_inside_its_box() {
-        let sets: [(&str, fn(IconCategory, Color) -> IconDef); 3] = [
+        type IconFn = fn(IconCategory, Color) -> IconDef;
+        let sets: [(&str, IconFn); 3] = [
             ("outline", outline_icon),
             ("solid", solid_icon),
             ("pixel", pixel_icon),

@@ -72,11 +72,11 @@ fn listen_and_accept() {
     let port = {
         let mut bound = None;
         for _ in 0..20 {
-            if let Some(p) = free_port() {
-                if backend.listen(p).is_ok() {
-                    bound = Some(p);
-                    break;
-                }
+            if let Some(p) = free_port()
+                && backend.listen(p).is_ok()
+            {
+                bound = Some(p);
+                break;
             }
             std::thread::sleep(std::time::Duration::from_millis(10));
         }

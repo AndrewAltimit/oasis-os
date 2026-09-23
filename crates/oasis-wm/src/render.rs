@@ -151,6 +151,21 @@ impl WindowManager {
     }
 }
 
+/// Format `"{id}.{suffix}"` into a stack buffer, returning `&str`.
+pub(crate) fn fmt_sdi_name<'a>(buf: &'a mut [u8; 64], id: &str, suffix: &str) -> &'a str {
+    let id_bytes = id.as_bytes();
+    let suf_bytes = suffix.as_bytes();
+    let total = id_bytes.len() + 1 + suf_bytes.len();
+    if total > buf.len() {
+        return "";
+    }
+    buf[..id_bytes.len()].copy_from_slice(id_bytes);
+    buf[id_bytes.len()] = b'.';
+    buf[id_bytes.len() + 1..total].copy_from_slice(suf_bytes);
+    // SAFETY: id and suffix are valid UTF-8, '.' is ASCII.
+    unsafe { core::str::from_utf8_unchecked(&buf[..total]) }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -301,19 +316,4 @@ mod tests {
 
         assert_eq!(a.0, b.0);
     }
-}
-
-/// Format `"{id}.{suffix}"` into a stack buffer, returning `&str`.
-pub(crate) fn fmt_sdi_name<'a>(buf: &'a mut [u8; 64], id: &str, suffix: &str) -> &'a str {
-    let id_bytes = id.as_bytes();
-    let suf_bytes = suffix.as_bytes();
-    let total = id_bytes.len() + 1 + suf_bytes.len();
-    if total > buf.len() {
-        return "";
-    }
-    buf[..id_bytes.len()].copy_from_slice(id_bytes);
-    buf[id_bytes.len()] = b'.';
-    buf[id_bytes.len() + 1..total].copy_from_slice(suf_bytes);
-    // SAFETY: id and suffix are valid UTF-8, '.' is ASCII.
-    unsafe { core::str::from_utf8_unchecked(&buf[..total]) }
 }

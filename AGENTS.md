@@ -32,7 +32,7 @@ cargo fmt --all -- --check                  # check only
 cargo fmt --all                             # apply
 
 # Linting (CI treats warnings as errors)
-cargo clippy --workspace -- -D warnings
+cargo clippy --workspace --all-targets -- -D warnings
 
 # License/advisory audit
 cargo deny check

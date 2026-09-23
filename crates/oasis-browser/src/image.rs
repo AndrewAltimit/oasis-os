@@ -719,7 +719,7 @@ mod tests {
         let w: u32 = 2;
         let h: u32 = 2;
         let bpp: u16 = 24;
-        let row_bytes = ((w * 3 + 3) / 4) * 4; // 8 bytes (padded)
+        let row_bytes = (w * 3).div_ceil(4) * 4; // 8 bytes (padded)
         let pixel_data_size = row_bytes * h;
         let file_size = 54 + pixel_data_size;
 

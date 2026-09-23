@@ -1085,7 +1085,7 @@ mod tests {
     fn constants() {
         assert_eq!(VISIBLE_OUTPUT_LINES, 12);
         assert_eq!(MAX_OUTPUT_LINES, 2000);
-        assert!(VISIBLE_OUTPUT_LINES < MAX_OUTPUT_LINES);
+        const { assert!(VISIBLE_OUTPUT_LINES < MAX_OUTPUT_LINES) };
     }
 
     #[test]

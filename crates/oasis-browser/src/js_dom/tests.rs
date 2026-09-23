@@ -177,7 +177,7 @@ fn append_child_moves_node() {
         .unwrap();
     let doc = shared.borrow();
     let main = doc.get_element_by_id("main").unwrap();
-    let main_children: Vec<_> = doc.get(main).children.iter().copied().collect();
+    let main_children: Vec<_> = doc.get(main).children.to_vec();
     assert!(
         main_children.iter().all(|&c| !matches!(
             doc.get(c).kind,

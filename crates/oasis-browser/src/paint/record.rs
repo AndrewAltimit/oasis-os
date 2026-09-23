@@ -2463,10 +2463,12 @@ mod form_paint_tests {
     use crate::layout::box_model::{BoxType, Dimensions, LayoutBox, ReplacedContent};
 
     fn make_text_input_box(value: &str, focused: bool, caret: Option<Color>) -> (LayoutBox, bool) {
-        let mut style = ComputedStyle::default();
-        style.font_size = 12.0;
-        style.color = Color::rgb(0, 0, 0);
-        style.caret_color = caret;
+        let style = ComputedStyle {
+            font_size: 12.0,
+            color: Color::rgb(0, 0, 0),
+            caret_color: caret,
+            ..Default::default()
+        };
         let mut lb = LayoutBox::new(
             BoxType::Replaced(ReplacedContent::TextInput {
                 value: value.to_string(),

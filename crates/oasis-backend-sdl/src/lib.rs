@@ -1871,7 +1871,7 @@ mod tests {
                 if ttf.has_glyph(ch) {
                     ttf.advance(ch, 16.0).max(0) as u32
                 } else {
-                    oasis_types::bitmap_font::glyph_advance_scaled(ch, 16) as u32
+                    oasis_types::bitmap_font::glyph_advance_scaled(ch, 16)
                 }
             })
             .sum();

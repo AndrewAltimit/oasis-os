@@ -1,6 +1,9 @@
-//! Benchmark for a full dashboard frame: animation tick + SDI object sync
-//! + registry draw. This is the shell's hottest per-frame path and the
+//! Benchmark for a full dashboard frame: animation tick, SDI object sync
+//! and registry draw. This is the shell's hottest per-frame path and the
 //! regression gate for dashboard/theming performance work.
+
+// Benchmark setup panics on failure, like a test.
+#![allow(clippy::unwrap_used)]
 
 use criterion::{Criterion, criterion_group, criterion_main};
 use oasis_core::dashboard::{AppEntry, DashboardConfig, DashboardState};

@@ -58,7 +58,15 @@ pub use video::*;
 // Tests (Rust-side, exercising the FFI functions directly)
 // ---------------------------------------------------------------------------
 
+// SAFETY (applies to every `unsafe` block in these tests): they call this
+// crate's own C-ABI functions or read their results. Handles come from
+// `create_instance()` (`oasis_create`) and are destroyed exactly once, at
+// the end of the test that made them (or are null where the null path is
+// under test). Pointer arguments point at live locals or `CString`s that
+// outlive the call. `CStr::from_ptr` only reads strings the exports
+// returned, after a non-null check and before `oasis_free_string`.
 #[cfg(test)]
+#[allow(clippy::undocumented_unsafe_blocks)]
 mod tests {
     use std::ffi::{CStr, CString};
     use std::os::raw::c_char;
@@ -393,6 +401,7 @@ mod tests {
         // first.txt should be gone after reset.
         let cmd = CString::new("cat /home/first.txt").unwrap();
         let result = unsafe { oasis_send_command(handle, cmd.as_ptr()) };
+        assert!(!result.is_null());
         let output = unsafe { CStr::from_ptr(result) }.to_string_lossy();
         assert!(
             output.contains("error"),
@@ -403,6 +412,7 @@ mod tests {
         // second.txt should exist.
         let cmd = CString::new("cat /home/second.txt").unwrap();
         let result = unsafe { oasis_send_command(handle, cmd.as_ptr()) };
+        assert!(!result.is_null());
         let output = unsafe { CStr::from_ptr(result) }.to_string_lossy();
         assert!(output.contains("second"));
         unsafe { oasis_free_string(result) };
@@ -540,6 +550,7 @@ mod tests {
 
         let cmd = CString::new("pwd").unwrap();
         let result = unsafe { oasis_send_command(handle, cmd.as_ptr()) };
+        assert!(!result.is_null());
         let output = unsafe { CStr::from_ptr(result) }.to_string_lossy();
         assert!(output.contains("/home"));
         unsafe { oasis_free_string(result) };

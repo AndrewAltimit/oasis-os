@@ -1,5 +1,8 @@
 //! Benchmarks for the oasis-video decode pipeline.
 
+// Benchmark setup panics on failure, like a test.
+#![allow(clippy::unwrap_used)]
+
 use criterion::{Criterion, criterion_group, criterion_main};
 
 fn fixture_path() -> std::path::PathBuf {

@@ -171,7 +171,7 @@ mod tests {
         use core::f32::consts::FRAC_PI_2;
         let (rx, ry) = rotate_point(10, 0, 0, 0, FRAC_PI_2);
         // (10, 0) rotated 90 degrees CW around origin → (0, 10)
-        assert!((rx - 0).abs() <= 1);
+        assert!(rx.abs() <= 1);
         assert!((ry - 10).abs() <= 1);
     }
 

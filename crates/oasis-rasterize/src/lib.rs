@@ -1508,7 +1508,7 @@ mod tests {
             255, 0, 0, 255, 255, 0, 0, 255, 255, 0, 0, 255, 255, 0, 0, 255,
         ];
         buf.blit_texture(&tex_data, 2, 2, 1, 1, 2, 2);
-        let offset = (1 * 10 + 1) * 4;
+        let offset = (10 + 1) * 4;
         assert_eq!(buf.data()[offset], 255);
         assert_eq!(buf.data()[offset + 1], 0);
     }

@@ -173,8 +173,10 @@ mod tests {
     use oasis_core::skin::SkinFeatures;
 
     fn free_dashboard(n: usize) -> DashboardState {
-        let mut features = SkinFeatures::default();
-        features.icon_layout = "free".to_string();
+        let features = SkinFeatures {
+            icon_layout: "free".to_string(),
+            ..Default::default()
+        };
         let at = ActiveTheme::default();
         let config = DashboardConfig::from_features(&features, &at);
         let apps = (0..n)

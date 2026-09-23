@@ -496,8 +496,10 @@ mod tests {
     #[test]
     fn config_from_skin_corrupted_disables_smooth_scroll() {
         let skin = SkinBrowserConfig::corrupted();
-        let mut base = BrowserConfig::default();
-        base.smooth_scroll = true;
+        let base = BrowserConfig {
+            smooth_scroll: true,
+            ..Default::default()
+        };
 
         let result = config_from_skin(&skin, base);
         assert!(

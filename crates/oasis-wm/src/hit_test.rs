@@ -445,35 +445,35 @@ mod tests {
 
         // North edge (top center)
         assert_eq!(
-            hit_test(&[win.clone()], mid_x, 50, &theme),
+            hit_test(std::slice::from_ref(&win), mid_x, 50, &theme),
             HitRegion::ResizeHandle("w1".into(), ResizeEdge::North)
         );
         // South edge (bottom center)
         assert_eq!(
-            hit_test(&[win.clone()], mid_x, 50 + h - 1, &theme),
+            hit_test(std::slice::from_ref(&win), mid_x, 50 + h - 1, &theme),
             HitRegion::ResizeHandle("w1".into(), ResizeEdge::South)
         );
         // West edge (left center)
         assert_eq!(
-            hit_test(&[win.clone()], 50, mid_y, &theme),
+            hit_test(std::slice::from_ref(&win), 50, mid_y, &theme),
             HitRegion::ResizeHandle("w1".into(), ResizeEdge::West)
         );
         // East edge (right center)
         assert_eq!(
-            hit_test(&[win.clone()], 50 + w - 1, mid_y, &theme),
+            hit_test(std::slice::from_ref(&win), 50 + w - 1, mid_y, &theme),
             HitRegion::ResizeHandle("w1".into(), ResizeEdge::East)
         );
         // Corners
         assert_eq!(
-            hit_test(&[win.clone()], 50, 50, &theme),
+            hit_test(std::slice::from_ref(&win), 50, 50, &theme),
             HitRegion::ResizeHandle("w1".into(), ResizeEdge::NorthWest)
         );
         assert_eq!(
-            hit_test(&[win.clone()], 50 + w - 1, 50, &theme),
+            hit_test(std::slice::from_ref(&win), 50 + w - 1, 50, &theme),
             HitRegion::ResizeHandle("w1".into(), ResizeEdge::NorthEast)
         );
         assert_eq!(
-            hit_test(&[win.clone()], 50, 50 + h - 1, &theme),
+            hit_test(std::slice::from_ref(&win), 50, 50 + h - 1, &theme),
             HitRegion::ResizeHandle("w1".into(), ResizeEdge::SouthWest)
         );
         assert_eq!(

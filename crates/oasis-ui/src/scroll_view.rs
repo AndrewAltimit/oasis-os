@@ -99,6 +99,31 @@ impl ScrollView {
     }
 }
 
+impl Widget for ScrollView {
+    fn measure(&self, _ctx: &DrawContext<'_>, available_w: u32, available_h: u32) -> (u32, u32) {
+        (available_w, available_h.min(self.viewport_height))
+    }
+
+    fn draw(&self, ctx: &mut DrawContext<'_>, x: i32, y: i32, w: u32, h: u32) -> Result<()> {
+        let bar_w = if self.needs_scrollbar() {
+            match self.scrollbar_style {
+                ScrollbarStyle::Thin => 3u32,
+                ScrollbarStyle::Wide => 6,
+                ScrollbarStyle::Hidden => 0,
+            }
+        } else {
+            0
+        };
+        let content_w = w.saturating_sub(bar_w + 2);
+
+        // Draw scrollbar.
+        if bar_w > 0 {
+            self.draw_scrollbar(ctx, x + content_w as i32 + 2, y, h)?;
+        }
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -294,30 +319,5 @@ mod tests {
         }
         // content_height (0) <= viewport_height (200), so no scrollbar.
         assert_eq!(backend.fill_rect_count(), 0);
-    }
-}
-
-impl Widget for ScrollView {
-    fn measure(&self, _ctx: &DrawContext<'_>, available_w: u32, available_h: u32) -> (u32, u32) {
-        (available_w, available_h.min(self.viewport_height))
-    }
-
-    fn draw(&self, ctx: &mut DrawContext<'_>, x: i32, y: i32, w: u32, h: u32) -> Result<()> {
-        let bar_w = if self.needs_scrollbar() {
-            match self.scrollbar_style {
-                ScrollbarStyle::Thin => 3u32,
-                ScrollbarStyle::Wide => 6,
-                ScrollbarStyle::Hidden => 0,
-            }
-        } else {
-            0
-        };
-        let content_w = w.saturating_sub(bar_w + 2);
-
-        // Draw scrollbar.
-        if bar_w > 0 {
-            self.draw_scrollbar(ctx, x + content_w as i32 + 2, y, h)?;
-        }
-        Ok(())
     }
 }

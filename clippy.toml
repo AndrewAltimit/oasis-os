@@ -43,3 +43,8 @@ pass-by-value-size-limit = 256
 
 # Literals threshold for clippy::unreadable_literal
 unreadable-literal-lint-fractions = true
+
+# `unwrap_used` is denied workspace-wide, but in tests a panic on an
+# unexpected Err/None *is* the failure report. Allow it in `#[test]`
+# functions and `#[cfg(test)]` code so CI can lint all targets.
+allow-unwrap-in-tests = true

@@ -88,8 +88,10 @@ fn apply_font_weight_bold_number() {
 
 #[test]
 fn apply_font_weight_normal_number() {
-    let mut s = ComputedStyle::default();
-    s.font_weight = FontWeight::BOLD;
+    let mut s = ComputedStyle {
+        font_weight: FontWeight::BOLD,
+        ..Default::default()
+    };
     s.apply_declaration("font-weight", &CssValue::Number(400.0), 16.0);
     assert_eq!(s.font_weight, FontWeight::NORMAL);
 }
@@ -168,8 +170,10 @@ fn resolve_font_size_keywords() {
 
 #[test]
 fn resolve_line_height_number_multiplier() {
-    let mut s = ComputedStyle::default();
-    s.font_size = 20.0;
+    let mut s = ComputedStyle {
+        font_size: 20.0,
+        ..Default::default()
+    };
     s.apply_declaration("line-height", &CssValue::Number(1.5), 16.0);
     // 1.5 * 20.0 = 30.0
     assert!((s.line_height - 30.0).abs() < f32::EPSILON);
@@ -212,8 +216,10 @@ fn test_margin_shorthand_preserves_auto() {
 
 #[test]
 fn test_currentcolor_resolves_to_element_color() {
-    let mut s = ComputedStyle::default();
-    s.color = Color::rgb(255, 0, 0);
+    let mut s = ComputedStyle {
+        color: Color::rgb(255, 0, 0),
+        ..Default::default()
+    };
     s.apply_declaration(
         "border-top-color",
         &CssValue::Keyword("currentcolor".into()),
@@ -250,13 +256,15 @@ fn text_shadow_parsed() {
 
 #[test]
 fn text_shadow_none() {
-    let mut s = ComputedStyle::default();
-    s.text_shadow = Some(TextShadow {
-        offset_x: 1.0,
-        offset_y: 1.0,
-        blur: 0.0,
-        color: Color::rgb(0, 0, 0),
-    });
+    let mut s = ComputedStyle {
+        text_shadow: Some(TextShadow {
+            offset_x: 1.0,
+            offset_y: 1.0,
+            blur: 0.0,
+            color: Color::rgb(0, 0, 0),
+        }),
+        ..Default::default()
+    };
     let value = CssValue::Keyword("none".into());
     s.apply_declaration("text-shadow", &value, 16.0);
     assert!(s.text_shadow.is_none());
@@ -619,8 +627,10 @@ fn parse_text_decoration_thickness_px() {
 
 #[test]
 fn parse_text_decoration_thickness_auto() {
-    let mut s = ComputedStyle::default();
-    s.text_decoration_thickness = Some(3.0);
+    let mut s = ComputedStyle {
+        text_decoration_thickness: Some(3.0),
+        ..Default::default()
+    };
     s.apply_declaration(
         "text-decoration-thickness",
         &CssValue::Keyword("auto".into()),
@@ -805,8 +815,10 @@ fn margin_inline_start_resolves_to_left_in_ltr() {
 #[test]
 fn margin_inline_start_resolves_to_right_in_rtl() {
     use crate::css::parser::LengthUnit;
-    let mut s = ComputedStyle::default();
-    s.direction = TextDirection::Rtl;
+    let mut s = ComputedStyle {
+        direction: TextDirection::Rtl,
+        ..Default::default()
+    };
     s.apply_declaration(
         "margin-inline-start",
         &CssValue::Length(10.0, LengthUnit::Px),
@@ -831,8 +843,10 @@ fn margin_inline_end_resolves_to_right_in_ltr() {
 #[test]
 fn margin_inline_end_resolves_to_left_in_rtl() {
     use crate::css::parser::LengthUnit;
-    let mut s = ComputedStyle::default();
-    s.direction = TextDirection::Rtl;
+    let mut s = ComputedStyle {
+        direction: TextDirection::Rtl,
+        ..Default::default()
+    };
     s.apply_declaration(
         "margin-inline-end",
         &CssValue::Length(20.0, LengthUnit::Px),
@@ -844,8 +858,10 @@ fn margin_inline_end_resolves_to_left_in_rtl() {
 #[test]
 fn padding_inline_start_rtl() {
     use crate::css::parser::LengthUnit;
-    let mut s = ComputedStyle::default();
-    s.direction = TextDirection::Rtl;
+    let mut s = ComputedStyle {
+        direction: TextDirection::Rtl,
+        ..Default::default()
+    };
     s.apply_declaration(
         "padding-inline-start",
         &CssValue::Length(8.0, LengthUnit::Px),
@@ -858,8 +874,10 @@ fn padding_inline_start_rtl() {
 #[test]
 fn border_inline_start_width_rtl() {
     use crate::css::parser::LengthUnit;
-    let mut s = ComputedStyle::default();
-    s.direction = TextDirection::Rtl;
+    let mut s = ComputedStyle {
+        direction: TextDirection::Rtl,
+        ..Default::default()
+    };
     s.apply_declaration(
         "border-inline-start-width",
         &CssValue::Length(2.0, LengthUnit::Px),
@@ -897,8 +915,10 @@ fn inset_inline_start_resolves_to_left_in_ltr() {
 #[test]
 fn inset_inline_start_resolves_to_right_in_rtl() {
     use crate::css::parser::LengthUnit;
-    let mut s = ComputedStyle::default();
-    s.direction = TextDirection::Rtl;
+    let mut s = ComputedStyle {
+        direction: TextDirection::Rtl,
+        ..Default::default()
+    };
     s.apply_declaration(
         "inset-inline-start",
         &CssValue::Length(12.0, LengthUnit::Px),
@@ -940,8 +960,10 @@ fn inset_inline_end_resolves_to_right_in_ltr() {
 #[test]
 fn inset_inline_end_resolves_to_left_in_rtl() {
     use crate::css::parser::LengthUnit;
-    let mut s = ComputedStyle::default();
-    s.direction = TextDirection::Rtl;
+    let mut s = ComputedStyle {
+        direction: TextDirection::Rtl,
+        ..Default::default()
+    };
     s.apply_declaration(
         "inset-inline-end",
         &CssValue::Length(24.0, LengthUnit::Px),

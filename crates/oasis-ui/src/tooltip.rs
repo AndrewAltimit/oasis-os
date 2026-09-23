@@ -232,6 +232,47 @@ impl TooltipAnchor {
     }
 }
 
+impl Widget for Tooltip {
+    fn measure(&self, ctx: &DrawContext<'_>, _available_w: u32, _available_h: u32) -> (u32, u32) {
+        let fs = ctx.theme.font_size_xs;
+        let text_w = ctx.backend.measure_text(&self.text, fs);
+        let text_h = ctx.backend.measure_text_height(fs);
+        (text_w + self.pad_h * 2, text_h + self.pad_v * 2)
+    }
+
+    fn draw(&self, ctx: &mut DrawContext<'_>, x: i32, y: i32, w: u32, h: u32) -> Result<()> {
+        if !self.is_visible() || self.text.is_empty() {
+            return Ok(());
+        }
+
+        let radius = ctx.theme.border_radius_sm;
+        let fs = ctx.theme.font_size_xs;
+
+        // Shadow.
+        ctx.theme
+            .shadow_tooltip
+            .draw(ctx.backend, x, y, w, h, radius)?;
+
+        // Background.
+        ctx.backend
+            .fill_rounded_rect(x, y, w, h, radius, ctx.theme.tooltip_bg)?;
+
+        // Border.
+        ctx.backend
+            .stroke_rounded_rect(x, y, w, h, radius, 1, ctx.theme.border_subtle)?;
+
+        // Text.
+        let text_w = ctx.backend.measure_text(&self.text, fs);
+        let text_h = ctx.backend.measure_text_height(fs);
+        let tx = x + layout::center(w, text_w);
+        let ty = y + layout::center(h, text_h);
+        ctx.backend
+            .draw_text(&self.text, tx, ty, fs, ctx.theme.tooltip_text)?;
+
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -621,46 +662,5 @@ mod tests {
         let (x, y, _w, _h) = t.compute_rect(&ctx, &anchor(0, 0, 10, 10, 20, 20));
         assert!(x >= 0);
         assert!(y >= 0);
-    }
-}
-
-impl Widget for Tooltip {
-    fn measure(&self, ctx: &DrawContext<'_>, _available_w: u32, _available_h: u32) -> (u32, u32) {
-        let fs = ctx.theme.font_size_xs;
-        let text_w = ctx.backend.measure_text(&self.text, fs);
-        let text_h = ctx.backend.measure_text_height(fs);
-        (text_w + self.pad_h * 2, text_h + self.pad_v * 2)
-    }
-
-    fn draw(&self, ctx: &mut DrawContext<'_>, x: i32, y: i32, w: u32, h: u32) -> Result<()> {
-        if !self.is_visible() || self.text.is_empty() {
-            return Ok(());
-        }
-
-        let radius = ctx.theme.border_radius_sm;
-        let fs = ctx.theme.font_size_xs;
-
-        // Shadow.
-        ctx.theme
-            .shadow_tooltip
-            .draw(ctx.backend, x, y, w, h, radius)?;
-
-        // Background.
-        ctx.backend
-            .fill_rounded_rect(x, y, w, h, radius, ctx.theme.tooltip_bg)?;
-
-        // Border.
-        ctx.backend
-            .stroke_rounded_rect(x, y, w, h, radius, 1, ctx.theme.border_subtle)?;
-
-        // Text.
-        let text_w = ctx.backend.measure_text(&self.text, fs);
-        let text_h = ctx.backend.measure_text_height(fs);
-        let tx = x + layout::center(w, text_w);
-        let ty = y + layout::center(h, text_h);
-        ctx.backend
-            .draw_text(&self.text, tx, ty, fs, ctx.theme.tooltip_text)?;
-
-        Ok(())
     }
 }

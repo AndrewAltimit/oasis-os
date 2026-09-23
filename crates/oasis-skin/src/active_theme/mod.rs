@@ -19,6 +19,7 @@ mod defaults;
 mod derive;
 mod methods;
 mod structs;
+#[cfg(test)]
 mod tests;
 
 pub use structs::{

@@ -51,7 +51,7 @@ repos:
       # Clippy lint (runs on every commit when .rs files change)
       - id: rust-clippy-oasis
         name: Rust lint oasis_os
-        entry: bash -c 'source "$HOME/.cargo/env" 2>/dev/null || true; cargo clippy --workspace -- -D warnings'
+        entry: bash -c 'source "$HOME/.cargo/env" 2>/dev/null || true; cargo clippy --workspace --all-targets -- -D warnings'
         language: system
         files: '\.rs$'
         pass_filenames: false

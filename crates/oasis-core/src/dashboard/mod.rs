@@ -1173,10 +1173,12 @@ pub(crate) mod tests {
         psp_at.grid_padding_y = 2;
         psp_at.cursor_pad = 2;
 
-        let mut features = crate::skin::SkinFeatures::default();
-        features.grid_cols = 4;
-        features.grid_rows = 3;
-        features.icons_per_page = 12;
+        let features = crate::skin::SkinFeatures {
+            grid_cols: 4,
+            grid_rows: 3,
+            icons_per_page: 12,
+            ..Default::default()
+        };
 
         let config = DashboardConfig::from_features(&features, &psp_at);
         assert_eq!(config.grid_cols, 4);

@@ -1285,7 +1285,7 @@ mod tests {
 
     #[test]
     fn gzip_bomb_is_rejected() {
-        assert!(BOMB_SIZE > MAX_BODY_SIZE);
+        const { assert!(BOMB_SIZE > MAX_BODY_SIZE) };
         let body = gzip(&vec![0u8; BOMB_SIZE]);
         // The compressed form is tiny, so it passes the wire-size limit...
         assert!(body.len() < 64 * 1024, "compressed {} bytes", body.len());

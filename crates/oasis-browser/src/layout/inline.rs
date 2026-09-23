@@ -1080,16 +1080,19 @@ mod tests {
     }
 
     fn inline_style() -> ComputedStyle {
-        let mut s = ComputedStyle::default();
-        s.display = Display::Inline;
-        s.font_size = 16.0;
-        s.line_height = 20.0;
-        s
+        ComputedStyle {
+            display: Display::Inline,
+            font_size: 16.0,
+            line_height: 20.0,
+            ..Default::default()
+        }
     }
 
     fn anon_parent(width: f32) -> LayoutBox {
-        let mut s = ComputedStyle::default();
-        s.display = Display::Block;
+        let s = ComputedStyle {
+            display: Display::Block,
+            ..Default::default()
+        };
         let mut lb = LayoutBox::new(BoxType::Anonymous, s, None);
         lb.dimensions.content.width = width;
         lb.dimensions.content.x = 0.0;
@@ -1290,11 +1293,13 @@ mod tests {
     #[test]
     fn nowrap_layout_produces_single_line() {
         let m = FixedMeasurer;
-        let mut style = ComputedStyle::default();
-        style.display = Display::Block;
-        style.white_space = WhiteSpace::NoWrap;
-        style.font_size = 16.0;
-        style.line_height = 20.0;
+        let style = ComputedStyle {
+            display: Display::Block,
+            white_space: WhiteSpace::NoWrap,
+            font_size: 16.0,
+            line_height: 20.0,
+            ..Default::default()
+        };
 
         let mut parent = LayoutBox::new(BoxType::Anonymous, style.clone(), None);
         parent.dimensions.content.width = 50.0; // very narrow

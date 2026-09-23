@@ -1249,7 +1249,7 @@ OASIS_OS uses Docker-based CI execution (container-first philosophy). All CI sta
 ```bash
 # Docker-based execution
 docker compose --profile ci run --rm rust-ci cargo fmt --all -- --check
-docker compose --profile ci run --rm rust-ci cargo clippy --workspace -- -D warnings
+docker compose --profile ci run --rm rust-ci cargo clippy --workspace --all-targets -- -D warnings
 docker compose --profile ci run --rm rust-ci cargo test --workspace
 docker compose --profile ci run --rm rust-ci cargo build --workspace --release
 docker compose --profile ci run --rm rust-ci cargo deny check

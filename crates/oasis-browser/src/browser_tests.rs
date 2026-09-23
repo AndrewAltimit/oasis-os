@@ -3379,14 +3379,12 @@ fn js_click_handler_infinite_loop_is_interrupted() {
 /// Tick + paint the way a host's frame loop does, until the widget stops
 /// asking for frames. Returns the number of frames painted.
 fn settle(browser: &mut BrowserWidget, vfs: &dyn Vfs, backend: &mut MockBackend) -> usize {
-    let mut drawn = 0;
-    for _ in 0..500 {
+    for drawn in 0..500 {
         browser.tick(vfs);
         if !browser.wants_frame() {
             return drawn;
         }
         browser.paint(backend).unwrap();
-        drawn += 1;
         std::thread::sleep(std::time::Duration::from_millis(2));
     }
     panic!("browser never settled");
@@ -3466,8 +3464,10 @@ fn smooth_scroll_moves_and_settles() {
         format!("<html><body>{body}</body></html>").as_bytes(),
     )
     .unwrap();
-    let mut config = BrowserConfig::default();
-    config.smooth_scroll = true;
+    let config = BrowserConfig {
+        smooth_scroll: true,
+        ..Default::default()
+    };
     let mut browser = BrowserWidget::new(config);
     browser.set_window(0, 0, 480, 272);
     browser.navigate_vfs("vfs://sites/long/index.html", &vfs);

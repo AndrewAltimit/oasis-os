@@ -82,6 +82,118 @@ impl TabBar {
     }
 }
 
+impl Widget for TabBar {
+    fn measure(&self, ctx: &DrawContext<'_>, available_w: u32, _available_h: u32) -> (u32, u32) {
+        let h = ctx.backend.measure_text_height(ctx.theme.font_size_md) + 8;
+        (available_w, h)
+    }
+
+    fn draw(&self, ctx: &mut DrawContext<'_>, x: i32, y: i32, w: u32, h: u32) -> Result<()> {
+        if self.tabs.is_empty() {
+            return Ok(());
+        }
+        let n = self.tabs.len() as u32;
+        let tab_w = w / n;
+        let remainder = w % n;
+        let fs = ctx.theme.font_size_md;
+        let text_h = ctx.backend.measure_text_height(fs);
+
+        for (i, tab) in self.tabs.iter().enumerate() {
+            // Distribute remainder pixels across the first N tabs.
+            let extra_before: u32 = (i as u32).min(remainder);
+            let this_tab_w = tab_w + if (i as u32) < remainder { 1 } else { 0 };
+            let tx = x + (i as u32 * tab_w + extra_before) as i32;
+            let active = i == self.active;
+            let state = self.tab_state(i);
+            let active_fill = WidgetStateColors::accent_bg(ctx.theme, state);
+
+            // Hover / press feedback on inactive tabs (none at rest).
+            if !active && matches!(state, WidgetState::Hover | WidgetState::Pressed) {
+                ctx.backend.fill_rounded_rect(
+                    tx + 2,
+                    y + 2,
+                    this_tab_w.saturating_sub(4),
+                    h.saturating_sub(4),
+                    ctx.theme.border_radius_sm,
+                    WidgetStateColors::surface_bg(ctx.theme, state),
+                )?;
+            }
+
+            match self.style {
+                TabStyle::Underline => {
+                    if active {
+                        ctx.backend
+                            .fill_rect(tx, y + h as i32 - 2, this_tab_w, 2, active_fill)?;
+                    }
+                },
+                TabStyle::Filled => {
+                    if active {
+                        ctx.backend.fill_rounded_rect(
+                            tx + 2,
+                            y + 2,
+                            this_tab_w.saturating_sub(4),
+                            h - 4,
+                            ctx.theme.border_radius_sm,
+                            active_fill,
+                        )?;
+                    }
+                },
+                TabStyle::Pill => {
+                    if active {
+                        ctx.backend.fill_rounded_rect(
+                            tx + 2,
+                            y + 2,
+                            this_tab_w.saturating_sub(4),
+                            h - 4,
+                            (h - 4) as u16 / 2,
+                            active_fill,
+                        )?;
+                    }
+                },
+            }
+
+            // Keyboard focus ring around the active tab.
+            if active && self.focused && !self.disabled {
+                crate::focus::FocusStyle::from_theme(ctx.theme).draw(
+                    ctx.backend,
+                    tx,
+                    y,
+                    this_tab_w,
+                    h,
+                )?;
+            }
+
+            let text_w = ctx.backend.measure_text(tab, fs);
+            let label_x = tx + layout::center(this_tab_w, text_w);
+            let label_y = y + layout::center(h, text_h);
+            let color = if active {
+                match self.style {
+                    TabStyle::Underline => ctx.theme.accent,
+                    TabStyle::Filled | TabStyle::Pill => ctx.theme.text_on_accent,
+                }
+            } else if self.disabled {
+                ctx.theme.text_disabled
+            } else {
+                ctx.theme.text_secondary
+            };
+            ctx.backend.draw_text(tab, label_x, label_y, fs, color)?;
+        }
+
+        // Bottom border for underline style.
+        if self.style == TabStyle::Underline {
+            ctx.backend.draw_line(
+                x,
+                y + h as i32 - 1,
+                x + w as i32,
+                y + h as i32 - 1,
+                1,
+                ctx.theme.border_subtle,
+            )?;
+        }
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -281,117 +393,5 @@ mod tests {
         assert_eq!(tb.tab_at(99, 100), Some(2));
         assert_eq!(tb.tab_at(100, 100), None);
         assert_eq!(tb.tab_at(-1, 100), None);
-    }
-}
-
-impl Widget for TabBar {
-    fn measure(&self, ctx: &DrawContext<'_>, available_w: u32, _available_h: u32) -> (u32, u32) {
-        let h = ctx.backend.measure_text_height(ctx.theme.font_size_md) + 8;
-        (available_w, h)
-    }
-
-    fn draw(&self, ctx: &mut DrawContext<'_>, x: i32, y: i32, w: u32, h: u32) -> Result<()> {
-        if self.tabs.is_empty() {
-            return Ok(());
-        }
-        let n = self.tabs.len() as u32;
-        let tab_w = w / n;
-        let remainder = w % n;
-        let fs = ctx.theme.font_size_md;
-        let text_h = ctx.backend.measure_text_height(fs);
-
-        for (i, tab) in self.tabs.iter().enumerate() {
-            // Distribute remainder pixels across the first N tabs.
-            let extra_before: u32 = (i as u32).min(remainder);
-            let this_tab_w = tab_w + if (i as u32) < remainder { 1 } else { 0 };
-            let tx = x + (i as u32 * tab_w + extra_before) as i32;
-            let active = i == self.active;
-            let state = self.tab_state(i);
-            let active_fill = WidgetStateColors::accent_bg(ctx.theme, state);
-
-            // Hover / press feedback on inactive tabs (none at rest).
-            if !active && matches!(state, WidgetState::Hover | WidgetState::Pressed) {
-                ctx.backend.fill_rounded_rect(
-                    tx + 2,
-                    y + 2,
-                    this_tab_w.saturating_sub(4),
-                    h.saturating_sub(4),
-                    ctx.theme.border_radius_sm,
-                    WidgetStateColors::surface_bg(ctx.theme, state),
-                )?;
-            }
-
-            match self.style {
-                TabStyle::Underline => {
-                    if active {
-                        ctx.backend
-                            .fill_rect(tx, y + h as i32 - 2, this_tab_w, 2, active_fill)?;
-                    }
-                },
-                TabStyle::Filled => {
-                    if active {
-                        ctx.backend.fill_rounded_rect(
-                            tx + 2,
-                            y + 2,
-                            this_tab_w.saturating_sub(4),
-                            h - 4,
-                            ctx.theme.border_radius_sm,
-                            active_fill,
-                        )?;
-                    }
-                },
-                TabStyle::Pill => {
-                    if active {
-                        ctx.backend.fill_rounded_rect(
-                            tx + 2,
-                            y + 2,
-                            this_tab_w.saturating_sub(4),
-                            h - 4,
-                            (h - 4) as u16 / 2,
-                            active_fill,
-                        )?;
-                    }
-                },
-            }
-
-            // Keyboard focus ring around the active tab.
-            if active && self.focused && !self.disabled {
-                crate::focus::FocusStyle::from_theme(ctx.theme).draw(
-                    ctx.backend,
-                    tx,
-                    y,
-                    this_tab_w,
-                    h,
-                )?;
-            }
-
-            let text_w = ctx.backend.measure_text(tab, fs);
-            let label_x = tx + layout::center(this_tab_w, text_w);
-            let label_y = y + layout::center(h, text_h);
-            let color = if active {
-                match self.style {
-                    TabStyle::Underline => ctx.theme.accent,
-                    TabStyle::Filled | TabStyle::Pill => ctx.theme.text_on_accent,
-                }
-            } else if self.disabled {
-                ctx.theme.text_disabled
-            } else {
-                ctx.theme.text_secondary
-            };
-            ctx.backend.draw_text(tab, label_x, label_y, fs, color)?;
-        }
-
-        // Bottom border for underline style.
-        if self.style == TabStyle::Underline {
-            ctx.backend.draw_line(
-                x,
-                y + h as i32 - 1,
-                x + w as i32,
-                y + h as i32 - 1,
-                1,
-                ctx.theme.border_subtle,
-            )?;
-        }
-        Ok(())
     }
 }

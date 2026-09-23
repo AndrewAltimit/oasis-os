@@ -140,10 +140,10 @@ Install the missing X11/system development headers for your platform (see "SDL3 
 
 ### Clippy Warnings as Errors
 
-CI runs `cargo clippy --workspace -- -D warnings`. Any warning fails the build. Fix all warnings before pushing:
+CI runs `cargo clippy --workspace --all-targets -- -D warnings`. Any warning fails the build. Fix all warnings before pushing:
 
 ```bash
-cargo clippy --workspace -- -D warnings
+cargo clippy --workspace --all-targets -- -D warnings
 ```
 
 ### `str::floor_char_boundary` Not Found

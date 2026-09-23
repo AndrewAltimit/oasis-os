@@ -312,9 +312,9 @@ mod tests {
 
     #[test]
     fn generate_cursor_has_transparent_pixels() {
-        let (pixels, w, _) = generate_cursor_pixels(1);
-        // Pixel at (5,0) should be transparent.
-        let offset = (0 * w + 5) as usize * 4;
+        let (pixels, _, _) = generate_cursor_pixels(1);
+        // Pixel at (5,0) should be transparent (row 0, so no stride term).
+        let offset = 5 * 4;
         assert_eq!(pixels[offset + 3], 0); // Alpha = 0
     }
 
@@ -322,7 +322,7 @@ mod tests {
     fn generate_cursor_has_black_outline() {
         let (pixels, w, _) = generate_cursor_pixels(1);
         // Pixel at (1,1) should be black outline.
-        let offset = (1 * w + 1) as usize * 4;
+        let offset = (w + 1) as usize * 4;
         assert_eq!(pixels[offset], 0);
         assert_eq!(pixels[offset + 1], 0);
         assert_eq!(pixels[offset + 2], 0);

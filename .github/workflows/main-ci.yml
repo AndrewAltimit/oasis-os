@@ -75,7 +75,7 @@ jobs:
       # -- Clippy Lint -------------------------------------------------------
       - name: Clippy
         timeout-minutes: 10
-        run: docker compose --profile ci run --rm rust-ci cargo clippy --workspace -- -D warnings
+        run: docker compose --profile ci run --rm rust-ci cargo clippy --workspace --all-targets -- -D warnings
 
       # -- Feature-combination check -----------------------------------------
       # The workspace build only compiles oasis-app's default features
@@ -97,7 +97,7 @@ jobs:
         continue-on-error: true
         run: >
           docker compose --profile ci run --rm rust-ci
-          cargo +nightly clippy --workspace -- -D warnings 2>&1 || true
+          cargo +nightly clippy --workspace --all-targets -- -D warnings 2>&1 || true
 
       # -- Documentation Build -----------------------------------------------
       - name: Doc build

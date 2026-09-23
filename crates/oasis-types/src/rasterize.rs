@@ -179,7 +179,7 @@ mod tests {
         assert!(!rec.spans.is_empty());
         // All spans should be between y=0 and y=10.
         for &(_, _, y) in &rec.spans {
-            assert!(y >= 0 && y <= 10);
+            assert!((0..=10).contains(&y));
         }
     }
 

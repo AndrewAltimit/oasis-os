@@ -572,17 +572,19 @@ mod tests {
     }
 
     fn flex_style() -> ComputedStyle {
-        let mut s = ComputedStyle::default();
-        s.display = Display::Flex;
-        s
+        ComputedStyle {
+            display: Display::Flex,
+            ..Default::default()
+        }
     }
 
     fn item_style(width: f32, height: f32) -> ComputedStyle {
-        let mut s = ComputedStyle::default();
-        s.display = Display::Block;
-        s.width = Dimension::Px(width);
-        s.height = Dimension::Px(height);
-        s
+        ComputedStyle {
+            display: Display::Block,
+            width: Dimension::Px(width),
+            height: Dimension::Px(height),
+            ..Default::default()
+        }
     }
 
     fn make_flex_container(style: ComputedStyle, children: Vec<LayoutBox>) -> LayoutBox {

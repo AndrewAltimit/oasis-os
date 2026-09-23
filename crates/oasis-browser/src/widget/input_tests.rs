@@ -36,39 +36,47 @@ fn geometry_equal_color_change_only_is_equal() {
     // a relayout. This is the central invariant the hover-restyle
     // optimization depends on.
     let a = ComputedStyle::default();
-    let mut b = ComputedStyle::default();
-    b.color = Color::rgb(255, 0, 0);
+    let b = ComputedStyle {
+        color: Color::rgb(255, 0, 0),
+        ..Default::default()
+    };
     assert!(styles_geometry_equal(&a, &b));
 }
 
 #[test]
 fn geometry_equal_background_color_change_is_equal() {
     let a = ComputedStyle::default();
-    let mut b = ComputedStyle::default();
-    b.background_color = Color::rgb(0, 0, 255);
+    let b = ComputedStyle {
+        background_color: Color::rgb(0, 0, 255),
+        ..Default::default()
+    };
     assert!(styles_geometry_equal(&a, &b));
 }
 
 #[test]
 fn geometry_equal_opacity_change_is_equal() {
     let a = ComputedStyle::default();
-    let mut b = ComputedStyle::default();
-    b.opacity = 0.5;
+    let b = ComputedStyle {
+        opacity: 0.5,
+        ..Default::default()
+    };
     assert!(styles_geometry_equal(&a, &b));
 }
 
 #[test]
 fn geometry_equal_box_shadow_change_is_equal() {
     let a = ComputedStyle::default();
-    let mut b = ComputedStyle::default();
-    b.box_shadow = vec![BoxShadow {
-        offset_x: 2.0,
-        offset_y: 2.0,
-        blur: 4.0,
-        spread: 0.0,
-        color: Color::rgba(0, 0, 0, 64),
-        inset: false,
-    }];
+    let b = ComputedStyle {
+        box_shadow: vec![BoxShadow {
+            offset_x: 2.0,
+            offset_y: 2.0,
+            blur: 4.0,
+            spread: 0.0,
+            color: Color::rgba(0, 0, 0, 64),
+            inset: false,
+        }],
+        ..Default::default()
+    };
     assert!(styles_geometry_equal(&a, &b));
 }
 
@@ -77,9 +85,11 @@ fn geometry_equal_outline_change_is_equal() {
     // Outline doesn't take space in the box model -- it's a visual
     // ring drawn outside the border.
     let a = ComputedStyle::default();
-    let mut b = ComputedStyle::default();
-    b.outline_width = 2.0;
-    b.outline_color = Color::rgb(255, 200, 0);
+    let b = ComputedStyle {
+        outline_width: 2.0,
+        outline_color: Color::rgb(255, 200, 0),
+        ..Default::default()
+    };
     assert!(styles_geometry_equal(&a, &b));
 }
 
@@ -87,24 +97,30 @@ fn geometry_equal_outline_change_is_equal() {
 fn geometry_equal_margin_change_breaks_equality() {
     // Margins are pure box-model -- ANY change forces relayout.
     let a = ComputedStyle::default();
-    let mut b = ComputedStyle::default();
-    b.margin_top = 8.0;
+    let b = ComputedStyle {
+        margin_top: 8.0,
+        ..Default::default()
+    };
     assert!(!styles_geometry_equal(&a, &b));
 }
 
 #[test]
 fn geometry_equal_padding_change_breaks_equality() {
     let a = ComputedStyle::default();
-    let mut b = ComputedStyle::default();
-    b.padding_left = 4.0;
+    let b = ComputedStyle {
+        padding_left: 4.0,
+        ..Default::default()
+    };
     assert!(!styles_geometry_equal(&a, &b));
 }
 
 #[test]
 fn geometry_equal_border_width_change_breaks_equality() {
     let a = ComputedStyle::default();
-    let mut b = ComputedStyle::default();
-    b.border_top_width = 1.0;
+    let b = ComputedStyle {
+        border_top_width: 1.0,
+        ..Default::default()
+    };
     assert!(!styles_geometry_equal(&a, &b));
 }
 
@@ -121,8 +137,10 @@ fn geometry_equal_font_size_change_breaks_equality() {
 fn geometry_equal_display_change_breaks_equality() {
     use crate::css::values::Display;
     let a = ComputedStyle::default();
-    let mut b = ComputedStyle::default();
-    b.display = Display::None;
+    let b = ComputedStyle {
+        display: Display::None,
+        ..Default::default()
+    };
     assert!(!styles_geometry_equal(&a, &b));
 }
 
@@ -131,8 +149,10 @@ fn geometry_equal_text_align_change_breaks_equality() {
     // text-align changes the position of inline boxes -- relayout.
     use crate::css::values::TextAlign;
     let a = ComputedStyle::default();
-    let mut b = ComputedStyle::default();
-    b.text_align = TextAlign::Right;
+    let b = ComputedStyle {
+        text_align: TextAlign::Right,
+        ..Default::default()
+    };
     assert!(!styles_geometry_equal(&a, &b));
 }
 

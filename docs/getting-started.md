@@ -264,7 +264,7 @@ cargo test --workspace                 # everything
 cargo test -p oasis-browser            # one crate
 cargo test --workspace -- test_name    # one test by name
 cargo fmt --all                        # format (CI: cargo fmt --all -- --check)
-cargo clippy --workspace -- -D warnings  # lint; warnings are CI errors
+cargo clippy --workspace --all-targets -- -D warnings  # lint; warnings are CI errors
 cargo deny check                       # license / advisory audit
 ```
 
@@ -272,7 +272,7 @@ Without ffmpeg dev libraries, exclude `oasis-app` from workspace-wide commands
 and run it separately with the ffmpeg-free features:
 
 ```bash
-cargo clippy --workspace --exclude oasis-app -- -D warnings
+cargo clippy --workspace --exclude oasis-app --all-targets -- -D warnings
 cargo clippy -p oasis-app --no-default-features --features javascript,video-decode -- -D warnings
 ```
 
@@ -286,7 +286,7 @@ The CI container has every desktop dependency (including ffmpeg) preinstalled:
 ```bash
 docker compose --profile ci run --rm rust-ci cargo build --workspace --release
 docker compose --profile ci run --rm rust-ci cargo test --workspace
-docker compose --profile ci run --rm rust-ci cargo clippy --workspace -- -D warnings
+docker compose --profile ci run --rm rust-ci cargo clippy --workspace --all-targets -- -D warnings
 ```
 
 The image is `rust:1.93-slim` plus cmake, X11/audio/ffmpeg dev headers, Rust

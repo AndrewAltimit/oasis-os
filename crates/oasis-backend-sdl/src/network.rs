@@ -61,10 +61,10 @@ mod tests {
     /// Find a free TCP port by binding to port 0 and releasing it.
     fn free_port() -> u16 {
         for _ in 0..20 {
-            if let Ok(tmp) = TcpListener::bind("127.0.0.1:0") {
-                if let Ok(addr) = tmp.local_addr() {
-                    return addr.port();
-                }
+            if let Ok(tmp) = TcpListener::bind("127.0.0.1:0")
+                && let Ok(addr) = tmp.local_addr()
+            {
+                return addr.port();
             }
             std::thread::sleep(std::time::Duration::from_millis(10));
         }

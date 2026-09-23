@@ -13,9 +13,10 @@ impl TextMeasurer for FixedMeasurer {
 }
 
 fn block_style() -> ComputedStyle {
-    let mut s = ComputedStyle::default();
-    s.display = Display::Block;
-    s
+    ComputedStyle {
+        display: Display::Block,
+        ..Default::default()
+    }
 }
 
 // -- text measurer -------------------------------------------------
@@ -821,10 +822,12 @@ fn deeply_nested_blocks_with_margins() {
     let depth = 10;
 
     fn build_nested(depth: usize) -> LayoutBox {
-        let mut style = ComputedStyle::default();
-        style.display = Display::Block;
-        style.margin_left = 2.0;
-        style.margin_right = 2.0;
+        let mut style = ComputedStyle {
+            display: Display::Block,
+            margin_left: 2.0,
+            margin_right: 2.0,
+            ..Default::default()
+        };
         if depth == 0 {
             style.height = Dimension::Px(10.0);
             LayoutBox::new(BoxType::Block, style, None)

@@ -953,13 +953,15 @@ mod tests {
 
     #[test]
     fn inherit_copies_inheritable_properties() {
-        let mut parent = ComputedStyle::default();
-        parent.color = Color::rgb(255, 0, 0);
-        parent.font_size = 20.0;
-        parent.font_weight = FontWeight::BOLD;
-        parent.text_align = TextAlign::Center;
-        parent.visibility = Visibility::Hidden;
-        parent.list_style_type = ListStyleType::Square;
+        let parent = ComputedStyle {
+            color: Color::rgb(255, 0, 0),
+            font_size: 20.0,
+            font_weight: FontWeight::BOLD,
+            text_align: TextAlign::Center,
+            visibility: Visibility::Hidden,
+            list_style_type: ListStyleType::Square,
+            ..Default::default()
+        };
 
         let child = ComputedStyle::inherit(&parent);
 
@@ -986,8 +988,10 @@ mod tests {
             /// ComputedStyle::inherit preserves inheritable props.
             #[test]
             fn inherit_preserves_font_size(fs in 1.0f32..100.0) {
-                let mut parent = ComputedStyle::default();
-                parent.font_size = fs;
+                let parent = ComputedStyle {
+                    font_size: fs,
+                    ..Default::default()
+                };
                 let child = ComputedStyle::inherit(&parent);
                 prop_assert!(
                     (child.font_size - fs).abs() < 0.001,
@@ -1002,9 +1006,11 @@ mod tests {
                 mt in 1.0f32..100.0,
                 mr in 1.0f32..100.0,
             ) {
-                let mut parent = ComputedStyle::default();
-                parent.margin_top = mt;
-                parent.margin_right = mr;
+                let parent = ComputedStyle {
+                    margin_top: mt,
+                    margin_right: mr,
+                    ..Default::default()
+                };
                 let child = ComputedStyle::inherit(&parent);
                 prop_assert!(
                     child.margin_top.abs() < 0.001,
