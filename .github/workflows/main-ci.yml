@@ -280,13 +280,11 @@ jobs:
           RUST_PSP_BUILD_STD=1 cargo psp --release
 
       - name: Build PSP Plugin PRX
-        continue-on-error: true
         run: |
           cd crates/oasis-plugin-psp
           RUST_PSP_BUILD_STD=1 cargo psp --release
 
       - name: Build PSP Recovery EBOOT
-        continue-on-error: true
         run: |
           cd crates/oasis-recovery-psp
           RUST_PSP_BUILD_STD=1 cargo psp --release
@@ -594,7 +592,7 @@ jobs:
     needs: ci
     if: github.ref == 'refs/heads/main'
     runs-on: self-hosted
-    timeout-minutes: 15
+    timeout-minutes: 30
     concurrency:
       group: pages
       cancel-in-progress: false

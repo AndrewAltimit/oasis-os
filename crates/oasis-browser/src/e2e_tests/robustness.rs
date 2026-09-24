@@ -154,7 +154,7 @@ fn many_elements_page() {
     }
     html.push_str("</table></body></html>");
     let took = survive(html, UI_STACK);
-    assert!(took < Duration::from_secs(20), "took {took:?}");
+    assert!(took < DEADLINE, "took {took:?}");
 }
 
 #[test]

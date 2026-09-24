@@ -203,13 +203,16 @@ non-standard requirements; see [psp-architecture.md](psp-architecture.md) and
 1. **The rust-psp fork** -- [github.com/AndrewAltimit/rust-psp](https://github.com/AndrewAltimit/rust-psp),
    not upstream rust-psp. It provides the `psp` crate, the std overlay
    (`rust-std-src/`) that `cargo psp` builds `std` from, and `cargo-psp`.
-   - `crates/oasis-backend-psp` and `crates/oasis-plugin-psp` depend on the
-     fork through an **absolute local `path`** in their `Cargo.toml`
+   - `crates/oasis-backend-psp`, `crates/oasis-plugin-psp` and
+     `crates/oasis-recovery-psp` depend on the fork through an **absolute
+     local `path`** in their `Cargo.toml`
      (`psp = { path = ".../rust-psp/psp", ... }`); edit it to point at your
      checkout (don't commit that change).
-   - The EBOOT build expects `crates/oasis-backend-psp/rust-std-src` to be a
-     symlink to the fork's `rust-std-src/` (it is gitignored):
-     `ln -s /path/to/rust-psp/rust-std-src crates/oasis-backend-psp/rust-std-src`.
+   - `RUST_PSP_BUILD_STD=1 cargo psp` looks for `rust-std-src/` in the crate
+     directory it runs from, so each of those crates needs a (gitignored)
+     symlink to the fork's `rust-std-src/`, e.g.
+     `ln -s /path/to/rust-psp/rust-std-src crates/oasis-backend-psp/rust-std-src`
+     (CI creates all three in `.github/actions/setup-psp`).
    - Some smaller PSP crates (e.g. `oasis-usb-*-psp`) pull the fork by `git`
      URL instead and need no local checkout.
 2. **cargo-psp**: `cargo install cargo-psp` (the fork also carries its own
