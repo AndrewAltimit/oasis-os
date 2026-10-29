@@ -50,7 +50,7 @@ fn assert_not_blank(h: &Harness, what: &str) {
     );
     let px = h.screenshot();
     let mut counts = std::collections::HashMap::<[u8; 3], usize>::new();
-    for p in px.chunks_exact(4) {
+    for p in px.as_chunks::<4>().0 {
         *counts.entry([p[0], p[1], p[2]]).or_default() += 1;
     }
     let total = px.len() / 4;

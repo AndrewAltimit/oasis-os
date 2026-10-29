@@ -1371,7 +1371,7 @@ mod tests {
     fn setup_terminal_objects_sgr_runs() {
         let mut sdi = SdiRegistry::new();
         let at = ActiveTheme::default();
-        let lines = vec![format!("\u{1b}[94mdir/\u{1b}[0m file")];
+        let lines = vec!["\u{1b}[94mdir/\u{1b}[0m file".to_string()];
         setup_terminal_objects(&mut sdi, &lines, "/", "", 0, &at, true);
 
         // First run lives in term_line_0 with the bright-blue slot color.
@@ -1395,7 +1395,7 @@ mod tests {
     fn setup_terminal_objects_sgr_runs_cleared_on_plain_line() {
         let mut sdi = SdiRegistry::new();
         let at = ActiveTheme::default();
-        let colored = vec![format!("\u{1b}[31merr\u{1b}[0m rest")];
+        let colored = vec!["\u{1b}[31merr\u{1b}[0m rest".to_string()];
         setup_terminal_objects(&mut sdi, &colored, "/", "", 0, &at, true);
         assert!(sdi.get("term_line_0_r1").unwrap().visible);
 
@@ -1416,7 +1416,7 @@ mod tests {
     fn set_terminal_visible_hides_run_objects() {
         let mut sdi = SdiRegistry::new();
         let at = ActiveTheme::default();
-        let colored = vec![format!("\u{1b}[32mok\u{1b}[0m done")];
+        let colored = vec!["\u{1b}[32mok\u{1b}[0m done".to_string()];
         setup_terminal_objects(&mut sdi, &colored, "/", "", 0, &at, true);
         assert!(sdi.get("term_line_0_r1").unwrap().visible);
 
