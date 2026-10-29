@@ -596,8 +596,8 @@
     </div>
 
     <div class="build-panel" id="build-psp">
-      <pre><span class="comment"># Requires Rust nightly + cargo-psp</span>
-<span class="cmd">cargo install cargo-psp</span>
+      <pre><span class="comment"># Requires Rust nightly + cargo-psp from the rust-psp fork</span>
+<span class="cmd">cargo install --git https://github.com/AndrewAltimit/rust-psp cargo-psp --locked</span>
 
 <span class="comment"># Build EBOOT.PBP</span>
 <span class="cmd">cd crates/oasis-backend-psp</span>

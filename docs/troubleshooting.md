@@ -45,7 +45,12 @@ If cmake fails with `Couldn't find dependency package for XTEST` (or similar), i
 The PSP backend is excluded from the workspace and requires:
 
 1. **Rust nightly toolchain** -- the `mipsel-sony-psp` target uses `-Z build-std`.
-2. **cargo-psp** -- `cargo install cargo-psp`.
+   Each PSP crate's `rust-toolchain.toml` pins the nightly (with `rust-src`);
+   rustup installs it on first build.
+2. **cargo-psp** from the rust-psp fork, at the revision the crates' `psp`
+   dependency pins (`RUST_PSP_REV` in `.github/workflows/main-ci.yml`):
+   `cargo install --git https://github.com/AndrewAltimit/rust-psp --rev <RUST_PSP_REV> cargo-psp --locked`.
+   The crates.io `cargo-psp` is upstream's and cannot find the fork's std overlay.
 
 Build the EBOOT:
 
@@ -78,6 +83,11 @@ docker compose --profile psp build ppsspp
 # Run headless test
 docker compose --profile psp run --rm -e PPSSPP_HEADLESS=1 ppsspp /roms/release/EBOOT.PBP
 ```
+
+CI's emulator gate is `scripts/psp-smoke-test.sh` (no GPU needed). It boots
+the release EBOOTs in PPSSPPHeadless and fails on a crash, an early exit, or
+missing boot markers in `eboot.log` / `selftest.log`; the script header lists
+the checks. Run it locally after `cargo psp --release`.
 
 ### GPU Passthrough
 
@@ -157,13 +167,15 @@ rustup update stable
 ### PSP Nightly Toolchain Missing
 
 ```
-error: toolchain 'nightly' is not installed
+error: toolchain 'nightly-2026-04-13-x86_64-unknown-linux-gnu' is not installed
 ```
 
-Install it:
+The PSP crates pin a dated nightly in `rust-toolchain.toml`. Recent rustup
+installs it automatically; otherwise install it (run `cargo psp` without
+`+nightly`, which would override the pin):
 
 ```bash
-rustup toolchain install nightly
+rustup toolchain install nightly-2026-04-13 --component rust-src
 ```
 
 ---
