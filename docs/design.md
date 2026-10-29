@@ -172,7 +172,7 @@ oasis-os/
 
 **Implemented infrastructure (in `docker/`):**
 
-- `rust-ci.Dockerfile` -- CI toolchain image (rust:1.93-slim + cmake + X11/audio dev libs + nightly + cargo-deny)
+- `rust-ci.Dockerfile` -- CI toolchain image (rust:1.99-slim + cmake + X11/audio dev libs + nightly + cargo-deny)
 - `ppsspp.Dockerfile` + `ppsspp-entrypoint.sh` -- PPSSPP Docker container for automated PSP testing
 - `ppsspp-patches/` -- placeholder for PPSSPP patches (see §12.2)
 

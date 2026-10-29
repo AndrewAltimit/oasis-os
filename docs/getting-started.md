@@ -8,7 +8,7 @@ running OASIS_OS on each supported target:
 - [UE5 / C FFI](#ue5--c-ffi) -- embed in Unreal Engine 5 or any C host
 - [PSP](#psp) -- PlayStation Portable hardware and the PPSSPP emulator
 
-Common to all targets: **Rust 1.91.0 or later** (the MSRV; CI uses 1.93) and a
+Common to all targets: **Rust 1.91.0 or later** (the MSRV; CI uses 1.99) and a
 clone of the repository:
 
 ```bash
@@ -293,7 +293,7 @@ docker compose --profile ci run --rm rust-ci cargo test --workspace
 docker compose --profile ci run --rm rust-ci cargo clippy --workspace --all-targets -- -D warnings
 ```
 
-The image is `rust:1.93-slim` plus cmake, X11/audio/ffmpeg dev headers, Rust
+The image is `rust:1.99-slim` plus cmake, X11/audio/ffmpeg dev headers, Rust
 nightly, and `cargo-deny`. Run clippy through it before opening a PR: lints
 change between Rust releases, so a different local toolchain can pass while CI
 fails.

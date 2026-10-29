@@ -40,7 +40,7 @@ cargo fmt --all
 cargo clippy --workspace --all-targets -- -D warnings
 
 # Lint exactly as CI does — ALWAYS run this before opening a PR. The CI image
-# pins a specific Rust version (rust:1.93-slim), so a locally newer/older
+# pins a specific Rust version (rust:1.99-slim), so a locally newer/older
 # toolchain can pass clippy while CI fails (lints change between releases).
 docker compose --profile ci run --rm rust-ci cargo clippy --workspace --all-targets -- -D warnings
 
@@ -224,7 +224,7 @@ Exports C-ABI functions: `oasis_create`, `oasis_create_full`, `oasis_destroy`, `
 ## Docker Services
 
 `docker-compose.yml` profiles:
-- `ci` -- rust-ci container (rust:1.93-slim + cmake + X11/audio dev libs + nightly + cargo-deny)
+- `ci` -- rust-ci container (rust:1.99-slim + cmake + X11/audio dev libs + nightly + cargo-deny)
 - `psp` -- PPSSPP emulator (multi-stage build, NVIDIA GPU passthrough)
 - `services` -- MCP server containers (code-quality, content-creation, gemini, etc.)
 
