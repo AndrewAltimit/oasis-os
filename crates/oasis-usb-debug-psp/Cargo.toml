@@ -14,7 +14,7 @@ repository = "https://github.com/AndrewAltimit/oasis-os"
 authors = ["AndrewAltimit"]
 
 [dependencies]
-psp = { git = "https://github.com/AndrewAltimit/rust-psp", rev = "f9ef537" }
+psp = { git = "https://github.com/AndrewAltimit/rust-psp", rev = "40cfeab743b6493828e169ac15fd088d8ad784e9" }
 
 # Standalone crates have their own `[workspace]` and inherit nothing from the
 # parent. Mirror the parent policy so unsafe-block discipline tracks here too.

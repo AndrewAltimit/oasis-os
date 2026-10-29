@@ -18,7 +18,7 @@ edition = "2024"
 license = "MIT"
 
 [dependencies]
-psp = { path = "/home/mikunpc/Documents/repos/rust-psp/psp", features = ["std"] }
+psp = { git = "https://github.com/AndrewAltimit/rust-psp", rev = "40cfeab743b6493828e169ac15fd088d8ad784e9", features = ["std"] }
 
 [patch.crates-io]
 unicode-width = { git = "https://git.sr.ht/~sajattack/unicode-width", rev = "114ac47" }

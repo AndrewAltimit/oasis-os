@@ -103,7 +103,7 @@ version = "0.72.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "993776b509cfb49c750f11b8f07a46fa23e0a1386ffc01fb1e7d343efc387895"
 dependencies = [
- "bitflags 2.10.0",
+ "bitflags 2.13.2",
  "cexpr",
  "clang-sys",
  "itertools",
@@ -125,9 +125,9 @@ checksum = "bef38d45163c2f1dde094a7dfd33ccf595c92905c8f8f4fdc18d06fb1037718a"
 
 [[package]]
 name = "bitflags"
-version = "2.10.0"
+version = "2.13.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "812e12b5285cc515a9c72a5c1d3b6d46a19dac5acfef5265968c166106e31dd3"
+checksum = "3ded4057c258ba199e2d26386d3af3780957ecaee6c4ef4041c6b4b8b97c0b06"
 
 [[package]]
 name = "block-buffer"
@@ -802,9 +802,9 @@ checksum = "b6d2cec3eae94f9f509c767b45932f1ada8350c4bdb85af2fcab4a3c14807981"
 
 [[package]]
 name = "linked_list_allocator"
-version = "0.10.5"
+version = "0.10.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9afa463f5405ee81cdb9cc2baf37e08ec7e4c8209442b5d72c04cfb2cd6e6286"
+checksum = "2b23ac50abb8261cb38c6e2a7192d3302e0836dac1628f6a93b82b4fad185897"
 
 [[package]]
 name = "log"
@@ -884,6 +884,7 @@ dependencies = [
  "oasis-sdi",
  "oasis-skin",
  "oasis-types",
+ "oasis-ui",
  "oasis-vfs",
  "thiserror",
 ]
@@ -966,6 +967,7 @@ dependencies = [
  "oasis-sdi",
  "oasis-skin",
  "oasis-types",
+ "oasis-ui",
  "oasis-vfs",
 ]
 
@@ -978,6 +980,7 @@ dependencies = [
  "oasis-sdi",
  "oasis-skin",
  "oasis-types",
+ "oasis-ui",
  "oasis-vfs",
 ]
 
@@ -986,9 +989,11 @@ name = "oasis-app-settings"
 version = "1.4.0"
 dependencies = [
  "oasis-app-core",
+ "oasis-i18n",
  "oasis-sdi",
  "oasis-skin",
  "oasis-types",
+ "oasis-ui",
  "oasis-vfs",
 ]
 
@@ -997,9 +1002,11 @@ name = "oasis-app-system-monitor"
 version = "1.4.0"
 dependencies = [
  "oasis-app-core",
+ "oasis-platform",
  "oasis-sdi",
  "oasis-skin",
  "oasis-types",
+ "oasis-ui",
  "oasis-vfs",
 ]
 
@@ -1107,6 +1114,7 @@ dependencies = [
  "oasis-app-tv-guide",
  "oasis-audio",
  "oasis-browser",
+ "oasis-i18n",
  "oasis-net",
  "oasis-platform",
  "oasis-sdi",
@@ -1120,6 +1128,16 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror",
+ "toml",
+]
+
+[[package]]
+name = "oasis-i18n"
+version = "1.4.0"
+dependencies = [
+ "log",
+ "oasis-types",
+ "serde",
  "toml",
 ]
 
@@ -1284,10 +1302,10 @@ dependencies = [
 ]
 
 [[package]]
-name = "paste"
-version = "1.0.15"
+name = "pastey"
+version = "0.2.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "57c0d7b74b563b49d38dae00a0c37d4d6de9b432382b2892f0574ddcae73fd0a"
+checksum = "2ee67f1008b1ba2321834326597b8e186293b049a023cdef258527550b9935b4"
 
 [[package]]
 name = "png"
@@ -1360,13 +1378,14 @@ dependencies = [
 [[package]]
 name = "psp"
 version = "1.0.0"
+source = "git+https://github.com/AndrewAltimit/rust-psp?rev=40cfeab743b6493828e169ac15fd088d8ad784e9#40cfeab743b6493828e169ac15fd088d8ad784e9"
 dependencies = [
- "bitflags 2.10.0",
+ "bitflags 2.13.2",
  "libm",
  "linked_list_allocator",
  "num_enum",
  "num_enum_derive",
- "paste",
+ "pastey",
  "spin",
  "unstringify",
 ]
@@ -1659,9 +1678,9 @@ checksum = "e320a6c5ad31d271ad523dcf3ad13e2767ad8b1cb8f047f75a8aeaf8da139da2"
 
 [[package]]
 name = "spin"
-version = "0.9.8"
+version = "0.12.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6980e8d7511241f8acf4aebddbb1ff938df5eebe98691418c4468d0b72a96a67"
+checksum = "0134f9043ed38b087ac4f7d4af44c79e2c9e5094421fe3164f435ce585953b10"
 
 [[package]]
 name = "stable_deref_trait"
