@@ -1,17 +1,20 @@
 # Pinned nightly for the PSP target. Do not replace with a floating `nightly`.
 #
-# `cargo psp` builds `std` from source through the rust-psp fork's overlay
+# This is the nightly rust-psp's CI pins and validates (`NIGHTLY_DATE` in
+# rust-psp's docker/rust-ci.Dockerfile). Keep it identical to that pin for
+# the rust-psp revision in Cargo.toml (`RUST_PSP_REV` in the CI workflows).
+#
+# `cargo psp` builds `std` from source through the rust-psp std overlay
 # (rust-std-src/library/std/src/sys/fs/psp.rs), which is written against one
-# specific nightly's internal `std` APIs. Both directions of drift break the
-# build:
+# specific nightly's internal `std` APIs, and newer nightlies also break the
+# `psp` crate itself. Both directions of drift break the build:
 #
 #   too new (>= ~2026-07)  core's BorrowedCursor gained a generic parameter,
 #                          so the overlay's `BorrowedCursor<'_>` fails E0107
 #   too old (<= ~2026-03)  std lacks `BorrowedCursor::advance_checked`, which
 #                          the overlay calls
 #
-# The overlay documents the API level it tracks (nightly-2026-04-11). Bump this
-# pin only in lockstep with the rust-psp fork's std overlay.
+# Bump this pin only in lockstep with the rust-psp revision.
 [toolchain]
-channel = "nightly-2026-04-15"
+channel = "nightly-2026-04-13"
 components = ["rust-src"]
