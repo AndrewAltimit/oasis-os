@@ -1,0 +1,31 @@
+name: Install cargo-psp
+description: >-
+  Installs cargo-psp (with prxgen, pack-pbp, mksfo and prxmin) from a pinned
+  rust-psp revision, cached per revision on the runner, and adds it to PATH.
+
+inputs:
+  rev:
+    description: rust-psp git revision (full SHA); use the workflow's RUST_PSP_REV
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Install cargo-psp
+      shell: bash
+      env:
+        REV: ${{ inputs.rev }}
+      run: |
+        # The psp crate is pinned to the same revision, and cargo-psp finds
+        # the std overlay (rust-std-src/) next to that git dependency, so no
+        # local rust-psp checkout is needed. The rust-psp fork is not on
+        # crates.io; `cargo install cargo-psp` would fetch upstream's tool.
+        root="$HOME/.cache/oasis-ci/cargo-psp-$REV"
+        if [ ! -x "$root/bin/cargo-psp" ] || [ ! -x "$root/bin/pack-pbp" ]; then
+          # Run outside the checkout so no repo cargo config or toolchain
+          # file applies to the host-side install.
+          (cd "$RUNNER_TEMP" && cargo install --locked --root "$root" \
+            --git https://github.com/AndrewAltimit/rust-psp --rev "$REV" cargo-psp)
+        fi
+        echo "$root/bin" >> "$GITHUB_PATH"
+        echo "cargo-psp from rust-psp $REV: $root/bin"

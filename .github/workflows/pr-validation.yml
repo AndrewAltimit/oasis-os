@@ -24,6 +24,11 @@ concurrency:
 env:
   DOCKER_BUILDKIT: 1
   COMPOSE_DOCKER_CLI_BUILD: 1
+  # rust-psp revision for the PSP builds: every PSP crate pins its `psp`
+  # dependency to it (scripts/check-rust-psp-rev.sh enforces that) and CI
+  # installs cargo-psp from it. Bump both together, along with the nightly
+  # in the crates' rust-toolchain.toml (rust-psp's CI NIGHTLY_DATE).
+  RUST_PSP_REV: 40cfeab743b6493828e169ac15fd088d8ad784e9
 
 jobs:
   # Fork guard: block fork PRs from running on self-hosted runners with write perms
@@ -241,8 +246,13 @@ jobs:
           echo '```' >> $GITHUB_STEP_SUMMARY
 
       # -- PSP Backend Build -------------------------------------------------
-      - name: Setup PSP SDK
-        uses: ./.github/actions/setup-psp
+      - name: Check rust-psp pins
+        run: scripts/check-rust-psp-rev.sh "$RUST_PSP_REV"
+
+      - name: Install cargo-psp
+        uses: ./.github/actions/install-cargo-psp
+        with:
+          rev: ${{ env.RUST_PSP_REV }}
 
       - name: Build PSP EBOOT
         run: |
