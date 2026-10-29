@@ -14,7 +14,7 @@ repository = "https://github.com/AndrewAltimit/oasis-os"
 authors = ["AndrewAltimit"]
 
 [dependencies]
-psp = { git = "https://github.com/AndrewAltimit/rust-psp", rev = "1dd6f00", features = ["kernel"] }
+psp = { git = "https://github.com/AndrewAltimit/rust-psp", rev = "e4cc06f6fa50fa45dc3ae8b332e8a2b67625f588", features = ["kernel"] }
 
 [profile.release]
 opt-level = "z"

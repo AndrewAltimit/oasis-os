@@ -243,7 +243,7 @@ To re-enable at your own risk: set `CODEX_ENABLED=true` in your environment.
 ## Docker Services
 
 `docker-compose.yml` profiles:
-- **`ci`** -- rust-ci container (rust:1.93-slim + cmake + X11/audio dev libs + nightly + cargo-deny)
+- **`ci`** -- rust-ci container (rust:1.99-slim + cmake + X11/audio dev libs + nightly + cargo-deny)
 - **`psp`** -- PPSSPP emulator (multi-stage build, NVIDIA GPU passthrough, X11 forwarding)
 - **`services`** -- All MCP server containers
 - **`memory`** -- AgentCore memory service (also included in `services`)

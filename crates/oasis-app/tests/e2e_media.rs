@@ -245,7 +245,7 @@ fn assert_splash_symmetric(w: u32, h: u32) {
     be.swap_buffers().unwrap();
     let px = be.pixels().to_vec();
     let mut distinct = std::collections::HashSet::new();
-    for p in px.chunks_exact(4) {
+    for p in px.as_chunks::<4>().0 {
         distinct.insert([p[0], p[1], p[2]]);
     }
     assert!(distinct.len() > 16, "{w}x{h}: splash painted a picture");
@@ -287,7 +287,7 @@ fn boot_splash_renders_every_phase() {
         let px = be.pixels();
         let first = &px[..3];
         assert!(
-            px.chunks_exact(4).any(|p| &p[..3] != first),
+            px.as_chunks::<4>().0.iter().any(|p| &p[..3] != first),
             "t={t}: splash frame is a single flat color"
         );
         if t > 0.5 && t < 3.4 {

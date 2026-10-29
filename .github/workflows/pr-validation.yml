@@ -24,6 +24,11 @@ concurrency:
 env:
   DOCKER_BUILDKIT: 1
   COMPOSE_DOCKER_CLI_BUILD: 1
+  # rust-psp revision for the PSP builds: every PSP crate pins its `psp`
+  # dependency to it (scripts/check-rust-psp-rev.sh enforces that) and CI
+  # installs cargo-psp from it. Bump both together, along with the nightly
+  # in the crates' rust-toolchain.toml (rust-psp's CI NIGHTLY_DATE).
+  RUST_PSP_REV: e4cc06f6fa50fa45dc3ae8b332e8a2b67625f588
 
 jobs:
   # Fork guard: block fork PRs from running on self-hosted runners with write perms
@@ -51,12 +56,12 @@ jobs:
           for item in outputs target psp_output_file.log .git/index.lock; do
             [ -e "$item" ] || continue
             rm -rf -- "$item" 2>/dev/null ||
-              docker run --rm -v "$PWD:/workspace" busybox:1.36.1 rm -rf "/workspace/$item" ||
+              docker run --rm -v "$PWD:/workspace" busybox:1.38.0 rm -rf "/workspace/$item" ||
               echo "::warning::could not remove $item"
           done
 
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
           clean: true
@@ -154,7 +159,7 @@ jobs:
 
       - name: Upload screenshot report
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: screenshot-report
           path: screenshots/tests/
@@ -209,7 +214,7 @@ jobs:
           always() &&
           github.event_name == 'workflow_dispatch' &&
           inputs.run_benchmarks
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: benchmark-results
           path: bench_results.txt
@@ -241,8 +246,13 @@ jobs:
           echo '```' >> $GITHUB_STEP_SUMMARY
 
       # -- PSP Backend Build -------------------------------------------------
-      - name: Setup PSP SDK
-        uses: ./.github/actions/setup-psp
+      - name: Check rust-psp pins
+        run: scripts/check-rust-psp-rev.sh "$RUST_PSP_REV"
+
+      - name: Install cargo-psp
+        uses: ./.github/actions/install-cargo-psp
+        with:
+          rev: ${{ env.RUST_PSP_REV }}
 
       - name: Build PSP EBOOT
         run: |
@@ -250,23 +260,21 @@ jobs:
           RUST_PSP_BUILD_STD=1 cargo psp --release
 
       # -- PSP Emulator Test -------------------------------------------------
-      - name: Run OASIS_OS EBOOT in PPSSPPHeadless
-        run: |
-          docker compose --profile psp run --rm -e PPSSPP_HEADLESS=1 ppsspp \
-            /roms/release/EBOOT.PBP --timeout=30 2>/dev/null || true
-
-          if [ -f psp_output_file.log ]; then
-            cat psp_output_file.log
-          else
-            echo "No output log -- headless exited without crash (TIMEOUT ok)"
-          fi
+      # Boots OASIS-OS (normal boot + built-in self-test); fails on a crash,
+      # an early exit or missing boot markers.
+      - name: PSP smoke test (PPSSPPHeadless)
+        env:
+          PSP_SMOKE_WORKDIR: ${{ runner.temp }}/psp-smoke
+        run: >-
+          scripts/psp-smoke-test.sh --backend
+          crates/oasis-backend-psp/target/mipsel-sony-psp-std/release/EBOOT.PBP
 
       - name: Fix Docker file ownership
         if: always()
         run: |
           for dir in target outputs; do
             if [ -d "$dir" ]; then
-              docker run --rm -v "$(pwd)/$dir:/workspace" busybox:1.36.1 \
+              docker run --rm -v "$(pwd)/$dir:/workspace" busybox:1.38.0 \
                 chown -Rh "$(id -u):$(id -g)" /workspace 2>/dev/null || true
             fi
           done
@@ -295,12 +303,12 @@ jobs:
           for item in outputs target psp_output_file.log .git/index.lock; do
             [ -e "$item" ] || continue
             rm -rf -- "$item" 2>/dev/null ||
-              docker run --rm -v "$PWD:/workspace" busybox:1.36.1 rm -rf "/workspace/$item" ||
+              docker run --rm -v "$PWD:/workspace" busybox:1.38.0 rm -rf "/workspace/$item" ||
               echo "::warning::could not remove $item"
           done
 
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
           clean: true
@@ -338,12 +346,12 @@ jobs:
           for item in outputs target psp_output_file.log .git/index.lock; do
             [ -e "$item" ] || continue
             rm -rf -- "$item" 2>/dev/null ||
-              docker run --rm -v "$PWD:/workspace" busybox:1.36.1 rm -rf "/workspace/$item" ||
+              docker run --rm -v "$PWD:/workspace" busybox:1.38.0 rm -rf "/workspace/$item" ||
               echo "::warning::could not remove $item"
           done
 
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
           clean: true
@@ -383,12 +391,12 @@ jobs:
           for item in outputs target psp_output_file.log .git/index.lock; do
             [ -e "$item" ] || continue
             rm -rf -- "$item" 2>/dev/null ||
-              docker run --rm -v "$PWD:/workspace" busybox:1.36.1 rm -rf "/workspace/$item" ||
+              docker run --rm -v "$PWD:/workspace" busybox:1.38.0 rm -rf "/workspace/$item" ||
               echo "::warning::could not remove $item"
           done
 
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
           clean: true
@@ -429,12 +437,12 @@ jobs:
           for item in outputs target psp_output_file.log .git/index.lock; do
             [ -e "$item" ] || continue
             rm -rf -- "$item" 2>/dev/null ||
-              docker run --rm -v "$PWD:/workspace" busybox:1.36.1 rm -rf "/workspace/$item" ||
+              docker run --rm -v "$PWD:/workspace" busybox:1.38.0 rm -rf "/workspace/$item" ||
               echo "::warning::could not remove $item"
           done
 
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
           clean: false
@@ -464,7 +472,7 @@ jobs:
 
       - name: Download review artifacts
         if: steps.iteration.outputs.should_skip != 'true'
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         continue-on-error: true
         with:
           pattern: '*-review-${{ github.run_id }}-${{ github.run_attempt }}'
@@ -529,12 +537,12 @@ jobs:
           for item in outputs target psp_output_file.log .git/index.lock; do
             [ -e "$item" ] || continue
             rm -rf -- "$item" 2>/dev/null ||
-              docker run --rm -v "$PWD:/workspace" busybox:1.36.1 rm -rf "/workspace/$item" ||
+              docker run --rm -v "$PWD:/workspace" busybox:1.38.0 rm -rf "/workspace/$item" ||
               echo "::warning::could not remove $item"
           done
 
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
           clean: false

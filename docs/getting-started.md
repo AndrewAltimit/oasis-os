@@ -8,7 +8,7 @@ running OASIS_OS on each supported target:
 - [UE5 / C FFI](#ue5--c-ffi) -- embed in Unreal Engine 5 or any C host
 - [PSP](#psp) -- PlayStation Portable hardware and the PPSSPP emulator
 
-Common to all targets: **Rust 1.91.0 or later** (the MSRV; CI uses 1.93) and a
+Common to all targets: **Rust 1.91.0 or later** (the MSRV; CI uses 1.99) and a
 clone of the repository:
 
 ```bash
@@ -203,24 +203,25 @@ non-standard requirements; see [psp-architecture.md](psp-architecture.md) and
 1. **The rust-psp fork** -- [github.com/AndrewAltimit/rust-psp](https://github.com/AndrewAltimit/rust-psp),
    not upstream rust-psp. It provides the `psp` crate, the std overlay
    (`rust-std-src/`) that `cargo psp` builds `std` from, and `cargo-psp`.
-   - `crates/oasis-backend-psp`, `crates/oasis-plugin-psp` and
-     `crates/oasis-recovery-psp` depend on the fork through an **absolute
-     local `path`** in their `Cargo.toml`
-     (`psp = { path = ".../rust-psp/psp", ... }`); edit it to point at your
-     checkout (don't commit that change).
-   - `RUST_PSP_BUILD_STD=1 cargo psp` looks for `rust-std-src/` in the crate
-     directory it runs from, so each of those crates needs a (gitignored)
-     symlink to the fork's `rust-std-src/`, e.g.
-     `ln -s /path/to/rust-psp/rust-std-src crates/oasis-backend-psp/rust-std-src`
-     (CI creates all three in `.github/actions/setup-psp`).
-   - Some smaller PSP crates (e.g. `oasis-usb-*-psp`) pull the fork by `git`
-     URL instead and need no local checkout.
-2. **cargo-psp**: `cargo install cargo-psp` (the fork also carries its own
-   `cargo-psp`; prefer that one if the published version lags).
-3. **Pinned nightly**: `crates/oasis-backend-psp/rust-toolchain.toml` pins a
-   specific nightly with `rust-src`; rustup installs it automatically on first
-   build. Don't replace it with a floating `nightly` -- the std overlay only
-   compiles against a narrow nightly range.
+   - Every PSP crate depends on the fork as a `git` dependency pinned to one
+     revision (`psp = { git = "https://github.com/AndrewAltimit/rust-psp",
+     rev = "...", ... }`), so no local checkout is needed. CI names that
+     revision once (`RUST_PSP_REV` in `.github/workflows/main-ci.yml`) and
+     `scripts/check-rust-psp-rev.sh` fails if a crate drifts from it.
+   - `cargo psp` finds the std overlay next to the resolved `psp` package
+     (the build log prints `[NOTE]: Using PSP std overlay at ...`); no
+     symlink is needed.
+2. **cargo-psp** from the fork, built from the same revision as the `psp`
+   dependency (the crates.io `cargo-psp` is upstream's and lacks the std
+   overlay lookup):
+   `cargo install --git https://github.com/AndrewAltimit/rust-psp --rev <RUST_PSP_REV> cargo-psp --locked`.
+   It installs `cargo-psp`, `prxgen`, `pack-pbp`, `mksfo` and `prxmin`; all
+   must be on `PATH`.
+3. **Pinned nightly**: each PSP crate's `rust-toolchain.toml` pins
+   `nightly-2026-04-13` (the nightly rust-psp's CI validates) with
+   `rust-src`; rustup installs it automatically on first build. Don't replace
+   it with a floating `nightly` -- the std overlay and the `psp` crate only
+   compile against a narrow nightly range.
 4. **pspdev toolchain at `/opt/pspdev`** (the official
    [pspdev](https://github.com/pspdev/pspdev) release). The EBOOT compiles
    QuickJS-NG's C sources with `psp-gcc` (`-msingle-float`) and links with
@@ -292,7 +293,7 @@ docker compose --profile ci run --rm rust-ci cargo test --workspace
 docker compose --profile ci run --rm rust-ci cargo clippy --workspace --all-targets -- -D warnings
 ```
 
-The image is `rust:1.93-slim` plus cmake, X11/audio/ffmpeg dev headers, Rust
+The image is `rust:1.99-slim` plus cmake, X11/audio/ffmpeg dev headers, Rust
 nightly, and `cargo-deny`. Run clippy through it before opening a PR: lints
 change between Rust releases, so a different local toolchain can pass while CI
 fails.

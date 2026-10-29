@@ -4,9 +4,12 @@
 # This is a KERNEL-MODE EBOOT. Requires custom firmware (PRO-C2 / ARK-4).
 #
 # Prerequisites:
-#   rustup toolchain install nightly
-#   rustup component add rust-src --toolchain nightly
-#   cargo install cargo-psp
+#   rustup -- the nightly pinned in rust-toolchain.toml (with rust-src) is
+#     installed automatically on the first build.
+#   cargo-psp from the rust-psp fork (crates.io `cargo-psp` is upstream's),
+#     built from the revision the `psp` dependency in Cargo.toml pins:
+#     cargo install --git https://github.com/AndrewAltimit/rust-psp \
+#       --rev <rev from Cargo.toml> cargo-psp --locked
 #
 # Usage:
 #   ./build.sh          # debug build

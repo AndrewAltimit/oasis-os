@@ -1418,7 +1418,7 @@ mod tests {
 
         // update_texture takes the same lock path.
         let mut flipped = pattern.clone();
-        for px in flipped.chunks_exact_mut(4) {
+        for px in flipped.as_chunks_mut::<4>().0 {
             px[2] = 40;
         }
         backend.update_texture(tex, w, h, &flipped).unwrap();
@@ -1448,7 +1448,7 @@ mod tests {
             .unwrap();
         backend.reset_clip_rect().unwrap();
         let px = backend.read_pixels(30, 30, 13, 7).unwrap();
-        for (i, p) in px.chunks_exact(4).enumerate() {
+        for (i, p) in px.as_chunks::<4>().0.iter().enumerate() {
             assert_eq!(p, &[0, 200, 0, 255], "pixel {i} of the composited layer");
         }
     }
@@ -1515,7 +1515,7 @@ mod tests {
             .composite_render_target(rt, 10, 10, 13, 7, BlendMode::Normal, 1.0)
             .unwrap();
         let px = backend.read_pixels(10, 10, 13, 7).unwrap();
-        for (i, p) in px.chunks_exact(4).enumerate() {
+        for (i, p) in px.as_chunks::<4>().0.iter().enumerate() {
             assert_eq!(p, &[0, 0, 90, 255], "pixel {i} under an empty layer");
         }
     }

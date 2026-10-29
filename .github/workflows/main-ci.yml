@@ -32,6 +32,11 @@ concurrency:
 env:
   DOCKER_BUILDKIT: 1
   COMPOSE_DOCKER_CLI_BUILD: 1
+  # rust-psp revision for the PSP builds: every PSP crate pins its `psp`
+  # dependency to it (scripts/check-rust-psp-rev.sh enforces that) and CI
+  # installs cargo-psp from it. Bump both together, along with the nightly
+  # in the crates' rust-toolchain.toml (rust-psp's CI NIGHTLY_DATE).
+  RUST_PSP_REV: e4cc06f6fa50fa45dc3ae8b332e8a2b67625f588
 
 jobs:
   ci:
@@ -49,12 +54,12 @@ jobs:
           for item in outputs target psp_output_file.log .git/index.lock; do
             [ -e "$item" ] || continue
             rm -rf -- "$item" 2>/dev/null ||
-              docker run --rm -v "$PWD:/workspace" busybox:1.36.1 rm -rf "/workspace/$item" ||
+              docker run --rm -v "$PWD:/workspace" busybox:1.38.0 rm -rf "/workspace/$item" ||
               echo "::warning::could not remove $item"
           done
 
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           fetch-depth: 1
           clean: true
@@ -198,7 +203,7 @@ jobs:
 
       - name: Upload screenshot report
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: screenshot-report
           path: screenshots/tests/
@@ -223,7 +228,7 @@ jobs:
 
       - name: Upload benchmark results
         if: inputs.run_benchmarks == true
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: benchmark-results
           path: bench_results.txt
@@ -232,7 +237,7 @@ jobs:
 
       - name: Upload criterion baseline
         if: inputs.run_benchmarks == true
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: criterion-baseline
           path: target/criterion/
@@ -271,8 +276,13 @@ jobs:
           echo '```' >> $GITHUB_STEP_SUMMARY
 
       # -- PSP Backend Build -------------------------------------------------
-      - name: Setup PSP SDK
-        uses: ./.github/actions/setup-psp
+      - name: Check rust-psp pins
+        run: scripts/check-rust-psp-rev.sh "$RUST_PSP_REV"
+
+      - name: Install cargo-psp
+        uses: ./.github/actions/install-cargo-psp
+        with:
+          rev: ${{ env.RUST_PSP_REV }}
 
       - name: Build PSP EBOOT
         run: |
@@ -303,7 +313,7 @@ jobs:
 
       - name: Upload PSP artifacts
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: psp-artifacts
           path: psp-artifacts/*
@@ -311,16 +321,12 @@ jobs:
           retention-days: 90
 
       # -- PSP Emulator Test -------------------------------------------------
-      - name: Run OASIS_OS EBOOT in PPSSPPHeadless
-        run: |
-          docker compose --profile psp run --rm -e PPSSPP_HEADLESS=1 ppsspp \
-            /roms/release/EBOOT.PBP --timeout=30 2>/dev/null || true
-
-          if [ -f psp_output_file.log ]; then
-            cat psp_output_file.log
-          else
-            echo "No output log -- headless exited without crash (TIMEOUT ok)"
-          fi
+      # Boots OASIS-OS (normal boot + built-in self-test) and the recovery
+      # EBOOT; fails on a crash, an early exit or missing boot markers.
+      - name: PSP smoke test (PPSSPPHeadless)
+        env:
+          PSP_SMOKE_WORKDIR: ${{ runner.temp }}/psp-smoke
+        run: scripts/psp-smoke-test.sh
 
       # -- Cleanup -----------------------------------------------------------
       - name: Fix Docker file ownership
@@ -328,7 +334,7 @@ jobs:
         run: |
           for dir in target outputs; do
             if [ -d "$dir" ]; then
-              docker run --rm -v "$(pwd)/$dir:/workspace" busybox:1.36.1 \
+              docker run --rm -v "$(pwd)/$dir:/workspace" busybox:1.38.0 \
                 chown -Rh "$(id -u):$(id -g)" /workspace 2>/dev/null || true
             fi
           done
@@ -380,12 +386,12 @@ jobs:
           for item in outputs release-binaries .git/index.lock; do
             [ -e "$item" ] || continue
             rm -rf -- "$item" 2>/dev/null ||
-              docker run --rm -v "$PWD:/workspace" busybox:1.36.1 rm -rf "/workspace/$item" ||
+              docker run --rm -v "$PWD:/workspace" busybox:1.38.0 rm -rf "/workspace/$item" ||
               echo "::warning::could not remove $item"
           done
 
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           fetch-depth: 1
           clean: true
@@ -432,7 +438,7 @@ jobs:
           file release-binaries/* || true
 
       - name: Upload binary artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: oasis-binaries
           path: release-binaries/*
@@ -460,23 +466,23 @@ jobs:
           for item in outputs target release-binaries .git/index.lock; do
             [ -e "$item" ] || continue
             rm -rf -- "$item" 2>/dev/null ||
-              docker run --rm -v "$PWD:/workspace" busybox:1.36.1 rm -rf "/workspace/$item" ||
+              docker run --rm -v "$PWD:/workspace" busybox:1.38.0 rm -rf "/workspace/$item" ||
               echo "::warning::could not remove $item"
           done
 
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
       - name: Download binary artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: oasis-binaries
           path: release-artifacts/binaries
 
       - name: Download PSP artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: psp-artifacts
           path: release-artifacts/psp
@@ -573,7 +579,7 @@ jobs:
           fi
 
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ steps.version.outputs.version }}
           name: Release ${{ steps.version.outputs.version }}
@@ -601,7 +607,7 @@ jobs:
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Install wasm-pack
         run: |
@@ -622,10 +628,12 @@ jobs:
           cp www/index.js _site/demo/index.js
 
       - name: Upload Pages artifact
-        uses: actions/upload-pages-artifact@v3
+        uses: actions/upload-pages-artifact@v5
         with:
           path: _site
+          # v5 drops dotfiles by default; keep site/.nojekyll.
+          include-hidden-files: true
 
       - name: Deploy to GitHub Pages
         id: deployment
-        uses: actions/deploy-pages@v4
+        uses: actions/deploy-pages@v5

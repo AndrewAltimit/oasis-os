@@ -2,7 +2,7 @@
 # Rust CI image for oasis_os
 # Stable + nightly toolchains with SDL3 (built from source via sdl3 crate)
 
-FROM rust:1.93-slim
+FROM rust:1.99-slim
 
 # System dependencies (cmake for sdl3 build-from-source, xvfb for headless tests)
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
