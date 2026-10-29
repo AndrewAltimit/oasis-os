@@ -321,16 +321,12 @@ jobs:
           retention-days: 90
 
       # -- PSP Emulator Test -------------------------------------------------
-      - name: Run OASIS_OS EBOOT in PPSSPPHeadless
-        run: |
-          docker compose --profile psp run --rm -e PPSSPP_HEADLESS=1 ppsspp \
-            /roms/release/EBOOT.PBP --timeout=30 2>/dev/null || true
-
-          if [ -f psp_output_file.log ]; then
-            cat psp_output_file.log
-          else
-            echo "No output log -- headless exited without crash (TIMEOUT ok)"
-          fi
+      # Boots OASIS-OS (normal boot + built-in self-test) and the recovery
+      # EBOOT; fails on a crash, an early exit or missing boot markers.
+      - name: PSP smoke test (PPSSPPHeadless)
+        env:
+          PSP_SMOKE_WORKDIR: ${{ runner.temp }}/psp-smoke
+        run: scripts/psp-smoke-test.sh
 
       # -- Cleanup -----------------------------------------------------------
       - name: Fix Docker file ownership
