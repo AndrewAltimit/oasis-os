@@ -17,6 +17,19 @@ use crate::values::{
     LinearGradient,
 };
 
+/// Regression: `tab-size: 2147483647` reached layout unclamped, whose
+/// tab expansion then pushed two billion spaces per tab.
+#[test]
+fn tab_size_is_clamped() {
+    let mut s = ComputedStyle::default();
+    s.apply_declaration("tab-size", &CssValue::Number(2_147_483_647.0), 16.0);
+    assert_eq!(s.tab_size, crate::values::MAX_TAB_SIZE);
+    s.apply_declaration("tab-size", &CssValue::Number(4.0), 16.0);
+    assert_eq!(s.tab_size, 4);
+    s.apply_declaration("tab-size", &CssValue::Number(0.0), 16.0);
+    assert_eq!(s.tab_size, 1);
+}
+
 #[test]
 fn apply_keyword_display() {
     let mut s = ComputedStyle::default();
