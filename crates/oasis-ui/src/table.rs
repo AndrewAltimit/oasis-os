@@ -1,7 +1,7 @@
 //! Table widget: multi-column data grid with optional header and selection.
 
 use crate::context::DrawContext;
-use crate::layout;
+use crate::layout::HAlign;
 use crate::widget::Widget;
 use oasis_types::error::Result;
 
@@ -148,7 +148,6 @@ impl Widget for Table {
 
     fn draw(&self, ctx: &mut DrawContext<'_>, x: i32, y: i32, w: u32, h: u32) -> Result<()> {
         let fs = ctx.theme.font_size_sm;
-        let text_h = ctx.backend.measure_text_height(fs);
         let text_color = ctx.theme.interactive_text(self.disabled);
         let border = ctx.theme.border;
 
@@ -185,9 +184,13 @@ impl Widget for Table {
                     _ => "",
                 };
                 let label = format!("{}{}", col.label, sort_indicator);
-                let tx = cx + 4;
-                let ty = cy + layout::center(HEADER_HEIGHT, text_h);
-                ctx.backend.draw_text(&label, tx, ty, fs, text_color)?;
+                ctx.text_in(
+                    (cx + 4, cy, cw.saturating_sub(4), HEADER_HEIGHT),
+                    &label,
+                    fs,
+                    text_color,
+                    HAlign::Left,
+                )?;
                 cx += cw as i32;
             }
             cy += HEADER_HEIGHT as i32;
@@ -211,14 +214,18 @@ impl Widget for Table {
                     break;
                 }
                 let cw = col_widths[col_idx];
-                let tx = cx + 4;
-                let ty = cy + layout::center(ROW_HEIGHT, text_h);
                 let fg = if is_selected {
                     ctx.theme.background
                 } else {
                     text_color
                 };
-                ctx.backend.draw_text(cell, tx, ty, fs, fg)?;
+                ctx.text_in(
+                    (cx + 4, cy, cw.saturating_sub(4), ROW_HEIGHT),
+                    cell,
+                    fs,
+                    fg,
+                    HAlign::Left,
+                )?;
                 cx += cw as i32;
             }
 

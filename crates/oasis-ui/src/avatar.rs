@@ -1,7 +1,7 @@
 //! Avatar widget: circular image with fallback initial.
 
 use crate::context::DrawContext;
-use crate::layout;
+use crate::layout::HAlign;
 use crate::widget::Widget;
 use oasis_types::backend::{Color, TextureId};
 use oasis_types::error::Result;
@@ -65,12 +65,13 @@ impl Widget for Avatar {
 
             let text = self.initial.to_uppercase().to_string();
             let fs = ctx.theme.font_size_md;
-            let tw = ctx.backend.measure_text(&text, fs);
-            let th = ctx.backend.measure_text_height(fs);
-            let tx = x + layout::center(self.size, tw);
-            let ty = y + layout::center(self.size, th);
-            ctx.backend
-                .draw_text(&text, tx, ty, fs, ctx.theme.text_on_accent)?;
+            ctx.text_in(
+                (x, y, self.size, self.size),
+                &text,
+                fs,
+                ctx.theme.text_on_accent,
+                HAlign::Center,
+            )?;
         }
         Ok(())
     }

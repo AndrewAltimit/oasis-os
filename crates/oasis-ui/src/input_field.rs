@@ -112,18 +112,8 @@ impl Widget for InputField {
     fn draw(&self, ctx: &mut DrawContext<'_>, x: i32, y: i32, w: u32, h: u32) -> Result<()> {
         let radius = ctx.theme.border_radius_md;
 
-        // Background.
+        // Background and border.
         let state = self.state();
-        ctx.backend.fill_rounded_rect(
-            x,
-            y,
-            w,
-            h,
-            radius,
-            WidgetStateColors::input_bg(ctx.theme, state),
-        )?;
-
-        // Border.
         let bc = if state.is_disabled() {
             WidgetStateColors::border(ctx.theme, state)
         } else if self.focused {
@@ -131,7 +121,12 @@ impl Widget for InputField {
         } else {
             ctx.theme.input_border
         };
-        ctx.backend.stroke_rounded_rect(x, y, w, h, radius, 1, bc)?;
+        ctx.frame(
+            (x, y, w, h),
+            WidgetStateColors::input_bg(ctx.theme, state),
+            bc,
+            radius,
+        )?;
 
         // Keyboard focus ring (in addition to the focus-colored border).
         if self.focused && !self.disabled {

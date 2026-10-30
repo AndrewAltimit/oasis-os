@@ -3,24 +3,11 @@
 use crate::context::DrawContext;
 use crate::focus::FocusStyle;
 use crate::icon::Icon;
-use crate::layout::{self, Padding};
+use crate::layout::{HAlign, Padding};
 use crate::states::{WidgetState, WidgetStateColors};
 use crate::widget::Widget;
 use oasis_types::backend::Color;
 use oasis_types::error::Result;
-
-/// Button visual state.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ButtonState {
-    /// Default state.
-    Normal,
-    /// Mouse/cursor is over the button.
-    Hover,
-    /// Button is being pressed.
-    Pressed,
-    /// Button is disabled and non-interactive.
-    Disabled,
-}
 
 /// Button visual style.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -41,8 +28,8 @@ pub struct Button {
     pub label: String,
     /// Optional icon to display.
     pub icon: Option<Icon>,
-    /// Current visual state.
-    pub state: ButtonState,
+    /// Current interaction state (the toolkit-wide [`WidgetState`]).
+    pub state: WidgetState,
     /// Visual style variant.
     pub style: ButtonStyle,
     /// Internal padding around label.
@@ -51,25 +38,13 @@ pub struct Button {
     pub focused: bool,
 }
 
-impl ButtonState {
-    /// Map the button's visual state onto the shared interaction state.
-    fn as_widget_state(self) -> WidgetState {
-        match self {
-            ButtonState::Normal => WidgetState::Normal,
-            ButtonState::Hover => WidgetState::Hover,
-            ButtonState::Pressed => WidgetState::Pressed,
-            ButtonState::Disabled => WidgetState::Disabled,
-        }
-    }
-}
-
 impl Button {
     /// Create a new secondary button.
     pub fn new(label: impl Into<String>) -> Self {
         Self {
             label: label.into(),
             icon: None,
-            state: ButtonState::Normal,
+            state: WidgetState::Normal,
             style: ButtonStyle::Secondary,
             padding: Padding::symmetric(8, 4),
             focused: false,
@@ -85,14 +60,14 @@ impl Button {
     }
 
     fn bg_color(&self, theme: &crate::theme::Theme) -> Option<Color> {
-        let state = self.state.as_widget_state();
+        let state = self.state;
         match self.style {
             ButtonStyle::Primary => Some(WidgetStateColors::accent_bg(theme, state)),
             ButtonStyle::Secondary => Some(WidgetStateColors::neutral_bg(theme, state)),
             ButtonStyle::Outline | ButtonStyle::Ghost => {
-                if self.state == ButtonState::Hover {
+                if self.state == WidgetState::Hover {
                     Some(theme.accent_subtle)
-                } else if self.state == ButtonState::Pressed {
+                } else if self.state == WidgetState::Pressed {
                     Some(theme.button_bg_pressed)
                 } else {
                     None
@@ -102,7 +77,7 @@ impl Button {
     }
 
     fn text_color(&self, theme: &crate::theme::Theme) -> Color {
-        if self.state == ButtonState::Disabled {
+        if self.state == WidgetState::Disabled {
             return theme.text_disabled;
         }
         match self.style {
@@ -134,7 +109,7 @@ impl Widget for Button {
 
         // Outline border for Outline style.
         if self.style == ButtonStyle::Outline {
-            let bc = if self.state == ButtonState::Disabled {
+            let bc = if self.state == WidgetState::Disabled {
                 ctx.theme.border_subtle
             } else {
                 ctx.theme.border
@@ -143,18 +118,17 @@ impl Widget for Button {
         }
 
         // Label.
-        let text_w = ctx
-            .backend
-            .measure_text(&self.label, ctx.theme.font_size_md);
-        let text_h = ctx.backend.measure_text_height(ctx.theme.font_size_md);
-        let tx = x + layout::center(w, text_w);
-        let ty = y + layout::center(h, text_h);
         let color = self.text_color(ctx.theme);
-        ctx.backend
-            .draw_text(&self.label, tx, ty, ctx.theme.font_size_md, color)?;
+        ctx.text_in(
+            (x, y, w, h),
+            &self.label,
+            ctx.theme.font_size_md,
+            color,
+            HAlign::Center,
+        )?;
 
         // Keyboard focus ring (only when focused and interactive).
-        if self.focused && self.state != ButtonState::Disabled {
+        if self.focused && self.state != WidgetState::Disabled {
             FocusStyle::from_theme(ctx.theme).draw(ctx.backend, x, y, w, h)?;
         }
 
@@ -170,7 +144,7 @@ mod tests {
     fn new_defaults() {
         let b = Button::new("Click");
         assert_eq!(b.label, "Click");
-        assert_eq!(b.state, ButtonState::Normal);
+        assert_eq!(b.state, WidgetState::Normal);
         assert_eq!(b.style, ButtonStyle::Secondary);
         assert!(b.icon.is_none());
     }
@@ -180,19 +154,19 @@ mod tests {
         let b = Button::primary("OK");
         assert_eq!(b.style, ButtonStyle::Primary);
         assert_eq!(b.label, "OK");
-        assert_eq!(b.state, ButtonState::Normal);
+        assert_eq!(b.state, WidgetState::Normal);
     }
 
     #[test]
     fn state_transitions() {
         let mut b = Button::new("test");
-        assert_eq!(b.state, ButtonState::Normal);
-        b.state = ButtonState::Hover;
-        assert_eq!(b.state, ButtonState::Hover);
-        b.state = ButtonState::Pressed;
-        assert_eq!(b.state, ButtonState::Pressed);
-        b.state = ButtonState::Disabled;
-        assert_eq!(b.state, ButtonState::Disabled);
+        assert_eq!(b.state, WidgetState::Normal);
+        b.state = WidgetState::Hover;
+        assert_eq!(b.state, WidgetState::Hover);
+        b.state = WidgetState::Pressed;
+        assert_eq!(b.state, WidgetState::Pressed);
+        b.state = WidgetState::Disabled;
+        assert_eq!(b.state, WidgetState::Disabled);
     }
 
     #[test]
@@ -205,10 +179,10 @@ mod tests {
     #[test]
     fn state_variants_debug() {
         for state in [
-            ButtonState::Normal,
-            ButtonState::Hover,
-            ButtonState::Pressed,
-            ButtonState::Disabled,
+            WidgetState::Normal,
+            WidgetState::Hover,
+            WidgetState::Pressed,
+            WidgetState::Disabled,
         ] {
             let _ = format!("{state:?}");
         }
@@ -277,7 +251,7 @@ mod tests {
         {
             let mut ctx = DrawContext::new(&mut backend, &theme);
             let mut btn = Button::new("Hov");
-            btn.state = ButtonState::Hover;
+            btn.state = WidgetState::Hover;
             btn.draw(&mut ctx, 0, 0, 80, 24).unwrap();
         }
         assert!(
@@ -293,7 +267,7 @@ mod tests {
         {
             let mut ctx = DrawContext::new(&mut backend, &theme);
             let mut btn = Button::new("Press");
-            btn.state = ButtonState::Pressed;
+            btn.state = WidgetState::Pressed;
             btn.draw(&mut ctx, 0, 0, 80, 24).unwrap();
         }
         assert!(
@@ -309,7 +283,7 @@ mod tests {
         {
             let mut ctx = DrawContext::new(&mut backend, &theme);
             let mut btn = Button::new("Off");
-            btn.state = ButtonState::Disabled;
+            btn.state = WidgetState::Disabled;
             btn.draw(&mut ctx, 0, 0, 80, 24).unwrap();
         }
         assert!(
@@ -365,10 +339,10 @@ mod tests {
     fn all_four_states_draw_without_panic() {
         let theme = Theme::dark();
         for state in [
-            ButtonState::Normal,
-            ButtonState::Hover,
-            ButtonState::Pressed,
-            ButtonState::Disabled,
+            WidgetState::Normal,
+            WidgetState::Hover,
+            WidgetState::Pressed,
+            WidgetState::Disabled,
         ] {
             let mut backend = RecordingBackend::default();
             let mut ctx = DrawContext::new(&mut backend, &theme);
@@ -402,20 +376,20 @@ mod tests {
         let t = Theme::dark();
         let mut b = Button::primary("P");
         assert_eq!(b.bg_color(&t), Some(t.accent));
-        b.state = ButtonState::Hover;
+        b.state = WidgetState::Hover;
         assert_eq!(b.bg_color(&t), Some(t.accent_hover));
-        b.state = ButtonState::Pressed;
+        b.state = WidgetState::Pressed;
         assert_eq!(b.bg_color(&t), Some(t.accent_pressed));
-        b.state = ButtonState::Disabled;
+        b.state = WidgetState::Disabled;
         assert_eq!(b.bg_color(&t), Some(t.button_bg_disabled));
 
         let mut s = Button::new("S");
         assert_eq!(s.bg_color(&t), Some(t.button_bg));
-        s.state = ButtonState::Hover;
+        s.state = WidgetState::Hover;
         assert_eq!(s.bg_color(&t), Some(t.button_bg_hover));
-        s.state = ButtonState::Pressed;
+        s.state = WidgetState::Pressed;
         assert_eq!(s.bg_color(&t), Some(t.button_bg_pressed));
-        s.state = ButtonState::Disabled;
+        s.state = WidgetState::Disabled;
         assert_eq!(s.bg_color(&t), Some(t.button_bg_disabled));
     }
 

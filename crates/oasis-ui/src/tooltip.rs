@@ -5,7 +5,7 @@
 //! preferring to appear below the target.
 
 use crate::context::DrawContext;
-use crate::layout;
+use crate::layout::{self, HAlign};
 use crate::widget::Widget;
 use oasis_types::error::Result;
 
@@ -253,21 +253,22 @@ impl Widget for Tooltip {
             .shadow_tooltip
             .draw(ctx.backend, x, y, w, h, radius)?;
 
-        // Background.
-        ctx.backend
-            .fill_rounded_rect(x, y, w, h, radius, ctx.theme.tooltip_bg)?;
-
-        // Border.
-        ctx.backend
-            .stroke_rounded_rect(x, y, w, h, radius, 1, ctx.theme.border_subtle)?;
+        // Background and border.
+        ctx.frame(
+            (x, y, w, h),
+            ctx.theme.tooltip_bg,
+            ctx.theme.border_subtle,
+            radius,
+        )?;
 
         // Text.
-        let text_w = ctx.backend.measure_text(&self.text, fs);
-        let text_h = ctx.backend.measure_text_height(fs);
-        let tx = x + layout::center(w, text_w);
-        let ty = y + layout::center(h, text_h);
-        ctx.backend
-            .draw_text(&self.text, tx, ty, fs, ctx.theme.tooltip_text)?;
+        ctx.text_in(
+            (x, y, w, h),
+            &self.text,
+            fs,
+            ctx.theme.tooltip_text,
+            HAlign::Center,
+        )?;
 
         Ok(())
     }

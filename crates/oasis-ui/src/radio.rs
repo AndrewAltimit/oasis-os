@@ -1,7 +1,7 @@
 //! RadioGroup widget: mutually exclusive option selection.
 
 use crate::context::DrawContext;
-use crate::layout;
+use crate::layout::{self, HAlign};
 use crate::states::{WidgetState, WidgetStateColors};
 use crate::widget::Widget;
 use oasis_types::error::Result;
@@ -134,10 +134,9 @@ impl Widget for RadioGroup {
         (w, h)
     }
 
-    fn draw(&self, ctx: &mut DrawContext<'_>, x: i32, y: i32, _w: u32, _h: u32) -> Result<()> {
+    fn draw(&self, ctx: &mut DrawContext<'_>, x: i32, y: i32, w: u32, _h: u32) -> Result<()> {
         let fs = ctx.theme.font_size_md;
         let row_h = Self::row_height(ctx);
-        let text_h = ctx.backend.measure_text_height(fs);
         let r = CIRCLE_SIZE / 2;
 
         for (i, option) in self.options.iter().enumerate() {
@@ -201,13 +200,13 @@ impl Widget for RadioGroup {
 
             // Label text.
             let tx = x + CIRCLE_SIZE as i32 + LABEL_GAP as i32;
-            let ty = iy + layout::center(row_h, text_h);
-            ctx.backend.draw_text(
+            let label_w = (x + w as i32 - tx).max(0) as u32;
+            ctx.text_in(
+                (tx, iy, label_w, row_h),
                 option,
-                tx,
-                ty,
                 fs,
                 ctx.theme.interactive_text(self.disabled),
+                HAlign::Left,
             )?;
         }
 

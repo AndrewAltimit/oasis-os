@@ -1,7 +1,7 @@
 //! Badge widget: small colored tag/indicator.
 
 use crate::context::DrawContext;
-use crate::layout;
+use crate::layout::HAlign;
 use crate::widget::Widget;
 use oasis_types::backend::Color;
 use oasis_types::error::Result;
@@ -50,11 +50,7 @@ impl Widget for Badge {
         ctx.backend.fill_rounded_rect(x, y, w, h, radius, bg)?;
 
         let fs = ctx.theme.font_size_xs;
-        let text_w = ctx.backend.measure_text(&self.text, fs);
-        let text_h = ctx.backend.measure_text_height(fs);
-        let tx = x + layout::center(w, text_w);
-        let ty = y + layout::center(h, text_h);
-        ctx.backend.draw_text(&self.text, tx, ty, fs, tc)?;
+        ctx.text_in((x, y, w, h), &self.text, fs, tc, HAlign::Center)?;
         Ok(())
     }
 }

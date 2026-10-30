@@ -1,7 +1,7 @@
 //! TabBar widget.
 
 use crate::context::DrawContext;
-use crate::layout;
+use crate::layout::HAlign;
 use crate::states::{WidgetState, WidgetStateColors};
 use crate::widget::Widget;
 use oasis_types::error::Result;
@@ -96,7 +96,6 @@ impl Widget for TabBar {
         let tab_w = w / n;
         let remainder = w % n;
         let fs = ctx.theme.font_size_md;
-        let text_h = ctx.backend.measure_text_height(fs);
 
         for (i, tab) in self.tabs.iter().enumerate() {
             // Distribute remainder pixels across the first N tabs.
@@ -163,9 +162,6 @@ impl Widget for TabBar {
                 )?;
             }
 
-            let text_w = ctx.backend.measure_text(tab, fs);
-            let label_x = tx + layout::center(this_tab_w, text_w);
-            let label_y = y + layout::center(h, text_h);
             let color = if active {
                 match self.style {
                     TabStyle::Underline => ctx.theme.accent,
@@ -176,7 +172,7 @@ impl Widget for TabBar {
             } else {
                 ctx.theme.text_secondary
             };
-            ctx.backend.draw_text(tab, label_x, label_y, fs, color)?;
+            ctx.text_in((tx, y, this_tab_w, h), tab, fs, color, HAlign::Center)?;
         }
 
         // Bottom border for underline style.

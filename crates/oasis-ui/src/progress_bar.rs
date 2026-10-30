@@ -1,7 +1,7 @@
 //! ProgressBar widget.
 
 use crate::context::DrawContext;
-use crate::layout;
+use crate::layout::HAlign;
 use crate::widget::Widget;
 use oasis_types::error::Result;
 
@@ -62,12 +62,13 @@ impl Widget for ProgressBar {
                 if self.show_label {
                     let pct = format!("{}%", (self.value * 100.0) as u32);
                     let fs = ctx.theme.font_size_xs;
-                    let tw = ctx.backend.measure_text(&pct, fs);
-                    let th = ctx.backend.measure_text_height(fs);
-                    let tx = x + layout::center(w, tw);
-                    let ty = y + layout::center(h, th);
-                    ctx.backend
-                        .draw_text(&pct, tx, ty, fs, ctx.theme.text_primary)?;
+                    ctx.text_in(
+                        (x, y, w, h),
+                        &pct,
+                        fs,
+                        ctx.theme.text_primary,
+                        HAlign::Center,
+                    )?;
                 }
             },
             ProgressStyle::Circular => {

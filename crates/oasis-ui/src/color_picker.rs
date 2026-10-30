@@ -1,7 +1,7 @@
 //! ColorPicker widget: HSV color selection with RGB preview.
 
 use crate::context::DrawContext;
-use crate::layout;
+use crate::layout::HAlign;
 use crate::widget::Widget;
 use oasis_types::backend::Color;
 use oasis_types::error::Result;
@@ -206,12 +206,15 @@ impl Widget for ColorPicker {
 
         // Hex label.
         let fs = ctx.theme.font_size_sm;
-        let text_h = ctx.backend.measure_text_height(fs);
         let hex = self.hex_string();
-        let tx = x + layout::center(preview_w, ctx.backend.measure_text(&hex, fs));
-        let ty = preview_y + layout::center(PREVIEW_HEIGHT, text_h);
         let text_color = ctx.theme.interactive_text(self.disabled);
-        ctx.backend.draw_text(&hex, tx, ty, fs, text_color)?;
+        ctx.text_in(
+            (x, preview_y, preview_w, PREVIEW_HEIGHT),
+            &hex,
+            fs,
+            text_color,
+            HAlign::Center,
+        )?;
 
         Ok(())
     }

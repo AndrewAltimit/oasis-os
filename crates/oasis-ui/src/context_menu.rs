@@ -362,13 +362,13 @@ impl Widget for ContextMenu {
             .shadow_dropdown
             .draw(ctx.backend, x, y, w, h, radius)?;
 
-        // Surface background.
-        ctx.backend
-            .fill_rounded_rect(x, y, w, h, radius, ctx.theme.surface)?;
-
-        // Border.
-        ctx.backend
-            .stroke_rounded_rect(x, y, w, h, radius, 1, ctx.theme.border_subtle)?;
+        // Surface background and border.
+        ctx.frame(
+            (x, y, w, h),
+            ctx.theme.surface,
+            ctx.theme.border_subtle,
+            radius,
+        )?;
 
         // Draw each item.
         let mut cy = y + PAD_V;

@@ -1,7 +1,7 @@
 //! TreeView widget: hierarchical tree with expand/collapse and keyboard navigation.
 
 use crate::context::DrawContext;
-use crate::layout;
+use crate::layout::HAlign;
 use crate::widget::Widget;
 use oasis_types::error::Result;
 
@@ -438,23 +438,30 @@ impl Widget for TreeView {
             let indicator_x = x + indent;
             if node.has_children() {
                 let indicator = if node.expanded { "-" } else { "+" };
-                let ind_w = ctx.backend.measure_text(indicator, fs);
-                let ind_x = indicator_x + layout::center(INDICATOR_WIDTH, ind_w);
-                let ind_y = row_y + layout::center(row_h, text_h);
                 let ind_color = if self.disabled {
                     ctx.theme.text_disabled
                 } else {
                     ctx.theme.text_secondary
                 };
-                ctx.backend
-                    .draw_text(indicator, ind_x, ind_y, fs, ind_color)?;
+                ctx.text_in(
+                    (indicator_x, row_y, INDICATOR_WIDTH, row_h),
+                    indicator,
+                    fs,
+                    ind_color,
+                    HAlign::Center,
+                )?;
             }
 
             // Node label.
             let label_x = indicator_x + INDICATOR_WIDTH as i32 + LABEL_GAP as i32;
-            let label_y = row_y + layout::center(row_h, text_h);
-            ctx.backend
-                .draw_text(&node.label, label_x, label_y, fs, text_color)?;
+            let label_w = (x + w as i32 - label_x).max(0) as u32;
+            ctx.text_in(
+                (label_x, row_y, label_w, row_h),
+                &node.label,
+                fs,
+                text_color,
+                HAlign::Left,
+            )?;
         }
 
         Ok(())

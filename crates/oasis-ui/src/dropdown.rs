@@ -142,21 +142,17 @@ impl Widget for Dropdown {
 
         // -- Header row --
         let state = self.state();
-        ctx.backend.fill_rounded_rect(
-            x,
-            y,
-            w,
-            row_h,
-            radius,
-            WidgetStateColors::input_bg(ctx.theme, state),
-        )?;
         let header_border = if state.is_disabled() {
             WidgetStateColors::border(ctx.theme, state)
         } else {
             ctx.theme.input_border
         };
-        ctx.backend
-            .stroke_rounded_rect(x, y, w, row_h, radius, 1, header_border)?;
+        ctx.frame(
+            (x, y, w, row_h),
+            WidgetStateColors::input_bg(ctx.theme, state),
+            header_border,
+            radius,
+        )?;
 
         // Keyboard focus ring around the header row.
         if self.focused && !self.disabled {
@@ -197,16 +193,11 @@ impl Widget for Dropdown {
             ctx.theme
                 .shadow_dropdown
                 .draw(ctx.backend, x, menu_y, w, menu_h, radius)?;
-            ctx.backend
-                .fill_rounded_rect(x, menu_y, w, menu_h, radius, ctx.theme.surface)?;
-            ctx.backend.stroke_rounded_rect(
-                x,
-                menu_y,
-                w,
-                menu_h,
-                radius,
-                1,
+            ctx.frame(
+                (x, menu_y, w, menu_h),
+                ctx.theme.surface,
                 ctx.theme.border_subtle,
+                radius,
             )?;
 
             for (i, option) in self.options.iter().enumerate() {

@@ -226,10 +226,12 @@ impl Widget for Modal {
         ctx.theme
             .shadow_modal
             .draw(ctx.backend, mx, my, mw, mh, radius)?;
-        ctx.backend
-            .fill_rounded_rect(mx, my, mw, mh, radius, ctx.theme.surface)?;
-        ctx.backend
-            .stroke_rounded_rect(mx, my, mw, mh, radius, 1, ctx.theme.border_subtle)?;
+        ctx.frame(
+            (mx, my, mw, mh),
+            ctx.theme.surface,
+            ctx.theme.border_subtle,
+            radius,
+        )?;
 
         let mut cy = my + pad;
 

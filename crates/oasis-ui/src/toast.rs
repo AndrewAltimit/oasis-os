@@ -11,7 +11,7 @@
 use std::collections::VecDeque;
 
 use crate::context::DrawContext;
-use crate::layout;
+use crate::layout::HAlign;
 use crate::widget::Widget;
 use oasis_types::backend::Color;
 use oasis_types::error::Result;
@@ -305,11 +305,13 @@ impl Widget for ToastStack {
                 .fill_rounded_rect(tx, ty, toast_w, toast_h, radius, bg)?;
 
             // Centered message text.
-            let text_w = ctx.backend.measure_text(&toast.message, fs);
-            let text_x = tx + layout::center(toast_w, text_w);
-            let text_y = ty + layout::center(toast_h, text_h);
-            ctx.backend
-                .draw_text(&toast.message, text_x, text_y, fs, text_color)?;
+            ctx.text_in(
+                (tx, ty, toast_w, toast_h),
+                &toast.message,
+                fs,
+                text_color,
+                HAlign::Center,
+            )?;
         }
 
         Ok(())
