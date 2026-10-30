@@ -875,6 +875,9 @@ fn load_from_network(
             {
                 let url_str = url.to_string();
                 if let Some(cached) = rc.peek_response(&url_str) {
+                    // A 304 may omit the CSP header: the cached body
+                    // keeps the policy it was served with.
+                    let csp = csp.or_else(|| rc.peek_csp(&url_str));
                     return Ok(LoadedResource {
                         response: cached,
                         etag,

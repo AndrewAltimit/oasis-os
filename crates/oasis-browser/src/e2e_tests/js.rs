@@ -351,6 +351,42 @@ fn csp_script_src_runs_only_nonced_inline_scripts() {
     assert!(!s.shows("HandlerRan"));
 }
 
+/// Regression: re-rendering a page from the in-memory cache (back /
+/// forward) cleared the page CSP, so inline scripts the header policy
+/// had blocked on the first load ran on the way back.
+#[test]
+fn csp_survives_back_navigation_from_cache() {
+    let server = TestServer::start(|req| {
+        if req.path() == "/two" {
+            return html("<p>SecondPage</p>");
+        }
+        Reply::with(
+            200,
+            &[
+                ("Content-Type", "text/html"),
+                ("Content-Security-Policy", "script-src 'none'"),
+            ],
+            "<html><body><p id=\"a\">Untouched</p><p><a href=\"/two\">NextLink</a></p>\
+             <script>document.getElementById('a').textContent = 'ScriptRan';</script>\
+             </body></html>",
+        )
+    });
+    let mut s = Session::new();
+    s.open(&server.url("/"));
+    s.assert_shows("Untouched");
+    s.click_text("NextLink");
+    s.assert_shows("SecondPage");
+    s.press(oasis_types::input::Button::Cancel);
+    assert_eq!(s.url(), server.url("/"));
+    assert_eq!(
+        server.requests_to("/").len(),
+        1,
+        "back re-renders from cache"
+    );
+    s.assert_shows("Untouched");
+    assert!(!s.shows("ScriptRan"), "blocked inline script ran on back");
+}
+
 #[test]
 fn csp_without_script_src_keeps_inline_scripts_running() {
     let server = TestServer::start(|_| {

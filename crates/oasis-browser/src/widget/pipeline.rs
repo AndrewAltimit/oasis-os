@@ -79,6 +79,7 @@ impl BrowserWidget {
         if let Some(entry) = self.cache.get(key) {
             let body = entry.response.body.clone();
             let ct = entry.response.content_type;
+            let csp = entry.csp.clone();
             if ct == ContentType::Html || ct == ContentType::PlainText || ct == ContentType::Unknown
             {
                 // Re-render from cached HTML without a network round-trip.
@@ -89,7 +90,9 @@ impl BrowserWidget {
                 self.reader_mode = false;
                 self.reader_html = None;
                 self.error_message = None;
-                self.page_csp = None;
+                // The re-render runs the page's scripts again: under the
+                // policy it was served with, not none.
+                self.page_csp = csp;
                 self.page_errors.clear();
                 self.decoded_images.clear();
                 self.mask_image_arcs.clear();
@@ -485,6 +488,11 @@ impl BrowserWidget {
                         if loaded.response.status == 304
                             && let Some(cached) = self.cache.peek_response(&loaded.response.url)
                         {
+                            // A 304 may omit the CSP header: keep the
+                            // stored response's policy unless it sends one.
+                            if loaded.csp.is_none() {
+                                loaded.csp = self.cache.peek_csp(&loaded.response.url);
+                            }
                             loaded.response = cached;
                         }
                         let url_str = loaded.response.url.clone();
@@ -648,6 +656,9 @@ impl BrowserWidget {
                 texture: None,
                 etag: None,
                 last_modified: None,
+                // Callers set `page_csp` from this response's headers
+                // before handing it over.
+                csp: self.page_csp.clone(),
             },
         );
 
