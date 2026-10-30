@@ -241,7 +241,7 @@ license = "MIT OR Unlicense"
 [dependencies]
 psp = { git = "https://github.com/AndrewAltimit/rust-psp", features = ["std"] }
 oasis-core = { path = "../oasis-core", default-features = false }
-oasis-video = { path = "../oasis-video", default-features = false, features = ["no-std-demux"] }
+oasis-video = { path = "../oasis-video", default-features = false, features = ["demux-lite"] }
 ```
 
 ### 3.3 Platform Targeting

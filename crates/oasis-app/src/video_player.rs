@@ -482,19 +482,13 @@ impl VideoPlayer {
                 },
             );
             let t0 = std::time::Instant::now();
-            // With the symphonia backend, extract avcC (and the keyframe
-            // index, so the seek below lands on a keyframe) from moov to
-            // skip the full-file scan. With ffmpeg, it handles both
-            // internally.
-            #[cfg(not(feature = "video-decode-ffmpeg"))]
+            // With the symphonia backend, the retained moov supplies avcC
+            // and the keyframe index (so the seek below lands on a
+            // keyframe) and skips the full-file scan. ffmpeg reads the
+            // container itself and ignores it.
             let open_result = if let Some(ref moov) = moov_data {
                 oasis_video::SoftwareVideoDecoder::open_stream_with_moov(source, moov)
             } else {
-                oasis_video::SoftwareVideoDecoder::open_stream(source)
-            };
-            #[cfg(feature = "video-decode-ffmpeg")]
-            let open_result = {
-                let _ = &moov_data; // suppress unused warning
                 oasis_video::SoftwareVideoDecoder::open_stream(source)
             };
             let mut decoder = match open_result {

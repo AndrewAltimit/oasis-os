@@ -85,7 +85,7 @@ oasis-types     (foundation: Color, Button, InputEvent, backend traits, error ty
 ├── oasis-terminal   (~95 commands + 20 shell builtins, line editing, completion, jobs, scripting)
 ├── oasis-browser    (HTML/CSS/Gemini: DOM, CSS cascade+@media, layout engine, @font-face web fonts (fontdue TTF/OTF rasterizer, font registry, glyph texture cache), full 2D CSS transforms + 3D transform functions (rotateX/Y/Z, translate3d, scale3d, rotate3d, matrix3d, perspective()) with screen-space perspective projection from ancestor `perspective:`, transform-style: preserve-3d propagation, transform-origin Z, perspective-origin, and backface-visibility culling, Canvas 2D path API, SVG paths/groups, light compositor, z-index stacking contexts, nested scroll containers, form elements with select dropdown + label association, hover-triggered CSS transitions, soft hyphens, bidi text, JS DOM bindings)
 ├── oasis-js         (JavaScript engine: QuickJS-NG via rquickjs on all backends incl. PSP)
-├── oasis-video      (MP4/H.264+AAC decode; StreamingBuffer sliding-window; features: h264, ffmpeg, no-std-demux)
+├── oasis-video      (MP4/H.264+AAC decode; additive features: demux-lite, symphonia, h264, ffmpeg)
 ├── oasis-vector     (vector graphics: scene graph, path ops, icons, frame-driven animations)
 ├── oasis-shader     (animated shader wallpapers: Shadertoy-style fragment shaders)
 ├── oasis-rasterize  (software rasterizer for CPU-side rendering)
@@ -111,7 +111,7 @@ oasis-types     (foundation: Color, Button, InputEvent, backend traits, error ty
     ├── oasis-app      (+ oasis-backend-sdl, oasis-backend-ue5; binaries oasis-app, oasis-screenshot; features javascript, video-decode-ffmpeg (default) / video-decode (openh264), skin-dev, mcp)
     ├── oasis-backend-wasm (Canvas 2D + DOM input + Web Audio; iframe overlay drives a Browser pane and a YouTube embed; YouTube search + thumbnail grid via Invidious; feature: wasm-youtube)
     ├── oasis-ffi      (+ oasis-backend-ue5; cdylib C-ABI for UE5 integration; features video-decode / video-decode-ffmpeg)
-    ├── oasis-backend-psp  (in the workspace `exclude` list, PSP hardware; oasis-video[no-std-demux])
+    ├── oasis-backend-psp  (in the workspace `exclude` list, PSP hardware; oasis-video[demux-lite])
     └── oasis-plugin-psp   (standalone, not in the workspace; kernel-mode PRX overlay)
 oasis-usb-host  (standalone binary, rusb only: host side of the PSP USB thin client)
 ```
@@ -143,7 +143,7 @@ The repository contains 50 crate directories under `crates/`: 40 workspace membe
 - **oasis-net** -- TCP networking with PSK authentication, remote terminal, FTP transfer
 - **oasis-audio** -- Audio manager with playlist, shuffle/repeat modes, MP3 ID3 tag parsing
 - **oasis-platform** -- Platform service traits: PowerService, TimeService, UsbService, NetworkService, OskService
-- **oasis-video** -- MP4 / H.264 + AAC decode pipeline. Feature flags: `h264` (openh264 + symphonia demux/AAC), `ffmpeg` (statically linked ffmpeg; mutually exclusive with `h264`), `no-std-demux` (PSP-safe `demux_lite::Mp4Lite`). `video-decode` / `video-decode-ffmpeg` are features of `oasis-app` / `oasis-ffi` that select `h264` / `ffmpeg`. Desktop progressive streaming + PSP in-memory ME-hardware pipeline are documented in [`docs/video-streaming.md`](docs/video-streaming.md) and [`docs/psp-architecture.md`](docs/psp-architecture.md) §Video Streaming.
+- **oasis-video** -- MP4 / H.264 + AAC decode pipeline. Additive feature flags, none on by default: `demux-lite` (dependency-free `demux_lite::Mp4Lite`), `symphonia` (symphonia demux/AAC; implies `demux-lite`), `h264` (openh264 on top of `symphonia`), `ffmpeg` (statically linked ffmpeg; wins over `h264` when both are on). `video-decode` / `video-decode-ffmpeg` are features of `oasis-app` / `oasis-ffi` that select `h264` / `ffmpeg`. Desktop progressive streaming + PSP in-memory ME-hardware pipeline are documented in [`docs/video-streaming.md`](docs/video-streaming.md) and [`docs/psp-architecture.md`](docs/psp-architecture.md) §Video Streaming.
 - **oasis-vector** -- Resolution-independent vector graphics: scene graph with path-based drawing operations (fill, stroke, arcs, beziers), dashboard icons, and frame-driven animations
 - **oasis-shader** -- Animated shader wallpapers: Shadertoy-style fragment shaders, 8 built-ins (`BuiltinShader`: balatro, voronoi, city_lights, ocean_waves, calm_waves, starfield, plasma, matrix_rain), each with a GLSL and a CPU implementation
 - **oasis-app-core** -- Shared app framework: the `App` trait (input, `handle_key`, `accepts_text`, `tick`, `wants_frame`, `apply_vfs_ops`, SDI + windowed rendering), `AppAction`, render helpers. Guide: [`docs/writing-apps.md`](docs/writing-apps.md)

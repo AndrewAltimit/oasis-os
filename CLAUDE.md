@@ -99,7 +99,7 @@ oasis-types     (foundation: Color, Button, InputEvent, backend traits, error ty
 ├── oasis-terminal   (~95 commands + 20 shell builtins, line editing, completion, jobs, scripting)
 ├── oasis-browser    (HTML/CSS/Gemini: DOM, CSS cascade+@media, layout engine, @font-face web fonts (fontdue TTF/OTF rasterizer, font registry, glyph texture cache), full 2D CSS transforms + 3D transform functions (rotateX/Y/Z, translate3d, scale3d, rotate3d, matrix3d, perspective()) with screen-space perspective projection from ancestor `perspective:`, transform-style: preserve-3d propagation, transform-origin Z, perspective-origin, and backface-visibility culling, Canvas 2D path API, SVG paths/groups, light compositor, z-index stacking contexts, nested scroll containers, form elements with select dropdown + label association, hover-triggered CSS transitions, soft hyphens, bidi text, JS DOM bindings)
 ├── oasis-js         (JavaScript engine: QuickJS-NG via rquickjs on all backends incl. PSP)
-├── oasis-video      (MP4/H.264+AAC decode; StreamingBuffer sliding-window; features: h264, ffmpeg, no-std-demux)
+├── oasis-video      (MP4/H.264+AAC decode; additive features: demux-lite, symphonia, h264, ffmpeg)
 ├── oasis-vector     (vector graphics: scene graph, path ops, icons, frame-driven animations)
 ├── oasis-shader     (animated shader wallpapers: Shadertoy-style fragment shaders)
 ├── oasis-rasterize  (software rasterizer for CPU-side rendering)
@@ -125,7 +125,7 @@ oasis-types     (foundation: Color, Button, InputEvent, backend traits, error ty
     ├── oasis-app      (+ oasis-backend-sdl, oasis-backend-ue5; lib `oasis_app::Shell` + headless e2e harness; binaries oasis-app, oasis-screenshot; features javascript, video-decode-ffmpeg (default) / video-decode (openh264), skin-dev, mcp)
     ├── oasis-backend-wasm (Canvas 2D + DOM input + Web Audio; iframe overlay drives a Browser pane and a YouTube embed; YouTube search + thumbnail grid via Invidious; feature: wasm-youtube)
     ├── oasis-ffi      (+ oasis-backend-ue5; cdylib C-ABI for UE5 integration; features video-decode / video-decode-ffmpeg)
-    ├── oasis-backend-psp  (in the workspace `exclude` list, PSP hardware; oasis-video[no-std-demux])
+    ├── oasis-backend-psp  (in the workspace `exclude` list, PSP hardware; oasis-video[demux-lite])
     └── oasis-plugin-psp   (standalone, not in the workspace; kernel-mode PRX overlay)
 oasis-usb-host  (standalone binary, rusb only: host side of the PSP USB thin client)
 ```
@@ -152,9 +152,10 @@ PSP has meaningful enough constraints that the detail lives in
 
 ### Desktop Video Streaming
 
-Progressive streaming via `StreamingBuffer` (sliding-window over an
-`Arc<StreamingInner>` while symphonia decodes from the same buffer
-via `Read + Seek`). Probe-mode reads return zeros, deferred tail
+Progressive streaming via `StreamingBuffer` (in oasis-app,
+`src/tv_controller/streaming_buffer.rs`; a sliding window over an
+`Arc<StreamingInner>` while oasis-video's decoder reads the same
+buffer via `Read + Seek`). Probe-mode reads return zeros, deferred tail
 probe for moov-at-end files, CDN failover through the archive.org
 URL for fresh 302 redirects. Full details in
 [`docs/video-streaming.md`](docs/video-streaming.md).
@@ -194,7 +195,7 @@ Each module below is its own crate (previously all in oasis-core):
 - **oasis-mcp** -- Optional MCP control server (off by default). Minimal Streamable-HTTP transport + JSON-RPC 2.0 / MCP dispatch over a non-blocking `NetworkStream`; app-agnostic (depends only on `oasis-types`) with a `ToolDispatcher` callback the app implements in `crates/oasis-app/src/mcp_tools.rs`. Lets an on-device agent drive the shell. See [`docs/mcp-server.md`](docs/mcp-server.md)
 - **oasis-audio** -- `AudioManager` (music playlist + playback state machine; the desktop `media_controller` carries out its actions and serves the `music` command / Music Player over `/var/audio/*`, paths and `MediaRequest` in `oasis_types::ipc`), shuffle/repeat modes, internet radio (`RadioManager`), SFX, WAV/Ogg Vorbis decode
 - **oasis-platform** -- Platform service traits: PowerService, TimeService, UsbService, NetworkService, OskService
-- **oasis-video** -- MP4 / H.264 + AAC decode pipeline. Feature flags: `h264` (openh264 + symphonia demux/AAC), `ffmpeg` (statically linked ffmpeg; mutually exclusive with `h264`), `no-std-demux` (PSP-safe `demux_lite::Mp4Lite`). `video-decode` / `video-decode-ffmpeg` are features of `oasis-app` / `oasis-ffi` that select `h264` / `ffmpeg`. Desktop progressive streaming + PSP in-memory ME-hardware pipeline are documented in [`docs/video-streaming.md`](docs/video-streaming.md) and [`docs/psp-architecture.md`](docs/psp-architecture.md) §Video Streaming.
+- **oasis-video** -- MP4 / H.264 + AAC decode pipeline. Additive feature flags, none on by default: `demux-lite` (dependency-free `demux_lite::Mp4Lite`, used by PSP and oasis-app's seek lookup), `symphonia` (symphonia demux/AAC; implies `demux-lite`), `h264` (openh264 on top of `symphonia`), `ffmpeg` (statically linked ffmpeg). With both `h264` and `ffmpeg` on, ffmpeg is the `SoftwareVideoDecoder` backend. `video-decode` / `video-decode-ffmpeg` are features of `oasis-app` / `oasis-ffi` that select `h264` / `ffmpeg`. Desktop progressive streaming + PSP in-memory ME-hardware pipeline are documented in [`docs/video-streaming.md`](docs/video-streaming.md) and [`docs/psp-architecture.md`](docs/psp-architecture.md) §Video Streaming.
 - **oasis-vector** -- Resolution-independent vector graphics: scene graph with path-based drawing operations (fill, stroke, arcs, beziers), Altimit-style dashboard icons, and frame-driven animations. Integrates via `SdiBackend` vector graphics trait extensions
 - **oasis-shader** -- Animated shader wallpapers: Shadertoy-style fragment shaders, 8 built-ins (`BuiltinShader`: balatro, voronoi, city_lights, ocean_waves, calm_waves, starfield, plasma, matrix_rain), each with a GLSL and a CPU implementation
 - **oasis-app-core** -- Shared app framework: the `App` trait (input, `handle_key`, `accepts_text`, `handle_scroll`, `layout`, `tick`, `wants_frame`, `apply_vfs_ops`, `drain_requests`, SDI + windowed rendering; `as_any` via the `AsAny` blanket impl), `AppAction`, `AppRequest`, `ContentState`, render helpers, `testing::AppHarness` (feature `testing`). Guide: [`docs/writing-apps.md`](docs/writing-apps.md)

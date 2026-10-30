@@ -5,11 +5,13 @@
 
 use criterion::{Criterion, criterion_group, criterion_main};
 
+#[cfg(any(feature = "h264", feature = "ffmpeg", feature = "demux-lite"))]
 fn fixture_path() -> std::path::PathBuf {
     std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/fixtures/test_320x240_2s.mp4")
 }
 
+#[cfg(any(feature = "h264", feature = "ffmpeg", feature = "demux-lite"))]
 fn fixture_bytes() -> Vec<u8> {
     std::fs::read(fixture_path()).expect("fixture file missing")
 }
@@ -92,7 +94,7 @@ fn bench_seek_latency(c: &mut Criterion) {
     });
 }
 
-#[cfg(feature = "no-std-demux")]
+#[cfg(feature = "demux-lite")]
 fn bench_demux_lite_open(c: &mut Criterion) {
     let data = fixture_bytes();
     c.bench_function("demux_lite_open", |b| {
@@ -103,7 +105,7 @@ fn bench_demux_lite_open(c: &mut Criterion) {
     });
 }
 
-#[cfg(feature = "no-std-demux")]
+#[cfg(feature = "demux-lite")]
 fn bench_demux_lite_read_samples(c: &mut Criterion) {
     let data = fixture_bytes();
     c.bench_function("demux_lite_read_samples", |b| {
@@ -122,36 +124,33 @@ fn bench_demux_lite_read_samples(c: &mut Criterion) {
     });
 }
 
-// Build the benchmark group based on enabled features.
+// Build the benchmark groups based on enabled features.
 #[cfg(any(feature = "h264", feature = "ffmpeg"))]
 criterion_group!(
-    h264_benches,
+    decode_benches,
     bench_demux_open,
     bench_video_decode_throughput,
     bench_audio_decode_throughput,
     bench_seek_latency,
 );
 
-#[cfg(not(any(feature = "h264", feature = "ffmpeg")))]
-criterion_group!(h264_benches, bench_yuv420_to_rgba);
-
 criterion_group!(common_benches, bench_yuv420_to_rgba);
 
-#[cfg(feature = "no-std-demux")]
+#[cfg(feature = "demux-lite")]
 criterion_group!(
     lite_benches,
     bench_demux_lite_open,
     bench_demux_lite_read_samples,
 );
 
-#[cfg(all(feature = "h264", feature = "no-std-demux"))]
-criterion_main!(h264_benches, common_benches, lite_benches);
+#[cfg(all(any(feature = "h264", feature = "ffmpeg"), feature = "demux-lite"))]
+criterion_main!(decode_benches, common_benches, lite_benches);
 
-#[cfg(all(feature = "h264", not(feature = "no-std-demux")))]
-criterion_main!(h264_benches, common_benches);
+#[cfg(all(any(feature = "h264", feature = "ffmpeg"), not(feature = "demux-lite")))]
+criterion_main!(decode_benches, common_benches);
 
-#[cfg(all(not(feature = "h264"), feature = "no-std-demux"))]
+#[cfg(all(not(any(feature = "h264", feature = "ffmpeg")), feature = "demux-lite"))]
 criterion_main!(common_benches, lite_benches);
 
-#[cfg(all(not(feature = "h264"), not(feature = "no-std-demux")))]
+#[cfg(not(any(feature = "h264", feature = "ffmpeg", feature = "demux-lite")))]
 criterion_main!(common_benches);

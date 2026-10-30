@@ -8,9 +8,38 @@ the desktop pipeline.
 ## Desktop: `StreamingBuffer` progressive playback
 
 TV Guide on desktop uses in-process progressive streaming via
-`StreamingBuffer` (in `tv_controller.rs`). A background download
-thread feeds an `Arc<StreamingInner>` sliding-window buffer while
-symphonia decodes from the same buffer via `Read + Seek`.
+`StreamingBuffer` (in oasis-app,
+`crates/oasis-app/src/tv_controller/streaming_buffer.rs`; it implements
+`oasis_video::VideoSource`). A background download thread feeds an
+`Arc<StreamingInner>` sliding-window buffer while
+`oasis_video::SoftwareVideoDecoder` reads the same buffer via
+`Read + Seek`.
+
+### Decoder backends (oasis-video features)
+
+oasis-video's features are additive and none is on by default:
+
+| Feature | What it adds |
+|---|---|
+| `demux-lite` | `demux_lite` (dependency-free MP4 parser: PSP, `seek_point_from_moov`, fuzzing) |
+| `symphonia` | symphonia MP4 demux + AAC-LC; an audio-only `SoftwareVideoDecoder`. Implies `demux-lite` |
+| `h264` | openh264 video decode for the symphonia backend (Baseline profile). Implies `symphonia` |
+| `ffmpeg` | statically linked ffmpeg demux + H.264 + AAC (Main/High profile, SIMD) |
+
+oasis-app's `video-decode` / `video-decode-ffmpeg` (and the same pair in
+oasis-ffi) select `h264` / `ffmpeg`; oasis-app also enables `demux-lite`.
+When both `h264` and `ffmpeg` end up enabled (`--all-features`, or two
+crates in one build picking different backends), ffmpeg is the
+`SoftwareVideoDecoder` backend and the symphonia modules stay available
+as libraries. `SoftwareVideoDecoder::open_stream_with_moov` and
+`keyframe_seek_target` exist on both backends (ffmpeg reads the
+container itself, so it ignores the moov and seeks to keyframes on its
+own). The PSP build enables only `demux-lite` and so links neither
+symphonia nor openh264.
+
+The probe-mode and keyframe details below describe the symphonia
+backend, which is what `video-decode` builds and the e2e tests in
+`crates/oasis-video/tests/decode_e2e.rs` exercise.
 
 ### Key mechanisms
 

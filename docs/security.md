@@ -134,7 +134,7 @@ authentication for remote terminal connections:
 
 ## MP4 Demux Safety
 
-The lightweight MP4 parser (`oasis-video/src/demux_lite.rs`) processes
+The lightweight MP4 parser (`oasis-video/src/demux_lite/`, feature `demux-lite`) processes
 untrusted media files from the Internet Archive. Hardening measures:
 
 - **Table size cap** -- all 7 sample table parsers (`stts`, `ctts`,
