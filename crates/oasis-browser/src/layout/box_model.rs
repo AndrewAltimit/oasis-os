@@ -225,9 +225,10 @@ pub enum ReplacedContent {
         options: Vec<String>,
         selected_index: Option<usize>,
     },
-    /// An inline `<svg>` element.
+    /// An inline `<svg>` element. Shared (`Rc`) so the display list
+    /// can reference it without a deep copy.
     Svg {
-        element: Box<crate::svg::SvgElement>,
+        element: std::rc::Rc<crate::svg::SvgElement>,
     },
     /// A `<canvas>` element with a shared drawing state.
     Canvas {

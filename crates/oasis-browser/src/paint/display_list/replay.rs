@@ -508,26 +508,6 @@ impl DisplayList {
                     ];
                     backend.fill_polygon(&shifted, c)?;
                 },
-                DisplayItem::StrokeRoundedRect {
-                    x,
-                    y,
-                    w,
-                    h,
-                    radius,
-                    stroke_width,
-                    color,
-                } => {
-                    let c = apply_layer_opacity(*color, layer_opacity);
-                    backend.stroke_rounded_rect(
-                        x + scroll_dx,
-                        y + eff_dy,
-                        *w,
-                        *h,
-                        *radius,
-                        *stroke_width,
-                        c,
-                    )?;
-                },
                 DisplayItem::Blit {
                     texture,
                     x,
@@ -634,6 +614,9 @@ impl DisplayList {
                         backend.reset_clip_rect()?;
                     }
                 },
+                DisplayItem::Svg { .. } | DisplayItem::Canvas { .. } => {
+                    replay_embedded(backend, item, scroll_dx, eff_dy, layer_opacity)?;
+                },
                 // Already handled above the match.
                 DisplayItem::FillRect { .. }
                 | DisplayItem::DrawText { .. }
@@ -643,9 +626,6 @@ impl DisplayList {
                 | DisplayItem::PopCompositingLayer
                 | DisplayItem::PushSticky { .. }
                 | DisplayItem::PopSticky => {},
-                // BlurHint is metadata for GPU backends; software fallback
-                // applies per-color approximation during recording.
-                DisplayItem::BlurHint { .. } => {},
             }
         }
 
@@ -885,26 +865,6 @@ impl DisplayList {
                     ];
                     backend.fill_polygon(&shifted, c)?;
                 },
-                DisplayItem::StrokeRoundedRect {
-                    x,
-                    y,
-                    w,
-                    h,
-                    radius,
-                    stroke_width,
-                    color,
-                } => {
-                    let c = apply_layer_opacity(*color, layer_opacity);
-                    backend.stroke_rounded_rect(
-                        x + scroll_dx,
-                        y + eff_dy,
-                        *w,
-                        *h,
-                        *radius,
-                        *stroke_width,
-                        c,
-                    )?;
-                },
                 DisplayItem::Blit {
                     texture,
                     x,
@@ -987,6 +947,9 @@ impl DisplayList {
                         *radius,
                     )?;
                 },
+                DisplayItem::Svg { .. } | DisplayItem::Canvas { .. } => {
+                    replay_embedded(backend, item, scroll_dx, eff_dy, layer_opacity)?;
+                },
                 DisplayItem::FillRect { .. }
                 | DisplayItem::DrawText { .. }
                 | DisplayItem::PushClip { .. }
@@ -997,7 +960,6 @@ impl DisplayList {
                 | DisplayItem::PopCompositingLayer
                 | DisplayItem::PushSticky { .. }
                 | DisplayItem::PopSticky => {},
-                DisplayItem::BlurHint { .. } => {},
             }
         }
 
@@ -1011,6 +973,69 @@ impl DisplayList {
 // ---------------------------------------------------------------------------
 // Replay helpers
 // ---------------------------------------------------------------------------
+
+/// Replay an [`DisplayItem::Svg`] / [`DisplayItem::Canvas`] item, whose
+/// content issues its own backend calls, with its top-left at
+/// `(x + dx, y + dy)`.
+///
+/// The active clip already applies (it is backend state). Under a
+/// translucent opacity layer the content is drawn into an offscreen
+/// render target and composited back at `opacity` when the backend
+/// supports render targets; otherwise it is drawn opaque (the same
+/// degradation `PushCompositingLayer` accepts on PSP).
+fn replay_embedded(
+    backend: &mut dyn SdiBackend,
+    item: &DisplayItem,
+    dx: i32,
+    dy: i32,
+    opacity: f32,
+) -> Result<()> {
+    let Some(bounds) = item.bounds() else {
+        return Ok(());
+    };
+    let x = bounds.x as i32 + dx;
+    let y = bounds.y as i32 + dy;
+    let w = bounds.width.max(0.0).ceil() as u32;
+    let h = bounds.height.max(0.0).ceil() as u32;
+    if w == 0 || h == 0 {
+        return Ok(());
+    }
+    let draw = |backend: &mut dyn SdiBackend, ox: i32, oy: i32| -> Result<()> {
+        match item {
+            DisplayItem::Svg {
+                element,
+                width,
+                height,
+                ..
+            } => crate::svg::paint_svg(element, backend, ox, oy, *width, *height),
+            DisplayItem::Canvas { state, w, h, .. } => match state.try_borrow() {
+                Ok(state) => crate::canvas::paint_canvas(&state, backend, ox, oy, *w, *h),
+                // A JS callback holding the canvas mid-replay can't
+                // happen on the UI thread; skip rather than panic.
+                Err(_) => Ok(()),
+            },
+            _ => Ok(()),
+        }
+    };
+    if opacity < 1.0
+        && backend.supports_render_targets()
+        && let Ok(id) = backend.create_render_target(w, h)
+    {
+        if backend.bind_render_target(id).is_ok() {
+            let drawn = draw(backend, 0, 0);
+            let unbound = backend.unbind_render_target();
+            let composited = if drawn.is_ok() && unbound.is_ok() {
+                backend.composite_render_target(id, x, y, w, h, BackendBlendMode::Normal, opacity)
+            } else {
+                Ok(())
+            };
+            let destroyed = backend.destroy_render_target(id);
+            return drawn.and(unbound).and(composited).and(destroyed);
+        }
+        backend.destroy_render_target(id)?;
+    }
+    draw(backend, x, y)
+}
 
 /// Flush accumulated `FillRect` items as a single batched call.
 ///
@@ -1267,9 +1292,7 @@ mod tests {
             bounds,
             opacity,
             blend: CssBlendMode::Multiply,
-            needs_backdrop: false,
             filters: Vec::new(),
-            backdrop_filters: Vec::new(),
             mask: None,
         }
     }

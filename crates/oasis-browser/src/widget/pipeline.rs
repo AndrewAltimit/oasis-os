@@ -177,8 +177,6 @@ impl BrowserWidget {
     fn clear_node_references(&mut self) {
         self.hover_node = None;
         self.focused_node = None;
-        self.tab_order.clear();
-        self.tab_focus_index = -1;
         self.transition_engine = css::transition::TransitionEngine::new();
     }
 

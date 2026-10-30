@@ -6,7 +6,7 @@ use oasis_vfs::Vfs;
 
 use crate::css::values::ComputedStyle;
 use crate::html::dom::NodeId;
-use crate::layout::box_model::{BoxType, LayoutBox, Rect, ReplacedContent};
+use crate::layout::box_model::{LayoutBox, Rect};
 use crate::paint;
 use crate::{BrowserWidget, Focus, LoadingState};
 
@@ -245,7 +245,7 @@ impl BrowserWidget {
             .collect();
 
         // Paint layout tree via cached display list.
-        if let Some(layout) = &self.layout_root {
+        if let Some(doc_h) = self.layout_root.as_ref().map(LayoutBox::scrollable_height) {
             // Rebuild display list when layout changed or on first paint.
             // The display list is also cleared by load_html on navigation.
             let needs_rebuild = layout_changed
@@ -257,50 +257,8 @@ impl BrowserWidget {
             let has_dirty_rects = !self.dirty_rects.is_empty();
 
             if needs_rebuild {
-                // Extend the viewport height by the scroll buffer zone so items
-                // slightly beyond the visible area are recorded. This means small
-                // scroll increments can replay the cached display list without a
-                // full rebuild (the extra items are already present).
-                let buffered_h = content_h as f32 + self.scroll.buffer_zone as f32;
-                let viewport = paint::PaintViewport {
-                    scroll_y: self.scroll.scroll_y as f32,
-                    scroll_x: self.scroll.scroll_x as f32,
-                    x: self.window_x,
-                    y: content_y,
-                    width: self.window_w as f32,
-                    height: buffered_h,
-                    visible_height: content_h as f32,
-                    focused_node: self.focused_node,
-                    counter_styles: counter_styles.clone(),
-                };
-
-                // Record to display list (no draw calls emitted).
-                let links = paint::record::record_with_scroll(
-                    layout,
-                    viewport,
-                    &self.href_map,
-                    &mut self.display_list,
-                    &self.nested_scroll_offsets,
-                );
-                // Compact and optimize the display list.
-                self.display_list.compact();
-                self.display_list.optimize();
-                self.link_map = links;
-                let doc_h = layout.scrollable_height();
+                self.record_display_list(content_y, content_h, &counter_styles);
                 self.scroll.set_content_height(doc_h as i32);
-                self.display_list_scroll_y = self.scroll.scroll_y;
-                self.display_list_scroll_x = self.scroll.scroll_x;
-                self.link_map_scroll_y = self.scroll.scroll_y;
-                self.link_map_scroll_x = self.scroll.scroll_x;
-
-                // Update tile grid on layout change.
-                let ch = doc_h as u32;
-                match &mut self.tile_grid {
-                    Some(grid) => grid.resize(self.window_w, ch),
-                    None => {
-                        self.tile_grid = Some(paint::tiling::TileGrid::new(self.window_w, ch));
-                    },
-                }
 
                 // Replay from the freshly built display list.
                 self.replay_display_list(
@@ -346,31 +304,7 @@ impl BrowserWidget {
                     }
                 } else {
                     // First paint: no display list yet, do a full record.
-                    let buffered_h = content_h as f32 + self.scroll.buffer_zone as f32;
-                    let viewport = paint::PaintViewport {
-                        scroll_y: self.scroll.scroll_y as f32,
-                        scroll_x: self.scroll.scroll_x as f32,
-                        x: self.window_x,
-                        y: content_y,
-                        width: self.window_w as f32,
-                        height: buffered_h,
-                        visible_height: content_h as f32,
-                        focused_node: self.focused_node,
-                        counter_styles: counter_styles.clone(),
-                    };
-                    let links = paint::record::record(
-                        layout,
-                        viewport,
-                        &self.href_map,
-                        &mut self.display_list,
-                    );
-                    self.display_list.compact();
-                    self.display_list.optimize();
-                    self.link_map = links;
-                    self.display_list_scroll_y = self.scroll.scroll_y;
-                    self.display_list_scroll_x = self.scroll.scroll_x;
-                    self.link_map_scroll_y = self.scroll.scroll_y;
-                    self.link_map_scroll_x = self.scroll.scroll_x;
+                    self.record_display_list(content_y, content_h, &counter_styles);
 
                     let dirty_copy2: Vec<_> = self.dirty_rects.clone();
                     for dirty in &dirty_copy2 {
@@ -431,33 +365,8 @@ impl BrowserWidget {
                             Some((self.window_x, content_y, self.window_w, content_h)),
                         )?;
                     } else {
-                        // Scroll exceeded the buffer zone or page has sticky
-                        // elements — must rebuild the display list.
-                        let buffered_h = content_h as f32 + self.scroll.buffer_zone as f32;
-                        let viewport = paint::PaintViewport {
-                            scroll_y: self.scroll.scroll_y as f32,
-                            scroll_x: self.scroll.scroll_x as f32,
-                            x: self.window_x,
-                            y: content_y,
-                            width: self.window_w as f32,
-                            height: buffered_h,
-                            visible_height: content_h as f32,
-                            focused_node: self.focused_node,
-                            counter_styles: counter_styles.clone(),
-                        };
-                        let links = paint::record::record(
-                            layout,
-                            viewport,
-                            &self.href_map,
-                            &mut self.display_list,
-                        );
-                        self.display_list.compact();
-                        self.display_list.optimize();
-                        self.link_map = links;
-                        self.display_list_scroll_y = self.scroll.scroll_y;
-                        self.display_list_scroll_x = self.scroll.scroll_x;
-                        self.link_map_scroll_y = self.scroll.scroll_y;
-                        self.link_map_scroll_x = self.scroll.scroll_x;
+                        // Scroll exceeded the buffer zone — re-record.
+                        self.record_display_list(content_y, content_h, &counter_styles);
 
                         self.replay_display_list(
                             backend,
@@ -465,18 +374,6 @@ impl BrowserWidget {
                             0,
                             Some((self.window_x, content_y, self.window_w, content_h)),
                         )?;
-                    }
-
-                    // Mark newly visible tiles as dirty on scroll.
-                    if let Some(grid) = &mut self.tile_grid {
-                        let (vis_start, vis_end) =
-                            grid.visible_range(self.scroll.scroll_y, content_h);
-                        for idx in vis_start..vis_end {
-                            if grid.is_dirty(idx) {
-                                // Tile is already dirty — will be re-rendered.
-                                // Future: skip replay for clean tiles.
-                            }
-                        }
                     }
                 } else {
                     // Same scroll, same layout — replay cached display list.
@@ -494,19 +391,6 @@ impl BrowserWidget {
         // current layout.
         if self.layout_root.is_some() {
             self.display_list_stale = false;
-        }
-
-        // Paint SVG/Canvas elements that can't be represented in the display list.
-        if let Some(layout) = &self.layout_root {
-            Self::paint_svg_canvas_elements(
-                layout,
-                backend,
-                self.scroll.scroll_x as f32,
-                self.scroll.scroll_y as f32,
-                content_h as f32,
-                self.window_x,
-                content_y,
-            )?;
         }
 
         // Paint link highlight if a link is selected.
@@ -554,6 +438,46 @@ impl BrowserWidget {
         backend.reset_clip_rect()?;
 
         Ok(())
+    }
+
+    /// Record the layout tree into `self.display_list` for the content
+    /// viewport at `content_y` (height `content_h`), refresh the link
+    /// map, and remember the scroll position the list was recorded at.
+    ///
+    /// The recorded area extends `scroll.buffer_zone` pixels past the
+    /// visible bottom so small scrolls can replay the cached list with a
+    /// translation instead of re-recording.
+    fn record_display_list(
+        &mut self,
+        content_y: i32,
+        content_h: u32,
+        counter_styles: &[crate::css::parser::CounterStyleRule],
+    ) {
+        let Some(layout) = &self.layout_root else {
+            return;
+        };
+        let viewport = paint::PaintViewport {
+            scroll_y: self.scroll.scroll_y as f32,
+            scroll_x: self.scroll.scroll_x as f32,
+            x: self.window_x,
+            y: content_y,
+            width: self.window_w as f32,
+            height: content_h as f32 + self.scroll.buffer_zone as f32,
+            visible_height: content_h as f32,
+            focused_node: self.focused_node,
+            counter_styles: counter_styles.to_vec(),
+        };
+        self.link_map = paint::build_display_list(
+            layout,
+            viewport,
+            &self.href_map,
+            &mut self.display_list,
+            &self.nested_scroll_offsets,
+        );
+        self.display_list_scroll_y = self.scroll.scroll_y;
+        self.display_list_scroll_x = self.scroll.scroll_x;
+        self.link_map_scroll_y = self.scroll.scroll_y;
+        self.link_map_scroll_x = self.scroll.scroll_x;
     }
 
     /// Helper: replay the display list with web font support when available.
@@ -962,98 +886,6 @@ impl BrowserWidget {
             }
         }
         None
-    }
-
-    /// Paint SVG and Canvas replaced elements via immediate-mode rendering.
-    ///
-    /// The display list recorder skips these elements because they have
-    /// complex internal drawing pipelines that can't be represented as
-    /// display items. This method walks the layout tree after display list
-    /// replay to paint them directly to the backend.
-    ///
-    /// Note: this post-pass means SVG/Canvas always render on top of
-    /// display-list content. For correct z-ordering, these elements would
-    /// need dedicated `DisplayItem` variants (future work).
-    fn paint_svg_canvas_elements(
-        layout_box: &LayoutBox,
-        backend: &mut dyn SdiBackend,
-        scroll_x: f32,
-        scroll_y: f32,
-        viewport_height: f32,
-        offset_x: i32,
-        offset_y: i32,
-    ) -> Result<()> {
-        use crate::css::values::{Dimension, Position};
-
-        // Compute sticky offset (same logic as paint_box / record_box).
-        let sticky_dy = if layout_box.style.position == Position::Sticky {
-            if let Dimension::Px(top) = layout_box.style.top {
-                let natural = layout_box.dimensions.content.y - scroll_y + offset_y as f32;
-                if natural < top {
-                    (top - natural) as i32
-                } else {
-                    0
-                }
-            } else if let Dimension::Px(bottom) = layout_box.style.bottom {
-                let natural = layout_box.dimensions.content.y - scroll_y + offset_y as f32;
-                let box_h = layout_box.dimensions.margin_box().height;
-                let threshold = viewport_height - bottom - box_h;
-                if natural > threshold {
-                    (threshold - natural) as i32
-                } else {
-                    0
-                }
-            } else {
-                0
-            }
-        } else {
-            0
-        };
-        let offset_y = offset_y + sticky_dy;
-
-        // Compute transform offsets (translate, scale, rotate, skew).
-        let (tx_x, tx_y) = paint::compute_transform_offsets(
-            &layout_box.style.transforms,
-            layout_box.style.transform_origin.as_ref(),
-            &layout_box.dimensions.content,
-            offset_x,
-            offset_y,
-        );
-
-        if let BoxType::Replaced(replaced) = &layout_box.box_type {
-            let content = &layout_box.dimensions.content;
-            let x = (content.x - scroll_x + tx_x as f32) as i32;
-            let y = (content.y - scroll_y + tx_y as f32) as i32;
-            match replaced {
-                ReplacedContent::Svg { element } => {
-                    crate::svg::paint_svg(element, backend, x, y, content.width, content.height)?;
-                },
-                ReplacedContent::Canvas { state } => {
-                    let s = state.borrow();
-                    crate::canvas::paint_canvas(
-                        &s,
-                        backend,
-                        x,
-                        y,
-                        content.width as u32,
-                        content.height as u32,
-                    )?;
-                },
-                _ => {},
-            }
-        }
-        for child in &layout_box.children {
-            Self::paint_svg_canvas_elements(
-                child,
-                backend,
-                scroll_x,
-                scroll_y,
-                viewport_height,
-                tx_x,
-                tx_y,
-            )?;
-        }
-        Ok(())
     }
 }
 

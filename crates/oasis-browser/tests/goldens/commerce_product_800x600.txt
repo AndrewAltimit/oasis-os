@@ -14,47 +14,36 @@ draw_text "Account", 56, 152, 13, Color { r: 255, g: 255, b: 255, a: 255 }
 fill_rect 0, 188, 800, 30, Color { r: 243, g: 243, b: 243, a: 255 }
 draw_text "Handhelds", 16, 194, 12, Color { r: 0, g: 102, b: 192, a: 255 }
 fill_rect 70, 194, 60, 18, Color { r: 243, g: 243, b: 243, a: 255 }
-fill_rect 70, 194, 60, 18, Color { r: 243, g: 243, b: 243, a: 255 }
 draw_text " &rsaquo; ", 70, 194, 12, Color { r: 85, g: 85, b: 85, a: 255 }
 draw_text "Sony", 130, 194, 12, Color { r: 0, g: 102, b: 192, a: 255 }
-fill_rect 154, 194, 60, 18, Color { r: 243, g: 243, b: 243, a: 255 }
 fill_rect 154, 194, 60, 18, Color { r: 243, g: 243, b: 243, a: 255 }
 draw_text " &rsaquo; ", 154, 194, 12, Color { r: 85, g: 85, b: 85, a: 255 }
 draw_text "PSP", 214, 194, 12, Color { r: 0, g: 102, b: 192, a: 255 }
 fill_rect 232, 194, 60, 18, Color { r: 243, g: 243, b: 243, a: 255 }
-fill_rect 232, 194, 60, 18, Color { r: 243, g: 243, b: 243, a: 255 }
 draw_text " &rsaquo; ", 232, 194, 12, Color { r: 85, g: 85, b: 85, a: 255 }
 fill_rect 292, 194, 48, 18, Color { r: 243, g: 243, b: 243, a: 255 }
-fill_rect 292, 194, 48, 18, Color { r: 243, g: 243, b: 243, a: 255 }
 draw_text "PSP-3000", 292, 194, 12, Color { r: 85, g: 85, b: 85, a: 255 }
-fill_rect 49, 267, 223, 0, Color { r: 232, g: 232, b: 232, a: 255 }
 fill_rect 48, 266, 225, 1, Color { r: 204, g: 204, b: 204, a: 255 }
 fill_rect 272, 266, 1, 2, Color { r: 204, g: 204, b: 204, a: 255 }
 fill_rect 48, 267, 225, 1, Color { r: 204, g: 204, b: 204, a: 255 }
 fill_rect 48, 266, 1, 2, Color { r: 204, g: 204, b: 204, a: 255 }
-fill_rect 161, 268, 0, 320, Color { r: 232, g: 232, b: 232, a: 255 }
 fill_rect 160, 267, 2, 1, Color { r: 204, g: 204, b: 204, a: 255 }
 fill_rect 161, 267, 1, 322, Color { r: 204, g: 204, b: 204, a: 255 }
 fill_rect 160, 588, 2, 1, Color { r: 204, g: 204, b: 204, a: 255 }
 fill_rect 160, 267, 1, 322, Color { r: 204, g: 204, b: 204, a: 255 }
-fill_rect 161, 268, 0, 320, Color { r: 232, g: 232, b: 232, a: 255 }
 draw_text "[product photo]", 161, 268, 8, Color { r: 153, g: 153, b: 153, a: 255 }
-fill_rect 49, 277, 0, 60, Color { r: 232, g: 232, b: 232, a: 255 }
 fill_rect 48, 276, 2, 1, Color { r: 204, g: 204, b: 204, a: 255 }
 fill_rect 49, 276, 1, 62, Color { r: 204, g: 204, b: 204, a: 255 }
 fill_rect 48, 337, 2, 1, Color { r: 204, g: 204, b: 204, a: 255 }
 fill_rect 48, 276, 1, 62, Color { r: 204, g: 204, b: 204, a: 255 }
-fill_rect 57, 277, 0, 60, Color { r: 232, g: 232, b: 232, a: 255 }
 fill_rect 56, 276, 2, 1, Color { r: 204, g: 204, b: 204, a: 255 }
 fill_rect 57, 276, 1, 62, Color { r: 204, g: 204, b: 204, a: 255 }
 fill_rect 56, 337, 2, 1, Color { r: 204, g: 204, b: 204, a: 255 }
 fill_rect 56, 276, 1, 62, Color { r: 204, g: 204, b: 204, a: 255 }
-fill_rect 65, 277, 0, 60, Color { r: 232, g: 232, b: 232, a: 255 }
 fill_rect 64, 276, 2, 1, Color { r: 204, g: 204, b: 204, a: 255 }
 fill_rect 65, 276, 1, 62, Color { r: 204, g: 204, b: 204, a: 255 }
 fill_rect 64, 337, 2, 1, Color { r: 204, g: 204, b: 204, a: 255 }
 fill_rect 64, 276, 1, 62, Color { r: 204, g: 204, b: 204, a: 255 }
-fill_rect 73, 277, 0, 60, Color { r: 232, g: 232, b: 232, a: 255 }
 fill_rect 72, 276, 2, 1, Color { r: 204, g: 204, b: 204, a: 255 }
 fill_rect 73, 276, 1, 62, Color { r: 204, g: 204, b: 204, a: 255 }
 fill_rect 72, 337, 2, 1, Color { r: 204, g: 204, b: 204, a: 255 }
@@ -86,7 +75,7 @@ draw_text "ratings", 481, 324, 13, Color { r: 0, g: 102, b: 192, a: 255 }
 fill_rect 295, 350, 335, 1, Color { r: 221, g: 221, b: 221, a: 255 }
 draw_text "$139.99", 295, 363, 28, Color { r: 177, g: 39, b: 4, a: 255 }
 draw_text "$179.99", 337, 363, 8, Color { r: 17, g: 17, b: 17, a: 255 }
-draw_text "•", 295, 431, 14, Color { r: 34, g: 34, b: 34, a: 255 }
+draw_text "•", 303, 431, 14, Color { r: 34, g: 34, b: 34, a: 255 }
 draw_text "Slimmer", 315, 431, 14, Color { r: 34, g: 34, b: 34, a: 255 }
 draw_text "and", 357, 431, 14, Color { r: 34, g: 34, b: 34, a: 255 }
 draw_text "lighter", 375, 431, 14, Color { r: 34, g: 34, b: 34, a: 255 }
@@ -96,7 +85,7 @@ draw_text "original", 459, 431, 14, Color { r: 34, g: 34, b: 34, a: 255 }
 draw_text "PSP-1000", 507, 431, 14, Color { r: 34, g: 34, b: 34, a: 255 }
 draw_text "launch", 555, 431, 14, Color { r: 34, g: 34, b: 34, a: 255 }
 draw_text "model.", 591, 431, 14, Color { r: 34, g: 34, b: 34, a: 255 }
-draw_text "•", 295, 452, 14, Color { r: 34, g: 34, b: 34, a: 255 }
+draw_text "•", 303, 452, 14, Color { r: 34, g: 34, b: 34, a: 255 }
 draw_text "Built-in", 315, 452, 14, Color { r: 34, g: 34, b: 34, a: 255 }
 draw_text "microphone", 363, 452, 14, Color { r: 34, g: 34, b: 34, a: 255 }
 draw_text "for", 423, 452, 14, Color { r: 34, g: 34, b: 34, a: 255 }
@@ -104,13 +93,13 @@ draw_text "Skype", 441, 452, 14, Color { r: 34, g: 34, b: 34, a: 255 }
 draw_text "and", 471, 452, 14, Color { r: 34, g: 34, b: 34, a: 255 }
 draw_text "voice", 489, 452, 14, Color { r: 34, g: 34, b: 34, a: 255 }
 draw_text "chat.", 519, 452, 14, Color { r: 34, g: 34, b: 34, a: 255 }
-draw_text "•", 295, 473, 14, Color { r: 34, g: 34, b: 34, a: 255 }
+draw_text "•", 303, 473, 14, Color { r: 34, g: 34, b: 34, a: 255 }
 draw_text "Anti-reflective", 315, 473, 14, Color { r: 34, g: 34, b: 34, a: 255 }
 draw_text "4.3-inch", 405, 473, 14, Color { r: 34, g: 34, b: 34, a: 255 }
 draw_text "16:9", 453, 473, 14, Color { r: 34, g: 34, b: 34, a: 255 }
 draw_text "widescreen", 477, 473, 14, Color { r: 34, g: 34, b: 34, a: 255 }
 draw_text "LCD.", 537, 473, 14, Color { r: 34, g: 34, b: 34, a: 255 }
-draw_text "•", 295, 494, 14, Color { r: 34, g: 34, b: 34, a: 255 }
+draw_text "•", 303, 494, 14, Color { r: 34, g: 34, b: 34, a: 255 }
 draw_text "Runs", 315, 494, 14, Color { r: 34, g: 34, b: 34, a: 255 }
 draw_text "homebrew", 339, 494, 14, Color { r: 34, g: 34, b: 34, a: 255 }
 draw_text "via", 387, 494, 14, Color { r: 34, g: 34, b: 34, a: 255 }
@@ -119,7 +108,7 @@ draw_text "ARK-4", 423, 494, 14, Color { r: 34, g: 34, b: 34, a: 255 }
 draw_text "custom", 453, 494, 14, Color { r: 34, g: 34, b: 34, a: 255 }
 draw_text "firmware", 489, 494, 14, Color { r: 34, g: 34, b: 34, a: 255 }
 draw_text "loader.", 537, 494, 14, Color { r: 34, g: 34, b: 34, a: 255 }
-draw_text "•", 295, 515, 14, Color { r: 34, g: 34, b: 34, a: 255 }
+draw_text "•", 303, 515, 14, Color { r: 34, g: 34, b: 34, a: 255 }
 draw_text "Refurbished", 315, 515, 14, Color { r: 34, g: 34, b: 34, a: 255 }
 draw_text "to", 381, 515, 14, Color { r: 34, g: 34, b: 34, a: 255 }
 draw_text "manufacturer", 393, 515, 14, Color { r: 34, g: 34, b: 34, a: 255 }
@@ -246,4 +235,4 @@ fill_rect 671, 458, 98, 1, Color { r: 255, g: 143, b: 0, a: 255 }
 fill_rect 671, 439, 1, 20, Color { r: 255, g: 143, b: 0, a: 255 }
 fill_rect 768, 439, 1, 20, Color { r: 255, g: 143, b: 0, a: 255 }
 draw_text "Add to Cart", 659, 442, 14, Color { r: 17, g: 17, b: 17, a: 255 }
-# totals fill_rect=145 draw_text=102 other=0
+# totals fill_rect=134 draw_text=102 other=0

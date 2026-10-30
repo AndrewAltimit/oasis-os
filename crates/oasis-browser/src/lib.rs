@@ -539,22 +539,6 @@ pub struct BrowserWidget {
     /// response headers).
     page_csp: Option<loader::csp::CspPolicy>,
 
-    /// Timestamp when loading started (for progress bar animation).
-    #[allow(dead_code)]
-    loading_start: Option<web_time::Instant>,
-
-    /// In-page search state: the current search query (empty = inactive).
-    #[allow(dead_code)]
-    search_state: String,
-
-    /// Ordered list of focusable DOM node IDs (tabindex order).
-    #[allow(dead_code)]
-    tab_order: Vec<NodeId>,
-
-    /// Current index into `tab_order` (-1 = none).
-    #[allow(dead_code)]
-    tab_focus_index: i32,
-
     /// Persistent text measurement cache shared across layout passes.
     /// Cleared only when the effective font size changes (e.g. zoom).
     text_cache: layout::text_cache::SharedTextCache,
@@ -626,12 +610,6 @@ pub struct BrowserWidget {
     /// the layout may not have changed (e.g. visual-only style change
     /// without known dirty rects).
     full_repaint_needed: bool,
-
-    /// Tile grid for tracking visible/dirty regions of the page.
-    /// Infrastructure for future GPU tile caching (render tiles as
-    /// GPU textures, only re-render newly visible tiles on scroll).
-    #[allow(dead_code)]
-    tile_grid: Option<paint::tiling::TileGrid>,
 
     /// Optional diagnostic log hook. When set, the browser fires it
     /// at key milestones during navigation and image loading: page
@@ -751,10 +729,6 @@ impl BrowserWidget {
             animation_engine: css::animation::AnimationEngine::new(),
             last_tick_time: None,
             page_csp: None,
-            loading_start: None,
-            search_state: String::new(),
-            tab_order: Vec::new(),
-            tab_focus_index: -1,
             text_cache: layout::text_cache::new_shared_cache(),
             #[cfg(feature = "web-fonts")]
             font_registry: std::cell::RefCell::new(font::FontRegistry::new()),
@@ -774,7 +748,6 @@ impl BrowserWidget {
             nested_scroll_offsets: HashMap::new(),
             dirty_rects: Vec::new(),
             full_repaint_needed: true,
-            tile_grid: None,
             diag_log: None,
         }
     }
