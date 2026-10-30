@@ -24,8 +24,6 @@ pub mod input;
 pub mod network;
 pub mod power;
 pub mod procedural;
-pub mod psmf;
-pub mod psmf_decode;
 // Rust shim that exposes the libc / libm / time / stdio symbols that
 // rquickjs-sys's QuickJS-NG C sources reference. Pspdev's prebuilt
 // libc.a/libm.a/libcglue.a are eabi32 + single-float + abicalls and

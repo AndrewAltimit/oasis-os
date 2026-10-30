@@ -26,8 +26,7 @@
 //!   video-status      → JSON: state, width, height, decoded, errors,
 //!                        no_pic, processed, pushed, dropped, polled,
 //!                        poll_try, upload_avg_us, audio_only, me_leaked,
-//!                        frame_limit, decode_step
-//!   video-limit <N>   → set max video frames for >480p
+//!                        decode_step
 //!   audio-only [on|off] → toggle/set video decode bypass
 //!   deploy <size> [crc] → receive EBOOT binary with optional CRC32
 //!   upload <size> <path> → write file to ms0:
@@ -405,10 +404,6 @@ fn handle_client(cfd: i32) {
                 handle_hold(cfd, args);
             } else if let Some(args) = cmd.strip_prefix(b"cursor ") {
                 handle_cursor(cfd, args);
-            } else if let Some(arg) = cmd.strip_prefix(b"video-limit ") {
-                let n = parse_u32(arg);
-                crate::video::set_video_frame_limit(n);
-                send_response(cfd, format!("video-limit: {n}\n").as_bytes());
             } else if let Some(args) = cmd.strip_prefix(b"upload ") {
                 handle_upload(cfd, args, leftover);
             } else if let Some(args) = cmd.strip_prefix(b"deploy ") {
@@ -603,7 +598,7 @@ fn send_video_status(cfd: i32) {
          \"decoded\":{},\"errors\":{},\"no_pic\":{},\"processed\":{},\
          \"pushed\":{},\"dropped\":{},\"polled\":{},\"poll_try\":{},\
          \"upload_avg_us\":{},\
-         \"audio_only\":{},\"me_leaked\":{},\"frame_limit\":{},\
+         \"audio_only\":{},\"me_leaked\":{},\
          \"decode_step\":{}}}\n",
         s.width,
         s.height,
@@ -618,7 +613,6 @@ fn send_video_status(cfd: i32) {
         s.upload_us.checked_div(s.upload_count).unwrap_or(0),
         s.audio_only,
         s.me_leaked,
-        s.frame_limit,
         s.decode_step,
     );
     send_response(cfd, resp.as_bytes());
