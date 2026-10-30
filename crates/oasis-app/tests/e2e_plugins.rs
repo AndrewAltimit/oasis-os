@@ -33,13 +33,20 @@ fn clock_drawn(h: &mut Harness) -> bool {
 
 /// The clock-widget example plugin used to draw into a throwaway scene
 /// and never got `update`: nothing appeared. It now shows the live time,
-/// right-aligned, on the dashboard.
+/// right-aligned, on the dashboard once `pclock show` opts in (it is hidden
+/// by default so the example never covers the dashboard).
 #[test]
 fn clock_widget_plugin_is_drawn_with_the_live_time() {
     let mut opts = HarnessOptions::new("classic");
     opts.resolution = Some((480, 272));
     let mut h = Harness::with_options(opts).unwrap();
     h.settle();
+    assert!(
+        !clock_drawn(&mut h),
+        "hidden by default: {:?}",
+        h.frame_text()
+    );
+    run(&mut h, "pclock show");
     assert!(clock_drawn(&mut h), "{:?}", h.frame_text());
     let (x, _, w, _) = h.sdi_rect("plugin_clock_bg").expect("clock background");
     assert_eq!(x + w as i32, 480 - 6, "right-aligned on the 480px screen");
@@ -68,6 +75,8 @@ fn plugin_command_lists_unloads_and_reloads_plugins() {
         h.state().terminal.output_lines
     );
     assert!(output_contains(&h, "hello (1.0.0) [active]"));
+    run(&mut h, "pclock show");
+    assert!(clock_drawn(&mut h), "{:?}", h.frame_text());
 
     run(&mut h, "plugin unload clock-widget");
     assert!(output_contains(&h, "Plugin clock-widget unloaded."));

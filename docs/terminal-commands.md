@@ -403,7 +403,7 @@ see [mcp-server.md](mcp-server.md).
 
 The example plugins add `hello [name]`, `note [list|read <name>|write <name>
 <text>]` and `pclock [show|hide]` (shows / hides the clock-widget plugin's
-on-screen clock through `/var/pclock/visible`).
+on-screen clock through `/var/pclock/visible`; hidden by default).
 
 ## Agent and CI (`oasis-core/src/terminal/agent_commands.rs`)
 

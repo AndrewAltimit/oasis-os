@@ -311,7 +311,7 @@ The codebase ships three example plugins in `crates/oasis-core/src/plugin/exampl
 | Plugin | Commands | Description |
 |--------|----------|-------------|
 | `HelloPlugin` | `hello [name]` | Simplest possible plugin -- single command |
-| `ClockWidgetPlugin` | `pclock [show\|hide]` | Live `HH:MM:SS` overlay clock, right-aligned from `PluginContext`; `pclock` toggles it through `/var/pclock/visible` |
+| `ClockWidgetPlugin` | `pclock [show\|hide]` | Live `HH:MM:SS` overlay clock, right-aligned from `PluginContext`; hidden until `pclock show` (state in `/var/pclock/visible`) |
 | `NotepadPlugin` | `note [list\|read\|write]` | VFS-backed notepad with CRUD operations (commands only; it registers no app) |
 
 Study these for patterns on SDI widget creation, VFS interaction, and command registration.

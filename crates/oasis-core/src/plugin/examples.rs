@@ -95,6 +95,8 @@ pub const CLOCK_WIDGET_NAME: &str = "plugin_clock";
 /// SDI object behind the text (a translucent rounded pill).
 pub const CLOCK_WIDGET_BG_NAME: &str = "plugin_clock_bg";
 /// `1` / `0`: whether the clock is shown (written by `pclock show|hide`).
+/// The widget is opt-in: anything but `1` (including no file) hides it, so
+/// the example plugin never covers the dashboard unless asked to.
 pub const PCLOCK_VISIBLE_PATH: &str = "/var/pclock/visible";
 
 const CLOCK_W: u32 = 60;
@@ -116,7 +118,7 @@ impl ClockWidgetPlugin {
             || "--:--:--".to_string(),
             |t| format!("{:02}:{:02}:{:02}", t.hour, t.minute, t.second),
         );
-        let visible = !host.vfs.read(PCLOCK_VISIBLE_PATH).is_ok_and(|d| d == b"0");
+        let visible = host.vfs.read(PCLOCK_VISIBLE_PATH).is_ok_and(|d| d == b"1");
         if let Ok(bg) = host.sdi.get_mut(CLOCK_WIDGET_BG_NAME) {
             bg.x = x;
             bg.y = CLOCK_TOP;
@@ -452,7 +454,8 @@ mod tests {
 
         let obj = sdi.get(CLOCK_WIDGET_NAME).unwrap();
         assert_eq!(obj.text.as_deref(), Some("09:05:07"));
-        assert!(obj.overlay && obj.visible);
+        assert!(obj.overlay);
+        assert!(!obj.visible, "the example clock is opt-in (`pclock show`)");
         let bg = sdi.get(CLOCK_WIDGET_BG_NAME).unwrap();
         assert_eq!(bg.x + bg.w as i32, 480 - 6, "right-aligned on screen");
     }
