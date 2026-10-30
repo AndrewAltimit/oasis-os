@@ -464,7 +464,7 @@ fn http_methods_and_paths() {
         ]
     });
     assert_eq!(resps[0].status, 405);
-    assert_eq!(resps[0].header("Allow"), Some("POST, DELETE"));
+    assert_eq!(resps[0].header("Allow"), Some("POST, OPTIONS"));
     assert_eq!(resps[1].status, 405);
     assert_eq!(resps[2].status, 204);
     assert!(
@@ -475,7 +475,8 @@ fn http_methods_and_paths() {
         "OPTIONS must never approve a CORS preflight: {:?}",
         resps[2].headers
     );
-    assert_eq!(resps[3].status, 200);
+    // No sessions are issued, so DELETE has nothing to terminate.
+    assert_eq!(resps[3].status, 405);
     assert_eq!(resps[4].status, 404);
     // The connection survived all of the above.
     assert_eq!(resps[5].status, 200);

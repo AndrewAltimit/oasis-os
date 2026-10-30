@@ -788,13 +788,7 @@ mod tests {
         listener.poll(&mut NoAccept);
         assert_eq!(listener.connection_count(), 0);
         let out = String::from_utf8(out.lock().unwrap().clone()).unwrap();
-        assert!(
-            out.ends_with(
-                "AUTH_FAIL timeout
-"
-            ),
-            "{out:?}"
-        );
+        assert!(out.ends_with("AUTH_FAIL timeout\n"), "{out:?}");
         // Timing out is not a wrong guess.
         assert_eq!(listener.auth_failures.count, 0);
     }
@@ -811,14 +805,7 @@ mod tests {
     #[test]
     fn command_burst_is_spread_over_polls() {
         let mut listener = RemoteListener::new(ListenerConfig::default());
-        let burst: String = (0..150)
-            .map(|i| {
-                format!(
-                    "c{i}
-"
-                )
-            })
-            .collect();
+        let burst: String = (0..150).map(|i| format!("c{i}\n")).collect();
         admitted(&mut listener, burst.as_bytes());
         let mut seen = Vec::new();
         for _ in 0..3 {

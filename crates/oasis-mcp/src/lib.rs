@@ -17,7 +17,8 @@
 //! The minimal Streamable-HTTP subset implemented here: `POST /mcp` with a
 //! JSON-RPC request returns a single `application/json` response; a
 //! notification returns `202 Accepted`; `GET /mcp` returns `405` (no
-//! server-initiated SSE stream); `DELETE`/`OPTIONS` are handled trivially.
+//! server-initiated SSE stream), as does `DELETE` (no sessions); `OPTIONS`
+//! answers `204` without approving any CORS preflight.
 //! No session IDs are issued (single local client).
 
 mod dispatch;
