@@ -105,7 +105,22 @@ pub(crate) enum InsertionMode {
 /// reaches this limit, new elements are appended as children of the
 /// current node instead of being pushed onto the stack. This prevents
 /// stack exhaustion from pathologically deeply nested HTML.
-const MAX_NESTING_DEPTH: usize = 256;
+///
+/// The cascade, layout-tree build, layout, paint and serialization
+/// passes all recurse once per DOM level and are sized for this cap, so
+/// DOM mutations from script enforce the matching
+/// [`MAX_DOM_DEPTH`] too (`js_dom::node_api::insert_node`).
+pub const MAX_NESTING_DEPTH: usize = 256;
+
+/// Deepest node depth (the document root is depth 0) the parser can
+/// produce: `MAX_NESTING_DEPTH` open elements below the root, plus one
+/// more level for the children appended once the stack is full. Script
+/// insertions that would place a node deeper are refused, and
+/// `innerHTML` flattens markup at this depth. The only node that can sit
+/// one level below it is the text leaf a `textContent` / `innerHTML`
+/// write puts inside an element already at the cap.
+#[cfg_attr(not(feature = "javascript"), allow(dead_code))]
+pub const MAX_DOM_DEPTH: usize = MAX_NESTING_DEPTH + 1;
 
 /// Maximum number of DOM nodes allowed in a document. Beyond this
 /// limit, new elements are silently dropped to prevent memory

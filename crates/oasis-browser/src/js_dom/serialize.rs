@@ -1,4 +1,4 @@
-//! `innerHTML` serialization and fragment deep-copy helpers.
+//! `innerHTML` serialization and the depth-capped fragment deep copy.
 
 use crate::html::dom::{Document, NodeId, NodeKind};
 
@@ -57,13 +57,38 @@ pub(super) fn escape_html(s: &str, out: &mut String) {
     }
 }
 
-/// Deep-copy a node (and its subtree) from `src` into `dst`,
-/// returning the new node ID in `dst`.
-pub(super) fn deep_copy_node(src: &Document, dst: &mut Document, src_id: NodeId) -> NodeId {
-    let new_id = dst.add_node(src.nodes[src_id].kind.clone());
-    for &child_src in &src.nodes[src_id].children {
-        let child_new = deep_copy_node(src, dst, child_src);
-        dst.append_child(new_id, child_new);
+/// Deep-copy `src_id` (and its subtree) from `src` into `dst`, appended
+/// as the last child of `dst_parent`, using at most `levels` levels below
+/// `dst_parent` (the copy of `src_id` itself is level 1).
+///
+/// Content deeper than that is flattened, like the parser does at its
+/// nesting cap: once one level is left, the remaining descendants are
+/// appended (in document order) as leaf siblings of the last copied
+/// node instead of nesting further. With `levels == 0` nothing is
+/// copied.
+pub(super) fn deep_copy_capped(
+    src: &Document,
+    dst: &mut Document,
+    src_id: NodeId,
+    dst_parent: NodeId,
+    levels: usize,
+) {
+    if levels == 0 {
+        return;
     }
-    new_id
+    let new_id = dst.add_node(src.nodes[src_id].kind.clone());
+    dst.append_child(dst_parent, new_id);
+    if levels > 1 {
+        for &child_src in &src.nodes[src_id].children {
+            deep_copy_capped(src, dst, child_src, new_id, levels - 1);
+        }
+        return;
+    }
+    // Last level: flatten the descendants into leaf siblings.
+    let mut stack: Vec<NodeId> = src.nodes[src_id].children.iter().rev().copied().collect();
+    while let Some(n) = stack.pop() {
+        let leaf = dst.add_node(src.nodes[n].kind.clone());
+        dst.append_child(dst_parent, leaf);
+        stack.extend(src.nodes[n].children.iter().rev().copied());
+    }
 }

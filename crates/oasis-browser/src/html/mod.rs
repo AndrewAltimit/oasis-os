@@ -4,3 +4,6 @@ pub mod dom;
 pub mod entities;
 pub mod tokenizer;
 pub mod tree_builder;
+
+#[cfg(feature = "javascript")]
+pub use tree_builder::MAX_DOM_DEPTH;

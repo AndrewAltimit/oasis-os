@@ -78,6 +78,10 @@
         'The new child element contains the parent.', 'HierarchyRequestError');
     }
     if (rc === -2) throw new DOMException('Invalid node.', 'NotFoundError');
+    if (rc === -3) {
+      throw new DOMException(
+        'The insertion would exceed the maximum DOM depth.', 'HierarchyRequestError');
+    }
   }
 
   function __as_node(n) {
