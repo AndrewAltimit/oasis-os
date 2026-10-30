@@ -61,6 +61,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
 
             let dir_name = entry.file_name().to_string_lossy().to_string();
+            // Settings saves user skins as `skins/custom-<base>/` (relative
+            // to the working directory, so into the repository when the
+            // shell runs from it): those are not built-ins.
+            if dir_name.starts_with("custom-") {
+                continue;
+            }
 
             let required = [
                 "skin.toml",
