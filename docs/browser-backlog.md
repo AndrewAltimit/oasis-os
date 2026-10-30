@@ -427,6 +427,15 @@ shipped. Each is small enough for a focused PR.
   -p oasis-browser --features parallel-style -- -D warnings` fails
   in `css/cascade/mod.rs` (unused `cascade_yield_fn`, needless
   `return`). CI only lints default features, so this rots silently.
+- **Network-stack gaps left after the WP-A hardening.** `SameSite` is
+  parsed but not enforced (every matching cookie is sent regardless of
+  initiator); `<meta http-equiv="Content-Security-Policy">` is ignored;
+  `'sha384-…'` / `'sha512-…'` CSP hashes never match; script-written
+  `style=""` attributes bypass `style-src-attr`; PSP has no cookie jar
+  (`load_from_network` on PSP carries CSP but not cookies); cookies set
+  by synchronous main-thread loads are not pushed to the I/O thread's
+  jar clone; HTTPS has no connection reuse (fresh TCP + TLS per
+  request, h2 GOAWAY after one stream).
 
 ---
 

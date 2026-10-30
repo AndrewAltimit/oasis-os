@@ -19,9 +19,51 @@ arena DOM and backend traits: [`adr/001-arena-based-dom.md`](adr/001-arena-based
   DATA flow control via `WINDOW_UPDATE`, PING/PONG, graceful GOAWAY,
   and `PUSH_PROMISE` refusal. One request per connection — no
   multiplexing, but unblocks every CDN that hard-requires `h2` for the
-  initial GET.
-- **Cookies, gzip, CSP.** Scripts/styles/connect-src enforced;
-  img-src relaxed for practicality.
+  initial GET. DoS caps: frames over the advertised 1 MiB
+  `MAX_FRAME_SIZE` are refused (GOAWAY `FRAME_SIZE_ERROR`) before their
+  payload is allocated, a HEADERS + CONTINUATION block over 64 KiB gets
+  GOAWAY `ENHANCE_YOUR_CALM`, and HPACK output is capped at the
+  advertised 64 KiB `MAX_HEADER_LIST_SIZE` (GOAWAY `COMPRESSION_ERROR`).
+- **HTTP/1.1 framing** (`loader/http1.rs`) is shared by the desktop and
+  PSP clients: header lines are parsed (not substring-sniffed) to pick
+  `Content-Length` / chunked framing, and the chunked terminator is
+  found by walking the chunk sizes.
+- **URLs** — network-scheme URLs are normalized at parse time: host
+  lower-cased, `user:pw@` split into `Url::userinfo` (never sent),
+  default port elided, `\` treated as `/`. `Url::origin()` is the one
+  origin used by CSP `'self'`, `fetch()` CORS and Web Storage.
+- **Cookies** (`loader/cookies.rs`, desktop only) — session-scoped
+  RFC 6265 jar: host-only cookies, `Domain=` validated (no IP parents, a
+  "PSL-lite" public-suffix guard), `Max-Age` / `Expires` expiry and
+  deletion, `Secure` (sent over and accepted from `https:` only),
+  `__Secure-` / `__Host-` prefixes, control-character and 4 KiB size
+  checks, 50-per-domain / 3000-total caps. `SameSite` is parsed but not
+  enforced. Cookies are computed and stored **per redirect hop**, so a
+  cross-site redirect never carries the first site's cookies and a hop's
+  `Set-Cookie` lands under the host that sent it. `document.cookie` is a
+  separate per-page map that never reaches the network.
+- **Redirect header policy** — cache validators go on the first hop
+  only; `Cookie` / `Authorization` are dropped once a hop leaves the
+  original origin; `Referer` follows `strict-origin-when-cross-origin`
+  per hop (origin only cross-origin, nothing on an `https:` → `http:`
+  downgrade); body headers go with the body on a POST → GET rewrite.
+- **CSP** (`loader/csp.rs`) — every `Content-Security-Policy` header is
+  enforced (report-only and `<meta>` policies are ignored):
+  `script-src(-elem)` gates inline `<script>` (matching `nonce`,
+  `'sha256-…'` hash, or `'unsafe-inline'` when the list has no nonce /
+  hash / `'strict-dynamic'`); `script-src-attr` gates inline event
+  handlers (`'unsafe-inline'` only); `style-src(-elem)` gates inline
+  `<style>` (nonce / hash / `'unsafe-inline'`) and `<link
+  rel=stylesheet>` / `@import` URLs; `style-src-attr` gates
+  parser-inserted `style=""`; `connect-src` gates script `fetch()`.
+  `img-src` is parsed but not enforced, and external `<script src>` is
+  never loaded. Scheme (`https:`, `data:`), host (`*.` wildcard, port,
+  path), `'self'` and `*` sources follow CSP3 matching. PSP carries the
+  CSP header too, but has no cookie jar.
+- **`vfs://` isolation** — pages with a network origin cannot load
+  `vfs://` images, stylesheets, `@import`s or fonts
+  (`loader::subresource_allowed`); their `http(s)` subresources may still
+  come from the offline `/sites/<host>/` cache.
 - **Redirects** — page loads follow up to `BrowserConfig::max_redirects`
   (default 5) redirects; script `fetch()` keeps the default.
 - **Background I/O thread** — network loads never block the UI thread.
