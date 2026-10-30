@@ -15,7 +15,10 @@
 //! `oasis-core`. The PSP backend doesn't use `AppRunner` and imports the
 //! app crates it needs (`oasis-app-tv-guide`) directly.
 
+use std::sync::Arc;
+
 use oasis_core::apps::{AppRegistration, AppRegistry, AppRunner, OwnedMedia, SimpleApp};
+use oasis_core::platform::{DesktopPlatform, TimeService};
 use oasis_core::terminal::CommandRegistry;
 
 #[cfg(test)]
@@ -70,23 +73,71 @@ pub struct HostInfo {
     pub default_skin: String,
     /// Resolution the Settings app shows before the host publishes it.
     pub default_resolution: (u32, u32),
+    /// The platform clock apps seed from (the Games shuffle). `None`
+    /// keeps every seed fixed: deterministic boards for tests.
+    pub clock: Option<HostClock>,
 }
+
+/// A shared platform [`TimeService`] handed to the app factories.
+///
+/// Equality is identity (the same clock instance).
+#[derive(Clone)]
+pub struct HostClock(Arc<dyn TimeService + Send + Sync>);
+
+impl HostClock {
+    /// Wrap a platform clock.
+    pub fn new(clock: impl TimeService + Send + Sync + 'static) -> Self {
+        Self(Arc::new(clock))
+    }
+}
+
+impl std::ops::Deref for HostClock {
+    type Target = dyn TimeService + Send + Sync;
+
+    fn deref(&self) -> &Self::Target {
+        &*self.0
+    }
+}
+
+impl std::fmt::Debug for HostClock {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("HostClock(..)")
+    }
+}
+
+impl PartialEq for HostClock {
+    fn eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.0, &other.0)
+    }
+}
+
+impl Eq for HostClock {}
 
 impl HostInfo {
     /// A host on `platform` rendering through `backend`, with the PSP
-    /// baseline (`classic`, 480x272) as the Settings fallback.
+    /// baseline (`classic`, 480x272) as the Settings fallback and no
+    /// clock (fixed app seeds).
     pub fn new(platform: impl Into<String>, backend: impl Into<String>) -> Self {
         Self {
             platform: platform.into(),
             backend: backend.into(),
             default_skin: "classic".to_string(),
             default_resolution: (480, 272),
+            clock: None,
         }
     }
 
-    /// The desktop shell (`oasis-app`, SDL3).
+    /// The desktop shell (`oasis-app`, SDL3), seeding apps from the
+    /// desktop clock (which honours `OASIS_FIXED_TIME`, so frozen-clock
+    /// captures stay reproducible).
     pub fn desktop() -> Self {
-        Self::new("Desktop (SDL3)", "SDL3")
+        Self::new("Desktop (SDL3)", "SDL3").with_clock(DesktopPlatform::new())
+    }
+
+    /// Seed apps from `clock` (see [`HostInfo::clock`]).
+    pub fn with_clock(mut self, clock: impl TimeService + Send + Sync + 'static) -> Self {
+        self.clock = Some(HostClock::new(clock));
+        self
     }
 }
 
@@ -181,9 +232,14 @@ pub fn builtin_registry(host: &HostInfo) -> AppRegistry {
         })
         .on_dashboard(),
     );
+    let clock = host.clock.clone();
     apps.register(
-        AppRegistration::new(GAMES, |path, _vfs| {
-            Box::new(oasis_app_games::GamesApp::new(path))
+        AppRegistration::new(GAMES, move |path, _vfs| {
+            Box::new(match &clock {
+                // A new shuffle every launch.
+                Some(clock) => oasis_app_games::GamesApp::with_clock(path, &**clock),
+                None => oasis_app_games::GamesApp::new(path),
+            })
         })
         .on_dashboard(),
     );

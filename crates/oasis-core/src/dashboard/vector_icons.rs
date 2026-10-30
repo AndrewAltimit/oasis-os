@@ -571,19 +571,10 @@ impl DashboardState {
         let icon_h = at.icon_height;
         let preset = &at.icon.vector_preset;
 
-        // Page-slide offset for animation.
-        let slide_offset = if let Some(ref anim) = self.page_anim {
-            let t = anim.eased_progress();
-            let w = at.screen_w as f32;
-            ((1.0 - t) * w * anim.direction as f32) as i32
-        } else {
-            0
-        };
-
+        let slide_offset = self.slide_offset(at);
         let per_page = self.config.icons_per_page as usize;
         let page_start = self.page * per_page;
         let origins = self.page_cell_origins();
-        let (cell_w, cell_h) = self.cell_size();
 
         // Draw the dragged icon last so it stays on top of its siblings.
         let mut order: Vec<usize> = (0..page_apps.len()).collect();
@@ -596,9 +587,11 @@ impl DashboardState {
 
         for &i in &order {
             let app = &page_apps[i];
-            let (cell_x, cell_y) = (origins[i].0 + slide_offset, origins[i].1);
-            let ix = cell_x + (cell_w as i32 - icon_w as i32) / 2;
-            let iy = cell_y + (cell_h as i32 - icon_h as i32) / 4 - self.hover_lift_px(i, at);
+            let Some(&(ox, oy)) = origins.get(i) else {
+                continue;
+            };
+            // Same placement as the SDI pass (column layouts left-align).
+            let (ix, iy) = self.icon_origin(i, (ox + slide_offset, oy), at);
 
             // Get or build the scaled icon scene: static icons render from
             // the cache; animated or flashing icons rebuild each frame.

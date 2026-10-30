@@ -9,27 +9,21 @@ authors.workspace = true
 
 [features]
 default = []
+# GPU path: `glow` (OpenGL, or WebGL2 through a host-created
+# `glow::Context`); the CPU renderer is always built.
 gl-native = ["glow"]
-gl-web = ["glow", "web-sys", "wasm-bindgen"]
 # Multi-threaded software shading (rayon). Desktop-only: do not enable
 # for the WASM or PSP targets (single-threaded; PSP grids are tiny).
 parallel = ["dep:rayon"]
 
 [dependencies]
-glow = { version = "0.16", optional = true }
+glow = { workspace = true, optional = true }
 log = { workspace = true }
 oasis-types = { workspace = true }
 rayon = { workspace = true, optional = true }
-web-sys = { workspace = true, features = [
-    "WebGl2RenderingContext",
-    "HtmlCanvasElement",
-    "Document",
-    "Window",
-], optional = true }
-wasm-bindgen = { workspace = true, optional = true }
 
 [dev-dependencies]
-criterion = { version = "0.5", features = ["html_reports"] }
+criterion = { workspace = true }
 
 [[bench]]
 name = "shader_render"

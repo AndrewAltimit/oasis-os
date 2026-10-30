@@ -72,9 +72,10 @@ impl SymphoniaDecoder {
 
     /// Open from a streaming source with pre-extracted avcC config.
     ///
-    /// Skips the full-file `read_to_end()` scan that `open_stream` performs.
-    /// Use this when avcC has already been extracted from the moov atom
-    /// (e.g. fetched via HTTP Range request).
+    /// Skips the top-level atom walk that `open_stream` performs to read
+    /// the `moov` box (and the seek back to the start after it). Use this
+    /// when avcC has already been extracted from the moov atom (e.g.
+    /// fetched via HTTP Range request).
     pub fn open_stream_with_avcc(
         source: Box<dyn VideoSource>,
         avcc: Option<AvccConfig>,
@@ -87,7 +88,7 @@ impl SymphoniaDecoder {
     /// complete atom, header included).
     ///
     /// Like [`open_stream_with_avcc`](Self::open_stream_with_avcc) (no
-    /// full-file scan), and additionally indexes the video keyframes so
+    /// atom walk), and additionally indexes the video keyframes so
     /// [`seek`](Self::seek) lands on a keyframe.
     pub fn open_stream_with_moov(
         source: Box<dyn VideoSource>,

@@ -26,11 +26,11 @@ h264 = ["symphonia", "dep:openh264"]
 ffmpeg = ["dep:ffmpeg-next"]
 
 [dependencies]
-log = "0.4"
+log = { workspace = true }
 thiserror = { workspace = true }
 
 # MP4 demuxing + AAC decoding (pure Rust)
-symphonia = { version = "0.5", optional = true, default-features = false, features = [
+symphonia = { workspace = true, optional = true, features = [
     "isomp4",  # MP4/ISO BMFF demuxer
     "aac",     # AAC-LC decoder
 ] }
@@ -54,7 +54,7 @@ path = "src/bin/video_memprofile.rs"
 required-features = ["h264"]
 
 [dev-dependencies]
-criterion = { version = "0.5", features = ["html_reports"] }
+criterion = { workspace = true }
 proptest.workspace = true
 
 [[bench]]

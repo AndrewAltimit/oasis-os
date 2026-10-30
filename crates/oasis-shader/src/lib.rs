@@ -6,8 +6,8 @@
 //!
 //! # Feature flags
 //!
-//! - `gl-native` — `glow` with native OpenGL loader (SDL3, headless EGL)
-//! - `gl-web` — `glow` with `web_sys::WebGl2RenderingContext`
+//! - `gl-native` — the `glow` GPU path; the host creates the `glow::Context`
+//!   (native OpenGL via SDL3 / EGL, or WebGL2)
 //! - `parallel` — shade the [`software`] renderer's rows on a rayon pool
 //!   (desktop only)
 //!

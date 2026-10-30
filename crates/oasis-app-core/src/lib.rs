@@ -70,7 +70,7 @@ macro_rules! impl_content_app_methods {
         fn path(&self) -> &str {
             &self.$field.app_path
         }
-        fn layout(&mut self, _cw: u32, ch: u32, at: &oasis_skin::ActiveTheme) {
+        fn layout(&mut self, _cw: u32, ch: u32, at: &$crate::__macro_support::ActiveTheme) {
             self.$field.update_layout_windowed(ch, at);
         }
         fn draw_windowed(
@@ -79,9 +79,9 @@ macro_rules! impl_content_app_methods {
             cy: i32,
             cw: u32,
             ch: u32,
-            backend: &mut dyn oasis_types::backend::SdiBackend,
-            at: &oasis_skin::ActiveTheme,
-        ) -> oasis_types::error::Result<()> {
+            backend: &mut dyn $crate::__macro_support::SdiBackend,
+            at: &$crate::__macro_support::ActiveTheme,
+        ) -> $crate::__macro_support::Result<()> {
             $crate::render::draw_content_windowed(&self.$field, cx, cy, cw, ch, backend, at)
         }
         fn drain_requests(&mut self, out: &mut Vec<$crate::AppRequest>) {
@@ -97,4 +97,13 @@ macro_rules! impl_content_app_methods {
             self.$field.viewing_file.as_deref()
         }
     };
+}
+
+/// Paths [`impl_content_app_methods!`] expands to, so an app crate using
+/// the macro needs no direct `oasis-skin` / `oasis-types` dependency.
+#[doc(hidden)]
+pub mod __macro_support {
+    pub use oasis_skin::ActiveTheme;
+    pub use oasis_types::backend::SdiBackend;
+    pub use oasis_types::error::Result;
 }
