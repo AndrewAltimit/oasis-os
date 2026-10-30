@@ -1762,6 +1762,9 @@ fn sticky_top_pins_to_the_viewport_not_the_screen() {
 
     let mut backend = MockBackend::new();
     dl.replay(&mut backend, 0, -40, None).unwrap();
-    assert_eq!(fill_y(&backend), Some(28), "replayed after 40 px more scroll");
+    assert_eq!(
+        fill_y(&backend),
+        Some(28),
+        "replayed after 40 px more scroll"
+    );
 }
-

@@ -1870,8 +1870,7 @@ mod fuzz {
     use super::super::super::tokenizer::Tokenizer;
     use super::TreeBuilder;
 
-    const FIXTURE: &str =
-        include_str!("../../tests/fixtures/html5lib/tree_construction_basic.dat");
+    const FIXTURE: &str = include_str!("../../tests/fixtures/html5lib/tree_construction_basic.dat");
 
     /// Extra seeds that target the historically fragile paths:
     /// adoption agency, foster parenting, templates, foreign content,

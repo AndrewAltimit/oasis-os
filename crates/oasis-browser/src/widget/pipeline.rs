@@ -997,7 +997,9 @@ impl BrowserWidget {
                 // Hover/focus restyles reuse this and would otherwise
                 // see stale pre-restyle dimensions for nested
                 // container-query cases.
-                Some(crate::layout::container_query::build_container_lookup(&layout_root))
+                Some(crate::layout::container_query::build_container_lookup(
+                    &layout_root,
+                ))
             } else {
                 Some(first_lookup)
             }
