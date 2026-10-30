@@ -5,11 +5,12 @@ use crate::error::Result;
 
 /// Core rendering methods that every backend must implement.
 ///
-/// These 13 methods are the minimum surface for a rendering backend.
-/// Test mocks and null backends implement this trait plus empty impls
-/// for the nine extension traits (`SdiShapes`, `SdiGradients`,
-/// `SdiAlpha`, `SdiText`, `SdiTextures`, `SdiClipTransform`, `SdiVector`,
-/// `SdiBatch`, `SdiRenderTarget`) -- one
+/// These 13 required methods (plus the provided
+/// [`viewport_size`](Self::viewport_size)) are the minimum surface for a
+/// rendering backend. Test mocks and null backends implement this trait
+/// plus empty impls for the eight extension traits (`SdiShapes`,
+/// `SdiGradients`, `SdiText`, `SdiTextures`, `SdiClipTransform`,
+/// `SdiVector`, `SdiBatch`, `SdiRenderTarget`) -- one
 /// [`impl_sdi_defaults!`](crate::impl_sdi_defaults) line writes them --
 /// to satisfy `SdiBackend` via its blanket impl.
 ///
@@ -31,6 +32,8 @@ use crate::error::Result;
 ///   [`SdiClipTransform::push_clip_rect`].
 /// - **[`reset_clip_rect`](Self::reset_clip_rect)** removes the clip. It is
 ///   always safe to call, including when no clip is set.
+/// - **[`viewport_size`](Self::viewport_size)** reports the bound surface:
+///   a render target's own size while one is bound.
 /// - **[`clear`](Self::clear) ignores the clip and does not blend.** It
 ///   writes `color`, alpha included, to every pixel of the bound surface,
 ///   so `clear(Color::TRANSPARENT)` on a render target really makes it
@@ -83,4 +86,21 @@ pub trait SdiCore {
 
     /// Shut down the rendering subsystem and release resources.
     fn shutdown(&mut self) -> Result<()>;
+
+    /// Size `(width, height)` of the bound surface in pixels: the
+    /// framebuffer, or the render target bound with
+    /// [`SdiRenderTarget::bind_render_target`].
+    ///
+    /// The one provided method of this trait. The default reports the PSP
+    /// native resolution ([`DEFAULT_VIEWPORT_WIDTH`] x
+    /// [`DEFAULT_VIEWPORT_HEIGHT`]); every real backend overrides it.
+    ///
+    /// [`DEFAULT_VIEWPORT_WIDTH`]: crate::backend::DEFAULT_VIEWPORT_WIDTH
+    /// [`DEFAULT_VIEWPORT_HEIGHT`]: crate::backend::DEFAULT_VIEWPORT_HEIGHT
+    fn viewport_size(&self) -> (u32, u32) {
+        (
+            crate::backend::DEFAULT_VIEWPORT_WIDTH,
+            crate::backend::DEFAULT_VIEWPORT_HEIGHT,
+        )
+    }
 }

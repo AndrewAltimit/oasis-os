@@ -4,7 +4,7 @@
 //! circles, triangles, polygons, arcs) and helper functions used by both
 //! this module and the parent `lib.rs` (gradients, clip intersection).
 
-use oasis_types::backend::{ArcParams, Color, SdiCore, StrokeStyle};
+use oasis_types::backend::{Color, SdiCore, StrokeStyle};
 use oasis_types::error::Result;
 use sdl3::render::FRect;
 
@@ -21,24 +21,6 @@ impl SdlBackend {
         if !self.rect_batch.is_empty() {
             let _ = self.canvas.fill_rects(self.rect_batch.as_slice());
         }
-    }
-
-    /// Fill a triangle using pre-translated screen coordinates.
-    ///
-    /// Used by `fill_arc` which translates the center once and computes
-    /// all vertices in screen space. Only appends spans to `rect_batch`;
-    /// the caller submits them.
-    #[allow(clippy::too_many_arguments)]
-    pub(crate) fn fill_triangle_translated(
-        &mut self,
-        tx1: i32,
-        ty1: i32,
-        tx2: i32,
-        ty2: i32,
-        tx3: i32,
-        ty3: i32,
-    ) {
-        triangle_spans((tx1, ty1), (tx2, ty2), (tx3, ty3), &mut self.rect_batch);
     }
 
     pub(crate) fn shape_fill_rounded_rect(
@@ -236,39 +218,11 @@ impl SdlBackend {
         self.flush_rect_batch();
         Ok(())
     }
-
-    pub(crate) fn shape_fill_arc(&mut self, arc: ArcParams, color: Color) -> Result<()> {
-        use oasis_types::backend::{arc_segments, cos_approx_f32, sin_approx_f32};
-        let (tcx, tcy) = self.translate(arc.cx, arc.cy);
-        self.set_color(color);
-        let segments = arc_segments(arc.radius, arc.start_angle, arc.end_angle);
-        let r = arc.radius as f32;
-        let step = (arc.end_angle - arc.start_angle) / segments as f32;
-
-        // Build triangle fan vertices and scanline-fill each triangle; the
-        // spans of the whole fan go to SDL in one `fill_rects` call.
-        self.rect_batch.clear();
-        let mut prev_x = tcx + (r * cos_approx_f32(arc.start_angle)) as i32;
-        let mut prev_y = tcy + (r * sin_approx_f32(arc.start_angle)) as i32;
-        for i in 1..=segments {
-            let angle = arc.start_angle + step * i as f32;
-            let nx = tcx + (r * cos_approx_f32(angle)) as i32;
-            let ny = tcy + (r * sin_approx_f32(angle)) as i32;
-            self.fill_triangle_translated(tcx, tcy, prev_x, prev_y, nx, ny);
-            prev_x = nx;
-            prev_y = ny;
-        }
-        self.flush_rect_batch();
-        Ok(())
-    }
 }
 
 // -------------------------------------------------------------------
 // Free helper functions
 // -------------------------------------------------------------------
-
-// `edge_x` is now shared via oasis_types.
-pub(crate) use oasis_types::rasterize::edge_x;
 
 /// Append the inclusive span `x0..=x1` on row `y` to `out`, growing the
 /// previous rect instead when it is the same span on an adjacent row (so
@@ -325,35 +279,13 @@ pub(crate) fn circle_spans(cx: i32, cy: i32, r: i32, out: &mut Vec<FRect>) {
     });
 }
 
-/// Scanline spans of a filled triangle (screen coordinates), one per row.
+/// Scanline spans of a filled triangle (screen coordinates), one per row
+/// ([`triangle_rows`](oasis_types::rasterize::triangle_rows), the same
+/// coverage as `SoftwareBuffer` and the `SdiShapes` default).
 pub(crate) fn triangle_spans(v0: (i32, i32), v1: (i32, i32), v2: (i32, i32), out: &mut Vec<FRect>) {
-    let mut verts = [v0, v1, v2];
-    verts.sort_by_key(|v| v.1);
-    let (vx0, vy0) = verts[0];
-    let (vx1, vy1) = verts[1];
-    let (vx2, vy2) = verts[2];
-    for y in vy0..=vy2 {
-        let mut x_min = i32::MAX;
-        let mut x_max = i32::MIN;
-        let x_02 = edge_x(vx0, vy0, vx2, vy2, y);
-        x_min = x_min.min(x_02);
-        x_max = x_max.max(x_02);
-        if y <= vy1 && vy0 != vy1 {
-            let x_01 = edge_x(vx0, vy0, vx1, vy1, y);
-            x_min = x_min.min(x_01);
-            x_max = x_max.max(x_01);
-        }
-        if y >= vy1 && vy1 != vy2 {
-            let x_12 = edge_x(vx1, vy1, vx2, vy2, y);
-            x_min = x_min.min(x_12);
-            x_max = x_max.max(x_12);
-        }
-        if y == vy1 {
-            x_min = x_min.min(vx1);
-            x_max = x_max.max(vx1);
-        }
-        push_row_span(out, x_min, x_max, y);
-    }
+    oasis_types::rasterize::triangle_rows(v0, v1, v2, |y, x0, x1| {
+        push_row_span(out, x0, x1 - 1, y);
+    });
 }
 
 #[cfg(test)]

@@ -1,7 +1,7 @@
 //! Full rendering backend: marker super-trait combining all extensions.
 //!
 //! `SdiBackend` is a thin super-trait that requires `SdiCore` plus all
-//! nine extension traits.  A blanket implementation ensures that any type
+//! eight extension traits.  A blanket implementation ensures that any type
 //! satisfying those bounds automatically implements `SdiBackend`.
 //!
 //! # For backend implementors
@@ -21,24 +21,23 @@
 //! speed, not for correctness.
 
 use super::{
-    SdiAlpha, SdiBatch, SdiClipTransform, SdiCore, SdiGradients, SdiRenderTarget, SdiShapes,
-    SdiText, SdiTextures, SdiVector,
+    SdiBatch, SdiClipTransform, SdiCore, SdiGradients, SdiRenderTarget, SdiShapes, SdiText,
+    SdiTextures, SdiVector,
 };
 
 /// Full rendering backend trait combining all extensions.
 ///
 /// This is a marker super-trait: it has no methods of its own.  All
 /// drawing methods live on the individual extension traits (`SdiShapes`,
-/// `SdiGradients`, `SdiAlpha`, `SdiText`, `SdiTextures`,
+/// `SdiGradients`, `SdiText`, `SdiTextures`,
 /// `SdiClipTransform`, `SdiVector`, `SdiBatch`, `SdiRenderTarget`).
 ///
 /// A blanket implementation ensures that any type implementing `SdiCore`
-/// plus all nine extension traits automatically implements `SdiBackend`.
+/// plus all eight extension traits automatically implements `SdiBackend`.
 pub trait SdiBackend:
     SdiCore
     + SdiShapes
     + SdiGradients
-    + SdiAlpha
     + SdiText
     + SdiTextures
     + SdiClipTransform
@@ -54,7 +53,6 @@ impl<T> SdiBackend for T where
     T: SdiCore
         + SdiShapes
         + SdiGradients
-        + SdiAlpha
         + SdiText
         + SdiTextures
         + SdiClipTransform

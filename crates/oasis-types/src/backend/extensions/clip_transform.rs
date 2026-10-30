@@ -2,6 +2,7 @@
 
 use crate::backend::SdiCore;
 use crate::error::Result;
+use crate::geometry::ClipRect;
 
 // ---------------------------------------------------------------------------
 // SdiClipTransform
@@ -51,7 +52,7 @@ pub trait SdiClipTransform: SdiCore {
     }
 
     /// Query the top of the clip stack, in surface pixels.
-    fn current_clip_rect(&self) -> Option<(i32, i32, u32, u32)> {
+    fn current_clip_rect(&self) -> Option<ClipRect> {
         None
     }
 

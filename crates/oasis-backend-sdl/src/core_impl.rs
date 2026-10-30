@@ -183,6 +183,11 @@ impl SdiCore for SdlBackend {
         log::info!("SDL3 backend shut down");
         Ok(())
     }
+
+    /// The bound surface: the window, or the bound render target.
+    fn viewport_size(&self) -> (u32, u32) {
+        (self.viewport_w, self.viewport_h)
+    }
 }
 
 // -------------------------------------------------------------------

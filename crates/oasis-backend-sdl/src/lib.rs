@@ -26,9 +26,9 @@ use sdl3::video::{Window, WindowContext};
 
 use oasis_types::backend::stacks::{ClipPush, ClipStack, DrawState, TranslateStack};
 use oasis_types::backend::{
-    ArcParams, BackendErrExt, BatchRect, BatchText, BlendMode, Color, RenderTargetId, SdiAlpha,
-    SdiBatch, SdiClipTransform, SdiRenderTarget, SdiShapes, SdiText, SdiTextures, SdiVector,
-    StrokeStyle, TextureId, render_target_not_found,
+    BackendErrExt, BatchRect, BatchText, BlendMode, Color, RenderTargetId, SdiBatch,
+    SdiClipTransform, SdiRenderTarget, SdiShapes, SdiText, SdiTextures, SdiVector, StrokeStyle,
+    TextureId, render_target_not_found,
 };
 use oasis_types::error::{OasisError, Result};
 pub use oasis_types::geometry::ClipRect;
@@ -482,26 +482,6 @@ impl SdiVector for SdlBackend {
         self.shape_fill_polygon(points, color)
     }
 
-    fn fill_arc(
-        &mut self,
-        cx: i32,
-        cy: i32,
-        radius: u16,
-        start_angle: f32,
-        end_angle: f32,
-        color: Color,
-    ) -> Result<()> {
-        self.shape_fill_arc(
-            ArcParams {
-                cx,
-                cy,
-                radius,
-                start_angle,
-                end_angle,
-            },
-            color,
-        )
-    }
     // `stroke_arc` and `stroke_line_dashed` use the trait defaults, which
     // decompose into `draw_line` -- the same pixels the software
     // rasterizer produces (the old overrides thickened with parallel
@@ -574,17 +554,6 @@ impl SdiTextures for SdlBackend {
 }
 
 // -------------------------------------------------------------------
-// SdiAlpha: Viewport and alpha utilities
-// -------------------------------------------------------------------
-
-impl SdiAlpha for SdlBackend {
-    /// The bound surface: the window, or the bound render target.
-    fn viewport_size(&self) -> (u32, u32) {
-        (self.viewport_w, self.viewport_h)
-    }
-}
-
-// -------------------------------------------------------------------
 // SdiClipTransform: Clip and transform stack
 // -------------------------------------------------------------------
 
@@ -611,8 +580,8 @@ impl SdiClipTransform for SdlBackend {
         Ok(())
     }
 
-    fn current_clip_rect(&self) -> Option<(i32, i32, u32, u32)> {
-        self.clip_stack.current_tuple()
+    fn current_clip_rect(&self) -> Option<ClipRect> {
+        self.clip_stack.current()
     }
 
     fn push_translate(&mut self, dx: i32, dy: i32) -> Result<()> {

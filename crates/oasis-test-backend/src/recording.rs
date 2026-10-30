@@ -9,9 +9,9 @@
 
 use crate::DrawCommand;
 use oasis_types::backend::{
-    BlendMode, Color, DEFAULT_VIEWPORT_HEIGHT, DEFAULT_VIEWPORT_WIDTH, RenderTargetId, SdiAlpha,
-    SdiBatch, SdiClipTransform, SdiCore, SdiGradients, SdiRenderTarget, SdiShapes, SdiText,
-    SdiTextures, SdiVector, TextureId, bitmap_measure_text,
+    BlendMode, Color, DEFAULT_VIEWPORT_HEIGHT, DEFAULT_VIEWPORT_WIDTH, RenderTargetId, SdiBatch,
+    SdiClipTransform, SdiCore, SdiGradients, SdiRenderTarget, SdiShapes, SdiText, SdiTextures,
+    SdiVector, TextureId, bitmap_measure_text,
     stacks::{ClipStack, DrawState, TranslateStack},
 };
 use oasis_types::error::{OasisError, Result};
@@ -291,6 +291,10 @@ impl SdiCore for RecordingBackend {
     fn shutdown(&mut self) -> Result<()> {
         Ok(())
     }
+
+    fn viewport_size(&self) -> (u32, u32) {
+        (self.width, self.height)
+    }
 }
 
 impl SdiRenderTarget for RecordingBackend {
@@ -424,11 +428,6 @@ impl SdiRenderTarget for RecordingBackend {
 
 impl SdiShapes for RecordingBackend {}
 impl SdiGradients for RecordingBackend {}
-impl SdiAlpha for RecordingBackend {
-    fn viewport_size(&self) -> (u32, u32) {
-        (self.width, self.height)
-    }
-}
 impl SdiText for RecordingBackend {}
 impl SdiTextures for RecordingBackend {}
 impl SdiVector for RecordingBackend {}
@@ -449,8 +448,8 @@ impl SdiClipTransform for RecordingBackend {
         Ok(())
     }
 
-    fn current_clip_rect(&self) -> Option<(i32, i32, u32, u32)> {
-        self.clip_stack.current_tuple()
+    fn current_clip_rect(&self) -> Option<ClipRect> {
+        self.clip_stack.current()
     }
 
     fn push_translate(&mut self, dx: i32, dy: i32) -> Result<()> {

@@ -5,7 +5,7 @@ use crate::backend::{Color, SdiCore};
 use crate::error::Result;
 use crate::rasterize::{
     midpoint_row_extents, rounded_rect_rows, stroke_circle_rows, stroke_rounded_rect_rows,
-    thick_line_rows,
+    thick_line_rows, triangle_rows,
 };
 
 // ---------------------------------------------------------------------------
@@ -138,7 +138,7 @@ pub trait SdiShapes: SdiCore {
         fill.finish()
     }
 
-    /// Draw a filled triangle (scanline fill).
+    /// Draw a filled triangle, one span per row ([`triangle_rows`]).
     fn fill_triangle(
         &mut self,
         x1: i32,
@@ -149,49 +149,11 @@ pub trait SdiShapes: SdiCore {
         y3: i32,
         color: Color,
     ) -> Result<()> {
-        let (mut v0, mut v1, mut v2) = ((x1, y1), (x2, y2), (x3, y3));
-        if v0.1 > v1.1 {
-            core::mem::swap(&mut v0, &mut v1);
-        }
-        if v0.1 > v2.1 {
-            core::mem::swap(&mut v0, &mut v2);
-        }
-        if v1.1 > v2.1 {
-            core::mem::swap(&mut v1, &mut v2);
-        }
-        let total_h = v2.1 - v0.1;
-        if total_h == 0 {
-            let lx = v0.0.min(v1.0).min(v2.0);
-            let rx = v0.0.max(v1.0).max(v2.0);
-            return self.fill_rect(lx, v0.1, (rx - lx).max(1) as u32, 1, color);
-        }
-        for y in v0.1..=v2.1 {
-            let second_half = y >= v1.1;
-            let seg_h = if second_half {
-                v2.1 - v1.1
-            } else {
-                v1.1 - v0.1
-            };
-            let alpha = (y - v0.1) as f32 / total_h as f32;
-            let beta = if seg_h == 0 {
-                0.0
-            } else if second_half {
-                (y - v1.1) as f32 / seg_h as f32
-            } else {
-                (y - v0.1) as f32 / seg_h as f32
-            };
-            let mut ax = v0.0 + ((v2.0 - v0.0) as f32 * alpha) as i32;
-            let mut bx = if second_half {
-                v1.0 + ((v2.0 - v1.0) as f32 * beta) as i32
-            } else {
-                v0.0 + ((v1.0 - v0.0) as f32 * beta) as i32
-            };
-            if ax > bx {
-                core::mem::swap(&mut ax, &mut bx);
-            }
-            self.fill_rect(ax, y, (bx - ax + 1) as u32, 1, color)?;
-        }
-        Ok(())
+        let mut fill = SpanFill::new(self, color);
+        triangle_rows((x1, y1), (x2, y2), (x3, y3), |y, x0, x1| {
+            fill.span(y, x0, x1);
+        });
+        fill.finish()
     }
 
     /// Draw a box shadow with blur, spread, and offset.
@@ -227,8 +189,8 @@ pub trait SdiShapes: SdiCore {
             let c = Color::rgba(color.r, color.g, color.b, alpha);
             let rx = bx - expand;
             let ry = by - expand;
-            let rw = bw + expand as u32 * 2;
-            let rh = bh + expand as u32 * 2;
+            let rw = bw.saturating_add(expand as u32 * 2);
+            let rh = bh.saturating_add(expand as u32 * 2);
             if radius > 0.0 {
                 let r = (radius + expand as f32) as u16;
                 self.fill_rounded_rect(rx, ry, rw, rh, r, c)?;

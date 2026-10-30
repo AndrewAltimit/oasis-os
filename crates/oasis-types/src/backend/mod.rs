@@ -3,8 +3,8 @@
 //! Every platform implements these traits. The core framework dispatches all
 //! I/O through trait boundaries -- it never calls platform-specific APIs.
 //!
-//! `SdiBackend` is a marker super-trait combining `SdiCore` with nine
-//! extension traits (`SdiShapes`, `SdiGradients`, `SdiAlpha`, `SdiText`,
+//! `SdiBackend` is a marker super-trait combining `SdiCore` with eight
+//! extension traits (`SdiShapes`, `SdiGradients`, `SdiText`,
 //! `SdiTextures`, `SdiClipTransform`, `SdiVector`, `SdiBatch`,
 //! `SdiRenderTarget`).  A blanket impl ensures any type implementing
 //! `SdiCore` + all extensions automatically satisfies `SdiBackend`.
@@ -29,9 +29,9 @@ pub const DEFAULT_VIEWPORT_HEIGHT: u32 = 272;
 
 // -- types --
 pub use types::{
-    ArcParams, BackendErrExt, BlendMode, Color, GradientStyle, RenderTargetId, StrokeStyle,
-    TextMetrics, TextureId, arc_segments, bitmap_measure_text, cos_approx_f32,
-    render_target_not_found, sin_approx_f32, texture_not_found, validate_rgba_data,
+    BackendErrExt, BlendMode, Color, GradientStyle, RenderTargetId, StrokeStyle, TextureId,
+    arc_segments, bitmap_measure_text, cos_approx_f32, render_target_not_found, sin_approx_f32,
+    texture_not_found, validate_rgba_data,
 };
 
 // -- core trait --
@@ -42,8 +42,8 @@ pub use sdi_backend::SdiBackend;
 
 // -- extension traits --
 pub use extensions::{
-    BatchRect, BatchText, SdiAlpha, SdiBatch, SdiClipTransform, SdiGradients, SdiRenderTarget,
-    SdiShapes, SdiText, SdiTextures, SdiVector,
+    BatchRect, BatchText, SdiBatch, SdiClipTransform, SdiGradients, SdiRenderTarget, SdiShapes,
+    SdiText, SdiTextures, SdiVector,
 };
 
 // -- input --

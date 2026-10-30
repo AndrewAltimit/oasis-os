@@ -4,6 +4,7 @@ use oasis_types::backend::{
     Color, SdiClipTransform, SdiCore, SdiTextures, TextureId, texture_not_found,
 };
 use oasis_types::error::Result;
+use oasis_types::geometry::ClipRect;
 
 use crate::renderer::{WasmBackend, cached_css_color, js_err};
 
@@ -124,8 +125,8 @@ impl SdiClipTransform for WasmBackend {
         Ok(())
     }
 
-    fn current_clip_rect(&self) -> Option<(i32, i32, u32, u32)> {
-        self.clip.stack.current_tuple()
+    fn current_clip_rect(&self) -> Option<ClipRect> {
+        self.clip.stack.current()
     }
 
     fn push_translate(&mut self, dx: i32, dy: i32) -> Result<()> {

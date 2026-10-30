@@ -38,9 +38,8 @@ pub use oasis_types::backend::{Color, GradientStyle, TextureId};
 #[cfg(test)]
 mod tests {
     use super::*;
-    use oasis_types::backend::{
-        SdiAlpha, SdiBatch, SdiClipTransform, SdiCore, SdiGradients, SdiShapes,
-    };
+    use oasis_types::backend::{SdiClipTransform, SdiCore, SdiGradients, SdiShapes};
+    use oasis_types::geometry::ClipRect;
 
     // -----------------------------------------------------------------------
     // MockSdiCore basic tests
@@ -230,16 +229,25 @@ mod tests {
 
         rec.push_clip_rect(10, 10, 200, 200)
             .expect("push_clip_rect");
-        assert_eq!(rec.current_clip_rect(), Some((10, 10, 200, 200)));
+        assert_eq!(
+            rec.current_clip_rect(),
+            Some(ClipRect::new(10, 10, 200, 200))
+        );
 
         rec.push_clip_rect(50, 50, 100, 100)
             .expect("push_clip_rect");
         // Intersection of (10,10,200,200) and (50,50,100,100)
         // = (50,50,100,100) since it fits inside the first.
-        assert_eq!(rec.current_clip_rect(), Some((50, 50, 100, 100)));
+        assert_eq!(
+            rec.current_clip_rect(),
+            Some(ClipRect::new(50, 50, 100, 100))
+        );
 
         rec.pop_clip_rect().expect("pop_clip_rect");
-        assert_eq!(rec.current_clip_rect(), Some((10, 10, 200, 200)));
+        assert_eq!(
+            rec.current_clip_rect(),
+            Some(ClipRect::new(10, 10, 200, 200))
+        );
 
         rec.pop_clip_rect().expect("pop_clip_rect");
         assert_eq!(rec.current_clip_rect(), None);
@@ -295,27 +303,6 @@ mod tests {
     fn recording_viewport_size() {
         let rec = RecordingBackend::new(800, 600);
         assert_eq!(rec.viewport_size(), (800, 600));
-    }
-
-    #[test]
-    fn recording_dim_screen() {
-        let mut rec = RecordingBackend::new(480, 272);
-        rec.dim_screen(128).expect("dim_screen");
-
-        let cmds = rec.commands();
-        assert_eq!(cmds.len(), 1);
-        match &cmds[0] {
-            DrawCommand::FillRect {
-                x, y, w, h, color, ..
-            } => {
-                assert_eq!(*x, 0);
-                assert_eq!(*y, 0);
-                assert_eq!(*w, 480);
-                assert_eq!(*h, 272);
-                assert_eq!(color.a, 128);
-            },
-            other => panic!("expected FillRect, got {other:?}"),
-        }
     }
 
     #[test]
@@ -380,17 +367,6 @@ mod tests {
     }
 
     #[test]
-    fn recording_begin_flush_batch() {
-        let mut rec = RecordingBackend::new(480, 272);
-        rec.begin_batch().expect("begin_batch");
-        rec.fill_rect(0, 0, 10, 10, Color::BLACK).ok();
-        rec.flush_batch().expect("flush_batch");
-        // begin_batch and flush_batch are no-ops in the default impl,
-        // so only the fill_rect is recorded.
-        assert_eq!(rec.commands().len(), 1);
-    }
-
-    #[test]
     fn recording_fill_rect_gradient() {
         let mut rec = RecordingBackend::new(480, 272);
         let gradient = GradientStyle::Vertical {
@@ -430,7 +406,7 @@ mod tests {
         rec.push_clip_rect(50, 50, 100, 100).expect("push clip 2");
 
         // Intersection: (50,50) to min(100,150) x min(100,150) = (50,50,50,50)
-        assert_eq!(rec.current_clip_rect(), Some((50, 50, 50, 50)));
+        assert_eq!(rec.current_clip_rect(), Some(ClipRect::new(50, 50, 50, 50)));
     }
 
     // -----------------------------------------------------------------------
@@ -453,7 +429,7 @@ mod tests {
         rec.push_clip_rect(1, 1, 5, 5).expect("inner clip");
         rec.unbind_render_target().expect("unbind");
         assert_eq!(rec.current_translate(), (10, 10));
-        assert_eq!(rec.current_clip_rect(), Some((10, 10, 30, 30)));
+        assert_eq!(rec.current_clip_rect(), Some(ClipRect::new(10, 10, 30, 30)));
         assert_eq!(rec.viewport_size(), (480, 272));
         rec.pop_clip_rect().expect("pop parent clip");
         assert_eq!(rec.current_clip_rect(), None);

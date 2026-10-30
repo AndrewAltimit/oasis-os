@@ -493,8 +493,8 @@ fn main() {
 /// runtime dependency graph.
 mod oasis_test_backend_stub {
     use oasis_types::backend::{
-        Color, SdiAlpha, SdiBatch, SdiClipTransform, SdiCore, SdiGradients, SdiRenderTarget,
-        SdiShapes, SdiText, SdiTextures, SdiVector, TextureId, bitmap_measure_text,
+        Color, SdiBatch, SdiClipTransform, SdiCore, SdiGradients, SdiRenderTarget, SdiShapes,
+        SdiText, SdiTextures, SdiVector, TextureId, bitmap_measure_text,
     };
     use oasis_types::error::Result;
 
@@ -558,15 +558,14 @@ mod oasis_test_backend_stub {
         fn shutdown(&mut self) -> Result<()> {
             Ok(())
         }
-    }
 
-    impl SdiShapes for NullBackend {}
-    impl SdiGradients for NullBackend {}
-    impl SdiAlpha for NullBackend {
         fn viewport_size(&self) -> (u32, u32) {
             (self.viewport_w, self.viewport_h)
         }
     }
+
+    impl SdiShapes for NullBackend {}
+    impl SdiGradients for NullBackend {}
     impl SdiText for NullBackend {}
     impl SdiTextures for NullBackend {}
     impl SdiClipTransform for NullBackend {}

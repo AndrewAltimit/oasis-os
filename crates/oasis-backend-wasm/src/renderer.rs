@@ -7,8 +7,8 @@ use web_sys::{CanvasRenderingContext2d, HtmlCanvasElement, ImageData};
 
 use oasis_rasterize::GlyphCacheKey;
 use oasis_types::backend::{
-    BlendMode, Color, RenderTargetId, SdiAlpha, SdiCore, SdiRenderTarget, SdiText, SdiVector,
-    TextureId, render_target_not_found, texture_not_found, validate_rgba_data,
+    BlendMode, Color, RenderTargetId, SdiCore, SdiRenderTarget, SdiText, SdiVector, TextureId,
+    render_target_not_found, texture_not_found, validate_rgba_data,
 };
 use oasis_types::error::{OasisError, Result};
 use oasis_types::geometry::ClipRect;
@@ -479,13 +479,7 @@ impl SdiCore for WasmBackend {
         self.gradient_cache.clear();
         Ok(())
     }
-}
 
-// -------------------------------------------------------------------
-// SdiAlpha: Alpha and viewport
-// -------------------------------------------------------------------
-
-impl SdiAlpha for WasmBackend {
     /// The bound surface: the page canvas, or the bound render target.
     fn viewport_size(&self) -> (u32, u32) {
         (self.width, self.height)

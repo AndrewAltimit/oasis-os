@@ -490,11 +490,12 @@ pub static SCENARIOS: &[Scenario] = &[
         "alpha-blend rounding"
     ),
     scenario!(
-        "dim_screen_and_fill_rect_alpha",
+        "translucent_viewport_overlay",
         |b| {
             b.fill_rect(0, 0, 64, 96, WHITE)?;
-            b.fill_rect_alpha(70, 10, 40, 40, GREEN, 100)?;
-            b.dim_screen(128)
+            b.fill_rect(70, 10, 40, 40, GREEN.with_alpha(100))?;
+            let (w, h) = b.viewport_size();
+            b.fill_rect(0, 0, w, h, Color::rgba(0, 0, 0, 128))
         },
         Tolerance::BLEND,
         "alpha-blend rounding"
@@ -1322,9 +1323,7 @@ pub static SCENARIOS: &[Scenario] = &[
                 color: Color::rgba(255, 255, 255, 0),
             });
             b.push_translate(1, 1)?;
-            b.begin_batch()?;
             b.submit_rect_batch(&rects)?;
-            b.flush_batch()?;
             b.pop_translate()
         },
         Tolerance::BLEND,

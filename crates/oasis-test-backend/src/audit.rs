@@ -24,7 +24,7 @@
 
 use crate::DrawCommand;
 use oasis_types::backend::{
-    BlendMode, Color, RenderTargetId, SdiAlpha, SdiBatch, SdiClipTransform, SdiCore, SdiGradients,
+    BlendMode, Color, RenderTargetId, SdiBatch, SdiClipTransform, SdiCore, SdiGradients,
     SdiRenderTarget, SdiShapes, SdiText, SdiTextures, SdiVector, TextureId, bitmap_measure_text,
     stacks::{ClipPush, ClipStack, DrawState, TranslateStack},
 };
@@ -476,6 +476,10 @@ impl SdiCore for ClipAuditBackend {
     fn shutdown(&mut self) -> Result<()> {
         Ok(())
     }
+
+    fn viewport_size(&self) -> (u32, u32) {
+        (self.width, self.height)
+    }
 }
 
 impl SdiClipTransform for ClipAuditBackend {
@@ -511,8 +515,8 @@ impl SdiClipTransform for ClipAuditBackend {
         Ok(())
     }
 
-    fn current_clip_rect(&self) -> Option<(i32, i32, u32, u32)> {
-        self.active_clip.map(|c| (c.x, c.y, c.w, c.h))
+    fn current_clip_rect(&self) -> Option<ClipRect> {
+        self.active_clip
     }
 
     fn push_translate(&mut self, dx: i32, dy: i32) -> Result<()> {
@@ -657,11 +661,6 @@ impl SdiRenderTarget for ClipAuditBackend {
 
 impl SdiShapes for ClipAuditBackend {}
 impl SdiGradients for ClipAuditBackend {}
-impl SdiAlpha for ClipAuditBackend {
-    fn viewport_size(&self) -> (u32, u32) {
-        (self.width, self.height)
-    }
-}
 impl SdiText for ClipAuditBackend {}
 impl SdiTextures for ClipAuditBackend {}
 impl SdiVector for ClipAuditBackend {}

@@ -14,24 +14,42 @@ pub struct ClipRect {
 }
 
 impl ClipRect {
+    /// A rectangle at `(x, y)` of `w` x `h` pixels.
+    #[must_use]
+    pub const fn new(x: i32, y: i32, w: u32, h: u32) -> Self {
+        Self { x, y, w, h }
+    }
+
+    /// Exclusive right edge, `x + w`, computed without overflow.
+    #[must_use]
+    pub const fn right(&self) -> i64 {
+        self.x as i64 + self.w as i64
+    }
+
+    /// Exclusive bottom edge, `y + h`, computed without overflow.
+    #[must_use]
+    pub const fn bottom(&self) -> i64 {
+        self.y as i64 + self.h as i64
+    }
+
     /// Compute the intersection of two clip rectangles.
     ///
-    /// Returns `None` if the rectangles do not overlap.
+    /// Returns `None` if the rectangles do not overlap. The edges are
+    /// computed in `i64`, so sizes above `i32::MAX` (an "unbounded" clip
+    /// such as `u32::MAX` x `u32::MAX`) intersect correctly.
+    #[must_use]
     pub fn intersect(&self, other: &ClipRect) -> Option<ClipRect> {
-        let ax2 = self.x.saturating_add(self.w as i32);
-        let ay2 = self.y.saturating_add(self.h as i32);
-        let bx2 = other.x.saturating_add(other.w as i32);
-        let by2 = other.y.saturating_add(other.h as i32);
         let x = self.x.max(other.x);
         let y = self.y.max(other.y);
-        let x2 = ax2.min(bx2);
-        let y2 = ay2.min(by2);
-        if x2 > x && y2 > y {
+        let x2 = self.right().min(other.right());
+        let y2 = self.bottom().min(other.bottom());
+        let (w, h) = (x2 - x as i64, y2 - y as i64);
+        if w > 0 && h > 0 {
             Some(ClipRect {
                 x,
                 y,
-                w: (x2 - x) as u32,
-                h: (y2 - y) as u32,
+                w: w.min(u32::MAX as i64) as u32,
+                h: h.min(u32::MAX as i64) as u32,
             })
         } else {
             None
@@ -86,6 +104,21 @@ pub fn rounded_rect_inset(dy: i32, h: i32, r: i32) -> i32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn intersect_huge_sizes_do_not_wrap() {
+        // `w as i32` wrapped u32::MAX to -1, so an "unbounded" clip
+        // intersected with anything came back empty.
+        let unbounded = ClipRect::new(0, 0, u32::MAX, u32::MAX);
+        let small = ClipRect::new(10, 10, 5, 5);
+        assert_eq!(unbounded.intersect(&small), Some(small));
+        assert_eq!(small.intersect(&unbounded), Some(small));
+        assert_eq!(unbounded.intersect(&unbounded), Some(unbounded));
+        // Far-left origin with a wide rect: no overflow in `x2 - x`.
+        let far = ClipRect::new(i32::MIN, i32::MIN, u32::MAX, u32::MAX);
+        assert_eq!(far.intersect(&small), Some(small));
+        assert_eq!(far.right(), i32::MAX as i64);
+    }
 
     #[test]
     fn intersect_overlapping() {

@@ -92,8 +92,6 @@ impl DisplayList {
         base_clip: Option<(i32, i32, u32, u32)>,
         #[cfg(feature = "web-fonts")] mut web_font_renderer: Option<&mut dyn WebFontRenderer>,
     ) -> Result<()> {
-        backend.begin_batch()?;
-
         let mut opacity_stack: Vec<f32> = Vec::new();
         // Clip stack stores the *intersected* clip rect for each level.
         let mut clip_stack: Vec<(i32, i32, u32, u32)> = Vec::new();
@@ -659,7 +657,6 @@ impl DisplayList {
 
         flush_rect_batch(backend, &mut rect_batch)?;
         flush_text_batch(backend, &mut text_batch, text_batch_key)?;
-        backend.flush_batch()?;
         Ok(())
     }
 
@@ -672,8 +669,6 @@ impl DisplayList {
         base_clip: Option<(i32, i32, u32, u32)>,
         #[cfg(feature = "web-fonts")] mut web_font_renderer: Option<&mut dyn WebFontRenderer>,
     ) -> Result<()> {
-        backend.begin_batch()?;
-
         let mut opacity_stack: Vec<f32> = Vec::new();
         let mut filter_stack: Vec<&[FilterFunction]> = Vec::new();
         let mut clip_stack: Vec<(i32, i32, u32, u32)> = Vec::new();
@@ -1001,7 +996,6 @@ impl DisplayList {
 
         flush_rect_batch(backend, &mut rect_batch)?;
         flush_text_batch(backend, &mut text_batch, text_batch_key)?;
-        backend.flush_batch()?;
         Ok(())
     }
 }
