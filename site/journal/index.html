@@ -2,175 +2,209 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Developer's Journal - OASIS_OS</title>
-  <meta name="description" content="Technical deep dives into building a unified embedded OS in Rust — from PSP homebrew to browser deployment.">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Developer's Journal — OASIS_OS</title>
+  <meta name="description" content="Long-form technical deep dives into building OASIS_OS, an embeddable OS framework in Rust: reverse engineering the PSP, TLS 1.3 on MIPS, streaming video and remote hardware automation.">
+  <link rel="canonical" href="https://andrewaltimit.github.io/oasis-os/journal/">
+  <meta name="theme-color" content="#08090d">
+  <link rel="icon" href="../favicon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="../img/apple-touch-icon.png">
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="OASIS_OS">
+  <meta property="og:title" content="Developer's Journal — OASIS_OS">
+  <meta property="og:description" content="Long-form technical deep dives into building OASIS_OS, an embeddable OS framework in Rust: reverse engineering the PSP, TLS 1.3 on MIPS, streaming video and remote hardware automation.">
+  <meta property="og:url" content="https://andrewaltimit.github.io/oasis-os/journal/">
+  <meta property="og:image" content="https://andrewaltimit.github.io/oasis-os/img/og-card.png">
+  <meta property="og:image:width" content="1200">
+  <meta property="og:image:height" content="630">
+  <meta property="og:image:alt" content="OASIS_OS: one OS shell, any pixel buffer">
+  <meta name="twitter:card" content="summary_large_image">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700;800&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="../css/style.css">
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&amp;display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="../css/site.css">
+  <link rel="stylesheet" href="../css/journal.css">
 </head>
-<body>
+<body class="page-journal">
 
-<nav class="site-nav">
-  <a class="nav-brand" href="../">OASIS_OS</a>
-  <button class="nav-toggle" id="nav-toggle" aria-label="Toggle navigation" aria-expanded="false">&#9776;</button>
-  <ul class="nav-links" id="nav-links">
-    <li><a href="../#platforms">Platforms</a></li>
-    <li><a href="../#features">Features</a></li>
-    <li><a href="../#architecture">Architecture</a></li>
-    <li><a href="./">Journal</a></li>
-    <li><a href="../demo/">Live Demo</a></li>
-  </ul>
-</nav>
+<a class="skip-link" href="#main">Skip to content</a>
 
-<section class="journal-hero">
-  <div class="container">
-    <h1 class="hero-title"><span class="glow">dev</span>::journal</h1>
-    <p class="hero-tagline">
-      Technical deep dives into building a unified embedded OS in Rust &mdash;
-      from reverse engineering a 2004 handheld to streaming video inside a game engine.
-    </p>
+<header class="topbar" id="topbar">
+  <div class="topbar__inner wrap">
+    <a class="brand" href="../" aria-label="OASIS_OS home">
+      <span class="brand__mark" aria-hidden="true"></span>
+      <span class="brand__name">OASIS<span class="brand__us">_</span>OS</span>
+    </a>
+    <button class="nav-toggle" id="nav-toggle" type="button" aria-expanded="false" aria-controls="site-nav">
+      <span class="sr-only">Menu</span>
+      <span class="nav-toggle__bar" aria-hidden="true"></span>
+    </button>
+    <nav class="site-nav" id="site-nav" aria-label="Primary">
+      <ul>
+        <li><a href="../#platforms">Platforms</a></li>
+        <li><a href="../#skins">Skins</a></li>
+        <li><a href="../#features">Features</a></li>
+        <li><a href="../#architecture">Architecture</a></li>
+        <li><a href="../#psp">PSP</a></li>
+        <li><a href="../journal/" aria-current="page">Journal</a></li>
+        <li><a href="../#start">Build</a></li>
+      </ul>
+      <div class="site-nav__cta">
+        <a class="btn btn--ghost btn--sm" href="https://github.com/AndrewAltimit/oasis-os">GitHub</a>
+        <a class="btn btn--primary btn--sm" href="../demo/">Live demo</a>
+      </div>
+    </nav>
   </div>
-</section>
+</header>
 
-<section>
-  <div class="container fade-in">
-    <div class="journal-grid">
-
-      <a class="journal-card" href="01-unified-embedded-os.html">
-        <div class="journal-card-body">
-          <h3>One Codebase, Five Platforms: Architecture of a Unified Embedded OS</h3>
-          <p>How trait-based backend abstraction lets the same Rust codebase render to SDL3, WebAssembly, PSP hardware, Unreal Engine 5, and a kernel-mode overlay &mdash; without a single <code>#[cfg]</code> in core logic.</p>
-          <div class="journal-card-meta">
-            <span class="journal-tag">architecture</span>
-            <span class="journal-tag">rust</span>
-            <span class="journal-tag purple">37 crates</span>
-          </div>
-        </div>
-        <div class="journal-card-number">01</div>
-      </a>
-
-      <a class="journal-card" href="02-tls-on-psp.html">
-        <div class="journal-card-body">
-          <h3>TLS 1.3 on a 2004 Handheld: Pure Rust Cryptography on MIPS Allegrex</h3>
-          <p>Sony's firmware ships SSL 3.0 with 2008 root CAs. We implemented native TLS 1.3 via embedded-tls on bare metal &mdash; discovering privileged instruction traps, RSA handshake failures, and DNS endianness bugs along the way.</p>
-          <div class="journal-card-meta">
-            <span class="journal-tag">psp</span>
-            <span class="journal-tag">security</span>
-            <span class="journal-tag purple">embedded-tls</span>
-          </div>
-        </div>
-        <div class="journal-card-number">02</div>
-      </a>
-
-      <a class="journal-card" href="03-streaming-video.html">
-        <div class="journal-card-body">
-          <h3>Streaming Internet Archive Video Across Two Architectures</h3>
-          <p>Building a TV Guide that streams live video on desktop (symphonia + openh264 with a sliding-window buffer) and PSP (in-memory AAC hardware decode with backpressure throttling). Solving the throttle deadlock, CDN failover, and moov atom positioning.</p>
-          <div class="journal-card-meta">
-            <span class="journal-tag">video</span>
-            <span class="journal-tag">streaming</span>
-            <span class="journal-tag purple">cross-platform</span>
-          </div>
-        </div>
-        <div class="journal-card-number">03</div>
-      </a>
-
-      <a class="journal-card" href="04-rust-psp-sdk.html">
-        <div class="journal-card-body">
-          <h3>Modernizing the rust-psp SDK: Safety Hardening for Bare Metal MIPS</h3>
-          <p>Forking and hardening a Rust SDK for PSP homebrew &mdash; fixing LLVM memcpy recursion on MIPS, weak import stub flags that break real hardware, DNS byte-order bugs, and building 38 high-level modules with RAII resource management.</p>
-          <div class="journal-card-meta">
-            <span class="journal-tag">sdk</span>
-            <span class="journal-tag">safety</span>
-            <span class="journal-tag purple">829 syscalls</span>
-          </div>
-        </div>
-        <div class="journal-card-number">04</div>
-      </a>
-
-      <a class="journal-card" href="05-psp-usb-research.html">
-        <div class="journal-card-body">
-          <h3>PSP USB Research: From Firmware Decryption to a Custom Device Driver</h3>
-          <p>Deep hardware RE of the PSP's USB subsystem &mdash; decrypting Sony's firmware, discovering a MUSB OTG controller and that accessories use side contact pads (not USB VBUS) for power, and building a custom USB device driver in Rust.</p>
-          <div class="journal-card-meta">
-            <span class="journal-tag">hardware</span>
-            <span class="journal-tag">reverse-engineering</span>
-            <span class="journal-tag">usb</span>
-          </div>
-        </div>
-        <div class="journal-card-number">05</div>
-      </a>
-
-      <a class="journal-card" href="06-backend-trait-system.html">
-        <div class="journal-card-body">
-          <h3>Anatomy of the Backend Trait System</h3>
-          <p>A deep architectural walkthrough of the five backend traits &mdash; how 13 required methods, 39 optional primitives, and 8 extension traits enable one codebase to render across SDL3, Canvas 2D, PSP hardware, and a software framebuffer.</p>
-          <div class="journal-card-meta">
-            <span class="journal-tag">architecture</span>
-            <span class="journal-tag">traits</span>
-            <span class="journal-tag purple">5 traits</span>
-          </div>
-        </div>
-        <div class="journal-card-number">06</div>
-      </a>
-
-      <a class="journal-card" href="07-psp-media-engine.html">
-        <div class="journal-card-body">
-          <h3>Reverse Engineering the PSP Media Engine: From Empty Stubs to Stable Video Streaming</h3>
-          <p>Tracing H.264 decode failures to empty firmware stubs, reverse engineering the ME&rsquo;s RPC protocol (22 command IDs, 47 NIDs), discovering a 70-frame firmware deadlock, and building three solutions &mdash; runtime binary patching, a kernel watchdog hook, and P/B-frame skipping for indefinite stable streaming.</p>
-          <div class="journal-card-meta">
-            <span class="journal-tag">hardware</span>
-            <span class="journal-tag">reverse-engineering</span>
-            <span class="journal-tag">media-engine</span>
-          </div>
-        </div>
-        <div class="journal-card-number">07</div>
-      </a>
-
-      <a class="journal-card" href="08-remote-dev-automation.html">
-        <div class="journal-card-body">
-          <h3>Zero-Touch PSP Development: From TCP Commands to Physical Actuators</h3>
-          <p>Closing the loop on embedded hardware development &mdash; WiFi auto-connect, a TCP command server with remote input injection, live framebuffer streaming, arbitrary file upload, and a DIY linear actuator. An AI agent used this infrastructure to debug H.264 video decode across 30+ iterations without touching the device.</p>
-          <div class="journal-card-meta">
-            <span class="journal-tag">automation</span>
-            <span class="journal-tag">hardware</span>
-            <span class="journal-tag">devtools</span>
-          </div>
-        </div>
-        <div class="journal-card-number">08</div>
-      </a>
-
-      <a class="journal-card" href="09-javascript-on-psp.html">
-        <div class="journal-card-body">
-          <h3>JavaScript on a 2004 Handheld: boa_engine, std Overlay Bugs, and a Misdiagnosed Panic</h3>
-          <p>Running a full ES2023+ JavaScript engine on 333 MHz MIPS. Three bring-up bugs blocked it &mdash; a 4-byte-alignment trap in the std random module, an orphaned time overlay that routed <code>Instant::now</code> into a panicking shim, and a 16 KB cmd-server thread stack too small for boa&rsquo;s parser. None reproduced in PPSSPP. All three fixed; <code>1 + 2 + 3</code> now returns <code>6</code> on real hardware. <em>Superseded 2026-04-14:</em> the PSP backend has since migrated to QuickJS-NG via <code>rquickjs</code>, the same engine used on desktop/WASM/UE5, with DOM bindings wired in and <code>&lt;script&gt;</code> tags executing against the browser on real hardware.</p>
-          <div class="journal-card-meta">
-            <span class="journal-tag">javascript</span>
-            <span class="journal-tag">rust-psp</span>
-            <span class="journal-tag">debugging</span>
-          </div>
-        </div>
-        <div class="journal-card-number">09</div>
-      </a>
-
+<main id="main">
+  <header class="jhero">
+    <div class="wrap">
+      <p class="kicker">Developer&rsquo;s journal</p>
+      <h1 class="jhero__title">The hard parts, written down.</h1>
+      <p class="jhero__lede">Nine deep dives into building OASIS_OS &mdash; from reverse engineering
+        a 2004 handheld&rsquo;s Media Engine to TLS&nbsp;1.3 on MIPS and a relay-driven rig that let
+        an AI agent iterate on real hardware. Entries are dated; where the code has moved on, an
+        <span class="update-chip">Update</span> note says so instead of rewriting history.</p>
     </div>
-  </div>
-</section>
+  </header>
 
-<footer class="site-footer">
-  <div class="container">
-    <div class="footer-row">
-      <span>&copy; 2024&ndash;2026 OASIS_OS contributors</span>
-      <span>&middot;</span>
-      <a href="https://github.com/AndrewAltimit/oasis-os">GitHub</a>
-      <span>&middot;</span>
-      <a href="../">Home</a>
+  <section class="wrap jlist-wrap" aria-label="Entries">
+    <ol class="jlist">
+      <li>
+        <a class="jcard" href="01-unified-embedded-os.html">
+          <span class="jcard__no" aria-hidden="true">01</span>
+          <span class="jcard__body">
+            <span class="jcard__meta"><time datetime="2026-03-11">Mar 11, 2026</time> &middot; 7 min read</span>
+            <span class="jcard__title">One Codebase, Five Platforms: Architecture of a Unified Embedded OS</span>
+            <span class="jcard__desc">How trait-based backend abstraction lets the same Rust codebase render to SDL3, WebAssembly, PSP hardware, Unreal Engine&nbsp;5 and a kernel-mode overlay &mdash; without a single <code>#[cfg]</code> in core logic.</span>
+            <span class="jcard__tags">architecture &middot; rust &middot; traits</span>
+          </span>
+        </a>
+      </li>
+      <li>
+        <a class="jcard" href="02-tls-on-psp.html">
+          <span class="jcard__no" aria-hidden="true">02</span>
+          <span class="jcard__body">
+            <span class="jcard__meta"><time datetime="2026-03-11">Mar 11, 2026</time> &middot; 6 min read</span>
+            <span class="jcard__title">TLS 1.3 on a 2004 Handheld: Pure Rust Cryptography on MIPS Allegrex</span>
+            <span class="jcard__desc">Sony&rsquo;s firmware ships SSL&nbsp;3.0 with 2008 root CAs. Native TLS&nbsp;1.3 via embedded-tls on bare metal &mdash; and the privileged-instruction traps, RSA handshake failures and DNS endianness bugs found along the way.</span>
+            <span class="jcard__tags">psp &middot; security &middot; embedded-tls</span>
+          </span>
+        </a>
+      </li>
+      <li>
+        <a class="jcard" href="03-streaming-video.html">
+          <span class="jcard__no" aria-hidden="true">03</span>
+          <span class="jcard__body">
+            <span class="jcard__meta"><time datetime="2026-03-11">Mar 11, 2026</time> &middot; 6 min read</span>
+            <span class="jcard__title">Streaming Internet Archive Video Across Two Architectures</span>
+            <span class="jcard__desc">A TV Guide that streams on desktop (a sliding-window buffer feeding the decoder) and PSP (in-memory AAC hardware decode with backpressure): the throttle deadlock, CDN failover and moov-atom positioning.</span>
+            <span class="jcard__tags">video &middot; streaming &middot; cross-platform</span>
+          </span>
+        </a>
+      </li>
+      <li>
+        <a class="jcard" href="04-rust-psp-sdk.html">
+          <span class="jcard__no" aria-hidden="true">04</span>
+          <span class="jcard__body">
+            <span class="jcard__meta"><time datetime="2026-03-11">Mar 11, 2026</time> &middot; 6 min read</span>
+            <span class="jcard__title">Modernizing the rust-psp SDK: Safety Hardening for Bare Metal MIPS</span>
+            <span class="jcard__desc">Hardening a Rust SDK for PSP homebrew: LLVM memcpy recursion on MIPS, weak-import stub flags that break real hardware, DNS byte order, and 38 high-level modules with RAII resource management.</span>
+            <span class="jcard__tags">sdk &middot; safety &middot; mips</span>
+          </span>
+        </a>
+      </li>
+      <li>
+        <a class="jcard" href="05-psp-usb-research.html">
+          <span class="jcard__no" aria-hidden="true">05</span>
+          <span class="jcard__body">
+            <span class="jcard__meta"><time datetime="2026-03-21">Mar 21, 2026</time> &middot; 10 min read</span>
+            <span class="jcard__title">PSP USB Research: From Firmware Decryption to a Custom Device Driver and Hardware Adapter</span>
+            <span class="jcard__desc">Decrypting Sony&rsquo;s firmware, finding a MUSB OTG controller &mdash; and that accessories draw power from side contact pads, not USB VBUS &mdash; then writing a custom USB device driver in Rust.</span>
+            <span class="jcard__tags">hardware &middot; reverse-engineering &middot; usb</span>
+          </span>
+        </a>
+      </li>
+      <li>
+        <a class="jcard" href="06-backend-trait-system.html">
+          <span class="jcard__no" aria-hidden="true">06</span>
+          <span class="jcard__body">
+            <span class="jcard__meta"><time datetime="2026-03-14">Mar 14, 2026</time> &middot; 8 min read</span>
+            <span class="jcard__title">Anatomy of the Backend Trait System</span>
+            <span class="jcard__desc">A walkthrough of the five backend traits: how 13 required methods plus default-implemented extension traits let one codebase render across SDL3, Canvas&nbsp;2D, PSP hardware and a software framebuffer.</span>
+            <span class="jcard__tags">architecture &middot; traits &middot; rendering</span>
+          </span>
+        </a>
+      </li>
+      <li>
+        <a class="jcard" href="07-psp-media-engine.html">
+          <span class="jcard__no" aria-hidden="true">07</span>
+          <span class="jcard__body">
+            <span class="jcard__meta"><time datetime="2026-03-26">Mar 26, 2026</time> &middot; 17 min read</span>
+            <span class="jcard__title">Reverse Engineering the PSP Media Engine: From Empty Stubs to Stable Video Streaming</span>
+            <span class="jcard__desc">From empty firmware stubs to stable hardware H.264: the ME&rsquo;s RPC protocol (22 command IDs, 47 NIDs), a 70-frame firmware deadlock, runtime binary patching, a kernel watchdog hook and P/B-frame skipping.</span>
+            <span class="jcard__tags">hardware &middot; reverse-engineering &middot; media-engine</span>
+          </span>
+        </a>
+      </li>
+      <li>
+        <a class="jcard" href="08-remote-dev-automation.html">
+          <span class="jcard__no" aria-hidden="true">08</span>
+          <span class="jcard__body">
+            <span class="jcard__meta"><time datetime="2026-03-30">Mar 30, 2026</time> &middot; 12 min read</span>
+            <span class="jcard__title">Zero-Touch PSP Development: From TCP Commands to Physical Actuators</span>
+            <span class="jcard__desc">WiFi auto-connect, a TCP command server with remote input, live framebuffer capture, file upload and a DIY linear actuator &mdash; so an AI agent could debug H.264 decode across 30+ iterations without touching the device.</span>
+            <span class="jcard__tags">automation &middot; hardware &middot; ai-agents</span>
+          </span>
+        </a>
+      </li>
+      <li>
+        <a class="jcard" href="09-javascript-on-psp.html">
+          <span class="jcard__no" aria-hidden="true">09</span>
+          <span class="jcard__body">
+            <span class="jcard__meta"><time datetime="2026-04-13">Apr 13, 2026</time> &middot; 14 min read</span>
+            <span class="jcard__title">JavaScript on a 2004 Handheld: boa_engine, std Overlay Bugs, and a Misdiagnosed Panic</span>
+            <span class="jcard__desc">Three hardware-only bring-up bugs between a JavaScript engine and 333&nbsp;MHz MIPS: an alignment trap in std&rsquo;s random module, an orphaned <code>Instant</code> overlay and a too-small thread stack. Written about boa_engine; the PSP has since moved to QuickJS-NG.</span>
+            <span class="jcard__tags">javascript &middot; rust-psp &middot; debugging</span>
+          </span>
+        </a>
+      </li>
+    </ol>
+
+    <div class="jextra">
+      <a class="jextra__card" href="../blueprint.html">
+        <img src="../img/blueprint-psp-usb-adapter.png" alt="" width="841" height="645" loading="lazy">
+        <span><strong>Hardware blueprints</strong>Interactive 3D diagrams of the PSP USB-C adapter and the hard-reset relay.</span>
+      </a>
+      <a class="jextra__card" href="https://github.com/AndrewAltimit/oasis-os/blob/main/docs/README.md">
+        <span class="jextra__glyph" aria-hidden="true">docs/</span>
+        <span><strong>Reference docs</strong>The design document, ADRs and subsystem guides live in the repository.</span>
+      </a>
     </div>
+  </section>
+</main>
+
+<footer class="footer">
+  <div class="wrap footer__inner">
+    <div class="footer__brand">
+      <span class="brand__name">OASIS<span class="brand__us">_</span>OS</span>
+      <p>Built from scratch in Rust. Dual-licensed MIT + Unlicense.</p>
+    </div>
+    <nav aria-label="Footer">
+      <ul class="footer__links">
+        <li><a href="../">Home</a></li>
+        <li><a href="../demo/">Live demo</a></li>
+        <li><a href="../journal/">Journal</a></li>
+        <li><a href="../blueprint.html">Blueprints</a></li>
+        <li><a href="https://github.com/AndrewAltimit/oasis-os">GitHub</a></li>
+        <li><a href="https://github.com/AndrewAltimit/oasis-os/blob/main/docs/README.md">Docs</a></li>
+      </ul>
+    </nav>
+    <p class="footer__status mono" aria-hidden="true">333MHz &middot; 480&times;272 &middot; v1.4.0</p>
   </div>
 </footer>
 
-<script src="../js/main.js"></script>
+<script src="../js/site.js" defer></script>
 </body>
 </html>

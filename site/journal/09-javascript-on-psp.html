@@ -2,54 +2,116 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>JavaScript on a 2004 Handheld - OASIS_OS Developer's Journal</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>JavaScript on a 2004 Handheld: boa_engine, std Overlay Bugs, and a Misdiagnosed Panic — OASIS_OS Developer's Journal</title>
   <meta name="description" content="Bringing up a full ES2023+ JavaScript engine on the PSP Allegrex. A story about three hardware-only bring-up bugs: a MIPS alignment trap in std's random module, an orphaned std overlay for Instant that panicked on every call, and a cmd-server thread stack too small for boa_engine's parser. None of them reproduced in PPSSPP.">
+  <link rel="canonical" href="https://andrewaltimit.github.io/oasis-os/journal/09-javascript-on-psp.html">
+  <meta name="theme-color" content="#08090d">
+  <link rel="icon" href="../favicon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="../img/apple-touch-icon.png">
+  <meta property="og:type" content="article">
+  <meta property="og:site_name" content="OASIS_OS">
+  <meta property="og:title" content="JavaScript on a 2004 Handheld: boa_engine, std Overlay Bugs, and a Misdiagnosed Panic — OASIS_OS Developer's Journal">
+  <meta property="og:description" content="Bringing up a full ES2023+ JavaScript engine on the PSP Allegrex. A story about three hardware-only bring-up bugs: a MIPS alignment trap in std's random module, an orphaned std overlay for Instant that panicked on every call, and a cmd-server thread stack too small for boa_engine's parser. None of them reproduced in PPSSPP.">
+  <meta property="og:url" content="https://andrewaltimit.github.io/oasis-os/journal/09-javascript-on-psp.html">
+  <meta property="og:image" content="https://andrewaltimit.github.io/oasis-os/img/og-card.png">
+  <meta property="og:image:width" content="1200">
+  <meta property="og:image:height" content="630">
+  <meta property="og:image:alt" content="OASIS_OS: one OS shell, any pixel buffer">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta property="article:published_time" content="2026-04-13">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700;800&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="../css/style.css">
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&amp;display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="../css/site.css">
+  <link rel="stylesheet" href="../css/journal.css">
 </head>
-<body>
+<body class="page-article">
 
-<nav class="site-nav">
-  <a class="nav-brand" href="../">OASIS_OS</a>
-  <button class="nav-toggle" id="nav-toggle" aria-label="Toggle navigation" aria-expanded="false">&#9776;</button>
-  <ul class="nav-links" id="nav-links">
-    <li><a href="../#platforms">Platforms</a></li>
-    <li><a href="../#architecture">Architecture</a></li>
-    <li><a href="./">Journal</a></li>
-    <li><a href="../demo/">Live Demo</a></li>
-  </ul>
-</nav>
+<a class="skip-link" href="#main">Skip to content</a>
 
-<header class="article-header">
-  <div class="container">
-    <a class="article-back" href="./">&larr; Developer's Journal</a>
-    <h1 class="article-title">JavaScript on a 2004 Handheld: boa_engine, std Overlay Bugs, and a Misdiagnosed Panic</h1>
-    <p class="article-subtitle">
-      Running a full ES2023+ JavaScript engine on 333 MHz MIPS. Three
+<header class="topbar" id="topbar">
+  <div class="topbar__inner wrap">
+    <a class="brand" href="../" aria-label="OASIS_OS home">
+      <span class="brand__mark" aria-hidden="true"></span>
+      <span class="brand__name">OASIS<span class="brand__us">_</span>OS</span>
+    </a>
+    <button class="nav-toggle" id="nav-toggle" type="button" aria-expanded="false" aria-controls="site-nav">
+      <span class="sr-only">Menu</span>
+      <span class="nav-toggle__bar" aria-hidden="true"></span>
+    </button>
+    <nav class="site-nav" id="site-nav" aria-label="Primary">
+      <ul>
+        <li><a href="../#platforms">Platforms</a></li>
+        <li><a href="../#skins">Skins</a></li>
+        <li><a href="../#features">Features</a></li>
+        <li><a href="../#architecture">Architecture</a></li>
+        <li><a href="../#psp">PSP</a></li>
+        <li><a href="../journal/" aria-current="page">Journal</a></li>
+        <li><a href="../#start">Build</a></li>
+      </ul>
+      <div class="site-nav__cta">
+        <a class="btn btn--ghost btn--sm" href="https://github.com/AndrewAltimit/oasis-os">GitHub</a>
+        <a class="btn btn--primary btn--sm" href="../demo/">Live demo</a>
+      </div>
+    </nav>
+  </div>
+</header>
+<div class="progress" aria-hidden="true"><span id="progress-bar"></span></div>
+
+<main id="main">
+<article class="article">
+  <header class="article__head wrap">
+    <nav class="crumbs" aria-label="Breadcrumb">
+      <a href="./">Developer&rsquo;s journal</a><span aria-hidden="true">/</span><span>Entry 09</span>
+    </nav>
+    <h1 class="article__title">JavaScript on a 2004 Handheld<span class="article__title-sub">boa_engine, std Overlay Bugs, and a Misdiagnosed Panic</span></h1>
+    <p class="article__lede">Running a full ES2023+ JavaScript engine on 333 MHz MIPS. Three
       bring-up bugs blocked it &mdash; a 4-byte-alignment trap in std's
       random module, an orphaned time overlay that routed
       <code>Instant::now</code> into a panicking shim, and a cmd-server
       thread stack too small for boa's parser. None reproduced in
       PPSSPP. All three fixed; <code>1 + 2 + 3</code> now returns
-      <code>6</code> on real hardware.
-    </p>
-    <div class="article-meta">
-      <span>Entry 09</span>
-      <span>javascript, rust-psp, debugging, std-overlay</span>
-    </div>
-  </div>
-</header>
+      <code>6</code> on real hardware.</p>
+    <dl class="article__meta">
+      <div><dt>Entry</dt><dd>09</dd></div>
+      <div><dt>Published</dt><dd><time datetime="2026-04-13">Apr 13, 2026</time></dd></div>
+      <div><dt>Reading time</dt><dd>14 min</dd></div>
+    </dl>
+    <ul class="article__tags" aria-label="Tags"><li>javascript</li><li>rust-psp</li><li>debugging</li></ul>
+  </header>
 
-<article class="article-content">
-
-  <aside style="border-left: 4px solid #5ca; padding: 0.75em 1em; margin: 0 0 1.5em; background: rgba(92, 204, 170, 0.08);">
-    <strong>Update &mdash; 2026-04-14:</strong> the PSP backend has since migrated off <code>boa_engine</code> onto <strong>QuickJS-NG via <code>rquickjs</code></strong>, the same engine used on desktop / WASM / UE5. The historical content below &mdash; the MIPS alignment trap, the orphaned <code>Instant</code> overlay, the 16 KB cmd-server stack &mdash; all still happened and are still the reason <code>1 + 2 + 3</code> returned <code>6</code> on real hardware for the first time. But the current PSP build cross-compiles QuickJS&rsquo;s C sources through the pspdev toolchain (<code>psp-gcc</code> wired into the <code>cc</code> crate) and provides ~40 hand-written libc/libm shim symbols via <code>quickjs_shim.rs</code> instead of linking newlib, which let us wire the DOM bindings in and run <code>document.getElementById(&hellip;).textContent = &hellip;</code> against a real browser DOM on hardware. The bring-up had its own blockers worth writing up &mdash; chiefly a five-day debugging odyssey that ended with a one-character fix: the C side had to be built with <code>-msingle-float</code> to match Rust&rsquo;s target-spec <code>+single-float</code>, because PSP Allegrex has a single-precision FPU only and PPSSPP silently emulates what real hardware traps on. A follow-up journal entry covering the QuickJS-NG migration is planned.
+  <div class="article__layout wrap">
+    <nav class="toc" aria-label="On this page">
+      <p class="toc__title">On this page</p>
+      <ol>
+        <li><a href="#the-epic-as-it-was-written">The Epic, As It Was Written</a></li>
+        <li><a href="#symptom-1-instant-crashes-on-allegrex-except-it-doesn-t">Symptom 1: &amp;ldquo;Instant Crashes on Allegrex&amp;rdquo; (Except It Doesn&amp;rsquo;t)</a></li>
+        <li><a href="#reading-eboot-log-through-a-bricked-eboot">Reading eboot.log Through a Bricked EBOOT</a></li>
+        <li><a href="#root-cause-1-a-u8-where-a-u32-was-required">Root Cause 1: A [u8] Where a [u32] Was Required</a></li>
+        <li><a href="#symptom-2-instant-now-still-crashes">Symptom 2: Instant::now() Still Crashes</a></li>
+        <li><a href="#fix-2-wire-the-overlay-back-in">Fix 2: Wire the Overlay Back In</a></li>
+        <li><a href="#why-boa-instead-of-quickjs">Why boa Instead of QuickJS</a></li>
+        <li><a href="#symptom-3-help-my-stack-is-only-16-kb">Symptom 3: &amp;ldquo;Help, My Stack Is Only 16 KB&amp;rdquo;</a></li>
+        <li><a href="#a-tour-of-what-works">A Tour of What Works</a></li>
+        <li><a href="#what-didn-t-ship-yet">What Didn&amp;rsquo;t Ship (Yet)</a></li>
+        <li><a href="#bugs-that-only-live-on-hardware">Bugs That Only Live on Hardware</a></li>
+        <li><a href="#the-footnote-neither-roadmap-predicted">The Footnote Neither Roadmap Predicted</a></li>
+      </ol>
+    </nav>
+    <div class="prose">
+<aside class="callout update" role="note">
+    <div class="callout-title">Update (Apr 2026)</div>
+    <p>the PSP backend has since migrated off <code>boa_engine</code> onto <strong>QuickJS-NG via <code>rquickjs</code></strong>, the same engine used on desktop / WASM / UE5. The historical content below &mdash; the MIPS alignment trap, the orphaned <code>Instant</code> overlay, the 16 KB cmd-server stack &mdash; all still happened and are still the reason <code>1 + 2 + 3</code> returned <code>6</code> on real hardware for the first time. But the current PSP build cross-compiles QuickJS&rsquo;s C sources through the pspdev toolchain (<code>psp-gcc</code> wired into the <code>cc</code> crate) and provides ~40 hand-written libc/libm shim symbols via <code>quickjs_shim.rs</code> instead of linking newlib, which let us wire the DOM bindings in and run <code>document.getElementById(&hellip;).textContent = &hellip;</code> against a real browser DOM on hardware. The bring-up had its own blockers worth writing up &mdash; chiefly a five-day debugging odyssey that ended with a one-character fix: the C side had to be built with <code>-msingle-float</code> to match Rust&rsquo;s target-spec <code>+single-float</code>, because PSP Allegrex has a single-precision FPU only and PPSSPP silently emulates what real hardware traps on. A follow-up journal entry covering the QuickJS-NG migration is planned.</p>
   </aside>
 
-  <h2>The Epic, As It Was Written</h2>
+  <aside class="callout update" role="note">
+    <div class="callout-title">Update (Oct 2026)</div>
+    <p>A correction to the note above: QuickJS-NG runs on desktop (the optional <code>javascript</code> feature, on by default in <code>oasis-app</code>) and on the PSP, but not on every target. The WASM build leaves it out because <code>rquickjs-sys</code> needs clang to cross-compile QuickJS for <code>wasm32-unknown-unknown</code>, and the UE5 <code>oasis-ffi</code> library doesn&rsquo;t enable it. The follow-up entry hasn&rsquo;t been written yet; <a href="https://github.com/AndrewAltimit/oasis-os/blob/main/docs/javascript-engine.md">docs/javascript-engine.md</a> covers the PSP cross-compile in the meantime.</p>
+  </aside>
+
+
+  <h2 id="the-epic-as-it-was-written"><a class="anchor" href="#the-epic-as-it-was-written" aria-hidden="true" tabindex="-1">#</a>The Epic, As It Was Written</h2>
 
   <p>
     The <a href="https://github.com/AndrewAltimit/oasis-os/blob/main/docs/browser-backlog.md">browser
@@ -78,7 +140,7 @@
     running on hardware Sony shipped the year the Nintendo DS came out.
   </p>
 
-  <h2>Symptom 1: &ldquo;Instant Crashes on Allegrex&rdquo; (Except It Doesn&rsquo;t)</h2>
+  <h2 id="symptom-1-instant-crashes-on-allegrex-except-it-doesn-t"><a class="anchor" href="#symptom-1-instant-crashes-on-allegrex-except-it-doesn-t" aria-hidden="true" tabindex="-1">#</a>Symptom 1: &ldquo;Instant Crashes on Allegrex&rdquo; (Except It Doesn&rsquo;t)</h2>
 
   <p>
     Before writing any new JavaScript integration code, I started with
@@ -130,7 +192,7 @@
     Not the allocator.
   </p>
 
-  <h2>Reading eboot.log Through a Bricked EBOOT</h2>
+  <h2 id="reading-eboot-log-through-a-bricked-eboot"><a class="anchor" href="#reading-eboot-log-through-a-bricked-eboot" aria-hidden="true" tabindex="-1">#</a>Reading eboot.log Through a Bricked EBOOT</h2>
 
   <p>
     Diagnosing a boot-time freeze on the PSP means getting
@@ -178,7 +240,7 @@ fn read_file(cfd: i32, path: &amp;[u8]) {
     <code>sys/random/psp.rs</code>.
   </p>
 
-  <h2>Root Cause 1: A <code>[u8]</code> Where a <code>[u32]</code> Was Required</h2>
+  <h2 id="root-cause-1-a-u8-where-a-u32-was-required"><a class="anchor" href="#root-cause-1-a-u8-where-a-u32-was-required" aria-hidden="true" tabindex="-1">#</a>Root Cause 1: A <code>[u8]</code> Where a <code>[u32]</code> Was Required</h2>
 
   <p>
     The PSP std overlay backed the Mersenne Twister context with a plain
@@ -238,7 +300,7 @@ fn mt_ctx_ptr() -&gt; *mut u8 {
     Time to run the <em>original</em> experiment.
   </p>
 
-  <h2>Symptom 2: <code>Instant::now()</code> Still Crashes</h2>
+  <h2 id="symptom-2-instant-now-still-crashes"><a class="anchor" href="#symptom-2-instant-now-still-crashes" aria-hidden="true" tabindex="-1">#</a>Symptom 2: <code>Instant::now()</code> Still Crashes</h2>
 
   <pre><code>$ echo "timetest" | nc 192.168.0.249 9293
 timetest: start
@@ -310,7 +372,7 @@ pub fn now() -&gt; Instant {
     already been told not to call.
   </p>
 
-  <h2>Fix 2: Wire the Overlay Back In</h2>
+  <h2 id="fix-2-wire-the-overlay-back-in"><a class="anchor" href="#fix-2-wire-the-overlay-back-in" aria-hidden="true" tabindex="-1">#</a>Fix 2: Wire the Overlay Back In</h2>
 
   <p>
     Two files. Copy the overlay implementation into the new
@@ -360,7 +422,7 @@ pong</code></pre>
     plan and build some JavaScript.
   </p>
 
-  <h2>Why boa Instead of QuickJS</h2>
+  <h2 id="why-boa-instead-of-quickjs"><a class="anchor" href="#why-boa-instead-of-quickjs" aria-hidden="true" tabindex="-1">#</a>Why boa Instead of QuickJS</h2>
 
   <p>
     The original epic called for vendoring QuickJS-NG via the
@@ -436,7 +498,7 @@ impl BoaJsEngine {
     All green on the host.
   </p>
 
-  <h2>Symptom 3: &ldquo;Help, My Stack Is Only 16 KB&rdquo;</h2>
+  <h2 id="symptom-3-help-my-stack-is-only-16-kb"><a class="anchor" href="#symptom-3-help-my-stack-is-only-16-kb" aria-hidden="true" tabindex="-1">#</a>Symptom 3: &ldquo;Help, My Stack Is Only 16 KB&rdquo;</h2>
 
   <p>
     boa compiled for <code>mipsel-sony-psp</code> in 31 seconds on the
@@ -502,7 +564,7 @@ js: 6</code></pre>
     correct answer, via a TCP command.
   </p>
 
-  <h2>A Tour of What Works</h2>
+  <h2 id="a-tour-of-what-works"><a class="anchor" href="#a-tour-of-what-works" aria-hidden="true" tabindex="-1">#</a>A Tour of What Works</h2>
 
   <pre><code>$ echo "js 'hello ' + 'world'" | nc 192.168.0.249 9293
 js: hello world
@@ -540,7 +602,7 @@ js: object</code></pre>
     the memory footprint bounded.
   </p>
 
-  <h2>What Didn&rsquo;t Ship (Yet)</h2>
+  <h2 id="what-didn-t-ship-yet"><a class="anchor" href="#what-didn-t-ship-yet" aria-hidden="true" tabindex="-1">#</a>What Didn&rsquo;t Ship (Yet)</h2>
 
   <p>
     The <code>javascript</code> feature on <code>oasis-browser</code>
@@ -565,7 +627,7 @@ js: object</code></pre>
     <code>while (true) {}</code> on PSP hardware is not a good time.
   </p>
 
-  <h2>Bugs That Only Live on Hardware</h2>
+  <h2 id="bugs-that-only-live-on-hardware"><a class="anchor" href="#bugs-that-only-live-on-hardware" aria-hidden="true" tabindex="-1">#</a>Bugs That Only Live on Hardware</h2>
 
   <p>
     All three bring-up bugs in this story share a property that makes
@@ -619,7 +681,7 @@ js: object</code></pre>
     </li>
   </ul>
 
-  <h2>The Footnote Neither Roadmap Predicted</h2>
+  <h2 id="the-footnote-neither-roadmap-predicted"><a class="anchor" href="#the-footnote-neither-roadmap-predicted" aria-hidden="true" tabindex="-1">#</a>The Footnote Neither Roadmap Predicted</h2>
 
   <p>
     The original epic budgeted one to three weeks at &ldquo;high
@@ -642,22 +704,39 @@ js: object</code></pre>
     <code>1 + 2 + 3</code>, and everything downstream from that is
     just scope.
   </p>
-
-</article>
-
-<footer class="site-footer">
-  <div class="container">
-    <div class="footer-row">
-      <span>&copy; 2024&ndash;2026 OASIS_OS contributors</span>
-      <span>&middot;</span>
-      <a href="https://github.com/AndrewAltimit/oasis-os">GitHub</a>
-      <span>&middot;</span>
-      <a href="../">Home</a>
     </div>
+  </div>
+
+  <footer class="article__foot wrap">
+  <nav class="pager" aria-label="More entries">
+    <a class="pager__link pager__link--prev" href="08-remote-dev-automation.html" rel="prev"><span class="pager__dir">&larr; Previous &middot; 08</span><span class="pager__title">Zero-Touch PSP Development</span></a>
+    <a class="pager__link pager__link--next" href="./"><span class="pager__dir">Journal &rarr;</span><span class="pager__title">All entries</span></a>
+  </nav>
+  </footer>
+</article>
+</main>
+
+<footer class="footer">
+  <div class="wrap footer__inner">
+    <div class="footer__brand">
+      <span class="brand__name">OASIS<span class="brand__us">_</span>OS</span>
+      <p>Built from scratch in Rust. Dual-licensed MIT + Unlicense.</p>
+    </div>
+    <nav aria-label="Footer">
+      <ul class="footer__links">
+        <li><a href="../">Home</a></li>
+        <li><a href="../demo/">Live demo</a></li>
+        <li><a href="../journal/">Journal</a></li>
+        <li><a href="../blueprint.html">Blueprints</a></li>
+        <li><a href="https://github.com/AndrewAltimit/oasis-os">GitHub</a></li>
+        <li><a href="https://github.com/AndrewAltimit/oasis-os/blob/main/docs/README.md">Docs</a></li>
+      </ul>
+    </nav>
+    <p class="footer__status mono" aria-hidden="true">333MHz &middot; 480&times;272 &middot; v1.4.0</p>
   </div>
 </footer>
 
-<script src="../js/main.js"></script>
-
+<script src="../js/site.js" defer></script>
+<script src="../js/journal.js" defer></script>
 </body>
 </html>

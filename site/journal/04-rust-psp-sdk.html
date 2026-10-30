@@ -2,46 +2,97 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Modernizing the rust-psp SDK - OASIS_OS Developer's Journal</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Modernizing the rust-psp SDK: Safety Hardening for Bare Metal MIPS — OASIS_OS Developer's Journal</title>
   <meta name="description" content="Forking and hardening a Rust SDK for PSP homebrew — fixing LLVM memcpy recursion, weak import flags, DNS endianness, and building 38 high-level modules.">
+  <link rel="canonical" href="https://andrewaltimit.github.io/oasis-os/journal/04-rust-psp-sdk.html">
+  <meta name="theme-color" content="#08090d">
+  <link rel="icon" href="../favicon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="../img/apple-touch-icon.png">
+  <meta property="og:type" content="article">
+  <meta property="og:site_name" content="OASIS_OS">
+  <meta property="og:title" content="Modernizing the rust-psp SDK: Safety Hardening for Bare Metal MIPS — OASIS_OS Developer's Journal">
+  <meta property="og:description" content="Forking and hardening a Rust SDK for PSP homebrew — fixing LLVM memcpy recursion, weak import flags, DNS endianness, and building 38 high-level modules.">
+  <meta property="og:url" content="https://andrewaltimit.github.io/oasis-os/journal/04-rust-psp-sdk.html">
+  <meta property="og:image" content="https://andrewaltimit.github.io/oasis-os/img/og-card.png">
+  <meta property="og:image:width" content="1200">
+  <meta property="og:image:height" content="630">
+  <meta property="og:image:alt" content="OASIS_OS: one OS shell, any pixel buffer">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta property="article:published_time" content="2026-03-11">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700;800&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="../css/style.css">
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&amp;display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="../css/site.css">
+  <link rel="stylesheet" href="../css/journal.css">
 </head>
-<body>
+<body class="page-article">
 
-<nav class="site-nav">
-  <a class="nav-brand" href="../">OASIS_OS</a>
-  <button class="nav-toggle" id="nav-toggle" aria-label="Toggle navigation" aria-expanded="false">&#9776;</button>
-  <ul class="nav-links" id="nav-links">
-    <li><a href="../#platforms">Platforms</a></li>
-    <li><a href="../#architecture">Architecture</a></li>
-    <li><a href="./">Journal</a></li>
-    <li><a href="../demo/">Live Demo</a></li>
-  </ul>
-</nav>
+<a class="skip-link" href="#main">Skip to content</a>
 
-<header class="article-header">
-  <div class="container">
-    <a class="article-back" href="./">&larr; Developer's Journal</a>
-    <h1 class="article-title">Modernizing the rust-psp SDK: Safety Hardening for Bare Metal MIPS</h1>
-    <p class="article-subtitle">
-      Forking and hardening a Rust SDK for PSP homebrew development &mdash; fixing LLVM
-      memcpy recursion on MIPS, weak import stub flags that break real hardware, and
-      building 38 high-level modules with RAII resource management.
-    </p>
-    <div class="article-meta">
-      <span>Entry 04</span>
-      <span>sdk, safety, 829 syscalls</span>
-    </div>
+<header class="topbar" id="topbar">
+  <div class="topbar__inner wrap">
+    <a class="brand" href="../" aria-label="OASIS_OS home">
+      <span class="brand__mark" aria-hidden="true"></span>
+      <span class="brand__name">OASIS<span class="brand__us">_</span>OS</span>
+    </a>
+    <button class="nav-toggle" id="nav-toggle" type="button" aria-expanded="false" aria-controls="site-nav">
+      <span class="sr-only">Menu</span>
+      <span class="nav-toggle__bar" aria-hidden="true"></span>
+    </button>
+    <nav class="site-nav" id="site-nav" aria-label="Primary">
+      <ul>
+        <li><a href="../#platforms">Platforms</a></li>
+        <li><a href="../#skins">Skins</a></li>
+        <li><a href="../#features">Features</a></li>
+        <li><a href="../#architecture">Architecture</a></li>
+        <li><a href="../#psp">PSP</a></li>
+        <li><a href="../journal/" aria-current="page">Journal</a></li>
+        <li><a href="../#start">Build</a></li>
+      </ul>
+      <div class="site-nav__cta">
+        <a class="btn btn--ghost btn--sm" href="https://github.com/AndrewAltimit/oasis-os">GitHub</a>
+        <a class="btn btn--primary btn--sm" href="../demo/">Live demo</a>
+      </div>
+    </nav>
   </div>
 </header>
+<div class="progress" aria-hidden="true"><span id="progress-bar"></span></div>
 
-<article class="article-content">
+<main id="main">
+<article class="article">
+  <header class="article__head wrap">
+    <nav class="crumbs" aria-label="Breadcrumb">
+      <a href="./">Developer&rsquo;s journal</a><span aria-hidden="true">/</span><span>Entry 04</span>
+    </nav>
+    <h1 class="article__title">Modernizing the rust-psp SDK<span class="article__title-sub">Safety Hardening for Bare Metal MIPS</span></h1>
+    <p class="article__lede">Forking and hardening a Rust SDK for PSP homebrew development &mdash; fixing LLVM
+      memcpy recursion on MIPS, weak import stub flags that break real hardware, and
+      building 38 high-level modules with RAII resource management.</p>
+    <dl class="article__meta">
+      <div><dt>Entry</dt><dd>04</dd></div>
+      <div><dt>Published</dt><dd><time datetime="2026-03-11">Mar 11, 2026</time></dd></div>
+      <div><dt>Reading time</dt><dd>6 min</dd></div>
+    </dl>
+    <ul class="article__tags" aria-label="Tags"><li>sdk</li><li>safety</li><li>mips</li></ul>
+  </header>
 
-  <h2>Why Fork?</h2>
+  <div class="article__layout wrap">
+    <nav class="toc" aria-label="On this page">
+      <p class="toc__title">On this page</p>
+      <ol>
+        <li><a href="#why-fork">Why Fork?</a></li>
+        <li><a href="#the-llvm-memcpy-recursion-bug">The LLVM Memcpy Recursion Bug</a></li>
+        <li><a href="#weak-import-stub-flags">Weak Import Stub Flags</a></li>
+        <li><a href="#the-38-high-level-modules">The 38 High-Level Modules</a></li>
+        <li><a href="#kernel-mode-syscallhook">Kernel Mode: SyscallHook</a></li>
+        <li><a href="#edition-2024-modernization">Edition 2024 Modernization</a></li>
+        <li><a href="#testing-on-real-hardware-vs-ppsspp">Testing on Real Hardware vs. PPSSPP</a></li>
+        <li><a href="#by-the-numbers">By the Numbers</a></li>
+      </ol>
+    </nav>
+    <div class="prose">
+<h2 id="why-fork"><a class="anchor" href="#why-fork" aria-hidden="true" tabindex="-1">#</a>Why Fork?</h2>
 
   <p>
     The <a href="https://github.com/overdrivenpotato/rust-psp">original rust-psp</a> is
@@ -64,7 +115,7 @@
     SDK modules and 30 example programs.
   </p>
 
-  <h2>The LLVM Memcpy Recursion Bug</h2>
+  <h2 id="the-llvm-memcpy-recursion-bug"><a class="anchor" href="#the-llvm-memcpy-recursion-bug" aria-hidden="true" tabindex="-1">#</a>The LLVM Memcpy Recursion Bug</h2>
 
   <div class="callout discovery">
     <div class="callout-title">Discovery: Infinite Recursion in C Intrinsics</div>
@@ -114,7 +165,7 @@ pub unsafe extern "C" fn memset(dest: *mut u8, val: i32, n: usize) -> *mut u8 {
     call. This is a compiler barrier, not a hardware requirement.
   </p>
 
-  <h2>Weak Import Stub Flags</h2>
+  <h2 id="weak-import-stub-flags"><a class="anchor" href="#weak-import-stub-flags" aria-hidden="true" tabindex="-1">#</a>Weak Import Stub Flags</h2>
 
   <p>
     PSP firmware modules export functions identified by 32-bit NIDs (Name IDs). When a
@@ -165,7 +216,7 @@ pub unsafe extern "C" fn memset(dest: *mut u8, val: i32, n: usize) -> *mut u8 {
     </p>
   </div>
 
-  <h2>The 38 High-Level Modules</h2>
+  <h2 id="the-38-high-level-modules"><a class="anchor" href="#the-38-high-level-modules" aria-hidden="true" tabindex="-1">#</a>The 38 High-Level Modules</h2>
 
   <p>
     The raw <code>psp::sys</code> module exposes 829 syscall bindings as unsafe C-ABI
@@ -246,7 +297,7 @@ pub unsafe extern "C" fn memset(dest: *mut u8, val: i32, n: usize) -> *mut u8 {
     a homebrew exits, any un-freed resources stay allocated until power cycle.
   </p>
 
-  <h2>Kernel Mode: SyscallHook</h2>
+  <h2 id="kernel-mode-syscallhook"><a class="anchor" href="#kernel-mode-syscallhook" aria-hidden="true" tabindex="-1">#</a>Kernel Mode: SyscallHook</h2>
 
   <p>
     The PSP plugin PRX needs to hook firmware syscalls to intercept display buffer swaps.
@@ -283,7 +334,7 @@ pub unsafe extern "C" fn memset(dest: *mut u8, val: i32, n: usize) -> *mut u8 {
     <div class="diagram-caption">Two hook mechanisms with CFW-specific quirk handling</div>
   </div>
 
-  <h2>Edition 2024 Modernization</h2>
+  <h2 id="edition-2024-modernization"><a class="anchor" href="#edition-2024-modernization" aria-hidden="true" tabindex="-1">#</a>Edition 2024 Modernization</h2>
 
   <p>
     The fork updates the entire codebase to Rust edition 2024:
@@ -301,7 +352,7 @@ pub unsafe extern "C" fn memset(dest: *mut u8, val: i32, n: usize) -> *mut u8 {
         field-by-field writes</li>
   </ul>
 
-  <h2>Testing on Real Hardware vs. PPSSPP</h2>
+  <h2 id="testing-on-real-hardware-vs-ppsspp"><a class="anchor" href="#testing-on-real-hardware-vs-ppsspp" aria-hidden="true" tabindex="-1">#</a>Testing on Real Hardware vs. PPSSPP</h2>
 
   <div class="callout warning">
     <div class="callout-title">Emulator vs. Real Hardware</div>
@@ -320,9 +371,9 @@ pub unsafe extern "C" fn memset(dest: *mut u8, val: i32, n: usize) -> *mut u8 {
     of bare-metal development: the emulator is a convenience tool, not a source of truth.
   </p>
 
-  <h2>By the Numbers</h2>
+  <h2 id="by-the-numbers"><a class="anchor" href="#by-the-numbers" aria-hidden="true" tabindex="-1">#</a>By the Numbers</h2>
 
-  <table>
+  <div class="table-wrap"><table>
     <thead>
       <tr><th>Metric</th><th>Value</th></tr>
     </thead>
@@ -335,25 +386,40 @@ pub unsafe extern "C" fn memset(dest: *mut u8, val: i32, n: usize) -> *mut u8 {
       <tr><td>Safety-critical fixes</td><td>8</td></tr>
       <tr><td>PSP hardware revisions tested</td><td>2 (PSP-1000, PSP-3000)</td></tr>
     </tbody>
-  </table>
-
-  <nav class="article-nav">
-    <a class="prev" href="03-streaming-video.html">&larr; Prev: Streaming Internet Archive Video</a>
-    <a class="next" href="05-psp-usb-research.html">Next: PSP USB Host Mode &rarr;</a>
-  </nav>
-
-</article>
-
-<footer class="site-footer">
-  <div class="container">
-    <div class="footer-row">
-      <span>&copy; 2024&ndash;2026 OASIS_OS contributors</span>
-      <span>&middot;</span>
-      <a href="https://github.com/AndrewAltimit/oasis-os">GitHub</a>
+  </table></div>
     </div>
+  </div>
+
+  <footer class="article__foot wrap">
+  <nav class="pager" aria-label="More entries">
+    <a class="pager__link pager__link--prev" href="03-streaming-video.html" rel="prev"><span class="pager__dir">&larr; Previous &middot; 03</span><span class="pager__title">Streaming Internet Archive Video</span></a>
+    <a class="pager__link pager__link--next" href="05-psp-usb-research.html" rel="next"><span class="pager__dir">Next &middot; 05 &rarr;</span><span class="pager__title">PSP USB Research</span></a>
+  </nav>
+  </footer>
+</article>
+</main>
+
+<footer class="footer">
+  <div class="wrap footer__inner">
+    <div class="footer__brand">
+      <span class="brand__name">OASIS<span class="brand__us">_</span>OS</span>
+      <p>Built from scratch in Rust. Dual-licensed MIT + Unlicense.</p>
+    </div>
+    <nav aria-label="Footer">
+      <ul class="footer__links">
+        <li><a href="../">Home</a></li>
+        <li><a href="../demo/">Live demo</a></li>
+        <li><a href="../journal/">Journal</a></li>
+        <li><a href="../blueprint.html">Blueprints</a></li>
+        <li><a href="https://github.com/AndrewAltimit/oasis-os">GitHub</a></li>
+        <li><a href="https://github.com/AndrewAltimit/oasis-os/blob/main/docs/README.md">Docs</a></li>
+      </ul>
+    </nav>
+    <p class="footer__status mono" aria-hidden="true">333MHz &middot; 480&times;272 &middot; v1.4.0</p>
   </div>
 </footer>
 
-<script src="../js/main.js"></script>
+<script src="../js/site.js" defer></script>
+<script src="../js/journal.js" defer></script>
 </body>
 </html>

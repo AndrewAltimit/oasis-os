@@ -2,47 +2,96 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>One Codebase, Five Platforms - OASIS_OS Developer's Journal</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>One Codebase, Five Platforms: Architecture of a Unified Embedded OS — OASIS_OS Developer's Journal</title>
   <meta name="description" content="How trait-based backend abstraction enables a single Rust OS codebase to render across SDL3, WebAssembly, PSP, Unreal Engine 5, and a kernel-mode overlay.">
+  <link rel="canonical" href="https://andrewaltimit.github.io/oasis-os/journal/01-unified-embedded-os.html">
+  <meta name="theme-color" content="#08090d">
+  <link rel="icon" href="../favicon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="../img/apple-touch-icon.png">
+  <meta property="og:type" content="article">
+  <meta property="og:site_name" content="OASIS_OS">
+  <meta property="og:title" content="One Codebase, Five Platforms: Architecture of a Unified Embedded OS — OASIS_OS Developer's Journal">
+  <meta property="og:description" content="How trait-based backend abstraction enables a single Rust OS codebase to render across SDL3, WebAssembly, PSP, Unreal Engine 5, and a kernel-mode overlay.">
+  <meta property="og:url" content="https://andrewaltimit.github.io/oasis-os/journal/01-unified-embedded-os.html">
+  <meta property="og:image" content="https://andrewaltimit.github.io/oasis-os/img/og-card.png">
+  <meta property="og:image:width" content="1200">
+  <meta property="og:image:height" content="630">
+  <meta property="og:image:alt" content="OASIS_OS: one OS shell, any pixel buffer">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta property="article:published_time" content="2026-03-11">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700;800&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="../css/style.css">
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&amp;display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="../css/site.css">
+  <link rel="stylesheet" href="../css/journal.css">
 </head>
-<body>
+<body class="page-article">
 
-<nav class="site-nav">
-  <a class="nav-brand" href="../">OASIS_OS</a>
-  <button class="nav-toggle" id="nav-toggle" aria-label="Toggle navigation" aria-expanded="false">&#9776;</button>
-  <ul class="nav-links" id="nav-links">
-    <li><a href="../#platforms">Platforms</a></li>
-    <li><a href="../#architecture">Architecture</a></li>
-    <li><a href="./">Journal</a></li>
-    <li><a href="../demo/">Live Demo</a></li>
-  </ul>
-</nav>
+<a class="skip-link" href="#main">Skip to content</a>
 
-<header class="article-header">
-  <div class="container">
-    <a class="article-back" href="./">&larr; Developer's Journal</a>
-    <h1 class="article-title">One Codebase, Five Platforms: Architecture of a Unified Embedded OS</h1>
-    <p class="article-subtitle">
-      How trait-based backend abstraction lets the same Rust codebase render to SDL3, WebAssembly,
-      PSP hardware, Unreal Engine 5, and a kernel-mode overlay &mdash; without a single
-      <code>#[cfg]</code> in core logic.
-    </p>
-    <div class="article-meta">
-      <span>Entry 01</span>
-      <span>37 crates</span>
-      <span>architecture, rust, traits</span>
-    </div>
+<header class="topbar" id="topbar">
+  <div class="topbar__inner wrap">
+    <a class="brand" href="../" aria-label="OASIS_OS home">
+      <span class="brand__mark" aria-hidden="true"></span>
+      <span class="brand__name">OASIS<span class="brand__us">_</span>OS</span>
+    </a>
+    <button class="nav-toggle" id="nav-toggle" type="button" aria-expanded="false" aria-controls="site-nav">
+      <span class="sr-only">Menu</span>
+      <span class="nav-toggle__bar" aria-hidden="true"></span>
+    </button>
+    <nav class="site-nav" id="site-nav" aria-label="Primary">
+      <ul>
+        <li><a href="../#platforms">Platforms</a></li>
+        <li><a href="../#skins">Skins</a></li>
+        <li><a href="../#features">Features</a></li>
+        <li><a href="../#architecture">Architecture</a></li>
+        <li><a href="../#psp">PSP</a></li>
+        <li><a href="../journal/" aria-current="page">Journal</a></li>
+        <li><a href="../#start">Build</a></li>
+      </ul>
+      <div class="site-nav__cta">
+        <a class="btn btn--ghost btn--sm" href="https://github.com/AndrewAltimit/oasis-os">GitHub</a>
+        <a class="btn btn--primary btn--sm" href="../demo/">Live demo</a>
+      </div>
+    </nav>
   </div>
 </header>
+<div class="progress" aria-hidden="true"><span id="progress-bar"></span></div>
 
-<article class="article-content">
+<main id="main">
+<article class="article">
+  <header class="article__head wrap">
+    <nav class="crumbs" aria-label="Breadcrumb">
+      <a href="./">Developer&rsquo;s journal</a><span aria-hidden="true">/</span><span>Entry 01</span>
+    </nav>
+    <h1 class="article__title">One Codebase, Five Platforms<span class="article__title-sub">Architecture of a Unified Embedded OS</span></h1>
+    <p class="article__lede">How trait-based backend abstraction lets the same Rust codebase render to SDL3, WebAssembly,
+      PSP hardware, Unreal Engine 5, and a kernel-mode overlay &mdash; without a single
+      <code>#[cfg]</code> in core logic.</p>
+    <dl class="article__meta">
+      <div><dt>Entry</dt><dd>01</dd></div>
+      <div><dt>Published</dt><dd><time datetime="2026-03-11">Mar 11, 2026</time></dd></div>
+      <div><dt>Reading time</dt><dd>7 min</dd></div>
+    </dl>
+    <ul class="article__tags" aria-label="Tags"><li>architecture</li><li>rust</li><li>traits</li></ul>
+  </header>
 
-  <h2>The Problem: One OS, Radically Different Hosts</h2>
+  <div class="article__layout wrap">
+    <nav class="toc" aria-label="On this page">
+      <p class="toc__title">On this page</p>
+      <ol>
+        <li><a href="#the-problem-one-os-radically-different-hosts">The Problem: One OS, Radically Different Hosts</a></li>
+        <li><a href="#the-backend-trait-boundary">The Backend Trait Boundary</a></li>
+        <li><a href="#the-five-backends">The Five Backends</a></li>
+        <li><a href="#the-crate-dependency-graph">The Crate Dependency Graph</a></li>
+        <li><a href="#why-this-works-the-key-design-decisions">Why This Works: The Key Design Decisions</a></li>
+        <li><a href="#what-20-crates-buys-you">What 20 Crates Buys You</a></li>
+        <li><a href="#numbers">Numbers</a></li>
+      </ol>
+    </nav>
+    <div class="prose">
+<h2 id="the-problem-one-os-radically-different-hosts"><a class="anchor" href="#the-problem-one-os-radically-different-hosts" aria-hidden="true" tabindex="-1">#</a>The Problem: One OS, Radically Different Hosts</h2>
 
   <p>
     OASIS_OS was built from scratch in Rust in early 2026, inspired by PSP homebrew
@@ -59,7 +108,7 @@
     implementation of rendering, input, audio, and networking traits.
   </p>
 
-  <h2>The Backend Trait Boundary</h2>
+  <h2 id="the-backend-trait-boundary"><a class="anchor" href="#the-backend-trait-boundary" aria-hidden="true" tabindex="-1">#</a>The Backend Trait Boundary</h2>
 
   <p>
     The entire platform abstraction lives in a single file:
@@ -109,7 +158,13 @@
     new backend can ship with just 13 methods and progressively add hardware acceleration.
   </p>
 
-  <h2>The Five Backends</h2>
+  <aside class="callout update" role="note">
+    <div class="callout-title">Update (Oct 2026)</div>
+    <p>The trait definitions have since moved out of a single <code>backend.rs</code> into the <code>oasis-types/src/backend/</code> directory, one file per extension trait under <code>extensions/</code>. <code>SdiBackend</code> is now a marker over <strong>nine</strong> extension traits carrying <strong>53</strong> default methods: <code>SdiRenderTarget</code> (offscreen render targets) joined the eight above, and <code>SdiBatch</code> is <code>begin_batch</code> / <code>flush_batch</code> plus rect and text batch submission. The defaults are span-exact software implementations, so a backend still starts with the 13 core methods and overrides only what its hardware accelerates.</p>
+  </aside>
+
+
+  <h2 id="the-five-backends"><a class="anchor" href="#the-five-backends" aria-hidden="true" tabindex="-1">#</a>The Five Backends</h2>
 
   <pre class="mermaid">
 graph TD
@@ -126,12 +181,12 @@ graph TD
     CORE --> PSP
     CORE -.-> PRX
 
-    style CORE fill:#1a1a2e,stroke:#7c3aed,color:#e0e0e0
-    style SDL fill:#1a1a2e,stroke:#00d4aa,color:#e0e0e0
-    style WASM fill:#1a1a2e,stroke:#00d4aa,color:#e0e0e0
-    style UE5 fill:#1a1a2e,stroke:#00d4aa,color:#e0e0e0
-    style PSP fill:#1a1a2e,stroke:#a78bfa,color:#e0e0e0
-    style PRX fill:#1a1a2e,stroke:#a78bfa,color:#e0e0e0
+    style CORE fill:#11141c,stroke:#ff8a3d,color:#e8eaf0
+    style SDL fill:#11141c,stroke:#7cc7ff,color:#e8eaf0
+    style WASM fill:#11141c,stroke:#7cc7ff,color:#e8eaf0
+    style UE5 fill:#11141c,stroke:#7cc7ff,color:#e8eaf0
+    style PSP fill:#11141c,stroke:#b8e45a,color:#e8eaf0
+    style PRX fill:#11141c,stroke:#b8e45a,color:#e8eaf0
   </pre>
   <div class="diagram-caption">Five backends sharing one core — from game engines to bare metal MIPS</div>
 
@@ -142,6 +197,12 @@ graph TD
     via the <code>build-from-source</code> feature &mdash; no system SDL installation
     required. Handles keyboard, mouse, and gamepad input; audio playback via SDL_mixer.
   </p>
+
+  <aside class="callout update" role="note">
+    <div class="callout-title">Update (Oct 2026)</div>
+    <p>SDL_mixer is no longer involved: the SDL backend feeds SDL3 audio streams directly and decodes MP3 with minimp3 (through the <code>rmp3</code> crate).</p>
+  </aside>
+
 
   <h3>WebAssembly (oasis-backend-wasm)</h3>
   <p>
@@ -177,7 +238,7 @@ graph TD
     minimal widget set.
   </p>
 
-  <h2>The Crate Dependency Graph</h2>
+  <h2 id="the-crate-dependency-graph"><a class="anchor" href="#the-crate-dependency-graph" aria-hidden="true" tabindex="-1">#</a>The Crate Dependency Graph</h2>
 
   <p>
     The workspace is organized as 20 crates with a strict dependency hierarchy. Foundation
@@ -208,7 +269,13 @@ graph TD
     <div class="diagram-caption">34 workspace crates — core logic never imports a backend</div>
   </div>
 
-  <h2>Why This Works: The Key Design Decisions</h2>
+  <aside class="callout update" role="note">
+    <div class="callout-title">Update (Oct 2026)</div>
+    <p>The tree has kept growing. The repository now has <strong>50 crate directories</strong>: 40 workspace members (desktop, WASM and UE5), the excluded <code>oasis-backend-psp</code>, and nine standalone PSP-target crates built one by one with <code>cargo psp</code>. Apps no longer live in <code>oasis-core</code>; they are 13 <code>oasis-app-*</code> crates (15 apps once you count the Terminal that stays in core), next to crates this diagram never showed, such as <code>oasis-app-core</code>, <code>oasis-mcp</code>, <code>oasis-shader</code>, <code>oasis-rasterize</code> and <code>oasis-i18n</code>. The shape is unchanged: backends are still leaves.</p>
+  </aside>
+
+
+  <h2 id="why-this-works-the-key-design-decisions"><a class="anchor" href="#why-this-works-the-key-design-decisions" aria-hidden="true" tabindex="-1">#</a>Why This Works: The Key Design Decisions</h2>
 
   <h3>No <code>#[cfg]</code> in Core</h3>
   <p>
@@ -246,7 +313,7 @@ graph TD
     (<code>psp::font</code>) supplements the bitmap glyphs with TrueType via a VRAM atlas.
   </p>
 
-  <h2>What 20 Crates Buys You</h2>
+  <h2 id="what-20-crates-buys-you"><a class="anchor" href="#what-20-crates-buys-you" aria-hidden="true" tabindex="-1">#</a>What 20 Crates Buys You</h2>
 
   <p>
     The aggressive crate split isn't just organizational hygiene. It has concrete
@@ -268,6 +335,12 @@ graph TD
         <code>oasis-wm</code> owns window hit testing and decorations. No god objects.</li>
   </ul>
 
+  <aside class="callout update" role="note">
+    <div class="callout-title">Update (Oct 2026)</div>
+    <p>The video features have been reshuffled. <code>oasis-video</code> now offers <code>h264</code> (openh264 + symphonia), <code>ffmpeg</code> (mutually exclusive with <code>h264</code>) and <code>no-std-demux</code>; <code>video-decode</code> and <code>video-decode-ffmpeg</code> are features of <code>oasis-app</code> and <code>oasis-ffi</code> that pick one of the two, and ffmpeg is the desktop default.</p>
+  </aside>
+
+
   <div class="callout">
     <div class="callout-title">Key Insight</div>
     <p>
@@ -278,9 +351,9 @@ graph TD
     </p>
   </div>
 
-  <h2>Numbers</h2>
+  <h2 id="numbers"><a class="anchor" href="#numbers" aria-hidden="true" tabindex="-1">#</a>Numbers</h2>
 
-  <table>
+  <div class="table-wrap"><table>
     <thead>
       <tr><th>Metric</th><th>Count</th></tr>
     </thead>
@@ -297,27 +370,55 @@ graph TD
     </tbody>
   </table>
 
-  <nav class="article-nav">
-    <span></span>
-    <a class="next" href="02-tls-on-psp.html">Next: TLS 1.3 on a 2004 Handheld &rarr;</a>
-  </nav>
-
-</article>
-
-<footer class="site-footer">
-  <div class="container">
-    <div class="footer-row">
-      <span>&copy; 2024&ndash;2026 OASIS_OS contributors</span>
-      <span>&middot;</span>
-      <a href="https://github.com/AndrewAltimit/oasis-os">GitHub</a>
+  <aside class="callout update" role="note">
+    <div class="callout-title">Update (Oct 2026)</div>
+    <p>The same table today:</p>
+    <div class="table-wrap"><table>
+      <thead><tr><th>Metric</th><th>Mar 2026</th><th>Oct 2026</th></tr></thead>
+      <tbody>
+        <tr><td>Crates</td><td>34 workspace</td><td>40 workspace + 10 PSP-target (50 dirs)</td></tr>
+        <tr><td>UI widgets</td><td>32</td><td>29 <code>Widget</code> impls, plus ListView, MenuBar, NinePatch</td></tr>
+        <tr><td>Terminal</td><td>90+ commands</td><td>~95 commands + 20 shell builtins</td></tr>
+        <tr><td>Skins</td><td>18</td><td>17, every one a TOML directory in <code>skins/</code></td></tr>
+        <tr><td>Apps</td><td>16 (12 crates)</td><td>15 (13 <code>oasis-app-*</code> crates + Terminal)</td></tr>
+        <tr><td>SdiBackend default methods</td><td>39 (8 traits)</td><td>53 (9 traits)</td></tr>
+      </tbody>
+    </table></div>
+  </aside>
+</div>
     </div>
+  </div>
+
+  <footer class="article__foot wrap">
+  <nav class="pager" aria-label="More entries">
+    <a class="pager__link pager__link--prev" href="./"><span class="pager__dir">&larr; Journal</span><span class="pager__title">All entries</span></a>
+    <a class="pager__link pager__link--next" href="02-tls-on-psp.html" rel="next"><span class="pager__dir">Next &middot; 02 &rarr;</span><span class="pager__title">TLS 1.3 on a 2004 Handheld</span></a>
+  </nav>
+  </footer>
+</article>
+</main>
+
+<footer class="footer">
+  <div class="wrap footer__inner">
+    <div class="footer__brand">
+      <span class="brand__name">OASIS<span class="brand__us">_</span>OS</span>
+      <p>Built from scratch in Rust. Dual-licensed MIT + Unlicense.</p>
+    </div>
+    <nav aria-label="Footer">
+      <ul class="footer__links">
+        <li><a href="../">Home</a></li>
+        <li><a href="../demo/">Live demo</a></li>
+        <li><a href="../journal/">Journal</a></li>
+        <li><a href="../blueprint.html">Blueprints</a></li>
+        <li><a href="https://github.com/AndrewAltimit/oasis-os">GitHub</a></li>
+        <li><a href="https://github.com/AndrewAltimit/oasis-os/blob/main/docs/README.md">Docs</a></li>
+      </ul>
+    </nav>
+    <p class="footer__status mono" aria-hidden="true">333MHz &middot; 480&times;272 &middot; v1.4.0</p>
   </div>
 </footer>
 
-<script src="../js/main.js"></script>
-<script type="module">
-  import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
-  mermaid.initialize({ startOnLoad: true, theme: 'dark' });
-</script>
+<script src="../js/site.js" defer></script>
+<script src="../js/journal.js" defer></script>
 </body>
 </html>

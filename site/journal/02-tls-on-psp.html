@@ -2,46 +2,98 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>TLS 1.3 on a 2004 Handheld - OASIS_OS Developer's Journal</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>TLS 1.3 on a 2004 Handheld: Pure Rust Cryptography on MIPS Allegrex — OASIS_OS Developer's Journal</title>
   <meta name="description" content="Implementing native TLS 1.3 on PSP Allegrex via pure Rust embedded-tls — privileged instruction traps, RSA handshake failures, and DNS endianness bugs.">
+  <link rel="canonical" href="https://andrewaltimit.github.io/oasis-os/journal/02-tls-on-psp.html">
+  <meta name="theme-color" content="#08090d">
+  <link rel="icon" href="../favicon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="../img/apple-touch-icon.png">
+  <meta property="og:type" content="article">
+  <meta property="og:site_name" content="OASIS_OS">
+  <meta property="og:title" content="TLS 1.3 on a 2004 Handheld: Pure Rust Cryptography on MIPS Allegrex — OASIS_OS Developer's Journal">
+  <meta property="og:description" content="Implementing native TLS 1.3 on PSP Allegrex via pure Rust embedded-tls — privileged instruction traps, RSA handshake failures, and DNS endianness bugs.">
+  <meta property="og:url" content="https://andrewaltimit.github.io/oasis-os/journal/02-tls-on-psp.html">
+  <meta property="og:image" content="https://andrewaltimit.github.io/oasis-os/img/og-card.png">
+  <meta property="og:image:width" content="1200">
+  <meta property="og:image:height" content="630">
+  <meta property="og:image:alt" content="OASIS_OS: one OS shell, any pixel buffer">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta property="article:published_time" content="2026-03-11">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700;800&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="../css/style.css">
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&amp;display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="../css/site.css">
+  <link rel="stylesheet" href="../css/journal.css">
 </head>
-<body>
+<body class="page-article">
 
-<nav class="site-nav">
-  <a class="nav-brand" href="../">OASIS_OS</a>
-  <button class="nav-toggle" id="nav-toggle" aria-label="Toggle navigation" aria-expanded="false">&#9776;</button>
-  <ul class="nav-links" id="nav-links">
-    <li><a href="../#platforms">Platforms</a></li>
-    <li><a href="../#architecture">Architecture</a></li>
-    <li><a href="./">Journal</a></li>
-    <li><a href="../demo/">Live Demo</a></li>
-  </ul>
-</nav>
+<a class="skip-link" href="#main">Skip to content</a>
 
-<header class="article-header">
-  <div class="container">
-    <a class="article-back" href="./">&larr; Developer's Journal</a>
-    <h1 class="article-title">TLS 1.3 on a 2004 Handheld: Pure Rust Cryptography on MIPS Allegrex</h1>
-    <p class="article-subtitle">
-      Sony's PSP firmware ships SSL 3.0 with root certificates from 2008.
-      Modern HTTPS servers refuse the connection. We implemented native TLS 1.3 using
-      pure Rust &mdash; and discovered three hardware-level bugs along the way.
-    </p>
-    <div class="article-meta">
-      <span>Entry 02</span>
-      <span>psp, security, embedded-tls</span>
-    </div>
+<header class="topbar" id="topbar">
+  <div class="topbar__inner wrap">
+    <a class="brand" href="../" aria-label="OASIS_OS home">
+      <span class="brand__mark" aria-hidden="true"></span>
+      <span class="brand__name">OASIS<span class="brand__us">_</span>OS</span>
+    </a>
+    <button class="nav-toggle" id="nav-toggle" type="button" aria-expanded="false" aria-controls="site-nav">
+      <span class="sr-only">Menu</span>
+      <span class="nav-toggle__bar" aria-hidden="true"></span>
+    </button>
+    <nav class="site-nav" id="site-nav" aria-label="Primary">
+      <ul>
+        <li><a href="../#platforms">Platforms</a></li>
+        <li><a href="../#skins">Skins</a></li>
+        <li><a href="../#features">Features</a></li>
+        <li><a href="../#architecture">Architecture</a></li>
+        <li><a href="../#psp">PSP</a></li>
+        <li><a href="../journal/" aria-current="page">Journal</a></li>
+        <li><a href="../#start">Build</a></li>
+      </ul>
+      <div class="site-nav__cta">
+        <a class="btn btn--ghost btn--sm" href="https://github.com/AndrewAltimit/oasis-os">GitHub</a>
+        <a class="btn btn--primary btn--sm" href="../demo/">Live demo</a>
+      </div>
+    </nav>
   </div>
 </header>
+<div class="progress" aria-hidden="true"><span id="progress-bar"></span></div>
 
-<article class="article-content">
+<main id="main">
+<article class="article">
+  <header class="article__head wrap">
+    <nav class="crumbs" aria-label="Breadcrumb">
+      <a href="./">Developer&rsquo;s journal</a><span aria-hidden="true">/</span><span>Entry 02</span>
+    </nav>
+    <h1 class="article__title">TLS 1.3 on a 2004 Handheld<span class="article__title-sub">Pure Rust Cryptography on MIPS Allegrex</span></h1>
+    <p class="article__lede">Sony's PSP firmware ships SSL 3.0 with root certificates from 2008.
+      Modern HTTPS servers refuse the connection. We implemented native TLS 1.3 using
+      pure Rust &mdash; and discovered three hardware-level bugs along the way.</p>
+    <dl class="article__meta">
+      <div><dt>Entry</dt><dd>02</dd></div>
+      <div><dt>Published</dt><dd><time datetime="2026-03-11">Mar 11, 2026</time></dd></div>
+      <div><dt>Reading time</dt><dd>6 min</dd></div>
+    </dl>
+    <ul class="article__tags" aria-label="Tags"><li>psp</li><li>security</li><li>embedded-tls</li></ul>
+  </header>
 
-  <h2>The Constraint</h2>
+  <div class="article__layout wrap">
+    <nav class="toc" aria-label="On this page">
+      <p class="toc__title">On this page</p>
+      <ol>
+        <li><a href="#the-constraint">The Constraint</a></li>
+        <li><a href="#the-stack">The Stack</a></li>
+        <li><a href="#discovery-1-the-privileged-instruction-trap">Discovery 1: The Privileged Instruction Trap</a></li>
+        <li><a href="#discovery-2-the-rsa-handshake-failure">Discovery 2: The RSA Handshake Failure</a></li>
+        <li><a href="#discovery-3-dns-endianness">Discovery 3: DNS Endianness</a></li>
+        <li><a href="#http-https-redirect-handling">HTTP→HTTPS Redirect Handling</a></li>
+        <li><a href="#the-flush-requirement">The Flush Requirement</a></li>
+        <li><a href="#performance-on-333mhz-mips">Performance on 333MHz MIPS</a></li>
+        <li><a href="#result">Result</a></li>
+      </ol>
+    </nav>
+    <div class="prose">
+<h2 id="the-constraint"><a class="anchor" href="#the-constraint" aria-hidden="true" tabindex="-1">#</a>The Constraint</h2>
 
   <p>
     The PlayStation Portable's built-in SSL stack (<code>sceSsl</code>) uses root
@@ -58,7 +110,7 @@
     (the PSP has no trusted root store, and we're connecting to known hosts).
   </p>
 
-  <h2>The Stack</h2>
+  <h2 id="the-stack"><a class="anchor" href="#the-stack" aria-hidden="true" tabindex="-1">#</a>The Stack</h2>
 
   <div class="diagram">
     <pre><code><span class="hl-bright">PSP TLS 1.3 Network Stack</span>
@@ -92,7 +144,7 @@
     <code>sceNetInet*</code> syscalls. No <code>std::net</code>, no libc, no OpenSSL.
   </p>
 
-  <h2>Discovery 1: The Privileged Instruction Trap</h2>
+  <h2 id="discovery-1-the-privileged-instruction-trap"><a class="anchor" href="#discovery-1-the-privileged-instruction-trap" aria-hidden="true" tabindex="-1">#</a>Discovery 1: The Privileged Instruction Trap</h2>
 
   <div class="callout discovery">
     <div class="callout-title">Discovery</div>
@@ -131,7 +183,7 @@
 // CORRECT: user-mode timer syscall
 let seed = unsafe { psp::sys::sceKernelGetSystemTimeLow() } as u64;</code></pre>
 
-  <h2>Discovery 2: The RSA Handshake Failure</h2>
+  <h2 id="discovery-2-the-rsa-handshake-failure"><a class="anchor" href="#discovery-2-the-rsa-handshake-failure" aria-hidden="true" tabindex="-1">#</a>Discovery 2: The RSA Handshake Failure</h2>
 
   <p>
     After fixing the RNG seed, TLS handshakes with <code>archive.org</code> consistently
@@ -167,7 +219,7 @@ embedded-tls = { version = "0.17", default-features = false, features = ["alloc"
     that it's a missing feature flag rather than a protocol error.
   </p>
 
-  <h2>Discovery 3: DNS Endianness</h2>
+  <h2 id="discovery-3-dns-endianness"><a class="anchor" href="#discovery-3-dns-endianness" aria-hidden="true" tabindex="-1">#</a>Discovery 3: DNS Endianness</h2>
 
   <p>
     With TLS working, HTTP(S) connections to <code>archive.org</code> produced
@@ -214,7 +266,7 @@ to_be_bytes() on this u32 (WRONG — double swap):
     SDK.
   </p>
 
-  <h2>HTTP→HTTPS Redirect Handling</h2>
+  <h2 id="http-https-redirect-handling"><a class="anchor" href="#http-https-redirect-handling" aria-hidden="true" tabindex="-1">#</a>HTTP→HTTPS Redirect Handling</h2>
 
   <p>
     Archive.org's CDN randomly assigns servers per session. Some CDN nodes
@@ -244,12 +296,12 @@ flowchart TD
     DEFAULT -->|"Yes (broken)"| FAIL
     DEFAULT -->|"No (fixed)"| FIX --> TLS --> OK_B
 
-    style REQ fill:#1a1a2e,stroke:#00d4aa,color:#e0e0e0
-    style FAIL fill:#2e1a1a,stroke:#f59e0b,color:#e0e0e0
-    style OK_A fill:#1a2e1a,stroke:#00d4aa,color:#e0e0e0
-    style OK_B fill:#1a2e1a,stroke:#00d4aa,color:#e0e0e0
-    style TLS fill:#1a1a2e,stroke:#00d4aa,color:#e0e0e0
-    style FIX fill:#1a1a2e,stroke:#7c3aed,color:#e0e0e0
+    style REQ fill:#11141c,stroke:#7cc7ff,color:#e8eaf0
+    style FAIL fill:#2e1a1a,stroke:#f59e0b,color:#e8eaf0
+    style OK_A fill:#1a2e1a,stroke:#7cc7ff,color:#e8eaf0
+    style OK_B fill:#1a2e1a,stroke:#7cc7ff,color:#e8eaf0
+    style TLS fill:#11141c,stroke:#7cc7ff,color:#e8eaf0
+    style FIX fill:#11141c,stroke:#ff8a3d,color:#e8eaf0
   </pre>
   <div class="diagram-caption">CDN randomness creates a protocol-level routing problem</div>
 
@@ -265,7 +317,7 @@ flowchart TD
     </p>
   </div>
 
-  <h2>The Flush Requirement</h2>
+  <h2 id="the-flush-requirement"><a class="anchor" href="#the-flush-requirement" aria-hidden="true" tabindex="-1">#</a>The Flush Requirement</h2>
 
   <p>
     One final subtlety: <code>embedded-tls</code> buffers outgoing data internally for
@@ -284,7 +336,7 @@ tls.write_all(request.as_bytes())?;
 tls.write_all(request.as_bytes())?;
 tls.flush()?;  // ← sends the actual TLS record</code></pre>
 
-  <h2>Performance on 333MHz MIPS</h2>
+  <h2 id="performance-on-333mhz-mips"><a class="anchor" href="#performance-on-333mhz-mips" aria-hidden="true" tabindex="-1">#</a>Performance on 333MHz MIPS</h2>
 
   <p>
     TLS 1.3 handshakes on the PSP take approximately 2&ndash;4 seconds, dominated by
@@ -301,7 +353,7 @@ tls.flush()?;  // ← sends the actual TLS record</code></pre>
     the RSA code path.
   </p>
 
-  <h2>Result</h2>
+  <h2 id="result"><a class="anchor" href="#result" aria-hidden="true" tabindex="-1">#</a>Result</h2>
 
   <p>
     The PSP can now connect to any TLS 1.3 server. The Internet Archive's TV Guide
@@ -310,28 +362,39 @@ tls.flush()?;  // ← sends the actual TLS record</code></pre>
     All running on a 2004 handheld that Sony expected to speak SSL 3.0 to servers that
     no longer exist.
   </p>
-
-  <nav class="article-nav">
-    <a class="prev" href="01-unified-embedded-os.html">&larr; Prev: One Codebase, Five Platforms</a>
-    <a class="next" href="03-streaming-video.html">Next: Streaming Internet Archive Video &rarr;</a>
-  </nav>
-
-</article>
-
-<footer class="site-footer">
-  <div class="container">
-    <div class="footer-row">
-      <span>&copy; 2024&ndash;2026 OASIS_OS contributors</span>
-      <span>&middot;</span>
-      <a href="https://github.com/AndrewAltimit/oasis-os">GitHub</a>
     </div>
+  </div>
+
+  <footer class="article__foot wrap">
+  <nav class="pager" aria-label="More entries">
+    <a class="pager__link pager__link--prev" href="01-unified-embedded-os.html" rel="prev"><span class="pager__dir">&larr; Previous &middot; 01</span><span class="pager__title">One Codebase, Five Platforms</span></a>
+    <a class="pager__link pager__link--next" href="03-streaming-video.html" rel="next"><span class="pager__dir">Next &middot; 03 &rarr;</span><span class="pager__title">Streaming Internet Archive Video</span></a>
+  </nav>
+  </footer>
+</article>
+</main>
+
+<footer class="footer">
+  <div class="wrap footer__inner">
+    <div class="footer__brand">
+      <span class="brand__name">OASIS<span class="brand__us">_</span>OS</span>
+      <p>Built from scratch in Rust. Dual-licensed MIT + Unlicense.</p>
+    </div>
+    <nav aria-label="Footer">
+      <ul class="footer__links">
+        <li><a href="../">Home</a></li>
+        <li><a href="../demo/">Live demo</a></li>
+        <li><a href="../journal/">Journal</a></li>
+        <li><a href="../blueprint.html">Blueprints</a></li>
+        <li><a href="https://github.com/AndrewAltimit/oasis-os">GitHub</a></li>
+        <li><a href="https://github.com/AndrewAltimit/oasis-os/blob/main/docs/README.md">Docs</a></li>
+      </ul>
+    </nav>
+    <p class="footer__status mono" aria-hidden="true">333MHz &middot; 480&times;272 &middot; v1.4.0</p>
   </div>
 </footer>
 
-<script src="../js/main.js"></script>
-<script type="module">
-  import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
-  mermaid.initialize({ startOnLoad: true, theme: 'dark' });
-</script>
+<script src="../js/site.js" defer></script>
+<script src="../js/journal.js" defer></script>
 </body>
 </html>
