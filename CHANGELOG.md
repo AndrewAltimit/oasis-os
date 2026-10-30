@@ -230,6 +230,24 @@ removal, a restyled site, and docs that match the code.
   http); archive redirects resolve relative `Location`s.
 - Shaders: `BuiltinShader` is the one catalogue of the 8 built-ins; the
   no-op `software` feature is removed.
+- Shuffle is a real random order (it was the same fixed interleave every
+  time) that starts at the playing track and plays every other track once
+  per round; picking, adding or removing a track keeps the rest of the
+  round. **(breaking)** `Playlist::shuffle` is private: use `shuffle()` /
+  `set_shuffle()`.
+- WAV: `WAVE_FORMAT_EXTENSIBLE` PCM plays; short `fmt ` chunks and 0 Hz
+  rates are rejected. Ogg decode stops at 2^27 samples. Radio responses
+  whose headers never end fail after 16 KiB.
+- `demux_lite` (PSP playback, desktop seek points) is hardened against
+  hostile MP4s: overflow-checked box ends, a nesting limit, table sizes
+  bounded by the bytes in the file, size caps on config boxes and
+  samples; per-sample lookups are indexed binary searches (playback was
+  quadratic in track length). AAC channel count, `esds` parsing and
+  multi-SPS `avcC` are fixed.
+- The symphonia video backend reads only `moov` when opening a stream (it
+  read the whole file into memory), finds `avcC` only inside `moov`, and
+  bounds its per-stream packet queues; the ffmpeg backend no longer leaks
+  its AVIO context and buffer on every close.
 
 ### VFS and networking
 
@@ -284,6 +302,13 @@ removal, a restyled site, and docs that match the code.
   deleted. Fixed a null write when the font atlas allocation fails and
   a read of freed memory when a video frame outgrows its texture. Every
   `unsafe` block in the backend has a `SAFETY` comment.
+- The standalone PSP crates (overlay PRX, PRX decrypter, recovery,
+  devloop, ME boot, USB client) now have a `SAFETY` comment on every
+  `unsafe` block too. Fixed on the way: the ME watchdog's inline hook ran
+  a trampoline in a dead stack frame; hook trampolines are cache-flushed
+  after moving to their statics; unchecked null function pointers;
+  out-of-bounds and non-UTF-8 handling in the PRX decrypter; module-ID
+  buffer sizes; a wrapping size parse in recovery.
 
 ### CI and tooling
 

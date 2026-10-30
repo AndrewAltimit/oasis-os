@@ -86,18 +86,30 @@ so `music status` there prints "(audio subsystem not initialized)".
 
 `Playlist` keeps a `Vec<TrackInfo>` in insertion order.
 
-Shuffle (`Playlist::rebuild_shuffle`) is a deterministic riffle/interleave shuffle: it
-splits the index list into two halves and interleaves the first half with the
-reversed second half. It is **not** Fisher-Yates and **not** cryptographically
-random — it just needs to be reproducible for tests. The shuffle order is
-rebuilt whenever you toggle shuffle on or add a new track.
+Shuffle keeps a permutation of the track indices plus a cursor into it:
+
+- `set_shuffle(true)` draws a fresh Fisher-Yates order (xorshift64, seeded
+  from the clock; `Playlist::with_seed` makes it reproducible for tests)
+  with the **current track first**, so one round plays every other track
+  exactly once. Starting from a not-yet-started playlist plays the order's
+  first track.
+- Picking a track (`set_current`, e.g. `music play <file>`) that has not
+  played yet this round moves it up to play now; the rest of the round is
+  kept. Picking an already-played one continues from its slot.
+- `add()` inserts the new track at a random point in the rest of the
+  round; `remove()` edits the order in place (removing the current track
+  moves to its shuffle successor). Neither reshuffles what already played.
+- With repeat `All` the round wraps to the start of the same order, so
+  `prev` undoes `next` across the wrap.
+- The flag is private (`shuffle()` / `set_shuffle()`), so the order can
+  never be out of step with it.
 
 Repeat modes:
 
 - `Off` — `advance()` returns false at the end, so the manager transitions to
   `Stopped`.
-- `All` — `advance()` wraps from the last index back to 0
-  .
+- `All` — `advance()` wraps from the last index (or the last shuffle slot)
+  back to the first.
 - `One` — both `advance()` and `go_back()` return the same index, so the
   same track is replayed on `next` / `prev`.
 
@@ -109,15 +121,20 @@ backend on desktop, `sceAudiocodec` on PSP, WebAudio on WASM, the engine mixer o
 
 The crate does ship two format helpers used by tests and a few backends:
 
-- `wav.rs` — PCM WAV reader. Format tag 1 only, 8-bit unsigned or 16-bit
-  little-endian signed, mono or stereo (`wav.rs`–73). The reader returns
-  `Option<WavData>`; any unsupported format tag, bit depth, or channel count
-  (and any malformed RIFF / `fmt `/ `data` chunk) yields `None` rather than
-  partial or corrupted PCM. Callers must treat `None` as "fall through to the
-  next decoder".
+- `wav.rs` — PCM WAV reader. Integer PCM only (format tag 1, or
+  `WAVE_FORMAT_EXTENSIBLE` with the PCM SubFormat), 8-bit unsigned or
+  16-bit little-endian signed, mono or stereo, non-zero sample rate. The
+  reader returns `Option<WavData>`; any unsupported format, bit depth, or
+  channel count (and any malformed RIFF / `fmt ` / `data` chunk, including
+  a `fmt ` chunk shorter than its 16 fixed bytes) yields `None` rather than
+  partial or corrupted PCM. Callers must treat `None` as "fall through to
+  the next decoder".
 - `ogg.rs` — Ogg/Vorbis decoding via `symphonia` (`ogg.rs`). Returns
-  interleaved `i16` PCM. Sample rate and channel layout come from the
-  codec params; defaults to 44.1 kHz / stereo when missing.
+  interleaved `i16` PCM labelled with the decoded stream's sample rate and
+  channel count (the header's, or 44.1 kHz / stereo, only if nothing
+  decodes). Decoding stops at `MAX_DECODED_SAMPLES` (2^27 samples, ~25 min
+  of 44.1 kHz stereo): a tiny Vorbis packet can expand to thousands of
+  frames, so a small hostile file could otherwise decode to gigabytes.
 
 `Cargo.toml` enables `symphonia/ogg` and `symphonia/vorbis` only — `mp3` is
 deliberately not enabled because backends carry their own MP3 path.
@@ -172,7 +189,9 @@ which on a plain TCP socket is the OS message ("Resource temporarily
 unavailable") and does not say "would block". The loopback tests in
 `source.rs` (`icecast_source_survives_os_would_block_on_plain_tcp`) drive a
 real `StdNetworkBackend` socket to keep it that way. `TimedOut` is a dead
-connection, not "no data yet", and fails the source.
+connection, not "no data yet", and fails the source. Response headers are
+capped at `MAX_HEADER_BYTES` (16 KiB): a server that never sends the blank
+line ending them fails the source instead of growing the header buffer.
 
 A peer that disappears without closing the connection only ever yields
 `WouldBlock`, so `ThreadedSource`'s pump drops a source that produces nothing
