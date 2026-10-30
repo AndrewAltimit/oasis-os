@@ -110,6 +110,18 @@ removal, a restyled site, and docs that match the code.
 - Shared helpers replace per-crate copies: `oasis_types::easing`,
   `util::ct_eq`, `util::base64`, `OasisError::is_would_block()` /
   `is_timed_out()`.
+- `oasis-core`'s status bar, bottom bar and dashboard, `oasis-video`'s
+  ffmpeg decoder and `oasis-audio`'s radio sources are split into
+  submodules. `DashboardConfig::max_pages` / `cursor_lerp_speed` (never
+  read) and `oasis-shader`'s `gl-web` feature (pulled in `web-sys` for
+  no code) are removed **(breaking)**.
+- Unused dependencies dropped (`oasis-sdi` from seven app crates,
+  `serde_json` / `thiserror` / `js-sys` from `oasis-core`, `serde` /
+  `brotli` from `oasis-browser`, `log` from four crates, `oasis-shader`
+  from `oasis-app`, `rustls-pki-types`); `symphonia`, `criterion`, `glow`
+  and `log` use workspace entries. `impl_content_app_methods!` expands to
+  `oasis_app_core` paths, so app crates using it need no `oasis-skin`
+  dependency.
 
 ### Backend contract
 
@@ -224,6 +236,14 @@ removal, a restyled site, and docs that match the code.
   published font scale and System / About scrolling.
 - e2e coverage for the close paths, plugin tiles, terminal scroll,
   skin-swap clocks, music control and window placement across skins.
+- Games deals new boards each launch on desktop (seeded from the platform
+  clock via `HostInfo::clock`; a frozen `OASIS_FIXED_TIME` clock keeps
+  them reproducible), and Memory / Puzzle resets no longer repeat the same
+  sequence every session. `GamesApp::new` keeps the fixed seed;
+  `GamesApp::with_clock` / `with_seed` choose.
+- Bottom bar labels (USB indicator, media tabs) follow skin swaps and the
+  clock gaining its date instead of keeping their first position; vector
+  dashboard icons left-align in the `"column"` layout like their labels.
 
 ### Browser engine and security
 
@@ -378,6 +398,18 @@ removal, a restyled site, and docs that match the code.
   read the whole file into memory), finds `avcC` only inside `moov`, and
   bounds its per-stream packet queues; the ffmpeg backend no longer leaks
   its AVIO context and buffer on every close.
+- ffmpeg backend: frames drained on an `EAGAIN` send are returned in order
+  (the frame decoded after the retry used to jump ahead of them), and a
+  caller that only pulls audio buffers at most 8 decoded video frames
+  instead of every frame of the stream.
+- TV streaming: a channel change no longer leaves the decoder thread
+  spinning (cancellation was an `Interrupted` read error, which
+  `read_exact` retries forever); the download thread no longer panics
+  when the window moves past a stalled atom scan; the retained file
+  header stops at the incomplete `mdat` instead of re-copying the whole
+  buffer on every chunk.
+- Radio: an Internet Archive response with a `Location` header is only a
+  redirect on 3xx.
 
 ### VFS and networking
 
@@ -454,6 +486,9 @@ removal, a restyled site, and docs that match the code.
 - Overlay PRX: the shipped `oasis-overlay.prx` is stripped with
   `prxmin` (293 KB -> 153 KB; the loaded image is identical), and the
   docs give its measured size instead of the never-met "<64 KB".
+- The EBOOT no longer links `webpki` 0.22 (unused; it pulled `ring`'s C
+  and assembly into the "pure Rust" TLS build) or the getrandom 0.2 / 0.3
+  custom backends nothing called.
 
 ### CI and tooling
 

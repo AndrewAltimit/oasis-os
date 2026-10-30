@@ -1,12 +1,11 @@
-# Enable getrandom 0.3 custom backend for the PSP target.
-# The PSP has no OS-level entropy source that getrandom recognises,
-# so we provide one via __getrandom_v03_custom in main.rs.
-#
 # cargo-psp generates a custom target spec (mipsel-sony-psp-std.json),
-# so we apply the flag to all targets via [build].
+# so the flags apply to all targets via [build].
+#
+# No getrandom backend: nothing in the graph uses getrandom (TLS entropy
+# comes from `PspRng` in src/tls.rs, the PSP's MT19937 PRNG). A new
+# dependency that needs it fails to link; give it a custom backend then.
 [build]
 rustflags = [
-  '--cfg', 'getrandom_backend="custom"',
   # Route the final link through pspdev's binutils `psp-ld` instead
   # of `rust-lld`. rust-lld strictly rejects the `.symtab` section
   # header layout that GCC 15 / binutils 2.43 produces on MIPS (see

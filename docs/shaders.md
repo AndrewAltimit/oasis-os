@@ -11,7 +11,7 @@ animated wallpapers. Each shader has two implementations:
   on a rayon pool (desktop only).
 - A **GLSL fragment shader** (`shaders/*.frag`), the GPU twin of each CPU
   kernel, rendered via `glow` (OpenGL on desktop, WebGL2 in the browser)
-  behind the `gl-native` / `gl-web` features. No in-tree backend
+  behind the `gl-native` feature. No in-tree backend
   instantiates `ShaderRenderer` today; it is kept for GPU hosts.
 
 The CPU port is canonical (skins are tuned against it and the golden

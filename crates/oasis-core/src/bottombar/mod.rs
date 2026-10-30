@@ -5,9 +5,9 @@
 //! and shoulder button hints.
 //!
 //! Two styles share this module's state and chrome (background strip,
-//! XP-style clock, URL plate): the classic footer ([`classic`]) and the
-//! decorative media dock ([`dock`], `bottombar_style = "media_dock"`).
-//! The media category tab strip lives in [`tabs`].
+//! XP-style clock, URL plate): the classic footer (`classic`) and the
+//! decorative media dock (`dock`, `bottombar_style = "media_dock"`).
+//! The media category tab strip lives in `tabs`.
 
 mod classic;
 mod dock;

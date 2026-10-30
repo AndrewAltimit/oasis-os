@@ -86,7 +86,6 @@ gif = { version = "0.14", default-features = false, features = ["std"] }
 # TLS (desktop -- feature-gated in oasis-core)
 rustls = { version = "0.23", default-features = false, features = ["ring", "logging", "std", "tls12"] }
 webpki-roots = "1.0"
-rustls-pki-types = "1"
 
 # Testing
 proptest = "1"
@@ -127,6 +126,9 @@ wasm-bindgen-futures = "0.4"
 # is a drop-in replacement that delegates to `performance.now()` there
 # and to `std::time::Instant` everywhere else.
 web-time = "1"
+
+# Audio / video demux + decode (pure Rust); crates pick the codec features
+symphonia = { version = "0.5", default-features = false }
 
 # Compression
 flate2 = "1"

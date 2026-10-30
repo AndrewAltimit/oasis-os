@@ -11,7 +11,7 @@
 //! after the SDI pass with [`render_status_glyphs`]. The legacy text form
 //! (`AC`, `75% [|||| ]`) remains available via [`IndicatorStyle::Text`].
 //!
-//! Layout: [`glyphs`] (indicator glyphs + slots), [`tabs`] (the top tab
+//! Layout: `glyphs` (indicator glyphs + slots), `tabs` (the top tab
 //! row); this module owns the cached state and the bar strip itself.
 
 mod glyphs;

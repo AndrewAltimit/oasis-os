@@ -9,7 +9,6 @@
 //! - `app_states` -- per-app mutable state structs
 //! - `dashboard` -- dashboard init and SDI helpers
 //! - `input_dispatch` -- unified input event routing
-//! - `getrandom` -- custom getrandom backends for PSP entropy
 //! - `io_poll` -- async I/O response polling
 //! - `render_classic` -- kiosk fullscreen view rendering
 //! - `render_desktop` -- windowed desktop mode rendering
@@ -37,7 +36,6 @@ mod chrome;
 mod commands;
 mod dashboard;
 mod desktop;
-mod getrandom;
 mod input_dispatch;
 mod io_poll;
 mod js_selftest;

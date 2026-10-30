@@ -981,7 +981,6 @@ dependencies = [
  "oasis-backend-ue5",
  "oasis-core",
  "oasis-mcp",
- "oasis-shader",
  "oasis-test-backend",
  "oasis-types",
  "oasis-video",
@@ -994,7 +993,6 @@ name = "oasis-app-calculator"
 version = "1.4.0"
 dependencies = [
  "oasis-app-core",
- "oasis-sdi",
  "oasis-skin",
  "oasis-test-backend",
  "oasis-types",
@@ -1018,7 +1016,6 @@ name = "oasis-app-file-manager"
 version = "1.4.0"
 dependencies = [
  "oasis-app-core",
- "oasis-sdi",
  "oasis-skin",
  "oasis-test-backend",
  "oasis-types",
@@ -1031,8 +1028,7 @@ name = "oasis-app-games"
 version = "1.4.0"
 dependencies = [
  "oasis-app-core",
- "oasis-sdi",
- "oasis-skin",
+ "oasis-platform",
  "oasis-types",
  "oasis-vfs",
 ]
@@ -1044,7 +1040,6 @@ dependencies = [
  "jpeg-decoder",
  "log",
  "oasis-app-core",
- "oasis-sdi",
  "oasis-skin",
  "oasis-test-backend",
  "oasis-types",
@@ -1057,7 +1052,6 @@ name = "oasis-app-paint"
 version = "1.4.0"
 dependencies = [
  "oasis-app-core",
- "oasis-sdi",
  "oasis-skin",
  "oasis-test-backend",
  "oasis-types",
@@ -1071,7 +1065,6 @@ version = "1.4.0"
 dependencies = [
  "oasis-app-core",
  "oasis-audio",
- "oasis-sdi",
  "oasis-skin",
  "oasis-test-backend",
  "oasis-types",
@@ -1085,7 +1078,6 @@ version = "1.4.0"
 dependencies = [
  "oasis-app-core",
  "oasis-i18n",
- "oasis-sdi",
  "oasis-skin",
  "oasis-test-backend",
  "oasis-types",
@@ -1099,7 +1091,6 @@ version = "1.4.0"
 dependencies = [
  "oasis-app-core",
  "oasis-platform",
- "oasis-sdi",
  "oasis-skin",
  "oasis-test-backend",
  "oasis-types",
@@ -1234,7 +1225,6 @@ dependencies = [
 name = "oasis-browser"
 version = "1.4.0"
 dependencies = [
- "brotli",
  "criterion",
  "flate2",
  "fontdue",
@@ -1255,7 +1245,6 @@ dependencies = [
  "proptest",
  "rayon",
  "rustc-hash 2.1.1",
- "serde",
  "web-time",
 ]
 
@@ -1264,7 +1253,6 @@ name = "oasis-core"
 version = "1.4.0"
 dependencies = [
  "criterion",
- "js-sys",
  "log",
  "oasis-app-core",
  "oasis-audio",
@@ -1283,9 +1271,7 @@ dependencies = [
  "oasis-vfs",
  "oasis-wm",
  "serde",
- "serde_json",
  "tempfile",
- "thiserror",
  "toml",
 ]
 
@@ -1329,7 +1315,6 @@ version = "1.4.0"
 dependencies = [
  "brotli",
  "flate2",
- "log",
  "oasis-net",
  "oasis-types",
  "oasis-vfs",
@@ -1351,7 +1336,6 @@ dependencies = [
 name = "oasis-js"
 version = "1.4.0"
 dependencies = [
- "log",
  "rquickjs",
  "thiserror",
 ]
@@ -1376,7 +1360,6 @@ dependencies = [
  "oasis-vfs",
  "rcgen",
  "rustls",
- "rustls-pki-types",
  "serde",
  "toml",
  "webpki-roots",
@@ -1403,7 +1386,6 @@ name = "oasis-sdi"
 version = "1.4.0"
 dependencies = [
  "criterion",
- "log",
  "oasis-test-backend",
  "oasis-types",
  "proptest",
@@ -1420,8 +1402,6 @@ dependencies = [
  "log",
  "oasis-types",
  "rayon",
- "wasm-bindgen",
- "web-sys",
 ]
 
 [[package]]
@@ -1448,7 +1428,6 @@ dependencies = [
 name = "oasis-terminal"
 version = "1.4.0"
 dependencies = [
- "log",
  "oasis-net",
  "oasis-platform",
  "oasis-types",

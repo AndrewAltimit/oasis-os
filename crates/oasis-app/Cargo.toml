@@ -61,7 +61,6 @@ oasis-audio = { workspace = true }
 oasis-backend-sdl = { path = "../oasis-backend-sdl" }
 # Software RGBA framebuffer behind the headless e2e harness (src/headless.rs).
 oasis-backend-ue5 = { workspace = true }
-oasis-shader = { workspace = true, features = ["gl-native"] }
 oasis-video = { workspace = true, optional = true }
 log = { workspace = true }
 env_logger = { workspace = true }

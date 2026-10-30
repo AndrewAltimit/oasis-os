@@ -16,7 +16,6 @@ oasis-types = { workspace = true }
 oasis-vfs = { workspace = true }
 oasis-net = { workspace = true }
 rustc-hash = { workspace = true }
-log = { workspace = true }
 flate2 = { workspace = true }
 brotli = { workspace = true }
 web-time = { workspace = true }

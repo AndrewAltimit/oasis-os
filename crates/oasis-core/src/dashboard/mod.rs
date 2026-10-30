@@ -3,7 +3,7 @@
 //! The dashboard manages a paginated icon grid, status bar, and cursor.
 //! It creates and updates SDI objects based on its internal state.
 //!
-//! Layout: [`config`] (skin-derived [`DashboardConfig`]), `navigation`
+//! Layout: `config` (skin-derived [`DashboardConfig`]), `navigation`
 //! (d-pad / page / hover input), `animation` (page slide, press flash,
 //! hover lift, entrance), `layout` (grid vs. free cell origins and hit
 //! testing), `render` (the per-frame SDI sync), `icons` / `labels` /
