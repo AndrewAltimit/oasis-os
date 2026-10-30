@@ -551,7 +551,7 @@ fn new_nonce(conn_id: usize) -> String {
         h.write_u128(nanos);
         seed.extend_from_slice(&h.finish().to_le_bytes());
     }
-    crate::auth::hex(&crate::auth::sha256(&seed)[..16])
+    oasis_types::crypto::hex(&oasis_types::crypto::sha256(&seed)[..16])
 }
 
 #[cfg(test)]
