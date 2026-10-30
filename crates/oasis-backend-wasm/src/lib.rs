@@ -17,6 +17,7 @@ pub mod platform;
 pub mod renderer;
 pub mod shader_bridge;
 mod shapes;
+mod skin_assets;
 mod textures;
 pub mod tv_catalog;
 pub mod video;
@@ -50,7 +51,6 @@ use oasis_core::terminal_sdi;
 use oasis_core::toast::ToastManager;
 use oasis_core::transition::{self, TransitionState};
 use oasis_core::vfs::{MemoryVfs, Vfs};
-use oasis_core::wallpaper;
 use oasis_core::wm::manager::WindowManager;
 use oasis_core::wm::window::{WindowConfig, WindowType};
 
@@ -145,6 +145,12 @@ pub struct OasisWasm {
     /// Requests drained from apps that closed or were replaced since the
     /// last tick; carried out ahead of the open apps' (see `app_requests`).
     closed_app_requests: Vec<oasis_core::apps::AppRequest>,
+    /// Textures uploaded for the skin's layout `texture =` objects.
+    skin_layout_textures: Vec<TextureId>,
+    /// The skin's `kind = "image"` background decals (wordmarks, logos).
+    image_layers: Vec<oasis_core::image_layers::ImageLayerObject>,
+    /// Seconds of animation time, for image-layer drift / pulse.
+    anim_secs: f32,
     browser: Option<BrowserWidget>,
     iframe: IframeOverlay,
     toasts: ToastManager,
@@ -319,8 +325,9 @@ impl OasisWasm {
         // Window manager.
         let wm = WindowManager::with_theme(width, height, skin.theme.build_wm_theme());
 
-        // Wallpaper texture.
-        let wp_data = wallpaper::generate_from_config(width, height, &active_theme);
+        // Wallpaper texture (composites the skin's image for
+        // `style = "image"`), then layout textures and image decals.
+        let wp_data = skin_assets::wallpaper_pixels(width, height, &active_theme, &skin);
         let wallpaper_tex = backend
             .load_texture(width, height, &wp_data)
             .map_err(|e| JsValue::from_str(&format!("wallpaper: {e}")))?;
@@ -331,6 +338,8 @@ impl OasisWasm {
         {
             obj.visible = false;
         }
+        let (skin_layout_textures, image_layers) =
+            skin_assets::create_skin_assets(&mut sdi, &mut backend, &skin, &active_theme);
 
         // Mouse cursor texture.
         let mut mouse_cursor = CursorState::new(width, height);
@@ -391,6 +400,9 @@ impl OasisWasm {
             apps,
             open_runners: Vec::new(),
             closed_app_requests: Vec::new(),
+            skin_layout_textures,
+            image_layers,
+            anim_secs: 0.0,
             browser: None,
             iframe,
             toasts: ToastManager::new(),
@@ -443,6 +455,7 @@ impl OasisWasm {
     /// updates the scene graph, and renders to the canvas.
     pub fn tick(&mut self, delta_seconds: f32) {
         self.frame_counter += 1;
+        self.anim_secs += delta_seconds.clamp(0.0, 1.0);
 
         // Update system info on the first frame (so the clock never shows
         // a placeholder) and then every ~60 frames (~1s at 60fps).
@@ -1233,6 +1246,7 @@ impl OasisWasm {
         self.start_menu.tick_animation();
         self.bottom_bar.tick_animation(&self.active_theme);
         self.toasts.tick();
+        self.tick_image_layers();
 
         match self.mode {
             Mode::Dashboard => {
@@ -1642,6 +1656,13 @@ impl OasisWasm {
     fn apply_skin_swap(&mut self, name: &str) {
         match oasis_skin::resolve_skin_request(name, &self.skin) {
             Ok(new_skin) => {
+                // Hide the outgoing skin's dashboard icons, taskbar and
+                // start button: the new skin re-shows only what it uses
+                // (a skin with fewer icons or no start menu otherwise
+                // keeps stale labels / a START pill from the old one).
+                self.dashboard.hide_sdi(&mut self.sdi);
+                self.taskbar.hide_sdi(&mut self.sdi);
+                self.start_menu.hide_sdi(&mut self.sdi);
                 let swapped =
                     Skin::swap_scaled(&self.skin, new_skin, &mut self.sdi, self.width, self.height);
                 self.active_theme = ActiveTheme::from_skin(&swapped.theme)
@@ -1662,6 +1683,9 @@ impl OasisWasm {
                 self.output_lines
                     .push(format!("Switched to skin: {}", swapped.manifest.name));
                 self.skin = swapped;
+                // New wallpaper (image or procedural), layout textures and
+                // image decals; the old skin's are freed.
+                self.refresh_skin_assets();
             },
             Err(e) => {
                 self.output_lines.push(format!("Skin error: {e}"));

@@ -239,6 +239,17 @@ desktop shell, with the same close semantics:
   `maximize`, `open <app>[\t<file>]`) each frame and publishes the window
   list to `/var/wm/status`.
 
+### Skin images
+
+Skin image assets render as on the desktop (`src/skin_assets.rs`): the
+`style = "image"` wallpaper is composited from the skin's PNG
+(`wallpaper::generate_with_assets`), layout `texture =` objects get their
+textures, and `[[background_layers]] kind = "image"` decals (the PSIX HiFi
+wordmark) become drifting / pulsing SDI objects. All three are rebuilt on a
+skin swap, which also hides the outgoing skin's dashboard icons, taskbar and
+start button. Not yet ported: themed software cursors, top-tab pill textures
+and WM nine-patch chrome.
+
 ### Music
 
 The Music Player and the `music` terminal command talk to the host through
