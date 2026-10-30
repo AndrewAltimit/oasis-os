@@ -6,12 +6,13 @@ use wasm_bindgen::prelude::*;
 use web_sys::{CanvasRenderingContext2d, HtmlCanvasElement, ImageData};
 
 use oasis_rasterize::GlyphCacheKey;
-use oasis_types::backend::stacks::{ClipStack, TranslateStack};
+use oasis_types::backend::stacks::{ClipStack, DrawState, TranslateStack};
 use oasis_types::backend::{
     BlendMode, Color, RenderTargetId, SdiAlpha, SdiCore, SdiRenderTarget, SdiText, SdiVector,
-    TextMetrics, TextureId, texture_not_found, validate_rgba_data,
+    TextureId, render_target_not_found, texture_not_found, validate_rgba_data,
 };
 use oasis_types::error::{OasisError, Result};
+use oasis_types::geometry::ClipRect;
 
 use crate::font;
 
@@ -76,6 +77,11 @@ struct SavedSurface {
     ctx: CanvasRenderingContext2d,
     width: u32,
     height: u32,
+    /// The clip applied on `ctx` (it keeps its clip save level while the
+    /// target is bound).
+    applied_clip: Option<ClipRect>,
+    /// The parent's clip and translate stacks.
+    state: DrawState,
 }
 
 pub struct WasmBackend {
@@ -86,9 +92,16 @@ pub struct WasmBackend {
     pub(crate) textures: HashMap<u64, TextureData>,
     pub(crate) next_texture_id: u64,
     pub(crate) clip_stack: ClipStack,
-    /// Depth counter for `set_clip_rect`/`reset_clip_rect` (SdiCore), which use
-    /// canvas `save()`/`restore()` independently of the `ClipStack`.
-    core_clip_depth: u32,
+    /// The clip currently applied on `ctx`, or `None`.
+    ///
+    /// Canvas 2D can only *intersect* clips (`clip()`), never replace or
+    /// remove one, except by `restore()`-ing to a state saved before it.
+    /// So an applied clip is exactly one `save()` level on `ctx`, entered
+    /// by [`WasmBackend::apply_clip`]; every clip change (`set_clip_rect`,
+    /// `reset_clip_rect`, `push_clip_rect`, `pop_clip_rect`) restores that
+    /// level and, if a clip remains, saves and clips once again. Nothing
+    /// else may leave a `save()` unbalanced.
+    applied_clip: Option<ClipRect>,
     pub(crate) translate_stack: TranslateStack,
     pub(crate) color_cache: HashMap<u32, String>,
     glyph_cache: HashMap<GlyphCacheKey, HtmlCanvasElement>,
@@ -130,8 +143,8 @@ impl WasmBackend {
             height,
             textures: HashMap::new(),
             next_texture_id: 1,
-            clip_stack: ClipStack::new(width, height),
-            core_clip_depth: 0,
+            clip_stack: ClipStack::default(),
+            applied_clip: None,
             translate_stack: TranslateStack::new(),
             color_cache: HashMap::new(),
             glyph_cache: HashMap::new(),
@@ -157,6 +170,65 @@ impl WasmBackend {
 
     pub(crate) fn translate(&self, x: i32, y: i32) -> (f64, f64) {
         self.translate_stack.translate_f64(x, y)
+    }
+
+    /// Make `clip` (surface pixels, `None` = no clip) the one clip applied
+    /// on the context, replacing the previous one (see `applied_clip`).
+    pub(crate) fn apply_clip(&mut self, clip: Option<ClipRect>) {
+        if self.applied_clip.take().is_some() {
+            self.ctx.restore();
+        }
+        if let Some(c) = clip {
+            self.ctx.save();
+            self.ctx.begin_path();
+            self.ctx.rect(
+                f64::from(c.x),
+                f64::from(c.y),
+                f64::from(c.w),
+                f64::from(c.h),
+            );
+            self.ctx.clip();
+            self.applied_clip = Some(c);
+        }
+    }
+
+    /// `drawImage` render target `id` scaled to `dst` with a blend mode
+    /// and opacity, restoring the context's composite state afterwards.
+    fn draw_render_target(
+        &mut self,
+        id: RenderTargetId,
+        dst: (i32, i32, u32, u32),
+        blend: BlendMode,
+        opacity: f32,
+    ) -> Result<()> {
+        let target = self
+            .render_targets
+            .get(&id.0)
+            .ok_or_else(|| render_target_not_found(id))?;
+        let prev_op = self.ctx.global_composite_operation().map_err(js_err)?;
+        let prev_alpha = self.ctx.global_alpha();
+        self.ctx
+            .set_global_composite_operation(canvas_composite_op(blend))
+            .map_err(js_err)?;
+        self.ctx
+            .set_global_alpha(f64::from(opacity.clamp(0.0, 1.0)));
+        let (x, y, w, h) = dst;
+        let r = self
+            .ctx
+            .draw_image_with_html_canvas_element_and_dw_and_dh(
+                &target.canvas,
+                f64::from(x),
+                f64::from(y),
+                f64::from(w),
+                f64::from(h),
+            )
+            .map_err(js_err);
+        // Restore state unconditionally before propagating draw errors.
+        self.ctx
+            .set_global_composite_operation(&prev_op)
+            .map_err(js_err)?;
+        self.ctx.set_global_alpha(prev_alpha);
+        r
     }
 
     /// Look up a glyph canvas by its cache key. Used by batched text
@@ -306,9 +378,14 @@ impl SdiCore for WasmBackend {
     fn init(&mut self, width: u32, height: u32) -> Result<()> {
         self.width = width;
         self.height = height;
+        // Resizing a canvas resets its whole 2D context state (save stack
+        // and clip included), so the Rust-side clip state starts over too.
         self.canvas.set_width(width);
         self.canvas.set_height(height);
         self.ctx.set_image_smoothing_enabled(false);
+        self.applied_clip = None;
+        self.clip_stack.clear();
+        self.translate_stack.clear();
         self.glyph_cache.clear();
         self.glyph_access.clear();
         self.color_cache.clear();
@@ -316,11 +393,21 @@ impl SdiCore for WasmBackend {
         Ok(())
     }
 
+    /// Clip-independent and unblended (SdiCore contract): the clip is
+    /// lifted for the clear, the surface wiped with `clearRect`, and an
+    /// opaque or translucent color painted over transparent black, which
+    /// leaves exactly that color.
     fn clear(&mut self, color: Color) -> Result<()> {
-        let css = cached_css_color(&mut self.color_cache, color);
-        self.ctx.set_fill_style_str(css);
-        self.ctx
-            .fill_rect(0.0, 0.0, self.width as f64, self.height as f64);
+        let clip = self.applied_clip;
+        self.apply_clip(None);
+        let (w, h) = (f64::from(self.width), f64::from(self.height));
+        self.ctx.clear_rect(0.0, 0.0, w, h);
+        if color.a > 0 {
+            let css = cached_css_color(&mut self.color_cache, color);
+            self.ctx.set_fill_style_str(css);
+            self.ctx.fill_rect(0.0, 0.0, w, h);
+        }
+        self.apply_clip(clip);
         self.gradient_cache.clear();
         Ok(())
     }
@@ -380,21 +467,19 @@ impl SdiCore for WasmBackend {
         Ok(())
     }
 
+    /// Absolute and replacing (SdiCore contract). This used to translate
+    /// the rect and `save()` + `clip()` on every call: Canvas clips
+    /// intersect, so a nested browser clip never widened again on
+    /// `PopClip`, and `reset_clip_rect` restored a level even when none
+    /// was saved, popping a `push_clip_rect` level and desynchronizing
+    /// the clip stack.
     fn set_clip_rect(&mut self, x: i32, y: i32, w: u32, h: u32) -> Result<()> {
-        let (tx, ty) = self.translate(x, y);
-        self.ctx.save();
-        self.ctx.begin_path();
-        self.ctx.rect(tx, ty, w as f64, h as f64);
-        self.ctx.clip();
-        self.core_clip_depth += 1;
+        self.apply_clip(Some(ClipRect { x, y, w, h }));
         Ok(())
     }
 
     fn reset_clip_rect(&mut self) -> Result<()> {
-        if self.core_clip_depth > 0 {
-            self.core_clip_depth -= 1;
-        }
-        self.ctx.restore();
+        self.apply_clip(None);
         Ok(())
     }
 
@@ -415,6 +500,14 @@ impl SdiCore for WasmBackend {
     }
 
     fn shutdown(&mut self) -> Result<()> {
+        // Unwind any bound render target so `canvas` is the page canvas.
+        while !self.render_target_bind_stack.is_empty() {
+            self.unbind_render_target()?;
+        }
+        self.apply_clip(None);
+        self.clip_stack.clear();
+        self.translate_stack.clear();
+        self.render_targets.clear();
         self.textures.clear();
         self.glyph_cache.clear();
         self.glyph_access.clear();
@@ -429,25 +522,9 @@ impl SdiCore for WasmBackend {
 // -------------------------------------------------------------------
 
 impl SdiAlpha for WasmBackend {
-    fn fill_rect_alpha(
-        &mut self,
-        x: i32,
-        y: i32,
-        w: u32,
-        h: u32,
-        color: Color,
-        alpha: u8,
-    ) -> Result<()> {
-        let c = Color::rgba(color.r, color.g, color.b, alpha);
-        self.fill_rect(x, y, w, h, c)
-    }
-
+    /// The bound surface: the page canvas, or the bound render target.
     fn viewport_size(&self) -> (u32, u32) {
         (self.width, self.height)
-    }
-
-    fn dim_screen(&mut self, alpha: u8) -> Result<()> {
-        self.fill_rect(0, 0, self.width, self.height, Color::rgba(0, 0, 0, alpha))
     }
 }
 
@@ -608,23 +685,8 @@ impl SdiText for WasmBackend {
     ) -> Result<()> {
         self.draw_text_impl(text, x, y, font_size, color, bold, italic)
     }
-
-    fn measure_text_height(&self, font_size: u16) -> u32 {
-        // Shared with the SDL and software backends.
-        oasis_rasterize::bitmap_line_height(font_size)
-    }
-
-    fn font_ascent(&self, font_size: u16) -> u32 {
-        oasis_rasterize::bitmap_ascent(font_size)
-    }
-
-    fn text_metrics(&self, text: &str, font_size: u16) -> TextMetrics {
-        TextMetrics {
-            width: self.measure_text(text, font_size),
-            height: self.measure_text_height(font_size),
-            ascent: self.font_ascent(font_size),
-        }
-    }
+    // Line metrics: the `SdiText` defaults (the bitmap font's line box,
+    // shared with the SDL and software backends).
 }
 
 // -------------------------------------------------------------------
@@ -684,10 +746,14 @@ impl SdiRenderTarget for WasmBackend {
     }
 
     fn bind_render_target(&mut self, id: RenderTargetId) -> Result<()> {
-        let target = self.render_targets.remove(&id.0).ok_or_else(|| {
-            OasisError::Backend(format!("bind_render_target: unknown id {id:?}").into())
-        })?;
-        // Save the current surface and swap the target in.
+        let target = self
+            .render_targets
+            .remove(&id.0)
+            .ok_or_else(|| render_target_not_found(id))?;
+        // Save the current surface and swap the target in. The parent's
+        // context keeps its clip save level; the target's context has
+        // none (unbind strips it), so the target starts unclipped, and
+        // `DrawState::take` starts it untranslated.
         let saved_canvas = std::mem::replace(&mut self.canvas, target.canvas);
         let saved_ctx = std::mem::replace(&mut self.ctx, target.ctx);
         let saved_width = std::mem::replace(&mut self.width, target.width);
@@ -698,6 +764,8 @@ impl SdiRenderTarget for WasmBackend {
             ctx: saved_ctx,
             width: saved_width,
             height: saved_height,
+            applied_clip: self.applied_clip.take(),
+            state: DrawState::take(&mut self.clip_stack, &mut self.translate_stack),
         });
         self.current_render_target = Some(id.0);
         Ok(())
@@ -707,13 +775,19 @@ impl SdiRenderTarget for WasmBackend {
         let saved = self.render_target_bind_stack.pop().ok_or_else(|| {
             OasisError::Backend("unbind_render_target: bind stack underflow".into())
         })?;
+        // Leave no clip level on the target's context for its next bind.
+        self.apply_clip(None);
         // Put the target back into storage under its id, then restore
         // the saved surface.
+        let target_canvas = std::mem::replace(&mut self.canvas, saved.canvas);
+        let target_ctx = std::mem::replace(&mut self.ctx, saved.ctx);
+        let target_w = std::mem::replace(&mut self.width, saved.width);
+        let target_h = std::mem::replace(&mut self.height, saved.height);
+        debug_assert!(
+            self.current_render_target.is_some(),
+            "unbind_render_target called without active target"
+        );
         if let Some(active_id) = self.current_render_target {
-            let target_canvas = std::mem::replace(&mut self.canvas, saved.canvas);
-            let target_ctx = std::mem::replace(&mut self.ctx, saved.ctx);
-            let target_w = std::mem::replace(&mut self.width, saved.width);
-            let target_h = std::mem::replace(&mut self.height, saved.height);
             self.render_targets.insert(
                 active_id,
                 RenderTargetData {
@@ -723,13 +797,11 @@ impl SdiRenderTarget for WasmBackend {
                     height: target_h,
                 },
             );
-        } else {
-            debug_assert!(false, "unbind_render_target called without active target");
-            self.canvas = saved.canvas;
-            self.ctx = saved.ctx;
-            self.width = saved.width;
-            self.height = saved.height;
         }
+        self.applied_clip = saved.applied_clip;
+        saved
+            .state
+            .restore(&mut self.clip_stack, &mut self.translate_stack);
         self.current_render_target = saved.prev_id;
         Ok(())
     }
@@ -748,53 +820,49 @@ impl SdiRenderTarget for WasmBackend {
             (0.0..=1.0).contains(&opacity),
             "opacity must be in [0.0, 1.0], got {opacity}"
         );
-        let target = self.render_targets.get(&id.0).ok_or_else(|| {
-            OasisError::Backend(format!("composite_render_target: unknown id {id:?}").into())
-        })?;
-        let prev_op = self.ctx.global_composite_operation().map_err(js_err)?;
-        let prev_alpha = self.ctx.global_alpha();
-        self.ctx
-            .set_global_composite_operation(canvas_composite_op(blend))
-            .map_err(js_err)?;
-        self.ctx.set_global_alpha(opacity.clamp(0.0, 1.0) as f64);
-        let r = self
-            .ctx
-            .draw_image_with_html_canvas_element_and_dw_and_dh(
-                &target.canvas,
-                dst_x as f64,
-                dst_y as f64,
-                dst_w as f64,
-                dst_h as f64,
-            )
-            .map_err(js_err);
-        // Restore state unconditionally before propagating draw errors.
-        self.ctx
-            .set_global_composite_operation(&prev_op)
-            .map_err(js_err)?;
-        self.ctx.set_global_alpha(prev_alpha);
-        r
+        self.draw_render_target(id, (dst_x, dst_y, dst_w, dst_h), blend, opacity)
+    }
+
+    /// Canvas 2D stores pixels premultiplied and `drawImage` with
+    /// `source-over` at alpha 1 *is* premultiplied source-over, so this
+    /// is the plain composite.
+    fn composite_render_target_premultiplied(
+        &mut self,
+        id: RenderTargetId,
+        dst_x: i32,
+        dst_y: i32,
+        dst_w: u32,
+        dst_h: u32,
+    ) -> Result<()> {
+        self.draw_render_target(id, (dst_x, dst_y, dst_w, dst_h), BlendMode::Normal, 1.0)
     }
 
     fn read_render_target(&mut self, id: RenderTargetId, dst: &mut [u8]) -> Result<()> {
-        let target = self.render_targets.get(&id.0).ok_or_else(|| {
-            OasisError::Backend(format!("read_render_target: unknown id {id:?}").into())
-        })?;
-        let image_data = target
-            .ctx
-            .get_image_data(0.0, 0.0, target.width as f64, target.height as f64)
-            .map_err(js_err)?;
-        let data = image_data.data();
-        let expected = (target.width * target.height * 4) as usize;
-        if dst.len() < expected || data.len() < expected {
+        let target = self
+            .render_targets
+            .get(&id.0)
+            .ok_or_else(|| render_target_not_found(id))?;
+        let expected = target.width as usize * target.height as usize * 4;
+        if dst.len() != expected {
             return Err(OasisError::Backend(
                 format!(
-                    "read_render_target: buffer too small ({} < {expected})",
+                    "read_render_target: buffer is {} bytes, target needs {expected}",
                     dst.len()
                 )
                 .into(),
             ));
         }
-        dst[..expected].copy_from_slice(&data[..expected]);
+        let image_data = target
+            .ctx
+            .get_image_data(0.0, 0.0, target.width as f64, target.height as f64)
+            .map_err(js_err)?;
+        let data = image_data.data();
+        if data.len() != expected {
+            return Err(OasisError::Backend(
+                format!("read_render_target: canvas returned {} bytes", data.len()).into(),
+            ));
+        }
+        dst.copy_from_slice(&data);
         Ok(())
     }
 
@@ -810,9 +878,7 @@ impl SdiRenderTarget for WasmBackend {
             ));
         }
         if self.render_targets.remove(&id.0).is_none() {
-            return Err(OasisError::Backend(
-                format!("destroy_render_target: unknown id {id:?}").into(),
-            ));
+            return Err(render_target_not_found(id));
         }
         // HtmlCanvasElement is GC'd by JS once Rust drops its handle.
         Ok(())

@@ -21,7 +21,7 @@
 use oasis_types::backend::{
     BatchRect, BatchText, BlendMode, Color, GradientStyle, SdiBackend, TextureId,
 };
-use oasis_types::error::{OasisError, Result};
+use oasis_types::error::{BackendError, OasisError, Result};
 
 /// Width of the scenario canvas.
 pub const CANVAS_W: u32 = 128;
@@ -1381,6 +1381,170 @@ pub static SCENARIOS: &[Scenario] = &[
             pixels: 0,
         },
         "multiply rounding"
+    ),
+    // -- drawing-state contract (SdiCore / SdiClipTransform /
+    //    SdiRenderTarget docs, ADR-003) ---------------------------------------
+    scenario!(
+        "clip_set_is_absolute_and_replaces",
+        |b| {
+            // `set_clip_rect` ignores the translation...
+            b.push_translate(30, 20)?;
+            b.set_clip_rect(10, 10, 20, 20)?;
+            b.fill_rect(-30, -20, 128, 96, RED)?;
+            // ...and replaces the clip instead of intersecting with it.
+            b.set_clip_rect(60, 40, 10, 10)?;
+            b.fill_rect(-30, -20, 128, 96, GREEN)?;
+            b.reset_clip_rect()?;
+            b.pop_translate()
+        },
+        check = |f| {
+            expect_rect_exact(f, (10, 10, 20, 20), rgb_of(RED))?;
+            expect_rect_exact(f, (60, 40, 10, 10), rgb_of(GREEN))?;
+            expect_ink_within(f, (10, 10, 60, 40))
+        }
+    ),
+    scenario!(
+        "clip_set_widens_again",
+        |b| {
+            // The browser display list's pattern: every PushClip / PopClip
+            // calls `set_clip_rect` with the intersected parent clip, so a
+            // clip must be able to grow back after a nested one.
+            b.set_clip_rect(10, 10, 100, 70)?;
+            b.fill_rect(0, 0, 128, 96, Color::rgb(60, 60, 60))?;
+            b.set_clip_rect(30, 30, 20, 20)?;
+            b.fill_rect(0, 0, 128, 96, RED)?;
+            b.set_clip_rect(10, 10, 100, 70)?;
+            b.fill_rect(0, 70, 128, 26, BLUE)?;
+            b.reset_clip_rect()?;
+            b.fill_rect(120, 90, 8, 6, WHITE)
+        },
+        check = |f| {
+            expect_fill(f, (30, 30, 20, 20), rgb_of(RED), 0)?;
+            expect_fill(f, (10, 70, 100, 10), rgb_of(BLUE), 0)?;
+            expect_fill(f, (10, 10, 100, 20), [60, 60, 60], 0)?;
+            expect_fill(f, (0, 80, 110, 10), rgb_of(BG), 0)?;
+            expect_rect_exact(f, (120, 90, 8, 6), rgb_of(WHITE))
+        }
+    ),
+    scenario!(
+        "clear_ignores_clip_and_alpha",
+        |b| {
+            // `clear` overwrites every pixel (no clip) without blending,
+            // and leaves the clip in place for the next draw.
+            b.set_clip_rect(10, 10, 10, 10)?;
+            b.clear(Color::rgba(200, 0, 0, 128))?;
+            b.fill_rect(0, 0, 128, 96, GREEN)?;
+            b.reset_clip_rect()
+        },
+        check = |f| {
+            expect_fill(f, (10, 10, 10, 10), rgb_of(GREEN), 0)?;
+            expect_fill(f, (0, 0, 128, 10), [200, 0, 0], 0)?;
+            expect_fill(f, (0, 20, 128, 76), [200, 0, 0], 0)?;
+            expect_fill(f, (20, 10, 108, 10), [200, 0, 0], 0)
+        }
+    ),
+    scenario!(
+        "render_target_bind_resets_and_restores_state",
+        |b| {
+            b.push_translate(10, 10)?;
+            b.push_clip_rect(0, 0, 30, 30)?;
+            let rt = b.create_render_target(40, 40)?;
+            b.bind_render_target(rt)?;
+            // Target-local, unclipped, untranslated.
+            if b.current_translate() != (0, 0) || b.current_clip_rect().is_some() {
+                return Err(OasisError::Backend(
+                    "bound target inherited the parent's clip or translate".into(),
+                ));
+            }
+            if b.viewport_size() != (40, 40) {
+                return Err(OasisError::Backend(
+                    format!("viewport_size {:?} while bound", b.viewport_size()).into(),
+                ));
+            }
+            b.fill_rect(0, 0, 40, 40, YELLOW)?;
+            b.push_clip_rect(5, 5, 10, 10)?;
+            b.fill_rect(0, 0, 40, 40, GREEN)?;
+            b.pop_clip_rect()?;
+            b.unbind_render_target()?;
+            // The parent's translate and clip are back.
+            b.fill_rect(-10, -10, 128, 96, BLUE)?;
+            b.pop_clip_rect()?;
+            b.pop_translate()?;
+            b.composite_render_target(rt, 60, 40, 40, 40, BlendMode::Normal, 1.0)?;
+            b.destroy_render_target(rt)
+        },
+        check = |f| {
+            expect_rect_exact(f, (10, 10, 30, 30), rgb_of(BLUE))?;
+            expect_fill(f, (65, 45, 10, 10), rgb_of(GREEN), 0)?;
+            expect_fill(f, (75, 40, 25, 40), rgb_of(YELLOW), 0)?;
+            expect_fill(f, (60, 55, 40, 25), rgb_of(YELLOW), 0)?;
+            expect_ring(f, (60, 40, 40, 40), rgb_of(BG))
+        }
+    ),
+    scenario!(
+        "render_target_composite_scales",
+        |b| {
+            let rt = b.create_render_target(20, 10)?;
+            b.bind_render_target(rt)?;
+            b.fill_rect(0, 0, 10, 10, RED)?;
+            b.fill_rect(10, 0, 10, 10, GREEN)?;
+            b.unbind_render_target()?;
+            b.composite_render_target(rt, 10, 10, 40, 20, BlendMode::Normal, 1.0)?;
+            b.destroy_render_target(rt)
+        },
+        check = |f| {
+            expect_fill(f, (10, 10, 18, 20), rgb_of(RED), 0)?;
+            expect_fill(f, (32, 10, 18, 20), rgb_of(GREEN), 0)?;
+            expect_ring(f, (10, 10, 40, 20), rgb_of(BG))
+        },
+        Tolerance {
+            channel: 255,
+            pixels: 80,
+        },
+        "SDL filters scaled render targets linearly: the columns around the \
+         red/green seam blend on SDL and are nearest-sampled on the rasterizer"
+    ),
+    scenario!(
+        "render_target_premultiplied_matches_direct",
+        |b| {
+            // The vector-layer bake cache's contract: translucent paint
+            // baked into a transparent target and composited with the
+            // premultiplied operator looks like painting it directly.
+            fn paint(b: &mut dyn SdiBackend, ox: i32) -> Result<()> {
+                b.fill_rect(ox + 4, 4, 40, 30, Color::rgba(230, 40, 30, 128))?;
+                b.fill_circle(ox + 30, 30, 14, Color::rgba(40, 90, 240, 160))?;
+                b.fill_rect(ox + 10, 44, 30, 10, Color::rgba(250, 250, 250, 60))
+            }
+            paint(b, 0)?;
+            let rt = b.create_render_target(60, 60)?;
+            b.bind_render_target(rt)?;
+            b.clear(Color::TRANSPARENT)?;
+            paint(b, 0)?;
+            b.unbind_render_target()?;
+            let composited = b.composite_render_target_premultiplied(rt, 64, 0, 60, 60);
+            b.destroy_render_target(rt)?;
+            match composited {
+                // Callers fall back to immediate drawing, as must we.
+                Err(OasisError::Backend(BackendError::Unsupported { .. })) => paint(b, 64),
+                other => other,
+            }
+        },
+        check = |f| {
+            for y in 0..60 {
+                for x in 0..60 {
+                    let (direct, baked) = (f.rgb(x, y), f.rgb(x + 64, y));
+                    if !near(direct, baked, 3) {
+                        return Err(format!("({x},{y}): direct {direct:?} vs baked {baked:?}"));
+                    }
+                }
+            }
+            Ok(())
+        },
+        Tolerance {
+            channel: 3,
+            pixels: 0,
+        },
+        "alpha-blend rounding (premultiplied vs straight-alpha arithmetic)"
     ),
 ];
 

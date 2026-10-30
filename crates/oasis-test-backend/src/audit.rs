@@ -132,7 +132,7 @@ impl ClipAuditBackend {
                 h: region.3,
             },
             active_clip: None,
-            clip_stack: ClipStack::new(width, height),
+            clip_stack: ClipStack::default(),
             clip_depth: 0,
             translate_stack: TranslateStack::new(),
             translate_depth: 0,
@@ -309,7 +309,7 @@ impl SdiCore for ClipAuditBackend {
     fn init(&mut self, width: u32, height: u32) -> Result<()> {
         self.width = width;
         self.height = height;
-        self.clip_stack = ClipStack::new(width, height);
+        self.clip_stack = ClipStack::default();
         self.active_clip = None;
         self.clip_depth = 0;
         Ok(())

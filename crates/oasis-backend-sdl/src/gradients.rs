@@ -4,9 +4,9 @@
 //! horizontal, and four-corner gradient fills on both rectangular and
 //! rounded-rectangular regions.
 
-use oasis_core::backend::{Color, GradientStyle, SdiGradients};
-use oasis_core::error::Result;
+use oasis_types::backend::{Color, GradientStyle, SdiGradients};
 use oasis_types::color::lerp_color_ratio;
+use oasis_types::error::Result;
 
 use super::{SdlBackend, frect};
 

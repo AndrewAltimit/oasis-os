@@ -163,10 +163,14 @@ fn tick_inner(instance: &mut OasisInstance, delta_seconds: f32) {
     // untouched, so the backend stays "not dirty" and the host skips its texture
     // upload too. Input always forces an immediate render for responsiveness.
     let shader_layer = oasis_core::vector_overlay::get_shader_layer(&instance.active_theme);
-    let has_shader = shader_layer.is_some();
-    const SHADER_FPS: f32 = 12.0; // animated wallpaper refresh rate
+    let animated = shader_layer.is_some()
+        || oasis_core::vector_overlay::layers_animated(
+            &instance.active_theme.background_layers,
+            instance.active_theme.background_reduced_motion,
+        );
+    const SHADER_FPS: f32 = 12.0; // animated wallpaper / layer refresh rate
     const STATIC_FPS: f32 = 4.0; // idle desktop refresh rate (enough to catch the clock)
-    let interval = if has_shader {
+    let interval = if animated {
         1.0 / SHADER_FPS
     } else {
         1.0 / STATIC_FPS
@@ -178,10 +182,15 @@ fn tick_inner(instance: &mut OasisInstance, delta_seconds: f32) {
     }
     instance.last_render_time = instance.shader_time;
 
-    // Render.
-    let _ = instance
+    // Render. A failing stage is logged (once per stage at `warn`, so a
+    // broken skin does not flood the host's log at the frame rate) and
+    // the remaining stages still draw.
+    // Vector animation clocks count 60 Hz frames.
+    let frame = (instance.shader_time.max(0.0) * 60.0) as u32;
+    let r = instance
         .backend
         .clear(oasis_core::backend::Color::rgb(10, 10, 18));
+    instance.report("clear", r);
 
     // Shader wallpaper FIRST (replaces bg clear). Rendered at quarter resolution
     // and nearest-upscaled -- the dominant render cost, and quartering it only
@@ -194,10 +203,10 @@ fn tick_inner(instance: &mut OasisInstance, delta_seconds: f32) {
         let renderer = instance
             .software_shader
             .get_or_insert_with(|| oasis_shader::software::SoftwareShaderRenderer::new(qw, qh));
-        let pixels = renderer
-            .render_shader(&info.name, instance.shader_time, &info.params)
-            .to_vec();
-        upscale_nearest(&pixels, qw, qh, &mut instance.shader_cache, full_w, full_h);
+        // `software_shader` and `shader_cache` are disjoint fields: upscale
+        // straight from the renderer's frame, no per-frame copy.
+        let pixels = renderer.render_shader(&info.name, instance.shader_time, &info.params);
+        upscale_nearest(pixels, qw, qh, &mut instance.shader_cache, full_w, full_h);
         instance
             .backend
             .blit_rgba(0, 0, full_w, full_h, &instance.shader_cache);
@@ -206,24 +215,34 @@ fn tick_inner(instance: &mut OasisInstance, delta_seconds: f32) {
     if instance.active_theme.icon.style == "vector"
         || !instance.active_theme.background_layers.is_empty()
     {
-        let _ = instance.sdi.draw_base_layer(&mut instance.backend);
+        let r = instance.sdi.draw_base_layer(&mut instance.backend);
+        instance.report("draw_base_layer", r);
 
-        let _ = oasis_core::vector_overlay::render_vector_background(
+        // Cached: static layers are tessellated once and, since the UE5
+        // backend composites premultiplied render targets, baked once.
+        let r = oasis_core::vector_overlay::render_vector_background_cached(
             &mut instance.backend,
             &instance.active_theme,
-            0,
+            frame,
+            &mut instance.background_layer_cache,
         );
+        instance.report("render_vector_background", r);
         if let Some(ref dash) = instance.dashboard {
-            let _ = dash.render_vector_icons(&mut instance.backend, &instance.active_theme, 0);
+            let r = dash.render_vector_icons(&mut instance.backend, &instance.active_theme, frame);
+            instance.report("render_vector_icons", r);
         }
-        let _ = instance.sdi.draw_overlay_layer(&mut instance.backend);
+        let r = instance.sdi.draw_overlay_layer(&mut instance.backend);
+        instance.report("draw_overlay_layer", r);
     } else {
-        let _ = instance.sdi.draw(&mut instance.backend);
+        let r = instance.sdi.draw(&mut instance.backend);
+        instance.report("sdi.draw", r);
     }
     // Status bar battery / AC / Wi-Fi glyphs (vector art over the bar).
-    let _ = oasis_core::statusbar::render_status_glyphs(&mut instance.backend, &instance.sdi);
+    let r = oasis_core::statusbar::render_status_glyphs(&mut instance.backend, &instance.sdi);
+    instance.report("render_status_glyphs", r);
 
-    let _ = instance.backend.swap_buffers();
+    let r = instance.backend.swap_buffers();
+    instance.report("swap_buffers", r);
 }
 
 /// Get a pointer to the RGBA framebuffer.

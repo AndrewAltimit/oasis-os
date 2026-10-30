@@ -15,8 +15,8 @@
 
 use std::collections::HashMap;
 
-use oasis_core::backend::{AudioBackend, AudioTrackId};
-use oasis_core::error::{OasisError, Result};
+use oasis_types::backend::{AudioBackend, AudioTrackId};
+use oasis_types::error::{OasisError, Result};
 
 /// High-water mark: stop accepting PCM once the SDL3 stream holds this much.
 /// ~9 seconds at 44.1 kHz stereo i16.

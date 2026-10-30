@@ -4,8 +4,8 @@
 
 use std::collections::HashMap;
 
-use oasis_core::backend::{BackendErrExt, Color, TextureId, texture_not_found};
-use oasis_core::error::Result;
+use oasis_types::backend::{BackendErrExt, Color, TextureId, texture_not_found};
+use oasis_types::error::Result;
 use sdl3::render::Texture;
 
 use super::{SdlBackend, frect};

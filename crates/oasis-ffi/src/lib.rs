@@ -743,4 +743,49 @@ mod tests {
             5
         );
     }
+
+    /// A skin's static background layer is baked into one render target
+    /// on the first rendered frame and reused afterwards (the FFI used to
+    /// redraw every primitive each frame, and the UE5 backend could not
+    /// composite a baked layer at all).
+    #[test]
+    fn static_background_layers_are_baked_once() {
+        let toml = |s: &str| CString::new(s).unwrap();
+        let manifest = toml(include_str!("../../../skins/paper/skin.toml"));
+        let layout = toml(include_str!("../../../skins/paper/layout.toml"));
+        let features = toml(include_str!("../../../skins/paper/features.toml"));
+        let theme = toml(include_str!("../../../skins/paper/theme.toml"));
+        let strings = toml(include_str!("../../../skins/paper/strings.toml"));
+        let handle = unsafe {
+            oasis_create_full(
+                160,
+                90,
+                manifest.as_ptr(),
+                layout.as_ptr(),
+                features.as_ptr(),
+                theme.as_ptr(),
+                strings.as_ptr(),
+            )
+        };
+        assert!(!handle.is_null());
+        assert!(
+            !unsafe { &*handle }
+                .active_theme
+                .background_layers
+                .is_empty(),
+            "the paper skin has background layers"
+        );
+        unsafe { oasis_tick(handle, 1.0) };
+        let baked = unsafe { &*handle }.backend.live_render_targets();
+        assert!(baked >= 1, "static layer baked into a render target");
+        for _ in 0..3 {
+            unsafe { oasis_tick(handle, 1.0) };
+        }
+        assert_eq!(
+            unsafe { &*handle }.backend.live_render_targets(),
+            baked,
+            "the bake is reused, not redone per frame"
+        );
+        unsafe { oasis_destroy(handle) };
+    }
 }

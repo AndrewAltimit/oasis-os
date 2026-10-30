@@ -11,4 +11,4 @@ mod renderer;
 
 pub use audio::Ue5AudioBackend;
 pub use input::FfiInputBackend;
-pub use renderer::Ue5Backend;
+pub use renderer::{DrawnText, Ue5Backend};

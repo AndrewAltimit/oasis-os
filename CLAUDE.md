@@ -14,7 +14,8 @@ All CI commands run inside Docker containers. For local development you can run 
 
 ```bash
 # Build (desktop). Default features need system ffmpeg dev libs (video-decode-ffmpeg);
-# without them (e.g. local Windows) use the openh264 fallback:
+# without them (e.g. local Windows) use the openh264 fallback (drop `javascript`
+# to build without QuickJS):
 cargo build --release -p oasis-app
 cargo build -p oasis-app --no-default-features --features javascript,video-decode
 
@@ -118,12 +119,12 @@ oasis-types     (foundation: Color, Button, InputEvent, backend traits, error ty
 ├── oasis-app-network     (Network status app)
 ├── oasis-app-package-manager (Package Manager app)
 ├── oasis-app-system-monitor  (System Monitor app)
+├── oasis-backend-sdl  (SDL3 desktop/Pi rendering + input + audio; needs only oasis-types/-net/-audio/-rasterize/-shader, not oasis-core, so it never pulls in QuickJS)
+├── oasis-backend-ue5  (software RGBA framebuffer for Unreal Engine 5; needs only oasis-types/-rasterize/-audio)
 └── oasis-core       (coordination only: dashboard, agent, plugin, script, terminal; all apps live in oasis-app-* crates)
-    ├── oasis-backend-sdl  (SDL3 desktop/Pi rendering + input + audio)
-    │   └── oasis-app      (lib `oasis_app::Shell` + headless e2e harness; binaries oasis-app, oasis-screenshot; features video-decode-ffmpeg (default) / video-decode (openh264), skin-dev, mcp)
+    ├── oasis-app      (+ oasis-backend-sdl, oasis-backend-ue5; lib `oasis_app::Shell` + headless e2e harness; binaries oasis-app, oasis-screenshot; features javascript, video-decode-ffmpeg (default) / video-decode (openh264), skin-dev, mcp)
     ├── oasis-backend-wasm (Canvas 2D + DOM input + Web Audio; iframe overlay drives a Browser pane and a YouTube embed; YouTube search + thumbnail grid via Invidious; feature: wasm-youtube)
-    ├── oasis-backend-ue5  (software RGBA framebuffer for Unreal Engine 5)
-    │   └── oasis-ffi      (cdylib C-ABI for UE5 integration; features video-decode / video-decode-ffmpeg)
+    ├── oasis-ffi      (+ oasis-backend-ue5; cdylib C-ABI for UE5 integration; features video-decode / video-decode-ffmpeg)
     ├── oasis-backend-psp  (in the workspace `exclude` list, PSP hardware; oasis-video[no-std-demux])
     └── oasis-plugin-psp   (standalone, not in the workspace; kernel-mode PRX overlay)
 oasis-usb-host  (standalone binary, rusb only: host side of the PSP USB thin client)
@@ -168,6 +169,8 @@ URL for fresh 302 redirects. Full details in
 - `AudioBackend` -- audio playback
 
 Core code never calls platform APIs directly. All platform interaction goes through these traits.
+
+Every backend follows one drawing-state contract (rustdoc on `SdiCore`, `SdiClipTransform`, `SdiRenderTarget`; rationale in [ADR-003](docs/adr/003-backend-trait-design.md)): `set_clip_rect` is absolute (untranslated) and replaces the clip, `push_clip_rect` is translated and intersects; `clear` ignores the clip and does not blend; a bound render target starts with no clip/translate and the unbind restores the parent's (`stacks::DrawState`); composites scale the target to the destination rect. `oasis_test_backend::conformance` pins it on SDL and UE5 (`cargo test -p oasis-backend-sdl --test backend_parity`).
 
 ### Core Modules
 

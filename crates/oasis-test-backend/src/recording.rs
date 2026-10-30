@@ -59,7 +59,7 @@ impl RecordingBackend {
             width,
             height,
             commands: Vec::new(),
-            clip_stack: ClipStack::new(width, height),
+            clip_stack: ClipStack::default(),
             translate_stack: TranslateStack::new(),
             next_texture_id: 1,
             measure_text_fn: None,
@@ -122,7 +122,7 @@ impl SdiCore for RecordingBackend {
     fn init(&mut self, width: u32, height: u32) -> Result<()> {
         self.width = width;
         self.height = height;
-        self.clip_stack = ClipStack::new(width, height);
+        self.clip_stack = ClipStack::default();
         Ok(())
     }
 

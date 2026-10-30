@@ -133,6 +133,12 @@ void oasis_destroy(OasisInstance* handle);
  *
  * delta_seconds: Time since last tick (e.g. 1.0/60.0 for 60 FPS).
  * Processes input, updates scene graph, renders to internal buffer.
+ * Rendering is skipped when nothing changed: it runs on input, at 12 FPS
+ * while a shader wallpaper or animated vector layer is showing, and at
+ * 4 FPS otherwise (to keep the clock current). Vector animations follow
+ * the accumulated delta_seconds; static background layers are baked into
+ * an offscreen buffer once. A failing render stage is logged (log crate,
+ * `warn` the first time) and the other stages still draw.
  */
 void oasis_tick(OasisInstance* handle, float delta_seconds);
 
