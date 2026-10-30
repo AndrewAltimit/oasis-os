@@ -92,8 +92,8 @@
       <dl class="hero__stats">
         <div><dt>Targets</dt><dd>5</dd></div>
         <div><dt>Skins</dt><dd>17</dd></div>
-        <div><dt>Crates</dt><dd>50</dd></div>
-        <div><dt>Tests</dt><dd>9k+</dd></div>
+        <div><dt>Crates</dt><dd>51</dd></div>
+        <div><dt>Tests</dt><dd>8.7k+</dd></div>
       </dl>
     </div>
 
@@ -505,13 +505,17 @@ nightfall_theme.mp3
         <h2 id="arch-title">Layers in, backends out.</h2>
       </div>
       <p class="section__lede">
-        50 crates: 40 workspace members for desktop, WASM and UE5, the excluded PSP backend, and nine standalone
+        51 crates: 41 workspace members for desktop, WASM and UE5, the excluded PSP backend, and nine standalone
         PSP-target crates. Everything above the trait line is platform-agnostic.
       </p>
     </header>
 
     <div class="arch">
       <ol class="arch__stack" aria-label="Crate layers, top to bottom">
+        <li class="layer layer--registry">
+          <span class="layer__name">Registry</span>
+          <ul class="layer__crates"><li>oasis-apps</li><li class="note">app table &middot; launch &middot; host glue over core + app crates</li></ul>
+        </li>
         <li class="layer layer--core">
           <span class="layer__name">Coordination</span>
           <ul class="layer__crates"><li>oasis-core</li><li class="note">dashboard &middot; agent &middot; plugins &middot; scripting &middot; taskbar</li></ul>
@@ -519,14 +523,13 @@ nightfall_theme.mp3
         <li class="layer layer--apps">
           <span class="layer__name">Apps</span>
           <ul class="layer__crates">
-            <li>oasis-app-core</li><li>browser</li><li>tv-guide</li><li>radio</li><li>media</li><li>file-manager</li>
-            <li>text-editor</li><li>paint</li><li>games</li><li>calculator</li><li>settings</li><li>network</li>
-            <li>package-manager</li><li>system-monitor</li>
+            <li>oasis-app-core</li><li>tv-guide</li><li>radio</li><li>media</li><li>file-manager</li>
+            <li>text-editor</li><li>paint</li><li>games</li><li>calculator</li><li>settings</li><li>system-monitor</li>
           </ul>
         </li>
         <li class="layer layer--engines">
           <span class="layer__name">Engines</span>
-          <ul class="layer__crates"><li>oasis-browser</li><li>oasis-js</li><li>oasis-terminal</li><li>oasis-video</li><li>oasis-audio</li></ul>
+          <ul class="layer__crates"><li>oasis-browser</li><li>oasis-html</li><li>oasis-css</li><li>oasis-http</li><li>oasis-js</li><li>oasis-terminal</li><li>oasis-video</li><li>oasis-audio</li></ul>
         </li>
         <li class="layer layer--ui">
           <span class="layer__name">Presentation</span>
