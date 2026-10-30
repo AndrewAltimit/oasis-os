@@ -28,6 +28,7 @@ static LOG_PATH: &[u8] = b"ms0:/PSP/GAME/PRXDEC/decrypt.log\0";
 
 fn log(s: &str) {
     psp::dprintln!("{}", s);
+    // SAFETY: LOG_PATH is a NUL-terminated static; sceIoOpen only reads it.
     let fd = unsafe {
         sceIoOpen(
             LOG_PATH.as_ptr(),
@@ -36,6 +37,8 @@ fn log(s: &str) {
         )
     };
     if fd.0 >= 0 {
+        // SAFETY: fd was opened above; each write reads a live slice's ptr/len;
+        // the fd is closed exactly once.
         unsafe {
             sceIoWrite(fd, s.as_ptr() as *const c_void, s.len());
             sceIoWrite(fd, b"\n".as_ptr() as *const c_void, 1);
@@ -45,6 +48,7 @@ fn log(s: &str) {
 }
 
 fn log_init() {
+    // SAFETY: LOG_PATH is a NUL-terminated static; sceIoOpen only reads it.
     let fd = unsafe {
         sceIoOpen(
             LOG_PATH.as_ptr(),
@@ -53,6 +57,7 @@ fn log_init() {
         )
     };
     if fd.0 >= 0 {
+        // SAFETY: closes the fd opened above exactly once.
         unsafe { sceIoClose(fd) };
     }
 }
@@ -72,10 +77,14 @@ impl Fmt {
         }
     }
     fn s(&self) -> &str {
+        // SAFETY: `buf[..pos]` only ever receives whole UTF-8 chars (`p` cuts its
+        // input at a char boundary) or ASCII digits (`h8`, `decimal`).
         unsafe { core::str::from_utf8_unchecked(&self.buf[..self.pos]) }
     }
     fn p(&mut self, s: &str) {
-        let n = s.len().min(self.buf.len() - self.pos);
+        // Truncate on a char boundary: a split multi-byte char would make the
+        // buffer invalid UTF-8 and `s()` unsound.
+        let n = s.floor_char_boundary(self.buf.len() - self.pos);
         self.buf[self.pos..self.pos + n].copy_from_slice(&s.as_bytes()[..n]);
         self.pos += n;
     }
@@ -199,31 +208,37 @@ static mut PRX_BUF: [u8; BUF_SIZE] = [0u8; BUF_SIZE];
 
 /// Read file into static buffer. Returns file size or 0 on failure.
 fn read_file_static(path: &[u8]) -> usize {
+    // SAFETY: callers pass NUL-terminated path literals (the TARGETS table).
     let fd = unsafe { sceIoOpen(path.as_ptr(), IoOpenFlags::RD_ONLY, 0) };
     if fd.0 < 0 {
         return 0;
     }
 
+    // SAFETY: integer arguments on the fd opened above.
     let size = unsafe { sys::sceIoLseek(fd, 0, sys::IoWhence::End) };
     if size <= 0 || size as usize > BUF_SIZE {
+        // SAFETY: closes the fd once; this path returns right after.
         unsafe { sceIoClose(fd) };
         return 0;
     }
+    // SAFETY: integer arguments on the fd opened above.
     unsafe { sys::sceIoLseek(fd, 0, sys::IoWhence::Set) };
 
     let size = size as usize;
     // Zero the buffer first
+    // SAFETY: PRX_BUF is only touched from the single main thread, and no
+    // reference to it is live here; the raw pointer covers exactly BUF_SIZE bytes.
     unsafe {
-        let ptr = (&raw mut PRX_BUF) as *mut u8;
-        for i in 0..BUF_SIZE {
-            *ptr.add(i) = 0;
-        }
+        core::ptr::write_bytes((&raw mut PRX_BUF) as *mut u8, 0, BUF_SIZE);
     }
 
+    // SAFETY: `size <= BUF_SIZE` was checked above, so the read stays inside
+    // PRX_BUF (single-threaded access, no live references).
     let read = unsafe {
         let ptr = (&raw mut PRX_BUF) as *mut c_void;
         sceIoRead(fd, ptr, size as u32)
     };
+    // SAFETY: closes the fd opened above exactly once.
     unsafe { sceIoClose(fd) };
 
     if read as usize != size {
@@ -234,6 +249,7 @@ fn read_file_static(path: &[u8]) -> usize {
 
 /// Write a buffer to a file. Returns true on success.
 fn write_file(path: &[u8], data: &[u8]) -> bool {
+    // SAFETY: callers pass NUL-terminated path literals.
     let fd = unsafe {
         sceIoOpen(
             path.as_ptr(),
@@ -245,7 +261,9 @@ fn write_file(path: &[u8], data: &[u8]) -> bool {
         return false;
     }
 
+    // SAFETY: ptr/len of the live `data` slice; sceIoWrite only reads it.
     let written = unsafe { sceIoWrite(fd, data.as_ptr() as *const c_void, data.len()) };
+    // SAFETY: closes the fd opened above exactly once.
     unsafe { sceIoClose(fd) };
 
     written as usize == data.len()
@@ -253,6 +271,7 @@ fn write_file(path: &[u8], data: &[u8]) -> bool {
 
 /// Create directory (ignore errors if exists).
 fn mkdir(path: &[u8]) {
+    // SAFETY: the only caller passes a NUL-terminated literal.
     unsafe { sys::sceIoMkdir(path.as_ptr(), 0o777) };
 }
 
@@ -270,11 +289,15 @@ unsafe fn decrypt_prx(buf: &mut [u8], file_size: usize) -> i32 {
             None => return -1,
         };
 
+        if file_size > buf.len() {
+            return -3;
+        }
         let mut new_size: i32 = 0;
-        // SAFETY: calling kernel memlmd decrypt function with valid buffer.
         let ret = func(buf.as_mut_ptr(), file_size as i32, &mut new_size);
 
-        if ret >= 0 && new_size > 0 {
+        // The caller reads `new_size` bytes back out of `buf`, so a size the
+        // firmware reports beyond the buffer must be rejected, not trusted.
+        if ret >= 0 && new_size > 0 && new_size as usize <= buf.len() {
             new_size
         } else {
             // Return the error code
@@ -482,18 +505,22 @@ const NAV_BUTTONS: CtrlButtons = CtrlButtons::from_bits_truncate(
 fn wait_button() -> CtrlButtons {
     let mut p = SceCtrlData::default();
     loop {
+        // SAFETY: `p` is one writable SceCtrlData, matching the count of 1.
         unsafe { sceCtrlPeekBufferPositive(&mut p, 1) };
         if !p.buttons.intersects(NAV_BUTTONS) {
             break;
         }
+        // SAFETY: plain microsecond delay.
         unsafe { sceKernelDelayThread(16_000) };
     }
     loop {
+        // SAFETY: `p` is one writable SceCtrlData, matching the count of 1.
         unsafe { sceCtrlPeekBufferPositive(&mut p, 1) };
         let pressed = p.buttons & NAV_BUTTONS;
         if !pressed.is_empty() {
             return pressed;
         }
+        // SAFETY: plain microsecond delay.
         unsafe { sceKernelDelayThread(16_000) };
     }
 }
@@ -509,6 +536,7 @@ fn dump_mpeg_modules() {
 
     // Load AV modules (same as the EBOOT does for streaming).
     log("Loading AvCodec...");
+    // SAFETY: module-id argument only; failure is a logged negative code.
     let ret = unsafe { sys::sceUtilityLoadModule(sys::Module::AvCodec) };
     let mut f = Fmt::new();
     f.p("  sceUtilityLoadModule(AvCodec) = ");
@@ -516,6 +544,7 @@ fn dump_mpeg_modules() {
     log(f.s());
 
     log("Loading AvMpegBase...");
+    // SAFETY: module-id argument only; failure is a logged negative code.
     let ret = unsafe { sys::sceUtilityLoadModule(sys::Module::AvMpegBase) };
     let mut f = Fmt::new();
     f.p("  sceUtilityLoadModule(AvMpegBase) = ");
@@ -531,7 +560,15 @@ fn dump_mpeg_modules() {
     // Get module ID list.
     let mut mod_ids = [sys::SceUid(0); 128];
     let mut count: i32 = 0;
-    let ret = unsafe { sys::sceKernelGetModuleIdList(mod_ids.as_mut_ptr(), 128, &mut count) };
+    // SAFETY: the buffer size passed (in bytes, as the kernel expects) is the
+    // exact size of `mod_ids`; `count` is a live out-parameter.
+    let ret = unsafe {
+        sys::sceKernelGetModuleIdList(
+            mod_ids.as_mut_ptr(),
+            core::mem::size_of_val(&mod_ids) as i32,
+            &mut count,
+        )
+    };
 
     let mut f = Fmt::new();
     f.p("  GetModuleIdList = ");
@@ -545,11 +582,15 @@ fn dump_mpeg_modules() {
         return;
     }
 
-    let count = count as usize;
-    for i in 0..count {
-        let mid = mod_ids[i];
+    // `count` is the total number of loaded modules, which can exceed the
+    // buffer; only the first `mod_ids.len()` were written.
+    let count = (count.max(0) as usize).min(mod_ids.len());
+    for (i, &mid) in mod_ids.iter().enumerate().take(count) {
+        // SAFETY: SceKernelModuleInfo is a POD C struct; all-zero is valid.
         let mut info: sys::SceKernelModuleInfo = unsafe { core::mem::zeroed() };
         info.size = core::mem::size_of::<sys::SceKernelModuleInfo>();
+        // SAFETY: `info` is live and writable, and its `size` field is set to
+        // the struct size as the call requires.
         let ret = unsafe { sys::sceKernelQueryModuleInfo(mid, &mut info) };
         if ret < 0 {
             let mut f = Fmt::new();
@@ -567,7 +608,13 @@ fn dump_mpeg_modules() {
             .iter()
             .position(|&b| b == 0)
             .unwrap_or(name_bytes.len());
-        let name = unsafe { core::str::from_utf8_unchecked(&name_bytes[..name_len]) };
+        // Module names come from the firmware and are not guaranteed UTF-8:
+        // keep the longest valid prefix instead of assuming.
+        let name_bytes = &name_bytes[..name_len];
+        let name = match core::str::from_utf8(name_bytes) {
+            Ok(s) => s,
+            Err(e) => core::str::from_utf8(&name_bytes[..e.valid_up_to()]).unwrap_or(""),
+        };
 
         // Log ALL modules with their addresses.
         let text_addr = info.text_addr as usize;
@@ -651,6 +698,9 @@ fn dump_mpeg_modules() {
                     b"ms0:/PSP/GAME/PRXDEC/dec/codec_memdump.bin\0"
                 };
 
+                // SAFETY: the kernel reports this module as loaded at `text_addr`
+                // with a contiguous text+data image of `total` bytes; it stays mapped
+                // (nothing unloads it here) while write_file reads the slice.
                 let slice = unsafe { core::slice::from_raw_parts(text_addr as *const u8, total) };
                 if write_file(out_path, slice) {
                     let mut f = Fmt::new();
@@ -673,6 +723,7 @@ fn dump_mpeg_modules() {
 
 fn psp_main() {
     let _ = psp::callback::setup_exit_callback();
+    // SAFETY: mode enum argument only.
     unsafe { sceCtrlSetSamplingMode(CtrlMode::Digital) };
     log_init();
 
@@ -685,6 +736,7 @@ fn psp_main() {
 
     // Resolve memlmd decrypt function
     log("Resolving memlmd decrypt NID...");
+    // SAFETY: called once, from the main thread, before any decrypt.
     let found = unsafe { resolve_decrypt() };
 
     if !found {
@@ -720,6 +772,11 @@ fn psp_main() {
         ];
 
         for (module, library, nid, name) in &alt_nids {
+            // SAFETY: NUL-terminated name literals for find_function. The found
+            // address is transmuted to `DecryptFn`, the memlmd decrypt signature
+            // these NIDs export (sceKernelCheckExecFile shares the
+            // `(buf, size, *out)` shape). DECRYPT_FN / DECRYPT_NAME are written
+            // through raw pointers from the single main thread.
             unsafe {
                 if let Some(addr) =
                     psp::hook::find_function(module.as_ptr(), library.as_ptr(), *nid)
@@ -741,6 +798,7 @@ fn psp_main() {
             }
         }
 
+        // SAFETY: raw-pointer read of a static only written by this thread.
         if unsafe { core::ptr::read_volatile(&raw const DECRYPT_FN) }.is_none() {
             log("FATAL: No decrypt function found.");
             log("Press any button to exit.");
@@ -749,6 +807,7 @@ fn psp_main() {
         }
     }
 
+    // SAFETY: raw-pointer read of a static only written by this thread.
     let name = unsafe { core::ptr::read_volatile(&raw const DECRYPT_NAME) };
     let mut f = Fmt::new();
     f.p("Using: ");
@@ -768,6 +827,7 @@ fn psp_main() {
         log("");
         log("Press any button to exit.");
         wait_button();
+        // SAFETY: ends the calling (main) thread; nothing runs after it.
         unsafe { sys::sceKernelExitDeleteThread(0) };
         return;
     }
@@ -800,6 +860,8 @@ fn psp_main() {
         // Log PRX header tag
         if file_size >= 0xD4 {
             let ptr = (&raw const PRX_BUF) as *const u8;
+            // SAFETY: 0xD0..0xD4 is inside PRX_BUF (BUF_SIZE bytes); no mutable
+            // reference to it is live.
             let tag = u32::from_le_bytes(unsafe {
                 [
                     *ptr.add(0xD0),
@@ -816,6 +878,8 @@ fn psp_main() {
 
         // Try to decrypt
         log("  Decrypting...");
+        // SAFETY: this is the only live reference to PRX_BUF (single thread), it
+        // covers exactly the static, and the decrypt fn was resolved above.
         let result = unsafe {
             let buf = core::slice::from_raw_parts_mut((&raw mut PRX_BUF) as *mut u8, BUF_SIZE);
             decrypt_prx(buf, file_size)
@@ -831,6 +895,8 @@ fn psp_main() {
             // Check magic
             let ptr = (&raw const PRX_BUF) as *const u8;
             if dec_size >= 4 {
+                // SAFETY: dec_size >= 4 and dec_size <= BUF_SIZE (checked in
+                // decrypt_prx), so bytes 0..4 are in bounds.
                 let magic = u32::from_le_bytes(unsafe {
                     [*ptr.add(0), *ptr.add(1), *ptr.add(2), *ptr.add(3)]
                 });
@@ -846,6 +912,8 @@ fn psp_main() {
             }
 
             // Write decrypted file
+            // SAFETY: decrypt_prx only returns sizes <= BUF_SIZE, and the mutable
+            // slice used for decryption is no longer live.
             let out_slice = unsafe { core::slice::from_raw_parts(ptr, dec_size) };
             if write_file(target.output_name, out_slice) {
                 log("  Saved!");
@@ -862,6 +930,7 @@ fn psp_main() {
 
             // Fallback: load module and dump from memory
             log("  Trying LoadModule+dump...");
+            // SAFETY: both paths are NUL-terminated TARGETS literals.
             let dump_size = unsafe { load_and_dump(target.flash_path, target.output_name) };
             if dump_size > 0 {
                 let mut f = Fmt::new();
@@ -880,6 +949,7 @@ fn psp_main() {
         }
 
         log("");
+        // SAFETY: plain microsecond delay.
         unsafe { sceKernelDelayThread(100_000) };
     }
 
@@ -898,5 +968,6 @@ fn psp_main() {
     log("Press any button to exit.");
     wait_button();
 
+    // SAFETY: ends the calling (main) thread; nothing runs after it.
     unsafe { sys::sceKernelExitDeleteThread(0) };
 }

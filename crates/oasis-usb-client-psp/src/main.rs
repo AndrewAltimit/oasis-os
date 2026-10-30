@@ -25,9 +25,12 @@ use psp::sys::{
 };
 
 /// Read a 32-bit value from a memory-mapped hardware address.
-/// SAFETY: Only call with valid MMIO or kernel memory addresses.
+///
+/// # Safety
+/// `addr` must be a 4-byte-aligned MMIO register or mapped kernel address.
 #[inline(always)]
 unsafe fn hw_read32(addr: u32) -> u32 {
+    // SAFETY: the caller guarantees `addr` is aligned and mapped (see above).
     unsafe { core::ptr::read_volatile(addr as *const u32) }
 }
 

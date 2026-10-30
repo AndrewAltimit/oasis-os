@@ -60,15 +60,6 @@ pub struct UsbDriver {
     pub link: *mut UsbDriver,
 }
 
-unsafe impl Sync for UsbDriver {}
-unsafe impl Send for UsbDriver {}
-unsafe impl Sync for UsbEndpoint {}
-unsafe impl Send for UsbEndpoint {}
-unsafe impl Sync for UsbInterface {}
-unsafe impl Send for UsbInterface {}
-unsafe impl Sync for UsbdDeviceReq {}
-unsafe impl Send for UsbdDeviceReq {}
-
 // ---------------------------------------------------------------------------
 // Static driver state (matches USBHostFS exactly)
 // ---------------------------------------------------------------------------

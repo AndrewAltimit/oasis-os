@@ -52,6 +52,7 @@ static mut SPY_FLUSH_CTR: u32 = 0;
 /// Dump thread entry point. Polls for trigger, then dumps.
 unsafe extern "C" fn dump_thread_entry(_args: usize, _argp: *mut core::ffi::c_void) -> i32 {
     // Load cooleyesBridge.prx early — PMPlayer requires it before mpeg_vsh.
+    // SAFETY: runs on this dedicated kernel thread, once, before the poll loop.
     unsafe { load_cooleyes_bridge() };
 
     // NOTE: Kernel K1 patches previously here have been REMOVED.
@@ -78,10 +79,14 @@ unsafe extern "C" fn dump_thread_entry(_args: usize, _argp: *mut core::ffi::c_vo
         // Check for ME decode hook request from EBOOT (file-based IPC).
         // EBOOT writes ".me_patch" after loading AV modules, we hook
         // sceMpegAvcDecode syscall and write ".me_patched" when done.
+        // SAFETY: the IPC-file handlers only run on this thread, which is the
+        // sole owner of the request/ack files and the hook state they patch.
         unsafe { check_patch_request() };
 
         // Check for VSH module load + address resolution request from EBOOT.
+        // SAFETY: as above — single dump thread owns this IPC.
         unsafe { check_vsh_load_request() };
+        // SAFETY: as above.
         unsafe { check_vsh_addr_request() };
 
         // Check for spy dump request from overlay menu.
@@ -90,6 +95,8 @@ unsafe extern "C" fn dump_thread_entry(_args: usize, _argp: *mut core::ffi::c_vo
             .is_ok()
         {
             crate::debug_log(b"[SPY] menu dump triggered");
+            // SAFETY: flush/dump only run on this thread (the menu just flips the
+            // atomic above), so their file I/O and spy-buffer reads don't race.
             unsafe {
                 auto_flush_spy();
                 dump_all_modules_to_file();
@@ -98,6 +105,8 @@ unsafe extern "C" fn dump_thread_entry(_args: usize, _argp: *mut core::ffi::c_vo
 
         // Auto-flush spy log every ~5 seconds if there's data.
         // Also auto-dump modules once ~30s after boot for comparison.
+        // SAFETY: SPY_FLUSH_CTR is only accessed by this thread, via raw-pointer
+        // volatile ops (no references); the flush/dump calls are as above.
         unsafe {
             let ctr = core::ptr::read_volatile(&raw const SPY_FLUSH_CTR);
             core::ptr::write_volatile(&raw mut SPY_FLUSH_CTR, ctr + 1);
@@ -183,14 +192,18 @@ unsafe fn do_dump() {
 unsafe fn extract_me_firmware() {
     crate::debug_log(b"[ME-DUMP] extracting ME firmware...");
 
+    // SAFETY (this block and the copy_file calls below): every path passed is a
+    // NUL-terminated literal, the only precondition of list_dir / copy_file.
     // List flash0:/kd/resource/ to find actual filenames.
     unsafe { list_kd_resource() };
 
     // Also list flash0:/kd/ to find all kernel modules.
+    // SAFETY: NUL-terminated path literal.
     unsafe { list_dir(b"flash0:/kd/\0", b"kd") };
 
     // Copy ME firmware image (only me_t2img.img exists on FW 6.61).
     crate::debug_log(b"[ME-DUMP] fw: me_t2img.img");
+    // SAFETY: NUL-terminated path literals.
     unsafe {
         copy_file(
             b"flash0:/kd/resource/me_t2img.img\0",
@@ -200,6 +213,7 @@ unsafe fn extract_me_firmware() {
 
     // Copy all codec-related PRX files from flash0:/kd/.
     crate::debug_log(b"[ME-DUMP] fw: me_wrapper.prx");
+    // SAFETY: NUL-terminated path literals.
     unsafe {
         copy_file(
             b"flash0:/kd/me_wrapper.prx\0",
@@ -208,6 +222,7 @@ unsafe fn extract_me_firmware() {
     }
 
     crate::debug_log(b"[ME-DUMP] fw: avcodec.prx");
+    // SAFETY: NUL-terminated path literals.
     unsafe {
         copy_file(
             b"flash0:/kd/avcodec.prx\0",
@@ -216,6 +231,7 @@ unsafe fn extract_me_firmware() {
     }
 
     crate::debug_log(b"[ME-DUMP] fw: mpeg.prx");
+    // SAFETY: NUL-terminated path literals.
     unsafe {
         copy_file(
             b"flash0:/kd/mpeg.prx\0",
@@ -224,6 +240,7 @@ unsafe fn extract_me_firmware() {
     }
 
     crate::debug_log(b"[ME-DUMP] fw: mpeg_vsh.prx");
+    // SAFETY: NUL-terminated path literals.
     unsafe {
         copy_file(
             b"flash0:/kd/mpeg_vsh.prx\0",
@@ -232,6 +249,7 @@ unsafe fn extract_me_firmware() {
     }
 
     crate::debug_log(b"[ME-DUMP] fw: videocodec_260.prx");
+    // SAFETY: NUL-terminated path literals.
     unsafe {
         copy_file(
             b"flash0:/kd/videocodec_260.prx\0",
@@ -240,6 +258,7 @@ unsafe fn extract_me_firmware() {
     }
 
     crate::debug_log(b"[ME-DUMP] fw: codec_09g.prx");
+    // SAFETY: NUL-terminated path literals.
     unsafe {
         copy_file(
             b"flash0:/kd/codec_09g.prx\0",
@@ -248,6 +267,7 @@ unsafe fn extract_me_firmware() {
     }
 
     crate::debug_log(b"[ME-DUMP] fw: mpegbase_260.prx");
+    // SAFETY: NUL-terminated path literals.
     unsafe {
         copy_file(
             b"flash0:/kd/mpegbase_260.prx\0",
@@ -259,7 +279,11 @@ unsafe fn extract_me_firmware() {
 }
 
 /// List a directory and write results to a text file + debug log.
+///
+/// # Safety
+/// `path` must be NUL-terminated.
 unsafe fn list_dir(path: &[u8], label: &[u8]) {
+    // SAFETY: `path` is NUL-terminated (caller contract).
     let dir_fd = unsafe { psp::sys::sceIoDopen(path.as_ptr()) };
     if dir_fd < psp::sys::SceUid(0) {
         let mut msg = [0u8; 80];
@@ -276,7 +300,10 @@ unsafe fn list_dir(path: &[u8], label: &[u8]) {
     let mut count = 0u32;
 
     loop {
+        // SAFETY: SceIoDirent is a POD C struct (ints, byte arrays and a raw
+        // pointer); all-zero, including a null `d_private`, is valid.
         let mut entry: psp::sys::SceIoDirent = unsafe { core::mem::zeroed() };
+        // SAFETY: `entry` is live and writable; dir_fd is the open directory.
         let ret = unsafe { psp::sys::sceIoDread(dir_fd, &mut entry) };
         if ret <= 0 {
             break;
@@ -310,6 +337,7 @@ unsafe fn list_dir(path: &[u8], label: &[u8]) {
             break;
         }
     }
+    // SAFETY: closes the directory opened above exactly once.
     unsafe { psp::sys::sceIoDclose(dir_fd) };
 
     // Write listing to file.
@@ -318,11 +346,14 @@ unsafe fn list_dir(path: &[u8], label: &[u8]) {
     op = append_bytes(&mut out_path, op, label);
     op = append_bytes(&mut out_path, op, b"_listing.txt\0");
     let _ = op;
+    // SAFETY: out_path is NUL-terminated: the prefix, a short literal label and
+    // the "_listing.txt\0" suffix total < 64 bytes, so append_bytes never truncates.
     unsafe { write_file(&out_path, &list[..lp]) };
 }
 
 /// List flash0:/kd/resource/ specifically.
 unsafe fn list_kd_resource() {
+    // SAFETY: NUL-terminated path literal.
     unsafe { list_dir(b"flash0:/kd/resource/\0", b"kd_resource") };
 }
 
@@ -417,9 +448,10 @@ unsafe fn dump_kernel_modules() {
     let mut mod_ids = [psp::sys::SceUid(0); 128];
     let mut count: i32 = 0;
 
-    // SAFETY: Kernel syscall to enumerate modules.
     // Second param is buffer size in BYTES (not element count).
     let buf_bytes = 128 * core::mem::size_of::<psp::sys::SceUid>() as i32;
+    // SAFETY: `buf_bytes` is exactly the size of `mod_ids`, so the kernel writes
+    // within it; `count` is a live out-parameter.
     let ret =
         unsafe { psp::sys::sceKernelGetModuleIdList(mod_ids.as_mut_ptr(), buf_bytes, &mut count) };
 
@@ -435,8 +467,11 @@ unsafe fn dump_kernel_modules() {
     let mut list_pos = 0;
     let mut dumped = 0u32;
 
-    for i in 0..count as usize {
-        let mid = mod_ids[i];
+    // `count` is the number of loaded modules, which may exceed the buffer;
+    // only the first `mod_ids.len()` entries were written.
+    let count = (count as usize).min(mod_ids.len());
+    for (i, &mid) in mod_ids.iter().enumerate().take(count) {
+        // SAFETY: SceKernelModuleInfo is a POD C struct; all-zero is valid.
         let mut info: psp::sys::SceKernelModuleInfo = unsafe { core::mem::zeroed() };
         info.size = core::mem::size_of::<psp::sys::SceKernelModuleInfo>();
 
@@ -592,6 +627,8 @@ unsafe fn probe_codec_drivers() {
         pp = append_bytes(&mut pre, pp, probe.label);
         crate::debug_log(&pre[..pp]);
 
+        // SAFETY: Probe names are NUL-terminated literals; find_function only
+        // reads them and returns None for modules that aren't loaded.
         let ptr = unsafe {
             psp::hook::find_function(probe.module.as_ptr(), probe.library.as_ptr(), probe.nid)
         };
@@ -877,10 +914,11 @@ unsafe fn dump_all_modules_to_file() {
         let mut list = [0u8; 8192];
         let mut lp = 0;
 
-        for i in 0..count as usize {
+        // `count` may exceed the 128-entry buffer; only that many were written.
+        for &mid in mod_ids.iter().take(count as usize) {
             let mut info: psp::sys::SceKernelModuleInfo = core::mem::zeroed();
             info.size = core::mem::size_of::<psp::sys::SceKernelModuleInfo>();
-            if psp::sys::sceKernelQueryModuleInfo(mod_ids[i], &mut info) < 0 {
+            if psp::sys::sceKernelQueryModuleInfo(mid, &mut info) < 0 {
                 continue;
             }
             let name_len = info
@@ -1289,7 +1327,13 @@ unsafe fn dump_kernel_module(mod_name: &[u8], out_path: &[u8]) {
         // Get list of all loaded module IDs
         let mut ids = [psp::sys::SceUid(0); 256];
         let mut count: i32 = 0;
-        let ret = psp::sys::sceKernelGetModuleIdList(ids.as_mut_ptr(), 256, &mut count);
+        // The size argument is in bytes: pass the whole buffer (256 ids), not
+        // 256 bytes (which only let the kernel fill the first 64 entries).
+        let ret = psp::sys::sceKernelGetModuleIdList(
+            ids.as_mut_ptr(),
+            core::mem::size_of_val(&ids) as i32,
+            &mut count,
+        );
         if ret < 0 {
             let mut m = [0u8; 60];
             let mut p = append_bytes(&mut m, 0, b"[KDUMP] GetModuleIdList err=0x");
