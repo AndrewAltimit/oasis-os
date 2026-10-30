@@ -24,6 +24,8 @@ symphonia = { version = "0.5", default-features = false, features = [
 
 [dev-dependencies]
 proptest.workspace = true
+# Real non-blocking TCP sockets for the radio loopback tests.
+oasis-net = { workspace = true }
 
 [lints]
 workspace = true

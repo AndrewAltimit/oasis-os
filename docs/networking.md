@@ -18,9 +18,14 @@ except during the initial TLS handshake (see Threading model). There is no
 async runtime, no thread pool, and no internal task spawning. Listener and
 client are designed to be polled from the host's main loop.
 
-Sockets are switched to non-blocking mode on accept (`std_backend.rs:52`,
-`67`, `82`). `send` and `recv` return immediately, with `WouldBlock`
-translated into "no data yet". `connect` resolves the host with
+Sockets are switched to non-blocking mode on accept and after connect.
+`read` and `write` return immediately; when the socket is not ready they
+fail with `OasisError::Io` of kind `WouldBlock` (the raw OS error, whose text
+is e.g. "Resource temporarily unavailable"). Callers must test
+`OasisError::is_would_block()` (which also accepts `TimedOut`), never search
+the error's display text for "would block": only the TLS stream happens to
+use that wording, so text matching works on `https://` and silently breaks
+every plain-TCP stream. `connect` resolves the host with
 `ToSocketAddrs` (hostnames, IPv4 literals and IPv6 literals with or without
 brackets all work) and tries each resolved address with
 `TcpStream::connect_timeout`, so the TCP handshake blocks the caller for at
@@ -97,9 +102,10 @@ Handshake:
 
 1. Server sends `AUTH_REQUIRED\n` immediately after accept.
 2. Client sends `<key>\n` (`client.rs:93`).
-3. Server compares with a constant-time XOR loop (`listener.rs:32`) so the
-   timing of the comparison reveals neither the length nor the content of the
-   stored key.
+3. Server compares with `oasis_types::util::ct_eq`, a constant-time XOR
+   loop, so the timing of the comparison does not reveal the content of the
+   stored key (a length mismatch returns early; the length is visible on the
+   wire anyway).
 4. On match, server replies `AUTH_OK\n> ` and the client transitions to
    `Connected`. On mismatch, server replies `AUTH_FAIL\n` and closes.
 
@@ -306,7 +312,7 @@ the existing code uses:
 1. Implement client and server halves on top of `NetworkBackend` (mirror the
    `RemoteClient` / `RemoteListener` shape).
 2. Use the same non-blocking-poll discipline: no thread spawns, no async.
-3. If authenticated, reuse the constant-time PSK comparison helper
-   (`listener.rs:32`) and require TLS for the PSK path.
+3. If authenticated, reuse the constant-time comparison helper
+   (`oasis_types::util::ct_eq`) and require TLS for the PSK path.
 4. Register a status / request VFS file pair under `/var/<proto>/` so
    headless tests and the terminal can drive it without a TUI.
