@@ -4,8 +4,66 @@
 //! nearly identical logic. This module provides reusable helpers so each
 //! backend only needs to wire up platform-specific calls (e.g. setting the
 //! SDL clip rect or calling `ctx.clip()` in WASM).
+//!
+//! [`DrawState`] bundles both stacks so a backend can save them on
+//! `bind_render_target` and restore them on `unbind_render_target`, as the
+//! [`SdiRenderTarget`](crate::backend::SdiRenderTarget) contract requires.
 
 use crate::geometry::ClipRect;
+
+// ---------------------------------------------------------------------------
+// DrawState
+// ---------------------------------------------------------------------------
+
+/// The clip and translate stacks of one drawing surface.
+///
+/// A render-target bind starts the target with no clip and no
+/// translation, and the unbind brings the parent's stacks back unchanged:
+///
+/// ```
+/// use oasis_types::backend::stacks::{ClipStack, DrawState, TranslateStack};
+/// use oasis_types::geometry::ClipRect;
+///
+/// let mut clip = ClipStack::default();
+/// let mut translate = TranslateStack::new();
+/// clip.push(ClipRect { x: 1, y: 2, w: 3, h: 4 });
+/// translate.push(10, 20);
+///
+/// // bind_render_target
+/// let saved = DrawState::take(&mut clip, &mut translate);
+/// assert_eq!(clip.current(), None);
+/// assert_eq!(translate.current(), (0, 0));
+///
+/// // unbind_render_target
+/// saved.restore(&mut clip, &mut translate);
+/// assert_eq!(clip.current(), Some(ClipRect { x: 1, y: 2, w: 3, h: 4 }));
+/// assert_eq!(translate.current(), (10, 20));
+/// ```
+#[derive(Debug, Clone, Default)]
+pub struct DrawState {
+    /// The surface's clip stack.
+    pub clip: ClipStack,
+    /// The surface's translate stack.
+    pub translate: TranslateStack,
+}
+
+impl DrawState {
+    /// Move both stacks out, leaving them empty (no clip, no translation).
+    #[must_use]
+    pub fn take(clip: &mut ClipStack, translate: &mut TranslateStack) -> Self {
+        Self {
+            clip: std::mem::take(clip),
+            translate: std::mem::take(translate),
+        }
+    }
+
+    /// Put stacks saved by [`take`](Self::take) back, discarding the
+    /// current ones.
+    pub fn restore(self, clip: &mut ClipStack, translate: &mut TranslateStack) {
+        *clip = self.clip;
+        *translate = self.translate;
+    }
+}
 
 // ---------------------------------------------------------------------------
 // TranslateStack
@@ -105,82 +163,53 @@ pub enum ClipPush {
 /// The stack tracks whether a clip is currently active.  When no clip is
 /// active the first push simply activates the given rectangle.  Subsequent
 /// pushes intersect with the active clip.
-#[derive(Debug, Clone)]
+///
+/// "No clip" is stored as `None`, not as a full-viewport rectangle, so a
+/// pushed clip that happens to equal the viewport restores correctly and
+/// the stack never depends on a viewport size that can go stale on resize.
+#[derive(Debug, Clone, Default)]
 pub struct ClipStack {
-    /// Previous clip states (what to restore on pop).
-    stack: Vec<ClipRect>,
+    /// Previous clip states (what to restore on pop); `None` = no clip.
+    stack: Vec<Option<ClipRect>>,
     /// The current effective clip, or `None` if clipping is disabled.
     current: Option<ClipRect>,
-    /// Viewport dimensions -- used as the sentinel value for "no clip".
-    viewport_w: u32,
-    viewport_h: u32,
 }
 
 impl ClipStack {
-    /// Create a new clip stack for a viewport of the given size.
-    #[must_use]
-    pub fn new(viewport_w: u32, viewport_h: u32) -> Self {
-        Self {
-            stack: Vec::new(),
-            current: None,
-            viewport_w,
-            viewport_h,
-        }
-    }
-
     /// Push a new clip rectangle (already translated by the caller).
     ///
     /// Returns what clip the backend should apply on the platform side.
     pub fn push(&mut self, clip: ClipRect) -> ClipPush {
-        if let Some(current) = self.current {
-            self.stack.push(current);
-            match current.intersect(&clip) {
-                Some(isect) => {
-                    self.current = Some(isect);
-                    ClipPush::Clip(isect)
-                },
-                None => {
-                    self.current = Some(ClipRect {
-                        x: 0,
-                        y: 0,
-                        w: 0,
-                        h: 0,
-                    });
-                    ClipPush::Empty
-                },
-            }
-        } else {
-            // No clip was active -- push a sentinel for the full viewport.
-            self.stack.push(ClipRect {
-                x: 0,
-                y: 0,
-                w: self.viewport_w,
-                h: self.viewport_h,
-            });
+        self.stack.push(self.current);
+        let Some(current) = self.current else {
             self.current = Some(clip);
-            ClipPush::Clip(clip)
+            return ClipPush::Clip(clip);
+        };
+        match current.intersect(&clip) {
+            Some(isect) => {
+                self.current = Some(isect);
+                ClipPush::Clip(isect)
+            },
+            None => {
+                self.current = Some(ClipRect {
+                    x: 0,
+                    y: 0,
+                    w: 0,
+                    h: 0,
+                });
+                ClipPush::Empty
+            },
         }
     }
 
     /// Pop the most recent clip.
     ///
     /// Returns `Some(clip)` with the restored clip rectangle, or `None` if
-    /// clipping should be disabled (either the stack was empty or the restored
-    /// state is the full-viewport sentinel).
+    /// clipping should be disabled (the stack was empty or no clip was
+    /// active before the matching push).
     pub fn pop(&mut self) -> Option<ClipRect> {
-        if let Some(prev) = self.stack.pop() {
-            if prev.x == 0 && prev.y == 0 && prev.w == self.viewport_w && prev.h == self.viewport_h
-            {
-                self.current = None;
-                None
-            } else {
-                self.current = Some(prev);
-                Some(prev)
-            }
-        } else {
-            self.current = None;
-            None
-        }
+        self.current = self.stack.pop().flatten();
+        self.current
     }
 
     /// The currently active clip rectangle, or `None` if clipping is disabled.
@@ -255,7 +284,7 @@ mod tests {
 
     #[test]
     fn clip_first_push_activates() {
-        let mut cs = ClipStack::new(100, 100);
+        let mut cs = ClipStack::default();
         assert!(cs.current().is_none());
 
         let result = cs.push(ClipRect {
@@ -286,7 +315,7 @@ mod tests {
 
     #[test]
     fn clip_nested_intersection() {
-        let mut cs = ClipStack::new(100, 100);
+        let mut cs = ClipStack::default();
         cs.push(ClipRect {
             x: 10,
             y: 10,
@@ -313,7 +342,7 @@ mod tests {
 
     #[test]
     fn clip_no_overlap_gives_empty() {
-        let mut cs = ClipStack::new(100, 100);
+        let mut cs = ClipStack::default();
         cs.push(ClipRect {
             x: 0,
             y: 0,
@@ -331,7 +360,7 @@ mod tests {
 
     #[test]
     fn clip_pop_restores() {
-        let mut cs = ClipStack::new(100, 100);
+        let mut cs = ClipStack::default();
         cs.push(ClipRect {
             x: 10,
             y: 10,
@@ -364,15 +393,40 @@ mod tests {
     }
 
     #[test]
+    fn clip_equal_to_viewport_restores() {
+        // A nested clip exactly the size of the viewport used to collide
+        // with the "no clip" sentinel and pop to `None`.
+        let mut cs = ClipStack::default();
+        let outer = ClipRect {
+            x: 10,
+            y: 10,
+            w: 50,
+            h: 50,
+        };
+        let full = ClipRect {
+            x: 0,
+            y: 0,
+            w: 100,
+            h: 100,
+        };
+        cs.push(full);
+        cs.push(outer);
+        assert_eq!(cs.pop(), Some(full), "restores the full-size clip");
+        assert_eq!(cs.current(), Some(full));
+        assert_eq!(cs.pop(), None);
+        assert_eq!(cs.current(), None);
+    }
+
+    #[test]
     fn clip_pop_empty_stack() {
-        let mut cs = ClipStack::new(100, 100);
+        let mut cs = ClipStack::default();
         assert!(cs.pop().is_none());
         assert!(cs.current().is_none());
     }
 
     #[test]
     fn clip_clear() {
-        let mut cs = ClipStack::new(100, 100);
+        let mut cs = ClipStack::default();
         cs.push(ClipRect {
             x: 0,
             y: 0,

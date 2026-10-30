@@ -10,7 +10,7 @@ use std::hash::{BuildHasherDefault, Hasher};
 use serde::Deserialize;
 
 use oasis_types::backend::{Color, SdiBackend};
-use oasis_types::error::{OasisError, Result};
+use oasis_types::error::{OasisError, Result, SdiError};
 use oasis_types::shadow::Shadow;
 
 use crate::object::SdiObject;
@@ -317,7 +317,7 @@ impl SdiRegistry {
         self.index
             .get(name)
             .map(|&h| &self.objects[h])
-            .ok_or_else(|| OasisError::Sdi(format!("object not found: {name}").into()))
+            .ok_or_else(|| not_found(name))
     }
 
     /// Get a mutable reference to an object by name.
@@ -333,7 +333,7 @@ impl SdiRegistry {
                 self.touch(h);
                 Ok(&mut self.objects[h])
             },
-            None => Err(OasisError::Sdi(format!("object not found: {name}").into())),
+            None => Err(not_found(name)),
         }
     }
 
@@ -391,10 +391,7 @@ impl SdiRegistry {
 
     /// Remove an object from the registry.
     pub fn destroy(&mut self, name: &str) -> Result<()> {
-        let handle = self
-            .index
-            .remove(name)
-            .ok_or_else(|| OasisError::Sdi(format!("object not found: {name}").into()))?;
+        let handle = self.index.remove(name).ok_or_else(|| not_found(name))?;
         self.objects.swap_remove(handle);
         // `swap_remove` moved the former last object into `handle` (unless the
         // removed object *was* last) — repoint its index entry.
@@ -603,7 +600,10 @@ impl SdiRegistry {
     /// Draw only the overlay layer, sorted by z-order.
     ///
     /// Call after [`Self::draw_base_layer`] and any custom mid-layer rendering.
-    pub fn draw_overlay_layer(&self, backend: &mut dyn SdiBackend) -> Result<()> {
+    /// Re-sorts first if objects were created, destroyed or re-ordered, so it
+    /// is also safe to call on its own.
+    pub fn draw_overlay_layer(&mut self, backend: &mut dyn SdiBackend) -> Result<()> {
+        self.ensure_z_sorted();
         for &handle in &self.z_sorted_overlay {
             let obj = &self.objects[handle];
             if !obj.visible || obj.alpha == 0 {
@@ -652,7 +652,7 @@ impl SdiRegistry {
 
     /// Draw only the overlay layer, excluding objects with given prefixes.
     pub fn draw_overlay_excluding_prefixes(
-        &self,
+        &mut self,
         backend: &mut dyn SdiBackend,
         prefixes: &[&str],
     ) -> Result<()> {
@@ -671,10 +671,11 @@ impl SdiRegistry {
     }
 
     /// Draw only the overlay layer, keeping objects for which `keep` returns true.
-    pub fn draw_overlay_filtered<F>(&self, backend: &mut dyn SdiBackend, keep: F) -> Result<()>
+    pub fn draw_overlay_filtered<F>(&mut self, backend: &mut dyn SdiBackend, keep: F) -> Result<()>
     where
         F: Fn(&str) -> bool,
     {
+        self.ensure_z_sorted();
         self.draw_layer_filtered(&self.z_sorted_overlay, backend, &keep)
     }
 
@@ -705,6 +706,9 @@ impl SdiRegistry {
     /// 2. Fill: gradient+radius → gradient → rounded → flat (existing)
     /// 3. Stroke (if `stroke_width` set)
     /// 4. Text (if present)
+    ///
+    /// The object's `alpha` scales every one of these (and a texture's
+    /// tint), so a fading object fades as a whole -- including its label.
     fn draw_object(obj: &SdiObject, backend: &mut dyn SdiBackend) -> Result<()> {
         // Textured object -- blit the texture. A non-opaque `alpha` goes
         // through the tinted path so textures can fade/pulse (backends
@@ -738,26 +742,16 @@ impl SdiRegistry {
                 if let Some(sc) = obj.shadow_color {
                     shadow = shadow.with_color(sc);
                 }
+                shadow = shadow.with_opacity(obj.alpha);
                 shadow.draw(backend, obj.x, obj.y, obj.w, obj.h, radius)?;
             }
 
             // 2. Fill: choose the best primitive.
-            let a = ((obj.color.a as u16) * (obj.alpha as u16) / 255) as u8;
-            let color = Color::rgba(obj.color.r, obj.color.g, obj.color.b, a);
+            let color = fade(obj.color, obj.alpha);
 
             if let (Some(gt), Some(gb)) = (obj.gradient_top, obj.gradient_bottom) {
-                let top = Color::rgba(
-                    gt.r,
-                    gt.g,
-                    gt.b,
-                    ((gt.a as u16) * (obj.alpha as u16) / 255) as u8,
-                );
-                let bot = Color::rgba(
-                    gb.r,
-                    gb.g,
-                    gb.b,
-                    ((gb.a as u16) * (obj.alpha as u16) / 255) as u8,
-                );
+                let top = fade(gt, obj.alpha);
+                let bot = fade(gb, obj.alpha);
                 let gradient = oasis_types::backend::GradientStyle::Vertical { top, bottom: bot };
                 if radius > 0 {
                     backend.fill_rounded_rect_gradient(
@@ -776,7 +770,10 @@ impl SdiRegistry {
             if let Some(sw) = obj.stroke_width
                 && sw > 0
             {
-                let sc = obj.stroke_color.unwrap_or(Color::rgba(255, 255, 255, 128));
+                let sc = fade(
+                    obj.stroke_color.unwrap_or(Color::rgba(255, 255, 255, 128)),
+                    obj.alpha,
+                );
                 if radius > 0 {
                     backend.stroke_rounded_rect(obj.x, obj.y, obj.w, obj.h, radius, sw, sc)?;
                 } else {
@@ -788,10 +785,14 @@ impl SdiRegistry {
         // 4. Text on top (with optional shadow pass).
         if let Some(ref text) = obj.text {
             if let Some((dx, dy)) = obj.text_shadow_offset {
-                let shadow_color = obj.text_shadow_color.unwrap_or(Color::rgba(0, 0, 0, 128));
+                let shadow_color = fade(
+                    obj.text_shadow_color.unwrap_or(Color::rgba(0, 0, 0, 128)),
+                    obj.alpha,
+                );
                 backend.draw_text(text, obj.x + dx, obj.y + dy, obj.font_size, shadow_color)?;
             }
-            backend.draw_text(text, obj.x, obj.y, obj.font_size, obj.text_color)?;
+            let text_color = fade(obj.text_color, obj.alpha);
+            backend.draw_text(text, obj.x, obj.y, obj.font_size, text_color)?;
         }
 
         Ok(())
@@ -840,6 +841,18 @@ struct ThemeEntry {
     shadow_color: Option<String>,
 }
 
+/// The error for a missing object name.
+fn not_found(name: &str) -> OasisError {
+    OasisError::Sdi(SdiError::NotFound {
+        name: name.to_owned(),
+    })
+}
+
+/// Scale `c`'s alpha by an object-level `alpha` (255 = unchanged).
+fn fade(c: Color, alpha: u8) -> Color {
+    c.with_alpha(((c.a as u16) * (alpha as u16) / 255) as u8)
+}
+
 /// Parse a color string like "#RRGGBB" or "#RRGGBBAA".
 fn parse_color(s: &str) -> Option<Color> {
     oasis_types::color::parse_hex_color(s)
@@ -854,7 +867,8 @@ impl Default for SdiRegistry {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use oasis_types::backend::{SdiCore, TextureId};
+    use oasis_test_backend::{DrawCommand, RecordingBackend};
+    use oasis_types::backend::TextureId;
 
     #[test]
     fn create_and_get() {
@@ -871,8 +885,18 @@ mod tests {
 
     #[test]
     fn get_nonexistent_returns_error() {
-        let reg = SdiRegistry::new();
-        assert!(reg.get("nope").is_err());
+        let mut reg = SdiRegistry::new();
+        for err in [
+            reg.get("nope").map(|_| ()).unwrap_err(),
+            reg.get_mut("nope").map(|_| ()).unwrap_err(),
+            reg.destroy("nope").unwrap_err(),
+        ] {
+            assert!(
+                matches!(&err, OasisError::Sdi(SdiError::NotFound { name }) if name == "nope"),
+                "typed NotFound expected: {err:?}"
+            );
+            assert_eq!(err.to_string(), "SDI error: object not found: nope");
+        }
     }
 
     #[test]
@@ -1309,7 +1333,7 @@ font_size = 16
         let mut reg = SdiRegistry::new();
         reg.create("img");
         reg.clear_scene_dirty();
-        let (mut backend, _calls) = RecordingBackend::new();
+        let mut backend = RecordingBackend::default();
         reg.load_image("img", 2, 2, &[0u8; 16], &mut backend)
             .unwrap();
         assert!(reg.is_scene_dirty());
@@ -1322,7 +1346,7 @@ font_size = 16
         obj.w = 4;
         obj.h = 4;
         reg.clear_scene_dirty();
-        let (mut backend, _calls) = RecordingBackend::new();
+        let mut backend = RecordingBackend::default();
         reg.draw(&mut backend).unwrap();
         assert!(
             !reg.is_scene_dirty(),
@@ -1411,118 +1435,68 @@ font_size = 16
         );
     }
 
+    // -- Overlay z-order and object alpha --
+
+    #[test]
+    fn overlay_layer_resorts_after_create_without_base_pass() {
+        let mut reg = SdiRegistry::new();
+        for name in ["a", "b"] {
+            let o = reg.create(name);
+            o.overlay = true;
+            o.text = Some(name.into());
+        }
+        let mut log = RecordingBackend::default();
+        reg.draw(&mut log).unwrap();
+        // Create and destroy overlay objects, then draw only the overlay:
+        // it must not walk the stale handle list (wrong objects or an
+        // out-of-bounds panic after the slab shrank).
+        reg.destroy("a").unwrap();
+        let o = reg.create("c");
+        o.overlay = true;
+        o.text = Some("c".into());
+        let mut log = RecordingBackend::default();
+        reg.draw_overlay_layer(&mut log).unwrap();
+        let texts = log.texts();
+        assert_eq!(texts, ["b", "c"]);
+
+        reg.destroy("b").unwrap();
+        reg.destroy("c").unwrap();
+        let mut log = RecordingBackend::default();
+        reg.draw_overlay_filtered(&mut log, |_| true).unwrap();
+        assert_eq!(log.fill_rect_count() + log.draw_text_count(), 0);
+    }
+
+    #[test]
+    fn object_alpha_fades_text_stroke_and_fill_together() {
+        let mut reg = SdiRegistry::new();
+        let o = reg.create("win.title");
+        o.w = 20;
+        o.h = 10;
+        o.color = Color::rgba(10, 20, 30, 255);
+        o.stroke_width = Some(1);
+        o.stroke_color = Some(Color::rgba(1, 2, 3, 200));
+        o.text = Some("Title".into());
+        o.text_color = Color::rgba(250, 250, 250, 255);
+        o.text_shadow_offset = Some((1, 1));
+        o.text_shadow_color = Some(Color::rgba(0, 0, 0, 100));
+        o.alpha = 128;
+        let mut log = RecordingBackend::default();
+        reg.draw(&mut log).unwrap();
+
+        let fills = log.fill_colors();
+        assert_eq!(fills[0], Color::rgba(10, 20, 30, 128), "fill");
+        assert!(
+            fills[1..].iter().all(|&c| c == Color::rgba(1, 2, 3, 100)),
+            "stroke: {fills:?}"
+        );
+        let texts = log.text_colors();
+        assert_eq!(
+            texts,
+            [Color::rgba(0, 0, 0, 50), Color::rgba(250, 250, 250, 128)]
+        );
+    }
+
     // -- Draw pipeline tests using a recording backend --
-
-    use std::cell::RefCell;
-    use std::rc::Rc;
-
-    /// Recording backend that tracks all draw calls for verification.
-    struct RecordingBackend {
-        calls: Rc<RefCell<Vec<DrawCall>>>,
-    }
-
-    #[derive(Debug, Clone)]
-    #[allow(dead_code)]
-    enum DrawCall {
-        Clear(Color),
-        FillRect {
-            x: i32,
-            y: i32,
-            w: u32,
-            h: u32,
-        },
-        DrawText {
-            text: String,
-            x: i32,
-            y: i32,
-            font_size: u16,
-        },
-        Blit {
-            tex: TextureId,
-        },
-    }
-
-    impl RecordingBackend {
-        fn new() -> (Self, Rc<RefCell<Vec<DrawCall>>>) {
-            let calls = Rc::new(RefCell::new(Vec::new()));
-            (
-                Self {
-                    calls: Rc::clone(&calls),
-                },
-                calls,
-            )
-        }
-    }
-
-    impl SdiCore for RecordingBackend {
-        fn init(&mut self, _w: u32, _h: u32) -> Result<()> {
-            Ok(())
-        }
-        fn clear(&mut self, color: Color) -> Result<()> {
-            self.calls.borrow_mut().push(DrawCall::Clear(color));
-            Ok(())
-        }
-        fn blit(&mut self, tex: TextureId, _x: i32, _y: i32, _w: u32, _h: u32) -> Result<()> {
-            self.calls.borrow_mut().push(DrawCall::Blit { tex });
-            Ok(())
-        }
-        fn fill_rect(&mut self, x: i32, y: i32, w: u32, h: u32, _color: Color) -> Result<()> {
-            self.calls
-                .borrow_mut()
-                .push(DrawCall::FillRect { x, y, w, h });
-            Ok(())
-        }
-        fn draw_text(
-            &mut self,
-            text: &str,
-            x: i32,
-            y: i32,
-            font_size: u16,
-            _color: Color,
-        ) -> Result<()> {
-            self.calls.borrow_mut().push(DrawCall::DrawText {
-                text: text.to_string(),
-                x,
-                y,
-                font_size,
-            });
-            Ok(())
-        }
-        fn swap_buffers(&mut self) -> Result<()> {
-            Ok(())
-        }
-        fn load_texture(&mut self, _w: u32, _h: u32, _data: &[u8]) -> Result<TextureId> {
-            Ok(TextureId(0))
-        }
-        fn destroy_texture(&mut self, _tex: TextureId) -> Result<()> {
-            Ok(())
-        }
-        fn set_clip_rect(&mut self, _x: i32, _y: i32, _w: u32, _h: u32) -> Result<()> {
-            Ok(())
-        }
-        fn reset_clip_rect(&mut self) -> Result<()> {
-            Ok(())
-        }
-        fn measure_text(&self, text: &str, font_size: u16) -> u32 {
-            text.len() as u32 * (font_size as u32 * 6 / 10).max(1)
-        }
-        fn read_pixels(&self, _x: i32, _y: i32, w: u32, h: u32) -> Result<Vec<u8>> {
-            Ok(vec![0u8; (w * h * 4) as usize])
-        }
-        fn shutdown(&mut self) -> Result<()> {
-            Ok(())
-        }
-    }
-
-    impl oasis_types::backend::SdiShapes for RecordingBackend {}
-    impl oasis_types::backend::SdiGradients for RecordingBackend {}
-    impl oasis_types::backend::SdiAlpha for RecordingBackend {}
-    impl oasis_types::backend::SdiText for RecordingBackend {}
-    impl oasis_types::backend::SdiTextures for RecordingBackend {}
-    impl oasis_types::backend::SdiClipTransform for RecordingBackend {}
-    impl oasis_types::backend::SdiVector for RecordingBackend {}
-    impl oasis_types::backend::SdiBatch for RecordingBackend {}
-    impl oasis_types::backend::SdiRenderTarget for RecordingBackend {}
 
     #[test]
     fn draw_dispatches_fill_rect_for_colored_objects() {
@@ -1534,18 +1508,19 @@ font_size = 16
         obj.h = 50;
         obj.color = Color::rgb(255, 0, 0);
 
-        let (mut backend, calls) = RecordingBackend::new();
+        let mut backend = RecordingBackend::default();
         reg.draw(&mut backend).unwrap();
 
-        let calls = calls.borrow();
+        let calls = backend.commands();
         assert!(
             calls.iter().any(|c| matches!(
                 c,
-                DrawCall::FillRect {
+                DrawCommand::FillRect {
                     x: 10,
                     y: 20,
                     w: 100,
-                    h: 50
+                    h: 50,
+                    ..
                 }
             )),
             "expected fill_rect call for colored object"
@@ -1560,16 +1535,16 @@ font_size = 16
         obj.font_size = 12;
         obj.text_color = Color::WHITE;
 
-        let (mut backend, calls) = RecordingBackend::new();
+        let mut backend = RecordingBackend::default();
         reg.draw(&mut backend).unwrap();
 
-        let calls = calls.borrow();
+        let calls = backend.commands();
         let text_calls: Vec<_> = calls
             .iter()
-            .filter(|c| matches!(c, DrawCall::DrawText { .. }))
+            .filter(|c| matches!(c, DrawCommand::DrawText { .. }))
             .collect();
         assert_eq!(text_calls.len(), 1, "expected exactly one draw_text call");
-        if let DrawCall::DrawText { text, .. } = &text_calls[0] {
+        if let DrawCommand::DrawText { text, .. } = &text_calls[0] {
             assert_eq!(text, "Hello World");
         }
     }
@@ -1581,10 +1556,10 @@ font_size = 16
         obj.text = Some("invisible".to_string());
         obj.visible = false;
 
-        let (mut backend, calls) = RecordingBackend::new();
+        let mut backend = RecordingBackend::default();
         reg.draw(&mut backend).unwrap();
 
-        let calls = calls.borrow();
+        let calls = backend.commands();
         assert!(
             calls.is_empty(),
             "invisible object should not produce any draw calls"
@@ -1598,10 +1573,10 @@ font_size = 16
         obj.text = Some("ghost".to_string());
         obj.alpha = 0;
 
-        let (mut backend, calls) = RecordingBackend::new();
+        let mut backend = RecordingBackend::default();
         reg.draw(&mut backend).unwrap();
 
-        let calls = calls.borrow();
+        let calls = backend.commands();
         assert!(
             calls.is_empty(),
             "zero-alpha object should not produce any draw calls"
@@ -1616,17 +1591,21 @@ font_size = 16
         obj.h = 0;
         obj.text = Some("just text".to_string());
 
-        let (mut backend, calls) = RecordingBackend::new();
+        let mut backend = RecordingBackend::default();
         reg.draw(&mut backend).unwrap();
 
-        let calls = calls.borrow();
+        let calls = backend.commands();
         // Should have draw_text but NOT fill_rect.
         assert!(
-            calls.iter().any(|c| matches!(c, DrawCall::DrawText { .. })),
+            calls
+                .iter()
+                .any(|c| matches!(c, DrawCommand::DrawText { .. })),
             "text-only object should call draw_text"
         );
         assert!(
-            !calls.iter().any(|c| matches!(c, DrawCall::FillRect { .. })),
+            !calls
+                .iter()
+                .any(|c| matches!(c, DrawCommand::FillRect { .. })),
             "text-only object should NOT call fill_rect"
         );
     }
@@ -1644,19 +1623,21 @@ font_size = 16
         obj.text_color = Color::WHITE;
         obj.font_size = 12;
 
-        let (mut backend, calls) = RecordingBackend::new();
+        let mut backend = RecordingBackend::default();
         reg.draw(&mut backend).unwrap();
 
-        let calls = calls.borrow();
+        let calls = backend.commands();
         // Should have BOTH fill_rect and draw_text.
         assert!(
-            calls.iter().any(|c| matches!(c, DrawCall::FillRect { .. })),
+            calls
+                .iter()
+                .any(|c| matches!(c, DrawCommand::FillRect { .. })),
             "button should have fill_rect"
         );
         assert!(
             calls
                 .iter()
-                .any(|c| matches!(c, DrawCall::DrawText { text, .. } if text == "Click")),
+                .any(|c| matches!(c, DrawCommand::DrawText { text, .. } if text == "Click")),
             "button should have draw_text with 'Click'"
         );
     }
@@ -1676,14 +1657,14 @@ font_size = 16
         obj.z = 10;
         obj.color = Color::rgb(0, 255, 0);
 
-        let (mut backend, calls) = RecordingBackend::new();
+        let mut backend = RecordingBackend::default();
         reg.draw(&mut backend).unwrap();
 
-        let calls = calls.borrow();
+        let calls = backend.commands();
         // The first fill_rect should be for "back" (lower z), second for "front".
         let rects: Vec<_> = calls
             .iter()
-            .filter(|c| matches!(c, DrawCall::FillRect { .. }))
+            .filter(|c| matches!(c, DrawCommand::FillRect { .. }))
             .collect();
         assert_eq!(rects.len(), 2);
     }
@@ -1697,13 +1678,13 @@ font_size = 16
             obj.y = i * 16;
         }
 
-        let (mut backend, calls) = RecordingBackend::new();
+        let mut backend = RecordingBackend::default();
         reg.draw(&mut backend).unwrap();
 
-        let calls = calls.borrow();
+        let calls = backend.commands();
         let text_calls: Vec<_> = calls
             .iter()
-            .filter(|c| matches!(c, DrawCall::DrawText { .. }))
+            .filter(|c| matches!(c, DrawCommand::DrawText { .. }))
             .collect();
         assert_eq!(text_calls.len(), 5, "should render all 5 text objects");
     }

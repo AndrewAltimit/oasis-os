@@ -133,6 +133,12 @@ void oasis_destroy(OasisInstance* handle);
  *
  * delta_seconds: Time since last tick (e.g. 1.0/60.0 for 60 FPS).
  * Processes input, updates scene graph, renders to internal buffer.
+ * Rendering is skipped when nothing changed: it runs on input, at 12 FPS
+ * while a shader wallpaper or animated vector layer is showing, and at
+ * 4 FPS otherwise (to keep the clock current). Vector animations follow
+ * the accumulated delta_seconds; static background layers are baked into
+ * an offscreen buffer once. A failing render stage is logged (log crate,
+ * `warn` the first time) and the other stages still draw.
  */
 void oasis_tick(OasisInstance* handle, float delta_seconds);
 
@@ -282,15 +288,12 @@ void oasis_add_vfs_file(
  * Callbacks
  * ---------------------------------------------------------------- */
 
-/* Callback event types. Currently fired: OASIS_CB_COMMAND_EXEC (detail =
- * the command line, from oasis_send_command) and OASIS_CB_APP_LAUNCH
- * (detail = app title). The other codes are reserved and never fire yet. */
-#define OASIS_CB_FILE_ACCESS   1
+/* Callback event types: OASIS_CB_COMMAND_EXEC (detail = the command line,
+ * from oasis_send_command) and OASIS_CB_APP_LAUNCH (detail = app title).
+ * Codes 1, 4, 5 and 6 were never-fired placeholders and are retired;
+ * registering them (or any other code) is ignored with a logged warning. */
 #define OASIS_CB_COMMAND_EXEC  2
 #define OASIS_CB_APP_LAUNCH    3
-#define OASIS_CB_LOGIN         4
-#define OASIS_CB_NETWORK_SEND  5
-#define OASIS_CB_PLUGIN_LOAD   6
 
 typedef void (*OasisCallback)(uint32_t event, const char* detail);
 

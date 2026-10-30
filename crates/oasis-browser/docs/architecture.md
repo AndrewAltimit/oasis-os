@@ -58,33 +58,55 @@ The pipeline is intentionally one-shot: a navigation kicks off
 tree. Incremental updates after that point happen at the cascade and
 layout level — the document itself is replaced wholesale.
 
-## Top-level modules
+## Crates and top-level modules
+
+The engine is four crates. The three parsers/loaders below have no
+dependency on layout or paint, so they build and test on their own
+(`cargo test -p oasis-css` compiles neither layout nor QuickJS):
 
 ```text
-src/
+oasis-html   tokenizer, tree builder, arena DOM, embedder Hook<F>   (deps: log)
+   ↑
+oasis-css    CSS tokenizer, parser, cascade, computed values        (deps: oasis-html, oasis-types)
+   ↑
+oasis-browser  layout, paint, widget, forms, js_dom, gemini, image, font, svg, canvas
+   ↓
+oasis-http   Url, HTTP/1.1 + HTTP/2, Gemini framing, cookies, cache, CSP, IO thread
+             (deps: oasis-net, oasis-vfs, oasis-types; feature psp)
+```
+
+`oasis-browser` keeps the old module paths: `src/lib.rs` aliases the
+crates as private `html` / `css` modules (`pub(crate) use oasis_html as
+html;`) and re-exports `pub use oasis_http as loader;`, so
+`crate::css::cascade::...` inside the crate and
+`oasis_browser::loader::...` / `oasis_browser::internals::...` for
+embedders are unchanged. Items the browser needs from the other crates
+are `pub`; their APIs are engine-internal and may change without notice.
+
+```text
+crates/oasis-browser/src/
 ├── lib.rs              BrowserWidget + the public surface
-├── widget_paint.rs     paint(): display list record + replay
-├── widget_input.rs     handle_input(): event routing
-├── widget_pipeline.rs  navigate -> parse -> cascade -> layout glue
-├── widget_images.rs    async image decode plumbing
-├── config.rs           viewport, zoom, cache caps, feature toggles
+├── widget/
+│   ├── paint.rs        paint(): display list record (cached) + replay
+│   ├── input.rs        handle_input(): event routing
+│   ├── pipeline.rs     navigate -> parse -> cascade -> layout glue
+│   └── images.rs       async image decode plumbing
+├── config.rs           viewport, zoom, cache + image caps, feature toggles
 │
-├── html/               HTML5 tokenizer, tree builder, arena DOM
-├── css/                CSS tokenizer, parser, cascade, values, shorthand
-├── layout/             block / inline / flex / grid / table layout
-├── paint/              display list recording + per-item painters
+├── layout/             block / inline / flex / grid / table layout,
+│                       @container lookup (container_query.rs)
+├── paint/              display list record / optimize / replay (the only renderer)
+├── transform.rs        2D / 3D transform matrices for layout + paint
 ├── nav.rs              navigation history (back / forward stacks)
-├── loader/             resource cache, IO thread, HTTP, Gemini, VFS, CSP
 ├── forms/              <input>, <textarea>, <select>, validation, submission
-├── image.rs            format detection + decode dispatch
+├── image.rs            format detection, decode + downscale to ImageLimits
 ├── image_atlas.rs      texture atlas packing for many small images
-├── gemini/             Gemini protocol parser + .gmi → HTML rasteriser
+├── gemini/             .gmi parser + .gmi → layout renderer (protocol in oasis-http)
 ├── js_dom/             QuickJS DOM bindings + JS bootstrap (feature = "javascript")
-├── plugin.rs           per-URL-scheme plugin trait
 └── reader.rs           reader-mode extraction
 ```
 
-The `widget_*.rs` files exist purely to keep `lib.rs` readable — they
+The `widget/*.rs` files exist purely to keep `lib.rs` readable — they
 contain `impl BrowserWidget` blocks that implement different aspects of
 the same struct. Treat them as one logical unit.
 
@@ -104,10 +126,10 @@ three methods above, and read `widget.title()`, `widget.url()`, and
 ## Threads
 
 There is exactly **one** background thread per `BrowserWidget`: the
-`IoThread` in `loader/io_thread.rs`. It processes `IoWork` items
+`IoThread` in `oasis-http/src/io_thread.rs`. It processes `IoWork` items
 sequentially (HTTP fetch, Gemini fetch, TLS handshake, response decode)
-and posts `IoResult` back through a channel. Image decoding spawns
-short-lived worker threads from a small pool — see `widget_images.rs`.
+and posts `IoResult` back through a channel. Image decoding runs on a
+second, lazily spawned `img-decode` thread — see `widget/images.rs`.
 
 Everything else runs on the main thread. The JavaScript engine is single
 threaded by design.

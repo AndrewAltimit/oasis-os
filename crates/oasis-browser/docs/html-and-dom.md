@@ -14,9 +14,9 @@ html::tree_builder ──▶ html::dom::Document
 
 The two stages live in:
 
-- `src/html/tokenizer/` — character-level tokenizer
-- `src/html/tree_builder/` — token-level tree construction
-- `src/html/dom.rs` — the arena-backed DOM data model
+- `crates/oasis-html/src/tokenizer/` — character-level tokenizer
+- `crates/oasis-html/src/tree_builder/` — token-level tree construction
+- `crates/oasis-html/src/dom.rs` — the arena-backed DOM data model
 
 The tree builder is loosely modelled on the WHATWG HTML5 parser
 algorithm: insertion modes, the active formatting elements list, foster
@@ -94,9 +94,10 @@ tables.
 The DOM is mutated in two situations:
 
 1. **During parsing** — the tree builder appends nodes as tokens arrive.
-2. **From JavaScript** — `js_dom.rs` mutates the DOM through
-   `Document::create_element`, `append_child`, `set_attribute`,
-   `set_text_content`, `replace_child`, etc.
+2. **From JavaScript** — the `js_dom/` bindings mutate the DOM through
+   `Document::add_node`, `append_child`, `detach_node`, `free_subtree`
+   and `ElementData::set_attribute` (freed slots are tracked with
+   `is_freed` / `is_live`, so stale ids from JS are rejected).
 
 After any mutation the affected subtree is marked dirty. The next call
 to `relayout_if_dirty()` rebuilds layout for those subtrees only — the
@@ -116,9 +117,9 @@ DOM itself is not rebuilt.
 
 ## Tests
 
-- `src/html/tokenizer/tests.rs` — token-level edge cases (entity
+- `crates/oasis-html/src/tokenizer/tests.rs` — token-level edge cases (entity
   decoding, raw text mode, `<![CDATA[`, comment recovery).
-- `src/html/tree_builder/tests.rs` — insertion modes, foster parenting,
+- `crates/oasis-html/src/tree_builder/tests.rs` — insertion modes, foster parenting,
   malformed input, the WHATWG "deep nesting no panic" property test.
 - `tests/browser_integration.rs` — end-to-end parses (heading hierarchy,
   nested lists, tables) that double as smoke tests for the DOM.

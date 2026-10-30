@@ -1,23 +1,33 @@
 //! Plugin management commands for the terminal.
 //!
-//! Provides `plugin list`, `plugin load`, and `plugin unload` commands.
-//! These read the plugin manager state from a VFS-based status file
-//! since the command interpreter does not have direct access to the
-//! plugin manager (it lives in the app layer).
+//! Provides `plugin list`, `plugin load`, and `plugin unload`. The command
+//! interpreter has no access to the plugin manager (it lives in the host),
+//! so the commands talk to it through VFS IPC: the host publishes the
+//! plugin list at [`PLUGIN_STATUS_PATH`] and applies the
+//! [`PluginRequest`] lines queued at [`PLUGIN_REQUEST_PATH`] (the desktop
+//! shell does both every frame, see `oasis-app/src/commands.rs`).
 
 use crate::error::{OasisError, Result};
+pub use crate::ipc::{PLUGIN_REQUEST_PATH, PLUGIN_STATUS_PATH, PluginRequest};
 use crate::terminal::{Command, CommandOutput, Environment};
 
-/// Path where the plugin manager writes its status for the terminal to read.
-pub const PLUGIN_STATUS_PATH: &str = "/var/plugin/status";
-/// Path where the terminal writes plugin load/unload requests.
-pub const PLUGIN_REQUEST_PATH: &str = "/var/plugin/request";
+/// Printed when no host publishes plugin status (no plugin manager runs).
+const NO_HOST: &str = "plugin management is not available on this host";
 
-/// Manage plugins via VFS-based communication with the app layer.
-///
-/// Reads plugin status from [`PLUGIN_STATUS_PATH`] and writes
-/// load/unload requests to [`PLUGIN_REQUEST_PATH`]. The app layer
-/// polls the request path and performs the actual operations.
+const USAGE: &str = "plugin [list|load <name>|unload <name>]";
+
+/// Append `request` to [`PLUGIN_REQUEST_PATH`] (a line queue: `plugin
+/// unload a; plugin load b` in one frame keeps both).
+fn queue(env: &mut Environment<'_>, request: &PluginRequest) -> Result<()> {
+    let mut data = env.vfs.read(PLUGIN_REQUEST_PATH).unwrap_or_default();
+    if !data.is_empty() && !data.ends_with(b"\n") {
+        data.push(b'\n');
+    }
+    data.extend_from_slice(request.to_line().as_bytes());
+    env.vfs.write(PLUGIN_REQUEST_PATH, &data)
+}
+
+/// Manage plugins via VFS-based communication with the host.
 pub struct PluginCmd;
 impl Command for PluginCmd {
     fn name(&self) -> &str {
@@ -27,59 +37,56 @@ impl Command for PluginCmd {
         "Manage plugins"
     }
     fn usage(&self) -> &str {
-        "plugin [list|load <name>|unload <name>]"
+        USAGE
     }
     fn category(&self) -> &str {
         "plugin"
     }
     fn execute(&self, args: &[&str], env: &mut Environment<'_>) -> Result<CommandOutput> {
         let subcmd = args.first().copied().unwrap_or("list");
+        let status = env
+            .vfs
+            .read(PLUGIN_STATUS_PATH)
+            .ok()
+            .map(|d| String::from_utf8_lossy(&d).into_owned());
 
-        match subcmd {
+        let request = match subcmd {
             "list" => {
-                if env.vfs.exists(PLUGIN_STATUS_PATH) {
-                    let data = env.vfs.read(PLUGIN_STATUS_PATH)?;
-                    let text = String::from_utf8_lossy(&data).into_owned();
-                    if text.trim().is_empty() {
-                        Ok(CommandOutput::Text("(no plugins loaded)".to_string()))
-                    } else {
-                        Ok(CommandOutput::Text(format!("Loaded Plugins:\n{text}")))
-                    }
+                return Ok(CommandOutput::Text(match status {
+                    None => NO_HOST.to_string(),
+                    Some(text) if text.trim().is_empty() => "(no plugins)".to_string(),
+                    Some(text) => format!("Plugins:\n{}", text.trim_end()),
+                }));
+            },
+            "load" | "unload" => {
+                let name = args.get(1).copied().unwrap_or("");
+                if name.is_empty() {
+                    return Err(OasisError::Command(
+                        format!("usage: plugin {subcmd} <name>").into(),
+                    ));
+                }
+                if subcmd == "load" {
+                    PluginRequest::Load(name.to_string())
                 } else {
-                    Ok(CommandOutput::Text(
-                        "(plugin status not available)".to_string(),
-                    ))
+                    PluginRequest::Unload(name.to_string())
                 }
             },
-            "load" => {
-                let name = args.get(1).copied().unwrap_or("");
-                if name.is_empty() {
-                    return Err(OasisError::Command("usage: plugin load <name>".into()));
-                }
-                let request = format!("load {name}");
-                env.vfs.write(PLUGIN_REQUEST_PATH, request.as_bytes())?;
-                Ok(CommandOutput::Text(format!(
-                    "Plugin load request queued: {name}"
-                )))
+            _ => {
+                return Err(OasisError::Command(
+                    format!("unknown subcommand: {subcmd}\nusage: {USAGE}").into(),
+                ));
             },
-            "unload" => {
-                let name = args.get(1).copied().unwrap_or("");
-                if name.is_empty() {
-                    return Err(OasisError::Command("usage: plugin unload <name>".into()));
-                }
-                let request = format!("unload {name}");
-                env.vfs.write(PLUGIN_REQUEST_PATH, request.as_bytes())?;
-                Ok(CommandOutput::Text(format!(
-                    "Plugin unload request queued: {name}"
-                )))
-            },
-            _ => Err(OasisError::Command(
-                format!(
-                    "unknown subcommand: {subcmd}\nusage: plugin [list|load <name>|unload <name>]"
-                )
-                .into(),
-            )),
+        };
+        if status.is_none() {
+            return Ok(CommandOutput::Text(NO_HOST.to_string()));
         }
+        queue(env, &request)?;
+        // The host reports the outcome in the terminal when it applies
+        // the request (this frame).
+        Ok(CommandOutput::Text(format!(
+            "Plugin {subcmd} requested: {}",
+            args[1]
+        )))
     }
 }
 
@@ -100,6 +107,7 @@ mod tests {
         let mut vfs = MemoryVfs::new();
         vfs.mkdir("/var").unwrap();
         vfs.mkdir("/var/plugin").unwrap();
+        vfs.write(PLUGIN_STATUS_PATH, b"").unwrap();
         (reg, vfs)
     }
 
@@ -119,16 +127,30 @@ mod tests {
         reg.execute(line, &mut env)
     }
 
+    fn text(out: Result<CommandOutput>) -> String {
+        match out.unwrap() {
+            CommandOutput::Text(s) => s,
+            other => panic!("expected text, got {other:?}"),
+        }
+    }
+
+    /// Without a host plugin manager every subcommand says so instead of
+    /// queuing requests nobody reads.
     #[test]
-    fn plugin_list_no_status() {
+    fn plugin_without_host_is_honest() {
         let mut reg = CommandRegistry::new();
         register_plugin_commands(&mut reg);
         let mut vfs = MemoryVfs::new();
-        let __out = exec(&reg, &mut vfs, "plugin list").unwrap();
-        let CommandOutput::Text(s) = __out else {
-            panic!("expected text, got {__out:?}");
-        };
-        assert!(s.contains("not available"));
+        for line in [
+            "plugin list",
+            "plugin",
+            "plugin load hello",
+            "plugin unload x",
+        ] {
+            let s = text(exec(&reg, &mut vfs, line));
+            assert!(s.contains("not available"), "{line}: {s}");
+        }
+        assert!(!vfs.exists(PLUGIN_REQUEST_PATH));
     }
 
     #[test]
@@ -136,73 +158,47 @@ mod tests {
         let (reg, mut vfs) = setup();
         vfs.write(
             PLUGIN_STATUS_PATH,
-            b"  hello (1.0.0) [active]\n  clock-widget (1.0.0) [active]",
+            b"hello (1.0.0) [active] Hello\nclock-widget (1.0.0) [active] Clock\n",
         )
         .unwrap();
-        let __out = exec(&reg, &mut vfs, "plugin list").unwrap();
-        let CommandOutput::Text(s) = __out else {
-            panic!("expected text, got {__out:?}");
-        };
+        let s = text(exec(&reg, &mut vfs, "plugin list"));
+        assert!(s.starts_with("Plugins:"), "{s}");
         assert!(s.contains("hello"));
         assert!(s.contains("clock-widget"));
+        assert_eq!(
+            text(exec(&reg, &mut vfs, "plugin")),
+            s,
+            "list is the default"
+        );
     }
 
     #[test]
     fn plugin_list_empty() {
         let (reg, mut vfs) = setup();
-        vfs.write(PLUGIN_STATUS_PATH, b"").unwrap();
-        let __out = exec(&reg, &mut vfs, "plugin list").unwrap();
-        let CommandOutput::Text(s) = __out else {
-            panic!("expected text, got {__out:?}");
-        };
-        assert!(s.contains("no plugins"));
+        assert!(text(exec(&reg, &mut vfs, "plugin list")).contains("no plugins"));
     }
 
     #[test]
-    fn plugin_list_default() {
+    fn plugin_load_and_unload_queue_requests() {
         let (reg, mut vfs) = setup();
-        vfs.write(PLUGIN_STATUS_PATH, b"test (1.0) [active]")
-            .unwrap();
-        let __out = exec(&reg, &mut vfs, "plugin").unwrap();
-        let CommandOutput::Text(s) = __out else {
-            panic!("expected text, got {__out:?}");
-        };
-        assert!(s.contains("test"));
-    }
-
-    #[test]
-    fn plugin_load() {
-        let (reg, mut vfs) = setup();
-        let __out = exec(&reg, &mut vfs, "plugin load hello").unwrap();
-        let CommandOutput::Text(s) = __out else {
-            panic!("expected text, got {__out:?}");
-        };
-        assert!(s.contains("hello"));
-        let data = vfs.read(PLUGIN_REQUEST_PATH).unwrap();
-        assert_eq!(data, b"load hello");
+        let s = text(exec(&reg, &mut vfs, "plugin unload hello"));
+        assert!(s.contains("hello"), "{s}");
+        text(exec(&reg, &mut vfs, "plugin load hello"));
+        let data = String::from_utf8(vfs.read(PLUGIN_REQUEST_PATH).unwrap()).unwrap();
+        let reqs: Vec<_> = data.lines().filter_map(PluginRequest::parse).collect();
+        assert_eq!(
+            reqs,
+            [
+                PluginRequest::Unload("hello".into()),
+                PluginRequest::Load("hello".into())
+            ]
+        );
     }
 
     #[test]
     fn plugin_load_no_name() {
         let (reg, mut vfs) = setup();
         assert!(exec(&reg, &mut vfs, "plugin load").is_err());
-    }
-
-    #[test]
-    fn plugin_unload() {
-        let (reg, mut vfs) = setup();
-        let __out = exec(&reg, &mut vfs, "plugin unload hello").unwrap();
-        let CommandOutput::Text(s) = __out else {
-            panic!("expected text, got {__out:?}");
-        };
-        assert!(s.contains("hello"));
-        let data = vfs.read(PLUGIN_REQUEST_PATH).unwrap();
-        assert_eq!(data, b"unload hello");
-    }
-
-    #[test]
-    fn plugin_unload_no_name() {
-        let (reg, mut vfs) = setup();
         assert!(exec(&reg, &mut vfs, "plugin unload").is_err());
     }
 

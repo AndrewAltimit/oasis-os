@@ -47,9 +47,7 @@ pub fn load_av_modules_once_pub() {
     unsafe {
         let r1 = psp::sys::sceUtilityLoadModule(psp::sys::Module::AvCodec);
         // AvMp3 loaded in video.rs preinit_mpeg() via load_avmp3_module().
-        let msg = format!(
-            "[AV] modules: AvCodec={r1:#x} AvMp3=deferred\n",
-        );
+        let msg = format!("[AV] modules: AvCodec={r1:#x} AvMp3=deferred\n",);
         let fd = psp::sys::sceIoOpen(
             b"ms0:/PSP/GAME/OASISOS/eboot.log\0".as_ptr(),
             psp::sys::IoOpenFlags::APPEND

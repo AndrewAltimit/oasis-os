@@ -2,48 +2,107 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Anatomy of the Backend Trait System - OASIS_OS Developer's Journal</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Anatomy of the Backend Trait System — OASIS_OS Developer's Journal</title>
   <meta name="description" content="A deep architectural walkthrough of OASIS_OS's five backend traits — how 13 required methods, 39 optional accelerated primitives, and 8 extension traits enable one codebase to render across SDL3, WebAssembly, PSP hardware, and Unreal Engine 5.">
+  <link rel="canonical" href="https://andrewaltimit.github.io/oasis-os/journal/06-backend-trait-system.html">
+  <meta name="theme-color" content="#08090d">
+  <link rel="icon" href="../favicon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="../img/apple-touch-icon.png">
+  <meta property="og:type" content="article">
+  <meta property="og:site_name" content="OASIS_OS">
+  <meta property="og:title" content="Anatomy of the Backend Trait System — OASIS_OS Developer's Journal">
+  <meta property="og:description" content="A deep architectural walkthrough of OASIS_OS's five backend traits — how 13 required methods, 39 optional accelerated primitives, and 8 extension traits enable one codebase to render across SDL3, WebAssembly, PSP hardware, and Unreal Engine 5.">
+  <meta property="og:url" content="https://andrewaltimit.github.io/oasis-os/journal/06-backend-trait-system.html">
+  <meta property="og:image" content="https://andrewaltimit.github.io/oasis-os/img/og-card.png">
+  <meta property="og:image:width" content="1200">
+  <meta property="og:image:height" content="630">
+  <meta property="og:image:alt" content="OASIS_OS: one OS shell, any pixel buffer">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta property="article:published_time" content="2026-03-14">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700;800&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="../css/style.css">
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&amp;display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="../css/site.css">
+  <link rel="stylesheet" href="../css/journal.css">
 </head>
-<body>
+<body class="page-article">
 
-<nav class="site-nav">
-  <a class="nav-brand" href="../">OASIS_OS</a>
-  <button class="nav-toggle" id="nav-toggle" aria-label="Toggle navigation" aria-expanded="false">&#9776;</button>
-  <ul class="nav-links" id="nav-links">
-    <li><a href="../#platforms">Platforms</a></li>
-    <li><a href="../#architecture">Architecture</a></li>
-    <li><a href="./">Journal</a></li>
-    <li><a href="../demo/">Live Demo</a></li>
-  </ul>
-</nav>
+<a class="skip-link" href="#main">Skip to content</a>
 
-<header class="article-header">
-  <div class="container">
-    <a class="article-back" href="./">&larr; Developer's Journal</a>
-    <h1 class="article-title">Anatomy of the Backend Trait System</h1>
-    <p class="article-subtitle">
-      How five traits, 13 required methods, 39 optional primitives, and 8 extension
-      traits let one Rust codebase draw to SDL3, Canvas&nbsp;2D, PSP hardware, and
-      a software framebuffer &mdash; without a single <code>#[cfg]</code> in
-      application code.
-    </p>
-    <div class="article-meta">
-      <span>Entry 06</span>
-      <span>37 crates</span>
-      <span>architecture, traits, rendering</span>
-    </div>
+<header class="topbar" id="topbar">
+  <div class="topbar__inner wrap">
+    <a class="brand" href="../" aria-label="OASIS_OS home">
+      <span class="brand__mark" aria-hidden="true"></span>
+      <span class="brand__name">OASIS<span class="brand__us">_</span>OS</span>
+    </a>
+    <button class="nav-toggle" id="nav-toggle" type="button" aria-expanded="false" aria-controls="site-nav">
+      <span class="sr-only">Menu</span>
+      <span class="nav-toggle__bar" aria-hidden="true"></span>
+    </button>
+    <nav class="site-nav" id="site-nav" aria-label="Primary">
+      <ul>
+        <li><a href="../#platforms">Platforms</a></li>
+        <li><a href="../#skins">Skins</a></li>
+        <li><a href="../#features">Features</a></li>
+        <li><a href="../#architecture">Architecture</a></li>
+        <li><a href="../#psp">PSP</a></li>
+        <li><a href="../journal/" aria-current="page">Journal</a></li>
+        <li><a href="../#start">Build</a></li>
+      </ul>
+      <div class="site-nav__cta">
+        <a class="btn btn--ghost btn--sm" href="https://github.com/AndrewAltimit/oasis-os">GitHub</a>
+        <a class="btn btn--primary btn--sm" href="../demo/">Live demo</a>
+      </div>
+    </nav>
   </div>
 </header>
+<div class="progress" aria-hidden="true"><span id="progress-bar"></span></div>
 
-<article class="article-content">
+<main id="main">
+<article class="article">
+  <header class="article__head wrap">
+    <nav class="crumbs" aria-label="Breadcrumb">
+      <a href="./">Developer&rsquo;s journal</a><span aria-hidden="true">/</span><span>Entry 06</span>
+    </nav>
+    <h1 class="article__title">Anatomy of the Backend Trait System</h1>
+    <p class="article__lede">How five traits, 13 required methods, 39 optional primitives, and 8 extension
+      traits let one Rust codebase draw to SDL3, Canvas&nbsp;2D, PSP hardware, and
+      a software framebuffer &mdash; without a single <code>#[cfg]</code> in
+      application code.</p>
+    <dl class="article__meta">
+      <div><dt>Entry</dt><dd>06</dd></div>
+      <div><dt>Published</dt><dd><time datetime="2026-03-14">Mar 14, 2026</time></dd></div>
+      <div><dt>Reading time</dt><dd>8 min</dd></div>
+    </dl>
+    <ul class="article__tags" aria-label="Tags"><li>architecture</li><li>traits</li><li>rendering</li></ul>
+  </header>
 
-  <h2>The Central Idea</h2>
+  <div class="article__layout wrap">
+    <nav class="toc" aria-label="On this page">
+      <p class="toc__title">On this page</p>
+      <ol>
+        <li><a href="#the-central-idea">The Central Idea</a></li>
+        <li><a href="#trait-architecture-overview">Trait Architecture Overview</a></li>
+        <li><a href="#sdicore-the-13-methods-every-backend-must-implement">SdiCore: The 13 Methods Every Backend Must Implement</a></li>
+        <li><a href="#sdibackend-progressive-capability-via-extension-traits">SdiBackend: Progressive Capability via Extension Traits</a></li>
+        <li><a href="#how-a-frame-renders">How a Frame Renders</a></li>
+        <li><a href="#the-sdi-registry-named-object-scene-graph">The SDI Registry: Named Object Scene Graph</a></li>
+        <li><a href="#how-each-backend-implements-the-traits">How Each Backend Implements the Traits</a></li>
+        <li><a href="#the-compilation-firewall">The Compilation Firewall</a></li>
+        <li><a href="#input-network-and-audio-traits">Input, Network, and Audio Traits</a></li>
+        <li><a href="#implementing-a-new-backend">Implementing a New Backend</a></li>
+        <li><a href="#numbers">Numbers</a></li>
+      </ol>
+    </nav>
+    <div class="prose">
+<aside class="callout update" role="note">
+    <div class="callout-title">Update (Oct 2026)</div>
+    <p>The counts in this entry are from March 2026. <code>SdiBackend</code> is now a marker trait over <strong>nine</strong> extension traits with <strong>53</strong> default methods: <code>SdiRenderTarget</code> (offscreen render targets) was added, and the <code>SdiBatch</code> hooks are <code>begin_batch</code> / <code>flush_batch</code>. The defaults became span-exact &mdash; shapes emit <code>fill_rect</code> spans from shared generators, so they cover exactly the pixels the SDL and UE5 backends draw &mdash; and a mock gets all nine extensions from one <code>impl_sdi_defaults!</code> line. Elsewhere: 29 widgets, ~95 terminal commands plus 20 shell builtins, 17 skins and 15 apps.</p>
+  </aside>
+
+
+  <h2 id="the-central-idea"><a class="anchor" href="#the-central-idea" aria-hidden="true" tabindex="-1">#</a>The Central Idea</h2>
 
   <p>
     Every pixel OASIS_OS draws, every button press it reads, every audio sample it
@@ -61,7 +120,7 @@
     as a dynamic texture.
   </p>
 
-  <h2>Trait Architecture Overview</h2>
+  <h2 id="trait-architecture-overview"><a class="anchor" href="#trait-architecture-overview" aria-hidden="true" tabindex="-1">#</a>Trait Architecture Overview</h2>
 
   <div class="diagram">
     <pre><code><span class="hl-bright">Five Backend Traits</span>
@@ -84,7 +143,7 @@
     <div class="diagram-caption">The complete platform abstraction boundary lives in oasis-types/src/backend/</div>
   </div>
 
-  <h2>SdiCore: The 13 Methods Every Backend Must Implement</h2>
+  <h2 id="sdicore-the-13-methods-every-backend-must-implement"><a class="anchor" href="#sdicore-the-13-methods-every-backend-must-implement" aria-hidden="true" tabindex="-1">#</a>SdiCore: The 13 Methods Every Backend Must Implement</h2>
 
   <p>
     <code>SdiCore</code> is the rendering contract. If you can implement these 13 methods,
@@ -131,7 +190,7 @@
     renders text. That's the entire rendering vocabulary at the core level.
   </p>
 
-  <h2>SdiBackend: Progressive Capability via Extension Traits</h2>
+  <h2 id="sdibackend-progressive-capability-via-extension-traits"><a class="anchor" href="#sdibackend-progressive-capability-via-extension-traits" aria-hidden="true" tabindex="-1">#</a>SdiBackend: Progressive Capability via Extension Traits</h2>
 
   <p>
     <code>SdiBackend</code> extends <code>SdiCore</code> with 39 optional methods.
@@ -166,7 +225,7 @@ Canvas = browser Canvas 2D API, &mdash; = uses default (no-op or software)</span
     <div class="diagram-caption">Each backend implements what its platform accelerates, falls back for the rest</div>
   </div>
 
-  <h2>How a Frame Renders</h2>
+  <h2 id="how-a-frame-renders"><a class="anchor" href="#how-a-frame-renders" aria-hidden="true" tabindex="-1">#</a>How a Frame Renders</h2>
 
   <p>
     Here's the call flow for a single frame, from the backend's main loop through
@@ -193,15 +252,15 @@ flowchart TD
     DRAW --> OVERLAY
     OVERLAY --> SWAP
 
-    style LOOP fill:#1a1a2e,stroke:#00d4aa,color:#e0e0e0
-    style TICK fill:#1a1a2e,stroke:#7c3aed,color:#e0e0e0
-    style DRAW fill:#1a1a2e,stroke:#7c3aed,color:#e0e0e0
-    style OBJ fill:#1a1a2e,stroke:#00d4aa,color:#e0e0e0
-    style SWAP fill:#1a1a2e,stroke:#00d4aa,color:#e0e0e0
+    style LOOP fill:#11141c,stroke:#7cc7ff,color:#e8eaf0
+    style TICK fill:#11141c,stroke:#ff8a3d,color:#e8eaf0
+    style DRAW fill:#11141c,stroke:#ff8a3d,color:#e8eaf0
+    style OBJ fill:#11141c,stroke:#7cc7ff,color:#e8eaf0
+    style SWAP fill:#11141c,stroke:#7cc7ff,color:#e8eaf0
   </pre>
   <div class="diagram-caption">The SDI registry mediates between application state and backend draw calls</div>
 
-  <h2>The SDI Registry: Named Object Scene Graph</h2>
+  <h2 id="the-sdi-registry-named-object-scene-graph"><a class="anchor" href="#the-sdi-registry-named-object-scene-graph" aria-hidden="true" tabindex="-1">#</a>The SDI Registry: Named Object Scene Graph</h2>
 
   <p>
     Between the backend traits and application code sits the
@@ -250,7 +309,7 @@ SdiObject {
     layer when state changes.
   </p>
 
-  <h2>How Each Backend Implements the Traits</h2>
+  <h2 id="how-each-backend-implements-the-traits"><a class="anchor" href="#how-each-backend-implements-the-traits" aria-hidden="true" tabindex="-1">#</a>How Each Backend Implements the Traits</h2>
 
   <h3>SDL3 Desktop</h3>
   <p>
@@ -290,7 +349,7 @@ SdiObject {
     <code>PixelSink</code> trait from <code>oasis-types::rasterize</code>.
   </p>
 
-  <h2>The Compilation Firewall</h2>
+  <h2 id="the-compilation-firewall"><a class="anchor" href="#the-compilation-firewall" aria-hidden="true" tabindex="-1">#</a>The Compilation Firewall</h2>
 
   <pre class="mermaid">
 flowchart TD
@@ -307,15 +366,15 @@ flowchart TD
     TYPES --> UI & BROWSER & TERMINAL & CORE
     UI & BROWSER & TERMINAL & CORE --> SDL & WASM & UE5 & PSP
 
-    style TYPES fill:#1a1a2e,stroke:#00d4aa,color:#e0e0e0
-    style UI fill:#1a1a2e,stroke:#00d4aa,color:#e0e0e0
-    style BROWSER fill:#1a1a2e,stroke:#00d4aa,color:#e0e0e0
-    style TERMINAL fill:#1a1a2e,stroke:#00d4aa,color:#e0e0e0
-    style CORE fill:#1a1a2e,stroke:#00d4aa,color:#e0e0e0
-    style SDL fill:#1a1a2e,stroke:#a78bfa,color:#e0e0e0
-    style WASM fill:#1a1a2e,stroke:#a78bfa,color:#e0e0e0
-    style UE5 fill:#1a1a2e,stroke:#a78bfa,color:#e0e0e0
-    style PSP fill:#1a1a2e,stroke:#a78bfa,color:#e0e0e0
+    style TYPES fill:#11141c,stroke:#7cc7ff,color:#e8eaf0
+    style UI fill:#11141c,stroke:#7cc7ff,color:#e8eaf0
+    style BROWSER fill:#11141c,stroke:#7cc7ff,color:#e8eaf0
+    style TERMINAL fill:#11141c,stroke:#7cc7ff,color:#e8eaf0
+    style CORE fill:#11141c,stroke:#7cc7ff,color:#e8eaf0
+    style SDL fill:#11141c,stroke:#b8e45a,color:#e8eaf0
+    style WASM fill:#11141c,stroke:#b8e45a,color:#e8eaf0
+    style UE5 fill:#11141c,stroke:#b8e45a,color:#e8eaf0
+    style PSP fill:#11141c,stroke:#b8e45a,color:#e8eaf0
   </pre>
   <div class="diagram-caption">Backends depend on core. Core never depends on backends.</div>
 
@@ -339,7 +398,13 @@ flowchart TD
     </p>
   </div>
 
-  <h2>Input, Network, and Audio Traits</h2>
+  <aside class="callout update" role="note">
+    <div class="callout-title">Update (Oct 2026)</div>
+    <p>Those helpers have been consolidated into scanline span generators in <code>oasis_types::rasterize</code> &mdash; circles, rings, rounded rects, thick lines and even-odd polygons &mdash; plus <code>PixelSink</code> / <code>rasterize_triangle</code>. <code>rasterize_circle()</code>, <code>perpendicular_normal_f32()</code> and <code>radial_extent()</code> no longer exist; the default shape methods are built on the span generators, so PSP and every mock draw the same pixels as SDL and UE5.</p>
+  </aside>
+
+
+  <h2 id="input-network-and-audio-traits"><a class="anchor" href="#input-network-and-audio-traits" aria-hidden="true" tabindex="-1">#</a>Input, Network, and Audio Traits</h2>
 
   <h3>InputBackend</h3>
   <p>
@@ -370,13 +435,13 @@ flowchart TD
     with <code>psp::audio::AudioChannel</code>.
   </p>
 
-  <h2>Implementing a New Backend</h2>
+  <h2 id="implementing-a-new-backend"><a class="anchor" href="#implementing-a-new-backend" aria-hidden="true" tabindex="-1">#</a>Implementing a New Backend</h2>
 
   <p>
     Here's what it takes to bring OASIS_OS to a new platform:
   </p>
 
-  <table>
+  <div class="table-wrap"><table>
     <thead>
       <tr><th>Step</th><th>What</th><th>Effort</th></tr>
     </thead>
@@ -389,16 +454,16 @@ flowchart TD
       <tr><td>6</td><td>Optional: add <code>AudioBackend</code> for music/radio</td><td>~150 LOC</td></tr>
       <tr><td>7</td><td>Optional: override <code>SdiBackend</code> extensions for HW accel</td><td>varies</td></tr>
     </tbody>
-  </table>
+  </table></div>
 
   <p>
     The UE5 backend is the proof: its <code>SdiCore</code> implementation is ~250 lines
     of pixel buffer writes, and it runs the full OS including the browser engine.
   </p>
 
-  <h2>Numbers</h2>
+  <h2 id="numbers"><a class="anchor" href="#numbers" aria-hidden="true" tabindex="-1">#</a>Numbers</h2>
 
-  <table>
+  <div class="table-wrap"><table>
     <thead>
       <tr><th>Metric</th><th>Count</th></tr>
     </thead>
@@ -415,27 +480,44 @@ flowchart TD
     </tbody>
   </table>
 
-  <nav class="article-nav">
-    <a class="prev" href="05-psp-usb-research.html">&larr; Prev: USB Host Mode</a>
-    <a class="next" href="07-psp-media-engine.html">Next: Reverse Engineering the PSP Media Engine &rarr;</a>
-  </nav>
-
-</article>
-
-<footer class="site-footer">
-  <div class="container">
-    <div class="footer-row">
-      <span>&copy; 2024&ndash;2026 OASIS_OS contributors</span>
-      <span>&middot;</span>
-      <a href="https://github.com/AndrewAltimit/oasis-os">GitHub</a>
+  <aside class="callout update" role="note">
+    <div class="callout-title">Update (Oct 2026)</div>
+    <p>Today: 9 extension traits and 53 default methods, defined across <code>oasis-types/src/backend/</code> and <code>backend/extensions/</code> (one file per extension trait); a new backend running &ldquo;all 15 apps&rdquo; in step 4 above.</p>
+  </aside>
+</div>
     </div>
+  </div>
+
+  <footer class="article__foot wrap">
+  <nav class="pager" aria-label="More entries">
+    <a class="pager__link pager__link--prev" href="05-psp-usb-research.html" rel="prev"><span class="pager__dir">&larr; Previous &middot; 05</span><span class="pager__title">PSP USB Research</span></a>
+    <a class="pager__link pager__link--next" href="07-psp-media-engine.html" rel="next"><span class="pager__dir">Next &middot; 07 &rarr;</span><span class="pager__title">Reverse Engineering the PSP Media Engine</span></a>
+  </nav>
+  </footer>
+</article>
+</main>
+
+<footer class="footer">
+  <div class="wrap footer__inner">
+    <div class="footer__brand">
+      <span class="brand__name">OASIS<span class="brand__us">_</span>OS</span>
+      <p>Built from scratch in Rust. Dual-licensed MIT + Unlicense.</p>
+    </div>
+    <nav aria-label="Footer">
+      <ul class="footer__links">
+        <li><a href="../">Home</a></li>
+        <li><a href="../demo/">Live demo</a></li>
+        <li><a href="../journal/">Journal</a></li>
+        <li><a href="../blueprint.html">Blueprints</a></li>
+        <li><a href="https://github.com/AndrewAltimit/oasis-os">GitHub</a></li>
+        <li><a href="https://github.com/AndrewAltimit/oasis-os/blob/main/docs/README.md">Docs</a></li>
+      </ul>
+    </nav>
+    <p class="footer__status mono" aria-hidden="true">333MHz &middot; 480&times;272 &middot; v1.4.0</p>
   </div>
 </footer>
 
-<script src="../js/main.js"></script>
-<script type="module">
-  import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
-  mermaid.initialize({ startOnLoad: true, theme: 'dark' });
-</script>
+<script src="../js/site.js" defer></script>
+<script src="../js/journal.js" defer></script>
 </body>
 </html>

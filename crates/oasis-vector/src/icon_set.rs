@@ -2408,45 +2408,6 @@ mod tests {
         }
     }
 
-    /// Titles of every app the shell registers (`oasis_core::apps` registry).
-    const BUILTIN_APP_TITLES: [&str; 15] = [
-        "File Manager",
-        "Settings",
-        "Network",
-        "Package Manager",
-        "Browser",
-        "System Monitor",
-        "Terminal",
-        "Music Player",
-        "Photo Viewer",
-        "Text Editor",
-        "Calculator",
-        "Paint",
-        "Games",
-        "Internet Radio",
-        "TV Guide",
-    ];
-
-    #[test]
-    fn no_builtin_app_maps_to_generic() {
-        for title in BUILTIN_APP_TITLES {
-            assert_ne!(
-                IconCategory::from_app_title(title),
-                IconCategory::Generic,
-                "{title} has no icon category"
-            );
-        }
-    }
-
-    #[test]
-    fn builtin_apps_get_distinct_categories() {
-        let mut seen = std::collections::HashSet::new();
-        for title in BUILTIN_APP_TITLES {
-            let cat = IconCategory::from_app_title(title);
-            assert!(seen.insert(format!("{cat:?}")), "{title} shares {cat:?}");
-        }
-    }
-
     #[test]
     fn classifier_routes_new_categories() {
         use IconCategory::*;

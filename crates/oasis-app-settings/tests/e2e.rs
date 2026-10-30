@@ -48,9 +48,15 @@ fn settings() -> AppHarness {
     h
 }
 
-/// Take the pending IPC request (as the shell does each frame).
+/// Take every queued IPC request (as the shell does each frame) and return
+/// the newest: the shell performs them in order, so it sets the final
+/// state.
 fn take_request(h: &mut AppHarness) -> Option<(String, String)> {
-    h.app_mut().take_pending_request()
+    let mut last = None;
+    while let Some(req) = h.take_request() {
+        last = Some(req);
+    }
+    last
 }
 
 /// Apply one request the way the shell does and publish the new state.
@@ -303,4 +309,30 @@ fn fuzz_random_input_never_panics_or_escapes_window() {
     for seed in 1..=3 {
         fuzz_app(&make, shell_vfs(), seed, 3000);
     }
+}
+
+/// The mouse wheel scrolls the skin list of a short window and back, and
+/// never changes the volume on the Audio tab (F14 item 10).
+#[test]
+fn wheel_scrolls_lists_but_never_changes_values() {
+    let mut h = settings();
+    h.set_size(480, 140);
+    let top = h.screen_text();
+    assert!(top.contains("classic"), "{top}");
+    assert!(h.scroll(12));
+    let scrolled = h.screen_text();
+    assert!(!scrolled.contains("classic"), "{scrolled}");
+    assert!(h.scroll(-12));
+    assert!(h.screen_text().contains("classic"));
+    // Scrolling only moves the selection: nothing is applied.
+    assert!(take_request(&mut h).is_none());
+
+    h.set_size(1024, 768);
+    h.click_text("Audio");
+    assert!(!h.scroll(3));
+    assert!(!h.scroll(-3));
+    assert!(
+        take_request(&mut h).is_none(),
+        "the wheel must not set volume"
+    );
 }

@@ -10,6 +10,26 @@ Contributor guide: [`design.md`](design.md) §Browser. ADRs on the
 arena DOM and backend traits: [`adr/001-arena-based-dom.md`](adr/001-arena-based-dom.md),
 [`adr/003-backend-trait-design.md`](adr/003-backend-trait-design.md).
 
+## Crates
+
+The engine is split so the parsers and the loader build and test
+without layout, paint or QuickJS:
+
+| Crate | Contents | Depends on |
+| --- | --- | --- |
+| `oasis-html` | tokenizer, tree builder, arena DOM, `Hook<F>` embedder hooks | `log` |
+| `oasis-css` | CSS tokenizer, parser, cascade, computed values, animations / transitions | `oasis-html`, `oasis-types` |
+| `oasis-http` | `Url`, HTTP/1.1 + HTTP/2, Gemini framing, cookies, cache, CSP, IO thread, VFS loader | `oasis-net`, `oasis-vfs`, `oasis-types` |
+| `oasis-browser` | layout, paint, `BrowserWidget`, forms, JS DOM bindings, `.gmi` parser / renderer, images, fonts, SVG, canvas | all of the above |
+
+`oasis-browser` re-exports `oasis_http` as `loader` and keeps
+`internals::*` for benches, fuzzers and the PSP hook setters, so
+embedders compile unchanged. Features forward: `javascript` →
+`oasis-css/scripting`, `web-fonts` → `oasis-css/web-fonts`,
+`parallel-style` → `oasis-css/parallel-style`, `psp` → `oasis-http/psp`.
+`oasis-core`'s `http` / `browse` terminal commands use `oasis-http`
+directly.
+
 ## Network stack
 
 - **HTTP/1.1 + HTTP/2** — ALPN-negotiated `h2` over rustls. Full HPACK
@@ -19,9 +39,71 @@ arena DOM and backend traits: [`adr/001-arena-based-dom.md`](adr/001-arena-based
   DATA flow control via `WINDOW_UPDATE`, PING/PONG, graceful GOAWAY,
   and `PUSH_PROMISE` refusal. One request per connection — no
   multiplexing, but unblocks every CDN that hard-requires `h2` for the
-  initial GET.
-- **Cookies, gzip, CSP.** Scripts/styles/connect-src enforced;
-  img-src relaxed for practicality.
+  initial GET. DoS caps: frames over the advertised 1 MiB
+  `MAX_FRAME_SIZE` are refused (GOAWAY `FRAME_SIZE_ERROR`) before their
+  payload is allocated, a HEADERS + CONTINUATION block over 64 KiB gets
+  GOAWAY `ENHANCE_YOUR_CALM`, and HPACK output is capped at the
+  advertised 64 KiB `MAX_HEADER_LIST_SIZE` (GOAWAY `COMPRESSION_ERROR`).
+- **HTTP/1.1 framing** (`oasis-http/src/http1.rs`) is shared by the desktop and
+  PSP clients: header lines are parsed (not substring-sniffed) to pick
+  `Content-Length` / chunked framing, and the chunked terminator is
+  found by walking the chunk sizes.
+- **URLs** — network-scheme URLs are normalized at parse time: host
+  lower-cased, `user:pw@` split into `Url::userinfo` (never sent),
+  default port elided, `\` treated as `/`. `Url::origin()` is the one
+  origin used by CSP `'self'`, `fetch()` CORS and Web Storage.
+- **Cookies** (`oasis-http/src/cookies.rs`, desktop only) — session-scoped
+  RFC 6265 jar: host-only cookies, `Domain=` validated (no IP parents, a
+  "PSL-lite" public-suffix guard), `Max-Age` / `Expires` expiry and
+  deletion, `Secure` (sent over and accepted from `https:` only),
+  `__Secure-` / `__Host-` prefixes, control-character and 4 KiB size
+  checks, 50-per-domain / 3000-total caps; plain http can neither
+  overwrite nor delete a `Secure` cookie. `SameSite` is enforced on send
+  (`cookies::SameSiteContext`, from `ResourceRequest::initiator`):
+  cross-site subresources get no `Strict` / `Lax` cookies and cross-site
+  top-level navigations get `Lax` ones only with GET / HEAD; sites are
+  PSL-lite registrable domains, a missing `SameSite` behaves as `None`,
+  and GET navigations count as user-initiated (link clicks and typed
+  URLs share one path). Cookies are computed and stored **per redirect
+  hop**, so a cross-site redirect never carries the first site's
+  cookies and a hop's `Set-Cookie` lands under the host that sent it.
+  `document.cookie` is a separate per-page map (4 KiB per pair, 50
+  pairs, `max-age=0` / past-`expires` deletion) that never reaches the
+  network.
+- **Redirect header policy** — cache validators go on the first hop
+  only; `Cookie` / `Authorization` are dropped once a hop leaves the
+  original origin; `Referer` follows `strict-origin-when-cross-origin`
+  per hop (origin only cross-origin, nothing on an `https:` → `http:`
+  downgrade); 301 / 302 / 303 rewrite POST to GET (body headers go with
+  the body) while 307 / 308 keep method and body. A network response
+  may only redirect to `http:` / `https:` (Gemini: `gemini:`).
+- **Request hygiene** — `Url::request_target` percent-encodes controls,
+  space and non-ASCII in the path and query (h1 request line, h2
+  `:path`, PSP), and `validate_request` rejects non-token methods /
+  header names and CR / LF / NUL in header values or the host before
+  connecting. Keep-alive connections are pooled only after a response
+  that ended at its framed length.
+- **CSP** (`oasis-http/src/csp.rs`) — every `Content-Security-Policy` header is
+  enforced (report-only and `<meta>` policies are ignored):
+  `script-src(-elem)` gates inline `<script>` (matching `nonce`,
+  `'sha256-…'` hash, or `'unsafe-inline'` when the list has no nonce /
+  hash / `'strict-dynamic'`); `script-src-attr` gates inline event
+  handlers one by one (`'unsafe-inline'`, or `'unsafe-hashes'` plus the
+  hash of that handler's text); `style-src(-elem)` gates inline
+  `<style>` (nonce / hash / `'unsafe-inline'`) and `<link
+  rel=stylesheet>` / `@import` URLs; `style-src-attr` gates
+  parser-inserted `style=""`; `connect-src` gates script `fetch()`
+  (every redirect hop, and `data:` URLs). The policy is stored with the
+  cached page and restored on back / forward re-renders and `304`s.
+  Scripts and handlers inside `<template>` never run.
+  `img-src` is parsed but not enforced, and external `<script src>` is
+  never loaded. Scheme (`https:`, `data:`), host (`*.` wildcard, port,
+  path), `'self'` and `*` sources follow CSP3 matching. PSP carries the
+  CSP header too, but has no cookie jar.
+- **`vfs://` isolation** — pages with a network origin cannot load
+  `vfs://` images, stylesheets, `@import`s or fonts
+  (`loader::subresource_allowed`); their `http(s)` subresources may still
+  come from the offline `/sites/<host>/` cache.
 - **Redirects** — page loads follow up to `BrowserConfig::max_redirects`
   (default 5) redirects; script `fetch()` keeps the default.
 - **Background I/O thread** — network loads never block the UI thread.
@@ -63,6 +145,13 @@ arena DOM and backend traits: [`adr/001-arena-based-dom.md`](adr/001-arena-based
 - CSS length units: `px`, `em`, `rem`, `pt`, `ex`, `ch` (the latter
   two resolve to `0.5em`).
 - CSS Nesting (`&` selector with parse-time desugaring).
+- Right-to-left selector matching with backtracking, so `A > B C`
+  matches through an outer `B` when the nearest `B` doesn't fit
+  (Servo-style failure kinds keep it linear in practice). Each
+  selector-vs-element match has a 16k-step traversal budget, shared
+  with `:has()` subtree scans and charged for sibling-list scans;
+  running out counts as no match for the whole selector, `:not()`
+  included.
 - `:has()` relational pseudo-class with `>`/`+`/`~` leading
   combinators, scope-bounded inner combinators.
 - Selectors Level 4 `:not(a, b, c)` list form.
@@ -72,9 +161,11 @@ arena DOM and backend traits: [`adr/001-arena-based-dom.md`](adr/001-arena-based
 - Modern color functions: `hsl/hsla`, `oklch/oklab`, `color(srgb |
   srgb-linear | display-p3)`, `color-mix(in srgb | oklch | oklab |
   hsl | srgb-linear)`, `light-dark()` with `color-scheme` tracking.
-- CSS logical properties — parse-time rewrite to LTR physical
-  equivalents for margin / padding / border / inset / block-size /
-  inline-size longhands and shorthands.
+- CSS logical properties: inline-axis logicals (margin / padding /
+  border / inset `-inline-start|end`) are resolved against `direction`
+  at cascade time, block-axis ones map to top / bottom, and
+  `block-size` / `inline-size` map to height / width. `text-align:
+  start | end` likewise follow `direction`.
 
 ## Layout
 
@@ -137,15 +228,21 @@ arena DOM and backend traits: [`adr/001-arena-based-dom.md`](adr/001-arena-based
 - Full 2D CSS transforms plus 3D transform functions (`rotateX/Y/Z`,
   `translate3d`, `scale3d`, `rotate3d`, `matrix3d`, `perspective()`)
   evaluated through a 4x4 `Matrix3d`.
-- Pure 2D transforms flatten orthographically via
-  `AffineTransform2D::from_css_transforms`.
+- A transform applies to the element's own box (background, borders,
+  overflow clip, compositing bounds, link hit region) and to its
+  descendants. Translations move the box; rotations / scales / skews
+  flatten to an `AffineTransform2D` around the screen-space
+  transform origin, and backgrounds under them paint as transformed
+  quads (borders, text and images follow the translation only).
 - 3D transforms under an ancestor `perspective:` property route
   through a screen-space projection path that builds the full
   `T(vp) * Persp(d) * T(-vp) * T(origin) * local * T(-origin)` matrix
   and derives a 3-corner-fit affine via
   `Matrix3d::project_screen_rect_affine`.
 - `transform-style: preserve-3d` propagates the parent's 4x4 matrix
-  to descendants via `PaintContext.preserved_3d`.
+  to descendants, whose backgrounds project all four corners through
+  it (a true trapezoid); children are painted back to front by
+  projected Z, except those with an explicit `z-index`.
 - `transform-origin` (X/Y/Z) and `perspective-origin` parsed into
   structured types, resolved via shared helpers.
 - `backface-visibility: hidden` culls back-facing subtrees via
@@ -165,11 +262,27 @@ arena DOM and backend traits: [`adr/001-arena-based-dom.md`](adr/001-arena-based
   `quadraticCurveTo`, `fill`, `stroke`, `save`, `restore`.
 - **SVG** — paths with fill-rule / linecap / linejoin, `<g>` group
   transform composition.
-- **Light compositor** — display list with batched rect + text
-  submission via `SdiBatch::submit_rect_batch` /
-  `submit_text_batch`, vertical/horizontal strip merging, occluded
-  rect elimination, clip intersection optimization, granular
-  animation dirty tracking.
+- **One renderer: display list record + replay** (`paint/`). The
+  recorder walks the layout tree in CSS 2.1 paint order and emits
+  display items — including `Svg` / `Canvas` items, so inline SVG and
+  `<canvas>` stack under later overlays, clip, scroll inside nested
+  scroll containers and honour `visibility`. The widget caches the
+  list and replays it with a scroll delta or dirty rectangles; tests,
+  the visual-regression goldens and the paint bench run the same
+  record + replay path (`internals::paint_page`). See
+  [`crates/oasis-browser/docs/paint.md`](../crates/oasis-browser/docs/paint.md).
+- **Light compositor** — batched rect + text submission via
+  `SdiBatch::submit_rect_batch` / `submit_text_batch`,
+  vertical/horizontal strip merging, occluded rect elimination,
+  clip intersection, granular animation dirty tracking, and
+  render-target layers for `mix-blend-mode`, `isolation`, box-level
+  `filter` and `mask-*` (CPU filter / mask / blend passes need
+  render-target readback; PSP falls back to plain opacity).
+- **Images** — PNG / JPEG / GIF / BMP (+ WebP with `webp`). Images
+  larger than `BrowserConfig::max_image_dimension` / `max_image_pixels`
+  (desktop 4096 px / 2 Mpx, PSP 1024 px / 1 Mpx) are downscaled —
+  JPEGs by DCT scaling during decode — and keep their natural layout
+  size.
 
 ## Forms
 
@@ -244,6 +357,21 @@ to page scripts include:
   `classList.add` of a token the element already has (and similar
   no-ops) skip the flag so redundant reassignments don't force a
   re-cascade.
+- **Robustness limits.** Script insertions that would nest a node
+  deeper than the parser's own limit (`MAX_DOM_DEPTH`, 257 levels)
+  throw `HierarchyRequestError`, and `innerHTML` flattens past it, so
+  a script-built chain can't overflow the UI stack in the recursive
+  render passes; text / comment nodes never take children. Scripts may
+  grow the document to `MAX_SCRIPT_DOM_NODES` (200k) live nodes, past
+  which node-creating calls throw `QuotaExceededError` (the arena sits
+  outside the JS heap cap). Ids of freed nodes are rejected, so a
+  wrapper kept across `innerHTML = ''` can't corrupt the tree. Each
+  inline script, event dispatch and per-frame
+  timer tick runs under `BrowserConfig::js_max_exec_ms` (2 s desktop,
+  500 ms PSP; timers still due when a tick's budget runs out wait for
+  the next frame), and the QuickJS heap is capped at
+  `BrowserConfig::js_memory_limit_bytes` (64 MiB desktop, 8 MiB PSP).
+  See [`oasis-js.md` §Watchdog](oasis-js.md#watchdog).
 - **preventDefault-aware link follow-up.** The inline-handler wrapper
   calls `event.preventDefault()` when the body returns `false` (the
   HTML spec), and `__oasis_dispatch_with_bubbling` returns the event's

@@ -42,6 +42,16 @@ pub enum BackendError {
     #[error("texture not found: {id}")]
     TextureNotFound { id: u64 },
 
+    /// The backend does not implement this optional operation (e.g. the
+    /// `SdiRenderTarget` defaults). Callers can match on it to fall back
+    /// instead of treating it as a real failure.
+    #[error("{op} not supported")]
+    Unsupported { op: &'static str },
+
+    /// A referenced render-target ID does not exist.
+    #[error("render target not found: {id}")]
+    RenderTargetNotFound { id: u64 },
+
     /// Catch-all for backend errors without a dedicated variant.
     #[error("{0}")]
     Other(String),
@@ -270,6 +280,52 @@ pub enum OasisError {
 /// Convenience alias.
 pub type Result<T> = std::result::Result<T, OasisError>;
 
+impl OasisError {
+    /// Whether this error means "no data yet, try again" on a non-blocking
+    /// stream rather than a real failure.
+    ///
+    /// Matches [`OasisError::Io`] with [`io::ErrorKind::WouldBlock`] (what a
+    /// non-blocking `TcpStream` returns: "Resource temporarily unavailable"
+    /// on Linux, WSAEWOULDBLOCK on Windows). Also accepts the legacy
+    /// `Backend("WouldBlock")` / `Backend("would block")` string some
+    /// backends and mocks produce.
+    ///
+    /// [`io::ErrorKind::TimedOut`] is deliberately **not** "try again": on a
+    /// non-blocking socket it is the kernel reporting a dead connection
+    /// (ETIMEDOUT / WSAETIMEDOUT after retransmission or keepalive gave up),
+    /// and on a blocking socket with a read timeout it means the caller's own
+    /// deadline expired. Retrying either forever hangs on a dead peer. Callers
+    /// that really do use a read timeout as a poll interval must check
+    /// [`OasisError::is_timed_out`] explicitly *and* enforce an overall
+    /// deadline or idle timeout of their own.
+    ///
+    /// Even for `WouldBlock`, a loop that retries must bound how long it
+    /// waits: a peer that goes silent without closing the connection yields
+    /// `WouldBlock` forever.
+    ///
+    /// Use this instead of searching the error's `Display` text: the OS
+    /// message never contains "would block", so string matching treats
+    /// every empty read on a plain TCP socket as fatal.
+    pub fn is_would_block(&self) -> bool {
+        match self {
+            Self::Io(e) => e.kind() == io::ErrorKind::WouldBlock,
+            Self::Backend(BackendError::Other(msg)) => {
+                msg.eq_ignore_ascii_case("wouldblock") || msg.eq_ignore_ascii_case("would block")
+            },
+            _ => false,
+        }
+    }
+
+    /// Whether this error is an I/O timeout ([`io::ErrorKind::TimedOut`]).
+    ///
+    /// See [`OasisError::is_would_block`] for why this is a separate check:
+    /// a timeout is only retryable where the caller set a read timeout as a
+    /// poll interval and tracks its own idle deadline.
+    pub fn is_timed_out(&self) -> bool {
+        matches!(self, Self::Io(e) if e.kind() == io::ErrorKind::TimedOut)
+    }
+}
+
 // Generate From<String>, From<&str>, and From<Domain> for OasisError
 // for each domain error type in one shot.
 domain_error!(SdiError => Sdi);
@@ -309,6 +365,16 @@ mod tests {
         assert_eq!(format!("{}", BackendError::NotListening), "not listening");
         let t = BackendError::TextureNotFound { id: 42 };
         assert_eq!(format!("{t}"), "texture not found: 42");
+    }
+
+    #[test]
+    fn backend_error_unsupported_and_render_target_not_found() {
+        let u = BackendError::Unsupported {
+            op: "render targets",
+        };
+        assert_eq!(format!("{u}"), "render targets not supported");
+        let r = BackendError::RenderTargetNotFound { id: 7 };
+        assert_eq!(format!("{r}"), "render target not found: 7");
     }
 
     #[test]
@@ -491,6 +557,47 @@ mod tests {
     fn command_usage_into_oasis() {
         let e: OasisError = CommandError::Usage("ls".into()).into();
         assert!(format!("{e}").contains("usage: ls"));
+    }
+
+    // -- is_would_block -------------------------------------------------------
+
+    #[test]
+    fn would_block_io_kinds() {
+        let wb: OasisError = io::Error::from(io::ErrorKind::WouldBlock).into();
+        assert!(wb.is_would_block());
+        // The OS text never says "would block"; the kind is what matters.
+        let os = OasisError::Io(io::Error::new(
+            io::ErrorKind::WouldBlock,
+            "Resource temporarily unavailable (os error 11)",
+        ));
+        assert!(os.is_would_block());
+    }
+
+    #[test]
+    fn timed_out_is_not_would_block() {
+        // A dead connection on Linux surfaces as ETIMEDOUT; treating it as
+        // "try again" would spin forever on a peer that is gone.
+        let to: OasisError = io::Error::from(io::ErrorKind::TimedOut).into();
+        assert!(!to.is_would_block());
+        assert!(to.is_timed_out());
+        let wb: OasisError = io::Error::from(io::ErrorKind::WouldBlock).into();
+        assert!(!wb.is_timed_out());
+        assert!(!OasisError::Backend("timed out".into()).is_timed_out());
+    }
+
+    #[test]
+    fn would_block_rejects_real_errors() {
+        let reset: OasisError = io::Error::from(io::ErrorKind::ConnectionReset).into();
+        assert!(!reset.is_would_block());
+        assert!(!OasisError::Backend(BackendError::NotConnected).is_would_block());
+        assert!(!OasisError::Backend("stream read: would block forever".into()).is_would_block());
+        assert!(!OasisError::Vfs("WouldBlock".into()).is_would_block());
+    }
+
+    #[test]
+    fn would_block_legacy_backend_string() {
+        assert!(OasisError::Backend("WouldBlock".into()).is_would_block());
+        assert!(OasisError::Backend("would block".into()).is_would_block());
     }
 
     // -- Pattern matching on structured errors --------------------------------

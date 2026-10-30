@@ -578,6 +578,22 @@ pub fn glyph_advance_scaled(ch: char, font_size: u16) -> u32 {
     advance * fs / 8
 }
 
+/// Line height of the bitmap font at `font_size`: `ceil(max(fs, 8) * 1.2)`.
+///
+/// This is the one definition every backend reports (SDL's bitmap path,
+/// UE5, WASM, headless) and the `SdiText::measure_text_height` default.
+/// Sizes below 8 px use the 8 px line box.
+pub fn bitmap_line_height(font_size: u16) -> u32 {
+    (f64::from(font_size.max(8)) * 1.2).ceil() as u32
+}
+
+/// Baseline offset from the top of a line box: `ceil(max(fs, 8) * 0.85)`.
+///
+/// Used as the `SdiText::font_ascent` default; see [`bitmap_line_height`].
+pub fn bitmap_ascent(font_size: u16) -> u32 {
+    (f64::from(font_size.max(8)) * 0.85).ceil() as u32
+}
+
 /// Fast ASCII-only glyph metrics lookup.
 ///
 /// For ASCII bytes (0x20..=0x7E), returns `(left_pad, advance)` directly
@@ -675,6 +691,18 @@ pub fn is_smooth_triangle(ch: char) -> bool {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn bitmap_line_metrics() {
+        use super::{bitmap_ascent, bitmap_line_height};
+        assert_eq!(bitmap_line_height(10), 12);
+        assert_eq!(bitmap_line_height(8), 10);
+        assert_eq!(bitmap_line_height(16), 20);
+        assert_eq!(bitmap_line_height(6), 10, "clamped to the 8 px box");
+        assert_eq!(bitmap_ascent(10), 9);
+        assert_eq!(bitmap_ascent(12), 11);
+        assert_eq!(bitmap_ascent(4), 7, "clamped to the 8 px box");
+    }
+
     use super::*;
 
     #[test]

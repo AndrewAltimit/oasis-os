@@ -55,6 +55,10 @@ autorun-script = []
 [dependencies]
 psp = { git = "https://github.com/AndrewAltimit/rust-psp", rev = "e4cc06f6fa50fa45dc3ae8b332e8a2b67625f588", features = ["std"] }
 oasis-core = { path = "../oasis-core", default-features = false }
+# TV Guide types (channels, catalogs, schedule) for the PSP's own guide
+# view. oasis-core no longer bundles the app crates; the PSP doesn't use
+# AppRunner, so it depends on just this one instead of `oasis-apps`.
+oasis-app-tv-guide = { path = "../oasis-app-tv-guide" }
 # QuickJS-NG is compiled from C via pspdev's psp-gcc (see .cargo/
 # config.toml) and the `javascript` feature is enabled here so that
 # oasis-browser can wire `<script>` tags / DOM bindings into the
@@ -63,8 +67,8 @@ oasis-core = { path = "../oasis-core", default-features = false }
 # `src/app_states.rs`, which stores `widget: Option<BrowserWidget>`.
 oasis-browser = { path = "../oasis-browser", default-features = false, features = ["psp", "javascript"] }
 oasis-js = { path = "../oasis-js", features = ["psp-bindgen"] }
-oasis-video = { path = "../oasis-video", default-features = false, features = ["no-std-demux"] }
-oasis-shader = { path = "../oasis-shader", default-features = false, features = ["software"] }
+oasis-video = { path = "../oasis-video", default-features = false, features = ["demux-lite"] }
+oasis-shader = { path = "../oasis-shader", default-features = false }
 libm = "0.2"
 
 # TLS for HTTPS/Gemini (pure Rust, no C/asm, works on mipsel-sony-psp)
@@ -80,10 +84,10 @@ webpki = { version = "0.22", default-features = false, features = ["std"] }
 getrandom_02 = { package = "getrandom", version = "0.2", features = ["custom"] }
 getrandom = "0.3"
 
-# unicode-width fork: the upstream crate panics on mipsel-sony-psp due to
-# a lookup table issue. This fork patches the panic for the MIPS target.
-[patch.crates-io]
-unicode-width = { git = "https://git.sr.ht/~sajattack/unicode-width", rev = "114ac47" }
+# No `[patch.crates-io] unicode-width` here: nothing in the graph uses
+# unicode-width, so cargo only warned that the patch was unused. If a
+# dependency (e.g. ratatui) pulls it in, re-add rust-psp's MIPS alignment
+# workaround: unicode-width = { git = "https://git.sr.ht/~sajattack/unicode-width", rev = "114ac47" }
 
 [profile.release]
 lto = "thin"

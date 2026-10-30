@@ -312,6 +312,10 @@ pub struct HarnessOptions {
     /// Note: the UI locale is process-global, so a persisted non-English
     /// locale is applied for every harness in the test binary.
     pub prefs_path: Option<std::path::PathBuf>,
+    /// Extra plugins registered and initialized at boot next to the
+    /// built-in ones (see [`BootOptions::plugins`]). Factories, so the
+    /// options stay `Clone`.
+    pub plugins: Vec<fn() -> Box<dyn oasis_core::plugin::Plugin>>,
 }
 
 impl HarnessOptions {
@@ -324,6 +328,7 @@ impl HarnessOptions {
             shader_wallpaper: false,
             fixed_time: Some(FIXED_TIME),
             prefs_path: None,
+            plugins: Vec::new(),
         }
     }
 }
@@ -386,8 +391,13 @@ impl Harness {
         if let Some(path) = opts.prefs_path.as_ref() {
             let store = crate::user_prefs::load_from_disk(Some(path));
             let prefs = oasis_core::settings::UserPrefs::from_store(&store);
+            // Mirror the shell's boot: a persisted skin that no longer
+            // resolves keeps the default (`opts.skin`), with a warning.
             if let Some(saved) = prefs.skin.as_deref() {
-                boot.skin = oasis_core::skin::resolve_skin(saved)?;
+                match oasis_core::skin::resolve_skin(saved) {
+                    Ok(skin) => boot.skin = skin,
+                    Err(e) => log::warn!("Persisted skin '{saved}' failed to load ({e})"),
+                }
             }
             prefs.patch_features(&mut boot.skin.features);
             crate::shell::resolve_screen_size(&mut boot.config, &boot.skin, &prefs);
@@ -407,6 +417,7 @@ impl Harness {
         }
         boot.shader_wallpaper = opts.shader_wallpaper;
         boot.fixed_time = opts.fixed_time;
+        boot.plugins = opts.plugins.iter().map(|make| make()).collect();
         let (w, h) = (boot.config.screen_width, boot.config.screen_height);
         let backend = HeadlessBackend::new(w, h);
         let audio = RecordingAudio::new();
@@ -632,6 +643,15 @@ impl Harness {
         ok
     }
 
+    /// Open `path` in the app titled `title`, the way an app's "open
+    /// with" hand-off does (File Manager -> Photo Viewer, MCP `open_app`
+    /// with a file): an open window of that app is reused. Runs one frame.
+    pub fn open_app_with_file(&mut self, title: &str, path: &str) {
+        let shell = &mut self.shell;
+        crate::launch::launch_for_file(&mut shell.state, &mut shell.sdi, &shell.vfs, title, path);
+        self.step(&[]);
+    }
+
     /// Titles of the apps on the current dashboard page.
     pub fn dashboard_apps(&self) -> Vec<String> {
         self.shell
@@ -709,16 +729,11 @@ impl Harness {
         true
     }
 
-    /// The runner of the open app titled `title` (windowed or
-    /// fullscreen).
+    /// The runner of the open app titled `title`.
     pub fn app_runner(&mut self, title: &str) -> Option<&mut AppRunner> {
-        let content = &mut self.shell.state.content;
-        if let Some(r) = content.app_runner.as_mut()
-            && r.title.eq_ignore_ascii_case(title)
-        {
-            return Some(r);
-        }
-        content
+        self.shell
+            .state
+            .content
             .open_runners
             .iter_mut()
             .map(|(_, r)| r)
@@ -746,6 +761,7 @@ impl Harness {
     ) -> bool {
         self.shell
             .state
+            .tv
             .video_player
             .inject_audio(pcm_f32, channels, sample_rate)
     }
@@ -755,8 +771,17 @@ impl Harness {
     pub fn inject_video_frame(&mut self, rgba: Vec<u8>, w: u32, h: u32, pts_secs: f64) -> bool {
         self.shell
             .state
+            .tv
             .video_player
             .inject_frame(rgba, w, h, pts_secs)
+    }
+
+    /// Run the app teardown [`Self::shutdown`] starts with: every app,
+    /// open or closed, releases its backend resources and is dropped
+    /// (windows stay on screen, empty). Lets a scenario check
+    /// [`Self::resource_counts`] after the exit path.
+    pub fn release_all_apps(&mut self) {
+        self.shell.release_all_apps();
     }
 
     /// Shut the shell down the way the binary does on exit (persists any
@@ -902,6 +927,13 @@ impl Harness {
         self.audio.borrow()
     }
 
+    /// Simulate the playing track reaching its end: the fake output stops
+    /// reporting it as playing, as a real backend does once its PCM has
+    /// drained.
+    pub fn finish_audio_track(&mut self) {
+        self.audio.borrow_mut().playing = None;
+    }
+
     /// All decoded f32 PCM fed to the audio output so far.
     pub fn audio_fed(&self) -> Vec<f32> {
         self.audio.borrow().pcm_f32()
@@ -965,7 +997,7 @@ impl Harness {
             render_targets: self.shell.backend.live_render_targets(),
             sdi_objects: self.shell.sdi.len(),
             windows: st.wm.window_count(),
-            runners: st.content.open_runners.len() + usize::from(st.content.app_runner.is_some()),
+            runners: st.content.open_runners.len(),
             audio_tracks: self.audio.borrow().live_tracks(),
         }
     }

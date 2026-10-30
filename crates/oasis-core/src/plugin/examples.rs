@@ -63,8 +63,14 @@ impl Command for HelloCmd {
 // ClockWidgetPlugin -- creates an SDI clock widget + command
 // ---------------------------------------------------------------------------
 
-/// Plugin that creates a clock display widget in the SDI scene graph
-/// and registers a "pclock" command.
+/// Plugin that draws a live clock in the top-right corner of the screen
+/// (two SDI overlay objects, positioned from [`PluginContext`]) and
+/// registers a `pclock [show|hide]` command.
+///
+/// The command reaches the plugin through the VFS ([`PCLOCK_VISIBLE_PATH`]):
+/// commands only get an `Environment`, never the plugin itself.
+///
+/// [`PluginContext`]: super::PluginContext
 pub struct ClockWidgetPlugin {
     /// Whether the widget has been created.
     widget_created: bool,
@@ -84,7 +90,50 @@ impl Default for ClockWidgetPlugin {
     }
 }
 
-const CLOCK_WIDGET_NAME: &str = "plugin_clock";
+/// SDI object holding the clock text.
+pub const CLOCK_WIDGET_NAME: &str = "plugin_clock";
+/// SDI object behind the text (a translucent rounded pill).
+pub const CLOCK_WIDGET_BG_NAME: &str = "plugin_clock_bg";
+/// `1` / `0`: whether the clock is shown (written by `pclock show|hide`).
+/// The widget is opt-in: anything but `1` (including no file) hides it, so
+/// the example plugin never covers the dashboard unless asked to.
+pub const PCLOCK_VISIBLE_PATH: &str = "/var/pclock/visible";
+
+const CLOCK_W: u32 = 60;
+const CLOCK_H: u32 = 14;
+/// Below a typical status bar + tab row, clear of the bar's own clock.
+const CLOCK_TOP: i32 = 46;
+/// Above everything else in the overlay pass (toasts, menus).
+const CLOCK_Z: i32 = 100_000;
+
+impl ClockWidgetPlugin {
+    /// Lay the widget out for `host.context` and refresh its text and
+    /// visibility.
+    fn refresh(host: &mut PluginHost<'_>) {
+        let ctx = host.context;
+        // An unknown screen size (0) falls back to the PSP-native 480.
+        let screen_w = if ctx.screen_w == 0 { 480 } else { ctx.screen_w };
+        let x = screen_w.saturating_sub(CLOCK_W + 6) as i32;
+        let text = ctx.time.map_or_else(
+            || "--:--:--".to_string(),
+            |t| format!("{:02}:{:02}:{:02}", t.hour, t.minute, t.second),
+        );
+        let visible = host.vfs.read(PCLOCK_VISIBLE_PATH).is_ok_and(|d| d == b"1");
+        if let Ok(bg) = host.sdi.get_mut(CLOCK_WIDGET_BG_NAME) {
+            bg.x = x;
+            bg.y = CLOCK_TOP;
+            bg.visible = visible;
+        }
+        if let Ok(obj) = host.sdi.get_mut(CLOCK_WIDGET_NAME) {
+            obj.x = x + 6;
+            obj.y = CLOCK_TOP + 3;
+            obj.visible = visible;
+            if obj.text.as_deref() != Some(text.as_str()) {
+                obj.text = Some(text);
+            }
+        }
+    }
+}
 
 impl Plugin for ClockWidgetPlugin {
     fn info(&self) -> PluginInfo {
@@ -94,16 +143,20 @@ impl Plugin for ClockWidgetPlugin {
     }
 
     fn init(&mut self, host: &mut PluginHost<'_>) -> Result<()> {
-        // Create an SDI object for the clock display.
+        let bg = host.sdi.create(CLOCK_WIDGET_BG_NAME);
+        bg.w = CLOCK_W;
+        bg.h = CLOCK_H;
+        bg.color = crate::backend::Color::rgba(0, 0, 0, 150);
+        bg.border_radius = Some(4);
+        bg.overlay = true;
+        bg.z = CLOCK_Z;
         let obj = host.sdi.create(CLOCK_WIDGET_NAME);
-        obj.x = 380;
-        obj.y = 4;
-        obj.w = 96;
-        obj.h = 16;
-        obj.text = Some("00:00:00".to_string());
-        obj.font_size = 10;
-        obj.visible = true;
+        obj.font_size = 8;
+        obj.text_color = crate::backend::Color::WHITE;
+        obj.overlay = true;
+        obj.z = CLOCK_Z + 1;
         self.widget_created = true;
+        Self::refresh(host);
 
         // Register the pclock command.
         host.commands.register(Box::new(PclockCmd));
@@ -111,23 +164,20 @@ impl Plugin for ClockWidgetPlugin {
     }
 
     fn update(&mut self, host: &mut PluginHost<'_>) -> Result<()> {
-        if !self.widget_created {
-            return Ok(());
-        }
-        // Update the clock text. On a real system this would read the time
-        // service. For now, we just confirm the widget exists.
-        if let Ok(obj) = host.sdi.get_mut(CLOCK_WIDGET_NAME) {
-            // In a real implementation, we'd format the current time here.
-            // For testing, just ensure the widget is accessible.
-            let _ = obj.text.as_ref();
+        if self.widget_created {
+            // Only a changed second rewrites the text, so an idle shell
+            // redraws once a second for the clock, not every frame.
+            Self::refresh(host);
         }
         Ok(())
     }
 
     fn shutdown(&mut self, host: &mut PluginHost<'_>) -> Result<()> {
         if self.widget_created {
-            if let Err(e) = host.sdi.destroy(CLOCK_WIDGET_NAME) {
-                log::debug!("destroy({CLOCK_WIDGET_NAME}) during plugin shutdown: {e}");
+            for name in [CLOCK_WIDGET_NAME, CLOCK_WIDGET_BG_NAME] {
+                if let Err(e) = host.sdi.destroy(name) {
+                    log::debug!("destroy({name}) during plugin shutdown: {e}");
+                }
             }
             self.widget_created = false;
         }
@@ -141,7 +191,7 @@ impl Command for PclockCmd {
         "pclock"
     }
     fn description(&self) -> &str {
-        "Show clock widget status (clock-widget plugin)"
+        "Show or hide the clock widget (clock-widget plugin)"
     }
     fn usage(&self) -> &str {
         "pclock [show|hide]"
@@ -149,15 +199,35 @@ impl Command for PclockCmd {
     fn category(&self) -> &str {
         "plugin"
     }
-    fn execute(&self, args: &[&str], _env: &mut Environment<'_>) -> Result<CommandOutput> {
+    fn execute(&self, args: &[&str], env: &mut Environment<'_>) -> Result<CommandOutput> {
         let subcmd = args.first().copied().unwrap_or("status");
-        match subcmd {
-            "show" => Ok(CommandOutput::Text("Clock widget: visible".to_string())),
-            "hide" => Ok(CommandOutput::Text("Clock widget: hidden".to_string())),
-            _ => Ok(CommandOutput::Text(
-                "Clock widget plugin active. Use 'pclock show' or 'pclock hide'.".to_string(),
-            )),
+        let visible = match subcmd {
+            "show" => true,
+            "hide" => false,
+            "status" => {
+                let shown = !env.vfs.read(PCLOCK_VISIBLE_PATH).is_ok_and(|d| d == b"0");
+                return Ok(CommandOutput::Text(format!(
+                    "Clock widget plugin active ({}). Use 'pclock show' or 'pclock hide'.",
+                    if shown { "visible" } else { "hidden" }
+                )));
+            },
+            _ => {
+                return Err(OasisError::Command(
+                    format!("unknown subcommand: {subcmd}\nusage: {}", self.usage()).into(),
+                ));
+            },
+        };
+        for dir in ["/var", "/var/pclock"] {
+            if !env.vfs.exists(dir) {
+                env.vfs.mkdir(dir)?;
+            }
         }
+        env.vfs
+            .write(PCLOCK_VISIBLE_PATH, if visible { b"1" } else { b"0" })?;
+        Ok(CommandOutput::Text(format!(
+            "Clock widget: {}",
+            if visible { "visible" } else { "hidden" }
+        )))
     }
 }
 
@@ -361,34 +431,90 @@ mod tests {
         assert_eq!(s, "Hello, OASIS!");
     }
 
-    #[test]
-    fn clock_widget_creates_sdi() {
-        let (mut mgr, mut sdi, mut vfs, mut cmds) = setup();
-        mgr.init_all(&mut sdi, &mut vfs, &mut cmds);
-
-        assert!(sdi.contains("plugin_clock"));
-        let obj = sdi.get("plugin_clock").unwrap();
-        assert_eq!(obj.x, 380);
-        assert!(obj.text.is_some());
+    fn context(w: u32, second: u8) -> crate::plugin::PluginContext {
+        crate::plugin::PluginContext {
+            screen_w: w,
+            screen_h: 272,
+            time: Some(crate::platform::SystemTime {
+                year: 2026,
+                month: 10,
+                day: 30,
+                hour: 9,
+                minute: 5,
+                second,
+            }),
+        }
     }
 
     #[test]
-    fn clock_widget_update() {
+    fn clock_widget_creates_sdi() {
         let (mut mgr, mut sdi, mut vfs, mut cmds) = setup();
+        mgr.set_context(context(480, 7));
         mgr.init_all(&mut sdi, &mut vfs, &mut cmds);
+
+        let obj = sdi.get(CLOCK_WIDGET_NAME).unwrap();
+        assert_eq!(obj.text.as_deref(), Some("09:05:07"));
+        assert!(obj.overlay);
+        assert!(!obj.visible, "the example clock is opt-in (`pclock show`)");
+        let bg = sdi.get(CLOCK_WIDGET_BG_NAME).unwrap();
+        assert_eq!(bg.x + bg.w as i32, 480 - 6, "right-aligned on screen");
+    }
+
+    /// `update` used to be a no-op: the clock showed "00:00:00" forever.
+    #[test]
+    fn clock_widget_update_follows_time_and_screen() {
+        let (mut mgr, mut sdi, mut vfs, mut cmds) = setup();
+        mgr.set_context(context(480, 7));
+        mgr.init_all(&mut sdi, &mut vfs, &mut cmds);
+        mgr.set_context(context(1024, 8));
         mgr.update_all(&mut sdi, &mut vfs, &mut cmds);
-        // Widget should still exist after update.
-        assert!(sdi.contains("plugin_clock"));
+        let obj = sdi.get(CLOCK_WIDGET_NAME).unwrap();
+        assert_eq!(obj.text.as_deref(), Some("09:05:08"));
+        let bg = sdi.get(CLOCK_WIDGET_BG_NAME).unwrap();
+        assert_eq!(bg.x + bg.w as i32, 1024 - 6);
     }
 
     #[test]
     fn clock_widget_cleanup_on_shutdown() {
         let (mut mgr, mut sdi, mut vfs, mut cmds) = setup();
         mgr.init_all(&mut sdi, &mut vfs, &mut cmds);
-        assert!(sdi.contains("plugin_clock"));
+        assert!(sdi.contains(CLOCK_WIDGET_NAME));
 
         mgr.shutdown_all(&mut sdi, &mut vfs, &mut cmds);
-        assert!(!sdi.contains("plugin_clock"));
+        assert!(!sdi.contains(CLOCK_WIDGET_NAME));
+        assert!(!sdi.contains(CLOCK_WIDGET_BG_NAME));
+    }
+
+    #[test]
+    fn pclock_hide_and_show_toggle_the_widget() {
+        let (mut mgr, mut sdi, mut vfs, mut cmds) = setup();
+        mgr.init_all(&mut sdi, &mut vfs, &mut cmds);
+        let run = |vfs: &mut MemoryVfs, line: &str| {
+            let mut env = Environment {
+                cwd: "/".to_string(),
+                vfs,
+                power: None,
+                time: None,
+                usb: None,
+                network: None,
+                tls: None,
+                stdin: None,
+                stderr: String::new(),
+            };
+            match cmds.execute(line, &mut env).unwrap() {
+                CommandOutput::Text(s) => s,
+                other => panic!("expected text, got {other:?}"),
+            }
+        };
+        assert!(run(&mut vfs, "pclock hide").contains("hidden"));
+        assert!(run(&mut vfs, "pclock").contains("(hidden)"));
+        let mut cmds2 = CommandRegistry::new();
+        mgr.update_all(&mut sdi, &mut vfs, &mut cmds2);
+        assert!(!sdi.get(CLOCK_WIDGET_NAME).unwrap().visible);
+        assert!(!sdi.get(CLOCK_WIDGET_BG_NAME).unwrap().visible);
+        run(&mut vfs, "pclock show");
+        mgr.update_all(&mut sdi, &mut vfs, &mut cmds2);
+        assert!(sdi.get(CLOCK_WIDGET_NAME).unwrap().visible);
     }
 
     #[test]

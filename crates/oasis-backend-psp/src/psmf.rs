@@ -43,11 +43,7 @@ const STREAM_PRIVATE2: u8 = 0xBF;
 ///
 /// Contains stream descriptors for one H.264 video stream (0xE0).
 /// The `data_size` is the total MPEG-PS data size that follows.
-pub fn generate_psmf_header(
-    width: u16,
-    height: u16,
-    data_size: u32,
-) -> [u8; PSMF_HEADER_SIZE] {
+pub fn generate_psmf_header(width: u16, height: u16, data_size: u32) -> [u8; PSMF_HEADER_SIZE] {
     let mut hdr = [0u8; PSMF_HEADER_SIZE];
 
     // Magic + version
@@ -205,7 +201,7 @@ fn write_private_stream2_index(buf: &mut [u8], offset: usize) -> usize {
 
     // Index data: video stream descriptor
     let data_start = offset + PES_OVERHEAD;
-    buf[data_start] = 0x01;     // entry type: video
+    buf[data_start] = 0x01; // entry type: video
     buf[data_start + 1] = 0xE0; // stream ID
     // Rest is zero (padding)
 
@@ -257,9 +253,7 @@ pub fn generate_first_pack(scr: u64) -> [u8; PACK_SIZE] {
 /// Encode PTS (Presentation Time Stamp) into 5 bytes.
 fn encode_pts(pts: u64, marker_nibble: u8, out: &mut [u8]) {
     let pts33 = pts & 0x1_FFFF_FFFF;
-    out[0] = (marker_nibble << 4)
-        | (((pts33 >> 29) & 0x0E) as u8)
-        | 0x01; // marker
+    out[0] = (marker_nibble << 4) | (((pts33 >> 29) & 0x0E) as u8) | 0x01; // marker
     out[1] = ((pts33 >> 22) & 0xFF) as u8;
     out[2] = (((pts33 >> 14) & 0xFE) as u8) | 0x01; // marker
     out[3] = ((pts33 >> 7) & 0xFF) as u8;
@@ -275,7 +269,7 @@ fn encode_pts(pts: u64, marker_nibble: u8, out: &mut [u8]) {
 /// Returns the number of packs written to `out_packs`.
 pub fn wrap_video_au(
     annex_b: &[u8],
-    pts: u64, // 90kHz PTS
+    pts: u64,      // 90kHz PTS
     scr: &mut u64, // mutable SCR counter, advanced per pack
     out_packs: &mut Vec<[u8; PACK_SIZE]>,
 ) -> usize {
@@ -312,8 +306,7 @@ pub fn wrap_video_au(
 
             // Copy H.264 payload
             let payload_off = off + 9 + hdr_data_len as usize;
-            pack[payload_off..payload_off + take]
-                .copy_from_slice(&remaining[..take]);
+            pack[payload_off..payload_off + take].copy_from_slice(&remaining[..take]);
             remaining = &remaining[take..];
 
             // Pad if needed
@@ -336,8 +329,7 @@ pub fn wrap_video_au(
             pack[off + 8] = 0x00; // hdr_data_len = 0
 
             let payload_off = off + 9;
-            pack[payload_off..payload_off + take]
-                .copy_from_slice(&remaining[..take]);
+            pack[payload_off..payload_off + take].copy_from_slice(&remaining[..take]);
             remaining = &remaining[take..];
 
             let used = payload_off + take;

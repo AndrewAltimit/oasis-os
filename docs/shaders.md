@@ -7,8 +7,10 @@ animated wallpapers. Each shader has two implementations:
   desktop, WebGL2 in the browser). Selected by the `gl-native` and `gl-web`
   Cargo features.
 - A **Rust software renderer** that mirrors the GLSL math per-pixel on the
-  CPU. Selected by the `software` feature. This is the fallback used by the
-  PSP backend and by anything that runs without a GL context.
+  CPU. It is always compiled (there is no feature flag for it) and is the
+  fallback used by the PSP, SDL, WASM and UE5/FFI backends whenever there is
+  no GL context. The optional `parallel` feature shades its rows on a rayon
+  pool (desktop only).
 
 The CPU and GPU paths produce visually equivalent output for each shader,
 which is what lets the screenshot regression suite cover both backends with
@@ -25,28 +27,40 @@ In `crates/oasis-shader/src/lib.rs`:
 - `ShaderParams` — re-exported from `oasis-types::shader::ShaderParams`. A
   parameter bag with `colors: Vec<[f32; 4]>` and `floats: HashMap<String,
   f32>` consumed by both renderers.
-- `SoftwareShaderRenderer` (`software.rs:24`) — CPU fallback. Renders at
-  `width/3 × height/3` (`RENDER_SCALE = 3`), then upscales nearest-neighbour
-  to the target buffer.
+- `BuiltinShader` (`registry.rs`) — the catalogue enum. `ALL`, `name()`
+  (the skin-facing name), `glsl()` (fragment source), `from_name()` and
+  `FromStr`. Both renderers dispatch on it.
+- `SoftwareShaderRenderer` (`software.rs`) — CPU fallback. Renders at
+  `width/3 × height/3` (`RENDER_SCALE = 3`, coarser for very large outputs),
+  then upscales nearest-neighbour to the target buffer.
+  `render_builtin(BuiltinShader, ..)` dispatches on the enum;
+  `render_shader(name, ..)` parses the name and falls back to Balatro (logged
+  once) for unknown names, while the GPU `ShaderRenderer` returns an error
+  for a name it has not registered.
 
 ## Built-in shaders
 
-The authoritative list is `registry.rs` (`get_shader_source`) paired with the
-`include_str!` constants in `shaders/mod.rs`. At time of writing the registry
-covers Voronoi cells, city lights, ocean and calm wave variants, the Balatro
-swirl, a starfield, a sine-wave plasma, and digital rain. Run
+The authoritative list is `BuiltinShader::ALL` in `registry.rs`, backed by
+the `include_str!` constants in `shaders/mod.rs`. There are eight:
 
-```bash
-rg 'Some\(shaders::' crates/oasis-shader/src/registry.rs
-```
+| Skin name | Variant | Effect |
+|---|---|---|
+| `balatro` | `Balatro` | Balatro-style paint swirl (the default) |
+| `voronoi` | `Voronoi` | Animated Voronoi cells |
+| `city_lights` | `CityLights` | Night-time city lights |
+| `ocean_waves` | `OceanWaves` | Layered ocean waves |
+| `calm_waves` | `CalmWaves` | Slow, low-contrast waves |
+| `starfield` | `Starfield` | Scrolling starfield |
+| `plasma` | `Plasma` | Sine-wave plasma |
+| `matrix_rain` | `MatrixRain` | Digital rain |
 
-for the current set without touching this doc. Each GPU shader has a paired
-`render_<name>` method on `SoftwareShaderRenderer` for the CPU path.
+Each GPU shader has a paired `render_<name>` method on
+`SoftwareShaderRenderer` for the CPU path.
 
 ## Shader inputs
 
 The shaders use a Shadertoy-compatible uniform set. The Rust code names them
-with the `u_` prefix (`lib.rs:299`):
+with the `u_` prefix (`gl_render` in `lib.rs`):
 
 | Uniform | Purpose |
 | --- | --- |
@@ -70,7 +84,7 @@ CPU.
    to the bound default framebuffer.
 2. `ShaderRenderer::render_to_pixels(name, time, params)` — render to an
    offscreen FBO, read back via `glReadPixels`, flip rows so the buffer is
-   top-down (`lib.rs:394`), and return a slice.
+   top-down (`gl_read_pixels`), and return a slice.
 
 The render is always a fullscreen triangle from `quad.rs`. There is no
 multi-pass support today.
@@ -79,30 +93,30 @@ multi-pass support today.
 
 1. Compute size at `RENDER_SCALE = 3` reduction.
 2. Loop pixel-by-pixel evaluating the per-shader math in Rust.
-3. Upscale nearest-neighbour to the target dimensions (`software.rs:662`).
+3. Upscale nearest-neighbour to the target dimensions (`upscale` / `upscale_nn` in `software.rs`).
 
 The reduced internal size is the entire performance story: every shader
 ships a software path because PSP and headless tests both need one, and 1/9
 the pixel count is what makes that affordable. The PSP test budget comment
-in `software.rs:1062` calls out 20–40 ms per frame on hardware against a
+in the `software.rs` tests calls out 20–40 ms per frame on hardware against a
 33 ms / 30 fps target.
 
 There is no caching of any kind. Every call re-evaluates the entire frame.
 Pixel buffers are pre-allocated in the renderer and resized on viewport
-change (`lib.rs:235`).
+change (`resize` on either renderer).
 
 ## Skin integration
 
 Shaders are selected by name from skin TOML. `ShaderParams.colors` is filled
 from the skin's theme palette and `ShaderParams.floats` from per-shader
-overrides. The PSP backend tests at `software.rs:902–976` show the canonical
+overrides. The tests in `crates/oasis-backend-psp/src/skins.rs` show the canonical
 parameter bundles for the shipped skins (Balatro, Terminal, etc.) — those
 tables are also the place to look when authoring a new wallpaper preset.
 
 ## Adding a new shader
 
-The data flow is hardcoded by name (no trait registration), so adding a
-shader called `my_effect` touches a small set of files:
+Built-in shaders are an enum, so the compiler points at every match that
+needs a new arm. Adding a shader called `my_effect` touches:
 
 1. **GLSL.** Create `crates/oasis-shader/src/shaders/my_effect.frag`. Use
    `#version 300 es` (the project targets GLSL ES 3.00 for WebGL2
@@ -112,19 +126,17 @@ shader called `my_effect` touches a small set of files:
 2. **`shaders/mod.rs`.** Add a `pub const MY_EFFECT_FRAG: &str =
    include_str!("my_effect.frag");`.
 
-3. **`registry.rs:6`.** Add a match arm `"my_effect" =>
-   Some(shaders::MY_EFFECT_FRAG)`.
+3. **`registry.rs`.** Add a `MyEffect` variant to `BuiltinShader`, append
+   it to `ALL` (which `ShaderRenderer::new` compiles at startup), and add
+   its arms to `name()` (`"my_effect"`) and `glsl()`
+   (`shaders::MY_EFFECT_FRAG`).
 
-4. **`lib.rs:118`.** Add `"my_effect"` to the auto-init name list inside
-   `ShaderRenderer::new` so the program is compiled at startup.
+4. **CPU port.** Add a `render_my_effect(time, params)` method on
+   `SoftwareShaderRenderer` and its arm in `render_builtin` (the match is
+   exhaustive, so this is required). Reuse the helpers (`hash2`, `fract`,
+   `lerp`, `smoothstep`) already defined in that file.
 
-5. **Optional CPU port.** If the shader needs to run on PSP or in headless
-   tests, add a `render_my_effect(time, params)` method on
-   `SoftwareShaderRenderer` (`software.rs:55`) and dispatch from the
-   per-name match. Reuse the helpers (`hash2`, `fract`, `lerp`,
-   `smoothstep`) already defined in that file.
-
-6. **Test.** Mirror the existing per-shader tests around `software.rs:767`
+5. **Test.** Mirror the existing per-shader tests in `software.rs`
    asserting the buffer is fully written and that obvious params change
    visible output.
 

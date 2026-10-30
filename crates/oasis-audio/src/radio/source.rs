@@ -59,6 +59,79 @@ pub trait RadioSource {
     }
 }
 
+/// A parsed HTTP (or ICY) response head.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct HttpHead {
+    /// Status code from the first line (`HTTP/1.1 200 OK`, `ICY 200 OK`);
+    /// `None` when the status line is malformed.
+    pub status: Option<u16>,
+    /// The head as text (status line + header lines, without the blank
+    /// line), lossily decoded.
+    pub text: String,
+    /// Offset of the first body byte in the input buffer.
+    pub body_offset: usize,
+}
+
+impl HttpHead {
+    /// Value of the first header named `name` (case-insensitive), trimmed.
+    pub fn header(&self, name: &str) -> Option<&str> {
+        self.text.lines().skip(1).find_map(|line| {
+            let (key, value) = line.split_once(':')?;
+            key.trim().eq_ignore_ascii_case(name).then(|| value.trim())
+        })
+    }
+}
+
+/// Parse an HTTP response head from the start of `buf`.
+///
+/// Returns `None` until the terminating `\r\n\r\n` has arrived. The
+/// separator is found in the raw bytes so a non-UTF-8 body (MP3 frames)
+/// cannot shift the body offset.
+pub(crate) fn parse_http_head(buf: &[u8]) -> Option<HttpHead> {
+    let end = buf.windows(4).position(|w| w == b"\r\n\r\n")?;
+    let text = String::from_utf8_lossy(&buf[..end]).into_owned();
+    let status = text
+        .lines()
+        .next()
+        .and_then(|line| line.split_whitespace().nth(1))
+        .and_then(|code| code.parse().ok());
+    Some(HttpHead {
+        status,
+        text,
+        body_offset: end + 4,
+    })
+}
+
+/// How long a request write may keep hitting `WouldBlock` before the peer
+/// is treated as dead. A request is a few hundred bytes, so a healthy
+/// socket accepts it on the first write.
+pub(crate) const REQUEST_WRITE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// Write all of `bytes` to a non-blocking `stream`, retrying `WouldBlock`
+/// until `timeout` elapses.
+pub(crate) fn write_all_bounded(
+    stream: &mut dyn oasis_types::backend::NetworkStream,
+    bytes: &[u8],
+    timeout: std::time::Duration,
+) -> Result<()> {
+    let deadline = std::time::Instant::now() + timeout;
+    let mut written = 0;
+    while written < bytes.len() {
+        match stream.write(&bytes[written..]) {
+            Ok(0) => return Err(OasisError::Backend("request write: peer closed".into())),
+            Ok(n) => written += n,
+            Err(e) if e.is_would_block() => {
+                if std::time::Instant::now() >= deadline {
+                    return Err(OasisError::Backend("request write timed out".into()));
+                }
+                std::thread::sleep(std::time::Duration::from_millis(1));
+            },
+            Err(e) => return Err(e),
+        }
+    }
+    Ok(())
+}
+
 /// Radio source that streams from a pre-loaded byte buffer.
 ///
 /// Useful for testing and UE5 integration where audio comes from game
@@ -133,6 +206,24 @@ pub struct IcecastSource {
     header_buf: Vec<u8>,
     headers_parsed: bool,
     last_metadata: Option<StreamMetadata>,
+    /// `Location` of a 3xx response, kept so
+    /// [`connect_icecast`](super::connect::connect_icecast) can follow it
+    /// without parsing the error text.
+    redirect_location: Option<String>,
+    /// Chunk read while waiting for the response head, returned by the next
+    /// `poll()` (see [`IcecastSource::push_back_chunk`]).
+    pending_chunk: Option<AudioChunk>,
+}
+
+impl std::fmt::Debug for IcecastSource {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("IcecastSource")
+            .field("host", &self.host)
+            .field("path", &self.url_path)
+            .field("state", &self.state)
+            .field("headers_parsed", &self.headers_parsed)
+            .finish_non_exhaustive()
+    }
 }
 
 impl IcecastSource {
@@ -154,7 +245,25 @@ impl IcecastSource {
             header_buf: Vec::new(),
             headers_parsed: false,
             last_metadata: None,
+            redirect_location: None,
+            pending_chunk: None,
         }
+    }
+
+    /// `Location` header of a 3xx response, once one has been received.
+    pub fn redirect_location(&self) -> Option<&str> {
+        self.redirect_location.as_deref()
+    }
+
+    /// Whether a 2xx response head has been parsed (audio follows).
+    pub fn headers_parsed(&self) -> bool {
+        self.headers_parsed
+    }
+
+    /// Queue `chunk` to be returned by the next `poll()`, so a caller that
+    /// polled past the response head does not lose the first audio bytes.
+    pub fn push_back_chunk(&mut self, chunk: AudioChunk) {
+        self.pending_chunk = Some(chunk);
     }
 
     /// Get the last parsed stream metadata.
@@ -169,44 +278,45 @@ impl IcecastSource {
              User-Agent: OASIS_OS/0.1\r\nAccept: */*\r\n\r\n",
             self.url_path, self.host
         );
-        let bytes = request.as_bytes();
-        let mut written = 0;
-        while written < bytes.len() {
-            match self.stream.write(&bytes[written..]) {
-                Ok(n) => written += n,
-                Err(e) => {
-                    let msg = format!("{e}");
-                    if msg.contains("WouldBlock") || msg.contains("would block") {
-                        std::thread::sleep(std::time::Duration::from_millis(1));
-                        continue;
-                    }
-                    self.state = SourceState::Error;
-                    return Err(e);
-                },
-            }
-        }
-        Ok(())
+        write_all_bounded(&mut *self.stream, request.as_bytes(), REQUEST_WRITE_TIMEOUT)
+            .inspect_err(|_| self.state = SourceState::Error)
     }
 
-    /// Try to parse HTTP response headers from the accumulated buffer.
+    /// Try to parse the response head from the accumulated buffer.
     ///
-    /// Searches for `\r\n\r\n` directly in raw bytes to avoid offset
-    /// mismatches from lossy UTF-8 conversion.
-    fn try_parse_headers(&mut self) -> Option<usize> {
-        let end = self.header_buf.windows(4).position(|w| w == b"\r\n\r\n")?;
-        let header_str = String::from_utf8_lossy(&self.header_buf[..end]);
-        let metaint = parse_icy_metaint(&header_str);
-        // Body starts after \r\n\r\n.
-        let body_offset = end + 4;
-        if let Some(mi) = metaint {
+    /// Returns `None` while the head is still incomplete, `Some(Ok(offset))`
+    /// with the body offset for a 2xx response, and `Some(Err(_))` for any
+    /// other status (the body of a 404/503 page is not audio). A 3xx with a
+    /// `Location` header becomes `redirect:<url>`, like [`ArchiveSource`].
+    fn try_parse_headers(&mut self) -> Option<Result<usize>> {
+        let head = parse_http_head(&self.header_buf)?;
+        let err = |msg: String| Some(Err(OasisError::Backend(msg.into())));
+        match head.status {
+            Some(200..=299) => {},
+            Some(code @ 300..=399) => {
+                return match head.header("location") {
+                    Some(loc) => {
+                        self.redirect_location = Some(loc.to_string());
+                        err(format!("redirect:{loc}"))
+                    },
+                    None => err(format!("HTTP {code}")),
+                };
+            },
+            Some(code) => return err(format!("HTTP {code}")),
+            None => return err("malformed HTTP status line".to_string()),
+        }
+        if let Some(mi) = parse_icy_metaint(&head.text) {
             self.demuxer = Some(IcyDemuxer::new(mi));
         }
-        Some(body_offset)
+        Some(Ok(head.body_offset))
     }
 }
 
 impl RadioSource for IcecastSource {
     fn poll(&mut self) -> Result<Option<AudioChunk>> {
+        if let Some(chunk) = self.pending_chunk.take() {
+            return Ok(Some(chunk));
+        }
         match self.state {
             SourceState::Connecting => {
                 self.send_request()?;
@@ -223,11 +333,8 @@ impl RadioSource for IcecastSource {
                         return Ok(None);
                     },
                     Ok(n) => n,
+                    Err(e) if e.is_would_block() => return Ok(None),
                     Err(e) => {
-                        let msg = format!("{e}");
-                        if msg.contains("WouldBlock") || msg.contains("would block") {
-                            return Ok(None);
-                        }
                         self.state = SourceState::Error;
                         return Err(OasisError::Backend(format!("stream read: {e}").into()));
                     },
@@ -235,7 +342,15 @@ impl RadioSource for IcecastSource {
 
                 if !self.headers_parsed {
                     self.header_buf.extend_from_slice(&buf[..n]);
-                    if let Some(body_offset) = self.try_parse_headers() {
+                    if let Some(parsed) = self.try_parse_headers() {
+                        let body_offset = match parsed {
+                            Ok(offset) => offset,
+                            Err(e) => {
+                                self.state = SourceState::Error;
+                                let _ = self.stream.close();
+                                return Err(e);
+                            },
+                        };
                         self.headers_parsed = true;
                         let body = self.header_buf[body_offset..].to_vec();
                         self.header_buf.clear();
@@ -352,23 +467,8 @@ impl ArchiveSource {
              Connection: close\r\nAccept: */*\r\n\r\n",
             self.path, self.host
         );
-        let bytes = request.as_bytes();
-        let mut written = 0;
-        while written < bytes.len() {
-            match self.stream.write(&bytes[written..]) {
-                Ok(n) => written += n,
-                Err(e) => {
-                    let msg = format!("{e}");
-                    if msg.contains("WouldBlock") || msg.contains("would block") {
-                        std::thread::sleep(std::time::Duration::from_millis(1));
-                        continue;
-                    }
-                    self.state = SourceState::Error;
-                    return Err(e);
-                },
-            }
-        }
-        Ok(())
+        write_all_bounded(&mut *self.stream, request.as_bytes(), REQUEST_WRITE_TIMEOUT)
+            .inspect_err(|_| self.state = SourceState::Error)
     }
 
     /// Push back a chunk so it is returned by the next `poll()` call.
@@ -384,30 +484,11 @@ impl ArchiveSource {
     /// Searches for `\r\n\r\n` directly in raw bytes to avoid offset
     /// mismatches from lossy UTF-8 conversion.
     fn try_parse_headers(&mut self) -> Option<usize> {
-        let end = self.header_buf.windows(4).position(|w| w == b"\r\n\r\n")?;
-        let header_str = String::from_utf8_lossy(&self.header_buf[..end]);
-
-        // Parse status code from first line (e.g. "HTTP/1.1 200 OK").
-        let first_line = header_str.lines().next().unwrap_or("");
-        if let Some(code_str) = first_line.split_whitespace().nth(1) {
-            self.status_code = code_str.parse().ok();
-        }
-
-        for line in header_str.lines() {
-            let lower = line.to_ascii_lowercase();
-            if lower.starts_with("content-length:")
-                && let Some(val) = line.split_once(':').map(|(_, v)| v.trim())
-            {
-                self.content_length = val.parse().ok();
-            }
-            // Extract Location header for redirects.
-            if lower.starts_with("location:")
-                && let Some((_, loc)) = line.split_once(':')
-            {
-                self.redirect_url = Some(loc.trim().to_string());
-            }
-        }
-        Some(end + 4)
+        let head = parse_http_head(&self.header_buf)?;
+        self.status_code = head.status;
+        self.content_length = head.header("content-length").and_then(|v| v.parse().ok());
+        self.redirect_url = head.header("location").map(str::to_string);
+        Some(head.body_offset)
     }
 }
 
@@ -433,11 +514,8 @@ impl RadioSource for ArchiveSource {
                         return Ok(None);
                     },
                     Ok(n) => n,
+                    Err(e) if e.is_would_block() => return Ok(None),
                     Err(e) => {
-                        let msg = format!("{e}");
-                        if msg.contains("WouldBlock") || msg.contains("would block") {
-                            return Ok(None);
-                        }
                         self.state = SourceState::Error;
                         return Err(OasisError::Backend(format!("stream read: {e}").into()));
                     },
@@ -1237,5 +1315,179 @@ mod tests {
             }
         }
         assert_eq!(src.state(), SourceState::Ended);
+    }
+
+    #[test]
+    fn icecast_source_rejects_http_error_status() {
+        let mut response = b"HTTP/1.0 404 Not Found\r\nContent-Type: text/html\r\n\r\n".to_vec();
+        response.extend_from_slice(b"<html>not audio</html>");
+        let stream = Box::new(MockStream::new(response));
+        let mut src = IcecastSource::new(stream, "host", "/missing");
+
+        src.poll().unwrap(); // Send request.
+        let err = src.poll().unwrap_err();
+        assert!(format!("{err}").contains("HTTP 404"), "got: {err}");
+        assert_eq!(src.state(), SourceState::Error);
+    }
+
+    #[test]
+    fn icecast_source_reports_redirect() {
+        let response =
+            b"HTTP/1.1 302 Found\r\nLocation: http://cdn.example.com/s.mp3\r\n\r\n".to_vec();
+        let stream = Box::new(MockStream::new(response));
+        let mut src = IcecastSource::new(stream, "host", "/stream");
+
+        src.poll().unwrap();
+        let err = src.poll().unwrap_err();
+        assert!(
+            format!("{err}").contains("redirect:http://cdn.example.com/s.mp3"),
+            "got: {err}"
+        );
+        assert_eq!(src.state(), SourceState::Error);
+    }
+
+    #[test]
+    fn icecast_source_accepts_icy_status_line() {
+        let mut response = b"ICY 200 OK\r\nicy-name: Test\r\n\r\n".to_vec();
+        response.extend_from_slice(&[0xFF; 64]);
+        let stream = Box::new(MockStream::new(response));
+        let mut src = IcecastSource::new(stream, "host", "/stream");
+
+        src.poll().unwrap();
+        let chunk = src.poll().unwrap().unwrap();
+        assert_eq!(chunk.data.len(), 64);
+    }
+
+    #[test]
+    fn icecast_source_rejects_garbage_status_line() {
+        let stream = Box::new(MockStream::new(b"hello there\r\n\r\nbody".to_vec()));
+        let mut src = IcecastSource::new(stream, "host", "/stream");
+        src.poll().unwrap();
+        assert!(src.poll().is_err());
+        assert_eq!(src.state(), SourceState::Error);
+    }
+
+    // ---------------------------------------------------------------
+    // parse_http_head
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn parse_http_head_incomplete_returns_none() {
+        assert!(parse_http_head(b"HTTP/1.1 200 OK\r\nContent-Length: 4\r\n").is_none());
+    }
+
+    #[test]
+    fn parse_http_head_fields() {
+        let mut buf = b"HTTP/1.1 206 Partial\r\nContent-Length: 4\r\nX-Pad:  v \r\n\r\n".to_vec();
+        buf.extend_from_slice(&[0xFF, 0xFE, b'\r', b'\n']);
+        let head = parse_http_head(&buf).unwrap();
+        assert_eq!(head.status, Some(206));
+        assert_eq!(head.header("content-length"), Some("4"));
+        assert_eq!(head.header("CONTENT-LENGTH"), Some("4"));
+        assert_eq!(head.header("x-pad"), Some("v"));
+        assert_eq!(head.header("location"), None);
+        assert_eq!(&buf[head.body_offset..], &[0xFF, 0xFE, b'\r', b'\n']);
+    }
+
+    #[test]
+    fn parse_http_head_status_line_is_not_a_header() {
+        // "HTTP/1.1 200 OK" contains no ':' but a status line like
+        // "HTTP/1.1 200 location: x" must not be read as a header.
+        let head = parse_http_head(b"HTTP/1.1 200 location: x\r\n\r\n").unwrap();
+        assert_eq!(head.header("location"), None);
+        assert_eq!(parse_http_head(b"junk\r\n\r\n").unwrap().status, None);
+    }
+
+    // ---------------------------------------------------------------
+    // Real non-blocking sockets (StdNetworkBackend over loopback)
+    // ---------------------------------------------------------------
+
+    /// Serve one connection on loopback: read the request head, wait for
+    /// `go`, then write `response` and close.
+    fn loopback_server(
+        response: Vec<u8>,
+    ) -> (
+        u16,
+        std::sync::mpsc::Sender<()>,
+        std::thread::JoinHandle<Vec<u8>>,
+    ) {
+        use std::io::{Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let (go_tx, go_rx) = std::sync::mpsc::channel::<()>();
+        let handle = std::thread::spawn(move || {
+            let (mut conn, _) = listener.accept().unwrap();
+            let mut request = Vec::new();
+            let mut buf = [0u8; 1024];
+            while !request.windows(4).any(|w| w == b"\r\n\r\n") {
+                let n = conn.read(&mut buf).unwrap();
+                assert!(n > 0, "client closed before sending a request");
+                request.extend_from_slice(&buf[..n]);
+            }
+            go_rx.recv().unwrap();
+            conn.write_all(&response).unwrap();
+            request
+        });
+        (port, go_tx, handle)
+    }
+
+    fn connect_loopback(port: u16) -> Box<dyn oasis_types::backend::NetworkStream> {
+        use oasis_types::backend::NetworkBackend;
+        let mut backend = oasis_net::StdNetworkBackend::new();
+        backend.connect("127.0.0.1", port).unwrap()
+    }
+
+    /// Poll until a chunk arrives or the source leaves `Active`.
+    fn poll_until_chunk(src: &mut IcecastSource) -> Result<Option<AudioChunk>> {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while std::time::Instant::now() < deadline {
+            match src.poll() {
+                Ok(None) if src.state() == SourceState::Active => {
+                    std::thread::sleep(std::time::Duration::from_millis(2));
+                },
+                other => return other,
+            }
+        }
+        panic!("timed out waiting for loopback data");
+    }
+
+    #[test]
+    fn icecast_source_survives_os_would_block_on_plain_tcp() {
+        let mut response = b"HTTP/1.0 200 OK\r\nContent-Type: audio/mpeg\r\n\r\n".to_vec();
+        response.extend_from_slice(&[0xAB; 256]);
+        let (port, go, server) = loopback_server(response);
+
+        let mut src = IcecastSource::new(connect_loopback(port), "127.0.0.1", "/live");
+        assert!(src.poll().unwrap().is_none()); // Sends the request.
+
+        // The server is holding its response, so the non-blocking socket has
+        // nothing to read: the OS reports WouldBlock (whose text does not say
+        // "would block"). That must be "no data yet", not a stream error.
+        for _ in 0..5 {
+            assert!(src.poll().unwrap().is_none());
+            assert_eq!(src.state(), SourceState::Active);
+        }
+
+        go.send(()).unwrap();
+        let chunk = poll_until_chunk(&mut src).unwrap().unwrap();
+        assert!(chunk.data.iter().all(|&b| b == 0xAB));
+        let request = server.join().unwrap();
+        let request = String::from_utf8_lossy(&request);
+        assert!(request.starts_with("GET /live HTTP/1.0\r\n"), "{request}");
+        assert!(request.contains("Icy-MetaData: 1"));
+    }
+
+    #[test]
+    fn icecast_source_loopback_http_error_is_not_audio() {
+        let response = b"HTTP/1.0 503 Service Unavailable\r\n\r\nserver full".to_vec();
+        let (port, go, server) = loopback_server(response);
+
+        let mut src = IcecastSource::new(connect_loopback(port), "127.0.0.1", "/live");
+        src.poll().unwrap();
+        go.send(()).unwrap();
+        let err = poll_until_chunk(&mut src).unwrap_err();
+        assert!(format!("{err}").contains("HTTP 503"), "got: {err}");
+        assert_eq!(src.state(), SourceState::Error);
+        server.join().unwrap();
     }
 }

@@ -77,6 +77,18 @@ impl CommandRegistry {
         self.commands.insert(cmd.name().to_string(), cmd);
     }
 
+    /// Remove the command `name` (a plugin being unloaded takes its
+    /// commands with it). Returns it, or `None` if it was not registered.
+    pub fn unregister(&mut self, name: &str) -> Option<Box<dyn Command>> {
+        self.commands.remove(name)
+    }
+
+    /// Names of the registered commands (unsorted; builtins, aliases and
+    /// functions excluded).
+    pub fn command_names(&self) -> impl Iterator<Item = &str> {
+        self.commands.keys().map(String::as_str)
+    }
+
     // -- Shell variable API --
 
     /// Set a shell variable.
@@ -296,7 +308,7 @@ impl CommandRegistry {
     /// functions (unsorted; used for tab completion).
     pub fn completion_names(&self) -> Vec<String> {
         let mut names: Vec<String> = self.commands.keys().cloned().collect();
-        names.extend(crate::types::BUILTIN_NAMES.iter().map(|s| s.to_string()));
+        names.extend(crate::builtins::BUILTINS.iter().map(|b| b.name.to_string()));
         names.extend(self.aliases.borrow().keys().cloned());
         names.extend(self.functions.borrow().keys().cloned());
         names

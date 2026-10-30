@@ -336,7 +336,7 @@ pub fn pulsing_core(cx: i32, cy: i32, radius: u16, color: Color) -> Vec<VectorOp
         VectorOp::StrokeArc {
             cx,
             cy,
-            radius: radius + 4,
+            radius: radius.saturating_add(4),
             start_angle: 0.0,
             end_angle: full_circle,
             width: 1,
@@ -461,6 +461,15 @@ mod tests {
         let ops = grid(100, 100, 30, Color::WHITE);
         // 3 vertical (30,60,90) + 3 horizontal (30,60,90) = 6
         assert_eq!(ops.len(), 6);
+    }
+
+    #[test]
+    fn pulsing_core_max_radius_does_not_overflow() {
+        let ops = pulsing_core(0, 0, u16::MAX, Color::WHITE);
+        let VectorOp::StrokeArc { radius, .. } = &ops[0] else {
+            panic!("expected StrokeArc, got {:?}", ops[0]);
+        };
+        assert_eq!(*radius, u16::MAX);
     }
 
     #[test]

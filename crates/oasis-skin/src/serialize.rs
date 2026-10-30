@@ -43,6 +43,20 @@ pub struct SkinTomlParts {
     pub corrupted: Option<String>,
 }
 
+impl SkinTomlParts {
+    /// Borrow these documents as parser input for [`Skin::from_sources`].
+    pub fn sources(&self) -> crate::loader::SkinSources<'_> {
+        crate::loader::SkinSources {
+            manifest: &self.manifest,
+            layout: &self.layout,
+            features: &self.features,
+            theme: &self.theme,
+            strings: &self.strings,
+            corrupted: self.corrupted.as_deref(),
+        }
+    }
+}
+
 /// Single-document form of a skin (used by `to_toml_string` /
 /// `from_toml_string`).
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -283,24 +297,8 @@ mod tests {
         for name in builtin::builtin_names() {
             let original = builtin::load_builtin(name).expect("builtin loads");
             let parts = original.to_toml_parts().expect("serializes");
-            let reloaded = match parts.corrupted {
-                Some(ref corrupted) => Skin::from_toml_corrupted(
-                    &parts.manifest,
-                    &parts.layout,
-                    &parts.features,
-                    &parts.theme,
-                    &parts.strings,
-                    corrupted,
-                ),
-                None => Skin::from_toml_full(
-                    &parts.manifest,
-                    &parts.layout,
-                    &parts.features,
-                    &parts.theme,
-                    &parts.strings,
-                ),
-            }
-            .unwrap_or_else(|e| panic!("skin '{name}' failed to re-parse: {e}"));
+            let reloaded = Skin::from_sources(&parts.sources())
+                .unwrap_or_else(|e| panic!("skin '{name}' failed to re-parse: {e}"));
 
             assert!(
                 reloaded.schema_warnings.is_empty(),

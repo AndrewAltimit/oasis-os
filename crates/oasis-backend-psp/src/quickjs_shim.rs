@@ -436,11 +436,7 @@ pub unsafe extern "C" fn realloc(p: *mut c_void, new_size: usize) -> *mut c_void
 // ---------------------------------------------------------------------------
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn snprintf(
-    buf: *mut c_char,
-    size: usize,
-    _fmt: *const c_char,
-) -> c_int {
+pub unsafe extern "C" fn snprintf(buf: *mut c_char, size: usize, _fmt: *const c_char) -> c_int {
     if !buf.is_null() && size > 0 {
         unsafe { buf.write(0) };
     }
@@ -466,10 +462,7 @@ pub unsafe extern "C" fn printf(_fmt: *const c_char) -> c_int {
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn fprintf(
-    _stream: *mut c_void,
-    _fmt: *const c_char,
-) -> c_int {
+pub unsafe extern "C" fn fprintf(_stream: *mut c_void, _fmt: *const c_char) -> c_int {
     0
 }
 
@@ -725,7 +718,7 @@ pub unsafe extern "C" fn __assert_func(
 /// the symbol a zeroed backing store with room for the full struct
 /// layout just in case other macros dereference it.
 #[repr(C)]
-struct Reent {
+pub struct Reent {
     errno: c_int,
     _pad: [u8; 252],
 }
@@ -736,13 +729,13 @@ static mut IMPURE_STORAGE: Reent = Reent {
 };
 
 #[unsafe(no_mangle)]
-pub static mut _impure_ptr: *mut Reent = unsafe { &raw mut IMPURE_STORAGE };
+pub static mut _impure_ptr: *mut Reent = &raw mut IMPURE_STORAGE;
 
 // The unused-import suppressor: keep the module from being GC'd if
 // no other oasis-backend-psp code references it.
 #[allow(dead_code)]
 pub(crate) fn __force_link() {
-    let _ = acos as usize;
+    let _ = acos as *const () as usize;
 }
 
 // Unused symbols — named so the initial compile surfaces any that go

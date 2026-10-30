@@ -33,7 +33,7 @@ path = "src/e2e_tests.rs"
 default = ["javascript", "video-decode-ffmpeg"]
 javascript = ["oasis-core/javascript"]
 # Internal: oasis-video is available. Activated by video-decode or video-decode-ffmpeg.
-_video = ["dep:oasis-video"]
+_video = ["dep:oasis-video", "oasis-video/demux-lite"]
 # Software decode via openh264 (Baseline profile only). Fallback for
 # environments without ffmpeg dev libraries (e.g. embedded, PSP).
 # Build: cargo build -p oasis-app --no-default-features --features video-decode,javascript
@@ -54,9 +54,9 @@ mcp = ["dep:oasis-mcp", "dep:serde_json"]
 oasis-core = { workspace = true, features = ["tls-rustls"] }
 oasis-mcp = { workspace = true, optional = true }
 serde_json = { workspace = true, optional = true }
-oasis-app-settings = { workspace = true }
-oasis-app-media = { workspace = true }
-oasis-app-system-monitor = { workspace = true }
+oasis-app-core = { workspace = true }
+# The built-in app bundle (AppRegistry, `tv` command, app crate re-exports).
+oasis-apps = { workspace = true }
 oasis-audio = { workspace = true }
 oasis-backend-sdl = { path = "../oasis-backend-sdl" }
 # Software RGBA framebuffer behind the headless e2e harness (src/headless.rs).
@@ -70,6 +70,7 @@ png = { workspace = true }
 
 [dev-dependencies]
 oasis-test-backend = { workspace = true }
+oasis-types = { workspace = true }
 
 [lints]
 workspace = true

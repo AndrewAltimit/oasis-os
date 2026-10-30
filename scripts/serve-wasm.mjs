@@ -46,7 +46,7 @@ const server = createServer(async (req, res) => {
   }
 
   // --- Static file serving ---
-  // Redirect root to /www/ so relative paths (index.js, style.css) resolve correctly.
+  // Redirect root to /www/ so relative paths (index.js, ../site/css, ../pkg) resolve correctly.
   if (pathname === "/") {
     res.writeHead(302, { Location: "/www/" + parsed.search });
     res.end();

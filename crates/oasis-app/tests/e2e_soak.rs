@@ -143,13 +143,18 @@ fn open_close_every_app_returns_to_baseline() {
 fn photo_viewer_textures_are_released_on_close() {
     let mut h = boot_small("classic");
     let base = h.resource_counts();
-    for close_with_button in [true, false, true] {
+    for close in [
+        Close::Button,
+        Close::Escape,
+        Close::WmCommand,
+        Close::Button,
+    ] {
         assert!(h.open_app("Photo Viewer"));
         h.settle();
         // Open the first entry (image or folder) a few times to load
         // thumbnails / the full image.
         // The listing of /home/user/photos: select the sample PNG, open it.
-        let lines = h.app_runner("Photo Viewer").unwrap().lines.clone();
+        let lines = h.app_runner("Photo Viewer").unwrap().lines().to_vec();
         let idx = lines
             .iter()
             .position(|l| l.contains(".png"))
@@ -169,26 +174,88 @@ fn photo_viewer_textures_are_released_on_close() {
             "setup: the viewer never uploaded an image {}",
             dump(&h, "photo_viewer_setup")
         );
-        if close_with_button {
-            assert!(h.close_window("Photo Viewer"));
-        } else {
-            for _ in 0..5 {
-                if h.find_window("Photo Viewer").is_none() {
-                    break;
+        match close {
+            Close::Button => assert!(h.close_window("Photo Viewer")),
+            Close::Escape => {
+                for _ in 0..5 {
+                    if h.find_window("Photo Viewer").is_none() {
+                        break;
+                    }
+                    h.key(Key::Escape);
+                    h.run_frames(2);
                 }
-                h.key(Key::Escape);
-                h.run_frames(2);
-            }
+            },
+            // The `wm close <id>` terminal command's request (it used to
+            // drop the runner without releasing its textures).
+            Close::WmCommand => h
+                .vfs_mut()
+                .write("/var/wm/request", b"close photo_viewer")
+                .unwrap(),
         }
         h.settle();
         h.render_now();
-        assert!(h.find_window("Photo Viewer").is_none());
+        assert!(h.find_window("Photo Viewer").is_none(), "{close:?}");
         let now = h.resource_counts();
         assert_eq!(
             now.textures, base.textures,
-            "Photo Viewer textures leaked (button close: {close_with_button})"
+            "Photo Viewer textures leaked (close: {close:?})"
         );
     }
+}
+
+/// Apps still open at exit used to be dropped without
+/// `App::release_resources` (only closed ones released theirs).
+#[test]
+fn apps_open_at_exit_release_their_textures() {
+    let mut h = boot_small("classic");
+    let base = h.resource_counts();
+    h.open_app_with_file("Photo Viewer", "/home/user/photos/oasis_sample.png");
+    let mut peak = 0;
+    for _ in 0..3 {
+        h.run_frames(5);
+        h.render_now();
+        peak = peak.max(h.resource_counts().textures);
+    }
+    assert!(peak > base.textures, "setup: no image uploaded");
+    h.release_all_apps();
+    let now = h.resource_counts();
+    assert_eq!(now.runners, 0);
+    assert_eq!(now.textures, base.textures, "open app's textures leaked");
+    h.shutdown().unwrap();
+}
+
+/// How a soak scenario closes a window.
+#[derive(Debug, Clone, Copy)]
+enum Close {
+    Button,
+    Escape,
+    WmCommand,
+}
+
+/// Opening file after file into the open Photo Viewer (File Manager's
+/// "open with" hand-off) replaces its runner each time; the replaced
+/// runner's image textures must be released, not dropped.
+#[test]
+fn reopening_files_in_the_photo_viewer_keeps_resources_flat() {
+    let mut h = boot_small("classic");
+    let image = "/home/user/photos/oasis_sample.png";
+    let mut first = None;
+    for round in 0..5 {
+        h.open_app_with_file("Photo Viewer", image);
+        h.settle();
+        h.render_now();
+        let now = h.resource_counts();
+        assert_eq!(now.windows, 1, "round {round}: one viewer window");
+        assert_eq!(now.runners, 1, "round {round}: one viewer runner");
+        match first {
+            None => first = Some(now),
+            Some(first) => assert_eq!(
+                now.textures, first.textures,
+                "round {round}: replaced viewer leaked textures"
+            ),
+        }
+    }
+    assert!(h.state().content.retired_runners.is_empty());
 }
 
 #[test]
@@ -203,7 +270,7 @@ fn skin_switch_cycles_do_not_leak() {
         for skin in skins.iter().chain(std::iter::once(&"classic")) {
             h.vfs_mut()
                 .write(
-                    oasis_app_settings::SKIN_CHANGE_REQUEST_PATH,
+                    oasis_apps::settings::SKIN_CHANGE_REQUEST_PATH,
                     skin.as_bytes(),
                 )
                 .unwrap();
@@ -239,7 +306,7 @@ fn resolution_cycles_do_not_leak() {
         for (w, hh) in sizes {
             h.vfs_mut()
                 .write(
-                    oasis_app_settings::RESOLUTION_CHANGE_REQUEST_PATH,
+                    oasis_apps::settings::RESOLUTION_CHANGE_REQUEST_PATH,
                     format!("{w}x{hh}").as_bytes(),
                 )
                 .unwrap();

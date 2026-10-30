@@ -220,11 +220,11 @@ pub const WINDOWED_FONT_SIZE: u16 = 12;
 /// Rows [`draw_content_windowed`] shows in a window with room for
 /// `max_lines`: `(first line index, selected row, row count)`.
 ///
-/// `ContentState` scrolls against a row count cached from the fullscreen
-/// layout, and a smaller window shows fewer rows. The drawn range is
-/// shifted so the selected row is always on screen; otherwise the cursor
-/// walks off the bottom of a small window and the last lines can never be
-/// reached.
+/// `ContentState` scrolls against the row count cached by its last
+/// [`ContentState::update_layout_windowed`] (or the fullscreen layout, for
+/// apps that never call it), which can disagree with this window. The drawn
+/// range is shifted so the selected row is always on screen; otherwise the
+/// cursor could walk off the bottom of a small window.
 fn windowed_rows(content: &ContentState, max_lines: usize) -> (usize, usize, usize) {
     let shift = if max_lines > 0 {
         (content.cursor + 1).saturating_sub(max_lines)
@@ -251,14 +251,10 @@ pub fn windowed_line_origin(
     at: &ActiveTheme,
     line_idx: usize,
 ) -> Option<(i32, i32, &'static str)> {
-    let has_context = content.viewing_file.is_some() || content.browse_dir.is_some();
-    let content_top = if has_context {
-        at.app.title_bar_height as i32
-    } else {
-        WINDOWED_TOP_PAD as i32
-    };
-    let line_h = at.terminal_line_height.max(12) as i32;
-    let max_lines = ((ch as i32 - content_top - 16) / line_h).max(0) as usize;
+    let metrics = WindowedMetrics::from_theme(at);
+    let content_top = windowed_content_top(content, metrics);
+    let line_h = metrics.line_h as i32;
+    let max_lines = windowed_max_lines(content, ch, metrics);
     let (first, cursor_row, visible) = windowed_rows(content, max_lines);
     let i = line_idx.checked_sub(first)?;
     if i >= visible {
@@ -268,9 +264,9 @@ pub fn windowed_line_origin(
     Some((cx + 4, cy + content_top + i as i32 * line_h, prefix))
 }
 
-/// Theme metrics [`draw_content_windowed`] lays lines out with. Apps cache
-/// them while drawing (their click handler gets no theme) and pass them to
-/// [`windowed_line_at`].
+/// Theme metrics [`draw_content_windowed`] lays lines out with. Apps record
+/// them in [`App::layout`](crate::App::layout) (their click handler gets
+/// no theme) and pass them to [`windowed_line_at`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct WindowedMetrics {
     /// Height of the context header row (`at.app.title_bar_height`).
@@ -295,6 +291,25 @@ impl Default for WindowedMetrics {
     }
 }
 
+/// Top inset of the first content row [`draw_content_windowed`] draws:
+/// below the context header row when there is one.
+fn windowed_content_top(content: &ContentState, metrics: WindowedMetrics) -> i32 {
+    let has_context = content.viewing_file.is_some() || content.browse_dir.is_some();
+    if has_context {
+        metrics.title_bar_height as i32
+    } else {
+        WINDOWED_TOP_PAD as i32
+    }
+}
+
+/// How many content rows [`draw_content_windowed`] fits in a content area
+/// `ch` tall (may be 0 for a degenerate window).
+pub fn windowed_max_lines(content: &ContentState, ch: u32, metrics: WindowedMetrics) -> usize {
+    let content_top = windowed_content_top(content, metrics);
+    let line_h = metrics.line_h.max(1) as i32;
+    ((ch as i32 - content_top - 16) / line_h).max(0) as usize
+}
+
 /// The content line [`draw_content_windowed`] drew at content-local `ly`
 /// in a window whose content area is `ch` tall (the inverse of
 /// [`windowed_line_origin`]), or `None` when `ly` is outside the lines.
@@ -304,14 +319,9 @@ pub fn windowed_line_at(
     metrics: WindowedMetrics,
     ly: i32,
 ) -> Option<usize> {
-    let has_context = content.viewing_file.is_some() || content.browse_dir.is_some();
-    let content_top = if has_context {
-        metrics.title_bar_height as i32
-    } else {
-        WINDOWED_TOP_PAD as i32
-    };
+    let content_top = windowed_content_top(content, metrics);
     let line_h = metrics.line_h.max(1) as i32;
-    let max_lines = ((ch as i32 - content_top - 16) / line_h).max(0) as usize;
+    let max_lines = windowed_max_lines(content, ch, metrics);
     let (first, _, visible) = windowed_rows(content, max_lines);
     let y = ly - content_top;
     if y < 0 {
@@ -357,8 +367,9 @@ pub fn draw_content_windowed(
     };
 
     // Content lines.
-    let line_h = at.terminal_line_height.max(12) as i32;
-    let max_lines = ((ch as i32 - content_top - 16) / line_h).max(0) as usize;
+    let metrics = WindowedMetrics::from_theme(at);
+    let line_h = metrics.line_h as i32;
+    let max_lines = windowed_max_lines(content, ch, metrics);
     let (first, cursor_row, visible) = windowed_rows(content, max_lines);
     // One buffer reused for every "{prefix}{line}" string (a single
     // draw_text call keeps proportional-font glyph placement identical).
@@ -435,65 +446,7 @@ pub fn hide_app_sdi(sdi: &mut SdiRegistry) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use oasis_types::backend::{Color, SdiCore, TextureId};
-    use oasis_types::error::Result;
-
-    /// Backend that records every `draw_text` call as `(text, x, y)`.
-    #[derive(Default)]
-    struct TextRecorder(Vec<(String, i32, i32)>);
-
-    impl SdiCore for TextRecorder {
-        fn init(&mut self, _w: u32, _h: u32) -> Result<()> {
-            Ok(())
-        }
-        fn clear(&mut self, _color: Color) -> Result<()> {
-            Ok(())
-        }
-        fn blit(&mut self, _t: TextureId, _x: i32, _y: i32, _w: u32, _h: u32) -> Result<()> {
-            Ok(())
-        }
-        fn fill_rect(&mut self, _x: i32, _y: i32, _w: u32, _h: u32, _c: Color) -> Result<()> {
-            Ok(())
-        }
-        fn draw_text(&mut self, t: &str, x: i32, y: i32, _fs: u16, _c: Color) -> Result<()> {
-            self.0.push((t.to_string(), x, y));
-            Ok(())
-        }
-        fn swap_buffers(&mut self) -> Result<()> {
-            Ok(())
-        }
-        fn load_texture(&mut self, _w: u32, _h: u32, _d: &[u8]) -> Result<TextureId> {
-            Ok(TextureId(0))
-        }
-        fn destroy_texture(&mut self, _t: TextureId) -> Result<()> {
-            Ok(())
-        }
-        fn set_clip_rect(&mut self, _x: i32, _y: i32, _w: u32, _h: u32) -> Result<()> {
-            Ok(())
-        }
-        fn reset_clip_rect(&mut self) -> Result<()> {
-            Ok(())
-        }
-        fn measure_text(&self, _t: &str, _fs: u16) -> u32 {
-            0
-        }
-        fn read_pixels(&self, _x: i32, _y: i32, _w: u32, _h: u32) -> Result<Vec<u8>> {
-            Ok(vec![])
-        }
-        fn shutdown(&mut self) -> Result<()> {
-            Ok(())
-        }
-    }
-
-    impl oasis_types::backend::SdiShapes for TextRecorder {}
-    impl oasis_types::backend::SdiGradients for TextRecorder {}
-    impl oasis_types::backend::SdiAlpha for TextRecorder {}
-    impl oasis_types::backend::SdiText for TextRecorder {}
-    impl oasis_types::backend::SdiTextures for TextRecorder {}
-    impl oasis_types::backend::SdiClipTransform for TextRecorder {}
-    impl oasis_types::backend::SdiVector for TextRecorder {}
-    impl oasis_types::backend::SdiBatch for TextRecorder {}
-    impl oasis_types::backend::SdiRenderTarget for TextRecorder {}
+    use oasis_test_backend::RecordingBackend;
 
     #[test]
     fn windowed_line_at_inverts_windowed_line_origin() {
@@ -572,16 +525,16 @@ mod tests {
         let mut content = ContentState::new("Paint", "/apps/paint");
         content.lines = vec!["first".into(), "second".into()];
 
-        let mut rec = TextRecorder::default();
+        let mut rec = RecordingBackend::default();
         let at = ActiveTheme::default();
         draw_content_windowed(&content, 0, 0, 300, 200, &mut rec, &at).unwrap();
 
+        let texts = rec.text_positions();
         assert!(
-            !rec.0.iter().any(|(t, _, _)| t.contains("Paint")),
-            "windowed content must not repeat the app title: {:?}",
-            rec.0
+            !rec.has_text("Paint"),
+            "windowed content must not repeat the app title: {texts:?}"
         );
-        let first = rec.0.first().expect("content lines drawn");
+        let first = texts.first().expect("content lines drawn");
         assert!(first.0.contains("first"));
         assert_eq!(first.2, WINDOWED_TOP_PAD as i32);
     }
@@ -594,17 +547,17 @@ mod tests {
         content.viewing_file = Some("/notes.txt".into());
         content.lines = vec!["hello".into()];
 
-        let mut rec = TextRecorder::default();
+        let mut rec = RecordingBackend::default();
         let at = ActiveTheme::default();
         draw_content_windowed(&content, 0, 0, 300, 200, &mut rec, &at).unwrap();
 
-        assert!(rec.0.iter().any(|(t, _, _)| t.contains("[/notes.txt]")));
-        assert!(!rec.0.iter().any(|(t, _, _)| t.contains("File Manager")));
+        assert!(rec.has_text("[/notes.txt]"));
+        assert!(!rec.has_text("File Manager"));
         // Content starts below the header row.
         let line = rec
-            .0
-            .iter()
-            .find(|(t, _, _)| t.contains("hello"))
+            .text_positions()
+            .into_iter()
+            .find(|t| t.0.contains("hello"))
             .expect("content line drawn");
         assert_eq!(line.2, at.app.title_bar_height as i32);
     }

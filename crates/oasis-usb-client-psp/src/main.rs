@@ -12,18 +12,17 @@
 #![no_std]
 #![no_main]
 
-mod usbd;
 mod descriptors;
 mod driver;
 mod framebuffer;
 mod transfer;
+mod usbd;
 
-use psp::sys::{
-    sceKernelDelayThread, sceUsbGetState, sceUsbStart, sceUsbActivate,
-    sceUsbDeactivate, sceUsbStop, IoOpenFlags,
-    SceCtrlData, CtrlButtons, sceCtrlPeekBufferPositive,
-};
 use core::ffi::c_void;
+use psp::sys::{
+    CtrlButtons, IoOpenFlags, SceCtrlData, sceCtrlPeekBufferPositive, sceKernelDelayThread,
+    sceUsbActivate, sceUsbDeactivate, sceUsbGetState, sceUsbStart, sceUsbStop,
+};
 
 /// Read a 32-bit value from a memory-mapped hardware address.
 /// SAFETY: Only call with valid MMIO or kernel memory addresses.
@@ -37,9 +36,6 @@ psp::module_kernel!("OasisUSBClient", 1, 0);
 /// Product ID for our custom USB device (avoid Sony reserved range 0x1C8-0x1CC)
 pub const OASIS_USB_PID: u32 = 0x1337;
 
-/// USB storage PID (for comparison dump in Step 1.3)
-const USB_STORAGE_PID: u32 = 0x1C8;
-
 static LOG_PATH: &[u8] = b"ms0:/PSP/GAME/USBCLIENT/usb.log\0";
 
 fn log_init() {
@@ -51,8 +47,10 @@ fn log_init() {
             0o777,
         )
     };
-    // SAFETY: PSP firmware syscall — kernel-mode binary; signature is documented in pspsdk.
-    if fd.0 >= 0 { unsafe { psp::sys::sceIoClose(fd) }; }
+    if fd.0 >= 0 {
+        // SAFETY: PSP firmware syscall — kernel-mode binary; signature is documented in pspsdk.
+        unsafe { psp::sys::sceIoClose(fd) };
+    }
 }
 
 pub fn log_str(s: &str) {
@@ -93,136 +91,9 @@ pub fn log_hex(label: &str, val: u32) {
 // Phase 1.1: MMIO state dump — USB bus driver internal state
 // ---------------------------------------------------------------------------
 
-/// Dump the USB bus driver's internal state block at 0x88190600-0x88190700.
-/// Key addresses from RE:
-///   0x881906E8 = speed param 1 (expect 0x200 for hi-speed, 0x100 for full)
-///   0x881906EC = speed param 2 (expect 0x20 for hi-speed, 0x10 for full)
-///   0x881906F0 = additional state
-fn dump_bus_driver_state(label: &str) {
-    log_str(label);
-
-    // Critical speed validation addresses
-    // SAFETY: MMIO read of a documented PSP hardware register at a fixed physical address.
-    let s1 = unsafe { hw_read32(0x881906E8) };
-    // SAFETY: MMIO read of a documented PSP hardware register at a fixed physical address.
-    let s2 = unsafe { hw_read32(0x881906EC) };
-    // SAFETY: MMIO read of a documented PSP hardware register at a fixed physical address.
-    let s3 = unsafe { hw_read32(0x881906F0) };
-    log_hex("  [6E8] speed1=", s1);
-    log_hex("  [6EC] speed2=", s2);
-    log_hex("  [6F0] state3=", s3);
-
-    // Dump full 0x88190600-0x88190700 range (64 words)
-    log_str("  --- 0x88190600 block ---");
-    let base: u32 = 0x88190600;
-    for row in 0..16 {
-        let off = row * 16;
-        // SAFETY: MMIO read of a documented PSP hardware register at a fixed physical address.
-        let w0 = unsafe { hw_read32(base + off) };
-        // SAFETY: MMIO read of a documented PSP hardware register at a fixed physical address.
-        let w1 = unsafe { hw_read32(base + off + 4) };
-        // SAFETY: MMIO read of a documented PSP hardware register at a fixed physical address.
-        let w2 = unsafe { hw_read32(base + off + 8) };
-        // SAFETY: MMIO read of a documented PSP hardware register at a fixed physical address.
-        let w3 = unsafe { hw_read32(base + off + 12) };
-        // Log as "  +XX: WWWWWWWW WWWWWWWW WWWWWWWW WWWWWWWW"
-        log_hex_row(off, w0, w1, w2, w3);
-    }
-}
-
-/// Log a row of 4 words with offset label.
-fn log_hex_row(off: u32, w0: u32, w1: u32, w2: u32, w3: u32) {
-    let hex = b"0123456789ABCDEF";
-    let mut buf = [b' '; 48]; // "  +XX: WWWWWWWW WWWWWWWW WWWWWWWW WWWWWWWW"
-    buf[0] = b' ';
-    buf[1] = b' ';
-    buf[2] = b'+';
-    buf[3] = hex[((off >> 4) & 0xF) as usize];
-    buf[4] = hex[(off & 0xF) as usize];
-    buf[5] = b':';
-    buf[6] = b' ';
-    fn write_word(buf: &mut [u8], pos: usize, w: u32) {
-        let hex = b"0123456789ABCDEF";
-        for i in 0..8 {
-            buf[pos + i] = hex[((w >> (28 - i * 4)) & 0xF) as usize];
-        }
-    }
-    write_word(&mut buf, 7, w0);
-    buf[15] = b' ';
-    write_word(&mut buf, 16, w1);
-    buf[24] = b' ';
-    write_word(&mut buf, 25, w2);
-    buf[33] = b' ';
-    write_word(&mut buf, 34, w3);
-
-    // SAFETY: all bytes written into this buffer above are ASCII.
-    let s = unsafe { core::str::from_utf8_unchecked(&buf[..42]) };
-    log_str(s);
-}
-
 // ---------------------------------------------------------------------------
 // Phase 1.3: USB storage comparison — dump regs with known-good driver
 // ---------------------------------------------------------------------------
-
-/// Activate USB storage mode, dump the bus driver state, then deactivate.
-/// This gives us the known-good values for speed params with a working driver.
-fn dump_usb_storage_comparison() {
-    log_str("=== USB Storage Comparison ===");
-
-    // Start USB storage driver
-    // SAFETY: PSP firmware syscall — kernel-mode binary; signature is documented in pspsdk.
-    let r = unsafe {
-        sceUsbStart(
-            b"USBStorDriver\0".as_ptr(),
-            0,
-            core::ptr::null_mut::<c_void>(),
-        )
-    };
-    log_hex("StorStart=", r as u32);
-
-    // Activate USB storage with standard PID
-    // SAFETY: PSP firmware syscall — kernel-mode binary; signature is documented in pspsdk.
-    let r = unsafe { sceUsbActivate(USB_STORAGE_PID) };
-    log_hex("StorActivate=", r as u32);
-
-    // Wait for connection
-    log_str("Plug USB cable for storage test...");
-    let mut connected = false;
-    for i in 0..50 {
-        // SAFETY: PSP firmware syscall — kernel-mode binary; signature is documented in pspsdk.
-        unsafe { sceKernelDelayThread(200_000) };
-        // SAFETY: PSP firmware syscall — kernel-mode binary; signature is documented in pspsdk.
-        let state = unsafe { sceUsbGetState() }.bits();
-        if state & 0x8 != 0 {
-            // USB_STATE_CONFIGURED
-            log_hex("Storage configured at tick=", i);
-            connected = true;
-            break;
-        }
-    }
-
-    // Dump state whether connected or not
-    dump_bus_driver_state("Storage driver state:");
-
-    // Deactivate and stop
-    // SAFETY: PSP firmware syscall — kernel-mode binary; signature is documented in pspsdk.
-    unsafe { sceUsbDeactivate(USB_STORAGE_PID) };
-    // SAFETY: PSP firmware syscall — kernel-mode binary; signature is documented in pspsdk.
-    unsafe { sceKernelDelayThread(100_000) };
-    // SAFETY: PSP firmware syscall — kernel-mode binary; signature is documented in pspsdk.
-    unsafe {
-        sceUsbStop(
-            b"USBStorDriver\0".as_ptr(),
-            0,
-            core::ptr::null_mut::<c_void>(),
-        )
-    };
-
-    if !connected {
-        log_str("(storage never connected, values are pre-connect)");
-    }
-    log_str("=== End Storage Comparison ===");
-}
 
 // ---------------------------------------------------------------------------
 // Main entry point
@@ -240,14 +111,10 @@ fn psp_main() {
 
     // Step 1: Load USB modules + start bus driver
     // SAFETY: PSP firmware syscall — kernel-mode binary; signature is documented in pspsdk.
-    let r1 = unsafe {
-        psp::sys::sceUtilityLoadUsbModule(psp::sys::UsbModule::UsbPspCm)
-    };
+    let r1 = unsafe { psp::sys::sceUtilityLoadUsbModule(psp::sys::UsbModule::UsbPspCm) };
     log_hex("LoadPspCm=", r1 as u32);
     // SAFETY: PSP firmware syscall — kernel-mode binary; signature is documented in pspsdk.
-    let r2 = unsafe {
-        psp::sys::sceUtilityLoadUsbModule(psp::sys::UsbModule::UsbAcc)
-    };
+    let r2 = unsafe { psp::sys::sceUtilityLoadUsbModule(psp::sys::UsbModule::UsbAcc) };
     log_hex("LoadAcc=", r2 as u32);
 
     log_str("Starting USBBusDriver...");

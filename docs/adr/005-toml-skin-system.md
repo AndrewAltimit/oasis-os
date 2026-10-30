@@ -1,8 +1,8 @@
 # ADR-005: TOML Skin System
 
 **Status:** Accepted
-**Date:** 2025-02-12
-**Last reviewed:** 2026-09-22 — decision still current; skin counts in Context and Consequences updated below to match current `crates/oasis-skin/src/builtin/mod.rs` (`builtin_names()`) and `skins/`.
+**Date:** 2026-02-09 (initial release; recorded 2026-02-19)
+**Last reviewed:** 2026-10-29 — decision still current. Consequences updated: every built-in skin is now generated from its `skins/` directory (the hand-written Rust loaders and constants were removed), and resolution is strict.
 
 ## Context
 
@@ -55,16 +55,21 @@ TOML at compile time.
 ## Consequences
 
 - `oasis-skin` crate owns parsing, resolution, and theme derivation.
-- 17 built-in skins ship today: `classic`, `corrupted`, `desktop`, `modern`,
-  `xp`, `macos`, `gnome`, `retro-cga`, `balatro`, `paper`, `win95`,
-  `solarized`, `vaporwave`, `highcontrast`, `altimit`, `psix-tribute`,
-  `psix-hifi`. Fourteen of them (every directory under `skins/`: `altimit`,
-  `balatro`, `classic`, `gnome`, `highcontrast`, `macos`, `paper`,
-  `psix-hifi`, `psix-tribute`, `retro-cga`, `solarized`, `vaporwave`,
-  `win95`, `xp`) also ship as external TOML directories and demonstrate the
-  filesystem-loading path; `oasis-skin`'s build script embeds them with
-  `include_str!` / `include_bytes!`. The other three (`corrupted`, `desktop`,
-  `modern`) are built-in only via Rust constructors. `psix-tribute` and
-  `psix-hifi` use manifest inheritance (`inherits = "classic"`).
+- 17 built-in skins ship today, and all 17 are directories under `skins/`
+  (`altimit`, `balatro`, `classic`, `corrupted`, `desktop`, `gnome`,
+  `highcontrast`, `macos`, `modern`, `paper`, `psix-hifi`, `psix-tribute`,
+  `retro-cga`, `solarized`, `vaporwave`, `win95`, `xp`). Those directories are
+  the single source of truth: `oasis-skin`'s build script embeds each one with
+  `include_str!` / `include_bytes!` (plus `corrupted.toml` when present) and
+  generates the loaders and `builtin_names()`. No skin is defined in Rust, so a
+  built-in and its directory form cannot drift apart. (Until 2026-10 three
+  skins existed only as Rust constants and `xp`'s constants had diverged from
+  `skins/xp/`; a snapshot test now pins what every built-in parses to.)
+  `psix-tribute` and `psix-hifi` use manifest inheritance
+  (`inherits = "classic"`).
+- `resolve_skin` is strict (unknown or broken skin = error);
+  `resolve_skin_or_classic` is the boot-time variant that falls back to
+  `classic`.
 - The `ActiveTheme` struct provides runtime-mutable access to all derived colors.
-- Adding a new skin requires only TOML files -- no Rust code changes.
+- Adding a new skin requires only TOML files -- no Rust code changes. Adding a
+  complete directory under `skins/` makes it a built-in.

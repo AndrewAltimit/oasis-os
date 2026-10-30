@@ -78,7 +78,21 @@
         'The new child element contains the parent.', 'HierarchyRequestError');
     }
     if (rc === -2) throw new DOMException('Invalid node.', 'NotFoundError');
+    if (rc === -3) {
+      throw new DOMException(
+        'The insertion would exceed the maximum DOM depth.', 'HierarchyRequestError');
+    }
   }
+
+  // Node-creating bindings return -1 once the document is at the
+  // script node cap (`MAX_SCRIPT_DOM_NODES`).
+  function __new_id(nid) {
+    if (nid < 0) {
+      throw new DOMException('The document has too many nodes.', 'QuotaExceededError');
+    }
+    return nid;
+  }
+  function __created(nid) { return __wrap(__new_id(nid)); }
 
   function __as_node(n) {
     if (n && typeof n.__oasis_node_id === 'number') return n;
@@ -233,7 +247,7 @@
     return oldChild;
   };
   Node.prototype.cloneNode = function(deep) {
-    return __wrap(__oasis_clone(this.__oasis_node_id, !!deep));
+    return __created(__oasis_clone(this.__oasis_node_id, !!deep));
   };
   Node.prototype.contains = function(other) {
     if (!other || typeof other.__oasis_node_id !== 'number') return false;
@@ -602,7 +616,7 @@
       set: function(v) {
         var p = __oasis_parent_node(this.__oasis_node_id);
         if (p < 0) return;
-        var frag = __oasis_parse_fragment(String(v));
+        var frag = __new_id(__oasis_parse_fragment(String(v)));
         __check(__oasis_insertbefore(p, frag, this.__oasis_node_id));
         __oasis_discard_fragment(frag);
         __oasis_remove(this.__oasis_node_id);
@@ -786,7 +800,7 @@
       "'beforeEnd', or 'afterEnd'.", 'SyntaxError');
   }
   Element.prototype.insertAdjacentHTML = function(where, html) {
-    var frag = __oasis_parse_fragment(String(html));
+    var frag = __new_id(__oasis_parse_fragment(String(html)));
     try {
       __adjacent(this, where, frag);
     } finally {
@@ -1104,22 +1118,22 @@
     });
   };
   document.createElement = function(tag) {
-    return __wrap(__oasis_create(String(tag).toLowerCase()));
+    return __created(__oasis_create(String(tag).toLowerCase()));
   };
   document.createElementNS = function(ns, qname) {
     var local = String(qname);
     var colon = local.indexOf(':');
     if (colon >= 0) local = local.slice(colon + 1);
-    return __wrap(__oasis_create(local.toLowerCase()));
+    return __created(__oasis_create(local.toLowerCase()));
   };
   document.createTextNode = function(text) {
-    return __wrap(__oasis_createtext(String(text)));
+    return __created(__oasis_createtext(String(text)));
   };
   document.createComment = function(text) {
-    return __wrap(__oasis_create_comment(String(text)));
+    return __created(__oasis_create_comment(String(text)));
   };
   document.createDocumentFragment = function() {
-    return __wrap(__oasis_create_fragment());
+    return __created(__oasis_create_fragment());
   };
   document.createEvent = function(kind) {
     var k = String(kind).toLowerCase();

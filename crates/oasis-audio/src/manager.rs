@@ -1,172 +1,229 @@
-//! High-level audio manager.
+//! Music playback state machine behind the `/var/audio/*` VFS IPC.
 //!
-//! Wraps an `AudioBackend` with playlist management, volume control,
-//! and VFS-based status publishing for the terminal to read.
+//! [`AudioManager`] owns the playlist, repeat/shuffle modes and the
+//! playback state, and turns each [`MediaRequest`] into a [`MediaAction`]
+//! for the host to carry out on its `AudioBackend`. It never touches a
+//! backend itself: the host knows things the manager does not (which
+//! loaded track is the music track, whether another consumer such as a
+//! video player currently owns the shared audio stream), so the split
+//! keeps those decisions in one place and keeps this type testable
+//! without audio hardware.
+//!
+//! [`MusicController`](crate::MusicController) carries the actions out
+//! (the desktop shell and the WASM backend both drive one); the `music`
+//! terminal command and the Music Player app produce the requests.
 
-use oasis_types::backend::AudioBackend;
-use oasis_types::error::{OasisError, Result};
+use oasis_types::error::Result;
+use oasis_types::ipc::{AUDIO_STATUS_PATH, MediaRequest};
 use oasis_vfs::Vfs;
 
 use super::playlist::{Playlist, format_duration};
-use super::types::{PlaybackState, RepeatMode, TrackInfo};
+use super::types::{PlaybackState, TrackInfo};
 
-/// VFS path where the audio manager publishes its status.
-pub const AUDIO_STATUS_PATH: &str = "/var/audio/status";
-/// VFS path where the terminal writes audio requests.
-pub const AUDIO_REQUEST_PATH: &str = "/var/audio/request";
+/// What the host must do on its audio backend after
+/// [`AudioManager::apply`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MediaAction {
+    /// Nothing to do on the backend (state-only change or a no-op).
+    None,
+    /// Release the current music track, then load and play this VFS path.
+    PlayPath(String),
+    /// Release the current music track and select this VFS path without
+    /// starting it (`next` / `prev` while paused): playback stays paused
+    /// and the next `play` / `resume` starts the new track
+    /// ([`MediaAction::PlayPath`]).
+    Cue(String),
+    /// Pause the music track.
+    Pause,
+    /// Resume the paused music track.
+    Resume,
+    /// Stop and release the music track.
+    Stop,
+    /// Set the output volume (0-100).
+    SetVolume(u8),
+}
 
-/// High-level audio manager that coordinates backend + playlist.
+/// Playlist + playback-state model for the host's music controller.
+#[derive(Debug, Default)]
 pub struct AudioManager {
     /// Current playback state.
     state: PlaybackState,
-    /// The playlist.
+    /// The playlist (every file played via `play_file`, in first-play order).
     pub playlist: Playlist,
-    /// Current volume (0-100).
-    volume: u8,
+    /// Paused on a cued entry ([`MediaAction::Cue`]): nothing is loaded,
+    /// so resuming must start the current entry rather than resume the
+    /// backend.
+    cued: bool,
 }
 
 impl AudioManager {
-    /// Create a new audio manager.
+    /// Create an empty, stopped manager.
     pub fn new() -> Self {
-        Self {
-            state: PlaybackState::Stopped,
-            playlist: Playlist::new(),
-            volume: 80,
-        }
+        Self::default()
     }
 
-    /// Get the current playback state.
+    /// Current playback state.
     pub fn state(&self) -> PlaybackState {
         self.state
     }
 
-    /// Get the current volume.
-    pub fn volume(&self) -> u8 {
-        self.volume
-    }
-
-    /// Set the volume (clamped to 0-100).
-    pub fn set_volume(&mut self, vol: u8, backend: &mut dyn AudioBackend) -> Result<()> {
-        self.volume = vol.min(100);
-        backend.set_volume(self.volume)
-    }
-
-    /// Add a track from a VFS path. Reads the file and creates a TrackInfo.
-    pub fn add_track_from_vfs(
-        &mut self,
-        path: &str,
-        vfs: &mut dyn Vfs,
-        backend: &mut dyn AudioBackend,
-    ) -> Result<()> {
-        if !vfs.exists(path) {
-            return Err(OasisError::Vfs(format!("file not found: {path}").into()));
+    /// Override the playback state. The host calls this when an action
+    /// could not be carried out (e.g. the file failed to load) or when
+    /// playback ended outside the manager (the app was closed).
+    pub fn set_state(&mut self, state: PlaybackState) {
+        self.state = state;
+        if state != PlaybackState::Paused {
+            self.cued = false;
         }
-        let data = vfs.read(path)?;
-        let _track_id = backend.load_track(&data)?;
-
-        let info = TrackInfo::from_path(path);
-        self.playlist.add(info);
-        Ok(())
     }
 
-    /// Play the current track (or start from the first track if none selected).
-    pub fn play(&mut self, backend: &mut dyn AudioBackend) -> Result<()> {
-        if self.playlist.is_empty() {
-            return Err(OasisError::Command("playlist is empty".into()));
-        }
-        if self.playlist.current_track().is_none() {
-            self.playlist.set_current(0);
-        }
-        // In a full implementation, we'd load the track data via VFS here.
-        // For now, we update state and let the backend handle playback.
-        let idx = self.playlist.current_index().unwrap_or(0);
-        let track_id = oasis_types::backend::AudioTrackId(idx as u64);
-        backend.play(track_id)?;
-        self.state = PlaybackState::Playing;
-        Ok(())
+    /// VFS path of the current playlist entry.
+    pub fn current_path(&self) -> Option<&str> {
+        self.playlist.current_track().map(|t| t.path.as_str())
     }
 
-    /// Pause playback.
-    pub fn pause(&mut self, backend: &mut dyn AudioBackend) -> Result<()> {
+    /// Apply one request and return the backend action it needs.
+    pub fn apply(&mut self, request: &MediaRequest) -> MediaAction {
+        match request {
+            MediaRequest::PlayFile(path) => {
+                let idx = match self.playlist.position_of(path) {
+                    Some(i) => i,
+                    None => {
+                        self.playlist.add(TrackInfo::from_path(path));
+                        self.playlist.len() - 1
+                    },
+                };
+                self.playlist.set_current(idx);
+                self.set_state(PlaybackState::Playing);
+                MediaAction::PlayPath(path.clone())
+            },
+            MediaRequest::Play => match self.state {
+                PlaybackState::Playing => MediaAction::None,
+                PlaybackState::Paused => self.resume(),
+                PlaybackState::Stopped => {
+                    if self.playlist.current_track().is_none() && !self.playlist.set_current(0) {
+                        return MediaAction::None;
+                    }
+                    self.play_current()
+                },
+            },
+            MediaRequest::Pause => {
+                if self.state != PlaybackState::Playing {
+                    return MediaAction::None;
+                }
+                self.state = PlaybackState::Paused;
+                MediaAction::Pause
+            },
+            MediaRequest::Resume => {
+                if self.state != PlaybackState::Paused {
+                    return MediaAction::None;
+                }
+                self.resume()
+            },
+            MediaRequest::Stop => {
+                self.set_state(PlaybackState::Stopped);
+                MediaAction::Stop
+            },
+            MediaRequest::Next => {
+                let moved = self.playlist.advance();
+                self.after_skip(moved)
+            },
+            MediaRequest::Prev => {
+                let moved = self.playlist.go_back();
+                self.after_skip(moved)
+            },
+            MediaRequest::Volume(v) => MediaAction::SetVolume((*v).min(100)),
+            MediaRequest::Repeat(mode) => {
+                self.playlist.repeat = *mode;
+                MediaAction::None
+            },
+            MediaRequest::Shuffle => {
+                self.playlist.set_shuffle(!self.playlist.shuffle);
+                MediaAction::None
+            },
+        }
+    }
+
+    /// The music track ended on its own (the host saw the backend stop
+    /// while the model says playing). Advance per repeat / shuffle like
+    /// `next`: repeat-one replays the track, repeat-all wraps, and at the
+    /// end of a non-repeating playlist playback stops.
+    pub fn track_finished(&mut self) -> MediaAction {
         if self.state != PlaybackState::Playing {
-            return Err(OasisError::Command("not playing".into()));
+            return MediaAction::None;
         }
-        backend.pause()?;
-        self.state = PlaybackState::Paused;
-        Ok(())
-    }
-
-    /// Resume paused playback.
-    pub fn resume(&mut self, backend: &mut dyn AudioBackend) -> Result<()> {
-        if self.state != PlaybackState::Paused {
-            return Err(OasisError::Command("not paused".into()));
+        if self.playlist.advance() {
+            return self.play_current();
         }
-        backend.resume()?;
-        self.state = PlaybackState::Playing;
-        Ok(())
+        self.set_state(PlaybackState::Stopped);
+        MediaAction::Stop
     }
 
-    /// Stop playback.
-    pub fn stop(&mut self, backend: &mut dyn AudioBackend) -> Result<()> {
-        backend.stop()?;
-        self.state = PlaybackState::Stopped;
-        Ok(())
-    }
-
-    /// Skip to the next track. Returns `false` if at end of playlist.
-    pub fn next(&mut self, backend: &mut dyn AudioBackend) -> Result<bool> {
-        let was_playing = self.state == PlaybackState::Playing;
-        if was_playing {
-            backend.stop()?;
+    /// Leave the paused state: start a cued entry, or resume the paused
+    /// track.
+    fn resume(&mut self) -> MediaAction {
+        if self.cued {
+            return self.play_current();
         }
-        let has_next = self.playlist.advance();
-        if has_next && was_playing {
-            self.play(backend)?;
-        } else if !has_next {
-            self.state = PlaybackState::Stopped;
+        self.set_state(PlaybackState::Playing);
+        MediaAction::Resume
+    }
+
+    /// Start the current playlist entry.
+    fn play_current(&mut self) -> MediaAction {
+        match self.current_path().map(str::to_string) {
+            Some(path) => {
+                self.set_state(PlaybackState::Playing);
+                MediaAction::PlayPath(path)
+            },
+            None => MediaAction::None,
         }
-        Ok(has_next)
     }
 
-    /// Go to the previous track. Returns `false` if at start.
-    pub fn prev(&mut self, backend: &mut dyn AudioBackend) -> Result<bool> {
-        let was_playing = self.state == PlaybackState::Playing;
-        if was_playing {
-            backend.stop()?;
+    /// After `next` / `prev`: play the new entry while playing, cue it
+    /// while paused (the conventional media-player behaviour: skipping
+    /// does not unpause), only move the selection while stopped; at
+    /// either end of a non-repeating playlist, stop.
+    fn after_skip(&mut self, moved: bool) -> MediaAction {
+        if !moved {
+            if self.state == PlaybackState::Stopped {
+                return MediaAction::None;
+            }
+            self.set_state(PlaybackState::Stopped);
+            return MediaAction::Stop;
         }
-        let has_prev = self.playlist.go_back();
-        if has_prev && was_playing {
-            self.play(backend)?;
-        } else if !has_prev {
-            self.state = PlaybackState::Stopped;
+        match self.state {
+            PlaybackState::Stopped => MediaAction::None,
+            PlaybackState::Paused => match self.current_path().map(str::to_string) {
+                Some(path) => {
+                    self.cued = true;
+                    MediaAction::Cue(path)
+                },
+                None => MediaAction::None,
+            },
+            PlaybackState::Playing => self.play_current(),
         }
-        Ok(has_prev)
     }
 
-    /// Set the repeat mode.
-    pub fn set_repeat(&mut self, mode: RepeatMode) {
-        self.playlist.repeat = mode;
-    }
-
-    /// Toggle shuffle on/off.
-    pub fn toggle_shuffle(&mut self) {
-        self.playlist.shuffle = !self.playlist.shuffle;
-    }
-
-    /// Format the current status as a human-readable string.
-    pub fn format_status(&self, backend: &dyn AudioBackend) -> String {
+    /// Format the status document published at [`AUDIO_STATUS_PATH`].
+    ///
+    /// `volume`, `position_ms` and `duration_ms` come from the backend.
+    pub fn format_status(&self, volume: u8, position_ms: u64, duration_ms: u64) -> String {
         let mut lines = Vec::new();
         lines.push(format!("State: {}", self.state));
-        lines.push(format!("Volume: {}%", self.volume));
+        lines.push(format!("Volume: {volume}%"));
 
         if let Some(track) = self.playlist.current_track() {
             lines.push(format!("Track: {}", track.title));
             if !track.artist.is_empty() {
                 lines.push(format!("Artist: {}", track.artist));
             }
-            let pos = format_duration(backend.position_ms());
-            let dur = format_duration(backend.duration_ms());
-            lines.push(format!("Position: {pos} / {dur}"));
+            lines.push(format!("Path: {}", track.path));
+            if self.state != PlaybackState::Stopped {
+                let pos = format_duration(position_ms);
+                let dur = format_duration(duration_ms);
+                lines.push(format!("Position: {pos} / {dur}"));
+            }
         }
 
         lines.push(format!("Repeat: {}", self.playlist.repeat));
@@ -179,570 +236,372 @@ impl AudioManager {
         lines.join("\n")
     }
 
-    /// Publish the current status to the VFS for terminal commands to read.
-    pub fn publish_status(&self, backend: &dyn AudioBackend, vfs: &mut dyn Vfs) -> Result<()> {
-        let status = self.format_status(backend);
-        vfs.write(AUDIO_STATUS_PATH, status.as_bytes())?;
-        Ok(())
-    }
-
-    /// Process a request string from the terminal.
-    /// Returns a response string.
-    pub fn process_request(
-        &mut self,
-        request: &str,
-        backend: &mut dyn AudioBackend,
-    ) -> Result<String> {
-        let parts: Vec<&str> = request.trim().splitn(2, ' ').collect();
-        let cmd = parts[0];
-
-        match cmd {
-            "play" => {
-                self.play(backend)?;
-                Ok("playing".to_string())
-            },
-            "pause" => {
-                self.pause(backend)?;
-                Ok("paused".to_string())
-            },
-            "resume" => {
-                self.resume(backend)?;
-                Ok("resumed".to_string())
-            },
-            "stop" => {
-                self.stop(backend)?;
-                Ok("stopped".to_string())
-            },
-            "next" => {
-                let ok = self.next(backend)?;
-                if ok {
-                    let title = self
-                        .playlist
-                        .current_track()
-                        .map(|t| t.title.as_str())
-                        .unwrap_or("unknown");
-                    Ok(format!("next: {title}"))
-                } else {
-                    Ok("end of playlist".to_string())
-                }
-            },
-            "prev" => {
-                let ok = self.prev(backend)?;
-                if ok {
-                    let title = self
-                        .playlist
-                        .current_track()
-                        .map(|t| t.title.as_str())
-                        .unwrap_or("unknown");
-                    Ok(format!("prev: {title}"))
-                } else {
-                    Ok("start of playlist".to_string())
-                }
-            },
-            "vol" => {
-                let vol_str = parts.get(1).unwrap_or(&"");
-                let vol: u8 = vol_str.parse().map_err(|_| {
-                    OasisError::Command(format!("invalid volume: {vol_str}").into())
-                })?;
-                self.set_volume(vol, backend)?;
-                Ok(format!("volume: {}%", self.volume))
-            },
-            "repeat" => {
-                let mode_str = parts.get(1).unwrap_or(&"");
-                let mode = RepeatMode::parse(mode_str).ok_or_else(|| {
-                    OasisError::Command(
-                        format!("invalid repeat mode: {mode_str} (use off/all/one)").into(),
-                    )
-                })?;
-                self.set_repeat(mode);
-                Ok(format!("repeat: {mode}"))
-            },
-            "shuffle" => {
-                self.toggle_shuffle();
-                let state = if self.playlist.shuffle { "on" } else { "off" };
-                Ok(format!("shuffle: {state}"))
-            },
-            _ => Err(OasisError::Command(
-                format!("unknown audio command: {cmd}").into(),
-            )),
+    /// Write [`AudioManager::format_status`] to [`AUDIO_STATUS_PATH`],
+    /// skipping the write when the document is unchanged. Returns whether
+    /// it wrote.
+    pub fn publish_status(
+        &self,
+        vfs: &mut dyn Vfs,
+        volume: u8,
+        position_ms: u64,
+        duration_ms: u64,
+    ) -> Result<bool> {
+        let status = self.format_status(volume, position_ms, duration_ms);
+        if vfs
+            .read(AUDIO_STATUS_PATH)
+            .is_ok_and(|prev| prev == status.as_bytes())
+        {
+            return Ok(false);
         }
-    }
-}
-
-impl Default for AudioManager {
-    fn default() -> Self {
-        Self::new()
+        vfs.write(AUDIO_STATUS_PATH, status.as_bytes())?;
+        Ok(true)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use oasis_types::backend::AudioTrackId;
-    use oasis_types::error::Result;
+    use oasis_types::ipc::RepeatMode;
     use oasis_vfs::MemoryVfs;
 
-    /// Stub audio backend for testing.
-    struct StubAudioBackend {
-        volume: u8,
-        playing: bool,
-        paused: bool,
-        loaded_count: u64,
+    fn play(path: &str) -> MediaRequest {
+        MediaRequest::PlayFile(path.to_string())
     }
 
-    impl StubAudioBackend {
-        fn new() -> Self {
-            Self {
-                volume: 80,
-                playing: false,
-                paused: false,
-                loaded_count: 0,
-            }
-        }
-    }
-
-    impl AudioBackend for StubAudioBackend {
-        fn init(&mut self) -> Result<()> {
-            Ok(())
-        }
-        fn load_track(&mut self, _data: &[u8]) -> Result<AudioTrackId> {
-            let id = self.loaded_count;
-            self.loaded_count += 1;
-            Ok(AudioTrackId(id))
-        }
-        fn play(&mut self, _track: AudioTrackId) -> Result<()> {
-            self.playing = true;
-            self.paused = false;
-            Ok(())
-        }
-        fn pause(&mut self) -> Result<()> {
-            self.paused = true;
-            self.playing = false;
-            Ok(())
-        }
-        fn resume(&mut self) -> Result<()> {
-            self.paused = false;
-            self.playing = true;
-            Ok(())
-        }
-        fn stop(&mut self) -> Result<()> {
-            self.playing = false;
-            self.paused = false;
-            Ok(())
-        }
-        fn set_volume(&mut self, vol: u8) -> Result<()> {
-            self.volume = vol;
-            Ok(())
-        }
-        fn get_volume(&self) -> u8 {
-            self.volume
-        }
-        fn is_playing(&self) -> bool {
-            self.playing
-        }
-        fn position_ms(&self) -> u64 {
-            0
-        }
-        fn duration_ms(&self) -> u64 {
-            180_000
-        }
-        fn unload_track(&mut self, _track: AudioTrackId) -> Result<()> {
-            Ok(())
-        }
-        fn shutdown(&mut self) -> Result<()> {
-            Ok(())
-        }
-    }
-
-    fn setup() -> (AudioManager, StubAudioBackend) {
+    /// A manager with three tracks queued (played once each, then stopped).
+    fn setup() -> AudioManager {
         let mut mgr = AudioManager::new();
-        mgr.playlist
-            .add(TrackInfo::from_path("/music/a.mp3").with_title("Song A"));
-        mgr.playlist
-            .add(TrackInfo::from_path("/music/b.mp3").with_title("Song B"));
-        mgr.playlist
-            .add(TrackInfo::from_path("/music/c.mp3").with_title("Song C"));
-        (mgr, StubAudioBackend::new())
+        for p in ["/music/a.mp3", "/music/b.mp3", "/music/c.mp3"] {
+            mgr.apply(&play(p));
+        }
+        mgr.apply(&MediaRequest::Stop);
+        mgr.playlist.set_current(0);
+        mgr
     }
 
     #[test]
-    fn play_starts_first_track() {
-        let (mut mgr, mut backend) = setup();
-        mgr.play(&mut backend).unwrap();
-        assert_eq!(mgr.state(), PlaybackState::Playing);
-        assert_eq!(mgr.playlist.current_index(), Some(0));
+    fn new_is_stopped_and_empty() {
+        let mgr = AudioManager::new();
+        assert_eq!(mgr.state(), PlaybackState::Stopped);
+        assert!(mgr.playlist.is_empty());
+        assert_eq!(mgr.current_path(), None);
     }
 
     #[test]
-    fn play_empty_playlist_fails() {
+    fn play_file_adds_once_and_plays() {
         let mut mgr = AudioManager::new();
-        let mut backend = StubAudioBackend::new();
-        assert!(mgr.play(&mut backend).is_err());
-    }
-
-    #[test]
-    fn pause_and_resume() {
-        let (mut mgr, mut backend) = setup();
-        mgr.play(&mut backend).unwrap();
-
-        mgr.pause(&mut backend).unwrap();
-        assert_eq!(mgr.state(), PlaybackState::Paused);
-
-        mgr.resume(&mut backend).unwrap();
+        assert_eq!(
+            mgr.apply(&play("/music/a.mp3")),
+            MediaAction::PlayPath("/music/a.mp3".into())
+        );
         assert_eq!(mgr.state(), PlaybackState::Playing);
+        mgr.apply(&play("/music/b.mp3"));
+        mgr.apply(&play("/music/a.mp3"));
+        assert_eq!(
+            mgr.playlist.len(),
+            2,
+            "re-playing a file does not duplicate it"
+        );
+        assert_eq!(mgr.current_path(), Some("/music/a.mp3"));
     }
 
     #[test]
-    fn pause_when_not_playing_fails() {
-        let (mut mgr, mut backend) = setup();
-        assert!(mgr.pause(&mut backend).is_err());
-    }
-
-    #[test]
-    fn resume_when_not_paused_fails() {
-        let (mut mgr, mut backend) = setup();
-        assert!(mgr.resume(&mut backend).is_err());
-    }
-
-    #[test]
-    fn stop_playback() {
-        let (mut mgr, mut backend) = setup();
-        mgr.play(&mut backend).unwrap();
-        mgr.stop(&mut backend).unwrap();
+    fn play_on_empty_playlist_does_nothing() {
+        let mut mgr = AudioManager::new();
+        assert_eq!(mgr.apply(&MediaRequest::Play), MediaAction::None);
         assert_eq!(mgr.state(), PlaybackState::Stopped);
     }
 
     #[test]
-    fn next_track() {
-        let (mut mgr, mut backend) = setup();
-        mgr.play(&mut backend).unwrap();
-
-        let ok = mgr.next(&mut backend).unwrap();
-        assert!(ok);
-        assert_eq!(mgr.playlist.current_index(), Some(1));
+    fn play_when_stopped_plays_current() {
+        let mut mgr = setup();
+        assert_eq!(
+            mgr.apply(&MediaRequest::Play),
+            MediaAction::PlayPath("/music/a.mp3".into())
+        );
         assert_eq!(mgr.state(), PlaybackState::Playing);
+        assert_eq!(mgr.apply(&MediaRequest::Play), MediaAction::None);
     }
 
     #[test]
-    fn prev_track() {
-        let (mut mgr, mut backend) = setup();
-        mgr.playlist.set_current(2);
-        mgr.play(&mut backend).unwrap();
-
-        let ok = mgr.prev(&mut backend).unwrap();
-        assert!(ok);
-        assert_eq!(mgr.playlist.current_index(), Some(1));
-    }
-
-    #[test]
-    fn volume_control() {
-        let (mut mgr, mut backend) = setup();
-        mgr.set_volume(50, &mut backend).unwrap();
-        assert_eq!(mgr.volume(), 50);
-        assert_eq!(backend.volume, 50);
-
-        // Clamp to 100.
-        mgr.set_volume(200, &mut backend).unwrap();
-        assert_eq!(mgr.volume(), 100);
-    }
-
-    #[test]
-    fn repeat_mode() {
-        let (mut mgr, _) = setup();
-        mgr.set_repeat(RepeatMode::All);
-        assert_eq!(mgr.playlist.repeat, RepeatMode::All);
-    }
-
-    #[test]
-    fn toggle_shuffle() {
-        let (mut mgr, _) = setup();
-        assert!(!mgr.playlist.shuffle);
-        mgr.toggle_shuffle();
-        assert!(mgr.playlist.shuffle);
-        mgr.toggle_shuffle();
-        assert!(!mgr.playlist.shuffle);
-    }
-
-    #[test]
-    fn process_request_play() {
-        let (mut mgr, mut backend) = setup();
-        let resp = mgr.process_request("play", &mut backend).unwrap();
-        assert_eq!(resp, "playing");
+    fn pause_resume_cycle() {
+        let mut mgr = setup();
+        assert_eq!(
+            mgr.apply(&MediaRequest::Pause),
+            MediaAction::None,
+            "not playing"
+        );
+        mgr.apply(&MediaRequest::Play);
+        assert_eq!(mgr.apply(&MediaRequest::Pause), MediaAction::Pause);
+        assert_eq!(mgr.state(), PlaybackState::Paused);
+        assert_eq!(mgr.apply(&MediaRequest::Pause), MediaAction::None);
+        assert_eq!(mgr.apply(&MediaRequest::Resume), MediaAction::Resume);
         assert_eq!(mgr.state(), PlaybackState::Playing);
+        assert_eq!(mgr.apply(&MediaRequest::Resume), MediaAction::None);
+        // `play` while paused resumes.
+        mgr.apply(&MediaRequest::Pause);
+        assert_eq!(mgr.apply(&MediaRequest::Play), MediaAction::Resume);
     }
 
     #[test]
-    fn process_request_vol() {
-        let (mut mgr, mut backend) = setup();
-        let resp = mgr.process_request("vol 42", &mut backend).unwrap();
-        assert!(resp.contains("42%"));
-        assert_eq!(mgr.volume(), 42);
+    fn stop_always_stops() {
+        let mut mgr = setup();
+        mgr.apply(&MediaRequest::Play);
+        assert_eq!(mgr.apply(&MediaRequest::Stop), MediaAction::Stop);
+        assert_eq!(mgr.state(), PlaybackState::Stopped);
     }
 
     #[test]
-    fn process_request_repeat() {
-        let (mut mgr, mut backend) = setup();
-        let resp = mgr.process_request("repeat all", &mut backend).unwrap();
-        assert!(resp.contains("all"));
-        assert_eq!(mgr.playlist.repeat, RepeatMode::All);
-    }
-
-    #[test]
-    fn process_request_shuffle() {
-        let (mut mgr, mut backend) = setup();
-        let resp = mgr.process_request("shuffle", &mut backend).unwrap();
-        assert!(resp.contains("on"));
-        assert!(mgr.playlist.shuffle);
-    }
-
-    #[test]
-    fn process_request_unknown() {
-        let (mut mgr, mut backend) = setup();
-        assert!(mgr.process_request("invalid", &mut backend).is_err());
-    }
-
-    #[test]
-    fn format_status_output() {
-        let (mut mgr, mut backend) = setup();
-        mgr.play(&mut backend).unwrap();
-        let status = mgr.format_status(&backend);
-        assert!(status.contains("playing"));
-        assert!(status.contains("Song A"));
-        assert!(status.contains("Volume: 80%"));
-        assert!(status.contains("3 tracks"));
-    }
-
-    #[test]
-    fn publish_status_to_vfs() {
-        let (mut mgr, mut backend) = setup();
-        let mut vfs = MemoryVfs::new();
-        vfs.mkdir("/var").unwrap();
-        vfs.mkdir("/var/audio").unwrap();
-
-        mgr.play(&mut backend).unwrap();
-        mgr.publish_status(&backend, &mut vfs).unwrap();
-
-        let data = vfs.read(AUDIO_STATUS_PATH).unwrap();
-        let text = String::from_utf8_lossy(&data);
-        assert!(text.contains("playing"));
-    }
-
-    #[test]
-    fn add_track_from_vfs() {
-        let mut mgr = AudioManager::new();
-        let mut backend = StubAudioBackend::new();
-        let mut vfs = MemoryVfs::new();
-        vfs.mkdir("/music").unwrap();
-        vfs.write("/music/test.mp3", b"fake mp3 data").unwrap();
-
-        mgr.add_track_from_vfs("/music/test.mp3", &mut vfs, &mut backend)
-            .unwrap();
-        assert_eq!(mgr.playlist.len(), 1);
-        assert_eq!(mgr.playlist.tracks()[0].title, "test.mp3");
-    }
-
-    #[test]
-    fn add_track_from_vfs_missing_file() {
-        let mut mgr = AudioManager::new();
-        let mut backend = StubAudioBackend::new();
-        let mut vfs = MemoryVfs::new();
-
-        assert!(
-            mgr.add_track_from_vfs("/music/missing.mp3", &mut vfs, &mut backend)
-                .is_err()
+    fn next_and_prev_while_playing() {
+        let mut mgr = setup();
+        mgr.apply(&MediaRequest::Play);
+        assert_eq!(
+            mgr.apply(&MediaRequest::Next),
+            MediaAction::PlayPath("/music/b.mp3".into())
+        );
+        assert_eq!(
+            mgr.apply(&MediaRequest::Prev),
+            MediaAction::PlayPath("/music/a.mp3".into())
         );
     }
 
-    // ---- Workflow integration tests ----
+    /// `next` / `prev` while paused used to start the new track. They now
+    /// cue it and stay paused; `resume` / `play` then start it.
+    #[test]
+    fn next_and_prev_while_paused_cue_and_stay_paused() {
+        let mut mgr = setup();
+        mgr.apply(&MediaRequest::Play);
+        mgr.apply(&MediaRequest::Pause);
+        assert_eq!(
+            mgr.apply(&MediaRequest::Next),
+            MediaAction::Cue("/music/b.mp3".into())
+        );
+        assert_eq!(mgr.state(), PlaybackState::Paused);
+        assert_eq!(
+            mgr.apply(&MediaRequest::Next),
+            MediaAction::Cue("/music/c.mp3".into())
+        );
+        assert_eq!(
+            mgr.apply(&MediaRequest::Prev),
+            MediaAction::Cue("/music/b.mp3".into())
+        );
+        assert_eq!(mgr.state(), PlaybackState::Paused);
+        // `pause` again is still a no-op; `resume` starts the cued track.
+        assert_eq!(mgr.apply(&MediaRequest::Pause), MediaAction::None);
+        assert_eq!(
+            mgr.apply(&MediaRequest::Resume),
+            MediaAction::PlayPath("/music/b.mp3".into())
+        );
+        assert_eq!(mgr.state(), PlaybackState::Playing);
+        // A plain pause / resume afterwards resumes the backend again.
+        mgr.apply(&MediaRequest::Pause);
+        assert_eq!(mgr.apply(&MediaRequest::Resume), MediaAction::Resume);
+        // `play` starts a cued track too.
+        mgr.apply(&MediaRequest::Pause);
+        mgr.apply(&MediaRequest::Next);
+        assert_eq!(
+            mgr.apply(&MediaRequest::Play),
+            MediaAction::PlayPath("/music/c.mp3".into())
+        );
+    }
 
     #[test]
-    fn workflow_full_playback_lifecycle() {
-        let (mut mgr, mut backend) = setup();
+    fn stop_clears_a_cued_track() {
+        let mut mgr = setup();
+        mgr.apply(&MediaRequest::Play);
+        mgr.apply(&MediaRequest::Pause);
+        mgr.apply(&MediaRequest::Next);
+        mgr.apply(&MediaRequest::Stop);
+        assert_eq!(
+            mgr.apply(&MediaRequest::Play),
+            MediaAction::PlayPath("/music/b.mp3".into())
+        );
+        mgr.apply(&MediaRequest::Pause);
+        assert_eq!(mgr.apply(&MediaRequest::Resume), MediaAction::Resume);
+    }
 
-        // Start playing.
-        mgr.play(&mut backend).unwrap();
-        assert_eq!(mgr.state(), PlaybackState::Playing);
-        assert_eq!(mgr.playlist.current_index(), Some(0));
+    /// A track that ends on its own advances like `next`, honouring the
+    /// repeat mode.
+    #[test]
+    fn track_finished_advances_per_repeat_mode() {
+        let mut mgr = setup();
+        // Not playing: nothing to advance.
+        assert_eq!(mgr.track_finished(), MediaAction::None);
+        mgr.apply(&MediaRequest::Play);
+        assert_eq!(
+            mgr.track_finished(),
+            MediaAction::PlayPath("/music/b.mp3".into())
+        );
+        assert_eq!(
+            mgr.track_finished(),
+            MediaAction::PlayPath("/music/c.mp3".into())
+        );
+        // Repeat off: the end of the playlist stops.
+        assert_eq!(mgr.track_finished(), MediaAction::Stop);
+        assert_eq!(mgr.state(), PlaybackState::Stopped);
 
-        // Adjust volume.
-        mgr.set_volume(60, &mut backend).unwrap();
-        assert_eq!(mgr.volume(), 60);
+        // Repeat all wraps around.
+        mgr.apply(&MediaRequest::Repeat(RepeatMode::All));
+        mgr.apply(&MediaRequest::Play);
+        assert_eq!(
+            mgr.track_finished(),
+            MediaAction::PlayPath("/music/a.mp3".into())
+        );
+        // Repeat one replays the same track.
+        mgr.apply(&MediaRequest::Repeat(RepeatMode::One));
+        assert_eq!(
+            mgr.track_finished(),
+            MediaAction::PlayPath("/music/a.mp3".into())
+        );
+        // Paused: the host never reports an end, but be safe.
+        mgr.apply(&MediaRequest::Pause);
+        assert_eq!(mgr.track_finished(), MediaAction::None);
+    }
 
-        // Next track while playing.
-        mgr.next(&mut backend).unwrap();
-        assert_eq!(mgr.playlist.current_index(), Some(1));
-        assert_eq!(mgr.state(), PlaybackState::Playing);
+    #[test]
+    fn track_finished_with_shuffle_visits_every_track() {
+        let mut mgr = setup();
+        mgr.apply(&MediaRequest::Shuffle);
+        mgr.apply(&MediaRequest::Repeat(RepeatMode::All));
+        mgr.apply(&MediaRequest::Play);
+        let mut seen = std::collections::BTreeSet::new();
+        for _ in 0..3 {
+            if let MediaAction::PlayPath(p) = mgr.track_finished() {
+                seen.insert(p);
+            }
+        }
+        assert_eq!(seen.len(), 3, "{seen:?}");
+    }
 
-        // Pause mid-track.
-        mgr.pause(&mut backend).unwrap();
-        assert_eq!(mgr.state(), PlaybackState::Paused);
-
-        // Resume.
-        mgr.resume(&mut backend).unwrap();
-        assert_eq!(mgr.state(), PlaybackState::Playing);
-
-        // Skip to last track.
-        mgr.next(&mut backend).unwrap();
-        assert_eq!(mgr.playlist.current_index(), Some(2));
-
-        // Go back.
-        mgr.prev(&mut backend).unwrap();
-        assert_eq!(mgr.playlist.current_index(), Some(1));
-
-        // Stop.
-        mgr.stop(&mut backend).unwrap();
+    #[test]
+    fn next_while_stopped_only_moves_selection() {
+        let mut mgr = setup();
+        assert_eq!(mgr.apply(&MediaRequest::Next), MediaAction::None);
+        assert_eq!(mgr.current_path(), Some("/music/b.mp3"));
         assert_eq!(mgr.state(), PlaybackState::Stopped);
     }
 
     #[test]
-    fn workflow_vfs_load_and_play() {
+    fn next_past_the_end_stops_unless_repeating() {
+        let mut mgr = setup();
+        mgr.playlist.set_current(2);
+        mgr.apply(&MediaRequest::Play);
+        assert_eq!(mgr.apply(&MediaRequest::Next), MediaAction::Stop);
+        assert_eq!(mgr.state(), PlaybackState::Stopped);
+
+        mgr.apply(&MediaRequest::Repeat(RepeatMode::All));
+        mgr.apply(&MediaRequest::Play);
+        assert_eq!(
+            mgr.apply(&MediaRequest::Next),
+            MediaAction::PlayPath("/music/a.mp3".into())
+        );
+    }
+
+    #[test]
+    fn repeat_one_replays_the_same_track() {
+        let mut mgr = setup();
+        mgr.apply(&MediaRequest::Play);
+        mgr.apply(&MediaRequest::Repeat(RepeatMode::One));
+        assert_eq!(
+            mgr.apply(&MediaRequest::Next),
+            MediaAction::PlayPath("/music/a.mp3".into())
+        );
+    }
+
+    #[test]
+    fn volume_is_clamped_and_forwarded() {
         let mut mgr = AudioManager::new();
-        let mut backend = StubAudioBackend::new();
+        assert_eq!(
+            mgr.apply(&MediaRequest::Volume(42)),
+            MediaAction::SetVolume(42)
+        );
+        assert_eq!(
+            mgr.apply(&MediaRequest::Volume(250)),
+            MediaAction::SetVolume(100)
+        );
+    }
+
+    #[test]
+    fn shuffle_toggles() {
+        let mut mgr = setup();
+        assert_eq!(mgr.apply(&MediaRequest::Shuffle), MediaAction::None);
+        assert!(mgr.playlist.shuffle);
+        mgr.apply(&MediaRequest::Shuffle);
+        assert!(!mgr.playlist.shuffle);
+    }
+
+    #[test]
+    fn shuffle_visits_every_track() {
+        let mut mgr = setup();
+        mgr.apply(&MediaRequest::Shuffle);
+        mgr.apply(&MediaRequest::Repeat(RepeatMode::All));
+        mgr.apply(&MediaRequest::Play);
+        let mut seen = std::collections::BTreeSet::new();
+        for _ in 0..3 {
+            if let MediaAction::PlayPath(p) = mgr.apply(&MediaRequest::Next) {
+                seen.insert(p);
+            }
+        }
+        assert_eq!(seen.len(), 3, "{seen:?}");
+    }
+
+    /// `music play <file>` with shuffle on used to leave the shuffle cursor
+    /// where it was, so `next` could replay the track just picked (or
+    /// skip unrelated ones). Shuffle now continues from the picked track.
+    #[test]
+    fn shuffle_next_after_play_file_moves_on() {
+        let mut mgr = AudioManager::new();
+        mgr.apply(&MediaRequest::Shuffle);
+        mgr.apply(&MediaRequest::Repeat(RepeatMode::All));
+        let paths: Vec<String> = (0..4).map(|i| format!("/music/{i}.mp3")).collect();
+        for p in &paths {
+            mgr.apply(&MediaRequest::PlayFile(p.clone()));
+        }
+        for p in &paths {
+            mgr.apply(&MediaRequest::PlayFile(p.clone()));
+            let MediaAction::PlayPath(next) = mgr.apply(&MediaRequest::Next) else {
+                panic!("next plays a track");
+            };
+            assert_ne!(&next, p, "next after play_file {p} replayed it");
+            let MediaAction::PlayPath(back) = mgr.apply(&MediaRequest::Prev) else {
+                panic!("prev plays a track");
+            };
+            assert_eq!(&back, p, "prev returns to the picked track");
+        }
+    }
+
+    #[test]
+    fn format_status_reports_everything() {
+        let mut mgr = setup();
+        mgr.apply(&MediaRequest::Play);
+        let status = mgr.format_status(65, 61_000, 180_000);
+        assert!(status.contains("State: playing"), "{status}");
+        assert!(status.contains("Volume: 65%"), "{status}");
+        assert!(status.contains("Track: a.mp3"), "{status}");
+        assert!(status.contains("Path: /music/a.mp3"), "{status}");
+        assert!(status.contains("Position: 1:01 / 3:00"), "{status}");
+        assert!(status.contains("Repeat: off"), "{status}");
+        assert!(status.contains("Shuffle: off"), "{status}");
+        assert!(status.contains("Playlist: 3 tracks"), "{status}");
+
+        mgr.apply(&MediaRequest::Stop);
+        let status = mgr.format_status(65, 0, 0);
+        assert!(status.contains("State: stopped"), "{status}");
+        assert!(!status.contains("Position:"), "{status}");
+    }
+
+    #[test]
+    fn publish_status_writes_only_on_change() {
+        let mut mgr = setup();
         let mut vfs = MemoryVfs::new();
-        vfs.mkdir("/music").unwrap();
-        vfs.write("/music/track1.mp3", b"data1").unwrap();
-        vfs.write("/music/track2.mp3", b"data2").unwrap();
-
-        mgr.add_track_from_vfs("/music/track1.mp3", &mut vfs, &mut backend)
-            .unwrap();
-        mgr.add_track_from_vfs("/music/track2.mp3", &mut vfs, &mut backend)
-            .unwrap();
-        assert_eq!(mgr.playlist.len(), 2);
-
-        // Play, verify status, publish to VFS.
-        mgr.play(&mut backend).unwrap();
-        let status = mgr.format_status(&backend);
-        assert!(status.contains("playing"));
-
         vfs.mkdir("/var").unwrap();
         vfs.mkdir("/var/audio").unwrap();
-        mgr.publish_status(&backend, &mut vfs).unwrap();
-        let data = vfs.read(AUDIO_STATUS_PATH).unwrap();
-        assert!(!data.is_empty());
-    }
 
-    // ---- Phase 12: additional unit tests ----
-
-    #[test]
-    fn new_defaults() {
-        let mgr = AudioManager::new();
-        assert_eq!(mgr.state(), PlaybackState::Stopped);
-        assert_eq!(mgr.volume(), 80);
-        assert!(mgr.playlist.is_empty());
-    }
-
-    #[test]
-    fn default_matches_new() {
-        let mgr = AudioManager::default();
-        assert_eq!(mgr.state(), PlaybackState::Stopped);
-        assert_eq!(mgr.volume(), 80);
-    }
-
-    #[test]
-    fn volume_clamps_at_100() {
-        let mut mgr = AudioManager::new();
-        let mut backend = StubAudioBackend::new();
-        mgr.set_volume(255, &mut backend).unwrap();
-        assert_eq!(mgr.volume(), 100);
-    }
-
-    #[test]
-    fn volume_zero_is_valid() {
-        let mut mgr = AudioManager::new();
-        let mut backend = StubAudioBackend::new();
-        mgr.set_volume(0, &mut backend).unwrap();
-        assert_eq!(mgr.volume(), 0);
-    }
-
-    #[test]
-    fn next_when_stopped_no_panic() {
-        let (mut mgr, mut backend) = setup();
-        // next() from stopped state should not panic.
-        let result = mgr.next(&mut backend);
-        assert!(result.is_ok());
-    }
-
-    #[test]
-    fn prev_when_stopped_no_panic() {
-        let (mut mgr, mut backend) = setup();
-        let result = mgr.prev(&mut backend);
-        assert!(result.is_ok());
-    }
-
-    #[test]
-    fn state_transitions_play_stop_play() {
-        let (mut mgr, mut backend) = setup();
-        mgr.play(&mut backend).unwrap();
-        assert_eq!(mgr.state(), PlaybackState::Playing);
-
-        mgr.stop(&mut backend).unwrap();
-        assert_eq!(mgr.state(), PlaybackState::Stopped);
-
-        mgr.play(&mut backend).unwrap();
-        assert_eq!(mgr.state(), PlaybackState::Playing);
-    }
-
-    #[test]
-    fn repeat_mode_one() {
-        let (mut mgr, _) = setup();
-        mgr.set_repeat(RepeatMode::One);
-        assert_eq!(mgr.playlist.repeat, RepeatMode::One);
-    }
-
-    #[test]
-    fn repeat_mode_off() {
-        let (mut mgr, _) = setup();
-        mgr.set_repeat(RepeatMode::All);
-        mgr.set_repeat(RepeatMode::Off);
-        assert_eq!(mgr.playlist.repeat, RepeatMode::Off);
-    }
-
-    #[test]
-    fn format_status_stopped() {
-        let (mgr, backend) = setup();
-        let status = mgr.format_status(&backend);
-        assert!(status.contains("stopped"));
-        assert!(status.contains("3 tracks"));
-    }
-
-    #[test]
-    fn process_request_invalid_vol() {
-        let (mut mgr, mut backend) = setup();
-        assert!(mgr.process_request("vol abc", &mut backend).is_err());
-    }
-
-    #[test]
-    fn process_request_invalid_repeat() {
-        let (mut mgr, mut backend) = setup();
-        assert!(mgr.process_request("repeat xyz", &mut backend).is_err());
-    }
-
-    #[test]
-    fn workflow_process_request_sequence() {
-        let (mut mgr, mut backend) = setup();
-
-        // Play via request API.
-        mgr.process_request("play", &mut backend).unwrap();
-        assert_eq!(mgr.state(), PlaybackState::Playing);
-
-        // Set volume via request.
-        mgr.process_request("vol 50", &mut backend).unwrap();
-        assert_eq!(mgr.volume(), 50);
-
-        // Enable repeat via request.
-        mgr.process_request("repeat one", &mut backend).unwrap();
-        assert_eq!(mgr.playlist.repeat, RepeatMode::One);
-
-        // Enable shuffle via request.
-        mgr.process_request("shuffle", &mut backend).unwrap();
-        assert!(mgr.playlist.shuffle);
-
-        // Next via request.
-        mgr.process_request("next", &mut backend).unwrap();
-        assert_eq!(mgr.state(), PlaybackState::Playing);
-
-        // Stop via request.
-        mgr.process_request("stop", &mut backend).unwrap();
-        assert_eq!(mgr.state(), PlaybackState::Stopped);
+        assert!(mgr.publish_status(&mut vfs, 80, 0, 0).unwrap());
+        assert!(!mgr.publish_status(&mut vfs, 80, 0, 0).unwrap());
+        mgr.apply(&MediaRequest::Play);
+        assert!(mgr.publish_status(&mut vfs, 80, 0, 0).unwrap());
+        let text = String::from_utf8(vfs.read(AUDIO_STATUS_PATH).unwrap()).unwrap();
+        assert!(text.contains("State: playing"));
     }
 }

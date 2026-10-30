@@ -9,6 +9,7 @@
 //! thread: every wait steps the harness (one frame) between non-blocking
 //! reads, with a wall-clock deadline.
 
+use oasis_apps::TvGuideRunnerExt as _;
 use std::io::{ErrorKind, Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::time::{Duration, Instant};
@@ -444,7 +445,7 @@ fn remote_terminal_refuses_server_toggles() {
 /// that nothing consumed; the shell now tunes the open TV Guide with it.
 #[test]
 fn remote_tv_tune_tunes_the_open_guide() {
-    use oasis_core::apps::tv_guide::catalog::{ChannelCatalog, VideoEpisode};
+    use oasis_apps::tv_guide::catalog::{ChannelCatalog, VideoEpisode};
 
     let mut h = Harness::new("classic");
     h.settle();
@@ -492,7 +493,7 @@ fn remote_tv_tune_tunes_the_open_guide() {
     // The request was consumed.
     let pending = h
         .vfs()
-        .read(oasis_core::apps::tv_guide::TV_REQUEST_PATH)
+        .read(oasis_apps::tv_guide::TV_REQUEST_PATH)
         .unwrap_or_default();
     assert!(
         !String::from_utf8_lossy(&pending).contains("tune_ch"),
@@ -627,7 +628,15 @@ fn mcp_drives_apps_and_windows() {
 
     // list_apps includes the dashboard apps.
     let apps = mcp::ok(&mut h, port, "list_apps", json!({}));
-    for title in ["Calculator", "Terminal", "Browser", "TV Guide"] {
+    // ... and the tile-less info apps (the registry, not the tiles).
+    for title in [
+        "Calculator",
+        "Terminal",
+        "Browser",
+        "TV Guide",
+        "Network",
+        "System Monitor",
+    ] {
         assert!(apps.lines().any(|l| l == title), "{title} missing: {apps}");
     }
 
@@ -722,6 +731,91 @@ fn mcp_drives_apps_and_windows() {
     assert!(h.windows().is_empty(), "{:?}", h.windows());
     assert!(h.app_runner("Calculator").is_none(), "runner leaked");
     assert_eq!(h.mode(), Mode::Dashboard);
+}
+
+/// MCP `close_window` asks the app first, like the titlebar close button:
+/// a Text Editor with unsaved changes declines (showing its prompt) and
+/// keeps the edits; `force: true` closes it anyway. It used to close the
+/// window silently, discarding the edits.
+#[cfg(feature = "mcp")]
+#[test]
+fn mcp_close_window_honours_unsaved_changes_unless_forced() {
+    use serde_json::json;
+    let mut h = Harness::new("classic");
+    h.settle();
+    let port = mcp::start(&mut h);
+
+    mcp::ok(&mut h, port, "open_app", json!({ "title": "Text Editor" }));
+    h.settle();
+    let editor = mcp::window_id(&h, "Text Editor");
+    h.type_text("agent must not lose this");
+    h.settle();
+
+    let msg = mcp::fails(&mut h, port, "close_window", json!({ "id": editor }));
+    assert!(msg.contains("declined"), "{msg}");
+    h.settle();
+    assert!(h.find_window("Text Editor").is_some(), "{:?}", h.windows());
+    h.render_now();
+    assert!(
+        h.text_drawn_contains("agent must not lose this"),
+        "{:?}",
+        h.frame_text()
+    );
+
+    // An unmodified app still closes on the first call.
+    mcp::ok(&mut h, port, "open_app", json!({ "title": "Calculator" }));
+    h.settle();
+    let calc = mcp::window_id(&h, "Calculator");
+    mcp::ok(&mut h, port, "close_window", json!({ "id": calc }));
+    h.settle();
+    assert!(h.find_window("Calculator").is_none());
+
+    let resp = mcp::ok(
+        &mut h,
+        port,
+        "close_window",
+        json!({ "id": editor, "force": true }),
+    );
+    assert!(resp.contains("closed"), "{resp}");
+    h.settle();
+    assert!(h.find_window("Text Editor").is_none(), "{:?}", h.windows());
+    assert!(h.app_runner("Text Editor").is_none(), "runner leaked");
+    assert_eq!(h.mode(), Mode::Dashboard);
+}
+
+/// MCP `close_window` retires the runner so its backend resources are
+/// released: a Photo Viewer opened on an image (MCP `open_app` with a
+/// file) gives its textures back. They used to leak.
+#[cfg(feature = "mcp")]
+#[test]
+fn mcp_close_window_releases_app_textures() {
+    use serde_json::json;
+    let mut h = Harness::new("classic");
+    h.settle();
+    let port = mcp::start(&mut h);
+    h.render_now();
+    let base = h.resource_counts();
+
+    mcp::ok(
+        &mut h,
+        port,
+        "open_app",
+        json!({ "title": "Photo Viewer", "file": "/home/user/photos/oasis_sample.png" }),
+    );
+    h.settle();
+    h.render_now();
+    assert!(
+        h.resource_counts().textures > base.textures,
+        "setup: the viewer uploaded the image"
+    );
+    let id = mcp::window_id(&h, "Photo Viewer");
+    mcp::ok(&mut h, port, "close_window", json!({ "id": id }));
+    h.settle();
+    h.render_now();
+    let now = h.resource_counts();
+    assert_eq!(now.windows, 0);
+    assert_eq!(now.runners, 0);
+    assert_eq!(now.textures, base.textures, "Photo Viewer textures leaked");
 }
 
 #[cfg(feature = "mcp")]
@@ -926,7 +1020,7 @@ fn mcp_play_media_and_radio_tune_reach_the_controllers() {
     h.run_frames(3);
     let pending = h
         .vfs()
-        .read(oasis_app_media::MEDIA_REQUEST_PATH)
+        .read(oasis_apps::media::MEDIA_REQUEST_PATH)
         .unwrap_or_default();
     assert!(pending.is_empty(), "request left queued: {pending:?}");
     assert!(h.state().media_track.is_none());
@@ -940,7 +1034,7 @@ fn mcp_play_media_and_radio_tune_reach_the_controllers() {
         json!({ "source": "radio", "channel": "0" }),
     );
     h.run_frames(3);
-    let err = h.state().radio_manager.error_msg().to_string();
+    let err = h.state().radio.manager.error_msg().to_string();
     assert!(err.contains("offline"), "radio error: {err:?}");
     let msg = mcp::ok(
         &mut h,
@@ -950,7 +1044,7 @@ fn mcp_play_media_and_radio_tune_reach_the_controllers() {
     );
     assert!(msg.contains("No Such FM"), "{msg}");
     h.run_frames(3);
-    let err = h.state().radio_manager.error_msg().to_string();
+    let err = h.state().radio.manager.error_msg().to_string();
     assert!(err.contains("station not found"), "radio error: {err:?}");
 }
 
@@ -973,7 +1067,7 @@ fn mcp_screenshot_matches_the_framebuffer_and_overlay_is_drawn() {
     let info = reader.next_frame(&mut img).unwrap();
     assert_eq!((info.width, info.height), h.size());
     assert!(
-        img.chunks_exact(4).any(|p| p[..3] != img[..3]),
+        img.as_chunks::<4>().0.iter().any(|p| p[..3] != img[..3]),
         "blank screenshot"
     );
 
@@ -1008,7 +1102,7 @@ fn base64_decode(s: &str) -> Vec<u8> {
 #[cfg(all(feature = "mcp", feature = "_video"))]
 #[test]
 fn mcp_tv_tune_starts_playback() {
-    use oasis_core::apps::tv_guide::catalog::{ChannelCatalog, VideoEpisode};
+    use oasis_apps::tv_guide::catalog::{ChannelCatalog, VideoEpisode};
     use serde_json::json;
 
     let mut h = Harness::new("classic");
@@ -1062,6 +1156,9 @@ fn mcp_tv_tune_starts_playback() {
     h.run_frames(3);
     let g = h.app_runner("TV Guide").unwrap().tv_guide_state().unwrap();
     assert_eq!(g.tuned_channel, Some(target.0));
-    assert!(h.state().video_player.is_active(), "tune started playback");
-    assert!(h.state().tv_audio_track.is_some());
+    assert!(
+        h.state().tv.video_player.is_active(),
+        "tune started playback"
+    );
+    assert!(h.state().tv.audio_track.is_some());
 }

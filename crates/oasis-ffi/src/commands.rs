@@ -69,8 +69,10 @@ fn send_command_inner(instance: &mut OasisInstance, cmd_str: &str) -> *mut c_cha
             }
             out
         },
-        Ok(CommandOutput::Clear) => String::new(),
-        Ok(CommandOutput::None) => String::new(),
+        // `Status` is unwrapped by the executor and never reaches hosts.
+        Ok(CommandOutput::Clear | CommandOutput::None | CommandOutput::Status { .. }) => {
+            String::new()
+        },
         Ok(CommandOutput::Signal(ref sig)) => {
             use oasis_core::terminal::CommandSignal;
             match sig {
@@ -111,7 +113,7 @@ fn send_command_inner(instance: &mut OasisInstance, cmd_str: &str) -> *mut c_cha
                             _ => "Not available via FFI.".to_string(),
                         }
                     },
-                    CommandOutput::Multi(_) => continue,
+                    CommandOutput::Multi(_) | CommandOutput::Status { .. } => continue,
                 };
                 parts.push(text);
             }

@@ -13,6 +13,9 @@ members = [
     "crates/oasis-skin",
     "crates/oasis-terminal",
     "crates/oasis-browser",
+    "crates/oasis-css",
+    "crates/oasis-html",
+    "crates/oasis-http",
     "crates/oasis-js",
     "crates/oasis-app-core",
     "crates/oasis-app-games",
@@ -24,10 +27,8 @@ members = [
     "crates/oasis-app-radio",
     "crates/oasis-app-settings",
     "crates/oasis-app-file-manager",
-    "crates/oasis-app-browser",
-    "crates/oasis-app-network",
-    "crates/oasis-app-package-manager",
     "crates/oasis-app-system-monitor",
+    "crates/oasis-apps",
     "crates/oasis-vector",
     "crates/oasis-shader",
     "crates/oasis-core",
@@ -115,8 +116,8 @@ web-sys = { version = "0.3", features = [
     "HtmlVideoElement",
     # Image element (YouTube embed thumbnail loader)
     "HtmlImageElement",
-    # URL (object URLs for MSE)
-    "Url",
+    # URL (object URLs for MSE and in-memory music tracks)
+    "Url", "Blob", "BlobPropertyBag",
 ] }
 js-sys = "0.3"
 wasm-bindgen-futures = "0.4"
@@ -159,6 +160,9 @@ oasis-wm = { path = "crates/oasis-wm" }
 oasis-skin = { path = "crates/oasis-skin" }
 oasis-terminal = { path = "crates/oasis-terminal" }
 oasis-browser = { path = "crates/oasis-browser" }
+oasis-css = { path = "crates/oasis-css" }
+oasis-html = { path = "crates/oasis-html" }
+oasis-http = { path = "crates/oasis-http" }
 oasis-js = { path = "crates/oasis-js" }
 oasis-app-core = { path = "crates/oasis-app-core" }
 oasis-app-games = { path = "crates/oasis-app-games" }
@@ -170,10 +174,8 @@ oasis-app-tv-guide = { path = "crates/oasis-app-tv-guide" }
 oasis-app-radio = { path = "crates/oasis-app-radio" }
 oasis-app-settings = { path = "crates/oasis-app-settings" }
 oasis-app-file-manager = { path = "crates/oasis-app-file-manager" }
-oasis-app-browser = { path = "crates/oasis-app-browser" }
-oasis-app-network = { path = "crates/oasis-app-network" }
-oasis-app-package-manager = { path = "crates/oasis-app-package-manager" }
 oasis-app-system-monitor = { path = "crates/oasis-app-system-monitor" }
+oasis-apps = { path = "crates/oasis-apps" }
 oasis-core = { path = "crates/oasis-core", default-features = false }
 oasis-vector = { path = "crates/oasis-vector" }
 oasis-shader = { path = "crates/oasis-shader", default-features = false }

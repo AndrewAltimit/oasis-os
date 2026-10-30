@@ -6,6 +6,7 @@
 
 pub mod archive;
 pub mod buffer;
+pub mod connect;
 pub mod icy;
 pub mod source;
 pub mod station;
@@ -16,14 +17,13 @@ use oasis_types::error::{OasisError, Result};
 use oasis_vfs::Vfs;
 
 pub use archive::{ArchiveCatalog, ArchiveTrack};
+pub use connect::{StreamUrl, connect_icecast};
 pub use source::{ArchiveSource, AudioChunk, IcecastSource, RadioSource, SourceState, VfsSource};
 pub use station::{Station, StationRegistry};
 pub use threaded::ThreadedSource;
 
-/// VFS path where the radio manager publishes its status.
-pub const RADIO_STATUS_PATH: &str = "/var/radio/status";
-/// VFS path where terminal commands write radio requests.
-pub const RADIO_REQUEST_PATH: &str = "/var/radio/request";
+/// VFS paths of the radio IPC (defined in [`oasis_types::ipc`]).
+pub use oasis_types::ipc::{RADIO_REQUEST_PATH, RADIO_STATUS_PATH};
 /// Display title of the Internet Radio app, shared between the app
 /// itself and every place that needs to identify a radio runner (e.g.
 /// the close-handler that stops playback when the window closes). Keep

@@ -23,23 +23,51 @@ below or its own math) and input (widgets expose state methods such as
 that the app calls from its own input handlers). There is no retained widget tree or
 event loop.
 
+### Drawing helpers
+
+Widgets share two `DrawContext` helpers instead of repeating the
+measure / center / draw sequence by hand:
+
+- `ctx.text_in((x, y, w, h), text, font_size, color, HAlign)` draws `text`
+  vertically centered in the rect and placed horizontally by
+  `layout::HAlign` (`Left`, `Center`, `Right`), using exactly
+  `layout::align_x` / `layout::center`, so it is pixel-identical to the
+  hand-written form.
+- `ctx.frame((x, y, w, h), bg, border, radius)` draws a rounded fill plus a
+  1-pixel rounded border.
+
 Supporting types:
 
 | Type | File | Purpose |
 |------|------|---------|
-| `DrawContext` / `Region` | `context.rs` | Backend + `Theme` bundle passed to `measure` / `draw`; sub-regions for nested drawing |
-| `Theme` | `theme.rs` | Colors, font sizes, spacing and radii; derived from the active skin (`SkinTheme::to_ui_theme`) |
-| `WidgetState` / `WidgetStateColors` | `states.rs` | Uniform normal / hover / pressed / focused / disabled color resolution |
+| `DrawContext` / `Region` | `context.rs` | Backend + `Theme` bundle passed to `measure` / `draw`; sub-regions for nested drawing; `text_in` / `frame` drawing helpers (below) |
+| `Theme` | `theme.rs` | Colors, font sizes, spacing and radii. Shipping themes are derived from the active skin (`SkinTheme::to_ui_theme`, with light / high-contrast variants via `oasis_skin::SkinVariant`); `Theme::dark()` is the built-in fallback |
+| `WidgetState` / `WidgetStateColors` | `states.rs` | Uniform normal / hover / pressed / disabled color resolution, shared by every interactive widget (`Button::state` included); keyboard focus is a separate `focused` flag |
 | `widget::Widget` | `widget.rs` | The trait above |
 
 ## Widgets implementing `Widget` (29)
+
+**Adoption.** The toolkit is a library catalogue: only a few of these are
+used outside `oasis-ui` today -- `Button` (Calculator), `ProgressBar`
+(Radio, System Monitor), `Slider` and `Toggle` (Settings), plus the
+non-`Widget` `MenuBar` (File Manager, Paint, Text Editor), `flex` and the
+`animation::easing` curves. The other 25 widgets, `ListView`, `NinePatch`,
+`IconAtlas`, `FocusManager` and `accessibility` have no in-tree callers.
+They are kept on purpose (complete, tested, and earmarked for the desktop
+metaphor in [theming-desktop-plan.md](theming-desktop-plan.md)) and stay
+compiled by default rather than behind a cargo feature: they cost only
+build time inside this one crate, a `widgets-extra` feature would put a
+`cfg` on two dozen modules and their tests and on the
+`oasis_core::ui` re-export, and nothing downstream would get smaller. Treat
+an unadopted widget as working but unproven in a real app: expect to
+adjust its API when the first app picks it up.
 
 | Widget | File | Purpose |
 |--------|------|---------|
 | `Accordion` | `accordion.rs` | Collapsible sections, single- or multi-expand (`AccordionMode`) |
 | `Avatar` | `avatar.rs` | Circular image with fallback initial |
 | `Badge` | `badge.rs` | Small colored tag / count indicator |
-| `Button` | `button.rs` | Push button with `ButtonStyle` variants and `ButtonState` (normal / hover / pressed / disabled) |
+| `Button` | `button.rs` | Push button with `ButtonStyle` variants; `state: WidgetState` (normal / hover / pressed / disabled) plus a `focused` ring |
 | `Card` | `card.rs` | Content card with optional image, title, subtitle and body |
 | `Checkbox` | `checkbox.rs` | Labelled boolean checkbox |
 | `ColorPicker` | `color_picker.rs` | HSV color selection with RGB preview |
@@ -79,7 +107,7 @@ Supporting types:
 | `FocusRing`, `FocusManager` | `focus.rs` | Keyboard focus navigation and focus styling for widget groups |
 | `Tween`, `ColorTween`, easing functions | `animation.rs` | Frame-driven animation primitives |
 | `AccessibilityLabel`, `contrast_ratio`, `meets_wcag_aa` / `_aaa` | `accessibility.rs` | Semantic labels and WCAG contrast checks |
-| `test_utils::MockBackend` | `test_utils.rs` | Test-only, crate-internal recording backend + `all_themes()` helper for widget tests |
+| `test_utils` | `test_utils.rs` | Test-only, crate-internal: re-exports `oasis_test_backend::RecordingBackend`, plus `all_themes()` / `test_draw_all_themes` / `assert_states_distinct` helpers |
 
 `color` and `shadow` are re-exported from `oasis-types`.
 
@@ -103,6 +131,9 @@ Paint's `PaintLayout`). See [writing-apps.md](writing-apps.md).
 
 ## Tests
 
-Each widget has in-module tests that draw against
-`test_utils::MockBackend` under every built-in `Theme`
-(`test_utils::test_draw_all_themes`).
+Each widget has in-module tests that draw into oasis-test-backend's
+`RecordingBackend` (a dev-dependency) and assert on its command log
+(`fill_rect_count`, `has_text`, `text_positions`, ...). The
+`test_utils::test_draw_all_themes` sweep runs a widget under `Theme::dark()`
+and two test palettes (a light one and a high-contrast one with no
+rounding or shadows).

@@ -22,6 +22,20 @@ pub struct AppEntry {
     pub color: Color,
 }
 
+impl AppEntry {
+    /// Entry for launching the app titled `title` without a dashboard
+    /// tile (programmatic launches: MCP, `OASIS_APP`, "open with",
+    /// the browser IPC). Path `/apps/<title>`, no icon, neutral gray.
+    pub fn for_title(title: &str) -> Self {
+        Self {
+            title: title.to_string(),
+            path: format!("/apps/{title}"),
+            icon_png: Vec::new(),
+            color: Color::rgb(100, 100, 100),
+        }
+    }
+}
+
 /// Default icon colors cycled for apps without ICON0.
 const FALLBACK_COLORS: &[Color] = &[
     Color {
@@ -158,6 +172,15 @@ pub fn discover_apps_themed(
 mod tests {
     use super::*;
     use crate::vfs::MemoryVfs;
+
+    #[test]
+    fn for_title_builds_a_tileless_entry() {
+        let e = AppEntry::for_title("Photo Viewer");
+        assert_eq!(e.title, "Photo Viewer");
+        assert_eq!(e.path, "/apps/Photo Viewer");
+        assert!(e.icon_png.is_empty());
+        assert_eq!(e.color, Color::rgb(100, 100, 100));
+    }
 
     fn make_pbp_bytes(title: &str) -> Vec<u8> {
         // Build a minimal PBP with the given title (reuse the test helper

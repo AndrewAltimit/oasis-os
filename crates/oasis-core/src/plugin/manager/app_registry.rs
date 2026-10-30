@@ -1,30 +1,21 @@
 //! Plugin app registration and enumeration.
 
-use crate::plugin::app_bridge::PluginAppRegistration;
-use crate::vfs::Vfs;
+use crate::apps::AppRegistry;
+use crate::plugin::app_bridge::{PluginAppRegistration, sync_registry};
 
 use super::PluginManager;
 
 impl PluginManager {
     /// Return all plugin-registered app registrations.
-    ///
-    /// The dashboard uses this to include plugin apps alongside built-in
-    /// apps. The app runner uses it to create app instances on launch.
     pub fn plugin_apps(&self) -> &[PluginAppRegistration] {
         &self.plugin_apps
     }
 
-    /// Find a plugin app registration by title and create an app instance.
-    ///
-    /// Returns `None` if no plugin app with the given title exists.
-    pub fn create_plugin_app(
-        &self,
-        title: &str,
-        vfs: &dyn Vfs,
-    ) -> Option<Box<dyn oasis_app_core::App>> {
-        self.plugin_apps
-            .iter()
-            .find(|r| r.title == title)
-            .map(|r| r.create_app(vfs))
+    /// Make `registry` hold exactly the currently registered plugin apps
+    /// (previous plugin entries are dropped, built-in apps are kept). Hosts
+    /// call this after plugin init (and after loading or unloading a
+    /// plugin) so plugin apps launch, list and auto-launch like built-ins.
+    pub fn extend_registry(&self, registry: &mut AppRegistry) {
+        sync_registry(&self.plugin_apps, registry);
     }
 }

@@ -9,6 +9,14 @@
 //! See `docs/` (in the crate root) for architecture, CSS coverage, and
 //! contributor guides. Start with `docs/README.md`.
 //!
+//! # Crates
+//!
+//! The HTML parser and DOM ([`oasis_html`]), the CSS parser and cascade
+//! ([`oasis_css`]) and the resource loader ([`oasis_http`]) are separate
+//! crates. This crate aliases the first two as its private `html` /
+//! `css` modules and re-exports the loader as [`loader`]; benches and
+//! fuzzers reach the parsers through [`internals`].
+//!
 //! # Feature flags
 //!
 //! - `javascript` — enables QuickJS-NG via `oasis-js` for inline
@@ -17,38 +25,51 @@
 //!   sources via pspdev's `psp-gcc` (wiring in
 //!   `crates/oasis-backend-psp/.cargo/config.toml`), so `oasis-js` and
 //!   its full `JsEngine` API are available on `mipsel-sony-psp` too.
-//!   The `javascript` feature is still off on PSP by default while
-//!   `js_dom/` is audited for the mipsel target; once that's done
-//!   the PSP browser will pick up inline `<script>` and DOM bindings
-//!   unchanged from desktop/WASM/UE5. Standalone evaluation is already
-//!   reachable via `cmd_server.rs`'s `js <code>` TCP command.
+//!   The PSP backend enables `javascript`
+//!   (`oasis-backend-psp/Cargo.toml`), so inline `<script>` and the DOM
+//!   bindings run there as on desktop/WASM/UE5. Script time and heap
+//!   are bounded by [`BrowserConfig::js_max_exec_ms`] and
+//!   [`BrowserConfig::js_memory_limit_bytes`] (smaller defaults under
+//!   `psp`).
 //! - `webp` — enables WebP image decoding via the `image` crate.
-//! - `parallel-style` — parallel style cascade via rayon (desktop only).
+//! - `parallel-style` — parallel style cascade via rayon (desktop only;
+//!   forwards to `oasis-css/parallel-style`).
 //! - `psp` — enables PSP-specific shrink-the-footprint code paths and
-//!   disables features that rely on desktop-only crates.
+//!   disables features that rely on desktop-only crates (forwards to
+//!   `oasis-http/psp`, which swaps in the PSP HTTP client).
 //!
-//! # Compositor (overhaul epic)
+//! # Rendering
+//!
+//! There is one renderer: the layout tree is recorded into a display
+//! list (`paint::record`), compacted and optimized, and replayed into
+//! the `SdiBackend`. `BrowserWidget::paint` caches the list across
+//! frames; `internals::paint_page` records and replays once and is
+//! what the goldens, corpus tests and paint bench run. See
+//! `docs/paint.md` (in the crate root).
+//!
+//! # Compositor
 //!
 //! Desktop backends (SDL3, WASM, UE5) support offscreen compositing
-//! via `SdiRenderTarget`. This unlocks, on the backends that opt in:
+//! via `SdiRenderTarget`, so on those backends a compositing layer is
+//! drawn into a render target and composited back:
 //!
-//! - `mix-blend-mode` — WASM renders all 16 CSS blend modes natively
-//!   via Canvas2D `globalCompositeOperation`. SDL3 currently uses
-//!   `Blend`/`Mod` approximations for Normal/Multiply and degrades
-//!   the other 14 modes to plain alpha over; the software path lands
-//!   in a follow-up.
-//! - `backdrop-filter` — parsed and plumbed through `PushCompositingLayer`;
-//!   the backdrop-sample step is scaffolded on top of the filter-chain
-//!   readback pipeline.
-//! - `isolation: isolate` — creates a stacking context and a real
-//!   compositing layer.
+//! - `mix-blend-mode` — composited by the backend's
+//!   `composite_render_target`: WASM uses Canvas2D
+//!   `globalCompositeOperation` (all 16 modes), UE5 blends in
+//!   software, SDL3 approximates Normal/Multiply and draws the other
+//!   modes as alpha over. Layers that also carry a filter or mask are
+//!   blended on CPU (`filter_chain::cpu_blend_composite`).
 //! - box-level `filter` — opacity, grayscale, invert, brightness,
-//!   contrast, sepia, saturate, hue-rotate, and blur (separable
-//!   3-pass box blur) run on CPU via read_render_target → apply →
-//!   upload as texture → blit.
-//! - `mask-*` (8 longhands) — parsed and stored on `ComputedStyle`;
-//!   the destination-in composite path lives on top of the existing
-//!   readback pipeline in a follow-up.
+//!   contrast, sepia, saturate, hue-rotate and blur (separable 3-pass
+//!   box blur) run on CPU via read_render_target → apply → upload →
+//!   blit, on backends with render-target readback.
+//! - `mask-*` — linear / radial gradient and `url()` masks are
+//!   rasterized and applied to the layer alpha when the layer pops
+//!   (`paint/display_list/mask.rs`), also via readback.
+//! - `isolation: isolate` and `will-change` — create a stacking
+//!   context and a real compositing layer.
+//! - `backdrop-filter` — isolates the element into a layer; sampling
+//!   and filtering the backdrop is not implemented.
 //!
 //! PSP opts out: the backend reports `supports_render_targets() = false`
 //! so replay falls back to plain opacity stacking — pages still render,
@@ -56,20 +77,17 @@
 //! `docs/archive/compositor-overhaul-plan.md` §3.6 for the phased revisit plan.
 
 pub mod config;
-pub(crate) mod css;
+pub(crate) use oasis_css as css;
 pub mod forms;
 pub mod gemini;
-pub(crate) mod html;
+pub(crate) use oasis_html as html;
 pub mod image;
 pub(crate) mod layout;
-pub mod loader;
+pub use oasis_http as loader;
 pub mod nav;
 pub(crate) mod paint;
-pub mod plugin;
 pub mod reader;
 pub mod scroll;
-pub mod search;
-pub mod skin;
 pub mod svg;
 pub(crate) mod transform;
 
@@ -140,7 +158,7 @@ use std::collections::{HashMap, HashSet};
 use html::dom::NodeId;
 use loader::ResourceRequest;
 use loader::cache::ResourceCache;
-#[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
+#[cfg(native_net)]
 use loader::cookies::CookieJar;
 use oasis_types::backend::TextureId;
 use paint::LinkRegion;
@@ -234,7 +252,7 @@ pub struct BrowserWidget {
     cache: ResourceCache,
 
     /// Session-scoped cookie jar for HTTP requests.
-    #[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
+    #[cfg(native_net)]
     cookie_jar: CookieJar,
 
     /// Current loading state.
@@ -344,7 +362,7 @@ pub struct BrowserWidget {
     ///
     /// The worker owns an `Arc` clone of `tls`, so replacing or
     /// dropping `tls` never frees a provider the worker still uses.
-    #[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
+    #[cfg(native_net)]
     io_thread: Option<loader::io_thread::IoThread>,
 
     /// Optional TLS provider for HTTPS and Gemini connections.
@@ -354,30 +372,30 @@ pub struct BrowserWidget {
     tls: Option<std::sync::Arc<dyn oasis_net::tls::TlsProvider>>,
 
     /// Pending page load request ID (in-flight on the I/O thread).
-    #[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
+    #[cfg(native_net)]
     pending_page_load: Option<loader::io_thread::IoRequestId>,
 
     /// URL of the in-flight [`Self::pending_page_load`], so a failed
     /// async load can render its error page under the URL the user
     /// actually asked for (keeping it in the URL bar and history).
-    #[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
+    #[cfg(native_net)]
     pending_page_url: Option<String>,
 
     /// In-flight image requests on the I/O thread, keyed by request ID
     /// mapped to the resolved image URL.
-    #[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
+    #[cfg(native_net)]
     pending_io_images: std::collections::HashMap<loader::io_thread::IoRequestId, String>,
 
     /// Channel to send `(url, raw_bytes)` to the background decode thread.
-    #[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
+    #[cfg(native_net)]
     image_decode_tx: Option<std::sync::mpsc::Sender<(String, Vec<u8>)>>,
 
     /// Channel to receive `(url, DecodedImage)` from the background decode thread.
-    #[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
+    #[cfg(native_net)]
     image_decode_rx: Option<std::sync::mpsc::Receiver<(String, image::DecodedImage)>>,
 
     /// Number of images sent to the decode thread but not yet received back.
-    #[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
+    #[cfg(native_net)]
     image_decode_in_flight: usize,
 
     /// GPU textures for decoded images, keyed by src URL.
@@ -385,6 +403,10 @@ pub struct BrowserWidget {
 
     /// Texture atlas for packing small images (reduces GPU bind switches).
     image_atlas: image_atlas::ImageAtlas,
+
+    /// Image / atlas textures of a page navigated away from. Navigation
+    /// has no backend handle, so they are destroyed on the next paint.
+    retired_textures: Vec<TextureId>,
 
     /// Pending image requests to be processed in time-sliced batches.
     pending_images: Vec<(String, ResourceRequest)>,
@@ -444,17 +466,17 @@ pub struct BrowserWidget {
 
     /// In-flight external stylesheet requests on the I/O thread, keyed
     /// by request ID mapped to the `external_stylesheets` slot index.
-    #[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
+    #[cfg(native_net)]
     pending_io_stylesheets: std::collections::HashMap<loader::io_thread::IoRequestId, usize>,
 
     /// VFS-scheme stylesheets queued during `load_html`. Drained by
     /// `tick()` which holds the active VFS handle.
-    #[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
+    #[cfg(native_net)]
     pending_vfs_stylesheets: Vec<(usize, ResourceRequest)>,
 
     /// `@import`ed stylesheet URLs already requested for the current
     /// page (dedupes imports and bounds import chains and cycles).
-    #[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
+    #[cfg(native_net)]
     imported_stylesheet_urls: HashSet<String>,
 
     /// Set once any external stylesheet has arrived that was not yet
@@ -538,22 +560,6 @@ pub struct BrowserWidget {
     /// response headers).
     page_csp: Option<loader::csp::CspPolicy>,
 
-    /// Timestamp when loading started (for progress bar animation).
-    #[allow(dead_code)]
-    loading_start: Option<web_time::Instant>,
-
-    /// In-page search state: the current search query (empty = inactive).
-    #[allow(dead_code)]
-    search_state: String,
-
-    /// Ordered list of focusable DOM node IDs (tabindex order).
-    #[allow(dead_code)]
-    tab_order: Vec<NodeId>,
-
-    /// Current index into `tab_order` (-1 = none).
-    #[allow(dead_code)]
-    tab_focus_index: i32,
-
     /// Persistent text measurement cache shared across layout passes.
     /// Cleared only when the effective font size changes (e.g. zoom).
     text_cache: layout::text_cache::SharedTextCache,
@@ -626,12 +632,6 @@ pub struct BrowserWidget {
     /// without known dirty rects).
     full_repaint_needed: bool,
 
-    /// Tile grid for tracking visible/dirty regions of the page.
-    /// Infrastructure for future GPU tile caching (render tiles as
-    /// GPU textures, only re-render newly visible tiles on scroll).
-    #[allow(dead_code)]
-    tile_grid: Option<paint::tiling::TileGrid>,
-
     /// Optional diagnostic log hook. When set, the browser fires it
     /// at key milestones during navigation and image loading: page
     /// fetch start/end, response processing, image fetch start/end
@@ -656,7 +656,7 @@ impl BrowserWidget {
             nav: NavigationController::new(&home),
             scroll: ScrollState::new(238, smooth), // 272 - 34
             cache: ResourceCache::new(cache_bytes),
-            #[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
+            #[cfg(native_net)]
             cookie_jar: CookieJar::new(),
             state: LoadingState::Idle,
             error_message: None,
@@ -687,23 +687,24 @@ impl BrowserWidget {
             decoded_images: HashMap::new(),
             broken_image_urls: std::collections::HashSet::new(),
             mask_image_arcs: HashMap::new(),
-            #[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
+            #[cfg(native_net)]
             io_thread: None,
             tls: None,
-            #[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
+            #[cfg(native_net)]
             pending_page_load: None,
-            #[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
+            #[cfg(native_net)]
             pending_page_url: None,
-            #[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
+            #[cfg(native_net)]
             pending_io_images: HashMap::new(),
-            #[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
+            #[cfg(native_net)]
             image_decode_tx: None,
-            #[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
+            #[cfg(native_net)]
             image_decode_rx: None,
-            #[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
+            #[cfg(native_net)]
             image_decode_in_flight: 0,
             image_textures: HashMap::new(),
             image_atlas: image_atlas::ImageAtlas::new(),
+            retired_textures: Vec::new(),
             pending_images: Vec::new(),
             deferred_images: Vec::new(),
             decoded_image_bytes: 0,
@@ -717,11 +718,11 @@ impl BrowserWidget {
             external_stylesheet_sources: Vec::new(),
             styled_viewport: (480, 272),
             media_dependent_css: false,
-            #[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
+            #[cfg(native_net)]
             pending_io_stylesheets: std::collections::HashMap::new(),
-            #[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
+            #[cfg(native_net)]
             pending_vfs_stylesheets: Vec::new(),
-            #[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
+            #[cfg(native_net)]
             imported_stylesheet_urls: HashSet::new(),
             pending_external_css_apply: false,
             cached_inline_styles: Vec::new(),
@@ -750,10 +751,6 @@ impl BrowserWidget {
             animation_engine: css::animation::AnimationEngine::new(),
             last_tick_time: None,
             page_csp: None,
-            loading_start: None,
-            search_state: String::new(),
-            tab_order: Vec::new(),
-            tab_focus_index: -1,
             text_cache: layout::text_cache::new_shared_cache(),
             #[cfg(feature = "web-fonts")]
             font_registry: std::cell::RefCell::new(font::FontRegistry::new()),
@@ -773,7 +770,6 @@ impl BrowserWidget {
             nested_scroll_offsets: HashMap::new(),
             dirty_rects: Vec::new(),
             full_repaint_needed: true,
-            tile_grid: None,
             diag_log: None,
         }
     }
@@ -788,7 +784,7 @@ impl BrowserWidget {
     /// flight it keeps the old provider until it is next recreated.
     pub fn set_tls_provider(&mut self, provider: Box<dyn oasis_net::tls::TlsProvider>) {
         self.tls = Some(std::sync::Arc::from(provider));
-        #[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
+        #[cfg(native_net)]
         if self
             .io_thread
             .as_ref()
@@ -888,7 +884,7 @@ impl BrowserWidget {
         let loading = self.state == LoadingState::Loading
             || !self.pending_images.is_empty()
             || self.pending_external_css_apply;
-        #[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
+        #[cfg(native_net)]
         let loading = loading
             || self.pending_page_load.is_some()
             || !self.pending_io_images.is_empty()
@@ -1033,7 +1029,7 @@ impl BrowserWidget {
     /// Exposed so screenshot tests and embedders can drive `tick()` to
     /// quiescence when external stylesheets and images are still in
     /// flight after `load_html()`.
-    #[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
+    #[cfg(native_net)]
     pub fn io_thread_in_flight(&self) -> Option<usize> {
         self.io_thread.as_ref().map(|t| t.in_flight())
     }
@@ -1041,7 +1037,7 @@ impl BrowserWidget {
     /// Stub for platforms without a dedicated I/O thread — always
     /// reports zero in-flight requests so drain loops terminate
     /// immediately.
-    #[cfg(any(target_arch = "wasm32", feature = "psp"))]
+    #[cfg(not(native_net))]
     pub fn io_thread_in_flight(&self) -> Option<usize> {
         None
     }
@@ -1131,5 +1127,5 @@ impl BrowserWidget {
 #[path = "browser_tests.rs"]
 mod tests;
 
-#[cfg(all(test, not(any(target_arch = "wasm32", feature = "psp"))))]
+#[cfg(all(test, native_net))]
 mod e2e_tests;

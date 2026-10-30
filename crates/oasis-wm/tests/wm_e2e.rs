@@ -525,6 +525,41 @@ fn maximize_button_and_titlebar_double_click_round_trip() {
     assert_eq!(geom(&wm, "w"), orig);
 }
 
+/// A maximized window has no resize handles (the conventional desktop
+/// behaviour): dragging any edge or corner used to resize it while it
+/// stayed marked maximized. Now it stays exactly work-area sized and
+/// still restores to its pre-maximize geometry.
+#[test]
+fn edge_drag_on_a_maximized_window_does_not_resize_it() {
+    let mut sdi = SdiRegistry::new();
+    let mut wm = WindowManager::new(SW, SH);
+    wm.create_window(&cfg("w", 120, 90, 300, 200), &mut sdi)
+        .unwrap();
+    let orig = geom(&wm, "w");
+    wm.maximize_window("w", &mut sdi).unwrap();
+    let maxed = geom(&wm, "w");
+    // The top edge is the titlebar (dragging it un-maximizes, as before);
+    // every other edge and corner must leave the window untouched.
+    for edge in EDGES.into_iter().filter(|e| {
+        !matches!(
+            e,
+            ResizeEdge::North | ResizeEdge::NorthEast | ResizeEdge::NorthWest
+        )
+    }) {
+        let p = edge_point(&wm, "w", edge);
+        let mut m = Mouse {
+            wm: &mut wm,
+            sdi: &mut sdi,
+        };
+        m.drag(p, (p.0 - 150, p.1 - 120));
+        let w = wm.get_window("w").unwrap();
+        assert_eq!(w.state, WindowState::Maximized, "{edge:?}");
+        assert_eq!(geom(&wm, "w"), maxed, "{edge:?} resized a maximized window");
+    }
+    wm.restore_window("w", &mut sdi).unwrap();
+    assert_eq!(geom(&wm, "w"), orig);
+}
+
 #[test]
 fn maximizing_twice_still_restores_the_original_geometry() {
     let mut sdi = SdiRegistry::new();

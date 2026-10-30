@@ -607,16 +607,9 @@ mod tests {
 
     #[test]
     fn from_theme_matches_default_for_builtin_themes() {
-        use crate::theme::Theme;
         // Every built-in theme keeps the Win95 gray menu defaults, so
         // the theme-derived style is pixel-identical to `default()`.
-        for theme in [
-            Theme::dark(),
-            Theme::light(),
-            Theme::classic(),
-            Theme::high_contrast(),
-            Theme::colorblind(),
-        ] {
+        for theme in crate::test_utils::all_themes() {
             assert_eq!(MenuStyle::from_theme(&theme), MenuStyle::default());
         }
     }

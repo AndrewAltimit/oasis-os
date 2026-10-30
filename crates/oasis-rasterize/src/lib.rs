@@ -9,15 +9,16 @@
 //! The crate also provides [`GlyphCacheKey`] for packing glyph parameters into
 //! a compact hash key suitable for any glyph cache implementation.
 //!
-//! [`TextureDedup`] provides content-addressed texture deduplication with LRU
-//! eviction and reference counting, shared by SDL and WASM backends.
+//! The scanline span generators (`*_rows`, [`midpoint_row_extents`]) are
+//! defined in [`oasis_types::rasterize`] so the trait defaults can share
+//! them; they are re-exported here unchanged.
 
 mod glyph;
-mod rows;
-mod texture_dedup;
 pub use glyph::{bitmap_ascent, bitmap_line_height, glyph_cell, glyph_mask, mask_runs};
-pub use rows::{polygon_rows, stroke_circle_rows, stroke_rounded_rect_rows, thick_line_rows};
-pub use texture_dedup::TextureDedup;
+pub use oasis_types::rasterize::{
+    midpoint_row_extents, polygon_rows, rounded_rect_rows, stroke_circle_rows,
+    stroke_rounded_rect_rows, thick_line_rows,
+};
 
 #[cfg(feature = "ttf")]
 pub mod ttf;
@@ -1160,91 +1161,6 @@ struct BlitParams<'a> {
 }
 
 // ---------------------------------------------------------------------------
-// Scanline helpers
-// ---------------------------------------------------------------------------
-
-/// Walk the midpoint circle of radius `r` and report every row offset
-/// `o` in `0..=r` **exactly once** together with the half-width `ext` of
-/// the filled disc on that row (the span is `-ext..=ext`).
-///
-/// The classic midpoint fill emits the same row several times (the
-/// `(x, y)` octant pair revisits a row while `y` stays constant), which
-/// double-blends translucent fills. This walk emits the same union of
-/// pixels -- the widest extent seen for each row -- but only once.
-pub fn midpoint_row_extents(r: i32, mut f: impl FnMut(i32, i32)) {
-    if r < 0 {
-        return;
-    }
-    let mut cx = 0i32;
-    let mut cy = r;
-    let mut d = 1 - r;
-    while cx <= cy {
-        // Row `cx` is visited exactly once, with its final extent `cy`.
-        f(cx, cy);
-        let steps_down = d >= 0;
-        // Row `cy` is revisited while `cy` stays constant, with a growing
-        // `cx`; its widest extent is the `cx` of the step that leaves it.
-        // `cx < cy` guarantees row `cy` is never reached as a `cx` row.
-        if steps_down && cx < cy {
-            f(cy, cx);
-        }
-        cx += 1;
-        if steps_down {
-            cy -= 1;
-            d += 2 * (cx - cy) + 1;
-        } else {
-            d += 2 * cx + 1;
-        }
-    }
-}
-
-/// Enumerate the rows of a filled `w x h` rounded rect with corner radius
-/// `r` (already clamped to `w/2`, `h/2`). Calls `f(dy, x0, x1)` exactly
-/// once per covered row, where the row covers columns `x0..x1` (relative
-/// to the rect's left edge, half-open).
-///
-/// The covered pixels match the historical midpoint-based fill exactly;
-/// only the repeated rows are gone.
-pub fn rounded_rect_rows(w: i32, h: i32, r: i32, mut f: impl FnMut(i32, i32, i32)) {
-    if w <= 0 || h <= 0 {
-        return;
-    }
-    if r <= 0 {
-        for dy in 0..h {
-            f(dy, 0, w);
-        }
-        return;
-    }
-    // Columns of a row inset by `r - ext`. When `w == 2r` the pole row
-    // (ext 0) keeps the two center pixels, as the inclusive-endpoint
-    // `hline` always drew it.
-    let span = |ext: i32| {
-        let inset = r - ext;
-        if w - 2 * inset > 0 {
-            (inset, w - inset)
-        } else {
-            (inset - 1, inset + 1)
-        }
-    };
-    midpoint_row_extents(r, |o, ext| {
-        let (x0, x1) = span(ext);
-        // Top arc: offset 0 is the first full-width row.
-        f(r - o, x0, x1);
-        // Bottom arc: offset 0 is covered by the body (or, when h == 2r,
-        // coincides with a top-arc row), so only o >= 1 rows below the
-        // top half are emitted.
-        let dy = h - 1 - r + o;
-        if o >= 1 && dy > r {
-            f(dy, x0, x1);
-        }
-    });
-    // Body rows strictly between the two arcs.
-    for dy in (r + 1)..(h - r) {
-        f(dy, 0, w);
-    }
-}
-
-// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
@@ -1911,38 +1827,6 @@ mod tests {
                 fast.data() == slow.data(),
                 "shape diverged at iter {iter}: {rect:?} r={radius}"
             );
-        }
-    }
-
-    #[test]
-    fn rounded_rect_rows_visits_each_row_once() {
-        for w in 1..24 {
-            for h in 1..24 {
-                for r in 0..=(w.min(h) / 2) {
-                    let mut seen = vec![0u32; h as usize];
-                    rounded_rect_rows(w, h, r, |dy, x0, x1| {
-                        assert!((0..h).contains(&dy), "row {dy} outside 0..{h}");
-                        assert!(0 <= x0 && x0 < x1 && x1 <= w, "w={w} r={r}: {x0}..{x1}");
-                        seen[dy as usize] += 1;
-                    });
-                    assert!(seen.iter().all(|&n| n == 1), "w={w} h={h} r={r}: {seen:?}");
-                }
-            }
-        }
-    }
-
-    #[test]
-    fn midpoint_row_extents_visits_each_offset_once() {
-        for r in 0..200 {
-            let mut ext_of = vec![-1i32; r as usize + 1];
-            midpoint_row_extents(r, |o, ext| {
-                assert!(ext >= 0 && ext <= r);
-                assert_eq!(ext_of[o as usize], -1, "r={r}: offset {o} visited twice");
-                ext_of[o as usize] = ext;
-            });
-            assert!(ext_of.iter().all(|&e| e >= 0), "r={r}: {ext_of:?}");
-            // The extent never grows with distance from the center.
-            assert!(ext_of.windows(2).all(|p| p[0] >= p[1]), "r={r}: {ext_of:?}");
         }
     }
 

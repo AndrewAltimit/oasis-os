@@ -88,6 +88,46 @@ fn giant_attribute_and_giant_text_run() {
     assert!(took < DEADLINE, "took {took:?}");
 }
 
+/// An interval tries to grow a 10 000-deep element chain after load,
+/// 500 levels per tick (so every step goes through the per-tick
+/// re-cascade + relayout + repaint), on a UI-sized stack. The DOM depth
+/// cap refuses the insertions past the parser's limit; the page must
+/// keep rendering, including the text written into the deepest
+/// accepted element.
+#[cfg(feature = "javascript")]
+#[test]
+fn script_built_ten_thousand_deep_chain() {
+    let page = "<html><body><p>TopOfPage</p><script>\
+        var c = document.body, i = 0, refused = 0; \
+        var id = setInterval(function () { \
+          for (var k = 0; k < 500 && i < 10000; k++, i++) { \
+            var d = document.createElement('div'); \
+            d.style.paddingLeft = '1px'; \
+            try { c.appendChild(d); c = d; } catch (e) { refused++; } \
+          } \
+          if (i >= 10000) { clearInterval(id); c.textContent = 'DeepJs' + refused; } \
+        }, 4);\
+        </script></body></html>";
+    let server = TestServer::start(move |_| Reply::html(page));
+    let url = server.url("/page");
+    let handle = std::thread::Builder::new()
+        .stack_size(UI_STACK)
+        .spawn(move || {
+            let mut s = Session::new();
+            s.open(&url);
+            s.assert_shows("TopOfPage");
+            // <body> is at depth 2; 255 divs fit below it.
+            let refused = 10_000 - (crate::html::MAX_DOM_DEPTH - 2);
+            s.wait_for(&format!("DeepJs{refused}"));
+            s.assert_shows("TopOfPage");
+            s.press(Button::Down);
+            s.input(InputEvent::MouseWheel { delta: 3 });
+        })
+        .unwrap();
+    handle.join().expect("browser thread panicked");
+    drop(server);
+}
+
 #[test]
 fn pathological_css() {
     let mut css = String::new();

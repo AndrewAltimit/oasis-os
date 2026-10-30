@@ -46,12 +46,12 @@ impl WindowManager {
         }
 
         // Determine initial position.
-        let (x, y) = match (config.x, config.y) {
-            (Some(x), Some(y)) => (x, y),
+        let (x, y, cascaded) = match (config.x, config.y) {
+            (Some(x), Some(y)) => (x, y, false),
             _ => {
                 let pos = (self.next_cascade_x, self.next_cascade_y);
                 self.advance_cascade();
-                pos
+                (pos.0, pos.1, true)
             },
         };
 
@@ -59,7 +59,15 @@ impl WindowManager {
         // so the two don't share SDI objects.
         self.flush_closing(Some(&config.id), sdi);
 
-        let window = Window::new(config, x, y, &self.theme);
+        let mut window = Window::new(config, x, y, &self.theme);
+        if cascaded {
+            // A cascade step must not push the frame past the right /
+            // bottom edge (at 480x272 a default-size window is nearly as
+            // tall as the screen): pull it back so it fits, or to the
+            // top-left corner when it is larger than the screen.
+            window.x = fit_on_screen(window.x, window.outer_w, self.screen_w);
+            window.y = fit_on_screen(window.y, window.outer_h, self.screen_h);
+        }
         let is_modal = window.modal;
 
         // Create modal overlay before the window if this is a modal window.
@@ -187,20 +195,31 @@ impl WindowManager {
             }
         }
 
-        // Move focus to next topmost visible window.
-        let new_active = self
-            .windows
-            .iter()
-            .rev()
-            .find(|w| w.state != WindowState::Minimized && w.id != id)
-            .map(|w| w.id.clone());
-        self.active_window = new_active;
+        // Move focus to the next topmost visible window, unless another
+        // (visible) window already has it. Going through
+        // `focus_window_internal` repaints the active/inactive titlebars.
+        let focus_elsewhere = self.active_window.as_deref().is_some_and(|a| a != id);
+        if !focus_elsewhere {
+            match self
+                .windows
+                .iter()
+                .rev()
+                .find(|w| w.state != WindowState::Minimized && w.id != id)
+                .map(|w| w.id.clone())
+            {
+                Some(next) => self.focus_window_internal(&next, sdi),
+                None => self.active_window = None,
+            }
+        }
 
         Ok(())
     }
 
     /// Maximize a window to fill the screen.
     pub fn maximize_window(&mut self, id: &str, sdi: &mut SdiRegistry) -> Result<()> {
+        // The screen minus the status/task bar insets (saturating, so
+        // insets taller than a tiny screen give a 0-height window).
+        let area = self.work_area();
         let window = self
             .windows
             .iter_mut()
@@ -225,11 +244,10 @@ impl WindowManager {
             });
         }
 
-        window.x = 0;
-        window.y = self.theme.maximize_top_inset as i32;
-        window.outer_w = self.screen_w;
-        window.outer_h =
-            self.screen_h - self.theme.maximize_top_inset - self.theme.maximize_bottom_inset;
+        window.x = area.x;
+        window.y = area.y;
+        window.outer_w = area.w;
+        window.outer_h = area.h;
         window.state = WindowState::Maximized;
 
         self.update_sdi_positions(id, sdi);
@@ -286,13 +304,16 @@ impl WindowManager {
             .ok_or_else(|| OasisError::Wm(WmError::WindowNotFound { id: id.to_string() }))?;
 
         // Save current geometry for restore (separate from maximize/minimize
-        // saved_geometry so we don't clobber it).
-        window.kiosk_saved_geometry = Some(Geometry {
-            x: window.x,
-            y: window.y,
-            w: window.outer_w,
-            h: window.outer_h,
-        });
+        // saved_geometry so we don't clobber it). Re-entering kiosk mode
+        // keeps the original: the current geometry is the fullscreen one.
+        if !window.fullscreen_kiosk || window.kiosk_saved_geometry.is_none() {
+            window.kiosk_saved_geometry = Some(Geometry {
+                x: window.x,
+                y: window.y,
+                w: window.outer_w,
+                h: window.outer_h,
+            });
+        }
 
         window.x = 0;
         window.y = 0;
@@ -334,11 +355,14 @@ impl WindowManager {
 
         window.fullscreen_kiosk = false;
 
-        // Re-show all decoration SDI objects.
-        for suffix in window.sdi_suffixes() {
-            let name = window.sdi_name(suffix);
-            if let Ok(obj) = sdi.get_mut(&name) {
-                obj.visible = true;
+        // Re-show all decoration SDI objects (a minimized window stays
+        // hidden until it is restored).
+        if window.state != WindowState::Minimized {
+            for suffix in window.sdi_suffixes() {
+                let name = window.sdi_name(suffix);
+                if let Ok(obj) = sdi.get_mut(&name) {
+                    obj.visible = true;
+                }
             }
         }
 
@@ -378,7 +402,8 @@ impl WindowManager {
         }
     }
 
-    /// Advance the cascade position for the next window.
+    /// Advance the cascade position for the next window (see also
+    /// [`fit_on_screen`], applied to each cascaded window).
     pub(crate) fn advance_cascade(&mut self) {
         self.next_cascade_x += CASCADE_OFFSET;
         self.next_cascade_y += CASCADE_OFFSET;
@@ -391,4 +416,12 @@ impl WindowManager {
             self.next_cascade_y = CASCADE_OFFSET;
         }
     }
+}
+
+/// `pos` moved back so a `size`-long span starting there ends within a
+/// `screen`-long axis, but never before 0.
+fn fit_on_screen(pos: i32, size: u32, screen: u32) -> i32 {
+    let max = i64::from(screen) - i64::from(size);
+    // In i32 range: the result lies between 0 and `pos`.
+    i64::from(pos).min(max).max(0) as i32
 }

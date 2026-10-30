@@ -218,7 +218,7 @@ fn begin_box_for_node(
                 && let Some(svg_elem) = crate::svg::parse_svg_with_styles(doc, node_id, styles)
             {
                 let replaced = ReplacedContent::Svg {
-                    element: Box::new(svg_elem),
+                    element: std::rc::Rc::new(svg_elem),
                 };
                 let mut lb = LayoutBox::new(BoxType::Replaced(replaced), style, Some(node_id));
                 lb.children = Vec::new();

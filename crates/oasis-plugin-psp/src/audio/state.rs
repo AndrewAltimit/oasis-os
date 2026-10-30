@@ -537,8 +537,8 @@ mod tests {
 
     #[test]
     fn umem_size_covers_all_buffers() {
-        let expected = 64 + (CODEC_BUF_WORDS * 4) + (1152 * 2 * 2)
-            + CODEC_WORK_SIZE + READ_BUF_SIZE;
+        let expected =
+            64 + (CODEC_BUF_WORDS * 4) + (1152 * 2 * 2) + CODEC_WORK_SIZE + READ_BUF_SIZE;
         assert_eq!(UMEM_CODEC_SIZE, expected);
     }
 

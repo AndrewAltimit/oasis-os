@@ -14,7 +14,7 @@ so you can `git show` for specifics.
 
 - **CSS Grid track lists, auto-repeat and placement** (commit
   `75ea47b`, follow-up `73939e5`). Raw-text grid values parsed by a
-  paren/bracket-aware tokenizer (`css/values/grid.rs`): nested
+  paren/bracket-aware tokenizer (`oasis-css/src/values/grid.rs`): nested
   `repeat()`, `repeat(auto-fill | auto-fit, ...)`, `minmax()`,
   `fit-content()`, content-sized tracks, line numbers / `span` /
   slash syntax / area names, `grid-auto-flow: dense`, and the spec
@@ -39,6 +39,13 @@ so you can `git show` for specifics.
 - **JS execution watchdog** (`79d0513`). Event dispatch, microtask
   drains and timer callbacks run under a deadline
   (`JsEngine::with_context_guarded`); timer count / interval limits.
+  Timer ticks now share one per-frame budget and defer the rest, and
+  the budget and heap limit come from `BrowserConfig`
+  (`js_max_exec_ms`, `js_memory_limit_bytes`).
+- **Script DOM depth cap + backtracking selector matcher.** JS
+  insertions past `MAX_DOM_DEPTH` throw instead of building trees the
+  recursive render passes can't survive; `A > B C`-style selectors
+  backtrack (bounded by `MAX_TRAVERSAL_STEPS`).
 - **`js_dom` module split** (`831913e`). The 3.5k-line `js_dom.rs`
   is now `src/js_dom/` (bindings, fetch, storage, serialize, canvas,
   compat shims) with the JS sources in `.js` files.
@@ -312,7 +319,10 @@ so you can `git show` for specifics.
   (`feat/browser-realworld-compat-epic`). Display-list golden
   harness for visual regression, hard wall-clock layout budgets
   gating `cargo test`, criterion corpus bench group, and a local-
-  only triage binary for bucket-sorting arbitrary HTML snapshots.
+  only triage tool for bucket-sorting arbitrary HTML snapshots (now
+  `cargo run -p oasis-browser --example triage`). The goldens record
+  through the production display-list record + replay path since the
+  immediate-mode painter was deleted.
 - **WHATWG HTML conformance** (`feat/browser-whatwg-epic-completion`
   + earlier `feat/browser-whatwg-conformance`). Full adoption agency
   algorithm, foster parenting, `<template>` with full DocumentFragment
@@ -407,11 +417,11 @@ shipped. Each is small enough for a focused PR.
 
 - **`line-clamp` is parsed but never applied.** `-webkit-line-clamp`
   / `line-clamp` populate `ComputedStyle::line_clamp`
-  (`css/values/apply/mod.rs`), but nothing in `layout/` reads it, so
+  (`oasis-css/src/values/apply/mod.rs`), but nothing in `layout/` reads it, so
   clamped text renders every line and no ellipsis is drawn.
 - **`position: sticky` never releases at its containing block.**
-  `compute_sticky_dy` (`paint/record.rs`, mirrored in
-  `paint/display_list/replay.rs`) pins against the viewport `top` /
+  `sticky_offset` (`paint/display_list/mod.rs`, used by both the
+  recorder and replay) pins against the viewport `top` /
   `bottom` only; a sticky header keeps sticking after its parent has
   scrolled away instead of being pushed out with it.
 - **Grid line-name references.** `[name]` groups in track lists are
@@ -423,10 +433,51 @@ shipped. Each is small enough for a focused PR.
   stretched to the row height and `align-items: center | end` has no
   effect.
 - **Subgrid** (see above).
-- **`parallel-style` feature does not pass clippy.** `cargo clippy
-  -p oasis-browser --features parallel-style -- -D warnings` fails
-  in `css/cascade/mod.rs` (unused `cascade_yield_fn`, needless
-  `return`). CI only lints default features, so this rots silently.
+- **Rotated boxes rotate only their background.** Under a rotate /
+  scale / skew / 3D transform the recorder emits the background as a
+  `FillPolygon` quad, but borders, outlines, text and images keep
+  following the translation only (`paint/record.rs`).
+- ~~**Box-level `filter` double-applies on render-target backends.**~~
+  **Fixed (wave 5).** `record.rs` records raw colors; replay applies
+  the per-color approximation only where the per-pixel readback chain
+  does not run (no render target, no readback, `replay_dirty`), to
+  every item color inside the layer.
+- **`backdrop-filter` is not sampled.** It only isolates the element
+  into a compositing layer; the backdrop is never read or filtered.
+- **`parallel-style` is not linted in CI.** The feature lives in
+  `oasis-css` (`oasis-browser/parallel-style` forwards to it). It is
+  clippy-clean today (`cargo clippy -p oasis-css --all-targets
+  --features parallel-style -- -D warnings`), but CI only lints default
+  features.
+- **Network-stack gaps left after the WP-A hardening.**
+  `<meta http-equiv="Content-Security-Policy">` is ignored;
+  `'sha384-…'` / `'sha512-…'` CSP hashes never match; script-written
+  `style=""` attributes bypass `style-src-attr`, and `style=""` is still
+  checked as a whole (so `'unsafe-hashes'` style hashes don't match);
+  `'unsafe-eval'` is not enforced (`eval` / `new Function` /
+  `setTimeout(string)` always work); PSP has no cookie jar
+  (`load_from_network` on PSP carries CSP but not cookies); HTTPS has
+  no connection reuse (fresh TCP + TLS per request, h2 GOAWAY after one
+  stream). `SameSite` leftovers: not applied when *storing*, missing
+  `SameSite` is not defaulted to `Lax`, same-site is schemeless, and
+  GET navigations count as user-initiated (link clicks and typed URLs
+  share `navigate_vfs_inner`, so a cross-site link still sends `Strict`
+  cookies). The global cookie cap evicts the oldest cookie of any site,
+  so one site with many subdomains can push out others' sessions.
+  Redirect chains A → B → A re-send `Authorization` on the return hop.
+  A stale JS wrapper whose freed slot was reused aliases the new node
+  (no generation counter; the tree itself stays well-formed).
+  **Fixed in wave 5:** `SameSite` on send; redirects to `vfs:` /
+  `file:` / other non-http(s) schemes; HPACK length overflow panic;
+  request splitting via CR / LF in URLs or `fetch()` headers; `fetch()`
+  redirect hops and `data:` URLs vs `connect-src`; CSP lost on cached
+  back / forward and `304`; per-handler `'unsafe-hashes'`; `<template>`
+  scripts; http deleting `Secure` cookies; `document.cookie` caps; h2
+  trailers; truncated keep-alive responses re-pooled; 307 / 308 method
+  preservation on desktop. The "cookies set by synchronous loads miss
+  the I/O thread's jar" item was not reproducible: the only
+  cookie-carrying synchronous loads happen when no I/O thread runs, and
+  a respawned thread re-clones the main jar.
 
 ---
 

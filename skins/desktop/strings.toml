@@ -1,0 +1,12 @@
+boot_text = [
+    "OASIS_OS v2.2 [desktop]",
+    "Loading desktop environment...",
+    "Window manager: active",
+    "Ready.",
+]
+prompt_format = "{cwd} $ "
+title = "OASIS Desktop"
+home_label = "Desktop"
+welcome_message = "Welcome to OASIS Desktop."
+error_prefix = "error: "
+shutdown_message = "Desktop session ended."

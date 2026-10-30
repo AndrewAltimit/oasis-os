@@ -1,6 +1,8 @@
-//! System Monitor app for OASIS_OS.
+//! System information apps for OASIS_OS: System Monitor, plus the
+//! [`NetworkApp`] (network service status) and the [`PackageManagerApp`]
+//! (what the build ships), which used to be separate placeholder crates.
 //!
-//! Shows platform identification, active backend and VFS type, plus
+//! The System Monitor shows platform identification, active backend and VFS type, plus
 //! themed gauges for CPU, memory, battery and uptime. Live values come
 //! from a [`SysStatus`] snapshot the host publishes to
 //! [`status::STATUS_PATH`] (see [`probe::HostProbe`]); anything the host
@@ -19,10 +21,14 @@ use oasis_types::backend::SdiBackend;
 use oasis_types::input::Button;
 use oasis_vfs::Vfs;
 
+pub mod network;
+pub mod packages;
 pub mod probe;
 mod render;
 pub mod status;
 
+pub use network::NetworkApp;
+pub use packages::PackageManagerApp;
 pub use render::SysmonColors;
 pub use status::{Gauge, Level, STATUS_PATH, SysStatus};
 
@@ -205,23 +211,14 @@ impl App for SystemMonitorApp {
     }
 
     fn handle_input(&mut self, button: &Button, vfs: &dyn Vfs) -> AppAction {
-        match button {
-            Button::Cancel => AppAction::Exit,
-            Button::Up => {
-                self.content.navigate_up();
-                AppAction::None
-            },
-            Button::Down => {
-                self.content.navigate_down();
-                AppAction::None
-            },
-            // Refresh now.
-            Button::Confirm | Button::Triangle => {
-                self.reload(vfs);
-                AppAction::None
-            },
-            _ => AppAction::None,
+        if let Some(action) = self.content.handle_nav(button) {
+            return action;
         }
+        // Refresh now.
+        if matches!(button, Button::Confirm | Button::Triangle) {
+            self.reload(vfs);
+        }
+        AppAction::None
     }
 
     fn tick(&mut self, dt_ms: u32, vfs: &dyn Vfs) -> bool {
@@ -254,19 +251,12 @@ impl App for SystemMonitorApp {
     fn lines(&self) -> &[String] {
         &self.content.lines
     }
-
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-
-    fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
-        self
-    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use oasis_app_core::AsAny;
     use oasis_test_backend::{DrawCommand, RecordingBackend};
     use oasis_vfs::MemoryVfs;
 
@@ -387,16 +377,32 @@ mod tests {
         let at = ActiveTheme::default();
         app.draw_windowed(0, 0, 400, 260, &mut backend, &at)
             .expect("draw");
-        let fills = backend
+        // A rounded fill reaches the backend as several row spans (the
+        // span-exact `fill_rounded_rect` default), so count gauges as
+        // vertically separate bands of accent pixels.
+        let mut rows: Vec<(i32, i32)> = backend
             .commands()
             .iter()
-            .filter(|c| {
-                matches!(c,
-                    DrawCommand::FillRoundedRect { color, .. } | DrawCommand::FillRect { color, .. }
-                    if *color == at.ui_theme.accent)
+            .filter_map(|c| match c {
+                DrawCommand::FillRoundedRect { y, h, color, .. }
+                | DrawCommand::FillRect { y, h, color, .. }
+                    if *color == at.ui_theme.accent =>
+                {
+                    Some((*y, *y + *h as i32))
+                },
+                _ => None,
             })
-            .count();
-        assert_eq!(fills, 4);
+            .collect();
+        rows.sort_unstable();
+        let mut bands = 0;
+        let mut end = i32::MIN;
+        for (y0, y1) in rows {
+            if y0 > end {
+                bands += 1;
+            }
+            end = end.max(y1);
+        }
+        assert_eq!(bands, 4);
     }
 
     #[test]

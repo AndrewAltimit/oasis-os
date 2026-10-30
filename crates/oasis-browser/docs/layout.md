@@ -132,7 +132,7 @@ which makes lookups effectively free for steady-state pages.
 - **Grid** (`grid.rs`) supports `grid-template-{columns,rows,areas}`,
   `grid-auto-{columns,rows}`, `grid-auto-flow: [row | column] || dense`,
   `gap`, and explicit / implicit grids. Track lists are parsed by
-  `css/values/grid.rs` with a paren-aware tokenizer: nested
+  `oasis-css/src/values/grid.rs` with a paren-aware tokenizer: nested
   `repeat(3, minmax(0, 1fr))`, multi-track `repeat(2, 1fr 2fr)`, and
   `px` / `%` / `em` / `rem` / `fr` / `auto` / `min-content` /
   `max-content` / `fit-content()` / `minmax()` tracks.

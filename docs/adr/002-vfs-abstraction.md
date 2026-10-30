@@ -1,8 +1,8 @@
 # ADR-002: Virtual File System Abstraction
 
 **Status:** Accepted
-**Date:** 2025-02-12
-**Last reviewed:** 2026-05-02 — still current. `MemoryVfs`, `RealVfs`, and `GameAssetVfs` ship today in `crates/oasis-vfs/`; the `Vfs` trait surface is unchanged in spirit.
+**Date:** 2026-02-09 (initial release; recorded 2026-02-19)
+**Last reviewed:** 2026-10-29 — still current. `MemoryVfs`, `RealVfs`, and `GameAssetVfs` ship today in `crates/oasis-vfs/`. Since the original decision the trait gained a shared `validate_rename` invariant check and a cross-implementation conformance suite (see "Shared invariants" below).
 
 ## Context
 
@@ -30,12 +30,47 @@ Core code never calls `std::fs` directly. Three implementations exist:
 - **Platform independence.** Terminal commands work on PSP, desktop, and UE5
   without `#[cfg]` conditionals in business logic.
 - **Security.** Path traversal attacks are blocked at the trait boundary. The
-  `MemoryVfs` cannot escape its virtual root. `RealVfs` normalizes and rejects
-  `..` traversal.
+  `MemoryVfs` cannot escape its virtual root. `RealVfs` resolves `..`
+  lexically (a VFS path cannot climb above `/`), then canonicalizes the
+  deepest ancestor that exists on disk and requires it to lie inside the
+  root before appending the not-yet-existing tail. A symlink inside the root
+  that points outside is therefore rejected even when several path levels
+  below it do not exist yet (`mkdir /link/new/x`), instead of letting
+  `create_dir_all` follow it out of the sandbox.
 - **Testability.** All file operations are testable with `MemoryVfs` -- no temp
   directories, no cleanup, deterministic behavior.
 - **Embedding.** FFI consumers populate `MemoryVfs` via `oasis_add_vfs_file()`
   before any OS code runs. No host filesystem exposure.
+
+## Shared invariants
+
+Behaviour that is part of the trait contract is enforced once and tested
+against every implementation:
+
+- **`Vfs::validate_rename`** (provided method in `oasis-vfs/src/lib.rs`) is
+  called by all three `rename` implementations on their normalized paths. It
+  rejects renaming `/`, a missing source, a destination inside the source
+  (`/a` -> `/a/b`, which would orphan the moved subtree), a missing or
+  non-directory destination parent, an existing directory as destination
+  (empty or not), and a directory onto an existing file. `from == to` is a
+  no-op; a file may replace a file. `RealVfs` additionally compares the
+  resolved on-disk paths so a symlink cannot smuggle a move into its own
+  subtree, and treats a case-only rename on a case-insensitive filesystem as
+  a rename rather than a collision.
+- **Permissions.** `MemoryVfs` and `GameAssetVfs` require write permission on
+  both parent directories for `rename` (as for `write`, `mkdir` and
+  `remove`). `RealVfs` leaves permission enforcement to the OS.
+- **`GameAssetVfs` layering.** Only overlay entries can be renamed; a
+  directory with visible base-layer descendants cannot move; a base entry
+  shadowed by the moved overlay entry stays hidden at the old path.
+- **`crates/oasis-vfs/tests/vfs_conformance.rs`** runs one macro-generated
+  suite against `MemoryVfs`, `GameAssetVfs` and `RealVfs` (temp dir), plus
+  unix-only RealVfs symlink-escape tests (run them on Linux or in the CI
+  Docker image). New trait-level behaviour gets a test there.
+
+Callers (`mv`, the file manager, the transfer service) still keep their own
+user-facing checks for nicer messages, but no longer need them for tree
+integrity.
 
 ## Tradeoffs
 

@@ -127,6 +127,8 @@ type Handler = Arc<dyn Fn(&Req) -> Reply + Send + Sync>;
 /// Every connection gets its own thread and supports keep-alive, so
 /// the browser's connection pool is exercised realistically.
 pub(crate) struct TestServer {
+    /// IP the server listens on (`127.0.0.1` unless [`Self::start_on`]).
+    pub host: String,
     pub port: u16,
     log: Arc<Mutex<Vec<Req>>>,
     stop: Arc<AtomicBool>,
@@ -135,7 +137,14 @@ pub(crate) struct TestServer {
 
 impl TestServer {
     pub fn start(handler: impl Fn(&Req) -> Reply + Send + Sync + 'static) -> Self {
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        Self::start_on("127.0.0.1", handler)
+    }
+
+    /// [`Self::start`] on another loopback IP (e.g. `127.0.0.2`), for a
+    /// second *site*: cookies are scoped by host, not port, so two
+    /// servers on `127.0.0.1` would share them.
+    pub fn start_on(host: &str, handler: impl Fn(&Req) -> Reply + Send + Sync + 'static) -> Self {
+        let listener = TcpListener::bind((host, 0)).unwrap();
         let port = listener.local_addr().unwrap().port();
         let log = Arc::new(Mutex::new(Vec::new()));
         let stop = Arc::new(AtomicBool::new(false));
@@ -152,6 +161,7 @@ impl TestServer {
             }
         });
         Self {
+            host: host.to_string(),
             port,
             log,
             stop,
@@ -161,13 +171,13 @@ impl TestServer {
 
     /// Absolute URL for `path` on this server.
     pub fn url(&self, path: &str) -> String {
-        format!("http://127.0.0.1:{}{path}", self.port)
+        format!("http://{}:{}{path}", self.host, self.port)
     }
 
-    /// Origin (`http://127.0.0.1:<port>`).
+    /// Origin (`http://<host>:<port>`).
     #[cfg_attr(not(feature = "javascript"), allow(dead_code))]
     pub fn origin(&self) -> String {
-        format!("http://127.0.0.1:{}", self.port)
+        format!("http://{}:{}", self.host, self.port)
     }
 
     /// Snapshot of every request received so far.
@@ -188,7 +198,7 @@ impl Drop for TestServer {
     fn drop(&mut self) {
         self.stop.store(true, Ordering::SeqCst);
         // Unblock `accept()`.
-        let _ = TcpStream::connect(("127.0.0.1", self.port));
+        let _ = TcpStream::connect((self.host.as_str(), self.port));
         if let Some(h) = self.accept.take() {
             let _ = h.join();
         }

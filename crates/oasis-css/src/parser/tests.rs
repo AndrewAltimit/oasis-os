@@ -1,0 +1,2007 @@
+//! Tests for the CSS parser.
+
+use super::containers::split_css_and;
+use super::*;
+
+// -- helper -------------------------------------------------------
+
+fn parse(css: &str) -> Stylesheet {
+    Stylesheet::parse(css)
+}
+
+fn first_decls(css: &str) -> Vec<Declaration> {
+    let sheet = parse(css);
+    assert!(!sheet.rules.is_empty(), "expected at least one rule");
+    sheet.rules[0].declarations.clone()
+}
+
+fn first_selectors(css: &str) -> SelectorList {
+    let sheet = parse(css);
+    sheet.rules[0].selectors.clone()
+}
+
+// -- test 1: simple rule -----------------------------------------
+
+#[test]
+fn simple_rule() {
+    let sheet = parse("p { color: red; }");
+    assert_eq!(sheet.rules.len(), 1);
+    let rule = &sheet.rules[0];
+    let sel = &rule.selectors.selectors[0];
+    assert_eq!(sel.parts[0].0.parts, vec![SimpleSelector::Type("p".into())]);
+    assert_eq!(rule.declarations.len(), 1);
+    assert_eq!(rule.declarations[0].property, "color");
+    assert_eq!(
+        rule.declarations[0].value,
+        CssValue::Color(CssColor::new(255, 0, 0, 255))
+    );
+}
+
+// -- test 2: class selector --------------------------------------
+
+#[test]
+fn class_selector() {
+    let sheet = parse(".intro { font-size: 14px; }");
+    let sel = &sheet.rules[0].selectors.selectors[0];
+    assert_eq!(
+        sel.parts[0].0.parts,
+        vec![SimpleSelector::Class("intro".into())]
+    );
+    assert_eq!(
+        sheet.rules[0].declarations[0].value,
+        CssValue::Length(14.0, LengthUnit::Px)
+    );
+}
+
+// -- test 3: id selector -----------------------------------------
+
+#[test]
+fn id_selector() {
+    let sheet = parse("#header { background-color: #333; }");
+    let sel = &sheet.rules[0].selectors.selectors[0];
+    assert_eq!(
+        sel.parts[0].0.parts,
+        vec![SimpleSelector::Id("header".into())]
+    );
+    assert_eq!(
+        sheet.rules[0].declarations[0].value,
+        CssValue::Color(CssColor::new(0x33, 0x33, 0x33, 255))
+    );
+}
+
+// -- test 4: descendant selector ---------------------------------
+
+#[test]
+fn descendant_selector() {
+    let decls = first_decls("div p { margin: 10px; }");
+    // Should expand margin shorthand.
+    assert_eq!(decls.len(), 4);
+    assert_eq!(decls[0].property, "margin-top");
+}
+
+// -- test 5: child selector --------------------------------------
+
+#[test]
+fn child_selector() {
+    let sels = first_selectors("div > p { color: blue; }");
+    let sel = &sels.selectors[0];
+    assert_eq!(sel.parts.len(), 2);
+    assert_eq!(sel.parts[1].1, Some(Combinator::Child));
+}
+
+// -- test 6: grouped selectors -----------------------------------
+
+#[test]
+fn grouped_selectors() {
+    let sheet = parse("h1, h2, h3 { font-weight: bold; }");
+    assert_eq!(sheet.rules[0].selectors.selectors.len(), 3);
+}
+
+// -- test 7: compound selector -----------------------------------
+
+#[test]
+fn compound_selector() {
+    let sels = first_selectors("p.intro#first { color: green; }");
+    let parts = &sels.selectors[0].parts[0].0.parts;
+    assert_eq!(parts.len(), 3);
+    assert_eq!(parts[0], SimpleSelector::Type("p".into()));
+    assert_eq!(parts[1], SimpleSelector::Class("intro".into()));
+    assert_eq!(parts[2], SimpleSelector::Id("first".into()));
+}
+
+// -- test 8: multiple declarations -------------------------------
+
+#[test]
+fn multiple_declarations() {
+    let sheet = parse("p { color: red; font-size: 12px; display: block; }");
+    assert_eq!(sheet.rules[0].declarations.len(), 3);
+}
+
+// -- test 9: shorthand expansion ---------------------------------
+
+#[test]
+fn shorthand_margin_two_values() {
+    let decls = first_decls("div { margin: 10px 20px; }");
+    assert_eq!(decls.len(), 4);
+    assert_eq!(decls[0].property, "margin-top");
+    assert_eq!(decls[0].value, CssValue::Length(10.0, LengthUnit::Px));
+    assert_eq!(decls[1].property, "margin-right");
+    assert_eq!(decls[1].value, CssValue::Length(20.0, LengthUnit::Px));
+    assert_eq!(decls[2].property, "margin-bottom");
+    assert_eq!(decls[2].value, CssValue::Length(10.0, LengthUnit::Px));
+    assert_eq!(decls[3].property, "margin-left");
+    assert_eq!(decls[3].value, CssValue::Length(20.0, LengthUnit::Px));
+}
+
+#[test]
+fn shorthand_margin_three_values() {
+    let decls = first_decls("div { margin: 10px 20px 30px; }");
+    assert_eq!(decls.len(), 4);
+    assert_eq!(decls[0].value, CssValue::Length(10.0, LengthUnit::Px));
+    assert_eq!(decls[1].value, CssValue::Length(20.0, LengthUnit::Px));
+    assert_eq!(decls[2].value, CssValue::Length(30.0, LengthUnit::Px));
+    assert_eq!(decls[3].value, CssValue::Length(20.0, LengthUnit::Px));
+}
+
+#[test]
+fn shorthand_margin_four_values() {
+    let decls = first_decls("div { margin: 10px 20px 30px 40px; }");
+    assert_eq!(decls.len(), 4);
+    assert_eq!(decls[3].value, CssValue::Length(40.0, LengthUnit::Px));
+}
+
+#[test]
+fn shorthand_padding() {
+    let decls = first_decls("div { padding: 5px; }");
+    assert_eq!(decls.len(), 4);
+    for d in &decls {
+        assert!(d.property.starts_with("padding-"));
+        assert_eq!(d.value, CssValue::Length(5.0, LengthUnit::Px));
+    }
+}
+
+#[test]
+fn shorthand_border() {
+    let decls = first_decls("div { border: 1px solid black; }");
+    assert!(
+        decls
+            .iter()
+            .any(|d| d.property == "border-width"
+                && d.value == CssValue::Length(1.0, LengthUnit::Px))
+    );
+    assert!(
+        decls
+            .iter()
+            .any(|d| d.property == "border-style" && d.value == CssValue::Keyword("solid".into()))
+    );
+    assert!(
+        decls.iter().any(|d| d.property == "border-color"
+            && d.value == CssValue::Color(CssColor::new(0, 0, 0, 255)))
+    );
+}
+
+#[test]
+fn shorthand_background_color() {
+    let decls = first_decls("div { background: #fff; }");
+    assert_eq!(decls.len(), 1);
+    assert_eq!(decls[0].property, "background-color");
+    assert_eq!(
+        decls[0].value,
+        CssValue::Color(CssColor::new(255, 255, 255, 255))
+    );
+}
+
+// -- test 10: colour parsing -------------------------------------
+
+#[test]
+fn color_named() {
+    let decls = first_decls("p { color: red; }");
+    assert_eq!(
+        decls[0].value,
+        CssValue::Color(CssColor::new(255, 0, 0, 255))
+    );
+}
+
+#[test]
+fn color_hex_short() {
+    let decls = first_decls("p { background-color: #abc; }");
+    assert_eq!(
+        decls[0].value,
+        CssValue::Color(CssColor::new(0xaa, 0xbb, 0xcc, 255))
+    );
+}
+
+#[test]
+fn color_hex_long() {
+    let decls = first_decls("p { color: #11aa33; }");
+    assert_eq!(
+        decls[0].value,
+        CssValue::Color(CssColor::new(0x11, 0xaa, 0x33, 255))
+    );
+}
+
+#[test]
+fn color_hex_with_alpha() {
+    let decls = first_decls("p { color: #11aa3380; }");
+    assert_eq!(
+        decls[0].value,
+        CssValue::Color(CssColor::new(0x11, 0xaa, 0x33, 0x80))
+    );
+}
+
+#[test]
+fn color_rgb_function() {
+    let decls = first_decls("p { color: rgb(100, 200, 50); }");
+    assert_eq!(
+        decls[0].value,
+        CssValue::Color(CssColor::new(100, 200, 50, 255))
+    );
+}
+
+#[test]
+fn color_rgba_function() {
+    let decls = first_decls("p { color: rgba(100, 200, 50, 0.5); }");
+    assert_eq!(
+        decls[0].value,
+        CssValue::Color(CssColor::new(100, 200, 50, 127))
+    );
+}
+
+#[test]
+fn color_transparent() {
+    let decls = first_decls("p { color: transparent; }");
+    assert_eq!(decls[0].value, CssValue::Color(CssColor::new(0, 0, 0, 0)));
+}
+
+// -- test 11: specificity ----------------------------------------
+
+#[test]
+fn specificity_type_only() {
+    let sels = first_selectors("p { color: red; }");
+    assert_eq!(
+        sels.selectors[0].specificity(),
+        Specificity {
+            inline: 0,
+            ids: 0,
+            classes: 0,
+            types: 1,
+        }
+    );
+}
+
+#[test]
+fn specificity_class() {
+    let sels = first_selectors(".foo { color: red; }");
+    assert_eq!(
+        sels.selectors[0].specificity(),
+        Specificity {
+            inline: 0,
+            ids: 0,
+            classes: 1,
+            types: 0,
+        }
+    );
+}
+
+#[test]
+fn specificity_id() {
+    let sels = first_selectors("#bar { color: red; }");
+    assert_eq!(
+        sels.selectors[0].specificity(),
+        Specificity {
+            inline: 0,
+            ids: 1,
+            classes: 0,
+            types: 0,
+        }
+    );
+}
+
+#[test]
+fn specificity_compound() {
+    // p.intro#first => types=1, classes=1, ids=1
+    let sels = first_selectors("p.intro#first { color: red; }");
+    assert_eq!(
+        sels.selectors[0].specificity(),
+        Specificity {
+            inline: 0,
+            ids: 1,
+            classes: 1,
+            types: 1,
+        }
+    );
+}
+
+#[test]
+fn specificity_descendant() {
+    // div p => types=2
+    let sels = first_selectors("div p { color: red; }");
+    assert_eq!(
+        sels.selectors[0].specificity(),
+        Specificity {
+            inline: 0,
+            ids: 0,
+            classes: 0,
+            types: 2,
+        }
+    );
+}
+
+#[test]
+fn specificity_ordering() {
+    let a = Specificity {
+        inline: 0,
+        ids: 1,
+        classes: 0,
+        types: 0,
+    };
+    let b = Specificity {
+        inline: 0,
+        ids: 0,
+        classes: 10,
+        types: 10,
+    };
+    assert!(a > b, "ID selector should outrank classes + types");
+}
+
+// -- test 12: !important -----------------------------------------
+
+#[test]
+fn important_flag() {
+    let decls = first_decls("p { color: red !important; }");
+    assert!(decls[0].important);
+    assert_eq!(
+        decls[0].value,
+        CssValue::Color(CssColor::new(255, 0, 0, 255))
+    );
+}
+
+#[test]
+fn not_important() {
+    let decls = first_decls("p { color: red; }");
+    assert!(!decls[0].important);
+}
+
+// -- test 13: inline style parsing -------------------------------
+
+#[test]
+fn inline_style() {
+    let decls = parse_inline_style("color: red; font-size: 16px;");
+    assert_eq!(decls.len(), 2);
+    assert_eq!(decls[0].property, "color");
+    assert_eq!(decls[1].property, "font-size");
+}
+
+// -- test 14: malformed input recovery ---------------------------
+
+#[test]
+fn malformed_recovery_bad_declaration() {
+    // Missing colon -- the bad declaration should be skipped.
+    let sheet = parse("p { color red; font-size: 12px; }");
+    // At least font-size should survive.
+    let decls = &sheet.rules[0].declarations;
+    assert!(
+        decls.iter().any(|d| d.property == "font-size"),
+        "should recover and parse font-size"
+    );
+}
+
+#[test]
+fn malformed_recovery_unclosed_brace() {
+    // Unclosed rule should not panic.
+    let sheet = parse("p { color: red; ");
+    // May or may not produce a rule, but must not panic.
+    let _ = sheet;
+}
+
+#[test]
+fn malformed_recovery_extra_close_brace() {
+    let sheet = parse("} p { color: red; }");
+    assert!(
+        !sheet.rules.is_empty(),
+        "should recover after stray close-brace"
+    );
+}
+
+// -- font-weight normalisation -----------------------------------
+
+#[test]
+fn font_weight_bold() {
+    let decls = first_decls("p { font-weight: bold; }");
+    assert_eq!(decls[0].value, CssValue::Number(700.0));
+}
+
+#[test]
+fn font_weight_normal() {
+    let decls = first_decls("p { font-weight: normal; }");
+    assert_eq!(decls[0].value, CssValue::Number(400.0));
+}
+
+// -- multiple rules ---------------------------------------------
+
+#[test]
+fn multiple_rules() {
+    let sheet = parse("p { color: red; } div { color: blue; }");
+    assert_eq!(sheet.rules.len(), 2);
+}
+
+// -- at-rule skipping -------------------------------------------
+
+#[test]
+fn at_rule_skipped() {
+    let sheet = parse("@import url('a.css'); p { color: red; }");
+    assert_eq!(sheet.rules.len(), 1);
+    assert_eq!(
+        sheet.rules[0].selectors.selectors[0].parts[0].0.parts[0],
+        SimpleSelector::Type("p".into())
+    );
+}
+
+#[test]
+fn at_media_screen_parsed() {
+    let sheet = parse(
+        "@media screen { body { color: red; } } \
+         p { color: blue; }",
+    );
+    // @media screen matches, so body rule is included alongside p rule.
+    assert_eq!(sheet.rules.len(), 2);
+}
+
+#[test]
+fn at_media_print_skipped() {
+    let sheet = parse(
+        "@media print { body { color: red; } } \
+         p { color: blue; }",
+    );
+    // @media print does not match screen, so only p rule remains.
+    assert_eq!(sheet.rules.len(), 1);
+}
+
+#[test]
+fn at_media_max_width_match() {
+    // 480 <= 600, so this should match.
+    let sheet = parse("@media (max-width: 600px) { p { color: red; } }");
+    assert_eq!(sheet.rules.len(), 1);
+}
+
+#[test]
+fn at_media_max_width_no_match() {
+    // 480 > 320, so this should NOT match.
+    let sheet = parse("@media (max-width: 320px) { p { color: red; } }");
+    assert_eq!(sheet.rules.len(), 0);
+}
+
+// -- @media with custom viewport ----------------------------------
+
+#[test]
+fn at_media_min_height_match() {
+    let vp = MediaViewport {
+        width: 480.0,
+        height: 272.0,
+        ..MediaViewport::DEFAULT
+    };
+    let sheet =
+        Stylesheet::parse_with_viewport("@media (min-height: 200px) { p { color: red; } }", vp);
+    assert_eq!(sheet.rules.len(), 1);
+}
+
+#[test]
+fn at_media_min_height_no_match() {
+    let vp = MediaViewport {
+        width: 480.0,
+        height: 272.0,
+        ..MediaViewport::DEFAULT
+    };
+    let sheet =
+        Stylesheet::parse_with_viewport("@media (min-height: 600px) { p { color: red; } }", vp);
+    assert_eq!(sheet.rules.len(), 0);
+}
+
+#[test]
+fn at_media_max_height_match() {
+    let vp = MediaViewport {
+        width: 480.0,
+        height: 272.0,
+        ..MediaViewport::DEFAULT
+    };
+    let sheet =
+        Stylesheet::parse_with_viewport("@media (max-height: 400px) { p { color: red; } }", vp);
+    assert_eq!(sheet.rules.len(), 1);
+}
+
+#[test]
+fn at_media_max_height_no_match() {
+    let vp = MediaViewport {
+        width: 480.0,
+        height: 272.0,
+        ..MediaViewport::DEFAULT
+    };
+    let sheet =
+        Stylesheet::parse_with_viewport("@media (max-height: 200px) { p { color: red; } }", vp);
+    assert_eq!(sheet.rules.len(), 0);
+}
+
+#[test]
+fn at_media_custom_viewport_width() {
+    let vp = MediaViewport {
+        width: 1024.0,
+        height: 768.0,
+        ..MediaViewport::DEFAULT
+    };
+    // With 1024px viewport, max-width: 320 should NOT match.
+    let sheet =
+        Stylesheet::parse_with_viewport("@media (max-width: 320px) { p { color: red; } }", vp);
+    assert_eq!(sheet.rules.len(), 0);
+    // But min-width: 800 SHOULD match.
+    let sheet =
+        Stylesheet::parse_with_viewport("@media (min-width: 800px) { p { color: red; } }", vp);
+    assert_eq!(sheet.rules.len(), 1);
+}
+
+#[test]
+fn at_media_screen_and_min_width() {
+    let vp = MediaViewport {
+        width: 800.0,
+        height: 600.0,
+        ..MediaViewport::DEFAULT
+    };
+    let sheet = Stylesheet::parse_with_viewport(
+        "@media screen and (min-width: 480px) { p { color: red; } }",
+        vp,
+    );
+    assert_eq!(sheet.rules.len(), 1);
+}
+
+#[test]
+fn at_media_all_matches() {
+    let sheet = parse("@media all { p { color: red; } }");
+    assert_eq!(sheet.rules.len(), 1);
+}
+
+#[test]
+fn at_media_prefers_color_scheme_dark() {
+    let sheet = parse("@media (prefers-color-scheme: dark) { p { color: white; } }");
+    // Dark mode is always false.
+    assert_eq!(sheet.rules.len(), 0);
+}
+
+#[test]
+fn at_media_prefers_color_scheme_light() {
+    let sheet = parse("@media (prefers-color-scheme: light) { p { color: black; } }");
+    // Light mode is always true.
+    assert_eq!(sheet.rules.len(), 1);
+}
+
+#[test]
+fn at_media_compound_width_and_height() {
+    let vp = MediaViewport {
+        width: 800.0,
+        height: 600.0,
+        ..MediaViewport::DEFAULT
+    };
+    let sheet = Stylesheet::parse_with_viewport(
+        "@media (min-width: 480px) and (min-height: 400px) { \
+         p { color: red; } }",
+        vp,
+    );
+    assert_eq!(sheet.rules.len(), 1);
+    // Fail on height.
+    let sheet = Stylesheet::parse_with_viewport(
+        "@media (min-width: 480px) and (min-height: 800px) { \
+         p { color: red; } }",
+        vp,
+    );
+    assert_eq!(sheet.rules.len(), 0);
+}
+
+// -- pseudo-class ------------------------------------------------
+
+#[test]
+fn pseudo_class_selector() {
+    let sels = first_selectors("a:hover { color: red; }");
+    let parts = &sels.selectors[0].parts[0].0.parts;
+    assert_eq!(parts.len(), 2);
+    assert_eq!(parts[0], SimpleSelector::Type("a".into()));
+    assert_eq!(parts[1], SimpleSelector::PseudoClass("hover".into()));
+}
+
+// -- universal selector ------------------------------------------
+
+#[test]
+fn universal_selector() {
+    let sels = first_selectors("* { margin: 0; }");
+    assert_eq!(
+        sels.selectors[0].parts[0].0.parts[0],
+        SimpleSelector::Universal
+    );
+}
+
+// -- empty stylesheet -------------------------------------------
+
+#[test]
+fn empty_stylesheet() {
+    let sheet = parse("");
+    assert!(sheet.rules.is_empty());
+}
+
+#[test]
+fn whitespace_only_stylesheet() {
+    let sheet = parse("   \n\t  ");
+    assert!(sheet.rules.is_empty());
+}
+
+// -- robustness / edge cases ----------------------------------------
+
+#[test]
+fn unclosed_rule_block() {
+    let sheet = parse("p { color: red;");
+    // Should not panic; may or may not produce a rule.
+    let _ = sheet;
+}
+
+#[test]
+fn unclosed_value() {
+    let sheet = parse("p { color: ");
+    let _ = sheet;
+}
+
+#[test]
+fn missing_colon() {
+    let sheet = parse("p { color red; }");
+    // Malformed declaration -- parser should skip gracefully.
+    let _ = sheet;
+}
+
+#[test]
+fn missing_semicolon_between_declarations() {
+    let sheet = parse("p { color: red background: blue; }");
+    let _ = sheet;
+}
+
+#[test]
+fn empty_selector() {
+    let sheet = parse("{ color: red; }");
+    let _ = sheet;
+}
+
+#[test]
+fn empty_declaration_block() {
+    let sheet = parse("p { }");
+    assert_eq!(sheet.rules.len(), 1);
+    assert!(sheet.rules[0].declarations.is_empty());
+}
+
+#[test]
+fn very_long_property_value() {
+    let val = "x".repeat(10_000);
+    let css = format!("p {{ content: \"{val}\"; }}");
+    let sheet = parse(&css);
+    assert!(!sheet.rules.is_empty());
+}
+
+#[test]
+fn very_long_selector_chain() {
+    // div > div > div > ... (100 levels)
+    let sel: String = (0..100).map(|_| "div").collect::<Vec<_>>().join(" > ");
+    let css = format!("{sel} {{ color: red; }}");
+    let sheet = parse(&css);
+    assert!(!sheet.rules.is_empty());
+}
+
+#[test]
+fn many_rules() {
+    let css: String = (0..500)
+        .map(|i| format!(".c{i} {{ color: red; }}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let sheet = parse(&css);
+    assert_eq!(sheet.rules.len(), 500);
+}
+
+#[test]
+fn nested_braces() {
+    // CSS doesn't normally nest, but parser should handle gracefully.
+    let sheet = parse("p { color: red; { nested: bad; } }");
+    let _ = sheet;
+}
+
+#[test]
+fn unmatched_closing_brace() {
+    let sheet = parse("} p { color: red; }");
+    let _ = sheet;
+}
+
+#[test]
+fn at_rule_unknown() {
+    let sheet = parse("@unknown { p { color: red; } }");
+    let _ = sheet;
+}
+
+#[test]
+fn at_media_rule() {
+    let sheet = parse("@media screen { p { color: red; } }");
+    // @media screen matches, inner rules are extracted.
+    assert_eq!(sheet.rules.len(), 1);
+}
+
+#[test]
+fn comments_in_css() {
+    let sheet = parse("/* comment */ p { color: red; /* inline */ }");
+    assert!(!sheet.rules.is_empty());
+}
+
+#[test]
+fn multiple_selectors_comma_separated() {
+    let sheet = parse("h1, h2, h3 { color: blue; }");
+    assert_eq!(sheet.rules.len(), 1);
+    assert!(sheet.rules[0].selectors.selectors.len() >= 3);
+}
+
+#[test]
+fn selector_with_pseudo_class() {
+    let sheet = parse("a:hover { color: red; }");
+    let _ = sheet; // Should not panic.
+}
+
+#[test]
+fn selector_with_pseudo_element() {
+    let sheet = parse("p::before { content: 'x'; }");
+    let _ = sheet;
+}
+
+#[test]
+fn null_bytes_in_css() {
+    let sheet = parse("p { color: re\0d; }");
+    let _ = sheet;
+}
+
+#[test]
+fn extremely_specific_selector() {
+    // #id.c1.c2.c3...c50
+    let classes: String = (0..50).map(|i| format!(".c{i}")).collect();
+    let css = format!("#id{classes} {{ color: red; }}");
+    let sheet = parse(&css);
+    assert!(!sheet.rules.is_empty());
+}
+
+#[test]
+fn numeric_property_values() {
+    let sheet = parse("p { width: 100px; height: 50%; margin: 0; }");
+    let decls = &sheet.rules[0].declarations;
+    // margin: 0 may be expanded into 4 longhand properties.
+    assert!(decls.len() >= 3);
+}
+
+#[test]
+fn shorthand_property() {
+    let sheet = parse("p { margin: 10px 20px 30px 40px; }");
+    assert!(!sheet.rules.is_empty());
+}
+
+#[test]
+fn color_hex_values() {
+    let sheet = parse("p { color: #fff; background: #aabbcc; border-color: #12345678; }");
+    // border-color is expanded into 4 longhand properties.
+    assert_eq!(sheet.rules[0].declarations.len(), 6);
+}
+
+#[test]
+fn trailing_garbage_after_rules() {
+    let sheet = parse("p { color: red; } garbage here");
+    // The first rule should still parse.
+    assert!(!sheet.rules.is_empty());
+}
+
+// -- CSS custom properties / var() parsing tests ----------------------
+
+#[test]
+fn var_function_parsed() {
+    // Values referencing var() are kept as raw text until computed-value
+    // time (see `CssValue::Unresolved`).
+    let decls = first_decls("p { color: var(--my-color); }");
+    assert_eq!(decls[0].property, "color");
+    assert_eq!(
+        decls[0].value,
+        CssValue::Unresolved("var(--my-color)".into())
+    );
+}
+
+#[test]
+fn var_function_with_fallback() {
+    let decls = first_decls("p { color: var(--my-color, blue); }");
+    assert_eq!(
+        decls[0].value,
+        CssValue::Unresolved("var(--my-color, blue)".into())
+    );
+}
+
+#[test]
+fn var_function_with_hex_fallback() {
+    let decls = first_decls("p { color: var(--my-color, #202122); }");
+    assert_eq!(
+        decls[0].value,
+        CssValue::Unresolved("var(--my-color, #202122)".into())
+    );
+}
+
+#[test]
+fn custom_property_stored_as_raw_text() {
+    let decls = first_decls(":root { --color: #202122; }");
+    assert_eq!(decls[0].property, "--color");
+    assert_eq!(decls[0].value, CssValue::String("#202122".into()));
+}
+
+#[test]
+fn custom_property_names_keep_case() {
+    let decls = first_decls(":root { --Brand-Color: red; COLOR: blue; }");
+    assert_eq!(decls[0].property, "--Brand-Color");
+    assert_eq!(decls[1].property, "color");
+}
+
+#[test]
+fn custom_property_complex_value() {
+    let decls = first_decls(":root { --border: 1px solid red; }");
+    assert_eq!(decls[0].property, "--border");
+    assert_eq!(decls[0].value, CssValue::String("1px solid red".into()));
+}
+
+#[test]
+fn var_in_multiple_value_property() {
+    let decls = first_decls("p { border: 1px solid var(--color); }");
+    // A shorthand containing var() can't be split before substitution:
+    // it stays whole and the cascade expands the substituted value.
+    assert_eq!(decls.len(), 1);
+    assert_eq!(decls[0].property, "border");
+    assert_eq!(
+        decls[0].value,
+        CssValue::Unresolved("1px solid var(--color)".into())
+    );
+}
+
+#[test]
+fn linear_gradient_to_right() {
+    let css = "div { background: linear-gradient(to right, red, blue); }";
+    let sheet = parse(css);
+    let decls = &sheet.rules[0].declarations;
+    let bg_image = decls
+        .iter()
+        .find(|d| d.property == "background-image")
+        .expect("should have background-image");
+    assert!(
+        matches!(&bg_image.value, CssValue::Gradient(_)),
+        "should parse as gradient"
+    );
+    if let CssValue::Gradient(ref g) = bg_image.value {
+        assert_eq!(g.direction, crate::values::GradientDirection::ToRight);
+        assert_eq!(g.stops.len(), 2);
+    }
+}
+
+#[test]
+fn linear_gradient_default_direction() {
+    let css = "div { background-image: linear-gradient(red, blue); }";
+    let sheet = parse(css);
+    let decls = &sheet.rules[0].declarations;
+    let bg_image = decls
+        .iter()
+        .find(|d| d.property == "background-image")
+        .expect("should have background-image");
+    assert!(
+        matches!(&bg_image.value, CssValue::Gradient(_)),
+        "expected gradient"
+    );
+    let CssValue::Gradient(g) = &bg_image.value else {
+        unreachable!()
+    };
+    assert_eq!(g.direction, crate::values::GradientDirection::ToBottom);
+    assert_eq!(g.stops.len(), 2);
+}
+
+// -- :has() relational pseudo-class ------------------------------
+
+// -- @layer cascade layers --------------------------------------
+
+#[test]
+fn layer_statement_form_registers_names_in_order() {
+    let sheet = parse("@layer reset, framework, overrides;");
+    assert_eq!(
+        sheet.layers,
+        vec![
+            "reset".to_string(),
+            "framework".to_string(),
+            "overrides".to_string(),
+        ]
+    );
+    // No rules emitted for statement form.
+    assert!(sheet.rules.is_empty());
+}
+
+#[test]
+fn layer_block_tags_inner_rules() {
+    let sheet = parse("@layer framework { p { color: red; } } p { color: blue; }");
+    assert_eq!(sheet.layers, vec!["framework".to_string()]);
+    assert_eq!(sheet.rules.len(), 2);
+    // The first rule (from the layer block) is tagged.
+    assert_eq!(sheet.rules[0].layer, Some(0));
+    // The second rule (outside the layer) is unlayered.
+    assert_eq!(sheet.rules[1].layer, None);
+}
+
+#[test]
+fn layer_statement_fixes_order_before_blocks() {
+    // `@layer a, b;` should freeze the order so that a later
+    // `@layer b { ... }` block followed by a `@layer a { ... }` block
+    // still reports `a` as index 0 and `b` as index 1.
+    let sheet = parse(
+        "@layer a, b; \
+         @layer b { p { color: red; } } \
+         @layer a { p { color: blue; } }",
+    );
+    assert_eq!(sheet.layers, vec!["a".to_string(), "b".to_string()]);
+    // Rule order mirrors source order (b then a).
+    assert_eq!(sheet.rules[0].layer, Some(1)); // b
+    assert_eq!(sheet.rules[1].layer, Some(0)); // a
+}
+
+#[test]
+fn layer_anonymous_block_gets_synthetic_name() {
+    let sheet = parse("@layer { p { color: red; } }");
+    assert_eq!(sheet.layers.len(), 1);
+    assert!(sheet.layers[0].starts_with("__anon_"));
+    assert_eq!(sheet.rules[0].layer, Some(0));
+}
+
+#[test]
+fn has_descendant_selector() {
+    let sels = first_selectors("article:has(img) { color: red; }");
+    let parts = &sels.selectors[0].parts[0].0.parts;
+    assert_eq!(parts.len(), 2);
+    assert_eq!(parts[0], SimpleSelector::Type("article".into()));
+    let SimpleSelector::Has(inner) = &parts[1] else {
+        panic!("expected :has() variant, got {:?}", parts[1]);
+    };
+    assert_eq!(inner.len(), 1);
+    assert_eq!(inner[0].0, Combinator::Descendant);
+    assert_eq!(
+        inner[0].1.parts[0].0.parts,
+        vec![SimpleSelector::Type("img".into())]
+    );
+}
+
+#[test]
+fn has_direct_child_selector() {
+    let sels = first_selectors("ul:has(> li.active) { color: red; }");
+    let parts = &sels.selectors[0].parts[0].0.parts;
+    let SimpleSelector::Has(inner) = &parts[1] else {
+        panic!("expected :has() variant");
+    };
+    assert_eq!(inner.len(), 1);
+    assert_eq!(inner[0].0, Combinator::Child);
+}
+
+#[test]
+fn has_next_sibling_selector() {
+    let sels = first_selectors("h1:has(+ p) { color: red; }");
+    let parts = &sels.selectors[0].parts[0].0.parts;
+    let SimpleSelector::Has(inner) = &parts[1] else {
+        panic!("expected :has() variant");
+    };
+    assert_eq!(inner[0].0, Combinator::AdjacentSibling);
+}
+
+#[test]
+fn has_selector_list() {
+    // Comma-separated relative selectors are ORed.
+    let sels = first_selectors("div:has(.a, > .b, + .c) { color: red; }");
+    let parts = &sels.selectors[0].parts[0].0.parts;
+    let SimpleSelector::Has(inner) = &parts[1] else {
+        panic!("expected :has() variant");
+    };
+    assert_eq!(inner.len(), 3);
+    assert_eq!(inner[0].0, Combinator::Descendant);
+    assert_eq!(inner[1].0, Combinator::Child);
+    assert_eq!(inner[2].0, Combinator::AdjacentSibling);
+}
+
+#[test]
+fn has_specificity_takes_max_of_inner() {
+    // `:has(.a)` should contribute one class-level specificity unit.
+    let sels = first_selectors("div:has(.a) { color: red; }");
+    let spec = sels.selectors[0].specificity();
+    // 1 type (div) + 1 class (.a) = (0, 0, 1, 1)
+    assert_eq!(spec.ids, 0);
+    assert_eq!(spec.classes, 1);
+    assert_eq!(spec.types, 1);
+}
+
+// Regression: descendant combinator followed by an attribute selector
+// (e.g. `.foo [type="submit"]`). Previously `is_selector_start` did
+// not list `[` so the selector stopped after `.foo`; the parser then
+// failed to see `{` and invoked `skip_to_close_brace`, which used to
+// fall through and consume every subsequent rule. Verify both the
+// selector parses correctly AND later rules survive.
+#[test]
+fn descendant_attribute_selector_preserves_following_rules() {
+    let sheet = parse(
+        ".working [type=\"submit\"] { color: red; } \
+         #after { color: blue; }",
+    );
+    assert_eq!(
+        sheet.rules.len(),
+        2,
+        "rule after descendant+attr selector must not be dropped"
+    );
+    // First rule is the descendant combinator.
+    let first = &sheet.rules[0].selectors.selectors[0];
+    assert_eq!(first.parts.len(), 2);
+    assert_eq!(first.parts[1].1, Some(Combinator::Descendant));
+    // Second rule's #after id is intact.
+    let second = &sheet.rules[1].selectors.selectors[0];
+    assert_eq!(
+        second.parts[0].0.parts,
+        vec![SimpleSelector::Id("after".into())]
+    );
+}
+
+// Regression: a malformed top-level rule must not swallow the
+// remainder of the stylesheet. `skip_to_close_brace` used to track
+// depth starting at 0 before the opening `{`, so it broke on a `}`
+// at depth 0 — which never happens in well-formed CSS and so the
+// recovery walked to EOF.
+#[test]
+fn malformed_rule_does_not_eat_following_rules() {
+    // First rule has an unclosed value but a matching `}`. Parser
+    // should recover and still pick up the second rule.
+    let sheet = parse("bogus @!!! { color: ; } #after { color: blue; }");
+    assert!(
+        sheet.rules.iter().any(|r| {
+            r.selectors.selectors.iter().any(
+                |s| matches!(s.parts[0].0.parts[0], SimpleSelector::Id(ref id) if id == "after"),
+            )
+        }),
+        "rule after malformed block must survive"
+    );
+}
+
+mod prop {
+    use super::*;
+    use crate::color::named_color;
+    use crate::color::parse_hex_color;
+    use proptest::prelude::*;
+
+    proptest! {
+        /// Parsing arbitrary CSS never panics.
+        #[test]
+        fn parse_never_panics(input in "[ -~]{0,120}") {
+            let _ = Stylesheet::parse(&input);
+        }
+
+        /// Parsing inline styles never panics.
+        #[test]
+        fn parse_inline_never_panics(input in "[ -~]{0,80}") {
+            let _ = parse_inline_style(&input);
+        }
+
+        /// Valid 3-digit hex colors parse successfully.
+        #[test]
+        fn hex_color_3_digit(
+            r in "[0-9a-fA-F]",
+            g in "[0-9a-fA-F]",
+            b in "[0-9a-fA-F]",
+        ) {
+            let hex = format!("#{r}{g}{b}");
+            let color = parse_hex_color(&hex);
+            prop_assert!(
+                color.is_some(),
+                "valid 3-digit hex '{hex}' should parse",
+            );
+        }
+
+        /// Valid 6-digit hex colors parse successfully.
+        #[test]
+        fn hex_color_6_digit(
+            r in "[0-9a-fA-F]{2}",
+            g in "[0-9a-fA-F]{2}",
+            b in "[0-9a-fA-F]{2}",
+        ) {
+            let hex = format!("#{r}{g}{b}");
+            let color = parse_hex_color(&hex);
+            prop_assert!(
+                color.is_some(),
+                "valid 6-digit hex '{hex}' should parse",
+            );
+        }
+
+        /// Invalid hex strings (wrong length) return None.
+        #[test]
+        fn hex_color_bad_length(
+            s in "[0-9a-f]{1,2}|[0-9a-f]{5}|[0-9a-f]{7}|[0-9a-f]{9,12}",
+        ) {
+            let hex = format!("#{s}");
+            prop_assert!(
+                parse_hex_color(&hex).is_none(),
+                "invalid-length hex '{hex}' should not parse",
+            );
+        }
+
+        /// Named color lookup is case-insensitive.
+        #[test]
+        fn named_color_case_insensitive(
+            name in proptest::sample::select(vec![
+                "red".to_string(), "Red".to_string(), "RED".to_string(),
+                "blue".to_string(), "Blue".to_string(), "BLUE".to_string(),
+                "green".to_string(), "Green".to_string(), "GREEN".to_string(),
+                "white".to_string(), "White".to_string(),
+                "black".to_string(), "Black".to_string(), "BLACK".to_string(),
+            ]),
+        ) {
+            prop_assert!(
+                named_color(&name).is_some(),
+                "named color '{}' should be recognized", name,
+            );
+        }
+
+        /// A valid rule with random property name parses without panic.
+        #[test]
+        fn rule_with_random_property(
+            prop_name in "[a-z\\-]{1,20}",
+            value in "[a-z0-9]{1,10}",
+        ) {
+            let css = format!("p {{ {prop_name}: {value}; }}");
+            let sheet = Stylesheet::parse(&css);
+            // Should parse the rule (property may not be recognized,
+            // but shouldn't panic).
+            prop_assert!(!sheet.rules.is_empty());
+        }
+    }
+
+    // -- @supports tests ------------------------------------------------
+
+    #[test]
+    fn supports_recognized_property_includes_rules() {
+        let css = "@supports (display: flex) { .flex { display: flex; } }";
+        let sheet = parse(css);
+        assert_eq!(
+            sheet.rules.len(),
+            1,
+            "supported property should include rules"
+        );
+        assert_eq!(sheet.rules[0].declarations[0].property, "display");
+    }
+
+    #[test]
+    fn supports_unrecognized_property_excludes_rules() {
+        // FOOTGUN: this test (and `supports_not_condition` below) needs
+        // a property that is *not* in `SUPPORTED_PROPERTIES`. We pick
+        // `paint-order` because it's a real CSS property we have no
+        // intention of supporting (SVG-only stroke vs. fill order),
+        // which makes it a stable sentinel. If you ever add
+        // `paint-order` to `SUPPORTED_PROPERTIES`, both this test and
+        // `supports_not_condition` will silently flip from passing to
+        // failing — pick another never-going-to-implement property at
+        // that point. The earlier sentinel was `container-type`, which
+        // was added to `SUPPORTED_PROPERTIES` mid-PR and broke both
+        // tests until they were swapped to `paint-order`.
+        let css = "@supports (paint-order: stroke) { .c { width: 100px; } }";
+        let sheet = parse(css);
+        assert!(
+            sheet.rules.is_empty(),
+            "unsupported property should exclude rules"
+        );
+    }
+
+    #[test]
+    fn supports_custom_property() {
+        let css = "@supports (--custom: value) { p { color: red; } }";
+        let sheet = parse(css);
+        assert_eq!(
+            sheet.rules.len(),
+            1,
+            "custom properties should be supported"
+        );
+    }
+
+    #[test]
+    fn supports_not_condition() {
+        // See `supports_unrecognized_property_excludes_rules` for the
+        // rationale behind `paint-order` as the sentinel — keep both
+        // tests in sync if you ever change it.
+        let css = "@supports not (paint-order: stroke) { p { color: red; } }";
+        let sheet = parse(css);
+        assert_eq!(sheet.rules.len(), 1, "not unsupported should include rules");
+    }
+
+    #[test]
+    fn supports_not_recognized() {
+        let css = "@supports not (display: flex) { p { color: red; } }";
+        let sheet = parse(css);
+        assert!(sheet.rules.is_empty(), "not supported should exclude rules");
+    }
+
+    #[test]
+    fn supports_empty_condition() {
+        let css = "@supports { p { color: red; } }";
+        let sheet = parse(css);
+        assert!(sheet.rules.is_empty(), "empty condition should be false");
+    }
+
+    #[test]
+    fn supports_multiple_rules_inside() {
+        let css = "@supports (color: red) { h1 { color: red; } p { color: blue; } }";
+        let sheet = parse(css);
+        assert_eq!(sheet.rules.len(), 2);
+    }
+
+    #[test]
+    fn supports_transition_property() {
+        let css = "@supports (transition: all 0.3s) { .anim { opacity: 1; } }";
+        let sheet = parse(css);
+        assert_eq!(sheet.rules.len(), 1, "transition should be recognized");
+    }
+}
+
+// -------------------------------------------------------------------
+// CSS Nesting
+// -------------------------------------------------------------------
+//
+// Checks the desugaring rules of CSS Nesting Module Level 1:
+// - `&` is replaced by the enclosing parent selector
+// - no `&` at all => implicit `& descendant`
+// - parent/child selector lists Cartesian-expand
+// - nested `@media` inherits the outer selector
+// - nested rules recurse (child becomes parent for its own children)
+
+#[cfg(test)]
+mod nesting_tests {
+    use super::*;
+
+    /// Render a flattened selector list back to a canonical string so
+    /// tests can assert on it without introspecting AST shape.
+    fn sel_str(sl: &SelectorList) -> String {
+        sl.selectors
+            .iter()
+            .map(selector_to_string)
+            .collect::<Vec<_>>()
+            .join(", ")
+    }
+
+    fn selector_to_string(sel: &Selector) -> String {
+        let mut out = String::new();
+        for (i, (compound, comb)) in sel.parts.iter().enumerate() {
+            if i > 0 {
+                match comb {
+                    Some(Combinator::Descendant) | None => out.push(' '),
+                    Some(Combinator::Child) => out.push_str(" > "),
+                    Some(Combinator::AdjacentSibling) => out.push_str(" + "),
+                    Some(Combinator::GeneralSibling) => out.push_str(" ~ "),
+                }
+            }
+            for simple in &compound.parts {
+                match simple {
+                    SimpleSelector::Type(n) => out.push_str(n),
+                    SimpleSelector::Class(n) => {
+                        out.push('.');
+                        out.push_str(n);
+                    },
+                    SimpleSelector::Id(n) => {
+                        out.push('#');
+                        out.push_str(n);
+                    },
+                    SimpleSelector::Universal => out.push('*'),
+                    SimpleSelector::PseudoClass(n) => {
+                        out.push(':');
+                        out.push_str(n);
+                    },
+                    SimpleSelector::PseudoClassFn(n, arg) => {
+                        out.push(':');
+                        out.push_str(n);
+                        out.push('(');
+                        out.push_str(arg);
+                        out.push(')');
+                    },
+                    SimpleSelector::PseudoElement(n) => {
+                        out.push_str("::");
+                        out.push_str(n);
+                    },
+                    SimpleSelector::Nest => out.push('&'),
+                    SimpleSelector::Not(_) => out.push_str(":not(…)"),
+                    SimpleSelector::Is(_) => out.push_str(":is(…)"),
+                    SimpleSelector::Where(_) => out.push_str(":where(…)"),
+                    SimpleSelector::Has(_) => out.push_str(":has(…)"),
+                    SimpleSelector::Attribute { name, .. } => {
+                        out.push('[');
+                        out.push_str(name);
+                        out.push(']');
+                    },
+                }
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn nest_explicit_descendant() {
+        let sheet = parse(".parent { & .foo { color: red; } }");
+        // Two rules: the parent's own (empty decls => skipped) and the
+        // flattened nested rule.
+        assert_eq!(sheet.rules.len(), 1);
+        assert_eq!(sel_str(&sheet.rules[0].selectors), ".parent .foo");
+    }
+
+    #[test]
+    fn nest_compound_merge() {
+        let sheet = parse(".parent { &.active { color: red; } }");
+        assert_eq!(sheet.rules.len(), 1);
+        assert_eq!(sel_str(&sheet.rules[0].selectors), ".parent.active");
+    }
+
+    #[test]
+    fn nest_pseudo_class() {
+        let sheet = parse("a { &:hover { color: red; } }");
+        assert_eq!(sheet.rules.len(), 1);
+        assert_eq!(sel_str(&sheet.rules[0].selectors), "a:hover");
+    }
+
+    #[test]
+    fn nest_implicit_descendant() {
+        // No `&` — child inherits implicit descendant combinator.
+        let sheet = parse(".parent { .foo { color: red; } }");
+        assert_eq!(sheet.rules.len(), 1);
+        assert_eq!(sel_str(&sheet.rules[0].selectors), ".parent .foo");
+    }
+
+    #[test]
+    fn nest_parent_with_own_decls() {
+        // Parent has its own declarations AND a nested rule.
+        let sheet = parse(".parent { color: red; & .foo { color: blue; } }");
+        assert_eq!(sheet.rules.len(), 2);
+        assert_eq!(sel_str(&sheet.rules[0].selectors), ".parent");
+        assert_eq!(sheet.rules[0].declarations.len(), 1);
+        assert_eq!(sel_str(&sheet.rules[1].selectors), ".parent .foo");
+    }
+
+    #[test]
+    fn nest_selector_list_cartesian() {
+        // 2 parents × 2 children = 4 flattened rules.
+        let sheet = parse("a, b { &.x, &.y { color: red; } }");
+        assert_eq!(sheet.rules.len(), 1);
+        let s = sel_str(&sheet.rules[0].selectors);
+        assert!(s.contains("a.x"), "{s}");
+        assert!(s.contains("a.y"), "{s}");
+        assert!(s.contains("b.x"), "{s}");
+        assert!(s.contains("b.y"), "{s}");
+        assert_eq!(sheet.rules[0].selectors.selectors.len(), 4);
+    }
+
+    #[test]
+    fn nest_recursive() {
+        let css = ".a { & .b { & .c { color: red; } } }";
+        let sheet = parse(css);
+        assert_eq!(sheet.rules.len(), 1);
+        assert_eq!(sel_str(&sheet.rules[0].selectors), ".a .b .c");
+    }
+
+    #[test]
+    fn nest_parent_chain_with_combinator() {
+        // Parent has a child combinator. `&.active` should merge into
+        // the last compound of the parent chain.
+        let sheet = parse("nav > a { &.active { color: red; } }");
+        assert_eq!(sheet.rules.len(), 1);
+        assert_eq!(sel_str(&sheet.rules[0].selectors), "nav > a.active");
+    }
+
+    #[test]
+    fn nest_child_combinator() {
+        let sheet = parse(".parent { & > .foo { color: red; } }");
+        assert_eq!(sheet.rules.len(), 1);
+        assert_eq!(sel_str(&sheet.rules[0].selectors), ".parent > .foo");
+    }
+
+    #[test]
+    fn nest_at_media_inside() {
+        let css = ".widget { color: red; @media (min-width: 100px) { & .inner { color: blue; } } }";
+        let sheet = parse(css);
+        // One rule for the parent decls + one flattened for the media-inner.
+        assert_eq!(sheet.rules.len(), 2);
+        assert_eq!(sel_str(&sheet.rules[0].selectors), ".widget");
+        assert_eq!(sel_str(&sheet.rules[1].selectors), ".widget .inner");
+    }
+
+    #[test]
+    fn nest_at_media_dropped_when_query_fails() {
+        // Viewport defaults to 480x272 — a min-width: 9999px query fails,
+        // so the nested `& .inner` rule disappears while the parent's own
+        // `color: red` is preserved.
+        let css =
+            ".widget { color: red; @media (min-width: 9999px) { & .inner { color: blue; } } }";
+        let sheet = parse(css);
+        assert_eq!(sheet.rules.len(), 1);
+        assert_eq!(sel_str(&sheet.rules[0].selectors), ".widget");
+        assert_eq!(sheet.rules[0].declarations.len(), 1);
+    }
+
+    #[test]
+    fn nest_preserves_sibling_selector() {
+        let sheet = parse(".parent { & + .sibling { color: red; } }");
+        assert_eq!(sheet.rules.len(), 1);
+        assert_eq!(sel_str(&sheet.rules[0].selectors), ".parent + .sibling");
+    }
+
+    #[test]
+    fn nest_ampersand_after_child() {
+        // `.foo &` means ".foo .parent" — parent spliced in at nest position.
+        let sheet = parse(".parent { .foo & { color: red; } }");
+        assert_eq!(sheet.rules.len(), 1);
+        assert_eq!(sel_str(&sheet.rules[0].selectors), ".foo .parent");
+    }
+
+    #[test]
+    fn nest_does_not_leak_nest_marker() {
+        // Confirm that no SimpleSelector::Nest appears in the flattened AST.
+        let sheet = parse(".parent { &.active { color: red; } & .foo { color: blue; } }");
+        for rule in &sheet.rules {
+            for sel in &rule.selectors.selectors {
+                for (compound, _) in &sel.parts {
+                    for simple in &compound.parts {
+                        assert!(
+                            !matches!(simple, SimpleSelector::Nest),
+                            "Nest marker leaked into AST"
+                        );
+                    }
+                }
+            }
+        }
+    }
+}
+
+// -------------------------------------------------------------------
+// @container query parsing
+// -------------------------------------------------------------------
+
+#[cfg(test)]
+mod container_query_tests {
+    use super::*;
+
+    #[test]
+    fn parses_min_width_condition() {
+        let css = "@container (min-width: 400px) { .card { color: red; } }";
+        let sheet = parse(css);
+        assert_eq!(sheet.rules.len(), 1);
+        let cond = sheet.rules[0]
+            .container
+            .as_ref()
+            .expect("rule should carry a container condition");
+        assert!(cond.name.is_none());
+        assert_eq!(cond.features, vec![ContainerFeature::MinWidth(400.0)]);
+        assert_eq!(sheet.rules[0].declarations[0].property, "color");
+    }
+
+    #[test]
+    fn parses_named_container() {
+        let css = "@container card (min-width: 200px) { p { color: blue; } }";
+        let sheet = parse(css);
+        assert_eq!(sheet.rules.len(), 1);
+        let cond = sheet.rules[0].container.as_ref().unwrap();
+        assert_eq!(cond.name.as_deref(), Some("card"));
+        assert_eq!(cond.features, vec![ContainerFeature::MinWidth(200.0)]);
+    }
+
+    #[test]
+    fn parses_max_width_inline_size_alias() {
+        let css = "@container (max-inline-size: 320px) { p { font-size: 12px; } }";
+        let sheet = parse(css);
+        let cond = sheet.rules[0].container.as_ref().unwrap();
+        assert_eq!(cond.features, vec![ContainerFeature::MaxWidth(320.0)]);
+    }
+
+    #[test]
+    fn parses_zero_space_and_combinator() {
+        // CSS allows `)` and `(` to be token boundaries on either side
+        // of `and`, so `(a)and(b)` is valid and must split into two
+        // features instead of merging into one unparseable string.
+        let css = "@container (min-width: 200px)and(max-width: 800px) { p { color: red; } }";
+        let sheet = parse(css);
+        let cond = sheet.rules[0].container.as_ref().unwrap();
+        assert_eq!(
+            cond.features,
+            vec![
+                ContainerFeature::MinWidth(200.0),
+                ContainerFeature::MaxWidth(800.0),
+            ]
+        );
+    }
+
+    #[test]
+    fn does_not_split_inside_identifier_containing_and() {
+        // `expand` contains "and" but preceded by `p`, not a boundary
+        // char, so `split_css_and` must not treat it as a combinator.
+        let parts = split_css_and("(expand: 200px)");
+        assert_eq!(parts.len(), 1);
+        assert_eq!(parts[0], "(expand: 200px)");
+    }
+
+    #[test]
+    fn parses_and_joined_features() {
+        let css = "@container (min-width: 200px) and (max-width: 800px) { p { color: red; } }";
+        let sheet = parse(css);
+        let cond = sheet.rules[0].container.as_ref().unwrap();
+        assert_eq!(
+            cond.features,
+            vec![
+                ContainerFeature::MinWidth(200.0),
+                ContainerFeature::MaxWidth(800.0),
+            ]
+        );
+    }
+
+    #[test]
+    fn block_size_alias_maps_to_height() {
+        let css = "@container (min-block-size: 100px) { p { color: red; } }";
+        let sheet = parse(css);
+        let cond = sheet.rules[0].container.as_ref().unwrap();
+        assert_eq!(cond.features, vec![ContainerFeature::MinHeight(100.0)]);
+    }
+
+    #[test]
+    fn multiple_inner_rules_all_tagged() {
+        let css = r#"
+            @container (min-width: 300px) {
+                .a { color: red; }
+                .b { color: blue; }
+            }
+        "#;
+        let sheet = parse(css);
+        assert_eq!(sheet.rules.len(), 2);
+        for rule in &sheet.rules {
+            let cond = rule
+                .container
+                .as_ref()
+                .expect("each child should be tagged");
+            assert_eq!(cond.features, vec![ContainerFeature::MinWidth(300.0)]);
+        }
+    }
+
+    #[test]
+    fn unrelated_rules_have_no_container() {
+        let css = "p { color: red; }";
+        let sheet = parse(css);
+        assert!(sheet.rules[0].container.is_none());
+    }
+
+    #[test]
+    fn style_query_parses_custom_property() {
+        let css = "@container style(--theme: dark) { p { color: red; } }";
+        let sheet = parse(css);
+        let cond = sheet.rules[0].container.as_ref().unwrap();
+        assert_eq!(cond.features.len(), 1);
+        assert_eq!(
+            cond.features[0],
+            ContainerFeature::Style("--theme".into(), "dark".into())
+        );
+    }
+
+    #[test]
+    fn nested_containers_and_combine_features() {
+        // Outer: min-width: 400px, Inner: max-width: 800px.
+        // The resulting rule should carry BOTH features.
+        let css = r#"
+            @container (min-width: 400px) {
+                @container (max-width: 800px) {
+                    .card { color: red; }
+                }
+            }
+        "#;
+        let sheet = parse(css);
+        assert_eq!(sheet.rules.len(), 1);
+        let cond = sheet.rules[0].container.as_ref().unwrap();
+        assert_eq!(
+            cond.features,
+            vec![
+                ContainerFeature::MaxWidth(800.0),
+                ContainerFeature::MinWidth(400.0),
+            ]
+        );
+    }
+
+    #[test]
+    fn nested_named_container_keeps_inner_name() {
+        let css = r#"
+            @container outer (min-width: 200px) {
+                @container inner (max-width: 600px) {
+                    p { color: blue; }
+                }
+            }
+        "#;
+        let sheet = parse(css);
+        let cond = sheet.rules[0].container.as_ref().unwrap();
+        // Inner name takes priority.
+        assert_eq!(cond.name.as_deref(), Some("inner"));
+        // Both features combined.
+        assert_eq!(cond.features.len(), 2);
+    }
+}
+
+// -------------------------------------------------------------------
+// @scope, @counter-style, @property, field-sizing parsing
+// -------------------------------------------------------------------
+
+#[cfg(test)]
+mod scope_tests {
+    use super::*;
+
+    #[test]
+    fn scope_with_root_only() {
+        let css = "@scope (.card) { p { color: red; } }";
+        let sheet = parse(css);
+        assert_eq!(sheet.rules.len(), 1);
+        let scope = sheet.rules[0].scope.as_ref().unwrap();
+        assert_eq!(scope.root.as_deref(), Some(".card"));
+        assert!(scope.limit.is_none());
+    }
+
+    #[test]
+    fn scope_with_root_and_limit() {
+        let css = "@scope (.card) to (.embed) { p { color: red; } }";
+        let sheet = parse(css);
+        let scope = sheet.rules[0].scope.as_ref().unwrap();
+        assert_eq!(scope.root.as_deref(), Some(".card"));
+        assert_eq!(scope.limit.as_deref(), Some(".embed"));
+    }
+
+    #[test]
+    fn scope_no_root_means_no_constraint() {
+        let css = "@scope { p { color: red; } }";
+        let sheet = parse(css);
+        let scope = sheet.rules[0].scope.as_ref().unwrap();
+        assert!(scope.root.is_none());
+        assert!(scope.limit.is_none());
+    }
+
+    #[test]
+    fn scope_tags_all_inner_rules() {
+        let css = r#"
+            @scope (.card) {
+                .a { color: red; }
+                .b { color: blue; }
+            }
+        "#;
+        let sheet = parse(css);
+        assert_eq!(sheet.rules.len(), 2);
+        for r in &sheet.rules {
+            assert!(r.scope.is_some());
+        }
+    }
+}
+
+#[cfg(test)]
+mod counter_style_tests {
+    use super::*;
+
+    #[test]
+    fn parses_basic_counter_style() {
+        let css = "@counter-style thumbs { system: cyclic; symbols: \"thumbsup\"; suffix: \" \"; }";
+        let sheet = parse(css);
+        assert_eq!(sheet.counter_styles.len(), 1);
+        let cs = &sheet.counter_styles[0];
+        assert_eq!(cs.name, "thumbs");
+        assert_eq!(cs.system.as_deref(), Some("cyclic"));
+        assert_eq!(cs.symbols, vec!["thumbsup".to_string()]);
+        assert_eq!(cs.suffix.as_deref(), Some(" "));
+    }
+
+    #[test]
+    fn parses_additive_symbols() {
+        let css = r#"
+            @counter-style upper-roman-lite {
+                system: additive;
+                additive-symbols: 10 X, 5 V, 1 I;
+            }
+        "#;
+        let sheet = parse(css);
+        let cs = &sheet.counter_styles[0];
+        assert_eq!(cs.system.as_deref(), Some("additive"));
+        assert_eq!(
+            cs.additive_symbols,
+            vec![
+                (10, "X".to_string()),
+                (5, "V".to_string()),
+                (1, "I".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn parses_with_fallback_and_range() {
+        let css = r#"
+            @counter-style alpha {
+                system: alphabetic;
+                symbols: a b c;
+                fallback: decimal;
+                range: 1 3;
+            }
+        "#;
+        let sheet = parse(css);
+        let cs = &sheet.counter_styles[0];
+        assert_eq!(cs.fallback.as_deref(), Some("decimal"));
+        assert_eq!(cs.range.as_deref(), Some("1 3"));
+        assert_eq!(cs.symbols, vec!["a", "b", "c"]);
+    }
+}
+
+#[cfg(test)]
+mod property_tests {
+    use super::*;
+
+    #[test]
+    fn parses_property_descriptors() {
+        let css = "@property --brand { syntax: \"<color>\"; inherits: false; \
+                   initial-value: red; }";
+        let sheet = parse(css);
+        assert_eq!(sheet.properties.len(), 1);
+        let p = &sheet.properties[0];
+        assert_eq!(p.name, "--brand");
+        assert_eq!(p.syntax.as_deref(), Some("<color>"));
+        assert!(!p.inherits);
+        assert_eq!(p.initial_value.as_deref(), Some("red"));
+    }
+
+    #[test]
+    fn property_inherits_true() {
+        let css = "@property --x { syntax: \"*\"; inherits: true; initial-value: 0; }";
+        let sheet = parse(css);
+        assert!(sheet.properties[0].inherits);
+    }
+
+    #[test]
+    fn property_missing_initial_value() {
+        let css = "@property --x { syntax: \"*\"; inherits: false; }";
+        let sheet = parse(css);
+        assert!(sheet.properties[0].initial_value.is_none());
+    }
+}
+
+#[cfg(test)]
+mod will_change_tests {
+    use super::*;
+    use crate::values::ComputedStyle;
+
+    fn applied(css: &str) -> ComputedStyle {
+        let decls = first_decls(css);
+        let mut style = ComputedStyle::default();
+        for d in &decls {
+            style.apply_declaration(&d.property, &d.value, 16.0);
+        }
+        style
+    }
+
+    #[test]
+    fn single_keyword_promotes() {
+        for kw in &[
+            "transform",
+            "opacity",
+            "filter",
+            "scroll-position",
+            "contents",
+        ] {
+            let style = applied(&format!("p {{ will-change: {kw}; }}"));
+            assert!(
+                style.will_change_promotes_layer,
+                "{kw} should promote to a layer"
+            );
+        }
+    }
+
+    #[test]
+    fn auto_does_not_promote() {
+        let style = applied("p { will-change: auto; }");
+        assert!(!style.will_change_promotes_layer);
+    }
+
+    #[test]
+    fn multiple_values_promote_if_any_match() {
+        let style = applied("p { will-change: top, transform; }");
+        assert!(style.will_change_promotes_layer);
+    }
+
+    #[test]
+    fn unrelated_keywords_do_not_promote() {
+        let style = applied("p { will-change: top, left; }");
+        assert!(!style.will_change_promotes_layer);
+    }
+}
+
+#[cfg(test)]
+mod field_sizing_tests {
+    use super::*;
+    use crate::values::ComputedStyle;
+    use crate::values::types::FieldSizing;
+
+    #[test]
+    fn parses_field_sizing_content() {
+        let decls = first_decls("input { field-sizing: content; }");
+        let mut style = ComputedStyle::default();
+        for d in &decls {
+            style.apply_declaration(&d.property, &d.value, 16.0);
+        }
+        assert_eq!(style.field_sizing, FieldSizing::Content);
+    }
+
+    #[test]
+    fn parses_field_sizing_fixed() {
+        let decls = first_decls("input { field-sizing: fixed; }");
+        let mut style = ComputedStyle::default();
+        for d in &decls {
+            style.apply_declaration(&d.property, &d.value, 16.0);
+        }
+        assert_eq!(style.field_sizing, FieldSizing::Fixed);
+    }
+
+    // -- @font-face ------------------------------------------------
+
+    #[test]
+    fn font_face_basic() {
+        let sheet = parse(
+            r#"
+            @font-face {
+                font-family: "Open Sans";
+                src: url("open-sans.woff2") format("woff2"),
+                     url("open-sans.woff") format("woff");
+                font-weight: 400;
+                font-style: normal;
+                font-display: swap;
+            }
+        "#,
+        );
+        assert_eq!(sheet.font_faces.len(), 1);
+        let ff = &sheet.font_faces[0];
+        assert_eq!(ff.family, "Open Sans");
+        assert_eq!(ff.src.len(), 2);
+        assert_eq!(ff.weight, (400, 400));
+        assert_eq!(ff.style, types::FontFaceStyle::Normal);
+        assert_eq!(ff.display, types::FontDisplay::Swap);
+        assert!(ff.unicode_range.is_empty());
+
+        // Check src entries.
+        match &ff.src[0] {
+            types::FontFaceSrc::Url { url, format } => {
+                assert_eq!(url, "open-sans.woff2");
+                assert_eq!(format, &["woff2"]);
+            },
+            _ => panic!("expected Url src"),
+        }
+        match &ff.src[1] {
+            types::FontFaceSrc::Url { url, format } => {
+                assert_eq!(url, "open-sans.woff");
+                assert_eq!(format, &["woff"]);
+            },
+            _ => panic!("expected Url src"),
+        }
+    }
+
+    #[test]
+    fn font_face_weight_range() {
+        let sheet = parse(
+            r#"
+            @font-face {
+                font-family: "Variable";
+                src: url("var.woff2");
+                font-weight: 100 900;
+            }
+        "#,
+        );
+        assert_eq!(sheet.font_faces.len(), 1);
+        assert_eq!(sheet.font_faces[0].weight, (100, 900));
+    }
+
+    #[test]
+    fn font_face_bold_keyword() {
+        let sheet = parse(
+            r#"
+            @font-face {
+                font-family: "MyFont";
+                src: url("bold.ttf");
+                font-weight: bold;
+                font-style: italic;
+            }
+        "#,
+        );
+        assert_eq!(sheet.font_faces.len(), 1);
+        assert_eq!(sheet.font_faces[0].weight, (700, 700));
+        assert_eq!(sheet.font_faces[0].style, types::FontFaceStyle::Italic);
+    }
+
+    #[test]
+    fn font_face_local_src() {
+        let sheet = parse(
+            r#"
+            @font-face {
+                font-family: "SystemFont";
+                src: local("Helvetica Neue"), url("fallback.woff2");
+            }
+        "#,
+        );
+        assert_eq!(sheet.font_faces.len(), 1);
+        assert_eq!(sheet.font_faces[0].src.len(), 2);
+        match &sheet.font_faces[0].src[0] {
+            types::FontFaceSrc::Local(name) => assert_eq!(name, "Helvetica Neue"),
+            _ => panic!("expected Local src"),
+        }
+    }
+
+    #[test]
+    fn font_face_unicode_range() {
+        let sheet = parse(
+            r#"
+            @font-face {
+                font-family: "Latin";
+                src: url("latin.woff2");
+                unicode-range: U+0020-007F, U+2000-206F;
+            }
+        "#,
+        );
+        assert_eq!(sheet.font_faces.len(), 1);
+        let ranges = &sheet.font_faces[0].unicode_range;
+        assert_eq!(ranges.len(), 2);
+        assert_eq!(ranges[0].start, 0x0020);
+        assert_eq!(ranges[0].end, 0x007F);
+        assert_eq!(ranges[1].start, 0x2000);
+        assert_eq!(ranges[1].end, 0x206F);
+    }
+
+    #[test]
+    fn font_face_missing_family_skipped() {
+        let sheet = parse(
+            r#"
+            @font-face {
+                src: url("no-family.woff2");
+            }
+        "#,
+        );
+        // Missing font-family → rule is invalid and skipped.
+        assert_eq!(sheet.font_faces.len(), 0);
+    }
+
+    #[test]
+    fn font_face_missing_src_skipped() {
+        let sheet = parse(
+            r#"
+            @font-face {
+                font-family: "NoSrc";
+            }
+        "#,
+        );
+        // Missing src → rule is invalid and skipped.
+        assert_eq!(sheet.font_faces.len(), 0);
+    }
+
+    #[test]
+    fn font_face_multiple_rules() {
+        let sheet = parse(
+            r#"
+            @font-face {
+                font-family: "MyFont";
+                src: url("regular.woff2");
+                font-weight: 400;
+            }
+            @font-face {
+                font-family: "MyFont";
+                src: url("bold.woff2");
+                font-weight: 700;
+            }
+            body { color: red; }
+        "#,
+        );
+        assert_eq!(sheet.font_faces.len(), 2);
+        assert_eq!(sheet.font_faces[0].weight, (400, 400));
+        assert_eq!(sheet.font_faces[1].weight, (700, 700));
+        // Regular rules should also parse.
+        assert!(!sheet.rules.is_empty());
+    }
+
+    #[test]
+    fn font_family_named_in_declaration() {
+        let decls = first_decls(r#"body { font-family: "Open Sans", Helvetica, sans-serif; }"#);
+        let ff_decl = decls.iter().find(|d| d.property == "font-family");
+        assert!(ff_decl.is_some(), "font-family should be in declarations");
+    }
+}

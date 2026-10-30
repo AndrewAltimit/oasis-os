@@ -238,7 +238,7 @@ fn parse_files_lightweight(
     json: &str,
     item_id: &str,
     subfolder: Option<&str>,
-) -> Vec<oasis_core::apps::tv_guide::VideoEpisode> {
+) -> Vec<oasis_app_tv_guide::VideoEpisode> {
     // Find the "result" array.
     let result_start = match json.find("\"result\":[") {
         Some(pos) => pos + "\"result\":[".len(),
@@ -338,7 +338,7 @@ fn parse_files_lightweight(
             .unwrap_or(display_name)
             .replace('_', " ");
 
-        episodes.push(oasis_core::apps::tv_guide::VideoEpisode {
+        episodes.push(oasis_app_tv_guide::VideoEpisode {
             item_id: item_id.to_string(),
             filename: name.to_string(),
             title,

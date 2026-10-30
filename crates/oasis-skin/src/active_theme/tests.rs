@@ -523,6 +523,170 @@ fn from_base_colors_matches_from_skin_defaults() {
     );
 }
 
+fn hex(c: Color) -> String {
+    format!("#{:02X}{:02X}{:02X}{:02X}", c.r, c.g, c.b, c.a)
+}
+
+/// `SkinTheme` carrying only the 9 base colors plus `shadow_intensity = 3`
+/// (the elevation `from_base_colors` has always used for dropdown / modal /
+/// tooltip shadows); every other override unset.
+fn base_only_theme(c: [Color; 9]) -> SkinTheme {
+    SkinTheme {
+        background: hex(c[0]),
+        primary: hex(c[1]),
+        secondary: hex(c[2]),
+        text: hex(c[3]),
+        dim_text: hex(c[4]),
+        status_bar: hex(c[5]),
+        prompt: hex(c[6]),
+        output: hex(c[7]),
+        error: hex(c[8]),
+        shadow_intensity: Some(3),
+        ..SkinTheme::default()
+    }
+}
+
+/// Fail with the first field (path + both values) where two themes differ.
+///
+/// Compares the pretty `Debug` output line by line, so every field of every
+/// sub-struct is covered (the empty `HashMap` fields print deterministically)
+/// and a divergence names the field instead of dumping two huge strings.
+fn assert_same_theme(a: &ActiveTheme, b: &ActiveTheme, ctx: &str) {
+    let (da, db) = (format!("{a:#?}"), format!("{b:#?}"));
+    let (la, lb): (Vec<&str>, Vec<&str>) = (da.lines().collect(), db.lines().collect());
+    // Field path from indentation: each nesting level is 4 spaces.
+    let mut path: Vec<&str> = Vec::new();
+    for (i, (x, y)) in la.iter().zip(lb.iter()).enumerate() {
+        let depth = (x.len() - x.trim_start().len()) / 4;
+        path.truncate(depth);
+        let name = x.trim_start().split(':').next().unwrap_or("");
+        if x != y {
+            panic!(
+                "{ctx}: themes diverge at line {i} ({}):\n  left:  {}\n  right: {}",
+                path.join("."),
+                x.trim(),
+                y.trim()
+            );
+        }
+        if x.trim_end().ends_with('{') || x.trim_end().ends_with('[') {
+            path.push(name);
+        }
+    }
+    assert_eq!(la.len(), lb.len(), "{ctx}: Debug output lengths differ");
+}
+
+/// 9 pseudo-random, pairwise-distinct base colors (deterministic LCG), with
+/// a translucent status bar on odd seeds.
+fn generated_palette(seed: u32) -> [Color; 9] {
+    let mut s = seed.wrapping_mul(2_654_435_761).wrapping_add(0x9E37_79B9);
+    let mut next = || {
+        s = s.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+        (s >> 8) as u8
+    };
+    let mut out = [Color::rgb(0, 0, 0); 9];
+    for (i, slot) in out.iter_mut().enumerate() {
+        // Low bits encode the slot so the colors can never coincide.
+        *slot = Color::rgb(next(), next(), (next() & 0xF0) | i as u8);
+    }
+    if seed % 2 == 1 {
+        out[5].a = next() | 0x10;
+    }
+    out
+}
+
+fn from_palette(c: [Color; 9]) -> ActiveTheme {
+    ActiveTheme::from_base_colors(c[0], c[1], c[2], c[3], c[4], c[5], c[6], c[7], c[8])
+}
+
+/// Full equality: `from_base_colors` is exactly `from_skin` on a theme with
+/// only the 9 base colors (and `shadow_intensity = 3`) set, field by field,
+/// across hand-picked and generated palettes. The palettes use 9 distinct
+/// colors so a swapped or dropped argument cannot cancel out.
+#[test]
+fn from_base_colors_equals_from_skin_exactly() {
+    let palettes: [[Color; 9]; 3] = [
+        [
+            Color::rgb(0x0E, 0x0E, 0x1C),
+            Color::rgb(0x44, 0x88, 0xCC),
+            Color::rgb(0x2A, 0x2A, 0x3E),
+            Color::rgb(0xE0, 0xE0, 0xF0),
+            Color::rgb(0x70, 0x70, 0x90),
+            Color::rgb(0x18, 0x18, 0x2C),
+            Color::rgb(0x44, 0xCC, 0x88),
+            Color::rgb(0xC0, 0xC0, 0xD8),
+            Color::rgb(0xFF, 0x44, 0x66),
+        ],
+        // Light palette (dark text on a bright background).
+        [
+            Color::rgb(0xF4, 0xF1, 0xE8),
+            Color::rgb(0x33, 0x66, 0x99),
+            Color::rgb(0xCC, 0xC6, 0xB8),
+            Color::rgb(0x22, 0x22, 0x22),
+            Color::rgb(0x77, 0x77, 0x77),
+            Color::rgb(0xE0, 0xDC, 0xD0),
+            Color::rgb(0x33, 0x66, 0x99),
+            Color::rgb(0x22, 0x22, 0x22),
+            Color::rgb(0xCC, 0x22, 0x22),
+        ],
+        // Translucent status bar.
+        [
+            Color::rgb(0x00, 0x00, 0x00),
+            Color::rgb(0xFF, 0xFF, 0x00),
+            Color::rgb(0x80, 0x80, 0x80),
+            Color::rgb(0xFF, 0xFF, 0xFF),
+            Color::rgb(0xAA, 0xAA, 0xAA),
+            Color::rgba(0x10, 0x20, 0x30, 0x80),
+            Color::rgb(0x00, 0xFF, 0x00),
+            Color::rgb(0xEE, 0xEE, 0xEE),
+            Color::rgb(0xFF, 0x00, 0x00),
+        ],
+    ];
+    let generated = (0..32).map(generated_palette);
+    for (n, c) in palettes.into_iter().chain(generated).enumerate() {
+        let from_colors = from_palette(c);
+        let from_skin = ActiveTheme::from_skin(&base_only_theme(c));
+        assert_same_theme(&from_colors, &from_skin, &format!("palette {n}"));
+    }
+}
+
+/// Every one of the 9 inputs reaches the derived theme: changing any single
+/// base color changes the result (and the result still matches `from_skin`
+/// with that slot changed). Together with the equality test this pins the
+/// argument order, and catches a derivation that silently ignores a slot.
+#[test]
+fn from_base_colors_uses_every_input() {
+    for seed in [0u32, 1, 7] {
+        let base = generated_palette(seed);
+        let reference = format!("{:#?}", from_palette(base));
+        for slot in 0..9 {
+            let mut changed = base;
+            let c = changed[slot];
+            changed[slot] = Color::rgba(c.r ^ 0x80, c.g ^ 0x55, c.b ^ 0x3C, c.a);
+            let derived = from_palette(changed);
+            assert_ne!(
+                format!("{derived:#?}"),
+                reference,
+                "seed {seed}: base color slot {slot} has no effect on the theme"
+            );
+            assert_same_theme(
+                &derived,
+                &ActiveTheme::from_skin(&base_only_theme(changed)),
+                &format!("seed {seed}, slot {slot} changed"),
+            );
+        }
+    }
+}
+
+/// The divergence reporter itself must fail on a single-field difference.
+#[test]
+#[should_panic(expected = "themes diverge")]
+fn assert_same_theme_catches_one_field() {
+    let a = from_palette(generated_palette(3));
+    let mut b = a.clone();
+    b.bar.battery_color.g ^= 1;
+    assert_same_theme(&a, &b, "one field");
+}
+
 // -----------------------------------------------------------------------
 // PSP-specific code path tests
 //

@@ -9,13 +9,13 @@
 //! (empty / `about:` URLs) get a private, page-lifetime store.
 
 use std::cell::RefCell;
-use std::collections::HashMap;
 use std::rc::Rc;
 
 use oasis_js::rquickjs::{Ctx, Function, Result as JsResult};
 use oasis_js::{LocalStorage, OriginStorage};
 
 use super::SharedLocalStorage;
+use crate::loader::cookies::{MAX_COOKIE_SIZE, MAX_COOKIES_PER_DOMAIN, parse_cookie_date};
 
 /// Per-origin Web Storage for one browser widget (tab).
 ///
@@ -56,43 +56,90 @@ impl WebStorage {
 /// script-set cookies cannot leak across origins (they are also not sent
 /// on network requests; HTTP `Set-Cookie` handling lives in the loader's
 /// per-domain `CookieJar`).
+///
+/// It lives outside the JS heap limit, so it carries the HTTP jar's
+/// caps: a `name=value` pair over [`MAX_COOKIE_SIZE`] bytes (or with
+/// control characters) is ignored, and past [`MAX_COOKIES_PER_DOMAIN`]
+/// cookies the oldest is evicted. `max-age=<= 0` and an `expires` date
+/// before 2000 (the usual `Thu, 01 Jan 1970 …` idiom) delete a cookie;
+/// other attributes are ignored.
 pub(super) fn install_cookie_bindings(ctx: &Ctx<'_>) -> JsResult<()> {
     let globals = ctx.globals();
 
     // -- __oasis_cookie_get() / __oasis_cookie_set(raw) ------------------
     {
-        let cookie_map: Rc<RefCell<HashMap<String, String>>> =
-            Rc::new(RefCell::new(HashMap::new()));
-        let cm1 = Rc::clone(&cookie_map);
+        let jar: Rc<RefCell<ScriptCookies>> = Rc::default();
+        let j1 = Rc::clone(&jar);
         globals.set(
             "__oasis_cookie_get",
-            Function::new(ctx.clone(), move || -> String {
-                let map = cm1.borrow();
-                let mut pairs: Vec<String> = map.iter().map(|(k, v)| format!("{k}={v}")).collect();
-                pairs.sort();
-                pairs.join("; ")
-            })?,
+            Function::new(ctx.clone(), move || -> String { j1.borrow().header() })?,
         )?;
-        let cm2 = Rc::clone(&cookie_map);
+        let j2 = Rc::clone(&jar);
         globals.set(
             "__oasis_cookie_set",
-            Function::new(ctx.clone(), move |raw: String| {
-                // Parse "name=value; path=/; ..." — only extract the first name=value.
-                if let Some(pair) = raw.split(';').next() {
-                    let pair = pair.trim();
-                    if let Some(eq) = pair.find('=') {
-                        let name = pair[..eq].trim().to_string();
-                        let value = pair[eq + 1..].trim().to_string();
-                        if !name.is_empty() {
-                            cm2.borrow_mut().insert(name, value);
-                        }
-                    }
-                }
-            })?,
+            Function::new(ctx.clone(), move |raw: String| j2.borrow_mut().set(&raw))?,
         )?;
     }
 
     Ok(())
+}
+
+/// `document.cookie` storage: `(name, value)` in creation order.
+#[derive(Debug, Default)]
+struct ScriptCookies {
+    pairs: Vec<(String, String)>,
+}
+
+impl ScriptCookies {
+    /// The `document.cookie` getter string.
+    fn header(&self) -> String {
+        let pairs: Vec<String> = self.pairs.iter().map(|(k, v)| format!("{k}={v}")).collect();
+        pairs.join("; ")
+    }
+
+    /// Apply one `document.cookie = raw` assignment.
+    fn set(&mut self, raw: &str) {
+        let mut parts = raw.split(';');
+        let Some((name, value)) = parts.next().and_then(|p| p.split_once('=')) else {
+            return;
+        };
+        let (name, value) = (name.trim(), value.trim());
+        if name.is_empty()
+            || name.len() + value.len() > MAX_COOKIE_SIZE
+            || name.chars().chain(value.chars()).any(char::is_control)
+        {
+            return;
+        }
+        let delete = parts.any(|attr| {
+            let Some((k, v)) = attr.split_once('=') else {
+                return false;
+            };
+            let (k, v) = (k.trim(), v.trim());
+            if k.eq_ignore_ascii_case("max-age") {
+                v.parse::<i64>().is_ok_and(|n| n <= 0)
+            } else if k.eq_ignore_ascii_case("expires") {
+                // 2000-01-01T00:00:00Z: no clock needed (wasm has none
+                // in std) for the deletion idiom.
+                parse_cookie_date(v).is_some_and(|t| t < 946_684_800)
+            } else {
+                false
+            }
+        });
+        let existing = self.pairs.iter().position(|(k, _)| k == name);
+        match (existing, delete) {
+            (Some(i), true) => {
+                self.pairs.remove(i);
+            },
+            (None, true) => {},
+            (Some(i), false) => value.clone_into(&mut self.pairs[i].1),
+            (None, false) => {
+                if self.pairs.len() >= MAX_COOKIES_PER_DOMAIN {
+                    self.pairs.remove(0);
+                }
+                self.pairs.push((name.to_string(), value.to_string()));
+            },
+        }
+    }
 }
 
 /// Install the `__oasis_storage_*` helpers backing `localStorage`
@@ -109,7 +156,7 @@ pub(super) fn install_storage_bindings(
 
     let origin = crate::loader::Url::parse(page_url)
         .as_ref()
-        .and_then(super::fetch::origin_key);
+        .and_then(crate::loader::Url::origin);
     let (store, origin): (SharedLocalStorage, String) = match (origin, persistent) {
         (Some(o), Some(p)) => (Rc::clone(p), o),
         (Some(o), None) => (Rc::default(), o),

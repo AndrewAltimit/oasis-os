@@ -1,7 +1,7 @@
 //! SpinBox widget: numeric input with increment/decrement buttons.
 
 use crate::context::DrawContext;
-use crate::layout;
+use crate::layout::HAlign;
 use crate::states::{WidgetState, WidgetStateColors};
 use crate::widget::Widget;
 use oasis_types::error::Result;
@@ -120,7 +120,6 @@ impl Widget for SpinBox {
 
     fn draw(&self, ctx: &mut DrawContext<'_>, x: i32, y: i32, w: u32, h: u32) -> Result<()> {
         let fs = ctx.theme.font_size_md;
-        let text_h = ctx.backend.measure_text_height(fs);
         let border = ctx.theme.interactive_border(self.disabled, false);
         let bg = if self.disabled {
             WidgetStateColors::surface_bg(ctx.theme, WidgetState::Disabled)
@@ -149,9 +148,13 @@ impl Widget for SpinBox {
             .interactive_text(self.disabled || self.value <= self.min);
         ctx.backend
             .stroke_rect(x, y, BUTTON_WIDTH, btn_h, 1, border)?;
-        let minus_x = x + layout::center(BUTTON_WIDTH, ctx.backend.measure_text("-", fs));
-        let minus_y = y + layout::center(btn_h, text_h);
-        ctx.backend.draw_text("-", minus_x, minus_y, fs, minus_fg)?;
+        ctx.text_in(
+            (x, y, BUTTON_WIDTH, btn_h),
+            "-",
+            fs,
+            minus_fg,
+            HAlign::Center,
+        )?;
 
         // Plus button.
         let plus_fg = ctx
@@ -159,23 +162,23 @@ impl Widget for SpinBox {
             .interactive_text(self.disabled || self.value >= self.max);
         ctx.backend
             .stroke_rect(plus_x, y, BUTTON_WIDTH, btn_h, 1, border)?;
-        let plus_tx = plus_x + layout::center(BUTTON_WIDTH, ctx.backend.measure_text("+", fs));
-        let plus_ty = y + layout::center(btn_h, text_h);
-        ctx.backend.draw_text("+", plus_tx, plus_ty, fs, plus_fg)?;
+        ctx.text_in(
+            (plus_x, y, BUTTON_WIDTH, btn_h),
+            "+",
+            fs,
+            plus_fg,
+            HAlign::Center,
+        )?;
 
         // Value text (centered in remaining area).
         let display = self.display_value();
         let text_area_w = w.saturating_sub(BUTTON_WIDTH * 2);
-        let text_x = x
-            + BUTTON_WIDTH as i32
-            + layout::center(text_area_w, ctx.backend.measure_text(&display, fs));
-        let text_y = y + layout::center(h, text_h);
-        ctx.backend.draw_text(
+        ctx.text_in(
+            (x + BUTTON_WIDTH as i32, y, text_area_w, h),
             &display,
-            text_x,
-            text_y,
             fs,
             ctx.theme.interactive_text(self.disabled),
+            HAlign::Center,
         )?;
 
         // Keyboard focus ring around the whole control.
@@ -264,14 +267,14 @@ mod tests {
     }
 
     use crate::context::DrawContext;
-    use crate::test_utils::MockBackend;
+    use crate::test_utils::RecordingBackend;
     use crate::theme::Theme;
     use crate::widget::Widget;
 
     #[test]
     fn draw_shows_value() {
         let theme = Theme::dark();
-        let mut backend = MockBackend::new();
+        let mut backend = RecordingBackend::default();
         {
             let mut ctx = DrawContext::new(&mut backend, &theme);
             let mut s = SpinBox::new(0.0, 10.0);

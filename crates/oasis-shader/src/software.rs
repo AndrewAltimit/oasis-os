@@ -4,6 +4,7 @@
 //! testing without GPU. Renders at configurable resolution (default:
 //! half-res for performance), upscaled when blitted.
 
+use crate::registry::BuiltinShader;
 use crate::uniforms::ShaderParams;
 
 const PI: f32 = std::f32::consts::PI;
@@ -48,6 +49,8 @@ pub struct SoftwareShaderRenderer {
     scale: u32,
     pixel_buf: Vec<u8>,
     lo_buf: Vec<[u8; 4]>,
+    /// Set after the first unknown-name fallback so it is logged once.
+    warned_unknown: bool,
 }
 
 impl SoftwareShaderRenderer {
@@ -62,6 +65,7 @@ impl SoftwareShaderRenderer {
             scale,
             pixel_buf: vec![0u8; (width * height * 4) as usize],
             lo_buf: vec![[0u8; 4]; (iw * ih) as usize],
+            warned_unknown: false,
         }
     }
 
@@ -76,17 +80,39 @@ impl SoftwareShaderRenderer {
         self.lo_buf.resize((iw * ih) as usize, [0u8; 4]);
     }
 
-    /// Render a named shader. Dispatches to the appropriate implementation.
+    /// Render a shader by skin name. Returns the RGBA output buffer.
+    ///
+    /// Unknown names fall back to [`BuiltinShader::Balatro`] (logged once
+    /// per renderer) so a typo in a skin still yields a wallpaper; use
+    /// [`render_builtin`](Self::render_builtin) to dispatch on the enum
+    /// directly.
     pub fn render_shader(&mut self, name: &str, time: f32, params: &ShaderParams) -> &[u8] {
-        match name {
-            "voronoi" => self.render_voronoi(time, params),
-            "city_lights" => self.render_city_lights(time, params),
-            "ocean_waves" => self.render_ocean_waves(time, params),
-            "calm_waves" => self.render_calm_waves(time, params),
-            "starfield" => self.render_starfield(time, params),
-            "plasma" => self.render_plasma(time, params),
-            "matrix_rain" => self.render_matrix_rain(time, params),
-            _ => self.render_balatro(time, params),
+        let shader = BuiltinShader::from_name(name).unwrap_or_else(|| {
+            if !self.warned_unknown {
+                self.warned_unknown = true;
+                log::warn!("unknown shader '{name}', rendering 'balatro' instead");
+            }
+            BuiltinShader::Balatro
+        });
+        self.render_builtin(shader, time, params)
+    }
+
+    /// Render a built-in shader. Returns the RGBA output buffer.
+    pub fn render_builtin(
+        &mut self,
+        shader: BuiltinShader,
+        time: f32,
+        params: &ShaderParams,
+    ) -> &[u8] {
+        match shader {
+            BuiltinShader::Balatro => self.render_balatro(time, params),
+            BuiltinShader::Voronoi => self.render_voronoi(time, params),
+            BuiltinShader::CityLights => self.render_city_lights(time, params),
+            BuiltinShader::OceanWaves => self.render_ocean_waves(time, params),
+            BuiltinShader::CalmWaves => self.render_calm_waves(time, params),
+            BuiltinShader::Starfield => self.render_starfield(time, params),
+            BuiltinShader::Plasma => self.render_plasma(time, params),
+            BuiltinShader::MatrixRain => self.render_matrix_rain(time, params),
         }
     }
 

@@ -2084,6 +2084,39 @@ fn navigation_clears_image_state() {
     );
 }
 
+#[test]
+fn navigation_destroys_previous_page_textures_on_next_paint() {
+    let vfs = test_vfs_with_image();
+    let mut browser = make_browser();
+    browser.set_window(0, 0, 480, 272);
+    let mut backend = MockBackend::new();
+
+    browser.navigate_vfs("vfs://sites/img/index.html", &vfs);
+    browser.load_next_image_batch(&vfs, 5000);
+    browser.paint(&mut backend).unwrap();
+    let page_one = backend.loaded_textures.clone();
+    assert!(!page_one.is_empty(), "the image page uploads a texture");
+
+    // Navigating has no backend, so nothing is destroyed yet...
+    browser.navigate_vfs("vfs://sites/img/broken.html", &vfs);
+    assert!(
+        page_one
+            .iter()
+            .any(|t| !backend.destroyed_textures.contains(t)),
+        "textures outlive the navigation until a backend is available"
+    );
+
+    // ...but the next paint releases every texture of the old page.
+    browser.paint(&mut backend).unwrap();
+    for tex in &page_one {
+        assert!(
+            backend.destroyed_textures.contains(tex),
+            "{tex:?} from the previous page leaked"
+        );
+    }
+    assert!(browser.retired_textures.is_empty());
+}
+
 // ---------------------------------------------------------------
 // Test: image loading is progressive (Phase 1)
 // ---------------------------------------------------------------
@@ -3361,6 +3394,27 @@ fn is_print_only_media_query_matches_print_variants_only() {
 
 #[cfg(feature = "javascript")]
 #[test]
+fn js_budget_comes_from_browser_config() {
+    let config = BrowserConfig {
+        js_max_exec_ms: 80,
+        ..Default::default()
+    };
+    let mut browser = BrowserWidget::new(config);
+    browser.set_window(0, 0, 480, 272);
+    let start = std::time::Instant::now();
+    browser.load_html(
+        "<html><body><p id=\"p\">x</p><script>while (1) {}</script></body></html>",
+        "test://js-budget",
+    );
+    // The runaway inline script is cut off at the configured 80 ms, not
+    // the engine's 5 s default.
+    assert!(start.elapsed() < std::time::Duration::from_millis(2_000));
+    let engine = browser.js_engine.as_ref().expect("javascript engine");
+    assert_eq!(engine.max_exec_ms(), 80);
+}
+
+#[cfg(feature = "javascript")]
+#[test]
 fn js_click_handler_infinite_loop_is_interrupted() {
     let vfs = MemoryVfs::new();
     let mut browser = make_browser();
@@ -3667,7 +3721,7 @@ fn image_finishing_loading_wants_a_frame() {
 // TLS provider lifetime vs. the background I/O thread
 // -------------------------------------------------------------------
 
-#[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
+#[cfg(native_net)]
 mod tls_lifetime {
     use std::sync::Arc;
     use std::sync::atomic::{AtomicBool, Ordering};

@@ -3,31 +3,34 @@
 //! Extracted from the main event loop to reduce complexity. Handles VFS-based
 //! radio requests, background catalog/track fetching, and state machine ticks.
 
+use std::time::{Duration, Instant};
+
 use crate::app_state::{AppState, CatalogFetchResult, TrackFetchResult};
 use oasis_core::backend::NetworkBackend as _;
 use oasis_core::vfs::Vfs;
 
-/// Process one frame of radio state: VFS requests, background fetch polling,
-/// state machine tick, auto-advance, status publish, and app refresh.
-pub fn tick(state: &mut AppState, vfs: &mut dyn Vfs) {
+/// How often the radio status file is republished (4 Hz of wall time, at
+/// any frame rate).
+pub const STATUS_INTERVAL: Duration = Duration::from_millis(250);
+
+/// Process one frame of radio state at `now`: VFS requests, background
+/// fetch polling, state machine tick, auto-advance and status publish.
+pub fn tick(state: &mut AppState, vfs: &mut dyn Vfs, now: Instant) {
     process_vfs_requests(state, vfs);
     poll_catalog_fetch(state);
     poll_track_fetch(state);
     tick_state_machine(state);
     auto_advance_track(state);
 
-    // Publish radio status periodically (~4 times per second).
-    if state.frame_counter.is_multiple_of(15) {
-        let _ = state.radio_manager.publish_status(vfs);
+    let due = state
+        .radio
+        .last_status_publish
+        .is_none_or(|at| now.saturating_duration_since(at) >= STATUS_INTERVAL);
+    if due {
+        state.radio.last_status_publish = Some(now);
+        let _ = state.radio.manager.publish_status(vfs);
     }
-
-    // Refresh radio app display if visible.
-    if let Some(ref mut runner) = state.content.app_runner {
-        runner.refresh_radio(vfs);
-    }
-    for (_, runner) in &mut state.content.open_runners {
-        runner.refresh_radio(vfs);
-    }
+    // The Internet Radio app polls the published status in its own `tick`.
 }
 
 /// Check the VFS for radio requests and process them.
@@ -51,13 +54,14 @@ fn process_vfs_requests(state: &mut AppState, vfs: &mut dyn Vfs) {
         process_tune_request(state, target);
     } else {
         let _ = state
-            .radio_manager
+            .radio
+            .manager
             .process_request(&request, state.audio_backend.as_mut());
         // Clear catalog on stop.
-        if state.radio_manager.state() == oasis_audio::radio::RadioState::Stopped {
-            state.archive_catalog = None;
-            state.pending_catalog_fetch = None;
-            state.pending_source_fetch = None;
+        if state.radio.manager.state() == oasis_audio::radio::RadioState::Stopped {
+            state.radio.archive_catalog = None;
+            state.radio.pending_catalog_fetch = None;
+            state.radio.pending_source_fetch = None;
         }
     }
 }
@@ -66,10 +70,11 @@ fn process_vfs_requests(state: &mut AppState, vfs: &mut dyn Vfs) {
 fn process_tune_request(state: &mut AppState, target: &str) {
     // Resolve station by index or case-insensitive name.
     let station = if let Ok(idx) = target.parse::<usize>() {
-        state.radio_manager.registry.stations.get(idx).cloned()
+        state.radio.manager.registry.stations.get(idx).cloned()
     } else {
         state
-            .radio_manager
+            .radio
+            .manager
             .registry
             .stations
             .iter()
@@ -79,29 +84,39 @@ fn process_tune_request(state: &mut AppState, target: &str) {
 
     let Some(station) = station else {
         state
-            .radio_manager
+            .radio
+            .manager
             .set_error(&format!("station not found: {target}"));
         return;
     };
 
+    // Radio takes over the audio output: release the music track first
+    // (as the WASM host does), so the music controller doesn't mistake
+    // the radio's `stop` of the shared stream for the end of its track
+    // and auto-advance into the radio.
+    if state.media_track.is_some() {
+        crate::media_controller::shutdown(state);
+    }
     let _ = state
-        .radio_manager
+        .radio
+        .manager
         .tune(&station.name, station.bitrate, state.audio_backend.as_mut());
 
     // Clear stale catalog/pending fetches on station change.
-    state.archive_catalog = None;
-    state.pending_catalog_fetch = None;
-    state.pending_source_fetch = None;
-    if let Some(mut old) = state.radio_source.take() {
+    state.radio.archive_catalog = None;
+    state.radio.pending_catalog_fetch = None;
+    state.radio.pending_source_fetch = None;
+    if let Some(mut old) = state.radio.source.take() {
         old.disconnect();
     }
 
     state
-        .radio_manager
+        .radio
+        .manager
         .set_source_info(&station.source_type, &station.collection);
 
     if state.offline {
-        state.radio_manager.set_error("offline: network disabled");
+        state.radio.manager.set_error("offline: network disabled");
         return;
     }
 
@@ -115,67 +130,68 @@ fn process_tune_request(state: &mut AppState, target: &str) {
             let result = super::fetch_catalog_blocking(&collection, seed, &tls);
             let _ = tx.send(result);
         });
-        state.pending_catalog_fetch = Some(rx);
-    } else if let Some((host, port, path, tls)) = super::parse_stream_url(&station.url) {
+        state.radio.pending_catalog_fetch = Some(rx);
+    } else if oasis_audio::radio::StreamUrl::parse(&station.url).is_some() {
         // Icecast: connect on the pump thread (TLS if https) so the TCP
-        // connect + TLS handshake never stall the frame loop, then stream
+        // connect + TLS handshake never stall the frame loop, follow any
+        // redirects (same-scheme or http -> https only), then stream
         // through the ThreadedSource readahead queue.
         let tls_provider = state.net.tls_provider.clone();
+        let url = station.url.clone();
         let source = oasis_audio::radio::ThreadedSource::spawn_connect(move || {
-            use oasis_core::net::TlsProvider;
-            let mut net = oasis_core::net::StdNetworkBackend::new();
-            let stream = net
-                .connect(&host, port)
-                .map_err(|e| format!("connect: {e}"))?;
-            let stream = if tls {
-                // IcecastSource is an HTTP/1.1 client — force ALPN so
-                // servers don't hand us an h2 stream.
-                tls_provider
-                    .connect_tls_with_alpn(stream, &host, &[b"http/1.1"])
-                    .map(|c| c.stream)
-                    .map_err(|e| format!("TLS: {e}"))?
-            } else {
-                stream
-            };
-            Ok(
-                Box::new(oasis_audio::radio::IcecastSource::new(stream, &host, &path))
-                    as Box<dyn oasis_audio::radio::RadioSource + Send>,
-            )
+            let src = oasis_audio::radio::connect_icecast(&url, |target| {
+                use oasis_core::net::TlsProvider;
+                let mut net = oasis_core::net::StdNetworkBackend::new();
+                let stream = net
+                    .connect(&target.host, target.port)
+                    .map_err(|e| format!("connect: {e}"))?;
+                if target.https {
+                    // IcecastSource is an HTTP/1.1 client — force ALPN so
+                    // servers don't hand us an h2 stream.
+                    tls_provider
+                        .connect_tls_with_alpn(stream, &target.host, &[b"http/1.1"])
+                        .map(|c| c.stream)
+                        .map_err(|e| format!("TLS: {e}"))
+                } else {
+                    Ok(stream)
+                }
+            })?;
+            Ok(Box::new(src) as Box<dyn oasis_audio::radio::RadioSource + Send>)
         });
-        state.radio_source = Some(Box::new(source));
+        state.radio.source = Some(Box::new(source));
     } else {
-        state.radio_manager.set_error("invalid stream URL");
+        state.radio.manager.set_error("invalid stream URL");
     }
 }
 
 /// Poll background catalog fetch (non-blocking).
 fn poll_catalog_fetch(state: &mut AppState) {
-    let Some(ref rx) = state.pending_catalog_fetch else {
+    let Some(ref rx) = state.radio.pending_catalog_fetch else {
         return;
     };
     match rx.try_recv() {
         Ok(Ok(CatalogFetchResult { catalog, source })) => {
-            state.pending_catalog_fetch = None;
+            state.radio.pending_catalog_fetch = None;
             log::info!(
                 "Catalog ready: {} tracks in '{}'",
                 catalog.tracks.len(),
                 catalog.collection
             );
-            if let Some(mut old) = state.radio_source.take() {
+            if let Some(mut old) = state.radio.source.take() {
                 old.disconnect();
             }
-            state.radio_source = Some(source);
-            state.archive_catalog = Some(catalog);
+            state.radio.source = Some(source);
+            state.radio.archive_catalog = Some(catalog);
         },
         Ok(Err(e)) => {
-            state.pending_catalog_fetch = None;
+            state.radio.pending_catalog_fetch = None;
             log::error!("Catalog fetch failed: {e}");
-            state.radio_manager.set_error(&e);
+            state.radio.manager.set_error(&e);
         },
         Err(std::sync::mpsc::TryRecvError::Disconnected) => {
-            state.pending_catalog_fetch = None;
+            state.radio.pending_catalog_fetch = None;
             log::error!("Catalog fetch thread died unexpectedly");
-            state.radio_manager.set_error("catalog fetch failed");
+            state.radio.manager.set_error("catalog fetch failed");
         },
         Err(std::sync::mpsc::TryRecvError::Empty) => {},
     }
@@ -183,27 +199,27 @@ fn poll_catalog_fetch(state: &mut AppState) {
 
 /// Poll background track fetch (non-blocking).
 fn poll_track_fetch(state: &mut AppState) {
-    let Some(ref rx) = state.pending_source_fetch else {
+    let Some(ref rx) = state.radio.pending_source_fetch else {
         return;
     };
     match rx.try_recv() {
         Ok(Ok(TrackFetchResult { source })) => {
-            state.pending_source_fetch = None;
+            state.radio.pending_source_fetch = None;
             log::info!("Next track source ready");
-            if let Some(mut old) = state.radio_source.take() {
+            if let Some(mut old) = state.radio.source.take() {
                 old.disconnect();
             }
-            state.radio_source = Some(source);
+            state.radio.source = Some(source);
         },
         Ok(Err(e)) => {
-            state.pending_source_fetch = None;
+            state.radio.pending_source_fetch = None;
             log::error!("Track fetch failed: {e}");
-            state.radio_manager.set_error(&e);
+            state.radio.manager.set_error(&e);
         },
         Err(std::sync::mpsc::TryRecvError::Disconnected) => {
-            state.pending_source_fetch = None;
+            state.radio.pending_source_fetch = None;
             log::error!("Track fetch thread died unexpectedly");
-            state.radio_manager.set_error("track fetch failed");
+            state.radio.manager.set_error("track fetch failed");
         },
         Err(std::sync::mpsc::TryRecvError::Empty) => {},
     }
@@ -212,16 +228,17 @@ fn poll_track_fetch(state: &mut AppState) {
 /// Drive the radio state machine.
 fn tick_state_machine(state: &mut AppState) {
     let _ = state
-        .radio_manager
-        .tick(&mut state.radio_source, state.audio_backend.as_mut());
+        .radio
+        .manager
+        .tick(&mut state.radio.source, state.audio_backend.as_mut());
 }
 
 /// Auto-advance to next track for archive stations (non-blocking).
 fn auto_advance_track(state: &mut AppState) {
-    if state.radio_manager.needs_next_track()
+    if state.radio.manager.needs_next_track()
         && !state.offline
-        && state.pending_source_fetch.is_none()
-        && let Some(ref mut catalog) = state.archive_catalog
+        && state.radio.pending_source_fetch.is_none()
+        && let Some(ref mut catalog) = state.radio.archive_catalog
         && let Some(track) = catalog.next_track().cloned()
     {
         let tls = state.net.tls_provider.clone();
@@ -230,7 +247,7 @@ fn auto_advance_track(state: &mut AppState) {
             let result = super::connect_archive_track_sync(&tls, &track);
             let _ = tx.send(result);
         });
-        state.pending_source_fetch = Some(rx);
-        state.radio_manager.continue_playing();
+        state.radio.pending_source_fetch = Some(rx);
+        state.radio.manager.continue_playing();
     }
 }

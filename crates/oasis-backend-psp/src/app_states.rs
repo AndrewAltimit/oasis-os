@@ -287,8 +287,8 @@ impl SettingsState {
 // ---------------------------------------------------------------------------
 
 pub(crate) struct TvGuideState {
-    pub(crate) channels: Vec<oasis_core::apps::tv_guide::Channel>,
-    pub(crate) catalogs: Vec<Option<oasis_core::apps::tv_guide::ChannelCatalog>>,
+    pub(crate) channels: Vec<oasis_app_tv_guide::Channel>,
+    pub(crate) catalogs: Vec<Option<oasis_app_tv_guide::ChannelCatalog>>,
     pub(crate) selected: usize,
     pub(crate) scroll: usize,
     pub(crate) tuned: Option<usize>,

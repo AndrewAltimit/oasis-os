@@ -144,6 +144,68 @@ fn boot_status_bar_uses_the_frozen_clock() {
     );
 }
 
+/// A skin switch used to replace the status bar with a fresh one reading
+/// "00:00" until the next periodic info update (about a second later).
+/// The very first frame after the switch shows the real clock, and the
+/// selected top tab is kept.
+#[test]
+fn status_bar_keeps_the_clock_and_tab_across_a_skin_switch() {
+    let mut h = Harness::new("classic");
+    h.settle();
+    h.trigger(Trigger::Left);
+    h.settle();
+    let tab = h.state().ui.status_bar.active_tab;
+    h.vfs_mut()
+        .write(oasis_apps::settings::SKIN_CHANGE_REQUEST_PATH, b"modern")
+        .unwrap();
+    h.step(&[]);
+    assert_eq!(h.state().skin.manifest.name, "modern");
+    assert!(
+        h.sdi_text_contains("12:00"),
+        "first frame after the switch shows the frozen clock: {:?}",
+        h.sdi_texts()
+    );
+    // (The clock-widget plugin's "12:00:00" overlay is not the status bar.)
+    assert!(
+        !h.sdi_texts()
+            .iter()
+            .any(|t| t.contains("00:00") && t != "12:00:00"),
+        "{:?}",
+        h.sdi_texts()
+    );
+    assert_eq!(h.state().ui.status_bar.active_tab, tab);
+}
+
+/// `OASIS_APP=<title>` (and `Harness::open_app`) launches every registered
+/// app, including the ones without a dashboard tile (Network, Package
+/// Manager, System Monitor used to be "not found").
+#[test]
+fn every_registered_app_launches_by_title() {
+    let mut h = Harness::new("classic");
+    h.settle();
+    let titles: Vec<String> = h
+        .state()
+        .content
+        .apps
+        .titles()
+        .map(str::to_string)
+        .collect();
+    for title in &titles {
+        let title = title.as_str();
+        assert!(h.open_app(title), "{title}: not launchable by title");
+        h.settle();
+        assert_eq!(h.mode(), Mode::Desktop, "{title}");
+        let id = title.to_lowercase().replace(' ', "_");
+        assert!(
+            h.state().wm.get_window(&id).is_some(),
+            "{title}: no window {id:?} in {:?}",
+            h.windows()
+        );
+    }
+    // Lower-case titles resolve too.
+    assert!(h.open_app("system monitor"));
+}
+
 // ---------------------------------------------------------------------------
 // Dashboard -> app -> dashboard
 // ---------------------------------------------------------------------------
@@ -398,7 +460,7 @@ fn skin_switch_via_settings_ipc_round_trip() {
     h.settle();
     let classic_bg = h.state().bg_color;
     h.vfs_mut()
-        .write(oasis_app_settings::SKIN_CHANGE_REQUEST_PATH, b"vaporwave")
+        .write(oasis_apps::settings::SKIN_CHANGE_REQUEST_PATH, b"vaporwave")
         .unwrap();
     h.settle();
     assert_eq!(h.state().skin.manifest.name, "vaporwave");
@@ -416,7 +478,7 @@ fn skin_switch_via_settings_ipc_round_trip() {
 
     // And back.
     h.vfs_mut()
-        .write(oasis_app_settings::SKIN_CHANGE_REQUEST_PATH, b"classic")
+        .write(oasis_apps::settings::SKIN_CHANGE_REQUEST_PATH, b"classic")
         .unwrap();
     h.settle();
     assert_eq!(h.state().skin.manifest.name, "classic");
@@ -452,7 +514,7 @@ fn resolution_change_via_settings_ipc() {
     h.settle();
     h.vfs_mut()
         .write(
-            oasis_app_settings::RESOLUTION_CHANGE_REQUEST_PATH,
+            oasis_apps::settings::RESOLUTION_CHANGE_REQUEST_PATH,
             b"800x600",
         )
         .unwrap();
@@ -467,4 +529,139 @@ fn resolution_change_via_settings_ipc() {
     assert_eq!(h.size(), (800, 600), "framebuffer resized");
     h.render_now();
     assert_not_blank(&h, "resolution_800x600");
+}
+
+/// The dashboard's static vector background layer is baked into one
+/// offscreen render target and replayed with the premultiplied composite,
+/// the path the SDL shell takes. The harness used to fail that composite
+/// (the headless backend did not forward it and the UE5 framebuffer did
+/// not implement it), so every run drew the layer immediately instead.
+#[test]
+fn static_background_layer_is_baked_and_reused() {
+    let mut h = Harness::new("paper");
+    h.settle();
+    assert_eq!(h.state().mode, Mode::Dashboard);
+    assert!(
+        !h.state().active_theme.background_layers.is_empty(),
+        "paper has background layers"
+    );
+    h.render_now();
+    let baked = h.resource_counts().render_targets;
+    assert!(
+        baked >= 1,
+        "static layer baked {}",
+        dump(&h, "bake_missing")
+    );
+    for _ in 0..5 {
+        h.render_now();
+    }
+    assert_eq!(
+        h.resource_counts().render_targets,
+        baked,
+        "the bake is reused, not redone per frame"
+    );
+    assert_not_blank(&h, "baked_background");
+}
+
+/// Writes a shell profile and a startup script during plugin init, which
+/// runs before the shell's boot scripts (a stand-in for a host whose VFS
+/// persists them across boots).
+mod boot_script_plugin {
+    use oasis_core::error::Result;
+    use oasis_core::plugin::{Plugin, PluginHost, PluginInfo};
+
+    struct WritesBootScripts;
+
+    impl Plugin for WritesBootScripts {
+        fn info(&self) -> PluginInfo {
+            PluginInfo::new("boot-scripts", "1.0.0")
+        }
+        fn init(&mut self, host: &mut PluginHost<'_>) -> Result<()> {
+            host.vfs.write("/home/.profile", b"set GREETING=hello")?;
+            host.vfs
+                .write("/etc/startup.sh", b"echo $GREETING from startup.sh")?;
+            Ok(())
+        }
+        fn update(&mut self, _host: &mut PluginHost<'_>) -> Result<()> {
+            Ok(())
+        }
+        fn shutdown(&mut self, _host: &mut PluginHost<'_>) -> Result<()> {
+            Ok(())
+        }
+    }
+
+    pub fn make() -> Box<dyn Plugin> {
+        Box::new(WritesBootScripts)
+    }
+}
+
+/// `/home/.profile` and `/etc/startup.sh` run once at boot, in that order:
+/// the profile's variables are visible to the startup script and to the
+/// interactive terminal, and the script's output is in the scrollback.
+#[test]
+fn boot_runs_profile_then_startup_script() {
+    let mut opts = HarnessOptions::new("classic");
+    opts.plugins = vec![boot_script_plugin::make];
+    let mut h = Harness::with_options(opts).unwrap();
+    let lines = &h.state().terminal.output_lines;
+    assert!(
+        lines.iter().any(|l| l == "hello from startup.sh"),
+        "startup output missing: {lines:?}"
+    );
+    h.terminal("echo $GREETING");
+    assert_eq!(
+        h.state().terminal.output_lines.last().map(String::as_str),
+        Some("hello")
+    );
+}
+
+/// The default seeded profile is a no-op: it restates the shell defaults
+/// and prints nothing.
+#[test]
+fn default_profile_keeps_shell_identity() {
+    let mut h = Harness::new("classic");
+    assert!(h.vfs().exists("/home/.profile"));
+    h.terminal("echo $USER $SHELL");
+    assert_eq!(
+        h.state().terminal.output_lines.last().map(String::as_str),
+        Some("user oasis")
+    );
+}
+
+/// Snapshot of every SDI object's distortable properties, sorted by name.
+fn scene_props(h: &Harness) -> Vec<(String, i32, i32, u8, Option<String>)> {
+    let sdi = &h.shell.sdi;
+    let mut names: Vec<&str> = sdi.names().collect();
+    names.sort_unstable();
+    names
+        .into_iter()
+        .map(|n| {
+            let o = sdi.get(n).unwrap();
+            (n.to_string(), o.x, o.y, o.alpha, o.text.clone())
+        })
+        .collect()
+}
+
+/// The corrupted skin distorts what is drawn (jitter / garble / flicker
+/// vary frame to frame) but never the scene itself: every frame starts
+/// from the clean layout, so nothing drifts.
+#[test]
+fn corrupted_skin_glitches_frames_without_drifting_the_scene() {
+    let mut h = Harness::new("corrupted");
+    assert!(h.state().skin.corrupted_modifiers.is_some());
+    h.settle();
+    let clean = scene_props(&h);
+    let mut drawn = std::collections::HashSet::new();
+    for _ in 0..20 {
+        let out = h.step(&[]);
+        assert!(out.redraw, "the glitch keeps the corrupted skin animating");
+        let frame: Vec<_> = h
+            .frame_text_calls()
+            .iter()
+            .map(|t| (t.text.clone(), t.x, t.y))
+            .collect();
+        drawn.insert(format!("{frame:?}"));
+    }
+    assert!(drawn.len() > 1, "drawn output never varied");
+    assert_eq!(scene_props(&h), clean, "corruption leaked into the scene");
 }

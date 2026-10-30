@@ -1,0 +1,35 @@
+[terminal_bg]
+x = 0
+y = 0
+w = 480
+h = 272
+z = -1
+color = "#050005"
+
+[glitch_overlay]
+x = 0
+y = 0
+w = 480
+h = 272
+color = "#FF000008"
+alpha = 20
+
+[terminal_output]
+x = 4
+y = 4
+w = 472
+h = 252
+color = "#00000000"
+text = ""
+font_size = 8
+text_color = "#CC00CC"
+
+[terminal_prompt]
+x = 4
+y = 256
+w = 472
+h = 12
+color = "#00000000"
+text = "?> "
+font_size = 8
+text_color = "#FF00FF"

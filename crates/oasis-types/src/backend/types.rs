@@ -1,12 +1,7 @@
-//! Core types: Color, TextureId, DrawCommand, TextMetrics, GradientStyle.
+//! Core types: Color, TextureId, RenderTargetId, BlendMode, TextMetrics,
+//! GradientStyle and the helpers the trait defaults share.
 
 use crate::error::Result;
-
-/// Width of a single glyph in the bitmap font system.
-pub const BITMAP_GLYPH_WIDTH: u32 = 8;
-
-/// Height of a single glyph in the bitmap font system.
-pub const BITMAP_GLYPH_HEIGHT: u32 = 8;
 
 /// Measure text width using proportional bitmap font metrics.
 ///
@@ -243,168 +238,6 @@ impl BlendMode {
     }
 }
 
-/// A recorded draw command for batch submission.
-///
-/// Draw commands capture all parameters needed to replay a draw call. The
-/// batch renderer sorts commands to minimize GPU state changes before
-/// executing them.
-#[derive(Debug, Clone, PartialEq)]
-pub enum DrawCommand {
-    FillRect {
-        x: i32,
-        y: i32,
-        w: u32,
-        h: u32,
-        color: Color,
-    },
-    FillRoundedRect {
-        x: i32,
-        y: i32,
-        w: u32,
-        h: u32,
-        radius: u16,
-        color: Color,
-    },
-    StrokeRect {
-        x: i32,
-        y: i32,
-        w: u32,
-        h: u32,
-        stroke_width: u16,
-        color: Color,
-    },
-    DrawLine {
-        x1: i32,
-        y1: i32,
-        x2: i32,
-        y2: i32,
-        width: u16,
-        color: Color,
-    },
-    FillCircle {
-        cx: i32,
-        cy: i32,
-        radius: u16,
-        color: Color,
-    },
-    FillTriangle {
-        points: [(i32, i32); 3],
-        color: Color,
-    },
-    Gradient {
-        x: i32,
-        y: i32,
-        w: u32,
-        h: u32,
-        style: GradientStyle,
-    },
-    DrawText {
-        text: String,
-        x: i32,
-        y: i32,
-        font_size: u16,
-        color: Color,
-    },
-    Blit {
-        tex: TextureId,
-        x: i32,
-        y: i32,
-        w: u32,
-        h: u32,
-    },
-    BlitSub {
-        tex: TextureId,
-        src: (u32, u32, u32, u32),
-        dst: (i32, i32, u32, u32),
-    },
-    BlitTinted {
-        tex: TextureId,
-        x: i32,
-        y: i32,
-        w: u32,
-        h: u32,
-        tint: Color,
-    },
-    PushClip {
-        x: i32,
-        y: i32,
-        w: u32,
-        h: u32,
-    },
-    PopClip,
-    PushTranslate {
-        dx: i32,
-        dy: i32,
-    },
-    PopTranslate,
-    FillPolygon {
-        points: Vec<(i32, i32)>,
-        color: Color,
-    },
-    FillArc {
-        cx: i32,
-        cy: i32,
-        radius: u16,
-        start_angle: f32,
-        end_angle: f32,
-        color: Color,
-    },
-    StrokeArc {
-        cx: i32,
-        cy: i32,
-        radius: u16,
-        start_angle: f32,
-        end_angle: f32,
-        width: u16,
-        color: Color,
-    },
-    StrokeLineDashed {
-        x1: i32,
-        y1: i32,
-        x2: i32,
-        y2: i32,
-        width: u16,
-        color: Color,
-        dash: u16,
-        gap: u16,
-    },
-    /// Allocate an offscreen render target.
-    CreateRenderTarget {
-        id: RenderTargetId,
-        w: u32,
-        h: u32,
-    },
-    /// Push a render target onto the bind stack.
-    BindRenderTarget {
-        id: RenderTargetId,
-    },
-    /// Pop the most recent `BindRenderTarget`.
-    UnbindRenderTarget,
-    /// Composite a render target back into the currently bound surface.
-    CompositeRenderTarget {
-        id: RenderTargetId,
-        dst_x: i32,
-        dst_y: i32,
-        dst_w: u32,
-        dst_h: u32,
-        blend: BlendMode,
-        opacity: f32,
-    },
-    /// Composite a premultiplied-alpha render target back into the
-    /// currently bound surface with source-over blending.
-    CompositeRenderTargetPremultiplied {
-        id: RenderTargetId,
-        dst_x: i32,
-        dst_y: i32,
-        dst_w: u32,
-        dst_h: u32,
-    },
-    /// Release a render target.
-    DestroyRenderTarget {
-        id: RenderTargetId,
-    },
-}
-
 /// Measured dimensions and baseline metrics for a text string.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TextMetrics {
@@ -471,40 +304,26 @@ pub struct ArcParams {
     pub end_angle: f32,
 }
 
-/// Parameters for a dashed line.
-#[derive(Debug, Clone, Copy)]
-pub struct DashStyle {
-    /// Length of each dash in pixels.
-    pub dash: u16,
-    /// Length of each gap in pixels.
-    pub gap: u16,
-}
-
 // ---------------------------------------------------------------------------
 // Vector graphics helpers (used by default trait implementations)
 // ---------------------------------------------------------------------------
 
-/// Fast cosine approximation using a 4-term Taylor series.
+/// Cosine used by the default arc rasterizers.
 ///
-/// Accurate to ~0.001 for the range used in arc rendering.
-/// Avoids pulling in libm on `no_std` targets (PSP).
+/// This used to be a 4-term Taylor polynomial evaluated over `[-pi, pi]`,
+/// which is off by 0.21 at the ends of that range (`cos(pi)` came out as
+/// -1.21), so every default arc overshot its left, top and bottom by up to
+/// 21 %. Every target, PSP included, has `std` float math, so this is now
+/// plain [`f32::cos`]; the name is kept for the backends that call it.
+#[inline]
 pub fn cos_approx_f32(x: f32) -> f32 {
-    use core::f32::consts::PI;
-    // Reduce to [-PI, PI].
-    let mut x = x % (2.0 * PI);
-    if x > PI {
-        x -= 2.0 * PI;
-    } else if x < -PI {
-        x += 2.0 * PI;
-    }
-    let x2 = x * x;
-    // Taylor: 1 - x^2/2 + x^4/24 - x^6/720
-    1.0 - x2 * (0.5 - x2 * (1.0 / 24.0 - x2 * (1.0 / 720.0)))
+    x.cos()
 }
 
-/// Fast sine approximation: `sin(x) = cos(x - PI/2)`.
+/// Sine counterpart of [`cos_approx_f32`]: plain [`f32::sin`].
+#[inline]
 pub fn sin_approx_f32(x: f32) -> f32 {
-    cos_approx_f32(x - core::f32::consts::FRAC_PI_2)
+    x.sin()
 }
 
 /// Compute the number of line segments for an arc at the given radius
@@ -534,16 +353,16 @@ impl<T, E: std::fmt::Display> BackendErrExt<T> for std::result::Result<T, E> {
     }
 }
 
-/// Look up a value in an `Option`, returning `OasisError::Backend` if `None`.
-///
-/// Eliminates repeated `.ok_or_else(|| OasisError::Backend(format!(...).into()))`.
-pub fn backend_require<T>(opt: Option<T>, msg: &str) -> Result<T> {
-    opt.ok_or_else(|| crate::error::OasisError::Backend(msg.into()))
+/// Return a [`BackendError::TextureNotFound`](crate::error::BackendError)
+/// error for the given id.
+pub fn texture_not_found(id: u64) -> crate::error::OasisError {
+    crate::error::OasisError::Backend(crate::error::BackendError::TextureNotFound { id })
 }
 
-/// Return a "texture not found" backend error for the given id.
-pub fn texture_not_found(id: u64) -> crate::error::OasisError {
-    crate::error::OasisError::Backend(format!("texture not found: {id}").into())
+/// Return a [`BackendError::RenderTargetNotFound`](crate::error::BackendError)
+/// error for the given render-target id.
+pub fn render_target_not_found(id: RenderTargetId) -> crate::error::OasisError {
+    crate::error::OasisError::Backend(crate::error::BackendError::RenderTargetNotFound { id: id.0 })
 }
 
 // ---------------------------------------------------------------------------
@@ -818,6 +637,20 @@ mod tests {
         let result = c.apply_opacity(0.0);
         assert_eq!(result.a, 0);
         assert_eq!(result.r, 100);
+    }
+
+    #[test]
+    fn trig_helpers_match_std_within_1e3() {
+        use core::f32::consts::PI;
+        let mut x = -4.0 * PI;
+        while x <= 4.0 * PI {
+            assert!((cos_approx_f32(x) - x.cos()).abs() < 1e-3, "cos({x})");
+            assert!((sin_approx_f32(x) - x.sin()).abs() < 1e-3, "sin({x})");
+            x += 0.01;
+        }
+        // The old Taylor polynomial returned -1.2114 at both of these.
+        assert!((cos_approx_f32(PI) + 1.0).abs() < 1e-6);
+        assert!((sin_approx_f32(-PI / 2.0) + 1.0).abs() < 1e-6);
     }
 
     #[test]

@@ -1,8 +1,6 @@
 # viewport 480x272
 fill_rect 0, 0, 480, 567, Color { r: 246, g: 246, b: 239, a: 255 }
 fill_rect 0, 0, 480, 23, Color { r: 255, g: 102, b: 0, a: 255 }
-fill_rect 4, 2, 0, 19, Color { r: 255, g: 102, b: 0, a: 255 }
-fill_rect 4, 2, 0, 19, Color { r: 255, g: 102, b: 0, a: 255 }
 draw_text " ", 4, 2, 13, Color { r: 0, g: 0, b: 0, a: 255 }
 draw_text "Hacker ", 10, 2, 13, Color { r: 0, g: 0, b: 0, a: 255 }
 draw_text "Hacker ", 11, 2, 13, Color { r: 0, g: 0, b: 0, a: 255 }
@@ -30,31 +28,17 @@ draw_text " | ", 328, 2, 13, Color { r: 0, g: 0, b: 0, a: 255 }
 draw_text "submit", 346, 2, 13, Color { r: 0, g: 0, b: 0, a: 255 }
 draw_text "submit", 347, 2, 13, Color { r: 0, g: 0, b: 0, a: 255 }
 draw_text " ", 382, 2, 13, Color { r: 0, g: 0, b: 0, a: 255 }
-fill_rect 388, 2, 0, 19, Color { r: 255, g: 102, b: 0, a: 255 }
-fill_rect 388, 2, 0, 19, Color { r: 255, g: 102, b: 0, a: 255 }
-fill_rect 4, 28, 39, 0, Color { r: 204, g: 204, b: 204, a: 255 }
-fill_rect 43, 28, 0, 46, Color { r: 204, g: 204, b: 204, a: 255 }
-fill_rect 4, 74, 39, 0, Color { r: 204, g: 204, b: 204, a: 255 }
-fill_rect 4, 28, 0, 46, Color { r: 204, g: 204, b: 204, a: 255 }
 fill_rect 4, 27, 40, 1, Color { r: 204, g: 204, b: 204, a: 255 }
 fill_rect 43, 27, 1, 25, Color { r: 204, g: 204, b: 204, a: 255 }
 fill_rect 4, 51, 40, 1, Color { r: 204, g: 204, b: 204, a: 255 }
 fill_rect 4, 27, 1, 25, Color { r: 204, g: 204, b: 204, a: 255 }
 draw_text "1.", 27, 30, 13, Color { r: 130, g: 130, b: 130, a: 255 }
-fill_rect 44, 28, 13, 0, Color { r: 204, g: 204, b: 204, a: 255 }
-fill_rect 57, 28, 0, 46, Color { r: 204, g: 204, b: 204, a: 255 }
-fill_rect 44, 74, 13, 0, Color { r: 204, g: 204, b: 204, a: 255 }
-fill_rect 44, 28, 0, 46, Color { r: 204, g: 204, b: 204, a: 255 }
 fill_rect 44, 27, 24, 1, Color { r: 204, g: 204, b: 204, a: 255 }
 fill_rect 67, 27, 1, 25, Color { r: 204, g: 204, b: 204, a: 255 }
 fill_rect 44, 51, 24, 1, Color { r: 204, g: 204, b: 204, a: 255 }
 fill_rect 44, 27, 1, 25, Color { r: 204, g: 204, b: 204, a: 255 }
 draw_text "^", 49, 30, 13, Color { r: 0, g: 102, b: 204, a: 255 }
 fill_rect 49, 41, 13, 1, Color { r: 0, g: 102, b: 204, a: 255 }
-fill_rect 58, 28, 417, 0, Color { r: 204, g: 204, b: 204, a: 255 }
-fill_rect 475, 28, 0, 46, Color { r: 204, g: 204, b: 204, a: 255 }
-fill_rect 58, 74, 417, 0, Color { r: 204, g: 204, b: 204, a: 255 }
-fill_rect 58, 28, 0, 46, Color { r: 204, g: 204, b: 204, a: 255 }
 fill_rect 58, 27, 408, 1, Color { r: 204, g: 204, b: 204, a: 255 }
 fill_rect 465, 27, 1, 41, Color { r: 204, g: 204, b: 204, a: 255 }
 fill_rect 58, 67, 408, 1, Color { r: 204, g: 204, b: 204, a: 255 }
@@ -69,10 +53,6 @@ draw_text "and ", 309, 30, 13, Color { r: 0, g: 0, b: 0, a: 255 }
 draw_text "variadic ", 333, 30, 13, Color { r: 0, g: 0, b: 0, a: 255 }
 draw_text "generics", 387, 30, 13, Color { r: 0, g: 0, b: 0, a: 255 }
 draw_text "(rust-lang.org)", 63, 50, 10, Color { r: 130, g: 130, b: 130, a: 255 }
-fill_rect 4, 76, 471, 0, Color { r: 204, g: 204, b: 204, a: 255 }
-fill_rect 475, 76, 0, 24, Color { r: 204, g: 204, b: 204, a: 255 }
-fill_rect 4, 100, 471, 0, Color { r: 204, g: 204, b: 204, a: 255 }
-fill_rect 4, 76, 0, 24, Color { r: 204, g: 204, b: 204, a: 255 }
 fill_rect 4, 75, 3046, 1, Color { r: 204, g: 204, b: 204, a: 255 }
 fill_rect 3049, 75, 1, 19, Color { r: 204, g: 204, b: 204, a: 255 }
 fill_rect 4, 93, 3046, 1, Color { r: 204, g: 204, b: 204, a: 255 }
@@ -90,29 +70,17 @@ draw_text "hide", 291, 78, 9, Color { r: 130, g: 130, b: 130, a: 255 }
 draw_text " | ", 315, 78, 9, Color { r: 130, g: 130, b: 130, a: 255 }
 draw_text "187 ", 333, 78, 9, Color { r: 130, g: 130, b: 130, a: 255 }
 draw_text "comments", 357, 78, 9, Color { r: 130, g: 130, b: 130, a: 255 }
-fill_rect 4, 102, 39, 0, Color { r: 204, g: 204, b: 204, a: 255 }
-fill_rect 43, 102, 0, 50, Color { r: 204, g: 204, b: 204, a: 255 }
-fill_rect 4, 152, 39, 0, Color { r: 204, g: 204, b: 204, a: 255 }
-fill_rect 4, 102, 0, 50, Color { r: 204, g: 204, b: 204, a: 255 }
 fill_rect 4, 101, 40, 1, Color { r: 204, g: 204, b: 204, a: 255 }
 fill_rect 43, 101, 1, 25, Color { r: 204, g: 204, b: 204, a: 255 }
 fill_rect 4, 125, 40, 1, Color { r: 204, g: 204, b: 204, a: 255 }
 fill_rect 4, 101, 1, 25, Color { r: 204, g: 204, b: 204, a: 255 }
 draw_text "2.", 27, 104, 13, Color { r: 130, g: 130, b: 130, a: 255 }
-fill_rect 44, 102, 13, 0, Color { r: 204, g: 204, b: 204, a: 255 }
-fill_rect 57, 102, 0, 50, Color { r: 204, g: 204, b: 204, a: 255 }
-fill_rect 44, 152, 13, 0, Color { r: 204, g: 204, b: 204, a: 255 }
-fill_rect 44, 102, 0, 50, Color { r: 204, g: 204, b: 204, a: 255 }
 fill_rect 44, 101, 24, 1, Color { r: 204, g: 204, b: 204, a: 255 }
 fill_rect 67, 101, 1, 25, Color { r: 204, g: 204, b: 204, a: 255 }
 fill_rect 44, 125, 24, 1, Color { r: 204, g: 204, b: 204, a: 255 }
 fill_rect 44, 101, 1, 25, Color { r: 204, g: 204, b: 204, a: 255 }
 draw_text "^", 49, 104, 13, Color { r: 0, g: 102, b: 204, a: 255 }
 fill_rect 49, 115, 13, 1, Color { r: 0, g: 102, b: 204, a: 255 }
-fill_rect 58, 102, 417, 0, Color { r: 204, g: 204, b: 204, a: 255 }
-fill_rect 475, 102, 0, 50, Color { r: 204, g: 204, b: 204, a: 255 }
-fill_rect 58, 152, 417, 0, Color { r: 204, g: 204, b: 204, a: 255 }
-fill_rect 58, 102, 0, 50, Color { r: 204, g: 204, b: 204, a: 255 }
 fill_rect 58, 101, 408, 1, Color { r: 204, g: 204, b: 204, a: 255 }
 fill_rect 465, 101, 1, 45, Color { r: 204, g: 204, b: 204, a: 255 }
 fill_rect 58, 145, 408, 1, Color { r: 204, g: 204, b: 204, a: 255 }
@@ -132,10 +100,6 @@ draw_text "PSP", 417, 104, 13, Color { r: 0, g: 0, b: 0, a: 255 }
 draw_text "homebrew", 63, 124, 13, Color { r: 0, g: 0, b: 0, a: 255 }
 draw_text " ", 111, 124, 13, Color { r: 0, g: 0, b: 0, a: 255 }
 draw_text "(github.com/altimit)", 117, 124, 10, Color { r: 130, g: 130, b: 130, a: 255 }
-fill_rect 4, 154, 471, 0, Color { r: 204, g: 204, b: 204, a: 255 }
-fill_rect 475, 154, 0, 24, Color { r: 204, g: 204, b: 204, a: 255 }
-fill_rect 4, 178, 471, 0, Color { r: 204, g: 204, b: 204, a: 255 }
-fill_rect 4, 154, 0, 24, Color { r: 204, g: 204, b: 204, a: 255 }
 fill_rect 4, 153, 3046, 1, Color { r: 204, g: 204, b: 204, a: 255 }
 fill_rect 3049, 153, 1, 19, Color { r: 204, g: 204, b: 204, a: 255 }
 fill_rect 4, 171, 3046, 1, Color { r: 204, g: 204, b: 204, a: 255 }
@@ -153,29 +117,17 @@ draw_text "hide", 261, 156, 9, Color { r: 130, g: 130, b: 130, a: 255 }
 draw_text " | ", 285, 156, 9, Color { r: 130, g: 130, b: 130, a: 255 }
 draw_text "94 ", 303, 156, 9, Color { r: 130, g: 130, b: 130, a: 255 }
 draw_text "comments", 321, 156, 9, Color { r: 130, g: 130, b: 130, a: 255 }
-fill_rect 4, 180, 39, 0, Color { r: 204, g: 204, b: 204, a: 255 }
-fill_rect 43, 180, 0, 46, Color { r: 204, g: 204, b: 204, a: 255 }
-fill_rect 4, 226, 39, 0, Color { r: 204, g: 204, b: 204, a: 255 }
-fill_rect 4, 180, 0, 46, Color { r: 204, g: 204, b: 204, a: 255 }
 fill_rect 4, 179, 40, 1, Color { r: 204, g: 204, b: 204, a: 255 }
 fill_rect 43, 179, 1, 25, Color { r: 204, g: 204, b: 204, a: 255 }
 fill_rect 4, 203, 40, 1, Color { r: 204, g: 204, b: 204, a: 255 }
 fill_rect 4, 179, 1, 25, Color { r: 204, g: 204, b: 204, a: 255 }
 draw_text "3.", 27, 182, 13, Color { r: 130, g: 130, b: 130, a: 255 }
-fill_rect 44, 180, 13, 0, Color { r: 204, g: 204, b: 204, a: 255 }
-fill_rect 57, 180, 0, 46, Color { r: 204, g: 204, b: 204, a: 255 }
-fill_rect 44, 226, 13, 0, Color { r: 204, g: 204, b: 204, a: 255 }
-fill_rect 44, 180, 0, 46, Color { r: 204, g: 204, b: 204, a: 255 }
 fill_rect 44, 179, 24, 1, Color { r: 204, g: 204, b: 204, a: 255 }
 fill_rect 67, 179, 1, 25, Color { r: 204, g: 204, b: 204, a: 255 }
 fill_rect 44, 203, 24, 1, Color { r: 204, g: 204, b: 204, a: 255 }
 fill_rect 44, 179, 1, 25, Color { r: 204, g: 204, b: 204, a: 255 }
 draw_text "^", 49, 182, 13, Color { r: 0, g: 102, b: 204, a: 255 }
 fill_rect 49, 193, 13, 1, Color { r: 0, g: 102, b: 204, a: 255 }
-fill_rect 58, 180, 417, 0, Color { r: 204, g: 204, b: 204, a: 255 }
-fill_rect 475, 180, 0, 46, Color { r: 204, g: 204, b: 204, a: 255 }
-fill_rect 58, 226, 417, 0, Color { r: 204, g: 204, b: 204, a: 255 }
-fill_rect 58, 180, 0, 46, Color { r: 204, g: 204, b: 204, a: 255 }
 fill_rect 58, 179, 408, 1, Color { r: 204, g: 204, b: 204, a: 255 }
 fill_rect 465, 179, 1, 41, Color { r: 204, g: 204, b: 204, a: 255 }
 fill_rect 58, 219, 408, 1, Color { r: 204, g: 204, b: 204, a: 255 }
@@ -190,10 +142,6 @@ draw_text "10M ", 291, 182, 13, Color { r: 0, g: 0, b: 0, a: 255 }
 draw_text "token ", 315, 182, 13, Color { r: 0, g: 0, b: 0, a: 255 }
 draw_text "context", 351, 182, 13, Color { r: 0, g: 0, b: 0, a: 255 }
 draw_text "(anthropic.com)", 63, 202, 10, Color { r: 130, g: 130, b: 130, a: 255 }
-fill_rect 4, 228, 471, 0, Color { r: 204, g: 204, b: 204, a: 255 }
-fill_rect 475, 228, 0, 24, Color { r: 204, g: 204, b: 204, a: 255 }
-fill_rect 4, 252, 471, 0, Color { r: 204, g: 204, b: 204, a: 255 }
-fill_rect 4, 228, 0, 24, Color { r: 204, g: 204, b: 204, a: 255 }
 fill_rect 4, 227, 3046, 1, Color { r: 204, g: 204, b: 204, a: 255 }
 fill_rect 3049, 227, 1, 19, Color { r: 204, g: 204, b: 204, a: 255 }
 fill_rect 4, 245, 3046, 1, Color { r: 204, g: 204, b: 204, a: 255 }
@@ -211,29 +159,17 @@ draw_text "hide", 237, 230, 9, Color { r: 130, g: 130, b: 130, a: 255 }
 draw_text " | ", 261, 230, 9, Color { r: 130, g: 130, b: 130, a: 255 }
 draw_text "302 ", 279, 230, 9, Color { r: 130, g: 130, b: 130, a: 255 }
 draw_text "comments", 303, 230, 9, Color { r: 130, g: 130, b: 130, a: 255 }
-fill_rect 4, 254, 39, 0, Color { r: 204, g: 204, b: 204, a: 255 }
-fill_rect 43, 254, 0, 46, Color { r: 204, g: 204, b: 204, a: 255 }
-fill_rect 4, 300, 39, 0, Color { r: 204, g: 204, b: 204, a: 255 }
-fill_rect 4, 254, 0, 46, Color { r: 204, g: 204, b: 204, a: 255 }
 fill_rect 4, 253, 40, 1, Color { r: 204, g: 204, b: 204, a: 255 }
 fill_rect 43, 253, 1, 25, Color { r: 204, g: 204, b: 204, a: 255 }
 fill_rect 4, 277, 40, 1, Color { r: 204, g: 204, b: 204, a: 255 }
 fill_rect 4, 253, 1, 25, Color { r: 204, g: 204, b: 204, a: 255 }
 draw_text "4.", 27, 256, 13, Color { r: 130, g: 130, b: 130, a: 255 }
-fill_rect 44, 254, 13, 0, Color { r: 204, g: 204, b: 204, a: 255 }
-fill_rect 57, 254, 0, 46, Color { r: 204, g: 204, b: 204, a: 255 }
-fill_rect 44, 300, 13, 0, Color { r: 204, g: 204, b: 204, a: 255 }
-fill_rect 44, 254, 0, 46, Color { r: 204, g: 204, b: 204, a: 255 }
 fill_rect 44, 253, 24, 1, Color { r: 204, g: 204, b: 204, a: 255 }
 fill_rect 67, 253, 1, 25, Color { r: 204, g: 204, b: 204, a: 255 }
 fill_rect 44, 277, 24, 1, Color { r: 204, g: 204, b: 204, a: 255 }
 fill_rect 44, 253, 1, 25, Color { r: 204, g: 204, b: 204, a: 255 }
 draw_text "^", 49, 256, 13, Color { r: 0, g: 102, b: 204, a: 255 }
 fill_rect 49, 267, 13, 1, Color { r: 0, g: 102, b: 204, a: 255 }
-fill_rect 58, 254, 417, 0, Color { r: 204, g: 204, b: 204, a: 255 }
-fill_rect 475, 254, 0, 46, Color { r: 204, g: 204, b: 204, a: 255 }
-fill_rect 58, 300, 417, 0, Color { r: 204, g: 204, b: 204, a: 255 }
-fill_rect 58, 254, 0, 46, Color { r: 204, g: 204, b: 204, a: 255 }
 fill_rect 58, 253, 408, 1, Color { r: 204, g: 204, b: 204, a: 255 }
 fill_rect 465, 253, 1, 41, Color { r: 204, g: 204, b: 204, a: 255 }
 fill_rect 58, 293, 408, 1, Color { r: 204, g: 204, b: 204, a: 255 }
@@ -244,4 +180,4 @@ draw_text "Component ", 159, 256, 13, Color { r: 0, g: 0, b: 0, a: 255 }
 draw_text "Model ", 219, 256, 13, Color { r: 0, g: 0, b: 0, a: 255 }
 draw_text "finally ", 255, 256, 13, Color { r: 0, g: 0, b: 0, a: 255 }
 draw_text "stabilizes", 303, 256, 13, Color { r: 0, g: 0, b: 0, a: 255 }
-# totals fill_rect=130 draw_text=115 other=0
+# totals fill_rect=66 draw_text=115 other=0

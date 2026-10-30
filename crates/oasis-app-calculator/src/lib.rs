@@ -11,8 +11,6 @@
 //! cursor and Confirm presses the key under it. History persists to
 //! [`history::HISTORY_PATH`].
 
-use std::cell::Cell;
-
 use oasis_app_core::render::{hide_app_sdi, render_app_chrome, render_content_sdi};
 use oasis_app_core::{App, AppAction, ContentState};
 use oasis_sdi::SdiRegistry;
@@ -359,8 +357,8 @@ pub struct CalcHistoryEntry {
 // CalculatorApp
 // ---------------------------------------------------------------
 
-/// Frames a pressed key stays drawn in its pressed state.
-const FLASH_FRAMES: u8 = 6;
+/// How long (ms of wall time) a pressed key stays drawn pressed.
+const FLASH_MS: u32 = 100;
 
 /// Calculator application state.
 #[derive(Debug)]
@@ -384,8 +382,9 @@ pub struct CalculatorApp {
     cursor_visible: bool,
     /// History entry currently recalled with Up/Down (index into `history`).
     recall_index: Option<usize>,
-    /// Key drawn pressed, with the frames left before it pops back up.
-    flash: Cell<Option<(usize, u8)>>,
+    /// Key drawn pressed, with the ms left before it pops back up (aged in
+    /// `tick`, so it pops back up even while the host elides idle frames).
+    flash: Option<(usize, u32)>,
     /// Whether history has been loaded from the VFS yet.
     history_loaded: bool,
     /// Whether history changed since it was last written to the VFS.
@@ -396,7 +395,8 @@ impl CalculatorApp {
     /// Create a new calculator app at the given VFS path.
     ///
     /// Persisted history is loaded from [`history::HISTORY_PATH`] on the
-    /// first [`App::refresh`] / [`App::apply_vfs_ops`] call.
+    /// first input ([`App::handle_input`] / [`App::handle_key`] /
+    /// [`App::handle_click`]) or [`App::apply_vfs_ops`] call.
     pub fn new(path: &str) -> Self {
         let content = ContentState::new("Calculator", path);
         let mut app = Self {
@@ -410,7 +410,7 @@ impl CalculatorApp {
             cursor: keypad::index_of(CalcKey::Digit('5')).unwrap_or(0),
             cursor_visible: false,
             recall_index: None,
-            flash: Cell::new(None),
+            flash: None,
             history_loaded: false,
             history_dirty: false,
         };
@@ -690,7 +690,7 @@ impl CalculatorApp {
     /// Press a keypad key (click, d-pad Confirm or a typed character).
     pub fn press_key(&mut self, key: CalcKey) {
         if let Some(i) = keypad::index_of(key) {
-            self.flash.set(Some((i, FLASH_FRAMES)));
+            self.flash = Some((i, FLASH_MS));
         }
         match key {
             CalcKey::Digit(d) => self.push_digit(d),
@@ -924,7 +924,22 @@ impl App for CalculatorApp {
         self.press_key(CalcKey::Backspace);
     }
 
-    fn handle_click(&mut self, lx: i32, ly: i32, cw: u32, ch: u32, _fullscreen: bool) -> AppAction {
+    /// Up / Down move keypad focus (or recall history), which the wheel
+    /// shouldn't do: the calculator has nothing to scroll.
+    fn handle_scroll(&mut self, _delta: i32, _vfs: &dyn Vfs) -> bool {
+        false
+    }
+
+    fn handle_click(
+        &mut self,
+        lx: i32,
+        ly: i32,
+        cw: u32,
+        ch: u32,
+        _fullscreen: bool,
+        vfs: &dyn Vfs,
+    ) -> AppAction {
+        self.ensure_history_loaded(vfs);
         let l = CalcLayout::compute(0, 0, cw, ch);
         if let Some(i) = l.key_at(lx, ly) {
             self.cursor = i;
@@ -943,8 +958,13 @@ impl App for CalculatorApp {
         AppAction::None
     }
 
-    fn refresh(&mut self, vfs: &dyn Vfs) {
-        self.ensure_history_loaded(vfs);
+    fn tick(&mut self, dt_ms: u32, _vfs: &dyn Vfs) -> bool {
+        // Age the pressed-key flash; redraw when it pops back up.
+        let Some((key, left)) = self.flash else {
+            return false;
+        };
+        self.flash = (left > dt_ms).then(|| (key, left - dt_ms));
+        self.flash.is_none()
     }
 
     fn apply_vfs_ops(&mut self, vfs: &mut dyn Vfs) -> bool {
@@ -985,14 +1005,6 @@ impl App for CalculatorApp {
 
     fn lines(&self) -> &[String] {
         &self.content.lines
-    }
-
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-
-    fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
-        self
     }
 }
 
@@ -1486,7 +1498,7 @@ mod tests {
 
     #[test]
     fn downcast_works() {
-        let app = CalculatorApp::new("/apps/calc");
+        let app: Box<dyn App> = Box::new(CalculatorApp::new("/apps/calc"));
         let any = app.as_any();
         assert!(any.downcast_ref::<CalculatorApp>().is_some());
     }
@@ -1683,7 +1695,14 @@ mod tests {
     fn click_key(app: &mut CalculatorApp, key: CalcKey) {
         let l = CalcLayout::compute(0, 0, CW, CH);
         let r = l.key_rect(keypad::index_of(key).expect("key on keypad"));
-        app.handle_click(r.x + r.w as i32 / 2, r.y + r.h as i32 / 2, CW, CH, false);
+        app.handle_click(
+            r.x + r.w as i32 / 2,
+            r.y + r.h as i32 / 2,
+            CW,
+            CH,
+            false,
+            &make_vfs(),
+        );
     }
 
     #[test]
@@ -1705,16 +1724,16 @@ mod tests {
         assert_eq!(app.last_result, Some(27.0));
         // The clicked key flashes pressed.
         let eq = keypad::index_of(CalcKey::Equals).expect("=");
-        assert_eq!(app.flash.get().map(|(k, _)| k), Some(eq));
+        assert_eq!(app.flash.map(|(k, _)| k), Some(eq));
     }
 
     #[test]
     fn click_outside_keys_does_nothing() {
         let mut app = CalculatorApp::new("/apps/calc");
         let l = CalcLayout::compute(0, 0, CW, CH);
-        app.handle_click(l.display.x + 5, l.display.y + 5, CW, CH, false);
+        app.handle_click(l.display.x + 5, l.display.y + 5, CW, CH, false, &make_vfs());
         assert!(app.input_buffer.is_empty());
-        assert!(app.flash.get().is_none());
+        assert!(app.flash.is_none());
     }
 
     #[test]
@@ -1727,7 +1746,7 @@ mod tests {
         let pane = l.history.expect("wide layout has history");
         // Rows are newest first: the second row is the older entry.
         let y = pane.y + (2 * keypad::HISTORY_ROW_H) as i32 + 2;
-        app.handle_click(pane.x + 4, y, w, h, false);
+        app.handle_click(pane.x + 4, y, w, h, false, &make_vfs());
         assert_eq!(app.input_buffer, "1+1");
     }
 
@@ -1756,17 +1775,25 @@ mod tests {
     }
 
     #[test]
-    fn flash_expires_after_a_few_frames() {
+    fn flash_expires_after_a_short_time() {
+        let vfs = make_vfs();
         let mut app = CalculatorApp::new("/apps/calc");
         app.handle_text_input('4');
-        assert!(app.flash.get().is_some());
+        assert!(app.flash.is_some());
+        // Drawing doesn't age it (idle frames may never be drawn)...
         let mut backend = oasis_test_backend::RecordingBackend::new(300, 220);
         let at = ActiveTheme::default();
-        for _ in 0..FLASH_FRAMES {
+        for _ in 0..10 {
             app.draw_windowed(0, 0, 300, 220, &mut backend, &at)
                 .expect("draw");
         }
-        assert!(app.flash.get().is_none());
+        assert!(app.flash.is_some());
+        // ...wall time does, and the expiry asks for the redraw.
+        assert!(!app.tick(FLASH_MS / 2, &vfs));
+        assert!(app.flash.is_some());
+        assert!(app.tick(FLASH_MS / 2, &vfs), "popping back up redraws");
+        assert!(app.flash.is_none());
+        assert!(!app.tick(16, &vfs), "idle afterwards");
     }
 
     #[test]
@@ -1792,7 +1819,7 @@ mod tests {
         assert!(vfs.exists(history::HISTORY_PATH));
 
         let mut reopened = CalculatorApp::new("/apps/calc");
-        reopened.refresh(&vfs);
+        reopened.apply_vfs_ops(&mut vfs);
         assert_eq!(reopened.history.len(), 2);
         assert_eq!(reopened.history[0].expression, "6*7");
         assert_eq!(reopened.history[1].result, 0.25);

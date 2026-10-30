@@ -3,6 +3,8 @@
 //! Each application (File Manager, Settings, Music Player, etc.) implements
 //! this trait. `AppRunner` delegates to the active `App` implementation.
 
+use std::any::Any;
+
 use oasis_sdi::SdiRegistry;
 use oasis_skin::ActiveTheme;
 use oasis_types::backend::SdiBackend;
@@ -12,12 +14,83 @@ use oasis_vfs::Vfs;
 use crate::AppAction;
 use crate::layout::AppLayout;
 
+/// Downcasting support for [`App`] trait objects.
+///
+/// Implemented automatically for every [`App`] (blanket impl), so apps never
+/// write `as_any` themselves. The blanket impl is deliberately restricted to
+/// `T: App`: a `Box<dyn App>` is itself `Any`, and an unrestricted impl
+/// would let `boxed.as_any()` resolve to the *box*, so every downcast would
+/// silently fail.
+pub trait AsAny: Any {
+    /// Downcast to `&dyn Any` for app-specific access.
+    fn as_any(&self) -> &dyn Any;
+    /// Downcast to `&mut dyn Any` for mutable app-specific access.
+    fn as_any_mut(&mut self) -> &mut dyn Any;
+}
+
+impl<T: App> AsAny for T {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+    fn as_any_mut(&mut self) -> &mut dyn Any {
+        self
+    }
+}
+
+/// A VFS IPC request an app asks its host to perform: write `data` to
+/// `path` (hosts act directly on paths they recognise, such as a TV Guide
+/// `tune_url` or a Video Embed search).
+///
+/// Apps queue requests from their input / tick handlers and hand them over
+/// in [`App::drain_requests`]; hosts drain every open app once per frame.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AppRequest {
+    /// VFS path the request targets (e.g. `/var/radio/request`).
+    pub path: String,
+    /// Request payload.
+    pub data: String,
+}
+
+impl AppRequest {
+    /// A request to write `data` to `path`.
+    pub fn new(path: impl Into<String>, data: impl Into<String>) -> Self {
+        Self {
+            path: path.into(),
+            data: data.into(),
+        }
+    }
+}
+
+/// Upper bound on the rows one wheel event moves in the default
+/// [`App::handle_scroll`] (a flung trackpad can report large deltas).
+pub const MAX_WHEEL_STEPS: u32 = 16;
+
 /// Trait for applications that can be launched from the dashboard.
 ///
 /// Each app owns its state and implements input handling, rendering (both
 /// SDI fullscreen and windowed), and VFS IPC. Apps are created via
 /// `AppRunner::launch()` and dispatched through the runner.
-pub trait App: std::fmt::Debug + Send {
+///
+/// # Input routing
+///
+/// One physical input reaches an app through these hooks, in this order:
+///
+/// | Input | Hooks |
+/// |---|---|
+/// | Keyboard key | [`Self::handle_key`]; if that returns `None`, the key's gamepad twin ([`Self::handle_input`] / [`Self::handle_backspace`]), skipped for typing keys while [`Self::accepts_text`]; then [`Self::handle_text_input`] for printable keys |
+/// | Gamepad button (PSP, OSK) | [`Self::handle_input`] |
+/// | Typed text (IME, OSK) | [`Self::handle_text_input`] / [`Self::handle_backspace`] |
+/// | Pointer click | [`Self::layout`], then [`Self::handle_click`] |
+/// | Mouse wheel | [`Self::handle_scroll`] |
+///
+/// # Per-frame order
+///
+/// Every frame, for every open app: [`Self::drain_requests`],
+/// [`Self::apply_vfs_ops`], [`Self::tick`], [`Self::take_close_request`].
+/// Then, for each window that is drawn: [`Self::layout`] and
+/// [`Self::draw_windowed`]. A closed app gets [`Self::release_resources`]
+/// once before it is dropped.
+pub trait App: AsAny + std::fmt::Debug + Send {
     /// Display title shown in the title bar.
     fn title(&self) -> &str;
 
@@ -66,9 +139,39 @@ pub trait App: std::fmt::Debug + Send {
         false
     }
 
+    /// Mouse wheel over the app's window: `delta` notches, negative =
+    /// toward the top (earlier content), positive = toward the bottom.
+    /// Return `true` when anything the app draws changed.
+    ///
+    /// The default moves the selection one row per notch by repeating
+    /// [`Button::Up`] / [`Button::Down`] through [`Self::handle_input`]
+    /// (at most [`MAX_WHEEL_STEPS`] per event), which suits list-style
+    /// apps. Apps where Up / Down means something else (steering a game,
+    /// moving a canvas cursor) override this.
+    fn handle_scroll(&mut self, delta: i32, vfs: &dyn Vfs) -> bool {
+        let button = if delta < 0 { Button::Up } else { Button::Down };
+        let steps = delta.unsigned_abs().min(MAX_WHEEL_STEPS);
+        for _ in 0..steps {
+            self.handle_input(&button, vfs);
+        }
+        steps > 0
+    }
+
+    /// The app's content area is `cw` x `ch` under theme `at`.
+    ///
+    /// Hosts call this right before every [`Self::draw_windowed`] and
+    /// [`Self::handle_click`], with the same size, so apps can record
+    /// layout metrics (visible row counts, hit-test geometry) in plain
+    /// fields instead of smuggling them out of the `&self` draw call
+    /// through `Cell`s. Hooks that run without a preceding `layout` (keys,
+    /// buttons, wheel) see the metrics of the last drawn frame. Default is
+    /// a no-op.
+    fn layout(&mut self, _cw: u32, _ch: u32, _at: &ActiveTheme) {}
+
     /// Handle a click/tap in the app content area.
     ///
-    /// `lx`/`ly` are local coordinates within the content area.
+    /// `lx`/`ly` are local coordinates within the content area, which is
+    /// `cw` x `ch`; [`Self::layout`] has just been called with that size.
     /// Returns `AppAction::None` by default.
     fn handle_click(
         &mut self,
@@ -77,14 +180,17 @@ pub trait App: std::fmt::Debug + Send {
         _cw: u32,
         _ch: u32,
         _fullscreen: bool,
+        _vfs: &dyn Vfs,
     ) -> AppAction {
         AppAction::None
     }
 
-    /// Render to SDI registry (fullscreen mode).
+    /// Render to SDI registry (the WASM host's fullscreen mode; the
+    /// desktop shell always draws windows).
     fn update_sdi(&mut self, sdi: &mut SdiRegistry, at: &ActiveTheme);
 
-    /// Render directly to backend (windowed mode).
+    /// Render directly to backend (windowed mode). [`Self::layout`] has
+    /// just been called with `cw` x `ch`.
     fn draw_windowed(
         &self,
         cx: i32,
@@ -104,34 +210,27 @@ pub trait App: std::fmt::Debug + Send {
     /// where a closing app still has backend access. Default: no-op.
     fn release_resources(&mut self, _backend: &mut dyn SdiBackend) {}
 
-    /// Take any pending VFS IPC request (path, data).
-    fn take_pending_request(&mut self) -> Option<(String, String)> {
-        None
-    }
-
-    /// Peek at pending VFS IPC request without consuming it.
-    fn peek_pending_request(&self) -> Option<&(String, String)> {
-        None
-    }
-
-    /// Refresh display from VFS state (called each frame when visible).
+    /// Move every queued VFS IPC request into `out`, oldest first.
     ///
-    /// Default implementation is a no-op.
-    fn refresh(&mut self, _vfs: &dyn Vfs) {}
+    /// Hosts call this once per frame for every open app and carry out
+    /// all of them, including the last requests of an app that closed
+    /// during the frame. Default: the app makes no requests.
+    fn drain_requests(&mut self, _out: &mut Vec<AppRequest>) {}
 
     /// Apply VFS mutations the app has queued (deletes, renames, copies,
     /// binary saves, ...).
     ///
-    /// Every other hook only sees a shared `&dyn Vfs`, so apps that need to
+    /// Input hooks only see a shared `&dyn Vfs`, so apps that need to
     /// change the file system queue the work from input handlers and the
     /// host drains it here with mutable access, once per frame for every
     /// open app. Returns `true` when anything was applied so the host can
-    /// re-sync cached state. Default is a no-op returning `false`.
+    /// redraw. Default is a no-op returning `false`.
     fn apply_vfs_ops(&mut self, _vfs: &mut dyn Vfs) -> bool {
         false
     }
 
-    /// Advance time-driven state by `dt_ms` milliseconds of wall time.
+    /// Advance time-driven state by `dt_ms` milliseconds of wall time, and
+    /// poll any VFS state the app mirrors (radio status, search results).
     ///
     /// Hosts call this once per frame for every open app (windowed or
     /// fullscreen, focused or not), *including frames whose redraw is
@@ -158,8 +257,8 @@ pub trait App: std::fmt::Debug + Send {
         false
     }
 
-    /// The user asked to close the app through the host's window chrome
-    /// (a titlebar close button) rather than through the app's own input.
+    /// The user or an agent asked to close the app from outside the app's
+    /// own input (a titlebar close button, `wm close`, MCP `close_window`).
     ///
     /// Return [`AppAction::Exit`] to close now; anything else keeps the
     /// app open -- e.g. an editor with unsaved changes raises its
@@ -181,8 +280,11 @@ pub trait App: std::fmt::Debug + Send {
         false
     }
 
-    /// Content lines for the app (used by generic scroll/render logic).
-    fn lines(&self) -> &[String];
+    /// Content lines, for apps built on the shared line-list renderers
+    /// (hosts and tests read an app's text through this). Default: none.
+    fn lines(&self) -> &[String] {
+        &[]
+    }
 
     /// Current browse directory, if the app browses files.
     fn browse_dir(&self) -> Option<&str> {
@@ -193,12 +295,6 @@ pub trait App: std::fmt::Debug + Send {
     fn viewing_file(&self) -> Option<&str> {
         None
     }
-
-    /// Downcast to `&dyn Any` for app-specific access.
-    fn as_any(&self) -> &dyn std::any::Any;
-
-    /// Downcast to `&mut dyn Any` for mutable app-specific access.
-    fn as_any_mut(&mut self) -> &mut dyn std::any::Any;
 }
 
 /// Shared scrollable content state used by many apps.
@@ -233,8 +329,9 @@ pub struct ContentState {
     pub browse_dir: Option<String>,
     /// File currently being viewed.
     pub viewing_file: Option<String>,
-    /// Pending VFS IPC request (path, data).
-    pub pending_vfs_request: Option<(String, String)>,
+    /// Queued VFS IPC requests, handed to the host by
+    /// [`App::drain_requests`] (see [`Self::post_request`]).
+    pub requests: Vec<AppRequest>,
 }
 
 /// Maximum visible lines fallback for 480x272.
@@ -262,7 +359,7 @@ impl ContentState {
             cached_line_h: DEFAULT_LINE_H,
             browse_dir: None,
             viewing_file: None,
-            pending_vfs_request: None,
+            requests: Vec::new(),
         }
     }
 
@@ -304,6 +401,59 @@ impl ContentState {
         self.cached_max_visible = (layout.usable_h / line_h).max(1) as usize;
         self.cached_title_bar_height = at.app.title_bar_height;
         self.cached_line_h = line_h;
+    }
+
+    /// Update cached layout for a windowed content area `ch` tall: the
+    /// row count, line height and header inset
+    /// [`draw_content_windowed`](crate::render::draw_content_windowed)
+    /// draws with, so scrolling and click-to-line mapping match the screen.
+    /// [`impl_content_app_methods!`](crate::impl_content_app_methods)
+    /// calls this from [`App::layout`].
+    pub fn update_layout_windowed(&mut self, ch: u32, at: &ActiveTheme) {
+        let metrics = crate::render::WindowedMetrics::from_theme(at);
+        self.cached_max_visible = crate::render::windowed_max_lines(self, ch, metrics).max(1);
+        self.cached_title_bar_height = metrics.title_bar_height;
+        self.cached_line_h = metrics.line_h;
+        // A shrunk window keeps the selected line selected and on screen.
+        let max_cursor = self.visible_count().saturating_sub(1);
+        if self.cursor > max_cursor {
+            self.scroll += self.cursor - max_cursor;
+            self.cursor = max_cursor;
+        }
+    }
+
+    /// The windowed metrics recorded by the last
+    /// [`Self::update_layout_windowed`], for
+    /// [`windowed_line_at`](crate::render::windowed_line_at) in click
+    /// handlers.
+    pub fn windowed_metrics(&self) -> crate::render::WindowedMetrics {
+        crate::render::WindowedMetrics {
+            title_bar_height: self.cached_title_bar_height,
+            line_h: self.cached_line_h,
+        }
+    }
+
+    /// Queue a VFS IPC request for the host (see [`App::drain_requests`]).
+    pub fn post_request(&mut self, path: impl Into<String>, data: impl Into<String>) {
+        self.requests.push(AppRequest::new(path, data));
+    }
+
+    /// Standard list navigation shared by the simple line-list apps:
+    /// Cancel exits, Up / Down move the selection. Returns `None` for any
+    /// other button so the caller can handle it.
+    pub fn handle_nav(&mut self, button: &Button) -> Option<AppAction> {
+        match button {
+            Button::Cancel => Some(AppAction::Exit),
+            Button::Up => {
+                self.navigate_up();
+                Some(AppAction::None)
+            },
+            Button::Down => {
+                self.navigate_down();
+                Some(AppAction::None)
+            },
+            _ => None,
+        }
     }
 
     /// Advance the smooth visual selection animation.
@@ -438,8 +588,44 @@ mod tests {
     }
 
     #[test]
-    fn pending_request_default_none() {
-        let cs = ContentState::new("Test", "/apps/test");
-        assert!(cs.pending_vfs_request.is_none());
+    fn requests_queue_in_order() {
+        let mut cs = ContentState::new("Test", "/apps/test");
+        assert!(cs.requests.is_empty());
+        cs.post_request("/a", "1");
+        cs.post_request("/b", "2");
+        assert_eq!(
+            cs.requests,
+            vec![AppRequest::new("/a", "1"), AppRequest::new("/b", "2")]
+        );
+    }
+
+    #[test]
+    fn handle_nav_maps_cancel_and_arrows() {
+        let mut cs = ContentState::new("Test", "/apps/test");
+        cs.lines = vec!["a".into(), "b".into()];
+        assert_eq!(cs.handle_nav(&Button::Down), Some(AppAction::None));
+        assert_eq!(cs.cursor, 1);
+        assert_eq!(cs.handle_nav(&Button::Up), Some(AppAction::None));
+        assert_eq!(cs.cursor, 0);
+        assert_eq!(cs.handle_nav(&Button::Cancel), Some(AppAction::Exit));
+        assert_eq!(cs.handle_nav(&Button::Confirm), None);
+    }
+
+    #[test]
+    fn windowed_layout_matches_drawn_rows() {
+        let at = ActiveTheme::default();
+        let line_h = at.terminal_line_height.max(12);
+        let mut cs = ContentState::new("Test", "/apps/test");
+        cs.lines = (0..40).map(|i| format!("line {i}")).collect();
+        // Room for exactly 5 rows (top pad + 16 px footer).
+        let ch = crate::render::WINDOWED_TOP_PAD + 16 + 5 * line_h;
+        cs.cursor = 9;
+        cs.update_layout_windowed(ch, &at);
+        assert_eq!(cs.cached_max_visible, 5);
+        assert_eq!(cs.cursor, 4, "cursor clamped onto a visible row");
+        assert_eq!(cs.scroll, 5, "the selected line stays selected");
+        // Navigation now scrolls against the real row count.
+        cs.navigate_down();
+        assert_eq!((cs.scroll, cs.cursor), (6, 4));
     }
 }

@@ -9,7 +9,7 @@ use std::path::{Component, Path, PathBuf};
 
 use oasis_types::error::{OasisError, Result};
 
-use crate::{EntryKind, FilePermissions, Vfs, VfsEntry, VfsMetadata};
+use crate::{EntryKind, FilePermissions, RenamePlan, Vfs, VfsEntry, VfsMetadata};
 
 /// A VFS backed by the real filesystem, rooted at a configurable directory.
 #[derive(Debug)]
@@ -37,54 +37,49 @@ impl RealVfs {
 
     /// Resolve a VFS path to a real filesystem path, ensuring it stays
     /// within the root directory.
+    ///
+    /// `.`/`..` are resolved lexically first (a VFS path cannot climb above
+    /// `/`). Then the deepest ancestor that exists on disk -- the path
+    /// itself, if it exists -- is canonicalized, which follows every
+    /// symlink in the existing part of the path, and must still lie inside
+    /// the root. The components that do not exist yet are appended to that
+    /// canonical prefix, so `create_dir_all` / `write` cannot be steered
+    /// through a symlink: a link pointing outside the root fails here even
+    /// when several levels below it are still missing (`/link/new/x`).
     fn resolve(&self, vfs_path: &str) -> Result<PathBuf> {
-        // Strip leading `/` and join with root.
-        let relative = vfs_path.strip_prefix('/').unwrap_or(vfs_path);
-        let candidate = self.root.join(relative);
+        let relative = vfs_path.trim_start_matches(std::path::is_separator);
+        let candidate = normalize_path(&self.root.join(relative));
+        if !candidate.starts_with(&self.root) {
+            return Err(OasisError::Vfs("path escapes VFS root".into()));
+        }
 
-        // Canonicalize if path exists, otherwise check that its parent
-        // is within root.
-        let resolved = if candidate.exists() {
-            candidate
-                .canonicalize()
-                .map_err(|e| OasisError::Vfs(format!("cannot resolve path: {e}").into()))?
-        } else {
-            // For non-existent paths (write/mkdir), verify the parent
-            // is inside root.
-            let parent = candidate
+        // Split into the deepest existing ancestor and the missing tail.
+        // `symlink_metadata` does not follow the final link, so a dangling
+        // symlink counts as existing and then fails to canonicalize.
+        let mut existing = candidate.as_path();
+        let mut tail = Vec::new();
+        while fs::symlink_metadata(existing).is_err() {
+            let Some(name) = existing.file_name() else {
+                return Err(OasisError::Vfs("invalid path".into()));
+            };
+            tail.push(name.to_owned());
+            existing = existing
                 .parent()
                 .ok_or_else(|| OasisError::Vfs("invalid path: no parent".into()))?;
-            if parent.exists() {
-                let canon_parent = parent
-                    .canonicalize()
-                    .map_err(|e| OasisError::Vfs(format!("cannot resolve parent: {e}").into()))?;
-                if !canon_parent.starts_with(&self.root) {
-                    return Err(OasisError::Vfs("path escapes VFS root".into()));
-                }
-                // Use the canonicalized parent joined with the filename
-                // to avoid TOCTOU issues with symlink replacement.
-                let file_name = candidate
-                    .file_name()
-                    .ok_or_else(|| OasisError::Vfs("invalid path: no filename".into()))?;
-                canon_parent.join(file_name)
-            } else {
-                // Normalize the candidate by walking components to strip
-                // `..` segments.  This prevents lexical bypass when
-                // neither the path nor its parent exist on disk.
-                normalize_path(&candidate)
-            }
-        };
-
+        }
+        let mut resolved = existing
+            .canonicalize()
+            .map_err(|e| OasisError::Vfs(format!("cannot resolve path: {e}").into()))?;
         if !resolved.starts_with(&self.root) {
             return Err(OasisError::Vfs("path escapes VFS root".into()));
         }
+        resolved.extend(tail.iter().rev());
         Ok(resolved)
     }
 }
 
 /// Normalize a path by resolving `.` and `..` components lexically
-/// (without touching the filesystem).  This prevents path-traversal
-/// attacks when neither the target path nor its parent exist on disk.
+/// (without touching the filesystem).
 fn normalize_path(path: &Path) -> PathBuf {
     let mut out = PathBuf::new();
     for component in path.components() {
@@ -97,6 +92,23 @@ fn normalize_path(path: &Path) -> PathBuf {
         }
     }
     out
+}
+
+/// Normalize a VFS path lexically: leading `/`, no empty or `.` segments,
+/// `..` resolved (clamped at `/`), no trailing `/`. Splits on the same
+/// separators as `RealVfs::resolve` (`/`, plus `\` on Windows).
+fn normalize_vfs_path(path: &str) -> String {
+    let mut parts: Vec<&str> = Vec::new();
+    for seg in path.split(std::path::is_separator) {
+        match seg {
+            "" | "." => {},
+            ".." => {
+                parts.pop();
+            },
+            s => parts.push(s),
+        }
+    }
+    format!("/{}", parts.join("/"))
 }
 
 impl Vfs for RealVfs {
@@ -175,10 +187,26 @@ impl Vfs for RealVfs {
 
     fn rename(&mut self, from: &str, to: &str) -> Result<()> {
         let real_from = self.resolve(from)?;
-        if !real_from.exists() {
-            return Err(OasisError::Vfs(format!("no such path: {from}").into()));
-        }
         let real_to = self.resolve(to)?;
+        // On case-insensitive filesystems `/Dir` -> `/dir` resolves both
+        // sides to the same entry: that is a case change, not a move onto
+        // an existing directory.
+        if real_from == real_to && from != to && real_from != self.root {
+            fs::rename(&real_from, &real_to)?;
+            return Ok(());
+        }
+        let from_norm = normalize_vfs_path(from);
+        let to_norm = normalize_vfs_path(to);
+        if self.validate_rename(&from_norm, &to_norm)? == RenamePlan::NoOp {
+            return Ok(());
+        }
+        // Symlinks inside the root can make a lexically unrelated `to` land
+        // inside `from` on disk; check the resolved paths as well.
+        if real_to.starts_with(&real_from) {
+            return Err(OasisError::Vfs(
+                format!("cannot move '{from}' into itself ('{to}')").into(),
+            ));
+        }
         fs::rename(&real_from, &real_to)?;
         Ok(())
     }
@@ -601,5 +629,35 @@ mod tests {
             result.is_err(),
             "stat on directory symlink outside root should fail"
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn symlink_inside_root_still_resolves() {
+        use std::os::unix::fs::symlink;
+
+        let (_dir, mut vfs) = temp_vfs();
+        vfs.mkdir("/real").unwrap();
+        symlink(vfs.root.join("real"), vfs.root.join("alias")).unwrap();
+        vfs.mkdir("/alias/a/b").unwrap();
+        assert!(vfs.root.join("real/a/b").is_dir());
+    }
+
+    #[test]
+    fn dot_dot_is_resolved_lexically() {
+        let (_dir, mut vfs) = temp_vfs();
+        vfs.mkdir("/a/b").unwrap();
+        vfs.write("/a/b/../f.txt", b"x").unwrap();
+        assert_eq!(vfs.read("/a/f.txt").unwrap(), b"x");
+        assert!(vfs.resolve("/a/../../x").is_err());
+    }
+
+    #[test]
+    fn normalize_vfs_path_cases() {
+        assert_eq!(normalize_vfs_path("/"), "/");
+        assert_eq!(normalize_vfs_path(""), "/");
+        assert_eq!(normalize_vfs_path("a//b/"), "/a/b");
+        assert_eq!(normalize_vfs_path("/a/./b/../c"), "/a/c");
+        assert_eq!(normalize_vfs_path("/../.."), "/");
     }
 }

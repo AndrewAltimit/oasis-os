@@ -79,11 +79,21 @@ pub trait TlsProvider: Send + Sync {
         stream.set_read_timeout(Some(Duration::from_secs(30))).ok();
 
         // Minimal NetworkStream wrapper for std::net::TcpStream.
+        //
+        // The socket is blocking with a 30 s read timeout, so an expired
+        // timeout is a dead/silent peer, never "no data yet". Linux reports
+        // it as WouldBlock (EAGAIN) and Windows as TimedOut; normalise both
+        // to TimedOut so `OasisError::is_would_block` callers do not retry
+        // a dead connection forever.
         struct TcpNetStream(std::net::TcpStream);
         impl NetworkStream for TcpNetStream {
             fn read(&mut self, buf: &mut [u8]) -> Result<usize> {
                 Read::read(&mut self.0, buf).map_err(|e| {
-                    crate::error::OasisError::Io(io::Error::new(e.kind(), e.to_string()))
+                    let kind = match e.kind() {
+                        io::ErrorKind::WouldBlock => io::ErrorKind::TimedOut,
+                        k => k,
+                    };
+                    crate::error::OasisError::Io(io::Error::new(kind, e.to_string()))
                 })
             }
             fn write(&mut self, data: &[u8]) -> Result<usize> {

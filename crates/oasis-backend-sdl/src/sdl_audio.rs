@@ -15,8 +15,8 @@
 
 use std::collections::HashMap;
 
-use oasis_core::backend::{AudioBackend, AudioTrackId};
-use oasis_core::error::{OasisError, Result};
+use oasis_types::backend::{AudioBackend, AudioTrackId};
+use oasis_types::error::{OasisError, Result};
 
 /// High-water mark: stop accepting PCM once the SDL3 stream holds this much.
 /// ~9 seconds at 44.1 kHz stereo i16.
@@ -727,7 +727,16 @@ impl AudioBackend for SdlAudioBackend {
     }
 
     fn is_playing(&self) -> bool {
-        self.playing
+        // A static (fully decoded) track whose PCM the device has drained
+        // has reached its end: report it, so the music controller can
+        // advance the playlist. Streaming tracks (radio, video audio) get
+        // more data later and stay "playing".
+        let static_track_ended = self
+            .current_track
+            .is_some_and(|id| self.stream_track != Some(id) && self.tracks.contains_key(&id))
+            && self.samples_queued > 0
+            && self.queued_bytes() == 0;
+        self.playing && !static_track_ended
     }
 
     fn position_ms(&self) -> u64 {

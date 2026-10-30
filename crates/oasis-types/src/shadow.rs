@@ -81,6 +81,19 @@ impl Shadow {
         self
     }
 
+    /// Scale every layer's alpha by `opacity` (255 = unchanged), e.g. to
+    /// fade a shadow together with the object casting it.
+    ///
+    /// Copies a borrowed built-in table only when `opacity < 255`.
+    pub fn with_opacity(mut self, opacity: u8) -> Self {
+        if opacity < 255 {
+            for layer in self.layers.to_mut() {
+                layer.alpha = ((layer.alpha as u16) * (opacity as u16) / 255) as u8;
+            }
+        }
+        self
+    }
+
     #[cfg(test)]
     fn layer_count(&self) -> usize {
         self.layers.len()

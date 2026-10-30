@@ -1,10 +1,13 @@
-//! Integration tests for the paint pipeline.
-//!
-//! These tests live alongside the paint module so they can reach
-//! private helpers (`has_text_content`) via `super::*`.
+//! Paint pipeline tests: layout trees are recorded and replayed
+//! through [`paint`] (the production record + replay path) into a
+//! `MockBackend`, and the emitted draw calls are asserted.
 
+use super::record::has_text_content;
 use super::*;
+use crate::css::values::Position;
+use crate::css::values::types::{BackfaceVisibility, TransformStyle};
 use crate::css::values::{BorderStyle, ComputedStyle, TransformFunction};
+use crate::layout::box_model::{BoxType, LayoutBox};
 use crate::layout::box_model::{EdgeSizes, ListMarker, ListMarkerStyle, Rect, ReplacedContent};
 use crate::test_utils::{DrawCall, MockBackend};
 use oasis_types::backend::Color;
@@ -1396,4 +1399,507 @@ fn preserve_3d_explicit_z_index_opts_out_of_z_sort() {
         "explicit z-index child (blue, z-index:5) must paint after \
          Z-sorted children: blue={blue_idx}, green={green_idx}",
     );
+}
+
+// -------------------------------------------------------------------
+// Divergences the record path used to have from the old immediate
+// painter (found by re-blessing the goldens through record + replay).
+// -------------------------------------------------------------------
+
+fn make_text(x: f32, y: f32, text: &str, style: ComputedStyle) -> LayoutBox {
+    let mut lb = LayoutBox::new(BoxType::Inline, style, Some(1));
+    lb.text = Some(text.to_string());
+    lb.dimensions.content = Rect {
+        x,
+        y,
+        width: 6.0 * text.len() as f32,
+        height: 10.0,
+    };
+    lb
+}
+
+#[test]
+fn newline_only_text_run_is_not_drawn() {
+    let mut backend = MockBackend::new();
+    let mut root = make_block(0.0, 0.0, 200.0, 40.0, ComputedStyle::default());
+    root.children
+        .push(make_text(0.0, 0.0, "\n", ComputedStyle::default()));
+    root.children
+        .push(make_text(0.0, 12.0, "hi", ComputedStyle::default()));
+    paint(&root, &mut backend, test_vp(), &HashMap::new()).unwrap();
+    assert!(backend.has_text("hi"));
+    assert!(
+        !backend.has_text("\n"),
+        "a bare newline run must not reach the backend (draws as tofu)"
+    );
+}
+
+#[test]
+fn translucent_inline_background_painted_once() {
+    let mut backend = MockBackend::new();
+    let bg = Color::rgba(255, 0, 0, 128);
+    let style = ComputedStyle {
+        background_color: bg,
+        ..Default::default()
+    };
+    let mut root = make_block(0.0, 0.0, 200.0, 40.0, ComputedStyle::default());
+    root.children.push(make_text(10.0, 10.0, "mark", style));
+    paint(&root, &mut backend, test_vp(), &HashMap::new()).unwrap();
+    let n = backend
+        .calls
+        .iter()
+        .filter(|c| matches!(c, DrawCall::FillRect { color, .. } if *color == bg))
+        .count();
+    assert_eq!(n, 1, "inline background must not be double-blended");
+}
+
+#[test]
+fn dotted_underline_keeps_its_style() {
+    use crate::css::values::types::{TextDecoration, TextDecorationLine, TextDecorationStyle};
+    let mut backend = MockBackend::new();
+    let style = ComputedStyle {
+        text_decoration: TextDecoration {
+            line: TextDecorationLine::UNDERLINE,
+            style: TextDecorationStyle::Dotted,
+            color: Some(Color::rgb(0, 0, 255)),
+        },
+        ..Default::default()
+    };
+    let mut root = make_block(0.0, 0.0, 200.0, 40.0, ComputedStyle::default());
+    root.children.push(make_text(10.0, 10.0, "abcdef", style));
+    paint(&root, &mut backend, test_vp(), &HashMap::new()).unwrap();
+    let dots: Vec<u32> = backend
+        .calls
+        .iter()
+        .filter_map(|c| match c {
+            DrawCall::FillRect { w, color, .. } if *color == Color::rgb(0, 0, 255) => Some(*w),
+            _ => None,
+        })
+        .collect();
+    assert!(
+        dots.len() > 1,
+        "dotted underline must be dots, got {dots:?}"
+    );
+    assert!(dots.iter().all(|w| *w == 1), "dots are 1 px wide: {dots:?}");
+}
+
+#[test]
+fn translate_moves_the_elements_own_background() {
+    // `transform: translate()` applies to the element itself, not just
+    // its descendants (the `translate(-50%, -50%)` modal-centering
+    // idiom depends on it).
+    let mut backend = MockBackend::new();
+    let style = ComputedStyle {
+        background_color: Color::rgb(1, 2, 3),
+        transforms: vec![TransformFunction::Translate(30.0, 20.0)],
+        ..Default::default()
+    };
+    let lb = make_block(10.0, 10.0, 50.0, 40.0, style);
+    paint(&lb, &mut backend, test_vp(), &HashMap::new()).unwrap();
+    let rect = backend
+        .calls
+        .iter()
+        .find_map(|c| match c {
+            DrawCall::FillRect { x, y, color, .. } if *color == Color::rgb(1, 2, 3) => {
+                Some((*x, *y))
+            },
+            _ => None,
+        })
+        .expect("background painted");
+    assert_eq!(rect, (40, 30));
+}
+
+#[test]
+fn rotate_applies_to_the_elements_own_background() {
+    let mut backend = MockBackend::new();
+    let style = ComputedStyle {
+        background_color: Color::rgb(9, 9, 9),
+        transforms: vec![TransformFunction::Rotate(45.0)],
+        ..Default::default()
+    };
+    let lb = make_block(100.0, 50.0, 80.0, 40.0, style);
+    paint(&lb, &mut backend, test_vp(), &HashMap::new()).unwrap();
+    let quad = backend
+        .polygon_calls()
+        .into_iter()
+        .find_map(|c| match c {
+            DrawCall::FillPolygon { points, color } if *color == Color::rgb(9, 9, 9) => {
+                Some(points.clone())
+            },
+            _ => None,
+        })
+        .expect("rotated element paints its own background as a quad");
+    let cx = quad.iter().map(|p| p.0).sum::<i32>() as f32 / 4.0;
+    let cy = quad.iter().map(|p| p.1).sum::<i32>() as f32 / 4.0;
+    assert!(
+        (cx - 140.0).abs() < 2.0 && (cy - 70.0).abs() < 2.0,
+        "centroid ({cx}, {cy})"
+    );
+}
+
+// -------------------------------------------------------------------
+// SVG / canvas are display items, painted in paint order
+// -------------------------------------------------------------------
+
+const SVG_RED: Color = Color::rgb(200, 0, 0);
+
+/// A replaced `<svg>` box at `(x, y)` whose single rect fills it in red.
+fn make_svg(x: f32, y: f32, w: f32, h: f32) -> LayoutBox {
+    use crate::svg::{SvgElement, SvgPaint, SvgShape};
+    let element = SvgElement {
+        width: w,
+        height: h,
+        viewbox: None,
+        shapes: vec![SvgShape::Rect {
+            x: 0.0,
+            y: 0.0,
+            width: w,
+            height: h,
+            fill: SvgPaint::Color(SVG_RED),
+            stroke: SvgPaint::None,
+            stroke_width: 0.0,
+            rx: 0.0,
+            opacity: 1.0,
+        }],
+        defs: Default::default(),
+    };
+    let replaced = ReplacedContent::Svg {
+        element: std::rc::Rc::new(element),
+    };
+    let mut lb = LayoutBox::new(
+        BoxType::Replaced(replaced),
+        ComputedStyle::default(),
+        Some(7),
+    );
+    lb.dimensions.content = Rect {
+        x,
+        y,
+        width: w,
+        height: h,
+    };
+    lb
+}
+
+fn first_fill_index(backend: &MockBackend, color: Color) -> Option<usize> {
+    backend
+        .calls
+        .iter()
+        .position(|c| matches!(c, DrawCall::FillRect { color: c2, .. } if *c2 == color))
+}
+
+#[test]
+fn svg_paints_beneath_a_later_positioned_overlay() {
+    // A modal / dropdown overlay (positioned, z-index 1) painted after
+    // an inline SVG icon must cover it. The old post-replay pass drew
+    // every SVG on top of everything.
+    let overlay_blue = Color::rgb(0, 0, 200);
+    let mut root = make_block(0.0, 0.0, 200.0, 200.0, ComputedStyle::default());
+    root.children.push(make_svg(10.0, 10.0, 40.0, 40.0));
+    let overlay = ComputedStyle {
+        background_color: overlay_blue,
+        position: Position::Absolute,
+        z_index: 1,
+        z_index_auto: false,
+        ..Default::default()
+    };
+    root.children
+        .push(make_block(0.0, 0.0, 200.0, 200.0, overlay));
+
+    let mut backend = MockBackend::new();
+    paint(&root, &mut backend, test_vp(), &HashMap::new()).unwrap();
+    let svg_at = first_fill_index(&backend, SVG_RED).expect("svg painted");
+    let overlay_at = first_fill_index(&backend, overlay_blue).expect("overlay painted");
+    assert!(
+        svg_at < overlay_at,
+        "svg (call {svg_at}) must paint before the overlay (call {overlay_at})"
+    );
+}
+
+#[test]
+fn svg_follows_nested_scroll_container_offset() {
+    // An SVG inside a scrolled `overflow: auto` box draws at its
+    // scrolled position, not its unscrolled layout position.
+    let scroller_style = ComputedStyle {
+        overflow: crate::css::values::Overflow::Auto,
+        ..Default::default()
+    };
+    let mut scroller = make_block(0.0, 0.0, 100.0, 100.0, scroller_style);
+    scroller.node = Some(5);
+    scroller.children.push(make_svg(0.0, 50.0, 20.0, 20.0));
+
+    let mut dl = display_list::DisplayList::new();
+    let nested: HashMap<NodeId, (f32, f32)> = [(5, (0.0, 30.0))].into_iter().collect();
+    build_display_list(&scroller, test_vp(), &HashMap::new(), &mut dl, &nested);
+    let mut backend = MockBackend::new();
+    dl.replay(&mut backend, 0, 0, Some((0, 0, 480, 272)))
+        .unwrap();
+
+    let y = backend
+        .calls
+        .iter()
+        .find_map(|c| match c {
+            DrawCall::FillRect { y, color, .. } if *color == SVG_RED => Some(*y),
+            _ => None,
+        })
+        .expect("svg painted");
+    assert_eq!(
+        y, 20,
+        "svg must be shifted up by the container's 30 px scroll"
+    );
+}
+
+#[test]
+fn hidden_svg_is_not_painted() {
+    let mut svg = make_svg(10.0, 10.0, 40.0, 40.0);
+    svg.style.visibility = crate::css::values::Visibility::Hidden;
+    let mut backend = MockBackend::new();
+    paint(&svg, &mut backend, test_vp(), &HashMap::new()).unwrap();
+    assert_eq!(first_fill_index(&backend, SVG_RED), None);
+}
+
+#[test]
+fn canvas_is_recorded_in_paint_order_and_replays_live_state() {
+    let state = std::rc::Rc::new(std::cell::RefCell::new(crate::canvas::CanvasState::new(
+        10, 10,
+    )));
+    let replaced = ReplacedContent::Canvas {
+        state: std::rc::Rc::clone(&state),
+    };
+    let mut canvas = LayoutBox::new(BoxType::Replaced(replaced), ComputedStyle::default(), None);
+    canvas.dimensions.content = Rect {
+        x: 0.0,
+        y: 0.0,
+        width: 10.0,
+        height: 10.0,
+    };
+    let mut dl = display_list::DisplayList::new();
+    build_display_list(
+        &canvas,
+        test_vp(),
+        &HashMap::new(),
+        &mut dl,
+        &HashMap::new(),
+    );
+
+    // Draw into the canvas after recording: the cached display list
+    // shares the state, so replay shows the new command.
+    state
+        .borrow_mut()
+        .commands
+        .push(crate::canvas::CanvasCommand::FillRect {
+            x: 0.0,
+            y: 0.0,
+            w: 5.0,
+            h: 5.0,
+            color: SVG_RED,
+        });
+    let mut backend = MockBackend::new();
+    dl.replay(&mut backend, 0, 0, None).unwrap();
+    assert!(first_fill_index(&backend, SVG_RED).is_some());
+}
+
+#[test]
+fn compositing_layer_bounds_are_screen_space_under_scroll() {
+    // The layer bounds must subtract the scroll like every other item;
+    // they used to be layout-space, so on a scrolled page the render
+    // target sat `scroll_y` px below its contents.
+    let style = ComputedStyle {
+        isolation: crate::css::values::types::Isolation::Isolate,
+        background_color: Color::rgb(1, 1, 1),
+        ..Default::default()
+    };
+    let lb = make_block(20.0, 500.0, 100.0, 40.0, style);
+    let vp = PaintViewport {
+        scroll_y: 400.0,
+        ..test_vp()
+    };
+    let mut dl = display_list::DisplayList::new();
+    build_display_list(&lb, vp, &HashMap::new(), &mut dl, &HashMap::new());
+    let bounds = dl
+        .items()
+        .iter()
+        .find_map(|i| match i {
+            display_list::DisplayItem::PushCompositingLayer { bounds, .. } => Some(*bounds),
+            _ => None,
+        })
+        .expect("isolation opens a compositing layer");
+    assert_eq!((bounds.x, bounds.y), (20.0, 100.0));
+}
+
+#[test]
+fn sticky_top_pins_to_the_viewport_not_the_screen() {
+    // The content viewport starts below the browser chrome (y = 28).
+    // A `top: 0` sticky header scrolled past must pin at the viewport
+    // top (28), not at screen y 0 under the chrome — both when recorded
+    // and when a cached list is replayed for a further scroll.
+    let bg = Color::rgb(7, 7, 7);
+    let style = ComputedStyle {
+        position: Position::Sticky,
+        top: crate::css::values::Dimension::Px(0.0),
+        background_color: bg,
+        ..Default::default()
+    };
+    let sticky = make_block(0.0, 100.0, 200.0, 20.0, style);
+    let mut root = make_block(0.0, 0.0, 200.0, 2000.0, ComputedStyle::default());
+    root.children.push(sticky);
+    let vp = PaintViewport {
+        y: 28,
+        scroll_y: 150.0,
+        ..test_vp()
+    };
+    let fill_y = |backend: &MockBackend| {
+        backend.calls.iter().find_map(|c| match c {
+            DrawCall::FillRect { y, color, .. } if *color == bg => Some(*y),
+            _ => None,
+        })
+    };
+
+    let mut dl = display_list::DisplayList::new();
+    build_display_list(&root, vp, &HashMap::new(), &mut dl, &HashMap::new());
+    let mut backend = MockBackend::new();
+    dl.replay(&mut backend, 0, 0, None).unwrap();
+    assert_eq!(fill_y(&backend), Some(28), "recorded position");
+
+    let mut backend = MockBackend::new();
+    dl.replay(&mut backend, 0, -40, None).unwrap();
+    assert_eq!(
+        fill_y(&backend),
+        Some(28),
+        "replayed after 40 px more scroll"
+    );
+}
+
+/// A red block with `filter: invert(1)`, recorded and replayed into
+/// `backend`: the colors of every `FillRect` the replay issued.
+fn filtered_block_fill_colors(backend: &mut oasis_test_backend::RecordingBackend) -> Vec<Color> {
+    let style = ComputedStyle {
+        background_color: Color::rgb(255, 0, 0),
+        filters: vec![crate::css::values::FilterFunction::Invert(1.0)],
+        ..Default::default()
+    };
+    let lb = make_block(10.0, 20.0, 100.0, 50.0, style);
+    paint(&lb, backend, test_vp(), &HashMap::new()).unwrap();
+    backend.fill_colors()
+}
+
+/// Regression: box-level `filter` used to be baked into the recorded
+/// colors *and* run per pixel on the layer readback, so `invert(1)`
+/// cancelled itself out on render-target backends. With readback the
+/// drawn color stays raw (the per-pixel chain does the filtering).
+#[test]
+fn box_filter_not_baked_into_colors_when_layer_readback_runs() {
+    let mut backend = oasis_test_backend::RecordingBackend::new(480, 272);
+    let colors = filtered_block_fill_colors(&mut backend);
+    assert!(
+        backend
+            .commands()
+            .iter()
+            .any(|c| matches!(c, oasis_test_backend::DrawCommand::BindRenderTarget { .. })),
+        "filtered box must draw into a render target"
+    );
+    assert!(
+        colors.contains(&Color::rgb(255, 0, 0)),
+        "raw color: {colors:?}"
+    );
+    assert!(
+        !colors.contains(&Color::rgb(0, 255, 255)),
+        "double filter: {colors:?}"
+    );
+}
+
+/// Without render targets the layer falls back to opacity stacking and
+/// the filter degrades to the per-color approximation, applied once.
+#[test]
+fn box_filter_approximated_per_color_without_render_targets() {
+    let mut backend = oasis_test_backend::RecordingBackend::new(480, 272);
+    backend.disable_render_targets();
+    let colors = filtered_block_fill_colors(&mut backend);
+    assert!(
+        colors.contains(&Color::rgb(0, 255, 255)),
+        "inverted: {colors:?}"
+    );
+    assert!(
+        !colors.contains(&Color::rgb(255, 0, 0)),
+        "unfiltered: {colors:?}"
+    );
+}
+
+/// The dirty-rect replay never uses render targets, so it applies the
+/// per-color approximation to everything inside the filtered layer
+/// (descendants included), innermost layer first.
+#[test]
+fn dirty_replay_approximates_nested_layer_filters() {
+    use crate::css::values::FilterFunction;
+    use crate::paint::display_list::{DisplayItem, DisplayList};
+    let bounds = Rect {
+        x: 0.0,
+        y: 0.0,
+        width: 100.0,
+        height: 100.0,
+    };
+    let layer = |filters| DisplayItem::PushCompositingLayer {
+        bounds,
+        opacity: 1.0,
+        blend: crate::css::values::types::BlendMode::Normal,
+        filters,
+        mask: None,
+    };
+    let mut dl = DisplayList::new();
+    // Outer: grayscale; inner: invert. Red -> cyan (invert) -> gray.
+    dl.push(layer(vec![FilterFunction::Grayscale(1.0)]));
+    dl.push(layer(vec![FilterFunction::Invert(1.0)]));
+    dl.push(DisplayItem::FillRect {
+        x: 1,
+        y: 1,
+        w: 10,
+        h: 10,
+        color: Color::rgb(255, 0, 0),
+        node_id: None,
+    });
+    dl.push(DisplayItem::PopCompositingLayer);
+    dl.push(DisplayItem::PopCompositingLayer);
+    let mut backend = oasis_test_backend::RecordingBackend::new(480, 272);
+    dl.replay_dirty(&mut backend, &bounds, 0, 0, None).unwrap();
+    let expected = filters::apply_filters(
+        filters::apply_filters(Color::rgb(255, 0, 0), &[FilterFunction::Invert(1.0)]),
+        &[FilterFunction::Grayscale(1.0)],
+    );
+    assert_eq!(backend.fill_colors(), vec![expected]);
+}
+
+/// Regression: the recorder leaves `opacity` to the layer, but the
+/// replay `Gradient` arm ignored it, so a translucent element's linear
+/// gradient painted fully opaque.
+#[test]
+fn gradient_honours_layer_opacity_on_both_replay_paths() {
+    use crate::paint::display_list::{DisplayItem, DisplayList};
+    use oasis_types::backend::GradientStyle;
+    let mut dl = DisplayList::new();
+    dl.push(DisplayItem::PushLayer { opacity: 0.5 });
+    dl.push(DisplayItem::Gradient {
+        x: 0,
+        y: 0,
+        w: 4,
+        h: 4,
+        style: GradientStyle::Vertical {
+            top: Color::rgb(255, 0, 0),
+            bottom: Color::rgb(0, 0, 255),
+        },
+    });
+    dl.push(DisplayItem::PopLayer);
+    let bounds = Rect {
+        x: 0.0,
+        y: 0.0,
+        width: 4.0,
+        height: 4.0,
+    };
+    let mut full = oasis_test_backend::RecordingBackend::new(480, 272);
+    dl.replay(&mut full, 0, 0, None).unwrap();
+    let mut dirty = oasis_test_backend::RecordingBackend::new(480, 272);
+    dl.replay_dirty(&mut dirty, &bounds, 0, 0, None).unwrap();
+    for backend in [&full, &dirty] {
+        let colors = backend.fill_colors();
+        assert!(!colors.is_empty(), "gradient drew nothing");
+        assert!(colors.iter().all(|c| c.a == 128), "alpha: {colors:?}");
+    }
 }

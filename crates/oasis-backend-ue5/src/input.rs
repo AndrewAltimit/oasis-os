@@ -3,8 +3,8 @@
 //! Queues `InputEvent`s pushed from the FFI layer and delivers them
 //! when polled by the core framework.
 
-use oasis_core::backend::InputBackend;
-use oasis_core::input::InputEvent;
+use oasis_types::backend::InputBackend;
+use oasis_types::input::InputEvent;
 
 /// Input backend driven by FFI event pushes.
 ///
@@ -48,7 +48,7 @@ mod tests {
     #![allow(clippy::unwrap_used)]
 
     use super::*;
-    use oasis_core::input::{Button, Trigger};
+    use oasis_types::input::{Button, Trigger};
 
     #[test]
     fn empty_by_default() {

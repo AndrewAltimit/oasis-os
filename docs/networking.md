@@ -3,9 +3,11 @@
 OASIS_OS networking is split across two crates:
 
 - **`oasis-net`** — TCP transport, PSK authentication, optional rustls TLS, the
-  remote terminal protocol, and the `StdNetworkBackend` desktop backend.
-- **`oasis-core/src/transfer/`** — the FTP-like file transfer service, layered
-  on top of `NetworkBackend` from `oasis-types`.
+  remote terminal protocol, the `StdNetworkBackend` desktop backend, and
+  (feature `vfs`) the FTP-like file transfer server (`oasis_net::ftp`),
+  layered on `NetworkBackend` and `Vfs`.
+- **`oasis-core/src/transfer/`** — the `ftp`, `push` and `pull` terminal
+  commands; re-exports `FtpServer` and `DEFAULT_FTP_PORT`.
 
 The `NetworkBackend` trait itself lives in `oasis-types/src/backend/`. Backends
 (SDL3, WASM, UE5, PSP) implement it; everything above the trait is shared.
@@ -18,9 +20,20 @@ except during the initial TLS handshake (see Threading model). There is no
 async runtime, no thread pool, and no internal task spawning. Listener and
 client are designed to be polled from the host's main loop.
 
-Sockets are switched to non-blocking mode on accept (`std_backend.rs:52`,
-`67`, `82`). `send` and `recv` return immediately, with `WouldBlock`
-translated into "no data yet". `connect` resolves the host with
+Sockets are switched to non-blocking mode on accept and after connect.
+`read` and `write` return immediately; when the socket is not ready they
+fail with `OasisError::Io` of kind `WouldBlock` (the raw OS error, whose text
+is e.g. "Resource temporarily unavailable"). Callers must test
+`OasisError::is_would_block()` (`WouldBlock` only), never search
+the error's display text for "would block": only the TLS stream happens to
+use that wording, so text matching works on `https://` and silently breaks
+every plain-TCP stream. `TimedOut` is *not* "try again": on a non-blocking
+socket it is the kernel declaring the peer dead (ETIMEDOUT after retransmits
+or keepalive gave up), so the listener, FTP and MCP servers drop the
+connection, and `RustlsStream` passes it through with its kind intact
+(`OasisError::is_timed_out()`). Every server also has an idle timeout, since
+a peer that vanishes without a FIN or RST yields `WouldBlock` forever.
+`connect` resolves the host with
 `ToSocketAddrs` (hostnames, IPv4 literals and IPv6 literals with or without
 brackets all work) and tries each resolved address with
 `TcpStream::connect_timeout`, so the TCP handshake blocks the caller for at
@@ -28,7 +41,7 @@ most `DEFAULT_CONNECT_TIMEOUT` (10 s) per address (adjustable with
 `StdNetworkBackend::set_connect_timeout`); the stream is switched to
 non-blocking mode once connected. TLS handshakes also block the calling
 thread: they spin with a 1 ms sleep between iterations
-(`tls_rustls.rs:186`), so `RemoteClient::connect` will not return until the
+(`tls_rustls.rs`), so `RemoteClient::connect` will not return until the
 handshake completes or the 30 s deadline expires.
 
 `NetworkBackend::listen(port)` binds `0.0.0.0` (all interfaces).
@@ -49,8 +62,8 @@ over TCP. Two halves:
 - `RemoteClient` (`oasis-net/src/client.rs`) — client side.
 
 Wire format is line-based text, `\n`-delimited. The server caps incoming lines
-at 1024 bytes (`listener.rs:16`); the client buffer caps at 16 KiB
-(`client.rs:15`). Excess line length disconnects with an error.
+at 1024 bytes (`listener.rs`); the client buffer caps at 16 KiB
+(`client.rs`). Excess line length disconnects with an error.
 
 ### Server flow
 
@@ -62,28 +75,28 @@ at 1024 bytes (`listener.rs:16`); the client buffer caps at 16 KiB
 
    The terminal `listen <port>` command cannot supply a PSK and therefore
    always listens on loopback. Up to 4 concurrent connections by default
-   (`listener.rs:13`, configurable via `ListenerConfig`).
+   (`listener.rs`, configurable via `ListenerConfig`).
 2. On accept, send the welcome line:
    - `OASIS_OS remote terminal\n> ` if no PSK is configured.
    - `AUTH_REQUIRED\n` if a PSK is configured.
-3. `poll()` reads in 512-byte chunks (`listener.rs:258`), splits on `\n`, and
+3. `poll()` reads in 4096-byte chunks (at most 64 KiB per poll) (`listener.rs`), splits on `\n`, and
    returns complete lines as `Vec<(String, usize)>` where the second element
    is the connection index. `quit` and `exit` are intercepted and close the
    connection immediately.
 4. The host runs each command and replies with
    `send_response(conn_idx, text)`, which writes the text plus a trailing
    `\n> ` prompt.
-5. Connections idle beyond 300 s (`listener.rs:27`) are closed with
+5. Connections idle beyond 300 s (`listener.rs`) are closed with
    `Idle timeout. Goodbye.\n`.
 
 ### Client flow
 
 1. `connect(addr, psk)` opens the TCP connection and, if a PSK was supplied,
-   enters the authenticating state (`client.rs:57`).
+   enters the authenticating state (`client.rs`).
 2. `send(line)` writes `<line>\n` to the stream.
 3. `poll()` returns any complete lines received since the last call. It also
    transparently handles `AUTH_OK` / `AUTH_FAIL` and updates `ClientState`.
-   The auth handshake has a 30 s deadline (`client.rs:12`) — if neither
+   The auth handshake has a 30 s deadline (`client.rs`) — if neither
    response arrives, `poll()` returns `Authentication timed out.` and closes
    the connection.
 
@@ -96,20 +109,21 @@ PSK is the only built-in identity mechanism. It is configured per-listener via
 Handshake:
 
 1. Server sends `AUTH_REQUIRED\n` immediately after accept.
-2. Client sends `<key>\n` (`client.rs:93`).
-3. Server compares with a constant-time XOR loop (`listener.rs:32`) so the
-   timing of the comparison reveals neither the length nor the content of the
-   stored key.
+2. Client sends `<key>\n` (`client.rs`).
+3. Server compares with `oasis_types::util::ct_eq`, a constant-time XOR
+   loop, so the timing of the comparison does not reveal the content of the
+   stored key (a length mismatch returns early; the length is visible on the
+   wire anyway).
 4. On match, server replies `AUTH_OK\n> ` and the client transitions to
    `Connected`. On mismatch, server replies `AUTH_FAIL\n` and closes.
 
 Brute-force defence is rate limiting: 5 consecutive failures from the same
 peer trigger an exponentially increasing back-off starting at 30 s, with the
 listener responding `RATE_LIMITED\n` to new connections from that peer
-(`listener.rs:19`, `216`).
+(`listener.rs`).
 
 **TLS is mandatory for PSK.** Without the `tls-rustls` feature, both sides
-refuse to use a PSK over plaintext (`client.rs:68`, `listener.rs:226`). This
+refuse to use a PSK over plaintext (`client.rs`, `listener.rs`). This
 is enforced at the API: passing a PSK to `connect` without TLS support fails
 with the error `"PSK authentication requires TLS — enable the `tls-rustls`
 feature"`.
@@ -117,21 +131,21 @@ feature"`.
 ## TLS
 
 Enabled by the `tls-rustls` Cargo feature. `RustlsTlsProvider`
-(`tls_rustls.rs:25`) builds a process-wide singleton `ClientConfig` cached
+(`tls_rustls.rs`) builds a process-wide singleton `ClientConfig` cached
 behind `LazyLock`:
 
 - Trust roots: the Mozilla bundle from `webpki-roots`.
 - Verifier: standard rustls; SNI is enforced and mismatched server names are
-  rejected (`tls_rustls.rs:69`).
+  rejected (`tls_rustls.rs`).
 - ALPN advertised: `h2`, `http/1.1`.
-- Handshake timeout: 30 s (`tls_rustls.rs:159`).
+- Handshake timeout: 30 s (`tls_rustls.rs`).
 
 Plaintext bytes between reads are buffered in a `VecDeque<u8>`
-(`tls_rustls.rs:146`); `drain_deque` uses `as_slices` to copy out without an
-intermediate allocation (`tls_rustls.rs:339`).
+(`tls_rustls.rs`); `drain_deque` uses `as_slices` to copy out without an
+intermediate allocation (`tls_rustls.rs`).
 
 Pinning custom certificates is not yet implemented; tracked at the TODO
-comment in `client.rs:91`.
+comment in `client.rs`.
 
 ## Hosts file
 
@@ -157,11 +171,11 @@ remote terminal endpoints, FTP servers, and future protocols side by side.
 > other credential material — keep it out of version control, restrict
 > filesystem permissions, and rotate the key if the file is exposed.
 
-## File transfer (`oasis-core/src/transfer/`)
+## File transfer (`oasis-net/src/ftp.rs`)
 
 The transfer service is FTP-like in spirit but defines its own minimal
 line-based protocol over TCP. Default port is 2121
-(`transfer/mod.rs:23`).
+(`oasis-net/src/ftp.rs`).
 
 Verbs:
 
@@ -179,7 +193,7 @@ Verbs:
 
 > **Path resolution and exposure:** path arguments are passed straight
 > through to the active `Vfs` (`process_ftp_request` in
-> `transfer/mod.rs:32`) — there is no extra chroot, allow-list, or
+> `oasis-net/src/ftp.rs`) — there is no extra chroot, allow-list, or
 > traversal check at the transfer layer. The exposed filesystem is
 > exactly whatever the host's VFS implementation exposes (typically a
 > `MemoryVfs` for headless drivers or a `RealVfs`/`GameAssetVfs` rooted
@@ -189,7 +203,7 @@ Verbs:
 > **`GET` is text-only — binary files and embedded newlines are
 > unsafe.** The server formats responses as
 > `format!("200 {} bytes\n{text}", data.len())` where `text` is
-> `String::from_utf8_lossy(&data)` (`transfer/mod.rs:65`). Two
+> `String::from_utf8_lossy(&data)` (`oasis-net/src/ftp.rs`). Two
 > consequences:
 >
 > 1. **Binary data is silently corrupted.** Any byte that is not
@@ -212,7 +226,7 @@ Verbs:
 
 > **`PUT` payload size and newline handling:** the protocol is strictly
 > line-based with a 1024-byte per-line cap (`MAX_FTP_LINE_LEN` in
-> `transfer/mod.rs:143`). The full request — `PUT `, the path, a single
+> `oasis-net/src/ftp.rs`). The full request — `PUT `, the path, a single
 > space, and the entire file body — must fit on one `\n`-terminated
 > line. Effective inline payload is therefore roughly
 > `1024 - 5 - len(path)` bytes, and the body cannot contain a literal
@@ -228,19 +242,19 @@ Verbs:
 > warning above.
 >
 > 1. **Comparison is constant-time** (`constant_time_eq` in
->    `transfer/mod.rs`), like the remote-terminal PSK check. Lines sent
+>    `oasis-net/src/ftp.rs`), like the remote-terminal PSK check. Lines sent
 >    after the third failure on a connection are discarded.
 > 2. **No cross-connection brute-force protection.** The 3-attempt
->    limit (`MAX_AUTH_FAILURES` at `transfer/mod.rs:152`) is tracked
+>    limit (`MAX_AUTH_FAILURES` at `oasis-net/src/ftp.rs`) is tracked
 >    per-connection only (`FtpConnection::failed_attempts` at
->    `transfer/mod.rs:162`). The listener does **not** track failures
+>    `oasis-net/src/ftp.rs`). The listener does **not** track failures
 >    by remote IP across reconnections, so the effective brute-force
 >    budget is `3 × unbounded reconnects`. This contrasts with the PSK
 >    path, which does apply per-peer exponential back-off
->    (`listener.rs:216`). On a hostile network an attacker can drain
+>    (`listener.rs`). On a hostile network an attacker can drain
 >    the password space at TCP-accept rate.
 > 3. **Empty passwords are accepted.** `ftp start <port> --password ""`
->    is parsed verbatim (`transfer/mod.rs:399`) and arms
+>    is parsed verbatim (`oasis-net/src/ftp.rs`) and arms
 >    `FtpServer::with_password("")`. A client can then authenticate by
 >    sending `PASS ` with no value. `--password` without any argument
 >    errors with `--password requires a value`, but `--password ""`
@@ -257,13 +271,16 @@ Verbs:
 The service is integrated into the desktop binary via `FtpServer` in
 `oasis-app/src/app_state.rs`. The `ftp` terminal command starts and stops it,
 and the main loop polls connections each frame
-(`Shell::step` in `oasis-app/src/shell.rs`). Status and request files live at
-
-`/var/ftp/status` and `/var/ftp/request` so headless drivers can inspect or
-trigger transfers via the VFS.
+(`Shell::step` in `oasis-app/src/shell.rs`). `ftp status` reads the network
+state the shell publishes every frame at `/system/state/net`
+(`oasis_types::ipc::NetState`, the document the Network app shows), so it
+reports `listening on port N` while the server runs. (The old
+`/var/ftp/status` / `/var/ftp/request` paths, which no host serviced, are
+gone.)
+`ftp start` rejects port `0` (the stop sentinel) and unparseable ports.
 
 Authentication is optional and password-based: `ftp start <port> --password
-<pass>` arms `FtpServer::with_password` (`transfer/mod.rs:203`). Without
+<pass>` arms `FtpServer::with_password` (`oasis-net/src/ftp.rs`). Without
 `--password` (or with an empty one) every accepted connection is
 immediately authenticated, so the server then binds **loopback only**
 (`NetworkBackend::listen_loopback`); with a password it listens on all
@@ -291,12 +308,12 @@ active.
 
 | Symptom | Likely cause | Source |
 | --- | --- | --- |
-| `PSK authentication requires TLS` | Built without `tls-rustls`. | client.rs:77 |
-| `AUTH_FAIL TLS required` from server | Server compiled without TLS but a client tried PSK. | listener.rs:139 |
-| `Authentication timed out.` | Server never responded `AUTH_OK`/`AUTH_FAIL` within 30 s. | client.rs:132 |
-| `error: line too long` | Peer sent more than 1024 bytes (server) or 16 KiB (client) in one line. | listener.rs:305 |
-| `RATE_LIMITED` on connect | 5+ failed PSK attempts; back-off active. | listener.rs:216 |
-| `TLS handshake timed out` / `peer closed` | Peer is not actually a TLS server, or `tls-rustls` mismatch. | tls_rustls.rs:171 |
+| `PSK authentication requires TLS` | Built without `tls-rustls`. | client.rs |
+| `AUTH_FAIL TLS required` from server | Server compiled without TLS but a client tried PSK. | listener.rs |
+| `Authentication timed out.` | Server never responded `AUTH_OK`/`AUTH_FAIL` within 30 s. | client.rs |
+| `error: line too long` | Peer sent more than 1024 bytes (server) or 16 KiB (client) in one line. | listener.rs |
+| `RATE_LIMITED` on connect | 5+ failed PSK attempts; back-off active. | listener.rs |
+| `TLS handshake timed out` / `peer closed` | Peer is not actually a TLS server, or `tls-rustls` mismatch. | tls_rustls.rs |
 
 ## Adding a new protocol
 
@@ -306,7 +323,7 @@ the existing code uses:
 1. Implement client and server halves on top of `NetworkBackend` (mirror the
    `RemoteClient` / `RemoteListener` shape).
 2. Use the same non-blocking-poll discipline: no thread spawns, no async.
-3. If authenticated, reuse the constant-time PSK comparison helper
-   (`listener.rs:32`) and require TLS for the PSK path.
+3. If authenticated, reuse the constant-time comparison helper
+   (`oasis_types::util::ct_eq`) and require TLS for the PSK path.
 4. Register a status / request VFS file pair under `/var/<proto>/` so
    headless tests and the terminal can drive it without a TUI.

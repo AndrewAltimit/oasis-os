@@ -1120,6 +1120,112 @@ fn fetch_reports_real_status_and_rejects_network_errors() {
 }
 
 #[test]
+fn fetch_rejects_crlf_in_header_names_and_values() {
+    let t = MockTransport::default();
+    let engine = setup_page("https://example.com/", None, Some(&t));
+    engine
+        .eval(
+            "globalThis.errs = []; \
+             fetch('/a', {headers: {'Accept': 'x\\r\\nOrigin: https://bank'}}) \
+               .catch(function(e) { errs.push(e.name); }); \
+             fetch('/b', {headers: {'X-A\\nB': '1'}}) \
+               .catch(function(e) { errs.push(e.name); }); \
+             fetch('/c', {headers: {'Accept': 'text/html'}});",
+        )
+        .unwrap();
+    assert_eq!(js_str(&engine, "errs.join()"), "TypeError,TypeError");
+    assert_eq!(
+        t.urls(),
+        vec!["https://example.com/c"],
+        "only the clean request is sent"
+    );
+}
+
+/// Transport double that asks the handler whether a redirect to `next`
+/// may be followed and records the verdict.
+struct RedirectProbe {
+    next: &'static str,
+    verdict: Rc<std::cell::Cell<Option<bool>>>,
+}
+
+impl fetch::FetchTransport for RedirectProbe {
+    fn resolve_host(&self, _host: &str) -> Vec<std::net::IpAddr> {
+        Vec::new()
+    }
+
+    fn supports_https(&self) -> bool {
+        true
+    }
+
+    fn send(
+        &self,
+        req: &fetch::TransportRequest<'_>,
+        redirect_ok: &dyn Fn(&crate::loader::Url) -> bool,
+        _addr_ok: &dyn Fn(std::net::IpAddr) -> bool,
+    ) -> Result<fetch::RawResponse, String> {
+        let next = crate::loader::Url::parse(self.next).ok_or("bad probe url")?;
+        self.verdict.set(Some(redirect_ok(&next)));
+        Ok(fetch::RawResponse {
+            status: 200,
+            headers: Vec::new(),
+            body: Vec::new(),
+            url: req.url.to_string(),
+        })
+    }
+}
+
+#[test]
+fn fetch_redirect_hops_must_satisfy_connect_src() {
+    // Regression: only the first URL was checked against connect-src,
+    // so a same-origin open redirect could bounce a request anywhere.
+    let page = "https://example.com/";
+    let csp = crate::loader::csp::parse_csp("connect-src 'self'");
+    for (next, allowed) in [
+        ("https://example.com/elsewhere", true),
+        ("https://evil.test/collect?d=1", false),
+    ] {
+        let verdict = Rc::new(std::cell::Cell::new(None));
+        let probe = RedirectProbe {
+            next,
+            verdict: Rc::clone(&verdict),
+        };
+        let engine = JsEngine::new(8 * 1024 * 1024).unwrap();
+        engine
+            .with_context(|ctx| {
+                let handler =
+                    fetch::BrowserFetchHandler::new(page, Some(csp.clone()), Box::new(probe));
+                oasis_js::fetch::bind_fetch_handler(&ctx, Box::new(handler))
+            })
+            .unwrap();
+        engine.eval("fetch('/start')").unwrap();
+        assert_eq!(verdict.get(), Some(allowed), "{next}");
+    }
+}
+
+#[test]
+fn fetch_data_url_is_subject_to_connect_src() {
+    let engine = JsEngine::new(8 * 1024 * 1024).unwrap();
+    let csp = crate::loader::csp::parse_csp("connect-src 'self'");
+    engine
+        .with_context(|ctx| {
+            let handler = fetch::BrowserFetchHandler::new(
+                "https://example.com/",
+                Some(csp),
+                Box::new(MockTransport::default()),
+            );
+            oasis_js::fetch::bind_fetch_handler(&ctx, Box::new(handler))
+        })
+        .unwrap();
+    engine
+        .eval(
+            "globalThis.r = 'pending'; fetch('data:text/plain,hi') \
+               .then(function() { r = 'ok'; }, function(e) { r = e.name; })",
+        )
+        .unwrap();
+    assert_eq!(js_str(&engine, "r"), "TypeError");
+}
+
+#[test]
 fn fetch_blocks_loopback_and_private_targets_from_web_origin() {
     let t = MockTransport::default();
     let engine = setup_page("http://example.com/", None, Some(&t));
@@ -1328,6 +1434,60 @@ const TREE_HTML: &str = "<html><head><title>T</title></head><body>\
       <p id=\"p\">a<b id=\"b\">b</b>c</p>\
       <ul id=\"list\"><li class=\"x\">1</li> <li class=\"x y\">2</li> <li>3</li></ul>\
     </div><section id=\"other\"></section></body></html>";
+
+#[test]
+fn document_cookie_is_size_and_count_capped() {
+    use crate::loader::cookies::{MAX_COOKIE_SIZE, MAX_COOKIES_PER_DOMAIN};
+    let engine = setup_page("https://example.com/", None, None);
+    // Oversized pairs are ignored, never stored.
+    check(
+        &engine,
+        &format!(
+            "document.cookie = 'big=' + 'x'.repeat({MAX_COOKIE_SIZE}); \
+             document.cookie = 'ok=1; path=/'; document.cookie"
+        ),
+        "ok=1",
+    );
+    // A flood of distinct names keeps only the newest
+    // MAX_COOKIES_PER_DOMAIN, evicting the oldest first.
+    engine
+        .eval("for (var i = 0; i < 10000; i++) document.cookie = 'k' + i + '=v';")
+        .unwrap();
+    let n = MAX_COOKIES_PER_DOMAIN;
+    check(
+        &engine,
+        "String(document.cookie.split('; ').length)",
+        &n.to_string(),
+    );
+    check(
+        &engine,
+        "String(document.cookie.indexOf('k9999=v') >= 0)",
+        "true",
+    );
+    check(
+        &engine,
+        "String(document.cookie.indexOf('ok=') >= 0)",
+        "false",
+    );
+}
+
+#[test]
+fn document_cookie_overwrite_and_delete() {
+    let engine = setup_page("https://example.com/", None, None);
+    check(
+        &engine,
+        "document.cookie = 'a=1'; document.cookie = 'b=2'; document.cookie = 'a=3'; \
+         document.cookie",
+        "a=3; b=2",
+    );
+    check(
+        &engine,
+        "document.cookie = 'a=; max-age=0'; \
+         document.cookie = 'b=; expires=Thu, 01 Jan 1970 00:00:00 GMT'; \
+         document.cookie = 'c=\\u0001'; document.cookie = 'd=4'; document.cookie",
+        "d=4",
+    );
+}
 
 #[test]
 fn wrappers_are_cached_per_node_id() {
@@ -1690,7 +1850,7 @@ fn body_onload_attribute_runs_on_window_load() {
     let (engine, shared) = setup_html(
         "<html><body onload=\"window.__loaded = (window.__loaded || 0) + 1\"></body></html>",
     );
-    register_inline_handlers(&engine, &shared.borrow());
+    register_inline_handlers(&engine, &shared.borrow(), &|_| true);
     fire_document_lifecycle(&engine);
     check(&engine, "String(window.__loaded)", "1");
 }
@@ -1800,6 +1960,204 @@ fn class_list_full_api() {
     let doc = shared.borrow();
     let d = doc.element(doc.get_element_by_id("d").unwrap()).unwrap();
     assert_eq!(d.get_attribute("class"), Some("B c d"));
+}
+
+// -- DOM depth cap (script-built trees must stay render-safe) ---------
+
+/// Deepest node depth in `doc` (the root is depth 0).
+fn max_depth(doc: &Document) -> usize {
+    let mut max = 0;
+    let mut stack = vec![(doc.root, 0usize)];
+    while let Some((n, d)) = stack.pop() {
+        max = max.max(d);
+        stack.extend(doc.nodes[n].children.iter().map(|&c| (c, d + 1)));
+    }
+    max
+}
+
+#[test]
+fn ten_thousand_deep_append_chain_is_capped() {
+    use crate::html::MAX_DOM_DEPTH;
+    let (engine, shared) = setup(sample_doc());
+    let refused = engine
+        .eval(
+            "var c = document.body, refused = 0, other = ''; \
+             for (var i = 0; i < 10000; i++) { \
+               var d = document.createElement('div'); \
+               try { c.appendChild(d); c = d; } \
+               catch (e) { if (e.name === 'HierarchyRequestError') refused++; \
+                           else other = e.name; } \
+             } \
+             other ? other : refused",
+        )
+        .unwrap();
+    // <body> sits at depth 2, so divs fit at depths 3..=MAX_DOM_DEPTH.
+    let accepted = MAX_DOM_DEPTH - 2;
+    assert_eq!(refused, oasis_js::JsValue::Int((10_000 - accepted) as i32));
+    assert_eq!(max_depth(&shared.borrow()), MAX_DOM_DEPTH);
+}
+
+#[test]
+fn detached_deep_chain_cannot_be_attached() {
+    use crate::html::MAX_DOM_DEPTH;
+    let (engine, shared) = setup(sample_doc());
+    // Build a 10k chain bottom-up while detached (each step re-parents
+    // the whole chain), then try to attach it.
+    check(
+        &engine,
+        "var top = document.createElement('div'), refused = 0; \
+         for (var i = 0; i < 10000; i++) { \
+           var p = document.createElement('div'); \
+           try { p.appendChild(top); top = p; } catch (e) { refused++; } \
+         } \
+         var attached = 'yes'; \
+         try { document.body.appendChild(top); } catch (e) { attached = e.name; } \
+         [refused > 0, attached].join()",
+        "true,HierarchyRequestError",
+    );
+    assert!(max_depth(&shared.borrow()) <= MAX_DOM_DEPTH);
+}
+
+#[test]
+fn inner_html_on_deepest_node_is_flattened() {
+    use crate::html::MAX_DOM_DEPTH;
+    let (engine, shared) = setup(sample_doc());
+    // Fill to the cap, step two levels back up, then keep writing nested
+    // markup into the deepest element: the markup is flattened (and at
+    // the cap reduced to text), the text survives, the depth stops
+    // growing.
+    check(
+        &engine,
+        "var c = document.body; \
+         while (true) { var d = document.createElement('div'); \
+           try { c.appendChild(d); c = d; } catch (e) { break; } } \
+         c = c.parentNode.parentNode; \
+         for (var i = 0; i < 20; i++) { \
+           c.innerHTML = '<div><div><span><b>deep' + i + '</b></span></div></div>'; \
+           c = c.firstElementChild || c; \
+         } \
+         document.body.textContent.indexOf('deep19') >= 0",
+        "true",
+    );
+    // At most the one text leaf below an element at the cap.
+    assert!(max_depth(&shared.borrow()) <= MAX_DOM_DEPTH + 1);
+}
+
+#[test]
+fn parser_output_respects_dom_depth_cap() {
+    use crate::html::MAX_DOM_DEPTH;
+    use crate::html::tokenizer::Tokenizer;
+    use crate::html::tree_builder::TreeBuilder;
+    let html = format!("<html><body>{}x</body></html>", "<div>".repeat(10_000));
+    let doc = TreeBuilder::build(Tokenizer::new(&html).tokenize());
+    assert!(
+        max_depth(&doc) <= MAX_DOM_DEPTH,
+        "depth {}",
+        max_depth(&doc)
+    );
+}
+
+/// Every node reachable from the root is reached exactly once and
+/// points back at the parent it was reached from (no cycles, no node
+/// listed under two parents).
+fn assert_well_formed(doc: &Document) {
+    let mut seen = vec![false; doc.nodes.len()];
+    let mut stack = vec![doc.root];
+    seen[doc.root] = true;
+    while let Some(n) = stack.pop() {
+        for &c in &doc.nodes[n].children {
+            assert!(!seen[c], "node {c} reachable twice (cycle or shared child)");
+            assert_eq!(doc.nodes[c].parent, Some(n), "node {c} parent link");
+            assert!(doc.is_live(c), "freed node {c} still in the tree");
+            seen[c] = true;
+            stack.push(c);
+        }
+    }
+}
+
+#[test]
+fn stale_wrapper_of_freed_node_cannot_corrupt_the_tree() {
+    // Regression: a wrapper kept across `innerHTML = ''` still carried
+    // its (freed) arena id. Re-inserting it, then letting createElement
+    // reuse the slot, listed one node under two parents and allowed a
+    // parent/child cycle that hung or overflowed the cascade.
+    let (engine, shared) = setup(sample_doc());
+    check(
+        &engine,
+        "var p = document.getElementById('main'); \
+         p.innerHTML = '<i></i>'; var s = p.firstChild; p.innerHTML = ''; \
+         var r = 'ok'; \
+         try { document.body.appendChild(s); } catch (e) { r = e.name; } \
+         var n = document.createElement('b'); \
+         document.documentElement.appendChild(n); \
+         try { n.appendChild(document.body); } catch (e) { r += ',' + e.name; } \
+         r",
+        "NotFoundError",
+    );
+    assert_well_formed(&shared.borrow());
+}
+
+#[test]
+fn clone_doubling_hits_the_script_node_cap() {
+    use super::node_api::MAX_SCRIPT_DOM_NODES;
+    let (engine, shared) = setup(sample_doc());
+    // Each round doubles the subtree under #main; the arena lives
+    // outside the JS heap limit, so only the node cap stops it.
+    check(
+        &engine,
+        "var m = document.getElementById('main'), err = 'none'; \
+         for (var i = 0; i < 40; i++) { \
+           try { m.appendChild(m.cloneNode(true)); } catch (e) { err = e.name; break; } } \
+         var more = 'none', made = 0; \
+         try { while (made < 300000) { document.createElement('i'); made++; } } \
+         catch (e) { more = e.name; } \
+         var html = 'none'; \
+         try { m.insertAdjacentHTML('beforeend', '<b>x</b>'); } catch (e) { html = e.name; } \
+         [err, more, html].join()",
+        "QuotaExceededError,QuotaExceededError,QuotaExceededError",
+    );
+    let doc = shared.borrow();
+    assert!(doc.live_node_count() <= MAX_SCRIPT_DOM_NODES);
+    assert_well_formed(&doc);
+}
+
+#[test]
+fn double_discarded_fragment_slot_is_not_handed_out_twice() {
+    let (engine, shared) = setup(sample_doc());
+    check(
+        &engine,
+        "var f = __oasis_parse_fragment(''); \
+         __oasis_discard_fragment(f); __oasis_discard_fragment(f); \
+         var a = document.createElement('a'), b = document.createElement('b'); \
+         String(a.__oasis_node_id !== b.__oasis_node_id)",
+        "true",
+    );
+    assert_well_formed(&shared.borrow());
+}
+
+#[test]
+fn text_nodes_cannot_grow_children() {
+    use crate::html::MAX_DOM_DEPTH;
+    let (engine, shared) = setup(sample_doc());
+    // Fill to the cap, then hang markup under the leaf text node through
+    // the innerHTML setter and appendChild: both must leave it a leaf.
+    check(
+        &engine,
+        "var c = document.body; \
+         while (true) { var d = document.createElement('div'); \
+           try { c.appendChild(d); c = d; } catch (e) { break; } } \
+         c.textContent = 'leaf'; var t = c.firstChild; \
+         var set = Object.getOwnPropertyDescriptor(Element.prototype, 'innerHTML').set; \
+         for (var i = 0; i < 2000; i++) { \
+           set.call(t, '<b>x</b>'); __oasis_set_inner_html(t.__oasis_node_id, 'y'); } \
+         var r = 'ok'; \
+         try { t.appendChild(document.createTextNode('z')); } catch (e) { r = e.name; } \
+         r + ',' + t.childNodes.length",
+        "HierarchyRequestError,0",
+    );
+    let doc = shared.borrow();
+    assert_well_formed(&doc);
+    assert!(max_depth(&doc) <= MAX_DOM_DEPTH + 1);
 }
 
 #[test]

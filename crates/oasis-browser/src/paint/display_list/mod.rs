@@ -29,6 +29,9 @@ mod mask;
 mod optimize;
 mod replay;
 
+use std::cell::RefCell;
+use std::rc::Rc;
+
 use oasis_types::backend::{Color, GradientStyle, SdiBackend, TextureId};
 use oasis_types::error::Result;
 
@@ -98,16 +101,6 @@ pub enum DisplayItem {
         color: Color,
         /// Source DOM node for hover color patching.
         node_id: Option<usize>,
-    },
-    /// Stroked rectangle outline.
-    StrokeRoundedRect {
-        x: i32,
-        y: i32,
-        w: u32,
-        h: u32,
-        radius: u16,
-        stroke_width: u16,
-        color: Color,
     },
     /// Text rendering.
     DrawText {
@@ -195,13 +188,14 @@ pub enum DisplayItem {
     /// target. All items between this and the matching
     /// `PopCompositingLayer` are drawn into an offscreen surface, then
     /// composited back into the parent with the supplied blend mode,
-    /// opacity, filter chain, and (when `needs_backdrop`) backdrop
-    /// filter chain.
+    /// opacity, filter chain and mask.
     ///
-    /// This is the slow path used for `mix-blend-mode`, `backdrop-filter`,
-    /// `isolation: isolate`, box-level `filter`, and (once wired)
-    /// `mask-*`. Backends that haven't opted into `SdiRenderTarget` fall
-    /// back to a no-op: items are drawn without the effect.
+    /// This is the slow path used for `mix-blend-mode`, `isolation:
+    /// isolate`, box-level `filter`, `mask-*`, `will-change`, and
+    /// `backdrop-filter` (which only isolates the layer: sampling and
+    /// filtering the backdrop is not implemented). Backends that haven't
+    /// opted into `SdiRenderTarget` fall back to plain opacity stacking:
+    /// items are drawn without the effect.
     ///
     /// The simple opacity-only case stays on the `PushLayer` /
     /// `PopLayer` fast path so backends without render-target support
@@ -215,16 +209,8 @@ pub enum DisplayItem {
         opacity: f32,
         /// Blend mode to use when compositing the layer back.
         blend: CssBlendMode,
-        /// Whether the layer needs to sample the parent surface before
-        /// drawing (set by `backdrop-filter` and any non-Normal blend
-        /// mode that isn't simple alpha).
-        needs_backdrop: bool,
         /// Filter chain applied to the layer pixels before composite.
         filters: Vec<FilterFunction>,
-        /// Filter chain applied to the sampled backdrop pixels before
-        /// the layer contents are drawn on top. Only consulted when
-        /// `needs_backdrop` is true.
-        backdrop_filters: Vec<FilterFunction>,
         /// Optional `mask-*` parameters. When present, the replay path
         /// reads the layer pixels after filters are applied,
         /// rasterizes the mask source into an alpha buffer, and
@@ -242,11 +228,6 @@ pub enum DisplayItem {
     },
     /// End a [`PushCompositingLayer`](Self::PushCompositingLayer).
     PopCompositingLayer,
-    /// Hint that subsequent items in this layer should be blurred.
-    /// Software fallback applies per-color approximation (desaturation +
-    /// dimming) via [`super::filters::apply_filters`].
-    /// GPU backends can override with actual Gaussian blur via render targets.
-    BlurHint { radius: f32 },
     /// Begin a sticky-positioned element group.
     ///
     /// During scroll-delta replay, the sticky offset is recomputed from
@@ -260,6 +241,27 @@ pub enum DisplayItem {
     },
     /// End a sticky-positioned element group.
     PopSticky,
+    /// Inline `<svg>` content, painted by [`crate::svg::paint_svg`] at
+    /// replay into the content box at `(x, y)` sized `width` x `height`.
+    /// Recorded in paint order, so it stacks, clips and scrolls like any
+    /// other item.
+    Svg {
+        element: Rc<crate::svg::SvgElement>,
+        x: i32,
+        y: i32,
+        width: f32,
+        height: f32,
+    },
+    /// `<canvas>` content, painted by [`crate::canvas::paint_canvas`]
+    /// at replay. The state is shared with the JS bindings, so a cached
+    /// display list replays the canvas's current commands.
+    Canvas {
+        state: Rc<RefCell<crate::canvas::CanvasState>>,
+        x: i32,
+        y: i32,
+        w: u32,
+        h: u32,
+    },
 }
 
 impl DisplayItem {
@@ -273,6 +275,7 @@ impl DisplayItem {
             | DisplayItem::Blit { x, y, w, h, .. }
             | DisplayItem::Gradient { x, y, w, h, .. }
             | DisplayItem::BorderEdge { x, y, w, h, .. }
+            | DisplayItem::Canvas { x, y, w, h, .. }
             | DisplayItem::PushClip { x, y, w, h } => Some(Rect {
                 x: *x as f32,
                 y: *y as f32,
@@ -310,12 +313,6 @@ impl DisplayItem {
                 width: *w as f32,
                 height: *h as f32,
             }),
-            DisplayItem::StrokeRoundedRect { x, y, w, h, .. } => Some(Rect {
-                x: *x as f32,
-                y: *y as f32,
-                width: *w as f32,
-                height: *h as f32,
-            }),
             DisplayItem::FillPolygon { points, .. } => {
                 let min_x = points.iter().map(|p| p.0).min().unwrap_or(0);
                 let min_y = points.iter().map(|p| p.1).min().unwrap_or(0);
@@ -344,25 +341,26 @@ impl DisplayItem {
                     height: text_h as f32,
                 })
             },
+            DisplayItem::Svg {
+                x,
+                y,
+                width,
+                height,
+                ..
+            } => Some(Rect {
+                x: *x as f32,
+                y: *y as f32,
+                width: *width,
+                height: *height,
+            }),
             DisplayItem::PushCompositingLayer { bounds, .. } => Some(*bounds),
             DisplayItem::PopClip
             | DisplayItem::PushLayer { .. }
             | DisplayItem::PopLayer
             | DisplayItem::PopCompositingLayer
-            | DisplayItem::BlurHint { .. }
             | DisplayItem::PushSticky { .. }
             | DisplayItem::PopSticky => None,
         }
-    }
-
-    /// Whether this item opens a compositing layer boundary that
-    /// [`DisplayList::compact`] / [`DisplayList::optimize`] must NOT
-    /// merge or eliminate rects across.
-    pub fn is_layer_boundary(&self) -> bool {
-        matches!(
-            self,
-            DisplayItem::PushCompositingLayer { .. } | DisplayItem::PopCompositingLayer
-        )
     }
 }
 
@@ -379,14 +377,6 @@ impl DisplayItem {
 pub struct DisplayList {
     /// The recorded items in paint order.
     items: Vec<DisplayItem>,
-    /// Generation counter — incremented on each rebuild so caches
-    /// can detect staleness.
-    generation: u64,
-    /// Whether the display list contains items from sticky-positioned
-    /// elements. When true, scroll-only replay with delta offsets is
-    /// not safe because sticky elements change their visual position
-    /// relative to scroll independently of normal content flow.
-    has_sticky: bool,
     /// The scroll Y value at the time this display list was recorded.
     /// Used by `PushSticky` to recompute sticky offsets during replay.
     recording_scroll_y: f32,
@@ -397,33 +387,19 @@ impl DisplayList {
     pub fn new() -> Self {
         Self {
             items: Vec::with_capacity(256),
-            generation: 0,
-            has_sticky: false,
             recording_scroll_y: 0.0,
         }
     }
 
-    /// Clear all items and increment the generation counter.
+    /// Clear all items.
     pub fn clear(&mut self) {
         self.items.clear();
-        self.generation += 1;
-        self.has_sticky = false;
         self.recording_scroll_y = 0.0;
     }
 
     /// Set the scroll Y value at recording time.
     pub fn set_recording_scroll_y(&mut self, scroll_y: f32) {
         self.recording_scroll_y = scroll_y;
-    }
-
-    /// Whether the display list contains sticky-positioned elements.
-    pub fn has_sticky(&self) -> bool {
-        self.has_sticky
-    }
-
-    /// Mark the display list as containing sticky-positioned elements.
-    pub fn set_has_sticky(&mut self) {
-        self.has_sticky = true;
     }
 
     /// Push a display item onto the list.
@@ -433,6 +409,7 @@ impl DisplayList {
     }
 
     /// Number of recorded items.
+    #[cfg(test)]
     pub fn len(&self) -> usize {
         self.items.len()
     }
@@ -442,12 +419,8 @@ impl DisplayList {
         self.items.is_empty()
     }
 
-    /// The current generation counter.
-    pub fn generation(&self) -> u64 {
-        self.generation
-    }
-
     /// Access the items slice.
+    #[cfg(test)]
     pub fn items(&self) -> &[DisplayItem] {
         &self.items
     }
@@ -565,6 +538,42 @@ impl DisplayList {
     }
 }
 
+/// The vertical offset that keeps a `position: sticky` box pinned.
+///
+/// `natural_y` is the box's content top relative to the top of the
+/// viewport at zero scroll (layout y plus any ancestor offsets, minus
+/// the viewport's screen y). With `top_px` the box is pushed down so it
+/// never scrolls above `top` px from the viewport top; with `bottom_px`
+/// it is pulled up so its margin box (`box_height`) never drops below
+/// `bottom` px from the visible bottom. Shared by the recorder and by
+/// replay, which re-evaluates it for a scroll delta.
+pub(crate) fn sticky_offset(
+    natural_y: f32,
+    box_height: f32,
+    top_px: Option<f32>,
+    bottom_px: Option<f32>,
+    visible_viewport_h: f32,
+    scroll_y: f32,
+) -> i32 {
+    let natural = natural_y - scroll_y;
+    if let Some(top) = top_px {
+        if natural < top {
+            (top - natural) as i32
+        } else {
+            0
+        }
+    } else if let Some(bottom) = bottom_px {
+        let threshold = visible_viewport_h - bottom - box_height;
+        if natural > threshold {
+            (threshold - natural) as i32
+        } else {
+            0
+        }
+    } else {
+        0
+    }
+}
+
 impl Default for DisplayList {
     fn default() -> Self {
         Self::new()
@@ -583,7 +592,6 @@ mod tests {
         let dl = DisplayList::new();
         assert!(dl.is_empty());
         assert_eq!(dl.len(), 0);
-        assert_eq!(dl.generation(), 0);
     }
 
     #[test]
@@ -598,11 +606,9 @@ mod tests {
             node_id: None,
         });
         assert_eq!(dl.len(), 1);
-        assert_eq!(dl.generation(), 0);
 
         dl.clear();
         assert!(dl.is_empty());
-        assert_eq!(dl.generation(), 1);
     }
 
     #[test]
@@ -640,28 +646,5 @@ mod tests {
     fn push_pop_layer_bounds_is_none() {
         assert!(DisplayItem::PushLayer { opacity: 0.5 }.bounds().is_none());
         assert!(DisplayItem::PopLayer.bounds().is_none());
-    }
-
-    #[test]
-    fn is_layer_boundary_flags_new_variants() {
-        let bounds = Rect {
-            x: 0.0,
-            y: 0.0,
-            width: 10.0,
-            height: 10.0,
-        };
-        let push_cl = DisplayItem::PushCompositingLayer {
-            bounds,
-            opacity: 1.0,
-            blend: CssBlendMode::Multiply,
-            needs_backdrop: false,
-            filters: Vec::new(),
-            backdrop_filters: Vec::new(),
-            mask: None,
-        };
-        assert!(push_cl.is_layer_boundary());
-        assert!(DisplayItem::PopCompositingLayer.is_layer_boundary());
-        assert!(!DisplayItem::PushLayer { opacity: 0.5 }.is_layer_boundary());
-        assert!(!DisplayItem::PopLayer.is_layer_boundary());
     }
 }

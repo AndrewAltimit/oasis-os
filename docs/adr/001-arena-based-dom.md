@@ -1,8 +1,8 @@
 # ADR-001: Arena-Based DOM
 
 **Status:** Accepted
-**Date:** 2025-02-12
-**Last reviewed:** 2026-05-02 — still current. The browser engine uses an arena-based DOM today (`crates/oasis-browser/src/html/dom.rs`) with `NodeId` indices, exactly as described.
+**Date:** 2026-02-09 (initial release; recorded 2026-02-19)
+**Last reviewed:** 2026-10-30 — decision still current. The browser engine uses an arena-based DOM (`crates/oasis-html/src/dom.rs`) with `NodeId` indices. Tradeoffs and Consequences updated: JavaScript mutation removes subtrees and their slots are reused through a free list, and script-built trees are depth-capped.
 
 ## Context
 
@@ -36,14 +36,24 @@ We use an **arena-based DOM** (`Vec<Node>`) with index-based relationships.
 
 ## Tradeoffs
 
-- **Node removal is O(n)** since we don't compact the arena. In practice, our
-  browser engine builds the DOM once and never removes nodes.
+- **Removed slots are not compacted.** JS DOM mutation (`removeChild`,
+  `innerHTML`, `textContent`) frees whole subtrees; their slots go on a free
+  list (`Document::free_list`) that `add_node` reuses before appending, so the
+  arena does not grow without bound under repeated mutation.
+- **Reused ids can alias.** A `NodeId` handed to JavaScript can later name a
+  different node once its slot is reused. The bindings record freed ids
+  (`FreedLog` in `js_dom/node_api.rs`) and drop the stale wrappers.
 - **Parent/child navigation requires indexing** rather than following pointers.
   This is a minor ergonomic cost.
 
 ## Consequences
 
-- `Document::add_node()` appends to the arena and returns a `NodeId`.
+- `Document::add_node()` reuses a free slot or appends to the arena and returns
+  a `NodeId`.
+- Depth is bounded: the tree builder stops nesting at `MAX_NESTING_DEPTH`
+  (256), and script insertion (`appendChild`, `insertBefore`, `innerHTML`)
+  refuses to place a node below `MAX_DOM_DEPTH`, because cascade, layout and
+  paint recurse per level.
 - CSS styles are stored as `Vec<Option<ComputedStyle>>` indexed by `NodeId`.
 - Layout boxes store `Option<NodeId>` to link back to DOM nodes.
 - No garbage collection or cycle detection needed.

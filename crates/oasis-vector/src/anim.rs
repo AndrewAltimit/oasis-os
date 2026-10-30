@@ -7,6 +7,7 @@
 
 use crate::op::VectorOp;
 use oasis_types::backend::Color;
+use oasis_types::easing::ease_out_cubic;
 
 /// Unified animation time source bridging frame-counter and time-based worlds.
 #[derive(Debug, Clone)]
@@ -53,7 +54,9 @@ impl AnimClock {
         if period_s <= 0.0 {
             return 0.0;
         }
-        ((self.time_s / period_s + phase) % 1.0).abs()
+        // `rem_euclid`, not `%` + `abs`: a negative phase must wrap to the
+        // far end of the ramp, not mirror back onto it.
+        (self.time_s / period_s + phase).rem_euclid(1.0)
     }
 }
 
@@ -68,9 +71,7 @@ pub fn entrance_scale(elapsed_ms: u32, duration_ms: u32) -> f32 {
     if duration_ms == 0 {
         return 1.0;
     }
-    let t = (elapsed_ms as f32 / duration_ms as f32).min(1.0);
-    let inv = 1.0 - t;
-    1.0 - inv * inv * inv
+    ease_out_cubic(elapsed_ms as f32 / duration_ms as f32)
 }
 
 /// Compute entrance alpha (0->255) with ease-out.
@@ -88,9 +89,7 @@ pub fn entrance_slide_y(elapsed_ms: u32, duration_ms: u32, dist: i32) -> i32 {
     if duration_ms == 0 {
         return 0;
     }
-    let t = (elapsed_ms as f32 / duration_ms as f32).min(1.0);
-    let inv = 1.0 - t;
-    let ease = 1.0 - inv * inv * inv;
+    let ease = ease_out_cubic(elapsed_ms as f32 / duration_ms as f32);
     (dist as f32 * (1.0 - ease)) as i32
 }
 
@@ -149,7 +148,11 @@ pub fn pulse_alpha(frame: u32, speed: f32, min_alpha: u8) -> u8 {
 /// Compute blink visibility for a given frame.
 ///
 /// Returns true if the element should be visible (on for 2/3 of interval).
+/// An `interval` of 0 (skins may set one) means "never blink".
 pub fn blink_visible(frame: u32, interval: u32) -> bool {
+    if interval == 0 {
+        return true;
+    }
     let phase = frame % interval;
     // On for first 2/3, off for last 1/3
     phase < (interval * 2 / 3)
@@ -288,6 +291,17 @@ mod tests {
     fn entrance_slide_y_easing() {
         assert_eq!(entrance_slide_y(0, 200, 20), 20);
         assert_eq!(entrance_slide_y(200, 200, 20), 0);
+    }
+
+    #[test]
+    fn blink_zero_interval_is_always_visible() {
+        assert!((0..10).all(|f| blink_visible(f, 0)));
+    }
+
+    #[test]
+    fn sawtooth_negative_phase_wraps_forward() {
+        let clock = AnimClock::new();
+        assert!((clock.sawtooth(1.0, -0.25) - 0.75).abs() < 1e-6);
     }
 
     #[test]

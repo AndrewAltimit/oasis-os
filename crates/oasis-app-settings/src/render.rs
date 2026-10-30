@@ -49,7 +49,7 @@ impl SettingsApp {
         at: &ActiveTheme,
     ) -> oasis_types::error::Result<()> {
         let colors = SettingsColors::from_theme(at);
-        let l = self.layout(cx, cy, cw, ch);
+        let l = self.settings_layout(cx, cy, cw, ch);
         backend.fill_rect(cx, cy, cw, ch, colors.bg)?;
 
         // Category tabs.

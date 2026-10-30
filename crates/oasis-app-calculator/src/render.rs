@@ -6,7 +6,8 @@
 
 use oasis_skin::ActiveTheme;
 use oasis_types::backend::{Color, SdiBackend};
-use oasis_ui::button::{Button as UiButton, ButtonState, ButtonStyle};
+use oasis_ui::WidgetState;
+use oasis_ui::button::{Button as UiButton, ButtonStyle};
 use oasis_ui::{DrawContext, Widget};
 
 use crate::keypad::{CalcLayout, HISTORY_ROW_H, KEYS, KeyGroup, Rect};
@@ -109,10 +110,6 @@ impl CalculatorApp {
         if let Some(h) = l.history {
             self.draw_history(h, l.history_rows(), backend, at, &colors)?;
         }
-        // Age the pressed-key flash by one frame.
-        if let Some((key, frames)) = self.flash.get() {
-            self.flash.set((frames > 1).then(|| (key, frames - 1)));
-        }
         Ok(())
     }
 
@@ -179,14 +176,14 @@ impl CalculatorApp {
         backend: &mut dyn SdiBackend,
         at: &ActiveTheme,
     ) -> oasis_types::error::Result<()> {
-        let flashed = self.flash.get().map(|(k, _)| k);
+        let flashed = self.flash.map(|(k, _)| k);
         let mut ctx = DrawContext::new(backend, &at.ui_theme);
         for (i, def) in KEYS.iter().enumerate() {
             let r = l.key_rect(i);
             let mut button = UiButton::new(def.key.label());
             button.style = style_for(def.key.group());
             if flashed == Some(i) {
-                button.state = ButtonState::Pressed;
+                button.state = WidgetState::Pressed;
             }
             button.focused = self.cursor_visible && self.cursor == i;
             button.draw(&mut ctx, r.x, r.y, r.w, r.h)?;

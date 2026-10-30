@@ -1,0 +1,32 @@
+[package]
+name = "oasis-css"
+description = "CSS parser, cascade and computed values for the OASIS_OS browser engine"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+documentation = "https://docs.rs/oasis-css"
+
+[features]
+parallel-style = ["dep:rayon"]
+web-fonts = []
+scripting = []
+
+[dependencies]
+oasis-types = { workspace = true }
+oasis-html = { workspace = true }
+rustc-hash = { workspace = true }
+log = { workspace = true }
+rayon = { workspace = true, optional = true }
+
+[dev-dependencies]
+proptest.workspace = true
+criterion.workspace = true
+
+[[bench]]
+name = "css_cascade"
+harness = false
+
+[lints]
+workspace = true

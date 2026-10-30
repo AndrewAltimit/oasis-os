@@ -7,23 +7,23 @@
 //! This module adds a thin wrapper (`SdlNetworkBackend`) that delegates
 //! to `StdNetworkBackend` so the SDL crate has a named type it owns.
 
-use oasis_core::backend::{NetworkBackend, NetworkStream};
-use oasis_core::error::Result;
+use oasis_types::backend::{NetworkBackend, NetworkStream};
+use oasis_types::error::Result;
 
-/// SDL network backend wrapping [`oasis_core::net::StdNetworkBackend`].
+/// SDL network backend wrapping [`oasis_net::StdNetworkBackend`].
 ///
 /// All methods delegate to the inner `StdNetworkBackend` which uses
 /// `std::net` for TCP and (when the `tls-rustls` feature is active)
 /// `rustls` for TLS.
 pub struct SdlNetworkBackend {
-    inner: oasis_core::net::StdNetworkBackend,
+    inner: oasis_net::StdNetworkBackend,
 }
 
 impl SdlNetworkBackend {
     /// Create a new network backend.
     pub fn new() -> Self {
         Self {
-            inner: oasis_core::net::StdNetworkBackend::new(),
+            inner: oasis_net::StdNetworkBackend::new(),
         }
     }
 }
@@ -47,7 +47,7 @@ impl NetworkBackend for SdlNetworkBackend {
         self.inner.connect(address, port)
     }
 
-    fn tls_provider(&self) -> Option<&dyn oasis_core::tls::TlsProvider> {
+    fn tls_provider(&self) -> Option<&dyn oasis_types::tls::TlsProvider> {
         self.inner.tls_provider()
     }
 }

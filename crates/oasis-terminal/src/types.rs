@@ -81,11 +81,32 @@ pub enum CommandOutput {
     /// Multiple outputs from a chained command (e.g. `skin xp ; echo Done`).
     /// Each inner output is processed in order by the app layer.
     Multi(Vec<CommandOutput>),
+    /// `output` together with an explicit exit status, so a command can
+    /// fail (`code != 0`) and still print something, without returning
+    /// an `Err` (e.g. `test` prints `false` and exits 1). The executor
+    /// records `code` for `&&` / `||` / `$?` / `if` and unwraps this, so
+    /// hosts never receive it from [`CommandRegistry::execute`].
+    ///
+    /// [`CommandRegistry::execute`]: crate::CommandRegistry::execute
+    Status {
+        /// Exit status (0 = success).
+        code: i32,
+        /// What the command printed.
+        output: Box<CommandOutput>,
+    },
 }
 
 // Convenience constructors matching the old flat variant names.
 // These keep the diff smaller for callers that construct signals.
 impl CommandOutput {
+    /// Shorthand for `Status { code, output: Box::new(output) }`.
+    pub fn status(code: i32, output: CommandOutput) -> Self {
+        Self::Status {
+            code,
+            output: Box::new(output),
+        }
+    }
+
     /// Shorthand for `Signal(CommandSignal::ListenToggle { port })`.
     pub fn listen_toggle(port: u16) -> Self {
         Self::Signal(CommandSignal::ListenToggle { port })
@@ -163,12 +184,6 @@ pub trait Command {
 /// Maximum number of history entries to retain (in memory and in the
 /// persisted history file).
 pub(crate) const MAX_HISTORY: usize = 500;
-
-/// Shell builtins intercepted by the executor (not in the command map).
-pub(crate) const BUILTIN_NAMES: &[&str] = &[
-    "help", "run", "history", "set", "unset", "env", "alias", "unalias", "which", "return",
-    "break", "continue", "local", "function", "jobs", "fg", "bg", "kill", "true", "false",
-];
 
 /// Maximum shell function call depth (prevents infinite recursion).
 pub(crate) const MAX_CALL_DEPTH: usize = 64;

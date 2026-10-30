@@ -4,8 +4,8 @@
 //! circles, triangles, polygons, arcs) and helper functions used by both
 //! this module and the parent `lib.rs` (gradients, clip intersection).
 
-use oasis_core::backend::{ArcParams, Color, SdiCore, StrokeStyle};
-use oasis_core::error::Result;
+use oasis_types::backend::{ArcParams, Color, SdiCore, StrokeStyle};
+use oasis_types::error::Result;
 use sdl3::render::FRect;
 
 use super::{SdlBackend, fpoint, frect};

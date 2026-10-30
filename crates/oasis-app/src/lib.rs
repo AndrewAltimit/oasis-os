@@ -39,6 +39,7 @@ mod ui_sfx;
 mod user_prefs;
 mod vfs_setup;
 mod video_player;
+mod windows;
 
 pub use app_state::Mode;
 pub use shell::{BootObserver, BootOptions, NoSplash, Shell, StepOutcome};
@@ -50,5 +51,4 @@ pub use shell_backend::ShellBackend;
 pub(crate) use net_fetch::connect_archive_source;
 pub(crate) use net_fetch::{
     connect_archive_track_sync, fetch_catalog_blocking, fetch_tv_catalogs_blocking,
-    parse_stream_url,
 };

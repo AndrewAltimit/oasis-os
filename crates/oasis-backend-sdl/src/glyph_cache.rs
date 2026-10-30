@@ -13,10 +13,10 @@
 //! Translucent text keeps a color-keyed entry with the color baked into the
 //! pixels — see `SdlBackend::tints_at_blit`.
 
-use oasis_core::backend::{BackendErrExt, Color, SdiText};
-use oasis_core::error::{OasisError, Result};
 use oasis_rasterize::GlyphCacheKey;
 use oasis_rasterize::ttf::TtfFont;
+use oasis_types::backend::{BackendErrExt, Color, SdiText};
+use oasis_types::error::{OasisError, Result};
 use sdl3::pixels::PixelFormat;
 use sdl3::render::Texture;
 

@@ -41,6 +41,7 @@ impl Playlist {
         self.tracks.push(info);
         if self.shuffle {
             self.rebuild_shuffle();
+            self.sync_shuffle_pos();
         }
     }
 
@@ -67,6 +68,7 @@ impl Playlist {
 
         if self.shuffle {
             self.rebuild_shuffle();
+            self.sync_shuffle_pos();
         }
         Some(removed)
     }
@@ -103,9 +105,38 @@ impl Playlist {
     pub fn set_current(&mut self, index: usize) -> bool {
         if index < self.tracks.len() {
             self.current = Some(index);
+            // `next` / `prev` in shuffle mode continue from this track.
+            if self.shuffle {
+                self.sync_shuffle_pos();
+            }
             true
         } else {
             false
+        }
+    }
+
+    /// Index of the track with this VFS path.
+    pub fn position_of(&self, path: &str) -> Option<usize> {
+        self.tracks.iter().position(|t| t.path == path)
+    }
+
+    /// Turn shuffle on or off. Turning it on builds a fresh shuffle order
+    /// that continues from the current track.
+    pub fn set_shuffle(&mut self, on: bool) {
+        self.shuffle = on;
+        if on {
+            self.rebuild_shuffle();
+            self.sync_shuffle_pos();
+        }
+    }
+
+    /// Point the shuffle cursor at the current track, so shuffle `next` /
+    /// `prev` step from the track that is actually playing.
+    fn sync_shuffle_pos(&mut self) {
+        if let Some(cur) = self.current
+            && let Some(pos) = self.shuffle_order.iter().position(|&i| i == cur)
+        {
+            self.shuffle_pos = pos;
         }
     }
 

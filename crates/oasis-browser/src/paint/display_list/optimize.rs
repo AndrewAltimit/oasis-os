@@ -28,10 +28,10 @@ impl DisplayList {
         self.items.retain(|item| match item {
             DisplayItem::FillRect { w, h, .. }
             | DisplayItem::FillRoundedRect { w, h, .. }
-            | DisplayItem::StrokeRoundedRect { w, h, .. }
             | DisplayItem::Blit { w, h, .. }
             | DisplayItem::Gradient { w, h, .. }
-            | DisplayItem::BorderEdge { w, h, .. } => *w > 0 && *h > 0,
+            | DisplayItem::BorderEdge { w, h, .. }
+            | DisplayItem::Canvas { w, h, .. } => *w > 0 && *h > 0,
             // PushClip must never be removed — its PopClip is always
             // retained, and removing one without the other corrupts the
             // clip stack.  Zero-size clips are harmless (they just clip
@@ -42,7 +42,7 @@ impl DisplayList {
             // still produces visible pixels.
             DisplayItem::Shadow { .. } => true,
             DisplayItem::DrawText { text, width, .. } => !text.is_empty() && *width > 0,
-            // PopClip, PushLayer, PopLayer, BlurHint — always keep.
+            // PopClip, layers, sticky groups and SVG — always keep.
             _ => true,
         });
 
@@ -365,9 +365,7 @@ mod tests {
             bounds,
             opacity,
             blend: CssBlendMode::Multiply,
-            needs_backdrop: false,
             filters: Vec::new(),
-            backdrop_filters: Vec::new(),
             mask: None,
         }
     }

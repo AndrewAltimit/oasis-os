@@ -365,10 +365,7 @@ mod tests {
     #[test]
     fn audio_modules_null_terminated() {
         for (module, library) in AUDIO_MODULES {
-            assert!(
-                module.last() == Some(&0),
-                "Module name not null-terminated"
-            );
+            assert!(module.last() == Some(&0), "Module name not null-terminated");
             assert!(
                 library.last() == Some(&0),
                 "Library name not null-terminated"

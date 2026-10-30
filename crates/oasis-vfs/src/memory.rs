@@ -8,7 +8,9 @@ use std::collections::BTreeMap;
 
 use oasis_types::error::{OasisError, Result};
 
-use crate::{AccessMode, EntryKind, FilePermissions, Vfs, VfsContext, VfsEntry, VfsMetadata};
+use crate::{
+    AccessMode, EntryKind, FilePermissions, RenamePlan, Vfs, VfsContext, VfsEntry, VfsMetadata,
+};
 
 #[derive(Debug, Clone)]
 enum Node {
@@ -270,25 +272,24 @@ impl Vfs for MemoryVfs {
     fn rename(&mut self, from: &str, to: &str) -> Result<()> {
         let from = normalize(from);
         let to = normalize(to);
-        if !self.nodes.contains_key(from.as_ref()) {
-            return Err(OasisError::Vfs(format!("no such path: {from}").into()));
+        if self.validate_rename(&from, &to)? == RenamePlan::NoOp {
+            return Ok(());
         }
-        // Ensure destination parent exists.
-        let to_par = parent(&to);
-        if !self.nodes.contains_key(to_par) {
-            return Err(OasisError::Vfs(
-                format!("parent directory does not exist: {to_par}").into(),
-            ));
-        }
-        // Collect all entries to move (the source itself + children if directory).
+        // Renaming rewrites an entry in both parent directories.
+        self.check_permission(parent(&from), AccessMode::Write)?;
+        self.check_permission(parent(&to), AccessMode::Write)?;
+        // Collect all entries to move: the source itself plus, for a
+        // directory, every key under `from/` (a contiguous BTreeMap range).
         let from_str = from.as_ref().to_string();
         let prefix = format!("{from_str}/");
-        let keys_to_move: Vec<String> = self
-            .nodes
-            .keys()
-            .filter(|k| *k == &from_str || k.starts_with(&prefix))
-            .cloned()
-            .collect();
+        let mut keys_to_move = vec![from_str.clone()];
+        keys_to_move.extend(
+            self.nodes
+                .range(prefix.clone()..)
+                .map(|(k, _)| k)
+                .take_while(|k| k.starts_with(&prefix))
+                .cloned(),
+        );
         let to_str = to.into_owned();
         for old_key in keys_to_move {
             let new_key = if old_key == from_str {

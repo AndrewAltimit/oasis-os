@@ -336,7 +336,7 @@ pub enum IoResponse {
     /// TV Guide catalog parsed on the I/O thread.
     TvCatalogReady {
         ch_idx: usize,
-        episodes: Vec<oasis_core::apps::tv_guide::VideoEpisode>,
+        episodes: Vec<oasis_app_tv_guide::VideoEpisode>,
     },
     Error {
         path: String,

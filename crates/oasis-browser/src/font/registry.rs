@@ -376,8 +376,17 @@ fn fetch_font_data(
     vfs: &dyn oasis_vfs::Vfs,
     tls: Option<&dyn oasis_net::tls::TlsProvider>,
 ) -> Option<Vec<u8>> {
+    // Resolve against the page so the `vfs://` gate sees the real target.
+    let resolved = base_url
+        .and_then(loader::Url::parse)
+        .and_then(|b| b.resolve(url))
+        .map_or_else(|| url.to_string(), |u| u.to_string());
+    if !loader::subresource_allowed(base_url, &resolved) {
+        log::warn!("blocked vfs:// font {resolved} on a web page");
+        return None;
+    }
     let request = ResourceRequest {
-        url: url.to_string(),
+        url: resolved,
         base_url: base_url.map(|s| s.to_string()),
         source: if tls.is_some() {
             ResourceSource::VfsThenNetwork
@@ -386,10 +395,11 @@ fn fetch_font_data(
         },
         method: loader::HttpMethod::Get,
         body: None,
-        referrer: base_url.map(|s| s.to_string()),
+        referrer: base_url.and_then(loader::strip_referrer),
+        initiator: base_url.map(str::to_string),
     };
 
-    #[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
+    #[cfg(native_net)]
     {
         match loader::load_resource(vfs, &request, tls, None, None) {
             Ok(loaded) if loaded.response.status < 400 && !loaded.response.body.is_empty() => {
@@ -398,7 +408,7 @@ fn fetch_font_data(
             _ => None,
         }
     }
-    #[cfg(any(target_arch = "wasm32", feature = "psp"))]
+    #[cfg(not(native_net))]
     {
         match loader::load_resource(vfs, &request, tls) {
             Ok(loaded) if loaded.response.status < 400 && !loaded.response.body.is_empty() => {

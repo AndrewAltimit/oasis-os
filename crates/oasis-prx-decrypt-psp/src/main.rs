@@ -16,10 +16,8 @@
 
 use core::ffi::c_void;
 use psp::sys::{
-    self, CtrlButtons, CtrlMode, IoOpenFlags, SceCtrlData, SceUid,
-    sceCtrlPeekBufferPositive, sceCtrlSetSamplingMode,
-    sceIoClose, sceIoOpen, sceIoRead, sceIoWrite,
-    sceKernelDelayThread,
+    self, CtrlButtons, CtrlMode, IoOpenFlags, SceCtrlData, sceCtrlPeekBufferPositive,
+    sceCtrlSetSamplingMode, sceIoClose, sceIoOpen, sceIoRead, sceIoWrite, sceKernelDelayThread,
 };
 
 psp::module_kernel!("PRXDecrypt", 1, 0);
@@ -68,7 +66,10 @@ struct Fmt {
 
 impl Fmt {
     fn new() -> Self {
-        Self { buf: [0u8; 256], pos: 0 }
+        Self {
+            buf: [0u8; 256],
+            pos: 0,
+        }
     }
     fn s(&self) -> &str {
         unsafe { core::str::from_utf8_unchecked(&self.buf[..self.pos]) }
@@ -120,9 +121,6 @@ const NID_MEMLMD_DECRYPT_1: u32 = 0xEF73E85B;
 /// memlmd_6192F715 — alternate decrypt
 const NID_MEMLMD_DECRYPT_2: u32 = 0x6192F715;
 
-/// sceUtilsBufferCopyWithRange — raw Kirk interface (fallback)
-const NID_KIRK_COPY: u32 = 0x4C537C72;
-
 type DecryptFn = unsafe extern "C" fn(*mut u8, i32, *mut i32) -> i32;
 
 static mut DECRYPT_FN: Option<DecryptFn> = None;
@@ -130,54 +128,67 @@ static mut DECRYPT_NAME: &str = "none";
 
 /// Resolve memlmd decrypt function.
 unsafe fn resolve_decrypt() -> bool {
-    let pairs: [(&[u8], &[u8], u32, &str); 6] = [
-        (
-            b"sceMesgLed\0", b"memlmd\0",
-            NID_MEMLMD_DECRYPT_1, "memlmd_EF73E85B",
-        ),
-        (
-            b"sceMesgLed\0", b"memlmd\0",
-            NID_MEMLMD_DECRYPT_2, "memlmd_6192F715",
-        ),
-        (
-            b"sceMemlmd\0", b"memlmd\0",
-            NID_MEMLMD_DECRYPT_1, "sceMemlmd_EF73E85B",
-        ),
-        (
-            b"sceMemlmd\0", b"memlmd\0",
-            NID_MEMLMD_DECRYPT_2, "sceMemlmd_6192F715",
-        ),
-        (
-            b"sceLowIO_Driver\0", b"sceNand_driver\0",
-            NID_MEMLMD_DECRYPT_1, "lowio_EF73E85B",
-        ),
-        (
-            b"sceMesgLed\0", b"sceMemlmd\0",
-            NID_MEMLMD_DECRYPT_1, "mesgLed_sceMemlmd",
-        ),
-    ];
+    // SAFETY: called once from psp_main before any decrypt. Module / library names are NUL-
+    // terminated literals, and the address find_function returns for a memlmd decrypt NID is
+    // transmuted to that NID's `DecryptFn` signature; DECRYPT_FN / DECRYPT_NAME are written with
+    // write_volatile through raw pointers.
+    unsafe {
+        let pairs: [(&[u8], &[u8], u32, &str); 6] = [
+            (
+                b"sceMesgLed\0",
+                b"memlmd\0",
+                NID_MEMLMD_DECRYPT_1,
+                "memlmd_EF73E85B",
+            ),
+            (
+                b"sceMesgLed\0",
+                b"memlmd\0",
+                NID_MEMLMD_DECRYPT_2,
+                "memlmd_6192F715",
+            ),
+            (
+                b"sceMemlmd\0",
+                b"memlmd\0",
+                NID_MEMLMD_DECRYPT_1,
+                "sceMemlmd_EF73E85B",
+            ),
+            (
+                b"sceMemlmd\0",
+                b"memlmd\0",
+                NID_MEMLMD_DECRYPT_2,
+                "sceMemlmd_6192F715",
+            ),
+            (
+                b"sceLowIO_Driver\0",
+                b"sceNand_driver\0",
+                NID_MEMLMD_DECRYPT_1,
+                "lowio_EF73E85B",
+            ),
+            (
+                b"sceMesgLed\0",
+                b"sceMemlmd\0",
+                NID_MEMLMD_DECRYPT_1,
+                "mesgLed_sceMemlmd",
+            ),
+        ];
 
-    for (module, library, nid, name) in &pairs {
-        if let Some(addr) = psp::hook::find_function(
-            module.as_ptr(), library.as_ptr(), *nid,
-        ) {
-            let mut f = Fmt::new();
-            f.p("  Found ");
-            f.p(name);
-            f.p(" at ");
-            f.h8(addr as u32);
-            log(f.s());
+        for (module, library, nid, name) in &pairs {
+            if let Some(addr) = psp::hook::find_function(module.as_ptr(), library.as_ptr(), *nid) {
+                let mut f = Fmt::new();
+                f.p("  Found ");
+                f.p(name);
+                f.p(" at ");
+                f.h8(addr as u32);
+                log(f.s());
 
-            core::ptr::write_volatile(
-                &raw mut DECRYPT_FN,
-                Some(core::mem::transmute(addr)),
-            );
-            core::ptr::write_volatile(&raw mut DECRYPT_NAME, name);
-            return true;
+                core::ptr::write_volatile(&raw mut DECRYPT_FN, Some(core::mem::transmute(addr)));
+                core::ptr::write_volatile(&raw mut DECRYPT_NAME, name);
+                return true;
+            }
         }
-    }
 
-    false
+        false
+    }
 }
 
 // ── File I/O helpers ────────────────────────────────────────────────────
@@ -188,9 +199,7 @@ static mut PRX_BUF: [u8; BUF_SIZE] = [0u8; BUF_SIZE];
 
 /// Read file into static buffer. Returns file size or 0 on failure.
 fn read_file_static(path: &[u8]) -> usize {
-    let fd = unsafe {
-        sceIoOpen(path.as_ptr(), IoOpenFlags::RD_ONLY, 0)
-    };
+    let fd = unsafe { sceIoOpen(path.as_ptr(), IoOpenFlags::RD_ONLY, 0) };
     if fd.0 < 0 {
         return 0;
     }
@@ -236,9 +245,7 @@ fn write_file(path: &[u8], data: &[u8]) -> bool {
         return false;
     }
 
-    let written = unsafe {
-        sceIoWrite(fd, data.as_ptr() as *const c_void, data.len())
-    };
+    let written = unsafe { sceIoWrite(fd, data.as_ptr() as *const c_void, data.len()) };
     unsafe { sceIoClose(fd) };
 
     written as usize == data.len()
@@ -254,89 +261,96 @@ fn mkdir(path: &[u8]) {
 /// Try to decrypt a PRX buffer in-place using memlmd.
 /// Returns decrypted size on success, negative error on failure.
 unsafe fn decrypt_prx(buf: &mut [u8], file_size: usize) -> i32 {
-    let func = match core::ptr::read_volatile(&raw const DECRYPT_FN) {
-        Some(f) => f,
-        None => return -1,
-    };
+    // SAFETY: DECRYPT_FN is read with read_volatile and is either None or the memlmd decrypt
+    // function resolved by `resolve_decrypt`. memlmd decrypts in place, so `buf` (exclusive borrow,
+    // at least `file_size` bytes per the caller) and `new_size` are valid for the call.
+    unsafe {
+        let func = match core::ptr::read_volatile(&raw const DECRYPT_FN) {
+            Some(f) => f,
+            None => return -1,
+        };
 
-    let mut new_size: i32 = 0;
-    // SAFETY: calling kernel memlmd decrypt function with valid buffer.
-    let ret = unsafe { func(buf.as_mut_ptr(), file_size as i32, &mut new_size) };
+        let mut new_size: i32 = 0;
+        // SAFETY: calling kernel memlmd decrypt function with valid buffer.
+        let ret = func(buf.as_mut_ptr(), file_size as i32, &mut new_size);
 
-    if ret >= 0 && new_size > 0 {
-        new_size
-    } else {
-        // Return the error code
-        if ret < 0 { ret } else { -2 }
+        if ret >= 0 && new_size > 0 {
+            new_size
+        } else {
+            // Return the error code
+            if ret < 0 { ret } else { -2 }
+        }
     }
 }
 
 /// Load a PRX via sceKernelLoadModule (which decrypts it), then find
 /// the decrypted module in memory and dump it. Returns decrypted size.
 unsafe fn load_and_dump(flash_path: &[u8], out_path: &[u8]) -> i32 {
-    // Load the module — this triggers Kirk decryption internally
-    let mod_id = sys::sceKernelLoadModule(
-        flash_path.as_ptr(),
-        0,
-        core::ptr::null_mut(),
-    );
+    // SAFETY: `flash_path` / `out_path` are NUL-terminated (the only caller passes entries of the
+    // dump-target table, all `b"...\0"` literals). The module info buffer is a local passed to
+    // sceKernelQueryModuleInfo, and the text range read back describes the module just loaded,
+    // which stays mapped until it is unloaded at the end.
+    unsafe {
+        // Load the module — this triggers Kirk decryption internally
+        let mod_id = sys::sceKernelLoadModule(flash_path.as_ptr(), 0, core::ptr::null_mut());
 
-    if mod_id.0 < 0 {
+        if mod_id.0 < 0 {
+            let mut f = Fmt::new();
+            f.p("  LoadModule err: ");
+            f.h8(mod_id.0 as u32);
+            log(f.s());
+            return mod_id.0;
+        }
+
         let mut f = Fmt::new();
-        f.p("  LoadModule err: ");
+        f.p("  Module loaded, id=");
         f.h8(mod_id.0 as u32);
         log(f.s());
-        return mod_id.0;
-    }
 
-    let mut f = Fmt::new();
-    f.p("  Module loaded, id=");
-    f.h8(mod_id.0 as u32);
-    log(f.s());
+        // Query module info to find its base address and size
+        let mut info: sys::SceKernelModuleInfo = core::mem::zeroed();
+        info.size = core::mem::size_of::<sys::SceKernelModuleInfo>();
+        let ret = sys::sceKernelQueryModuleInfo(mod_id, &mut info);
 
-    // Query module info to find its base address and size
-    let mut info: sys::SceKernelModuleInfo = core::mem::zeroed();
-    info.size = core::mem::size_of::<sys::SceKernelModuleInfo>();
-    let ret = sys::sceKernelQueryModuleInfo(mod_id, &mut info);
-
-    if ret < 0 {
-        let mut f = Fmt::new();
-        f.p("  QueryModuleInfo err: ");
-        f.h8(ret as u32);
-        log(f.s());
-        sys::sceKernelUnloadModule(mod_id);
-        return ret;
-    }
-
-    // Get text segment info
-    let text_addr = info.text_addr as *const u8;
-    let text_size = info.text_size as usize;
-    let data_size = info.data_size as usize;
-    let total = text_size + data_size;
-
-    let mut f = Fmt::new();
-    f.p("  Addr=");
-    f.h8(text_addr as u32);
-    f.p(" text=");
-    f.decimal(text_size as u32);
-    f.p(" data=");
-    f.decimal(data_size as u32);
-    log(f.s());
-
-    if total > 0 && !text_addr.is_null() {
-        // Dump decrypted module memory (text + data) to file
-        let slice = core::slice::from_raw_parts(text_addr, total);
-        if write_file(out_path, slice) {
-            log("  Dumped!");
-        } else {
-            log("  Write failed");
+        if ret < 0 {
+            let mut f = Fmt::new();
+            f.p("  QueryModuleInfo err: ");
+            f.h8(ret as u32);
+            log(f.s());
+            sys::sceKernelUnloadModule(mod_id);
+            return ret;
         }
+
+        // Get text segment info
+        let text_addr = info.text_addr as *const u8;
+        let text_size = info.text_size as usize;
+        let data_size = info.data_size as usize;
+        let total = text_size + data_size;
+
+        let mut f = Fmt::new();
+        f.p("  Addr=");
+        f.h8(text_addr as u32);
+        f.p(" text=");
+        f.decimal(text_size as u32);
+        f.p(" data=");
+        f.decimal(data_size as u32);
+        log(f.s());
+
+        if total > 0 && !text_addr.is_null() {
+            // Dump decrypted module memory (text + data) to file
+            let slice = core::slice::from_raw_parts(text_addr, total);
+            if write_file(out_path, slice) {
+                log("  Dumped!");
+            } else {
+                log("  Write failed");
+            }
+        }
+
+        // Unload the module
+        sys::sceKernelUnloadModule(mod_id);
+
+        total as i32
     }
-
-    // Unload the module
-    sys::sceKernelUnloadModule(mod_id);
-
-    total as i32
 }
 
 // ── Target PRX list ─────────────────────────────────────────────────────
@@ -460,22 +474,26 @@ const TARGETS: &[PrxTarget] = &[
 
 const NAV_BUTTONS: CtrlButtons = CtrlButtons::from_bits_truncate(
     CtrlButtons::CROSS.bits()
-    | CtrlButtons::TRIANGLE.bits()
-    | CtrlButtons::CIRCLE.bits()
-    | CtrlButtons::START.bits()
+        | CtrlButtons::TRIANGLE.bits()
+        | CtrlButtons::CIRCLE.bits()
+        | CtrlButtons::START.bits(),
 );
 
 fn wait_button() -> CtrlButtons {
     let mut p = SceCtrlData::default();
     loop {
         unsafe { sceCtrlPeekBufferPositive(&mut p, 1) };
-        if !p.buttons.intersects(NAV_BUTTONS) { break; }
+        if !p.buttons.intersects(NAV_BUTTONS) {
+            break;
+        }
         unsafe { sceKernelDelayThread(16_000) };
     }
     loop {
         unsafe { sceCtrlPeekBufferPositive(&mut p, 1) };
         let pressed = p.buttons & NAV_BUTTONS;
-        if !pressed.is_empty() { return pressed; }
+        if !pressed.is_empty() {
+            return pressed;
+        }
         unsafe { sceKernelDelayThread(16_000) };
     }
 }
@@ -513,13 +531,7 @@ fn dump_mpeg_modules() {
     // Get module ID list.
     let mut mod_ids = [sys::SceUid(0); 128];
     let mut count: i32 = 0;
-    let ret = unsafe {
-        sys::sceKernelGetModuleIdList(
-            mod_ids.as_mut_ptr(),
-            128,
-            &mut count,
-        )
-    };
+    let ret = unsafe { sys::sceKernelGetModuleIdList(mod_ids.as_mut_ptr(), 128, &mut count) };
 
     let mut f = Fmt::new();
     f.p("  GetModuleIdList = ");
@@ -551,10 +563,11 @@ fn dump_mpeg_modules() {
 
         // Convert module name to str.
         let name_bytes = &info.name;
-        let name_len = name_bytes.iter().position(|&b| b == 0).unwrap_or(name_bytes.len());
-        let name = unsafe {
-            core::str::from_utf8_unchecked(&name_bytes[..name_len])
-        };
+        let name_len = name_bytes
+            .iter()
+            .position(|&b| b == 0)
+            .unwrap_or(name_bytes.len());
+        let name = unsafe { core::str::from_utf8_unchecked(&name_bytes[..name_len]) };
 
         // Log ALL modules with their addresses.
         let text_addr = info.text_addr as usize;
@@ -579,13 +592,21 @@ fn dump_mpeg_modules() {
         let is_target = {
             let mut found = false;
             let targets = [
-                "mpeg", "Mpeg", "MPEG",
-                "avcodec", "Avcodec",
-                "codec", "Codec",
-                "video", "Video",
-                "mpegbase", "MpegBase",
-                "sceMpeg", "libmpeg",
-                "memlmd", "semaphore",
+                "mpeg",
+                "Mpeg",
+                "MPEG",
+                "avcodec",
+                "Avcodec",
+                "codec",
+                "Codec",
+                "video",
+                "Video",
+                "mpegbase",
+                "MpegBase",
+                "sceMpeg",
+                "libmpeg",
+                "memlmd",
+                "semaphore",
             ];
             for t in targets {
                 if name.contains(t) {
@@ -630,9 +651,7 @@ fn dump_mpeg_modules() {
                     b"ms0:/PSP/GAME/PRXDEC/dec/codec_memdump.bin\0"
                 };
 
-                let slice = unsafe {
-                    core::slice::from_raw_parts(text_addr as *const u8, total)
-                };
+                let slice = unsafe { core::slice::from_raw_parts(text_addr as *const u8, total) };
                 if write_file(out_path, slice) {
                     let mut f = Fmt::new();
                     f.p("    Dumped ");
@@ -674,21 +693,37 @@ fn psp_main() {
 
         // Try alternative NIDs
         let alt_nids: [(&[u8], &[u8], u32, &str); 4] = [
-            (b"sceLoadExec\0", b"LoadExecForKernel\0",
-             0xD8320A28, "sceKernelCheckExecFile"),
-            (b"sceMesgLed\0", b"sceMesgLed_driver\0",
-             0xEF73E85B, "sceMesgLed_driver_EF73"),
-            (b"sceMesgLed\0", b"sceMesgLed_driver\0",
-             0x6192F715, "sceMesgLed_driver_6192"),
-            (b"sceMemlmd\0", b"sceMesgLed_driver\0",
-             0xEF73E85B, "sceMemlmd_mesgLed_EF73"),
+            (
+                b"sceLoadExec\0",
+                b"LoadExecForKernel\0",
+                0xD8320A28,
+                "sceKernelCheckExecFile",
+            ),
+            (
+                b"sceMesgLed\0",
+                b"sceMesgLed_driver\0",
+                0xEF73E85B,
+                "sceMesgLed_driver_EF73",
+            ),
+            (
+                b"sceMesgLed\0",
+                b"sceMesgLed_driver\0",
+                0x6192F715,
+                "sceMesgLed_driver_6192",
+            ),
+            (
+                b"sceMemlmd\0",
+                b"sceMesgLed_driver\0",
+                0xEF73E85B,
+                "sceMemlmd_mesgLed_EF73",
+            ),
         ];
 
         for (module, library, nid, name) in &alt_nids {
             unsafe {
-                if let Some(addr) = psp::hook::find_function(
-                    module.as_ptr(), library.as_ptr(), *nid,
-                ) {
+                if let Some(addr) =
+                    psp::hook::find_function(module.as_ptr(), library.as_ptr(), *nid)
+                {
                     let mut f = Fmt::new();
                     f.p("  Found alt: ");
                     f.p(name);
@@ -764,11 +799,15 @@ fn psp_main() {
 
         // Log PRX header tag
         if file_size >= 0xD4 {
-            let ptr = unsafe { (&raw const PRX_BUF) as *const u8 };
-            let tag = u32::from_le_bytes(unsafe { [
-                *ptr.add(0xD0), *ptr.add(0xD1),
-                *ptr.add(0xD2), *ptr.add(0xD3),
-            ] });
+            let ptr = (&raw const PRX_BUF) as *const u8;
+            let tag = u32::from_le_bytes(unsafe {
+                [
+                    *ptr.add(0xD0),
+                    *ptr.add(0xD1),
+                    *ptr.add(0xD2),
+                    *ptr.add(0xD3),
+                ]
+            });
             let mut f = Fmt::new();
             f.p("  Tag: ");
             f.h8(tag);
@@ -778,9 +817,7 @@ fn psp_main() {
         // Try to decrypt
         log("  Decrypting...");
         let result = unsafe {
-            let buf = core::slice::from_raw_parts_mut(
-                (&raw mut PRX_BUF) as *mut u8, BUF_SIZE,
-            );
+            let buf = core::slice::from_raw_parts_mut((&raw mut PRX_BUF) as *mut u8, BUF_SIZE);
             decrypt_prx(buf, file_size)
         };
 
@@ -792,12 +829,11 @@ fn psp_main() {
             log(f.s());
 
             // Check magic
-            let ptr = unsafe { (&raw const PRX_BUF) as *const u8 };
+            let ptr = (&raw const PRX_BUF) as *const u8;
             if dec_size >= 4 {
-                let magic = u32::from_le_bytes(unsafe { [
-                    *ptr.add(0), *ptr.add(1),
-                    *ptr.add(2), *ptr.add(3),
-                ] });
+                let magic = u32::from_le_bytes(unsafe {
+                    [*ptr.add(0), *ptr.add(1), *ptr.add(2), *ptr.add(3)]
+                });
                 let mut f = Fmt::new();
                 f.p("  Magic: ");
                 f.h8(magic);
@@ -810,9 +846,7 @@ fn psp_main() {
             }
 
             // Write decrypted file
-            let out_slice = unsafe {
-                core::slice::from_raw_parts(ptr, dec_size)
-            };
+            let out_slice = unsafe { core::slice::from_raw_parts(ptr, dec_size) };
             if write_file(target.output_name, out_slice) {
                 log("  Saved!");
                 ok_count += 1;
@@ -828,9 +862,7 @@ fn psp_main() {
 
             // Fallback: load module and dump from memory
             log("  Trying LoadModule+dump...");
-            let dump_size = unsafe {
-                load_and_dump(target.flash_path, target.output_name)
-            };
+            let dump_size = unsafe { load_and_dump(target.flash_path, target.output_name) };
             if dump_size > 0 {
                 let mut f = Fmt::new();
                 f.p("  Dumped ");

@@ -7,7 +7,7 @@ var h; // helpers shorthand
 BlueprintEngine.register('psp-usb-adapter', {
   title: 'PSP Universal USB-C Adapter',
   subtitle: 'Passive Bridge &bull; Power Pads + Mini-B Data &bull; Single USB-C Receptacle',
-  backLink: {href: 'journal/05-psp-usb-research.html', text: '&larr; Entry 05: PSP USB Research'},
+  backLink: {href: 'journal/05-psp-usb-research.html', text: 'Journal entry 05: PSP USB Research'},
   dims: 'PSP top edge: ~82mm wide\nMini-B port: 8x4mm\nPower pads: ~3x5mm each\nUSB-C receptacle: 8.3x2.5mm',
   legend: [
     {color:'#fa0', label:'VBUS (5V from power pads)'},

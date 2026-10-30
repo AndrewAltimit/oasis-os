@@ -625,8 +625,8 @@ pub fn setup_terminal_objects_with_cursor(
     let margin = 4i32;
     let top_y = at.statusbar_height as i32 + 2;
     let bot_y = at.screen_h as i32 - at.bottombar_height as i32;
-    let bg_w = at.screen_w - (margin * 2) as u32;
-    let bg_h = (bot_y - top_y) as u32;
+    let bg_w = at.screen_w.saturating_sub((margin * 2) as u32);
+    let bg_h = (bot_y - top_y).max(0) as u32;
     let visible_lines = visible_output_lines(at);
     let colors = TerminalColors::from_theme(at);
 
@@ -945,8 +945,8 @@ pub fn paint_terminal_scrollbar(
     let margin = 4i32;
     let top_y = at.statusbar_height as i32 + 2;
     let bot_y = at.screen_h as i32 - at.bottombar_height as i32;
-    let bg_w = at.screen_w - (margin * 2) as u32;
-    let bg_h = (bot_y - top_y) as u32;
+    let bg_w = at.screen_w.saturating_sub((margin * 2) as u32);
+    let bg_h = (bot_y - top_y).max(0) as u32;
 
     let sb_w = at.scrollbar.width;
     let track_x: i32 = margin + bg_w as i32 - sb_w as i32 - 1;

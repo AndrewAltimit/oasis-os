@@ -1056,11 +1056,10 @@ impl FileManagerApp {
             .screen_h
             .saturating_sub(at.app.title_bar_height + at.statusbar_height + at.bottombar_height);
         let g = compute_explorer_geom(0, body_top, at.screen_w, body_h);
-        self.explorer_cols.set(g.cols);
-        self.explorer_visible_rows.set(g.rows);
-        self.cached_font_hint.set(at.font_hint);
-        self.cached_system_bars
-            .set(at.statusbar_height + at.bottombar_height);
+        self.explorer_cols = g.cols;
+        self.explorer_visible_rows = g.rows;
+        self.cached_font_hint = at.font_hint;
+        self.cached_system_bars = at.statusbar_height + at.bottombar_height;
 
         let dark = colors.divider;
 
@@ -1377,12 +1376,9 @@ impl FileManagerApp {
         let panel = self.active();
         // No inner title bar -- the WM titlebar already shows "File Manager"
         // and the address bar below shows the current path.
+        // Grid metrics for navigation / hit-tests were recorded by
+        // `App::layout` from the same geometry.
         let g = compute_explorer_geom(cx, cy, cw, ch);
-        self.explorer_cols.set(g.cols);
-        self.explorer_visible_rows.set(g.rows);
-        self.cached_font_hint.set(at.font_hint);
-        self.cached_system_bars
-            .set(at.statusbar_height + at.bottombar_height);
 
         let dark = colors.divider;
 

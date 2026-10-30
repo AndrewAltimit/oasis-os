@@ -97,9 +97,7 @@ pub(crate) fn render_desktop(
                     let _ = w.paint(be);
                     Ok(())
                 } else {
-                    desktop::draw_browser_windowed_with_url(
-                        &br_url, &br_status, cx, cy, cw, ch, be,
-                    )
+                    desktop::draw_browser_windowed_with_url(&br_url, &br_status, cx, cy, cw, ch, be)
                 }
             },
             "packages" => desktop::draw_packages_windowed(cx, cy, cw, ch, be),
@@ -115,7 +113,11 @@ pub(crate) fn render_desktop(
                 tv.download_progress,
                 &tv.error_msg,
                 tv.preview_tex,
-                cx, cy, cw, ch, be,
+                cx,
+                cy,
+                cw,
+                ch,
+                be,
             ),
             _ => Ok(()),
         },

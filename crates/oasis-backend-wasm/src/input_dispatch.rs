@@ -12,7 +12,7 @@
 //! backend appears with the same pattern, consider a shared
 //! `InputDispatcher` trait in `oasis-types`.
 
-use oasis_core::apps::{AppAction, AppRunner};
+use oasis_core::apps::{AppAction, OwnedMedia};
 use oasis_core::bottombar::MediaTab;
 use oasis_core::input::{Button, InputEvent, Key, Modifiers, Trigger};
 use oasis_core::osk::{OskConfig, OskState};
@@ -237,32 +237,22 @@ impl OasisWasm {
                     return;
                 }
 
+                // A titlebar close button asks the app first: an editor
+                // with unsaved changes answers with its prompt instead of
+                // closing (the WM would otherwise drop the window, and the
+                // edits, on the spot).
+                if let Some(id) = self.close_button_under(*x, *y) {
+                    self.request_close_window(&id);
+                    return;
+                }
                 let wm_event = self
                     .wm
                     .handle_input(&InputEvent::PointerClick { x: *x, y: *y }, &mut self.sdi);
                 match wm_event {
-                    WmEvent::WindowClosed(id) => {
-                        if self.fullscreen_app.as_deref() == Some(id.as_str()) {
-                            self.fullscreen_app = None;
-                        }
-                        self.open_runners.retain(|(rid, _)| *rid != id);
-                        if id == "browser" {
-                            self.browser = None;
-                            self.iframe.hide();
-                        }
-                        #[cfg(feature = "wasm-youtube")]
-                        if id == "video_embed" {
-                            self.youtube_active_id = None;
-                            self.youtube_active_url = None;
-                            self.iframe.hide();
-                            for tex in self.youtube_thumb_textures.drain(..) {
-                                let _ = self.backend.destroy_texture(tex);
-                            }
-                        }
-                        if self.wm.window_count() == 0 {
-                            self.mode = Mode::Dashboard;
-                        }
-                    },
+                    // The close button is intercepted above; this only
+                    // fires if the WM's own hit test found one ours did
+                    // not. The window is already gone: clean up after it.
+                    WmEvent::WindowClosed(id) => self.close_app_window(&id),
                     WmEvent::ContentClick(id, lx, ly) => {
                         if id == "browser"
                             && let Some(ref mut bw) = self.browser
@@ -285,10 +275,15 @@ impl OasisWasm {
                             && let Some(win) = self.wm.get_window(&id)
                         {
                             let (_, _, cw, ch) = win.content_rect(self.wm.theme());
-                            let action = runner.handle_click(lx, ly, cw, ch, win.fullscreen_kiosk);
-                            // Apply any vfs work the click queued (e.g. file
-                            // manager folder navigation via pending_navigation).
-                            runner.refresh_app(&self.vfs);
+                            let action = runner.handle_click(
+                                lx,
+                                ly,
+                                cw,
+                                ch,
+                                win.fullscreen_kiosk,
+                                &self.active_theme,
+                                &self.vfs,
+                            );
                             if action == AppAction::RequestFullscreen
                                 && self.fullscreen_app.is_none()
                             {
@@ -348,25 +343,7 @@ impl OasisWasm {
                     self.fullscreen_app = Some(active_id);
                 }
             },
-            InputEvent::ButtonPress(Button::Cancel) => {
-                if let Some(active_id) = self.wm.active_window().map(|s| s.to_string()) {
-                    if self.fullscreen_app.as_deref() == Some(active_id.as_str()) {
-                        let _ = self.wm.exit_fullscreen(&active_id, &mut self.sdi);
-                        self.fullscreen_app = None;
-                    }
-                    let _ = self.wm.close_window(&active_id, &mut self.sdi);
-                    self.open_runners.retain(|(rid, _)| *rid != active_id);
-                    if active_id == "browser" {
-                        self.browser = None;
-                        self.iframe.hide();
-                    }
-                    if self.wm.window_count() == 0 {
-                        self.mode = Mode::Dashboard;
-                    }
-                } else {
-                    self.mode = Mode::Dashboard;
-                }
-            },
+            InputEvent::ButtonPress(Button::Cancel) => self.desktop_cancel(),
             InputEvent::ButtonPress(Button::Start) if !self.skin.features.window_manager => {
                 self.mode = Mode::Terminal;
             },
@@ -430,7 +407,14 @@ impl OasisWasm {
                         }
                     }
                 },
-                _ => {},
+                Some(id) => {
+                    if let Some((_, runner)) =
+                        self.open_runners.iter_mut().find(|(rid, _)| rid == id)
+                    {
+                        runner.handle_scroll(*delta, &self.vfs);
+                    }
+                },
+                None => {},
             },
             InputEvent::ButtonPress(btn) => {
                 if let Some(active_id) = self.wm.active_window().map(|s| s.to_string()) {
@@ -460,29 +444,13 @@ impl OasisWasm {
     }
 
     // -----------------------------------------------------------------------
-    // Input dispatch: App (fullscreen) mode
+    // Closing app windows
     // -----------------------------------------------------------------------
-
-    pub(crate) fn handle_app_input(&mut self, event: &InputEvent) {
-        if let Some(ref mut runner) = self.app_runner
-            && let InputEvent::ButtonPress(btn) = event
-        {
-            let action = runner.handle_input(btn, &self.vfs);
-            self.apply_fullscreen_action(action);
-        }
-    }
 
     /// Close every open app that asked to close itself outside an input
     /// handler (`AppRunner::take_close_request`). Called once per frame
     /// after the runners' `apply_vfs_ops` and `tick`.
     pub(crate) fn apply_app_close_requests(&mut self) {
-        if self
-            .app_runner
-            .as_mut()
-            .is_some_and(AppRunner::take_close_request)
-        {
-            self.apply_fullscreen_action(AppAction::Exit);
-        }
         let closing: Vec<String> = self
             .open_runners
             .iter_mut()
@@ -493,50 +461,136 @@ impl OasisWasm {
         }
     }
 
-    /// Apply an [`AppAction`] returned by the fullscreen (`Mode::App`) runner.
-    fn apply_fullscreen_action(&mut self, action: AppAction) {
-        match action {
-            AppAction::Exit => {
-                AppRunner::hide_sdi(&mut self.sdi);
-                self.app_runner = None;
+    /// The window whose titlebar close button is at `(x, y)`, if any (and
+    /// clickable: not behind a modal, not a kiosk-fullscreen window).
+    fn close_button_under(&self, x: i32, y: i32) -> Option<String> {
+        let id = self.wm.window_at(x, y)?;
+        if self.wm.topmost_modal().is_some_and(|m| m != id) {
+            return None;
+        }
+        let win = self.wm.get_window(id).filter(|w| !w.fullscreen_kiosk)?;
+        let (bx, by, bw, bh) = win.close_btn_rect(self.wm.theme())?;
+        let hit = x >= bx && y >= by && x < bx + bw as i32 && y < by + bh as i32;
+        hit.then(|| id.to_string())
+    }
+
+    /// The user asked to close window `id` (titlebar button, Cancel on a
+    /// window that is not an app): the app is asked first
+    /// (`AppRunner::request_close`), and an app with unsaved changes
+    /// answers with its prompt instead, leaving the window open and
+    /// focused. Returns whether the window closed. The desktop shell's
+    /// `CloseHow::UserChrome`.
+    pub(crate) fn request_close_window(&mut self, id: &str) -> bool {
+        if let Some((_, runner)) = self.open_runners.iter_mut().find(|(rid, _)| rid == id)
+            && runner.request_close(&self.vfs) != AppAction::Exit
+        {
+            let _ = self.wm.focus_window(id, &mut self.sdi);
+            return false;
+        }
+        self.close_app_window(id);
+        true
+    }
+
+    /// Desktop-mode Cancel, as on the desktop shell: app windows own it
+    /// (it backs out of dialogs, leaves viewers, raises the Text Editor's
+    /// unsaved-changes prompt; the window closes only when the app answers
+    /// `Exit`); the browser ends typing first; other windows close.
+    fn desktop_cancel(&mut self) {
+        let Some(active_id) = self.wm.active_window().map(str::to_string) else {
+            if let Some(top) = self.wm.topmost_visible().map(str::to_string) {
+                // Windows on screen but none focused (e.g. after a click
+                // on the bare desktop): focus the top one so the next
+                // Cancel reaches it instead of leaving them dead to input.
+                let _ = self.wm.focus_window(&top, &mut self.sdi);
+            } else {
                 self.mode = Mode::Dashboard;
-            },
-            AppAction::SwitchToTerminal => {
-                AppRunner::hide_sdi(&mut self.sdi);
-                self.app_runner = None;
-                self.mode = Mode::Terminal;
-            },
-            AppAction::LaunchAppWithFile {
-                app_title,
-                file_path,
-            } => {
-                AppRunner::hide_sdi(&mut self.sdi);
-                let entry = oasis_core::dashboard::AppEntry {
-                    title: app_title.clone(),
-                    path: format!("/apps/{app_title}"),
-                    icon_png: Vec::new(),
-                    color: oasis_core::backend::Color::rgb(100, 100, 100),
-                };
-                self.app_runner = Some(AppRunner::launch_with_file(&entry, &file_path, &self.vfs));
-            },
-            AppAction::RequestFullscreen | AppAction::None => {},
+            }
+            return;
+        };
+        if active_id != "browser"
+            && active_id != "terminal"
+            && let Some((_, runner)) = self
+                .open_runners
+                .iter_mut()
+                .find(|(id, _)| *id == active_id)
+        {
+            let action = runner.handle_input(&Button::Cancel, &self.vfs);
+            self.apply_window_action(action, active_id);
+            return;
+        }
+        if active_id == "browser"
+            && let Some(ref mut bw) = self.browser
+            && bw.accepts_text()
+        {
+            bw.handle_input(&InputEvent::ButtonPress(Button::Cancel), &self.vfs);
+            return;
+        }
+        self.request_close_window(&active_id);
+    }
+
+    /// Close window `id` unconditionally (an app's own `Exit`, or a window
+    /// the WM already dropped): exit kiosk fullscreen, close the WM window
+    /// (if the WM hasn't already), stop the radio / music the app owned,
+    /// release the runner's backend resources (textures) before dropping
+    /// it, tear down the browser / YouTube overlays, and fall back to the
+    /// dashboard when the last window went away. The WASM counterpart of
+    /// the desktop shell's `windows::close_app_window`; user-initiated
+    /// closes go through [`Self::request_close_window`].
+    pub(crate) fn close_app_window(&mut self, id: &str) {
+        if self.fullscreen_app.as_deref() == Some(id) {
+            let _ = self.wm.exit_fullscreen(id, &mut self.sdi);
+            self.fullscreen_app = None;
+        }
+        if self.wm.get_window(id).is_some() {
+            let _ = self.wm.close_window(id, &mut self.sdi);
+        }
+        if let Some(pos) = self.open_runners.iter().position(|(rid, _)| rid == id) {
+            let (_, mut runner) = self.open_runners.remove(pos);
+            // Requests the app made this frame (a skin picked right before
+            // Escape) are carried out by the next request pass instead of
+            // being dropped with the runner.
+            runner.drain_requests(&mut self.closed_app_requests);
+            match self.apps.owned_media(&runner.title) {
+                Some(OwnedMedia::Radio) => self.stop_radio(),
+                Some(OwnedMedia::Music) => self.stop_music(),
+                None => {},
+            }
+            runner.release_resources(&mut self.backend);
+        }
+        if id == "browser" {
+            self.browser = None;
+            self.iframe.hide();
+        }
+        #[cfg(feature = "wasm-youtube")]
+        if id == "video_embed" {
+            self.youtube_active_id = None;
+            self.youtube_active_url = None;
+            self.iframe.hide();
+            for tex in self.youtube_thumb_textures.drain(..) {
+                let _ = self.backend.destroy_texture(tex);
+            }
+        }
+        if self.wm.window_count() == 0 && self.mode == Mode::Desktop {
+            self.mode = Mode::Dashboard;
+        }
+    }
+
+    /// Stop radio playback and drop the station's catalog / source, as
+    /// the desktop shell does when the Internet Radio window closes:
+    /// otherwise the stream keeps playing with no UI to control it.
+    fn stop_radio(&mut self) {
+        let _ = self.radio_manager.process_request("stop", &mut self.audio);
+        self.archive_catalog = None;
+        self.pending_catalog = None;
+        if let Some(mut src) = self.radio_source.take() {
+            src.disconnect();
         }
     }
 
     /// Apply an [`AppAction`] returned by the windowed runner `active_id`.
     fn apply_window_action(&mut self, action: AppAction, active_id: String) {
         match action {
-            AppAction::Exit => {
-                if self.fullscreen_app.as_deref() == Some(active_id.as_str()) {
-                    let _ = self.wm.exit_fullscreen(&active_id, &mut self.sdi);
-                    self.fullscreen_app = None;
-                }
-                let _ = self.wm.close_window(&active_id, &mut self.sdi);
-                self.open_runners.retain(|(rid, _)| *rid != active_id);
-                if self.wm.window_count() == 0 {
-                    self.mode = Mode::Dashboard;
-                }
-            },
+            AppAction::Exit => self.close_app_window(&active_id),
             AppAction::SwitchToTerminal => {
                 self.mode = Mode::Terminal;
             },
@@ -565,10 +619,6 @@ impl OasisWasm {
     pub(crate) fn text_focus(&self) -> bool {
         match self.mode {
             Mode::Terminal => true,
-            Mode::App => self
-                .app_runner
-                .as_ref()
-                .is_some_and(AppRunner::accepts_text),
             Mode::Desktop => match self.wm.active_window() {
                 Some("terminal") => true,
                 Some("browser") => self.browser.as_ref().is_some_and(|bw| bw.accepts_text()),
@@ -586,16 +636,6 @@ impl OasisWasm {
     /// `true` when the app consumed it (its action has been applied).
     fn route_key(&mut self, key: &Key, mods: Modifiers) -> bool {
         match self.mode {
-            Mode::App => {
-                let Some(runner) = self.app_runner.as_mut() else {
-                    return false;
-                };
-                let Some(action) = runner.handle_key(key, mods, &self.vfs) else {
-                    return false;
-                };
-                self.apply_fullscreen_action(action);
-                true
-            },
             Mode::Desktop => {
                 let Some(active_id) = self
                     .wm
@@ -713,7 +753,6 @@ impl OasisWasm {
         match self.mode {
             Mode::Osk => self.handle_osk_input(event),
             Mode::Desktop => self.handle_desktop_input(event),
-            Mode::App => self.handle_app_input(event),
             _ => self.handle_default_input(event),
         }
     }

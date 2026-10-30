@@ -1,12 +1,13 @@
 use crate::shell_backend::ShellBackend;
 use oasis_backend_sdl::shader_bridge::SdlShaderBridge;
 use oasis_core::active_theme::ActiveTheme;
+use oasis_core::apps::AppRegistry;
 use oasis_core::browser::BrowserConfig;
 use oasis_core::cursor::CursorState;
-use oasis_core::dashboard::{DashboardConfig, DashboardState, discover_apps_themed};
+use oasis_core::dashboard::{AppEntry, DashboardConfig, DashboardState, discover_apps_themed};
 use oasis_core::net::{ListenerConfig, RemoteClient, RemoteListener, StdNetworkBackend};
 use oasis_core::sdi::SdiRegistry;
-use oasis_core::skin::{Skin, SkinTheme, resolve_skin, resolve_skin_request};
+use oasis_core::skin::{Skin, SkinTheme, resolve_skin_request};
 use oasis_core::startmenu::StartMenuState;
 use oasis_core::terminal::{CommandOutput, CommandSignal, Environment};
 use oasis_core::terminal_sdi;
@@ -14,9 +15,52 @@ use oasis_core::transfer::FtpServer;
 use oasis_core::vfs::{MemoryVfs, Vfs};
 use oasis_core::wallpaper;
 
-#[cfg(test)]
-use crate::app_state::UiLayer;
 use crate::app_state::{AppState, NetworkLayer, TerminalLayer};
+use crate::windows::{CloseHow, CloseOutcome, close_app_window};
+
+/// Terminal messages of a toggled server (`listen`, `ftp`).
+struct ServiceText {
+    stopped: &'static str,
+    not_running: &'static str,
+    already_running: &'static str,
+}
+
+/// The `listen` / `ftp` toggle: `port == 0` stops the server (and frees
+/// its listening socket by replacing `backend`), otherwise a running
+/// server is refused and a stopped one is started with `start`, which
+/// returns the server and its "listening" line (or the error line).
+fn toggle_service<S>(
+    out: &mut TerminalLayer,
+    slot: &mut Option<S>,
+    backend: &mut StdNetworkBackend,
+    port: u16,
+    text: &ServiceText,
+    stop: fn(&mut S),
+    start: impl FnOnce(&mut StdNetworkBackend) -> Result<(S, String), String>,
+) {
+    if port == 0 {
+        match slot.take() {
+            Some(mut server) => {
+                stop(&mut server);
+                // `stop` only drops the connections; a fresh backend closes
+                // the listening socket so the port is free again.
+                *backend = StdNetworkBackend::new();
+                out.print(text.stopped);
+            },
+            None => out.print(text.not_running),
+        }
+    } else if slot.is_some() {
+        out.print(text.already_running);
+    } else {
+        match start(backend) {
+            Ok((server, line)) => {
+                out.print(line);
+                *slot = Some(server);
+            },
+            Err(line) => out.print(line),
+        }
+    }
+}
 
 /// Process a local terminal command result. Returns a pending skin swap name
 /// if the command was `SkinSwap`.
@@ -24,94 +68,66 @@ pub fn process_command_output(
     result: oasis_core::error::Result<CommandOutput>,
     state: &mut AppState,
 ) -> Option<String> {
+    let term = &mut state.terminal;
     match result {
         Ok(CommandOutput::Text(text)) => {
             for l in text.lines() {
-                state.terminal.output_lines.push(l.to_string());
+                term.print(l);
             }
         },
         Ok(CommandOutput::Table { headers, rows }) => {
-            state.terminal.output_lines.push(headers.join(" | "));
+            term.print(headers.join(" | "));
             for row in &rows {
-                state.terminal.output_lines.push(row.join(" | "));
+                term.print(row.join(" | "));
             }
         },
-        Ok(CommandOutput::Clear) => state.terminal.output_lines.clear(),
+        Ok(CommandOutput::Clear) => term.output_lines.clear(),
         Ok(CommandOutput::None) => {},
         Ok(CommandOutput::Signal(CommandSignal::ListenToggle { port })) => {
-            if port == 0 {
-                if let Some(ref mut l) = state.net.listener {
-                    l.stop();
-                    state.net.listener = None;
-                    // Close the listening socket too (`stop` only drops the
-                    // connections), so the port is free for a new `listen`.
-                    state.net.listener_backend = StdNetworkBackend::new();
-                    state
-                        .terminal
-                        .output_lines
-                        .push("Remote listener stopped.".to_string());
-                } else {
-                    state
-                        .terminal
-                        .output_lines
-                        .push("No listener running.".to_string());
-                }
-            } else if state.net.listener.is_some() {
-                state
-                    .terminal
-                    .output_lines
-                    .push("Listener already running. Use 'listen stop' first.".to_string());
-            } else {
-                // No PSK can be supplied from the terminal, so the listener
-                // stays on loopback: an unauthenticated shell must never be
-                // reachable from the network.
-                let cfg = ListenerConfig {
-                    port,
-                    psk: String::new(),
-                    bind: oasis_core::net::ListenerBind::Loopback,
-                    max_connections: 4,
-                    ..ListenerConfig::default()
-                };
-                let mut l = RemoteListener::new(cfg);
-                match l.start(&mut state.net.listener_backend) {
-                    Ok(()) => {
-                        state
-                            .terminal
-                            .output_lines
-                            .push(format!("Listening on 127.0.0.1:{port} (loopback only)."));
-                        state.net.listener = Some(l);
-                    },
-                    Err(e) => {
-                        state
-                            .terminal
-                            .output_lines
-                            .push(format!("Listen error: {e}"));
-                    },
-                }
-            }
+            let net = &mut state.net;
+            toggle_service(
+                term,
+                &mut net.listener,
+                &mut net.listener_backend,
+                port,
+                &ServiceText {
+                    stopped: "Remote listener stopped.",
+                    not_running: "No listener running.",
+                    already_running: "Listener already running. Use 'listen stop' first.",
+                },
+                RemoteListener::stop,
+                |backend| {
+                    // No PSK can be supplied from the terminal, so the
+                    // listener stays on loopback: an unauthenticated shell
+                    // must never be reachable from the network.
+                    let cfg = ListenerConfig {
+                        port,
+                        psk: String::new(),
+                        bind: oasis_core::net::ListenerBind::Loopback,
+                        max_connections: 4,
+                        ..ListenerConfig::default()
+                    };
+                    let mut l = RemoteListener::new(cfg);
+                    match l.start(backend) {
+                        Ok(()) => {
+                            Ok((l, format!("Listening on 127.0.0.1:{port} (loopback only).")))
+                        },
+                        Err(e) => Err(format!("Listen error: {e}")),
+                    }
+                },
+            );
         },
         Ok(CommandOutput::Signal(CommandSignal::RemoteConnect { address, port, psk })) => {
             if state.net.remote_client.is_some() {
-                state
-                    .terminal
-                    .output_lines
-                    .push("Already connected. Disconnect first.".to_string());
+                term.print("Already connected. Disconnect first.");
             } else {
                 let mut client = RemoteClient::new();
                 match client.connect(&mut state.net.backend, &address, port, psk.as_deref()) {
                     Ok(()) => {
-                        state
-                            .terminal
-                            .output_lines
-                            .push(format!("Connected to {address}:{port}."));
+                        term.print(format!("Connected to {address}:{port}."));
                         state.net.remote_client = Some(client);
                     },
-                    Err(e) => {
-                        state
-                            .terminal
-                            .output_lines
-                            .push(format!("Connect error: {e}"));
-                    },
+                    Err(e) => term.print(format!("Connect error: {e}")),
                 }
             }
         },
@@ -124,53 +140,32 @@ pub fn process_command_output(
             } else {
                 "off (HTTP enabled)"
             };
-            state
-                .terminal
-                .output_lines
-                .push(format!("Browser sandbox: {st}"));
+            term.print(format!("Browser sandbox: {st}"));
         },
         Ok(CommandOutput::Signal(CommandSignal::FtpToggle { port, password })) => {
-            if port == 0 {
-                if let Some(ref mut f) = state.net.ftp_server {
-                    f.stop();
-                    state.net.ftp_server = None;
-                    state.net.ftp_backend = StdNetworkBackend::new();
-                    state
-                        .terminal
-                        .output_lines
-                        .push("FTP server stopped.".to_string());
-                } else {
-                    state
-                        .terminal
-                        .output_lines
-                        .push("No FTP server running.".to_string());
-                }
-            } else if state.net.ftp_server.is_some() {
-                state
-                    .terminal
-                    .output_lines
-                    .push("FTP server already running. Use 'ftp stop' first.".to_string());
-            } else {
-                let mut server = FtpServer::new(port);
-                if let Some(pass) = password {
-                    server = server.with_password(pass);
-                }
-                match server.start(&mut state.net.ftp_backend) {
-                    Ok(()) => {
-                        state
-                            .terminal
-                            .output_lines
-                            .push(format!("FTP server listening on port {port}."));
-                        state.net.ftp_server = Some(server);
-                    },
-                    Err(e) => {
-                        state
-                            .terminal
-                            .output_lines
-                            .push(format!("FTP server error: {e}"));
-                    },
-                }
-            }
+            let net = &mut state.net;
+            toggle_service(
+                term,
+                &mut net.ftp_server,
+                &mut net.ftp_backend,
+                port,
+                &ServiceText {
+                    stopped: "FTP server stopped.",
+                    not_running: "No FTP server running.",
+                    already_running: "FTP server already running. Use 'ftp stop' first.",
+                },
+                FtpServer::stop,
+                |backend| {
+                    let mut server = FtpServer::new(port);
+                    if let Some(pass) = password {
+                        server = server.with_password(pass);
+                    }
+                    match server.start(backend) {
+                        Ok(()) => Ok((server, format!("FTP server listening on port {port}."))),
+                        Err(e) => Err(format!("FTP server error: {e}")),
+                    }
+                },
+            );
         },
         Ok(CommandOutput::Signal(CommandSignal::McpToggle { start, port, token })) => {
             #[cfg(feature = "mcp")]
@@ -179,24 +174,15 @@ pub fn process_command_output(
                     start_mcp_server(state, port, token);
                 } else if let Some(mut server) = state.mcp.take() {
                     server.stop();
-                    state
-                        .terminal
-                        .output_lines
-                        .push("MCP server stopped.".to_string());
+                    term.print("MCP server stopped.");
                 } else {
-                    state
-                        .terminal
-                        .output_lines
-                        .push("No MCP server running.".to_string());
+                    term.print("No MCP server running.");
                 }
             }
             #[cfg(not(feature = "mcp"))]
             {
                 let _ = (start, port, token);
-                state
-                    .terminal
-                    .output_lines
-                    .push("MCP support not compiled in (build with --features mcp).".to_string());
+                term.print("MCP support not compiled in (build with --features mcp).");
             }
         },
         Ok(CommandOutput::Signal(CommandSignal::SkinSwap { name })) => {
@@ -205,10 +191,7 @@ pub fn process_command_output(
         Ok(CommandOutput::Signal(CommandSignal::SdiInspect { .. })) => {
             // Callers with scene access resolve this first via
             // `terminal_sdi::resolve_sdi_inspect`.
-            state
-                .terminal
-                .output_lines
-                .push("sdi: scene inspection not available here".to_string());
+            term.print("sdi: scene inspection not available here");
         },
         Ok(CommandOutput::Multi(outputs)) => {
             let mut skin_swap = None;
@@ -220,18 +203,58 @@ pub fn process_command_output(
             }
             return skin_swap;
         },
+        // Unwrapped by the executor; handled for completeness.
+        Ok(CommandOutput::Status { output, .. }) => {
+            return process_command_output(Ok(*output), state);
+        },
         Err(e) => {
             // Red via the skin's ANSI palette (SGR 31); the terminal
             // renderer resolves the escape into a themed colored run.
-            state
-                .terminal
-                .output_lines
-                .push(oasis_core::ansi::colorize(&format!("error: {e}"), 31));
+            term.print(oasis_core::ansi::colorize(&format!("error: {e}"), 31));
         },
     }
     None
 }
 
+/// The dashboard's apps: everything installed under `/apps` plus the
+/// plugin apps in the registry. Boot and every dashboard rebuild (skin
+/// swap, resolution change) use this, so plugin apps never drop off.
+pub(crate) fn dashboard_apps(
+    vfs: &MemoryVfs,
+    apps: &AppRegistry,
+    at: &ActiveTheme,
+) -> oasis_core::error::Result<Vec<AppEntry>> {
+    let mut tiles = discover_apps_themed(vfs, "/apps", Some("OASISOS"), &at.icon.fallback_colors)?;
+    tiles.extend(
+        apps.iter()
+            .filter(|reg| reg.from_plugin && reg.on_dashboard)
+            .map(|reg| reg.to_app_entry()),
+    );
+    Ok(tiles)
+}
+
+/// Rebuild the dashboard and start menu for the current skin / theme /
+/// resolution (per-skin free-layout icon positions restored), back on
+/// page 0.
+fn rebuild_dashboard(state: &mut AppState, vfs: &MemoryVfs) {
+    let dash_config = DashboardConfig::from_features(&state.skin.features, &state.active_theme);
+    let apps = dashboard_apps(vfs, &state.content.apps, &state.active_theme).unwrap_or_else(|e| {
+        log::warn!("app discovery failed: {e}");
+        Vec::new()
+    });
+    state.ui.dashboard = DashboardState::new(dash_config, apps);
+    crate::icon_drag::load_icon_positions(
+        &state.settings,
+        &state.skin.manifest.name,
+        &mut state.ui.dashboard,
+    );
+    state.ui.bottom_bar.total_pages = state.ui.dashboard.page_count();
+    state.ui.bottom_bar.current_page = 0;
+    state.ui.start_menu = StartMenuState::new_with_theme(
+        StartMenuState::default_items(&state.active_theme),
+        &state.active_theme,
+    );
+}
 /// Apply a skin swap after the Environment borrow has been dropped.
 ///
 /// `name` may also be a variant request (`"@variant:dark"`), which derives
@@ -240,7 +263,7 @@ pub fn apply_skin_swap(name: &str, state: &mut AppState, sdi: &mut SdiRegistry, 
     match resolve_skin_request(name, &state.skin) {
         Ok(new_skin) => apply_skin_object(new_skin, state, sdi, vfs),
         Err(e) => {
-            state.terminal.output_lines.push(format!("Skin error: {e}"));
+            state.terminal.print(format!("Skin error: {e}"));
         },
     }
 }
@@ -289,28 +312,17 @@ pub fn apply_skin_object(
     // on the next frame.
     clear_component_sdi_objects(sdi);
 
-    let dash_config = DashboardConfig::from_features(&swapped.features, &state.active_theme);
-    let apps = discover_apps_themed(
-        vfs,
-        "/apps",
-        Some("OASISOS"),
-        &state.active_theme.icon.fallback_colors,
-    )
-    .unwrap_or_default();
-    state.ui.dashboard = DashboardState::new(dash_config, apps);
-    crate::icon_drag::load_icon_positions(
-        &state.settings,
-        &swapped.manifest.name,
-        &mut state.ui.dashboard,
-    );
-    state.ui.bottom_bar.total_pages = state.ui.dashboard.page_count();
-    state.ui.bottom_bar.current_page = 0;
-    state.ui.start_menu = StartMenuState::new_with_theme(
-        StartMenuState::default_items(&state.active_theme),
-        &state.active_theme,
-    );
-    state.ui.status_bar = oasis_core::statusbar::StatusBar::new();
-    state.ui.taskbar = oasis_core::taskbar::Taskbar::new();
+    state
+        .terminal
+        .print(format!("Switched to skin: {}", swapped.manifest.name));
+    state.skin = swapped;
+    rebuild_dashboard(state, vfs);
+    // The status bar and taskbar keep their instances: their state (clock,
+    // battery and Wi-Fi text, the selected top tab, taskbar order) is not
+    // skin-specific, and their SDI objects rebuild from the new theme on
+    // the next frame. (Fresh instances showed "00:00" until the next
+    // periodic info update.) Their tab textures are re-uploaded by
+    // `refresh_skin_assets`.
 
     // Mirror the parts of startup (`main()`) that depend on the
     // theme rather than on the window surface: clear color and
@@ -318,12 +330,6 @@ pub fn apply_skin_object(
     // have to be re-read whenever the theme changes.
     state.bg_color = state.active_theme.clear_color;
     state.ui.mouse_cursor.scale = state.active_theme.cursor_scale;
-
-    state
-        .terminal
-        .output_lines
-        .push(format!("Switched to skin: {}", swapped.manifest.name));
-    state.skin = swapped;
     // Swap-out frees the old skin's decoded SFX samples and loads
     // the new skin's [sounds] WAVs (mirrors image asset lifecycle).
     crate::ui_sfx::reload_for_skin(state);
@@ -412,8 +418,7 @@ pub fn refresh_wallpaper_if_pending(
         Err(e) => {
             state
                 .terminal
-                .output_lines
-                .push(format!("Warning: wallpaper refresh failed: {e}"));
+                .print(format!("Warning: wallpaper refresh failed: {e}"));
         },
     }
 }
@@ -627,7 +632,7 @@ pub fn apply_resolution_change(
         || new_w > MAX_RESOLUTION_W
         || new_h > MAX_RESOLUTION_H
     {
-        state.terminal.output_lines.push(format!(
+        state.terminal.print(format!(
             "Resolution {new_w}x{new_h} out of range ({MIN_RESOLUTION_W}x{MIN_RESOLUTION_H} \
              to {MAX_RESOLUTION_W}x{MAX_RESOLUTION_H})"
         ));
@@ -643,8 +648,7 @@ pub fn apply_resolution_change(
     if let Err(e) = backend.set_window_size(new_w, new_h) {
         state
             .terminal
-            .output_lines
-            .push(format!("Resolution change failed: {e}"));
+            .print(format!("Resolution change failed: {e}"));
         return;
     }
 
@@ -656,70 +660,31 @@ pub fn apply_resolution_change(
     state.config.screen_width = new_w;
     state.config.screen_height = new_h;
 
-    // Re-apply the current skin's layout at the new target size. This rebuilds
-    // every skin-owned SDI object (taskbar, dashboard tiles, etc.) for the new
-    // canvas. We clone the current skin name because `Skin::swap_scaled`
-    // consumes the new skin, and we want to reuse the already-resolved skin
-    // rather than re-reading it from disk.
-    let current_skin_name = state.skin.manifest.name.clone();
-    match resolve_skin(&current_skin_name) {
-        Ok(fresh_skin) => {
-            let mut swapped = Skin::swap_scaled(&state.skin, fresh_skin, sdi, new_w, new_h);
-            let prefs = crate::user_prefs::current(state);
-            prefs.patch_features(&mut swapped.features);
-            state.active_theme = ActiveTheme::from_skin(&swapped.theme)
-                .with_screen_size(new_w, new_h)
-                .with_features(&swapped.features);
-            prefs.apply_font_scale(&mut state.active_theme);
-            state.browser_config = BrowserConfig::from_skin_theme(&swapped.theme);
-            if let Some(ref mut bw) = state.content.browser {
-                bw.apply_chrome_theme(&state.browser_config);
-            }
-            state.wm.set_theme(swapped.theme.build_wm_theme());
-            state.skin = swapped;
-        },
-        Err(e) => {
-            // Reloading the skin failed (shouldn't happen for a built-in),
-            // but we still need to keep the theme dimensions consistent with
-            // the resized window so rendering doesn't draw to stale coords.
-            // We also refresh the WM theme from the existing `state.skin` so
-            // `state.wm` stays consistent with the skin that's actually
-            // still active (rather than holding whatever theme it was
-            // constructed with before this fallback path ran).
-            state
-                .terminal
-                .output_lines
-                .push(format!("Warning: skin reload failed: {e}"));
-            state.active_theme = state
-                .active_theme
-                .clone()
-                .with_screen_size(new_w, new_h)
-                .with_features(&state.skin.features);
-            state.wm.set_theme(state.skin.theme.build_wm_theme());
-        },
+    // Re-apply the running skin's layout at the new target size. This
+    // rebuilds every skin-owned SDI object (taskbar, dashboard tiles, etc.)
+    // for the new canvas. The skin is cloned rather than re-resolved by
+    // name: `Skin::swap_scaled` consumes its new skin, and a lookup by name
+    // would fail for external skins (strict resolve) and drop an in-memory
+    // theme preview. Layout coordinates stay at the skin's base resolution
+    // (`apply_layout_scaled` scales on the way into the SDI), so re-applying
+    // a clone is exact.
+    let current = state.skin.clone();
+    let mut swapped = Skin::swap_scaled(&state.skin, current, sdi, new_w, new_h);
+    let prefs = crate::user_prefs::current(state);
+    prefs.patch_features(&mut swapped.features);
+    state.active_theme = ActiveTheme::from_skin(&swapped.theme)
+        .with_screen_size(new_w, new_h)
+        .with_features(&swapped.features);
+    prefs.apply_font_scale(&mut state.active_theme);
+    state.browser_config = BrowserConfig::from_skin_theme(&swapped.theme);
+    if let Some(ref mut bw) = state.content.browser {
+        bw.apply_chrome_theme(&state.browser_config);
     }
+    state.wm.set_theme(swapped.theme.build_wm_theme());
+    state.skin = swapped;
 
     // Rebuild dashboard + bars for the new layout grid.
-    let dash_config = DashboardConfig::from_features(&state.skin.features, &state.active_theme);
-    let apps = discover_apps_themed(
-        vfs,
-        "/apps",
-        Some("OASISOS"),
-        &state.active_theme.icon.fallback_colors,
-    )
-    .unwrap_or_default();
-    state.ui.dashboard = DashboardState::new(dash_config, apps);
-    crate::icon_drag::load_icon_positions(
-        &state.settings,
-        &state.skin.manifest.name,
-        &mut state.ui.dashboard,
-    );
-    state.ui.bottom_bar.total_pages = state.ui.dashboard.page_count();
-    state.ui.bottom_bar.current_page = 0;
-    state.ui.start_menu = StartMenuState::new_with_theme(
-        StartMenuState::default_items(&state.active_theme),
-        &state.active_theme,
-    );
+    rebuild_dashboard(state, vfs);
 
     state.wm.set_screen_size(new_w, new_h);
     state.wm.restyle_windows(sdi);
@@ -735,10 +700,7 @@ pub fn apply_resolution_change(
     state.pending_wallpaper_refresh = true;
     refresh_wallpaper_if_pending(state, sdi, backend);
 
-    state
-        .terminal
-        .output_lines
-        .push(format!("Resolution: {new_w}x{new_h}"));
+    state.terminal.print(format!("Resolution: {new_w}x{new_h}"));
 }
 
 /// Publish the current runtime state (skin, resolution, backend) to VFS so
@@ -754,33 +716,33 @@ pub fn publish_runtime_state(state: &AppState, backend_name: &str, vfs: &mut Mem
     let _ = vfs.mkdir("/system/state");
     let _ = vfs.mkdir("/system/ipc");
     let _ = vfs.write(
-        oasis_app_settings::SKIN_STATE_PATH,
+        oasis_apps::settings::SKIN_STATE_PATH,
         state.skin.manifest.name.as_bytes(),
     );
     let res = format!(
         "{}x{}",
         state.active_theme.screen_w, state.active_theme.screen_h
     );
-    let _ = vfs.write(oasis_app_settings::RESOLUTION_STATE_PATH, res.as_bytes());
+    let _ = vfs.write(oasis_apps::settings::RESOLUTION_STATE_PATH, res.as_bytes());
     let _ = vfs.write(
-        oasis_app_settings::BACKEND_STATE_PATH,
+        oasis_apps::settings::BACKEND_STATE_PATH,
         backend_name.as_bytes(),
     );
     // User preferences shown by the Settings Audio / Language /
     // Accessibility categories.
     let prefs = crate::user_prefs::current(state);
     let volume = state.audio_backend.get_volume().to_string();
-    let _ = vfs.write(oasis_app_settings::VOLUME_STATE_PATH, volume.as_bytes());
+    let _ = vfs.write(oasis_apps::settings::VOLUME_STATE_PATH, volume.as_bytes());
     let _ = vfs.write(
-        oasis_app_settings::LOCALE_STATE_PATH,
+        oasis_apps::settings::LOCALE_STATE_PATH,
         prefs.locale.as_bytes(),
     );
     let _ = vfs.write(
-        oasis_app_settings::FONT_SCALE_STATE_PATH,
+        oasis_apps::settings::FONT_SCALE_STATE_PATH,
         prefs.font_scale.to_string().as_bytes(),
     );
     let reduced = if prefs.reduced_motion { b"1" } else { b"0" };
-    let _ = vfs.write(oasis_app_settings::REDUCED_MOTION_STATE_PATH, reduced);
+    let _ = vfs.write(oasis_apps::settings::REDUCED_MOTION_STATE_PATH, reduced);
 }
 
 /// Poll the Settings IPC paths once per frame and dispatch any pending
@@ -795,26 +757,25 @@ pub fn poll_settings_ipc(
     backend_name: &str,
 ) {
     let mut skin_request: Option<String> = None;
-    if let Ok(data) = vfs.read(oasis_app_settings::SKIN_CHANGE_REQUEST_PATH) {
+    if let Ok(data) = vfs.read(oasis_apps::settings::SKIN_CHANGE_REQUEST_PATH) {
         let req = String::from_utf8_lossy(&data).trim().to_string();
         // Always clear the request so we don't loop on malformed input.
-        let _ = vfs.write(oasis_app_settings::SKIN_CHANGE_REQUEST_PATH, b"");
+        let _ = vfs.write(oasis_apps::settings::SKIN_CHANGE_REQUEST_PATH, b"");
         if !req.is_empty() && req != state.skin.manifest.name {
             skin_request = Some(req);
         }
     }
 
     let mut resolution_request: Option<(u32, u32)> = None;
-    if let Ok(data) = vfs.read(oasis_app_settings::RESOLUTION_CHANGE_REQUEST_PATH) {
+    if let Ok(data) = vfs.read(oasis_apps::settings::RESOLUTION_CHANGE_REQUEST_PATH) {
         let req = String::from_utf8_lossy(&data).trim().to_string();
-        let _ = vfs.write(oasis_app_settings::RESOLUTION_CHANGE_REQUEST_PATH, b"");
-        if let Some((w, h)) = oasis_app_settings::parse_resolution(&req) {
+        let _ = vfs.write(oasis_apps::settings::RESOLUTION_CHANGE_REQUEST_PATH, b"");
+        if let Some((w, h)) = oasis_apps::settings::parse_resolution(&req) {
             resolution_request = Some((w, h));
         } else if !req.is_empty() {
             state
                 .terminal
-                .output_lines
-                .push(format!("Ignoring malformed resolution request: {req}"));
+                .print(format!("Ignoring malformed resolution request: {req}"));
         }
     }
 
@@ -823,17 +784,16 @@ pub fn poll_settings_ipc(
     // current skin's layout/features/strings are kept and only the theme is
     // replaced. Nothing is written to disk.
     let mut theme_preview: Option<SkinTheme> = None;
-    if let Ok(data) = vfs.read(oasis_app_settings::SKIN_APPLY_THEME_REQUEST_PATH) {
+    if let Ok(data) = vfs.read(oasis_apps::settings::SKIN_APPLY_THEME_REQUEST_PATH) {
         let req = String::from_utf8_lossy(&data).to_string();
-        let _ = vfs.write(oasis_app_settings::SKIN_APPLY_THEME_REQUEST_PATH, b"");
+        let _ = vfs.write(oasis_apps::settings::SKIN_APPLY_THEME_REQUEST_PATH, b"");
         if !req.trim().is_empty() {
             match SkinTheme::from_toml_str(&req) {
                 Ok(theme) => theme_preview = Some(theme),
                 Err(e) => {
                     state
                         .terminal
-                        .output_lines
-                        .push(format!("Ignoring malformed theme preview: {e}"));
+                        .print(format!("Ignoring malformed theme preview: {e}"));
                 },
             }
         }
@@ -844,17 +804,16 @@ pub fn poll_settings_ipc(
     // standard directory format and then swapped in by name through the
     // normal resolution path (which validates the save round-trips).
     let mut save_custom: Option<(String, SkinTheme)> = None;
-    if let Ok(data) = vfs.read(oasis_app_settings::SKIN_SAVE_CUSTOM_REQUEST_PATH) {
+    if let Ok(data) = vfs.read(oasis_apps::settings::SKIN_SAVE_CUSTOM_REQUEST_PATH) {
         let req = String::from_utf8_lossy(&data).to_string();
-        let _ = vfs.write(oasis_app_settings::SKIN_SAVE_CUSTOM_REQUEST_PATH, b"");
+        let _ = vfs.write(oasis_apps::settings::SKIN_SAVE_CUSTOM_REQUEST_PATH, b"");
         if !req.trim().is_empty() {
             match parse_save_custom_request(&req) {
                 Ok(parsed) => save_custom = Some(parsed),
                 Err(e) => {
                     state
                         .terminal
-                        .output_lines
-                        .push(format!("Ignoring malformed save-custom request: {e}"));
+                        .print(format!("Not saving the custom skin: {e}"));
                 },
             }
         }
@@ -884,8 +843,7 @@ pub fn poll_settings_ipc(
             Ok(()) => {
                 state
                     .terminal
-                    .output_lines
-                    .push(format!("Saved custom skin to {}", dir.display()));
+                    .print(format!("Saved custom skin to {}", dir.display()));
                 // Swap to the written directory through the normal
                 // resolution path so the running session uses exactly what
                 // was written to disk.
@@ -898,8 +856,7 @@ pub fn poll_settings_ipc(
             Err(e) => {
                 state
                     .terminal
-                    .output_lines
-                    .push(format!("Failed to save custom skin: {e}"));
+                    .print(format!("Failed to save custom skin: {e}"));
             },
         }
     }
@@ -935,6 +892,15 @@ fn parse_save_custom_request(req: &str) -> Result<(String, SkinTheme), String> {
         .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
     {
         return Err(format!("invalid skin name '{name}'"));
+    }
+    // A built-in's name would overwrite its source directory when the
+    // shell runs from the repository (built-ins are compiled from
+    // `skins/<name>/`), and the saved copy would never load again: the
+    // built-in wins name resolution.
+    if oasis_core::skin::builtin::is_builtin(name) {
+        return Err(format!(
+            "'{name}' is a built-in skin; save the custom skin under another name"
+        ));
     }
     let theme = SkinTheme::from_toml_str(theme_toml).map_err(|e| e.to_string())?;
     Ok((name.to_string(), theme))
@@ -1010,6 +976,10 @@ pub(crate) fn format_remote_response(
             }
             parts.join("\n")
         },
+        // Unwrapped by the executor; handled for completeness.
+        Ok(CommandOutput::Status { output, .. }) => {
+            format_remote_response(Ok(*output), browser, skin, sdi, pending_skin)
+        },
         Err(e) => format!("error: {e}"),
     }
 }
@@ -1070,8 +1040,10 @@ pub fn poll_remote_listener(state: &mut AppState, sdi: &mut SdiRegistry, vfs: &m
 
 /// Poll the MCP control server, dispatching agent tool calls against the UI.
 ///
-/// Mirrors [`poll_remote_listener`]'s borrow-split idiom, additionally taking
-/// the rendering `backend` so the `screenshot` tool can read the framebuffer.
+/// The server is taken out of `state` for the poll, so the dispatcher can
+/// drive the whole shell state through the same functions the local input
+/// pipeline uses (launch, close, skin swap). The rendering `backend` lets
+/// the `screenshot` tool read the framebuffer.
 #[cfg(feature = "mcp")]
 pub fn poll_mcp_server(
     state: &mut AppState,
@@ -1079,72 +1051,20 @@ pub fn poll_mcp_server(
     vfs: &mut MemoryVfs,
     backend: &mut dyn oasis_core::backend::SdiCore,
 ) {
-    let AppState {
-        ref mut mcp,
-        ref mut wm,
-        ref mut content,
-        ref mut terminal,
-        ref skin,
-        ref active_theme,
-        ref mut browser_config,
-        ref platform,
-        ref net,
-        ref mut mode,
-        ref plugin_manager,
-        ref mut agent_activity,
-        ..
-    } = *state;
-
-    let Some(server) = mcp else { return };
-
-    let crate::app_state::ContentLayer {
-        ref mut browser,
-        ref mut open_runners,
-        ..
-    } = *content;
-    let TerminalLayer {
-        ref mut cmd_reg,
-        ref mut cwd,
-        ..
-    } = *terminal;
-
-    // The live framebuffer size: skins are scaled to the configured
-    // resolution, so the manifest's native size can be smaller than the
-    // screen (the screenshot then only captured the top-left corner).
-    let screen_w = active_theme.screen_w;
-    let screen_h = active_theme.screen_h;
-
+    let Some(mut server) = state.mcp.take() else {
+        return;
+    };
     let mut disp = crate::mcp_tools::AppDispatcher {
-        wm,
+        state,
         sdi,
         vfs,
-        browser,
-        open_runners,
-        cmd_reg,
-        cwd,
-        skin,
-        browser_config,
-        platform,
-        tls_provider: &net.tls_provider,
-        plugin_manager,
-        mode,
         screen: backend,
-        screen_w,
-        screen_h,
-        activity: agent_activity,
-        pending_skin: None,
-        closed_windows: Vec::new(),
     };
     server.poll(&mut disp);
-    let pending_skin = disp.pending_skin.take();
-    let closed = std::mem::take(&mut disp.closed_windows);
-    for id in closed {
-        finish_window_close(state, &id);
-    }
-    // Apply a skin swap requested by `run_command` now that the whole
-    // state is available again (see `format_remote_response`).
-    if let Some(new_skin) = pending_skin {
-        apply_skin_object(new_skin, state, sdi, vfs);
+    // A tool cannot start another server (`mcp-server` is refused over
+    // remote channels), so the slot is still empty.
+    if state.mcp.is_none() {
+        state.mcp = Some(server);
     }
 }
 
@@ -1171,8 +1091,7 @@ fn start_mcp_server(state: &mut AppState, port: u16, token: Option<String>) {
     if state.mcp.is_some() {
         state
             .terminal
-            .output_lines
-            .push("MCP server already running. Use 'mcp-server stop' first.".to_string());
+            .print("MCP server already running. Use 'mcp-server stop' first.");
         return;
     }
     let mut backend = oasis_core::net::StdNetworkBackend::new();
@@ -1182,16 +1101,12 @@ fn start_mcp_server(state: &mut AppState, port: u16, token: Option<String>) {
             log::info!("MCP control server listening on 127.0.0.1:{port}");
             state
                 .terminal
-                .output_lines
-                .push(format!("MCP server listening on 127.0.0.1:{port}."));
+                .print(format!("MCP server listening on 127.0.0.1:{port}."));
             state.mcp = Some(server);
         },
         Err(e) => {
             log::warn!("MCP server failed to start: {e}");
-            state
-                .terminal
-                .output_lines
-                .push(format!("MCP start error: {e}"));
+            state.terminal.print(format!("MCP start error: {e}"));
         },
     }
 }
@@ -1211,15 +1126,130 @@ pub fn poll_ftp_server(state: &mut AppState, vfs: &mut MemoryVfs) {
     }
 }
 
-/// VFS IPC path the `wm` terminal command writes requests to.
-pub const WM_REQUEST_PATH: &str = "/var/wm/request";
-/// VFS IPC path the `wm list` terminal command reads window state from.
-pub const WM_STATUS_PATH: &str = "/var/wm/status";
+/// Service the `plugin` terminal command's VFS IPC: apply every
+/// [`PluginRequest`](oasis_core::ipc::PluginRequest) queued on
+/// [`PLUGIN_REQUEST_PATH`](oasis_core::ipc::PLUGIN_REQUEST_PATH) (`load`
+/// initializes a registered or unloaded plugin again, `unload` shuts it
+/// down and removes its commands, apps and SDI objects), report each
+/// outcome in the terminal, and publish the plugin list at
+/// [`PLUGIN_STATUS_PATH`](oasis_core::ipc::PLUGIN_STATUS_PATH). Without
+/// this bridge `plugin list` had no data and `load` / `unload` were
+/// silently dropped.
+pub fn poll_plugin_ipc(state: &mut AppState, sdi: &mut SdiRegistry, vfs: &mut MemoryVfs) {
+    use oasis_core::ipc::{PLUGIN_REQUEST_PATH, PLUGIN_STATUS_PATH, PluginRequest};
+    if !vfs.exists("/var/plugin") && vfs.mkdir("/var/plugin").is_err() {
+        return;
+    }
+    let mut changed = false;
+    if let Ok(data) = vfs.read(PLUGIN_REQUEST_PATH)
+        && !data.is_empty()
+    {
+        let _ = vfs.write(PLUGIN_REQUEST_PATH, b"");
+        let requests = String::from_utf8_lossy(&data).into_owned();
+        for line in requests.lines().map(str::trim).filter(|l| !l.is_empty()) {
+            let Some(req) = PluginRequest::parse(line) else {
+                state
+                    .terminal
+                    .print(format!("plugin: malformed request {line:?}"));
+                continue;
+            };
+            let pm = &mut state.plugin_manager;
+            let cmds = &mut state.terminal.cmd_reg;
+            let (name, verb, result) = match &req {
+                PluginRequest::Load(name) => (name, "loaded", pm.init_plugin(name, sdi, vfs, cmds)),
+                PluginRequest::Unload(name) => {
+                    (name, "unloaded", pm.stop_plugin(name, sdi, vfs, cmds))
+                },
+            };
+            let msg = match result {
+                Ok(()) => {
+                    changed = true;
+                    format!("Plugin {name} {verb}.")
+                },
+                Err(_) if !pm.is_loaded(name) => format!(
+                    "plugin: no plugin named '{name}' (plugins are statically linked; \
+                     there is no dynamic loader)"
+                ),
+                Err(e) => format!("plugin: {e}"),
+            };
+            state.terminal.print(msg);
+        }
+        state.terminal.dirty = true;
+    }
+    if changed {
+        // Plugin apps come and go with their plugin: re-sync the registry
+        // and the dashboard tiles.
+        state
+            .plugin_manager
+            .extend_registry(&mut state.content.apps);
+        rebuild_dashboard(state, vfs);
+    }
+    let status = state.plugin_manager.status_text();
+    if vfs.read(PLUGIN_STATUS_PATH).ok().as_deref() != Some(status.as_bytes()) {
+        let _ = vfs.write(PLUGIN_STATUS_PATH, status.as_bytes());
+    }
+}
+
+/// Run every active plugin's per-frame `update`, with the current screen
+/// size and wall-clock time as its [`PluginContext`](oasis_core::plugin::PluginContext).
+pub fn update_plugins(state: &mut AppState, sdi: &mut SdiRegistry, vfs: &mut MemoryVfs) {
+    use oasis_core::platform::TimeService as _;
+    state
+        .plugin_manager
+        .set_context(oasis_core::plugin::PluginContext {
+            screen_w: state.config.screen_width,
+            screen_h: state.config.screen_height,
+            time: state.platform.now().ok(),
+        });
+    state
+        .plugin_manager
+        .update_all(sdi, vfs, &mut state.terminal.cmd_reg);
+}
+
+/// VFS IPC paths the `wm` terminal command writes requests to / reads the
+/// window list from.
+pub use oasis_core::ipc::{WM_REQUEST_PATH, WM_STATUS_PATH, WmRequest};
+
+/// Publish the network service state (remote-terminal listener, FTP
+/// server, outbound remote connection, MCP server) at
+/// [`NET_STATE_PATH`](oasis_core::ipc::NET_STATE_PATH) for the Network
+/// app. Runs every frame; writes only when the state changed.
+pub fn publish_net_state(state: &AppState, vfs: &mut MemoryVfs) {
+    use oasis_core::ipc::{NET_STATE_PATH, NetState};
+    let net = &state.net;
+    let st = NetState {
+        listener_port: net
+            .listener
+            .as_ref()
+            .filter(|l| l.is_listening())
+            .map(RemoteListener::port),
+        ftp_port: net
+            .ftp_server
+            .as_ref()
+            .filter(|s| s.is_listening())
+            .map(FtpServer::port),
+        remote_connected: net
+            .remote_client
+            .as_ref()
+            .is_some_and(RemoteClient::is_connected),
+        #[cfg(feature = "mcp")]
+        mcp_running: state.mcp.is_some(),
+        #[cfg(not(feature = "mcp"))]
+        mcp_running: false,
+    };
+    let text = st.to_text();
+    if vfs.read(NET_STATE_PATH).ok().as_deref() != Some(text.as_bytes()) {
+        if !vfs.exists("/system/state") {
+            let _ = vfs.mkdir("/system/state");
+        }
+        let _ = vfs.write(NET_STATE_PATH, text.as_bytes());
+    }
+}
 
 /// Service the `wm` terminal command's VFS IPC (local, remote terminal and
 /// MCP `run_command` alike): publish the window list to
-/// [`WM_STATUS_PATH`] and apply `close|focus|minimize|maximize <id>`
-/// requests from [`WM_REQUEST_PATH`]. Without this bridge `wm` was a no-op
+/// [`WM_STATUS_PATH`] and apply the [`WmRequest`]s (`close [--force]|focus|
+/// minimize|maximize <id>`, `open <app>[\t<file>]`) from [`WM_REQUEST_PATH`]. Without this bridge `wm` was a no-op
 /// in the desktop shell (and failed outright: `/var/wm` did not exist).
 pub fn poll_wm_ipc(state: &mut AppState, sdi: &mut SdiRegistry, vfs: &mut MemoryVfs) {
     if !vfs.exists("/var/wm") && vfs.mkdir("/var/wm").is_err() {
@@ -1229,8 +1259,12 @@ pub fn poll_wm_ipc(state: &mut AppState, sdi: &mut SdiRegistry, vfs: &mut Memory
         && !data.is_empty()
     {
         let _ = vfs.write(WM_REQUEST_PATH, b"");
-        let request = String::from_utf8_lossy(&data).into_owned();
-        apply_wm_request(request.trim(), state, sdi);
+        // One request per line: `open Calculator; open Paint` queues both
+        // before this runs.
+        let requests = String::from_utf8_lossy(&data).into_owned();
+        for request in requests.lines().map(str::trim).filter(|l| !l.is_empty()) {
+            apply_wm_request(request, state, sdi, vfs);
+        }
     }
     let status = wm_status_text(&state.wm);
     if vfs.read(WM_STATUS_PATH).ok().as_deref() != Some(status.as_bytes()) {
@@ -1238,37 +1272,58 @@ pub fn poll_wm_ipc(state: &mut AppState, sdi: &mut SdiRegistry, vfs: &mut Memory
     }
 }
 
-fn apply_wm_request(request: &str, state: &mut AppState, sdi: &mut SdiRegistry) {
-    let Some((op, id)) = request.split_once(' ') else {
-        log::warn!("wm request without a window id: {request:?}");
+fn apply_wm_request(request: &str, state: &mut AppState, sdi: &mut SdiRegistry, vfs: &MemoryVfs) {
+    let Some(req) = WmRequest::parse(request) else {
+        log::warn!("malformed wm request {request:?}");
         return;
     };
-    let id = id.trim();
+    // `open <app> [file]`: launch (or raise) an app window by title.
+    if let WmRequest::Open { app, file } = &req {
+        let opened = crate::launch::open_by_title(
+            state,
+            sdi,
+            vfs,
+            app,
+            file.as_deref(),
+            crate::launch::LaunchOpts::USER_NO_FADE,
+        );
+        if let Err(msg) = opened {
+            state.terminal.print(format!("open: {msg}"));
+            state.terminal.dirty = true;
+        }
+        return;
+    }
+    let id = match &req {
+        WmRequest::Close { id, .. }
+        | WmRequest::Focus(id)
+        | WmRequest::Minimize(id)
+        | WmRequest::Maximize(id) => id.as_str(),
+        WmRequest::Open { .. } => return,
+    };
     if state.wm.get_window(id).is_none() {
         log::warn!("wm request for unknown window {id:?}");
         return;
     }
-    let result = match op {
-        "close" => {
-            if state.content.fullscreen_app.as_deref() == Some(id) {
-                let _ = state.wm.exit_fullscreen(id, sdi);
+    let result = match &req {
+        // Without `--force`, same as the titlebar close button: an app with
+        // unsaved changes answers with its prompt instead of losing them.
+        WmRequest::Close { force, .. } => {
+            let how = CloseHow::Programmatic { force: *force };
+            if close_app_window(state, sdi, vfs, id, how) == CloseOutcome::Declined {
+                state.terminal.print(format!(
+                    "wm: {id} did not close: the app is asking for confirmation"
+                ));
+                state.terminal.dirty = true;
             }
-            let r = state.wm.close_window(id, sdi);
-            if r.is_ok() {
-                finish_window_close(state, id);
-            }
-            r
+            Ok(())
         },
-        "focus" => state.wm.focus_window(id, sdi),
-        "minimize" => state.wm.minimize_window(id, sdi),
-        "maximize" => state.wm.maximize_window(id, sdi),
-        other => {
-            log::warn!("unknown wm request {other:?}");
-            return;
-        },
+        WmRequest::Focus(_) => state.wm.focus_window(id, sdi),
+        WmRequest::Minimize(_) => state.wm.minimize_window(id, sdi),
+        WmRequest::Maximize(_) => state.wm.maximize_window(id, sdi),
+        WmRequest::Open { .. } => Ok(()),
     };
     if let Err(e) = result {
-        log::warn!("wm {op} {id}: {e}");
+        log::warn!("wm {request:?}: {e}");
     }
 }
 
@@ -1302,26 +1357,6 @@ fn wm_status_text(wm: &oasis_core::wm::manager::WindowManager) -> String {
         .join("\n")
 }
 
-/// Shell-side cleanup after window `id` was closed through the window
-/// manager directly (MCP `close_window`, `wm close`), mirroring the
-/// titlebar close button: stop the radio / music the app owned, drop its
-/// runner (or the browser widget) and fall back to the dashboard when no
-/// window is left. Without this the app kept running invisibly.
-pub(crate) fn finish_window_close(state: &mut AppState, id: &str) {
-    if state.content.fullscreen_app.as_deref() == Some(id) {
-        state.content.fullscreen_app = None;
-    }
-    crate::input::stop_radio_if_radio_runner(state, id);
-    crate::input::stop_music_if_music_runner(state, id);
-    state.content.open_runners.retain(|(rid, _)| rid != id);
-    if id == "browser" {
-        state.content.browser = None;
-    }
-    if state.wm.window_count() == 0 && state.mode == crate::app_state::Mode::Desktop {
-        state.mode = crate::app_state::Mode::Dashboard;
-    }
-}
-
 /// Poll the remote client for received data.
 pub fn poll_remote_client(state: &mut AppState) {
     let Some(ref mut client) = state.net.remote_client else {
@@ -1329,13 +1364,10 @@ pub fn poll_remote_client(state: &mut AppState) {
     };
     let lines = client.poll();
     for line in lines {
-        state.terminal.output_lines.push(format!("[remote] {line}"));
+        state.terminal.print(format!("[remote] {line}"));
     }
     if !client.is_connected() {
-        state
-            .terminal
-            .output_lines
-            .push("[remote] Disconnected.".to_string());
+        state.terminal.print("[remote] Disconnected.");
         state.net.remote_client = None;
     }
     trim_output(&mut state.terminal.output_lines);
@@ -1349,7 +1381,6 @@ pub fn trim_output(output_lines: &mut Vec<String>) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::app_state::ContentLayer;
     use oasis_core::terminal::{CommandOutput, CommandSignal};
 
     // -- trim_output --
@@ -1392,121 +1423,7 @@ mod tests {
     // -- process_command_output (using a real AppState) --
 
     fn make_test_state() -> AppState {
-        use oasis_audio::RadioManager;
-        use oasis_backend_sdl::SdlAudioBackend;
-        use oasis_core::active_theme::ActiveTheme;
-        use oasis_core::backend::Color;
-        use oasis_core::bottombar::BottomBar;
-        use oasis_core::browser::BrowserConfig;
-        use oasis_core::config::OasisConfig;
-        use oasis_core::cursor::CursorState;
-        use oasis_core::dashboard::{DashboardConfig, DashboardState};
-        use oasis_core::net::{RustlsTlsProvider, StdNetworkBackend};
-        use oasis_core::platform::DesktopPlatform;
-        use oasis_core::skin::SkinFeatures;
-        use oasis_core::skin::builtin::load_builtin;
-        use oasis_core::startmenu::StartMenuState;
-        use oasis_core::statusbar::StatusBar;
-        use oasis_core::terminal::CommandRegistry;
-        use oasis_core::wm::manager::WindowManager;
-
-        let skin = load_builtin("classic").unwrap();
-        let active_theme = ActiveTheme::from_skin(&skin.theme);
-        let dash_cfg = DashboardConfig::from_features(&SkinFeatures::default(), &active_theme);
-
-        AppState {
-            config: OasisConfig::default(),
-            skin,
-            active_theme: active_theme.clone(),
-            browser_config: BrowserConfig::default(),
-            platform: DesktopPlatform::new(),
-            ui: UiLayer {
-                dashboard: DashboardState::new(dash_cfg, vec![]),
-                status_bar: StatusBar::new(),
-                bottom_bar: BottomBar::new(),
-                taskbar: oasis_core::taskbar::Taskbar::new(),
-                start_menu: StartMenuState::new(StartMenuState::default_items(&active_theme)),
-                mouse_cursor: CursorState::default(),
-                desktops: oasis_core::wm::DesktopManager::new(1),
-            },
-            terminal: TerminalLayer {
-                cmd_reg: CommandRegistry::new(),
-                cwd: "/".to_string(),
-                session: oasis_core::terminal::ShellSession::new(),
-                output_lines: Vec::new(),
-                scroll_offset: 0,
-                dirty: true,
-                sync_signature: None,
-                sdi_signature: None,
-            },
-            net: NetworkLayer {
-                backend: StdNetworkBackend::new(),
-                listener_backend: StdNetworkBackend::new(),
-                ftp_backend: StdNetworkBackend::new(),
-                listener: None,
-                ftp_server: None,
-                remote_client: None,
-                tls_provider: RustlsTlsProvider::new(),
-            },
-            content: ContentLayer {
-                app_runner: None,
-                open_runners: Vec::new(),
-                browser: None,
-                fullscreen_app: None,
-                retired_runners: Vec::new(),
-            },
-            osk: None,
-            plugin_manager: oasis_core::plugin::PluginManager::new(),
-            wm: WindowManager::new(480, 272),
-            mode: crate::app_state::Mode::Dashboard,
-            bg_color: Color::rgb(0, 0, 0),
-            active_transition: None,
-            frame_counter: 0,
-            pending_wallpaper_refresh: false,
-            skin_layout_textures: Vec::new(),
-            image_layers: Vec::new(),
-            background_layer_cache: oasis_core::vector_overlay::LayerOpsCache::new(),
-            chrome_layer_cache: oasis_core::vector_overlay::LayerOpsCache::new(),
-            icon_drag: None,
-            cursor_texture: None,
-            settings: oasis_core::settings::SettingsStore::new(),
-            radio_manager: RadioManager::new(),
-            radio_source: None,
-            archive_catalog: None,
-            pending_catalog_fetch: None,
-            pending_source_fetch: None,
-            audio_backend: Box::new(SdlAudioBackend::new()),
-            offline: true,
-            custom_skin_root: std::env::temp_dir().join("oasis-unit-skins"),
-            toasts: oasis_core::toast::ToastManager::new(),
-            ui_sounds: oasis_core::ui_sound::UiSoundQueue::new(),
-            sfx: oasis_audio::sfx::SfxPlayer::new(),
-            pending_tv_catalog_fetch: None,
-            tv_fetch_start: None,
-            video_player: crate::video_player::VideoPlayer::new(),
-            tv_audio_track: None,
-            media_track: None,
-            tv_audio_chunks_fed: 0,
-            tv_audio_samples_fed: 0,
-            #[cfg(feature = "_video")]
-            pending_video_download: None,
-            #[cfg(feature = "_video")]
-            tv_video_cache_path: None,
-            #[cfg(feature = "_video")]
-            pending_video_params: None,
-            #[cfg(feature = "_video")]
-            tv_download_progress: None,
-            #[cfg(feature = "_video")]
-            tv_video_cache: Vec::new(),
-            #[cfg(feature = "_video")]
-            tv_stream_session: None,
-            #[cfg(feature = "_video")]
-            tv_current_url: None,
-            #[cfg(feature = "mcp")]
-            mcp: None,
-            #[cfg(feature = "mcp")]
-            agent_activity: crate::mcp_tools::AgentActivity::default(),
-        }
+        AppState::new_for_test()
     }
 
     #[test]
@@ -1539,7 +1456,7 @@ mod tests {
     #[test]
     fn process_clear_output() {
         let mut state = make_test_state();
-        state.terminal.output_lines.push("existing".to_string());
+        state.terminal.print("existing".to_string());
         let result = process_command_output(Ok(CommandOutput::Clear), &mut state);
         assert!(result.is_none());
         assert!(state.terminal.output_lines.is_empty());
@@ -1817,7 +1734,7 @@ mod tests {
 
     // -- Settings preference IPC (volume / locale / accessibility) --
 
-    use oasis_app_settings as settings_app;
+    use oasis_apps::settings as settings_app;
     use oasis_core::settings::{SettingsStore, UserPrefs};
 
     /// A VFS with the runtime-state / IPC directories the shell creates.
@@ -1888,7 +1805,10 @@ mod tests {
             app.handle_input(&Button::Right, &vfs);
         }
         app.handle_input(&Button::Up, &vfs);
-        let (path, payload) = app.take_pending_request().expect("volume IPC");
+        let mut reqs = Vec::new();
+        app.drain_requests(&mut reqs);
+        let req = reqs.pop().expect("volume IPC");
+        let (path, payload) = (req.path, req.data);
         assert!(post(&mut state, &mut vfs, &path, &payload));
         assert_eq!(state.audio_backend.get_volume(), 85);
     }

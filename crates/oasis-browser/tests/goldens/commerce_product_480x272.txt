@@ -14,33 +14,26 @@ draw_text "Account", 56, 152, 13, Color { r: 255, g: 255, b: 255, a: 255 }
 fill_rect 0, 188, 480, 30, Color { r: 243, g: 243, b: 243, a: 255 }
 draw_text "Handhelds", 16, 194, 12, Color { r: 0, g: 102, b: 192, a: 255 }
 fill_rect 70, 194, 60, 18, Color { r: 243, g: 243, b: 243, a: 255 }
-fill_rect 70, 194, 60, 18, Color { r: 243, g: 243, b: 243, a: 255 }
 draw_text " &rsaquo; ", 70, 194, 12, Color { r: 85, g: 85, b: 85, a: 255 }
 draw_text "Sony", 130, 194, 12, Color { r: 0, g: 102, b: 192, a: 255 }
-fill_rect 154, 194, 60, 18, Color { r: 243, g: 243, b: 243, a: 255 }
 fill_rect 154, 194, 60, 18, Color { r: 243, g: 243, b: 243, a: 255 }
 draw_text " &rsaquo; ", 154, 194, 12, Color { r: 85, g: 85, b: 85, a: 255 }
 draw_text "PSP", 214, 194, 12, Color { r: 0, g: 102, b: 192, a: 255 }
 fill_rect 232, 194, 60, 18, Color { r: 243, g: 243, b: 243, a: 255 }
-fill_rect 232, 194, 60, 18, Color { r: 243, g: 243, b: 243, a: 255 }
 draw_text " &rsaquo; ", 232, 194, 12, Color { r: 85, g: 85, b: 85, a: 255 }
 fill_rect 292, 194, 48, 18, Color { r: 243, g: 243, b: 243, a: 255 }
-fill_rect 292, 194, 48, 18, Color { r: 243, g: 243, b: 243, a: 255 }
 draw_text "PSP-3000", 292, 194, 12, Color { r: 85, g: 85, b: 85, a: 255 }
-fill_rect 49, 267, 116, 0, Color { r: 232, g: 232, b: 232, a: 255 }
 fill_rect 48, 266, 118, 1, Color { r: 204, g: 204, b: 204, a: 255 }
 fill_rect 165, 266, 1, 2, Color { r: 204, g: 204, b: 204, a: 255 }
 fill_rect 48, 267, 118, 1, Color { r: 204, g: 204, b: 204, a: 255 }
 fill_rect 48, 266, 1, 2, Color { r: 204, g: 204, b: 204, a: 255 }
-fill_rect 108, 268, 0, 320, Color { r: 232, g: 232, b: 232, a: 255 }
 fill_rect 107, 267, 2, 1, Color { r: 204, g: 204, b: 204, a: 255 }
 fill_rect 108, 267, 1, 322, Color { r: 204, g: 204, b: 204, a: 255 }
 fill_rect 107, 588, 2, 1, Color { r: 204, g: 204, b: 204, a: 255 }
 fill_rect 107, 267, 1, 322, Color { r: 204, g: 204, b: 204, a: 255 }
-fill_rect 108, 268, 0, 320, Color { r: 232, g: 232, b: 232, a: 255 }
 draw_text "[product photo]", 108, 268, 8, Color { r: 153, g: 153, b: 153, a: 255 }
 draw_text "Visit", 188, 266, 13, Color { r: 0, g: 102, b: 192, a: 255 }
 draw_text "the", 218, 266, 13, Color { r: 0, g: 102, b: 192, a: 255 }
 draw_text "Sony", 236, 266, 13, Color { r: 0, g: 102, b: 192, a: 255 }
 draw_text "Store", 260, 266, 13, Color { r: 0, g: 102, b: 192, a: 255 }
-# totals fill_rect=22 draw_text=22 other=0
+# totals fill_rect=15 draw_text=22 other=0

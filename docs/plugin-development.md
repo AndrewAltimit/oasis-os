@@ -14,13 +14,31 @@ Plugins interact with the OS through services provided by `PluginHost`:
 - **`audio`** -- audio playback (optional, `None` in headless mode)
 - **`network`** -- TCP networking (optional, `None` if unavailable)
 - **`backend`** -- rendering backend for texture loading (optional)
+- **`context`** -- `PluginContext` from the host: `screen_w`, `screen_h`
+  (0 = unknown) and `time` (`Option<SystemTime>`), refreshed before every
+  `update` (the host calls `PluginManager::set_context`)
 
 The plugin lifecycle is:
 
 1. **Register** -- plugin is added to `PluginManager` (state: `Registered`)
 2. **Init** -- `init()` called once; register commands, create SDI objects (state: `Active`)
-3. **Update** -- `update()` called once per frame; do periodic work
-4. **Shutdown** -- `shutdown()` called on unload; clean up resources (state: `Stopped`)
+3. **Update** -- `update()` called each time the host calls `PluginManager::update_all`
+4. **Shutdown** -- `shutdown()` called on `stop_plugin` / `unload` / `shutdown_all`; clean up resources (state: `Stopped`)
+
+A stopped plugin can be initialized again with `init_plugin` (the terminal's
+`plugin load` after `plugin unload`), so `init` must work after `shutdown`.
+The manager records the commands a plugin's `init` registers and the apps it
+registers, and removes both when the plugin stops.
+
+**Desktop host:** the shell (`oasis-app/src/shell.rs`) initializes plugins
+into its real scene graph at boot, so SDI objects a plugin creates are drawn
+(use `overlay = true` and a high `z` to draw above the dashboard and
+windows). Every frame it calls `update_all` (after setting the context) and
+services the `plugin` terminal command (`commands::poll_plugin_ipc`:
+`/var/plugin/request`, `/var/plugin/status`); `Shell::shutdown` calls
+`shutdown_all`. Plugin apps are synced into the app registry and the
+dashboard whenever a plugin loads or unloads. The WASM, UE5 and PSP hosts do
+not run plugins.
 
 Source: `crates/oasis-core/src/plugin/traits.rs`
 
@@ -208,8 +226,10 @@ auto_load = true
 ```
 
 Use `PluginManager::discover_manifests(vfs)` to scan for available plugins.
+Discovery only parses manifests: there is no dynamic loader, so `library`
+and `auto_load` are informational and no host acts on them today.
 
-Source: `crates/oasis-core/src/plugin/manager.rs`
+Source: `crates/oasis-core/src/plugin/manager/discovery.rs`
 
 ---
 
@@ -291,8 +311,8 @@ The codebase ships three example plugins in `crates/oasis-core/src/plugin/exampl
 | Plugin | Commands | Description |
 |--------|----------|-------------|
 | `HelloPlugin` | `hello [name]` | Simplest possible plugin -- single command |
-| `ClockWidgetPlugin` | `pclock [show\|hide]` | Creates an SDI clock widget + command |
-| `NotepadPlugin` | `note [list\|read\|write]` | VFS-backed notepad with CRUD operations + dashboard app |
+| `ClockWidgetPlugin` | `pclock [show\|hide]` | Live `HH:MM:SS` overlay clock, right-aligned from `PluginContext`; hidden until `pclock show` (state in `/var/pclock/visible`) |
+| `NotepadPlugin` | `note [list\|read\|write]` | VFS-backed notepad with CRUD operations (commands only; it registers no app) |
 
 Study these for patterns on SDI widget creation, VFS interaction, and command registration.
 
@@ -306,7 +326,9 @@ Source: `crates/oasis-core/src/plugin/app_bridge.rs`
 
 ### Registering a Plugin App
 
-During `init()`, call `host.register_app()` with a `PluginAppRegistration`:
+During `init()`, call `host.register_app()` with a `PluginAppRegistration`. It
+returns `Result<()>` and fails unless the plugin declared the
+`PluginCapabilities::app_registration` capability:
 
 ```rust
 use oasis_core::plugin::app_bridge::{AppCategory, PluginAppRegistration};
@@ -323,12 +345,23 @@ fn init(&mut self, host: &mut PluginHost<'_>) -> Result<()> {
         .with_color(oasis_types::backend::Color {
             r: 100, g: 200, b: 50, a: 255,
         }),
-    );
+    )?;
     Ok(())
 }
 ```
 
-The factory closure is called each time the user launches the app from the dashboard.
+The factory closure is called each time the app is launched (a fresh
+instance per launch).
+
+After plugin init the host copies the registrations into its app
+registry with `PluginManager::extend_registry(&mut apps)` (an
+`AppRegistration` per plugin app: on the dashboard, at
+`/plugins/<title>`, marked `from_plugin`; calling it again replaces the
+previous plugin entries). From then on a plugin app is an ordinary
+registered app: it gets a dashboard tile that survives skin and
+resolution changes, and it launches through `open <app>`, MCP
+`open_app` / `list_apps` and `OASIS_APP` exactly like a built-in. A
+plugin app with the same title as a built-in replaces it.
 
 ### App Categories
 
@@ -339,17 +372,22 @@ The factory closure is called each time the user launches the app from the dashb
 | `AppCategory::Game` | Games and entertainment |
 | `AppCategory::System` | System tools and monitors |
 | `AppCategory::Network` | Network and communication |
-| `AppCategory::Other` | Uncategorized |
 
 ### Implementing the App Trait
 
-Your plugin app must implement the `App` trait from `oasis_core::apps::app_trait`:
+Your plugin app implements the `App` trait (`oasis_core::apps::App`, a
+re-export of `oasis_app_core::App`; see [writing-apps.md](writing-apps.md)
+for every hook). The quickest route is to embed a `ContentState` and let
+`impl_content_app_methods!` implement the rendering, layout and request
+plumbing, so you only write `handle_input`:
 
 ```rust
+use oasis_app_core::impl_content_app_methods;
 use oasis_core::apps::{App, AppAction, ContentState};
 use oasis_core::input::Button;
 use oasis_core::vfs::Vfs;
 
+#[derive(Debug)]
 struct MyPluginApp {
     content: ContentState,
     counter: i32,
@@ -374,8 +412,9 @@ impl MyPluginApp {
 }
 
 impl App for MyPluginApp {
-    fn title(&self) -> &str { &self.content.title }
-    fn path(&self) -> &str { &self.content.app_path }
+    // title, path, lines, layout, update_sdi, draw_windowed, hide_sdi,
+    // drain_requests, ... (`as_any` comes from the `AsAny` blanket impl).
+    impl_content_app_methods!(content);
 
     fn handle_input(&mut self, button: &Button, _vfs: &dyn Vfs) -> AppAction {
         match button {
@@ -385,15 +424,24 @@ impl App for MyPluginApp {
             _ => AppAction::None,
         }
     }
-
-    fn lines(&self) -> &[String] { &self.content.lines }
-
-    // ... implement remaining required trait methods
-    // (see ContentState helpers for default implementations)
 }
 ```
 
-The `NotepadPlugin` in `examples.rs` demonstrates registering a `SimpleApp`-based plugin app on the dashboard.
+The plugin manager's `extend_registry_adds_launchable_plugin_apps` test
+(`crates/oasis-core/src/plugin/manager/mod.rs`) shows a complete round
+trip: register, extend the registry, launch through `AppRunner`.
+
+> **Breaking change (App trait, 2026-10):** `as_any` / `as_any_mut` are no
+> longer written by apps (blanket `AsAny` impl); `handle_click` takes a
+> trailing `&dyn Vfs`; `refresh` is gone (do follow-ups in `handle_click` /
+> `handle_key`, polling in `tick`); `take_pending_request` /
+> `peek_pending_request` became `drain_requests(&mut Vec<AppRequest>)`;
+> `lines` has a default; new optional hooks `layout` and `handle_scroll`.
+>
+> **Breaking change (app registry, 2026-10):** `PluginManager::create_plugin_app`
+> is gone (hosts launch plugin apps from their `AppRegistry` after
+> `extend_registry`), and `PluginAppRegistration::factory` is an
+> `Arc<dyn PluginAppFactory>` (shared with the registry entry).
 
 ---
 
@@ -412,45 +460,6 @@ let info = PluginInfo::new("my-plugin", "2.0.0");
 - Plugins should always use the default `api_version` from `PluginInfo::new()` unless they need to target a specific older API.
 
 Source: `crates/oasis-core/src/plugin/traits.rs`
-
----
-
-## EventBus IPC
-
-In addition to VFS-based IPC, plugins can communicate via the **event bus** -- a publish/subscribe system for real-time, topic-based messaging.
-
-Source: `crates/oasis-core/src/plugin/event_bus.rs`
-
-The `EventBus` is managed by the `PluginManager`, which calls `subscribe()`, `publish()`, and `drain_for()` on behalf of plugins during lifecycle calls. The API uses a buffered drain model rather than channels.
-
-### Publishing Events
-
-```rust
-use oasis_core::plugin::event_bus::{EventBus, PluginEvent};
-
-// EventBus is owned by PluginManager, not PluginHost directly.
-// The manager exposes it during update cycles.
-let event = PluginEvent::new("sensor.temperature", "temp-monitor", "72.5");
-bus.publish(event);
-```
-
-### Subscribing and Draining Events
-
-```rust
-// Subscribe a plugin to a topic (done by PluginManager during init).
-bus.subscribe("my-plugin", "sensor.temperature");
-
-// After all plugins publish, the manager drains events for each subscriber.
-let events: Vec<PluginEvent> = bus.drain_for("my-plugin");
-for event in &events {
-    // Handle event.topic, event.source, event.data
-}
-
-// After all plugins have drained, clear pending events.
-bus.clear_pending();
-```
-
-Events are string-based for cross-language compatibility. Source plugins do not receive their own events. The event bus is useful for real-time notifications (e.g., state changes, sensor data), while VFS-based IPC remains better for persistent state and file-like data exchange.
 
 ---
 

@@ -1,182 +1,81 @@
-//! Music Player audio controller.
+//! Music playback controller: the desktop shell's consumer of the
+//! `/var/audio/*` VFS IPC.
 //!
-//! Bridges the Music Player app (which lives in a pure-data crate with no
-//! backend access) to the `AudioBackend` by watching for VFS IPC requests
-//! at [`MEDIA_REQUEST_PATH`]. The app writes `play_file <path>` when the
-//! user opens a track and `stop` when they back out of the view.
+//! The request handling, position and status publishing live in
+//! [`oasis_audio::MusicController`] (shared with the WASM backend); this
+//! module lends it the shell's music state (`state.media`,
+//! `state.media_track`) and SDL audio backend, and supplies the two
+//! desktop-specific rules:
 //!
-//! While a track plays the controller also reports the real playback
-//! position to [`MEDIA_POSITION_PATH`] for the app's progress bar.
-//!
-//! Format is deliberately line-based and human readable — mirrors the
-//! radio_controller pattern.
+//! - TV Guide video audio streams through the same process-global SDL audio
+//!   stream, so while it is live the controller must not pause / resume /
+//!   stop the backend (`stream_shared`).
+//! - Starting a track tears down internet radio first (unless TV Guide owns
+//!   the stream: `RadioManager::stop` calls the process-global
+//!   `AudioBackend::stop()`, which would silence the video mid-playback).
 
-use oasis_app_media::{MEDIA_POSITION_PATH, MEDIA_REQUEST_PATH};
-use oasis_core::vfs::{MemoryVfs, Vfs};
+use oasis_core::vfs::MemoryVfs;
 
-use crate::app_state::AppState;
+use crate::app_state::{AppState, RadioLayer};
 
-/// Poll the Music Player IPC path and action every pending request.
-///
-/// The IPC file is newline-delimited: each request occupies one line,
-/// and the controller drains them all per tick, then rewrites the
-/// buffer with any lines it did not recognise (so a future controller
-/// sharing the path — e.g. a radio consumer — still sees its own
-/// payload). This prevents the "rapidly click two tracks in one tick
-/// and one of them gets silently dropped" race.
+/// Poll the audio IPC path, action every pending request, and publish
+/// position + status.
 pub fn tick(state: &mut AppState, vfs: &mut MemoryVfs) {
-    publish_position(state, vfs);
-    let Ok(data) = vfs.read(MEDIA_REQUEST_PATH) else {
-        return;
+    let stream_shared = state.tv.audio_track.is_some();
+    let AppState {
+        media,
+        media_track,
+        audio_backend,
+        radio,
+        ..
+    } = state;
+    let mut stop_radio = |audio: &mut dyn oasis_core::backend::AudioBackend| {
+        if !stream_shared {
+            stop_radio_for_music(radio, audio);
+        }
     };
-    if data.is_empty() {
-        return;
+    oasis_audio::MusicController {
+        manager: media,
+        track: media_track,
+        audio: audio_backend.as_mut(),
+        stream_shared,
     }
-    let text = String::from_utf8_lossy(&data).into_owned();
-
-    let mut unhandled: Vec<&str> = Vec::new();
-    let mut touched = false;
-    // Collect owned copies of consumed lines first so the borrow on
-    // `text` (from the `split` iterator) ends before we call
-    // `play_file`, which needs `vfs` mutably.
-    let mut to_process: Vec<String> = Vec::new();
-    for line in text.split('\n') {
-        let trimmed = line.trim();
-        if trimmed.is_empty() {
-            continue;
-        }
-        if trimmed.starts_with("play_file ") || trimmed == "stop" {
-            to_process.push(trimmed.to_string());
-            touched = true;
-        } else {
-            unhandled.push(line);
-        }
-    }
-
-    if !touched {
-        return;
-    }
-    let remainder = unhandled.join("\n");
-    let _ = vfs.write(MEDIA_REQUEST_PATH, remainder.as_bytes());
-
-    for req in to_process {
-        if let Some(path) = req.strip_prefix("play_file ") {
-            play_file(state, vfs, path);
-            if state.media_track.is_some() {
-                write_position(state, vfs, path);
-            }
-        } else if req == "stop" {
-            stop_track(state);
-            let _ = vfs.write(MEDIA_POSITION_PATH, b"");
-        }
-    }
+    .tick(vfs, &mut stop_radio);
 }
 
-/// Position-report granularity: the Music Player's readout is m:ss and
-/// its bar a few hundred pixels wide, so 250 ms steps are plenty and
-/// avoid rewriting the IPC file every frame.
-const POSITION_STEP_MS: u64 = 250;
-
-/// Write `<position_ms> <duration_ms> <path>` to [`MEDIA_POSITION_PATH`]
-/// so the Music Player can draw a real progress bar.
-fn write_position(state: &AppState, vfs: &mut MemoryVfs, path: &str) {
-    let pos = state.audio_backend.position_ms() / POSITION_STEP_MS * POSITION_STEP_MS;
-    let line = format!("{pos} {} {path}", state.audio_backend.duration_ms());
-    let unchanged = vfs
-        .read(MEDIA_POSITION_PATH)
-        .is_ok_and(|prev| prev == line.as_bytes());
-    if !unchanged {
-        let _ = vfs.write(MEDIA_POSITION_PATH, line.as_bytes());
-    }
+/// Append one request line to the audio request path. Producers in the
+/// shell (app requests, MCP `play_media`) must append like the `music`
+/// command does: a plain write would drop lines queued earlier in the
+/// same frame.
+pub(crate) fn queue_request(vfs: &mut MemoryVfs, line: &str) -> oasis_core::error::Result<()> {
+    oasis_audio::queue_request(vfs, line)
 }
 
-/// Refresh the position report for the track that is playing (its path
-/// is carried in the report written by `play_file`).
-fn publish_position(state: &AppState, vfs: &mut MemoryVfs) {
-    if state.media_track.is_none() {
+/// If Internet Radio is streaming, tear it down so its UI reflects reality
+/// once music takes over.
+fn stop_radio_for_music(radio: &mut RadioLayer, audio: &mut dyn oasis_core::backend::AudioBackend) {
+    if radio.manager.state() == oasis_audio::radio::RadioState::Stopped {
         return;
     }
-    let Ok(prev) = vfs.read(MEDIA_POSITION_PATH) else {
-        return;
-    };
-    let prev = String::from_utf8_lossy(&prev).into_owned();
-    if let Some(path) = prev.trim().splitn(3, ' ').nth(2) {
-        write_position(state, vfs, path);
-    }
-}
-
-fn play_file(state: &mut AppState, vfs: &MemoryVfs, path: &str) {
-    // Unload any previous track so memory doesn't grow across songs.
-    stop_track(state);
-    // If Internet Radio is currently streaming, tear it down so its UI
-    // reflects reality after music takes over. `RadioManager::stop`
-    // internally calls `AudioBackend::stop()` which is process-global
-    // (it clears the shared SDL audio stream), so guard it with
-    // `state.tv_audio_track.is_none()` — otherwise TV Guide video
-    // audio would be silenced mid-playback in windowed multi-window
-    // mode while its state machine stays oblivious. If TV Guide is the
-    // active audio consumer, we skip the radio teardown entirely;
-    // radio's RadioState stays `Playing` until the user explicitly
-    // stops it, but the subsequent `play(music_track)` swaps
-    // `current_track` away from radio so no audio interleaves.
-    if state.radio_manager.state() != oasis_audio::radio::RadioState::Stopped
-        && state.tv_audio_track.is_none()
-    {
-        let _ = state
-            .radio_manager
-            .process_request("stop", state.audio_backend.as_mut());
-        state.archive_catalog = None;
-        state.pending_catalog_fetch = None;
-        state.pending_source_fetch = None;
-        if let Some(mut src) = state.radio_source.take() {
-            src.disconnect();
-        }
-    }
-
-    let data = match vfs.read(path) {
-        Ok(d) => d,
-        Err(e) => {
-            log::warn!("media_controller: cannot read {path} from VFS: {e}");
-            return;
-        },
-    };
-
-    match state.audio_backend.load_track(&data) {
-        Ok(track) => {
-            if let Err(e) = state.audio_backend.play(track) {
-                log::warn!("media_controller: play failed for {path}: {e}");
-                return;
-            }
-            state.media_track = Some(track);
-            log::info!("media_controller: playing {path} ({} bytes)", data.len());
-        },
-        Err(e) => {
-            log::warn!("media_controller: load_track failed for {path}: {e}");
-        },
-    }
-}
-
-fn stop_track(state: &mut AppState) {
-    if let Some(track) = state.media_track.take() {
-        // `AudioBackend::stop()` is process-global: it clears the shared
-        // audio stream buffer. If TV Guide is concurrently streaming
-        // (windowed multi-window mode), calling it here would silence
-        // the video's audio mid-playback while leaving its state machine
-        // thinking it's still live. `unload_track` already issues an
-        // internal `stop()` when the music track is the current one, so
-        // we only need the explicit call when no other audio consumer
-        // is active.
-        if state.tv_audio_track.is_none() {
-            let _ = state.audio_backend.stop();
-        }
-        let _ = state.audio_backend.unload_track(track);
+    let _ = radio.manager.process_request("stop", audio);
+    radio.archive_catalog = None;
+    radio.pending_catalog_fetch = None;
+    radio.pending_source_fetch = None;
+    if let Some(mut src) = radio.source.take() {
+        src.disconnect();
     }
 }
 
 /// Unload the music track when the Music Player window/app closes.
-/// Invoked from the input dispatcher when the closing runner is the
-/// Music Player — the app's own Cancel handler emits a `stop` IPC
-/// but the window-manager close button bypasses that path.
+/// Invoked from the window-close path when the closing runner is the
+/// Music Player — the app's own Cancel handler emits a `stop` IPC but the
+/// window-manager close button bypasses that path.
 pub fn shutdown(state: &mut AppState) {
-    stop_track(state);
+    oasis_audio::MusicController {
+        manager: &mut state.media,
+        track: &mut state.media_track,
+        audio: state.audio_backend.as_mut(),
+        stream_shared: state.tv.audio_track.is_some(),
+    }
+    .shutdown();
 }

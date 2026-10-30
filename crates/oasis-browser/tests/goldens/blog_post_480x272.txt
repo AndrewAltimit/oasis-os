@@ -94,15 +94,12 @@ fill_rect 8, 250, 464, 1, Color { r: 128, g: 128, b: 128, a: 255 }
 fill_rect 8, 202, 3, 49, Color { r: 0, g: 153, b: 204, a: 255 }
 set_clip_rect 18, 210, 445, 33
 fill_rect 18, 210, 132, 11, Color { r: 244, g: 244, b: 244, a: 255 }
-fill_rect 18, 210, 132, 11, Color { r: 244, g: 244, b: 244, a: 255 }
 draw_text "fn hello() -> String {", 18, 210, 7, Color { r: 51, g: 51, b: 51, a: 255 }
-fill_rect 18, 221, 126, 11, Color { r: 244, g: 244, b: 244, a: 255 }
 fill_rect 18, 221, 126, 11, Color { r: 244, g: 244, b: 244, a: 255 }
 draw_text "   String::from(\"hi\")", 18, 221, 7, Color { r: 51, g: 51, b: 51, a: 255 }
 fill_rect 18, 233, 6, 11, Color { r: 244, g: 244, b: 244, a: 255 }
-fill_rect 18, 233, 6, 11, Color { r: 244, g: 244, b: 244, a: 255 }
 draw_text "}", 18, 233, 7, Color { r: 51, g: 51, b: 51, a: 255 }
-reset_clip_rect
+set_clip_rect 0, 0, 480, 272
 draw_text "The ", 8, 260, 8, Color { r: 51, g: 51, b: 51, a: 255 }
 draw_text "generic ", 32, 260, 8, Color { r: 51, g: 51, b: 51, a: 255 }
 draw_text "version ", 80, 260, 8, Color { r: 51, g: 51, b: 51, a: 255 }
@@ -118,4 +115,4 @@ draw_text "a ", 404, 260, 8, Color { r: 51, g: 51, b: 51, a: 255 }
 draw_text "bet", 416, 260, 8, Color { r: 51, g: 51, b: 51, a: 255 }
 draw_text " on ", 434, 260, 8, Color { r: 51, g: 51, b: 51, a: 255 }
 draw_text "a", 458, 260, 8, Color { r: 51, g: 51, b: 51, a: 255 }
-# totals fill_rect=11 draw_text=106 other=2
+# totals fill_rect=8 draw_text=106 other=2

@@ -9,6 +9,20 @@ use oasis_ui::menu_bar::MenuStyle;
 /// Used for both sizing (we create objects up front) and teardown.
 const NP_MAX_VISIBLE_LINES: usize = 64;
 
+/// Gap between the top of the text area and the first text row.
+const NP_PAD_TOP: i32 = 6;
+/// Menu bar and status strip heights of the windowed Notepad layout.
+const NP_MENU_H: u32 = 18;
+const NP_STATUS_H: u32 = 18;
+
+/// `(text rows, row height)` of the windowed editor viewport in a content
+/// area `ch` tall: what `draw_notepad` draws and `App::layout` records.
+pub(crate) fn notepad_viewport(ch: u32, at: &ActiveTheme) -> (usize, i32) {
+    let area_h = ch.saturating_sub(NP_MENU_H + NP_STATUS_H) as i32;
+    let line_h = at.terminal_line_height.max(14) as i32;
+    (((area_h - NP_PAD_TOP) / line_h).max(0) as usize, line_h)
+}
+
 impl TextEditorApp {
     /// Format the buffer lines with line numbers for display.
     pub fn format_display_lines(&self) -> Vec<String> {
@@ -30,7 +44,7 @@ impl TextEditorApp {
     /// viewport, or the fullscreen layout estimate before the first draw
     /// (minus the status line).
     pub(crate) fn page_lines(&self) -> usize {
-        match self.viewport_lines.get() {
+        match self.viewport_lines {
             0 => self.content.cached_max_visible.max(2) - 1,
             n => n,
         }
@@ -212,13 +226,10 @@ impl TextEditorApp {
         backend.fill_rect(cx, area_y, cw, area_h, body_bg)?;
 
         let font_size: u16 = 12;
-        let line_h = at.terminal_line_height.max(14) as i32;
         let pad_left = 8i32;
-        let pad_top = 6i32;
-
-        let max_lines = ((area_h as i32 - pad_top) / line_h).max(0) as usize;
-        self.viewport_lines.set(max_lines.max(1));
-        self.viewport_line_h.set(line_h);
+        let pad_top = NP_PAD_TOP;
+        // Same viewport `App::layout` recorded for scrolling and clicks.
+        let (max_lines, line_h) = notepad_viewport(ch, at);
         let first = self.content.scroll;
         let visible = self
             .buffer
@@ -319,14 +330,12 @@ impl TextEditorApp {
         let status_left = self.status_left(true);
         backend.draw_text(&status_left, cx + 6, status_y + 4, 11, status_fg)?;
 
+        let left_w = backend.measure_text(&status_left, 11);
         let pos_w = backend.measure_text(&position, 11);
-        backend.draw_text(
-            &position,
-            cx + cw as i32 - pos_w as i32 - 8,
-            status_y + 4,
-            11,
-            status_fg,
-        )?;
+        let pos_x = cx + cw as i32 - pos_w as i32 - 8;
+        if status_position_fits(cx + 6, left_w, pos_x) {
+            backend.draw_text(&position, pos_x, status_y + 4, 11, status_fg)?;
+        }
 
         // Drop-down must render ABOVE the text area and status bar.
         // Draw it last so it naturally layers on top without needing
@@ -343,7 +352,7 @@ impl TextEditorApp {
     /// `draw_notepad` produces for windowed mode, but emits named SDI
     /// objects instead of direct backend draw calls so it survives the
     /// classic-skin fullscreen render path.
-    pub(crate) fn render_notepad_sdi(&self, sdi: &mut SdiRegistry, at: &ActiveTheme) {
+    pub(crate) fn render_notepad_sdi(&mut self, sdi: &mut SdiRegistry, at: &ActiveTheme) {
         // Defensive: hide the generic content-listing SDI objects that
         // a previously-open app may have populated and left visible.
         // Without this, stale `app_line_*` text bleeds through our
@@ -469,8 +478,8 @@ impl TextEditorApp {
         let pad_left = 8i32;
         let max_lines = ((area_h as i32 - pad_top) / line_h as i32).max(0) as usize;
         let max_lines = max_lines.min(NP_MAX_VISIBLE_LINES);
-        self.viewport_lines.set(max_lines.max(1));
-        self.viewport_line_h.set(line_h as i32);
+        self.viewport_lines = max_lines.max(1);
+        self.viewport_line_h = line_h as i32;
         let visible = self
             .buffer
             .line_count()
@@ -631,6 +640,12 @@ impl TextEditorApp {
 
         let position = self.status_position();
         let right_x = (sw as i32) - (position.chars().count() as i32 * 6) - 8;
+        let left_w = status_left.chars().count() as u32 * 6;
+        let position = if status_position_fits(6, left_w, right_x) {
+            position
+        } else {
+            String::new()
+        };
         text(
             sdi,
             "np_status_right",
@@ -884,6 +899,21 @@ fn rect_visible(
     }
 }
 
+/// Gap kept between the left status text and the right-aligned
+/// "Ln / Col" readout.
+const STATUS_GAP: i32 = 8;
+
+/// Whether the "Ln / Col" readout at `pos_x` clears the left status text
+/// (`left_w` px wide from `left_x`). A long prompt ("Unsaved changes:
+/// [S]ave / [D]iscard / [Esc] Cancel", a Save-as path) wins: the readout
+/// is dropped instead of being drawn on top of it.
+fn status_position_fits(left_x: i32, left_w: u32, pos_x: i32) -> bool {
+    left_x
+        .saturating_add(left_w as i32)
+        .saturating_add(STATUS_GAP)
+        <= pos_x
+}
+
 #[allow(clippy::too_many_arguments)]
 fn text(
     sdi: &mut SdiRegistry,
@@ -965,6 +995,54 @@ mod tests {
             fills.iter().all(|f| f.3 != white || f.1 < 18),
             "no white fills below the menu bar"
         );
+    }
+
+    /// Texts drawn on the status strip row (`y`), as `(text, x)`.
+    fn status_texts(rec: &RecordingBackend, y: i32) -> Vec<(String, i32)> {
+        rec.commands()
+            .iter()
+            .filter_map(|c| match c {
+                DrawCommand::DrawText { text, x, y: ty, .. } if *ty == y => {
+                    Some((text.clone(), *x))
+                },
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// The unsaved-changes prompt used to be drawn under the right-aligned
+    /// "Ln / Col" readout in a narrow window. The prompt wins: the readout
+    /// is dropped while it would overlap, and comes back with room.
+    #[test]
+    fn unsaved_prompt_does_not_overlap_the_position_readout() {
+        let at = ActiveTheme::default();
+        let mut app = TextEditorApp::open_file("/a.txt", "words");
+        app.mode = crate::EditorMode::ConfirmDiscard;
+        let (w, h) = (300, 200);
+        let status_y = h as i32 - 18 + 4;
+
+        let mut rec = RecordingBackend::new(w, h);
+        app.draw_windowed(0, 0, w, h, &mut rec, &at).expect("draw");
+        let row = status_texts(&rec, status_y);
+        assert!(
+            row.iter().any(|(t, _)| t.starts_with("Unsaved changes")),
+            "{row:?}"
+        );
+        assert!(
+            row.iter().all(|(t, _)| !t.starts_with("Ln ")),
+            "the readout overlapped the prompt: {row:?}"
+        );
+
+        // A wide window has room for both, side by side.
+        let mut rec = RecordingBackend::new(900, h);
+        app.draw_windowed(0, 0, 900, h, &mut rec, &at)
+            .expect("draw");
+        let row = status_texts(&rec, status_y);
+        let prompt = row.iter().find(|(t, _)| t.starts_with("Unsaved")).unwrap();
+        let pos = row.iter().find(|(t, _)| t.starts_with("Ln ")).unwrap();
+        let prompt_end =
+            prompt.1 + oasis_types::backend::SdiCore::measure_text(&rec, &prompt.0, 11) as i32;
+        assert!(prompt_end < pos.1, "{row:?}");
     }
 
     #[test]

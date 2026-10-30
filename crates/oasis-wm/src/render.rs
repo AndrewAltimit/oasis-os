@@ -8,7 +8,7 @@ use oasis_types::backend::SdiBackend;
 use oasis_types::error::Result;
 
 use super::manager::WindowManager;
-use super::window::WindowState;
+use super::window::{Window, WindowState};
 
 impl WindowManager {
     /// Draw window content with clipping. The caller provides a draw callback
@@ -75,10 +75,7 @@ impl WindowManager {
 
             // Draw this window's SDI objects (frame, titlebar, buttons, etc.).
             let id = window.id.as_str();
-            for suffix in window.sdi_suffixes() {
-                let name = fmt_sdi_name(&mut name_buf, id, suffix);
-                sdi.draw_named(name, backend)?;
-            }
+            draw_window_objects(window, sdi, backend, &mut name_buf)?;
 
             // Draw clipped content inside the window (at its animated
             // geometry while an open/minimize/restore animation runs).
@@ -100,11 +97,7 @@ impl WindowManager {
 
         // Closing windows fade out on top (chrome only, content is gone).
         for ghost in &self.closing {
-            let id = ghost.id.as_str();
-            for suffix in ghost.sdi_suffixes() {
-                let name = fmt_sdi_name(&mut name_buf, id, suffix);
-                sdi.draw_named(name, backend)?;
-            }
+            draw_window_objects(ghost, sdi, backend, &mut name_buf)?;
         }
 
         // Draw non-window overlay SDI objects (cursor, start menu, toasts)
@@ -151,7 +144,29 @@ impl WindowManager {
     }
 }
 
-/// Format `"{id}.{suffix}"` into a stack buffer, returning `&str`.
+/// Draw every SDI object of `window`, building the names in `buf`.
+/// Names too long for the buffer fall back to an allocated string rather
+/// than silently skipping the window's chrome.
+fn draw_window_objects(
+    window: &Window,
+    sdi: &mut SdiRegistry,
+    backend: &mut dyn SdiBackend,
+    buf: &mut [u8; 64],
+) -> Result<()> {
+    let id = window.id.as_str();
+    for suffix in window.sdi_suffixes() {
+        let name = fmt_sdi_name(buf, id, suffix);
+        if name.is_empty() {
+            sdi.draw_named(&window.sdi_name(suffix), backend)?;
+        } else {
+            sdi.draw_named(name, backend)?;
+        }
+    }
+    Ok(())
+}
+
+/// Format `"{id}.{suffix}"` into a stack buffer, returning `&str` (empty
+/// when it does not fit).
 pub(crate) fn fmt_sdi_name<'a>(buf: &'a mut [u8; 64], id: &str, suffix: &str) -> &'a str {
     let id_bytes = id.as_bytes();
     let suf_bytes = suffix.as_bytes();
@@ -171,64 +186,14 @@ mod tests {
     use super::*;
     use crate::manager::WindowManager;
     use crate::window::{WindowConfig, WindowType};
-    use oasis_types::backend::{Color, SdiCore, TextureId};
+    use oasis_test_backend::RecordingBackend;
+    use oasis_types::backend::Color;
 
-    /// Backend that records the red channel of every `fill_rect`, which the
-    /// tests use as a per-object tag.
-    struct TagRecorder(Vec<u8>);
-
-    impl SdiCore for TagRecorder {
-        fn init(&mut self, _w: u32, _h: u32) -> Result<()> {
-            Ok(())
-        }
-        fn clear(&mut self, _color: Color) -> Result<()> {
-            Ok(())
-        }
-        fn blit(&mut self, _t: TextureId, _x: i32, _y: i32, _w: u32, _h: u32) -> Result<()> {
-            Ok(())
-        }
-        fn fill_rect(&mut self, _x: i32, _y: i32, _w: u32, _h: u32, color: Color) -> Result<()> {
-            self.0.push(color.r);
-            Ok(())
-        }
-        fn draw_text(&mut self, _t: &str, _x: i32, _y: i32, _fs: u16, _c: Color) -> Result<()> {
-            Ok(())
-        }
-        fn swap_buffers(&mut self) -> Result<()> {
-            Ok(())
-        }
-        fn load_texture(&mut self, _w: u32, _h: u32, _d: &[u8]) -> Result<TextureId> {
-            Ok(TextureId(0))
-        }
-        fn destroy_texture(&mut self, _t: TextureId) -> Result<()> {
-            Ok(())
-        }
-        fn set_clip_rect(&mut self, _x: i32, _y: i32, _w: u32, _h: u32) -> Result<()> {
-            Ok(())
-        }
-        fn reset_clip_rect(&mut self) -> Result<()> {
-            Ok(())
-        }
-        fn measure_text(&self, _t: &str, _fs: u16) -> u32 {
-            0
-        }
-        fn read_pixels(&self, _x: i32, _y: i32, _w: u32, _h: u32) -> Result<Vec<u8>> {
-            Ok(vec![])
-        }
-        fn shutdown(&mut self) -> Result<()> {
-            Ok(())
-        }
+    /// The red channel of every recorded `fill_rect`, which the tests use
+    /// as a per-object tag.
+    fn tags(backend: &RecordingBackend) -> Vec<u8> {
+        backend.fill_colors().iter().map(|c| c.r).collect()
     }
-
-    impl oasis_types::backend::SdiShapes for TagRecorder {}
-    impl oasis_types::backend::SdiGradients for TagRecorder {}
-    impl oasis_types::backend::SdiAlpha for TagRecorder {}
-    impl oasis_types::backend::SdiText for TagRecorder {}
-    impl oasis_types::backend::SdiTextures for TagRecorder {}
-    impl oasis_types::backend::SdiClipTransform for TagRecorder {}
-    impl oasis_types::backend::SdiVector for TagRecorder {}
-    impl oasis_types::backend::SdiBatch for TagRecorder {}
-    impl oasis_types::backend::SdiRenderTarget for TagRecorder {}
 
     /// Tag an SDI object so the recorder can identify it in the draw stream.
     fn tag(sdi: &mut SdiRegistry, name: &str, tag: u8, overlay: bool) {
@@ -264,11 +229,11 @@ mod tests {
         tag(&mut sdi, "w1.stray", 2, false);
         tag(&mut sdi, "cursor", 3, true);
 
-        let mut backend = TagRecorder(Vec::new());
+        let mut backend = RecordingBackend::default();
         wm.draw_with_clips(&mut sdi, &mut backend, |_, _, _, _, _, _| Ok(()))
             .unwrap();
 
-        let tags = &backend.0;
+        let tags = tags(&backend);
         assert!(tags.contains(&1), "wallpaper must draw in the base pass");
         assert!(!tags.contains(&2), "window-owned objects must be excluded");
         // Cursor is an overlay: it draws after the window's chrome.
@@ -285,12 +250,12 @@ mod tests {
         tag(&mut sdi, "w1x", 7, false);
         tag(&mut sdi, "w10.frame", 8, false);
 
-        let mut backend = TagRecorder(Vec::new());
+        let mut backend = RecordingBackend::default();
         wm.draw_with_clips(&mut sdi, &mut backend, |_, _, _, _, _, _| Ok(()))
             .unwrap();
 
-        assert!(backend.0.contains(&7));
-        assert!(backend.0.contains(&8));
+        assert!(tags(&backend).contains(&7));
+        assert!(tags(&backend).contains(&8));
     }
 
     #[test]
@@ -305,15 +270,32 @@ mod tests {
         };
 
         let (mut sdi_a, wm_a) = build();
-        let mut a = TagRecorder(Vec::new());
+        let mut a = RecordingBackend::default();
         wm_a.draw_with_clips(&mut sdi_a, &mut a, |_, _, _, _, _, _| Ok(()))
             .unwrap();
 
         let (mut sdi_b, wm_b) = build();
-        let mut b = TagRecorder(Vec::new());
+        let mut b = RecordingBackend::default();
         wm_b.draw_with_clips_noalloc(&mut sdi_b, &mut b, |_, _, _, _, _, _| Ok(()))
             .unwrap();
 
-        assert_eq!(a.0, b.0);
+        assert_eq!(tags(&a), tags(&b));
+    }
+    #[test]
+    fn long_window_ids_still_draw_their_chrome() {
+        // "{id}.{suffix}" no longer fits the 64-byte stack buffer.
+        let id = "x".repeat(60);
+        let mut sdi = SdiRegistry::new();
+        let mut wm = WindowManager::new(800, 600);
+        let mut theme = wm.theme().clone();
+        theme.frame_color = Color::rgb(9, 0, 0);
+        wm.set_theme(theme);
+        wm.create_window(&app_config(&id), &mut sdi).unwrap();
+
+        let mut backend = RecordingBackend::default();
+        wm.draw_with_clips(&mut sdi, &mut backend, |_, _, _, _, _, _| Ok(()))
+            .unwrap();
+
+        assert!(tags(&backend).contains(&9), "frame must be drawn");
     }
 }

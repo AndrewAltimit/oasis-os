@@ -9,7 +9,7 @@ use oasis_types::color::with_alpha;
 
 use crate::active_theme::ActiveTheme;
 use crate::sdi::SdiRegistry;
-use crate::transition::ease_out_cubic;
+use oasis_types::easing::ease_out_cubic;
 
 /// Maximum number of visible toasts.
 const MAX_VISIBLE: usize = 4;

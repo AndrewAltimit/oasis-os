@@ -20,6 +20,29 @@ services:
     profiles:
       - ci
 
+  # -- PSP build environment ----------------------------------------------
+  # pspdev toolchain + pinned nightly + cargo-psp, as the CI runner has them.
+  # Build: docker compose --profile psp-build build psp-build
+  # Use:   docker compose --profile psp-build run --rm psp-build \
+  #          bash -c 'cd crates/oasis-backend-psp && RUST_PSP_BUILD_STD=1 cargo psp --release'
+  psp-build:
+    build:
+      context: .
+      dockerfile: docker/psp-build.Dockerfile
+    user: "${USER_ID:-1000}:${GROUP_ID:-1000}"
+    volumes:
+      - .:/app
+      - psp-cargo-cache:/tmp/cargo
+    environment:
+      - CARGO_HOME=/tmp/cargo
+      - RUSTUP_HOME=/usr/local/rustup
+    working_dir: /app
+    command: ["/bin/bash"]
+    stdin_open: true
+    tty: true
+    profiles:
+      - psp-build
+
   # -- PPSSPP Emulator ---------------------------------------------------
   # Build:   docker compose --profile psp build ppsspp
   # Run GUI: docker compose --profile psp run --rm ppsspp /roms/release/EBOOT.PBP
@@ -188,4 +211,5 @@ services:
 
 volumes:
   cargo-registry-cache:
+  psp-cargo-cache:
   reaction-search-cache:

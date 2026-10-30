@@ -9,13 +9,14 @@
 //!   cargo run -p oasis-app --bin e2e-tests
 //!   OASIS_E2E_NETWORK=1 cargo run -p oasis-app --bin e2e-tests
 
+use oasis_apps::TvGuideRunnerExt as _;
 use std::time::Instant;
 
+use oasis_apps::tv_guide::catalog::ChannelCatalog;
+use oasis_apps::tv_guide::channel::{ChannelConfig, DEFAULT_CHANNELS_TOML};
+use oasis_apps::tv_guide::{TvGuideState, VideoEpisode};
 use oasis_core::active_theme::ActiveTheme;
 use oasis_core::apps::AppRunner;
-use oasis_core::apps::tv_guide::catalog::ChannelCatalog;
-use oasis_core::apps::tv_guide::channel::{ChannelConfig, DEFAULT_CHANNELS_TOML};
-use oasis_core::apps::tv_guide::{TvGuideState, VideoEpisode};
 use oasis_core::backend::Color;
 use oasis_core::dashboard::AppEntry;
 use oasis_core::vfs::{MemoryVfs, Vfs};
@@ -73,7 +74,11 @@ fn inject_catalogs(guide: &mut TvGuideState, episodes_per_channel: usize) {
 
 fn test_tv_guide_launch_shows_loading() -> bool {
     let vfs = make_vfs();
-    let runner = AppRunner::launch(&make_tv_app(), &vfs);
+    let runner = AppRunner::launch(
+        &oasis_apps::builtin_registry(&oasis_apps::HostInfo::desktop()),
+        &make_tv_app(),
+        &vfs,
+    );
     let guide = make_guide();
 
     // Initial state: shows "Loading", fetch_attempted is false, no error.
@@ -86,7 +91,7 @@ fn test_tv_guide_launch_shows_loading() -> bool {
     assert!(no_error, "should have no error initially");
     assert!(not_attempted, "fetch_attempted should be false initially");
     assert!(
-        runner.lines.iter().any(|l| l.contains("Loading")),
+        runner.lines().iter().any(|l| l.contains("Loading")),
         "runner lines should contain 'Loading'",
     );
 
@@ -178,7 +183,11 @@ fn test_tv_guide_schedule_deterministic() -> bool {
 
 fn test_tv_guide_tune_request_emitted() -> bool {
     let vfs = make_vfs();
-    let mut runner = AppRunner::launch(&make_tv_app(), &vfs);
+    let mut runner = AppRunner::launch(
+        &oasis_apps::builtin_registry(&oasis_apps::HostInfo::desktop()),
+        &make_tv_app(),
+        &vfs,
+    );
 
     // Inject catalogs into the runner's guide state.
     if let Some(guide) = runner.tv_guide_state() {
@@ -191,12 +200,14 @@ fn test_tv_guide_tune_request_emitted() -> bool {
     use oasis_core::input::Button;
     runner.handle_input(&Button::Confirm, &vfs);
 
-    let request = runner.take_pending_request();
+    let mut requests = Vec::new();
+    runner.drain_requests(&mut requests);
+    let request = requests.pop().map(|r| (r.path, r.data));
     assert!(request.is_some(), "should have a pending tune request");
     let (path, data) = request.unwrap();
     assert_eq!(
         path,
-        oasis_core::apps::tv_guide::TV_REQUEST_PATH,
+        oasis_apps::tv_guide::TV_REQUEST_PATH,
         "request path should match TV_REQUEST_PATH",
     );
     assert!(

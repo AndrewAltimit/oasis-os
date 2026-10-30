@@ -4,10 +4,8 @@
 
 use criterion::{BatchSize, Criterion, criterion_group, criterion_main};
 use oasis_core::apps::AppRunner;
-use oasis_core::dashboard::AppEntry;
+use oasis_core::apps::simple_app::SimpleApp;
 use oasis_core::terminal_sdi::{MAX_OUTPUT_LINES, trim_scrollback};
-use oasis_core::vfs::MemoryVfs;
-use oasis_types::backend::Color;
 
 /// A full scrollback followed by a 5000-line command output burst.
 fn full_plus_burst() -> Vec<String> {
@@ -45,22 +43,16 @@ fn bench_trim(c: &mut Criterion) {
 }
 
 fn terminal_runner() -> AppRunner {
-    let entry = AppEntry {
-        title: "Terminal".to_string(),
-        path: "/apps/terminal".to_string(),
-        icon_png: Vec::new(),
-        color: Color::rgb(0, 0, 0),
-    };
-    AppRunner::launch(&entry, &MemoryVfs::new())
+    AppRunner::from_delegate(Box::new(SimpleApp::terminal("/apps/terminal")))
 }
 
 fn bench_sync(c: &mut Criterion) {
     let mut group = c.benchmark_group("scrollback_sync_append_one");
     let mut output: Vec<String> = (0..MAX_OUTPUT_LINES).map(|i| format!("line {i}")).collect();
 
-    // The pre-fix desktop path: clone the scrollback, push the prompt,
-    // hand it to set_lines (which re-clones into the runner mirror).
-    let mut runner = terminal_runner();
+    // The pre-fix desktop path: clone the scrollback, push the prompt and
+    // replace the app's lines wholesale.
+    let mut app = SimpleApp::terminal("/apps/terminal");
     let mut n = 0usize;
     group.bench_function("full_clone", |b| {
         b.iter(|| {
@@ -69,7 +61,7 @@ fn bench_sync(c: &mut Criterion) {
             trim_scrollback(&mut output);
             let mut lines = output.clone();
             lines.push("> ".to_string());
-            runner.set_lines(lines, 0);
+            app.set_lines(lines, 0);
         });
     });
 

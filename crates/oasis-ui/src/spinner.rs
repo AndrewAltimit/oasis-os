@@ -344,17 +344,17 @@ mod tests {
         assert_eq!(s.elapsed_ms, 9);
     }
 
-    // -- Draw / measure tests using MockBackend --
+    // -- Draw / measure tests using RecordingBackend --
 
     use crate::context::DrawContext;
-    use crate::test_utils::MockBackend;
+    use crate::test_utils::RecordingBackend;
     use crate::theme::Theme;
     use crate::widget::Widget;
 
     #[test]
     fn measure_returns_nonzero() {
         let theme = Theme::dark();
-        let mut backend = MockBackend::new();
+        let mut backend = RecordingBackend::default();
         let ctx = DrawContext::new(&mut backend, &theme);
         let s = Spinner::new();
         let (w, h) = s.measure(&ctx, 200, 100);
@@ -365,7 +365,7 @@ mod tests {
     #[test]
     fn measure_with_label_wider() {
         let theme = Theme::dark();
-        let mut backend = MockBackend::new();
+        let mut backend = RecordingBackend::default();
         let ctx = DrawContext::new(&mut backend, &theme);
         let no_label = Spinner::new();
         let with_label = Spinner::with_label("Loading...");
@@ -377,7 +377,7 @@ mod tests {
     #[test]
     fn draw_text_style_no_panic() {
         let theme = Theme::dark();
-        let mut backend = MockBackend::new();
+        let mut backend = RecordingBackend::default();
         {
             let mut ctx = DrawContext::new(&mut backend, &theme);
             let s = Spinner::new();
@@ -389,7 +389,7 @@ mod tests {
     #[test]
     fn draw_text_style_with_label() {
         let theme = Theme::dark();
-        let mut backend = MockBackend::new();
+        let mut backend = RecordingBackend::default();
         {
             let mut ctx = DrawContext::new(&mut backend, &theme);
             let s = Spinner::with_label("Wait");
@@ -401,7 +401,7 @@ mod tests {
     #[test]
     fn draw_dots_style_no_panic() {
         let theme = Theme::dark();
-        let mut backend = MockBackend::new();
+        let mut backend = RecordingBackend::default();
         {
             let mut ctx = DrawContext::new(&mut backend, &theme);
             let mut s = Spinner::new();
@@ -415,7 +415,7 @@ mod tests {
     #[test]
     fn draw_dots_with_label() {
         let theme = Theme::dark();
-        let mut backend = MockBackend::new();
+        let mut backend = RecordingBackend::default();
         {
             let mut ctx = DrawContext::new(&mut backend, &theme);
             let mut s = Spinner::with_label("Connecting");
@@ -428,7 +428,7 @@ mod tests {
     #[test]
     fn draw_bar_style_no_panic() {
         let theme = Theme::dark();
-        let mut backend = MockBackend::new();
+        let mut backend = RecordingBackend::default();
         {
             let mut ctx = DrawContext::new(&mut backend, &theme);
             let mut s = Spinner::new();
@@ -443,7 +443,7 @@ mod tests {
     fn draw_reduced_motion_text() {
         let mut theme = Theme::dark();
         theme.reduced_motion = true;
-        let mut backend = MockBackend::new();
+        let mut backend = RecordingBackend::default();
         {
             let mut ctx = DrawContext::new(&mut backend, &theme);
             let s = Spinner::new();
@@ -457,7 +457,7 @@ mod tests {
     fn draw_reduced_motion_dots() {
         let mut theme = Theme::dark();
         theme.reduced_motion = true;
-        let mut backend = MockBackend::new();
+        let mut backend = RecordingBackend::default();
         {
             let mut ctx = DrawContext::new(&mut backend, &theme);
             let mut s = Spinner::new();
@@ -472,7 +472,7 @@ mod tests {
     fn draw_reduced_motion_bar() {
         let mut theme = Theme::dark();
         theme.reduced_motion = true;
-        let mut backend = MockBackend::new();
+        let mut backend = RecordingBackend::default();
         {
             let mut ctx = DrawContext::new(&mut backend, &theme);
             let mut s = Spinner::new();
@@ -486,7 +486,7 @@ mod tests {
     #[test]
     fn draw_bar_at_different_frames() {
         let theme = Theme::dark();
-        let mut backend = MockBackend::new();
+        let mut backend = RecordingBackend::default();
         {
             let mut ctx = DrawContext::new(&mut backend, &theme);
             let mut s = Spinner::new();
@@ -500,7 +500,7 @@ mod tests {
     #[test]
     fn draw_bar_with_label() {
         let theme = Theme::dark();
-        let mut backend = MockBackend::new();
+        let mut backend = RecordingBackend::default();
         {
             let mut ctx = DrawContext::new(&mut backend, &theme);
             let mut s = Spinner::with_label("Loading");

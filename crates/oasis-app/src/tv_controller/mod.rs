@@ -31,25 +31,12 @@ pub fn tick(state: &mut AppState, backend: &mut impl SdiBackend, vfs: &mut dyn V
     player::auto_advance_episode(state, backend);
 }
 
-/// Find a TV Guide runner in either the full-screen runner or open windowed runners.
-fn find_tv_guide_runner<'a>(
-    app_runner: &'a mut Option<AppRunner>,
-    open_runners: &'a mut [(String, AppRunner)],
-) -> Option<&'a mut AppRunner> {
-    if let Some(ref mut runner) = *app_runner
-        && runner.title == "TV Guide"
-    {
-        log::trace!("TV: found TV Guide in app_runner (full-screen)");
-        return Some(runner);
-    }
-    let found = open_runners
+/// The open TV Guide window's runner, if any.
+fn find_tv_guide_runner(open_runners: &mut [(String, AppRunner)]) -> Option<&mut AppRunner> {
+    open_runners
         .iter_mut()
         .map(|(_, runner)| runner)
-        .find(|runner| runner.title == "TV Guide");
-    if found.is_some() {
-        log::trace!("TV: found TV Guide in open_runners (windowed)");
-    }
-    found
+        .find(|runner| runner.title == "TV Guide")
 }
 
 #[cfg(all(test, feature = "_video"))]

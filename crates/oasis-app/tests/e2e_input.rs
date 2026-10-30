@@ -740,16 +740,28 @@ fn drag_resize_maximize_and_snap_with_the_mouse() {
     }
 }
 
-/// Close via titlebar button, via Escape, and via the app's own Exit
-/// (Calculator: Escape on an empty display = Cancel -> Exit).
+/// Close via titlebar button, via `wm close <id>` (the terminal command's
+/// VFS request), via Escape, and via the app's own Exit (Calculator:
+/// Escape on an empty display = Cancel -> Exit).
 #[test]
 fn close_paths_all_release_the_runner() {
+    use oasis_core::vfs::Vfs;
     for skin in windowed_skins() {
         let mut h = boot(skin);
         open(&mut h, "Calculator");
         assert!(h.close_window("Calculator"), "{skin}");
         h.settle();
         assert!(h.find_window("Calculator").is_none(), "{skin}");
+
+        let win = open(&mut h, "Calculator");
+        h.vfs_mut()
+            .write("/var/wm/request", format!("close {}", win.id).as_bytes())
+            .unwrap();
+        h.settle();
+        assert!(h.find_window("Calculator").is_none(), "{skin}: wm close");
+        assert!(h.state().content.open_runners.is_empty(), "{skin}");
+        assert!(h.state().content.retired_runners.is_empty(), "{skin}");
+        assert_eq!(h.mode(), Mode::Dashboard, "{skin}: wm close");
 
         open(&mut h, "Calculator");
         h.type_text("12");
@@ -772,7 +784,7 @@ fn request_resolution(h: &mut Harness, w: u32, hh: u32) {
     use oasis_core::vfs::Vfs;
     h.vfs_mut()
         .write(
-            oasis_app_settings::RESOLUTION_CHANGE_REQUEST_PATH,
+            oasis_apps::settings::RESOLUTION_CHANGE_REQUEST_PATH,
             format!("{w}x{hh}").as_bytes(),
         )
         .unwrap();
@@ -967,7 +979,7 @@ fn icon_drag_reorder_persists() {
     for name in ["classic", skin] {
         h.vfs_mut()
             .write(
-                oasis_app_settings::SKIN_CHANGE_REQUEST_PATH,
+                oasis_apps::settings::SKIN_CHANGE_REQUEST_PATH,
                 name.as_bytes(),
             )
             .unwrap();
@@ -1070,7 +1082,7 @@ fn open_windows_adopt_the_new_skin_chrome() {
     for skin in ["xp", "macos", "win95", "classic"] {
         h.vfs_mut()
             .write(
-                oasis_app_settings::SKIN_CHANGE_REQUEST_PATH,
+                oasis_apps::settings::SKIN_CHANGE_REQUEST_PATH,
                 skin.as_bytes(),
             )
             .unwrap();
@@ -1099,4 +1111,141 @@ fn open_windows_adopt_the_new_skin_chrome() {
         );
         assert_window_reachable(&h, "Calculator", &format!("skin_{skin}"));
     }
+}
+
+// ---------------------------------------------------------------------------
+// Terminal scrollback: short windows and the mouse wheel
+// ---------------------------------------------------------------------------
+
+/// Run `echo rowNN` for NN in 1..=n (two scrollback lines each), then type
+/// `pending` on the prompt without running it.
+fn fill_terminal(h: &mut Harness, n: usize) {
+    for i in 1..=n {
+        h.type_text(&format!("echo row{i:02}"));
+        h.key(Key::Enter);
+    }
+    h.type_text("pending");
+    h.settle();
+}
+
+fn any_contains(lines: &[String], needle: &str) -> bool {
+    lines.iter().any(|l| l.contains(needle))
+}
+
+/// A windowed terminal resized to about six rows used to scroll against a
+/// fixed 13-row count: the newest output and the prompt fell below the
+/// window's bottom edge. The wheel must also reach the oldest line and
+/// come back to the prompt.
+#[test]
+fn short_windowed_terminal_shows_the_prompt_and_wheel_scrolls_end_to_end() {
+    let mut h = boot("classic");
+    let win = open(&mut h, "Terminal");
+    fill_terminal(&mut h, 15);
+
+    let line_h = h.state().active_theme.terminal_line_height.max(12);
+    let chrome_h = win.frame.3 - win.content.3;
+    let content_h = 4 + 16 + 6 * line_h + line_h / 2;
+    {
+        let shell = &mut h.shell;
+        shell
+            .state
+            .wm
+            .resize_window(&win.id, win.frame.2, chrome_h + content_h, &mut shell.sdi)
+            .unwrap();
+    }
+    h.settle();
+    let drawn = text_in_window(&mut h, "Terminal");
+    assert!(
+        any_contains(&drawn, "pending") && any_contains(&drawn, "row15"),
+        "six-row window shows the prompt and the newest output: {drawn:?} {}",
+        dump(&h, "short_terminal")
+    );
+    assert!(!any_contains(&drawn, "row10"), "older lines scrolled away");
+
+    let content = h.find_window("Terminal").unwrap().content;
+    let (cx, cy) = rect_center(content);
+    h.move_to(cx, cy);
+    for _ in 0..40 {
+        h.scroll(-1);
+    }
+    h.settle();
+    let drawn = text_in_window(&mut h, "Terminal");
+    assert!(
+        any_contains(&drawn, "OASIS_OS"),
+        "wheel reaches the first scrollback line: {drawn:?}"
+    );
+    assert!(!any_contains(&drawn, "pending"), "{drawn:?}");
+
+    for _ in 0..40 {
+        h.scroll(1);
+    }
+    h.settle();
+    let drawn = text_in_window(&mut h, "Terminal");
+    assert!(
+        any_contains(&drawn, "pending") && any_contains(&drawn, "row15"),
+        "wheel returns to the prompt: {drawn:?}"
+    );
+}
+
+/// The fullscreen terminal's wheel scrolls through the same range: up to
+/// the first line, back down to the prompt.
+#[test]
+fn fullscreen_terminal_wheel_scrolls_end_to_end() {
+    let mut h = boot("classic");
+    h.button(Button::Start);
+    h.settle();
+    assert_eq!(h.mode(), Mode::Terminal);
+    fill_terminal(&mut h, 40);
+    assert!(h.sdi_text_contains("pending"), "{:?}", h.sdi_texts());
+    assert!(!h.sdi_text_contains("OASIS_OS"), "first line scrolled away");
+
+    for _ in 0..60 {
+        h.scroll(-1);
+    }
+    h.settle();
+    assert!(
+        h.sdi_text_contains("OASIS_OS"),
+        "wheel reaches the first scrollback line: {:?}",
+        h.sdi_texts()
+    );
+    assert!(!h.sdi_text_contains("row40"));
+
+    for _ in 0..60 {
+        h.scroll(1);
+    }
+    h.settle();
+    assert!(h.sdi_text_contains("row40"), "{:?}", h.sdi_texts());
+    assert!(h.sdi_text_contains("pending"));
+}
+
+/// The wheel over an app window reaches the app (`App::handle_scroll`):
+/// a long document in the Text Editor scrolls and comes back.
+#[test]
+fn wheel_over_an_app_window_scrolls_the_app() {
+    use oasis_core::vfs::Vfs;
+    let mut h = boot("classic");
+    let text: String = (0..80).map(|i| format!("wheel-line-{i:02}\n")).collect();
+    h.vfs_mut()
+        .write("/home/user/long.txt", text.as_bytes())
+        .unwrap();
+    h.open_app_with_file("Text Editor", "/home/user/long.txt");
+    h.settle();
+    let win = h.find_window("Text Editor").expect("editor window");
+    let drawn = text_in_window(&mut h, "Text Editor");
+    assert!(any_contains(&drawn, "wheel-line-00"), "{drawn:?}");
+
+    let (cx, cy) = rect_center(win.content);
+    h.move_to(cx, cy);
+    h.scroll(5);
+    h.settle();
+    let drawn = text_in_window(&mut h, "Text Editor");
+    assert!(
+        !any_contains(&drawn, "wheel-line-00"),
+        "wheel scrolled the document: {drawn:?}"
+    );
+
+    h.scroll(-5);
+    h.settle();
+    let drawn = text_in_window(&mut h, "Text Editor");
+    assert!(any_contains(&drawn, "wheel-line-00"), "{drawn:?}");
 }

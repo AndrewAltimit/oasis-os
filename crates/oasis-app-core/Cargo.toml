@@ -19,5 +19,8 @@ oasis-test-backend = { workspace = true, optional = true }
 # End-to-end app test harness (`oasis_app_core::testing`), for dev-deps.
 testing = ["dep:oasis-test-backend"]
 
+[dev-dependencies]
+oasis-test-backend = { workspace = true }
+
 [lints]
 workspace = true

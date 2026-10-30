@@ -14,11 +14,11 @@ consume identically.
 
 | Type | Source | Notes |
 | --- | --- | --- |
-| `VectorOp` | `op.rs:15` | Flat enum of drawing operations. Serializable, no trait objects. |
-| `VectorScene` | `scene.rs:17` | Width, height, `Vec<VectorOp>` paint list. |
-| `IconDef` | `icons.rs:18` | Named icon: `ops`, `width`, `height`, helpers `recolor`, `as_op`, `as_op_alpha`. |
-| `IconCategory` | `icon_set.rs:33` | Semantic category derived from app titles via `from_app_title`. |
-| `AnimClock` | `anim.rs:13` | Frame counter + monotonic seconds, oscillators, easings. |
+| `VectorOp` | `op.rs` | Flat enum of drawing operations. Serializable, no trait objects. |
+| `VectorScene` | `scene.rs` | Width, height, `Vec<VectorOp>` paint list. |
+| `IconDef` | `icons.rs` | Named icon: `ops`, `width`, `height`, helpers `recolor`, `as_op`. |
+| `IconCategory` | `icon_set.rs` | Semantic category derived from app titles via `from_app_title`. |
+| `AnimClock` | `anim.rs` | Frame counter + monotonic seconds, oscillators, easings. |
 | `BackgroundLayer`, `BackgroundScene` | `background.rs` | Data-driven decorative layers (grids, spheres, radar, waves, shaders). |
 
 ## VectorOp reference
@@ -42,9 +42,11 @@ approximated with arcs and polygons.
 Coordinates are integer pixels. Angles are radians, clockwise from the
 positive X axis. Alpha is 0–255.
 
-`VectorOp::scale(factor: f32)` (`op.rs:215`) multiplies every coordinate and
-stroke width by `factor` so an icon designed at 22×22 can render at any
-display size without re-authoring.
+`VectorOp::scale(factor: f32)` (`op.rs`) multiplies every coordinate,
+size, radius, font size and rectangle stroke width by `factor` so an icon
+designed at 22×22 can render at any display size without re-authoring.
+Line, circle, arc and polygon stroke widths (and dash patterns) are left
+as authored. Radii, rect stroke widths and font sizes never scale below 1.
 
 ## Scene composition
 
@@ -105,43 +107,40 @@ paints them after the SDI pass with `statusbar::render_status_glyphs`.
 
 ### Background and overlay helpers
 
-`icons.rs:476–622` defines:
-
-- `wireframe_sphere(radius, color)` and an `_animated(angle)` variant.
-- `active_indicator(height, color)` — the thin sidebar bar.
-- `glass_polygon(points, color, alpha)` — translucent shape.
-- `grid_overlay(w, h, spacing, color)` — sparse grid.
-- `radar_sweep(cx, cy, radius, sweep_angle, rotation, color)` — filled
-  wedge.
-- `eq_bar(x, y, width, height, color)` — audio visualiser bar.
-- `altimit_sidebar(...)` — full sidebar layout: 6 icons + labels + LED.
+`icons.rs` defines `grid_overlay(w, h, spacing, color)` — the sparse
+Altimit grid (same lines as the `grid` background layer). The animated
+background elements (wireframe sphere, radar sweep, rings, EQ bars,
+waves, ...) live in `backgrounds.rs` and are driven by `BackgroundScene`.
 
 ## Animation model
 
-`AnimClock` (`anim.rs:13`) is the single time source:
+`AnimClock` (`anim.rs`) is the single time source:
 
 - `frame: u32` — wrapping frame counter, advanced by `tick_frame()`.
 - `time_s: f32` — monotonic seconds, advanced by `tick_dt(ms)` for variable
   timestep or implicitly by `tick_frame` at 1/60 s per tick.
 
-Oscillators (`anim.rs:42`):
+Oscillators (`anim.rs`):
 
 - `sine(freq, phase) -> f32` — `sin(TAU * freq * time + phase)`, range -1..1.
 - `sine_norm(freq, phase) -> f32` — same, mapped to 0..1.
-- `sawtooth(period_s, phase) -> f32` — wrapping 0..1 ramp.
+- `sawtooth(period_s, phase) -> f32` — wrapping 0..1 ramp (negative
+  phases wrap forward).
 
-Easing curves (`anim.rs:67`):
+Easing curves (`anim.rs`):
 
-- `entrance_scale(elapsed_ms, duration_ms)` — ease-out cubic, 0→1.
+- `entrance_scale(elapsed_ms, duration_ms)` — ease-out cubic, 0→1
+  (`oasis_types::easing::ease_out_cubic`).
 - `entrance_alpha(elapsed_ms, duration_ms)` — ease-out quadratic, 0–255.
 - `entrance_slide_y(elapsed_ms, duration_ms, distance)` — ease-out cubic.
 
-Per-frame helpers (`anim.rs:129`):
+Per-frame helpers (`anim.rs`):
 
 - `float_offset(frame, slot, amplitude, speed)` — sine bobbing,
   per-slot phase.
 - `pulse_alpha(frame, speed, min_alpha)` — oscillating alpha.
-- `blink_visible(frame, interval)` — 2/3 on, 1/3 off duty cycle.
+- `blink_visible(frame, interval)` — 2/3 on, 1/3 off duty cycle
+  (`interval == 0` = always visible).
 - `rotate_point`, `rotate_rect` — rotation around a centre.
 
 The model is **frame-driven** in the sense that animations are pure functions
@@ -151,7 +150,7 @@ new counter value.
 
 ## Rendering: SdiVector trait integration
 
-`render::render_scene(backend, &scene)` (`render.rs:17`) dispatches each op to
+`render::render_scene(backend, &scene)` (`render.rs`) dispatches each op to
 the backend trait it belongs to:
 
 - `SdiCore` for `fill_rect`, `draw_text`.
@@ -161,7 +160,7 @@ the backend trait it belongs to:
 - `SdiGradients` for the gradient ops.
 
 Group opacity is multiplied into each child op's alpha by `apply_alpha`
-(`render.rs:44`). Empty translates `(0, 0)` are skipped to avoid pushing a
+(`render.rs`), including every stop of `RectGradient` / `PolygonGradient`. Empty translates `(0, 0)` are skipped to avoid pushing a
 no-op transform.
 
 `render_scene_at(backend, scene, x, y, alpha)` is the common wrapper — it
@@ -191,7 +190,7 @@ dashboard icons; use `render_scene` directly for full-viewport overlays.
    for a circle is usually fine since the renderer also scales).
 3. Choose a grid: 22×22 for Altimit, 24×24 for outline / solid, 32×32 for
    pixel.
-4. Add a unit test next to existing ones (around `icons.rs:690`) asserting
+4. Add a unit test next to existing ones (in the `tests` module of `icons.rs`) asserting
    name, dimensions, and op count. `icon_set::ops_bounds` gives an op
    list's conservative pixel bounds; the icon-set tests assert every glyph
    stays inside its design box.

@@ -222,100 +222,8 @@ impl WindowManager {
 mod tests {
     use super::*;
     use crate::window::{WindowConfig, WindowState, WindowType};
-    use oasis_types::backend::{Color, SdiCore, TextureId};
-
-    /// Minimal no-op backend for tests that require `&mut dyn SdiBackend`.
-    struct NullBackend;
-
-    impl SdiCore for NullBackend {
-        fn init(&mut self, _w: u32, _h: u32) -> oasis_types::error::Result<()> {
-            Ok(())
-        }
-        fn clear(&mut self, _color: Color) -> oasis_types::error::Result<()> {
-            Ok(())
-        }
-        fn blit(
-            &mut self,
-            _tex: TextureId,
-            _x: i32,
-            _y: i32,
-            _w: u32,
-            _h: u32,
-        ) -> oasis_types::error::Result<()> {
-            Ok(())
-        }
-        fn fill_rect(
-            &mut self,
-            _x: i32,
-            _y: i32,
-            _w: u32,
-            _h: u32,
-            _color: Color,
-        ) -> oasis_types::error::Result<()> {
-            Ok(())
-        }
-        fn draw_text(
-            &mut self,
-            _text: &str,
-            _x: i32,
-            _y: i32,
-            _font_size: u16,
-            _color: Color,
-        ) -> oasis_types::error::Result<()> {
-            Ok(())
-        }
-        fn swap_buffers(&mut self) -> oasis_types::error::Result<()> {
-            Ok(())
-        }
-        fn load_texture(
-            &mut self,
-            _w: u32,
-            _h: u32,
-            _data: &[u8],
-        ) -> oasis_types::error::Result<TextureId> {
-            Ok(TextureId(0))
-        }
-        fn destroy_texture(&mut self, _tex: TextureId) -> oasis_types::error::Result<()> {
-            Ok(())
-        }
-        fn set_clip_rect(
-            &mut self,
-            _x: i32,
-            _y: i32,
-            _w: u32,
-            _h: u32,
-        ) -> oasis_types::error::Result<()> {
-            Ok(())
-        }
-        fn reset_clip_rect(&mut self) -> oasis_types::error::Result<()> {
-            Ok(())
-        }
-        fn measure_text(&self, _text: &str, _font_size: u16) -> u32 {
-            0
-        }
-        fn read_pixels(
-            &self,
-            _x: i32,
-            _y: i32,
-            _w: u32,
-            _h: u32,
-        ) -> oasis_types::error::Result<Vec<u8>> {
-            Ok(vec![])
-        }
-        fn shutdown(&mut self) -> oasis_types::error::Result<()> {
-            Ok(())
-        }
-    }
-
-    impl oasis_types::backend::SdiShapes for NullBackend {}
-    impl oasis_types::backend::SdiGradients for NullBackend {}
-    impl oasis_types::backend::SdiAlpha for NullBackend {}
-    impl oasis_types::backend::SdiText for NullBackend {}
-    impl oasis_types::backend::SdiTextures for NullBackend {}
-    impl oasis_types::backend::SdiClipTransform for NullBackend {}
-    impl oasis_types::backend::SdiVector for NullBackend {}
-    impl oasis_types::backend::SdiBatch for NullBackend {}
-    impl oasis_types::backend::SdiRenderTarget for NullBackend {}
+    use oasis_test_backend::NullBackend;
+    use oasis_types::backend::{Color, TextureId};
 
     fn app_config(id: &str) -> WindowConfig {
         WindowConfig {
@@ -1126,6 +1034,47 @@ mod tests {
         }
     }
 
+    /// A cascaded window that would cross the bottom / right edge is pulled
+    /// back on screen (a default-size window at 480x272 is nearly as tall
+    /// as the screen); one larger than the screen sits at the corner.
+    #[test]
+    fn cascaded_windows_stay_on_screen() {
+        let mut sdi = SdiRegistry::new();
+        let mut wm = WindowManager::new(480, 272);
+        for i in 0..6 {
+            let config = WindowConfig {
+                id: format!("w{i}"),
+                title: format!("W{i}"),
+                x: None,
+                y: None,
+                width: 380,
+                height: 220,
+                window_type: WindowType::AppWindow,
+                always_on_top: false,
+                modal: false,
+            };
+            wm.create_window(&config, &mut sdi).unwrap();
+            let win = wm.get_window(&format!("w{i}")).unwrap();
+            assert!(win.x >= 0 && win.y >= 0, "w{i}");
+            assert!(win.x + win.outer_w as i32 <= 480, "w{i} x={}", win.x);
+            assert!(win.y + win.outer_h as i32 <= 272, "w{i} y={}", win.y);
+        }
+        let huge = WindowConfig {
+            id: "huge".into(),
+            title: "Huge".into(),
+            x: None,
+            y: None,
+            width: 900,
+            height: 900,
+            window_type: WindowType::AppWindow,
+            always_on_top: false,
+            modal: false,
+        };
+        wm.create_window(&huge, &mut sdi).unwrap();
+        let win = wm.get_window("huge").unwrap();
+        assert_eq!((win.x, win.y), (0, 0));
+    }
+
     #[test]
     fn explicit_position_overrides_cascade() {
         let mut sdi = SdiRegistry::new();
@@ -1553,7 +1502,10 @@ mod tests {
         let wm = WindowManager::new(800, 600);
         // Calling draw_with_clips on an empty WM should not panic.
         // We use a no-op content callback since there are no windows.
-        let result = wm.draw_with_clips(&mut sdi, &mut NullBackend, |_, _, _, _, _, _| Ok(()));
+        let result =
+            wm.draw_with_clips(&mut sdi, &mut NullBackend::default(), |_, _, _, _, _, _| {
+                Ok(())
+            });
         assert!(result.is_ok());
     }
 
@@ -1591,5 +1543,76 @@ mod tests {
         // SDI objects should be cleaned up too.
         assert!(!sdi.contains("w0.frame"));
         assert!(!sdi.contains("w19.frame"));
+    }
+    #[test]
+    fn maximize_with_insets_taller_than_screen_does_not_underflow() {
+        let mut sdi = SdiRegistry::new();
+        let mut wm = WindowManager::new(200, 40);
+        let mut theme = wm.theme().clone();
+        theme.maximize_top_inset = 30;
+        theme.maximize_bottom_inset = 30;
+        wm.set_theme(theme);
+        wm.create_window(&app_config("w"), &mut sdi).unwrap();
+        wm.maximize_window("w", &mut sdi).unwrap();
+        let win = wm.get_window("w").unwrap();
+        assert_eq!((win.y, win.outer_w, win.outer_h), (30, 200, 0));
+    }
+
+    #[test]
+    fn minimize_repaints_titlebar_of_newly_focused_window() {
+        let mut sdi = SdiRegistry::new();
+        let mut wm = WindowManager::new(800, 600);
+        wm.create_window(&app_config("w1"), &mut sdi).unwrap();
+        wm.create_window(&app_config("w2"), &mut sdi).unwrap();
+        wm.minimize_window("w2", &mut sdi).unwrap();
+        assert_eq!(wm.active_window(), Some("w1"));
+        assert_eq!(
+            sdi.get("w1.titlebar").unwrap().color,
+            wm.theme().titlebar_active_color
+        );
+        assert_eq!(
+            sdi.get("w1.title_text").unwrap().text_color,
+            wm.theme().titlebar_text_color
+        );
+    }
+
+    #[test]
+    fn minimizing_a_background_window_keeps_focus() {
+        let mut sdi = SdiRegistry::new();
+        let mut wm = WindowManager::new(800, 600);
+        wm.create_window(&app_config("w1"), &mut sdi).unwrap();
+        wm.create_window(&app_config("w2"), &mut sdi).unwrap();
+        wm.create_window(&app_config("w3"), &mut sdi).unwrap();
+        wm.focus_window("w1", &mut sdi).unwrap();
+        wm.minimize_window("w2", &mut sdi).unwrap();
+        assert_eq!(wm.active_window(), Some("w1"));
+    }
+
+    #[test]
+    fn enter_fullscreen_twice_keeps_original_geometry() {
+        let mut sdi = SdiRegistry::new();
+        let mut wm = WindowManager::new(800, 600);
+        wm.create_window(&app_config("w"), &mut sdi).unwrap();
+        let orig = wm.get_window("w").unwrap().clone();
+        wm.enter_fullscreen("w", &mut sdi).unwrap();
+        wm.enter_fullscreen("w", &mut sdi).unwrap();
+        wm.exit_fullscreen("w", &mut sdi).unwrap();
+        let win = wm.get_window("w").unwrap();
+        assert_eq!(
+            (win.x, win.y, win.outer_w, win.outer_h),
+            (orig.x, orig.y, orig.outer_w, orig.outer_h)
+        );
+    }
+
+    #[test]
+    fn exit_fullscreen_keeps_minimized_window_hidden() {
+        let mut sdi = SdiRegistry::new();
+        let mut wm = WindowManager::new(800, 600);
+        wm.create_window(&app_config("w"), &mut sdi).unwrap();
+        wm.enter_fullscreen("w", &mut sdi).unwrap();
+        wm.minimize_window("w", &mut sdi).unwrap();
+        wm.exit_fullscreen("w", &mut sdi).unwrap();
+        assert!(!sdi.get("w.frame").unwrap().visible);
+        assert!(!sdi.get("w.content").unwrap().visible);
     }
 }

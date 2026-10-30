@@ -7,7 +7,9 @@
 use oasis_types::backend::SdiBackend;
 use oasis_types::error::Result;
 
-use crate::op::VectorOp;
+use oasis_types::backend::Color;
+
+use crate::op::{VectorOp, modulate_color, modulate_gradient};
 use crate::scene::VectorScene;
 
 /// Render a complete scene to the given backend.
@@ -44,14 +46,12 @@ pub fn render_ops(backend: &mut dyn SdiBackend, ops: &[VectorOp], group_alpha: u
 }
 
 /// Blend an op color with the group alpha.
-fn apply_alpha(
-    mut color: oasis_types::backend::Color,
-    group_alpha: u8,
-) -> oasis_types::backend::Color {
+fn apply_alpha(color: Color, group_alpha: u8) -> Color {
     if group_alpha < 255 {
-        color.a = ((color.a as u16 * group_alpha as u16) / 255) as u8;
+        modulate_color(color, group_alpha)
+    } else {
+        color
     }
-    color
 }
 
 /// Dispatch a single `VectorOp` to backend calls.
@@ -179,7 +179,14 @@ fn render_op(backend: &mut dyn SdiBackend, op: &VectorOp, group_alpha: u8) -> Re
             w,
             h,
             gradient,
-        } => backend.fill_rect_gradient(*x, *y, *w, *h, gradient),
+        } => {
+            if group_alpha < 255 {
+                let faded = modulate_gradient(*gradient, group_alpha);
+                backend.fill_rect_gradient(*x, *y, *w, *h, &faded)
+            } else {
+                backend.fill_rect_gradient(*x, *y, *w, *h, gradient)
+            }
+        },
         VectorOp::PolygonGradient {
             points,
             color_start,
@@ -234,10 +241,7 @@ fn render_op(backend: &mut dyn SdiBackend, op: &VectorOp, group_alpha: u8) -> Re
 #[cfg(test)]
 mod tests {
     use super::*;
-    use oasis_types::backend::{
-        Color, SdiAlpha, SdiBatch, SdiClipTransform, SdiCore, SdiGradients, SdiShapes, SdiText,
-        SdiTextures, SdiVector, TextureId,
-    };
+    use oasis_types::backend::{Color, SdiClipTransform, SdiCore, SdiShapes, SdiVector, TextureId};
     use oasis_types::error::Result;
 
     /// Minimal mock backend that records calls.
@@ -378,12 +382,9 @@ mod tests {
             Ok(())
         }
     }
-    impl SdiGradients for MockBackend {}
-    impl SdiAlpha for MockBackend {}
-    impl SdiText for MockBackend {}
-    impl SdiTextures for MockBackend {}
-    impl SdiBatch for MockBackend {}
-    impl oasis_types::backend::SdiRenderTarget for MockBackend {}
+    // Records the high-level shape calls themselves (not their default
+    // decomposition), so it overrides three traits and defaults the rest.
+    oasis_types::impl_sdi_defaults!(MockBackend; except SdiShapes, SdiVector, SdiClipTransform);
 
     #[test]
     fn test_render_empty_scene() {
@@ -507,5 +508,21 @@ mod tests {
         });
         render_scene(&mut backend, &scene).ok();
         assert_eq!(backend.calls, vec!["draw_text(HELLO,10,20,8,a=255)"]);
+    }
+    #[test]
+    fn test_render_gradient_honours_group_alpha() {
+        let mut backend = MockBackend::new();
+        let ops = vec![VectorOp::RectGradient {
+            x: 0,
+            y: 0,
+            w: 4,
+            h: 4,
+            gradient: oasis_types::backend::GradientStyle::Vertical {
+                top: Color::WHITE,
+                bottom: Color::BLACK,
+            },
+        }];
+        render_ops(&mut backend, &ops, 128).ok();
+        assert_eq!(backend.calls, vec!["fill_rect(0,0,4,4,a=128)"]);
     }
 }

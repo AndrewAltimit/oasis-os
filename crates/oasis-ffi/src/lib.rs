@@ -248,6 +248,26 @@ mod tests {
     }
 
     #[test]
+    fn register_callback_ignores_unknown_codes() {
+        extern "C" fn test_cb(_event: u32, _detail: *const c_char) {}
+
+        let handle = create_instance();
+        // 1/4/5/6 are the retired never-fired codes; 99 was never defined.
+        for code in [0, 1, 4, 5, 6, 99] {
+            unsafe { oasis_register_callback(handle, code, test_cb) };
+        }
+        unsafe { oasis_register_callback(handle, OASIS_CB_APP_LAUNCH, test_cb) };
+        // SAFETY: `handle` is a live instance from `create_instance`.
+        let codes: Vec<u32> = unsafe {
+            crate::handle::with_instance_ref(handle, Vec::new(), |inst| {
+                inst.callbacks.keys().copied().collect()
+            })
+        };
+        assert_eq!(codes, vec![OASIS_CB_APP_LAUNCH]);
+        unsafe { oasis_destroy(handle) };
+    }
+
+    #[test]
     fn free_string_null_is_safe() {
         unsafe { oasis_free_string(std::ptr::null_mut()) };
     }
@@ -742,5 +762,50 @@ mod tests {
             crate::handle::ffi_guard("test", 5u32, || panic!("boom {}", 1)),
             5
         );
+    }
+
+    /// A skin's static background layer is baked into one render target
+    /// on the first rendered frame and reused afterwards (the FFI used to
+    /// redraw every primitive each frame, and the UE5 backend could not
+    /// composite a baked layer at all).
+    #[test]
+    fn static_background_layers_are_baked_once() {
+        let toml = |s: &str| CString::new(s).unwrap();
+        let manifest = toml(include_str!("../../../skins/paper/skin.toml"));
+        let layout = toml(include_str!("../../../skins/paper/layout.toml"));
+        let features = toml(include_str!("../../../skins/paper/features.toml"));
+        let theme = toml(include_str!("../../../skins/paper/theme.toml"));
+        let strings = toml(include_str!("../../../skins/paper/strings.toml"));
+        let handle = unsafe {
+            oasis_create_full(
+                160,
+                90,
+                manifest.as_ptr(),
+                layout.as_ptr(),
+                features.as_ptr(),
+                theme.as_ptr(),
+                strings.as_ptr(),
+            )
+        };
+        assert!(!handle.is_null());
+        assert!(
+            !unsafe { &*handle }
+                .active_theme
+                .background_layers
+                .is_empty(),
+            "the paper skin has background layers"
+        );
+        unsafe { oasis_tick(handle, 1.0) };
+        let baked = unsafe { &*handle }.backend.live_render_targets();
+        assert!(baked >= 1, "static layer baked into a render target");
+        for _ in 0..3 {
+            unsafe { oasis_tick(handle, 1.0) };
+        }
+        assert_eq!(
+            unsafe { &*handle }.backend.live_render_targets(),
+            baked,
+            "the bake is reused, not redone per frame"
+        );
+        unsafe { oasis_destroy(handle) };
     }
 }

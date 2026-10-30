@@ -1,11 +1,9 @@
 //! `SdiTextures` and `SdiClipTransform` implementations for the WASM backend.
 
-use oasis_types::backend::stacks::ClipPush;
 use oasis_types::backend::{
     Color, SdiClipTransform, SdiCore, SdiTextures, TextureId, texture_not_found,
 };
 use oasis_types::error::Result;
-use oasis_types::geometry::ClipRect;
 
 use crate::renderer::{WasmBackend, cached_css_color, js_err};
 
@@ -117,68 +115,30 @@ impl SdiTextures for WasmBackend {
 
 impl SdiClipTransform for WasmBackend {
     fn push_clip_rect(&mut self, x: i32, y: i32, w: u32, h: u32) -> Result<()> {
-        let (tx, ty) = self.translate(x, y);
-        let new_clip = ClipRect {
-            x: tx as i32,
-            y: ty as i32,
-            w,
-            h,
-        };
-        let effective = match self.clip_stack.push(new_clip) {
-            ClipPush::Clip(c) => c,
-            ClipPush::Empty => ClipRect {
-                x: 0,
-                y: 0,
-                w: 0,
-                h: 0,
-            },
-        };
-
-        self.ctx.save();
-        self.ctx.begin_path();
-        self.ctx.rect(
-            effective.x as f64,
-            effective.y as f64,
-            effective.w as f64,
-            effective.h as f64,
-        );
-        self.ctx.clip();
+        self.clip.push(&self.ctx, x, y, w, h);
         Ok(())
     }
 
     fn pop_clip_rect(&mut self) -> Result<()> {
-        self.clip_stack.pop();
-        self.ctx.restore();
+        self.clip.pop(&self.ctx);
         Ok(())
     }
 
     fn current_clip_rect(&self) -> Option<(i32, i32, u32, u32)> {
-        self.clip_stack.current_tuple()
+        self.clip.stack.current_tuple()
     }
 
     fn push_translate(&mut self, dx: i32, dy: i32) -> Result<()> {
-        self.translate_stack.push(dx, dy);
+        self.clip.translate.push(dx, dy);
         Ok(())
     }
 
     fn pop_translate(&mut self) -> Result<()> {
-        self.translate_stack.pop();
+        self.clip.translate.pop();
         Ok(())
     }
 
     fn current_translate(&self) -> (i32, i32) {
-        self.translate_stack.current()
-    }
-
-    fn push_region(&mut self, x: i32, y: i32, w: u32, h: u32) -> Result<()> {
-        self.push_translate(x, y)?;
-        self.push_clip_rect(0, 0, w, h)?;
-        Ok(())
-    }
-
-    fn pop_region(&mut self) -> Result<()> {
-        self.pop_clip_rect()?;
-        self.pop_translate()?;
-        Ok(())
+        self.clip.translate.current()
     }
 }

@@ -1,7 +1,7 @@
 //! Accordion widget: collapsible sections with single or multi-expand modes.
 
 use crate::context::DrawContext;
-use crate::layout;
+use crate::layout::HAlign;
 use crate::widget::Widget;
 use oasis_types::error::Result;
 
@@ -243,25 +243,28 @@ impl Widget for Accordion {
 
             // -- Expand/collapse indicator --
             let indicator = if section.expanded { "-" } else { "+" };
-            let ind_h = ctx.backend.measure_text_height(fs);
-            let ind_y = cur_y + layout::center(hh, ind_h);
             let text_color = if section.disabled {
                 ctx.theme.text_disabled
             } else {
                 ctx.theme.text_primary
             };
-            ctx.backend
-                .draw_text(indicator, x + CONTENT_PAD_X, ind_y, fs, text_color)?;
-
-            // -- Header text --
-            let text_h = ctx.backend.measure_text_height(fs);
-            let text_y = cur_y + layout::center(hh, text_h);
-            ctx.backend.draw_text(
-                &section.header,
-                x + CONTENT_PAD_X + INDICATOR_WIDTH as i32,
-                text_y,
+            let text_x = x + CONTENT_PAD_X + INDICATOR_WIDTH as i32;
+            ctx.text_in(
+                (x + CONTENT_PAD_X, cur_y, INDICATOR_WIDTH, hh),
+                indicator,
                 fs,
                 text_color,
+                HAlign::Left,
+            )?;
+
+            // -- Header text --
+            let text_w = (x + w as i32 - text_x).max(0) as u32;
+            ctx.text_in(
+                (text_x, cur_y, text_w, hh),
+                &section.header,
+                fs,
+                text_color,
+                HAlign::Left,
             )?;
 
             cur_y += hh as i32;
@@ -269,15 +272,15 @@ impl Widget for Accordion {
             // -- Expanded content lines --
             if section.expanded {
                 let lh = self.line_height as u32;
+                let line_x = x + CONTENT_PAD_X + INDICATOR_WIDTH as i32;
+                let line_w = (x + w as i32 - line_x).max(0) as u32;
                 for line in &section.content_lines {
-                    let line_text_h = ctx.backend.measure_text_height(fs);
-                    let ly = cur_y + layout::center(lh, line_text_h);
-                    ctx.backend.draw_text(
+                    ctx.text_in(
+                        (line_x, cur_y, line_w, lh),
                         line,
-                        x + CONTENT_PAD_X + INDICATOR_WIDTH as i32,
-                        ly,
                         fs,
                         ctx.theme.text_secondary,
+                        HAlign::Left,
                     )?;
                     cur_y += lh as i32;
                 }
@@ -525,17 +528,17 @@ mod tests {
         assert_eq!(acc.focused(), 0);
     }
 
-    // -- Draw / measure tests using MockBackend --
+    // -- Draw / measure tests using RecordingBackend --
 
     use crate::context::DrawContext;
-    use crate::test_utils::MockBackend;
+    use crate::test_utils::RecordingBackend;
     use crate::theme::Theme;
     use crate::widget::Widget;
 
     #[test]
     fn measure_collapsed_sections() {
         let theme = Theme::dark();
-        let mut backend = MockBackend::new();
+        let mut backend = RecordingBackend::default();
         let ctx = DrawContext::new(&mut backend, &theme);
 
         let mut acc = Accordion::new(AccordionMode::MultiExpand);
@@ -551,7 +554,7 @@ mod tests {
     #[test]
     fn measure_expanded_sections() {
         let theme = Theme::dark();
-        let mut backend = MockBackend::new();
+        let mut backend = RecordingBackend::default();
         let ctx = DrawContext::new(&mut backend, &theme);
 
         let mut acc = Accordion::new(AccordionMode::MultiExpand);
@@ -569,7 +572,7 @@ mod tests {
     #[test]
     fn draw_shows_headers() {
         let theme = Theme::dark();
-        let mut backend = MockBackend::new();
+        let mut backend = RecordingBackend::default();
         {
             let mut ctx = DrawContext::new(&mut backend, &theme);
             let mut acc = Accordion::new(AccordionMode::MultiExpand);
@@ -587,7 +590,7 @@ mod tests {
     #[test]
     fn draw_expanded_shows_content() {
         let theme = Theme::dark();
-        let mut backend = MockBackend::new();
+        let mut backend = RecordingBackend::default();
         {
             let mut ctx = DrawContext::new(&mut backend, &theme);
             let mut acc = Accordion::new(AccordionMode::MultiExpand);
@@ -605,7 +608,7 @@ mod tests {
     #[test]
     fn draw_indicators() {
         let theme = Theme::dark();
-        let mut backend = MockBackend::new();
+        let mut backend = RecordingBackend::default();
         {
             let mut ctx = DrawContext::new(&mut backend, &theme);
             let mut acc = Accordion::new(AccordionMode::MultiExpand);
@@ -622,7 +625,7 @@ mod tests {
     #[test]
     fn draw_empty_accordion_no_panic() {
         let theme = Theme::dark();
-        let mut backend = MockBackend::new();
+        let mut backend = RecordingBackend::default();
         {
             let mut ctx = DrawContext::new(&mut backend, &theme);
             let acc = Accordion::new(AccordionMode::MultiExpand);

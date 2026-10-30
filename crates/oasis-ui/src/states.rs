@@ -200,16 +200,8 @@ const PRESSED_TINT: f32 = 0.24;
 mod tests {
     use super::*;
 
-    fn all_themes() -> Vec<Theme> {
-        vec![
-            Theme::dark(),
-            Theme::light(),
-            Theme::classic(),
-            Theme::high_contrast(),
-            Theme::colorblind(),
-            Theme::protanopia(),
-            Theme::tritanopia(),
-        ]
+    fn all_themes() -> [Theme; 3] {
+        crate::test_utils::all_themes()
     }
 
     #[test]

@@ -6,6 +6,10 @@ use oasis_core::terminal::{populate_man_pages, populate_motd, populate_profile};
 use oasis_core::terminal_sdi;
 use oasis_core::vfs::{MemoryVfs, Vfs};
 
+/// Sample track for the Music Player, shared with the desktop shell's demo
+/// VFS (`oasis-app/assets/samples`). About 200 KB of the `.wasm`.
+const SAMPLE_AMBIENT_MP3: &[u8] = include_bytes!("../../oasis-app/assets/samples/ambient_dawn.mp3");
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -19,20 +23,14 @@ pub(crate) fn trim_output(output_lines: &mut Vec<String>) {
 // VFS population
 // ---------------------------------------------------------------------------
 
-/// Find a TV Guide runner in either the full-screen or windowed runners.
-pub(crate) fn find_tv_guide_runner_wasm<'a>(
-    app_runner: &'a mut Option<AppRunner>,
-    open_runners: &'a mut [(String, AppRunner)],
-) -> Option<&'a mut AppRunner> {
-    if let Some(ref mut runner) = *app_runner
-        && runner.title == "TV Guide"
-    {
-        return Some(runner);
-    }
+/// Find the TV Guide's runner among the open app windows.
+pub(crate) fn find_tv_guide_runner_wasm(
+    open_runners: &mut [(String, AppRunner)],
+) -> Option<&mut AppRunner> {
     open_runners
         .iter_mut()
         .map(|(_, runner)| runner)
-        .find(|runner| runner.title == "TV Guide")
+        .find(|runner| runner.title == oasis_apps::titles::TV_GUIDE)
 }
 
 /// Compute the TV video capture dimensions `(x, y, w, h)`.
@@ -45,14 +43,6 @@ pub(crate) fn tv_preview_rect(at: &ActiveTheme) -> (i32, i32, u32, u32) {
         .screen_h
         .saturating_sub(at.statusbar_height + at.bottombar_height);
     (0, at.statusbar_height as i32, at.screen_w, usable_h)
-}
-
-/// Check if a runner's pending request is a TV Guide tune_url (should not be
-/// consumed by the generic VFS handler).
-pub(crate) fn is_tv_tune_request_wasm(runner: &AppRunner) -> bool {
-    runner.peek_pending_request().is_some_and(|req| {
-        req.0 == oasis_core::apps::tv_guide::TV_REQUEST_PATH && req.1.starts_with("tune_url ")
-    })
 }
 
 /// Populate the WASM VFS with demo content.
@@ -98,6 +88,13 @@ pub(crate) fn populate_wasm_vfs(vfs: &mut MemoryVfs) {
         b"Shopping list:\n- Milk\n- Bread\n- Memory Stick PRO Duo\n",
     );
 
+    // Music Player library (it browses /home/user/music) and the music
+    // controller's IPC directory (`/var/audio/request`, `status`,
+    // `position`).
+    let _ = vfs.mkdir("/home/user/music");
+    let _ = vfs.write("/home/user/music/ambient_dawn.mp3", SAMPLE_AMBIENT_MP3);
+    let _ = vfs.mkdir("/var/audio");
+
     // Demo app directories (discovered by the dashboard).
     // Names must match the title strings in AppRunner::init_content().
     let _ = vfs.mkdir("/apps");
@@ -123,7 +120,7 @@ pub(crate) fn populate_wasm_vfs(vfs: &mut MemoryVfs) {
     let _ = vfs.mkdir("/var/tv/cache");
     let _ = vfs.write(
         "/etc/tv/channels.toml",
-        oasis_core::apps::tv_guide::channel::DEFAULT_CHANNELS_TOML.as_bytes(),
+        oasis_apps::tv_guide::channel::DEFAULT_CHANNELS_TOML.as_bytes(),
     );
 
     // Browser home page content.
@@ -351,6 +348,11 @@ mod tests {
         assert!(vfs.read("/home/user/readme.txt").is_ok());
         assert!(vfs.read("/home/user/notes.txt").is_ok());
         assert!(vfs.read("/home/user/startup.sh").is_ok());
+
+        // The Music Player has a real track to play.
+        let mp3 = vfs.read("/home/user/music/ambient_dawn.mp3").unwrap();
+        assert_eq!(mp3.first(), Some(&0xFF), "MPEG frame sync");
+        assert!(vfs.exists("/var/audio"));
 
         // Check hostname content.
         let hostname = vfs.read("/etc/hostname").unwrap();

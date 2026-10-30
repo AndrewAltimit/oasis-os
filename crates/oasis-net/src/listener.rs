@@ -8,6 +8,7 @@ use std::time::{Duration, Instant};
 
 use oasis_types::backend::{NetworkBackend, NetworkStream};
 use oasis_types::error::{OasisError, Result};
+use oasis_types::util::ct_eq;
 
 use crate::std_backend::StdNetworkBackend;
 
@@ -40,23 +41,6 @@ const WRITE_COMPACT_THRESHOLD: usize = 1024 * 1024;
 
 /// How long a closing connection may take to drain its queued output.
 const CLOSE_DRAIN_TIMEOUT: Duration = Duration::from_secs(2);
-
-/// Constant-time comparison of two byte slices.
-///
-/// Always compares every byte to avoid leaking length or content via timing.
-fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
-    if a.len() != b.len() {
-        // Still iterate to avoid leaking whether lengths matched via timing,
-        // but we can short-circuit length since the attacker can observe
-        // packet size anyway.
-        return false;
-    }
-    let mut diff = 0u8;
-    for (x, y) in a.iter().zip(b.iter()) {
-        diff |= x ^ y;
-    }
-    diff == 0
-}
 
 /// Authentication state for a connection.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -276,6 +260,11 @@ impl RemoteListener {
         Ok(())
     }
 
+    /// The configured port.
+    pub fn port(&self) -> u16 {
+        self.config.port
+    }
+
     /// Whether the listener is active.
     pub fn is_listening(&self) -> bool {
         self.listening
@@ -412,7 +401,7 @@ impl RemoteListener {
 
                 match conn.auth {
                     AuthState::AwaitingAuth => {
-                        if constant_time_eq(line.as_bytes(), &psk_bytes) {
+                        if ct_eq(line.as_bytes(), &psk_bytes) {
                             conn.auth = AuthState::Authenticated;
                             conn.queue(b"AUTH_OK\n> ");
                         } else {
@@ -556,42 +545,6 @@ impl RemoteListener {
 #[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn test_constant_time_eq_equal_strings() {
-        assert!(constant_time_eq(b"hello", b"hello"));
-        assert!(constant_time_eq(b"", b""));
-        assert!(constant_time_eq(b"a", b"a"));
-    }
-
-    #[test]
-    fn test_constant_time_eq_different_strings() {
-        assert!(!constant_time_eq(b"hello", b"world"));
-        assert!(!constant_time_eq(b"hello", b"hallo"));
-        assert!(!constant_time_eq(b"abc", b"def"));
-    }
-
-    #[test]
-    fn test_constant_time_eq_different_lengths() {
-        assert!(!constant_time_eq(b"hello", b"hello!"));
-        assert!(!constant_time_eq(b"a", b"ab"));
-        assert!(!constant_time_eq(b"", b"x"));
-    }
-
-    #[test]
-    fn test_constant_time_eq_empty_strings() {
-        assert!(constant_time_eq(b"", b""));
-        assert!(!constant_time_eq(b"", b"a"));
-        assert!(!constant_time_eq(b"a", b""));
-    }
-
-    #[test]
-    fn test_constant_time_eq_similar_strings() {
-        // Differs by one bit
-        assert!(!constant_time_eq(b"password", b"passwosd"));
-        // Differs by case
-        assert!(!constant_time_eq(b"Secret", b"secret"));
-    }
 
     #[test]
     fn test_listener_config_default() {

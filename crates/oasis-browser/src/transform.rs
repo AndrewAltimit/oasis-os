@@ -73,21 +73,6 @@ impl AffineTransform2D {
         }
     }
 
-    /// Pure skew (angles in degrees).
-    #[allow(dead_code)]
-    pub fn skew(ax_deg: f32, ay_deg: f32) -> Self {
-        let tan_x = (ax_deg * std::f32::consts::PI / 180.0).tan();
-        let tan_y = (ay_deg * std::f32::consts::PI / 180.0).tan();
-        Self {
-            a: 1.0,
-            b: tan_y,
-            c: tan_x,
-            d: 1.0,
-            e: 0.0,
-            f: 0.0,
-        }
-    }
-
     /// Compose two transforms: `self * other`.
     pub fn multiply(&self, other: &Self) -> Self {
         Self {

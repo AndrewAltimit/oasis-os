@@ -35,8 +35,8 @@ use oasis_js::fetch::{FetchHandler, FetchRequest, FetchResponse};
 use oasis_js::rquickjs::{Ctx, Result as JsResult};
 use oasis_net::tls::TlsProvider;
 
-use crate::loader::Url;
 use crate::loader::csp::{CspPolicy, CspResourceType};
+use crate::loader::{Url, is_http_token};
 
 /// Bind the browser's fetch handler for a page at `url` into `ctx`.
 pub(super) fn install_fetch_binding(
@@ -52,26 +52,6 @@ pub(super) fn install_fetch_binding(
 // ------------------------------------------------------------------
 // Origins and network classes
 // ------------------------------------------------------------------
-
-/// Serialized origin (`scheme://host[:port]`) with the host lower-cased
-/// and the scheme's default port elided, or `None` for URLs without a
-/// host (opaque origins).
-pub(crate) fn origin_key(url: &Url) -> Option<String> {
-    if url.scheme.is_empty() || url.host.is_empty() {
-        return None;
-    }
-    let host = url.host.to_ascii_lowercase();
-    let default_port = match url.scheme.as_str() {
-        "http" => Some(80),
-        "https" => Some(443),
-        "gemini" => Some(1965),
-        _ => None,
-    };
-    Some(match url.port {
-        Some(p) if Some(p) != default_port => format!("{}://{host}:{p}", url.scheme),
-        _ => format!("{}://{host}", url.scheme),
-    })
-}
 
 fn is_web_scheme(url: &Url) -> bool {
     url.scheme == "http" || url.scheme == "https"
@@ -238,13 +218,6 @@ fn is_cors_safelisted_header(name: &str) -> bool {
     matches!(name, "accept" | "accept-language" | "content-language")
 }
 
-fn is_valid_method(method: &str) -> bool {
-    !method.is_empty()
-        && method
-            .bytes()
-            .all(|b| b.is_ascii_alphanumeric() || b"!#$%&'*+-.^_`|~".contains(&b))
-}
-
 // ------------------------------------------------------------------
 // Transport
 // ------------------------------------------------------------------
@@ -290,11 +263,11 @@ struct NetTransport {
 
 impl FetchTransport for NetTransport {
     fn resolve_host(&self, host: &str) -> Vec<IpAddr> {
-        #[cfg(not(any(feature = "psp", target_arch = "wasm32")))]
+        #[cfg(native_net)]
         {
             crate::loader::http::dns_resolve_cached(host).unwrap_or_default()
         }
-        #[cfg(any(feature = "psp", target_arch = "wasm32"))]
+        #[cfg(not(native_net))]
         {
             let _ = host;
             Vec::new()
@@ -318,7 +291,7 @@ impl FetchTransport for NetTransport {
             .collect();
         let tls = self.tls.as_deref();
 
-        #[cfg(not(any(feature = "psp", target_arch = "wasm32")))]
+        #[cfg(native_net)]
         let result = {
             let guard = crate::loader::http::RequestGuard {
                 redirect_ok,
@@ -415,7 +388,7 @@ impl BrowserFetchHandler {
 impl FetchHandler for BrowserFetchHandler {
     fn fetch(&self, request: FetchRequest) -> Result<FetchResponse, String> {
         let method = request.method.as_str();
-        if !is_valid_method(method) {
+        if !is_http_token(method) {
             return Err(format!("invalid method '{method}'"));
         }
         if matches!(
@@ -425,11 +398,27 @@ impl FetchHandler for BrowserFetchHandler {
             return Err(format!("method '{method}' is forbidden"));
         }
 
+        // Header names must be tokens and values free of CR / LF / NUL:
+        // anything else would split the HTTP/1.1 request (header
+        // injection, request smuggling) on the way out.
+        for (name, value) in &request.headers {
+            if !is_http_token(name) || value.contains(['\r', '\n', '\0']) {
+                return Err(format!("invalid header '{name}'"));
+            }
+        }
+
         let raw = request.url.trim();
         if raw
             .get(..5)
             .is_some_and(|p| p.eq_ignore_ascii_case("data:"))
         {
+            // `data:` is a connect-src scheme source like any other.
+            if let Some(ref policy) = self.csp
+                && policy.is_active()
+                && !policy.allows(raw, &self.page_url_str, CspResourceType::Connect)
+            {
+                return Err("data: URL blocked by Content-Security-Policy connect-src".into());
+            }
             return self.fetch_data_uri(raw, method);
         }
 
@@ -446,6 +435,11 @@ impl FetchHandler for BrowserFetchHandler {
         target.fragment = None;
         if !is_web_scheme(&target) {
             return Err(format!("unsupported URL scheme '{}'", target.scheme));
+        }
+        // `Url` splits userinfo off the host; fetch() refuses URLs that
+        // carry credentials outright, as browsers do.
+        if target.userinfo.is_some() {
+            return Err(format!("URL '{raw}' includes credentials"));
         }
         if target.host.contains(['@', ' ', '\\']) {
             return Err(format!("invalid host in URL '{raw}'"));
@@ -478,9 +472,9 @@ impl FetchHandler for BrowserFetchHandler {
 
         // Web-origin policy: network class, same-origin / CORS.
         let page = self.page_url.as_ref().filter(|u| is_web_scheme(u));
-        let page_origin = page.and_then(origin_key);
+        let page_origin = page.and_then(Url::origin);
         let page_class = page.map(|p| self.classify(p));
-        let target_origin = origin_key(&target);
+        let target_origin = target.origin();
         if let (Some(page_origin), Some(page_class)) = (&page_origin, page_class) {
             let target_class = self.classify(&target);
             if target_class > page_class {
@@ -505,13 +499,25 @@ impl FetchHandler for BrowserFetchHandler {
             if !is_web_scheme(next) {
                 return false;
             }
+            // Every hop must satisfy connect-src, not just the first:
+            // otherwise a same-origin open redirect reaches any host.
+            if let Some(ref policy) = self.csp
+                && policy.is_active()
+                && !policy.allows(
+                    &next.to_string(),
+                    &self.page_url_str,
+                    CspResourceType::Connect,
+                )
+            {
+                return false;
+            }
             if let Some(pc) = page_class
                 && self.classify(next) > pc
             {
                 return false;
             }
             // A non-simple request must not be bounced to another origin.
-            simple || origin_key(next) == target_origin
+            simple || next.origin() == target_origin
         };
         let addr_ok = |ip: IpAddr| -> bool { page_class.is_none_or(|pc| classify_ip(ip) <= pc) };
 
@@ -530,7 +536,7 @@ impl FetchHandler for BrowserFetchHandler {
         if let Some(ref page_origin) = page_origin {
             let final_origin = Url::parse(&resp.url)
                 .as_ref()
-                .and_then(origin_key)
+                .and_then(Url::origin)
                 .or_else(|| target_origin.clone());
             if final_origin.as_deref() != Some(page_origin.as_str()) {
                 let acao = resp

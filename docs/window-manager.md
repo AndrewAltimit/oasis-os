@@ -9,7 +9,7 @@ hosts all drive the same `WindowManager`; the PSP backend uses a
 PSP-tuned `WmTheme` (`psp_wm_theme()`).
 
 This guide is the practical API summary. The design rationale lives in
-[design.md §4.5](design.md#45-window-manager) (4.5.1 - 4.5.9).
+[design.md §4.5](design.md#45-window-manager) (4.5.1 - 4.5.6).
 
 ## Model
 
@@ -65,7 +65,7 @@ Lifecycle (all take `&mut SdiRegistry`):
 
 | Method | Effect |
 |--------|--------|
-| `create_window(&WindowConfig, sdi) -> Result<WindowId>` | Create chrome objects, cascade position, focus the window |
+| `create_window(&WindowConfig, sdi) -> Result<WindowId>` | Create chrome objects, cascade position (pulled back so the frame stays on screen), focus the window |
 | `close_window(id, sdi)` / `close_all(sdi)` | Remove the window; with motion on, its chrome animates out before the SDI objects are destroyed |
 | `minimize_window` / `maximize_window` / `restore_window` | State changes; maximize fills the work area |
 | `enter_fullscreen` / `exit_fullscreen` | Kiosk fullscreen for an app window |
@@ -82,6 +82,11 @@ Input:
   6 px toggles maximize), resize handles, content (`ContentClick` with
   content-local coordinates), then desktop. Clicking an unfocused window
   focuses it first. Modal windows block input to windows below.
+- A maximized window has no resize handles (the convention on Windows,
+  macOS and GNOME: its size is the work area's). Its frame border hits
+  the content instead, clamped to the nearest content pixel, so a
+  pointer pushed against the screen edge reaches the app; dragging the
+  titlebar still un-maximizes it.
 - Keyboard shortcuts are handled by the host, not by
   `handle_input` (see below).
 

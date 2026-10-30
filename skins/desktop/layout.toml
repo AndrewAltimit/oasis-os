@@ -1,0 +1,31 @@
+[desktop_bg]
+x = 0
+y = 0
+w = 800
+h = 600
+color = "#1A1A2D"
+gradient_top = "#22223A"
+gradient_bottom = "#121220"
+
+[taskbar_bg]
+x = 0
+y = 568
+w = 800
+h = 32
+color = "#222233"
+gradient_top = "#2A2A44"
+gradient_bottom = "#1A1A33"
+
+[taskbar_separator]
+x = 0
+y = 567
+w = 800
+h = 1
+color = "#444466"
+
+[task_area]
+x = 68
+y = 572
+w = 658
+h = 24
+color = "#1E1E3060"

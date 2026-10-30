@@ -591,25 +591,6 @@ pub(crate) fn draw_sysmon_windowed(
     Ok(())
 }
 
-pub(crate) fn draw_browser_windowed(
-    cx: i32,
-    cy: i32,
-    cw: u32,
-    ch: u32,
-    be: &mut dyn SdiBackend,
-) -> oasis_backend_psp::OasisResult<()> {
-    be.fill_rect(cx, cy, cw, ch, Color::rgba(5, 10, 25, 210))?;
-    be.draw_text("BROWSER", cx + 4, cy + 2, 8, Color::rgb(50, 120, 200))?;
-    be.fill_rect(cx, cy + 12, cw, 1, Color::rgba(255, 255, 255, 40))?;
-
-    let lbl = Color::rgb(160, 160, 160);
-    let mut y = cy + 20;
-    be.draw_text("Web browser for PSP.", cx + 4, y, 8, lbl)?;
-    y += 14;
-    be.draw_text("Press Start for fullscreen.", cx + 4, y, 8, lbl)?;
-    Ok(())
-}
-
 pub(crate) fn draw_browser_windowed_with_url(
     url: &str,
     status: &str,
@@ -715,8 +696,8 @@ pub(crate) fn draw_radio_windowed(
 // ---------------------------------------------------------------------------
 
 pub(crate) fn draw_tvguide_windowed(
-    channels: &[oasis_core::apps::tv_guide::Channel],
-    catalogs: &[Option<oasis_core::apps::tv_guide::ChannelCatalog>],
+    channels: &[oasis_app_tv_guide::Channel],
+    catalogs: &[Option<oasis_app_tv_guide::ChannelCatalog>],
     selected: usize,
     scroll: usize,
     now_playing: &str,
@@ -808,7 +789,7 @@ pub(crate) fn draw_tvguide_windowed(
         return Ok(());
     }
 
-    let mut y = cy + 16;
+    let y = cy + 16;
 
     if channels.is_empty() {
         be.draw_text("Loading channels...", cx + 4, y, 8, lbl)?;

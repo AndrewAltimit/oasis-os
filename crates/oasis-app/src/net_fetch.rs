@@ -18,28 +18,6 @@ fn is_archive_host(host: &str) -> bool {
     h == "archive.org" || h.ends_with(".archive.org")
 }
 
-/// Parse an HTTP/HTTPS stream URL into (host, port, path, use_tls).
-pub(crate) fn parse_stream_url(url: &str) -> Option<(String, u16, String, bool)> {
-    let (remainder, tls) = if let Some(r) = url.strip_prefix("https://") {
-        (r, true)
-    } else {
-        (url.strip_prefix("http://")?, false)
-    };
-    let (host_port, path) = if let Some(idx) = remainder.find('/') {
-        (&remainder[..idx], remainder[idx..].to_string())
-    } else {
-        (remainder, "/".to_string())
-    };
-    let default_port = if tls { 443 } else { 80 };
-    let (host, port) = if let Some(idx) = host_port.rfind(':') {
-        let port: u16 = host_port[idx + 1..].parse().ok()?;
-        (host_port[..idx].to_string(), port)
-    } else {
-        (host_port.to_string(), default_port)
-    };
-    Some((host, port, path, tls))
-}
-
 /// Perform a blocking HTTPS GET and return the response body as a string.
 ///
 /// Used for Internet Archive API calls (small JSON responses).
@@ -76,26 +54,30 @@ fn https_get_body(
         "GET {path} HTTP/1.1\r\nHost: {host}\r\nUser-Agent: OASIS_OS/0.1\r\n\
          Connection: close\r\nAccept: */*\r\n\r\n"
     );
+    // One absolute deadline covers the request write and the response:
+    // a peer that stops reading or goes silent (WouldBlock forever on the
+    // non-blocking socket) must not pin this thread.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
     let req_bytes = request.as_bytes();
     let mut written = 0;
     while written < req_bytes.len() {
         match stream.write(&req_bytes[written..]) {
+            Ok(0) => return Err("write: peer closed".to_string()),
             Ok(n) => written += n,
-            Err(e) => {
-                let msg = format!("{e}");
-                if msg.contains("WouldBlock") || msg.contains("would block") {
-                    std::thread::sleep(std::time::Duration::from_millis(1));
-                    continue;
+            Err(e) if e.is_would_block() => {
+                if std::time::Instant::now() > deadline {
+                    return Err("timeout writing HTTP request".to_string());
                 }
-                return Err(format!("write: {e}"));
+                std::thread::sleep(std::time::Duration::from_millis(1));
             },
+            Err(e) => return Err(format!("write: {e}")),
         }
     }
 
-    // Read full response (runs on background thread; may spin on WouldBlock).
+    // Read full response (runs on background thread; polls WouldBlock
+    // until the deadline).
     let mut buf = [0u8; 8192];
     let mut response = Vec::new();
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
     loop {
         if std::time::Instant::now() > deadline {
             return Err("timeout reading HTTP response".to_string());
@@ -103,12 +85,10 @@ fn https_get_body(
         match stream.read(&mut buf) {
             Ok(0) => break,
             Ok(n) => response.extend_from_slice(&buf[..n]),
+            Err(e) if e.is_would_block() => {
+                std::thread::sleep(std::time::Duration::from_millis(1));
+            },
             Err(e) => {
-                let msg = format!("{e}");
-                if msg.contains("WouldBlock") || msg.contains("would block") {
-                    std::thread::sleep(std::time::Duration::from_millis(1));
-                    continue;
-                }
                 if !response.is_empty() {
                     break;
                 }
@@ -221,8 +201,12 @@ pub(crate) fn connect_archive_source(
     let mut last_err = String::new();
 
     'attempt: for attempt in 0..CDN_RETRIES {
-        let mut host = orig_host.clone();
-        let mut path = orig_path.clone();
+        let mut target = oasis_audio::radio::StreamUrl {
+            https: true,
+            host: orig_host.clone(),
+            port: 443,
+            path: orig_path.clone(),
+        };
         if attempt > 0 {
             log::warn!(
                 "Retrying archive source (attempt {}/{CDN_RETRIES}) after: {last_err}",
@@ -238,12 +222,13 @@ pub(crate) fn connect_archive_source(
             // but CDN redirects are honoured verbatim, so a compromised
             // or misbehaving response must not be able to steer us at
             // an internal address.
-            if !is_archive_host(&host) {
-                last_err = format!("redirect to non-archive host rejected: {host}");
+            if !is_archive_host(&target.host) {
+                last_err = format!("redirect to non-archive host rejected: {}", target.host);
                 continue 'attempt;
             }
+            let host = target.host.clone();
             let mut net_backend = StdNetworkBackend::new();
-            let tcp = match net_backend.connect(&host, 443) {
+            let tcp = match net_backend.connect(&host, target.port) {
                 Ok(t) => t,
                 Err(e) => {
                     // TCP failure on a CDN node is transient — fall back
@@ -263,8 +248,13 @@ pub(crate) fn connect_archive_source(
                 },
             };
 
-            let mut source =
-                oasis_audio::radio::ArchiveSource::new(stream, &host, &path, &title, &creator);
+            let mut source = oasis_audio::radio::ArchiveSource::new(
+                stream,
+                &target.host_header(),
+                &target.path,
+                &title,
+                &creator,
+            );
 
             // Poll until headers are fully parsed (data arrives, or error/redirect).
             let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
@@ -303,13 +293,27 @@ pub(crate) fn connect_archive_source(
                         // "backend error: redirect:..." — strip the prefix.
                         let inner = msg.strip_prefix("backend error: ").unwrap_or(&msg);
                         if let Some(url) = inner.strip_prefix("redirect:") {
-                            if let Some((new_host, _, new_path, _)) = parse_stream_url(url) {
-                                host = new_host;
-                                path = new_path;
-                                continue 'redirect;
+                            // Every archive.org host serves HTTPS, and this
+                            // client only speaks TLS: upgrade an `http://`
+                            // CDN Location instead of refusing it as a
+                            // downgrade. Relative Locations resolve against
+                            // the current host.
+                            let url = match url.get(..7) {
+                                Some(p) if p.eq_ignore_ascii_case("http://") => {
+                                    format!("https://{}", &url[7..])
+                                },
+                                _ => url.to_string(),
+                            };
+                            match target.resolve_redirect(&url) {
+                                Ok(next) => {
+                                    target = next;
+                                    continue 'redirect;
+                                },
+                                Err(e) => {
+                                    last_err = format!("bad redirect: {e}");
+                                    continue 'attempt;
+                                },
                             }
-                            last_err = format!("bad redirect URL: {url}");
-                            continue 'attempt;
                         }
                         // HTTP 4xx is the caller's problem (bad URL, auth,
                         // etc.) — don't retry those. Everything else is
@@ -434,10 +438,10 @@ pub(crate) fn fetch_catalog_blocking(
 
 /// Fetch video catalogs for all TV channels on a background thread.
 pub(crate) fn fetch_tv_catalogs_blocking(
-    channels: &[oasis_core::apps::tv_guide::Channel],
+    channels: &[oasis_apps::tv_guide::Channel],
     tls: &oasis_core::net::RustlsTlsProvider,
-) -> std::result::Result<Vec<Option<oasis_core::apps::tv_guide::ChannelCatalog>>, String> {
-    use oasis_core::apps::tv_guide::catalog::ChannelCatalog;
+) -> std::result::Result<Vec<Option<oasis_apps::tv_guide::ChannelCatalog>>, String> {
+    use oasis_apps::tv_guide::catalog::ChannelCatalog;
 
     log::info!("TV fetch_tv_catalogs_blocking: {} channels", channels.len());
 

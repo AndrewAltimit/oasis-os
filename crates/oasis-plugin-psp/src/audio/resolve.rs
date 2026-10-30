@@ -51,8 +51,7 @@ pub(super) static mut CODEC_CHECK_NEED_MEM_FN: Option<unsafe extern "C" fn(*mut 
     None;
 pub(super) static mut CODEC_INIT_FN: Option<unsafe extern "C" fn(*mut u32, i32) -> i32> = None;
 pub(super) static mut CODEC_DECODE_FN: Option<unsafe extern "C" fn(*mut u32, i32) -> i32> = None;
-pub(super) static mut CODEC_GET_EDRAM_FN: Option<unsafe extern "C" fn(*mut u32, i32) -> i32> =
-    None;
+pub(super) static mut CODEC_GET_EDRAM_FN: Option<unsafe extern "C" fn(*mut u32, i32) -> i32> = None;
 pub(super) static mut CODEC_RELEASE_EDRAM_FN: Option<unsafe extern "C" fn(*mut u32) -> i32> = None;
 
 // sceKernelGetModuleIdList function pointer
@@ -64,15 +63,15 @@ pub(super) static mut QUERY_MODULE_INFO_FN: Option<unsafe extern "C" fn(i32, *mu
     None;
 
 // Network function pointers (resolved lazily for radio streaming)
-pub(super) static mut NET_INIT_FN: Option<
-    unsafe extern "C" fn(i32, i32, i32, i32, i32) -> i32,
-> = None;
+pub(super) static mut NET_INIT_FN: Option<unsafe extern "C" fn(i32, i32, i32, i32, i32) -> i32> =
+    None;
 pub(super) static mut INET_INIT_FN: Option<unsafe extern "C" fn() -> i32> = None;
 pub(super) static mut INET_SOCKET_FN: Option<unsafe extern "C" fn(i32, i32, i32) -> i32> = None;
 pub(super) static mut INET_CONNECT_FN: Option<unsafe extern "C" fn(i32, *const u8, u32) -> i32> =
     None;
-pub(super) static mut INET_SEND_FN: Option<unsafe extern "C" fn(i32, *const u8, usize, i32) -> i32> =
-    None;
+pub(super) static mut INET_SEND_FN: Option<
+    unsafe extern "C" fn(i32, *const u8, usize, i32) -> i32,
+> = None;
 pub(super) static mut INET_RECV_FN: Option<unsafe extern "C" fn(i32, *mut u8, usize, i32) -> i32> =
     None;
 pub(super) static mut INET_CLOSE_FN: Option<unsafe extern "C" fn(i32) -> i32> = None;

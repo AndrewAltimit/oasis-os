@@ -1,6 +1,6 @@
 [package]
 name = "oasis-audio"
-description = "Audio subsystem: playlist management, playback state, manager for OASIS_OS"
+description = "Audio subsystem for OASIS_OS: music playlist and playback state, internet radio, SFX, WAV/Ogg decode"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -24,6 +24,8 @@ symphonia = { version = "0.5", default-features = false, features = [
 
 [dev-dependencies]
 proptest.workspace = true
+# Real non-blocking TCP sockets for the radio loopback tests.
+oasis-net = { workspace = true }
 
 [lints]
 workspace = true

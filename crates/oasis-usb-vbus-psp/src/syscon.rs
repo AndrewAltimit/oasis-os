@@ -23,24 +23,29 @@ pub fn resolved_addr() -> u32 {
 /// Resolve sceSysconCtrlUsbPower via find_function.
 /// Returns true if found.
 pub unsafe fn resolve_nids() -> bool {
-    let modules: [&[u8]; 2] = [
-        psp::sys::syscon::SYSCON_MODULE,
-        psp::sys::syscon::SYSCON_MODULE_ALT,
-    ];
-    let library = psp::sys::syscon::SYSCON_LIBRARY.as_ptr();
-    let nid = psp::sys::syscon::NID_SYSCON_CTRL_USB_POWER;
+    // SAFETY: module / library names are NUL-terminated constants from psp::sys::syscon;
+    // CTRL_USB_POWER_FN / RESOLVED_ADDR are written with write_volatile through raw pointers from
+    // the single main thread, and the address is transmuted to sceSysconCtrlUsbPower's signature.
+    unsafe {
+        let modules: [&[u8]; 2] = [
+            psp::sys::syscon::SYSCON_MODULE,
+            psp::sys::syscon::SYSCON_MODULE_ALT,
+        ];
+        let library = psp::sys::syscon::SYSCON_LIBRARY.as_ptr();
+        let nid = psp::sys::syscon::NID_SYSCON_CTRL_USB_POWER;
 
-    for module in &modules {
-        if let Some(addr) = psp::hook::find_function(module.as_ptr(), library, nid) {
-            core::ptr::write_volatile(
-                &raw mut CTRL_USB_POWER_FN,
-                Some(core::mem::transmute(addr)),
-            );
-            core::ptr::write_volatile(&raw mut RESOLVED_ADDR, addr as u32);
-            return true;
+        for module in &modules {
+            if let Some(addr) = psp::hook::find_function(module.as_ptr(), library, nid) {
+                core::ptr::write_volatile(
+                    &raw mut CTRL_USB_POWER_FN,
+                    Some(core::mem::transmute(addr)),
+                );
+                core::ptr::write_volatile(&raw mut RESOLVED_ADDR, addr as u32);
+                return true;
+            }
         }
+        false
     }
-    false
 }
 
 /// Call sceSysconCtrlUsbPower(enable) via resolved function pointer.
@@ -49,8 +54,12 @@ pub unsafe fn resolve_nids() -> bool {
 /// a cached value but may not actually control USB power. The raw Syscon
 /// command path (syscon_set 0x47) is more reliable for testing.
 pub unsafe fn ctrl_usb_power(enable: i32) -> Option<i32> {
-    let f = core::ptr::read_volatile(&raw const CTRL_USB_POWER_FN)?;
-    Some(f(enable))
+    // SAFETY: CTRL_USB_POWER_FN is read with read_volatile and is either None or the function
+    // `resolve_nids` resolved for this signature.
+    unsafe {
+        let f = core::ptr::read_volatile(&raw const CTRL_USB_POWER_FN)?;
+        Some(f(enable))
+    }
 }
 
 /// Get the _sceSysconCommonWrite function address based on Tachyon version.
@@ -96,6 +105,8 @@ fn syscon_cmd(cmd: u8, data: &[u8]) -> (i32, [u8; 16]) {
     let addr = syscon_common_write_addr();
     // SAFETY: calling kernel Syscon driver function at known address.
     let func: F = unsafe { core::mem::transmute(addr) };
+    // SAFETY: `pkt` is a local Syscon packet buffer the driver reads and
+    // writes in place for the duration of the call.
     let ret = unsafe { func(pkt.as_mut_ptr(), 0) };
 
     let mut rx = [0u8; 16];

@@ -4,7 +4,7 @@
 //! `perspective-origin` against an element's box, building the
 //! composed 2D affine matrix from a `transform:` list, and asking
 //! "does this transform list contain any 3D function?". The
-//! `paint_box` recursive walker in [`super`] uses these to decide
+//! `record_box` recursive walker in `record.rs` uses these to decide
 //! between the cheap 2D-translation fast path, the full affine path,
 //! and the screen-space 3D projection path.
 
@@ -69,11 +69,12 @@ pub(crate) fn resolve_perspective_origin(
     }
 }
 
-/// Compute the full 2D affine transform from CSS transforms.
+/// Compute the 2D affine transform from CSS transforms, pivoting on
+/// the content-box-local transform origin (`50% 50% 0` when `None`).
 ///
-/// Returns the composed matrix which callers use either as a simple
-/// translation offset (fast path) or for full geometry transformation.
-/// `transform_origin` defaults to `50% 50% 0` when `None`.
+/// The recorder uses it to detect translate-only transforms (whose
+/// `e`/`f` are a plain box offset); rotations and scales are built in
+/// screen space instead.
 pub(super) fn compute_transform_matrix(
     transforms: &[TransformFunction],
     transform_origin: Option<&TransformOrigin>,
@@ -81,26 +82,6 @@ pub(super) fn compute_transform_matrix(
 ) -> crate::transform::AffineTransform2D {
     let (ox, oy, _oz) = resolve_transform_origin(transform_origin, content);
     crate::transform::AffineTransform2D::from_css_transforms(transforms, ox, oy)
-}
-
-/// Compute offset adjustments from CSS transforms.
-///
-/// Returns the translation component of the composed transform matrix
-/// added to the base offsets. For translation-only transforms this is
-/// exact; for rotation/scale/skew the full matrix is available via
-/// [`compute_transform_matrix`].
-pub(crate) fn compute_transform_offsets(
-    transforms: &[TransformFunction],
-    transform_origin: Option<&TransformOrigin>,
-    content: &Rect,
-    base_x: i32,
-    base_y: i32,
-) -> (i32, i32) {
-    if transforms.is_empty() {
-        return (base_x, base_y);
-    }
-    let m = compute_transform_matrix(transforms, transform_origin, content);
-    (base_x + m.e as i32, base_y + m.f as i32)
 }
 
 #[cfg(test)]
@@ -158,20 +139,20 @@ mod tests {
     }
 
     #[test]
-    fn empty_transforms_return_base_offsets_unchanged() {
-        let (x, y) = compute_transform_offsets(&[], None, &rect(0.0, 0.0, 100.0, 100.0), 12, 34);
-        assert_eq!((x, y), (12, 34));
+    fn empty_transforms_are_identity() {
+        let m = compute_transform_matrix(&[], None, &rect(0.0, 0.0, 100.0, 100.0));
+        assert!(m.is_translation_only());
+        assert_eq!((m.e, m.f), (0.0, 0.0));
     }
 
     #[test]
-    fn translate_transform_shifts_offsets() {
-        let (x, y) = compute_transform_offsets(
+    fn translate_transform_is_translation_only() {
+        let m = compute_transform_matrix(
             &[TransformFunction::Translate(10.0, 20.0)],
             None,
             &rect(0.0, 0.0, 100.0, 100.0),
-            5,
-            7,
         );
-        assert_eq!((x, y), (15, 27));
+        assert!(m.is_translation_only());
+        assert_eq!((m.e, m.f), (10.0, 20.0));
     }
 }

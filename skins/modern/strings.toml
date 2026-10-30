@@ -1,0 +1,12 @@
+boot_text = [
+    "OASIS_OS v2.2 [modern]",
+    "Loading modern interface...",
+    "UI subsystems: active",
+    "Ready.",
+]
+prompt_format = "> "
+title = "OASIS Modern"
+home_label = "Home"
+welcome_message = "Welcome to OASIS Modern. Type 'help' for commands."
+error_prefix = "error: "
+shutdown_message = "Session ended."

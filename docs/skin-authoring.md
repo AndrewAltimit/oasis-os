@@ -126,7 +126,6 @@ icons_per_page = 6        # Icons per page
 grid_cols = 3             # Grid columns
 grid_rows = 2             # Grid rows
 corrupted = false         # Enable corrupted visual effects
-command_categories = []   # Restrict to specific command categories
 
 # -- Desktop icon layout --
 icon_layout = "grid"      # "grid" (uniform cells) or "free" (desktop icons)
@@ -443,7 +442,16 @@ alpha_flicker_chance = 0.15 # Probability of alpha flicker
 alpha_flicker_min = 60      # Minimum alpha during flicker
 text_garble_chance = 0.08   # Probability of character garbling
 intensity = 1.0             # Overall effect intensity (0.0-1.0)
+tear_chance = 0.02          # Per-frame chance of a horizontal tear band
+tear_max = 20               # Max horizontal tear offset (px)
+color_shift_chance = 0.03   # Per-frame chance of an RGB-split text shadow
+color_shift_offset = 2      # Max RGB-split offset (px)
+screen_height = 272         # Height tear bands are sampled over
 ```
+
+The values above (except the first five, which the `corrupted` skin sets)
+are the defaults. See [Corrupted Effect](#corrupted-effect) for how hosts
+apply it.
 
 ## Image Assets
 
@@ -902,27 +910,23 @@ Reloads re-read the TOML and assets from disk (even for names that are
 also compiled in as built-ins) and play the skin's entrance transition,
 so what you see is exactly what a fresh boot would show.
 
-## Effect System
+## Corrupted Effect
 
-Effects are pluggable visual modifiers applied each frame. Built-in effects:
+The one per-frame scene effect is **corrupted**: position jitter, alpha
+flicker, text garbling, horizontal tear bands and RGB-split text shadows.
+Enable it in `features.toml` (defaults apply) or ship a `corrupted.toml`
+with your own values (see above):
 
-- **corrupted**: Position jitter, alpha flicker, text garbling
-- **scanlines**: CRT-style horizontal line overlay
-
-Effects are enabled via `features.toml`:
 ```toml
-corrupted = true    # Enable corrupted effect
+corrupted = true    # Enable the corrupted effect
 ```
 
-Custom effects implement the `SkinEffect` trait:
-```rust
-pub trait SkinEffect: Debug {
-    fn name(&self) -> &str;
-    fn intensity(&self) -> f32;
-    fn set_intensity(&mut self, intensity: f32);
-    fn apply(&mut self, sdi: &mut SdiRegistry);
-}
-```
+The desktop shell distorts each drawn frame and restores the clean scene
+right after drawing, so the glitch never drifts; it keeps the shell
+redrawing every frame while active and is skipped under `reduced_motion`.
+Set `intensity = 0.0` in `corrupted.toml` to turn it off. WASM, UE5 and PSP
+hosts don't apply it yet. For static CRT looks use vector layers
+(`kind = "scanlines"`, above) instead.
 
 ## Runtime Switching
 
@@ -970,6 +974,10 @@ silently do nothing:
   inconsistencies (e.g. `icons_per_page` exceeding the grid capacity),
   and asset problems (missing `texture`/`source` references,
   non-power-of-two images, decoded size over the per-skin budget).
+- A `kind = "shader"` background layer whose `shader` is not a built-in
+  shader name (`balatro`, `voronoi`, `city_lights`, `ocean_waves`,
+  `calm_waves`, `starfield`, `plasma`, `matrix_rain`) is flagged: an
+  unknown name draws no wallpaper.
 - The lint also runs WCAG AA contrast checks over the pairs that
   actually render text: `text`/`dim_text`/`output`/`prompt`/`error` on
   the background, button text on the button background, selected text
@@ -1041,13 +1049,47 @@ ls screenshots/
 
 ## Built-In Skins
 
-| Name | Style | Features |
-|------|-------|----------|
-| classic | PSP icon grid | Dashboard + terminal |
-| corrupted | Glitched terminal | Terminal + corruption effects |
-| desktop | Windowed desktop | WM + terminal |
-| modern | Purple accent, rounded | Dashboard + WM + browser |
-| psix-tribute | PSIX homage | Every theming capability (see below) |
+Every built-in skin is a directory under `skins/`. `oasis-skin`'s build
+script embeds each complete directory (the five TOML files, an optional
+`corrupted.toml`, and `assets/*.png|ttf|otf|wav`) into the binary and
+generates the loader and the name list (`builtin_names()`: `classic`
+first, then alphabetical). There is no hand-written Rust copy, so
+`--skin xp` and `--skin skins/xp` load the same skin (a CI test,
+`builtin_and_directory_forms_are_identical`, checks this), and editing a
+file under `skins/<name>/` changes the built-in on the next build. Adding
+a complete directory adds a built-in; a snapshot test
+(`builtin_skin_snapshots_match`) then asks you to record its hash.
+
+| Name | Native size | Style | Features |
+|------|-------------|-------|----------|
+| classic | 480x272 | PSP icon grid (the default) | Dashboard + WM + terminal |
+| altimit | 480x272 | .hack//SIGN vector icons | Dashboard + WM |
+| balatro | 800x600 | Dark neon, shader wallpaper | Dashboard + WM |
+| corrupted | 480x272 | Glitched terminal | Terminal + corruption effects |
+| desktop | 800x600 | Windowed desktop with taskbar | WM + terminal (no dashboard) |
+| gnome | 800x600 | Adwaita dark, top bar | Dashboard + WM |
+| highcontrast | 480x272 | Black/white/yellow accessibility | Dashboard |
+| macos | 800x600 | Light, traffic-light buttons, dock | Dashboard + WM |
+| modern | 480x272 | Purple accent, rounded, gradients | Dashboard + WM + browser |
+| paper | 480x272 | Cream e-reader, shader wallpaper | Dashboard |
+| psix-hifi | 480x272 | High-fidelity PSIX tribute | Dashboard + WM |
+| psix-tribute | 480x272 | PSIX homage | Every theming capability (see below) |
+| retro-cga | 480x272 | 4-color CGA | Dashboard |
+| solarized | 800x600 | Solarized Dark | Dashboard + WM |
+| vaporwave | 480x272 | Purple/pink/cyan | Dashboard |
+| win95 | 640x480 | Raised 3D borders | Dashboard + WM |
+| xp | 1024x768 | Luna blue, start menu | Dashboard + WM + start menu |
+
+## Skin Resolution
+
+`resolve_skin(name_or_path)` tries, in order: a built-in name, a directory
+path containing `skin.toml`, then `./skins/<name>/`. It is strict: an
+unknown name, or a skin that fails to parse, is an error (so `skin typo`
+and `skin export typo` report the typo). Startup paths (the desktop shell's
+CLI argument / `OASIS_SKIN` / config default, the WASM `?skin=` value) use
+`resolve_skin_or_classic`, which logs the error and boots `classic` instead.
+`lookup_skin` is the lower-level form that tells "not found" (`None`) apart
+from "found but broken" (`Some(Err(..))`).
 
 ## Showcase: the psix-tribute skin
 

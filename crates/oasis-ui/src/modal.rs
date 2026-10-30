@@ -226,10 +226,12 @@ impl Widget for Modal {
         ctx.theme
             .shadow_modal
             .draw(ctx.backend, mx, my, mw, mh, radius)?;
-        ctx.backend
-            .fill_rounded_rect(mx, my, mw, mh, radius, ctx.theme.surface)?;
-        ctx.backend
-            .stroke_rounded_rect(mx, my, mw, mh, radius, 1, ctx.theme.border_subtle)?;
+        ctx.frame(
+            (mx, my, mw, mh),
+            ctx.theme.surface,
+            ctx.theme.border_subtle,
+            radius,
+        )?;
 
         let mut cy = my + pad;
 
@@ -528,17 +530,17 @@ mod tests {
         assert_eq!(m.activate(), ModalResult::Confirmed);
     }
 
-    // -- Draw / measure tests using MockBackend --
+    // -- Draw / measure tests using RecordingBackend --
 
     use crate::context::DrawContext;
-    use crate::test_utils::MockBackend;
+    use crate::test_utils::RecordingBackend;
     use crate::theme::Theme;
     use crate::widget::Widget;
 
     #[test]
     fn measure_returns_viewport_size() {
         let theme = Theme::dark();
-        let mut backend = MockBackend::new();
+        let mut backend = RecordingBackend::default();
         let ctx = DrawContext::new(&mut backend, &theme);
         let m = Modal::new("T", "B");
         let (w, h) = m.measure(&ctx, 480, 272);
@@ -549,7 +551,7 @@ mod tests {
     #[test]
     fn draw_shows_title_and_body() {
         let theme = Theme::dark();
-        let mut backend = MockBackend::new();
+        let mut backend = RecordingBackend::default();
         {
             let mut ctx = DrawContext::new(&mut backend, &theme);
             let m = Modal::new("Warning", "Something happened");
@@ -562,7 +564,7 @@ mod tests {
     #[test]
     fn draw_shows_buttons() {
         let theme = Theme::dark();
-        let mut backend = MockBackend::new();
+        let mut backend = RecordingBackend::default();
         {
             let mut ctx = DrawContext::new(&mut backend, &theme);
             let m = Modal::confirm("Delete?", "Sure?");
@@ -575,7 +577,7 @@ mod tests {
     #[test]
     fn draw_backdrop_emits_fill_rect() {
         let theme = Theme::dark();
-        let mut backend = MockBackend::new();
+        let mut backend = RecordingBackend::default();
         {
             let mut ctx = DrawContext::new(&mut backend, &theme);
             let m = Modal::new("T", "B");
@@ -587,8 +589,8 @@ mod tests {
     #[test]
     fn draw_no_backdrop() {
         let theme = Theme::dark();
-        let mut backend_with = MockBackend::new();
-        let mut backend_without = MockBackend::new();
+        let mut backend_with = RecordingBackend::default();
+        let mut backend_without = RecordingBackend::default();
         {
             let mut ctx = DrawContext::new(&mut backend_with, &theme);
             let m = Modal::new("T", "B");
@@ -606,7 +608,7 @@ mod tests {
     #[test]
     fn draw_empty_buttons_no_panic() {
         let theme = Theme::dark();
-        let mut backend = MockBackend::new();
+        let mut backend = RecordingBackend::default();
         {
             let mut ctx = DrawContext::new(&mut backend, &theme);
             let mut m = Modal::new("T", "B");
@@ -627,7 +629,7 @@ mod tests {
     #[test]
     fn draw_yes_no_shows_buttons() {
         let theme = Theme::dark();
-        let mut backend = MockBackend::new();
+        let mut backend = RecordingBackend::default();
         {
             let mut ctx = DrawContext::new(&mut backend, &theme);
             let m = Modal::yes_no("Save?", "Save changes?");
@@ -640,7 +642,7 @@ mod tests {
     #[test]
     fn draw_custom_buttons_shows_all() {
         let theme = Theme::dark();
-        let mut backend = MockBackend::new();
+        let mut backend = RecordingBackend::default();
         {
             let mut ctx = DrawContext::new(&mut backend, &theme);
             let m = Modal::custom("Pick", "Choose", vec!["A".into(), "B".into(), "C".into()]);

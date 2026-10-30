@@ -338,8 +338,9 @@ impl Default for WmTheme {
     }
 }
 
-/// Stored geometry for restore-from-maximize.
-#[derive(Debug, Clone, Copy)]
+/// A window's outer rectangle: position plus size (used for saved
+/// restore geometry, snap/tile targets and animation endpoints).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Geometry {
     pub x: i32,
     pub y: i32,
@@ -670,13 +671,6 @@ impl Window {
             text_w: text_w as u32,
             text,
         })
-    }
-
-    /// Compute the title text X position and available width.
-    ///
-    /// Convenience wrapper over [`Self::title_layout`].
-    pub fn title_text_x(&self, theme: &WmTheme) -> Option<(i32, u32)> {
-        self.title_layout(theme).map(|l| (l.x, l.avail_w))
     }
 
     /// Whether this window type has a close button.

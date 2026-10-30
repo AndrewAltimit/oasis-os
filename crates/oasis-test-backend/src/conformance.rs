@@ -21,7 +21,7 @@
 use oasis_types::backend::{
     BatchRect, BatchText, BlendMode, Color, GradientStyle, SdiBackend, TextureId,
 };
-use oasis_types::error::{OasisError, Result};
+use oasis_types::error::{BackendError, OasisError, Result};
 
 /// Width of the scenario canvas.
 pub const CANVAS_W: u32 = 128;
@@ -252,6 +252,23 @@ pub fn expect_ring(f: &Frame, rect: (i32, i32, u32, u32), rgb: [u8; 3]) -> Check
 pub fn expect_rect_exact(f: &Frame, rect: (i32, i32, u32, u32), rgb: [u8; 3]) -> Check {
     expect_fill(f, rect, rgb, 0)?;
     expect_ring(f, rect, rgb_of(BG))
+}
+
+/// Ink in the columns selected by `cols` stays inside `rect`.
+fn check_ink_box(f: &Frame, cols: impl Fn(u32) -> bool, rect: (i32, i32, u32, u32)) -> Check {
+    let (rx, ry, rw, rh) = rect;
+    for y in 0..f.h {
+        for x in (0..f.w).filter(|&x| cols(x)) {
+            if f.rgb(x, y) == rgb_of(BG) {
+                continue;
+            }
+            let (xi, yi) = (x as i32, y as i32);
+            if xi < rx || yi < ry || xi >= rx + rw as i32 || yi >= ry + rh as i32 {
+                return Err(format!("ink at ({x},{y}) outside {rect:?}"));
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Nothing was drawn.
@@ -598,6 +615,29 @@ pub static SCENARIOS: &[Scenario] = &[
         Tolerance::BLEND,
         "alpha-blend rounding"
     ),
+    scenario!(
+        "circle_translucent_single_coverage",
+        |b| b.fill_circle(64, 48, 30, Color::rgba(230, 40, 30, 120)),
+        check = |f| {
+            // Every pixel is blended at most once: overlapping spans would
+            // show up as a darker, double-blended color.
+            let once = blend(Color::rgba(230, 40, 30, 120), rgb_of(BG));
+            for y in 0..CANVAS_H {
+                for x in 0..CANVAS_W {
+                    let px = f.rgb(x, y);
+                    if px != rgb_of(BG) && !near(px, once, 2) {
+                        return Err(format!("({x},{y}) is {px:?}, single blend is {once:?}"));
+                    }
+                }
+            }
+            if !near(f.rgb(64, 48), once, 2) {
+                return Err("circle center not covered".into());
+            }
+            expect_ink_within(f, (33, 17, 63, 63))
+        },
+        Tolerance::BLEND,
+        "alpha-blend rounding"
+    ),
     scenario!("triangles", |b| {
         b.fill_triangle(10, 5, 2, 40, 40, 30, RED)?;
         b.fill_triangle(50, 5, 90, 5, 70, 45, GREEN)?;
@@ -629,12 +669,62 @@ pub static SCENARIOS: &[Scenario] = &[
         b.stroke_polygon(&[(70, 50), (120, 55), (100, 90), (65, 80)], 1, YELLOW)?;
         b.stroke_polyline(&[(70, 92), (85, 70), (100, 92), (115, 70)], 1, WHITE)
     }),
+    scenario!(
+        "polygon_concave_exact",
+        |b| {
+            // A "U": the notch between the arms must stay empty (a convex
+            // fan fill would cover it).
+            b.fill_polygon(
+                &[
+                    (10, 10),
+                    (50, 10),
+                    (50, 50),
+                    (40, 50),
+                    (40, 20),
+                    (20, 20),
+                    (20, 50),
+                    (10, 50),
+                ],
+                GREEN,
+            )
+        },
+        check = |f| {
+            expect_fill(f, (12, 22, 6, 26), rgb_of(GREEN), 0)?;
+            expect_fill(f, (42, 22, 6, 26), rgb_of(GREEN), 0)?;
+            expect_fill(f, (12, 12, 36, 6), rgb_of(GREEN), 0)?;
+            expect_fill(f, (22, 22, 16, 28), rgb_of(BG), 0)?;
+            expect_ink_within(f, (10, 10, 41, 41))
+        }
+    ),
     scenario!("arcs", |b| {
         b.fill_arc(30, 30, 25, 0.0, 1.5, RED)?;
         b.fill_arc(30, 30, 25, 3.2, 4.4, GREEN)?;
         b.stroke_arc(90, 40, 30, 0.5, 3.0, 1, YELLOW)?;
         b.stroke_arc(90, 40, 20, 3.5, 6.0, 3, BLUE)
     }),
+    scenario!(
+        "arcs_through_pi",
+        |b| {
+            // Wedges across the +-pi seam, where a range-limited sin/cos
+            // approximation used to overshoot (r = 50 plotted at cx - 60).
+            b.fill_arc(40, 30, 25, 2.6, 3.7, RED)?;
+            b.stroke_arc(100, 60, 20, -3.6, -2.7, 1, YELLOW)
+        },
+        check = |f| {
+            // Left wedge: inside its bounding box and filled at angle pi.
+            let left = |x: u32| x < 70;
+            check_ink_box(f, left, (14, 4, 28, 53))?;
+            if f.rgb(40 - 15, 30) != rgb_of(RED) {
+                return Err("fill_arc misses the point at angle pi".into());
+            }
+            // Right arc: inside its bounding box and through (cx - r, cy).
+            check_ink_box(f, |x| x >= 70, (79, 39, 23, 43))?;
+            if !(79..=81).any(|x| f.rgb(x, 60) == rgb_of(YELLOW)) {
+                return Err("stroke_arc misses the point at angle -pi".into());
+            }
+            Ok(())
+        }
+    ),
     scenario!("dashed_lines", |b| {
         b.stroke_line_dashed(5, 10, 120, 10, 1, RED, 6, 4)?;
         b.stroke_line_dashed(5, 20, 120, 60, 1, GREEN, 5, 5)?;
@@ -933,24 +1023,33 @@ pub static SCENARIOS: &[Scenario] = &[
             }
             expect_ring(f, (10, 10, 64, 64), rgb_of(BG))
         },
+        // Measured (SDL software renderer vs oasis-rasterize): every
+        // non-centre pixel differs, by at most 104 (red/blue checker texels
+        // blending halfway towards a neighbour). 112 leaves a small margin.
         Tolerance {
-            channel: 120,
+            channel: 112,
             pixels: 0,
         },
         "intentional: SDL textures use the renderer's default linear filter when \
          scaled (smooth photos and wallpapers); the software rasterizer samples \
-         nearest. Texel interiors blend towards their neighbours on SDL."
+         nearest. Texel interiors blend towards their neighbours on SDL \
+         (measured max delta 104)."
     ),
     scenario!(
         "texture_blit_downscaled",
         |b| blit_pattern_scaled(b, 100, 60, (4, 4, 50, 30)),
         check = |f| expect_ink_within(f, (4, 4, 50, 30)),
+        // Measured: 1500 pixels differ, 60 by more than 120, 11 by more
+        // than 160, none by more than 187. A misplaced or mis-scaled blit
+        // puts whole rows / columns of full-contrast texels in the wrong
+        // place, far over this budget.
         Tolerance {
-            channel: 255,
-            pixels: 0,
+            channel: 160,
+            pixels: 16,
         },
-        "SDL linear filtering vs rasterizer nearest sampling: only the \
-         destination bounds are compared"
+        "SDL linear filtering vs rasterizer nearest sampling when 2:1 \
+         downscaling a high-contrast pattern: SDL averages texels the \
+         rasterizer skips (measured: 11 px over 160, max delta 187)"
     ),
     scenario!(
         "texture_blit_sub",
@@ -1381,6 +1480,201 @@ pub static SCENARIOS: &[Scenario] = &[
             pixels: 0,
         },
         "multiply rounding"
+    ),
+    // -- drawing-state contract (SdiCore / SdiClipTransform /
+    //    SdiRenderTarget docs, ADR-003) ---------------------------------------
+    scenario!(
+        "clip_set_is_absolute_and_replaces",
+        |b| {
+            // `set_clip_rect` ignores the translation...
+            b.push_translate(30, 20)?;
+            b.set_clip_rect(10, 10, 20, 20)?;
+            b.fill_rect(-30, -20, 128, 96, RED)?;
+            // ...and replaces the clip instead of intersecting with it.
+            b.set_clip_rect(60, 40, 10, 10)?;
+            b.fill_rect(-30, -20, 128, 96, GREEN)?;
+            b.reset_clip_rect()?;
+            b.pop_translate()
+        },
+        check = |f| {
+            expect_rect_exact(f, (10, 10, 20, 20), rgb_of(RED))?;
+            expect_rect_exact(f, (60, 40, 10, 10), rgb_of(GREEN))?;
+            expect_ink_within(f, (10, 10, 60, 40))
+        }
+    ),
+    scenario!(
+        "clip_set_widens_again",
+        |b| {
+            // The browser display list's pattern: every PushClip / PopClip
+            // calls `set_clip_rect` with the intersected parent clip, so a
+            // clip must be able to grow back after a nested one.
+            b.set_clip_rect(10, 10, 100, 70)?;
+            b.fill_rect(0, 0, 128, 96, Color::rgb(60, 60, 60))?;
+            b.set_clip_rect(30, 30, 20, 20)?;
+            b.fill_rect(0, 0, 128, 96, RED)?;
+            b.set_clip_rect(10, 10, 100, 70)?;
+            b.fill_rect(0, 70, 128, 26, BLUE)?;
+            b.reset_clip_rect()?;
+            b.fill_rect(120, 90, 8, 6, WHITE)
+        },
+        check = |f| {
+            expect_fill(f, (30, 30, 20, 20), rgb_of(RED), 0)?;
+            expect_fill(f, (10, 70, 100, 10), rgb_of(BLUE), 0)?;
+            expect_fill(f, (10, 10, 100, 20), [60, 60, 60], 0)?;
+            expect_fill(f, (0, 80, 110, 10), rgb_of(BG), 0)?;
+            expect_rect_exact(f, (120, 90, 8, 6), rgb_of(WHITE))
+        }
+    ),
+    scenario!(
+        "clip_set_and_push_stack_are_independent",
+        |b| {
+            // One active clip, last call wins: `set_clip_rect` does not
+            // touch the push stack, and the next push/pop re-applies the
+            // stack's clip.
+            b.push_clip_rect(10, 10, 60, 60)?;
+            b.set_clip_rect(80, 0, 40, 40)?;
+            b.fill_rect(0, 0, 128, 96, RED)?;
+            // Intersected with the pushed (10,10,60,60), not the set clip.
+            b.push_clip_rect(20, 20, 20, 20)?;
+            b.fill_rect(0, 0, 128, 96, GREEN)?;
+            b.pop_clip_rect()?;
+            // Back to (10,10,60,60).
+            b.fill_rect(0, 60, 128, 36, BLUE)?;
+            b.pop_clip_rect()?;
+            b.reset_clip_rect()
+        },
+        check = |f| {
+            expect_rect_exact(f, (80, 0, 40, 40), rgb_of(RED))?;
+            expect_rect_exact(f, (20, 20, 20, 20), rgb_of(GREEN))?;
+            expect_rect_exact(f, (10, 60, 60, 10), rgb_of(BLUE))?;
+            if f.count(rgb_of(BG)) != (CANVAS_W * CANVAS_H) as usize - 1600 - 400 - 600 {
+                return Err("ink outside the three clipped fills".into());
+            }
+            Ok(())
+        }
+    ),
+    scenario!(
+        "clear_ignores_clip_and_alpha",
+        |b| {
+            // `clear` overwrites every pixel (no clip) without blending,
+            // and leaves the clip in place for the next draw.
+            b.set_clip_rect(10, 10, 10, 10)?;
+            b.clear(Color::rgba(200, 0, 0, 128))?;
+            b.fill_rect(0, 0, 128, 96, GREEN)?;
+            b.reset_clip_rect()
+        },
+        check = |f| {
+            expect_fill(f, (10, 10, 10, 10), rgb_of(GREEN), 0)?;
+            expect_fill(f, (0, 0, 128, 10), [200, 0, 0], 0)?;
+            expect_fill(f, (0, 20, 128, 76), [200, 0, 0], 0)?;
+            expect_fill(f, (20, 10, 108, 10), [200, 0, 0], 0)
+        }
+    ),
+    scenario!(
+        "render_target_bind_resets_and_restores_state",
+        |b| {
+            b.push_translate(10, 10)?;
+            b.push_clip_rect(0, 0, 30, 30)?;
+            let rt = b.create_render_target(40, 40)?;
+            b.bind_render_target(rt)?;
+            // Target-local, unclipped, untranslated.
+            if b.current_translate() != (0, 0) || b.current_clip_rect().is_some() {
+                return Err(OasisError::Backend(
+                    "bound target inherited the parent's clip or translate".into(),
+                ));
+            }
+            if b.viewport_size() != (40, 40) {
+                return Err(OasisError::Backend(
+                    format!("viewport_size {:?} while bound", b.viewport_size()).into(),
+                ));
+            }
+            b.fill_rect(0, 0, 40, 40, YELLOW)?;
+            b.push_clip_rect(5, 5, 10, 10)?;
+            b.fill_rect(0, 0, 40, 40, GREEN)?;
+            b.pop_clip_rect()?;
+            b.unbind_render_target()?;
+            // The parent's translate and clip are back.
+            b.fill_rect(-10, -10, 128, 96, BLUE)?;
+            b.pop_clip_rect()?;
+            b.pop_translate()?;
+            b.composite_render_target(rt, 60, 40, 40, 40, BlendMode::Normal, 1.0)?;
+            b.destroy_render_target(rt)
+        },
+        check = |f| {
+            expect_rect_exact(f, (10, 10, 30, 30), rgb_of(BLUE))?;
+            expect_fill(f, (65, 45, 10, 10), rgb_of(GREEN), 0)?;
+            expect_fill(f, (75, 40, 25, 40), rgb_of(YELLOW), 0)?;
+            expect_fill(f, (60, 55, 40, 25), rgb_of(YELLOW), 0)?;
+            expect_ring(f, (60, 40, 40, 40), rgb_of(BG))
+        }
+    ),
+    scenario!(
+        "render_target_composite_scales",
+        |b| {
+            let rt = b.create_render_target(20, 10)?;
+            b.bind_render_target(rt)?;
+            b.fill_rect(0, 0, 10, 10, RED)?;
+            b.fill_rect(10, 0, 10, 10, GREEN)?;
+            b.unbind_render_target()?;
+            b.composite_render_target(rt, 10, 10, 40, 20, BlendMode::Normal, 1.0)?;
+            b.destroy_render_target(rt)
+        },
+        check = |f| {
+            expect_fill(f, (10, 10, 18, 20), rgb_of(RED), 0)?;
+            expect_fill(f, (32, 10, 18, 20), rgb_of(GREEN), 0)?;
+            expect_ring(f, (10, 10, 40, 20), rgb_of(BG))
+        },
+        // Measured: the 2 columns either side of the seam (40 px) differ by
+        // up to 48; every other pixel is exact.
+        Tolerance {
+            channel: 64,
+            pixels: 0,
+        },
+        "SDL filters scaled render targets linearly: the columns around the \
+         red/green seam blend on SDL and are nearest-sampled on the rasterizer \
+         (measured max delta 48)"
+    ),
+    scenario!(
+        "render_target_premultiplied_matches_direct",
+        |b| {
+            // The vector-layer bake cache's contract: translucent paint
+            // baked into a transparent target and composited with the
+            // premultiplied operator looks like painting it directly.
+            fn paint(b: &mut dyn SdiBackend, ox: i32) -> Result<()> {
+                b.fill_rect(ox + 4, 4, 40, 30, Color::rgba(230, 40, 30, 128))?;
+                b.fill_circle(ox + 30, 30, 14, Color::rgba(40, 90, 240, 160))?;
+                b.fill_rect(ox + 10, 44, 30, 10, Color::rgba(250, 250, 250, 60))
+            }
+            paint(b, 0)?;
+            let rt = b.create_render_target(60, 60)?;
+            b.bind_render_target(rt)?;
+            b.clear(Color::TRANSPARENT)?;
+            paint(b, 0)?;
+            b.unbind_render_target()?;
+            let composited = b.composite_render_target_premultiplied(rt, 64, 0, 60, 60);
+            b.destroy_render_target(rt)?;
+            match composited {
+                // Callers fall back to immediate drawing, as must we.
+                Err(OasisError::Backend(BackendError::Unsupported { .. })) => paint(b, 64),
+                other => other,
+            }
+        },
+        check = |f| {
+            for y in 0..60 {
+                for x in 0..60 {
+                    let (direct, baked) = (f.rgb(x, y), f.rgb(x + 64, y));
+                    if !near(direct, baked, 3) {
+                        return Err(format!("({x},{y}): direct {direct:?} vs baked {baked:?}"));
+                    }
+                }
+            }
+            Ok(())
+        },
+        Tolerance {
+            channel: 3,
+            pixels: 0,
+        },
+        "alpha-blend rounding (premultiplied vs straight-alpha arithmetic)"
     ),
 ];
 

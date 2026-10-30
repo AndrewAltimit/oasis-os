@@ -1,7 +1,8 @@
 //! System health monitoring.
 //!
-//! Collects CPU temperature, memory usage, disk usage, and network status
-//! from `/proc` and `/sys` on Linux. Returns safe defaults on other platforms.
+//! Collects CPU temperature, memory usage, and network status from `/proc`
+//! and `/sys` on Linux (disk usage is not collected yet and shows `N/A`).
+//! Returns safe defaults on other platforms.
 
 use std::fmt;
 

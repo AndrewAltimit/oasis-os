@@ -1,11 +1,13 @@
 //! WebAssembly backend for OASIS_OS.
 //!
 //! Renders to an HTML `<canvas>` element using the Canvas 2D API,
-//! maps DOM events to `InputEvent`, and provides Web Audio playback.
+//! maps DOM events to `InputEvent`, and plays audio through HTML `<audio>` elements.
 
+mod app_requests;
 pub mod archive;
 pub mod audio;
 mod batch;
+mod clip;
 pub mod font;
 mod gradients;
 pub mod iframe;
@@ -15,6 +17,7 @@ pub mod platform;
 pub mod renderer;
 pub mod shader_bridge;
 mod shapes;
+mod skin_assets;
 mod textures;
 pub mod tv_catalog;
 pub mod video;
@@ -22,13 +25,15 @@ pub mod video;
 pub mod youtube;
 
 mod input_dispatch;
+mod media;
 mod vfs_content;
 
 use wasm_bindgen::prelude::*;
 use web_sys::HtmlCanvasElement;
 
+use oasis_apps::TvGuideRunnerExt as _;
 use oasis_core::active_theme::ActiveTheme;
-use oasis_core::apps::AppRunner;
+use oasis_core::apps::{AppRegistry, AppRunner, default_window_size, window_id};
 use oasis_core::backend::{AudioBackend, Color, InputBackend, SdiCore, TextureId};
 use oasis_core::bottombar::{BottomBar, MediaTab};
 use oasis_core::browser::{BrowserConfig, BrowserWidget};
@@ -46,7 +51,6 @@ use oasis_core::terminal_sdi;
 use oasis_core::toast::ToastManager;
 use oasis_core::transition::{self, TransitionState};
 use oasis_core::vfs::{MemoryVfs, Vfs};
-use oasis_core::wallpaper;
 use oasis_core::wm::manager::WindowManager;
 use oasis_core::wm::window::{WindowConfig, WindowType};
 
@@ -78,6 +82,20 @@ macro_rules! console_log {
 /// flood archive.org with catalog/files API hits.
 const RADIO_FAILURE_LIMIT: u32 = 3;
 
+/// Dashboard tiles: the apps installed under `/apps`, plus the YouTube
+/// Video Embed app (feature `wasm-youtube`), which has no directory there.
+fn dashboard_apps(vfs: &MemoryVfs, apps: &AppRegistry) -> Vec<AppEntry> {
+    #[allow(unused_mut)]
+    let mut tiles = discover_apps(vfs, "/apps", None).unwrap_or_default();
+    #[cfg(feature = "wasm-youtube")]
+    if let Some(reg) = apps.get(oasis_apps::titles::VIDEO_EMBED) {
+        tiles.push(reg.to_app_entry());
+    }
+    #[cfg(not(feature = "wasm-youtube"))]
+    let _ = apps;
+    tiles
+}
+
 // ---------------------------------------------------------------------------
 // Mode enum (mirrors oasis-app's AppState::Mode)
 // ---------------------------------------------------------------------------
@@ -86,8 +104,6 @@ const RADIO_FAILURE_LIMIT: u32 = 3;
 enum Mode {
     Dashboard,
     Terminal,
-    #[allow(dead_code)]
-    App,
     Osk,
     Desktop,
 }
@@ -123,8 +139,18 @@ pub struct OasisWasm {
     mouse_cursor: CursorState,
     cursor_texture: Option<TextureId>,
     wm: WindowManager,
-    app_runner: Option<AppRunner>,
+    /// Launchable apps (the `oasis-apps` bundle).
+    apps: AppRegistry,
     open_runners: Vec<(String, AppRunner)>,
+    /// Requests drained from apps that closed or were replaced since the
+    /// last tick; carried out ahead of the open apps' (see `app_requests`).
+    closed_app_requests: Vec<oasis_core::apps::AppRequest>,
+    /// Textures uploaded for the skin's layout `texture =` objects.
+    skin_layout_textures: Vec<TextureId>,
+    /// The skin's `kind = "image"` background decals (wordmarks, logos).
+    image_layers: Vec<oasis_core::image_layers::ImageLayerObject>,
+    /// Seconds of animation time, for image-layer drift / pulse.
+    anim_secs: f32,
     browser: Option<BrowserWidget>,
     iframe: IframeOverlay,
     toasts: ToastManager,
@@ -152,8 +178,18 @@ pub struct OasisWasm {
     /// can't be decoded (e.g. Firefox MSE quirks) cascades into
     /// hundreds of catalog/track API requests in a few seconds.
     radio_consecutive_errors: u32,
+    /// Music playlist + playback state behind `/var/audio/*` (the Music
+    /// Player app and the `music` command), carried out by
+    /// [`oasis_audio::MusicController`] in [`OasisWasm::tick_music`].
+    media: oasis_audio::AudioManager,
+    /// The loaded music track (an `<audio>` element in the audio backend).
+    media_track: Option<oasis_core::backend::AudioTrackId>,
     video_player: video::VideoPlayer,
     pending_tv_catalog: Option<tv_catalog::WasmTvCatalogFetcher>,
+    /// Next TV tune to start, as `"{url} {seek_secs}"`: a TV Guide
+    /// `tune_url` request from the per-frame request drain, or an
+    /// auto-advance. Consumed by the TV section of the same frame.
+    pending_tv_tune: Option<String>,
     shader_bridge: Option<shader_bridge::WasmShaderBridge>,
     /// Window id of the currently fullscreen-kiosk app (if any).
     fullscreen_app: Option<String>,
@@ -210,11 +246,12 @@ impl OasisWasm {
 
         // Resolve skin first so we can use its declared resolution.
         let skin_ref = skin_name.as_deref().unwrap_or("xp");
-        let skin = oasis_skin::resolve_skin(skin_ref)
+        // Startup path: an unknown skin name falls back to classic (logged).
+        let skin = oasis_skin::resolve_skin_or_classic(skin_ref)
             .map_err(|e| JsValue::from_str(&format!("skin: {e}")))?;
 
         // Use the skin's declared resolution (e.g. classic=480x272,
-        // modern=800x600, xp=1024x768) so the WASM build matches the
+        // desktop=800x600, xp=1024x768) so the WASM build matches the
         // desktop SDL version for each skin.
         let width = skin.manifest.screen_width;
         let height = skin.manifest.screen_height;
@@ -250,7 +287,11 @@ impl OasisWasm {
         let mut sdi = SdiRegistry::new();
         let mut cmd_reg = CommandRegistry::new();
         register_builtins(&mut cmd_reg);
-        oasis_core::terminal::register_tv_commands(&mut cmd_reg);
+        oasis_apps::register_commands(&mut cmd_reg);
+        let apps = oasis_apps::builtin_registry(&oasis_apps::HostInfo::new(
+            "Browser (WASM)",
+            "WASM Canvas 2D",
+        ));
 
         // VFS with demo content.
         let mut vfs = MemoryVfs::new();
@@ -270,21 +311,8 @@ impl OasisWasm {
 
         // Apply skin layout and discover apps.
         skin.apply_layout(&mut sdi);
-        let mut apps = discover_apps(&vfs, "/apps", None).unwrap_or_default();
-        #[cfg(feature = "wasm-youtube")]
-        apps.push(AppEntry {
-            title: "Video Embed".to_string(),
-            path: "/apps/video-embed".to_string(),
-            icon_png: Vec::new(),
-            color: Color {
-                r: 255,
-                g: 0,
-                b: 0,
-                a: 255,
-            },
-        });
         let dash_config = DashboardConfig::from_features(&skin.features, &active_theme);
-        let dashboard = DashboardState::new(dash_config, apps);
+        let dashboard = DashboardState::new(dash_config, dashboard_apps(&vfs, &apps));
 
         // Bars, start menu.
         let mut bottom_bar = BottomBar::new();
@@ -297,8 +325,9 @@ impl OasisWasm {
         // Window manager.
         let wm = WindowManager::with_theme(width, height, skin.theme.build_wm_theme());
 
-        // Wallpaper texture.
-        let wp_data = wallpaper::generate_from_config(width, height, &active_theme);
+        // Wallpaper texture (composites the skin's image for
+        // `style = "image"`), then layout textures and image decals.
+        let wp_data = skin_assets::wallpaper_pixels(width, height, &active_theme, &skin);
         let wallpaper_tex = backend
             .load_texture(width, height, &wp_data)
             .map_err(|e| JsValue::from_str(&format!("wallpaper: {e}")))?;
@@ -309,6 +338,8 @@ impl OasisWasm {
         {
             obj.visible = false;
         }
+        let (skin_layout_textures, image_layers) =
+            skin_assets::create_skin_assets(&mut sdi, &mut backend, &skin, &active_theme);
 
         // Mouse cursor texture.
         let mut mouse_cursor = CursorState::new(width, height);
@@ -366,8 +397,12 @@ impl OasisWasm {
             mouse_cursor,
             cursor_texture,
             wm,
-            app_runner: None,
+            apps,
             open_runners: Vec::new(),
+            closed_app_requests: Vec::new(),
+            skin_layout_textures,
+            image_layers,
+            anim_secs: 0.0,
             browser: None,
             iframe,
             toasts: ToastManager::new(),
@@ -391,8 +426,11 @@ impl OasisWasm {
             archive_catalog: None,
             pending_catalog: None,
             radio_consecutive_errors: 0,
+            media: oasis_audio::AudioManager::new(),
+            media_track: None,
             video_player,
             pending_tv_catalog: None,
+            pending_tv_tune: None,
             shader_bridge: shader_bridge::WasmShaderBridge::new(width, height),
             fullscreen_app: None,
             key_filter: oasis_core::input::KeyTwinFilter::default(),
@@ -417,9 +455,11 @@ impl OasisWasm {
     /// updates the scene graph, and renders to the canvas.
     pub fn tick(&mut self, delta_seconds: f32) {
         self.frame_counter += 1;
+        self.anim_secs += delta_seconds.clamp(0.0, 1.0);
 
-        // Update system info every ~60 frames (~1s at 60fps).
-        if self.frame_counter.is_multiple_of(60) {
+        // Update system info on the first frame (so the clock never shows
+        // a placeholder) and then every ~60 frames (~1s at 60fps).
+        if self.frame_counter == 1 || self.frame_counter.is_multiple_of(60) {
             use oasis_core::platform::TimeService;
             let time = self.platform.now().ok();
             self.status_bar.update_info(time.as_ref(), None);
@@ -436,45 +476,32 @@ impl OasisWasm {
         // Run the next queued background terminal job (`cmd &`), if any.
         self.poll_terminal_jobs();
 
-        // Process pending VFS requests from app runners (e.g. radio tune).
-        // Skip TV Guide tune requests — they're handled by the dedicated video
-        // overlay section below.
+        // Carry out every request the apps queued (radio tune, settings,
+        // ...), those of apps that closed this frame first. TV Guide tunes
+        // go to the video overlay section below, Video Embed commands to
+        // the YouTube overlay; the line-queued request files are appended.
         {
-            let mut pending = None;
-            if let Some(ref mut runner) = self.app_runner
-                && !vfs_content::is_tv_tune_request_wasm(runner)
-            {
-                pending = runner.take_pending_request();
-            }
-            if pending.is_none() {
-                for (_, runner) in &mut self.open_runners {
-                    if vfs_content::is_tv_tune_request_wasm(runner) {
-                        continue;
-                    }
-                    if let Some(req) = runner.take_pending_request() {
-                        pending = Some(req);
-                        break;
-                    }
+            let requests =
+                app_requests::gather(&mut self.closed_app_requests, &mut self.open_runners);
+            for req in requests {
+                if let Some(tune) = oasis_apps::tv_guide::tune_url_request(&req) {
+                    self.pending_tv_tune = Some(tune.to_string());
+                    continue;
                 }
-            }
-            if let Some((path, data)) = pending {
                 #[cfg(feature = "wasm-youtube")]
-                if path == oasis_core::apps::video_embed::VIDEO_EMBED_REQUEST_PATH {
-                    self.handle_video_embed_request(&data);
-                } else {
-                    let _ = self.vfs.write(&path, data.as_bytes());
+                if req.path == oasis_apps::video_embed::VIDEO_EMBED_REQUEST_PATH {
+                    self.handle_video_embed_request(&req.data);
+                    continue;
                 }
-                #[cfg(not(feature = "wasm-youtube"))]
-                {
-                    let _ = self.vfs.write(&path, data.as_bytes());
+                if let Err(e) = app_requests::write(&mut self.vfs, &req) {
+                    log::warn!("app VFS request write failed ({}): {e}", req.path);
                 }
             }
+            // `wm` / `open` commands (terminal, scripts).
+            self.poll_wm_ipc();
 
             // Let open apps apply queued VFS mutations (file manager
             // deletes / renames / copies, paint's binary BMP saves).
-            if let Some(ref mut runner) = self.app_runner {
-                runner.apply_vfs_ops(&mut self.vfs);
-            }
             for (_, runner) in &mut self.open_runners {
                 runner.apply_vfs_ops(&mut self.vfs);
             }
@@ -483,9 +510,6 @@ impl OasisWasm {
             // the frame's wall time so it runs at a fixed rate
             // independent of the display's refresh rate.
             let dt_ms = (delta_seconds.max(0.0) * 1000.0).min(u32::MAX as f32) as u32;
-            if let Some(ref mut runner) = self.app_runner {
-                runner.tick(dt_ms, &self.vfs);
-            }
             for (_, runner) in &mut self.open_runners {
                 runner.tick(dt_ms, &self.vfs);
             }
@@ -493,18 +517,10 @@ impl OasisWasm {
             // Editor "Save & close" once the save above is written).
             self.apply_app_close_requests();
 
-            // Drive the YouTube search fetcher and let the embed app
-            // pick up freshly-published results from VFS.
+            // Drive the YouTube search fetcher; the embed app picks up
+            // freshly-published results from VFS in its own `tick`.
             #[cfg(feature = "wasm-youtube")]
-            {
-                self.poll_youtube_search();
-                if let Some(ref mut runner) = self.app_runner {
-                    runner.refresh_video_embed(&self.vfs);
-                }
-                for (_, runner) in &mut self.open_runners {
-                    runner.refresh_video_embed(&self.vfs);
-                }
-            }
+            self.poll_youtube_search();
         }
 
         // -- Radio processing --
@@ -536,6 +552,10 @@ impl OasisWasm {
                             // explicitly retrying after a previous
                             // failure tripped the circuit breaker.
                             self.radio_consecutive_errors = 0;
+                            // Radio and music share the audio backend:
+                            // the tune below stops the backend, so unload
+                            // the music track and mark it stopped too.
+                            self.stop_music();
                             let _ = self.radio_manager.tune(
                                 &station.name,
                                 station.bitrate,
@@ -684,14 +704,10 @@ impl OasisWasm {
             if self.frame_counter.is_multiple_of(15) {
                 let _ = self.radio_manager.publish_status(&mut self.vfs);
             }
+            // (The Internet Radio app polls the status in its `tick`.)
 
-            // Refresh radio app display if visible.
-            if let Some(ref mut runner) = self.app_runner {
-                runner.refresh_radio(&self.vfs);
-            }
-            for (_, runner) in &mut self.open_runners {
-                runner.refresh_radio(&self.vfs);
-            }
+            // Music Player / `music` command requests.
+            self.tick_music();
 
             // Poll pending TV catalog fetch.
             if self
@@ -702,10 +718,7 @@ impl OasisWasm {
             {
                 match fetcher.take_results() {
                     Ok(catalogs) => {
-                        let runner = vfs_content::find_tv_guide_runner_wasm(
-                            &mut self.app_runner,
-                            &mut self.open_runners,
-                        );
+                        let runner = vfs_content::find_tv_guide_runner_wasm(&mut self.open_runners);
                         if let Some(runner) = runner {
                             if let Some(guide) = runner.tv_guide_state() {
                                 guide.fetch_in_progress = false;
@@ -728,10 +741,7 @@ impl OasisWasm {
                     },
                     Err(e) => {
                         console_log!("TV catalog fetch failed: {e}");
-                        let runner = vfs_content::find_tv_guide_runner_wasm(
-                            &mut self.app_runner,
-                            &mut self.open_runners,
-                        );
+                        let runner = vfs_content::find_tv_guide_runner_wasm(&mut self.open_runners);
                         if let Some(runner) = runner {
                             if let Some(guide) = runner.tv_guide_state() {
                                 guide.fetch_in_progress = false;
@@ -745,10 +755,7 @@ impl OasisWasm {
 
             // Start TV catalog fetch if a TV Guide app needs it.
             if self.pending_tv_catalog.is_none() {
-                let runner = vfs_content::find_tv_guide_runner_wasm(
-                    &mut self.app_runner,
-                    &mut self.open_runners,
-                );
+                let runner = vfs_content::find_tv_guide_runner_wasm(&mut self.open_runners);
                 if let Some(runner) = runner
                     && let Some(guide) = runner.tv_guide_state()
                     && !guide.fetch_attempted
@@ -761,20 +768,16 @@ impl OasisWasm {
                 }
             }
 
-            // Handle TV Guide tune requests via VFS IPC.
+            // Start a queued TV tune (dropped when the guide is closed).
             {
-                let runner = vfs_content::find_tv_guide_runner_wasm(
-                    &mut self.app_runner,
-                    &mut self.open_runners,
-                );
+                let tune = self.pending_tv_tune.take();
+                let runner = vfs_content::find_tv_guide_runner_wasm(&mut self.open_runners);
                 if let Some(runner) = runner
-                    && let Some((path, data)) = runner.take_pending_request()
+                    && let Some(data) = tune
                 {
-                    if path == oasis_core::apps::tv_guide::TV_REQUEST_PATH
-                        && data.starts_with("tune_url ")
                     {
-                        // Format: "tune_url {url} {seek_secs}"
-                        let rest = &data["tune_url ".len()..];
+                        // Format: "{url} {seek_secs}"
+                        let rest = data.as_str();
                         let (url, seek_secs) = rest
                             .rsplit_once(' ')
                             .map(|(u, s)| (u, s.parse::<u64>().unwrap_or(0)))
@@ -796,8 +799,6 @@ impl OasisWasm {
                                 console_log!("TV tune: texture={:?} preview={}x{}", tex_id, pw, ph,);
                             }
                         }
-                    } else {
-                        let _ = self.vfs.write(&path, data.as_bytes());
                     }
                 }
             }
@@ -806,10 +807,7 @@ impl OasisWasm {
         // Detect untune: video is playing but guide has no tuned channel.
         if self.video_player.is_active() {
             let should_stop = {
-                let runner = vfs_content::find_tv_guide_runner_wasm(
-                    &mut self.app_runner,
-                    &mut self.open_runners,
-                );
+                let runner = vfs_content::find_tv_guide_runner_wasm(&mut self.open_runners);
                 match runner {
                     Some(runner) => runner
                         .tv_guide_state()
@@ -826,10 +824,7 @@ impl OasisWasm {
         // frame (set_volume skips no-op writes) so a freshly created element
         // picks up the guide's volume instead of the browser default of 100%.
         if self.video_player.is_active() {
-            let runner = vfs_content::find_tv_guide_runner_wasm(
-                &mut self.app_runner,
-                &mut self.open_runners,
-            );
+            let runner = vfs_content::find_tv_guide_runner_wasm(&mut self.open_runners);
             if let Some(runner) = runner
                 && let Some(guide) = runner.tv_guide_state()
             {
@@ -899,7 +894,7 @@ impl OasisWasm {
         if self.mode == Mode::Desktop && self.wm.window_count() > 0 {
             let browser = &mut self.browser;
             let iframe_ref = &mut self.iframe;
-            let open_runners = &self.open_runners;
+            let open_runners = &mut self.open_runners;
             let active_theme = &self.active_theme;
             let dashboard = &self.dashboard;
             let frame = self.frame_counter as u32;
@@ -954,7 +949,7 @@ impl OasisWasm {
                             Ok(())
                         }
                     } else if let Some((_, runner)) =
-                        open_runners.iter().find(|(id, _)| id == window_id)
+                        open_runners.iter_mut().find(|(id, _)| id == window_id)
                     {
                         let r = runner.draw_windowed(cx, cy, cw, ch, be, active_theme);
                         // YouTube iframe: glue to the Video Embed window's
@@ -1089,7 +1084,7 @@ impl OasisWasm {
         }
 
         if let Some(id) = data.strip_prefix("play:") {
-            self.youtube_active_url = Some(oasis_core::apps::video_embed::embed_url(id));
+            self.youtube_active_url = Some(oasis_apps::video_embed::embed_url(id));
             self.youtube_active_id = Some(id.to_string());
             self.iframe.set_youtube_mode();
         }
@@ -1105,15 +1100,15 @@ impl OasisWasm {
         }
         // Publish a "loading" placeholder immediately so the app's next
         // refresh() reflects in-flight state instead of stale results.
-        let pending = oasis_core::apps::video_embed::SearchResults {
+        let pending = oasis_apps::video_embed::SearchResults {
             query: query.to_string(),
-            status: oasis_core::apps::video_embed::SearchStatus::Loading,
+            status: oasis_apps::video_embed::SearchStatus::Loading,
             error: None,
             results: Vec::new(),
         };
         if let Ok(json) = serde_json::to_string(&pending) {
             let _ = self.vfs.write(
-                oasis_core::apps::video_embed::VIDEO_EMBED_RESULTS_PATH,
+                oasis_apps::video_embed::VIDEO_EMBED_RESULTS_PATH,
                 json.as_bytes(),
             );
         }
@@ -1153,7 +1148,7 @@ impl OasisWasm {
                     if let Err(e) = youtube::paint_canvas_from_url(canvas, &hit.thumbnail_url) {
                         console_log!("youtube: img load: {e:?}");
                     }
-                    out.push(oasis_core::apps::video_embed::SearchResult {
+                    out.push(oasis_apps::video_embed::SearchResult {
                         id: hit.video_id,
                         title: hit.title,
                         author: hit.author,
@@ -1161,16 +1156,16 @@ impl OasisWasm {
                         thumb_tex: tex.0,
                     });
                 }
-                oasis_core::apps::video_embed::SearchResults {
+                oasis_apps::video_embed::SearchResults {
                     query,
-                    status: oasis_core::apps::video_embed::SearchStatus::Ready,
+                    status: oasis_apps::video_embed::SearchStatus::Ready,
                     error: None,
                     results: out,
                 }
             },
-            Err(e) => oasis_core::apps::video_embed::SearchResults {
+            Err(e) => oasis_apps::video_embed::SearchResults {
                 query,
-                status: oasis_core::apps::video_embed::SearchStatus::Error,
+                status: oasis_apps::video_embed::SearchStatus::Error,
                 error: Some(e),
                 results: Vec::new(),
             },
@@ -1178,7 +1173,7 @@ impl OasisWasm {
 
         if let Ok(json) = serde_json::to_string(&blob) {
             let _ = self.vfs.write(
-                oasis_core::apps::video_embed::VIDEO_EMBED_RESULTS_PATH,
+                oasis_apps::video_embed::VIDEO_EMBED_RESULTS_PATH,
                 json.as_bytes(),
             );
         }
@@ -1188,10 +1183,7 @@ impl OasisWasm {
     fn auto_advance_episode(&mut self) {
         // Gather schedule info from the guide state, then release the borrow.
         let tune_data = {
-            let runner = vfs_content::find_tv_guide_runner_wasm(
-                &mut self.app_runner,
-                &mut self.open_runners,
-            );
+            let runner = vfs_content::find_tv_guide_runner_wasm(&mut self.open_runners);
             let Some(runner) = runner else { return };
             let Some(guide) = runner.tv_guide_state() else {
                 return;
@@ -1213,7 +1205,7 @@ impl OasisWasm {
             // If the current slot has <5s remaining, skip ahead to avoid
             // re-tuning to the same nearly-finished episode.
             let query_time = {
-                let Some(slot) = oasis_core::apps::tv_guide::schedule_at(catalog, now) else {
+                let Some(slot) = oasis_apps::tv_guide::schedule_at(catalog, now) else {
                     return;
                 };
                 if slot.remaining_secs < 5 {
@@ -1222,12 +1214,11 @@ impl OasisWasm {
                     now
                 }
             };
-            let Some(slot) = oasis_core::apps::tv_guide::schedule_at(catalog, query_time) else {
+            let Some(slot) = oasis_apps::tv_guide::schedule_at(catalog, query_time) else {
                 return;
             };
 
-            let url =
-                oasis_core::apps::tv_guide::catalog::ChannelCatalog::download_url(&slot.episode);
+            let url = oasis_apps::tv_guide::catalog::ChannelCatalog::download_url(&slot.episode);
             let seek_secs = slot.elapsed_secs;
             console_log!(
                 "TV auto-advance -> {} (seek={}s, remaining={}s)",
@@ -1235,21 +1226,14 @@ impl OasisWasm {
                 seek_secs,
                 slot.remaining_secs,
             );
-            format!("tune_url {url} {seek_secs}")
+            format!("{url} {seek_secs}")
         };
 
         // Stop the finished player (needs &mut self.video_player + backend).
         self.video_player.stop(&mut self.backend);
 
-        // Write tune request via VFS IPC (same path as manual tune).
-        let runner =
-            vfs_content::find_tv_guide_runner_wasm(&mut self.app_runner, &mut self.open_runners);
-        if let Some(runner) = runner {
-            runner.set_pending_request(
-                oasis_core::apps::tv_guide::TV_REQUEST_PATH.to_string(),
-                tune_data,
-            );
-        }
+        // Queue the tune (same path as a manual tune from the guide).
+        self.pending_tv_tune = Some(tune_data);
     }
 
     // -----------------------------------------------------------------------
@@ -1262,11 +1246,12 @@ impl OasisWasm {
         self.start_menu.tick_animation();
         self.bottom_bar.tick_animation(&self.active_theme);
         self.toasts.tick();
+        self.tick_image_layers();
 
         match self.mode {
             Mode::Dashboard => {
                 terminal_sdi::set_terminal_visible(&mut self.sdi, false);
-                AppRunner::hide_sdi(&mut self.sdi);
+                AppRunner::hide_sdi(&self.apps, &mut self.sdi);
                 self.taskbar.hide_sdi(&mut self.sdi);
 
                 if self.bottom_bar.active_tab == MediaTab::None {
@@ -1292,7 +1277,7 @@ impl OasisWasm {
             },
             Mode::Terminal => {
                 self.dashboard.hide_sdi(&mut self.sdi);
-                AppRunner::hide_sdi(&mut self.sdi);
+                AppRunner::hide_sdi(&self.apps, &mut self.sdi);
                 StatusBar::hide_sdi(&mut self.sdi);
                 BottomBar::hide_sdi(&mut self.sdi);
                 self.taskbar.hide_sdi(&mut self.sdi);
@@ -1314,24 +1299,9 @@ impl OasisWasm {
                     cursor_visible,
                 );
             },
-            Mode::App => {
-                self.dashboard.hide_sdi(&mut self.sdi);
-                terminal_sdi::set_terminal_visible(&mut self.sdi, false);
-                terminal_sdi::hide_media_page(&mut self.sdi);
-                self.taskbar.hide_sdi(&mut self.sdi);
-                self.start_menu.close();
-                self.start_menu.hide_sdi(&mut self.sdi);
-                self.status_bar
-                    .update_sdi(&mut self.sdi, &self.active_theme, &self.skin.features);
-                self.bottom_bar
-                    .update_sdi(&mut self.sdi, &self.active_theme, &self.skin.features);
-                if let Some(ref mut runner) = self.app_runner {
-                    runner.update_sdi(&mut self.sdi, &self.active_theme);
-                }
-            },
             Mode::Desktop => {
                 terminal_sdi::set_terminal_visible(&mut self.sdi, false);
-                AppRunner::hide_sdi(&mut self.sdi);
+                AppRunner::hide_sdi(&self.apps, &mut self.sdi);
                 terminal_sdi::hide_media_page(&mut self.sdi);
 
                 // Sync terminal output to the windowed terminal runner
@@ -1407,7 +1377,7 @@ impl OasisWasm {
 
         // Update toast overlays (visible in Dashboard, App, Desktop modes).
         match self.mode {
-            Mode::Dashboard | Mode::App | Mode::Desktop => {
+            Mode::Dashboard | Mode::Desktop => {
                 self.toasts.update_sdi(&mut self.sdi, &self.active_theme);
             },
             _ => {
@@ -1440,35 +1410,43 @@ impl OasisWasm {
     // App launching (mirrors oasis-app launch.rs)
     // -----------------------------------------------------------------------
 
+    /// Raise window `id` (restoring it if minimized) or create it at the
+    /// default size. Returns whether it already existed.
+    fn open_or_raise_window(&mut self, id: &str, title: &str) -> bool {
+        if let Some(win) = self.wm.get_window(id) {
+            if win.state == oasis_core::wm::window::WindowState::Minimized {
+                let _ = self.wm.restore_window(id, &mut self.sdi);
+            }
+            let _ = self.wm.focus_window(id, &mut self.sdi);
+            return true;
+        }
+        let (width, height) = default_window_size(self.width, self.height);
+        let wc = WindowConfig {
+            id: id.to_string(),
+            title: title.to_string(),
+            x: None,
+            y: None,
+            width,
+            height,
+            window_type: WindowType::AppWindow,
+            always_on_top: false,
+            modal: false,
+        };
+        let _ = self.wm.create_window(&wc, &mut self.sdi);
+        false
+    }
+
     fn launch_app_window(&mut self, app: &AppEntry) {
         // Terminal: fullscreen mode for non-WM skins; windowed for WM skins.
-        if app.title == "Terminal" && !self.skin.features.window_manager {
+        if app.title == oasis_apps::titles::TERMINAL && !self.skin.features.window_manager {
             self.mode = Mode::Terminal;
             self.active_transition = Some(self.make_transition());
             return;
         }
 
-        // Scale window dimensions proportionally to screen resolution.
-        let win_w = (self.width * 380 + 240) / 480;
-        let win_h = (self.height * 220 + 136) / 272;
-
-        if app.title == "Browser" {
-            let win_id = "browser";
-            if self.wm.get_window(win_id).is_some() {
-                let _ = self.wm.focus_window(win_id, &mut self.sdi);
-            } else {
-                let wc = WindowConfig {
-                    id: win_id.to_string(),
-                    title: "Browser".to_string(),
-                    x: None,
-                    y: None,
-                    width: win_w,
-                    height: win_h,
-                    window_type: WindowType::AppWindow,
-                    always_on_top: false,
-                    modal: false,
-                };
-                let _ = self.wm.create_window(&wc, &mut self.sdi);
+        if app.title == oasis_apps::titles::BROWSER {
+            if !self.open_or_raise_window("browser", oasis_apps::titles::BROWSER) {
+                let (win_w, win_h) = default_window_size(self.width, self.height);
                 let mut bw = BrowserWidget::new(self.browser_config.clone());
                 bw.set_window(0, 0, win_w, win_h);
                 let home = bw.config.features.home_url.clone();
@@ -1480,82 +1458,43 @@ impl OasisWasm {
             return;
         }
 
-        let win_id = app.title.to_lowercase().replace(' ', "_");
-        if self.wm.get_window(&win_id).is_some() {
-            let _ = self.wm.focus_window(&win_id, &mut self.sdi);
-        } else {
-            let wc = WindowConfig {
-                id: win_id.clone(),
-                title: app.title.clone(),
-                x: None,
-                y: None,
-                width: win_w,
-                height: win_h,
-                window_type: WindowType::AppWindow,
-                always_on_top: false,
-                modal: false,
-            };
-            let _ = self.wm.create_window(&wc, &mut self.sdi);
-            self.open_runners
-                .push((win_id, AppRunner::launch(app, &self.vfs)));
+        let win_id = window_id(&app.title);
+        if !self.open_or_raise_window(&win_id, &app.title) {
+            let runner = AppRunner::launch(&self.apps, app, &self.vfs);
+            self.open_runners.push((win_id, runner));
         }
         self.mode = Mode::Desktop;
         self.active_transition = Some(self.make_transition());
     }
 
-    /// Launch an app window pre-loaded with a file. Mirrors
-    /// [`launch_app_window`] but calls `AppRunner::launch_with_file` so
-    /// File Manager's Confirm-on-typed-file flow can hand off to
-    /// Photo Viewer / Music Player / Text Editor under the WASM backend.
+    /// Launch entry for `title`: the registered app's own (title and path),
+    /// or a bare tile-less entry for the Browser and unknown titles.
+    fn entry_for_title(&self, title: &str) -> AppEntry {
+        self.apps
+            .get(title)
+            .map_or_else(|| AppEntry::for_title(title), |reg| reg.to_app_entry())
+    }
+
+    /// Launch an app window pre-loaded with a file (File Manager's
+    /// Confirm-on-typed-file hand-off to Photo Viewer / Music Player /
+    /// Text Editor). An already-open window of that app is reused: its
+    /// runner is replaced, and the old runner's backend resources
+    /// (textures) are released before it is dropped.
     fn launch_app_window_for_file(&mut self, app_title: &str, file_path: &str) {
-        let win_w = (self.width * 380 + 240) / 480;
-        let win_h = (self.height * 220 + 136) / 272;
-        let win_id = app_title.to_lowercase().replace(' ', "_");
-        let entry = AppEntry {
-            title: app_title.to_string(),
-            path: format!("/apps/{app_title}"),
-            icon_png: Vec::new(),
-            color: oasis_core::backend::Color::rgb(100, 100, 100),
-        };
-
-        if self.wm.get_window(&win_id).is_some() {
-            let _ = self.wm.focus_window(&win_id, &mut self.sdi);
-            if let Some(slot) = self.open_runners.iter_mut().find(|(id, _)| *id == win_id) {
-                let new_runner = AppRunner::launch_with_file(&entry, file_path, &self.vfs);
-                // Transfer pending Photo Viewer GPU textures so they
-                // don't leak when the outgoing runner is dropped.
-                if let (Some(old_app), Some(new_app)) = (
-                    slot.1.delegate_as::<oasis_app_media::BrowsingApp>(),
-                    new_runner.delegate_as::<oasis_app_media::BrowsingApp>(),
-                ) {
-                    new_app.inherit_textures_from(old_app);
-                }
-                slot.1 = new_runner;
-            } else {
-                self.open_runners.push((
-                    win_id,
-                    AppRunner::launch_with_file(&entry, file_path, &self.vfs),
-                ));
-            }
-            return;
+        let win_id = window_id(app_title);
+        let entry = self.entry_for_title(app_title);
+        let runner = AppRunner::launch_with_file(&self.apps, &entry, file_path, &self.vfs);
+        self.open_or_raise_window(&win_id, app_title);
+        match self.open_runners.iter_mut().find(|(id, _)| *id == win_id) {
+            Some((_, slot)) => {
+                let mut old = std::mem::replace(slot, runner);
+                // The replaced app's last requests still get carried out.
+                old.drain_requests(&mut self.closed_app_requests);
+                old.release_resources(&mut self.backend);
+            },
+            None => self.open_runners.push((win_id, runner)),
         }
-
-        let wc = WindowConfig {
-            id: win_id.clone(),
-            title: app_title.to_string(),
-            x: None,
-            y: None,
-            width: win_w,
-            height: win_h,
-            window_type: WindowType::AppWindow,
-            always_on_top: false,
-            modal: false,
-        };
-        let _ = self.wm.create_window(&wc, &mut self.sdi);
-        self.open_runners.push((
-            win_id,
-            AppRunner::launch_with_file(&entry, file_path, &self.vfs),
-        ));
+        self.mode = Mode::Desktop;
     }
 
     fn make_transition(&self) -> TransitionState {
@@ -1572,17 +1511,7 @@ impl OasisWasm {
 
     fn handle_start_menu_action(&mut self, action: &StartMenuAction) {
         match action {
-            StartMenuAction::LaunchApp(title) => {
-                let app = self
-                    .dashboard
-                    .apps
-                    .iter()
-                    .find(|a| a.title == *title)
-                    .cloned();
-                if let Some(app) = app {
-                    self.launch_app_window(&app);
-                }
-            },
+            StartMenuAction::LaunchApp(title) => self.launch_app(title),
             StartMenuAction::OpenTerminal => {
                 self.mode = Mode::Terminal;
             },
@@ -1709,6 +1638,10 @@ impl OasisWasm {
                 }
                 return skin_swap;
             },
+            // Unwrapped by the executor; handled for completeness.
+            Ok(CommandOutput::Status { output, .. }) => {
+                return self.process_command_output(Ok(*output));
+            },
             Err(e) => {
                 self.output_lines.push(format!("error: {e}"));
             },
@@ -1723,6 +1656,13 @@ impl OasisWasm {
     fn apply_skin_swap(&mut self, name: &str) {
         match oasis_skin::resolve_skin_request(name, &self.skin) {
             Ok(new_skin) => {
+                // Hide the outgoing skin's dashboard icons, taskbar and
+                // start button: the new skin re-shows only what it uses
+                // (a skin with fewer icons or no start menu otherwise
+                // keeps stale labels / a START pill from the old one).
+                self.dashboard.hide_sdi(&mut self.sdi);
+                self.taskbar.hide_sdi(&mut self.sdi);
+                self.start_menu.hide_sdi(&mut self.sdi);
                 let swapped =
                     Skin::swap_scaled(&self.skin, new_skin, &mut self.sdi, self.width, self.height);
                 self.active_theme = ActiveTheme::from_skin(&swapped.theme)
@@ -1732,20 +1672,8 @@ impl OasisWasm {
                 self.wm.set_theme(swapped.theme.build_wm_theme());
                 let dash_config =
                     DashboardConfig::from_features(&swapped.features, &self.active_theme);
-                let mut apps = discover_apps(&self.vfs, "/apps", None).unwrap_or_default();
-                #[cfg(feature = "wasm-youtube")]
-                apps.push(AppEntry {
-                    title: "Video Embed".to_string(),
-                    path: "/apps/video-embed".to_string(),
-                    icon_png: Vec::new(),
-                    color: Color {
-                        r: 255,
-                        g: 0,
-                        b: 0,
-                        a: 255,
-                    },
-                });
-                self.dashboard = DashboardState::new(dash_config, apps);
+                self.dashboard =
+                    DashboardState::new(dash_config, dashboard_apps(&self.vfs, &self.apps));
                 self.bottom_bar.total_pages = self.dashboard.page_count();
                 self.bottom_bar.current_page = 0;
                 self.start_menu = StartMenuState::new_with_theme(
@@ -1755,6 +1683,9 @@ impl OasisWasm {
                 self.output_lines
                     .push(format!("Switched to skin: {}", swapped.manifest.name));
                 self.skin = swapped;
+                // New wallpaper (image or procedural), layout textures and
+                // image decals; the old skin's are freed.
+                self.refresh_skin_assets();
             },
             Err(e) => {
                 self.output_lines.push(format!("Skin error: {e}"));
@@ -1834,18 +1765,26 @@ impl OasisWasm {
         self.height
     }
 
-    /// Launch an app by title (e.g. "TV Guide", "Browser", "File Manager").
+    /// Launch an app by title (e.g. "TV Guide", "Browser", "File Manager";
+    /// ASCII case-insensitive): any registered app, with or without a
+    /// dashboard tile, or the Browser.
     pub fn launch_app(&mut self, title: &str) {
-        let app = self
+        let entry = if title.eq_ignore_ascii_case(oasis_apps::titles::BROWSER) {
+            AppEntry::for_title(oasis_apps::titles::BROWSER)
+        } else if let Some(reg) = self.apps.find(title) {
+            reg.to_app_entry()
+        } else if let Some(tile) = self
             .dashboard
             .apps
             .iter()
-            .find(|a| a.title == title)
-            .cloned();
-        if let Some(app) = app {
-            self.launch_app_window(&app);
+            .find(|a| a.title.eq_ignore_ascii_case(title))
+        {
+            // A VFS-discovered app the registry doesn't know (placeholder).
+            tile.clone()
         } else {
             log::warn!("App not found: {title}");
-        }
+            return;
+        };
+        self.launch_app_window(&entry);
     }
 }

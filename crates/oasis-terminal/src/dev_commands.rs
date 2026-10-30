@@ -3,6 +3,7 @@
 use oasis_types::error::OasisError;
 #[cfg(test)]
 use oasis_types::error::Result;
+use oasis_types::util::base64;
 
 use crate::interpreter::CommandOutput;
 
@@ -42,76 +43,13 @@ define_command!(
                 )),
             }
         } else {
-            Ok(CommandOutput::Text(base64_encode(input.as_bytes())))
+            Ok(CommandOutput::Text(base64::encode(input.as_bytes())))
         }
     }
 );
 
-const B64_CHARS: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-
-fn base64_encode(data: &[u8]) -> String {
-    let mut result = String::new();
-    for chunk in data.chunks(3) {
-        let b0 = chunk[0] as u32;
-        let b1 = chunk.get(1).copied().unwrap_or(0) as u32;
-        let b2 = chunk.get(2).copied().unwrap_or(0) as u32;
-        let triple = (b0 << 16) | (b1 << 8) | b2;
-
-        result.push(B64_CHARS[((triple >> 18) & 0x3F) as usize] as char);
-        result.push(B64_CHARS[((triple >> 12) & 0x3F) as usize] as char);
-        if chunk.len() > 1 {
-            result.push(B64_CHARS[((triple >> 6) & 0x3F) as usize] as char);
-        } else {
-            result.push('=');
-        }
-        if chunk.len() > 2 {
-            result.push(B64_CHARS[(triple & 0x3F) as usize] as char);
-        } else {
-            result.push('=');
-        }
-    }
-    result
-}
-
 fn base64_decode(input: &str) -> std::result::Result<String, String> {
-    let input = input.trim();
-    let mut bytes = Vec::new();
-    let chars: Vec<u8> = input
-        .bytes()
-        .filter(|&b| b != b'\n' && b != b'\r')
-        .collect();
-
-    for chunk in chars.chunks(4) {
-        if chunk.len() < 2 {
-            break;
-        }
-        let vals: Vec<u32> = chunk
-            .iter()
-            .map(|&b| {
-                if b == b'=' {
-                    return Ok(0u32);
-                }
-                B64_CHARS
-                    .iter()
-                    .position(|&c| c == b)
-                    .map(|p| p as u32)
-                    .ok_or_else(|| format!("invalid base64 char: {}", b as char))
-            })
-            .collect::<std::result::Result<Vec<_>, _>>()?;
-
-        let triple = (vals[0] << 18)
-            | (vals[1] << 12)
-            | (vals.get(2).copied().unwrap_or(0) << 6)
-            | vals.get(3).copied().unwrap_or(0);
-
-        bytes.push(((triple >> 16) & 0xFF) as u8);
-        if chunk.len() > 2 && chunk[2] != b'=' {
-            bytes.push(((triple >> 8) & 0xFF) as u8);
-        }
-        if chunk.len() > 3 && chunk[3] != b'=' {
-            bytes.push((triple & 0xFF) as u8);
-        }
-    }
+    let bytes = base64::decode(input).map_err(|e| e.to_string())?;
     String::from_utf8(bytes).map_err(|e| format!("invalid UTF-8: {e}"))
 }
 
@@ -537,7 +475,10 @@ define_command!(
     "dev",
     |args, env| {
         if args.is_empty() {
-            return Ok(CommandOutput::Text("false".to_string()));
+            return Ok(CommandOutput::status(
+                1,
+                CommandOutput::Text("false".to_string()),
+            ));
         }
         let result = match args[0] {
             "-f" => {
@@ -598,9 +539,10 @@ define_command!(
                 }
             },
         };
-        Ok(CommandOutput::Text(
-            if result { "true" } else { "false" }.to_string(),
-        ))
+        // Print the verdict and exit 1 on false, so `test ... && cmd`,
+        // `||` and `$?` behave as in a POSIX shell.
+        let text = CommandOutput::Text(if result { "true" } else { "false" }.to_string());
+        Ok(CommandOutput::status(if result { 0 } else { 1 }, text))
     }
 );
 

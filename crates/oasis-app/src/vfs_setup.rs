@@ -32,26 +32,17 @@ pub fn populate_demo_vfs(vfs: &mut MemoryVfs) {
     .expect("vfs write /etc/hosts.toml");
 
     vfs.mkdir("/apps").expect("vfs mkdir /apps");
-    // Dashboard apps: GUI-first. CLI-style placeholders (Network,
-    // Package Manager, System Monitor) are still registered in the
-    // app registry so the terminal / scripts can open them by name
-    // but they deliberately don't take up a dashboard slot — their
-    // output is static text and duplicates what `netstat`, `pkg`,
-    // and `sysmon` commands provide.
-    for name in &[
-        "File Manager",
-        "Settings",
-        "Terminal",
-        "Music Player",
-        "Internet Radio",
-        "Photo Viewer",
-        "Text Editor",
-        "Calculator",
-        "Paint",
-        "Games",
-        "Browser",
-        "TV Guide",
-    ] {
+    // Dashboard tiles: the registry's `on_dashboard` apps plus the
+    // host's Browser. The info screens (Network, Package Manager, System
+    // Monitor) stay registered without a tile; `open <app>`, MCP
+    // `open_app` and `OASIS_APP` reach them by name.
+    let apps = oasis_apps::builtin_registry(&oasis_apps::HostInfo::desktop());
+    let tiles = apps
+        .iter()
+        .filter(|reg| reg.on_dashboard)
+        .map(|reg| reg.title.as_str())
+        .chain([crate::launch::BROWSER_TITLE]);
+    for name in tiles {
         vfs.mkdir(&format!("/apps/{name}"))
             .expect("vfs mkdir app dir");
     }
@@ -71,7 +62,7 @@ pub fn populate_demo_vfs(vfs: &mut MemoryVfs) {
     vfs.mkdir("/var/tv/cache").expect("vfs mkdir /var/tv/cache");
     vfs.write(
         "/etc/tv/channels.toml",
-        oasis_core::apps::tv_guide::channel::DEFAULT_CHANNELS_TOML.as_bytes(),
+        oasis_apps::tv_guide::channel::DEFAULT_CHANNELS_TOML.as_bytes(),
     )
     .expect("vfs write /etc/tv/channels.toml");
 
@@ -585,7 +576,7 @@ mod tests {
     /// metadata text names the actual PNG dimensions.
     #[test]
     fn bundled_png_opens_in_photo_viewer() {
-        use oasis_app_media::BrowsingApp;
+        use oasis_apps::media::BrowsingApp;
         use oasis_core::apps::App;
 
         let mut vfs = MemoryVfs::new();
@@ -606,7 +597,7 @@ mod tests {
     /// `media_controller::tick` can kick off actual playback.
     #[test]
     fn bundled_mp3_opens_in_music_player_with_ipc() {
-        use oasis_app_media::{BrowsingApp, MEDIA_REQUEST_PATH};
+        use oasis_apps::media::{BrowsingApp, MEDIA_REQUEST_PATH};
 
         let mut vfs = MemoryVfs::new();
         super::populate_demo_vfs(&mut vfs);
@@ -617,11 +608,11 @@ mod tests {
         );
         let req = app
             .content
-            .pending_vfs_request
-            .take()
+            .requests
+            .pop()
             .expect("music player should emit play_file IPC");
-        assert_eq!(req.0, MEDIA_REQUEST_PATH);
-        assert_eq!(req.1, "play_file /home/user/music/ambient_dawn.mp3");
+        assert_eq!(req.path, MEDIA_REQUEST_PATH);
+        assert_eq!(req.data, "play_file /home/user/music/ambient_dawn.mp3");
     }
 
     /// Text Editor opens a bundled document — routed through the
@@ -634,26 +625,23 @@ mod tests {
 
         let mut vfs = MemoryVfs::new();
         super::populate_demo_vfs(&mut vfs);
-        let entry = AppEntry {
-            title: "Text Editor".to_string(),
-            path: "/apps/Text Editor".to_string(),
-            icon_png: Vec::new(),
-            color: oasis_core::backend::Color::rgb(100, 100, 100),
-        };
-        let runner = AppRunner::launch_with_file(&entry, "/home/user/documents/welcome.txt", &vfs);
+        let entry = AppEntry::for_title("Text Editor");
+        let apps = oasis_apps::builtin_registry(&oasis_apps::HostInfo::desktop());
+        let runner =
+            AppRunner::launch_with_file(&apps, &entry, "/home/user/documents/welcome.txt", &vfs);
         assert_eq!(
-            runner.viewing_file.as_deref(),
+            runner.viewing_file(),
             Some("/home/user/documents/welcome.txt")
         );
         // The text editor renders the file as display lines with line
         // numbers — the welcome content shows up in the rendered output.
         assert!(
             runner
-                .lines
+                .lines()
                 .iter()
                 .any(|l| l.contains("Welcome to OASIS_OS")),
             "editor should render welcome text, got: {:?}",
-            runner.lines,
+            runner.lines(),
         );
     }
 }

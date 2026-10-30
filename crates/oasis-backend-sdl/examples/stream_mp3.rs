@@ -19,7 +19,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use oasis_backend_sdl::SdlAudioBackend;
-use oasis_core::backend::AudioBackend;
+use oasis_types::backend::AudioBackend;
 
 const CHUNK_SIZE: usize = 4096;
 /// Tick-ish cadence: one chunk per ~16 ms so total throughput is

@@ -13,8 +13,9 @@ use std::rc::Rc;
 
 use oasis_js::rquickjs::{Ctx, Function, Result as JsResult};
 
-use super::serialize::{deep_copy_node, serialize_node};
+use super::serialize::{deep_copy_capped, serialize_node};
 use super::{NO_NODE, SharedDirty, SharedDoc, mark_dirty};
+use crate::html::MAX_DOM_DEPTH;
 use crate::html::dom::{Document, NodeId, NodeKind};
 
 /// Node ids whose arena slots were freed by a binding since the JS side
@@ -34,11 +35,62 @@ pub(super) const INSERT_OK: i32 = 0;
 pub(super) const INSERT_HIERARCHY_ERROR: i32 = -1;
 /// A node id was out of range.
 pub(super) const INSERT_INVALID: i32 = -2;
+/// The insertion would nest a node deeper than [`MAX_DOM_DEPTH`].
+pub(super) const INSERT_TOO_DEEP: i32 = -3;
+
+/// Most live nodes a script may grow the document to. The node arena
+/// sits outside the JS heap limit, so without this `cloneNode(true)`
+/// doubling (or a `createElement` loop) could exhaust host memory.
+/// Twice the parser's own node cap.
+pub(super) const MAX_SCRIPT_DOM_NODES: usize = 200_000;
+
+/// Whether `n` more nodes fit under [`MAX_SCRIPT_DOM_NODES`].
+pub(super) fn has_room(doc: &Document, n: usize) -> bool {
+    doc.live_node_count().saturating_add(n) <= MAX_SCRIPT_DOM_NODES
+}
+
+/// Number of nodes in `id`'s subtree (including `id`).
+pub(super) fn subtree_size(doc: &Document, id: NodeId) -> usize {
+    let mut n = 0;
+    let mut stack = vec![id];
+    while let Some(c) = stack.pop() {
+        n += 1;
+        stack.extend(doc.nodes[c].children.iter().copied());
+    }
+    n
+}
+
+/// Number of ancestors of `id` (0 for a tree root, attached or not).
+fn depth(doc: &Document, id: NodeId) -> usize {
+    let mut d = 0;
+    let mut cur = id;
+    while let Some(p) = doc.nodes[cur].parent {
+        d += 1;
+        // A well-formed tree is never deeper than the arena.
+        if d > doc.nodes.len() {
+            break;
+        }
+        cur = p;
+    }
+    d
+}
+
+/// Levels below `id` in its subtree (0 for a leaf). Iterative, so a
+/// malformed deep subtree can't overflow the stack here either.
+fn subtree_height(doc: &Document, id: NodeId) -> usize {
+    let mut max = 0;
+    let mut stack = vec![(id, 0usize)];
+    while let Some((n, h)) = stack.pop() {
+        max = max.max(h);
+        stack.extend(doc.nodes[n].children.iter().map(|&c| (c, h + 1)));
+    }
+    max
+}
 
 /// Convert a JS-supplied node id into a valid arena index.
 fn valid(doc: &Document, nid: i32) -> Option<NodeId> {
     let id = usize::try_from(nid).ok()?;
-    (id < doc.nodes.len()).then_some(id)
+    doc.is_live(id).then_some(id)
 }
 
 /// `nodeType` for a node. Detached `Document`-kind nodes other than the
@@ -90,21 +142,43 @@ fn is_inclusive_ancestor(doc: &Document, ancestor: NodeId, node: NodeId) -> bool
 /// `reference` is `None` or not a child of `parent`). The node is
 /// detached from its old parent first — without freeing its subtree —
 /// and a document fragment contributes its children instead of itself.
+///
+/// Refused with [`INSERT_TOO_DEEP`] when a moved node's subtree would
+/// reach deeper than [`MAX_DOM_DEPTH`] below its tree root: every
+/// render pass recurses per DOM level, so an unbounded script-built
+/// chain (`for (;;) { c.appendChild(d); c = d }`) would otherwise
+/// overflow the UI thread's stack. Detached trees are measured from
+/// their own root, and attaching them is checked again.
 pub(super) fn insert_node(
     doc: &mut Document,
     parent: NodeId,
     node: NodeId,
     reference: Option<NodeId>,
 ) -> i32 {
-    if node == doc.root || is_inclusive_ancestor(doc, node, parent) {
+    // Only elements, the document and fragments have children (DOM
+    // "ensure pre-insertion validity"); text under text would also
+    // escape the depth checks that assume leaves stay leaves.
+    if node == doc.root
+        || !matches!(
+            doc.nodes[parent].kind,
+            NodeKind::Element(_) | NodeKind::Document
+        )
+        || is_inclusive_ancestor(doc, node, parent)
+    {
         return INSERT_HIERARCHY_ERROR;
+    }
+    let is_fragment = node_type(doc, node) == DOCUMENT_FRAGMENT_NODE;
+    // Fragment children land where the fragment would, one level up.
+    let height = subtree_height(doc, node).saturating_sub(usize::from(is_fragment));
+    if depth(doc, parent) + 1 + height > MAX_DOM_DEPTH {
+        return INSERT_TOO_DEEP;
     }
     // Inserting a node before itself means "before its next sibling".
     let mut reference = reference;
     if reference == Some(node) {
         reference = next_sibling(doc, node);
     }
-    let moving: Vec<NodeId> = if node_type(doc, node) == DOCUMENT_FRAGMENT_NODE {
+    let moving: Vec<NodeId> = if is_fragment {
         doc.nodes[node].children.clone()
     } else {
         vec![node]
@@ -167,9 +241,21 @@ fn collect_subtree(doc: &Document, id: NodeId, out: &mut Vec<NodeId>) {
 
 /// Parse `html` as a body fragment and deep-copy its nodes under
 /// `parent` (appended in order).
+///
+/// The copy respects [`MAX_DOM_DEPTH`] measured from `parent`'s tree
+/// root: markup that would nest deeper is flattened the way the parser
+/// flattens past its own cap (see [`deep_copy_capped`]), so repeated
+/// `innerHTML` writes on the deepest node can't grow the tree without
+/// bound.
 pub(super) fn parse_into(doc: &mut Document, parent: NodeId, html: &str) {
     use crate::html::tokenizer::Tokenizer;
     use crate::html::tree_builder::TreeBuilder;
+    if !matches!(
+        doc.nodes[parent].kind,
+        NodeKind::Element(_) | NodeKind::Document
+    ) {
+        return;
+    }
     let wrapped = format!("<html><body>{html}</body></html>");
     let tokens = Tokenizer::new(&wrapped).tokenize();
     let frag = TreeBuilder::build(tokens);
@@ -177,9 +263,24 @@ pub(super) fn parse_into(doc: &mut Document, parent: NodeId, html: &str) {
         .body()
         .map(|b| frag.nodes[b].children.clone())
         .unwrap_or_default();
+    // The parsed fragment is bounded by the tree builder's own node cap;
+    // copying it must still fit the script cap, else nothing is copied.
+    if !has_room(doc, frag.nodes.len()) {
+        return;
+    }
+    let levels = MAX_DOM_DEPTH.saturating_sub(depth(doc, parent));
+    if levels == 0 {
+        // `parent` already sits at the cap: keep the markup's text as a
+        // single leaf, the same one level a `textContent` write adds.
+        let text: String = src_children.iter().map(|&c| frag.text_content(c)).collect();
+        if !text.is_empty() {
+            let id = doc.add_node(NodeKind::Text(text));
+            doc.append_child(parent, id);
+        }
+        return;
+    }
     for &src_child in &src_children {
-        let new_id = deep_copy_node(&frag, doc, src_child);
-        doc.append_child(parent, new_id);
+        deep_copy_capped(&frag, doc, src_child, parent, levels);
     }
 }
 
@@ -396,14 +497,22 @@ pub(super) fn install_node_bindings(
         globals.set(
             "__oasis_create_comment",
             Function::new(ctx.clone(), move |text: String| -> i32 {
-                d.borrow_mut().add_node(NodeKind::Comment(text)) as i32
+                let mut doc = d.borrow_mut();
+                if !has_room(&doc, 1) {
+                    return NO_NODE;
+                }
+                doc.add_node(NodeKind::Comment(text)) as i32
             })?,
         )?;
         let d = Rc::clone(doc);
         globals.set(
             "__oasis_create_fragment",
             Function::new(ctx.clone(), move || -> i32 {
-                d.borrow_mut().add_node(NodeKind::Document) as i32
+                let mut doc = d.borrow_mut();
+                if !has_room(&doc, 1) {
+                    return NO_NODE;
+                }
+                doc.add_node(NodeKind::Document) as i32
             })?,
         )?;
     }
@@ -415,6 +524,9 @@ pub(super) fn install_node_bindings(
             "__oasis_parse_fragment",
             Function::new(ctx.clone(), move |html: String| -> i32 {
                 let mut doc = d.borrow_mut();
+                if !has_room(&doc, 1) {
+                    return NO_NODE;
+                }
                 let frag = doc.add_node(NodeKind::Document);
                 parse_into(&mut doc, frag, &html);
                 frag as i32
@@ -452,7 +564,14 @@ pub(super) fn install_node_bindings(
             Function::new(ctx.clone(), move |nid: i32, deep: bool| -> i32 {
                 let mut doc = d.borrow_mut();
                 match valid(&doc, nid) {
-                    Some(id) if id != doc.root => clone_node(&mut doc, id, deep) as i32,
+                    Some(id) if id != doc.root => {
+                        let n = if deep { subtree_size(&doc, id) } else { 1 };
+                        if has_room(&doc, n) {
+                            clone_node(&mut doc, id, deep) as i32
+                        } else {
+                            NO_NODE
+                        }
+                    },
                     _ => NO_NODE,
                 }
             })?,

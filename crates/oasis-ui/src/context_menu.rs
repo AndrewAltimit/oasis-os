@@ -362,13 +362,13 @@ impl Widget for ContextMenu {
             .shadow_dropdown
             .draw(ctx.backend, x, y, w, h, radius)?;
 
-        // Surface background.
-        ctx.backend
-            .fill_rounded_rect(x, y, w, h, radius, ctx.theme.surface)?;
-
-        // Border.
-        ctx.backend
-            .stroke_rounded_rect(x, y, w, h, radius, 1, ctx.theme.border_subtle)?;
+        // Surface background and border.
+        ctx.frame(
+            (x, y, w, h),
+            ctx.theme.surface,
+            ctx.theme.border_subtle,
+            radius,
+        )?;
 
         // Draw each item.
         let mut cy = y + PAD_V;
@@ -445,7 +445,7 @@ impl Widget for ContextMenu {
 mod tests {
     use super::*;
     use crate::context::DrawContext;
-    use crate::test_utils::{self, MockBackend};
+    use crate::test_utils::{self, RecordingBackend};
     use crate::theme::Theme;
     use crate::widget::Widget;
 
@@ -620,7 +620,7 @@ mod tests {
     #[test]
     fn dismiss_outside_click() {
         let theme = Theme::dark();
-        let mut backend = MockBackend::new();
+        let mut backend = RecordingBackend::default();
         let ctx = DrawContext::new(&mut backend, &theme);
         let mut menu = ContextMenu::new(sample_items());
         menu.show(100, 100);
@@ -631,7 +631,7 @@ mod tests {
     #[test]
     fn no_dismiss_inside_click() {
         let theme = Theme::dark();
-        let mut backend = MockBackend::new();
+        let mut backend = RecordingBackend::default();
         let ctx = DrawContext::new(&mut backend, &theme);
         let mut menu = ContextMenu::new(sample_items());
         menu.show(10, 10);
@@ -642,7 +642,7 @@ mod tests {
     #[test]
     fn dismiss_when_hidden_returns_false() {
         let theme = Theme::dark();
-        let mut backend = MockBackend::new();
+        let mut backend = RecordingBackend::default();
         let ctx = DrawContext::new(&mut backend, &theme);
         let menu = ContextMenu::new(sample_items());
         assert!(!menu.dismiss_on_click(&ctx, 0, 0));
@@ -653,7 +653,7 @@ mod tests {
     #[test]
     fn measure_returns_positive_dimensions() {
         let theme = Theme::dark();
-        let mut backend = MockBackend::new();
+        let mut backend = RecordingBackend::default();
         let ctx = DrawContext::new(&mut backend, &theme);
         let menu = ContextMenu::new(sample_items());
         let (w, h) = menu.measure(&ctx, 480, 272);
@@ -664,7 +664,7 @@ mod tests {
     #[test]
     fn measure_empty_menu() {
         let theme = Theme::dark();
-        let mut backend = MockBackend::new();
+        let mut backend = RecordingBackend::default();
         let ctx = DrawContext::new(&mut backend, &theme);
         let menu = ContextMenu::new(vec![]);
         let (w, h) = menu.measure(&ctx, 480, 272);
@@ -678,7 +678,7 @@ mod tests {
     #[test]
     fn draw_visible_emits_text() {
         let theme = Theme::dark();
-        let mut backend = MockBackend::new();
+        let mut backend = RecordingBackend::default();
         {
             let mut ctx = DrawContext::new(&mut backend, &theme);
             let mut menu = ContextMenu::new(sample_items());
@@ -696,7 +696,7 @@ mod tests {
     #[test]
     fn draw_hidden_emits_nothing() {
         let theme = Theme::dark();
-        let mut backend = MockBackend::new();
+        let mut backend = RecordingBackend::default();
         {
             let mut ctx = DrawContext::new(&mut backend, &theme);
             let menu = ContextMenu::new(sample_items());
@@ -709,7 +709,7 @@ mod tests {
     #[test]
     fn draw_with_selection_highlights_row() {
         let theme = Theme::dark();
-        let mut backend = MockBackend::new();
+        let mut backend = RecordingBackend::default();
         {
             let mut ctx = DrawContext::new(&mut backend, &theme);
             let mut menu = ContextMenu::new(sample_items());
@@ -776,7 +776,7 @@ mod tests {
     #[test]
     fn item_at_and_hover_at() {
         let theme = Theme::dark();
-        let mut backend = MockBackend::new();
+        let mut backend = RecordingBackend::default();
         let ctx = DrawContext::new(&mut backend, &theme);
         let mut menu = ContextMenu::new(sample_items());
         assert_eq!(menu.item_at(&ctx, 10, 10), None, "hidden");

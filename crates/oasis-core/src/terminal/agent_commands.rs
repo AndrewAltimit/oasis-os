@@ -164,8 +164,9 @@ impl Command for McpCmd {
                         )),
                     }
                 } else {
-                    // Attempt to invoke a tool (display info -- actual invocation
-                    // requires network, which the interpreter doesn't own).
+                    // Display tool info only: there is no MCP client transport
+                    // here and nothing is queued (the output used to claim it
+                    // was "queued for execution").
                     match registry.find_tool(server_name, tool_name) {
                         Some(tool) => {
                             let tool_args = if args.len() > 2 {
@@ -174,7 +175,7 @@ impl Command for McpCmd {
                                 "(none)".to_string()
                             };
                             Ok(CommandOutput::Text(format!(
-                                "MCP invoke: {server_name}.{}\n  Description: {}\n  Arguments: {tool_args}\n  (tool invocation requires network transport -- queued for execution)",
+                                "MCP invoke: {server_name}.{}\n  Description: {}\n  Arguments: {tool_args}\n  (not executed: no MCP client transport is available)",
                                 tool.name, tool.description
                             )))
                         },
@@ -376,7 +377,7 @@ impl Command for CiCmd {
 // health -- system health metrics
 // ---------------------------------------------------------------------------
 
-/// Display system health metrics (uptime, memory, CPU).
+/// Display system health metrics (CPU temperature, memory, network).
 ///
 /// Collects live metrics via [`SystemHealth::collect()`] and formats
 /// them for terminal display.
@@ -566,6 +567,8 @@ tools = [
         assert!(s.contains("MCP invoke"));
         assert!(s.contains("code-quality.lint"));
         assert!(s.contains("/src"));
+        // Nothing is queued; the output must not claim otherwise.
+        assert!(!s.contains("queued"), "{s}");
     }
 
     #[test]

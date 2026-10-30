@@ -116,17 +116,17 @@ mod tests {
         let _ = format!("{:?}", DividerOrientation::Vertical);
     }
 
-    // -- Draw / measure tests using MockBackend --
+    // -- Draw / measure tests using RecordingBackend --
 
     use crate::context::DrawContext;
-    use crate::test_utils::MockBackend;
+    use crate::test_utils::RecordingBackend;
     use crate::theme::Theme;
     use crate::widget::Widget;
 
     #[test]
     fn measure_horizontal_returns_full_width() {
         let theme = Theme::dark();
-        let mut backend = MockBackend::new();
+        let mut backend = RecordingBackend::default();
         let ctx = DrawContext::new(&mut backend, &theme);
         let d = Divider::horizontal();
         let (w, h) = d.measure(&ctx, 300, 100);
@@ -137,7 +137,7 @@ mod tests {
     #[test]
     fn draw_horizontal_emits_fill() {
         let theme = Theme::dark();
-        let mut backend = MockBackend::new();
+        let mut backend = RecordingBackend::default();
         {
             let mut ctx = DrawContext::new(&mut backend, &theme);
             let d = Divider::horizontal();
@@ -150,7 +150,7 @@ mod tests {
     #[test]
     fn draw_vertical_emits_fill() {
         let theme = Theme::dark();
-        let mut backend = MockBackend::new();
+        let mut backend = RecordingBackend::default();
         {
             let mut ctx = DrawContext::new(&mut backend, &theme);
             let d = Divider::vertical();
@@ -163,7 +163,7 @@ mod tests {
     #[test]
     fn draw_custom_thickness() {
         let theme = Theme::dark();
-        let mut backend = MockBackend::new();
+        let mut backend = RecordingBackend::default();
         {
             let mut ctx = DrawContext::new(&mut backend, &theme);
             let mut d = Divider::horizontal();
@@ -176,7 +176,7 @@ mod tests {
     #[test]
     fn draw_custom_color() {
         let theme = Theme::dark();
-        let mut backend = MockBackend::new();
+        let mut backend = RecordingBackend::default();
         {
             let mut ctx = DrawContext::new(&mut backend, &theme);
             let mut d = Divider::horizontal();

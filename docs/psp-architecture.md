@@ -21,6 +21,30 @@ game's framebuffer and claims a PSP audio channel for background MP3
 playback. No dependency on `oasis-core` — direct framebuffer rendering
 only (<64 KB binary).
 
+## Building
+
+Only `oasis-backend-psp` depends on workspace crates: `oasis-core`
+(no default features), `oasis-app-tv-guide`, `oasis-browser`
+(`psp` + `javascript`), `oasis-js` (`psp-bindgen`), `oasis-video`
+(`demux-lite`) and `oasis-shader`. The plugin, recovery and USB/devloop
+crates are self-contained. When you change a shared API, rebuild the EBOOT.
+It has its own `Cargo.lock`, so let cargo update that file during the
+build; don't edit it by hand.
+
+The reproducible environment is `docker/psp-build.Dockerfile`, compose
+profile `psp-build`: pspdev, libclang, the pinned nightly and cargo-psp
+from `RUST_PSP_REV`. Commands and prerequisites are in
+[`getting-started.md` § PSP](getting-started.md#psp). Run
+`scripts/psp-smoke-test.sh` afterwards to boot both EBOOTs in
+PPSSPPHeadless the way CI does.
+
+Every PSP crate builds without warnings, and CI keeps it that way for the
+EBOOT, overlay PRX and recovery EBOOT: it adds
+`--config 'build.rustflags=["-D", "warnings"]'` to `cargo psp`. Pass the same
+flag locally to check a change. Don't use `RUSTFLAGS` for this: it replaces
+the `build.rustflags` in the EBOOT's `.cargo/config.toml` (psp-ld linker
+setup) instead of adding to them.
+
 ## GU Rendering Constraints
 
 The PSP GU (Graphics Unit) has a fixed-size command buffer
@@ -202,7 +226,7 @@ five entries (Old Time Radio, LibriVox Audiobooks, Netlabel Music,
   is bypassed (archive MP3s are vanilla files, not icecast). The same
   `psp::audiocodec::AudiocodecDecoder` decode path then plays through
   `AudioChannel::output_blocking`.
-- **`reinit_gu_frame()` discipline** — `dispatch_radio_confirm`
+- **`reinit_gu_frame()` discipline** — the radio Confirm handler
   previously called `backend.reinit_gu_frame()` unconditionally after
   `ensure_net_init_pub`, even on the silent GotIp early-return
   (cmd_server pre-connected WiFi at boot). Calling `sceGuStart` a

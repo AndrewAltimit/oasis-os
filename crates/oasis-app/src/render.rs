@@ -12,6 +12,7 @@ use oasis_core::wm::manager::WindowManager;
 use oasis_core::wm::window::{Window, WindowState, WmTheme};
 
 use crate::app_state::{AppState, Mode};
+use crate::launch::{BROWSER_WIN, TERMINAL_WIN};
 use oasis_core::terminal_sdi;
 
 /// Update the SDI scene graph based on the current mode.
@@ -35,7 +36,7 @@ pub fn update_sdi(state: &mut AppState, sdi: &mut SdiRegistry, vfs: &dyn Vfs) {
     match state.mode {
         Mode::Dashboard => {
             terminal_sdi::set_terminal_visible(sdi, false);
-            AppRunner::hide_sdi(sdi);
+            AppRunner::hide_sdi(&state.content.apps, sdi);
             state.ui.taskbar.hide_sdi(sdi);
 
             if state.ui.bottom_bar.active_tab == MediaTab::None {
@@ -65,7 +66,7 @@ pub fn update_sdi(state: &mut AppState, sdi: &mut SdiRegistry, vfs: &dyn Vfs) {
         },
         Mode::Terminal => {
             state.ui.dashboard.hide_sdi(sdi);
-            AppRunner::hide_sdi(sdi);
+            AppRunner::hide_sdi(&state.content.apps, sdi);
             StatusBar::hide_sdi(sdi);
             BottomBar::hide_sdi(sdi);
             state.ui.taskbar.hide_sdi(sdi);
@@ -135,28 +136,9 @@ pub fn update_sdi(state: &mut AppState, sdi: &mut SdiRegistry, vfs: &dyn Vfs) {
                 state.terminal.sdi_signature = Some(sig);
             }
         },
-        Mode::App => {
-            state.ui.dashboard.hide_sdi(sdi);
-            terminal_sdi::set_terminal_visible(sdi, false);
-            terminal_sdi::hide_media_page(sdi);
-            state.ui.taskbar.hide_sdi(sdi);
-            state.ui.start_menu.close();
-            state.ui.start_menu.hide_sdi(sdi);
-            state
-                .ui
-                .status_bar
-                .update_sdi(sdi, &state.active_theme, &state.skin.features);
-            state
-                .ui
-                .bottom_bar
-                .update_sdi(sdi, &state.active_theme, &state.skin.features);
-            if let Some(ref mut runner) = state.content.app_runner {
-                runner.update_sdi(sdi, &state.active_theme);
-            }
-        },
         Mode::Desktop => {
             terminal_sdi::set_terminal_visible(sdi, false);
-            AppRunner::hide_sdi(sdi);
+            AppRunner::hide_sdi(&state.content.apps, sdi);
             terminal_sdi::hide_media_page(sdi);
 
             // Sync terminal output to the windowed terminal runner (only when
@@ -164,9 +146,12 @@ pub fn update_sdi(state: &mut AppState, sdi: &mut SdiRegistry, vfs: &dyn Vfs) {
             // content signature gates the expensive full-scrollback clone to
             // frames where the terminal actually changed — a mouse drag over
             // the desktop must not deep-copy 2000 lines per frame.
+            // (A resized terminal window needs no resync here: the
+            // runner's `layout` re-maps the scroll offset onto the
+            // window's rows when it is drawn.)
             if state.terminal.dirty {
                 let (input_text, cursor_col) = state.terminal.session.display();
-                let focused = state.wm.active_window() == Some("terminal");
+                let focused = state.wm.active_window() == Some(TERMINAL_WIN);
                 let term = &state.terminal;
                 let changed = term.sync_signature.as_ref().is_none_or(|sig| {
                     sig.0 != term.output_lines.len()
@@ -179,7 +164,7 @@ pub fn update_sdi(state: &mut AppState, sdi: &mut SdiRegistry, vfs: &dyn Vfs) {
                     .content
                     .open_runners
                     .iter_mut()
-                    .find(|(id, _)| id == "terminal")
+                    .find(|(id, _)| id == TERMINAL_WIN)
                 {
                     // Cursor column within the prompt line ("> " + input),
                     // drawn only while the terminal window has focus.
@@ -187,7 +172,7 @@ pub fn update_sdi(state: &mut AppState, sdi: &mut SdiRegistry, vfs: &dyn Vfs) {
                     // A freshly (re)opened runner has not received this
                     // content yet even if the signature matches — its line
                     // count (scrollback + prompt) gives that away.
-                    if changed || runner.lines.len() != state.terminal.output_lines.len() + 1 {
+                    if changed || runner.lines().len() != state.terminal.output_lines.len() + 1 {
                         // Incremental sync: only lines not already in the
                         // runner are cloned (was a full scrollback clone
                         // here plus another inside the runner).
@@ -260,9 +245,9 @@ pub fn update_sdi(state: &mut AppState, sdi: &mut SdiRegistry, vfs: &dyn Vfs) {
         },
     }
 
-    // Update toast overlays (visible in Dashboard, App, Desktop modes).
+    // Update toast overlays (visible in Dashboard and Desktop modes).
     match state.mode {
-        Mode::Dashboard | Mode::App | Mode::Desktop => {
+        Mode::Dashboard | Mode::Desktop => {
             state.toasts.update_sdi(sdi, &state.active_theme);
         },
         _ => {
@@ -411,7 +396,7 @@ pub fn windows_want_frame(
         if win.state == WindowState::Minimized || !desktops.is_visible(id) {
             return false;
         }
-        if id == "browser" {
+        if id == BROWSER_WIN {
             return browser.is_some_and(BrowserWidget::wants_frame);
         }
         runners
@@ -453,33 +438,8 @@ fn rect_covers_screen(x: i32, y: i32, w: u32, h: u32, sw: u32, sh: u32) -> bool 
 mod tests {
     use super::*;
 
-    // NOTE: The `update_sdi` function is heavily coupled to the SDI backend and AppState.
-    // It requires fully initialized AppState and SdiRegistry instances, making unit testing
-    // impractical without extensive mocking. The function's correctness is validated through
-    // integration tests and visual inspection in the running application.
-    //
-    // Potential testable aspects if refactored:
-    // - Visibility logic could be extracted to pure functions
-    // - Mode-to-visibility mapping could be a lookup table
-    // - Each mode's rendering behavior could be a separate function
-
-    #[test]
-    fn test_mode_enum_coverage() {
-        // Verify all Mode variants are handled in update_sdi.
-        // This test ensures we don't forget to add a match arm when adding new modes.
-        let modes = vec![
-            Mode::Dashboard,
-            Mode::Terminal,
-            Mode::App,
-            Mode::Osk,
-            Mode::Desktop,
-        ];
-
-        // If this compiles, all modes are at least syntactically valid.
-        for mode in modes {
-            let _ = mode;
-        }
-    }
+    // `update_sdi` per mode is covered end to end by the harness suites
+    // (`tests/e2e_*.rs`).
 
     use oasis_core::wm::window::{WindowConfig, WindowType};
 
@@ -522,13 +482,12 @@ mod tests {
     }
 
     fn launch_runner(title: &str, vfs: &oasis_core::vfs::MemoryVfs) -> AppRunner {
-        let entry = oasis_core::dashboard::AppEntry {
-            title: title.to_string(),
-            path: format!("/apps/{title}"),
-            icon_png: Vec::new(),
-            color: Color::rgb(100, 100, 100),
-        };
-        AppRunner::launch(&entry, vfs)
+        let apps = oasis_apps::builtin_registry(&oasis_apps::HostInfo::desktop());
+        AppRunner::launch(
+            &apps,
+            &oasis_core::dashboard::AppEntry::for_title(title),
+            vfs,
+        )
     }
 
     /// Mimic a drawn frame: every visible runner's content is on screen.

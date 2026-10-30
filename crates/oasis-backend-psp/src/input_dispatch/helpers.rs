@@ -131,8 +131,8 @@ pub(super) fn dispatch_dashboard_confirm(
                     }
                 }
                 dbg_log("[TV] parsing channel TOML...");
-                if let Ok(config) = oasis_core::apps::tv_guide::ChannelConfig::from_toml(
-                    oasis_core::apps::tv_guide::channel::DEFAULT_CHANNELS_TOML,
+                if let Ok(config) = oasis_app_tv_guide::ChannelConfig::from_toml(
+                    oasis_app_tv_guide::channel::DEFAULT_CHANNELS_TOML,
                 ) {
                     dbg_log(&format!("[TV] parsed {} channels", config.channel.len()));
                     tv.channels = config.channel;
@@ -141,9 +141,7 @@ pub(super) fn dispatch_dashboard_confirm(
                     for (i, ch) in tv.channels.iter().enumerate() {
                         for src in &ch.source {
                             let api_path =
-                                oasis_core::apps::tv_guide::ChannelCatalog::files_api_path(
-                                    &src.item_id,
-                                );
+                                oasis_app_tv_guide::ChannelCatalog::files_api_path(&src.item_id);
                             batch.push(TvCatalogRequest {
                                 url: format!("http://archive.org{}", api_path,),
                                 ch_idx: i,
@@ -371,8 +369,11 @@ pub(super) fn dispatch_tv_confirm(
                 "[TV] catalog has {} episodes",
                 catalog.episodes.len()
             ));
-            let best = oasis_core::apps::tv_guide::select_smallest_with_max_width(
-                &catalog.episodes, 20_000_000, 320, 480,
+            let best = oasis_app_tv_guide::select_smallest_with_max_width(
+                &catalog.episodes,
+                20_000_000,
+                320,
+                480,
             );
             if let Some(ep) = best {
                 dbg_log(&format!(
@@ -390,7 +391,7 @@ pub(super) fn dispatch_tv_confirm(
                     dbg_log("[TV] net init OK");
                     backend.reinit_gu_frame();
                 }
-                let url = oasis_core::apps::tv_guide::ChannelCatalog::download_url(ep);
+                let url = oasis_app_tv_guide::ChannelCatalog::download_url(ep);
                 dbg_log(&format!("[TV] starting download: {url}"));
                 // Note: DOWNLOAD_CANCEL is reset at the START of
                 // handle_video_download (not here) to avoid

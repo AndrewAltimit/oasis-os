@@ -112,18 +112,8 @@ impl Widget for InputField {
     fn draw(&self, ctx: &mut DrawContext<'_>, x: i32, y: i32, w: u32, h: u32) -> Result<()> {
         let radius = ctx.theme.border_radius_md;
 
-        // Background.
+        // Background and border.
         let state = self.state();
-        ctx.backend.fill_rounded_rect(
-            x,
-            y,
-            w,
-            h,
-            radius,
-            WidgetStateColors::input_bg(ctx.theme, state),
-        )?;
-
-        // Border.
         let bc = if state.is_disabled() {
             WidgetStateColors::border(ctx.theme, state)
         } else if self.focused {
@@ -131,7 +121,12 @@ impl Widget for InputField {
         } else {
             ctx.theme.input_border
         };
-        ctx.backend.stroke_rounded_rect(x, y, w, h, radius, 1, bc)?;
+        ctx.frame(
+            (x, y, w, h),
+            WidgetStateColors::input_bg(ctx.theme, state),
+            bc,
+            radius,
+        )?;
 
         // Keyboard focus ring (in addition to the focus-colored border).
         if self.focused && !self.disabled {
@@ -286,17 +281,17 @@ mod tests {
         assert_eq!(a.focused, b.focused);
     }
 
-    // -- Draw / measure tests using MockBackend --
+    // -- Draw / measure tests using RecordingBackend --
 
     use crate::context::DrawContext;
-    use crate::test_utils::MockBackend;
+    use crate::test_utils::RecordingBackend;
     use crate::theme::Theme;
     use crate::widget::Widget;
 
     #[test]
     fn measure_returns_width() {
         let theme = Theme::dark();
-        let mut backend = MockBackend::new();
+        let mut backend = RecordingBackend::default();
         let ctx = DrawContext::new(&mut backend, &theme);
         let mut f = InputField::new();
         for ch in "Hello".chars() {
@@ -311,7 +306,7 @@ mod tests {
     #[test]
     fn draw_shows_text() {
         let theme = Theme::dark();
-        let mut backend = MockBackend::new();
+        let mut backend = RecordingBackend::default();
         {
             let mut ctx = DrawContext::new(&mut backend, &theme);
             let mut f = InputField::new();
@@ -326,7 +321,7 @@ mod tests {
     #[test]
     fn draw_password_shows_asterisks() {
         let theme = Theme::dark();
-        let mut backend = MockBackend::new();
+        let mut backend = RecordingBackend::default();
         {
             let mut ctx = DrawContext::new(&mut backend, &theme);
             let mut f = InputField::new();
@@ -349,7 +344,7 @@ mod tests {
     #[test]
     fn draw_placeholder_when_empty() {
         let theme = Theme::dark();
-        let mut backend = MockBackend::new();
+        let mut backend = RecordingBackend::default();
         {
             let mut ctx = DrawContext::new(&mut backend, &theme);
             let mut f = InputField::new();
@@ -365,7 +360,7 @@ mod tests {
     #[test]
     fn draw_cursor_position() {
         let theme = Theme::dark();
-        let mut backend = MockBackend::new();
+        let mut backend = RecordingBackend::default();
         {
             let mut ctx = DrawContext::new(&mut backend, &theme);
             let mut f = InputField::new();
@@ -389,7 +384,7 @@ mod tests {
     fn draw_focused_vs_unfocused() {
         let theme = Theme::dark();
         for focused in [true, false] {
-            let mut backend = MockBackend::new();
+            let mut backend = RecordingBackend::default();
             {
                 let mut ctx = DrawContext::new(&mut backend, &theme);
                 let mut f = InputField::new();

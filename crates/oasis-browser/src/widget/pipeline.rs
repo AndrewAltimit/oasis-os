@@ -12,13 +12,14 @@ use crate::html::dom::NodeId;
 use crate::js_dom;
 use crate::layout;
 use crate::loader::cache::CacheEntry;
+use crate::loader::csp::{CspPolicy, CspResourceType, InlineKind};
 use crate::loader::{
     self, ContentType, ResourceRequest, ResourceResponse, ResourceSource, load_resource,
 };
 use crate::reader;
 use crate::{BrowserWidget, LoadingState, SimpleTextMeasurer};
 
-#[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
+#[cfg(native_net)]
 use crate::loader::io_thread::{IoRequestKind, IoThread};
 
 impl BrowserWidget {
@@ -45,10 +46,13 @@ impl BrowserWidget {
             method: loader::HttpMethod::Post,
             body: Some(body),
             referrer,
+            // A form post is always page-initiated: cross-site, it gets
+            // no `SameSite=Lax` / `Strict` cookies (CSRF).
+            initiator: self.nav.current_url().map(String::from),
         };
 
         // POST requests always go to the network, so offload to IO thread.
-        #[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
+        #[cfg(native_net)]
         {
             // `ensure_io_thread` fails only if the OS refuses to spawn a
             // thread; fall through to the synchronous load in that case.
@@ -78,6 +82,7 @@ impl BrowserWidget {
         if let Some(entry) = self.cache.get(key) {
             let body = entry.response.body.clone();
             let ct = entry.response.content_type;
+            let csp = entry.csp.clone();
             if ct == ContentType::Html || ct == ContentType::PlainText || ct == ContentType::Unknown
             {
                 // Re-render from cached HTML without a network round-trip.
@@ -88,12 +93,13 @@ impl BrowserWidget {
                 self.reader_mode = false;
                 self.reader_html = None;
                 self.error_message = None;
-                self.page_csp = None;
+                // The re-render runs the page's scripts again: under the
+                // policy it was served with, not none.
+                self.page_csp = csp;
                 self.page_errors.clear();
                 self.decoded_images.clear();
                 self.mask_image_arcs.clear();
-                self.image_textures.clear();
-                self.image_atlas.clear_without_destroy();
+                self.retire_image_textures();
                 self.pending_images.clear();
                 self.decoded_image_bytes = 0;
                 self.decoded_image_lru.clear();
@@ -133,6 +139,15 @@ impl BrowserWidget {
         }
     }
 
+    /// Drop the page's image and atlas textures, queueing their GPU
+    /// handles in `retired_textures`: navigation has no backend, so
+    /// `ensure_image_textures` destroys them on the next paint.
+    fn retire_image_textures(&mut self) {
+        self.retired_textures
+            .extend(self.image_textures.drain().map(|(_, tex)| tex));
+        self.image_atlas.clear_into(&mut self.retired_textures);
+    }
+
     /// Reset browser state in preparation for a new navigation.
     ///
     /// Clears the parsed document and layout tree along with all
@@ -153,14 +168,13 @@ impl BrowserWidget {
         self.decoded_images.clear();
         self.broken_image_urls.clear();
         self.mask_image_arcs.clear();
-        self.image_textures.clear();
-        self.image_atlas.clear_without_destroy();
+        self.retire_image_textures();
         self.pending_images.clear();
         self.decoded_image_bytes = 0;
         self.decoded_image_lru.clear();
         self.cached_image_info.clear();
         self.image_info_dirty = false;
-        #[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
+        #[cfg(native_net)]
         {
             self.pending_page_load = None;
             self.pending_page_url = None;
@@ -176,8 +190,6 @@ impl BrowserWidget {
     fn clear_node_references(&mut self) {
         self.hover_node = None;
         self.focused_node = None;
-        self.tab_order.clear();
-        self.tab_focus_index = -1;
         self.transition_engine = css::transition::TransitionEngine::new();
     }
 
@@ -254,10 +266,14 @@ impl BrowserWidget {
             method: loader::HttpMethod::Get,
             body: None,
             referrer,
+            // GET navigations can't be told apart from typed URLs here,
+            // so they count as user-initiated (same-site): only the
+            // `Strict`-on-cross-site-link-click case is lost.
+            initiator: None,
         };
 
         // Determine if this is a network request that can be offloaded.
-        #[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
+        #[cfg(native_net)]
         {
             // `ensure_io_thread` fails only if the OS refuses to spawn a
             // thread; fall through to the synchronous load in that case.
@@ -278,9 +294,9 @@ impl BrowserWidget {
             vfs,
             &request,
             self.tls.as_deref(),
-            #[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
+            #[cfg(native_net)]
             Some(&mut self.cookie_jar),
-            #[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
+            #[cfg(native_net)]
             Some(&self.cache),
         ) {
             Ok(loaded) => {
@@ -343,7 +359,7 @@ impl BrowserWidget {
     /// Returns `true` for network-only requests (no VFS fallback needed
     /// for the initial attempt). For `VfsThenNetwork`, we try VFS first
     /// synchronously and only offload to the IO thread on VFS miss.
-    #[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
+    #[cfg(native_net)]
     fn should_use_io_thread(&self, request: &ResourceRequest, vfs: &dyn Vfs) -> bool {
         // VFS-only URLs (vfs://) are always local reads.
         if request.url.starts_with("vfs://") {
@@ -376,7 +392,7 @@ impl BrowserWidget {
     /// The worker receives its own `Arc` clone of the TLS provider, so the
     /// provider stays alive for as long as the thread can use it -- even if
     /// [`BrowserWidget::set_tls_provider`] replaces `self.tls` meanwhile.
-    #[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
+    #[cfg(native_net)]
     pub(crate) fn ensure_io_thread(&mut self) -> bool {
         if let Some(io) = self.io_thread.as_mut() {
             // Every submit comes through here: keep the limit current.
@@ -399,7 +415,7 @@ impl BrowserWidget {
     }
 
     /// Submit a page load request to the I/O thread.
-    #[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
+    #[cfg(native_net)]
     fn submit_page_load_to_io_thread(&mut self, request: ResourceRequest) {
         self.ensure_io_thread();
 
@@ -415,7 +431,7 @@ impl BrowserWidget {
     }
 
     /// Submit an image load request to the I/O thread.
-    #[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
+    #[cfg(native_net)]
     pub(crate) fn submit_image_to_io_thread(
         &mut self,
         resolved_url: String,
@@ -440,7 +456,7 @@ impl BrowserWidget {
     ///
     /// Called from `tick()` each frame. Handles both page load and image
     /// load completions.
-    #[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
+    #[cfg(native_net)]
     pub(crate) fn poll_io_thread(&mut self) {
         let io = match &mut self.io_thread {
             Some(io) => io,
@@ -479,6 +495,11 @@ impl BrowserWidget {
                         if loaded.response.status == 304
                             && let Some(cached) = self.cache.peek_response(&loaded.response.url)
                         {
+                            // A 304 may omit the CSP header: keep the
+                            // stored response's policy unless it sends one.
+                            if loaded.csp.is_none() {
+                                loaded.csp = self.cache.peek_csp(&loaded.response.url);
+                            }
                             loaded.response = cached;
                         }
                         let url_str = loaded.response.url.clone();
@@ -540,7 +561,10 @@ impl BrowserWidget {
                         self.image_decode_in_flight += 1;
                     } else {
                         // Sync fallback — use placeholder on decode failure.
-                        let decoded = match crate::image::decode_image(&body) {
+                        let decoded = match crate::image::decode_image_with_limits(
+                            &body,
+                            self.config.image_limits(),
+                        ) {
                             Some(img) => img,
                             None => {
                                 self.broken_image_urls.insert(resolved.clone());
@@ -639,6 +663,9 @@ impl BrowserWidget {
                 texture: None,
                 etag: None,
                 last_modified: None,
+                // Callers set `page_csp` from this response's headers
+                // before handing it over.
+                csp: self.page_csp.clone(),
             },
         );
 
@@ -663,7 +690,10 @@ impl BrowserWidget {
                 // `<img>` doesn't trigger a second network round-trip
                 // (and inherit any cookie / redirect / cache failure
                 // path that the page-load fetch already cleared).
-                if let Some(decoded) = crate::image::decode_image(&response.body) {
+                if let Some(decoded) = crate::image::decode_image_with_limits(
+                    &response.body,
+                    self.config.image_limits(),
+                ) {
                     let img_bytes = decoded.width as usize * decoded.height as usize * 4;
                     // Evict oldest decoded images if over budget so the
                     // byte counter tracks actual resident memory.
@@ -764,11 +794,12 @@ impl BrowserWidget {
         }
         #[cfg(feature = "javascript")]
         let doc = {
-            let (scripts, deferred) = Self::collect_scripts(&doc);
+            let (scripts, deferred) = Self::collect_scripts(&doc, self.page_csp.as_ref());
             self.deferred_scripts = deferred;
             let shared: js_dom::SharedDoc = std::rc::Rc::new(std::cell::RefCell::new(doc));
-            match oasis_js::JsEngine::new(8 * 1024 * 1024) {
-                Ok(engine) => {
+            match oasis_js::JsEngine::new(self.config.js_memory_limit_bytes) {
+                Ok(mut engine) => {
+                    engine.set_max_exec_ms(self.config.js_max_exec_ms);
                     let s = std::rc::Rc::clone(&shared);
                     let nav = std::rc::Rc::clone(&self.js_nav_actions);
                     let js_sty = std::rc::Rc::clone(&self.js_styles);
@@ -817,10 +848,17 @@ impl BrowserWidget {
                     // defined their own versions.
                     js_dom::install_site_compat_shims(&engine);
                     // Register inline event handlers (onclick, etc.)
-                    // after scripts so Element class is available.
+                    // after scripts so Element class is available. CSP
+                    // `script-src-attr` judges each handler's own text.
                     {
+                        let csp = self.page_csp.as_ref();
+                        let allowed = |body: &str| {
+                            csp.is_none_or(|p| {
+                                p.allows_inline(InlineKind::ScriptAttribute, None, body)
+                            })
+                        };
                         let doc_borrow = shared.borrow();
-                        js_dom::register_inline_handlers(&engine, &doc_borrow);
+                        js_dom::register_inline_handlers(&engine, &doc_borrow, &allowed);
                     }
                     // readystatechange -> DOMContentLoaded -> window load.
                     js_dom::fire_document_lifecycle(&engine);
@@ -865,8 +903,8 @@ impl BrowserWidget {
             pointer: "fine",
         };
         let (author_sheets, author_sheet_positions) =
-            Self::collect_style_sheets(&doc, media_viewport);
-        let inline_styles = Self::collect_inline_styles(&doc);
+            Self::collect_style_sheets(&doc, media_viewport, self.page_csp.as_ref());
+        let inline_styles = Self::collect_parser_inline_styles(&doc, self.page_csp.as_ref());
         self.diag(&format!(
             "[BR] collect stylesheets done: {} sheets, {} inline",
             author_sheets.len(),
@@ -880,7 +918,8 @@ impl BrowserWidget {
         //     is the primary reason old.reddit.com renders as unstyled
         //     bullets without this pass — the site ships essentially no
         //     inline CSS.
-        let (linked_urls, linked_positions) = Self::collect_linked_stylesheet_urls(&doc, url);
+        let (linked_urls, linked_positions) =
+            Self::collect_linked_stylesheet_urls(&doc, url, self.page_csp.as_ref());
         self.external_stylesheets = vec![None; linked_urls.len()];
         self.external_stylesheet_sources = vec![None; linked_urls.len()];
         self.styled_viewport = (self.window_w, self.window_h);
@@ -888,7 +927,7 @@ impl BrowserWidget {
             .iter()
             .any(|&nid| css_uses_media_queries(&doc.text_content(nid)));
         self.external_stylesheet_positions = linked_positions;
-        #[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
+        #[cfg(native_net)]
         {
             self.pending_io_stylesheets.clear();
             self.pending_vfs_stylesheets.clear();
@@ -964,7 +1003,7 @@ impl BrowserWidget {
         //     the post-layout container sizes plumbed into cascade. Pages
         //     without container queries skip the work entirely.
         let container_lookup = if css::cascade::stylesheets_use_container_queries(&all_sheets) {
-            let first_lookup = css::cascade::build_container_lookup(&layout_root);
+            let first_lookup = crate::layout::container_query::build_container_lookup(&layout_root);
             if !first_lookup.is_empty() {
                 self.diag("[BR] container-query restyle");
                 let ctx = css::cascade::CascadeContext {
@@ -989,7 +1028,9 @@ impl BrowserWidget {
                 // Hover/focus restyles reuse this and would otherwise
                 // see stale pre-restyle dimensions for nested
                 // container-query cases.
-                Some(css::cascade::build_container_lookup(&layout_root))
+                Some(crate::layout::container_query::build_container_lookup(
+                    &layout_root,
+                ))
             } else {
                 Some(first_lookup)
             }
@@ -1437,9 +1478,14 @@ impl BrowserWidget {
     /// against the actual window size rather than the 480x272 default —
     /// without this, desktop-sized windows silently get the mobile
     /// breakpoints of any page whose author CSS uses `max-width`.
+    ///
+    /// Blocks the page's CSP does not allow (`style-src-elem` /
+    /// `style-src`: nonce, `'sha256-…'` hash or `'unsafe-inline'`) are
+    /// skipped.
     fn collect_style_sheets(
         doc: &html::dom::Document,
         viewport: css::parser::MediaViewport,
+        csp: Option<&CspPolicy>,
     ) -> (Vec<css::parser::Stylesheet>, Vec<html::dom::NodeId>) {
         let mut sheets = Vec::new();
         let mut positions = Vec::new();
@@ -1448,6 +1494,12 @@ impl BrowserWidget {
                 && elem.tag == html::dom::TagName::Style
             {
                 let css_text = doc.text_content(id);
+                let nonce = elem.get_attribute("nonce");
+                if csp.is_some_and(|p| !p.allows_inline(InlineKind::StyleElement, nonce, &css_text))
+                {
+                    log::warn!("CSP style-src blocked an inline <style> block");
+                    continue;
+                }
                 if !css_text.is_empty() {
                     sheets.push(css::parser::Stylesheet::parse_with_viewport(
                         &css_text, viewport,
@@ -1503,9 +1555,14 @@ impl BrowserWidget {
     /// parallel `Vec<NodeId>` gives each retained URL its originating
     /// DOM node index so callers can interleave external sheets with
     /// inline `<style>` blocks by DOM order in the cascade.
+    ///
+    /// URLs the page's CSP (`style-src-elem` / `style-src`) refuses, and
+    /// `vfs://` URLs on a page with a web origin
+    /// ([`loader::subresource_allowed`]), are dropped.
     fn collect_linked_stylesheet_urls(
         doc: &html::dom::Document,
         base_url: &str,
+        csp: Option<&CspPolicy>,
     ) -> (Vec<String>, Vec<html::dom::NodeId>) {
         const MAX_LINKED_STYLESHEETS: usize = 16;
         let mut urls = Vec::new();
@@ -1576,6 +1633,9 @@ impl BrowserWidget {
             if urls.iter().any(|u| u == &resolved) {
                 continue;
             }
+            if !Self::stylesheet_url_allowed(base_url, &resolved, csp) {
+                continue;
+            }
             urls.push(resolved);
             positions.push(node_id);
         }
@@ -1592,7 +1652,7 @@ impl BrowserWidget {
     /// doesn't hold a VFS handle, so routing a VFS request through it
     /// would always return "unsupported network scheme: vfs" and the
     /// slot would never fill.
-    #[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
+    #[cfg(native_net)]
     fn submit_external_stylesheets(&mut self, urls: Vec<String>, base_url: &str) {
         let source = if self.config.features.sandbox_only {
             ResourceSource::Vfs
@@ -1610,6 +1670,7 @@ impl BrowserWidget {
                 method: crate::loader::HttpMethod::Get,
                 body: None,
                 referrer: referrer.clone(),
+                initiator: base.clone(),
             };
             if url.starts_with("vfs://") {
                 // VFS lookups require the caller's `Vfs` handle, which
@@ -1647,13 +1708,13 @@ impl BrowserWidget {
     }
 
     /// WASM/PSP stub: no async I/O path, skip external stylesheet loading.
-    #[cfg(any(target_arch = "wasm32", feature = "psp"))]
+    #[cfg(not(native_net))]
     fn submit_external_stylesheets(&mut self, _urls: Vec<String>, _base_url: &str) {}
 
     /// Drain any VFS-scheme stylesheets queued during `load_html` and
     /// parse them against the caller-supplied VFS. Called from `tick()`
     /// so the initial paint can land without waiting.
-    #[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
+    #[cfg(native_net)]
     pub(crate) fn load_pending_vfs_stylesheets(&mut self, vfs: &dyn Vfs) {
         if self.pending_vfs_stylesheets.is_empty() {
             return;
@@ -1695,7 +1756,7 @@ impl BrowserWidget {
     /// own rules) and is fetched like a `<link>`ed sheet — including its
     /// own imports once it arrives. At most [`MAX_STYLESHEET_IMPORTS`]
     /// distinct URLs per page, which also ends import cycles.
-    #[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
+    #[cfg(native_net)]
     fn queue_stylesheet_imports(&mut self, mut arrived: Vec<(usize, String, String)>) {
         // Highest slot first: inserting slots shifts only the slots at
         // or after the insertion point, never a lower one still to do.
@@ -1705,9 +1766,11 @@ impl BrowserWidget {
         } else {
             ResourceSource::VfsThenNetwork
         };
+        let page_url = self.nav.current_url().unwrap_or("").to_string();
         for (idx, sheet_url, css_text) in arrived {
             let urls: Vec<String> = css_import_urls(&css_text, &sheet_url)
                 .into_iter()
+                .filter(|u| Self::stylesheet_url_allowed(&page_url, u, self.page_csp.as_ref()))
                 .filter(|u| {
                     self.imported_stylesheet_urls.len() < MAX_STYLESHEET_IMPORTS
                         && self.imported_stylesheet_urls.insert(u.clone())
@@ -1734,6 +1797,8 @@ impl BrowserWidget {
                 }
             }
             let referrer = loader::strip_referrer(&sheet_url);
+            // The page, not the importing sheet, decides same-site.
+            let initiator = self.nav.current_url().map(String::from);
             for (k, url) in urls.into_iter().enumerate() {
                 let request = ResourceRequest {
                     url: url.clone(),
@@ -1742,6 +1807,7 @@ impl BrowserWidget {
                     method: crate::loader::HttpMethod::Get,
                     body: None,
                     referrer: referrer.clone(),
+                    initiator: initiator.clone(),
                 };
                 if url.starts_with("vfs://") {
                     self.pending_vfs_stylesheets.push((idx + k, request));
@@ -1758,7 +1824,7 @@ impl BrowserWidget {
 
     /// Remember the source text of external sheet `idx` (for re-parsing
     /// on viewport changes) and note whether it is media-dependent.
-    #[cfg_attr(any(target_arch = "wasm32", feature = "psp"), allow(dead_code))]
+    #[cfg_attr(not(native_net), allow(dead_code))]
     fn record_external_source(&mut self, idx: usize, css_text: String) {
         if css_uses_media_queries(&css_text) {
             self.media_dependent_css = true;
@@ -1792,7 +1858,7 @@ impl BrowserWidget {
             hover: true,
             pointer: "fine",
         };
-        let (sheets, positions) = Self::collect_style_sheets(doc, viewport);
+        let (sheets, positions) = Self::collect_style_sheets(doc, viewport, self.page_csp.as_ref());
         self.cached_author_sheets = sheets;
         self.cached_author_sheet_positions = positions;
         for (slot, source) in self
@@ -1924,6 +1990,41 @@ impl BrowserWidget {
         self.display_list_stale = true;
     }
 
+    /// Whether a page at `page_url` may load the stylesheet `url`: CSP
+    /// `style-src-elem` / `style-src` and the `vfs://` subresource gate.
+    fn stylesheet_url_allowed(page_url: &str, url: &str, csp: Option<&CspPolicy>) -> bool {
+        if !loader::subresource_allowed(Some(page_url), url) {
+            log::warn!("blocked vfs:// stylesheet {url} on web page {page_url}");
+            return false;
+        }
+        if let Some(policy) = csp
+            && !policy.allows(url, page_url, CspResourceType::Style)
+        {
+            log::warn!("CSP style-src blocked stylesheet {url}");
+            return false;
+        }
+        true
+    }
+
+    /// [`Self::collect_inline_styles`] for the parser-inserted
+    /// attributes of a freshly loaded page: empty when the page's CSP
+    /// (`style-src-attr` / `style-src`) lacks `'unsafe-inline'`.
+    ///
+    /// Re-collection after script DOM mutations
+    /// (`apply_js_dom_mutations`) is not filtered: script `element.style`
+    /// writes land in the `style` attribute, and CSSOM writes are exempt
+    /// from `style-src` in browsers too.
+    fn collect_parser_inline_styles(
+        doc: &html::dom::Document,
+        csp: Option<&CspPolicy>,
+    ) -> Vec<(NodeId, Vec<css::parser::Declaration>)> {
+        if csp.is_some_and(|p| !p.allows_inline(InlineKind::StyleAttribute, None, "")) {
+            log::warn!("CSP style-src blocked inline style=\"\" attributes");
+            return Vec::new();
+        }
+        Self::collect_inline_styles(doc)
+    }
+
     /// Walk the DOM to collect inline `style=""` attributes and parse
     /// each into a list of declarations keyed by NodeId.
     pub(crate) fn collect_inline_styles(
@@ -1950,17 +2051,36 @@ impl BrowserWidget {
     /// Returns `(immediate, deferred)` where `deferred` contains scripts
     /// with the `defer` or `async` attribute, to be executed after the
     /// first paint.
+    ///
+    /// Scripts the page's CSP does not allow (`script-src-elem` /
+    /// `script-src`: matching `nonce`, `'sha256-…'` hash, or
+    /// `'unsafe-inline'` without nonces / hashes / `'strict-dynamic'`) are
+    /// skipped.
     #[cfg(feature = "javascript")]
-    fn collect_scripts(doc: &html::dom::Document) -> (Vec<String>, Vec<String>) {
+    fn collect_scripts(
+        doc: &html::dom::Document,
+        csp: Option<&CspPolicy>,
+    ) -> (Vec<String>, Vec<String>) {
         let mut immediate = Vec::new();
         let mut deferred = Vec::new();
-        for (id, node) in doc.nodes.iter().enumerate() {
-            if let html::dom::NodeKind::Element(elem) = &node.kind
+        // Document order, skipping inert `<template>` contents.
+        for id in js_dom::active_elements(doc) {
+            if let html::dom::NodeKind::Element(elem) = &doc.nodes[id].kind
                 && elem.tag == html::dom::TagName::Script
                 && elem.get_attribute("src").is_none()
                 && Self::is_js_script_type(elem.get_attribute("type"))
             {
                 let text = doc.text_content(id);
+                if let Some(policy) = csp
+                    && !policy.allows_inline(
+                        InlineKind::ScriptElement,
+                        elem.get_attribute("nonce"),
+                        &text,
+                    )
+                {
+                    log::warn!("CSP script-src blocked an inline <script>");
+                    continue;
+                }
                 if !text.is_empty() {
                     let is_deferred = elem.get_attribute("defer").is_some()
                         || elem.get_attribute("async").is_some();
@@ -2169,7 +2289,7 @@ fn gemini_to_html(doc: &gemini::parser::GeminiDocument) -> String {
 }
 
 /// Most `@import`ed stylesheets followed per page.
-#[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
+#[cfg(native_net)]
 const MAX_STYLESHEET_IMPORTS: usize = 16;
 
 /// URLs of the `@import` rules at the head of `css` (imports must come
@@ -2177,7 +2297,7 @@ const MAX_STYLESHEET_IMPORTS: usize = 16;
 /// against `sheet_url`. Print-only imports and schemes the loader can't
 /// fetch are skipped; other media / `layer()` / `supports()` conditions
 /// are not evaluated (the sheet is imported unconditionally).
-#[cfg_attr(any(target_arch = "wasm32", feature = "psp"), allow(dead_code))]
+#[cfg_attr(not(native_net), allow(dead_code))]
 pub(crate) fn css_import_urls(css: &str, sheet_url: &str) -> Vec<String> {
     let base = loader::Url::parse(sheet_url);
     let mut urls = Vec::new();

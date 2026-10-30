@@ -9,74 +9,8 @@
 
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use oasis_sdi::registry::SdiRegistry;
-use oasis_types::backend::{
-    Color, SdiAlpha, SdiBatch, SdiClipTransform, SdiCore, SdiGradients, SdiRenderTarget, SdiShapes,
-    SdiText, SdiTextures, SdiVector, TextureId, bitmap_measure_text,
-};
-use oasis_types::error::Result;
-
-/// A backend that accepts every draw call and does nothing, so the bench
-/// measures registry-side cost only.
-struct NullBackend;
-
-impl SdiCore for NullBackend {
-    fn init(&mut self, _width: u32, _height: u32) -> Result<()> {
-        Ok(())
-    }
-    fn clear(&mut self, _color: Color) -> Result<()> {
-        Ok(())
-    }
-    fn blit(&mut self, _tex: TextureId, _x: i32, _y: i32, _w: u32, _h: u32) -> Result<()> {
-        Ok(())
-    }
-    fn fill_rect(&mut self, _x: i32, _y: i32, _w: u32, _h: u32, _color: Color) -> Result<()> {
-        Ok(())
-    }
-    fn draw_text(
-        &mut self,
-        _text: &str,
-        _x: i32,
-        _y: i32,
-        _font_size: u16,
-        _color: Color,
-    ) -> Result<()> {
-        Ok(())
-    }
-    fn swap_buffers(&mut self) -> Result<()> {
-        Ok(())
-    }
-    fn load_texture(&mut self, _width: u32, _height: u32, _rgba_data: &[u8]) -> Result<TextureId> {
-        Ok(TextureId(1))
-    }
-    fn destroy_texture(&mut self, _tex: TextureId) -> Result<()> {
-        Ok(())
-    }
-    fn set_clip_rect(&mut self, _x: i32, _y: i32, _w: u32, _h: u32) -> Result<()> {
-        Ok(())
-    }
-    fn reset_clip_rect(&mut self) -> Result<()> {
-        Ok(())
-    }
-    fn measure_text(&self, text: &str, font_size: u16) -> u32 {
-        bitmap_measure_text(text, font_size)
-    }
-    fn read_pixels(&self, _x: i32, _y: i32, w: u32, h: u32) -> Result<Vec<u8>> {
-        Ok(vec![0u8; (w as usize) * (h as usize) * 4])
-    }
-    fn shutdown(&mut self) -> Result<()> {
-        Ok(())
-    }
-}
-
-impl SdiShapes for NullBackend {}
-impl SdiGradients for NullBackend {}
-impl SdiAlpha for NullBackend {}
-impl SdiText for NullBackend {}
-impl SdiTextures for NullBackend {}
-impl SdiClipTransform for NullBackend {}
-impl SdiVector for NullBackend {}
-impl SdiBatch for NullBackend {}
-impl SdiRenderTarget for NullBackend {}
+use oasis_test_backend::NullBackend;
+use oasis_types::backend::{Color, TextureId};
 
 /// Build a dashboard-like scene: a mix of flat rects, gradient/rounded
 /// panels, text labels, textured objects, and overlay-layer chrome in
@@ -128,7 +62,7 @@ fn build_scene(n: usize) -> SdiRegistry {
 
 fn bench_draw(c: &mut Criterion) {
     let mut group = c.benchmark_group("sdi_draw");
-    let mut backend = NullBackend;
+    let mut backend = NullBackend::default();
 
     for n in [120usize, 1_000] {
         let mut reg = build_scene(n);
@@ -161,7 +95,7 @@ fn bench_draw(c: &mut Criterion) {
 
 fn bench_draw_excluding_prefixes(c: &mut Criterion) {
     let mut group = c.benchmark_group("sdi_draw_excluding");
-    let mut backend = NullBackend;
+    let mut backend = NullBackend::default();
 
     // Window-compositing path: scene plus 3 windows' worth of prefixed
     // chrome objects, drawn with the windows excluded (as the WM does).

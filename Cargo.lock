@@ -974,9 +974,8 @@ dependencies = [
  "anyhow",
  "env_logger",
  "log",
- "oasis-app-media",
- "oasis-app-settings",
- "oasis-app-system-monitor",
+ "oasis-app-core",
+ "oasis-apps",
  "oasis-audio",
  "oasis-backend-sdl",
  "oasis-backend-ue5",
@@ -984,20 +983,10 @@ dependencies = [
  "oasis-mcp",
  "oasis-shader",
  "oasis-test-backend",
+ "oasis-types",
  "oasis-video",
  "png",
  "serde_json",
-]
-
-[[package]]
-name = "oasis-app-browser"
-version = "1.4.0"
-dependencies = [
- "oasis-app-core",
- "oasis-sdi",
- "oasis-skin",
- "oasis-types",
- "oasis-vfs",
 ]
 
 [[package]]
@@ -1063,28 +1052,6 @@ dependencies = [
  "oasis-types",
  "oasis-vfs",
  "png",
-]
-
-[[package]]
-name = "oasis-app-network"
-version = "1.4.0"
-dependencies = [
- "oasis-app-core",
- "oasis-sdi",
- "oasis-skin",
- "oasis-types",
- "oasis-vfs",
-]
-
-[[package]]
-name = "oasis-app-package-manager"
-version = "1.4.0"
-dependencies = [
- "oasis-app-core",
- "oasis-sdi",
- "oasis-skin",
- "oasis-types",
- "oasis-vfs",
 ]
 
 [[package]]
@@ -1174,10 +1141,33 @@ dependencies = [
 ]
 
 [[package]]
+name = "oasis-apps"
+version = "1.4.0"
+dependencies = [
+ "oasis-app-calculator",
+ "oasis-app-core",
+ "oasis-app-file-manager",
+ "oasis-app-games",
+ "oasis-app-media",
+ "oasis-app-paint",
+ "oasis-app-radio",
+ "oasis-app-settings",
+ "oasis-app-system-monitor",
+ "oasis-app-text-editor",
+ "oasis-app-tv-guide",
+ "oasis-core",
+ "oasis-types",
+ "serde",
+ "serde_json",
+ "toml",
+]
+
+[[package]]
 name = "oasis-audio"
 version = "1.4.0"
 dependencies = [
  "log",
+ "oasis-net",
  "oasis-types",
  "oasis-vfs",
  "proptest",
@@ -1196,6 +1186,7 @@ dependencies = [
  "oasis-audio",
  "oasis-backend-ue5",
  "oasis-core",
+ "oasis-net",
  "oasis-rasterize",
  "oasis-shader",
  "oasis-test-backend",
@@ -1227,7 +1218,7 @@ dependencies = [
  "console_error_panic_hook",
  "js-sys",
  "log",
- "oasis-app-media",
+ "oasis-apps",
  "oasis-audio",
  "oasis-core",
  "oasis-platform",
@@ -1255,6 +1246,9 @@ dependencies = [
  "image",
  "jpeg-decoder",
  "log",
+ "oasis-css",
+ "oasis-html",
+ "oasis-http",
  "oasis-js",
  "oasis-net",
  "oasis-skin",
@@ -1276,22 +1270,10 @@ dependencies = [
  "criterion",
  "js-sys",
  "log",
- "oasis-app-browser",
- "oasis-app-calculator",
  "oasis-app-core",
- "oasis-app-file-manager",
- "oasis-app-games",
- "oasis-app-media",
- "oasis-app-network",
- "oasis-app-package-manager",
- "oasis-app-paint",
- "oasis-app-radio",
- "oasis-app-settings",
- "oasis-app-system-monitor",
- "oasis-app-text-editor",
- "oasis-app-tv-guide",
  "oasis-audio",
  "oasis-browser",
+ "oasis-http",
  "oasis-i18n",
  "oasis-net",
  "oasis-platform",
@@ -1304,12 +1286,24 @@ dependencies = [
  "oasis-vector",
  "oasis-vfs",
  "oasis-wm",
- "proptest",
  "serde",
  "serde_json",
  "tempfile",
  "thiserror",
  "toml",
+]
+
+[[package]]
+name = "oasis-css"
+version = "1.4.0"
+dependencies = [
+ "criterion",
+ "log",
+ "oasis-html",
+ "oasis-types",
+ "proptest",
+ "rayon",
+ "rustc-hash 2.1.1",
 ]
 
 [[package]]
@@ -1322,6 +1316,29 @@ dependencies = [
  "oasis-core",
  "oasis-shader",
  "oasis-video",
+]
+
+[[package]]
+name = "oasis-html"
+version = "1.4.0"
+dependencies = [
+ "criterion",
+ "log",
+ "proptest",
+]
+
+[[package]]
+name = "oasis-http"
+version = "1.4.0"
+dependencies = [
+ "brotli",
+ "flate2",
+ "log",
+ "oasis-net",
+ "oasis-types",
+ "oasis-vfs",
+ "rustc-hash 2.1.1",
+ "web-time",
 ]
 
 [[package]]
@@ -1360,6 +1377,7 @@ version = "1.4.0"
 dependencies = [
  "log",
  "oasis-types",
+ "oasis-vfs",
  "rcgen",
  "rustls",
  "rustls-pki-types",
@@ -1390,6 +1408,7 @@ version = "1.4.0"
 dependencies = [
  "criterion",
  "log",
+ "oasis-test-backend",
  "oasis-types",
  "proptest",
  "serde",
@@ -1416,6 +1435,7 @@ dependencies = [
  "fontdue",
  "log",
  "oasis-sdi",
+ "oasis-shader",
  "oasis-test-backend",
  "oasis-types",
  "oasis-ui",
@@ -1433,10 +1453,8 @@ name = "oasis-terminal"
 version = "1.4.0"
 dependencies = [
  "log",
- "oasis-audio",
  "oasis-net",
  "oasis-platform",
- "oasis-skin",
  "oasis-types",
  "oasis-vfs",
  "proptest",
@@ -1465,6 +1483,7 @@ dependencies = [
 name = "oasis-ui"
 version = "1.4.0"
 dependencies = [
+ "oasis-test-backend",
  "oasis-types",
 ]
 

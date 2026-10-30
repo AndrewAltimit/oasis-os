@@ -1,0 +1,6 @@
+dashboard = false
+terminal = true
+file_browser = true
+window_manager = false
+show_tabs = false
+corrupted = true

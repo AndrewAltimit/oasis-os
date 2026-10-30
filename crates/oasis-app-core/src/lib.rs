@@ -10,7 +10,7 @@ pub mod render;
 #[cfg(feature = "testing")]
 pub mod testing;
 
-pub use app_trait::{App, ContentState};
+pub use app_trait::{App, AppRequest, AsAny, ContentState, MAX_WHEEL_STEPS};
 
 /// Action returned by an app after handling input.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -39,9 +39,15 @@ pub enum AppAction {
 /// `render_app_chrome` / `render_content_sdi` / `draw_content_windowed`
 /// / `hide_app_sdi` helpers all share identical implementations of:
 ///
-/// - `title()`, `path()`, `lines()`, `update_sdi()`, `draw_windowed()`,
-///   `hide_sdi()`, `take_pending_request()`, `peek_pending_request()`,
-///   `as_any()`, `as_any_mut()`
+/// - `title()`, `path()`, `lines()`, `browse_dir()`, `viewing_file()`
+/// - `layout()` ([`ContentState::update_layout_windowed`], so scrolling and
+///   click-to-line mapping use the rows the window really shows)
+/// - `update_sdi()`, `draw_windowed()`, `hide_sdi()`
+/// - `drain_requests()` (hands over `ContentState::requests`; queue them
+///   with [`ContentState::post_request`])
+///
+/// Downcasting (`as_any`) comes from the [`AsAny`] blanket impl. The app
+/// implements `handle_input` and whatever optional hooks it needs.
 ///
 /// # Usage
 ///
@@ -59,6 +65,9 @@ macro_rules! impl_content_app_methods {
         }
         fn path(&self) -> &str {
             &self.$field.app_path
+        }
+        fn layout(&mut self, _cw: u32, ch: u32, at: &oasis_skin::ActiveTheme) {
+            self.$field.update_layout_windowed(ch, at);
         }
         fn update_sdi(&mut self, sdi: &mut oasis_sdi::SdiRegistry, at: &oasis_skin::ActiveTheme) {
             self.$field.update_layout(at);
@@ -80,20 +89,17 @@ macro_rules! impl_content_app_methods {
         fn hide_sdi(&self, sdi: &mut oasis_sdi::SdiRegistry) {
             $crate::render::hide_app_sdi(sdi);
         }
-        fn take_pending_request(&mut self) -> Option<(String, String)> {
-            self.$field.pending_vfs_request.take()
-        }
-        fn peek_pending_request(&self) -> Option<&(String, String)> {
-            self.$field.pending_vfs_request.as_ref()
+        fn drain_requests(&mut self, out: &mut Vec<$crate::AppRequest>) {
+            out.append(&mut self.$field.requests);
         }
         fn lines(&self) -> &[String] {
             &self.$field.lines
         }
-        fn as_any(&self) -> &dyn std::any::Any {
-            self
+        fn browse_dir(&self) -> Option<&str> {
+            self.$field.browse_dir.as_deref()
         }
-        fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
-            self
+        fn viewing_file(&self) -> Option<&str> {
+            self.$field.viewing_file.as_deref()
         }
     };
 }

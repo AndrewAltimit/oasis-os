@@ -4,26 +4,33 @@ use oasis_types::error::OasisError;
 #[cfg(test)]
 use oasis_types::error::Result;
 
+use oasis_types::ipc::{
+    NOTIFY_PATH, SCREENSHOT_REQUEST_PATH, THEME_STATUS_PATH, WM_REQUEST_PATH, WM_STATUS_PATH,
+    WmRequest,
+};
+
+use crate::audio_commands::queue_request_line;
 use crate::interpreter::{CommandOutput, CommandSignal};
 
 // ---------------------------------------------------------------------------
 // wm
 // ---------------------------------------------------------------------------
 
+const WM_USAGE: &str = "wm [list|close [--force] <id>|focus <id>|minimize <id>|maximize <id>]";
+
 define_command!(
     WmCmd,
     "wm",
     "Window manager control",
-    "wm [list|close <id>|focus <id>|minimize <id>]",
+    WM_USAGE,
     "ui",
     |args, env| {
         let subcmd = args.first().copied().unwrap_or("list");
         match subcmd {
             "list" => {
                 // Read window state from VFS if available.
-                let status_path = "/var/wm/status";
-                if env.vfs.exists(status_path) {
-                    let data = env.vfs.read(status_path)?;
+                if env.vfs.exists(WM_STATUS_PATH) {
+                    let data = env.vfs.read(WM_STATUS_PATH)?;
                     Ok(CommandOutput::Text(
                         String::from_utf8_lossy(&data).into_owned(),
                     ))
@@ -34,19 +41,30 @@ define_command!(
                 }
             },
             "close" | "focus" | "minimize" | "maximize" => {
-                let id = args.get(1).copied().unwrap_or("");
+                // `--force` (close only, either side of the id) skips the
+                // app's unsaved-changes prompt.
+                let force = subcmd == "close" && args[1..].contains(&"--force");
+                let id = args[1..]
+                    .iter()
+                    .copied()
+                    .find(|a| !(force && *a == "--force"))
+                    .unwrap_or("");
                 if id.is_empty() {
+                    let flag = if subcmd == "close" { " [--force]" } else { "" };
                     return Err(OasisError::Command(
-                        format!("usage: wm {subcmd} <window-id>").into(),
+                        format!("usage: wm {subcmd}{flag} <window-id>").into(),
                     ));
                 }
-                let request = format!("{subcmd} {id}");
-                let req_path = "/var/wm/request";
-                env.vfs.write(req_path, request.as_bytes())?;
-                Ok(CommandOutput::Text(format!("WM request: {subcmd} {id}")))
+                let request = if force {
+                    format!("close --force {id}")
+                } else {
+                    format!("{subcmd} {id}")
+                };
+                queue_request_line(env.vfs, WM_REQUEST_PATH, &request)?;
+                Ok(CommandOutput::Text(format!("WM request: {request}")))
             },
             _ => Err(OasisError::Command(
-                format!("unknown subcommand: {subcmd}\nusage: wm [list|close <id>|focus <id>|minimize <id>]").into(),
+                format!("unknown subcommand: {subcmd}\nusage: {WM_USAGE}").into(),
             )),
         }
     }
@@ -100,7 +118,7 @@ define_command!(
         let subcmd = args.first().copied().unwrap_or("show");
         match subcmd {
             "show" | "colors" => {
-                let theme_path = "/var/theme/current";
+                let theme_path = THEME_STATUS_PATH;
                 if env.vfs.exists(theme_path) {
                     let data = env.vfs.read(theme_path)?;
                     Ok(CommandOutput::Text(
@@ -165,7 +183,7 @@ define_command!(
 
         // Write level and message to VFS for the UI layer to pick up.
         let payload = format!("{level}:{message}");
-        let notify_path = "/var/notify/message";
+        let notify_path = NOTIFY_PATH;
         env.vfs.write(notify_path, payload.as_bytes())?;
         Ok(CommandOutput::Text(format!(
             "Notification queued [{level}]: {message}"
@@ -185,7 +203,7 @@ define_command!(
     "ui",
     |args, env| {
         let path = args.first().copied().unwrap_or("/tmp/screenshot.bmp");
-        let req_path = "/var/screenshot/request";
+        let req_path = SCREENSHOT_REQUEST_PATH;
         env.vfs.write(req_path, path.as_bytes())?;
         Ok(CommandOutput::Text(format!(
             "Screenshot request queued: {path}"
@@ -193,9 +211,58 @@ define_command!(
     }
 );
 
+// ---------------------------------------------------------------------------
+// open
+// ---------------------------------------------------------------------------
+
+const OPEN_USAGE: &str = "open <app> [file]";
+
+/// Whether the trailing `open` argument `arg` names a file rather than the
+/// last word of the app title. App titles are plain words ("Text
+/// Editor"), so anything path-like (a `/`, a `.` as in `./x` or an
+/// extension) is a file, and so is a bare word naming an existing entry
+/// in the working directory (`open Text Editor notes`).
+fn is_file_arg(arg: &str, cwd: &str, vfs: &dyn oasis_vfs::Vfs) -> bool {
+    arg.contains('/')
+        || arg.contains('.')
+        || vfs.exists(&crate::interpreter::resolve_path(cwd, arg))
+}
+
+define_command!(
+    OpenCmd,
+    "open",
+    "Open an app window, optionally with a file",
+    OPEN_USAGE,
+    "ui",
+    |args, env| {
+        // App titles contain spaces ("Text Editor"), so every argument
+        // belongs to the title except a trailing file, which may be
+        // relative to the working directory (the host has no cwd).
+        let (title_args, file) = match args.split_last() {
+            Some((last, rest)) if !rest.is_empty() && is_file_arg(last, &env.cwd, env.vfs) => {
+                (rest, Some(crate::interpreter::resolve_path(&env.cwd, last)))
+            },
+            _ => (args, None),
+        };
+        let app = title_args.join(" ");
+        if app.is_empty() {
+            return Err(OasisError::Command(format!("usage: {OPEN_USAGE}").into()));
+        }
+        let request = WmRequest::Open {
+            app: app.clone(),
+            file: file.clone(),
+        };
+        queue_request_line(env.vfs, WM_REQUEST_PATH, &request.to_line())?;
+        Ok(CommandOutput::Text(match file {
+            Some(f) => format!("Opening {f} in {app}"),
+            None => format!("Opening {app}"),
+        }))
+    }
+);
+
 register_commands!(
     register_ui_commands,
-    [WmCmd, SdiCmd, ThemeCmd, NotifyCmd, ScreenshotCmd]
+    [WmCmd, SdiCmd, ThemeCmd, NotifyCmd, ScreenshotCmd, OpenCmd]
 );
 
 #[cfg(test)]
@@ -258,6 +325,102 @@ mod tests {
     }
 
     #[test]
+    fn wm_close_force_queues_forced_request() {
+        let (reg, mut vfs) = setup();
+        for line in ["wm close --force editor", "wm close editor --force"] {
+            vfs.write(WM_REQUEST_PATH, b"").unwrap();
+            exec(&reg, &mut vfs, line).unwrap();
+            assert_eq!(vfs.read(WM_REQUEST_PATH).unwrap(), b"close --force editor");
+        }
+        assert!(exec(&reg, &mut vfs, "wm close --force").is_err());
+    }
+
+    /// Requests queue one per line: a second command before the host polls
+    /// must not overwrite the first (`open Calculator; open Paint`).
+    #[test]
+    fn wm_requests_queue_instead_of_overwriting() {
+        let (reg, mut vfs) = setup();
+        exec(&reg, &mut vfs, "open Calculator").unwrap();
+        exec(&reg, &mut vfs, "wm close editor").unwrap();
+        let data = String::from_utf8(vfs.read(WM_REQUEST_PATH).unwrap()).unwrap();
+        assert_eq!(data, "open Calculator\nclose editor");
+    }
+
+    #[test]
+    fn open_queues_an_open_request() {
+        let (reg, mut vfs) = setup();
+        exec(&reg, &mut vfs, "open Text Editor").unwrap();
+        assert_eq!(vfs.read(WM_REQUEST_PATH).unwrap(), b"open Text Editor");
+        vfs.write(WM_REQUEST_PATH, b"").unwrap();
+        exec(&reg, &mut vfs, "open Photo Viewer /home/user/a.png").unwrap();
+        let line = String::from_utf8(vfs.read(WM_REQUEST_PATH).unwrap()).unwrap();
+        assert_eq!(
+            WmRequest::parse(&line),
+            Some(WmRequest::Open {
+                app: "Photo Viewer".into(),
+                file: Some("/home/user/a.png".into()),
+            })
+        );
+        assert!(exec(&reg, &mut vfs, "open").is_err());
+    }
+
+    /// `open Text Editor notes.txt` used to treat the relative file as
+    /// part of the app title; it now resolves against the cwd.
+    #[test]
+    fn open_resolves_relative_files_against_cwd() {
+        let (reg, mut vfs) = setup();
+        vfs.mkdir("/home").unwrap();
+        vfs.mkdir("/home/user").unwrap();
+        vfs.write("/home/user/todo", b"x").unwrap();
+        let open_line = |vfs: &mut MemoryVfs, cwd: &str, line: &str| {
+            vfs.write(WM_REQUEST_PATH, b"").unwrap();
+            let mut env = Environment {
+                cwd: cwd.to_string(),
+                vfs,
+                power: None,
+                time: None,
+                usb: None,
+                network: None,
+                tls: None,
+                stdin: None,
+                stderr: String::new(),
+            };
+            reg.execute(line, &mut env).unwrap();
+            let line = String::from_utf8(vfs.read(WM_REQUEST_PATH).unwrap()).unwrap();
+            WmRequest::parse(&line).unwrap()
+        };
+        let open = |app: &str, file: Option<&str>| WmRequest::Open {
+            app: app.into(),
+            file: file.map(str::to_string),
+        };
+        let cwd = "/home/user";
+        assert_eq!(
+            open_line(&mut vfs, cwd, "open Text Editor notes.txt"),
+            open("Text Editor", Some("/home/user/notes.txt"))
+        );
+        assert_eq!(
+            open_line(&mut vfs, cwd, "open Text Editor ../shared/a.md"),
+            open("Text Editor", Some("/home/shared/a.md"))
+        );
+        assert_eq!(
+            open_line(&mut vfs, cwd, "open Paint ./pic"),
+            open("Paint", Some("/home/user/pic"))
+        );
+        // An extension-less name counts when it exists in the cwd...
+        assert_eq!(
+            open_line(&mut vfs, cwd, "open Text Editor todo"),
+            open("Text Editor", Some("/home/user/todo"))
+        );
+        // ...otherwise it is part of the title.
+        assert_eq!(
+            open_line(&mut vfs, cwd, "open Text Editor"),
+            open("Text Editor", None)
+        );
+        // A lone argument is always the app, even with a dot.
+        assert_eq!(open_line(&mut vfs, cwd, "open v1.2"), open("v1.2", None));
+    }
+
+    #[test]
     fn sdi_list_signals_host() {
         let mut reg = CommandRegistry::new();
         register_ui_commands(&mut reg);
@@ -296,7 +459,7 @@ mod tests {
         let (reg, mut vfs) = setup();
         let s = assert_text!(exec(&reg, &mut vfs, "notify Hello World").unwrap());
         assert!(s.contains("Hello World"));
-        let data = vfs.read("/var/notify/message").unwrap();
+        let data = vfs.read(NOTIFY_PATH).unwrap();
         assert_eq!(data, b"info:Hello World");
     }
 
@@ -305,7 +468,7 @@ mod tests {
         let (reg, mut vfs) = setup();
         let s = assert_text!(exec(&reg, &mut vfs, "notify --level error Something broke").unwrap());
         assert!(s.contains("[error]"));
-        let data = vfs.read("/var/notify/message").unwrap();
+        let data = vfs.read(NOTIFY_PATH).unwrap();
         assert_eq!(data, b"error:Something broke");
     }
 

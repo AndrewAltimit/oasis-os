@@ -1,78 +1,85 @@
 <!DOCTYPE html>
+<!-- Local dev page: ./scripts/build-wasm.sh, then python3 -m http.server 8080 at the repo root and open http://localhost:8080/www/. Shares site/css and site/js with site/demo/index.html; keep the two in step. -->
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>OASIS_OS</title>
-  <link rel="stylesheet" href="style.css">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Live demo — OASIS_OS</title>
+  <meta name="description" content="OASIS_OS running in your browser via WebAssembly: 17 skins, windowed apps, a terminal and a browser engine.">
+  <meta name="theme-color" content="#08090d">
+  <link rel="icon" href="../site/favicon.svg" type="image/svg+xml">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&amp;display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="../site/css/site.css">
+  <link rel="stylesheet" href="../site/css/demo.css">
 </head>
-<body>
-  <div class="demo-bar">
-    <span class="title">OASIS_OS</span>
-    <div class="spacer"></div>
-    <label>
+<body class="page-demo">
+  <header class="demo-bar">
+    <a class="brand" href="../site/" aria-label="OASIS_OS home">
+      <span class="brand__mark" aria-hidden="true"></span>
+      <span class="brand__name">OASIS<span class="brand__us">_</span>OS</span>
+    </a>
+    <span class="demo-bar__label">Live demo &middot; WebAssembly</span>
+    <span class="demo-bar__spacer"></span>
+    <label class="skin-picker">
+      <span>Skin</span>
       <select id="skin-select">
-        <optgroup label="Classic Skins">
-          <option value="classic">Classic</option>
-          <option value="xp">XP</option>
-        </optgroup>
-        <optgroup label="Built-in Skins">
-          <option value="modern">Modern</option>
-          <option value="desktop">Desktop</option>
-          <option value="corrupted">Corrupted</option>
-        </optgroup>
-        <optgroup label="New Skins">
-          <option value="macos">macOS</option>
-          <option value="gnome">GNOME</option>
-          <option value="retro-cga">Retro CGA</option>
-          <option value="balatro">Balatro</option>
-          <option value="paper">Paper</option>
-          <option value="win95">Win95</option>
-          <option value="solarized">Solarized</option>
-          <option value="vaporwave">Vaporwave</option>
-          <option value="highcontrast">High Contrast</option>
-          <option value="altimit">Altimit</option>
-        </optgroup>
+          <!-- BEGIN skins:options (generated from site/data/skins.json by scripts/gen-skin-list.sh; do not edit) -->
+          <optgroup label="PSP dashboard">
+            <option value="psix-hifi">PSIX HiFi</option>
+            <option value="psix-tribute">PSIX Tribute</option>
+            <option value="classic">Classic</option>
+            <option value="altimit">Altimit</option>
+          </optgroup>
+          <optgroup label="Desktop">
+            <option value="xp">XP</option>
+            <option value="win95">Win95</option>
+            <option value="macos">macOS</option>
+            <option value="gnome">GNOME</option>
+            <option value="desktop">Desktop</option>
+            <option value="modern">Modern</option>
+          </optgroup>
+          <optgroup label="Aesthetic">
+            <option value="balatro">Balatro</option>
+            <option value="vaporwave">Vaporwave</option>
+            <option value="solarized">Solarized</option>
+            <option value="paper">Paper</option>
+            <option value="retro-cga">Retro CGA</option>
+          </optgroup>
+          <optgroup label="Terminal &amp; accessibility">
+            <option value="corrupted">Corrupted</option>
+            <option value="highcontrast">High Contrast</option>
+          </optgroup>
+          <!-- END skins:options -->
       </select>
     </label>
-  </div>
-  <div id="container">
-    <!-- Shader canvas (WebGL2, behind 2D canvas, added dynamically by shader_bridge.rs) -->
-    <canvas id="oasis" width="480" height="272" tabindex="0"></canvas>
-    <div class="instructions" id="instructions">
-      <strong>Controls</strong><br>
-      <kbd>Arrow keys</kbd> Navigate &nbsp; <kbd>Enter</kbd> Select &nbsp; <kbd>Esc</kbd> Back<br>
-      Mouse click supported. Type in the terminal tab.
-      <span class="dismiss" id="dismiss-btn">Dismiss</span>
-    </div>
-  </div>
-  <noscript>OASIS_OS requires JavaScript and WebAssembly.</noscript>
-  <script>
-    const params = new URLSearchParams(window.location.search);
-    const currentSkin = params.get("skin") || "classic";
-    document.getElementById("skin-select").value = currentSkin;
+    <nav class="demo-bar__links" aria-label="Demo">
+      <button type="button" id="help-btn" aria-expanded="true" aria-controls="instructions">Controls</button>
+      <a class="hide-sm" href="../site/journal/">Journal</a>
+      <a class="hide-sm" href="https://github.com/AndrewAltimit/oasis-os/blob/main/docs/wasm-backend.md">Docs</a>
+      <a class="is-boxed" href="https://github.com/AndrewAltimit/oasis-os">GitHub</a>
+    </nav>
+  </header>
 
-    document.getElementById("skin-select").addEventListener("change", (e) => {
-      const url = new URL(window.location);
-      url.searchParams.set("skin", e.target.value);
-      window.location.href = url.toString();
-    });
-
-    document.getElementById("dismiss-btn").addEventListener("click", () => {
-      document.getElementById("instructions").style.opacity = "0";
-      setTimeout(() => {
-        document.getElementById("instructions").style.display = "none";
-      }, 300);
-    });
-
-    setTimeout(() => {
-      const el = document.getElementById("instructions");
-      if (el && el.style.display !== "none") {
-        el.style.opacity = "0";
-        setTimeout(() => { el.style.display = "none"; }, 300);
-      }
-    }, 8000);
-  </script>
+  <main id="container">
+    <canvas id="oasis" width="480" height="272" tabindex="0" aria-label="OASIS_OS shell"></canvas>
+    <div class="boot" id="boot" role="status"><span class="boot__msg">Booting OASIS_OS</span><span class="boot__bar" aria-hidden="true"></span></div>
+    <section class="instructions" id="instructions" aria-labelledby="controls-title">
+      <h2 id="controls-title">Controls</h2>
+      <ul>
+        <li><kbd>&larr;</kbd><kbd>&uarr;</kbd><kbd>&rarr;</kbd><kbd>&darr;</kbd> navigate &nbsp; <kbd>Enter</kbd> select &nbsp; <kbd>Esc</kbd> back</li>
+        <li>Mouse: click icons, drag and resize windows. Type in the Terminal app.</li>
+        <li>This WebAssembly build has no in-page JavaScript engine or raw TCP; live web pages and YouTube open in an overlay above the canvas.</li>
+      </ul>
+      <div class="instructions__foot">
+        <a href="../site/#skins">Compare all 17 skins &rarr;</a>
+        <button type="button" class="dismiss" id="dismiss-btn">Got it</button>
+      </div>
+    </section>
+  </main>
+  <noscript>OASIS_OS needs JavaScript and WebAssembly.</noscript>
+  <script src="../site/js/demo.js" defer></script>
   <script type="module" src="index.js"></script>
 </body>
 </html>

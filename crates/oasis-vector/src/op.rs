@@ -143,9 +143,9 @@ pub enum VectorOp {
     },
     /// Nested group with optional translate offset and opacity.
     ///
-    /// The translate is applied relative to the parent coordinate space.
-    /// Opacity (0-255) is applied to the group as a whole via `push_translate`
-    /// and per-op alpha modulation.
+    /// The translate is applied relative to the parent coordinate space
+    /// (via `push_translate`). Opacity (0-255) is multiplied into the alpha
+    /// of every op in the group at render time.
     Group {
         ops: Vec<VectorOp>,
         translate: (i32, i32),
@@ -212,6 +212,9 @@ impl VectorOp {
     /// Scale all coordinates and dimensions by the given factor.
     ///
     /// Used to resize icons from design-space (22x22) to display-space.
+    /// Radii, font sizes and rectangle stroke widths scale too (never below
+    /// 1); line, circle, arc and polygon stroke widths and dash patterns are
+    /// kept as authored.
     pub fn scale(&mut self, factor: f32) {
         let s = |v: &mut i32| *v = (*v as f32 * factor) as i32;
         let su = |v: &mut u32| *v = (*v as f32 * factor) as u32;
@@ -317,9 +320,7 @@ impl VectorOp {
 
     /// Apply an alpha multiplier to this op (modulates existing alpha).
     pub fn modulate_alpha(&mut self, alpha: u8) {
-        let modulate = |c: &mut Color| {
-            c.a = ((c.a as u16 * alpha as u16) / 255) as u8;
-        };
+        let modulate = |c: &mut Color| *c = modulate_color(*c, alpha);
         match self {
             Self::FillRect { color, .. }
             | Self::FillRoundedRect { color, .. }
@@ -335,11 +336,53 @@ impl VectorOp {
             | Self::StrokeArc { color, .. }
             | Self::Line { color, .. }
             | Self::DashedLine { color, .. } => modulate(color),
-            Self::RectGradient { .. } | Self::PolygonGradient { .. } => {},
+            Self::RectGradient { gradient, .. } => {
+                *gradient = modulate_gradient(*gradient, alpha);
+            },
+            Self::PolygonGradient {
+                color_start,
+                color_end,
+                ..
+            } => {
+                modulate(color_start);
+                modulate(color_end);
+            },
             Self::Group { opacity, .. } => {
                 *opacity = ((*opacity as u16 * alpha as u16) / 255) as u8;
             },
         }
+    }
+}
+
+/// `color` with its alpha multiplied by `alpha / 255`.
+pub(crate) fn modulate_color(mut color: Color, alpha: u8) -> Color {
+    color.a = ((color.a as u16 * alpha as u16) / 255) as u8;
+    color
+}
+
+/// `gradient` with every stop's alpha multiplied by `alpha / 255`.
+pub(crate) fn modulate_gradient(gradient: GradientStyle, alpha: u8) -> GradientStyle {
+    let m = |c: Color| modulate_color(c, alpha);
+    match gradient {
+        GradientStyle::Vertical { top, bottom } => GradientStyle::Vertical {
+            top: m(top),
+            bottom: m(bottom),
+        },
+        GradientStyle::Horizontal { left, right } => GradientStyle::Horizontal {
+            left: m(left),
+            right: m(right),
+        },
+        GradientStyle::FourCorner {
+            top_left,
+            top_right,
+            bottom_left,
+            bottom_right,
+        } => GradientStyle::FourCorner {
+            top_left: m(top_left),
+            top_right: m(top_right),
+            bottom_left: m(bottom_left),
+            bottom_right: m(bottom_right),
+        },
     }
 }
 

@@ -467,7 +467,7 @@ mod tests {
         assert_eq!(words[0].text, "");
         assert!(
             words[0].trailing_space,
-            "the word must carry a trailing space so paint_text writes \
+            "the word must carry a trailing space so record_text writes \
              one space_width into the line",
         );
     }

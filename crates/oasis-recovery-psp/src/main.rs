@@ -58,7 +58,7 @@ fn psp_main() {
         Err(e) => {
             print(&format!("  Net init failed: {e}\n"));
             print("  (Will retry after WiFi connect)\n");
-        }
+        },
     }
 
     // Check WLAN switch.
@@ -174,9 +174,7 @@ fn server_main() {
     loop {
         let mut client_addr: psp::sys::sockaddr = unsafe { core::mem::zeroed() };
         let mut addr_len: u32 = core::mem::size_of::<psp::sys::sockaddr>() as u32;
-        let cfd = unsafe {
-            psp::sys::sceNetInetAccept(fd, &mut client_addr, &mut addr_len)
-        };
+        let cfd = unsafe { psp::sys::sceNetInetAccept(fd, &mut client_addr, &mut addr_len) };
         if cfd < 0 {
             psp::thread::sleep_ms(100);
             continue;
@@ -188,16 +186,17 @@ fn server_main() {
 
 fn handle_client(cfd: i32) {
     let mut buf = [0u8; 512];
-    let n = unsafe {
-        psp::sys::sceNetInetRecv(cfd, buf.as_mut_ptr() as *mut c_void, 512, 0)
-    };
+    let n = unsafe { psp::sys::sceNetInetRecv(cfd, buf.as_mut_ptr() as *mut c_void, 512, 0) };
     if n <= 0 {
         unsafe { psp::sys::sceNetInetClose(cfd) };
         return;
     }
 
     let raw = &buf[..n as usize];
-    let cmd = raw.split(|&b| b == b'\n' || b == b'\r').next().unwrap_or(raw);
+    let cmd = raw
+        .split(|&b| b == b'\n' || b == b'\r')
+        .next()
+        .unwrap_or(raw);
 
     if cmd == b"ping" {
         send(cfd, b"pong\n");
@@ -226,8 +225,11 @@ fn handle_client(cfd: i32) {
             let size = parse_u32(parts[0]);
             let path = parts[1];
             if size > 0 && size < 16_000_000 {
-                let header_end = raw.iter().position(|&b| b == b'\n')
-                    .map(|p| p + 1).unwrap_or(n as usize);
+                let header_end = raw
+                    .iter()
+                    .position(|&b| b == b'\n')
+                    .map(|p| p + 1)
+                    .unwrap_or(n as usize);
                 let leftover = &buf[header_end..n as usize];
                 let path_str = core::str::from_utf8(path).unwrap_or("?");
                 print(&format!("[<] upload {} bytes -> {}\n", size, path_str));
@@ -290,11 +292,15 @@ fn receive_file(cfd: i32, size: u32, path: &[u8], leftover: &[u8]) {
     while received < size {
         let n = unsafe {
             psp::sys::sceNetInetRecv(
-                cfd, buf.as_mut_ptr() as *mut c_void,
-                buf.len().min((size - received) as usize), 0,
+                cfd,
+                buf.as_mut_ptr() as *mut c_void,
+                buf.len().min((size - received) as usize),
+                0,
             )
         };
-        if n <= 0 { break; }
+        if n <= 0 {
+            break;
+        }
         unsafe {
             psp::sys::sceIoWrite(fd, buf.as_ptr() as *const c_void, n as usize);
         }
@@ -327,13 +333,7 @@ fn read_file(cfd: i32, path: &[u8]) {
     path_buf.extend_from_slice(path);
     path_buf.push(0);
 
-    let fd = unsafe {
-        psp::sys::sceIoOpen(
-            path_buf.as_ptr(),
-            psp::sys::IoOpenFlags::RD_ONLY,
-            0,
-        )
-    };
+    let fd = unsafe { psp::sys::sceIoOpen(path_buf.as_ptr(), psp::sys::IoOpenFlags::RD_ONLY, 0) };
     if fd < psp::sys::SceUid(0) {
         send(cfd, b"err: open failed\n");
         return;
@@ -355,19 +355,12 @@ fn read_file(cfd: i32, path: &[u8]) {
     let mut buf = [0u8; 4096];
     while remaining > 0 {
         let chunk = buf.len().min(remaining as usize);
-        let n = unsafe {
-            psp::sys::sceIoRead(fd, buf.as_mut_ptr() as *mut c_void, chunk as u32)
-        };
+        let n = unsafe { psp::sys::sceIoRead(fd, buf.as_mut_ptr() as *mut c_void, chunk as u32) };
         if n <= 0 {
             break;
         }
         unsafe {
-            psp::sys::sceNetInetSend(
-                cfd,
-                buf.as_ptr() as *const c_void,
-                n as usize,
-                0,
-            );
+            psp::sys::sceNetInetSend(cfd, buf.as_ptr() as *const c_void, n as usize, 0);
         }
         remaining -= n as i64;
     }
@@ -417,7 +410,11 @@ fn send(cfd: i32, data: &[u8]) {
 
 fn parse_u32(data: &[u8]) -> u32 {
     data.iter().fold(0u32, |acc, &b| {
-        if b >= b'0' && b <= b'9' { acc * 10 + (b - b'0') as u32 } else { acc }
+        if b >= b'0' && b <= b'9' {
+            acc * 10 + (b - b'0') as u32
+        } else {
+            acc
+        }
     })
 }
 

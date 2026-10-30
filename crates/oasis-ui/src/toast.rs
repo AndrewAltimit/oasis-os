@@ -11,7 +11,7 @@
 use std::collections::VecDeque;
 
 use crate::context::DrawContext;
-use crate::layout;
+use crate::layout::HAlign;
 use crate::widget::Widget;
 use oasis_types::backend::Color;
 use oasis_types::error::Result;
@@ -305,11 +305,13 @@ impl Widget for ToastStack {
                 .fill_rounded_rect(tx, ty, toast_w, toast_h, radius, bg)?;
 
             // Centered message text.
-            let text_w = ctx.backend.measure_text(&toast.message, fs);
-            let text_x = tx + layout::center(toast_w, text_w);
-            let text_y = ty + layout::center(toast_h, text_h);
-            ctx.backend
-                .draw_text(&toast.message, text_x, text_y, fs, text_color)?;
+            ctx.text_in(
+                (tx, ty, toast_w, toast_h),
+                &toast.message,
+                fs,
+                text_color,
+                HAlign::Center,
+            )?;
         }
 
         Ok(())
@@ -320,7 +322,7 @@ impl Widget for ToastStack {
 mod tests {
     use super::*;
     use crate::context::DrawContext;
-    use crate::test_utils::{self, MockBackend};
+    use crate::test_utils::{self, RecordingBackend};
     use crate::theme::Theme;
     use crate::widget::Widget;
 
@@ -502,7 +504,7 @@ mod tests {
     #[test]
     fn draw_empty_stack_no_calls() {
         let theme = Theme::dark();
-        let mut backend = MockBackend::new();
+        let mut backend = RecordingBackend::default();
         {
             let mut ctx = DrawContext::new(&mut backend, &theme);
             let stack = ToastStack::new();
@@ -515,7 +517,7 @@ mod tests {
     #[test]
     fn draw_emits_text_and_rect() {
         let theme = Theme::dark();
-        let mut backend = MockBackend::new();
+        let mut backend = RecordingBackend::default();
         {
             let mut ctx = DrawContext::new(&mut backend, &theme);
             let mut stack = ToastStack::new();
@@ -533,7 +535,7 @@ mod tests {
     #[test]
     fn measure_empty() {
         let theme = Theme::dark();
-        let mut backend = MockBackend::new();
+        let mut backend = RecordingBackend::default();
         let ctx = DrawContext::new(&mut backend, &theme);
         let stack = ToastStack::new();
         let (w, h) = stack.measure(&ctx, 400, 300);
@@ -544,7 +546,7 @@ mod tests {
     #[test]
     fn measure_nonempty() {
         let theme = Theme::dark();
-        let mut backend = MockBackend::new();
+        let mut backend = RecordingBackend::default();
         let ctx = DrawContext::new(&mut backend, &theme);
         let mut stack = ToastStack::new();
         stack.show("A toast message", ToastLevel::Info, 60);

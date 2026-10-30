@@ -27,71 +27,40 @@ unsafe extern "C" fn hooked_wait_event_flag(
     out_bits: *mut u32,
     timeout: *mut u32,
 ) -> i32 {
-    let orig = match ORIG_WAIT_EVFLAG {
-        Some(f) => f,
-        None => return -1,
-    };
-
-    // Only intervene on infinite-timeout calls that match known ME pattern.
-    if timeout.is_null() {
-        let me_uid = ME_EVFLAG_UID.load(Ordering::Relaxed);
-
-        // Match: known ME UID, or any event flag with specific bit patterns
-        // used by the ME RPC (bits 0x1 or 0x2 with OR-CLEAR wait mode).
-        // The ME RPC uses WaitEventFlag(uid, 1, OR|CLEAR, ..., NULL).
-        let is_me_pattern = (me_uid > 0 && ev_id == me_uid)
-            || (bits <= 0x3 && (wait & 0x21) == 0x21);
-
-        if is_me_pattern {
-            let mut timeout_us: u32 = 5_000_000;
-            let ret = orig(ev_id, bits, wait, out_bits, &mut timeout_us);
-            if ret == 0x800201A8u32 as i32 {
-                // Timed out — cache this UID for faster future matching.
-                if me_uid < 0 {
-                    ME_EVFLAG_UID.store(ev_id, Ordering::Release);
-                }
-            }
-            return ret;
-        }
-    }
-
-    orig(ev_id, bits, wait, out_bits, timeout)
-}
-
-/// Find the SceMediaEngineRpc event flag (kernel mode).
-fn find_me_rpc_event_flag() -> Option<i32> {
-    let mut info: psp::sys::SceKernelEventFlagInfo = unsafe { core::mem::zeroed() };
-    info.size = core::mem::size_of::<psp::sys::SceKernelEventFlagInfo>();
-
-    let mut found_any = false;
-    for uid in 1..0x10000i32 {
-        info.name = [0u8; 32];
-        let ret = unsafe {
-            psp::sys::sceKernelReferEventFlagStatus(
-                psp::sys::SceUid(uid),
-                &mut info,
-            )
+    // SAFETY: installed in place of sceKernelWaitEventFlag, so the kernel calls it with that
+    // syscall's arguments. ORIG_WAIT_EVFLAG is written once by `install_hook` before the hook is
+    // live and is copied, not borrowed; `out_bits` / `timeout` are forwarded unchanged.
+    unsafe {
+        let orig = match ORIG_WAIT_EVFLAG {
+            Some(f) => f,
+            None => return -1,
         };
-        if ret >= 0 {
-            let name = info.name.split(|&b| b == 0).next().unwrap_or(&[]);
-            // Log ALL found event flags (first scan only).
-            if !found_any || name.starts_with(b"Sce") {
-                crate::debug_log(name);
-            }
-            found_any = true;
-            if name == b"SceMediaEngineRpc"
-                || name.starts_with(b"SceMeRpc")
-                || name.starts_with(b"SceMedia")
-                || name.starts_with(b"SceMpeg")
-                || name.starts_with(b"SceME")
-                || name.starts_with(b"SceMe")
-            {
-                crate::debug_log(b"[ME-WD] ^^^ MATCH!");
-                return Some(uid);
+
+        // Only intervene on infinite-timeout calls that match known ME pattern.
+        if timeout.is_null() {
+            let me_uid = ME_EVFLAG_UID.load(Ordering::Relaxed);
+
+            // Match: known ME UID, or any event flag with specific bit patterns
+            // used by the ME RPC (bits 0x1 or 0x2 with OR-CLEAR wait mode).
+            // The ME RPC uses WaitEventFlag(uid, 1, OR|CLEAR, ..., NULL).
+            let is_me_pattern =
+                (me_uid > 0 && ev_id == me_uid) || (bits <= 0x3 && (wait & 0x21) == 0x21);
+
+            if is_me_pattern {
+                let mut timeout_us: u32 = 5_000_000;
+                let ret = orig(ev_id, bits, wait, out_bits, &mut timeout_us);
+                if ret == 0x800201A8u32 as i32 {
+                    // Timed out — cache this UID for faster future matching.
+                    if me_uid < 0 {
+                        ME_EVFLAG_UID.store(ev_id, Ordering::Release);
+                    }
+                }
+                return ret;
             }
         }
+
+        orig(ev_id, bits, wait, out_bits, timeout)
     }
-    None
 }
 
 /// Install the WaitEventFlag hook immediately (no deferred scanning).

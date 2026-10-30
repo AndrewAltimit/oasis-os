@@ -26,6 +26,15 @@ const IDLE_POLL: std::time::Duration = std::time::Duration::from_millis(5);
 /// Pump-thread sleep when the readahead queue is full.
 const FULL_BACKOFF: std::time::Duration = std::time::Duration::from_millis(20);
 
+/// How long the pump tolerates a source that produces nothing (while the
+/// readahead queue has room) before declaring the stream dead.
+///
+/// A peer that disappears without a FIN/RST (NAT drop, Wi-Fi loss, a CDN
+/// node that hangs) leaves a non-blocking socket returning `WouldBlock`
+/// forever; without this the radio would sit in Connecting/Buffering
+/// indefinitely. Time spent paused on a full readahead queue does not count.
+pub const STALL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(20);
+
 // SourceState encoding for the shared atomic.
 const STATE_CONNECTING: u8 = 0;
 const STATE_ACTIVE: u8 = 1;
@@ -66,7 +75,7 @@ impl ThreadedSource {
     /// Wrap an already-connected source; all further I/O happens on the
     /// pump thread.
     pub fn spawn_from(inner: Box<dyn RadioSource + Send>) -> Self {
-        Self::spawn_connect_inner(move |_| Ok(inner))
+        Self::spawn_connect_inner(move |_| Ok(inner), STALL_TIMEOUT)
     }
 
     /// Run `connect` on the background thread to build the source (TCP +
@@ -75,10 +84,10 @@ impl ThreadedSource {
     where
         F: FnOnce() -> std::result::Result<Box<dyn RadioSource + Send>, String> + Send + 'static,
     {
-        Self::spawn_connect_inner(move |_| connect())
+        Self::spawn_connect_inner(move |_| connect(), STALL_TIMEOUT)
     }
 
-    fn spawn_connect_inner<F>(connect: F) -> Self
+    fn spawn_connect_inner<F>(connect: F, stall_timeout: std::time::Duration) -> Self
     where
         F: FnOnce(&Shared) -> std::result::Result<Box<dyn RadioSource + Send>, String>
             + Send
@@ -106,7 +115,7 @@ impl ThreadedSource {
             if let Some(url) = inner.streaming_url() {
                 let _ = thread_shared.url.set(url.to_string());
             }
-            pump(inner, &thread_shared, &tx);
+            pump(inner, &thread_shared, &tx, stall_timeout);
         });
         Self { shared, rx }
     }
@@ -126,10 +135,19 @@ impl Shared {
 }
 
 /// Pump loop: poll the inner source, forward chunks, honour readahead
-/// backpressure and the stop flag.
-fn pump(mut inner: Box<dyn RadioSource + Send>, shared: &Shared, tx: &Sender<AudioChunk>) {
+/// backpressure and the stop flag, and give up on a source that stays
+/// silent for `stall_timeout`.
+fn pump(
+    mut inner: Box<dyn RadioSource + Send>,
+    shared: &Shared,
+    tx: &Sender<AudioChunk>,
+    stall_timeout: std::time::Duration,
+) {
     let mut total_bytes: u64 = 0;
     let mut last_chunk = std::time::Instant::now();
+    // Like `last_chunk`, but also reset while paused on a full queue, so
+    // backpressure is never mistaken for a stalled network.
+    let mut last_progress = std::time::Instant::now();
     let mut last_log = std::time::Instant::now();
     loop {
         if shared.stop.load(Ordering::Acquire) {
@@ -149,7 +167,20 @@ fn pump(mut inner: Box<dyn RadioSource + Send>, shared: &Shared, tx: &Sender<Aud
         }
         if shared.buffered.load(Ordering::Acquire) >= READAHEAD_BYTES {
             std::thread::sleep(FULL_BACKOFF);
+            last_progress = std::time::Instant::now();
             continue;
+        }
+        if last_progress.elapsed() >= stall_timeout {
+            log::warn!(
+                "radio pump: no data for {}s, dropping the stream",
+                last_progress.elapsed().as_secs()
+            );
+            inner.disconnect();
+            shared.fail(&format!(
+                "stream stalled: no data for {}s",
+                stall_timeout.as_secs_f32()
+            ));
+            return;
         }
         match inner.poll() {
             Ok(Some(chunk)) => {
@@ -158,6 +189,7 @@ fn pump(mut inner: Box<dyn RadioSource + Send>, shared: &Shared, tx: &Sender<Aud
                 }
                 total_bytes += chunk.data.len() as u64;
                 last_chunk = std::time::Instant::now();
+                last_progress = last_chunk;
                 shared
                     .buffered
                     .fetch_add(chunk.data.len(), Ordering::AcqRel);
@@ -391,6 +423,79 @@ mod tests {
             std::thread::sleep(std::time::Duration::from_millis(1));
         }
         assert_eq!(src.source_type(), "vfs");
+    }
+
+    /// A loopback Icecast server that answers the request with a 200 head
+    /// and a little audio, then keeps the connection open and silent (a
+    /// dead peer that never sends FIN/RST). The pump must give up after the
+    /// stall timeout instead of polling `WouldBlock` forever.
+    #[test]
+    fn silent_peer_is_dropped_after_stall_timeout() {
+        use std::io::{Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
+        let server = std::thread::spawn(move || {
+            let (mut conn, _) = listener.accept().unwrap();
+            let mut req = Vec::new();
+            let mut buf = [0u8; 1024];
+            while !req.windows(4).any(|w| w == b"\r\n\r\n") {
+                let n = conn.read(&mut buf).unwrap();
+                assert!(n > 0);
+                req.extend_from_slice(&buf[..n]);
+            }
+            let mut resp = b"HTTP/1.0 200 OK\r\n\r\n".to_vec();
+            resp.extend_from_slice(&[0x11; 512]);
+            conn.write_all(&resp).unwrap();
+            // Go silent but keep the socket open until the test is done.
+            let _ = release_rx.recv();
+        });
+
+        let mut src = ThreadedSource::spawn_connect_inner(
+            move |_| {
+                use oasis_types::backend::NetworkBackend;
+                let stream = oasis_net::StdNetworkBackend::new()
+                    .connect("127.0.0.1", port)
+                    .map_err(|e| e.to_string())?;
+                Ok(Box::new(crate::radio::IcecastSource::new(
+                    stream,
+                    "127.0.0.1",
+                    "/live",
+                )) as Box<dyn RadioSource + Send>)
+            },
+            std::time::Duration::from_millis(400),
+        );
+
+        let started = std::time::Instant::now();
+        let mut audio = 0usize;
+        let err = loop {
+            assert!(
+                started.elapsed() < std::time::Duration::from_secs(10),
+                "silent peer was never dropped"
+            );
+            match src.poll() {
+                Ok(Some(chunk)) => audio += chunk.data.len(),
+                Ok(None) => std::thread::sleep(std::time::Duration::from_millis(5)),
+                Err(e) => break e,
+            }
+        };
+        assert_eq!(audio, 512, "audio sent before the stall is delivered");
+        assert!(format!("{err}").contains("stalled"), "got: {err}");
+        assert_eq!(src.state(), SourceState::Error);
+        release_tx.send(()).unwrap();
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn full_queue_is_not_a_stall() {
+        // Never consume: the pump sits on a full readahead queue far longer
+        // than the (tiny) stall timeout, which must not count as a stall.
+        let src = ThreadedSource::spawn_connect_inner(
+            |_| Ok(Box::new(VfsSource::new(vec![0xAB; 1024 * 1024])) as Box<dyn RadioSource + Send>),
+            std::time::Duration::from_millis(100),
+        );
+        std::thread::sleep(std::time::Duration::from_millis(600));
+        assert_ne!(src.shared.state.load(Ordering::Acquire), STATE_ERROR);
     }
 
     #[test]

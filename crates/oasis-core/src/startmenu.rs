@@ -9,9 +9,9 @@ use crate::backend::Color;
 use crate::input::Button;
 use crate::sdi::SdiRegistry;
 use crate::sdi::helpers::{ensure_border, ensure_rounded_fill, ensure_text, hide_objects};
-use crate::transition::ease_out_cubic;
 use oasis_types::bitmap_font::glyph_advance_scaled;
 use oasis_types::color::{darken, with_alpha};
+use oasis_types::easing::ease_out_cubic;
 
 /// Pixel width of `s` rendered at `font_size`.
 fn text_px(s: &str, font_size: u16) -> i32 {
@@ -115,7 +115,7 @@ impl StartMenuState {
         let pad = at.menu.pad_inner;
         let menu_h =
             header_h + (pad + rows as i32 * at.menu.item_row_height + pad) as u32 + footer_h;
-        let bar_y = at.screen_h.saturating_sub(at.bottombar_height) as i32;
+        let bar_y = crate::bottombar::bottom_bar_y(at);
         let btn_y = bar_y + 3;
         let menu_y = bar_y - menu_h as i32 - 2;
         Self {
@@ -334,41 +334,13 @@ impl StartMenuState {
     }
 
     /// Test whether a pointer click hits a menu item. Returns the action if so.
+    ///
+    /// Uses the same cell mapping as the hover highlight, so a click lands
+    /// on exactly the item that is highlighted under the pointer.
     pub fn hit_test_item(&self, x: i32, y: i32) -> Option<StartMenuAction> {
-        if !self.open {
-            return None;
-        }
-        let menu_w = self.at.menu.panel_width;
-        let menu_x = self.at.menu.panel_x;
-        // Check if within menu panel.
-        if x < menu_x
-            || x >= menu_x + menu_w as i32
-            || y < self.menu_y
-            || y >= self.menu_y + self.menu_h as i32
-        {
-            return None;
-        }
-        // Items start after header.
-        let pad = self.at.menu.pad_inner;
-        let items_top = self.menu_y + self.header_h as i32 + pad;
-        let rel_y = y - items_top;
-        let rel_x = x - menu_x - pad;
-        if rel_y < 0 || rel_x < 0 {
-            return None;
-        }
-        let cols = self.at.menu.columns.max(1);
-        let col_w = (menu_w as i32 - pad * 2) / cols as i32;
-        if col_w <= 0 || self.at.menu.item_row_height <= 0 {
-            return None;
-        }
-        let row = rel_y / self.at.menu.item_row_height;
-        let col = rel_x / col_w;
-        let idx = row as usize * cols + col as usize;
-        if idx < self.items.len() {
-            Some(self.items[idx].action.clone())
-        } else {
-            None
-        }
+        self.cell_index_at(x, y)
+            .and_then(|idx| self.items.get(idx))
+            .map(|item| item.action.clone())
     }
 
     /// Test whether a click is inside the open menu panel (for consuming clicks).
@@ -876,6 +848,27 @@ mod tests {
         let x = sm.at.menu.panel_x + pad + 2;
         let action = sm.hit_test_item(x, y);
         assert!(action.is_some());
+    }
+
+    #[test]
+    fn click_in_right_padding_hits_nothing_like_hover() {
+        // Clicks past the last column (the right inner padding) used to
+        // compute col == columns and launch the first item of the *next*
+        // row, while the hover highlight showed nothing there.
+        let mut sm = StartMenuState::new(StartMenuState::default_items(&ActiveTheme::default()));
+        sm.open = true;
+        sm.at.menu.columns = 2;
+        sm.at.menu.pad_inner = 6;
+        let y = sm.menu_y + sm.header_h as i32 + sm.at.menu.pad_inner + 2;
+        let right_pad_x =
+            sm.at.menu.panel_x + sm.at.menu.panel_width as i32 - sm.at.menu.pad_inner + 1;
+        assert!(sm.items.len() > 2, "need a second row");
+        assert_eq!(sm.cell_index_at(right_pad_x, y), None);
+        assert_eq!(sm.hit_test_item(right_pad_x, y), None);
+        // Inside the grid, click and hover agree.
+        let x = sm.at.menu.panel_x + sm.at.menu.pad_inner + 2;
+        let idx = sm.cell_index_at(x, y).expect("first cell");
+        assert_eq!(sm.hit_test_item(x, y), Some(sm.items[idx].action.clone()));
     }
 
     #[test]

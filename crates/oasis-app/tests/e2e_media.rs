@@ -6,6 +6,7 @@ use oasis_app::boot_splash::{BootSplash, SplashTheme};
 use oasis_app::harness::{Harness, HarnessOptions};
 use oasis_app::headless::HeadlessBackend;
 use oasis_app::{BootObserver, Mode};
+use oasis_apps::TvGuideRunnerExt as _;
 use oasis_core::backend::{SdiCore, SdiTextures};
 
 // ---------------------------------------------------------------------------
@@ -15,8 +16,8 @@ use oasis_core::backend::{SdiCore, SdiTextures};
 #[cfg(feature = "_video")]
 mod tv {
     use super::*;
-    use oasis_core::apps::tv_guide::catalog::ChannelCatalog;
-    use oasis_core::apps::tv_guide::{TvGuideState, VideoEpisode};
+    use oasis_apps::tv_guide::catalog::ChannelCatalog;
+    use oasis_apps::tv_guide::{TvGuideState, VideoEpisode};
     use oasis_core::input::Key;
 
     fn mock_episodes(channel: u32, count: usize) -> Vec<VideoEpisode> {
@@ -69,11 +70,11 @@ mod tv {
         );
         let st = h.state();
         assert!(
-            st.video_player.is_active(),
+            st.tv.video_player.is_active(),
             "tune started (injected) playback"
         );
         assert!(
-            st.tv_audio_track.is_some(),
+            st.tv.audio_track.is_some(),
             "tune opened a streaming audio track"
         );
         assert_eq!(st.mode, Mode::Desktop);
@@ -90,7 +91,7 @@ mod tv {
         assert_eq!(log.pcm_chunks.len(), before + 1, "chunk reached the output");
         let chunk = log.pcm_chunks.last().unwrap();
         assert_eq!((chunk.channels, chunk.sample_rate), (2, 48_000));
-        assert_eq!(Some(chunk.track), h.state().tv_audio_track);
+        assert_eq!(Some(chunk.track), h.state().tv.audio_track);
         chunk.samples.clone()
     }
 
@@ -188,7 +189,7 @@ mod tv {
     #[test]
     fn closing_the_tv_guide_stops_playback_and_releases_audio() {
         let mut h = open_and_tune();
-        let track = h.state().tv_audio_track.unwrap();
+        let track = h.state().tv.audio_track.unwrap();
         // Tuning enters kiosk fullscreen; leave it (F11) so the titlebar
         // close button exists, then close the window with the mouse.
         assert!(
@@ -198,7 +199,10 @@ mod tv {
         h.send(&[oasis_core::input::InputEvent::ToggleFullscreen]);
         h.settle();
         assert!(!h.find_window("TV Guide").unwrap().fullscreen);
-        assert!(h.state().video_player.is_active(), "still playing windowed");
+        assert!(
+            h.state().tv.video_player.is_active(),
+            "still playing windowed"
+        );
         assert!(
             h.close_window("TV Guide"),
             "close button: {:?}",
@@ -206,11 +210,181 @@ mod tv {
         );
         h.settle();
         assert!(h.find_window("TV Guide").is_none());
-        assert!(!h.state().video_player.is_active(), "playback stopped");
-        assert!(h.state().tv_audio_track.is_none(), "track released");
+        assert!(!h.state().tv.video_player.is_active(), "playback stopped");
+        assert!(h.state().tv.audio_track.is_none(), "track released");
         assert!(h.audio().tracks_unloaded.contains(&track));
         assert_eq!(h.mode(), Mode::Dashboard);
     }
+}
+
+// ---------------------------------------------------------------------------
+// `music` terminal command -> media controller -> audio output
+// ---------------------------------------------------------------------------
+
+/// Whether the last terminal output contains `needle`.
+fn term_shows(h: &Harness, needle: &str) -> bool {
+    h.state()
+        .terminal
+        .output_lines
+        .iter()
+        .any(|l| l.contains(needle))
+}
+
+#[test]
+fn music_command_drives_playback_and_publishes_status() {
+    use oasis_core::vfs::Vfs;
+    const TRACK: &str = "/home/user/music/ambient_dawn.mp3";
+    let mut h = Harness::new("classic");
+    h.settle();
+
+    h.terminal(&format!("music play {TRACK}"));
+    h.settle();
+    let track = h
+        .state()
+        .media_track
+        .expect("`music play <file>` started a track");
+    assert_eq!(h.audio().playing, Some(track));
+    assert!(h.state().audio_backend.is_playing());
+
+    h.terminal("music pause");
+    h.settle();
+    assert!(!h.state().audio_backend.is_playing(), "backend paused");
+    assert_eq!(h.audio().playing, Some(track), "paused, not stopped");
+
+    h.terminal("music status");
+    h.settle();
+    for line in [
+        "State: paused",
+        "Track: ambient_dawn.mp3",
+        "Repeat: off",
+        "Playlist: 1 tracks",
+    ] {
+        assert!(
+            term_shows(&h, line),
+            "{line:?} in {:?}",
+            h.state().terminal.output_lines
+        );
+    }
+
+    h.terminal("music resume");
+    h.settle();
+    assert!(h.state().audio_backend.is_playing(), "backend resumed");
+
+    h.terminal("music vol 30; music repeat all; music shuffle");
+    h.settle();
+    assert_eq!(h.audio().volume, 30);
+    let status = String::from_utf8(h.vfs().read(oasis_audio::AUDIO_STATUS_PATH).unwrap()).unwrap();
+    assert!(status.contains("Volume: 30%"), "{status}");
+    assert!(status.contains("Repeat: all"), "{status}");
+    assert!(status.contains("Shuffle: on"), "{status}");
+
+    // A one-track repeating playlist: `next` restarts it as a fresh track.
+    h.terminal("music next");
+    h.settle();
+    let again = h.state().media_track.expect("next replays the only track");
+    assert_ne!(again, track);
+    assert!(h.audio().tracks_unloaded.contains(&track));
+
+    h.terminal("music stop");
+    h.settle();
+    assert!(h.state().media_track.is_none());
+    assert_eq!(h.audio().playing, None);
+    h.terminal("music status");
+    h.settle();
+    assert!(term_shows(&h, "State: stopped"));
+}
+
+/// A two-track playlist (`ambient_dawn.mp3`, then `second.mp3`), playing
+/// the first.
+fn two_track_playlist(h: &mut Harness) -> (&'static str, &'static str) {
+    use oasis_core::vfs::Vfs;
+    const A: &str = "/home/user/music/ambient_dawn.mp3";
+    const B: &str = "/home/user/music/second.mp3";
+    let data = h.vfs().read(A).unwrap();
+    h.vfs_mut().write(B, &data).unwrap();
+    h.terminal(&format!("music play {A}; music play {B}; music prev"));
+    h.settle();
+    (A, B)
+}
+
+fn audio_status(h: &Harness) -> String {
+    use oasis_core::vfs::Vfs;
+    String::from_utf8(h.vfs().read(oasis_audio::AUDIO_STATUS_PATH).unwrap()).unwrap()
+}
+
+/// A track that finished on its own used to leave the shell "playing"
+/// silence. The shared music controller now advances the playlist per
+/// repeat mode: on to the next track, then stop at the end.
+#[test]
+fn finished_music_track_advances_the_playlist() {
+    let mut h = Harness::new("classic");
+    h.settle();
+    two_track_playlist(&mut h);
+    let first = h.state().media_track.expect("first track playing");
+    assert!(audio_status(&h).contains("Track: ambient_dawn.mp3"));
+
+    h.finish_audio_track();
+    h.settle();
+    let second = h.state().media_track.expect("advanced to the next track");
+    assert_ne!(second, first);
+    assert_eq!(h.audio().playing, Some(second));
+    assert!(h.audio().tracks_unloaded.contains(&first));
+    let status = audio_status(&h);
+    assert!(status.contains("State: playing"), "{status}");
+    assert!(status.contains("Track: second.mp3"), "{status}");
+
+    // Repeat off: the end of the playlist stops and releases the track.
+    h.finish_audio_track();
+    h.settle();
+    assert!(h.state().media_track.is_none());
+    assert!(audio_status(&h).contains("State: stopped"));
+}
+
+/// `music next` while paused used to start the next track. It now keeps
+/// the paused state: the new track is selected (shown at 0:00) and starts
+/// on `music resume`.
+#[test]
+fn music_next_while_paused_stays_paused() {
+    let mut h = Harness::new("classic");
+    h.settle();
+    two_track_playlist(&mut h);
+    h.terminal("music pause");
+    h.settle();
+    h.terminal("music next");
+    h.settle();
+    assert!(!h.state().audio_backend.is_playing(), "still silent");
+    assert_eq!(h.audio().playing, None);
+    let status = audio_status(&h);
+    assert!(status.contains("State: paused"), "{status}");
+    assert!(status.contains("Track: second.mp3"), "{status}");
+
+    h.terminal("music resume");
+    h.settle();
+    let track = h
+        .state()
+        .media_track
+        .expect("resume started the cued track");
+    assert_eq!(h.audio().playing, Some(track));
+    assert!(audio_status(&h).contains("State: playing"));
+}
+
+/// Tuning the radio releases the music track (the WASM host already did):
+/// otherwise the radio's takeover of the shared stream looked like the end
+/// of the music track and the playlist auto-advanced over the radio.
+#[test]
+fn radio_tune_releases_the_music_track() {
+    use oasis_core::vfs::Vfs;
+    let mut h = Harness::new("classic");
+    h.settle();
+    two_track_playlist(&mut h);
+    let track = h.state().media_track.expect("music playing");
+    h.vfs_mut()
+        .write(oasis_audio::RADIO_REQUEST_PATH, b"tune 0")
+        .unwrap();
+    h.settle();
+    assert!(h.state().media_track.is_none(), "music released");
+    assert!(h.audio().tracks_unloaded.contains(&track));
+    assert!(audio_status(&h).contains("State: stopped"));
 }
 
 // ---------------------------------------------------------------------------

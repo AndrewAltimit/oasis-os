@@ -866,155 +866,9 @@ dependencies = [
 ]
 
 [[package]]
-name = "oasis-app-browser"
-version = "1.4.0"
-dependencies = [
- "oasis-app-core",
- "oasis-sdi",
- "oasis-skin",
- "oasis-types",
- "oasis-vfs",
-]
-
-[[package]]
-name = "oasis-app-calculator"
-version = "1.4.0"
-dependencies = [
- "oasis-app-core",
- "oasis-sdi",
- "oasis-skin",
- "oasis-types",
- "oasis-ui",
- "oasis-vfs",
- "thiserror",
-]
-
-[[package]]
 name = "oasis-app-core"
 version = "1.4.0"
 dependencies = [
- "oasis-sdi",
- "oasis-skin",
- "oasis-types",
- "oasis-ui",
- "oasis-vfs",
-]
-
-[[package]]
-name = "oasis-app-file-manager"
-version = "1.4.0"
-dependencies = [
- "oasis-app-core",
- "oasis-sdi",
- "oasis-skin",
- "oasis-types",
- "oasis-ui",
- "oasis-vfs",
-]
-
-[[package]]
-name = "oasis-app-games"
-version = "1.4.0"
-dependencies = [
- "oasis-app-core",
- "oasis-sdi",
- "oasis-skin",
- "oasis-types",
- "oasis-vfs",
-]
-
-[[package]]
-name = "oasis-app-media"
-version = "1.4.0"
-dependencies = [
- "jpeg-decoder",
- "log",
- "oasis-app-core",
- "oasis-sdi",
- "oasis-skin",
- "oasis-types",
- "oasis-vfs",
- "png",
-]
-
-[[package]]
-name = "oasis-app-network"
-version = "1.4.0"
-dependencies = [
- "oasis-app-core",
- "oasis-sdi",
- "oasis-skin",
- "oasis-types",
- "oasis-vfs",
-]
-
-[[package]]
-name = "oasis-app-package-manager"
-version = "1.4.0"
-dependencies = [
- "oasis-app-core",
- "oasis-sdi",
- "oasis-skin",
- "oasis-types",
- "oasis-vfs",
-]
-
-[[package]]
-name = "oasis-app-paint"
-version = "1.4.0"
-dependencies = [
- "oasis-app-core",
- "oasis-sdi",
- "oasis-skin",
- "oasis-types",
- "oasis-ui",
- "oasis-vfs",
-]
-
-[[package]]
-name = "oasis-app-radio"
-version = "1.4.0"
-dependencies = [
- "oasis-app-core",
- "oasis-audio",
- "oasis-sdi",
- "oasis-skin",
- "oasis-types",
- "oasis-ui",
- "oasis-vfs",
-]
-
-[[package]]
-name = "oasis-app-settings"
-version = "1.4.0"
-dependencies = [
- "oasis-app-core",
- "oasis-i18n",
- "oasis-sdi",
- "oasis-skin",
- "oasis-types",
- "oasis-ui",
- "oasis-vfs",
-]
-
-[[package]]
-name = "oasis-app-system-monitor"
-version = "1.4.0"
-dependencies = [
- "oasis-app-core",
- "oasis-platform",
- "oasis-sdi",
- "oasis-skin",
- "oasis-types",
- "oasis-ui",
- "oasis-vfs",
-]
-
-[[package]]
-name = "oasis-app-text-editor"
-version = "1.4.0"
-dependencies = [
- "oasis-app-core",
  "oasis-sdi",
  "oasis-skin",
  "oasis-types",
@@ -1061,6 +915,7 @@ dependencies = [
  "getrandom 0.2.17",
  "getrandom 0.3.4",
  "libm",
+ "oasis-app-tv-guide",
  "oasis-browser",
  "oasis-core",
  "oasis-js",
@@ -1081,6 +936,9 @@ dependencies = [
  "gif",
  "jpeg-decoder",
  "log",
+ "oasis-css",
+ "oasis-html",
+ "oasis-http",
  "oasis-js",
  "oasis-net",
  "oasis-skin",
@@ -1098,22 +956,10 @@ version = "1.4.0"
 dependencies = [
  "js-sys",
  "log",
- "oasis-app-browser",
- "oasis-app-calculator",
  "oasis-app-core",
- "oasis-app-file-manager",
- "oasis-app-games",
- "oasis-app-media",
- "oasis-app-network",
- "oasis-app-package-manager",
- "oasis-app-paint",
- "oasis-app-radio",
- "oasis-app-settings",
- "oasis-app-system-monitor",
- "oasis-app-text-editor",
- "oasis-app-tv-guide",
  "oasis-audio",
  "oasis-browser",
+ "oasis-http",
  "oasis-i18n",
  "oasis-net",
  "oasis-platform",
@@ -1129,6 +975,37 @@ dependencies = [
  "serde_json",
  "thiserror",
  "toml",
+]
+
+[[package]]
+name = "oasis-css"
+version = "1.4.0"
+dependencies = [
+ "log",
+ "oasis-html",
+ "oasis-types",
+ "rustc-hash",
+]
+
+[[package]]
+name = "oasis-html"
+version = "1.4.0"
+dependencies = [
+ "log",
+]
+
+[[package]]
+name = "oasis-http"
+version = "1.4.0"
+dependencies = [
+ "brotli",
+ "flate2",
+ "log",
+ "oasis-net",
+ "oasis-types",
+ "oasis-vfs",
+ "rustc-hash",
+ "web-time",
 ]
 
 [[package]]
@@ -1156,6 +1033,7 @@ version = "1.4.0"
 dependencies = [
  "log",
  "oasis-types",
+ "oasis-vfs",
  "serde",
  "toml",
 ]
@@ -1191,6 +1069,7 @@ version = "1.4.0"
 dependencies = [
  "log",
  "oasis-sdi",
+ "oasis-shader",
  "oasis-types",
  "oasis-ui",
  "oasis-vector",
@@ -1206,10 +1085,8 @@ name = "oasis-terminal"
 version = "1.4.0"
 dependencies = [
  "log",
- "oasis-audio",
  "oasis-net",
  "oasis-platform",
- "oasis-skin",
  "oasis-types",
  "oasis-vfs",
 ]
@@ -1251,7 +1128,6 @@ name = "oasis-video"
 version = "1.4.0"
 dependencies = [
  "log",
- "symphonia",
  "thiserror",
 ]
 
@@ -1701,23 +1577,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5773a4c030a19d9bfaa090f49746ff35c75dfddfa700df7a5939d5e076a57039"
 dependencies = [
  "lazy_static",
- "symphonia-codec-aac",
  "symphonia-codec-vorbis",
  "symphonia-core",
- "symphonia-format-isomp4",
  "symphonia-format-ogg",
  "symphonia-metadata",
-]
-
-[[package]]
-name = "symphonia-codec-aac"
-version = "0.5.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4c263845aa86881416849c1729a54c7f55164f8b96111dba59de46849e73a790"
-dependencies = [
- "lazy_static",
- "log",
- "symphonia-core",
 ]
 
 [[package]]
@@ -1742,19 +1605,6 @@ dependencies = [
  "bytemuck",
  "lazy_static",
  "log",
-]
-
-[[package]]
-name = "symphonia-format-isomp4"
-version = "0.5.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "243739585d11f81daf8dac8d9f3d18cc7898f6c09a259675fc364b382c30e0a5"
-dependencies = [
- "encoding_rs",
- "log",
- "symphonia-core",
- "symphonia-metadata",
- "symphonia-utils-xiph",
 ]
 
 [[package]]
@@ -2145,8 +1995,3 @@ name = "zmij"
 version = "1.0.21"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b8848ee67ecc8aedbaf3e4122217aff892639231befc6a1b58d29fff4c2cabaa"
-
-[[patch.unused]]
-name = "unicode-width"
-version = "0.2.0"
-source = "git+https://git.sr.ht/~sajattack/unicode-width?rev=114ac47#114ac4742ac29a7b69be8e0e7b1e45af43ed6d83"

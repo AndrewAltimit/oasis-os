@@ -1,6 +1,6 @@
 [package]
 name = "oasis-backend-wasm"
-description = "WebAssembly backend for OASIS_OS: Canvas 2D rendering, DOM input, Web Audio"
+description = "WebAssembly backend for OASIS_OS: Canvas 2D rendering, DOM input, HTML media-element audio"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -9,7 +9,7 @@ authors.workspace = true
 
 [features]
 default = ["wasm-youtube"]
-wasm-youtube = ["oasis-core/wasm-youtube"]
+wasm-youtube = ["oasis-apps/video-embed"]
 
 [lib]
 crate-type = ["cdylib", "rlib"]
@@ -22,15 +22,15 @@ crate-type = ["cdylib", "rlib"]
 # oasis-browser, oasis-net, oasis-ui, serde, serde_json, toml — all available
 # through oasis-core re-exports and not directly imported in this crate.
 oasis-core = { workspace = true, default-features = false }
-# Shared software rasterization: GlyphCacheKey, SoftwareBuffer
+# The built-in app bundle: AppRegistry, the `tv` command, TV Guide access.
+oasis-apps = { workspace = true }
+# Glyph masks and metrics shared with SDL / UE5: GlyphCacheKey, glyph_mask,
+# mask_runs (WASM draws shapes with native Canvas 2D paths, not SoftwareBuffer)
 oasis-rasterize = { workspace = true }
 # Direct imports: oasis_types::{backend, error, input, geometry} in renderer, input, network, audio, video
 oasis-types = { workspace = true }
 # Direct import: oasis_skin::resolve_skin in lib.rs
 oasis-skin = { workspace = true }
-# Direct import: BrowsingApp::inherit_textures_from in launch_app_window_for_file
-# to avoid leaking GPU textures when a Photo Viewer window is reused.
-oasis-app-media = { workspace = true }
 # Direct import: oasis_platform::{PowerService, TimeService, ...} in platform.rs
 oasis-platform = { workspace = true }
 # Direct imports: oasis_audio::{radio, RadioManager, RADIO_REQUEST_PATH} in archive.rs, lib.rs
@@ -38,7 +38,7 @@ oasis-audio = { workspace = true }
 # Direct import: oasis_wm::DesktopManager in lib.rs
 oasis-wm = { workspace = true }
 # Direct import: oasis_shader::{ShaderParams, software::SoftwareShaderRenderer} in shader_bridge.rs
-oasis-shader = { workspace = true, features = ["software"] }
+oasis-shader = { workspace = true }
 # Direct usage: log::info!, log::warn! in shader_bridge.rs, lib.rs
 log = { workspace = true }
 # Direct use: youtube.rs parses Invidious JSON; lib.rs serializes search

@@ -87,7 +87,6 @@ impl PaintApp {
     ) -> oasis_types::error::Result<()> {
         let colors = PaintColors::from_theme(at);
         let l = PaintLayout::compute(cx, cy, cw, ch, self.canvas.width(), self.canvas.height());
-        self.cached_picker_rows.set(l.picker_rows());
         backend.fill_rect(cx, cy, cw, ch, colors.bg)?;
 
         let menu_style = MenuStyle::from_theme(&at.ui_theme);

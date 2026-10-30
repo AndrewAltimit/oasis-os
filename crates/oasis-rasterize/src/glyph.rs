@@ -11,16 +11,7 @@
 //! [`glyph_advance_scaled`]: oasis_types::bitmap_font::glyph_advance_scaled
 
 use oasis_types::bitmap_font;
-
-/// Line height of the bitmap font at `font_size`: `ceil(max(fs, 8) * 1.2)`.
-pub fn bitmap_line_height(font_size: u16) -> u32 {
-    (f64::from(font_size.max(8)) * 1.2).ceil() as u32
-}
-
-/// Baseline offset from the top of a line box: `ceil(max(fs, 8) * 0.85)`.
-pub fn bitmap_ascent(font_size: u16) -> u32 {
-    (f64::from(font_size.max(8)) * 0.85).ceil() as u32
-}
+pub use oasis_types::bitmap_font::{bitmap_ascent, bitmap_line_height};
 
 /// Width and height of the cell [`glyph_mask`] rasterizes `ch` into.
 pub fn glyph_cell(ch: char, font_size: u16, bold: bool, italic: bool) -> (u32, u32) {

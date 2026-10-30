@@ -1,7 +1,10 @@
 # JavaScript Engine (`oasis-js`)
 
-Single-backend QuickJS-NG integration via `rquickjs`. Used on every
-target (desktop / WASM / UE5 / PSP).
+Single-backend QuickJS-NG integration via `rquickjs`. Linked wherever
+`oasis-browser`'s `javascript` feature is on: the desktop shell
+(`oasis-app` feature `javascript`, on by default) and the PSP EBOOT. The
+WASM backend and the UE5 FFI library build `oasis-core` without it and
+link no QuickJS.
 
 The DOM bindings themselves are documented in the "JavaScript DOM
 bindings" section of [`browser-engine.md`](browser-engine.md); this
@@ -24,6 +27,27 @@ execution, and especially the PSP cross-compile arrangement.
   `addEventListener({once, capture, passive})`, detail properties
   (`clientX`, `clientY`, `key`, `code`), `stopPropagation`,
   `preventDefault`.
+
+## Execution and memory limits
+
+The browser builds each page's engine from two `BrowserConfig` fields
+(full details in [`oasis-js.md` §Watchdog](oasis-js.md#watchdog)):
+
+| Field | Desktop | PSP | Meaning |
+| --- | --- | --- | --- |
+| `js_max_exec_ms` | 2 000 ms | 500 ms | Limit per inline script and per event dispatch, and the budget of each frame's timer tick (timers still due when it runs out wait for the next frame). Runaway JS gets an uncatchable `InternalError: interrupted`. |
+| `js_memory_limit_bytes` | 64 MiB | 8 MiB | QuickJS heap limit; allocations past it throw `InternalError: out of memory`. |
+
+The heap limit is real on every target, including PSP. The workspace
+enables `rquickjs/rust-alloc` (all JS allocations go through Rust's
+global allocator, on PSP the rust-psp heap), and rquickjs' docs say
+`set_memory_limit` is a no-op then. That is out of date for QuickJS-NG,
+which checks `malloc_limit` in `js_malloc_rt` itself, before it calls
+the allocator. `oasis-js` pins this with the `memory_limit_is_enforced`
+test, so no counting allocator is needed. The few buffers QuickJS
+allocates straight from libc (for example through
+`dbuf_default_realloc`, served on PSP by the shim below) are outside
+the limit.
 
 ## PSP build
 
@@ -50,7 +74,7 @@ knots to be aware of:
    "invalid binding: 0". The workaround lives in `.cargo/config.toml`:
    `linker = /opt/pspdev/bin/psp-ld`, `linker-flavor = gnu` under
    `-Z unstable-options`, replayed target-spec pre-link args, plus a
-   supplementary link script (`tools/psp-linkscript.ld`) that
+   supplementary link script (`crates/oasis-backend-psp/tools/psp-linkscript.ld`) that
    synthesises `_gp` (rust-psp's target script omits it; rust-lld
    computes `_gp` internally).
 

@@ -1,7 +1,7 @@
 //! Badge widget: small colored tag/indicator.
 
 use crate::context::DrawContext;
-use crate::layout;
+use crate::layout::HAlign;
 use crate::widget::Widget;
 use oasis_types::backend::Color;
 use oasis_types::error::Result;
@@ -50,11 +50,7 @@ impl Widget for Badge {
         ctx.backend.fill_rounded_rect(x, y, w, h, radius, bg)?;
 
         let fs = ctx.theme.font_size_xs;
-        let text_w = ctx.backend.measure_text(&self.text, fs);
-        let text_h = ctx.backend.measure_text_height(fs);
-        let tx = x + layout::center(w, text_w);
-        let ty = y + layout::center(h, text_h);
-        ctx.backend.draw_text(&self.text, tx, ty, fs, tc)?;
+        ctx.text_in((x, y, w, h), &self.text, fs, tc, HAlign::Center)?;
         Ok(())
     }
 }
@@ -92,17 +88,17 @@ mod tests {
         assert_eq!(b.text_color.unwrap(), Color::WHITE);
     }
 
-    // -- Draw / measure tests using MockBackend --
+    // -- Draw / measure tests using RecordingBackend --
 
     use crate::context::DrawContext;
-    use crate::test_utils::MockBackend;
+    use crate::test_utils::RecordingBackend;
     use crate::theme::Theme;
     use crate::widget::Widget;
 
     #[test]
     fn measure_returns_correct_size() {
         let theme = Theme::dark();
-        let mut backend = MockBackend::new();
+        let mut backend = RecordingBackend::default();
         let ctx = DrawContext::new(&mut backend, &theme);
         let badge = Badge::new("New");
         let (w, h) = badge.measure(&ctx, 200, 100);
@@ -113,7 +109,7 @@ mod tests {
     #[test]
     fn draw_emits_fill_and_text() {
         let theme = Theme::dark();
-        let mut backend = MockBackend::new();
+        let mut backend = RecordingBackend::default();
         {
             let mut ctx = DrawContext::new(&mut backend, &theme);
             let badge = Badge::new("Tag");
@@ -126,7 +122,7 @@ mod tests {
     #[test]
     fn draw_count_badge() {
         let theme = Theme::dark();
-        let mut backend = MockBackend::new();
+        let mut backend = RecordingBackend::default();
         {
             let mut ctx = DrawContext::new(&mut backend, &theme);
             let badge = Badge::count(42);
@@ -138,7 +134,7 @@ mod tests {
     #[test]
     fn draw_custom_colors_no_panic() {
         let theme = Theme::dark();
-        let mut backend = MockBackend::new();
+        let mut backend = RecordingBackend::default();
         {
             let mut ctx = DrawContext::new(&mut backend, &theme);
             let mut badge = Badge::new("OK");
@@ -151,7 +147,7 @@ mod tests {
     #[test]
     fn draw_empty_text() {
         let theme = Theme::dark();
-        let mut backend = MockBackend::new();
+        let mut backend = RecordingBackend::default();
         {
             let mut ctx = DrawContext::new(&mut backend, &theme);
             let badge = Badge::new("");

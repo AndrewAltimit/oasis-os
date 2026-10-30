@@ -7,7 +7,10 @@
 //! via [`handle_event`]. Keyboard and gamepad share the event path, so the
 //! PSP-style buttons keep working (Up/Down = history, Left/Right = cursor,
 //! Square = backspace, Cross = run).
+//!
+//! [`scroll`] is the one mouse-wheel path for both terminal views.
 
+use oasis_app_core::render::WINDOWED_TOP_PAD;
 use oasis_core::input::{InputEvent, Key, Modifiers};
 use oasis_core::sdi::SdiRegistry;
 use oasis_core::terminal::{Environment, SessionEvent};
@@ -16,14 +19,59 @@ use oasis_core::vfs::MemoryVfs;
 
 use crate::app_state::{AppState, Mode};
 use crate::commands;
+use crate::launch::TERMINAL_WIN;
+
+/// Lines one wheel notch scrolls.
+const WHEEL_LINES: usize = 3;
 
 /// Whether keyboard input currently belongs to the terminal.
 pub fn focused(state: &AppState) -> bool {
     match state.mode {
         Mode::Terminal => true,
-        Mode::Desktop => state.wm.active_window() == Some("terminal"),
+        Mode::Desktop => state.wm.active_window() == Some(TERMINAL_WIN),
         _ => false,
     }
+}
+
+/// Rows of text the windowed terminal shows: the line count
+/// `oasis_app_core::render::draw_content_windowed` fits in the terminal
+/// window's content area (it has no context header row). `None` while no
+/// terminal window is open.
+pub fn windowed_rows(state: &AppState) -> Option<usize> {
+    let win = state.wm.get_window(TERMINAL_WIN)?;
+    let (_, _, _, ch) = win.content_rect(state.wm.theme());
+    let line_h = state.active_theme.terminal_line_height.max(12) as i32;
+    let rows = (ch as i32 - WINDOWED_TOP_PAD as i32 - 16) / line_h;
+    Some(rows.max(1) as usize)
+}
+
+/// `(lines, rows)` of the visible terminal view: the windowed terminal
+/// scrolls its scrollback plus the prompt line through the window's rows,
+/// the fullscreen one its scrollback through `visible_output_lines` (the
+/// prompt has its own row there).
+fn scroll_extent(state: &AppState) -> (usize, usize) {
+    let len = state.terminal.output_lines.len();
+    match windowed_rows(state).filter(|_| state.mode == Mode::Desktop) {
+        Some(rows) => (len + 1, rows),
+        None => (len, terminal_sdi::visible_output_lines(&state.active_theme)),
+    }
+}
+
+/// Mouse wheel over the terminal (fullscreen, or the windowed one):
+/// negative `delta` scrolls back into older lines, positive returns toward
+/// the prompt. Clamped so the oldest line is the furthest you can go.
+pub fn scroll(state: &mut AppState, delta: i32) {
+    let (len, rows) = scroll_extent(state);
+    let max_offset = len.saturating_sub(rows);
+    let step = delta.unsigned_abs() as usize * WHEEL_LINES;
+    let term = &mut state.terminal;
+    term.scroll_offset = if delta < 0 {
+        term.scroll_offset.saturating_add(step)
+    } else {
+        term.scroll_offset.saturating_sub(step)
+    }
+    .min(max_offset);
+    term.dirty = true;
 }
 
 /// Offer a raw key press to the line editor. Returns `true` when it was a
@@ -75,7 +123,7 @@ fn apply_session_event(
         SessionEvent::Redraw => {},
         SessionEvent::Submit(line) => run_line(&line, state, sdi, vfs),
         SessionEvent::Interrupted(line) => {
-            state.terminal.output_lines.push(format!("> {line}^C"));
+            state.terminal.print(format!("> {line}^C"));
             state.terminal.scroll_offset = 0;
             commands::trim_output(&mut state.terminal.output_lines);
         },
@@ -131,11 +179,23 @@ fn make_env<'a>(state: &'a AppState, vfs: &'a mut MemoryVfs) -> Environment<'a> 
     }
 }
 
+/// Run the boot scripts (`/home/.profile`, then `/etc/startup.sh`) through
+/// the shell's command registry, printing their output to the terminal.
+pub fn run_boot_scripts(state: &mut AppState, vfs: &mut MemoryVfs) {
+    let lines = {
+        let mut env = make_env(state, vfs);
+        oasis_core::script::run_boot_scripts(&state.terminal.cmd_reg, &mut env)
+    };
+    for line in lines {
+        state.terminal.print(line);
+    }
+}
+
 /// Echo and execute one submitted terminal line, then persist history.
 pub fn run_line(line: &str, state: &mut AppState, sdi: &mut SdiRegistry, vfs: &mut MemoryVfs) {
     state.terminal.scroll_offset = 0;
     if !line.trim().is_empty() {
-        state.terminal.output_lines.push(format!("> {line}"));
+        state.terminal.print(format!("> {line}"));
         let (result, cwd) = {
             let mut env = make_env(state, vfs);
             let result = state

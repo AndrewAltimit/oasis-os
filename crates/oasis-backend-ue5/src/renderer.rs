@@ -7,26 +7,57 @@
 //! gradients, sub-rect blits, clip/transform stacks) are software-rasterized
 //! into the pixel buffer via the shared `oasis-rasterize` crate.
 
+use std::collections::HashMap;
 use std::rc::Rc;
 
-use oasis_core::backend::{
-    BatchRect, BlendMode, Color, GradientStyle, RenderTargetId, SdiAlpha, SdiBatch,
-    SdiClipTransform, SdiGradients, SdiRenderTarget, SdiShapes, SdiText, SdiTextures, SdiVector,
-    TextureId, texture_not_found, validate_rgba_data,
-};
-use oasis_core::error::{OasisError, Result};
 use oasis_rasterize::SoftwareBuffer;
-use oasis_types::backend::SdiCore;
-use oasis_types::backend::stacks::{ClipPush, ClipStack, TranslateStack};
+use oasis_types::backend::stacks::{ClipPush, ClipStack, DrawState, TranslateStack};
+use oasis_types::backend::{
+    BatchRect, BatchText, BlendMode, Color, GradientStyle, RenderTargetId, SdiAlpha, SdiBatch,
+    SdiClipTransform, SdiCore, SdiGradients, SdiRenderTarget, SdiShapes, SdiText, SdiTextures,
+    SdiVector, TextureId, render_target_not_found, texture_not_found, validate_rgba_data,
+};
+use oasis_types::error::{OasisError, Result};
 use oasis_types::geometry::ClipRect;
 use oasis_types::rasterize::PixelSink;
-use std::collections::HashMap;
 
 /// A stored texture for later blitting.
 struct Texture {
     width: u32,
     height: u32,
     data: Rc<Vec<u8>>,
+}
+
+/// One text draw recorded while the text log is enabled
+/// ([`Ue5Backend::enable_text_log`]).
+///
+/// Coordinates are the caller's (before the translate stack is applied).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DrawnText {
+    pub text: String,
+    pub x: i32,
+    pub y: i32,
+    pub font_size: u16,
+    pub color: Color,
+}
+
+/// Text drawn in the current and in the last presented frame.
+#[derive(Default)]
+struct TextLog {
+    /// Since the last framebuffer `clear`.
+    drawing: Vec<DrawnText>,
+    /// The last presented frame.
+    presented: Vec<DrawnText>,
+}
+
+/// The surface a render-target bind replaced, restored on unbind.
+struct BoundFrom {
+    /// Render target that was bound before (`None` = framebuffer).
+    prev_id: Option<u64>,
+    /// The parent surface's buffer (it carries its own applied clip).
+    parent: SoftwareBuffer,
+    /// The parent surface's clip and translate stacks.
+    state: DrawState,
 }
 
 /// Software RGBA framebuffer renderer for UE5 integration.
@@ -44,14 +75,19 @@ pub struct Ue5Backend {
     /// When a target is *bound*, its buffer is temporarily swapped into
     /// `self.fb` and the parent surface is stored on the bind stack.
     render_targets: HashMap<u64, SoftwareBuffer>,
-    /// Bind stack: each entry holds the render target id that was
-    /// active before the bind (`None` = framebuffer) and the
-    /// corresponding swapped-out buffer.
-    render_target_bind_stack: Vec<(Option<u64>, SoftwareBuffer)>,
+    /// One entry per active bind, innermost last.
+    render_target_bind_stack: Vec<BoundFrom>,
     /// Currently bound render target id (`None` = framebuffer).
     current_render_target: Option<u64>,
     /// Monotonic counter for render-target ids.
     next_render_target_id: u64,
+    /// Reused buffer for scaled render-target composites.
+    composite_scratch: Vec<u8>,
+    /// Text recording for test harnesses; `None` (the default) records
+    /// nothing.
+    text_log: Option<TextLog>,
+    /// Number of `swap_buffers` calls.
+    frames_presented: u64,
 }
 
 impl Ue5Backend {
@@ -61,12 +97,15 @@ impl Ue5Backend {
             fb: SoftwareBuffer::new(width, height),
             dirty: true,
             textures: Vec::new(),
-            clip_stack: ClipStack::new(width, height),
+            clip_stack: ClipStack::default(),
             translate_stack: TranslateStack::new(),
             render_targets: HashMap::new(),
             render_target_bind_stack: Vec::new(),
             current_render_target: None,
             next_render_target_id: 1,
+            composite_scratch: Vec::new(),
+            text_log: None,
+            frames_presented: 0,
         }
     }
 
@@ -96,6 +135,41 @@ impl Ue5Backend {
         self.dirty = true;
     }
 
+    /// Number of live textures (loaded and not yet destroyed).
+    pub fn live_textures(&self) -> usize {
+        self.textures.iter().filter(|t| t.is_some()).count()
+    }
+
+    /// Number of live offscreen render targets (bound ones included).
+    pub fn live_render_targets(&self) -> usize {
+        self.render_targets.len()
+            + usize::from(self.current_render_target.is_some())
+            + self
+                .render_target_bind_stack
+                .iter()
+                .filter(|b| b.prev_id.is_some())
+                .count()
+    }
+
+    /// Number of `swap_buffers` calls so far.
+    pub fn frames_presented(&self) -> u64 {
+        self.frames_presented
+    }
+
+    /// Start recording every string drawn (`draw_text`, `draw_text_styled`
+    /// and everything built on them), for test harnesses that assert on
+    /// painted text. The log of a frame runs from the framebuffer `clear`
+    /// to `swap_buffers`; clearing a bound render target keeps it.
+    pub fn enable_text_log(&mut self) {
+        self.text_log.get_or_insert_with(TextLog::default);
+    }
+
+    /// Text drawn in the last presented frame (empty unless
+    /// [`enable_text_log`](Self::enable_text_log) was called).
+    pub fn presented_text(&self) -> &[DrawnText] {
+        self.text_log.as_ref().map_or(&[], |l| &l.presented)
+    }
+
     /// Apply cumulative translation to coordinates.
     fn translate(&self, x: i32, y: i32) -> (i32, i32) {
         self.translate_stack.translate(x, y)
@@ -118,6 +192,104 @@ impl Ue5Backend {
             .ok_or_else(|| texture_not_found(tex.0))?;
         Ok((texture.width, texture.height, Rc::clone(&texture.data)))
     }
+
+    /// Composite render target `id` into the bound surface, scaled to the
+    /// destination rect (nearest-neighbour, the same sampling as `blit`).
+    #[allow(clippy::too_many_arguments)]
+    fn composite_scaled(
+        &mut self,
+        id: RenderTargetId,
+        dst_x: i32,
+        dst_y: i32,
+        dst_w: u32,
+        dst_h: u32,
+        blend: BlendMode,
+        opacity: f32,
+    ) -> Result<()> {
+        let Self {
+            fb,
+            render_targets,
+            composite_scratch,
+            ..
+        } = self;
+        let src = render_targets
+            .get(&id.0)
+            .ok_or_else(|| render_target_not_found(id))?;
+        let (sw, sh) = (src.width(), src.height());
+        if dst_w == 0 || dst_h == 0 {
+            return Ok(());
+        }
+        // `render_targets` and `fb` are disjoint fields, so an unscaled
+        // layer is composited straight from its storage.
+        if (sw, sh) == (dst_w, dst_h) {
+            fb.composite_rgba_blend(dst_x, dst_y, sw, sh, src.data(), opacity, blend);
+        } else {
+            // Resample only the part of the destination that lands on the
+            // framebuffer: the destination rect is caller-controlled and
+            // may be far larger than the screen.
+            let visible = |pos: i32, len: u32, screen: u32| {
+                let start = i64::from(pos).max(0);
+                let end = (i64::from(pos) + i64::from(len)).min(i64::from(screen));
+                (start < end).then(|| ((start - i64::from(pos)) as u32, (end - start) as u32))
+            };
+            let (Some((ox, vw)), Some((oy, vh))) = (
+                visible(dst_x, dst_w, fb.width()),
+                visible(dst_y, dst_h, fb.height()),
+            ) else {
+                return Ok(());
+            };
+            let region = ScaleRegion {
+                dst_w,
+                dst_h,
+                x0: ox,
+                y0: oy,
+                w: vw,
+                h: vh,
+            };
+            scale_nearest(src.data(), sw, sh, &region, composite_scratch);
+            // On screen, so in i32 range.
+            let at = |pos: i32, off: u32| (i64::from(pos) + i64::from(off)) as i32;
+            fb.composite_rgba_blend(
+                at(dst_x, ox),
+                at(dst_y, oy),
+                vw,
+                vh,
+                composite_scratch,
+                opacity,
+                blend,
+            );
+        }
+        self.dirty = true;
+        Ok(())
+    }
+}
+
+/// The `w` x `h` window at (`x0`, `y0`) of a `dst_w` x `dst_h` resample.
+struct ScaleRegion {
+    dst_w: u32,
+    dst_h: u32,
+    x0: u32,
+    y0: u32,
+    w: u32,
+    h: u32,
+}
+
+/// Nearest-neighbour resample of an `sw` x `sh` RGBA image to
+/// `region.dst_w` x `region.dst_h`, producing only `region`'s pixels into
+/// `out` (destination column `k` samples source column `k * sw / dst_w`,
+/// like `SoftwareBuffer`'s blits).
+fn scale_nearest(src: &[u8], sw: u32, sh: u32, region: &ScaleRegion, out: &mut Vec<u8>) {
+    let (sw64, sh64) = (u64::from(sw), u64::from(sh));
+    let (dw64, dh64) = (u64::from(region.dst_w), u64::from(region.dst_h));
+    out.clear();
+    out.reserve(region.w as usize * region.h as usize * 4);
+    for y in u64::from(region.y0)..u64::from(region.y0) + u64::from(region.h) {
+        let row = (y * sh64 / dh64) as usize * sw as usize * 4;
+        for x in u64::from(region.x0)..u64::from(region.x0) + u64::from(region.w) {
+            let i = row + (x * sw64 / dw64) as usize * 4;
+            out.extend_from_slice(src.get(i..i + 4).unwrap_or(&[0; 4]));
+        }
+    }
 }
 
 impl PixelSink for Ue5Backend {
@@ -127,14 +299,29 @@ impl PixelSink for Ue5Backend {
 }
 
 impl SdiCore for Ue5Backend {
+    /// Resize the framebuffer. Textures and render targets survive (their
+    /// ids stay valid), the clip and translate stacks are reset. Fails
+    /// while a render target is bound.
     fn init(&mut self, width: u32, height: u32) -> Result<()> {
+        if self.current_render_target.is_some() {
+            return Err(OasisError::Backend(
+                "init: cannot resize while a render target is bound".into(),
+            ));
+        }
         self.fb.resize(width, height);
+        self.clip_stack.clear();
+        self.translate_stack.clear();
         self.dirty = true;
         Ok(())
     }
 
     fn clear(&mut self, color: Color) -> Result<()> {
         self.fb.clear(color);
+        if self.current_render_target.is_none()
+            && let Some(log) = &mut self.text_log
+        {
+            log.drawing.clear();
+        }
         self.dirty = true;
         Ok(())
     }
@@ -169,6 +356,10 @@ impl SdiCore for Ue5Backend {
     }
 
     fn swap_buffers(&mut self) -> Result<()> {
+        self.frames_presented += 1;
+        if let Some(log) = &mut self.text_log {
+            log.presented = std::mem::take(&mut log.drawing);
+        }
         Ok(())
     }
 
@@ -201,8 +392,9 @@ impl SdiCore for Ue5Backend {
     }
 
     fn set_clip_rect(&mut self, x: i32, y: i32, w: u32, h: u32) -> Result<()> {
-        let clip = ClipRect { x, y, w, h };
-        self.fb.set_clip(Some(clip));
+        // Absolute and replacing (SdiCore contract): no translation, no
+        // intersection with the clip stack.
+        self.fb.set_clip(Some(ClipRect { x, y, w, h }));
         Ok(())
     }
 
@@ -212,7 +404,7 @@ impl SdiCore for Ue5Backend {
     }
 
     fn measure_text(&self, text: &str, font_size: u16) -> u32 {
-        oasis_core::backend::bitmap_measure_text(text, font_size)
+        oasis_types::backend::bitmap_measure_text(text, font_size)
     }
 
     fn read_pixels(&self, x: i32, y: i32, w: u32, h: u32) -> Result<Vec<u8>> {
@@ -220,10 +412,18 @@ impl SdiCore for Ue5Backend {
     }
 
     fn shutdown(&mut self) -> Result<()> {
+        // Drop any bound target's parents first so `fb` ends up empty.
+        self.render_target_bind_stack.clear();
+        self.current_render_target = None;
+        self.render_targets.clear();
         self.fb = SoftwareBuffer::new(0, 0);
         self.textures.clear();
         self.clip_stack.clear();
         self.translate_stack.clear();
+        self.composite_scratch = Vec::new();
+        if let Some(log) = &mut self.text_log {
+            *log = TextLog::default();
+        }
         log::info!("UE5 backend shut down");
         Ok(())
     }
@@ -396,27 +596,18 @@ impl SdiGradients for Ue5Backend {
 }
 
 // -------------------------------------------------------------------
-// SdiAlpha: Viewport and alpha utilities
+// SdiAlpha: the defaults (`dim_screen` covers `viewport_size`)
 // -------------------------------------------------------------------
 
 impl SdiAlpha for Ue5Backend {
+    /// The bound surface: the framebuffer, or the bound render target.
     fn viewport_size(&self) -> (u32, u32) {
         (self.fb.width(), self.fb.height())
-    }
-
-    fn dim_screen(&mut self, alpha: u8) -> Result<()> {
-        self.fill_rect(
-            0,
-            0,
-            self.fb.width(),
-            self.fb.height(),
-            Color::rgba(0, 0, 0, alpha),
-        )
     }
 }
 
 // -------------------------------------------------------------------
-// SdiText: Text system
+// SdiText: Text system (line metrics are the bitmap-font defaults)
 // -------------------------------------------------------------------
 
 impl SdiText for Ue5Backend {
@@ -433,19 +624,24 @@ impl SdiText for Ue5Backend {
         bold: bool,
         italic: bool,
     ) -> Result<()> {
+        // Fully transparent text (glyph-cache warm-up) paints nothing.
+        if let Some(log) = &mut self.text_log
+            && color.a > 0
+            && !text.is_empty()
+        {
+            log.drawing.push(DrawnText {
+                text: text.to_string(),
+                x,
+                y,
+                font_size,
+                color,
+            });
+        }
         let (tx, ty) = self.translate(x, y);
         self.fb
             .draw_text(text, tx, ty, font_size, color, bold, italic);
         self.dirty = true;
         Ok(())
-    }
-
-    fn measure_text_height(&self, font_size: u16) -> u32 {
-        oasis_rasterize::bitmap_line_height(font_size)
-    }
-
-    fn font_ascent(&self, font_size: u16) -> u32 {
-        oasis_rasterize::bitmap_ascent(font_size)
     }
 }
 
@@ -561,7 +757,7 @@ impl SdiClipTransform for Ue5Backend {
     }
 
     fn current_clip_rect(&self) -> Option<(i32, i32, u32, u32)> {
-        self.fb.clip().map(|c| (c.x, c.y, c.w, c.h))
+        self.clip_stack.current_tuple()
     }
 
     fn push_translate(&mut self, dx: i32, dy: i32) -> Result<()> {
@@ -607,10 +803,26 @@ impl SdiBatch for Ue5Backend {
         }
         Ok(())
     }
+
+    /// One styled pass per item, like SDL: bold is baked into the glyph
+    /// mask (the default double-strikes, blending translucent text twice)
+    /// and italic is honoured (the default drops it).
+    fn submit_text_batch(
+        &mut self,
+        texts: &[BatchText<'_>],
+        font_size: u16,
+        bold: bool,
+        italic: bool,
+    ) -> Result<()> {
+        for t in texts {
+            self.draw_text_styled(t.text, t.x, t.y, font_size, t.color, bold, italic)?;
+        }
+        Ok(())
+    }
 }
 
 // -------------------------------------------------------------------
-// SdiRenderTarget: Offscreen compositing layers (compositor PR4)
+// SdiRenderTarget: Offscreen compositing layers
 // -------------------------------------------------------------------
 
 impl SdiRenderTarget for Ue5Backend {
@@ -630,29 +842,42 @@ impl SdiRenderTarget for Ue5Backend {
         // Take the target's buffer out of storage and swap it with
         // `self.fb`. The previous fb ends up held by the bind stack
         // entry and is swapped back on `unbind_render_target`.
-        let mut target_fb = self.render_targets.remove(&id.0).ok_or_else(|| {
-            OasisError::Backend(format!("bind_render_target: unknown id {id:?}").into())
-        })?;
+        let mut target_fb = self
+            .render_targets
+            .remove(&id.0)
+            .ok_or_else(|| render_target_not_found(id))?;
+        // A target starts unclipped and untranslated (a clip left from
+        // its previous bind must not survive).
+        target_fb.set_clip(None);
         std::mem::swap(&mut self.fb, &mut target_fb);
-        self.render_target_bind_stack
-            .push((self.current_render_target, target_fb));
+        self.render_target_bind_stack.push(BoundFrom {
+            prev_id: self.current_render_target,
+            parent: target_fb,
+            state: DrawState::take(&mut self.clip_stack, &mut self.translate_stack),
+        });
         self.current_render_target = Some(id.0);
         Ok(())
     }
 
     fn unbind_render_target(&mut self) -> Result<()> {
-        let (prev_id, mut saved_parent) = self.render_target_bind_stack.pop().ok_or_else(|| {
+        let BoundFrom {
+            prev_id,
+            mut parent,
+            state,
+        } = self.render_target_bind_stack.pop().ok_or_else(|| {
             OasisError::Backend("unbind_render_target: bind stack underflow".into())
         })?;
-        // Swap the parent surface back in; the target's buffer ends up
-        // in `saved_parent` which we return to the pool.
-        std::mem::swap(&mut self.fb, &mut saved_parent);
+        // Swap the parent surface back in (it kept its own applied clip);
+        // the target's buffer ends up in `parent`, which goes back to the
+        // pool.
+        std::mem::swap(&mut self.fb, &mut parent);
+        state.restore(&mut self.clip_stack, &mut self.translate_stack);
         debug_assert!(
             self.current_render_target.is_some(),
             "unbind_render_target called without active target"
         );
         if let Some(active_id) = self.current_render_target {
-            self.render_targets.insert(active_id, saved_parent);
+            self.render_targets.insert(active_id, parent);
         }
         self.current_render_target = prev_id;
         Ok(())
@@ -668,36 +893,46 @@ impl SdiRenderTarget for Ue5Backend {
         blend: BlendMode,
         opacity: f32,
     ) -> Result<()> {
-        let src = self.render_targets.get(&id.0).ok_or_else(|| {
-            OasisError::Backend(format!("composite_render_target: unknown id {id:?}").into())
-        })?;
-        let sw = src.width();
-        let sh = src.height();
-        debug_assert_eq!(sw, dst_w, "composite_render_target: dst_w != src width");
-        debug_assert_eq!(sh, dst_h, "composite_render_target: dst_h != src height");
-        // `render_targets` and `fb` are disjoint fields, so the layer can be
-        // composited straight from its storage -- no per-composite copy.
-        self.fb
-            .composite_rgba_blend(dst_x, dst_y, sw, sh, src.data(), opacity, blend);
-        self.dirty = true;
-        Ok(())
+        debug_assert!(
+            (0.0..=1.0).contains(&opacity),
+            "opacity must be in [0.0, 1.0], got {opacity}"
+        );
+        self.composite_scaled(id, dst_x, dst_y, dst_w, dst_h, blend, opacity)
+    }
+
+    /// Render targets here hold *straight* alpha: `SoftwareBuffer` blends
+    /// over translucent pixels with the full Porter-Duff operator, so a
+    /// layer keeps the color and coverage of what was painted into it.
+    /// Straight source-over of that layer is the same operation as
+    /// premultiplied source-over of the premultiplied pixels a GPU
+    /// leaves, so this is the plain composite at full opacity.
+    fn composite_render_target_premultiplied(
+        &mut self,
+        id: RenderTargetId,
+        dst_x: i32,
+        dst_y: i32,
+        dst_w: u32,
+        dst_h: u32,
+    ) -> Result<()> {
+        self.composite_scaled(id, dst_x, dst_y, dst_w, dst_h, BlendMode::Normal, 1.0)
     }
 
     fn read_render_target(&mut self, id: RenderTargetId, dst: &mut [u8]) -> Result<()> {
-        let src = self.render_targets.get(&id.0).ok_or_else(|| {
-            OasisError::Backend(format!("read_render_target: unknown id {id:?}").into())
-        })?;
-        let expected = (src.width() * src.height() * 4) as usize;
-        if dst.len() < expected {
+        let src = self
+            .render_targets
+            .get(&id.0)
+            .ok_or_else(|| render_target_not_found(id))?;
+        let expected = src.width() as usize * src.height() as usize * 4;
+        if dst.len() != expected {
             return Err(OasisError::Backend(
                 format!(
-                    "read_render_target: buffer too small ({} < {expected})",
+                    "read_render_target: buffer is {} bytes, target needs {expected}",
                     dst.len()
                 )
                 .into(),
             ));
         }
-        dst[..expected].copy_from_slice(src.data());
+        dst.copy_from_slice(src.data());
         Ok(())
     }
 
@@ -706,16 +941,14 @@ impl SdiRenderTarget for Ue5Backend {
             || self
                 .render_target_bind_stack
                 .iter()
-                .any(|(stacked, _)| *stacked == Some(id.0))
+                .any(|b| b.prev_id == Some(id.0))
         {
             return Err(OasisError::Backend(
                 format!("destroy_render_target: id {id:?} is still bound").into(),
             ));
         }
         if self.render_targets.remove(&id.0).is_none() {
-            return Err(OasisError::Backend(
-                format!("destroy_render_target: unknown id {id:?}").into(),
-            ));
+            return Err(render_target_not_found(id));
         }
         Ok(())
     }
@@ -1399,5 +1632,235 @@ mod tests {
         b.pop_translate().unwrap();
 
         assert_eq!(a.buffer(), b.buffer(), "translate stack diverged");
+    }
+
+    fn px(b: &Ue5Backend, x: u32, y: u32) -> [u8; 4] {
+        let (w, _) = b.dimensions();
+        let i = ((y * w + x) * 4) as usize;
+        let p = &b.buffer()[i..i + 4];
+        [p[0], p[1], p[2], p[3]]
+    }
+
+    /// A bound target starts unclipped and untranslated; the unbind brings
+    /// the parent's clip and translate stacks back, so a later pop pops the
+    /// parent's clip in parent coordinates.
+    #[test]
+    fn render_target_bind_saves_and_restores_draw_state() {
+        let mut b = Ue5Backend::new(40, 40);
+        b.clear(Color::BLACK).unwrap();
+        b.push_translate(5, 5).unwrap();
+        b.push_clip_rect(0, 0, 10, 10).unwrap();
+        b.push_clip_rect(2, 2, 4, 4).unwrap();
+
+        let rt = b.create_render_target(20, 20).unwrap();
+        b.bind_render_target(rt).unwrap();
+        assert_eq!(b.current_translate(), (0, 0));
+        assert_eq!(b.current_clip_rect(), None);
+        assert_eq!(b.viewport_size(), (20, 20));
+        b.fill_rect(0, 0, 20, 20, Color::WHITE).unwrap();
+        b.unbind_render_target().unwrap();
+
+        assert_eq!(b.current_translate(), (5, 5));
+        assert_eq!(b.current_clip_rect(), Some((7, 7, 4, 4)));
+        assert_eq!(b.viewport_size(), (40, 40));
+        b.pop_clip_rect().unwrap();
+        assert_eq!(b.current_clip_rect(), Some((5, 5, 10, 10)));
+        b.fill_rect(-5, -5, 40, 40, Color::rgb(255, 0, 0)).unwrap();
+        assert_eq!(px(&b, 5, 5), [255, 0, 0, 255]);
+        assert_eq!(px(&b, 15, 15), [0, 0, 0, 255], "parent clip restored");
+        b.pop_clip_rect().unwrap();
+        b.pop_translate().unwrap();
+        b.destroy_render_target(rt).unwrap();
+    }
+
+    /// The target's buffer keeps no clip from an earlier bind.
+    #[test]
+    fn render_target_rebind_starts_unclipped() {
+        let mut b = Ue5Backend::new(20, 20);
+        let rt = b.create_render_target(10, 10).unwrap();
+        b.bind_render_target(rt).unwrap();
+        b.set_clip_rect(0, 0, 1, 1).unwrap();
+        b.unbind_render_target().unwrap();
+        b.bind_render_target(rt).unwrap();
+        b.clear(Color::TRANSPARENT).unwrap();
+        b.fill_rect(0, 0, 10, 10, Color::rgb(0, 255, 0)).unwrap();
+        b.unbind_render_target().unwrap();
+        let mut out = vec![0u8; 10 * 10 * 4];
+        b.read_render_target(rt, &mut out).unwrap();
+        assert_eq!(&out[out.len() - 4..], &[0, 255, 0, 255]);
+        // Wrong-size buffers are rejected rather than partly filled.
+        assert!(b.read_render_target(rt, &mut [0u8; 8]).is_err());
+    }
+
+    #[test]
+    fn composite_scales_to_destination() {
+        let mut b = Ue5Backend::new(40, 20);
+        b.clear(Color::BLACK).unwrap();
+        let rt = b.create_render_target(4, 2).unwrap();
+        b.bind_render_target(rt).unwrap();
+        b.fill_rect(0, 0, 2, 2, Color::rgb(255, 0, 0)).unwrap();
+        b.fill_rect(2, 0, 2, 2, Color::rgb(0, 0, 255)).unwrap();
+        b.unbind_render_target().unwrap();
+        b.composite_render_target(rt, 0, 0, 40, 20, BlendMode::Normal, 1.0)
+            .unwrap();
+        assert_eq!(px(&b, 19, 19), [255, 0, 0, 255]);
+        assert_eq!(px(&b, 20, 0), [0, 0, 255, 255]);
+        assert_eq!(px(&b, 39, 19), [0, 0, 255, 255]);
+    }
+
+    /// A scaled composite far larger than the screen only resamples the
+    /// visible part (it used to allocate `dst_w * dst_h * 4` bytes first)
+    /// and samples the same source pixels as an on-screen one.
+    #[test]
+    fn huge_scaled_composite_resamples_only_the_visible_part() {
+        let mut b = Ue5Backend::new(40, 20);
+        b.clear(Color::BLACK).unwrap();
+        let rt = b.create_render_target(4, 2).unwrap();
+        b.bind_render_target(rt).unwrap();
+        b.fill_rect(0, 0, 2, 2, Color::rgb(255, 0, 0)).unwrap();
+        b.fill_rect(2, 0, 2, 2, Color::rgb(0, 0, 255)).unwrap();
+        b.unbind_render_target().unwrap();
+        // 4x2 scaled to 200_000 x 100_000 (80 GB unclipped), placed so the
+        // left/right halves meet at screen column 20.
+        b.composite_render_target(
+            rt,
+            -99_980,
+            -50_000,
+            200_000,
+            100_000,
+            BlendMode::Normal,
+            1.0,
+        )
+        .unwrap();
+        assert!(b.composite_scratch.len() <= 40 * 20 * 4);
+        assert_eq!(px(&b, 19, 0), [255, 0, 0, 255]);
+        assert_eq!(px(&b, 20, 19), [0, 0, 255, 255]);
+        // Entirely off screen: nothing drawn, nothing resampled.
+        b.clear(Color::BLACK).unwrap();
+        b.composite_render_target(rt, 50, 0, 1 << 30, 1 << 30, BlendMode::Normal, 1.0)
+            .unwrap();
+        assert_eq!(px(&b, 39, 0), [0, 0, 0, 255]);
+    }
+
+    /// Baking translucent draws into a target and compositing it with the
+    /// premultiplied operator looks like drawing them directly.
+    #[test]
+    fn premultiplied_composite_matches_immediate_drawing() {
+        let draw = |b: &mut Ue5Backend| {
+            b.fill_rect(2, 2, 20, 10, Color::rgba(230, 40, 30, 128))
+                .unwrap();
+            b.fill_circle(16, 10, 6, Color::rgba(40, 90, 240, 160))
+                .unwrap();
+        };
+        let mut direct = Ue5Backend::new(32, 24);
+        direct.clear(Color::rgb(24, 32, 48)).unwrap();
+        draw(&mut direct);
+
+        let mut baked = Ue5Backend::new(32, 24);
+        let rt = baked.create_render_target(32, 24).unwrap();
+        baked.bind_render_target(rt).unwrap();
+        baked.clear(Color::TRANSPARENT).unwrap();
+        draw(&mut baked);
+        baked.unbind_render_target().unwrap();
+        baked.clear(Color::rgb(24, 32, 48)).unwrap();
+        baked
+            .composite_render_target_premultiplied(rt, 0, 0, 32, 24)
+            .unwrap();
+
+        for (a, b) in direct
+            .buffer()
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .zip(baked.buffer().as_chunks::<4>().0)
+        {
+            for c in 0..3 {
+                assert!(a[c].abs_diff(b[c]) <= 2, "direct {a:?} vs baked {b:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn render_target_errors_are_typed() {
+        use oasis_types::error::BackendError;
+        let mut b = Ue5Backend::new(4, 4);
+        let missing = RenderTargetId(99);
+        for r in [
+            b.bind_render_target(missing),
+            b.destroy_render_target(missing),
+            b.composite_render_target_premultiplied(missing, 0, 0, 1, 1),
+        ] {
+            assert!(matches!(
+                r,
+                Err(OasisError::Backend(BackendError::RenderTargetNotFound {
+                    id: 99
+                }))
+            ));
+        }
+    }
+
+    /// `init` resizes in place: texture ids stay valid (the e2e harness
+    /// resizes the window with textures loaded).
+    #[test]
+    fn init_keeps_textures_and_resets_stacks() {
+        let mut b = Ue5Backend::new(8, 8);
+        let tex = b.load_texture(1, 1, &[1, 2, 3, 255]).unwrap();
+        b.push_translate(3, 3).unwrap();
+        b.push_clip_rect(0, 0, 1, 1).unwrap();
+        b.init(16, 12).unwrap();
+        assert_eq!(b.dimensions(), (16, 12));
+        assert_eq!(b.current_translate(), (0, 0));
+        assert_eq!(b.current_clip_rect(), None);
+        b.blit(tex, 15, 11, 1, 1).unwrap();
+        assert_eq!(px(&b, 15, 11), [1, 2, 3, 255]);
+        assert_eq!(b.live_textures(), 1);
+    }
+
+    #[test]
+    fn shutdown_releases_render_targets() {
+        let mut b = Ue5Backend::new(8, 8);
+        let a = b.create_render_target(4, 4).unwrap();
+        let _c = b.create_render_target(4, 4).unwrap();
+        b.bind_render_target(a).unwrap();
+        assert_eq!(b.live_render_targets(), 2);
+        b.shutdown().unwrap();
+        assert_eq!(b.live_render_targets(), 0);
+        assert!(b.bind_render_target(a).is_err());
+    }
+
+    #[test]
+    fn text_log_records_frames() {
+        let mut b = Ue5Backend::new(64, 32);
+        b.draw_text("before", 0, 0, 8, Color::WHITE).unwrap();
+        assert!(b.presented_text().is_empty(), "off by default");
+        b.enable_text_log();
+        b.clear(Color::BLACK).unwrap();
+        b.push_translate(4, 4).unwrap();
+        b.draw_text("hello", 1, 2, 8, Color::WHITE).unwrap();
+        b.pop_translate().unwrap();
+        b.draw_text("invisible", 0, 0, 8, Color::TRANSPARENT)
+            .unwrap();
+        // Clearing a bound render target does not reset the frame's log.
+        let rt = b.create_render_target(4, 4).unwrap();
+        b.bind_render_target(rt).unwrap();
+        b.clear(Color::TRANSPARENT).unwrap();
+        b.unbind_render_target().unwrap();
+        b.submit_text_batch(
+            &[BatchText {
+                text: "batched",
+                x: 0,
+                y: 10,
+                color: Color::WHITE,
+            }],
+            8,
+            true,
+            false,
+        )
+        .unwrap();
+        b.swap_buffers().unwrap();
+        let texts: Vec<_> = b.presented_text().iter().map(|t| t.text.as_str()).collect();
+        assert_eq!(texts, ["hello", "batched"]);
+        assert_eq!((b.presented_text()[0].x, b.presented_text()[0].y), (1, 2));
+        assert_eq!(b.frames_presented(), 1);
     }
 }

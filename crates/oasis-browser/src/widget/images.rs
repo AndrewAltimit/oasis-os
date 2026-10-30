@@ -10,7 +10,7 @@ use crate::html;
 use crate::html::dom::{NodeKind, TagName};
 use crate::image;
 use crate::layout;
-#[cfg(any(target_arch = "wasm32", feature = "psp"))]
+#[cfg(not(native_net))]
 use crate::loader::load_resource;
 use crate::loader::{self, ResourceRequest, ResourceSource};
 use crate::{BrowserWidget, LoadingState, SimpleTextMeasurer};
@@ -210,13 +210,15 @@ impl BrowserWidget {
                 if self.decoded_images.contains_key(&resolved) {
                     continue;
                 }
+                // A web page may not read the shell's VFS (`vfs://`).
+                if !loader::subresource_allowed(base_url.as_deref(), &resolved) {
+                    continue;
+                }
                 // CSP img-src enforcement is intentionally skipped.
-                // Images don't execute code, so blocking them provides no
-                // meaningful security benefit for an embedded browser. Many
-                // sites (Reddit, etc.) send strict img-src policies that
-                // reference CDN subdomains our lightweight CSP parser
-                // doesn't fully support (scheme-only sources like `https:`,
-                // `data:`, `blob:`), causing most images to be blocked.
+                // Images don't execute code, so blocking them provides
+                // little security benefit for an embedded browser, while
+                // a host-source mismatch (CDN subdomains, `blob:`) would
+                // break most images on sites with strict img-src policies.
                 let source = if self.config.features.sandbox_only {
                     ResourceSource::Vfs
                 } else {
@@ -232,6 +234,7 @@ impl BrowserWidget {
                         method: crate::loader::HttpMethod::Get,
                         body: None,
                         referrer,
+                        initiator: base_url.clone(),
                     },
                 );
 
@@ -260,6 +263,7 @@ impl BrowserWidget {
                 if let css::values::BackgroundImage::Url(ref url) = *img {
                     let resolved = Self::resolve_src(&base_url, url);
                     if self.decoded_images.contains_key(&resolved)
+                        || !loader::subresource_allowed(base_url.as_deref(), &resolved)
                         || !style_seen.insert(resolved.clone())
                     {
                         continue;
@@ -279,6 +283,7 @@ impl BrowserWidget {
                             method: crate::loader::HttpMethod::Get,
                             body: None,
                             referrer,
+                            initiator: base_url.clone(),
                         },
                     ));
                 }
@@ -306,18 +311,19 @@ impl BrowserWidget {
     ///
     /// Lazily spawns a daemon thread on first call. The thread receives
     /// `(url, raw_bytes)` and sends back `(url, DecodedImage)`.
-    #[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
+    #[cfg(native_net)]
     pub(crate) fn ensure_decode_thread(&mut self) {
         if self.image_decode_tx.is_some() {
             return;
         }
         let (work_tx, work_rx) = std::sync::mpsc::channel::<(String, Vec<u8>)>();
         let (result_tx, result_rx) = std::sync::mpsc::channel::<(String, image::DecodedImage)>();
+        let limits = self.config.image_limits();
         std::thread::Builder::new()
             .name("img-decode".into())
             .spawn(move || {
                 while let Ok((url, data)) = work_rx.recv() {
-                    if let Some(decoded) = image::decode_image(&data) {
+                    if let Some(decoded) = image::decode_image_with_limits(&data, limits) {
                         if result_tx.send((url, decoded)).is_err() {
                             break; // receiver dropped
                         }
@@ -337,7 +343,7 @@ impl BrowserWidget {
     /// Collect completed image decodes from the background thread.
     ///
     /// Returns `true` if any new images were inserted.
-    #[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
+    #[cfg(native_net)]
     fn poll_decoded_images(&mut self) -> bool {
         let rx = match &self.image_decode_rx {
             Some(rx) => rx,
@@ -406,13 +412,13 @@ impl BrowserWidget {
         self.promote_deferred_images();
 
         // On non-WASM targets, collect any completed background decodes.
-        #[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
+        #[cfg(native_net)]
         let mut any_decoded = self.poll_decoded_images();
-        #[cfg(any(target_arch = "wasm32", feature = "psp"))]
+        #[cfg(not(native_net))]
         let mut any_decoded = false;
 
         if self.pending_images.is_empty() {
-            #[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
+            #[cfg(native_net)]
             {
                 let io_images_done = self.pending_io_images.is_empty();
                 if self.image_decode_in_flight == 0
@@ -423,7 +429,7 @@ impl BrowserWidget {
                     self.state = LoadingState::Idle;
                 }
             }
-            #[cfg(any(target_arch = "wasm32", feature = "psp"))]
+            #[cfg(not(native_net))]
             if self.state == LoadingState::Loading {
                 self.state = LoadingState::Idle;
             }
@@ -461,7 +467,7 @@ impl BrowserWidget {
             }
 
             // On desktop, offload network image requests to the I/O thread.
-            #[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
+            #[cfg(native_net)]
             {
                 let is_network = matches!(
                     request.source,
@@ -486,7 +492,10 @@ impl BrowserWidget {
                         self.image_decode_in_flight += 1;
                     } else {
                         // Sync fallback — use placeholder on decode failure.
-                        let decoded = match image::decode_image(&vfs_resp.body) {
+                        let decoded = match image::decode_image_with_limits(
+                            &vfs_resp.body,
+                            self.config.image_limits(),
+                        ) {
                             Some(img) => img,
                             None => {
                                 self.broken_image_urls.insert(resolved.clone());
@@ -509,17 +518,20 @@ impl BrowserWidget {
             }
 
             // On WASM/PSP, load and decode synchronously (no threads).
-            #[cfg(any(target_arch = "wasm32", feature = "psp"))]
+            #[cfg(not(native_net))]
             self.diag(&format!("[BR] image fetch start: {resolved}"));
-            #[cfg(any(target_arch = "wasm32", feature = "psp"))]
+            #[cfg(not(native_net))]
             let load_result = load_resource(vfs, &request, self.tls.as_deref());
-            #[cfg(any(target_arch = "wasm32", feature = "psp"))]
+            #[cfg(not(native_net))]
             if let Ok(loaded) = load_result {
                 self.diag(&format!(
                     "[BR] image fetch ok: {} bytes",
                     loaded.response.body.len()
                 ));
-                if let Some(decoded) = image::decode_image(&loaded.response.body) {
+                if let Some(decoded) = image::decode_image_with_limits(
+                    &loaded.response.body,
+                    self.config.image_limits(),
+                ) {
                     let img_bytes = decoded.width as usize * decoded.height as usize * 4;
 
                     while self.decoded_image_bytes + img_bytes > Self::IMAGE_MEMORY_BUDGET {
@@ -547,7 +559,7 @@ impl BrowserWidget {
                     self.image_info_dirty = true;
                     any_decoded = true;
                 } else {
-                    #[cfg(any(target_arch = "wasm32", feature = "psp"))]
+                    #[cfg(not(native_net))]
                     self.diag("[BR] image decode failed, using placeholder");
                     // Insert a broken-image placeholder so the user
                     // sees a visual indicator instead of a blank space.
@@ -561,7 +573,7 @@ impl BrowserWidget {
                     any_decoded = true;
                 }
             } else {
-                #[cfg(any(target_arch = "wasm32", feature = "psp"))]
+                #[cfg(not(native_net))]
                 self.diag("[BR] image fetch err");
             }
 
@@ -575,7 +587,7 @@ impl BrowserWidget {
         // On non-WASM, wait within the remaining budget for in-flight
         // decodes to complete so callers that pass a generous budget
         // (e.g. tests with 5000ms) see results immediately.
-        #[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
+        #[cfg(native_net)]
         if self.image_decode_in_flight > 0
             && let Some(ref rx) = self.image_decode_rx
         {
@@ -633,7 +645,7 @@ impl BrowserWidget {
         }
 
         if self.pending_images.is_empty() {
-            #[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
+            #[cfg(native_net)]
             {
                 let io_images_done = self.pending_io_images.is_empty();
                 if self.image_decode_in_flight == 0
@@ -644,7 +656,7 @@ impl BrowserWidget {
                     self.state = LoadingState::Idle;
                 }
             }
-            #[cfg(any(target_arch = "wasm32", feature = "psp"))]
+            #[cfg(not(native_net))]
             if self.state == LoadingState::Loading {
                 self.state = LoadingState::Idle;
             }
@@ -704,7 +716,7 @@ impl BrowserWidget {
             self.cached_image_info = self
                 .decoded_images
                 .iter()
-                .map(|(url, img)| (url.clone(), (img.width, img.height)))
+                .map(|(url, img)| (url.clone(), (img.natural_width, img.natural_height)))
                 .collect();
             self.image_info_dirty = false;
         }
@@ -717,6 +729,11 @@ impl BrowserWidget {
     /// to reduce GPU texture bind switches during rendering. Larger
     /// images get individual textures as before.
     pub(crate) fn ensure_image_textures(&mut self, backend: &mut dyn SdiBackend) {
+        // Textures of the previous page (see `retire_image_textures`).
+        for tex in self.retired_textures.drain(..) {
+            let _ = backend.destroy_texture(tex);
+        }
+
         let doc = match &self.document {
             Some(d) => d,
             None => return,

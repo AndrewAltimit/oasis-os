@@ -3,7 +3,6 @@
 use std::time::{Duration, Instant};
 
 use oasis_types::backend::{NetworkBackend, NetworkStream};
-use oasis_types::error::OasisError;
 
 use crate::dispatch::{Handled, handle_message};
 use crate::http::{
@@ -32,22 +31,6 @@ const MAX_WRITE_BUF: usize = 4 * 1024 * 1024;
 const LINGER_QUIET_MS: u64 = 100;
 /// Hard cap on how long a lingering close may take.
 const LINGER_MAX_SECS: u64 = 2;
-
-/// Constant-time byte comparison (avoids leaking the token via timing).
-fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
-    if a.len() != b.len() {
-        return false;
-    }
-    let mut diff = 0u8;
-    for (x, y) in a.iter().zip(b.iter()) {
-        diff |= x ^ y;
-    }
-    diff == 0
-}
-
-fn is_would_block(e: &OasisError) -> bool {
-    matches!(e, OasisError::Io(io) if io.kind() == std::io::ErrorKind::WouldBlock)
-}
 
 struct HttpConn {
     stream: Box<dyn NetworkStream>,
@@ -99,7 +82,7 @@ impl HttpConn {
                     total += n;
                     last_input = now;
                 },
-                Err(ref e) if is_would_block(e) => break,
+                Err(ref e) if e.is_would_block() => break,
                 Err(_) => return true,
             }
         }
@@ -136,7 +119,7 @@ impl HttpConn {
                     }
                     self.read_buf.extend_from_slice(&buf[..n]);
                 },
-                Err(ref e) if is_would_block(e) => break,
+                Err(ref e) if e.is_would_block() => break,
                 Err(e) => {
                     log::debug!("mcp read error: {e}");
                     return false;
@@ -154,7 +137,7 @@ impl HttpConn {
                 Ok(n) => {
                     self.write_buf.drain(..n);
                 },
-                Err(ref e) if is_would_block(e) => break,
+                Err(ref e) if e.is_would_block() => break,
                 Err(e) => {
                     log::debug!("mcp write error: {e}");
                     self.write_buf.clear();
@@ -400,7 +383,7 @@ fn handle_http_request(
         let ok = req
             .auth_bearer
             .as_deref()
-            .is_some_and(|got| constant_time_eq(got.as_bytes(), expected.as_bytes()));
+            .is_some_and(|got| oasis_types::util::ct_eq(got.as_bytes(), expected.as_bytes()));
         if !ok {
             return build_response(
                 401,
@@ -447,7 +430,7 @@ fn handle_http_request(
 mod tests {
     use super::*;
     use crate::tools::{ToolResult, ToolSpec};
-    use oasis_types::error::Result;
+    use oasis_types::error::{OasisError, Result};
     use serde_json::{Value, json};
     use std::sync::{Arc, Mutex};
 
@@ -458,6 +441,8 @@ mod tests {
         server_to_client: Vec<u8>,
         /// When set, writes fail with `WouldBlock` (peer not draining).
         write_blocked: bool,
+        /// When set, reads fail with this kind once the input is drained.
+        read_error: Option<std::io::ErrorKind>,
         closed: bool,
     }
 
@@ -482,7 +467,10 @@ mod tests {
         fn read(&mut self, buf: &mut [u8]) -> Result<usize> {
             let mut p = lock(&self.pipe);
             if p.client_to_server.is_empty() {
-                return Err(would_block());
+                return Err(match p.read_error {
+                    Some(kind) => OasisError::Io(std::io::Error::from(kind)),
+                    None => would_block(),
+                });
             }
             let n = buf.len().min(p.client_to_server.len());
             let drained: Vec<u8> = p.client_to_server.drain(..n).collect();
@@ -724,6 +712,42 @@ mod tests {
         assert!(!lock(&pipe).closed);
         // Once the peer is quiet long enough, the connection closes.
         server.linger_quiet = Duration::ZERO;
+        server.poll(&mut disp);
+        assert_eq!(server.connection_count(), 0);
+        assert!(lock(&pipe).closed);
+    }
+
+    #[test]
+    fn timed_out_read_drops_the_connection() {
+        // On a non-blocking socket ETIMEDOUT is the kernel declaring the
+        // peer dead; it must not be retried like WouldBlock until the
+        // (5 minute) idle timeout.
+        let (mut server, pipe) = server_with(b"", None);
+        lock(&pipe).read_error = Some(std::io::ErrorKind::TimedOut);
+        let mut disp = StubDispatcher;
+        server.poll(&mut disp);
+        assert_eq!(server.connection_count(), 0);
+    }
+
+    #[test]
+    fn would_block_read_keeps_the_connection() {
+        let (mut server, _pipe) = server_with(b"", None);
+        let mut disp = StubDispatcher;
+        server.poll(&mut disp);
+        server.poll(&mut disp);
+        assert_eq!(server.connection_count(), 1);
+    }
+
+    #[test]
+    fn silent_peer_is_dropped_after_idle_timeout() {
+        // A client that connects and then never sends anything (and never
+        // closes) only ever yields WouldBlock: the idle timeout reaps it.
+        let (mut server, pipe) = server_with(b"", None);
+        let mut disp = StubDispatcher;
+        server.poll(&mut disp);
+        assert_eq!(server.connection_count(), 1);
+        server.idle_timeout = Duration::ZERO;
+        std::thread::sleep(Duration::from_millis(2));
         server.poll(&mut disp);
         assert_eq!(server.connection_count(), 0);
         assert!(lock(&pipe).closed);
