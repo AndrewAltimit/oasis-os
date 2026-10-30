@@ -2,7 +2,6 @@
 
 use crate::context::DrawContext;
 use crate::focus::FocusStyle;
-use crate::icon::Icon;
 use crate::layout::{HAlign, Padding};
 use crate::states::{WidgetState, WidgetStateColors};
 use crate::widget::Widget;
@@ -22,12 +21,10 @@ pub enum ButtonStyle {
     Ghost,
 }
 
-/// A clickable button with label and optional icon.
+/// A clickable button with a text label.
 pub struct Button {
     /// Button text label.
     pub label: String,
-    /// Optional icon to display.
-    pub icon: Option<Icon>,
     /// Current interaction state (the toolkit-wide [`WidgetState`]).
     pub state: WidgetState,
     /// Visual style variant.
@@ -43,7 +40,6 @@ impl Button {
     pub fn new(label: impl Into<String>) -> Self {
         Self {
             label: label.into(),
-            icon: None,
             state: WidgetState::Normal,
             style: ButtonStyle::Secondary,
             padding: Padding::symmetric(8, 4),
@@ -146,7 +142,6 @@ mod tests {
         assert_eq!(b.label, "Click");
         assert_eq!(b.state, WidgetState::Normal);
         assert_eq!(b.style, ButtonStyle::Secondary);
-        assert!(b.icon.is_none());
     }
 
     #[test]

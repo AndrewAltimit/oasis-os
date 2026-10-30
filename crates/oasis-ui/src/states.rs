@@ -158,7 +158,7 @@ impl WidgetStateColors {
             WidgetState::Normal => base,
             WidgetState::Hover => base.lerp(theme.text_primary, HOVER_TINT),
             WidgetState::Pressed => base.lerp(theme.text_primary, PRESSED_TINT),
-            WidgetState::Disabled => Color::rgba(base.r, base.g, base.b, base.a / 2),
+            WidgetState::Disabled => base.with_alpha(base.a / 2),
         }
     }
 

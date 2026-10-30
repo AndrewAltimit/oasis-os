@@ -378,7 +378,7 @@ fn format_display_value(val: f32) -> String {
 
 /// Dim a color for the disabled state by reducing its alpha.
 fn dim_color(c: Color) -> Color {
-    Color::rgba(c.r, c.g, c.b, c.a / 2)
+    c.with_alpha(c.a / 2)
 }
 
 #[cfg(test)]

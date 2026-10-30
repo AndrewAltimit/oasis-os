@@ -32,7 +32,10 @@ measure / center / draw sequence by hand:
   vertically centered in the rect and placed horizontally by
   `layout::HAlign` (`Left`, `Center`, `Right`), using exactly
   `layout::align_x` / `layout::center`, so it is pixel-identical to the
-  hand-written form.
+  hand-written form whenever the text fits. Text wider than the rect is
+  truncated with `...` from the left edge (`SdiText::draw_text_ellipsis`)
+  and dropped when not even the ellipsis fits, so a label never spills
+  out of its widget.
 - `ctx.frame((x, y, w, h), bg, border, radius)` draws a rounded fill plus a
   1-pixel rounded border.
 
@@ -45,27 +48,61 @@ Supporting types:
 | `WidgetState` / `WidgetStateColors` | `states.rs` | Uniform normal / hover / pressed / disabled color resolution, shared by every interactive widget (`Button::state` included); keyboard focus is a separate `focused` flag |
 | `widget::Widget` | `widget.rs` | The trait above |
 
-## Widgets implementing `Widget` (29)
+## Widgets implementing `Widget` (27)
 
 **Adoption.** The toolkit is a library catalogue: only a few of these are
 used outside `oasis-ui` today -- `Button` (Calculator), `ProgressBar`
 (Radio, System Monitor), `Slider` and `Toggle` (Settings), plus the
 non-`Widget` `MenuBar` (File Manager, Paint, Text Editor), `flex` and the
-`animation::easing` curves. The other 25 widgets, `ListView`, `NinePatch`,
-`IconAtlas`, `FocusManager` and `accessibility` have no in-tree callers.
-They are kept on purpose (complete, tested, and earmarked for the desktop
-metaphor in [theming-desktop-plan.md](theming-desktop-plan.md)) and stay
-compiled by default rather than behind a cargo feature: they cost only
-build time inside this one crate, a `widgets-extra` feature would put a
-`cfg` on two dozen modules and their tests and on the
-`oasis_core::ui` re-export, and nothing downstream would get smaller. Treat
+`animation::easing` curves. The other 23 widgets, `ListView`, `NinePatch`
+and the focus managers have no in-tree callers yet.
+
+They are kept on purpose: they are the general-purpose controls any app
+toolkit needs (text input, selection, lists, tables, trees, dialogs,
+menus), they already follow one convention (below), and the robustness
+sweep keeps them honest. They stay compiled by default rather than behind
+a cargo feature: they cost only build time inside this one crate, and a
+`widgets-extra` feature would put a `cfg` on two dozen modules and on the
+`oasis_core::ui` re-export while making nothing downstream smaller. Treat
 an unadopted widget as working but unproven in a real app: expect to
 adjust its API when the first app picks it up.
+
+Pruned (removed rather than kept as dead weight): `ToastStack` (the shell
+has its own skin-themed, SDI-based `oasis_core::toast::ToastManager`),
+`Avatar` (no user-account concept anywhere in the OS), `IconAtlas` / `Icon`
+(no atlas texture ships; icons are vector, see
+[vector-graphics.md](vector-graphics.md)) together with the never-drawn
+`Button::icon` field, and `accessibility` (its WCAG contrast helpers
+duplicated `oasis_types::color::{contrast_ratio, relative_luminance,
+meets_wcag_aa}`, and `AccessibilityLabel` had no assistive-technology
+consumer).
+
+### Widget conventions
+
+Every widget follows the same shape, so adopting one looks like adopting
+any other:
+
+- **Construction**: `Widget::new(..)` with the content (label, options,
+  range), then plain `pub` fields or `with_*` builders for the rest.
+- **Interaction state**: `hovered` / `pressed` / `disabled` flags resolve
+  through `WidgetState` + `WidgetStateColors` (`state()` /
+  `part_state()` / `option_state()`), plus a separate `focused` flag that
+  draws the theme's focus ring (`FocusStyle::from_theme`).
+- **Input**: the app owns events. Widgets expose state transitions
+  (`toggle`, `select_next`, `navigate_down`, `scroll_by`, `handle_key`)
+  and local-offset hit tests (`option_at`, `tab_at`, `part_at`,
+  `index_at`, `item_at`) that the app calls from its own handlers.
+- **Styling**: all colors, font sizes, radii and shadows come from the
+  `Theme` in the `DrawContext` (derived from the active skin); widgets
+  hard-code geometry only.
+- **Degenerate rects**: any widget can be drawn at any size, including
+  0x0 -- `robustness_tests.rs` sweeps every widget at zero, one-pixel,
+  few-pixel and full-screen sizes with overflowing content under every
+  test palette.
 
 | Widget | File | Purpose |
 |--------|------|---------|
 | `Accordion` | `accordion.rs` | Collapsible sections, single- or multi-expand (`AccordionMode`) |
-| `Avatar` | `avatar.rs` | Circular image with fallback initial |
 | `Badge` | `badge.rs` | Small colored tag / count indicator |
 | `Button` | `button.rs` | Push button with `ButtonStyle` variants; `state: WidgetState` (normal / hover / pressed / disabled) plus a `focused` ring |
 | `Card` | `card.rs` | Content card with optional image, title, subtitle and body |
@@ -81,15 +118,14 @@ adjust its API when the first app picks it up.
 | `ProgressBar` | `progress_bar.rs` | Determinate progress / gauge (`ProgressStyle`) |
 | `RadioGroup` | `radio.rs` | Mutually exclusive option selection |
 | `RichText` | `rich_text.rs` | Formatted text built from styled `Span`s |
-| `ScrollView` | `scroll_view.rs` | Scrollable content region with a scrollbar (`ScrollbarStyle`) |
+| `ScrollView` | `scroll_view.rs` | Scrollable content region with a scrollbar (`ScrollbarStyle`); `scroll_by` saturates and clamps |
 | `Slider` | `slider.rs` | Value within a range, horizontal or vertical |
 | `SpinBox` | `spin_box.rs` | Numeric input with increment / decrement buttons |
 | `Spinner` | `spinner.rs` | Loading indicators (`SpinnerStyle`) |
 | `SplitPane` | `split_pane.rs` | Two resizable panes with a draggable divider |
-| `Table` | `table.rs` | Multi-column data grid with optional header, selection and sort direction |
+| `Table` | `table.rs` | Multi-column data grid with optional header, selection and stable sort (the selection follows its row) |
 | `TabBar` | `tab_bar.rs` | Row of tabs (`TabStyle`) |
 | `TextBlock` | `text_block.rs` | Multi-line text with wrapping, truncation and alignment |
-| `ToastStack` | `toast.rs` | Stack of ephemeral `Toast` notifications (`ToastLevel`, `ToastPosition`) |
 | `Toggle` | `toggle.rs` | On / off switch |
 | `Tooltip` | `tooltip.rs` | Hover-activated text overlay with delay state machine and `TooltipAnchor` positioning |
 | `TreeView` | `tree_view.rs` | Hierarchical tree with expand / collapse and keyboard navigation |
@@ -98,18 +134,17 @@ adjust its API when the first app picks it up.
 
 | Component | File | Purpose |
 |-----------|------|---------|
-| `ListView<T>` | `list_view.rs` | Scrollable list with virtualized item rendering (items drawn by a caller closure) |
+| `ListView<T>` | `list_view.rs` | Scrollable list with virtualized item rendering (items drawn by a caller `fn`); `scroll_to` / clamped `scroll_by` |
 | `MenuBar` | `menu_bar.rs` | Windows-95-style top menu bar with drop-downs; returns `MenuHit` for clicks (used by Paint, Text Editor) |
 | `NinePatch`, `NinePatchSlices` | `nine_patch.rs` | 9-slice rendering of themed borders from a texture (re-exported from `oasis_types::nine_patch`) |
-| `IconAtlas` / `Icon` | `icon.rs` | Icon atlas rendering |
 | `FlexLayout`, `GridLayout` | `flex.rs` | Lightweight flex and grid layout helpers producing `ComputedRect`s |
-| `Padding`, `center`, `distribute`, `HAlign` / `VAlign`, `MeasureCache` | `layout.rs` | Centering, alignment, padding, distribution, cached text measurement |
-| `FocusRing`, `FocusManager` | `focus.rs` | Keyboard focus navigation and focus styling for widget groups |
+| `Padding`, `center`, `distribute`, `max_scroll`, `HAlign` / `VAlign`, `MeasureCache` | `layout.rs` | Centering, alignment, padding, distribution, scroll bounds, cached text measurement |
+| `FocusRing`, `FocusManager`, `SpatialFocusManager`, `FocusStyle` | `focus/` (`ring.rs`, `manager.rs`, `spatial.rs`, `style.rs`) | Index focus cursor; Tab / Shift-Tab cycling that skips disabled items; tab-index + arrow-key spatial navigation (consumes the backends' `InputEvent::Tab` / `ShiftTab`); focus-ring styling from the theme |
 | `Tween`, `ColorTween`, easing functions | `animation.rs` | Frame-driven animation primitives |
-| `AccessibilityLabel`, `contrast_ratio`, `meets_wcag_aa` / `_aaa` | `accessibility.rs` | Semantic labels and WCAG contrast checks |
 | `test_utils` | `test_utils.rs` | Test-only, crate-internal: re-exports `oasis_test_backend::RecordingBackend`, plus `all_themes()` / `test_draw_all_themes` / `assert_states_distinct` helpers |
 
-`color` and `shadow` are re-exported from `oasis-types`.
+`color` and `shadow` are re-exported from `oasis-types` (WCAG contrast
+checks live there: `color::contrast_ratio`, `color::meets_wcag_aa`).
 
 ## Using a widget
 
@@ -136,4 +171,6 @@ Each widget has in-module tests that draw into oasis-test-backend's
 (`fill_rect_count`, `has_text`, `text_positions`, ...). The
 `test_utils::test_draw_all_themes` sweep runs a widget under `Theme::dark()`
 and two test palettes (a light one and a high-contrast one with no
-rounding or shadows).
+rounding or shadows). `robustness_tests.rs` measures and draws one
+populated instance of every `Widget` impl at degenerate sizes under all
+three palettes; add new widgets to its `all_widgets()` list.
