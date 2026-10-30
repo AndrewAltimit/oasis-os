@@ -100,7 +100,8 @@ If you set `OASIS_MCP_TOKEN`, add the header:
 | `list_apps` | — | List launchable app titles. |
 | `open_app` | `title`, `file?` | Open an app (optionally pre-loading a VFS file). |
 | `list_windows` | — | List open windows (id, title, pos, size, focus). |
-| `focus_window` / `close_window` / `minimize_window` / `maximize_window` / `restore_window` | `id` | Window lifecycle. |
+| `focus_window` / `minimize_window` / `maximize_window` / `restore_window` | `id` | Window lifecycle. |
+| `close_window` | `id`, `force?` | Close a window the way its titlebar close button does (see below). |
 | `move_window` | `id`, `x`, `y` | Move a window to an absolute position. |
 | `resize_window` | `id`, `width`, `height` | Resize a window. |
 | `run_command` | `command` | Run a terminal command and return its output. |
@@ -109,6 +110,20 @@ If you set `OASIS_MCP_TOKEN`, add the header:
 | `tune` | `source` (`radio`/`tv`), `channel` | Tune the radio (station index or name) or the TV (channel number; the TV Guide must be open, it owns the catalogs). |
 | `get_state` | — | Current mode, skin, focused window, open windows, browser URL. |
 | `screenshot` | — | Return the current screen as a PNG image. |
+
+### Closing windows
+
+`close_window` goes through the same close path as the titlebar close button
+and the `wm close <id>` terminal command: it stops radio / music the app owned,
+releases the app's resources (textures) and returns to the dashboard when the
+last window closes. The app is asked first, so an app with unsaved work (the
+Text Editor with a modified document) can decline: it shows its "Save /
+Discard / Cancel" prompt, the window stays open and focused, and the call
+fails with an error whose text contains `declined`. The agent can then answer
+the prompt like a user (`screenshot` shows it), or call `close_window` again
+with `"force": true` to close the window without asking; unsaved changes are
+lost. `wm close <id>` behaves the same, without a force option: it prints
+`wm: <id> did not close: ...` to the terminal when the app declines.
 
 When an agent acts, a small activity pill appears in the bottom-right of the UI
 showing the most recent tool — the beginning of the in-OS assistant surface.
