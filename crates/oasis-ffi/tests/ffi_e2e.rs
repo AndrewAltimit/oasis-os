@@ -519,7 +519,7 @@ fn null_pointers_are_rejected_everywhere() {
         oasis_free_string(std::ptr::null_mut());
         oasis_set_vfs_root(null, std::ptr::null());
         oasis_add_vfs_file(null, s.as_ptr(), b"x".as_ptr(), 1);
-        oasis_register_callback(null, OASIS_CB_LOGIN, on_os_event);
+        oasis_register_callback(null, OASIS_CB_APP_LAUNCH, on_os_event);
         oasis_set_audio_callback(null, on_audio_event);
         assert_eq!(oasis_audio_load(null, b"x".as_ptr(), 1), u64::MAX);
     }

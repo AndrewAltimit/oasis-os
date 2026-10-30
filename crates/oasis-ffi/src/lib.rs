@@ -248,6 +248,26 @@ mod tests {
     }
 
     #[test]
+    fn register_callback_ignores_unknown_codes() {
+        extern "C" fn test_cb(_event: u32, _detail: *const c_char) {}
+
+        let handle = create_instance();
+        // 1/4/5/6 are the retired never-fired codes; 99 was never defined.
+        for code in [0, 1, 4, 5, 6, 99] {
+            unsafe { oasis_register_callback(handle, code, test_cb) };
+        }
+        unsafe { oasis_register_callback(handle, OASIS_CB_APP_LAUNCH, test_cb) };
+        // SAFETY: `handle` is a live instance from `create_instance`.
+        let codes: Vec<u32> = unsafe {
+            crate::handle::with_instance_ref(handle, Vec::new(), |inst| {
+                inst.callbacks.keys().copied().collect()
+            })
+        };
+        assert_eq!(codes, vec![OASIS_CB_APP_LAUNCH]);
+        unsafe { oasis_destroy(handle) };
+    }
+
+    #[test]
     fn free_string_null_is_safe() {
         unsafe { oasis_free_string(std::ptr::null_mut()) };
     }

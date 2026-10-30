@@ -288,15 +288,12 @@ void oasis_add_vfs_file(
  * Callbacks
  * ---------------------------------------------------------------- */
 
-/* Callback event types. Currently fired: OASIS_CB_COMMAND_EXEC (detail =
- * the command line, from oasis_send_command) and OASIS_CB_APP_LAUNCH
- * (detail = app title). The other codes are reserved and never fire yet. */
-#define OASIS_CB_FILE_ACCESS   1
+/* Callback event types: OASIS_CB_COMMAND_EXEC (detail = the command line,
+ * from oasis_send_command) and OASIS_CB_APP_LAUNCH (detail = app title).
+ * Codes 1, 4, 5 and 6 were never-fired placeholders and are retired;
+ * registering them (or any other code) is ignored with a logged warning. */
 #define OASIS_CB_COMMAND_EXEC  2
 #define OASIS_CB_APP_LAUNCH    3
-#define OASIS_CB_LOGIN         4
-#define OASIS_CB_NETWORK_SEND  5
-#define OASIS_CB_PLUGIN_LOAD   6
 
 typedef void (*OasisCallback)(uint32_t event, const char* detail);
 

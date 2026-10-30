@@ -42,14 +42,26 @@ pub(super) fn icon_for_app(
     frame: u32,
     anim_cfg: &IconTheme,
 ) -> IconDef {
+    let category = IconCategory::from_app_title(&app.title);
+    icon_for_category(preset, category, app.color, index, frame, anim_cfg)
+}
+
+/// [`icon_for_app`] for an already-classified app.
+fn icon_for_category(
+    preset: &str,
+    category: IconCategory,
+    color: Color,
+    index: usize,
+    frame: u32,
+    anim_cfg: &IconTheme,
+) -> IconDef {
     match preset {
-        "altimit" => altimit_icon(app, index, frame, anim_cfg),
-        "geometric" => geometric_icon(app.color, index),
-        "hud" => hud_icon(app.color, index),
-        "outline" => icon_set::outline_icon(IconCategory::from_app_title(&app.title), app.color),
-        "solid" => icon_set::solid_icon(IconCategory::from_app_title(&app.title), app.color),
-        "pixel" => icon_set::pixel_icon(IconCategory::from_app_title(&app.title), app.color),
-        _ => altimit_icon(app, index, frame, anim_cfg),
+        "geometric" => geometric_icon(color, index),
+        "hud" => hud_icon(color, index),
+        "outline" => icon_set::outline_icon(category, color),
+        "solid" => icon_set::solid_icon(category, color),
+        "pixel" => icon_set::pixel_icon(category, color),
+        _ => altimit_icon(category, color, index, frame, anim_cfg),
     }
 }
 
@@ -92,9 +104,14 @@ fn altimit_glyph(category: IconCategory, index: usize) -> AltimitGlyph {
 /// Build the Altimit icon for an app.
 ///
 /// Applies per-icon animations when enabled in the theme config.
-fn altimit_icon(app: &AppEntry, index: usize, frame: u32, cfg: &IconTheme) -> IconDef {
-    let color = app.color;
-    match altimit_glyph(IconCategory::from_app_title(&app.title), index) {
+fn altimit_icon(
+    category: IconCategory,
+    color: Color,
+    index: usize,
+    frame: u32,
+    cfg: &IconTheme,
+) -> IconDef {
+    match altimit_glyph(category, index) {
         AltimitGlyph::World if cfg.spin_enabled && frame > 0 => {
             let angle = frame as f32 * cfg.spin_speed;
             icons::icon_the_world_animated(color, angle)
@@ -556,7 +573,7 @@ impl DashboardState {
 
         // Page-slide offset for animation.
         let slide_offset = if let Some(ref anim) = self.page_anim {
-            let t = crate::transition::ease_in_out_cubic(anim.frame as f32 / anim.duration as f32);
+            let t = anim.eased_progress();
             let w = at.screen_w as f32;
             ((1.0 - t) * w * anim.direction as f32) as i32
         } else {
@@ -1053,18 +1070,21 @@ mod tests {
         }
     }
 
+    /// Every real category (each built-in app maps to one; `oasis-apps`
+    /// tests that against its registry).
+    fn categories() -> impl Iterator<Item = IconCategory> {
+        IconCategory::ALL
+            .into_iter()
+            .filter(|c| *c != IconCategory::Generic)
+    }
+
     #[test]
-    fn no_builtin_app_gets_a_generic_icon() {
+    fn no_category_gets_a_generic_icon() {
         let cfg = default_icon_theme();
-        for &title in crate::apps::BUILTIN_APP_TITLES {
-            assert_ne!(
-                IconCategory::from_app_title(title),
-                IconCategory::Generic,
-                "{title}"
-            );
+        for cat in categories() {
             for preset in ["outline", "solid", "pixel", "altimit"] {
-                let name = icon_for_app(preset, &app(title), 0, 0, &cfg).name;
-                assert!(!name.ends_with("generic"), "{preset} {title} -> {name}");
+                let name = icon_for_category(preset, cat, Color::WHITE, 0, 0, &cfg).name;
+                assert!(!name.ends_with("generic"), "{preset} {cat:?} -> {name}");
             }
         }
     }
@@ -1098,12 +1118,23 @@ mod tests {
     }
 
     #[test]
-    fn builtin_altimit_icons_are_distinct() {
+    fn altimit_icons_are_distinct_per_category() {
+        // Distinct categories get distinct Altimit icons; Home shares the
+        // Browser globe by design (no built-in app is a launcher).
         let cfg = default_icon_theme();
-        let mut seen = std::collections::HashSet::new();
-        for (i, &title) in crate::apps::BUILTIN_APP_TITLES.iter().enumerate() {
-            let name = icon_for_app("altimit", &app(title), i, 0, &cfg).name;
-            assert!(seen.insert(name), "{title} reuses {name}");
+        let mut seen = std::collections::HashMap::new();
+        for (i, cat) in categories().enumerate() {
+            let name = icon_for_category("altimit", cat, Color::WHITE, i, 0, &cfg).name;
+            if let Some(prev) = seen.insert(name, cat) {
+                assert!(
+                    matches!(
+                        (prev, cat),
+                        (IconCategory::Browser, IconCategory::Home)
+                            | (IconCategory::Home, IconCategory::Browser)
+                    ),
+                    "{cat:?} reuses {name} of {prev:?}"
+                );
+            }
         }
     }
 
@@ -1129,9 +1160,9 @@ mod tests {
         // Semantic sets are strict; the legacy Altimit glyphs are drawn
         // edge-to-edge, so allow their centred 2px strokes 1px of overhang.
         let cfg = default_icon_theme();
-        for &title in crate::apps::BUILTIN_APP_TITLES {
+        for cat in categories() {
             for preset in ["outline", "solid", "pixel", "altimit"] {
-                let icon = icon_for_app(preset, &app(title), 0, 0, &cfg);
+                let icon = icon_for_category(preset, cat, Color::WHITE, 0, 0, &cfg);
                 let (x0, y0, x1, y1) = icon_set::ops_bounds(&icon.ops).expect("icon has ops");
                 let legacy = matches!(
                     icon.name,
@@ -1143,7 +1174,7 @@ mod tests {
                         && y0 >= -tol
                         && x1 <= icon.width as i32 + tol
                         && y1 <= icon.height as i32 + tol,
-                    "{preset} {title} ({}) bounds ({x0},{y0})-({x1},{y1})",
+                    "{preset} {cat:?} ({}) bounds ({x0},{y0})-({x1},{y1})",
                     icon.name
                 );
             }

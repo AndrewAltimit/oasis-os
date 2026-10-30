@@ -287,22 +287,83 @@ impl TvGuideRunnerExt for AppRunner {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use oasis_core::apps::BUILTIN_APP_TITLES;
     use oasis_core::dashboard::AppEntry;
     use oasis_core::vfs::MemoryVfs;
 
-    #[test]
-    fn core_knows_every_builtin_title() {
+    /// Every title the dashboard can show for a built-in app: the
+    /// registry (minus the WASM-only video embed) plus the host browser.
+    fn builtin_titles() -> Vec<String> {
         let apps = builtin_registry(&HostInfo::default());
-        let mut titles: Vec<&str> = apps
-            .titles()
+        apps.titles()
             .filter(|t| *t != titles::VIDEO_EMBED)
             .chain([titles::BROWSER])
+            .map(str::to_string)
+            .collect()
+    }
+
+    #[test]
+    fn every_builtin_title_has_its_own_icon_category() {
+        use oasis_core::vector::icon_set::IconCategory;
+        let mut seen = std::collections::HashMap::new();
+        for title in builtin_titles() {
+            let cat = IconCategory::from_app_title(&title);
+            assert_ne!(cat, IconCategory::Generic, "{title} has no icon category");
+            if let Some(prev) = seen.insert(format!("{cat:?}"), title.clone()) {
+                panic!("{title} shares icon category {cat:?} with {prev}");
+            }
+        }
+    }
+
+    /// Dashboard labels of every built-in title stay inside their cell on
+    /// every built-in skin at 480x272, in both grid and free layout, and
+    /// are never truncated on PSP-native skins.
+    #[test]
+    fn every_builtin_title_fits_its_dashboard_cell() {
+        use oasis_core::active_theme::ActiveTheme;
+        use oasis_core::dashboard::{DashboardConfig, DashboardState};
+        use oasis_core::sdi::SdiRegistry;
+        use oasis_core::skin::builtin::{builtin_names, load_builtin};
+        use oasis_core::text_fit::{ELLIPSIS, text_width};
+
+        let tiles: Vec<AppEntry> = builtin_titles()
+            .iter()
+            .map(|t| AppEntry::for_title(t))
             .collect();
-        let mut known = BUILTIN_APP_TITLES.to_vec();
-        titles.sort_unstable();
-        known.sort_unstable();
-        assert_eq!(titles, known, "update oasis_core::apps::BUILTIN_APP_TITLES");
+        for &skin_name in builtin_names() {
+            let skin = load_builtin(skin_name).unwrap();
+            let at = ActiveTheme::from_skin(&skin.theme)
+                .with_screen_size(480, 272)
+                .with_features(&skin.features);
+            let psp_native = skin.manifest.screen_width == 480;
+            for free in [false, true] {
+                let mut cfg = DashboardConfig::from_features(&skin.features, &at);
+                cfg.free_layout = free;
+                let cell_w = if free { cfg.free_cell_w } else { cfg.cell_w };
+                let mut dash = DashboardState::new(cfg, tiles.clone());
+                let mut labelled = 0;
+                for _ in 0..dash.page_count() {
+                    let mut sdi = SdiRegistry::new();
+                    dash.update_sdi(&mut sdi, &at);
+                    for name in sdi.names().filter(|n| n.starts_with("icon_label")) {
+                        let obj = sdi.get(name).unwrap();
+                        let Some(line) = obj.text.as_deref().filter(|_| obj.visible) else {
+                            continue;
+                        };
+                        labelled += 1;
+                        let what = format!("{skin_name} free={free}: {line:?}");
+                        assert!(!psp_native || !line.ends_with(ELLIPSIS), "{what} truncated");
+                        let w = text_width(line, obj.font_size);
+                        assert!(w < cell_w, "{what} is {w}px in a {cell_w}px cell");
+                    }
+                    dash.next_page();
+                    dash.tick_animation();
+                }
+                assert!(
+                    labelled >= tiles.len(),
+                    "{skin_name}: only {labelled} labels"
+                );
+            }
+        }
     }
 
     #[test]

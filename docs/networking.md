@@ -7,7 +7,7 @@ OASIS_OS networking is split across two crates:
   (feature `vfs`) the FTP-like file transfer server (`oasis_net::ftp`),
   layered on `NetworkBackend` and `Vfs`.
 - **`oasis-core/src/transfer/`** — the `ftp`, `push` and `pull` terminal
-  commands; re-exports the server types.
+  commands; re-exports `FtpServer`, `DEFAULT_FTP_PORT` and `FTP_STATUS_PATH`.
 
 The `NetworkBackend` trait itself lives in `oasis-types/src/backend/`. Backends
 (SDL3, WASM, UE5, PSP) implement it; everything above the trait is shared.
@@ -265,10 +265,12 @@ Verbs:
 The service is integrated into the desktop binary via `FtpServer` in
 `oasis-app/src/app_state.rs`. The `ftp` terminal command starts and stops it,
 and the main loop polls connections each frame
-(`Shell::step` in `oasis-app/src/shell.rs`). Status and request files live at
-
-`/var/ftp/status` and `/var/ftp/request` so headless drivers can inspect or
-trigger transfers via the VFS.
+(`Shell::step` in `oasis-app/src/shell.rs`). `oasis_net::ftp` defines
+`FTP_STATUS_PATH` (`/var/ftp/status`, read by `ftp status`) and
+`FTP_REQUEST_PATH` (`/var/ftp/request`), but no host writes the status file
+or polls the request file today, so `ftp status` reports `inactive` even
+while the server runs; the start/stop replies are the source of truth.
+`ftp start` rejects port `0` (the stop sentinel) and unparseable ports.
 
 Authentication is optional and password-based: `ftp start <port> --password
 <pass>` arms `FtpServer::with_password` (`oasis-net/src/ftp.rs`). Without

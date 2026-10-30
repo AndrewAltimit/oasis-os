@@ -97,7 +97,7 @@ Fork PRs are blocked from the self-hosted runners (fork guard).
 | Gemini | Host (Gemini CLI) | Second-opinion consultation via MCP; not used for PR review | Optional |
 | Codex | Containerized | -- | **DISABLED** -- see security notice below |
 
-Priorities (from `.agents.yaml.example`): issue creation / PR authoring: Claude > OpenCode; code fixes: Claude > Crush > OpenCode. The example still lists `pr_reviews: gemini, claude`, but `pr-validation.yml` runs only the Claude and OpenRouter reviews.
+Priorities (from `.agents.yaml.example`): issue creation / PR authoring: Claude > OpenCode; PR reviews: Claude (`pr-validation.yml` runs the Claude security + quality reviews and an OpenRouter general review); code fixes: Claude > Crush > OpenCode.
 
 ### MCP Servers
 

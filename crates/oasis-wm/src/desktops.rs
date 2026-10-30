@@ -236,7 +236,8 @@ impl DesktopManager {
 
         // Adjust active desktop if needed.
         if self.active == desktop {
-            // Snap to the previous desktop, or 0 if we removed desktop 0.
+            // The following desktop slides into this index; if the last
+            // desktop was removed, fall back to the new last one.
             if self.active >= self.count {
                 self.active = self.count - 1;
             }

@@ -98,17 +98,6 @@ impl McpRegistry {
             .and_then(|s| s.tools.iter().find(|t| t.name == tool_name))
     }
 
-    /// List all tools across all servers as `(server_name, tool)` pairs.
-    pub fn all_tools(&self) -> Vec<(&str, &McpToolEntry)> {
-        let mut out = Vec::new();
-        for server in &self.servers {
-            for tool in &server.tools {
-                out.push((server.name.as_str(), tool));
-            }
-        }
-        out
-    }
-
     /// Return the total number of servers.
     pub fn server_count(&self) -> usize {
         self.servers.len()
@@ -197,15 +186,6 @@ tools = [
     fn find_tool_missing_tool() {
         let reg = McpRegistry::from_toml(MCP_TOML).unwrap();
         assert!(reg.find_tool("code-quality", "nonexistent").is_none());
-    }
-
-    #[test]
-    fn all_tools() {
-        let reg = McpRegistry::from_toml(MCP_TOML).unwrap();
-        let tools = reg.all_tools();
-        assert_eq!(tools.len(), 6);
-        assert_eq!(tools[0].0, "code-quality");
-        assert_eq!(tools[0].1.name, "lint");
     }
 
     #[test]

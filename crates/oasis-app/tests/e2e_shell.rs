@@ -555,3 +555,106 @@ fn static_background_layer_is_baked_and_reused() {
     );
     assert_not_blank(&h, "baked_background");
 }
+
+/// Writes a shell profile and a startup script during plugin init, which
+/// runs before the shell's boot scripts (a stand-in for a host whose VFS
+/// persists them across boots).
+mod boot_script_plugin {
+    use oasis_core::error::Result;
+    use oasis_core::plugin::{Plugin, PluginHost, PluginInfo};
+
+    struct WritesBootScripts;
+
+    impl Plugin for WritesBootScripts {
+        fn info(&self) -> PluginInfo {
+            PluginInfo::new("boot-scripts", "1.0.0")
+        }
+        fn init(&mut self, host: &mut PluginHost<'_>) -> Result<()> {
+            host.vfs.write("/home/.profile", b"set GREETING=hello")?;
+            host.vfs
+                .write("/etc/startup.sh", b"echo $GREETING from startup.sh")?;
+            Ok(())
+        }
+        fn update(&mut self, _host: &mut PluginHost<'_>) -> Result<()> {
+            Ok(())
+        }
+        fn shutdown(&mut self, _host: &mut PluginHost<'_>) -> Result<()> {
+            Ok(())
+        }
+    }
+
+    pub fn make() -> Box<dyn Plugin> {
+        Box::new(WritesBootScripts)
+    }
+}
+
+/// `/home/.profile` and `/etc/startup.sh` run once at boot, in that order:
+/// the profile's variables are visible to the startup script and to the
+/// interactive terminal, and the script's output is in the scrollback.
+#[test]
+fn boot_runs_profile_then_startup_script() {
+    let mut opts = HarnessOptions::new("classic");
+    opts.plugins = vec![boot_script_plugin::make];
+    let mut h = Harness::with_options(opts).unwrap();
+    let lines = &h.state().terminal.output_lines;
+    assert!(
+        lines.iter().any(|l| l == "hello from startup.sh"),
+        "startup output missing: {lines:?}"
+    );
+    h.terminal("echo $GREETING");
+    assert_eq!(
+        h.state().terminal.output_lines.last().map(String::as_str),
+        Some("hello")
+    );
+}
+
+/// The default seeded profile is a no-op: it restates the shell defaults
+/// and prints nothing.
+#[test]
+fn default_profile_keeps_shell_identity() {
+    let mut h = Harness::new("classic");
+    assert!(h.vfs().exists("/home/.profile"));
+    h.terminal("echo $USER $SHELL");
+    assert_eq!(
+        h.state().terminal.output_lines.last().map(String::as_str),
+        Some("user oasis")
+    );
+}
+
+/// Snapshot of every SDI object's distortable properties, sorted by name.
+fn scene_props(h: &Harness) -> Vec<(String, i32, i32, u8, Option<String>)> {
+    let sdi = &h.shell.sdi;
+    let mut names: Vec<&str> = sdi.names().collect();
+    names.sort_unstable();
+    names
+        .into_iter()
+        .map(|n| {
+            let o = sdi.get(n).unwrap();
+            (n.to_string(), o.x, o.y, o.alpha, o.text.clone())
+        })
+        .collect()
+}
+
+/// The corrupted skin distorts what is drawn (jitter / garble / flicker
+/// vary frame to frame) but never the scene itself: every frame starts
+/// from the clean layout, so nothing drifts.
+#[test]
+fn corrupted_skin_glitches_frames_without_drifting_the_scene() {
+    let mut h = Harness::new("corrupted");
+    assert!(h.state().skin.corrupted_modifiers.is_some());
+    h.settle();
+    let clean = scene_props(&h);
+    let mut drawn = std::collections::HashSet::new();
+    for _ in 0..20 {
+        let out = h.step(&[]);
+        assert!(out.redraw, "the glitch keeps the corrupted skin animating");
+        let frame: Vec<_> = h
+            .frame_text_calls()
+            .iter()
+            .map(|t| (t.text.clone(), t.x, t.y))
+            .collect();
+        drawn.insert(format!("{frame:?}"));
+    }
+    assert!(drawn.len() > 1, "drawn output never varied");
+    assert_eq!(scene_props(&h), clean, "corruption leaked into the scene");
+}

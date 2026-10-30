@@ -124,9 +124,6 @@ pub struct SkinFeatures {
     /// Grid rows.
     #[serde(default = "default_grid_rows")]
     pub grid_rows: u32,
-    /// Available command categories (empty = all).
-    #[serde(default)]
-    pub command_categories: Vec<String>,
     /// Whether the start menu popup is available.
     #[serde(default = "yes")]
     pub start_menu: bool,
@@ -212,7 +209,6 @@ impl Default for SkinFeatures {
             software_cursor: false,
             grid_cols: 5,
             grid_rows: 3,
-            command_categories: Vec::new(),
             start_menu: true,
             corrupted: false,
             show_battery: true,

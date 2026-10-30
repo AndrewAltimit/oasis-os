@@ -195,20 +195,31 @@ impl WindowManager {
             }
         }
 
-        // Move focus to next topmost visible window.
-        let new_active = self
-            .windows
-            .iter()
-            .rev()
-            .find(|w| w.state != WindowState::Minimized && w.id != id)
-            .map(|w| w.id.clone());
-        self.active_window = new_active;
+        // Move focus to the next topmost visible window, unless another
+        // (visible) window already has it. Going through
+        // `focus_window_internal` repaints the active/inactive titlebars.
+        let focus_elsewhere = self.active_window.as_deref().is_some_and(|a| a != id);
+        if !focus_elsewhere {
+            match self
+                .windows
+                .iter()
+                .rev()
+                .find(|w| w.state != WindowState::Minimized && w.id != id)
+                .map(|w| w.id.clone())
+            {
+                Some(next) => self.focus_window_internal(&next, sdi),
+                None => self.active_window = None,
+            }
+        }
 
         Ok(())
     }
 
     /// Maximize a window to fill the screen.
     pub fn maximize_window(&mut self, id: &str, sdi: &mut SdiRegistry) -> Result<()> {
+        // The screen minus the status/task bar insets (saturating, so
+        // insets taller than a tiny screen give a 0-height window).
+        let area = self.work_area();
         let window = self
             .windows
             .iter_mut()
@@ -233,11 +244,10 @@ impl WindowManager {
             });
         }
 
-        window.x = 0;
-        window.y = self.theme.maximize_top_inset as i32;
-        window.outer_w = self.screen_w;
-        window.outer_h =
-            self.screen_h - self.theme.maximize_top_inset - self.theme.maximize_bottom_inset;
+        window.x = area.x;
+        window.y = area.y;
+        window.outer_w = area.w;
+        window.outer_h = area.h;
         window.state = WindowState::Maximized;
 
         self.update_sdi_positions(id, sdi);
@@ -294,13 +304,16 @@ impl WindowManager {
             .ok_or_else(|| OasisError::Wm(WmError::WindowNotFound { id: id.to_string() }))?;
 
         // Save current geometry for restore (separate from maximize/minimize
-        // saved_geometry so we don't clobber it).
-        window.kiosk_saved_geometry = Some(Geometry {
-            x: window.x,
-            y: window.y,
-            w: window.outer_w,
-            h: window.outer_h,
-        });
+        // saved_geometry so we don't clobber it). Re-entering kiosk mode
+        // keeps the original: the current geometry is the fullscreen one.
+        if !window.fullscreen_kiosk || window.kiosk_saved_geometry.is_none() {
+            window.kiosk_saved_geometry = Some(Geometry {
+                x: window.x,
+                y: window.y,
+                w: window.outer_w,
+                h: window.outer_h,
+            });
+        }
 
         window.x = 0;
         window.y = 0;
@@ -342,11 +355,14 @@ impl WindowManager {
 
         window.fullscreen_kiosk = false;
 
-        // Re-show all decoration SDI objects.
-        for suffix in window.sdi_suffixes() {
-            let name = window.sdi_name(suffix);
-            if let Ok(obj) = sdi.get_mut(&name) {
-                obj.visible = true;
+        // Re-show all decoration SDI objects (a minimized window stays
+        // hidden until it is restored).
+        if window.state != WindowState::Minimized {
+            for suffix in window.sdi_suffixes() {
+                let name = window.sdi_name(suffix);
+                if let Ok(obj) = sdi.get_mut(&name) {
+                    obj.visible = true;
+                }
             }
         }
 

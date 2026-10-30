@@ -8,7 +8,7 @@ use oasis_types::backend::SdiBackend;
 use oasis_types::error::Result;
 
 use super::manager::WindowManager;
-use super::window::WindowState;
+use super::window::{Window, WindowState};
 
 impl WindowManager {
     /// Draw window content with clipping. The caller provides a draw callback
@@ -75,10 +75,7 @@ impl WindowManager {
 
             // Draw this window's SDI objects (frame, titlebar, buttons, etc.).
             let id = window.id.as_str();
-            for suffix in window.sdi_suffixes() {
-                let name = fmt_sdi_name(&mut name_buf, id, suffix);
-                sdi.draw_named(name, backend)?;
-            }
+            draw_window_objects(window, sdi, backend, &mut name_buf)?;
 
             // Draw clipped content inside the window (at its animated
             // geometry while an open/minimize/restore animation runs).
@@ -100,11 +97,7 @@ impl WindowManager {
 
         // Closing windows fade out on top (chrome only, content is gone).
         for ghost in &self.closing {
-            let id = ghost.id.as_str();
-            for suffix in ghost.sdi_suffixes() {
-                let name = fmt_sdi_name(&mut name_buf, id, suffix);
-                sdi.draw_named(name, backend)?;
-            }
+            draw_window_objects(ghost, sdi, backend, &mut name_buf)?;
         }
 
         // Draw non-window overlay SDI objects (cursor, start menu, toasts)
@@ -151,7 +144,29 @@ impl WindowManager {
     }
 }
 
-/// Format `"{id}.{suffix}"` into a stack buffer, returning `&str`.
+/// Draw every SDI object of `window`, building the names in `buf`.
+/// Names too long for the buffer fall back to an allocated string rather
+/// than silently skipping the window's chrome.
+fn draw_window_objects(
+    window: &Window,
+    sdi: &mut SdiRegistry,
+    backend: &mut dyn SdiBackend,
+    buf: &mut [u8; 64],
+) -> Result<()> {
+    let id = window.id.as_str();
+    for suffix in window.sdi_suffixes() {
+        let name = fmt_sdi_name(buf, id, suffix);
+        if name.is_empty() {
+            sdi.draw_named(&window.sdi_name(suffix), backend)?;
+        } else {
+            sdi.draw_named(name, backend)?;
+        }
+    }
+    Ok(())
+}
+
+/// Format `"{id}.{suffix}"` into a stack buffer, returning `&str` (empty
+/// when it does not fit).
 pub(crate) fn fmt_sdi_name<'a>(buf: &'a mut [u8; 64], id: &str, suffix: &str) -> &'a str {
     let id_bytes = id.as_bytes();
     let suf_bytes = suffix.as_bytes();
@@ -265,5 +280,22 @@ mod tests {
             .unwrap();
 
         assert_eq!(tags(&a), tags(&b));
+    }
+    #[test]
+    fn long_window_ids_still_draw_their_chrome() {
+        // "{id}.{suffix}" no longer fits the 64-byte stack buffer.
+        let id = "x".repeat(60);
+        let mut sdi = SdiRegistry::new();
+        let mut wm = WindowManager::new(800, 600);
+        let mut theme = wm.theme().clone();
+        theme.frame_color = Color::rgb(9, 0, 0);
+        wm.set_theme(theme);
+        wm.create_window(&app_config(&id), &mut sdi).unwrap();
+
+        let mut backend = RecordingBackend::default();
+        wm.draw_with_clips(&mut sdi, &mut backend, |_, _, _, _, _, _| Ok(()))
+            .unwrap();
+
+        assert!(tags(&backend).contains(&9), "frame must be drawn");
     }
 }

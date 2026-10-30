@@ -1544,4 +1544,75 @@ mod tests {
         assert!(!sdi.contains("w0.frame"));
         assert!(!sdi.contains("w19.frame"));
     }
+    #[test]
+    fn maximize_with_insets_taller_than_screen_does_not_underflow() {
+        let mut sdi = SdiRegistry::new();
+        let mut wm = WindowManager::new(200, 40);
+        let mut theme = wm.theme().clone();
+        theme.maximize_top_inset = 30;
+        theme.maximize_bottom_inset = 30;
+        wm.set_theme(theme);
+        wm.create_window(&app_config("w"), &mut sdi).unwrap();
+        wm.maximize_window("w", &mut sdi).unwrap();
+        let win = wm.get_window("w").unwrap();
+        assert_eq!((win.y, win.outer_w, win.outer_h), (30, 200, 0));
+    }
+
+    #[test]
+    fn minimize_repaints_titlebar_of_newly_focused_window() {
+        let mut sdi = SdiRegistry::new();
+        let mut wm = WindowManager::new(800, 600);
+        wm.create_window(&app_config("w1"), &mut sdi).unwrap();
+        wm.create_window(&app_config("w2"), &mut sdi).unwrap();
+        wm.minimize_window("w2", &mut sdi).unwrap();
+        assert_eq!(wm.active_window(), Some("w1"));
+        assert_eq!(
+            sdi.get("w1.titlebar").unwrap().color,
+            wm.theme().titlebar_active_color
+        );
+        assert_eq!(
+            sdi.get("w1.title_text").unwrap().text_color,
+            wm.theme().titlebar_text_color
+        );
+    }
+
+    #[test]
+    fn minimizing_a_background_window_keeps_focus() {
+        let mut sdi = SdiRegistry::new();
+        let mut wm = WindowManager::new(800, 600);
+        wm.create_window(&app_config("w1"), &mut sdi).unwrap();
+        wm.create_window(&app_config("w2"), &mut sdi).unwrap();
+        wm.create_window(&app_config("w3"), &mut sdi).unwrap();
+        wm.focus_window("w1", &mut sdi).unwrap();
+        wm.minimize_window("w2", &mut sdi).unwrap();
+        assert_eq!(wm.active_window(), Some("w1"));
+    }
+
+    #[test]
+    fn enter_fullscreen_twice_keeps_original_geometry() {
+        let mut sdi = SdiRegistry::new();
+        let mut wm = WindowManager::new(800, 600);
+        wm.create_window(&app_config("w"), &mut sdi).unwrap();
+        let orig = wm.get_window("w").unwrap().clone();
+        wm.enter_fullscreen("w", &mut sdi).unwrap();
+        wm.enter_fullscreen("w", &mut sdi).unwrap();
+        wm.exit_fullscreen("w", &mut sdi).unwrap();
+        let win = wm.get_window("w").unwrap();
+        assert_eq!(
+            (win.x, win.y, win.outer_w, win.outer_h),
+            (orig.x, orig.y, orig.outer_w, orig.outer_h)
+        );
+    }
+
+    #[test]
+    fn exit_fullscreen_keeps_minimized_window_hidden() {
+        let mut sdi = SdiRegistry::new();
+        let mut wm = WindowManager::new(800, 600);
+        wm.create_window(&app_config("w"), &mut sdi).unwrap();
+        wm.enter_fullscreen("w", &mut sdi).unwrap();
+        wm.minimize_window("w", &mut sdi).unwrap();
+        wm.exit_fullscreen("w", &mut sdi).unwrap();
+        assert!(!sdi.get("w.frame").unwrap().visible);
+        assert!(!sdi.get("w.content").unwrap().visible);
+    }
 }

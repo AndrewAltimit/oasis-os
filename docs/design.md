@@ -177,8 +177,6 @@ The command interpreter is a registry-based dispatch system in the `oasis-termin
 
 Counted from the source: 75 commands in `oasis-terminal`, 20 in `oasis-core`, 1 in `oasis-app` (feature `mcp`), plus the 20 builtins. The catalogue is [terminal-commands.md](terminal-commands.md) and the how-to is [adding-commands.md](adding-commands.md).
 
-Skin-driven command gating is designed but not wired: `features.toml` carries a `command_categories` list that no host filters the registry by yet.
-
 ### 4.3 Input Pipeline
 
 The input system translates platform-specific events into a platform-agnostic `InputEvent` enum. Every backend maps its native input to this enum. The core framework never sees raw platform input.
@@ -286,7 +284,7 @@ Window content is painted by the host inside a clip rect the WM pushes for that 
 
 The WM handles behavior uniformly; the skin defines every visual detail. Titlebar layout is skin data too: `button_side = "left"` gives macOS order, `"right"` gives minimize, maximize, close; `title_align = "center"` mirrors the reserved button space and titles that do not fit are truncated with `...`.
 
-The Corrupted skin is designed to demonstrate behavioral hooks: jittered positions, garbled text, flickering and glitched frames, configured in its `corrupted.toml` and parsed into `oasis_skin::CorruptedModifiers` (`apply(&mut SdiRegistry, &mut SimpleRng)`, `garble_text`). No host calls `apply` yet, so today the skin renders with its palette and layout but without the per-frame distortion.
+The Corrupted skin demonstrates behavioral hooks: jittered positions, garbled text, alpha flicker, horizontal tear bands and RGB-split text shadows, configured in its `corrupted.toml` and parsed into `oasis_skin::CorruptedModifiers`. The desktop shell applies them every drawn frame between layout and the SDI pass: `apply(&mut SdiRegistry, &mut SimpleRng)` distorts the scene and returns a `CorruptionUndo` that `restore`s it right after drawing, so the glitch never accumulates and the SDI dirty tracker sees no spurious change. The shell keeps redrawing while the skin is active, and skips the effect under `reduced_motion`. Other hosts (WASM, UE5, PSP) do not apply it yet.
 
 ### 4.6 Desktop Shell
 
@@ -445,16 +443,14 @@ The FFI layer exports 26 C-ABI functions: lifecycle and rendering (`oasis_create
 
 ### 7.5 Gameplay Integration via Callbacks
 
-`oasis_register_callback` lets UE5 react to OS-level events. Fired today: `OASIS_CB_COMMAND_EXEC` (detail = the command) and `OASIS_CB_APP_LAUNCH` (detail = app title). `OASIS_CB_FILE_ACCESS`, `OASIS_CB_LOGIN`, `OASIS_CB_NETWORK_SEND` and `OASIS_CB_PLUGIN_LOAD` are reserved codes for the gameplay hooks below and never fire yet.
+`oasis_register_callback` lets UE5 react to OS-level events: `OASIS_CB_COMMAND_EXEC` (detail = the command) and `OASIS_CB_APP_LAUNCH` (detail = app title). Other codes are ignored with a warning; the never-fired placeholders `FILE_ACCESS` (1), `LOGIN` (4), `NETWORK_SEND` (5) and `PLUGIN_LOAD` (6) were retired, and their numbers stay unused.
 
 | Callback Event | Trigger | Gameplay Example |
 |---------------|---------|-----------------|
 | `COMMAND_EXEC` | Player executes a terminal command | Hacking puzzle: run the right sequence to bypass "security" |
 | `APP_LAUNCH` | Player launches an app from the dashboard | Open a game-specific interface, launch a mini-game |
-| `FILE_ACCESS` (reserved) | Player opens a file | Unlock a lore entry, trigger a quest objective |
-| `LOGIN` (reserved) | Player enters the correct key | Gain access to a restricted terminal |
-| `NETWORK_SEND` (reserved) | Player sends an in-game message | Deliver it to another player's terminal |
-| `PLUGIN_LOAD` (reserved) | Player installs a "plugin" found in the world | Unlock terminal capabilities as progression |
+
+Other gameplay hooks (a lore file opened, a key entered) can be built on these two: watch `COMMAND_EXEC` for `cat lore.txt` or `login <key>`, or seed files with `oasis_add_vfs_file`.
 
 ### 7.6 Multiple Instances
 
@@ -676,7 +672,7 @@ OASIS_OS supports runtime-extensible functionality through plugins: Rust types i
 - **Lifecycle.** Register -> `init` (register commands, create SDI objects) -> `update` once per frame -> `shutdown` on unload.
 - **Discovery.** `PluginManager::discover_manifests` reads `plugin.toml` manifests from `/etc/oasis-os/plugins/` in the VFS (each with a typed `[config]` section of `PluginConfigValue` bool / int / float / string entries).
 - **Apps.** A plugin can register a dashboard app (`PluginAppRegistration`, needs the app capability; `register_app` returns `Result`). Its tile survives skin swaps.
-- **IPC.** VFS paths plus a string-based publish/subscribe event bus (`plugin/event_bus.rs`, `PluginEvent { topic, source, data }`).
+- **IPC.** VFS paths (the shared `PluginHost::vfs`).
 - **Not implemented.** Loading plugins from binaries at runtime (PRX via `sceKernelLoadModule`, `.so` via `libloading`) remains a design goal; today every plugin is compiled in. The PSP overlay PRX (§8.4) is a separate binary, not an `oasis-core` plugin.
 
 ---

@@ -195,7 +195,7 @@ impl WindowManager {
         let w = (g.w / 4).max(1);
         let h = (g.h / 4).max(1);
         Geometry {
-            x: g.x + (g.w - w) as i32 / 2,
+            x: g.x + g.w.saturating_sub(w) as i32 / 2,
             y: self.screen_h as i32 - h as i32,
             w,
             h,
@@ -450,5 +450,15 @@ mod tests {
         wm.maximize_window("a", &mut sdi).expect("maximize");
         assert!(!wm.is_animating());
         assert_eq!(frame_rect(&sdi, "a"), (0, 0, 800, 600, 255));
+    }
+    #[test]
+    fn minimizing_a_zero_width_window_does_not_underflow() {
+        let (mut wm, mut sdi) = animated_wm();
+        wm.create_window(&cfg("z"), &mut sdi).expect("create");
+        wm.tick_animations_by(10_000, &mut sdi);
+        wm.resize_window("z", 0, 0, &mut sdi).expect("resize");
+        wm.minimize_window("z", &mut sdi).expect("minimize");
+        wm.tick_animations_by(10_000, &mut sdi);
+        assert_eq!(wm.get_window("z").expect("z").state, WindowState::Minimized);
     }
 }

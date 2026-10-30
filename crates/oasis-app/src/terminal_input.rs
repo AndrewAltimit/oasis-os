@@ -179,6 +179,18 @@ fn make_env<'a>(state: &'a AppState, vfs: &'a mut MemoryVfs) -> Environment<'a> 
     }
 }
 
+/// Run the boot scripts (`/home/.profile`, then `/etc/startup.sh`) through
+/// the shell's command registry, printing their output to the terminal.
+pub fn run_boot_scripts(state: &mut AppState, vfs: &mut MemoryVfs) {
+    let lines = {
+        let mut env = make_env(state, vfs);
+        oasis_core::script::run_boot_scripts(&state.terminal.cmd_reg, &mut env)
+    };
+    for line in lines {
+        state.terminal.print(line);
+    }
+}
+
 /// Echo and execute one submitted terminal line, then persist history.
 pub fn run_line(line: &str, state: &mut AppState, sdi: &mut SdiRegistry, vfs: &mut MemoryVfs) {
     state.terminal.scroll_offset = 0;

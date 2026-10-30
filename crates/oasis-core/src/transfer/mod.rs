@@ -1,17 +1,14 @@
 //! File transfer terminal commands: `ftp start/stop/status`, `push`,
 //! `pull`.
 //!
-//! The FTP-like server itself ([`FtpServer`], [`process_ftp_request`])
-//! lives in `oasis-net` (feature `vfs`) and is re-exported here; the
-//! `ftp` command only signals the host (`CommandSignal::FtpToggle`), which
-//! owns and polls the server.
+//! The FTP-like server itself ([`FtpServer`]) lives in `oasis_net::ftp`
+//! (feature `vfs`) and is re-exported here; the `ftp` command only signals
+//! the host (`CommandSignal::FtpToggle`), which owns and polls the server.
 
 use crate::error::{OasisError, Result};
 use crate::terminal::{Command, CommandOutput, Environment};
 
-pub use oasis_net::ftp::{
-    DEFAULT_FTP_PORT, FTP_REQUEST_PATH, FTP_STATUS_PATH, FtpServer, process_ftp_request,
-};
+pub use oasis_net::ftp::{DEFAULT_FTP_PORT, FTP_STATUS_PATH, FtpServer};
 
 // ---------------------------------------------------------------------------
 // Terminal commands
@@ -49,10 +46,20 @@ impl Command for FtpCmd {
                         } else {
                             return Err(OasisError::Command("--password requires a value".into()));
                         }
-                    } else if let Ok(p) = args[i].parse::<u16>() {
-                        port = p;
-                        i += 1;
                     } else {
+                        // Port 0 is the host's "stop" sentinel in
+                        // `CommandSignal::FtpToggle`, so it cannot be a
+                        // listen port; anything unparseable is a typo that
+                        // must not silently fall back to the default port.
+                        port = match args[i].parse::<u16>() {
+                            Ok(p) if p != 0 => p,
+                            _ => {
+                                return Err(OasisError::Command(
+                                    format!("invalid port: {}\nusage: {}", args[i], self.usage())
+                                        .into(),
+                                ));
+                            },
+                        };
                         i += 1;
                     }
                 }
@@ -92,21 +99,7 @@ impl Command for PushCmd {
         "transfer"
     }
     fn execute(&self, args: &[&str], env: &mut Environment<'_>) -> Result<CommandOutput> {
-        let src = args
-            .first()
-            .copied()
-            .ok_or_else(|| OasisError::Command("usage: push <source> <dest>".into()))?;
-        let dest = args
-            .get(1)
-            .copied()
-            .ok_or_else(|| OasisError::Command("usage: push <source> <dest>".into()))?;
-
-        let data = env.vfs.read(src)?;
-        env.vfs.write(dest, &data)?;
-        Ok(CommandOutput::Text(format!(
-            "Copied {} bytes: {src} -> {dest}",
-            data.len()
-        )))
+        copy_file(args, env, self.usage())
     }
 }
 
@@ -127,22 +120,21 @@ impl Command for PullCmd {
         "transfer"
     }
     fn execute(&self, args: &[&str], env: &mut Environment<'_>) -> Result<CommandOutput> {
-        let src = args
-            .first()
-            .copied()
-            .ok_or_else(|| OasisError::Command("usage: pull <source> <dest>".into()))?;
-        let dest = args
-            .get(1)
-            .copied()
-            .ok_or_else(|| OasisError::Command("usage: pull <source> <dest>".into()))?;
-
-        let data = env.vfs.read(src)?;
-        env.vfs.write(dest, &data)?;
-        Ok(CommandOutput::Text(format!(
-            "Copied {} bytes: {src} -> {dest}",
-            data.len()
-        )))
+        copy_file(args, env, self.usage())
     }
+}
+
+/// Shared body of `push` / `pull`: copy `args[0]` to `args[1]` in the VFS.
+fn copy_file(args: &[&str], env: &mut Environment<'_>, usage: &str) -> Result<CommandOutput> {
+    let [src, dest, ..] = args else {
+        return Err(OasisError::Command(format!("usage: {usage}").into()));
+    };
+    let data = env.vfs.read(src)?;
+    env.vfs.write(dest, &data)?;
+    Ok(CommandOutput::Text(format!(
+        "Copied {} bytes: {src} -> {dest}",
+        data.len()
+    )))
 }
 
 /// Register transfer commands.
@@ -231,6 +223,16 @@ mod tests {
         };
         assert_eq!(port, 0);
         assert!(password.is_none());
+    }
+
+    #[test]
+    fn ftp_cmd_start_rejects_bad_port() {
+        let (reg, mut vfs) = setup();
+        // `0` is the stop sentinel: `ftp start 0` used to stop the server.
+        assert!(exec(&reg, &mut vfs, "ftp start 0").is_err());
+        // Out-of-range / typo'd ports used to silently fall back to 2121.
+        assert!(exec(&reg, &mut vfs, "ftp start 70000").is_err());
+        assert!(exec(&reg, &mut vfs, "ftp start 80x").is_err());
     }
 
     #[test]

@@ -99,13 +99,18 @@ pub const OASIS_BUTTON_SELECT: u32 = 9;
 pub const OASIS_TRIGGER_LEFT: u32 = 0;
 pub const OASIS_TRIGGER_RIGHT: u32 = 1;
 
-// Callback event types.
-pub const OASIS_CB_FILE_ACCESS: u32 = 1;
+// Callback event types. Codes 1, 4, 5 and 6 (`FILE_ACCESS`, `LOGIN`,
+// `NETWORK_SEND`, `PLUGIN_LOAD`) were reserved placeholders that never fired;
+// they are retired and must not be reused for a different meaning.
+/// Fired by `oasis_send_command`; detail = the command line.
 pub const OASIS_CB_COMMAND_EXEC: u32 = 2;
+/// Fired when a dashboard app is launched; detail = the app title.
 pub const OASIS_CB_APP_LAUNCH: u32 = 3;
-pub const OASIS_CB_LOGIN: u32 = 4;
-pub const OASIS_CB_NETWORK_SEND: u32 = 5;
-pub const OASIS_CB_PLUGIN_LOAD: u32 = 6;
+
+/// Whether `event` is a callback code the library fires.
+pub(crate) fn is_callback_event(event: u32) -> bool {
+    matches!(event, OASIS_CB_COMMAND_EXEC | OASIS_CB_APP_LAUNCH)
+}
 
 /// Callback function type: receives an event type and a null-terminated detail string.
 pub type OasisCallback = extern "C" fn(event: u32, detail: *const c_char);
