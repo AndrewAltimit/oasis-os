@@ -6,16 +6,25 @@
 
 use oasis_types::backend::{BackendErrExt, Color, SdiCore, StrokeStyle};
 use oasis_types::error::Result;
+use oasis_types::geometry::ClipRect;
 use oasis_types::rasterize::{size_i32, stroke_rect_parts};
 use sdl3::render::FRect;
 
-use super::{SdlBackend, fpoint, frect};
+use super::{SdlBackend, frect};
 
 // -------------------------------------------------------------------
 // Inherent shape methods on SdlBackend
 // -------------------------------------------------------------------
 
 impl SdlBackend {
+    /// The bound surface in surface pixels: the bounds handed to the span
+    /// generators, so shapes reaching far off-screen only generate their
+    /// visible rows.
+    fn surface_bounds(&self) -> ClipRect {
+        let (w, h) = self.viewport_size();
+        ClipRect::new(0, 0, w, h)
+    }
+
     /// Submit the spans collected in `rect_batch` with a single
     /// `fill_rects` FFI call (using the current draw color).
     fn flush_rect_batch(&mut self) -> Result<()> {
@@ -80,23 +89,18 @@ impl SdlBackend {
         let (tx1, ty1) = self.translate(x1, y1);
         let (tx2, ty2) = self.translate(x2, y2);
         self.set_color(color);
-        if width <= 1 {
-            self.canvas
-                .draw_line(fpoint(tx1, ty1), fpoint(tx2, ty2))
-                .backend_err()
-        } else {
-            // Square brush stamped along the Bresenham path, one span per
-            // row (shared with the software rasterizer). The previous
-            // "parallel lines along the normal" truncated the unit normal
-            // to integers, so every non-axis-aligned thick line collapsed
-            // to a 1 px line drawn `width` times.
-            self.rect_batch.clear();
-            let batch = &mut self.rect_batch;
-            oasis_rasterize::thick_line_rows(tx1, ty1, tx2, ty2, width, |y, xs, xe| {
-                push_row_span(batch, xs, xe - 1, y);
-            });
-            self.flush_rect_batch()
-        }
+        // Square brush stamped along the Bresenham path, one span per row,
+        // only the rows on the surface (shared with the software rasterizer
+        // and the trait default, so every backend covers the same pixels).
+        // Thin lines take the same path: SDL's own line walk visits every
+        // point of the segment, however far off-screen it reaches.
+        let bounds = self.surface_bounds();
+        self.rect_batch.clear();
+        let batch = &mut self.rect_batch;
+        oasis_rasterize::thick_line_rows(tx1, ty1, tx2, ty2, width, bounds, |y, xs, xe| {
+            push_row_span(batch, xs, xe - 1, y);
+        });
+        self.flush_rect_batch()
     }
 
     pub(crate) fn shape_fill_circle(
@@ -149,8 +153,15 @@ impl SdlBackend {
         let (tx2, ty2) = self.translate(x2, y2);
         let (tx3, ty3) = self.translate(x3, y3);
         self.set_color(color);
+        let bounds = self.surface_bounds();
         self.rect_batch.clear();
-        triangle_spans((tx1, ty1), (tx2, ty2), (tx3, ty3), &mut self.rect_batch);
+        triangle_spans(
+            (tx1, ty1),
+            (tx2, ty2),
+            (tx3, ty3),
+            bounds,
+            &mut self.rect_batch,
+        );
         self.flush_rect_batch()
     }
 
@@ -202,9 +213,10 @@ impl SdlBackend {
                 .map(|&(x, y)| (x.saturating_add(ox), y.saturating_add(oy))),
         );
 
+        let bounds = self.surface_bounds();
         self.rect_batch.clear();
         let batch = &mut self.rect_batch;
-        oasis_rasterize::polygon_rows(&self.poly_points, &mut self.poly_xs, |y, x0, x1| {
+        oasis_rasterize::polygon_rows(&self.poly_points, &mut self.poly_xs, bounds, |y, x0, x1| {
             push_row_span(batch, x0, x1 - 1, y);
         });
         self.flush_rect_batch()
@@ -273,8 +285,14 @@ pub(crate) fn circle_spans(cx: i32, cy: i32, r: i32, out: &mut Vec<FRect>) {
 /// Scanline spans of a filled triangle (screen coordinates), one per row
 /// ([`triangle_rows`](oasis_types::rasterize::triangle_rows), the same
 /// coverage as `SoftwareBuffer` and the `SdiShapes` default).
-pub(crate) fn triangle_spans(v0: (i32, i32), v1: (i32, i32), v2: (i32, i32), out: &mut Vec<FRect>) {
-    oasis_types::rasterize::triangle_rows(v0, v1, v2, |y, x0, x1| {
+pub(crate) fn triangle_spans(
+    v0: (i32, i32),
+    v1: (i32, i32),
+    v2: (i32, i32),
+    bounds: ClipRect,
+    out: &mut Vec<FRect>,
+) {
+    oasis_types::rasterize::triangle_rows(v0, v1, v2, bounds, |y, x0, x1| {
         push_row_span(out, x0, x1 - 1, y);
     });
 }
@@ -367,7 +385,7 @@ mod tests {
     #[test]
     fn triangle_spans_one_per_row() {
         let mut rects = Vec::new();
-        triangle_spans((10, 2), (2, 18), (18, 18), &mut rects);
+        triangle_spans((10, 2), (2, 18), (18, 18), ClipRect::UNBOUNDED, &mut rects);
         let grid = coverage(&rects, 20, 20);
         assert!(grid.iter().all(|&n| n <= 1));
         let rows: u32 = rects.iter().map(|r| r.h as u32).sum();

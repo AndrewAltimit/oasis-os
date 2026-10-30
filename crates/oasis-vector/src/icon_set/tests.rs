@@ -256,3 +256,76 @@ fn gear_teeth_polygon_has_expected_vertex_count() {
     let pts = gear_teeth_polygon(12, 12, 10, 7, 8);
     assert_eq!(pts.len(), 32); // 4 vertices per tooth × 8 teeth.
 }
+
+/// Paint the `FillRect`s of `ops` (through group translations, later ops
+/// on top) into a `w` x `h` grid of colours.
+fn paint_rects(ops: &[VectorOp], w: usize, h: usize) -> Vec<Option<Color>> {
+    fn walk(ops: &[VectorOp], (ox, oy): (i32, i32), g: &mut [Option<Color>], w: usize, h: usize) {
+        for op in ops {
+            match op {
+                VectorOp::FillRect {
+                    x,
+                    y,
+                    w: rw,
+                    h: rh,
+                    color,
+                } => {
+                    for py in (oy + y)..(oy + y + *rh as i32) {
+                        for px in (ox + x)..(ox + x + *rw as i32) {
+                            if (0..w as i32).contains(&px) && (0..h as i32).contains(&py) {
+                                g[py as usize * w + px as usize] = Some(*color);
+                            }
+                        }
+                    }
+                },
+                VectorOp::Group { ops, translate, .. } => {
+                    walk(ops, (ox + translate.0, oy + translate.1), g, w, h);
+                },
+                _ => {},
+            }
+        }
+    }
+    let mut g = vec![None; w * h];
+    walk(ops, (0, 0), &mut g, w, h);
+    g
+}
+
+/// Regression: `VectorOp::scale` truncated each rect's position and size
+/// separately, so abutting rects of the pixel icons drifted apart at
+/// fractional scales and left 1 px seams of whatever lay below. With
+/// edges snapped as absolute positions, every scaled pixel shows the
+/// design pixel its centre samples; inside a solid 3x3 design region that
+/// must be the region's colour.
+#[test]
+fn pixel_icons_have_no_seams_at_fractional_scales() {
+    let n = PIXEL_SIZE as usize;
+    for cat in IconCategory::ALL {
+        let icon = pixel::pixel_icon(cat, Color::rgb(200, 40, 40));
+        let design = paint_rects(&icon.ops, n, n);
+        for f in [0.75f32, 1.3, 1.37, 1.5, 1.66, 2.2, 2.75] {
+            let mut ops = icon.ops.clone();
+            for op in &mut ops {
+                op.scale(f);
+            }
+            let m = (n as f32 * f).ceil() as usize;
+            let scaled = paint_rects(&ops, m, m);
+            for py in 0..m {
+                for px in 0..m {
+                    let dx = ((px as f32 + 0.5) / f) as usize;
+                    let dy = ((py as f32 + 0.5) / f) as usize;
+                    if dx < 1 || dy < 1 || dx + 1 >= n || dy + 1 >= n {
+                        continue;
+                    }
+                    let c = design[dy * n + dx];
+                    let solid = (dy - 1..=dy + 1)
+                        .all(|y| (dx - 1..=dx + 1).all(|x| design[y * n + x] == c));
+                    assert!(
+                        !solid || scaled[py * m + px] == c,
+                        "{cat:?} at {f}: pixel ({px}, {py}) is {:?}, design ({dx}, {dy}) {c:?}",
+                        scaled[py * m + px]
+                    );
+                }
+            }
+        }
+    }
+}

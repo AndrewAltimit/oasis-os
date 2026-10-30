@@ -21,7 +21,7 @@ mod shapes;
 use std::collections::HashMap;
 
 use sdl3::EventPump;
-use sdl3::render::{Canvas, FPoint, FRect, Texture, TextureCreator};
+use sdl3::render::{Canvas, FRect, Texture, TextureCreator};
 use sdl3::video::{Window, WindowContext};
 
 use oasis_types::backend::stacks::{ClipPush, ClipStack, DrawState, TranslateStack};
@@ -50,11 +50,6 @@ use oasis_types::rasterize::edge_x;
 /// Convert integer coordinates to an `FRect` for SDL3 renderer calls.
 pub(crate) fn frect(x: i32, y: i32, w: u32, h: u32) -> FRect {
     FRect::new(x as f32, y as f32, w as f32, h as f32)
-}
-
-/// Convert integer coordinates to an `FPoint` for SDL3 renderer calls.
-pub(crate) fn fpoint(x: i32, y: i32) -> FPoint {
-    FPoint::new(x as f32, y as f32)
 }
 
 /// The error for a render-target call on a target that is currently bound
@@ -1283,13 +1278,6 @@ mod tests {
         let r = frect(0, 0, 0, 0);
         assert_eq!(r.x, 0.0);
         assert_eq!(r.w, 0.0);
-    }
-
-    #[test]
-    fn fpoint_conversion() {
-        let p = fpoint(42, -7);
-        assert_eq!(p.x, 42.0);
-        assert_eq!(p.y, -7.0);
     }
 
     // ---------------------------------------------------------------

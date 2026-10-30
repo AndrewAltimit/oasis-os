@@ -1,7 +1,9 @@
 //! Extension traits: fine-grained capability groupings.
 //!
-//! Every extension trait has `SdiCore` as its supertrait (`SdiVector`
-//! builds on `SdiShapes`) and default implementations written in terms of
+//! Every extension trait has `SdiCore` as its supertrait (`SdiShapes`
+//! builds on `SdiClipTransform`, whose `draw_bounds` limits its span
+//! generators to the visible area, and `SdiVector` on `SdiShapes`) and
+//! default implementations written in terms of
 //! the supertrait methods, so a type that implements `SdiCore` can opt
 //! into any extension with an empty `impl` block --
 //! [`impl_sdi_defaults!`](crate::impl_sdi_defaults) writes all eight.

@@ -200,6 +200,14 @@ impl SoftwareBuffer {
         }
     }
 
+    /// [`Self::visible_bounds`] as a [`ClipRect`], the bounds the span
+    /// generators take: shapes reaching far off the buffer only generate
+    /// their visible rows.
+    fn span_bounds(&self) -> ClipRect {
+        let b = self.visible_bounds();
+        ClipRect::new(b.x0, b.y0, (b.x1 - b.x0) as u32, (b.y1 - b.y0) as u32)
+    }
+
     /// Mutable RGBA bytes of row `y`, columns `xs..xe` (already clipped).
     #[inline]
     fn row_mut(&mut self, y: i32, xs: i32, xe: i32) -> &mut [u8] {
@@ -442,42 +450,18 @@ impl SoftwareBuffer {
         });
     }
 
-    /// Draw a line using Bresenham's algorithm. Widths above 1 stamp a
-    /// square brush at every step ([`thick_line_rows`]); every covered
-    /// pixel is blended exactly once.
+    /// Draw a line with Bresenham's algorithm ([`thick_line_rows`]):
+    /// widths above 1 stamp a square brush at every step, and every
+    /// covered pixel is blended exactly once. Only the rows and columns on
+    /// the buffer (inside the clip) are visited, however long the line.
     pub fn draw_line(&mut self, x1: i32, y1: i32, x2: i32, y2: i32, width: u16, color: Color) {
         if color.a == 0 {
             return;
         }
-        if width > 1 {
-            thick_line_rows(x1, y1, x2, y2, width, |y, xs, xe| {
-                self.fill_span(y, xs, xe, color);
-            });
-            return;
-        }
-        let dx = (x2 - x1).abs();
-        let dy = -(y2 - y1).abs();
-        let sx = if x1 < x2 { 1 } else { -1 };
-        let sy = if y1 < y2 { 1 } else { -1 };
-        let mut err = dx + dy;
-        let mut cx = x1;
-        let mut cy = y1;
-
-        loop {
-            self.set_pixel(cx, cy, color);
-            if cx == x2 && cy == y2 {
-                break;
-            }
-            let e2 = 2 * err;
-            if e2 >= dy {
-                err += dy;
-                cx += sx;
-            }
-            if e2 <= dx {
-                err += dx;
-                cy += sy;
-            }
-        }
+        let bounds = self.span_bounds();
+        thick_line_rows(x1, y1, x2, y2, width, bounds, |y, xs, xe| {
+            self.fill_span(y, xs, xe, color);
+        });
     }
 
     /// Fill a circle using the midpoint circle algorithm.
@@ -543,7 +527,8 @@ impl SoftwareBuffer {
             return;
         }
         let mut xs = Vec::new();
-        polygon_rows(points, &mut xs, |y, x0, x1| {
+        let bounds = self.span_bounds();
+        polygon_rows(points, &mut xs, bounds, |y, x0, x1| {
             self.fill_span(y, x0, x1, color)
         });
     }
@@ -553,7 +538,8 @@ impl SoftwareBuffer {
         if color.a == 0 {
             return;
         }
-        rasterize::rasterize_triangle(self, v0, v1, v2, color);
+        let bounds = self.span_bounds();
+        rasterize::rasterize_triangle(self, v0, v1, v2, color, bounds);
     }
 
     // -----------------------------------------------------------------------
@@ -1325,6 +1311,30 @@ mod tests {
         buf.draw_line(2, 5, 18, 5, 1, Color::rgb(255, 0, 0));
         let offset = (5 * 20 + 10) * 4;
         assert_eq!(buf.data()[offset], 255);
+    }
+
+    /// Regression: the thin line walked every Bresenham step and the
+    /// polygon every row, so +-1e9 coordinates effectively hung.
+    #[test]
+    fn huge_coordinate_shapes_finish_fast() {
+        let mut buf = SoftwareBuffer::new(64, 48);
+        let red = Color::rgb(255, 0, 0);
+        let start = std::time::Instant::now();
+        buf.draw_line(-1_000_000_000, 5, 1_000_000_000, 5, 1, red);
+        buf.draw_line(10, -1_000_000_000, 10, 1_000_000_000, 4, red);
+        let far = [
+            (-2_000_000_000, -2_000_000_000),
+            (2_000_000_000, 0),
+            (0, 2_000_000_000),
+        ];
+        buf.fill_polygon(&far, red);
+        buf.fill_triangle(far[0], far[1], far[2], red);
+        assert!(start.elapsed() < std::time::Duration::from_secs(2));
+        assert_eq!(
+            buf.data()[(5 * 64 + 63) * 4],
+            255,
+            "line reaches the right edge"
+        );
     }
 
     #[test]

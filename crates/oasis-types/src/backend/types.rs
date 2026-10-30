@@ -307,6 +307,16 @@ pub fn arc_segments(radius: u16, start_angle: f32, end_angle: f32) -> usize {
     (arc_len / 8.0).ceil().clamp(4.0, 64.0) as usize
 }
 
+/// The end angle of an arc from `start` to `end` with the sweep clamped to
+/// one full turn either way: more than a turn draws nothing new, and an
+/// unbounded sweep would only grow the segment count. Every arc (filled or
+/// stroked, default or backend override) clamps through this.
+#[must_use]
+pub fn clamp_sweep(start: f32, end: f32) -> f32 {
+    let tau = core::f32::consts::TAU;
+    start + (end - start).clamp(-tau, tau)
+}
+
 // ---------------------------------------------------------------------------
 // Backend error helpers
 // ---------------------------------------------------------------------------

@@ -34,10 +34,12 @@ plus `ClipboardBackend` and the `NetworkStream` connection trait):
    type that satisfies `SdiCore` and all eight extensions automatically
    implements `SdiBackend`. The eight extensions are `SdiShapes`,
    `SdiGradients`, `SdiText`, `SdiTextures`, `SdiClipTransform`,
-   `SdiVector`, `SdiBatch`, and `SdiRenderTarget`, totalling 46
+   `SdiVector`, `SdiBatch`, and `SdiRenderTarget`, totalling 47
    default-implemented methods that fall back to `SdiCore` primitives
-   (shapes 8, gradients 2, text 7, textures 4, clip/transform 8,
-   vector 6, batch 2, render target 9).
+   (shapes 8, gradients 2, text 7, textures 4, clip/transform 9,
+   vector 6, batch 2, render target 9). `SdiShapes` builds on
+   `SdiClipTransform` (for `draw_bounds`, below) and `SdiVector` on
+   `SdiShapes`; every other extension builds on `SdiCore` alone.
    `SdiBatch` is `submit_rect_batch`/`submit_text_batch`, batched rect and
    text geometry submission (used by the browser's display-list replay to
    reduce draw call count). The former opt-in traits `SdiBlendMode` and
@@ -73,6 +75,9 @@ wrapper) now implements the following, documented as rustdoc on the traits:
 | `composite_render_target[_premultiplied]` | Into the bound surface, under its clip; the destination is untranslated surface pixels; the target is **scaled** to `dst_w` x `dst_h` |
 | `read_render_target` | `dst.len()` must equal `w * h * 4` of the target; anything else is an error |
 | Using a bound target | Binding a target that is already on the bind chain, compositing it, reading it back or destroying it is an error, and leaves the bind state as it was (UE5 and WASM take a bound target out of storage; SDL checks the chain) |
+| Unknown ids | `destroy_texture` of an id that is not live (never loaded, or already destroyed) fails with `BackendError::TextureNotFound`, as `destroy_render_target` fails with `RenderTargetNotFound`; so does a blit of it |
+| Off-surface shapes | Shapes cost what their visible part costs: the span generators take the visible bounds (`SdiClipTransform::draw_bounds` for the defaults), so a line from `-1e9` to `1e9` draws as fast as one across the screen |
+| Arcs | A sweep beyond one full turn is clamped to one turn (`backend::clamp_sweep`), filled or stroked, default or override |
 
 Why these choices:
 
@@ -102,7 +107,9 @@ SDL scales render targets with its default linear filter and the software
 rasterizer samples nearest, so a scaled composite differs at colour seams.
 `oasis_test_backend::conformance` records that as a documented tolerance.
 `conformance::render_target_misuse` checks the bound-target rule on SDL,
-UE5 and `RecordingBackend`. The conformance scenarios
+UE5 and `RecordingBackend`; `conformance::texture_misuse` checks the
+unknown-texture rule on SDL and UE5 (and every test double has a unit test
+for it). The conformance scenarios
 `clip_set_is_absolute_and_replaces`,
 `clip_set_widens_again`, `clip_set_and_push_stack_are_independent`,
 `clear_ignores_clip_and_alpha`,
@@ -116,6 +123,24 @@ bind and restores them on unbind. WASM has no
 automated pixel test yet. Its clip handling keeps exactly one canvas
 `save()` level per applied clip (`WasmBackend::apply_clip`), because Canvas
 2D can only intersect clips, never replace them.
+
+- **Unknown ids are errors.** `destroy_texture` used to accept any id
+  silently while `destroy_render_target` rejected unknown ones. One rule
+  for both, and the stricter one: a double destroy is a caller bug (with
+  UE5's slot reuse it can even free another owner's texture), and an error
+  surfaces it in tests where silence hid it. Callers that release
+  best-effort (`let _ = backend.destroy_texture(..)`) are unaffected. The
+  test doubles (`RecordingBackend`, `NullBackend`, `MockSdiCore`,
+  `ClipAuditBackend`) track live ids so they reject the same calls.
+- **Visible-only span generation.** `thick_line_rows`, `polygon_rows` and
+  `triangle_rows` take a `ClipRect` of bounds, visit only the rows inside
+  it and clip spans to its columns; the thick line computes each row's
+  extent from the closed form of the Bresenham walk instead of walking
+  every step. The trait defaults pass `draw_bounds()` (the bound surface
+  moved back by the current translation; deliberately not the clip, which
+  `set_clip_rect` can replace behind the stack's back), SDL and
+  `SoftwareBuffer` their surface. SDL draws thin lines through the same
+  spans: its own line walk visits every point of the segment.
 
 ### Surface trim (2026-10)
 

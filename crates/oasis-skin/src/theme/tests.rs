@@ -548,15 +548,43 @@ fn composite_over_blends_alpha() {
 }
 
 #[test]
-fn contrast_warns_on_low_button_pair() {
-    // Button text is the base text color; button bg derives from
-    // `secondary`. Near-identical values must trip the 4.5:1 check.
+fn derived_button_text_reads_on_the_button_fill() {
+    // The base text color nearly matches the button fill (derived from
+    // `secondary`): the derived `button_text` is pushed until it reaches
+    // 4.5:1, so there is no button warning.
     let toml = r##"
 background = "#101010"
 text = "#5A5A5A"
 secondary = "#4A4A4A"
 "##;
     let skin: SkinTheme = toml::from_str(toml).unwrap();
+    let ui = skin.to_ui_theme();
+    assert_eq!(ui.text_primary, Color::rgb(0x5A, 0x5A, 0x5A));
+    assert!(contrast_ratio(ui.button_text, ui.button_bg) >= 4.5);
+    let warnings = skin.validate_contrast();
+    assert!(
+        !warnings.iter().any(|w| w.pair.contains("button")),
+        "{warnings:?}"
+    );
+    // A readable base text color is kept as is.
+    let ok: SkinTheme = toml::from_str("text = \"#F0F0F0\"\nsecondary = \"#202020\"").unwrap();
+    assert_eq!(ok.to_ui_theme().button_text, Color::rgb(0xF0, 0xF0, 0xF0));
+}
+
+#[test]
+fn explicit_button_text_is_used_as_given_and_linted() {
+    // `[widget_states.button] text` wins over the derivation, even when
+    // it is unreadable; the contrast report then flags it.
+    let toml = r##"
+background = "#101010"
+text = "#F0F0F0"
+secondary = "#4A4A4A"
+
+[widget_states.button]
+text = "#505050"
+"##;
+    let skin: SkinTheme = toml::from_str(toml).unwrap();
+    assert_eq!(skin.to_ui_theme().button_text, Color::rgb(0x50, 0x50, 0x50));
     let warnings = skin.validate_contrast();
     assert!(
         warnings
@@ -564,6 +592,12 @@ secondary = "#4A4A4A"
             .any(|w| w.pair.contains("button") && w.required == 4.5),
         "missing button contrast warning: {warnings:?}"
     );
+    // The derivation follows an overridden fill too.
+    let light: SkinTheme =
+        toml::from_str("text = \"#F0F0F0\"\n[widget_states.button]\nnormal_bg = \"#F8F8F8\"")
+            .unwrap();
+    let ui = light.to_ui_theme();
+    assert!(contrast_ratio(ui.button_text, ui.button_bg) >= 4.5);
 }
 
 #[test]

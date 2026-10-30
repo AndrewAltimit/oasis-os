@@ -72,7 +72,8 @@ fn fill_polygon_vertical_gradient(
     let span = (y_max as i64 - y_min as i64).max(1) as f32;
     let mut xs = Vec::new();
     let mut result = Ok(());
-    polygon_rows(points, &mut xs, |y, x0, x1| {
+    let bounds = backend.draw_bounds();
+    polygon_rows(points, &mut xs, bounds, |y, x0, x1| {
         if result.is_ok() {
             let t = (y as i64 - y_min as i64) as f32 / span;
             let color = top.lerp(bottom, t);

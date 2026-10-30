@@ -260,6 +260,53 @@ mod tests {
         assert!(matches!(cmds[3], DrawCommand::PopClip));
     }
 
+    /// `set_clip_rect` / `reset_clip_rect` are logged as themselves, not
+    /// as a push and a pop: the absolute clip replaces, the stack nests,
+    /// and a test asserting on one must not be satisfied by the other.
+    #[test]
+    fn recording_set_and_reset_clip_are_distinct_from_the_stack() {
+        let mut rec = RecordingBackend::new(480, 272);
+        rec.push_clip_rect(0, 0, 100, 100).expect("push");
+        rec.set_clip_rect(5, 6, 7, 8).expect("set");
+        rec.reset_clip_rect().expect("reset");
+        rec.pop_clip_rect().expect("pop");
+        assert_eq!(
+            rec.commands(),
+            &[
+                DrawCommand::PushClip {
+                    x: 0,
+                    y: 0,
+                    w: 100,
+                    h: 100
+                },
+                DrawCommand::SetClip {
+                    x: 5,
+                    y: 6,
+                    w: 7,
+                    h: 8
+                },
+                DrawCommand::ResetClip,
+                DrawCommand::PopClip,
+            ]
+        );
+        // The absolute clip leaves the stack alone.
+        let mut audit = ClipAuditBackend::new(480, 272, (0, 0, 480, 272));
+        audit.set_clip_rect(1, 2, 3, 4).expect("set");
+        audit.reset_clip_rect().expect("reset");
+        assert_eq!(
+            audit.commands(),
+            &[
+                DrawCommand::SetClip {
+                    x: 1,
+                    y: 2,
+                    w: 3,
+                    h: 4
+                },
+                DrawCommand::ResetClip,
+            ]
+        );
+    }
+
     #[test]
     fn recording_translate_stack_push_pop() {
         let mut rec = RecordingBackend::new(480, 272);

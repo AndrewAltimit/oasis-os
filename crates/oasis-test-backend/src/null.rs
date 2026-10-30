@@ -7,9 +7,11 @@
 //! [`MockSdiCore`](crate::MockSdiCore) to assert on raw `SdiCore` calls.
 
 use oasis_types::backend::{
-    Color, DEFAULT_VIEWPORT_HEIGHT, DEFAULT_VIEWPORT_WIDTH, SdiCore, TextureId, bitmap_measure_text,
+    Color, DEFAULT_VIEWPORT_HEIGHT, DEFAULT_VIEWPORT_WIDTH, SdiCore, TextureId,
+    bitmap_measure_text, texture_not_found,
 };
 use oasis_types::error::Result;
+use std::collections::HashSet;
 
 /// Type alias for a custom `measure_text` callback.
 type MeasureTextFn = Box<dyn Fn(&str, u16) -> u32>;
@@ -19,7 +21,9 @@ type MeasureTextFn = Box<dyn Fn(&str, u16) -> u32>;
 /// - `measure_text` uses the bitmap font metrics (like every real backend)
 ///   unless [`set_measure_text_fn`](Self::set_measure_text_fn) overrides it;
 /// - `viewport_size` reports the configured size;
-/// - `load_texture` hands out distinct ids starting at 1;
+/// - `load_texture` hands out distinct ids starting at 1, and
+///   `destroy_texture` rejects an id it did not hand out (or already
+///   destroyed) with `BackendError::TextureNotFound`, like every backend;
 /// - `read_pixels` returns a zeroed buffer of the requested size;
 /// - every extension trait keeps its default, so higher-level calls
 ///   (rounded rects, text wrapping, ...) decompose into no-op primitives.
@@ -36,6 +40,7 @@ pub struct NullBackend {
     width: u32,
     height: u32,
     next_texture_id: u64,
+    live_textures: HashSet<u64>,
     measure_text_fn: Option<MeasureTextFn>,
 }
 
@@ -47,6 +52,7 @@ impl NullBackend {
             width,
             height,
             next_texture_id: 1,
+            live_textures: HashSet::new(),
             measure_text_fn: None,
         }
     }
@@ -107,11 +113,16 @@ impl SdiCore for NullBackend {
     fn load_texture(&mut self, _width: u32, _height: u32, _rgba: &[u8]) -> Result<TextureId> {
         let id = self.next_texture_id;
         self.next_texture_id += 1;
+        self.live_textures.insert(id);
         Ok(TextureId(id))
     }
 
-    fn destroy_texture(&mut self, _tex: TextureId) -> Result<()> {
-        Ok(())
+    fn destroy_texture(&mut self, tex: TextureId) -> Result<()> {
+        if self.live_textures.remove(&tex.0) {
+            Ok(())
+        } else {
+            Err(texture_not_found(tex.0))
+        }
     }
 
     fn set_clip_rect(&mut self, _x: i32, _y: i32, _w: u32, _h: u32) -> Result<()> {

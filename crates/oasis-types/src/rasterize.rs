@@ -12,6 +12,7 @@
 //!   [`stroke_rounded_rect_rows`], [`polygon_rows`], [`triangle_rows`]).
 
 use crate::backend::Color;
+use crate::geometry::ClipRect;
 
 mod rows;
 pub use rows::{
@@ -80,15 +81,17 @@ pub fn edge_x(x0: i32, y0: i32, x1: i32, y1: i32, y: i32) -> i32 {
 }
 
 /// Rasterize a filled triangle using edge-walking scanlines
-/// ([`triangle_rows`]).
+/// ([`triangle_rows`]), visiting only the rows and columns inside `bounds`
+/// (the sink's visible area; [`ClipRect::UNBOUNDED`] for all of them).
 pub fn rasterize_triangle(
     sink: &mut impl PixelSink,
     v0: (i32, i32),
     v1: (i32, i32),
     v2: (i32, i32),
     color: Color,
+    bounds: ClipRect,
 ) {
-    triangle_rows(v0, v1, v2, |y, x0, x1| {
+    triangle_rows(v0, v1, v2, bounds, |y, x0, x1| {
         sink.draw_hline(x0, x1 - 1, y, color)
     });
 }
@@ -154,7 +157,8 @@ mod tests {
     #[test]
     fn triangle_degenerate_horizontal() {
         let mut rec = SpanRecorder::new();
-        rasterize_triangle(&mut rec, (0, 5), (10, 5), (5, 5), Color::WHITE);
+        let all = ClipRect::UNBOUNDED;
+        rasterize_triangle(&mut rec, (0, 5), (10, 5), (5, 5), Color::WHITE, all);
         assert_eq!(rec.spans.len(), 1);
         assert_eq!(rec.spans[0], (0, 10, 5));
     }
@@ -162,7 +166,8 @@ mod tests {
     #[test]
     fn triangle_produces_spans() {
         let mut rec = SpanRecorder::new();
-        rasterize_triangle(&mut rec, (5, 0), (0, 10), (10, 10), Color::WHITE);
+        let all = ClipRect::UNBOUNDED;
+        rasterize_triangle(&mut rec, (5, 0), (0, 10), (10, 10), Color::WHITE, all);
         assert!(!rec.spans.is_empty());
         // All spans should be between y=0 and y=10.
         for &(_, _, y) in &rec.spans {

@@ -1,7 +1,7 @@
 //! `SdiShapes` extension trait.
 
 use super::spans::SpanFill;
-use crate::backend::{Color, SdiCore};
+use crate::backend::{Color, SdiClipTransform};
 use crate::error::Result;
 use crate::rasterize::{
     midpoint_row_extents, rounded_rect_rows, stroke_circle_rows, stroke_rect_parts,
@@ -22,7 +22,7 @@ use crate::rasterize::{
 /// translucent colours blend uniformly. PSP and all test mocks rely on
 /// them.
 #[allow(clippy::too_many_arguments)]
-pub trait SdiShapes: SdiCore {
+pub trait SdiShapes: SdiClipTransform {
     /// Draw a filled rectangle with rounded corners.
     ///
     /// `radius` is clamped to half the shorter side.
@@ -115,8 +115,11 @@ pub trait SdiShapes: SdiCore {
         width: u16,
         color: Color,
     ) -> Result<()> {
+        let bounds = self.draw_bounds();
         let mut fill = SpanFill::new(self, color);
-        thick_line_rows(x1, y1, x2, y2, width, |y, xs, xe| fill.span(y, xs, xe));
+        thick_line_rows(x1, y1, x2, y2, width, bounds, |y, xs, xe| {
+            fill.span(y, xs, xe)
+        });
         fill.finish()
     }
 
@@ -144,8 +147,9 @@ pub trait SdiShapes: SdiCore {
         y3: i32,
         color: Color,
     ) -> Result<()> {
+        let bounds = self.draw_bounds();
         let mut fill = SpanFill::new(self, color);
-        triangle_rows((x1, y1), (x2, y2), (x3, y3), |y, x0, x1| {
+        triangle_rows((x1, y1), (x2, y2), (x3, y3), bounds, |y, x0, x1| {
             fill.span(y, x0, x1);
         });
         fill.finish()

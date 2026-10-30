@@ -2,11 +2,14 @@
 //!
 //! Implements `SdiGradients` for `SdlBackend`, supporting vertical,
 //! horizontal, and four-corner gradient fills on both rectangular and
-//! rounded-rectangular regions.
+//! rounded-rectangular regions. A failed SDL fill is reported, not
+//! dropped: the first error ends the gradient and is returned.
 
-use oasis_types::backend::{Color, GradientStyle, SdiGradients};
+use oasis_types::backend::{BackendErrExt, Color, GradientStyle, SdiGradients};
 use oasis_types::color::lerp_color_ratio;
 use oasis_types::error::Result;
+
+use sdl3::render::FRect;
 
 use super::{SdlBackend, frect};
 
@@ -21,9 +24,9 @@ impl SdlBackend {
         h: u32,
         (x0, x1): (i32, i32),
         color_of: impl Fn(u32) -> Color,
-    ) {
+    ) -> Result<()> {
         if x0 >= x1 {
-            return;
+            return Ok(());
         }
         let mut run_start = x0;
         let mut run_color = color_of((x0 - origin_x) as u32);
@@ -35,13 +38,90 @@ impl SdlBackend {
             };
             if x == x1 || color != run_color {
                 self.set_color(run_color);
-                let _ = self
-                    .canvas
-                    .fill_rect(frect(run_start, y, (x - run_start) as u32, h));
+                self.canvas
+                    .fill_rect(frect(run_start, y, (x - run_start) as u32, h))
+                    .backend_err()?;
                 run_start = x;
                 run_color = color;
             }
         }
+        Ok(())
+    }
+
+    /// The colour runs of a rounded-rect gradient over `rows` (the shape's
+    /// rows relative to `(tx, ty)`, sorted by row).
+    fn fill_rounded_gradient_rows(
+        &mut self,
+        (tx, ty): (i32, i32),
+        rows: &[FRect],
+        (w_max, h_max): (u32, u32),
+        gradient: &GradientStyle,
+    ) -> Result<()> {
+        match *gradient {
+            GradientStyle::Vertical { top, bottom } => {
+                // Coalesce rows of the same color and span into one rect.
+                let mut i = 0;
+                while i < rows.len() {
+                    let first = rows[i];
+                    let color = lerp_color_ratio(top, bottom, first.y as u32, h_max);
+                    let mut j = i + 1;
+                    while j < rows.len()
+                        && rows[j].x == first.x
+                        && rows[j].w == first.w
+                        && lerp_color_ratio(top, bottom, rows[j].y as u32, h_max) == color
+                    {
+                        j += 1;
+                    }
+                    self.set_color(color);
+                    self.canvas
+                        .fill_rect(frect(
+                            tx + first.x as i32,
+                            ty + first.y as i32,
+                            first.w as u32,
+                            (j - i) as u32,
+                        ))
+                        .backend_err()?;
+                    i = j;
+                }
+            },
+            GradientStyle::Horizontal { left, right } => {
+                // Rows with the same span share their column runs.
+                let mut i = 0;
+                while i < rows.len() {
+                    let first = rows[i];
+                    let mut j = i + 1;
+                    while j < rows.len() && rows[j].x == first.x && rows[j].w == first.w {
+                        j += 1;
+                    }
+                    let span = (tx + first.x as i32, tx + (first.x + first.w) as i32);
+                    self.fill_gradient_columns(
+                        tx,
+                        ty + first.y as i32,
+                        (j - i) as u32,
+                        span,
+                        |dx| lerp_color_ratio(left, right, dx, w_max),
+                    )?;
+                    i = j;
+                }
+            },
+            GradientStyle::FourCorner {
+                top_left,
+                top_right,
+                bottom_left,
+                bottom_right,
+            } => {
+                for row in rows.iter().copied() {
+                    let dy = row.y as u32;
+                    let l = lerp_color_ratio(top_left, bottom_left, dy, h_max);
+                    let rt = lerp_color_ratio(top_right, bottom_right, dy, h_max);
+                    let span = (tx + row.x as i32, tx + (row.x + row.w) as i32);
+                    self.fill_gradient_columns(tx, ty + dy as i32, 1, span, |dx| {
+                        lerp_color_ratio(l, rt, dx, w_max)
+                    })?;
+                }
+            },
+        }
+        Ok(())
     }
 }
 
@@ -73,7 +153,9 @@ impl SdiGradients for SdlBackend {
                     if dy as u32 == h || color != run_color {
                         self.set_color(run_color);
                         let run_h = (dy - run_start) as u32;
-                        let _ = self.canvas.fill_rect(frect(tx, ty + run_start, w, run_h));
+                        self.canvas
+                            .fill_rect(frect(tx, ty + run_start, w, run_h))
+                            .backend_err()?;
                         run_start = dy;
                         run_color = color;
                     }
@@ -92,7 +174,9 @@ impl SdiGradients for SdlBackend {
                     if dx as u32 == w || color != run_color {
                         self.set_color(run_color);
                         let run_w = (dx - run_start) as u32;
-                        let _ = self.canvas.fill_rect(frect(tx + run_start, ty, run_w, h));
+                        self.canvas
+                            .fill_rect(frect(tx + run_start, ty, run_w, h))
+                            .backend_err()?;
                         run_start = dx;
                         run_color = color;
                     }
@@ -121,9 +205,9 @@ impl SdiGradients for SdlBackend {
                         if dx as u32 == w || color != run_color {
                             self.set_color(run_color);
                             let run_w = (dx - run_start) as u32;
-                            let _ = self
-                                .canvas
-                                .fill_rect(frect(tx + run_start, ty + dy, run_w, 1));
+                            self.canvas
+                                .fill_rect(frect(tx + run_start, ty + dy, run_w, 1))
+                                .backend_err()?;
                             run_start = dx;
                             run_color = color;
                         }
@@ -161,69 +245,9 @@ impl SdiGradients for SdlBackend {
             rows.push(frect(x0, dy, (x1 - x0) as u32, 1));
         });
         rows.sort_by_key(|row| row.y as i32);
-        match *gradient {
-            GradientStyle::Vertical { top, bottom } => {
-                // Coalesce rows of the same color and span into one rect.
-                let mut i = 0;
-                while i < rows.len() {
-                    let first = rows[i];
-                    let color = lerp_color_ratio(top, bottom, first.y as u32, h_max);
-                    let mut j = i + 1;
-                    while j < rows.len()
-                        && rows[j].x == first.x
-                        && rows[j].w == first.w
-                        && lerp_color_ratio(top, bottom, rows[j].y as u32, h_max) == color
-                    {
-                        j += 1;
-                    }
-                    self.set_color(color);
-                    let _ = self.canvas.fill_rect(frect(
-                        tx + first.x as i32,
-                        ty + first.y as i32,
-                        first.w as u32,
-                        (j - i) as u32,
-                    ));
-                    i = j;
-                }
-            },
-            GradientStyle::Horizontal { left, right } => {
-                // Rows with the same span share their column runs.
-                let mut i = 0;
-                while i < rows.len() {
-                    let first = rows[i];
-                    let mut j = i + 1;
-                    while j < rows.len() && rows[j].x == first.x && rows[j].w == first.w {
-                        j += 1;
-                    }
-                    let span = (tx + first.x as i32, tx + (first.x + first.w) as i32);
-                    self.fill_gradient_columns(
-                        tx,
-                        ty + first.y as i32,
-                        (j - i) as u32,
-                        span,
-                        |dx| lerp_color_ratio(left, right, dx, w_max),
-                    );
-                    i = j;
-                }
-            },
-            GradientStyle::FourCorner {
-                top_left,
-                top_right,
-                bottom_left,
-                bottom_right,
-            } => {
-                for row in rows.iter().copied() {
-                    let dy = row.y as u32;
-                    let l = lerp_color_ratio(top_left, bottom_left, dy, h_max);
-                    let rt = lerp_color_ratio(top_right, bottom_right, dy, h_max);
-                    let span = (tx + row.x as i32, tx + (row.x + row.w) as i32);
-                    self.fill_gradient_columns(tx, ty + dy as i32, 1, span, |dx| {
-                        lerp_color_ratio(l, rt, dx, w_max)
-                    });
-                }
-            },
-        }
+        // The scratch goes back before an error propagates.
+        let drawn = self.fill_rounded_gradient_rows((tx, ty), &rows, (w_max, h_max), gradient);
         self.rect_batch = rows;
-        Ok(())
+        drawn
     }
 }

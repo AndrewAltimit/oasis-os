@@ -116,6 +116,7 @@ impl Skin {
                         "hover_bg",
                         "pressed_bg",
                         "disabled_bg",
+                        "text",
                         "disabled_text",
                     ],
                 ),

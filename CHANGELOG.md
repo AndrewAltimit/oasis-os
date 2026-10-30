@@ -175,6 +175,34 @@ removal, a restyled site, and docs that match the code.
   resizes drop the SDL-side clip and read back bound targets at their own
   size; WASM keeps its context save stack balanced when a flipped blit
   fails.
+- **(breaking)** `destroy_texture` of an unknown or already-destroyed id
+  fails with `BackendError::TextureNotFound` on every backend (SDL, UE5,
+  WASM, PSP and the test doubles), like `destroy_render_target`; it used
+  to succeed silently. Checked by `conformance::texture_misuse`.
+- **(breaking)** `thick_line_rows`, `polygon_rows`, `triangle_rows` and
+  `rasterize_triangle` take a `ClipRect` of bounds and generate only the
+  visible rows, so a line spanning +-1e9 no longer effectively hangs
+  (`ClipRect::UNBOUNDED` keeps the old behaviour). `SdiShapes` now builds
+  on `SdiClipTransform`, which gains `draw_bounds()`.
+- `stroke_arc` clamps its sweep to one turn like `fill_arc`
+  (`backend::clamp_sweep`; WASM arcs too, and negative sweeps run
+  anticlockwise there). WASM `blit_tinted` no longer paints the tint into
+  the texture's transparent pixels, and `blit_sub_tinted` tints at all.
+  SDL gradients and glyph blits report SDL errors instead of dropping
+  them. `RecordingBackend` / `ClipAuditBackend` log `set_clip_rect` /
+  `reset_clip_rect` as the new `DrawCommand::SetClip` / `ResetClip`
+  instead of `PushClip` / `PopClip`.
+- `oasis_ui::Theme` gains `button_text`, the label colour on neutral
+  button fills (secondary buttons, unfocused modal buttons): derived from
+  the skin's `text` with 4.5:1 contrast enforced against the button fill,
+  or set with `[widget_states.button] text`. The retro-cga, solarized and
+  corrupted buttons are readable now and left the accepted low-contrast
+  list.
+- `VectorOp::scale` snaps positions as absolute pixels (rect edges rather
+  than position + size, through group translations), so vector icons no
+  longer show 1 px seams between abutting parts at fractional scales;
+  dashboard icon pixels change slightly and the screenshots were
+  regenerated.
 - `impl_sdi_defaults!(T)` writes the eight empty extension impls for mocks;
   `oasis-test-backend` gains `NullBackend` and a stateful
   `RecordingBackend` (with `DrawCommand`), replacing per-crate mocks.

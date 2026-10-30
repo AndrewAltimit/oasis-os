@@ -78,7 +78,16 @@ impl Button {
         }
         match self.style {
             ButtonStyle::Primary => theme.text_on_accent,
-            _ => theme.text_primary,
+            // On the neutral button fill.
+            ButtonStyle::Secondary => theme.button_text,
+            // No fill except the pressed one, which is a button surface.
+            ButtonStyle::Outline | ButtonStyle::Ghost => {
+                if self.state == WidgetState::Pressed {
+                    theme.button_text
+                } else {
+                    theme.text_primary
+                }
+            },
         }
     }
 }
@@ -386,6 +395,26 @@ mod tests {
         assert_eq!(s.bg_color(&t), Some(t.button_bg_pressed));
         s.state = WidgetState::Disabled;
         assert_eq!(s.bg_color(&t), Some(t.button_bg_disabled));
+    }
+
+    /// Labels on the neutral button fill use `button_text`, not the base
+    /// `text_primary` (which a skin picks for its background, not for the
+    /// button fill).
+    #[test]
+    fn labels_on_the_button_fill_use_button_text() {
+        let mut t = Theme::dark();
+        t.button_text = Color::rgb(1, 2, 3);
+        assert_ne!(t.button_text, t.text_primary);
+        let mut s = Button::new("S");
+        assert_eq!(s.text_color(&t), t.button_text);
+        s.state = WidgetState::Disabled;
+        assert_eq!(s.text_color(&t), t.text_disabled);
+        let mut g = Button::new("G");
+        g.style = ButtonStyle::Ghost;
+        assert_eq!(g.text_color(&t), t.text_primary, "no fill: base text");
+        g.state = WidgetState::Pressed;
+        assert_eq!(g.text_color(&t), t.button_text, "pressed fill");
+        assert_eq!(Button::primary("P").text_color(&t), t.text_on_accent);
     }
 
     #[test]

@@ -48,6 +48,16 @@ designed at 22×22 can render at any display size without re-authoring.
 Line, circle, arc and polygon stroke widths (and dash patterns) are left
 as authored. Radii, rect stroke widths and font sizes never scale below 1.
 
+Positions are snapped as **absolute** pixels: a point `p` (including its
+enclosing groups' translation) lands on `round(p * factor)`, and a
+rectangle keeps the snapped edges `round(x * factor)` and
+`round((x + w) * factor)` instead of scaling its width separately. Parts
+that touch in design space — the abutting rects of a pixel icon, a body
+and its outline, ops in differently translated groups — therefore still
+touch at any fractional scale; each scaled pixel shows the design pixel
+its centre samples. Radii round; font sizes and rect stroke widths round
+down.
+
 ## Scene composition
 
 `VectorScene` keeps a flat ops list in paint order (back to front). To compose

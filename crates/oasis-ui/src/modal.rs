@@ -281,7 +281,7 @@ impl Widget for Modal {
                 let fg = if is_focused {
                     ctx.theme.text_on_accent
                 } else {
-                    ctx.theme.text_primary
+                    ctx.theme.button_text
                 };
 
                 ctx.backend

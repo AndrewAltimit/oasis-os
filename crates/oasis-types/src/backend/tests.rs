@@ -1228,14 +1228,52 @@ fn draw_line_bresenham_single_point() {
     assert_eq!(calls.len(), 1);
 }
 
+/// Spans outside the bound surface are never generated: a line reaching
+/// a billion pixels off-screen draws only its visible rows, quickly.
+#[test]
+fn draw_line_default_generates_only_visible_spans() {
+    let mut b = RecordingBackend::new();
+    let start = std::time::Instant::now();
+    b.draw_line(-1_000_000_000, 10, 1_000_000_000, 10, 3, Color::WHITE)
+        .unwrap();
+    b.draw_line(20, -1_000_000_000, 20, 1_000_000_000, 1, Color::WHITE)
+        .unwrap();
+    b.fill_triangle(
+        0,
+        -2_000_000_000,
+        2_000_000_000,
+        0,
+        0,
+        2_000_000_000,
+        Color::WHITE,
+    )
+    .unwrap();
+    b.fill_polygon(
+        &[
+            (-2_000_000_000, -2_000_000_000),
+            (2_000_000_000, 0),
+            (0, 2_000_000_000),
+        ],
+        Color::WHITE,
+    )
+    .unwrap();
+    assert!(start.elapsed() < std::time::Duration::from_secs(2));
+    let (vw, vh) = b.viewport_size();
+    let cov = coverage(&b.calls());
+    assert!(!cov.is_empty());
+    for &(x, y) in cov.keys() {
+        assert!((0..vw as i32).contains(&x) && (0..vh as i32).contains(&y));
+    }
+}
+
 #[test]
 fn draw_line_bresenham_width_scales_pixels() {
     let mut b = RecordingBackend::new();
-    b.draw_line(0, 0, 2, 2, 3, Color::WHITE).unwrap();
-    // The union of a centred 3x3 brush at (0,0), (1,1), (2,2), each pixel
+    b.draw_line(5, 5, 7, 7, 3, Color::WHITE).unwrap();
+    // The union of a centred 3x3 brush at (5,5), (6,6), (7,7), each pixel
     // covered once.
     let mut expected = std::collections::BTreeSet::new();
-    for i in 0..3 {
+    for i in 5..8 {
         for dy in -1..=1 {
             for dx in -1..=1 {
                 expected.insert((i + dx, i + dy));

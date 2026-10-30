@@ -287,6 +287,22 @@ fn render_target_misuse_is_rejected() {
     );
 }
 
+/// Destroying an unknown or already-destroyed texture is an error
+/// (`TextureNotFound`) on SDL and the software framebuffer, as destroying
+/// an unknown render target already was (it used to succeed silently).
+#[test]
+fn texture_misuse_is_rejected() {
+    let sdl_bad = with_sdl(CANVAS_W, CANVAS_H, |sdl| {
+        conformance::texture_misuse(sdl as &mut dyn SdiBackend)
+    });
+    let mut ue5 = Ue5Backend::new(CANVAS_W, CANVAS_H);
+    let ue5_bad = conformance::texture_misuse(&mut ue5 as &mut dyn SdiBackend);
+    assert!(
+        sdl_bad.is_empty() && ue5_bad.is_empty(),
+        "sdl: {sdl_bad:?}\nue5: {ue5_bad:?}"
+    );
+}
+
 /// `read_pixels` while a render target is bound reads the target in full,
 /// also past the window's width (it used to clip to the window size).
 #[test]

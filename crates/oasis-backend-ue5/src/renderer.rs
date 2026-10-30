@@ -384,11 +384,13 @@ impl SdiCore for Ue5Backend {
     }
 
     fn destroy_texture(&mut self, tex: TextureId) -> Result<()> {
-        let idx = tex.0 as usize;
-        if idx < self.textures.len() {
-            self.textures[idx] = None;
+        let slot = usize::try_from(tex.0)
+            .ok()
+            .and_then(|idx| self.textures.get_mut(idx));
+        match slot.and_then(Option::take) {
+            Some(_) => Ok(()),
+            None => Err(texture_not_found(tex.0)),
         }
-        Ok(())
     }
 
     fn set_clip_rect(&mut self, x: i32, y: i32, w: u32, h: u32) -> Result<()> {
@@ -556,7 +558,10 @@ impl SdiVector for Ue5Backend {
         if (dx, dy) == (0, 0) {
             self.fb.fill_polygon(points, color);
         } else {
-            let moved: Vec<(i32, i32)> = points.iter().map(|&(x, y)| (x + dx, y + dy)).collect();
+            let moved: Vec<(i32, i32)> = points
+                .iter()
+                .map(|&(x, y)| (x.saturating_add(dx), y.saturating_add(dy)))
+                .collect();
             self.fb.fill_polygon(&moved, color);
         }
         self.dirty = true;
