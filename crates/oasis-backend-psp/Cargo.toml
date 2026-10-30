@@ -64,7 +64,7 @@ oasis-core = { path = "../oasis-core", default-features = false }
 oasis-browser = { path = "../oasis-browser", default-features = false, features = ["psp", "javascript"] }
 oasis-js = { path = "../oasis-js", features = ["psp-bindgen"] }
 oasis-video = { path = "../oasis-video", default-features = false, features = ["no-std-demux"] }
-oasis-shader = { path = "../oasis-shader", default-features = false, features = ["software"] }
+oasis-shader = { path = "../oasis-shader", default-features = false }
 libm = "0.2"
 
 # TLS for HTTPS/Gemini (pure Rust, no C/asm, works on mipsel-sony-psp)

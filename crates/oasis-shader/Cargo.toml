@@ -11,7 +11,6 @@ authors.workspace = true
 default = []
 gl-native = ["glow"]
 gl-web = ["glow", "web-sys", "wasm-bindgen"]
-software = []
 # Multi-threaded software shading (rayon). Desktop-only: do not enable
 # for the WASM or PSP targets (single-threaded; PSP grids are tiny).
 parallel = ["dep:rayon"]

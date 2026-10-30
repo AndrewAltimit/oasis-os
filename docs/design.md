@@ -112,7 +112,7 @@ oasis-os/
 |   +-- oasis-js/                    # QuickJS-NG: console, DOM glue, Promise fetch, per-origin storage, watchdog
 |   +-- oasis-video/                 # MP4/H.264+AAC decode (openh264 + symphonia, or ffmpeg; PSP-safe demux_lite)
 |   +-- oasis-vector/                # Vector graphics: scene graph, path ops, icons, frame-driven animations
-|   +-- oasis-shader/                # Animated shader wallpapers (voronoi, city lights, ocean waves, calm waves, balatro)
+|   +-- oasis-shader/                # Animated shader wallpapers (8 built-ins: balatro, voronoi, city_lights, ...)
 |   +-- oasis-rasterize/             # Shared software rasterizer used by the SDL, WASM and UE5 backends
 |   +-- oasis-i18n/                  # Internationalization framework
 |   +-- oasis-test-backend/          # Mock / recording backends for tests
