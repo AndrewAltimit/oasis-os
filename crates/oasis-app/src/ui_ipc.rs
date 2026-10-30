@@ -15,14 +15,12 @@
 //!   the browser, then open a URL / back / forward / reload / home /
 //!   reader / bookmarks / history.
 
-use oasis_core::backend::Color;
-use oasis_core::dashboard::AppEntry;
 use oasis_core::sdi::SdiRegistry;
 use oasis_core::toast::ToastLevel;
 use oasis_core::vfs::{MemoryVfs, Vfs};
 
 use crate::app_state::AppState;
-use crate::launch;
+use crate::launch::{self, LaunchOpts};
 
 pub const NOTIFY_PATH: &str = "/var/notify/message";
 pub const SCREENSHOT_REQUEST_PATH: &str = "/var/screenshot/request";
@@ -110,26 +108,8 @@ fn apply_browse_request(
         Some((op, arg)) => (op, arg.trim()),
         None => (request, ""),
     };
-    let entry = AppEntry {
-        title: "Browser".to_string(),
-        path: "/apps/Browser".to_string(),
-        icon_png: Vec::new(),
-        color: Color::rgb(100, 100, 100),
-    };
     // Opens the window (at the home page) or focuses the existing one.
-    let result = launch::launch_app_window(
-        &entry,
-        &mut state.wm,
-        sdi,
-        &mut state.content.open_runners,
-        &mut state.content.browser,
-        &state.browser_config,
-        vfs,
-        &state.net.tls_provider,
-        state.skin.features.window_manager,
-        &state.plugin_manager,
-    );
-    launch::apply_launch(result, &mut state.mode);
+    launch::launch_title(state, sdi, vfs, launch::BROWSER_TITLE, LaunchOpts::QUIET);
     let Some(bw) = state.content.browser.as_mut() else {
         return;
     };
@@ -223,7 +203,7 @@ pub fn save_screenshot(
         Ok(()) => format!("Screenshot saved: {path} ({w}x{h})"),
         Err(e) => format!("screenshot: {path}: {e}"),
     };
-    state.terminal.output_lines.push(line);
+    state.terminal.print(line);
     state.terminal.dirty = true;
 }
 

@@ -112,23 +112,24 @@ fn play_file(state: &mut AppState, vfs: &MemoryVfs, path: &str) {
     // reflects reality after music takes over. `RadioManager::stop`
     // internally calls `AudioBackend::stop()` which is process-global
     // (it clears the shared SDL audio stream), so guard it with
-    // `state.tv_audio_track.is_none()` — otherwise TV Guide video
+    // `state.tv.audio_track.is_none()` — otherwise TV Guide video
     // audio would be silenced mid-playback in windowed multi-window
     // mode while its state machine stays oblivious. If TV Guide is the
     // active audio consumer, we skip the radio teardown entirely;
     // radio's RadioState stays `Playing` until the user explicitly
     // stops it, but the subsequent `play(music_track)` swaps
     // `current_track` away from radio so no audio interleaves.
-    if state.radio_manager.state() != oasis_audio::radio::RadioState::Stopped
-        && state.tv_audio_track.is_none()
+    if state.radio.manager.state() != oasis_audio::radio::RadioState::Stopped
+        && state.tv.audio_track.is_none()
     {
         let _ = state
-            .radio_manager
+            .radio
+            .manager
             .process_request("stop", state.audio_backend.as_mut());
-        state.archive_catalog = None;
-        state.pending_catalog_fetch = None;
-        state.pending_source_fetch = None;
-        if let Some(mut src) = state.radio_source.take() {
+        state.radio.archive_catalog = None;
+        state.radio.pending_catalog_fetch = None;
+        state.radio.pending_source_fetch = None;
+        if let Some(mut src) = state.radio.source.take() {
             src.disconnect();
         }
     }
@@ -166,7 +167,7 @@ fn stop_track(state: &mut AppState) {
         // internal `stop()` when the music track is the current one, so
         // we only need the explicit call when no other audio consumer
         // is active.
-        if state.tv_audio_track.is_none() {
+        if state.tv.audio_track.is_none() {
             let _ = state.audio_backend.stop();
         }
         let _ = state.audio_backend.unload_track(track);

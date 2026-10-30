@@ -39,6 +39,7 @@ mod ui_sfx;
 mod user_prefs;
 mod vfs_setup;
 mod video_player;
+mod windows;
 
 pub use app_state::Mode;
 pub use shell::{BootObserver, BootOptions, NoSplash, Shell, StepOutcome};

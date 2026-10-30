@@ -634,12 +634,7 @@ mod tests {
 
         let mut vfs = MemoryVfs::new();
         super::populate_demo_vfs(&mut vfs);
-        let entry = AppEntry {
-            title: "Text Editor".to_string(),
-            path: "/apps/Text Editor".to_string(),
-            icon_png: Vec::new(),
-            color: oasis_core::backend::Color::rgb(100, 100, 100),
-        };
+        let entry = AppEntry::for_title("Text Editor");
         let runner = AppRunner::launch_with_file(&entry, "/home/user/documents/welcome.txt", &vfs);
         assert_eq!(
             runner.viewing_file.as_deref(),

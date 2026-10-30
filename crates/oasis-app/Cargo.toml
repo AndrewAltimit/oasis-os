@@ -54,6 +54,7 @@ mcp = ["dep:oasis-mcp", "dep:serde_json"]
 oasis-core = { workspace = true, features = ["tls-rustls"] }
 oasis-mcp = { workspace = true, optional = true }
 serde_json = { workspace = true, optional = true }
+oasis-app-core = { workspace = true }
 oasis-app-settings = { workspace = true }
 oasis-app-media = { workspace = true }
 oasis-app-system-monitor = { workspace = true }

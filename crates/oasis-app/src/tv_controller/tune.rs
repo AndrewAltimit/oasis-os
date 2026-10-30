@@ -31,10 +31,7 @@ fn tune_channel_from_vfs(state: &mut AppState, vfs: &mut dyn Vfs) {
         log::warn!("TV: bad channel in tune request: {number:?}");
         return;
     };
-    let Some(runner) = super::find_tv_guide_runner(
-        &mut state.content.app_runner,
-        &mut state.content.open_runners,
-    ) else {
+    let Some(runner) = super::find_tv_guide_runner(&mut state.content.open_runners) else {
         log::warn!("TV: tune_ch:{number} ignored, the TV Guide is not open");
         return;
     };
@@ -74,10 +71,7 @@ pub(super) fn handle_tune_requests(
 ) {
     tune_channel_from_vfs(state, vfs);
 
-    let runner = super::find_tv_guide_runner(
-        &mut state.content.app_runner,
-        &mut state.content.open_runners,
-    );
+    let runner = super::find_tv_guide_runner(&mut state.content.open_runners);
     let Some(runner) = runner else { return };
     let Some((path, data)) = runner.take_pending_request() else {
         return;
@@ -105,25 +99,25 @@ pub(super) fn handle_tune_requests(
 
     // Deduplicate: ignore tune requests for the URL already playing.
     #[cfg(feature = "_video")]
-    if state.tv_current_url.as_deref() == Some(url) && state.video_player.is_active() {
+    if state.tv.current_url.as_deref() == Some(url) && state.tv.video_player.is_active() {
         log::info!("TV: ignoring duplicate tune request for same URL");
         return;
     }
 
     // Cancel any orphaned streaming session (download + decoder threads).
     #[cfg(feature = "_video")]
-    if let Some(ref session) = state.tv_stream_session.take() {
+    if let Some(ref session) = state.tv.stream_session.take() {
         session.cancel();
     }
 
     // Stop any existing video session.
-    state.video_player.stop(backend);
-    if let Some(track) = state.tv_audio_track.take() {
+    state.tv.video_player.stop(backend);
+    if let Some(track) = state.tv.audio_track.take() {
         let _ = state.audio_backend.unload_track(track);
     }
     // Reset diagnostics for the new session.
-    state.tv_audio_chunks_fed = 0;
-    state.tv_audio_samples_fed = 0;
+    state.tv.audio_chunks_fed = 0;
+    state.tv.audio_samples_fed = 0;
 
     // Decode at full screen resolution so the video looks sharp in both
     // PIP and expanded (fullscreen) modes. The backend handles downscaling
@@ -142,8 +136,8 @@ pub(super) fn handle_tune_requests(
     if state.offline {
         #[cfg(feature = "_video")]
         {
-            state.tv_current_url = Some(url.to_string());
-            state.video_player.start_injected(preview_w, preview_h);
+            state.tv.current_url = Some(url.to_string());
+            state.tv.video_player.start_injected(preview_w, preview_h);
             setup_streaming_audio(state);
         }
         #[cfg(not(feature = "_video"))]
@@ -161,7 +155,7 @@ pub(super) fn handle_tune_requests(
 /// Start ffmpeg-based playback (the legacy path, used when video-decode is disabled).
 #[cfg(not(feature = "_video"))]
 fn start_ffmpeg_playback(state: &mut AppState, url: &str, seek_secs: u64, width: u32, height: u32) {
-    state.video_player.start(url, seek_secs, width, height);
+    state.tv.video_player.start(url, seek_secs, width, height);
     setup_streaming_audio(state);
 }
 
@@ -170,7 +164,7 @@ fn setup_streaming_audio(state: &mut AppState) {
     match state.audio_backend.load_streaming() {
         Ok(track) => {
             let _ = state.audio_backend.play(track);
-            state.tv_audio_track = Some(track);
+            state.tv.audio_track = Some(track);
         },
         Err(e) => {
             log::warn!("TV: failed to start audio stream: {e}");
@@ -183,34 +177,41 @@ fn setup_streaming_audio(state: &mut AppState) {
 #[cfg(feature = "_video")]
 fn start_video_download(state: &mut AppState, url: &str, seek_secs: u64, width: u32, height: u32) {
     // Check cache: if URL exists and file is on disk with valid size, play from file.
-    if let Some(pos) = state.tv_video_cache.iter().position(|(u, _)| u == url) {
-        let (_, ref path) = state.tv_video_cache[pos];
+    if let Some(pos) = state.tv.video_cache.iter().position(|(u, _)| u == url) {
+        let (_, ref path) = state.tv.video_cache[pos];
         let valid = path.metadata().map(|m| m.len() > 8192).unwrap_or(false);
         if valid {
             log::info!("TV: cache hit for {url}, starting software decode");
-            state.tv_video_cache_path = Some(path.clone());
+            state.tv.video_cache_path = Some(path.clone());
             state
+                .tv
                 .video_player
                 .start_software(path.clone(), seek_secs, width, height);
             setup_streaming_audio(state);
             return;
         }
         // File missing or too small (failed download) -- remove stale entry.
-        state.tv_video_cache.remove(pos);
+        state.tv.video_cache.remove(pos);
     }
 
     let tls = state.net.tls_provider.clone();
-    let session = start_stream_session(&mut state.video_player, url, tls, seek_secs, width, height);
+    let session = start_stream_session(
+        &mut state.tv.video_player,
+        url,
+        tls,
+        seek_secs,
+        width,
+        height,
+    );
 
     // Store session for cancellation on re-tune, and URL for dedup.
-    state.tv_stream_session = Some(session);
-    state.tv_current_url = Some(url.to_string());
+    state.tv.stream_session = Some(session);
+    state.tv.current_url = Some(url.to_string());
     setup_streaming_audio(state);
 
     // Clear download-related state (no longer used for streaming).
-    state.pending_video_download = None;
-    state.tv_download_progress = None;
-    state.pending_video_params = None;
+    state.tv.pending_video_download = None;
+    state.tv.download_progress = None;
 }
 
 /// Start a streaming session: a download thread feeding a

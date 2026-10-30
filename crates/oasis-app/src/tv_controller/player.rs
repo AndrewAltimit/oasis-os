@@ -5,16 +5,13 @@ use oasis_core::backend::SdiBackend;
 
 /// Tick video player: upload frames, collect audio chunks.
 pub(super) fn tick_video_player(state: &mut AppState, backend: &mut impl SdiBackend) {
-    let (texture, mut audio_output) = state.video_player.tick(backend);
+    let (texture, mut audio_output) = state.tv.video_player.tick(backend);
 
     // The guide's volume slider (0-100) scales the video audio on top of
     // the system volume the audio backend applies.
     #[cfg(feature = "_video")]
     let gain = {
-        let runner = super::find_tv_guide_runner(
-            &mut state.content.app_runner,
-            &mut state.content.open_runners,
-        );
+        let runner = super::find_tv_guide_runner(&mut state.content.open_runners);
         runner
             .and_then(|r| r.tv_guide_state())
             .map_or(1.0, |guide| {
@@ -24,7 +21,7 @@ pub(super) fn tick_video_player(state: &mut AppState, backend: &mut impl SdiBack
     };
 
     // Feed audio to the streaming track.
-    if let Some(track) = state.tv_audio_track {
+    if let Some(track) = state.tv.audio_track {
         let mut audio_chunks_fed = 0u32;
         // Only the PCM path counts samples (MP3 chunks are opaque bytes).
         #[cfg_attr(not(feature = "_video"), allow(unused_mut))]
@@ -56,18 +53,18 @@ pub(super) fn tick_video_player(state: &mut AppState, backend: &mut impl SdiBack
             crate::video_player::AudioOutput::None => {},
         }
         if audio_chunks_fed > 0 {
-            state.tv_audio_chunks_fed += u64::from(audio_chunks_fed);
-            state.tv_audio_samples_fed += audio_samples_fed;
+            state.tv.audio_chunks_fed += u64::from(audio_chunks_fed);
+            state.tv.audio_samples_fed += audio_samples_fed;
         }
     }
 
     // Periodic diagnostics (every ~5 seconds at 60fps).
-    if state.video_player.is_active() && state.frame_counter.is_multiple_of(300) {
+    if state.tv.video_player.is_active() && state.frame_counter.is_multiple_of(300) {
         log::info!(
             "TV: main thread: {} display frames, {} audio chunks fed ({:.1}M samples)",
-            state.video_player.displayed_frames(),
-            state.tv_audio_chunks_fed,
-            state.tv_audio_samples_fed as f64 / 1_000_000.0,
+            state.tv.video_player.displayed_frames(),
+            state.tv.audio_chunks_fed,
+            state.tv.audio_samples_fed as f64 / 1_000_000.0,
         );
     }
 
@@ -75,7 +72,7 @@ pub(super) fn tick_video_player(state: &mut AppState, backend: &mut impl SdiBack
     let download_status = {
         #[cfg(feature = "_video")]
         {
-            state.tv_stream_session.as_ref().and_then(|session| {
+            state.tv.stream_session.as_ref().and_then(|session| {
                 let received = session.bytes_received();
                 let total = session
                     .total_size
@@ -95,10 +92,7 @@ pub(super) fn tick_video_player(state: &mut AppState, backend: &mut impl SdiBack
             None::<String>
         }
     };
-    let runner = super::find_tv_guide_runner(
-        &mut state.content.app_runner,
-        &mut state.content.open_runners,
-    );
+    let runner = super::find_tv_guide_runner(&mut state.content.open_runners);
     if let Some(runner) = runner
         && let Some(guide) = runner.tv_guide_state()
     {
@@ -134,14 +128,11 @@ fn apply_gain(chunks: &mut [crate::video_player::SoftwareAudio], gain: f32) {
 
 /// Detect untune: video is active but guide has no tuned channel.
 pub(super) fn detect_untune(state: &mut AppState, backend: &mut impl SdiBackend) {
-    if !state.video_player.is_active() {
+    if !state.tv.video_player.is_active() {
         return;
     }
     let should_stop = {
-        let runner = super::find_tv_guide_runner(
-            &mut state.content.app_runner,
-            &mut state.content.open_runners,
-        );
+        let runner = super::find_tv_guide_runner(&mut state.content.open_runners);
         match runner {
             Some(runner) => runner
                 .tv_guide_state()
@@ -151,21 +142,20 @@ pub(super) fn detect_untune(state: &mut AppState, backend: &mut impl SdiBackend)
     };
     if should_stop {
         log::info!("TV: untuned or guide closed, stopping video");
-        state.video_player.stop(backend);
-        if let Some(track) = state.tv_audio_track.take() {
+        state.tv.video_player.stop(backend);
+        if let Some(track) = state.tv.audio_track.take() {
             let _ = state.audio_backend.unload_track(track);
         }
         #[cfg(feature = "_video")]
         {
-            if let Some(ref session) = state.tv_stream_session.take() {
+            if let Some(ref session) = state.tv.stream_session.take() {
                 session.cancel();
             }
-            state.tv_current_url = None;
-            state.pending_video_download = None;
-            state.pending_video_params = None;
-            state.tv_download_progress = None;
+            state.tv.current_url = None;
+            state.tv.pending_video_download = None;
+            state.tv.download_progress = None;
             // Keep the file in cache (don't delete) -- it can be reused on re-tune.
-            state.tv_video_cache_path = None;
+            state.tv.video_cache_path = None;
         }
     }
 }
@@ -177,14 +167,11 @@ pub(super) fn detect_untune(state: &mut AppState, backend: &mut impl SdiBackend)
 /// Detects rapid-retune loops (playback < 3s) and skips to the next
 /// episode to avoid infinite buffer-play-buffer cycles.
 pub(super) fn auto_advance_episode(state: &mut AppState, backend: &mut impl SdiBackend) {
-    if !state.video_player.is_finished() {
+    if !state.tv.video_player.is_finished() {
         return;
     }
 
-    let runner = super::find_tv_guide_runner(
-        &mut state.content.app_runner,
-        &mut state.content.open_runners,
-    );
+    let runner = super::find_tv_guide_runner(&mut state.content.open_runners);
     let Some(runner) = runner else { return };
     let Some(guide) = runner.tv_guide_state() else {
         return;
@@ -200,21 +187,21 @@ pub(super) fn auto_advance_episode(state: &mut AppState, backend: &mut impl SdiB
     // Skip ahead to the next episode instead of re-tuning the same video
     // which would create an infinite buffer→play→buffer loop.
     #[cfg(feature = "_video")]
-    let was_rapid = state.video_player.playback_duration_secs() < 3.0
-        && state.video_player.displayed_frames() < 60;
+    let was_rapid = state.tv.video_player.playback_duration_secs() < 3.0
+        && state.tv.video_player.displayed_frames() < 60;
     #[cfg(not(feature = "_video"))]
     let was_rapid = false;
 
     // Stop the finished player — but preserve the last frame texture so
     // the user sees a still image instead of the "Loading..." screen
     // during the brief retune/rebuffer period.
-    let last_texture = state.video_player.take_texture();
-    state.video_player.stop(backend);
+    let last_texture = state.tv.video_player.take_texture();
+    state.tv.video_player.stop(backend);
     // Assign the preserved texture back to the guide. It will be
     // replaced by the new video's first frame once it arrives, or
     // destroyed if the channel is untuned.
     guide.preview_texture = last_texture;
-    if let Some(track) = state.tv_audio_track.take() {
+    if let Some(track) = state.tv.audio_track.take() {
         let _ = state.audio_backend.unload_track(track);
     }
 
