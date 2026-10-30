@@ -15,7 +15,7 @@ pub use memory::MemoryVfs;
 #[cfg(not(target_arch = "wasm32"))]
 pub use real::RealVfs;
 
-use oasis_types::error::{OasisError, Result};
+use oasis_types::error::{OasisError, Result, VfsError};
 
 /// Type of a VFS entry.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -160,6 +160,23 @@ impl FilePermissions {
     }
 }
 
+/// What [`Vfs::validate_rename`] decided.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RenamePlan {
+    /// The rename is valid; perform it.
+    Move,
+    /// Source and destination are the same path; do nothing.
+    NoOp,
+}
+
+/// Parent of a normalized absolute path (`/` for top-level entries and root).
+pub(crate) fn parent_path(path: &str) -> &str {
+    match path.rfind('/') {
+        Some(0) | None => "/",
+        Some(i) => &path[..i],
+    }
+}
+
 /// The virtual file system trait.
 ///
 /// All file operations in the command interpreter go through this trait.
@@ -214,6 +231,66 @@ pub trait Vfs {
     /// each override it with their own name.
     fn vfs_type(&self) -> &'static str {
         "UnknownVfs"
+    }
+
+    /// Check the invariants every `rename` implementation must enforce.
+    ///
+    /// `from` and `to` must already be in the implementation's normal form
+    /// (absolute, no `//`, no trailing `/`, no `.`/`..`). Returns
+    /// [`RenamePlan::NoOp`] when `from == to`, [`RenamePlan::Move`] when the
+    /// rename may proceed, and an error when:
+    ///
+    /// - `from` is the root (`/`), or does not exist;
+    /// - `to` is `from` itself or lies inside it (`/a` -> `/a/b`), which
+    ///   would orphan the moved subtree;
+    /// - the parent of `to` is missing or not a directory;
+    /// - `to` is an existing directory (empty or not: callers that mean
+    ///   "move into" must append the file name themselves);
+    /// - `to` is an existing file and `from` is a directory.
+    ///
+    /// Replacing an existing file with a file is allowed (POSIX `rename`).
+    /// Permission checks are left to the implementation: the in-memory
+    /// backends enforce their stored modes, `RealVfs` defers to the OS.
+    fn validate_rename(&self, from: &str, to: &str) -> Result<RenamePlan> {
+        if from == "/" {
+            return Err(VfsError::Other("cannot rename root".into()).into());
+        }
+        if !self.exists(from) {
+            return Err(VfsError::NotFound { path: from.into() }.into());
+        }
+        if from == to {
+            return Ok(RenamePlan::NoOp);
+        }
+        if to == "/"
+            || to
+                .strip_prefix(from)
+                .is_some_and(|rest| rest.starts_with('/'))
+        {
+            return Err(
+                VfsError::Other(format!("cannot move '{from}' into itself ('{to}')")).into(),
+            );
+        }
+        let to_parent = parent_path(to);
+        if !self
+            .stat(to_parent)
+            .is_ok_and(|m| m.kind == EntryKind::Directory)
+        {
+            return Err(
+                VfsError::Other(format!("parent directory does not exist: {to_parent}")).into(),
+            );
+        }
+        if let Ok(dest) = self.stat(to) {
+            if dest.kind == EntryKind::Directory {
+                return Err(VfsError::Other(format!(
+                    "destination exists and is a directory: {to}"
+                ))
+                .into());
+            }
+            if self.stat(from)?.kind == EntryKind::Directory {
+                return Err(VfsError::NotADirectory { path: to.into() }.into());
+            }
+        }
+        Ok(RenamePlan::Move)
     }
 
     /// Check whether the current context has the given access mode for

@@ -8,7 +8,9 @@ use std::collections::{HashMap, HashSet};
 
 use oasis_types::error::{OasisError, Result};
 
-use crate::{AccessMode, EntryKind, FilePermissions, Vfs, VfsContext, VfsEntry, VfsMetadata};
+use crate::{
+    AccessMode, EntryKind, FilePermissions, RenamePlan, Vfs, VfsContext, VfsEntry, VfsMetadata,
+};
 
 /// An entry in the game asset VFS.
 #[derive(Debug, Clone)]
@@ -268,8 +270,8 @@ impl Vfs for GameAssetVfs {
     fn rename(&mut self, from: &str, to: &str) -> Result<()> {
         let from = normalize(from);
         let to = normalize(to);
-        if self.effective_entry(&from).is_none() {
-            return Err(OasisError::Vfs(format!("no such path: {from}").into()));
+        if self.validate_rename(&from, &to)? == RenamePlan::NoOp {
+            return Ok(());
         }
         // Only allow rename if the source exists in the overlay layer.
         // Base-layer-only entries cannot be renamed (they are immutable).
@@ -278,15 +280,21 @@ impl Vfs for GameAssetVfs {
                 format!("cannot rename base-layer entry not in overlay: {from}").into(),
             ));
         }
-        // Ensure destination parent exists.
-        let to_par = parent(&to);
-        if !self.effective_dir_exists(to_par) {
+        let prefix = format!("{from}/");
+        // A visible base-layer descendant cannot move with its directory.
+        if self
+            .base
+            .keys()
+            .any(|k| k.starts_with(&prefix) && !self.deleted.contains(k))
+        {
             return Err(OasisError::Vfs(
-                format!("parent directory does not exist: {to_par}").into(),
+                format!("cannot rename directory containing base-layer entries: {from}").into(),
             ));
         }
+        // Renaming rewrites an entry in both parent directories.
+        self.check_permission(parent(&from), AccessMode::Write)?;
+        self.check_permission(parent(&to), AccessMode::Write)?;
         // Collect all overlay entries to move (source + children if directory).
-        let prefix = format!("{from}/");
         let keys_to_move: Vec<String> = self
             .overlay
             .keys()
@@ -299,6 +307,13 @@ impl Vfs for GameAssetVfs {
             } else {
                 format!("{to}{}", &old_key[from.len()..])
             };
+            // A base entry the overlay was shadowing must stay hidden, or
+            // it would reappear at the old path once the overlay moves.
+            if self.base.contains_key(&old_key) {
+                self.deleted.insert(old_key.clone());
+            }
+            // The destination may have been deleted earlier; un-hide it.
+            self.deleted.remove(&new_key);
             if let Some(node) = self.overlay.remove(&old_key) {
                 self.overlay.insert(new_key.clone(), node);
             }
