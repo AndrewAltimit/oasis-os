@@ -294,6 +294,99 @@ fn music_command_drives_playback_and_publishes_status() {
     assert!(term_shows(&h, "State: stopped"));
 }
 
+/// A two-track playlist (`ambient_dawn.mp3`, then `second.mp3`), playing
+/// the first.
+fn two_track_playlist(h: &mut Harness) -> (&'static str, &'static str) {
+    use oasis_core::vfs::Vfs;
+    const A: &str = "/home/user/music/ambient_dawn.mp3";
+    const B: &str = "/home/user/music/second.mp3";
+    let data = h.vfs().read(A).unwrap();
+    h.vfs_mut().write(B, &data).unwrap();
+    h.terminal(&format!("music play {A}; music play {B}; music prev"));
+    h.settle();
+    (A, B)
+}
+
+fn audio_status(h: &Harness) -> String {
+    use oasis_core::vfs::Vfs;
+    String::from_utf8(h.vfs().read(oasis_audio::AUDIO_STATUS_PATH).unwrap()).unwrap()
+}
+
+/// A track that finished on its own used to leave the shell "playing"
+/// silence. The shared music controller now advances the playlist per
+/// repeat mode: on to the next track, then stop at the end.
+#[test]
+fn finished_music_track_advances_the_playlist() {
+    let mut h = Harness::new("classic");
+    h.settle();
+    two_track_playlist(&mut h);
+    let first = h.state().media_track.expect("first track playing");
+    assert!(audio_status(&h).contains("Track: ambient_dawn.mp3"));
+
+    h.finish_audio_track();
+    h.settle();
+    let second = h.state().media_track.expect("advanced to the next track");
+    assert_ne!(second, first);
+    assert_eq!(h.audio().playing, Some(second));
+    assert!(h.audio().tracks_unloaded.contains(&first));
+    let status = audio_status(&h);
+    assert!(status.contains("State: playing"), "{status}");
+    assert!(status.contains("Track: second.mp3"), "{status}");
+
+    // Repeat off: the end of the playlist stops and releases the track.
+    h.finish_audio_track();
+    h.settle();
+    assert!(h.state().media_track.is_none());
+    assert!(audio_status(&h).contains("State: stopped"));
+}
+
+/// `music next` while paused used to start the next track. It now keeps
+/// the paused state: the new track is selected (shown at 0:00) and starts
+/// on `music resume`.
+#[test]
+fn music_next_while_paused_stays_paused() {
+    let mut h = Harness::new("classic");
+    h.settle();
+    two_track_playlist(&mut h);
+    h.terminal("music pause");
+    h.settle();
+    h.terminal("music next");
+    h.settle();
+    assert!(!h.state().audio_backend.is_playing(), "still silent");
+    assert_eq!(h.audio().playing, None);
+    let status = audio_status(&h);
+    assert!(status.contains("State: paused"), "{status}");
+    assert!(status.contains("Track: second.mp3"), "{status}");
+
+    h.terminal("music resume");
+    h.settle();
+    let track = h
+        .state()
+        .media_track
+        .expect("resume started the cued track");
+    assert_eq!(h.audio().playing, Some(track));
+    assert!(audio_status(&h).contains("State: playing"));
+}
+
+/// Tuning the radio releases the music track (the WASM host already did):
+/// otherwise the radio's takeover of the shared stream looked like the end
+/// of the music track and the playlist auto-advanced over the radio.
+#[test]
+fn radio_tune_releases_the_music_track() {
+    use oasis_core::vfs::Vfs;
+    let mut h = Harness::new("classic");
+    h.settle();
+    two_track_playlist(&mut h);
+    let track = h.state().media_track.expect("music playing");
+    h.vfs_mut()
+        .write(oasis_audio::RADIO_REQUEST_PATH, b"tune 0")
+        .unwrap();
+    h.settle();
+    assert!(h.state().media_track.is_none(), "music released");
+    assert!(h.audio().tracks_unloaded.contains(&track));
+    assert!(audio_status(&h).contains("State: stopped"));
+}
+
 // ---------------------------------------------------------------------------
 // Boot splash
 // ---------------------------------------------------------------------------

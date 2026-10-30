@@ -309,7 +309,7 @@ Skin resolution matches `skin lint` (built-in name, directory path, or `skins/<n
 
 | Command | Usage | Description |
 | --- | --- | --- |
-| `music` | `music [status\|play [file]\|pause\|resume\|stop\|next\|prev\|vol [0-100]\|list\|repeat <off\|all\|one>\|shuffle]` | Control music playback: queues `MediaRequest` lines on `/var/audio/request` and prints `/var/audio/status` (see [`audio-engine.md`](audio-engine.md#music-ipc-varaudio)). `play <file>` plays a VFS file (relative to the cwd) and adds it to the playlist; `play` alone starts the current entry or resumes. Serviced by the desktop shell only; elsewhere `status` prints "(audio subsystem not initialized)". |
+| `music` | `music [status\|play [file]\|pause\|resume\|stop\|next\|prev\|vol [0-100]\|list\|repeat <off\|all\|one>\|shuffle]` | Control music playback: queues `MediaRequest` lines on `/var/audio/request` and prints `/var/audio/status` (see [`audio-engine.md`](audio-engine.md#music-ipc-varaudio)). `play <file>` plays a VFS file (relative to the cwd) and adds it to the playlist; `play` alone starts the current entry or resumes. `next` / `prev` while paused select the new track and stay paused; a finished track advances per repeat/shuffle. Serviced by the desktop shell and the WASM host; elsewhere `status` prints "(audio subsystem not initialized)". |
 | `radio` | `radio [status\|stations\|tune <name\|index>\|stop\|vol [0-100]\|fav <index>\|genre [name]\|info]` | Control internet radio. |
 
 ## Documentation (`oasis-terminal/src/doc_commands.rs`)

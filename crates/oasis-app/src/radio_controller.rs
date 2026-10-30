@@ -90,6 +90,13 @@ fn process_tune_request(state: &mut AppState, target: &str) {
         return;
     };
 
+    // Radio takes over the audio output: release the music track first
+    // (as the WASM host does), so the music controller doesn't mistake
+    // the radio's `stop` of the shared stream for the end of its track
+    // and auto-advance into the radio.
+    if state.media_track.is_some() {
+        crate::media_controller::shutdown(state);
+    }
     let _ = state
         .radio
         .manager

@@ -28,6 +28,11 @@ pub enum MediaAction {
     None,
     /// Release the current music track, then load and play this VFS path.
     PlayPath(String),
+    /// Release the current music track and select this VFS path without
+    /// starting it (`next` / `prev` while paused): playback stays paused
+    /// and the next `play` / `resume` starts the new track
+    /// ([`MediaAction::PlayPath`]).
+    Cue(String),
     /// Pause the music track.
     Pause,
     /// Resume the paused music track.
@@ -45,6 +50,10 @@ pub struct AudioManager {
     state: PlaybackState,
     /// The playlist (every file played via `play_file`, in first-play order).
     pub playlist: Playlist,
+    /// Paused on a cued entry ([`MediaAction::Cue`]): nothing is loaded,
+    /// so resuming must start the current entry rather than resume the
+    /// backend.
+    cued: bool,
 }
 
 impl AudioManager {
@@ -63,6 +72,9 @@ impl AudioManager {
     /// playback ended outside the manager (the app was closed).
     pub fn set_state(&mut self, state: PlaybackState) {
         self.state = state;
+        if state != PlaybackState::Paused {
+            self.cued = false;
+        }
     }
 
     /// VFS path of the current playlist entry.
@@ -82,15 +94,12 @@ impl AudioManager {
                     },
                 };
                 self.playlist.set_current(idx);
-                self.state = PlaybackState::Playing;
+                self.set_state(PlaybackState::Playing);
                 MediaAction::PlayPath(path.clone())
             },
             MediaRequest::Play => match self.state {
                 PlaybackState::Playing => MediaAction::None,
-                PlaybackState::Paused => {
-                    self.state = PlaybackState::Playing;
-                    MediaAction::Resume
-                },
+                PlaybackState::Paused => self.resume(),
                 PlaybackState::Stopped => {
                     if self.playlist.current_track().is_none() && !self.playlist.set_current(0) {
                         return MediaAction::None;
@@ -109,11 +118,10 @@ impl AudioManager {
                 if self.state != PlaybackState::Paused {
                     return MediaAction::None;
                 }
-                self.state = PlaybackState::Playing;
-                MediaAction::Resume
+                self.resume()
             },
             MediaRequest::Stop => {
-                self.state = PlaybackState::Stopped;
+                self.set_state(PlaybackState::Stopped);
                 MediaAction::Stop
             },
             MediaRequest::Next => {
@@ -136,32 +144,65 @@ impl AudioManager {
         }
     }
 
+    /// The music track ended on its own (the host saw the backend stop
+    /// while the model says playing). Advance per repeat / shuffle like
+    /// `next`: repeat-one replays the track, repeat-all wraps, and at the
+    /// end of a non-repeating playlist playback stops.
+    pub fn track_finished(&mut self) -> MediaAction {
+        if self.state != PlaybackState::Playing {
+            return MediaAction::None;
+        }
+        if self.playlist.advance() {
+            return self.play_current();
+        }
+        self.set_state(PlaybackState::Stopped);
+        MediaAction::Stop
+    }
+
+    /// Leave the paused state: start a cued entry, or resume the paused
+    /// track.
+    fn resume(&mut self) -> MediaAction {
+        if self.cued {
+            return self.play_current();
+        }
+        self.set_state(PlaybackState::Playing);
+        MediaAction::Resume
+    }
+
     /// Start the current playlist entry.
     fn play_current(&mut self) -> MediaAction {
         match self.current_path().map(str::to_string) {
             Some(path) => {
-                self.state = PlaybackState::Playing;
+                self.set_state(PlaybackState::Playing);
                 MediaAction::PlayPath(path)
             },
             None => MediaAction::None,
         }
     }
 
-    /// After `next` / `prev`: play the new entry unless playback is
-    /// stopped (then only the selection moves); at either end of a
-    /// non-repeating playlist, stop.
+    /// After `next` / `prev`: play the new entry while playing, cue it
+    /// while paused (the conventional media-player behaviour: skipping
+    /// does not unpause), only move the selection while stopped; at
+    /// either end of a non-repeating playlist, stop.
     fn after_skip(&mut self, moved: bool) -> MediaAction {
         if !moved {
             if self.state == PlaybackState::Stopped {
                 return MediaAction::None;
             }
-            self.state = PlaybackState::Stopped;
+            self.set_state(PlaybackState::Stopped);
             return MediaAction::Stop;
         }
-        if self.state == PlaybackState::Stopped {
-            return MediaAction::None;
+        match self.state {
+            PlaybackState::Stopped => MediaAction::None,
+            PlaybackState::Paused => match self.current_path().map(str::to_string) {
+                Some(path) => {
+                    self.cued = true;
+                    MediaAction::Cue(path)
+                },
+                None => MediaAction::None,
+            },
+            PlaybackState::Playing => self.play_current(),
         }
-        self.play_current()
     }
 
     /// Format the status document published at [`AUDIO_STATUS_PATH`].
@@ -324,16 +365,112 @@ mod tests {
         );
     }
 
+    /// `next` / `prev` while paused used to start the new track. They now
+    /// cue it and stay paused; `resume` / `play` then start it.
     #[test]
-    fn next_while_paused_starts_the_new_track() {
+    fn next_and_prev_while_paused_cue_and_stay_paused() {
         let mut mgr = setup();
         mgr.apply(&MediaRequest::Play);
         mgr.apply(&MediaRequest::Pause);
         assert_eq!(
             mgr.apply(&MediaRequest::Next),
+            MediaAction::Cue("/music/b.mp3".into())
+        );
+        assert_eq!(mgr.state(), PlaybackState::Paused);
+        assert_eq!(
+            mgr.apply(&MediaRequest::Next),
+            MediaAction::Cue("/music/c.mp3".into())
+        );
+        assert_eq!(
+            mgr.apply(&MediaRequest::Prev),
+            MediaAction::Cue("/music/b.mp3".into())
+        );
+        assert_eq!(mgr.state(), PlaybackState::Paused);
+        // `pause` again is still a no-op; `resume` starts the cued track.
+        assert_eq!(mgr.apply(&MediaRequest::Pause), MediaAction::None);
+        assert_eq!(
+            mgr.apply(&MediaRequest::Resume),
             MediaAction::PlayPath("/music/b.mp3".into())
         );
         assert_eq!(mgr.state(), PlaybackState::Playing);
+        // A plain pause / resume afterwards resumes the backend again.
+        mgr.apply(&MediaRequest::Pause);
+        assert_eq!(mgr.apply(&MediaRequest::Resume), MediaAction::Resume);
+        // `play` starts a cued track too.
+        mgr.apply(&MediaRequest::Pause);
+        mgr.apply(&MediaRequest::Next);
+        assert_eq!(
+            mgr.apply(&MediaRequest::Play),
+            MediaAction::PlayPath("/music/c.mp3".into())
+        );
+    }
+
+    #[test]
+    fn stop_clears_a_cued_track() {
+        let mut mgr = setup();
+        mgr.apply(&MediaRequest::Play);
+        mgr.apply(&MediaRequest::Pause);
+        mgr.apply(&MediaRequest::Next);
+        mgr.apply(&MediaRequest::Stop);
+        assert_eq!(
+            mgr.apply(&MediaRequest::Play),
+            MediaAction::PlayPath("/music/b.mp3".into())
+        );
+        mgr.apply(&MediaRequest::Pause);
+        assert_eq!(mgr.apply(&MediaRequest::Resume), MediaAction::Resume);
+    }
+
+    /// A track that ends on its own advances like `next`, honouring the
+    /// repeat mode.
+    #[test]
+    fn track_finished_advances_per_repeat_mode() {
+        let mut mgr = setup();
+        // Not playing: nothing to advance.
+        assert_eq!(mgr.track_finished(), MediaAction::None);
+        mgr.apply(&MediaRequest::Play);
+        assert_eq!(
+            mgr.track_finished(),
+            MediaAction::PlayPath("/music/b.mp3".into())
+        );
+        assert_eq!(
+            mgr.track_finished(),
+            MediaAction::PlayPath("/music/c.mp3".into())
+        );
+        // Repeat off: the end of the playlist stops.
+        assert_eq!(mgr.track_finished(), MediaAction::Stop);
+        assert_eq!(mgr.state(), PlaybackState::Stopped);
+
+        // Repeat all wraps around.
+        mgr.apply(&MediaRequest::Repeat(RepeatMode::All));
+        mgr.apply(&MediaRequest::Play);
+        assert_eq!(
+            mgr.track_finished(),
+            MediaAction::PlayPath("/music/a.mp3".into())
+        );
+        // Repeat one replays the same track.
+        mgr.apply(&MediaRequest::Repeat(RepeatMode::One));
+        assert_eq!(
+            mgr.track_finished(),
+            MediaAction::PlayPath("/music/a.mp3".into())
+        );
+        // Paused: the host never reports an end, but be safe.
+        mgr.apply(&MediaRequest::Pause);
+        assert_eq!(mgr.track_finished(), MediaAction::None);
+    }
+
+    #[test]
+    fn track_finished_with_shuffle_visits_every_track() {
+        let mut mgr = setup();
+        mgr.apply(&MediaRequest::Shuffle);
+        mgr.apply(&MediaRequest::Repeat(RepeatMode::All));
+        mgr.apply(&MediaRequest::Play);
+        let mut seen = std::collections::BTreeSet::new();
+        for _ in 0..3 {
+            if let MediaAction::PlayPath(p) = mgr.track_finished() {
+                seen.insert(p);
+            }
+        }
+        assert_eq!(seen.len(), 3, "{seen:?}");
     }
 
     #[test]

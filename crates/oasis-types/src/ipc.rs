@@ -280,9 +280,11 @@ pub enum MediaRequest {
     Resume,
     /// Stop playback and release the track.
     Stop,
-    /// Skip to the next playlist entry.
+    /// Skip to the next playlist entry (while paused: select it and stay
+    /// paused).
     Next,
-    /// Go back to the previous playlist entry.
+    /// Go back to the previous playlist entry (while paused: select it and
+    /// stay paused).
     Prev,
     /// Set the output volume (0-100).
     Volume(u8),
