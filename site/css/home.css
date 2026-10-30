@@ -439,7 +439,7 @@
 .stage__arrow[hidden] { display: none; }
 
 .stage-bar { border-top: 1px solid var(--line); padding: 0.75rem; }
-.views { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 0.5rem; }
+.views { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0.5rem; }
 .view {
   display: grid; gap: 0.35rem; padding: 0.35rem 0.35rem 0.45rem; cursor: pointer;
   border: 1px solid var(--line); border-radius: 10px; background: transparent; color: var(--muted);
