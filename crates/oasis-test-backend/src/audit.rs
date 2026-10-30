@@ -26,7 +26,7 @@ use crate::DrawCommand;
 use oasis_types::backend::{
     BlendMode, Color, RenderTargetId, SdiAlpha, SdiBatch, SdiClipTransform, SdiCore, SdiGradients,
     SdiRenderTarget, SdiShapes, SdiText, SdiTextures, SdiVector, TextureId, bitmap_measure_text,
-    stacks::{ClipPush, ClipStack, TranslateStack},
+    stacks::{ClipPush, ClipStack, DrawState, TranslateStack},
 };
 use oasis_types::error::{OasisError, Result};
 use oasis_types::geometry::ClipRect;
@@ -109,7 +109,18 @@ pub struct ClipAuditBackend {
     next_render_target_id: u64,
     live_render_targets: std::collections::HashSet<u64>,
     rt_bind_depth: usize,
+    /// The parent surface's draw state for every bound render target
+    /// (restored on unbind, per the `SdiRenderTarget` contract).
+    bound_parents: Vec<ParentState>,
     auditing: bool,
+}
+
+/// What a bind saves and an unbind restores.
+struct ParentState {
+    stacks: DrawState,
+    active_clip: Option<ClipRect>,
+    clip_depth: usize,
+    translate_depth: usize,
 }
 
 impl ClipAuditBackend {
@@ -145,6 +156,7 @@ impl ClipAuditBackend {
             next_render_target_id: 1,
             live_render_targets: std::collections::HashSet::new(),
             rt_bind_depth: 0,
+            bound_parents: Vec::new(),
             auditing: true,
         }
     }
@@ -545,6 +557,14 @@ impl SdiRenderTarget for ClipAuditBackend {
                 format!("bind_render_target: unknown id {id:?}").into(),
             ));
         }
+        // The target starts with no clip and no translation; the parent's
+        // state comes back on unbind.
+        self.bound_parents.push(ParentState {
+            stacks: DrawState::take(&mut self.clip_stack, &mut self.translate_stack),
+            active_clip: self.active_clip.take(),
+            clip_depth: std::mem::take(&mut self.clip_depth),
+            translate_depth: std::mem::take(&mut self.translate_depth),
+        });
         self.rt_bind_depth += 1;
         self.commands.push(DrawCommand::BindRenderTarget { id });
         Ok(())
@@ -557,6 +577,14 @@ impl SdiRenderTarget for ClipAuditBackend {
             ));
         }
         self.rt_bind_depth -= 1;
+        if let Some(parent) = self.bound_parents.pop() {
+            parent
+                .stacks
+                .restore(&mut self.clip_stack, &mut self.translate_stack);
+            self.active_clip = parent.active_clip;
+            self.clip_depth = parent.clip_depth;
+            self.translate_depth = parent.translate_depth;
+        }
         self.commands.push(DrawCommand::UnbindRenderTarget);
         Ok(())
     }
@@ -571,7 +599,8 @@ impl SdiRenderTarget for ClipAuditBackend {
         blend: BlendMode,
         opacity: f32,
     ) -> Result<()> {
-        let (x, y) = self.translate_stack.translate(dst_x, dst_y);
+        // Surface pixels, not translated (the `SdiRenderTarget` contract).
+        let (x, y) = (dst_x, dst_y);
         self.audit("composite_render_target", x, y, dst_w, dst_h);
         self.commands.push(DrawCommand::CompositeRenderTarget {
             id,
@@ -593,7 +622,7 @@ impl SdiRenderTarget for ClipAuditBackend {
         dst_w: u32,
         dst_h: u32,
     ) -> Result<()> {
-        let (x, y) = self.translate_stack.translate(dst_x, dst_y);
+        let (x, y) = (dst_x, dst_y);
         self.audit("composite_render_target_premultiplied", x, y, dst_w, dst_h);
         self.commands
             .push(DrawCommand::CompositeRenderTargetPremultiplied {
@@ -651,6 +680,32 @@ mod tests {
         b.pop_host_clip();
         assert!(b.violations().is_empty(), "{:?}", b.violations());
         assert!(b.find_text("hi").is_some());
+    }
+
+    /// Per the `SdiRenderTarget` contract a bound target starts with no
+    /// clip / translation and the unbind restores the parent's, and the
+    /// composite position is not translated. The audit used to keep the
+    /// parent's stacks across the bind and translate the composite, so it
+    /// checked layers at the wrong place.
+    #[test]
+    fn render_target_bind_saves_and_restores_the_draw_state() {
+        let mut b = ClipAuditBackend::new(200, 200, (10, 10, 50, 50));
+        b.push_host_clip();
+        b.push_translate(10, 10).ok();
+        let rt = b.create_render_target(20, 20).unwrap();
+        b.bind_render_target(rt).unwrap();
+        assert_eq!(b.current_translate(), (0, 0), "target starts untranslated");
+        b.push_clip_rect(0, 0, 5, 5).ok();
+        b.pop_clip_rect().ok();
+        b.unbind_render_target().unwrap();
+        assert_eq!(b.current_translate(), (10, 10), "parent translate restored");
+        // In surface pixels: (10, 10) is inside the region even though the
+        // translate would have moved it to (20, 20).
+        b.composite_render_target(rt, 10, 10, 50, 50, BlendMode::Normal, 1.0)
+            .unwrap();
+        b.pop_translate().ok();
+        b.pop_host_clip();
+        assert!(b.violations().is_empty(), "{:?}", b.violations());
     }
 
     #[test]

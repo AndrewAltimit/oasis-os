@@ -224,12 +224,36 @@ impl Ue5Backend {
         if (sw, sh) == (dst_w, dst_h) {
             fb.composite_rgba_blend(dst_x, dst_y, sw, sh, src.data(), opacity, blend);
         } else {
-            scale_nearest(src.data(), sw, sh, dst_w, dst_h, composite_scratch);
-            fb.composite_rgba_blend(
-                dst_x,
-                dst_y,
+            // Resample only the part of the destination that lands on the
+            // framebuffer: the destination rect is caller-controlled and
+            // may be far larger than the screen.
+            let visible = |pos: i32, len: u32, screen: u32| {
+                let start = i64::from(pos).max(0);
+                let end = (i64::from(pos) + i64::from(len)).min(i64::from(screen));
+                (start < end).then(|| ((start - i64::from(pos)) as u32, (end - start) as u32))
+            };
+            let (Some((ox, vw)), Some((oy, vh))) = (
+                visible(dst_x, dst_w, fb.width()),
+                visible(dst_y, dst_h, fb.height()),
+            ) else {
+                return Ok(());
+            };
+            let region = ScaleRegion {
                 dst_w,
                 dst_h,
+                x0: ox,
+                y0: oy,
+                w: vw,
+                h: vh,
+            };
+            scale_nearest(src.data(), sw, sh, &region, composite_scratch);
+            // On screen, so in i32 range.
+            let at = |pos: i32, off: u32| (i64::from(pos) + i64::from(off)) as i32;
+            fb.composite_rgba_blend(
+                at(dst_x, ox),
+                at(dst_y, oy),
+                vw,
+                vh,
                 composite_scratch,
                 opacity,
                 blend,
@@ -240,16 +264,28 @@ impl Ue5Backend {
     }
 }
 
-/// Nearest-neighbour resample of an `sw` x `sh` RGBA image to `dw` x `dh`
-/// into `out` (destination column `k` samples source column `k * sw / dw`,
+/// The `w` x `h` window at (`x0`, `y0`) of a `dst_w` x `dst_h` resample.
+struct ScaleRegion {
+    dst_w: u32,
+    dst_h: u32,
+    x0: u32,
+    y0: u32,
+    w: u32,
+    h: u32,
+}
+
+/// Nearest-neighbour resample of an `sw` x `sh` RGBA image to
+/// `region.dst_w` x `region.dst_h`, producing only `region`'s pixels into
+/// `out` (destination column `k` samples source column `k * sw / dst_w`,
 /// like `SoftwareBuffer`'s blits).
-fn scale_nearest(src: &[u8], sw: u32, sh: u32, dw: u32, dh: u32, out: &mut Vec<u8>) {
-    let (sw64, sh64, dw64, dh64) = (sw as u64, sh as u64, dw as u64, dh as u64);
+fn scale_nearest(src: &[u8], sw: u32, sh: u32, region: &ScaleRegion, out: &mut Vec<u8>) {
+    let (sw64, sh64) = (u64::from(sw), u64::from(sh));
+    let (dw64, dh64) = (u64::from(region.dst_w), u64::from(region.dst_h));
     out.clear();
-    out.reserve(dw as usize * dh as usize * 4);
-    for y in 0..dh64 {
+    out.reserve(region.w as usize * region.h as usize * 4);
+    for y in u64::from(region.y0)..u64::from(region.y0) + u64::from(region.h) {
         let row = (y * sh64 / dh64) as usize * sw as usize * 4;
-        for x in 0..dw64 {
+        for x in u64::from(region.x0)..u64::from(region.x0) + u64::from(region.w) {
             let i = row + (x * sw64 / dw64) as usize * 4;
             out.extend_from_slice(src.get(i..i + 4).unwrap_or(&[0; 4]));
         }
@@ -1670,6 +1706,40 @@ mod tests {
         assert_eq!(px(&b, 19, 19), [255, 0, 0, 255]);
         assert_eq!(px(&b, 20, 0), [0, 0, 255, 255]);
         assert_eq!(px(&b, 39, 19), [0, 0, 255, 255]);
+    }
+
+    /// A scaled composite far larger than the screen only resamples the
+    /// visible part (it used to allocate `dst_w * dst_h * 4` bytes first)
+    /// and samples the same source pixels as an on-screen one.
+    #[test]
+    fn huge_scaled_composite_resamples_only_the_visible_part() {
+        let mut b = Ue5Backend::new(40, 20);
+        b.clear(Color::BLACK).unwrap();
+        let rt = b.create_render_target(4, 2).unwrap();
+        b.bind_render_target(rt).unwrap();
+        b.fill_rect(0, 0, 2, 2, Color::rgb(255, 0, 0)).unwrap();
+        b.fill_rect(2, 0, 2, 2, Color::rgb(0, 0, 255)).unwrap();
+        b.unbind_render_target().unwrap();
+        // 4x2 scaled to 200_000 x 100_000 (80 GB unclipped), placed so the
+        // left/right halves meet at screen column 20.
+        b.composite_render_target(
+            rt,
+            -99_980,
+            -50_000,
+            200_000,
+            100_000,
+            BlendMode::Normal,
+            1.0,
+        )
+        .unwrap();
+        assert!(b.composite_scratch.len() <= 40 * 20 * 4);
+        assert_eq!(px(&b, 19, 0), [255, 0, 0, 255]);
+        assert_eq!(px(&b, 20, 19), [0, 0, 255, 255]);
+        // Entirely off screen: nothing drawn, nothing resampled.
+        b.clear(Color::BLACK).unwrap();
+        b.composite_render_target(rt, 50, 0, 1 << 30, 1 << 30, BlendMode::Normal, 1.0)
+            .unwrap();
+        assert_eq!(px(&b, 39, 0), [0, 0, 0, 255]);
     }
 
     /// Baking translucent draws into a target and compositing it with the
