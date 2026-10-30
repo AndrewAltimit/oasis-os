@@ -188,7 +188,7 @@ resolution, inheritance. But:
   chrome convention.
 - The software cursor exists but is disabled on SDL (`oasis-app/src/render.rs:170`);
   WM drag/resize/hit-test infrastructure is mature and reusable
-  (`oasis-wm/src/drag_resize.rs`, `hit_test.rs`).
+  (`oasis-wm/src/drag_resize/`, `hit_test.rs`).
 - **Silent schema drift**: skin TOMLs already set fields that don't exist
   (vaporwave/win95 phantom `wm_theme` keys) and nothing warns.
 - Underused hooks ready to exploit: `app_themes` (2 consumers),

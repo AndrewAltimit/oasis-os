@@ -1,6 +1,6 @@
 //! SDI object creation, destruction, and position updates for windows.
 //!
-//! Extracted from `manager.rs` to separate rendering concerns from
+//! Kept apart from `manager/` to separate rendering concerns from
 //! window lifecycle and input handling logic.
 
 use oasis_sdi::SdiRegistry;
@@ -8,6 +8,7 @@ use oasis_types::backend::Color;
 
 use super::hit_test::{ButtonKind, hit_test};
 use super::manager::{MODAL_OVERLAY_ID, WindowManager};
+use super::window::Window;
 
 impl WindowManager {
     /// Create all SDI objects for a window.
@@ -464,5 +465,19 @@ impl WindowManager {
     /// Hide and destroy the modal overlay.
     pub(crate) fn hide_modal_overlay(&self, sdi: &mut SdiRegistry) {
         let _ = sdi.destroy(MODAL_OVERLAY_ID);
+    }
+}
+
+/// Show or hide the SDI objects of `window`.
+///
+/// Hiding hides everything. Showing a window in fullscreen kiosk mode
+/// shows only its `content` object: its decorations stay hidden for as long
+/// as it is in kiosk mode.
+pub(crate) fn set_window_visible(window: &Window, visible: bool, sdi: &mut SdiRegistry) {
+    for &suffix in window.sdi_suffixes() {
+        let show = visible && (!window.fullscreen_kiosk || suffix == "content");
+        if let Ok(obj) = sdi.get_mut(&window.sdi_name(suffix)) {
+            obj.visible = show;
+        }
     }
 }
