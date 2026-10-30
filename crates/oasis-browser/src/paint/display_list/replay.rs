@@ -15,7 +15,8 @@
 //! draw call per batch.
 
 use oasis_types::backend::{
-    BatchRect, BatchText, BlendMode as BackendBlendMode, Color, RenderTargetId, SdiBackend,
+    BatchRect, BatchText, BlendMode as BackendBlendMode, Color, GradientStyle, RenderTargetId,
+    SdiBackend,
 };
 use oasis_types::error::Result;
 
@@ -567,7 +568,8 @@ impl DisplayList {
                     )?;
                 },
                 DisplayItem::Gradient { x, y, w, h, style } => {
-                    backend.fill_rect_gradient(x + scroll_dx, y + eff_dy, *w, *h, style)?;
+                    let g = layer_gradient(style, layer_opacity, &filter_stack);
+                    backend.fill_rect_gradient(x + scroll_dx, y + eff_dy, *w, *h, &g)?;
                 },
                 DisplayItem::BorderEdge {
                     x,
@@ -931,7 +933,8 @@ impl DisplayList {
                     )?;
                 },
                 DisplayItem::Gradient { x, y, w, h, style } => {
-                    backend.fill_rect_gradient(x + scroll_dx, y + eff_dy, *w, *h, style)?;
+                    let g = layer_gradient(style, layer_opacity, &filter_stack);
+                    backend.fill_rect_gradient(x + scroll_dx, y + eff_dy, *w, *h, &g)?;
                 },
                 DisplayItem::BorderEdge {
                     x,
@@ -1165,6 +1168,37 @@ fn layer_color(color: Color, opacity: f32, filters: &[&[FilterFunction]]) -> Col
         }
     }
     apply_layer_opacity(c, opacity)
+}
+
+/// [`layer_color`] applied to every stop of a gradient (the recorder
+/// leaves layer opacity and filters to replay, like for flat fills).
+fn layer_gradient(
+    style: &GradientStyle,
+    opacity: f32,
+    filters: &[&[FilterFunction]],
+) -> GradientStyle {
+    let c = |color: Color| layer_color(color, opacity, filters);
+    match *style {
+        GradientStyle::Vertical { top, bottom } => GradientStyle::Vertical {
+            top: c(top),
+            bottom: c(bottom),
+        },
+        GradientStyle::Horizontal { left, right } => GradientStyle::Horizontal {
+            left: c(left),
+            right: c(right),
+        },
+        GradientStyle::FourCorner {
+            top_left,
+            top_right,
+            bottom_left,
+            bottom_right,
+        } => GradientStyle::FourCorner {
+            top_left: c(top_left),
+            top_right: c(top_right),
+            bottom_left: c(bottom_left),
+            bottom_right: c(bottom_right),
+        },
+    }
 }
 
 /// Test whether two rectangles overlap.

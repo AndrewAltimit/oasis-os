@@ -1520,7 +1520,7 @@ mod tests {
 
     /// Live end-to-end probe against `www.wikipedia.org`. Hidden
     /// behind `#[ignore]` so CI doesn't flake on network failures —
-    /// run with `cargo test -p oasis-browser wikipedia_live -- --ignored`.
+    /// run with `cargo test -p oasis-http wikipedia_live_h2 -- --ignored`.
     #[test]
     #[ignore]
     fn wikipedia_live_h2() {

@@ -229,25 +229,8 @@ pub fn http_request_full(
     )
 }
 
-/// Like [`http_request_full`] but follows at most `max_redirects`
-/// redirects (0 = none) before failing with "too many redirects".
-pub fn http_request_full_limited(
-    method: &str,
-    url: &Url,
-    body: Option<&[u8]>,
-    extra_headers: &[(&str, &str)],
-    tls: Option<&dyn TlsProvider>,
-    max_redirects: u8,
-) -> Result<(ResourceResponse, Vec<(String, String)>)> {
-    let opts = RequestOptions {
-        max_redirects,
-        ..RequestOptions::default()
-    };
-    http_request_inner(method, url, body, extra_headers, tls, opts)
-}
-
-/// Like [`http_request_full_limited`] with cookie handling done per
-/// redirect hop: every hop is sent the `Cookie:` header `cookies` yields
+/// Like [`http_request_full`], following at most `max_redirects`
+/// redirects (0 = none), with cookie handling done per redirect hop: every hop is sent the `Cookie:` header `cookies` yields
 /// for that hop's own URL, and every hop's `Set-Cookie` headers
 /// (redirect responses included) are stored against the hop that sent
 /// them. A `Cookie` header in `extra_headers` is ignored in favour of the

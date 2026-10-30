@@ -1866,3 +1866,40 @@ fn dirty_replay_approximates_nested_layer_filters() {
     );
     assert_eq!(backend.fill_colors(), vec![expected]);
 }
+
+/// Regression: the recorder leaves `opacity` to the layer, but the
+/// replay `Gradient` arm ignored it, so a translucent element's linear
+/// gradient painted fully opaque.
+#[test]
+fn gradient_honours_layer_opacity_on_both_replay_paths() {
+    use crate::paint::display_list::{DisplayItem, DisplayList};
+    use oasis_types::backend::GradientStyle;
+    let mut dl = DisplayList::new();
+    dl.push(DisplayItem::PushLayer { opacity: 0.5 });
+    dl.push(DisplayItem::Gradient {
+        x: 0,
+        y: 0,
+        w: 4,
+        h: 4,
+        style: GradientStyle::Vertical {
+            top: Color::rgb(255, 0, 0),
+            bottom: Color::rgb(0, 0, 255),
+        },
+    });
+    dl.push(DisplayItem::PopLayer);
+    let bounds = Rect {
+        x: 0.0,
+        y: 0.0,
+        width: 4.0,
+        height: 4.0,
+    };
+    let mut full = oasis_test_backend::RecordingBackend::new(480, 272);
+    dl.replay(&mut full, 0, 0, None).unwrap();
+    let mut dirty = oasis_test_backend::RecordingBackend::new(480, 272);
+    dl.replay_dirty(&mut dirty, &bounds, 0, 0, None).unwrap();
+    for backend in [&full, &dirty] {
+        let colors = backend.fill_colors();
+        assert!(!colors.is_empty(), "gradient drew nothing");
+        assert!(colors.iter().all(|c| c.a == 128), "alpha: {colors:?}");
+    }
+}

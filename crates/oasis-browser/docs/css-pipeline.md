@@ -93,7 +93,7 @@ inputs are:
 
 The algorithm:
 
-1. **Index selectors.** `SelectorIndex` (in `cascade/matching.rs`)
+1. **Index selectors.** `SelectorIndex` (in `oasis-css/src/cascade/index.rs`)
    buckets rules by their rightmost simple selector (id, class, tag, or
    universal). When matching against a node, only the relevant buckets
    are tested. This is the single biggest perf win in the cascade.

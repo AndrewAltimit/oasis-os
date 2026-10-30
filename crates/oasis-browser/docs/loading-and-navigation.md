@@ -7,19 +7,21 @@ thread, cookies, CSP, and forms.
 ## Files
 
 ```text
-src/
+crates/oasis-http/src/      (re-exported as `oasis_browser::loader`)
+├── lib.rs                  Url, orchestrator: cache lookup, dispatch, content type detection
+├── http.rs                 HTTP/HTTPS fetch (TLS via oasis-types::TlsProvider)
+├── http1.rs                HTTP/1.1 framing + redirect-hop header policy (shared with http_psp.rs)
+├── http_psp.rs             PSP client (feature `psp`)
+├── http2.rs, hpack.rs      HTTP/2 (ALPN h2) + HPACK
+├── gemini.rs, gemini_fetch.rs  Gemini parsing + fetch
+├── io_thread.rs            background IO thread + IoWork / IoResult queue
+├── cache.rs                byte-bounded LRU response cache (+ stored page CSP)
+├── cookies.rs              RFC 6265 session cookie jar + SameSite context
+├── csp.rs                  Content-Security-Policy parsing + checks
+└── vfs.rs                  virtual filesystem source
+
+crates/oasis-browser/src/
 ├── nav.rs                  navigation history (back / forward stacks)
-├── loader/
-│   ├── mod.rs              orchestrator: cache lookup, dispatch, content type detection
-│   ├── http.rs             HTTP/HTTPS fetch (TLS via oasis-types::TlsProvider)
-│   ├── http1.rs            HTTP/1.1 framing + redirect-hop header policy (shared with http_psp.rs)
-│   ├── http2.rs, hpack.rs  HTTP/2 (ALPN h2) + HPACK
-│   ├── gemini_fetch.rs     Gemini protocol fetch
-│   ├── io_thread.rs        background IO thread + IoWork / IoResult queue
-│   ├── cache.rs            byte-bounded LRU response cache
-│   ├── cookies.rs          RFC 6265 session cookie jar
-│   ├── csp.rs              Content-Security-Policy parsing + checks
-│   └── vfs.rs              virtual filesystem source
 ├── forms/                  form state, validation, submission
 └── widget/pipeline.rs      hooks IoResult → parse → cascade → layout
 ```

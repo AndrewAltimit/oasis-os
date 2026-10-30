@@ -7,11 +7,11 @@
 //! For HTTPS, `connect_tcp` + `connect_tls` gives a TLS-wrapped stream.
 //! For HTTP, `connect_tcp` alone gives a raw TCP stream.
 //!
-//! This module mirrors the public API of `loader/http.rs` so that
-//! `loader/mod.rs` can swap between them with a cfg gate. Response
+//! This module mirrors the public API of `http.rs` so that
+//! `lib.rs` can swap between them with a cfg gate. Response
 //! framing (header parsing, `Content-Length` / chunked detection and
 //! decoding) and the per-redirect-hop header policy are shared with the
-//! desktop client through `loader/http1.rs`; only connection setup and
+//! desktop client through `http1.rs`; only connection setup and
 //! the body cap differ.
 
 use oasis_net::tls::TlsProvider;

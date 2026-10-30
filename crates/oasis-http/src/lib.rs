@@ -162,17 +162,6 @@ impl ContentType {
             ContentType::Jpeg | ContentType::Png | ContentType::Bmp | ContentType::Gif
         )
     }
-
-    /// Is this a font content type?
-    pub fn is_font(&self) -> bool {
-        matches!(
-            self,
-            ContentType::FontTtf
-                | ContentType::FontOtf
-                | ContentType::FontWoff
-                | ContentType::FontWoff2
-        )
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -646,12 +635,6 @@ pub fn subresource_allowed(page_url: Option<&str>, resource_url: &str) -> bool {
         .and_then(Url::parse)
         .is_some_and(|u| is_special_scheme(&u.scheme));
     !page_is_web
-}
-
-/// Returns `true` if `href` is a fragment-only reference (e.g. `#section`).
-pub fn is_fragment_only(href: &str) -> bool {
-    let trimmed = href.trim();
-    trimmed.starts_with('#')
 }
 
 /// Parse a `data:` URI into a `ResourceResponse`.
