@@ -8,10 +8,10 @@ use sdl3::pixels::PixelFormat;
 use sdl3::rect::Rect;
 use sdl3::render::Texture;
 
-use oasis_core::backend::{
+use oasis_types::backend::{
     BackendErrExt, Color, SdiCore, SdiText, TextureId, texture_not_found, validate_rgba_data,
 };
-use oasis_core::error::Result;
+use oasis_types::error::Result;
 
 use super::{SdlBackend, frect};
 
@@ -103,23 +103,14 @@ impl SdiCore for SdlBackend {
     }
 
     fn set_clip_rect(&mut self, x: i32, y: i32, w: u32, h: u32) -> Result<()> {
-        // A degenerate clip (w==0 or h==0) means "intersection collapsed
-        // to nothing". `sdl3::rect::Rect::new` would silently clamp the
-        // zero to one, leaving a 1-pixel slot that any subsequent
-        // `fill_rect` / glyph blit can sneak a sliver of pixels through —
-        // that is exactly the source of the dotted-underline leak below
-        // an old.reddit.com browser window. Use `ClippingRect::Zero` so
-        // SDL3 actually rejects every draw under this clip.
-        if w == 0 || h == 0 {
-            self.canvas.set_clip_rect(sdl3::render::ClippingRect::Zero);
-        } else {
-            self.canvas.set_clip_rect(Rect::new(x, y, w, h));
-        }
+        // Absolute and replacing (SdiCore contract): no translation, no
+        // intersection with the clip stack. Zero-area clips reject all.
+        self.apply_clip(Some(oasis_types::geometry::ClipRect { x, y, w, h }));
         Ok(())
     }
 
     fn reset_clip_rect(&mut self) -> Result<()> {
-        self.canvas.set_clip_rect(None);
+        self.apply_clip(None);
         Ok(())
     }
 
@@ -140,7 +131,7 @@ impl SdiCore for SdlBackend {
                 })
                 .sum();
         }
-        oasis_core::backend::bitmap_measure_text(text, font_size)
+        oasis_types::backend::bitmap_measure_text(text, font_size)
     }
 
     fn read_pixels(&self, x: i32, y: i32, w: u32, h: u32) -> Result<Vec<u8>> {
@@ -173,7 +164,7 @@ impl SdiCore for SdlBackend {
         // SAFETY: The surface was just created by read_pixels and is not
         // shared; we only read the pixel data before it goes out of scope.
         let data = unsafe { surface.without_lock() }.ok_or_else(|| {
-            oasis_core::error::OasisError::Backend("cannot lock surface pixels".into())
+            oasis_types::error::OasisError::Backend("cannot lock surface pixels".into())
         })?;
         // Copy row by row (the surface pitch may differ from width * 4).
         let dst_stride = w as usize * 4;
@@ -223,7 +214,7 @@ impl SdlBackend {
 
         let query = texture.query();
         if query.width != width || query.height != height {
-            return Err(oasis_core::error::OasisError::Backend(
+            return Err(oasis_types::error::OasisError::Backend(
                 format!(
                     "update_texture: size mismatch (texture is {}x{}, data is {width}x{height})",
                     query.width, query.height

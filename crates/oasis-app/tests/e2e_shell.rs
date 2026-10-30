@@ -515,3 +515,35 @@ fn resolution_change_via_settings_ipc() {
     h.render_now();
     assert_not_blank(&h, "resolution_800x600");
 }
+
+/// The dashboard's static vector background layer is baked into one
+/// offscreen render target and replayed with the premultiplied composite,
+/// the path the SDL shell takes. The harness used to fail that composite
+/// (the headless backend did not forward it and the UE5 framebuffer did
+/// not implement it), so every run drew the layer immediately instead.
+#[test]
+fn static_background_layer_is_baked_and_reused() {
+    let mut h = Harness::new("paper");
+    h.settle();
+    assert_eq!(h.state().mode, Mode::Dashboard);
+    assert!(
+        !h.state().active_theme.background_layers.is_empty(),
+        "paper has background layers"
+    );
+    h.render_now();
+    let baked = h.resource_counts().render_targets;
+    assert!(
+        baked >= 1,
+        "static layer baked {}",
+        dump(&h, "bake_missing")
+    );
+    for _ in 0..5 {
+        h.render_now();
+    }
+    assert_eq!(
+        h.resource_counts().render_targets,
+        baked,
+        "the bake is reused, not redone per frame"
+    );
+    assert_not_blank(&h, "baked_background");
+}

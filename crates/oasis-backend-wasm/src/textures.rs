@@ -117,14 +117,8 @@ impl SdiTextures for WasmBackend {
 
 impl SdiClipTransform for WasmBackend {
     fn push_clip_rect(&mut self, x: i32, y: i32, w: u32, h: u32) -> Result<()> {
-        let (tx, ty) = self.translate(x, y);
-        let new_clip = ClipRect {
-            x: tx as i32,
-            y: ty as i32,
-            w,
-            h,
-        };
-        let effective = match self.clip_stack.push(new_clip) {
+        let (tx, ty) = self.translate_stack.translate(x, y);
+        let applied = match self.clip_stack.push(ClipRect { x: tx, y: ty, w, h }) {
             ClipPush::Clip(c) => c,
             ClipPush::Empty => ClipRect {
                 x: 0,
@@ -133,22 +127,13 @@ impl SdiClipTransform for WasmBackend {
                 h: 0,
             },
         };
-
-        self.ctx.save();
-        self.ctx.begin_path();
-        self.ctx.rect(
-            effective.x as f64,
-            effective.y as f64,
-            effective.w as f64,
-            effective.h as f64,
-        );
-        self.ctx.clip();
+        self.apply_clip(Some(applied));
         Ok(())
     }
 
     fn pop_clip_rect(&mut self) -> Result<()> {
-        self.clip_stack.pop();
-        self.ctx.restore();
+        let prev = self.clip_stack.pop();
+        self.apply_clip(prev);
         Ok(())
     }
 
@@ -168,17 +153,5 @@ impl SdiClipTransform for WasmBackend {
 
     fn current_translate(&self) -> (i32, i32) {
         self.translate_stack.current()
-    }
-
-    fn push_region(&mut self, x: i32, y: i32, w: u32, h: u32) -> Result<()> {
-        self.push_translate(x, y)?;
-        self.push_clip_rect(0, 0, w, h)?;
-        Ok(())
-    }
-
-    fn pop_region(&mut self) -> Result<()> {
-        self.pop_clip_rect()?;
-        self.pop_translate()?;
-        Ok(())
     }
 }

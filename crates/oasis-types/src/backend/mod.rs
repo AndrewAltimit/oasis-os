@@ -30,8 +30,8 @@ pub const DEFAULT_VIEWPORT_HEIGHT: u32 = 272;
 // -- types --
 pub use types::{
     ArcParams, BackendErrExt, BlendMode, Color, GradientStyle, RenderTargetId, StrokeStyle,
-    TextMetrics, TextureId, arc_segments, bitmap_measure_text, cos_approx_f32, sin_approx_f32,
-    texture_not_found, validate_rgba_data,
+    TextMetrics, TextureId, arc_segments, bitmap_measure_text, cos_approx_f32,
+    render_target_not_found, sin_approx_f32, texture_not_found, validate_rgba_data,
 };
 
 // -- core trait --

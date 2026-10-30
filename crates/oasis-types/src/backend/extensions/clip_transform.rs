@@ -8,18 +8,49 @@ use crate::error::Result;
 // ---------------------------------------------------------------------------
 
 /// Clip rectangle and coordinate translation stack operations.
+///
+/// # Contract
+///
+/// Unlike the absolute [`SdiCore::set_clip_rect`], the clip *stack* works
+/// in translated coordinates and nests:
+///
+/// - [`push_clip_rect`](Self::push_clip_rect) translates its rectangle by
+///   the current translation, intersects it with the clip pushed before it
+///   (an empty intersection rejects every draw) and applies the result.
+/// - [`pop_clip_rect`](Self::pop_clip_rect) re-applies the clip that was
+///   pushed before, or removes the clip when the stack becomes empty.
+/// - [`current_clip_rect`](Self::current_clip_rect) reports the top of the
+///   stack in surface pixels (`None` when nothing is pushed).
+///
+/// The stack and `set_clip_rect` share one active clip. The last call wins:
+/// `set_clip_rect` replaces the applied clip without touching the stack,
+/// and the next push or pop applies the stack's clip again. Code that mixes
+/// the two inside one scope should not rely on more than that.
+///
+/// A render-target bind starts the target with empty clip and translate
+/// stacks and the unbind restores the parent's
+/// ([`SdiRenderTarget`](crate::backend::SdiRenderTarget));
+/// [`stacks::DrawState`](crate::backend::stacks::DrawState) implements
+/// that save and restore.
 pub trait SdiClipTransform: SdiCore {
-    /// Push a clip rectangle onto the clip stack.
+    /// Push a clip rectangle (translated, intersected with the current
+    /// one) onto the clip stack.
+    ///
+    /// The default has no stack: it applies the rectangle with
+    /// `set_clip_rect`, untranslated (the default translation is always
+    /// zero).
     fn push_clip_rect(&mut self, x: i32, y: i32, w: u32, h: u32) -> Result<()> {
         self.set_clip_rect(x, y, w, h)
     }
 
     /// Pop the most recently pushed clip rectangle.
+    ///
+    /// The default removes the clip.
     fn pop_clip_rect(&mut self) -> Result<()> {
         self.reset_clip_rect()
     }
 
-    /// Query the current effective clip rectangle.
+    /// Query the top of the clip stack, in surface pixels.
     fn current_clip_rect(&self) -> Option<(i32, i32, u32, u32)> {
         None
     }

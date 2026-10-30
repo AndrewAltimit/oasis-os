@@ -37,6 +37,29 @@ fn unsupported(op: &'static str) -> OasisError {
 /// `bind_render_target` must be paired with exactly one
 /// [`unbind_render_target`](Self::unbind_render_target).
 ///
+/// # Draw state across a bind
+///
+/// - A bound target starts with **no clip and no translation**, whatever
+///   the parent surface had. Its coordinates are target-local: `(0, 0)` is
+///   the target's top-left pixel.
+/// - Unbinding restores the parent's clip stack, translate stack and
+///   applied clip exactly as they were at the bind, so a
+///   `pop_clip_rect` after the unbind pops the parent's clip, in the
+///   parent's coordinates.
+/// - [`viewport_size`](crate::backend::SdiAlpha::viewport_size) reports
+///   the bound surface's size.
+///
+/// [`stacks::DrawState`](crate::backend::stacks::DrawState) holds the
+/// saved stacks.
+///
+/// # Compositing
+///
+/// Both composite methods draw into the *currently bound* surface under
+/// its clip and **scale** the whole target to the `dst_w` x `dst_h`
+/// destination rectangle (nearest-neighbour on software backends). The
+/// destination position is in surface pixels and is not translated, like
+/// [`SdiCore::set_clip_rect`].
+///
 /// # Readback
 ///
 /// [`read_render_target`](Self::read_render_target) is a separate

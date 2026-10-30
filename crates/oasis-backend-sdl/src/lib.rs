@@ -24,13 +24,13 @@ use sdl3::EventPump;
 use sdl3::render::{Canvas, FPoint, FRect, Texture, TextureCreator};
 use sdl3::video::{Window, WindowContext};
 
-use oasis_core::backend::{
+use oasis_types::backend::stacks::{ClipPush, ClipStack, DrawState, TranslateStack};
+use oasis_types::backend::{
     ArcParams, BackendErrExt, BatchRect, BatchText, BlendMode, Color, RenderTargetId, SdiAlpha,
-    SdiBatch, SdiClipTransform, SdiCore, SdiRenderTarget, SdiShapes, SdiText, SdiTextures,
-    SdiVector, StrokeStyle, TextureId,
+    SdiBatch, SdiClipTransform, SdiRenderTarget, SdiShapes, SdiText, SdiTextures, SdiVector,
+    StrokeStyle, TextureId, render_target_not_found,
 };
-use oasis_core::error::{OasisError, Result};
-use oasis_types::backend::stacks::{ClipPush, ClipStack, TranslateStack};
+use oasis_types::error::{OasisError, Result};
 pub use oasis_types::geometry::ClipRect;
 
 pub use network::SdlNetworkBackend;
@@ -55,6 +55,20 @@ pub(crate) fn frect(x: i32, y: i32, w: u32, h: u32) -> FRect {
 /// Convert integer coordinates to an `FPoint` for SDL3 renderer calls.
 pub(crate) fn fpoint(x: i32, y: i32) -> FPoint {
     FPoint::new(x as f32, y as f32)
+}
+
+/// The surface a render-target bind replaced, restored on unbind.
+///
+/// SDL3 keeps the clip rectangle per render target, so the parent's
+/// applied clip survives the bind on the SDL side; the Rust-side stacks
+/// and the viewport size are saved here.
+pub(crate) struct BoundFrom {
+    /// Render target bound before (`None` = the window).
+    prev_id: Option<u64>,
+    /// The parent surface's clip and translate stacks.
+    state: DrawState,
+    /// The parent surface's size (`viewport_size`).
+    viewport: (u32, u32),
 }
 
 /// SDL3 rendering and input backend.
@@ -87,10 +101,9 @@ pub struct SdlBackend {
     /// as `textures` — the `Texture<'static>` handles borrow from
     /// `texture_creator`, must be dropped before the creator.
     pub(crate) render_targets: HashMap<u64, Texture<'static>>,
-    /// Bind stack for `SdiRenderTarget`. Each entry is the `RenderTargetId`
-    /// that was active before the corresponding `bind_render_target`
-    /// call, i.e. popping restores the entry. `None` means "framebuffer".
-    pub(crate) render_target_bind_stack: Vec<Option<u64>>,
+    /// Bind stack for `SdiRenderTarget`: one entry per active bind,
+    /// innermost last, holding what the unbind restores.
+    pub(crate) render_target_bind_stack: Vec<BoundFrom>,
     /// Currently bound render target (`None` = framebuffer).
     pub(crate) current_render_target: Option<u64>,
     /// Monotonic counter for render-target ids.
@@ -231,7 +244,7 @@ impl SdlBackend {
             ttf_font: None,
             texture_creator,
             next_texture_id: 1,
-            clip_stack: ClipStack::new(width, height),
+            clip_stack: ClipStack::default(),
             translate_stack: TranslateStack::new(),
             viewport_w: width,
             viewport_h: height,
@@ -274,7 +287,7 @@ impl SdlBackend {
             })?;
         self.viewport_w = width;
         self.viewport_h = height;
-        self.clip_stack = ClipStack::new(width, height);
+        self.clip_stack = ClipStack::default();
         self.translate_stack = TranslateStack::new();
         Ok(())
     }
@@ -282,6 +295,51 @@ impl SdlBackend {
     /// Apply cumulative translation to coordinates.
     pub(crate) fn translate(&self, x: i32, y: i32) -> (i32, i32) {
         self.translate_stack.translate(x, y)
+    }
+
+    /// Body of `submit_rect_batch`: one `fill_rects` per run of
+    /// same-colored rects, collected in `group`.
+    fn submit_rect_groups(&mut self, rects: &[BatchRect], group: &mut Vec<FRect>) -> Result<()> {
+        let mut group_color: Option<Color> = None;
+        for r in rects {
+            if r.w == 0 || r.h == 0 || r.color.a == 0 {
+                continue;
+            }
+            if group_color != Some(r.color) {
+                if let Some(prev) = group_color.take() {
+                    self.set_color(prev);
+                    self.canvas.fill_rects(group).backend_err()?;
+                    group.clear();
+                }
+                group_color = Some(r.color);
+            }
+            let (tx, ty) = self.translate(r.x, r.y);
+            group.push(frect(tx, ty, r.w, r.h));
+        }
+        if let Some(color) = group_color {
+            self.set_color(color);
+            self.canvas.fill_rects(group).backend_err()?;
+        }
+        Ok(())
+    }
+
+    /// Apply `clip` (surface pixels) to the SDL renderer, `None` = no clip.
+    pub(crate) fn apply_clip(&mut self, clip: Option<ClipRect>) {
+        match clip {
+            // A degenerate clip (w == 0 or h == 0) means "intersection
+            // collapsed to nothing". `sdl3::rect::Rect::new` would silently
+            // clamp the zero to one, leaving a 1-pixel slot that any later
+            // `fill_rect` / glyph blit can sneak a sliver of pixels through
+            // (the dotted-underline leak below an old.reddit.com browser
+            // window). `ClippingRect::Zero` makes SDL3 reject every draw.
+            Some(c) if c.w == 0 || c.h == 0 => {
+                self.canvas.set_clip_rect(sdl3::render::ClippingRect::Zero);
+            },
+            Some(c) => self
+                .canvas
+                .set_clip_rect(sdl3::rect::Rect::new(c.x, c.y, c.w, c.h)),
+            None => self.canvas.set_clip_rect(None),
+        }
     }
 
     /// Set the SDL draw color with optional blend mode.
@@ -520,18 +578,9 @@ impl SdiTextures for SdlBackend {
 // -------------------------------------------------------------------
 
 impl SdiAlpha for SdlBackend {
+    /// The bound surface: the window, or the bound render target.
     fn viewport_size(&self) -> (u32, u32) {
         (self.viewport_w, self.viewport_h)
-    }
-
-    fn dim_screen(&mut self, alpha: u8) -> Result<()> {
-        self.fill_rect(
-            0,
-            0,
-            self.viewport_w,
-            self.viewport_h,
-            Color::rgba(0, 0, 0, alpha),
-        )
     }
 }
 
@@ -543,39 +592,22 @@ impl SdiClipTransform for SdlBackend {
     fn push_clip_rect(&mut self, x: i32, y: i32, w: u32, h: u32) -> Result<()> {
         let (tx, ty) = self.translate(x, y);
         let new_clip = ClipRect { x: tx, y: ty, w, h };
-        match self.clip_stack.push(new_clip) {
-            ClipPush::Clip(c) => {
-                if c.w == 0 || c.h == 0 {
-                    // `Rect::new` would clamp 0 to 1, letting a 1-pixel
-                    // sliver through. Use `Zero` to actually reject all
-                    // subsequent draws.
-                    self.canvas.set_clip_rect(sdl3::render::ClippingRect::Zero);
-                } else {
-                    self.canvas
-                        .set_clip_rect(sdl3::rect::Rect::new(c.x, c.y, c.w, c.h));
-                }
+        let applied = match self.clip_stack.push(new_clip) {
+            ClipPush::Clip(c) => c,
+            ClipPush::Empty => ClipRect {
+                x: 0,
+                y: 0,
+                w: 0,
+                h: 0,
             },
-            ClipPush::Empty => {
-                self.canvas.set_clip_rect(sdl3::render::ClippingRect::Zero);
-            },
-        }
+        };
+        self.apply_clip(Some(applied));
         Ok(())
     }
 
     fn pop_clip_rect(&mut self) -> Result<()> {
-        match self.clip_stack.pop() {
-            Some(prev) => {
-                if prev.w == 0 || prev.h == 0 {
-                    self.canvas.set_clip_rect(sdl3::render::ClippingRect::Zero);
-                } else {
-                    self.canvas
-                        .set_clip_rect(sdl3::rect::Rect::new(prev.x, prev.y, prev.w, prev.h));
-                }
-            },
-            None => {
-                self.canvas.set_clip_rect(None);
-            },
-        }
+        let prev = self.clip_stack.pop();
+        self.apply_clip(prev);
         Ok(())
     }
 
@@ -613,28 +645,13 @@ impl SdiBatch for SdlBackend {
         if rects.is_empty() {
             return Ok(());
         }
-        let mut group: Vec<sdl3::render::FRect> = Vec::with_capacity(rects.len());
-        let mut group_color: Option<Color> = None;
-        for r in rects {
-            if r.w == 0 || r.h == 0 || r.color.a == 0 {
-                continue;
-            }
-            if group_color != Some(r.color) {
-                if let Some(prev) = group_color.take() {
-                    self.set_color(prev);
-                    self.canvas.fill_rects(&group).backend_err()?;
-                    group.clear();
-                }
-                group_color = Some(r.color);
-            }
-            let (tx, ty) = self.translate(r.x, r.y);
-            group.push(frect(tx, ty, r.w, r.h));
-        }
-        if let Some(color) = group_color {
-            self.set_color(color);
-            self.canvas.fill_rects(&group).backend_err()?;
-        }
-        Ok(())
+        // Reuse the shape scratch buffer instead of allocating per batch
+        // (nothing below draws a shape, so it is free for the duration).
+        let mut group = std::mem::take(&mut self.rect_batch);
+        group.clear();
+        let result = self.submit_rect_groups(rects, &mut group);
+        self.rect_batch = group;
+        result
     }
 
     fn submit_text_batch(
@@ -722,7 +739,7 @@ impl SdiRenderTarget for SdlBackend {
         let restore: *mut sdl3::sys::render::SDL_Texture = self
             .current_render_target
             .and_then(|id| self.render_targets.get(&id))
-            .map_or(std::ptr::null_mut(), sdl_texture_raw);
+            .map_or(std::ptr::null_mut(), |tex| tex.raw());
         // SAFETY: raw_renderer is the canvas's valid renderer; raw_tex was
         // just created on it with TARGET access, and `restore` is either
         // null (the window) or a live target texture owned by this backend.
@@ -759,52 +776,58 @@ impl SdiRenderTarget for SdlBackend {
     }
 
     fn bind_render_target(&mut self, id: RenderTargetId) -> Result<()> {
-        let raw_tex = match self.render_targets.get(&id.0) {
-            Some(tex) => self::sdl_texture_raw(tex),
-            None => {
-                return Err(OasisError::Backend(
-                    format!("bind_render_target: unknown id {id:?}").into(),
-                ));
-            },
+        let (raw_tex, size) = match self.render_targets.get(&id.0) {
+            Some(tex) => (tex.raw(), (tex.width(), tex.height())),
+            None => return Err(render_target_not_found(id)),
         };
-        // Remember the previous binding so unbind can restore it.
-        self.render_target_bind_stack
-            .push(self.current_render_target);
         // SAFETY: raw_tex is a valid SDL_Texture owned by this backend.
         // SDL_SetRenderTarget accepts any texture created with
         // `TEXTUREACCESS_TARGET` from the same renderer.
         let ok = unsafe { sdl3::sys::render::SDL_SetRenderTarget(self.canvas.raw(), raw_tex) };
         if !ok {
-            self.render_target_bind_stack.pop();
             return Err(OasisError::Backend(
                 "SDL_SetRenderTarget (bind) failed".into(),
             ));
         }
+        // SDL3 keeps the clip per target, so the parent's applied clip
+        // waits on the parent's view; a clip left on this target by an
+        // earlier bind must not survive (a bound target starts unclipped
+        // and untranslated, see `SdiRenderTarget`).
+        self.canvas.set_clip_rect(None);
+        self.render_target_bind_stack.push(BoundFrom {
+            prev_id: self.current_render_target,
+            state: DrawState::take(&mut self.clip_stack, &mut self.translate_stack),
+            viewport: (self.viewport_w, self.viewport_h),
+        });
+        (self.viewport_w, self.viewport_h) = size;
         self.current_render_target = Some(id.0);
         Ok(())
     }
 
     fn unbind_render_target(&mut self) -> Result<()> {
-        let prev = self.render_target_bind_stack.pop().ok_or_else(|| {
+        let bound = self.render_target_bind_stack.pop().ok_or_else(|| {
             OasisError::Backend("unbind_render_target: bind stack underflow".into())
         })?;
-        let raw_tex: *mut sdl3::sys::render::SDL_Texture = match prev {
-            Some(id) => match self.render_targets.get(&id) {
-                Some(tex) => self::sdl_texture_raw(tex),
-                None => std::ptr::null_mut(),
-            },
-            None => std::ptr::null_mut(),
-        };
+        let raw_tex = bound
+            .prev_id
+            .and_then(|id| self.render_targets.get(&id))
+            .map_or(std::ptr::null_mut(), |tex| tex.raw());
         // SAFETY: raw_tex is either null (framebuffer) or a valid
         // texture owned by this backend that has outlived the current
         // bind scope.
         let ok = unsafe { sdl3::sys::render::SDL_SetRenderTarget(self.canvas.raw(), raw_tex) };
+        // The Rust-side state is restored even if SDL failed, so the
+        // stacks never stay desynchronized from the bind stack.
+        bound
+            .state
+            .restore(&mut self.clip_stack, &mut self.translate_stack);
+        (self.viewport_w, self.viewport_h) = bound.viewport;
+        self.current_render_target = bound.prev_id;
         if !ok {
             return Err(OasisError::Backend(
                 "SDL_SetRenderTarget (unbind) failed".into(),
             ));
         }
-        self.current_render_target = prev;
         Ok(())
     }
 
@@ -827,14 +850,13 @@ impl SdiRenderTarget for SdlBackend {
             render_targets,
             ..
         } = self;
-        let tex = render_targets.get_mut(&id.0).ok_or_else(|| {
-            OasisError::Backend(format!("composite_render_target: unknown id {id:?}").into())
-        })?;
+        let tex = render_targets
+            .get_mut(&id.0)
+            .ok_or_else(|| render_target_not_found(id))?;
         // SAFETY: the raw pointer comes from a live texture owned by
         // `render_targets` (borrowed above) and is only used for this call.
-        let premultiplied = unsafe {
-            sdl3::sys::render::SDL_SetTextureBlendMode(sdl_texture_raw(tex), sdl_blend_for(blend))
-        };
+        let premultiplied =
+            unsafe { sdl3::sys::render::SDL_SetTextureBlendMode(tex.raw(), sdl_blend_for(blend)) };
         let alpha = (opacity.clamp(0.0, 1.0) * 255.0).round() as u8;
         if premultiplied {
             // Opacity scales a premultiplied source uniformly: color and
@@ -869,11 +891,9 @@ impl SdiRenderTarget for SdlBackend {
             render_targets,
             ..
         } = self;
-        let tex = render_targets.get_mut(&id.0).ok_or_else(|| {
-            OasisError::Backend(
-                format!("composite_render_target_premultiplied: unknown id {id:?}").into(),
-            )
-        })?;
+        let tex = render_targets
+            .get_mut(&id.0)
+            .ok_or_else(|| render_target_not_found(id))?;
         // The safe sdl3 `BlendMode` enum does not expose
         // SDL_BLENDMODE_BLEND_PREMULTIPLIED, so set it through the sys
         // API. The call doubles as the capability probe: SDL rejects
@@ -881,7 +901,7 @@ impl SdiRenderTarget for SdlBackend {
         // resulting `Err` makes callers (the vector-layer bake cache)
         // fall back to immediate-mode drawing instead of compositing
         // with wrong alpha.
-        let raw_tex = sdl_texture_raw(tex);
+        let raw_tex = tex.raw();
         // SAFETY: raw_tex is a valid SDL_Texture owned by this backend
         // (fetched from `render_targets` above and kept alive by it).
         let ok = unsafe {
@@ -892,7 +912,9 @@ impl SdiRenderTarget for SdlBackend {
         };
         if !ok {
             return Err(OasisError::Backend(
-                "premultiplied blending not supported by this renderer".into(),
+                oasis_types::error::BackendError::Unsupported {
+                    op: "premultiplied blending on this SDL renderer",
+                },
             ));
         }
         tex.set_alpha_mod(255);
@@ -910,16 +932,17 @@ impl SdiRenderTarget for SdlBackend {
         // If the caller destroys a still-bound target, refuse — same
         // contract the RecordingBackend tests enforce.
         if self.current_render_target == Some(id.0)
-            || self.render_target_bind_stack.contains(&Some(id.0))
+            || self
+                .render_target_bind_stack
+                .iter()
+                .any(|b| b.prev_id == Some(id.0))
         {
             return Err(OasisError::Backend(
                 format!("destroy_render_target: id {id:?} is still bound").into(),
             ));
         }
         if self.render_targets.remove(&id.0).is_none() {
-            return Err(OasisError::Backend(
-                format!("destroy_render_target: unknown id {id:?}").into(),
-            ));
+            return Err(render_target_not_found(id));
         }
         Ok(())
     }
@@ -928,42 +951,19 @@ impl SdiRenderTarget for SdlBackend {
         true
     }
 
+    /// Deliberately `false`: `read_render_target` is not implemented.
+    ///
+    /// A GPU readback (`SDL_RenderReadPixels` with the target bound)
+    /// stalls the pipeline once per layer per frame. The browser only
+    /// reads layers back for `backdrop-filter` / `filter` / `mask` and,
+    /// on `false`, uses its static-tint fallback, which keeps desktop
+    /// frame times flat and the screenshot baselines unchanged.
     fn supports_render_target_readback(&self) -> bool {
-        // SDL3 supports SDL_RenderReadPixels but read_render_target
-        // is not yet wired — report false until implemented.
         false
     }
 }
 
-/// Extract the raw `SDL_Texture` pointer from a safe `Texture`
-/// handle.
-///
-/// The sdl3 crate hides its `raw` field behind `pub(crate)`, but we
-/// need the pointer to call `SDL_SetRenderTarget`.  `Texture<'r>` in
-/// sdl3 0.17 is `{ raw: *mut SDL_Texture, _marker: PhantomData }` —
-/// layout-compatible with a single pointer. We cast through a
-/// repr-identical shadow struct.
-#[repr(C)]
-struct TextureLayout {
-    raw: *mut sdl3::sys::render::SDL_Texture,
-    _marker: std::marker::PhantomData<&'static ()>,
-}
-
-fn sdl_texture_raw(tex: &Texture<'static>) -> *mut sdl3::sys::render::SDL_Texture {
-    // SAFETY: This relies on sdl3 0.17 `Texture<'r>` having the exact
-    // layout `{ raw: *mut SDL_Texture, _marker: PhantomData }`, which
-    // it does (verified in `render.rs:2213-2216` of the sdl3 crate).
-    // `TextureLayout` mirrors that layout with `#[repr(C)]` and a
-    // single pointer-sized field + ZST.  A bump in the sdl3 crate
-    // that changes this layout is the reason we gate sdl3 at exact
-    // minor version in Cargo.toml.
-    unsafe {
-        let layout: &TextureLayout = &*(tex as *const Texture<'static>).cast::<TextureLayout>();
-        layout.raw
-    }
-}
-
-impl oasis_core::backend::ClipboardBackend for SdlBackend {
+impl oasis_types::backend::ClipboardBackend for SdlBackend {
     fn copy(&mut self, text: &str) {
         let clipboard = self.canvas.window().subsystem().clipboard();
         if let Err(e) = clipboard.set_clipboard_text(text) {
@@ -984,7 +984,7 @@ impl oasis_core::backend::ClipboardBackend for SdlBackend {
             .has_clipboard_text()
     }
 
-    fn clear(&mut self) {
+    fn clear_clipboard(&mut self) {
         let clipboard = self.canvas.window().subsystem().clipboard();
         if let Err(e) = clipboard.set_clipboard_text("") {
             log::warn!("SDL clipboard clear failed: {e}");
@@ -1012,10 +1012,11 @@ impl Drop for SdlBackend {
 mod tests {
     use super::*;
 
+    use oasis_types::backend::SdiCore;
     use sdl3::keyboard::Keycode;
 
-    use oasis_core::input::{Button, InputEvent, Trigger};
     use oasis_types::backend::SdiText;
+    use oasis_types::input::{Button, InputEvent, Trigger};
 
     // ---------------------------------------------------------------
     // Input mapping tests
@@ -1856,7 +1857,7 @@ mod tests {
         // Bitmap path is untouched without a font.
         assert_eq!(
             backend.measure_text("Hello", 16),
-            oasis_core::backend::bitmap_measure_text("Hello", 16)
+            oasis_types::backend::bitmap_measure_text("Hello", 16)
         );
 
         backend.set_font(Some(TEST_TTF));

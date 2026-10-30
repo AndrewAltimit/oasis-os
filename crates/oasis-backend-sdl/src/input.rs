@@ -10,11 +10,11 @@
 use sdl3::event::Event;
 use sdl3::keyboard::{Keycode, Mod};
 
-use oasis_core::input::{InputEvent, Key, Modifiers};
+use oasis_types::input::{InputEvent, Key, Modifiers};
 
 use super::SdlBackend;
 
-impl oasis_core::backend::InputBackend for SdlBackend {
+impl oasis_types::backend::InputBackend for SdlBackend {
     fn poll_events(&mut self) -> Vec<InputEvent> {
         let mut events = Vec::new();
         for event in self.event_pump.poll_iter() {
@@ -164,7 +164,7 @@ mod tests {
     #![allow(clippy::unwrap_used)]
 
     use super::*;
-    use oasis_core::input::{Button, Trigger};
+    use oasis_types::input::{Button, Trigger};
 
     // -- Key down mapping tests --
 

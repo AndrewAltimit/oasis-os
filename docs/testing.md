@@ -42,7 +42,10 @@ headlessly:
 
 - **Rendering** goes to `HeadlessBackend` (`src/headless.rs`): the UE5
   software RGBA framebuffer (`oasis-backend-ue5`, the rasterizer the FFI
-  embeds) plus per-frame recording of every `draw_text` call.
+  embeds). It forwards every SDI method, defaults included, so the harness
+  takes the same paths as a UE5 host (render targets and the vector-layer
+  bake cache included), and turns on `Ue5Backend`'s text log, which records
+  every string drawn in a frame.
 - **Audio** goes to `RecordingAudio` (`src/harness.rs`), which keeps every
   PCM sample, byte and track operation the shell sends.
 - **Time** is virtual: each frame advances exactly 1/60 s, and the

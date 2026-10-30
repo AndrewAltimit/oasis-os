@@ -16,7 +16,10 @@ pub trait ClipboardBackend {
     fn has_content(&self) -> bool;
 
     /// Clear the clipboard contents.
-    fn clear(&mut self);
+    ///
+    /// Not called `clear`: backends implement this trait next to
+    /// `SdiCore::clear`, and two `clear` methods in scope are ambiguous.
+    fn clear_clipboard(&mut self);
 }
 
 /// In-memory clipboard implementation.
@@ -49,7 +52,7 @@ impl ClipboardBackend for InMemoryClipboard {
         self.content.is_some()
     }
 
-    fn clear(&mut self) {
+    fn clear_clipboard(&mut self) {
         self.content = None;
     }
 }
@@ -86,7 +89,7 @@ mod tests {
         let mut clipboard = InMemoryClipboard::new();
         clipboard.copy("data");
         assert!(clipboard.has_content());
-        clipboard.clear();
+        clipboard.clear_clipboard();
         assert!(!clipboard.has_content());
         assert_eq!(clipboard.paste(), None);
     }

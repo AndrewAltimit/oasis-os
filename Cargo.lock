@@ -1198,6 +1198,7 @@ dependencies = [
  "oasis-audio",
  "oasis-backend-ue5",
  "oasis-core",
+ "oasis-net",
  "oasis-rasterize",
  "oasis-shader",
  "oasis-test-backend",

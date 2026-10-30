@@ -21,7 +21,7 @@ use std::thread;
 use std::time::Duration;
 
 use oasis_backend_sdl::SdlAudioBackend;
-use oasis_core::backend::AudioBackend;
+use oasis_types::backend::AudioBackend;
 
 fn main() -> ExitCode {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();

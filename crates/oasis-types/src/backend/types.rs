@@ -359,6 +359,12 @@ pub fn texture_not_found(id: u64) -> crate::error::OasisError {
     crate::error::OasisError::Backend(crate::error::BackendError::TextureNotFound { id })
 }
 
+/// Return a [`BackendError::RenderTargetNotFound`](crate::error::BackendError)
+/// error for the given render-target id.
+pub fn render_target_not_found(id: RenderTargetId) -> crate::error::OasisError {
+    crate::error::OasisError::Backend(crate::error::BackendError::RenderTargetNotFound { id: id.0 })
+}
+
 // ---------------------------------------------------------------------------
 // Texture validation helpers
 // ---------------------------------------------------------------------------
