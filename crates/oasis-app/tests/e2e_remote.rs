@@ -441,6 +441,37 @@ fn remote_terminal_refuses_server_toggles() {
     assert_eq!(remote_cmd(&mut h, &mut p, "echo ok"), "ok");
 }
 
+/// A background job (`cmd &`) queued over the remote terminal runs a frame
+/// later through the local output path: it must not get the authority the
+/// direct command is refused (regression: `ftp start <port> &` started
+/// the FTP server).
+#[test]
+fn remote_terminal_background_job_cannot_toggle_servers() {
+    let mut h = Harness::new("classic");
+    h.settle();
+    let port = free_port();
+    run(
+        &mut h,
+        &format!("listen {port}"),
+        &format!("Listening on 127.0.0.1:{port}"),
+    );
+    let mut p = remote_client(&mut h, port);
+    let other = free_port();
+    for cmd in [format!("ftp start {other} &"), "listen stop &".to_string()] {
+        remote_cmd(&mut h, &mut p, &cmd);
+        h.run_frames(4);
+        assert!(h.state().net.ftp_server.is_none(), "{cmd}");
+        assert!(h.state().net.listener.is_some(), "{cmd}");
+    }
+    assert!(
+        output_contains(&h, "Not available from a background job."),
+        "{:#?}",
+        output(&h)
+    );
+    // The connection is still served.
+    assert_eq!(remote_cmd(&mut h, &mut p, "echo ok"), "ok");
+}
+
 /// `tv tune <ch>` (terminal, remote terminal) writes a `tune_ch:` request
 /// that nothing consumed; the shell now tunes the open TV Guide with it.
 #[test]
@@ -909,6 +940,80 @@ fn mcp_bad_arguments_are_errors_not_panics() {
     );
 }
 
+/// MCP `focus_window` restores a minimized window (it used to make the
+/// invisible window the keyboard target); geometry tools on the kiosk
+/// window leave kiosk mode first (the chrome stayed hidden); and
+/// `resize_window` keeps the window on screen.
+#[cfg(feature = "mcp")]
+#[test]
+fn mcp_window_ops_restore_leave_kiosk_and_fit_the_screen() {
+    use oasis_core::input::InputEvent;
+    use serde_json::json;
+    let mut h = Harness::new("classic");
+    h.settle();
+    let port = mcp::start(&mut h);
+    mcp::ok(&mut h, port, "open_app", json!({ "title": "Calculator" }));
+    h.settle();
+    let id = mcp::window_id(&h, "Calculator");
+
+    mcp::ok(&mut h, port, "minimize_window", json!({ "id": id }));
+    h.settle();
+    assert!(h.find_window("Calculator").unwrap().minimized);
+    mcp::ok(&mut h, port, "focus_window", json!({ "id": id }));
+    h.settle();
+    assert!(!h.find_window("Calculator").unwrap().minimized);
+    assert_eq!(h.active_window().as_deref(), Some(id.as_str()));
+
+    let ops = [
+        ("minimize_window", json!({ "id": id })),
+        ("maximize_window", json!({ "id": id })),
+        ("restore_window", json!({ "id": id })),
+        ("move_window", json!({ "id": id, "x": 10, "y": 30 })),
+        (
+            "resize_window",
+            json!({ "id": id, "width": 200, "height": 150 }),
+        ),
+    ];
+    for (tool, args) in ops {
+        mcp::ok(&mut h, port, "focus_window", json!({ "id": id }));
+        h.send(&[InputEvent::ToggleFullscreen]);
+        h.settle();
+        assert_eq!(
+            h.state().content.fullscreen_app.as_deref(),
+            Some(id.as_str()),
+            "{tool}"
+        );
+        mcp::ok(&mut h, port, tool, args);
+        h.settle();
+        assert!(h.state().content.fullscreen_app.is_none(), "{tool}");
+        assert!(!h.find_window("Calculator").unwrap().fullscreen, "{tool}");
+    }
+
+    // Larger than the screen: fitted to it, and fully on screen.
+    mcp::ok(
+        &mut h,
+        port,
+        "move_window",
+        json!({ "id": id, "x": 300, "y": 200 }),
+    );
+    mcp::ok(
+        &mut h,
+        port,
+        "resize_window",
+        json!({ "id": id, "width": 100_000, "height": 100_000 }),
+    );
+    h.settle();
+    let (x, y, w, hh) = h.find_window("Calculator").unwrap().frame;
+    let (sw, sh) = h.size();
+    assert!(w <= sw && hh <= sh, "{:?}", (x, y, w, hh));
+    assert!(x >= 0 && y >= 0, "{:?}", (x, y, w, hh));
+    assert!(
+        x + w as i32 <= sw as i32 && y + hh as i32 <= sh as i32,
+        "window sticks out of the {sw}x{sh} screen: {:?}",
+        (x, y, w, hh)
+    );
+}
+
 #[cfg(feature = "mcp")]
 #[test]
 fn mcp_run_command_changes_shell_state() {
@@ -956,6 +1061,19 @@ fn mcp_run_command_changes_shell_state() {
     );
     assert_eq!(out, "Not available via remote.");
     assert!(h.state().mcp.is_some());
+
+    // ... and so are the same toggles queued as a background job, which
+    // runs a frame later through the local output path.
+    let ftp_port = free_port();
+    for cmd in [
+        format!("ftp start {ftp_port} &"),
+        "mcp-server stop &".into(),
+    ] {
+        mcp::ok(&mut h, port, "run_command", json!({ "command": cmd }));
+        h.run_frames(4);
+        assert!(h.state().net.ftp_server.is_none(), "{cmd}");
+        assert!(h.state().mcp.is_some(), "{cmd}");
+    }
 }
 
 #[cfg(feature = "mcp")]
@@ -1078,6 +1196,80 @@ fn mcp_screenshot_matches_the_framebuffer_and_overlay_is_drawn() {
         "overlay missing: {:?}",
         h.frame_text()
     );
+}
+
+/// MCP `screenshot` draws the frame it returns. It used to read the back
+/// buffer during `step`, after the previous present, which is undefined on
+/// SDL: here the framebuffer is scribbled over (as a real backend's back
+/// buffer may be) and the screenshot must still show the shell, not the
+/// scribble.
+#[cfg(feature = "mcp")]
+#[test]
+fn mcp_screenshot_draws_the_frame_it_returns() {
+    use oasis_core::backend::{Color, SdiCore};
+    use serde_json::json;
+    let mut h = Harness::new("classic");
+    h.settle();
+    let port = mcp::start(&mut h);
+    let scribble = [255u8, 0, 255];
+    h.shell
+        .backend
+        .clear(Color::rgb(scribble[0], scribble[1], scribble[2]))
+        .unwrap();
+
+    let (err, content) = mcp::call(&mut h, port, "screenshot", json!({}));
+    assert!(!err, "{content}");
+    let png_bytes = base64_decode(content[0]["data"].as_str().unwrap());
+    let mut reader = png::Decoder::new(std::io::Cursor::new(png_bytes))
+        .read_info()
+        .unwrap();
+    let mut img = vec![0u8; reader.output_buffer_size()];
+    reader.next_frame(&mut img).unwrap();
+    let px = img.as_chunks::<4>().0;
+    let scribbled = px.iter().filter(|p| p[..3] == scribble).count();
+    assert_eq!(scribbled, 0, "screenshot shows the stale back buffer");
+    assert!(px.iter().any(|p| p[..3] != px[0][..3]), "blank screenshot");
+}
+
+/// MCP `play_media` / `tune` arguments go into line-based IPC request
+/// files: a line break used to inject further requests. Unknown tool
+/// names are not recorded verbatim (the activity overlay drew them).
+#[cfg(feature = "mcp")]
+#[test]
+fn mcp_ipc_arguments_cannot_inject_requests() {
+    use oasis_core::vfs::Vfs;
+    use serde_json::json;
+    let mut h = Harness::new("classic");
+    h.settle();
+    let port = mcp::start(&mut h);
+
+    let msg = mcp::fails(
+        &mut h,
+        port,
+        "play_media",
+        json!({ "path": "/music/a.mp3\nstop" }),
+    );
+    assert!(msg.contains("line breaks"), "{msg}");
+    for channel in ["0\r\nstop", "0\0"] {
+        let msg = mcp::fails(
+            &mut h,
+            port,
+            "tune",
+            json!({ "source": "radio", "channel": channel }),
+        );
+        assert!(msg.contains("line breaks"), "{msg}");
+    }
+    let radio = h
+        .vfs()
+        .read(oasis_audio::RADIO_REQUEST_PATH)
+        .unwrap_or_default();
+    assert!(radio.is_empty(), "{radio:?}");
+
+    let huge = "x".repeat(5_000);
+    let msg = mcp::fails(&mut h, port, &huge, json!({}));
+    assert!(msg.len() < 200, "{}", msg.len());
+    let last = h.state().agent_activity.last_tool.clone();
+    assert_eq!(last.as_deref(), Some("unknown tool"));
 }
 
 #[cfg(feature = "mcp")]

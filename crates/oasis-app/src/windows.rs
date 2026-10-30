@@ -78,12 +78,7 @@ pub fn close_app_window(
         return CloseOutcome::Declined;
     }
 
-    if state.content.fullscreen_app.as_deref() == Some(id) {
-        if has_window {
-            let _ = state.wm.exit_fullscreen(id, sdi);
-        }
-        state.content.fullscreen_app = None;
-    }
+    exit_kiosk(state, sdi, id);
     if has_window && let Err(e) = state.wm.close_window(id, sdi) {
         log::warn!("close_window({id}): {e}");
     }
@@ -99,6 +94,25 @@ pub fn close_app_window(
         state.mode = Mode::Dashboard;
     }
     CloseOutcome::Closed
+}
+
+/// Leave kiosk fullscreen when window `id` is the kiosk app, restoring its
+/// geometry and the shell chrome (status bar, taskbar). Returns whether it
+/// was the kiosk window.
+///
+/// Programmatic window operations (`wm minimize`, MCP `move_window`, ...)
+/// call this first, like [`close_app_window`] does: changing the kiosk
+/// window behind the shell's back left `fullscreen_app` set, so the chrome
+/// stayed hidden around a window that no longer covered the screen.
+pub fn exit_kiosk(state: &mut AppState, sdi: &mut SdiRegistry, id: &str) -> bool {
+    if state.content.fullscreen_app.as_deref() != Some(id) {
+        return false;
+    }
+    if state.wm.get_window(id).is_some() {
+        let _ = state.wm.exit_fullscreen(id, sdi);
+    }
+    state.content.fullscreen_app = None;
+    true
 }
 
 /// Stop the radio / music when the closing runner's app owns it
