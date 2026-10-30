@@ -178,6 +178,22 @@ removal, a restyled site, and docs that match the code.
   geometry; the status-bar clock drifted off its right edge; long Text
   Editor prompts overlapped the Ln/Col readout; WM underflow, focus after
   minimize and fullscreen re-entry.
+- App fixes from a review pass: File Manager acted on the wrong entry
+  when a name contained `"  ("` (it parsed display text; real names are
+  kept now), kept the selection in range after deletes / rescans, and
+  only falls back to copy + delete when rename is unsupported (deleting
+  the source after a full copy); Calculator rejects inf / NaN results,
+  bounds unary / power recursion, negates the last number with +/- and
+  chains from the exact previous result; Text Editor opens non-UTF-8
+  files read-only, keeps CRLF, and commits Save As only after a
+  successful write (relative names go to `/home/user`); Paint's
+  cancelled shapes leave undo history alone; Games shuffles use the
+  PRNG's high bits and Snake may move into its vacating tail; Photo
+  Viewer refuses > 40 MP sources before allocating and actually rotates;
+  ID3 parsing is shared, v2.4-aware and overflow-safe; TV Guide accepts
+  `MM:SS` lengths and rejects inf / NaN; Radio clamps a published volume
+  and never overwrites an unparsable `stations.toml`; Settings clamps a
+  published font scale and System / About scrolling.
 - e2e coverage for the close paths, plugin tiles, terminal scroll,
   skin-swap clocks, music control and window placement across skins.
 
