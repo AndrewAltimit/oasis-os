@@ -217,6 +217,83 @@ mod tv {
 }
 
 // ---------------------------------------------------------------------------
+// `music` terminal command -> media controller -> audio output
+// ---------------------------------------------------------------------------
+
+/// Whether the last terminal output contains `needle`.
+fn term_shows(h: &Harness, needle: &str) -> bool {
+    h.state()
+        .terminal
+        .output_lines
+        .iter()
+        .any(|l| l.contains(needle))
+}
+
+#[test]
+fn music_command_drives_playback_and_publishes_status() {
+    use oasis_core::vfs::Vfs;
+    const TRACK: &str = "/home/user/music/ambient_dawn.mp3";
+    let mut h = Harness::new("classic");
+    h.settle();
+
+    h.terminal(&format!("music play {TRACK}"));
+    h.settle();
+    let track = h
+        .state()
+        .media_track
+        .expect("`music play <file>` started a track");
+    assert_eq!(h.audio().playing, Some(track));
+    assert!(h.state().audio_backend.is_playing());
+
+    h.terminal("music pause");
+    h.settle();
+    assert!(!h.state().audio_backend.is_playing(), "backend paused");
+    assert_eq!(h.audio().playing, Some(track), "paused, not stopped");
+
+    h.terminal("music status");
+    h.settle();
+    for line in [
+        "State: paused",
+        "Track: ambient_dawn.mp3",
+        "Repeat: off",
+        "Playlist: 1 tracks",
+    ] {
+        assert!(
+            term_shows(&h, line),
+            "{line:?} in {:?}",
+            h.state().terminal.output_lines
+        );
+    }
+
+    h.terminal("music resume");
+    h.settle();
+    assert!(h.state().audio_backend.is_playing(), "backend resumed");
+
+    h.terminal("music vol 30; music repeat all; music shuffle");
+    h.settle();
+    assert_eq!(h.audio().volume, 30);
+    let status = String::from_utf8(h.vfs().read(oasis_audio::AUDIO_STATUS_PATH).unwrap()).unwrap();
+    assert!(status.contains("Volume: 30%"), "{status}");
+    assert!(status.contains("Repeat: all"), "{status}");
+    assert!(status.contains("Shuffle: on"), "{status}");
+
+    // A one-track repeating playlist: `next` restarts it as a fresh track.
+    h.terminal("music next");
+    h.settle();
+    let again = h.state().media_track.expect("next replays the only track");
+    assert_ne!(again, track);
+    assert!(h.audio().tracks_unloaded.contains(&track));
+
+    h.terminal("music stop");
+    h.settle();
+    assert!(h.state().media_track.is_none());
+    assert_eq!(h.audio().playing, None);
+    h.terminal("music status");
+    h.settle();
+    assert!(term_shows(&h, "State: stopped"));
+}
+
+// ---------------------------------------------------------------------------
 // Boot splash
 // ---------------------------------------------------------------------------
 

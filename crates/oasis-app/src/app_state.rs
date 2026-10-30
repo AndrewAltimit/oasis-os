@@ -328,6 +328,9 @@ pub struct AppState {
     pub sfx: oasis_audio::sfx::SfxPlayer,
     /// Audio track for the Music Player app.
     pub media_track: Option<AudioTrackId>,
+    /// Music playlist + playback state behind `/var/audio/*` (driven by
+    /// `media_controller`).
+    pub media: oasis_audio::AudioManager,
     /// Optional MCP control server bound to loopback. `None` unless started
     /// via `OASIS_MCP=1` or the `mcp-server start` command.
     #[cfg(feature = "mcp")]
@@ -392,6 +395,7 @@ impl AppState {
             ui_sounds: oasis_core::ui_sound::UiSoundQueue::new(),
             sfx: oasis_audio::sfx::SfxPlayer::new(),
             media_track: None,
+            media: oasis_audio::AudioManager::new(),
             #[cfg(feature = "mcp")]
             mcp: None,
             #[cfg(feature = "mcp")]
