@@ -262,6 +262,14 @@ removal, a restyled site, and docs that match the code.
   notes where claims changed.
 - The demo lists all 17 skins (generated from `site/data/skins.json`;
   a test fails on stale lists) and its canvas refits without overflowing.
+- Landing page revamp (hero video kept): `site/css/site.css` documents a
+  token set (color, fluid type scale, spacing, radii, shadows, motion,
+  focus ring) and shared components; new sections show the backend
+  contract with real code (`SdiCore`, the C host loop, an `App`), a
+  platform switcher with device frames, a skin stage that frames each
+  capture by resolution and tints itself from colors sampled from it,
+  an inline-SVG crate diagram with a text fallback, and a redesigned PSP
+  section around the hardware captures. Counts re-verified (9k+ tests).
 
 ### Docs
 
