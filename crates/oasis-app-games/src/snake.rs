@@ -65,7 +65,10 @@ impl SnakeGame {
             Direction::Right => (hx + 1, hy),
         };
 
-        if self.is_collision(new_head.0, new_head.1) {
+        // The tail cell is vacated this tick unless the snake eats, so
+        // moving into it is legal.
+        let eating = new_head == self.food;
+        if self.collides(new_head.0, new_head.1, !eating) {
             self.state = GameState::GameOver;
             if self.score > self.high_score {
                 self.high_score = self.score;
@@ -75,7 +78,7 @@ impl SnakeGame {
 
         self.snake.insert(0, new_head);
 
-        if new_head == self.food {
+        if eating {
             self.score += 1;
             // Check win: snake fills entire grid.
             let total = (self.width * self.height) as usize;
@@ -118,10 +121,20 @@ impl SnakeGame {
 
     /// Check if position collides with walls or the snake body.
     pub fn is_collision(&self, x: i32, y: i32) -> bool {
+        self.collides(x, y, false)
+    }
+
+    /// Wall / body collision, optionally ignoring the tail segment.
+    fn collides(&self, x: i32, y: i32, ignore_tail: bool) -> bool {
         if x < 0 || y < 0 || x >= self.width as i32 || y >= self.height as i32 {
             return true;
         }
-        self.snake.contains(&(x, y))
+        let body = if ignore_tail {
+            &self.snake[..self.snake.len().saturating_sub(1)]
+        } else {
+            &self.snake[..]
+        };
+        body.contains(&(x, y))
     }
 
     /// Reset the game (keeps high score).
@@ -186,6 +199,36 @@ impl SnakeGame {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A 4-segment snake curled into a 2x2 square, heading Down into the
+    /// cell its tail occupies.
+    fn curled(food: (i32, i32)) -> SnakeGame {
+        let mut game = SnakeGame::new(10, 10, 42);
+        game.snake = vec![(1, 1), (2, 1), (2, 2), (1, 2)];
+        game.direction = Direction::Down;
+        game.next_direction = Direction::Down;
+        game.food = food;
+        game.tick_counter = game.speed - 1;
+        game
+    }
+
+    #[test]
+    fn moving_into_the_vacating_tail_is_legal() {
+        let mut game = curled((7, 7));
+        game.tick();
+        assert_eq!(game.state, GameState::Playing);
+        assert_eq!(game.snake[0], (1, 2));
+        assert_eq!(game.snake.len(), 4);
+    }
+
+    #[test]
+    fn eating_on_the_tail_cell_still_collides() {
+        // Food can't really sit on the snake; force it to check the tail
+        // is kept (and so hit) when the snake grows.
+        let mut game = curled((1, 2));
+        game.tick();
+        assert_eq!(game.state, GameState::GameOver);
+    }
 
     #[test]
     fn snake_creation() {
