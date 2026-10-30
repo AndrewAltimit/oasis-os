@@ -19,15 +19,16 @@ use rustc_hash::FxHashMap;
 // Robustness limits
 // -----------------------------------------------------------------------
 
-/// Maximum selector nesting depth (combinators). Selectors deeper
-/// than this are treated as non-matching.
-#[allow(dead_code)]
+/// Maximum number of compounds in one complex selector. Longer
+/// selectors are treated as non-matching (this also bounds the matcher's
+/// recursion depth).
 const MAX_SELECTOR_DEPTH: usize = 64;
 
-/// Maximum number of DOM traversal steps during selector matching.
-/// Prevents O(N^2) blowup on pathologically complex selectors.
-#[allow(dead_code)]
-const MAX_TRAVERSAL_STEPS: usize = 512;
+/// Maximum number of DOM traversal steps (combinator candidates plus
+/// `:has()` subtree nodes) spent matching one selector against one
+/// element. Exhaustion is treated as "no match", which bounds hostile
+/// selector/DOM combinations; ordinary pages stay far below it.
+const MAX_TRAVERSAL_STEPS: usize = 16_384;
 
 // -----------------------------------------------------------------------
 // Matched declaration types
@@ -878,7 +879,59 @@ pub(crate) fn matches_selector(
     selector: &super::super::parser::Selector,
     ctx: &CascadeContext<'_>,
 ) -> bool {
-    matches_selector_scoped(doc, node_id, selector, ctx, None, None)
+    matches_selector_scoped(doc, node_id, selector, ctx, None, None, &Budget::new())
+}
+
+/// Outcome of matching a selector suffix against one candidate element.
+///
+/// The three failure kinds let the right-to-left walk prune retries
+/// that cannot succeed (the scheme Servo / Firefox use), which keeps
+/// backtracking linear in practice instead of exponential:
+///
+/// * `RestartFromClosestLaterSibling` -- this candidate failed; any
+///   enclosing combinator may try its next candidate.
+/// * `RestartFromClosestDescendant` -- a `+` / `~` chain ran out of
+///   siblings; only an enclosing descendant (` `) combinator may still
+///   retry with a higher ancestor.
+/// * `Globally` -- an ancestor walk ran out of ancestors (or the
+///   traversal budget ran out); no retry anywhere can succeed.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum MatchResult {
+    Matched,
+    RestartFromClosestLaterSibling,
+    RestartFromClosestDescendant,
+    Globally,
+}
+
+/// Per-match traversal budget shared by combinator walks and `:has()`
+/// subtree scans. Exhaustion is treated as "no match".
+struct Budget(std::cell::Cell<usize>);
+
+impl Budget {
+    fn new() -> Self {
+        Self(std::cell::Cell::new(MAX_TRAVERSAL_STEPS))
+    }
+
+    /// Consume one step; `false` once the budget is spent.
+    #[inline]
+    fn tick(&self) -> bool {
+        let left = self.0.get();
+        if left == 0 {
+            return false;
+        }
+        self.0.set(left - 1);
+        true
+    }
+}
+
+/// Shared state of one complex-selector match.
+struct Matcher<'a, 'c> {
+    doc: &'a Document,
+    parts: &'a [(CompoundSelector, Option<Combinator>)],
+    ctx: &'a CascadeContext<'c>,
+    scope: Option<NodeId>,
+    scope_combinator: Option<&'a Combinator>,
+    budget: &'a Budget,
 }
 
 /// Like [`matches_selector`] but with an optional `scope` ancestor
@@ -891,6 +944,11 @@ pub(crate) fn matches_selector(
 /// relative selector must live strictly inside the subject's subtree,
 /// so `article:has(.a .b)` can't match via an `.a` that is an ancestor
 /// of `article` itself.
+///
+/// Matching walks right-to-left with backtracking: a descendant or
+/// general-sibling combinator tries every candidate until the rest of
+/// the selector matches, so `A > B C` matches `<A><B><X><B><C>` via the
+/// outer `B`.
 fn matches_selector_scoped(
     doc: &Document,
     node_id: NodeId,
@@ -898,117 +956,126 @@ fn matches_selector_scoped(
     ctx: &CascadeContext<'_>,
     scope: Option<NodeId>,
     scope_combinator: Option<&Combinator>,
+    budget: &Budget,
 ) -> bool {
     let parts = &selector.parts;
-    if parts.is_empty() {
+    if parts.is_empty() || parts.len() > MAX_SELECTOR_DEPTH {
         return false;
     }
+    let m = Matcher {
+        doc,
+        parts,
+        ctx,
+        scope,
+        scope_combinator,
+        budget,
+    };
+    m.match_from(parts.len() - 1, node_id) == MatchResult::Matched
+}
 
-    // The last compound is the subject -- it must match node_id.
-    let last_idx = parts.len() - 1;
-    if !matches_compound(doc, node_id, &parts[last_idx].0, ctx) {
-        return false;
-    }
-
-    // Walk remaining parts right-to-left (from subject towards root).
-    let mut current = node_id;
-    for i in (0..last_idx).rev() {
-        let (ref compound, _) = parts[i];
-        // The combinator that connects `parts[i]` to `parts[i+1]` is
-        // stored in `parts[i+1].1`.
-        let combinator = parts[i + 1].1.as_ref();
+impl Matcher<'_, '_> {
+    /// Match `parts[..=idx]` with `parts[idx]` anchored at `node`.
+    fn match_from(&self, idx: usize, node: NodeId) -> MatchResult {
+        if !matches_compound(self.doc, node, &self.parts[idx].0, self.ctx, self.budget) {
+            return MatchResult::RestartFromClosestLaterSibling;
+        }
+        if idx == 0 {
+            return if self.leading_scope_ok(node) {
+                MatchResult::Matched
+            } else {
+                MatchResult::RestartFromClosestLaterSibling
+            };
+        }
+        // The combinator linking `parts[idx - 1]` to `parts[idx]` is
+        // stored on `parts[idx]`.
+        let combinator = self.parts[idx]
+            .1
+            .as_ref()
+            .unwrap_or(&Combinator::Descendant);
+        let doc = self.doc;
         match combinator {
-            Some(Combinator::Child) => match parent_element(doc, current) {
-                Some(pid)
-                    if !in_scope_exclusive(pid, scope)
-                        || !matches_compound(doc, pid, compound, ctx) =>
-                {
-                    return false;
-                },
-                Some(pid) => {
-                    current = pid;
-                },
-                None => return false,
-            },
-            Some(Combinator::AdjacentSibling) => match previous_sibling_element(doc, current) {
-                Some(sid) if matches_compound(doc, sid, compound, ctx) => {
-                    current = sid;
-                },
-                _ => return false,
-            },
-            Some(Combinator::GeneralSibling) => {
-                // Walk previous siblings until one matches.
-                let mut found = false;
-                let mut sib = previous_sibling_element(doc, current);
-                while let Some(sid) = sib {
-                    if matches_compound(doc, sid, compound, ctx) {
-                        current = sid;
-                        found = true;
-                        break;
-                    }
-                    sib = previous_sibling_element(doc, sid);
+            Combinator::Child => {
+                let Some(pid) = parent_element(doc, node) else {
+                    return MatchResult::Globally;
+                };
+                if !in_scope_exclusive(pid, self.scope) || !self.budget.tick() {
+                    return MatchResult::Globally;
                 }
-                if !found {
-                    return false;
+                match self.match_from(idx - 1, pid) {
+                    r @ (MatchResult::Matched | MatchResult::Globally) => r,
+                    _ => MatchResult::RestartFromClosestDescendant,
                 }
             },
-            Some(Combinator::Descendant) | None => {
-                // Walk up ancestors until one matches.
-                let mut found = false;
-                let mut ancestor = parent_element(doc, current);
-                while let Some(anc_id) = ancestor {
-                    if !in_scope_exclusive(anc_id, scope) {
+            Combinator::Descendant => {
+                let mut ancestor = parent_element(doc, node);
+                while let Some(anc) = ancestor {
+                    if !in_scope_exclusive(anc, self.scope) || !self.budget.tick() {
                         break;
                     }
-                    if matches_compound(doc, anc_id, compound, ctx) {
-                        current = anc_id;
-                        found = true;
-                        break;
+                    let r = self.match_from(idx - 1, anc);
+                    if matches!(r, MatchResult::Matched | MatchResult::Globally) {
+                        return r;
                     }
-                    ancestor = parent_element(doc, anc_id);
+                    ancestor = parent_element(doc, anc);
                 }
-                if !found {
-                    return false;
+                MatchResult::Globally
+            },
+            Combinator::AdjacentSibling => {
+                let Some(sid) = previous_sibling_element(doc, node) else {
+                    return MatchResult::RestartFromClosestDescendant;
+                };
+                if !self.budget.tick() {
+                    return MatchResult::Globally;
                 }
+                self.match_from(idx - 1, sid)
+            },
+            Combinator::GeneralSibling => {
+                let Some(parent) = doc.nodes[node].parent else {
+                    return MatchResult::RestartFromClosestDescendant;
+                };
+                let siblings = &doc.nodes[parent].children;
+                let pos = siblings.iter().position(|&c| c == node).unwrap_or(0);
+                for &sid in siblings[..pos].iter().rev() {
+                    if !matches!(doc.nodes[sid].kind, NodeKind::Element(_)) {
+                        continue;
+                    }
+                    if !self.budget.tick() {
+                        return MatchResult::Globally;
+                    }
+                    let r = self.match_from(idx - 1, sid);
+                    if r != MatchResult::RestartFromClosestLaterSibling {
+                        return r;
+                    }
+                }
+                MatchResult::RestartFromClosestDescendant
             },
         }
     }
 
-    // Enforce the leading combinator from :has(). After the right-to-left
-    // walk, `current` is the node that matched the leftmost compound.
-    // scope_combinator specifies the required relationship between that
-    // node and the scope element.
-    if let (Some(sc), Some(sid)) = (scope_combinator, scope) {
+    /// Enforce the leading combinator from `:has()`: the node matching
+    /// the leftmost compound must stand in that relationship to the
+    /// scope element.
+    fn leading_scope_ok(&self, leftmost: NodeId) -> bool {
+        let (Some(sc), Some(sid)) = (self.scope_combinator, self.scope) else {
+            return true;
+        };
+        let doc = self.doc;
         match sc {
-            Combinator::Child => {
-                if parent_element(doc, current) != Some(sid) {
-                    return false;
-                }
-            },
-            Combinator::AdjacentSibling => {
-                if previous_sibling_element(doc, current) != Some(sid) {
-                    return false;
-                }
-            },
+            Combinator::Child => parent_element(doc, leftmost) == Some(sid),
+            Combinator::AdjacentSibling => previous_sibling_element(doc, leftmost) == Some(sid),
             Combinator::GeneralSibling => {
                 let mut sib = next_sibling_element(doc, sid);
-                let mut found = false;
                 while let Some(s) = sib {
-                    if s == current {
-                        found = true;
-                        break;
+                    if s == leftmost {
+                        return true;
                     }
                     sib = next_sibling_element(doc, s);
                 }
-                if !found {
-                    return false;
-                }
+                false
             },
-            Combinator::Descendant => {},
+            Combinator::Descendant => true,
         }
     }
-
-    true
 }
 
 /// Returns `true` if `node_id` is a strict descendant of `scope`
@@ -1027,11 +1094,12 @@ fn matches_compound(
     node_id: NodeId,
     compound: &CompoundSelector,
     ctx: &CascadeContext<'_>,
+    budget: &Budget,
 ) -> bool {
     compound
         .parts
         .iter()
-        .all(|simple| matches_simple(doc, node_id, simple, ctx))
+        .all(|simple| matches_simple(doc, node_id, simple, ctx, budget))
 }
 
 /// Check if a single simple selector matches a node.
@@ -1040,6 +1108,7 @@ fn matches_simple(
     node_id: NodeId,
     simple: &SimpleSelector,
     ctx: &CascadeContext<'_>,
+    budget: &Budget,
 ) -> bool {
     let elem = match &doc.nodes[node_id].kind {
         NodeKind::Element(e) => e,
@@ -1057,11 +1126,11 @@ fn matches_simple(
         },
         SimpleSelector::Not(inner_list) => !inner_list
             .iter()
-            .any(|compound| matches_compound(doc, node_id, compound, ctx)),
+            .any(|compound| matches_compound(doc, node_id, compound, ctx, budget)),
         SimpleSelector::Is(inner_list) | SimpleSelector::Where(inner_list) => inner_list
             .iter()
-            .any(|compound| matches_compound(doc, node_id, compound, ctx)),
-        SimpleSelector::Has(relative_list) => matches_has(doc, node_id, relative_list, ctx),
+            .any(|compound| matches_compound(doc, node_id, compound, ctx, budget)),
+        SimpleSelector::Has(relative_list) => matches_has(doc, node_id, relative_list, ctx, budget),
         SimpleSelector::Attribute { name, op, value } => {
             match_attribute(elem, name, op, value.as_deref())
         },
@@ -1209,57 +1278,44 @@ fn matches_has(
     node_id: NodeId,
     list: &[(Combinator, super::super::parser::Selector)],
     ctx: &CascadeContext<'_>,
+    budget: &Budget,
 ) -> bool {
+    // Depth-first scan of `root`'s subtree (excluding `root`), charging
+    // every visited node to the shared budget.
+    let any_in_subtree = |root: NodeId, matched: &dyn Fn(NodeId) -> bool| -> bool {
+        let mut stack: Vec<NodeId> = doc.nodes[root].children.clone();
+        while let Some(nid) = stack.pop() {
+            if !budget.tick() {
+                return false;
+            }
+            if matches!(doc.nodes[nid].kind, NodeKind::Element(_)) && matched(nid) {
+                return true;
+            }
+            stack.extend(doc.nodes[nid].children.iter().copied());
+        }
+        false
+    };
     list.iter().any(|(combinator, sel)| {
         let scope = Some(node_id);
         let sc = Some(combinator);
-        let matched = |cand: NodeId| matches_selector_scoped(doc, cand, sel, ctx, scope, sc);
+        let matched =
+            |cand: NodeId| matches_selector_scoped(doc, cand, sel, ctx, scope, sc, budget);
         match combinator {
-            Combinator::Descendant | Combinator::Child => {
-                // DFS the subject's subtree. For Descendant the scope
-                // bounding is sufficient; for Child the scope_combinator
-                // check in matches_selector_scoped verifies the leftmost
-                // matched compound is a direct child of the subject.
-                let mut stack: Vec<NodeId> = doc.nodes[node_id].children.clone();
-                while let Some(nid) = stack.pop() {
-                    if matches!(doc.nodes[nid].kind, NodeKind::Element(_)) && matched(nid) {
-                        return true;
-                    }
-                    stack.extend(doc.nodes[nid].children.iter().copied());
-                }
-                false
-            },
-            Combinator::AdjacentSibling => {
-                if let Some(sib) = next_sibling_element(doc, node_id) {
-                    if matched(sib) {
-                        return true;
-                    }
-                    if sel.parts.len() > 1 {
-                        let mut stack: Vec<NodeId> = doc.nodes[sib].children.clone();
-                        while let Some(nid) = stack.pop() {
-                            if matches!(doc.nodes[nid].kind, NodeKind::Element(_)) && matched(nid) {
-                                return true;
-                            }
-                            stack.extend(doc.nodes[nid].children.iter().copied());
-                        }
-                    }
-                }
-                false
-            },
+            // For Descendant the scope bounding is sufficient; for Child
+            // the leading-combinator check verifies the leftmost matched
+            // compound is a direct child of the subject.
+            Combinator::Descendant | Combinator::Child => any_in_subtree(node_id, &matched),
+            Combinator::AdjacentSibling => next_sibling_element(doc, node_id).is_some_and(|sib| {
+                matched(sib) || (sel.parts.len() > 1 && any_in_subtree(sib, &matched))
+            }),
             Combinator::GeneralSibling => {
                 let mut sib = next_sibling_element(doc, node_id);
                 while let Some(sid) = sib {
-                    if matched(sid) {
-                        return true;
+                    if !budget.tick() {
+                        return false;
                     }
-                    if sel.parts.len() > 1 {
-                        let mut stack: Vec<NodeId> = doc.nodes[sid].children.clone();
-                        while let Some(nid) = stack.pop() {
-                            if matches!(doc.nodes[nid].kind, NodeKind::Element(_)) && matched(nid) {
-                                return true;
-                            }
-                            stack.extend(doc.nodes[nid].children.iter().copied());
-                        }
+                    if matched(sid) || (sel.parts.len() > 1 && any_in_subtree(sid, &matched)) {
+                        return true;
                     }
                     sib = next_sibling_element(doc, sid);
                 }
