@@ -4,7 +4,7 @@
 # List of enabled agents (claude is always enabled by default)
 enabled_agents:
   - claude      # Anthropic's Claude Code (host-only)
-  - gemini      # Google's Gemini CLI (host-only)
+  - gemini      # Google's Gemini CLI (host-only; second-opinion MCP consultation)
   - opencode    # SST's OpenCode (containerized)
   - crush       # Charm Bracelet's Crush AI (containerized)
 
@@ -16,9 +16,9 @@ agent_priorities:
     - claude
     - opencode
 
-  # For reviewing PRs
+  # For reviewing PRs (pr-validation.yml runs the Claude security/quality
+  # reviews plus an OpenRouter general review; Gemini is consultation-only)
   pr_reviews:
-    - gemini
     - claude
 
   # For implementing code fixes

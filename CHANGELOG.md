@@ -128,6 +128,32 @@ traits and crate layering, dead-code removal, and docs that match the code.
   `js_max_exec_ms` / `js_memory_limit_bytes` (2 s / 64 MiB desktop, 500 ms /
   8 MiB PSP); the heap limit is verified to be enforced.
 
+### Design-vs-code gaps (wave 5)
+
+- The **corrupted skin's glitch effect** now runs on the desktop shell:
+  each drawn frame is distorted and then restored, so nothing drifts.
+  **(breaking)** `CorruptedModifiers::apply` returns a `CorruptionUndo`;
+  the unused `SkinEffect` / `CorruptedEffect` / `ScanlineEffect` are gone.
+- **Boot scripts run at boot:** `oasis_core::script::run_boot_scripts` runs
+  `/home/.profile` and then `/etc/startup.sh`, and the desktop shell calls it.
+  **(breaking)** Replaces `run_startup`.
+- **(breaking)** Removed things that never did anything: the skin
+  `features.toml` `command_categories` key (now an unknown-key lint warning),
+  and FFI callback codes `FILE_ACCESS` / `LOGIN` / `NETWORK_SEND` /
+  `PLUGIN_LOAD`, which never fired. Registering an unknown code is now
+  ignored with a warning.
+- Removed `oasis_core::apps::BUILTIN_APP_TITLES`; the icon and label checks
+  for every built-in title now run in `oasis-apps` against the real registry.
+- Review fixes:
+  - Start-menu clicks in the right padding launched an item from the next
+    row; they now hit the same item the hover highlight shows.
+  - Cron names can no longer escape `/etc/cron`.
+  - `ftp start 0` no longer stops the server.
+  - Duplicate plugin app titles stay owned by the first plugin.
+  - WM: underflow, focus and fullscreen fixes.
+  - Vector: fixes for a zero blink interval and for gradients under group
+    alpha.
+
 ### Docs and site
 
 - `docs/design.md` v3.0; ADRs re-reviewed (dates, DOM free list, PSP crate
