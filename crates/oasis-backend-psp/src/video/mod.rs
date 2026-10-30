@@ -247,6 +247,11 @@ pub const VIDEO_TEX_STRIDE: u32 = 512;
 /// 480×272 (17 macroblock rows) fits without a reallocation.
 pub const VIDEO_TEX_DEFAULT_ROWS: u32 = 272;
 
+/// Rows tried when the [`VIDEO_TEX_DEFAULT_ROWS`] allocation fails: the
+/// 512×256 buffer earlier builds always used (32 KB smaller), so a tight
+/// heap never loses video for streams up to 256 rows.
+pub const VIDEO_TEX_FALLBACK_ROWS: u32 = 256;
+
 /// Rows of CSC output for a picture `height` px tall. The ME converts whole
 /// macroblocks, so it writes `ceil16(height)` rows.
 pub const fn video_tex_rows(height: u32) -> u32 {

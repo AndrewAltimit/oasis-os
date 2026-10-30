@@ -177,7 +177,10 @@ order.
   buffer width); the height is `ceil16(rows)` (the ME converts whole
   macroblocks) plus one zeroed guard row, *not* padded to a power of
   two: `max(272, episode height)` rows, so PSP-native 480×272 takes
-  557 KB instead of a 1 MB 512×512 buffer. Only the size declared to
+  557 KB instead of a 1 MB 512×512 buffer. If that allocation fails, the
+  tune falls back to the old 512×256 size (logged `[TV] WARN: ... fell
+  back to 512x256` in `eboot.log`), so streams up to 256 rows keep their
+  video. Only the size declared to
   `sceGuTexImage` is rounded up to a power of two; the GE fetches just
   the texels the UVs address, and the blit's V range is clamped to the
   content height (`set_video_content_size`), so it never reads past the

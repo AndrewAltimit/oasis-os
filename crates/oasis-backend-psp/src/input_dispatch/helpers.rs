@@ -371,16 +371,29 @@ pub(super) fn dispatch_tv_confirm(
                 // reallocates, taller if the selected episode needs it
                 // (capped at 480: taller streams play audio-only). The
                 // buffer is reused by later tunes when big enough.
-                let rows = ep
-                    .height
-                    .clamp(oasis_backend_psp::video::VIDEO_TEX_DEFAULT_ROWS, 480);
+                use oasis_backend_psp::video::{
+                    VIDEO_TEX_DEFAULT_ROWS, VIDEO_TEX_FALLBACK_ROWS, VIDEO_TEX_STRIDE, vlog_force,
+                };
+                let rows = ep.height.clamp(VIDEO_TEX_DEFAULT_ROWS, 480);
                 if backend
-                    .alloc_video_texture(oasis_backend_psp::video::VIDEO_TEX_STRIDE, rows)
-                    .is_none()
+                    .alloc_video_texture(VIDEO_TEX_STRIDE, rows)
+                    .is_some()
                 {
-                    oasis_backend_psp::video::vlog_force(
-                        "[TV] WARN: video texture alloc failed; video will be audio-only",
-                    );
+                    vlog_force(&format!("[TV] video texture: {VIDEO_TEX_STRIDE}x{rows}"));
+                } else if backend
+                    .alloc_video_texture(VIDEO_TEX_STRIDE, VIDEO_TEX_FALLBACK_ROWS)
+                    .is_some()
+                {
+                    // Not enough room for the full size: keep the pre-272-row
+                    // 512x256 buffer so streams up to 256 rows still get
+                    // video (taller ones go audio-only instead of overrunning
+                    // it, see `NalDecoder::try_init`).
+                    vlog_force(&format!(
+                        "[TV] WARN: {VIDEO_TEX_STRIDE}x{rows} video texture alloc failed; \
+                         fell back to {VIDEO_TEX_STRIDE}x{VIDEO_TEX_FALLBACK_ROWS}"
+                    ));
+                } else {
+                    vlog_force("[TV] WARN: video texture alloc failed; video will be audio-only");
                 }
                 if !oasis_backend_psp::network::is_net_initialized() {
                     dbg_log("[TV] calling ensure_net_init_pub...");
