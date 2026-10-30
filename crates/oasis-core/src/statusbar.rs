@@ -523,6 +523,11 @@ impl StatusBar {
             let cx = screen_w as i32 - clock_w - 6;
             ensure_text(sdi, "bar_clock", cx, text_y, font_small, at.bar.clock_color);
             if let Ok(obj) = sdi.get_mut("bar_clock") {
+                // `ensure_text` places the object only when creating it;
+                // the width changes with the text (the date arrives after
+                // the first frame, "Oct 9" vs "Oct 30") and with the skin.
+                obj.x = cx;
+                obj.y = text_y;
                 obj.set_text(&self.clock_display);
                 obj.visible = true;
                 if at.bar.text_shadow {
@@ -553,6 +558,8 @@ impl StatusBar {
                     at.bar.version_color,
                 );
                 if let Ok(obj) = sdi.get_mut("bar_version") {
+                    obj.x = ver_x;
+                    obj.y = text_y;
                     obj.set_text(ver);
                     obj.visible = true;
                     if at.bar.text_shadow {
@@ -1136,6 +1143,36 @@ mod tests {
         if let Ok(obj) = sdi.get("bar_clock") {
             assert!(!obj.visible);
         }
+    }
+
+    /// The clock is created on the first frame showing "00:00" and only
+    /// later gets the date; it must stay right-aligned as it grows
+    /// (it used to keep the x it was created at and run off the screen).
+    #[test]
+    fn clock_stays_right_aligned_when_text_grows() {
+        let mut bar = StatusBar::new();
+        let mut sdi = SdiRegistry::new();
+        let at = crate::active_theme::ActiveTheme::default();
+        let feat = crate::skin::SkinFeatures {
+            clock_in_bottombar: false,
+            ..Default::default()
+        };
+        bar.update_sdi(&mut sdi, &at, &feat);
+        let first_x = sdi.get("bar_clock").unwrap().x;
+        let time = SystemTime {
+            year: 2026,
+            month: 10,
+            day: 30,
+            hour: 0,
+            minute: 57,
+            second: 0,
+        };
+        bar.update_info(Some(&time), None);
+        bar.update_sdi(&mut sdi, &at, &feat);
+        let obj = sdi.get("bar_clock").unwrap();
+        let w = text_px(obj.text.as_deref().unwrap(), at.font_small);
+        assert!(obj.x < first_x);
+        assert_eq!(obj.x + w, at.screen_w as i32 - 6);
     }
 
     #[test]
