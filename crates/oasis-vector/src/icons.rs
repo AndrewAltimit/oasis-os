@@ -38,11 +38,6 @@ impl IconDef {
     pub fn as_op(&self, x: i32, y: i32) -> VectorOp {
         VectorOp::translated(x, y, self.ops.clone())
     }
-
-    /// Convert this icon into a `VectorOp::Group` with opacity.
-    pub fn as_op_alpha(&self, x: i32, y: i32, alpha: u8) -> VectorOp {
-        VectorOp::group_with(x, y, alpha, self.ops.clone())
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -397,294 +392,15 @@ pub fn icon_data_animated(color: Color, led_color: Color, led_visible: bool) -> 
     }
 }
 
-/// Wireframe sphere with animated longitude line rotation.
-///
-/// The main circle and cross lines are static; the inner ellipse rotates.
-pub fn wireframe_sphere_animated(radius: u16, color: Color, angle: f32) -> IconDef {
-    let r = radius as i32;
-    let cx = r;
-    let cy = r;
-    let full_circle = core::f32::consts::TAU;
-    let inner_r = radius / 3;
-
-    // Compute two rotating "longitude" line endpoints
-    let (sin, cos) = (angle.sin(), angle.cos());
-    let line_x1 = cx + (inner_r as f32 * cos) as i32;
-    let line_y1 = cy - r;
-    let line_x2 = cx - (inner_r as f32 * cos) as i32;
-    let line_y2 = cy + r;
-
-    IconDef {
-        name: "wireframe_sphere",
-        ops: vec![
-            // Main circle
-            VectorOp::StrokeArc {
-                cx,
-                cy,
-                radius,
-                start_angle: 0.0,
-                end_angle: full_circle,
-                width: 1,
-                color,
-            },
-            // Horizontal cross line
-            VectorOp::Line {
-                x1: cx - r,
-                y1: cy,
-                x2: cx + r,
-                y2: cy,
-                width: 1,
-                color,
-            },
-            // Vertical cross line
-            VectorOp::Line {
-                x1: cx,
-                y1: cy - r,
-                x2: cx,
-                y2: cy + r,
-                width: 1,
-                color,
-            },
-            // Rotating inner ellipse (approximated as offset vertical line)
-            VectorOp::Line {
-                x1: line_x1,
-                y1: line_y1,
-                x2: line_x2,
-                y2: line_y2,
-                width: 1,
-                color,
-            },
-            // Second rotating line (perpendicular)
-            VectorOp::Line {
-                x1: cx + (inner_r as f32 * sin) as i32,
-                y1: cy - r,
-                x2: cx - (inner_r as f32 * sin) as i32,
-                y2: cy + r,
-                width: 1,
-                color,
-            },
-        ],
-        width: (r * 2) as u32,
-        height: (r * 2) as u32,
-    }
-}
-
 // ---------------------------------------------------------------------------
 // Background elements
 // ---------------------------------------------------------------------------
-
-/// Wireframe sphere (spinning globe effect).
-///
-/// Circle + horizontal ellipse + vertical ellipse + cross lines.
-/// Based on altimit3.svg wireframe sphere at (390, 130) r=38.
-pub fn wireframe_sphere(radius: u16, color: Color) -> IconDef {
-    let r = radius as i32;
-    let cx = r;
-    let cy = r;
-    // Approximate ellipse with arcs -- horizontal ellipse is a flat arc
-    let full_circle = core::f32::consts::TAU;
-    IconDef {
-        name: "wireframe_sphere",
-        ops: vec![
-            // Main circle
-            VectorOp::StrokeArc {
-                cx,
-                cy,
-                radius,
-                start_angle: 0.0,
-                end_angle: full_circle,
-                width: 1,
-                color,
-            },
-            // Horizontal cross line
-            VectorOp::Line {
-                x1: cx - r,
-                y1: cy,
-                x2: cx + r,
-                y2: cy,
-                width: 1,
-                color,
-            },
-            // Vertical cross line
-            VectorOp::Line {
-                x1: cx,
-                y1: cy - r,
-                x2: cx,
-                y2: cy + r,
-                width: 1,
-                color,
-            },
-            // Horizontal ellipse approximation (flattened arc top half)
-            VectorOp::StrokeArc {
-                cx,
-                cy,
-                radius: radius / 3,
-                start_angle: 0.0,
-                end_angle: full_circle,
-                width: 1,
-                color,
-            },
-        ],
-        width: (r * 2) as u32,
-        height: (r * 2) as u32,
-    }
-}
-
-/// Active indicator tab — thin vertical bar drawn to the left of the active
-/// sidebar icon.
-///
-/// Based on altimit3.svg: rect x=0 y=4 width=3 height=38.
-pub fn active_indicator(height: u32, color: Color) -> VectorOp {
-    VectorOp::FillRect {
-        x: 0,
-        y: 0,
-        w: 3,
-        h: height,
-        color,
-    }
-}
-
-/// Floating glass polygon for background decoration.
-///
-/// Returns a translucent polygon with the given vertices and opacity.
-pub fn glass_polygon(points: Vec<(i32, i32)>, color: Color, alpha: u8) -> VectorOp {
-    VectorOp::FillPolygon {
-        points,
-        color: color.with_alpha(alpha),
-    }
-}
 
 /// Grid pattern overlay — renders a sparse grid of thin lines.
 ///
 /// Based on altimit3.svg grid pattern (30px spacing, white at 5% opacity).
 pub fn grid_overlay(width: u32, height: u32, spacing: u32, color: Color) -> Vec<VectorOp> {
-    let mut ops = Vec::new();
-    // Vertical lines
-    let mut x = spacing as i32;
-    while x < width as i32 {
-        ops.push(VectorOp::Line {
-            x1: x,
-            y1: 0,
-            x2: x,
-            y2: height as i32,
-            width: 1,
-            color,
-        });
-        x += spacing as i32;
-    }
-    // Horizontal lines
-    let mut y = spacing as i32;
-    while y < height as i32 {
-        ops.push(VectorOp::Line {
-            x1: 0,
-            y1: y,
-            x2: width as i32,
-            y2: y,
-            width: 1,
-            color,
-        });
-        y += spacing as i32;
-    }
-    ops
-}
-
-/// Radar sweep arc for HUD/status display.
-///
-/// A filled arc wedge that represents a scanning sweep.
-pub fn radar_sweep(
-    cx: i32,
-    cy: i32,
-    radius: u16,
-    sweep_angle: f32,
-    rotation: f32,
-    color: Color,
-) -> VectorOp {
-    VectorOp::FillArc {
-        cx,
-        cy,
-        radius,
-        start_angle: rotation,
-        end_angle: rotation + sweep_angle,
-        color,
-    }
-}
-
-/// Equalizer bar — single vertical bar for audio visualizer.
-pub fn eq_bar(x: i32, y: i32, width: u32, height: u32, color: Color) -> VectorOp {
-    VectorOp::FillRect {
-        x,
-        y,
-        w: width,
-        h: height,
-        color,
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Sidebar layout helper
-// ---------------------------------------------------------------------------
-
-/// Standard Altimit sidebar icon set with default positioning.
-///
-/// Returns a scene-ready group of 6 icons laid out vertically in a 70px-wide
-/// sidebar, matching the altimit3.svg layout (480x272).
-///
-/// `color` is the default inactive icon color. `active_color` is for the
-/// active icon. `active_index` selects which icon (0-5) is highlighted.
-pub fn altimit_sidebar(
-    color: Color,
-    active_color: Color,
-    led_color: Color,
-    active_index: usize,
-) -> Vec<VectorOp> {
-    let icons: Vec<IconDef> = vec![
-        icon_the_world(color),
-        icon_mailer(color),
-        icon_news(color),
-        icon_accessory(color, Color::BLACK),
-        icon_audio(color),
-        icon_data(color, led_color),
-    ];
-
-    let labels = ["THE WORLD", "MAILER", "NEWS", "ACCESSORY", "AUDIO", "DATA"];
-    let y_offsets = [5, 48, 91, 134, 177, 220];
-    let icon_x = 23; // left padding for icon within sidebar
-
-    let mut ops = Vec::new();
-    for (i, (icon, label)) in icons.iter().zip(labels.iter()).enumerate() {
-        let y = y_offsets[i];
-        let is_active = i == active_index;
-        let c = if is_active { active_color } else { color };
-
-        // Active indicator bar
-        if is_active {
-            ops.push(VectorOp::translated(
-                0,
-                y + 4,
-                vec![active_indicator(38, active_color)],
-            ));
-        }
-
-        // Icon (recolored if active)
-        let mut icon_ops = icon.ops.clone();
-        if is_active {
-            for op in &mut icon_ops {
-                op.recolor(c);
-            }
-        }
-        ops.push(VectorOp::translated(icon_x, y, icon_ops));
-
-        // Label text
-        ops.push(VectorOp::Text {
-            text: label.to_string(),
-            x: 34,
-            y: y + 38,
-            font_size: 8,
-            color: c,
-        });
-    }
-
-    ops
+    crate::backgrounds::grid(width, height, spacing, color)
 }
 
 #[cfg(test)]
@@ -765,12 +481,8 @@ mod tests {
     }
 
     #[test]
-    fn test_wireframe_sphere() {
-        let sphere = wireframe_sphere(38, Color::WHITE);
-        assert_eq!(sphere.name, "wireframe_sphere");
-        assert_eq!(sphere.width, 76);
-        assert_eq!(sphere.height, 76);
-        assert_eq!(sphere.ops.len(), 4);
+    fn test_grid_overlay_zero_spacing_is_empty() {
+        assert!(grid_overlay(100, 100, 0, Color::WHITE).is_empty());
     }
 
     #[test]
@@ -778,54 +490,5 @@ mod tests {
         let grid = grid_overlay(100, 100, 30, Color::WHITE);
         // 3 vertical lines (30, 60, 90) + 3 horizontal lines (30, 60, 90) = 6
         assert_eq!(grid.len(), 6);
-    }
-
-    #[test]
-    fn test_altimit_sidebar() {
-        let ops = altimit_sidebar(
-            Color::rgb(136, 136, 136),
-            Color::rgb(85, 204, 221),
-            Color::rgb(85, 204, 221),
-            0,
-        );
-        // 6 icons * (icon group + label text) + 1 active indicator = 13
-        assert_eq!(ops.len(), 13);
-    }
-
-    #[test]
-    fn test_altimit_sidebar_different_active() {
-        let ops = altimit_sidebar(
-            Color::rgb(136, 136, 136),
-            Color::rgb(85, 204, 221),
-            Color::rgb(85, 204, 221),
-            3,
-        );
-        // Same count: 6 icons + 6 labels + 1 active indicator
-        assert_eq!(ops.len(), 13);
-    }
-
-    #[test]
-    fn test_glass_polygon() {
-        let op = glass_polygon(vec![(50, 272), (200, -20), (350, 272)], Color::WHITE, 38);
-        let VectorOp::FillPolygon { color, points } = op else {
-            panic!("expected FillPolygon, got {op:?}");
-        };
-        assert_eq!(color.a, 38);
-        assert_eq!(points.len(), 3);
-    }
-
-    #[test]
-    fn test_radar_sweep() {
-        let op = radar_sweep(100, 100, 50, 0.5, 1.0, Color::rgb(255, 128, 0));
-        let VectorOp::FillArc {
-            start_angle,
-            end_angle,
-            ..
-        } = op
-        else {
-            panic!("expected FillArc, got {op:?}");
-        };
-        assert!((start_angle - 1.0).abs() < 0.001);
-        assert!((end_angle - 1.5).abs() < 0.001);
     }
 }

@@ -85,16 +85,6 @@ pub struct TileGeometry {
     pub geometry: Geometry,
 }
 
-// Geometry doesn't derive PartialEq/Eq upstream, so we add a local
-// impl so TileGeometry can derive them for tests.
-impl PartialEq for Geometry {
-    fn eq(&self, other: &Self) -> bool {
-        self.x == other.x && self.y == other.y && self.w == other.w && self.h == other.h
-    }
-}
-
-impl Eq for Geometry {}
-
 // ── Tiling manager ──────────────────────────────────────────────────
 
 /// Manages tiling layout for a set of windows.
@@ -105,7 +95,6 @@ impl Eq for Geometry {}
 pub struct TilingManager {
     layout: TilingLayout,
     config: TilingConfig,
-    enabled: bool,
     /// Window IDs that are forced floating (excluded from tiling).
     floating_overrides: HashSet<String>,
 }
@@ -116,7 +105,6 @@ impl TilingManager {
         Self {
             layout: TilingLayout::MasterStack,
             config: TilingConfig::default(),
-            enabled: true,
             floating_overrides: HashSet::new(),
         }
     }
@@ -126,7 +114,6 @@ impl TilingManager {
         Self {
             layout,
             config: TilingConfig::default(),
-            enabled: true,
             floating_overrides: HashSet::new(),
         }
     }
@@ -139,22 +126,6 @@ impl TilingManager {
     /// Return the active layout algorithm.
     pub fn layout(&self) -> TilingLayout {
         self.layout
-    }
-
-    /// Enable or disable tiling.
-    pub fn set_enabled(&mut self, enabled: bool) {
-        self.enabled = enabled;
-    }
-
-    /// Whether tiling is currently enabled.
-    pub fn is_enabled(&self) -> bool {
-        self.enabled
-    }
-
-    /// Toggle the enabled state, returning the new value.
-    pub fn toggle(&mut self) -> bool {
-        self.enabled = !self.enabled;
-        self.enabled
     }
 
     /// Borrow the tiling configuration.
@@ -288,7 +259,7 @@ impl TilingManager {
             let sy = uy + (per_h + gap) as i32 * idx as i32;
             // Last window absorbs rounding remainder.
             let sh = if idx == stack_count - 1 {
-                (uy + uh as i32 - sy) as u32
+                remainder(uy, uh, sy)
             } else {
                 per_h
             };
@@ -333,13 +304,13 @@ impl TilingManager {
 
             // Last column absorbs horizontal remainder.
             let w = if col == cols - 1 {
-                (ux + uw as i32 - cx) as u32
+                remainder(ux, uw, cx)
             } else {
                 cell_w
             };
             // Last row absorbs vertical remainder.
             let h = if row == rows - 1 {
-                (uy + uh as i32 - cy) as u32
+                remainder(uy, uh, cy)
             } else {
                 cell_h
             };
@@ -368,7 +339,7 @@ impl TilingManager {
             let cx = ux + (col_w + gap) as i32 * idx as i32;
             // Last column absorbs rounding remainder.
             let w = if idx == n - 1 {
-                (ux + uw as i32 - cx) as u32
+                remainder(ux, uw, cx)
             } else {
                 col_w
             };
@@ -401,7 +372,7 @@ impl TilingManager {
             let ry = uy + (row_h + gap) as i32 * idx as i32;
             // Last row absorbs rounding remainder.
             let h = if idx == n - 1 {
-                (uy + uh as i32 - ry) as u32
+                remainder(uy, uh, ry)
             } else {
                 row_h
             };
@@ -444,6 +415,13 @@ impl Default for TilingManager {
 }
 
 // ── Helpers ─────────────────────────────────────────────────────────
+
+/// Pixels left between `pos` and the far edge of the span `start..start+len`
+/// (the last tile absorbs the rounding remainder). Zero, not a wrapped
+/// `u32`, when an overcrowded layout puts `pos` past the edge.
+fn remainder(start: i32, len: u32, pos: i32) -> u32 {
+    (i64::from(start) + i64::from(len) - i64::from(pos)).max(0) as u32
+}
 
 /// Integer ceiling of the square root of `n`.
 fn ceil_sqrt(n: u32) -> u32 {
@@ -845,29 +823,6 @@ mod tests {
         assert!(tiles.is_empty());
     }
 
-    // ── Toggle enabled/disabled ─────────────────────────────────────
-
-    #[test]
-    fn toggle_enabled() {
-        let mut mgr = TilingManager::new();
-        assert!(mgr.is_enabled());
-        let new_state = mgr.toggle();
-        assert!(!new_state);
-        assert!(!mgr.is_enabled());
-        let new_state = mgr.toggle();
-        assert!(new_state);
-        assert!(mgr.is_enabled());
-    }
-
-    #[test]
-    fn set_enabled() {
-        let mut mgr = TilingManager::new();
-        mgr.set_enabled(false);
-        assert!(!mgr.is_enabled());
-        mgr.set_enabled(true);
-        assert!(mgr.is_enabled());
-    }
-
     // ── cycle_layout ────────────────────────────────────────────────
 
     #[test]
@@ -967,10 +922,9 @@ mod tests {
     // ── Default trait ───────────────────────────────────────────────
 
     #[test]
-    fn default_manager_is_master_stack_enabled() {
+    fn default_manager_is_master_stack() {
         let mgr = TilingManager::default();
         assert_eq!(mgr.layout(), TilingLayout::MasterStack);
-        assert!(mgr.is_enabled());
     }
 
     // ── with_layout constructor ─────────────────────────────────────
@@ -1040,5 +994,26 @@ mod tests {
                 h: 200,
             }
         );
+    }
+
+    #[test]
+    fn overcrowded_layouts_never_wrap_tile_sizes() {
+        // With more gaps than area, the last tile's start lies past the
+        // usable area; its "remainder" size must clamp to the minimum
+        // instead of wrapping to ~4 billion pixels.
+        let ids: Vec<String> = (0..41).map(|i| format!("w{i}")).collect();
+        let ids: Vec<&str> = ids.iter().map(String::as_str).collect();
+        for layout in [
+            TilingLayout::MasterStack,
+            TilingLayout::Grid,
+            TilingLayout::Columns,
+            TilingLayout::Rows,
+        ] {
+            let mgr = TilingManager::with_layout(layout);
+            for tile in mgr.compute_layout(&ids, 100, 100) {
+                let g = tile.geometry;
+                assert!(g.w <= 100 && g.h <= 100, "{layout:?}: {g:?}");
+            }
+        }
     }
 }
