@@ -1,6 +1,6 @@
 # Contributing
 
-This repository does not accept external contributions. All code changes are authored by AI agents (Claude, Gemini, Codex, OpenCode, Crush) operating under human direction.
+This repository does not accept external contributions. All code changes are authored by AI agents (primarily Claude Code; see [AGENTS.md](AGENTS.md)) operating under human direction.
 
 ## No External Contributions
 
@@ -14,6 +14,6 @@ Feature requests, guidance, consulting, and support are not provided. This polic
 
 - **Fork it.** Clone the repo and adapt it however you want. This is the recommended path if you need features that don't exist here.
 - **Study it.** The codebase demonstrates an embeddable OS framework in edition 2024 Rust with pluggable rendering backends (SDL3, WASM, UE5, PSP hardware), a window manager, HTML/CSS/Gemini browser engine, 17-skin theming system, virtual filesystem, and command interpreter.
-- **Use it.** You are free to use any component under the terms of the [MIT License](LICENSE).
+- **Use it.** You are free to use any component under the terms of either license it is dual-licensed under: [MIT](LICENSE-MIT) or the [Unlicense](LICENSE).
 
 You do so entirely at your own risk and without any expectation of support, maintenance, or acknowledgment from the maintainer.
