@@ -4,7 +4,9 @@
 //! from the `sceDisplaySetFrameBuf` hook arguments). No GU, no VRAM alloc --
 //! just pixel writes + dcache flush.
 //!
-//! Pixel format: ABGR 8888 (PSP native 32-bit).
+//! Pixel format: PSM_8888, the PSP's native 32-bit format. Colors are the
+//! `u32` `0xAABBGGRR` (hence the SDK's "ABGR" name); little-endian, so the
+//! bytes in memory are R, G, B, A.
 
 use crate::config;
 use crate::font;
@@ -71,7 +73,8 @@ pub unsafe fn draw_string(fb: *mut u32, stride: u32, x: u32, y: u32, text: &[u8]
 
 /// Draw a filled rectangle with alpha blending.
 ///
-/// `color` is ABGR 8888. The alpha channel controls blend intensity.
+/// `color` is `0xAABBGGRR`; its alpha byte is ignored. Blend intensity is
+/// the user's overlay opacity setting (`config::get_opacity`).
 ///
 /// # Safety
 /// `fb` must point to a valid framebuffer.
@@ -193,14 +196,15 @@ pub unsafe fn blit_rgb_rect(
     }
 }
 
-/// Color constants (ABGR 8888).
+/// Color constants (`0xAABBGGRR`).
 pub mod colors {
     /// White.
     pub const WHITE: u32 = 0xFFFFFFFF;
     /// Black.
     pub const BLACK: u32 = 0xFF000000;
-    /// Semi-transparent black for overlay background.
-    pub const OVERLAY_BG: u32 = 0xFF1A1A2E;
+    /// Dark navy overlay background, RGB `#1A1A2E` (note the reversed byte
+    /// order); translucency comes from `fill_rect_alpha`.
+    pub const OVERLAY_BG: u32 = 0xFF2E1A1A;
     /// Accent blue.
     pub const ACCENT: u32 = 0xFFFF9933;
     /// Highlight / cursor color.
