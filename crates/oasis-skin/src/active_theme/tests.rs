@@ -1137,3 +1137,82 @@ alpha = 120
         oasis_types::shadow::Shadow::elevation(1).layers.len()
     );
 }
+
+// -- Derived text contrast --
+
+fn ratio(a: Color, b: Color) -> f64 {
+    oasis_types::color::contrast_ratio(a, b)
+}
+
+#[test]
+fn readable_on_keeps_colors_that_already_pass() {
+    let fg = Color::rgb(230, 230, 230);
+    let bg = Color::rgb(20, 20, 20);
+    assert_eq!(crate::theme::readable_on(fg, bg, 4.5), fg);
+}
+
+#[test]
+fn readable_on_lifts_failing_colors_to_the_minimum() {
+    for (fg, bg) in [
+        (Color::rgb(255, 255, 255), Color::rgb(0, 255, 0)),
+        (Color::rgb(0, 0, 0), Color::rgb(0, 0, 128)),
+        (Color::rgb(131, 148, 150), Color::rgb(42, 161, 152)),
+        (Color::rgb(120, 120, 120), Color::rgb(128, 128, 128)),
+    ] {
+        let out = crate::theme::readable_on(fg, bg, 4.5);
+        assert!(ratio(out, bg) >= 4.5, "{fg:?} on {bg:?} -> {out:?}");
+        assert_eq!(out.a, 255);
+    }
+}
+
+#[test]
+fn text_on_accent_is_readable() {
+    // White text on a bright green primary used to derive a 1.37:1 label.
+    let skin: SkinTheme = toml::from_str("text = \"#FFFFFF\"\nprimary = \"#00FF00\"\n").unwrap();
+    let ui = skin.to_ui_theme();
+    assert!(ratio(ui.text_on_accent, ui.accent) >= 4.5);
+    // A pair that already passes is untouched.
+    let skin: SkinTheme = toml::from_str("text = \"#FFFFFF\"\nprimary = \"#003399\"\n").unwrap();
+    assert_eq!(skin.to_ui_theme().text_on_accent, Color::rgb(255, 255, 255));
+}
+
+#[test]
+fn derived_selected_text_is_readable_on_light_apps() {
+    // macOS-like: light app surface + blue primary. `lighten(primary)`
+    // selection text used to measure 2.18:1.
+    let toml = "background = \"#ECECEC\"\nprimary = \"#007AFF\"\n\
+                [app_overrides]\napp_bg = \"#FFFFFF\"\n";
+    let skin: SkinTheme = toml::from_str(toml).unwrap();
+    let at = ActiveTheme::from_skin(&skin);
+    let surface = crate::theme::composite_over(at.app.bg, skin.background_color());
+    let sel = crate::theme::composite_over(at.app.selected_bg, surface);
+    assert!(ratio(at.app.selected_text, sel) >= 3.0);
+    assert!(ratio(at.app.text, surface) >= 4.5);
+}
+
+#[test]
+fn explicit_app_and_bar_colors_are_respected() {
+    let toml = "background = \"#ECECEC\"\nprimary = \"#007AFF\"\n\
+                [app_overrides]\napp_bg = \"#FFFFFF\"\nselected_text = \"#EEEEEE\"\n\
+                text_color = \"#DDDDDD\"\n\
+                [bar_overrides]\nbar_bg = \"#FFFFFF\"\nurl_color = \"#F0F0F0\"\n";
+    let skin: SkinTheme = toml::from_str(toml).unwrap();
+    let at = ActiveTheme::from_skin(&skin);
+    assert_eq!(at.app.selected_text, Color::rgb(0xEE, 0xEE, 0xEE));
+    assert_eq!(at.app.text, Color::rgb(0xDD, 0xDD, 0xDD));
+    assert_eq!(at.bar.url_color, Color::rgb(0xF0, 0xF0, 0xF0));
+}
+
+#[test]
+fn derived_bar_text_is_readable_on_its_bar() {
+    // Paper-like: dim text on a light bar measured 2.89:1 before.
+    let toml = "background = \"#FAF8F0\"\ndim_text = \"#8C8C84\"\n\
+                [bar_overrides]\nbar_bg = \"#F0EDE4\"\nstatusbar_bg = \"#F0EDE4\"\n";
+    let skin: SkinTheme = toml::from_str(toml).unwrap();
+    let at = ActiveTheme::from_skin(&skin);
+    let bg = skin.background_color();
+    let bar = crate::theme::bar_backdrop(at.bar.bg, None, None, bg);
+    assert!(ratio(at.bar.url_color, bar) >= 3.0);
+    let status = crate::theme::bar_backdrop(at.bar.statusbar_bg, None, None, bg);
+    assert!(ratio(at.bar.battery_color, status) >= 3.0);
+}
