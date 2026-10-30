@@ -37,7 +37,7 @@ All re-exported from `oasis_wm` (and from `oasis_core::wm`).
 | `WindowConfig` | Creation parameters: `id`, `title`, optional `x`/`y` (cascade when `None`), content `width`/`height`, `window_type`, `always_on_top`, `modal` |
 | `WindowType` | `AppWindow`, `Dialog` (modal, centered), `Panel` (docked), `FloatingWidget` (always on top, no min/max), `Fullscreen` (no chrome) |
 | `WindowState` | `Normal`, `Minimized`, `Maximized` |
-| `Window`, `WindowId`, `Geometry` | A managed window, its id (`Rc<str>`), and an `x, y, w, h` rect |
+| `Window`, `WindowId`, `Geometry` | A managed window (`geometry()` / `set_geometry()` read and write its outer rect), its id (`Rc<str>`), and an `x, y, w, h` rect |
 | `TitleLayout` | Result of `Window::title_layout`: button group placement, title position, truncated title |
 | `WmTheme` | Visual parameters (titlebar colors / gradients, button glyphs and colors, `button_side`, `title_align`, radii, shadows, `maximize_top_inset` / `maximize_bottom_inset`) |
 | `WmEvent` | What `handle_input` did: `WindowFocused`, `WindowMoved`, `WindowResized`, `WindowClosed`, `WindowMinimized`, `WindowMaximized`, `WindowRestored`, `ContentClick(id, x, y)` (content-local), `DesktopClick(x, y)`, `None` |
@@ -67,12 +67,18 @@ Lifecycle (all take `&mut SdiRegistry`):
 |--------|--------|
 | `create_window(&WindowConfig, sdi) -> Result<WindowId>` | Create chrome objects, cascade position (pulled back so the frame stays on screen), focus the window |
 | `close_window(id, sdi)` / `close_all(sdi)` | Remove the window; with motion on, its chrome animates out before the SDI objects are destroyed |
-| `minimize_window` / `maximize_window` / `restore_window` | State changes; maximize fills the work area |
+| `minimize_window` / `maximize_window` / `restore_window` | State changes; maximize fills the work area. Focus passes to the topmost *visible* window when the active one is minimized or closed. A window minimized while maximized is restored maximized (`Window::minimized_from_maximized`); the next restore returns it to its pre-maximize geometry. Maximizing a minimized window shows it again |
 | `enter_fullscreen` / `exit_fullscreen` | Kiosk fullscreen for an app window |
-| `focus_window(id, sdi)` | Bring to front and mark active |
+| `focus_window(id, sdi)` | Bring to front and mark active (does not restore a minimized window; hosts call `restore_window` first) |
 | `cycle_focus(forward, sdi) -> Option<WindowId>` | Alt+Tab behavior, skipping minimized windows |
 | `move_window` / `resize_window` | Programmatic geometry changes |
-| `hide_all_window_sdi` / `show_all_window_sdi` | Hide or show every window's objects (e.g. when switching to the fullscreen terminal) |
+| `hide_all_window_sdi` / `show_all_window_sdi` | Hide or show every window's objects (e.g. when switching to the fullscreen terminal); `show_all` keeps a kiosk window's chrome hidden |
+
+Every programmatic state or geometry change (close, minimize, maximize,
+restore, fullscreen, snap / unsnap, `resize_window`, `cycle_tiling`,
+`fit_to_screen`) ends an in-progress pointer drag of the affected
+window: a drag recomputes the geometry from where it started on every
+cursor move, so it would otherwise undo the change.
 
 Input:
 
@@ -82,6 +88,14 @@ Input:
   6 px toggles maximize), resize handles, content (`ContentClick` with
   content-local coordinates), then desktop. Clicking an unfocused window
   focuses it first. Modal windows block input to windows below.
+- Resize handles are `resize_handle_size`-wide bands inside the frame
+  edges (corners win over edges; titlebar buttons and the titlebar win
+  over handles). On a frame narrower than two bands the nearer edge
+  wins, so the right edge of a tiny window stays grabbable. A resize
+  never shrinks a window below `80 x 60` content pixels, or below its
+  current size if it is already smaller; dragged edges stop at the
+  screen edge. A titlebar drag keeps at least 20 px of the frame (or
+  the whole frame, if narrower) and the titlebar's top on screen.
 - A maximized window has no resize handles (the convention on Windows,
   macOS and GNOME: its size is the work area's). Its frame border hits
   the content instead, clamped to the nearest content pixel, so a
@@ -138,6 +152,12 @@ maps keys to them before routing keys to the focused app:
 | Super+Down or Ctrl+Alt+Down | Restore a maximized/snapped window, otherwise minimize |
 | Super+T or Ctrl+Alt+T | Cycle tiling: master/stack, grid, columns, rows, monocle, then back to floating (pre-tiling geometry restored) |
 
+Without gaps the tiling layouts cover the work area exactly, at any
+size: the last tile of a row or column absorbs the rounding remainder,
+and a partial last grid row spreads its windows across the full width
+(three windows give two on top, one full-width below). Snap halves and
+quarters split odd sizes the same way (`w / 2` and `w - w / 2`).
+
 Every combo needs Ctrl, Alt or Super, so plain Tab, arrows and letters
 still reach text-entry windows. Ctrl+Alt+Arrow exists because desktop
 OSes often swallow Super+Arrow.
@@ -156,7 +176,10 @@ frame (or `tick_animations_by(delta_ms, sdi)` for deterministic stepping):
 
 Animations are visual only: logical geometry and state change
 immediately, and any logical geometry change (maximize, snap, resize)
-finishes a running animation. `is_animating()` tells idle-frame elision
+finishes a running animation. A new animation that interrupts another
+(minimize while opening, restore while minimizing, close while opening)
+starts from the geometry the window is drawn at, not from its logical
+geometry, so nothing jumps. `is_animating()` tells idle-frame elision
 to keep drawing (see [writing-apps.md](writing-apps.md#frames-and-idle-elision)).
 Motion is off by default so tests, the screenshot tool and other
 headless hosts stay instant; the desktop app enables it unless the skin
@@ -175,6 +198,26 @@ sets `reduced_motion`.
 
 ## Tests
 
-Unit tests live next to each module; `crates/oasis-wm/tests/wm_integration.rs`
-drives full create / drag / snap / close sequences against an
-`SdiRegistry`.
+Unit tests live next to each module (the larger suites in sibling
+`tests.rs` files: `manager/tests.rs`, `drag_resize/tests.rs`,
+`tiling/tests.rs`, `window/tests.rs`).
+`crates/oasis-wm/tests/wm_integration.rs` drives full create / drag /
+snap / close sequences against an `SdiRegistry`, and
+`crates/oasis-wm/tests/wm_e2e.rs` drives the WM through pointer input
+only, including a seeded random-session fuzz that checks the min-size,
+on-screen and focus invariants.
+
+## Source layout
+
+| Module | Contents |
+|--------|----------|
+| `manager/` | `WindowManager` struct, `WmEvent`, `move_window` / `resize_window`; `input.rs` (event dispatch), `query.rs` (read accessors) |
+| `window/` | `Window`, `WindowConfig`, `WindowType`, `WindowState`, `Geometry`, title layout; `id.rs` (`WindowId`), `theme.rs` (`WmTheme`) |
+| `lifecycle.rs` | create / close / minimize / maximize / restore / fullscreen |
+| `drag_resize/` | Pointer drag + resize state machine, `compute_resize`, `clamp_position`, edge magnetism |
+| `hit_test.rs` | Topmost-first hit testing, resize-handle bands |
+| `focus.rs`, `stacking.rs` | Focus, Alt+Tab cycling, z-order groups (normal < always-on-top < modal) |
+| `window_ops.rs`, `snap.rs`, `tiling/` | Snapping, keyboard snapping, tiling layouts |
+| `motion.rs`, `animation.rs` | Window animations on top of `AnimationManager` |
+| `sdi_objects.rs`, `render.rs` | Chrome SDI objects, layout, visibility; clipped drawing |
+| `desktops.rs` | `DesktopManager` (virtual desktops; listings sorted by id) |

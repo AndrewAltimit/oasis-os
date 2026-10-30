@@ -17,7 +17,7 @@ consume identically.
 | `VectorOp` | `op.rs` | Flat enum of drawing operations. Serializable, no trait objects. |
 | `VectorScene` | `scene.rs` | Width, height, `Vec<VectorOp>` paint list. |
 | `IconDef` | `icons.rs` | Named icon: `ops`, `width`, `height`, helpers `recolor`, `as_op`. |
-| `IconCategory` | `icon_set.rs` | Semantic category derived from app titles via `from_app_title`. |
+| `IconCategory` | `icon_set/mod.rs` | Semantic category derived from app titles via `from_app_title`. |
 | `AnimClock` | `anim.rs` | Frame counter + monotonic seconds, oscillators, easings. |
 | `BackgroundLayer`, `BackgroundScene` | `background.rs` | Data-driven decorative layers (grids, spheres, radar, waves, shaders). |
 
@@ -57,7 +57,8 @@ frame rebuilds whatever ops the caller wants to draw.
 
 ## Built-in icon catalog
 
-All in `crates/oasis-vector/src/icons.rs` and `icon_set.rs`.
+All in `crates/oasis-vector/src/icons.rs` and `icon_set/` (`outline.rs`,
+`solid.rs`, `pixel.rs`; shared helpers and `ops_bounds` in `mod.rs`).
 
 ### Altimit dashboard set (22×22)
 
@@ -110,18 +111,28 @@ paints them after the SDI pass with `statusbar::render_status_glyphs`.
 `icons.rs` defines `grid_overlay(w, h, spacing, color)` — the sparse
 Altimit grid (same lines as the `grid` background layer). The animated
 background elements (wireframe sphere, radar sweep, rings, EQ bars,
-waves, ...) live in `backgrounds.rs` and are driven by `BackgroundScene`.
+waves, ...) live in the crate-private `backgrounds.rs` and are driven by
+`BackgroundScene`.
 
 ## Animation model
 
 `AnimClock` (`anim.rs`) is the single time source:
 
-- `frame: u32` — wrapping frame counter, advanced by `tick_frame()`.
-- `time_s: f32` — monotonic seconds, advanced by `tick_dt(ms)` for variable
+- `frame()` — wrapping frame counter, advanced by `tick_frame()`.
+- `time_s()` — monotonic seconds, advanced by `tick_dt(ms)` for variable
   timestep or implicitly by `tick_frame` at 1/60 s per tick.
+- `AnimClock::from_frame(n)` — a clock at frame `n` of a fixed 60 fps
+  timeline (what the shell's vector overlay builds every frame).
+
+Time is accumulated in `f64` internally: an `f32` accumulator stops
+resolving the 1/60 s step after a few days of uptime (at 2^18 s its spacing
+is 1/32 s, so animations ran at double speed). The oscillators and `angle`
+reduce their phase in `f64` before narrowing.
 
 Oscillators (`anim.rs`):
 
+- `angle(rad_per_s, phase) -> f32` — constant-speed rotation angle, reduced
+  modulo a full turn (used by rotating background layers).
 - `sine(freq, phase) -> f32` — `sin(TAU * freq * time + phase)`, range -1..1.
 - `sine_norm(freq, phase) -> f32` — same, mapped to 0..1.
 - `sawtooth(period_s, phase) -> f32` — wrapping 0..1 ramp (negative
@@ -140,8 +151,9 @@ Per-frame helpers (`anim.rs`):
   per-slot phase.
 - `pulse_alpha(frame, speed, min_alpha)` — oscillating alpha.
 - `blink_visible(frame, interval)` — 2/3 on, 1/3 off duty cycle
-  (`interval == 0` = always visible).
-- `rotate_point`, `rotate_rect` — rotation around a centre.
+  (`interval` 0 or 1 = always visible; at least one frame on otherwise).
+- `rotate_point`, `rotate_rect` — rotation around a centre (results are
+  rounded, so a half turn of `(10, 0)` lands on `(-10, 0)`).
 
 The model is **frame-driven** in the sense that animations are pure functions
 of `(frame, params)` — there is no tweening engine and no event queue. Drop a

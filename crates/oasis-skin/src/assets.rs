@@ -96,8 +96,9 @@ impl SkinAsset {
         })
     }
 
-    /// Whether both dimensions are powers of two. PSP GU textures require
-    /// power-of-two dimensions; desktop backends do not care.
+    /// Whether both dimensions are powers of two. PSP GU textures are
+    /// power-of-two; the PSP backend pads NPOT images up on upload (wasting
+    /// the padding in VRAM), and desktop backends do not care.
     pub fn is_power_of_two(&self) -> bool {
         self.width.is_power_of_two() && self.height.is_power_of_two()
     }

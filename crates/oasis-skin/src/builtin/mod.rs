@@ -324,6 +324,102 @@ mod tests {
         );
     }
 
+    /// Advisory WCAG contrast misses the built-in skins keep on purpose:
+    /// `(skin, pair, why)`. Everything else `skin lint` reports on a shipped
+    /// skin is a bug (in `skins/` or in the validator) and fails
+    /// [`all_builtin_skins_lint_clean`]. Entries must still fire, so a fixed
+    /// pair has to be removed from this list.
+    const ACCEPTED_CONTRAST: &[(&str, &str, &str)] = &[
+        (
+            "corrupted",
+            "text on background",
+            "glitch aesthetic: washed-out phosphor text",
+        ),
+        ("corrupted", "dim_text on background", "glitch aesthetic"),
+        (
+            "corrupted",
+            "app text on window content",
+            "glitch aesthetic",
+        ),
+        (
+            "corrupted",
+            "terminal output on app background",
+            "glitch aesthetic",
+        ),
+        (
+            "corrupted",
+            "button text on button background",
+            "glitch aesthetic",
+        ),
+        (
+            "retro-cga",
+            "button text on button background",
+            "fixed 4-color CGA palette",
+        ),
+        (
+            "solarized",
+            "dim_text on background",
+            "canonical base01 on base03",
+        ),
+        (
+            "solarized",
+            "button text on button background",
+            "canonical base0 on base02",
+        ),
+        // win95 / xp: `background` is the desktop wallpaper; body text is
+        // drawn on the gray / cream app surface (checked separately).
+        (
+            "win95",
+            "text on background",
+            "base text never sits on the teal desktop",
+        ),
+        (
+            "win95",
+            "dim_text on background",
+            "base text never sits on the teal desktop",
+        ),
+        (
+            "win95",
+            "error on background",
+            "errors render on the gray app surface",
+        ),
+        (
+            "xp",
+            "error on background",
+            "errors render on the cream app surface",
+        ),
+    ];
+
+    /// `skin lint` must report every built-in skin as clean, apart from the
+    /// documented [`ACCEPTED_CONTRAST`] misses.
+    #[test]
+    fn all_builtin_skins_lint_clean() {
+        let mut failures = Vec::new();
+        let mut fired = vec![false; ACCEPTED_CONTRAST.len()];
+        for name in builtin_names() {
+            let skin = load_builtin(name).expect("built-in skin loads");
+            for w in skin.validate() {
+                let accepted = ACCEPTED_CONTRAST.iter().position(|(s, pair, _)| {
+                    s == name && w.starts_with(&format!("contrast: {pair} is"))
+                });
+                match accepted {
+                    Some(i) => fired[i] = true,
+                    None => failures.push(format!("{name}: {w}")),
+                }
+            }
+        }
+        for (i, (skin, pair, _)) in ACCEPTED_CONTRAST.iter().enumerate() {
+            if !fired[i] {
+                failures.push(format!("stale ACCEPTED_CONTRAST entry: {skin} / {pair}"));
+            }
+        }
+        assert!(
+            failures.is_empty(),
+            "skin lint warnings:\n{}",
+            failures.join("\n")
+        );
+    }
+
     #[test]
     fn contrast_checks_clock_on_its_actual_bar() {
         // macOS draws the clock in its dark dock-style bottom bar.

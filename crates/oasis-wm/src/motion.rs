@@ -20,6 +20,7 @@ use oasis_sdi::SdiRegistry;
 
 use super::animation::{AnimationFrame, AnimationKind};
 use super::manager::WindowManager;
+use super::sdi_objects::set_window_visible;
 use super::window::{Geometry, Window, WindowState};
 
 /// Longest frame delta fed to the animations (keeps a stalled frame from
@@ -35,15 +36,6 @@ fn shrunk(g: Geometry) -> Geometry {
         y: g.y + (g.h - h) as i32 / 2,
         w,
         h,
-    }
-}
-
-fn geometry_of(w: &Window) -> Geometry {
-    Geometry {
-        x: w.x,
-        y: w.y,
-        w: w.outer_w,
-        h: w.outer_h,
     }
 }
 
@@ -119,7 +111,12 @@ impl WindowManager {
 
     /// Start the open animation for a freshly created window.
     pub(crate) fn animate_open(&mut self, id: &str, sdi: &mut SdiRegistry) {
-        let Some(end) = self.windows.iter().find(|w| w.id == id).map(geometry_of) else {
+        let Some(end) = self
+            .windows
+            .iter()
+            .find(|w| w.id == id)
+            .map(Window::geometry)
+        else {
             return;
         };
         self.start_window_animation(AnimationKind::Open, id, shrunk(end), end, sdi);
@@ -127,30 +124,54 @@ impl WindowManager {
 
     /// Start the minimize animation (shrinking towards the bottom edge,
     /// where taskbars live). Returns `false` when motion is disabled.
+    ///
+    /// An interrupted animation (minimizing a window that is still opening
+    /// or restoring) continues from where the window is drawn instead of
+    /// jumping back to its full geometry first.
     pub(crate) fn animate_minimize(&mut self, id: &str, sdi: &mut SdiRegistry) -> bool {
-        let Some(start) = self.windows.iter().find(|w| w.id == id).map(geometry_of) else {
+        let Some(logical) = self
+            .windows
+            .iter()
+            .find(|w| w.id == id)
+            .map(Window::geometry)
+        else {
             return false;
         };
-        let end = self.minimized_target(start);
+        let start = self.animating_geometry(id).unwrap_or(logical);
+        let end = self.minimized_target(logical);
         self.start_window_animation(AnimationKind::Minimize, id, start, end, sdi)
     }
 
-    /// Start the restore-from-minimized animation.
-    pub(crate) fn animate_unminimize(&mut self, id: &str, sdi: &mut SdiRegistry) {
-        let Some(end) = self.windows.iter().find(|w| w.id == id).map(geometry_of) else {
+    /// Start the restore-from-minimized animation. `from` is where the
+    /// window was drawn when the restore began (a minimize animation still
+    /// in flight); `None` starts from the minimized target.
+    pub(crate) fn animate_unminimize(
+        &mut self,
+        id: &str,
+        from: Option<Geometry>,
+        sdi: &mut SdiRegistry,
+    ) {
+        let Some(end) = self
+            .windows
+            .iter()
+            .find(|w| w.id == id)
+            .map(Window::geometry)
+        else {
             return;
         };
-        let start = self.minimized_target(end);
+        let start = from.unwrap_or_else(|| self.minimized_target(end));
         self.start_window_animation(AnimationKind::Restore, id, start, end, sdi);
     }
 
     /// Move a window into the closing list and start its close animation.
+    /// `from` is the window's drawn geometry if another animation was in
+    /// flight (closing a still-opening window shrinks from where it is).
     /// Returns `false` (window untouched) when motion is disabled.
-    pub(crate) fn animate_close(&mut self, window: &Window) -> bool {
+    pub(crate) fn animate_close(&mut self, window: &Window, from: Option<Geometry>) -> bool {
         if !self.motion_enabled || window.state == WindowState::Minimized {
             return false;
         }
-        let start = geometry_of(window);
+        let start = from.unwrap_or_else(|| window.geometry());
         if !self
             .anim
             .start_animation(AnimationKind::Close, &window.id, start, shrunk(start))
@@ -246,8 +267,7 @@ impl WindowManager {
         let alpha = (frame.alpha.clamp(0.0, 1.0) * 255.0).round() as u8;
         set_window_alpha(&ghost, alpha, sdi);
         self.anim_visual.retain(|(id, _)| *id != ghost.id);
-        self.anim_visual
-            .push((ghost.id.clone(), geometry_of(&ghost)));
+        self.anim_visual.push((ghost.id.clone(), ghost.geometry()));
     }
 
     /// Final state for a window whose animation ended (or was cut short).
@@ -264,11 +284,17 @@ impl WindowManager {
         self.layout_window_sdi(window, sdi);
         set_window_alpha(window, 255, sdi);
         if window.state == WindowState::Minimized {
-            for suffix in window.sdi_suffixes() {
-                if let Ok(obj) = sdi.get_mut(&window.sdi_name(suffix)) {
-                    obj.visible = false;
-                }
-            }
+            set_window_visible(window, false, sdi);
+        }
+    }
+
+    /// The geometry `id` is drawn at mid-animation, or `None` when it has
+    /// no animation in flight (then it is drawn at its logical geometry).
+    pub(crate) fn animating_geometry(&self, id: &str) -> Option<Geometry> {
+        if self.anim.is_animating(id) {
+            self.visual_geometry(id)
+        } else {
+            None
         }
     }
 
@@ -451,6 +477,61 @@ mod tests {
         assert!(!wm.is_animating());
         assert_eq!(frame_rect(&sdi, "a"), (0, 0, 800, 600, 255));
     }
+    // -- Interrupted animations continue from the drawn geometry --------
+
+    #[test]
+    fn minimize_during_open_continues_from_drawn_geometry() {
+        let (mut wm, mut sdi) = animated_wm();
+        wm.create_window(&cfg("a"), &mut sdi).expect("create");
+        let full_w = wm.get_window("a").expect("a").outer_w;
+        wm.tick_animations_by(40, &mut sdi);
+        let drawn_w = frame_rect(&sdi, "a").2;
+        assert!(drawn_w < full_w);
+        wm.minimize_window("a", &mut sdi).expect("minimize");
+        // The first minimize frame used to jump to the full width.
+        assert_eq!(frame_rect(&sdi, "a").2, drawn_w);
+        wm.tick_animations_by(1000, &mut sdi);
+        assert!(!sdi.get("a.frame").expect("frame").visible);
+    }
+
+    #[test]
+    fn restore_during_minimize_continues_from_drawn_geometry() {
+        let (mut wm, mut sdi) = animated_wm();
+        wm.create_window(&cfg("a"), &mut sdi).expect("create");
+        wm.tick_animations_by(1000, &mut sdi);
+        let full = frame_rect(&sdi, "a");
+        wm.minimize_window("a", &mut sdi).expect("minimize");
+        wm.tick_animations_by(100, &mut sdi);
+        let mid = frame_rect(&sdi, "a");
+        assert!(mid.2 < full.2 && mid.2 > full.2 / 4, "{mid:?}");
+        wm.restore_window("a", &mut sdi).expect("restore");
+        // Used to restart from the quarter-size minimized target.
+        let first = frame_rect(&sdi, "a");
+        assert_eq!(
+            (first.0, first.1, first.2, first.3),
+            (mid.0, mid.1, mid.2, mid.3)
+        );
+        wm.tick_animations_by(1000, &mut sdi);
+        assert_eq!(frame_rect(&sdi, "a"), full);
+        assert_eq!(wm.get_window("a").expect("a").state, WindowState::Normal);
+    }
+
+    #[test]
+    fn close_during_open_shrinks_from_drawn_geometry() {
+        let (mut wm, mut sdi) = animated_wm();
+        wm.create_window(&cfg("a"), &mut sdi).expect("create");
+        wm.tick_animations_by(40, &mut sdi);
+        let drawn_w = frame_rect(&sdi, "a").2;
+        wm.close_window("a", &mut sdi).expect("close");
+        wm.tick_animations_by(0, &mut sdi);
+        assert!(
+            frame_rect(&sdi, "a").2 <= drawn_w,
+            "close grew the window first"
+        );
+        wm.tick_animations_by(1000, &mut sdi);
+        assert!(!sdi.contains("a.frame"));
+    }
+
     #[test]
     fn minimizing_a_zero_width_window_does_not_underflow() {
         let (mut wm, mut sdi) = animated_wm();

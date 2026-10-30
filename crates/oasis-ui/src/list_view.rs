@@ -61,7 +61,23 @@ impl<T> ListView<T> {
 
     /// Total content height.
     pub fn content_height(&self) -> u32 {
-        self.items.len() as u32 * self.item_height
+        u32::try_from(self.items.len())
+            .unwrap_or(u32::MAX)
+            .saturating_mul(self.item_height)
+    }
+
+    /// Largest valid `scroll_offset` for a `viewport_h`-pixel viewport.
+    pub fn max_scroll(&self, viewport_h: u32) -> i32 {
+        crate::layout::max_scroll(self.content_height(), viewport_h)
+    }
+
+    /// Scroll by `delta` pixels (mouse wheel, page keys), clamped to
+    /// `0..=max_scroll(viewport_h)`.
+    pub fn scroll_by(&mut self, delta: i32, viewport_h: u32) {
+        self.scroll_offset = self
+            .scroll_offset
+            .saturating_add(delta)
+            .clamp(0, self.max_scroll(viewport_h));
     }
 
     /// Scroll to make the given index visible.
@@ -78,32 +94,25 @@ impl<T> ListView<T> {
     pub fn draw_at(&self, ctx: &mut DrawContext<'_>, x: i32, y: i32, w: u32, h: u32) -> Result<()> {
         ctx.backend.push_clip_rect(x, y, w, h)?;
 
+        // `item_height` is a public field: guard a zero set after `new`.
+        let ih = self.item_height.max(1);
         let result: Result<()> = (|| {
-            let first = (self.scroll_offset / self.item_height as i32).max(0) as usize;
+            let first = (self.scroll_offset / ih as i32).max(0) as usize;
             // Exact visible count: items that fit plus one for
             // a partially visible trailing item.
-            let visible = h / self.item_height + u32::from(!h.is_multiple_of(self.item_height)) + 1;
-            let last = (first + visible as usize).min(self.items.len());
+            let visible = h / ih + u32::from(!h.is_multiple_of(ih)) + 1;
+            let last = first.saturating_add(visible as usize).min(self.items.len());
 
             for i in first..last {
-                let item_y = y + (i as i32 * self.item_height as i32) - self.scroll_offset;
+                let item_y = y + (i as i32 * ih as i32) - self.scroll_offset;
                 let selected = self.selected == Some(i);
                 let hovered = self.hovered == Some(i);
 
                 if let Some(fill) = WidgetStateColors::row_bg(ctx.theme, selected, hovered) {
-                    ctx.backend
-                        .fill_rect(x, item_y, w, self.item_height, fill)?;
+                    ctx.backend.fill_rect(x, item_y, w, ih, fill)?;
                 }
 
-                (self.render_item)(
-                    &self.items[i],
-                    ctx,
-                    x,
-                    item_y,
-                    w,
-                    self.item_height,
-                    selected,
-                )?;
+                (self.render_item)(&self.items[i], ctx, x, item_y, w, ih, selected)?;
             }
             Ok(())
         })();
@@ -385,5 +394,28 @@ mod tests {
         assert_eq!(lv.index_at(100), None);
         lv.scroll_offset = 40;
         assert_eq!(lv.index_at(0), Some(2));
+    }
+
+    #[test]
+    fn scroll_by_clamps_to_content() {
+        let items: Vec<String> = (0..10).map(|i| i.to_string()).collect();
+        let mut lv = ListView::new(items, 20, dummy_render);
+        lv.scroll_by(1_000, 60);
+        assert_eq!(lv.scroll_offset, 140);
+        lv.scroll_by(-1_000, 60);
+        assert_eq!(lv.scroll_offset, 0);
+        // Everything fits: no scrolling at all.
+        lv.scroll_by(50, 400);
+        assert_eq!(lv.scroll_offset, 0);
+    }
+
+    #[test]
+    fn zero_item_height_set_after_new_does_not_divide_by_zero() {
+        let mut lv = ListView::new(vec!["a".to_string()], 20, dummy_render);
+        lv.item_height = 0;
+        let theme = crate::theme::Theme::dark();
+        let mut backend = crate::test_utils::RecordingBackend::default();
+        let mut ctx = DrawContext::new(&mut backend, &theme);
+        lv.draw(&mut ctx, 0, 0, 50, 50).unwrap();
     }
 }

@@ -181,12 +181,24 @@ impl MenuStyle {
 }
 
 /// Layout parameters (pixel sizes).
+const BAR_PAD_X: i32 = 6;
 const LABEL_PAD_X: i32 = 8;
 const LABEL_CHAR_W: i32 = 7;
 const ITEM_H: i32 = 20;
 const ITEM_PAD_X: i32 = 22;
 const DROPDOWN_MIN_W: u32 = 120;
 const SEPARATOR_H: i32 = 6;
+
+/// `(x, y, w, h)` screen rect.
+type Rect = (i32, i32, u32, u32);
+
+/// Whether `(x, y)` lies inside `rect` (right / bottom edges exclusive).
+fn contains((rx, ry, rw, rh): Rect, x: i32, y: i32) -> bool {
+    x >= rx
+        && y >= ry
+        && i64::from(x) < i64::from(rx) + i64::from(rw)
+        && i64::from(y) < i64::from(ry) + i64::from(rh)
+}
 
 impl MenuBar {
     pub fn new(menus: Vec<Menu>) -> Self {
@@ -206,12 +218,18 @@ impl MenuBar {
         self.open.is_some()
     }
 
+    /// Width of a top-level label on the bar (fixed per-character
+    /// advance, so hit boxes never depend on the backend's font).
+    fn label_width(menu: &Menu) -> i32 {
+        menu.label.chars().count() as i32 * LABEL_CHAR_W + LABEL_PAD_X * 2
+    }
+
     /// Compute the X range of a top-level label on the bar.
     /// Returns `(label_x, label_w)` in bar-local coordinates.
     fn label_range(&self, index: usize) -> (i32, i32) {
-        let mut x = 6i32;
+        let mut x = BAR_PAD_X;
         for (i, menu) in self.menus.iter().enumerate() {
-            let w = menu.label.chars().count() as i32 * LABEL_CHAR_W + LABEL_PAD_X * 2;
+            let w = Self::label_width(menu);
             if i == index {
                 return (x, w);
             }
@@ -262,6 +280,39 @@ impl MenuBar {
         (self.dropdown_width(menu), Self::dropdown_height(menu))
     }
 
+    /// The open menu and its drop-down rect `(x, y, w, h)` for a bar at
+    /// `(bar_x, bar_y)` that is `bar_h` tall. `None` when nothing is open
+    /// (or `open` names a menu that no longer exists).
+    fn open_dropdown(&self, bar_x: i32, bar_y: i32, bar_h: u32) -> Option<(&Menu, Rect)> {
+        let idx = self.open?;
+        let menu = self.menus.get(idx)?;
+        let (label_x, _) = self.label_range(idx);
+        let rect = (
+            bar_x + label_x,
+            bar_y + bar_h as i32,
+            self.dropdown_width(menu),
+            Self::dropdown_height(menu),
+        );
+        Some((menu, rect))
+    }
+
+    /// Index of the drop-down entry whose row contains `y`, for a
+    /// drop-down whose top edge is `dd_y`.
+    fn entry_at(menu: &Menu, dd_y: i32, y: i32) -> Option<usize> {
+        let mut item_y = dd_y + 4;
+        for (i, entry) in menu.entries.iter().enumerate() {
+            let h = match entry {
+                MenuEntry::Action { .. } => ITEM_H,
+                MenuEntry::Separator => SEPARATOR_H,
+            };
+            if y >= item_y && y < item_y + h {
+                return Some(i);
+            }
+            item_y += h;
+        }
+        None
+    }
+
     /// Test a click at `(x, y)` against the bar at `(bar_x, bar_y)`
     /// with a given `bar_w, bar_h`. Call on every pointer click
     /// while the bar is visible.
@@ -275,11 +326,11 @@ impl MenuBar {
         bar_h: u32,
     ) -> MenuHit {
         // On the bar itself?
-        if y >= bar_y && y < bar_y + bar_h as i32 && x >= bar_x && x < bar_x + bar_w as i32 {
+        if contains((bar_x, bar_y, bar_w, bar_h), x, y) {
             let rel_x = x - bar_x;
-            let mut cursor = 6i32;
+            let mut cursor = BAR_PAD_X;
             for (i, menu) in self.menus.iter().enumerate() {
-                let w = menu.label.chars().count() as i32 * LABEL_CHAR_W + LABEL_PAD_X * 2;
+                let w = Self::label_width(menu);
                 if rel_x >= cursor && rel_x < cursor + w {
                     return MenuHit::Label(i);
                 }
@@ -290,35 +341,16 @@ impl MenuBar {
         }
 
         // Inside the open drop-down?
-        if let Some(idx) = self.open {
-            let menu = &self.menus[idx];
-            let (label_x, _label_w) = self.label_range(idx);
-            let dd_x = bar_x + label_x;
-            let dd_y = bar_y + bar_h as i32;
-            let dd_w = self.dropdown_width(menu) as i32;
-            let dd_h = Self::dropdown_height(menu) as i32;
-
-            if x >= dd_x && x < dd_x + dd_w && y >= dd_y && y < dd_y + dd_h {
-                let mut item_y = dd_y + 4;
-                for entry in &menu.entries {
-                    match entry {
-                        MenuEntry::Action { id, enabled, .. } => {
-                            if y >= item_y && y < item_y + ITEM_H {
-                                return if *enabled {
-                                    MenuHit::Item { id: id.clone() }
-                                } else {
-                                    MenuHit::NoOp
-                                };
-                            }
-                            item_y += ITEM_H;
-                        },
-                        MenuEntry::Separator => {
-                            item_y += SEPARATOR_H;
-                        },
-                    }
-                }
-                return MenuHit::NoOp;
-            }
+        if let Some((menu, dd)) = self.open_dropdown(bar_x, bar_y, bar_h)
+            && contains(dd, x, y)
+        {
+            return match Self::entry_at(menu, dd.1, y).map(|i| &menu.entries[i]) {
+                Some(MenuEntry::Action {
+                    id, enabled: true, ..
+                }) => MenuHit::Item { id: id.clone() },
+                // Disabled entry, separator or padding.
+                _ => MenuHit::NoOp,
+            };
         }
 
         MenuHit::Outside
@@ -334,34 +366,13 @@ impl MenuBar {
     /// variant is added, call this from the dispatcher to enable live
     /// hover highlights.
     pub fn pointer_move(&mut self, x: i32, y: i32, bar_x: i32, bar_y: i32, bar_h: u32) {
-        self.hovered_item = None;
-        let Some(idx) = self.open else {
-            return;
-        };
-        let menu = &self.menus[idx];
-        let (label_x, _) = self.label_range(idx);
-        let dd_x = bar_x + label_x;
-        let dd_y = bar_y + bar_h as i32;
-        let dd_w = self.dropdown_width(menu) as i32;
-        let dd_h = Self::dropdown_height(menu) as i32;
-        if x < dd_x || x >= dd_x + dd_w || y < dd_y || y >= dd_y + dd_h {
-            return;
-        }
-        let mut item_y = dd_y + 4;
-        for (i, entry) in menu.entries.iter().enumerate() {
-            match entry {
-                MenuEntry::Action { .. } => {
-                    if y >= item_y && y < item_y + ITEM_H {
-                        self.hovered_item = Some(i);
-                        return;
-                    }
-                    item_y += ITEM_H;
-                },
-                MenuEntry::Separator => {
-                    item_y += SEPARATOR_H;
-                },
-            }
-        }
+        self.hovered_item = self
+            .open_dropdown(bar_x, bar_y, bar_h)
+            .filter(|&(_, dd)| contains(dd, x, y))
+            .and_then(|(menu, dd)| {
+                Self::entry_at(menu, dd.1, y)
+                    .filter(|&i| matches!(menu.entries[i], MenuEntry::Action { .. }))
+            });
     }
 
     /// Draw the bar itself (labels only). The host should call this
@@ -380,16 +391,16 @@ impl MenuBar {
         backend.fill_rect(bar_x, bar_y, bar_w, bar_h, style.bar_bg)?;
         backend.fill_rect(bar_x, bar_y + bar_h as i32 - 1, bar_w, 1, style.bar_border)?;
 
-        let mut cursor = 6i32;
+        let mut cursor = BAR_PAD_X;
         for (i, menu) in self.menus.iter().enumerate() {
-            let w = menu.label.chars().count() as i32 * LABEL_CHAR_W + LABEL_PAD_X * 2;
+            let w = Self::label_width(menu);
             let is_open = self.open == Some(i);
             if is_open {
                 backend.fill_rect(
                     bar_x + cursor,
                     bar_y + 2,
                     w as u32,
-                    bar_h - 4,
+                    bar_h.saturating_sub(4),
                     style.label_hot_bg,
                 )?;
             }
@@ -420,15 +431,9 @@ impl MenuBar {
         bar_h: u32,
         style: &MenuStyle,
     ) -> Result<()> {
-        let Some(idx) = self.open else {
+        let Some((menu, (dd_x, dd_y, dd_w, dd_h))) = self.open_dropdown(bar_x, bar_y, bar_h) else {
             return Ok(());
         };
-        let menu = &self.menus[idx];
-        let (label_x, _) = self.label_range(idx);
-        let dd_x = bar_x + label_x;
-        let dd_y = bar_y + bar_h as i32;
-        let dd_w = self.dropdown_width(menu);
-        let dd_h = Self::dropdown_height(menu);
 
         // Win95 raised bezel: 1px white top+left over 1px dark
         // bottom+right over grey fill.
@@ -634,5 +639,40 @@ mod tests {
         assert_eq!(disabled.action_id(), None);
         let sep = MenuEntry::Separator;
         assert_eq!(sep.action_id(), None);
+    }
+
+    #[test]
+    fn stale_open_index_is_harmless() {
+        let mut bar = demo_bar();
+        bar.open = Some(99);
+        assert_eq!(bar.hit_test(10, 30, 0, 0, 300, 20), MenuHit::Outside);
+        bar.pointer_move(10, 30, 0, 0, 20);
+        assert_eq!(bar.hovered_item, None);
+        let mut rec = oasis_test_backend::RecordingBackend::default();
+        bar.draw_dropdown(&mut rec, 0, 0, 20, &MenuStyle::default())
+            .unwrap();
+    }
+
+    #[test]
+    fn short_bar_does_not_underflow() {
+        let mut bar = demo_bar();
+        bar.open = Some(0);
+        let mut rec = oasis_test_backend::RecordingBackend::default();
+        bar.draw_bar(&mut rec, 0, 0, 200, 2, &MenuStyle::default())
+            .unwrap();
+    }
+
+    #[test]
+    fn hover_skips_separators() {
+        let mut bar = demo_bar();
+        bar.open = Some(0);
+        let (dx, dy, _, _) = bar.open_dropdown(0, 0, 20).unwrap().1;
+        // Walk every row of the drop-down: hover only ever lands on actions.
+        for y in dy..dy + 200 {
+            bar.pointer_move(dx + 5, y, 0, 0, 20);
+            if let Some(i) = bar.hovered_item {
+                assert!(matches!(bar.menus[0].entries[i], MenuEntry::Action { .. }));
+            }
+        }
     }
 }

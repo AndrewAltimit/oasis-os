@@ -27,6 +27,9 @@ btn_maximize = "#C0C0C0"
 frame_shadow_level = 0
 frame_border_radius = 0
 button_radius = 0
+# Gray window content, matching `app_overrides.app_bg`: windowed apps draw
+# the black `text_color` straight onto this (the default is near-black).
+content_bg = "#C0C0C0"
 
 [bar_overrides]
 statusbar_bg = "#C0C0C0"
@@ -61,6 +64,10 @@ press_flash_duration = 2
 [app_overrides]
 app_bg = "#C0C0C0"
 text_color = "#000000"
+# The terminal draws on the gray app surface, not the teal desktop: keep
+# its text black / navy (the inherited green defaults are unreadable here).
+terminal_output_color = "#000000"
+terminal_prompt_color = "#000080"
 selection_accent_color = "#00008060"
 
 [start_menu_overrides]

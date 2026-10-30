@@ -9,6 +9,9 @@ use crate::theme::Theme;
 use oasis_types::backend::{Color, SdiBackend, TextureId};
 use oasis_types::error::Result;
 
+/// The truncation marker `SdiText::draw_text_ellipsis` appends.
+const ELLIPSIS: &str = "...";
+
 /// Drawing context wrapping a backend and theme.
 pub struct DrawContext<'a> {
     /// Backend for rendering operations.
@@ -123,9 +126,12 @@ impl<'a> DrawContext<'a> {
     /// The shared form of the widgets' "measure, `layout::center`,
     /// `draw_text`" idiom; positions are exactly
     /// `x + layout::align_x(w, text_w, align)` and
-    /// `y + layout::center(h, measure_text_height(font_size))`. Text wider
-    /// or taller than the rect starts at its left / top edge (it is not
-    /// clipped).
+    /// `y + layout::center(h, measure_text_height(font_size))`.
+    ///
+    /// Text wider than the rect is not allowed to spill out of it: it is
+    /// truncated with `"..."` (via `SdiText::draw_text_ellipsis`) starting
+    /// at the left edge, and dropped entirely when even the ellipsis does
+    /// not fit. Text taller than the rect starts at its top edge.
     pub fn text_in(
         &mut self,
         rect: (i32, i32, u32, u32),
@@ -137,9 +143,17 @@ impl<'a> DrawContext<'a> {
         let (x, y, w, h) = rect;
         let text_w = self.backend.measure_text(text, font_size);
         let text_h = self.backend.measure_text_height(font_size);
-        let tx = x + layout::align_x(w, text_w, align);
         let ty = y + layout::center(h, text_h);
-        self.backend.draw_text(text, tx, ty, font_size, color)
+        if text_w <= w {
+            let tx = x + layout::align_x(w, text_w, align);
+            return self.backend.draw_text(text, tx, ty, font_size, color);
+        }
+        if self.backend.measure_text(ELLIPSIS, font_size) > w {
+            return Ok(());
+        }
+        self.backend
+            .draw_text_ellipsis(text, x, ty, font_size, color, w)
+            .map(|_| ())
     }
 
     /// Draw a rounded box: `bg` fill, then a 1-pixel `border` stroke, both
@@ -236,7 +250,30 @@ mod tests {
     }
 
     #[test]
-    fn text_in_wider_than_rect_starts_at_left_edge() {
+    fn text_in_wider_than_rect_is_ellipsized_from_left_edge() {
+        let theme = Theme::dark();
+        let mut rec = RecordingBackend::default();
+        let w = rec.measure_text("Much...", 12);
+        {
+            let mut ctx = DrawContext::new(&mut rec, &theme);
+            ctx.text_in(
+                (5, 5, w, 2),
+                "Much too wide",
+                12,
+                Color::WHITE,
+                HAlign::Right,
+            )
+            .unwrap();
+        }
+        let t = rec.text_positions();
+        assert_eq!(t.len(), 1);
+        assert_eq!((t[0].1, t[0].2), (5, 5));
+        assert!(t[0].0.ends_with("..."), "got {:?}", t[0].0);
+        assert!(rec.measure_text(t[0].0, 12) <= w);
+    }
+
+    #[test]
+    fn text_in_narrower_than_ellipsis_draws_nothing() {
         let theme = Theme::dark();
         let mut rec = RecordingBackend::default();
         {
@@ -246,11 +283,11 @@ mod tests {
                 "Much too wide",
                 12,
                 Color::WHITE,
-                HAlign::Right,
+                HAlign::Left,
             )
             .unwrap();
         }
-        assert_eq!(text_at(&rec), (5, 5));
+        assert!(rec.text_positions().is_empty());
     }
 
     #[test]

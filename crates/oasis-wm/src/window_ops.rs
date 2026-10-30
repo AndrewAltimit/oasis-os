@@ -24,16 +24,6 @@ use super::snap::{KeyboardSnapDirection, SnapPreview, SnapZone};
 use super::tiling::{TilingLayout, cycle_layout};
 use super::window::{Geometry, Window, WindowState, WindowType};
 
-/// Current geometry of a window as a [`Geometry`].
-fn geometry_of(w: &Window) -> Geometry {
-    Geometry {
-        x: w.x,
-        y: w.y,
-        w: w.outer_w,
-        h: w.outer_h,
-    }
-}
-
 /// `g` shrunk to fit `area` and, unless it already lies fully on the
 /// `sw` x `sh` screen, moved inside `area`.
 fn fit_geometry(g: Geometry, area: Geometry, sw: u32, sh: u32) -> Geometry {
@@ -142,6 +132,7 @@ impl WindowManager {
     /// Returns [`WmEvent::None`] for windows that cannot be snapped
     /// (dialogs, widgets, panels, kiosk or minimized windows).
     pub fn snap_window(&mut self, id: &str, zone: SnapZone, sdi: &mut SdiRegistry) -> WmEvent {
+        self.cancel_drag_of(id);
         let Some(target) = self.snap_zone_geometry(zone) else {
             return WmEvent::None;
         };
@@ -162,9 +153,9 @@ impl WindowManager {
             window
                 .saved_geometry
                 .take()
-                .unwrap_or_else(|| geometry_of(window))
+                .unwrap_or_else(|| window.geometry())
         } else {
-            geometry_of(window)
+            window.geometry()
         };
         window.snap_zone = None;
 
@@ -183,10 +174,7 @@ impl WindowManager {
 
         window.state = WindowState::Normal;
         window.saved_geometry = None;
-        window.x = target.x;
-        window.y = target.y;
-        window.outer_w = target.w;
-        window.outer_h = target.h;
+        window.set_geometry(target);
         window.snap_zone = Some(zone);
         window.pre_snap_geometry = Some(original);
         self.update_sdi_positions(id, sdi);
@@ -197,6 +185,7 @@ impl WindowManager {
     /// Return a snapped window to the geometry it had before snapping.
     /// Returns [`WmEvent::None`] if the window is not snapped.
     pub fn unsnap_window(&mut self, id: &str, sdi: &mut SdiRegistry) -> WmEvent {
+        self.cancel_drag_of(id);
         let Some(window) = self.windows.iter_mut().find(|w| w.id == id) else {
             return WmEvent::None;
         };
@@ -204,10 +193,7 @@ impl WindowManager {
             return WmEvent::None;
         };
         window.snap_zone = None;
-        window.x = g.x;
-        window.y = g.y;
-        window.outer_w = g.w;
-        window.outer_h = g.h;
+        window.set_geometry(g);
         let wid = window.id.clone();
         self.update_sdi_positions(id, sdi);
         WmEvent::WindowRestored(wid)
@@ -292,6 +278,8 @@ impl WindowManager {
     /// leave-kiosk) are fitted the same way, so restoring later also lands
     /// on screen.
     pub fn fit_to_screen(&mut self, sdi: &mut SdiRegistry) {
+        // A drag in progress would resize from its pre-fit geometry.
+        self.drag = None;
         let area = self.work_area();
         let (sw, sh) = (self.screen_w, self.screen_h);
         let ids: Vec<_> = self.windows.iter().map(|w| w.id.clone()).collect();
@@ -328,12 +316,9 @@ impl WindowManager {
             } else if let Some(g) = zone_geom {
                 g
             } else {
-                fit_geometry(geometry_of(w), area, sw, sh)
+                fit_geometry(w.geometry(), area, sw, sh)
             };
-            w.x = target.x;
-            w.y = target.y;
-            w.outer_w = target.w;
-            w.outer_h = target.h;
+            w.set_geometry(target);
             self.update_sdi_positions(id, sdi);
         }
         if let Some(layout) = self.tiling_layout {
@@ -356,6 +341,8 @@ impl WindowManager {
     ///
     /// Returns the new layout (`None` = back to floating).
     pub fn cycle_tiling(&mut self, sdi: &mut SdiRegistry) -> Option<TilingLayout> {
+        // Every tiled window changes geometry under any drag in progress.
+        self.drag = None;
         let next = match self.tiling_layout {
             None => Some(TilingLayout::MasterStack),
             Some(cur) => {
@@ -391,9 +378,9 @@ impl WindowManager {
             };
             if w.pre_tile_geometry.is_none() {
                 w.pre_tile_geometry = Some(if w.state == WindowState::Maximized {
-                    w.saved_geometry.take().unwrap_or_else(|| geometry_of(w))
+                    w.saved_geometry.take().unwrap_or_else(|| w.geometry())
                 } else {
-                    w.pre_snap_geometry.take().unwrap_or_else(|| geometry_of(w))
+                    w.pre_snap_geometry.take().unwrap_or_else(|| w.geometry())
                 });
             }
             w.state = WindowState::Normal;
@@ -426,10 +413,7 @@ impl WindowManager {
             .filter_map(|w| {
                 let g = w.pre_tile_geometry.take()?;
                 if w.state == WindowState::Normal {
-                    w.x = g.x;
-                    w.y = g.y;
-                    w.outer_w = g.w;
-                    w.outer_h = g.h;
+                    w.set_geometry(g);
                 } else {
                     // Minimized / maximized since tiling: restore later.
                     w.saved_geometry = Some(g);
@@ -691,6 +675,60 @@ mod tests {
         assert_eq!(wm.cycle_tiling(&mut sdi), None);
         assert_eq!(geom(&wm, "a"), before_a);
         assert_eq!(geom(&wm, "b"), before_b);
+    }
+
+    /// A resize drag that outlives a tiling switch used to keep resizing
+    /// from the stale tile geometry, undoing the restore (found by the
+    /// `random_pointer_sessions_preserve_wm_invariants` e2e fuzz).
+    #[test]
+    fn tiling_switch_cancels_an_in_progress_resize() {
+        let (mut wm, mut sdi) = setup(&["a"]);
+        let before = geom(&wm, "a");
+        wm.cycle_tiling(&mut sdi);
+        let (x, y, w, h) = geom(&wm, "a");
+        // Grab the tile's bottom-right corner.
+        let (cx, cy) = (x + w as i32 - 1, y + h as i32 - 1);
+        wm.handle_input(&InputEvent::PointerClick { x: cx, y: cy }, &mut sdi);
+        assert!(wm.is_dragging());
+        // Back to floating while the button is still down.
+        while wm.cycle_tiling(&mut sdi).is_some() {}
+        assert!(!wm.is_dragging());
+        assert_eq!(geom(&wm, "a"), before);
+        wm.handle_input(
+            &InputEvent::CursorMove {
+                x: cx - 50,
+                y: cy - 50,
+            },
+            &mut sdi,
+        );
+        assert_eq!(geom(&wm, "a"), before, "stale drag resized the window");
+    }
+
+    #[test]
+    fn maximize_during_drag_ends_the_drag() {
+        let (mut wm, mut sdi) = setup(&["a"]);
+        let (tx, ty, _, th) = wm
+            .get_window("a")
+            .and_then(|w| w.titlebar_rect(wm.theme()))
+            .expect("titlebar");
+        let (px, py) = (tx + 30, ty + th as i32 / 2);
+        wm.handle_input(&InputEvent::PointerClick { x: px, y: py }, &mut sdi);
+        assert!(wm.is_dragging());
+        wm.maximize_window("a", &mut sdi).expect("maximize");
+        wm.handle_input(
+            &InputEvent::CursorMove {
+                x: px + 80,
+                y: py + 60,
+            },
+            &mut sdi,
+        );
+        let w = wm.get_window("a").expect("a");
+        assert_eq!(w.state, WindowState::Maximized);
+        assert_eq!(
+            geom(&wm, "a"),
+            (0, 0, SW, SH),
+            "maximized window was dragged"
+        );
     }
 
     #[test]

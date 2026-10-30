@@ -71,6 +71,13 @@ impl Padding {
     }
 }
 
+/// Largest valid scroll offset for `content` pixels shown through a
+/// `viewport`-pixel window: `content - viewport`, or 0 when it all fits.
+/// Saturates at `i32::MAX` so huge contents never wrap negative.
+pub fn max_scroll(content: u32, viewport: u32) -> i32 {
+    i32::try_from(content.saturating_sub(viewport)).unwrap_or(i32::MAX)
+}
+
 /// Compute centered position of a child within a parent.
 ///
 /// Uses round-up division so that on odd remainders the child is biased

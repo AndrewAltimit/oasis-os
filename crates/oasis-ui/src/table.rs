@@ -94,7 +94,9 @@ impl Table {
         self.selected_row = Some(self.selected_row.map(|i| i.saturating_sub(1)).unwrap_or(0));
     }
 
-    /// Sort the rows by a column.
+    /// Sort the rows by a column (stable; a second call on the same column
+    /// flips the direction). The selection follows the selected row to its
+    /// new position.
     pub fn sort_by_column(&mut self, col: usize) {
         if col >= self.columns.len() {
             return;
@@ -104,14 +106,34 @@ impl Table {
             _ => SortDirection::Ascending,
         };
         self.sort = Some((col, dir));
-        self.rows.sort_by(|a, b| {
-            let ca = a.get(col).map(String::as_str).unwrap_or("");
-            let cb = b.get(col).map(String::as_str).unwrap_or("");
+        let mut order: Vec<usize> = (0..self.rows.len()).collect();
+        let rows = &self.rows;
+        order.sort_by(|&a, &b| {
+            let ca = rows[a].get(col).map(String::as_str).unwrap_or("");
+            let cb = rows[b].get(col).map(String::as_str).unwrap_or("");
             match dir {
                 SortDirection::Ascending => ca.cmp(cb),
                 SortDirection::Descending => cb.cmp(ca),
             }
         });
+        self.selected_row = self
+            .selected_row
+            .and_then(|sel| order.iter().position(|&old| old == sel));
+        let mut old_rows: Vec<Option<Vec<String>>> = std::mem::take(&mut self.rows)
+            .into_iter()
+            .map(Some)
+            .collect();
+        self.rows = order
+            .into_iter()
+            .filter_map(|old| old_rows[old].take())
+            .collect();
+    }
+
+    /// First row drawn: `scroll_offset`, clamped so a stale offset (rows
+    /// removed, viewport grown) never scrolls the table past its last page.
+    fn first_visible_row(&self, h: u32) -> usize {
+        self.scroll_offset
+            .min(self.rows.len().saturating_sub(self.visible_rows(h)))
     }
 
     /// Number of visible rows that fit in the given height.
@@ -198,8 +220,9 @@ impl Widget for Table {
 
         // Data rows.
         let visible = self.visible_rows(h);
-        let end = (self.scroll_offset + visible).min(self.rows.len());
-        for row_idx in self.scroll_offset..end {
+        let first = self.first_visible_row(h);
+        let end = (first + visible).min(self.rows.len());
+        for row_idx in first..end {
             let row = &self.rows[row_idx];
             let is_selected = self.selected_row == Some(row_idx);
 
@@ -376,5 +399,36 @@ mod tests {
             let t = sample_table();
             t.draw(ctx, 0, 0, 200, 100).unwrap();
         });
+    }
+
+    #[test]
+    fn sort_keeps_selection_on_the_same_row() {
+        let mut t = Table::new(vec![Column::new("Name", 50)]);
+        for name in ["carol", "alice", "bob"] {
+            t.add_row(vec![name.into()]);
+        }
+        t.selected_row = Some(0); // "carol"
+        t.sort_by_column(0);
+        assert_eq!(t.rows[0][0], "alice");
+        assert_eq!(t.selected_row, Some(2));
+        assert_eq!(t.rows[t.selected_row.unwrap()][0], "carol");
+        t.sort_by_column(0); // descending
+        assert_eq!(t.rows[t.selected_row.unwrap()][0], "carol");
+        assert_eq!(t.selected_row, Some(0));
+    }
+
+    #[test]
+    fn stale_scroll_offset_still_shows_last_page() {
+        let mut t = Table::new(vec![Column::new("A", 50)]);
+        for i in 0..3 {
+            t.add_row(vec![format!("row{i}")]);
+        }
+        t.show_header = false;
+        t.scroll_offset = 50; // rows were removed since this was set
+        let theme = crate::theme::Theme::dark();
+        let mut backend = crate::test_utils::RecordingBackend::default();
+        let mut ctx = DrawContext::new(&mut backend, &theme);
+        t.draw(&mut ctx, 0, 0, 100, ROW_HEIGHT * 3).unwrap();
+        assert!(backend.has_text("row0") && backend.has_text("row2"));
     }
 }

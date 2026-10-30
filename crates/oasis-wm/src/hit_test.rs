@@ -45,8 +45,13 @@ pub enum HitRegion {
 }
 
 /// Test whether a point (px, py) is inside a rectangle (rx, ry, rw, rh).
+///
+/// The far edges are exclusive and computed in `i64`, so a rectangle near
+/// `i32::MAX` (or wider than `i32::MAX`) cannot wrap around.
 fn point_in_rect(px: i32, py: i32, rx: i32, ry: i32, rw: u32, rh: u32) -> bool {
-    px >= rx && py >= ry && px < rx + rw as i32 && py < ry + rh as i32
+    let (px, py) = (i64::from(px), i64::from(py));
+    let (rx, ry) = (i64::from(rx), i64::from(ry));
+    px >= rx && py >= ry && px < rx + i64::from(rw) && py < ry + i64::from(rh)
 }
 
 /// Perform a hit test against a single window. Returns the first matching
@@ -144,10 +149,26 @@ fn check_resize_handles(window: &Window, x: i32, y: i32, theme: &WmTheme) -> Opt
     let wr = wx + window.outer_w as i32;
     let wb = wy + window.outer_h as i32;
 
-    let in_left = x >= wx && x < wx + handle;
-    let in_right = x >= wr - handle && x < wr;
-    let in_top = y >= wy && y < wy + handle;
-    let in_bottom = y >= wb - handle && y < wb;
+    let mut in_left = x >= wx && x < wx + handle;
+    let mut in_right = x >= wr - handle && x < wr;
+    let mut in_top = y >= wy && y < wy + handle;
+    let mut in_bottom = y >= wb - handle && y < wb;
+
+    // On a frame narrower (or shorter) than two handles the opposite
+    // bands overlap; the nearer edge wins, so the far edge stays
+    // reachable instead of always resolving to the left / top one.
+    if in_left && in_right {
+        let to_left = x - wx;
+        let to_right = wr - 1 - x;
+        in_left = to_left <= to_right;
+        in_right = !in_left;
+    }
+    if in_top && in_bottom {
+        let to_top = y - wy;
+        let to_bottom = wb - 1 - y;
+        in_top = to_top <= to_bottom;
+        in_bottom = !in_top;
+    }
 
     // Corners first (they overlap edges).
     if in_top && in_left {
@@ -536,5 +557,38 @@ mod tests {
         // FloatingWidget should not have minimize/maximize buttons.
         assert!(win.minimize_btn_rect(&theme).is_none());
         assert!(win.maximize_btn_rect(&theme).is_none());
+    }
+
+    /// On a frame narrower / shorter than two handle bands the opposite
+    /// bands overlap; the right and bottom edges must stay grabbable
+    /// (they used to always resolve to West / North).
+    #[test]
+    fn tiny_window_resolves_overlapping_handles_to_nearest_edge() {
+        let theme = WmTheme::default();
+        let mut win = make_window("t", 100, 100, 10, 10);
+        win.outer_w = 8; // < 2 * resize_handle_size (6)
+        win.outer_h = 60;
+        let right = 100 + 8 - 1;
+        let mid_y = 100 + 40;
+        assert_eq!(
+            hit_test(std::slice::from_ref(&win), right, mid_y, &theme),
+            HitRegion::ResizeHandle("t".into(), ResizeEdge::East)
+        );
+        assert_eq!(
+            hit_test(std::slice::from_ref(&win), 100, mid_y, &theme),
+            HitRegion::ResizeHandle("t".into(), ResizeEdge::West)
+        );
+        // The bottom corner of the narrow frame is South-East, not -West.
+        assert_eq!(
+            hit_test(std::slice::from_ref(&win), right, 100 + 59, &theme),
+            HitRegion::ResizeHandle("t".into(), ResizeEdge::SouthEast)
+        );
+    }
+
+    #[test]
+    fn point_in_rect_does_not_wrap_near_i32_max() {
+        // `rx + rw` overflowed i32 and wrapped negative, missing the point.
+        assert!(point_in_rect(i32::MAX - 1, 0, i32::MAX - 10, 0, 100, 10));
+        assert!(point_in_rect(5, 5, 0, 0, u32::MAX, u32::MAX));
     }
 }

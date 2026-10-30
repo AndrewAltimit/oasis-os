@@ -165,11 +165,13 @@ impl FlexLayout {
         let main_total = if is_row { parent_w } else { parent_h };
         let cross_total = if is_row { parent_h } else { parent_w };
 
-        let total_gap = self.gap * children.len().saturating_sub(1) as u32;
+        let total_gap = self
+            .gap
+            .saturating_mul(u32::try_from(children.len() - 1).unwrap_or(u32::MAX));
 
         // First pass: compute fixed/percent sizes and total flex weight.
         let mut sizes: Vec<u32> = Vec::with_capacity(children.len());
-        let mut flex_total_weight = 0u32;
+        let mut flex_total_weight = 0u64;
         let mut consumed = total_gap;
 
         for child in children {
@@ -181,44 +183,54 @@ impl FlexLayout {
             match child.size {
                 FlexSize::Fixed(px) => {
                     sizes.push(px);
-                    consumed += px + margin_main;
+                    consumed = consumed.saturating_add(px).saturating_add(margin_main);
                 },
                 FlexSize::Percent(pct) => {
                     let px = (main_total as f32 * pct / 100.0) as u32;
                     sizes.push(px);
-                    consumed += px + margin_main;
+                    consumed = consumed.saturating_add(px).saturating_add(margin_main);
                 },
                 FlexSize::Flex(weight) => {
                     sizes.push(0); // placeholder
-                    flex_total_weight += weight;
-                    consumed += margin_main;
+                    flex_total_weight += u64::from(weight);
+                    consumed = consumed.saturating_add(margin_main);
                 },
             }
         }
 
         // Second pass: distribute remaining space to flex children.
         let remaining = main_total.saturating_sub(consumed);
-        if let Some(ftw) = std::num::NonZero::new(flex_total_weight) {
+        // Each flex child gets the difference of the rounded-down running
+        // totals, so the shares always sum to exactly `remaining` (three
+        // `flex(1)` children in 100 px are 33 + 33 + 34, not 33 * 3 with a
+        // stray pixel). u128 math keeps `remaining * weight` from wrapping.
+        if flex_total_weight > 0 {
+            let total = flex_total_weight;
+            let mut cum_weight = 0u64;
+            let mut given = 0u128;
             for (i, child) in children.iter().enumerate() {
                 if let FlexSize::Flex(weight) = child.size {
-                    sizes[i] = remaining * weight / ftw;
+                    cum_weight += u64::from(weight);
+                    let upto = u128::from(remaining) * u128::from(cum_weight) / u128::from(total);
+                    sizes[i] = (upto - given) as u32;
+                    given = upto;
                 }
             }
         }
 
         // Compute main-axis starting offset for justify alignment.
-        let total_used: u32 = sizes.iter().sum::<u32>()
-            + total_gap
-            + children
-                .iter()
-                .map(|c| {
-                    if is_row {
-                        c.margin.horizontal()
-                    } else {
-                        c.margin.vertical()
-                    }
-                })
-                .sum::<u32>();
+        let margins = children.iter().map(|c| {
+            if is_row {
+                c.margin.horizontal()
+            } else {
+                c.margin.vertical()
+            }
+        });
+        let total_used = sizes
+            .iter()
+            .copied()
+            .chain(margins)
+            .fold(total_gap, u32::saturating_add);
         let justify_offset = match self.justify {
             HAlign::Left => 0,
             HAlign::Center => main_total.saturating_sub(total_used) / 2,
@@ -227,7 +239,7 @@ impl FlexLayout {
 
         // Third pass: compute final rects.
         let mut results = Vec::with_capacity(children.len());
-        let mut cursor = justify_offset as i32;
+        let mut cursor = sat_i32(justify_offset);
 
         for (i, child) in children.iter().enumerate() {
             let main_size = sizes[i];
@@ -257,11 +269,11 @@ impl FlexLayout {
                     child.margin.left as i32
                 };
 
-            cursor += margin_before;
+            cursor = cursor.saturating_add(margin_before);
 
             let rect = if is_row {
                 ComputedRect {
-                    x: parent_x + cursor,
+                    x: parent_x.saturating_add(cursor),
                     y: parent_y + cross_offset,
                     w: main_size,
                     h: cross_avail,
@@ -269,18 +281,26 @@ impl FlexLayout {
             } else {
                 ComputedRect {
                     x: parent_x + cross_offset,
-                    y: parent_y + cursor,
+                    y: parent_y.saturating_add(cursor),
                     w: cross_avail,
                     h: main_size,
                 }
             };
             results.push(rect);
 
-            cursor += main_size as i32 + margin_after + self.gap as i32;
+            cursor = cursor
+                .saturating_add(sat_i32(main_size))
+                .saturating_add(margin_after)
+                .saturating_add(sat_i32(self.gap));
         }
 
         results
     }
+}
+
+/// `u32` pixel size as an `i32` offset, saturating instead of wrapping.
+fn sat_i32(v: u32) -> i32 {
+    i32::try_from(v).unwrap_or(i32::MAX)
 }
 
 /// A grid layout helper that computes cell positions for a uniform grid.
@@ -345,8 +365,8 @@ impl GridLayout {
             .padding
             .inner_rect(parent_x, parent_y, parent_w, parent_h);
 
-        let total_col_gap = self.col_gap * self.cols.saturating_sub(1);
-        let total_row_gap = self.row_gap * rows.saturating_sub(1);
+        let total_col_gap = self.col_gap.saturating_mul(self.cols.saturating_sub(1));
+        let total_row_gap = self.row_gap.saturating_mul(rows.saturating_sub(1));
         let cell_w = pw.saturating_sub(total_col_gap) / self.cols;
         let cell_h = ph.saturating_sub(total_row_gap) / rows;
 
@@ -931,5 +951,43 @@ mod tests {
         assert_eq!(layout.gap, 0);
         assert_eq!(layout.align_items, VAlign::Top);
         assert_eq!(layout.justify, HAlign::Left);
+    }
+
+    #[test]
+    fn flex_children_fill_the_container_exactly() {
+        let layout = FlexLayout::row().with_gap(1);
+        for w in [100u32, 101, 7, 479, 480] {
+            let kids = [FlexChild::flex(1), FlexChild::flex(1), FlexChild::flex(1)];
+            let rects = layout.compute(0, 0, w, 10, &kids);
+            let last = rects[2];
+            // No stray pixels after the last child, and no overlaps.
+            assert_eq!(last.x + last.w as i32, w as i32, "width {w}: {rects:?}");
+            for pair in rects.windows(2) {
+                assert_eq!(pair[0].x + pair[0].w as i32 + 1, pair[1].x);
+            }
+        }
+        // Weighted: 1:2 of 100 px.
+        let rects =
+            FlexLayout::row().compute(0, 0, 100, 10, &[FlexChild::flex(1), FlexChild::flex(2)]);
+        assert_eq!((rects[0].w, rects[1].w), (33, 67));
+    }
+
+    #[test]
+    fn huge_sizes_and_weights_do_not_overflow() {
+        let kids = [
+            FlexChild::fixed(u32::MAX),
+            FlexChild::flex(u32::MAX),
+            FlexChild::flex(u32::MAX),
+        ];
+        let rects = FlexLayout::row()
+            .with_gap(u32::MAX)
+            .with_justify(HAlign::Center)
+            .compute(0, 0, u32::MAX, 10, &kids);
+        assert_eq!(rects.len(), 3);
+        let rects = FlexLayout::row().compute(0, 0, u32::MAX, 10, &kids[1..]);
+        assert_eq!(
+            u64::from(rects[0].w) + u64::from(rects[1].w),
+            u64::from(u32::MAX)
+        );
     }
 }
