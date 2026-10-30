@@ -1193,3 +1193,14 @@ fn runaway_scripts_are_bounded_inner() {
     let _ = sh.run(&format!("echo {deep_subst}"));
     assert_eq!(sh.ok("echo alive"), "alive");
 }
+
+#[test]
+fn run_passes_script_arguments() {
+    let mut sh = Shell::memory();
+    sh.vfs
+        .write("/tmp/greet.sh", b"echo hello $1 and $2 ($#)")
+        .unwrap();
+    assert_eq!(sh.ok("run /tmp/greet.sh ann bob"), "hello ann and bob (2)");
+    // The caller's positional parameters are restored afterwards.
+    assert_eq!(sh.ok("echo [$1]"), "[]");
+}

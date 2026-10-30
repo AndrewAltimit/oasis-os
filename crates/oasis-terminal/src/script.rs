@@ -659,7 +659,11 @@ impl CommandRegistry {
             return Ok(CommandOutput::Text("(empty script)".to_string()));
         }
         self.script_depth.set(script_depth + 1);
-        let lines = self.run_script_source(&source, env);
+        // `$1..$n` are the arguments after the script path (as advertised
+        // by `run <script> [args...]`; they used to be dropped).
+        let lines = self.with_positional_args(&full_path, &args[1..], || {
+            self.run_script_source(&source, env)
+        });
         self.script_depth.set(script_depth);
         let lines = lines?;
         if lines.is_empty() {

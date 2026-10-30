@@ -272,7 +272,43 @@ impl CommandRegistry {
         }
         self.call_depth.set(depth + 1);
 
-        // Save current positional args and set new ones.
+        let result = self.with_positional_args(name, args, || {
+            // Push a new local variable scope.
+            self.local_scopes.borrow_mut().push(HashMap::new());
+
+            // Execute body as a chain of commands.
+            let result = self.execute(func.body.trim(), env);
+
+            // Clear the return flag so it doesn't propagate to the caller.
+            self.return_flag.set(false);
+
+            // Pop local variable scope and restore saved values.
+            if let Some(scope) = self.local_scopes.borrow_mut().pop() {
+                for (name, saved) in scope {
+                    match saved {
+                        Some(v) => self.set_variable(&name, &v),
+                        None => self.unset_variable(&name),
+                    }
+                }
+            }
+            result
+        });
+
+        // Restore call depth.
+        self.call_depth.set(depth);
+
+        result
+    }
+
+    /// Run `f` with the positional parameters `$0` = `name`, `$1`..`$n` =
+    /// `args` and `$#` = n, restoring the caller's parameters afterwards
+    /// (functions and `run <script> [args...]`).
+    pub(crate) fn with_positional_args<R>(
+        &self,
+        name: &str,
+        args: &[&str],
+        f: impl FnOnce() -> R,
+    ) -> R {
         // Determine prior arg count so we save/restore the full range.
         let saved_argc = self.get_variable("#");
         let prior_count: usize = saved_argc
@@ -288,7 +324,6 @@ impl CommandRegistry {
             })
             .collect();
 
-        // Set positional args: $0 = function name, $1..$n = args.
         // Unset any prior positional args beyond the new arg count.
         self.set_variable("0", name);
         for (i, arg) in args.iter().enumerate() {
@@ -299,26 +334,8 @@ impl CommandRegistry {
         }
         self.set_variable("#", &args.len().to_string());
 
-        // Push a new local variable scope.
-        self.local_scopes.borrow_mut().push(HashMap::new());
+        let result = f();
 
-        // Execute body as a chain of commands.
-        let result = self.execute(func.body.trim(), env);
-
-        // Clear the return flag so it doesn't propagate to the caller.
-        self.return_flag.set(false);
-
-        // Pop local variable scope and restore saved values.
-        if let Some(scope) = self.local_scopes.borrow_mut().pop() {
-            for (name, saved) in scope {
-                match saved {
-                    Some(v) => self.set_variable(&name, &v),
-                    None => self.unset_variable(&name),
-                }
-            }
-        }
-
-        // Restore previous positional args.
         for (key, old_val) in saved_args {
             match old_val {
                 Some(v) => self.set_variable(&key, &v),
@@ -329,10 +346,6 @@ impl CommandRegistry {
             Some(v) => self.set_variable("#", &v),
             None => self.unset_variable("#"),
         }
-
-        // Restore call depth.
-        self.call_depth.set(depth);
-
         result
     }
 
