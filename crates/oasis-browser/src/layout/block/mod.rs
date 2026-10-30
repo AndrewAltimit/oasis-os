@@ -358,9 +358,7 @@ fn layout_children_incremental(
                     + child.dimensions.padding.top;
 
                 let mut w = (content_width - pad_h - bdr_h - mar_h).max(0.0);
-                if let Dimension::Px(max) = child.style.max_width
-                    && max < 999.0
-                {
+                if let Dimension::Px(max) = child.style.max_width {
                     w = w.min(max);
                 }
                 child.dimensions.content.width = w;
@@ -764,8 +762,7 @@ fn calculate_block_width(layout_box: &mut LayoutBox, containing_width: f32) {
         _ => {},
     }
     match layout_box.style.max_width {
-        Dimension::Px(max) if max < 999.0 && layout_box.dimensions.content.width > max => {
-            // Don't clamp table rowspan/colspan encoding values (>= 1000).
+        Dimension::Px(max) if layout_box.dimensions.content.width > max => {
             layout_box.dimensions.content.width = max;
         },
         Dimension::Percent(pct) => {
@@ -1111,9 +1108,7 @@ fn layout_block_children(parent: &mut LayoutBox, measurer: &dyn TextMeasurer) {
                 // Width: stretch to container (like a block), minus
                 // edges. Respect max-width if set.
                 let mut w = (content_width - pad_h - bdr_h - mar_h).max(0.0);
-                if let Dimension::Px(max) = child.style.max_width
-                    && max < 999.0
-                {
+                if let Dimension::Px(max) = child.style.max_width {
                     w = w.min(max);
                 }
                 child.dimensions.content.width = w;

@@ -53,9 +53,9 @@ draw_text "and ", 309, 30, 13, Color { r: 0, g: 0, b: 0, a: 255 }
 draw_text "variadic ", 333, 30, 13, Color { r: 0, g: 0, b: 0, a: 255 }
 draw_text "generics", 387, 30, 13, Color { r: 0, g: 0, b: 0, a: 255 }
 draw_text "(rust-lang.org)", 63, 50, 10, Color { r: 130, g: 130, b: 130, a: 255 }
-fill_rect 4, 75, 3046, 1, Color { r: 204, g: 204, b: 204, a: 255 }
-fill_rect 3049, 75, 1, 19, Color { r: 204, g: 204, b: 204, a: 255 }
-fill_rect 4, 93, 3046, 1, Color { r: 204, g: 204, b: 204, a: 255 }
+fill_rect 4, 75, 426, 1, Color { r: 204, g: 204, b: 204, a: 255 }
+fill_rect 429, 75, 1, 19, Color { r: 204, g: 204, b: 204, a: 255 }
+fill_rect 4, 93, 426, 1, Color { r: 204, g: 204, b: 204, a: 255 }
 fill_rect 4, 75, 1, 19, Color { r: 204, g: 204, b: 204, a: 255 }
 draw_text "412 ", 45, 78, 9, Color { r: 130, g: 130, b: 130, a: 255 }
 draw_text "points", 69, 78, 9, Color { r: 130, g: 130, b: 130, a: 255 }
@@ -100,9 +100,9 @@ draw_text "PSP", 417, 104, 13, Color { r: 0, g: 0, b: 0, a: 255 }
 draw_text "homebrew", 63, 124, 13, Color { r: 0, g: 0, b: 0, a: 255 }
 draw_text " ", 111, 124, 13, Color { r: 0, g: 0, b: 0, a: 255 }
 draw_text "(github.com/altimit)", 117, 124, 10, Color { r: 130, g: 130, b: 130, a: 255 }
-fill_rect 4, 153, 3046, 1, Color { r: 204, g: 204, b: 204, a: 255 }
-fill_rect 3049, 153, 1, 19, Color { r: 204, g: 204, b: 204, a: 255 }
-fill_rect 4, 171, 3046, 1, Color { r: 204, g: 204, b: 204, a: 255 }
+fill_rect 4, 153, 426, 1, Color { r: 204, g: 204, b: 204, a: 255 }
+fill_rect 429, 153, 1, 19, Color { r: 204, g: 204, b: 204, a: 255 }
+fill_rect 4, 171, 426, 1, Color { r: 204, g: 204, b: 204, a: 255 }
 fill_rect 4, 153, 1, 19, Color { r: 204, g: 204, b: 204, a: 255 }
 draw_text "298 ", 45, 156, 9, Color { r: 130, g: 130, b: 130, a: 255 }
 draw_text "points", 69, 156, 9, Color { r: 130, g: 130, b: 130, a: 255 }
@@ -142,9 +142,9 @@ draw_text "10M ", 291, 182, 13, Color { r: 0, g: 0, b: 0, a: 255 }
 draw_text "token ", 315, 182, 13, Color { r: 0, g: 0, b: 0, a: 255 }
 draw_text "context", 351, 182, 13, Color { r: 0, g: 0, b: 0, a: 255 }
 draw_text "(anthropic.com)", 63, 202, 10, Color { r: 130, g: 130, b: 130, a: 255 }
-fill_rect 4, 227, 3046, 1, Color { r: 204, g: 204, b: 204, a: 255 }
-fill_rect 3049, 227, 1, 19, Color { r: 204, g: 204, b: 204, a: 255 }
-fill_rect 4, 245, 3046, 1, Color { r: 204, g: 204, b: 204, a: 255 }
+fill_rect 4, 227, 426, 1, Color { r: 204, g: 204, b: 204, a: 255 }
+fill_rect 429, 227, 1, 19, Color { r: 204, g: 204, b: 204, a: 255 }
+fill_rect 4, 245, 426, 1, Color { r: 204, g: 204, b: 204, a: 255 }
 fill_rect 4, 227, 1, 19, Color { r: 204, g: 204, b: 204, a: 255 }
 draw_text "241 ", 45, 230, 9, Color { r: 130, g: 130, b: 130, a: 255 }
 draw_text "points", 69, 230, 9, Color { r: 130, g: 130, b: 130, a: 255 }

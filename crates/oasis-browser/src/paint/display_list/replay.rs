@@ -28,6 +28,36 @@ use crate::css::values::BorderStyle;
 use crate::css::values::types::{BlendMode as CssBlendMode, FilterFunction};
 use crate::layout::box_model::Rect;
 
+/// Span of surface coordinates (from 0) an oversized offscreen layer
+/// is clipped to. Covers a 4K framebuffer or a maximal parent layer.
+const LAYER_SURFACE_SPAN: i32 = 4096;
+/// Extra pixels kept on each side of the clipped span so filters that
+/// sample neighbours (`blur()`) still see content just off-surface.
+const LAYER_PAD: i32 = 128;
+/// Longest layer side allocated as-is; longer sides are clipped.
+const MAX_LAYER_SIDE: u32 = (LAYER_SURFACE_SPAN + 2 * LAYER_PAD) as u32;
+
+/// Bound one axis (`pos`, `len` in the current surface's coordinates)
+/// of an offscreen layer.
+///
+/// An offscreen target costs `w * h * 4` bytes on every backend (and a
+/// CPU filter pass reads that much back), so a `33_554_432 px` box with
+/// `opacity` / `filter` used to request terabytes. Layers up to
+/// [`MAX_LAYER_SIDE`] are untouched; a longer axis is clipped to the
+/// part that can reach the surface, which is all that can show.
+fn bound_layer_axis(pos: i32, len: u32) -> (i32, u32) {
+    if len <= MAX_LAYER_SIDE {
+        return (pos, len);
+    }
+    let lo = pos.max(-LAYER_PAD);
+    let hi = (i64::from(pos) + i64::from(len)).min(i64::from(LAYER_SURFACE_SPAN + LAYER_PAD));
+    if hi <= i64::from(lo) {
+        (lo, 1)
+    } else {
+        (lo, (hi - i64::from(lo)) as u32)
+    }
+}
+
 /// Convert a parsed CSS `BlendMode` into the backend's `BlendMode`
 /// (they are the same 16-variant vocabulary — a direct map).
 fn css_blend_to_backend(m: CssBlendMode) -> BackendBlendMode {
@@ -153,12 +183,16 @@ impl DisplayList {
                     // expressed in the currently bound surface (the
                     // framebuffer, or an enclosing layer's target).
                     let sticky = sticky_dy_stack.last().copied().unwrap_or(0);
-                    let screen_x = bounds.x as i32 + scroll_dx;
-                    let screen_y = bounds.y as i32 + scroll_dy + sticky;
-                    let dx = screen_x + compositor_dx;
-                    let dy = screen_y + compositor_dy;
-                    let dw = bounds.width.max(1.0) as u32;
-                    let dh = bounds.height.max(1.0) as u32;
+                    let (dx, dw) = bound_layer_axis(
+                        bounds.x as i32 + scroll_dx + compositor_dx,
+                        bounds.width.max(1.0) as u32,
+                    );
+                    let (dy, dh) = bound_layer_axis(
+                        bounds.y as i32 + scroll_dy + sticky + compositor_dy,
+                        bounds.height.max(1.0) as u32,
+                    );
+                    let screen_x = dx - compositor_dx;
+                    let screen_y = dy - compositor_dy;
                     let blend_backend = css_blend_to_backend(*blend);
                     let layer_id = if supports_rt {
                         match backend.create_render_target(dw, dh) {
@@ -1036,6 +1070,10 @@ fn replay_embedded(
     if w == 0 || h == 0 {
         return Ok(());
     }
+    // The offscreen target covers only the part that can reach the
+    // surface; the content draws shifted by the clipped-off amount.
+    let (tx, tw) = bound_layer_axis(x, w);
+    let (ty, th) = bound_layer_axis(y, h);
     let draw = |backend: &mut dyn SdiBackend, ox: i32, oy: i32| -> Result<()> {
         match item {
             DisplayItem::Svg {
@@ -1055,13 +1093,21 @@ fn replay_embedded(
     };
     if opacity < 1.0
         && backend.supports_render_targets()
-        && let Ok(id) = backend.create_render_target(w, h)
+        && let Ok(id) = backend.create_render_target(tw, th)
     {
         if backend.bind_render_target(id).is_ok() {
-            let drawn = draw(backend, 0, 0);
+            let drawn = draw(backend, x - tx, y - ty);
             let unbound = backend.unbind_render_target();
             let composited = if drawn.is_ok() && unbound.is_ok() {
-                backend.composite_render_target(id, x, y, w, h, BackendBlendMode::Normal, opacity)
+                backend.composite_render_target(
+                    id,
+                    tx,
+                    ty,
+                    tw,
+                    th,
+                    BackendBlendMode::Normal,
+                    opacity,
+                )
             } else {
                 Ok(())
             };
@@ -1342,6 +1388,24 @@ mod tests {
             filters: Vec::new(),
             mask: None,
         }
+    }
+
+    /// Regression: a layer's offscreen target was sized from its full
+    /// bounds, so a 33-million-pixel box with `opacity` asked every
+    /// backend for terabytes. Normal layers keep their exact rect.
+    #[test]
+    fn oversized_layer_axes_are_clipped_to_the_surface() {
+        use super::{LAYER_PAD, LAYER_SURFACE_SPAN, MAX_LAYER_SIDE, bound_layer_axis};
+        assert_eq!(bound_layer_axis(-500, 800), (-500, 800));
+        assert_eq!(bound_layer_axis(10, MAX_LAYER_SIDE), (10, MAX_LAYER_SIDE));
+        let (x, w) = bound_layer_axis(-33_554_432, 67_108_864);
+        assert_eq!(x, -LAYER_PAD);
+        assert_eq!(w, MAX_LAYER_SIDE);
+        // Entirely past the surface: a 1-pixel placeholder.
+        assert_eq!(
+            bound_layer_axis(LAYER_SURFACE_SPAN * 4, 10_000),
+            (LAYER_SURFACE_SPAN * 4, 1)
+        );
     }
 
     #[test]
