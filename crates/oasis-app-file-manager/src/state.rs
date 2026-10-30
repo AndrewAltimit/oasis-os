@@ -10,7 +10,7 @@ use oasis_ui::menu_bar::MenuBar;
 use oasis_vfs::Vfs;
 
 use crate::commands::default_menu_bar;
-use crate::model::{Clipboard, Dialog, FileOp, FilePanel, NavTarget, ViewMode};
+use crate::model::{Clipboard, Dialog, FileOp, FilePanel, NavTarget, ViewMode, list_panel};
 
 use oasis_app_core::file_viewer::list_directory;
 
@@ -100,6 +100,15 @@ impl FileManagerApp {
     /// nearest surviving ancestor. Returns `true` if any listing changed.
     pub(crate) fn rescan(&mut self, vfs: &dyn Vfs) -> bool {
         let mut changed = false;
+        // Scroll granularity and visible-entry count of the active view:
+        // the Explorer grid scrolls by whole rows of `cols` tiles.
+        let (step, page) = match self.view_mode {
+            ViewMode::Dual => (1, self.content.cached_max_visible.max(1)),
+            ViewMode::Explorer => {
+                let cols = self.explorer_cols.max(1);
+                (cols, cols * self.explorer_visible_rows.max(1))
+            },
+        };
         for panel in &mut self.panels {
             let mut dir = panel.browse_dir.clone();
             while dir != "/" && !vfs.exists(&dir) {
@@ -110,19 +119,14 @@ impl FileManagerApp {
                 changed = true;
                 continue;
             }
-            let lines = list_directory(vfs, &dir);
+            let (lines, _) = list_panel(vfs, &dir);
             if lines == panel.lines {
                 continue;
             }
             let selected = panel.lines.get(panel.scroll + panel.cursor).cloned();
             panel.refresh(vfs);
             if let Some(i) = selected.and_then(|sel| panel.lines.iter().position(|l| *l == sel)) {
-                if i >= panel.scroll {
-                    panel.cursor = i - panel.scroll;
-                } else {
-                    panel.scroll = i;
-                    panel.cursor = 0;
-                }
+                panel.reveal(i, step, page);
             }
             changed = true;
         }

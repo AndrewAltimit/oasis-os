@@ -263,7 +263,7 @@ impl FileManagerApp {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::{EntryKind, build_tree_entries, parse_entry};
+    use crate::model::{EntryKind, build_tree_entries, list_panel};
     use crate::view::compute_explorer_geom;
     use oasis_app_core::testing::click_at;
     use oasis_vfs::MemoryVfs;
@@ -674,12 +674,101 @@ mod tests {
     }
 
     #[test]
-    fn parse_entry_classifies_correctly() {
-        assert!(matches!(parse_entry("..").1, EntryKind::ParentDir));
-        assert!(matches!(parse_entry("home/").1, EntryKind::Dir));
-        let (name, kind) = parse_entry("readme.txt  (6 B)");
-        assert_eq!(name, "readme.txt");
-        assert!(matches!(kind, EntryKind::File));
+    fn list_panel_classifies_and_matches_list_directory() {
+        let vfs = setup_vfs();
+        let (lines, entries) = list_panel(&vfs, "/home/user");
+        assert_eq!(lines, list_directory(&vfs, "/home/user"));
+        assert_eq!(lines.len(), entries.len());
+        let kinds: Vec<(String, EntryKind)> = entries
+            .iter()
+            .flatten()
+            .map(|e| (e.name.clone(), e.kind))
+            .collect();
+        assert_eq!(kinds[0], ("..".to_string(), EntryKind::ParentDir));
+        assert!(kinds.contains(&("music".to_string(), EntryKind::Dir)));
+        assert!(kinds.contains(&("readme.txt".to_string(), EntryKind::File)));
+        let (lines, entries) = list_panel(&vfs, "/tmp");
+        assert_eq!(lines[1], "(empty directory)");
+        assert!(entries[1].is_none());
+    }
+
+    #[test]
+    fn names_resembling_the_size_suffix_target_the_real_entry() {
+        let mut vfs = setup_vfs();
+        vfs.mkdir("/x").unwrap();
+        vfs.mkdir("/x/a").unwrap();
+        vfs.write("/x/a/keep.txt", b"k").unwrap();
+        vfs.write("/x/a  (old).txt", b"old").unwrap();
+        let mut fm = FileManagerApp::new("/apps/fm", &vfs);
+        select(&mut fm, &vfs, 0, "/x", "a  (old).txt");
+        assert_eq!(
+            fm.panels[0].selected_path().as_deref(),
+            Some("/x/a  (old).txt")
+        );
+
+        fm.handle_input(&Button::Triangle, &vfs);
+        fm.handle_input(&Button::Confirm, &vfs);
+        assert!(fm.apply_vfs_ops(&mut vfs));
+        assert!(!vfs.exists("/x/a  (old).txt"));
+        assert!(vfs.exists("/x/a/keep.txt"), "folder `a` must survive");
+    }
+
+    #[test]
+    fn refresh_after_shrink_keeps_selection_in_range() {
+        let mut vfs = setup_vfs();
+        for i in 0..10 {
+            vfs.write(&format!("/tmp/f{i}.txt"), b"x").unwrap();
+        }
+        let mut fm = FileManagerApp::new("/apps/fm", &vfs);
+        fm.panels[0].navigate_to("/tmp", &vfs);
+        // `..` + 10 files; select the last one with scroll 5.
+        fm.panels[0].scroll = 5;
+        fm.panels[0].cursor = 5;
+        for i in 5..10 {
+            vfs.remove(&format!("/tmp/f{i}.txt")).unwrap();
+        }
+        fm.panels[0].refresh(&vfs);
+        let p = &fm.panels[0];
+        assert!(
+            p.scroll + p.cursor < p.lines.len(),
+            "scroll {} + cursor {} >= len {}",
+            p.scroll,
+            p.cursor,
+            p.lines.len()
+        );
+    }
+
+    #[test]
+    fn rescan_keeps_moved_selection_visible() {
+        let mut vfs = setup_vfs();
+        vfs.write("/tmp/z.txt", b"x").unwrap();
+        let mut fm = FileManagerApp::new("/apps/fm", &vfs);
+        fm.view_mode = ViewMode::Dual;
+        fm.content.cached_max_visible = 4;
+        select(&mut fm, &vfs, 0, "/tmp", "z.txt");
+        // Many entries appear before the selection.
+        for i in 0..20 {
+            vfs.write(&format!("/tmp/a{i:02}.txt"), b"x").unwrap();
+        }
+        assert!(fm.rescan(&vfs));
+        let p = &fm.panels[0];
+        assert!(
+            p.cursor < 4,
+            "cursor {} outside the 4 visible rows",
+            p.cursor
+        );
+        assert!(p.lines[p.scroll + p.cursor].starts_with("z.txt"));
+    }
+
+    #[test]
+    fn dual_view_draws_at_zero_width() {
+        let vfs = setup_vfs();
+        let mut fm = FileManagerApp::new("/apps/fm", &vfs);
+        fm.view_mode = ViewMode::Dual;
+        let at = ActiveTheme::default();
+        let mut backend = oasis_test_backend::NullBackend::new(480, 272);
+        fm.draw_windowed_dual(0, 0, 0, 200, &mut backend, &at)
+            .expect("draw at zero width");
     }
 
     #[test]
@@ -755,9 +844,9 @@ mod tests {
         fm.active_panel = pi;
         fm.panels[pi].navigate_to(dir, vfs);
         let idx = fm.panels[pi]
-            .lines
+            .entries
             .iter()
-            .position(|l| parse_entry(l).0 == name)
+            .position(|e| e.as_ref().is_some_and(|e| e.name == name))
             .expect("entry in listing");
         fm.panels[pi].scroll = 0;
         fm.panels[pi].cursor = idx;

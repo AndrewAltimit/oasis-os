@@ -11,7 +11,7 @@ use oasis_types::input::{Button, Key, Modifiers};
 use oasis_ui::menu_bar::{Menu, MenuBar, MenuEntry};
 use oasis_vfs::Vfs;
 
-use crate::model::{Clipboard, Dialog, FileOp, NamePurpose, NavTarget, ViewMode};
+use crate::model::{Clipboard, Dialog, EntryKind, FileOp, NamePurpose, NavTarget, ViewMode};
 use crate::ops::{MAX_NAME_LEN, apply_file_op, file_name, validate_name};
 use crate::state::FileManagerApp;
 
@@ -51,20 +51,21 @@ impl FileManagerApp {
     /// `apply_pending_navigation`.
     pub(crate) fn activate_index(&mut self, abs_idx: usize) -> AppAction {
         let p = self.active();
-        let Some(line) = p.lines.get(abs_idx).cloned() else {
+        let Some(entry) = p.entry(abs_idx) else {
             return AppAction::None;
         };
-        let trimmed = line.trim();
-        if trimmed == ".." {
-            self.pending_navigation = Some(NavTarget::Folder(parent_dir(&p.browse_dir)));
-            return AppAction::None;
+        let file_path = join_path(&p.browse_dir, &entry.name);
+        match entry.kind {
+            EntryKind::ParentDir => {
+                self.pending_navigation = Some(NavTarget::Folder(parent_dir(&p.browse_dir)));
+                return AppAction::None;
+            },
+            EntryKind::Dir => {
+                self.pending_navigation = Some(NavTarget::Folder(file_path));
+                return AppAction::None;
+            },
+            EntryKind::File => {},
         }
-        if let Some(name) = trimmed.strip_suffix('/') {
-            self.pending_navigation = Some(NavTarget::Folder(join_path(&p.browse_dir, name)));
-            return AppAction::None;
-        }
-        let name = trimmed.split("  (").next().unwrap_or(trimmed);
-        let file_path = join_path(&p.browse_dir, name);
         // Typed files open in their app, exactly like Confirm does; only
         // unknown types fall back to the built-in viewer.
         if let Some(app_title) = app_for_file(&file_path) {
@@ -116,16 +117,12 @@ impl FileManagerApp {
             },
             Button::Confirm => {
                 let p = &mut self.panels[self.active_panel];
-                let abs_idx = p.scroll + p.cursor;
-                let is_file = p.lines.get(abs_idx).is_some_and(|line| {
-                    let l = line.trim();
-                    l != ".." && !l.ends_with('/')
-                });
-                if is_file {
-                    let line = p.lines[abs_idx].trim().to_string();
-                    let file_name = line.split("  (").next().unwrap_or(&line);
-                    let dir = &p.browse_dir;
-                    let file_path = join_path(dir, file_name);
+                let file_name = p
+                    .selected_entry()
+                    .filter(|e| e.kind == EntryKind::File)
+                    .map(|e| e.name.clone());
+                if let Some(file_name) = file_name {
+                    let file_path = join_path(&p.browse_dir, &file_name);
                     if let Some(app_title) = app_for_file(&file_path) {
                         return AppAction::LaunchAppWithFile {
                             app_title: app_title.to_string(),
@@ -216,16 +213,12 @@ impl FileManagerApp {
             },
             Button::Confirm => {
                 let p = self.active_mut();
-                let abs_idx = p.scroll + p.cursor;
-                let is_file = p.lines.get(abs_idx).is_some_and(|line| {
-                    let l = line.trim();
-                    l != ".." && !l.ends_with('/')
-                });
-                if is_file {
-                    let line = p.lines[abs_idx].trim().to_string();
-                    let file_name = line.split("  (").next().unwrap_or(&line);
-                    let dir = p.browse_dir.clone();
-                    let file_path = join_path(&dir, file_name);
+                let file_name = p
+                    .selected_entry()
+                    .filter(|e| e.kind == EntryKind::File)
+                    .map(|e| e.name.clone());
+                if let Some(file_name) = file_name {
+                    let file_path = join_path(&p.browse_dir, &file_name);
                     if let Some(app_title) = app_for_file(&file_path) {
                         return AppAction::LaunchAppWithFile {
                             app_title: app_title.to_string(),
