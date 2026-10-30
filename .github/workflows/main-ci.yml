@@ -308,6 +308,12 @@ jobs:
       - name: Check rust-psp pins
         run: scripts/check-rust-psp-rev.sh "$RUST_PSP_REV"
 
+      # Stdlib-only unit tests for the PSP remote tool (scripts/psp_remote.py).
+      # Runs on the host python3 the PSP build already needs (prxgen helper).
+      - name: PSP tooling tests (python)
+        timeout-minutes: 2
+        run: python3 -m unittest discover -s scripts -p "test_*.py" -v
+
       - name: Install cargo-psp
         uses: ./.github/actions/install-cargo-psp
         with:
