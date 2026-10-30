@@ -596,6 +596,23 @@ fn test_min_max_width_applied() {
     );
 }
 
+/// Regression: `max-width` values of 999px and up were ignored (they
+/// collided with a since-removed table-span sentinel), so the common
+/// `.container { max-width: 1200px }` never capped anything.
+#[test]
+fn large_max_width_still_caps() {
+    let m = FixedMeasurer;
+    let mut style = block_style();
+    style.max_width = Dimension::Px(1200.0);
+    let mut lb = LayoutBox::new(BoxType::Block, style, None);
+    layout_block(&mut lb, 1920.0, &m);
+    assert!(
+        (lb.dimensions.content.width - 1200.0).abs() < 0.01,
+        "max-width 1200 should cap a 1920px container, got {}",
+        lb.dimensions.content.width,
+    );
+}
+
 // -- block-level replaced elements --------------------------------
 
 #[test]

@@ -1,12 +1,13 @@
 //! `innerHTML` serialization and the depth-capped fragment deep copy.
 
 use crate::html::dom::{Document, NodeId, NodeKind};
+use crate::html::escape::push_escaped;
 
 /// Serialize a DOM node (and its subtree) to an HTML string.
 pub(super) fn serialize_node(doc: &Document, id: NodeId, out: &mut String) {
     match &doc.nodes[id].kind {
         NodeKind::Text(s) => {
-            escape_html(s, out);
+            push_escaped(out, s);
         },
         NodeKind::Element(e) => {
             let tag = e.tag.as_str();
@@ -16,7 +17,7 @@ pub(super) fn serialize_node(doc: &Document, id: NodeId, out: &mut String) {
                 out.push(' ');
                 out.push_str(&attr.name);
                 out.push_str("=\"");
-                escape_html(&attr.value, out);
+                push_escaped(out, &attr.value);
                 out.push('"');
             }
             if e.tag.is_void() {
@@ -41,19 +42,6 @@ pub(super) fn serialize_node(doc: &Document, id: NodeId, out: &mut String) {
                 serialize_node(doc, child, out);
             }
         },
-    }
-}
-
-/// Escape `<`, `>`, `&`, and `"` in text for HTML serialization.
-pub(super) fn escape_html(s: &str, out: &mut String) {
-    for ch in s.chars() {
-        match ch {
-            '&' => out.push_str("&amp;"),
-            '<' => out.push_str("&lt;"),
-            '>' => out.push_str("&gt;"),
-            '"' => out.push_str("&quot;"),
-            _ => out.push(ch),
-        }
     }
 }
 

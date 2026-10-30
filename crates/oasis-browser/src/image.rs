@@ -493,7 +493,7 @@ fn decode_webp(data: &[u8]) -> Option<DecodedImage> {
 /// declared dimensions.
 ///
 /// A real SVG rasterizer is out of scope for this module — full SVG
-/// support (filters, gradients, transforms, text) lives in `svg.rs` and
+/// support (filters, gradients, transforms, text) lives in `svg/` and
 /// renders through an `SdiBackend`, which isn't available during image
 /// decode. What we can do cheaply here is:
 ///

@@ -12,6 +12,7 @@
 
 pub mod dom;
 pub mod entities;
+pub mod escape;
 pub mod hooks;
 pub mod tokenizer;
 pub mod tree_builder;

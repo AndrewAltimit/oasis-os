@@ -50,13 +50,18 @@ pub fn layout_multicol(
     let total_height: f32 = child_heights.iter().sum();
     let target_col_height = total_height / num_cols as f32;
 
-    let mut columns: Vec<Vec<usize>> = vec![Vec::new(); num_cols];
-    let mut col_heights: Vec<f32> = vec![0.0; num_cols];
+    // A column only opens once the previous one holds a child, so at most
+    // one column per child is ever used. Allocating `num_cols` buckets let
+    // `column-count: 2147483647` (or a tiny `column-width`) reserve tens
+    // of gigabytes.
+    let used_cols = num_cols.min(child_heights.len());
+    let mut columns: Vec<Vec<usize>> = vec![Vec::new(); used_cols];
+    let mut col_heights: Vec<f32> = vec![0.0; used_cols];
     let mut current_col = 0;
 
     for (i, &h) in child_heights.iter().enumerate() {
         // Move to next column if current exceeds target (unless first item in column).
-        if current_col < num_cols - 1
+        if current_col < used_cols - 1
             && !columns[current_col].is_empty()
             && col_heights[current_col] + h > target_col_height
         {
@@ -177,5 +182,31 @@ mod tests {
         let (count, width) = resolve_column_count(0, 0.0, 480.0, 10.0);
         assert_eq!(count, 1);
         assert!((width - 480.0).abs() < f32::EPSILON);
+    }
+
+    /// Regression: one column bucket was allocated per *declared*
+    /// column, so `column-count: 2147483647` tried to reserve ~50 GB.
+    #[test]
+    fn huge_column_count_allocates_per_child() {
+        struct M;
+        impl TextMeasurer for M {
+            fn measure_text(&self, text: &str, _font_size: u16) -> u32 {
+                text.len() as u32 * 8
+            }
+        }
+        let mut style = crate::css::values::ComputedStyle {
+            column_count: u32::MAX,
+            ..Default::default()
+        };
+        let mut container = LayoutBox::new(BoxType::Block, style.clone(), None);
+        container.dimensions.content.width = 480.0;
+        style.column_count = 0;
+        style.height = Dimension::Px(10.0);
+        container.children = vec![
+            LayoutBox::new(BoxType::Block, style.clone(), None),
+            LayoutBox::new(BoxType::Block, style, None),
+        ];
+        layout_multicol(&mut container, 480.0, &M);
+        assert_eq!(container.dimensions.content.height, 10.0);
     }
 }

@@ -23,7 +23,7 @@ crates/oasis-http/src/      (re-exported as `oasis_browser::loader`)
 crates/oasis-browser/src/
 ├── nav.rs                  navigation history (back / forward stacks)
 ├── forms/                  form state, validation, submission
-└── widget/pipeline.rs      hooks IoResult → parse → cascade → layout
+└── widget/pipeline/      hooks IoResult → parse → cascade → layout
 ```
 
 ## Resource sources
@@ -120,7 +120,7 @@ never sent on requests.
 
 `oasis-http/src/csp.rs` parses every `Content-Security-Policy` response header
 (each comma-separated policy must allow a load; report-only and
-`<meta http-equiv>` policies are ignored). `widget/pipeline.rs` and
+`<meta http-equiv>` policies are ignored). `widget/pipeline/` and
 `js_dom/fetch.rs` enforce:
 
 - `script-src-elem` → `script-src` → `default-src` — inline `<script>`

@@ -69,7 +69,7 @@ impl JsEngine {
             stack: None,
         })?;
 
-        let console_buf: ConsoleBuffer = Rc::new(RefCell::new(Vec::new()));
+        let console_buf: ConsoleBuffer = Rc::default();
         let timer_queue = Rc::new(RefCell::new(TimerQueue::new()));
         let storage: SharedStorage = Rc::new(RefCell::new(LocalStorage::new()));
         let fetch_handler: SharedFetchHandler = Rc::new(RefCell::new(None));
@@ -145,14 +145,16 @@ impl JsEngine {
         scripts.iter().map(|s| self.eval(s)).collect()
     }
 
-    /// Return a clone of the buffered console output.
+    /// Return a copy of the buffered console output: the most recent
+    /// [`MAX_CONSOLE_ENTRIES`](crate::MAX_CONSOLE_ENTRIES) entries, each
+    /// cut to [`MAX_CONSOLE_MESSAGE_BYTES`](crate::MAX_CONSOLE_MESSAGE_BYTES).
     pub fn console_output(&self) -> Vec<ConsoleEntry> {
-        self.console_buf.borrow().clone()
+        self.console_buf.borrow().to_vec()
     }
 
     /// Take and clear the buffered console output.
     pub fn take_console_output(&self) -> Vec<ConsoleEntry> {
-        std::mem::take(&mut self.console_buf.borrow_mut())
+        self.console_buf.borrow_mut().take()
     }
 
     /// Return a shared reference to the in-memory `localStorage` backing
@@ -448,6 +450,27 @@ mod tests {
         assert_eq!(out.len(), 1);
         assert_eq!(out[0].level, ConsoleLevel::Log);
         assert_eq!(out[0].message, "test");
+    }
+
+    /// Regression: the console buffer sits outside the QuickJS heap
+    /// limit and grew without bound, so logging big strings in a loop
+    /// exhausted host memory while the JS heap stayed small.
+    #[test]
+    fn console_buffer_is_bounded() {
+        let engine = JsEngine::new(8 * 1024 * 1024).unwrap();
+        engine
+            .eval(
+                "const s = 'x'.repeat(100000);
+                 for (let i = 0; i < 3000; i++) console.log(i === 2999 ? 'last' : s);",
+            )
+            .unwrap();
+        let out = engine.take_console_output();
+        assert_eq!(out.len(), crate::MAX_CONSOLE_ENTRIES);
+        assert_eq!(out.last().unwrap().message, "last");
+        let cut = &out[0].message;
+        assert!(cut.len() <= crate::MAX_CONSOLE_MESSAGE_BYTES + '\u{2026}'.len_utf8());
+        assert!(cut.ends_with('\u{2026}'));
+        assert!(engine.console_output().is_empty());
     }
 
     #[test]

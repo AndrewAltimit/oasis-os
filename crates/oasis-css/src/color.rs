@@ -772,32 +772,30 @@ pub(crate) fn parse_rgb_function(tokens: &[&CssToken]) -> Option<CssColor> {
     }
 }
 
+/// A colour keyword: `transparent` or one of the 148 CSS named colours.
 pub(crate) fn named_color(name: &str) -> Option<CssColor> {
-    match name.to_ascii_lowercase().as_str() {
-        "black" => Some(CssColor::new(0, 0, 0, 255)),
-        "white" => Some(CssColor::new(255, 255, 255, 255)),
-        "red" => Some(CssColor::new(255, 0, 0, 255)),
-        "green" => Some(CssColor::new(0, 128, 0, 255)),
-        "blue" => Some(CssColor::new(0, 0, 255, 255)),
-        "yellow" => Some(CssColor::new(255, 255, 0, 255)),
-        "cyan" | "aqua" => Some(CssColor::new(0, 255, 255, 255)),
-        "magenta" | "fuchsia" => Some(CssColor::new(255, 0, 255, 255)),
-        "orange" => Some(CssColor::new(255, 165, 0, 255)),
-        "purple" => Some(CssColor::new(128, 0, 128, 255)),
-        "gray" | "grey" => Some(CssColor::new(128, 128, 128, 255)),
-        "lime" => Some(CssColor::new(0, 255, 0, 255)),
-        "navy" => Some(CssColor::new(0, 0, 128, 255)),
-        "teal" => Some(CssColor::new(0, 128, 128, 255)),
-        "maroon" => Some(CssColor::new(128, 0, 0, 255)),
-        "olive" => Some(CssColor::new(128, 128, 0, 255)),
-        "silver" => Some(CssColor::new(192, 192, 192, 255)),
-        "transparent" => Some(CssColor::new(0, 0, 0, 0)),
-        "pink" => Some(CssColor::new(255, 192, 203, 255)),
-        "brown" => Some(CssColor::new(165, 42, 42, 255)),
-        "coral" => Some(CssColor::new(255, 127, 80, 255)),
-        "gold" => Some(CssColor::new(255, 215, 0, 255)),
-        _ => None,
+    if name.eq_ignore_ascii_case("transparent") {
+        return Some(CssColor::new(0, 0, 0, 0));
     }
+    let rgb = crate::named_colors::lookup(name)?;
+    Some(CssColor::new(
+        (rgb >> 16) as u8,
+        (rgb >> 8) as u8,
+        rgb as u8,
+        255,
+    ))
+}
+
+/// Parse a standalone CSS `<color>` string (`#rgb[a]`, `#rrggbb[aa]`,
+/// keywords, `rgb()` / `hsl()` / `oklch()` / `color-mix()` / ...).
+///
+/// The one colour parser for every consumer outside a stylesheet: SVG
+/// presentation attributes, `<font color>`, canvas `fillStyle`.
+/// `currentcolor` is context-dependent and returns `None`.
+pub fn parse_color(input: &str) -> Option<CssColor> {
+    let mut tokens = crate::tokenizer::CssTokenizer::new(input.trim()).tokenize();
+    tokens.retain(|t| *t != crate::tokenizer::CssToken::Eof);
+    try_parse_color(&tokens)
 }
 
 #[cfg(test)]
@@ -948,8 +946,11 @@ mod tests {
     }
 
     #[test]
-    fn named_color_unknown() {
-        assert!(named_color("chartreuse").is_none());
+    fn named_color_full_table_and_unknown() {
+        assert_eq!(
+            named_color("chartreuse"),
+            Some(CssColor::new(127, 255, 0, 255))
+        );
         assert!(named_color("").is_none());
         assert!(named_color("notacolor").is_none());
     }
@@ -1277,5 +1278,26 @@ mod tests {
         let (light, dark) = try_parse_light_dark(&tokens).unwrap();
         assert_eq!(light, CssColor::new(255, 255, 255, 255));
         assert_eq!(dark, CssColor::new(0, 0, 0, 255));
+    }
+
+    #[test]
+    fn parse_color_accepts_standalone_css_colors() {
+        assert_eq!(parse_color(" #f00 "), Some(CssColor::new(255, 0, 0, 255)));
+        assert_eq!(
+            parse_color("#00ff0080"),
+            Some(CssColor::new(0, 255, 0, 128))
+        );
+        assert_eq!(
+            parse_color("rgba(10, 20, 30, 0.5)"),
+            Some(CssColor::new(10, 20, 30, 127))
+        );
+        assert_eq!(
+            parse_color("RebeccaPurple"),
+            Some(CssColor::new(0x66, 0x33, 0x99, 255))
+        );
+        assert_eq!(parse_color("transparent"), Some(CssColor::new(0, 0, 0, 0)));
+        assert_eq!(parse_color("currentcolor"), None);
+        assert_eq!(parse_color("#\u{e9}1"), None);
+        assert_eq!(parse_color(""), None);
     }
 }

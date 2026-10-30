@@ -619,9 +619,9 @@ fn collect_presentational_attrs(
 
     // bgcolor -> background-color
     if let Some(color_str) = elem.get_attribute("bgcolor")
-        && let Some((r, g, b, a)) = parse_html_color(color_str)
+        && let Some(color) = parse_html_color(color_str)
     {
-        push("background-color", CssValue::Color(CssColor { r, g, b, a }));
+        push("background-color", CssValue::Color(color));
     }
 
     // width attribute -> width (on img, table, td, th, input)
@@ -764,38 +764,15 @@ fn ancestor_table_cellpadding(doc: &Document, start: NodeId) -> Option<f32> {
     None
 }
 
-/// Parse an HTML color attribute value (e.g., "#fff", "#ffffff", "red").
-fn parse_html_color(s: &str) -> Option<(u8, u8, u8, u8)> {
+/// Parse an HTML colour attribute value (`"#fff"`, `"#ffffff"`, `"red"`):
+/// hex digits or one of the 148 CSS colour names. Byte-safe on
+/// non-ASCII input (a hand-rolled slicer here used to panic on
+/// `bgcolor="#\u{e9}1"`).
+fn parse_html_color(s: &str) -> Option<CssColor> {
     let s = s.trim();
-    if let Some(hex) = s.strip_prefix('#') {
-        match hex.len() {
-            3 => {
-                let r = u8::from_str_radix(&hex[0..1], 16).ok()? * 17;
-                let g = u8::from_str_radix(&hex[1..2], 16).ok()? * 17;
-                let b = u8::from_str_radix(&hex[2..3], 16).ok()? * 17;
-                Some((r, g, b, 255))
-            },
-            6 => {
-                let r = u8::from_str_radix(&hex[0..2], 16).ok()?;
-                let g = u8::from_str_radix(&hex[2..4], 16).ok()?;
-                let b = u8::from_str_radix(&hex[4..6], 16).ok()?;
-                Some((r, g, b, 255))
-            },
-            _ => None,
-        }
-    } else {
-        // Named color lookup (common ones).
-        match s.to_ascii_lowercase().as_str() {
-            "white" => Some((255, 255, 255, 255)),
-            "black" => Some((0, 0, 0, 255)),
-            "red" => Some((255, 0, 0, 255)),
-            "green" => Some((0, 128, 0, 255)),
-            "blue" => Some((0, 0, 255, 255)),
-            "yellow" => Some((255, 255, 0, 255)),
-            "gray" | "grey" => Some((128, 128, 128, 255)),
-            "silver" => Some((192, 192, 192, 255)),
-            _ => None,
-        }
+    match s.strip_prefix('#') {
+        Some(hex) => crate::color::parse_hex_color(hex),
+        None => crate::color::named_color(s),
     }
 }
 

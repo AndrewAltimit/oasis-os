@@ -4,6 +4,7 @@
 //! Readability.js.
 
 use crate::html::dom::{Document, NodeId, NodeKind, TagName};
+use crate::html::escape::push_escaped;
 
 /// Extracted article content.
 #[derive(Debug, Clone)]
@@ -232,12 +233,12 @@ fn extract_content_html(
     // Prepend article title and byline if available.
     if !title.is_empty() {
         html.push_str("<h1>");
-        escape_html(title, &mut html);
+        push_escaped(&mut html, title);
         html.push_str("</h1>");
     }
     if let Some(ref bl) = *byline {
         html.push_str("<p style=\"color: #666; font-style: italic;\">");
-        escape_html(bl, &mut html);
+        push_escaped(&mut html, bl);
         html.push_str("</p>");
     }
 
@@ -253,25 +254,12 @@ fn extract_content_html(
     )
 }
 
-/// Escape HTML special characters in text content.
-fn escape_html(text: &str, out: &mut String) {
-    for ch in text.chars() {
-        match ch {
-            '<' => out.push_str("&lt;"),
-            '>' => out.push_str("&gt;"),
-            '&' => out.push_str("&amp;"),
-            '"' => out.push_str("&quot;"),
-            _ => out.push(ch),
-        }
-    }
-}
-
 fn build_reader_html(doc: &Document, node_id: NodeId, html: &mut String) {
     let node = doc.get(node_id);
 
     match &node.kind {
         NodeKind::Text(text) => {
-            escape_html(text, html);
+            push_escaped(html, text);
         },
         NodeKind::Element(elem) => {
             // Only keep certain tags in reader mode.
