@@ -3182,30 +3182,6 @@ mod container_query_cascade_tests {
         assert_eq!(styles[p_id].as_ref().unwrap().color, Color::rgb(0, 0, 255));
     }
 
-    #[test]
-    fn build_container_lookup_picks_up_container_type() {
-        use crate::css::values::types::ContainerType;
-        use crate::layout::box_model::{BoxType, Dimensions, LayoutBox, Rect};
-
-        let style = ComputedStyle {
-            container_type: ContainerType::InlineSize,
-            container_name: vec!["card".to_string()],
-            ..Default::default()
-        };
-
-        let mut child = LayoutBox::new(BoxType::Block, style, Some(7));
-        child.dimensions = Dimensions {
-            content: Rect::new(0.0, 0.0, 320.0, 240.0),
-            ..Dimensions::default()
-        };
-
-        let lookup = build_container_lookup(&child);
-        let entry = lookup.get(7).expect("container should be indexed");
-        assert_eq!(entry.names, vec!["card".to_string()]);
-        assert!((entry.width - 320.0).abs() < 0.01);
-        assert!((entry.height - 240.0).abs() < 0.01);
-    }
-
     // -- light-dark() + color-scheme -----------------------------------
 
     #[test]

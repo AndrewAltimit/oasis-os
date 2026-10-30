@@ -972,7 +972,7 @@ impl BrowserWidget {
         //     the post-layout container sizes plumbed into cascade. Pages
         //     without container queries skip the work entirely.
         let container_lookup = if css::cascade::stylesheets_use_container_queries(&all_sheets) {
-            let first_lookup = css::cascade::build_container_lookup(&layout_root);
+            let first_lookup = crate::layout::container_query::build_container_lookup(&layout_root);
             if !first_lookup.is_empty() {
                 self.diag("[BR] container-query restyle");
                 let ctx = css::cascade::CascadeContext {
@@ -997,7 +997,7 @@ impl BrowserWidget {
                 // Hover/focus restyles reuse this and would otherwise
                 // see stale pre-restyle dimensions for nested
                 // container-query cases.
-                Some(css::cascade::build_container_lookup(&layout_root))
+                Some(crate::layout::container_query::build_container_lookup(&layout_root))
             } else {
                 Some(first_lookup)
             }

@@ -181,7 +181,8 @@ pub struct ContainerEntry {
 }
 
 /// Map of container `NodeId` → metadata. Built post-layout from a walk
-/// over the layout tree by [`build_container_lookup`].
+/// over the layout tree by `layout::container_query::build_container_lookup`
+/// in `oasis-browser`.
 #[derive(Debug, Default, Clone)]
 pub struct ContainerLookup {
     pub map: rustc_hash::FxHashMap<NodeId, ContainerEntry>,
@@ -203,38 +204,6 @@ impl ContainerLookup {
     pub fn is_empty(&self) -> bool {
         self.map.is_empty()
     }
-}
-
-/// Walk a laid-out `LayoutBox` tree and snapshot every query container
-/// (any element whose computed `container-type` is not `Normal`), keyed
-/// by its DOM node id. `@container` rule conditions are evaluated
-/// against the container's content-box size.
-pub fn build_container_lookup(root: &crate::layout::box_model::LayoutBox) -> ContainerLookup {
-    use crate::css::values::types::ContainerType;
-
-    fn walk(b: &crate::layout::box_model::LayoutBox, out: &mut ContainerLookup) {
-        if let Some(nid) = b.node
-            && b.style.container_type != ContainerType::Normal
-        {
-            out.insert(
-                nid,
-                ContainerEntry {
-                    names: b.style.container_name.clone(),
-                    width: b.dimensions.content.width,
-                    height: b.dimensions.content.height,
-                    container_type: b.style.container_type,
-                    custom_properties: std::sync::Arc::clone(&b.style.custom_properties),
-                },
-            );
-        }
-        for c in &b.children {
-            walk(c, out);
-        }
-    }
-
-    let mut lookup = ContainerLookup::new();
-    walk(root, &mut lookup);
-    lookup
 }
 
 /// Return true if any rule in any of the given stylesheets is gated

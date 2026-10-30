@@ -7,6 +7,7 @@
 
 pub mod block;
 pub mod box_model;
+pub mod container_query;
 pub mod flex;
 pub mod float;
 pub mod grid;
