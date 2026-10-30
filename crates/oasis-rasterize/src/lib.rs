@@ -99,11 +99,17 @@ pub struct SoftwareBuffer {
     glyph_scratch: Vec<bool>,
 }
 
+/// Byte length of a `w` x `h` RGBA8 image, computed in `usize` (the `u32`
+/// product overflows above 2^30 pixels).
+fn rgba_len(w: u32, h: u32) -> usize {
+    w as usize * h as usize * 4
+}
+
 impl SoftwareBuffer {
     /// Create a new buffer with the given resolution, filled with transparent
     /// black.
     pub fn new(width: u32, height: u32) -> Self {
-        let size = (width * height * 4) as usize;
+        let size = rgba_len(width, height);
         Self {
             width,
             height,
@@ -118,7 +124,7 @@ impl SoftwareBuffer {
     pub fn resize(&mut self, width: u32, height: u32) {
         self.width = width;
         self.height = height;
-        self.buffer = vec![0; (width * height * 4) as usize];
+        self.buffer = vec![0; rgba_len(width, height)];
         self.clip = None;
     }
 
@@ -264,11 +270,16 @@ impl SoftwareBuffer {
 
     /// Fill a rectangle.
     pub fn fill_rect(&mut self, x: i32, y: i32, w: u32, h: u32, color: Color) {
-        if w == 0 || h == 0 || color.a == 0 {
+        if color.a == 0 {
             return;
         }
-        for dy in 0..h as i32 {
-            self.fill_span(y + dy, x, x + w as i32, color);
+        // Clip first: only visible rows are visited, and a width above
+        // `i32::MAX` cannot wrap negative.
+        let Some((xs, xe, ys, ye)) = self.clip_rect_to_visible(x, y, w, h) else {
+            return;
+        };
+        for row in ys..ye {
+            self.fill_span(row, xs, xe, color);
         }
     }
 
@@ -318,7 +329,7 @@ impl SoftwareBuffer {
         opacity: f32,
         mode: BlendMode,
     ) {
-        if src_w == 0 || src_h == 0 || src_pixels.len() < (src_w * src_h * 4) as usize {
+        if src_w == 0 || src_h == 0 || src_pixels.len() < rgba_len(src_w, src_h) {
             return;
         }
         let opacity = opacity.clamp(0.0, 1.0);
@@ -381,21 +392,21 @@ impl SoftwareBuffer {
 
     /// Read pixels from the buffer into a new RGBA vec.
     pub fn read_pixels(&self, x: i32, y: i32, w: u32, h: u32) -> Vec<u8> {
-        let mut out = vec![0u8; (w * h * 4) as usize];
-        for row in 0..h {
-            let sy = (y as u32).wrapping_add(row) as usize;
-            if sy >= self.height as usize {
-                continue;
-            }
-            for col in 0..w {
-                let sx = (x as u32).wrapping_add(col) as usize;
-                if sx >= self.width as usize {
-                    continue;
-                }
-                let src_idx = (sy * self.width as usize + sx) * 4;
-                let dst_idx = (row as usize * w as usize + col as usize) * 4;
-                out[dst_idx..dst_idx + 4].copy_from_slice(&self.buffer[src_idx..src_idx + 4]);
-            }
+        let mut out = vec![0u8; rgba_len(w, h)];
+        // Only the part of the requested rect that lies on the buffer is
+        // copied; the rest stays transparent black.
+        let xs = (x as i64).clamp(0, self.width as i64);
+        let xe = (x as i64 + w as i64).clamp(0, self.width as i64);
+        let ys = (y as i64).clamp(0, self.height as i64);
+        let ye = (y as i64 + h as i64).clamp(0, self.height as i64);
+        if xs >= xe || ys >= ye {
+            return out;
+        }
+        let row_bytes = (xe - xs) as usize * 4;
+        for sy in ys..ye {
+            let src = (sy as usize * self.width as usize + xs as usize) * 4;
+            let dst = ((sy - y as i64) as usize * w as usize + (xs - x as i64) as usize) * 4;
+            out[dst..dst + row_bytes].copy_from_slice(&self.buffer[src..src + row_bytes]);
         }
         out
     }
@@ -560,9 +571,13 @@ impl SoftwareBuffer {
         bottom: Color,
     ) {
         let h_max = h.saturating_sub(1).max(1);
-        for dy in 0..h as i32 {
-            let color = lerp_color_ratio(top, bottom, dy as u32, h_max);
-            self.fill_span(y + dy, x, x + w as i32, color);
+        let Some((xs, xe, ys, ye)) = self.clip_rect_to_visible(x, y, w, h) else {
+            return;
+        };
+        for row in ys..ye {
+            let dy = (row as i64 - y as i64) as u32;
+            let color = lerp_color_ratio(top, bottom, dy, h_max);
+            self.fill_span(row, xs, xe, color);
         }
     }
 
@@ -899,8 +914,8 @@ impl SoftwareBuffer {
     /// Otherwise the source column of every destination column is computed
     /// once per blit with an exact integer DDA (quotient + remainder, so no
     /// per-pixel division), and a fully opaque row that repeats the previous
-    /// source row is duplicated with `copy_within`. Source pixels whose
-    /// offset falls outside `tex` are skipped, as before.
+    /// source row is duplicated with `copy_within`. Source pixels
+    /// outside the texture (past its right edge or its data) are skipped.
     fn blit_core(&mut self, p: &BlitParams<'_>) {
         let (sx0, _, sw, _) = p.src;
         let (dst_x, dst_y, dw, dh) = p.dst;
@@ -926,8 +941,13 @@ impl SoftwareBuffer {
             // Unscaled horizontally: each row is one contiguous source run.
             for py in ys..ye {
                 let sy = Self::sample_row(p, py);
-                let off = sy * tex_stride + (sx0 as usize + q0) * 4;
-                let cnt = n.min(tex.len().saturating_sub(off) / 4);
+                let first_col = sx0 as usize + q0;
+                let off = sy * tex_stride + first_col * 4;
+                // Stop at the texture's right edge (columns past it would
+                // read the next row) and at the end of the data.
+                let cnt = n
+                    .min((p.tex_w as usize).saturating_sub(first_col))
+                    .min(tex.len().saturating_sub(off) / 4);
                 if cnt > 0 {
                     let dst = self.row_mut(py, xs, xe);
                     blend_row(&mut dst[..cnt * 4], &tex[off..off + cnt * 4]);
@@ -971,8 +991,11 @@ impl SoftwareBuffer {
                     .copy_within(cur - stride..cur - stride + len, cur);
                 continue;
             }
+            // Exactly one texture row, so a source column past the right
+            // edge is skipped instead of reading the next row.
+            let row_start = sy * tex_stride;
             let src_px = tex
-                .get(sy * tex_stride..)
+                .get(row_start..(row_start + tex_stride).min(tex.len()))
                 .map_or(&[][..], |s| s.as_chunks::<4>().0);
             let dst_px = self.row_mut(py, xs, xe).as_chunks_mut::<4>().0;
             let mut opaque = true;
@@ -1157,6 +1180,62 @@ struct BlitParams<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Regression: `read_pixels` computed `w * h * 4` in u32 and walked
+    /// every requested pixel; off-buffer parts now stay zero and only the
+    /// overlap is copied.
+    #[test]
+    fn read_pixels_partially_off_buffer() {
+        let mut fb = SoftwareBuffer::new(4, 4);
+        fb.fill_rect(0, 0, 4, 4, Color::rgb(9, 8, 7));
+        let px = fb.read_pixels(-2, 3, 4, 2);
+        assert_eq!(px.len(), 4 * 2 * 4);
+        // Row 0 of the result is buffer row 3: columns -2, -1 off, 0, 1 on.
+        assert_eq!(&px[0..8], &[0; 8]);
+        assert_eq!(&px[8..16], &[9, 8, 7, 255, 9, 8, 7, 255]);
+        // Row 1 is buffer row 4: off the buffer.
+        assert!(px[16..].iter().all(|&b| b == 0));
+    }
+
+    /// Regression: `w as i32` of a width above `i32::MAX` went negative,
+    /// so the rect drew nothing (and a huge `h` walked every row).
+    #[test]
+    fn fill_rect_huge_size_is_clipped() {
+        let mut fb = SoftwareBuffer::new(4, 4);
+        fb.fill_rect(0, 1, u32::MAX, u32::MAX, Color::rgb(1, 2, 3));
+        let px = fb.read_pixels(0, 0, 4, 4);
+        assert_eq!(&px[0..4], &[0, 0, 0, 0], "row 0 untouched");
+        assert_eq!(&px[16..20], &[1, 2, 3, 255]);
+        assert_eq!(&px[60..64], &[1, 2, 3, 255]);
+    }
+
+    /// Regression: a sub-blit whose source rect runs past the texture's
+    /// right edge sampled the next texture row instead of skipping.
+    #[test]
+    fn blit_sub_past_right_edge_skips_columns() {
+        // 2x2 texture: row 0 red, row 1 green.
+        let mut tex = Vec::new();
+        for c in [
+            [255, 0, 0, 255],
+            [255, 0, 0, 255],
+            [0, 255, 0, 255],
+            [0, 255, 0, 255],
+        ] {
+            tex.extend_from_slice(&c);
+        }
+        for (dw, label) in [(3u32, "unscaled"), (6, "scaled")] {
+            let mut fb = SoftwareBuffer::new(8, 2);
+            fb.blit_texture_sub(&tex, 2, 0, 0, 3, 1, 0, 0, dw, 1);
+            let px = fb.read_pixels(0, 0, 8, 1);
+            let last = (dw as usize - 1) * 4;
+            assert_eq!(&px[0..4], &[255, 0, 0, 255], "{label}");
+            assert_eq!(
+                &px[last..last + 4],
+                &[0, 0, 0, 0],
+                "{label}: off the texture"
+            );
+        }
+    }
 
     #[test]
     fn new_creates_buffer() {
@@ -1497,6 +1576,9 @@ mod tests {
                     let sx = src_x + (mx * src_w / dst_w.max(1));
                     let sy = src_y + (my * src_h / dst_h.max(1));
                     let off = (sy as usize * tex_w as usize + sx as usize) * 4;
+                    if sx >= tex_w {
+                        continue;
+                    }
                     if let Some(c) = sample(tex, off) {
                         let c = tint.map_or(c, |t| tinted(c, t));
                         set_pixel(buf, dst_x + dx as i32, dst_y + dy as i32, c);

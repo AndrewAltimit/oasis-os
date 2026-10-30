@@ -291,10 +291,19 @@ impl SdlBackend {
                     "SDL set_size failed: {e:?}"
                 )))
             })?;
-        self.viewport_w = width;
-        self.viewport_h = height;
-        self.clip_stack = ClipStack::default();
-        self.translate_stack = TranslateStack::new();
+        if let Some(window) = self.render_target_bind_stack.first_mut() {
+            // A render target is bound: it keeps its own size and stacks;
+            // the window's size takes effect when the bind chain unwinds.
+            window.viewport = (width, height);
+        } else {
+            self.viewport_w = width;
+            self.viewport_h = height;
+            self.clip_stack = ClipStack::default();
+            self.translate_stack = TranslateStack::new();
+            // The SDL-side clip goes with the stacks; leaving it applied
+            // would keep clipping while `current_clip_rect` says `None`.
+            self.apply_clip(None);
+        }
         Ok(())
     }
 

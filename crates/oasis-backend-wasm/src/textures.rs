@@ -75,12 +75,16 @@ impl SdiTextures for WasmBackend {
         let sy = if flip_v { -1.0 } else { 1.0 };
         let dx = if flip_h { -(tx + fw) } else { tx };
         let dy = if flip_v { -(ty + fh) } else { ty };
-        self.ctx.scale(sx, sy).map_err(js_err)?;
-        self.ctx
-            .draw_image_with_html_canvas_element_and_dw_and_dh(&td.canvas, dx, dy, fw, fh)
-            .map_err(js_err)?;
+        // Restore before propagating an error: an early return would leave
+        // the flip transform and an extra save level on the context, which
+        // the clip bookkeeping (one save level per applied clip) would then
+        // pop instead of its own.
+        let drawn = self.ctx.scale(sx, sy).and_then(|()| {
+            self.ctx
+                .draw_image_with_html_canvas_element_and_dw_and_dh(&td.canvas, dx, dy, fw, fh)
+        });
         self.ctx.restore();
-        Ok(())
+        drawn.map_err(js_err)
     }
 
     fn blit_tinted(
