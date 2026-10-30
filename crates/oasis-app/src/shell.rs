@@ -1145,7 +1145,6 @@ impl<B: ShellBackend> Shell<B> {
 // Boot phases (called from `Shell::boot` between splash progress reports)
 // ---------------------------------------------------------------------------
 
-/// BIOS line 2: real RAM + logical core count.
 /// Draw one complete frame into the backend's back buffer (no present):
 /// the shader wallpaper, the SDI scene with its windows, the vector
 /// chrome, the transition overlay and the agent overlay.
@@ -1352,6 +1351,7 @@ fn carry_out_app_requests(
     }
 }
 
+/// BIOS line 2: real RAM + logical core count.
 fn ram_bios_line() -> String {
     match (sysinfo::total_ram_kb(), sysinfo::cpu_core_count()) {
         (Some(kb), Some(cores)) => format!(

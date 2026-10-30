@@ -256,7 +256,8 @@ pub fn open_by_title(
                 Ok(exact)
             } else {
                 Err(format!(
-                    "{exact} is asking for confirmation (e.g. unsaved changes);                      {file} was not opened"
+                    "{exact} is asking for confirmation (e.g. unsaved changes); \
+                     {file} was not opened"
                 ))
             }
         },

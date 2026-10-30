@@ -74,6 +74,29 @@ fn open_command_launches_apps_and_files() {
     assert_eq!(h.windows().len(), before);
 }
 
+/// `open <app> <file>` on an app that declines to be replaced (a Text
+/// Editor with unsaved changes) reports it in one readable line: the
+/// message used to carry a run of source indentation mid-sentence.
+#[test]
+fn open_command_reports_a_declined_replacement_readably() {
+    let mut h = Harness::new("classic");
+    h.settle();
+    assert!(h.open_app("Text Editor"));
+    h.settle();
+    h.type_text("unsaved words");
+    h.settle();
+    run(&mut h, "open Text Editor /home/user/readme.txt");
+    assert!(
+        output_contains(
+            &h,
+            "Text Editor is asking for confirmation (e.g. unsaved changes); \
+             /home/user/readme.txt was not opened"
+        ),
+        "{:?}",
+        h.state().terminal.output_lines
+    );
+}
+
 /// `open <app> <file>` resolves a relative file against the terminal's
 /// working directory: `open Text Editor notes.txt` used to read
 /// "notes.txt" as part of the app title ("unknown app").
