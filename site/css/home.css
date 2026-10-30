@@ -382,6 +382,7 @@
 }
 .layer__crates li.note { background: none; border-color: transparent; color: var(--faint); font-family: var(--sans); font-size: 0.82rem; }
 .layer__crates li.note strong { color: var(--accent); font-weight: 600; }
+.layer--registry { --c: #ff6b6b; }
 .layer--core { --c: #ff8a3d; }
 .layer--apps { --c: #ffb86b; }
 .layer--engines { --c: #e7d36a; }
