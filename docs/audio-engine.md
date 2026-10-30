@@ -45,19 +45,23 @@ Producers: the `music` terminal command (`oasis-terminal/src/audio_commands.rs`,
 which appends so several requests in one frame all arrive), the Music
 Player app (`play_file` / `stop`), and the MCP `play_media` tool.
 
-The only consumer is the **desktop shell** (`oasis-app/src/media_controller.rs`):
-each tick it drains every recognised line, feeds it to `state.media`
-(an `AudioManager`), performs the returned `MediaAction` on the backend
-(guarding the process-global `stop` / `pause` / `resume` while TV Guide
-audio is streaming), and republishes position and status. The playlist is
+The consumer is `oasis_audio::MusicController` (`controller.rs`), driven by
+each host that runs the Music Player: the **desktop shell**
+(`oasis-app/src/media_controller.rs`) and the **WASM backend**
+(`oasis-backend-wasm/src/media.rs`). The host lends it its `AudioManager`,
+the music track id and its `AudioBackend`; each tick the controller drains
+every recognised line, feeds it to the manager, performs the returned
+`MediaAction` on the backend and republishes position and status. Two
+host-specific rules come in as arguments: `stream_shared` (desktop: TV Guide
+audio streams through the same process-global SDL stream, so `stop` /
+`pause` / `resume` are skipped while it is live) and a `before_play` hook
+(both hosts stop internet radio before a track starts). The playlist is
 every file played through `play_file`, in first-play order; `next` / `prev`
 honour repeat and shuffle; `next` / `prev` while stopped only move the
 selection. A track that finishes on its own does not auto-advance yet.
 
-Other hosts do not service this IPC: the WASM backend only watches
-`/var/radio/request` (for the radio overlay), and the UE5 FFI host has no
-media controller, so `music status` there prints
-"(audio subsystem not initialized)".
+The UE5 FFI host does not service this IPC (it has no media controller),
+so `music status` there prints "(audio subsystem not initialized)".
 
 ## Playlist semantics
 
