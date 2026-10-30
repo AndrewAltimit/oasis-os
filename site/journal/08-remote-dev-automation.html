@@ -173,7 +173,7 @@ pong</code></pre>
       <tr><td><code>status</code></td><td>JSON</td><td>Kiosk app, free memory, frame count, audio-only flag</td></tr>
       <tr><td><code>log</code></td><td>text</td><td>Last 2KB of eboot.log</td></tr>
       <tr><td><code>logfull</code></td><td>text</td><td>Last 8KB of eboot.log</td></tr>
-      <tr><td><code>screencap</code></td><td>raw pixels</td><td>480&times;272 ABGR framebuffer stream</td></tr>
+      <tr><td><code>screencap</code></td><td>raw pixels</td><td>480&times;272 framebuffer stream (<code>PSM_8888</code>: bytes R,G,B,A)</td></tr>
       <tr><td><code>screenshot</code></td><td><code>ok\n</code></td><td>Save VRAM to ms0:</td></tr>
       <tr><td><code>press &lt;button&gt;</code></td><td><code>ok\n</code></td><td>Inject button press+release</td></tr>
       <tr><td><code>hold &lt;button&gt; &lt;ms&gt;</code></td><td><code>ok\n</code></td><td>Hold button for N milliseconds</td></tr>
@@ -263,20 +263,32 @@ echo "press start" | nc -w 3 192.168.0.249 9293</code></pre>
   <h2 id="layer-5-live-framebuffer-streaming"><a class="anchor" href="#layer-5-live-framebuffer-streaming" aria-hidden="true" tabindex="-1">#</a>Layer 5: Live Framebuffer Streaming</h2>
 
   <p>
-    The <code>screencap</code> command reads the PSP&rsquo;s VRAM directly at
-    <code>0x44000000</code> (uncached framebuffer base), crops from the 512-pixel
-    stride to 480 visible pixels per row, and streams the raw ABGR pixel data
+    The <code>screencap</code> command asks <code>sceDisplayGetFrameBuf</code>
+    which of the two VRAM framebuffers is on screen, reads it through the
+    uncached mirror (<code>0x44000000</code> and up), crops from the 512-pixel
+    stride to 480 visible pixels per row, and streams the raw pixel data
     over TCP with a simple header (<code>480 272\n</code>).
   </p>
 
   <p>
-    On the host side, a one-liner converts this to a viewable PNG:
+    The pixels are the PSP&rsquo;s <code>PSM_8888</code> format. The SDK calls it
+    &ldquo;ABGR&rdquo; because that is how the little-endian <code>u32</code> reads
+    (<code>0xAABBGGRR</code>), but in memory, and on the wire, each pixel is the
+    bytes <strong>R, G, B, A</strong>. The display ignores the alpha byte, and the
+    GE usually leaves it at 0. A decoder that takes the &ldquo;ABGR&rdquo; name as
+    the byte order zeroes the red channel and moves red into alpha, which is
+    why our first captures came out with a strong blue/cyan tint and see-through.
+  </p>
+
+  <p>
+    On the host side, a one-liner converts this to a viewable PNG
+    (<code>rgb0</code> reads R, G, B and skips the fourth byte, so the PNG is opaque):
   </p>
 
   <pre><code>$ echo "screencap" | nc -w 5 192.168.0.249 9293 > /tmp/psp.raw
 $ tail -c +9 /tmp/psp.raw | ffmpeg -y -f rawvideo \
-    -pixel_format abgr -video_size 480x272 \
-    -i - -update 1 /tmp/psp.png</code></pre>
+    -pixel_format rgb0 -video_size 480x272 \
+    -i - -pix_fmt rgb24 -update 1 /tmp/psp.png</code></pre>
 
   <figure>
     <img src="../img/09-remote-screencap.png" alt="TV Guide in windowed mode, captured remotely via TCP screencap command" class="pixel" width="480" height="272" loading="lazy">

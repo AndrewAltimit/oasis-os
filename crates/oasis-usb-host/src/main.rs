@@ -69,9 +69,9 @@ fn test_input(psp: &PspDevice) {
 fn test_frame(psp: &PspDevice) {
     println!("--- Frame Test ---");
 
-    // Generate solid red frame (RGB565: R=31, G=0, B=0 -> 0xF800)
-    let red_pixel: u16 = 0xF800;
-    let frame = generate_solid_frame(red_pixel);
+    // Solid red. PSM_5650 keeps red in the low bits (0x001F); the desktop
+    // RGB565 red 0xF800 would show as blue.
+    let frame = generate_solid_frame(protocol::pack_psm5650(255, 0, 0));
 
     match psp.send_frame(&frame, 0) {
         Ok(input) => {
@@ -90,9 +90,9 @@ fn test_streaming(psp: &PspDevice) {
     println!("--- Streaming Test (100 frames) ---");
 
     let colors: [u16; 3] = [
-        0xF800, // Red
-        0x07E0, // Green
-        0x001F, // Blue
+        protocol::pack_psm5650(255, 0, 0),
+        protocol::pack_psm5650(0, 255, 0),
+        protocol::pack_psm5650(0, 0, 255),
     ];
 
     let start = Instant::now();
@@ -137,11 +137,12 @@ fn test_streaming(psp: &PspDevice) {
     println!("  Last input: {}", last_input.display());
 }
 
-/// Generate a solid-color stride-padded RGB565 frame.
-fn generate_solid_frame(color_rgb565: u16) -> Vec<u8> {
+/// Generate a solid-color stride-padded `PSM_5650` frame
+/// (pixel from [`protocol::pack_psm5650`]).
+fn generate_solid_frame(color_psm5650: u16) -> Vec<u8> {
     let size = protocol::FRAME_SIZE_STRIDE;
     let mut frame = vec![0u8; size];
-    let pixel = color_rgb565.to_le_bytes();
+    let pixel = color_psm5650.to_le_bytes();
 
     // Fill stride-padded buffer: 512 pixels/row x 272 rows
     for row in 0..protocol::DISPLAY_HEIGHT as usize {

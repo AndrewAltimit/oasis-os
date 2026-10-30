@@ -221,38 +221,27 @@ class PspConnection:
             self.close()
 
     def screencap(self):
-        """Capture screen and return raw ABGR pixel data (480x272)."""
-        raw = self.send_command_raw("screencap")
-        # Header is "480 272\n", skip it.
-        nl = raw.find(b"\n")
-        if nl < 0:
-            return None
-        return raw[nl + 1:]
+        """Capture the screen.
+
+        Returns ``(width, height, pixels)`` where ``pixels`` is the raw
+        PSM_8888 framebuffer (see :func:`psm8888_to_rgb`), or ``None``.
+        """
+        return parse_screencap(self.send_command_raw("screencap"))
 
     def screencap_png(self, output_path):
         """Capture screen and save as PNG."""
-        pixels = self.screencap()
-        if not pixels:
+        cap = self.screencap()
+        if not cap or not cap[2]:
             print("Error: no screencap data received")
             return False
+        width, height, pixels = cap
 
-        expected = 480 * 272 * 4
+        expected = width * height * 4
         if len(pixels) < expected:
             print(f"Warning: got {len(pixels)} bytes, expected {expected}")
 
-        # Convert ABGR to RGBA for PNG.
-        rgba = bytearray(expected)
-        limit = min(len(pixels), expected)
-        limit -= limit % 4
-        for i in range(0, limit, 4):
-            a, b, g, r = pixels[i], pixels[i + 1], pixels[i + 2], pixels[i + 3]
-            rgba[i] = r
-            rgba[i + 1] = g
-            rgba[i + 2] = b
-            rgba[i + 3] = a
-
         # Write PNG using zlib (no PIL dependency).
-        _write_png(output_path, 480, 272, rgba)
+        _write_png_rgb(output_path, width, height, psm8888_to_rgb(pixels, width, height))
         return True
 
 
@@ -405,11 +394,47 @@ class PspDevKit:
 
 
 # ---------------------------------------------------------------------------
-# Minimal PNG writer (no PIL dependency)
+# Framebuffer decoding + minimal PNG writer (no PIL dependency)
 # ---------------------------------------------------------------------------
 
-def _write_png(path, width, height, rgba_data):
-    """Write RGBA data as a PNG file using only zlib."""
+def parse_screencap(raw):
+    """Split a ``screencap`` reply into ``(width, height, pixels)``.
+
+    The reply is an ASCII header ``"<width> <height>\\n"`` followed by
+    ``width * height`` PSM_8888 pixels (the 512-pixel VRAM stride is already
+    cropped server-side). Returns ``None`` if there is no valid header.
+    """
+    nl = raw.find(b"\n")
+    if nl < 0:
+        return None
+    try:
+        width, height = (int(v) for v in raw[:nl].split()[:2])
+    except ValueError:
+        return None
+    return width, height, raw[nl + 1:]
+
+
+def psm8888_to_rgb(pixels, width, height):
+    """Convert PSP PSM_8888 framebuffer bytes to packed RGB.
+
+    PSM_8888 pixels are the little-endian u32 ``0xAABBGGRR``, so the bytes
+    in memory are **R, G, B, A** (the "ABGR" name describes the u32, not
+    the byte order). The display ignores alpha, and the GE usually leaves
+    it 0 in the framebuffer, so it is dropped: keeping it would make the
+    capture transparent. Missing trailing pixels (short read) are black.
+    """
+    count = width * height
+    usable = min(len(pixels) // 4, count)
+    rgb = bytearray(count * 3)
+    view = memoryview(pixels)[:usable * 4]
+    rgb[0:usable * 3:3] = view[0::4]
+    rgb[1:usable * 3:3] = view[1::4]
+    rgb[2:usable * 3:3] = view[2::4]
+    return rgb
+
+
+def _write_png_rgb(path, width, height, rgb_data):
+    """Write packed 8-bit RGB data as an opaque PNG using only zlib."""
 
     def _chunk(chunk_type, data):
         c = chunk_type + data
@@ -417,16 +442,17 @@ def _write_png(path, width, height, rgba_data):
         return struct.pack(">I", len(data)) + c + struct.pack(">I", crc)
 
     signature = b"\x89PNG\r\n\x1a\n"
-    ihdr_data = struct.pack(">IIBBBBB", width, height, 8, 6, 0, 0, 0)
+    # Bit depth 8, colour type 2 (truecolour, no alpha).
+    ihdr_data = struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0)
     ihdr = _chunk(b"IHDR", ihdr_data)
 
     # Build raw image data with filter byte 0 (None) per row.
     raw = bytearray()
-    stride = width * 4
+    stride = width * 3
     for y in range(height):
         raw.append(0)  # filter byte
         row_start = y * stride
-        raw.extend(rgba_data[row_start:row_start + stride])
+        raw.extend(rgb_data[row_start:row_start + stride])
 
     compressed = zlib.compress(bytes(raw), 9)
     idat = _chunk(b"IDAT", compressed)

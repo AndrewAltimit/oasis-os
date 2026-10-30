@@ -16,8 +16,18 @@
 pub const DISPLAY_WIDTH: u32 = 480;
 pub const DISPLAY_HEIGHT: u32 = 272;
 
-/// Bytes per pixel (RGB565 for bandwidth efficiency)
+/// Bytes per pixel (16-bit `PSM_5650` for bandwidth efficiency)
 pub const BPP_RGB565: u32 = 2;
+
+/// Pack 8-bit RGB into one PSP `PSM_5650` pixel (sent little-endian).
+///
+/// The PSP's 16-bit format puts **red in the low bits**: bits 0-4 = R,
+/// 5-10 = G, 11-15 = B (what desktop APIs call BGR565). The common desktop
+/// RGB565 constant `0xF800` (red in the high bits) therefore shows as
+/// blue on the PSP.
+pub const fn pack_psm5650(r: u8, g: u8, b: u8) -> u16 {
+    ((r as u16) >> 3) | (((g as u16) >> 2) << 5) | (((b as u16) >> 3) << 11)
+}
 
 /// Full frame size in RGB565
 pub const FRAME_SIZE_RGB565: usize = (DISPLAY_WIDTH * DISPLAY_HEIGHT * BPP_RGB565) as usize;
@@ -409,6 +419,17 @@ mod tests {
         packet.extend_from_slice(&[6, 7, 8]);
         let (_, body) = decode_msg(&packet).expect("complete message");
         assert_eq!(InputState::from_bytes(body).expect("state").analog_x, 5);
+    }
+
+    #[test]
+    fn psm5650_puts_red_in_low_bits() {
+        assert_eq!(pack_psm5650(255, 0, 0), 0x001F);
+        assert_eq!(pack_psm5650(0, 255, 0), 0x07E0);
+        assert_eq!(pack_psm5650(0, 0, 255), 0xF800);
+        assert_eq!(pack_psm5650(255, 255, 255), 0xFFFF);
+        assert_eq!(pack_psm5650(0, 0, 0), 0);
+        // Wire order is little-endian: red lands in the first byte.
+        assert_eq!(pack_psm5650(255, 0, 0).to_le_bytes(), [0x1F, 0x00]);
     }
 
     #[test]
