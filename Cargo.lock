@@ -1260,6 +1260,7 @@ dependencies = [
  "log",
  "oasis-css",
  "oasis-html",
+ "oasis-http",
  "oasis-js",
  "oasis-net",
  "oasis-skin",
@@ -1268,6 +1269,7 @@ dependencies = [
  "oasis-vfs",
  "png",
  "proptest",
+ "rayon",
  "rustc-hash 2.1.1",
  "serde",
  "web-time",
@@ -1296,6 +1298,7 @@ dependencies = [
  "oasis-app-tv-guide",
  "oasis-audio",
  "oasis-browser",
+ "oasis-http",
  "oasis-i18n",
  "oasis-net",
  "oasis-platform",
@@ -1348,6 +1351,20 @@ dependencies = [
  "criterion",
  "log",
  "proptest",
+]
+
+[[package]]
+name = "oasis-http"
+version = "1.4.0"
+dependencies = [
+ "brotli",
+ "flate2",
+ "log",
+ "oasis-net",
+ "oasis-types",
+ "oasis-vfs",
+ "rustc-hash 2.1.1",
+ "web-time",
 ]
 
 [[package]]

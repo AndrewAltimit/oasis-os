@@ -5,7 +5,7 @@
 //! Keeping them here avoids a dependency from oasis-browser → oasis-terminal.
 
 #[cfg(not(target_arch = "wasm32"))]
-use oasis_browser::loader;
+use oasis_http as loader;
 use oasis_terminal::{Command, CommandOutput, CommandRegistry, Environment};
 use oasis_types::error::Result;
 

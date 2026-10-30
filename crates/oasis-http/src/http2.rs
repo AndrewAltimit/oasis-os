@@ -882,7 +882,7 @@ mod tests {
         ];
         server.extend(build_frame(FRAME_SETTINGS, 0, 0, &[]));
         let mut stream = MemStream::new(server);
-        let url = crate::loader::Url::parse("https://example.com/").unwrap();
+        let url = crate::Url::parse("https://example.com/").unwrap();
         let err = h2_request(&mut stream, "GET", &url, None, &[]).unwrap_err();
         assert!(err.to_string().contains("frame too large"), "{err}");
         assert_eq!(
@@ -902,7 +902,7 @@ mod tests {
             server.extend(build_frame(FRAME_CONTINUATION, 0, 1, &frag));
         }
         let mut stream = MemStream::new(server);
-        let url = crate::loader::Url::parse("https://example.com/").unwrap();
+        let url = crate::Url::parse("https://example.com/").unwrap();
         let err = h2_request(&mut stream, "GET", &url, None, &[]).unwrap_err();
         assert!(err.to_string().contains("header block exceeds"), "{err}");
         assert_eq!(
@@ -927,7 +927,7 @@ mod tests {
             &block,
         ));
         let mut stream = MemStream::new(server);
-        let url = crate::loader::Url::parse("https://example.com/").unwrap();
+        let url = crate::Url::parse("https://example.com/").unwrap();
         let err = h2_request(&mut stream, "GET", &url, None, &[]).unwrap_err();
         assert!(err.to_string().contains("exceeds"), "{err}");
         assert_eq!(
@@ -1034,7 +1034,7 @@ mod tests {
         server.extend(build_frame(FRAME_DATA, FLAG_END_STREAM, 1, b"<hi/>"));
 
         let mut stream = MemStream::new(server);
-        let url = crate::loader::Url::parse("https://example.com/").unwrap();
+        let url = crate::Url::parse("https://example.com/").unwrap();
         let resp = h2_request(&mut stream, "GET", &url, None, &[]).unwrap();
         assert_eq!(resp.status_code, 200);
         assert_eq!(resp.body, b"<hi/>");
@@ -1056,7 +1056,7 @@ mod tests {
         ));
 
         let mut stream = MemStream::new(server);
-        let url = crate::loader::Url::parse("https://example.com/").unwrap();
+        let url = crate::Url::parse("https://example.com/").unwrap();
         let resp = h2_request(&mut stream, "GET", &url, None, &[]).unwrap();
         assert_eq!(resp.status_code, 200);
         assert!(resp.body.is_empty());
@@ -1076,7 +1076,7 @@ mod tests {
         ));
 
         let mut stream = MemStream::new(server);
-        let url = crate::loader::Url::parse("https://example.com/").unwrap();
+        let url = crate::Url::parse("https://example.com/").unwrap();
         let resp = h2_request(&mut stream, "GET", &url, None, &[]).unwrap();
         assert_eq!(resp.status_code, 200);
         // Among the written bytes there should be a PING ACK frame.
@@ -1106,7 +1106,7 @@ mod tests {
         server.extend(build_frame(FRAME_RST_STREAM, 0, 1, &[0, 0, 0, 7]));
 
         let mut stream = MemStream::new(server);
-        let url = crate::loader::Url::parse("https://example.com/").unwrap();
+        let url = crate::Url::parse("https://example.com/").unwrap();
         let err = h2_request(&mut stream, "GET", &url, None, &[]).unwrap_err();
         assert!(err.to_string().contains("stream reset"));
     }
@@ -1126,7 +1126,7 @@ mod tests {
         server.extend(build_frame(FRAME_CONTINUATION, FLAG_END_HEADERS, 1, b));
 
         let mut stream = MemStream::new(server);
-        let url = crate::loader::Url::parse("https://example.com/").unwrap();
+        let url = crate::Url::parse("https://example.com/").unwrap();
         let resp = h2_request(&mut stream, "GET", &url, None, &[]).unwrap();
         assert_eq!(resp.status_code, 200);
     }
@@ -1144,7 +1144,7 @@ mod tests {
         ));
 
         let mut stream = MemStream::new(server);
-        let url = crate::loader::Url::parse("https://example.com/api").unwrap();
+        let url = crate::Url::parse("https://example.com/api").unwrap();
         let body = b"key=value";
         let resp = h2_request(&mut stream, "POST", &url, Some(body), &[]).unwrap();
         assert_eq!(resp.status_code, 200);
@@ -1169,7 +1169,7 @@ mod tests {
 
     #[test]
     fn request_headers_include_pseudo_and_defaults() {
-        let url = crate::loader::Url::parse("https://example.com/path?q=1").unwrap();
+        let url = crate::Url::parse("https://example.com/path?q=1").unwrap();
         let block = encode_request_headers("GET", &url, None, &[]);
 
         let mut table = DynamicTable::new(4096);
@@ -1190,7 +1190,7 @@ mod tests {
 
     #[test]
     fn connection_specific_headers_dropped() {
-        let url = crate::loader::Url::parse("https://example.com/").unwrap();
+        let url = crate::Url::parse("https://example.com/").unwrap();
         let block = encode_request_headers(
             "GET",
             &url,
@@ -1217,7 +1217,7 @@ mod tests {
 
     #[test]
     fn post_request_emits_content_length() {
-        let url = crate::loader::Url::parse("https://example.com/api").unwrap();
+        let url = crate::Url::parse("https://example.com/api").unwrap();
         let block = encode_request_headers("POST", &url, Some(42), &[]);
         let mut table = DynamicTable::new(4096);
         let decoded = decode_block(&block, &mut table, 4096).unwrap();
@@ -1230,7 +1230,7 @@ mod tests {
 
     #[test]
     fn explicit_content_length_header_not_duplicated() {
-        let url = crate::loader::Url::parse("https://example.com/api").unwrap();
+        let url = crate::Url::parse("https://example.com/api").unwrap();
         let block = encode_request_headers("POST", &url, Some(3), &[("Content-Length", "99")]);
         let mut table = DynamicTable::new(4096);
         let decoded = decode_block(&block, &mut table, 4096).unwrap();
@@ -1250,7 +1250,7 @@ mod tests {
         // not RST_STREAM on stream 0.
         server.extend(build_frame(FRAME_HEADERS, FLAG_END_HEADERS, 0, &[]));
         let mut stream = MemStream::new(server);
-        let url = crate::loader::Url::parse("https://example.com/").unwrap();
+        let url = crate::Url::parse("https://example.com/").unwrap();
         let err = h2_request(&mut stream, "GET", &url, None, &[]).unwrap_err();
         assert!(err.to_string().contains("stream 0"));
         // Verify a GOAWAY was emitted on stream 0, not a RST_STREAM.
@@ -1286,7 +1286,7 @@ mod tests {
         server.extend(build_frame(FRAME_SETTINGS, 0, 0, &[]));
         server.extend(build_frame(FRAME_DATA, 0, 0, b"bad"));
         let mut stream = MemStream::new(server);
-        let url = crate::loader::Url::parse("https://example.com/").unwrap();
+        let url = crate::Url::parse("https://example.com/").unwrap();
         let err = h2_request(&mut stream, "GET", &url, None, &[]).unwrap_err();
         assert!(err.to_string().contains("stream 0"));
     }
@@ -1300,7 +1300,7 @@ mod tests {
         let mut server = Vec::new();
         server.extend(build_frame(FRAME_SETTINGS, 0, 0, &settings_payload));
         let mut stream = MemStream::new(server);
-        let url = crate::loader::Url::parse("https://example.com/").unwrap();
+        let url = crate::Url::parse("https://example.com/").unwrap();
         let err = h2_request(&mut stream, "GET", &url, None, &[]).unwrap_err();
         assert!(err.to_string().contains("MAX_FRAME_SIZE"));
     }
@@ -1310,7 +1310,7 @@ mod tests {
         // Build a header block larger than 16 KiB (the default HTTP/2
         // MAX_FRAME_SIZE floor) by adding a big Cookie header.
         let big_cookie = "k=".to_string() + &"x".repeat(20_000);
-        let url = crate::loader::Url::parse("https://example.com/").unwrap();
+        let url = crate::Url::parse("https://example.com/").unwrap();
 
         // Script the server: reply immediately with a small response.
         let mut server = Vec::new();
@@ -1368,7 +1368,7 @@ mod tests {
         // PING on stream 1 — protocol error per RFC 9113 §6.7.
         server.extend(build_frame(FRAME_PING, 0, 1, &[0u8; 8]));
         let mut stream = MemStream::new(server);
-        let url = crate::loader::Url::parse("https://example.com/").unwrap();
+        let url = crate::Url::parse("https://example.com/").unwrap();
         let err = h2_request(&mut stream, "GET", &url, None, &[]).unwrap_err();
         assert!(err.to_string().contains("PING on non-zero stream"));
     }
@@ -1380,7 +1380,7 @@ mod tests {
         // RST_STREAM on stream 0 — protocol error per RFC 9113 §6.4.
         server.extend(build_frame(FRAME_RST_STREAM, 0, 0, &[0, 0, 0, 1]));
         let mut stream = MemStream::new(server);
-        let url = crate::loader::Url::parse("https://example.com/").unwrap();
+        let url = crate::Url::parse("https://example.com/").unwrap();
         let err = h2_request(&mut stream, "GET", &url, None, &[]).unwrap_err();
         assert!(err.to_string().contains("RST_STREAM on stream 0"));
     }
@@ -1392,7 +1392,7 @@ mod tests {
         // PUSH_PROMISE with only 3 payload bytes (needs 4 for stream ID).
         server.extend(build_frame(FRAME_PUSH_PROMISE, 0, 1, &[0, 0, 0]));
         let mut stream = MemStream::new(server);
-        let url = crate::loader::Url::parse("https://example.com/").unwrap();
+        let url = crate::Url::parse("https://example.com/").unwrap();
         let err = h2_request(&mut stream, "GET", &url, None, &[]).unwrap_err();
         assert!(err.to_string().contains("PUSH_PROMISE too short"));
     }
@@ -1403,7 +1403,7 @@ mod tests {
         // SETTINGS ACK with non-empty payload — FRAME_SIZE_ERROR.
         server.extend(build_frame(FRAME_SETTINGS, FLAG_ACK, 0, &[0u8; 6]));
         let mut stream = MemStream::new(server);
-        let url = crate::loader::Url::parse("https://example.com/").unwrap();
+        let url = crate::Url::parse("https://example.com/").unwrap();
         let err = h2_request(&mut stream, "GET", &url, None, &[]).unwrap_err();
         assert!(
             err.to_string()
@@ -1417,7 +1417,7 @@ mod tests {
         // SETTINGS on stream 1 — protocol error per RFC 9113 §6.5.
         server.extend(build_frame(FRAME_SETTINGS, 0, 1, &[]));
         let mut stream = MemStream::new(server);
-        let url = crate::loader::Url::parse("https://example.com/").unwrap();
+        let url = crate::Url::parse("https://example.com/").unwrap();
         let err = h2_request(&mut stream, "GET", &url, None, &[]).unwrap_err();
         assert!(err.to_string().contains("SETTINGS on non-zero stream"));
     }
@@ -1429,7 +1429,7 @@ mod tests {
         // WINDOW_UPDATE with 3 bytes instead of exactly 4.
         server.extend(build_frame(FRAME_WINDOW_UPDATE, 0, 0, &[0, 0, 1]));
         let mut stream = MemStream::new(server);
-        let url = crate::loader::Url::parse("https://example.com/").unwrap();
+        let url = crate::Url::parse("https://example.com/").unwrap();
         let err = h2_request(&mut stream, "GET", &url, None, &[]).unwrap_err();
         assert!(err.to_string().contains("WINDOW_UPDATE"));
     }
@@ -1441,7 +1441,7 @@ mod tests {
         // PING ACK with 4 bytes instead of exactly 8.
         server.extend(build_frame(FRAME_PING, FLAG_ACK, 0, &[0u8; 4]));
         let mut stream = MemStream::new(server);
-        let url = crate::loader::Url::parse("https://example.com/").unwrap();
+        let url = crate::Url::parse("https://example.com/").unwrap();
         let err = h2_request(&mut stream, "GET", &url, None, &[]).unwrap_err();
         assert!(err.to_string().contains("malformed PING"));
     }
@@ -1463,7 +1463,7 @@ mod tests {
             &padded,
         ));
         let mut stream = MemStream::new(server);
-        let url = crate::loader::Url::parse("https://example.com/").unwrap();
+        let url = crate::Url::parse("https://example.com/").unwrap();
         let resp = h2_request(&mut stream, "GET", &url, None, &[]).unwrap();
         assert_eq!(resp.body, b"body");
     }
@@ -1474,13 +1474,13 @@ mod tests {
     #[test]
     #[ignore]
     fn wikipedia_live_h2() {
-        use crate::loader::http::http_get;
+        use crate::http::http_get;
         use oasis_net::tls_rustls::RustlsTlsProvider;
         use oasis_types::tls::TlsProvider;
 
         let provider = RustlsTlsProvider::new();
         let tls: &dyn TlsProvider = &provider;
-        let url = crate::loader::Url::parse("https://www.wikipedia.org/").unwrap();
+        let url = crate::Url::parse("https://www.wikipedia.org/").unwrap();
         let resp =
             http_get(&url, Some(tls)).unwrap_or_else(|e| panic!("wikipedia fetch failed: {e}"));
         let body = String::from_utf8_lossy(&resp.body);
@@ -1507,13 +1507,13 @@ mod tests {
     #[test]
     #[ignore]
     fn github_live_h2() {
-        use crate::loader::http::http_get;
+        use crate::http::http_get;
         use oasis_net::tls_rustls::RustlsTlsProvider;
         use oasis_types::tls::TlsProvider;
 
         let provider = RustlsTlsProvider::new();
         let tls: &dyn TlsProvider = &provider;
-        let url = crate::loader::Url::parse("https://github.com/").unwrap();
+        let url = crate::Url::parse("https://github.com/").unwrap();
         let resp = http_get(&url, Some(tls)).unwrap_or_else(|e| panic!("github fetch failed: {e}"));
         assert_eq!(resp.status, 200);
         assert!(

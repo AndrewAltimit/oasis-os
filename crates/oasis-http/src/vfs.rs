@@ -206,7 +206,7 @@ pub fn error_page(url: &str, message: &str) -> ResourceResponse {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::loader::{HttpMethod, ResourceSource};
+    use crate::{HttpMethod, ResourceSource};
     use oasis_vfs::MemoryVfs;
 
     /// Normalise a path by resolving `.` and `..` segments (test helper).

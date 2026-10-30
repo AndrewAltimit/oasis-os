@@ -15,12 +15,13 @@ canvas = []
 web-fonts = ["dep:fontdue", "oasis-css/web-fonts"]
 webp = ["dep:image"]
 parallel-style = ["oasis-css/parallel-style"]
-psp = []
+psp = ["oasis-http/psp"]
 
 [dependencies]
 oasis-types = { workspace = true }
 oasis-html = { workspace = true }
 oasis-css = { workspace = true }
+oasis-http = { workspace = true }
 oasis-vfs = { workspace = true }
 oasis-net = { workspace = true }
 oasis-skin = { workspace = true }
@@ -39,8 +40,10 @@ web-time = { workspace = true }
 
 [dev-dependencies]
 proptest.workspace = true
-criterion = { version = "0.5", features = ["html_reports"] }
+criterion.workspace = true
 oasis-test-backend = { workspace = true }
+# `examples/triage.rs` fans pages out over rayon under `parallel-style`.
+rayon = { workspace = true }
 oasis-net = { workspace = true, features = ["tls-rustls"] }
 
 [[bench]]

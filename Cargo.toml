@@ -15,6 +15,7 @@ members = [
     "crates/oasis-browser",
     "crates/oasis-css",
     "crates/oasis-html",
+    "crates/oasis-http",
     "crates/oasis-js",
     "crates/oasis-app-core",
     "crates/oasis-app-games",
@@ -163,6 +164,7 @@ oasis-terminal = { path = "crates/oasis-terminal" }
 oasis-browser = { path = "crates/oasis-browser" }
 oasis-css = { path = "crates/oasis-css" }
 oasis-html = { path = "crates/oasis-html" }
+oasis-http = { path = "crates/oasis-http" }
 oasis-js = { path = "crates/oasis-js" }
 oasis-app-core = { path = "crates/oasis-app-core" }
 oasis-app-games = { path = "crates/oasis-app-games" }

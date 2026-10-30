@@ -73,7 +73,7 @@ pub mod gemini;
 pub(crate) use oasis_html as html;
 pub mod image;
 pub(crate) mod layout;
-pub mod loader;
+pub use oasis_http as loader;
 pub mod nav;
 pub(crate) mod paint;
 pub mod reader;

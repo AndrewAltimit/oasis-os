@@ -18,9 +18,9 @@ mod inner {
     use oasis_net::tls::TlsProvider;
     use oasis_types::error::OasisError;
 
-    use crate::loader::cookies::{CookieHook, CookieJar};
-    use crate::loader::csp;
-    use crate::loader::{self, HttpMethod, LoadedResource, ResourceRequest, Url};
+    use crate::cookies::{CookieHook, CookieJar};
+    use crate::csp;
+    use crate::{HttpMethod, LoadedResource, ResourceRequest, Url};
 
     /// Cookie hook for one request: reads and writes the worker's jar and
     /// records every hop's `Set-Cookie` headers (with the hop URL that
@@ -166,7 +166,7 @@ mod inner {
                 next_id: 1,
                 in_flight: 0,
                 cancelled,
-                max_redirects: loader::http::MAX_REDIRECTS,
+                max_redirects: crate::http::MAX_REDIRECTS,
             })
         }
 
@@ -313,7 +313,7 @@ mod inner {
                         jar: cookie_jar,
                         updates: Vec::new(),
                     };
-                    let result = loader::http::http_request_with_cookies(
+                    let result = crate::http::http_request_with_cookies(
                         method,
                         &url,
                         request.body.as_deref(),
@@ -327,10 +327,10 @@ mod inner {
                     match result {
                         Ok((resp, headers)) => {
                             // Extract cache validators.
-                            let etag = loader::http::response_find_header(&headers, "etag")
+                            let etag = crate::http::response_find_header(&headers, "etag")
                                 .map(String::from);
                             let last_modified =
-                                loader::http::response_find_header(&headers, "last-modified")
+                                crate::http::response_find_header(&headers, "last-modified")
                                     .map(String::from);
 
                             // CSP of the final response.
@@ -349,7 +349,7 @@ mod inner {
                     }
                 },
                 "gemini" => {
-                    let gemini_result = loader::gemini_fetch::gemini_get(&url, tls)
+                    let gemini_result = crate::gemini_fetch::gemini_get(&url, tls)
                         .map(LoadedResource::from_response);
                     (gemini_result, Vec::new())
                 },
@@ -376,7 +376,7 @@ mod tests {
     use oasis_types::backend::NetworkStream;
 
     use super::IoThread;
-    use crate::loader::cookies::CookieJar;
+    use crate::cookies::CookieJar;
 
     /// TLS provider that records when it is dropped.
     struct DropFlagProvider(Arc<AtomicBool>);
@@ -426,7 +426,7 @@ mod tests {
         use std::time::{Duration, Instant};
 
         use super::IoRequestKind;
-        use crate::loader::{HttpMethod, ResourceRequest, ResourceSource};
+        use crate::{HttpMethod, ResourceRequest, ResourceSource};
 
         let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
         let port = listener.local_addr().expect("addr").port();

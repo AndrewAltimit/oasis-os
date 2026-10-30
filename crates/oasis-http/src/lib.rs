@@ -1,9 +1,27 @@
-//! Resource loading: URL parsing, content type detection, and loader
-//! orchestration.
+//! Resource loading for the OASIS_OS browser: URL parsing, content
+//! type detection, and loader orchestration over VFS, HTTP/1.1, HTTP/2
+//! (rustls via `oasis-net`) and Gemini, plus the cookie jar, the
+//! resource cache, CSP parsing and the background I/O thread.
+//!
+//! `oasis-browser` re-exports this crate as `oasis_browser::loader`, so
+//! embedders that only need to fetch (e.g. the `http` / `browse`
+//! terminal commands in `oasis-core`) can depend on `oasis-http`
+//! without pulling in the layout and paint engine.
+//!
+//! # Feature flags
+//!
+//! - `psp` — swap the std/rustls client for the PSP client in
+//!   [`http_psp`] (raw `sceNetInet` sockets + embedded-tls). Forwarded
+//!   from `oasis-browser/psp`.
+//!
+//! The build script sets `cfg(native_net)` on every target except
+//! `wasm32` and `psp`: the I/O thread, the std TCP / rustls client, the
+//! cookie jar and the DNS cache only exist there.
 
 pub mod cache;
 pub mod cookies;
 pub mod csp;
+pub mod gemini;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod gemini_fetch;
 #[cfg(not(target_arch = "wasm32"))]
@@ -592,8 +610,8 @@ pub fn parse_data_uri(uri: &str) -> Option<ResourceResponse> {
     };
 
     let body = if is_base64 {
-        // Simple base64 decode (no padding validation).
-        base64_decode(data)?
+        // Whitespace-tolerant, padding optional.
+        oasis_types::util::base64::decode(data).ok()?
     } else {
         // URL-decode the data.
         url_decode(data).into_bytes()
@@ -627,41 +645,6 @@ fn url_decode(s: &str) -> String {
         }
     }
     result
-}
-
-/// Minimal base64 decode (standard alphabet, ignores padding).
-fn base64_decode(input: &str) -> Option<Vec<u8>> {
-    let table = |c: u8| -> Option<u8> {
-        match c {
-            b'A'..=b'Z' => Some(c - b'A'),
-            b'a'..=b'z' => Some(c - b'a' + 26),
-            b'0'..=b'9' => Some(c - b'0' + 52),
-            b'+' => Some(62),
-            b'/' => Some(63),
-            _ => None,
-        }
-    };
-
-    let bytes: Vec<u8> = input
-        .bytes()
-        .filter(|&b| b != b'=' && b != b'\n' && b != b'\r' && b != b' ')
-        .collect();
-    let mut result = Vec::with_capacity(bytes.len() * 3 / 4);
-
-    for chunk in bytes.chunks(4) {
-        let b0 = table(*chunk.first()?)?;
-        let b1 = table(*chunk.get(1)?)?;
-        result.push((b0 << 2) | (b1 >> 4));
-        if let Some(&c2) = chunk.get(2) {
-            let b2 = table(c2)?;
-            result.push((b1 << 4) | (b2 >> 2));
-            if let Some(&c3) = chunk.get(3) {
-                let b3 = table(c3)?;
-                result.push((b2 << 6) | b3);
-            }
-        }
-    }
-    Some(result)
 }
 
 /// Detect the content type for a URL by inspecting its file extension.

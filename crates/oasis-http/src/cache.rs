@@ -357,7 +357,7 @@ impl ResourceCache {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::loader::ContentType;
+    use crate::ContentType;
 
     /// Helper: build a minimal `CacheEntry` with the given body size.
     fn make_entry(url: &str, size: usize) -> (String, CacheEntry) {

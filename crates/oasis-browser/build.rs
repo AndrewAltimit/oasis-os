@@ -4,7 +4,8 @@
 //! desktop networking stack: the background I/O thread, the std TCP /
 //! rustls HTTP client, the cookie jar and the DNS cache. That is every
 //! target except `wasm32` (no sockets) and the PSP build (`psp` feature,
-//! which uses `loader/http_psp.rs`). Write `#[cfg(native_net)]` instead
+//! which uses `oasis-http`'s `http_psp.rs`; `oasis-http` has the
+//! same build script). Write `#[cfg(native_net)]` instead
 //! of `#[cfg(not(any(target_arch = "wasm32", feature = "psp")))]`.
 
 fn main() {

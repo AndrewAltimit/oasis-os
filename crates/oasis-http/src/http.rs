@@ -6,7 +6,7 @@
 use std::cell::RefCell;
 use std::io::{self, Read, Write};
 use std::net::TcpStream;
-#[cfg(all(native_net, feature = "javascript"))]
+#[cfg(native_net)]
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
@@ -56,15 +56,16 @@ const MAX_TOTAL_CONNS: usize = 8;
 const POOL_IDLE_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// DNS cache TTL (5 minutes). The cache backs JS `fetch()` connect-src
-/// checks, so it only exists with `javascript` on native-net targets.
-#[cfg(all(native_net, feature = "javascript"))]
+/// checks (`oasis-browser`'s `js_dom::fetch`), so it only exists on
+/// native-net targets.
+#[cfg(native_net)]
 const DNS_CACHE_TTL: Duration = Duration::from_secs(300);
 
 /// Global DNS cache: maps hostname -> (resolved IPs, cached time).
-#[cfg(all(native_net, feature = "javascript"))]
+#[cfg(native_net)]
 type DnsCacheMap = FxHashMap<String, (Vec<std::net::IpAddr>, Instant)>;
 
-#[cfg(all(native_net, feature = "javascript"))]
+#[cfg(native_net)]
 static DNS_CACHE: std::sync::LazyLock<Mutex<DnsCacheMap>> =
     std::sync::LazyLock::new(|| Mutex::new(FxHashMap::default()));
 
@@ -143,8 +144,8 @@ thread_local! {
 ///
 /// Returns cached addresses if still within TTL, otherwise performs a
 /// fresh DNS resolution and updates the cache.
-#[cfg(all(native_net, feature = "javascript"))]
-pub(crate) fn dns_resolve_cached(host: &str) -> io::Result<Vec<std::net::IpAddr>> {
+#[cfg(native_net)]
+pub fn dns_resolve_cached(host: &str) -> io::Result<Vec<std::net::IpAddr>> {
     use std::net::ToSocketAddrs;
 
     // Check cache first.

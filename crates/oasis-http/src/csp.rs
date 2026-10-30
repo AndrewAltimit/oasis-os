@@ -503,30 +503,11 @@ fn host_source_matches(h: &HostSource, url: &Url, page: Option<&Url>) -> bool {
 
 /// Decode standard or URL-safe base64, padding optional.
 fn base64_decode_any(input: &str) -> Option<Vec<u8>> {
-    let val = |c: u8| -> Option<u32> {
-        Some(match c {
-            b'A'..=b'Z' => c - b'A',
-            b'a'..=b'z' => c - b'a' + 26,
-            b'0'..=b'9' => c - b'0' + 52,
-            b'+' | b'-' => 62,
-            b'/' | b'_' => 63,
-            _ => return None,
-        } as u32)
-    };
-    let bytes = input.trim_end_matches('=').as_bytes();
-    if bytes.is_empty() || bytes.len() % 4 == 1 {
+    if input.is_empty() || input.bytes().any(|b| b.is_ascii_whitespace()) {
         return None;
     }
-    let mut out = Vec::with_capacity(bytes.len() * 3 / 4);
-    for chunk in bytes.chunks(4) {
-        let mut acc = 0u32;
-        for (i, &b) in chunk.iter().enumerate() {
-            acc |= val(b)? << (18 - 6 * i);
-        }
-        let n = chunk.len() * 6 / 8;
-        out.extend_from_slice(&acc.to_be_bytes()[1..=n]);
-    }
-    Some(out)
+    let standard = input.replace('-', "+").replace('_', "/");
+    oasis_types::util::base64::decode(&standard).ok()
 }
 
 /// SHA-256 (FIPS 180-4) of `data`.
