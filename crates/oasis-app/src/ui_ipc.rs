@@ -22,10 +22,9 @@ use oasis_core::vfs::{MemoryVfs, Vfs};
 use crate::app_state::AppState;
 use crate::launch::{self, LaunchOpts};
 
-pub const NOTIFY_PATH: &str = "/var/notify/message";
-pub const SCREENSHOT_REQUEST_PATH: &str = "/var/screenshot/request";
-pub const THEME_STATUS_PATH: &str = "/var/theme/current";
-pub use oasis_core::terminal::BROWSER_REQUEST_PATH;
+pub use oasis_core::ipc::{
+    BROWSER_REQUEST_PATH, NOTIFY_PATH, SCREENSHOT_REQUEST_PATH, THEME_STATUS_PATH,
+};
 
 /// Service every UI request file. Returns the VFS path of a requested
 /// screenshot: the caller captures the next presented frame there

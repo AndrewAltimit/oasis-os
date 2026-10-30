@@ -24,11 +24,9 @@ pub use channel::{Channel, ChannelConfig, ChannelSource};
 pub use guide::TvGuideState;
 pub use schedule::{CachedSchedule, ScheduleSlot, schedule_at, schedule_range};
 
-/// VFS path for TV channel configuration.
-pub const TV_CHANNELS_PATH: &str = "/etc/tv/channels.toml";
-
-/// VFS path for TV playback requests (IPC).
-pub const TV_REQUEST_PATH: &str = "/var/tv/request";
+/// TV Guide VFS paths (channel config, playback request / status IPC),
+/// shared with the hosts through `oasis_types::ipc`.
+pub use oasis_types::ipc::{TV_CHANNELS_PATH, TV_REQUEST_PATH, TV_STATUS_PATH};
 
 /// The `"{url} {seek_secs}"` part of a TV Guide tune request
 /// (`tune_url {url} {seek_secs}` at [`TV_REQUEST_PATH`]), or `None` for any
@@ -40,6 +38,3 @@ pub fn tune_url_request(req: &oasis_app_core::AppRequest) -> Option<&str> {
     }
     req.data.strip_prefix("tune_url ")
 }
-
-/// VFS path for TV playback status (IPC).
-pub const TV_STATUS_PATH: &str = "/var/tv/status";

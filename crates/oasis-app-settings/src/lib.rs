@@ -29,64 +29,16 @@ pub use colors::SettingsColors;
 use layout::SettingsLayout;
 use rows::{Row, row_of_item, scroll_for};
 
-/// VFS IPC path used to request a skin change.
-pub const SKIN_CHANGE_REQUEST_PATH: &str = "/system/ipc/skin-change";
-
-/// VFS IPC path used to request an in-memory theme preview ("Apply" in the
-/// Appearance editor). The payload is a serialized `SkinTheme` TOML document;
-/// the shell keeps the current skin's layout/features and swaps only the
-/// theme, without writing anything to disk.
-pub const SKIN_APPLY_THEME_REQUEST_PATH: &str = "/system/ipc/skin-apply-theme";
-
-/// VFS IPC path used to save the edited theme as a custom skin. The payload
-/// is `<name>\n<theme toml>`; the shell writes `skins/<name>/` in the
-/// standard directory format and then swaps to it by name.
-pub const SKIN_SAVE_CUSTOM_REQUEST_PATH: &str = "/system/ipc/skin-save-custom";
-
-/// VFS IPC path used to request a resolution change.
-///
-/// The payload is `"WIDTHxHEIGHT"` (e.g. `"1280x720"`).
-pub const RESOLUTION_CHANGE_REQUEST_PATH: &str = "/system/ipc/resolution-change";
-
-/// VFS IPC path used to set the master volume. Payload: `0`-`100`.
-pub const VOLUME_CHANGE_REQUEST_PATH: &str = "/system/ipc/volume";
-
-/// VFS IPC path used to select the UI locale. Payload: a locale code
-/// (`"en"`, `"de"`, ...).
-pub const LOCALE_CHANGE_REQUEST_PATH: &str = "/system/ipc/locale";
-
-/// VFS IPC path used to set the font scale. Payload: a float such as
-/// `"1.25"`.
-pub const FONT_SCALE_REQUEST_PATH: &str = "/system/ipc/font-scale";
-
-/// VFS IPC path used to switch reduced motion. Payload: `"1"` or `"0"`.
-pub const REDUCED_MOTION_REQUEST_PATH: &str = "/system/ipc/reduced-motion";
-
-/// VFS IPC path for the high-contrast shortcut. Payload: `"on"` (swap to
-/// [`HIGH_CONTRAST_SKIN`], remembering the current skin) or `"off"` (swap
-/// back to the remembered skin).
-pub const HIGH_CONTRAST_REQUEST_PATH: &str = "/system/ipc/high-contrast";
-
-/// VFS path where the shell publishes the currently active skin name.
-pub const SKIN_STATE_PATH: &str = "/system/state/skin";
-
-/// VFS path where the shell publishes the current resolution (`"WxH"`).
-pub const RESOLUTION_STATE_PATH: &str = "/system/state/resolution";
-
-/// VFS path where the shell publishes the current backend name.
-pub const BACKEND_STATE_PATH: &str = "/system/state/backend";
-
-/// VFS path where the shell publishes the master volume (`0`-`100`).
-pub const VOLUME_STATE_PATH: &str = "/system/state/volume";
-
-/// VFS path where the shell publishes the selected locale code.
-pub const LOCALE_STATE_PATH: &str = "/system/state/locale";
-
-/// VFS path where the shell publishes the font scale.
-pub const FONT_SCALE_STATE_PATH: &str = "/system/state/font-scale";
-
-/// VFS path where the shell publishes the reduced-motion switch (`1`/`0`).
-pub const REDUCED_MOTION_STATE_PATH: &str = "/system/state/reduced-motion";
+// The VFS IPC paths the Settings app posts requests to and reads the host's
+// state from, plus the resolution grammar, live in `oasis_types::ipc`
+// (shared with the host shell); re-exported here for existing callers.
+pub use oasis_types::ipc::{
+    BACKEND_STATE_PATH, FONT_SCALE_REQUEST_PATH, FONT_SCALE_STATE_PATH, HIGH_CONTRAST_REQUEST_PATH,
+    LOCALE_CHANGE_REQUEST_PATH, LOCALE_STATE_PATH, REDUCED_MOTION_REQUEST_PATH,
+    REDUCED_MOTION_STATE_PATH, RESOLUTION_CHANGE_REQUEST_PATH, RESOLUTION_STATE_PATH,
+    SKIN_APPLY_THEME_REQUEST_PATH, SKIN_CHANGE_REQUEST_PATH, SKIN_SAVE_CUSTOM_REQUEST_PATH,
+    SKIN_STATE_PATH, VOLUME_CHANGE_REQUEST_PATH, VOLUME_STATE_PATH, parse_resolution,
+};
 
 /// Built-in skin used by the Accessibility high-contrast shortcut.
 pub const HIGH_CONTRAST_SKIN: &str = "highcontrast";
@@ -1510,16 +1462,6 @@ fn locale_label(locale: Locale) -> String {
     } else {
         format!("{} ({})", locale.english_name(), locale.code())
     }
-}
-
-/// Parse a `"WIDTHxHEIGHT"` string into its components.
-///
-/// Shared between the Settings app (for reading state payloads) and the
-/// shell runner in `oasis-app` (for dispatching IPC resolution-change
-/// requests). Keeping a single copy prevents the two sides from drifting.
-pub fn parse_resolution(s: &str) -> Option<(u32, u32)> {
-    let (w, h) = s.trim().split_once('x')?;
-    Some((w.trim().parse().ok()?, h.trim().parse().ok()?))
 }
 
 /// Friendly label for a resolution preset (aspect ratio / common name).

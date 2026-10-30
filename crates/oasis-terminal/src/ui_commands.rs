@@ -4,7 +4,10 @@ use oasis_types::error::OasisError;
 #[cfg(test)]
 use oasis_types::error::Result;
 
-use oasis_types::ipc::{WM_REQUEST_PATH, WM_STATUS_PATH};
+use oasis_types::ipc::{
+    NOTIFY_PATH, SCREENSHOT_REQUEST_PATH, THEME_STATUS_PATH, WM_REQUEST_PATH, WM_STATUS_PATH,
+    WmRequest,
+};
 
 use crate::interpreter::{CommandOutput, CommandSignal};
 
@@ -114,7 +117,7 @@ define_command!(
         let subcmd = args.first().copied().unwrap_or("show");
         match subcmd {
             "show" | "colors" => {
-                let theme_path = "/var/theme/current";
+                let theme_path = THEME_STATUS_PATH;
                 if env.vfs.exists(theme_path) {
                     let data = env.vfs.read(theme_path)?;
                     Ok(CommandOutput::Text(
@@ -179,7 +182,7 @@ define_command!(
 
         // Write level and message to VFS for the UI layer to pick up.
         let payload = format!("{level}:{message}");
-        let notify_path = "/var/notify/message";
+        let notify_path = NOTIFY_PATH;
         env.vfs.write(notify_path, payload.as_bytes())?;
         Ok(CommandOutput::Text(format!(
             "Notification queued [{level}]: {message}"
@@ -199,7 +202,7 @@ define_command!(
     "ui",
     |args, env| {
         let path = args.first().copied().unwrap_or("/tmp/screenshot.bmp");
-        let req_path = "/var/screenshot/request";
+        let req_path = SCREENSHOT_REQUEST_PATH;
         env.vfs.write(req_path, path.as_bytes())?;
         Ok(CommandOutput::Text(format!(
             "Screenshot request queued: {path}"
@@ -207,9 +210,45 @@ define_command!(
     }
 );
 
+// ---------------------------------------------------------------------------
+// open
+// ---------------------------------------------------------------------------
+
+const OPEN_USAGE: &str = "open <app> [/path/to/file]";
+
+define_command!(
+    OpenCmd,
+    "open",
+    "Open an app window, optionally with a file",
+    OPEN_USAGE,
+    "ui",
+    |args, env| {
+        // App titles contain spaces ("Text Editor"), so every argument
+        // belongs to the title except a trailing absolute path.
+        let (title_args, file) = match args.split_last() {
+            Some((last, rest)) if last.starts_with('/') && !rest.is_empty() => (rest, Some(*last)),
+            _ => (args, None),
+        };
+        let app = title_args.join(" ");
+        if app.is_empty() {
+            return Err(OasisError::Command(format!("usage: {OPEN_USAGE}").into()));
+        }
+        let request = WmRequest::Open {
+            app: app.clone(),
+            file: file.map(str::to_string),
+        };
+        env.vfs
+            .write(WM_REQUEST_PATH, request.to_line().as_bytes())?;
+        Ok(CommandOutput::Text(match file {
+            Some(f) => format!("Opening {f} in {app}"),
+            None => format!("Opening {app}"),
+        }))
+    }
+);
+
 register_commands!(
     register_ui_commands,
-    [WmCmd, SdiCmd, ThemeCmd, NotifyCmd, ScreenshotCmd]
+    [WmCmd, SdiCmd, ThemeCmd, NotifyCmd, ScreenshotCmd, OpenCmd]
 );
 
 #[cfg(test)]
@@ -282,6 +321,23 @@ mod tests {
     }
 
     #[test]
+    fn open_queues_an_open_request() {
+        let (reg, mut vfs) = setup();
+        exec(&reg, &mut vfs, "open Text Editor").unwrap();
+        assert_eq!(vfs.read(WM_REQUEST_PATH).unwrap(), b"open Text Editor");
+        exec(&reg, &mut vfs, "open Photo Viewer /home/user/a.png").unwrap();
+        let line = String::from_utf8(vfs.read(WM_REQUEST_PATH).unwrap()).unwrap();
+        assert_eq!(
+            WmRequest::parse(&line),
+            Some(WmRequest::Open {
+                app: "Photo Viewer".into(),
+                file: Some("/home/user/a.png".into()),
+            })
+        );
+        assert!(exec(&reg, &mut vfs, "open").is_err());
+    }
+
+    #[test]
     fn sdi_list_signals_host() {
         let mut reg = CommandRegistry::new();
         register_ui_commands(&mut reg);
@@ -320,7 +376,7 @@ mod tests {
         let (reg, mut vfs) = setup();
         let s = assert_text!(exec(&reg, &mut vfs, "notify Hello World").unwrap());
         assert!(s.contains("Hello World"));
-        let data = vfs.read("/var/notify/message").unwrap();
+        let data = vfs.read(NOTIFY_PATH).unwrap();
         assert_eq!(data, b"info:Hello World");
     }
 
@@ -329,7 +385,7 @@ mod tests {
         let (reg, mut vfs) = setup();
         let s = assert_text!(exec(&reg, &mut vfs, "notify --level error Something broke").unwrap());
         assert!(s.contains("[error]"));
-        let data = vfs.read("/var/notify/message").unwrap();
+        let data = vfs.read(NOTIFY_PATH).unwrap();
         assert_eq!(data, b"error:Something broke");
     }
 
