@@ -18,25 +18,33 @@ use crate::interpreter::resolve_path;
 const MUSIC_USAGE: &str = "music [status|play [file]|pause|resume|stop|next|prev|\
                            vol [0-100]|list|repeat <off|all|one>|shuffle]";
 
-/// Pending request lines kept when nothing drains the request file (a host
-/// without a media controller); older lines are dropped.
+/// Pending request lines kept when nothing drains a request file (a host
+/// without the matching controller); older lines are dropped.
 const MAX_PENDING_REQUESTS: usize = 32;
 
-/// Append `request` to the request file. The host drains every line per
-/// tick, so two commands in one frame (`music vol 40; music play`) are
-/// both seen.
+/// Append `line` to the line-queued IPC request file `path`. The host
+/// drains every line per tick, so two commands in one frame
+/// (`music vol 40; music play`, `open Calculator; open Paint`) are both
+/// seen instead of the second overwriting the first.
+pub(crate) fn queue_request_line(
+    vfs: &mut dyn oasis_vfs::Vfs,
+    path: &str,
+    line: &str,
+) -> oasis_types::error::Result<()> {
+    let data = vfs.read(path).unwrap_or_default();
+    let text = String::from_utf8_lossy(&data);
+    let mut lines: Vec<&str> = text.lines().filter(|l| !l.trim().is_empty()).collect();
+    lines.push(line);
+    let skip = lines.len().saturating_sub(MAX_PENDING_REQUESTS);
+    vfs.write(path, lines[skip..].join("\n").as_bytes())
+}
+
+/// Queue `request` on [`AUDIO_REQUEST_PATH`] (see [`queue_request_line`]).
 fn queue(
     env: &mut crate::Environment<'_>,
     request: &MediaRequest,
 ) -> oasis_types::error::Result<()> {
-    let data = env.vfs.read(AUDIO_REQUEST_PATH).unwrap_or_default();
-    let text = String::from_utf8_lossy(&data);
-    let mut lines: Vec<&str> = text.lines().filter(|l| !l.trim().is_empty()).collect();
-    let line = request.to_line();
-    lines.push(&line);
-    let skip = lines.len().saturating_sub(MAX_PENDING_REQUESTS);
-    env.vfs
-        .write(AUDIO_REQUEST_PATH, lines[skip..].join("\n").as_bytes())
+    queue_request_line(env.vfs, AUDIO_REQUEST_PATH, &request.to_line())
 }
 
 /// The `Key: value` line for `key` from the published status, if any.

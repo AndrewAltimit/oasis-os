@@ -44,6 +44,19 @@ pub fn tick(state: &mut AppState, vfs: &mut MemoryVfs) {
     publish_status(state, vfs);
 }
 
+/// Append one request line to [`AUDIO_REQUEST_PATH`]. Producers in the
+/// shell (app requests, MCP `play_media`) must append like the `music`
+/// command does: a plain write would drop lines queued earlier in the
+/// same frame.
+pub(crate) fn queue_request(vfs: &mut MemoryVfs, line: &str) -> oasis_core::error::Result<()> {
+    let mut data = vfs.read(AUDIO_REQUEST_PATH).unwrap_or_default();
+    if !data.is_empty() && !data.ends_with(b"\n") {
+        data.push(b'\n');
+    }
+    data.extend_from_slice(line.trim_end_matches('\n').as_bytes());
+    vfs.write(AUDIO_REQUEST_PATH, &data)
+}
+
 /// Take every recognised request line out of [`AUDIO_REQUEST_PATH`],
 /// leaving unrecognised lines in place.
 fn drain_requests(vfs: &mut MemoryVfs) -> Vec<MediaRequest> {

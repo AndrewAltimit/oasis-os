@@ -9,6 +9,7 @@ use oasis_types::ipc::{
     WmRequest,
 };
 
+use crate::audio_commands::queue_request_line;
 use crate::interpreter::{CommandOutput, CommandSignal};
 
 // ---------------------------------------------------------------------------
@@ -59,7 +60,7 @@ define_command!(
                 } else {
                     format!("{subcmd} {id}")
                 };
-                env.vfs.write(WM_REQUEST_PATH, request.as_bytes())?;
+                queue_request_line(env.vfs, WM_REQUEST_PATH, &request)?;
                 Ok(CommandOutput::Text(format!("WM request: {request}")))
             },
             _ => Err(OasisError::Command(
@@ -237,8 +238,7 @@ define_command!(
             app: app.clone(),
             file: file.map(str::to_string),
         };
-        env.vfs
-            .write(WM_REQUEST_PATH, request.to_line().as_bytes())?;
+        queue_request_line(env.vfs, WM_REQUEST_PATH, &request.to_line())?;
         Ok(CommandOutput::Text(match file {
             Some(f) => format!("Opening {f} in {app}"),
             None => format!("Opening {app}"),
@@ -314,10 +314,22 @@ mod tests {
     fn wm_close_force_queues_forced_request() {
         let (reg, mut vfs) = setup();
         for line in ["wm close --force editor", "wm close editor --force"] {
+            vfs.write(WM_REQUEST_PATH, b"").unwrap();
             exec(&reg, &mut vfs, line).unwrap();
             assert_eq!(vfs.read(WM_REQUEST_PATH).unwrap(), b"close --force editor");
         }
         assert!(exec(&reg, &mut vfs, "wm close --force").is_err());
+    }
+
+    /// Requests queue one per line: a second command before the host polls
+    /// must not overwrite the first (`open Calculator; open Paint`).
+    #[test]
+    fn wm_requests_queue_instead_of_overwriting() {
+        let (reg, mut vfs) = setup();
+        exec(&reg, &mut vfs, "open Calculator").unwrap();
+        exec(&reg, &mut vfs, "wm close editor").unwrap();
+        let data = String::from_utf8(vfs.read(WM_REQUEST_PATH).unwrap()).unwrap();
+        assert_eq!(data, "open Calculator\nclose editor");
     }
 
     #[test]
@@ -325,6 +337,7 @@ mod tests {
         let (reg, mut vfs) = setup();
         exec(&reg, &mut vfs, "open Text Editor").unwrap();
         assert_eq!(vfs.read(WM_REQUEST_PATH).unwrap(), b"open Text Editor");
+        vfs.write(WM_REQUEST_PATH, b"").unwrap();
         exec(&reg, &mut vfs, "open Photo Viewer /home/user/a.png").unwrap();
         let line = String::from_utf8(vfs.read(WM_REQUEST_PATH).unwrap()).unwrap();
         assert_eq!(

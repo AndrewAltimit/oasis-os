@@ -813,7 +813,7 @@ pub fn poll_settings_ipc(
                 Err(e) => {
                     state
                         .terminal
-                        .print(format!("Ignoring malformed save-custom request: {e}"));
+                        .print(format!("Not saving the custom skin: {e}"));
                 },
             }
         }
@@ -892,6 +892,15 @@ fn parse_save_custom_request(req: &str) -> Result<(String, SkinTheme), String> {
         .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
     {
         return Err(format!("invalid skin name '{name}'"));
+    }
+    // A built-in's name would overwrite its source directory when the
+    // shell runs from the repository (built-ins are compiled from
+    // `skins/<name>/`), and the saved copy would never load again: the
+    // built-in wins name resolution.
+    if oasis_core::skin::builtin::is_builtin(name) {
+        return Err(format!(
+            "'{name}' is a built-in skin; save the custom skin under another name"
+        ));
     }
     let theme = SkinTheme::from_toml_str(theme_toml).map_err(|e| e.to_string())?;
     Ok((name.to_string(), theme))
@@ -1170,8 +1179,12 @@ pub fn poll_wm_ipc(state: &mut AppState, sdi: &mut SdiRegistry, vfs: &mut Memory
         && !data.is_empty()
     {
         let _ = vfs.write(WM_REQUEST_PATH, b"");
-        let request = String::from_utf8_lossy(&data).into_owned();
-        apply_wm_request(request.trim(), state, sdi, vfs);
+        // One request per line: `open Calculator; open Paint` queues both
+        // before this runs.
+        let requests = String::from_utf8_lossy(&data).into_owned();
+        for request in requests.lines().map(str::trim).filter(|l| !l.is_empty()) {
+            apply_wm_request(request, state, sdi, vfs);
+        }
     }
     let status = wm_status_text(&state.wm);
     if vfs.read(WM_STATUS_PATH).ok().as_deref() != Some(status.as_bytes()) {

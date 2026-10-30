@@ -23,9 +23,9 @@ pub const RADIO_REQUEST_PATH: &str = "/var/radio/request";
 /// Status published by the host's internet-radio controller.
 pub const RADIO_STATUS_PATH: &str = "/var/radio/status";
 
-/// Requests for the window manager, one [`WmRequest`] line: `close
-/// [--force] <id>`, `focus <id>`, `minimize <id>`, `maximize <id>`,
-/// `open <app>[\t<file>]`.
+/// Requests for the window manager, one [`WmRequest`] per line (producers
+/// append, the host applies every line it finds): `close [--force] <id>`,
+/// `focus <id>`, `minimize <id>`, `maximize <id>`, `open <app>[\t<file>]`.
 pub const WM_REQUEST_PATH: &str = "/var/wm/request";
 /// Window list published by the host, one window per line.
 pub const WM_STATUS_PATH: &str = "/var/wm/status";

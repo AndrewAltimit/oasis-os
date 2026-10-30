@@ -203,6 +203,27 @@ fn photo_viewer_textures_are_released_on_close() {
     }
 }
 
+/// Apps still open at exit used to be dropped without
+/// `App::release_resources` (only closed ones released theirs).
+#[test]
+fn apps_open_at_exit_release_their_textures() {
+    let mut h = boot_small("classic");
+    let base = h.resource_counts();
+    h.open_app_with_file("Photo Viewer", "/home/user/photos/oasis_sample.png");
+    let mut peak = 0;
+    for _ in 0..3 {
+        h.run_frames(5);
+        h.render_now();
+        peak = peak.max(h.resource_counts().textures);
+    }
+    assert!(peak > base.textures, "setup: no image uploaded");
+    h.release_all_apps();
+    let now = h.resource_counts();
+    assert_eq!(now.runners, 0);
+    assert_eq!(now.textures, base.textures, "open app's textures leaked");
+    h.shutdown().unwrap();
+}
+
 /// How a soak scenario closes a window.
 #[derive(Debug, Clone, Copy)]
 enum Close {

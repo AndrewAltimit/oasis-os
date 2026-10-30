@@ -761,14 +761,32 @@ impl<B: ShellBackend> Shell<B> {
         // settings changes, ...). TV Guide tunes go to the video player
         // (`tv_controller::tick` below) instead of the VFS.
         {
+            // Apps closed (or replaced) by this frame's input still get
+            // their last requests carried out (a skin picked right before
+            // Escape), first since they were made first, except TV tunes:
+            // there is no guide left to play them in.
             let mut requests = Vec::new();
+            for runner in &mut state.content.retired_runners {
+                runner.drain_requests(&mut requests);
+            }
+            requests.retain(|req| oasis_apps::tv_guide::tune_url_request(req).is_none());
             for (_, runner) in &mut state.content.open_runners {
                 runner.drain_requests(&mut requests);
             }
             for req in requests {
                 if let Some(tune) = oasis_apps::tv_guide::tune_url_request(&req) {
                     state.tv.pending_tune = Some(tune.to_string());
-                } else if let Err(e) = vfs.write(&req.path, req.data.as_bytes()) {
+                    continue;
+                }
+                // The music request file is a line queue (several requests
+                // per frame, the `music` command's included); the other
+                // request files hold the latest request.
+                let written = if req.path == oasis_core::ipc::AUDIO_REQUEST_PATH {
+                    media_controller::queue_request(vfs, &req.data)
+                } else {
+                    vfs.write(&req.path, req.data.as_bytes())
+                };
+                if let Err(e) = written {
                     log::warn!("app VFS request write failed ({}): {e}", req.path);
                 }
             }
@@ -1157,14 +1175,23 @@ impl<B: ShellBackend> Shell<B> {
         Ok(())
     }
 
+    /// Drop every app, open or already closed, after it released its
+    /// backend resources (the `App::release_resources` contract; open
+    /// windows used to be dropped at exit without it).
+    pub(crate) fn release_all_apps(&mut self) {
+        let content = &mut self.state.content;
+        let open = content.open_runners.drain(..).map(|(_, runner)| runner);
+        for mut runner in content.retired_runners.drain(..).chain(open) {
+            runner.release_resources(&mut self.backend);
+        }
+    }
+
     /// Persist settings, stop media and release the backend.
     pub fn shutdown(mut self) -> Result<()> {
         // Persist any settings changed since the last periodic sync.
         self.settings_mirror.sync(&self.vfs);
 
-        for mut runner in self.state.content.retired_runners.drain(..) {
-            runner.release_resources(&mut self.backend);
-        }
+        self.release_all_apps();
         // Clean up video player before shutting down backend.
         self.state.tv.video_player.stop(&mut self.backend);
         if let Some(track) = self.state.tv.audio_track.take() {

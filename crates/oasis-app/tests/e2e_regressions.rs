@@ -269,6 +269,37 @@ fn custom_skin_save_stays_out_of_the_working_directory() {
     let _ = std::fs::remove_dir_all(&root);
 }
 
+/// Saving a custom skin under a built-in's name (`classic`) overwrote the
+/// built-in's source directory when run from the repository, and the copy
+/// could never be loaded again (the built-in wins name resolution). Such
+/// saves are refused with a message.
+#[test]
+fn custom_skin_save_refuses_builtin_names() {
+    use oasis_core::vfs::Vfs;
+    let mut h = Harness::new("xp");
+    h.settle();
+    let theme = h.state().skin.theme.to_toml_string().unwrap();
+    h.vfs_mut()
+        .write(
+            oasis_apps::settings::SKIN_SAVE_CUSTOM_REQUEST_PATH,
+            format!("classic\n{theme}").as_bytes(),
+        )
+        .unwrap();
+    h.settle();
+    assert_eq!(h.state().skin.manifest.name, "xp", "no swap");
+    let root = h.state().custom_skin_root.clone();
+    assert!(!root.join("classic").exists());
+    assert!(
+        h.state()
+            .terminal
+            .output_lines
+            .iter()
+            .any(|l| l.contains("'classic' is a built-in skin")),
+        "{:?}",
+        h.state().terminal.output_lines
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Programmatic close honours the app's close prompt
 // ---------------------------------------------------------------------------
@@ -433,4 +464,137 @@ fn plugin_app_survives_skin_switch_and_resolution_change() {
     h.settle();
     assert_eq!(h.size(), (800, 600));
     assert_plugin_app_launches(&mut h, "after resolution change");
+}
+
+// ---------------------------------------------------------------------------
+// IPC request files queue instead of overwriting
+// ---------------------------------------------------------------------------
+
+/// `open Calculator; open Paint` used to open only Paint: each `open`
+/// overwrote the single-request `/var/wm/request` before the shell polled
+/// it. Requests now queue one per line and the shell applies them all.
+#[test]
+fn one_command_line_opens_two_apps() {
+    let mut h = Harness::new("classic");
+    h.settle();
+    h.terminal("open Calculator; open Paint");
+    h.settle();
+    assert!(h.find_window("Calculator").is_some(), "{:?}", h.windows());
+    assert!(h.find_window("Paint").is_some(), "{:?}", h.windows());
+    assert_eq!(h.mode(), Mode::Desktop);
+
+    // Same for `wm`: both closes apply.
+    run_in_windowed_terminal(&mut h, "wm close calculator; wm close paint");
+    assert!(h.find_window("Calculator").is_none(), "{:?}", h.windows());
+    assert!(h.find_window("Paint").is_none(), "{:?}", h.windows());
+}
+
+/// A music request queued earlier in the frame (the `music` command)
+/// used to be overwritten when the shell wrote an app's request (Music
+/// Player `play_file`) to the same line-queued file.
+#[test]
+fn app_music_request_keeps_requests_queued_in_the_same_frame() {
+    use oasis_core::vfs::Vfs;
+    const TRACK: &str = "/home/user/music/ambient_dawn.mp3";
+    let mut h = Harness::new("classic");
+    h.settle();
+    h.vfs_mut()
+        .write(oasis_audio::AUDIO_REQUEST_PATH, b"vol 30")
+        .unwrap();
+    // Opening the track queues `play_file` on the same frame.
+    h.open_app_with_file("Music Player", TRACK);
+    h.settle();
+    assert!(h.state().media_track.is_some(), "play_file applied");
+    assert_eq!(h.audio().volume, 30, "the earlier `vol 30` survived");
+}
+
+/// An app's last requests before it closes (picked a skin, then Escape,
+/// both within one frame) used to be dropped with its runner: the
+/// shell only drained the requests of apps still open.
+#[test]
+fn requests_queued_right_before_a_close_are_carried_out() {
+    use oasis_core::input::{Button, InputEvent};
+    let mut h = Harness::new("classic");
+    h.settle();
+    assert!(h.open_app("Settings"));
+    h.settle();
+    let before = h.state().skin.manifest.name.clone();
+    h.step(&[
+        InputEvent::ButtonPress(Button::Down),
+        InputEvent::ButtonPress(Button::Confirm),
+        InputEvent::ButtonPress(Button::Cancel),
+    ]);
+    h.settle();
+    assert!(h.find_window("Settings").is_none(), "{:?}", h.windows());
+    assert_ne!(
+        h.state().skin.manifest.name,
+        before,
+        "the skin picked just before closing Settings was applied"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Default window geometry
+// ---------------------------------------------------------------------------
+
+/// Default-size windows (380x220 content on small screens) cascaded down
+/// past the bottom edge at 480x272: even the first one lost a few rows,
+/// later ones most of their content. Every newly opened window now fits
+/// the screen, on every skin's chrome and at the larger resolutions.
+#[test]
+fn default_windows_fit_the_screen() {
+    use oasis_app::harness::HarnessOptions;
+
+    let cases = [
+        ("classic", Some((480, 272))),
+        ("xp", Some((480, 272))),
+        ("gnome", Some((480, 272))),
+        ("win95", Some((480, 272))),
+        ("macos", Some((800, 600))),
+        ("xp", None),
+        ("classic", None),
+    ];
+    for (skin, res) in cases {
+        let mut opts = HarnessOptions::new(skin);
+        opts.resolution = res;
+        let mut h = Harness::with_options(opts).unwrap();
+        h.settle();
+        let (sw, sh) = h.size();
+        for app in [
+            "Calculator",
+            "Paint",
+            "Text Editor",
+            "File Manager",
+            "Settings",
+            "Games",
+        ] {
+            assert!(h.open_app(app), "{skin}: {app}");
+        }
+        h.settle();
+        assert_eq!(h.windows().len(), 6, "{skin}");
+        for w in h.windows() {
+            let (x, y, fw, fh) = w.frame;
+            assert!(
+                x >= 0 && y >= 0 && x + fw as i32 <= sw as i32 && y + fh as i32 <= sh as i32,
+                "{skin} {sw}x{sh}: {} frame {:?} off screen",
+                w.id,
+                w.frame
+            );
+            let (_, _, cw, ch) = w.content;
+            assert!(
+                cw >= 380 && ch >= 220,
+                "{skin}: {} content {:?}",
+                w.id,
+                w.content
+            );
+        }
+        // The topmost window's close button is on screen and works.
+        assert!(h.close_window("Games"), "{skin}");
+        h.settle();
+        assert!(
+            h.find_window("Games").is_none(),
+            "{skin}: {:?}",
+            h.windows()
+        );
+    }
 }
