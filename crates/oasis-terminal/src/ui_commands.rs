@@ -215,7 +215,18 @@ define_command!(
 // open
 // ---------------------------------------------------------------------------
 
-const OPEN_USAGE: &str = "open <app> [/path/to/file]";
+const OPEN_USAGE: &str = "open <app> [file]";
+
+/// Whether the trailing `open` argument `arg` names a file rather than the
+/// last word of the app title. App titles are plain words ("Text
+/// Editor"), so anything path-like (a `/`, a `.` as in `./x` or an
+/// extension) is a file, and so is a bare word naming an existing entry
+/// in the working directory (`open Text Editor notes`).
+fn is_file_arg(arg: &str, cwd: &str, vfs: &dyn oasis_vfs::Vfs) -> bool {
+    arg.contains('/')
+        || arg.contains('.')
+        || vfs.exists(&crate::interpreter::resolve_path(cwd, arg))
+}
 
 define_command!(
     OpenCmd,
@@ -225,9 +236,12 @@ define_command!(
     "ui",
     |args, env| {
         // App titles contain spaces ("Text Editor"), so every argument
-        // belongs to the title except a trailing absolute path.
+        // belongs to the title except a trailing file, which may be
+        // relative to the working directory (the host has no cwd).
         let (title_args, file) = match args.split_last() {
-            Some((last, rest)) if last.starts_with('/') && !rest.is_empty() => (rest, Some(*last)),
+            Some((last, rest)) if !rest.is_empty() && is_file_arg(last, &env.cwd, env.vfs) => {
+                (rest, Some(crate::interpreter::resolve_path(&env.cwd, last)))
+            },
             _ => (args, None),
         };
         let app = title_args.join(" ");
@@ -236,7 +250,7 @@ define_command!(
         }
         let request = WmRequest::Open {
             app: app.clone(),
-            file: file.map(str::to_string),
+            file: file.clone(),
         };
         queue_request_line(env.vfs, WM_REQUEST_PATH, &request.to_line())?;
         Ok(CommandOutput::Text(match file {
@@ -348,6 +362,62 @@ mod tests {
             })
         );
         assert!(exec(&reg, &mut vfs, "open").is_err());
+    }
+
+    /// `open Text Editor notes.txt` used to treat the relative file as
+    /// part of the app title; it now resolves against the cwd.
+    #[test]
+    fn open_resolves_relative_files_against_cwd() {
+        let (reg, mut vfs) = setup();
+        vfs.mkdir("/home").unwrap();
+        vfs.mkdir("/home/user").unwrap();
+        vfs.write("/home/user/todo", b"x").unwrap();
+        let open_line = |vfs: &mut MemoryVfs, cwd: &str, line: &str| {
+            vfs.write(WM_REQUEST_PATH, b"").unwrap();
+            let mut env = Environment {
+                cwd: cwd.to_string(),
+                vfs,
+                power: None,
+                time: None,
+                usb: None,
+                network: None,
+                tls: None,
+                stdin: None,
+                stderr: String::new(),
+            };
+            reg.execute(line, &mut env).unwrap();
+            let line = String::from_utf8(vfs.read(WM_REQUEST_PATH).unwrap()).unwrap();
+            WmRequest::parse(&line).unwrap()
+        };
+        let open = |app: &str, file: Option<&str>| WmRequest::Open {
+            app: app.into(),
+            file: file.map(str::to_string),
+        };
+        let cwd = "/home/user";
+        assert_eq!(
+            open_line(&mut vfs, cwd, "open Text Editor notes.txt"),
+            open("Text Editor", Some("/home/user/notes.txt"))
+        );
+        assert_eq!(
+            open_line(&mut vfs, cwd, "open Text Editor ../shared/a.md"),
+            open("Text Editor", Some("/home/shared/a.md"))
+        );
+        assert_eq!(
+            open_line(&mut vfs, cwd, "open Paint ./pic"),
+            open("Paint", Some("/home/user/pic"))
+        );
+        // An extension-less name counts when it exists in the cwd...
+        assert_eq!(
+            open_line(&mut vfs, cwd, "open Text Editor todo"),
+            open("Text Editor", Some("/home/user/todo"))
+        );
+        // ...otherwise it is part of the title.
+        assert_eq!(
+            open_line(&mut vfs, cwd, "open Text Editor"),
+            open("Text Editor", None)
+        );
+        // A lone argument is always the app, even with a dot.
+        assert_eq!(open_line(&mut vfs, cwd, "open v1.2"), open("v1.2", None));
     }
 
     #[test]

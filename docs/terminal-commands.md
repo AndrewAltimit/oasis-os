@@ -268,7 +268,7 @@ VFS metadata only — there is no real Unix permission model behind these.
 | `theme` | `theme [show\|colors]` | Show the current theme (skin name, resolution, base colors), from `/var/theme/current`, which the shell keeps up to date. |
 | `notify` | `notify [--level info\|success\|warning\|error] <message>` | Show a notification: queues `/var/notify/message`, which the shell shows as a toast. |
 | `screenshot` | `screenshot [path]` | Save the next presented frame to a VFS path (default `/tmp/screenshot.bmp`; PNG when the path ends in `.png`, else BMP). Queues `/var/screenshot/request`; the shell prints the result. |
-| `open` | `open <app> [/path/to/file]` | Open (or raise) the window of any registered app by title, case-insensitive, including apps without a dashboard tile (`open system monitor`); a trailing absolute path is opened in it (`open Photo Viewer /home/user/photos/a.png`; only apps that open files accept one). Queues `open <app>\t<file>` on `/var/wm/request`; the shell reports unknown apps in the terminal. |
+| `open` | `open <app> [file]` | Open (or raise) the window of any registered app by title, case-insensitive, including apps without a dashboard tile (`open system monitor`); a trailing file is opened in it (`open Photo Viewer /home/user/photos/a.png`; only apps that open files accept one). The file may be relative to the working directory (`open Text Editor notes.txt`, `../a.md`): the last argument is a file when it contains `/` or `.` or names an existing entry in the cwd, otherwise it is part of the title. Queues `open <app>\t<file>` on `/var/wm/request`; the shell reports unknown apps in the terminal. |
 
 ## Skin management (`oasis-core/src/terminal/skin_commands.rs`)
 

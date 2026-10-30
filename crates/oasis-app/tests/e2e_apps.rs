@@ -74,6 +74,33 @@ fn open_command_launches_apps_and_files() {
     assert_eq!(h.windows().len(), before);
 }
 
+/// `open <app> <file>` resolves a relative file against the terminal's
+/// working directory: `open Text Editor notes.txt` used to read
+/// "notes.txt" as part of the app title ("unknown app").
+#[test]
+fn open_command_resolves_relative_files_against_cwd() {
+    let mut h = Harness::new("classic");
+    h.settle();
+    run(&mut h, "cd /home/user/photos");
+    run(&mut h, "open Photo Viewer oasis_sample.png");
+    let viewer = h.app_runner("Photo Viewer").expect("photo viewer window");
+    assert_eq!(
+        viewer.viewing_file(),
+        Some("/home/user/photos/oasis_sample.png")
+    );
+
+    run(&mut h, "cd ..");
+    run(&mut h, "open Text Editor readme.txt");
+    assert!(
+        !output_contains(&h, "unknown app"),
+        "{:?}",
+        h.state().terminal.output_lines
+    );
+    assert!(h.find_window("Text Editor").is_some(), "{:?}", h.windows());
+    h.render_now();
+    assert!(h.text_drawn_contains("readme.txt"), "{:?}", h.frame_text());
+}
+
 /// The Network app used to show hard-coded "Not running / Not connected"
 /// whatever the shell was doing. It now follows `/system/state/net`.
 #[test]
