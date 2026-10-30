@@ -189,6 +189,9 @@ impl CommandRegistry {
 
         for segment in &pipe_segments {
             env.stdin = stdin.take();
+            // A pipeline's status is its last command's (`false | echo hi`
+            // succeeds), so each segment starts from success.
+            self.last_exit_code.set(0);
             // All segments get redirection parsing so `>` / `>>` is
             // stripped instead of being passed as literal arguments.
             let result = self.execute_with_redirect(segment, env)?;

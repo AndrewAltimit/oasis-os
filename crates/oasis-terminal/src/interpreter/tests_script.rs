@@ -1251,6 +1251,25 @@ fn test_command_sets_exit_status() {
     assert_eq!(out, "recovered");
 }
 
+/// A pipeline's exit status is its last command's: `false | echo hi`
+/// succeeds (it used to keep the first segment's failure), and
+/// `echo hi | false` fails.
+#[test]
+fn pipeline_status_is_the_last_segments() {
+    let reg = make_full_reg();
+    let mut vfs = MemoryVfs::new();
+    let mut env = make_env(&mut vfs);
+    reg.execute("false | echo hi", &mut env).unwrap();
+    assert_eq!(reg.get_variable("?").as_deref(), Some("0"));
+    let out = assert_text!(
+        reg.execute("false | echo hi && echo ran", &mut env)
+            .unwrap()
+    );
+    assert!(out.ends_with("ran"), "{out}");
+    reg.execute("echo hi | false", &mut env).unwrap();
+    assert_eq!(reg.get_variable("?").as_deref(), Some("1"));
+}
+
 #[test]
 fn status_wrapper_never_reaches_the_host() {
     struct Fails;
