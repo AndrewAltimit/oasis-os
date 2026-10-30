@@ -8,19 +8,31 @@
 //! For HTTP, `connect_tcp` alone gives a raw TCP stream.
 //!
 //! This module mirrors the public API of `loader/http.rs` so that
-//! `loader/mod.rs` can swap between them with a cfg gate.
+//! `loader/mod.rs` can swap between them with a cfg gate. Response
+//! framing (header parsing, `Content-Length` / chunked detection and
+//! decoding) and the per-redirect-hop header policy are shared with the
+//! desktop client through `loader/http1.rs`; only connection setup and
+//! the body cap differ.
 
 use oasis_net::tls::TlsProvider;
 use oasis_types::backend::NetworkStream;
 use oasis_types::error::{OasisError, Result};
 
+use super::http1::{
+    self, BodyLimit, Hop, HttpResponse, MAX_HEADER_SIZE, Oversize, ResponseTracker, find_header,
+    is_redirect,
+};
 use super::{ContentType, ResourceResponse, Url};
 
 /// Maximum response body size (2 MB -- PSP RAM constraint).
 const MAX_BODY_SIZE: usize = 2 * 1024 * 1024;
 
-/// Maximum HTTP header section size (16 KB).
-const MAX_HEADER_SIZE: usize = 16_384;
+/// Body-size policy: an oversized page is cut at the cap and rendered
+/// as far as it got rather than failing (PSP RAM constraint).
+const BODY_LIMIT: BodyLimit = BodyLimit {
+    max_body: MAX_BODY_SIZE,
+    oversize: Oversize::Truncate,
+};
 
 /// Maximum number of redirects to follow.
 const MAX_REDIRECTS: u8 = 5;
@@ -62,14 +74,29 @@ pub fn http_request_guarded(
     let mut current_method = method.to_string();
     let mut current_body: Option<Vec<u8>> = body.map(|b| b.to_vec());
 
+    let mut method_changed = false;
+
     // The initial request plus up to MAX_REDIRECTS followed redirects.
-    for _ in 0..=MAX_REDIRECTS {
+    for hop_index in 0..=usize::from(MAX_REDIRECTS) {
+        // Credentials / validators / Referer are re-derived per hop
+        // (see `http1::hop_headers`).
+        let hop = Hop {
+            original: url,
+            current: &current_url,
+            index: hop_index,
+            method_changed,
+        };
+        let headers = http1::hop_headers(extra_headers, hop);
+        let header_refs: Vec<(&str, &str)> = headers
+            .iter()
+            .map(|(k, v)| (k.as_str(), v.as_str()))
+            .collect();
         let resp = do_request(
             tls_provider,
             &current_method,
             &current_url,
             current_body.as_deref(),
-            extra_headers,
+            &header_refs,
         )?;
 
         if is_redirect(resp.status_code)
@@ -87,6 +114,7 @@ pub fn http_request_guarded(
             // 307/308 must preserve the original method and body.
             // 301/302/303 convert to GET and drop the body.
             if !matches!(resp.status_code, 307 | 308) {
+                method_changed |= current_method != "GET";
                 current_method = "GET".to_string();
                 current_body = None;
             }
@@ -115,16 +143,6 @@ pub fn http_request_guarded(
 /// Case-insensitive header lookup.
 pub fn response_find_header<'a>(headers: &'a [(String, String)], name: &str) -> Option<&'a str> {
     find_header(headers, name)
-}
-
-// -------------------------------------------------------------------
-// Internal types
-// -------------------------------------------------------------------
-
-struct HttpResponse {
-    status_code: u16,
-    headers: Vec<(String, String)>,
-    body: Vec<u8>,
 }
 
 // -------------------------------------------------------------------
@@ -206,14 +224,13 @@ fn do_request(
         .flush()
         .map_err(|e| OasisError::Backend(format!("flush: {e}").into()))?;
 
-    // Read response with early header detection.
-    // We parse headers as they arrive to determine body length, avoiding
-    // a 30-second timeout wait on PSP sockets.
+    // Read response with early header detection: the shared tracker
+    // parses the header lines as they arrive and stops at the end of the
+    // body (Content-Length or the real chunked terminator), avoiding a
+    // 30-second timeout wait on PSP sockets.
     let mut buf = Vec::with_capacity(8192);
     let mut chunk = [0u8; 4096];
-    let mut body_start: Option<usize> = None;
-    let mut expected_body_len: Option<usize> = None;
-    let mut is_chunked = false;
+    let mut tracker = ResponseTracker::new();
     // Safety limit: max read iterations to prevent infinite loops when
     // the TLS layer blocks without returning EOF (e.g. missing
     // close_notify from servers that ignore Connection: close).
@@ -229,77 +246,23 @@ fn do_request(
                     break;
                 }
                 buf.extend_from_slice(&chunk[..n]);
-
-                // Detect header/body boundary once.
-                if body_start.is_none() {
-                    if let Some(pos) = find_subsequence(&buf, b"\r\n\r\n") {
-                        let hdr_end = pos + 4;
-                        body_start = Some(hdr_end);
-                        let hdr = String::from_utf8_lossy(&buf[..pos]);
-                        let hdr_lower = hdr.to_ascii_lowercase();
-                        // Anchor header searches to line boundaries to
-                        // avoid matching e.g. X-Content-Length.
-                        if hdr_lower.contains("\ntransfer-encoding:")
-                            && hdr_lower.contains("chunked")
-                        {
-                            is_chunked = true;
-                        } else if let Some(cl_start) = hdr_lower.find("\ncontent-length:") {
-                            let after = &hdr_lower[cl_start + 16..];
-                            let line_end = after.find('\n').unwrap_or(after.len());
-                            if let Ok(cl) = after[..line_end].trim().parse::<usize>() {
-                                expected_body_len = Some(cl);
-                            }
-                        }
-                    } else if let Some(pos) = find_subsequence(&buf, b"\n\n") {
-                        let hdr_end = pos + 2;
-                        body_start = Some(hdr_end);
-                        let hdr = String::from_utf8_lossy(&buf[..pos]);
-                        let hdr_lower = hdr.to_ascii_lowercase();
-                        // Anchor header searches to line boundaries to
-                        // avoid matching e.g. X-Content-Length.
-                        if hdr_lower.contains("\ntransfer-encoding:")
-                            && hdr_lower.contains("chunked")
-                        {
-                            is_chunked = true;
-                        } else if let Some(cl_start) = hdr_lower.find("\ncontent-length:") {
-                            let after = &hdr_lower[cl_start + 16..];
-                            let line_end = after.find('\n').unwrap_or(after.len());
-                            if let Ok(cl) = after[..line_end].trim().parse::<usize>() {
-                                expected_body_len = Some(cl);
-                            }
-                        }
-                    } else if buf.len() > MAX_HEADER_SIZE {
+                match tracker.poll(&buf) {
+                    Ok(Some(end)) => {
+                        buf.truncate(end);
                         break;
-                    }
-                }
-
-                // Check if we have the complete body.
-                if let Some(bs) = body_start {
-                    if let Some(expected) = expected_body_len {
-                        if buf.len() - bs >= expected {
-                            buf.truncate(bs + expected);
-                            break;
-                        }
-                    } else if is_chunked {
-                        // Search for the chunked terminator anywhere in
-                        // the body data, not just at the end. Servers may
-                        // append trailing headers or padding after the
-                        // final `0\r\n\r\n` chunk marker.
-                        let chunk_data = &buf[bs..];
-                        if find_subsequence(chunk_data, b"\r\n0\r\n\r\n").is_some()
-                            || find_subsequence(chunk_data, b"\n0\r\n\r\n").is_some()
-                            || (chunk_data.starts_with(b"0\r\n") && chunk_data.len() <= 7)
-                        {
-                            break;
-                        }
-                    }
-                    // No content-length + not chunked: read until EOF/error.
+                    },
+                    Ok(None) => {},
+                    // Oversized header block: stop reading; parsing
+                    // below reports the error.
+                    Err(_) => break,
                 }
             },
             Err(_) => {
                 // Read error (timeout, connection reset, etc.).
                 // If we have headers and some body data, use what we got.
-                if body_start.is_some() && buf.len() > body_start.unwrap_or(0) + 64 {
+                if let Some(bs) = tracker.body_start()
+                    && buf.len() > bs + 64
+                {
                     break;
                 }
                 reads_since_progress += 1;
@@ -317,7 +280,7 @@ fn do_request(
         ));
     }
 
-    parse_response(&buf).map_err(|e| {
+    http1::parse_response(&buf, BODY_LIMIT).map_err(|e| {
         // Include buffer preview for debugging.
         let preview_len = buf.len().min(128);
         let preview = String::from_utf8_lossy(&buf[..preview_len]);
@@ -333,161 +296,8 @@ fn do_request(
 }
 
 // -------------------------------------------------------------------
-// Response parsing
-// -------------------------------------------------------------------
-
-fn parse_response(data: &[u8]) -> Result<HttpResponse> {
-    let (header_end, separator_len) = if let Some(pos) = find_subsequence(data, b"\r\n\r\n") {
-        (pos, 4)
-    } else if let Some(pos) = find_subsequence(data, b"\n\n") {
-        (pos, 2)
-    } else {
-        return Err(OasisError::Backend(
-            "malformed HTTP response: no header terminator".into(),
-        ));
-    };
-
-    if header_end > MAX_HEADER_SIZE {
-        return Err(OasisError::Backend(
-            "HTTP headers exceed 16 KB limit".into(),
-        ));
-    }
-
-    let header_bytes = &data[..header_end];
-    let body_start = header_end + separator_len;
-
-    // Use lossy conversion -- real-world servers sometimes send
-    // ISO-8859-1 in headers (RFC 7230 allows only ASCII, but we
-    // should be robust).
-    let header_str = String::from_utf8_lossy(header_bytes);
-
-    let header_owned;
-    let header_normalized: &str = if header_str.contains("\r\n") {
-        header_owned = header_str.replace("\r\n", "\n");
-        header_owned.as_str()
-    } else {
-        &header_str
-    };
-
-    let mut lines = header_normalized.split('\n');
-
-    let status_line = lines
-        .next()
-        .ok_or_else(|| OasisError::Backend("empty response".into()))?;
-    let status_code = parse_status_line(status_line)?;
-
-    let mut headers = Vec::new();
-    for line in lines {
-        if line.is_empty() {
-            break;
-        }
-        if let Some((name, value)) = line.split_once(':') {
-            headers.push((name.trim().to_lowercase(), value.trim().to_string()));
-        }
-    }
-
-    let raw_body = &data[body_start..];
-    let body = if find_header(&headers, "transfer-encoding").is_some_and(|v| v.contains("chunked"))
-    {
-        decode_chunked(raw_body)?
-    } else if let Some(cl) = find_header(&headers, "content-length") {
-        let len: usize = cl
-            .parse()
-            .map_err(|_| OasisError::Backend("bad Content-Length".into()))?;
-        let capped = len.min(MAX_BODY_SIZE);
-        raw_body[..raw_body.len().min(capped)].to_vec()
-    } else {
-        raw_body.to_vec()
-    };
-
-    Ok(HttpResponse {
-        status_code,
-        headers,
-        body,
-    })
-}
-
-// -------------------------------------------------------------------
 // Helpers
 // -------------------------------------------------------------------
-
-fn parse_status_line(line: &str) -> Result<u16> {
-    let parts: Vec<&str> = line.splitn(3, ' ').collect();
-    if parts.len() < 2 {
-        return Err(OasisError::Backend(
-            format!("bad status line: {line}").into(),
-        ));
-    }
-    parts[1]
-        .parse()
-        .map_err(|_| OasisError::Backend(format!("bad status code in: {line}").into()))
-}
-
-fn find_header<'a>(headers: &'a [(String, String)], name: &str) -> Option<&'a str> {
-    let name_lower = name.to_lowercase();
-    headers
-        .iter()
-        .find(|(k, _)| k == &name_lower)
-        .map(|(_, v)| v.as_str())
-}
-
-fn decode_chunked(data: &[u8]) -> Result<Vec<u8>> {
-    let mut result = Vec::new();
-    let mut pos = 0;
-
-    while pos < data.len() {
-        let remaining = &data[pos..];
-        let Some(i) = find_subsequence(remaining, b"\r\n") else {
-            break;
-        };
-        let line_end = pos + i;
-
-        let size_str = std::str::from_utf8(&data[pos..line_end])
-            .map_err(|_| OasisError::Backend("bad chunk size".into()))?
-            .trim();
-        let size_str = size_str.split(';').next().unwrap_or("").trim();
-
-        let chunk_size = usize::from_str_radix(size_str, 16)
-            .map_err(|_| OasisError::Backend("bad chunk size".into()))?;
-
-        if chunk_size == 0 {
-            break;
-        }
-
-        let chunk_start = line_end + 2;
-        let chunk_end = match chunk_start.checked_add(chunk_size) {
-            Some(end) => end,
-            None => break,
-        };
-
-        if chunk_end > data.len() {
-            if chunk_start < data.len() {
-                result.extend_from_slice(&data[chunk_start..]);
-            }
-            break;
-        }
-
-        if result.len() + chunk_size > MAX_BODY_SIZE {
-            break;
-        }
-
-        result.extend_from_slice(&data[chunk_start..chunk_end]);
-        pos = match chunk_end.checked_add(2) {
-            Some(p) => p,
-            None => break,
-        };
-    }
-
-    Ok(result)
-}
-
-fn is_redirect(status: u16) -> bool {
-    matches!(status, 301 | 302 | 303 | 307 | 308)
-}
-
-fn find_subsequence(haystack: &[u8], needle: &[u8]) -> Option<usize> {
-    haystack.windows(needle.len()).position(|w| w == needle)
-}
 
 /// Write all bytes, handling partial writes.
 fn write_all(stream: &mut dyn NetworkStream, mut data: &[u8]) -> Result<()> {

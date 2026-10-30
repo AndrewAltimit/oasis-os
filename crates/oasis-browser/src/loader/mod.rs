@@ -11,6 +11,8 @@ pub mod hpack;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod http;
 #[cfg(not(target_arch = "wasm32"))]
+pub mod http1;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod http2;
 #[cfg(feature = "psp")]
 pub mod http_psp;
@@ -160,10 +162,18 @@ pub struct Url {
     /// Scheme component (e.g. `"http"`, `"vfs"`, `"gemini"`).
     pub scheme: String,
     /// Host component (e.g. `"example.com"`). For `vfs://` URLs this is
-    /// the first path segment.
+    /// the first path segment. Lower-cased for network schemes
+    /// (`http`, `https`, `gemini`, `ws`, `wss`, `ftp`); never contains
+    /// userinfo.
     pub host: String,
-    /// Optional explicit port number.
+    /// Optional explicit port number. A network scheme's default port
+    /// (`http:80`, `https:443`, `gemini:1965`, ...) is elided to `None`.
     pub port: Option<u16>,
+    /// `user[:password]` from the authority (`http://user:pw@host/`),
+    /// kept apart from `host` so it can never be mistaken for one. It is
+    /// not sent anywhere (no HTTP auth support) and is omitted by
+    /// `Display`.
+    pub userinfo: Option<String>,
     /// Path component starting with `/`.
     pub path: String,
     /// Optional query string (without the leading `?`).
@@ -191,6 +201,7 @@ impl Url {
                 scheme: String::new(),
                 host: String::new(),
                 port: None,
+                userinfo: None,
                 path: String::new(),
                 query: None,
                 fragment: Some(frag.to_string()),
@@ -212,9 +223,28 @@ impl Url {
         None
     }
 
-    /// Internal helper: parse `host[:port]/path?query#fragment` after
-    /// the scheme has been stripped.
+    /// Internal helper: parse `[userinfo@]host[:port]/path?query#fragment`
+    /// after the scheme has been stripped.
+    ///
+    /// For network schemes ([`is_special_scheme`]) the authority is
+    /// normalized the way WHATWG URL parsing does: `\` counts as a path
+    /// separator, userinfo is split off at the last `@`, the host is
+    /// lower-cased, bracketed IPv6 literals keep their colons, a
+    /// non-numeric port makes the URL invalid, and the scheme's default
+    /// port is elided. Other schemes (`vfs`, `about`, ...) keep the
+    /// lenient legacy parse, since their "host" is a case-sensitive VFS
+    /// path segment.
     fn parse_authority_and_path(scheme: &str, rest: &str) -> Option<Url> {
+        let scheme = scheme.to_ascii_lowercase();
+        let special = is_special_scheme(&scheme);
+        let rest_owned;
+        let rest = if special && rest.contains('\\') {
+            rest_owned = rest.replace('\\', "/");
+            rest_owned.as_str()
+        } else {
+            rest
+        };
+
         // Split off fragment first.
         let (rest, fragment) = match rest.find('#') {
             Some(i) => (&rest[..i], Some(rest[i + 1..].to_string())),
@@ -232,26 +262,54 @@ impl Url {
             Some(i) => (&rest[..i], &rest[i..]),
             None => (rest, "/"),
         };
-
-        // Parse host and optional port from authority.
-        let (host, port) = match authority.rfind(':') {
-            Some(i) => {
-                let maybe_port = &authority[i + 1..];
-                if let Ok(p) = maybe_port.parse::<u16>() {
-                    (&authority[..i], Some(p))
-                } else {
-                    (authority, None)
-                }
-            },
-            None => (authority, None),
-        };
-
         let path = if path.is_empty() { "/" } else { path };
 
+        let (userinfo, host, port) = if special {
+            let (userinfo, hostport) = match authority.rfind('@') {
+                Some(i) => (Some(authority[..i].to_string()), &authority[i + 1..]),
+                None => (None, authority),
+            };
+            let (host, port_str) = if hostport.starts_with('[') {
+                // Bracketed IPv6 literal: the port follows `]:`.
+                let close = hostport.find(']')?;
+                let after = &hostport[close + 1..];
+                let port_str = match after.strip_prefix(':') {
+                    Some(p) => Some(p),
+                    None if after.is_empty() => None,
+                    None => return None,
+                };
+                (&hostport[..=close], port_str)
+            } else {
+                match hostport.rfind(':') {
+                    Some(i) => (&hostport[..i], Some(&hostport[i + 1..])),
+                    None => (hostport, None),
+                }
+            };
+            let port = match port_str {
+                None | Some("") => None,
+                Some(p) if p.bytes().all(|b| b.is_ascii_digit()) => Some(p.parse::<u16>().ok()?),
+                Some(_) => return None,
+            };
+            let port = port.filter(|&p| Some(p) != default_port(&scheme));
+            (userinfo, host.to_ascii_lowercase(), port)
+        } else {
+            // Legacy lenient parse: a trailing `:digits` is the port,
+            // anything else stays part of the host.
+            let (host, port) = match authority.rfind(':') {
+                Some(i) => match authority[i + 1..].parse::<u16>() {
+                    Ok(p) => (&authority[..i], Some(p)),
+                    Err(_) => (authority, None),
+                },
+                None => (authority, None),
+            };
+            (None, host.to_string(), port)
+        };
+
         Some(Url {
-            scheme: scheme.to_lowercase(),
-            host: host.to_string(),
+            scheme,
+            host,
             port,
+            userinfo,
             path: path.to_string(),
             query,
             fragment,
@@ -311,6 +369,7 @@ impl Url {
                 scheme: self.scheme.clone(),
                 host: self.host.clone(),
                 port: self.port,
+                userinfo: self.userinfo.clone(),
                 path,
                 query,
                 fragment,
@@ -325,6 +384,7 @@ impl Url {
             scheme: self.scheme.clone(),
             host: self.host.clone(),
             port: self.port,
+            userinfo: self.userinfo.clone(),
             path: resolved_path,
             query,
             fragment,
@@ -349,13 +409,55 @@ impl Url {
         }
     }
 
-    /// Get the origin (`scheme://host[:port]`).
-    pub fn origin(&self) -> String {
-        let mut s = format!("{}://{}", self.scheme, self.host);
-        if let Some(port) = self.port {
-            s.push_str(&format!(":{port}"));
+    /// The serialized origin (`scheme://host[:port]`), or `None` for a
+    /// URL without a scheme or host (an opaque origin).
+    ///
+    /// This is the one origin definition used by CSP `'self'`, `fetch()`
+    /// same-origin / CORS checks, Web Storage partitioning and the
+    /// redirect header policy. The host is lower-cased and a default
+    /// port elided (both already true for parsed network URLs; repeated
+    /// here so hand-built `Url`s compare the same way), so
+    /// `https://Example.com:443` and `https://example.com` are one origin.
+    pub fn origin(&self) -> Option<String> {
+        if self.scheme.is_empty() || self.host.is_empty() {
+            return None;
         }
-        s
+        let host = if is_special_scheme(&self.scheme) {
+            self.host.to_ascii_lowercase()
+        } else {
+            self.host.clone()
+        };
+        Some(match self.port {
+            Some(p) if Some(p) != default_port(&self.scheme) => {
+                format!("{}://{host}:{p}", self.scheme)
+            },
+            _ => format!("{}://{host}", self.scheme),
+        })
+    }
+
+    /// Whether `self` and `other` have the same (non-opaque) origin.
+    pub fn same_origin(&self, other: &Url) -> bool {
+        match (self.origin(), other.origin()) {
+            (Some(a), Some(b)) => a == b,
+            _ => false,
+        }
+    }
+}
+
+/// Schemes whose authority is a network host: their hosts are
+/// case-insensitive and they have a default port.
+pub fn is_special_scheme(scheme: &str) -> bool {
+    default_port(scheme).is_some()
+}
+
+/// The default port of a network scheme.
+pub fn default_port(scheme: &str) -> Option<u16> {
+    match scheme {
+        "http" | "ws" => Some(80),
+        "https" | "wss" => Some(443),
+        "gemini" => Some(1965),
+        "ftp" => Some(21),
+        _ => None,
     }
 }
 
@@ -438,6 +540,29 @@ pub fn strip_referrer(page_url: &str) -> Option<String> {
     }
     s.push_str(&url.path);
     Some(s)
+}
+
+/// Whether a page at `page_url` may load the subresource `resource_url`.
+///
+/// A page with a network origin (`http:`, `https:`, `gemini:`) must not
+/// read the shell's virtual file system: `vfs://` images, stylesheets,
+/// `@import`s and fonts are refused for it, the way real browsers keep
+/// web pages away from `file://`. Its `http(s)` subresources may still be
+/// served from the offline cache (`/sites/<host>/...`) by the
+/// `VfsThenNetwork` loader. Local pages (`vfs://`, `about:`, HTML loaded
+/// from a string) keep full VFS access.
+pub fn subresource_allowed(page_url: Option<&str>, resource_url: &str) -> bool {
+    let is_vfs = resource_url
+        .trim_start()
+        .get(..6)
+        .is_some_and(|p| p.eq_ignore_ascii_case("vfs://"));
+    if !is_vfs {
+        return true;
+    }
+    let page_is_web = page_url
+        .and_then(Url::parse)
+        .is_some_and(|u| is_special_scheme(&u.scheme));
+    !page_is_web
 }
 
 /// Returns `true` if `href` is a fragment-only reference (e.g. `#section`).
@@ -574,7 +699,9 @@ pub fn load_resource(
         },
         #[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
         ResourceSource::Network => load_from_network(request, tls, cookie_jar, resource_cache),
-        #[cfg(any(target_arch = "wasm32", feature = "psp"))]
+        #[cfg(all(feature = "psp", not(target_arch = "wasm32")))]
+        ResourceSource::Network => load_from_network(request, tls),
+        #[cfg(target_arch = "wasm32")]
         ResourceSource::Network => {
             load_from_network(request, tls).map(LoadedResource::from_response)
         },
@@ -597,7 +724,11 @@ pub fn load_resource(
                 {
                     load_from_network(request, tls, cookie_jar, resource_cache)
                 }
-                #[cfg(any(target_arch = "wasm32", feature = "psp"))]
+                #[cfg(all(feature = "psp", not(target_arch = "wasm32")))]
+                {
+                    load_from_network(request, tls)
+                }
+                #[cfg(target_arch = "wasm32")]
                 {
                     load_from_network(request, tls).map(LoadedResource::from_response)
                 }
@@ -649,20 +780,14 @@ fn load_from_network(
                 HttpMethod::Post => "POST",
             };
 
-            // Build extra headers for cookies, referrer, and conditional
-            // requests.
+            // Build extra headers for the referrer and conditional
+            // requests. Cookies are added per redirect hop by the HTTP
+            // client, so they always match the hop's own URL.
             let mut extra: Vec<(String, String)> = Vec::new();
 
             // Add Referer header (privacy-stripped).
             if let Some(ref referrer) = request.referrer {
                 extra.push(("Referer".to_string(), referrer.clone()));
-            }
-
-            // Add cookies.
-            if let Some(ref jar) = cookie_jar
-                && let Some(cookie_val) = jar.cookie_header(&url)
-            {
-                extra.push(("Cookie".to_string(), cookie_val));
             }
 
             // Add conditional request headers from cache.
@@ -683,22 +808,27 @@ fn load_from_network(
                 .map(|(k, v)| (k.as_str(), v.as_str()))
                 .collect();
 
-            let (resp, headers) =
-                http::http_request_full(method, &url, request.body.as_deref(), &extra_refs, tls)?;
-
-            // Store Set-Cookie headers from the response.
-            if let Some(jar) = cookie_jar {
-                jar.set_cookies(&url, &headers);
-            }
+            let body = request.body.as_deref();
+            let (resp, headers) = match cookie_jar {
+                Some(jar) => http::http_request_with_cookies(
+                    method,
+                    &url,
+                    body,
+                    &extra_refs,
+                    tls,
+                    jar,
+                    http::MAX_REDIRECTS,
+                )?,
+                None => http::http_request_full(method, &url, body, &extra_refs, tls)?,
+            };
 
             // Extract cache validators.
             let etag = http::response_find_header(&headers, "etag").map(String::from);
             let last_modified =
                 http::response_find_header(&headers, "last-modified").map(String::from);
 
-            // Parse Content-Security-Policy header if present.
-            let csp =
-                http::response_find_header(&headers, "content-security-policy").map(csp::parse_csp);
+            // Content-Security-Policy of the final response.
+            let csp = csp::parse_csp_headers(&headers);
 
             // Handle 304 Not Modified -- return cached body.
             if resp.status == 304
@@ -730,11 +860,14 @@ fn load_from_network(
 }
 
 /// PSP network loader using raw `sceNetInet*` sockets + embedded-tls.
-#[cfg(feature = "psp")]
+///
+/// No cookie jar is wired on PSP yet; the response's CSP and cache
+/// validators are carried like on desktop.
+#[cfg(all(feature = "psp", not(target_arch = "wasm32")))]
 fn load_from_network(
     request: &ResourceRequest,
     tls: Option<&dyn oasis_net::tls::TlsProvider>,
-) -> Result<ResourceResponse> {
+) -> Result<LoadedResource> {
     let url = Url::parse(&request.url).ok_or_else(|| {
         oasis_types::error::OasisError::Backend(format!("invalid URL: {}", request.url,).into())
     })?;
@@ -755,10 +888,15 @@ fn load_from_network(
                 extra.push(("Referer", &referrer_owned));
             }
 
-            let (resp, _headers) =
+            let (resp, headers) =
                 http_psp::http_request_full(method, &url, request.body.as_deref(), &extra, tls)?;
 
-            Ok(resp)
+            Ok(LoadedResource {
+                response: resp,
+                etag: http1::find_header(&headers, "etag").map(String::from),
+                last_modified: http1::find_header(&headers, "last-modified").map(String::from),
+                csp: csp::parse_csp_headers(&headers),
+            })
         },
         scheme => Err(oasis_types::error::OasisError::Backend(
             format!("unsupported network scheme: {scheme}",).into(),
@@ -908,8 +1046,92 @@ mod tests {
 
     #[test]
     fn url_display_round_trip() {
+        let url = Url::parse("https://example.com:8443/path?q=1#frag").unwrap();
+        assert_eq!(url.to_string(), "https://example.com:8443/path?q=1#frag");
+        // The default port is elided.
         let url = Url::parse("https://example.com:443/path?q=1#frag").unwrap();
-        assert_eq!(url.to_string(), "https://example.com:443/path?q=1#frag");
+        assert_eq!(url.to_string(), "https://example.com/path?q=1#frag");
+    }
+
+    // -- normalization (F15) -------------------------------------------
+
+    #[test]
+    fn userinfo_is_split_from_the_host() {
+        let url = Url::parse("http://user:pw@Example.COM:8080/p").unwrap();
+        assert_eq!(url.host, "example.com");
+        assert_eq!(url.port, Some(8080));
+        assert_eq!(url.userinfo.as_deref(), Some("user:pw"));
+        // Credentials never reach the serialized URL.
+        assert_eq!(url.to_string(), "http://example.com:8080/p");
+        // The last `@` ends the userinfo (WHATWG).
+        let url = Url::parse("https://a@b@evil.test/").unwrap();
+        assert_eq!(url.host, "evil.test");
+        assert_eq!(url.userinfo.as_deref(), Some("a@b"));
+    }
+
+    #[test]
+    fn network_hosts_are_lower_cased_but_vfs_hosts_are_not() {
+        assert_eq!(
+            Url::parse("HTTPS://WWW.Example.Com/").unwrap().host,
+            "www.example.com"
+        );
+        assert_eq!(Url::parse("gemini://Gem.Test/").unwrap().host, "gem.test");
+        assert_eq!(Url::parse("vfs://Sites/Corp/x.html").unwrap().host, "Sites");
+    }
+
+    #[test]
+    fn backslash_is_a_path_separator_for_network_schemes() {
+        let url = Url::parse("http://good.test\\@evil.test/").unwrap();
+        assert_eq!(url.host, "good.test");
+        assert_eq!(url.userinfo, None);
+    }
+
+    #[test]
+    fn ipv6_literals_and_bad_ports() {
+        let url = Url::parse("http://[::1]:8080/x").unwrap();
+        assert_eq!(url.host, "[::1]");
+        assert_eq!(url.port, Some(8080));
+        let url = Url::parse("http://[::1]/x").unwrap();
+        assert_eq!(url.host, "[::1]");
+        assert_eq!(url.port, None);
+        assert!(Url::parse("http://host:abc/").is_none());
+        assert!(Url::parse("http://host:99999/").is_none());
+        assert!(Url::parse("http://[::1]x/").is_none());
+        // An empty port is the default.
+        assert_eq!(Url::parse("http://host:/").unwrap().port, None);
+    }
+
+    #[test]
+    fn origin_is_normalized() {
+        let a = Url::parse("https://Example.com:443/a").unwrap();
+        let b = Url::parse("https://example.com/b").unwrap();
+        assert_eq!(a.origin().as_deref(), Some("https://example.com"));
+        assert!(a.same_origin(&b));
+        // A hand-built Url with an explicit default port still matches.
+        let mut c = b.clone();
+        c.port = Some(443);
+        c.host = "EXAMPLE.com".into();
+        assert!(c.same_origin(&a));
+        assert!(!a.same_origin(&Url::parse("http://example.com/").unwrap()));
+        assert_eq!(Url::parse("#frag").unwrap().origin(), None);
+    }
+
+    #[test]
+    fn vfs_subresources_are_blocked_from_web_pages() {
+        let web = Some("https://site.test/page");
+        assert!(!subresource_allowed(web, "vfs://home/secret.png"));
+        assert!(!subresource_allowed(web, "VFS://home/secret.png"));
+        assert!(subresource_allowed(web, "https://cdn.test/a.png"));
+        // The offline cache maps http(s) URLs into `/sites/<host>`.
+        assert!(subresource_allowed(web, "http://other.test/a.png"));
+        assert!(subresource_allowed(web, "data:image/png;base64,AA=="));
+        // Local pages keep VFS access.
+        assert!(subresource_allowed(
+            Some("vfs://sites/a/index.html"),
+            "vfs://x/y.png"
+        ));
+        assert!(subresource_allowed(None, "vfs://x/y.png"));
+        assert!(subresource_allowed(Some("about:blank"), "vfs://x/y.png"));
     }
 
     // -- helpers -----------------------------------------------------------
@@ -929,7 +1151,7 @@ mod tests {
     #[test]
     fn url_origin() {
         let url = Url::parse("https://example.com:8443/path").unwrap();
-        assert_eq!(url.origin(), "https://example.com:8443");
+        assert_eq!(url.origin().as_deref(), Some("https://example.com:8443"));
     }
 
     #[test]

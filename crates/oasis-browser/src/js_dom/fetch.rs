@@ -53,26 +53,6 @@ pub(super) fn install_fetch_binding(
 // Origins and network classes
 // ------------------------------------------------------------------
 
-/// Serialized origin (`scheme://host[:port]`) with the host lower-cased
-/// and the scheme's default port elided, or `None` for URLs without a
-/// host (opaque origins).
-pub(crate) fn origin_key(url: &Url) -> Option<String> {
-    if url.scheme.is_empty() || url.host.is_empty() {
-        return None;
-    }
-    let host = url.host.to_ascii_lowercase();
-    let default_port = match url.scheme.as_str() {
-        "http" => Some(80),
-        "https" => Some(443),
-        "gemini" => Some(1965),
-        _ => None,
-    };
-    Some(match url.port {
-        Some(p) if Some(p) != default_port => format!("{}://{host}:{p}", url.scheme),
-        _ => format!("{}://{host}", url.scheme),
-    })
-}
-
 fn is_web_scheme(url: &Url) -> bool {
     url.scheme == "http" || url.scheme == "https"
 }
@@ -447,6 +427,11 @@ impl FetchHandler for BrowserFetchHandler {
         if !is_web_scheme(&target) {
             return Err(format!("unsupported URL scheme '{}'", target.scheme));
         }
+        // `Url` splits userinfo off the host; fetch() refuses URLs that
+        // carry credentials outright, as browsers do.
+        if target.userinfo.is_some() {
+            return Err(format!("URL '{raw}' includes credentials"));
+        }
         if target.host.contains(['@', ' ', '\\']) {
             return Err(format!("invalid host in URL '{raw}'"));
         }
@@ -478,9 +463,9 @@ impl FetchHandler for BrowserFetchHandler {
 
         // Web-origin policy: network class, same-origin / CORS.
         let page = self.page_url.as_ref().filter(|u| is_web_scheme(u));
-        let page_origin = page.and_then(origin_key);
+        let page_origin = page.and_then(Url::origin);
         let page_class = page.map(|p| self.classify(p));
-        let target_origin = origin_key(&target);
+        let target_origin = target.origin();
         if let (Some(page_origin), Some(page_class)) = (&page_origin, page_class) {
             let target_class = self.classify(&target);
             if target_class > page_class {
@@ -511,7 +496,7 @@ impl FetchHandler for BrowserFetchHandler {
                 return false;
             }
             // A non-simple request must not be bounced to another origin.
-            simple || origin_key(next) == target_origin
+            simple || next.origin() == target_origin
         };
         let addr_ok = |ip: IpAddr| -> bool { page_class.is_none_or(|pc| classify_ip(ip) <= pc) };
 
@@ -530,7 +515,7 @@ impl FetchHandler for BrowserFetchHandler {
         if let Some(ref page_origin) = page_origin {
             let final_origin = Url::parse(&resp.url)
                 .as_ref()
-                .and_then(origin_key)
+                .and_then(Url::origin)
                 .or_else(|| target_origin.clone());
             if final_origin.as_deref() != Some(page_origin.as_str()) {
                 let acao = resp

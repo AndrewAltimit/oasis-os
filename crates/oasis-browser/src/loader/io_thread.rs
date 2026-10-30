@@ -18,9 +18,35 @@ mod inner {
     use oasis_net::tls::TlsProvider;
     use oasis_types::error::OasisError;
 
-    use crate::loader::cookies::CookieJar;
+    use crate::loader::cookies::{CookieHook, CookieJar};
     use crate::loader::csp;
     use crate::loader::{self, HttpMethod, LoadedResource, ResourceRequest, Url};
+
+    /// Cookie hook for one request: reads and writes the worker's jar and
+    /// records every hop's `Set-Cookie` headers (with the hop URL that
+    /// sent them) for replay on the main-thread jar.
+    struct RecordingJar<'a> {
+        jar: &'a mut CookieJar,
+        updates: Vec<(String, Vec<(String, String)>)>,
+    }
+
+    impl CookieHook for RecordingJar<'_> {
+        fn cookie_header(&mut self, url: &Url) -> Option<String> {
+            self.jar.cookie_header(url)
+        }
+
+        fn store(&mut self, url: &Url, headers: &[(String, String)]) {
+            let set_cookies: Vec<(String, String)> = headers
+                .iter()
+                .filter(|(k, _)| k.eq_ignore_ascii_case("set-cookie"))
+                .cloned()
+                .collect();
+            if !set_cookies.is_empty() {
+                self.jar.set_cookies(url, &set_cookies);
+                self.updates.push((url.to_string(), set_cookies));
+            }
+        }
+    }
 
     /// Return type for `execute_request`: the loaded resource and any
     /// cookie updates that need replaying on the main-thread jar.
@@ -63,7 +89,9 @@ mod inner {
         pub id: IoRequestId,
         pub kind: IoRequestKind,
         pub result: oasis_types::error::Result<LoadedResource>,
-        /// Cookie `Set-Cookie` updates to apply to the main-thread jar.
+        /// `Set-Cookie` updates to apply to the main-thread jar, one entry
+        /// per response hop that set cookies: `(hop URL, set-cookie
+        /// headers)`. Redirect hops are included, each under its own URL.
         pub cookie_updates: Vec<(String, Vec<(String, String)>)>,
         /// The resolved image URL key (only for `Image` kind).
         pub image_key: Option<String>,
@@ -255,17 +283,13 @@ mod inner {
                 HttpMethod::Post => "POST",
             };
 
-            // Build extra headers.
+            // Build extra headers. Cookies are added per redirect hop by
+            // the HTTP client (see `RecordingJar`).
             let mut extra: Vec<(String, String)> = Vec::new();
 
             // Referrer header.
             if let Some(ref referrer) = request.referrer {
                 extra.push(("Referer".to_string(), referrer.clone()));
-            }
-
-            // Cookie header.
-            if let Some(cookie_val) = cookie_jar.cookie_header(&url) {
-                extra.push(("Cookie".to_string(), cookie_val));
             }
 
             // Conditional request headers from pre-extracted cache validators.
@@ -285,28 +309,23 @@ mod inner {
 
             match url.scheme.as_str() {
                 "http" | "https" => {
-                    match loader::http::http_request_full_limited(
+                    let mut recorder = RecordingJar {
+                        jar: cookie_jar,
+                        updates: Vec::new(),
+                    };
+                    let result = loader::http::http_request_with_cookies(
                         method,
                         &url,
                         request.body.as_deref(),
                         &extra_refs,
                         tls,
+                        &mut recorder,
                         work.max_redirects,
-                    ) {
+                    );
+                    // Cookies set by hops before a failure still count.
+                    let cookie_updates = recorder.updates;
+                    match result {
                         Ok((resp, headers)) => {
-                            // Collect cookie updates to replay on main thread.
-                            let mut cookie_updates = Vec::new();
-                            let set_cookies: Vec<(String, String)> = headers
-                                .iter()
-                                .filter(|(k, _)| k.eq_ignore_ascii_case("set-cookie"))
-                                .cloned()
-                                .collect();
-                            if !set_cookies.is_empty() {
-                                // Apply to our local jar too.
-                                cookie_jar.set_cookies(&url, &headers);
-                                cookie_updates.push((url.to_string(), set_cookies));
-                            }
-
                             // Extract cache validators.
                             let etag = loader::http::response_find_header(&headers, "etag")
                                 .map(String::from);
@@ -314,12 +333,8 @@ mod inner {
                                 loader::http::response_find_header(&headers, "last-modified")
                                     .map(String::from);
 
-                            // Parse CSP header.
-                            let csp = loader::http::response_find_header(
-                                &headers,
-                                "content-security-policy",
-                            )
-                            .map(csp::parse_csp);
+                            // CSP of the final response.
+                            let csp = csp::parse_csp_headers(&headers);
 
                             let loaded = LoadedResource {
                                 response: resp,
@@ -330,7 +345,7 @@ mod inner {
 
                             (Ok(loaded), cookie_updates)
                         },
-                        Err(e) => (Err(e), Vec::new()),
+                        Err(e) => (Err(e), cookie_updates),
                     }
                 },
                 "gemini" => {

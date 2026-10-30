@@ -109,7 +109,7 @@ pub(super) fn install_storage_bindings(
 
     let origin = crate::loader::Url::parse(page_url)
         .as_ref()
-        .and_then(super::fetch::origin_key);
+        .and_then(crate::loader::Url::origin);
     let (store, origin): (SharedLocalStorage, String) = match (origin, persistent) {
         (Some(o), Some(p)) => (Rc::clone(p), o),
         (Some(o), None) => (Rc::default(), o),
