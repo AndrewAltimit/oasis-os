@@ -24,7 +24,7 @@ Runnable code samples live in [`examples/`](../examples/README.md).
 
 | Doc | What it covers |
 |-----|----------------|
-| [design.md](design.md) | Technical design document: overall architecture |
+| [design.md](design.md) | Technical design document: goals, layering, backend contract, platform notes; links out to the subsystem docs below |
 | [browser-engine.md](browser-engine.md) | `oasis-browser` feature catalogue (HTML, CSS, layout, fonts, JS bindings) |
 | [browser-backlog.md](browser-backlog.md) | Browser engine backlog and recently shipped epics |
 | [javascript-engine.md](javascript-engine.md) | QuickJS-NG integration and the PSP cross-compile |
@@ -39,6 +39,7 @@ Runnable code samples live in [`examples/`](../examples/README.md).
 | [vector-graphics.md](vector-graphics.md) | `oasis-vector` scene, icons, animation, `SdiVector` integration |
 | [shaders.md](shaders.md) | Shader wallpapers, GPU and software renderers |
 | [boot-splash.md](boot-splash.md) | Functional desktop boot splash and its phase probes |
+| [i18n.md](i18n.md) | `oasis-i18n`: locales, selecting a locale, adding strings and translations |
 | [theming-desktop-plan.md](theming-desktop-plan.md) | Advanced theming and desktop-metaphor plan (in progress) |
 | [examples/oasis.mcp.json](examples/oasis.mcp.json) | Example MCP client config (used by mcp-server.md) |
 
@@ -69,8 +70,10 @@ See [adr/README.md](adr/README.md) for the index with statuses.
 
 ## Archive
 
-Completed, shipped or superseded plans and investigations, kept for history.
-Each starts with a banner stating its outcome.
+Completed, shipped or superseded plans and investigations, kept for history
+(reviewed 2026-10-30: each still explains why the shipped design looks the way
+it does, so none was deleted). Each starts with a banner stating its outcome;
+do not treat the body as a description of current behavior.
 
 | Doc | Outcome |
 |-----|---------|
@@ -83,6 +86,8 @@ Each starts with a banner stating its outcome.
 ## Elsewhere in the repo
 
 - [`../README.md`](../README.md) -- project overview
+- [`../CHANGELOG.md`](../CHANGELOG.md) -- notable changes by release / branch
+- [`../SCREENSHOTS.md`](../SCREENSHOTS.md) -- every built-in skin, screenshot per app
 - [`../CLAUDE.md`](../CLAUDE.md) -- developer / agent reference (build commands, architecture, conventions)
 - [`../AGENTS.md`](../AGENTS.md) -- multi-agent workflow and CI
 - [`../CONTRIBUTING.md`](../CONTRIBUTING.md) -- contribution policy
