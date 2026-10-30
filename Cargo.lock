@@ -1007,11 +1007,9 @@ dependencies = [
 name = "oasis-app-core"
 version = "1.4.0"
 dependencies = [
- "oasis-sdi",
  "oasis-skin",
  "oasis-test-backend",
  "oasis-types",
- "oasis-ui",
  "oasis-vfs",
 ]
 
@@ -1115,7 +1113,6 @@ version = "1.4.0"
 dependencies = [
  "criterion",
  "oasis-app-core",
- "oasis-sdi",
  "oasis-skin",
  "oasis-test-backend",
  "oasis-types",

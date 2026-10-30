@@ -14,7 +14,7 @@ use crate::sdi::helpers::{
     BezelStyle, ensure_border, ensure_chrome_bezel, ensure_pill, ensure_rounded_fill, ensure_text,
     hide_bezel, hide_indexed, hide_objects,
 };
-use crate::theme;
+use oasis_skin::legacy_theme as theme;
 
 /// Top edge of the bottom bar: `screen_h - bottombar_height`, saturated
 /// so a skin whose bar is taller than the screen pins it at 0 instead of

@@ -5,14 +5,12 @@
 
 use std::any::Any;
 
-use oasis_sdi::SdiRegistry;
 use oasis_skin::ActiveTheme;
 use oasis_types::backend::SdiBackend;
 use oasis_types::input::{Button, Key, Modifiers};
 use oasis_vfs::Vfs;
 
 use crate::AppAction;
-use crate::layout::AppLayout;
 
 /// Downcasting support for [`App`] trait objects.
 ///
@@ -67,8 +65,8 @@ pub const MAX_WHEEL_STEPS: u32 = 16;
 
 /// Trait for applications that can be launched from the dashboard.
 ///
-/// Each app owns its state and implements input handling, rendering (both
-/// SDI fullscreen and windowed), and VFS IPC. Apps are created via
+/// Each app owns its state and implements input handling, drawing into
+/// its window ([`Self::draw_windowed`]) and VFS IPC. Apps are created via
 /// `AppRunner::launch()` and dispatched through the runner.
 ///
 /// # Input routing
@@ -172,6 +170,8 @@ pub trait App: AsAny + std::fmt::Debug + Send {
     ///
     /// `lx`/`ly` are local coordinates within the content area, which is
     /// `cw` x `ch`; [`Self::layout`] has just been called with that size.
+    /// Hit-test against the geometry [`Self::draw_windowed`] draws -- a
+    /// kiosk-fullscreen window is still drawn through it, just bigger.
     /// Returns `AppAction::None` by default.
     fn handle_click(
         &mut self,
@@ -179,18 +179,15 @@ pub trait App: AsAny + std::fmt::Debug + Send {
         _ly: i32,
         _cw: u32,
         _ch: u32,
-        _fullscreen: bool,
         _vfs: &dyn Vfs,
     ) -> AppAction {
         AppAction::None
     }
 
-    /// Render to SDI registry (the WASM host's fullscreen mode; the
-    /// desktop shell always draws windows).
-    fn update_sdi(&mut self, sdi: &mut SdiRegistry, at: &ActiveTheme);
-
-    /// Render directly to backend (windowed mode). [`Self::layout`] has
-    /// just been called with `cw` x `ch`.
+    /// Draw the app into its `cw` x `ch` content area at `(cx, cy)`, inside
+    /// the window manager's clip rect. Every host draws apps this way (a
+    /// kiosk-fullscreen app is a window filling the screen). [`Self::layout`]
+    /// has just been called with `cw` x `ch`.
     fn draw_windowed(
         &self,
         cx: i32,
@@ -200,9 +197,6 @@ pub trait App: AsAny + std::fmt::Debug + Send {
         backend: &mut dyn SdiBackend,
         at: &ActiveTheme,
     ) -> oasis_types::error::Result<()>;
-
-    /// Hide all SDI objects created by this app.
-    fn hide_sdi(&self, sdi: &mut SdiRegistry);
 
     /// The app is closing: destroy every backend resource it created
     /// (textures, render targets). Hosts call this exactly once, after
@@ -314,8 +308,6 @@ pub struct ContentState {
     pub scroll: usize,
     /// Cursor position (relative to visible area).
     pub cursor: usize,
-    /// Smooth selection for lerp animation.
-    pub visual_selected: f32,
     /// Cached max visible lines (updated each frame).
     pub cached_max_visible: usize,
     /// Cached title bar height in pixels (updated each frame from the active
@@ -336,12 +328,12 @@ pub struct ContentState {
 
 /// Maximum visible lines fallback for 480x272.
 const DEFAULT_MAX_VISIBLE: usize = 13;
-/// Default title bar height fallback used until the first `update_layout`
-/// call populates the real value from the active theme. Matches the common
-/// desktop skin metric.
+/// Default title bar height fallback used until the first
+/// `update_layout_windowed` call populates the real value from the active
+/// theme. Matches the common desktop skin metric.
 const DEFAULT_TITLE_BAR_HEIGHT: u32 = 20;
-/// Default content line height fallback used until the first `update_layout`
-/// call. Matches `AppLayout::compute` for the default desktop skin.
+/// Default content line height fallback used until the first
+/// `update_layout_windowed` call.
 const DEFAULT_LINE_H: u32 = 14;
 
 impl ContentState {
@@ -353,7 +345,6 @@ impl ContentState {
             lines: Vec::new(),
             scroll: 0,
             cursor: 0,
-            visual_selected: 0.0,
             cached_max_visible: DEFAULT_MAX_VISIBLE,
             cached_title_bar_height: DEFAULT_TITLE_BAR_HEIGHT,
             cached_line_h: DEFAULT_LINE_H,
@@ -386,21 +377,6 @@ impl ContentState {
         } else if self.scroll + self.cached_max_visible < self.lines.len() {
             self.scroll += 1;
         }
-    }
-
-    /// Update cached layout from theme.
-    pub fn update_layout(&mut self, at: &ActiveTheme) {
-        // Match the floor `draw_content_windowed` applies so click-to-line
-        // mapping uses the same row height the renderer drew.
-        let line_h = at.terminal_line_height.max(12);
-        let layout = AppLayout::compute(at, 14);
-        // Re-derive `max_visible` using the clamped `line_h` so the scroll
-        // viewport bound and the click-to-row mapping agree. `AppLayout`
-        // internally uses `max(1)` which diverges from the windowed
-        // renderer's `max(12)` whenever the skin has a tiny line height.
-        self.cached_max_visible = (layout.usable_h / line_h).max(1) as usize;
-        self.cached_title_bar_height = at.app.title_bar_height;
-        self.cached_line_h = line_h;
     }
 
     /// Update cached layout for a windowed content area `ch` tall: the
@@ -454,11 +430,6 @@ impl ContentState {
             },
             _ => None,
         }
-    }
-
-    /// Advance the smooth visual selection animation.
-    pub fn animate_selection(&mut self, lerp_speed: f32) {
-        self.visual_selected += (self.cursor as f32 - self.visual_selected) * lerp_speed;
     }
 }
 
@@ -575,16 +546,6 @@ mod tests {
         cs.navigate_down();
         assert_eq!(cs.cursor, 1);
         assert_eq!(cs.scroll, 0);
-    }
-
-    #[test]
-    fn animate_selection_moves_toward_cursor() {
-        let mut cs = ContentState::new("Test", "/apps/test");
-        cs.cursor = 5;
-        cs.visual_selected = 0.0;
-        cs.animate_selection(0.5);
-        assert!(cs.visual_selected > 0.0);
-        assert!(cs.visual_selected < 5.0);
     }
 
     #[test]

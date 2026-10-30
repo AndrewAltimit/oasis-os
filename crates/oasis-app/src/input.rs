@@ -362,15 +362,7 @@ fn window_content_click(
         && let Some(win) = state.wm.get_window(id)
     {
         let (_, _, cw, ch) = win.content_rect(state.wm.theme());
-        let action = runner.handle_click(
-            lx,
-            ly,
-            cw,
-            ch,
-            win.fullscreen_kiosk,
-            &state.active_theme,
-            vfs,
-        );
+        let action = runner.handle_click(lx, ly, cw, ch, &state.active_theme, vfs);
         // Clicks answer with the same actions as buttons: a double-clicked
         // file opens in its app, a File > Close menu item closes the window.
         apply_window_action(action, id.to_string(), state, sdi, vfs);

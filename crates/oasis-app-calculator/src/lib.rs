@@ -11,9 +11,7 @@
 //! cursor and Confirm presses the key under it. History persists to
 //! [`history::HISTORY_PATH`].
 
-use oasis_app_core::render::{hide_app_sdi, render_app_chrome, render_content_sdi};
 use oasis_app_core::{App, AppAction, ContentState};
-use oasis_sdi::SdiRegistry;
 use oasis_skin::ActiveTheme;
 use oasis_types::backend::SdiBackend;
 use oasis_types::input::{Button, Key, Modifiers};
@@ -930,15 +928,7 @@ impl App for CalculatorApp {
         false
     }
 
-    fn handle_click(
-        &mut self,
-        lx: i32,
-        ly: i32,
-        cw: u32,
-        ch: u32,
-        _fullscreen: bool,
-        vfs: &dyn Vfs,
-    ) -> AppAction {
+    fn handle_click(&mut self, lx: i32, ly: i32, cw: u32, ch: u32, vfs: &dyn Vfs) -> AppAction {
         self.ensure_history_loaded(vfs);
         let l = CalcLayout::compute(0, 0, cw, ch);
         if let Some(i) = l.key_at(lx, ly) {
@@ -980,13 +970,6 @@ impl App for CalculatorApp {
         changed
     }
 
-    fn update_sdi(&mut self, sdi: &mut SdiRegistry, at: &ActiveTheme) {
-        self.content.update_layout(at);
-        self.content.animate_selection(0.3);
-        render_app_chrome(sdi, at);
-        render_content_sdi(&self.content, sdi, at);
-    }
-
     fn draw_windowed(
         &self,
         cx: i32,
@@ -997,10 +980,6 @@ impl App for CalculatorApp {
         at: &ActiveTheme,
     ) -> oasis_types::error::Result<()> {
         self.draw_calculator(cx, cy, cw, ch, backend, at)
-    }
-
-    fn hide_sdi(&self, sdi: &mut SdiRegistry) {
-        hide_app_sdi(sdi);
     }
 
     fn lines(&self) -> &[String] {
@@ -1700,7 +1679,6 @@ mod tests {
             r.y + r.h as i32 / 2,
             CW,
             CH,
-            false,
             &make_vfs(),
         );
     }
@@ -1731,7 +1709,7 @@ mod tests {
     fn click_outside_keys_does_nothing() {
         let mut app = CalculatorApp::new("/apps/calc");
         let l = CalcLayout::compute(0, 0, CW, CH);
-        app.handle_click(l.display.x + 5, l.display.y + 5, CW, CH, false, &make_vfs());
+        app.handle_click(l.display.x + 5, l.display.y + 5, CW, CH, &make_vfs());
         assert!(app.input_buffer.is_empty());
         assert!(app.flash.is_none());
     }
@@ -1746,7 +1724,7 @@ mod tests {
         let pane = l.history.expect("wide layout has history");
         // Rows are newest first: the second row is the older entry.
         let y = pane.y + (2 * keypad::HISTORY_ROW_H) as i32 + 2;
-        app.handle_click(pane.x + 4, y, w, h, false, &make_vfs());
+        app.handle_click(pane.x + 4, y, w, h, &make_vfs());
         assert_eq!(app.input_buffer, "1+1");
     }
 

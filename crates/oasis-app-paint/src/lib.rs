@@ -19,9 +19,7 @@ pub mod palette;
 mod render;
 pub mod tools;
 
-use oasis_app_core::render::{hide_app_sdi, render_app_chrome, render_content_sdi};
 use oasis_app_core::{App, AppAction, ContentState};
-use oasis_sdi::SdiRegistry;
 use oasis_skin::ActiveTheme;
 use oasis_types::backend::{Color, SdiBackend};
 use oasis_types::input::{Button, Key, Modifiers};
@@ -803,26 +801,11 @@ impl App for PaintApp {
         delta != 0
     }
 
-    fn handle_click(
-        &mut self,
-        lx: i32,
-        ly: i32,
-        cw: u32,
-        ch: u32,
-        _fullscreen: bool,
-        vfs: &dyn Vfs,
-    ) -> AppAction {
+    fn handle_click(&mut self, lx: i32, ly: i32, cw: u32, ch: u32, vfs: &dyn Vfs) -> AppAction {
         let action = self.click(lx, ly, cw, ch);
         // A click can open the picker or choose a file: list / load now.
         self.service_picker(vfs);
         action
-    }
-
-    fn update_sdi(&mut self, sdi: &mut SdiRegistry, at: &ActiveTheme) {
-        self.content.update_layout(at);
-        self.content.animate_selection(0.3);
-        render_app_chrome(sdi, at);
-        render_content_sdi(&self.content, sdi, at);
     }
 
     fn draw_windowed(
@@ -835,10 +818,6 @@ impl App for PaintApp {
         at: &ActiveTheme,
     ) -> oasis_types::error::Result<()> {
         self.draw_paint(cx, cy, cw, ch, backend, at)
-    }
-
-    fn hide_sdi(&self, sdi: &mut SdiRegistry) {
-        hide_app_sdi(sdi);
     }
 
     fn lines(&self) -> &[String] {
@@ -1720,7 +1699,6 @@ mod tests {
             r.y + r.h as i32 / 2,
             CW,
             CH,
-            false,
             &make_vfs(),
         );
     }
@@ -1765,7 +1743,7 @@ mod tests {
     fn clicks_outside_canvas_do_not_paint() {
         let mut app = PaintApp::new("/apps/paint");
         let before = app.canvas.pixels.clone();
-        app.handle_click(1, CH as i32 - 30, CW, CH, false, &make_vfs());
+        app.handle_click(1, CH as i32 - 30, CW, CH, &make_vfs());
         assert_eq!(app.canvas.pixels, before);
         assert!(app.undo_stack.is_empty());
     }
@@ -1775,7 +1753,7 @@ mod tests {
         let mut app = PaintApp::new("/apps/paint");
         let l = PaintLayout::compute(0, 0, CW, CH, 64, 48);
         let r = l.swatch_rect(4);
-        app.handle_click(r.x + 1, r.y + 1, CW, CH, false, &make_vfs());
+        app.handle_click(r.x + 1, r.y + 1, CW, CH, &make_vfs());
         assert_eq!(app.palette_index, 4);
         assert_eq!(app.color, palette()[4]);
     }
@@ -1836,7 +1814,7 @@ mod tests {
         other.apply_vfs_ops(&mut vfs);
         let l = PaintLayout::compute(0, 0, CW, CH, 64, 48);
         let p = l.picker();
-        other.handle_click(p.x + 5, p.y + PICKER_ROW + 2, CW, CH, false, &vfs);
+        other.handle_click(p.x + 5, p.y + PICKER_ROW + 2, CW, CH, &vfs);
         assert_eq!((other.canvas.width(), other.canvas.height()), (16, 8));
     }
 
@@ -1887,7 +1865,7 @@ mod tests {
     fn menu_click_opens_dropdown() {
         let mut app = PaintApp::new("/apps/paint");
         // "File" label sits at the left of the bar.
-        app.handle_click(12, 8, CW, CH, false, &make_vfs());
+        app.handle_click(12, 8, CW, CH, &make_vfs());
         assert_eq!(app.menu.open, Some(0));
         // Clicking the canvas while open just closes the menu.
         click_canvas_pixel(&mut app, 0, 0);

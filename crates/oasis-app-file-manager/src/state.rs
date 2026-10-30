@@ -46,11 +46,6 @@ pub struct FileManagerApp {
     /// heights consistently with the renderer's
     /// `(font_hint as i32 + 2).max(11)` formula.
     pub(crate) cached_font_hint: u16,
-    /// Cached `statusbar_height + bottombar_height` from the active theme.
-    /// In SDI/fullscreen mode the renderer subtracts these from `body_h`
-    /// before computing geometry; the click handler needs the same value
-    /// so hit-tests don't extend over the system bars.
-    pub(crate) cached_system_bars: u32,
     /// Top menu bar (File / Edit / View) shared by both view modes.
     pub menu: MenuBar,
     /// Last-clicked tile index (absolute, into `panels[active].lines`).
@@ -88,7 +83,6 @@ impl FileManagerApp {
             explorer_cols: 1,
             explorer_visible_rows: 1,
             cached_font_hint: 11,
-            cached_system_bars: 0,
             menu: default_menu_bar(),
             last_click_tile: None,
             pending_navigation: None,

@@ -358,21 +358,15 @@ impl TvGuideState {
 
     /// Handle a click at content-local coordinates.
     ///
-    /// `cw`/`ch` are the content area dimensions (needed to recompute layout).
+    /// `cw`/`ch` are the content area dimensions (needed to recompute the
+    /// layout `draw_windowed` draws with).
     /// Returns `Some(TuneRequest)` if the click tuned a channel (caller should
     /// enter fullscreen), `None` if it only selected a channel or missed.
     ///
     /// When the video is expanded (fullscreen), any click collapses back to
     /// PIP mode. When in PIP mode, clicking the video preview area expands
     /// it to fullscreen.
-    pub fn handle_click(
-        &mut self,
-        lx: i32,
-        ly: i32,
-        cw: u32,
-        ch: u32,
-        fullscreen: bool,
-    ) -> Option<TuneRequest> {
+    pub fn handle_click(&mut self, lx: i32, ly: i32, cw: u32, ch: u32) -> Option<TuneRequest> {
         // Volume bar click (available in both expanded and PIP modes).
         if self.tuned_channel.is_some() {
             let vr = volume_bar_rect(cw, ch, self.video_expanded);
@@ -395,12 +389,11 @@ impl TvGuideState {
         // Check if clicking the video preview area (PIP) to expand.
         if self.tuned_channel.is_some() && self.preview_texture.is_some() {
             let usable_h = ch;
-            let min_header = if fullscreen { 60 } else { 40 };
-            let header_h = (usable_h * 20 / 100).max(min_header);
-            let preview_w = (cw * 30 / 100).max(if fullscreen { 80 } else { 60 });
-            let preview_h = header_h.saturating_sub(if fullscreen { 16 } else { 8 });
-            let preview_x = cw as i32 - preview_w as i32 - if fullscreen { 10 } else { 4 };
-            let preview_y = if fullscreen { 8i32 } else { 4i32 };
+            let header_h = (usable_h * 20 / 100).max(40);
+            let preview_w = (cw * 30 / 100).max(60);
+            let preview_h = header_h.saturating_sub(8);
+            let preview_x = cw as i32 - preview_w as i32 - 4;
+            let preview_y = 4i32;
 
             if lx >= preview_x
                 && lx < preview_x + preview_w as i32
@@ -418,19 +411,14 @@ impl TvGuideState {
 
         // Recompute layout from content dimensions.
         let usable_h = ch;
-        let (min_header, min_time, min_footer) = if fullscreen {
-            (60, 20, 18) // matches update_sdi
-        } else {
-            (40, 16, 14) // matches draw_windowed
-        };
-        let header_h = (usable_h * 20 / 100).max(min_header);
-        let time_header_h = (usable_h * 4 / 100).max(min_time);
-        let footer_h = (usable_h * 5 / 100).max(min_footer);
+        // Same minimums as `draw_windowed`.
+        let header_h = (usable_h * 20 / 100).max(40);
+        let time_header_h = (usable_h * 4 / 100).max(16);
+        let footer_h = (usable_h * 5 / 100).max(14);
         let grid_h = usable_h.saturating_sub(header_h + time_header_h + footer_h);
 
         let row_count = self.channels.len().clamp(1, VISIBLE_ROWS) as u32;
-        let min_row = if fullscreen { 20 } else { 16 };
-        let row_h = (grid_h / row_count).max(min_row);
+        let row_h = (grid_h / row_count).max(16);
 
         let grid_y = header_h + time_header_h;
 
@@ -739,7 +727,7 @@ mod tests {
         let click_x = vr.x + (vr.w as i32 / 2);
         let click_y = vr.y + (vr.h as i32 / 2);
 
-        let result = state.handle_click(click_x, click_y, cw, ch, true);
+        let result = state.handle_click(click_x, click_y, cw, ch);
         assert!(result.is_none()); // volume click doesn't tune
         assert!(state.volume_changed);
         // Should be roughly 50%.
@@ -756,7 +744,7 @@ mod tests {
         let ch = 600u32;
         let vr = crate::grid_layout::volume_bar_rect(cw, ch, true);
         // Click at left edge of volume bar.
-        let result = state.handle_click(vr.x, vr.y, cw, ch, true);
+        let result = state.handle_click(vr.x, vr.y, cw, ch);
         assert!(result.is_none());
         assert!(state.volume_changed);
         assert!(state.volume <= 5); // should be near 0%
@@ -770,7 +758,7 @@ mod tests {
 
         let (cw, ch) = (800u32, 600u32);
         let vr = crate::grid_layout::volume_bar_rect(cw, ch, true);
-        state.handle_click(vr.x + vr.w as i32 - 1, vr.y, cw, ch, true);
+        state.handle_click(vr.x + vr.w as i32 - 1, vr.y, cw, ch);
         assert_eq!(state.volume, 100);
     }
 
@@ -783,7 +771,7 @@ mod tests {
         state.video_expanded = true;
 
         // Click outside volume bar should collapse.
-        let result = state.handle_click(10, 10, 800, 600, true);
+        let result = state.handle_click(10, 10, 800, 600);
         assert!(result.is_none());
         assert!(!state.video_expanded);
     }

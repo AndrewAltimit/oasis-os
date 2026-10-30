@@ -39,6 +39,7 @@ use oasis_core::bottombar::{BottomBar, MediaTab};
 use oasis_core::browser::{BrowserConfig, BrowserWidget};
 use oasis_core::cursor::{self, CursorState};
 use oasis_core::dashboard::{AppEntry, DashboardConfig, DashboardState, discover_apps};
+use oasis_core::media_page;
 use oasis_core::osk::OskState;
 use oasis_core::sdi::SdiRegistry;
 use oasis_core::skin::Skin;
@@ -1251,15 +1252,14 @@ impl OasisWasm {
         match self.mode {
             Mode::Dashboard => {
                 terminal_sdi::set_terminal_visible(&mut self.sdi, false);
-                AppRunner::hide_sdi(&self.apps, &mut self.sdi);
                 self.taskbar.hide_sdi(&mut self.sdi);
 
                 if self.bottom_bar.active_tab == MediaTab::None {
                     self.dashboard.update_sdi(&mut self.sdi, &self.active_theme);
-                    terminal_sdi::hide_media_page(&mut self.sdi);
+                    media_page::hide_media_page(&mut self.sdi);
                 } else {
                     self.dashboard.hide_sdi(&mut self.sdi);
-                    terminal_sdi::update_media_page(
+                    media_page::update_media_page(
                         &mut self.sdi,
                         &self.bottom_bar,
                         &self.active_theme,
@@ -1277,13 +1277,12 @@ impl OasisWasm {
             },
             Mode::Terminal => {
                 self.dashboard.hide_sdi(&mut self.sdi);
-                AppRunner::hide_sdi(&self.apps, &mut self.sdi);
                 StatusBar::hide_sdi(&mut self.sdi);
                 BottomBar::hide_sdi(&mut self.sdi);
                 self.taskbar.hide_sdi(&mut self.sdi);
                 self.start_menu.close();
                 self.start_menu.hide_sdi(&mut self.sdi);
-                terminal_sdi::hide_media_page(&mut self.sdi);
+                media_page::hide_media_page(&mut self.sdi);
                 let cursor_visible = self.active_theme.terminal_cursor_blink_rate == 0
                     || (self.frame_counter / self.active_theme.terminal_cursor_blink_rate as u64)
                         .is_multiple_of(2);
@@ -1301,8 +1300,7 @@ impl OasisWasm {
             },
             Mode::Desktop => {
                 terminal_sdi::set_terminal_visible(&mut self.sdi, false);
-                AppRunner::hide_sdi(&self.apps, &mut self.sdi);
-                terminal_sdi::hide_media_page(&mut self.sdi);
+                media_page::hide_media_page(&mut self.sdi);
 
                 // Sync terminal output to the windowed terminal runner
                 // (incremental: only new scrollback lines are cloned).

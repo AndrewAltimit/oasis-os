@@ -321,7 +321,7 @@ impl AppHarness {
     pub fn click(&mut self, lx: i32, ly: i32) -> AppAction {
         let (_, _, w, h) = self.window;
         self.app.layout(w, h, &self.theme);
-        let action = self.app.handle_click(lx, ly, w, h, false, &self.vfs);
+        let action = self.app.handle_click(lx, ly, w, h, &self.vfs);
         self.note(action)
     }
 
@@ -644,7 +644,6 @@ mod tests {
             ly: i32,
             _cw: u32,
             ch: u32,
-            _fullscreen: bool,
             _vfs: &dyn Vfs,
         ) -> AppAction {
             let metrics = self.content.windowed_metrics();

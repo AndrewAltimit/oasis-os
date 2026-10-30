@@ -13,6 +13,7 @@ use oasis_core::wm::window::{Window, WindowState, WmTheme};
 
 use crate::app_state::{AppState, Mode};
 use crate::launch::{BROWSER_WIN, TERMINAL_WIN};
+use oasis_core::media_page;
 use oasis_core::terminal_sdi;
 
 /// Update the SDI scene graph based on the current mode.
@@ -36,15 +37,14 @@ pub fn update_sdi(state: &mut AppState, sdi: &mut SdiRegistry, vfs: &dyn Vfs) {
     match state.mode {
         Mode::Dashboard => {
             terminal_sdi::set_terminal_visible(sdi, false);
-            AppRunner::hide_sdi(&state.content.apps, sdi);
             state.ui.taskbar.hide_sdi(sdi);
 
             if state.ui.bottom_bar.active_tab == MediaTab::None {
                 state.ui.dashboard.update_sdi(sdi, &state.active_theme);
-                terminal_sdi::hide_media_page(sdi);
+                media_page::hide_media_page(sdi);
             } else {
                 state.ui.dashboard.hide_sdi(sdi);
-                terminal_sdi::update_media_page_with_vfs(
+                media_page::update_media_page_with_vfs(
                     sdi,
                     &state.ui.bottom_bar,
                     &state.active_theme,
@@ -66,13 +66,12 @@ pub fn update_sdi(state: &mut AppState, sdi: &mut SdiRegistry, vfs: &dyn Vfs) {
         },
         Mode::Terminal => {
             state.ui.dashboard.hide_sdi(sdi);
-            AppRunner::hide_sdi(&state.content.apps, sdi);
             StatusBar::hide_sdi(sdi);
             BottomBar::hide_sdi(sdi);
             state.ui.taskbar.hide_sdi(sdi);
             state.ui.start_menu.close();
             state.ui.start_menu.hide_sdi(sdi);
-            terminal_sdi::hide_media_page(sdi);
+            media_page::hide_media_page(sdi);
             let cursor_visible = state.active_theme.terminal_cursor_blink_rate == 0
                 || (state.frame_counter / state.active_theme.terminal_cursor_blink_rate as u64)
                     .is_multiple_of(2);
@@ -138,8 +137,7 @@ pub fn update_sdi(state: &mut AppState, sdi: &mut SdiRegistry, vfs: &dyn Vfs) {
         },
         Mode::Desktop => {
             terminal_sdi::set_terminal_visible(sdi, false);
-            AppRunner::hide_sdi(&state.content.apps, sdi);
-            terminal_sdi::hide_media_page(sdi);
+            media_page::hide_media_page(sdi);
 
             // Sync terminal output to the windowed terminal runner (only when
             // changed). `dirty` is a catch-all set on any input event, so the

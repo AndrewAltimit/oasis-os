@@ -9,10 +9,8 @@ authors.workspace = true
 
 [dependencies]
 oasis-types = { workspace = true }
-oasis-sdi = { workspace = true }
 oasis-skin = { workspace = true }
 oasis-vfs = { workspace = true }
-oasis-ui = { workspace = true }
 oasis-test-backend = { workspace = true, optional = true }
 
 [features]

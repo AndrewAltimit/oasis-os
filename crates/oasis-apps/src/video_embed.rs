@@ -16,7 +16,6 @@ use serde::{Deserialize, Serialize};
 use oasis_core::active_theme::ActiveTheme;
 use oasis_core::backend::SdiBackend;
 use oasis_core::input::Button;
-use oasis_core::sdi::SdiRegistry;
 use oasis_core::vfs::Vfs;
 use oasis_types::backend::TextureId;
 use oasis_types::error::Result;
@@ -432,15 +431,7 @@ impl App for VideoEmbedApp {
         self.input_buf.pop();
     }
 
-    fn handle_click(
-        &mut self,
-        lx: i32,
-        ly: i32,
-        cw: u32,
-        ch: u32,
-        _fullscreen: bool,
-        _vfs: &dyn Vfs,
-    ) -> AppAction {
+    fn handle_click(&mut self, lx: i32, ly: i32, cw: u32, ch: u32, _vfs: &dyn Vfs) -> AppAction {
         if self.state != EmbedState::Results {
             return AppAction::None;
         }
@@ -484,10 +475,6 @@ impl App for VideoEmbedApp {
             return true;
         }
         false
-    }
-
-    fn update_sdi(&mut self, _sdi: &mut SdiRegistry, at: &ActiveTheme) {
-        self.content.update_layout(at);
     }
 
     fn draw_windowed(
@@ -558,8 +545,6 @@ impl App for VideoEmbedApp {
 
         Ok(())
     }
-
-    fn hide_sdi(&self, _sdi: &mut SdiRegistry) {}
 
     fn drain_requests(&mut self, out: &mut Vec<AppRequest>) {
         out.append(&mut self.content.requests);
@@ -878,7 +863,7 @@ mod tests {
         let (rx, ry, rw, rh) = VideoEmbedApp::cell_rect(640, 400, TOP_PAD, 0);
         let cx = rx + rw as i32 / 2;
         let cy = ry + rh as i32 / 2;
-        app.handle_click(cx, cy, 640, 400, false, &oasis_core::vfs::MemoryVfs::new());
+        app.handle_click(cx, cy, 640, 400, &oasis_core::vfs::MemoryVfs::new());
         assert_eq!(app.state, EmbedState::Playing);
         let (_, data) = take_request(&mut app).unwrap();
         assert_eq!(data, "play:id_one_aaaa");
