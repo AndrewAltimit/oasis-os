@@ -3502,3 +3502,27 @@ mod backtracking {
         assert!(!hit(html, "article:has(.x > .a .c)", "art"));
     }
 }
+
+/// Regression: `bgcolor` hex parsing sliced the attribute by byte
+/// offsets and panicked on non-ASCII (`#é1` is three bytes); the
+/// named-colour fallback also only knew eight names.
+#[test]
+fn bgcolor_attribute_is_byte_safe_and_knows_all_names() {
+    let attr = |v: &str| {
+        vec![Attribute {
+            name: "bgcolor".to_string(),
+            value: v.to_string(),
+        }]
+    };
+    let doc = make_doc(vec![
+        (TagName::Td, attr("#\u{e9}1")),
+        (TagName::Td, attr("SteelBlue")),
+        (TagName::Td, attr("#0f0")),
+    ]);
+    let sheet = Stylesheet::parse("");
+    let styles = style_tree(&doc, &[&sheet], &[], &ctx());
+    let bg = |id: usize| styles[id].as_ref().unwrap().background_color;
+    assert_eq!(bg(3), Color::rgba(0, 0, 0, 0));
+    assert_eq!(bg(4), Color::rgb(0x46, 0x82, 0xB4));
+    assert_eq!(bg(5), Color::rgb(0, 255, 0));
+}
