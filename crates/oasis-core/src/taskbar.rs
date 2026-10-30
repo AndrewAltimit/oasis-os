@@ -192,7 +192,7 @@ impl Taskbar {
         }
 
         // Render inline within the bottom bar.
-        let bar_y = (at.screen_h - at.bottombar_height) as i32;
+        let bar_y = crate::bottombar::bottom_bar_y(at);
         let bar_h = at.bottombar_height;
         let font = at.font_small;
         let text_y = bar_y + (bar_h as i32 - font as i32) / 2;
@@ -370,7 +370,7 @@ impl Taskbar {
 
         self.desktop_indicator_visible = true;
 
-        let bar_y = (at.screen_h - at.bottombar_height) as i32;
+        let bar_y = crate::bottombar::bottom_bar_y(at);
         let bar_h = at.bottombar_height;
 
         // Ensure hit test geometry is set even without window buttons.

@@ -16,6 +16,14 @@ use crate::sdi::helpers::{
 };
 use crate::theme;
 
+/// Top edge of the bottom bar: `screen_h - bottombar_height`, saturated
+/// so a skin whose bar is taller than the screen pins it at 0 instead of
+/// overflowing (a panic in debug builds, a bar at y ~ 4 billion in
+/// release).
+pub fn bottom_bar_y(at: &ActiveTheme) -> i32 {
+    i32::try_from(at.screen_h.saturating_sub(at.bottombar_height)).unwrap_or(i32::MAX)
+}
+
 /// Translation keys of the month names for date display (`date.month_N`).
 const MONTH_KEYS: [&str; 12] = [
     "date.month_1",
@@ -248,7 +256,7 @@ impl BottomBar {
             self.update_sdi_dock(sdi, at, features);
             return;
         }
-        let bar_y = (at.screen_h - at.bottombar_height) as i32;
+        let bar_y = bottom_bar_y(at);
         let bar_h = at.bottombar_height;
         let font_small = at.font_small;
         let screen_w = at.screen_w;
@@ -447,7 +455,7 @@ impl BottomBar {
     /// tab group. Shared by the classic footer and the media dock.
     fn draw_media_tabs(&self, sdi: &mut SdiRegistry, at: &ActiveTheme, right_edge: i32) -> i32 {
         let font_small = at.font_small;
-        let bar_y = (at.screen_h - at.bottombar_height) as i32;
+        let bar_y = bottom_bar_y(at);
         let bar_h = at.bottombar_height;
         let text_y = bar_y + (bar_h as i32 - font_small as i32) / 2;
         let bz_y = bar_y + 2;
@@ -524,7 +532,7 @@ impl BottomBar {
         at: &ActiveTheme,
         features: &crate::skin::SkinFeatures,
     ) {
-        let bar_y = (at.screen_h - at.bottombar_height) as i32;
+        let bar_y = bottom_bar_y(at);
         let bar_h = at.bottombar_height;
         let font_small = at.font_small;
         let screen_w = at.screen_w;
@@ -830,6 +838,80 @@ impl Default for BottomBar {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Bars taller than the screen (and a 0x0 dashboard grid) used to
+    /// overflow `screen_h - bottombar_height` and friends: a debug-build
+    /// panic, and bars / icons at y ~ 4 billion in release. Every bar,
+    /// the dashboard, the start menu, the terminal and the assemble
+    /// transition must lay out such a skin without panicking.
+    #[test]
+    fn extreme_skin_geometry_does_not_overflow() {
+        use crate::dashboard::{AppEntry, DashboardConfig, DashboardState};
+        use crate::skin::SkinFeatures;
+        use crate::startmenu::StartMenuState;
+        use crate::statusbar::StatusBar;
+        use crate::taskbar::Taskbar;
+        use crate::transition::{TransitionEffect, TransitionState, apply_assemble};
+        use crate::wm::window::{Window, WindowConfig, WindowType, WmTheme};
+
+        let mut at = ActiveTheme::default();
+        at.screen_w = 8;
+        at.screen_h = 10;
+        at.statusbar_height = 200;
+        at.tab_row_height = 40;
+        at.bottombar_height = 300;
+        at.grid_padding_x = 500;
+        at.grid_padding_y = 500;
+        let mut features = SkinFeatures::default();
+        features.grid_cols = 0;
+        features.grid_rows = 0;
+
+        assert_eq!(bottom_bar_y(&at), 0);
+        let mut sdi = SdiRegistry::new();
+
+        let config = DashboardConfig::from_features(&features, &at);
+        assert_eq!((config.grid_w, config.grid_h), (0, 0));
+        let apps = vec![AppEntry::for_title("Terminal"), AppEntry::for_title("Paint")];
+        let mut dash = DashboardState::new(config, apps);
+        dash.update_sdi(&mut sdi, &at);
+
+        StatusBar::new().update_sdi(&mut sdi, &at, &features);
+        let mut bar = BottomBar::new();
+        bar.update_sdi(&mut sdi, &at, &features);
+        bar.next_tab();
+        bar.update_sdi(&mut sdi, &at, &features);
+        let mut dock = features.clone();
+        dock.bottombar_style = "media_dock".to_string();
+        bar.update_sdi(&mut sdi, &at, &dock);
+        assert!(sdi.get("bar_bottom").is_ok_and(|o| o.y == 0));
+
+        let win = Window::new(
+            &WindowConfig {
+                id: "w".into(),
+                title: "Window".into(),
+                x: None,
+                y: None,
+                width: 100,
+                height: 80,
+                window_type: WindowType::AppWindow,
+                always_on_top: false,
+                modal: false,
+            },
+            0,
+            0,
+            &WmTheme::default(),
+        );
+        Taskbar::new().update_sdi(&mut sdi, &at, &[win], Some("w"), true);
+
+        let menu = StartMenuState::new_with_theme(StartMenuState::default_items(&at), &at);
+        menu.update_sdi(&mut sdi, &at);
+
+        let lines = vec!["line".to_string(); 50];
+        crate::terminal_sdi::setup_terminal_objects(&mut sdi, &lines, "/", "ls", 0, &at, true);
+
+        let trans = TransitionState::new(TransitionEffect::Assemble, 10, at.screen_w, at.screen_h);
+        apply_assemble(&mut sdi, &at, &trans);
+    }
 
     #[test]
     fn media_tab_cycle() {
