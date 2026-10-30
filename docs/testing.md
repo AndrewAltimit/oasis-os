@@ -1,6 +1,6 @@
 # Testing
 
-OASIS_OS has three layers of automated tests:
+OASIS_OS has five layers of automated tests:
 
 | Layer | Where | What it catches |
 |-------|-------|-----------------|
@@ -89,7 +89,8 @@ h.key(Key::Enter);
 assert!(h.screen_text().contains("10"));
 ```
 
-Every app crate has a `tests/e2e.rs` built on it. Flows that cross the
+Every app crate except the TV Guide has a `tests/e2e.rs` built on it (the
+TV Guide's `tests/interaction.rs` drives its `App` API directly). Flows that cross the
 app boundary (window manager, taskbar, audio, host key handling) belong
 in the shell harness below.
 
@@ -251,7 +252,10 @@ Observation
   changes), `e2e_soak.rs` (leak baselines over open/close, skin and
   resolution cycles; seeded random-input fuzz; idle-frame counts),
   `e2e_media.rs`, `e2e_apps.rs` (the app registry: `open <app> [file]`,
-  plugin apps, the Network app's live state). Heavy soak/fuzz variants
+  plugin apps, the Network app's live state), `e2e_plugins.rs` (plugin
+  lifecycle through the shell: scene objects, per-frame `update`,
+  `shutdown`, the `plugin` command), `e2e_remote.rs` and
+  `e2e_browser.rs` (loopback servers, above). Heavy soak/fuzz variants
   are `#[ignore]`d:
   `cargo test -p oasis-app --release --test e2e_soak -- --ignored`.
 - **Leak checks** compare `resource_counts()` after a warm-up round with

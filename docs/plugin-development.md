@@ -83,8 +83,8 @@ impl Plugin for GreetPlugin {
     }
 
     fn shutdown(&mut self, host: &mut PluginHost<'_>) -> Result<()> {
-        // Clean up SDI objects. Commands remain registered
-        // (the registry does not support removal yet).
+        // Clean up SDI objects. The manager unregisters the commands
+        // (and apps) this plugin's `init` registered when it stops.
         let _ = host.sdi.destroy("greet_banner");
         Ok(())
     }
@@ -170,11 +170,9 @@ See the `NotepadPlugin` in `crates/oasis-core/src/plugin/examples.rs` for a comp
 
 ## The PluginHost and PluginContext
 
-`PluginHost` is the struct passed to every lifecycle method:
-
-See the full `PluginHost` struct definition below.
-
-In addition to the three core fields, `PluginHost` provides optional access to platform services:
+`PluginHost` is the struct passed to every lifecycle method. Its public
+fields (the manager also keeps a few crate-private ones: pending app
+registrations, the plugin's capabilities and name):
 
 ```rust
 pub struct PluginHost<'a> {
@@ -184,10 +182,22 @@ pub struct PluginHost<'a> {
     pub audio: Option<&'a mut dyn AudioBackend>,     // audio playback
     pub network: Option<&'a mut dyn NetworkBackend>,  // TCP networking
     pub backend: Option<&'a mut dyn SdiCore>,         // rendering/textures
+    pub context: PluginContext,                       // screen size + time
 }
 ```
 
 The optional fields are `None` in headless or test contexts. Always check for `Some` before using them.
+
+### Capabilities
+
+`Plugin::capabilities()` declares what a plugin may touch
+(`PluginCapabilities { vfs_read, vfs_write, commands, audio, network,
+app_registration }`). The default is `PluginCapabilities::all()`; override it
+to follow least privilege. The capability-aware accessors return `Err` when a
+capability is missing: `checked_commands()`, `checked_vfs_read()`,
+`checked_vfs_write()`, `check_audio()`, `check_network()`, and
+`register_app()`. The public fields above stay reachable for backwards
+compatibility and bypass the checks, so prefer the accessors.
 
 ### Texture Loading
 
@@ -361,7 +371,10 @@ previous plugin entries). From then on a plugin app is an ordinary
 registered app: it gets a dashboard tile that survives skin and
 resolution changes, and it launches through `open <app>`, MCP
 `open_app` / `list_apps` and `OASIS_APP` exactly like a built-in. A
-plugin app with the same title as a built-in replaces it.
+plugin app with the same title as a built-in replaces it, and the
+built-in comes back when the plugin unloads. Titles are unique across
+plugins: a second plugin registering an existing plugin app's title is
+ignored (with a warning).
 
 ### App Categories
 
@@ -428,8 +441,11 @@ impl App for MyPluginApp {
 ```
 
 The plugin manager's `extend_registry_adds_launchable_plugin_apps` test
-(`crates/oasis-core/src/plugin/manager/mod.rs`) shows a complete round
-trip: register, extend the registry, launch through `AppRunner`.
+(`crates/oasis-core/src/plugin/manager/tests.rs`) shows a complete round
+trip: register, extend the registry, launch through `AppRunner`. For a
+test through the real desktop shell, register plugin factories with
+`HarnessOptions::plugins` (see `crates/oasis-app/tests/e2e_plugins.rs` and
+[testing.md](testing.md)).
 
 > **Breaking change (App trait, 2026-10):** `as_any` / `as_any_mut` are no
 > longer written by apps (blanket `AsAny` impl); `handle_click` takes a
