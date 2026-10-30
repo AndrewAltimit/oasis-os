@@ -282,9 +282,9 @@ main() {
 
     for scenario in "${scenarios_to_run[@]}"; do
         if "run_scenario_$scenario"; then
-            ((passed++))
+            passed=$((passed + 1))
         else
-            ((failed++))
+            failed=$((failed + 1))
         fi
     done
 
