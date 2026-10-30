@@ -122,6 +122,19 @@ impl PluginInfo {
     }
 }
 
+/// What the host tells plugins about the current frame, set with
+/// [`PluginManager::set_context`](super::PluginManager::set_context) and
+/// visible as [`PluginHost::context`].
+#[derive(Debug, Clone, Copy, Default)]
+pub struct PluginContext {
+    /// Virtual screen width in pixels (0 = unknown).
+    pub screen_w: u32,
+    /// Virtual screen height in pixels (0 = unknown).
+    pub screen_h: u32,
+    /// Wall-clock time, if the host has a clock.
+    pub time: Option<crate::platform::SystemTime>,
+}
+
 /// Host-side context passed to plugins during lifecycle calls.
 ///
 /// Provides access to OS services that plugins can use to register
@@ -146,6 +159,8 @@ pub struct PluginHost<'a> {
     /// Rendering backend for texture loading. `None` if no backend is
     /// available (e.g. during headless init).
     pub backend: Option<&'a mut dyn SdiCore>,
+    /// Screen size and time from the host ([`PluginContext`]).
+    pub context: PluginContext,
     /// Accumulator for plugin app registrations. Processed by the
     /// manager after `init()` returns.
     pub(crate) app_registrations: &'a mut Vec<PluginAppRegistration>,
@@ -376,6 +391,7 @@ mod tests {
             audio: None,
             network: None,
             backend: None,
+            context: PluginContext::default(),
             app_registrations: pending,
             capabilities,
             plugin_name: "test".to_string(),

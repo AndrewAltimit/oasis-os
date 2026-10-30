@@ -4,11 +4,14 @@
 //! The FTP-like server itself ([`FtpServer`]) lives in `oasis_net::ftp`
 //! (feature `vfs`) and is re-exported here; the `ftp` command only signals
 //! the host (`CommandSignal::FtpToggle`), which owns and polls the server.
+//! `ftp status` reads the host's network service state
+//! ([`NET_STATE_PATH`], the same document the Network app shows).
 
 use crate::error::{OasisError, Result};
+use crate::ipc::{NET_STATE_PATH, NetState};
 use crate::terminal::{Command, CommandOutput, Environment};
 
-pub use oasis_net::ftp::{DEFAULT_FTP_PORT, FTP_STATUS_PATH, FtpServer};
+pub use oasis_net::ftp::{DEFAULT_FTP_PORT, FtpServer};
 
 // ---------------------------------------------------------------------------
 // Terminal commands
@@ -67,13 +70,18 @@ impl Command for FtpCmd {
             },
             "stop" => Ok(CommandOutput::ftp_toggle(0, None)),
             "status" => {
-                if env.vfs.exists(FTP_STATUS_PATH) {
-                    let data = env.vfs.read(FTP_STATUS_PATH)?;
-                    let text = String::from_utf8_lossy(&data).into_owned();
-                    Ok(CommandOutput::Text(format!("FTP: {text}")))
-                } else {
-                    Ok(CommandOutput::Text("FTP: inactive".to_string()))
-                }
+                // The host publishes its services' state every frame; a
+                // host that does not (no FTP support) says so.
+                let Ok(data) = env.vfs.read(NET_STATE_PATH) else {
+                    return Ok(CommandOutput::Text(
+                        "FTP: status not available on this host".to_string(),
+                    ));
+                };
+                let state = NetState::parse(&String::from_utf8_lossy(&data));
+                Ok(CommandOutput::Text(match state.ftp_port {
+                    Some(port) => format!("FTP: listening on port {port}"),
+                    None => "FTP: inactive".to_string(),
+                }))
             },
             _ => Err(OasisError::Command(
                 format!("unknown subcommand: {subcmd}\nusage: {}", self.usage()).into(),
@@ -157,7 +165,6 @@ mod tests {
         vfs.mkdir("/home").unwrap();
         vfs.mkdir("/tmp").unwrap();
         vfs.mkdir("/var").unwrap();
-        vfs.mkdir("/var/ftp").unwrap();
         vfs.write("/home/test.txt", b"Hello FTP").unwrap();
         (reg, vfs)
     }
@@ -180,16 +187,31 @@ mod tests {
 
     // -- Terminal command tests --
 
-    #[test]
-    fn ftp_cmd_status_inactive() {
-        let (reg, mut vfs) = setup();
-        // Remove the status file to test default.
-        vfs.remove(FTP_STATUS_PATH).ok();
-        let __out = exec(&reg, &mut vfs, "ftp status").unwrap();
-        let CommandOutput::Text(s) = __out else {
-            panic!("expected CommandOutput::Text, got {__out:?}");
+    fn status_text(reg: &CommandRegistry, vfs: &mut MemoryVfs) -> String {
+        let out = exec(reg, vfs, "ftp status").unwrap();
+        let CommandOutput::Text(s) = out else {
+            panic!("expected CommandOutput::Text, got {out:?}");
         };
-        assert!(s.contains("inactive"));
+        s
+    }
+
+    /// `ftp status` used to read a file no host wrote, so it said
+    /// "inactive" while the server ran. It now reads the host's published
+    /// network state.
+    #[test]
+    fn ftp_cmd_status_follows_the_host_net_state() {
+        let (reg, mut vfs) = setup();
+        assert!(status_text(&reg, &mut vfs).contains("not available"));
+
+        vfs.mkdir("/system").unwrap();
+        vfs.mkdir("/system/state").unwrap();
+        let mut st = NetState::default();
+        vfs.write(NET_STATE_PATH, st.to_text().as_bytes()).unwrap();
+        assert_eq!(status_text(&reg, &mut vfs), "FTP: inactive");
+
+        st.ftp_port = Some(2121);
+        vfs.write(NET_STATE_PATH, st.to_text().as_bytes()).unwrap();
+        assert_eq!(status_text(&reg, &mut vfs), "FTP: listening on port 2121");
     }
 
     #[test]

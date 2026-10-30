@@ -30,6 +30,13 @@ pub const WM_REQUEST_PATH: &str = "/var/wm/request";
 /// Window list published by the host, one window per line.
 pub const WM_STATUS_PATH: &str = "/var/wm/status";
 
+/// Requests for the host's plugin manager, one [`PluginRequest`] per line
+/// (producers append, the host applies every line it finds).
+pub const PLUGIN_REQUEST_PATH: &str = "/var/plugin/request";
+/// Plugin list published by the host, one plugin per line:
+/// `<name> (<version>) [registered|active|stopped] <description>`.
+pub const PLUGIN_STATUS_PATH: &str = "/var/plugin/status";
+
 // -- UI requests (terminal `notify` / `screenshot` / `theme` / `browse`) --
 
 /// Toast request (`level:message`) from the `notify` command.
@@ -171,6 +178,43 @@ impl WmRequest {
                 app,
                 file: Some(file),
             } => format!("open {app}\t{file}"),
+        }
+    }
+}
+
+/// One request line on [`PLUGIN_REQUEST_PATH`]: `load <name>` /
+/// `unload <name>`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PluginRequest {
+    /// Initialize (or re-initialize after an unload) the statically linked
+    /// plugin `name`.
+    Load(String),
+    /// Shut the plugin `name` down (its commands, apps and SDI objects go
+    /// with it); it stays known, so `load` brings it back.
+    Unload(String),
+}
+
+impl PluginRequest {
+    /// Parse one request line. `None` for unknown ops or a missing name.
+    pub fn parse(line: &str) -> Option<Self> {
+        let (op, name) = line.trim().split_once(' ')?;
+        let name = name.trim();
+        if name.is_empty() {
+            return None;
+        }
+        match op {
+            "load" => Some(Self::Load(name.to_string())),
+            "unload" => Some(Self::Unload(name.to_string())),
+            _ => None,
+        }
+    }
+
+    /// Serialize to the request-line wire format ([`PluginRequest::parse`]
+    /// round-trips it).
+    pub fn to_line(&self) -> String {
+        match self {
+            Self::Load(name) => format!("load {name}"),
+            Self::Unload(name) => format!("unload {name}"),
         }
     }
 }
@@ -433,6 +477,23 @@ mod tests {
     fn wm_request_rejects_malformed() {
         for line in ["", "close", "close ", "open ", "fly away", "close --force "] {
             assert_eq!(WmRequest::parse(line), None, "{line:?}");
+        }
+    }
+
+    #[test]
+    fn plugin_request_round_trips_and_rejects_malformed() {
+        for req in [
+            PluginRequest::Load("clock-widget".into()),
+            PluginRequest::Unload("hello".into()),
+        ] {
+            assert_eq!(PluginRequest::parse(&req.to_line()), Some(req.clone()));
+        }
+        assert_eq!(
+            PluginRequest::parse("  load  notepad \r"),
+            Some(PluginRequest::Load("notepad".into()))
+        );
+        for line in ["", "load", "load ", "unload  ", "reload hello", "hello"] {
+            assert_eq!(PluginRequest::parse(line), None, "{line:?}");
         }
     }
 

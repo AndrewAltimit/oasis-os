@@ -354,12 +354,13 @@ the wire protocol and PSK auth.
 
 ## File transfer (`oasis-core/src/transfer/mod.rs`)
 
-The FTP-like transfer server lives in `oasis-core`, not `oasis-net`; see
-[networking.md](networking.md) for the protocol.
+The FTP-like transfer server lives in `oasis-net` (`oasis_net::ftp`, feature
+`vfs`); the commands live in `oasis-core`. See [networking.md](networking.md)
+for the protocol.
 
 | Command | Usage | Description |
 | --- | --- | --- |
-| `ftp` | `ftp [start [port] [--password <pass>]\|stop\|status]` | Manage the file transfer server. |
+| `ftp` | `ftp [start [port] [--password <pass>]\|stop\|status]` | Manage the file transfer server. `start` / `stop` signal the host (`CommandSignal::FtpToggle`), which owns the server and prints the outcome. `status` reads the host's network state (`/system/state/net`, `NetState`): `FTP: listening on port N` or `FTP: inactive`; on a host that publishes no network state it says the status is not available. |
 | `push` | `push <source> <dest>` | Copy a file to a transfer staging area. |
 | `pull` | `pull <source> <dest>` | Copy a file from a transfer staging area. |
 
@@ -398,7 +399,11 @@ see [mcp-server.md](mcp-server.md).
 
 | Command | Usage | Description |
 | --- | --- | --- |
-| `plugin` | `plugin [list\|load <name>\|unload <name>]` | Manage plugins. |
+| `plugin` | `plugin [list\|load <name>\|unload <name>]` | Manage plugins through the host's plugin manager (VFS IPC, `oasis_types::ipc`). `list` prints the host-published `/var/plugin/status` (`<name> (<version>) [registered\|active\|stopped] <description>` per plugin). `load` / `unload` append a `PluginRequest` line to `/var/plugin/request`; the desktop shell applies it the same frame and prints the outcome. `unload` shuts the plugin down and removes its commands, apps and SDI objects but keeps it known; `load` initializes a registered or unloaded plugin again. Plugins are statically linked, so `load` of an unknown name says there is no dynamic loader. On a host without a plugin manager (no status file) every subcommand says plugin management is not available. |
+
+The example plugins add `hello [name]`, `note [list|read <name>|write <name>
+<text>]` and `pclock [show|hide]` (shows / hides the clock-widget plugin's
+on-screen clock through `/var/pclock/visible`).
 
 ## Agent and CI (`oasis-core/src/terminal/agent_commands.rs`)
 
