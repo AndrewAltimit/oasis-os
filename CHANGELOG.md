@@ -127,6 +127,22 @@ traits and crate layering, dead-code removal, and docs that match the code.
 - JS: one per-tick timer budget that defers the rest; configurable
   `js_max_exec_ms` / `js_memory_limit_bytes` (2 s / 64 MiB desktop, 500 ms /
   8 MiB PSP); the heap limit is verified to be enforced.
+- **Review fixes (wave 5):** network responses can no longer redirect to
+  `vfs://` / `file:` (a remote page gained local-page privileges); an HPACK
+  length near `u64::MAX` no longer panics; CR / LF in URLs or `fetch()`
+  headers can't split requests; `SameSite=Strict/Lax` cookies are withheld
+  from cross-site subresources and form posts (`ResourceRequest::initiator`,
+  **breaking** for struct literals); http can't delete `Secure` cookies;
+  `fetch()` redirect hops and `data:` URLs obey `connect-src`; the page CSP
+  survives back / forward and `304`; `'unsafe-hashes'` matches per handler;
+  `<template>` scripts stay inert; stale JS node ids can't corrupt the tree
+  (freed-slot tracking); SVG / MathML nesting and text-node `innerHTML`
+  respect the depth cap; scripts are capped at 200k DOM nodes; sibling
+  selector scans are charged to the match budget and an exhausted budget
+  never matches through `:not()`; `document.cookie` is size / count capped;
+  box-level `filter` is applied once (it cancelled itself on render-target
+  backends); h2 trailers, 307 / 308 bodies and truncated keep-alive
+  responses are handled.
 
 ### Docs and site
 

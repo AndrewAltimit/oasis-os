@@ -88,18 +88,31 @@ fetch. This is fine for an embedded engine driving one tab.
   absolute expiry capped at 400 days; `Max-Age<=0` or a past date
   deletes; expired cookies are never sent;
 - `Secure` cookies go over `https:` only, are refused from `http:`
-  responses, and cannot be overwritten from `http:`; `__Secure-` /
-  `__Host-` prefixes are enforced;
+  responses, and cannot be overwritten or deleted from `http:`;
+  `__Secure-` / `__Host-` prefixes are enforced;
 - control characters and `name=value` over 4 KiB are refused; at most 50
   cookies per domain and 3000 total (oldest evicted);
-- `HttpOnly` and `SameSite` are stored; `SameSite` is not enforced.
+- `SameSite` is enforced when sending (`SameSiteContext`): a request is
+  cross-site when its registrable domain (PSL-lite) differs from that of
+  `ResourceRequest::initiator`. Cross-site subresources (images,
+  stylesheets) get no `Strict` / `Lax` cookies; cross-site top-level
+  navigations get `Lax` ones only with GET / HEAD, so a cross-site form
+  POST carries neither. Missing `SameSite` behaves as `None`. GET
+  navigations have no initiator (typed URLs and link clicks share
+  `navigate_vfs_inner`), so they count as same-site; `SameSite` is not
+  applied when storing.
 
 The HTTP client asks a `CookieHook` for each redirect hop's own
 `Cookie:` header and stores every hop's `Set-Cookie` under that hop's
-URL (`http::http_request_with_cookies`), so cookies never follow a
-cross-site redirect and a login → 302 → dashboard flow keeps its
-session. `document.cookie` is a separate per-page map
-(`js_dom/storage.rs`) that is never sent on requests.
+URL (`http::http_request_with_cookies`; the I/O thread's `RecordingJar`
+and the synchronous path's `cookies::ScopedJar` add the `SameSite`
+context), so cookies never follow a cross-site redirect and a login →
+302 → dashboard flow keeps its session. The only cookie-carrying
+synchronous loads are page loads when the I/O thread can't be used, and
+the I/O thread re-clones the main jar whenever it is respawned, so the
+two jars don't diverge in practice. `document.cookie` is a separate
+per-page map (`js_dom/storage.rs`; 4 KiB per pair, 50 pairs) that is
+never sent on requests.
 
 ## CSP
 
@@ -112,22 +125,30 @@ session. `document.cookie` is a separate per-page map
   runs only with a matching `nonce`, a matching `'sha256-…'` hash, or
   `'unsafe-inline'` (ignored when the list has a nonce, hash or
   `'strict-dynamic'`). External `<script src>` is never loaded.
-- `script-src-attr` → `script-src` → `default-src` — inline event
-  handlers (`onclick=…`) are registered only under `'unsafe-inline'`.
+- `script-src-attr` → `script-src` → `default-src` — each inline event
+  handler (`onclick=…`) is checked with its own text: registered under
+  `'unsafe-inline'`, or `'unsafe-hashes'` plus a matching hash.
+  Scripts and handlers inside `<template>` never run.
 - `style-src-elem` → `style-src` → `default-src` — inline `<style>`
   (nonce / hash / `'unsafe-inline'`) and `<link rel=stylesheet>` /
   `@import` URLs.
 - `style-src-attr` → `style-src` → `default-src` — parser-inserted
   `style="…"` attributes. Attributes written later by scripts
   (`element.style`) are not filtered.
-- `connect-src` → `default-src` — script `fetch()`.
+- `connect-src` → `default-src` — script `fetch()`, including every
+  redirect hop and `data:` URLs.
 - `img-src` — parsed, not enforced (see `widget/images.rs`).
 
-Violations are logged with `log::warn!`; nothing is reported.
+The policy is stored with the page's cache entry, so a back / forward
+re-render from cache, or a `304 Not Modified` without a CSP header, runs
+under the policy the page was served with. Violations are logged with
+`log::warn!`; nothing is reported.
 
 `vfs://` subresources (images, stylesheets, `@import`, fonts) are
 refused for pages with a network origin
-(`loader::subresource_allowed`).
+(`loader::subresource_allowed`), and the HTTP clients refuse redirects
+from the network to any non-http(s) scheme (Gemini: non-`gemini:`), so a
+remote page can never end up labelled with a local URL.
 
 ## Navigation history
 

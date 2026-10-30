@@ -114,33 +114,51 @@ The HTML/CSS engine (`oasis-browser`) processes untrusted content:
   (`BrowserConfig::js_max_exec_ms` / `js_memory_limit_bytes`: 2 s and
   64 MiB on desktop, 500 ms and 8 MiB on PSP); timers still due when the
   budget runs out are deferred to the next tick
-- **DOM depth cap** -- the parser and script DOM insertion both stop at
-  `MAX_DOM_DEPTH`, so script-built chains cannot overflow the stack in
-  the recursive cascade / layout / paint passes. The CSS selector matcher
-  has a per-match traversal budget
+- **DOM depth cap** -- the parser (SVG / MathML content included) and
+  script DOM insertion both stop at `MAX_DOM_DEPTH`, so script-built
+  chains cannot overflow the stack in the recursive cascade / layout /
+  paint passes; text and comment nodes never take children. Scripts may
+  grow the document to at most 200k live nodes (`QuotaExceededError`
+  past it). Freed DOM slots are tracked, so a stale node reference can't
+  be re-inserted. The CSS selector matcher has a per-match traversal
+  budget that also pays for sibling-list scans; running out never counts
+  as a match (not even under `:not()`)
 - **No nested browsing contexts** -- `<iframe>` content is never loaded
 - **CSS property limits** -- unknown properties are ignored; no
   `expression()` or `-moz-binding` support
 - **Image loading** -- images are decoded in-process with bounds
   checking on dimensions
 - **Content Security Policy** -- `script-src` / `style-src` (with
-  nonces and `'sha256-…'` hashes) gate inline scripts, event handlers,
+  nonces and `'sha256-…'` hashes) gate inline scripts, event handlers
+  (each checked with its own text, so `'unsafe-hashes'` works),
   `<style>`, `style=""` and linked stylesheets; `connect-src` gates
-  `fetch()`. `img-src` is not enforced. See `oasis-http/src/csp.rs` for the
-  exact directive and source coverage
+  `fetch()` (every redirect hop, and `data:` URLs). The policy a page was
+  served with stays in force when it is re-rendered from cache (back /
+  forward, `304`). `<template>` contents are inert. `img-src` is not
+  enforced. See `oasis-http/src/csp.rs` for the exact directive and
+  source coverage
 - **Cookies** -- RFC 6265 host-only / `Domain` / `Secure` / expiry rules
   with a public-suffix guard and size caps; cookies are attached and
-  stored per redirect hop so they never follow a cross-site redirect.
-  Session-only (never persisted); `SameSite` is not enforced
+  stored per redirect hop so they never follow a cross-site redirect;
+  plain http can neither overwrite nor delete a `Secure` cookie.
+  `SameSite=Strict` / `Lax` are withheld from cross-site subresources
+  and form posts (missing `SameSite` behaves as `None`). Session-only
+  (never persisted). `document.cookie` is a capped per-page map
 - **Local files** -- pages with a web origin cannot read `vfs://`
-  subresources
+  subresources, and a network response can't redirect to `vfs://`,
+  `file:` or any other non-http(s) scheme
+- **Request hygiene** -- the request target is percent-encoded and
+  methods / header names / values are validated before anything is
+  sent, so CR / LF from a URL or a `fetch()` header can't split a
+  request
 - **Redirects** -- validators are sent on the first hop only;
   `Cookie` / `Authorization` are dropped when a hop leaves the origin and
   `Referer` follows `strict-origin-when-cross-origin`. URLs are
   normalized (lower-cased host, default port elided, userinfo split off
   and never sent)
 - **HTTP/2** -- frame size, header-block and HPACK decoded-size caps
-  bound memory against CONTINUATION floods and HPACK amplification
+  bound memory against CONTINUATION floods and HPACK amplification;
+  HPACK lengths and indices are overflow-checked
 - **Body size** -- decompressed HTTP bodies are capped at 8 MB on
   desktop (2 MB on PSP and for Gemini)
 
