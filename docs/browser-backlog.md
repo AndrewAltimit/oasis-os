@@ -14,7 +14,7 @@ so you can `git show` for specifics.
 
 - **CSS Grid track lists, auto-repeat and placement** (commit
   `75ea47b`, follow-up `73939e5`). Raw-text grid values parsed by a
-  paren/bracket-aware tokenizer (`css/values/grid.rs`): nested
+  paren/bracket-aware tokenizer (`oasis-css/src/values/grid.rs`): nested
   `repeat()`, `repeat(auto-fill | auto-fit, ...)`, `minmax()`,
   `fit-content()`, content-sized tracks, line numbers / `span` /
   slash syntax / area names, `grid-auto-flow: dense`, and the spec
@@ -417,7 +417,7 @@ shipped. Each is small enough for a focused PR.
 
 - **`line-clamp` is parsed but never applied.** `-webkit-line-clamp`
   / `line-clamp` populate `ComputedStyle::line_clamp`
-  (`css/values/apply/mod.rs`), but nothing in `layout/` reads it, so
+  (`oasis-css/src/values/apply/mod.rs`), but nothing in `layout/` reads it, so
   clamped text renders every line and no ellipsis is drawn.
 - **`position: sticky` never releases at its containing block.**
   `sticky_offset` (`paint/display_list/mod.rs`, used by both the
@@ -450,9 +450,11 @@ shipped. Each is small enough for a focused PR.
   `reset_for_navigation` clears `image_textures` and the atlas
   (`clear_without_destroy`) without a backend handle, so their GPU
   textures leak until the backend is torn down.
-- **`parallel-style` is not linted in CI.** It is clippy-clean today
-  (`cargo clippy -p oasis-browser --all-targets --features
-  parallel-style -- -D warnings`), but CI only lints default features.
+- **`parallel-style` is not linted in CI.** The feature lives in
+  `oasis-css` (`oasis-browser/parallel-style` forwards to it). It is
+  clippy-clean today (`cargo clippy -p oasis-css --all-targets
+  --features parallel-style -- -D warnings`), but CI only lints default
+  features.
 - **Network-stack gaps left after the WP-A hardening.** `SameSite` is
   parsed but not enforced (every matching cookie is sent regardless of
   initiator); `<meta http-equiv="Content-Security-Policy">` is ignored;

@@ -1,11 +1,11 @@
 # CSS Coverage
 
 State of CSS property support in `oasis-browser`. Update this file whenever
-properties are added or removed in `src/css/values/apply.rs`.
+properties are added or removed in `crates/oasis-css/src/values/apply/mod.rs`.
 
 **As of 2026-04-12: ~120 properties parsed and stored on `ComputedStyle`.**
 
-The cascade pipeline lives in `src/css/`:
+The cascade pipeline lives in `crates/oasis-css/src/`:
 
 - `parser/` — tokenizer + selector / declaration parser, `PropertyId` enum (fast-path interning for the ~75 hottest properties).
 - `cascade/` — specificity sorting, `@media` / `@supports`, `var()` / `calc()` resolution.
@@ -87,7 +87,7 @@ Many of the newer properties (`backdrop-filter`, `mix-blend-mode`, `clip-path`,
 and `getComputedStyle()` work, but the **paint pipeline doesn't yet honour
 them**. They're useful as groundwork — the painter can opt in to a property
 without re-touching the parser. When wiring one of these into the compositor,
-search for the field name in `src/paint/` and `src/css/values/computed.rs`.
+search for the field name in `src/paint/` and `crates/oasis-css/src/values/computed.rs`.
 
 Notable: 3D transform *functions* (`rotateX`, `rotate3d`, `translate3d`,
 `matrix3d`, `perspective(d)`, …) **are** painted — they go through the new
@@ -99,9 +99,9 @@ trapezoid instead of a parallelogram.
 
 ## How to add a property
 
-1. **`PropertyId` enum** — `src/css/parser/types.rs` (only for hot properties; everything else falls through to `Other`).
-2. **Value type** — add an enum/struct in `src/css/values/types.rs` if the property has a constrained set of values.
-3. **`ComputedStyle` field** — `src/css/values/computed.rs`. Add the field, set its CSS initial value in `Default`, and (if inheritable) carry it through `inherit()`.
-4. **Parse arm** — `src/css/values/apply.rs::apply_declaration`. Use the `as_keyword` / `resolve_length` / `resolve_color` helpers and any small parser helper at the bottom of the file.
+1. **`PropertyId` enum** — `crates/oasis-css/src/parser/types.rs` (only for hot properties; everything else falls through to `Other`).
+2. **Value type** — add an enum/struct in `crates/oasis-css/src/values/types.rs` if the property has a constrained set of values.
+3. **`ComputedStyle` field** — `crates/oasis-css/src/values/computed.rs`. Add the field, set its CSS initial value in `Default`, and (if inheritable) carry it through `inherit()`.
+4. **Parse arm** — `crates/oasis-css/src/values/apply/mod.rs::apply_declaration`. Use the `as_keyword` / `resolve_length` / `resolve_color` helpers and any small parser helper at the bottom of the file.
 5. **Test** — at least one positive parse test in the `mod tests` block in `apply.rs`.
 6. **Update this file** — add the property to the relevant section above and bump the count in the header.

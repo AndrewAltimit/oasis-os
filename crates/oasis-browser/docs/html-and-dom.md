@@ -14,9 +14,9 @@ html::tree_builder ──▶ html::dom::Document
 
 The two stages live in:
 
-- `src/html/tokenizer/` — character-level tokenizer
-- `src/html/tree_builder/` — token-level tree construction
-- `src/html/dom.rs` — the arena-backed DOM data model
+- `crates/oasis-html/src/tokenizer/` — character-level tokenizer
+- `crates/oasis-html/src/tree_builder/` — token-level tree construction
+- `crates/oasis-html/src/dom.rs` — the arena-backed DOM data model
 
 The tree builder is loosely modelled on the WHATWG HTML5 parser
 algorithm: insertion modes, the active formatting elements list, foster
@@ -116,9 +116,9 @@ DOM itself is not rebuilt.
 
 ## Tests
 
-- `src/html/tokenizer/tests.rs` — token-level edge cases (entity
+- `crates/oasis-html/src/tokenizer/tests.rs` — token-level edge cases (entity
   decoding, raw text mode, `<![CDATA[`, comment recovery).
-- `src/html/tree_builder/tests.rs` — insertion modes, foster parenting,
+- `crates/oasis-html/src/tree_builder/tests.rs` — insertion modes, foster parenting,
   malformed input, the WHATWG "deep nesting no panic" property test.
 - `tests/browser_integration.rs` — end-to-end parses (heading hierarchy,
   nested lists, tables) that double as smoke tests for the DOM.

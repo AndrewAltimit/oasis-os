@@ -10,22 +10,31 @@ parsers.
 ### Unit tests
 
 Per-module `#[cfg(test)] mod tests` blocks. These are the bulk of the
-suite (~1500 tests) and are the right place to add a regression test
-for a single function or one CSS property arm.
+suite (~2,200 tests across the engine's four crates with `javascript`
+on) and are the right place to add a regression test for a single
+function or one CSS property arm. The parser and loader crates test on
+their own, without building layout, paint or QuickJS:
+
+```bash
+cargo test -p oasis-html   # incl. tests/html5lib_tree_construction.rs
+cargo test -p oasis-css
+cargo test -p oasis-http
+cargo test -p oasis-browser --features javascript
+```
 
 Hot spots:
 
 | Area | Test module |
 | --- | --- |
-| Tokenizer | `src/html/tokenizer/tests.rs` |
-| Tree builder | `src/html/tree_builder/tests.rs` |
-| CSS parser | `src/css/parser/tests.rs` |
-| CSS cascade | `src/css/cascade/tests.rs` |
-| `apply_declaration` (per-property) | `src/css/values/apply.rs` (`mod tests`) |
+| Tokenizer | `crates/oasis-html/src/tokenizer/tests.rs` |
+| Tree builder | `crates/oasis-html/src/tree_builder/tests.rs` |
+| CSS parser | `crates/oasis-css/src/parser/tests.rs` |
+| CSS cascade | `crates/oasis-css/src/cascade/tests.rs` |
+| `apply_declaration` (per-property) | `crates/oasis-css/src/values/apply/mod.rs` (`mod tests`) |
 | Block layout | `src/layout/block/tests.rs` |
 | Text cache | `src/layout/text_cache.rs` (`mod tests`) |
-| Loader cache | `src/loader/cache.rs` (`mod tests`) |
-| Cookies | `src/loader/cookies.rs` (`mod tests`) |
+| Loader cache | `crates/oasis-http/src/cache.rs` (`mod tests`) |
+| Cookies | `crates/oasis-http/src/cookies.rs` (`mod tests`) |
 | Navigation history | `src/nav.rs` (`mod tests`) |
 
 Several modules also have `mod prop` blocks containing
@@ -60,8 +69,8 @@ unit test alone would not exercise the full path.
 
 | Bench | Measures |
 | --- | --- |
-| `css_cascade.rs` | cascade throughput on a large stylesheet |
-| `html_parsing.rs` | tokenizer + tree builder throughput |
+| `oasis-css/benches/css_cascade.rs` | cascade throughput on a large stylesheet |
+| `oasis-html/benches/html_parsing.rs` | tokenizer + tree builder throughput |
 | `layout_engine.rs` | layout build + relayout throughput |
 | `paint.rs` | display list record + replay |
 
@@ -69,6 +78,8 @@ Run with:
 
 ```bash
 cargo bench -p oasis-browser
+cargo bench -p oasis-css --bench css_cascade
+cargo bench -p oasis-html --bench html_parsing
 ```
 
 Benchmarks are not run in CI by default — they exist to catch
@@ -77,13 +88,15 @@ before/after a change.
 
 ### Fuzzing
 
-`fuzz/` contains `cargo-fuzz` targets for the HTML and CSS parsers.
-Run with:
+`fuzz/` contains `cargo-fuzz` targets for the HTML and CSS parsers
+(through `oasis_browser::internals`). CI fuzzes the copies in
+`crates/oasis-core/fuzz` (`.github/workflows/fuzz.yml`), which also
+cover the Gemini and HTTP response parsers. Run with:
 
 ```bash
-cd crates/oasis-browser
-cargo +nightly fuzz run html_tokenizer
-cargo +nightly fuzz run css_parser
+cd crates/oasis-browser/fuzz
+cargo +nightly fuzz run fuzz_html_tokenizer
+cargo +nightly fuzz run fuzz_css_parser
 ```
 
 The fuzzers should not panic, hit `unreachable!()`, or trigger UB

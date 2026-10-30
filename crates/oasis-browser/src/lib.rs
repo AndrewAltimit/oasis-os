@@ -9,6 +9,14 @@
 //! See `docs/` (in the crate root) for architecture, CSS coverage, and
 //! contributor guides. Start with `docs/README.md`.
 //!
+//! # Crates
+//!
+//! The HTML parser and DOM ([`oasis_html`]), the CSS parser and cascade
+//! ([`oasis_css`]) and the resource loader ([`oasis_http`]) are separate
+//! crates. This crate aliases the first two as its private `html` /
+//! `css` modules and re-exports the loader as [`loader`]; benches and
+//! fuzzers reach the parsers through [`internals`].
+//!
 //! # Feature flags
 //!
 //! - `javascript` — enables QuickJS-NG via `oasis-js` for inline
@@ -24,9 +32,11 @@
 //!   [`BrowserConfig::js_memory_limit_bytes`] (smaller defaults under
 //!   `psp`).
 //! - `webp` — enables WebP image decoding via the `image` crate.
-//! - `parallel-style` — parallel style cascade via rayon (desktop only).
+//! - `parallel-style` — parallel style cascade via rayon (desktop only;
+//!   forwards to `oasis-css/parallel-style`).
 //! - `psp` — enables PSP-specific shrink-the-footprint code paths and
-//!   disables features that rely on desktop-only crates.
+//!   disables features that rely on desktop-only crates (forwards to
+//!   `oasis-http/psp`, which swaps in the PSP HTTP client).
 //!
 //! # Rendering
 //!

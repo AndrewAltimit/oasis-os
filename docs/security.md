@@ -101,7 +101,7 @@ The HTML/CSS engine (`oasis-browser`) processes untrusted content:
 - **Content Security Policy** -- `script-src` / `style-src` (with
   nonces and `'sha256-…'` hashes) gate inline scripts, event handlers,
   `<style>`, `style=""` and linked stylesheets; `connect-src` gates
-  `fetch()`. `img-src` is not enforced. See `loader/csp.rs` for the
+  `fetch()`. `img-src` is not enforced. See `oasis-http/src/csp.rs` for the
   exact directive and source coverage
 - **Cookies** -- RFC 6265 host-only / `Domain` / `Secure` / expiry rules
   with a public-suffix guard and size caps; cookies are attached and

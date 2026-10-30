@@ -11,7 +11,7 @@
 //! # Feature flags
 //!
 //! - `psp` — swap the std/rustls client for the PSP client in
-//!   [`http_psp`] (raw `sceNetInet` sockets + embedded-tls). Forwarded
+//!   `http_psp` (raw `sceNetInet` sockets + embedded-tls). Forwarded
 //!   from `oasis-browser/psp`.
 //!
 //! The build script sets `cfg(native_net)` on every target except
