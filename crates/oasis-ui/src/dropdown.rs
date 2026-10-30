@@ -86,20 +86,26 @@ impl Dropdown {
             .unwrap_or(&self.placeholder)
     }
 
-    /// Select the next option (wrapping).
+    /// Select the next option (wrapping; from the placeholder state --
+    /// `selected` past the end -- to the first). No-op while disabled,
+    /// like [`toggle`](Self::toggle) and `RadioGroup`.
     pub fn select_next(&mut self) {
-        if !self.options.is_empty() {
-            self.selected = (self.selected + 1) % self.options.len();
+        if !self.disabled && !self.options.is_empty() {
+            self.selected = match self.selected.checked_add(1) {
+                Some(next) if next < self.options.len() => next,
+                _ => 0,
+            };
         }
     }
 
-    /// Select the previous option (wrapping).
+    /// Select the previous option (wrapping; from the placeholder state to
+    /// the last). No-op while disabled.
     pub fn select_prev(&mut self) {
-        if !self.options.is_empty() {
-            self.selected = if self.selected == 0 {
-                self.options.len() - 1
-            } else {
-                self.selected - 1
+        if !self.disabled && !self.options.is_empty() {
+            let last = self.options.len() - 1;
+            self.selected = match self.selected {
+                0 => last,
+                i => (i - 1).min(last),
             };
         }
     }
@@ -460,5 +466,25 @@ mod tests {
         d.disabled = true;
         d.toggle();
         assert!(!d.open);
+    }
+
+    #[test]
+    fn disabled_dropdown_keeps_its_selection() {
+        let mut dd = Dropdown::new(vec!["a".into(), "b".into()]);
+        dd.disabled = true;
+        dd.select_next();
+        dd.select_prev();
+        assert_eq!(dd.selected, 0);
+    }
+
+    #[test]
+    fn placeholder_state_steps_onto_the_list() {
+        let mut dd = Dropdown::new(vec!["a".into(), "b".into(), "c".into()]);
+        dd.selected = usize::MAX;
+        dd.select_next();
+        assert_eq!(dd.selected, 0);
+        dd.selected = 10;
+        dd.select_prev();
+        assert_eq!(dd.selected, 2);
     }
 }
