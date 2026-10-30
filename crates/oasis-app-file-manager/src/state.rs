@@ -2,8 +2,7 @@
 //! accessor / mutation helpers.
 //!
 //! Behavioural splits live in the sibling modules: [`crate::commands`]
-//! handles input + menu actions, [`crate::view`] handles all rendering
-//! and SDI scene updates.
+//! handles input + menu actions, [`crate::view`] handles all rendering.
 
 use oasis_app_core::ContentState;
 use oasis_ui::menu_bar::MenuBar;
@@ -38,9 +37,8 @@ pub struct FileManagerApp {
     pub status: Option<String>,
     /// Active view mode (toggled via Button::Select).
     pub view_mode: ViewMode,
-    /// Cached column count for the Explorer icon grid (written by the
-    /// renderer each frame so the next input tick can navigate by tile
-    /// coordinates). Set by `App::layout` (windowed) and `update_sdi`.
+    /// Cached column count for the Explorer icon grid, set by
+    /// `App::layout` so input can navigate by tile coordinates.
     pub(crate) explorer_cols: usize,
     /// Cached visible row count for the Explorer icon grid.
     pub(crate) explorer_visible_rows: usize,

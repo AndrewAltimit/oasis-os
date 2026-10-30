@@ -158,7 +158,7 @@ mod private {
         Some(abs)
     }
 
-    /// Rectangle in screen coordinates, used by Explorer-view SDI helpers.
+    /// Rectangle in content coordinates, used by the Explorer-view helpers.
     #[derive(Clone, Copy)]
     pub(crate) struct Box2d {
         pub x: i32,

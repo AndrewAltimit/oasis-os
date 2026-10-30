@@ -9,7 +9,7 @@
 //! - `state` — the [`FileManagerApp`] struct definition + constructors
 //!   + simple accessors.
 //! - `commands` — input handling and menu-action dispatch.
-//! - `view` — direct-draw + SDI rendering for both view modes.
+//! - `view` — windowed rendering for both view modes.
 //!
 //! This file re-exports the public API and contains the `App` trait impl.
 

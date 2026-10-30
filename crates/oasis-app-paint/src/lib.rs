@@ -455,13 +455,11 @@ impl PaintApp {
     /// Encode the flattened canvas and write it to `path`, creating the
     /// parent folder if needed.
     fn write_bmp(&mut self, vfs: &mut dyn Vfs, path: &str) -> Result<(), String> {
-        if let Some((dir, _)) = path.rsplit_once('/') {
-            io::ensure_dir(vfs, dir)?;
-        }
         let w = self.canvas.width();
         let h = self.canvas.height();
         let bmp = encode_bmp(&self.canvas.flatten(), w, h);
-        vfs.write(path, &bmp).map_err(|e| e.to_string())?;
+        oasis_app_core::vfs_util::write_creating_dirs(vfs, path, &bmp)
+            .map_err(|e| e.to_string())?;
         self.file_path = Some(path.to_string());
         self.modified = false;
         Ok(())
@@ -1916,7 +1914,7 @@ mod tests {
     #[test]
     fn open_rejects_bad_file() {
         let mut vfs = make_vfs();
-        io::ensure_dir(&mut vfs, PICTURES_DIR).expect("mkdir");
+        oasis_app_core::vfs_util::ensure_dir(&mut vfs, PICTURES_DIR).expect("mkdir");
         vfs.write("/home/user/pictures/bad.bmp", b"garbage")
             .expect("write");
         let mut app = PaintApp::new("/apps/paint");
