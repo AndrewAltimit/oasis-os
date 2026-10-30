@@ -289,7 +289,9 @@ impl PaintApp {
             | Tool::Circle
             | Tool::FilledCircle => {
                 if self.drag_start.is_none() {
-                    self.push_undo();
+                    // The undo snapshot is taken when the shape is
+                    // committed (`finish_shape`), so a cancelled shape
+                    // leaves history and the modified flag alone.
                     self.drag_start = Some((cx, cy));
                     self.drawing = true;
                 } else {
@@ -304,6 +306,7 @@ impl PaintApp {
         let Some((sx, sy)) = self.drag_start.take() else {
             return;
         };
+        self.push_undo();
         let w = self.canvas.width();
         let h = self.canvas.height();
         let ex = self.cursor_x;
@@ -1764,6 +1767,35 @@ mod tests {
         click_at(&mut app, r.x + 1, r.y + 1, CW, CH, &make_vfs());
         assert_eq!(app.palette_index, 4);
         assert_eq!(app.color, palette()[4]);
+    }
+
+    #[test]
+    fn cancelled_shape_leaves_history_alone() {
+        let mut app = PaintApp::new("/apps/paint");
+        // A redo entry that a cancelled shape must not discard.
+        app.tool = Tool::Fill;
+        click_canvas_pixel(&mut app, 1, 1);
+        app.undo();
+        assert_eq!(app.redo_stack.len(), 1);
+        app.modified = false;
+
+        app.tool = Tool::Rectangle;
+        click_canvas_pixel(&mut app, 2, 2);
+        assert!(app.drag_start.is_some());
+        app.handle_input(&Button::Triangle, &make_vfs()); // switch tool: cancels
+        assert!(app.drag_start.is_none());
+        assert!(app.undo_stack.is_empty());
+        assert_eq!(app.redo_stack.len(), 1);
+        assert!(!app.modified);
+
+        // Committing a shape is one undo step.
+        app.tool = Tool::Line;
+        click_canvas_pixel(&mut app, 2, 2);
+        click_canvas_pixel(&mut app, 8, 2);
+        assert_eq!(app.undo_stack.len(), 1);
+        assert!(app.modified);
+        app.undo();
+        assert_ne!(app.canvas.get_pixel(5, 2), app.color);
     }
 
     #[test]
