@@ -33,7 +33,7 @@ pub struct TvGuideApp {
 
 impl TvGuideApp {
     /// Create a new TV Guide app from VFS channel config.
-    pub fn new(path: &str, vfs: &dyn Vfs, at: &ActiveTheme) -> Self {
+    pub fn new(path: &str, vfs: &dyn Vfs) -> Self {
         let config = if vfs.exists(TV_CHANNELS_PATH) {
             log::debug!("TV: loading channel config from VFS");
             let data = vfs.read(TV_CHANNELS_PATH).unwrap_or_default();
@@ -48,7 +48,7 @@ impl TvGuideApp {
         };
 
         log::debug!("TV: TvGuideApp::new with {} channels", config.channel.len());
-        let guide = TvGuideState::new(&config, at);
+        let guide = TvGuideState::new(&config);
         let lines = guide.text_content();
 
         Self {
@@ -176,8 +176,7 @@ mod tests {
     #[test]
     fn tv_guide_app_implements_app_trait() {
         let vfs = MemoryVfs::new();
-        let at = ActiveTheme::default();
-        let app = TvGuideApp::new("/apps/TV Guide", &vfs, &at);
+        let app = TvGuideApp::new("/apps/TV Guide", &vfs);
         assert_eq!(app.title(), "TV Guide");
         assert_eq!(app.path(), "/apps/TV Guide");
         assert!(!app.lines().is_empty());
@@ -192,8 +191,7 @@ mod tests {
     #[test]
     fn tv_guide_app_cancel_exits_when_not_tuned() {
         let vfs = MemoryVfs::new();
-        let at = ActiveTheme::default();
-        let mut app = TvGuideApp::new("/apps/TV Guide", &vfs, &at);
+        let mut app = TvGuideApp::new("/apps/TV Guide", &vfs);
         let action = app.handle_input(&Button::Cancel, &vfs);
         assert_eq!(action, AppAction::Exit);
     }
@@ -201,8 +199,7 @@ mod tests {
     #[test]
     fn tv_guide_app_navigation() {
         let vfs = MemoryVfs::new();
-        let at = ActiveTheme::default();
-        let mut app = TvGuideApp::new("/apps/TV Guide", &vfs, &at);
+        let mut app = TvGuideApp::new("/apps/TV Guide", &vfs);
         app.handle_input(&Button::Down, &vfs);
         assert_eq!(app.guide.selected_channel, 1);
         app.handle_input(&Button::Up, &vfs);
@@ -212,8 +209,7 @@ mod tests {
     #[test]
     fn tv_guide_app_select_resets_fetch() {
         let vfs = MemoryVfs::new();
-        let at = ActiveTheme::default();
-        let mut app = TvGuideApp::new("/apps/TV Guide", &vfs, &at);
+        let mut app = TvGuideApp::new("/apps/TV Guide", &vfs);
         app.guide.fetch_attempted = true;
         app.guide.fetch_error = Some("error".into());
         app.handle_input(&Button::Select, &vfs);
@@ -224,8 +220,7 @@ mod tests {
     #[test]
     fn tv_guide_app_downcast() {
         let vfs = MemoryVfs::new();
-        let at = ActiveTheme::default();
-        let app = TvGuideApp::new("/apps/TV Guide", &vfs, &at);
+        let app = TvGuideApp::new("/apps/TV Guide", &vfs);
         let boxed: Box<dyn App> = Box::new(app);
         assert!(boxed.as_any().downcast_ref::<TvGuideApp>().is_some());
     }

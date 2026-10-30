@@ -11,7 +11,6 @@ use oasis_app_tv_guide::schedule::{
     CachedSchedule, ScheduleSlot, format_time, schedule_at, schedule_range,
 };
 use oasis_app_tv_guide::{ChannelCatalog, TV_REQUEST_PATH, TvGuideApp, VideoEpisode};
-use oasis_skin::active_theme::ActiveTheme;
 use oasis_types::input::Button;
 use oasis_vfs::{MemoryVfs, Vfs};
 
@@ -42,7 +41,7 @@ fn catalog(channel_number: u32, episodes: Vec<VideoEpisode>) -> ChannelCatalog {
 /// `loaded` (by index), each with a single long episode.
 fn guide_with(loaded: &[usize]) -> (TvGuideApp, MemoryVfs) {
     let vfs = MemoryVfs::new();
-    let mut app = TvGuideApp::new("/apps/TV Guide", &vfs, &ActiveTheme::default());
+    let mut app = TvGuideApp::new("/apps/TV Guide", &vfs);
     app.guide.fetch_attempted = true;
     for &i in loaded {
         let number = app.guide.channels[i].number;
@@ -189,7 +188,7 @@ fn many_channels_page_with_selection() {
     vfs.mkdir("/etc").unwrap();
     vfs.mkdir("/etc/tv").unwrap();
     vfs.write("/etc/tv/channels.toml", toml.as_bytes()).unwrap();
-    let mut app = TvGuideApp::new("/apps/TV Guide", &vfs, &ActiveTheme::default());
+    let mut app = TvGuideApp::new("/apps/TV Guide", &vfs);
     assert_eq!(app.guide.channels.len(), 12);
     for _ in 0..11 {
         press(&mut app, &vfs, Button::Down);
@@ -317,7 +316,7 @@ fn guide_without_channels_handles_all_input() {
     vfs.mkdir("/etc").unwrap();
     vfs.mkdir("/etc/tv").unwrap();
     vfs.write("/etc/tv/channels.toml", b"channel = []").unwrap();
-    let mut app = TvGuideApp::new("/apps/TV Guide", &vfs, &ActiveTheme::default());
+    let mut app = TvGuideApp::new("/apps/TV Guide", &vfs);
     assert!(app.guide.channels.is_empty());
     for b in [
         Button::Up,
@@ -341,7 +340,7 @@ fn invalid_channel_config_falls_back_to_defaults() {
     vfs.mkdir("/etc/tv").unwrap();
     vfs.write("/etc/tv/channels.toml", b"this is [not toml")
         .unwrap();
-    let app = TvGuideApp::new("/apps/TV Guide", &vfs, &ActiveTheme::default());
+    let app = TvGuideApp::new("/apps/TV Guide", &vfs);
     assert_eq!(app.guide.channels.len(), 5);
 }
 

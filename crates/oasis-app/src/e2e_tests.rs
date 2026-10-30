@@ -15,7 +15,6 @@ use std::time::Instant;
 use oasis_apps::tv_guide::catalog::ChannelCatalog;
 use oasis_apps::tv_guide::channel::{ChannelConfig, DEFAULT_CHANNELS_TOML};
 use oasis_apps::tv_guide::{TvGuideState, VideoEpisode};
-use oasis_core::active_theme::ActiveTheme;
 use oasis_core::apps::AppRunner;
 use oasis_core::backend::Color;
 use oasis_core::dashboard::AppEntry;
@@ -40,7 +39,7 @@ fn make_vfs() -> MemoryVfs {
 fn make_guide() -> TvGuideState {
     let config =
         ChannelConfig::from_toml(DEFAULT_CHANNELS_TOML).expect("default channels TOML is valid");
-    TvGuideState::new(&config, &ActiveTheme::default())
+    TvGuideState::new(&config)
 }
 
 fn mock_episodes(channel_num: u32, count: usize) -> Vec<VideoEpisode> {
@@ -237,27 +236,27 @@ fn test_tv_guide_fetch_guard() -> bool {
 }
 
 fn test_tv_guide_screenshot_populated() -> bool {
-    // This test verifies the rendering pipeline can produce non-empty output.
-    // We test that the guide produces meaningful SDI updates without crashing.
+    // The guide's `draw_windowed` path renders a populated EPG grid.
     let mut guide = make_guide();
     inject_catalogs(&mut guide, 5);
     guide.fetch_attempted = true;
 
-    // Create a minimal SDI registry and active theme.
     let skin = oasis_core::skin::resolve_skin("classic").expect("classic skin should exist");
     let active_theme = oasis_core::active_theme::ActiveTheme::from_skin(&skin.theme);
-    let mut sdi = oasis_core::sdi::SdiRegistry::new();
+    let mut backend = oasis_app::headless::HeadlessBackend::new(480, 272);
 
     // This should not panic.
-    guide.update_sdi(&mut sdi, &active_theme);
+    guide
+        .draw_windowed(0, 0, 480, 272, &mut backend, &active_theme)
+        .expect("draw_windowed should succeed");
+    oasis_core::backend::SdiCore::swap_buffers(&mut backend).expect("present");
 
-    // Verify SDI objects were created.
+    let text = backend.frame_text();
     assert!(
-        sdi.contains("tv_hdr_bg"),
-        "should create tv_hdr_bg SDI object"
+        text.iter().any(|t| t.text == "TIME:"),
+        "should draw the time header"
     );
-    assert!(sdi.contains("tv_hdr_date"), "should create tv_hdr_date");
-    assert!(sdi.contains("tv_ftr_bg"), "should create tv_ftr_bg");
+    assert!(text.len() > 5, "a populated guide should draw channel rows");
 
     true
 }
