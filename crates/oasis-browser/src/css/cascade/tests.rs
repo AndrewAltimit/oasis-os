@@ -3383,3 +3383,87 @@ mod var_substitution {
         assert_eq!(s.before_content.as_deref(), Some("*"));
     }
 }
+
+// -- Backtracking selector matching -----------------------------------
+
+mod backtracking {
+    use super::*;
+    use crate::css::parser::parse_selector_string;
+    use crate::html::tokenizer::Tokenizer;
+    use crate::html::tree_builder::TreeBuilder;
+
+    /// Whether `selector` matches the element `#id` of `html`.
+    fn hit(html: &str, selector: &str, id: &str) -> bool {
+        let doc = TreeBuilder::build(Tokenizer::new(html).tokenize());
+        let list = parse_selector_string(selector).expect("selector parses");
+        let node = doc.get_element_by_id(id).expect("element with id");
+        list.selectors
+            .iter()
+            .any(|s| matching::matches_selector(&doc, node, s, &ctx()))
+    }
+
+    #[test]
+    fn child_then_descendant_retries_outer_ancestor() {
+        // `A > B C` against `<A><B><X><B><C>`: the nearest `.b` is a
+        // child of `.x`, but the outer `.b` is a child of `.a`. A greedy
+        // walk misses this.
+        let html = r#"<div class="a"><div class="b"><div class="x">
+            <div class="b"><span id="c"></span></div></div></div></div>"#;
+        assert!(hit(html, ".a > .b span", "c"));
+        assert!(hit(html, "div.a > div.b #c", "c"));
+        assert!(!hit(html, ".x > .a span", "c"));
+    }
+
+    #[test]
+    fn real_world_nav_list_pattern() {
+        let html = r#"<nav><ul><li><ul><li><a id="t">x</a></li></ul></li></ul></nav>"#;
+        assert!(hit(html, "nav > ul li a", "t"));
+        assert!(!hit(html, "nav > li a", "t"));
+    }
+
+    #[test]
+    fn sibling_chain_retries_earlier_siblings() {
+        // `.x + .y ~ .z`: the nearest `.y` has no `.x` before it, an
+        // earlier one does.
+        let html = r#"<div><p class="x"></p><p class="y"></p><p></p>
+            <p class="y"></p><p id="z" class="z"></p></div>"#;
+        assert!(hit(html, ".x + .y ~ .z", "z"));
+        assert!(!hit(html, ".q + .y ~ .z", "z"));
+    }
+
+    #[test]
+    fn sibling_failure_restarts_from_descendant() {
+        let html = r#"<div class="a"><div class="inner"><p class="b"></p>
+            <p id="t" class="c"></p></div></div>"#;
+        assert!(hit(html, ".a .b + .c", "t"));
+        assert!(hit(html, ".a > .inner > .b + .c", "t"));
+        assert!(!hit(html, ".a > .b + .c", "t"));
+    }
+
+    #[test]
+    fn deep_failing_descendant_chain_stays_fast() {
+        // 200 nested `.a` plus a selector that can never match: without
+        // pruning, backtracking would be exponential.
+        let mut html = String::new();
+        for _ in 0..200 {
+            html.push_str(r#"<div class="a">"#);
+        }
+        html.push_str(r#"<span id="t"></span>"#);
+        let start = std::time::Instant::now();
+        assert!(!hit(
+            &html,
+            ".missing .a .a .a .a .a .a .a .a .a .a span",
+            "t"
+        ));
+        assert!(hit(&html, ".a .a .a .a .a .a .a .a .a .a span", "t"));
+        assert!(start.elapsed() < std::time::Duration::from_secs(2));
+    }
+
+    #[test]
+    fn has_with_backtracking_inner_selector() {
+        let html = r#"<article id="art"><div class="a"><div class="b">
+            <div class="x"><div class="b"><i class="c"></i></div></div></div></div></article>"#;
+        assert!(hit(html, "article:has(.a > .b .c)", "art"));
+        assert!(!hit(html, "article:has(.x > .a .c)", "art"));
+    }
+}

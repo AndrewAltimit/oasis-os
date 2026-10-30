@@ -24,8 +24,8 @@ extends with DOM bindings.
 ```rust
 use oasis_js::JsEngine;
 
-let engine = JsEngine::new(8 * 1024 * 1024)?; // 8 MiB heap budget
-engine.set_max_exec_ms(5_000);
+let mut engine = JsEngine::new(8 * 1024 * 1024)?; // 8 MiB heap limit (enforced)
+engine.set_max_exec_ms(500); // default 5 s is far too long for a frame loop
 
 let value = engine.eval("1 + 2")?;       // returns JsValue::Int(3)
 let _ = engine.tick_timers(16.0);        // advance pending setTimeout/setInterval
@@ -39,17 +39,18 @@ Key entry points (paths are `crates/oasis-js/src/engine.rs`):
 
 | Method | Purpose |
 | --- | --- |
-| `JsEngine::new(max_memory_bytes)` (engine.rs:51) | Allocate the QuickJS runtime, install console / storage / fetch / timer globals. |
-| `set_max_exec_ms(ms)` (engine.rs:99) | Execution budget per guarded entry (eval, timer callback, microtask drain, guarded event dispatch). Default 5 s. See [Watchdog](#watchdog). |
-| `eval(script)` (engine.rs:114) | Evaluate a single script. Returns `Result<JsValue, JsError>`. Drains the promise microtask queue (bounded) afterwards. |
-| `eval_all(&[scripts])` (engine.rs:134) | Evaluate each script in document order and collect a `Vec<Result<JsValue, JsError>>` with one entry per input. A failed script does not halt the loop — subsequent scripts still run, and the returned vector preserves index alignment with the input slice. |
-| `tick_timers(dt_ms)` (engine.rs:170) | Advance the timer queue by `dt_ms`, fire due callbacks (each under its own deadline), drain microtasks between callbacks. Call once per host frame. |
-| `drain_microtasks()` (engine.rs:209) | Run pending promise jobs, bounded by the deadline and `MAX_MICROTASKS_PER_DRAIN`. Returns the number of jobs run. |
-| `console_output()` / `take_console_output()` (engine.rs:139, 144) | Snapshot or drain the buffered console. |
-| `local_storage()` (engine.rs:150) | Borrow the in-memory `localStorage` area (`LocalStorage`, 5 MiB quota) for snapshot or restore. |
-| `install_fetch_handler(Box::new(handler))` (engine.rs:156) | Install an HTTP transport. Replaces any previous handler. See [Fetch](#fetch). |
-| `with_context_guarded(\|ctx\| ...)` (engine.rs:227) | Raw `Ctx` access with the watchdog armed. Use whenever the closure calls into page JS (event dispatch). |
-| `with_context(\|ctx\| ...)` (engine.rs:284) | Unguarded escape hatch for raw `rquickjs::Ctx<'_>` access. Used by `oasis-browser` to register DOM globals; do **not** call page JS through it. |
+| `JsEngine::new(max_memory_bytes)` (engine.rs:60) | Allocate the QuickJS runtime, install console / storage / fetch / timer globals. `max_memory_bytes` is a hard heap limit (`0` = unlimited): QuickJS-NG checks it in `js_malloc_rt` before calling the allocator, so it holds under the workspace's `rquickjs/rust-alloc` feature too (rquickjs' own docs call it a no-op there; test `memory_limit_is_enforced`). An allocation past it throws `InternalError: out of memory` in the script. |
+| `set_max_exec_ms(ms)` (engine.rs:109) | Execution budget per guarded entry (eval, timer tick, microtask drain, guarded event dispatch). Default `DEFAULT_MAX_EXEC_MS` = 5 s; `oasis-browser` sets it from `BrowserConfig::js_max_exec_ms` (2 s desktop, 500 ms PSP). See [Watchdog](#watchdog). |
+| `eval(script)` (engine.rs:124) | Evaluate a single script. Returns `Result<JsValue, JsError>`. Drains the promise microtask queue (bounded) afterwards. |
+| `eval_all(&[scripts])` (engine.rs:144) | Evaluate each script in document order and collect a `Vec<Result<JsValue, JsError>>` with one entry per input. A failed script does not halt the loop — subsequent scripts still run, and the returned vector preserves index alignment with the input slice. |
+| `tick_timers(dt_ms)` (engine.rs:187) | Advance the timer queue by `dt_ms` and fire due callbacks until the tick's `max_exec_ms` budget is spent; timers still due then are deferred to the next tick. Drains microtasks after each callback. Returns the number of callbacks that ran. Call once per host frame. |
+| `deferred_timer_count()` (engine.rs:227) | Timers that came due but were deferred by the per-tick budget. |
+| `drain_microtasks()` (engine.rs:258) | Run pending promise jobs, bounded by the deadline and `MAX_MICROTASKS_PER_DRAIN`. Returns the number of jobs run. |
+| `console_output()` / `take_console_output()` (engine.rs:149, 154) | Snapshot or drain the buffered console. |
+| `local_storage()` (engine.rs:160) | Borrow the in-memory `localStorage` area (`LocalStorage`, 5 MiB quota) for snapshot or restore. |
+| `install_fetch_handler(Box::new(handler))` (engine.rs:166) | Install an HTTP transport. Replaces any previous handler. See [Fetch](#fetch). |
+| `with_context_guarded(\|ctx\| ...)` (engine.rs:276) | Raw `Ctx` access with the watchdog armed. Use whenever the closure calls into page JS (event dispatch). |
+| `with_context(\|ctx\| ...)` (engine.rs:336) | Unguarded escape hatch for raw `rquickjs::Ctx<'_>` access. Used by `oasis-browser` to register DOM globals; do **not** call page JS through it. |
 
 There is no explicit shutdown; dropping the `JsEngine` runs the QuickJS
 finalizers and releases the runtime.
@@ -114,7 +115,7 @@ whole OS. Every entry point that runs page JS is bounded:
 | Entry point | Bound |
 | --- | --- |
 | `eval` / `eval_all` | Interrupt handler armed with a deadline of `max_exec_ms` (default 5 s, `set_max_exec_ms`). The trailing microtask drain shares the same deadline. |
-| `tick_timers` | Each fired callback gets its own `max_exec_ms` deadline, followed by a bounded microtask drain. A runaway callback is interrupted and logged; later timers in the same tick still fire. |
+| `tick_timers` | One budget of `max_exec_ms` per tick: callbacks are started only while the tick is younger than that, and the timers still due when it runs out are deferred (not dropped) to the next tick; a deferred timer that is cleared in the meantime does not run. Each callback still gets its own `max_exec_ms` interrupt and a bounded microtask drain, so a runaway callback is interrupted and logged, and one that merely starts late is not aborted. |
 | `drain_microtasks` | Fresh `max_exec_ms` deadline **and** a cap of `MAX_MICROTASKS_PER_DRAIN` (10 000) jobs. |
 | `with_context_guarded` | Deadline armed for the duration of the closure. `oasis-browser` routes all DOM event dispatch (click, mouse, key, input) through it. |
 | `with_context` | **Unbounded.** Only for installing globals / reading state. |
@@ -134,8 +135,16 @@ console warning is logged and the remaining jobs stay queued for the next
 drain — a runaway chain therefore costs at most one bounded slice per drain
 instead of freezing the host.
 
-`max_exec_ms` is a per-entry budget, not a per-frame budget: a page that
-schedules many slow timers can still use up to `max_exec_ms` per callback.
+Timer work is budgeted per tick: a page with many slow timers costs at most
+about `2 * max_exec_ms` per frame (the budget plus one callback that started
+just before it ran out), then catches up over the following frames. Other
+entry points (each inline script at load, each event dispatch) are bounded per
+entry.
+
+Memory is bounded by the `JsEngine::new` heap limit: the browser uses
+`BrowserConfig::js_memory_limit_bytes` (64 MiB desktop, 8 MiB PSP). A script
+that exceeds it gets `InternalError: out of memory`; the engine stays usable
+once the garbage is released.
 
 ## Fetch
 
@@ -254,10 +263,10 @@ API on top":
 | --- | --- |
 | `mod.rs` | Shared handle types, `install_document_global_*` entry points, inline `on*` handler registration. |
 | `bindings.rs` | Attribute / text / tree-mutation / innerHTML / selector / inline-style / navigation / `getComputedStyle` bindings. |
-| `node_api.rs` | Node types, text-inclusive child lists, raw parent / sibling links, detached-safe insertion (fragments, cycle checks), `cloneNode`, fragment parsing, `matches`, `getElementsBy*`, and the freed-slot log that evicts stale wrappers. |
+| `node_api.rs` | Node types, text-inclusive child lists, raw parent / sibling links, detached-safe insertion (fragments, cycle checks, the `MAX_DOM_DEPTH` cap), `cloneNode`, fragment parsing, `matches`, `getElementsBy*`, and the freed-slot log that evicts stale wrappers. |
 | `fetch.rs` | `BrowserFetchHandler`: origin-aware `FetchHandler` behind `oasis-js`'s `fetch()` (URL resolution, TLS, CSP `connect-src`, private-network and same-origin policy). |
 | `storage.rs` | Per-origin, quota'd `localStorage` / `sessionStorage`; page-scoped `document.cookie`. |
-| `serialize.rs` | `innerHTML` / `outerHTML` serialization + fragment deep-copy. |
+| `serialize.rs` | `innerHTML` / `outerHTML` serialization + depth-capped fragment deep-copy. |
 | `canvas.rs` | `__oasis_canvas_*` (feature `canvas`). |
 | `compat_shims.rs` | Site-compat helpers (reddit `togglecomment` & co.). |
 | `bootstrap.js` / `canvas.js` / `compat_shims.js` | The JS halves, embedded with `include_str!`. |
@@ -309,6 +318,14 @@ nodes stay allocated until the page unloads.
   appends), `removeChild` / `replaceChild` (throw `NotFoundError` when the
   node is not a child), `cloneNode(deep)`. Inserting an ancestor into its own
   descendant throws `HierarchyRequestError`.
+- Depth cap: an insertion that would put any node deeper than
+  `MAX_DOM_DEPTH` (257 levels below its tree root, the deepest the HTML
+  parser produces) also throws `HierarchyRequestError`, because the render
+  passes recurse per level and an unbounded chain would overflow the UI
+  thread's stack. Detached trees are measured from their own root and checked
+  again when attached. `innerHTML` / `insertAdjacentHTML` flatten markup that
+  would nest past the cap, like the parser does; into an element already at
+  the cap they write the markup's text only.
 - `Text` / `Comment` add `data`, `length`, `wholeText` (Text) and the
   ChildNode methods below.
 

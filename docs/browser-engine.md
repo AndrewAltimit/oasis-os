@@ -105,6 +105,11 @@ arena DOM and backend traits: [`adr/001-arena-based-dom.md`](adr/001-arena-based
 - CSS length units: `px`, `em`, `rem`, `pt`, `ex`, `ch` (the latter
   two resolve to `0.5em`).
 - CSS Nesting (`&` selector with parse-time desugaring).
+- Right-to-left selector matching with backtracking, so `A > B C`
+  matches through an outer `B` when the nearest `B` doesn't fit
+  (Servo-style failure kinds keep it linear in practice). Each
+  selector-vs-element match has a 16k-step traversal budget, shared
+  with `:has()` subtree scans; running out counts as no match.
 - `:has()` relational pseudo-class with `>`/`+`/`~` leading
   combinators, scope-bounded inner combinators.
 - Selectors Level 4 `:not(a, b, c)` list form.
@@ -114,9 +119,11 @@ arena DOM and backend traits: [`adr/001-arena-based-dom.md`](adr/001-arena-based
 - Modern color functions: `hsl/hsla`, `oklch/oklab`, `color(srgb |
   srgb-linear | display-p3)`, `color-mix(in srgb | oklch | oklab |
   hsl | srgb-linear)`, `light-dark()` with `color-scheme` tracking.
-- CSS logical properties — parse-time rewrite to LTR physical
-  equivalents for margin / padding / border / inset / block-size /
-  inline-size longhands and shorthands.
+- CSS logical properties: inline-axis logicals (margin / padding /
+  border / inset `-inline-start|end`) are resolved against `direction`
+  at cascade time, block-axis ones map to top / bottom, and
+  `block-size` / `inline-size` map to height / width. `text-align:
+  start | end` likewise follow `direction`.
 
 ## Layout
 
@@ -286,6 +293,16 @@ to page scripts include:
   `classList.add` of a token the element already has (and similar
   no-ops) skip the flag so redundant reassignments don't force a
   re-cascade.
+- **Robustness limits.** Script insertions that would nest a node
+  deeper than the parser's own limit (`MAX_DOM_DEPTH`, 257 levels)
+  throw `HierarchyRequestError`, and `innerHTML` flattens past it, so
+  a script-built chain can't overflow the UI stack in the recursive
+  render passes. Each inline script, event dispatch and per-frame
+  timer tick runs under `BrowserConfig::js_max_exec_ms` (2 s desktop,
+  500 ms PSP; timers still due when a tick's budget runs out wait for
+  the next frame), and the QuickJS heap is capped at
+  `BrowserConfig::js_memory_limit_bytes` (64 MiB desktop, 8 MiB PSP).
+  See [`oasis-js.md` §Watchdog](oasis-js.md#watchdog).
 - **preventDefault-aware link follow-up.** The inline-handler wrapper
   calls `event.preventDefault()` when the body returns `false` (the
   HTML spec), and `__oasis_dispatch_with_bubbling` returns the event's

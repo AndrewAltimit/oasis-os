@@ -768,8 +768,9 @@ impl BrowserWidget {
             let (scripts, deferred) = Self::collect_scripts(&doc, self.page_csp.as_ref());
             self.deferred_scripts = deferred;
             let shared: js_dom::SharedDoc = std::rc::Rc::new(std::cell::RefCell::new(doc));
-            match oasis_js::JsEngine::new(8 * 1024 * 1024) {
-                Ok(engine) => {
+            match oasis_js::JsEngine::new(self.config.js_memory_limit_bytes) {
+                Ok(mut engine) => {
+                    engine.set_max_exec_ms(self.config.js_max_exec_ms);
                     let s = std::rc::Rc::clone(&shared);
                     let nav = std::rc::Rc::clone(&self.js_nav_actions);
                     let js_sty = std::rc::Rc::clone(&self.js_styles);

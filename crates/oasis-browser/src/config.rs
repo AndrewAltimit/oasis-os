@@ -47,6 +47,20 @@ impl Default for BrowserFeatures {
     }
 }
 
+/// Default [`BrowserConfig::js_max_exec_ms`]: 2 s on desktop, 500 ms on
+/// PSP, where the same runaway script freezes a much slower UI loop.
+pub const DEFAULT_JS_MAX_EXEC_MS: u64 = if cfg!(feature = "psp") { 500 } else { 2_000 };
+
+/// Default [`BrowserConfig::js_memory_limit_bytes`]: 64 MiB on desktop,
+/// 8 MiB on PSP. The limit is really enforced (QuickJS-NG checks it in
+/// `js_malloc_rt`), and 8 MiB runs out on a page that merely creates
+/// ~10k elements, so only the PSP keeps the small heap.
+pub const DEFAULT_JS_MEMORY_LIMIT: usize = if cfg!(feature = "psp") {
+    8 * 1024 * 1024
+} else {
+    64 * 1024 * 1024
+};
+
 /// Visual configuration for browser chrome.
 #[derive(Debug, Clone)]
 pub struct BrowserConfig {
@@ -81,6 +95,17 @@ pub struct BrowserConfig {
     // Limits
     pub max_redirects: u8,
     pub max_image_dimension: u32,
+    /// Page JavaScript budget in milliseconds, applied to the page's
+    /// `JsEngine` via `set_max_exec_ms`: the limit for each inline
+    /// script, each event dispatch, and each frame's timer tick (timers
+    /// still due when it runs out wait for the next frame). Runaway
+    /// scripts are interrupted when they exceed it. Default
+    /// [`DEFAULT_JS_MAX_EXEC_MS`].
+    pub js_max_exec_ms: u64,
+    /// QuickJS heap limit for page JavaScript, in bytes (`0` =
+    /// unlimited). Allocations past it throw `InternalError: out of
+    /// memory` inside the page. Default [`DEFAULT_JS_MEMORY_LIMIT`].
+    pub js_memory_limit_bytes: usize,
 
     /// Use themed chrome with rounded rects (true) or legacy flat chrome (false).
     pub use_themed_chrome: bool,
@@ -118,6 +143,8 @@ impl Default for BrowserConfig {
             scroll_line_px: 16,
             max_redirects: 5,
             max_image_dimension: 480,
+            js_max_exec_ms: DEFAULT_JS_MAX_EXEC_MS,
+            js_memory_limit_bytes: DEFAULT_JS_MEMORY_LIMIT,
             use_themed_chrome: true,
             zoom_level: 1.0,
         }
@@ -197,6 +224,8 @@ mod tests {
         assert!(!cfg.smooth_scroll);
         assert_eq!(cfg.scroll_line_px, 16);
         assert!((cfg.zoom_level - 1.0).abs() < f32::EPSILON);
+        assert_eq!(cfg.js_max_exec_ms, DEFAULT_JS_MAX_EXEC_MS);
+        assert_eq!(cfg.js_memory_limit_bytes, DEFAULT_JS_MEMORY_LIMIT);
     }
 
     #[test]

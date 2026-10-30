@@ -1802,6 +1802,101 @@ fn class_list_full_api() {
     assert_eq!(d.get_attribute("class"), Some("B c d"));
 }
 
+// -- DOM depth cap (script-built trees must stay render-safe) ---------
+
+/// Deepest node depth in `doc` (the root is depth 0).
+fn max_depth(doc: &Document) -> usize {
+    let mut max = 0;
+    let mut stack = vec![(doc.root, 0usize)];
+    while let Some((n, d)) = stack.pop() {
+        max = max.max(d);
+        stack.extend(doc.nodes[n].children.iter().map(|&c| (c, d + 1)));
+    }
+    max
+}
+
+#[test]
+fn ten_thousand_deep_append_chain_is_capped() {
+    use crate::html::MAX_DOM_DEPTH;
+    let (engine, shared) = setup(sample_doc());
+    let refused = engine
+        .eval(
+            "var c = document.body, refused = 0, other = ''; \
+             for (var i = 0; i < 10000; i++) { \
+               var d = document.createElement('div'); \
+               try { c.appendChild(d); c = d; } \
+               catch (e) { if (e.name === 'HierarchyRequestError') refused++; \
+                           else other = e.name; } \
+             } \
+             other ? other : refused",
+        )
+        .unwrap();
+    // <body> sits at depth 2, so divs fit at depths 3..=MAX_DOM_DEPTH.
+    let accepted = MAX_DOM_DEPTH - 2;
+    assert_eq!(refused, oasis_js::JsValue::Int((10_000 - accepted) as i32));
+    assert_eq!(max_depth(&shared.borrow()), MAX_DOM_DEPTH);
+}
+
+#[test]
+fn detached_deep_chain_cannot_be_attached() {
+    use crate::html::MAX_DOM_DEPTH;
+    let (engine, shared) = setup(sample_doc());
+    // Build a 10k chain bottom-up while detached (each step re-parents
+    // the whole chain), then try to attach it.
+    check(
+        &engine,
+        "var top = document.createElement('div'), refused = 0; \
+         for (var i = 0; i < 10000; i++) { \
+           var p = document.createElement('div'); \
+           try { p.appendChild(top); top = p; } catch (e) { refused++; } \
+         } \
+         var attached = 'yes'; \
+         try { document.body.appendChild(top); } catch (e) { attached = e.name; } \
+         [refused > 0, attached].join()",
+        "true,HierarchyRequestError",
+    );
+    assert!(max_depth(&shared.borrow()) <= MAX_DOM_DEPTH);
+}
+
+#[test]
+fn inner_html_on_deepest_node_is_flattened() {
+    use crate::html::MAX_DOM_DEPTH;
+    let (engine, shared) = setup(sample_doc());
+    // Fill to the cap, step two levels back up, then keep writing nested
+    // markup into the deepest element: the markup is flattened (and at
+    // the cap reduced to text), the text survives, the depth stops
+    // growing.
+    check(
+        &engine,
+        "var c = document.body; \
+         while (true) { var d = document.createElement('div'); \
+           try { c.appendChild(d); c = d; } catch (e) { break; } } \
+         c = c.parentNode.parentNode; \
+         for (var i = 0; i < 20; i++) { \
+           c.innerHTML = '<div><div><span><b>deep' + i + '</b></span></div></div>'; \
+           c = c.firstElementChild || c; \
+         } \
+         document.body.textContent.indexOf('deep19') >= 0",
+        "true",
+    );
+    // At most the one text leaf below an element at the cap.
+    assert!(max_depth(&shared.borrow()) <= MAX_DOM_DEPTH + 1);
+}
+
+#[test]
+fn parser_output_respects_dom_depth_cap() {
+    use crate::html::MAX_DOM_DEPTH;
+    use crate::html::tokenizer::Tokenizer;
+    use crate::html::tree_builder::TreeBuilder;
+    let html = format!("<html><body>{}x</body></html>", "<div>".repeat(10_000));
+    let doc = TreeBuilder::build(Tokenizer::new(&html).tokenize());
+    assert!(
+        max_depth(&doc) <= MAX_DOM_DEPTH,
+        "depth {}",
+        max_depth(&doc)
+    );
+}
+
 #[test]
 fn reddit_shim_identity_check_skips_clicked_arrow() {
     // togglevote's `s !== el` guard relies on wrapper identity: the

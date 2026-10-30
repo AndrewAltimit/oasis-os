@@ -438,11 +438,19 @@ impl ComputedStyle {
             // -- Text ---------------------------------------------------
             "text-align" => {
                 if let Some(kw) = as_keyword(value) {
+                    // `start` / `end` (the initial value is `start`) are
+                    // resolved against the element's `direction`, which
+                    // the cascade applies before every other property.
+                    let rtl = self.direction == TextDirection::Rtl;
                     self.text_align = match kw {
                         "left" => TextAlign::Left,
                         "center" => TextAlign::Center,
                         "right" => TextAlign::Right,
                         "justify" => TextAlign::Justify,
+                        "start" if rtl => TextAlign::Right,
+                        "end" if rtl => TextAlign::Left,
+                        "start" => TextAlign::Left,
+                        "end" => TextAlign::Right,
                         _ => return,
                     };
                 }

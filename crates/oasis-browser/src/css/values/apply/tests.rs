@@ -6,8 +6,8 @@ use oasis_types::backend::Color;
 use super::super::computed::ComputedStyle;
 use super::super::types::{
     BackfaceVisibility, BackgroundBox, BlendMode, ContentVisibility, FontStretch, Hyphens,
-    ImageRendering, JustifySelf, OverscrollBehavior, ScrollBehavior, TextAlignLast, TextDirection,
-    TextShadow, TimingFunction, TransformStyle,
+    ImageRendering, JustifySelf, OverscrollBehavior, ScrollBehavior, TextAlign, TextAlignLast,
+    TextDirection, TextShadow, TimingFunction, TransformStyle,
 };
 use super::parsers::parse_time;
 use crate::css::parser::{CssColor, CssValue, LengthUnit};
@@ -810,6 +810,27 @@ fn margin_inline_start_resolves_to_left_in_ltr() {
     );
     assert_eq!(s.margin_left, 10.0, "inline-start → left in LTR");
     assert_eq!(s.margin_right, 0.0, "right should be untouched");
+}
+
+#[test]
+fn text_align_start_end_follow_direction() {
+    let kw = |k: &str| CssValue::Keyword(k.into());
+    let mut ltr = ComputedStyle {
+        text_align: TextAlign::Center,
+        ..Default::default()
+    };
+    ltr.apply_declaration("text-align", &kw("start"), 16.0);
+    assert_eq!(ltr.text_align, TextAlign::Left);
+    ltr.apply_declaration("text-align", &kw("end"), 16.0);
+    assert_eq!(ltr.text_align, TextAlign::Right);
+    let mut rtl = ComputedStyle {
+        direction: TextDirection::Rtl,
+        ..Default::default()
+    };
+    rtl.apply_declaration("text-align", &kw("start"), 16.0);
+    assert_eq!(rtl.text_align, TextAlign::Right);
+    rtl.apply_declaration("text-align", &kw("end"), 16.0);
+    assert_eq!(rtl.text_align, TextAlign::Left);
 }
 
 #[test]

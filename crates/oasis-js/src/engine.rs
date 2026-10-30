@@ -9,8 +9,11 @@ use crate::fetch::{FetchHandler, SharedFetchHandler};
 use crate::storage::{LocalStorage, SharedStorage};
 use crate::timers::{FiredTimer, TimerQueue};
 
-/// Default maximum JS execution time per eval call (5 seconds).
-const DEFAULT_MAX_EXEC_MS: u64 = 5_000;
+/// Default JS execution budget per guarded entry point (5 seconds).
+/// Hosts with a frame loop should set something much smaller via
+/// [`JsEngine::set_max_exec_ms`] (the browser widget does, from
+/// `BrowserConfig::max_exec_ms`).
+pub const DEFAULT_MAX_EXEC_MS: u64 = 5_000;
 
 /// Maximum number of promise jobs (microtasks) run by a single drain.
 ///
@@ -36,6 +39,9 @@ pub struct JsEngine {
     context: Context,
     console_buf: ConsoleBuffer,
     timer_queue: Rc<RefCell<TimerQueue>>,
+    /// Timers that came due but were not run because the tick's budget
+    /// ran out; they run first on the next [`JsEngine::tick_timers`].
+    deferred_timers: RefCell<Vec<FiredTimer>>,
     storage: SharedStorage,
     fetch_handler: SharedFetchHandler,
     /// Maximum execution time per eval call in milliseconds.
@@ -45,9 +51,12 @@ pub struct JsEngine {
 impl JsEngine {
     /// Create a new engine.
     ///
-    /// `max_memory_bytes` sets the QuickJS memory limit. Note: with the
-    /// `rust-alloc` feature this is a no-op — the Rust global allocator
-    /// is used instead.
+    /// `max_memory_bytes` sets the QuickJS heap limit (`0` = unlimited).
+    /// It is enforced even with rquickjs' `rust-alloc` feature, because
+    /// QuickJS-NG checks the limit in `js_malloc_rt` before calling the
+    /// allocator: an allocation past it throws `InternalError: out of
+    /// memory` (rquickjs' own docs still call this a no-op; they predate
+    /// that). Covered by the `memory_limit_is_enforced` test.
     pub fn new(max_memory_bytes: usize) -> Result<Self, JsError> {
         let runtime = Runtime::new().map_err(|e| JsError {
             message: format!("failed to create JS runtime: {e}"),
@@ -86,6 +95,7 @@ impl JsEngine {
             context,
             console_buf,
             timer_queue,
+            deferred_timers: RefCell::new(Vec::new()),
             storage,
             fetch_handler,
             max_exec_ms: DEFAULT_MAX_EXEC_MS,
@@ -160,25 +170,65 @@ impl JsEngine {
     /// Advance timers by `dt_ms` and execute any callbacks that fire.
     ///
     /// Call this once per frame from the host (e.g. browser widget
-    /// tick).  Returns the number of callbacks that fired.
+    /// tick).  Returns the number of callbacks that ran.
     ///
-    /// Each callback runs under its own execution deadline (see
-    /// [`set_max_exec_ms`](Self::set_max_exec_ms)) and is followed by a
-    /// bounded microtask drain. Callbacks are invoked through a
-    /// pre-compiled dispatcher, so firing a timer never re-parses JS
-    /// source.
+    /// Budget: callbacks are started only while the tick is younger than
+    /// `max_exec_ms` (see [`set_max_exec_ms`](Self::set_max_exec_ms)).
+    /// Once that budget is spent, the timers that came due but have not
+    /// run yet are deferred and run first on the next tick, so a page
+    /// with many slow timers costs at most about `2 * max_exec_ms` per
+    /// frame (the budget plus one callback that started just before it
+    /// ran out). Each callback, and the bounded microtask drain after
+    /// it, still runs under its own `max_exec_ms` interrupt, so a
+    /// callback that merely starts late is not aborted. A deferred timer
+    /// cleared in the meantime (`clearTimeout`) does not run.
+    /// Callbacks are invoked through a pre-compiled dispatcher, so firing
+    /// a timer never re-parses JS source.
     pub fn tick_timers(&self, dt_ms: f64) -> usize {
-        let fired = self.timer_queue.borrow_mut().tick_fired(dt_ms);
-        let count = fired.len();
-        for timer in fired {
-            self.fire_timer(timer);
+        let mut due = std::mem::take(&mut *self.deferred_timers.borrow_mut());
+        for t in self.timer_queue.borrow_mut().tick_fired(dt_ms) {
+            // An interval deferred last tick may have come due again.
+            if !due.contains(&t) {
+                due.push(t);
+            }
         }
-        // Drain the promise microtask queue after timer callbacks.
-        self.drain_microtasks();
-        count
+        let budget_end = Instant::now() + Duration::from_millis(self.max_exec_ms);
+        let mut ran = 0;
+        let mut pending = due.into_iter();
+        while let Some(timer) = pending.next() {
+            if ran > 0 && Instant::now() >= budget_end {
+                let mut deferred = self.deferred_timers.borrow_mut();
+                deferred.push(timer);
+                deferred.extend(pending);
+                self.console_buf.borrow_mut().push(ConsoleEntry {
+                    level: ConsoleLevel::Warn,
+                    message: format!(
+                        "timer budget ({} ms) spent; deferring {} timer(s) to the next tick",
+                        self.max_exec_ms,
+                        deferred.len()
+                    ),
+                });
+                break;
+            }
+            self.fire_timer(timer);
+            ran += 1;
+        }
+        // Drain the promise microtask queue after timer callbacks, within
+        // whatever is left of the tick's budget.
+        self.runtime
+            .set_interrupt_handler(Some(Box::new(move || Instant::now() >= budget_end)));
+        self.context.with(|ctx| self.drain_jobs(&ctx, budget_end));
+        self.runtime.set_interrupt_handler(None);
+        ran
     }
 
-    /// Invoke one fired timer's stored callback under a deadline.
+    /// Number of timers that came due but were deferred to the next
+    /// [`tick_timers`](Self::tick_timers) because the budget ran out.
+    pub fn deferred_timer_count(&self) -> usize {
+        self.deferred_timers.borrow().len()
+    }
+
+    /// Invoke one fired timer's stored callback under a fresh deadline.
     /// Exceptions are logged to the console buffer.
     fn fire_timer(&self, timer: FiredTimer) {
         let deadline = self.install_deadline();
@@ -192,7 +242,6 @@ impl JsEngine {
             }
             self.drain_jobs(&ctx, deadline);
         });
-        self.runtime.set_interrupt_handler(None);
     }
 
     /// Execute pending microtasks (promise continuations).
@@ -246,17 +295,20 @@ impl JsEngine {
     }
 
     /// Run pending jobs until the queue is empty, the job cap is hit, or
-    /// `deadline` passes. Logs a console warning when cut off.
+    /// `deadline` passes. Logs a console warning when cut off. A drain
+    /// that starts past its deadline runs nothing (rather than starting a
+    /// job the armed interrupt would abort at once), leaving the queue for
+    /// the next drain.
     fn drain_jobs(&self, ctx: &rquickjs::Ctx<'_>, deadline: Instant) -> usize {
         let mut n = 0;
-        while ctx.execute_pending_job() {
+        while Instant::now() < deadline && ctx.execute_pending_job() {
             n += 1;
             if n >= MAX_MICROTASKS_PER_DRAIN || Instant::now() >= deadline {
                 // Remaining jobs (if any) stay queued for the next drain.
                 self.console_buf.borrow_mut().push(ConsoleEntry {
                     level: ConsoleLevel::Warn,
                     message: format!(
-                        "microtask drain cut off after {n} jobs                          (runaway promise chain?)"
+                        "microtask drain cut off after {n} jobs (runaway promise chain?)"
                     ),
                 });
                 break;
@@ -831,9 +883,14 @@ mod tests {
             .eval("setTimeout(function(){ __after = 1; }, 0);")
             .unwrap();
         let start = Instant::now();
-        assert_eq!(engine.tick_timers(0.0), 2);
+        // The runaway callback spends the tick's budget; the second timer
+        // is deferred, not dropped.
+        assert_eq!(engine.tick_timers(0.0), 1);
         assert!(start.elapsed() < Duration::from_millis(2_000));
-        // The second timer still ran after the first was interrupted.
+        assert_eq!(engine.deferred_timer_count(), 1);
+        assert_eq!(engine.eval("__after").unwrap(), JsValue::Int(0));
+        assert_eq!(engine.tick_timers(0.0), 1);
+        assert_eq!(engine.deferred_timer_count(), 0);
         assert_eq!(engine.eval("__after").unwrap(), JsValue::Int(1));
         assert!(
             engine
@@ -842,6 +899,55 @@ mod tests {
                 .any(|e| e.level == ConsoleLevel::Error),
             "interrupt is logged"
         );
+    }
+
+    #[test]
+    fn many_slow_timers_share_one_tick_budget() {
+        let mut engine = JsEngine::new(8 * 1024 * 1024).unwrap();
+        engine.set_max_exec_ms(100);
+        // 50 timers of ~20 ms each: ~1 s of work if each got its own
+        // budget; one tick may only spend ~100 ms.
+        engine
+            .eval(
+                "var __done = 0; \
+                 function slow() { var t = Date.now(); while (Date.now() - t < 20) {} __done++; } \
+                 for (var i = 0; i < 50; i++) setTimeout(slow, 0);",
+            )
+            .unwrap();
+        let start = Instant::now();
+        let ran = engine.tick_timers(0.0);
+        let took = start.elapsed();
+        assert!(took < Duration::from_millis(400), "one tick took {took:?}");
+        assert!(ran < 50, "ran {ran}");
+        assert_eq!(engine.deferred_timer_count(), 50 - ran);
+        // Subsequent ticks finish the rest without losing any.
+        let mut total = ran;
+        for _ in 0..100 {
+            if engine.deferred_timer_count() == 0 {
+                break;
+            }
+            total += engine.tick_timers(0.0);
+        }
+        assert_eq!(total, 50);
+        assert_eq!(engine.eval("__done").unwrap(), JsValue::Int(50));
+    }
+
+    #[test]
+    fn cleared_deferred_timer_does_not_run() {
+        let mut engine = JsEngine::new(8 * 1024 * 1024).unwrap();
+        engine.set_max_exec_ms(30);
+        engine
+            .eval(
+                "var __late = 0; \
+                 setTimeout(function(){ var t = Date.now(); while (Date.now() - t < 60) {} }, 0); \
+                 var __tid = setTimeout(function(){ __late = 1; }, 0);",
+            )
+            .unwrap();
+        assert_eq!(engine.tick_timers(0.0), 1);
+        assert_eq!(engine.deferred_timer_count(), 1);
+        engine.eval("clearTimeout(__tid);").unwrap();
+        engine.tick_timers(0.0);
+        assert_eq!(engine.eval("__late").unwrap(), JsValue::Int(0));
     }
 
     #[test]
@@ -876,6 +982,29 @@ mod tests {
             .unwrap();
         engine.tick_timers(0.0);
         assert!(engine.console_output().iter().any(|e| e.message == "ran"));
+    }
+
+    #[test]
+    fn memory_limit_is_enforced() {
+        // QuickJS-NG checks `malloc_limit` in `js_malloc_rt` itself, so
+        // the cap holds under the `rust-alloc` allocator too.
+        let mut engine = JsEngine::new(8 * 1024 * 1024).unwrap();
+        // Bound the test if the limit ever stops working.
+        engine.set_max_exec_ms(3_000);
+        let start = Instant::now();
+        let result = engine.eval("var a = []; for (;;) a.push(new Array(65536).fill(1.5));");
+        let err = result.expect_err("allocation past the limit must throw");
+        assert!(
+            err.message.contains("out of memory"),
+            "expected an out-of-memory error, got {err}"
+        );
+        assert!(
+            start.elapsed() < Duration::from_millis(2_500),
+            "hit the time limit instead"
+        );
+        // Releasing the garbage leaves the engine usable.
+        engine.eval("a = null;").unwrap();
+        assert_eq!(engine.eval("[1, 2, 3].length").unwrap(), JsValue::Int(3));
     }
 
     #[test]

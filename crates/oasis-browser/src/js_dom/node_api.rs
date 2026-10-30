@@ -13,8 +13,9 @@ use std::rc::Rc;
 
 use oasis_js::rquickjs::{Ctx, Function, Result as JsResult};
 
-use super::serialize::{deep_copy_node, serialize_node};
+use super::serialize::{deep_copy_capped, serialize_node};
 use super::{NO_NODE, SharedDirty, SharedDoc, mark_dirty};
+use crate::html::MAX_DOM_DEPTH;
 use crate::html::dom::{Document, NodeId, NodeKind};
 
 /// Node ids whose arena slots were freed by a binding since the JS side
@@ -34,6 +35,35 @@ pub(super) const INSERT_OK: i32 = 0;
 pub(super) const INSERT_HIERARCHY_ERROR: i32 = -1;
 /// A node id was out of range.
 pub(super) const INSERT_INVALID: i32 = -2;
+/// The insertion would nest a node deeper than [`MAX_DOM_DEPTH`].
+pub(super) const INSERT_TOO_DEEP: i32 = -3;
+
+/// Number of ancestors of `id` (0 for a tree root, attached or not).
+fn depth(doc: &Document, id: NodeId) -> usize {
+    let mut d = 0;
+    let mut cur = id;
+    while let Some(p) = doc.nodes[cur].parent {
+        d += 1;
+        // A well-formed tree is never deeper than the arena.
+        if d > doc.nodes.len() {
+            break;
+        }
+        cur = p;
+    }
+    d
+}
+
+/// Levels below `id` in its subtree (0 for a leaf). Iterative, so a
+/// malformed deep subtree can't overflow the stack here either.
+fn subtree_height(doc: &Document, id: NodeId) -> usize {
+    let mut max = 0;
+    let mut stack = vec![(id, 0usize)];
+    while let Some((n, h)) = stack.pop() {
+        max = max.max(h);
+        stack.extend(doc.nodes[n].children.iter().map(|&c| (c, h + 1)));
+    }
+    max
+}
 
 /// Convert a JS-supplied node id into a valid arena index.
 fn valid(doc: &Document, nid: i32) -> Option<NodeId> {
@@ -90,6 +120,13 @@ fn is_inclusive_ancestor(doc: &Document, ancestor: NodeId, node: NodeId) -> bool
 /// `reference` is `None` or not a child of `parent`). The node is
 /// detached from its old parent first — without freeing its subtree —
 /// and a document fragment contributes its children instead of itself.
+///
+/// Refused with [`INSERT_TOO_DEEP`] when a moved node's subtree would
+/// reach deeper than [`MAX_DOM_DEPTH`] below its tree root: every
+/// render pass recurses per DOM level, so an unbounded script-built
+/// chain (`for (;;) { c.appendChild(d); c = d }`) would otherwise
+/// overflow the UI thread's stack. Detached trees are measured from
+/// their own root, and attaching them is checked again.
 pub(super) fn insert_node(
     doc: &mut Document,
     parent: NodeId,
@@ -99,12 +136,18 @@ pub(super) fn insert_node(
     if node == doc.root || is_inclusive_ancestor(doc, node, parent) {
         return INSERT_HIERARCHY_ERROR;
     }
+    let is_fragment = node_type(doc, node) == DOCUMENT_FRAGMENT_NODE;
+    // Fragment children land where the fragment would, one level up.
+    let height = subtree_height(doc, node).saturating_sub(usize::from(is_fragment));
+    if depth(doc, parent) + 1 + height > MAX_DOM_DEPTH {
+        return INSERT_TOO_DEEP;
+    }
     // Inserting a node before itself means "before its next sibling".
     let mut reference = reference;
     if reference == Some(node) {
         reference = next_sibling(doc, node);
     }
-    let moving: Vec<NodeId> = if node_type(doc, node) == DOCUMENT_FRAGMENT_NODE {
+    let moving: Vec<NodeId> = if is_fragment {
         doc.nodes[node].children.clone()
     } else {
         vec![node]
@@ -167,6 +210,12 @@ fn collect_subtree(doc: &Document, id: NodeId, out: &mut Vec<NodeId>) {
 
 /// Parse `html` as a body fragment and deep-copy its nodes under
 /// `parent` (appended in order).
+///
+/// The copy respects [`MAX_DOM_DEPTH`] measured from `parent`'s tree
+/// root: markup that would nest deeper is flattened the way the parser
+/// flattens past its own cap (see [`deep_copy_capped`]), so repeated
+/// `innerHTML` writes on the deepest node can't grow the tree without
+/// bound.
 pub(super) fn parse_into(doc: &mut Document, parent: NodeId, html: &str) {
     use crate::html::tokenizer::Tokenizer;
     use crate::html::tree_builder::TreeBuilder;
@@ -177,9 +226,19 @@ pub(super) fn parse_into(doc: &mut Document, parent: NodeId, html: &str) {
         .body()
         .map(|b| frag.nodes[b].children.clone())
         .unwrap_or_default();
+    let levels = MAX_DOM_DEPTH.saturating_sub(depth(doc, parent));
+    if levels == 0 {
+        // `parent` already sits at the cap: keep the markup's text as a
+        // single leaf, the same one level a `textContent` write adds.
+        let text: String = src_children.iter().map(|&c| frag.text_content(c)).collect();
+        if !text.is_empty() {
+            let id = doc.add_node(NodeKind::Text(text));
+            doc.append_child(parent, id);
+        }
+        return;
+    }
     for &src_child in &src_children {
-        let new_id = deep_copy_node(&frag, doc, src_child);
-        doc.append_child(parent, new_id);
+        deep_copy_capped(&frag, doc, src_child, parent, levels);
     }
 }
 
