@@ -46,6 +46,9 @@ pub enum CalcError {
     /// Expression nesting exceeds the maximum depth.
     #[error("Expression too deeply nested (max {MAX_DEPTH} levels)")]
     TooDeep,
+    /// The result is infinite or not a number (`0^-1`, `9^999`, ...).
+    #[error("Result is undefined or out of range")]
+    NotFinite,
 }
 
 /// Maximum recursion depth for the expression parser.
@@ -257,8 +260,12 @@ impl Parser {
 
         if let Some(Token::Power) = self.peek() {
             self.advance();
-            // Right-associative: recurse into parse_power.
+            // Right-associative: recurse into parse_power. Each level
+            // counts toward MAX_DEPTH so `2^2^2^...` can't overflow the
+            // stack.
+            self.enter()?;
             let exp = self.parse_power()?;
+            self.leave();
             Ok(base.powf(exp))
         } else {
             Ok(base)
@@ -269,7 +276,11 @@ impl Parser {
     fn parse_unary(&mut self) -> Result<f64, CalcError> {
         if let Some(Token::Minus) = self.peek() {
             self.advance();
+            // Counted like a paren level so `-----...5` can't overflow
+            // the stack.
+            self.enter()?;
             let val = self.parse_unary()?;
+            self.leave();
             Ok(-val)
         } else {
             self.parse_primary()
@@ -320,7 +331,21 @@ pub fn evaluate(expr: &str) -> Result<f64, CalcError> {
         return Err(CalcError::EmptyExpression);
     }
 
-    let tokens = tokenize(trimmed)?;
+    evaluate_tokens(tokenize(trimmed)?)
+}
+
+/// Evaluate `rest` with the exact value `first` standing in front of it
+/// (chaining from a previous result without re-parsing its rounded
+/// display string).
+fn evaluate_after(first: f64, rest: &str) -> Result<f64, CalcError> {
+    let mut tokens = vec![Token::Number(first)];
+    tokens.extend(tokenize(rest)?);
+    evaluate_tokens(tokens)
+}
+
+/// Parse and evaluate a token list; non-finite results are errors (they
+/// would display as `Infinity` / `NaN`, which can't be typed back in).
+fn evaluate_tokens(tokens: Vec<Token>) -> Result<f64, CalcError> {
     if tokens.is_empty() {
         return Err(CalcError::EmptyExpression);
     }
@@ -335,6 +360,9 @@ pub fn evaluate(expr: &str) -> Result<f64, CalcError> {
         ));
     }
 
+    if !result.is_finite() {
+        return Err(CalcError::NotFinite);
+    }
     Ok(result)
 }
 
@@ -375,6 +403,11 @@ pub struct CalculatorApp {
     memory: f64,
     /// Result of the last successful evaluation.
     last_result: Option<f64>,
+    /// Set when an operator started the entry from `last_result`: the
+    /// exact value and the length of its display text at the start of
+    /// `input_buffer`. While that prefix is intact, evaluation uses the
+    /// exact value instead of re-parsing the rounded text.
+    chained: Option<(usize, f64)>,
     /// Current error message (cleared on next input).
     error_message: Option<String>,
     /// Keypad cursor: index into [`keypad::KEYS`] (d-pad navigation).
@@ -407,6 +440,7 @@ impl CalculatorApp {
             history: Vec::new(),
             memory: 0.0,
             last_result: None,
+            chained: None,
             error_message: None,
             cursor: keypad::index_of(CalcKey::Digit('5')).unwrap_or(0),
             cursor_visible: false,
@@ -462,6 +496,7 @@ impl CalculatorApp {
         if self.input_buffer.is_empty() {
             if let Some(result) = self.last_result {
                 self.input_buffer = format_number(result);
+                self.chained = Some((self.input_buffer.len(), result));
             } else {
                 self.input_buffer.push('0');
             }
@@ -518,7 +553,11 @@ impl CalculatorApp {
             return;
         }
 
-        match evaluate(&self.input_buffer) {
+        let outcome = match self.chained_operand() {
+            Some((len, value)) => evaluate_after(value, &self.input_buffer[len..]),
+            None => evaluate(&self.input_buffer),
+        };
+        match outcome {
             Ok(result) => {
                 let entry = CalcHistoryEntry {
                     expression: self.input_buffer.clone(),
@@ -530,6 +569,7 @@ impl CalculatorApp {
                 self.history_dirty = true;
                 self.display = format_number(result);
                 self.last_result = Some(result);
+                self.chained = None;
                 self.error_message = None;
                 self.input_buffer.clear();
             },
@@ -541,8 +581,21 @@ impl CalculatorApp {
         self.refresh_lines();
     }
 
+    /// The exact chained value and its prefix length, if the entry still
+    /// starts with that value's unedited display text.
+    fn chained_operand(&self) -> Option<(usize, f64)> {
+        let (len, value) = self.chained?;
+        let prefix = self.input_buffer.get(..len)?;
+        let extended = self.input_buffer[len..]
+            .chars()
+            .next()
+            .is_some_and(|c| c.is_ascii_digit() || c == '.');
+        (prefix == format_number(value) && !extended).then_some((len, value))
+    }
+
     /// Clear the current input (C).
     pub fn clear(&mut self) {
+        self.chained = None;
         self.input_buffer.clear();
         self.display = "0".to_string();
         self.error_message = None;
@@ -553,6 +606,7 @@ impl CalculatorApp {
     /// Clear input, last result and history (AC). The cleared history is
     /// persisted on the next [`App::apply_vfs_ops`].
     pub fn clear_all(&mut self) {
+        self.chained = None;
         self.input_buffer.clear();
         self.display = "0".to_string();
         if !self.history.is_empty() {
@@ -582,7 +636,12 @@ impl CalculatorApp {
     /// number, otherwise the last result.
     fn memory_operand(&self) -> Option<f64> {
         if !self.input_buffer.is_empty() {
-            return self.input_buffer.parse::<f64>().ok().or(self.last_result);
+            return self
+                .input_buffer
+                .parse::<f64>()
+                .ok()
+                .filter(|v| v.is_finite())
+                .or(self.last_result);
         }
         self.last_result
     }
@@ -621,8 +680,12 @@ impl CalculatorApp {
 
     /// Add the current value to memory (M+).
     pub fn memory_add(&mut self) {
-        if let Some(v) = self.memory_operand() {
-            self.memory += v;
+        // An overflowing sum would leave `inf` in memory, which MR can't
+        // insert as a typeable number: keep the old value instead.
+        if let Some(sum) = self.memory_operand().map(|v| self.memory + v)
+            && sum.is_finite()
+        {
+            self.memory = sum;
         }
         self.refresh_lines();
     }
@@ -647,12 +710,7 @@ impl CalculatorApp {
             return;
         }
 
-        // Toggle leading minus on the whole buffer.
-        if self.input_buffer.starts_with('-') {
-            self.input_buffer.remove(0);
-        } else {
-            self.input_buffer.insert(0, '-');
-        }
+        toggle_last_sign(&mut self.input_buffer);
 
         if self.input_buffer.is_empty() {
             self.display = "0".to_string();
@@ -675,6 +733,7 @@ impl CalculatorApp {
             (Some(i), false) => (i + 1 < self.history.len()).then_some(i + 1),
         };
         self.error_message = None;
+        self.chained = None;
         match next {
             Some(i) => {
                 self.input_buffer = self.history[i].expression.clone();
@@ -809,6 +868,50 @@ impl CalculatorApp {
     /// Rebuild the `content.lines` from the current state.
     fn refresh_lines(&mut self) {
         self.content.lines = self.format_display_lines();
+    }
+}
+
+/// Toggle the sign of the last number in `buf` (`5+3` -> `5+-3`): remove
+/// the unary minus in front of it, or insert one. With no trailing number
+/// (`5*`), toggle a unary minus at the end; after `)` negate the group.
+fn toggle_last_sign(buf: &mut String) {
+    let mut start = buf
+        .rfind(|c: char| !(c.is_ascii_digit() || c == '.'))
+        .map_or(0, |p| p + 1);
+    if start == buf.len() && buf.ends_with(')') {
+        // Negate the whole trailing `( ... )` group.
+        let mut depth = 0usize;
+        let mut open = None;
+        for (i, c) in buf.char_indices().rev() {
+            match c {
+                ')' => depth += 1,
+                '(' => {
+                    depth = depth.saturating_sub(1);
+                    if depth == 0 {
+                        open = Some(i);
+                        break;
+                    }
+                },
+                _ => {},
+            }
+        }
+        let Some(open) = open else {
+            return;
+        };
+        start = open;
+    }
+    // A '-' right before `start` is unary when it opens the entry or
+    // follows an operator / '('.
+    let unary_minus_before = start > 0
+        && buf[..start].ends_with('-')
+        && buf[..start - 1]
+            .chars()
+            .last()
+            .is_none_or(|c| "+-*/%^(".contains(c));
+    if unary_minus_before {
+        buf.remove(start - 1);
+    } else {
+        buf.insert(start, '-');
     }
 }
 
@@ -1415,6 +1518,85 @@ mod tests {
         app.push_operator('-');
         // Should replace + with -.
         assert_eq!(app.input_buffer, "5-");
+    }
+
+    #[test]
+    fn non_finite_results_are_errors() {
+        assert_eq!(evaluate("0^-1"), Err(CalcError::NotFinite));
+        assert_eq!(evaluate("9^999"), Err(CalcError::NotFinite));
+        assert_eq!(evaluate("(0-1)^0.5"), Err(CalcError::NotFinite));
+        let mut app = CalculatorApp::new("/apps/calc");
+        for c in "9^999".chars() {
+            app.press_key(CalculatorApp::key_for_char(c).expect("key"));
+        }
+        app.evaluate_input();
+        assert!(app.error_message.is_some());
+        assert!(app.last_result.is_none(), "no Infinity to chain from");
+    }
+
+    #[test]
+    fn memory_add_never_stores_infinity() {
+        let mut app = CalculatorApp::new("/apps/calc");
+        app.memory = f64::MAX;
+        app.last_result = Some(f64::MAX);
+        app.memory_add();
+        assert!(app.memory.is_finite());
+        app.memory_recall();
+        assert!(evaluate(&app.input_buffer).is_ok());
+    }
+
+    #[test]
+    fn long_unary_and_power_chains_hit_the_depth_limit() {
+        let minus = format!("{}5", "-".repeat(200_000));
+        assert_eq!(evaluate(&minus), Err(CalcError::TooDeep));
+        let power = format!("1{}", "^1".repeat(200_000));
+        assert_eq!(evaluate(&power), Err(CalcError::TooDeep));
+        // Modest chains still work.
+        assert_eq!(evaluate("2^3^2").ok(), Some(512.0));
+        assert_eq!(evaluate("----5").ok(), Some(5.0));
+    }
+
+    #[test]
+    fn negate_toggles_only_the_last_number() {
+        let mut app = CalculatorApp::new("/apps/calc");
+        for c in "5+3".chars() {
+            app.press_key(CalculatorApp::key_for_char(c).expect("key"));
+        }
+        app.negate();
+        assert_eq!(app.input_buffer, "5+-3");
+        app.negate();
+        assert_eq!(app.input_buffer, "5+3");
+        let mut s = "5-3".to_string();
+        toggle_last_sign(&mut s);
+        assert_eq!(s, "5--3");
+        toggle_last_sign(&mut s);
+        assert_eq!(s, "5-3");
+        let mut s = "2*".to_string();
+        toggle_last_sign(&mut s);
+        assert_eq!(s, "2*-");
+        let mut s = "4*(1+(2))".to_string();
+        toggle_last_sign(&mut s);
+        assert_eq!(s, "4*-(1+(2))");
+        toggle_last_sign(&mut s);
+        assert_eq!(s, "4*(1+(2))");
+    }
+
+    #[test]
+    fn chaining_from_a_result_uses_the_exact_value() {
+        let mut app = CalculatorApp::new("/apps/calc");
+        for c in "1/3=*3=".chars() {
+            app.press_key(CalculatorApp::key_for_char(c).expect("key"));
+        }
+        assert_eq!(app.last_result, Some(1.0));
+        // Editing the chained number falls back to the typed text.
+        for c in "1/3=+".chars() {
+            app.press_key(CalculatorApp::key_for_char(c).expect("key"));
+        }
+        app.backspace();
+        app.push_digit('1');
+        assert_eq!(app.input_buffer, "0.33333333331");
+        app.evaluate_input();
+        assert_eq!(app.last_result, Some(0.33333333331));
     }
 
     #[test]
