@@ -112,7 +112,7 @@ command on a machine without ffmpeg dev libraries.
 |---------|---------|-------------|
 | `javascript` | Yes | QuickJS-NG JavaScript engine for the browser |
 | `video-decode-ffmpeg` | Yes | Video decode via system ffmpeg (Main/High H.264 profiles); needs ffmpeg dev libs + `pkg-config` + libclang |
-| `video-decode` | No | Software decode via openh264 + symphonia (Baseline profile only); no ffmpeg needed. Use instead of `video-decode-ffmpeg`, not together |
+| `video-decode` | No | Software decode via openh264 + symphonia (Baseline profile only); no ffmpeg needed. Use instead of `video-decode-ffmpeg` (with both on, ffmpeg is the decoder) |
 | `skin-dev` | No | Polls the active external skin directory every second and hot-reloads it on change: `cargo run -p oasis-app --features skin-dev -- skins/paper` |
 | `mcp` | No | Compiles in the MCP control server so a local agent can drive the shell; also needs runtime opt-in (`OASIS_MCP=1` or `mcp-server start`). See [mcp-server.md](mcp-server.md) |
 
@@ -402,7 +402,7 @@ lines for CI assertions.
 
 ```
 oasis-os/
-  crates/        50 crates: 40 workspace members, oasis-backend-psp (excluded),
+  crates/        51 crates: 41 workspace members, oasis-backend-psp (excluded),
                  9 standalone PSP crates
   skins/         the 17 skin directories (every built-in skin)
   examples/      runnable examples (see examples/README.md)

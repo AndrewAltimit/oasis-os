@@ -43,6 +43,9 @@ cargo deny check
 # PSP backend / overlay PRX (not workspace members; nightly + cargo-psp)
 cd crates/oasis-backend-psp && RUST_PSP_BUILD_STD=1 cargo psp --release
 cd crates/oasis-plugin-psp && RUST_PSP_BUILD_STD=1 cargo psp --release
+# ... or in the psp-build container (pspdev + pinned nightly + cargo-psp), then boot-test
+docker compose --profile psp-build run --rm psp-build   bash -c 'cd crates/oasis-backend-psp && RUST_PSP_BUILD_STD=1 cargo psp --release'
+scripts/psp-smoke-test.sh
 
 # UE5 FFI shared library
 cargo build --profile release-ffi -p oasis-ffi
@@ -56,11 +59,9 @@ cargo run -p oasis-app --bin oasis-screenshot
 
 ## CI Pipeline
 
-All steps run via `docker compose --profile ci run --rm rust-ci` on self-hosted runners.
+CI runs on self-hosted runners; the Rust steps run via `docker compose --profile ci run --rm rust-ci`. The step-by-step order of `main-ci.yml` (push to `main`) and of the checks in `pr-validation.yml` is kept in one place, [CLAUDE.md § CI Pipeline Order](CLAUDE.md#ci-pipeline-order).
 
-**`main-ci.yml` (push to `main`):** format check -> clippy -> `oasis-app` feature-combination check -> non-default feature-set clippy (`oasis-browser`, `oasis-core`, `oasis-video`, `oasis-app`, `oasis-ffi`) -> nightly clippy (advisory) -> doc build -> markdown link check -> test (cargo-nextest + doc-tests) -> release build -> screenshot regression -> cargo-deny -> benchmarks -> code coverage (advisory) -> rust-psp pin check (crates, workflows, `docker/psp-build.Dockerfile`) -> PSP EBOOT / overlay PRX / recovery EBOOT builds (rustc warnings are errors) -> PPSSPP headless smoke test; then release binaries and the GitHub Pages deploy (WASM).
-
-**`pr-validation.yml` (pull requests):** the same checks (with a benchmark regression gate), plus:
+**`pr-validation.yml` (pull requests):** a subset of the `main-ci.yml` checks (with a benchmark regression gate), plus:
 
 1. Claude Code security review and Claude Code quality review
 2. OpenRouter general review (advisory, `continue-on-error`)
@@ -81,7 +82,7 @@ Fork PRs are blocked from the self-hosted runners (fork guard).
 - **Formatting:** `cargo fmt` with `rustfmt.toml` -- 4-space indent, Unix newlines, `fn_params_layout = "Tall"`, `match_block_trailing_comma = true`
 - **Linting:** Clippy warnings are CI errors (`-D warnings`, all targets). Workspace lints: `clone_on_ref_ptr`, `dbg_macro`, `todo`, `unimplemented` = warn; `unsafe_op_in_unsafe_fn` = warn; `unwrap_used` = **deny** (allowed in `#[test]` / `#[cfg(test)]` code via `clippy.toml`)
 - **Unsafe:** All unsafe blocks require `// SAFETY:` comments. Unsafe is limited to FFI boundaries, SDL texture handles, and PSP system calls.
-- **Tests:** Unit tests live in-module (`#[cfg(test)] mod tests`); a few crates also have `tests/` integration suites and criterion `benches/`. Desktop-shell user-flow changes get an e2e scenario in `crates/oasis-app/tests/e2e_*.rs` ([docs/testing.md](docs/testing.md)). About 9,000 `#[test]` functions across the repository.
+- **Tests:** Unit tests live in-module (`#[cfg(test)] mod tests`); many crates also have `tests/` integration suites and some have criterion `benches/`. Desktop-shell user-flow changes get an e2e scenario in `crates/oasis-app/tests/e2e_*.rs` ([docs/testing.md](docs/testing.md)). About 9,000 `#[test]` functions across the repository.
 - **Docs:** Update the docs that describe the code you change (see the [docs index](docs/README.md)); CI's markdown link check fails on broken relative links.
 - **License:** Dual-licensed Unlicense + MIT
 
@@ -137,6 +138,7 @@ To re-enable at your own risk: set `CODEX_ENABLED=true` in your environment.
 
 `docker-compose.yml` profiles:
 - **`ci`** -- rust-ci container (rust:1.99-slim + cmake + X11/audio dev libs + nightly + cargo-deny)
+- **`psp-build`** -- PSP build environment (`docker/psp-build.Dockerfile`: pspdev toolchain + pinned nightly + cargo-psp)
 - **`psp`** -- PPSSPP emulator (multi-stage build, NVIDIA GPU passthrough, X11 forwarding)
 - **`services`** -- all MCP server containers
 - **`memory`** -- AgentCore memory service (also included in `services`)
