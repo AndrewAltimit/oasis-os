@@ -208,6 +208,7 @@ Observation
 | `frame_text()`, `frame_text_calls()`, `text_drawn_contains(s)` | Strings painted in the last presented frame, including window content drawn outside the scene graph |
 | `sdi_texts()`, `sdi_text_contains(s)` | Text of visible SDI objects |
 | `audio()`, `audio_fed()` | `AudioLog`: PCM chunks (with track / channels / rate), bytes, SFX samples, tracks opened / unloaded, volume |
+| `finish_audio_track()` | Make the fake output stop reporting the playing track (end of track, e.g. to test playlist auto-advance) |
 | `resource_counts()` | `ResourceCounts`: live backend textures and render targets, SDI objects, windows, runners, open audio tracks (leak checks) |
 | `save_png(path)` | Dump the framebuffer when debugging a failure |
 | `shutdown()` | Shut down like the binary on exit (flushes the settings file) |

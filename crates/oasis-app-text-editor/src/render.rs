@@ -330,14 +330,12 @@ impl TextEditorApp {
         let status_left = self.status_left(true);
         backend.draw_text(&status_left, cx + 6, status_y + 4, 11, status_fg)?;
 
+        let left_w = backend.measure_text(&status_left, 11);
         let pos_w = backend.measure_text(&position, 11);
-        backend.draw_text(
-            &position,
-            cx + cw as i32 - pos_w as i32 - 8,
-            status_y + 4,
-            11,
-            status_fg,
-        )?;
+        let pos_x = cx + cw as i32 - pos_w as i32 - 8;
+        if status_position_fits(cx + 6, left_w, pos_x) {
+            backend.draw_text(&position, pos_x, status_y + 4, 11, status_fg)?;
+        }
 
         // Drop-down must render ABOVE the text area and status bar.
         // Draw it last so it naturally layers on top without needing
@@ -642,6 +640,12 @@ impl TextEditorApp {
 
         let position = self.status_position();
         let right_x = (sw as i32) - (position.chars().count() as i32 * 6) - 8;
+        let left_w = status_left.chars().count() as u32 * 6;
+        let position = if status_position_fits(6, left_w, right_x) {
+            position
+        } else {
+            String::new()
+        };
         text(
             sdi,
             "np_status_right",
@@ -895,6 +899,21 @@ fn rect_visible(
     }
 }
 
+/// Gap kept between the left status text and the right-aligned
+/// "Ln / Col" readout.
+const STATUS_GAP: i32 = 8;
+
+/// Whether the "Ln / Col" readout at `pos_x` clears the left status text
+/// (`left_w` px wide from `left_x`). A long prompt ("Unsaved changes:
+/// [S]ave / [D]iscard / [Esc] Cancel", a Save-as path) wins: the readout
+/// is dropped instead of being drawn on top of it.
+fn status_position_fits(left_x: i32, left_w: u32, pos_x: i32) -> bool {
+    left_x
+        .saturating_add(left_w as i32)
+        .saturating_add(STATUS_GAP)
+        <= pos_x
+}
+
 #[allow(clippy::too_many_arguments)]
 fn text(
     sdi: &mut SdiRegistry,
@@ -976,6 +995,54 @@ mod tests {
             fills.iter().all(|f| f.3 != white || f.1 < 18),
             "no white fills below the menu bar"
         );
+    }
+
+    /// Texts drawn on the status strip row (`y`), as `(text, x)`.
+    fn status_texts(rec: &RecordingBackend, y: i32) -> Vec<(String, i32)> {
+        rec.commands()
+            .iter()
+            .filter_map(|c| match c {
+                DrawCommand::DrawText { text, x, y: ty, .. } if *ty == y => {
+                    Some((text.clone(), *x))
+                },
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// The unsaved-changes prompt used to be drawn under the right-aligned
+    /// "Ln / Col" readout in a narrow window. The prompt wins: the readout
+    /// is dropped while it would overlap, and comes back with room.
+    #[test]
+    fn unsaved_prompt_does_not_overlap_the_position_readout() {
+        let at = ActiveTheme::default();
+        let mut app = TextEditorApp::open_file("/a.txt", "words");
+        app.mode = crate::EditorMode::ConfirmDiscard;
+        let (w, h) = (300, 200);
+        let status_y = h as i32 - 18 + 4;
+
+        let mut rec = RecordingBackend::new(w, h);
+        app.draw_windowed(0, 0, w, h, &mut rec, &at).expect("draw");
+        let row = status_texts(&rec, status_y);
+        assert!(
+            row.iter().any(|(t, _)| t.starts_with("Unsaved changes")),
+            "{row:?}"
+        );
+        assert!(
+            row.iter().all(|(t, _)| !t.starts_with("Ln ")),
+            "the readout overlapped the prompt: {row:?}"
+        );
+
+        // A wide window has room for both, side by side.
+        let mut rec = RecordingBackend::new(900, h);
+        app.draw_windowed(0, 0, 900, h, &mut rec, &at)
+            .expect("draw");
+        let row = status_texts(&rec, status_y);
+        let prompt = row.iter().find(|(t, _)| t.starts_with("Unsaved")).unwrap();
+        let pos = row.iter().find(|(t, _)| t.starts_with("Ln ")).unwrap();
+        let prompt_end =
+            prompt.1 + oasis_types::backend::SdiCore::measure_text(&rec, &prompt.0, 11) as i32;
+        assert!(prompt_end < pos.1, "{row:?}");
     }
 
     #[test]

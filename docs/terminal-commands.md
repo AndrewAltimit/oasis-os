@@ -268,7 +268,7 @@ VFS metadata only — there is no real Unix permission model behind these.
 | `theme` | `theme [show\|colors]` | Show the current theme (skin name, resolution, base colors), from `/var/theme/current`, which the shell keeps up to date. |
 | `notify` | `notify [--level info\|success\|warning\|error] <message>` | Show a notification: queues `/var/notify/message`, which the shell shows as a toast. |
 | `screenshot` | `screenshot [path]` | Save the next presented frame to a VFS path (default `/tmp/screenshot.bmp`; PNG when the path ends in `.png`, else BMP). Queues `/var/screenshot/request`; the shell prints the result. |
-| `open` | `open <app> [/path/to/file]` | Open (or raise) the window of any registered app by title, case-insensitive, including apps without a dashboard tile (`open system monitor`); a trailing absolute path is opened in it (`open Photo Viewer /home/user/photos/a.png`; only apps that open files accept one). Queues `open <app>\t<file>` on `/var/wm/request`; the shell reports unknown apps in the terminal. |
+| `open` | `open <app> [file]` | Open (or raise) the window of any registered app by title, case-insensitive, including apps without a dashboard tile (`open system monitor`); a trailing file is opened in it (`open Photo Viewer /home/user/photos/a.png`; only apps that open files accept one). The file may be relative to the working directory (`open Text Editor notes.txt`, `../a.md`): the last argument is a file when it contains `/` or `.` or names an existing entry in the cwd, otherwise it is part of the title. Queues `open <app>\t<file>` on `/var/wm/request`; the shell reports unknown apps in the terminal. |
 
 ## Skin management (`oasis-core/src/terminal/skin_commands.rs`)
 
@@ -309,7 +309,7 @@ Skin resolution matches `skin lint` (built-in name, directory path, or `skins/<n
 
 | Command | Usage | Description |
 | --- | --- | --- |
-| `music` | `music [status\|play [file]\|pause\|resume\|stop\|next\|prev\|vol [0-100]\|list\|repeat <off\|all\|one>\|shuffle]` | Control music playback: queues `MediaRequest` lines on `/var/audio/request` and prints `/var/audio/status` (see [`audio-engine.md`](audio-engine.md#music-ipc-varaudio)). `play <file>` plays a VFS file (relative to the cwd) and adds it to the playlist; `play` alone starts the current entry or resumes. Serviced by the desktop shell only; elsewhere `status` prints "(audio subsystem not initialized)". |
+| `music` | `music [status\|play [file]\|pause\|resume\|stop\|next\|prev\|vol [0-100]\|list\|repeat <off\|all\|one>\|shuffle]` | Control music playback: queues `MediaRequest` lines on `/var/audio/request` and prints `/var/audio/status` (see [`audio-engine.md`](audio-engine.md#music-ipc-varaudio)). `play <file>` plays a VFS file (relative to the cwd) and adds it to the playlist; `play` alone starts the current entry or resumes. `next` / `prev` while paused select the new track and stay paused; a finished track advances per repeat/shuffle. Serviced by the desktop shell and the WASM host; elsewhere `status` prints "(audio subsystem not initialized)". |
 | `radio` | `radio [status\|stations\|tune <name\|index>\|stop\|vol [0-100]\|fav <index>\|genre [name]\|info]` | Control internet radio. |
 
 ## Documentation (`oasis-terminal/src/doc_commands.rs`)
@@ -354,12 +354,13 @@ the wire protocol and PSK auth.
 
 ## File transfer (`oasis-core/src/transfer/mod.rs`)
 
-The FTP-like transfer server lives in `oasis-core`, not `oasis-net`; see
-[networking.md](networking.md) for the protocol.
+The FTP-like transfer server lives in `oasis-net` (`oasis_net::ftp`, feature
+`vfs`); the commands live in `oasis-core`. See [networking.md](networking.md)
+for the protocol.
 
 | Command | Usage | Description |
 | --- | --- | --- |
-| `ftp` | `ftp [start [port] [--password <pass>]\|stop\|status]` | Manage the file transfer server. |
+| `ftp` | `ftp [start [port] [--password <pass>]\|stop\|status]` | Manage the file transfer server. `start` / `stop` signal the host (`CommandSignal::FtpToggle`), which owns the server and prints the outcome. `status` reads the host's network state (`/system/state/net`, `NetState`): `FTP: listening on port N` or `FTP: inactive`; on a host that publishes no network state it says the status is not available. |
 | `push` | `push <source> <dest>` | Copy a file to a transfer staging area. |
 | `pull` | `pull <source> <dest>` | Copy a file from a transfer staging area. |
 
@@ -398,7 +399,11 @@ see [mcp-server.md](mcp-server.md).
 
 | Command | Usage | Description |
 | --- | --- | --- |
-| `plugin` | `plugin [list\|load <name>\|unload <name>]` | Manage plugins. |
+| `plugin` | `plugin [list\|load <name>\|unload <name>]` | Manage plugins through the host's plugin manager (VFS IPC, `oasis_types::ipc`). `list` prints the host-published `/var/plugin/status` (`<name> (<version>) [registered\|active\|stopped] <description>` per plugin). `load` / `unload` append a `PluginRequest` line to `/var/plugin/request`; the desktop shell applies it the same frame and prints the outcome. `unload` shuts the plugin down and removes its commands, apps and SDI objects but keeps it known; `load` initializes a registered or unloaded plugin again. Plugins are statically linked, so `load` of an unknown name says there is no dynamic loader. On a host without a plugin manager (no status file) every subcommand says plugin management is not available. |
+
+The example plugins add `hello [name]`, `note [list|read <name>|write <name>
+<text>]` and `pclock [show|hide]` (shows / hides the clock-widget plugin's
+on-screen clock through `/var/pclock/visible`).
 
 ## Agent and CI (`oasis-core/src/terminal/agent_commands.rs`)
 

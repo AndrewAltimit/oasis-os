@@ -80,6 +80,39 @@ fn close_button_on_modified_text_editor_prompts_instead_of_discarding() {
     assert_eq!(h.mode(), Mode::Dashboard);
 }
 
+/// The unsaved-changes prompt on the editor's status strip used to be
+/// drawn underneath the right-aligned "Ln / Col" readout at 480x272. The
+/// two texts must not overlap on screen.
+#[test]
+fn unsaved_changes_prompt_does_not_overlap_line_column_readout() {
+    let mut opts = oasis_app::harness::HarnessOptions::new("classic");
+    opts.resolution = Some((480, 272));
+    let mut h = Harness::with_options(opts).unwrap();
+    h.settle();
+    assert!(h.click_app_icon("Text Editor"));
+    h.settle();
+    h.type_text("draft");
+    h.settle();
+    assert!(h.close_window("Text Editor"));
+    h.settle();
+    h.render_now();
+    let texts = h.frame_text_calls().to_vec();
+    let prompt = texts
+        .iter()
+        .find(|t| t.text.starts_with("Unsaved changes"))
+        .unwrap_or_else(|| panic!("prompt drawn: {:?}", h.frame_text()));
+    let width = |t: &oasis_app::headless::DrawnText| {
+        oasis_core::backend::bitmap_measure_text(&t.text, t.font_size) as i32
+    };
+    let line_h = i32::from(prompt.font_size);
+    for pos in texts.iter().filter(|t| t.text.starts_with("Ln ")) {
+        let overlaps = (pos.y - prompt.y).abs() < line_h
+            && pos.x < prompt.x + width(prompt)
+            && prompt.x < pos.x + width(pos);
+        assert!(!overlaps, "{pos:?} overlaps {prompt:?}");
+    }
+}
+
 /// `wm close <id>` (the terminal command's VFS request) asks a modified
 /// Text Editor first, like the close button; `wm close --force <id>`
 /// closes it without the prompt.

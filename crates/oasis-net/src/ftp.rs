@@ -22,10 +22,6 @@ use oasis_vfs::Vfs;
 /// Default FTP server port.
 pub const DEFAULT_FTP_PORT: u16 = 2121;
 
-/// VFS path for FTP configuration.
-pub const FTP_STATUS_PATH: &str = "/var/ftp/status";
-pub const FTP_REQUEST_PATH: &str = "/var/ftp/request";
-
 /// Process an FTP protocol request line against the VFS.
 ///
 /// Returns a response string to send back to the client.

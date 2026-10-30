@@ -94,16 +94,23 @@ impl DashboardConfig {
     /// Create a config from skin features and screen dimensions.
     /// Uses PSIX-style layout: icons on the left side with generous spacing.
     pub fn from_features(features: &SkinFeatures, at: &ActiveTheme) -> Self {
-        let cols = features.grid_cols;
-        let rows = features.grid_rows;
-        let content_top = at.statusbar_height + at.tab_row_height;
-        let content_h = at.screen_h - content_top - at.bottombar_height;
+        // Saturating throughout: a skin whose bars (or padding) exceed the
+        // screen, or that asks for a 0x0 grid, gets an empty grid instead
+        // of an arithmetic overflow / division by zero.
+        let cols = features.grid_cols.max(1);
+        let rows = features.grid_rows.max(1);
+        let content_top = at.statusbar_height.saturating_add(at.tab_row_height);
+        let content_h = at
+            .screen_h
+            .saturating_sub(content_top)
+            .saturating_sub(at.bottombar_height);
         let grid_padding_x = at.grid_padding_x;
         let grid_padding_y = at.grid_padding_y;
         let grid_x = grid_padding_x as i32;
-        let grid_y = (content_top + grid_padding_y as u32) as i32;
-        let grid_w = at.screen_w - 2 * grid_padding_x as u32;
-        let grid_h = content_h - 2 * grid_padding_y as u32;
+        let grid_y =
+            i32::try_from(content_top.saturating_add(grid_padding_y as u32)).unwrap_or(i32::MAX);
+        let grid_w = at.screen_w.saturating_sub(2 * grid_padding_x as u32);
+        let grid_h = content_h.saturating_sub(2 * grid_padding_y as u32);
 
         // Size cells to fill available space evenly.
         let cell_w = grid_w / cols;

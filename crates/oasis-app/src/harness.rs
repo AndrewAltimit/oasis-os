@@ -927,6 +927,13 @@ impl Harness {
         self.audio.borrow()
     }
 
+    /// Simulate the playing track reaching its end: the fake output stops
+    /// reporting it as playing, as a real backend does once its PCM has
+    /// drained.
+    pub fn finish_audio_track(&mut self) {
+        self.audio.borrow_mut().playing = None;
+    }
+
     /// All decoded f32 PCM fed to the audio output so far.
     pub fn audio_fed(&self) -> Vec<f32> {
         self.audio.borrow().pcm_f32()

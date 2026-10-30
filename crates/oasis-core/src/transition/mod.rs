@@ -262,7 +262,7 @@ pub fn apply_assemble(
     let bot_h = at.bottombar_height;
     let top_dy = (-(1.0 - t) * bar_h as f32).round() as i32;
     let bot_dy = ((1.0 - t) * bot_h as f32).round() as i32;
-    let bar_y = (at.screen_h - bot_h) as i32;
+    let bar_y = crate::bottombar::bottom_bar_y(at);
 
     // Hide bar content while the chrome slides (backgrounds ride the offset).
     const SLIDERS: [&str; 4] = ["bar_top", "bar_top_line", "bar_bottom", "bar_bottom_line"];

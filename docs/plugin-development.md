@@ -14,19 +14,31 @@ Plugins interact with the OS through services provided by `PluginHost`:
 - **`audio`** -- audio playback (optional, `None` in headless mode)
 - **`network`** -- TCP networking (optional, `None` if unavailable)
 - **`backend`** -- rendering backend for texture loading (optional)
+- **`context`** -- `PluginContext` from the host: `screen_w`, `screen_h`
+  (0 = unknown) and `time` (`Option<SystemTime>`), refreshed before every
+  `update` (the host calls `PluginManager::set_context`)
 
 The plugin lifecycle is:
 
 1. **Register** -- plugin is added to `PluginManager` (state: `Registered`)
 2. **Init** -- `init()` called once; register commands, create SDI objects (state: `Active`)
 3. **Update** -- `update()` called each time the host calls `PluginManager::update_all`
-4. **Shutdown** -- `shutdown()` called on `unload` / `shutdown_all`; clean up resources (state: `Stopped`)
+4. **Shutdown** -- `shutdown()` called on `stop_plugin` / `unload` / `shutdown_all`; clean up resources (state: `Stopped`)
 
-> **Host status:** the desktop shell (`oasis-app/src/shell.rs`) currently
-> only calls `init_all` (into a private, unrendered `SdiRegistry`) and
-> `extend_registry`. It never calls `update_all` or `shutdown_all`, so
-> `update()` / `shutdown()` do not run there, and SDI objects a plugin
-> creates are not drawn. Commands and plugin apps work.
+A stopped plugin can be initialized again with `init_plugin` (the terminal's
+`plugin load` after `plugin unload`), so `init` must work after `shutdown`.
+The manager records the commands a plugin's `init` registers and the apps it
+registers, and removes both when the plugin stops.
+
+**Desktop host:** the shell (`oasis-app/src/shell.rs`) initializes plugins
+into its real scene graph at boot, so SDI objects a plugin creates are drawn
+(use `overlay = true` and a high `z` to draw above the dashboard and
+windows). Every frame it calls `update_all` (after setting the context) and
+services the `plugin` terminal command (`commands::poll_plugin_ipc`:
+`/var/plugin/request`, `/var/plugin/status`); `Shell::shutdown` calls
+`shutdown_all`. Plugin apps are synced into the app registry and the
+dashboard whenever a plugin loads or unloads. The WASM, UE5 and PSP hosts do
+not run plugins.
 
 Source: `crates/oasis-core/src/plugin/traits.rs`
 
@@ -299,7 +311,7 @@ The codebase ships three example plugins in `crates/oasis-core/src/plugin/exampl
 | Plugin | Commands | Description |
 |--------|----------|-------------|
 | `HelloPlugin` | `hello [name]` | Simplest possible plugin -- single command |
-| `ClockWidgetPlugin` | `pclock [show\|hide]` | Creates an SDI clock widget + command |
+| `ClockWidgetPlugin` | `pclock [show\|hide]` | Live `HH:MM:SS` overlay clock, right-aligned from `PluginContext`; `pclock` toggles it through `/var/pclock/visible` |
 | `NotepadPlugin` | `note [list\|read\|write]` | VFS-backed notepad with CRUD operations (commands only; it registers no app) |
 
 Study these for patterns on SDI widget creation, VFS interaction, and command registration.

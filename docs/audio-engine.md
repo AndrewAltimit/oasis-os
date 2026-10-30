@@ -17,8 +17,9 @@ All in `crates/oasis-audio/src/`.
 - `AudioManager` (`manager.rs`) — the music playlist + playback-state
   machine behind the `/var/audio/*` VFS IPC. It never touches an
   `AudioBackend`: `apply(&MediaRequest)` updates the playlist/state and
-  returns a `MediaAction` (`PlayPath`, `Pause`, `Resume`, `Stop`,
-  `SetVolume`, `None`) for the host to carry out.
+  returns a `MediaAction` (`PlayPath`, `Cue`, `Pause`, `Resume`, `Stop`,
+  `SetVolume`, `None`) for the host to carry out. `track_finished()` is the
+  end-of-track transition (advance like `next`).
 - `Playlist` (`playlist.rs`) — ordered tracks plus shuffle/repeat state.
 - `TrackInfo` (`types.rs`) — title, artist, duration, VFS path, builder
   setters.
@@ -58,7 +59,25 @@ audio streams through the same process-global SDL stream, so `stop` /
 (both hosts stop internet radio before a track starts). The playlist is
 every file played through `play_file`, in first-play order; `next` / `prev`
 honour repeat and shuffle; `next` / `prev` while stopped only move the
-selection. A track that finishes on its own does not auto-advance yet.
+selection.
+
+`next` / `prev` while **paused** keep playback paused, as in common media
+players: the old track is released and the new entry is *cued*
+(`MediaAction::Cue`: shown in the status and at `0 0 <path>` in the
+position file, nothing loaded); `resume` or `play` then starts it. While
+playing they start the new entry.
+
+A track that finishes on its own **auto-advances**: each tick the
+controller checks for a loaded music track that the model says is playing
+while `AudioBackend::is_playing()` is false, and applies
+`AudioManager::track_finished()` (the `next` rules: repeat one replays,
+repeat all wraps, shuffle follows the shuffle order, and the end of a
+non-repeating playlist stops and releases the track). The check is skipped
+while the stream is shared (`is_playing` then reports the other consumer).
+Backends report the end through `is_playing()`: WASM once the `<audio>`
+element has `ended`, SDL once a static track's queued PCM has drained.
+Tuning internet radio releases the music track on both hosts first, so the
+radio's takeover is never mistaken for the end of the track.
 
 The UE5 FFI host does not service this IPC (it has no media controller),
 so `music status` there prints "(audio subsystem not initialized)".

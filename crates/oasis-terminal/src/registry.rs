@@ -77,6 +77,18 @@ impl CommandRegistry {
         self.commands.insert(cmd.name().to_string(), cmd);
     }
 
+    /// Remove the command `name` (a plugin being unloaded takes its
+    /// commands with it). Returns it, or `None` if it was not registered.
+    pub fn unregister(&mut self, name: &str) -> Option<Box<dyn Command>> {
+        self.commands.remove(name)
+    }
+
+    /// Names of the registered commands (unsorted; builtins, aliases and
+    /// functions excluded).
+    pub fn command_names(&self) -> impl Iterator<Item = &str> {
+        self.commands.keys().map(String::as_str)
+    }
+
     // -- Shell variable API --
 
     /// Set a shell variable.

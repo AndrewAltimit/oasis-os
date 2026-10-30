@@ -1126,6 +1126,86 @@ pub fn poll_ftp_server(state: &mut AppState, vfs: &mut MemoryVfs) {
     }
 }
 
+/// Service the `plugin` terminal command's VFS IPC: apply every
+/// [`PluginRequest`](oasis_core::ipc::PluginRequest) queued on
+/// [`PLUGIN_REQUEST_PATH`](oasis_core::ipc::PLUGIN_REQUEST_PATH) (`load`
+/// initializes a registered or unloaded plugin again, `unload` shuts it
+/// down and removes its commands, apps and SDI objects), report each
+/// outcome in the terminal, and publish the plugin list at
+/// [`PLUGIN_STATUS_PATH`](oasis_core::ipc::PLUGIN_STATUS_PATH). Without
+/// this bridge `plugin list` had no data and `load` / `unload` were
+/// silently dropped.
+pub fn poll_plugin_ipc(state: &mut AppState, sdi: &mut SdiRegistry, vfs: &mut MemoryVfs) {
+    use oasis_core::ipc::{PLUGIN_REQUEST_PATH, PLUGIN_STATUS_PATH, PluginRequest};
+    if !vfs.exists("/var/plugin") && vfs.mkdir("/var/plugin").is_err() {
+        return;
+    }
+    let mut changed = false;
+    if let Ok(data) = vfs.read(PLUGIN_REQUEST_PATH)
+        && !data.is_empty()
+    {
+        let _ = vfs.write(PLUGIN_REQUEST_PATH, b"");
+        let requests = String::from_utf8_lossy(&data).into_owned();
+        for line in requests.lines().map(str::trim).filter(|l| !l.is_empty()) {
+            let Some(req) = PluginRequest::parse(line) else {
+                state
+                    .terminal
+                    .print(format!("plugin: malformed request {line:?}"));
+                continue;
+            };
+            let pm = &mut state.plugin_manager;
+            let cmds = &mut state.terminal.cmd_reg;
+            let (name, verb, result) = match &req {
+                PluginRequest::Load(name) => (name, "loaded", pm.init_plugin(name, sdi, vfs, cmds)),
+                PluginRequest::Unload(name) => {
+                    (name, "unloaded", pm.stop_plugin(name, sdi, vfs, cmds))
+                },
+            };
+            let msg = match result {
+                Ok(()) => {
+                    changed = true;
+                    format!("Plugin {name} {verb}.")
+                },
+                Err(_) if !pm.is_loaded(name) => format!(
+                    "plugin: no plugin named '{name}' (plugins are statically linked; \
+                     there is no dynamic loader)"
+                ),
+                Err(e) => format!("plugin: {e}"),
+            };
+            state.terminal.print(msg);
+        }
+        state.terminal.dirty = true;
+    }
+    if changed {
+        // Plugin apps come and go with their plugin: re-sync the registry
+        // and the dashboard tiles.
+        state
+            .plugin_manager
+            .extend_registry(&mut state.content.apps);
+        rebuild_dashboard(state, vfs);
+    }
+    let status = state.plugin_manager.status_text();
+    if vfs.read(PLUGIN_STATUS_PATH).ok().as_deref() != Some(status.as_bytes()) {
+        let _ = vfs.write(PLUGIN_STATUS_PATH, status.as_bytes());
+    }
+}
+
+/// Run every active plugin's per-frame `update`, with the current screen
+/// size and wall-clock time as its [`PluginContext`](oasis_core::plugin::PluginContext).
+pub fn update_plugins(state: &mut AppState, sdi: &mut SdiRegistry, vfs: &mut MemoryVfs) {
+    use oasis_core::platform::TimeService as _;
+    state
+        .plugin_manager
+        .set_context(oasis_core::plugin::PluginContext {
+            screen_w: state.config.screen_width,
+            screen_h: state.config.screen_height,
+            time: state.platform.now().ok(),
+        });
+    state
+        .plugin_manager
+        .update_all(sdi, vfs, &mut state.terminal.cmd_reg);
+}
+
 /// VFS IPC paths the `wm` terminal command writes requests to / reads the
 /// window list from.
 pub use oasis_core::ipc::{WM_REQUEST_PATH, WM_STATUS_PATH, WmRequest};

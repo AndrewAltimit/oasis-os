@@ -5,13 +5,14 @@ use crate::terminal::CommandRegistry;
 use crate::vfs::Vfs;
 
 use crate::plugin::app_bridge::PluginAppRegistration;
-use crate::plugin::traits::{PluginCapabilities, PluginHost};
+use crate::plugin::traits::{PluginCapabilities, PluginContext, PluginHost};
 
 use super::LoadedPlugin;
 
 /// Build a `PluginHost` for the given plugin.
 pub(crate) fn build_host<'a>(
     plugin: &LoadedPlugin,
+    context: PluginContext,
     sdi: &'a mut SdiRegistry,
     vfs: &'a mut dyn Vfs,
     commands: &'a mut CommandRegistry,
@@ -25,6 +26,7 @@ pub(crate) fn build_host<'a>(
         audio: None,
         network: None,
         backend: None,
+        context,
         app_registrations: pending_apps,
         capabilities: capabilities_override.unwrap_or_else(|| plugin.capabilities.clone()),
         plugin_name: plugin.plugin.info().name.clone(),

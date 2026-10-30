@@ -165,7 +165,14 @@ fn status_bar_keeps_the_clock_and_tab_across_a_skin_switch() {
         "first frame after the switch shows the frozen clock: {:?}",
         h.sdi_texts()
     );
-    assert!(!h.sdi_text_contains("00:00"), "{:?}", h.sdi_texts());
+    // (The clock-widget plugin's "12:00:00" overlay is not the status bar.)
+    assert!(
+        !h.sdi_texts()
+            .iter()
+            .any(|t| t.contains("00:00") && t != "12:00:00"),
+        "{:?}",
+        h.sdi_texts()
+    );
     assert_eq!(h.state().ui.status_bar.active_tab, tab);
 }
 

@@ -21,7 +21,9 @@ use crate::terminal::CommandRegistry;
 use crate::vfs::Vfs;
 
 use super::app_bridge::PluginAppRegistration;
-use super::traits::{Plugin, PluginCapabilities, PluginHost, PluginInfo, PluginState};
+use super::traits::{
+    Plugin, PluginCapabilities, PluginContext, PluginHost, PluginInfo, PluginState,
+};
 
 /// A loaded plugin with its runtime state.
 struct LoadedPlugin {
@@ -29,6 +31,8 @@ struct LoadedPlugin {
     state: PluginState,
     /// Titles of apps registered by this plugin (for cleanup on unload).
     registered_app_titles: Vec<String>,
+    /// Commands this plugin's `init` registered (removed on stop/unload).
+    registered_commands: Vec<String>,
     /// Cached capabilities from `plugin.capabilities()`.
     capabilities: PluginCapabilities,
 }
@@ -77,6 +81,9 @@ pub struct PluginManager {
     plugins: Vec<LoadedPlugin>,
     /// App registrations from plugins (populated during init).
     plugin_apps: Vec<PluginAppRegistration>,
+    /// What the host told us about the frame (screen size, time), handed
+    /// to every lifecycle call as [`PluginHost::context`].
+    context: PluginContext,
 }
 
 impl PluginManager {
@@ -85,7 +92,20 @@ impl PluginManager {
         Self {
             plugins: Vec::new(),
             plugin_apps: Vec::new(),
+            context: PluginContext::default(),
         }
+    }
+
+    /// Set the host context (screen size, wall-clock time) plugins see
+    /// from the next lifecycle call on. Hosts call this before `init_all`
+    /// and before each `update_all`.
+    pub fn set_context(&mut self, context: PluginContext) {
+        self.context = context;
+    }
+
+    /// The host context last set with [`set_context`](Self::set_context).
+    pub fn context(&self) -> PluginContext {
+        self.context
     }
 
     /// Validate a plugin's API version against the host.
@@ -96,6 +116,7 @@ impl PluginManager {
     /// Build a `PluginHost` for the given plugin index.
     fn build_host<'a>(
         plugin: &LoadedPlugin,
+        context: PluginContext,
         sdi: &'a mut SdiRegistry,
         vfs: &'a mut dyn Vfs,
         commands: &'a mut CommandRegistry,
@@ -104,6 +125,7 @@ impl PluginManager {
     ) -> PluginHost<'a> {
         host::build_host(
             plugin,
+            context,
             sdi,
             vfs,
             commands,
@@ -726,8 +748,10 @@ auto_load = true
         assert!(result.unwrap_err().to_string().contains("plugin not found"),);
     }
 
+    /// A stopped plugin can be initialized again (`plugin load` after
+    /// `plugin unload`).
     #[test]
-    fn init_stopped_plugin_fails() {
+    fn init_stopped_plugin_reactivates_it() {
         let mut mgr = PluginManager::new();
         mgr.register_static(Box::new(TestPlugin::new()));
 
@@ -737,11 +761,137 @@ auto_load = true
 
         mgr.init_all(&mut sdi, &mut vfs, &mut cmds);
         mgr.shutdown_all(&mut sdi, &mut vfs, &mut cmds);
+        assert_eq!(mgr.active_count(), 0);
 
-        // Plugin is now Stopped -- re-init should fail.
-        let result = mgr.init_plugin("test-plugin", &mut sdi, &mut vfs, &mut cmds);
-        assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("stopped"),);
+        mgr.init_plugin("test-plugin", &mut sdi, &mut vfs, &mut cmds)
+            .unwrap();
+        assert_eq!(mgr.active_count(), 1);
+        let again = mgr.init_plugin("test-plugin", &mut sdi, &mut vfs, &mut cmds);
+        assert!(again.unwrap_err().to_string().contains("already active"));
+    }
+
+    /// `stop_plugin` (the terminal's `plugin unload`) shuts a plugin down,
+    /// removes the commands and apps it registered, and keeps it known so
+    /// `init_plugin` brings everything back.
+    #[test]
+    fn stop_plugin_removes_commands_and_apps_until_reloaded() {
+        use crate::plugin::{AppCategory, PluginAppRegistration};
+        use crate::terminal::{Command, CommandOutput, Environment};
+
+        struct EchoCmd;
+        impl Command for EchoCmd {
+            fn name(&self) -> &str {
+                "hello"
+            }
+            fn description(&self) -> &str {
+                "test"
+            }
+            fn usage(&self) -> &str {
+                "hello"
+            }
+            fn execute(&self, _: &[&str], _: &mut Environment<'_>) -> Result<CommandOutput> {
+                Ok(CommandOutput::None)
+            }
+        }
+
+        struct CmdAppPlugin;
+        impl Plugin for CmdAppPlugin {
+            fn info(&self) -> PluginInfo {
+                PluginInfo::new("cmd-app", "1.0.0")
+            }
+            fn init(&mut self, host: &mut PluginHost<'_>) -> Result<()> {
+                host.commands.register(Box::new(EchoCmd));
+                host.register_app(PluginAppRegistration::new(
+                    "Cmd App",
+                    AppCategory::Utility,
+                    |_, _| unreachable!("not launched"),
+                ))?;
+                host.sdi.create("cmd_app_obj");
+                Ok(())
+            }
+            fn update(&mut self, _host: &mut PluginHost<'_>) -> Result<()> {
+                Ok(())
+            }
+            fn shutdown(&mut self, host: &mut PluginHost<'_>) -> Result<()> {
+                host.sdi.destroy("cmd_app_obj")
+            }
+        }
+
+        let mut mgr = PluginManager::new();
+        mgr.register_static(Box::new(CmdAppPlugin));
+        let mut sdi = SdiRegistry::new();
+        let mut vfs = MemoryVfs::new();
+        let mut cmds = CommandRegistry::new();
+        crate::terminal::register_plugin_commands(&mut cmds);
+
+        mgr.init_all(&mut sdi, &mut vfs, &mut cmds);
+        assert!(cmds.command_names().any(|n| n == "hello"));
+        assert_eq!(mgr.plugin_apps().len(), 1);
+        assert!(sdi.contains("cmd_app_obj"));
+
+        mgr.stop_plugin("cmd-app", &mut sdi, &mut vfs, &mut cmds)
+            .unwrap();
+        assert!(!cmds.command_names().any(|n| n == "hello"));
+        assert!(
+            cmds.command_names().any(|n| n == "plugin"),
+            "pre-existing commands are kept"
+        );
+        assert!(mgr.plugin_apps().is_empty());
+        assert!(!sdi.contains("cmd_app_obj"));
+        assert!(mgr.is_loaded("cmd-app"));
+        assert!(
+            mgr.stop_plugin("cmd-app", &mut sdi, &mut vfs, &mut cmds)
+                .is_err()
+        );
+
+        mgr.init_plugin("cmd-app", &mut sdi, &mut vfs, &mut cmds)
+            .unwrap();
+        assert!(cmds.command_names().any(|n| n == "hello"));
+        assert_eq!(mgr.plugin_apps().len(), 1);
+        assert!(sdi.contains("cmd_app_obj"));
+        assert!(mgr.status_text().contains("cmd-app (1.0.0) [active]"));
+    }
+
+    /// Plugins see the host context the manager was given.
+    #[test]
+    fn plugins_see_the_host_context() {
+        struct CtxPlugin(std::rc::Rc<std::cell::Cell<(u32, u32)>>);
+        impl Plugin for CtxPlugin {
+            fn info(&self) -> PluginInfo {
+                PluginInfo::new("ctx", "1.0.0")
+            }
+            fn init(&mut self, host: &mut PluginHost<'_>) -> Result<()> {
+                self.0.set((host.context.screen_w, host.context.screen_h));
+                Ok(())
+            }
+            fn update(&mut self, host: &mut PluginHost<'_>) -> Result<()> {
+                self.0.set((host.context.screen_w, host.context.screen_h));
+                Ok(())
+            }
+            fn shutdown(&mut self, _host: &mut PluginHost<'_>) -> Result<()> {
+                Ok(())
+            }
+        }
+        let seen = std::rc::Rc::new(std::cell::Cell::new((0, 0)));
+        let mut mgr = PluginManager::new();
+        mgr.register_static(Box::new(CtxPlugin(std::rc::Rc::clone(&seen))));
+        let mut sdi = SdiRegistry::new();
+        let mut vfs = MemoryVfs::new();
+        let mut cmds = CommandRegistry::new();
+        mgr.set_context(PluginContext {
+            screen_w: 480,
+            screen_h: 272,
+            time: None,
+        });
+        mgr.init_all(&mut sdi, &mut vfs, &mut cmds);
+        assert_eq!(seen.get(), (480, 272));
+        mgr.set_context(PluginContext {
+            screen_w: 800,
+            screen_h: 600,
+            time: None,
+        });
+        mgr.update_all(&mut sdi, &mut vfs, &mut cmds);
+        assert_eq!(seen.get(), (800, 600));
     }
 
     #[test]

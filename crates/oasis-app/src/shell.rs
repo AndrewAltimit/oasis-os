@@ -35,7 +35,7 @@ use oasis_core::cursor::CursorState;
 use oasis_core::dashboard::{AppEntry, DashboardConfig, DashboardState};
 use oasis_core::input::{InputEvent, KeyTwinFilter};
 use oasis_core::platform::{DesktopPlatform, NetworkService, PowerService, TimeService};
-use oasis_core::plugin::{Plugin, PluginManager, register_builtin_plugins};
+use oasis_core::plugin::{Plugin, PluginContext, PluginManager, register_builtin_plugins};
 use oasis_core::sdi::SdiRegistry;
 use oasis_core::settings::{SettingsStore, UserPrefs};
 use oasis_core::skin::{Skin, resolve_skin, resolve_skin_or_classic};
@@ -416,7 +416,20 @@ impl<B: ShellBackend> Shell<B> {
         let mut cmd_reg = shell_commands();
 
         observer.status("Initializing plugin system...");
-        let plugin_manager = init_plugins(plugins, &mut vfs, &mut cmd_reg);
+        // The real scene graph, created now so plugins draw into it (their
+        // `init` runs before the skin layout is applied below).
+        let mut sdi = SdiRegistry::new();
+        let plugin_manager = init_plugins(
+            plugins,
+            PluginContext {
+                screen_w: config.screen_width,
+                screen_h: config.screen_height,
+                time: None,
+            },
+            &mut sdi,
+            &mut vfs,
+            &mut cmd_reg,
+        );
         let mut apps = oasis_apps::builtin_registry(&oasis_apps::HostInfo::desktop());
         plugin_manager.extend_registry(&mut apps);
         let plugin_count = plugin_manager.active_count();
@@ -601,7 +614,6 @@ impl<B: ShellBackend> Shell<B> {
         // splash's logo-entrance phase at ~4.0s so the main loop's first
         // frame has a fully-built scene).
         observer.status("Composing SDI scene graph...");
-        let mut sdi = SdiRegistry::new();
         state.skin.apply_layout_scaled(
             &mut sdi,
             state.config.screen_width,
@@ -764,6 +776,11 @@ impl<B: ShellBackend> Shell<B> {
 
         // `wm` terminal command IPC (window list + close/focus/... requests).
         commands::poll_wm_ipc(state, sdi, vfs);
+
+        // `plugin load|unload` requests + the published plugin list, then
+        // every active plugin's per-frame `update`.
+        commands::poll_plugin_ipc(state, sdi, vfs);
+        commands::update_plugins(state, sdi, vfs);
 
         // `notify` / `screenshot` / `theme` / `browse` request files.
         if let Some(path) = ui_ipc::poll(state, sdi, vfs) {
@@ -1217,8 +1234,14 @@ impl<B: ShellBackend> Shell<B> {
         }
     }
 
-    /// Persist settings, stop media and release the backend.
+    /// Shut the plugins down, persist settings, stop media and release
+    /// the backend.
     pub fn shutdown(mut self) -> Result<()> {
+        self.state.plugin_manager.shutdown_all(
+            &mut self.sdi,
+            &mut self.vfs,
+            &mut self.state.terminal.cmd_reg,
+        );
         // Persist any settings changed since the last periodic sync.
         self.settings_mirror.sync(&self.vfs);
 
@@ -1309,9 +1332,12 @@ fn shell_commands() -> CommandRegistry {
     cmd_reg
 }
 
-/// Register the built-in plugins plus `extra`, and initialize them all.
+/// Register the built-in plugins plus `extra`, and initialize them all
+/// into the shell's scene graph.
 fn init_plugins(
     extra: Vec<Box<dyn Plugin>>,
+    context: PluginContext,
+    sdi: &mut SdiRegistry,
     vfs: &mut MemoryVfs,
     cmd_reg: &mut CommandRegistry,
 ) -> PluginManager {
@@ -1320,8 +1346,8 @@ fn init_plugins(
     for plugin in extra {
         plugin_manager.register_static(plugin);
     }
-    let mut plugin_sdi = SdiRegistry::new();
-    plugin_manager.init_all(&mut plugin_sdi, vfs, cmd_reg);
+    plugin_manager.set_context(context);
+    plugin_manager.init_all(sdi, vfs, cmd_reg);
     plugin_manager
 }
 

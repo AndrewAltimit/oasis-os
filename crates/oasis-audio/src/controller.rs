@@ -50,17 +50,32 @@ pub struct MusicController<'a> {
 }
 
 impl MusicController<'_> {
-    /// Publish the position, carry out every pending request, publish the
-    /// status.
+    /// Publish the position, advance past a track that finished on its
+    /// own, carry out every pending request, publish the status.
     ///
     /// `before_play` runs right before a new track loads; hosts use it to
     /// tear down internet radio so the two never play at once.
     pub fn tick(&mut self, vfs: &mut dyn Vfs, before_play: &mut dyn FnMut(&mut dyn AudioBackend)) {
         self.publish_position(vfs);
+        if self.track_ended() {
+            let action = self.manager.track_finished();
+            self.carry_out(vfs, action, before_play);
+        }
         for request in drain_requests(vfs) {
             self.handle(vfs, &request, before_play);
         }
         self.publish_status(vfs);
+    }
+
+    /// The music track played to its end: it is loaded, the model says
+    /// playing, yet the backend stopped. Skipped while another consumer
+    /// shares the process-global stream (`is_playing` then reports that
+    /// consumer, not the music).
+    fn track_ended(&self) -> bool {
+        self.track.is_some()
+            && !self.stream_shared
+            && self.manager.state() == PlaybackState::Playing
+            && !self.audio.is_playing()
     }
 
     /// Stop and unload the music track (the Music Player window closed:
@@ -77,7 +92,18 @@ impl MusicController<'_> {
         request: &MediaRequest,
         before_play: &mut dyn FnMut(&mut dyn AudioBackend),
     ) {
-        match self.manager.apply(request) {
+        let action = self.manager.apply(request);
+        self.carry_out(vfs, action, before_play);
+    }
+
+    /// Carry out one [`MediaAction`] on the backend.
+    fn carry_out(
+        &mut self,
+        vfs: &mut dyn Vfs,
+        action: MediaAction,
+        before_play: &mut dyn FnMut(&mut dyn AudioBackend),
+    ) {
+        match action {
             MediaAction::None => {},
             MediaAction::PlayPath(path) => {
                 self.play_file(vfs, &path, before_play);
@@ -86,6 +112,12 @@ impl MusicController<'_> {
                 } else {
                     self.manager.set_state(PlaybackState::Stopped);
                 }
+            },
+            MediaAction::Cue(path) => {
+                // Selected but not started: release the old track and
+                // point the progress bar at the new one, at 0:00.
+                self.stop_track();
+                let _ = vfs.write(AUDIO_POSITION_PATH, format!("0 0 {path}").as_bytes());
             },
             MediaAction::Pause => {
                 if self.track.is_some() && !self.stream_shared {
@@ -361,6 +393,88 @@ mod tests {
         // for the other consumer.
         assert_eq!(h.manager.state(), PlaybackState::Paused);
         assert!(h.audio.is_playing());
+    }
+
+    /// A finished track used to leave the player "playing" silence; it
+    /// now advances to the next playlist entry (and stops at the end of
+    /// a non-repeating playlist).
+    #[test]
+    fn finished_track_auto_advances() {
+        let mut h = Host::new();
+        h.request("play_file /music/a.mp3\nplay_file /music/b.mp3\nprev");
+        assert_eq!(h.manager.current_path(), Some("/music/a.mp3"));
+        let first = h.track;
+        // The backend runs out of audio (end of track).
+        h.audio.stop().unwrap();
+        h.tick(false);
+        assert_eq!(h.manager.current_path(), Some("/music/b.mp3"));
+        assert_eq!(h.manager.state(), PlaybackState::Playing);
+        assert!(h.audio.is_playing());
+        assert_ne!(h.track, first, "the next track was loaded");
+        assert_eq!(h.audio.loaded_count(), 1, "the finished track was released");
+        assert_eq!(
+            h.vfs.read(AUDIO_POSITION_PATH).unwrap(),
+            b"0 0 /music/b.mp3"
+        );
+
+        // End of a non-repeating playlist: stop and release.
+        h.audio.stop().unwrap();
+        h.tick(false);
+        assert_eq!(h.manager.state(), PlaybackState::Stopped);
+        assert!(h.track.is_none());
+        assert_eq!(h.audio.loaded_count(), 0);
+
+        // Repeat one: the same track again.
+        h.request("repeat one\nplay");
+        h.audio.stop().unwrap();
+        h.tick(false);
+        assert_eq!(h.manager.current_path(), Some("/music/b.mp3"));
+        assert!(h.audio.is_playing());
+    }
+
+    #[test]
+    fn no_auto_advance_while_paused_or_shared() {
+        let mut h = Host::new();
+        h.request("play_file /music/a.mp3\nplay_file /music/b.mp3\nprev");
+        // Paused: the backend is not playing, but nothing ended.
+        h.request("pause");
+        h.tick(false);
+        assert_eq!(h.manager.current_path(), Some("/music/a.mp3"));
+        assert_eq!(h.manager.state(), PlaybackState::Paused);
+        // Shared stream: `is_playing` reports the other consumer.
+        h.request("resume");
+        h.audio.stop().unwrap();
+        h.tick(true);
+        assert_eq!(h.manager.current_path(), Some("/music/a.mp3"));
+    }
+
+    /// `next` while paused used to start the next track. It now cues it:
+    /// the old track is released, the new one shows at 0:00 and starts
+    /// only on `resume`.
+    #[test]
+    fn next_while_paused_stays_paused() {
+        let mut h = Host::new();
+        h.request("play_file /music/a.mp3\nplay_file /music/b.mp3\nprev\npause");
+        let calls = h.before_play_calls;
+        h.request("next");
+        assert_eq!(h.manager.state(), PlaybackState::Paused);
+        assert_eq!(h.manager.current_path(), Some("/music/b.mp3"));
+        assert!(!h.audio.is_playing());
+        assert!(h.track.is_none());
+        assert_eq!(h.audio.loaded_count(), 0);
+        assert_eq!(h.before_play_calls, calls, "nothing started");
+        assert_eq!(
+            h.vfs.read(AUDIO_POSITION_PATH).unwrap(),
+            b"0 0 /music/b.mp3"
+        );
+        assert!(h.status().contains("State: paused"), "{}", h.status());
+        assert!(h.status().contains("Track: b.mp3"), "{}", h.status());
+
+        h.request("resume");
+        assert_eq!(h.manager.state(), PlaybackState::Playing);
+        assert!(h.track.is_some());
+        assert!(h.audio.is_playing());
+        assert_eq!(h.before_play_calls, calls + 1);
     }
 
     #[test]
