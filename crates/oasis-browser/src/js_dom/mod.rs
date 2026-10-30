@@ -132,7 +132,7 @@ pub fn install_document_global_with_url(ctx: &Ctx<'_>, doc: &SharedDoc, url: &st
 /// Like [`install_document_global_with_url`] but also accepts a shared
 /// navigation action queue that JS `location.assign()` /
 /// `history.back()` / `history.forward()` will push to.
-#[allow(dead_code)]
+#[cfg(test)]
 pub fn install_document_global_with_nav(
     ctx: &Ctx<'_>,
     doc: &SharedDoc,
@@ -142,7 +142,7 @@ pub fn install_document_global_with_nav(
     install_document_global_full(ctx, doc, url, nav_actions, None, None, None, None, None)
 }
 
-/// Like [`install_document_global_with_nav`] but also accepts an
+/// Installs the document global with a navigation action queue, an
 /// optional CSP policy to enforce `connect-src` on `fetch()` calls,
 /// the TLS provider `fetch()` uses for `https:` URLs, and an optional
 /// persistent per-origin storage backing store.

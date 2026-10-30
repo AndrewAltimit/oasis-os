@@ -141,6 +141,7 @@ impl TransitionEngine {
 
     /// Get the current interpolated value for a property, if a
     /// transition is in flight.
+    #[cfg(test)]
     pub fn get_value(&self, property: &str) -> Option<f32> {
         self.active
             .iter()
@@ -154,15 +155,6 @@ impl TransitionEngine {
             .iter()
             .find(|t| t.node_id == node_id && t.property == property)
             .map(|t| t.current_value())
-    }
-
-    /// Returns all interpolated property overrides for a given node.
-    pub fn get_node_overrides(&self, node_id: usize) -> Vec<(&str, f32)> {
-        self.active
-            .iter()
-            .filter(|t| t.node_id == node_id)
-            .map(|t| (t.property.as_str(), t.current_value()))
-            .collect()
     }
 
     /// Returns `true` if any transitions are currently in progress.

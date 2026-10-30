@@ -80,14 +80,6 @@ pub(super) fn resolve_dimension(value: &CssValue, parent_font_size: f32) -> Dime
     }
 }
 
-/// Resolve a color value from the parser's representation.
-/// Treats `light-dark()` as light mode — use [`resolve_color_with_scheme`]
-/// when the element's `color-scheme` is known.
-#[allow(dead_code)]
-pub(super) fn resolve_color(value: &CssValue) -> Option<Color> {
-    resolve_color_with_scheme(value, false)
-}
-
 /// Resolve a color, picking the dark argument of `light-dark()` when
 /// `is_dark` is true.
 pub(super) fn resolve_color_with_scheme(value: &CssValue, is_dark: bool) -> Option<Color> {
@@ -100,12 +92,6 @@ pub(super) fn resolve_color_with_scheme(value: &CssValue, is_dark: bool) -> Opti
         CssValue::Keyword(name) => keyword_color(name),
         _ => None,
     }
-}
-
-/// Resolve a color value, treating `currentcolor` as the element's `color`.
-#[allow(dead_code)]
-pub(super) fn resolve_color_or_current(value: &CssValue, current_color: Color) -> Option<Color> {
-    resolve_color_or_current_with_scheme(value, current_color, false)
 }
 
 /// Like [`resolve_color_or_current`] but with `light-dark()` awareness.

@@ -40,10 +40,7 @@ pub enum ClearSide {
 /// The `rect` describes the margin box of the float in the coordinate
 /// space of its containing block.
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
 pub struct FloatBox {
-    /// Whether this is a left or right float.
-    pub side: FloatSide,
     /// The positioned rectangle of the float (margin box).
     pub rect: Rect,
 }
@@ -112,7 +109,7 @@ impl FloatContext {
             },
         };
 
-        let float_box = FloatBox { side, rect };
+        let float_box = FloatBox { rect };
 
         match side {
             FloatSide::Left => self.left_floats.push(float_box.clone()),
@@ -323,7 +320,6 @@ mod tests {
     fn place_left_float() {
         let mut ctx = FloatContext::new();
         let fb = ctx.place_float(FloatSide::Left, 100.0, 50.0, 0.0, CONTAINING_WIDTH);
-        assert_eq!(fb.side, FloatSide::Left);
         assert_eq!(fb.rect.x, 0.0);
         assert_eq!(fb.rect.y, 0.0);
         assert_eq!(fb.rect.width, 100.0);
@@ -335,7 +331,6 @@ mod tests {
     fn place_right_float() {
         let mut ctx = FloatContext::new();
         let fb = ctx.place_float(FloatSide::Right, 120.0, 40.0, 0.0, CONTAINING_WIDTH);
-        assert_eq!(fb.side, FloatSide::Right);
         // Right float: x = containing_width - width = 480 - 120 = 360
         assert_eq!(fb.rect.x, 360.0);
         assert_eq!(fb.rect.y, 0.0);
@@ -477,7 +472,6 @@ mod tests {
     #[test]
     fn overlaps_band_function() {
         let fb = FloatBox {
-            side: FloatSide::Left,
             rect: Rect::new(0.0, 10.0, 50.0, 20.0),
         };
         // Band fully overlaps.

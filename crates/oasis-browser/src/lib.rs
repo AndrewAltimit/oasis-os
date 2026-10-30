@@ -66,11 +66,8 @@ pub(crate) mod layout;
 pub mod loader;
 pub mod nav;
 pub(crate) mod paint;
-pub mod plugin;
 pub mod reader;
 pub mod scroll;
-pub mod search;
-pub mod skin;
 pub mod svg;
 pub(crate) mod transform;
 

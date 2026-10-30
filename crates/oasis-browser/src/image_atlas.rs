@@ -225,18 +225,6 @@ impl ImageAtlas {
         }
     }
 
-    /// Clear all atlas data and destroy GPU textures.
-    #[allow(dead_code)]
-    pub fn clear(&mut self, backend: &mut dyn SdiBackend) {
-        for page in &mut self.pages {
-            if let Some(tex) = page.texture.take() {
-                let _ = backend.destroy_texture(tex);
-            }
-        }
-        self.pages.clear();
-        self.entries.clear();
-    }
-
     /// Clear all atlas data without destroying GPU textures.
     ///
     /// Used during navigation resets where the backend may have already
@@ -247,13 +235,13 @@ impl ImageAtlas {
     }
 
     /// Number of images currently packed in the atlas.
-    #[allow(dead_code)]
+    #[cfg(test)]
     pub fn len(&self) -> usize {
         self.entries.len()
     }
 
     /// Whether the atlas is empty.
-    #[allow(dead_code)]
+    #[cfg(test)]
     pub fn is_empty(&self) -> bool {
         self.entries.is_empty()
     }
