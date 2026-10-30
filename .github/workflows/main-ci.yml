@@ -324,10 +324,26 @@ jobs:
           cd crates/oasis-backend-psp
           RUST_PSP_BUILD_STD=1 cargo psp --release --config "$PSP_DENY_WARNINGS"
 
+      # cargo psp's PRX still carries the MIPS .pdr descriptors, symbol table
+      # and strings (~135 KB the module loader never reads); prxmin (shipped
+      # with cargo-psp) keeps only the loaded sections + relocations. The
+      # stripped file is the release artifact and is held to a size budget
+      # (see docs/psp-plugin.md, Memory Budget).
       - name: Build PSP Plugin PRX
+        env:
+          PRX_SIZE_BUDGET: 196608 # 192 KiB; v1.4.0 strips to ~153 KiB
         run: |
           cd crates/oasis-plugin-psp
           RUST_PSP_BUILD_STD=1 cargo psp --release --config "$PSP_DENY_WARNINGS"
+          out=target/mipsel-sony-psp-std/release
+          prxmin "$out/oasis-plugin-psp.prx" "$out/oasis-overlay.prx"
+          size=$(stat -c %s "$out/oasis-overlay.prx")
+          echo "Overlay PRX (stripped): $size bytes, budget $PRX_SIZE_BUDGET" \
+            | tee -a "$GITHUB_STEP_SUMMARY"
+          if [ "$size" -gt "$PRX_SIZE_BUDGET" ]; then
+            echo "::error::overlay PRX is $size bytes, over the $PRX_SIZE_BUDGET budget"
+            exit 1
+          fi
 
       - name: Build PSP Recovery EBOOT
         run: |
@@ -340,7 +356,7 @@ jobs:
           mkdir -p psp-artifacts
           cp crates/oasis-backend-psp/target/mipsel-sony-psp-std/release/EBOOT.PBP \
             psp-artifacts/OASIS-OS.PBP 2>/dev/null || true
-          cp crates/oasis-plugin-psp/target/mipsel-sony-psp-std/release/oasis-plugin-psp.prx \
+          cp crates/oasis-plugin-psp/target/mipsel-sony-psp-std/release/oasis-overlay.prx \
             psp-artifacts/oasis-overlay.prx 2>/dev/null || true
           cp crates/oasis-recovery-psp/target/mipsel-sony-psp-std/release/EBOOT.PBP \
             psp-artifacts/RECOVERY.PBP 2>/dev/null || true

@@ -25,8 +25,13 @@ psp = { git = "https://github.com/AndrewAltimit/rust-psp", rev = "e4cc06f6fa50fa
 # crates/oasis-backend-psp/Cargo.toml for the workaround if that changes).
 
 [profile.release]
-opt-level = "z"        # minimize size (<64KB target)
+opt-level = "z"        # minimize size (CI budget: 192 KiB stripped, see docs/psp-plugin.md)
 lto = true
 codegen-units = 1
+# Kept on purpose (measured: "abort" saves only ~10 KB of the stripped PRX;
+# libunwind is linked either way). With unwind, module_start's catch_unwind
+# catches a panic in psp_main, and a panic on one of the raw kernel threads
+# ends in psp's print-and-exit-thread path rather than an abort trap under a
+# running game.
 panic = "unwind"
 # Do NOT set strip = true -- it conflicts with --emit-relocs needed by prxgen.

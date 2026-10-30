@@ -28,7 +28,9 @@ Deploy as **two separate binaries**:
 2. **`oasis-plugin-psp`** (PRX) -- lightweight overlay companion. Direct
    framebuffer rendering only (no `oasis-core` dependency). Hooks
    `sceDisplaySetFrameBuf` to draw UI into the game's framebuffer. Claims a PSP
-   audio channel for background MP3 playback. Under 64 KB binary.
+   audio channel for background MP3 playback. Originally targeted <64 KB; at
+   v1.4.0 the stripped PRX is ~153 KB (~212 KB resident), see
+   [`psp-plugin.md`](../psp-plugin.md) §Memory Budget.
 
 ## Rationale
 
@@ -36,7 +38,9 @@ Deploy as **two separate binaries**:
   IPC with the EBOOT. Both are separate use cases.
 - **Minimal kernel footprint.** The PRX includes only rendering primitives,
   audio, config, and font code. No DOM, no CSS, no VFS, no terminal. This keeps
-  the kernel memory footprint under 64 KB.
+  the kernel memory footprint small (the original target was 64 KB; the PRX
+  has since grown MP3/AAC/radio playback, PIP video and diagnostics, and CI
+  now holds the stripped file to a 192 KiB budget).
 - **Separate crate graph.** The PRX crate (`oasis-plugin-psp`) uses
   `psp = { features = ["kernel"] }` while the EBOOT uses `features = ["std"]`.
   These are incompatible feature sets -- separate crates avoid feature unification

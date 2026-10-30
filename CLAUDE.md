@@ -59,6 +59,8 @@ scripts/psp-smoke-test.sh
 
 # Build PSP overlay plugin PRX (excluded from workspace, kernel mode)
 cd crates/oasis-plugin-psp && RUST_PSP_BUILD_STD=1 cargo psp --release
+# ... then strip it (CI ships this file, size-gated at 192 KiB)
+prxmin target/mipsel-sony-psp-std/release/oasis-plugin-psp.prx oasis-overlay.prx
 
 # Build UE5 FFI shared library
 cargo build --profile release-ffi -p oasis-ffi
@@ -146,8 +148,8 @@ PSP has meaningful enough constraints that the detail lives in
 [`docs/psp-architecture.md`](docs/psp-architecture.md). Summary:
 
 - **Two binaries** — `oasis-backend-psp` (EBOOT.PBP, the shell) and
-  `oasis-plugin-psp` (PRX overlay loaded by CFW, <64 KB, no
-  `oasis-core` dependency). See [ADR 004](docs/adr/004-psp-two-binary-architecture.md).
+  `oasis-plugin-psp` (PRX overlay loaded by CFW, ~153 KB stripped with
+  `prxmin`, ~212 KB resident; no `oasis-core` dependency). See [ADR 004](docs/adr/004-psp-two-binary-architecture.md).
 - **GU command buffer (1 MB)** overflows with dense pages. Don't
   double-start GU frames after `swap_buffers_inner()`.
 - **QuickJS-NG** built through pspdev's `psp-gcc` with `-msingle-float`,

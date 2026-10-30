@@ -19,7 +19,8 @@ The PSP deployment uses two binaries:
 The PRX hooks `sceDisplaySetFrameBuf` to draw overlay UI into the
 game's framebuffer and claims a PSP audio channel for background MP3
 playback. No dependency on `oasis-core` — direct framebuffer rendering
-only (<64 KB binary).
+only (~153 KB PRX once stripped with `prxmin`, ~212 KB resident
+including `.bss`; see [`psp-plugin.md`](psp-plugin.md) §Memory Budget).
 
 ## Building
 

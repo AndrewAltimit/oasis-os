@@ -319,6 +319,21 @@ removal, a restyled site, and docs that match the code.
   after moving to their statics; unchecked null function pointers;
   out-of-bounds and non-UTF-8 handling in the PRX decrypter; module-ID
   buffer sizes; a wrapping size parse in recovery.
+- TV Guide video texture: the main thread no longer frees (or reuses) the
+  CSC target while the video thread may be writing it. The decoder holds
+  a hazard pointer around each decode + CSC and re-acquires the buffer
+  every frame; the main thread unpublishes, waits up to 150 ms and
+  otherwise defers the free. The texture is now 512-stride x
+  `ceil16(height)` rows (+1 guard row) sized at tune time for
+  `max(272, episode height)`, so 480x272 streams decode into it (the old
+  fixed 512x256 buffer was too short: the CSC either errored or, with a
+  reused persistent decoder, overran it by 16 rows) and 557 KB is
+  allocated instead of padding to 512x512. Frames report the stream's
+  own SPS size, and volatile-memory buffers are reused instead of leaking
+  one per tune.
+- Overlay PRX: the shipped `oasis-overlay.prx` is stripped with
+  `prxmin` (293 KB -> 153 KB; the loaded image is identical), and the
+  docs give its measured size instead of the never-met "<64 KB".
 
 ### CI and tooling
 
@@ -330,6 +345,9 @@ removal, a restyled site, and docs that match the code.
   crates, workflows and `docker/psp-build.Dockerfile`.
 - PSP EBOOT, overlay PRX and recovery EBOOT builds deny rustc warnings
   (`PSP_DENY_WARNINGS`).
+- `main-ci.yml` holds the stripped overlay PRX to a 192 KiB budget, and
+  both workflows run the `scripts/test_*.py` unit tests
+  (`psp_remote.py` screencap decoding).
 
 ### Site
 
