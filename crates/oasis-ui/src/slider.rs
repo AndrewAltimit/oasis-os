@@ -60,7 +60,7 @@ impl Slider {
     /// Create a new horizontal slider for the given range.
     ///
     /// The initial value is set to `min`. The range must satisfy `min < max`;
-    /// if not, `max` is clamped to at least `min + f32::EPSILON`.
+    /// if not, `max` becomes `min + 1.0`.
     pub fn new(min: f32, max: f32) -> Self {
         let max = if max <= min { min + 1.0 } else { max };
         Self {
@@ -140,34 +140,27 @@ impl Slider {
         }
 
         let range = self.max - self.min;
-        let delta = if let Some(s) = self.step {
-            (s / range).clamp(0.0, 1.0)
-        } else {
-            // Default: 5% of the range per key press.
-            0.05
+        let dir = match (self.orientation, button) {
+            (Orientation::Horizontal, Button::Right) | (Orientation::Vertical, Button::Up) => 1.0,
+            (Orientation::Horizontal, Button::Left) | (Orientation::Vertical, Button::Down) => -1.0,
+            _ => return false,
         };
-
-        match (self.orientation, button) {
-            (Orientation::Horizontal, Button::Right) | (Orientation::Vertical, Button::Up) => {
-                self.value = (self.value + delta).min(1.0);
-                if let Some(s) = self.step {
-                    self.value = snap_to_step(self.value, s, range);
-                }
-                true
-            },
-            (Orientation::Horizontal, Button::Left) | (Orientation::Vertical, Button::Down) => {
-                self.value = (self.value - delta).max(0.0);
-                if let Some(s) = self.step {
-                    self.value = snap_to_step(self.value, s, range);
-                }
-                true
-            },
-            _ => false,
-        }
+        self.value = match self.step {
+            Some(s) if s > 0.0 && range > 0.0 => key_step(self.value, (s / range).min(1.0), dir),
+            // Default: 5% of the range per key press.
+            _ => (self.value + dir * 0.05).clamp(0.0, 1.0),
+        };
+        true
     }
 }
 
-/// Snap a normalized value to the nearest step on the grid.
+/// Tolerance for float noise when comparing normalized slider positions.
+const STEP_EPS: f32 = 1e-4;
+
+/// Snap a normalized value to the nearest allowed position: a multiple of
+/// the step from `min`, or `max` itself (which is not on the grid when the
+/// range is not a multiple of the step -- 0..10 in steps of 3 allows
+/// 0, 3, 6, 9 and 10).
 fn snap_to_step(norm: f32, step: f32, range: f32) -> f32 {
     if step <= 0.0 || range <= 0.0 {
         return norm;
@@ -176,7 +169,32 @@ fn snap_to_step(norm: f32, step: f32, range: f32) -> f32 {
     if step_norm <= 0.0 {
         return norm;
     }
-    (norm / step_norm).round() * step_norm
+    let snapped = ((norm / step_norm).round() * step_norm).min(1.0);
+    if (1.0 - norm) < (norm - snapped).abs() {
+        1.0
+    } else {
+        snapped
+    }
+}
+
+/// One keyboard step from `norm` in direction `dir` (+1 / -1) on a grid
+/// of `step_norm`: lands on the next allowed position (grid point or the
+/// `0.0` / `1.0` ends), never skipping one or sticking short of `max`.
+fn key_step(norm: f32, step_norm: f32, dir: f32) -> f32 {
+    let target = norm + dir * step_norm;
+    if target >= 1.0 - STEP_EPS {
+        return 1.0;
+    }
+    if target <= STEP_EPS {
+        return 0.0;
+    }
+    let k = target / step_norm;
+    let k = if dir > 0.0 {
+        (k + STEP_EPS).floor()
+    } else {
+        (k - STEP_EPS).ceil()
+    };
+    (k * step_norm).clamp(0.0, 1.0)
 }
 
 impl Widget for Slider {
@@ -836,5 +854,41 @@ mod tests {
     fn snap_to_step_zero_range() {
         let snapped = snap_to_step(0.5, 10.0, 0.0);
         assert!((snapped - 0.5).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn max_is_reachable_when_range_is_not_a_step_multiple() {
+        // 0..10 in steps of 3: positions 0, 3, 6, 9, 10.
+        let mut s = Slider::new(0.0, 10.0).with_step(3.0);
+        s.set_value(10.0);
+        assert!(
+            (s.display_value() - 10.0).abs() < 1e-4,
+            "{}",
+            s.display_value()
+        );
+        s.set_value(0.0);
+        let mut seen = Vec::new();
+        for _ in 0..6 {
+            s.handle_key(Button::Right);
+            seen.push(s.display_value().round() as i32);
+        }
+        assert_eq!(seen, [3, 6, 9, 10, 10, 10]);
+        let mut seen = Vec::new();
+        for _ in 0..6 {
+            s.handle_key(Button::Left);
+            seen.push(s.display_value().round() as i32);
+        }
+        assert_eq!(seen, [9, 6, 3, 0, 0, 0]);
+    }
+
+    #[test]
+    fn key_steps_survive_float_noise() {
+        // 0.1-wide steps: 0.1 * 3 is 0.30000001 in f32, which used to be
+        // able to floor / ceil onto the wrong grid point.
+        let mut s = Slider::new(0.0, 1.0).with_step(0.1);
+        for want in 1..=10 {
+            s.handle_key(Button::Right);
+            assert!((s.value() - want as f32 / 10.0).abs() < 1e-4);
+        }
     }
 }
