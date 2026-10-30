@@ -24,10 +24,16 @@ Sockets are switched to non-blocking mode on accept and after connect.
 `read` and `write` return immediately; when the socket is not ready they
 fail with `OasisError::Io` of kind `WouldBlock` (the raw OS error, whose text
 is e.g. "Resource temporarily unavailable"). Callers must test
-`OasisError::is_would_block()` (which also accepts `TimedOut`), never search
+`OasisError::is_would_block()` (`WouldBlock` only), never search
 the error's display text for "would block": only the TLS stream happens to
 use that wording, so text matching works on `https://` and silently breaks
-every plain-TCP stream. `connect` resolves the host with
+every plain-TCP stream. `TimedOut` is *not* "try again": on a non-blocking
+socket it is the kernel declaring the peer dead (ETIMEDOUT after retransmits
+or keepalive gave up), so the listener, FTP and MCP servers drop the
+connection, and `RustlsStream` passes it through with its kind intact
+(`OasisError::is_timed_out()`). Every server also has an idle timeout, since
+a peer that vanishes without a FIN or RST yields `WouldBlock` forever.
+`connect` resolves the host with
 `ToSocketAddrs` (hostnames, IPv4 literals and IPv6 literals with or without
 brackets all work) and tries each resolved address with
 `TcpStream::connect_timeout`, so the TCP handshake blocks the caller for at

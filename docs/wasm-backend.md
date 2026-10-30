@@ -229,6 +229,26 @@ desktop shell, with the same close semantics:
   answers `Exit`. In the browser, Cancel first ends typing in the URL bar or a
   form field.
 - Closing the Internet Radio or Music Player window stops its audio.
+- Requests an app queued in the frame it closed (or was replaced by a
+  File Manager hand-off) are still carried out, ahead of the open apps'
+  (`src/app_requests.rs`); TV tunes from a closed guide are dropped.
+  `/var/audio/request` and `/var/wm/request` are line queues: the host
+  appends to them instead of overwriting earlier lines.
+- The `wm` and `open` terminal commands work as on the desktop: the host
+  applies every queued `WmRequest` (`close [--force]`, `focus`, `minimize`,
+  `maximize`, `open <app>[\t<file>]`) each frame and publishes the window
+  list to `/var/wm/status`.
+
+### Skin images
+
+Skin image assets render as on the desktop (`src/skin_assets.rs`): the
+`style = "image"` wallpaper is composited from the skin's PNG
+(`wallpaper::generate_with_assets`), layout `texture =` objects get their
+textures, and `[[background_layers]] kind = "image"` decals (the PSIX HiFi
+wordmark) become drifting / pulsing SDI objects. All three are rebuilt on a
+skin swap, which also hides the outgoing skin's dashboard icons, taskbar and
+start button. Not yet ported: themed software cursors, top-tab pill textures
+and WM nine-patch chrome.
 
 ### Music
 

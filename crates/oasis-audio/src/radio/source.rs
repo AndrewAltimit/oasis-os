@@ -102,6 +102,36 @@ pub(crate) fn parse_http_head(buf: &[u8]) -> Option<HttpHead> {
     })
 }
 
+/// How long a request write may keep hitting `WouldBlock` before the peer
+/// is treated as dead. A request is a few hundred bytes, so a healthy
+/// socket accepts it on the first write.
+pub(crate) const REQUEST_WRITE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// Write all of `bytes` to a non-blocking `stream`, retrying `WouldBlock`
+/// until `timeout` elapses.
+pub(crate) fn write_all_bounded(
+    stream: &mut dyn oasis_types::backend::NetworkStream,
+    bytes: &[u8],
+    timeout: std::time::Duration,
+) -> Result<()> {
+    let deadline = std::time::Instant::now() + timeout;
+    let mut written = 0;
+    while written < bytes.len() {
+        match stream.write(&bytes[written..]) {
+            Ok(0) => return Err(OasisError::Backend("request write: peer closed".into())),
+            Ok(n) => written += n,
+            Err(e) if e.is_would_block() => {
+                if std::time::Instant::now() >= deadline {
+                    return Err(OasisError::Backend("request write timed out".into()));
+                }
+                std::thread::sleep(std::time::Duration::from_millis(1));
+            },
+            Err(e) => return Err(e),
+        }
+    }
+    Ok(())
+}
+
 /// Radio source that streams from a pre-loaded byte buffer.
 ///
 /// Useful for testing and UE5 integration where audio comes from game
@@ -176,6 +206,24 @@ pub struct IcecastSource {
     header_buf: Vec<u8>,
     headers_parsed: bool,
     last_metadata: Option<StreamMetadata>,
+    /// `Location` of a 3xx response, kept so
+    /// [`connect_icecast`](super::connect::connect_icecast) can follow it
+    /// without parsing the error text.
+    redirect_location: Option<String>,
+    /// Chunk read while waiting for the response head, returned by the next
+    /// `poll()` (see [`IcecastSource::push_back_chunk`]).
+    pending_chunk: Option<AudioChunk>,
+}
+
+impl std::fmt::Debug for IcecastSource {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("IcecastSource")
+            .field("host", &self.host)
+            .field("path", &self.url_path)
+            .field("state", &self.state)
+            .field("headers_parsed", &self.headers_parsed)
+            .finish_non_exhaustive()
+    }
 }
 
 impl IcecastSource {
@@ -197,7 +245,25 @@ impl IcecastSource {
             header_buf: Vec::new(),
             headers_parsed: false,
             last_metadata: None,
+            redirect_location: None,
+            pending_chunk: None,
         }
+    }
+
+    /// `Location` header of a 3xx response, once one has been received.
+    pub fn redirect_location(&self) -> Option<&str> {
+        self.redirect_location.as_deref()
+    }
+
+    /// Whether a 2xx response head has been parsed (audio follows).
+    pub fn headers_parsed(&self) -> bool {
+        self.headers_parsed
+    }
+
+    /// Queue `chunk` to be returned by the next `poll()`, so a caller that
+    /// polled past the response head does not lose the first audio bytes.
+    pub fn push_back_chunk(&mut self, chunk: AudioChunk) {
+        self.pending_chunk = Some(chunk);
     }
 
     /// Get the last parsed stream metadata.
@@ -212,21 +278,8 @@ impl IcecastSource {
              User-Agent: OASIS_OS/0.1\r\nAccept: */*\r\n\r\n",
             self.url_path, self.host
         );
-        let bytes = request.as_bytes();
-        let mut written = 0;
-        while written < bytes.len() {
-            match self.stream.write(&bytes[written..]) {
-                Ok(n) => written += n,
-                Err(e) if e.is_would_block() => {
-                    std::thread::sleep(std::time::Duration::from_millis(1));
-                },
-                Err(e) => {
-                    self.state = SourceState::Error;
-                    return Err(e);
-                },
-            }
-        }
-        Ok(())
+        write_all_bounded(&mut *self.stream, request.as_bytes(), REQUEST_WRITE_TIMEOUT)
+            .inspect_err(|_| self.state = SourceState::Error)
     }
 
     /// Try to parse the response head from the accumulated buffer.
@@ -242,7 +295,10 @@ impl IcecastSource {
             Some(200..=299) => {},
             Some(code @ 300..=399) => {
                 return match head.header("location") {
-                    Some(loc) => err(format!("redirect:{loc}")),
+                    Some(loc) => {
+                        self.redirect_location = Some(loc.to_string());
+                        err(format!("redirect:{loc}"))
+                    },
                     None => err(format!("HTTP {code}")),
                 };
             },
@@ -258,6 +314,9 @@ impl IcecastSource {
 
 impl RadioSource for IcecastSource {
     fn poll(&mut self) -> Result<Option<AudioChunk>> {
+        if let Some(chunk) = self.pending_chunk.take() {
+            return Ok(Some(chunk));
+        }
         match self.state {
             SourceState::Connecting => {
                 self.send_request()?;
@@ -408,21 +467,8 @@ impl ArchiveSource {
              Connection: close\r\nAccept: */*\r\n\r\n",
             self.path, self.host
         );
-        let bytes = request.as_bytes();
-        let mut written = 0;
-        while written < bytes.len() {
-            match self.stream.write(&bytes[written..]) {
-                Ok(n) => written += n,
-                Err(e) if e.is_would_block() => {
-                    std::thread::sleep(std::time::Duration::from_millis(1));
-                },
-                Err(e) => {
-                    self.state = SourceState::Error;
-                    return Err(e);
-                },
-            }
-        }
-        Ok(())
+        write_all_bounded(&mut *self.stream, request.as_bytes(), REQUEST_WRITE_TIMEOUT)
+            .inspect_err(|_| self.state = SourceState::Error)
     }
 
     /// Push back a chunk so it is returned by the next `poll()` call.

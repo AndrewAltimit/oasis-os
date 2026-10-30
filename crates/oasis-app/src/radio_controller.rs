@@ -124,31 +124,32 @@ fn process_tune_request(state: &mut AppState, target: &str) {
             let _ = tx.send(result);
         });
         state.radio.pending_catalog_fetch = Some(rx);
-    } else if let Some((host, port, path, tls)) = super::parse_stream_url(&station.url) {
+    } else if oasis_audio::radio::StreamUrl::parse(&station.url).is_some() {
         // Icecast: connect on the pump thread (TLS if https) so the TCP
-        // connect + TLS handshake never stall the frame loop, then stream
+        // connect + TLS handshake never stall the frame loop, follow any
+        // redirects (same-scheme or http -> https only), then stream
         // through the ThreadedSource readahead queue.
         let tls_provider = state.net.tls_provider.clone();
+        let url = station.url.clone();
         let source = oasis_audio::radio::ThreadedSource::spawn_connect(move || {
-            use oasis_core::net::TlsProvider;
-            let mut net = oasis_core::net::StdNetworkBackend::new();
-            let stream = net
-                .connect(&host, port)
-                .map_err(|e| format!("connect: {e}"))?;
-            let stream = if tls {
-                // IcecastSource is an HTTP/1.1 client — force ALPN so
-                // servers don't hand us an h2 stream.
-                tls_provider
-                    .connect_tls_with_alpn(stream, &host, &[b"http/1.1"])
-                    .map(|c| c.stream)
-                    .map_err(|e| format!("TLS: {e}"))?
-            } else {
-                stream
-            };
-            Ok(
-                Box::new(oasis_audio::radio::IcecastSource::new(stream, &host, &path))
-                    as Box<dyn oasis_audio::radio::RadioSource + Send>,
-            )
+            let src = oasis_audio::radio::connect_icecast(&url, |target| {
+                use oasis_core::net::TlsProvider;
+                let mut net = oasis_core::net::StdNetworkBackend::new();
+                let stream = net
+                    .connect(&target.host, target.port)
+                    .map_err(|e| format!("connect: {e}"))?;
+                if target.https {
+                    // IcecastSource is an HTTP/1.1 client — force ALPN so
+                    // servers don't hand us an h2 stream.
+                    tls_provider
+                        .connect_tls_with_alpn(stream, &target.host, &[b"http/1.1"])
+                        .map(|c| c.stream)
+                        .map_err(|e| format!("TLS: {e}"))
+                } else {
+                    Ok(stream)
+                }
+            })?;
+            Ok(Box::new(src) as Box<dyn oasis_audio::radio::RadioSource + Send>)
         });
         state.radio.source = Some(Box::new(source));
     } else {

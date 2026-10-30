@@ -148,11 +148,19 @@ pub trait RadioSource {
 `poll` returns `Ok(None)` when no data is ready yet. The network sources
 read from a non-blocking `NetworkStream`, so an empty socket is the normal
 case, not an error: they test `OasisError::is_would_block()` (an
-`io::ErrorKind::WouldBlock` / `TimedOut`), never the error's display text,
+`io::ErrorKind::WouldBlock`), never the error's display text,
 which on a plain TCP socket is the OS message ("Resource temporarily
 unavailable") and does not say "would block". The loopback tests in
 `source.rs` (`icecast_source_survives_os_would_block_on_plain_tcp`) drive a
-real `StdNetworkBackend` socket to keep it that way.
+real `StdNetworkBackend` socket to keep it that way. `TimedOut` is a dead
+connection, not "no data yet", and fails the source.
+
+A peer that disappears without closing the connection only ever yields
+`WouldBlock`, so `ThreadedSource`'s pump drops a source that produces nothing
+for `threaded::STALL_TIMEOUT` (20 s) while its readahead queue has room
+(time paused on a full queue does not count) and surfaces
+`stream stalled: ...` as the error. Request writes give up after
+10 s of `WouldBlock`.
 
 `streaming_url` is the WASM / UE5 escape hatch — when set, the backend may
 hand the URL to a native streaming player (HTML5 `<audio>` for WASM) instead
@@ -168,9 +176,17 @@ lookup, and the body offset.
 
 - HTTP/1.0 GET with `Icy-MetaData: 1` so the server interleaves stream titles.
 - Only a 2xx status starts playback. A 3xx with `Location` fails with
-  `redirect:<url>` (same convention as `ArchiveSource`), any other status
+  `redirect:<url>` (same convention as `ArchiveSource`; the location is also
+  available as `IcecastSource::redirect_location()`), any other status
   with `HTTP <code>`, and a garbled status line with an error, so an error
   page's body is never fed to the decoder as audio.
+- `radio::connect_icecast(url, connect)` (`connect.rs`) is the desktop entry
+  point: it opens each hop through the caller's `connect` closure (TCP, plus
+  TLS for `https`), waits up to 15 s for the response head and follows up to
+  `MAX_REDIRECTS` (5) redirects. Absolute and relative `Location`s are
+  accepted, same-scheme or `http` -> `https` only; an `https` -> `http`
+  downgrade is refused before anything connects to it. Audio bytes that
+  arrived with the head are kept for the first `poll()`.
 - Parses `icy-metaint` from response headers (`icy::parse_icy_metaint`).
 - `IcyDemuxer` (`icy.rs`) splits audio from metadata blocks and surfaces
   `StreamTitle='Artist - Song'` updates.
@@ -179,15 +195,12 @@ lookup, and the body offset.
 
 - HTTP/1.1 GET against archive.org.
 - Handles 301 / 302 / 307 by encoding the new URL into the error string as
-  `redirect:<url>`; the manager re-issues against the new URL.
-- **No redirect-loop or hop-count protection.** `ArchiveSource` itself does
-  not track redirect depth, and `RadioManager::resume_from_redirect`
-  (`radio/mod.rs`) just clears the error and reconnects. A misconfigured
-  CDN that bounces between two URLs (`A` → `B` → `A` …) will cause the
-  manager to spin in a tight reconnect loop, repeatedly stalling the audio
-  thread. Callers that drive `resume_from_redirect` are responsible for
-  capping the number of consecutive redirects and giving up on a sensible
-  budget (3–5 hops).
+  `redirect:<url>`. `ArchiveSource` itself does not follow redirects; the
+  desktop shell's `net_fetch::connect_archive_source` does, at most 3 hops
+  per attempt, only to `archive.org` hosts, always over TLS (an `http://` CDN
+  `Location` is upgraded) and resolving relative `Location`s against the
+  current host. `RadioManager::resume_from_redirect` just clears the error;
+  anything else that drives it must cap the hop count itself.
 - 4xx and 5xx responses kill the source.
 - Tracks `Content-Length` and ends the source once that many body bytes
   arrived.

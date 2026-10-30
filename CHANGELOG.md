@@ -66,6 +66,10 @@ traits and crate layering, dead-code removal, and docs that match the code.
   the handler, polling in `tick`); `drain_requests` replaces the single
   pending-request slot; new `layout` and `handle_scroll` hooks; `handle_click`
   gets the VFS. `AppRunner` drops its mirrored state.
+- WASM host: app requests to `/var/audio/request` and `/var/wm/request` are
+  appended, closing / replaced apps' last requests are kept, `wm` / `open`
+  work, and skin image wallpapers, layout textures and image layers render
+  (PSIX HiFi showed a plain orange screen).
 - Desktop shell: one launch path (`launch::launch`) and one close path
   (`windows::close_app_window`). `wm close` and MCP `close_window` now ask
   the app first instead of dropping unsaved edits (`--force` / `force` skip
@@ -95,6 +99,15 @@ traits and crate layering, dead-code removal, and docs that match the code.
   `/var/audio/status`.
 - Radio: OS-level `WouldBlock` is "no data" (http:// stations used to fail on
   the first empty read); non-2xx Icecast responses are rejected.
+- **(breaking)** `OasisError::is_would_block()` no longer accepts `TimedOut`
+  (new `is_timed_out()`): on a non-blocking socket it is a dead peer, and
+  retrying it hung radio, FTP and MCP connections. `RustlsStream` keeps the
+  kind instead of folding it into `WouldBlock`. Radio streams that stay silent
+  for 20 s (`ThreadedSource` stall timeout) are dropped; request writes are
+  bounded.
+- Radio redirects: `radio::connect_icecast` follows up to 5 Icecast redirects
+  (same-scheme or http -> https, never https -> http); archive redirects
+  resolve relative `Location`s.
 - Shaders: `BuiltinShader` enum is the one catalogue of the 8 built-ins; the
   no-op `software` feature is removed.
 
