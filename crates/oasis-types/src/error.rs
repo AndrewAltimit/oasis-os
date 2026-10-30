@@ -270,6 +270,34 @@ pub enum OasisError {
 /// Convenience alias.
 pub type Result<T> = std::result::Result<T, OasisError>;
 
+impl OasisError {
+    /// Whether this error means "no data yet, try again" on a non-blocking
+    /// stream rather than a real failure.
+    ///
+    /// Matches [`OasisError::Io`] with [`io::ErrorKind::WouldBlock`] (what a
+    /// non-blocking `TcpStream` returns: "Resource temporarily unavailable"
+    /// on Linux, WSAEWOULDBLOCK on Windows) or [`io::ErrorKind::TimedOut`]
+    /// (what a socket with a read timeout returns on Windows). Also accepts
+    /// the legacy `Backend("WouldBlock")` / `Backend("would block")` string
+    /// some backends and mocks produce.
+    ///
+    /// Use this instead of searching the error's `Display` text: the OS
+    /// message never contains "would block", so string matching treats
+    /// every empty read on a plain TCP socket as fatal.
+    pub fn is_would_block(&self) -> bool {
+        match self {
+            Self::Io(e) => matches!(
+                e.kind(),
+                io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
+            ),
+            Self::Backend(BackendError::Other(msg)) => {
+                msg.eq_ignore_ascii_case("wouldblock") || msg.eq_ignore_ascii_case("would block")
+            },
+            _ => false,
+        }
+    }
+}
+
 // Generate From<String>, From<&str>, and From<Domain> for OasisError
 // for each domain error type in one shot.
 domain_error!(SdiError => Sdi);
@@ -491,6 +519,37 @@ mod tests {
     fn command_usage_into_oasis() {
         let e: OasisError = CommandError::Usage("ls".into()).into();
         assert!(format!("{e}").contains("usage: ls"));
+    }
+
+    // -- is_would_block -------------------------------------------------------
+
+    #[test]
+    fn would_block_io_kinds() {
+        let wb: OasisError = io::Error::from(io::ErrorKind::WouldBlock).into();
+        assert!(wb.is_would_block());
+        let to: OasisError = io::Error::from(io::ErrorKind::TimedOut).into();
+        assert!(to.is_would_block());
+        // The OS text never says "would block"; the kind is what matters.
+        let os = OasisError::Io(io::Error::new(
+            io::ErrorKind::WouldBlock,
+            "Resource temporarily unavailable (os error 11)",
+        ));
+        assert!(os.is_would_block());
+    }
+
+    #[test]
+    fn would_block_rejects_real_errors() {
+        let reset: OasisError = io::Error::from(io::ErrorKind::ConnectionReset).into();
+        assert!(!reset.is_would_block());
+        assert!(!OasisError::Backend(BackendError::NotConnected).is_would_block());
+        assert!(!OasisError::Backend("stream read: would block forever".into()).is_would_block());
+        assert!(!OasisError::Vfs("WouldBlock".into()).is_would_block());
+    }
+
+    #[test]
+    fn would_block_legacy_backend_string() {
+        assert!(OasisError::Backend("WouldBlock".into()).is_would_block());
+        assert!(OasisError::Backend("would block".into()).is_would_block());
     }
 
     // -- Pattern matching on structured errors --------------------------------
