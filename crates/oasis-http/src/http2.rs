@@ -751,7 +751,7 @@ fn read_response<S: Read + Write>(stream: &mut S) -> Result<HttpResponse> {
 
     // Decode content-encoding using the shared HTTP/1.1 helper by
     // going through `parse_response`. Easier: reuse `decode_body`.
-    let body = super::http::decode_body_public(&regular, body)?;
+    let body = super::http::decode_body(&regular, body)?;
 
     Ok(HttpResponse {
         status_code,

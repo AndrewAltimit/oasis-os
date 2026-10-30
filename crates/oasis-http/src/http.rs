@@ -690,14 +690,9 @@ pub fn parse_response(data: &[u8]) -> Result<HttpResponse> {
     Ok(resp)
 }
 
-/// Public wrapper for [`decode_body`] so the HTTP/2 driver can reuse
-/// the same gzip/deflate/brotli plumbing.
-pub(super) fn decode_body_public(headers: &[(String, String)], body: Vec<u8>) -> Result<Vec<u8>> {
-    decode_body(headers, body)
-}
-
-/// Decompress the response body based on the `Content-Encoding` header.
-fn decode_body(headers: &[(String, String)], body: Vec<u8>) -> Result<Vec<u8>> {
+/// Decompress the response body based on the `Content-Encoding` header
+/// (shared with the HTTP/2 driver).
+pub(super) fn decode_body(headers: &[(String, String)], body: Vec<u8>) -> Result<Vec<u8>> {
     if body.is_empty() {
         return Ok(body);
     }
