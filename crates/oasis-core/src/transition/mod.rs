@@ -6,6 +6,7 @@
 
 use crate::backend::{Color, SdiBackend};
 use crate::error::Result;
+use oasis_types::easing::ease_in_out_cubic;
 
 /// Available transition effects.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -330,24 +331,6 @@ pub fn page_slide_right_custom(w: u32, h: u32, frames: u32) -> TransitionState {
     TransitionState::new(TransitionEffect::PageSlideRight, frames, w, h)
 }
 
-/// Cubic ease-in-out: smooth acceleration and deceleration.
-///
-/// `t` is expected in `[0.0, 1.0]`. Returns a value in `[0.0, 1.0]`.
-pub fn ease_in_out_cubic(t: f32) -> f32 {
-    if t < 0.5 {
-        4.0 * t * t * t
-    } else {
-        1.0 - (-2.0 * t + 2.0).powi(3) / 2.0
-    }
-}
-
-/// Cubic ease-out: fast start, smooth deceleration.
-///
-/// `t` is expected in `[0.0, 1.0]`. Returns a value in `[0.0, 1.0]`.
-pub fn ease_out_cubic(t: f32) -> f32 {
-    1.0 - (1.0 - t).powi(3)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -554,30 +537,5 @@ mod tests {
         apply_assemble(&mut sdi, &at, &done);
         assert_eq!(sdi.get("bar_top").unwrap().y, y_before);
         assert!(sdi.get("bar_battery").unwrap().visible);
-    }
-
-    #[test]
-    fn ease_in_out_cubic_known_values() {
-        // Boundary values.
-        assert!((ease_in_out_cubic(0.0) - 0.0).abs() < f32::EPSILON);
-        assert!((ease_in_out_cubic(1.0) - 1.0).abs() < f32::EPSILON);
-        // Midpoint is exactly 0.5 for symmetric ease.
-        assert!((ease_in_out_cubic(0.5) - 0.5).abs() < f32::EPSILON);
-        // Quarter: 4 * 0.25^3 = 0.0625.
-        assert!((ease_in_out_cubic(0.25) - 0.0625).abs() < 0.001);
-        // Three-quarter: 1 - (-0.5+2)^3 / 2 = 1 - 1.5^3/2 = 1 - 1.6875 = ... no.
-        // 1 - (-2*0.75 + 2)^3 / 2 = 1 - (0.5)^3/2 = 1 - 0.0625 = 0.9375.
-        assert!((ease_in_out_cubic(0.75) - 0.9375).abs() < 0.001);
-    }
-
-    #[test]
-    fn ease_is_monotonic() {
-        let mut prev = 0.0f32;
-        for i in 0..=100 {
-            let t = i as f32 / 100.0;
-            let v = ease_in_out_cubic(t);
-            assert!(v >= prev, "ease_in_out_cubic not monotonic at t={t}");
-            prev = v;
-        }
     }
 }

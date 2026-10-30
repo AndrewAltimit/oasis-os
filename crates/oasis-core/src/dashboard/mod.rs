@@ -170,15 +170,23 @@ impl DashboardConfig {
 /// Active page-slide animation state.
 #[derive(Debug)]
 struct PageSlideAnim {
-    /// Previous page index (for drawing outgoing icons).
-    #[allow(dead_code)] // reserved for outgoing page rendering
-    from_page: usize,
     /// Current animation frame.
     frame: u32,
     /// Total animation duration in frames (~200ms at 60fps).
     duration: u32,
     /// Slide direction: -1 = left, +1 = right.
     direction: i32,
+}
+
+impl PageSlideAnim {
+    /// Eased progress in `[0, 1]`; a zero-frame slide (skin
+    /// `page_slide_duration = 0`) is already complete instead of `0/0 = NaN`.
+    fn eased_progress(&self) -> f32 {
+        if self.duration == 0 {
+            return 1.0;
+        }
+        oasis_types::easing::ease_in_out_cubic(self.frame as f32 / self.duration as f32)
+    }
 }
 
 /// Pre-computed SDI object names for a single icon slot.
@@ -341,7 +349,7 @@ impl DashboardState {
             return 0;
         }
         let p = self.hover_lift.get(i).copied().unwrap_or(0.0);
-        (crate::transition::ease_out_cubic(p) * HOVER_LIFT_PX).round() as i32
+        (oasis_types::easing::ease_out_cubic(p) * HOVER_LIFT_PX).round() as i32
     }
 
     /// Whether any hover lift is still easing toward its target.
@@ -414,14 +422,12 @@ impl DashboardState {
     /// Switch to the next page (wraps around) with slide animation.
     pub fn next_page(&mut self) {
         let count = self.page_count();
-        let from = self.page;
         self.page = (self.page + 1) % count;
         let page_apps = self.current_page_apps().len();
         if self.selected >= page_apps && page_apps > 0 {
             self.selected = page_apps - 1;
         }
         self.page_anim = (self.config.page_style != "fade").then_some(PageSlideAnim {
-            from_page: from,
             frame: 0,
             duration: self.config.page_slide_duration,
             direction: -1, // slide left (next)
@@ -433,7 +439,6 @@ impl DashboardState {
     /// Switch to the previous page (wraps around) with slide animation.
     pub fn prev_page(&mut self) {
         let count = self.page_count();
-        let from = self.page;
         if self.page == 0 {
             self.page = count - 1;
         } else {
@@ -444,7 +449,6 @@ impl DashboardState {
             self.selected = page_apps - 1;
         }
         self.page_anim = (self.config.page_style != "fade").then_some(PageSlideAnim {
-            from_page: from,
             frame: 0,
             duration: self.config.page_slide_duration,
             direction: 1, // slide right (prev)
@@ -557,7 +561,7 @@ impl DashboardState {
 
         // Compute page-slide x-offset for incoming icons.
         let slide_offset = if let Some(ref anim) = self.page_anim {
-            let t = crate::transition::ease_in_out_cubic(anim.frame as f32 / anim.duration as f32);
+            let t = anim.eased_progress();
             // Incoming page slides from off-screen to 0.
             let w = at.screen_w as f32;
             ((1.0 - t) * w * anim.direction as f32) as i32
@@ -848,6 +852,22 @@ pub(crate) mod tests {
         dash.selected = 3;
         dash.handle_input(&Button::Up);
         assert_eq!(dash.selected, 1);
+    }
+
+    #[test]
+    fn zero_frame_page_slide_is_complete_not_nan() {
+        let anim = PageSlideAnim {
+            frame: 0,
+            duration: 0,
+            direction: -1,
+        };
+        assert_eq!(anim.eased_progress(), 1.0);
+        let half = PageSlideAnim {
+            frame: 5,
+            duration: 10,
+            direction: 1,
+        };
+        assert!((half.eased_progress() - 0.5).abs() < 1e-6);
     }
 
     #[test]
