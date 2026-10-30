@@ -316,11 +316,12 @@ impl BrowserWidget {
         }
         let (work_tx, work_rx) = std::sync::mpsc::channel::<(String, Vec<u8>)>();
         let (result_tx, result_rx) = std::sync::mpsc::channel::<(String, image::DecodedImage)>();
+        let limits = self.config.image_limits();
         std::thread::Builder::new()
             .name("img-decode".into())
             .spawn(move || {
                 while let Ok((url, data)) = work_rx.recv() {
-                    if let Some(decoded) = image::decode_image(&data) {
+                    if let Some(decoded) = image::decode_image_with_limits(&data, limits) {
                         if result_tx.send((url, decoded)).is_err() {
                             break; // receiver dropped
                         }
@@ -489,7 +490,10 @@ impl BrowserWidget {
                         self.image_decode_in_flight += 1;
                     } else {
                         // Sync fallback — use placeholder on decode failure.
-                        let decoded = match image::decode_image(&vfs_resp.body) {
+                        let decoded = match image::decode_image_with_limits(
+                            &vfs_resp.body,
+                            self.config.image_limits(),
+                        ) {
                             Some(img) => img,
                             None => {
                                 self.broken_image_urls.insert(resolved.clone());
@@ -522,7 +526,10 @@ impl BrowserWidget {
                     "[BR] image fetch ok: {} bytes",
                     loaded.response.body.len()
                 ));
-                if let Some(decoded) = image::decode_image(&loaded.response.body) {
+                if let Some(decoded) = image::decode_image_with_limits(
+                    &loaded.response.body,
+                    self.config.image_limits(),
+                ) {
                     let img_bytes = decoded.width as usize * decoded.height as usize * 4;
 
                     while self.decoded_image_bytes + img_bytes > Self::IMAGE_MEMORY_BUDGET {
@@ -707,7 +714,7 @@ impl BrowserWidget {
             self.cached_image_info = self
                 .decoded_images
                 .iter()
-                .map(|(url, img)| (url.clone(), (img.width, img.height)))
+                .map(|(url, img)| (url.clone(), (img.natural_width, img.natural_height)))
                 .collect();
             self.image_info_dirty = false;
         }

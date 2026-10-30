@@ -539,7 +539,10 @@ impl BrowserWidget {
                         self.image_decode_in_flight += 1;
                     } else {
                         // Sync fallback — use placeholder on decode failure.
-                        let decoded = match crate::image::decode_image(&body) {
+                        let decoded = match crate::image::decode_image_with_limits(
+                            &body,
+                            self.config.image_limits(),
+                        ) {
                             Some(img) => img,
                             None => {
                                 self.broken_image_urls.insert(resolved.clone());
@@ -662,7 +665,10 @@ impl BrowserWidget {
                 // `<img>` doesn't trigger a second network round-trip
                 // (and inherit any cookie / redirect / cache failure
                 // path that the page-load fetch already cleared).
-                if let Some(decoded) = crate::image::decode_image(&response.body) {
+                if let Some(decoded) = crate::image::decode_image_with_limits(
+                    &response.body,
+                    self.config.image_limits(),
+                ) {
                     let img_bytes = decoded.width as usize * decoded.height as usize * 4;
                     // Evict oldest decoded images if over budget so the
                     // byte counter tracks actual resident memory.

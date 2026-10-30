@@ -61,6 +61,8 @@ pub const DEFAULT_JS_MEMORY_LIMIT: usize = if cfg!(feature = "psp") {
     64 * 1024 * 1024
 };
 
+use crate::image::ImageLimits;
+
 /// Visual configuration for browser chrome.
 #[derive(Debug, Clone)]
 pub struct BrowserConfig {
@@ -94,7 +96,14 @@ pub struct BrowserConfig {
 
     // Limits
     pub max_redirects: u8,
+    /// Largest decoded image width or height; larger images are
+    /// downscaled while decoding (JPEG, via DCT scaling) or right after
+    /// (other formats). Layout still uses the image's natural size.
+    /// Default [`ImageLimits::default`]: 4096 on desktop, 1024 on PSP.
     pub max_image_dimension: u32,
+    /// Largest decoded image pixel count; larger images are downscaled.
+    /// Default 2 Mpx (8 MiB RGBA) on desktop, 1 Mpx on PSP.
+    pub max_image_pixels: u32,
     /// Page JavaScript budget in milliseconds, applied to the page's
     /// `JsEngine` via `set_max_exec_ms`: the limit for each inline
     /// script, each event dispatch, and each frame's timer tick (timers
@@ -142,11 +151,23 @@ impl Default for BrowserConfig {
             smooth_scroll: false,
             scroll_line_px: 16,
             max_redirects: 5,
-            max_image_dimension: 480,
+            max_image_dimension: ImageLimits::default().max_dimension,
+            max_image_pixels: ImageLimits::default().max_pixels,
             js_max_exec_ms: DEFAULT_JS_MAX_EXEC_MS,
             js_memory_limit_bytes: DEFAULT_JS_MEMORY_LIMIT,
             use_themed_chrome: true,
             zoom_level: 1.0,
+        }
+    }
+}
+
+impl BrowserConfig {
+    /// The image decode limits from `max_image_dimension` /
+    /// `max_image_pixels`.
+    pub fn image_limits(&self) -> ImageLimits {
+        ImageLimits {
+            max_dimension: self.max_image_dimension,
+            max_pixels: self.max_image_pixels,
         }
     }
 }
@@ -220,7 +241,7 @@ mod tests {
         assert_eq!(cfg.button_width, 28);
         assert!((cfg.default_font_size - 8.0).abs() < f32::EPSILON);
         assert_eq!(cfg.max_redirects, 5);
-        assert_eq!(cfg.max_image_dimension, 480);
+        assert_eq!(cfg.image_limits(), ImageLimits::default());
         assert!(!cfg.smooth_scroll);
         assert_eq!(cfg.scroll_line_px, 16);
         assert!((cfg.zoom_level - 1.0).abs() < f32::EPSILON);
