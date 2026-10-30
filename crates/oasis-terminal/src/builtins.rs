@@ -1,24 +1,187 @@
 //! Built-in shell commands implemented directly on [`CommandRegistry`].
 //!
 //! These are commands that need direct access to registry internals
-//! (variables, aliases, history, functions) and so cannot be implemented
-//! as standalone [`Command`] trait objects.
+//! (variables, aliases, history, functions, jobs) and so cannot be
+//! implemented as standalone [`Command`](crate::Command) trait objects.
+//!
+//! [`BUILTINS`] is the single table the executor dispatches through and
+//! that `help`, `which` and tab completion read, so a builtin is added in
+//! exactly one place.
 
 use std::collections::HashMap;
 
 use oasis_types::error::{OasisError, Result};
 
-use crate::interpreter::{CommandOutput, CommandRegistry};
+use crate::interpreter::{CommandOutput, CommandRegistry, Environment};
 
-/// `help` listing category of a shell builtin (see `BUILTIN_NAMES`).
-fn builtin_category(name: &str) -> &'static str {
-    match name {
-        "set" | "unset" | "env" | "alias" | "unalias" => "config",
-        "run" | "return" | "break" | "continue" | "local" | "function" => "scripting",
-        "jobs" | "fg" | "bg" | "kill" => "jobs",
-        "true" | "false" => "scripting",
-        _ => "general",
-    }
+/// Signature of a builtin's implementation.
+pub(crate) type BuiltinFn =
+    fn(&CommandRegistry, &[&str], &mut Environment<'_>) -> Result<CommandOutput>;
+
+/// One shell builtin: its `help` metadata and its implementation.
+pub(crate) struct BuiltinSpec {
+    /// What the user types.
+    pub(crate) name: &'static str,
+    /// `help` listing category.
+    pub(crate) category: &'static str,
+    /// Usage line for `help <name>`.
+    pub(crate) usage: &'static str,
+    /// One-line description.
+    pub(crate) description: &'static str,
+    /// Implementation.
+    pub(crate) run: BuiltinFn,
+}
+
+/// Every shell builtin, intercepted by the executor before the command
+/// map (so a registered command with the same name could never run).
+pub(crate) static BUILTINS: &[BuiltinSpec] = &[
+    BuiltinSpec {
+        name: "help",
+        category: "general",
+        usage: "help [--category <cat>] [command]",
+        description: "List commands or describe one",
+        run: |reg, args, _| reg.execute_help(args),
+    },
+    BuiltinSpec {
+        name: "which",
+        category: "general",
+        usage: "which <command>",
+        description: "Say whether a name is a builtin, command, alias or function",
+        run: |reg, args, _| reg.execute_which(args),
+    },
+    BuiltinSpec {
+        name: "history",
+        category: "general",
+        usage: "history [clear]",
+        description: "Show or clear the command history",
+        run: |reg, args, _| reg.execute_history_cmd(args),
+    },
+    BuiltinSpec {
+        name: "set",
+        category: "config",
+        usage: "set [VAR=value | VAR]",
+        description: "Set a shell variable, or show one / all",
+        run: |reg, args, _| reg.execute_set(args),
+    },
+    BuiltinSpec {
+        name: "unset",
+        category: "config",
+        usage: "unset <VAR>...",
+        description: "Remove shell variables",
+        run: |reg, args, _| reg.execute_unset(args),
+    },
+    BuiltinSpec {
+        name: "env",
+        category: "config",
+        usage: "env",
+        description: "List all shell variables",
+        run: |reg, _, _| reg.execute_env(),
+    },
+    BuiltinSpec {
+        name: "alias",
+        category: "config",
+        usage: "alias [name=command | name]",
+        description: "Define, show or list aliases",
+        run: |reg, args, _| reg.execute_alias(args),
+    },
+    BuiltinSpec {
+        name: "unalias",
+        category: "config",
+        usage: "unalias <name>...",
+        description: "Remove aliases",
+        run: |reg, args, _| reg.execute_unalias(args),
+    },
+    BuiltinSpec {
+        name: "run",
+        category: "scripting",
+        usage: "run <script> [args...]",
+        description: "Execute a script file (control flow, $1..$9)",
+        run: |reg, args, env| reg.execute_run(args, env),
+    },
+    BuiltinSpec {
+        name: "function",
+        category: "scripting",
+        usage: "function name() { body }",
+        description: "Define a shell function, or list them",
+        // Normally intercepted before expansion so the body is stored
+        // literally; this path only runs when reached through an alias.
+        run: |reg, args, _| reg.execute_function_def_raw(&args.join(" ")),
+    },
+    BuiltinSpec {
+        name: "return",
+        category: "scripting",
+        usage: "return [code]",
+        description: "Return from a shell function",
+        run: |reg, args, _| reg.execute_return(args),
+    },
+    BuiltinSpec {
+        name: "local",
+        category: "scripting",
+        usage: "local NAME[=VALUE]...",
+        description: "Declare function-local variables",
+        run: |reg, args, _| reg.execute_local(args),
+    },
+    BuiltinSpec {
+        name: "break",
+        category: "scripting",
+        usage: "break",
+        description: "Leave the enclosing loop",
+        run: |reg, _, _| reg.execute_break(),
+    },
+    BuiltinSpec {
+        name: "continue",
+        category: "scripting",
+        usage: "continue",
+        description: "Skip to the next loop iteration",
+        run: |reg, _, _| reg.execute_continue(),
+    },
+    BuiltinSpec {
+        name: "true",
+        category: "scripting",
+        usage: "true",
+        description: "Do nothing, successfully",
+        run: |_, _, _| Ok(CommandOutput::None),
+    },
+    BuiltinSpec {
+        name: "false",
+        category: "scripting",
+        usage: "false",
+        description: "Do nothing, with exit status 1",
+        run: |_, _, _| Ok(CommandOutput::status(1, CommandOutput::None)),
+    },
+    BuiltinSpec {
+        name: "jobs",
+        category: "jobs",
+        usage: "jobs",
+        description: "List background jobs",
+        run: |reg, _, _| reg.execute_jobs(),
+    },
+    BuiltinSpec {
+        name: "fg",
+        category: "jobs",
+        usage: "fg [%job]",
+        description: "Run a job in the foreground",
+        run: |reg, args, env| reg.execute_fg(args, env),
+    },
+    BuiltinSpec {
+        name: "bg",
+        category: "jobs",
+        usage: "bg [%job]",
+        description: "Resume a stopped job in the background",
+        run: |reg, args, _| reg.execute_bg(args),
+    },
+    BuiltinSpec {
+        name: "kill",
+        category: "jobs",
+        usage: "kill [-STOP|-CONT|-TERM] <%job|job-number>...",
+        description: "Signal background jobs",
+        run: |reg, args, _| reg.execute_kill(args),
+    },
+];
+
+/// Look up a builtin by (lower-case) name.
+pub(crate) fn builtin(name: &str) -> Option<&'static BuiltinSpec> {
+    BUILTINS.iter().find(|b| b.name == name)
 }
 
 impl CommandRegistry {
@@ -55,22 +218,25 @@ impl CommandRegistry {
                     out.push_str(&format!("  Usage: {}", cmd.usage()));
                     Ok(CommandOutput::Text(out))
                 },
-                None if crate::types::BUILTIN_NAMES.contains(&name_lower.as_str()) => Ok(
-                    CommandOutput::Text(format!("{name_lower} (shell built-in)")),
-                ),
-                None => Err(OasisError::Command(
-                    format!("unknown command: {name}").into(),
-                )),
+                None => match builtin(&name_lower) {
+                    Some(b) => Ok(CommandOutput::Text(format!(
+                        "{} ({}, shell built-in)\n  {}\n  Usage: {}",
+                        b.name, b.category, b.description, b.usage
+                    ))),
+                    None => Err(OasisError::Command(
+                        format!("unknown command: {name}").into(),
+                    )),
+                },
             }
         } else {
             // Group commands by category.
             let mut categories: HashMap<&str, Vec<(&str, &str)>> = HashMap::new();
             // Include intercepted commands.
-            for &name in crate::types::BUILTIN_NAMES {
+            for b in BUILTINS {
                 categories
-                    .entry(builtin_category(name))
+                    .entry(b.category)
                     .or_default()
-                    .push((name, ""));
+                    .push((b.name, b.description));
             }
             for cmd in self.commands.values() {
                 categories
@@ -126,7 +292,7 @@ impl CommandRegistry {
         }
         let name = args[0].to_ascii_lowercase();
         // Check intercepted commands first.
-        if crate::types::BUILTIN_NAMES.contains(&name.as_str()) {
+        if builtin(&name).is_some() {
             return Ok(CommandOutput::Text(format!("{name}: shell built-in")));
         }
         match self.commands.get(name.as_str()) {

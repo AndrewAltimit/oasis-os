@@ -4,26 +4,29 @@ use oasis_types::error::OasisError;
 #[cfg(test)]
 use oasis_types::error::Result;
 
+use oasis_types::ipc::{WM_REQUEST_PATH, WM_STATUS_PATH};
+
 use crate::interpreter::{CommandOutput, CommandSignal};
 
 // ---------------------------------------------------------------------------
 // wm
 // ---------------------------------------------------------------------------
 
+const WM_USAGE: &str = "wm [list|close [--force] <id>|focus <id>|minimize <id>|maximize <id>]";
+
 define_command!(
     WmCmd,
     "wm",
     "Window manager control",
-    "wm [list|close <id>|focus <id>|minimize <id>]",
+    WM_USAGE,
     "ui",
     |args, env| {
         let subcmd = args.first().copied().unwrap_or("list");
         match subcmd {
             "list" => {
                 // Read window state from VFS if available.
-                let status_path = "/var/wm/status";
-                if env.vfs.exists(status_path) {
-                    let data = env.vfs.read(status_path)?;
+                if env.vfs.exists(WM_STATUS_PATH) {
+                    let data = env.vfs.read(WM_STATUS_PATH)?;
                     Ok(CommandOutput::Text(
                         String::from_utf8_lossy(&data).into_owned(),
                     ))
@@ -34,19 +37,30 @@ define_command!(
                 }
             },
             "close" | "focus" | "minimize" | "maximize" => {
-                let id = args.get(1).copied().unwrap_or("");
+                // `--force` (close only, either side of the id) skips the
+                // app's unsaved-changes prompt.
+                let force = subcmd == "close" && args[1..].contains(&"--force");
+                let id = args[1..]
+                    .iter()
+                    .copied()
+                    .find(|a| !(force && *a == "--force"))
+                    .unwrap_or("");
                 if id.is_empty() {
+                    let flag = if subcmd == "close" { " [--force]" } else { "" };
                     return Err(OasisError::Command(
-                        format!("usage: wm {subcmd} <window-id>").into(),
+                        format!("usage: wm {subcmd}{flag} <window-id>").into(),
                     ));
                 }
-                let request = format!("{subcmd} {id}");
-                let req_path = "/var/wm/request";
-                env.vfs.write(req_path, request.as_bytes())?;
-                Ok(CommandOutput::Text(format!("WM request: {subcmd} {id}")))
+                let request = if force {
+                    format!("close --force {id}")
+                } else {
+                    format!("{subcmd} {id}")
+                };
+                env.vfs.write(WM_REQUEST_PATH, request.as_bytes())?;
+                Ok(CommandOutput::Text(format!("WM request: {request}")))
             },
             _ => Err(OasisError::Command(
-                format!("unknown subcommand: {subcmd}\nusage: wm [list|close <id>|focus <id>|minimize <id>]").into(),
+                format!("unknown subcommand: {subcmd}\nusage: {WM_USAGE}").into(),
             )),
         }
     }
@@ -255,6 +269,16 @@ mod tests {
         assert!(s.contains("close browser"));
         let data = vfs.read("/var/wm/request").unwrap();
         assert_eq!(data, b"close browser");
+    }
+
+    #[test]
+    fn wm_close_force_queues_forced_request() {
+        let (reg, mut vfs) = setup();
+        for line in ["wm close --force editor", "wm close editor --force"] {
+            exec(&reg, &mut vfs, line).unwrap();
+            assert_eq!(vfs.read(WM_REQUEST_PATH).unwrap(), b"close --force editor");
+        }
+        assert!(exec(&reg, &mut vfs, "wm close --force").is_err());
     }
 
     #[test]

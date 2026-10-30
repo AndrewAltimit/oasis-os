@@ -7,15 +7,14 @@ use oasis_skin::theme::contrast_ratio;
 use oasis_skin::{ActiveTheme, SkinVariant, VARIANT_REQUEST_PREFIX, resolve_skin};
 use oasis_types::backend::Color;
 
-use crate::CommandOutput;
-use crate::interpreter::resolve_path;
+use oasis_terminal::{CommandOutput, resolve_path};
 
 /// Format a color's RGB channels as `#RRGGBB` (alpha dropped).
 fn fmt_hex(c: Color) -> String {
     format!("#{:02X}{:02X}{:02X}", c.r, c.g, c.b)
 }
 
-register_commands!(register_skin_commands, [SkinCmd]);
+oasis_terminal::register_commands!(register_skin_commands, [SkinCmd]);
 
 /// Resolve a skin for linting: built-in name, explicit path, or
 /// `./skins/{name}/`. Unlike `resolve_skin`, does NOT fall back to classic —
@@ -175,7 +174,7 @@ fn inspect_skin(target: &str) -> String {
 
 // Terminal command for listing, showing, linting, switching, exporting, or
 // deriving variants of UI skins.
-define_command!(
+oasis_terminal::define_command!(
     SkinCmd,
     "skin",
     "List, show, lint, inspect, switch, export, or derive variants of skins",
@@ -269,8 +268,18 @@ define_command!(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_helpers::assert_text;
-    use crate::{Command, CommandSignal, Environment};
+    use oasis_terminal::{Command, CommandSignal, Environment};
+
+    /// Unwrap `CommandOutput::Text`, panicking on anything else.
+    macro_rules! assert_text {
+        ($expr:expr) => {{
+            let __val = $expr;
+            let CommandOutput::Text(s) = __val else {
+                panic!("expected CommandOutput::Text, got {__val:?}");
+            };
+            s
+        }};
+    }
     use oasis_vfs::{MemoryVfs, Vfs};
 
     fn make_env(vfs: &mut MemoryVfs) -> Environment<'_> {

@@ -2,7 +2,8 @@
 //!
 //! Reads script files from the VFS and runs them through the terminal's
 //! shared script engine (`#` comments, blank lines skipped, full control
-//! flow). Provides `run`, `cron`, and `startup` commands.
+//! flow). Provides the `cron` and `startup` commands; `run <path>` is a
+//! shell builtin in `oasis-terminal` (`CommandRegistry::execute_run`).
 
 use crate::error::{OasisError, Result};
 use crate::terminal::{Command, CommandOutput, CommandRegistry, Environment};
@@ -49,65 +50,6 @@ pub fn run_startup(registry: &CommandRegistry, env: &mut Environment<'_>) -> Res
 // ---------------------------------------------------------------------------
 // Terminal commands
 // ---------------------------------------------------------------------------
-
-/// `run <path>` -- execute a script file.
-pub struct RunCmd;
-
-impl Command for RunCmd {
-    fn name(&self) -> &str {
-        "run"
-    }
-    fn description(&self) -> &str {
-        "Execute a script file"
-    }
-    fn usage(&self) -> &str {
-        "run <path>"
-    }
-    fn category(&self) -> &str {
-        "scripting"
-    }
-    fn execute(&self, args: &[&str], env: &mut Environment<'_>) -> Result<CommandOutput> {
-        let path = args
-            .first()
-            .copied()
-            .ok_or_else(|| OasisError::Command("usage: run <path>".into()))?;
-
-        // Resolve relative paths against cwd.
-        let full_path = if path.starts_with('/') {
-            path.to_string()
-        } else if env.cwd == "/" {
-            format!("/{path}")
-        } else {
-            format!("{}/{path}", env.cwd)
-        };
-
-        if !env.vfs.exists(&full_path) {
-            return Err(OasisError::Command(
-                format!("script not found: {full_path}").into(),
-            ));
-        }
-
-        // We need a reference to the registry, but we're inside a Command.
-        // The `run` command reads the script and returns it as text output.
-        // The caller (main loop or script engine) can execute it.
-        let data = env.vfs.read(&full_path)?;
-        let source = String::from_utf8_lossy(&data);
-        let lines = parse_script(&source);
-
-        if lines.is_empty() {
-            return Ok(CommandOutput::Text("(empty script)".to_string()));
-        }
-
-        // Return the parsed commands as a listing (actual execution happens
-        // through run_script() at the app level).
-        let mut output = format!("Script: {full_path} ({} commands)\n", lines.len());
-        for line in &lines {
-            output.push_str(&format!("  {line}\n"));
-        }
-        output.push_str("(use run_script() API for execution)");
-        Ok(CommandOutput::Text(output))
-    }
-}
 
 /// `cron` -- manage scheduled scripts.
 pub struct CronCmd;
@@ -254,9 +196,8 @@ impl Command for StartupCmd {
     }
 }
 
-/// Register scripting commands.
+/// Register scripting commands (`cron`, `startup`).
 pub fn register_script_commands(reg: &mut CommandRegistry) {
-    reg.register(Box::new(RunCmd));
     reg.register(Box::new(CronCmd));
     reg.register(Box::new(StartupCmd));
 }

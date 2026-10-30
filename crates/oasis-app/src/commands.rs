@@ -203,6 +203,10 @@ pub fn process_command_output(
             }
             return skin_swap;
         },
+        // Unwrapped by the executor; handled for completeness.
+        Ok(CommandOutput::Status { output, .. }) => {
+            return process_command_output(Ok(*output), state);
+        },
         Err(e) => {
             // Red via the skin's ANSI palette (SGR 31); the terminal
             // renderer resolves the escape into a themed colored run.
@@ -984,6 +988,10 @@ pub(crate) fn format_remote_response(
             }
             parts.join("\n")
         },
+        // Unwrapped by the executor; handled for completeness.
+        Ok(CommandOutput::Status { output, .. }) => {
+            format_remote_response(Ok(*output), browser, skin, sdi, pending_skin)
+        },
         Err(e) => format!("error: {e}"),
     }
 }
@@ -1130,14 +1138,13 @@ pub fn poll_ftp_server(state: &mut AppState, vfs: &mut MemoryVfs) {
     }
 }
 
-/// VFS IPC path the `wm` terminal command writes requests to.
-pub const WM_REQUEST_PATH: &str = "/var/wm/request";
-/// VFS IPC path the `wm list` terminal command reads window state from.
-pub const WM_STATUS_PATH: &str = "/var/wm/status";
+/// VFS IPC paths the `wm` terminal command writes requests to / reads the
+/// window list from.
+pub use oasis_core::ipc::{WM_REQUEST_PATH, WM_STATUS_PATH};
 
 /// Service the `wm` terminal command's VFS IPC (local, remote terminal and
 /// MCP `run_command` alike): publish the window list to
-/// [`WM_STATUS_PATH`] and apply `close|focus|minimize|maximize <id>`
+/// [`WM_STATUS_PATH`] and apply `close [--force]|focus|minimize|maximize <id>`
 /// requests from [`WM_REQUEST_PATH`]. Without this bridge `wm` was a no-op
 /// in the desktop shell (and failed outright: `/var/wm` did not exist).
 pub fn poll_wm_ipc(state: &mut AppState, sdi: &mut SdiRegistry, vfs: &mut MemoryVfs) {
@@ -1163,15 +1170,20 @@ fn apply_wm_request(request: &str, state: &mut AppState, sdi: &mut SdiRegistry, 
         return;
     };
     let id = id.trim();
+    // `close --force <id>` skips the app's unsaved-changes prompt.
+    let (force, id) = match id.strip_prefix("--force ") {
+        Some(rest) if op == "close" => (true, rest.trim()),
+        _ => (false, id),
+    };
     if state.wm.get_window(id).is_none() {
         log::warn!("wm request for unknown window {id:?}");
         return;
     }
     let result = match op {
-        // Same as the titlebar close button: an app with unsaved changes
-        // answers with its prompt instead of losing them.
+        // Without `--force`, same as the titlebar close button: an app with
+        // unsaved changes answers with its prompt instead of losing them.
         "close" => {
-            let how = CloseHow::Programmatic { force: false };
+            let how = CloseHow::Programmatic { force };
             if close_app_window(state, sdi, vfs, id, how) == CloseOutcome::Declined {
                 state.terminal.print(format!(
                     "wm: {id} did not close: the app is asking for confirmation"

@@ -329,10 +329,19 @@ impl CommandRegistry {
     }
 
     /// Resolve a job spec argument (`%N`, `%%`, `%+`, `%-`; default `%%`).
+    /// A bare job number (`kill 1`, `fg 2`) means `%N`: the shell has no
+    /// process ids, so there is nothing else it could refer to.
     fn resolve_job(&self, spec: Option<&&str>, builtin: &str) -> Result<(usize, String)> {
         let spec = spec.copied().unwrap_or("%%");
         let jobs = self.jobs.borrow();
-        parse_job_spec(spec, &jobs)
+        let numbered;
+        let lookup = if !spec.is_empty() && spec.bytes().all(|b| b.is_ascii_digit()) {
+            numbered = format!("%{spec}");
+            numbered.as_str()
+        } else {
+            spec
+        };
+        parse_job_spec(lookup, &jobs)
             .and_then(|id| jobs.get(id).map(|j| (id, j.command.clone())))
             .ok_or_else(|| OasisError::Command(format!("{builtin}: {spec}: no such job").into()))
     }

@@ -37,6 +37,7 @@ fn text_of(out: &CommandOutput) -> String {
         CommandOutput::None | CommandOutput::Clear => String::new(),
         CommandOutput::Signal(sig) => format!("{sig:?}"),
         CommandOutput::Multi(parts) => parts.iter().map(text_of).collect::<Vec<_>>().join("\n"),
+        CommandOutput::Status { output, .. } => text_of(output),
     }
 }
 

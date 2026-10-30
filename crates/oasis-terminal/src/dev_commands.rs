@@ -475,7 +475,10 @@ define_command!(
     "dev",
     |args, env| {
         if args.is_empty() {
-            return Ok(CommandOutput::Text("false".to_string()));
+            return Ok(CommandOutput::status(
+                1,
+                CommandOutput::Text("false".to_string()),
+            ));
         }
         let result = match args[0] {
             "-f" => {
@@ -536,9 +539,10 @@ define_command!(
                 }
             },
         };
-        Ok(CommandOutput::Text(
-            if result { "true" } else { "false" }.to_string(),
-        ))
+        // Print the verdict and exit 1 on false, so `test ... && cmd`,
+        // `||` and `$?` behave as in a POSIX shell.
+        let text = CommandOutput::Text(if result { "true" } else { "false" }.to_string());
+        Ok(CommandOutput::status(if result { 0 } else { 1 }, text))
     }
 );
 

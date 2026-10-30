@@ -1709,6 +1709,10 @@ impl OasisWasm {
                 }
                 return skin_swap;
             },
+            // Unwrapped by the executor; handled for completeness.
+            Ok(CommandOutput::Status { output, .. }) => {
+                return self.process_command_output(Ok(*output));
+            },
             Err(e) => {
                 self.output_lines.push(format!("error: {e}"));
             },
