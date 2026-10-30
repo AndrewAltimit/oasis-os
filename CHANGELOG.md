@@ -71,7 +71,14 @@ removal, a restyled site, and docs that match the code.
   `fullscreen` flag: hosts passed the kiosk-window flag, which apps read
   as "use the SDI layout", so clicks in a kiosk-fullscreen Music Player
   were ignored and Settings / File Manager / TV Guide hit-tested rows
-  other than the ones drawn.
+  other than the ones drawn. `App::handle_click(lx, ly, vfs)` also
+  drops its `cw` / `ch`: apps hit-test against the size `App::layout`
+  recorded just before (`AppRunner::handle_click` still takes the size
+  and lays the app out first). `ContentState::line_at` maps a click to a
+  line; `oasis_app_core::testing::click_at` lays out and clicks in unit
+  tests. `TvGuideState`'s SDI renderer (`update_sdi` / `hide_sdi`,
+  `colors`) is gone too, and `TvGuideState::new` / `TvGuideApp::new` no
+  longer take an `ActiveTheme`.
 - Shared helpers replace per-crate copies: `oasis_types::easing`,
   `util::ct_eq`, `util::base64`, `OasisError::is_would_block()` /
   `is_timed_out()`.

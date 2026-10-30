@@ -22,6 +22,9 @@ use crate::{TV_CHANNELS_PATH, TV_REQUEST_PATH};
 pub struct TvGuideApp {
     /// The TV guide state (EPG grid, channel list, catalogs, etc.).
     pub guide: TvGuideState,
+    /// Content-area size recorded by the last `App::layout` (click
+    /// hit-testing).
+    content_size: (u32, u32),
     /// VFS path for this app.
     path: String,
     /// Cached text lines for the content view.
@@ -53,6 +56,7 @@ impl TvGuideApp {
 
         Self {
             guide,
+            content_size: (0, 0),
             path: path.to_string(),
             lines,
             requests: Vec::new(),
@@ -137,7 +141,12 @@ impl App for TvGuideApp {
         }
     }
 
-    fn handle_click(&mut self, lx: i32, ly: i32, cw: u32, ch: u32, _vfs: &dyn Vfs) -> AppAction {
+    fn layout(&mut self, cw: u32, ch: u32, _at: &ActiveTheme) {
+        self.content_size = (cw, ch);
+    }
+
+    fn handle_click(&mut self, lx: i32, ly: i32, _vfs: &dyn Vfs) -> AppAction {
+        let (cw, ch) = self.content_size;
         if let Some(req) = self.guide.handle_click(lx, ly, cw, ch) {
             self.requests.push(Self::make_tune_ipc(&req));
             self.lines = self.guide.text_content();

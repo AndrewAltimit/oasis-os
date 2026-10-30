@@ -101,6 +101,7 @@ impl App for FileManagerApp {
     }
 
     fn layout(&mut self, cw: u32, ch: u32, at: &ActiveTheme) {
+        self.content_size = (cw, ch);
         self.content.update_layout_windowed(ch, at);
         // Same geometry `draw_windowed_explorer` draws with (no inner title
         // bar; the grid metrics don't depend on the window origin).
@@ -110,7 +111,8 @@ impl App for FileManagerApp {
         self.cached_font_hint = at.font_hint;
     }
 
-    fn handle_click(&mut self, lx: i32, ly: i32, cw: u32, ch: u32, vfs: &dyn Vfs) -> AppAction {
+    fn handle_click(&mut self, lx: i32, ly: i32, vfs: &dyn Vfs) -> AppAction {
+        let (cw, ch) = self.content_size;
         let action = self.click(lx, ly, cw, ch);
         self.apply_pending_navigation(vfs);
         action
@@ -263,6 +265,7 @@ mod tests {
     use super::*;
     use crate::model::{EntryKind, build_tree_entries, parse_entry};
     use crate::view::compute_explorer_geom;
+    use oasis_app_core::testing::click_at;
     use oasis_vfs::MemoryVfs;
 
     fn setup_vfs() -> MemoryVfs {
@@ -626,12 +629,12 @@ mod tests {
         let tile_x = g.grid_x + 4 + g.tile_w as i32 / 2;
         let tile_y = g.body_y + 4 + g.tile_h as i32 / 2;
         // First click selects.
-        fm.handle_click(tile_x, tile_y, 600, 400, &vfs);
+        click_at(&mut fm, tile_x, tile_y, 600, 400, &vfs);
         assert_eq!(fm.last_click_tile, Some(0));
         assert_eq!(fm.panels[0].browse_dir, "/");
         // Second click on same tile activates (the click has the vfs, so
         // it navigates right away).
-        fm.handle_click(tile_x, tile_y, 600, 400, &vfs);
+        click_at(&mut fm, tile_x, tile_y, 600, 400, &vfs);
         assert_eq!(fm.panels[0].browse_dir, expected_path);
         assert!(fm.pending_navigation.is_none());
     }
@@ -651,7 +654,7 @@ mod tests {
         let row_idx = 1; // "/" entry.
         let tx = g.tree_x + 8;
         let ty = g.body_y + 4 + row_idx * tree_line_h + tree_line_h / 2;
-        fm.handle_click(tx, ty, 600, 400, &vfs);
+        click_at(&mut fm, tx, ty, 600, 400, &vfs);
         assert_eq!(fm.panels[0].browse_dir, "/");
         assert!(fm.pending_navigation.is_none());
     }
@@ -665,7 +668,7 @@ mod tests {
         let file_w = 4 * 7 + 16; // "File"
         let edit_w = 4 * 7 + 16; // "Edit"
         let view_x = 6 + file_w + edit_w + 4;
-        let action = fm.handle_click(view_x, 8, 600, 400, &vfs);
+        let action = click_at(&mut fm, view_x, 8, 600, 400, &vfs);
         assert_eq!(action, AppAction::None);
         assert_eq!(fm.menu.open, Some(2));
     }
@@ -957,7 +960,7 @@ mod tests {
         select(&mut fm, &vfs, 0, "/etc", "hostname");
         fm.request_delete();
         let g = crate::dialog::dialog_geom(0, 0, 400, 240);
-        fm.handle_click(g.ok.x + 2, g.ok.y + 2, 400, 240, &vfs);
+        click_at(&mut fm, g.ok.x + 2, g.ok.y + 2, 400, 240, &vfs);
         assert!(fm.dialog.is_none());
         fm.apply_vfs_ops(&mut vfs);
         assert!(!vfs.exists("/etc/hostname"));

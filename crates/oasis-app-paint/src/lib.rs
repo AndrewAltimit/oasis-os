@@ -70,6 +70,9 @@ struct Picker {
 #[derive(Debug)]
 pub struct PaintApp {
     content: ContentState,
+    /// Content-area size recorded by the last `App::layout` (click
+    /// hit-testing).
+    content_size: (u32, u32),
     canvas: Canvas,
     tool: Tool,
     color: Color,
@@ -157,6 +160,7 @@ impl PaintApp {
         let pal = palette();
         let mut app = Self {
             content: ContentState::new("Paint", path),
+            content_size: (0, 0),
             canvas: Canvas::new(CANVAS_W, CANVAS_H),
             tool: Tool::Pencil,
             color: pal[0],
@@ -784,6 +788,7 @@ impl App for PaintApp {
     }
 
     fn layout(&mut self, cw: u32, ch: u32, _at: &ActiveTheme) {
+        self.content_size = (cw, ch);
         let l = PaintLayout::compute(0, 0, cw, ch, self.canvas.width(), self.canvas.height());
         self.picker_rows = l.picker_rows();
     }
@@ -801,7 +806,8 @@ impl App for PaintApp {
         delta != 0
     }
 
-    fn handle_click(&mut self, lx: i32, ly: i32, cw: u32, ch: u32, vfs: &dyn Vfs) -> AppAction {
+    fn handle_click(&mut self, lx: i32, ly: i32, vfs: &dyn Vfs) -> AppAction {
+        let (cw, ch) = self.content_size;
         let action = self.click(lx, ly, cw, ch);
         // A click can open the picker or choose a file: list / load now.
         self.service_picker(vfs);
@@ -906,6 +912,7 @@ mod tests {
     use super::*;
     use canvas::alpha_blend;
     use oasis_app_core::AsAny;
+    use oasis_app_core::testing::click_at;
     use oasis_vfs::MemoryVfs;
 
     fn make_vfs() -> MemoryVfs {
@@ -1694,7 +1701,8 @@ mod tests {
         let l = PaintLayout::compute(0, 0, CW, CH, app.canvas.width(), app.canvas.height());
         let r = l.pixel_rect(px, py);
         // Aim at the middle of the on-screen cell.
-        app.handle_click(
+        click_at(
+            app,
             r.x + r.w as i32 / 2,
             r.y + r.h as i32 / 2,
             CW,
@@ -1743,7 +1751,7 @@ mod tests {
     fn clicks_outside_canvas_do_not_paint() {
         let mut app = PaintApp::new("/apps/paint");
         let before = app.canvas.pixels.clone();
-        app.handle_click(1, CH as i32 - 30, CW, CH, &make_vfs());
+        click_at(&mut app, 1, CH as i32 - 30, CW, CH, &make_vfs());
         assert_eq!(app.canvas.pixels, before);
         assert!(app.undo_stack.is_empty());
     }
@@ -1753,7 +1761,7 @@ mod tests {
         let mut app = PaintApp::new("/apps/paint");
         let l = PaintLayout::compute(0, 0, CW, CH, 64, 48);
         let r = l.swatch_rect(4);
-        app.handle_click(r.x + 1, r.y + 1, CW, CH, &make_vfs());
+        click_at(&mut app, r.x + 1, r.y + 1, CW, CH, &make_vfs());
         assert_eq!(app.palette_index, 4);
         assert_eq!(app.color, palette()[4]);
     }
@@ -1814,7 +1822,7 @@ mod tests {
         other.apply_vfs_ops(&mut vfs);
         let l = PaintLayout::compute(0, 0, CW, CH, 64, 48);
         let p = l.picker();
-        other.handle_click(p.x + 5, p.y + PICKER_ROW + 2, CW, CH, &vfs);
+        click_at(&mut other, p.x + 5, p.y + PICKER_ROW + 2, CW, CH, &vfs);
         assert_eq!((other.canvas.width(), other.canvas.height()), (16, 8));
     }
 
@@ -1865,7 +1873,7 @@ mod tests {
     fn menu_click_opens_dropdown() {
         let mut app = PaintApp::new("/apps/paint");
         // "File" label sits at the left of the bar.
-        app.handle_click(12, 8, CW, CH, &make_vfs());
+        click_at(&mut app, 12, 8, CW, CH, &make_vfs());
         assert_eq!(app.menu.open, Some(0));
         // Clicking the canvas while open just closes the menu.
         click_canvas_pixel(&mut app, 0, 0);

@@ -9,7 +9,7 @@ use std::cell::{Cell, RefCell};
 use oasis_app_core::file_viewer::{
     join_path, list_directory, parent_dir, view_audio_file, view_generic_file, view_image_file,
 };
-use oasis_app_core::render::{draw_content_windowed, windowed_line_at};
+use oasis_app_core::render::draw_content_windowed;
 use oasis_app_core::{App, AppAction, AppRequest, ContentState};
 use oasis_skin::SimpleRng;
 use oasis_types::backend::TextureId;
@@ -700,12 +700,11 @@ impl App for BrowsingApp {
 
     /// Windowed listing: a click selects an entry, a second click on it
     /// (a double-click) opens it like Confirm.
-    fn handle_click(&mut self, _lx: i32, ly: i32, _cw: u32, ch: u32, vfs: &dyn Vfs) -> AppAction {
+    fn handle_click(&mut self, _lx: i32, ly: i32, vfs: &dyn Vfs) -> AppAction {
         if self.content.viewing_file.is_some() || self.content.browse_dir.is_none() {
             return AppAction::None;
         }
-        let metrics = self.content.windowed_metrics();
-        let Some(idx) = windowed_line_at(&self.content, ch, metrics, ly) else {
+        let Some(idx) = self.content.line_at(ly) else {
             return AppAction::None;
         };
         if self.last_click_line == Some(idx) && idx == self.content.scroll + self.content.cursor {
@@ -863,6 +862,7 @@ impl App for BrowsingApp {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use oasis_app_core::testing::click_at;
     use oasis_vfs::MemoryVfs;
 
     /// Build a minimal ID3v2 tag containing one TIT2 frame.
@@ -1128,18 +1128,18 @@ mod tests {
         )
         .expect("visible");
         // First click only selects.
-        app.handle_click(10, y + 2, 300, ch, &vfs);
+        click_at(&mut app, 10, y + 2, 300, ch, &vfs);
         assert_eq!(app.content.scroll + app.content.cursor, idx);
         assert!(app.content.viewing_file.is_none());
         // Second click on the same line opens it (and asks to play).
-        app.handle_click(10, y + 2, 300, ch, &vfs);
+        click_at(&mut app, 10, y + 2, 300, ch, &vfs);
         assert_eq!(
             app.content.viewing_file.as_deref(),
             Some("/home/user/music/ambient_dawn.mp3")
         );
         assert!(!app.content.requests.is_empty());
         // Clicks are ignored while a track is open, and in fullscreen.
-        app.handle_click(10, y + 2, 300, ch, &vfs);
+        click_at(&mut app, 10, y + 2, 300, ch, &vfs);
         assert_eq!(
             app.content.viewing_file.as_deref(),
             Some("/home/user/music/ambient_dawn.mp3")

@@ -128,7 +128,15 @@ impl RadioStatus {
             } else if let Some(v) = line.strip_prefix("Error: ") {
                 s.error = known(v);
             } else if let Some(v) = line.strip_prefix("Volume: ") {
-                s.volume = v.trim().trim_end_matches('%').trim().parse::<u8>().ok();
+                // Anything can write the status file; keep the volume a
+                // percentage so the text bar below can't underflow.
+                s.volume = v
+                    .trim()
+                    .trim_end_matches('%')
+                    .trim()
+                    .parse::<u8>()
+                    .ok()
+                    .map(|v| v.min(100));
             }
         }
         s
@@ -206,6 +214,9 @@ fn station_rows(registry: &StationRegistry) -> Vec<StationRow> {
 #[derive(Debug)]
 pub struct RadioApp {
     content: ContentState,
+    /// Content-area size recorded by the last `App::layout` (click
+    /// hit-testing).
+    content_size: (u32, u32),
     /// Last published playback status.
     status: RadioStatus,
     /// Station list.
@@ -234,6 +245,7 @@ impl RadioApp {
     pub fn new(path: &str, vfs: &dyn Vfs) -> Self {
         let mut app = Self {
             content: ContentState::new(RADIO_APP_TITLE, path),
+            content_size: (0, 0),
             status: RadioStatus::load(vfs),
             stations: Vec::new(),
             registry: load_registry(vfs),
@@ -345,12 +357,12 @@ impl RadioApp {
         s
     }
 
-    /// Rebuild the text lines (full-screen SDI view) and point the
-    /// generic line cursor at the selected station.
+    /// Rebuild the text lines (`App::lines`) and point the generic line
+    /// cursor at the selected station.
     fn rebuild_lines(&mut self) {
         let na = |v: &Option<String>| v.clone().unwrap_or_else(|| "--".to_string());
         let vol = self.volume();
-        let filled = (vol as usize).div_ceil(10);
+        let filled = (vol as usize).div_ceil(10).min(10);
         let mut lines = vec![
             format!("Status: {}", self.status_line()),
             format!("Station: {}", na(&self.status.station)),
@@ -449,10 +461,13 @@ impl App for RadioApp {
     }
 
     fn layout(&mut self, cw: u32, ch: u32, _at: &ActiveTheme) {
+        self.content_size = (cw, ch);
         self.visible_rows = RadioLayout::compute(0, 0, cw, ch).visible_rows();
+        self.scroll_into_view();
     }
 
-    fn handle_click(&mut self, lx: i32, ly: i32, cw: u32, ch: u32, _vfs: &dyn Vfs) -> AppAction {
+    fn handle_click(&mut self, lx: i32, ly: i32, _vfs: &dyn Vfs) -> AppAction {
+        let (cw, ch) = self.content_size;
         let l = RadioLayout::compute(0, 0, cw, ch);
         if let Some(button) = l.button_at(lx, ly) {
             match button {
@@ -529,6 +544,7 @@ impl App for RadioApp {
 mod tests {
     use super::*;
     use oasis_app_core::AsAny;
+    use oasis_app_core::testing::click_at;
     use oasis_test_backend::{DrawCommand, RecordingBackend};
     use oasis_vfs::MemoryVfs;
 
@@ -792,7 +808,7 @@ mod tests {
         let l = RadioLayout::compute(0, 0, w, h);
         let vfs2 = make_vfs();
         let click = |app: &mut RadioApp, x: i32, y: i32| {
-            app.handle_click(x, y, w, h, &vfs2);
+            click_at(app, x, y, w, h, &vfs2);
         };
 
         let stop = l.buttons[2];
@@ -829,6 +845,34 @@ mod tests {
         assert_eq!(app.selected, n - 1);
         assert!(app.list_scroll + 2 > app.selected);
         assert!(app.list_scroll <= app.selected);
+    }
+
+    #[test]
+    fn out_of_range_status_volume_is_clamped() {
+        // Regression: `Volume: 200%` made the text bar's `10 - filled`
+        // underflow and panic.
+        let mut vfs = make_vfs();
+        write_status(&mut vfs, "State: Playing\nVolume: 200%\n");
+        let app = RadioApp::new("/apps/radio", &vfs);
+        assert_eq!(app.status.volume, Some(100));
+        assert!(app.lines().iter().any(|l| l.contains("100%")));
+    }
+
+    #[test]
+    fn layout_shrink_keeps_selection_visible() {
+        let vfs = make_vfs();
+        let mut app = RadioApp::new("/apps/radio", &vfs);
+        let n = app.stations.len();
+        assert!(n > 2, "default registry has several stations");
+        app.layout(480, 2000, &ActiveTheme::default());
+        for _ in 0..n {
+            app.handle_input(&Button::Down, &vfs);
+        }
+        // Shrink the window: the selected (last) row must stay on screen.
+        app.layout(480, 140, &ActiveTheme::default());
+        assert!(app.visible_rows < n);
+        assert!(app.list_scroll <= app.selected);
+        assert!(app.selected < app.list_scroll + app.visible_rows.max(1));
     }
 
     #[test]

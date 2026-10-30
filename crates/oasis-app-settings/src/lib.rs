@@ -282,6 +282,11 @@ pub struct SettingsApp {
     seen: SeenState,
     /// Font metrics of the last `layout` (click hit-testing).
     metrics: Metrics,
+    /// Body rows that fit the content area of the last `layout`.
+    visible_rows: usize,
+    /// Content-area size recorded by the last `App::layout` (click
+    /// hit-testing).
+    content_size: (u32, u32),
     /// Appearance editor state (base palette, edit mode).
     appearance: AppearanceState,
 }
@@ -308,6 +313,8 @@ impl SettingsApp {
             text_scroll: 0,
             seen: SeenState::default(),
             metrics: Metrics::default(),
+            visible_rows: 1,
+            content_size: (0, 0),
             appearance: AppearanceState::default(),
         };
         // Align the cursor with the currently active skin so the highlight
@@ -316,7 +323,6 @@ impl SettingsApp {
             app.item_cursor = idx;
         }
         app.refresh_lines();
-        app.sync_content_cursor();
         app
     }
 
@@ -545,7 +551,6 @@ impl SettingsApp {
             self.appearance.editing_channel = Some(0);
             self.appearance.edit_backup = self.appearance.colors[self.item_cursor];
             self.refresh_lines();
-            self.sync_content_cursor();
             return;
         }
         let action = self.item_cursor - BASE_COLOR_LABELS.len();
@@ -617,7 +622,6 @@ impl SettingsApp {
             _ => return AppAction::None,
         }
         self.refresh_lines();
-        self.sync_content_cursor();
         AppAction::None
     }
 
@@ -810,7 +814,6 @@ impl SettingsApp {
 
         if changed {
             self.refresh_lines();
-            self.sync_content_cursor();
         }
         changed
     }
@@ -834,6 +837,10 @@ impl SettingsApp {
         if let Some(f) = read_changed(vfs, FONT_SCALE_STATE_PATH, &mut self.seen.font_scale)
             .and_then(|s| s.parse::<f32>().ok())
             .filter(|f| f.is_finite())
+            .map(|f| {
+                let (min, max) = font_scale_range();
+                f.clamp(min, max)
+            })
         {
             changed |= (f - self.font_scale).abs() > f32::EPSILON;
             self.font_scale = f;
@@ -854,35 +861,6 @@ impl SettingsApp {
     /// Rebuild display lines from current state.
     fn refresh_lines(&mut self) {
         self.content.lines = self.build_lines();
-    }
-
-    /// First content-line index where selectable items begin in the list
-    /// categories. Layout is:
-    ///   0 = tab header
-    ///   1 = separator
-    ///   2 = section heading
-    ///   3 = blank
-    ///   4 = first item
-    /// Every list category's rows start with heading + blank.
-    const ITEMS_START: usize = 4;
-
-    /// Align `content.cursor` (and scroll, if needed) with the active item
-    /// so the `>`-marked line of [`App::lines`] is the item `item_cursor`
-    /// points at. Only meaningful for categories
-    /// that actually have a list of selectable items — scrollable text
-    /// categories leave content.cursor alone.
-    fn sync_content_cursor(&mut self) {
-        if !self.category.has_items() && self.category != Category::Audio {
-            return;
-        }
-        let target = Self::ITEMS_START + self.item_cursor;
-        let max_visible = self.content.cached_max_visible.max(1);
-        if target < self.content.scroll {
-            self.content.scroll = target;
-        } else if target >= self.content.scroll + max_visible {
-            self.content.scroll = target + 1 - max_visible;
-        }
-        self.content.cursor = target - self.content.scroll;
     }
 
     /// Number of selectable items in the current category.
@@ -951,10 +929,7 @@ impl SettingsApp {
         }
         self.item_cursor = self.cursor_for_category(category);
         self.text_scroll = 0;
-        self.content.scroll = 0;
-        self.content.cursor = 0;
         self.refresh_lines();
-        self.sync_content_cursor();
     }
 
     /// Queue an IPC request for the shell.
@@ -1148,7 +1123,6 @@ impl SettingsApp {
             _ => self.handle_confirm(),
         }
         self.refresh_lines();
-        self.sync_content_cursor();
     }
 }
 
@@ -1191,13 +1165,17 @@ impl App for SettingsApp {
         steps > 0
     }
 
-    fn layout(&mut self, _cw: u32, _ch: u32, at: &ActiveTheme) {
+    fn layout(&mut self, cw: u32, ch: u32, at: &ActiveTheme) {
         // The windowed rows are sized from the theme's (font-scaled)
-        // fonts; record them for click hit-testing.
+        // fonts; record them for click hit-testing and text scrolling.
         self.metrics = Metrics {
             font_body: at.font_body,
             font_hint: at.font_hint,
         };
+        self.content_size = (cw, ch);
+        self.visible_rows = self.settings_layout(0, 0, cw, ch).visible_rows();
+        let max = self.rows().len().saturating_sub(self.visible_rows);
+        self.text_scroll = self.text_scroll.min(max);
     }
 
     fn drain_requests(&mut self, out: &mut Vec<AppRequest>) {
@@ -1258,14 +1236,12 @@ impl App for SettingsApp {
                         self.adjust_slider(up);
                     },
                     Category::System | Category::About => {
-                        // Plain scrollable text — move the content cursor
-                        // and scroll the windowed row list.
+                        // Plain scrollable text: scroll the row list, never
+                        // past the last full page (so Up reacts at once).
                         if up {
-                            self.content.navigate_up();
                             self.text_scroll = self.text_scroll.saturating_sub(1);
                         } else {
-                            self.content.navigate_down();
-                            let max = self.rows().len().saturating_sub(1);
+                            let max = self.rows().len().saturating_sub(self.visible_rows);
                             self.text_scroll = (self.text_scroll + 1).min(max);
                         }
                     },
@@ -1279,7 +1255,6 @@ impl App for SettingsApp {
                             return AppAction::None;
                         }
                         self.refresh_lines();
-                        self.sync_content_cursor();
                     },
                 }
                 AppAction::None
@@ -1303,7 +1278,8 @@ impl App for SettingsApp {
         }
     }
 
-    fn handle_click(&mut self, lx: i32, ly: i32, cw: u32, ch: u32, _vfs: &dyn Vfs) -> AppAction {
+    fn handle_click(&mut self, lx: i32, ly: i32, _vfs: &dyn Vfs) -> AppAction {
+        let (cw, ch) = self.content_size;
         self.handle_windowed_click(lx, ly, cw, ch);
         AppAction::None
     }
@@ -1385,6 +1361,7 @@ fn preset_label(w: u32, h: u32) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use oasis_app_core::testing::click_at;
 
     /// Take the oldest queued IPC request as `(path, data)`.
     fn take_req(app: &mut SettingsApp) -> Option<(String, String)> {
@@ -1594,6 +1571,52 @@ mod tests {
         let lines = app.lines();
         assert!(lines.iter().any(|l| l.contains("MIT")));
         assert!(lines.iter().any(|l| l.contains("PSP")));
+    }
+
+    #[test]
+    fn about_up_scrolls_back_immediately_after_overscrolling_down() {
+        // Regression: Down past the end kept growing `text_scroll` beyond
+        // the last page, so the next Up presses had no visible effect.
+        let vfs = make_vfs();
+        let mut app = app_in(Category::About, &vfs);
+        app.layout(CW, CH, &ActiveTheme::default());
+        let rows = app.rows().len();
+        let max = rows.saturating_sub(app.visible_rows);
+        assert!(max > 0, "About must overflow the test window");
+        for _ in 0..rows + 5 {
+            app.handle_input(&Button::Down, &vfs);
+        }
+        assert_eq!(app.text_scroll, max);
+        app.handle_input(&Button::Up, &vfs);
+        assert_eq!(app.text_scroll, max - 1);
+    }
+
+    #[test]
+    fn layout_shrink_clamps_text_scroll() {
+        let vfs = make_vfs();
+        let mut app = app_in(Category::About, &vfs);
+        app.layout(CW, 60, &ActiveTheme::default());
+        for _ in 0..50 {
+            app.handle_input(&Button::Down, &vfs);
+        }
+        // A taller window shows more rows, so the old offset is past the end.
+        app.layout(CW, 2000, &ActiveTheme::default());
+        let max = app.rows().len().saturating_sub(app.visible_rows);
+        assert!(app.text_scroll <= max);
+    }
+
+    #[test]
+    fn published_font_scale_is_clamped_to_range() {
+        let mut vfs = make_vfs();
+        vfs.mkdir("/system").unwrap();
+        vfs.mkdir("/system/state").unwrap();
+        vfs.write(FONT_SCALE_STATE_PATH, b"5").unwrap();
+        let app = SettingsApp::from_vfs("/apps/settings", &vfs, "classic", 480, 272, "SDL3");
+        let (min, max) = font_scale_range();
+        assert_eq!(app.font_scale, max);
+        vfs.write(FONT_SCALE_STATE_PATH, b"-1").unwrap();
+        let app = SettingsApp::from_vfs("/apps/settings", &vfs, "classic", 480, 272, "SDL3");
+        assert_eq!(app.font_scale, min);
     }
 
     #[test]
@@ -1823,7 +1846,7 @@ mod tests {
     fn click_on_skin_row_applies() {
         let mut app = make_app();
         let (x, y) = item_point(&app, 1, 0.2);
-        let _action = app.handle_click(x, y, CW, CH, &MemoryVfs::new());
+        let _action = click_at(&mut app, x, y, CW, CH, &MemoryVfs::new());
         let req = take_req(&mut app);
         let (path, data) = req.expect("click on non-active skin should post IPC");
         assert_eq!(path, SKIN_CHANGE_REQUEST_PATH);
@@ -1836,7 +1859,7 @@ mod tests {
         let mut app = make_app();
         // Item 0 = "classic", which is the active skin.
         let (x, y) = item_point(&app, 0, 0.2);
-        let _action = app.handle_click(x, y, CW, CH, &MemoryVfs::new());
+        let _action = click_at(&mut app, x, y, CW, CH, &MemoryVfs::new());
         assert!(take_req(&mut app).is_none());
     }
 
@@ -1844,7 +1867,7 @@ mod tests {
     fn click_above_content_area_ignored() {
         let mut app = make_app();
         // Top-left padding above the tab strip: nothing to hit.
-        let _action = app.handle_click(1, 1, CW, CH, &MemoryVfs::new());
+        let _action = click_at(&mut app, 1, 1, CW, CH, &MemoryVfs::new());
         assert!(take_req(&mut app).is_none());
         assert_eq!(app.category, Category::Display);
     }
@@ -1858,7 +1881,7 @@ mod tests {
             .position(|c| *c == Category::Audio)
             .expect("audio tab");
         let t = l.tabs[audio];
-        app.handle_click(t.x + 2, t.y + 2, CW, CH, &MemoryVfs::new());
+        click_at(&mut app, t.x + 2, t.y + 2, CW, CH, &MemoryVfs::new());
         assert_eq!(app.category, Category::Audio);
     }
 
@@ -1872,7 +1895,7 @@ mod tests {
         assert_eq!(app.category, Category::Resolution);
         // Click the 4th preset (1280x720, index 3).
         let (x, y) = item_point(&app, 3, 0.2);
-        let _action = app.handle_click(x, y, CW, CH, &vfs);
+        let _action = click_at(&mut app, x, y, CW, CH, &vfs);
         let req = take_req(&mut app);
         let (path, data) = req.expect("click on non-active preset should post IPC");
         assert_eq!(path, RESOLUTION_CHANGE_REQUEST_PATH);
@@ -1942,7 +1965,7 @@ mod tests {
         let row = row_of_item(&rows, 0).expect("volume row");
         let track = l.control_rect(l.row_rect(row));
         // Click near the left end of the track -> low volume.
-        app.handle_click(track.x + 1, track.y + 2, CW, CH, &vfs);
+        click_at(&mut app, track.x + 1, track.y + 2, CW, CH, &vfs);
         assert!(app.volume <= 5, "volume {}", app.volume);
         let (path, _) = take_req(&mut app).expect("slider click posts");
         assert_eq!(path, VOLUME_CHANGE_REQUEST_PATH);
@@ -2121,49 +2144,6 @@ mod tests {
                 );
             }
         }
-    }
-
-    #[test]
-    fn sync_cursor_lands_on_active_skin_line() {
-        // Start with a skin that's not first in the list to make the test
-        // meaningful (otherwise cursor=0 and scroll=0 trivially "match").
-        let vfs = make_vfs();
-        let mut app = SettingsApp::new("/apps/settings", "balatro", 480, 272, "SDL3");
-        app.content.cached_max_visible = 13;
-        app.sync_content_cursor();
-        let balatro_idx = builtin_names()
-            .iter()
-            .position(|n| *n == "balatro")
-            .expect("balatro must be a known skin");
-        let expected_line = SettingsApp::ITEMS_START + balatro_idx;
-        assert_eq!(
-            app.content.scroll + app.content.cursor,
-            expected_line,
-            "content cursor+scroll must point at the active skin's line",
-        );
-        // Also make sure navigation updates both in lockstep.
-        app.handle_input(&Button::Down, &vfs);
-        assert_eq!(app.content.scroll + app.content.cursor, expected_line + 1,);
-    }
-
-    #[test]
-    fn sync_cursor_scrolls_when_item_below_viewport() {
-        let mut app = make_app();
-        // Simulate a small viewport.
-        app.content.cached_max_visible = 5;
-        // Walk cursor to a late skin (say index 10) — requires scroll.
-        app.item_cursor = 10;
-        app.sync_content_cursor();
-        let target = SettingsApp::ITEMS_START + 10;
-        assert!(
-            app.content.scroll > 0,
-            "scroll should advance once the cursor moves beyond the viewport"
-        );
-        assert_eq!(app.content.scroll + app.content.cursor, target);
-        assert!(
-            app.content.cursor < 5,
-            "cursor must stay within visible range"
-        );
     }
 
     #[test]

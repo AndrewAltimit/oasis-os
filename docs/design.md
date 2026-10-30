@@ -213,7 +213,7 @@ Every input / render hook on `App` sees at most a shared `&dyn Vfs`. Read-only f
 
 #### 4.3.3 App Ticking and Layout
 
-`App::tick(dt_ms, &dyn Vfs) -> bool` advances time-driven state by wall time. The hosts call it once per frame for every open runner, focused or not, including frames whose redraw is elided, so app time never depends on the frame rate or on input. Apps accumulate `dt_ms` instead of counting calls, return `true` when something they draw changed, and poll mirrored VFS state here (the Internet Radio's published status, Video Embed's search results). `App::layout(cw, ch, theme)` runs right before every `draw_windowed` and `handle_click` with the same size, so apps record hit-test geometry in plain fields instead of smuggling it out of `draw_windowed` through `Cell`s.
+`App::tick(dt_ms, &dyn Vfs) -> bool` advances time-driven state by wall time. The hosts call it once per frame for every open runner, focused or not, including frames whose redraw is elided, so app time never depends on the frame rate or on input. Apps accumulate `dt_ms` instead of counting calls, return `true` when something they draw changed, and poll mirrored VFS state here (the Internet Radio's published status, Video Embed's search results). `App::layout(cw, ch, theme)` runs right before every `draw_windowed` and `handle_click(lx, ly, vfs)` with the same size, so apps record their size and hit-test geometry in plain fields instead of smuggling it out of `draw_windowed` through `Cell`s; `handle_click` takes no size of its own.
 
 The per-frame order for every open runner is: drain requests, `apply_vfs_ops`, `tick`, `take_close_request`; runners retired by a close get `release_resources` before they are dropped.
 

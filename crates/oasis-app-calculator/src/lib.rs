@@ -362,6 +362,9 @@ const FLASH_MS: u32 = 100;
 #[derive(Debug)]
 pub struct CalculatorApp {
     content: ContentState,
+    /// Content-area size recorded by the last `App::layout` (click
+    /// hit-testing).
+    content_size: (u32, u32),
     /// Current display value (formatted result or input echo).
     display: String,
     /// Expression being typed by the user.
@@ -411,6 +414,7 @@ impl CalculatorApp {
             flash: None,
             history_loaded: false,
             history_dirty: false,
+            content_size: (0, 0),
         };
         app.refresh_lines();
         app
@@ -928,8 +932,13 @@ impl App for CalculatorApp {
         false
     }
 
-    fn handle_click(&mut self, lx: i32, ly: i32, cw: u32, ch: u32, vfs: &dyn Vfs) -> AppAction {
+    fn layout(&mut self, cw: u32, ch: u32, _at: &ActiveTheme) {
+        self.content_size = (cw, ch);
+    }
+
+    fn handle_click(&mut self, lx: i32, ly: i32, vfs: &dyn Vfs) -> AppAction {
         self.ensure_history_loaded(vfs);
+        let (cw, ch) = self.content_size;
         let l = CalcLayout::compute(0, 0, cw, ch);
         if let Some(i) = l.key_at(lx, ly) {
             self.cursor = i;
@@ -994,6 +1003,7 @@ impl App for CalculatorApp {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use oasis_app_core::testing::click_at;
     use oasis_vfs::MemoryVfs;
 
     // -- Expression evaluator: basic operations --
@@ -1674,7 +1684,8 @@ mod tests {
     fn click_key(app: &mut CalculatorApp, key: CalcKey) {
         let l = CalcLayout::compute(0, 0, CW, CH);
         let r = l.key_rect(keypad::index_of(key).expect("key on keypad"));
-        app.handle_click(
+        click_at(
+            app,
             r.x + r.w as i32 / 2,
             r.y + r.h as i32 / 2,
             CW,
@@ -1709,7 +1720,14 @@ mod tests {
     fn click_outside_keys_does_nothing() {
         let mut app = CalculatorApp::new("/apps/calc");
         let l = CalcLayout::compute(0, 0, CW, CH);
-        app.handle_click(l.display.x + 5, l.display.y + 5, CW, CH, &make_vfs());
+        click_at(
+            &mut app,
+            l.display.x + 5,
+            l.display.y + 5,
+            CW,
+            CH,
+            &make_vfs(),
+        );
         assert!(app.input_buffer.is_empty());
         assert!(app.flash.is_none());
     }
@@ -1724,7 +1742,7 @@ mod tests {
         let pane = l.history.expect("wide layout has history");
         // Rows are newest first: the second row is the older entry.
         let y = pane.y + (2 * keypad::HISTORY_ROW_H) as i32 + 2;
-        app.handle_click(pane.x + 4, y, w, h, &make_vfs());
+        click_at(&mut app, pane.x + 4, y, w, h, &make_vfs());
         assert_eq!(app.input_buffer, "1+1");
     }
 

@@ -70,7 +70,7 @@ impl AppRunner {
         vfs: &dyn Vfs,
     ) -> AppAction {
         self.delegate.layout(cw, ch, at);
-        let action = self.delegate.handle_click(lx, ly, cw, ch, vfs);
+        let action = self.delegate.handle_click(lx, ly, vfs);
         self.redraw_pending = true;
         action
     }

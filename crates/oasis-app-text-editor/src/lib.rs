@@ -72,6 +72,9 @@ pub(crate) enum PendingClose {
 #[derive(Debug)]
 pub struct TextEditorApp {
     pub(crate) content: ContentState,
+    /// Content-area size recorded by the last `App::layout` (click
+    /// hit-testing).
+    pub(crate) content_size: (u32, u32),
     pub(crate) buffer: EditorBuffer,
     pub(crate) mode: EditorMode,
     pub(crate) cursor_line: usize,
@@ -157,6 +160,7 @@ impl TextEditorApp {
     fn with_state(content: ContentState, buffer: EditorBuffer, path: Option<&str>) -> Self {
         let mut editor = Self {
             content,
+            content_size: (0, 0),
             buffer,
             mode: EditorMode::Normal,
             cursor_line: 0,
@@ -337,7 +341,8 @@ impl App for TextEditorApp {
         self.handle_backspace_impl();
     }
 
-    fn layout(&mut self, _cw: u32, ch: u32, at: &ActiveTheme) {
+    fn layout(&mut self, cw: u32, ch: u32, at: &ActiveTheme) {
+        self.content_size = (cw, ch);
         let (lines, line_h) = render::notepad_viewport(ch, at);
         self.viewport_lines = lines.max(1);
         self.viewport_line_h = line_h;
@@ -361,10 +366,11 @@ impl App for TextEditorApp {
         changed
     }
 
-    fn handle_click(&mut self, lx: i32, ly: i32, cw: u32, ch: u32, _vfs: &dyn Vfs) -> AppAction {
+    fn handle_click(&mut self, lx: i32, ly: i32, _vfs: &dyn Vfs) -> AppAction {
         if self.close_requested {
             return AppAction::Exit;
         }
+        let (cw, ch) = self.content_size;
         // Layout constants — must mirror `draw_notepad`: the menu bar sits
         // at the very top of the content area (no inner title bar — the WM
         // titlebar shows the app title), text area below it, status strip
@@ -493,6 +499,7 @@ mod tests {
     use super::TextEditorApp;
     use oasis_app_core::App;
     use oasis_app_core::AppAction;
+    use oasis_app_core::testing::click_at;
     use oasis_types::input::Button;
     use oasis_vfs::MemoryVfs;
 
@@ -547,7 +554,14 @@ mod tests {
         // Click roughly at column 6 in the first line. Area top is
         // menu_h = 18 (menu bar sits at the top of the content area),
         // so ly = 18 + 6 (pad) + 2 puts us on line 0.
-        let action = app.handle_click(8 + 6 * 7, 26, 400, 300, &oasis_vfs::MemoryVfs::new());
+        let action = click_at(
+            &mut app,
+            8 + 6 * 7,
+            26,
+            400,
+            300,
+            &oasis_vfs::MemoryVfs::new(),
+        );
         assert_eq!(action, AppAction::None);
         assert_eq!(app.mode, EditorMode::Insert);
         assert_eq!(app.cursor_line, 0);
@@ -561,10 +575,10 @@ mod tests {
         let mut app = TextEditorApp::new("/apps/editor");
         assert!(!app.menu.is_open());
         // "File" label at x=6, menu strip y=0..18 so ly=8 hits it.
-        let _ = app.handle_click(10, 8, 400, 300, &oasis_vfs::MemoryVfs::new());
+        let _ = click_at(&mut app, 10, 8, 400, 300, &oasis_vfs::MemoryVfs::new());
         assert_eq!(app.menu.open, Some(0), "File dropdown should be open");
         // Clicking File again toggles it closed.
-        let _ = app.handle_click(10, 8, 400, 300, &oasis_vfs::MemoryVfs::new());
+        let _ = click_at(&mut app, 10, 8, 400, 300, &oasis_vfs::MemoryVfs::new());
         assert!(!app.menu.is_open(), "second click should close");
     }
 
@@ -577,12 +591,12 @@ mod tests {
         vfs.mkdir("/tmp").expect("mkdir");
         let mut app = TextEditorApp::open_file("/tmp/notes.txt", "hello");
         // Open the File menu.
-        let _ = app.handle_click(10, 8, 400, 300, &oasis_vfs::MemoryVfs::new());
+        let _ = click_at(&mut app, 10, 8, 400, 300, &oasis_vfs::MemoryVfs::new());
         assert!(app.menu.is_open());
         // File dropdown starts just below the menu bar (y=18) with
         // 4px padding, so first item row is y=22..42. New, then
         // Save is the second entry (y=42..62).
-        let action = app.handle_click(20, 46, 400, 300, &oasis_vfs::MemoryVfs::new());
+        let action = click_at(&mut app, 20, 46, 400, 300, &oasis_vfs::MemoryVfs::new());
         assert_eq!(action, AppAction::None);
         assert!(!app.menu.is_open(), "menu should close after dispatch");
         assert!(app.apply_vfs_ops(&mut vfs), "save must be applied");
@@ -594,10 +608,10 @@ mod tests {
     #[test]
     fn click_file_exit_item_returns_exit() {
         let mut app = TextEditorApp::new("/apps/editor");
-        let _ = app.handle_click(10, 8, 400, 300, &oasis_vfs::MemoryVfs::new());
+        let _ = click_at(&mut app, 10, 8, 400, 300, &oasis_vfs::MemoryVfs::new());
         // Exit is the 5th entry (New, Save, Save As, Separator, Exit):
         // y=22+20+20+20+6 = 88 is the exit row.
-        let action = app.handle_click(20, 92, 400, 300, &oasis_vfs::MemoryVfs::new());
+        let action = click_at(&mut app, 20, 92, 400, 300, &oasis_vfs::MemoryVfs::new());
         assert_eq!(action, AppAction::Exit);
     }
 

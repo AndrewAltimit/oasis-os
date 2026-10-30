@@ -19,6 +19,9 @@ use oasis_app_core::file_viewer::list_directory;
 pub struct FileManagerApp {
     /// Shared content state (title, lines, scroll, cursor, etc.).
     pub content: ContentState,
+    /// Content-area size recorded by the last `App::layout` (click
+    /// hit-testing).
+    pub content_size: (u32, u32),
     /// Dual panels.
     pub panels: [FilePanel; 2],
     /// Which panel is active (0 = left, 1 = right).
@@ -73,6 +76,7 @@ impl FileManagerApp {
         content.lines = list_directory(vfs, "/");
         Self {
             content,
+            content_size: (0, 0),
             panels: [FilePanel::new("/", vfs), FilePanel::new("/", vfs)],
             active_panel: 0,
             pending_ops: Vec::new(),

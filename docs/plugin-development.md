@@ -432,8 +432,8 @@ The plugin manager's `extend_registry_adds_launchable_plugin_apps` test
 trip: register, extend the registry, launch through `AppRunner`.
 
 > **Breaking change (App trait, 2026-10):** `as_any` / `as_any_mut` are no
-> longer written by apps (blanket `AsAny` impl); `handle_click` takes a
-> trailing `&dyn Vfs`; `refresh` is gone (do follow-ups in `handle_click` /
+> longer written by apps (blanket `AsAny` impl); `handle_click` is
+> `(lx, ly, &dyn Vfs)` (its size comes from `layout`); `refresh` is gone (do follow-ups in `handle_click` /
 > `handle_key`, polling in `tick`); `take_pending_request` /
 > `peek_pending_request` became `drain_requests(&mut Vec<AppRequest>)`;
 > `lines` has a default; new optional hooks `layout` and `handle_scroll`.
