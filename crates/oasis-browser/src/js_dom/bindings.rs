@@ -7,7 +7,7 @@ use std::rc::Rc;
 use oasis_js::rquickjs::{Ctx, Function, Result as JsResult};
 
 use super::node_api::{
-    FreedLog, INSERT_INVALID, connected_element_by_id, free_children_logged, insert_node,
+    FreedLog, INSERT_INVALID, connected_element_by_id, free_children_logged, has_room, insert_node,
     parse_into,
 };
 use super::serialize::serialize_node;
@@ -217,6 +217,9 @@ pub(super) fn install_dom_bindings(
             "__oasis_create",
             Function::new(ctx.clone(), move |tag: String| -> i32 {
                 let mut doc = d.borrow_mut();
+                if !has_room(&doc, 1) {
+                    return NO_NODE;
+                }
                 let data = ElementData::new(TagName::from_str(&tag));
                 doc.add_node(NodeKind::Element(data)) as i32
             })?,
@@ -230,6 +233,9 @@ pub(super) fn install_dom_bindings(
             "__oasis_createtext",
             Function::new(ctx.clone(), move |text: String| -> i32 {
                 let mut doc = d.borrow_mut();
+                if !has_room(&doc, 1) {
+                    return NO_NODE;
+                }
                 doc.add_node(NodeKind::Text(text)) as i32
             })?,
         )?;

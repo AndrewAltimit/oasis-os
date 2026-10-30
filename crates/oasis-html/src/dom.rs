@@ -814,6 +814,11 @@ impl Document {
         self.freed.get(id).copied().unwrap_or(false)
     }
 
+    /// Number of live (allocated, not freed) nodes in the arena.
+    pub fn live_node_count(&self) -> usize {
+        self.nodes.len() - self.free_list.len()
+    }
+
     /// Whether `id` names a live node: in range and not freed.
     pub fn is_live(&self, id: NodeId) -> bool {
         id < self.nodes.len() && !self.is_freed(id)

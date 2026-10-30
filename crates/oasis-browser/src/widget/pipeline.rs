@@ -849,10 +849,16 @@ impl BrowserWidget {
                     js_dom::install_site_compat_shims(&engine);
                     // Register inline event handlers (onclick, etc.)
                     // after scripts so Element class is available. CSP
-                    // `script-src-attr` gates them as a whole.
-                    if Self::csp_allows_inline_handlers(self.page_csp.as_ref()) {
+                    // `script-src-attr` judges each handler's own text.
+                    {
+                        let csp = self.page_csp.as_ref();
+                        let allowed = |body: &str| {
+                            csp.is_none_or(|p| {
+                                p.allows_inline(InlineKind::ScriptAttribute, None, body)
+                            })
+                        };
                         let doc_borrow = shared.borrow();
-                        js_dom::register_inline_handlers(&engine, &doc_borrow);
+                        js_dom::register_inline_handlers(&engine, &doc_borrow, &allowed);
                     }
                     // readystatechange -> DOMContentLoaded -> window load.
                     js_dom::fire_document_lifecycle(&engine);
@@ -2019,17 +2025,6 @@ impl BrowserWidget {
         Self::collect_inline_styles(doc)
     }
 
-    /// Whether inline event-handler attributes may run under `csp`
-    /// (`script-src-attr` / `script-src`: `'unsafe-inline'`).
-    #[cfg(feature = "javascript")]
-    fn csp_allows_inline_handlers(csp: Option<&CspPolicy>) -> bool {
-        let allowed = csp.is_none_or(|p| p.allows_inline(InlineKind::ScriptAttribute, None, ""));
-        if !allowed {
-            log::warn!("CSP script-src blocked inline event handlers");
-        }
-        allowed
-    }
-
     /// Walk the DOM to collect inline `style=""` attributes and parse
     /// each into a list of declarations keyed by NodeId.
     pub(crate) fn collect_inline_styles(
@@ -2068,8 +2063,9 @@ impl BrowserWidget {
     ) -> (Vec<String>, Vec<String>) {
         let mut immediate = Vec::new();
         let mut deferred = Vec::new();
-        for (id, node) in doc.nodes.iter().enumerate() {
-            if let html::dom::NodeKind::Element(elem) = &node.kind
+        // Document order, skipping inert `<template>` contents.
+        for id in js_dom::active_elements(doc) {
+            if let html::dom::NodeKind::Element(elem) = &doc.nodes[id].kind
                 && elem.tag == html::dom::TagName::Script
                 && elem.get_attribute("src").is_none()
                 && Self::is_js_script_type(elem.get_attribute("type"))

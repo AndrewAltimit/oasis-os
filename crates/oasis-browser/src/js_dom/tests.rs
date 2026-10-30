@@ -1850,7 +1850,7 @@ fn body_onload_attribute_runs_on_window_load() {
     let (engine, shared) = setup_html(
         "<html><body onload=\"window.__loaded = (window.__loaded || 0) + 1\"></body></html>",
     );
-    register_inline_handlers(&engine, &shared.borrow());
+    register_inline_handlers(&engine, &shared.borrow(), &|_| true);
     fire_document_lifecycle(&engine);
     check(&engine, "String(window.__loaded)", "1");
 }
@@ -2095,6 +2095,30 @@ fn stale_wrapper_of_freed_node_cannot_corrupt_the_tree() {
         "NotFoundError",
     );
     assert_well_formed(&shared.borrow());
+}
+
+#[test]
+fn clone_doubling_hits_the_script_node_cap() {
+    use super::node_api::MAX_SCRIPT_DOM_NODES;
+    let (engine, shared) = setup(sample_doc());
+    // Each round doubles the subtree under #main; the arena lives
+    // outside the JS heap limit, so only the node cap stops it.
+    check(
+        &engine,
+        "var m = document.getElementById('main'), err = 'none'; \
+         for (var i = 0; i < 40; i++) { \
+           try { m.appendChild(m.cloneNode(true)); } catch (e) { err = e.name; break; } } \
+         var more = 'none', made = 0; \
+         try { while (made < 300000) { document.createElement('i'); made++; } } \
+         catch (e) { more = e.name; } \
+         var html = 'none'; \
+         try { m.insertAdjacentHTML('beforeend', '<b>x</b>'); } catch (e) { html = e.name; } \
+         [err, more, html].join()",
+        "QuotaExceededError,QuotaExceededError,QuotaExceededError",
+    );
+    let doc = shared.borrow();
+    assert!(doc.live_node_count() <= MAX_SCRIPT_DOM_NODES);
+    assert_well_formed(&doc);
 }
 
 #[test]

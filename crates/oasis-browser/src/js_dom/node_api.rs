@@ -38,6 +38,28 @@ pub(super) const INSERT_INVALID: i32 = -2;
 /// The insertion would nest a node deeper than [`MAX_DOM_DEPTH`].
 pub(super) const INSERT_TOO_DEEP: i32 = -3;
 
+/// Most live nodes a script may grow the document to. The node arena
+/// sits outside the JS heap limit, so without this `cloneNode(true)`
+/// doubling (or a `createElement` loop) could exhaust host memory.
+/// Twice the parser's own node cap.
+pub(super) const MAX_SCRIPT_DOM_NODES: usize = 200_000;
+
+/// Whether `n` more nodes fit under [`MAX_SCRIPT_DOM_NODES`].
+pub(super) fn has_room(doc: &Document, n: usize) -> bool {
+    doc.live_node_count().saturating_add(n) <= MAX_SCRIPT_DOM_NODES
+}
+
+/// Number of nodes in `id`'s subtree (including `id`).
+pub(super) fn subtree_size(doc: &Document, id: NodeId) -> usize {
+    let mut n = 0;
+    let mut stack = vec![id];
+    while let Some(c) = stack.pop() {
+        n += 1;
+        stack.extend(doc.nodes[c].children.iter().copied());
+    }
+    n
+}
+
 /// Number of ancestors of `id` (0 for a tree root, attached or not).
 fn depth(doc: &Document, id: NodeId) -> usize {
     let mut d = 0;
@@ -241,6 +263,11 @@ pub(super) fn parse_into(doc: &mut Document, parent: NodeId, html: &str) {
         .body()
         .map(|b| frag.nodes[b].children.clone())
         .unwrap_or_default();
+    // The parsed fragment is bounded by the tree builder's own node cap;
+    // copying it must still fit the script cap, else nothing is copied.
+    if !has_room(doc, frag.nodes.len()) {
+        return;
+    }
     let levels = MAX_DOM_DEPTH.saturating_sub(depth(doc, parent));
     if levels == 0 {
         // `parent` already sits at the cap: keep the markup's text as a
@@ -470,14 +497,22 @@ pub(super) fn install_node_bindings(
         globals.set(
             "__oasis_create_comment",
             Function::new(ctx.clone(), move |text: String| -> i32 {
-                d.borrow_mut().add_node(NodeKind::Comment(text)) as i32
+                let mut doc = d.borrow_mut();
+                if !has_room(&doc, 1) {
+                    return NO_NODE;
+                }
+                doc.add_node(NodeKind::Comment(text)) as i32
             })?,
         )?;
         let d = Rc::clone(doc);
         globals.set(
             "__oasis_create_fragment",
             Function::new(ctx.clone(), move || -> i32 {
-                d.borrow_mut().add_node(NodeKind::Document) as i32
+                let mut doc = d.borrow_mut();
+                if !has_room(&doc, 1) {
+                    return NO_NODE;
+                }
+                doc.add_node(NodeKind::Document) as i32
             })?,
         )?;
     }
@@ -489,6 +524,9 @@ pub(super) fn install_node_bindings(
             "__oasis_parse_fragment",
             Function::new(ctx.clone(), move |html: String| -> i32 {
                 let mut doc = d.borrow_mut();
+                if !has_room(&doc, 1) {
+                    return NO_NODE;
+                }
                 let frag = doc.add_node(NodeKind::Document);
                 parse_into(&mut doc, frag, &html);
                 frag as i32
@@ -526,7 +564,14 @@ pub(super) fn install_node_bindings(
             Function::new(ctx.clone(), move |nid: i32, deep: bool| -> i32 {
                 let mut doc = d.borrow_mut();
                 match valid(&doc, nid) {
-                    Some(id) if id != doc.root => clone_node(&mut doc, id, deep) as i32,
+                    Some(id) if id != doc.root => {
+                        let n = if deep { subtree_size(&doc, id) } else { 1 };
+                        if has_room(&doc, n) {
+                            clone_node(&mut doc, id, deep) as i32
+                        } else {
+                            NO_NODE
+                        }
+                    },
                     _ => NO_NODE,
                 }
             })?,

@@ -58,7 +58,7 @@ use oasis_net::tls::TlsProvider;
 use crate::css::values::ComputedStyle;
 #[cfg(test)]
 use crate::html::dom::ElementData;
-use crate::html::dom::{Document, NodeKind, TagName};
+use crate::html::dom::{Document, NodeId, NodeKind, TagName};
 
 /// Shared, interior-mutable document used during JS execution.
 pub type SharedDoc = Rc<RefCell<Document>>;
@@ -236,16 +236,47 @@ const INLINE_HANDLERS: &[(&str, &str)] = &[
     ("onload", "load"),
 ];
 
+/// Elements reachable from the document root, in document order,
+/// without the contents of `<template>` elements (inert per HTML: their
+/// scripts never run and their handlers are never wired). Detached
+/// arena slots are not visited either.
+pub(crate) fn active_elements(doc: &Document) -> Vec<NodeId> {
+    let mut out = Vec::new();
+    let mut stack = vec![doc.root];
+    while let Some(id) = stack.pop() {
+        if let NodeKind::Element(elem) = &doc.nodes[id].kind {
+            out.push(id);
+            if elem.tag == TagName::Template {
+                continue;
+            }
+        }
+        stack.extend(doc.nodes[id].children.iter().rev().copied());
+    }
+    out
+}
+
 /// Walk the DOM and register inline event handler attributes
 /// (e.g. `onclick="..."`) as `addEventListener` calls on the JS side.
 ///
+/// `allowed` is asked about every handler's source text (CSP
+/// `script-src-attr`, incl. `'unsafe-hashes'` hashes of that text);
+/// refused handlers are not registered.
+///
 /// Call this after `engine.eval_all()` in `load_html()` so that inline
 /// handlers declared in the HTML source are wired up.
-pub fn register_inline_handlers(engine: &oasis_js::JsEngine, doc: &Document) {
-    for (id, node) in doc.nodes.iter().enumerate() {
-        if let NodeKind::Element(elem) = &node.kind {
+pub fn register_inline_handlers(
+    engine: &oasis_js::JsEngine,
+    doc: &Document,
+    allowed: &dyn Fn(&str) -> bool,
+) {
+    for id in active_elements(doc) {
+        if let NodeKind::Element(elem) = &doc.nodes[id].kind {
             for &(attr_name, event_type) in INLINE_HANDLERS {
                 if let Some(handler_body) = elem.get_attribute(attr_name) {
+                    if !allowed(handler_body) {
+                        log::warn!("CSP script-src blocked an inline {attr_name} handler");
+                        continue;
+                    }
                     // `<body onload>` is a window `load` handler.
                     let target = if elem.tag == TagName::Body && event_type == "load" {
                         "window".to_string()
