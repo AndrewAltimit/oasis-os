@@ -1,6 +1,6 @@
 //! Gradient parsing: linear, repeating-linear, and radial.
 
-use crate::helpers::try_parse_color;
+use crate::color::try_parse_color;
 use crate::parser::CssColor;
 use crate::tokenizer::CssToken;
 
@@ -10,9 +10,7 @@ use crate::tokenizer::CssToken;
 /// - Direction keywords: `to top`, `to right`, `to bottom`, `to left`
 /// - Angle values: `180deg`, `0.5turn`
 /// - Color stops with optional positions: `red 0%`, `#fff 50%`, `blue`
-pub fn parse_linear_gradient(
-    inner_tokens: &[CssToken],
-) -> Option<crate::values::LinearGradient> {
+pub fn parse_linear_gradient(inner_tokens: &[CssToken]) -> Option<crate::values::LinearGradient> {
     use crate::values::{GradientStop, LinearGradient};
 
     // Skip the Function token and trailing CloseParen.
@@ -131,9 +129,7 @@ pub fn parse_repeating_linear_gradient(
 /// - Color stops with optional positions (reuses linear stop parsing)
 ///
 /// The center is always 50% 50% (center of the element).
-pub fn parse_radial_gradient(
-    inner_tokens: &[CssToken],
-) -> Option<crate::values::RadialGradient> {
+pub fn parse_radial_gradient(inner_tokens: &[CssToken]) -> Option<crate::values::RadialGradient> {
     use crate::values::{GradientStop, RadialGradient};
 
     // Strip wrapping Function / CloseParen tokens.

@@ -2933,7 +2933,7 @@ mod prop_tests {
 
     // -- Fuzz-style no-panic tests for CSS parsing -----------------------
 
-    use crate::helpers::{named_color, parse_hex_color};
+    use crate::color::{named_color, parse_hex_color};
     use crate::parser::parse_inline_style;
     use crate::tokenizer::CssTokenizer;
 

@@ -12,7 +12,7 @@ mod selectors;
 mod supports;
 mod types;
 
-pub use super::helpers::MediaViewport;
+pub use crate::media::MediaViewport;
 pub(crate) use declarations::{parse_substituted_declaration, parse_value_list};
 #[allow(unused_imports)]
 pub use types::{
@@ -32,9 +32,9 @@ use font_face::{
 use nested::{ParsedRule, flatten_nested_rule};
 use supports::eval_supports_condition;
 
-use super::helpers::eval_media_query_with_viewport;
 use super::shorthand::expand_shorthands;
 use super::tokenizer::{CssToken, CssTokenizer};
+use crate::media::eval_media_query_with_viewport;
 
 impl Stylesheet {
     /// Parse an entire CSS stylesheet.

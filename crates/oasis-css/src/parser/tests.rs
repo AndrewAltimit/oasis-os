@@ -1065,8 +1065,8 @@ fn malformed_rule_does_not_eat_following_rules() {
 
 mod prop {
     use super::*;
-    use crate::helpers::named_color;
-    use crate::helpers::parse_hex_color;
+    use crate::color::named_color;
+    use crate::color::parse_hex_color;
     use proptest::prelude::*;
 
     proptest! {

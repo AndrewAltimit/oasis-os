@@ -3,10 +3,6 @@
 //! Implements declaration list parsing, value token collection,
 //! `!important` handling, and the [`parse_value_list`] free function.
 
-use super::super::helpers::{
-    is_color_property, named_color, parse_font_weight, parse_hex_color, parse_unit,
-    tokens_to_css_text, try_parse_color, try_parse_light_dark,
-};
 use super::super::shorthand::expand_shorthands;
 use super::super::shorthand::{
     parse_linear_gradient, parse_radial_gradient, parse_repeating_linear_gradient,
@@ -15,6 +11,8 @@ use super::super::tokenizer::{CssToken, CssTokenizer};
 use super::CssParser;
 use super::types::PropertyId;
 use super::types::{CssValue, Declaration};
+use crate::color::{named_color, parse_hex_color, try_parse_color, try_parse_light_dark};
+use crate::token_util::{is_color_property, parse_font_weight, parse_unit, tokens_to_css_text};
 
 impl CssParser {
     // -- declarations ------------------------------------------------

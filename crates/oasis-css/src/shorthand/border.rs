@@ -1,6 +1,6 @@
 //! Border shorthand expansion.
 
-use crate::helpers::named_color;
+use crate::color::named_color;
 use crate::parser::{CssValue, Declaration, PropertyId};
 
 pub(super) fn expand_border(value: &CssValue, important: bool) -> Vec<Declaration> {
