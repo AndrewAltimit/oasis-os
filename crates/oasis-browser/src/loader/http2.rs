@@ -127,11 +127,6 @@ fn read_frame_header<R: Read>(r: &mut R) -> Result<FrameHeader> {
         | ((hdr[6] as u32) << 16)
         | ((hdr[7] as u32) << 8)
         | (hdr[8] as u32);
-    if length > MAX_FRAME_SIZE {
-        return Err(OasisError::Backend(
-            format!("HTTP/2 frame too large: {length}").into(),
-        ));
-    }
     Ok(FrameHeader {
         length,
         frame_type,
@@ -448,18 +443,16 @@ fn read_response<S: Read + Write>(stream: &mut S) -> Result<HttpResponse> {
             return Err(OasisError::Backend("HTTP/2 response timed out".into()));
         }
 
-        let fh = match read_frame_header(stream) {
-            Ok(fh) => fh,
-            Err(e) => {
-                // RFC 9113 §4.2: a frame larger than our advertised
-                // SETTINGS_MAX_FRAME_SIZE is a FRAME_SIZE_ERROR. The
-                // header check runs before the payload is allocated.
-                if e.to_string().contains("frame too large") {
-                    let _ = send_goaway(stream, 0, ERROR_CODE_FRAME_SIZE_ERROR);
-                }
-                return Err(e);
-            },
-        };
+        let fh = read_frame_header(stream)?;
+        // RFC 9113 §4.2: a frame larger than our advertised
+        // SETTINGS_MAX_FRAME_SIZE is a FRAME_SIZE_ERROR. Checked on the
+        // header, before the payload is allocated.
+        if fh.length > MAX_FRAME_SIZE {
+            let _ = send_goaway(stream, 0, ERROR_CODE_FRAME_SIZE_ERROR);
+            return Err(OasisError::Backend(
+                format!("HTTP/2 frame too large: {}", fh.length).into(),
+            ));
+        }
         if waiting_continuation && fh.frame_type != FRAME_CONTINUATION {
             let _ = send_goaway(stream, 1, ERROR_CODE_PROTOCOL_ERROR);
             return Err(OasisError::Backend(
