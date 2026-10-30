@@ -65,7 +65,7 @@ Lifecycle (all take `&mut SdiRegistry`):
 
 | Method | Effect |
 |--------|--------|
-| `create_window(&WindowConfig, sdi) -> Result<WindowId>` | Create chrome objects, cascade position, focus the window |
+| `create_window(&WindowConfig, sdi) -> Result<WindowId>` | Create chrome objects, cascade position (pulled back so the frame stays on screen), focus the window |
 | `close_window(id, sdi)` / `close_all(sdi)` | Remove the window; with motion on, its chrome animates out before the SDI objects are destroyed |
 | `minimize_window` / `maximize_window` / `restore_window` | State changes; maximize fills the work area |
 | `enter_fullscreen` / `exit_fullscreen` | Kiosk fullscreen for an app window |
