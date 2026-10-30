@@ -404,6 +404,10 @@ pub struct BrowserWidget {
     /// Texture atlas for packing small images (reduces GPU bind switches).
     image_atlas: image_atlas::ImageAtlas,
 
+    /// Image / atlas textures of a page navigated away from. Navigation
+    /// has no backend handle, so they are destroyed on the next paint.
+    retired_textures: Vec<TextureId>,
+
     /// Pending image requests to be processed in time-sliced batches.
     pending_images: Vec<(String, ResourceRequest)>,
 
@@ -700,6 +704,7 @@ impl BrowserWidget {
             image_decode_in_flight: 0,
             image_textures: HashMap::new(),
             image_atlas: image_atlas::ImageAtlas::new(),
+            retired_textures: Vec::new(),
             pending_images: Vec::new(),
             deferred_images: Vec::new(),
             decoded_image_bytes: 0,

@@ -43,6 +43,10 @@ pub enum DrawCall {
 /// A mock backend that records all draw calls for test assertions.
 pub struct MockBackend {
     pub calls: Vec<DrawCall>,
+    /// Every texture `load_texture` handed out, in order.
+    pub loaded_textures: Vec<TextureId>,
+    /// Every texture passed to `destroy_texture`, in order.
+    pub destroyed_textures: Vec<TextureId>,
     next_texture_id: u64,
 }
 
@@ -50,6 +54,8 @@ impl MockBackend {
     pub fn new() -> Self {
         Self {
             calls: Vec::new(),
+            loaded_textures: Vec::new(),
+            destroyed_textures: Vec::new(),
             next_texture_id: 1,
         }
     }
@@ -232,12 +238,14 @@ impl SdiCore for MockBackend {
     }
 
     fn load_texture(&mut self, _width: u32, _height: u32, _rgba_data: &[u8]) -> Result<TextureId> {
-        let id = self.next_texture_id;
+        let id = TextureId(self.next_texture_id);
         self.next_texture_id += 1;
-        Ok(TextureId(id))
+        self.loaded_textures.push(id);
+        Ok(id)
     }
 
-    fn destroy_texture(&mut self, _tex: TextureId) -> Result<()> {
+    fn destroy_texture(&mut self, tex: TextureId) -> Result<()> {
+        self.destroyed_textures.push(tex);
         Ok(())
     }
 

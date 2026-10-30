@@ -446,10 +446,6 @@ shipped. Each is small enough for a focused PR.
   approximation in replay's no-render-target fallback.
 - **`backdrop-filter` is not sampled.** It only isolates the element
   into a compositing layer; the backdrop is never read or filtered.
-- **Image textures are not destroyed on navigation.**
-  `reset_for_navigation` clears `image_textures` and the atlas
-  (`clear_without_destroy`) without a backend handle, so their GPU
-  textures leak until the backend is torn down.
 - **`parallel-style` is not linted in CI.** The feature lives in
   `oasis-css` (`oasis-browser/parallel-style` forwards to it). It is
   clippy-clean today (`cargo clippy -p oasis-css --all-targets

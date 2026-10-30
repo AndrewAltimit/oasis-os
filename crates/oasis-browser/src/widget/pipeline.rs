@@ -93,8 +93,7 @@ impl BrowserWidget {
                 self.page_errors.clear();
                 self.decoded_images.clear();
                 self.mask_image_arcs.clear();
-                self.image_textures.clear();
-                self.image_atlas.clear_without_destroy();
+                self.retire_image_textures();
                 self.pending_images.clear();
                 self.decoded_image_bytes = 0;
                 self.decoded_image_lru.clear();
@@ -134,6 +133,15 @@ impl BrowserWidget {
         }
     }
 
+    /// Drop the page's image and atlas textures, queueing their GPU
+    /// handles in `retired_textures`: navigation has no backend, so
+    /// `ensure_image_textures` destroys them on the next paint.
+    fn retire_image_textures(&mut self) {
+        self.retired_textures
+            .extend(self.image_textures.drain().map(|(_, tex)| tex));
+        self.image_atlas.clear_into(&mut self.retired_textures);
+    }
+
     /// Reset browser state in preparation for a new navigation.
     ///
     /// Clears the parsed document and layout tree along with all
@@ -154,8 +162,7 @@ impl BrowserWidget {
         self.decoded_images.clear();
         self.broken_image_urls.clear();
         self.mask_image_arcs.clear();
-        self.image_textures.clear();
-        self.image_atlas.clear_without_destroy();
+        self.retire_image_textures();
         self.pending_images.clear();
         self.decoded_image_bytes = 0;
         self.decoded_image_lru.clear();

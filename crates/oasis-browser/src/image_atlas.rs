@@ -225,12 +225,12 @@ impl ImageAtlas {
         }
     }
 
-    /// Clear all atlas data without destroying GPU textures.
+    /// Clear all atlas data, moving the pages' GPU textures into `out`.
     ///
-    /// Used during navigation resets where the backend may have already
-    /// invalidated the textures.
-    pub fn clear_without_destroy(&mut self) {
-        self.pages.clear();
+    /// Navigation resets have no backend handle, so the caller queues
+    /// the textures and destroys them on the next paint.
+    pub fn clear_into(&mut self, out: &mut Vec<TextureId>) {
+        out.extend(self.pages.drain(..).filter_map(|page| page.texture));
         self.entries.clear();
     }
 
@@ -331,14 +331,20 @@ mod tests {
     }
 
     #[test]
-    fn clear_without_destroy_resets() {
+    fn clear_into_resets_and_hands_back_uploaded_textures() {
         let mut atlas = ImageAtlas::new();
         let pixels = vec![255u8; 4 * 32 * 32];
         atlas.insert("img1", 32, 32, &pixels);
         assert!(!atlas.is_empty());
-        atlas.clear_without_destroy();
+        let mut backend = crate::test_utils::MockBackend::new();
+        atlas.upload_dirty(&mut backend);
+        let (tex, _) = atlas.get("img1").expect("uploaded");
+
+        let mut retired = Vec::new();
+        atlas.clear_into(&mut retired);
         assert!(atlas.is_empty());
         assert!(!atlas.contains("img1"));
+        assert_eq!(retired, vec![tex]);
     }
 
     #[test]

@@ -2084,6 +2084,39 @@ fn navigation_clears_image_state() {
     );
 }
 
+#[test]
+fn navigation_destroys_previous_page_textures_on_next_paint() {
+    let vfs = test_vfs_with_image();
+    let mut browser = make_browser();
+    browser.set_window(0, 0, 480, 272);
+    let mut backend = MockBackend::new();
+
+    browser.navigate_vfs("vfs://sites/img/index.html", &vfs);
+    browser.load_next_image_batch(&vfs, 5000);
+    browser.paint(&mut backend).unwrap();
+    let page_one = backend.loaded_textures.clone();
+    assert!(!page_one.is_empty(), "the image page uploads a texture");
+
+    // Navigating has no backend, so nothing is destroyed yet...
+    browser.navigate_vfs("vfs://sites/img/broken.html", &vfs);
+    assert!(
+        page_one
+            .iter()
+            .any(|t| !backend.destroyed_textures.contains(t)),
+        "textures outlive the navigation until a backend is available"
+    );
+
+    // ...but the next paint releases every texture of the old page.
+    browser.paint(&mut backend).unwrap();
+    for tex in &page_one {
+        assert!(
+            backend.destroyed_textures.contains(tex),
+            "{tex:?} from the previous page leaked"
+        );
+    }
+    assert!(browser.retired_textures.is_empty());
+}
+
 // ---------------------------------------------------------------
 // Test: image loading is progressive (Phase 1)
 // ---------------------------------------------------------------
