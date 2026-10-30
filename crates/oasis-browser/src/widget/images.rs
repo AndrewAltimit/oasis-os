@@ -210,13 +210,15 @@ impl BrowserWidget {
                 if self.decoded_images.contains_key(&resolved) {
                     continue;
                 }
+                // A web page may not read the shell's VFS (`vfs://`).
+                if !loader::subresource_allowed(base_url.as_deref(), &resolved) {
+                    continue;
+                }
                 // CSP img-src enforcement is intentionally skipped.
-                // Images don't execute code, so blocking them provides no
-                // meaningful security benefit for an embedded browser. Many
-                // sites (Reddit, etc.) send strict img-src policies that
-                // reference CDN subdomains our lightweight CSP parser
-                // doesn't fully support (scheme-only sources like `https:`,
-                // `data:`, `blob:`), causing most images to be blocked.
+                // Images don't execute code, so blocking them provides
+                // little security benefit for an embedded browser, while
+                // a host-source mismatch (CDN subdomains, `blob:`) would
+                // break most images on sites with strict img-src policies.
                 let source = if self.config.features.sandbox_only {
                     ResourceSource::Vfs
                 } else {
@@ -260,6 +262,7 @@ impl BrowserWidget {
                 if let css::values::BackgroundImage::Url(ref url) = *img {
                     let resolved = Self::resolve_src(&base_url, url);
                     if self.decoded_images.contains_key(&resolved)
+                        || !loader::subresource_allowed(base_url.as_deref(), &resolved)
                         || !style_seen.insert(resolved.clone())
                     {
                         continue;

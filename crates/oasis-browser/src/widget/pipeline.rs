@@ -12,6 +12,7 @@ use crate::html::dom::NodeId;
 use crate::js_dom;
 use crate::layout;
 use crate::loader::cache::CacheEntry;
+use crate::loader::csp::{CspPolicy, CspResourceType, InlineKind};
 use crate::loader::{
     self, ContentType, ResourceRequest, ResourceResponse, ResourceSource, load_resource,
 };
@@ -764,7 +765,7 @@ impl BrowserWidget {
         }
         #[cfg(feature = "javascript")]
         let doc = {
-            let (scripts, deferred) = Self::collect_scripts(&doc);
+            let (scripts, deferred) = Self::collect_scripts(&doc, self.page_csp.as_ref());
             self.deferred_scripts = deferred;
             let shared: js_dom::SharedDoc = std::rc::Rc::new(std::cell::RefCell::new(doc));
             match oasis_js::JsEngine::new(8 * 1024 * 1024) {
@@ -817,8 +818,9 @@ impl BrowserWidget {
                     // defined their own versions.
                     js_dom::install_site_compat_shims(&engine);
                     // Register inline event handlers (onclick, etc.)
-                    // after scripts so Element class is available.
-                    {
+                    // after scripts so Element class is available. CSP
+                    // `script-src-attr` gates them as a whole.
+                    if Self::csp_allows_inline_handlers(self.page_csp.as_ref()) {
                         let doc_borrow = shared.borrow();
                         js_dom::register_inline_handlers(&engine, &doc_borrow);
                     }
@@ -865,8 +867,8 @@ impl BrowserWidget {
             pointer: "fine",
         };
         let (author_sheets, author_sheet_positions) =
-            Self::collect_style_sheets(&doc, media_viewport);
-        let inline_styles = Self::collect_inline_styles(&doc);
+            Self::collect_style_sheets(&doc, media_viewport, self.page_csp.as_ref());
+        let inline_styles = Self::collect_parser_inline_styles(&doc, self.page_csp.as_ref());
         self.diag(&format!(
             "[BR] collect stylesheets done: {} sheets, {} inline",
             author_sheets.len(),
@@ -880,7 +882,8 @@ impl BrowserWidget {
         //     is the primary reason old.reddit.com renders as unstyled
         //     bullets without this pass — the site ships essentially no
         //     inline CSS.
-        let (linked_urls, linked_positions) = Self::collect_linked_stylesheet_urls(&doc, url);
+        let (linked_urls, linked_positions) =
+            Self::collect_linked_stylesheet_urls(&doc, url, self.page_csp.as_ref());
         self.external_stylesheets = vec![None; linked_urls.len()];
         self.external_stylesheet_sources = vec![None; linked_urls.len()];
         self.styled_viewport = (self.window_w, self.window_h);
@@ -1437,9 +1440,14 @@ impl BrowserWidget {
     /// against the actual window size rather than the 480x272 default —
     /// without this, desktop-sized windows silently get the mobile
     /// breakpoints of any page whose author CSS uses `max-width`.
+    ///
+    /// Blocks the page's CSP does not allow (`style-src-elem` /
+    /// `style-src`: nonce, `'sha256-…'` hash or `'unsafe-inline'`) are
+    /// skipped.
     fn collect_style_sheets(
         doc: &html::dom::Document,
         viewport: css::parser::MediaViewport,
+        csp: Option<&CspPolicy>,
     ) -> (Vec<css::parser::Stylesheet>, Vec<html::dom::NodeId>) {
         let mut sheets = Vec::new();
         let mut positions = Vec::new();
@@ -1448,6 +1456,12 @@ impl BrowserWidget {
                 && elem.tag == html::dom::TagName::Style
             {
                 let css_text = doc.text_content(id);
+                let nonce = elem.get_attribute("nonce");
+                if csp.is_some_and(|p| !p.allows_inline(InlineKind::StyleElement, nonce, &css_text))
+                {
+                    log::warn!("CSP style-src blocked an inline <style> block");
+                    continue;
+                }
                 if !css_text.is_empty() {
                     sheets.push(css::parser::Stylesheet::parse_with_viewport(
                         &css_text, viewport,
@@ -1503,9 +1517,14 @@ impl BrowserWidget {
     /// parallel `Vec<NodeId>` gives each retained URL its originating
     /// DOM node index so callers can interleave external sheets with
     /// inline `<style>` blocks by DOM order in the cascade.
+    ///
+    /// URLs the page's CSP (`style-src-elem` / `style-src`) refuses, and
+    /// `vfs://` URLs on a page with a web origin
+    /// ([`loader::subresource_allowed`]), are dropped.
     fn collect_linked_stylesheet_urls(
         doc: &html::dom::Document,
         base_url: &str,
+        csp: Option<&CspPolicy>,
     ) -> (Vec<String>, Vec<html::dom::NodeId>) {
         const MAX_LINKED_STYLESHEETS: usize = 16;
         let mut urls = Vec::new();
@@ -1574,6 +1593,9 @@ impl BrowserWidget {
                 _ => continue,
             }
             if urls.iter().any(|u| u == &resolved) {
+                continue;
+            }
+            if !Self::stylesheet_url_allowed(base_url, &resolved, csp) {
                 continue;
             }
             urls.push(resolved);
@@ -1705,9 +1727,11 @@ impl BrowserWidget {
         } else {
             ResourceSource::VfsThenNetwork
         };
+        let page_url = self.nav.current_url().unwrap_or("").to_string();
         for (idx, sheet_url, css_text) in arrived {
             let urls: Vec<String> = css_import_urls(&css_text, &sheet_url)
                 .into_iter()
+                .filter(|u| Self::stylesheet_url_allowed(&page_url, u, self.page_csp.as_ref()))
                 .filter(|u| {
                     self.imported_stylesheet_urls.len() < MAX_STYLESHEET_IMPORTS
                         && self.imported_stylesheet_urls.insert(u.clone())
@@ -1792,7 +1816,7 @@ impl BrowserWidget {
             hover: true,
             pointer: "fine",
         };
-        let (sheets, positions) = Self::collect_style_sheets(doc, viewport);
+        let (sheets, positions) = Self::collect_style_sheets(doc, viewport, self.page_csp.as_ref());
         self.cached_author_sheets = sheets;
         self.cached_author_sheet_positions = positions;
         for (slot, source) in self
@@ -1924,6 +1948,52 @@ impl BrowserWidget {
         self.display_list_stale = true;
     }
 
+    /// Whether a page at `page_url` may load the stylesheet `url`: CSP
+    /// `style-src-elem` / `style-src` and the `vfs://` subresource gate.
+    fn stylesheet_url_allowed(page_url: &str, url: &str, csp: Option<&CspPolicy>) -> bool {
+        if !loader::subresource_allowed(Some(page_url), url) {
+            log::warn!("blocked vfs:// stylesheet {url} on web page {page_url}");
+            return false;
+        }
+        if let Some(policy) = csp
+            && !policy.allows(url, page_url, CspResourceType::Style)
+        {
+            log::warn!("CSP style-src blocked stylesheet {url}");
+            return false;
+        }
+        true
+    }
+
+    /// [`Self::collect_inline_styles`] for the parser-inserted
+    /// attributes of a freshly loaded page: empty when the page's CSP
+    /// (`style-src-attr` / `style-src`) lacks `'unsafe-inline'`.
+    ///
+    /// Re-collection after script DOM mutations
+    /// (`apply_js_dom_mutations`) is not filtered: script `element.style`
+    /// writes land in the `style` attribute, and CSSOM writes are exempt
+    /// from `style-src` in browsers too.
+    fn collect_parser_inline_styles(
+        doc: &html::dom::Document,
+        csp: Option<&CspPolicy>,
+    ) -> Vec<(NodeId, Vec<css::parser::Declaration>)> {
+        if csp.is_some_and(|p| !p.allows_inline(InlineKind::StyleAttribute, None, "")) {
+            log::warn!("CSP style-src blocked inline style=\"\" attributes");
+            return Vec::new();
+        }
+        Self::collect_inline_styles(doc)
+    }
+
+    /// Whether inline event-handler attributes may run under `csp`
+    /// (`script-src-attr` / `script-src`: `'unsafe-inline'`).
+    #[cfg(feature = "javascript")]
+    fn csp_allows_inline_handlers(csp: Option<&CspPolicy>) -> bool {
+        let allowed = csp.is_none_or(|p| p.allows_inline(InlineKind::ScriptAttribute, None, ""));
+        if !allowed {
+            log::warn!("CSP script-src blocked inline event handlers");
+        }
+        allowed
+    }
+
     /// Walk the DOM to collect inline `style=""` attributes and parse
     /// each into a list of declarations keyed by NodeId.
     pub(crate) fn collect_inline_styles(
@@ -1950,8 +2020,16 @@ impl BrowserWidget {
     /// Returns `(immediate, deferred)` where `deferred` contains scripts
     /// with the `defer` or `async` attribute, to be executed after the
     /// first paint.
+    ///
+    /// Scripts the page's CSP does not allow (`script-src-elem` /
+    /// `script-src`: matching `nonce`, `'sha256-…'` hash, or
+    /// `'unsafe-inline'` without nonces / hashes / `'strict-dynamic'`) are
+    /// skipped.
     #[cfg(feature = "javascript")]
-    fn collect_scripts(doc: &html::dom::Document) -> (Vec<String>, Vec<String>) {
+    fn collect_scripts(
+        doc: &html::dom::Document,
+        csp: Option<&CspPolicy>,
+    ) -> (Vec<String>, Vec<String>) {
         let mut immediate = Vec::new();
         let mut deferred = Vec::new();
         for (id, node) in doc.nodes.iter().enumerate() {
@@ -1961,6 +2039,16 @@ impl BrowserWidget {
                 && Self::is_js_script_type(elem.get_attribute("type"))
             {
                 let text = doc.text_content(id);
+                if let Some(policy) = csp
+                    && !policy.allows_inline(
+                        InlineKind::ScriptElement,
+                        elem.get_attribute("nonce"),
+                        &text,
+                    )
+                {
+                    log::warn!("CSP script-src blocked an inline <script>");
+                    continue;
+                }
                 if !text.is_empty() {
                     let is_deferred = elem.get_attribute("defer").is_some()
                         || elem.get_attribute("async").is_some();

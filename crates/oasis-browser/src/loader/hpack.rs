@@ -614,17 +614,54 @@ fn decode_string(buf: &[u8], pos: &mut usize) -> Result<String> {
 // Decoder
 // ---------------------------------------------------------------------
 
+/// Default cap on a decoded header list (matches the
+/// `SETTINGS_MAX_HEADER_LIST_SIZE` the HTTP/2 client advertises).
+pub const DEFAULT_MAX_HEADER_LIST_SIZE: usize = 64 * 1024;
+
+/// Per-field overhead counted against the header list size (RFC 9113
+/// §6.5.2 / RFC 7541 §4.1).
+const FIELD_OVERHEAD: usize = 32;
+
 /// Decode a complete HPACK header block into (name, value) pairs.
 ///
 /// The dynamic table is mutated in-place per the HPACK state rules:
 /// indexed references with incremental indexing add to the table,
-/// explicit size updates shrink it.
+/// explicit size updates shrink it. The decoded list is capped at
+/// [`DEFAULT_MAX_HEADER_LIST_SIZE`]; see [`decode_block_limited`].
 pub fn decode_block(
     buf: &[u8],
     table: &mut DynamicTable,
     max_table_size: usize,
 ) -> Result<Vec<(String, String)>> {
-    let mut out = Vec::new();
+    decode_block_limited(buf, table, max_table_size, DEFAULT_MAX_HEADER_LIST_SIZE)
+}
+
+/// [`decode_block`] with an explicit cap on the decoded header list:
+/// `Σ(name.len() + value.len() + 32)` may not exceed `max_list_size`.
+///
+/// Without the cap a small block amplifies enormously: a 1-byte indexed
+/// field can reference a 4 KiB dynamic-table entry, so a 64 KiB block
+/// would otherwise decode to ~256 MiB.
+pub fn decode_block_limited(
+    buf: &[u8],
+    table: &mut DynamicTable,
+    max_table_size: usize,
+    max_list_size: usize,
+) -> Result<Vec<(String, String)>> {
+    let mut out: Vec<(String, String)> = Vec::new();
+    let mut list_size = 0usize;
+    let mut account = |name: &str, value: &str| -> Result<()> {
+        list_size = list_size
+            .saturating_add(name.len())
+            .saturating_add(value.len())
+            .saturating_add(FIELD_OVERHEAD);
+        if list_size > max_list_size {
+            return Err(OasisError::Backend(
+                format!("HPACK: decoded header list exceeds {max_list_size} bytes").into(),
+            ));
+        }
+        Ok(())
+    };
     let mut pos = 0;
     // Whether a Dynamic Table Size Update is still permitted at the
     // current position. Per RFC 7541 §4.2, size updates must appear
@@ -639,6 +676,7 @@ pub fn decode_block(
             size_update_allowed = false;
             let idx = decode_integer(buf, &mut pos, 7)? as usize;
             let (n, v) = lookup(table, idx)?;
+            account(&n, &v)?;
             out.push((n, v));
         } else if first & 0x40 != 0 {
             // 01xxxxxx — Literal With Incremental Indexing
@@ -650,6 +688,7 @@ pub fn decode_block(
                 lookup(table, name_idx)?.0
             };
             let value = decode_string(buf, &mut pos)?;
+            account(&name, &value)?;
             table.insert(name.clone(), value.clone());
             out.push((name, value));
         } else if first & 0x20 != 0 {
@@ -676,6 +715,7 @@ pub fn decode_block(
                 lookup(table, name_idx)?.0
             };
             let value = decode_string(buf, &mut pos)?;
+            account(&name, &value)?;
             out.push((name, value));
         }
     }
@@ -714,6 +754,33 @@ fn encode_string(out: &mut Vec<u8>, s: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn indexed_amplification_is_capped() {
+        // One 4000-byte dynamic-table entry, then 1-byte references to it:
+        // a ~20 KiB block that would decode to ~80 MiB uncapped.
+        let mut block = Vec::new();
+        block.push(0x40); // literal with incremental indexing, new name
+        encode_string(&mut block, "x-big");
+        encode_string(&mut block, &"v".repeat(4000));
+        block.extend(std::iter::repeat_n(0x80 | 62, 20_000)); // index 62 = dyn[0]
+        let mut table = DynamicTable::new(4096);
+        let err = decode_block(&block, &mut table, 4096).unwrap_err();
+        assert!(err.to_string().contains("exceeds"), "{err}");
+
+        // A list just under the cap still decodes.
+        let mut block = Vec::new();
+        block.push(0x40);
+        encode_string(&mut block, "x-big");
+        encode_string(&mut block, &"v".repeat(4000));
+        block.extend(std::iter::repeat_n(0x80 | 62, 10));
+        let mut table = DynamicTable::new(4096);
+        let out = decode_block(&block, &mut table, 4096).unwrap();
+        assert_eq!(out.len(), 11);
+
+        let mut table = DynamicTable::new(4096);
+        assert!(decode_block_limited(&block, &mut table, 4096, 8 * 1024).is_err());
+    }
 
     // Integer codec -----------------------------------------------------
 

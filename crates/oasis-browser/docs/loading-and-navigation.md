@@ -12,11 +12,13 @@ src/
 ├── loader/
 │   ├── mod.rs              orchestrator: cache lookup, dispatch, content type detection
 │   ├── http.rs             HTTP/HTTPS fetch (TLS via oasis-types::TlsProvider)
+│   ├── http1.rs            HTTP/1.1 framing + redirect-hop header policy (shared with http_psp.rs)
+│   ├── http2.rs, hpack.rs  HTTP/2 (ALPN h2) + HPACK
 │   ├── gemini_fetch.rs     Gemini protocol fetch
 │   ├── io_thread.rs        background IO thread + IoWork / IoResult queue
 │   ├── cache.rs            byte-bounded LRU response cache
-│   ├── cookies.rs          cookie jar (per-host, persistent across navigations)
-│   ├── csp.rs              Content-Security-Policy enforcement
+│   ├── cookies.rs          RFC 6265 session cookie jar
+│   ├── csp.rs              Content-Security-Policy parsing + checks
 │   └── vfs.rs              virtual filesystem source
 ├── forms/                  form state, validation, submission
 └── widget_pipeline.rs      hooks IoResult → parse → cascade → layout
@@ -58,41 +60,74 @@ main thread                  IO thread
 push IoWork  ─────────────▶  recv IoWork
                               fetch (HTTP / TLS / Gemini)
                               decode (gzip)
-                              update cookie jar
+                              update cookie jar (per redirect hop)
 recv IoResult ◀────────────  send IoResult
 parse + cascade + layout
 ```
 
 `IoWork` and `IoResult` cross thread boundaries via `mpsc::Sender` /
 `Receiver`. The IO thread owns its own `CookieJar` clone; cookie
-updates are merged back into the main-thread jar when the result is
-processed. The TLS provider is borrowed via a raw pointer that the
-crate guarantees outlives the IO thread (the `BrowserWidget` joins the
-thread on `Drop`).
+updates (one `(hop URL, Set-Cookie headers)` entry per redirect hop)
+are merged back into the main-thread jar when the result is processed.
+The IO thread holds the TLS provider by `Arc`. Dropping the widget
+detaches a busy worker, which finishes its in-flight request and exits.
 
 The IO thread processes work **sequentially** — there is no parallel
 fetch. This is fine for an embedded engine driving one tab.
 
 ## Cookies
 
-`CookieJar` (`loader/cookies.rs`) is a per-host cookie store with
-`Set-Cookie` parsing, `Path`, `Domain`, `Expires`, `Max-Age`,
-`Secure`, `HttpOnly`, and `SameSite` honored. JavaScript reads /
-writes via `document.cookie`, which delegates to the same jar.
+`CookieJar` (`loader/cookies.rs`) is a session-only RFC 6265 store
+(desktop; PSP has none yet):
+
+- host-only cookies unless `Domain=` is given; `Domain=` must
+  domain-match the setting host, is refused for IP hosts, and is refused
+  for public suffixes (single-label domains plus the embedded
+  `MULTI_LABEL_SUFFIXES` list — not a full PSL);
+- `Max-Age` (preferred) / `Expires` (RFC 6265 §5.1.1 date parser) set an
+  absolute expiry capped at 400 days; `Max-Age<=0` or a past date
+  deletes; expired cookies are never sent;
+- `Secure` cookies go over `https:` only, are refused from `http:`
+  responses, and cannot be overwritten from `http:`; `__Secure-` /
+  `__Host-` prefixes are enforced;
+- control characters and `name=value` over 4 KiB are refused; at most 50
+  cookies per domain and 3000 total (oldest evicted);
+- `HttpOnly` and `SameSite` are stored; `SameSite` is not enforced.
+
+The HTTP client asks a `CookieHook` for each redirect hop's own
+`Cookie:` header and stores every hop's `Set-Cookie` under that hop's
+URL (`http::http_request_with_cookies`), so cookies never follow a
+cross-site redirect and a login → 302 → dashboard flow keeps its
+session. `document.cookie` is a separate per-page map
+(`js_dom/storage.rs`) that is never sent on requests.
 
 ## CSP
 
-`loader/csp.rs` parses `Content-Security-Policy` response headers and
-enforces:
+`loader/csp.rs` parses every `Content-Security-Policy` response header
+(each comma-separated policy must allow a load; report-only and
+`<meta http-equiv>` policies are ignored). `widget/pipeline.rs` and
+`js_dom/fetch.rs` enforce:
 
-- `script-src` — blocks inline / external `<script>` execution.
-- `style-src` — blocks inline / external `<style>` and `style="…"`.
-- `connect-src` — blocks `fetch()` / XHR / WebSocket connect attempts.
-- `img-src` — relaxed (warn-only) so existing pages render.
+- `script-src-elem` → `script-src` → `default-src` — inline `<script>`
+  runs only with a matching `nonce`, a matching `'sha256-…'` hash, or
+  `'unsafe-inline'` (ignored when the list has a nonce, hash or
+  `'strict-dynamic'`). External `<script src>` is never loaded.
+- `script-src-attr` → `script-src` → `default-src` — inline event
+  handlers (`onclick=…`) are registered only under `'unsafe-inline'`.
+- `style-src-elem` → `style-src` → `default-src` — inline `<style>`
+  (nonce / hash / `'unsafe-inline'`) and `<link rel=stylesheet>` /
+  `@import` URLs.
+- `style-src-attr` → `style-src` → `default-src` — parser-inserted
+  `style="…"` attributes. Attributes written later by scripts
+  (`element.style`) are not filtered.
+- `connect-src` → `default-src` — script `fetch()`.
+- `img-src` — parsed, not enforced (see `widget/images.rs`).
 
-CSP enforcement happens at the loader (for resource requests) and at
-the JS engine (for inline script execution). Violations are logged via
-the `log` crate.
+Violations are logged with `log::warn!`; nothing is reported.
+
+`vfs://` subresources (images, stylesheets, `@import`, fonts) are
+refused for pages with a network origin
+(`loader::subresource_allowed`).
 
 ## Navigation history
 
@@ -168,7 +203,14 @@ in-binary documentation pages without going through the IO thread.
 ## Tests
 
 - `loader::cache::tests` — LRU eviction, byte budget enforcement.
-- `loader::cookies::tests` — `Set-Cookie` parsing, expiry, host scoping.
+- `loader::cookies::tests` — `Set-Cookie` parsing, expiry / deletion,
+  host-only and public-suffix scoping, caps.
+- `loader::csp::tests`, `loader::http1::tests`, `loader::http2::tests`,
+  `loader::hpack::tests` — CSP matching, framing, redirect-hop headers,
+  HTTP/2 + HPACK caps.
+- `e2e_tests::http` — cross-site redirect cookie isolation, redirect-hop
+  `Set-Cookie`, `Max-Age=0` logout, Referer reduction, `vfs://` gating,
+  CSP `style-src`; `e2e_tests::js` — CSP `script-src` nonces.
 - `nav::tests` — back / forward stack invariants, plus a `proptest`
   block (`prop`) that verifies path-independence properties.
 - `tests/browser_integration.rs` — full pipeline navigation and link

@@ -98,6 +98,19 @@ The HTML/CSS engine (`oasis-browser`) processes untrusted content:
   `expression()` or `-moz-binding` support
 - **Image loading** -- images are decoded in-process with bounds
   checking on dimensions
+- **Content Security Policy** -- `script-src` / `style-src` (with
+  nonces and `'sha256-…'` hashes) gate inline scripts, event handlers,
+  `<style>`, `style=""` and linked stylesheets; `connect-src` gates
+  `fetch()`. `img-src` is not enforced. See `loader/csp.rs` for the
+  exact directive and source coverage
+- **Cookies** -- RFC 6265 host-only / `Domain` / `Secure` / expiry rules
+  with a public-suffix guard and size caps; cookies are attached and
+  stored per redirect hop so they never follow a cross-site redirect.
+  Session-only (never persisted); `SameSite` is not enforced
+- **Local files** -- pages with a web origin cannot read `vfs://`
+  subresources
+- **HTTP/2** -- frame size, header-block and HPACK decoded-size caps
+  bound memory against CONTINUATION floods and HPACK amplification
 
 ## Network Security
 
