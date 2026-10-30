@@ -644,7 +644,7 @@ Test layers and the harness API: [testing.md](testing.md). PSP scenarios: [scrip
 
 ### 12.2 PSP Debugging
 
-Today PSP debugging uses the WiFi TCP command server inside the EBOOT (`scripts/psp-devloop.sh`: deploy, reboot, remote input injection, live framebuffer capture, file upload), the network recovery EBOOT (hold R on boot) and PPSSPP headless runs in the `psp` Docker profile.
+Today PSP debugging uses the WiFi TCP command server inside the EBOOT (`scripts/psp_remote.py`: deploy, reboot, remote input injection, live framebuffer capture, file upload, scripted sequences), the network recovery EBOOT (hold R on boot) and PPSSPP headless runs in the `psp` Docker profile.
 
 **Planned: PPSSPP with an embedded MCP server.** A patched PPSSPP container would expose emulator internals as MCP tools (`psp.memory.read/write/search`, `psp.gpu.state/vram_dump/texture_list`, `psp.debug.breakpoint/step/registers/threads/stack_trace`, `psp.net.sockets/capture/inject_latency`, `psp.emu.screenshot/save_state/frame_advance`), built from a pinned PPSSPP commit plus a small patch series under `docker/ppsspp-patches/` (currently a placeholder). It would let an agent inspect GU state, threads and memory of a running EBOOT the way it inspects desktop code. None of it is built yet.
 

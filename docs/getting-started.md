@@ -139,9 +139,32 @@ custom skin (see [skin-authoring.md](skin-authoring.md)):
 cargo run -p oasis-app -- ./skins/my-custom-skin
 ```
 
-Other useful environment variables: `OASIS_APP=<title>` auto-launches an app
-(`OASIS_URL=<url>` sets the browser's first page), `OASIS_FRAME_STATS=1` logs
-per-phase frame timings, and `RUST_LOG` controls logging (default `info`).
+### Environment variables
+
+Read by the desktop binaries (`oasis-app`, `oasis-screenshot`) and the platform
+layer. `RUST_LOG` controls logging (default `info`).
+
+| Variable | Description | Example |
+|----------|-------------|---------|
+| `OASIS_SKIN` | Skin to start with (a CLI argument takes precedence); also picks the skin for `oasis-screenshot` | `OASIS_SKIN=modern cargo run -p oasis-app` |
+| `OASIS_APP` | Auto-launch an app by title on startup (dashboard tiles and registered apps without a tile) | `OASIS_APP=Browser` |
+| `OASIS_URL` | Initial browser URL (with `OASIS_APP=Browser`) | `OASIS_URL="vfs://sites/home/js-test.html"` |
+| `OASIS_SKIP_SPLASH` | `1` skips the boot splash animation (init work still runs) | `OASIS_SKIP_SPLASH=1` |
+| `OASIS_FRAME_STATS` | `1` logs per-phase frame timings (p50/p99) and drawn vs. skipped frames every ~5 s | `OASIS_FRAME_STATS=1` |
+| `OASIS_FIXED_TIME` | Freeze the platform clock (status bar, TV Guide grid) for deterministic screenshots | `OASIS_FIXED_TIME="2026-01-01 12:00:00"` |
+| `OASIS_FIXED_FRAME` | Shader wallpaper frame number used by `oasis-screenshot` (default 30) | `OASIS_FIXED_FRAME=0` |
+| `OASIS_TV_CHANNEL` | Auto-tune this TV Guide channel number once the catalog loads (automated testing) | `OASIS_TV_CHANNEL=3` |
+| `OASIS_TV_SEEK` | Override the seek position (seconds) when tuning a TV channel | `OASIS_TV_SEEK=120` |
+| `OASIS_TV_TIMEOUT` | Exit N seconds after video decode starts (automated testing) | `OASIS_TV_TIMEOUT=30` |
+| `OASIS_MCP` | `1` starts the MCP control server at boot (requires the `mcp` feature) | `OASIS_MCP=1` |
+| `OASIS_MCP_PORT` | MCP server port (default 7345, loopback only) | `OASIS_MCP_PORT=7345` |
+| `OASIS_MCP_TOKEN` | Optional bearer token the MCP server requires | `OASIS_MCP_TOKEN=secret` |
+
+Test-only switches: `OASIS_E2E_NETWORK`, `OASIS_NETWORK_SCREENSHOTS` and
+`OASIS_LIVE_CSS` enable network-dependent `oasis-app` tests;
+`OASIS_SOAK_SECS` / `OASIS_SOAK_TICK_MS` tune the ignored radio soak test;
+`OASIS_LAYOUT_BUDGET_SCALE` scales the browser layout time budgets in
+`crates/oasis-browser/tests/layout_budget.rs`.
 
 ### Screenshots
 
@@ -259,7 +282,28 @@ docker compose --profile psp run --rm -e PPSSPP_HEADLESS=1 ppsspp /roms/release/
 ```
 
 Deterministic scripted runs use the autorun feature; see
-[psp-autorun.md](psp-autorun.md).
+[psp-autorun.md](psp-autorun.md). The first run needs
+`docker compose --profile psp build ppsspp`.
+
+### Remote development on hardware
+
+The EBOOT runs a WiFi TCP command server for closed-loop build-deploy-test
+cycles ([Developer's Journal entry 08](https://andrewaltimit.github.io/oasis-os/journal/08-remote-dev-automation.html)):
+
+```bash
+export PSP_IP=192.168.0.249                                  # PSP_PORT defaults to 9293
+python3 scripts/psp_remote.py cycle target/.../EBOOT.PBP     # deploy over WiFi and reboot
+python3 scripts/psp_remote.py press cross                    # remote input
+python3 scripts/psp_remote.py screencap /tmp/psp.png         # live framebuffer capture
+python3 scripts/psp_remote.py upload oasis.prx ms0:/seplugins/oasis.prx
+python3 scripts/psp_remote.py sequence scripts/sequences/smoke-test.yaml
+```
+
+Run `python3 scripts/psp_remote.py` without arguments for the full command
+list (status, log, hold, cursor, hard-reboot, skins, build-cycle, ...).
+
+The network recovery EBOOT (`crates/oasis-recovery-psp`, built the same way)
+starts a WiFi file server when R is held at boot.
 
 ## Tests, lint and formatting
 
@@ -326,47 +370,18 @@ lines for CI assertions.
 
 ```
 oasis-os/
-  crates/
-    oasis-types/        Foundation types (Color, Button, InputEvent), backend traits
-    oasis-vfs/          Virtual file system (MemoryVfs, RealVfs, GameAssetVfs)
-    oasis-platform/     Platform service traits (power, time, USB, network, OSK)
-    oasis-sdi/          Scene display interface (named objects, z-order)
-    oasis-ui/           Reusable widgets and flex layout
-    oasis-wm/           Window manager
-    oasis-skin/         TOML skin engine and built-in skins
-    oasis-i18n/         Internationalization
-    oasis-terminal/     Command interpreter and built-in commands
-    oasis-browser/      HTML/CSS/Gemini browser engine
-    oasis-js/           JavaScript engine (QuickJS-NG)
-    oasis-net/          TCP networking, PSK auth, remote terminal, FTP
-    oasis-mcp/          Optional MCP control server
-    oasis-audio/        Audio manager, playlists, radio
-    oasis-video/        MP4 / H.264 + AAC decode
-    oasis-vector/       Vector graphics, icons, animations
-    oasis-shader/       Shader wallpapers
-    oasis-rasterize/    Software rasterizer (text, shapes) for CPU backends
-    oasis-usb-host/     USB host for a PSP thin client (sends frames, receives input)
-    oasis-test-backend/ Mock backend for tests
-    oasis-app-core/     App framework (`App` trait) for app crates
-    oasis-app-*/        13 app crates (browser, calculator, file-manager, games,
-                        media, network, package-manager, paint, radio, settings,
-                        system-monitor, text-editor, tv-guide)
-    oasis-core/         Coordination: dashboard, terminal, plugins, scripting, bars
-    oasis-backend-sdl/  SDL3 desktop / Raspberry Pi backend
-    oasis-backend-wasm/ WebAssembly backend
-    oasis-backend-ue5/  Software RGBA framebuffer backend (UE5)
-    oasis-ffi/          C-ABI shared library
-    oasis-app/          Desktop binaries (oasis-app, oasis-screenshot, tests)
-    oasis-backend-psp/  PSP shell EBOOT (not a workspace member)
-    oasis-plugin-psp/   PSP kernel-mode overlay PRX (not a workspace member)
-    ...-psp / oasis-me-boot  Other standalone PSP tools and research crates
-  examples/             Runnable examples (see examples/README.md)
-  skins/                External TOML skin definitions
-  www/                  WASM page shell
-  scripts/              Build, test and analysis scripts
-  screenshots/          Per-skin screenshot gallery
-  docs/                 Guides, subsystem docs, ADRs (see docs/README.md)
+  crates/        50 crates: 40 workspace members, oasis-backend-psp (excluded),
+                 9 standalone PSP crates
+  skins/         the 17 skin directories (every built-in skin)
+  examples/      runnable examples (see examples/README.md)
+  docs/          guides, subsystem docs, ADRs (see docs/README.md)
+  scripts/       build, test and analysis scripts
+  screenshots/   per-skin screenshot gallery
+  site/, www/    GitHub Pages site and the WASM page shell
 ```
+
+The crate-by-crate map is the [crate table in the README](../README.md#crates);
+the dependency graph is in [CLAUDE.md](../CLAUDE.md#crate-dependency-graph).
 
 ## Next steps
 
