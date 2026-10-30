@@ -10,9 +10,7 @@ use std::collections::HashMap;
 use oasis_backend_psp::{Color, GradientStops};
 use oasis_core::active_theme::ActiveTheme;
 use oasis_core::skin::SkinFeatures;
-use oasis_core::vector::background::{
-    BackgroundLayer, LayerAnimation, LayerKind, LayerPosition,
-};
+use oasis_core::vector::background::{BackgroundLayer, LayerAnimation, LayerKind, LayerPosition};
 use oasis_shader::ShaderParams;
 
 use crate::theme;
@@ -189,10 +187,7 @@ impl PspSkinPreset {
             Self::RetroCga => Some((
                 "voronoi",
                 ShaderParams {
-                    colors: vec![
-                        hex_to_f4(0x55, 0xFF, 0x55),
-                        hex_to_f4(0xFF, 0x55, 0xFF),
-                    ],
+                    colors: vec![hex_to_f4(0x55, 0xFF, 0x55), hex_to_f4(0xFF, 0x55, 0xFF)],
                     floats: HashMap::from([
                         ("speed".into(), 0.5),
                         // Size=6: ~6 cells across 11 internal pixels (RENDER_SCALE=3
@@ -216,10 +211,7 @@ impl PspSkinPreset {
             Self::Altimit => Some((
                 "starfield",
                 ShaderParams {
-                    colors: vec![
-                        hex_to_f4(0x00, 0xCC, 0x88),
-                        hex_to_f4(0x08, 0x08, 0x16),
-                    ],
+                    colors: vec![hex_to_f4(0x00, 0xCC, 0x88), hex_to_f4(0x08, 0x08, 0x16)],
                     floats: HashMap::from([("speed".into(), 0.6)]),
                 },
             )),
@@ -459,9 +451,7 @@ pub(crate) fn apply_psp_overrides(t: &mut ActiveTheme) {
     t.background_layers.retain(|layer| {
         !matches!(
             layer.kind,
-            LayerKind::FloatingPolygons { .. }
-                | LayerKind::EqBars { .. }
-                | LayerKind::Waves { .. }
+            LayerKind::FloatingPolygons { .. } | LayerKind::EqBars { .. } | LayerKind::Waves { .. }
         )
     });
     // Cap at 4 base layers max on PSP hardware (shader layer appended separately).
@@ -585,7 +575,10 @@ mod tests {
     #[test]
     fn shader_skins_return_correct_names() {
         assert_eq!(PspSkinPreset::Balatro.shader_config().unwrap().0, "balatro");
-        assert_eq!(PspSkinPreset::RetroCga.shader_config().unwrap().0, "voronoi");
+        assert_eq!(
+            PspSkinPreset::RetroCga.shader_config().unwrap().0,
+            "voronoi"
+        );
         assert_eq!(
             PspSkinPreset::Solarized.shader_config().unwrap().0,
             "ocean_waves"
@@ -674,9 +667,10 @@ mod tests {
     fn shader_skins_inject_shader_layer() {
         for preset in PspSkinPreset::ALL {
             let theme = preset.to_active_theme();
-            let has_shader = theme.background_layers.iter().any(|l| {
-                matches!(l.kind, LayerKind::Shader { .. })
-            });
+            let has_shader = theme
+                .background_layers
+                .iter()
+                .any(|l| matches!(l.kind, LayerKind::Shader { .. }));
             let expects_shader = preset.shader_config().is_some();
             assert_eq!(
                 has_shader, expects_shader,
@@ -691,13 +685,10 @@ mod tests {
         for preset in PspSkinPreset::ALL {
             if let Some((expected_name, _)) = preset.shader_config() {
                 let theme = preset.to_active_theme();
-                let layer = theme
-                    .background_layers
-                    .iter()
-                    .find_map(|l| match &l.kind {
-                        LayerKind::Shader { name, .. } => Some(name.as_str()),
-                        _ => None,
-                    });
+                let layer = theme.background_layers.iter().find_map(|l| match &l.kind {
+                    LayerKind::Shader { name, .. } => Some(name.as_str()),
+                    _ => None,
+                });
                 assert_eq!(
                     layer,
                     Some(expected_name),
@@ -716,9 +707,10 @@ mod tests {
             PspSkinPreset::HighContrast,
         ] {
             let theme = preset.to_active_theme();
-            let has_shader = theme.background_layers.iter().any(|l| {
-                matches!(l.kind, LayerKind::Shader { .. })
-            });
+            let has_shader = theme
+                .background_layers
+                .iter()
+                .any(|l| matches!(l.kind, LayerKind::Shader { .. }));
             assert!(!has_shader, "{:?} should not have a shader layer", preset);
         }
     }
@@ -818,8 +810,7 @@ mod tests {
     #[test]
     fn get_shader_layer_returns_correct_params() {
         let theme = PspSkinPreset::Balatro.to_active_theme();
-        let info =
-            oasis_core::vector_overlay::get_shader_layer(&theme).unwrap();
+        let info = oasis_core::vector_overlay::get_shader_layer(&theme).unwrap();
         assert_eq!(info.name, "balatro");
         assert_eq!(info.params.colors.len(), 3);
         assert!(info.params.floats.contains_key("speed"));
@@ -905,11 +896,7 @@ mod tests {
                 // Measure 10 frames.
                 let start = Instant::now();
                 for i in 0..10 {
-                    let _ = renderer.render_shader(
-                        name,
-                        i as f32 / 30.0,
-                        &params,
-                    );
+                    let _ = renderer.render_shader(name, i as f32 / 30.0, &params);
                 }
                 let elapsed = start.elapsed();
                 let per_frame_us = elapsed.as_micros() / 10;
@@ -955,6 +942,9 @@ mod tests {
         }
         // Ensure we tested at least one of each.
         assert!(saw_shader, "should have tested at least one shader skin");
-        assert!(saw_no_shader, "should have tested at least one non-shader skin");
+        assert!(
+            saw_no_shader,
+            "should have tested at least one non-shader skin"
+        );
     }
 }

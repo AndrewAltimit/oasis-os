@@ -6,7 +6,6 @@ use oasis_core::sdi::SdiRegistry;
 use crate::theme::*;
 use crate::types::RADIO_STATIONS;
 
-use super::helpers::sdi_key;
 use super::list_view::{
     LIST_ROWS, hide_unused_rows, setup_list_bg, update_list_bg, update_list_row, update_scrollbar,
 };

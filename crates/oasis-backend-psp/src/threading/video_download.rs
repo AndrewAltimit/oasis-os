@@ -7,8 +7,8 @@ use super::tls_http::TlsHttpReader;
 use super::video_dl_http::{HttpDataSource, http_open_with_redirect};
 use super::video_dl_parse::{find_moov_end, process_stream_chunk};
 use super::{
-    AudioCmd, DOWNLOAD_CANCEL, DOWNLOAD_STOPPED, IO_CMD_QUEUE, IO_RESP_QUEUE, IoResponse,
-    io_log, io_log_verbose, send_audio_cmd, set_streaming_active,
+    AudioCmd, DOWNLOAD_CANCEL, DOWNLOAD_STOPPED, IO_CMD_QUEUE, IO_RESP_QUEUE, IoResponse, io_log,
+    io_log_verbose, send_audio_cmd, set_streaming_active,
 };
 
 // ---------------------------------------------------------------------------
@@ -272,8 +272,7 @@ fn handle_video_download_inner(url: String, _dest: String, tag: u32) {
         .map(|t| t.max_sample_size())
         .unwrap_or(0) as usize;
     let mut sample_data: Vec<u8> = Vec::with_capacity(max_audio_sample.max(4096));
-    let mut video_sample_data: Vec<u8> =
-        Vec::with_capacity(max_video_sample.max(16384));
+    let mut video_sample_data: Vec<u8> = Vec::with_capacity(max_video_sample.max(16384));
     let mut sample_offset: u64 = 0;
     let mut sample_size: u32 = 0;
     let mut sample_is_video = false;
@@ -345,8 +344,7 @@ fn handle_video_download_inner(url: String, _dest: String, tag: u32) {
         if n == 0 {
             // EOF or connection dropped. Try to reconnect with Range
             // request if we haven't finished downloading.
-            let should_reconnect = total
-                .map_or(false, |t| downloaded < t && reconnect_count < 3);
+            let should_reconnect = total.map_or(false, |t| downloaded < t && reconnect_count < 3);
             if should_reconnect {
                 reconnect_count += 1;
                 io_log(&format!(
@@ -360,15 +358,11 @@ fn handle_video_download_inner(url: String, _dest: String, tag: u32) {
                 match TlsHttpReader::open_range(&url, downloaded) {
                     Ok((reader, _cl)) => {
                         source = HttpDataSource::Tls(reader);
-                        io_log(&format!(
-                            "[IO-DL] reconnected at byte {downloaded}"
-                        ));
+                        io_log(&format!("[IO-DL] reconnected at byte {downloaded}"));
                         continue 'outer;
-                    }
+                    },
                     Err(e) => {
-                        io_log(&format!(
-                            "[IO-DL] reconnect failed: {e}"
-                        ));
+                        io_log(&format!("[IO-DL] reconnect failed: {e}"));
                         // Source already cleaned up. Set flag and break.
                         set_streaming_active(false);
                         io_log(&format!(
@@ -378,15 +372,13 @@ fn handle_video_download_inner(url: String, _dest: String, tag: u32) {
                         crate::video::set_video_playing(false);
                         send_audio_cmd(AudioCmd::VideoAudioStop);
                         return;
-                    }
+                    },
                 }
             }
             break; // Genuine EOF or max reconnects exhausted
         }
         if loop_iter < 3 {
-            io_log_verbose(&format!(
-                "[IO-DL] phase2 read #{loop_iter}: {n} bytes"
-            ));
+            io_log_verbose(&format!("[IO-DL] phase2 read #{loop_iter}: {n} bytes"));
         }
 
         downloaded += n as u64;

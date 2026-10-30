@@ -2,8 +2,8 @@
 
 use core::sync::atomic::Ordering;
 
-use super::nids::*;
 use super::network::*;
+use super::nids::*;
 use super::radio::*;
 use super::resolve::*;
 use super::state::*;
@@ -423,10 +423,7 @@ pub(super) unsafe fn try_resolve_codec() -> bool {
             &raw const CODEC_TEXT_ADDR,
             NID_CODEC_GET_EDRAM,
         ) {
-            core::ptr::write_volatile(
-                &raw mut CODEC_GET_EDRAM_FN,
-                Some(core::mem::transmute(ptr)),
-            );
+            core::ptr::write_volatile(&raw mut CODEC_GET_EDRAM_FN, Some(core::mem::transmute(ptr)));
         } else {
             crate::debug_log(b"[OASIS] NID miss: GetEDRAM");
         }
@@ -828,8 +825,7 @@ pub(super) unsafe extern "C" fn audio_thread_entry(
             5 => {
                 // Next station (explicit).
                 let idx = RADIO_STATION_IDX.load(Ordering::Relaxed);
-                RADIO_STATION_IDX
-                    .store((idx + 1) % RADIO_STATIONS.len() as u8, Ordering::Relaxed);
+                RADIO_STATION_IDX.store((idx + 1) % RADIO_STATIONS.len() as u8, Ordering::Relaxed);
             },
             6 => {
                 // Prev station (explicit).

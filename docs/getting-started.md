@@ -270,7 +270,8 @@ docker compose --profile psp-build run --rm psp-build \
 The cargo registry and git cache persist in the `psp-cargo-cache` volume. Build
 output lands in each crate's own `target/` on the host. If you bump the
 nightly, `RUST_PSP_REV` or the pspdev release, change the matching
-`ARG`s in the Dockerfile too.
+`ARG`s in the Dockerfile too; `scripts/check-rust-psp-rev.sh` (run in CI) fails
+if the Dockerfile, the workflows and the crates disagree.
 
 Boot-test the result in PPSSPPHeadless, as CI does. The script needs a POSIX
 shell. On Windows, use Git Bash with `MSYS_NO_PATHCONV=1` set; that is the

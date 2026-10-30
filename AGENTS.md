@@ -58,7 +58,7 @@ cargo run -p oasis-app --bin oasis-screenshot
 
 All steps run via `docker compose --profile ci run --rm rust-ci` on self-hosted runners.
 
-**`main-ci.yml` (push to `main`):** format check -> clippy -> `oasis-app` feature-combination check -> nightly clippy (advisory) -> doc build -> markdown link check -> test (cargo-nextest + doc-tests) -> release build -> screenshot regression -> cargo-deny -> benchmarks -> code coverage (advisory) -> rust-psp pin check -> PSP EBOOT / overlay PRX / recovery EBOOT builds -> PPSSPP headless smoke test; then release binaries and the GitHub Pages deploy (WASM).
+**`main-ci.yml` (push to `main`):** format check -> clippy -> `oasis-app` feature-combination check -> non-default feature-set clippy (`oasis-browser`, `oasis-core`, `oasis-video`, `oasis-app`, `oasis-ffi`) -> nightly clippy (advisory) -> doc build -> markdown link check -> test (cargo-nextest + doc-tests) -> release build -> screenshot regression -> cargo-deny -> benchmarks -> code coverage (advisory) -> rust-psp pin check (crates, workflows, `docker/psp-build.Dockerfile`) -> PSP EBOOT / overlay PRX / recovery EBOOT builds (rustc warnings are errors) -> PPSSPP headless smoke test; then release binaries and the GitHub Pages deploy (WASM).
 
 **`pr-validation.yml` (pull requests):** the same checks (with a benchmark regression gate), plus:
 

@@ -18,8 +18,8 @@
 #![no_main]
 
 use oasis_backend_psp::{
-    CURSOR_H, CURSOR_W, Color, PspBackend, SCREEN_HEIGHT, SCREEN_WIDTH, SdiRegistry,
-    StatusBarInfo, SystemInfo, TextureId, WindowManager,
+    CURSOR_H, CURSOR_W, Color, PspBackend, SCREEN_HEIGHT, SCREEN_WIDTH, SdiRegistry, StatusBarInfo,
+    SystemInfo, TextureId, WindowManager,
 };
 
 // oasis-core SDI integration types.
@@ -57,9 +57,6 @@ use types::*;
 // modules to call kernel syscalls, and module_kernel! (0x1000) fails to
 // load on PSP-3000 + 6.20 PRO-C.
 psp::module!("OASIS_OS", 1, 0);
-
-// Force the getrandom module to be linked (contains registration macros).
-use getrandom as _;
 
 // ---------------------------------------------------------------------------
 // Entry point
@@ -121,9 +118,7 @@ fn psp_main() {
     });
     oasis_browser::internals::set_cascade_progress_hook(|idx, total| {
         let free_kb = unsafe { psp::sys::sceKernelTotalFreeMemSize() as i32 / 1024 };
-        oasis_backend_psp::vlog_force(&format!(
-            "[BR/CASCADE] idx={idx}/{total} free={free_kb}KB"
-        ));
+        oasis_backend_psp::vlog_force(&format!("[BR/CASCADE] idx={idx}/{total} free={free_kb}KB"));
     });
     oasis_browser::internals::set_cascade_yield_hook(|| {
         psp::thread::sleep_ms(1);
@@ -228,8 +223,10 @@ fn psp_main() {
     let mut cached_shader = oasis_core::vector_overlay::get_shader_layer(&active_theme);
     let mut shader_active = cached_shader.is_some();
     if let Some(ref info) = cached_shader {
-        dbg_log(&format!("[SHADER] active: {} ({}x{})",
-            info.name, SHADER_W, SHADER_H));
+        dbg_log(&format!(
+            "[SHADER] active: {} ({}x{})",
+            info.name, SHADER_W, SHADER_H
+        ));
     } else {
         dbg_log("[SHADER] none (using static gradient)");
     }
@@ -505,7 +502,7 @@ fn psp_main() {
                     should_quit = true;
                     break;
                 },
-                DispatchResult::Continue | DispatchResult::SkipRest => {},
+                DispatchResult::Continue => {},
             }
         }
         if should_quit {
@@ -520,39 +517,34 @@ fn psp_main() {
             let vp = oasis_backend_psp::video::is_video_playing();
             oasis_backend_psp::video::vlog_force(&format!(
                 "[MAIN] tuned={} vp={} tex={:?} kiosk={:?} frame={}",
-                tv.tuned.is_some(), vp, tv.preview_tex, kiosk_app as u8, viz_frame,
+                tv.tuned.is_some(),
+                vp,
+                tv.preview_tex,
+                kiosk_app as u8,
+                viz_frame,
             ));
         }
         if tv.tuned.is_some() {
             // Drain all queued frames to keep the queue clear.
             let mut latest = oasis_backend_psp::video::poll_video_frame();
-            while let Some(newer) = oasis_backend_psp::video::poll_video_frame()
-            {
+            while let Some(newer) = oasis_backend_psp::video::poll_video_frame() {
                 latest = Some(newer);
             }
             // Upload every frame — direct CSC is fast enough (~15ms).
             let do_upload = latest.is_some();
             if let Some(frame) = latest {
                 if do_upload {
-                    let t0 = unsafe {
-                        psp::sys::sceKernelGetSystemTimeWide()
-                    } as u32;
-                    let pixels =
-                        oasis_backend_psp::video::frame_pixels_raw(&frame);
+                    let t0 = unsafe { psp::sys::sceKernelGetSystemTimeWide() } as u32;
+                    let pixels = oasis_backend_psp::video::frame_pixels_raw(&frame);
                     let old_tex = tv.preview_tex;
                     // Pass stride as width so texture buf_w matches CSC
                     // stride (both 512px). This eliminates row-by-row copy.
-                    tv.preview_tex = backend.update_video_texture(
-                        frame.stride, frame.height, pixels,
-                    );
+                    tv.preview_tex =
+                        backend.update_video_texture(frame.stride, frame.height, pixels);
                     // Set actual content dimensions for correct UV mapping.
-                    backend.set_video_content_size(
-                        frame.width, frame.height,
-                    );
-                    let dt = (unsafe {
-                        psp::sys::sceKernelGetSystemTimeWide()
-                    } as u32)
-                        .wrapping_sub(t0);
+                    backend.set_video_content_size(frame.width, frame.height);
+                    let dt =
+                        (unsafe { psp::sys::sceKernelGetSystemTimeWide() } as u32).wrapping_sub(t0);
                     oasis_backend_psp::video::record_upload_time(dt);
                     if old_tex.is_none() && tv.preview_tex.is_some() {
                         oasis_backend_psp::video::vlog_force(&format!(
@@ -564,9 +556,7 @@ fn psp_main() {
             }
             // Only clear tuned state when video WAS playing and stopped
             // (not during the startup gap before streaming begins).
-            if tv.preview_tex.is_some()
-                && !oasis_backend_psp::video::is_video_playing()
-            {
+            if tv.preview_tex.is_some() && !oasis_backend_psp::video::is_video_playing() {
                 backend.free_video_texture();
                 tv.preview_tex = None;
                 tv.tuned = None;
@@ -579,12 +569,10 @@ fn psp_main() {
         // the internal semaphore to unblock the ME and force an error
         // return, allowing the video thread to fall back to audio-only.
         if tv.tuned.is_some() && viz_frame % 30 == 0 {
-            let step = psp::mpeg::DECODE_STEP.load(
-                core::sync::atomic::Ordering::Relaxed,
-            );
+            let step = psp::mpeg::DECODE_STEP.load(core::sync::atomic::Ordering::Relaxed);
             if step == 2 {
                 oasis_backend_psp::video::vlog_force(
-                    "[WATCHDOG] ME stuck in AvcDecode — unblocking"
+                    "[WATCHDOG] ME stuck in AvcDecode — unblocking",
                 );
                 oasis_backend_psp::video::unblock_stuck_decode();
             }
@@ -641,9 +629,8 @@ fn psp_main() {
 
         // -- Render --
         // Skip clear + wallpaper when video covers the entire screen.
-        let video_fullscreen = kiosk_app == KioskApp::TvGuide
-            && tv.tuned.is_some()
-            && tv.preview_tex.is_some();
+        let video_fullscreen =
+            kiosk_app == KioskApp::TvGuide && tv.tuned.is_some() && tv.preview_tex.is_some();
 
         // During fullscreen video, skip all non-video rendering:
         // status bar polling (6+ kernel calls), bar updates, wallpaper,
@@ -704,8 +691,7 @@ fn psp_main() {
             let cur_key = current_preset.key();
             if cur_key != last_skin_key {
                 last_skin_key = cur_key;
-                cached_shader =
-                    oasis_core::vector_overlay::get_shader_layer(&active_theme);
+                cached_shader = oasis_core::vector_overlay::get_shader_layer(&active_theme);
                 shader_active = cached_shader.is_some();
                 let stops = current_preset.gradient_stops();
                 let pixels = oasis_backend_psp::generate_gradient_with(
@@ -729,15 +715,12 @@ fn psp_main() {
                         0
                     };
                     let time = viz_frame as f32 / 60.0;
-                    let pixels = shader_renderer.render_shader(
-                        &info.name, time, &info.params,
-                    );
+                    let pixels = shader_renderer.render_shader(&info.name, time, &info.params);
                     backend.update_texture_data(shader_tex, pixels);
                     // Log shader render time periodically (~every 10s).
                     if log_this_frame {
-                        let elapsed = unsafe {
-                            psp::sys::sceKernelGetSystemTimeLow()
-                        }.wrapping_sub(t0);
+                        let elapsed =
+                            unsafe { psp::sys::sceKernelGetSystemTimeLow() }.wrapping_sub(t0);
                         dbg_log(&format!(
                             "[SHADER] render+upload: {}us (frame {})",
                             elapsed, viz_frame,
@@ -773,7 +756,6 @@ fn psp_main() {
                 &active_theme,
                 kiosk_app,
                 &mut prev_kiosk_app,
-                icons_hidden,
                 &mut fm,
                 &mut pv,
                 &mut mp,
@@ -794,13 +776,7 @@ fn psp_main() {
 
             // Draw desktop icons directly (bypasses SDI, cheaper on GU).
             if !icons_hidden {
-                chrome::draw_dashboard(
-                    &mut backend,
-                    dashboard_state.selected,
-                    dashboard_state.page,
-                    viz_frame,
-                    &active_theme,
-                );
+                chrome::draw_dashboard(&mut backend, dashboard_state.page, &active_theme);
             }
 
             // Kiosk transition: hide old SDI objects, restore window decorations.
@@ -936,19 +912,31 @@ fn run_js_selftest() {
 
     log("Runtime::new begin");
     let runtime = match rquickjs::Runtime::new() {
-        Ok(r) => { log("Runtime::new ok"); r },
-        Err(e) => { log(&format!("Runtime::new err: {e}")); return; },
+        Ok(r) => {
+            log("Runtime::new ok");
+            r
+        },
+        Err(e) => {
+            log(&format!("Runtime::new err: {e}"));
+            return;
+        },
     };
 
     log("Context::base begin");
     let context = match rquickjs::Context::base(&runtime) {
-        Ok(c) => { log("Context::base ok"); c },
-        Err(e) => { log(&format!("Context::base err: {e}")); return; },
+        Ok(c) => {
+            log("Context::base ok");
+            c
+        },
+        Err(e) => {
+            log(&format!("Context::base err: {e}"));
+            return;
+        },
     };
 
     log("context.with begin");
     context.with(|ctx| {
-        let raw_ctx = unsafe { ctx.as_raw().as_ptr() };
+        let raw_ctx = ctx.as_raw().as_ptr();
         log(&format!("raw ctx ptr = {raw_ctx:?}"));
 
         log("JS_GetGlobalObject begin");
@@ -963,8 +951,7 @@ fn run_js_selftest() {
 
         let fname = b"<jstest>\0".as_ptr() as *const core::ffi::c_char;
         let global_flag = rquickjs::qjs::JS_EVAL_TYPE_GLOBAL as i32;
-        let compile_only = global_flag
-            | rquickjs::qjs::JS_EVAL_FLAG_COMPILE_ONLY as i32;
+        let compile_only = global_flag | rquickjs::qjs::JS_EVAL_FLAG_COMPILE_ONLY as i32;
 
         // Probe A: call JS_Eval2 — which takes a JSEvalOptions
         // pointer instead of the 5-arg-list form JS_Eval uses.
@@ -972,12 +959,15 @@ fn run_js_selftest() {
         // If this works and JS_Eval doesn't, the crash is the
         // MIPS o32 shadow-space ABI mismatch between rustc and GCC
         // for 5-arg calls.
-        log(&format!("A: free={}KB, JS_Eval2 \"0\" (4-arg form) begin", free_kb()));
+        log(&format!(
+            "A: free={}KB, JS_Eval2 \"0\" (4-arg form) begin",
+            free_kb()
+        ));
         let mut opts = rquickjs::qjs::JSEvalOptions {
             version: 1, // QuickJS rejects version != 1 with
-                        // JS_ThrowInternalError, whose variadic
-                        // error formatter path crashes under our
-                        // stub `vsnprintf` on real hardware.
+            // JS_ThrowInternalError, whose variadic
+            // error formatter path crashes under our
+            // stub `vsnprintf` on real hardware.
             eval_flags: compile_only,
             filename: fname,
             line_num: 1,
@@ -998,7 +988,10 @@ fn run_js_selftest() {
         // codegen for a single literal. No bytecode execution. If
         // this crashes but A does not, parse/codegen for integer
         // literals is the issue.
-        log(&format!("B: free={}KB, JS_Eval \"0\" COMPILE_ONLY begin", free_kb()));
+        log(&format!(
+            "B: free={}KB, JS_Eval \"0\" COMPILE_ONLY begin",
+            free_kb()
+        ));
         let vb = unsafe {
             rquickjs::qjs::JS_Eval(
                 raw_ctx,
@@ -1013,7 +1006,10 @@ fn run_js_selftest() {
         log("B: freed");
 
         // Probe C: full eval of "0". Adds bytecode interpreter.
-        log(&format!("C: free={}KB, JS_Eval \"0\" FULL begin", free_kb()));
+        log(&format!(
+            "C: free={}KB, JS_Eval \"0\" FULL begin",
+            free_kb()
+        ));
         let vc = unsafe {
             rquickjs::qjs::JS_Eval(
                 raw_ctx,
@@ -1032,7 +1028,10 @@ fn run_js_selftest() {
         for (label, src_bytes) in [
             ("D=1+2+3", b"1+2+3\0".as_slice()),
             ("E='hi'+'!'", b"'hi'+'!'\0".as_slice()),
-            ("F=(fn(){return 42})()", b"(function(){return 42})()\0".as_slice()),
+            (
+                "F=(fn(){return 42})()",
+                b"(function(){return 42})()\0".as_slice(),
+            ),
         ] {
             log(&format!("{label}: free={}KB, begin", free_kb()));
             let val = unsafe {

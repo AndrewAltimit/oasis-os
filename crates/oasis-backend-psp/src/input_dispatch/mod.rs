@@ -33,8 +33,6 @@ pub(crate) use app_input::dispatch_app_input;
 pub(crate) enum DispatchResult {
     /// Continue processing the next event.
     Continue,
-    /// Skip remaining events this frame.
-    SkipRest,
     /// Exit the main loop.
     Quit,
 }
@@ -243,9 +241,7 @@ fn dispatch_dashboard(
                 oasis_backend_psp::WmEvent::None
                 | oasis_backend_psp::WmEvent::DesktopClick(_, _) => {
                     // Click didn't hit a window — try desktop icons.
-                    if let Some(idx) =
-                        desktop::hit_test_dashboard_icon(cx, cy, dashboard.page)
-                    {
+                    if let Some(idx) = desktop::hit_test_dashboard_icon(cx, cy, dashboard.page) {
                         if idx < APPS.len() {
                             audio.send(AudioCmd::PlaySfx(SfxId::Navigate));
                             helpers::dispatch_dashboard_confirm(

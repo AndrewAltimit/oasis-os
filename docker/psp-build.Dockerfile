@@ -17,7 +17,9 @@
 #
 # Bump NIGHTLY_DATE / RUST_PSP_REV together with the crates' rust-toolchain.toml
 # and RUST_PSP_REV in .github/workflows/*.yml. If PSPDEV_RELEASE ships a new
-# GCC, update BINDGEN_EXTRA_CLANG_ARGS in crates/oasis-backend-psp/.cargo/config.toml.
+# GCC, update the `test -d` path below and BINDGEN_EXTRA_CLANG_ARGS in
+# crates/oasis-backend-psp/.cargo/config.toml. scripts/check-rust-psp-rev.sh
+# (run by CI) fails if any of these drift apart.
 
 FROM rust:1.99-slim
 

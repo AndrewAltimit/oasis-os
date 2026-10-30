@@ -27,8 +27,13 @@ env:
   # rust-psp revision for the PSP builds: every PSP crate pins its `psp`
   # dependency to it (scripts/check-rust-psp-rev.sh enforces that) and CI
   # installs cargo-psp from it. Bump both together, along with the nightly
-  # in the crates' rust-toolchain.toml (rust-psp's CI NIGHTLY_DATE).
+  # in the crates' rust-toolchain.toml (rust-psp's CI NIGHTLY_DATE) and the
+  # ARGs in docker/psp-build.Dockerfile; the pin check below fails on drift.
   RUST_PSP_REV: e4cc06f6fa50fa45dc3ae8b332e8a2b67625f588
+  # PSP builds fail on rustc warnings. Passed with `cargo psp --config`, which
+  # appends to the crates' `.cargo/config.toml` build.rustflags (RUSTFLAGS
+  # would replace them and drop the psp-ld linker setup).
+  PSP_DENY_WARNINGS: 'build.rustflags=["-D", "warnings"]'
 
 jobs:
   # Fork guard: block fork PRs from running on self-hosted runners with write perms
@@ -257,7 +262,7 @@ jobs:
       - name: Build PSP EBOOT
         run: |
           cd crates/oasis-backend-psp
-          RUST_PSP_BUILD_STD=1 cargo psp --release
+          RUST_PSP_BUILD_STD=1 cargo psp --release --config "$PSP_DENY_WARNINGS"
 
       # -- PSP Emulator Test -------------------------------------------------
       # Boots OASIS-OS (normal boot + built-in self-test); fails on a crash,

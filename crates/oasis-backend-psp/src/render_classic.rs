@@ -26,7 +26,6 @@ pub(crate) fn render_classic(
     active_theme: &oasis_core::active_theme::ActiveTheme,
     kiosk_app: KioskApp,
     prev_kiosk_app: &mut KioskApp,
-    icons_hidden: bool,
     fm: &mut FileManagerState,
     pv: &mut PhotoViewerState,
     mp: &mut MusicPlayerState,
@@ -263,8 +262,8 @@ pub(crate) fn render_classic(
                 dbg_log(&format!("[TV] render frame {}", viz_frame));
             }
             backend.force_bitmap_font = true;
+            use crate::theme::{CONTENT_H, CONTENT_TOP};
             use oasis_backend_psp::SCREEN_WIDTH;
-            use crate::theme::{CONTENT_TOP, CONTENT_H};
             let _ = desktop::draw_tvguide_windowed(
                 &tv.channels,
                 &tv.catalogs,
@@ -301,10 +300,7 @@ pub(crate) fn render_classic(
                 active_theme,
             );
             backend.force_bitmap_font = true;
-            chrome::draw_button_hints(
-                backend,
-                &[("X", "Apply"), ("^v", "Nav"), ("O", "Back")],
-            );
+            chrome::draw_button_hints(backend, &[("X", "Apply"), ("^v", "Nav"), ("O", "Back")]);
             backend.force_bitmap_font = false;
         },
     }

@@ -86,9 +86,9 @@ pub struct UsbDataEndpoint {
 /// Interface descriptor wrapper within UsbData
 #[repr(C)]
 pub struct UsbDataInterDesc {
-    pub desc: [u8; 12],         // interface descriptor bytes (9 used)
+    pub desc: [u8; 12],              // interface descriptor bytes (9 used)
     pub pendp: *mut UsbDataEndpoint, // pointer to endpoint array
-    pub pad: [u8; 32],          // required padding
+    pub pad: [u8; 32],               // required padding
 }
 
 /// Interface list within UsbData
@@ -101,7 +101,7 @@ pub struct UsbDataInterfaces {
 /// Config descriptor wrapper within UsbData
 #[repr(C)]
 pub struct UsbDataConfDesc {
-    pub desc: [u8; 12],               // config descriptor bytes (9 used)
+    pub desc: [u8; 12], // config descriptor bytes (9 used)
     pub pinterfaces: *mut UsbDataInterfaces,
 }
 
@@ -145,7 +145,7 @@ pub static mut DEVDESC_HI: DeviceDescriptor = DeviceDescriptor {
     b_device_sub_class: 0,
     b_device_protocol: 0,
     b_max_packet_size0: 64,
-    id_vendor: 0,   // USBHostFS uses 0
+    id_vendor: 0, // USBHostFS uses 0
     id_product: 0,
     bcd_device: 0x0100,
     i_manufacturer: 0,
@@ -219,27 +219,39 @@ pub static INTERDESC_FULL: InterfaceDescriptor = InterfaceDescriptor {
 
 pub static ENDPDESC_HI: [EndpointDescriptor; 2] = [
     EndpointDescriptor {
-        b_length: 7, b_descriptor_type: 5,
-        b_endpoint_address: 0x81, bm_attributes: 2,
-        w_max_packet_size: 512, b_interval: 0,
+        b_length: 7,
+        b_descriptor_type: 5,
+        b_endpoint_address: 0x81,
+        bm_attributes: 2,
+        w_max_packet_size: 512,
+        b_interval: 0,
     },
     EndpointDescriptor {
-        b_length: 7, b_descriptor_type: 5,
-        b_endpoint_address: 0x02, bm_attributes: 2,
-        w_max_packet_size: 512, b_interval: 0,
+        b_length: 7,
+        b_descriptor_type: 5,
+        b_endpoint_address: 0x02,
+        bm_attributes: 2,
+        w_max_packet_size: 512,
+        b_interval: 0,
     },
 ];
 
 pub static ENDPDESC_FULL: [EndpointDescriptor; 2] = [
     EndpointDescriptor {
-        b_length: 7, b_descriptor_type: 5,
-        b_endpoint_address: 0x81, bm_attributes: 2,
-        w_max_packet_size: 64, b_interval: 0,
+        b_length: 7,
+        b_descriptor_type: 5,
+        b_endpoint_address: 0x81,
+        bm_attributes: 2,
+        w_max_packet_size: 64,
+        b_interval: 0,
     },
     EndpointDescriptor {
-        b_length: 7, b_descriptor_type: 5,
-        b_endpoint_address: 0x02, bm_attributes: 2,
-        w_max_packet_size: 64, b_interval: 0,
+        b_length: 7,
+        b_descriptor_type: 5,
+        b_endpoint_address: 0x02,
+        bm_attributes: 2,
+        w_max_packet_size: 64,
+        b_interval: 0,
     },
 ];
 

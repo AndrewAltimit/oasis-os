@@ -233,10 +233,7 @@ impl PspBackend {
             if src_stride == dst_stride {
                 let total = src_stride * height as usize;
                 ptr::copy_nonoverlapping(rgba_data.as_ptr(), data, total);
-                psp::cache::dcache_writeback_range(
-                    data as *const core::ffi::c_void,
-                    total as u32,
-                );
+                psp::cache::dcache_writeback_range(data as *const core::ffi::c_void, total as u32);
             } else {
                 for row in 0..height as usize {
                     let src = rgba_data.as_ptr().add(row * src_stride);
@@ -244,10 +241,7 @@ impl PspBackend {
                     ptr::copy_nonoverlapping(src, dst, src_stride);
                 }
                 let total = dst_stride * height as usize;
-                psp::cache::dcache_writeback_range(
-                    data as *const core::ffi::c_void,
-                    total as u32,
-                );
+                psp::cache::dcache_writeback_range(data as *const core::ffi::c_void, total as u32);
             }
         }
     }
@@ -376,7 +370,8 @@ impl PspBackend {
         // (pre-allocated at boot at the max ≤480p size). Only re-allocate
         // when there's no texture yet or the requested dimensions exceed
         // the existing power-of-2 buffer.
-        let existing_buf = self.video_tex
+        let existing_buf = self
+            .video_tex
             .and_then(|id| self.textures.get(id.0 as usize))
             .and_then(|slot| slot.as_ref())
             .map(|tex| (tex.buf_w, tex.buf_h));
@@ -411,13 +406,8 @@ impl PspBackend {
         // from CSC), do a single bulk copy.
         if src_stride == dst_stride && rgba_data.len() >= total {
             unsafe {
-                ptr::copy_nonoverlapping(
-                    rgba_data.as_ptr(), data, total,
-                );
-                psp::cache::dcache_writeback_range(
-                    data as *const core::ffi::c_void,
-                    total as u32,
-                );
+                ptr::copy_nonoverlapping(rgba_data.as_ptr(), data, total);
+                psp::cache::dcache_writeback_range(data as *const core::ffi::c_void, total as u32);
             }
         } else {
             // Fallback: row-by-row copy (no alpha fixup).
@@ -427,10 +417,7 @@ impl PspBackend {
                     let dst = data.add(row * dst_stride);
                     ptr::copy_nonoverlapping(src, dst, src_stride);
                 }
-                psp::cache::dcache_writeback_range(
-                    data as *const core::ffi::c_void,
-                    total as u32,
-                );
+                psp::cache::dcache_writeback_range(data as *const core::ffi::c_void, total as u32);
             }
         }
 

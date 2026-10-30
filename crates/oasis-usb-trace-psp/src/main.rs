@@ -10,13 +10,11 @@
 #![no_std]
 #![no_main]
 
+use core::ffi::c_void;
 use psp::hw::{hw_read32, hw_write32};
 use psp::sys::{
-    CtrlButtons, SceCtrlData, IoOpenFlags,
-    sceCtrlPeekBufferPositive,
-    sceKernelDelayThread,
+    CtrlButtons, IoOpenFlags, SceCtrlData, sceCtrlPeekBufferPositive, sceKernelDelayThread,
 };
-use core::ffi::c_void;
 
 psp::module_kernel!("USBHostTest", 1, 0);
 
@@ -34,7 +32,9 @@ impl Logger {
             )
         };
         // SAFETY: PSP firmware syscall — kernel-mode binary; signature is documented in pspsdk.
-        if fd.0 >= 0 { unsafe { psp::sys::sceIoClose(fd) }; }
+        if fd.0 >= 0 {
+            unsafe { psp::sys::sceIoClose(fd) };
+        }
     }
     fn log(s: &str) {
         psp::dprintln!("{}", s);
@@ -57,9 +57,17 @@ impl Logger {
     }
 }
 
-struct Fmt { buf: [u8; 200], pos: usize }
+struct Fmt {
+    buf: [u8; 200],
+    pos: usize,
+}
 impl Fmt {
-    fn new() -> Self { Self { buf: [0u8; 200], pos: 0 } }
+    fn new() -> Self {
+        Self {
+            buf: [0u8; 200],
+            pos: 0,
+        }
+    }
     fn s(&self) -> &str {
         // SAFETY: all bytes written into this buffer above are ASCII.
         unsafe { core::str::from_utf8_unchecked(&self.buf[..self.pos]) }
@@ -90,7 +98,8 @@ impl Fmt {
 
 fn lr(label: &str, val: u32) {
     let mut f = Fmt::new();
-    f.p(label); f.h8(val);
+    f.p(label);
+    f.h8(val);
     Logger::log(f.s());
 }
 
@@ -99,21 +108,27 @@ fn wait_cross() {
     loop {
         // SAFETY: PSP firmware syscall — kernel-mode binary; signature is documented in pspsdk.
         unsafe { sceCtrlPeekBufferPositive(&mut p, 1) };
-        if !p.buttons.intersects(CtrlButtons::CROSS) { break; }
+        if !p.buttons.intersects(CtrlButtons::CROSS) {
+            break;
+        }
         // SAFETY: PSP firmware syscall — kernel-mode binary; signature is documented in pspsdk.
         unsafe { sceKernelDelayThread(16_000) };
     }
     loop {
         // SAFETY: PSP firmware syscall — kernel-mode binary; signature is documented in pspsdk.
         unsafe { sceCtrlPeekBufferPositive(&mut p, 1) };
-        if p.buttons.intersects(CtrlButtons::CROSS) { return; }
+        if p.buttons.intersects(CtrlButtons::CROSS) {
+            return;
+        }
         // SAFETY: PSP firmware syscall — kernel-mode binary; signature is documented in pspsdk.
         unsafe { sceKernelDelayThread(16_000) };
     }
 }
 
 // SAFETY: MMIO read of a documented PSP hardware register at a fixed physical address.
-fn hr(addr: u32) -> u32 { unsafe { hw_read32(addr) } }
+fn hr(addr: u32) -> u32 {
+    unsafe { hw_read32(addr) }
+}
 fn hw(addr: u32, val: u32) {
     // SAFETY: kernel-mode MMIO write
     unsafe { hw_write32(addr, val) };
@@ -121,8 +136,12 @@ fn hw(addr: u32, val: u32) {
 
 fn syscon_set(cmd: u8, value: u8) -> (i32, [u8; 16]) {
     let mut pkt = [0u8; 128];
-    for b in pkt[0x0C..0x1C].iter_mut() { *b = 0xFF; }
-    for b in pkt[0x1C..0x2C].iter_mut() { *b = 0xFF; }
+    for b in pkt[0x0C..0x1C].iter_mut() {
+        *b = 0xFF;
+    }
+    for b in pkt[0x1C..0x2C].iter_mut() {
+        *b = 0xFF;
+    }
 
     pkt[0x0C] = cmd;
     pkt[0x0D] = 3;
@@ -132,7 +151,11 @@ fn syscon_set(cmd: u8, value: u8) -> (i32, [u8; 16]) {
 
     type F = unsafe extern "C" fn(*mut u8, i32) -> i32;
     let tachyon = hr(0xBC10_0040) & 0xFF00_0000;
-    let addr: u32 = if tachyon >= 0x0050_0000 { 0x880A6E4C } else { 0x880A6D4C };
+    let addr: u32 = if tachyon >= 0x0050_0000 {
+        0x880A6E4C
+    } else {
+        0x880A6D4C
+    };
     // SAFETY: transmuting a u32 address to a fn pointer of the documented prototype.
     let func: F = unsafe { core::mem::transmute(addr) };
     // SAFETY: PSP-specific unsafe op (kernel-mode hardware / syscall access).
@@ -145,8 +168,12 @@ fn syscon_set(cmd: u8, value: u8) -> (i32, [u8; 16]) {
 
 fn syscon_get(cmd: u8) -> (i32, [u8; 16]) {
     let mut pkt = [0u8; 128];
-    for b in pkt[0x0C..0x1C].iter_mut() { *b = 0xFF; }
-    for b in pkt[0x1C..0x2C].iter_mut() { *b = 0xFF; }
+    for b in pkt[0x0C..0x1C].iter_mut() {
+        *b = 0xFF;
+    }
+    for b in pkt[0x1C..0x2C].iter_mut() {
+        *b = 0xFF;
+    }
 
     pkt[0x0C] = cmd;
     pkt[0x0D] = 2;
@@ -155,7 +182,11 @@ fn syscon_get(cmd: u8) -> (i32, [u8; 16]) {
 
     type F = unsafe extern "C" fn(*mut u8, i32) -> i32;
     let tachyon = hr(0xBC10_0040) & 0xFF00_0000;
-    let addr: u32 = if tachyon >= 0x0050_0000 { 0x880A6E4C } else { 0x880A6D4C };
+    let addr: u32 = if tachyon >= 0x0050_0000 {
+        0x880A6E4C
+    } else {
+        0x880A6D4C
+    };
     // SAFETY: transmuting a u32 address to a fn pointer of the documented prototype.
     let func: F = unsafe { core::mem::transmute(addr) };
     // SAFETY: PSP-specific unsafe op (kernel-mode hardware / syscall access).
@@ -172,7 +203,10 @@ fn log_cmd(desc: &str, ret: i32, rx: &[u8; 16]) {
     f.p(": r=");
     f.h8(ret as u32);
     f.p(" ");
-    for i in 0..6 { f.h2(rx[i]); f.p(" "); }
+    for i in 0..6 {
+        f.h2(rx[i]);
+        f.p(" ");
+    }
     Logger::log(f.s());
 }
 

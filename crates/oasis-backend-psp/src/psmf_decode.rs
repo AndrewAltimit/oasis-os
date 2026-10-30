@@ -23,19 +23,18 @@ static CB_PACK_CONSUMED: AtomicU32 = AtomicU32::new(0);
 
 /// Ringbuffer callback invoked by the kernel during sceMpegRingbufferPut.
 ///
-/// Copies pending MPEG-PS packs into the ringbuffer data area.
+/// Meant to copy the pending MPEG-PS packs (`CB_PACK_*`) into the
+/// ringbuffer data area; currently a diagnostic stub that only logs the
+/// call and reports no data (see the TEST note at the end).
 unsafe extern "C" fn ringbuffer_callback(
-    p_data: *mut c_void,
-    num_packets: i32,
+    _p_data: *mut c_void,
+    _num_packets: i32,
     _p_param: *mut c_void,
 ) -> i32 {
-    let total = CB_PACK_COUNT.load(Ordering::Acquire);
-    let consumed = CB_PACK_CONSUMED.load(Ordering::Relaxed);
-    let available = total.saturating_sub(consumed);
-    let to_copy = (num_packets as u32).min(available);
-
     // Log callback invocation.
-    {
+    // SAFETY: the path is a NUL-terminated literal, the write buffer is a
+    // 17-byte literal, and `fd` is closed before leaving the block.
+    unsafe {
         let fd = psp::sys::sceIoOpen(
             b"ms0:/PSP/GAME/OASISOS/eboot.log\0".as_ptr(),
             psp::sys::IoOpenFlags::APPEND
@@ -44,11 +43,7 @@ unsafe extern "C" fn ringbuffer_callback(
             0o777,
         );
         if fd >= psp::sys::SceUid(0) {
-            psp::sys::sceIoWrite(
-                fd,
-                b"[PSMF-CB] called\n".as_ptr() as *const _,
-                17,
-            );
+            psp::sys::sceIoWrite(fd, b"[PSMF-CB] called\n".as_ptr() as *const _, 17);
             psp::sys::sceIoClose(fd);
         }
     }
@@ -99,9 +94,7 @@ impl PsmfDecoder {
         // Load AvMpegBase module (provides the ringbuffer sceMpeg path).
         // This MUST be done before mpeg_vsh370.prx is loaded, because
         // mpeg_vsh370.prx overrides sceMpeg exports and doesn't support mode 0.
-        let ret = unsafe {
-            psp::sys::sceUtilityLoadModule(psp::sys::Module::AvMpegBase)
-        };
+        let ret = unsafe { psp::sys::sceUtilityLoadModule(psp::sys::Module::AvMpegBase) };
         vlog_force(&format!("[PSMF] AvMpegBase load={ret:#x}"));
         // Accept already-loaded (0x80111103).
         if ret < 0 && ret != -0x7FEEEEFDi32 {
@@ -147,19 +140,15 @@ impl PsmfDecoder {
         if ddr_block < psp::sys::SceUid(0) {
             return Err(format!("DDR alloc: {:#x}", ddr_block.0));
         }
-        let ddr_raw =
-            unsafe { psp::sys::sceKernelGetBlockHeadAddr(ddr_block) };
+        let ddr_raw = unsafe { psp::sys::sceKernelGetBlockHeadAddr(ddr_block) };
         let ddr_aligned = ((ddr_raw as u32) + 0x3F_FFFF) & !0x3F_FFFF;
 
         // Ringbuffer: 64 packets (128KB).
         let rb_packets = 64;
-        let rb_size = unsafe {
-            psp::sys::sceMpegRingbufferQueryMemSize(rb_packets)
-        };
+        let rb_size = unsafe { psp::sys::sceMpegRingbufferQueryMemSize(rb_packets) };
         let mut rb_data = vec![0u8; rb_size.max(1) as usize];
-        let mut ringbuffer = Box::new(unsafe {
-            core::mem::zeroed::<psp::sys::SceMpegRingbuffer>()
-        });
+        let mut ringbuffer =
+            Box::new(unsafe { core::mem::zeroed::<psp::sys::SceMpegRingbuffer>() });
 
         // Construct ringbuffer with our callback.
         let ret = unsafe {
@@ -181,11 +170,9 @@ impl PsmfDecoder {
         vlog_force("[PSMF] ringbuffer constructed");
 
         // Create sceMpeg instance.
-        let mpeg_storage =
-            Box::into_raw(Box::new(core::ptr::null_mut::<c_void>()));
-        let mpeg: psp::sys::SceMpeg = unsafe {
-            core::mem::transmute(mpeg_storage as *mut *mut c_void)
-        };
+        let mpeg_storage = Box::into_raw(Box::new(core::ptr::null_mut::<c_void>()));
+        let mpeg: psp::sys::SceMpeg =
+            unsafe { core::mem::transmute(mpeg_storage as *mut *mut c_void) };
         // Standard ringbuffer mode: mode=0, ddr_top=0.
         // Unlike the NAL path (mode 4/5) which needs a DDR workspace,
         // the ringbuffer path manages its own ME memory internally.
@@ -210,8 +197,7 @@ impl PsmfDecoder {
         vlog_force("[PSMF] mpeg created");
 
         // Register video stream (type 0 = video, channel 0).
-        let stream =
-            unsafe { psp::sys::sceMpegRegistStream(mpeg, 0, 0) };
+        let stream = unsafe { psp::sys::sceMpegRegistStream(mpeg, 0, 0) };
         vlog_force("[PSMF] stream registered");
 
         // Allocate ES buffer.
@@ -220,8 +206,7 @@ impl PsmfDecoder {
 
         // Init AU using the ES buffer.
         let mut au = unsafe {
-            let mut a =
-                core::mem::MaybeUninit::<psp::sys::SceMpegAu>::uninit();
+            let mut a = core::mem::MaybeUninit::<psp::sys::SceMpegAu>::uninit();
             core::ptr::write_bytes(
                 a.as_mut_ptr() as *mut u8,
                 0xFF,
@@ -229,8 +214,7 @@ impl PsmfDecoder {
             );
             a.assume_init()
         };
-        let ret =
-            unsafe { psp::sys::sceMpegInitAu(mpeg, es_buf, &mut au) };
+        let ret = unsafe { psp::sys::sceMpegInitAu(mpeg, es_buf, &mut au) };
         vlog_force(&format!("[PSMF] initAu={ret:#x}"));
 
         // Set decode mode to ABGR 8888.
@@ -242,8 +226,7 @@ impl PsmfDecoder {
 
         // Output buffer.
         let out_h = ((height + 15) / 16) * 16;
-        let output_buf =
-            vec![0u8; frame_width as usize * out_h as usize * 4];
+        let output_buf = vec![0u8; frame_width as usize * out_h as usize * 4];
 
         vlog_force("[PSMF] decoder created OK");
 
@@ -269,9 +252,7 @@ impl PsmfDecoder {
     }
 
     fn mpeg(&self) -> psp::sys::SceMpeg {
-        unsafe {
-            core::mem::transmute(self.mpeg_storage as *mut *mut c_void)
-        }
+        unsafe { core::mem::transmute(self.mpeg_storage as *mut *mut c_void) }
     }
 
     /// Send the PSMF header from the real test.pmf file.
@@ -316,10 +297,7 @@ impl PsmfDecoder {
         // Also query stream size.
         let mut stream_size: i32 = 0;
         unsafe {
-            psp::sys::sceMpegQueryStreamSize(
-                hdr.as_ptr() as *mut c_void,
-                &mut stream_size,
-            );
+            psp::sys::sceMpegQueryStreamSize(hdr.as_ptr() as *mut c_void, &mut stream_size);
         }
         vlog_force(&format!("[PSMF] streamSize={stream_size:#x}"));
 
@@ -348,26 +326,14 @@ impl PsmfDecoder {
             );
         }
 
-        let avail = unsafe {
-            psp::sys::sceMpegRingbufferAvailableSize(
-                &mut *self.ringbuffer,
-            )
-        };
+        let avail = unsafe { psp::sys::sceMpegRingbufferAvailableSize(&mut *self.ringbuffer) };
         if avail <= 0 {
             return Err("ringbuffer full".into());
         }
 
         let to_put = (count as i32).min(avail);
-        let ret = unsafe {
-            psp::sys::sceMpegRingbufferPut(
-                &mut *self.ringbuffer,
-                to_put,
-                avail,
-            )
-        };
-        vlog_force(&format!(
-            "[PSMF] put {to_put} packs, ret={ret}"
-        ));
+        let ret = unsafe { psp::sys::sceMpegRingbufferPut(&mut *self.ringbuffer, to_put, avail) };
+        vlog_force(&format!("[PSMF] put {to_put} packs, ret={ret}"));
         if ret < 0 {
             return Err(format!("RingbufferPut: {ret:#x}"));
         }
@@ -377,9 +343,7 @@ impl PsmfDecoder {
     /// Feed one H.264 access unit (Annex B) and attempt decode.
     ///
     /// Returns `true` if a frame was decoded, `false` otherwise.
-    pub fn feed_and_decode(&mut self, annex_b: &[u8], pts_secs: f64)
-        -> bool
-    {
+    pub fn feed_and_decode(&mut self, annex_b: &[u8], pts_secs: f64) -> bool {
         let pts_90khz = (pts_secs * 90000.0) as u64;
 
         // Send PSMF header on first call.
@@ -392,18 +356,13 @@ impl PsmfDecoder {
 
         // Wrap the AU in MPEG-PS packs.
         let mut packs: Vec<[u8; psmf::PACK_SIZE]> = Vec::new();
-        let pack_count = psmf::wrap_video_au(
-            annex_b,
-            pts_90khz,
-            &mut self.scr,
-            &mut packs,
-        );
-        let pts_90khz = (pts_secs * 90000.0) as u64;
+        // The pack count is unused while the TEST path below feeds packs
+        // from test.pmf instead.
+        let _ = psmf::wrap_video_au(annex_b, pts_90khz, &mut self.scr, &mut packs);
 
         // TEST: Feed real PMF data from test.pmf instead of our generated packs.
         // This verifies the ringbuffer path works with known-good data.
-        static TEST_COUNT: core::sync::atomic::AtomicU32 =
-            core::sync::atomic::AtomicU32::new(0);
+        static TEST_COUNT: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
         let call_num = TEST_COUNT.fetch_add(1, Ordering::Relaxed);
 
         if call_num < 16 {
@@ -433,8 +392,14 @@ impl PsmfDecoder {
                 vlog_force(&format!(
                     "[PSMF] real pack {call_num} @{pack_offset:#x}: \
                      {:02x}{:02x}{:02x}{:02x} {:02x}{:02x}{:02x}{:02x}",
-                    real_pack[0], real_pack[1], real_pack[2], real_pack[3],
-                    real_pack[14], real_pack[15], real_pack[16], real_pack[17],
+                    real_pack[0],
+                    real_pack[1],
+                    real_pack[2],
+                    real_pack[3],
+                    real_pack[14],
+                    real_pack[15],
+                    real_pack[16],
+                    real_pack[17],
                 ));
 
                 self.pack_buf.clear();
@@ -467,22 +432,15 @@ impl PsmfDecoder {
 
         // Get next video AU.
         let ret = unsafe {
-            psp::sys::sceMpegGetAvcAu(
-                mpeg,
-                self.stream,
-                &mut self.au,
-                core::ptr::null_mut(),
-            )
+            psp::sys::sceMpegGetAvcAu(mpeg, self.stream, &mut self.au, core::ptr::null_mut())
         };
         if ret < 0 {
             return false; // No AU available yet.
         }
 
         // Decode.
-        let mut output_ptr =
-            self.output_buf.as_mut_ptr() as *mut c_void;
-        let buf_arg =
-            &mut output_ptr as *mut *mut c_void as *mut c_void;
+        let mut output_ptr = self.output_buf.as_mut_ptr() as *mut c_void;
+        let buf_arg = &mut output_ptr as *mut *mut c_void as *mut c_void;
         let ret = unsafe {
             psp::sys::sceMpegAvcDecode(
                 mpeg,

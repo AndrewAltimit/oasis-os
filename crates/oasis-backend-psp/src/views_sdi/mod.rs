@@ -4,10 +4,9 @@
 //! their properties every frame, and hides them when switching away.  The
 //! actual drawing is handled by [`SdiRegistry::draw_base_layer`].
 //!
-//! Object names are prefixed per view (`radio_`, `tv_`, `photo_`, `browser_`,
+//! Object names are prefixed per view (`radio_`, `tv_`, `photo_`,
 //! `music_`, `fm_`) to avoid collisions.
 
-mod browser;
 mod file_manager;
 pub(crate) mod helpers;
 mod list_view;
@@ -22,9 +21,6 @@ use oasis_core::sdi::SdiRegistry;
 use crate::types::KioskApp;
 
 // Re-export all public view functions.
-// Browser SDI views retained for potential future fallback use.
-#[allow(unused_imports)]
-pub(crate) use browser::{setup_browser, update_browser};
 pub(crate) use file_manager::{setup_file_manager, update_file_manager};
 pub(crate) use helpers::hide_all;
 pub(crate) use list_view::LIST_ROWS;
@@ -34,7 +30,7 @@ pub(crate) use photo::{
 };
 pub(crate) use radio::{setup_radio, update_radio};
 pub(crate) use settings::{setup_settings, update_settings};
-pub(crate) use tv_guide::{setup_tv_channels, update_tv_channels};
+pub(crate) use tv_guide::setup_tv_channels;
 
 /// Set up SDI objects for the given kiosk app.  Idempotent -- safe to call
 /// every time a view is entered.

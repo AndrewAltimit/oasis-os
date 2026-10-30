@@ -11,7 +11,7 @@
 //!   BE4C0030 — PHY mode (bit 0 = host enable, bits 8-9 = mode)
 //!   BE4C0044 — Feature enable bitmask
 
-use psp::hw::{hw_read32, hw_write32, USB_PHY_BASE};
+use psp::hw::{USB_PHY_BASE, hw_read32, hw_write32};
 
 const PHY_CLK_DIV: u32 = USB_PHY_BASE + 0x24;
 const PHY_CLK_DIV_HI: u32 = USB_PHY_BASE + 0x28;
@@ -52,17 +52,21 @@ pub fn snapshot() -> PhySnapshot {
 ///   BE4C0030 |= 0x301     (host mode enable)
 ///   BE4C0044 |= 0x7FF     (feature enable all)
 pub unsafe fn configure_host_mode() {
-    // SAFETY: kernel-mode MMIO writes to PHY registers per firmware sequence.
-    hw_write32(PHY_CLK_DIV, 6);
-    hw_write32(PHY_CLK_DIV_HI, 0);
-    hw_write32(PHY_CONFIG, 0x60);
+    // SAFETY: kernel-mode MMIO writes of the USB PHY registers in the firmware's init order (each
+    // one is commented below).
+    unsafe {
+        // SAFETY: kernel-mode MMIO writes to PHY registers per firmware sequence.
+        hw_write32(PHY_CLK_DIV, 6);
+        hw_write32(PHY_CLK_DIV_HI, 0);
+        hw_write32(PHY_CONFIG, 0x60);
 
-    let mode = hw_read32(PHY_MODE);
-    hw_write32(PHY_MODE, mode | 0x301);
+        let mode = hw_read32(PHY_MODE);
+        hw_write32(PHY_MODE, mode | 0x301);
 
-    // Small delay for PHY to settle
-    psp::sys::sceKernelDelayThread(1_000); // 1ms
+        // Small delay for PHY to settle
+        psp::sys::sceKernelDelayThread(1_000); // 1ms
 
-    let feat = hw_read32(PHY_FEATURE);
-    hw_write32(PHY_FEATURE, feat | 0x7FF);
+        let feat = hw_read32(PHY_FEATURE);
+        hw_write32(PHY_FEATURE, feat | 0x7FF);
+    }
 }

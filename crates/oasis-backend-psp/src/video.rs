@@ -11,10 +11,10 @@
 //! API is used instead of the lower-level sceVideocodec because sceVideocodec
 //! weak imports fail to resolve on many CFW configurations (error 0x806201fe).
 
+use crate::threading::{AudioCmd, send_audio_cmd};
 use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use psp::sync::SpscQueue;
 use psp::thread::ThreadBuilder;
-use crate::threading::{AudioCmd, send_audio_cmd};
 
 /// Whether verbose video logging is enabled. Disabled during active
 /// decode to avoid ~5-20ms Memory Stick I/O stalls per log write.
@@ -290,13 +290,11 @@ static STREAM_REQUESTED: AtomicBool = AtomicBool::new(false);
 static DECODER_READY: AtomicBool = AtomicBool::new(true);
 
 /// The sceMpeg internal semaphore ID (at mpeg_data+0x66c).
-static MPEG_INTERNAL_SEMA: core::sync::atomic::AtomicI32 =
-    core::sync::atomic::AtomicI32::new(-1);
+static MPEG_INTERNAL_SEMA: core::sync::atomic::AtomicI32 = core::sync::atomic::AtomicI32::new(-1);
 
 /// The SceMediaEngineRpc event flag UID. The ME kernel RPC handler blocks
 /// on this with infinite timeout. Signalling it unblocks a stuck decode.
-static ME_RPC_EVFLAG: core::sync::atomic::AtomicI32 =
-    core::sync::atomic::AtomicI32::new(-1);
+static ME_RPC_EVFLAG: core::sync::atomic::AtomicI32 = core::sync::atomic::AtomicI32::new(-1);
 
 /// Scan kernel UIDs to find the SceMediaEngineRpc event flag.
 fn find_me_rpc_event_flag() -> Option<psp::sys::SceUid> {
@@ -306,12 +304,8 @@ fn find_me_rpc_event_flag() -> Option<psp::sys::SceUid> {
     // Event flag UIDs are typically in a low range. Scan 1..4096.
     for uid in 1..4096i32 {
         info.name = [0u8; 32];
-        let ret = unsafe {
-            psp::sys::sceKernelReferEventFlagStatus(
-                psp::sys::SceUid(uid),
-                &mut info,
-            )
-        };
+        let ret =
+            unsafe { psp::sys::sceKernelReferEventFlagStatus(psp::sys::SceUid(uid), &mut info) };
         if ret >= 0 {
             let name = info.name.split(|&b| b == 0).next().unwrap_or(&[]);
             if name == b"SceMediaEngineRpc" {
@@ -341,26 +335,24 @@ pub fn signal_me_rpc_event_flag() {
 /// Address of the `jal 0x9fd4` instruction in the loaded mpeg_vsh370.prx
 /// (at PRX VA 0x8678). When patched to `jr $ra; nop`, the ME kernel call
 /// is skipped and the decode returns 0 (no frame produced).
-static PRX_KERNEL_CALL_ADDR: core::sync::atomic::AtomicU32 =
-    core::sync::atomic::AtomicU32::new(0);
+static PRX_KERNEL_CALL_ADDR: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
 /// Original instruction at the kernel call site (for restore).
-static PRX_KERNEL_CALL_ORIG: core::sync::atomic::AtomicU32 =
-    core::sync::atomic::AtomicU32::new(0);
+static PRX_KERNEL_CALL_ORIG: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
 
 /// Patch the loaded PRX to skip the ME kernel call (return 0 = no frame).
 /// Call this before sceMpegAvcDecode to prevent the ME deadlock.
 pub fn patch_skip_me_call() {
     let addr = PRX_KERNEL_CALL_ADDR.load(core::sync::atomic::Ordering::Relaxed);
-    if addr == 0 { return; }
+    if addr == 0 {
+        return;
+    }
     unsafe {
         let ptr = addr as *mut u32;
         // Replace `jal 0x9fd4` with `addiu $v0, $zero, -1` (return error)
         // so the caller skips the frame instead of using stale ME data.
         // 0x2402ffff = addiu $v0, $zero, -1
         *ptr = 0x2402ffff;
-        psp::sys::sceKernelDcacheWritebackInvalidateRange(
-            ptr as *const core::ffi::c_void, 8,
-        );
+        psp::sys::sceKernelDcacheWritebackInvalidateRange(ptr as *const core::ffi::c_void, 8);
         // PSP has split I/D cache. Flush D-cache to RAM and invalidate
         // I-cache so the CPU fetches the patched instruction.
         psp::sys::sceKernelDcacheWritebackInvalidateAll();
@@ -373,13 +365,13 @@ pub fn patch_skip_me_call() {
 pub fn unpatch_me_call() {
     let addr = PRX_KERNEL_CALL_ADDR.load(core::sync::atomic::Ordering::Relaxed);
     let orig = PRX_KERNEL_CALL_ORIG.load(core::sync::atomic::Ordering::Relaxed);
-    if addr == 0 || orig == 0 { return; }
+    if addr == 0 || orig == 0 {
+        return;
+    }
     unsafe {
         let ptr = addr as *mut u32;
         *ptr = orig;
-        psp::sys::sceKernelDcacheWritebackInvalidateRange(
-            ptr as *const core::ffi::c_void, 8,
-        );
+        psp::sys::sceKernelDcacheWritebackInvalidateRange(ptr as *const core::ffi::c_void, 8);
         // PSP has split I/D cache. Flush D-cache to RAM and invalidate
         // I-cache so the CPU fetches the patched instruction.
         psp::sys::sceKernelDcacheWritebackInvalidateAll();
@@ -403,8 +395,7 @@ pub fn unblock_stuck_decode() {
 
 /// Kernel semaphore signalled by I/O thread when a stream frame is pushed.
 /// The video thread waits on this instead of polling with sleep.
-static STREAM_FRAME_SEMA: core::sync::atomic::AtomicI32 =
-    core::sync::atomic::AtomicI32::new(-1);
+static STREAM_FRAME_SEMA: core::sync::atomic::AtomicI32 = core::sync::atomic::AtomicI32::new(-1);
 
 /// Create the stream frame semaphore (called once at video thread start).
 fn create_stream_sema() {
@@ -412,9 +403,9 @@ fn create_stream_sema() {
     let id = unsafe {
         psp::sys::sceKernelCreateSema(
             b"oasis_vframe\0".as_ptr(),
-            0,   // attr: FIFO
-            0,   // initial value
-            8,   // max value (matches VIDEO_STREAM_QUEUE capacity)
+            0, // attr: FIFO
+            0, // initial value
+            8, // max value (matches VIDEO_STREAM_QUEUE capacity)
             core::ptr::null_mut(),
         )
     };
@@ -445,13 +436,7 @@ fn wait_stream_frame(timeout_us: u32) -> bool {
     }
     let mut timeout = timeout_us;
     // SAFETY: id is a valid semaphore, timeout pointer is valid.
-    let ret = unsafe {
-        psp::sys::sceKernelWaitSema(
-            psp::sys::SceUid(id),
-            1,
-            &mut timeout,
-        )
-    };
+    let ret = unsafe { psp::sys::sceKernelWaitSema(psp::sys::SceUid(id), 1, &mut timeout) };
     ret >= 0
 }
 
@@ -537,7 +522,7 @@ pub fn try_push_stream_frame(frame: StreamFrame) -> Result<(), StreamFrame> {
         Ok(()) => {
             signal_stream_frame();
             Ok(())
-        }
+        },
         Err(f) => Err(f),
     }
 }
@@ -583,7 +568,8 @@ fn load_mpeg_vsh_module() {
     let id = unsafe {
         psp::sys::sceKernelLoadModule(
             b"ms0:/PSP/GAME/OASISOS/mpeg_vsh370.prx\0".as_ptr(),
-            0, core::ptr::null_mut(),
+            0,
+            core::ptr::null_mut(),
         )
     };
     vlog(&format!("[VIDEO] sceKernelLoadModule = {:#x}", id.0));
@@ -595,14 +581,21 @@ fn load_mpeg_vsh_module() {
     let mut status: i32 = 0;
     let ret = unsafe {
         psp::sys::sceKernelStartModule(
-            id, 0, core::ptr::null_mut(),
-            &mut status, core::ptr::null_mut(),
+            id,
+            0,
+            core::ptr::null_mut(),
+            &mut status,
+            core::ptr::null_mut(),
         )
     };
-    vlog(&format!("[VIDEO] sceKernelStartModule = {ret:#x}, status={status:#x}"));
+    vlog(&format!(
+        "[VIDEO] sceKernelStartModule = {ret:#x}, status={status:#x}"
+    ));
     if ret < 0 {
         vlog("[VIDEO] mpeg_vsh370 start FAILED");
-        unsafe { psp::sys::sceKernelUnloadModule(id); }
+        unsafe {
+            psp::sys::sceKernelUnloadModule(id);
+        }
         return;
     }
     vlog("[VIDEO] sceMpeg stubs resolved via mpeg_vsh370");
@@ -610,24 +603,21 @@ fn load_mpeg_vsh_module() {
 
 /// Boot the Media Engine via oasis-me-boot.prx (if available).
 fn load_me_boot_prx() {
-    let boot_paths: &[&[u8]] = &[
-        b"ms0:/PSP/GAME/OASISOS/oasis-me-boot.prx\0",
-    ];
+    let boot_paths: &[&[u8]] = &[b"ms0:/PSP/GAME/OASISOS/oasis-me-boot.prx\0"];
     for path in boot_paths {
-        let id = unsafe {
-            psp::sys::sceKernelLoadModule(
-                path.as_ptr(), 0, core::ptr::null_mut(),
-            )
-        };
+        let id = unsafe { psp::sys::sceKernelLoadModule(path.as_ptr(), 0, core::ptr::null_mut()) };
         if id >= psp::sys::SceUid(0) {
             let mut status: i32 = 0;
             let ret = unsafe {
                 psp::sys::sceKernelStartModule(
-                    id, 0, core::ptr::null_mut(),
-                    &mut status, core::ptr::null_mut(),
+                    id,
+                    0,
+                    core::ptr::null_mut(),
+                    &mut status,
+                    core::ptr::null_mut(),
                 )
             };
-            let name = core::str::from_utf8(&path[..path.len()-1]).unwrap_or("?");
+            let name = core::str::from_utf8(&path[..path.len() - 1]).unwrap_or("?");
             vlog(&format!("[VIDEO] ME boot {name} = {ret:#x}"));
             return;
         }
@@ -658,13 +648,6 @@ struct PspFileReader {
 }
 
 impl PspFileReader {
-    fn seek_read(&mut self, offset: u64, buf: &mut [u8]) {
-        unsafe {
-            psp::sys::sceIoLseek(self.fd, offset as i64, psp::sys::IoWhence::Set);
-            psp::sys::sceIoRead(self.fd, buf.as_mut_ptr() as *mut _, buf.len() as u32);
-        }
-    }
-
     fn open(path: &str) -> Option<Self> {
         let mut path_bytes: Vec<u8> = path.as_bytes().to_vec();
         path_bytes.push(0);
@@ -724,7 +707,6 @@ impl Drop for PspFileReader {
     }
 }
 
-
 // ---------------------------------------------------------------------------
 // NAL-based H.264 decoder — thin wrapper around psp::mpeg::AvcDecoder
 // ---------------------------------------------------------------------------
@@ -740,12 +722,9 @@ struct NalDecoder {
     decoder: Option<psp::mpeg::AvcDecoder>,
     sps: Vec<u8>,
     pps: Vec<u8>,
-    nal_prefix_size: i32,
     first_frame: bool,
     /// Frames decoded since last flush/keyframe.
     frames_since_flush: u32,
-    /// Maximum frames before a preventive flush.
-    flush_interval: u32,
     /// Timestamp of last decode call (for rate throttling).
     last_decode_us: u64,
 }
@@ -779,8 +758,7 @@ impl NalDecoder {
         load_mpeg_vsh_module();
 
         // SPS/PPS from MP4 avcC atom (always present on keyframes).
-        let (mut sps, pps) = if let (Some(s), Some(p)) =
-            (&first_frame.avcc_sps, &first_frame.avcc_pps)
+        let (sps, pps) = if let (Some(s), Some(p)) = (&first_frame.avcc_sps, &first_frame.avcc_pps)
         {
             (s.clone(), p.clone())
         } else {
@@ -790,7 +768,10 @@ impl NalDecoder {
         if sps.len() >= 4 {
             vlog(&format!(
                 "[VIDEO] NAL: SPS={} PPS={} profile={:#x} level={:#x}",
-                sps.len(), pps.len(), sps[1], sps[3]
+                sps.len(),
+                pps.len(),
+                sps[1],
+                sps[3]
             ));
         }
 
@@ -811,7 +792,11 @@ impl NalDecoder {
         vlog(&format!(
             "[VIDEO] NAL: {width}x{height} refs={max_ref_frames} \
              dpb={dpb_total}B (2MB workspace={})",
-            if dpb_total > 0x20_0000 { "OVERFLOW" } else { "ok" }
+            if dpb_total > 0x20_0000 {
+                "OVERFLOW"
+            } else {
+                "ok"
+            }
         ));
 
         // Reuse the persistent decoder if available; otherwise allocate a
@@ -819,10 +804,9 @@ impl NalDecoder {
         // SAFETY: Single-threaded access (video thread only). Use raw
         // pointer ops to avoid creating a `&mut` to the `static mut`,
         // which Rust 2024 forbids (`static_mut_refs`).
-        let prev: Option<psp::mpeg::AvcDecoder> = unsafe {
-            core::ptr::replace(core::ptr::addr_of_mut!(PERSISTENT_DECODER), None)
-        };
-        let mut decoder = match prev {
+        let prev: Option<psp::mpeg::AvcDecoder> =
+            unsafe { core::ptr::replace(core::ptr::addr_of_mut!(PERSISTENT_DECODER), None) };
+        let decoder = match prev {
             Some(mut dec) => {
                 vlog(&format!(
                     "[VIDEO] NAL: reusing persistent decoder ({}x{}) for {dec_w}x{dec_h} stream",
@@ -871,16 +855,11 @@ impl NalDecoder {
             // SAFETY: single-threaded access (video thread only); same
             // pattern as the take above.
             unsafe {
-                core::ptr::replace(
-                    core::ptr::addr_of_mut!(PERSISTENT_DECODER),
-                    Some(decoder),
-                );
+                core::ptr::replace(core::ptr::addr_of_mut!(PERSISTENT_DECODER), Some(decoder));
             }
-            return Err(
-                "GU video texture not pre-allocated (TV Guide tune-press \
+            return Err("GU video texture not pre-allocated (TV Guide tune-press \
                  path is responsible for calling PspBackend::alloc_video_texture)"
-                    .to_string(),
-            );
+                .to_string());
         }
 
         // Flush interval: only used for >480p content where the DPB
@@ -896,7 +875,6 @@ impl NalDecoder {
         unsafe {
             let stub_ptr = psp::sys::sceMpegAvcDecode as *const u32;
             let insn0 = *stub_ptr;
-            let insn1 = *stub_ptr.add(1);
             let target = if (insn0 >> 26) == 0x02 {
                 (insn0 & 0x03FFFFFF) << 2
             } else {
@@ -910,14 +888,12 @@ impl NalDecoder {
             // Extract the import stub address from the psp_extern wrapper.
             // Layout: [0]=addiu sp  [1]=sw ra  [2]=lui $v0,HI  [3]=lw arg
             //         [4]=addiu $v0,LO  [5]=sw $v0  [6]=jal  [7]=sw arg
-            let lui_insn = *stub_ptr.add(2);    // lui $v0, HI
-            let addiu_insn = *stub_ptr.add(4);  // addiu $v0, $v0, LO
+            let lui_insn = *stub_ptr.add(2); // lui $v0, HI
+            let addiu_insn = *stub_ptr.add(4); // addiu $v0, $v0, LO
             let hi = (lui_insn & 0xFFFF) << 16;
             let lo = (addiu_insn & 0xFFFF) as i16 as i32 as u32;
             let import_stub = hi.wrapping_add(lo);
-            vlog(&format!(
-                "[VIDEO] NAL: import stub @ {import_stub:#010x}"
-            ));
+            vlog(&format!("[VIDEO] NAL: import stub @ {import_stub:#010x}"));
             // Dump the import stub (should be: j <prx_func>; nop)
             if import_stub > 0x08000000 {
                 let isp = import_stub as *const u32;
@@ -928,29 +904,24 @@ impl NalDecoder {
                 ));
                 // Decode j target
                 if (is0 >> 26) == 2 {
-                    let prx_func = ((is0 & 0x03FFFFFF) << 2)
-                        | (import_stub & 0xF0000000);
-                    vlog(&format!(
-                        "[VIDEO] NAL: -> PRX func @ {prx_func:#010x}"
-                    ));
+                    let prx_func = ((is0 & 0x03FFFFFF) << 2) | (import_stub & 0xF0000000);
+                    vlog(&format!("[VIDEO] NAL: -> PRX func @ {prx_func:#010x}"));
                     // Dump first 4 instructions of the PRX function
                     let pp = prx_func as *const u32;
                     vlog(&format!(
                         "[VIDEO] NAL: PRX[0-3]: {:08x} {:08x} {:08x} {:08x}",
-                        *pp, *pp.add(1), *pp.add(2), *pp.add(3),
+                        *pp,
+                        *pp.add(1),
+                        *pp.add(2),
+                        *pp.add(3),
                     ));
                 } else if (is0 >> 26) == 3 {
                     // JAL - might be kernel syscall
-                    let target = ((is0 & 0x03FFFFFF) << 2)
-                        | (import_stub & 0xF0000000);
-                    vlog(&format!(
-                        "[VIDEO] NAL: -> kernel @ {target:#010x}"
-                    ));
+                    let target = ((is0 & 0x03FFFFFF) << 2) | (import_stub & 0xF0000000);
+                    vlog(&format!("[VIDEO] NAL: -> kernel @ {target:#010x}"));
                 } else {
                     // Might be a syscall or other pattern
-                    vlog(&format!(
-                        "[VIDEO] NAL: import stub opcode={}", is0 >> 26
-                    ));
+                    vlog(&format!("[VIDEO] NAL: import stub opcode={}", is0 >> 26));
                 }
             }
             // Trace the full call chain to find where sceMpegAvcDecode
@@ -966,8 +937,7 @@ impl NalDecoder {
                     let op = w >> 26;
                     if op == 2 || op == 3 {
                         // J (2) or JAL (3)
-                        found_target = ((w & 0x03FFFFFF) << 2)
-                            | (addr & 0xF0000000);
+                        found_target = ((w & 0x03FFFFFF) << 2) | (addr & 0xF0000000);
                         vlog(&format!(
                             "[VIDEO] NAL: L{level} @{addr:#010x}+{}: \
                              {} {found_target:#010x}",
@@ -994,8 +964,14 @@ impl NalDecoder {
                     vlog(&format!(
                         "[VIDEO] NAL: L{level} @{addr:#010x} raw: \
                          {:08x} {:08x} {:08x} {:08x} {:08x} {:08x} {:08x} {:08x}",
-                        *dp, *dp.add(1), *dp.add(2), *dp.add(3),
-                        *dp.add(4), *dp.add(5), *dp.add(6), *dp.add(7),
+                        *dp,
+                        *dp.add(1),
+                        *dp.add(2),
+                        *dp.add(3),
+                        *dp.add(4),
+                        *dp.add(5),
+                        *dp.add(6),
+                        *dp.add(7),
                     ));
                     break;
                 }
@@ -1008,8 +984,7 @@ impl NalDecoder {
                 let isp = import_stub as *const u32;
                 let is0 = *isp;
                 if (is0 >> 26) == 2 {
-                    let dispatch_addr = ((is0 & 0x03FFFFFF) << 2)
-                        | (import_stub & 0xF0000000);
+                    let dispatch_addr = ((is0 & 0x03FFFFFF) << 2) | (import_stub & 0xF0000000);
                     let prx_base = dispatch_addr.wrapping_sub(0x71c0);
                     // The kernel call is at PRX VA 0x8678
                     let kernel_call_addr = prx_base + 0x8678;
@@ -1018,14 +993,9 @@ impl NalDecoder {
                         "[VIDEO] NAL: PRX base={prx_base:#010x} \
                          kernel_call@{kernel_call_addr:#010x}={orig_insn:#010x}"
                     ));
-                    PRX_KERNEL_CALL_ADDR.store(
-                        kernel_call_addr,
-                        core::sync::atomic::Ordering::Release,
-                    );
-                    PRX_KERNEL_CALL_ORIG.store(
-                        orig_insn,
-                        core::sync::atomic::Ordering::Release,
-                    );
+                    PRX_KERNEL_CALL_ADDR
+                        .store(kernel_call_addr, core::sync::atomic::Ordering::Release);
+                    PRX_KERNEL_CALL_ORIG.store(orig_insn, core::sync::atomic::Ordering::Release);
                 }
             }
 
@@ -1056,24 +1026,17 @@ impl NalDecoder {
         // Publish the internal semaphore ID for the watchdog.
         if let Some(sema) = decoder.internal_sema_id() {
             MPEG_INTERNAL_SEMA.store(sema.0, core::sync::atomic::Ordering::Release);
-            vlog(&format!(
-                "[VIDEO] NAL: internal sema={:#x}",
-                sema.0,
-            ));
+            vlog(&format!("[VIDEO] NAL: internal sema={:#x}", sema.0,));
         }
 
-        vlog(&format!(
-            "[VIDEO] NAL: flush_interval={flush_interval}"
-        ));
+        vlog(&format!("[VIDEO] NAL: flush_interval={flush_interval}"));
 
         Ok(Self {
             decoder: Some(decoder),
             sps,
             pps,
-            nal_prefix_size: first_frame.nal_prefix_size as i32,
             first_frame: true,
             frames_since_flush: 0,
-            flush_interval,
             last_decode_us: 0,
         })
     }
@@ -1084,15 +1047,17 @@ impl NalDecoder {
     /// - `Ok(None)` — no picture yet (B-frame reordering)
     /// - `Err(())` — decode error
     fn decode(
-        &mut self, avcc_data: &[u8], _pts_secs: f64,
-        avcc_prefix: u8, is_keyframe: bool,
+        &mut self,
+        avcc_data: &[u8],
+        _pts_secs: f64,
+        avcc_prefix: u8,
+        _is_keyframe: bool,
     ) -> Result<Option<DecodedFrame>, ()> {
         if avcc_data.is_empty() {
             return Ok(None);
         }
 
-        static DECODE_COUNT: core::sync::atomic::AtomicU32 =
-            core::sync::atomic::AtomicU32::new(0);
+        static DECODE_COUNT: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
         let call_num = DECODE_COUNT.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
         let verbose = call_num < 10;
 
@@ -1132,16 +1097,12 @@ impl NalDecoder {
 
         // SAFETY: `decoder` is `Some` for the lifetime of NalDecoder; only
         // `Drop` ever takes it.
-        let dec = self
-            .decoder
-            .as_mut()
-            .expect("decoder Some until Drop");
+        let dec = self.decoder.as_mut().expect("decoder Some until Drop");
         let result = dec.decode_csc_direct(&nal, dst);
         let (out_w, out_h, out_stride) = (dec.width(), dec.height(), dec.stride());
         match result {
             Ok(true) => {
-                let dt_ms = (unsafe { psp::sys::sceKernelGetSystemTimeWide() } as u64
-                    - t0) / 1000;
+                let dt_ms = (unsafe { psp::sys::sceKernelGetSystemTimeWide() } as u64 - t0) / 1000;
                 if verbose {
                     vlog(&format!("[VIDEO] NAL: FRAME DECODED! ({}ms)", dt_ms));
                 }
@@ -1152,22 +1113,21 @@ impl NalDecoder {
                     height: out_h,
                     stride: out_stride,
                 }))
-            }
+            },
             Ok(false) => {
                 if verbose {
                     vlog("[VIDEO] NAL: no picture yet (reordering)");
                 }
                 Ok(None)
-            }
+            },
             Err(e) => {
                 if verbose || call_num < 50 {
                     vlog(&format!("[VIDEO] NAL: decode error: {e}"));
                 }
                 Err(())
-            }
+            },
         }
     }
-
 }
 
 impl Drop for NalDecoder {
@@ -1182,198 +1142,10 @@ impl Drop for NalDecoder {
             // already be `None` (taken in `try_init`); if it isn't, the
             // returned `Option` drops it harmlessly.
             unsafe {
-                let _ = core::ptr::replace(
-                    core::ptr::addr_of_mut!(PERSISTENT_DECODER),
-                    Some(dec),
-                );
+                let _ = core::ptr::replace(core::ptr::addr_of_mut!(PERSISTENT_DECODER), Some(dec));
             }
         }
     }
-}
-
-/// Patch the `max_num_ref_frames` field in a raw SPS NAL unit.
-///
-/// Navigates to the exp-golomb coded field and rewrites it in-place.
-/// Returns true if the patch was applied successfully.
-fn patch_sps_max_ref_frames(sps: &mut Vec<u8>, new_refs: u32) -> bool {
-    if sps.len() < 5 {
-        return false;
-    }
-
-    let profile_idc = sps[1];
-    let mut reader = BitReader::new(&sps[4..]);
-
-    // Navigate to max_num_ref_frames (same path as parse_sps_info)
-    if reader.read_ue().is_none() { return false; } // sps_id
-
-    if profile_idc == 100 || profile_idc == 110 || profile_idc == 122
-        || profile_idc == 244 || profile_idc == 44 || profile_idc == 83
-        || profile_idc == 86 || profile_idc == 118 || profile_idc == 128
-    {
-        let chroma = reader.read_ue();
-        if chroma.is_none() { return false; }
-        if chroma == Some(3) { if reader.skip(1).is_none() { return false; } }
-        if reader.read_ue().is_none() { return false; } // bit_depth_luma
-        if reader.read_ue().is_none() { return false; } // bit_depth_chroma
-        if reader.skip(1).is_none() { return false; }
-        let scaling = reader.read_bit();
-        if scaling == Some(1) {
-            let count = if chroma != Some(3) { 8 } else { 12 };
-            for i in 0..count {
-                let present = reader.read_bit();
-                if present == Some(1) {
-                    let size = if i < 6 { 16 } else { 64 };
-                    let mut last = 8i32;
-                    let mut next = 8i32;
-                    for _ in 0..size {
-                        if next != 0 {
-                            let d = match reader.read_se() { Some(v) => v, None => return false };
-                            next = (last + d + 256) % 256;
-                        }
-                        last = if next == 0 { last } else { next };
-                    }
-                }
-            }
-        }
-    }
-
-    if reader.read_ue().is_none() { return false; } // log2_max_frame_num
-    let poc_type = match reader.read_ue() { Some(v) => v, None => return false };
-    if poc_type == 0 {
-        if reader.read_ue().is_none() { return false; }
-    } else if poc_type == 1 {
-        if reader.skip(1).is_none() { return false; }
-        if reader.read_se().is_none() { return false; }
-        if reader.read_se().is_none() { return false; }
-        let n = match reader.read_ue() { Some(v) => v, None => return false };
-        for _ in 0..n { if reader.read_se().is_none() { return false; } }
-    }
-
-    // Now reader is positioned right before max_num_ref_frames.
-    // Record the bit position.
-    let ref_byte = reader.byte_pos;
-    let ref_bit = reader.bit_pos;
-
-    // Read the current value to know its exp-golomb size.
-    let old_refs = match reader.read_ue() { Some(v) => v, None => return false };
-
-    // Exp-golomb encoding of new_refs:
-    // value N encodes as: (leading_zeros zeros)(1)(N+1 in binary, leading_zeros bits)
-    // For 0: "1" (1 bit)
-    // For 1: "010" (3 bits)
-    // For 2: "011" (3 bits)
-    // For 3: "00100" (5 bits)
-
-    // Calculate bit lengths
-    fn ue_bit_len(val: u32) -> u32 {
-        if val == 0 { return 1; }
-        let n = val + 1;
-        let bits = 32 - n.leading_zeros(); // ceil(log2(n+1))
-        2 * bits - 1
-    }
-
-    let old_len = ue_bit_len(old_refs);
-    let new_len = ue_bit_len(new_refs);
-
-    // Only patch if new encoding is same size (avoids shifting the entire
-    // bitstream). For refs 3->1: 5 bits -> 3 bits — different size.
-    // For refs 3->2: 5 bits -> 3 bits — also different.
-    // This is tricky. Let's handle the simple same-size case first,
-    // then if sizes differ, we need to rebuild the SPS.
-    if old_len != new_len {
-        // Rebuild SPS with modified ref count. Copy bits up to the ref
-        // field, write new value, copy remaining bits.
-        let total_bits = (sps.len() - 4) * 8; // bits after byte 4
-        let ref_start_bit = ref_byte * 8 + ref_bit as usize;
-        let ref_end_bit = ref_start_bit + old_len as usize;
-        let tail_bits = total_bits.saturating_sub(ref_end_bit);
-
-        let new_total_bits = ref_start_bit + new_len as usize + tail_bits;
-        let new_total_bytes = (new_total_bits + 7) / 8;
-        let mut new_sps = vec![0u8; 4 + new_total_bytes];
-        new_sps[..4].copy_from_slice(&sps[..4]); // copy header
-
-        // Copy bits before ref field
-        let src = &sps[4..];
-        let dst = &mut new_sps[4..];
-        for b in 0..ref_start_bit {
-            let byte_idx = b / 8;
-            let bit_idx = 7 - (b % 8);
-            let val = (src[byte_idx] >> bit_idx) & 1;
-            let d_byte = b / 8;
-            let d_bit = 7 - (b % 8);
-            dst[d_byte] = (dst[d_byte] & !(1 << d_bit)) | (val << d_bit);
-        }
-
-        // Write new ref value (exp-golomb)
-        let ue_val = new_refs + 1;
-        let leading = (new_len - 1) / 2;
-        let mut pos = ref_start_bit;
-        // Write leading zeros
-        for _ in 0..leading {
-            let d_byte = pos / 8;
-            let d_bit = 7 - (pos % 8);
-            dst[d_byte] &= !(1 << d_bit);
-            pos += 1;
-        }
-        // Write 1
-        {
-            let d_byte = pos / 8;
-            let d_bit = 7 - (pos % 8);
-            dst[d_byte] |= 1 << d_bit;
-            pos += 1;
-        }
-        // Write suffix bits
-        for i in (0..leading).rev() {
-            let d_byte = pos / 8;
-            let d_bit = 7 - (pos % 8);
-            let val = ((ue_val >> i) & 1) as u8;
-            dst[d_byte] = (dst[d_byte] & !(1 << d_bit)) | (val << d_bit);
-            pos += 1;
-        }
-
-        // Copy tail bits
-        for b in 0..tail_bits {
-            let s_pos = ref_end_bit + b;
-            let s_byte = s_pos / 8;
-            let s_bit = 7 - (s_pos % 8);
-            let val = (src[s_byte] >> s_bit) & 1;
-            let d_byte = pos / 8;
-            let d_bit = 7 - (pos % 8);
-            dst[d_byte] = (dst[d_byte] & !(1 << d_bit)) | (val << d_bit);
-            pos += 1;
-        }
-
-        sps.clear();
-        sps.extend_from_slice(&new_sps);
-        return true;
-    }
-
-    // Same-size: just overwrite the bits in-place
-    let ue_val = new_refs + 1;
-    let leading = (new_len - 1) / 2;
-    let mut pos = ref_byte * 8 + ref_bit as usize;
-    let dst = &mut sps[4..];
-    for _ in 0..leading {
-        let d_byte = pos / 8;
-        let d_bit = 7 - (pos % 8);
-        dst[d_byte] &= !(1 << d_bit);
-        pos += 1;
-    }
-    {
-        let d_byte = pos / 8;
-        let d_bit = 7 - (pos % 8);
-        dst[d_byte] |= 1 << d_bit;
-        pos += 1;
-    }
-    for i in (0..leading).rev() {
-        let d_byte = pos / 8;
-        let d_bit = 7 - (pos % 8);
-        let val = ((ue_val >> i) & 1) as u8;
-        dst[d_byte] = (dst[d_byte] & !(1 << d_bit)) | (val << d_bit);
-        pos += 1;
-    }
-    true
 }
 
 // ---------------------------------------------------------------------------
@@ -1452,9 +1224,15 @@ fn parse_sps_info(sps: &[u8]) -> Option<SpsInfo> {
     let _sps_id = reader.read_ue()?;
 
     // High profile has additional fields
-    if profile_idc == 100 || profile_idc == 110 || profile_idc == 122
-        || profile_idc == 244 || profile_idc == 44 || profile_idc == 83
-        || profile_idc == 86 || profile_idc == 118 || profile_idc == 128
+    if profile_idc == 100
+        || profile_idc == 110
+        || profile_idc == 122
+        || profile_idc == 244
+        || profile_idc == 44
+        || profile_idc == 83
+        || profile_idc == 86
+        || profile_idc == 118
+        || profile_idc == 128
     {
         let chroma_format_idc = reader.read_ue()?;
         if chroma_format_idc == 3 {
@@ -1478,7 +1256,11 @@ fn parse_sps_info(sps: &[u8]) -> Option<SpsInfo> {
                             let delta = reader.read_se()?;
                             next_scale = (last_scale + delta + 256) % 256;
                         }
-                        last_scale = if next_scale == 0 { last_scale } else { next_scale };
+                        last_scale = if next_scale == 0 {
+                            last_scale
+                        } else {
+                            next_scale
+                        };
                     }
                 }
             }
@@ -1514,7 +1296,11 @@ fn parse_sps_info(sps: &[u8]) -> Option<SpsInfo> {
     let width = pic_width_mbs * 16;
     let height = pic_height_map_units * 16;
 
-    Some(SpsInfo { width, height, max_ref_frames })
+    Some(SpsInfo {
+        width,
+        height,
+        max_ref_frames,
+    })
 }
 
 /// Minimal bitstream reader for exp-golomb codes in H.264 SPS.
@@ -1526,7 +1312,11 @@ struct BitReader<'a> {
 
 impl<'a> BitReader<'a> {
     fn new(data: &'a [u8]) -> Self {
-        Self { data, byte_pos: 0, bit_pos: 0 }
+        Self {
+            data,
+            byte_pos: 0,
+            bit_pos: 0,
+        }
     }
 
     fn read_bit(&mut self) -> Option<u32> {
@@ -1672,12 +1462,9 @@ fn play_mp4(path: &str, seek_secs: u64) -> bool {
 
     let mut video_count = 0u32;
     let mut audio_count = 0u32;
-    let mut decode_count = 0u32;
+    let decode_count = 0u32;
     let mut audio_done = mp4.audio_track_info().is_none();
     let mut video_done = mp4.video_track_info().is_none();
-
-    // Track playback start time for frame pacing.
-    let start_us = unsafe { psp::sys::sceKernelGetSystemTimeWide() } as u64;
 
     loop {
         // Check for stop command.
@@ -1769,8 +1556,10 @@ fn push_frame_with_retry(frame: DecodedFrame) -> bool {
             Err(ret) => {
                 item = ret;
                 // SAFETY: brief sleep to yield to main thread.
-                unsafe { psp::sys::sceKernelDelayThread(3_000); }
-            }
+                unsafe {
+                    psp::sys::sceKernelDelayThread(3_000);
+                }
+            },
         }
     }
     // Last-ditch: drop oldest frame, push newer one.
@@ -1796,7 +1585,9 @@ fn play_stream() -> bool {
             if DECODER_READY.load(Ordering::Acquire) {
                 break;
             }
-            unsafe { psp::sys::sceKernelDelayThread(10_000); }
+            unsafe {
+                psp::sys::sceKernelDelayThread(10_000);
+            }
         }
         if !DECODER_READY.load(Ordering::Acquire) {
             vlog("[VIDEO] play_stream: cleanup timeout, proceeding anyway");
@@ -1845,15 +1636,14 @@ fn play_stream() -> bool {
             if frame.is_keyframe {
                 vlog_force(&format!(
                     "[VIDEO] GOT KEYFRAME: sz={} ts={:.2}",
-                    frame.data.len(), frame.timestamp_secs,
+                    frame.data.len(),
+                    frame.timestamp_secs,
                 ));
                 first_frame = Some(frame);
                 break;
             }
             // Skip non-keyframes before decoder init.
-            vlog_force(&format!(
-                "[VIDEO] skip non-kf: sz={}", frame.data.len(),
-            ));
+            vlog_force(&format!("[VIDEO] skip non-kf: sz={}", frame.data.len(),));
         }
 
         // Wait for I/O thread to signal a new frame (10ms timeout).
@@ -1870,7 +1660,9 @@ fn play_stream() -> bool {
     };
 
     // Parse SPS from the first keyframe to get video dimensions.
-    let (vid_w, vid_h) = first_frame.avcc_sps.as_ref()
+    let (vid_w, vid_h) = first_frame
+        .avcc_sps
+        .as_ref()
         .and_then(|sps| parse_sps_rbsp(sps))
         .unwrap_or((480, 272));
     VIDEO_WIDTH.store(vid_w, Ordering::Relaxed);
@@ -1939,16 +1731,22 @@ fn play_stream() -> bool {
     // First frame decode (NAL path only — PSMF feeds via ringbuffer).
     if let Some(ref mut nal) = nal_dec {
         match nal.decode(
-            &first_frame.data, first_frame.timestamp_secs,
-            first_frame.nal_prefix_size, true,
+            &first_frame.data,
+            first_frame.timestamp_secs,
+            first_frame.nal_prefix_size,
+            true,
         ) {
             Ok(Some(decoded)) => {
                 decode_count += 1;
                 push_frame_with_retry(decoded);
                 vlog("[VIDEO] play_stream: first frame decoded!");
-            }
-            Ok(None) => { no_pic_count += 1; }
-            Err(()) => { error_count += 1; }
+            },
+            Ok(None) => {
+                no_pic_count += 1;
+            },
+            Err(()) => {
+                error_count += 1;
+            },
         }
     } else if let Some(ref mut psmf) = psmf_dec {
         // Convert AVCC to Annex B for PSMF path.
@@ -1995,7 +1793,9 @@ fn play_stream() -> bool {
                                 (i + 1) * 10
                             ));
                         }
-                        unsafe { psp::sys::sceKernelDelayThread(10_000); }
+                        unsafe {
+                            psp::sys::sceKernelDelayThread(10_000);
+                        }
                     }
                     if !crate::threading::is_download_stopped() {
                         vlog_force("[VIDEO] STOP: I/O timeout, proceeding");
@@ -2008,7 +1808,9 @@ fn play_stream() -> bool {
                     vlog_force("[VIDEO] STOP: nal_dec dropped OK");
                     drop(psmf_dec.take());
                     // Brief ME cooldown after sceMpegDelete/Finish.
-                    unsafe { psp::sys::sceKernelDelayThread(100_000); }
+                    unsafe {
+                        psp::sys::sceKernelDelayThread(100_000);
+                    }
                     DECODER_READY.store(true, Ordering::Release);
                     vlog_force("[VIDEO] STOP: cleanup complete");
                     return is_shutdown;
@@ -2030,23 +1832,32 @@ fn play_stream() -> bool {
                 // is full, wasting ~30% of ME time.
                 {
                     let mut waits = 0u32;
-                    while VIDEO_FRAME_QUEUE.len()
-                        >= VIDEO_FRAME_QUEUE.capacity() as u32
-                    {
-                        unsafe { psp::sys::sceKernelDelayThread(3_000); }
+                    while VIDEO_FRAME_QUEUE.len() >= VIDEO_FRAME_QUEUE.capacity() as u32 {
+                        unsafe {
+                            psp::sys::sceKernelDelayThread(3_000);
+                        }
                         waits += 1;
-                        if waits > 20 { break; } // 60ms max wait
+                        if waits > 20 {
+                            break;
+                        } // 60ms max wait
                     }
                 }
-
 
                 // PSMF path: convert to Annex B and feed to ringbuffer.
                 let decode_result = if let Some(ref mut psmf) = psmf_dec {
                     let annex_b = avcc_to_annex_b_simple(
                         &frame.data,
                         frame.nal_prefix_size,
-                        if frame.is_keyframe { frame.avcc_sps.as_deref() } else { None },
-                        if frame.is_keyframe { frame.avcc_pps.as_deref() } else { None },
+                        if frame.is_keyframe {
+                            frame.avcc_sps.as_deref()
+                        } else {
+                            None
+                        },
+                        if frame.is_keyframe {
+                            frame.avcc_pps.as_deref()
+                        } else {
+                            None
+                        },
                     );
                     if psmf.feed_and_decode(&annex_b, frame.timestamp_secs) {
                         Ok(Some(DecodedFrame {
@@ -2060,8 +1871,10 @@ fn play_stream() -> bool {
                     }
                 } else if let Some(ref mut nal) = nal_dec {
                     nal.decode(
-                        &frame.data, frame.timestamp_secs,
-                        frame.nal_prefix_size, frame.is_keyframe,
+                        &frame.data,
+                        frame.timestamp_secs,
+                        frame.nal_prefix_size,
+                        frame.is_keyframe,
                     )
                 } else {
                     Err(())
@@ -2078,11 +1891,8 @@ fn play_stream() -> bool {
                         }
 
                         // Frame pacing via PTS with drift correction.
-                        let pts_us =
-                            (frame.timestamp_secs * 1_000_000.0) as u64;
-                        let now_us = unsafe {
-                            psp::sys::sceKernelGetSystemTimeWide()
-                        } as u64;
+                        let pts_us = (frame.timestamp_secs * 1_000_000.0) as u64;
+                        let now_us = unsafe { psp::sys::sceKernelGetSystemTimeWide() } as u64;
                         let elapsed = now_us.wrapping_sub(start_us);
                         if pts_us > elapsed {
                             let wait = (pts_us - elapsed) as u32;
@@ -2101,19 +1911,15 @@ fn play_stream() -> bool {
                         // Queue space was checked before decode. Push
                         // should succeed; if not, drop gracefully.
                         if VIDEO_FRAME_QUEUE.push(decoded).is_ok() {
-                            VIDEO_FRAMES_PUSHED.fetch_add(
-                                1, Ordering::Relaxed,
-                            );
+                            VIDEO_FRAMES_PUSHED.fetch_add(1, Ordering::Relaxed);
                         } else {
-                            VIDEO_FRAMES_DROPPED.fetch_add(
-                                1, Ordering::Relaxed,
-                            );
+                            VIDEO_FRAMES_DROPPED.fetch_add(1, Ordering::Relaxed);
                         }
-                    }
+                    },
                     Ok(None) => {
                         no_pic_count += 1;
                         VIDEO_NOPIC_COUNT.store(no_pic_count, Ordering::Relaxed);
-                    }
+                    },
                     Err(()) => {
                         error_count += 1;
                         VIDEO_ERROR_COUNT.store(error_count, Ordering::Relaxed);
@@ -2139,12 +1945,10 @@ fn play_stream() -> bool {
                             DECODER_READY.store(true, Ordering::Release);
                             return drain_stream_only();
                         }
-                    }
+                    },
                 }
                 frames_processed += 1;
-                VIDEO_FRAMES_PROCESSED.store(
-                    frames_processed, Ordering::Relaxed,
-                );
+                VIDEO_FRAMES_PROCESSED.store(frames_processed, Ordering::Relaxed);
 
                 // Periodic diagnostic (unconditional) — every 50 frames
                 // to reduce ~5-20ms per-write I/O overhead.
@@ -2159,9 +1963,7 @@ fn play_stream() -> bool {
                 wait_count += 1;
                 // Log when stuck waiting (every 30 waits ≈ 1 second).
                 if wait_count % 30 == 0 {
-                    let step = psp::mpeg::DECODE_STEP.load(
-                        core::sync::atomic::Ordering::Relaxed,
-                    );
+                    let step = psp::mpeg::DECODE_STEP.load(core::sync::atomic::Ordering::Relaxed);
                     vlog_force(&format!(
                         "[VIDEO] waiting: w={wait_count} proc={frames_processed} \
                          playing={} step={step}",
@@ -2189,12 +1991,16 @@ fn play_stream() -> bool {
         if crate::threading::is_download_stopped() {
             break;
         }
-        unsafe { psp::sys::sceKernelDelayThread(10_000); }
+        unsafe {
+            psp::sys::sceKernelDelayThread(10_000);
+        }
     }
     // Drop decoders explicitly, then give ME time to clean up.
     drop(nal_dec);
     drop(psmf_dec);
-    unsafe { psp::sys::sceKernelDelayThread(50_000); }
+    unsafe {
+        psp::sys::sceKernelDelayThread(50_000);
+    }
     DECODER_READY.store(true, Ordering::Release);
     vlog("[VIDEO] decoder cleanup done");
     false

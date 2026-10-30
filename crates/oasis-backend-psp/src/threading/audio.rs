@@ -224,9 +224,7 @@ fn decode_aac_frame(
     match decoder.decode(data, pcm) {
         Ok(consumed) => {
             if count < 3 {
-                io_log_verbose(&format!(
-                    "[AUDIO] decode #{count} OK, consumed={consumed}"
-                ));
+                io_log_verbose(&format!("[AUDIO] decode #{count} OK, consumed={consumed}"));
             }
             if consumed == 0 {
                 return;

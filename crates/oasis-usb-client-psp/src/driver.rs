@@ -76,14 +76,30 @@ unsafe impl Send for UsbdDeviceReq {}
 /// 4 endpoints: EP0 (control) + EP1 (bulk IN) + EP2 (bulk OUT) + EP3 (spare)
 /// Must match USBHostFS layout — kernel expects endpoint count to match array
 static mut ENDPOINTS: [UsbEndpoint; 4] = [
-    UsbEndpoint { endpnum: 0, unk2: 0, unk3: 0 },
-    UsbEndpoint { endpnum: 1, unk2: 0, unk3: 0 },
-    UsbEndpoint { endpnum: 2, unk2: 0, unk3: 0 },
-    UsbEndpoint { endpnum: 3, unk2: 0, unk3: 0 },
+    UsbEndpoint {
+        endpnum: 0,
+        unk2: 0,
+        unk3: 0,
+    },
+    UsbEndpoint {
+        endpnum: 1,
+        unk2: 0,
+        unk3: 0,
+    },
+    UsbEndpoint {
+        endpnum: 2,
+        unk2: 0,
+        unk3: 0,
+    },
+    UsbEndpoint {
+        endpnum: 3,
+        unk2: 0,
+        unk3: 0,
+    },
 ];
 
 static mut INTERFACE: UsbInterface = UsbInterface {
-    expect_interface: -1i32,  // 0xFFFFFFFF
+    expect_interface: -1i32, // 0xFFFFFFFF
     unk8: 0,
     num_interface: 1,
 };
@@ -97,7 +113,7 @@ pub static mut DRIVER_STATIC: UsbDriver = UsbDriver {
     // SAFETY: PSP-specific unsafe op (kernel-mode hardware / syscall access).
     endp: unsafe { &raw mut ENDPOINTS[0] },
     intp: &raw mut INTERFACE,
-    devp_hi: core::ptr::null_mut(),  // filled by start_func
+    devp_hi: core::ptr::null_mut(), // filled by start_func
     confp_hi: core::ptr::null_mut(),
     devp: core::ptr::null_mut(),
     confp: core::ptr::null_mut(),
@@ -187,19 +203,35 @@ unsafe extern "C" fn usb_start(_size: i32, _args: *mut u8) -> i32 {
         crate::log_hex("[CB] ud0.cfg.pintf=", USB_DATA[0].config.pinterfaces as u32);
         crate::log_hex("[CB] ud0.cfg.pintd=", USB_DATA[0].config.pinterdesc as u32);
         crate::log_hex("[CB] ud0.cfg.pendp=", USB_DATA[0].config.pendp as u32);
-        crate::log_hex("[CB] ud0.confd.pintf=", USB_DATA[0].confdesc.pinterfaces as u32);
-        crate::log_hex("[CB] ud0.intf.pd0=", USB_DATA[0].interfaces.pinterdesc[0] as u32);
+        crate::log_hex(
+            "[CB] ud0.confd.pintf=",
+            USB_DATA[0].confdesc.pinterfaces as u32,
+        );
+        crate::log_hex(
+            "[CB] ud0.intf.pd0=",
+            USB_DATA[0].interfaces.pinterdesc[0] as u32,
+        );
         crate::log_hex("[CB] ud0.intf.cnt=", USB_DATA[0].interfaces.intcount);
         crate::log_hex("[CB] ud0.intd.pendp=", USB_DATA[0].interdesc.pendp as u32);
         // Endpoint descriptor bytes
-        crate::log_hex("[CB] ep0.b0123=", u32::from_le_bytes([
-            USB_DATA[0].endp[0].desc[0], USB_DATA[0].endp[0].desc[1],
-            USB_DATA[0].endp[0].desc[2], USB_DATA[0].endp[0].desc[3],
-        ]));
-        crate::log_hex("[CB] ep1.b0123=", u32::from_le_bytes([
-            USB_DATA[0].endp[1].desc[0], USB_DATA[0].endp[1].desc[1],
-            USB_DATA[0].endp[1].desc[2], USB_DATA[0].endp[1].desc[3],
-        ]));
+        crate::log_hex(
+            "[CB] ep0.b0123=",
+            u32::from_le_bytes([
+                USB_DATA[0].endp[0].desc[0],
+                USB_DATA[0].endp[0].desc[1],
+                USB_DATA[0].endp[0].desc[2],
+                USB_DATA[0].endp[0].desc[3],
+            ]),
+        );
+        crate::log_hex(
+            "[CB] ep1.b0123=",
+            u32::from_le_bytes([
+                USB_DATA[0].endp[1].desc[0],
+                USB_DATA[0].endp[1].desc[1],
+                USB_DATA[0].endp[1].desc[2],
+                USB_DATA[0].endp[1].desc[3],
+            ]),
+        );
     }
 
     crate::log_str("[CB] start_func done");

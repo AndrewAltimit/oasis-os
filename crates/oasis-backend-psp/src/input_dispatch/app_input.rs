@@ -27,11 +27,7 @@ use super::DispatchResult;
 use super::helpers::{dispatch_terminal_confirm, dispatch_tv_confirm};
 
 /// Close the current kiosk app and return to dashboard.
-fn close_kiosk(
-    kiosk_app: &mut KioskApp,
-    wm: &mut WindowManager,
-    sdi: &mut SdiRegistry,
-) {
+fn close_kiosk(kiosk_app: &mut KioskApp, wm: &mut WindowManager, sdi: &mut SdiRegistry) {
     if let Some(wid) = kiosk_app.window_id() {
         let _ = wm.exit_fullscreen(wid, sdi);
         let _ = wm.close_window(wid, sdi);

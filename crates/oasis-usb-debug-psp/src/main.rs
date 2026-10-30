@@ -26,10 +26,9 @@
 use core::ffi::c_void;
 
 use psp::sys::{
-    self, CtrlButtons, CtrlMode, IoOpenFlags, SceCtrlData, UsbState,
-    sceCtrlPeekBufferPositive, sceCtrlSetSamplingMode,
-    sceKernelDelayThread,
-    sceUsbActivate, sceUsbDeactivate, sceUsbGetDrvState, sceUsbGetState, sceUsbStart, sceUsbStop,
+    self, CtrlButtons, CtrlMode, IoOpenFlags, SceCtrlData, UsbState, sceCtrlPeekBufferPositive,
+    sceCtrlSetSamplingMode, sceKernelDelayThread, sceUsbActivate, sceUsbDeactivate,
+    sceUsbGetDrvState, sceUsbGetState, sceUsbStart, sceUsbStop,
 };
 
 psp::module!("USBHostPhase0", 1, 0);
@@ -63,16 +62,8 @@ fn log_write(msg: &str) {
     // SAFETY: PSP firmware syscall — kernel-mode binary; signature is documented in pspsdk.
     unsafe {
         if LOG_FD.0 > 0 {
-            psp::sys::sceIoWrite(
-                LOG_FD,
-                msg.as_ptr() as *const c_void,
-                msg.len(),
-            );
-            psp::sys::sceIoWrite(
-                LOG_FD,
-                b"\n".as_ptr() as *const c_void,
-                1,
-            );
+            psp::sys::sceIoWrite(LOG_FD, msg.as_ptr() as *const c_void, msg.len());
+            psp::sys::sceIoWrite(LOG_FD, b"\n".as_ptr() as *const c_void, 1);
         }
     }
 }
@@ -120,8 +111,7 @@ fn fmt_to_buf(buf: &mut [u8; 256], args: core::fmt::Arguments<'_>) -> usize {
             // Truncate at a UTF-8 character boundary to avoid splitting
             // a multibyte codepoint (which would make from_utf8_unchecked UB).
             let to_copy = s.floor_char_boundary(bytes.len().min(remaining));
-            self.buf[self.pos..self.pos + to_copy]
-                .copy_from_slice(&bytes[..to_copy]);
+            self.buf[self.pos..self.pos + to_copy].copy_from_slice(&bytes[..to_copy]);
             self.pos += to_copy;
             Ok(())
         }
@@ -259,11 +249,7 @@ fn step_start_bus() -> i32 {
     // Check USB state after bus start
     // SAFETY: PSP firmware syscall — kernel-mode binary; signature is documented in pspsdk.
     let bits = unsafe { sceUsbGetState() }.bits();
-    log_println!(
-        "  USB state: 0x{:03X} [{}]",
-        bits,
-        format_usb_state(bits),
-    );
+    log_println!("  USB state: 0x{:03X} [{}]", bits, format_usb_state(bits),);
 
     // SAFETY: PSP firmware syscall — kernel-mode binary; signature is documented in pspsdk.
     unsafe { sceKernelDelayThread(100_000) };
@@ -302,11 +288,7 @@ fn step_start_cam() -> i32 {
 
     // SAFETY: PSP firmware syscall — kernel-mode binary; signature is documented in pspsdk.
     let bits = unsafe { sceUsbGetState() }.bits();
-    log_println!(
-        "  USB state: 0x{:03X} [{}]",
-        bits,
-        format_usb_state(bits),
-    );
+    log_println!("  USB state: 0x{:03X} [{}]", bits, format_usb_state(bits),);
 
     // SAFETY: PSP firmware syscall — kernel-mode binary; signature is documented in pspsdk.
     unsafe { sceKernelDelayThread(100_000) };
@@ -327,11 +309,7 @@ fn step_activate() -> i32 {
 
     // SAFETY: PSP firmware syscall — kernel-mode binary; signature is documented in pspsdk.
     let bits = unsafe { sceUsbGetState() }.bits();
-    log_println!(
-        "  USB state: 0x{:03X} [{}]",
-        bits,
-        format_usb_state(bits),
-    );
+    log_println!("  USB state: 0x{:03X} [{}]", bits, format_usb_state(bits),);
 
     // Check if cable is connected
     if bits & UsbState::CONNECTED.bits() != 0 {
@@ -397,11 +375,7 @@ fn step_cleanup() {
 
     // SAFETY: PSP firmware syscall — kernel-mode binary; signature is documented in pspsdk.
     let bits = unsafe { sceUsbGetState() }.bits();
-    log_println!(
-        "  USB state: 0x{:03X} [{}]",
-        bits,
-        format_usb_state(bits),
-    );
+    log_println!("  USB state: 0x{:03X} [{}]", bits, format_usb_state(bits),);
 }
 
 // ── State polling loop ──────────────────────────────────────────────────

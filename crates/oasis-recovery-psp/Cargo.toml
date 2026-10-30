@@ -20,8 +20,8 @@ license = "MIT"
 [dependencies]
 psp = { git = "https://github.com/AndrewAltimit/rust-psp", rev = "e4cc06f6fa50fa45dc3ae8b332e8a2b67625f588", features = ["std"] }
 
-[patch.crates-io]
-unicode-width = { git = "https://git.sr.ht/~sajattack/unicode-width", rev = "114ac47" }
+# No `[patch.crates-io] unicode-width`: nothing in the graph uses it (see
+# crates/oasis-backend-psp/Cargo.toml for the workaround if that changes).
 
 [profile.release]
 opt-level = "z"

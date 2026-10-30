@@ -25,17 +25,6 @@ pub fn trigger_dump() {
     let _ = DUMP_STATE.compare_exchange(0, 1, Ordering::AcqRel, Ordering::Relaxed);
 }
 
-/// Check if dump is in progress or completed. Returns status message.
-pub fn dump_status() -> &'static [u8] {
-    match DUMP_STATE.load(Ordering::Relaxed) {
-        0 => b"Ready",
-        1 => b"Queued...",
-        2 => b"Dumping...",
-        3 => b"Done!",
-        _ => b"???",
-    }
-}
-
 /// Start the dump thread. Called once from psp_main.
 pub fn start_dump_thread() {
     // SAFETY: Creating a kernel thread for ME firmware dump.
@@ -43,7 +32,7 @@ pub fn start_dump_thread() {
         let thid = psp::sys::sceKernelCreateThread(
             b"OasisMEDump\0".as_ptr(),
             dump_thread_entry,
-            0x20, // low priority (background)
+            0x20,    // low priority (background)
             0x10000, // 64KB stack (needs room for file copy buffer)
             psp::sys::ThreadAttributes::empty(),
             core::ptr::null_mut(),
@@ -61,10 +50,7 @@ pub fn start_dump_thread() {
 static mut SPY_FLUSH_CTR: u32 = 0;
 
 /// Dump thread entry point. Polls for trigger, then dumps.
-unsafe extern "C" fn dump_thread_entry(
-    _args: usize,
-    _argp: *mut core::ffi::c_void,
-) -> i32 {
+unsafe extern "C" fn dump_thread_entry(_args: usize, _argp: *mut core::ffi::c_void) -> i32 {
     // Load cooleyesBridge.prx early — PMPlayer requires it before mpeg_vsh.
     unsafe { load_cooleyes_bridge() };
 
@@ -75,9 +61,10 @@ unsafe extern "C" fn dump_thread_entry(
 
     loop {
         // Wait for trigger.
-        if DUMP_STATE.compare_exchange(
-            1, 2, Ordering::AcqRel, Ordering::Relaxed
-        ).is_ok() {
+        if DUMP_STATE
+            .compare_exchange(1, 2, Ordering::AcqRel, Ordering::Relaxed)
+            .is_ok()
+        {
             // SAFETY: All dump functions use kernel-mode APIs.
             unsafe { do_dump() };
             DUMP_STATE.store(3, Ordering::Release);
@@ -98,9 +85,10 @@ unsafe extern "C" fn dump_thread_entry(
         unsafe { check_vsh_addr_request() };
 
         // Check for spy dump request from overlay menu.
-        if SPY_DUMP_STATE.compare_exchange(
-            1, 0, Ordering::AcqRel, Ordering::Relaxed
-        ).is_ok() {
+        if SPY_DUMP_STATE
+            .compare_exchange(1, 0, Ordering::AcqRel, Ordering::Relaxed)
+            .is_ok()
+        {
             crate::debug_log(b"[SPY] menu dump triggered");
             unsafe {
                 auto_flush_spy();
@@ -132,10 +120,7 @@ unsafe extern "C" fn dump_thread_entry(
 unsafe fn ensure_dump_dir() {
     // SAFETY: sceIoMkdir with valid path. Ignores error if dir exists.
     unsafe {
-        let _ = psp::sys::sceIoMkdir(
-            b"ms0:/seplugins/me_dump\0".as_ptr(),
-            0o777,
-        );
+        let _ = psp::sys::sceIoMkdir(b"ms0:/seplugins/me_dump\0".as_ptr(), 0o777);
     }
 }
 
@@ -159,11 +144,7 @@ unsafe fn write_file(path: &[u8], data: &[u8]) -> bool {
         let mut offset = 0;
         while offset < data.len() {
             let end = (offset + chunk).min(data.len());
-            let n = psp::sys::sceIoWrite(
-                fd,
-                data[offset..end].as_ptr() as *const _,
-                end - offset,
-            );
+            let n = psp::sys::sceIoWrite(fd, data[offset..end].as_ptr() as *const _, end - offset);
             if n <= 0 {
                 break;
             }
@@ -279,9 +260,7 @@ unsafe fn extract_me_firmware() {
 
 /// List a directory and write results to a text file + debug log.
 unsafe fn list_dir(path: &[u8], label: &[u8]) {
-    let dir_fd = unsafe {
-        psp::sys::sceIoDopen(path.as_ptr())
-    };
+    let dir_fd = unsafe { psp::sys::sceIoDopen(path.as_ptr()) };
     if dir_fd < psp::sys::SceUid(0) {
         let mut msg = [0u8; 80];
         let mut mp = append_bytes(&mut msg, 0, b"[ME-DUMP] dir fail: ");
@@ -302,7 +281,10 @@ unsafe fn list_dir(path: &[u8], label: &[u8]) {
         if ret <= 0 {
             break;
         }
-        let name_len = entry.d_name.iter().position(|&b| b == 0)
+        let name_len = entry
+            .d_name
+            .iter()
+            .position(|&b| b == 0)
             .unwrap_or(entry.d_name.len());
         let name = &entry.d_name[..name_len];
         let size = entry.d_stat.st_size as u32;
@@ -350,13 +332,7 @@ unsafe fn copy_file(src: &[u8], dst: &[u8]) {
     crate::debug_log(b"[ME-DUMP] sceIoOpen src...");
 
     // SAFETY: Opening source file for reading.
-    let src_fd = unsafe {
-        psp::sys::sceIoOpen(
-            src.as_ptr(),
-            psp::sys::IoOpenFlags::RD_ONLY,
-            0,
-        )
-    };
+    let src_fd = unsafe { psp::sys::sceIoOpen(src.as_ptr(), psp::sys::IoOpenFlags::RD_ONLY, 0) };
 
     log_hex(b"[ME-DUMP] src fd=", src_fd.0 as u32);
 
@@ -407,26 +383,15 @@ unsafe fn copy_file(src: &[u8], dst: &[u8]) {
 
     loop {
         // SAFETY: Reading from flash0 file.
-        let n = unsafe {
-            psp::sys::sceIoRead(
-                src_fd,
-                buf.as_mut_ptr() as *mut _,
-                buf.len() as u32,
-            )
-        };
+        let n =
+            unsafe { psp::sys::sceIoRead(src_fd, buf.as_mut_ptr() as *mut _, buf.len() as u32) };
         if n <= 0 {
             break;
         }
         let n = n as usize;
 
         // SAFETY: Writing to memory stick file.
-        let w = unsafe {
-            psp::sys::sceIoWrite(
-                dst_fd,
-                buf.as_ptr() as *const _,
-                n,
-            )
-        };
+        let w = unsafe { psp::sys::sceIoWrite(dst_fd, buf.as_ptr() as *const _, n) };
         if w <= 0 {
             crate::debug_log(b"[ME-DUMP] write error during copy");
             break;
@@ -455,13 +420,8 @@ unsafe fn dump_kernel_modules() {
     // SAFETY: Kernel syscall to enumerate modules.
     // Second param is buffer size in BYTES (not element count).
     let buf_bytes = 128 * core::mem::size_of::<psp::sys::SceUid>() as i32;
-    let ret = unsafe {
-        psp::sys::sceKernelGetModuleIdList(
-            mod_ids.as_mut_ptr(),
-            buf_bytes,
-            &mut count,
-        )
-    };
+    let ret =
+        unsafe { psp::sys::sceKernelGetModuleIdList(mod_ids.as_mut_ptr(), buf_bytes, &mut count) };
 
     log_hex(b"[ME-DUMP] modules: ret=", ret as u32);
     log_dec(b"[ME-DUMP] modules: count=", count as u32);
@@ -477,9 +437,7 @@ unsafe fn dump_kernel_modules() {
 
     for i in 0..count as usize {
         let mid = mod_ids[i];
-        let mut info: psp::sys::SceKernelModuleInfo = unsafe {
-            core::mem::zeroed()
-        };
+        let mut info: psp::sys::SceKernelModuleInfo = unsafe { core::mem::zeroed() };
         info.size = core::mem::size_of::<psp::sys::SceKernelModuleInfo>();
 
         // SAFETY: Kernel syscall to query module info.
@@ -491,7 +449,10 @@ unsafe fn dump_kernel_modules() {
             continue;
         }
 
-        let name_len = info.name.iter().position(|&b| b == 0)
+        let name_len = info
+            .name
+            .iter()
+            .position(|&b| b == 0)
             .unwrap_or(info.name.len());
         let name = &info.name[..name_len];
 
@@ -536,9 +497,7 @@ unsafe fn dump_kernel_modules() {
 
         // SAFETY: text_addr is the loaded module's base in kernel memory.
         // We're in kernel mode so we can read kernel-space addresses.
-        let slice = unsafe {
-            core::slice::from_raw_parts(text_addr as *const u8, total)
-        };
+        let slice = unsafe { core::slice::from_raw_parts(text_addr as *const u8, total) };
 
         // SAFETY: Write dump file.
         let ok = unsafe { write_file(&path, slice) };
@@ -634,11 +593,7 @@ unsafe fn probe_codec_drivers() {
         crate::debug_log(&pre[..pp]);
 
         let ptr = unsafe {
-            psp::hook::find_function(
-                probe.module.as_ptr(),
-                probe.library.as_ptr(),
-                probe.nid,
-            )
+            psp::hook::find_function(probe.module.as_ptr(), probe.library.as_ptr(), probe.nid)
         };
 
         rp = append_bytes(&mut result_buf, rp, probe.label);
@@ -674,30 +629,6 @@ unsafe fn probe_codec_drivers() {
 // ---------------------------------------------------------------------------
 // Helpers (no_std, no alloc)
 // ---------------------------------------------------------------------------
-
-/// Check if `haystack` contains `needle` (byte-level substring search).
-pub fn contains_bytes(haystack: &[u8], needle: &[u8]) -> bool {
-    if needle.len() > haystack.len() {
-        return false;
-    }
-    let mut i = 0;
-    while i + needle.len() <= haystack.len() {
-        let mut matched = true;
-        let mut j = 0;
-        while j < needle.len() {
-            if haystack[i + j] != needle[j] {
-                matched = false;
-                break;
-            }
-            j += 1;
-        }
-        if matched {
-            return true;
-        }
-        i += 1;
-    }
-    false
-}
 
 pub fn append_bytes(buf: &mut [u8], pos: usize, s: &[u8]) -> usize {
     let mut p = pos;
@@ -827,8 +758,15 @@ pub fn spy_dec(val: u32) {
 
 /// Log a sceMpegCreate call to the spy buffer.
 pub fn spy_log_create(
-    mpeg: u32, data: u32, size: i32, rb: u32,
-    fw: i32, mode: i32, ddr: i32, ret: i32, tag: &[u8],
+    mpeg: u32,
+    data: u32,
+    size: i32,
+    rb: u32,
+    fw: i32,
+    mode: i32,
+    ddr: i32,
+    ret: i32,
+    tag: &[u8],
 ) {
     spy_append(tag);
     spy_append(b"Create: mpeg=");
@@ -851,10 +789,7 @@ pub fn spy_log_create(
 }
 
 /// Log a sceMpegAvcDecode call to the spy buffer.
-pub fn spy_log_decode(
-    mpeg: u32, au: u32, fw: i32, buf: u32,
-    init: i32, ret: i32, tag: &[u8],
-) {
+pub fn spy_log_decode(mpeg: u32, au: u32, fw: i32, buf: u32, init: i32, ret: i32, tag: &[u8]) {
     spy_append(tag);
     spy_append(b"Decode: mpeg=");
     spy_hex(mpeg);
@@ -884,103 +819,110 @@ pub fn trigger_spy_dump() {
 /// the dump thread (~every 5 seconds). Appends to mpeg_spy.txt and also
 /// writes a fresh module snapshot on the first flush.
 unsafe fn auto_flush_spy() {
-    let pos = core::ptr::read_volatile(&raw const SPY_POS);
-    if pos == 0 {
-        return;
-    }
+    // SAFETY: called only from the dump thread. The spy-log statics are accessed through raw
+    // pointers (no references to `static mut`), and each sceIo* call gets a NUL-terminated path and
+    // a buffer with its real length.
+    unsafe {
+        let pos = core::ptr::read_volatile(&raw const SPY_POS);
+        if pos == 0 {
+            return;
+        }
 
-    // Diagnostic: log that we detected data.
-    let mut m = [0u8; 48];
-    let mut p = append_bytes(&mut m, 0, b"[SPY] flush pos=");
-    p = append_dec(&mut m, p, pos as u32);
-    crate::debug_log(&m[..p]);
+        // Diagnostic: log that we detected data.
+        let mut m = [0u8; 48];
+        let mut p = append_bytes(&mut m, 0, b"[SPY] flush pos=");
+        p = append_dec(&mut m, p, pos as u32);
+        crate::debug_log(&m[..p]);
 
-    // Append spy log to file (not truncate -- accumulates across flushes).
-    let buf = &*(&raw const SPY_BUF);
-    let fd = psp::sys::sceIoOpen(
-        b"ms0:/seplugins/mpeg_spy.txt\0".as_ptr(),
-        psp::sys::IoOpenFlags::APPEND
-            | psp::sys::IoOpenFlags::CREAT
-            | psp::sys::IoOpenFlags::WR_ONLY,
-        0o777,
-    );
-    if fd >= psp::sys::SceUid(0) {
-        psp::sys::sceIoWrite(fd, buf.as_ptr() as *const _, pos);
-        psp::sys::sceIoClose(fd);
-    }
+        // Append spy log to file (not truncate -- accumulates across flushes).
+        let buf = &*(&raw const SPY_BUF);
+        let fd = psp::sys::sceIoOpen(
+            b"ms0:/seplugins/mpeg_spy.txt\0".as_ptr(),
+            psp::sys::IoOpenFlags::APPEND
+                | psp::sys::IoOpenFlags::CREAT
+                | psp::sys::IoOpenFlags::WR_ONLY,
+            0o777,
+        );
+        if fd >= psp::sys::SceUid(0) {
+            psp::sys::sceIoWrite(fd, buf.as_ptr() as *const _, pos);
+            psp::sys::sceIoClose(fd);
+        }
 
-    // Reset buffer.
-    core::ptr::write_volatile(&raw mut SPY_POS, 0);
+        // Reset buffer.
+        core::ptr::write_volatile(&raw mut SPY_POS, 0);
 
-    // Dump modules on first flush only (avoid repeated large writes).
-    static mut MODULES_DUMPED: bool = false;
-    if !core::ptr::read_volatile(&raw const MODULES_DUMPED) {
-        core::ptr::write_volatile(&raw mut MODULES_DUMPED, true);
-        dump_all_modules_to_file();
+        // Dump modules on first flush only (avoid repeated large writes).
+        static mut MODULES_DUMPED: bool = false;
+        if !core::ptr::read_volatile(&raw const MODULES_DUMPED) {
+            core::ptr::write_volatile(&raw mut MODULES_DUMPED, true);
+            dump_all_modules_to_file();
+        }
     }
 }
 
 /// Dump all loaded modules (kernel + user) to a text file for comparison.
 unsafe fn dump_all_modules_to_file() {
-    let mut mod_ids = [psp::sys::SceUid(0); 128];
-    let mut count: i32 = 0;
-    let buf_bytes = 128 * core::mem::size_of::<psp::sys::SceUid>() as i32;
-    let ret = psp::sys::sceKernelGetModuleIdList(
-        mod_ids.as_mut_ptr(), buf_bytes, &mut count,
-    );
-    if ret < 0 || count <= 0 {
-        crate::debug_log(b"[SPY] no modules");
-        return;
-    }
-
-    let mut list = [0u8; 8192];
-    let mut lp = 0;
-
-    for i in 0..count as usize {
-        let mut info: psp::sys::SceKernelModuleInfo = core::mem::zeroed();
-        info.size = core::mem::size_of::<psp::sys::SceKernelModuleInfo>();
-        if psp::sys::sceKernelQueryModuleInfo(mod_ids[i], &mut info) < 0 {
-            continue;
+    // SAFETY: called only from the dump thread; the module-ID and module-info buffers are locals
+    // passed with their real sizes, and the output path is NUL-terminated.
+    unsafe {
+        let mut mod_ids = [psp::sys::SceUid(0); 128];
+        let mut count: i32 = 0;
+        let buf_bytes = 128 * core::mem::size_of::<psp::sys::SceUid>() as i32;
+        let ret = psp::sys::sceKernelGetModuleIdList(mod_ids.as_mut_ptr(), buf_bytes, &mut count);
+        if ret < 0 || count <= 0 {
+            crate::debug_log(b"[SPY] no modules");
+            return;
         }
-        let name_len = info.name.iter().position(|&b| b == 0)
-            .unwrap_or(info.name.len());
 
-        // Tag kernel vs user modules.
-        let tag = if info.text_addr >= 0x8800_0000 {
-            b"[K] "
-        } else if info.text_addr >= 0x0800_0000 {
-            b"[U] "
-        } else {
-            b"[?] "
-        };
+        let mut list = [0u8; 8192];
+        let mut lp = 0;
 
-        lp = append_bytes(&mut list, lp, tag);
-        lp = append_bytes(&mut list, lp, &info.name[..name_len]);
-        lp = append_bytes(&mut list, lp, b" @0x");
-        lp = append_hex(&mut list, lp, info.text_addr);
-        lp = append_bytes(&mut list, lp, b" t=");
-        lp = append_dec(&mut list, lp, info.text_size);
-        lp = append_bytes(&mut list, lp, b" d=");
-        lp = append_dec(&mut list, lp, info.data_size);
-        lp = append_bytes(&mut list, lp, b" attr=0x");
-        lp = append_hex(&mut list, lp, info.attribute as u32);
-        lp = append_bytes(&mut list, lp, b"\n");
+        for i in 0..count as usize {
+            let mut info: psp::sys::SceKernelModuleInfo = core::mem::zeroed();
+            info.size = core::mem::size_of::<psp::sys::SceKernelModuleInfo>();
+            if psp::sys::sceKernelQueryModuleInfo(mod_ids[i], &mut info) < 0 {
+                continue;
+            }
+            let name_len = info
+                .name
+                .iter()
+                .position(|&b| b == 0)
+                .unwrap_or(info.name.len());
+
+            // Tag kernel vs user modules.
+            let tag = if info.text_addr >= 0x8800_0000 {
+                b"[K] "
+            } else if info.text_addr >= 0x0800_0000 {
+                b"[U] "
+            } else {
+                b"[?] "
+            };
+
+            lp = append_bytes(&mut list, lp, tag);
+            lp = append_bytes(&mut list, lp, &info.name[..name_len]);
+            lp = append_bytes(&mut list, lp, b" @0x");
+            lp = append_hex(&mut list, lp, info.text_addr);
+            lp = append_bytes(&mut list, lp, b" t=");
+            lp = append_dec(&mut list, lp, info.text_size);
+            lp = append_bytes(&mut list, lp, b" d=");
+            lp = append_dec(&mut list, lp, info.data_size);
+            lp = append_bytes(&mut list, lp, b" attr=0x");
+            lp = append_hex(&mut list, lp, info.attribute as u32);
+            lp = append_bytes(&mut list, lp, b"\n");
+        }
+
+        lp = append_bytes(&mut list, lp, b"\nTotal: ");
+        lp = append_dec(&mut list, lp, count as u32);
+        lp = append_bytes(&mut list, lp, b" modules\n");
+
+        write_file(b"ms0:/seplugins/mpeg_spy_modules.txt\0", &list[..lp]);
+
+        let mut m = [0u8; 48];
+        let mut p = append_bytes(&mut m, 0, b"[SPY] dumped ");
+        p = append_dec(&mut m, p, count as u32);
+        p = append_bytes(&mut m, p, b" modules");
+        crate::debug_log(&m[..p]);
     }
-
-    lp = append_bytes(&mut list, lp, b"\nTotal: ");
-    lp = append_dec(&mut list, lp, count as u32);
-    lp = append_bytes(&mut list, lp, b" modules\n");
-
-    write_file(
-        b"ms0:/seplugins/mpeg_spy_modules.txt\0",
-        &list[..lp],
-    );
-
-    let mut m = [0u8; 48];
-    let mut p = append_bytes(&mut m, 0, b"[SPY] dumped ");
-    p = append_dec(&mut m, p, count as u32);
-    p = append_bytes(&mut m, p, b" modules");
-    crate::debug_log(&m[..p]);
 }
 
 // ---------------------------------------------------------------------------
@@ -990,223 +932,71 @@ unsafe fn dump_all_modules_to_file() {
 const PATCH_REQUEST: &[u8] = b"ms0:/PSP/GAME/OASISOS/.me_patch\0";
 const PATCH_DONE: &[u8] = b"ms0:/PSP/GAME/OASISOS/.me_patched\0";
 
-static PATCH_DONE_FLAG: core::sync::atomic::AtomicBool =
-    core::sync::atomic::AtomicBool::new(false);
+static PATCH_DONE_FLAG: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
 
 /// Check for patch request file and perform kernel stub patching.
 unsafe fn check_patch_request() {
-    if PATCH_DONE_FLAG.load(core::sync::atomic::Ordering::Relaxed) {
-        return;
-    }
+    // SAFETY: called only from the dump thread. Paths are NUL-terminated literals; function
+    // pointers come from find_function and are transmuted to the signature of the NID they were
+    // resolved for.
+    unsafe {
+        if PATCH_DONE_FLAG.load(core::sync::atomic::Ordering::Relaxed) {
+            return;
+        }
 
-    let fd = psp::sys::sceIoOpen(
-        PATCH_REQUEST.as_ptr(), psp::sys::IoOpenFlags::RD_ONLY, 0,
-    );
-    if fd < psp::sys::SceUid(0) {
-        return;
-    }
-    psp::sys::sceIoClose(fd);
-    psp::sys::sceIoRemove(PATCH_REQUEST.as_ptr());
+        let fd = psp::sys::sceIoOpen(PATCH_REQUEST.as_ptr(), psp::sys::IoOpenFlags::RD_ONLY, 0);
+        if fd < psp::sys::SceUid(0) {
+            return;
+        }
+        psp::sys::sceIoClose(fd);
+        psp::sys::sceIoRemove(PATCH_REQUEST.as_ptr());
 
-    crate::debug_log(b"[ME-PATCH] hooking sceMpegAvcDecode...");
+        crate::debug_log(b"[ME-PATCH] hooking sceMpegAvcDecode...");
 
-    // Find AvcDecode — try kernel driver first (sctrlHENPatchSyscall
-    // only works on kernel syscall table entries, not user-mode stubs).
-    let avc_ptr = psp::hook::find_function(
-        b"sceMpeg_driver\0".as_ptr(),
-        b"sceMpeg\0".as_ptr(),
-        0x0E3C2E9D,
-    ).or_else(|| psp::hook::find_function(
-        b"sceMpegVsh_library\0".as_ptr(),
-        b"sceMpeg\0".as_ptr(),
-        0x0E3C2E9D,
-    )).or_else(|| psp::hook::find_function(
-        b"sceMpeg_library\0".as_ptr(),
-        b"sceMpeg\0".as_ptr(),
-        0x0E3C2E9D,
-    ));
-    if let Some(ptr) = avc_ptr {
-        let mut m = [0u8; 64];
-        let mut p = append_bytes(&mut m, 0, b"[ME-PATCH] AvcDecode @0x");
-        p = append_hex(&mut m, p, ptr as u32);
-        crate::debug_log(&m[..p]);
+        // Find AvcDecode — try kernel driver first (sctrlHENPatchSyscall
+        // only works on kernel syscall table entries, not user-mode stubs).
+        let avc_ptr = psp::hook::find_function(
+            b"sceMpeg_driver\0".as_ptr(),
+            b"sceMpeg\0".as_ptr(),
+            0x0E3C2E9D,
+        )
+        .or_else(|| {
+            psp::hook::find_function(
+                b"sceMpegVsh_library\0".as_ptr(),
+                b"sceMpeg\0".as_ptr(),
+                0x0E3C2E9D,
+            )
+        })
+        .or_else(|| {
+            psp::hook::find_function(
+                b"sceMpeg_library\0".as_ptr(),
+                b"sceMpeg\0".as_ptr(),
+                0x0E3C2E9D,
+            )
+        });
+        if let Some(ptr) = avc_ptr {
+            let mut m = [0u8; 64];
+            let mut p = append_bytes(&mut m, 0, b"[ME-PATCH] AvcDecode @0x");
+            p = append_hex(&mut m, p, ptr as u32);
+            crate::debug_log(&m[..p]);
 
-        // Store original and hook the syscall.
-        crate::ORIGINAL_AVC_DECODE = ptr;
-        let ret = psp::sys::sctrlHENPatchSyscall(
-            ptr,
-            crate::hooked_avc_decode as *mut u8,
-        );
-        let ok = ret >= 0;
-        if ok {
-            crate::debug_log(b"[ME-PATCH] AvcDecode HOOKED!");
+            // Store original and hook the syscall.
+            crate::ORIGINAL_AVC_DECODE = ptr;
+            let ret = psp::sys::sctrlHENPatchSyscall(ptr, crate::hooked_avc_decode as *mut u8);
+            let ok = ret >= 0;
+            if ok {
+                crate::debug_log(b"[ME-PATCH] AvcDecode HOOKED!");
+            } else {
+                crate::debug_log(b"[ME-PATCH] hook failed");
+            }
+            write_done_file(ok);
         } else {
-            crate::debug_log(b"[ME-PATCH] hook failed");
+            crate::debug_log(b"[ME-PATCH] sceMpeg_library AvcDecode NOT found");
+            write_done_file(false);
         }
-        write_done_file(ok);
-    } else {
-        crate::debug_log(b"[ME-PATCH] sceMpeg_library AvcDecode NOT found");
-        write_done_file(false);
+
+        PATCH_DONE_FLAG.store(true, core::sync::atomic::Ordering::Release);
     }
-
-    PATCH_DONE_FLAG.store(true, core::sync::atomic::Ordering::Release);
-}
-
-/// Dump all user-space modules (0x08xxxxxx) for debugging.
-unsafe fn dump_user_modules() {
-    let mut mod_ids = [psp::sys::SceUid(0); 128];
-    let mut count: i32 = 0;
-    let buf_bytes = 128 * core::mem::size_of::<psp::sys::SceUid>() as i32;
-    let ret = psp::sys::sceKernelGetModuleIdList(
-        mod_ids.as_mut_ptr(), buf_bytes, &mut count,
-    );
-    if ret < 0 || count <= 0 { return; }
-
-    for i in 0..count as usize {
-        let mut info: psp::sys::SceKernelModuleInfo = core::mem::zeroed();
-        info.size = core::mem::size_of::<psp::sys::SceKernelModuleInfo>();
-        if psp::sys::sceKernelQueryModuleInfo(mod_ids[i], &mut info) < 0 {
-            continue;
-        }
-        // Only log user-space modules
-        if info.text_addr < 0x0800_0000 || info.text_addr >= 0x0C00_0000 {
-            continue;
-        }
-        let name_len = info.name.iter().position(|&b| b == 0)
-            .unwrap_or(info.name.len());
-        let mut msg = [0u8; 80];
-        let mut mp = append_bytes(&mut msg, 0, b"[ME-PATCH] user mod: ");
-        mp = append_bytes(&mut msg, mp, &info.name[..name_len]);
-        mp = append_bytes(&mut msg, mp, b" @0x");
-        mp = append_hex(&mut msg, mp, info.text_addr);
-        mp = append_bytes(&mut msg, mp, b" sz=");
-        mp = append_dec(&mut msg, mp, info.text_size);
-        crate::debug_log(&msg[..mp]);
-    }
-}
-
-/// Find the kernel sceAvcodec_wrapper module size.
-fn find_kernel_avcodec_size() -> u32 {
-    let mut mod_ids = [psp::sys::SceUid(0); 128];
-    let mut count: i32 = 0;
-    let buf_bytes = 128 * core::mem::size_of::<psp::sys::SceUid>() as i32;
-    let ret = unsafe {
-        psp::sys::sceKernelGetModuleIdList(
-            mod_ids.as_mut_ptr(), buf_bytes, &mut count,
-        )
-    };
-    if ret < 0 || count <= 0 { return 0; }
-    for i in 0..count as usize {
-        let mut info: psp::sys::SceKernelModuleInfo = unsafe { core::mem::zeroed() };
-        info.size = core::mem::size_of::<psp::sys::SceKernelModuleInfo>();
-        if unsafe { psp::sys::sceKernelQueryModuleInfo(mod_ids[i], &mut info) } < 0 {
-            continue;
-        }
-        let name_len = info.name.iter().position(|&b| b == 0).unwrap_or(info.name.len());
-        let name = &info.name[..name_len];
-        if contains_bytes(name, b"vcodec") && info.text_addr >= 0x8800_0000 {
-            return info.text_size + info.data_size;
-        }
-    }
-    0
-}
-
-/// Find the kernel sceAvcodec_wrapper module base address.
-fn find_kernel_avcodec() -> u32 {
-    let mut mod_ids = [psp::sys::SceUid(0); 128];
-    let mut count: i32 = 0;
-    let buf_bytes = 128 * core::mem::size_of::<psp::sys::SceUid>() as i32;
-
-    let ret = unsafe {
-        psp::sys::sceKernelGetModuleIdList(
-            mod_ids.as_mut_ptr(), buf_bytes, &mut count,
-        )
-    };
-    if ret < 0 || count <= 0 {
-        return 0;
-    }
-
-    for i in 0..count as usize {
-        let mut info: psp::sys::SceKernelModuleInfo = unsafe {
-            core::mem::zeroed()
-        };
-        info.size = core::mem::size_of::<psp::sys::SceKernelModuleInfo>();
-        let ret = unsafe {
-            psp::sys::sceKernelQueryModuleInfo(mod_ids[i], &mut info)
-        };
-        if ret < 0 { continue; }
-
-        let name_len = info.name.iter().position(|&b| b == 0)
-            .unwrap_or(info.name.len());
-        let name = &info.name[..name_len];
-
-        // Match "sceAvcodec_wrapper" (kernel module, addr >= 0x88000000).
-        if contains_bytes(name, b"vcodec") && info.text_addr >= 0x8800_0000 {
-            return info.text_addr;
-        }
-    }
-    0
-}
-
-/// Patch the 5 ME submission stubs in kernel sceAvcodec_wrapper.
-///
-/// Replaces J instructions (that jump to user-space sceMpeg) with
-/// J instructions to the real sceMeVideo_driver functions.
-///
-/// Returns true if all stubs were patched successfully.
-unsafe fn patch_kernel_stubs(base: u32) -> bool {
-    // Stub offsets and their target sceMeVideo_driver NIDs.
-    let stubs: [(u32, u32); 5] = [
-        (0x4414, 0xC441994C), // me_open → MeVideo::Init
-        (0x4424, 0x8768915D), // me_scan → MeVideo::ScanHeader
-        (0x4434, 0xE8CD3C75), // me_init → MeVideo::Init2
-        (0x4394, 0x6D68B223), // me_worker → MeVideo::Decode
-        (0x438c, 0x4D78330C), // me_wait → MeVideo::GetEdram
-    ];
-
-    let mut patched = 0u32;
-
-    for (offset, nid) in stubs {
-        let stub_addr = base + offset;
-
-        // Log current instruction at this address.
-        let current = core::ptr::read_volatile(stub_addr as *const u32);
-        let mut pre = [0u8; 64];
-        let mut pp = append_bytes(&mut pre, 0, b"[ME-PATCH] +0x");
-        pp = append_hex(&mut pre, pp, offset);
-        pp = append_bytes(&mut pre, pp, b" was=0x");
-        pp = append_hex(&mut pre, pp, current);
-        crate::debug_log(&pre[..pp]);
-
-        // Resolve the real ME function.
-        let me_fn = psp::hook::find_function(
-            b"sceMeCodecWrapper\0".as_ptr(),
-            b"sceMeVideo_driver\0".as_ptr(),
-            nid,
-        );
-
-        if let Some(target_ptr) = me_fn {
-            let target = target_ptr as u32;
-            let j_insn = 0x0800_0000 | ((target >> 2) & 0x03FF_FFFF);
-
-            // Write the J instruction over the stub.
-            core::ptr::write_volatile(stub_addr as *mut u32, j_insn);
-
-            // Flush caches.
-            psp::sys::sceKernelDcacheWritebackInvalidateRange(
-                stub_addr as *const core::ffi::c_void, 8,
-            );
-            psp::sys::sceKernelIcacheInvalidateRange(
-                stub_addr as *const core::ffi::c_void, 8,
-            );
-
-            patched += 1;
-        }
-    }
-
-    log_dec(b"[ME-PATCH] patched ", patched);
-    crate::debug_log(b"[ME-PATCH] done");
-    patched == 5
 }
 
 // ---------------------------------------------------------------------------
@@ -1217,156 +1007,156 @@ const VSH_LOAD_REQ: &[u8] = b"ms0:/PSP/GAME/OASISOS/.vsh_load\0";
 const VSH_REQ: &[u8] = b"ms0:/PSP/GAME/OASISOS/.vsh_req\0";
 const VSH_ADDRS: &[u8] = b"ms0:/PSP/GAME/OASISOS/.vsh_addrs\0";
 
-static VSH_LOAD_DONE: core::sync::atomic::AtomicBool =
-    core::sync::atomic::AtomicBool::new(false);
+static VSH_LOAD_DONE: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
 
 /// Load cooleyesBridge.prx as kernel module (PMPlayer prerequisite).
 /// Called once at dump thread startup.
-static BRIDGE_LOADED: core::sync::atomic::AtomicBool =
-    core::sync::atomic::AtomicBool::new(false);
+static BRIDGE_LOADED: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
 
 unsafe fn load_cooleyes_bridge() {
-    if BRIDGE_LOADED.load(core::sync::atomic::Ordering::Relaxed) {
-        return;
-    }
-    BRIDGE_LOADED.store(true, core::sync::atomic::Ordering::Release);
-
-    let paths: [&[u8]; 2] = [
-        b"ms0:/PSP/GAME/OASISOS/cooleyesBridge.prx\0",
-        b"ms0:/PSP/GAME/UoPMPlayer_660/cooleyesBridge.prx\0",
-    ];
-
-    for path in &paths {
-        let mod_id = psp::sys::sceKernelLoadModule(
-            path.as_ptr(), 0, core::ptr::null_mut(),
-        );
-        if mod_id < psp::sys::SceUid(0) {
-            continue;
-        }
-        let mut status: i32 = 0;
-        let ret = psp::sys::sceKernelStartModule(
-            mod_id, 0, core::ptr::null_mut(),
-            &mut status, core::ptr::null_mut(),
-        );
-        let mut m = [0u8; 64];
-        let mut p = append_bytes(&mut m, 0, b"[BRIDGE] start=0x");
-        p = append_hex(&mut m, p, ret as u32);
-        crate::debug_log(&m[..p]);
-        if ret >= 0 {
-            crate::debug_log(b"[BRIDGE] cooleyesBridge loaded OK");
+    // SAFETY: called once at dump-thread startup; the module path is a NUL-terminated literal and
+    // the load / start calls get valid (or null) out-pointers.
+    unsafe {
+        if BRIDGE_LOADED.load(core::sync::atomic::Ordering::Relaxed) {
             return;
         }
-        psp::sys::sceKernelUnloadModule(mod_id);
+        BRIDGE_LOADED.store(true, core::sync::atomic::Ordering::Release);
+
+        let paths: [&[u8]; 2] = [
+            b"ms0:/PSP/GAME/OASISOS/cooleyesBridge.prx\0",
+            b"ms0:/PSP/GAME/UoPMPlayer_660/cooleyesBridge.prx\0",
+        ];
+
+        for path in &paths {
+            let mod_id = psp::sys::sceKernelLoadModule(path.as_ptr(), 0, core::ptr::null_mut());
+            if mod_id < psp::sys::SceUid(0) {
+                continue;
+            }
+            let mut status: i32 = 0;
+            let ret = psp::sys::sceKernelStartModule(
+                mod_id,
+                0,
+                core::ptr::null_mut(),
+                &mut status,
+                core::ptr::null_mut(),
+            );
+            let mut m = [0u8; 64];
+            let mut p = append_bytes(&mut m, 0, b"[BRIDGE] start=0x");
+            p = append_hex(&mut m, p, ret as u32);
+            crate::debug_log(&m[..p]);
+            if ret >= 0 {
+                crate::debug_log(b"[BRIDGE] cooleyesBridge loaded OK");
+                return;
+            }
+            psp::sys::sceKernelUnloadModule(mod_id);
+        }
+        crate::debug_log(b"[BRIDGE] cooleyesBridge not found");
     }
-    crate::debug_log(b"[BRIDGE] cooleyesBridge not found");
 }
 
 /// Check for VSH syscall resolution request from EBOOT.
 /// Reads syscall numbers from the VSH library's user-mode stubs (0x0A0A*)
 /// and writes them so the EBOOT can make direct syscalls.
 unsafe fn check_vsh_load_request() {
-    if VSH_LOAD_DONE.load(core::sync::atomic::Ordering::Relaxed) {
-        return;
-    }
+    // SAFETY: called only from the dump thread; the stub addresses read come from the loaded
+    // module's info and are read with read_volatile, and file paths are NUL-terminated.
+    unsafe {
+        if VSH_LOAD_DONE.load(core::sync::atomic::Ordering::Relaxed) {
+            return;
+        }
 
-    let fd = psp::sys::sceIoOpen(
-        VSH_LOAD_REQ.as_ptr(), psp::sys::IoOpenFlags::RD_ONLY, 0,
-    );
-    if fd < psp::sys::SceUid(0) {
-        return;
-    }
-    psp::sys::sceIoClose(fd);
-    psp::sys::sceIoRemove(VSH_LOAD_REQ.as_ptr());
+        let fd = psp::sys::sceIoOpen(VSH_LOAD_REQ.as_ptr(), psp::sys::IoOpenFlags::RD_ONLY, 0);
+        if fd < psp::sys::SceUid(0) {
+            return;
+        }
+        psp::sys::sceIoClose(fd);
+        psp::sys::sceIoRemove(VSH_LOAD_REQ.as_ptr());
 
-    crate::debug_log(b"[VSH-SC] extracting syscall numbers...");
+        crate::debug_log(b"[VSH-SC] extracting syscall numbers...");
 
-    // Resolve VSH function addresses (in VSH process space 0x0A0A*).
-    let nids: [u32; 8] = [
-        0xD8C5F121, 0x606A4649, 0x167AFD9E, 0xA780CF7E,
-        0xCEB870B1, 0x11F95CF1, 0x0E3C2E9D, 0xC132E22F,
-    ];
+        // Resolve VSH function addresses (in VSH process space 0x0A0A*).
+        let nids: [u32; 8] = [
+            0xD8C5F121, 0x606A4649, 0x167AFD9E, 0xA780CF7E, 0xCEB870B1, 0x11F95CF1, 0x0E3C2E9D,
+            0xC132E22F,
+        ];
 
-    // Output: 8 x u32 syscall numbers (or 0 if not found).
-    let mut syscalls = [0u32; 8];
-    let mut resolved = 0u32;
+        // Output: 8 x u32 syscall numbers (or 0 if not found).
+        let mut syscalls = [0u32; 8];
+        let mut resolved = 0u32;
 
-    for (i, &nid) in nids.iter().enumerate() {
-        let ptr = psp::hook::find_function(
-            b"sceMpegVsh_library\0".as_ptr(),
-            b"sceMpeg\0".as_ptr(),
-            nid,
-        );
-        if let Some(fn_ptr) = ptr {
-            // Read the syscall stub. PSP user-mode stubs look like:
-            //   jr $ra        (03E00008)
-            //   syscall N     (0000000C | (N << 6))
-            // OR:
-            //   nop           (00000000)
-            //   syscall N     (0000000C | (N << 6))
-            // The syscall instruction is at offset +4.
-            let stub_addr = fn_ptr as u32;
-            let insn0 = core::ptr::read_volatile(stub_addr as *const u32);
-            let insn1 = core::ptr::read_volatile((stub_addr + 4) as *const u32);
+        for (i, &nid) in nids.iter().enumerate() {
+            let ptr = psp::hook::find_function(
+                b"sceMpegVsh_library\0".as_ptr(),
+                b"sceMpeg\0".as_ptr(),
+                nid,
+            );
+            if let Some(fn_ptr) = ptr {
+                // Read the syscall stub. PSP user-mode stubs look like:
+                //   jr $ra        (03E00008)
+                //   syscall N     (0000000C | (N << 6))
+                // OR:
+                //   nop           (00000000)
+                //   syscall N     (0000000C | (N << 6))
+                // The syscall instruction is at offset +4.
+                let stub_addr = fn_ptr as u32;
+                let insn0 = core::ptr::read_volatile(stub_addr as *const u32);
+                let insn1 = core::ptr::read_volatile((stub_addr + 4) as *const u32);
 
-            // Extract syscall number from whichever instruction is the syscall.
-            let sc_num = if (insn1 & 0x3F) == 0x0C {
-                // insn1 is syscall
-                (insn1 >> 6) & 0xFFFFF
-            } else if (insn0 & 0x3F) == 0x0C {
-                // insn0 is syscall
-                (insn0 >> 6) & 0xFFFFF
-            } else {
-                0
-            };
+                // Extract syscall number from whichever instruction is the syscall.
+                let sc_num = if (insn1 & 0x3F) == 0x0C {
+                    // insn1 is syscall
+                    (insn1 >> 6) & 0xFFFFF
+                } else if (insn0 & 0x3F) == 0x0C {
+                    // insn0 is syscall
+                    (insn0 >> 6) & 0xFFFFF
+                } else {
+                    0
+                };
 
-            if sc_num != 0 {
-                syscalls[i] = sc_num;
-                resolved += 1;
+                if sc_num != 0 {
+                    syscalls[i] = sc_num;
+                    resolved += 1;
 
-                let mut m = [0u8; 80];
-                let mut p = append_bytes(&mut m, 0, b"[VSH-SC] [");
-                p = append_dec(&mut m, p, i as u32);
-                p = append_bytes(&mut m, p, b"] @0x");
-                p = append_hex(&mut m, p, stub_addr);
-                p = append_bytes(&mut m, p, b" insn=0x");
-                p = append_hex(&mut m, p, insn0);
-                p = append_bytes(&mut m, p, b",0x");
-                p = append_hex(&mut m, p, insn1);
-                p = append_bytes(&mut m, p, b" sc=");
-                p = append_dec(&mut m, p, sc_num);
-                crate::debug_log(&m[..p]);
+                    let mut m = [0u8; 80];
+                    let mut p = append_bytes(&mut m, 0, b"[VSH-SC] [");
+                    p = append_dec(&mut m, p, i as u32);
+                    p = append_bytes(&mut m, p, b"] @0x");
+                    p = append_hex(&mut m, p, stub_addr);
+                    p = append_bytes(&mut m, p, b" insn=0x");
+                    p = append_hex(&mut m, p, insn0);
+                    p = append_bytes(&mut m, p, b",0x");
+                    p = append_hex(&mut m, p, insn1);
+                    p = append_bytes(&mut m, p, b" sc=");
+                    p = append_dec(&mut m, p, sc_num);
+                    crate::debug_log(&m[..p]);
+                }
             }
         }
-    }
 
-    let mut m = [0u8; 48];
-    let mut p = append_bytes(&mut m, 0, b"[VSH-SC] resolved ");
-    p = append_dec(&mut m, p, resolved);
-    p = append_bytes(&mut m, p, b"/8 syscalls");
-    crate::debug_log(&m[..p]);
+        let mut m = [0u8; 48];
+        let mut p = append_bytes(&mut m, 0, b"[VSH-SC] resolved ");
+        p = append_dec(&mut m, p, resolved);
+        p = append_bytes(&mut m, p, b"/8 syscalls");
+        crate::debug_log(&m[..p]);
 
-    // Write syscall numbers to file (8 x u32 = 32 bytes).
-    let out_fd = psp::sys::sceIoOpen(
-        VSH_ADDRS.as_ptr(),
-        psp::sys::IoOpenFlags::WR_ONLY
-            | psp::sys::IoOpenFlags::CREAT
-            | psp::sys::IoOpenFlags::TRUNC,
-        0o777,
-    );
-    if out_fd >= psp::sys::SceUid(0) {
-        psp::sys::sceIoWrite(
-            out_fd,
-            syscalls.as_ptr() as *const core::ffi::c_void,
-            32,
+        // Write syscall numbers to file (8 x u32 = 32 bytes).
+        let out_fd = psp::sys::sceIoOpen(
+            VSH_ADDRS.as_ptr(),
+            psp::sys::IoOpenFlags::WR_ONLY
+                | psp::sys::IoOpenFlags::CREAT
+                | psp::sys::IoOpenFlags::TRUNC,
+            0o777,
         );
-        psp::sys::sceIoClose(out_fd);
-    }
+        if out_fd >= psp::sys::SceUid(0) {
+            psp::sys::sceIoWrite(out_fd, syscalls.as_ptr() as *const core::ffi::c_void, 32);
+            psp::sys::sceIoClose(out_fd);
+        }
 
-    VSH_LOAD_DONE.store(true, core::sync::atomic::Ordering::Release);
+        VSH_LOAD_DONE.store(true, core::sync::atomic::Ordering::Release);
+    }
 }
 
-static VSH_ADDRS_DONE: core::sync::atomic::AtomicBool =
-    core::sync::atomic::AtomicBool::new(false);
+static VSH_ADDRS_DONE: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
 
 /// Check for VSH address request from EBOOT and resolve sceMpegVsh_library NIDs.
 ///
@@ -1375,336 +1165,268 @@ static VSH_ADDRS_DONE: core::sync::atomic::AtomicBool =
 /// function addresses to `.vsh_addrs` (24 x u32 = 96 bytes).
 /// NID order matches `psp::sys::mpeg_stubs::NIDS`.
 unsafe fn check_vsh_addr_request() {
-    if VSH_ADDRS_DONE.load(core::sync::atomic::Ordering::Relaxed) {
-        return;
-    }
-
-    let fd = psp::sys::sceIoOpen(
-        VSH_REQ.as_ptr(), psp::sys::IoOpenFlags::RD_ONLY, 0,
-    );
-    if fd < psp::sys::SceUid(0) {
-        return;
-    }
-    psp::sys::sceIoClose(fd);
-    psp::sys::sceIoRemove(VSH_REQ.as_ptr());
-
-    crate::debug_log(b"[VSH-ADDR] resolving 24 sceMpegVsh NIDs...");
-
-    // All 24 NIDs — same order as psp::sys::mpeg_stubs::NIDS.
-    let nids: [u32; 24] = [
-        0x682A619B, // 0:  sceMpegInit
-        0x874624D6, // 1:  sceMpegFinish
-        0xC132E22F, // 2:  sceMpegQueryMemSize
-        0xD8C5F121, // 3:  sceMpegCreate
-        0x606A4649, // 4:  sceMpegDelete
-        0x42560F23, // 5:  sceMpegRegistStream
-        0x591A4AA2, // 6:  sceMpegUnRegistStream
-        0xA780CF7E, // 7:  sceMpegMallocAvcEsBuf
-        0xCEB870B1, // 8:  sceMpegFreeAvcEsBuf
-        0x167AFD9E, // 9:  sceMpegInitAu
-        0xFE246728, // 10: sceMpegGetAvcAu
-        0xA11C7026, // 11: sceMpegAvcDecodeMode
-        0x0E3C2E9D, // 12: sceMpegAvcDecode
-        0x740FCCD1, // 13: sceMpegAvcDecodeStop
-        0x11F95CF1, // 14: sceMpegGetAvcNalAu
-        0xCF3547A2, // 15: sceMpegAvcDecodeDetail2
-        0x707B7629, // 16: sceMpegFlushAllStream
-        0xD7A29F46, // 17: sceMpegRingbufferQueryMemSize
-        0x37295ED8, // 18: sceMpegRingbufferConstruct
-        0x13407F13, // 19: sceMpegRingbufferDestruct
-        0xB5F6DC87, // 20: sceMpegRingbufferAvailableSize
-        0xB240A59E, // 21: sceMpegRingbufferPut
-        0x21FF80E4, // 22: sceMpegQueryStreamOffset
-        0x611E9E11, // 23: sceMpegQueryStreamSize
-    ];
-
-    let mut addrs = [0u32; 24];
-    let mut resolved = 0u32;
-
-    for (i, &nid) in nids.iter().enumerate() {
-        let ptr = psp::hook::find_function(
-            b"sceMpegVsh_library\0".as_ptr(),
-            b"sceMpeg\0".as_ptr(),
-            nid,
-        );
-        if let Some(p) = ptr {
-            addrs[i] = p as u32;
-            resolved += 1;
+    // SAFETY: called only from the dump thread; NIDs are resolved with find_function and the
+    // 96-byte address table is a local array written with its real size.
+    unsafe {
+        if VSH_ADDRS_DONE.load(core::sync::atomic::Ordering::Relaxed) {
+            return;
         }
-    }
 
-    let mut m = [0u8; 48];
-    let mut p = append_bytes(&mut m, 0, b"[VSH-ADDR] resolved ");
-    p = append_dec(&mut m, p, resolved);
-    p = append_bytes(&mut m, p, b"/24");
-    crate::debug_log(&m[..p]);
+        let fd = psp::sys::sceIoOpen(VSH_REQ.as_ptr(), psp::sys::IoOpenFlags::RD_ONLY, 0);
+        if fd < psp::sys::SceUid(0) {
+            return;
+        }
+        psp::sys::sceIoClose(fd);
+        psp::sys::sceIoRemove(VSH_REQ.as_ptr());
 
-    // Write addresses to dedicated file (24 x u32 = 96 bytes, LE).
-    // Uses ".mpeg_fns" NOT ".vsh_addrs" to avoid conflict with boot-time
-    // syscall extraction that also writes to ".vsh_addrs".
-    let out_fd = psp::sys::sceIoOpen(
-        b"ms0:/PSP/GAME/OASISOS/.mpeg_fns\0".as_ptr(),
-        psp::sys::IoOpenFlags::WR_ONLY
-            | psp::sys::IoOpenFlags::CREAT
-            | psp::sys::IoOpenFlags::TRUNC,
-        0o777,
-    );
-    if out_fd >= psp::sys::SceUid(0) {
-        psp::sys::sceIoWrite(
-            out_fd,
-            addrs.as_ptr() as *const core::ffi::c_void,
-            96, // 24 * 4
+        crate::debug_log(b"[VSH-ADDR] resolving 24 sceMpegVsh NIDs...");
+
+        // All 24 NIDs — same order as psp::sys::mpeg_stubs::NIDS.
+        let nids: [u32; 24] = [
+            0x682A619B, // 0:  sceMpegInit
+            0x874624D6, // 1:  sceMpegFinish
+            0xC132E22F, // 2:  sceMpegQueryMemSize
+            0xD8C5F121, // 3:  sceMpegCreate
+            0x606A4649, // 4:  sceMpegDelete
+            0x42560F23, // 5:  sceMpegRegistStream
+            0x591A4AA2, // 6:  sceMpegUnRegistStream
+            0xA780CF7E, // 7:  sceMpegMallocAvcEsBuf
+            0xCEB870B1, // 8:  sceMpegFreeAvcEsBuf
+            0x167AFD9E, // 9:  sceMpegInitAu
+            0xFE246728, // 10: sceMpegGetAvcAu
+            0xA11C7026, // 11: sceMpegAvcDecodeMode
+            0x0E3C2E9D, // 12: sceMpegAvcDecode
+            0x740FCCD1, // 13: sceMpegAvcDecodeStop
+            0x11F95CF1, // 14: sceMpegGetAvcNalAu
+            0xCF3547A2, // 15: sceMpegAvcDecodeDetail2
+            0x707B7629, // 16: sceMpegFlushAllStream
+            0xD7A29F46, // 17: sceMpegRingbufferQueryMemSize
+            0x37295ED8, // 18: sceMpegRingbufferConstruct
+            0x13407F13, // 19: sceMpegRingbufferDestruct
+            0xB5F6DC87, // 20: sceMpegRingbufferAvailableSize
+            0xB240A59E, // 21: sceMpegRingbufferPut
+            0x21FF80E4, // 22: sceMpegQueryStreamOffset
+            0x611E9E11, // 23: sceMpegQueryStreamSize
+        ];
+
+        let mut addrs = [0u32; 24];
+        let mut resolved = 0u32;
+
+        for (i, &nid) in nids.iter().enumerate() {
+            let ptr = psp::hook::find_function(
+                b"sceMpegVsh_library\0".as_ptr(),
+                b"sceMpeg\0".as_ptr(),
+                nid,
+            );
+            if let Some(p) = ptr {
+                addrs[i] = p as u32;
+                resolved += 1;
+            }
+        }
+
+        let mut m = [0u8; 48];
+        let mut p = append_bytes(&mut m, 0, b"[VSH-ADDR] resolved ");
+        p = append_dec(&mut m, p, resolved);
+        p = append_bytes(&mut m, p, b"/24");
+        crate::debug_log(&m[..p]);
+
+        // Write addresses to dedicated file (24 x u32 = 96 bytes, LE).
+        // Uses ".mpeg_fns" NOT ".vsh_addrs" to avoid conflict with boot-time
+        // syscall extraction that also writes to ".vsh_addrs".
+        let out_fd = psp::sys::sceIoOpen(
+            b"ms0:/PSP/GAME/OASISOS/.mpeg_fns\0".as_ptr(),
+            psp::sys::IoOpenFlags::WR_ONLY
+                | psp::sys::IoOpenFlags::CREAT
+                | psp::sys::IoOpenFlags::TRUNC,
+            0o777,
         );
-        psp::sys::sceIoClose(out_fd);
-        crate::debug_log(b"[VSH-ADDR] 96 bytes written");
-    }
+        if out_fd >= psp::sys::SceUid(0) {
+            psp::sys::sceIoWrite(
+                out_fd,
+                addrs.as_ptr() as *const core::ffi::c_void,
+                96, // 24 * 4
+            );
+            psp::sys::sceIoClose(out_fd);
+            crate::debug_log(b"[VSH-ADDR] 96 bytes written");
+        }
 
-    VSH_ADDRS_DONE.store(true, core::sync::atomic::Ordering::Release);
+        VSH_ADDRS_DONE.store(true, core::sync::atomic::Ordering::Release);
+    }
 }
 
 /// Write the done file (EBOOT polls for this).
 unsafe fn write_done_file(success: bool) {
-    let fd = psp::sys::sceIoOpen(
-        PATCH_DONE.as_ptr(),
-        psp::sys::IoOpenFlags::WR_ONLY
-            | psp::sys::IoOpenFlags::CREAT
-            | psp::sys::IoOpenFlags::TRUNC,
-        0o777,
-    );
-    if fd >= psp::sys::SceUid(0) {
-        let msg: &[u8] = if success { b"OK" } else { b"FAIL" };
-        psp::sys::sceIoWrite(fd, msg.as_ptr() as *const _, msg.len());
-        psp::sys::sceIoClose(fd);
+    // SAFETY: the path is a NUL-terminated literal and the written buffer is a local slice passed
+    // with its real length.
+    unsafe {
+        let fd = psp::sys::sceIoOpen(
+            PATCH_DONE.as_ptr(),
+            psp::sys::IoOpenFlags::WR_ONLY
+                | psp::sys::IoOpenFlags::CREAT
+                | psp::sys::IoOpenFlags::TRUNC,
+            0o777,
+        );
+        if fd >= psp::sys::SceUid(0) {
+            let msg: &[u8] = if success { b"OK" } else { b"FAIL" };
+            psp::sys::sceIoWrite(fd, msg.as_ptr() as *const _, msg.len());
+            psp::sys::sceIoClose(fd);
+        }
     }
 }
 
 // ---------------------------------------------------------------------------
-// Kernel-mode child module load test
+// Kernel module dumps
 // ---------------------------------------------------------------------------
-
-static KERNEL_LOAD_DONE: core::sync::atomic::AtomicBool =
-    core::sync::atomic::AtomicBool::new(false);
-
-/// Check for kernel-mode module load test trigger file.
-/// EBOOT creates `.kload_test`, PRX loads+starts modules from kernel context.
-unsafe fn check_kernel_load_test() {
-    if KERNEL_LOAD_DONE.load(core::sync::atomic::Ordering::Relaxed) {
-        return;
-    }
-
-    let trigger = b"ms0:/PSP/GAME/OASISOS/.kload_test\0";
-    let fd = psp::sys::sceIoOpen(trigger.as_ptr(), psp::sys::IoOpenFlags::RD_ONLY, 0);
-    if fd < psp::sys::SceUid(0) {
-        return;
-    }
-    psp::sys::sceIoClose(fd);
-    psp::sys::sceIoRemove(trigger.as_ptr());
-    KERNEL_LOAD_DONE.store(true, core::sync::atomic::Ordering::Relaxed);
-
-    crate::debug_log(b"[KLOAD] patching kernel linking wrapper");
-
-    // Patch the sceKernelLinkLibraryEntriesWithModule wrapper at 0x8805e5e8.
-    // At 0x8805e620: "beq $a2, $zero, 0x8805e658" returns 0x800200D3 when
-    // stubSize (a2) is 0. We NOP this check to allow modules with 0 imports.
-    // Also NOP the delay slot instruction at 0x8805e624.
-    let patch_addr1 = 0x8805E620 as *mut u32;
-    let patch_addr2 = 0x8805E624 as *mut u32;
-
-    let old1 = core::ptr::read_volatile(patch_addr1);
-    let old2 = core::ptr::read_volatile(patch_addr2);
-    let mut m = [0u8; 80];
-    let mut p = append_bytes(&mut m, 0, b"[KLOAD] old @0x8805E620=0x");
-    p = append_hex(&mut m, p, old1);
-    p = append_bytes(&mut m, p, b" @0x8805E624=0x");
-    p = append_hex(&mut m, p, old2);
-    crate::debug_log(&m[..p]);
-
-    // NOP both instructions
-    core::ptr::write_volatile(patch_addr1, 0x00000000u32); // nop
-    // DON'T nop the delay slot — it sets a3 = (K1<0)?1:0 which is needed later
-    // Just nop the branch itself
-
-    crate::debug_log(b"[KLOAD] patched beq $a2,$zero to NOP");
-
-    // Flush caches to ensure patch takes effect
-    psp::sys::sceKernelDcacheWritebackInvalidateAll();
-    psp::sys::sceKernelIcacheInvalidateAll();
-
-    // Read module ID from .kload_modid (EBOOT writes u32 module ID)
-    let fd = psp::sys::sceIoOpen(
-        b"ms0:/PSP/GAME/OASISOS/.kload_modid\0".as_ptr(),
-        psp::sys::IoOpenFlags::RD_ONLY, 0,
-    );
-    if fd < psp::sys::SceUid(0) {
-        crate::debug_log(b"[KLOAD] no .kload_modid file");
-        return;
-    }
-    let mut mod_id_bytes = [0u8; 4];
-    psp::sys::sceIoRead(fd, mod_id_bytes.as_mut_ptr() as *mut _, 4);
-    psp::sys::sceIoClose(fd);
-    psp::sys::sceIoRemove(b"ms0:/PSP/GAME/OASISOS/.kload_modid\0".as_ptr());
-
-    let mod_id_val = u32::from_le_bytes(mod_id_bytes);
-    let mod_id = psp::sys::SceUid(mod_id_val as i32);
-
-    let mut msg = [0u8; 60];
-    let mut p = append_bytes(&mut msg, 0, b"[KLOAD] mod_id=0x");
-    p = append_hex(&mut msg, p, mod_id_val);
-    crate::debug_log(&msg[..p]);
-
-    // The kernel patch (NOP at 0x8805E620) should now allow child module start.
-    // The EBOOT does sceKernelStartModule directly — no need to do it here.
-
-    // Write empty result file to signal completion
-    let result_fd = psp::sys::sceIoOpen(
-        b"ms0:/PSP/GAME/OASISOS/.kload_result\0".as_ptr(),
-        psp::sys::IoOpenFlags::CREAT | psp::sys::IoOpenFlags::WR_ONLY | psp::sys::IoOpenFlags::TRUNC,
-        0o777,
-    );
-    if result_fd >= psp::sys::SceUid(0) {
-        psp::sys::sceIoWrite(result_fd, b"DONE".as_ptr() as *const _, 4);
-        psp::sys::sceIoClose(result_fd);
-    }
-
-    crate::debug_log(b"[KLOAD] test complete");
-}
 
 /// Dump a kernel module's text+data segments to a file for Ghidra analysis.
 /// `mod_name` must be null-terminated. `out_path` must be null-terminated.
 #[allow(dead_code)]
 unsafe fn dump_kernel_module(mod_name: &[u8], out_path: &[u8]) {
-    // Get list of all loaded module IDs
-    let mut ids = [psp::sys::SceUid(0); 256];
-    let mut count: i32 = 0;
-    let ret = psp::sys::sceKernelGetModuleIdList(
-        ids.as_mut_ptr(), 256, &mut count,
-    );
-    if ret < 0 {
-        let mut m = [0u8; 60];
-        let mut p = append_bytes(&mut m, 0, b"[KDUMP] GetModuleIdList err=0x");
-        p = append_hex(&mut m, p, ret as u32);
-        crate::debug_log(&m[..p]);
-        return;
-    }
-
-    let mut m = [0u8; 60];
-    let mut p = append_bytes(&mut m, 0, b"[KDUMP] ");
-    p = append_dec(&mut m, p, count as u32);
-    p = append_bytes(&mut m, p, b" modules loaded, searching for ");
-    // Append module name (without null terminator)
-    let name_len = mod_name.iter().position(|&b| b == 0).unwrap_or(mod_name.len());
-    p = append_bytes(&mut m, p, &mod_name[..name_len]);
-    crate::debug_log(&m[..p]);
-
-    // Search for the target module
-    let mut found_id = psp::sys::SceUid(-1);
-    let mut info: psp::sys::SceKernelModuleInfo = core::mem::zeroed();
-
-    for i in 0..(count as usize).min(256) {
-        info = core::mem::zeroed();
-        info.size = core::mem::size_of::<psp::sys::SceKernelModuleInfo>();
-        let ret = psp::sys::sceKernelQueryModuleInfo(ids[i], &mut info);
+    // SAFETY: the caller passes NUL-terminated `mod_name` / `out_path` (see above); the segment
+    // ranges come from sceKernelQueryModuleInfo for a loaded kernel module, so they are mapped
+    // while it is read.
+    unsafe {
+        // Get list of all loaded module IDs
+        let mut ids = [psp::sys::SceUid(0); 256];
+        let mut count: i32 = 0;
+        let ret = psp::sys::sceKernelGetModuleIdList(ids.as_mut_ptr(), 256, &mut count);
         if ret < 0 {
-            continue;
+            let mut m = [0u8; 60];
+            let mut p = append_bytes(&mut m, 0, b"[KDUMP] GetModuleIdList err=0x");
+            p = append_hex(&mut m, p, ret as u32);
+            crate::debug_log(&m[..p]);
+            return;
         }
 
-        // Compare name (info.name is [u8; 28])
-        let mut matches = true;
-        for j in 0..name_len {
-            if j >= 28 || info.name[j] != mod_name[j] {
+        let mut m = [0u8; 60];
+        let mut p = append_bytes(&mut m, 0, b"[KDUMP] ");
+        p = append_dec(&mut m, p, count as u32);
+        p = append_bytes(&mut m, p, b" modules loaded, searching for ");
+        // Append module name (without null terminator)
+        let name_len = mod_name
+            .iter()
+            .position(|&b| b == 0)
+            .unwrap_or(mod_name.len());
+        p = append_bytes(&mut m, p, &mod_name[..name_len]);
+        crate::debug_log(&m[..p]);
+
+        // Search for the target module
+        let mut found_id = psp::sys::SceUid(-1);
+        let mut info: psp::sys::SceKernelModuleInfo = core::mem::zeroed();
+
+        for i in 0..(count as usize).min(256) {
+            info = core::mem::zeroed();
+            info.size = core::mem::size_of::<psp::sys::SceKernelModuleInfo>();
+            let ret = psp::sys::sceKernelQueryModuleInfo(ids[i], &mut info);
+            if ret < 0 {
+                continue;
+            }
+
+            // Compare name (info.name is [u8; 28])
+            let mut matches = true;
+            for j in 0..name_len {
+                if j >= 28 || info.name[j] != mod_name[j] {
+                    matches = false;
+                    break;
+                }
+            }
+            // Also check null terminator
+            if matches && name_len < 28 && info.name[name_len] != 0 {
                 matches = false;
+            }
+
+            if matches {
+                found_id = ids[i];
                 break;
             }
         }
-        // Also check null terminator
-        if matches && name_len < 28 && info.name[name_len] != 0 {
-            matches = false;
+
+        if found_id < psp::sys::SceUid(0) {
+            let mut m = [0u8; 60];
+            let mut p = append_bytes(&mut m, 0, b"[KDUMP] module not found: ");
+            p = append_bytes(&mut m, p, &mod_name[..name_len]);
+            crate::debug_log(&m[..p]);
+            return;
         }
 
-        if matches {
-            found_id = ids[i];
-            break;
-        }
-    }
+        // Log module info
+        let text_addr = info.text_addr;
+        let text_size = info.text_size;
+        let data_size = info.data_size;
+        let total_size = text_size + data_size;
+        let seg0_addr = info.segment_addr[0] as u32;
+        let seg0_size = info.segment_size[0] as u32;
 
-    if found_id < psp::sys::SceUid(0) {
-        let mut m = [0u8; 60];
-        let mut p = append_bytes(&mut m, 0, b"[KDUMP] module not found: ");
-        p = append_bytes(&mut m, p, &mod_name[..name_len]);
+        let mut m = [0u8; 120];
+        let mut p = append_bytes(&mut m, 0, b"[KDUMP] found! text=0x");
+        p = append_hex(&mut m, p, text_addr);
+        p = append_bytes(&mut m, p, b" tsize=0x");
+        p = append_hex(&mut m, p, text_size);
+        p = append_bytes(&mut m, p, b" dsize=0x");
+        p = append_hex(&mut m, p, data_size);
+        p = append_bytes(&mut m, p, b" seg0=0x");
+        p = append_hex(&mut m, p, seg0_addr);
+        p = append_bytes(&mut m, p, b"+0x");
+        p = append_hex(&mut m, p, seg0_size);
         crate::debug_log(&m[..p]);
-        return;
-    }
 
-    // Log module info
-    let text_addr = info.text_addr;
-    let text_size = info.text_size;
-    let data_size = info.data_size;
-    let total_size = text_size + data_size;
-    let seg0_addr = info.segment_addr[0] as u32;
-    let seg0_size = info.segment_size[0] as u32;
+        // Use the larger of (text+data) or seg0_size for dump
+        let dump_size = if seg0_size > total_size {
+            seg0_size
+        } else {
+            total_size
+        };
+        let dump_addr = if seg0_addr != 0 { seg0_addr } else { text_addr };
 
-    let mut m = [0u8; 120];
-    let mut p = append_bytes(&mut m, 0, b"[KDUMP] found! text=0x");
-    p = append_hex(&mut m, p, text_addr);
-    p = append_bytes(&mut m, p, b" tsize=0x");
-    p = append_hex(&mut m, p, text_size);
-    p = append_bytes(&mut m, p, b" dsize=0x");
-    p = append_hex(&mut m, p, data_size);
-    p = append_bytes(&mut m, p, b" seg0=0x");
-    p = append_hex(&mut m, p, seg0_addr);
-    p = append_bytes(&mut m, p, b"+0x");
-    p = append_hex(&mut m, p, seg0_size);
-    crate::debug_log(&m[..p]);
-
-    // Use the larger of (text+data) or seg0_size for dump
-    let dump_size = if seg0_size > total_size { seg0_size } else { total_size };
-    let dump_addr = if seg0_addr != 0 { seg0_addr } else { text_addr };
-
-    if dump_size == 0 || dump_size > 0x100000 {
-        crate::debug_log(b"[KDUMP] invalid size, skipping");
-        return;
-    }
-
-    // Write raw memory to file
-    let fd = psp::sys::sceIoOpen(
-        out_path.as_ptr(),
-        psp::sys::IoOpenFlags::CREAT | psp::sys::IoOpenFlags::WR_ONLY | psp::sys::IoOpenFlags::TRUNC,
-        0o777,
-    );
-    if fd < psp::sys::SceUid(0) {
-        crate::debug_log(b"[KDUMP] failed to open output file");
-        return;
-    }
-
-    // Write a small header: [base_addr: u32] [dump_size: u32] [module_name: 28 bytes]
-    let hdr_addr = dump_addr.to_le_bytes();
-    let hdr_size = dump_size.to_le_bytes();
-    psp::sys::sceIoWrite(fd, hdr_addr.as_ptr() as *const _, 4);
-    psp::sys::sceIoWrite(fd, hdr_size.as_ptr() as *const _, 4);
-    psp::sys::sceIoWrite(fd, info.name.as_ptr() as *const _, 28);
-    // Total header: 36 bytes, raw dump follows
-
-    // Dump memory in chunks (kernel memory may need uncached access)
-    let src = dump_addr as *const u8;
-    let mut written = 0u32;
-    while written < dump_size {
-        let chunk = if dump_size - written > 4096 { 4096 } else { dump_size - written };
-        let ret = psp::sys::sceIoWrite(
-            fd,
-            src.add(written as usize) as *const _,
-            chunk as usize,
-        );
-        if ret < 0 {
-            break;
+        if dump_size == 0 || dump_size > 0x100000 {
+            crate::debug_log(b"[KDUMP] invalid size, skipping");
+            return;
         }
-        written += chunk;
+
+        // Write raw memory to file
+        let fd = psp::sys::sceIoOpen(
+            out_path.as_ptr(),
+            psp::sys::IoOpenFlags::CREAT
+                | psp::sys::IoOpenFlags::WR_ONLY
+                | psp::sys::IoOpenFlags::TRUNC,
+            0o777,
+        );
+        if fd < psp::sys::SceUid(0) {
+            crate::debug_log(b"[KDUMP] failed to open output file");
+            return;
+        }
+
+        // Write a small header: [base_addr: u32] [dump_size: u32] [module_name: 28 bytes]
+        let hdr_addr = dump_addr.to_le_bytes();
+        let hdr_size = dump_size.to_le_bytes();
+        psp::sys::sceIoWrite(fd, hdr_addr.as_ptr() as *const _, 4);
+        psp::sys::sceIoWrite(fd, hdr_size.as_ptr() as *const _, 4);
+        psp::sys::sceIoWrite(fd, info.name.as_ptr() as *const _, 28);
+        // Total header: 36 bytes, raw dump follows
+
+        // Dump memory in chunks (kernel memory may need uncached access)
+        let src = dump_addr as *const u8;
+        let mut written = 0u32;
+        while written < dump_size {
+            let chunk = if dump_size - written > 4096 {
+                4096
+            } else {
+                dump_size - written
+            };
+            let ret =
+                psp::sys::sceIoWrite(fd, src.add(written as usize) as *const _, chunk as usize);
+            if ret < 0 {
+                break;
+            }
+            written += chunk;
+        }
+
+        psp::sys::sceIoClose(fd);
+
+        let mut m = [0u8; 60];
+        let mut p = append_bytes(&mut m, 0, b"[KDUMP] dumped 0x");
+        p = append_hex(&mut m, p, written);
+        p = append_bytes(&mut m, p, b" bytes to file");
+        crate::debug_log(&m[..p]);
     }
-
-    psp::sys::sceIoClose(fd);
-
-    let mut m = [0u8; 60];
-    let mut p = append_bytes(&mut m, 0, b"[KDUMP] dumped 0x");
-    p = append_hex(&mut m, p, written);
-    p = append_bytes(&mut m, p, b" bytes to file");
-    crate::debug_log(&m[..p]);
 }

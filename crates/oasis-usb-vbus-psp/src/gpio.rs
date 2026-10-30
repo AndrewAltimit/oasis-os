@@ -3,11 +3,7 @@
 //! Uses `psp::gpio` for NID-resolved GPIO functions (via find_function)
 //! and `psp::hw` for direct MMIO register snapshots.
 
-use psp::hw::{
-    hw_read32, hw_write32,
-    GPIO_BASE, GPIO_PORT0_READ, GPIO_PORT0_DIR, GPIO_PORT0_SET,
-    GPIO_PORT0_CLEAR, GPIO_PORT0_ALTFUNC,
-};
+use psp::hw::{GPIO_BASE, GPIO_PORT0_ALTFUNC, GPIO_PORT0_DIR, GPIO_PORT0_READ, hw_read32};
 
 // Additional offsets not in psp::hw (used only for MMIO snapshots)
 const GPIO_OUTPUT: u32 = GPIO_BASE + 0x08;
@@ -54,7 +50,8 @@ pub fn diff(before: &GpioSnapshot, after: &GpioSnapshot) -> GpioDiff {
 /// Initialize GPIO NID resolution via psp::gpio.
 /// Returns number of resolved functions (0-6).
 pub unsafe fn resolve_nids() -> u32 {
-    psp::gpio::init()
+    // SAFETY: the caller upholds psp::gpio::init's contract (kernel mode, single-threaded init).
+    unsafe { psp::gpio::init() }
 }
 
 /// Read GPIO port via psp::gpio (find_function resolved).
@@ -72,30 +69,7 @@ pub fn port_clear(mask: u32) -> Option<i32> {
     psp::gpio::clear_pins(mask)
 }
 
-/// Set GPIO pin direction (0=input, 1=output) via psp::gpio.
-pub fn set_port_mode(pin: u32, mode: u32) -> Option<i32> {
-    psp::gpio::set_pin_mode(pin, mode as i32)
-}
-
 /// Set GPIO pin full output mode (0=disable, 2=output enable) via psp::gpio.
 pub fn set_port_mode2(pin: u32, mode: u32) -> Option<i32> {
     psp::gpio::set_pin_mode2(pin, mode as i32)
-}
-
-/// Direct MMIO write to GPIO set register (no NID needed, kernel-mode only).
-pub unsafe fn mmio_set(mask: u32) {
-    // SAFETY: kernel-mode MMIO write to GPIO output set register.
-    hw_write32(GPIO_PORT0_SET, mask);
-}
-
-/// Direct MMIO write to GPIO clear register (no NID needed, kernel-mode only).
-pub unsafe fn mmio_clear(mask: u32) {
-    // SAFETY: kernel-mode MMIO write to GPIO output clear register.
-    hw_write32(GPIO_PORT0_CLEAR, mask);
-}
-
-/// Direct MMIO write to GPIO direction register (no NID needed, kernel-mode only).
-pub unsafe fn mmio_set_direction(val: u32) {
-    // SAFETY: kernel-mode MMIO write to GPIO direction register.
-    hw_write32(GPIO_PORT0_DIR, val);
 }
