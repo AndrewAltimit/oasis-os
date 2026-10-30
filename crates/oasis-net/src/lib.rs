@@ -2,6 +2,7 @@
 //! TLS provider abstraction, and (feature `vfs`) the FTP-like file
 //! transfer server.
 
+pub mod auth;
 mod client;
 #[cfg(feature = "vfs")]
 pub mod ftp;
@@ -14,6 +15,7 @@ pub mod tls;
 #[cfg(all(feature = "tls-rustls", not(target_arch = "wasm32")))]
 pub mod tls_rustls;
 
+pub use auth::psk_response;
 pub use client::{ClientState, RemoteClient};
 pub use hosts::{HostEntry, parse_hosts};
 #[cfg(not(target_arch = "wasm32"))]

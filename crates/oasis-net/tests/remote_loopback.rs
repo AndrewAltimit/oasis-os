@@ -222,6 +222,18 @@ fn remote_client_large_output_and_server_shutdown() {
 // PSK authentication
 // ---------------------------------------------------------------------------
 
+/// Read the `AUTH_REQUIRED <nonce>` challenge line; returns the nonce.
+fn challenge(s: &mut TcpStream, acc: &mut Vec<u8>) -> String {
+    assert!(read_until(s, acc, b"\n"));
+    let pos = acc.iter().position(|&b| b == b'\n').unwrap();
+    let line: Vec<u8> = acc.drain(..=pos).collect();
+    let line = String::from_utf8(line).unwrap();
+    line.strip_prefix("AUTH_REQUIRED ")
+        .unwrap_or_else(|| panic!("not a challenge: {line:?}"))
+        .trim_end()
+        .to_string()
+}
+
 fn with_psk(psk: &str) -> ListenerConfig {
     ListenerConfig {
         psk: psk.to_string(),
@@ -230,15 +242,15 @@ fn with_psk(psk: &str) -> ListenerConfig {
     }
 }
 
-#[cfg(feature = "tls-rustls")]
 #[test]
 fn psk_success_then_command() {
     let (mut backend, mut listener, port) = start(with_psk("s3cret"));
     let client = thread::spawn(move || {
         let mut s = connect(port);
         let mut acc = Vec::new();
-        assert!(read_until(&mut s, &mut acc, b"AUTH_REQUIRED\n"));
-        s.write_all(b"s3cret\n").unwrap();
+        let nonce = challenge(&mut s, &mut acc);
+        let answer = format!("AUTH {}\n", oasis_net::psk_response("s3cret", &nonce));
+        s.write_all(answer.as_bytes()).unwrap();
         assert!(read_until(&mut s, &mut acc, b"AUTH_OK\n> "));
         s.write_all(b"whoami\n").unwrap();
         assert!(read_until(&mut s, &mut acc, b"reply:whoami\n> "));
@@ -252,14 +264,13 @@ fn psk_success_then_command() {
     assert_eq!(seen, vec!["whoami".to_string()]);
 }
 
-#[cfg(feature = "tls-rustls")]
 #[test]
 fn wrong_psk_is_rejected_and_closed() {
     let (mut backend, mut listener, port) = start(with_psk("s3cret"));
     let client = thread::spawn(move || {
         let mut s = connect(port);
         let mut acc = Vec::new();
-        assert!(read_until(&mut s, &mut acc, b"AUTH_REQUIRED\n"));
+        challenge(&mut s, &mut acc);
         s.write_all(b"guess\n").unwrap();
         let (rest, eof) = read_to_eof(&mut s);
         acc.extend_from_slice(&rest);
@@ -278,14 +289,13 @@ fn wrong_psk_is_rejected_and_closed() {
 
 /// A wrong guess followed by more lines in the same packet must not get
 /// further PSK attempts (or commands) on the rejected connection.
-#[cfg(feature = "tls-rustls")]
 #[test]
 fn lines_after_auth_fail_are_ignored() {
     let (mut backend, mut listener, port) = start(with_psk("s3cret"));
     let client = thread::spawn(move || {
         let mut s = connect(port);
         let mut acc = Vec::new();
-        assert!(read_until(&mut s, &mut acc, b"AUTH_REQUIRED\n"));
+        challenge(&mut s, &mut acc);
         s.write_all(b"guess1\ns3cret\nrm -rf /\n").unwrap();
         let (rest, _) = read_to_eof(&mut s);
         acc.extend_from_slice(&rest);
@@ -303,7 +313,6 @@ fn lines_after_auth_fail_are_ignored() {
     assert!(!out.contains("AUTH_OK"), "{out}");
 }
 
-#[cfg(feature = "tls-rustls")]
 #[test]
 fn remote_client_psk_authenticates() {
     let (mut backend, mut listener, port) = start(with_psk("s3cret"));
@@ -328,32 +337,6 @@ fn remote_client_psk_authenticates() {
         thread::sleep(Duration::from_millis(1));
     }
     assert_eq!(got[0].0, "ping");
-}
-
-/// Without TLS support the listener refuses PSK auth outright.
-#[cfg(not(feature = "tls-rustls"))]
-#[test]
-fn psk_without_tls_is_refused() {
-    let (mut backend, mut listener, port) = start(with_psk("s3cret"));
-    let client = thread::spawn(move || {
-        let mut s = connect(port);
-        let (out, eof) = read_to_eof(&mut s);
-        assert!(eof);
-        String::from_utf8_lossy(&out).into_owned()
-    });
-    let out = serve(&mut backend, &mut listener, client, reply);
-    assert!(out.contains("AUTH_FAIL"), "{out}");
-    assert_eq!(listener.connection_count(), 0);
-
-    // The client side refuses to send a PSK in plaintext as well.
-    let mut client_backend = StdNetworkBackend::new();
-    let mut client = RemoteClient::new();
-    assert!(
-        client
-            .connect(&mut client_backend, "127.0.0.1", port, Some("s3cret"))
-            .is_err()
-    );
-    assert!(!client.is_connected());
 }
 
 // ---------------------------------------------------------------------------
