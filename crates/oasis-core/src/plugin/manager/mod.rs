@@ -541,6 +541,51 @@ auto_load = true
         assert_eq!(apps.titles().collect::<Vec<_>>(), ["Builtin"]);
     }
 
+    /// Second plugin (different name) that registers the same app title
+    /// as [`AppPlugin`].
+    struct SameTitleAppPlugin;
+    impl Plugin for SameTitleAppPlugin {
+        fn info(&self) -> PluginInfo {
+            PluginInfo::new("same-title-plugin", "1.0.0")
+        }
+        fn init(&mut self, host: &mut PluginHost<'_>) -> Result<()> {
+            host.register_app(PluginAppRegistration::new(
+                "Plugin App",
+                crate::plugin::AppCategory::Utility,
+                |path, _vfs| Box::new(crate::apps::SimpleApp::new("Plugin App", path, Vec::new())),
+            ))
+        }
+        fn update(&mut self, _host: &mut PluginHost<'_>) -> Result<()> {
+            Ok(())
+        }
+        fn shutdown(&mut self, _host: &mut PluginHost<'_>) -> Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn init_dedupes_app_titles_across_plugins() {
+        let mut mgr = PluginManager::new();
+        mgr.register_static(Box::new(AppPlugin));
+        mgr.register_static(Box::new(SameTitleAppPlugin));
+        let mut sdi = SdiRegistry::new();
+        let mut vfs = MemoryVfs::new();
+        let mut cmds = CommandRegistry::new();
+        mgr.init_all(&mut sdi, &mut vfs, &mut cmds);
+        // First registration wins, as it already did for `update_all`.
+        assert_eq!(mgr.plugin_apps().len(), 1);
+
+        // Unloading the plugin whose duplicate was ignored must not take
+        // the first plugin's app with it (it used to, because both
+        // plugins recorded the title as theirs).
+        mgr.unload("same-title-plugin", &mut sdi, &mut vfs, &mut cmds)
+            .unwrap();
+        assert_eq!(mgr.plugin_apps().len(), 1);
+        mgr.unload("app-plugin", &mut sdi, &mut vfs, &mut cmds)
+            .unwrap();
+        assert!(mgr.plugin_apps().is_empty());
+    }
+
     #[test]
     fn plugin_apps_empty_by_default() {
         let mgr = PluginManager::new();

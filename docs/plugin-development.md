@@ -19,8 +19,14 @@ The plugin lifecycle is:
 
 1. **Register** -- plugin is added to `PluginManager` (state: `Registered`)
 2. **Init** -- `init()` called once; register commands, create SDI objects (state: `Active`)
-3. **Update** -- `update()` called once per frame; do periodic work
-4. **Shutdown** -- `shutdown()` called on unload; clean up resources (state: `Stopped`)
+3. **Update** -- `update()` called each time the host calls `PluginManager::update_all`
+4. **Shutdown** -- `shutdown()` called on `unload` / `shutdown_all`; clean up resources (state: `Stopped`)
+
+> **Host status:** the desktop shell (`oasis-app/src/shell.rs`) currently
+> only calls `init_all` (into a private, unrendered `SdiRegistry`) and
+> `extend_registry`. It never calls `update_all` or `shutdown_all`, so
+> `update()` / `shutdown()` do not run there, and SDI objects a plugin
+> creates are not drawn. Commands and plugin apps work.
 
 Source: `crates/oasis-core/src/plugin/traits.rs`
 
@@ -208,8 +214,10 @@ auto_load = true
 ```
 
 Use `PluginManager::discover_manifests(vfs)` to scan for available plugins.
+Discovery only parses manifests: there is no dynamic loader, so `library`
+and `auto_load` are informational and no host acts on them today.
 
-Source: `crates/oasis-core/src/plugin/manager.rs`
+Source: `crates/oasis-core/src/plugin/manager/discovery.rs`
 
 ---
 
@@ -440,45 +448,6 @@ let info = PluginInfo::new("my-plugin", "2.0.0");
 - Plugins should always use the default `api_version` from `PluginInfo::new()` unless they need to target a specific older API.
 
 Source: `crates/oasis-core/src/plugin/traits.rs`
-
----
-
-## EventBus IPC
-
-In addition to VFS-based IPC, plugins can communicate via the **event bus** -- a publish/subscribe system for real-time, topic-based messaging.
-
-Source: `crates/oasis-core/src/plugin/event_bus.rs`
-
-The `EventBus` is managed by the `PluginManager`, which calls `subscribe()`, `publish()`, and `drain_for()` on behalf of plugins during lifecycle calls. The API uses a buffered drain model rather than channels.
-
-### Publishing Events
-
-```rust
-use oasis_core::plugin::event_bus::{EventBus, PluginEvent};
-
-// EventBus is owned by PluginManager, not PluginHost directly.
-// The manager exposes it during update cycles.
-let event = PluginEvent::new("sensor.temperature", "temp-monitor", "72.5");
-bus.publish(event);
-```
-
-### Subscribing and Draining Events
-
-```rust
-// Subscribe a plugin to a topic (done by PluginManager during init).
-bus.subscribe("my-plugin", "sensor.temperature");
-
-// After all plugins publish, the manager drains events for each subscriber.
-let events: Vec<PluginEvent> = bus.drain_for("my-plugin");
-for event in &events {
-    // Handle event.topic, event.source, event.data
-}
-
-// After all plugins have drained, clear pending events.
-bus.clear_pending();
-```
-
-Events are string-based for cross-language compatibility. Source plugins do not receive their own events. The event bus is useful for real-time notifications (e.g., state changes, sensor data), while VFS-based IPC remains better for persistent state and file-like data exchange.
 
 ---
 

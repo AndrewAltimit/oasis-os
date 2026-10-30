@@ -52,18 +52,6 @@ impl TamperState {
             Self::Unknown => "[?]",
         }
     }
-
-    /// Return a color hint for the status indicator.
-    /// Returns a CSS-style hex color string for the skin to use.
-    pub fn color_hint(&self) -> &'static str {
-        match self {
-            Self::Disarmed => "#808080",  // gray
-            Self::Arming => "#CCAA00",    // amber
-            Self::Armed => "#00CC00",     // green
-            Self::Triggered => "#FF0000", // red
-            Self::Unknown => "#666666",   // dim gray
-        }
-    }
 }
 
 impl fmt::Display for TamperState {
@@ -147,14 +135,6 @@ mod tests {
         assert_eq!(TamperState::Disarmed.indicator(), "[DISARMED]");
         assert_eq!(TamperState::Armed.indicator(), "[ARMED]");
         assert_eq!(TamperState::Triggered.indicator(), "[!TRIGGERED!]");
-    }
-
-    #[test]
-    fn color_hints() {
-        // Armed should be green-ish.
-        assert!(TamperState::Armed.color_hint().contains("CC"));
-        // Triggered should be red.
-        assert!(TamperState::Triggered.color_hint().contains("FF0000"));
     }
 
     #[test]

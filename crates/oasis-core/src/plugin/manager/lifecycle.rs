@@ -26,31 +26,24 @@ impl PluginManager {
     }
 
     /// Collect app registrations from a lifecycle call into the manager.
-    pub(super) fn collect_apps(
-        &mut self,
-        idx: usize,
-        pending_apps: Vec<PluginAppRegistration>,
-        deduplicate: bool,
-    ) {
-        if deduplicate {
-            for app in pending_apps {
-                if self.plugin_apps.iter().any(|a| a.title == app.title) {
-                    log::warn!(
-                        "Plugin app '{}' already registered, ignoring duplicate",
-                        app.title,
-                    );
-                } else {
-                    self.plugins[idx]
-                        .registered_app_titles
-                        .push(app.title.clone());
-                    self.plugin_apps.push(app);
-                }
+    ///
+    /// Titles are unique across all plugins (first registration wins):
+    /// [`unload`](Self::unload) removes apps by the titles a plugin
+    /// recorded, so a duplicate recorded by a second plugin would take the
+    /// first plugin's app with it.
+    pub(super) fn collect_apps(&mut self, idx: usize, pending_apps: Vec<PluginAppRegistration>) {
+        for app in pending_apps {
+            if self.plugin_apps.iter().any(|a| a.title == app.title) {
+                log::warn!(
+                    "Plugin app '{}' already registered, ignoring duplicate",
+                    app.title,
+                );
+            } else {
+                self.plugins[idx]
+                    .registered_app_titles
+                    .push(app.title.clone());
+                self.plugin_apps.push(app);
             }
-        } else {
-            self.plugins[idx]
-                .registered_app_titles
-                .extend(pending_apps.iter().map(|a| a.title.clone()));
-            self.plugin_apps.extend(pending_apps);
         }
     }
 
@@ -88,7 +81,7 @@ impl PluginManager {
                     continue;
                 }
                 self.plugins[i].state = PluginState::Active;
-                self.collect_apps(i, pending_apps, false);
+                self.collect_apps(i, pending_apps);
             }
         }
     }
@@ -133,7 +126,7 @@ impl PluginManager {
             self.plugins[idx].plugin.init(&mut host)?;
         }
         self.plugins[idx].state = PluginState::Active;
-        self.collect_apps(idx, pending_apps, false);
+        self.collect_apps(idx, pending_apps);
         Ok(())
     }
 
@@ -166,7 +159,7 @@ impl PluginManager {
                     log::error!("Failed to update plugin '{name}': {e}");
                     continue;
                 }
-                self.collect_apps(i, pending_apps, true);
+                self.collect_apps(i, pending_apps);
             }
         }
     }
