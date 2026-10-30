@@ -474,8 +474,10 @@ impl SdiCore for WasmBackend {
     }
 
     fn destroy_texture(&mut self, tex: TextureId) -> Result<()> {
-        self.textures.remove(&tex.0);
-        Ok(())
+        self.textures
+            .remove(&tex.0)
+            .map(drop)
+            .ok_or_else(|| texture_not_found(tex.0))
     }
 
     /// Absolute and replacing (SdiCore contract). This used to translate

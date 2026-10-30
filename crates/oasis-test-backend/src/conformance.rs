@@ -1224,8 +1224,14 @@ pub static SCENARIOS: &[Scenario] = &[
             }
             b.destroy_texture(c)?;
             b.destroy_texture(d)?;
-            // Destroying twice is harmless.
-            b.destroy_texture(d)
+            // Destroying twice is reported (`TextureNotFound`), like a
+            // second `destroy_render_target`; see `texture_misuse`.
+            match b.destroy_texture(d) {
+                Err(OasisError::Backend(BackendError::TextureNotFound { .. })) => Ok(()),
+                other => Err(OasisError::Backend(
+                    format!("second destroy_texture returned {other:?}").into(),
+                )),
+            }
         },
         check = |f| {
             expect_rect_exact(f, (4, 4, 4, 4), rgb_of(GREEN))?;
@@ -1884,6 +1890,45 @@ pub fn render_target_misuse(backend: &mut dyn SdiBackend) -> Vec<String> {
         &mut bad,
         "destroying a destroyed target",
         backend.destroy_render_target(rt),
+    );
+    bad
+}
+
+/// Texture-id misuse every backend must reject the same way, as a list of
+/// violations (empty = conforming): `destroy_texture` on an id the backend
+/// never handed out, a second `destroy_texture` of the same id, and a blit
+/// of a destroyed id all fail with [`BackendError::TextureNotFound`], the
+/// contract `destroy_render_target` already follows (ADR-003).
+pub fn texture_misuse(backend: &mut dyn SdiBackend) -> Vec<String> {
+    fn expect_not_found(bad: &mut Vec<String>, what: &str, r: Result<()>) {
+        match r {
+            Err(OasisError::Backend(BackendError::TextureNotFound { .. })) => {},
+            Err(e) => bad.push(format!("{what}: expected TextureNotFound, got {e}")),
+            Ok(()) => bad.push(format!("{what} succeeded")),
+        }
+    }
+    let mut bad = Vec::new();
+    expect_not_found(
+        &mut bad,
+        "destroying a never-loaded id",
+        backend.destroy_texture(TextureId(0xDEAD_BEEF)),
+    );
+    let tex = match backend.load_texture(2, 2, &[255; 16]) {
+        Ok(t) => t,
+        Err(e) => return vec![format!("load_texture: {e}")],
+    };
+    if let Err(e) = backend.destroy_texture(tex) {
+        bad.push(format!("destroying a live texture: {e}"));
+    }
+    expect_not_found(
+        &mut bad,
+        "destroying a texture twice",
+        backend.destroy_texture(tex),
+    );
+    expect_not_found(
+        &mut bad,
+        "blitting a destroyed texture",
+        backend.blit(tex, 0, 0, 2, 2),
     );
     bad
 }

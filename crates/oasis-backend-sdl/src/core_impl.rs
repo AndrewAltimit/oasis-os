@@ -97,9 +97,11 @@ impl SdiCore for SdlBackend {
     }
 
     fn destroy_texture(&mut self, tex: TextureId) -> Result<()> {
-        self.textures.remove(&tex.0);
         self.texture_mods.remove(&tex.0);
-        Ok(())
+        self.textures
+            .remove(&tex.0)
+            .map(drop)
+            .ok_or_else(|| texture_not_found(tex.0))
     }
 
     fn set_clip_rect(&mut self, x: i32, y: i32, w: u32, h: u32) -> Result<()> {

@@ -6,9 +6,10 @@
 
 use oasis_types::backend::{
     Color, SdiBatch, SdiClipTransform, SdiCore, SdiGradients, SdiRenderTarget, SdiShapes, SdiText,
-    SdiTextures, SdiVector, TextureId, bitmap_measure_text,
+    SdiTextures, SdiVector, TextureId, bitmap_measure_text, texture_not_found,
 };
 use oasis_types::error::Result;
+use std::collections::HashSet;
 
 /// A recorded method call: `(method_name, formatted_parameters)`.
 pub type CallRecord = (String, String);
@@ -36,6 +37,7 @@ pub struct MockSdiCore {
     height: u32,
     calls: Vec<CallRecord>,
     next_texture_id: u64,
+    live_textures: HashSet<u64>,
     measure_text_fn: Option<MeasureTextFn>,
 }
 
@@ -48,6 +50,7 @@ impl MockSdiCore {
             height,
             calls: Vec::new(),
             next_texture_id: 1,
+            live_textures: HashSet::new(),
             measure_text_fn: None,
         }
     }
@@ -125,6 +128,7 @@ impl SdiCore for MockSdiCore {
     fn load_texture(&mut self, width: u32, height: u32, rgba_data: &[u8]) -> Result<TextureId> {
         let id = self.next_texture_id;
         self.next_texture_id += 1;
+        self.live_textures.insert(id);
         self.record(
             "load_texture",
             format!("{width}, {height}, {} bytes", rgba_data.len()),
@@ -134,7 +138,11 @@ impl SdiCore for MockSdiCore {
 
     fn destroy_texture(&mut self, tex: TextureId) -> Result<()> {
         self.record("destroy_texture", format!("{tex:?}"));
-        Ok(())
+        if self.live_textures.remove(&tex.0) {
+            Ok(())
+        } else {
+            Err(texture_not_found(tex.0))
+        }
     }
 
     fn set_clip_rect(&mut self, x: i32, y: i32, w: u32, h: u32) -> Result<()> {

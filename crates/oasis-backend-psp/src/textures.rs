@@ -252,14 +252,22 @@ impl PspBackend {
     /// allocator reclaims them all at once on reset). The video texture is
     /// routed through [`Self::free_video_texture`] so it is never freed
     /// while the video thread may be writing into it.
-    pub fn destroy_texture_inner(&mut self, tex: TextureId) {
+    ///
+    /// Returns `false` when `tex` is not a live texture (never loaded, or
+    /// already destroyed); `SdiCore::destroy_texture` turns that into
+    /// `BackendError::TextureNotFound`, as every backend does.
+    pub fn destroy_texture_inner(&mut self, tex: TextureId) -> bool {
         if self.video_tex == Some(tex) {
             self.free_video_texture();
-            return;
+            return true;
         }
         let idx = tex.0 as usize;
-        if let Some(texture) = self.textures.get_mut(idx).and_then(Option::take) {
-            free_texture_storage(texture);
+        match self.textures.get_mut(idx).and_then(Option::take) {
+            Some(texture) => {
+                free_texture_storage(texture);
+                true
+            },
+            None => false,
         }
     }
 

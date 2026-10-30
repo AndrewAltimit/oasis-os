@@ -41,10 +41,15 @@ crate can take it as a dev-dependency). Pick the narrowest one:
 | Backend | Use it when |
 |---------|-------------|
 | `NullBackend` | You need *a* backend but assert elsewhere (window-manager geometry, decoder state) or bench caller-side cost. Every draw is a no-op; `measure_text` uses the bitmap font (override with `set_measure_text_fn` / `with_measure_text_fn`); `viewport_size` is configurable (`NullBackend::new(w, h)`, `Default` = 480x272) |
-| `RecordingBackend` | You assert on what was drawn. It logs every primitive as a `DrawCommand` (the extension-trait defaults decompose first, so a rounded rect is several `FillRect`s), keeps real clip/translate stacks and render-target state (bind starts fresh, unbind restores; ADR-003), and has query helpers: `fill_rect_count`, `fill_colors`, `draw_text_count`, `texts`, `text_positions`, `text_colors`, `has_text` |
+| `RecordingBackend` | You assert on what was drawn. It logs every primitive as a `DrawCommand` (the extension-trait defaults decompose first, so a rounded rect is several `FillRect`s), keeps real clip/translate stacks and render-target state (bind starts fresh, unbind restores; ADR-003), and has query helpers. The clip stack logs as `PushClip` / `PopClip`, the absolute `set_clip_rect` / `reset_clip_rect` as `SetClip` / `ResetClip`. Query helpers: `fill_rect_count`, `fill_colors`, `draw_text_count`, `texts`, `text_positions`, `text_colors`, `has_text` |
 | `MockSdiCore` | You assert on raw `SdiCore` calls as `(method, params)` strings |
 | `ClipAuditBackend` | Code draws into a host-provided region (an app in a window) and must never put visible pixels outside it |
 | `conformance` | Not a backend: the shared pixel scenarios real backends run (see [Backend parity](#backend-parity)) |
+
+All four doubles follow the backends' texture contract: they track the ids
+`load_texture` handed out, and `destroy_texture` of any other id (or a
+second destroy) fails with `BackendError::TextureNotFound`. A test that
+destroys a made-up `TextureId` must load it first.
 
 Write a custom recorder only when the doubles cannot express the check
 (e.g. `oasis-vector` logs the high-level shape calls themselves, the TV
@@ -305,6 +310,10 @@ cargo test -p oasis-app --test sdl_parity
   rasterizer rounds: 1-3 levels) and SDL's linear filtering of *scaled*
   textures (the rasterizer samples nearest). Add a scenario whenever a
   backend grows a new primitive or a rendering bug is fixed.
+- **Misuse checks** (`conformance::render_target_misuse`,
+  `conformance::texture_misuse`) return a list of violations instead of
+  a frame: calls every backend must reject the same way (binding a bound
+  target, destroying an unknown texture, ...).
 - **Headless SDL**: `SdlBackend::new_headless` forces the `offscreen`
   video driver and the `software` renderer through in-process SDL hints,
   so the suites need no display and run in the CI container. SDL may only

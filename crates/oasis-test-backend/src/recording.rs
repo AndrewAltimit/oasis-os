@@ -13,10 +13,11 @@ use oasis_types::backend::{
     SdiClipTransform, SdiCore, SdiGradients, SdiRenderTarget, SdiShapes, SdiText, SdiTextures,
     SdiVector, TextureId, bitmap_measure_text,
     stacks::{ClipStack, DrawState, TranslateStack},
+    texture_not_found,
 };
 use oasis_types::error::{OasisError, Result};
 use oasis_types::geometry::ClipRect;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 /// Type alias for a custom `measure_text` callback.
 type MeasureTextFn = Box<dyn Fn(&str, u16) -> u32>;
@@ -56,6 +57,7 @@ pub struct RecordingBackend {
     clip_stack: ClipStack,
     translate_stack: TranslateStack,
     next_texture_id: u64,
+    live_textures: HashSet<u64>,
     measure_text_fn: Option<MeasureTextFn>,
     // Render-target pool state: live ids -> size.
     next_render_target_id: u64,
@@ -75,6 +77,7 @@ impl RecordingBackend {
             clip_stack: ClipStack::default(),
             translate_stack: TranslateStack::new(),
             next_texture_id: 1,
+            live_textures: HashSet::new(),
             measure_text_fn: None,
             next_render_target_id: 1,
             live_render_targets: HashMap::new(),
@@ -261,11 +264,16 @@ impl SdiCore for RecordingBackend {
     fn load_texture(&mut self, _width: u32, _height: u32, _rgba_data: &[u8]) -> Result<TextureId> {
         let id = self.next_texture_id;
         self.next_texture_id += 1;
+        self.live_textures.insert(id);
         Ok(TextureId(id))
     }
 
-    fn destroy_texture(&mut self, _tex: TextureId) -> Result<()> {
-        Ok(())
+    fn destroy_texture(&mut self, tex: TextureId) -> Result<()> {
+        if self.live_textures.remove(&tex.0) {
+            Ok(())
+        } else {
+            Err(texture_not_found(tex.0))
+        }
     }
 
     fn set_clip_rect(&mut self, x: i32, y: i32, w: u32, h: u32) -> Result<()> {

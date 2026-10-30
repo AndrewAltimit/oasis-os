@@ -492,8 +492,11 @@ impl SdiCore for PspBackend {
     }
 
     fn destroy_texture(&mut self, tex: TextureId) -> OasisResult<()> {
-        self.destroy_texture_inner(tex);
-        Ok(())
+        if self.destroy_texture_inner(tex) {
+            Ok(())
+        } else {
+            Err(oasis_types::backend::texture_not_found(tex.0))
+        }
     }
 
     /// Absolute and untranslated, like every backend (`SdiCore`

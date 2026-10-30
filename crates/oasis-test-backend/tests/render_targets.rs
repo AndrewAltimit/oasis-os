@@ -335,6 +335,41 @@ fn misuse_is_rejected_like_the_real_backends() {
     assert!(bad.is_empty(), "{bad:?}");
 }
 
+/// Every test double follows the `destroy_texture` contract of the pixel
+/// backends: an id it never handed out, or one already destroyed, fails
+/// with `TextureNotFound` (the destroy half of
+/// `conformance::texture_misuse`; recorders do not validate blits).
+#[test]
+fn destroy_texture_rejects_unknown_ids_on_every_double() {
+    use oasis_test_backend::{ClipAuditBackend, MockSdiCore, NullBackend};
+    use oasis_types::backend::{SdiBackend, TextureId};
+    use oasis_types::error::{BackendError, OasisError};
+    let mut doubles: Vec<(&str, Box<dyn SdiBackend>)> = vec![
+        ("recording", Box::new(RecordingBackend::new(64, 64))),
+        ("null", Box::new(NullBackend::new(64, 64))),
+        ("mock", Box::new(MockSdiCore::new(64, 64))),
+        (
+            "audit",
+            Box::new(ClipAuditBackend::new(64, 64, (0, 0, 64, 64))),
+        ),
+    ];
+    let not_found = |r: oasis_types::error::Result<()>| {
+        matches!(
+            r,
+            Err(OasisError::Backend(BackendError::TextureNotFound { .. }))
+        )
+    };
+    for (name, b) in &mut doubles {
+        assert!(
+            not_found(b.destroy_texture(TextureId(999))),
+            "{name}: unknown id"
+        );
+        let tex = b.load_texture(1, 1, &[0; 4]).expect("load");
+        assert!(b.destroy_texture(tex).is_ok(), "{name}: live id");
+        assert!(not_found(b.destroy_texture(tex)), "{name}: double destroy");
+    }
+}
+
 /// `read_render_target` checks the destination length.
 #[test]
 fn read_render_target_checks_dst_len() {

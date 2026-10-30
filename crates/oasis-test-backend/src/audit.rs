@@ -27,6 +27,7 @@ use oasis_types::backend::{
     BlendMode, Color, RenderTargetId, SdiBatch, SdiClipTransform, SdiCore, SdiGradients,
     SdiRenderTarget, SdiShapes, SdiText, SdiTextures, SdiVector, TextureId, bitmap_measure_text,
     stacks::{ClipPush, ClipStack, DrawState, TranslateStack},
+    texture_not_found,
 };
 use oasis_types::error::{OasisError, Result};
 use oasis_types::geometry::ClipRect;
@@ -443,8 +444,11 @@ impl SdiCore for ClipAuditBackend {
     }
 
     fn destroy_texture(&mut self, tex: TextureId) -> Result<()> {
-        self.live_textures.remove(&tex.0);
-        Ok(())
+        if self.live_textures.remove(&tex.0) {
+            Ok(())
+        } else {
+            Err(texture_not_found(tex.0))
+        }
     }
 
     fn set_clip_rect(&mut self, x: i32, y: i32, w: u32, h: u32) -> Result<()> {
