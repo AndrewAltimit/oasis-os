@@ -391,8 +391,13 @@ impl Harness {
         if let Some(path) = opts.prefs_path.as_ref() {
             let store = crate::user_prefs::load_from_disk(Some(path));
             let prefs = oasis_core::settings::UserPrefs::from_store(&store);
+            // Mirror the shell's boot: a persisted skin that no longer
+            // resolves keeps the default (`opts.skin`), with a warning.
             if let Some(saved) = prefs.skin.as_deref() {
-                boot.skin = oasis_core::skin::resolve_skin(saved)?;
+                match oasis_core::skin::resolve_skin(saved) {
+                    Ok(skin) => boot.skin = skin,
+                    Err(e) => log::warn!("Persisted skin '{saved}' failed to load ({e})"),
+                }
             }
             prefs.patch_features(&mut boot.skin.features);
             crate::shell::resolve_screen_size(&mut boot.config, &boot.skin, &prefs);

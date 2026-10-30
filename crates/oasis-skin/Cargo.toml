@@ -26,6 +26,8 @@ ttf = ["dep:fontdue"]
 oasis-types = { workspace = true }
 fontdue = { workspace = true, optional = true }
 oasis-sdi = { workspace = true }
+# Only for `BuiltinShader` (shader-name validation); no GL features.
+oasis-shader = { workspace = true }
 oasis-ui = { workspace = true }
 oasis-vector = { workspace = true }
 oasis-wm = { workspace = true }

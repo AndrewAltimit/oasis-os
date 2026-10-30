@@ -1,0 +1,26 @@
+background = "#050005"
+primary = "#FF00FF"
+secondary = "#330033"
+text = "#CC00CC"
+dim_text = "#880088"
+status_bar = "#1A001A"
+prompt = "#FF00FF"
+output = "#CC00CC"
+error = "#FF3333"
+
+[geometry]
+toast_slide_in = false
+
+[[background_layers]]
+kind = "scanlines"
+spacing = 1
+color = "#FF000030"
+
+[[background_layers]]
+kind = "floating_polygons"
+count = 2
+sides = 3
+color = "#FF000038"
+[background_layers.animation]
+drift_x = 15.0
+drift_y = 10.0

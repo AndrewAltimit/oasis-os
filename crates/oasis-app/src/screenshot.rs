@@ -63,17 +63,15 @@ fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-/// All available skin names (external TOML skins + built-in skins).
+/// All built-in skin names (`classic` first).
 fn all_skin_names() -> Vec<String> {
-    let mut names = vec!["classic".to_string()];
-    for name in builtin_names() {
-        names.push(name.to_string());
-    }
-    names
+    builtin_names().iter().map(|s| s.to_string()).collect()
 }
 
 /// Capture all 4 screenshots for a single skin.
 fn capture_skin(skin_name: &str) -> anyhow::Result<()> {
+    // Strict: a typo must fail, not write classic screenshots under
+    // `screenshots/<typo>/`.
     let skin = resolve_skin(skin_name)?;
 
     let w = skin.manifest.screen_width;

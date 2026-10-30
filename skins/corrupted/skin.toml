@@ -1,0 +1,6 @@
+name = "corrupted"
+version = "1.0"
+author = "OASIS_OS"
+description = "Damaged terminal with visual corruption and garbled output"
+screen_width = 480
+screen_height = 272

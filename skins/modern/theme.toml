@@ -1,0 +1,66 @@
+background = "#14141E"
+primary = "#6C5CE7"
+secondary = "#3D3852"
+text = "#F0F0FF"
+dim_text = "#7E7A90"
+status_bar = "#1A1A2D"
+prompt = "#A29BFE"
+output = "#DDD6FE"
+error = "#FF6B6B"
+surface = "#1E1E30"
+accent_hover = "#8B7CF7"
+border_radius = 6
+shadow_intensity = 2
+gradient_enabled = true
+
+[bar_overrides]
+text_shadow = true
+
+[geometry]
+tab_row_height = 0
+icon_width = 26
+icon_height = 30
+font_body = 12
+font_hint = 10
+font_heading = 14
+cursor_lerp_speed = 0.15
+start_menu_anim_speed = 0.12
+focus_ring_color = "#6C5CE7AA"
+cursor_pad = 4
+press_flash_lighten = 0.3
+toast_slide_in = true
+
+[app_overrides]
+selection_accent_color = "#6C5CE780"
+selection_border_radius = 4
+title_bar_text_shadow = true
+
+[wm_theme]
+titlebar_height = 24
+border_width = 1
+titlebar_active = "#6C5CE7"
+titlebar_inactive = "#3D3852"
+titlebar_text = "#F0F0FF"
+frame_color = "#2A2A40"
+content_bg = "#181828"
+btn_close = "#FF6B6B"
+btn_minimize = "#FFD93D"
+btn_maximize = "#6BCB77"
+button_size = 16
+resize_handle_size = 6
+titlebar_font_size = 12
+titlebar_radius = 6
+titlebar_gradient = true
+frame_shadow_level = 2
+frame_border_radius = 4
+button_radius = 8
+
+[icon_overrides]
+icon_style = "vector"
+vector_preset = "outline"
+icon_container = "chip"
+
+[[background_layers]]
+kind = "glass_shard"
+color = "#FFFFFF20"
+points = [[0.3, 0.25], [0.6, 0.1], [0.65, 0.45]]

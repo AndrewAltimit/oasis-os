@@ -12,7 +12,7 @@ shadow_intensity = 1
 gradient_enabled = true
 
 [wm_theme]
-titlebar_height = 24
+titlebar_height = 30
 border_width = 1
 titlebar_active = "#0054E3"
 titlebar_inactive = "#7B7B7B"
@@ -22,8 +22,8 @@ content_bg = "#ECE9D8"
 btn_close = "#C75050"
 btn_minimize = "#406BBD"
 btn_maximize = "#406BBD"
-button_size = 16
-titlebar_font_size = 12
+button_size = 20
+titlebar_font_size = 14
 titlebar_radius = 4
 titlebar_gradient = true
 titlebar_gradient_top = "#3A6EA5"
@@ -50,8 +50,8 @@ title_text_shadow = true
 title_text_shadow_color = "#00000060"
 content_stroke_width = 1
 content_stroke_color = "#0054E320"
-maximize_top_inset = 44
-maximize_bottom_inset = 30
+maximize_top_inset = 52
+maximize_bottom_inset = 40
 inactive_frame_alpha = 160
 
 [bar_overrides]
@@ -74,43 +74,24 @@ wave_enabled = false
 angle = 90
 
 [geometry]
+statusbar_height = 30
+bottombar_height = 40
+icon_width = 48
+icon_height = 56
+font_small = 12
 tab_row_height = 0
-statusbar_height = 26
-bottombar_height = 30
-icon_width = 24
-icon_height = 28
 font_body = 14
 font_hint = 12
 font_heading = 16
 cursor_blink_rate = 25
-cursor_lerp_speed = 0.22
-page_slide_duration = 10
-press_flash_duration = 8
 focus_ring_color = "#0054E3A0"
 cursor_pad = 4
 toast_slide_in = true
 
-[[background_layers]]
-kind = "glass_shard"
-color = "#FFFFFF24"
-points = [[0.1, 0.2], [0.4, 0.05], [0.5, 0.35]]
-[background_layers.animation]
-drift_x = 2.0
-
-[[background_layers]]
-kind = "glass_shard"
-color = "#FFFFFF24"
-points = [[0.55, 0.6], [0.85, 0.45], [0.9, 0.8]]
-[background_layers.animation]
-drift_x = 1.5
-
 [app_overrides]
-# XP-style cream content area for app windows (File Manager file
-# viewer, list view, Notepad, Settings, etc.). The skin's primary blue
-# (`background = #003399`) is for the wallpaper, taskbar and titlebars
-# — it's unreadable as a window-content fill once dark text is drawn
-# over it. Match `wm_theme.content_bg` so the inner content surface
-# blends with the WM frame's content area.
+# Cream content area instead of inheriting the skin's deep-blue
+# wallpaper color — keeps the File Manager / Notepad / Settings
+# windows readable. Matches `wm_theme.content_bg`.
 app_bg = "#ECE9D8"
 divider_color = "#BFB9A4"
 text_color = "#333333"
@@ -126,13 +107,14 @@ body_color = "#ECE9D8"
 fold_color = "#C8C2AD"
 outline_color = "#0054E380"
 label_color = "#000000E6"
-cursor_color = "#003399C0"
+cursor_color = "#5B9BD5A0"
+cursor_stroke_width = 2
 icon_border_radius = 3
-cursor_border_radius = 4
+cursor_border_radius = 5
 icon_style = "vector"
 vector_preset = "pixel"
 icon_container = "none"
-cursor_style = "fill"
+cursor_style = "stroke"
 
 [start_menu_overrides]
 panel_bg = "#1F3E7B"
@@ -147,24 +129,24 @@ button_text = "#FFFFFF"
 panel_border_radius = 4
 panel_shadow_level = 1
 button_label = "start"
-button_width = 54
-button_height = 22
+button_width = 80
+button_height = 30
 button_shape = "rect"
 button_gradient = true
 button_gradient_top = "#4DA54D"
 button_gradient_bottom = "#2D852D"
-panel_width = 240
+panel_width = 360
 columns = 2
 header_text = "User"
 header_bg = "#003399"
 header_text_color = "#FFFFFF"
-header_height = 28
+header_height = 36
 footer_enabled = true
 footer_bg = "#1F3E7B"
 footer_text_color = "#FFFFFF"
-footer_height = 24
-item_icon_size = 16
-item_row_height = 24
+footer_height = 30
+item_icon_size = 24
+item_row_height = 32
 item_separator = true
 item_separator_color = "#4080D040"
 

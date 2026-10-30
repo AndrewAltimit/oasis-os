@@ -523,6 +523,79 @@ fn from_base_colors_matches_from_skin_defaults() {
     );
 }
 
+fn hex(c: Color) -> String {
+    format!("#{:02X}{:02X}{:02X}{:02X}", c.r, c.g, c.b, c.a)
+}
+
+/// `SkinTheme` carrying only the 9 base colors plus `shadow_intensity = 3`
+/// (the elevation `from_base_colors` has always used for dropdown / modal /
+/// tooltip shadows); every other override unset.
+fn base_only_theme(c: [Color; 9]) -> SkinTheme {
+    SkinTheme {
+        background: hex(c[0]),
+        primary: hex(c[1]),
+        secondary: hex(c[2]),
+        text: hex(c[3]),
+        dim_text: hex(c[4]),
+        status_bar: hex(c[5]),
+        prompt: hex(c[6]),
+        output: hex(c[7]),
+        error: hex(c[8]),
+        shadow_intensity: Some(3),
+        ..SkinTheme::default()
+    }
+}
+
+/// Full equality: `from_base_colors` is exactly `from_skin` on a theme with
+/// only the 9 base colors (and `shadow_intensity = 3`) set. Compared via `Debug` (the empty `HashMap`
+/// fields print deterministically) so *every* field is covered.
+#[test]
+fn from_base_colors_equals_from_skin_exactly() {
+    let palettes: [[Color; 9]; 3] = [
+        [
+            Color::rgb(0x0E, 0x0E, 0x1C),
+            Color::rgb(0x44, 0x88, 0xCC),
+            Color::rgb(0x2A, 0x2A, 0x3E),
+            Color::rgb(0xE0, 0xE0, 0xF0),
+            Color::rgb(0x70, 0x70, 0x90),
+            Color::rgb(0x18, 0x18, 0x2C),
+            Color::rgb(0x44, 0xCC, 0x88),
+            Color::rgb(0xC0, 0xC0, 0xD8),
+            Color::rgb(0xFF, 0x44, 0x66),
+        ],
+        // Light palette (dark text on a bright background).
+        [
+            Color::rgb(0xF4, 0xF1, 0xE8),
+            Color::rgb(0x33, 0x66, 0x99),
+            Color::rgb(0xCC, 0xC6, 0xB8),
+            Color::rgb(0x22, 0x22, 0x22),
+            Color::rgb(0x77, 0x77, 0x77),
+            Color::rgb(0xE0, 0xDC, 0xD0),
+            Color::rgb(0x33, 0x66, 0x99),
+            Color::rgb(0x22, 0x22, 0x22),
+            Color::rgb(0xCC, 0x22, 0x22),
+        ],
+        // Translucent status bar.
+        [
+            Color::rgb(0x00, 0x00, 0x00),
+            Color::rgb(0xFF, 0xFF, 0x00),
+            Color::rgb(0x80, 0x80, 0x80),
+            Color::rgb(0xFF, 0xFF, 0xFF),
+            Color::rgb(0xAA, 0xAA, 0xAA),
+            Color::rgba(0x10, 0x20, 0x30, 0x80),
+            Color::rgb(0x00, 0xFF, 0x00),
+            Color::rgb(0xEE, 0xEE, 0xEE),
+            Color::rgb(0xFF, 0x00, 0x00),
+        ],
+    ];
+    for c in palettes {
+        let from_colors =
+            ActiveTheme::from_base_colors(c[0], c[1], c[2], c[3], c[4], c[5], c[6], c[7], c[8]);
+        let from_skin = ActiveTheme::from_skin(&base_only_theme(c));
+        assert_eq!(format!("{from_colors:#?}"), format!("{from_skin:#?}"));
+    }
+}
+
 // -----------------------------------------------------------------------
 // PSP-specific code path tests
 //

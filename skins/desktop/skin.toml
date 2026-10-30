@@ -1,0 +1,6 @@
+name = "desktop"
+version = "1.0"
+author = "OASIS_OS"
+description = "Desktop-style interface with window manager and taskbar"
+screen_width = 800
+screen_height = 600

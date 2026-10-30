@@ -1418,6 +1418,7 @@ dependencies = [
  "fontdue",
  "log",
  "oasis-sdi",
+ "oasis-shader",
  "oasis-test-backend",
  "oasis-types",
  "oasis-ui",

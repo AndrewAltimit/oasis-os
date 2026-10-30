@@ -1,0 +1,12 @@
+boot_text = [
+    "O@S!S_OS v?.? [c0rrupt3d]",
+    "W4RNING: syst3m int3grity compromis3d",
+    "M0dules: [DAMAGED]",
+    "VFS: m0unt3d (errors detected)",
+    "R3ady... maybe.",
+]
+prompt_format = "?> "
+title = "???_OS"
+welcome_message = "Syst3m unst4ble. Proc33d with c4ution."
+error_prefix = "3RR: "
+shutdown_message = "signal l0st..."

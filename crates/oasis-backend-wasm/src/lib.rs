@@ -210,11 +210,12 @@ impl OasisWasm {
 
         // Resolve skin first so we can use its declared resolution.
         let skin_ref = skin_name.as_deref().unwrap_or("xp");
-        let skin = oasis_skin::resolve_skin(skin_ref)
+        // Startup path: an unknown skin name falls back to classic (logged).
+        let skin = oasis_skin::resolve_skin_or_classic(skin_ref)
             .map_err(|e| JsValue::from_str(&format!("skin: {e}")))?;
 
         // Use the skin's declared resolution (e.g. classic=480x272,
-        // modern=800x600, xp=1024x768) so the WASM build matches the
+        // desktop=800x600, xp=1024x768) so the WASM build matches the
         // desktop SDL version for each skin.
         let width = skin.manifest.screen_width;
         let height = skin.manifest.screen_height;
