@@ -107,13 +107,13 @@ The backends depend only on the foundation crates: `oasis-backend-sdl` needs `oa
 
 ### 3.2 Repository Structure
 
-The project is a Cargo workspace at the repository root (edition 2024, workspace version 1.4.0, 40 members). The authoritative crate list, with one line per crate, is the dependency graph in [`CLAUDE.md`](../CLAUDE.md#crate-dependency-graph); the README has the [crate table by layer](../README.md#crates).
+The project is a Cargo workspace at the repository root (edition 2024, workspace version 1.4.0, 41 members). The authoritative crate list, with one line per crate, is the dependency graph in [`CLAUDE.md`](../CLAUDE.md#crate-dependency-graph); the README has the [crate table by layer](../README.md#crates).
 
 ```
 oasis-os/
-+-- Cargo.toml        # workspace root: 40 members, oasis-backend-psp excluded
-+-- crates/           # 50 crate directories:
-|                     #   40 workspace members (foundation, rendering, content, apps,
++-- Cargo.toml        # workspace root: 41 members, oasis-backend-psp excluded
++-- crates/           # 51 crate directories:
+|                     #   41 workspace members (foundation, rendering, content, apps,
 |                     #   backends, oasis-app desktop shell, tools)
 |                     #   oasis-backend-psp (workspace `exclude`, mipsel-sony-psp)
 |                     #   9 standalone PSP crates (overlay PRX, recovery EBOOT, devloop,
@@ -121,7 +121,7 @@ oasis-os/
 +-- skins/            # 17 skin directories (every built-in skin, single source of truth)
 +-- docs/             # this document, guides, subsystem docs, ADRs (index: docs/README.md)
 +-- examples/         # runnable examples registered as [[example]] targets
-+-- docker/           # rust-ci and PPSSPP Dockerfiles
++-- docker/           # rust-ci, psp-build and PPSSPP Dockerfiles
 +-- scripts/          # WASM build/serve, PSP devloop and test scenarios
 +-- site/, www/       # GitHub Pages site and the WASM page shell
 ```
@@ -175,7 +175,7 @@ The command interpreter is a registry-based dispatch system in the `oasis-termin
 - **Exit status.** `CommandOutput::Status { code, output }` lets a command print and fail without an `Err`; the executor records the code for `&&`, `||`, `$?` and `if`.
 - **Layering.** Commands that need higher layers are registered by `oasis-core`: `skin` (it needs `oasis-skin`), agent/MCP, browser, plugin, script (`cron`, `startup`), file transfer, update and TV. `oasis_core::terminal::register_builtins` is the entry point every host calls. The desktop shell adds `mcp-server` when built with the `mcp` feature.
 
-Counted from the source: 75 commands in `oasis-terminal`, 20 in `oasis-core`, 1 in `oasis-app` (feature `mcp`), plus the 20 builtins. The catalogue is [terminal-commands.md](terminal-commands.md) and the how-to is [adding-commands.md](adding-commands.md).
+Counted from the source: 75 commands in `oasis-terminal`, 19 in `oasis-core`, 1 (`tv`) in `oasis-apps` and 1 in `oasis-app` (feature `mcp`) -- 95 on the default desktop build -- plus the 20 builtins. The catalogue is [terminal-commands.md](terminal-commands.md) and the how-to is [adding-commands.md](adding-commands.md).
 
 ### 4.3 Input Pipeline
 
@@ -733,11 +733,7 @@ Build commands and feature flags are in [getting-started.md](getting-started.md)
 
 ### 17.2 CI Pipeline
 
-All CI runs in Docker (`docker compose --profile ci run --rm rust-ci ...`, image pinned to `rust:1.99-slim`) on self-hosted runners. `main-ci.yml` runs on pushes to `main`:
-
-format check -> clippy (all targets, `-D warnings`) -> `oasis-app` feature-combination check -> nightly clippy (advisory) -> doc build (`-D warnings`) -> markdown link check -> tests (cargo-nextest + doc-tests) -> release build -> screenshot regression -> cargo-deny -> benchmarks -> coverage (advisory) -> rust-psp pin check -> PSP EBOOT, overlay PRX and recovery EBOOT builds -> PPSSPP headless smoke test; then release binaries and the GitHub Pages deploy (WASM).
-
-`pr-validation.yml` runs the same checks on pull requests (with a benchmark regression gate), plus Claude security and quality reviews, an OpenRouter general review, and the review-response and failure-handler agents. Separate workflows run memory analysis (`memory-ci.yml`: ASAN, Valgrind massif), nightly streaming tests (`nightly-streaming.yml`) and fuzzing (`fuzz.yml`).
+CI runs on self-hosted runners; every Rust step runs in the `rust-ci` Docker image (pinned to `rust:1.99-slim`), and the PSP steps use the rust-psp revision every PSP crate pins (CI checks the pins). `main-ci.yml` (pushes to `main`) gates on format, clippy with `-D warnings` over all targets and over the supported non-default feature sets, rustdoc with `-D warnings`, the markdown link check, tests (cargo-nextest + doc-tests), the release build, cargo-deny, warning-free PSP EBOOT / overlay PRX / recovery EBOOT builds and a PPSSPP headless smoke test, and then deploys the WASM build to GitHub Pages. `pr-validation.yml` runs a subset on pull requests plus the Claude reviews and auto-fix agents. The step-by-step order is in [CLAUDE.md](../CLAUDE.md#ci-pipeline-order) and the agent workflow in [AGENTS.md](../AGENTS.md#ci-pipeline). Separate workflows run memory analysis (`memory-ci.yml`: ASAN, Valgrind massif), nightly streaming tests (`nightly-streaming.yml`) and fuzzing (`fuzz.yml`).
 
 ---
 
@@ -760,7 +756,7 @@ The original C source (`psixpsp.7z`, not checked in) contains ~15,000 lines of C
 | 11 -- Polish | Transitions, update checker, scripting, file transfer server | **Complete** |
 | 12 -- PSP GU backend | Hardware-accelerated sceGu rendering, PSIX-style UI matching desktop layout | **Complete** |
 
-The Rust codebase is about 400,000 lines in 789 source files across 50 crate directories (counted with `git ls-files 'crates/*.rs' | xargs cat | wc -l`, tests included), far beyond the original C because of the framework abstraction, 13 app crates, the browser engine with JS bindings, video decode, vector graphics, shader wallpapers, the window manager, the VFS and UE5 integration. The vendored ffmpeg (~176,000 lines) is gone.
+The Rust codebase is about 400,000 lines in 795 source files across 51 crate directories (counted with `git ls-files 'crates/*.rs' | xargs cat | wc -l`, tests included), far beyond the original C because of the framework abstraction, 10 app crates, the browser engine with JS bindings, video decode, vector graphics, shader wallpapers, the window manager, the VFS and UE5 integration. The vendored ffmpeg (~176,000 lines) is gone.
 
 ---
 

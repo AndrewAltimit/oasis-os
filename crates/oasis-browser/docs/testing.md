@@ -124,15 +124,17 @@ The fastest way to confirm that nothing visually regressed is to
 launch the desktop binary and click into the Browser app:
 
 ```bash
-cargo build --release -p oasis-app
-LD_LIBRARY_PATH="$(pwd)/target/release:$LD_LIBRARY_PATH" ./target/release/oasis-app
+cargo run --release -p oasis-app
 ```
 
-The repo also ships an automated screenshot test under
-`scripts/screenshot-test.sh` (used in CI) that runs the app headlessly,
-captures a frame, and diffs it against the golden image. Update the
-golden image with `cargo run -p oasis-app --bin oasis-screenshot` after
-intentional visual changes.
+CI also runs the headless `screenshot-tests` binary (`oasis-app`) and
+diffs its frames against `screenshots/baseline/` with
+`scripts/compare-screenshots.sh`. After an intentional visual change,
+regenerate with
+`cargo run -p oasis-app --bin screenshot-tests --release -- --bless`
+(with `OASIS_FIXED_TIME` / `OASIS_FIXED_FRAME` set as in
+`.github/workflows/main-ci.yml`) and copy `screenshots/tests/` over the
+baseline.
 
 ## Adding a new test
 

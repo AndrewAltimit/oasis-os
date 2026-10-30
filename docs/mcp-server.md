@@ -122,7 +122,7 @@ Discard / Cancel" prompt, the window stays open and focused, and the call
 fails with an error whose text contains `declined`. The agent can then answer
 the prompt like a user (`screenshot` shows it), or call `close_window` again
 with `"force": true` to close the window without asking; unsaved changes are
-lost. `wm close <id>` behaves the same, without a force option: it prints
+lost. `wm close <id>` behaves the same (`wm close --force <id>` skips the prompt): it prints
 `wm: <id> did not close: ...` to the terminal when the app declines.
 
 When an agent acts, a small activity pill appears in the bottom-right of the UI

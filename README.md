@@ -48,7 +48,7 @@ Per-platform dependencies, feature flags (`skin-dev`, `mcp`), environment variab
 
 **Browser engine** ([feature catalogue](docs/browser-engine.md))
 - HTML/CSS with the full cascade, flex, table and Grid layout, 2D + 3D transforms, `@media` / `@container` / `@layer` / `@supports`, `var()`, transitions, Canvas 2D, SVG, forms, web fonts, reader mode, Gemini
-- JavaScript via QuickJS-NG on every backend including real PSP hardware: a broad DOM API, Promise-based `fetch()`, per-origin storage, and per-tick time and heap budgets so runaway scripts cannot freeze the shell
+- JavaScript via QuickJS-NG on the desktop shell (optional `javascript` feature, on by default) and on real PSP hardware: a broad DOM API, Promise-based `fetch()`, per-origin storage, and per-tick time and heap budgets so runaway scripts cannot freeze the shell
 - HTTP/1.1 + HTTP/2 over rustls with an RFC 6265 cookie jar, enforced CSP and per-hop redirect rules ([security model](docs/security.md))
 
 **Rendering and theming**
@@ -90,7 +90,7 @@ Core code never calls platform APIs. Rendering, input, networking and audio go t
 
 ```mermaid
 graph TD
-    APP["<b>OASIS_OS</b><br/>oasis-core + 13 app crates<br/>29 widgets, browser, terminal<br/>17 skins, ~95 commands"]
+    APP["<b>OASIS_OS</b><br/>oasis-core + oasis-apps (10 app crates)<br/>29 widgets, browser, terminal<br/>17 skins, ~95 commands"]
     TRAITS["<b>Backend Traits</b><br/>SdiCore (13 required) + 9 extension traits (53 defaults)<br/>InputBackend / NetworkBackend / AudioBackend"]
 
     SDL["<b>SDL3</b><br/>Desktop + Pi"]
@@ -114,15 +114,15 @@ graph TD
 
 ## Crates
 
-50 crate directories under `crates/`: 40 workspace members, plus the PSP backend (explicitly excluded from the workspace) and 9 standalone PSP-target crates built individually with `cargo psp`. The dependency graph is in [CLAUDE.md](CLAUDE.md#crate-dependency-graph).
+51 crate directories under `crates/`: 41 workspace members, plus the PSP backend (explicitly excluded from the workspace) and 9 standalone PSP-target crates built individually with `cargo psp`. The dependency graph is in [CLAUDE.md](CLAUDE.md#crate-dependency-graph).
 
 | Layer | Crates | Description |
 |-------|--------|-------------|
 | **Foundation** | `oasis-types`, `oasis-vfs`, `oasis-platform`, `oasis-i18n` | Backend traits, input/geometry types, span rasterizer, VFS IPC paths; virtual file system; platform service traits; internationalization |
 | **Rendering** | `oasis-sdi`, `oasis-ui`, `oasis-wm`, `oasis-skin`, `oasis-vector`, `oasis-shader`, `oasis-rasterize` | Scene graph, widgets, window manager, skin engine, vector graphics, shader wallpapers, software rasterizer and glyph masks |
-| **Content** | `oasis-browser`, `oasis-js`, `oasis-terminal`, `oasis-video`, `oasis-audio` | HTML/CSS/Gemini engine, QuickJS-NG, command interpreter, MP4/H.264+AAC decode, music state machine + internet radio |
-| **Infrastructure** | `oasis-net`, `oasis-mcp`, `oasis-core` | TCP/PSK/TLS networking + remote terminal, optional MCP control server, coordination layer (dashboard, app runner, plugins, scripting, file transfer) |
-| **Apps** | `oasis-app-core` + 13 `oasis-app-*` crates | `App` trait and helpers; games, paint, text editor, calculator, media (music + photos), TV guide, radio, settings, file manager, browser, network, package manager, system monitor |
+| **Content** | `oasis-browser`, `oasis-html`, `oasis-css`, `oasis-http`, `oasis-js`, `oasis-terminal`, `oasis-video`, `oasis-audio` | HTML/CSS/Gemini engine (layout + paint, on the HTML parser / arena DOM, CSS cascade and resource-loader crates), QuickJS-NG, command interpreter, MP4/H.264+AAC decode, music state machine + internet radio |
+| **Infrastructure** | `oasis-net`, `oasis-mcp`, `oasis-core` | TCP/PSK/TLS networking + remote terminal + FTP-like file transfer, optional MCP control server, coordination layer (dashboard, app runner + registry, plugins, scripting) |
+| **Apps** | `oasis-app-core`, `oasis-apps` + 10 `oasis-app-*` crates | `App` trait and helpers; the built-in app registry hosts depend on; games, paint, text editor, calculator, media (music + photos), TV guide, radio, settings, file manager, system monitor (+ network, package manager). The Browser and Terminal are host / core views, not app crates |
 | **Backends** | `oasis-backend-sdl`, `oasis-backend-wasm`, `oasis-backend-ue5`, `oasis-ffi` | SDL3 desktop/Pi, Canvas 2D, UE5 software framebuffer, C-ABI shared library |
 | **Binaries and tools** | `oasis-app`, `oasis-usb-host`, `oasis-test-backend` | Desktop shell library + binaries (`oasis-app`, `oasis-screenshot`, `screenshot-tests`, `e2e-tests`), PSP USB thin-client host, mock/recording/conformance backends |
 
@@ -147,7 +147,7 @@ The full index is [docs/README.md](docs/README.md). Start with:
 - [ADRs](docs/adr/README.md), [Security](docs/security.md), [Troubleshooting](docs/troubleshooting.md), [Examples](examples/README.md)
 - [CHANGELOG](CHANGELOG.md), [CONTRIBUTING](CONTRIBUTING.md) (AI-authored contributions only), [AGENTS.md](AGENTS.md) (agent workflow and CI)
 
-CI runs entirely in Docker on self-hosted runners: format, clippy, docs, markdown links, tests, release build, screenshot regression, cargo-deny, benchmarks, coverage, PSP builds and a PPSSPP smoke test, then the WASM deploy to GitHub Pages.
+CI runs on self-hosted runners, the Rust steps inside the pinned `rust-ci` Docker image: format, clippy (workspace plus non-default feature sets), docs, markdown links, tests, release build, screenshot regression, cargo-deny, benchmarks, coverage, warning-free PSP builds and a PPSSPP smoke test, then the WASM deploy to GitHub Pages ([pipeline order](CLAUDE.md#ci-pipeline-order)).
 
 ## Security notice
 

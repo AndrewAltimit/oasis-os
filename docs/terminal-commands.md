@@ -434,9 +434,13 @@ on-screen clock through `/var/pclock/visible`; hidden by default).
   `oasis-core/src/plugin/examples.rs` add `hello`, `note` and `pclock`);
   they are not part of the built-in set.
 
-Counted from the source: 76 commands in `oasis-terminal`, 19 in `oasis-core`,
-1 in `oasis-apps` (`tv`) and 1 in `oasis-app` (97, or 96 without the `mcp`
-feature), plus the 20 shell builtins.
+Counted from the source: 75 commands in `oasis-terminal`, 19 in `oasis-core`,
+1 in `oasis-apps` (`tv`) and 1 in `oasis-app` (96, or 95 without the `mcp`
+feature), plus the 20 shell builtins. To recount, call
+`CommandRegistry::list_commands()` after `oasis_terminal::register_builtins`
+(75) and look for `fn name(&self)` / `define_command!` in `oasis-core/src`,
+`oasis-apps/src` and `oasis-app/src` (skipping test modules and the example
+plugins).
 
 `man <command>` is the canonical interactive reference; this document is the
 written-form mirror. If they diverge, the source `Command` impl is the

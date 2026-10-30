@@ -1,7 +1,10 @@
 # JavaScript Engine (`oasis-js`)
 
-Single-backend QuickJS-NG integration via `rquickjs`. Used on every
-target (desktop / WASM / UE5 / PSP).
+Single-backend QuickJS-NG integration via `rquickjs`. Linked wherever
+`oasis-browser`'s `javascript` feature is on: the desktop shell
+(`oasis-app` feature `javascript`, on by default) and the PSP EBOOT. The
+WASM backend and the UE5 FFI library build `oasis-core` without it and
+link no QuickJS.
 
 The DOM bindings themselves are documented in the "JavaScript DOM
 bindings" section of [`browser-engine.md`](browser-engine.md); this
@@ -71,7 +74,7 @@ knots to be aware of:
    "invalid binding: 0". The workaround lives in `.cargo/config.toml`:
    `linker = /opt/pspdev/bin/psp-ld`, `linker-flavor = gnu` under
    `-Z unstable-options`, replayed target-spec pre-link args, plus a
-   supplementary link script (`tools/psp-linkscript.ld`) that
+   supplementary link script (`crates/oasis-backend-psp/tools/psp-linkscript.ld`) that
    synthesises `_gp` (rust-psp's target script omits it; rust-lld
    computes `_gp` internally).
 

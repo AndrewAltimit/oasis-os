@@ -8,7 +8,9 @@ hand-rolled libc shim, kernel-mode quirks) see
 ## Crate at a glance
 
 `oasis-js` wraps QuickJS-NG via the `rquickjs` bindings. The same crate runs on
-desktop, WASM, UE5, and PSP — there is no per-target backend split. The crate
+the desktop shell (when `oasis-app`'s `javascript` feature is on, the default)
+and on PSP — there is no per-target backend split. The WASM backend and the UE5
+FFI library don't link it. The crate
 provides a single-threaded, non-reentrant JS context plus a small set of
 host-side primitives (console, timers, fetch, storage) that the browser layer
 extends with DOM bindings.

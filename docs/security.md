@@ -183,10 +183,10 @@ authentication for remote terminal connections:
 - **Line length cap** -- the listener drops a connection whose line
   exceeds 1024 bytes and the client one that exceeds 16 KiB, so a peer
   cannot exhaust memory by sending data without newlines
-- The FTP-like transfer server (`oasis-core/src/transfer/`) is opt-in
+- The FTP-like transfer server (`oasis-net/src/ftp.rs`, feature `vfs`) is opt-in
   (`ftp start [port] [--password <pass>]`); after three failed logins the
   connection is dropped. The limit is per connection, not per peer; see
-  [networking.md](networking.md#file-transfer-oasis-coresrctransfer) for
+  [networking.md](networking.md#file-transfer-oasis-netsrcftprs) for
   its caveats
 - The optional MCP control server (`oasis-mcp`, off by default) listens
   on loopback only, checks `Origin` / `Host` and can require a bearer

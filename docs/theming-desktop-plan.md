@@ -260,7 +260,7 @@ nine_patch = { image = "assets/btn.png", insets = [4, 4, 4, 4] }
 ### A4. Themeable cursor, selection, and file-type icons
 
 - `[cursor] texture = "assets/cursor.png", hotspot = [1, 1]` replacing the
-  procedural arrow in `oasis-app/src/cursor.rs`; keep procedural as fallback.
+  procedural arrow (`oasis_core::cursor::CursorState`); keep procedural as fallback.
 - `icon_selected`-style hover/selection highlight object (PSIX's most-loved
   affordance) — themeable texture or derived rounded rect.
 - Optional bitmap icon slots: `[icons.overrides] terminal = "assets/term.png"`

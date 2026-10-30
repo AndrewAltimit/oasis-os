@@ -6,190 +6,273 @@ larger changes by area. Breaking API changes are marked **(breaking)**.
 
 ## Unreleased -- overhaul (`overhaul/site-code-docs-2026-10`)
 
-A repository-wide cleanup: bug fixes found by a full code review, tighter
-traits and crate layering, dead-code removal, and docs that match the code.
+A repository-wide cleanup: bug fixes from a full code review and an
+adversarial review pass, tighter traits and crate layering, dead-code
+removal, a restyled site, and docs that match the code.
 
-> **Still in flight (wave 4).** The following lanes had not landed when this
-> entry was written; the orchestrator will fill them in before merge:
-> app registry inversion (`oasis-apps::builtin_registry`), the browser crate
-> split, video / UI / test-support consolidation, and the second site pass.
+### Behaviour changes to know about
 
-### Foundation (`oasis-types`, `oasis-sdi`, `oasis-rasterize`)
+- Skin names resolve strictly: `skin typo` is an error instead of silently
+  acting on Classic (boot paths still fall back to Classic).
+- Closing a window asks the app first everywhere (titlebar, `wm close`,
+  MCP `close_window`, WASM), so unsaved Text Editor edits raise a
+  Save / Discard / Cancel prompt; `wm close --force <id>` and MCP
+  `close_window { force: true }` skip it.
+- Requests written to `/var/wm/request` and `/var/audio/request` queue:
+  `open a; open b` or `wm close a; wm close b` apply both.
+- Music: finished tracks auto-advance (repeat / shuffle rules apply), and
+  `next` / `prev` while paused stay paused.
+- Maximized windows have no resize handles.
+- New windows open at a size that follows the screen (380x220 on
+  PSP-native skins, growing to 40 % x 45 % of larger screens), and
+  cascaded windows stay on screen.
+- The example clock plugin is hidden until `pclock show`.
+- The browser enforces CSP `script-src` / `style-src` and `SameSite`
+  cookies; large images are downscaled instead of shown broken (on PSP
+  they are capped at 256 px per side).
+- Desktop JavaScript is optional: `oasis-app` without the `javascript`
+  feature links no QuickJS (the WASM and UE5 FFI builds don't link it
+  either).
 
-- **Span-exact SDI defaults.** The `SdiShapes` / `SdiVector` defaults
-  (circles, rings, rounded rects, thick lines, polygons) now use the same
-  span generators as the SDL and UE5 rasterizers, moved into
-  `oasis_types::rasterize`. Previously `stroke_circle` drew a filled disc,
-  rounded rects ignored the radius and concave polygons filled wrong; PSP and
-  every mock run these defaults.
-- `cos_approx_f32` / `sin_approx_f32` used a Taylor series that overshot
-  default arcs by up to 21 %; they now call `f32::cos` / `f32::sin`.
-- `impl_sdi_defaults!(T)` / `impl_sdi_defaults!(T; except ..)` write the nine
-  empty extension impls for mocks and null backends.
-- **(breaking)** Removed traits and types with no production users:
-  `SdiBlendMode`, `SdiGeometry`, `GeometryVertex`, `sync.rs` (`SpscQueue`, which
-  was unsound), `sync_clock.rs`, texture dedup, `DashStyle` and others.
-  `DrawCommand` moved to `oasis-test-backend`.
-- Typed errors: `BackendError::{Unsupported, RenderTargetNotFound}`,
-  `SdiError::NotFound`.
-- SDI: overlay draws re-sort before drawing (no stale handles after a
-  create/destroy); object alpha also fades text, shadows and strokes.
+### Architecture and crate layout
+
+- **(breaking)** The app registry is inverted: hosts own an
+  `AppRegistry`, and the new `oasis-apps` crate provides
+  `builtin_registry(&HostInfo)`, the `tv` command and `TvGuideRunnerExt`.
+  `oasis-core` depends on no app crate, so editing an app no longer
+  rebuilds it. Plugin apps join the same registry
+  (`PluginManager::extend_registry`).
+- **(breaking)** `oasis-app-browser` is deleted (every host opens its own
+  browser view); `oasis-app-network` and `oasis-app-package-manager` are
+  merged into `oasis-app-system-monitor`. Network now shows the
+  shell-published `/system/state/net` instead of constants. 10 app crates
+  remain.
+- The browser's parser and loader are their own crates: `oasis-html`
+  (tokenizer, tree builder, arena DOM), `oasis-css` (parser, cascade,
+  computed values) and `oasis-http` (HTTP/1.1 + HTTP/2, Gemini, cookies,
+  cache, CSP, IO thread; re-exported as `oasis_browser::loader`). Each
+  builds and tests without layout, paint or QuickJS.
+- **(breaking)** The FTP-like transfer server moved from `oasis-core` to
+  `oasis-net::ftp` (feature `vfs`); `oasis-terminal` depends only on
+  types / vfs / platform / net (the `skin` command moved to `oasis-core`).
+- **(breaking)** `oasis-video` features are additive: `demux-lite`
+  (replaces the no-op `no-std-demux`), `symphonia`, `h264`, `ffmpeg`;
+  with both decoders on, ffmpeg wins, so `--all-features` builds.
+- `oasis_types::ipc` is the one home for VFS IPC paths and typed
+  requests (`/var/audio`, `/var/radio`, `/var/wm`, `/var/tv`, Settings,
+  terminal UI, plugins, `/system/state/net`; `MediaRequest`, `WmRequest`,
+  `PluginRequest`, `NetState`).
 - Shared helpers replace per-crate copies: `oasis_types::easing`,
-  `util::ct_eq`, `util::base64`, `OasisError::is_would_block()`.
-- `oasis_types::ipc`: the `/var/audio`, `/var/radio` and `/var/wm` paths and a
-  typed `MediaRequest`.
+  `util::ct_eq`, `util::base64`, `OasisError::is_would_block()` /
+  `is_timed_out()`.
 
-### Backends
+### Backend contract
 
-- **(breaking)** `oasis-backend-sdl` and `oasis-backend-ue5` no longer depend on
-  `oasis-core`; a desktop build without the `javascript` feature links no
-  QuickJS.
-- **One drawing-state contract** for every backend: absolute `set_clip_rect`,
-  translated and intersecting `push_clip_rect`, clip-independent unblended
-  `clear`, render targets that start clean and restore the parent's state,
-  scaled composites. Pinned on SDL and UE5 by
-  `oasis_test_backend::conformance` (`backend_parity`). Fixes WASM clip
-  narrowing and save-stack growth, UE5 stale target clips and 1:1-only
-  composites, and the vector-layer bake cache that disabled itself on UE5,
-  WASM and in the e2e harness.
-- UE5 / FFI: cached vector backgrounds, animated layers on a 12 FPS cadence,
-  render errors logged instead of discarded; `init` resizes in place.
-- PSP: shared `oasis-types` glyph table and `Color` ABGR conversion (the
-  duplicate table and `ColorExt` are gone); `set_clip_rect` untranslated per
-  the contract. (PSP build not verified on the development host.)
-- **(breaking)** `ClipboardBackend::clear` is now `clear_clipboard`.
+- **(breaking)** `oasis-backend-sdl` and `oasis-backend-ue5` no longer
+  depend on `oasis-core`.
+- **Span-exact SDI defaults:** the `SdiShapes` / `SdiVector` defaults use
+  the same span generators as the SDL and UE5 rasterizers
+  (`oasis_types::rasterize`). Previously `stroke_circle` drew a filled
+  disc, rounded rects ignored the radius and concave polygons filled
+  wrong; PSP and every mock run these defaults. Default arcs no longer
+  overshoot (exact `f32::cos` / `sin`).
+- **One drawing-state contract** (ADR-003): absolute `set_clip_rect`,
+  translated and intersecting `push_clip_rect`, clip-independent
+  unblended `clear`, render targets that start clean and restore the
+  parent's state, scaled composites. Pinned on SDL and UE5 by
+  `oasis_test_backend::conformance`. Fixes WASM clip narrowing, UE5 stale
+  target clips and unbounded scaled composites, and a vector-layer cache
+  that disabled itself on UE5, WASM and the e2e harness.
+- `impl_sdi_defaults!(T)` writes the nine empty extension impls for mocks;
+  `oasis-test-backend` gains `NullBackend` and a stateful
+  `RecordingBackend` (with `DrawCommand`), replacing per-crate mocks.
+- **(breaking)** Removed traits and types with no production users:
+  `SdiBlendMode`, `SdiGeometry`, `GeometryVertex`, the unsound
+  `SpscQueue`, texture dedup, `DashStyle` and others.
+  `ClipboardBackend::clear` is now `clear_clipboard`. Typed errors:
+  `BackendError::{Unsupported, RenderTargetNotFound}`, `SdiError::NotFound`.
+- SDI: overlay draws re-sort before drawing; object alpha also fades text,
+  shadows and strokes.
+- UE5 / FFI: cached vector backgrounds, animated layers at 12 FPS, render
+  errors logged; `init` resizes in place. **(breaking)** FFI callback codes
+  that never fired (`FILE_ACCESS`, `LOGIN`, `NETWORK_SEND`,
+  `PLUGIN_LOAD`) are removed; unknown codes are ignored with a warning.
 
-### Apps and the desktop shell
+### Shell and apps
 
-- **(breaking)** Slimmer `App` trait (`oasis-app-core`): `AsAny` blanket impl
-  replaces 19 hand-written `as_any`s; `refresh` is gone (follow-ups happen in
-  the handler, polling in `tick`); `drain_requests` replaces the single
-  pending-request slot; new `layout` and `handle_scroll` hooks; `handle_click`
-  gets the VFS. `AppRunner` drops its mirrored state.
-- WASM host: app requests to `/var/audio/request` and `/var/wm/request` are
-  appended, closing / replaced apps' last requests are kept, `wm` / `open`
-  work, and skin image wallpapers, layout textures and image layers render
-  (PSIX HiFi showed a plain orange screen).
+- **(breaking)** Slimmer `App` trait (`oasis-app-core`): an `AsAny`
+  blanket impl replaces 19 hand-written `as_any`s; `refresh` is gone;
+  `drain_requests` replaces the single pending-request slot; new `layout`
+  and `handle_scroll` hooks; `handle_click` gets the VFS.
+  `testing::AppHarness` drives an app in tests.
 - Desktop shell: one launch path (`launch::launch`) and one close path
-  (`windows::close_app_window`). `wm close` and MCP `close_window` now ask
-  the app first instead of dropping unsaved edits (`--force` / `force` skip
-  the prompt). Skin swaps keep plugin-registered apps, the status bar and the
-  taskbar. The unused desktop `Mode::App` is removed. Every app request is
-  drained each frame (was one per frame across all apps); the mouse wheel
-  reaches apps.
-- e2e coverage for the close paths, plugin tiles, terminal scroll, skin-swap
-  clocks and music control.
+  (`windows::close_app_window`); every app request is drained each frame
+  (was one per frame across all apps), including from apps closed that
+  frame; apps still open at exit release their resources; the mouse
+  wheel reaches apps. Skin swaps keep plugin apps, the status bar and the
+  taskbar.
+- Plugins run for real: the shell initializes them into its scene, calls
+  `update_all` with a `PluginContext` (screen size, wall-clock time) and
+  `shutdown_all`, and services `plugin list / load / unload` over
+  `oasis_types::ipc`. Duplicate plugin app titles stay with the first
+  plugin; removing a plugin app that shadowed a built-in restores it.
+- The corrupted skin's glitch effect runs on the desktop (each frame is
+  distorted, then restored). **(breaking)** `CorruptedModifiers::apply`
+  returns a `CorruptionUndo`.
+- Boot scripts run at boot: `oasis_core::script::run_boot_scripts` runs
+  `/home/.profile` then `/etc/startup.sh`. **(breaking)** Replaces
+  `run_startup`.
+- Fixes: start-menu clicks in the right padding launched the next row's
+  item; oversized skin bars overflowed bar / dashboard / terminal
+  geometry; the status-bar clock drifted off its right edge; long Text
+  Editor prompts overlapped the Ln/Col readout; WM underflow, focus after
+  minimize and fullscreen re-entry.
+- e2e coverage for the close paths, plugin tiles, terminal scroll,
+  skin-swap clocks, music control and window placement across skins.
 
-### Terminal, skins, audio
+### Browser engine and security
 
-- Terminal: one `BUILTINS` table for the 20 shell builtins (dispatch, `help`,
-  `which`, completion); `CommandOutput::Status` exit codes for `&&` / `||` /
-  `$?`; `kill N` works without `%`; `wm close --force`. The `skin` command moved
-  to `oasis-core`, so `oasis-terminal` depends only on types / vfs / platform
-  / net. Dead `HelpCmd` and `RunCmd` removed.
-- **Skins have one source of truth.** All 17 built-ins are generated from
-  `skins/` (the Rust-only `desktop`, `modern`, `corrupted` and the diverged
-  `xp` constants became TOML directories; a snapshot test proves the move was
-  lossless). Skin resolution is strict (`skin typo` is an error, not Classic);
-  `skin lint` flags unknown shader names. `from_base_colors` delegates to
-  `from_skin` instead of carrying a 400-line copy.
-- **Music IPC.** `AudioManager` is a backend-free state machine; the desktop
-  media controller now serves every `music` request (pause, resume, next,
-  prev, vol, repeat, shuffle were silently dropped) and publishes
-  `/var/audio/status`.
-- Radio: OS-level `WouldBlock` is "no data" (http:// stations used to fail on
-  the first empty read); non-2xx Icecast responses are rejected.
-- **(breaking)** `OasisError::is_would_block()` no longer accepts `TimedOut`
-  (new `is_timed_out()`): on a non-blocking socket it is a dead peer, and
-  retrying it hung radio, FTP and MCP connections. `RustlsStream` keeps the
-  kind instead of folding it into `WouldBlock`. Radio streams that stay silent
-  for 20 s (`ThreadedSource` stall timeout) are dropped; request writes are
-  bounded.
-- Radio redirects: `radio::connect_icecast` follows up to 5 Icecast redirects
-  (same-scheme or http -> https, never https -> http); archive redirects
-  resolve relative `Location`s.
-- Shaders: `BuiltinShader` enum is the one catalogue of the 8 built-ins; the
+- **Cookies:** RFC 6265 jar (host-only, `Max-Age` / `Expires`,
+  public-suffix guard, `Secure`, `__Secure-` / `__Host-`, size caps),
+  sent and stored per redirect hop; `SameSite=Strict/Lax` cookies are
+  withheld from cross-site subresources and form posts
+  (`ResourceRequest::initiator`, **breaking** for struct literals); http
+  pages can't overwrite or delete `Secure` cookies; `document.cookie` is
+  capped.
+- **Redirects and requests:** per-hop headers (`Cookie` / `Authorization`
+  dropped off-origin, strict-origin-when-cross-origin `Referer`), URL
+  normalization, no credentials in URLs; network responses can't redirect
+  to `vfs://` / `file:`; CR / LF in URLs or `fetch()` headers can't split
+  requests.
+- **CSP:** `script-src` / `style-src` enforced with nonces, sha256 hashes
+  and `'unsafe-hashes'` per handler (previously only `connect-src`);
+  `fetch()` redirect hops and `data:` URLs obey `connect-src`; the page
+  policy survives back / forward and `304`; web-origin pages can't load
+  `vfs://` subresources.
+- **HTTP/2:** header-block and HPACK output caps (CONTINUATION-flood
+  class), no panic on huge HPACK lengths, `GOAWAY` on oversized frames,
+  trailers handled; 307 / 308 keep the body and only framed responses are
+  pooled.
+- **Robustness:** script-built DOM trees are depth-capped (incl. SVG /
+  MathML and `innerHTML`) and capped at 200k nodes; stale JS node ids
+  can't corrupt the tree; `<template>` scripts stay inert; the selector
+  matcher backtracks within a traversal budget that never matches through
+  `:not()` when exhausted; one per-tick JS timer budget; configurable
+  `js_max_exec_ms` / `js_memory_limit_bytes` (2 s / 64 MiB desktop,
+  500 ms / 8 MiB PSP) with the heap limit verified.
+- **Rendering:** one record + replay renderer everywhere, with SVG and
+  canvas in paint order; compositing layers placed correctly under scroll;
+  one sticky-positioning formula; box `filter` applied once; gradients
+  honour layer opacity; large images downscaled during decode
+  (`max_image_dimension` / `max_image_pixels`); previous pages' image
+  textures are freed on navigation; `text-align: start/end` follow
+  `direction`.
+
+### Skins
+
+- **One source of truth:** all 17 built-ins are generated from `skins/`
+  at build time (`desktop`, `modern`, `corrupted` and the diverged `xp`
+  became TOML directories; a snapshot test pins every parsed skin).
+  Settings-saved `custom-*` skins are never compiled in, and saving over a
+  built-in's name is refused.
+- Strict `resolve_skin` (plus `resolve_skin_or_classic` for boot);
+  `skin lint` flags unknown shader names and the removed `features.toml`
+  `command_categories` key. `from_base_colors` delegates to `from_skin`.
+
+### Terminal
+
+- One `BUILTINS` table for the 20 shell builtins (dispatch, `help`,
+  `which`, completion); `CommandOutput::Status` exit codes for `&&` /
+  `||` / `$?`; a pipeline's status is its last segment's; `kill N` works
+  without `%`.
+- `open <app> [file]` resolves relative files against the cwd;
+  `wm close --force`; `ftp start 0` and bad ports are errors (0 used to
+  stop the server); `ftp status` reads the published network state; cron
+  names can't escape `/etc/cron`. Dead `HelpCmd` / `RunCmd` removed.
+
+### Audio and video
+
+- **Music IPC:** `AudioManager` is a backend-free state machine and
+  `oasis_audio::MusicController` carries it out on the desktop and WASM:
+  every `music` request is served (pause, resume, next, prev, vol, repeat
+  and shuffle used to be dropped) and `/var/audio/status` is published.
+  Shuffle continues from a track picked with `play_file`.
+- **(breaking)** `OasisError::is_would_block()` no longer accepts
+  `TimedOut` (new `is_timed_out()`): on a non-blocking socket it is a dead
+  peer, and retrying it hung radio, FTP and MCP connections. Radio streams
+  silent for 20 s are dropped; request writes are bounded.
+- Radio: OS `WouldBlock` is "no data" (http:// stations failed on the
+  first empty read); non-2xx Icecast responses are rejected;
+  `radio::connect_icecast` follows up to 5 redirects (never https to
+  http); archive redirects resolve relative `Location`s.
+- Shaders: `BuiltinShader` is the one catalogue of the 8 built-ins; the
   no-op `software` feature is removed.
 
-### VFS
+### VFS and networking
 
-- `Vfs::validate_rename` shared by all implementations: no renaming `/`, no
-  moving a directory into itself, no clobbering directories.
-- `RealVfs`: fixed a symlink escape on `mkdir` of a missing path under a link
-  pointing outside the root.
-- `tests/vfs_conformance.rs` runs one suite against all three implementations.
+- `Vfs::validate_rename` shared by all implementations (no renaming `/`,
+  no moving a directory into itself, no clobbering directories);
+  `tests/vfs_conformance.rs` runs one suite against all three.
+- `RealVfs`: fixed a symlink escape on `mkdir` of a missing path under a
+  link pointing outside the root.
+- `RustlsStream` keeps the I/O error kind instead of folding it into
+  `WouldBlock`; MCP idle connections are reaped.
 
-### Browser and JavaScript
+### WASM
 
-- **Cookies:** RFC 6265 jar -- host-only cookies, `Max-Age` / `Expires`,
-  public-suffix guard, `Secure` rules, `__Secure-` / `__Host-` prefixes, size
-  caps. Cookies are sent and stored per redirect hop (they used to follow
-  cross-site redirects, even https to http).
-- **Redirects / URLs:** per-hop headers (`Cookie` / `Authorization` dropped
-  off-origin, strict-origin-when-cross-origin `Referer`), URL normalization,
-  credentials never sent.
-- **CSP:** `script-src` / `style-src` enforced with nonces and sha256 hashes
-  (previously only `connect-src`); web-origin pages cannot load `vfs://`
-  subresources.
-- **HTTP/2:** header-block and HPACK output caps (CONTINUATION-flood class),
-  `GOAWAY` on oversized frames. Shared HTTP/1.1 framing between desktop and
-  PSP.
-- Script-built DOM trees are depth-capped (a deep `appendChild` loop used to
-  overflow the stack); the selector matcher backtracks correctly with a
-  traversal budget; `text-align: start/end` resolve against `direction`.
-- JS: one per-tick timer budget that defers the rest; configurable
-  `js_max_exec_ms` / `js_memory_limit_bytes` (2 s / 64 MiB desktop, 500 ms /
-  8 MiB PSP); the heap limit is verified to be enforced.
-- **Review fixes (wave 5):** network responses can no longer redirect to
-  `vfs://` / `file:` (a remote page gained local-page privileges); an HPACK
-  length near `u64::MAX` no longer panics; CR / LF in URLs or `fetch()`
-  headers can't split requests; `SameSite=Strict/Lax` cookies are withheld
-  from cross-site subresources and form posts (`ResourceRequest::initiator`,
-  **breaking** for struct literals); http can't delete `Secure` cookies;
-  `fetch()` redirect hops and `data:` URLs obey `connect-src`; the page CSP
-  survives back / forward and `304`; `'unsafe-hashes'` matches per handler;
-  `<template>` scripts stay inert; stale JS node ids can't corrupt the tree
-  (freed-slot tracking); SVG / MathML nesting and text-node `innerHTML`
-  respect the depth cap; scripts are capped at 200k DOM nodes; sibling
-  selector scans are charged to the match budget and an exhausted budget
-  never matches through `:not()`; `document.cookie` is size / count capped;
-  box-level `filter` is applied once (it cancelled itself on render-target
-  backends); h2 trailers, 307 / 308 bodies and truncated keep-alive
-  responses are handled.
+- App requests to `/var/audio/request` and `/var/wm/request` append;
+  closing / replaced apps' last requests are kept; `wm` and `open` work.
+- The Music Player plays real audio through an `<audio>` element; music
+  and radio stop each other.
+- Closing a window asks the app first and Cancel reaches apps, as on the
+  desktop.
+- Skin image wallpapers, layout textures and image layers render (PSIX
+  HiFi showed a plain orange screen); host-side tests cover the Canvas 2D
+  clip state machine.
 
-### Design-vs-code gaps (wave 5)
+### PSP
 
-- The **corrupted skin's glitch effect** now runs on the desktop shell:
-  each drawn frame is distorted and then restored, so nothing drifts.
-  **(breaking)** `CorruptedModifiers::apply` returns a `CorruptionUndo`;
-  the unused `SkinEffect` / `CorruptedEffect` / `ScanlineEffect` are gone.
-- **Boot scripts run at boot:** `oasis_core::script::run_boot_scripts` runs
-  `/home/.profile` and then `/etc/startup.sh`, and the desktop shell calls it.
-  **(breaking)** Replaces `run_startup`.
-- **(breaking)** Removed things that never did anything: the skin
-  `features.toml` `command_categories` key (now an unknown-key lint warning),
-  and FFI callback codes `FILE_ACCESS` / `LOGIN` / `NETWORK_SEND` /
-  `PLUGIN_LOAD`, which never fired. Registering an unknown code is now
-  ignored with a warning.
-- Removed `oasis_core::apps::BUILTIN_APP_TITLES`; the icon and label checks
-  for every built-in title now run in `oasis-apps` against the real registry.
-- Review fixes:
-  - Start-menu clicks in the right padding launched an item from the next
-    row; they now hit the same item the hover highlight shows.
-  - Cron names can no longer escape `/etc/cron`.
-  - `ftp start 0` no longer stops the server.
-  - Duplicate plugin app titles stay owned by the first plugin.
-  - WM: underflow, focus and fullscreen fixes.
-  - Vector: fixes for a zero blink interval and for gradients under group
-    alpha.
+- The PSP crates build warning-free, in CI and in a new `psp-build`
+  Docker profile (pspdev + pinned nightly + cargo-psp) usable on any
+  host; `scripts/psp-smoke-test.sh` boot-tests the EBOOTs in
+  PPSSPPHeadless.
+- One rust-psp revision pinned across every PSP crate; the backend
+  lockfile was regenerated.
+- Shared `oasis-types` glyph table and `Color` ABGR conversion (the
+  duplicate table and `ColorExt` are gone); `set_clip_rect` untranslated
+  per the contract; browser images fit within 256 px.
 
-### Docs and site
+### CI and tooling
 
-- `docs/design.md` v3.0; ADRs re-reviewed (dates, DOM free list, PSP crate
-  layout, backend counts); every doc indexed in `docs/README.md`; command,
-  skin, trait and FFI counts re-verified against the source; drifted
-  `file.rs:NN` references replaced; CHANGELOG added.
-- Site landing page revamped with current facts.
+- New `main-ci.yml` steps: an `oasis-app` feature-combination check,
+  clippy over the supported non-default feature sets (`oasis-browser`,
+  `oasis-core`, `oasis-video`, `oasis-app`, `oasis-ffi`), and
+  `scripts/check-rust-psp-rev.sh`, which fails when the rust-psp pin,
+  nightly date, toolchain channel or pspdev GCC version drift between
+  crates, workflows and `docker/psp-build.Dockerfile`.
+- PSP EBOOT, overlay PRX and recovery EBOOT builds deny rustc warnings
+  (`PSP_DENY_WARNINGS`).
+
+### Site
+
+- Landing page, journal, blueprint viewer and WASM demo share one design
+  system (tokens, top bar, footer), with current facts, social card,
+  favicon, 404 page and sitemap.
+- Journal articles keep their narrative with dated "Update (Oct 2026)"
+  notes where claims changed.
+- The demo lists all 17 skins (generated from `site/data/skins.json`;
+  a test fails on stale lists) and its canvas refits without overflowing.
+
+### Docs
+
+- `docs/design.md` v3.0 links to the subsystem docs instead of repeating
+  them; ADRs re-reviewed; `docs/README.md` indexes every doc;
+  `CLAUDE.md` is the one architecture and CI reference (`AGENTS.md`
+  links to it).
+- Command, builtin, skin, widget, trait-method and FFI counts re-verified
+  against the source; drifted `file.rs:NN` references and paths replaced;
+  the browser crate docs describe the oasis-html / oasis-css / oasis-http
+  split; this CHANGELOG added.
 
 ## Earlier releases
 
