@@ -51,6 +51,12 @@ cargo deny check
 # Build PSP backend (excluded from workspace, requires nightly + cargo-psp)
 cd crates/oasis-backend-psp && RUST_PSP_BUILD_STD=1 cargo psp --release
 
+# ... or in Docker with pspdev + nightly + cargo-psp preinstalled (any host)
+docker compose --profile psp-build run --rm psp-build \
+  bash -c 'cd crates/oasis-backend-psp && RUST_PSP_BUILD_STD=1 cargo psp --release'
+# Boot-test the PSP EBOOTs in PPSSPPHeadless (as CI does)
+scripts/psp-smoke-test.sh
+
 # Build PSP overlay plugin PRX (excluded from workspace, kernel mode)
 cd crates/oasis-plugin-psp && RUST_PSP_BUILD_STD=1 cargo psp --release
 
