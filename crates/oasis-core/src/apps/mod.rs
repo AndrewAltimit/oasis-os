@@ -41,30 +41,6 @@ pub fn default_window_size(screen_w: u32, screen_h: u32) -> (u32, u32) {
     (w, h)
 }
 
-/// Titles of the apps the built-in dashboard knows (icons, labels): the
-/// `oasis-apps` bundle's registry plus the host-provided Browser. Kept
-/// here so `oasis-core`'s icon and label tests can cover every built-in
-/// app without depending on the app crates; `oasis-apps` tests that it
-/// matches its registry.
-#[doc(hidden)]
-pub const BUILTIN_APP_TITLES: &[&str] = &[
-    "File Manager",
-    "Settings",
-    "Network",
-    "Package Manager",
-    "System Monitor",
-    "Terminal",
-    "Music Player",
-    "Photo Viewer",
-    "Text Editor",
-    "Calculator",
-    "Paint",
-    "Games",
-    "Internet Radio",
-    "TV Guide",
-    "Browser",
-];
-
 #[cfg(test)]
 mod tests {
     use super::*;

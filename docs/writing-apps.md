@@ -314,10 +314,12 @@ way a host does: a `Confirm`, 90 ticks of 16 ms, a lap, `Ctrl+S` through
    file with me": `AppAction::LaunchAppWithFile` hand-offs and
    `open <app> <file>`), `.owns_media(OwnedMedia::Music | Radio)`,
    `.hide_sdi(fn)` (cleanup for SDI objects outside the shared pools).
-3. Add the title to `oasis_core::apps::BUILTIN_APP_TITLES` (the
-   dashboard icon and label tests cover every title there; an
-   `oasis-apps` test fails until you do) and give it a dashboard icon
-   category in `oasis-core/src/dashboard`.
+3. Make sure the title maps to its own dashboard icon category
+   (`oasis_vector::icon_set::IconCategory::from_app_title`, a title
+   keyword classifier). The `oasis-apps` tests run every registered
+   title through it and through the dashboard label layout of every
+   built-in skin, so a title with no category, a category clash or a
+   label that overflows its cell fails there.
 
 ## Testing
 

@@ -159,42 +159,7 @@ pub(crate) fn draw_label(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::apps::BUILTIN_APP_TITLES;
     use crate::text_fit::{ELLIPSIS, text_width};
-
-    #[test]
-    fn every_builtin_title_fits_its_cell_at_480x272() {
-        for &skin_name in crate::skin::builtin::builtin_names() {
-            let skin = crate::skin::builtin::load_builtin(skin_name).expect("builtin skin");
-            let at = ActiveTheme::from_skin(&skin.theme)
-                .with_screen_size(480, 272)
-                .with_features(&skin.features);
-            let cfg = super::super::DashboardConfig::from_features(&skin.features, &at);
-            let psp_native = skin.manifest.screen_width == 480;
-            for cell_w in [cfg.cell_w, cfg.free_cell_w] {
-                for &title in BUILTIN_APP_TITLES {
-                    let lines = wrap_label(title, label_max_width(cell_w), at.font_small);
-                    assert!(
-                        !lines.is_empty() && lines.len() <= LABEL_MAX_LINES,
-                        "{skin_name}: {title:?} -> {lines:?}"
-                    );
-                    for line in &lines {
-                        // Cells of PSP-native skins are sized so no
-                        // built-in title needs truncating.
-                        assert!(
-                            !psp_native || !line.ends_with(ELLIPSIS),
-                            "{skin_name}: {title:?} truncated to {line:?} in {cell_w}px"
-                        );
-                        let w = text_width(line, at.font_small);
-                        assert!(
-                            w + 2 * LABEL_GUTTER <= cell_w,
-                            "{skin_name}: {title:?} line {line:?} is {w}px in a {cell_w}px cell"
-                        );
-                    }
-                }
-            }
-        }
-    }
 
     #[test]
     fn narrow_cell_ellipsizes_instead_of_overflowing() {
