@@ -1,5 +1,5 @@
-//! Audio file metadata for the Music Player: ID3v2 title, MP3 duration
-//! estimate, duration formatting.
+//! Audio file metadata for the Music Player: display title (ID3v2 via
+//! `oasis_app_core::id3`, else the file name), MP3 duration estimate.
 
 /// Extract a display title and duration string from an audio file.
 /// Falls back to the filename stem if ID3 tags are not available.
@@ -9,95 +9,17 @@ pub(crate) fn parse_audio_metadata(path: &str, data: &[u8]) -> (String, Option<S
         .rsplit_once('.')
         .map_or(filename, |(stem, _)| stem)
         .replace(['_', '-'], " ");
-    let title = id3v2_title(data).unwrap_or(fallback_title);
+    let title = oasis_app_core::id3::read(data)
+        .title
+        .unwrap_or(fallback_title);
     let duration = mp3_duration(data).map(format_duration);
     (title, duration)
-}
-
-/// Small ID3v2 TIT2 (title) reader. Handles the two tag-size encodings
-/// that real-world MP3s use:
-///
-/// * v2.3 (`data[3] == 3`): frame sizes are plain big-endian `u32`.
-/// * v2.4 (`data[3] == 4`): frame sizes are 28-bit syncsafe integers
-///   (same shape as the tag header size).
-///
-/// Returns `None` for older v2.2, unknown versions, or malformed data.
-fn id3v2_title(data: &[u8]) -> Option<String> {
-    if data.len() < 10 || &data[..3] != b"ID3" {
-        return None;
-    }
-    let major = data[3];
-    // We know how to parse v2.3 and v2.4 frames. v2.2 uses 3-byte
-    // frame IDs with 3-byte sizes — different layout; skip it.
-    if major != 3 && major != 4 {
-        return None;
-    }
-    let size = ((data[6] as usize) << 21)
-        | ((data[7] as usize) << 14)
-        | ((data[8] as usize) << 7)
-        | (data[9] as usize);
-    let tag_end = 10 + size;
-    if tag_end > data.len() {
-        return None;
-    }
-    let tag = &data[10..tag_end];
-    let mut i = 0;
-    while i + 10 <= tag.len() {
-        let frame_id = &tag[i..i + 4];
-        if frame_id[0] == 0 {
-            break;
-        }
-        let size_bytes = [tag[i + 4], tag[i + 5], tag[i + 6], tag[i + 7]];
-        let frame_size = if major == 4 {
-            syncsafe_to_usize(size_bytes)
-        } else {
-            u32::from_be_bytes(size_bytes) as usize
-        };
-        let body_start = i + 10;
-        // Checked: a v2.3 size is a raw u32, which can wrap `usize` on
-        // 32-bit targets (WASM) and move `body_end` backwards.
-        let Some(body_end) = body_start.checked_add(frame_size) else {
-            break;
-        };
-        if body_end > tag.len() {
-            break;
-        }
-        if frame_id == b"TIT2" && frame_size >= 1 {
-            let encoding = tag[body_start];
-            let payload = &tag[body_start + 1..body_end];
-            if encoding == 0 || encoding == 3 {
-                let s = String::from_utf8_lossy(payload).into_owned();
-                let trimmed = s.trim_end_matches('\0').trim();
-                if !trimmed.is_empty() {
-                    return Some(trimmed.to_string());
-                }
-            }
-        }
-        i = body_end;
-    }
-    None
-}
-
-/// Decode a 4-byte ID3 syncsafe integer (7 bits per byte).
-fn syncsafe_to_usize(bytes: [u8; 4]) -> usize {
-    ((bytes[0] as usize) << 21)
-        | ((bytes[1] as usize) << 14)
-        | ((bytes[2] as usize) << 7)
-        | (bytes[3] as usize)
 }
 
 /// Estimate MP3 duration from first-frame bitrate + file size. Close
 /// enough for a UI readout; we're not a metadata library.
 fn mp3_duration(data: &[u8]) -> Option<u32> {
-    let audio_start = if data.len() >= 10 && &data[..3] == b"ID3" {
-        let size = ((data[6] as usize) << 21)
-            | ((data[7] as usize) << 14)
-            | ((data[8] as usize) << 7)
-            | (data[9] as usize);
-        10 + size
-    } else {
-        0
-    };
+    let audio_start = oasis_app_core::id3::tag_len(data);
     if audio_start >= data.len() {
         return None;
     }
@@ -129,12 +51,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn id3v2_title_rejects_huge_frame_size() {
+    fn huge_frame_size_falls_back_to_file_name() {
         // v2.3 tag, TIT2 frame claiming 0xFFFFFFFF bytes.
         let mut data = b"ID3\x03\x00\x00\x00\x00\x00\x14".to_vec();
         data.extend_from_slice(b"TIT2\xFF\xFF\xFF\xFF\x00\x00");
         data.extend_from_slice(&[0; 10]);
-        assert_eq!(id3v2_title(&data), None);
+        assert_eq!(parse_audio_metadata("/m/my_song.mp3", &data).0, "my song");
     }
 
     /// Build a minimal ID3v2 tag containing one TIT2 frame.
@@ -184,7 +106,7 @@ mod tests {
     #[test]
     fn id3v2_3_title_parses() {
         let tag = make_id3_tag("Hello World", 3);
-        assert_eq!(super::id3v2_title(&tag).as_deref(), Some("Hello World"));
+        assert_eq!(parse_audio_metadata("/m/x.mp3", &tag).0, "Hello World");
     }
 
     #[test]
@@ -192,7 +114,7 @@ mod tests {
         // v2.4 uses syncsafe for frame sizes too — the old code read
         // them as plain big-endian and tripped `body_end > tag.len()`.
         let tag = make_id3_tag("Modern MP3", 4);
-        assert_eq!(super::id3v2_title(&tag).as_deref(), Some("Modern MP3"));
+        assert_eq!(parse_audio_metadata("/m/x.mp3", &tag).0, "Modern MP3");
     }
 
     #[test]
@@ -200,6 +122,6 @@ mod tests {
         // v2.2 has a different frame layout we don't support.
         let mut tag = make_id3_tag("Old", 3);
         tag[3] = 2; // pretend v2.2
-        assert!(super::id3v2_title(&tag).is_none());
+        assert_eq!(parse_audio_metadata("/m/old.mp3", &tag).0, "old");
     }
 }

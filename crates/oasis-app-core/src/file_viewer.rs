@@ -104,11 +104,11 @@ pub fn view_audio_file(path: &str, data: &[u8]) -> Vec<String> {
         lines.push(format!("  File Size:    {size_kb} KB"));
 
         if data.len() > 10 && &data[..3] == b"ID3" {
-            let id3_info = parse_id3v2_basic(data);
-            if let Some(title) = id3_info.0 {
+            let id3_info = crate::id3::read(data);
+            if let Some(title) = id3_info.title {
                 lines.push(format!("  Title:        {title}"));
             }
-            if let Some(artist) = id3_info.1 {
+            if let Some(artist) = id3_info.artist {
                 lines.push(format!("  Artist:       {artist}"));
             }
         }
@@ -130,55 +130,6 @@ pub fn view_audio_file(path: &str, data: &[u8]) -> Vec<String> {
     lines.push(String::new());
     lines.push("Cancel=back to library".to_string());
     lines
-}
-
-/// Try to extract title and artist from an ID3v2 tag.
-/// Returns (Option<title>, Option<artist>).
-fn parse_id3v2_basic(data: &[u8]) -> (Option<String>, Option<String>) {
-    if data.len() < 10 || &data[..3] != b"ID3" {
-        return (None, None);
-    }
-    let header_size = ((data[6] as usize & 0x7F) << 21)
-        | ((data[7] as usize & 0x7F) << 14)
-        | ((data[8] as usize & 0x7F) << 7)
-        | (data[9] as usize & 0x7F);
-    let end = (10 + header_size).min(data.len());
-
-    let mut title = None;
-    let mut artist = None;
-    let mut pos = 10;
-
-    while pos + 10 < end {
-        let frame_id = &data[pos..pos + 4];
-        let frame_size =
-            u32::from_be_bytes([data[pos + 4], data[pos + 5], data[pos + 6], data[pos + 7]])
-                as usize;
-        // Checked: the raw u32 size can wrap `usize` on 32-bit targets.
-        let Some(frame_end) = (pos + 10).checked_add(frame_size) else {
-            break;
-        };
-        if frame_size == 0 || frame_end > end {
-            break;
-        }
-        let frame_data = &data[pos + 10..frame_end];
-        let text = if frame_data.len() > 1 {
-            String::from_utf8_lossy(&frame_data[1..])
-                .trim_matches('\0')
-                .to_string()
-        } else {
-            String::new()
-        };
-
-        if frame_id == b"TIT2" && !text.is_empty() {
-            title = Some(text);
-        } else if frame_id == b"TPE1" && !text.is_empty() {
-            artist = Some(text);
-        }
-
-        pos = frame_end;
-    }
-
-    (title, artist)
 }
 
 /// View an image file: parse headers and show image metadata.
@@ -321,14 +272,6 @@ pub fn view_generic_file(path: &str, data: &[u8]) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn parse_id3v2_basic_rejects_huge_frame_size() {
-        let mut data = b"ID3\x03\x00\x00\x00\x00\x00\x14".to_vec();
-        data.extend_from_slice(b"TIT2\xFF\xFF\xFF\xFF\x00\x00");
-        data.extend_from_slice(&[0; 10]);
-        assert_eq!(parse_id3v2_basic(&data), (None, None));
-    }
 
     // -- parent_dir --
 

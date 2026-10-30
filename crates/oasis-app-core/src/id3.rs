@@ -1,0 +1,183 @@
+//! Minimal ID3v2 tag reader (title / artist) shared by the file viewer
+//! and the Music Player.
+//!
+//! Handles v2.3 (plain big-endian frame sizes) and v2.4 (syncsafe frame
+//! sizes) tags and the four ID3 text encodings. v2.2 (3-byte frame ids)
+//! and anything malformed yield no tags. All size arithmetic is checked,
+//! so hostile sizes can't wrap `usize` on 32-bit targets.
+
+/// Text frames read from an ID3v2 tag.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Id3Tags {
+    /// `TIT2` (title).
+    pub title: Option<String>,
+    /// `TPE1` (lead artist).
+    pub artist: Option<String>,
+}
+
+/// Length of the ID3v2 tag at the start of `data` (header included), or
+/// 0 when `data` has no tag. Where the audio frames start.
+pub fn tag_len(data: &[u8]) -> usize {
+    if data.len() < 10 || &data[..3] != b"ID3" {
+        return 0;
+    }
+    10 + syncsafe([data[6], data[7], data[8], data[9]])
+}
+
+/// Read the title / artist frames of the ID3v2 tag at the start of `data`.
+pub fn read(data: &[u8]) -> Id3Tags {
+    let mut tags = Id3Tags::default();
+    if data.len() < 10 || &data[..3] != b"ID3" {
+        return tags;
+    }
+    let major = data[3];
+    if major != 3 && major != 4 {
+        return tags;
+    }
+    let tag = &data[10..tag_len(data).min(data.len())];
+    let mut i = 0;
+    while i + 10 <= tag.len() {
+        let id = &tag[i..i + 4];
+        if id[0] == 0 {
+            break; // padding
+        }
+        let size_bytes = [tag[i + 4], tag[i + 5], tag[i + 6], tag[i + 7]];
+        let size = if major == 4 {
+            syncsafe(size_bytes)
+        } else {
+            u32::from_be_bytes(size_bytes) as usize
+        };
+        let body_start = i + 10;
+        let Some(body_end) = body_start.checked_add(size).filter(|&e| e <= tag.len()) else {
+            break;
+        };
+        let slot = match id {
+            b"TIT2" => Some(&mut tags.title),
+            b"TPE1" => Some(&mut tags.artist),
+            _ => None,
+        };
+        if let Some(slot) = slot
+            && slot.is_none()
+        {
+            *slot = decode_text(&tag[body_start..body_end]);
+        }
+        if tags.title.is_some() && tags.artist.is_some() {
+            break;
+        }
+        i = body_end;
+    }
+    tags
+}
+
+/// Decode a text frame body (encoding byte + text); `None` when empty.
+fn decode_text(body: &[u8]) -> Option<String> {
+    let (&encoding, text) = body.split_first()?;
+    let s = match encoding {
+        // ISO-8859-1: every byte is the code point.
+        0 => text.iter().map(|&b| char::from(b)).collect(),
+        // UTF-16 with BOM (1) / UTF-16BE without BOM (2).
+        1 | 2 => {
+            let (big_endian, text) = match text {
+                [0xFE, 0xFF, rest @ ..] => (true, rest),
+                [0xFF, 0xFE, rest @ ..] => (false, rest),
+                _ => (encoding == 2, text),
+            };
+            let units = text.as_chunks::<2>().0.iter().map(|c| {
+                if big_endian {
+                    u16::from_be_bytes([c[0], c[1]])
+                } else {
+                    u16::from_le_bytes([c[0], c[1]])
+                }
+            });
+            char::decode_utf16(units)
+                .map(|r| r.unwrap_or(char::REPLACEMENT_CHARACTER))
+                .collect()
+        },
+        // UTF-8.
+        3 => String::from_utf8_lossy(text).into_owned(),
+        _ => return None,
+    };
+    let trimmed = s.trim_matches('\0').trim();
+    (!trimmed.is_empty()).then(|| trimmed.to_string())
+}
+
+/// Decode a 4-byte syncsafe integer (7 bits per byte).
+fn syncsafe(b: [u8; 4]) -> usize {
+    ((b[0] as usize & 0x7F) << 21)
+        | ((b[1] as usize & 0x7F) << 14)
+        | ((b[2] as usize & 0x7F) << 7)
+        | (b[3] as usize & 0x7F)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A tag with the given frames (`(id, encoding, text bytes)`).
+    fn tag(major: u8, frames: &[(&[u8; 4], u8, &[u8])]) -> Vec<u8> {
+        let mut body = Vec::new();
+        for (id, enc, text) in frames {
+            let size = (text.len() + 1) as u32;
+            body.extend_from_slice(*id);
+            if major == 4 {
+                body.extend_from_slice(&[
+                    ((size >> 21) & 0x7F) as u8,
+                    ((size >> 14) & 0x7F) as u8,
+                    ((size >> 7) & 0x7F) as u8,
+                    (size & 0x7F) as u8,
+                ]);
+            } else {
+                body.extend_from_slice(&size.to_be_bytes());
+            }
+            body.extend_from_slice(&[0, 0, *enc]);
+            body.extend_from_slice(text);
+        }
+        let n = body.len();
+        let mut out = vec![b'I', b'D', b'3', major, 0, 0];
+        out.extend_from_slice(&[
+            ((n >> 21) & 0x7F) as u8,
+            ((n >> 14) & 0x7F) as u8,
+            ((n >> 7) & 0x7F) as u8,
+            (n & 0x7F) as u8,
+        ]);
+        out.extend_from_slice(&body);
+        out
+    }
+
+    #[test]
+    fn reads_title_and_artist_v23_and_v24() {
+        for major in [3, 4] {
+            let data = tag(major, &[(b"TIT2", 3, b"Song"), (b"TPE1", 0, b"Band")]);
+            let t = read(&data);
+            assert_eq!(t.title.as_deref(), Some("Song"), "v2.{major}");
+            assert_eq!(t.artist.as_deref(), Some("Band"), "v2.{major}");
+        }
+    }
+
+    #[test]
+    fn decodes_utf16_and_latin1() {
+        let utf16le = [0xFF, 0xFE, b'H', 0, b'i', 0];
+        let data = tag(3, &[(b"TIT2", 1, &utf16le), (b"TPE1", 0, &[0xE9])]);
+        let t = read(&data);
+        assert_eq!(t.title.as_deref(), Some("Hi"));
+        assert_eq!(t.artist.as_deref(), Some("\u{e9}"));
+    }
+
+    #[test]
+    fn rejects_huge_frame_size_and_unknown_versions() {
+        let mut data = b"ID3\x03\x00\x00\x00\x00\x00\x14".to_vec();
+        data.extend_from_slice(b"TIT2\xFF\xFF\xFF\xFF\x00\x00");
+        data.extend_from_slice(&[0; 10]);
+        assert_eq!(read(&data), Id3Tags::default());
+        let v22 = tag(2, &[(b"TIT2", 3, b"x")]);
+        assert_eq!(read(&v22), Id3Tags::default());
+        assert_eq!(read(b"not a tag"), Id3Tags::default());
+    }
+
+    #[test]
+    fn tag_len_covers_header_and_body() {
+        let data = tag(3, &[(b"TIT2", 3, b"abc")]);
+        assert_eq!(tag_len(&data), data.len());
+        assert_eq!(tag_len(b"\xFF\xFB\x90"), 0);
+    }
+}
