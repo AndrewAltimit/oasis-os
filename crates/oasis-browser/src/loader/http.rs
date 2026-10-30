@@ -6,6 +6,7 @@
 use std::cell::RefCell;
 use std::io::{self, Read, Write};
 use std::net::TcpStream;
+#[cfg(all(native_net, feature = "javascript"))]
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
@@ -54,14 +55,16 @@ const MAX_TOTAL_CONNS: usize = 8;
 /// Maximum age of an idle pooled connection (30 seconds).
 const POOL_IDLE_TIMEOUT: Duration = Duration::from_secs(30);
 
-/// DNS cache TTL (5 minutes).
-#[allow(dead_code)]
+/// DNS cache TTL (5 minutes). The cache backs JS `fetch()` connect-src
+/// checks, so it only exists with `javascript` on native-net targets.
+#[cfg(all(native_net, feature = "javascript"))]
 const DNS_CACHE_TTL: Duration = Duration::from_secs(300);
 
 /// Global DNS cache: maps hostname -> (resolved IPs, cached time).
+#[cfg(all(native_net, feature = "javascript"))]
 type DnsCacheMap = FxHashMap<String, (Vec<std::net::IpAddr>, Instant)>;
 
-#[allow(dead_code)]
+#[cfg(all(native_net, feature = "javascript"))]
 static DNS_CACHE: std::sync::LazyLock<Mutex<DnsCacheMap>> =
     std::sync::LazyLock::new(|| Mutex::new(FxHashMap::default()));
 
@@ -140,7 +143,7 @@ thread_local! {
 ///
 /// Returns cached addresses if still within TTL, otherwise performs a
 /// fresh DNS resolution and updates the cache.
-#[allow(dead_code)]
+#[cfg(all(native_net, feature = "javascript"))]
 pub(crate) fn dns_resolve_cached(host: &str) -> io::Result<Vec<std::net::IpAddr>> {
     use std::net::ToSocketAddrs;
 

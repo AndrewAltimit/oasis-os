@@ -62,11 +62,11 @@ impl BrowserWidget {
         // Drain any VFS-scheme `<link rel=stylesheet>` entries queued
         // during the previous `load_html`. VFS access requires the
         // caller's handle, which only the tick path holds.
-        #[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
+        #[cfg(native_net)]
         self.load_pending_vfs_stylesheets(vfs);
 
         // Poll the I/O thread for completed network requests.
-        #[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
+        #[cfg(native_net)]
         self.poll_io_thread();
 
         // Re-cascade + relayout if external stylesheets arrived since

@@ -270,11 +270,11 @@ struct NetTransport {
 
 impl FetchTransport for NetTransport {
     fn resolve_host(&self, host: &str) -> Vec<IpAddr> {
-        #[cfg(not(any(feature = "psp", target_arch = "wasm32")))]
+        #[cfg(native_net)]
         {
             crate::loader::http::dns_resolve_cached(host).unwrap_or_default()
         }
-        #[cfg(any(feature = "psp", target_arch = "wasm32"))]
+        #[cfg(not(native_net))]
         {
             let _ = host;
             Vec::new()
@@ -298,7 +298,7 @@ impl FetchTransport for NetTransport {
             .collect();
         let tls = self.tls.as_deref();
 
-        #[cfg(not(any(feature = "psp", target_arch = "wasm32")))]
+        #[cfg(native_net)]
         let result = {
             let guard = crate::loader::http::RequestGuard {
                 redirect_ok,

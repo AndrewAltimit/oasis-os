@@ -10,7 +10,7 @@ use crate::html;
 use crate::html::dom::{NodeKind, TagName};
 use crate::image;
 use crate::layout;
-#[cfg(any(target_arch = "wasm32", feature = "psp"))]
+#[cfg(not(native_net))]
 use crate::loader::load_resource;
 use crate::loader::{self, ResourceRequest, ResourceSource};
 use crate::{BrowserWidget, LoadingState, SimpleTextMeasurer};
@@ -309,7 +309,7 @@ impl BrowserWidget {
     ///
     /// Lazily spawns a daemon thread on first call. The thread receives
     /// `(url, raw_bytes)` and sends back `(url, DecodedImage)`.
-    #[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
+    #[cfg(native_net)]
     pub(crate) fn ensure_decode_thread(&mut self) {
         if self.image_decode_tx.is_some() {
             return;
@@ -340,7 +340,7 @@ impl BrowserWidget {
     /// Collect completed image decodes from the background thread.
     ///
     /// Returns `true` if any new images were inserted.
-    #[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
+    #[cfg(native_net)]
     fn poll_decoded_images(&mut self) -> bool {
         let rx = match &self.image_decode_rx {
             Some(rx) => rx,
@@ -409,13 +409,13 @@ impl BrowserWidget {
         self.promote_deferred_images();
 
         // On non-WASM targets, collect any completed background decodes.
-        #[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
+        #[cfg(native_net)]
         let mut any_decoded = self.poll_decoded_images();
-        #[cfg(any(target_arch = "wasm32", feature = "psp"))]
+        #[cfg(not(native_net))]
         let mut any_decoded = false;
 
         if self.pending_images.is_empty() {
-            #[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
+            #[cfg(native_net)]
             {
                 let io_images_done = self.pending_io_images.is_empty();
                 if self.image_decode_in_flight == 0
@@ -426,7 +426,7 @@ impl BrowserWidget {
                     self.state = LoadingState::Idle;
                 }
             }
-            #[cfg(any(target_arch = "wasm32", feature = "psp"))]
+            #[cfg(not(native_net))]
             if self.state == LoadingState::Loading {
                 self.state = LoadingState::Idle;
             }
@@ -464,7 +464,7 @@ impl BrowserWidget {
             }
 
             // On desktop, offload network image requests to the I/O thread.
-            #[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
+            #[cfg(native_net)]
             {
                 let is_network = matches!(
                     request.source,
@@ -512,11 +512,11 @@ impl BrowserWidget {
             }
 
             // On WASM/PSP, load and decode synchronously (no threads).
-            #[cfg(any(target_arch = "wasm32", feature = "psp"))]
+            #[cfg(not(native_net))]
             self.diag(&format!("[BR] image fetch start: {resolved}"));
-            #[cfg(any(target_arch = "wasm32", feature = "psp"))]
+            #[cfg(not(native_net))]
             let load_result = load_resource(vfs, &request, self.tls.as_deref());
-            #[cfg(any(target_arch = "wasm32", feature = "psp"))]
+            #[cfg(not(native_net))]
             if let Ok(loaded) = load_result {
                 self.diag(&format!(
                     "[BR] image fetch ok: {} bytes",
@@ -550,7 +550,7 @@ impl BrowserWidget {
                     self.image_info_dirty = true;
                     any_decoded = true;
                 } else {
-                    #[cfg(any(target_arch = "wasm32", feature = "psp"))]
+                    #[cfg(not(native_net))]
                     self.diag("[BR] image decode failed, using placeholder");
                     // Insert a broken-image placeholder so the user
                     // sees a visual indicator instead of a blank space.
@@ -564,7 +564,7 @@ impl BrowserWidget {
                     any_decoded = true;
                 }
             } else {
-                #[cfg(any(target_arch = "wasm32", feature = "psp"))]
+                #[cfg(not(native_net))]
                 self.diag("[BR] image fetch err");
             }
 
@@ -578,7 +578,7 @@ impl BrowserWidget {
         // On non-WASM, wait within the remaining budget for in-flight
         // decodes to complete so callers that pass a generous budget
         // (e.g. tests with 5000ms) see results immediately.
-        #[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
+        #[cfg(native_net)]
         if self.image_decode_in_flight > 0
             && let Some(ref rx) = self.image_decode_rx
         {
@@ -636,7 +636,7 @@ impl BrowserWidget {
         }
 
         if self.pending_images.is_empty() {
-            #[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
+            #[cfg(native_net)]
             {
                 let io_images_done = self.pending_io_images.is_empty();
                 if self.image_decode_in_flight == 0
@@ -647,7 +647,7 @@ impl BrowserWidget {
                     self.state = LoadingState::Idle;
                 }
             }
-            #[cfg(any(target_arch = "wasm32", feature = "psp"))]
+            #[cfg(not(native_net))]
             if self.state == LoadingState::Loading {
                 self.state = LoadingState::Idle;
             }

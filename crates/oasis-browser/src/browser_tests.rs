@@ -3688,7 +3688,7 @@ fn image_finishing_loading_wants_a_frame() {
 // TLS provider lifetime vs. the background I/O thread
 // -------------------------------------------------------------------
 
-#[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
+#[cfg(native_net)]
 mod tls_lifetime {
     use std::sync::Arc;
     use std::sync::atomic::{AtomicBool, Ordering};

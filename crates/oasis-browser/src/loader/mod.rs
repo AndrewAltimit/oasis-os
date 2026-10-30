@@ -16,7 +16,7 @@ pub mod http1;
 pub mod http2;
 #[cfg(feature = "psp")]
 pub mod http_psp;
-#[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
+#[cfg(native_net)]
 pub mod io_thread;
 pub mod vfs;
 
@@ -686,18 +686,14 @@ pub fn load_resource(
     vfs_backend: &dyn oasis_vfs::Vfs,
     request: &ResourceRequest,
     tls: Option<&dyn oasis_net::tls::TlsProvider>,
-    #[cfg(not(any(target_arch = "wasm32", feature = "psp")))] cookie_jar: Option<
-        &mut cookies::CookieJar,
-    >,
-    #[cfg(not(any(target_arch = "wasm32", feature = "psp")))] resource_cache: Option<
-        &cache::ResourceCache,
-    >,
+    #[cfg(native_net)] cookie_jar: Option<&mut cookies::CookieJar>,
+    #[cfg(native_net)] resource_cache: Option<&cache::ResourceCache>,
 ) -> Result<LoadedResource> {
     match request.source {
         ResourceSource::Vfs => {
             vfs::load_from_vfs(vfs_backend, request).map(LoadedResource::from_response)
         },
-        #[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
+        #[cfg(native_net)]
         ResourceSource::Network => load_from_network(request, tls, cookie_jar, resource_cache),
         #[cfg(all(feature = "psp", not(target_arch = "wasm32")))]
         ResourceSource::Network => load_from_network(request, tls),
@@ -720,7 +716,7 @@ pub fn load_resource(
                 if matches!(scheme.as_str(), "vfs" | "about" | "data") {
                     return Err(vfs_err);
                 }
-                #[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
+                #[cfg(native_net)]
                 {
                     load_from_network(request, tls, cookie_jar, resource_cache)
                 }
@@ -762,7 +758,7 @@ impl LoadedResource {
 }
 
 /// Load a resource over the network (HTTP/HTTPS).
-#[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
+#[cfg(native_net)]
 fn load_from_network(
     request: &ResourceRequest,
     tls: Option<&dyn oasis_net::tls::TlsProvider>,

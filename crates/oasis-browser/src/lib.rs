@@ -138,7 +138,7 @@ use std::collections::{HashMap, HashSet};
 use html::dom::NodeId;
 use loader::ResourceRequest;
 use loader::cache::ResourceCache;
-#[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
+#[cfg(native_net)]
 use loader::cookies::CookieJar;
 use oasis_types::backend::TextureId;
 use paint::LinkRegion;
@@ -232,7 +232,7 @@ pub struct BrowserWidget {
     cache: ResourceCache,
 
     /// Session-scoped cookie jar for HTTP requests.
-    #[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
+    #[cfg(native_net)]
     cookie_jar: CookieJar,
 
     /// Current loading state.
@@ -342,7 +342,7 @@ pub struct BrowserWidget {
     ///
     /// The worker owns an `Arc` clone of `tls`, so replacing or
     /// dropping `tls` never frees a provider the worker still uses.
-    #[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
+    #[cfg(native_net)]
     io_thread: Option<loader::io_thread::IoThread>,
 
     /// Optional TLS provider for HTTPS and Gemini connections.
@@ -352,30 +352,30 @@ pub struct BrowserWidget {
     tls: Option<std::sync::Arc<dyn oasis_net::tls::TlsProvider>>,
 
     /// Pending page load request ID (in-flight on the I/O thread).
-    #[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
+    #[cfg(native_net)]
     pending_page_load: Option<loader::io_thread::IoRequestId>,
 
     /// URL of the in-flight [`Self::pending_page_load`], so a failed
     /// async load can render its error page under the URL the user
     /// actually asked for (keeping it in the URL bar and history).
-    #[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
+    #[cfg(native_net)]
     pending_page_url: Option<String>,
 
     /// In-flight image requests on the I/O thread, keyed by request ID
     /// mapped to the resolved image URL.
-    #[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
+    #[cfg(native_net)]
     pending_io_images: std::collections::HashMap<loader::io_thread::IoRequestId, String>,
 
     /// Channel to send `(url, raw_bytes)` to the background decode thread.
-    #[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
+    #[cfg(native_net)]
     image_decode_tx: Option<std::sync::mpsc::Sender<(String, Vec<u8>)>>,
 
     /// Channel to receive `(url, DecodedImage)` from the background decode thread.
-    #[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
+    #[cfg(native_net)]
     image_decode_rx: Option<std::sync::mpsc::Receiver<(String, image::DecodedImage)>>,
 
     /// Number of images sent to the decode thread but not yet received back.
-    #[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
+    #[cfg(native_net)]
     image_decode_in_flight: usize,
 
     /// GPU textures for decoded images, keyed by src URL.
@@ -442,17 +442,17 @@ pub struct BrowserWidget {
 
     /// In-flight external stylesheet requests on the I/O thread, keyed
     /// by request ID mapped to the `external_stylesheets` slot index.
-    #[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
+    #[cfg(native_net)]
     pending_io_stylesheets: std::collections::HashMap<loader::io_thread::IoRequestId, usize>,
 
     /// VFS-scheme stylesheets queued during `load_html`. Drained by
     /// `tick()` which holds the active VFS handle.
-    #[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
+    #[cfg(native_net)]
     pending_vfs_stylesheets: Vec<(usize, ResourceRequest)>,
 
     /// `@import`ed stylesheet URLs already requested for the current
     /// page (dedupes imports and bounds import chains and cycles).
-    #[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
+    #[cfg(native_net)]
     imported_stylesheet_urls: HashSet<String>,
 
     /// Set once any external stylesheet has arrived that was not yet
@@ -632,7 +632,7 @@ impl BrowserWidget {
             nav: NavigationController::new(&home),
             scroll: ScrollState::new(238, smooth), // 272 - 34
             cache: ResourceCache::new(cache_bytes),
-            #[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
+            #[cfg(native_net)]
             cookie_jar: CookieJar::new(),
             state: LoadingState::Idle,
             error_message: None,
@@ -663,20 +663,20 @@ impl BrowserWidget {
             decoded_images: HashMap::new(),
             broken_image_urls: std::collections::HashSet::new(),
             mask_image_arcs: HashMap::new(),
-            #[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
+            #[cfg(native_net)]
             io_thread: None,
             tls: None,
-            #[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
+            #[cfg(native_net)]
             pending_page_load: None,
-            #[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
+            #[cfg(native_net)]
             pending_page_url: None,
-            #[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
+            #[cfg(native_net)]
             pending_io_images: HashMap::new(),
-            #[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
+            #[cfg(native_net)]
             image_decode_tx: None,
-            #[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
+            #[cfg(native_net)]
             image_decode_rx: None,
-            #[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
+            #[cfg(native_net)]
             image_decode_in_flight: 0,
             image_textures: HashMap::new(),
             image_atlas: image_atlas::ImageAtlas::new(),
@@ -693,11 +693,11 @@ impl BrowserWidget {
             external_stylesheet_sources: Vec::new(),
             styled_viewport: (480, 272),
             media_dependent_css: false,
-            #[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
+            #[cfg(native_net)]
             pending_io_stylesheets: std::collections::HashMap::new(),
-            #[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
+            #[cfg(native_net)]
             pending_vfs_stylesheets: Vec::new(),
-            #[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
+            #[cfg(native_net)]
             imported_stylesheet_urls: HashSet::new(),
             pending_external_css_apply: false,
             cached_inline_styles: Vec::new(),
@@ -759,7 +759,7 @@ impl BrowserWidget {
     /// flight it keeps the old provider until it is next recreated.
     pub fn set_tls_provider(&mut self, provider: Box<dyn oasis_net::tls::TlsProvider>) {
         self.tls = Some(std::sync::Arc::from(provider));
-        #[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
+        #[cfg(native_net)]
         if self
             .io_thread
             .as_ref()
@@ -859,7 +859,7 @@ impl BrowserWidget {
         let loading = self.state == LoadingState::Loading
             || !self.pending_images.is_empty()
             || self.pending_external_css_apply;
-        #[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
+        #[cfg(native_net)]
         let loading = loading
             || self.pending_page_load.is_some()
             || !self.pending_io_images.is_empty()
@@ -1004,7 +1004,7 @@ impl BrowserWidget {
     /// Exposed so screenshot tests and embedders can drive `tick()` to
     /// quiescence when external stylesheets and images are still in
     /// flight after `load_html()`.
-    #[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
+    #[cfg(native_net)]
     pub fn io_thread_in_flight(&self) -> Option<usize> {
         self.io_thread.as_ref().map(|t| t.in_flight())
     }
@@ -1012,7 +1012,7 @@ impl BrowserWidget {
     /// Stub for platforms without a dedicated I/O thread — always
     /// reports zero in-flight requests so drain loops terminate
     /// immediately.
-    #[cfg(any(target_arch = "wasm32", feature = "psp"))]
+    #[cfg(not(native_net))]
     pub fn io_thread_in_flight(&self) -> Option<usize> {
         None
     }
@@ -1102,5 +1102,5 @@ impl BrowserWidget {
 #[path = "browser_tests.rs"]
 mod tests;
 
-#[cfg(all(test, not(any(target_arch = "wasm32", feature = "psp"))))]
+#[cfg(all(test, native_net))]
 mod e2e_tests;
