@@ -269,12 +269,12 @@ impl SdiCore for RecordingBackend {
     }
 
     fn set_clip_rect(&mut self, x: i32, y: i32, w: u32, h: u32) -> Result<()> {
-        self.commands.push(DrawCommand::PushClip { x, y, w, h });
+        self.commands.push(DrawCommand::SetClip { x, y, w, h });
         Ok(())
     }
 
     fn reset_clip_rect(&mut self) -> Result<()> {
-        self.commands.push(DrawCommand::PopClip);
+        self.commands.push(DrawCommand::ResetClip);
         Ok(())
     }
 

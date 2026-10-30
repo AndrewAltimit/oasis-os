@@ -456,7 +456,7 @@ impl SdiCore for ClipAuditBackend {
             });
         }
         self.active_clip = Some(ClipRect { x, y, w, h });
-        self.commands.push(DrawCommand::PushClip { x, y, w, h });
+        self.commands.push(DrawCommand::SetClip { x, y, w, h });
         Ok(())
     }
 
@@ -468,7 +468,7 @@ impl SdiCore for ClipAuditBackend {
             });
         }
         self.active_clip = None;
-        self.commands.push(DrawCommand::PopClip);
+        self.commands.push(DrawCommand::ResetClip);
         Ok(())
     }
 
