@@ -59,6 +59,8 @@ scripts/psp-smoke-test.sh
 
 # Build PSP overlay plugin PRX (excluded from workspace, kernel mode)
 cd crates/oasis-plugin-psp && RUST_PSP_BUILD_STD=1 cargo psp --release
+# ... then strip it (CI ships this file, size-gated at 192 KiB)
+prxmin target/mipsel-sony-psp-std/release/oasis-plugin-psp.prx oasis-overlay.prx
 
 # Build UE5 FFI shared library
 cargo build --profile release-ffi -p oasis-ffi
@@ -76,9 +78,9 @@ cargo run -p oasis-app --bin oasis-screenshot
 
 This section is the canonical description of CI; `AGENTS.md` and `docs/design.md` link here.
 
-`main-ci.yml` (push to `main`): format check -> clippy (`--workspace --all-targets -D warnings`) -> `oasis-app` feature-combination check (`--no-default-features --features javascript[,mcp]`) -> non-default feature-set clippy (`oasis-browser`, `oasis-core`, `oasis-video`, `oasis-app`, `oasis-ffi`) -> nightly clippy (advisory) -> doc build (`RUSTDOCFLAGS=-D warnings cargo doc --workspace --no-deps`) -> markdown link check (`md-link-checker --internal-only` over `*.md`, `docs/`, `scripts/psp-scenarios.md`) -> test (cargo-nextest + doc-tests) -> release build -> screenshot regression -> cargo-deny -> benchmarks -> code coverage (advisory) -> rust-psp pin check (`scripts/check-rust-psp-rev.sh`: crates, workflows, `docker/psp-build.Dockerfile`) -> PSP EBOOT / overlay PRX / recovery EBOOT builds (rustc warnings are errors via `PSP_DENY_WARNINGS`) -> PPSSPP headless smoke test (`scripts/psp-smoke-test.sh`); then release binaries and GitHub Pages deploy (WASM).
+`main-ci.yml` (push to `main`): format check -> clippy (`--workspace --all-targets -D warnings`) -> `oasis-app` feature-combination check (`--no-default-features --features javascript[,mcp]`) -> non-default feature-set clippy (`oasis-browser`, `oasis-core`, `oasis-video`, `oasis-app`, `oasis-ffi`) -> nightly clippy (advisory) -> doc build (`RUSTDOCFLAGS=-D warnings cargo doc --workspace --no-deps`) -> markdown link check (`md-link-checker --internal-only` over `*.md`, `docs/`, `scripts/psp-scenarios.md`) -> test (cargo-nextest + doc-tests) -> release build -> screenshot regression -> cargo-deny -> benchmarks -> code coverage (advisory) -> rust-psp pin check (`scripts/check-rust-psp-rev.sh`: crates, workflows, `docker/psp-build.Dockerfile`) -> PSP tooling unit tests (`python3 -m unittest` over `scripts/test_*.py`) -> PSP EBOOT / overlay PRX / recovery EBOOT builds (rustc warnings are errors via `PSP_DENY_WARNINGS`) -> PPSSPP headless smoke test (`scripts/psp-smoke-test.sh`); then release binaries and GitHub Pages deploy (WASM).
 
-`pr-validation.yml` (pull requests) runs a subset -- format, clippy, nightly clippy (advisory), doc build, link check, test, release build, screenshot generation, cargo-deny, benchmarks with a regression gate, pin check, PSP EBOOT build and smoke test -- without the feature-combination / non-default-feature clippy, coverage, or the PRX / recovery builds; plus Claude security/quality reviews and the auto-fix agents (see [`AGENTS.md`](AGENTS.md)).
+`pr-validation.yml` (pull requests) runs a subset -- format, clippy, nightly clippy (advisory), doc build, link check, test, release build, screenshot generation, cargo-deny, benchmarks with a regression gate, pin check, PSP tooling unit tests, PSP EBOOT build and smoke test -- without the feature-combination / non-default-feature clippy, coverage, or the PRX / recovery builds; plus Claude security/quality reviews and the auto-fix agents (see [`AGENTS.md`](AGENTS.md)).
 
 The Rust steps run via `docker compose --profile ci run --rm rust-ci`; the PSP builds use cargo-psp installed on the runner by `.github/actions/install-cargo-psp` (locally, use the `psp-build` Docker profile below).
 
@@ -146,8 +148,8 @@ PSP has meaningful enough constraints that the detail lives in
 [`docs/psp-architecture.md`](docs/psp-architecture.md). Summary:
 
 - **Two binaries** — `oasis-backend-psp` (EBOOT.PBP, the shell) and
-  `oasis-plugin-psp` (PRX overlay loaded by CFW, <64 KB, no
-  `oasis-core` dependency). See [ADR 004](docs/adr/004-psp-two-binary-architecture.md).
+  `oasis-plugin-psp` (PRX overlay loaded by CFW, ~153 KB stripped with
+  `prxmin`, ~212 KB resident; no `oasis-core` dependency). See [ADR 004](docs/adr/004-psp-two-binary-architecture.md).
 - **GU command buffer (1 MB)** overflows with dense pages. Don't
   double-start GU frames after `swap_buffers_inner()`.
 - **QuickJS-NG** built through pspdev's `psp-gcc` with `-msingle-float`,

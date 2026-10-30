@@ -164,5 +164,9 @@ the indexed lookups against the original linear walks.
 ## Related docs
 
 - [`psp-architecture.md`](psp-architecture.md) §Video Streaming — the
-  PSP in-memory path (demux_lite, sceMpeg, sceAudiocodec).
+  PSP in-memory path (demux_lite, sceMpeg, sceAudiocodec), including
+  the zero-copy CSC texture: its row-sized 512-stride layout
+  (≥ 480×272 allocated at tune time) and the hazard-pointer hand-off
+  that keeps the main thread from freeing it while the video thread
+  writes it.
 - `crates/oasis-video/` — shared demux / decode crate.
