@@ -1067,7 +1067,7 @@ fn mcp_screenshot_matches_the_framebuffer_and_overlay_is_drawn() {
     let info = reader.next_frame(&mut img).unwrap();
     assert_eq!((info.width, info.height), h.size());
     assert!(
-        img.chunks_exact(4).any(|p| p[..3] != img[..3]),
+        img.as_chunks::<4>().0.iter().any(|p| p[..3] != img[..3]),
         "blank screenshot"
     );
 
