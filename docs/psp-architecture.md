@@ -38,6 +38,13 @@ from `RUST_PSP_REV`. Commands and prerequisites are in
 `scripts/psp-smoke-test.sh` afterwards to boot both EBOOTs in
 PPSSPPHeadless the way CI does.
 
+Every PSP crate builds without warnings, and CI keeps it that way for the
+EBOOT, overlay PRX and recovery EBOOT: it adds
+`--config 'build.rustflags=["-D", "warnings"]'` to `cargo psp`. Pass the same
+flag locally to check a change. Don't use `RUSTFLAGS` for this: it replaces
+the `build.rustflags` in the EBOOT's `.cargo/config.toml` (psp-ld linker
+setup) instead of adding to them.
+
 ## GU Rendering Constraints
 
 The PSP GU (Graphics Unit) has a fixed-size command buffer

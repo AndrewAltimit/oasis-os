@@ -35,8 +35,13 @@ env:
   # rust-psp revision for the PSP builds: every PSP crate pins its `psp`
   # dependency to it (scripts/check-rust-psp-rev.sh enforces that) and CI
   # installs cargo-psp from it. Bump both together, along with the nightly
-  # in the crates' rust-toolchain.toml (rust-psp's CI NIGHTLY_DATE).
+  # in the crates' rust-toolchain.toml (rust-psp's CI NIGHTLY_DATE) and the
+  # ARGs in docker/psp-build.Dockerfile; the pin check below fails on drift.
   RUST_PSP_REV: e4cc06f6fa50fa45dc3ae8b332e8a2b67625f588
+  # PSP builds fail on rustc warnings. Passed with `cargo psp --config`, which
+  # appends to the crates' `.cargo/config.toml` build.rustflags (RUSTFLAGS
+  # would replace them and drop the psp-ld linker setup).
+  PSP_DENY_WARNINGS: 'build.rustflags=["-D", "warnings"]'
 
 jobs:
   ci:
@@ -95,6 +100,30 @@ jobs:
             cargo check -p oasis-app --no-default-features --features javascript
           docker compose --profile ci run --rm rust-ci \
             cargo check -p oasis-app --no-default-features --features javascript,mcp
+
+      # Supported non-default feature sets that the workspace clippy never
+      # compiles (feature unification there gives oasis-browser only its
+      # defaults + javascript, and oasis-video only demux-lite + ffmpeg).
+      # Each is a single-crate clippy, so dependencies whose features don't
+      # change are reused from the workspace build.
+      - name: Clippy (non-default feature sets)
+        timeout-minutes: 20
+        run: |
+          docker compose --profile ci run --rm rust-ci bash -euxc '
+            clippy() { cargo clippy --all-targets "$@" -- -D warnings; }
+            clippy -p oasis-browser --features parallel-style,webp
+            clippy -p oasis-browser --no-default-features
+            clippy -p oasis-browser --no-default-features --features psp,javascript
+            clippy -p oasis-core --no-default-features
+            clippy -p oasis-video
+            clippy -p oasis-video --features demux-lite
+            clippy -p oasis-video --features symphonia
+            clippy -p oasis-video --features h264
+            clippy -p oasis-video --all-features
+            clippy -p oasis-app --no-default-features --features video-decode
+            clippy -p oasis-ffi --features video-decode
+            clippy -p oasis-ffi --features video-decode-ffmpeg
+          '
 
       # -- Nightly Clippy (advisory) -----------------------------------------
       - name: Clippy (nightly, advisory)
@@ -287,17 +316,17 @@ jobs:
       - name: Build PSP EBOOT
         run: |
           cd crates/oasis-backend-psp
-          RUST_PSP_BUILD_STD=1 cargo psp --release
+          RUST_PSP_BUILD_STD=1 cargo psp --release --config "$PSP_DENY_WARNINGS"
 
       - name: Build PSP Plugin PRX
         run: |
           cd crates/oasis-plugin-psp
-          RUST_PSP_BUILD_STD=1 cargo psp --release
+          RUST_PSP_BUILD_STD=1 cargo psp --release --config "$PSP_DENY_WARNINGS"
 
       - name: Build PSP Recovery EBOOT
         run: |
           cd crates/oasis-recovery-psp
-          RUST_PSP_BUILD_STD=1 cargo psp --release
+          RUST_PSP_BUILD_STD=1 cargo psp --release --config "$PSP_DENY_WARNINGS"
 
       - name: Collect PSP artifacts
         if: always()

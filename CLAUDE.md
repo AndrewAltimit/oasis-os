@@ -74,7 +74,7 @@ cargo run -p oasis-app --bin oasis-screenshot
 
 ## CI Pipeline Order
 
-`main-ci.yml`: format check -> clippy -> `oasis-app` feature-combination check -> nightly clippy (advisory) -> doc build -> markdown link check (`md-link-checker --internal-only` over `*.md`, `docs/`, `scripts/psp-scenarios.md`) -> test (cargo-nextest + doc-tests) -> release build -> screenshot regression -> cargo-deny -> benchmarks -> code coverage (advisory) -> rust-psp pin check -> PSP EBOOT / overlay PRX / recovery EBOOT builds -> PPSSPP headless smoke test; then release binaries and GitHub Pages deploy (WASM). `pr-validation.yml` runs the same checks on PRs plus Claude security/quality reviews and the auto-fix agents (see [`AGENTS.md`](AGENTS.md)).
+`main-ci.yml`: format check -> clippy -> `oasis-app` feature-combination check -> non-default feature-set clippy (`oasis-browser`, `oasis-core`, `oasis-video`, `oasis-app`, `oasis-ffi`) -> nightly clippy (advisory) -> doc build -> markdown link check (`md-link-checker --internal-only` over `*.md`, `docs/`, `scripts/psp-scenarios.md`) -> test (cargo-nextest + doc-tests) -> release build -> screenshot regression -> cargo-deny -> benchmarks -> code coverage (advisory) -> rust-psp pin check (crates, workflows, `docker/psp-build.Dockerfile`) -> PSP EBOOT / overlay PRX / recovery EBOOT builds (rustc warnings are errors) -> PPSSPP headless smoke test; then release binaries and GitHub Pages deploy (WASM). `pr-validation.yml` runs the same checks on PRs plus Claude security/quality reviews and the auto-fix agents (see [`AGENTS.md`](AGENTS.md)).
 
 All steps run via `docker compose --profile ci run --rm rust-ci`.
 
