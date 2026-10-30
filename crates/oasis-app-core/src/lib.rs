@@ -3,14 +3,17 @@
 //! App crates depend on this crate (never on `oasis-core`): the [`App`]
 //! trait and its [`AppAction`] / [`AppRequest`] vocabulary, [`ContentState`]
 //! plus [`impl_content_app_methods!`] for line-list apps, the windowed
-//! line-list renderer ([`render`]), file viewers ([`file_viewer`]) and,
-//! behind the `testing` feature, an end-to-end app harness.
+//! line-list renderer ([`render`]), file viewers ([`file_viewer`]), VFS
+//! helpers ([`vfs_util`]) and, behind the `testing` feature, an end-to-end
+//! app harness.
 
 mod app_trait;
 pub mod file_viewer;
+pub mod id3;
 pub mod render;
 #[cfg(feature = "testing")]
 pub mod testing;
+pub mod vfs_util;
 
 pub use app_trait::{App, AppRequest, AsAny, ContentState, MAX_WHEEL_STEPS};
 

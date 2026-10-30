@@ -16,7 +16,7 @@ use oasis_core::vfs::{MemoryVfs, Vfs};
 use oasis_core::wallpaper;
 
 use crate::app_state::{AppState, NetworkLayer, TerminalLayer};
-use crate::windows::{CloseHow, CloseOutcome, close_app_window};
+use crate::windows::{CloseHow, CloseOutcome, close_app_window, exit_kiosk};
 
 /// Terminal messages of a toggled server (`listen`, `ftp`).
 struct ServiceText {
@@ -59,6 +59,38 @@ fn toggle_service<S>(
             },
             Err(line) => out.print(line),
         }
+    }
+}
+
+/// Line printed in place of a server toggle a background job asked for.
+pub(crate) const JOB_TOGGLE_REFUSED: &str = "Not available from a background job.";
+
+/// Neutralize the signals a remote caller may not trigger (the server
+/// toggles [`format_remote_response`] refuses) in a background job's
+/// output.
+///
+/// Jobs (`cmd &`) sit in the one shared command registry and run a frame
+/// later through the local output path, so a job queued over the remote
+/// listener or MCP `run_command` would otherwise start `ftp` / `listen` /
+/// `connect` / `mcp-server` with local authority. Where a job came from is
+/// not recorded (and a script, alias or function can queue one), so no
+/// job may toggle a server.
+pub(crate) fn refuse_job_server_toggles(output: CommandOutput) -> CommandOutput {
+    match output {
+        CommandOutput::Signal(
+            CommandSignal::ListenToggle { .. }
+            | CommandSignal::RemoteConnect { .. }
+            | CommandSignal::FtpToggle { .. }
+            | CommandSignal::McpToggle { .. },
+        ) => CommandOutput::Text(JOB_TOGGLE_REFUSED.to_string()),
+        CommandOutput::Multi(outputs) => {
+            CommandOutput::Multi(outputs.into_iter().map(refuse_job_server_toggles).collect())
+        },
+        CommandOutput::Status { code, output } => CommandOutput::Status {
+            code,
+            output: Box::new(refuse_job_server_toggles(*output)),
+        },
+        other => other,
     }
 }
 
@@ -1049,7 +1081,7 @@ pub fn poll_mcp_server(
     state: &mut AppState,
     sdi: &mut SdiRegistry,
     vfs: &mut MemoryVfs,
-    backend: &mut dyn oasis_core::backend::SdiCore,
+    capture: &mut crate::mcp_tools::FrameCapture<'_>,
 ) {
     let Some(mut server) = state.mcp.take() else {
         return;
@@ -1058,7 +1090,7 @@ pub fn poll_mcp_server(
         state,
         sdi,
         vfs,
-        screen: backend,
+        capture,
     };
     server.poll(&mut disp);
     // A tool cannot start another server (`mcp-server` is refused over
@@ -1317,9 +1349,22 @@ fn apply_wm_request(request: &str, state: &mut AppState, sdi: &mut SdiRegistry, 
             }
             Ok(())
         },
-        WmRequest::Focus(_) => state.wm.focus_window(id, sdi),
-        WmRequest::Minimize(_) => state.wm.minimize_window(id, sdi),
-        WmRequest::Maximize(_) => state.wm.maximize_window(id, sdi),
+        // Restores a minimized window first (focusing alone made the
+        // invisible window the keyboard target).
+        WmRequest::Focus(_) => {
+            crate::launch::raise_window(&mut state.wm, id, sdi);
+            Ok(())
+        },
+        // Geometry changes leave kiosk fullscreen first, so the shell
+        // chrome comes back with the window's frame.
+        WmRequest::Minimize(_) => {
+            exit_kiosk(state, sdi, id);
+            state.wm.minimize_window(id, sdi)
+        },
+        WmRequest::Maximize(_) => {
+            exit_kiosk(state, sdi, id);
+            state.wm.maximize_window(id, sdi)
+        },
         WmRequest::Open { .. } => Ok(()),
     };
     if let Err(e) = result {
@@ -1382,6 +1427,35 @@ pub fn trim_output(output_lines: &mut Vec<String>) {
 mod tests {
     use super::*;
     use oasis_core::terminal::{CommandOutput, CommandSignal};
+
+    // -- refuse_job_server_toggles --
+
+    #[test]
+    fn background_jobs_cannot_toggle_servers() {
+        let refused =
+            |out: &CommandOutput| matches!(out, CommandOutput::Text(t) if t == JOB_TOGGLE_REFUSED);
+        for signal in [
+            CommandOutput::listen_toggle(2323),
+            CommandOutput::remote_connect("10.0.0.1".into(), 23, None),
+        ] {
+            assert!(refused(&refuse_job_server_toggles(signal)));
+        }
+        // Nested in a chain / with a status, and other output untouched.
+        let out = refuse_job_server_toggles(CommandOutput::Multi(vec![
+            CommandOutput::Text("before".into()),
+            CommandOutput::status(0, CommandOutput::listen_toggle(0)),
+            CommandOutput::skin_swap("xp".into()),
+        ]));
+        let CommandOutput::Multi(parts) = out else {
+            panic!("multi kept");
+        };
+        assert!(matches!(&parts[0], CommandOutput::Text(t) if t == "before"));
+        assert!(matches!(&parts[1], CommandOutput::Status { output, .. } if refused(output)));
+        assert!(matches!(
+            &parts[2],
+            CommandOutput::Signal(CommandSignal::SkinSwap { .. })
+        ));
+    }
 
     // -- trim_output --
 

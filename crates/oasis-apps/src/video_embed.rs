@@ -101,6 +101,9 @@ const TITLE_LINES_H: i32 = 22; // two short lines below the thumbnail.
 #[derive(Debug)]
 pub struct VideoEmbedApp {
     content: ContentState,
+    /// Content-area size recorded by the last `App::layout` (click
+    /// hit-testing).
+    content_size: (u32, u32),
     state: EmbedState,
     /// Search input buffer (or playing video id when in Playing state).
     input_buf: String,
@@ -121,6 +124,7 @@ impl VideoEmbedApp {
         content.lines = Vec::new();
         Self {
             content,
+            content_size: (0, 0),
             state: EmbedState::Search,
             input_buf: String::new(),
             playing_video_id: None,
@@ -431,10 +435,15 @@ impl App for VideoEmbedApp {
         self.input_buf.pop();
     }
 
-    fn handle_click(&mut self, lx: i32, ly: i32, cw: u32, ch: u32, _vfs: &dyn Vfs) -> AppAction {
+    fn layout(&mut self, cw: u32, ch: u32, _at: &ActiveTheme) {
+        self.content_size = (cw, ch);
+    }
+
+    fn handle_click(&mut self, lx: i32, ly: i32, _vfs: &dyn Vfs) -> AppAction {
         if self.state != EmbedState::Results {
             return AppAction::None;
         }
+        let (cw, ch) = self.content_size;
         if let Some(cell) = Self::hit_test_grid(lx, ly, cw, ch, TOP_PAD) {
             let v = self.visible_count();
             if cell < v {
@@ -863,7 +872,8 @@ mod tests {
         let (rx, ry, rw, rh) = VideoEmbedApp::cell_rect(640, 400, TOP_PAD, 0);
         let cx = rx + rw as i32 / 2;
         let cy = ry + rh as i32 / 2;
-        app.handle_click(cx, cy, 640, 400, &oasis_core::vfs::MemoryVfs::new());
+        app.layout(640, 400, &ActiveTheme::default());
+        app.handle_click(cx, cy, &oasis_core::vfs::MemoryVfs::new());
         assert_eq!(app.state, EmbedState::Playing);
         let (_, data) = take_request(&mut app).unwrap();
         assert_eq!(data, "play:id_one_aaaa");

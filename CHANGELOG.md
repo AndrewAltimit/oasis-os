@@ -99,7 +99,14 @@ removal, a restyled site, and docs that match the code.
   `fullscreen` flag: hosts passed the kiosk-window flag, which apps read
   as "use the SDI layout", so clicks in a kiosk-fullscreen Music Player
   were ignored and Settings / File Manager / TV Guide hit-tested rows
-  other than the ones drawn.
+  other than the ones drawn. `App::handle_click(lx, ly, vfs)` also
+  drops its `cw` / `ch`: apps hit-test against the size `App::layout`
+  recorded just before (`AppRunner::handle_click` still takes the size
+  and lays the app out first). `ContentState::line_at` maps a click to a
+  line; `oasis_app_core::testing::click_at` lays out and clicks in unit
+  tests. `TvGuideState`'s SDI renderer (`update_sdi` / `hide_sdi`,
+  `colors`) is gone too, and `TvGuideState::new` / `TvGuideApp::new` no
+  longer take an `ActiveTheme`.
 - Shared helpers replace per-crate copies: `oasis_types::easing`,
   `util::ct_eq`, `util::base64`, `OasisError::is_would_block()` /
   `is_timed_out()`.
@@ -158,6 +165,17 @@ removal, a restyled site, and docs that match the code.
   errors logged; `init` resizes in place. **(breaking)** FFI callback codes
   that never fired (`FILE_ACCESS`, `LOGIN`, `NETWORK_SEND`,
   `PLUGIN_LOAD`) are removed; unknown codes are ignored with a warning.
+- FFI soundness: a NULL callback passed to `oasis_register_callback` /
+  `oasis_set_audio_callback` unregisters it (it used to be stored as a
+  non-null Rust function pointer, which is undefined behaviour);
+  `oasis_destroy` and a new `oasis_video_play` stop and join the decode
+  thread (it used to run on detached); `oasis_video_next_frame` keeps a
+  frame that didn't fit the host buffer and still reports its size;
+  `oasis_video_is_playing` turns 0 once the stream ended and was drained;
+  `oasis_set_vfs_root` re-seeds the dashboard's `/apps`;
+  `oasis_add_vfs_file` with NULL data and length 0 creates an empty file.
+  The crate docs spell out the full safety contract (NULL handles,
+  callback re-entrancy, borrowed / owned pointers, panics).
 
 ### Shell and apps
 
@@ -188,6 +206,22 @@ removal, a restyled site, and docs that match the code.
   geometry; the status-bar clock drifted off its right edge; long Text
   Editor prompts overlapped the Ln/Col readout; WM underflow, focus after
   minimize and fullscreen re-entry.
+- App fixes from a review pass: File Manager acted on the wrong entry
+  when a name contained `"  ("` (it parsed display text; real names are
+  kept now), kept the selection in range after deletes / rescans, and
+  only falls back to copy + delete when rename is unsupported (deleting
+  the source after a full copy); Calculator rejects inf / NaN results,
+  bounds unary / power recursion, negates the last number with +/- and
+  chains from the exact previous result; Text Editor opens non-UTF-8
+  files read-only, keeps CRLF, and commits Save As only after a
+  successful write (relative names go to `/home/user`); Paint's
+  cancelled shapes leave undo history alone; Games shuffles use the
+  PRNG's high bits and Snake may move into its vacating tail; Photo
+  Viewer refuses > 40 MP sources before allocating and actually rotates;
+  ID3 parsing is shared, v2.4-aware and overflow-safe; TV Guide accepts
+  `MM:SS` lengths and rejects inf / NaN; Radio clamps a published volume
+  and never overwrites an unparsable `stations.toml`; Settings clamps a
+  published font scale and System / About scrolling.
 - e2e coverage for the close paths, plugin tiles, terminal scroll,
   skin-swap clocks, music control and window placement across skins.
 

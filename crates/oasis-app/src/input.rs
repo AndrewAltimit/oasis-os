@@ -421,6 +421,31 @@ fn desktop_release(
         .handle_input(&InputEvent::PointerRelease { x, y }, sdi);
 }
 
+/// End the pointer drags when the mode changed since `seen` (and record
+/// the new mode): an icon drag and a WM window drag / resize are finished
+/// where they are. The release handlers only run in the mode the drag
+/// started in, so a drag interrupted by a mode switch (Start to the
+/// terminal, an app launch, a remote `open`) used to survive it and resume
+/// on the next pointer motion with no button held.
+pub fn end_drags_on_mode_change(
+    state: &mut AppState,
+    sdi: &mut SdiRegistry,
+    vfs: &mut MemoryVfs,
+    seen: &mut Mode,
+) {
+    if state.mode == *seen {
+        return;
+    }
+    *seen = state.mode;
+    icon_drag::end_in_place(state, vfs);
+    if state.wm.is_dragging() {
+        // The WM has no cancel: a release ends the drag in place.
+        state
+            .wm
+            .handle_input(&InputEvent::PointerRelease { x: 0, y: 0 }, sdi);
+    }
+}
+
 /// Toggle kiosk fullscreen for the active window (or leave it).
 fn toggle_fullscreen(state: &mut AppState, sdi: &mut SdiRegistry) {
     if let Some(id) = state.content.fullscreen_app.take() {

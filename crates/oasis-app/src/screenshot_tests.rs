@@ -1633,7 +1633,7 @@ fn run_tv_guide_scenario(
 
     // Build guide state based on scenario variant.
     let config = ChannelConfig::from_toml(DEFAULT_CHANNELS_TOML)?;
-    let mut guide = TvGuideState::new(&config, &ActiveTheme::default());
+    let mut guide = TvGuideState::new(&config);
 
     match scenario {
         "tv_guide_loading" => {
@@ -1696,37 +1696,11 @@ fn run_tv_guide_scenario(
         },
     }
 
-    // Render the guide's SDI objects.
-    guide.update_sdi(&mut sdi, &active_theme);
-
-    // Also render text content into the window via draw_with_clips.
-    let lines = guide.text_content();
+    // Draw the guide into the window's content rect through the same
+    // `draw_windowed` path the shell uses.
     wm.draw_with_clips(&mut sdi, backend, |window_id, cx, cy, cw, ch, be| {
         if window_id == "tv_guide" {
-            // Draw content background.
-            be.fill_rect(cx, cy, cw, ch, active_theme.app.bg)?;
-            // Draw title.
-            be.draw_text(
-                "TV Guide",
-                cx + 4,
-                cy + 2,
-                12,
-                active_theme.app.title_bar_text,
-            )?;
-            be.fill_rect(
-                cx,
-                cy + active_theme.app.title_bar_height as i32 - 4,
-                cw,
-                1,
-                active_theme.app.divider,
-            )?;
-            // Draw text lines.
-            let line_h = active_theme.terminal_line_height.max(12) as i32;
-            let max_lines = ((ch as i32 - line_h - 4) / line_h).max(0) as usize;
-            for (i, line) in lines.iter().take(max_lines).enumerate() {
-                let y = cy + active_theme.app.title_bar_height as i32 + i as i32 * line_h;
-                be.draw_text(line, cx + 4, y, 12, active_theme.app.text)?;
-            }
+            guide.draw_windowed(cx, cy, cw, ch, be, &active_theme)?;
         }
         Ok(())
     })?;

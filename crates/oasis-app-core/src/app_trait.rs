@@ -159,28 +159,24 @@ pub trait App: AsAny + std::fmt::Debug + Send {
     ///
     /// Hosts call this right before every [`Self::draw_windowed`] and
     /// [`Self::handle_click`], with the same size, so apps can record
-    /// layout metrics (visible row counts, hit-test geometry) in plain
-    /// fields instead of smuggling them out of the `&self` draw call
-    /// through `Cell`s. Hooks that run without a preceding `layout` (keys,
-    /// buttons, wheel) see the metrics of the last drawn frame. Default is
-    /// a no-op.
+    /// layout metrics (content size, visible row counts, hit-test
+    /// geometry) in plain fields instead of smuggling them out of the
+    /// `&self` draw call through `Cell`s. This is the only place an app
+    /// learns its size outside drawing: `handle_click` hit-tests against
+    /// what `layout` recorded. Hooks that run without a preceding `layout`
+    /// (keys, buttons, wheel) see the metrics of the last drawn frame.
+    /// Default is a no-op.
     fn layout(&mut self, _cw: u32, _ch: u32, _at: &ActiveTheme) {}
 
     /// Handle a click/tap in the app content area.
     ///
-    /// `lx`/`ly` are local coordinates within the content area, which is
-    /// `cw` x `ch`; [`Self::layout`] has just been called with that size.
-    /// Hit-test against the geometry [`Self::draw_windowed`] draws -- a
-    /// kiosk-fullscreen window is still drawn through it, just bigger.
-    /// Returns `AppAction::None` by default.
-    fn handle_click(
-        &mut self,
-        _lx: i32,
-        _ly: i32,
-        _cw: u32,
-        _ch: u32,
-        _vfs: &dyn Vfs,
-    ) -> AppAction {
+    /// `lx`/`ly` are local coordinates within the content area;
+    /// [`Self::layout`] has just been called with its size, so hit-test
+    /// against the geometry recorded there -- the same geometry
+    /// [`Self::draw_windowed`] draws (a kiosk-fullscreen window is still
+    /// drawn through it, just bigger). Returns `AppAction::None` by
+    /// default.
+    fn handle_click(&mut self, _lx: i32, _ly: i32, _vfs: &dyn Vfs) -> AppAction {
         AppAction::None
     }
 
@@ -317,6 +313,9 @@ pub struct ContentState {
     /// Cached content line height in pixels (updated each frame from the
     /// active theme). Mirrors the value used by `draw_content_windowed`.
     pub cached_line_h: u32,
+    /// Content-area height of the last `update_layout_windowed` (click
+    /// hit-testing with [`Self::line_at`]).
+    pub cached_content_h: u32,
     /// Current browse directory.
     pub browse_dir: Option<String>,
     /// File currently being viewed.
@@ -348,6 +347,7 @@ impl ContentState {
             cached_max_visible: DEFAULT_MAX_VISIBLE,
             cached_title_bar_height: DEFAULT_TITLE_BAR_HEIGHT,
             cached_line_h: DEFAULT_LINE_H,
+            cached_content_h: 0,
             browse_dir: None,
             viewing_file: None,
             requests: Vec::new(),
@@ -390,6 +390,7 @@ impl ContentState {
         self.cached_max_visible = crate::render::windowed_max_lines(self, ch, metrics).max(1);
         self.cached_title_bar_height = metrics.title_bar_height;
         self.cached_line_h = metrics.line_h;
+        self.cached_content_h = ch;
         // A shrunk window keeps the selected line selected and on screen.
         let max_cursor = self.visible_count().saturating_sub(1);
         if self.cursor > max_cursor {
@@ -407,6 +408,14 @@ impl ContentState {
             title_bar_height: self.cached_title_bar_height,
             line_h: self.cached_line_h,
         }
+    }
+
+    /// Index of the content line drawn at content-local `ly` by
+    /// [`draw_content_windowed`](crate::render::draw_content_windowed),
+    /// using the layout of the last [`Self::update_layout_windowed`]
+    /// (`None` above the list or below its last visible row).
+    pub fn line_at(&self, ly: i32) -> Option<usize> {
+        crate::render::windowed_line_at(self, self.cached_content_h, self.windowed_metrics(), ly)
     }
 
     /// Queue a VFS IPC request for the host (see [`App::drain_requests`]).

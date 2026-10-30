@@ -15,7 +15,6 @@
 //! `oasis-core`. The PSP backend doesn't use `AppRunner` and imports the
 //! app crates it needs (`oasis-app-tv-guide`) directly.
 
-use oasis_core::active_theme::ActiveTheme;
 use oasis_core::apps::{AppRegistration, AppRegistry, AppRunner, OwnedMedia, SimpleApp};
 use oasis_core::terminal::CommandRegistry;
 
@@ -190,11 +189,7 @@ pub fn builtin_registry(host: &HostInfo) -> AppRegistry {
     );
     apps.register(
         AppRegistration::new(TV_GUIDE, |path, vfs| {
-            Box::new(oasis_app_tv_guide::TvGuideApp::new(
-                path,
-                vfs,
-                &ActiveTheme::default(),
-            ))
+            Box::new(oasis_app_tv_guide::TvGuideApp::new(path, vfs))
         })
         .on_dashboard(),
     );

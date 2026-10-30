@@ -126,8 +126,9 @@ OasisInstance* oasis_create_full(
  * Safe to call with NULL.
  */
 void oasis_destroy(OasisInstance* handle);
-/* (Destroying fires the audio SHUTDOWN callback. The handle is invalid
- * afterwards: destroying it twice is undefined behaviour.) */
+/* (Destroying fires the audio SHUTDOWN callback and stops + joins a
+ * running video decode thread. The handle is invalid afterwards:
+ * destroying it twice is undefined behaviour.) */
 
 /* Advance the OS by one frame.
  *
@@ -252,7 +253,8 @@ void oasis_send_input(OasisInstance* handle, const OasisInputEvent* event);
 /* Execute a terminal command and return the output as a C string.
  *
  * The returned string must be freed with oasis_free_string().
- * Returns NULL on invalid input.
+ * Returns NULL for a NULL handle or a NULL / non-UTF-8 cmd; a failing
+ * command returns its "error: ..." text instead.
  */
 char* oasis_send_command(OasisInstance* handle, const char* cmd);
 
@@ -265,16 +267,16 @@ void oasis_free_string(char* ptr);
  * Virtual File System
  * ---------------------------------------------------------------- */
 
-/* Reset the VFS to a clean state (empty /home, /etc, /tmp) and the cwd to
- * "/". `path` is currently ignored. Note: this also drops the /apps
- * directories seeded at creation, so the dashboard has no icons afterwards
- * unless the host re-adds them. */
+/* Reset the VFS to a clean state (empty /home, /etc, /tmp, the dashboard's
+ * /apps entries re-seeded) and the cwd to "/". `path` is reserved and
+ * currently ignored. */
 void oasis_set_vfs_root(OasisInstance* handle, const char* path);
 
-/* Add a file to the VFS base layer.
+/* Add a file to the VFS base layer (the bytes are copied).
  *
  * path:     Virtual path (e.g. "/home/readme.txt").
- * data:     File content bytes.
+ * data:     File content bytes; may be NULL only when data_len is 0
+ *           (creates an empty file).
  * data_len: Size in bytes.
  */
 void oasis_add_vfs_file(
@@ -297,8 +299,14 @@ void oasis_add_vfs_file(
 
 typedef void (*OasisCallback)(uint32_t event, const char* detail);
 
-/* Register a callback for OS events. */
-/* Registering the same event again replaces the previous callback. */
+/* Register a callback for OS events. Registering the same event again
+ * replaces the previous callback; passing NULL unregisters it.
+ *
+ * Callbacks (this one and the audio callback) run synchronously inside the
+ * oasis_* call that fired them, on the calling thread. They must NOT call
+ * back into the API with the same handle (the instance is borrowed while
+ * they run); queue the work and do it after the call returns. `detail` is
+ * only valid during the callback: copy it to keep it. */
 void oasis_register_callback(
     OasisInstance* handle,
     uint32_t event,
@@ -325,6 +333,7 @@ void oasis_register_callback(
 /* track_id is 0 when not applicable. */
 typedef void (*OasisAudioCallback)(uint32_t event, uint64_t track_id, uint32_t value);
 
+/* Passing NULL unregisters the callback. */
 void oasis_set_audio_callback(OasisInstance* handle, OasisAudioCallback cb);
 
 /* Load audio data; returns a track ID, or UINT64_MAX on failure.
@@ -357,7 +366,8 @@ int32_t oasis_video_play(OasisInstance* handle, const char* path);
 void oasis_video_stop(OasisInstance* handle);
 
 /* Check if video is currently playing.
- * Returns 1 if playing, 0 if not.
+ * Returns 1 while the decoder runs or decoded output is still waiting to
+ * be polled, 0 once the stream ended and everything was drained.
  */
 int32_t oasis_video_is_playing(OasisInstance* handle);
 
@@ -367,7 +377,9 @@ int32_t oasis_video_is_playing(OasisInstance* handle);
  * Copies RGBA pixels into buf, sets out_w/out_h to video dimensions.
  * buf_size must be >= out_w * out_h * 4 for the decoded frame dimensions.
  * Returns: 1 = new frame copied, 0 = no new frame available,
- *          -1 = error (including buffer too small).
+ *          -1 = error. When buf is NULL or too small the frame stays
+ *          queued and out_w/out_h are still set, so the host can size its
+ *          buffer and poll again.
  */
 int32_t oasis_video_next_frame(OasisInstance* handle, uint8_t* buf,
                                uint32_t buf_size,
@@ -493,7 +505,13 @@ The instance's VFS is a `GameAssetVfs` (from `oasis-vfs`), which supports overla
 
 ## Thread Safety
 
-Each `OasisInstance` must be accessed from a single thread. The FFI functions are not thread-safe. If you need multi-threaded access, synchronize externally.
+Calls on one `OasisInstance` must be serialized (typically all on the game thread); the FFI functions are not thread-safe. Distinct instances are independent. Callbacks fire synchronously on the calling thread and must not re-enter the API with the same handle. The video decoder is the only internal thread; `oasis_video_stop` and `oasis_destroy` join it.
+
+## Safety Contract
+
+- Every function accepts a NULL handle (no-op, documented default return). A destroyed handle is undefined behaviour.
+- C strings must be NULL or NUL-terminated; non-UTF-8 strings are rejected like NULL. Data pointers must be valid for the length passed with them.
+- Panics never unwind into the host when the library is built with the `release-ffi` profile: each export catches them, logs at `error` and returns its default; the handle stays usable.
 
 ## Memory Management
 

@@ -128,7 +128,15 @@ impl RadioStatus {
             } else if let Some(v) = line.strip_prefix("Error: ") {
                 s.error = known(v);
             } else if let Some(v) = line.strip_prefix("Volume: ") {
-                s.volume = v.trim().trim_end_matches('%').trim().parse::<u8>().ok();
+                // Anything can write the status file; keep the volume a
+                // percentage so the text bar below can't underflow.
+                s.volume = v
+                    .trim()
+                    .trim_end_matches('%')
+                    .trim()
+                    .parse::<u8>()
+                    .ok()
+                    .map(|v| v.min(100));
             }
         }
         s
@@ -164,13 +172,21 @@ pub struct StationRow {
 }
 
 /// Load the station registry from [`STATIONS_PATH`] (or the defaults).
-fn load_registry(vfs: &dyn Vfs) -> StationRegistry {
-    if vfs.exists(STATIONS_PATH) {
-        let data = vfs.read(STATIONS_PATH).unwrap_or_default();
-        let text = String::from_utf8_lossy(&data);
-        StationRegistry::from_toml(&text).unwrap_or_else(|_| StationRegistry::defaults())
-    } else {
-        StationRegistry::defaults()
+///
+/// A file that exists but can't be read or parsed falls back to the
+/// defaults *and* returns the reason, so the app can say so and must not
+/// save the defaults over the user's file.
+fn load_registry(vfs: &dyn Vfs) -> (StationRegistry, Option<String>) {
+    if !vfs.exists(STATIONS_PATH) {
+        return (StationRegistry::defaults(), None);
+    }
+    let parsed = vfs
+        .read(STATIONS_PATH)
+        .map_err(|e| e.to_string())
+        .and_then(|data| StationRegistry::from_toml(&String::from_utf8_lossy(&data)));
+    match parsed {
+        Ok(registry) => (registry, None),
+        Err(e) => (StationRegistry::defaults(), Some(e)),
     }
 }
 
@@ -206,6 +222,9 @@ fn station_rows(registry: &StationRegistry) -> Vec<StationRow> {
 #[derive(Debug)]
 pub struct RadioApp {
     content: ContentState,
+    /// Content-area size recorded by the last `App::layout` (click
+    /// hit-testing).
+    content_size: (u32, u32),
     /// Last published playback status.
     status: RadioStatus,
     /// Station list.
@@ -215,6 +234,10 @@ pub struct RadioApp {
     registry: StationRegistry,
     /// A favorite changed and the registry must be saved.
     save_pending: bool,
+    /// Why [`STATIONS_PATH`] couldn't be loaded (the list shows the
+    /// defaults). While set, favorites are not saved, so the user's file
+    /// is never overwritten.
+    registry_error: Option<String>,
     /// Selected station index.
     selected: usize,
     /// First station row shown in the windowed list.
@@ -232,12 +255,15 @@ pub struct RadioApp {
 impl RadioApp {
     /// Create a new Internet Radio app, loading initial content from VFS.
     pub fn new(path: &str, vfs: &dyn Vfs) -> Self {
+        let (registry, registry_error) = load_registry(vfs);
         let mut app = Self {
             content: ContentState::new(RADIO_APP_TITLE, path),
+            content_size: (0, 0),
             status: RadioStatus::load(vfs),
             stations: Vec::new(),
-            registry: load_registry(vfs),
+            registry,
             save_pending: false,
+            registry_error,
             selected: 0,
             list_scroll: 0,
             visible_rows: 8,
@@ -342,15 +368,18 @@ impl RadioApp {
             // without dev tools.
             s = format!("{s} - {err}");
         }
+        if self.registry_error.is_some() {
+            s.push_str(" - stations.toml invalid, using defaults (not saved)");
+        }
         s
     }
 
-    /// Rebuild the text lines (full-screen SDI view) and point the
-    /// generic line cursor at the selected station.
+    /// Rebuild the text lines (`App::lines`) and point the generic line
+    /// cursor at the selected station.
     fn rebuild_lines(&mut self) {
         let na = |v: &Option<String>| v.clone().unwrap_or_else(|| "--".to_string());
         let vol = self.volume();
-        let filled = (vol as usize).div_ceil(10);
+        let filled = (vol as usize).div_ceil(10).min(10);
         let mut lines = vec![
             format!("Status: {}", self.status_line()),
             format!("Station: {}", na(&self.status.station)),
@@ -449,10 +478,13 @@ impl App for RadioApp {
     }
 
     fn layout(&mut self, cw: u32, ch: u32, _at: &ActiveTheme) {
+        self.content_size = (cw, ch);
         self.visible_rows = RadioLayout::compute(0, 0, cw, ch).visible_rows();
+        self.scroll_into_view();
     }
 
-    fn handle_click(&mut self, lx: i32, ly: i32, cw: u32, ch: u32, _vfs: &dyn Vfs) -> AppAction {
+    fn handle_click(&mut self, lx: i32, ly: i32, _vfs: &dyn Vfs) -> AppAction {
+        let (cw, ch) = self.content_size;
         let l = RadioLayout::compute(0, 0, cw, ch);
         if let Some(button) = l.button_at(lx, ly) {
             match button {
@@ -484,24 +516,15 @@ impl App for RadioApp {
     }
 
     fn apply_vfs_ops(&mut self, vfs: &mut dyn Vfs) -> bool {
-        if !std::mem::take(&mut self.save_pending) {
+        if !std::mem::take(&mut self.save_pending) || self.registry_error.is_some() {
             return false;
         }
         let Ok(toml) = self.registry.to_toml() else {
             return false;
         };
-        let dir = STATIONS_PATH.rsplit_once('/').map_or("/", |(d, _)| d);
-        let mut prefix = String::new();
-        for part in dir.split('/').filter(|p| !p.is_empty()) {
-            prefix.push('/');
-            prefix.push_str(part);
-            if !vfs.exists(&prefix) {
-                let _ = vfs.mkdir(&prefix);
-            }
-        }
         // A failed save only costs persistence; the in-app flag and the
         // subsystem's registry are already toggled.
-        vfs.write(STATIONS_PATH, toml.as_bytes()).is_ok()
+        oasis_app_core::vfs_util::write_creating_dirs(vfs, STATIONS_PATH, toml.as_bytes()).is_ok()
     }
 
     fn draw_windowed(
@@ -529,6 +552,7 @@ impl App for RadioApp {
 mod tests {
     use super::*;
     use oasis_app_core::AsAny;
+    use oasis_app_core::testing::click_at;
     use oasis_test_backend::{DrawCommand, RecordingBackend};
     use oasis_vfs::MemoryVfs;
 
@@ -792,7 +816,7 @@ mod tests {
         let l = RadioLayout::compute(0, 0, w, h);
         let vfs2 = make_vfs();
         let click = |app: &mut RadioApp, x: i32, y: i32| {
-            app.handle_click(x, y, w, h, &vfs2);
+            click_at(app, x, y, w, h, &vfs2);
         };
 
         let stop = l.buttons[2];
@@ -829,6 +853,55 @@ mod tests {
         assert_eq!(app.selected, n - 1);
         assert!(app.list_scroll + 2 > app.selected);
         assert!(app.list_scroll <= app.selected);
+    }
+
+    #[test]
+    fn broken_stations_file_is_reported_and_never_overwritten() {
+        let mut vfs = make_vfs();
+        oasis_app_core::vfs_util::write_creating_dirs(
+            &mut vfs,
+            STATIONS_PATH,
+            b"[[station]\nname = ",
+        )
+        .unwrap();
+        let mut app = RadioApp::new("/apps/radio", &vfs);
+        assert!(!app.stations.is_empty(), "defaults are shown");
+        assert!(
+            app.lines()
+                .iter()
+                .any(|l| l.contains("stations.toml invalid"))
+        );
+        app.toggle_favorite();
+        assert!(!app.apply_vfs_ops(&mut vfs));
+        assert_eq!(vfs.read(STATIONS_PATH).unwrap(), b"[[station]\nname = ");
+    }
+
+    #[test]
+    fn out_of_range_status_volume_is_clamped() {
+        // Regression: `Volume: 200%` made the text bar's `10 - filled`
+        // underflow and panic.
+        let mut vfs = make_vfs();
+        write_status(&mut vfs, "State: Playing\nVolume: 200%\n");
+        let app = RadioApp::new("/apps/radio", &vfs);
+        assert_eq!(app.status.volume, Some(100));
+        assert!(app.lines().iter().any(|l| l.contains("100%")));
+    }
+
+    #[test]
+    fn layout_shrink_keeps_selection_visible() {
+        let vfs = make_vfs();
+        let mut app = RadioApp::new("/apps/radio", &vfs);
+        let n = app.stations.len();
+        assert!(n > 2, "default registry has several stations");
+        app.layout(480, 2000, &ActiveTheme::default());
+        for _ in 0..n {
+            app.handle_input(&Button::Down, &vfs);
+        }
+        // Shrink the window: the selected (last) row must stay on screen.
+        app.layout(480, 140, &ActiveTheme::default());
+        assert!(app.visible_rows < n);
+        assert!(app.list_scroll <= app.selected);
+        assert!(app.selected < app.list_scroll + app.visible_rows.max(1));
     }
 
     #[test]

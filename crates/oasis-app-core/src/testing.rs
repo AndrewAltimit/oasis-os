@@ -38,6 +38,21 @@ pub const SIZES: &[(u32, u32)] = &[(96, 64), (480, 272), (1024, 768)];
 /// classic PSIX-style and a heavily stylised one).
 pub const THEMES: &[&str] = &["classic", "paper", "highcontrast", "xp", "vaporwave"];
 
+/// Lay `app` out for a `cw` x `ch` content area under the default theme,
+/// then click at content-local `(lx, ly)` -- the host's click sequence,
+/// for unit tests that don't need a whole [`AppHarness`].
+pub fn click_at<A: App + ?Sized>(
+    app: &mut A,
+    lx: i32,
+    ly: i32,
+    cw: u32,
+    ch: u32,
+    vfs: &dyn Vfs,
+) -> AppAction {
+    app.layout(cw, ch, &ActiveTheme::default());
+    app.handle_click(lx, ly, vfs)
+}
+
 /// Load a built-in skin's theme by name (panics on an unknown name).
 #[must_use]
 pub fn theme(name: &str) -> ActiveTheme {
@@ -321,7 +336,7 @@ impl AppHarness {
     pub fn click(&mut self, lx: i32, ly: i32) -> AppAction {
         let (_, _, w, h) = self.window;
         self.app.layout(w, h, &self.theme);
-        let action = self.app.handle_click(lx, ly, w, h, &self.vfs);
+        let action = self.app.handle_click(lx, ly, &self.vfs);
         self.note(action)
     }
 
@@ -638,16 +653,8 @@ mod tests {
             self.content.handle_nav(button).unwrap_or(AppAction::None)
         }
 
-        fn handle_click(
-            &mut self,
-            _lx: i32,
-            ly: i32,
-            _cw: u32,
-            ch: u32,
-            _vfs: &dyn Vfs,
-        ) -> AppAction {
-            let metrics = self.content.windowed_metrics();
-            self.clicked = crate::render::windowed_line_at(&self.content, ch, metrics, ly);
+        fn handle_click(&mut self, _lx: i32, ly: i32, _vfs: &dyn Vfs) -> AppAction {
+            self.clicked = self.content.line_at(ly);
             AppAction::None
         }
     }

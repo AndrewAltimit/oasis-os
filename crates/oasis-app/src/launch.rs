@@ -3,7 +3,7 @@
 //! IPC, "open with" hand-offs between apps).
 
 use oasis_core::active_theme::ActiveTheme;
-use oasis_core::apps::AppRunner;
+use oasis_core::apps::{AppAction, AppRunner};
 use oasis_core::browser::BrowserWidget;
 use oasis_core::dashboard::AppEntry;
 use oasis_core::sdi::SdiRegistry;
@@ -64,7 +64,7 @@ impl LaunchOpts {
 /// Bring an already-open window back to the user: restore it if it is
 /// minimized, then focus it. (Focusing alone would make a minimized,
 /// invisible window the keyboard target.)
-fn raise_window(wm: &mut WindowManager, id: &str, sdi: &mut SdiRegistry) {
+pub(crate) fn raise_window(wm: &mut WindowManager, id: &str, sdi: &mut SdiRegistry) {
     if wm
         .get_window(id)
         .is_some_and(|w| w.state == WindowState::Minimized)
@@ -171,15 +171,30 @@ fn entry_for_title(state: &AppState, title: &str) -> AppEntry {
 /// An already-open window of that app is reused (opening five PNGs in a
 /// row keeps one Photo Viewer window): its runner is replaced by one with
 /// the file pre-loaded, and the old runner is retired so its backend
-/// resources (textures) are released like on a close.
+/// resources (textures) are released like on a close. Replacing it is a
+/// close, so the old runner is asked first like on the titlebar close
+/// button: one that declines (a Text Editor with unsaved changes, now
+/// showing its Save / Discard / Cancel prompt) is kept and raised, and the
+/// file is not opened. Returns whether the file was opened.
 pub fn launch_for_file(
     state: &mut AppState,
     sdi: &mut SdiRegistry,
     vfs: &MemoryVfs,
     app_title: &str,
     file_path: &str,
-) {
+) -> bool {
     let win_id = window_id(app_title);
+    if let Some((_, old)) = state
+        .content
+        .open_runners
+        .iter_mut()
+        .find(|(id, _)| *id == win_id)
+        && old.request_close(vfs) != AppAction::Exit
+    {
+        raise_window(&mut state.wm, &win_id, sdi);
+        state.mode = Mode::Desktop;
+        return false;
+    }
     let entry = entry_for_title(state, app_title);
     let runner = AppRunner::launch_with_file(&state.content.apps, &entry, file_path, vfs);
     if state.wm.get_window(&win_id).is_some() {
@@ -200,6 +215,7 @@ pub fn launch_for_file(
         None => content.open_runners.push((win_id, runner)),
     }
     state.mode = Mode::Desktop;
+    true
 }
 
 /// Every title [`open_by_title`] accepts: the registry (built-in and
@@ -236,8 +252,13 @@ pub fn open_by_title(
     match file {
         Some(_) if !opens_files => Err(format!("{exact} does not open files")),
         Some(file) => {
-            launch_for_file(state, sdi, vfs, &exact, file);
-            Ok(exact)
+            if launch_for_file(state, sdi, vfs, &exact, file) {
+                Ok(exact)
+            } else {
+                Err(format!(
+                    "{exact} is asking for confirmation (e.g. unsaved changes);                      {file} was not opened"
+                ))
+            }
         },
         None => {
             launch_title(state, sdi, vfs, &exact, opts);

@@ -308,6 +308,9 @@ pub struct Shell<B: ShellBackend> {
     tv_timeout_start: Option<Instant>,
     /// VFS path the next presented frame is saved to (`screenshot`).
     pending_screenshot: Option<String>,
+    /// Mode the pointer drags (icon drag, WM drag) were started in: any
+    /// mode change ends them (see [`input::end_drags_on_mode_change`]).
+    drag_mode: Mode,
     #[cfg(feature = "skin-dev")]
     skin_watcher: crate::hot_reload::SkinWatcher,
 }
@@ -666,7 +669,9 @@ impl<B: ShellBackend> Shell<B> {
         let settings_mirror = user_prefs::DiskMirror::new(settings_disk_path, &vfs);
 
         let now = Instant::now();
+        let drag_mode = state.mode;
         Ok(Self {
+            drag_mode,
             state,
             sdi,
             vfs,
@@ -745,6 +750,7 @@ impl<B: ShellBackend> Shell<B> {
         for event in events {
             state.ui.mouse_cursor.handle_input(event);
             let result = input::handle_event(event, &mut self.key_filter, state, sdi, vfs);
+            input::end_drags_on_mode_change(state, sdi, vfs, &mut self.drag_mode);
             if result == input::InputResult::Quit {
                 return StepOutcome {
                     quit: true,
@@ -763,7 +769,24 @@ impl<B: ShellBackend> Shell<B> {
 
         // Poll the MCP control server (agent-driven UI actions).
         #[cfg(feature = "mcp")]
-        commands::poll_mcp_server(state, sdi, vfs, &mut self.backend);
+        {
+            let backend = &mut self.backend;
+            let shader_bridge = &mut self.shader_bridge;
+            let mut capture = |state: &mut AppState, sdi: &mut SdiRegistry, w: u32, h: u32| {
+                draw_frame(
+                    state,
+                    sdi,
+                    backend,
+                    shader_bridge,
+                    anim_secs,
+                    &mut None,
+                    false,
+                )
+                .map_err(|e| e.to_string())?;
+                backend.read_pixels(0, 0, w, h).map_err(|e| e.to_string())
+            };
+            commands::poll_mcp_server(state, sdi, vfs, &mut capture);
+        }
 
         // Poll FTP server for incoming connections.
         commands::poll_ftp_server(state, vfs);
@@ -798,31 +821,11 @@ impl<B: ShellBackend> Shell<B> {
             // their last requests carried out (a skin picked right before
             // Escape), first since they were made first, except TV tunes:
             // there is no guide left to play them in.
-            let mut requests = Vec::new();
-            for runner in &mut state.content.retired_runners {
-                runner.drain_requests(&mut requests);
-            }
-            requests.retain(|req| oasis_apps::tv_guide::tune_url_request(req).is_none());
+            let mut requests = drain_retired_requests(state);
             for (_, runner) in &mut state.content.open_runners {
                 runner.drain_requests(&mut requests);
             }
-            for req in requests {
-                if let Some(tune) = oasis_apps::tv_guide::tune_url_request(&req) {
-                    state.tv.pending_tune = Some(tune.to_string());
-                    continue;
-                }
-                // The music request file is a line queue (several requests
-                // per frame, the `music` command's included); the other
-                // request files hold the latest request.
-                let written = if req.path == oasis_core::ipc::AUDIO_REQUEST_PATH {
-                    media_controller::queue_request(vfs, &req.data)
-                } else {
-                    vfs.write(&req.path, req.data.as_bytes())
-                };
-                if let Err(e) = written {
-                    log::warn!("app VFS request write failed ({}): {e}", req.path);
-                }
-            }
+            carry_out_app_requests(state, vfs, requests);
         }
 
         // Let open apps apply queued VFS mutations (file manager deletes /
@@ -848,6 +851,11 @@ impl<B: ShellBackend> Shell<B> {
         // Apps that decided to close outside an input handler (Text
         // Editor "Save & close" once the save above is written).
         input::apply_app_close_requests(state, sdi, vfs);
+        // Runners closed just now may have queued requests in this frame's
+        // `apply_vfs_ops` / `tick` (after the pass above): carry them out
+        // before the runners drop, or they are lost.
+        let late = drain_retired_requests(state);
+        carry_out_app_requests(state, vfs, late);
         // Closed apps release their backend resources (textures) now that
         // the backend is at hand, then drop.
         for mut runner in state.content.retired_runners.drain(..) {
@@ -921,6 +929,9 @@ impl<B: ShellBackend> Shell<B> {
                 };
             }
         }
+
+        // Remote / MCP / IPC / app actions above may have switched modes.
+        input::end_drags_on_mode_change(state, sdi, vfs, &mut self.drag_mode);
 
         // Update SDI scene graph for the active mode.
         render::update_sdi(state, sdi, vfs);
@@ -1057,151 +1068,15 @@ impl<B: ShellBackend> Shell<B> {
             .frame_stats
             .as_ref()
             .map(|_| frame_stats::PhaseClock::start());
-        backend.clear(state.bg_color)?;
-
-        // Render shader wallpaper FIRST (replaces bg_color clear).
-        // This runs every drawn frame so the animation stays live in all
-        // modes (elided frames redraw whenever the bridge would shade),
-        // except while an opaque surface provably covers the whole canvas
-        // (fullscreen kiosk app, full-screen opaque window): then the
-        // bridge skips both the CPU shade pass and the blit. Time keeps
-        // advancing during occlusion, so on reveal the animation resumes
-        // at the current time (immediately — no 30 Hz wait). Occluding
-        // states always come with `content_active` redraws, so the
-        // visibility pushed here is never stale on a frame that needs it.
-        if let Some(ref mut bridge) = self.shader_bridge
-            && let Some(info) = get_shader_layer(&state.active_theme)
-        {
-            bridge.set_visibility(render::wallpaper_visibility(state));
-            bridge.render_and_blit(backend, &info.name, anim_secs, &info.params);
-        }
-        if let Some(ref mut pc) = phase_clock {
-            pc.lap_shader();
-        }
-
-        // Corrupted-skin glitch: distort the final layout for this one
-        // frame only; restored right after the SDI pass below.
-        let corruption = corruption_active(state)
-            .then_some(state.skin.corrupted_modifiers.as_ref())
-            .flatten()
-            .map(|m| {
-                let seed = state.frame_counter as u32;
-                m.apply(sdi, &mut oasis_core::skin::SimpleRng::new(seed))
-            });
-
-        if state.mode == Mode::Desktop && state.wm.window_count() > 0 {
-            // Vector-icon dashboards paint glyphs directly to the backend
-            // (outside SDI), so we need an extra step between base SDI and
-            // per-window rendering to avoid the dashboard icons disappearing
-            // whenever a window is open on top of them.
-            let wants_vector_icons =
-                state.skin.features.dashboard && state.active_theme.icon.style == "vector";
-            let dashboard = &state.ui.dashboard;
-            let active_theme = &state.active_theme;
-            let frame = state.frame_counter as u32;
-            let overlay = |be: &mut dyn SdiBackend| -> oasis_core::error::Result<()> {
-                if wants_vector_icons {
-                    dashboard.render_vector_icons(be, active_theme, frame)?;
-                }
-                Ok(())
-            };
-            state.wm.draw_with_clips_overlay(
-                sdi,
-                backend,
-                overlay,
-                |window_id, cx, cy, cw, ch, be| {
-                    if window_id == BROWSER_WIN {
-                        if let Some(ref mut bw) = state.content.browser {
-                            bw.set_window(cx, cy, cw, ch);
-                            bw.paint(be)
-                        } else {
-                            Ok(())
-                        }
-                    } else if let Some((_, runner)) = state
-                        .content
-                        .open_runners
-                        .iter_mut()
-                        .find(|(id, _)| id == window_id)
-                    {
-                        runner.draw_windowed(cx, cy, cw, ch, be, &state.active_theme)
-                    } else {
-                        Ok(())
-                    }
-                },
-            )?;
-            // Drag-to-edge snap preview, on top of the windows.
-            render::draw_snap_preview(state, backend)?;
-        } else if state.mode == Mode::Dashboard
-            && (state.active_theme.icon.style == "vector"
-                || !state.active_theme.background_layers.is_empty())
-        {
-            // Split draw: base layer → vector overlays/icons → overlay
-            // layer. Shader already rendered above as wallpaper.
-            sdi.draw_base_layer(backend)?;
-
-            oasis_core::vector_overlay::render_vector_background_cached(
-                backend,
-                &state.active_theme,
-                state.frame_counter as u32,
-                &mut state.background_layer_cache,
-            )?;
-            state.ui.dashboard.render_vector_icons(
-                backend,
-                &state.active_theme,
-                state.frame_counter as u32,
-            )?;
-            sdi.draw_overlay_layer(backend)?;
-        } else {
-            sdi.draw(backend)?;
-        }
-        if let Some(undo) = corruption {
-            undo.restore(sdi);
-        }
-        if let Some(ref mut pc) = phase_clock {
-            pc.lap_sdi();
-        }
-
-        // Vector chrome layers paint on top of the SDI scene (bars, tabs,
-        // windows) in every mode — procedurally shaped chrome accents.
-        if !state.active_theme.chrome_layers.is_empty() {
-            oasis_core::vector_overlay::render_vector_chrome(
-                backend,
-                &state.active_theme,
-                state.frame_counter as u32,
-                &mut state.chrome_layer_cache,
-            )?;
-        }
-
-        // Status bar indicator glyphs (battery / AC / Wi-Fi) are vector
-        // art, painted over the bar after the SDI pass. No-op while the
-        // bar is hidden.
-        oasis_core::statusbar::render_status_glyphs(backend, sdi)?;
-
-        // Paint terminal scrollbar when in terminal mode.
-        if state.mode == Mode::Terminal {
-            terminal_sdi::paint_terminal_scrollbar(
-                backend,
-                state.terminal.output_lines.len(),
-                state.terminal.scroll_offset,
-                &state.active_theme,
-            )?;
-        }
-
-        // Draw transition overlay if active.
-        if let Some(ref mut trans) = state.active_transition {
-            trans.draw_overlay(backend)?;
-            trans.tick();
-            if trans.is_done() {
-                state.active_transition = None;
-            }
-        }
-        if let Some(ref mut pc) = phase_clock {
-            pc.lap_vector();
-        }
-
-        // Assistant-activity overlay (agent connected/acting).
-        #[cfg(feature = "mcp")]
-        crate::mcp_tools::draw_agent_overlay(backend, &state.agent_activity, &state.active_theme)?;
+        draw_frame(
+            state,
+            sdi,
+            backend,
+            &mut self.shader_bridge,
+            anim_secs,
+            &mut phase_clock,
+            true,
+        )?;
 
         // `screenshot`: capture the finished frame before presenting it.
         if let Some(path) = self.pending_screenshot.take() {
@@ -1271,6 +1146,212 @@ impl<B: ShellBackend> Shell<B> {
 // ---------------------------------------------------------------------------
 
 /// BIOS line 2: real RAM + logical core count.
+/// Draw one complete frame into the backend's back buffer (no present):
+/// the shader wallpaper, the SDI scene with its windows, the vector
+/// chrome, the transition overlay and the agent overlay.
+///
+/// [`Shell::render`] draws with it and then presents; MCP `screenshot`
+/// draws with it and reads the pixels back before anything is presented,
+/// like the `screenshot` command (reading the back buffer after a present
+/// is undefined on SDL). `advance_transition` is false for such extra
+/// draws, so they do not speed up a running transition.
+fn draw_frame<B: ShellBackend>(
+    state: &mut AppState,
+    sdi: &mut SdiRegistry,
+    backend: &mut B,
+    shader_bridge: &mut Option<SdlShaderBridge>,
+    anim_secs: f32,
+    phase_clock: &mut Option<frame_stats::PhaseClock>,
+    advance_transition: bool,
+) -> Result<()> {
+    backend.clear(state.bg_color)?;
+
+    // Render shader wallpaper FIRST (replaces bg_color clear).
+    // This runs every drawn frame so the animation stays live in all
+    // modes (elided frames redraw whenever the bridge would shade),
+    // except while an opaque surface provably covers the whole canvas
+    // (fullscreen kiosk app, full-screen opaque window): then the
+    // bridge skips both the CPU shade pass and the blit. Time keeps
+    // advancing during occlusion, so on reveal the animation resumes
+    // at the current time (immediately — no 30 Hz wait). Occluding
+    // states always come with `content_active` redraws, so the
+    // visibility pushed here is never stale on a frame that needs it.
+    if let Some(bridge) = shader_bridge.as_mut()
+        && let Some(info) = get_shader_layer(&state.active_theme)
+    {
+        bridge.set_visibility(render::wallpaper_visibility(state));
+        bridge.render_and_blit(backend, &info.name, anim_secs, &info.params);
+    }
+    if let Some(pc) = phase_clock.as_mut() {
+        pc.lap_shader();
+    }
+
+    // Corrupted-skin glitch: distort the final layout for this one
+    // frame only; restored right after the SDI pass below.
+    let corruption = corruption_active(state)
+        .then_some(state.skin.corrupted_modifiers.as_ref())
+        .flatten()
+        .map(|m| {
+            let seed = state.frame_counter as u32;
+            m.apply(sdi, &mut oasis_core::skin::SimpleRng::new(seed))
+        });
+
+    if state.mode == Mode::Desktop && state.wm.window_count() > 0 {
+        // Vector-icon dashboards paint glyphs directly to the backend
+        // (outside SDI), so we need an extra step between base SDI and
+        // per-window rendering to avoid the dashboard icons disappearing
+        // whenever a window is open on top of them.
+        let wants_vector_icons =
+            state.skin.features.dashboard && state.active_theme.icon.style == "vector";
+        let dashboard = &state.ui.dashboard;
+        let active_theme = &state.active_theme;
+        let frame = state.frame_counter as u32;
+        let overlay = |be: &mut dyn SdiBackend| -> oasis_core::error::Result<()> {
+            if wants_vector_icons {
+                dashboard.render_vector_icons(be, active_theme, frame)?;
+            }
+            Ok(())
+        };
+        state.wm.draw_with_clips_overlay(
+            sdi,
+            backend,
+            overlay,
+            |window_id, cx, cy, cw, ch, be| {
+                if window_id == BROWSER_WIN {
+                    if let Some(ref mut bw) = state.content.browser {
+                        bw.set_window(cx, cy, cw, ch);
+                        bw.paint(be)
+                    } else {
+                        Ok(())
+                    }
+                } else if let Some((_, runner)) = state
+                    .content
+                    .open_runners
+                    .iter_mut()
+                    .find(|(id, _)| id == window_id)
+                {
+                    runner.draw_windowed(cx, cy, cw, ch, be, &state.active_theme)
+                } else {
+                    Ok(())
+                }
+            },
+        )?;
+        // Drag-to-edge snap preview, on top of the windows.
+        render::draw_snap_preview(state, backend)?;
+    } else if state.mode == Mode::Dashboard
+        && (state.active_theme.icon.style == "vector"
+            || !state.active_theme.background_layers.is_empty())
+    {
+        // Split draw: base layer → vector overlays/icons → overlay
+        // layer. Shader already rendered above as wallpaper.
+        sdi.draw_base_layer(backend)?;
+
+        oasis_core::vector_overlay::render_vector_background_cached(
+            backend,
+            &state.active_theme,
+            state.frame_counter as u32,
+            &mut state.background_layer_cache,
+        )?;
+        state.ui.dashboard.render_vector_icons(
+            backend,
+            &state.active_theme,
+            state.frame_counter as u32,
+        )?;
+        sdi.draw_overlay_layer(backend)?;
+    } else {
+        sdi.draw(backend)?;
+    }
+    if let Some(undo) = corruption {
+        undo.restore(sdi);
+    }
+    if let Some(pc) = phase_clock.as_mut() {
+        pc.lap_sdi();
+    }
+
+    // Vector chrome layers paint on top of the SDI scene (bars, tabs,
+    // windows) in every mode — procedurally shaped chrome accents.
+    if !state.active_theme.chrome_layers.is_empty() {
+        oasis_core::vector_overlay::render_vector_chrome(
+            backend,
+            &state.active_theme,
+            state.frame_counter as u32,
+            &mut state.chrome_layer_cache,
+        )?;
+    }
+
+    // Status bar indicator glyphs (battery / AC / Wi-Fi) are vector
+    // art, painted over the bar after the SDI pass. No-op while the
+    // bar is hidden.
+    oasis_core::statusbar::render_status_glyphs(backend, sdi)?;
+
+    // Paint terminal scrollbar when in terminal mode.
+    if state.mode == Mode::Terminal {
+        terminal_sdi::paint_terminal_scrollbar(
+            backend,
+            state.terminal.output_lines.len(),
+            state.terminal.scroll_offset,
+            &state.active_theme,
+        )?;
+    }
+
+    // Draw transition overlay if active.
+    if let Some(ref mut trans) = state.active_transition {
+        trans.draw_overlay(backend)?;
+        if advance_transition {
+            trans.tick();
+            if trans.is_done() {
+                state.active_transition = None;
+            }
+        }
+    }
+    if let Some(pc) = phase_clock.as_mut() {
+        pc.lap_vector();
+    }
+
+    // Assistant-activity overlay (agent connected/acting).
+    #[cfg(feature = "mcp")]
+    crate::mcp_tools::draw_agent_overlay(backend, &state.agent_activity, &state.active_theme)?;
+    Ok(())
+}
+
+/// Drain the VFS requests of the retired (closed or replaced) runners,
+/// minus TV tunes: there is no guide left to play them in.
+fn drain_retired_requests(state: &mut AppState) -> Vec<oasis_core::apps::AppRequest> {
+    let mut requests = Vec::new();
+    for runner in &mut state.content.retired_runners {
+        runner.drain_requests(&mut requests);
+    }
+    requests.retain(|req| oasis_apps::tv_guide::tune_url_request(req).is_none());
+    requests
+}
+
+/// Carry out the apps' VFS requests in order: TV Guide tunes go to the
+/// video player (`tv_controller::tick`), the rest are written to their
+/// request files.
+fn carry_out_app_requests(
+    state: &mut AppState,
+    vfs: &mut MemoryVfs,
+    requests: Vec<oasis_core::apps::AppRequest>,
+) {
+    for req in requests {
+        if let Some(tune) = oasis_apps::tv_guide::tune_url_request(&req) {
+            state.tv.pending_tune = Some(tune.to_string());
+            continue;
+        }
+        // The music request file is a line queue (several requests per
+        // frame, the `music` command's included); the other request files
+        // hold the latest request.
+        let written = if req.path == oasis_core::ipc::AUDIO_REQUEST_PATH {
+            media_controller::queue_request(vfs, &req.data)
+        } else {
+            vfs.write(&req.path, req.data.as_bytes())
+        };
+        if let Err(e) = written {
+            log::warn!("app VFS request write failed ({}): {e}", req.path);
+        }
+    }
+}
+
 fn ram_bios_line() -> String {
     match (sysinfo::total_ram_kb(), sysinfo::cpu_core_count()) {
         (Some(kb), Some(cores)) => format!(

@@ -322,19 +322,49 @@ pub fn select_smallest_with_max_width(
     best
 }
 
+/// Longest episode duration accepted (24 hours). Longer, infinite or NaN
+/// values would overflow the schedule's integer slot math.
+const MAX_EPISODE_SECS: f64 = 86_400.0;
+
 /// Parse the duration field from an IA file entry.
 ///
-/// The `length` field can be a string like "1234.56" or a number.
+/// The `length` field can be a number, a seconds string like "1234.56",
+/// or a clock string like "MM:SS" / "HH:MM:SS". Anything non-finite,
+/// non-positive or longer than [`MAX_EPISODE_SECS`] yields 0 (skipped).
 fn parse_duration(file: &serde_json::Value) -> f64 {
-    if let Some(v) = file.get("length") {
-        if let Some(n) = v.as_f64() {
-            return n;
-        }
-        if let Some(s) = v.as_str() {
-            return s.parse().unwrap_or(0.0);
-        }
+    let secs = match file.get("length") {
+        Some(v) => v
+            .as_f64()
+            .or_else(|| v.as_str().and_then(parse_length_str))
+            .unwrap_or(0.0),
+        None => 0.0,
+    };
+    if secs.is_finite() && secs > 0.0 && secs <= MAX_EPISODE_SECS {
+        secs
+    } else {
+        0.0
     }
-    0.0
+}
+
+/// Parse "1234.5", "MM:SS" or "HH:MM:SS" into seconds.
+fn parse_length_str(s: &str) -> Option<f64> {
+    let s = s.trim();
+    if !s.contains(':') {
+        return s.parse().ok();
+    }
+    let mut total = 0.0;
+    let parts: Vec<&str> = s.split(':').collect();
+    if parts.len() > 3 {
+        return None;
+    }
+    for part in parts {
+        let v: f64 = part.trim().parse().ok()?;
+        if !v.is_finite() || v < 0.0 {
+            return None;
+        }
+        total = total * 60.0 + v;
+    }
+    Some(total)
 }
 
 /// Derive a display title from a filename, stripping path prefix and extension.
@@ -359,6 +389,20 @@ fn derive_title(filename: &str, subfolder: Option<&str>) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parse_duration_accepts_clock_strings_and_rejects_bad_values() {
+        let d = |v: serde_json::Value| parse_duration(&serde_json::json!({ "length": v }));
+        assert_eq!(d(serde_json::json!("1234.5")), 1234.5);
+        assert_eq!(d(serde_json::json!(90)), 90.0);
+        assert_eq!(d(serde_json::json!("22:30")), 1350.0);
+        assert_eq!(d(serde_json::json!("1:02:03")), 3723.0);
+        // Regression: these parsed and overflowed the schedule math.
+        for bad in ["inf", "NaN", "1e30", "-5", "1:2:3:4", "a:b", "0"] {
+            assert_eq!(d(serde_json::json!(bad)), 0.0, "{bad}");
+        }
+        assert_eq!(parse_duration(&serde_json::json!({})), 0.0);
+    }
 
     fn sample_files_json() -> &'static str {
         r#"{

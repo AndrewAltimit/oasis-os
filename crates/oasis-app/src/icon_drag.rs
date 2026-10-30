@@ -135,6 +135,29 @@ pub fn on_release(state: &mut AppState, vfs: &mut MemoryVfs, x: i32, y: i32) -> 
     }
 }
 
+/// End an armed or active drag without a pointer release (the mode
+/// changed under it): a moved icon is dropped where it is (snapped and
+/// persisted, like a release there); a press that never moved is dropped
+/// without the click it would have been.
+pub fn end_in_place(state: &mut AppState, vfs: &mut MemoryVfs) {
+    let Some(drag) = state.icon_drag else {
+        return;
+    };
+    let live = drag
+        .moved
+        .then(|| state.ui.dashboard.icon_rect(drag.index))
+        .flatten();
+    match live {
+        Some((ox, oy, _, _)) => {
+            let _ = on_release(state, vfs, ox + drag.grab_dx, oy + drag.grab_dy);
+        },
+        None => {
+            state.icon_drag = None;
+            state.ui.dashboard.drag_index = None;
+        },
+    }
+}
+
 /// Settings key for one icon's stored position.
 fn position_key(skin: &str, app_path: &str) -> String {
     format!("icon_positions.{skin}.{app_path}")

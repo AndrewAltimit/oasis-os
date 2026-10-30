@@ -11,7 +11,7 @@ use oasis_types::backend::{BatchRect, BatchText, Color, SdiBackend};
 use oasis_ui::menu_bar::MenuStyle;
 
 use crate::colors::FileManagerColors;
-use crate::model::{EntryKind, TreeEntry, parse_entry, truncate_label};
+use crate::model::{EntryKind, TreeEntry, truncate_label};
 use crate::state::FileManagerApp;
 
 /// Pixel height reserved for the file-manager menu bar (matches the
@@ -158,7 +158,7 @@ mod private {
         Some(abs)
     }
 
-    /// Rectangle in screen coordinates, used by Explorer-view SDI helpers.
+    /// Rectangle in content coordinates, used by the Explorer-view helpers.
     #[derive(Clone, Copy)]
     pub(crate) struct Box2d {
         pub x: i32,
@@ -333,7 +333,11 @@ impl FileManagerApp {
         let max_lines = ((content_h as i32) / line_h).max(0) as usize;
         for (pi, panel) in self.panels.iter().enumerate() {
             let px = if pi == 0 { cx } else { divider_x + 1 };
-            let pw = if pi == 0 { half_w } else { cw - half_w - 1 };
+            let pw = if pi == 0 {
+                half_w
+            } else {
+                cw.saturating_sub(half_w + 1)
+            };
             let is_active = pi == self.active_panel;
 
             if is_active {
@@ -518,7 +522,11 @@ impl FileManagerApp {
                     color: colors.selected_bg,
                 });
             }
-            let (name, kind) = parse_entry(line);
+            // Informational rows (`(empty directory)`) draw as a file.
+            let (name, kind) = match panel.entry(abs_idx) {
+                Some(e) => (e.name.clone(), e.kind),
+                None => (line.trim().to_string(), EntryKind::File),
+            };
             let icon_x = tx + (g.tile_w as i32 - g.icon_w as i32) / 2;
             let icon_y = ty + 4;
             push_icon(

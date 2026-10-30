@@ -2,15 +2,14 @@
 //! accessor / mutation helpers.
 //!
 //! Behavioural splits live in the sibling modules: [`crate::commands`]
-//! handles input + menu actions, [`crate::view`] handles all rendering
-//! and SDI scene updates.
+//! handles input + menu actions, [`crate::view`] handles all rendering.
 
 use oasis_app_core::ContentState;
 use oasis_ui::menu_bar::MenuBar;
 use oasis_vfs::Vfs;
 
 use crate::commands::default_menu_bar;
-use crate::model::{Clipboard, Dialog, FileOp, FilePanel, NavTarget, ViewMode};
+use crate::model::{Clipboard, Dialog, FileOp, FilePanel, NavTarget, ViewMode, list_panel};
 
 use oasis_app_core::file_viewer::list_directory;
 
@@ -19,6 +18,9 @@ use oasis_app_core::file_viewer::list_directory;
 pub struct FileManagerApp {
     /// Shared content state (title, lines, scroll, cursor, etc.).
     pub content: ContentState,
+    /// Content-area size recorded by the last `App::layout` (click
+    /// hit-testing).
+    pub content_size: (u32, u32),
     /// Dual panels.
     pub panels: [FilePanel; 2],
     /// Which panel is active (0 = left, 1 = right).
@@ -35,9 +37,8 @@ pub struct FileManagerApp {
     pub status: Option<String>,
     /// Active view mode (toggled via Button::Select).
     pub view_mode: ViewMode,
-    /// Cached column count for the Explorer icon grid (written by the
-    /// renderer each frame so the next input tick can navigate by tile
-    /// coordinates). Set by `App::layout` (windowed) and `update_sdi`.
+    /// Cached column count for the Explorer icon grid, set by
+    /// `App::layout` so input can navigate by tile coordinates.
     pub(crate) explorer_cols: usize,
     /// Cached visible row count for the Explorer icon grid.
     pub(crate) explorer_visible_rows: usize,
@@ -73,6 +74,7 @@ impl FileManagerApp {
         content.lines = list_directory(vfs, "/");
         Self {
             content,
+            content_size: (0, 0),
             panels: [FilePanel::new("/", vfs), FilePanel::new("/", vfs)],
             active_panel: 0,
             pending_ops: Vec::new(),
@@ -96,6 +98,15 @@ impl FileManagerApp {
     /// nearest surviving ancestor. Returns `true` if any listing changed.
     pub(crate) fn rescan(&mut self, vfs: &dyn Vfs) -> bool {
         let mut changed = false;
+        // Scroll granularity and visible-entry count of the active view:
+        // the Explorer grid scrolls by whole rows of `cols` tiles.
+        let (step, page) = match self.view_mode {
+            ViewMode::Dual => (1, self.content.cached_max_visible.max(1)),
+            ViewMode::Explorer => {
+                let cols = self.explorer_cols.max(1);
+                (cols, cols * self.explorer_visible_rows.max(1))
+            },
+        };
         for panel in &mut self.panels {
             let mut dir = panel.browse_dir.clone();
             while dir != "/" && !vfs.exists(&dir) {
@@ -106,19 +117,14 @@ impl FileManagerApp {
                 changed = true;
                 continue;
             }
-            let lines = list_directory(vfs, &dir);
+            let (lines, _) = list_panel(vfs, &dir);
             if lines == panel.lines {
                 continue;
             }
             let selected = panel.lines.get(panel.scroll + panel.cursor).cloned();
             panel.refresh(vfs);
             if let Some(i) = selected.and_then(|sel| panel.lines.iter().position(|l| *l == sel)) {
-                if i >= panel.scroll {
-                    panel.cursor = i - panel.scroll;
-                } else {
-                    panel.scroll = i;
-                    panel.cursor = 0;
-                }
+                panel.reveal(i, step, page);
             }
             changed = true;
         }

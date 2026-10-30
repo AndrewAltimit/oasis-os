@@ -1128,7 +1128,6 @@ dependencies = [
  "log",
  "oasis-app-core",
  "oasis-audio",
- "oasis-sdi",
  "oasis-skin",
  "oasis-types",
  "oasis-vfs",

@@ -100,7 +100,7 @@ extern int32_t oasis_video_get_audio(OasisInstance* handle, float* buf, uint32_t
 #define OASIS_KEY_CHAR 0
 #define OASIS_MOD_CTRL 2
 #define OASIS_CB_COMMAND_EXEC 2
-#define OASIS_CB_FILE_ACCESS 1
+#define OASIS_CB_APP_LAUNCH 3
 
 /* ------------------------------------------------------------------------
  * Helpers
@@ -169,7 +169,7 @@ int main(void) {
 
     /* Callbacks: OS events and audio state changes. */
     oasis_register_callback(os, OASIS_CB_COMMAND_EXEC, on_os_event);
-    oasis_register_callback(os, OASIS_CB_FILE_ACCESS, on_os_event);
+    oasis_register_callback(os, OASIS_CB_APP_LAUNCH, on_os_event);
     oasis_set_audio_callback(os, on_audio_event);
 
     /* Seed the virtual filesystem before the first tick. */

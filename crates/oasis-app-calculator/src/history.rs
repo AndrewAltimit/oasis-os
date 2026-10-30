@@ -60,18 +60,7 @@ pub fn load(vfs: &dyn Vfs) -> Vec<CalcHistoryEntry> {
 
 /// Write `entries` to [`HISTORY_PATH`], creating its folder if needed.
 pub fn save(vfs: &mut dyn Vfs, entries: &[CalcHistoryEntry]) -> Result<(), String> {
-    let dir = HISTORY_PATH
-        .rsplit_once('/')
-        .map_or("/", |(d, _)| if d.is_empty() { "/" } else { d });
-    let mut cur = String::new();
-    for part in dir.split('/').filter(|p| !p.is_empty()) {
-        cur.push('/');
-        cur.push_str(part);
-        if !vfs.exists(&cur) {
-            vfs.mkdir(&cur).map_err(|e| e.to_string())?;
-        }
-    }
-    vfs.write(HISTORY_PATH, serialize(entries).as_bytes())
+    oasis_app_core::vfs_util::write_creating_dirs(vfs, HISTORY_PATH, serialize(entries).as_bytes())
         .map_err(|e| e.to_string())
 }
 

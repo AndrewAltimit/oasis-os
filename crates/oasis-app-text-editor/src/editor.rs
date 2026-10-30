@@ -14,6 +14,10 @@ const UNDO_LIMIT: usize = 1000;
 /// Spaces inserted by the Tab key.
 const TAB_TEXT: &str = "    ";
 
+/// Directory an untitled document is saved to (the default Save As path
+/// and the base of a relative name typed for an untitled document).
+const UNTITLED_DIR: &str = "/home/user";
+
 /// What kind of edit an undo group holds. Consecutive `Typing` edits (and
 /// consecutive `Deleting` edits) coalesce; `Other` edits (newline, paste,
 /// cut, replace) always stand alone.
@@ -757,7 +761,7 @@ impl TextEditorApp {
                 self.prompt_input = self
                     .file_path
                     .clone()
-                    .unwrap_or_else(|| "/home/user/untitled.txt".to_string());
+                    .unwrap_or_else(|| format!("{UNTITLED_DIR}/untitled.txt"));
             },
             _ => {},
         }
@@ -796,6 +800,9 @@ impl TextEditorApp {
     /// document is untitled. The write happens in `apply_vfs_ops`.
     pub fn save(&mut self) {
         match self.file_path.clone() {
+            Some(_) if self.read_only => {
+                self.refuse_read_only_save();
+            },
             Some(path) => {
                 self.queue_save(path);
                 self.mode = EditorMode::Normal;
@@ -805,8 +812,18 @@ impl TextEditorApp {
         self.rebuild_display_lines();
     }
 
+    /// Saving a lossily-decoded (non-UTF-8) file over itself would destroy
+    /// the bytes that could not be decoded: refuse and say why.
+    fn refuse_read_only_save(&mut self) {
+        self.mode = EditorMode::Normal;
+        self.pending_close = None;
+        self.status_message =
+            Some("Read-only: file is not UTF-8. Use Save As to write a copy.".into());
+    }
+
     /// Save under `path` (made absolute relative to the current file's
-    /// directory), switching the document to that path.
+    /// directory, or `/home/user` for an untitled document). The document
+    /// switches to that path once the write succeeds.
     pub fn save_as(&mut self, path: &str) -> bool {
         let path = path.trim();
         if path.is_empty() || path.ends_with('/') {
@@ -821,12 +838,14 @@ impl TextEditorApp {
                 .file_path
                 .as_deref()
                 .and_then(|p| p.rsplit_once('/'))
-                .map_or("", |(d, _)| d);
+                .map_or(UNTITLED_DIR, |(d, _)| d);
             format!("{dir}/{path}")
         };
-        self.file_type = detect_file_type(&full);
-        self.file_path = Some(full.clone());
-        self.content.title = self.build_title();
+        if self.read_only && self.file_path.as_deref() == Some(full.as_str()) {
+            self.refuse_read_only_save();
+            self.rebuild_display_lines();
+            return false;
+        }
         self.mode = EditorMode::Normal;
         self.queue_save(full);
         self.rebuild_display_lines();
@@ -845,6 +864,14 @@ impl TextEditorApp {
         };
         match vfs.write(&path, data.as_bytes()) {
             Ok(()) => {
+                // Save As: the document moves to the new path only now
+                // that the write succeeded.
+                if self.file_path.as_deref() != Some(path.as_str()) {
+                    self.file_type = detect_file_type(&path);
+                    self.file_path = Some(path.clone());
+                    self.content.title = self.build_title();
+                    self.read_only = false;
+                }
                 if self.buffer.generation() == generation {
                     self.modified = false;
                 }
@@ -918,6 +945,8 @@ impl TextEditorApp {
         self.group_open = false;
         self.modified = false;
         self.file_path = None;
+        self.line_ending = "\n";
+        self.read_only = false;
         self.file_type = crate::FileType::Plain;
         self.content.title = self.build_title();
         self.mode = EditorMode::Normal;
@@ -931,7 +960,12 @@ impl TextEditorApp {
 
     /// Serialize the buffer to a string suitable for saving.
     pub fn save_content(&self) -> String {
-        self.buffer.text()
+        let text = self.buffer.text();
+        if self.line_ending == "\n" {
+            text
+        } else {
+            text.replace('\n', self.line_ending)
+        }
     }
 
     /// Current editor mode.

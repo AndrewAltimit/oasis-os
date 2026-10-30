@@ -95,16 +95,7 @@ impl HostProbe {
 
 /// Write `status` to [`STATUS_PATH`], creating its folder if needed.
 pub fn publish_status(vfs: &mut dyn Vfs, status: &SysStatus) -> oasis_types::error::Result<()> {
-    let mut cur = String::new();
-    let dir = STATUS_PATH.rsplit_once('/').map_or("", |(d, _)| d);
-    for part in dir.split('/').filter(|p| !p.is_empty()) {
-        cur.push('/');
-        cur.push_str(part);
-        if !vfs.exists(&cur) {
-            vfs.mkdir(&cur)?;
-        }
-    }
-    vfs.write(STATUS_PATH, status.to_text().as_bytes())
+    oasis_app_core::vfs_util::write_creating_dirs(vfs, STATUS_PATH, status.to_text().as_bytes())
 }
 
 /// CPU load in percent between two counter samples.

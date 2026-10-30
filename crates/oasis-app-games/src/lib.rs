@@ -432,6 +432,7 @@ impl App for GamesApp {
 mod tests {
     use super::*;
     use oasis_app_core::AsAny;
+    use oasis_app_core::testing::click_at;
     use oasis_vfs::MemoryVfs;
 
     fn make_vfs() -> MemoryVfs {
@@ -647,7 +648,7 @@ mod tests {
         app.snake.speed = 1;
         let old_head = app.snake.snake[0];
         let old_dir = app.snake.next_direction;
-        app.handle_click(10, 10, 200, 200, &vfs);
+        click_at(&mut app, 10, 10, 200, 200, &vfs);
         assert!(!app.handle_scroll(3, &vfs), "wheel is ignored in a game");
         assert_eq!(
             app.snake.snake[0], old_head,
