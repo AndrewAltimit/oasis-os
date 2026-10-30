@@ -25,7 +25,7 @@ pub mod fetch;
 mod storage;
 mod timers;
 
-pub use console::{ConsoleEntry, ConsoleLevel};
+pub use console::{ConsoleEntry, ConsoleLevel, MAX_CONSOLE_ENTRIES, MAX_CONSOLE_MESSAGE_BYTES};
 pub use engine::{JsEngine, MAX_MICROTASKS_PER_DRAIN};
 pub use fetch::{FetchHandler, FetchRequest, FetchResponse, MockFetchHandler};
 pub use rquickjs;
