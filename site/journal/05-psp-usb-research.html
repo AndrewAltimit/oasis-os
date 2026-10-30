@@ -2,48 +2,98 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>PSP USB Research - OASIS_OS Developer's Journal</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>PSP USB Research: From Firmware Decryption to a Custom Device Driver and Hardware Adapter — OASIS_OS Developer's Journal</title>
   <meta name="description" content="Deep hardware reverse engineering of the PSP's USB subsystem — firmware decryption, OHCI controller discovery, Syscon protocol, a working custom USB device driver in Rust, and a hardware adapter design to bring modern USB-C to the PSP.">
+  <link rel="canonical" href="https://andrewaltimit.github.io/oasis-os/journal/05-psp-usb-research.html">
+  <meta name="theme-color" content="#08090d">
+  <link rel="icon" href="../favicon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="../img/apple-touch-icon.png">
+  <meta property="og:type" content="article">
+  <meta property="og:site_name" content="OASIS_OS">
+  <meta property="og:title" content="PSP USB Research: From Firmware Decryption to a Custom Device Driver and Hardware Adapter — OASIS_OS Developer's Journal">
+  <meta property="og:description" content="Deep hardware reverse engineering of the PSP's USB subsystem — firmware decryption, OHCI controller discovery, Syscon protocol, a working custom USB device driver in Rust, and a hardware adapter design to bring modern USB-C to the PSP.">
+  <meta property="og:url" content="https://andrewaltimit.github.io/oasis-os/journal/05-psp-usb-research.html">
+  <meta property="og:image" content="https://andrewaltimit.github.io/oasis-os/img/og-card.png">
+  <meta property="og:image:width" content="1200">
+  <meta property="og:image:height" content="630">
+  <meta property="og:image:alt" content="OASIS_OS: one OS shell, any pixel buffer">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta property="article:published_time" content="2026-03-21">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700;800&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="../css/style.css">
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&amp;display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="../css/site.css">
+  <link rel="stylesheet" href="../css/journal.css">
 </head>
-<body>
+<body class="page-article">
 
-<nav class="site-nav">
-  <a class="nav-brand" href="../">OASIS_OS</a>
-  <button class="nav-toggle" id="nav-toggle" aria-label="Toggle navigation" aria-expanded="false">&#9776;</button>
-  <ul class="nav-links" id="nav-links">
-    <li><a href="../#platforms">Platforms</a></li>
-    <li><a href="../#architecture">Architecture</a></li>
-    <li><a href="./">Journal</a></li>
-    <li><a href="../demo/">Live Demo</a></li>
-  </ul>
-</nav>
+<a class="skip-link" href="#main">Skip to content</a>
 
-<header class="article-header">
-  <div class="container">
-    <a class="article-back" href="./">&larr; Developer's Journal</a>
-    <h1 class="article-title">PSP USB Research: From Firmware Decryption to a Custom Device Driver and Hardware Adapter</h1>
-    <p class="article-subtitle">
-      What started as an attempt to enable USB host mode became a deep reverse engineering
+<header class="topbar" id="topbar">
+  <div class="topbar__inner wrap">
+    <a class="brand" href="../" aria-label="OASIS_OS home">
+      <span class="brand__mark" aria-hidden="true"></span>
+      <span class="brand__name">OASIS<span class="brand__us">_</span>OS</span>
+    </a>
+    <button class="nav-toggle" id="nav-toggle" type="button" aria-expanded="false" aria-controls="site-nav">
+      <span class="sr-only">Menu</span>
+      <span class="nav-toggle__bar" aria-hidden="true"></span>
+    </button>
+    <nav class="site-nav" id="site-nav" aria-label="Primary">
+      <ul>
+        <li><a href="../#platforms">Platforms</a></li>
+        <li><a href="../#skins">Skins</a></li>
+        <li><a href="../#features">Features</a></li>
+        <li><a href="../#architecture">Architecture</a></li>
+        <li><a href="../#psp">PSP</a></li>
+        <li><a href="../journal/" aria-current="page">Journal</a></li>
+        <li><a href="../#start">Build</a></li>
+      </ul>
+      <div class="site-nav__cta">
+        <a class="btn btn--ghost btn--sm" href="https://github.com/AndrewAltimit/oasis-os">GitHub</a>
+        <a class="btn btn--primary btn--sm" href="../demo/">Live demo</a>
+      </div>
+    </nav>
+  </div>
+</header>
+<div class="progress" aria-hidden="true"><span id="progress-bar"></span></div>
+
+<main id="main">
+<article class="article">
+  <header class="article__head wrap">
+    <nav class="crumbs" aria-label="Breadcrumb">
+      <a href="./">Developer&rsquo;s journal</a><span aria-hidden="true">/</span><span>Entry 05</span>
+    </nav>
+    <h1 class="article__title">PSP USB Research<span class="article__title-sub">From Firmware Decryption to a Custom Device Driver and Hardware Adapter</span></h1>
+    <p class="article__lede">What started as an attempt to enable USB host mode became a deep reverse engineering
       expedition &mdash; decrypting Sony's USB firmware, mapping undocumented hardware
       registers, discovering that PSP accessories were never powered through VBUS at all,
       and ultimately building both a working custom USB device driver in Rust and a hardware
-      adapter design that brings USB-C to the PSP.
-    </p>
-    <div class="article-meta">
-      <span>Entry 05</span>
-      <span>hardware, reverse-engineering, usb</span>
-    </div>
-  </div>
-</header>
+      adapter design that brings USB-C to the PSP.</p>
+    <dl class="article__meta">
+      <div><dt>Entry</dt><dd>05</dd></div>
+      <div><dt>Published</dt><dd><time datetime="2026-03-21">Mar 21, 2026</time></dd></div>
+      <div><dt>Reading time</dt><dd>10 min</dd></div>
+    </dl>
+    <ul class="article__tags" aria-label="Tags"><li>hardware</li><li>reverse-engineering</li><li>usb</li></ul>
+  </header>
 
-<article class="article-content">
-
-  <h2>The Original Goal</h2>
+  <div class="article__layout wrap">
+    <nav class="toc" aria-label="On this page">
+      <p class="toc__title">On this page</p>
+      <ol>
+        <li><a href="#the-original-goal">The Original Goal</a></li>
+        <li><a href="#the-answer-accessory-power-pads-not-vbus">The Answer: Accessory Power Pads, Not VBUS</a></li>
+        <li><a href="#the-reverse-engineering-journey">The Reverse Engineering Journey</a></li>
+        <li><a href="#the-pivot-custom-usb-device-driver">The Pivot: Custom USB Device Driver</a></li>
+        <li><a href="#the-hardware-a-usb-c-adapter-for-the-psp">The Hardware: A USB-C Adapter for the PSP</a></li>
+        <li><a href="#what-we-learned">What We Learned</a></li>
+        <li><a href="#what-s-next">What's Next</a></li>
+      </ol>
+    </nav>
+    <div class="prose">
+<h2 id="the-original-goal"><a class="anchor" href="#the-original-goal" aria-hidden="true" tabindex="-1">#</a>The Original Goal</h2>
 
   <p>
     The plan was straightforward: enable USB host mode on the PSP so it could supply 5V
@@ -59,7 +109,7 @@
     about how PSP accessories actually work.
   </p>
 
-  <h2>The Answer: Accessory Power Pads, Not VBUS</h2>
+  <h2 id="the-answer-accessory-power-pads-not-vbus"><a class="anchor" href="#the-answer-accessory-power-pads-not-vbus" aria-hidden="true" tabindex="-1">#</a>The Answer: Accessory Power Pads, Not VBUS</h2>
 
   <p>
     Before diving into the journey, here's the conclusion up front so we don't mislead
@@ -119,7 +169,7 @@
     arrived at this conclusion and what we built along the way.
   </p>
 
-  <h2>The Reverse Engineering Journey</h2>
+  <h2 id="the-reverse-engineering-journey"><a class="anchor" href="#the-reverse-engineering-journey" aria-hidden="true" tabindex="-1">#</a>The Reverse Engineering Journey</h2>
 
   <p>
     Even though the answer turned out to be "use the side pads," the investigation produced
@@ -152,7 +202,7 @@
     The firmware analysis revealed three previously undocumented register blocks:
   </p>
 
-  <table>
+  <div class="table-wrap"><table>
     <thead>
       <tr><th>Address Block</th><th>Purpose</th><th>Key Finding</th></tr>
     </thead>
@@ -173,7 +223,7 @@
         <td>Dead code in firmware &mdash; never called</td>
       </tr>
     </tbody>
-  </table>
+  </table></div>
 
   <p>
     We also mapped the complete Syscon command set for Baryon 0x00040600 (256 GET commands,
@@ -196,7 +246,7 @@
     We'd been probing the wrong USB controller entirely.
   </p>
 
-  <table>
+  <div class="table-wrap"><table>
     <thead>
       <tr><th>PRX File</th><th>Key Finding</th></tr>
     </thead>
@@ -214,7 +264,7 @@
         <td>Also controls GPIO pin 23 directly, accesses <code>BC100083</code></td>
       </tr>
     </tbody>
-  </table>
+  </table></div>
 
   <h3>Phase 5: Exhaustive GPIO &amp; Register Testing</h3>
   <p>
@@ -246,7 +296,7 @@
     subsystem, not the external VBUS pin.
   </p>
 
-  <h2>The Pivot: Custom USB Device Driver</h2>
+  <h2 id="the-pivot-custom-usb-device-driver"><a class="anchor" href="#the-pivot-custom-usb-device-driver" aria-hidden="true" tabindex="-1">#</a>The Pivot: Custom USB Device Driver</h2>
 
   <p>
     With the power delivery question answered (use the side pads), we focused on the data
@@ -271,7 +321,7 @@
 
 Power: PSP side contact pads &rarr; adapter &rarr; Pico VBUS
 Data:  PSP Mini-B port &rarr; adapter passthru &rarr; Pico USB</code></pre>
-    <div class="diagram-caption">The PSP registers a vendor-specific USB device with bulk endpoints &mdash; <a href="../blueprint.html?diagram=psp-usb-adapter" style="color:#4af;">open interactive 3D blueprint</a></div>
+    <div class="diagram-caption">The PSP registers a vendor-specific USB device with bulk endpoints &mdash; <a href="../blueprint.html?diagram=psp-usb-adapter">open interactive 3D blueprint</a></div>
   </div>
 
   <h3>sceUsbbd: The Undocumented Kernel API</h3>
@@ -281,7 +331,7 @@ Data:  PSP Mini-B port &rarr; adapter passthru &rarr; Pico USB</code></pre>
     device drivers. These functions are kernel-only and not documented in any public SDK:
   </p>
 
-  <table>
+  <div class="table-wrap"><table>
     <thead>
       <tr><th>Function</th><th>NID (6.61)</th><th>Purpose</th></tr>
     </thead>
@@ -302,7 +352,7 @@ Data:  PSP Mini-B port &rarr; adapter passthru &rarr; Pico USB</code></pre>
         <td>Queue async bulk OUT transfer (host&rarr;device)</td>
       </tr>
     </tbody>
-  </table>
+  </table></div>
 
   <p>
     The NIDs were resolved from the PSP-3001's kernel memory dump &mdash; the standard
@@ -338,7 +388,7 @@ $ lsusb -v -d 054c:1337
     driver sustained <strong>~100 FPS / 28 MB/s</strong>.
   </p>
 
-  <h2>The Hardware: A USB-C Adapter for the PSP</h2>
+  <h2 id="the-hardware-a-usb-c-adapter-for-the-psp"><a class="anchor" href="#the-hardware-a-usb-c-adapter-for-the-psp" aria-hidden="true" tabindex="-1">#</a>The Hardware: A USB-C Adapter for the PSP</h2>
 
   <p>
     With the software side working, the remaining challenge is physical: how do you
@@ -347,21 +397,19 @@ $ lsusb -v -d 054c:1337
     receptacle.
   </p>
 
-  <figure style="margin: 2em 0; text-align: center;">
+  <figure>
     <img src="../img/psp-usb-adapter-diagram.png"
-         alt="PSP universal USB-C adapter diagram"
-         style="max-width: 100%; border-radius: 8px;">
-    <figcaption style="margin-top: 0.5em; opacity: 0.7;">
+         alt="PSP universal USB-C adapter diagram" class="is-framed" width="1019" height="803" loading="lazy">
+    <figcaption>
       The adapter bridges the PSP's proprietary power pads and Mini-B data port into a single USB-C receptacle
     </figcaption>
   </figure>
 
-  <figure style="margin: 2em 0; text-align: center;">
-    <a href="../blueprint.html?diagram=psp-usb-adapter" style="display:block;text-decoration:none;">
+  <figure>
+    <a class="figure__link" href="../blueprint.html?diagram=psp-usb-adapter">
       <img src="../img/blueprint-psp-usb-adapter.png"
-           alt="Interactive 3D blueprint of the PSP USB-C adapter"
-           style="max-width: 100%; border-radius: 8px; border: 1px solid #1e2e44;">
-      <div style="margin-top:0.5em;color:#4af;font-size:13px;font-family:'JetBrains Mono',monospace;letter-spacing:1px;">&#9654; Open interactive 3D blueprint</div>
+           alt="Interactive 3D blueprint of the PSP USB-C adapter" class="is-framed" width="841" height="645" loading="lazy">
+      <span class="figure__cta">Open the interactive 3D blueprint &rarr;</span>
     </a>
   </figure>
 
@@ -409,7 +457,7 @@ $ lsusb -v -d 054c:1337
 
   <h3>Bill of Materials</h3>
 
-  <table>
+  <div class="table-wrap"><table>
     <thead>
       <tr><th>Component</th><th>Purpose</th><th>Unit Cost</th></tr>
     </thead>
@@ -450,7 +498,7 @@ $ lsusb -v -d 054c:1337
         <td>~$2&ndash;4</td>
       </tr>
     </tbody>
-  </table>
+  </table></div>
 
   <p>
     Total per-unit cost is roughly <strong>$7&ndash;11</strong> for the adapter alone (excluding
@@ -458,7 +506,7 @@ $ lsusb -v -d 054c:1337
     under $2/unit.
   </p>
 
-  <h2>What We Learned</h2>
+  <h2 id="what-we-learned"><a class="anchor" href="#what-we-learned" aria-hidden="true" tabindex="-1">#</a>What We Learned</h2>
 
   <p>
     This project produced several results that have value beyond our specific use case:
@@ -480,7 +528,7 @@ $ lsusb -v -d 054c:1337
         VBUS. Any modern accessory design must account for these pads.</li>
   </ul>
 
-  <h2>What's Next</h2>
+  <h2 id="what-s-next"><a class="anchor" href="#what-s-next" aria-hidden="true" tabindex="-1">#</a>What's Next</h2>
 
   <ul>
     <li><strong>Connector reverse engineering:</strong> Multimeter + caliper measurements of the
@@ -498,24 +546,39 @@ $ lsusb -v -d 054c:1337
     <li><strong>Convert to PRX:</strong> Move the thin client from game-slot EBOOT to kernel PRX
         loaded via <code>PLUGINS.TXT</code> for always-on USB device mode alongside games</li>
   </ul>
-
-  <nav class="article-nav">
-    <a class="prev" href="04-rust-psp-sdk.html">&larr; Prev: Modernizing the rust-psp SDK</a>
-    <a class="next" href="06-backend-trait-system.html">Next: Anatomy of the Backend Trait System &rarr;</a>
-  </nav>
-
-</article>
-
-<footer class="site-footer">
-  <div class="container">
-    <div class="footer-row">
-      <span>&copy; 2024&ndash;2026 OASIS_OS contributors</span>
-      <span>&middot;</span>
-      <a href="https://github.com/AndrewAltimit/oasis-os">GitHub</a>
     </div>
+  </div>
+
+  <footer class="article__foot wrap">
+  <nav class="pager" aria-label="More entries">
+    <a class="pager__link pager__link--prev" href="04-rust-psp-sdk.html" rel="prev"><span class="pager__dir">&larr; Previous &middot; 04</span><span class="pager__title">Modernizing the rust-psp SDK</span></a>
+    <a class="pager__link pager__link--next" href="06-backend-trait-system.html" rel="next"><span class="pager__dir">Next &middot; 06 &rarr;</span><span class="pager__title">Anatomy of the Backend Trait System</span></a>
+  </nav>
+  </footer>
+</article>
+</main>
+
+<footer class="footer">
+  <div class="wrap footer__inner">
+    <div class="footer__brand">
+      <span class="brand__name">OASIS<span class="brand__us">_</span>OS</span>
+      <p>Built from scratch in Rust. Dual-licensed MIT + Unlicense.</p>
+    </div>
+    <nav aria-label="Footer">
+      <ul class="footer__links">
+        <li><a href="../">Home</a></li>
+        <li><a href="../demo/">Live demo</a></li>
+        <li><a href="../journal/">Journal</a></li>
+        <li><a href="../blueprint.html">Blueprints</a></li>
+        <li><a href="https://github.com/AndrewAltimit/oasis-os">GitHub</a></li>
+        <li><a href="https://github.com/AndrewAltimit/oasis-os/blob/main/docs/README.md">Docs</a></li>
+      </ul>
+    </nav>
+    <p class="footer__status mono" aria-hidden="true">333MHz &middot; 480&times;272 &middot; v1.4.0</p>
   </div>
 </footer>
 
-<script src="../js/main.js"></script>
+<script src="../js/site.js" defer></script>
+<script src="../js/journal.js" defer></script>
 </body>
 </html>

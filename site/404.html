@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <!-- GitHub Pages serves this for any missing path, at any depth: resolve
+       every relative URL from the project root. -->
+  <base href="/oasis-os/">
+  <title>Page not found — OASIS_OS</title>
+  <meta name="robots" content="noindex">
+  <meta name="theme-color" content="#08090d">
+  <link rel="icon" href="favicon.svg" type="image/svg+xml">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&amp;display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="css/site.css">
+  <style>
+    .nf { min-height: calc(100vh - var(--topbar-h) - 140px); display: grid; place-items: center; padding-block: 4rem; }
+    .nf__screen {
+      width: min(520px, 100%); aspect-ratio: 480 / 272; border-radius: 6px; overflow: hidden;
+      display: grid; place-items: center; text-align: center; padding: 1.5rem;
+      background: radial-gradient(70% 90% at 30% 20%, #20304d, #0b1220 70%);
+      box-shadow: 0 0 0 7px #050608, 0 0 0 8px #2a2d36, 0 40px 80px -30px rgba(0, 0, 0, 0.9);
+      font-family: var(--mono); color: #e8eef8;
+    }
+    .nf__screen p { font-size: clamp(0.8rem, 2.4vw, 0.95rem); line-height: 1.7; }
+    .nf__code { color: var(--accent); }
+    .nf__ok { margin-top: 1rem; font-size: 0.78rem; color: #9fb3d1; }
+    .nf__ok b { display: inline-grid; place-items: center; width: 1.4em; height: 1.4em; border-radius: 50%; border: 1px solid currentColor; font-weight: 400; margin-right: 0.35rem; }
+    .nf h1 { margin-top: 2.5rem; font-size: clamp(1.8rem, 4vw, 2.5rem); letter-spacing: -0.03em; text-align: center; }
+    .nf__lede { margin-top: 0.75rem; color: var(--muted); text-align: center; }
+    .nf__ctas { margin-top: 1.75rem; display: flex; flex-wrap: wrap; gap: 0.6rem; justify-content: center; }
+  </style>
+</head>
+<body>
+
+<a class="skip-link" href="#main">Skip to content</a>
+
+<header class="topbar is-scrolled" id="topbar">
+  <div class="topbar__inner wrap">
+    <a class="brand" href="./" aria-label="OASIS_OS home">
+      <span class="brand__mark" aria-hidden="true"></span>
+      <span class="brand__name">OASIS<span class="brand__us">_</span>OS</span>
+    </a>
+    <button class="nav-toggle" id="nav-toggle" type="button" aria-expanded="false" aria-controls="site-nav">
+      <span class="sr-only">Menu</span>
+      <span class="nav-toggle__bar" aria-hidden="true"></span>
+    </button>
+    <nav class="site-nav" id="site-nav" aria-label="Primary">
+      <ul>
+        <li><a href="./#platforms">Platforms</a></li>
+        <li><a href="./#skins">Skins</a></li>
+        <li><a href="./#features">Features</a></li>
+        <li><a href="./#architecture">Architecture</a></li>
+        <li><a href="./#psp">PSP</a></li>
+        <li><a href="journal/">Journal</a></li>
+        <li><a href="./#start">Build</a></li>
+      </ul>
+      <div class="site-nav__cta">
+        <a class="btn btn--ghost btn--sm" href="https://github.com/AndrewAltimit/oasis-os">GitHub</a>
+        <a class="btn btn--primary btn--sm" href="demo/">Live demo</a>
+      </div>
+    </nav>
+  </div>
+</header>
+
+<main id="main" class="nf wrap">
+  <div>
+    <div class="nf__screen" role="img" aria-label="A handheld-style error dialog">
+      <div>
+        <p>The page could not be started.</p>
+        <p class="nf__code">(80020148)</p>
+        <p class="nf__ok"><b aria-hidden="true">&#9675;</b>OK</p>
+      </div>
+    </div>
+    <h1>404 &mdash; nothing at this address.</h1>
+    <p class="nf__lede">The link may be old, or the page moved when the site was rebuilt.</p>
+    <div class="nf__ctas">
+      <a class="btn btn--primary" href="./">Back to the home page</a>
+      <a class="btn btn--ghost" href="journal/">Developer&rsquo;s journal</a>
+      <a class="btn btn--ghost" href="demo/">Live demo</a>
+    </div>
+  </div>
+</main>
+
+<footer class="footer">
+  <div class="wrap footer__inner">
+    <div class="footer__brand">
+      <span class="brand__name">OASIS<span class="brand__us">_</span>OS</span>
+      <p>Built from scratch in Rust. Dual-licensed MIT + Unlicense.</p>
+    </div>
+    <nav aria-label="Footer">
+      <ul class="footer__links">
+        <li><a href="./">Home</a></li>
+        <li><a href="demo/">Live demo</a></li>
+        <li><a href="journal/">Journal</a></li>
+        <li><a href="blueprint.html">Blueprints</a></li>
+        <li><a href="https://github.com/AndrewAltimit/oasis-os">GitHub</a></li>
+        <li><a href="https://github.com/AndrewAltimit/oasis-os/blob/main/docs/README.md">Docs</a></li>
+      </ul>
+    </nav>
+    <p class="footer__status mono" aria-hidden="true">333MHz &middot; 480&times;272 &middot; v1.4.0</p>
+  </div>
+</footer>
+
+<script src="js/site.js" defer></script>
+</body>
+</html>

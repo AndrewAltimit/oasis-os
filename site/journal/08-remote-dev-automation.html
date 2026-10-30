@@ -2,49 +2,104 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Zero-Touch PSP Development - OASIS_OS Developer's Journal</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Zero-Touch PSP Development: From TCP Commands to Physical Actuators — OASIS_OS Developer's Journal</title>
   <meta name="description" content="Building a fully autonomous development loop for PSP hardware — TCP command server, remote input injection, live framebuffer streaming, arbitrary file upload, and a physical actuator for hard reboot recovery. Enabling an AI agent to develop for a 2004 handheld without touching the device.">
+  <link rel="canonical" href="https://andrewaltimit.github.io/oasis-os/journal/08-remote-dev-automation.html">
+  <meta name="theme-color" content="#08090d">
+  <link rel="icon" href="../favicon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="../img/apple-touch-icon.png">
+  <meta property="og:type" content="article">
+  <meta property="og:site_name" content="OASIS_OS">
+  <meta property="og:title" content="Zero-Touch PSP Development: From TCP Commands to Physical Actuators — OASIS_OS Developer's Journal">
+  <meta property="og:description" content="Building a fully autonomous development loop for PSP hardware — TCP command server, remote input injection, live framebuffer streaming, arbitrary file upload, and a physical actuator for hard reboot recovery. Enabling an AI agent to develop for a 2004 handheld without touching the device.">
+  <meta property="og:url" content="https://andrewaltimit.github.io/oasis-os/journal/08-remote-dev-automation.html">
+  <meta property="og:image" content="https://andrewaltimit.github.io/oasis-os/img/og-card.png">
+  <meta property="og:image:width" content="1200">
+  <meta property="og:image:height" content="630">
+  <meta property="og:image:alt" content="OASIS_OS: one OS shell, any pixel buffer">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta property="article:published_time" content="2026-03-30">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700;800&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="../css/style.css">
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&amp;display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="../css/site.css">
+  <link rel="stylesheet" href="../css/journal.css">
 </head>
-<body>
+<body class="page-article">
 
-<nav class="site-nav">
-  <a class="nav-brand" href="../">OASIS_OS</a>
-  <button class="nav-toggle" id="nav-toggle" aria-label="Toggle navigation" aria-expanded="false">&#9776;</button>
-  <ul class="nav-links" id="nav-links">
-    <li><a href="../#platforms">Platforms</a></li>
-    <li><a href="../#architecture">Architecture</a></li>
-    <li><a href="./">Journal</a></li>
-    <li><a href="../demo/">Live Demo</a></li>
-  </ul>
-</nav>
+<a class="skip-link" href="#main">Skip to content</a>
 
-<header class="article-header">
-  <div class="container">
-    <a class="article-back" href="./">&larr; Developer's Journal</a>
-    <h1 class="article-title">Zero-Touch PSP Development: From TCP Commands to Physical Actuators</h1>
-    <p class="article-subtitle">
-      The PSP has no JTAG, no serial console, and no remote debug interface.
+<header class="topbar" id="topbar">
+  <div class="topbar__inner wrap">
+    <a class="brand" href="../" aria-label="OASIS_OS home">
+      <span class="brand__mark" aria-hidden="true"></span>
+      <span class="brand__name">OASIS<span class="brand__us">_</span>OS</span>
+    </a>
+    <button class="nav-toggle" id="nav-toggle" type="button" aria-expanded="false" aria-controls="site-nav">
+      <span class="sr-only">Menu</span>
+      <span class="nav-toggle__bar" aria-hidden="true"></span>
+    </button>
+    <nav class="site-nav" id="site-nav" aria-label="Primary">
+      <ul>
+        <li><a href="../#platforms">Platforms</a></li>
+        <li><a href="../#skins">Skins</a></li>
+        <li><a href="../#features">Features</a></li>
+        <li><a href="../#architecture">Architecture</a></li>
+        <li><a href="../#psp">PSP</a></li>
+        <li><a href="../journal/" aria-current="page">Journal</a></li>
+        <li><a href="../#start">Build</a></li>
+      </ul>
+      <div class="site-nav__cta">
+        <a class="btn btn--ghost btn--sm" href="https://github.com/AndrewAltimit/oasis-os">GitHub</a>
+        <a class="btn btn--primary btn--sm" href="../demo/">Live demo</a>
+      </div>
+    </nav>
+  </div>
+</header>
+<div class="progress" aria-hidden="true"><span id="progress-bar"></span></div>
+
+<main id="main">
+<article class="article">
+  <header class="article__head wrap">
+    <nav class="crumbs" aria-label="Breadcrumb">
+      <a href="./">Developer&rsquo;s journal</a><span aria-hidden="true">/</span><span>Entry 08</span>
+    </nav>
+    <h1 class="article__title">Zero-Touch PSP Development<span class="article__title-sub">From TCP Commands to Physical Actuators</span></h1>
+    <p class="article__lede">The PSP has no JTAG, no serial console, and no remote debug interface.
       We built a complete autonomous development loop &mdash; WiFi auto-connect,
       a TCP command server with remote input injection, live framebuffer streaming,
       arbitrary file upload, and a DIY linear actuator for hard reboot recovery.
       The result: a closed loop where an AI agent debugs H.264 video decode on
-      real hardware, iterating dozens of times without anyone touching the device.
-    </p>
-    <div class="article-meta">
-      <span>Entry 08</span>
-      <span>automation, hardware, devtools, ai-agents</span>
-    </div>
-  </div>
-</header>
+      real hardware, iterating dozens of times without anyone touching the device.</p>
+    <dl class="article__meta">
+      <div><dt>Entry</dt><dd>08</dd></div>
+      <div><dt>Published</dt><dd><time datetime="2026-03-30">Mar 30, 2026</time></dd></div>
+      <div><dt>Reading time</dt><dd>12 min</dd></div>
+    </dl>
+    <ul class="article__tags" aria-label="Tags"><li>automation</li><li>hardware</li><li>ai-agents</li></ul>
+  </header>
 
-<article class="article-content">
-
-  <h2>The Problem: Manual Testing Doesn&rsquo;t Scale</h2>
+  <div class="article__layout wrap">
+    <nav class="toc" aria-label="On this page">
+      <p class="toc__title">On this page</p>
+      <ol>
+        <li><a href="#the-problem-manual-testing-doesn-t-scale">The Problem: Manual Testing Doesn&amp;rsquo;t Scale</a></li>
+        <li><a href="#layer-1-wifi-auto-connect">Layer 1: WiFi Auto-Connect</a></li>
+        <li><a href="#layer-2-tcp-command-server">Layer 2: TCP Command Server</a></li>
+        <li><a href="#layer-3-remote-deploy-arbitrary-file-upload">Layer 3: Remote Deploy + Arbitrary File Upload</a></li>
+        <li><a href="#layer-4-remote-ui-control">Layer 4: Remote UI Control</a></li>
+        <li><a href="#layer-5-live-framebuffer-streaming">Layer 5: Live Framebuffer Streaming</a></li>
+        <li><a href="#layer-6-physical-hard-reset-the-last-mile">Layer 6: Physical Hard Reset (The Last Mile)</a></li>
+        <li><a href="#layer-7-network-recovery-the-safety-net">Layer 7: Network Recovery (The Safety Net)</a></li>
+        <li><a href="#the-complete-automation-loop">The Complete Automation Loop</a></li>
+        <li><a href="#proving-it-debugging-h-264-video-decode-remotely">Proving It: Debugging H.264 Video Decode Remotely</a></li>
+        <li><a href="#closing-the-loop-ai-agent-driven-hardware-development">Closing the Loop: AI-Agent-Driven Hardware Development</a></li>
+        <li><a href="#lessons-learned">Lessons Learned</a></li>
+      </ol>
+    </nav>
+    <div class="prose">
+<h2 id="the-problem-manual-testing-doesn-t-scale"><a class="anchor" href="#the-problem-manual-testing-doesn-t-scale" aria-hidden="true" tabindex="-1">#</a>The Problem: Manual Testing Doesn&rsquo;t Scale</h2>
 
   <p>
     Developing for the PSP is an exercise in physical logistics. Every test cycle
@@ -64,7 +119,7 @@
     agent. No walking to the desk. No plugging in cables. No pressing buttons.
   </p>
 
-  <h2>Layer 1: WiFi Auto-Connect</h2>
+  <h2 id="layer-1-wifi-auto-connect"><a class="anchor" href="#layer-1-wifi-auto-connect" aria-hidden="true" tabindex="-1">#</a>Layer 1: WiFi Auto-Connect</h2>
 
   <p>
     The PSP&rsquo;s WiFi stack doesn&rsquo;t connect automatically on boot.
@@ -95,7 +150,7 @@
     everywhere, not just in the server thread.
   </p>
 
-  <h2>Layer 2: TCP Command Server</h2>
+  <h2 id="layer-2-tcp-command-server"><a class="anchor" href="#layer-2-tcp-command-server" aria-hidden="true" tabindex="-1">#</a>Layer 2: TCP Command Server</h2>
 
   <p>
     Once WiFi is up, the background thread starts a TCP server on port 9293.
@@ -109,7 +164,7 @@ pong</code></pre>
 
   <p>The full command set:</p>
 
-  <table>
+  <div class="table-wrap"><table>
     <thead>
       <tr><th>Command</th><th>Response</th><th>Description</th></tr>
     </thead>
@@ -130,9 +185,9 @@ pong</code></pre>
       <tr><td><code>audio-only [on|off]</code></td><td>status</td><td>Toggle or set video decode bypass</td></tr>
       <tr><td><code>video-limit &lt;N&gt;</code></td><td>status</td><td>Set max video frames for &gt;480p content</td></tr>
     </tbody>
-  </table>
+  </table></div>
 
-  <h2>Layer 3: Remote Deploy + Arbitrary File Upload</h2>
+  <h2 id="layer-3-remote-deploy-arbitrary-file-upload"><a class="anchor" href="#layer-3-remote-deploy-arbitrary-file-upload" aria-hidden="true" tabindex="-1">#</a>Layer 3: Remote Deploy + Arbitrary File Upload</h2>
 
   <p>
     The <code>deploy</code> command receives a raw EBOOT binary over the TCP
@@ -173,7 +228,7 @@ $ sleep 20
 $ echo "ping" | nc -w 3 192.168.0.249 9293
 pong</code></pre>
 
-  <h2>Layer 4: Remote UI Control</h2>
+  <h2 id="layer-4-remote-ui-control"><a class="anchor" href="#layer-4-remote-ui-control" aria-hidden="true" tabindex="-1">#</a>Layer 4: Remote UI Control</h2>
 
   <p>
     Button presses are injected through a lock-free
@@ -205,7 +260,7 @@ echo "press cross" | nc -w 3 192.168.0.249 9293
 sleep 5
 echo "press start" | nc -w 3 192.168.0.249 9293</code></pre>
 
-  <h2>Layer 5: Live Framebuffer Streaming</h2>
+  <h2 id="layer-5-live-framebuffer-streaming"><a class="anchor" href="#layer-5-live-framebuffer-streaming" aria-hidden="true" tabindex="-1">#</a>Layer 5: Live Framebuffer Streaming</h2>
 
   <p>
     The <code>screencap</code> command reads the PSP&rsquo;s VRAM directly at
@@ -224,16 +279,22 @@ $ tail -c +9 /tmp/psp.raw | ffmpeg -y -f rawvideo \
     -i - -update 1 /tmp/psp.png</code></pre>
 
   <figure>
-    <img src="../img/09-remote-screencap.png" alt="TV Guide in windowed mode, captured remotely via TCP screencap command" style="max-width: 480px; image-rendering: pixelated;">
+    <img src="../img/09-remote-screencap.png" alt="TV Guide in windowed mode, captured remotely via TCP screencap command" class="pixel" width="480" height="272" loading="lazy">
     <figcaption>TV Guide in windowed mode &mdash; captured remotely via the <code>screencap</code> TCP command and converted to PNG with ffmpeg.</figcaption>
   </figure>
 
   <figure>
-    <img src="../img/09-dashboard-remote.png" alt="OASIS OS dashboard captured remotely" style="max-width: 480px; image-rendering: pixelated;">
+    <img src="../img/09-dashboard-remote.png" alt="OASIS OS dashboard captured remotely" class="pixel" width="480" height="272" loading="lazy">
     <figcaption>The OASIS OS dashboard with all 11 app icons &mdash; captured entirely via remote automation.</figcaption>
   </figure>
 
-  <h2>Layer 6: Physical Hard Reset (The Last Mile)</h2>
+  <aside class="callout update" role="note">
+    <div class="callout-title">Update (Oct 2026)</div>
+    <p>Eleven is still right for the PSP, whose dashboard comes from its own app table in <code>oasis-backend-psp/src/types.rs</code>. The desktop shell has since grown to 15 apps, 12 of them on the dashboard (Network, Package Manager and System Monitor are opened from the terminal).</p>
+  </aside>
+
+
+  <h2 id="layer-6-physical-hard-reset-the-last-mile"><a class="anchor" href="#layer-6-physical-hard-reset-the-last-mile" aria-hidden="true" tabindex="-1">#</a>Layer 6: Physical Hard Reset (The Last Mile)</h2>
 
   <p>
     Software reboot handles the normal case. But the PSP&rsquo;s firmware
@@ -267,14 +328,14 @@ $ tail -c +9 /tmp/psp.raw | ffmpeg -y -f rawvideo \
   </ul>
 
   <figure>
-    <img src="../img/09-actuator-wiring.png" alt="H-bridge wiring diagram for PSP power actuator" style="max-width: 600px;">
+    <img src="../img/09-actuator-wiring.png" alt="H-bridge wiring diagram for PSP power actuator" width="830" height="872" loading="lazy">
     <figcaption>The USB relay H-bridge wiring. Two relays cross-wired to reverse polarity for extend/retract control.</figcaption>
   </figure>
 
   <figure>
-    <a href="../blueprint.html?diagram=psp-relay" style="display:block;text-decoration:none;">
-      <img src="../img/blueprint-psp-relay.png" alt="Interactive 3D blueprint of the PSP relay H-bridge wiring" style="max-width: 600px; border-radius: 8px; border: 1px solid #1e2e44;">
-      <div style="margin-top:0.5em;color:#4af;font-size:13px;font-family:'JetBrains Mono',monospace;letter-spacing:1px;">&#9654; Open interactive 3D blueprint</div>
+    <a class="figure__link" href="../blueprint.html?diagram=psp-relay">
+      <img src="../img/blueprint-psp-relay.png" alt="Interactive 3D blueprint of the PSP relay H-bridge wiring" class="is-framed" width="1030" height="628" loading="lazy">
+      <span class="figure__cta">Open the interactive 3D blueprint &rarr;</span>
     </a>
   </figure>
 
@@ -292,7 +353,7 @@ Done! PSP should be booting.</code></pre>
 
   <h3>Parts List</h3>
 
-  <table>
+  <div class="table-wrap"><table>
     <thead>
       <tr><th>Part</th><th>Approx. Price</th></tr>
     </thead>
@@ -304,11 +365,11 @@ Done! PSP should be booting.</code></pre>
       <tr><td>22 AWG hookup wire</td><td>~$6</td></tr>
       <tr><td>Wire stripper</td><td>~$10&ndash;15</td></tr>
     </tbody>
-  </table>
+  </table></div>
 
   <p>Total cost: <strong>~$55&ndash;65</strong>, all off-the-shelf, no soldering required.</p>
 
-  <h2>Layer 7: Network Recovery (The Safety Net)</h2>
+  <h2 id="layer-7-network-recovery-the-safety-net"><a class="anchor" href="#layer-7-network-recovery-the-safety-net" aria-hidden="true" tabindex="-1">#</a>Layer 7: Network Recovery (The Safety Net)</h2>
 
   <p>
     The actuator handles hard locks, but there&rsquo;s a worse scenario: a bad
@@ -359,7 +420,7 @@ ok
     to working application in under 30 seconds.
   </p>
 
-  <h2>The Complete Automation Loop</h2>
+  <h2 id="the-complete-automation-loop"><a class="anchor" href="#the-complete-automation-loop" aria-hidden="true" tabindex="-1">#</a>The Complete Automation Loop</h2>
 
   <p>
     With all seven layers in place, the full development cycle looks like this:
@@ -409,7 +470,7 @@ $ python3 scripts/psp_remote.py sequence scripts/sequences/smoke-test.yaml
 # Hard reboot via USB relay actuator when PSP is frozen
 $ python3 scripts/psp_remote.py hard-reboot</code></pre>
 
-  <h2>Proving It: Debugging H.264 Video Decode Remotely</h2>
+  <h2 id="proving-it-debugging-h-264-video-decode-remotely"><a class="anchor" href="#proving-it-debugging-h-264-video-decode-remotely" aria-hidden="true" tabindex="-1">#</a>Proving It: Debugging H.264 Video Decode Remotely</h2>
 
   <p>
     The automation infrastructure was built specifically to solve a hard problem:
@@ -449,14 +510,14 @@ $ python3 scripts/psp_remote.py hard-reboot</code></pre>
   </p>
 
   <figure>
-    <img src="../img/07-me-video-decode.png" alt="H.264 video decoded on PSP Media Engine hardware, captured remotely" style="max-width: 480px; image-rendering: pixelated;">
+    <img src="../img/07-me-video-decode.png" alt="H.264 video decoded on PSP Media Engine hardware, captured remotely" class="pixel" width="480" height="272" loading="lazy">
     <figcaption>H.264 video from the PSP Media Engine &mdash; decoded at 656&times;480 on real hardware, captured via remote screencap. The content (Bits and Bytes, 1983) streams from archive.org over TLS 1.3.</figcaption>
   </figure>
 
-  <h2>Closing the Loop: AI-Agent-Driven Hardware Development</h2>
+  <h2 id="closing-the-loop-ai-agent-driven-hardware-development"><a class="anchor" href="#closing-the-loop-ai-agent-driven-hardware-development" aria-hidden="true" tabindex="-1">#</a>Closing the Loop: AI-Agent-Driven Hardware Development</h2>
 
   <figure>
-    <video controls style="max-width: 100%; border-radius: 8px;">
+    <video controls preload="metadata" playsinline>
       <source src="https://github.com/user-attachments/assets/3d84aea5-969c-4f38-af67-c088a7c37764" type="video/mp4">
     </video>
     <figcaption>Full closed-loop demo: an AI agent connects to the PSP over WiFi, launches TV Guide, tunes a channel, windows the app, then power-cycles the device via a USB relay-controlled linear actuator &mdash; all without touching the hardware.</figcaption>
@@ -498,7 +559,7 @@ $ python3 scripts/psp_remote.py hard-reboot</code></pre>
     availability.
   </p>
 
-  <h2>Lessons Learned</h2>
+  <h2 id="lessons-learned"><a class="anchor" href="#lessons-learned" aria-hidden="true" tabindex="-1">#</a>Lessons Learned</h2>
 
   <ul>
     <li>
@@ -542,22 +603,39 @@ $ python3 scripts/psp_remote.py hard-reboot</code></pre>
       <code>nc</code> &mdash; tools it already knows how to use.
     </li>
   </ul>
-
-</article>
-
-<footer class="site-footer">
-  <div class="container">
-    <div class="footer-row">
-      <span>&copy; 2024&ndash;2026 OASIS_OS contributors</span>
-      <span>&middot;</span>
-      <a href="https://github.com/AndrewAltimit/oasis-os">GitHub</a>
-      <span>&middot;</span>
-      <a href="../">Home</a>
     </div>
+  </div>
+
+  <footer class="article__foot wrap">
+  <nav class="pager" aria-label="More entries">
+    <a class="pager__link pager__link--prev" href="07-psp-media-engine.html" rel="prev"><span class="pager__dir">&larr; Previous &middot; 07</span><span class="pager__title">Reverse Engineering the PSP Media Engine</span></a>
+    <a class="pager__link pager__link--next" href="09-javascript-on-psp.html" rel="next"><span class="pager__dir">Next &middot; 09 &rarr;</span><span class="pager__title">JavaScript on a 2004 Handheld</span></a>
+  </nav>
+  </footer>
+</article>
+</main>
+
+<footer class="footer">
+  <div class="wrap footer__inner">
+    <div class="footer__brand">
+      <span class="brand__name">OASIS<span class="brand__us">_</span>OS</span>
+      <p>Built from scratch in Rust. Dual-licensed MIT + Unlicense.</p>
+    </div>
+    <nav aria-label="Footer">
+      <ul class="footer__links">
+        <li><a href="../">Home</a></li>
+        <li><a href="../demo/">Live demo</a></li>
+        <li><a href="../journal/">Journal</a></li>
+        <li><a href="../blueprint.html">Blueprints</a></li>
+        <li><a href="https://github.com/AndrewAltimit/oasis-os">GitHub</a></li>
+        <li><a href="https://github.com/AndrewAltimit/oasis-os/blob/main/docs/README.md">Docs</a></li>
+      </ul>
+    </nav>
+    <p class="footer__status mono" aria-hidden="true">333MHz &middot; 480&times;272 &middot; v1.4.0</p>
   </div>
 </footer>
 
-<script src="../js/main.js"></script>
-
+<script src="../js/site.js" defer></script>
+<script src="../js/journal.js" defer></script>
 </body>
 </html>

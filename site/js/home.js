@@ -1,41 +1,10 @@
-// OASIS_OS landing page. No dependencies; everything degrades to static HTML.
+// OASIS_OS landing page: skin gallery, build console, reveal, hero video.
+// The top bar + mobile menu live in site.js. No dependencies; degrades to
+// static HTML.
 (function () {
   "use strict";
 
   var reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-
-  // ------------------------------------------------------------------
-  // Top bar: border on scroll + mobile menu
-  // ------------------------------------------------------------------
-  var topbar = document.getElementById("topbar");
-  var toggle = document.getElementById("nav-toggle");
-  var nav = document.getElementById("site-nav");
-
-  function onScroll() {
-    if (topbar) topbar.classList.toggle("is-scrolled", window.scrollY > 8);
-  }
-  window.addEventListener("scroll", onScroll, { passive: true });
-  onScroll();
-
-  function setMenu(open) {
-    if (!toggle || !nav) return;
-    nav.classList.toggle("is-open", open);
-    toggle.setAttribute("aria-expanded", String(open));
-  }
-  if (toggle && nav) {
-    toggle.addEventListener("click", function () {
-      setMenu(toggle.getAttribute("aria-expanded") !== "true");
-    });
-    nav.addEventListener("click", function (e) {
-      if (e.target.closest("a")) setMenu(false);
-    });
-    document.addEventListener("keydown", function (e) {
-      if (e.key === "Escape" && nav.classList.contains("is-open")) {
-        setMenu(false);
-        toggle.focus();
-      }
-    });
-  }
 
   // ------------------------------------------------------------------
   // Generic roving-tabindex tablist (arrow keys / Home / End)

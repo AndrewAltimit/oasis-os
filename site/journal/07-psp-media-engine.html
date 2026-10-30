@@ -2,33 +2,71 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Reverse Engineering the PSP Media Engine - OASIS_OS Developer's Journal</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Reverse Engineering the PSP Media Engine: From Empty Stubs to Stable Video Streaming — OASIS_OS Developer's Journal</title>
   <meta name="description" content="Reverse engineering the PSP Media Engine coprocessor for stable H.264 video streaming from Rust homebrew &mdash; discovering hidden kernel modules, mapping the RPC protocol, tracing a firmware deadlock through disassembled PRX code, and building three solutions from runtime binary patching to a kernel watchdog hook.">
+  <link rel="canonical" href="https://andrewaltimit.github.io/oasis-os/journal/07-psp-media-engine.html">
+  <meta name="theme-color" content="#08090d">
+  <link rel="icon" href="../favicon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="../img/apple-touch-icon.png">
+  <meta property="og:type" content="article">
+  <meta property="og:site_name" content="OASIS_OS">
+  <meta property="og:title" content="Reverse Engineering the PSP Media Engine: From Empty Stubs to Stable Video Streaming — OASIS_OS Developer's Journal">
+  <meta property="og:description" content="Reverse engineering the PSP Media Engine coprocessor for stable H.264 video streaming from Rust homebrew &mdash; discovering hidden kernel modules, mapping the RPC protocol, tracing a firmware deadlock through disassembled PRX code, and building three solutions from runtime binary patching to a kernel watchdog hook.">
+  <meta property="og:url" content="https://andrewaltimit.github.io/oasis-os/journal/07-psp-media-engine.html">
+  <meta property="og:image" content="https://andrewaltimit.github.io/oasis-os/img/og-card.png">
+  <meta property="og:image:width" content="1200">
+  <meta property="og:image:height" content="630">
+  <meta property="og:image:alt" content="OASIS_OS: one OS shell, any pixel buffer">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta property="article:published_time" content="2026-03-26">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700;800&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="../css/style.css">
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&amp;display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="../css/site.css">
+  <link rel="stylesheet" href="../css/journal.css">
 </head>
-<body>
+<body class="page-article">
 
-<nav class="site-nav">
-  <a class="nav-brand" href="../">OASIS_OS</a>
-  <button class="nav-toggle" id="nav-toggle" aria-label="Toggle navigation" aria-expanded="false">&#9776;</button>
-  <ul class="nav-links" id="nav-links">
-    <li><a href="../#platforms">Platforms</a></li>
-    <li><a href="../#architecture">Architecture</a></li>
-    <li><a href="./">Journal</a></li>
-    <li><a href="../demo/">Live Demo</a></li>
-  </ul>
-</nav>
+<a class="skip-link" href="#main">Skip to content</a>
 
-<header class="article-header">
-  <div class="container">
-    <a class="article-back" href="./">&larr; Developer's Journal</a>
-    <h1 class="article-title">Reverse Engineering the PSP Media Engine: From Empty Stubs to Stable Video Streaming</h1>
-    <p class="article-subtitle">
-      On ARK-4 CFW, H.264 video decode from PSP homebrew fails with a cryptic error &mdash;
+<header class="topbar" id="topbar">
+  <div class="topbar__inner wrap">
+    <a class="brand" href="../" aria-label="OASIS_OS home">
+      <span class="brand__mark" aria-hidden="true"></span>
+      <span class="brand__name">OASIS<span class="brand__us">_</span>OS</span>
+    </a>
+    <button class="nav-toggle" id="nav-toggle" type="button" aria-expanded="false" aria-controls="site-nav">
+      <span class="sr-only">Menu</span>
+      <span class="nav-toggle__bar" aria-hidden="true"></span>
+    </button>
+    <nav class="site-nav" id="site-nav" aria-label="Primary">
+      <ul>
+        <li><a href="../#platforms">Platforms</a></li>
+        <li><a href="../#skins">Skins</a></li>
+        <li><a href="../#features">Features</a></li>
+        <li><a href="../#architecture">Architecture</a></li>
+        <li><a href="../#psp">PSP</a></li>
+        <li><a href="../journal/" aria-current="page">Journal</a></li>
+        <li><a href="../#start">Build</a></li>
+      </ul>
+      <div class="site-nav__cta">
+        <a class="btn btn--ghost btn--sm" href="https://github.com/AndrewAltimit/oasis-os">GitHub</a>
+        <a class="btn btn--primary btn--sm" href="../demo/">Live demo</a>
+      </div>
+    </nav>
+  </div>
+</header>
+<div class="progress" aria-hidden="true"><span id="progress-bar"></span></div>
+
+<main id="main">
+<article class="article">
+  <header class="article__head wrap">
+    <nav class="crumbs" aria-label="Breadcrumb">
+      <a href="./">Developer&rsquo;s journal</a><span aria-hidden="true">/</span><span>Entry 07</span>
+    </nav>
+    <h1 class="article__title">Reverse Engineering the PSP Media Engine<span class="article__title-sub">From Empty Stubs to Stable Video Streaming</span></h1>
+    <p class="article__lede">On ARK-4 CFW, H.264 video decode from PSP homebrew fails with a cryptic error &mdash;
       the official <code>sceVideocodec</code> API returns <code>0x806201FE</code> and nobody
       has documented why. We traced the problem to empty firmware stubs, discovered hidden
       kernel modules during UMD playback, reverse engineered the Media Engine&rsquo;s RPC
@@ -36,18 +74,35 @@
       hardware-accelerated H.264 decode, hit a firmware deadlock after 90 frames, reverse
       engineered the loaded PRX to find the blocking kernel call, and built three
       increasingly robust solutions &mdash; from runtime binary patching to a kernel
-      watchdog hook to P/B-frame skipping that runs stable for minutes.
-    </p>
-    <div class="article-meta">
-      <span>Entry 07</span>
-      <span>hardware, reverse-engineering, media-engine, firmware-patching</span>
-    </div>
-  </div>
-</header>
+      watchdog hook to P/B-frame skipping that runs stable for minutes.</p>
+    <dl class="article__meta">
+      <div><dt>Entry</dt><dd>07</dd></div>
+      <div><dt>Published</dt><dd><time datetime="2026-03-26">Mar 26, 2026</time></dd></div>
+      <div><dt>Reading time</dt><dd>17 min</dd></div>
+    </dl>
+    <ul class="article__tags" aria-label="Tags"><li>hardware</li><li>reverse-engineering</li><li>media-engine</li></ul>
+  </header>
 
-<article class="article-content">
-
-  <h2>The Problem: Error 0x806201FE on ARK-4 CFW</h2>
+  <div class="article__layout wrap">
+    <nav class="toc" aria-label="On this page">
+      <p class="toc__title">On this page</p>
+      <ol>
+        <li><a href="#the-problem-error-0x806201fe-on-ark-4-cfw">The Problem: Error 0x806201FE on ARK-4 CFW</a></li>
+        <li><a href="#runtime-module-discovery">Runtime Module Discovery</a></li>
+        <li><a href="#me-driver-architecture">ME Driver Architecture</a></li>
+        <li><a href="#the-breakthrough-mpeg-vsh370-prx">The Breakthrough: mpeg_vsh370.prx</a></li>
+        <li><a href="#streaming-performance">Streaming Performance</a></li>
+        <li><a href="#the-70-frame-deadlock">The 70-Frame Deadlock</a></li>
+        <li><a href="#inside-mpeg-vsh370-prx">Inside mpeg_vsh370.prx</a></li>
+        <li><a href="#three-solutions">Three Solutions</a></li>
+        <li><a href="#the-pixel-pipeline">The Pixel Pipeline</a></li>
+        <li><a href="#graceful-degradation">Graceful Degradation</a></li>
+        <li><a href="#lessons-learned">Lessons Learned</a></li>
+        <li><a href="#key-hardware-reference">Key Hardware Reference</a></li>
+      </ol>
+    </nav>
+    <div class="prose">
+<h2 id="the-problem-error-0x806201fe-on-ark-4-cfw"><a class="anchor" href="#the-problem-error-0x806201fe-on-ark-4-cfw" aria-hidden="true" tabindex="-1">#</a>The Problem: Error 0x806201FE on ARK-4 CFW</h2>
 
   <p>
     The PSP contains a dedicated coprocessor called the <strong>Media Engine</strong> (ME) &mdash;
@@ -96,7 +151,7 @@
     <div class="diagram-caption">The ME is a full MIPS CPU with its own firmware, communicating via shared memory RPC.</div>
   </div>
 
-  <h2>Runtime Module Discovery</h2>
+  <h2 id="runtime-module-discovery"><a class="anchor" href="#runtime-module-discovery" aria-hidden="true" tabindex="-1">#</a>Runtime Module Discovery</h2>
 
   <p>
     Our kernel PRX (<code>oasis-plugin-psp</code>) hooks <code>sceDisplaySetFrameBuf</code> to
@@ -118,7 +173,7 @@
     and are not documented in any public PSP SDK or wiki:
   </p>
 
-  <table>
+  <div class="table-wrap"><table>
     <thead>
       <tr><th>Module</th><th>Size</th><th>Purpose</th></tr>
     </thead>
@@ -134,7 +189,7 @@
         <td>Kernel-mode avcodec with ME driver imports (replaces the stub version)</td>
       </tr>
     </tbody>
-  </table>
+  </table></div>
 
   <p>
     This was the first clue. The <code>avcodec.prx</code> loaded during normal homebrew execution
@@ -143,7 +198,7 @@
     The error <code>0x806201FE</code> comes from these empty ME submission stubs returning failure.
   </p>
 
-  <h2>ME Driver Architecture</h2>
+  <h2 id="me-driver-architecture"><a class="anchor" href="#me-driver-architecture" aria-hidden="true" tabindex="-1">#</a>ME Driver Architecture</h2>
 
   <p>
     With the module names in hand, we used <code>sctrlHENFindFunction</code> (an ARK-4 CFW API
@@ -151,7 +206,7 @@
     <code>sceMeCodecWrapper</code>. It imports from <strong>six internal ME driver libraries</strong>:
   </p>
 
-  <table>
+  <div class="table-wrap"><table>
     <thead>
       <tr><th>Library</th><th>Functions</th><th>Role</th></tr>
     </thead>
@@ -187,7 +242,7 @@
         <td>ME clock frequency and power state control</td>
       </tr>
     </tbody>
-  </table>
+  </table></div>
 
   <p>
     In total, we extracted <strong>47 NIDs</strong> for internal ME driver interfaces. These NIDs
@@ -255,7 +310,7 @@ Offset  Size   Field
     From the disassembly, we mapped <strong>22 RPC command IDs</strong> to their functions:
   </p>
 
-  <table>
+  <div class="table-wrap"><table>
     <thead>
       <tr><th>Category</th><th>Command</th><th>ID</th><th>Description</th></tr>
     </thead>
@@ -320,7 +375,7 @@ Offset  Size   Field
         <td>Color space conversion (YCbCr &rarr; RGB)</td>
       </tr>
     </tbody>
-  </table>
+  </table></div>
 
   <p>
     Every video function checks a version constant <code>0x05100601</code> before dispatching.
@@ -333,7 +388,7 @@ Offset  Size   Field
     the ME from reset.
   </p>
 
-  <h2>The Breakthrough: mpeg_vsh370.prx</h2>
+  <h2 id="the-breakthrough-mpeg-vsh370-prx"><a class="anchor" href="#the-breakthrough-mpeg-vsh370-prx" aria-hidden="true" tabindex="-1">#</a>The Breakthrough: mpeg_vsh370.prx</h2>
 
   <p>
     With direct ME driver calls producing initialization errors (the ME responded but
@@ -364,7 +419,7 @@ Offset  Size   Field
     <code>sceMpegCreate</code> call:
   </p>
 
-  <table>
+  <div class="table-wrap"><table>
     <thead>
       <tr><th>Parameter</th><th>Our Code</th><th>PMPlayer</th><th>Impact</th></tr>
     </thead>
@@ -400,7 +455,7 @@ Offset  Size   Field
         <td>Sentinel values required for proper state tracking</td>
       </tr>
     </tbody>
-  </table>
+  </table></div>
 
   <p>
     The &ldquo;unknown&rdquo; parameters in <code>sceMpegCreate</code> were
@@ -441,7 +496,7 @@ sceMpegAvcDecodeMode(mpeg, {-1, Psm8888}) = 0x0</code></pre>
     Then, after exactly ~90 frames, the video freezes and never recovers.
   </p>
 
-  <h2>Streaming Performance</h2>
+  <h2 id="streaming-performance"><a class="anchor" href="#streaming-performance" aria-hidden="true" tabindex="-1">#</a>Streaming Performance</h2>
 
   <p>
     Before investigating the deadlock, we eliminated a massive performance
@@ -449,7 +504,7 @@ sceMpegAvcDecodeMode(mpeg, {-1, Psm8888}) = 0x0</code></pre>
     and slow heap allocator were being hammered by per-frame allocations:
   </p>
 
-  <table>
+  <div class="table-wrap"><table>
     <thead>
       <tr><th>Optimization</th><th>What Changed</th><th>Savings</th></tr>
     </thead>
@@ -490,7 +545,7 @@ sceMpegAvcDecodeMode(mpeg, {-1, Psm8888}) = 0x0</code></pre>
         <td>5&ndash;20ms stall per log eliminated</td>
       </tr>
     </tbody>
-  </table>
+  </table></div>
 
   <p>
     Total: <strong>~48 MB/s of heap allocation churn eliminated</strong> on a
@@ -499,7 +554,7 @@ sceMpegAvcDecodeMode(mpeg, {-1, Psm8888}) = 0x0</code></pre>
     regardless of the deadlock fix.
   </p>
 
-  <h2>The 70-Frame Deadlock</h2>
+  <h2 id="the-70-frame-deadlock"><a class="anchor" href="#the-70-frame-deadlock" aria-hidden="true" tabindex="-1">#</a>The 70-Frame Deadlock</h2>
 
   <p>
     The content is 656&times;480 Main profile H.264 (mode 5 in the ME&rsquo;s
@@ -524,7 +579,7 @@ sceMpegAvcDecodeMode(mpeg, {-1, Psm8888}) = 0x0</code></pre>
     We then systematically tested every mitigation we could think of:
   </p>
 
-  <table>
+  <div class="table-wrap"><table>
     <thead>
       <tr><th>Approach</th><th>Result</th></tr>
     </thead>
@@ -541,7 +596,7 @@ sceMpegAvcDecodeMode(mpeg, {-1, Psm8888}) = 0x0</code></pre>
       <tr><td>Mode 4 forced for &gt;480p content</td><td><code>0x80628002</code> on every frame</td></tr>
       <tr><td>Frame skipping (&ldquo;ME rest&rdquo;)</td><td>Deadlocks on resume</td></tr>
     </tbody>
-  </table>
+  </table></div>
 
   <p>
     The deadlock is not caused by DPB overflow, cache coherency, decode speed,
@@ -550,7 +605,7 @@ sceMpegAvcDecodeMode(mpeg, {-1, Psm8888}) = 0x0</code></pre>
     but cannot decode &gt;480p content at all.
   </p>
 
-  <h2>Inside mpeg_vsh370.prx</h2>
+  <h2 id="inside-mpeg-vsh370-prx"><a class="anchor" href="#inside-mpeg-vsh370-prx" aria-hidden="true" tabindex="-1">#</a>Inside mpeg_vsh370.prx</h2>
 
   <p>
     The deadlock is inside the loaded PRX, not in our code. To understand it,
@@ -613,7 +668,7 @@ move  $v0, $s1             // return result</code></pre>
     holder is past the mutex, stuck in the kernel.
   </p>
 
-  <h2>Three Solutions</h2>
+  <h2 id="three-solutions"><a class="anchor" href="#three-solutions" aria-hidden="true" tabindex="-1">#</a>Three Solutions</h2>
 
   <p>
     With the root cause identified &mdash; the ME firmware hangs after ~90 mode 5
@@ -723,11 +778,11 @@ Keyframe 2   --&gt; decode frames 0..50   --&gt; skip P/B until keyframe 3
   </p>
 
   <figure>
-    <img src="../img/07-me-video-decode.png" alt="H.264 video decoded on PSP hardware via Media Engine" style="max-width: 480px; image-rendering: pixelated;">
+    <img src="../img/07-me-video-decode.png" alt="H.264 video decoded on PSP hardware via Media Engine" class="pixel" width="480" height="272" loading="lazy">
     <figcaption>H.264 video from archive.org decoded on real PSP hardware via the Media Engine &mdash; captured remotely via TCP <code>screencap</code> command.</figcaption>
   </figure>
 
-  <h2>The Pixel Pipeline</h2>
+  <h2 id="the-pixel-pipeline"><a class="anchor" href="#the-pixel-pipeline" aria-hidden="true" tabindex="-1">#</a>The Pixel Pipeline</h2>
 
   <p>
     Getting decoded frames from the ME to the screen required solving several
@@ -755,7 +810,7 @@ Keyframe 2   --&gt; decode frames 0..50   --&gt; skip P/B until keyframe 3
     alpha to 0xFF for correct GU compositing.
   </p>
 
-  <h2>Graceful Degradation</h2>
+  <h2 id="graceful-degradation"><a class="anchor" href="#graceful-degradation" aria-hidden="true" tabindex="-1">#</a>Graceful Degradation</h2>
 
   <p>
     In a streaming application, reliability matters more than maximum decode quality.
@@ -792,7 +847,7 @@ Keyframe 2   --&gt; decode frames 0..50   --&gt; skip P/B until keyframe 3
     audio &mdash; acceptable for a streaming TV app on 2005 hardware.
   </p>
 
-  <h2>Lessons Learned</h2>
+  <h2 id="lessons-learned"><a class="anchor" href="#lessons-learned" aria-hidden="true" tabindex="-1">#</a>Lessons Learned</h2>
 
   <ul>
     <li>
@@ -853,9 +908,9 @@ Keyframe 2   --&gt; decode frames 0..50   --&gt; skip P/B until keyframe 3
     </li>
   </ul>
 
-  <h2>Key Hardware Reference</h2>
+  <h2 id="key-hardware-reference"><a class="anchor" href="#key-hardware-reference" aria-hidden="true" tabindex="-1">#</a>Key Hardware Reference</h2>
 
-  <table>
+  <div class="table-wrap"><table>
     <thead>
       <tr><th>Address</th><th>Purpose</th><th>Notes</th></tr>
     </thead>
@@ -881,11 +936,11 @@ Keyframe 2   --&gt; decode frames 0..50   --&gt; skip P/B until keyframe 3
         <td>PLL configuration</td>
       </tr>
     </tbody>
-  </table>
+  </table></div>
 
   <h3>ME Driver NID Summary</h3>
 
-  <table>
+  <div class="table-wrap"><table>
     <thead>
       <tr><th>Library</th><th>Count</th><th>Key Functions</th></tr>
     </thead>
@@ -921,28 +976,40 @@ Keyframe 2   --&gt; decode frames 0..50   --&gt; skip P/B until keyframe 3
         <td>Clock and power state control</td>
       </tr>
     </tbody>
-  </table>
-
-  <nav class="article-nav">
-    <a class="prev" href="06-backend-trait-system.html">&larr; Prev: Anatomy of the Backend Trait System</a>
-    <a class="next" href="09-remote-dev-automation.html">Next: Zero-Touch PSP Development &rarr;</a>
-  </nav>
-
-</article>
-
-<footer class="site-footer">
-  <div class="container">
-    <div class="footer-row">
-      <span>&copy; 2024&ndash;2026 OASIS_OS contributors</span>
-      <span>&middot;</span>
-      <a href="https://github.com/AndrewAltimit/oasis-os">GitHub</a>
-      <span>&middot;</span>
-      <a href="../">Home</a>
+  </table></div>
     </div>
+  </div>
+
+  <footer class="article__foot wrap">
+  <nav class="pager" aria-label="More entries">
+    <a class="pager__link pager__link--prev" href="06-backend-trait-system.html" rel="prev"><span class="pager__dir">&larr; Previous &middot; 06</span><span class="pager__title">Anatomy of the Backend Trait System</span></a>
+    <a class="pager__link pager__link--next" href="08-remote-dev-automation.html" rel="next"><span class="pager__dir">Next &middot; 08 &rarr;</span><span class="pager__title">Zero-Touch PSP Development</span></a>
+  </nav>
+  </footer>
+</article>
+</main>
+
+<footer class="footer">
+  <div class="wrap footer__inner">
+    <div class="footer__brand">
+      <span class="brand__name">OASIS<span class="brand__us">_</span>OS</span>
+      <p>Built from scratch in Rust. Dual-licensed MIT + Unlicense.</p>
+    </div>
+    <nav aria-label="Footer">
+      <ul class="footer__links">
+        <li><a href="../">Home</a></li>
+        <li><a href="../demo/">Live demo</a></li>
+        <li><a href="../journal/">Journal</a></li>
+        <li><a href="../blueprint.html">Blueprints</a></li>
+        <li><a href="https://github.com/AndrewAltimit/oasis-os">GitHub</a></li>
+        <li><a href="https://github.com/AndrewAltimit/oasis-os/blob/main/docs/README.md">Docs</a></li>
+      </ul>
+    </nav>
+    <p class="footer__status mono" aria-hidden="true">333MHz &middot; 480&times;272 &middot; v1.4.0</p>
   </div>
 </footer>
 
-<script src="../js/main.js"></script>
-
+<script src="../js/site.js" defer></script>
+<script src="../js/journal.js" defer></script>
 </body>
 </html>

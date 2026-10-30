@@ -70,9 +70,8 @@ is there for manual testing of remote media that lacks CORS headers.
 
 | File | Role |
 |------|------|
-| `www/index.html` | Page shell: `<canvas id="oasis">`, a skin `<select>` that reloads with `?skin=<name>`, a controls hint |
-| `www/index.js` | Loads `pkg/oasis_backend_wasm.js`, constructs `OasisWasm`, drives `tick()` from `requestAnimationFrame`, letterbox-fits the canvas to the window |
-| `www/style.css` | Layout / demo bar styling |
+| `www/index.html` | Local page shell: `<canvas id="oasis">` inside `#container` (the positioned parent the iframe overlay attaches to), a skin `<select>` grouped like the landing page that reloads with `?skin=<name>`, a controls card. Styles and chrome script come from `site/css/{site,demo}.css` and `site/js/demo.js`, shared with the deployed `site/demo/index.html` |
+| `www/index.js` | Loads `pkg/oasis_backend_wasm.js`, constructs `OasisWasm`, drives `tick()` from `requestAnimationFrame`, letterbox-fits the canvas to the window; sets `window.__oasisReady` once booted. The Pages deploy copies it to `demo/index.js` |
 
 URL parameters read by `index.js`:
 

@@ -1,101 +1,142 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Blueprint Viewer — OASIS_OS</title>
-<style>
-  *{margin:0;padding:0;box-sizing:border-box}
-  body{background:#0a1628;overflow:hidden;font-family:'Courier New',monospace;color:#4af}
-  canvas{display:block}
-  #hud{position:fixed;top:24px;left:0;right:0;padding:14px 20px;display:flex;justify-content:space-between;align-items:flex-start;pointer-events:none;z-index:10}
-  #hud h1{font-size:16px;font-weight:400;letter-spacing:3px;text-transform:uppercase;color:#4af;text-shadow:0 0 10px #4af6}
-  #hud .sub{font-size:11px;color:#4af9;margin-top:4px;letter-spacing:1px}
-  #controls{font-size:11px;text-align:right;color:#4af9;line-height:1.7;white-space:nowrap}
-  #legend{position:fixed;bottom:16px;left:20px;font-size:11px;line-height:2;pointer-events:none;z-index:10}
-  #legend .row{display:flex;align-items:center;gap:8px}
-  #legend .swatch{width:22px;height:3px;border-radius:1px;display:inline-block}
-  #tooltip{position:fixed;display:none;padding:8px 14px;border:1px solid #4af6;background:#0a1628e6;color:#cde;font-size:12px;pointer-events:none;z-index:20;max-width:320px;line-height:1.5;letter-spacing:.5px}
-  #tooltip .label{color:#4af;font-weight:bold;margin-bottom:2px}
-  #tooltip .dim{color:#4af9;font-size:11px}
-  #explode-slider{position:fixed;bottom:18px;right:20px;z-index:10;display:flex;align-items:center;gap:10px;font-size:11px}
-  #explode-slider input{width:120px;accent-color:#4af}
-  #loading{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;background:#0a1628;z-index:100;font-size:14px;letter-spacing:2px}
-  #dims{position:fixed;top:100px;right:20px;font-size:10px;color:#4af7;pointer-events:none;z-index:10;text-align:right;line-height:2;letter-spacing:.5px}
-  #tabs{position:fixed;top:80px;left:20px;z-index:10;display:flex;gap:0;flex-wrap:wrap}
-  #tabs button{background:none;border:1px solid #4af3;color:#4af9;font-family:'Courier New',monospace;font-size:11px;padding:6px 14px;cursor:pointer;letter-spacing:1px;transition:all .2s}
-  #tabs button:first-child{border-radius:3px 0 0 3px}
-  #tabs button:last-child{border-radius:0 3px 3px 0}
-  #tabs button.active{background:#4af2;color:#4af;border-color:#4af6}
-  #tabs button:hover:not(.active){background:#4af1;color:#4af}
-  #back-link{position:fixed;top:10px;left:20px;z-index:15;font-size:11px;letter-spacing:1px;pointer-events:auto}
-  #back-link a{color:#4af9;text-decoration:none;transition:color .2s}
-  #back-link a:hover{color:#4af}
-  .state-note{position:fixed;bottom:50px;right:20px;font-size:10px;color:#4af6;pointer-events:none;z-index:10;text-align:right;max-width:200px;line-height:1.6}
-  #gallery{display:none;position:fixed;inset:0;background:#0a1628;z-index:200;overflow:auto}
-  #gallery.active{display:flex;flex-direction:column;align-items:center;justify-content:center;padding:40px 20px}
-  #gallery h1{font-size:20px;font-weight:400;letter-spacing:4px;text-transform:uppercase;color:#4af;text-shadow:0 0 10px #4af6;margin-bottom:6px}
-  #gallery .sub{font-size:12px;color:#4af9;letter-spacing:1px;margin-bottom:40px}
-  #gallery .cards{display:flex;gap:24px;flex-wrap:wrap;justify-content:center}
-  #gallery .card{border:1px solid #1e2e44;background:#0e1628;border-radius:6px;overflow:hidden;width:420px;cursor:pointer;transition:border-color .2s,transform .2s}
-  #gallery .card:hover{border-color:#4af6;transform:translateY(-2px)}
-  #gallery .card img{width:100%;height:220px;object-fit:cover;display:block;opacity:0.85}
-  #gallery .card:hover img{opacity:1}
-  #gallery .card-body{padding:14px 16px}
-  #gallery .card-title{font-size:13px;color:#4af;letter-spacing:1px;margin-bottom:4px}
-  #gallery .card-desc{font-size:11px;color:#4af9;line-height:1.5}
-</style>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Hardware Blueprints — OASIS_OS</title>
+  <meta name="description" content="Interactive 3D blueprints of the hardware behind OASIS_OS PSP development: a universal USB-C adapter and a relay-driven hard-reset actuator.">
+  <link rel="canonical" href="https://andrewaltimit.github.io/oasis-os/blueprint.html">
+  <meta name="theme-color" content="#08090d">
+  <link rel="icon" href="favicon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="img/apple-touch-icon.png">
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="OASIS_OS">
+  <meta property="og:title" content="Hardware Blueprints — OASIS_OS">
+  <meta property="og:description" content="Interactive 3D blueprints of the PSP USB-C adapter and the relay-driven hard-reset rig built for OASIS_OS development.">
+  <meta property="og:url" content="https://andrewaltimit.github.io/oasis-os/blueprint.html">
+  <meta property="og:image" content="https://andrewaltimit.github.io/oasis-os/img/blueprint-psp-usb-adapter.png">
+  <meta property="og:image:alt" content="3D blueprint of the PSP USB-C adapter">
+  <meta name="twitter:card" content="summary_large_image">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&amp;display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="css/site.css">
+  <link rel="stylesheet" href="css/blueprint.css">
 </head>
-<body>
+<body class="page-blueprint">
 
-<div id="loading">LOADING 3D ENGINE...</div>
+<a class="skip-link" href="#main">Skip to content</a>
 
-<div id="hud">
-  <div>
+<header class="topbar is-scrolled" id="topbar">
+  <div class="topbar__inner wrap">
+    <a class="brand" href="./" aria-label="OASIS_OS home">
+      <span class="brand__mark" aria-hidden="true"></span>
+      <span class="brand__name">OASIS<span class="brand__us">_</span>OS</span>
+    </a>
+    <button class="nav-toggle" id="nav-toggle" type="button" aria-expanded="false" aria-controls="site-nav">
+      <span class="sr-only">Menu</span>
+      <span class="nav-toggle__bar" aria-hidden="true"></span>
+    </button>
+    <nav class="site-nav" id="site-nav" aria-label="Primary">
+      <ul>
+        <li><a href="./#platforms">Platforms</a></li>
+        <li><a href="./#skins">Skins</a></li>
+        <li><a href="./#features">Features</a></li>
+        <li><a href="./#architecture">Architecture</a></li>
+        <li><a href="./#psp">PSP</a></li>
+        <li><a href="journal/">Journal</a></li>
+        <li><a href="./#start">Build</a></li>
+      </ul>
+      <div class="site-nav__cta">
+        <a class="btn btn--ghost btn--sm" href="https://github.com/AndrewAltimit/oasis-os">GitHub</a>
+        <a class="btn btn--primary btn--sm" href="demo/">Live demo</a>
+      </div>
+    </nav>
+  </div>
+</header>
+
+<main id="main">
+
+<div id="loading" role="status">Loading 3D engine&hellip;</div>
+
+<!-- Viewer HUD (populated by js/blueprint-engine.js; ids are its contract) -->
+<div id="hud" class="hud">
+  <div class="hud__panel hud__panel--title">
+    <p class="hud__crumbs"><a href="blueprint.html">Blueprints</a><span id="back-link"></span></p>
     <h1 id="title">Blueprint Viewer</h1>
     <div class="sub" id="subtitle"></div>
+    <div id="tabs" role="group" aria-label="Diagram state"></div>
   </div>
-  <div id="controls">
-    Left-drag: rotate &bull; Middle-drag: pan &bull; Scroll: zoom<br>
-    Hover components for info
-  </div>
-</div>
-
-<div id="tabs"></div>
-<div id="dims"></div>
-<div id="legend"></div>
-<div id="tooltip"></div>
-<div id="back-link"></div>
-
-<div id="explode-slider">
-  <span>Compact</span>
-  <input type="range" id="explode" min="0" max="100" value="0">
-  <span>Exploded</span>
-</div>
-
-<div class="state-note" id="state-note"></div>
-
-<div id="gallery">
-  <h1>Hardware Blueprints</h1>
-  <div class="sub">Interactive 3D diagrams &mdash; click to explore</div>
-  <div class="cards">
-    <a class="card" href="blueprint.html?diagram=psp-usb-adapter">
-      <img src="img/blueprint-psp-usb-adapter.png" alt="PSP USB-C Adapter">
-      <div class="card-body">
-        <div class="card-title">PSP Universal USB-C Adapter</div>
-        <div class="card-desc">Passive bridge combining proprietary power pads + Mini-B data into a single USB-C receptacle. Pogo pin contacts, screw-mounted shell.</div>
-      </div>
-    </a>
-    <a class="card" href="blueprint.html?diagram=psp-relay">
-      <img src="img/blueprint-psp-relay.png" alt="PSP Hard Reset Relay">
-      <div class="card-body">
-        <div class="card-title">PSP Hard Reset Automation</div>
-        <div class="card-desc">H-bridge wiring with 2-channel USB relay driving a 12V linear actuator to push the PSP power slider for remote hard reboot.</div>
-      </div>
-    </a>
+  <div id="controls" class="hud__panel">
+    <p><kbd>Drag</kbd> rotate &middot; <kbd>Middle-drag</kbd> pan &middot; <kbd>Scroll</kbd> zoom</p>
+    <p><kbd>&larr;&uarr;&rarr;&darr;</kbd> rotate &middot; <kbd>+</kbd><kbd>&minus;</kbd> zoom (focus the view)</p>
+    <p>Hover a component for details</p>
   </div>
 </div>
 
+<div id="dims" class="hud__panel"></div>
+<div id="legend" class="hud__panel"></div>
+<div id="tooltip" role="tooltip"></div>
+
+<div id="explode-slider" class="hud__panel">
+  <label for="explode">Compact</label>
+  <input type="range" id="explode" min="0" max="100" value="0" aria-label="Explode view">
+  <span aria-hidden="true">Exploded</span>
+</div>
+
+<div class="state-note" id="state-note" aria-live="polite"></div>
+
+<section id="gallery" aria-labelledby="gallery-title">
+  <div class="wrap">
+    <p class="kicker">Hardware</p>
+    <h1 id="gallery-title">Interactive blueprints.</h1>
+    <p class="gallery__lede">The physical side of zero-touch PSP development, modelled in three.js:
+      rotate, explode and hover each part. Both rigs are written up in the
+      <a href="journal/">developer&rsquo;s journal</a>.</p>
+    <div class="cards">
+      <a class="card" href="blueprint.html?diagram=psp-usb-adapter">
+        <img src="img/blueprint-psp-usb-adapter.png" alt="" width="841" height="645">
+        <span class="card-body">
+          <span class="card-kicker">Blueprint &middot; entry 05</span>
+          <span class="card-title">PSP universal USB-C adapter</span>
+          <span class="card-desc">A passive bridge that combines the PSP&rsquo;s proprietary power pads and Mini-B data port into one USB-C receptacle: pogo-pin contacts, screw-mounted shell.</span>
+        </span>
+      </a>
+      <a class="card" href="blueprint.html?diagram=psp-relay">
+        <img src="img/blueprint-psp-relay.png" alt="" width="1030" height="628">
+        <span class="card-body">
+          <span class="card-kicker">Blueprint &middot; entry 08</span>
+          <span class="card-title">PSP hard-reset automation</span>
+          <span class="card-desc">H-bridge wiring: a two-channel USB relay drives a 12&nbsp;V linear actuator that pushes the PSP&rsquo;s power slider for remote hard reboots.</span>
+        </span>
+      </a>
+    </div>
+  </div>
+</section>
+
+</main>
+
+<footer class="footer">
+  <div class="wrap footer__inner">
+    <div class="footer__brand">
+      <span class="brand__name">OASIS<span class="brand__us">_</span>OS</span>
+      <p>Built from scratch in Rust. Dual-licensed MIT + Unlicense.</p>
+    </div>
+    <nav aria-label="Footer">
+      <ul class="footer__links">
+        <li><a href="./">Home</a></li>
+        <li><a href="demo/">Live demo</a></li>
+        <li><a href="journal/">Journal</a></li>
+        <li><a href="blueprint.html">Blueprints</a></li>
+        <li><a href="https://github.com/AndrewAltimit/oasis-os">GitHub</a></li>
+        <li><a href="https://github.com/AndrewAltimit/oasis-os/blob/main/docs/README.md">Docs</a></li>
+      </ul>
+    </nav>
+    <p class="footer__status mono" aria-hidden="true">333MHz &middot; 480&times;272 &middot; v1.4.0</p>
+  </div>
+</footer>
+
+<script src="js/site.js" defer></script>
 <!-- Engine + diagrams (order matters: three.js → loader → engine → diagram files) -->
 <script src="js/three.min.js"></script>
 <script src="js/GLTFLoader.js"></script>
