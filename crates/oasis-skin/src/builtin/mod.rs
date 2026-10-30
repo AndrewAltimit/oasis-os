@@ -15,6 +15,8 @@
 
 mod classic;
 mod modern;
+#[cfg(all(test, feature = "serialize"))]
+mod snapshot_tests;
 mod special;
 
 /// Build-time generated skin loaders from `skins/` TOML directories.
