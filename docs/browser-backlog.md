@@ -39,6 +39,13 @@ so you can `git show` for specifics.
 - **JS execution watchdog** (`79d0513`). Event dispatch, microtask
   drains and timer callbacks run under a deadline
   (`JsEngine::with_context_guarded`); timer count / interval limits.
+  Timer ticks now share one per-frame budget and defer the rest, and
+  the budget and heap limit come from `BrowserConfig`
+  (`js_max_exec_ms`, `js_memory_limit_bytes`).
+- **Script DOM depth cap + backtracking selector matcher.** JS
+  insertions past `MAX_DOM_DEPTH` throw instead of building trees the
+  recursive render passes can't survive; `A > B C`-style selectors
+  backtrack (bounded by `MAX_TRAVERSAL_STEPS`).
 - **`js_dom` module split** (`831913e`). The 3.5k-line `js_dom.rs`
   is now `src/js_dom/` (bindings, fetch, storage, serialize, canvas,
   compat shims) with the JS sources in `.js` files.
