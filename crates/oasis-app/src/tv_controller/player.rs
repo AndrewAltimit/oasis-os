@@ -237,15 +237,14 @@ pub(super) fn auto_advance_episode(state: &mut AppState, backend: &mut impl SdiB
 
     let url = oasis_core::apps::tv_guide::catalog::ChannelCatalog::download_url(&slot.episode);
     let seek_secs = slot.elapsed_secs;
-    let data = format!("tune_url {url} {seek_secs}");
+    let data = format!("{url} {seek_secs}");
     log::info!(
         "TV: auto-advance -> {} (seek={seek_secs}s, remaining={}s)",
         slot.episode.title,
         slot.remaining_secs,
     );
 
-    use oasis_core::apps::tv_guide::TV_REQUEST_PATH;
-    runner.set_pending_request(TV_REQUEST_PATH.to_string(), data);
+    state.tv.pending_tune = Some(data);
 }
 
 #[cfg(all(test, feature = "_video"))]

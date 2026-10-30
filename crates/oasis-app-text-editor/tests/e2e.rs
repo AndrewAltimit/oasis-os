@@ -345,7 +345,7 @@ fn clicking_in_the_text_places_the_caret() {
 #[test]
 fn opening_a_missing_file_reports_it() {
     let vfs = MemoryVfs::new();
-    let h = editor_on(vfs, "/nope.txt");
+    let mut h = editor_on(vfs, "/nope.txt");
     let lines = h.app().lines().join("\n");
     assert!(lines.contains("Could not read /nope.txt"), "{lines}");
     let _ = h.draw();
@@ -379,4 +379,26 @@ fn fuzz_random_input_never_panics_or_escapes_window() {
         .unwrap();
         fuzz_app(&make, vfs, seed, 3000);
     }
+}
+
+/// The mouse wheel scrolls the view (three lines a notch) without moving
+/// the caret, clamped at both ends.
+#[test]
+fn wheel_scrolls_the_view_not_the_caret() {
+    let mut vfs = vfs_with_home();
+    let body: String = (0..100).map(|i| format!("row{i:03}\n")).collect();
+    vfs.write("/home/user/long.txt", body.as_bytes()).unwrap();
+    let mut h = editor_on(vfs, "/home/user/long.txt");
+    h.set_size(400, 240);
+    assert!(h.screen_text().contains("row000"));
+    assert!(h.scroll(5));
+    let screen = h.screen_text();
+    assert!(!screen.contains("row000"), "{screen}");
+    assert!(screen.contains("row015"), "{screen}");
+    assert!(h.scroll(-100));
+    assert!(h.screen_text().contains("row000"));
+    assert!(!h.scroll(-1), "already at the top");
+    // The caret never moved: typing still lands at the start.
+    h.type_text("X");
+    assert!(text(&h).starts_with("Xrow000"), "{}", text(&h));
 }

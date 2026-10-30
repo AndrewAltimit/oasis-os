@@ -750,20 +750,20 @@ impl<B: ShellBackend> Shell<B> {
         // Run the next queued background terminal job (`cmd &`), if any.
         terminal_input::poll_jobs(state, sdi, vfs);
 
-        // Process pending VFS requests from app runners (e.g. radio tune).
-        // Skip TV Guide tune requests — they're handled by the dedicated
-        // video player section below.
+        // Carry out every VFS request the open apps queued (radio tune,
+        // settings changes, ...). TV Guide tunes go to the video player
+        // (`tv_controller::tick` below) instead of the VFS.
         {
-            let pending = state
-                .content
-                .open_runners
-                .iter_mut()
-                .filter(|(_, runner)| !is_tv_tune_request(runner))
-                .find_map(|(_, runner)| runner.take_pending_request());
-            if let Some((path, data)) = pending
-                && let Err(e) = vfs.write(&path, data.as_bytes())
-            {
-                log::warn!("pending VFS request write failed ({path}): {e}");
+            let mut requests = Vec::new();
+            for (_, runner) in &mut state.content.open_runners {
+                runner.drain_requests(&mut requests);
+            }
+            for req in requests {
+                if let Some(tune) = oasis_core::apps::tv_guide::tune_url_request(&req) {
+                    state.tv.pending_tune = Some(tune.to_string());
+                } else if let Err(e) = vfs.write(&req.path, req.data.as_bytes()) {
+                    log::warn!("app VFS request write failed ({}): {e}", req.path);
+                }
             }
         }
 
@@ -1050,7 +1050,7 @@ impl<B: ShellBackend> Shell<B> {
                     } else if let Some((_, runner)) = state
                         .content
                         .open_runners
-                        .iter()
+                        .iter_mut()
                         .find(|(id, _)| id == window_id)
                     {
                         runner.draw_windowed(cx, cy, cw, ch, be, &state.active_theme)
@@ -1369,14 +1369,6 @@ pub fn launch_by_title(
     launch::launch(state, sdi, vfs, &app, LaunchOpts::QUIET);
     log::info!("Auto-launched app: {}", app.title);
     true
-}
-
-/// Check if a runner's pending request is a TV Guide tune_url (should not
-/// be consumed by the generic VFS handler).
-fn is_tv_tune_request(runner: &oasis_core::apps::AppRunner) -> bool {
-    runner.peek_pending_request().is_some_and(|req| {
-        req.0 == oasis_core::apps::tv_guide::TV_REQUEST_PATH && req.1.starts_with("tune_url ")
-    })
 }
 
 /// Format a large number with underscore thousand separators — matches the

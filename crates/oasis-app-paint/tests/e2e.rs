@@ -30,7 +30,7 @@ struct CanvasGeom {
 }
 
 impl CanvasGeom {
-    fn discover(h: &AppHarness) -> Self {
+    fn discover(h: &mut AppHarness) -> Self {
         let b = h.draw();
         let mut sizes: std::collections::HashMap<u32, usize> = Default::default();
         for r in b.rects() {
@@ -114,7 +114,7 @@ fn saved_pixels(h: &AppHarness, name: &str) -> (u32, u32, Vec<Color>) {
 #[test]
 fn pencil_strokes_change_pixels_and_survive_save_and_reopen() {
     let mut h = paint();
-    let g = CanvasGeom::discover(&h);
+    let g = CanvasGeom::discover(&mut h);
     let red = palette()[2];
     click_swatch(&mut h, red);
     assert!(h.app().lines().join("\n").contains("(Red)"));
@@ -171,7 +171,7 @@ fn pencil_strokes_change_pixels_and_survive_save_and_reopen() {
 #[test]
 fn undo_and_redo_from_the_edit_menu_and_keyboard() {
     let mut h = paint();
-    let g = CanvasGeom::discover(&h);
+    let g = CanvasGeom::discover(&mut h);
     let blue = palette()[4];
     click_swatch(&mut h, blue);
     click_px(&mut h, g, 5, 5);
@@ -199,7 +199,7 @@ fn undo_and_redo_from_the_edit_menu_and_keyboard() {
 #[test]
 fn shape_and_fill_tools_selected_from_the_menu() {
     let mut h = paint();
-    let g = CanvasGeom::discover(&h);
+    let g = CanvasGeom::discover(&mut h);
     let black = palette()[0];
     menu(&mut h, "Tool", "Line");
     assert!(h.app().lines().join("\n").contains("Tool: Line"));
@@ -291,7 +291,7 @@ fn corrupt_and_foreign_bmps_report_errors_in_the_picker() {
         .unwrap();
 
     let mut h = AppHarness::with_vfs(Box::new(PaintApp::new("/apps/Paint")), vfs);
-    let g = CanvasGeom::discover(&h);
+    let g = CanvasGeom::discover(&mut h);
     for name in ["a_empty.bmp", "b_garbage.bmp", "c_huge.bmp"] {
         h.ctrl('o');
         let screen = h.screen_text();

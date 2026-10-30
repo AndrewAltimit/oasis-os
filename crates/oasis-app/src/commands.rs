@@ -1671,7 +1671,10 @@ mod tests {
             app.handle_input(&Button::Right, &vfs);
         }
         app.handle_input(&Button::Up, &vfs);
-        let (path, payload) = app.take_pending_request().expect("volume IPC");
+        let mut reqs = Vec::new();
+        app.drain_requests(&mut reqs);
+        let req = reqs.pop().expect("volume IPC");
+        let (path, payload) = (req.path, req.data);
         assert!(post(&mut state, &mut vfs, &path, &payload));
         assert_eq!(state.audio_backend.get_volume(), 85);
     }

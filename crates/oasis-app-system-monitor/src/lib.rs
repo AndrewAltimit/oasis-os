@@ -205,23 +205,14 @@ impl App for SystemMonitorApp {
     }
 
     fn handle_input(&mut self, button: &Button, vfs: &dyn Vfs) -> AppAction {
-        match button {
-            Button::Cancel => AppAction::Exit,
-            Button::Up => {
-                self.content.navigate_up();
-                AppAction::None
-            },
-            Button::Down => {
-                self.content.navigate_down();
-                AppAction::None
-            },
-            // Refresh now.
-            Button::Confirm | Button::Triangle => {
-                self.reload(vfs);
-                AppAction::None
-            },
-            _ => AppAction::None,
+        if let Some(action) = self.content.handle_nav(button) {
+            return action;
         }
+        // Refresh now.
+        if matches!(button, Button::Confirm | Button::Triangle) {
+            self.reload(vfs);
+        }
+        AppAction::None
     }
 
     fn tick(&mut self, dt_ms: u32, vfs: &dyn Vfs) -> bool {
@@ -254,19 +245,12 @@ impl App for SystemMonitorApp {
     fn lines(&self) -> &[String] {
         &self.content.lines
     }
-
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-
-    fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
-        self
-    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use oasis_app_core::AsAny;
     use oasis_test_backend::{DrawCommand, RecordingBackend};
     use oasis_vfs::MemoryVfs;
 

@@ -16,7 +16,7 @@ fn pm() -> AppHarness {
 
 #[test]
 fn lists_installed_packages_with_the_workspace_version() {
-    let h = pm();
+    let mut h = pm();
     let text = h.screen_text();
     let version = env!("CARGO_PKG_VERSION");
     assert!(

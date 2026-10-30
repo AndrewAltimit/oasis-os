@@ -7,7 +7,7 @@
 //! - The app writes commands (`search:<query>`, `play:<id>`, `stop`) to
 //!   [`VIDEO_EMBED_REQUEST_PATH`].
 //! - The backend writes a JSON result blob to [`VIDEO_EMBED_RESULTS_PATH`]
-//!   that the app polls each frame in [`App::refresh`].
+//!   that the app polls each frame in [`App::tick`].
 //!
 //! Feature-gated behind `wasm-youtube`.
 
@@ -22,7 +22,7 @@ use oasis_types::backend::TextureId;
 use oasis_types::error::Result;
 
 use super::app_trait::App;
-use super::{AppAction, ContentState};
+use super::{AppAction, AppRequest, ContentState};
 
 /// VFS IPC path the app writes commands to.
 pub const VIDEO_EMBED_REQUEST_PATH: &str = "/tmp/video_embed_request";
@@ -231,19 +231,15 @@ impl VideoEmbedApp {
         self.state = EmbedState::Results;
         self.page = 0;
         self.selection = 0;
-        self.content.pending_vfs_request = Some((
-            VIDEO_EMBED_REQUEST_PATH.to_string(),
-            format!("search:{query}"),
-        ));
+        self.content
+            .post_request(VIDEO_EMBED_REQUEST_PATH, format!("search:{query}"));
     }
 
     fn start_play(&mut self, video_id: &str) {
         self.playing_video_id = Some(video_id.to_string());
         self.state = EmbedState::Playing;
-        self.content.pending_vfs_request = Some((
-            VIDEO_EMBED_REQUEST_PATH.to_string(),
-            format!("play:{video_id}"),
-        ));
+        self.content
+            .post_request(VIDEO_EMBED_REQUEST_PATH, format!("play:{video_id}"));
     }
 
     fn stop_playback(&mut self) {
@@ -253,8 +249,7 @@ impl VideoEmbedApp {
         } else {
             EmbedState::Results
         };
-        self.content.pending_vfs_request =
-            Some((VIDEO_EMBED_REQUEST_PATH.to_string(), "stop".to_string()));
+        self.content.post_request(VIDEO_EMBED_REQUEST_PATH, "stop");
     }
 
     /// Compute the rect of grid cell `i` (0..GRID_PAGE) within `(cw, ch)`.
@@ -438,7 +433,15 @@ impl App for VideoEmbedApp {
         self.input_buf.pop();
     }
 
-    fn handle_click(&mut self, lx: i32, ly: i32, cw: u32, ch: u32, _fullscreen: bool) -> AppAction {
+    fn handle_click(
+        &mut self,
+        lx: i32,
+        ly: i32,
+        cw: u32,
+        ch: u32,
+        _fullscreen: bool,
+        _vfs: &dyn Vfs,
+    ) -> AppAction {
         if self.state != EmbedState::Results {
             return AppAction::None;
         }
@@ -462,31 +465,26 @@ impl App for VideoEmbedApp {
         true
     }
 
-    fn refresh(&mut self, vfs: &dyn Vfs) {
-        if !vfs.exists(VIDEO_EMBED_RESULTS_PATH) {
-            return;
+    /// Poll the search results the host publishes to VFS.
+    fn tick(&mut self, _dt_ms: u32, vfs: &dyn Vfs) -> bool {
+        // Only a pending search can pick up new results.
+        if self.state != EmbedState::Results || !vfs.exists(VIDEO_EMBED_RESULTS_PATH) {
+            return false;
         }
         let Ok(bytes) = vfs.read(VIDEO_EMBED_RESULTS_PATH) else {
-            return;
+            return false;
         };
-        if bytes.is_empty() {
-            return;
-        }
-        let Ok(text) = std::str::from_utf8(&bytes) else {
-            return;
-        };
-        let Ok(parsed) = serde_json::from_str::<SearchResults>(text) else {
-            return;
+        let Ok(parsed) = serde_json::from_slice::<SearchResults>(&bytes) else {
+            return false;
         };
 
         // Only swap in results that match our latest in-flight query.
-        if self.state == EmbedState::Results
-            && self.results.query == parsed.query
-            && parsed != self.results
-        {
+        if self.results.query == parsed.query && parsed != self.results {
             self.results = parsed;
             self.clamp_selection();
+            return true;
         }
+        false
     }
 
     fn update_sdi(&mut self, _sdi: &mut SdiRegistry, at: &ActiveTheme) {
@@ -564,24 +562,8 @@ impl App for VideoEmbedApp {
 
     fn hide_sdi(&self, _sdi: &mut SdiRegistry) {}
 
-    fn take_pending_request(&mut self) -> Option<(String, String)> {
-        self.content.pending_vfs_request.take()
-    }
-
-    fn peek_pending_request(&self) -> Option<&(String, String)> {
-        self.content.pending_vfs_request.as_ref()
-    }
-
-    fn lines(&self) -> &[String] {
-        &self.content.lines
-    }
-
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-
-    fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
-        self
+    fn drain_requests(&mut self, out: &mut Vec<AppRequest>) {
+        out.append(&mut self.content.requests);
     }
 }
 
@@ -739,6 +721,15 @@ fn truncate(s: &str, max_chars: usize) -> String {
 mod tests {
     use super::*;
 
+    /// Take the oldest queued request as `(path, data)`.
+    fn take_request(app: &mut VideoEmbedApp) -> Option<(String, String)> {
+        if app.content.requests.is_empty() {
+            return None;
+        }
+        let req = app.content.requests.remove(0);
+        Some((req.path, req.data))
+    }
+
     #[test]
     fn embed_url_format() {
         let url = embed_url("dQw4w9WgXcQ");
@@ -807,7 +798,7 @@ mod tests {
         let vfs = MemoryVfs::new();
         app.handle_input(&Button::Confirm, &vfs);
         assert_eq!(app.state, EmbedState::Playing);
-        let (path, data) = app.take_pending_request().unwrap();
+        let (path, data) = take_request(&mut app).unwrap();
         assert_eq!(path, VIDEO_EMBED_REQUEST_PATH);
         assert!(data.starts_with("play:"));
         assert!(data.contains("dQw4w9WgXcQ"));
@@ -822,7 +813,7 @@ mod tests {
         app.handle_input(&Button::Confirm, &vfs);
         assert_eq!(app.state, EmbedState::Results);
         assert_eq!(app.results.status, SearchStatus::Loading);
-        let (path, data) = app.take_pending_request().unwrap();
+        let (path, data) = take_request(&mut app).unwrap();
         assert_eq!(path, VIDEO_EMBED_REQUEST_PATH);
         assert_eq!(data, "search:lofi hip hop");
     }
@@ -834,14 +825,14 @@ mod tests {
         app.input_buf = "dQw4w9WgXcQ".to_string();
         let vfs = MemoryVfs::new();
         app.handle_input(&Button::Confirm, &vfs);
-        let _ = app.take_pending_request();
+        let _ = take_request(&mut app);
         app.handle_input(&Button::Cancel, &vfs);
-        let (_, data) = app.take_pending_request().unwrap();
+        let (_, data) = take_request(&mut app).unwrap();
         assert_eq!(data, "stop");
     }
 
     #[test]
-    fn refresh_loads_results_from_vfs() {
+    fn tick_loads_results_from_vfs() {
         use oasis_vfs::MemoryVfs;
         use oasis_vfs::Vfs;
         let mut app = VideoEmbedApp::new("/apps/video-embed");
@@ -849,7 +840,7 @@ mod tests {
         let mut vfs = MemoryVfs::new();
         let _ = vfs.mkdir("/tmp");
         app.handle_input(&Button::Confirm, &vfs);
-        let _ = app.take_pending_request();
+        let _ = take_request(&mut app);
 
         let payload = SearchResults {
             query: "cats".to_string(),
@@ -865,7 +856,8 @@ mod tests {
         };
         let json = serde_json::to_string(&payload).unwrap();
         let _ = vfs.write(VIDEO_EMBED_RESULTS_PATH, json.as_bytes());
-        app.refresh(&vfs);
+        assert!(app.tick(16, &vfs), "new results redraw");
+        assert!(!app.tick(16, &vfs), "unchanged results don't");
         assert_eq!(app.results.results.len(), 1);
         assert_eq!(app.results.results[0].id, "abc12345678");
         assert_eq!(app.results.status, SearchStatus::Ready);
@@ -887,9 +879,9 @@ mod tests {
         let (rx, ry, rw, rh) = VideoEmbedApp::cell_rect(640, 400, TOP_PAD, 0);
         let cx = rx + rw as i32 / 2;
         let cy = ry + rh as i32 / 2;
-        app.handle_click(cx, cy, 640, 400, false);
+        app.handle_click(cx, cy, 640, 400, false, &oasis_vfs::MemoryVfs::new());
         assert_eq!(app.state, EmbedState::Playing);
-        let (_, data) = app.take_pending_request().unwrap();
+        let (_, data) = take_request(&mut app).unwrap();
         assert_eq!(data, "play:id_one_aaaa");
     }
 

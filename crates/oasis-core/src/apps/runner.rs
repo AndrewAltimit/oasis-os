@@ -14,32 +14,19 @@ use crate::backend::SdiBackend;
 use crate::dashboard::AppEntry;
 use crate::vfs::Vfs;
 
-use super::app_trait::AppAction;
+use super::app_trait::{App, AppAction, AppRequest};
 use super::registry::{create_app_delegate, create_app_delegate_for_file};
 
-/// Runtime state for a launched application screen.
-///
-/// All apps are stored in the `delegate` field as `Box<dyn App>`.
+/// Runtime state for a launched application screen: the app itself plus the
+/// host-facing bookkeeping (redraw tracking).
 #[derive(Debug)]
 pub struct AppRunner {
-    /// App display title.
+    /// App display title (the delegate's title at launch).
     pub title: String,
-    /// App path in VFS.
+    /// App path in VFS (the delegate's path at launch).
     pub path: String,
-    /// Content lines displayed in the app area.
-    pub lines: Vec<String>,
-    /// Scroll offset (first visible line index).
-    pub scroll: usize,
-    /// Current directory for file-manager navigation.
-    pub browse_dir: Option<String>,
-    /// Path of the file currently being viewed (file viewer mode).
-    pub viewing_file: Option<String>,
-    /// Selected line index (relative to visible area).
-    pub cursor: usize,
-    /// Pending VFS IPC request from inline apps (path, data).
-    pub(crate) pending_vfs_request: Option<(String, String)>,
-    /// Extracted app implementation (Some for migrated apps).
-    pub(crate) delegate: Option<Box<dyn super::app_trait::App>>,
+    /// The app implementation.
+    pub(crate) delegate: Box<dyn App>,
     /// Whether the app's visible content may have changed since the host
     /// last drew it (see [`Self::wants_frame`] / [`Self::mark_drawn`]).
     /// Set conservatively by every mutating entry point.
@@ -49,35 +36,14 @@ pub struct AppRunner {
 impl AppRunner {
     /// Launch an app from its dashboard entry.
     pub fn launch(app: &AppEntry, vfs: &dyn Vfs) -> Self {
-        let title = app.title.clone();
-        let path = app.path.clone();
-
-        // Look up the app in the registry; fall back to a generic placeholder.
-        let delegate: Box<dyn super::app_trait::App> = create_app_delegate(&title, &path, vfs)
-            .unwrap_or_else(|| {
-                Box::new(super::simple_app::SimpleApp::new(
-                    &title,
-                    &path,
-                    vec![
-                        title.clone(),
-                        String::new(),
-                        "(No content available for this app)".to_string(),
-                    ],
-                ))
-            });
-
-        Self {
-            title: delegate.title().to_string(),
-            path: delegate.path().to_string(),
-            lines: delegate.lines().to_vec(),
-            scroll: 0,
-            browse_dir: delegate.browse_dir().map(String::from),
-            viewing_file: None,
-            cursor: 0,
-            pending_vfs_request: None,
-            delegate: Some(delegate),
-            redraw_pending: true,
-        }
+        let delegate = create_app_delegate(&app.title, &app.path, vfs).unwrap_or_else(|| {
+            placeholder(
+                &app.title,
+                &app.path,
+                "(No content available for this app)".to_string(),
+            )
+        });
+        Self::from_delegate(delegate)
     }
 
     /// Launch an app with a specific file pre-opened in its viewer.
@@ -87,115 +53,93 @@ impl AppRunner {
     /// regular [`launch`](Self::launch) path for apps without a
     /// file-specific entry.
     pub fn launch_with_file(app: &AppEntry, file_path: &str, vfs: &dyn Vfs) -> Self {
-        let title = app.title.clone();
-        let path = app.path.clone();
-
-        let delegate: Box<dyn super::app_trait::App> =
-            create_app_delegate_for_file(&title, &path, file_path, vfs).unwrap_or_else(|| {
-                Box::new(super::simple_app::SimpleApp::new(
-                    &title,
-                    &path,
-                    vec![
-                        title.clone(),
-                        String::new(),
-                        format!("(Cannot open {file_path} with this app)"),
-                    ],
-                ))
+        let delegate = create_app_delegate_for_file(&app.title, &app.path, file_path, vfs)
+            .unwrap_or_else(|| {
+                placeholder(
+                    &app.title,
+                    &app.path,
+                    format!("(Cannot open {file_path} with this app)"),
+                )
             });
-
-        Self {
-            title: delegate.title().to_string(),
-            path: delegate.path().to_string(),
-            lines: delegate.lines().to_vec(),
-            scroll: 0,
-            browse_dir: delegate.browse_dir().map(String::from),
-            viewing_file: delegate.viewing_file().map(String::from),
-            cursor: 0,
-            pending_vfs_request: None,
-            delegate: Some(delegate),
-            redraw_pending: true,
-        }
+        Self::from_delegate(delegate)
     }
 
     /// Create an `AppRunner` from a pre-built `App` delegate.
     ///
     /// Used by plugin apps that provide their own `App` implementation
     /// via the plugin-to-app bridge.
-    pub fn from_delegate(delegate: Box<dyn super::app_trait::App>) -> Self {
+    pub fn from_delegate(delegate: Box<dyn App>) -> Self {
         Self {
             title: delegate.title().to_string(),
             path: delegate.path().to_string(),
-            lines: delegate.lines().to_vec(),
-            scroll: 0,
-            browse_dir: delegate.browse_dir().map(String::from),
-            viewing_file: None,
-            cursor: 0,
-            pending_vfs_request: None,
-            delegate: Some(delegate),
+            delegate,
             redraw_pending: true,
         }
     }
 
-    /// Update the display lines (used for syncing terminal output).
-    pub fn set_lines(&mut self, lines: Vec<String>, scroll_offset: usize) {
-        if let Some(simple) = self.delegate_as_mut::<super::simple_app::SimpleApp>() {
-            simple.set_lines(lines, scroll_offset);
-        }
-        self.sync_from_delegate();
+    /// The app's content lines (see [`App::lines`]).
+    pub fn lines(&self) -> &[String] {
+        self.delegate.lines()
+    }
+
+    /// The app's current browse directory (see [`App::browse_dir`]).
+    pub fn browse_dir(&self) -> Option<&str> {
+        self.delegate.browse_dir()
+    }
+
+    /// The file the app is viewing (see [`App::viewing_file`]).
+    pub fn viewing_file(&self) -> Option<&str> {
+        self.delegate.viewing_file()
     }
 
     /// Advance the app's time-driven state by `dt_ms` (see
-    /// [`crate::apps::App::tick`]). Hosts call this once per frame for
-    /// every open runner, whether or not the frame is drawn.
+    /// [`App::tick`]). Hosts call this once per frame for every open
+    /// runner, whether or not the frame is drawn.
     pub fn tick(&mut self, dt_ms: u32, vfs: &dyn Vfs) {
-        if let Some(ref mut app) = self.delegate
-            && app.tick(dt_ms, vfs)
-        {
+        if self.delegate.tick(dt_ms, vfs) {
             self.redraw_pending = true;
-            self.sync_from_delegate();
         }
+    }
+
+    /// Move the app's queued VFS IPC requests into `out` (see
+    /// [`App::drain_requests`]). Hosts call this once per frame for every
+    /// open runner and carry out all of them.
+    pub fn drain_requests(&mut self, out: &mut Vec<AppRequest>) {
+        self.delegate.drain_requests(out);
     }
 
     /// Take the app's pending self-close request (see
-    /// [`crate::apps::App::take_close_request`]). Hosts poll this once per
-    /// frame after [`Self::apply_vfs_ops`] and [`Self::tick`] and, when it
-    /// returns `true`, close the runner as for `AppAction::Exit`.
+    /// [`App::take_close_request`]). Hosts poll this once per frame after
+    /// [`Self::apply_vfs_ops`] and [`Self::tick`] and, when it returns
+    /// `true`, close the runner as for `AppAction::Exit`.
     pub fn take_close_request(&mut self) -> bool {
-        self.delegate
-            .as_mut()
-            .is_some_and(|app| app.take_close_request())
+        self.delegate.take_close_request()
     }
 
     /// Destroy the app's backend resources before the runner is dropped
-    /// (see [`crate::apps::App::release_resources`]).
+    /// (see [`App::release_resources`]).
     pub fn release_resources(&mut self, backend: &mut dyn SdiBackend) {
-        if let Some(ref mut app) = self.delegate {
-            app.release_resources(backend);
-        }
+        self.delegate.release_resources(backend);
     }
 
     /// Ask the app whether its window may close now (titlebar close
-    /// button; see [`crate::apps::App::on_close_requested`]). Returns
+    /// button, `wm close`, MCP; see [`App::on_close_requested`]). Returns
     /// `AppAction::Exit` to close; any other action keeps it open.
     pub fn request_close(&mut self, vfs: &dyn Vfs) -> AppAction {
-        let Some(app) = self.delegate.as_mut() else {
-            return AppAction::Exit;
-        };
-        let action = app.on_close_requested(vfs);
+        let action = self.delegate.on_close_requested(vfs);
         if action != AppAction::Exit {
             self.redraw_pending = true;
-            self.sync_from_delegate();
         }
         action
     }
 
     /// Whether the app's window needs to be redrawn: its content changed
     /// since the last [`Self::mark_drawn`], or the app animates
-    /// continuously ([`crate::apps::App::wants_frame`]).
+    /// continuously ([`App::wants_frame`]).
     ///
     /// Hosts with idle-frame elision OR this over every visible window.
     pub fn wants_frame(&self) -> bool {
-        self.redraw_pending || self.delegate.as_ref().is_some_and(|app| app.wants_frame())
+        self.redraw_pending || self.delegate.wants_frame()
     }
 
     /// Record that the host just drew this runner's current content.
@@ -214,46 +158,51 @@ impl AppRunner {
     pub fn set_terminal_cursor(&mut self, col: Option<usize>) {
         // Downcast directly: `delegate_as_mut` would flag a redraw even when
         // the cursor didn't move.
-        if let Some(simple) = self.delegate.as_mut().and_then(|app| {
-            app.as_any_mut()
-                .downcast_mut::<super::simple_app::SimpleApp>()
-        }) && simple.set_prompt_cursor(col)
+        if let Some(simple) = self
+            .delegate
+            .as_any_mut()
+            .downcast_mut::<super::simple_app::SimpleApp>()
+            && simple.set_prompt_cursor(col)
         {
-            // Cursor-only moves don't change the synced lines, so the
-            // idle-frame check would otherwise skip them.
             self.redraw_pending = true;
         }
     }
 
     /// Sync terminal scrollback plus a trailing prompt line into a
     /// Terminal runner, incrementally (see
-    /// [`SimpleApp::sync_terminal_lines`](super::simple_app::SimpleApp::sync_terminal_lines)).
-    ///
-    /// Same result as `set_lines(output + [prompt], scroll_offset)`
-    /// without deep-copying the scrollback — neither into the delegate nor
-    /// into the mirrored `lines` field. Returns the number of lines cloned
-    /// into the delegate (0 if this runner is not a Terminal).
+    /// [`SimpleApp::sync_terminal_lines`](super::simple_app::SimpleApp::sync_terminal_lines)):
+    /// only lines the app doesn't already hold are cloned. Schedules a
+    /// redraw only when the displayed content changed. Returns the number
+    /// of lines cloned (0 if this runner is not a Terminal).
     pub fn sync_terminal_lines(
         &mut self,
         output: &[String],
         prompt: &str,
         scroll_offset: usize,
     ) -> usize {
-        let cloned = match self.delegate_as_mut::<super::simple_app::SimpleApp>() {
-            Some(simple) => simple.sync_terminal_lines(output, prompt, scroll_offset),
-            None => 0,
+        let Some(simple) = self
+            .delegate
+            .as_any_mut()
+            .downcast_mut::<super::simple_app::SimpleApp>()
+        else {
+            return 0;
         };
-        self.sync_from_delegate();
+        let before = (simple.content.lines.len(), simple.content.scroll);
+        let cloned = simple.sync_terminal_lines(output, prompt, scroll_offset);
+        if cloned > 0 || before != (simple.content.lines.len(), simple.content.scroll) {
+            self.redraw_pending = true;
+        }
         cloned
     }
 
     /// Render app content directly into a windowed content area.
     ///
     /// Unlike `update_sdi()` which creates named SDI objects for full-screen
-    /// display, this method draws directly into the clip region provided by the
-    /// window manager's `draw_with_clips` callback.
+    /// display, this draws directly into the clip region provided by the
+    /// window manager's `draw_with_clips` callback. Calls [`App::layout`]
+    /// with the content size first.
     pub fn draw_windowed(
-        &self,
+        &mut self,
         cx: i32,
         cy: i32,
         cw: u32,
@@ -261,48 +210,13 @@ impl AppRunner {
         backend: &mut dyn SdiBackend,
         at: &ActiveTheme,
     ) -> crate::error::Result<()> {
-        // Delegate to extracted app.
-        if let Some(ref app) = self.delegate {
-            return app.draw_windowed(cx, cy, cw, ch, backend, at);
-        }
-
-        Ok(())
+        self.delegate.layout(cw, ch, at);
+        self.delegate.draw_windowed(cx, cy, cw, ch, backend, at)
     }
 
-    /// Sync AppRunner pub fields from the delegate app.
-    ///
-    /// This keeps the legacy `title`, `lines`, `browse_dir`, `viewing_file`
-    /// fields in sync after delegate calls, for backward compatibility with
-    /// external code that reads these fields directly.
-    ///
-    /// Marks the runner for redraw when any mirrored field changed.
-    pub(crate) fn sync_from_delegate(&mut self) {
-        if let Some(ref app) = self.delegate {
-            // Incremental: after an append only the new lines are cloned
-            // (a to_vec() here deep-copied the whole scrollback on every
-            // input event while a terminal window was open).
-            let old_len = self.lines.len();
-            let cloned = super::simple_app::sync_lines(&mut self.lines, app.lines());
-            let browse_dir = app.browse_dir();
-            let viewing_file = app.viewing_file();
-            let changed = cloned > 0
-                || self.lines.len() != old_len
-                || self.browse_dir.as_deref() != browse_dir
-                || self.viewing_file.as_deref() != viewing_file;
-            if changed {
-                self.browse_dir = browse_dir.map(String::from);
-                self.viewing_file = viewing_file.map(String::from);
-                self.redraw_pending = true;
-            }
-        }
-    }
-
-    /// Get a reference to the delegate app, if present.
     /// Get a reference to the delegate app, downcasting with `as_any()`.
     pub fn delegate_as<T: 'static>(&self) -> Option<&T> {
-        self.delegate
-            .as_ref()
-            .and_then(|app| app.as_any().downcast_ref::<T>())
+        self.delegate.as_any().downcast_ref::<T>()
     }
 
     /// Get a mutable reference to the delegate app, downcasting with `as_any_mut()`.
@@ -310,15 +224,21 @@ impl AppRunner {
     /// Conservatively marks the runner for redraw on a successful downcast
     /// (the caller may change anything the app draws).
     pub fn delegate_as_mut<T: 'static>(&mut self) -> Option<&mut T> {
-        let app = self
-            .delegate
-            .as_mut()
-            .and_then(|app| app.as_any_mut().downcast_mut::<T>());
+        let app = self.delegate.as_any_mut().downcast_mut::<T>();
         if app.is_some() {
             self.redraw_pending = true;
         }
         app
     }
+}
+
+/// Fallback app for a title with no registered (or no file-capable) app.
+fn placeholder(title: &str, path: &str, note: String) -> Box<dyn App> {
+    Box::new(super::simple_app::SimpleApp::new(
+        title,
+        path,
+        vec![title.to_string(), String::new(), note],
+    ))
 }
 
 #[cfg(test)]
@@ -334,6 +254,14 @@ mod tests {
     use oasis_app_core::App;
 
     const MAX_VISIBLE_LINES: usize = 13;
+
+    /// Take the runner's oldest queued request as `(path, data)`.
+    fn take_request(runner: &mut AppRunner) -> Option<(String, String)> {
+        let mut out = Vec::new();
+        runner.drain_requests(&mut out);
+        assert!(out.len() <= 1, "more than one request queued: {out:?}");
+        out.pop().map(|r| (r.path, r.data))
+    }
 
     fn make_app(title: &str) -> AppEntry {
         AppEntry {
@@ -377,17 +305,17 @@ mod tests {
         let vfs = setup_vfs();
         let runner = AppRunner::launch(&make_app("File Manager"), &vfs);
         assert_eq!(runner.title, "File Manager");
-        assert!(runner.browse_dir.is_some());
-        assert!(!runner.lines.is_empty());
+        assert!(runner.browse_dir().is_some());
+        assert!(!runner.lines().is_empty());
         // Root should list etc, home, tmp directories.
-        assert!(runner.lines.iter().any(|l| l.contains("home")));
+        assert!(runner.lines().iter().any(|l| l.contains("home")));
     }
 
     #[test]
     fn launch_settings() {
         let vfs = setup_vfs();
         let runner = AppRunner::launch(&make_app("Settings"), &vfs);
-        assert!(runner.lines.iter().any(|l| l.contains("480")));
+        assert!(runner.lines().iter().any(|l| l.contains("480")));
     }
 
     #[test]
@@ -408,31 +336,31 @@ mod tests {
         let mut runner = AppRunner::launch(&make_app("Terminal"), &vfs);
         let mut output: Vec<String> = (0..2000).map(|i| format!("out {i}")).collect();
         runner.sync_terminal_lines(&output, "> ", 0);
-        assert_eq!(runner.lines.len(), 2001);
-        let mirror_ptr = runner.lines[500].as_ptr();
+        assert_eq!(runner.lines().len(), 2001);
+        let kept_ptr = runner.lines()[500].as_ptr();
 
         output.push("one more".into());
         let cloned = runner.sync_terminal_lines(&output, "> ls", 0);
         assert_eq!(cloned, 2, "new line + prompt only");
-        assert_eq!(runner.lines.len(), 2002);
-        assert_eq!(runner.lines[2000], "one more");
-        assert_eq!(runner.lines[2001], "> ls");
+        assert_eq!(runner.lines().len(), 2002);
+        assert_eq!(runner.lines()[2000], "one more");
+        assert_eq!(runner.lines()[2001], "> ls");
         assert_eq!(
-            runner.lines[500].as_ptr(),
-            mirror_ptr,
-            "mirrored lines field must be updated in place, not re-cloned"
+            runner.lines()[500].as_ptr(),
+            kept_ptr,
+            "existing lines are kept in place, not re-cloned"
         );
         let app = runner
             .delegate_as::<crate::apps::simple_app::SimpleApp>()
             .expect("terminal delegate");
-        assert_eq!(app.content.lines, runner.lines);
+        assert_eq!(app.content.lines, runner.lines());
     }
 
     #[test]
     fn launch_generic_app() {
         let vfs = setup_vfs();
         let runner = AppRunner::launch(&make_app("Unknown App"), &vfs);
-        assert!(runner.lines.iter().any(|l| l.contains("No content")));
+        assert!(runner.lines().iter().any(|l| l.contains("No content")));
     }
 
     #[test]
@@ -446,8 +374,12 @@ mod tests {
         let runner = AppRunner::from_delegate(delegate);
         assert_eq!(runner.title, "Plugin Test");
         assert_eq!(runner.path, "/plugins/test");
-        assert!(runner.lines.iter().any(|l| l.contains("Hello from plugin")));
-        assert!(runner.delegate.is_some());
+        assert!(
+            runner
+                .lines()
+                .iter()
+                .any(|l| l.contains("Hello from plugin"))
+        );
     }
 
     #[test]
@@ -481,7 +413,7 @@ mod tests {
             runner.handle_input(&Button::Down, &vfs);
         }
         runner.handle_input(&Button::Confirm, &vfs);
-        assert_eq!(runner.browse_dir.as_deref(), Some("/home"));
+        assert_eq!(runner.browse_dir(), Some("/home"));
         let fm = runner.delegate_as::<FileManagerApp>().unwrap();
         assert!(
             fm.panels[0]
@@ -505,10 +437,10 @@ mod tests {
             runner.handle_input(&Button::Down, &vfs);
         }
         runner.handle_input(&Button::Confirm, &vfs);
-        assert_eq!(runner.browse_dir.as_deref(), Some("/home"));
+        assert_eq!(runner.browse_dir(), Some("/home"));
 
         runner.handle_input(&Button::Cancel, &vfs);
-        assert_eq!(runner.browse_dir.as_deref(), Some("/"));
+        assert_eq!(runner.browse_dir(), Some("/"));
     }
 
     #[test]
@@ -543,21 +475,80 @@ mod tests {
         assert!(runner.wants_frame(), "new terminal output redraws");
         runner.mark_drawn();
 
-        // Re-syncing identical content through a refresh is not a change.
-        runner.refresh_app(&vfs);
+        // Re-syncing identical content is not a change.
+        runner.sync_terminal_lines(&output, "> ", 0);
+        assert!(!runner.wants_frame());
+        // A scroll is.
+        runner.sync_terminal_lines(&(0..40).map(|i| i.to_string()).collect::<Vec<_>>(), "> ", 0);
+        runner.mark_drawn();
+        runner.sync_terminal_lines(&(0..40).map(|i| i.to_string()).collect::<Vec<_>>(), "> ", 3);
+        assert!(runner.wants_frame(), "scrolling redraws");
+    }
+
+    #[test]
+    fn unchanged_radio_status_does_not_request_a_frame() {
+        let vfs = setup_vfs();
+        let mut runner = AppRunner::launch(&make_app("Internet Radio"), &vfs);
+        runner.mark_drawn();
+        // Every open app ticks every frame; an unchanged status = no redraw.
+        for _ in 0..60 {
+            runner.tick(16, &vfs);
+        }
         assert!(!runner.wants_frame());
     }
 
     #[test]
-    fn unchanged_refresh_does_not_request_a_frame() {
-        let vfs = setup_vfs();
-        let mut runner = AppRunner::launch(&make_app("Internet Radio"), &vfs);
-        runner.mark_drawn();
-        // Hosts refresh the radio every frame; identical status = no redraw.
-        for _ in 0..5 {
-            runner.refresh_radio(&vfs);
+    fn requests_from_one_frame_are_all_drained() {
+        /// Posts two requests per button press.
+        #[derive(Debug)]
+        struct PostingApp {
+            content: crate::apps::ContentState,
         }
-        assert!(!runner.wants_frame());
+        impl App for PostingApp {
+            oasis_app_core::impl_content_app_methods!(content);
+            fn handle_input(&mut self, _button: &Button, _vfs: &dyn Vfs) -> AppAction {
+                self.content.post_request("/tmp/a", "1");
+                self.content.post_request("/tmp/b", "2");
+                AppAction::None
+            }
+        }
+
+        let vfs = setup_vfs();
+        let mut runner = AppRunner::from_delegate(Box::new(PostingApp {
+            content: crate::apps::ContentState::new("Posting", "/apps/posting"),
+        }));
+        runner.handle_input(&Button::Confirm, &vfs);
+        let mut out = Vec::new();
+        runner.drain_requests(&mut out);
+        assert_eq!(
+            out,
+            vec![
+                crate::apps::AppRequest::new("/tmp/a", "1"),
+                crate::apps::AppRequest::new("/tmp/b", "2"),
+            ]
+        );
+        runner.drain_requests(&mut out);
+        assert_eq!(out.len(), 2, "drained requests are gone");
+    }
+
+    #[test]
+    fn wheel_over_a_list_app_moves_its_selection() {
+        use crate::apps::file_manager::{FileManagerApp, ViewMode};
+        let vfs = setup_vfs();
+        let mut runner = AppRunner::launch(&make_app("File Manager"), &vfs);
+        if let Some(fm) = runner.delegate_as_mut::<FileManagerApp>() {
+            fm.view_mode = ViewMode::Dual;
+        }
+        runner.mark_drawn();
+        let before = runner
+            .delegate_as::<FileManagerApp>()
+            .map(|fm| fm.panels[0].cursor);
+        assert!(runner.handle_scroll(2, &vfs));
+        assert!(runner.wants_frame(), "a wheel move redraws");
+        let after = runner
+            .delegate_as::<FileManagerApp>()
+            .map(|fm| fm.panels[0].cursor);
+        assert_ne!(before, after);
     }
 
     #[test]
@@ -617,12 +608,6 @@ mod tests {
         }
         fn lines(&self) -> &[String] {
             &self.lines
-        }
-        fn as_any(&self) -> &dyn std::any::Any {
-            self
-        }
-        fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
-            self
         }
     }
 
@@ -800,8 +785,8 @@ mod tests {
         navigate_panel_to(&mut runner, file_idx, &vfs);
         let action = runner.handle_input(&Button::Confirm, &vfs);
         assert_eq!(action, AppAction::None);
-        assert!(runner.viewing_file.is_some());
-        assert!(runner.lines.iter().any(|l| l.contains("Binary file")));
+        assert!(runner.viewing_file().is_some());
+        assert!(runner.lines().iter().any(|l| l.contains("Binary file")));
     }
 
     #[test]
@@ -821,10 +806,7 @@ mod tests {
             "/home/user/photos/sunset.png",
             &vfs,
         );
-        assert_eq!(
-            runner.viewing_file.as_deref(),
-            Some("/home/user/photos/sunset.png")
-        );
+        assert_eq!(runner.viewing_file(), Some("/home/user/photos/sunset.png"));
         let app = runner.delegate_as::<BrowsingApp>().unwrap();
         assert!(app.viewing_file().is_some());
     }
@@ -904,9 +886,9 @@ mod tests {
         let file_idx = find_panel_entry(&runner, "data.bin");
         navigate_panel_to(&mut runner, file_idx, &vfs);
         runner.handle_input(&Button::Confirm, &vfs);
-        assert!(runner.viewing_file.is_some());
-        assert!(runner.lines.iter().any(|l| l.contains("Binary file")));
-        assert!(runner.lines.iter().any(|l| l.contains("00 01 ff fe")));
+        assert!(runner.viewing_file().is_some());
+        assert!(runner.lines().iter().any(|l| l.contains("Binary file")));
+        assert!(runner.lines().iter().any(|l| l.contains("00 01 ff fe")));
     }
 
     #[test]
@@ -983,10 +965,10 @@ mod tests {
     fn music_player_lists_tracks() {
         let vfs = setup_vfs();
         let runner = AppRunner::launch(&make_app("Music Player"), &vfs);
-        assert!(runner.browse_dir.is_some());
+        assert!(runner.browse_dir().is_some());
         // Uses list_directory, so ".." is first, then files.
-        assert!(runner.lines.iter().any(|l| l.contains("ambient_dawn")));
-        assert!(runner.lines.iter().any(|l| l.contains("nightfall_theme")));
+        assert!(runner.lines().iter().any(|l| l.contains("ambient_dawn")));
+        assert!(runner.lines().iter().any(|l| l.contains("nightfall_theme")));
     }
 
     #[test]
@@ -1006,9 +988,9 @@ mod tests {
         }
         runner.handle_input(&Button::Confirm, &vfs);
         // Should open audio viewer with track info and playback hints.
-        assert!(runner.viewing_file.is_some());
-        assert!(runner.lines.iter().any(|l| l.contains("Now Viewing")));
-        assert!(runner.lines.iter().any(|l| l.contains("music play")));
+        assert!(runner.viewing_file().is_some());
+        assert!(runner.lines().iter().any(|l| l.contains("Now Viewing")));
+        assert!(runner.lines().iter().any(|l| l.contains("music play")));
     }
 
     #[test]
@@ -1021,7 +1003,7 @@ mod tests {
         let runner = AppRunner::launch(&make_app("Music Player"), &vfs);
         assert!(
             runner
-                .lines
+                .lines()
                 .iter()
                 .any(|l| l.contains("Music directory not found"))
         );
@@ -1031,8 +1013,8 @@ mod tests {
     fn photo_viewer_lists_photos() {
         let vfs = setup_vfs();
         let runner = AppRunner::launch(&make_app("Photo Viewer"), &vfs);
-        assert!(runner.browse_dir.is_some());
-        assert!(runner.lines.iter().any(|l| l.contains("sunset.png")));
+        assert!(runner.browse_dir().is_some());
+        assert!(runner.lines().iter().any(|l| l.contains("sunset.png")));
     }
 
     #[test]
@@ -1052,8 +1034,8 @@ mod tests {
         }
         runner.handle_input(&Button::Confirm, &vfs);
         // Photo viewer shows image metadata.
-        assert!(runner.viewing_file.is_some());
-        assert!(runner.lines.iter().any(|l| l.contains("Photo:")));
+        assert!(runner.viewing_file().is_some());
+        assert!(runner.lines().iter().any(|l| l.contains("Photo:")));
     }
 
     #[test]
@@ -1072,12 +1054,12 @@ mod tests {
             runner.handle_input(&Button::Down, &vfs);
         }
         runner.handle_input(&Button::Confirm, &vfs);
-        assert!(runner.viewing_file.is_some());
+        assert!(runner.viewing_file().is_some());
         // Cancel returns to photo list.
         let action = runner.handle_input(&Button::Cancel, &vfs);
         assert_eq!(action, AppAction::None);
-        assert!(runner.viewing_file.is_none());
-        assert!(runner.lines.iter().any(|l| l.contains("sunset.png")));
+        assert!(runner.viewing_file().is_none());
+        assert!(runner.lines().iter().any(|l| l.contains("sunset.png")));
     }
 
     #[test]
@@ -1089,7 +1071,7 @@ mod tests {
         vfs.mkdir("/home/user/photos").unwrap();
         let runner = AppRunner::launch(&make_app("Photo Viewer"), &vfs);
         // Empty dir shows "(empty directory)" via list_directory.
-        assert!(runner.lines.iter().any(|l| l.contains("empty directory")));
+        assert!(runner.lines().iter().any(|l| l.contains("empty directory")));
     }
 
     #[test]
@@ -1225,7 +1207,7 @@ mod tests {
         let mut runner = AppRunner::launch(&make_app("TV Guide"), &vfs);
         assert!(runner.tv_guide_state().is_some());
         // Initially shows "Loading".
-        assert!(runner.lines.iter().any(|l| l.contains("Loading")));
+        assert!(runner.lines().iter().any(|l| l.contains("Loading")));
 
         // Inject a catalog for channel 0.
         let guide = runner.tv_guide_state().unwrap();
@@ -1248,8 +1230,13 @@ mod tests {
 
         // Refresh text lines.
         runner.refresh_tv_text();
-        assert!(runner.lines.iter().any(|l| l.contains("Space Adventures")));
-        assert!(!runner.lines.iter().any(|l| l.contains("Loading")));
+        assert!(
+            runner
+                .lines()
+                .iter()
+                .any(|l| l.contains("Space Adventures"))
+        );
+        assert!(!runner.lines().iter().any(|l| l.contains("Loading")));
     }
 
     #[test]
@@ -1264,11 +1251,11 @@ mod tests {
         runner.refresh_tv_text();
         assert!(
             runner
-                .lines
+                .lines()
                 .iter()
                 .any(|l| l.contains("Error: connection refused"))
         );
-        assert!(!runner.lines.iter().any(|l| l.contains("Loading")));
+        assert!(!runner.lines().iter().any(|l| l.contains("Loading")));
     }
 
     #[test]
@@ -1301,7 +1288,7 @@ mod tests {
         assert_eq!(action, AppAction::RequestFullscreen);
 
         // Should have a pending VFS request for the tune.
-        let req = runner.take_pending_request();
+        let req = take_request(&mut runner);
         assert!(req.is_some());
         let (path, data) = req.unwrap();
         assert!(path.contains("tv"));
@@ -1364,7 +1351,7 @@ mod tests {
         let (mut runner, vfs) = setup_tv_guide_with_catalog("my-item", "video.mp4", "My Video");
 
         runner.handle_input(&Button::Confirm, &vfs);
-        let (_, data) = runner.take_pending_request().unwrap();
+        let (_, data) = take_request(&mut runner).unwrap();
 
         // Must use tune_url prefix (not old "tune " format).
         assert!(
@@ -1398,7 +1385,7 @@ mod tests {
             setup_tv_guide_with_catalog("sonic-episodes", "Season1/ep01.mp4", "Episode 1");
 
         runner.handle_input(&Button::Confirm, &vfs);
-        let (_, data) = runner.take_pending_request().unwrap();
+        let (_, data) = take_request(&mut runner).unwrap();
         let url = extract_tune_url(&data);
 
         // URL must contain the item ID.
@@ -1417,7 +1404,7 @@ mod tests {
             setup_tv_guide_with_catalog("test-item", "My Video #1.mp4", "My Video");
 
         runner.handle_input(&Button::Confirm, &vfs);
-        let (_, data) = runner.take_pending_request().unwrap();
+        let (_, data) = take_request(&mut runner).unwrap();
         let url = extract_tune_url(&data);
 
         // '#' must be percent-encoded to '%23' (raw '#' breaks URLs).
@@ -1462,7 +1449,7 @@ mod tests {
 
         // Tune channel 1.
         runner.handle_input(&Button::Confirm, &vfs);
-        let (_, data) = runner.take_pending_request().unwrap();
+        let (_, data) = take_request(&mut runner).unwrap();
         let url = extract_tune_url(&data);
 
         // URL must reference channel 1's item, not channel 0's.
@@ -1484,7 +1471,7 @@ mod tests {
         // Press Confirm with no catalogs loaded.
         runner.handle_input(&Button::Confirm, &vfs);
         assert!(
-            runner.take_pending_request().is_none(),
+            take_request(&mut runner).is_none(),
             "should not produce tune request without catalog",
         );
     }
@@ -1499,7 +1486,7 @@ mod tests {
         guide.fetch_attempted = true;
         guide.fetch_error = Some("network error".to_string());
         runner.refresh_tv_text();
-        assert!(runner.lines.iter().any(|l| l.contains("Error")));
+        assert!(runner.lines().iter().any(|l| l.contains("Error")));
 
         // Press Select to retry.
         runner.handle_input(&Button::Select, &vfs);
@@ -1509,7 +1496,7 @@ mod tests {
         assert!(guide.fetch_error.is_none(), "fetch_error should be cleared");
 
         // Text should now show loading again.
-        assert!(runner.lines.iter().any(|l| l.contains("Loading")));
+        assert!(runner.lines().iter().any(|l| l.contains("Loading")));
     }
 
     #[test]
@@ -1561,7 +1548,7 @@ mod tests {
         let (mut runner, vfs) = setup_tv_guide_with_catalog("path-test", "ep.mp4", "Path Test");
 
         runner.handle_input(&Button::Confirm, &vfs);
-        let (path, _) = runner.take_pending_request().unwrap();
+        let (path, _) = take_request(&mut runner).unwrap();
         assert_eq!(path, TV_REQUEST_PATH, "IPC path must match TV_REQUEST_PATH");
     }
 
@@ -1570,7 +1557,7 @@ mod tests {
         let (mut runner, vfs) = setup_tv_guide_with_catalog("https-test", "ep.mp4", "HTTPS Test");
 
         runner.handle_input(&Button::Confirm, &vfs);
-        let (_, data) = runner.take_pending_request().unwrap();
+        let (_, data) = take_request(&mut runner).unwrap();
         let url = extract_tune_url(&data);
 
         assert!(url.starts_with("https://"), "URL must be HTTPS: {url}");
@@ -1604,21 +1591,21 @@ mod tests {
 
         // Click row 1 — should select channel 1 (not tune).
         let ly = (grid_y + row_h + row_h / 2) as i32;
-        let action = runner.handle_click(100, ly, cw, ch, true);
+        let action = runner.handle_click(100, ly, cw, ch, true, &ActiveTheme::default(), &_vfs);
         assert_eq!(action, AppAction::None);
         assert_eq!(runner.tv_guide_state().unwrap().selected_channel, 1);
-        assert!(runner.take_pending_request().is_none());
+        assert!(take_request(&mut runner).is_none());
 
         // Click row 0 — selects channel 0 (catalog is on ch 0).
         let ly0 = (grid_y + row_h / 2) as i32;
-        let action = runner.handle_click(100, ly0, cw, ch, true);
+        let action = runner.handle_click(100, ly0, cw, ch, true, &ActiveTheme::default(), &_vfs);
         assert_eq!(action, AppAction::None);
         assert_eq!(runner.tv_guide_state().unwrap().selected_channel, 0);
 
         // Click row 0 again — already selected, should tune.
-        let action = runner.handle_click(100, ly0, cw, ch, true);
+        let action = runner.handle_click(100, ly0, cw, ch, true, &ActiveTheme::default(), &_vfs);
         assert_eq!(action, AppAction::RequestFullscreen);
-        let (path, data) = runner.take_pending_request().unwrap();
+        let (path, data) = take_request(&mut runner).unwrap();
         assert!(path.contains("tv"));
         assert!(data.starts_with("tune_url "));
     }
@@ -1628,8 +1615,8 @@ mod tests {
         let (mut runner, _vfs) = setup_tv_guide_with_catalog("noop-test", "ep.mp4", "Noop");
 
         // Click in the header area.
-        let action = runner.handle_click(100, 10, 800, 600, true);
+        let action = runner.handle_click(100, 10, 800, 600, true, &ActiveTheme::default(), &_vfs);
         assert_eq!(action, AppAction::None);
-        assert!(runner.take_pending_request().is_none());
+        assert!(take_request(&mut runner).is_none());
     }
 }

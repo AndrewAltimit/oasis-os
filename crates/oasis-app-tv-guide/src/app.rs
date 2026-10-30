@@ -3,7 +3,7 @@
 //! Wraps `TvGuideState` so TV Guide can use the same delegate pattern
 //! as all other apps in `AppRunner`.
 
-use oasis_app_core::{App, AppAction};
+use oasis_app_core::{App, AppAction, AppRequest};
 use oasis_sdi::SdiRegistry;
 use oasis_skin::active_theme::ActiveTheme;
 use oasis_types::backend::SdiBackend;
@@ -27,8 +27,9 @@ pub struct TvGuideApp {
     path: String,
     /// Cached text lines for the content view.
     lines: Vec<String>,
-    /// Pending VFS IPC request (path, data).
-    pub pending_request: Option<(String, String)>,
+    /// Queued VFS IPC requests (tune requests), handed to the host by
+    /// `drain_requests`.
+    pub requests: Vec<AppRequest>,
 }
 
 impl TvGuideApp {
@@ -55,7 +56,7 @@ impl TvGuideApp {
             guide,
             path: path.to_string(),
             lines,
-            pending_request: None,
+            requests: Vec::new(),
         }
     }
 
@@ -69,11 +70,11 @@ impl TvGuideApp {
     }
 
     /// Build a tune request VFS IPC payload from a tune request.
-    fn make_tune_ipc(req: &crate::guide::TuneRequest) -> (String, String) {
+    fn make_tune_ipc(req: &crate::guide::TuneRequest) -> AppRequest {
         let url = ChannelCatalog::download_url(&req.episode);
         let data = format!("tune_url {url} {}", req.seek_secs);
         log::info!("TV: tune CH{} -> {}", req.channel_index, req.episode.title,);
-        (TV_REQUEST_PATH.to_string(), data)
+        AppRequest::new(TV_REQUEST_PATH, data)
     }
 }
 
@@ -116,7 +117,7 @@ impl App for TvGuideApp {
             },
             Button::Confirm => {
                 let tuned = if let Some(req) = self.guide.tune() {
-                    self.pending_request = Some(Self::make_tune_ipc(&req));
+                    self.requests.push(Self::make_tune_ipc(&req));
                     true
                 } else {
                     false
@@ -137,9 +138,17 @@ impl App for TvGuideApp {
         }
     }
 
-    fn handle_click(&mut self, lx: i32, ly: i32, cw: u32, ch: u32, fullscreen: bool) -> AppAction {
+    fn handle_click(
+        &mut self,
+        lx: i32,
+        ly: i32,
+        cw: u32,
+        ch: u32,
+        fullscreen: bool,
+        _vfs: &dyn Vfs,
+    ) -> AppAction {
         if let Some(req) = self.guide.handle_click(lx, ly, cw, ch, fullscreen) {
-            self.pending_request = Some(Self::make_tune_ipc(&req));
+            self.requests.push(Self::make_tune_ipc(&req));
             self.lines = self.guide.text_content();
             return AppAction::RequestFullscreen;
         }
@@ -167,24 +176,12 @@ impl App for TvGuideApp {
         TvGuideState::hide_sdi(sdi);
     }
 
-    fn take_pending_request(&mut self) -> Option<(String, String)> {
-        self.pending_request.take()
-    }
-
-    fn peek_pending_request(&self) -> Option<&(String, String)> {
-        self.pending_request.as_ref()
+    fn drain_requests(&mut self, out: &mut Vec<AppRequest>) {
+        out.append(&mut self.requests);
     }
 
     fn lines(&self) -> &[String] {
         &self.lines
-    }
-
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-
-    fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
-        self
     }
 }
 

@@ -18,7 +18,7 @@ fn net(listening: bool, connected: bool) -> AppHarness {
 
 #[test]
 fn window_shows_listener_and_remote_state() {
-    let h = net(true, true);
+    let mut h = net(true, true);
     let text = h.screen_text();
     assert!(text.contains("127.0.0.1"), "{text}");
     assert!(text.contains("Active (port 9000)"), "{text}");

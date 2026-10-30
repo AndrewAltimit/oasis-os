@@ -3,10 +3,14 @@
 //! [`AppHarness`] hosts one app the way the desktop shell does: it routes
 //! keyboard input through `handle_key` -> gamepad twin -> `TextInput`
 //! (honouring [`App::accepts_text`]), forwards content-local clicks and
-//! calls `refresh` afterwards, pumps `tick` / `apply_vfs_ops` /
-//! `take_close_request` once per frame, and draws the app into a window
-//! with a [`ClipAuditBackend`] that fails the test if anything visible
-//! escapes the window's content rectangle.
+//! wheel notches (each click preceded by [`App::layout`]), pumps
+//! `tick` / `apply_vfs_ops` / `take_close_request` once per frame, and
+//! draws the app into a window (again after `layout`) with a
+//! [`ClipAuditBackend`] that fails the test if anything visible escapes
+//! the window's content rectangle.
+//!
+//! VFS IPC requests the app queues are collected every frame and on
+//! [`AppHarness::take_request`] / [`AppHarness::requests`].
 //!
 //! [`fuzz_app`] is the generic property test: thousands of seeded random
 //! events at random window sizes and themes, asserting no panic and no
@@ -25,7 +29,7 @@ use oasis_test_backend::ClipAuditBackend;
 use oasis_types::input::{Button, InputEvent, Key, Modifiers};
 use oasis_vfs::{MemoryVfs, Vfs};
 
-use crate::{App, AppAction};
+use crate::{App, AppAction, AppRequest};
 
 /// Window sizes every app is exercised at: tiny, PSP native and XGA.
 pub const SIZES: &[(u32, u32)] = &[(96, 64), (480, 272), (1024, 768)];
@@ -89,6 +93,7 @@ pub struct AppHarness {
     window: (i32, i32, u32, u32),
     closed: bool,
     actions: Vec<AppAction>,
+    requests: Vec<AppRequest>,
 }
 
 impl std::fmt::Debug for AppHarness {
@@ -120,6 +125,7 @@ impl AppHarness {
             window: (8, 20, 480, 272),
             closed: false,
             actions: Vec::new(),
+            requests: Vec::new(),
         }
     }
 
@@ -200,6 +206,23 @@ impl AppHarness {
         &self.actions
     }
 
+    /// Collect the app's queued VFS IPC requests (as a host does once per
+    /// frame) and return every request not yet taken, oldest first.
+    pub fn requests(&mut self) -> &[AppRequest] {
+        self.app.drain_requests(&mut self.requests);
+        &self.requests
+    }
+
+    /// Take the oldest queued VFS IPC request as `(path, data)`.
+    pub fn take_request(&mut self) -> Option<(String, String)> {
+        self.app.drain_requests(&mut self.requests);
+        if self.requests.is_empty() {
+            return None;
+        }
+        let req = self.requests.remove(0);
+        Some((req.path, req.data))
+    }
+
     fn note(&mut self, action: AppAction) -> AppAction {
         if action == AppAction::Exit {
             self.closed = true;
@@ -224,12 +247,11 @@ impl AppHarness {
     /// Press a keyboard key exactly as the desktop host routes it:
     /// `handle_key`, then (unless consumed, or suppressed because the app
     /// accepts text and the key types) the gamepad twin, then the
-    /// `TextInput` for typing keys. Calls `refresh` after a consumed key.
+    /// `TextInput` for typing keys.
     pub fn key_mods(&mut self, key: Key, mods: Modifiers) -> AppAction {
         let mut result = AppAction::None;
         let consumed = self.app.handle_key(&key, mods, &self.vfs);
         if let Some(action) = consumed {
-            self.app.refresh(&self.vfs);
             result = self.note(action);
         } else if !(self.app.accepts_text() && key.produces_text(mods)) {
             match key.legacy_press(mods) {
@@ -285,7 +307,6 @@ impl AppHarness {
                     .app
                     .handle_key(&Key::Char(ch), Modifiers::NONE, &self.vfs);
                 if let Some(action) = consumed {
-                    self.app.refresh(&self.vfs);
                     self.note(action);
                 }
                 if !self.closed {
@@ -295,12 +316,19 @@ impl AppHarness {
         }
     }
 
-    /// Click at content-local coordinates.
+    /// Click at content-local coordinates (after [`App::layout`], like a
+    /// host).
     pub fn click(&mut self, lx: i32, ly: i32) -> AppAction {
         let (_, _, w, h) = self.window;
-        let action = self.app.handle_click(lx, ly, w, h, false);
-        self.app.refresh(&self.vfs);
+        self.app.layout(w, h, &self.theme);
+        let action = self.app.handle_click(lx, ly, w, h, false, &self.vfs);
         self.note(action)
+    }
+
+    /// Mouse wheel over the window: `delta` notches (negative = up).
+    /// Returns whether the app reported a visible change.
+    pub fn scroll(&mut self, delta: i32) -> bool {
+        self.app.handle_scroll(delta, &self.vfs)
     }
 
     /// Draw, find the first visible text equal to `label` and click its
@@ -352,11 +380,14 @@ impl AppHarness {
         self.click(x - self.window.0, y - self.window.1)
     }
 
-    /// Run one host frame: `tick(dt_ms)`, `apply_vfs_ops`, and the close
-    /// request poll. Returns whether the app reported a visible change.
+    /// Run one host frame: collect queued requests (see
+    /// [`Self::take_request`]), `apply_vfs_ops`, `tick(dt_ms)`, and the
+    /// close request poll. Returns whether the app reported a visible
+    /// change.
     pub fn frame(&mut self, dt_ms: u32) -> bool {
-        let mut changed = self.app.tick(dt_ms, &self.vfs);
-        changed |= self.app.apply_vfs_ops(&mut self.vfs);
+        self.app.drain_requests(&mut self.requests);
+        let mut changed = self.app.apply_vfs_ops(&mut self.vfs);
+        changed |= self.app.tick(dt_ms, &self.vfs);
         if self.app.take_close_request() {
             self.closed = true;
         }
@@ -370,11 +401,12 @@ impl AppHarness {
         }
     }
 
-    /// Draw the app windowed and return the audit backend without
-    /// checking for violations.
+    /// Lay the app out ([`App::layout`]), draw it windowed and return the
+    /// audit backend without checking for violations.
     #[must_use]
-    pub fn draw_unchecked(&self) -> ClipAuditBackend {
+    pub fn draw_unchecked(&mut self) -> ClipAuditBackend {
         let (x, y, w, h) = self.window;
+        self.app.layout(w, h, &self.theme);
         let mut b = ClipAuditBackend::new(self.screen.0, self.screen.1, (x, y, w, h));
         b.push_host_clip();
         if let Err(e) = self.app.draw_windowed(x, y, w, h, &mut b, &self.theme) {
@@ -387,7 +419,7 @@ impl AppHarness {
     /// Draw the app windowed and panic if anything visible escaped the
     /// window's content rectangle.
     #[must_use]
-    pub fn draw(&self) -> ClipAuditBackend {
+    pub fn draw(&mut self) -> ClipAuditBackend {
         let b = self.draw_unchecked();
         if !b.violations().is_empty() {
             panic!(
@@ -403,7 +435,7 @@ impl AppHarness {
 
     /// Visible text of a fresh (checked) draw.
     #[must_use]
-    pub fn screen_text(&self) -> String {
+    pub fn screen_text(&mut self) -> String {
         self.draw().visible_text()
     }
 
@@ -589,6 +621,84 @@ mod tests {
         }
         let r = a.range(-5, 5);
         assert!((-5..5).contains(&r));
+    }
+
+    /// A line-list app whose click handler maps the click back to a line
+    /// with the metrics its `layout` recorded.
+    #[derive(Debug)]
+    struct ListApp {
+        content: crate::ContentState,
+        clicked: Option<usize>,
+    }
+
+    impl App for ListApp {
+        crate::impl_content_app_methods!(content);
+
+        fn handle_input(&mut self, button: &Button, _vfs: &dyn Vfs) -> AppAction {
+            self.content.handle_nav(button).unwrap_or(AppAction::None)
+        }
+
+        fn handle_click(
+            &mut self,
+            _lx: i32,
+            ly: i32,
+            _cw: u32,
+            ch: u32,
+            _fullscreen: bool,
+            _vfs: &dyn Vfs,
+        ) -> AppAction {
+            let metrics = self.content.windowed_metrics();
+            self.clicked = crate::render::windowed_line_at(&self.content, ch, metrics, ly);
+            AppAction::None
+        }
+    }
+
+    /// Resize a `ContentState` app to 5 rows: the harness lays the app out
+    /// before drawing and clicking, so clicking a drawn row hits that line,
+    /// also after scrolling.
+    #[test]
+    fn click_to_line_hits_the_drawn_row_in_a_short_window() {
+        let mut content = crate::ContentState::new("List", "/apps/list");
+        content.lines = (0..30).map(|i| format!("item {i}")).collect();
+        let mut h = AppHarness::new(Box::new(ListApp {
+            content,
+            clicked: None,
+        }));
+        let line_h = ActiveTheme::default().terminal_line_height.max(12);
+        h.set_size(300, crate::render::WINDOWED_TOP_PAD + 16 + 5 * line_h);
+
+        let screen = h.screen_text();
+        assert!(screen.contains("item 4") && !screen.contains("item 5"));
+        h.click_text_containing("item 3");
+        assert_eq!(h.app_as::<ListApp>().clicked, Some(3));
+
+        // Scroll the selection past the bottom row: the view follows the
+        // window's 5 rows, and clicks still land on what is drawn.
+        for _ in 0..12 {
+            h.press(Button::Down);
+        }
+        let screen = h.screen_text();
+        assert!(screen.contains("> item 12"), "{screen}");
+        assert!(!screen.contains("item 7\n"), "{screen}");
+        h.click_text_containing("item 9");
+        assert_eq!(h.app_as::<ListApp>().clicked, Some(9));
+    }
+
+    /// The default wheel handler moves a list app's selection.
+    #[test]
+    fn wheel_moves_list_selection() {
+        let mut content = crate::ContentState::new("List", "/apps/list");
+        content.lines = (0..30).map(|i| format!("item {i}")).collect();
+        let mut h = AppHarness::new(Box::new(ListApp {
+            content,
+            clicked: None,
+        }));
+        let _ = h.draw();
+        assert!(h.scroll(3));
+        assert!(h.screen_text().contains("> item 3"));
+        assert!(h.scroll(-2));
+        assert!(h.screen_text().contains("> item 1"));
+        assert!(!h.scroll(0));
     }
 
     #[test]

@@ -47,7 +47,8 @@ pub(crate) fn default_menu_bar() -> MenuBar {
 
 impl FileManagerApp {
     /// Queue navigation/open for the entry at `abs_idx` of the active panel.
-    /// Used by click activation; the actual vfs work happens in `refresh`.
+    /// Used by click activation; the vfs work happens in
+    /// `apply_pending_navigation`.
     pub(crate) fn activate_index(&mut self, abs_idx: usize) -> AppAction {
         let p = self.active();
         let Some(line) = p.lines.get(abs_idx).cloned() else {
@@ -170,8 +171,8 @@ impl FileManagerApp {
     /// Move the active panel's cursor by `delta` tiles in the Explorer grid,
     /// keeping the scrolled-into-view invariant intact.
     pub(crate) fn explorer_move_cursor(&mut self, delta: isize) {
-        let cols = self.explorer_cols.get().max(1);
-        let rows = self.explorer_visible_rows.get().max(1);
+        let cols = self.explorer_cols.max(1);
+        let rows = self.explorer_visible_rows.max(1);
         let p = self.active_mut();
         let total = p.lines.len();
         if total == 0 {
@@ -195,7 +196,7 @@ impl FileManagerApp {
 
     /// Handle input in Explorer (single-pane icon grid) mode.
     pub(crate) fn handle_explorer_input(&mut self, button: &Button, vfs: &dyn Vfs) -> AppAction {
-        let cols = self.explorer_cols.get().max(1) as isize;
+        let cols = self.explorer_cols.max(1) as isize;
         match button {
             Button::Left => {
                 self.explorer_move_cursor(-1);

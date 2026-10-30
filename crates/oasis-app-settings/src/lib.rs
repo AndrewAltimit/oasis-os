@@ -7,10 +7,8 @@
 //! `/system/settings.toml` and publishes the resulting state under
 //! `/system/state/*`, which this app reads back.
 
-use std::cell::Cell;
-
 use oasis_app_core::render::{hide_app_sdi, render_app_chrome, render_content_sdi};
-use oasis_app_core::{App, AppAction, ContentState};
+use oasis_app_core::{App, AppAction, AppRequest, ContentState};
 use oasis_i18n::{Locale, tr};
 use oasis_sdi::SdiRegistry;
 use oasis_skin::ActiveTheme;
@@ -286,7 +284,7 @@ struct SeenState {
     reduced_motion: Option<String>,
 }
 
-/// Font metrics of the last windowed draw, reused by click hit-testing.
+/// Font metrics recorded by `App::layout`, reused by click hit-testing.
 #[derive(Debug, Clone, Copy)]
 struct Metrics {
     font_body: u16,
@@ -332,8 +330,8 @@ pub struct SettingsApp {
     text_scroll: usize,
     /// Last seen shell-published preference state.
     seen: SeenState,
-    /// Font metrics of the last windowed draw (click hit-testing).
-    metrics: Cell<Metrics>,
+    /// Font metrics of the last `layout` (click hit-testing).
+    metrics: Metrics,
     /// Appearance editor state (base palette, edit mode).
     appearance: AppearanceState,
 }
@@ -359,7 +357,7 @@ impl SettingsApp {
             reduced_motion: false,
             text_scroll: 0,
             seen: SeenState::default(),
-            metrics: Cell::new(Metrics::default()),
+            metrics: Metrics::default(),
             appearance: AppearanceState::default(),
         };
         // Align the cursor with the currently active skin so the highlight
@@ -1014,7 +1012,7 @@ impl SettingsApp {
 
     /// Queue an IPC request for the shell.
     fn post(&mut self, path: &str, payload: String) {
-        self.content.pending_vfs_request = Some((path.to_string(), payload));
+        self.content.post_request(path, payload);
     }
 
     /// Set the volume (clamped) and ask the shell to apply it.
@@ -1175,9 +1173,9 @@ impl SettingsApp {
     }
 
     /// Windowed layout for a content rect of the given size, using the
-    /// font metrics of the last draw.
-    fn layout(&self, cx: i32, cy: i32, cw: u32, ch: u32) -> SettingsLayout {
-        let m = self.metrics.get();
+    /// font metrics of the last `layout`.
+    fn settings_layout(&self, cx: i32, cy: i32, cw: u32, ch: u32) -> SettingsLayout {
+        let m = self.metrics;
         SettingsLayout::compute(
             cx,
             cy,
@@ -1202,7 +1200,7 @@ impl SettingsApp {
     /// Windowed click: tabs switch category, rows select + activate,
     /// slider tracks set the value at the click position.
     fn handle_windowed_click(&mut self, lx: i32, ly: i32, cw: u32, ch: u32) {
-        let l = self.layout(0, 0, cw, ch);
+        let l = self.settings_layout(0, 0, cw, ch);
         if let Some(i) = l.tabs.iter().position(|t| t.contains(lx, ly)) {
             if Category::ALL[i] != self.category {
                 self.enter_category(Category::ALL[i]);
@@ -1301,23 +1299,39 @@ impl App for SettingsApp {
         backend: &mut dyn SdiBackend,
         at: &ActiveTheme,
     ) -> oasis_types::error::Result<()> {
-        self.metrics.set(Metrics {
+        self.draw_settings(cx, cy, cw, ch, backend, at)
+    }
+
+    /// The wheel moves the selection / scrolls text, but never changes a
+    /// value: on the Audio tab and while editing a palette channel Up/Down
+    /// adjust the value, so the wheel is ignored there.
+    fn handle_scroll(&mut self, delta: i32, vfs: &dyn Vfs) -> bool {
+        if self.category == Category::Audio || self.appearance.editing_channel.is_some() {
+            return false;
+        }
+        let button = if delta < 0 { Button::Up } else { Button::Down };
+        let steps = delta.unsigned_abs().min(oasis_app_core::MAX_WHEEL_STEPS);
+        for _ in 0..steps {
+            self.handle_input(&button, vfs);
+        }
+        steps > 0
+    }
+
+    fn layout(&mut self, _cw: u32, _ch: u32, at: &ActiveTheme) {
+        // The windowed rows are sized from the theme's (font-scaled)
+        // fonts; record them for click hit-testing.
+        self.metrics = Metrics {
             font_body: at.font_body,
             font_hint: at.font_hint,
-        });
-        self.draw_settings(cx, cy, cw, ch, backend, at)
+        };
     }
 
     fn hide_sdi(&self, sdi: &mut SdiRegistry) {
         hide_app_sdi(sdi);
     }
 
-    fn take_pending_request(&mut self) -> Option<(String, String)> {
-        self.content.pending_vfs_request.take()
-    }
-
-    fn peek_pending_request(&self) -> Option<&(String, String)> {
-        self.content.pending_vfs_request.as_ref()
+    fn drain_requests(&mut self, out: &mut Vec<AppRequest>) {
+        out.append(&mut self.content.requests);
     }
 
     fn tick(&mut self, _dt_ms: u32, vfs: &dyn Vfs) -> bool {
@@ -1326,14 +1340,6 @@ impl App for SettingsApp {
 
     fn lines(&self) -> &[String] {
         &self.content.lines
-    }
-
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-
-    fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
-        self
     }
 
     fn handle_key(&mut self, key: &Key, mods: Modifiers, _vfs: &dyn Vfs) -> Option<AppAction> {
@@ -1428,7 +1434,15 @@ impl App for SettingsApp {
         }
     }
 
-    fn handle_click(&mut self, lx: i32, ly: i32, cw: u32, ch: u32, fullscreen: bool) -> AppAction {
+    fn handle_click(
+        &mut self,
+        lx: i32,
+        ly: i32,
+        cw: u32,
+        ch: u32,
+        fullscreen: bool,
+        _vfs: &dyn Vfs,
+    ) -> AppAction {
         if fullscreen {
             self.handle_fullscreen_click(ly);
         } else {
@@ -1524,6 +1538,15 @@ fn preset_label(w: u32, h: u32) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Take the oldest queued IPC request as `(path, data)`.
+    fn take_req(app: &mut SettingsApp) -> Option<(String, String)> {
+        if app.content.requests.is_empty() {
+            return None;
+        }
+        let req = app.content.requests.remove(0);
+        Some((req.path, req.data))
+    }
     use oasis_vfs::MemoryVfs;
 
     fn make_app() -> SettingsApp {
@@ -1632,7 +1655,7 @@ mod tests {
 
         let names = builtin_names();
         // Should have a pending VFS IPC request.
-        let req = app.take_pending_request();
+        let req = take_req(&mut app);
         assert!(req.is_some());
         let (path, data) = req.as_ref().unwrap();
         assert_eq!(path, SKIN_CHANGE_REQUEST_PATH);
@@ -1645,7 +1668,7 @@ mod tests {
         let mut app = make_app();
         // Confirm on current skin (classic, cursor=0).
         app.handle_input(&Button::Confirm, &vfs);
-        assert!(app.take_pending_request().is_none());
+        assert!(take_req(&mut app).is_none());
     }
 
     #[test]
@@ -1751,9 +1774,8 @@ mod tests {
 
     #[test]
     fn downcast_works() {
-        let app = make_app();
-        let any = app.as_any();
-        assert!(any.downcast_ref::<SettingsApp>().is_some());
+        let app: Box<dyn App> = Box::new(make_app());
+        assert!(app.as_any().downcast_ref::<SettingsApp>().is_some());
     }
 
     #[test]
@@ -1855,7 +1877,7 @@ mod tests {
         }
         app.handle_input(&Button::Confirm, &vfs);
 
-        let req = app.take_pending_request();
+        let req = take_req(&mut app);
         let (path, data) = req.expect("resolution confirm should post an IPC request");
         assert_eq!(path, RESOLUTION_CHANGE_REQUEST_PATH);
         assert_eq!(data, "1280x720");
@@ -1869,7 +1891,7 @@ mod tests {
         app.handle_input(&Button::Right, &vfs);
         // Cursor starts on the active resolution, so Confirm should no-op.
         app.handle_input(&Button::Confirm, &vfs);
-        assert!(app.take_pending_request().is_none());
+        assert!(take_req(&mut app).is_none());
     }
 
     // -- VFS-driven construction + sync --
@@ -1929,7 +1951,7 @@ mod tests {
         // before discovering Enter still get feedback.
         app.handle_input(&Button::Triangle, &vfs);
         assert!(
-            app.take_pending_request().is_some(),
+            take_req(&mut app).is_some(),
             "Space/Triangle should confirm the selection"
         );
     }
@@ -1942,7 +1964,7 @@ mod tests {
     /// the same layout + scroll the renderer uses. `x_frac` positions the
     /// point across the row (0.0 = left edge, 1.0 = right edge).
     fn item_point(app: &SettingsApp, item: usize, x_frac: f32) -> (i32, i32) {
-        let l = app.layout(0, 0, CW, CH);
+        let l = app.settings_layout(0, 0, CW, CH);
         let rows = app.rows();
         let scroll = app.body_scroll(&rows, l.visible_rows());
         let row = row_of_item(&rows, item).expect("item has a row");
@@ -1954,8 +1976,8 @@ mod tests {
     fn click_on_skin_row_applies() {
         let mut app = make_app();
         let (x, y) = item_point(&app, 1, 0.2);
-        let _action = app.handle_click(x, y, CW, CH, false);
-        let req = app.take_pending_request();
+        let _action = app.handle_click(x, y, CW, CH, false, &MemoryVfs::new());
+        let req = take_req(&mut app);
         let (path, data) = req.expect("click on non-active skin should post IPC");
         assert_eq!(path, SKIN_CHANGE_REQUEST_PATH);
         // builtin_names()[1] is the second skin (not "classic").
@@ -1967,29 +1989,29 @@ mod tests {
         let mut app = make_app();
         // Item 0 = "classic", which is the active skin.
         let (x, y) = item_point(&app, 0, 0.2);
-        let _action = app.handle_click(x, y, CW, CH, false);
-        assert!(app.take_pending_request().is_none());
+        let _action = app.handle_click(x, y, CW, CH, false, &MemoryVfs::new());
+        assert!(take_req(&mut app).is_none());
     }
 
     #[test]
     fn click_above_content_area_ignored() {
         let mut app = make_app();
         // Top-left padding above the tab strip: nothing to hit.
-        let _action = app.handle_click(1, 1, CW, CH, false);
-        assert!(app.take_pending_request().is_none());
+        let _action = app.handle_click(1, 1, CW, CH, false, &MemoryVfs::new());
+        assert!(take_req(&mut app).is_none());
         assert_eq!(app.category, Category::Display);
     }
 
     #[test]
     fn click_on_tab_switches_category() {
         let mut app = make_app();
-        let l = app.layout(0, 0, CW, CH);
+        let l = app.settings_layout(0, 0, CW, CH);
         let audio = Category::ALL
             .iter()
             .position(|c| *c == Category::Audio)
             .expect("audio tab");
         let t = l.tabs[audio];
-        app.handle_click(t.x + 2, t.y + 2, CW, CH, false);
+        app.handle_click(t.x + 2, t.y + 2, CW, CH, false, &MemoryVfs::new());
         assert_eq!(app.category, Category::Audio);
     }
 
@@ -2003,8 +2025,8 @@ mod tests {
         assert_eq!(app.category, Category::Resolution);
         // Click the 4th preset (1280x720, index 3).
         let (x, y) = item_point(&app, 3, 0.2);
-        let _action = app.handle_click(x, y, CW, CH, false);
-        let req = app.take_pending_request();
+        let _action = app.handle_click(x, y, CW, CH, false, &vfs);
+        let req = take_req(&mut app);
         let (path, data) = req.expect("click on non-active preset should post IPC");
         assert_eq!(path, RESOLUTION_CHANGE_REQUEST_PATH);
         assert_eq!(data, "1280x720");
@@ -2016,8 +2038,8 @@ mod tests {
         // Fullscreen keeps the line-based mapping: items start at content
         // line 4; with WINDOWED_TOP_PAD = 4 and line_h = 14, line 5 (the
         // second skin) lives at y = 4 + 5*14 = 74.
-        app.handle_click(10, 74, 400, 220, true);
-        let (path, data) = app.take_pending_request().expect("fullscreen click posts");
+        app.handle_click(10, 74, 400, 220, true, &MemoryVfs::new());
+        let (path, data) = take_req(&mut app).expect("fullscreen click posts");
         assert_eq!(path, SKIN_CHANGE_REQUEST_PATH);
         assert_eq!(data, builtin_names()[1]);
     }
@@ -2038,13 +2060,17 @@ mod tests {
         let vfs = make_vfs();
         let mut app = app_in(Category::Audio, &vfs);
         app.handle_input(&Button::Up, &vfs);
-        let (path, data) = app.take_pending_request().expect("volume posts IPC");
+        let (path, data) = take_req(&mut app).expect("volume posts IPC");
         assert_eq!(path, VOLUME_CHANGE_REQUEST_PATH);
         assert_eq!(data, "85");
         app.handle_input(&Button::Down, &vfs);
         app.handle_input(&Button::Down, &vfs);
-        let (_, data) = app.take_pending_request().expect("volume posts IPC");
+        // Both steps are queued and delivered in order.
+        let (_, data) = take_req(&mut app).expect("volume posts IPC");
+        assert_eq!(data, "80");
+        let (_, data) = take_req(&mut app).expect("volume posts IPC");
         assert_eq!(data, "75");
+        assert!(take_req(&mut app).is_none());
     }
 
     #[test]
@@ -2053,7 +2079,7 @@ mod tests {
         let mut app = app_in(Category::Audio, &vfs);
         app.volume = 100;
         app.handle_input(&Button::Up, &vfs);
-        assert!(app.take_pending_request().is_none());
+        assert!(take_req(&mut app).is_none());
     }
 
     #[test]
@@ -2076,14 +2102,14 @@ mod tests {
     fn click_on_volume_slider_sets_value() {
         let vfs = make_vfs();
         let mut app = app_in(Category::Audio, &vfs);
-        let l = app.layout(0, 0, CW, CH);
+        let l = app.settings_layout(0, 0, CW, CH);
         let rows = app.rows();
         let row = row_of_item(&rows, 0).expect("volume row");
         let track = l.control_rect(l.row_rect(row));
         // Click near the left end of the track -> low volume.
-        app.handle_click(track.x + 1, track.y + 2, CW, CH, false);
+        app.handle_click(track.x + 1, track.y + 2, CW, CH, false, &vfs);
         assert!(app.volume <= 5, "volume {}", app.volume);
-        let (path, _) = app.take_pending_request().expect("slider click posts");
+        let (path, _) = take_req(&mut app).expect("slider click posts");
         assert_eq!(path, VOLUME_CHANGE_REQUEST_PATH);
     }
 
@@ -2122,7 +2148,7 @@ mod tests {
         // English is first; move to the next locale and confirm.
         app.handle_input(&Button::Down, &vfs);
         app.handle_input(&Button::Confirm, &vfs);
-        let (path, data) = app.take_pending_request().expect("locale posts IPC");
+        let (path, data) = take_req(&mut app).expect("locale posts IPC");
         assert_eq!(path, LOCALE_CHANGE_REQUEST_PATH);
         assert_eq!(data, Locale::all()[1].code());
     }
@@ -2149,7 +2175,7 @@ mod tests {
         let mut app = app_in(Category::Accessibility, &vfs);
         assert_eq!(app.item_cursor, A11Y_FONT_SCALE);
         app.handle_input(&Button::Confirm, &vfs);
-        let (path, data) = app.take_pending_request().expect("font scale posts");
+        let (path, data) = take_req(&mut app).expect("font scale posts");
         assert_eq!(path, FONT_SCALE_REQUEST_PATH);
         assert_eq!(data.parse::<f32>().ok(), Some(1.25));
         // Square steps back down.
@@ -2167,13 +2193,13 @@ mod tests {
         let mut app = app_in(Category::Accessibility, &vfs);
         app.handle_input(&Button::Down, &vfs);
         app.handle_input(&Button::Confirm, &vfs);
-        let (path, data) = app.take_pending_request().expect("high contrast posts");
+        let (path, data) = take_req(&mut app).expect("high contrast posts");
         assert_eq!(path, HIGH_CONTRAST_REQUEST_PATH);
         assert_eq!(data, "on");
 
         app.handle_input(&Button::Down, &vfs);
         app.handle_input(&Button::Confirm, &vfs);
-        let (path, data) = app.take_pending_request().expect("reduced motion posts");
+        let (path, data) = take_req(&mut app).expect("reduced motion posts");
         assert_eq!(path, REDUCED_MOTION_REQUEST_PATH);
         assert_eq!(data, "1");
         assert!(app.reduced_motion);
@@ -2196,7 +2222,7 @@ mod tests {
         );
         app.item_cursor = A11Y_HIGH_CONTRAST;
         app.handle_input(&Button::Confirm, &vfs);
-        let (_, data) = app.take_pending_request().expect("posts");
+        let (_, data) = take_req(&mut app).expect("posts");
         assert_eq!(data, "off");
     }
 
@@ -2205,7 +2231,7 @@ mod tests {
         use oasis_test_backend::{DrawCommand, RecordingBackend};
 
         let vfs = make_vfs();
-        let app = app_in(Category::Accessibility, &vfs);
+        let mut app = app_in(Category::Accessibility, &vfs);
         let mut backend = RecordingBackend::new(CW, CH);
         let mut at = ActiveTheme::default();
         at.font_body = 15;
@@ -2237,8 +2263,9 @@ mod tests {
             )),
             "toggle widgets drawn"
         );
-        // The metrics are cached for click hit-testing.
-        assert_eq!(app.metrics.get().font_body, 15);
+        // `layout` records the metrics for click hit-testing.
+        app.layout(CW, CH, &at);
+        assert_eq!(app.metrics.font_body, 15);
     }
 
     // -- Cursor sync (no double-`>` markers) --
@@ -2493,7 +2520,7 @@ mod tests {
             app.handle_input(&Button::Down, &vfs);
         }
         app.handle_input(&Button::Confirm, &vfs);
-        let (path, payload) = app.take_pending_request().expect("apply posts IPC");
+        let (path, payload) = take_req(&mut app).expect("apply posts IPC");
         assert_eq!(path, SKIN_APPLY_THEME_REQUEST_PATH);
         let theme = SkinTheme::from_toml_str(&payload).expect("payload is a valid theme");
         assert_eq!(
@@ -2510,7 +2537,7 @@ mod tests {
             app.handle_input(&Button::Down, &vfs);
         }
         app.handle_input(&Button::Confirm, &vfs);
-        let (path, payload) = app.take_pending_request().expect("save posts IPC");
+        let (path, payload) = take_req(&mut app).expect("save posts IPC");
         assert_eq!(path, SKIN_SAVE_CUSTOM_REQUEST_PATH);
         let (name, theme_toml) = payload.split_once('\n').expect("name line present");
         assert_eq!(name, "custom-classic");
@@ -2528,7 +2555,7 @@ mod tests {
             app.handle_input(&Button::Down, &vfs);
         }
         app.handle_input(&Button::Confirm, &vfs);
-        let (path, _) = app.take_pending_request().expect("variant posts preview");
+        let (path, _) = take_req(&mut app).expect("variant posts preview");
         assert_eq!(path, SKIN_APPLY_THEME_REQUEST_PATH);
         let bg = app.appearance.colors[0];
         let luma = 0.2126 * bg.r as f32 + 0.7152 * bg.g as f32 + 0.0722 * bg.b as f32;

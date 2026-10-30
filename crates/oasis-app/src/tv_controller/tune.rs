@@ -7,9 +7,9 @@ use oasis_core::vfs::Vfs;
 /// Resolve a `tune_ch:<number>` request at [`TV_REQUEST_PATH`] (written by
 /// the `tv tune` terminal command and the MCP `tune` tool) against the open
 /// TV Guide: select that channel and tune it exactly like pressing Confirm
-/// in the guide, which queues the guide's own `tune_url` request for
-/// [`handle_tune_requests`]. Nothing consumed these requests before, so
-/// both entry points silently did nothing.
+/// in the guide, which queues the tune for [`handle_tune_requests`].
+/// Nothing consumed these requests before, so both entry points silently
+/// did nothing.
 ///
 /// [`TV_REQUEST_PATH`]: oasis_core::apps::tv_guide::TV_REQUEST_PATH
 fn tune_channel_from_vfs(state: &mut AppState, vfs: &mut dyn Vfs) {
@@ -56,11 +56,8 @@ fn tune_channel_from_vfs(state: &mut AppState, vfs: &mut dyn Vfs) {
         return;
     };
     let url = ChannelCatalog::download_url(&req.episode);
-    runner.set_pending_request(
-        TV_REQUEST_PATH.to_string(),
-        format!("tune_url {url} {}", req.seek_secs),
-    );
     runner.refresh_tv_text();
+    state.tv.pending_tune = Some(format!("{url} {}", req.seek_secs));
 }
 
 /// Handle TV Guide tune requests -- start in-app video player.
@@ -71,19 +68,14 @@ pub(super) fn handle_tune_requests(
 ) {
     tune_channel_from_vfs(state, vfs);
 
-    let runner = super::find_tv_guide_runner(&mut state.content.open_runners);
-    let Some(runner) = runner else { return };
-    let Some((path, data)) = runner.take_pending_request() else {
+    // Queued by the shell's per-frame request drain (the guide's own
+    // `tune_url` requests), the catalog auto-tune, auto-advance and
+    // `tune_ch:` above.
+    let Some(data) = state.tv.pending_tune.take() else {
         return;
     };
-
-    if path != oasis_core::apps::tv_guide::TV_REQUEST_PATH || !data.starts_with("tune_url ") {
-        let _ = vfs.write(&path, data.as_bytes());
-        return;
-    }
-
-    let rest = &data["tune_url ".len()..];
-    // Parse "url seek_secs" from IPC data.
+    let rest = data.as_str();
+    // Parse "url seek_secs".
     let (url, seek_secs) = if let Some(space_idx) = rest.rfind(' ') {
         let seek: u64 = rest[space_idx + 1..].parse().unwrap_or(0);
         (&rest[..space_idx], seek)

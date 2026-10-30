@@ -90,7 +90,16 @@ fn volume_bar(expanded: bool) -> (i32, i32, u32) {
 }
 
 fn tune_request(app: &mut TvGuideApp) -> Option<(String, String)> {
-    app.take_pending_request()
+    let mut out = Vec::new();
+    app.drain_requests(&mut out);
+    assert!(out.len() <= 1, "more than one request queued: {out:?}");
+    out.pop().map(|r| {
+        assert_eq!(
+            oasis_app_tv_guide::tune_url_request(&r).is_some(),
+            r.data.starts_with("tune_url ")
+        );
+        (r.path, r.data)
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -189,21 +198,21 @@ fn many_channels_page_with_selection() {
     assert_eq!(app.guide.current_page(), app.guide.total_pages());
     // Clicking the first visible row on the last page selects channel 7.
     let first_visible = app.guide.scroll_offset;
-    app.handle_click(100, row_y(12, 0), CW, CH, true);
+    app.handle_click(100, row_y(12, 0), CW, CH, true, &vfs);
     assert_eq!(app.guide.selected_channel, first_visible);
 }
 
 #[test]
 fn click_selects_then_second_click_tunes() {
-    let (mut app, _vfs) = guide_with(&[0, 1, 2, 3, 4]);
+    let (mut app, vfs) = guide_with(&[0, 1, 2, 3, 4]);
     assert_eq!(
-        app.handle_click(100, row_y(5, 3), CW, CH, true),
+        app.handle_click(100, row_y(5, 3), CW, CH, true, &vfs),
         AppAction::None
     );
     assert_eq!(app.guide.selected_channel, 3);
     assert!(app.guide.tuned_channel.is_none());
     assert_eq!(
-        app.handle_click(100, row_y(5, 3), CW, CH, true),
+        app.handle_click(100, row_y(5, 3), CW, CH, true, &vfs),
         AppAction::RequestFullscreen
     );
     assert_eq!(app.guide.tuned_channel, Some(3));
@@ -231,7 +240,10 @@ fn volume_bar_click_sets_volume_while_tuned() {
             (x + w as i32 - 1, 100),
         ] {
             app.guide.volume_changed = false;
-            assert_eq!(app.handle_click(px, y + 6, CW, CH, true), AppAction::None);
+            assert_eq!(
+                app.handle_click(px, y + 6, CW, CH, true, &vfs),
+                AppAction::None
+            );
             assert!(app.guide.volume_changed);
             assert!(
                 app.guide.volume.abs_diff(want) <= 1,
@@ -247,9 +259,9 @@ fn volume_bar_click_sets_volume_while_tuned() {
 
 #[test]
 fn volume_bar_is_inert_when_not_tuned() {
-    let (mut app, _vfs) = guide_with(&[0]);
+    let (mut app, vfs) = guide_with(&[0]);
     let (x, y, w) = volume_bar(false);
-    app.handle_click(x + w as i32 / 2, y + 6, CW, CH, true);
+    app.handle_click(x + w as i32 / 2, y + 6, CW, CH, true, &vfs);
     assert_eq!(app.guide.volume, 25);
     assert!(!app.guide.volume_changed);
 }
@@ -320,7 +332,10 @@ fn guide_without_channels_handles_all_input() {
     ] {
         assert_eq!(press(&mut app, &vfs, b), AppAction::None);
     }
-    assert_eq!(app.handle_click(100, 300, CW, CH, true), AppAction::None);
+    assert_eq!(
+        app.handle_click(100, 300, CW, CH, true, &vfs),
+        AppAction::None
+    );
     assert!(app.lines().iter().any(|l| l.contains("No channels")));
     assert_eq!(press(&mut app, &vfs, Button::Cancel), AppAction::Exit);
 }

@@ -362,10 +362,15 @@ fn window_content_click(
         && let Some(win) = state.wm.get_window(id)
     {
         let (_, _, cw, ch) = win.content_rect(state.wm.theme());
-        let action = runner.handle_click(lx, ly, cw, ch, win.fullscreen_kiosk);
-        // Apply any vfs work the click queued (e.g. file manager folder
-        // navigation).
-        runner.refresh_app(vfs);
+        let action = runner.handle_click(
+            lx,
+            ly,
+            cw,
+            ch,
+            win.fullscreen_kiosk,
+            &state.active_theme,
+            vfs,
+        );
         // Clicks answer with the same actions as buttons: a double-clicked
         // file opens in its app, a File > Close menu item closes the window.
         apply_window_action(action, id.to_string(), state, sdi, vfs);
@@ -522,7 +527,17 @@ fn desktop_wheel(delta: i32, state: &mut AppState, vfs: &mut MemoryVfs) {
             }
         },
         Some(TERMINAL_WIN) => terminal_input::scroll(state, delta),
-        _ => {},
+        Some(id) => {
+            if let Some((_, runner)) = state
+                .content
+                .open_runners
+                .iter_mut()
+                .find(|(rid, _)| rid == id)
+            {
+                runner.handle_scroll(delta, vfs);
+            }
+        },
+        None => {},
     }
 }
 
@@ -667,7 +682,6 @@ fn route_key(
     let Some(action) = runner.handle_key(key, mods, vfs) else {
         return false;
     };
-    runner.refresh_app(vfs);
     apply_window_action(action, active_id, state, sdi, vfs);
     true
 }
@@ -1285,8 +1299,10 @@ mod tests {
             .iter_mut()
             .find(|(id, _)| id == "settings")
             .expect("settings runner should exist");
-        let req = runner.take_pending_request();
-        let (path, data) = req.expect("Confirm should post an IPC request");
+        let mut reqs = Vec::new();
+        runner.drain_requests(&mut reqs);
+        let req = reqs.pop().expect("Confirm should post an IPC request");
+        let (path, data) = (req.path, req.data);
         assert_eq!(path, "/system/ipc/skin-change");
         assert!(!data.is_empty());
     }
@@ -1651,10 +1667,8 @@ mod tests {
             .iter_mut()
             .find(|(id, _)| Some(id) == win_id.as_ref())
             .expect("editor window still open");
-        // Sync the runner's cached display lines from the editor.
-        runner.refresh_app(&vfs);
         // Space typed a space instead of Triangle opening Find mode.
-        let text = runner.lines.join("\n");
+        let text = runner.lines().join("\n");
         assert!(text.contains("qe "), "editor text: {text:?}");
         assert!(!text.contains("Find:"), "Triangle leaked: {text:?}");
     }

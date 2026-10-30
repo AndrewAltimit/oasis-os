@@ -208,8 +208,8 @@ pub struct Clipboard {
 }
 
 /// A target the user activated by clicking and that needs vfs to apply.
-/// `App::handle_click` doesn't get a vfs reference, so the click handler
-/// queues the action here and `App::refresh(vfs)` consumes it.
+/// The click hit-test queues the action here and `App::handle_click`
+/// applies it with its vfs right after.
 #[derive(Debug, Clone)]
 pub enum NavTarget {
     /// Navigate the active panel to this absolute path.

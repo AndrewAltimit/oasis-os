@@ -245,7 +245,7 @@ impl OasisWasm {
                         if self.fullscreen_app.as_deref() == Some(id.as_str()) {
                             self.fullscreen_app = None;
                         }
-                        self.open_runners.retain(|(rid, _)| *rid != id);
+                        self.drop_window_runner(&id);
                         if id == "browser" {
                             self.browser = None;
                             self.iframe.hide();
@@ -285,10 +285,15 @@ impl OasisWasm {
                             && let Some(win) = self.wm.get_window(&id)
                         {
                             let (_, _, cw, ch) = win.content_rect(self.wm.theme());
-                            let action = runner.handle_click(lx, ly, cw, ch, win.fullscreen_kiosk);
-                            // Apply any vfs work the click queued (e.g. file
-                            // manager folder navigation via pending_navigation).
-                            runner.refresh_app(&self.vfs);
+                            let action = runner.handle_click(
+                                lx,
+                                ly,
+                                cw,
+                                ch,
+                                win.fullscreen_kiosk,
+                                &self.active_theme,
+                                &self.vfs,
+                            );
                             if action == AppAction::RequestFullscreen
                                 && self.fullscreen_app.is_none()
                             {
@@ -355,7 +360,7 @@ impl OasisWasm {
                         self.fullscreen_app = None;
                     }
                     let _ = self.wm.close_window(&active_id, &mut self.sdi);
-                    self.open_runners.retain(|(rid, _)| *rid != active_id);
+                    self.drop_window_runner(&active_id);
                     if active_id == "browser" {
                         self.browser = None;
                         self.iframe.hide();
@@ -430,7 +435,14 @@ impl OasisWasm {
                         }
                     }
                 },
-                _ => {},
+                Some(id) => {
+                    if let Some((_, runner)) =
+                        self.open_runners.iter_mut().find(|(rid, _)| rid == id)
+                    {
+                        runner.handle_scroll(*delta, &self.vfs);
+                    }
+                },
+                None => {},
             },
             InputEvent::ButtonPress(btn) => {
                 if let Some(active_id) = self.wm.active_window().map(|s| s.to_string()) {
@@ -493,17 +505,34 @@ impl OasisWasm {
         }
     }
 
+    /// Drop window `id`'s runner after its window closed, releasing the
+    /// app's backend resources (textures) first.
+    pub(crate) fn drop_window_runner(&mut self, id: &str) {
+        if let Some(pos) = self.open_runners.iter().position(|(rid, _)| rid == id) {
+            let (_, mut runner) = self.open_runners.remove(pos);
+            runner.release_resources(&mut self.backend);
+        }
+    }
+
+    /// Drop the fullscreen (`Mode::App`) runner, releasing its backend
+    /// resources first.
+    fn drop_fullscreen_runner(&mut self) {
+        if let Some(mut runner) = self.app_runner.take() {
+            runner.release_resources(&mut self.backend);
+        }
+    }
+
     /// Apply an [`AppAction`] returned by the fullscreen (`Mode::App`) runner.
     fn apply_fullscreen_action(&mut self, action: AppAction) {
         match action {
             AppAction::Exit => {
                 AppRunner::hide_sdi(&mut self.sdi);
-                self.app_runner = None;
+                self.drop_fullscreen_runner();
                 self.mode = Mode::Dashboard;
             },
             AppAction::SwitchToTerminal => {
                 AppRunner::hide_sdi(&mut self.sdi);
-                self.app_runner = None;
+                self.drop_fullscreen_runner();
                 self.mode = Mode::Terminal;
             },
             AppAction::LaunchAppWithFile {
@@ -511,6 +540,7 @@ impl OasisWasm {
                 file_path,
             } => {
                 AppRunner::hide_sdi(&mut self.sdi);
+                self.drop_fullscreen_runner();
                 let entry = oasis_core::dashboard::AppEntry {
                     title: app_title.clone(),
                     path: format!("/apps/{app_title}"),
@@ -532,7 +562,7 @@ impl OasisWasm {
                     self.fullscreen_app = None;
                 }
                 let _ = self.wm.close_window(&active_id, &mut self.sdi);
-                self.open_runners.retain(|(rid, _)| *rid != active_id);
+                self.drop_window_runner(&active_id);
                 if self.wm.window_count() == 0 {
                     self.mode = Mode::Dashboard;
                 }

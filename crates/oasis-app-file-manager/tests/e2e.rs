@@ -393,3 +393,33 @@ fn fuzz_random_input_never_panics_or_escapes_window() {
         fuzz_app(&make, tree(), seed, 3000);
     }
 }
+
+/// Mouse wheel over the window (F14 item 10): each notch moves the
+/// selection one grid row through the default `handle_scroll`, the visible
+/// tiles follow in a long folder, and wheeling back returns to the top.
+#[test]
+fn wheel_scrolls_a_long_folder() {
+    let mut vfs = MemoryVfs::new();
+    for i in 0..60 {
+        vfs.write(&format!("/file{i:02}.txt"), b"x").unwrap();
+    }
+    let mut h = fm(vfs);
+    h.set_size(400, 240);
+    let selected = |h: &AppHarness| {
+        let p = &app(h).panels[app(h).active_panel];
+        p.scroll + p.cursor
+    };
+    let first = h.screen_text();
+    assert!(first.contains("file00"), "{first}");
+    assert_eq!(selected(&h), 0);
+
+    assert!(h.scroll(8));
+    let down = selected(&h);
+    assert!(down >= 8, "8 notches move 8 grid rows, got {down}");
+    let scrolled = h.screen_text();
+    assert!(!scrolled.contains("file00"), "view follows: {scrolled}");
+
+    assert!(h.scroll(-8));
+    assert_eq!(selected(&h), 0, "wheeling back returns to the top");
+    assert!(h.screen_text().contains("file00"));
+}

@@ -8,10 +8,7 @@ use super::runner::AppRunner;
 impl AppRunner {
     /// Render the app screen as SDI objects (single-display-interface mode).
     pub fn update_sdi(&mut self, sdi: &mut SdiRegistry, at: &ActiveTheme) {
-        // Delegate to extracted app.
-        if let Some(ref mut app) = self.delegate {
-            app.update_sdi(sdi, at);
-        }
+        self.delegate.update_sdi(sdi, at);
     }
 
     /// Hide all app-related SDI objects.

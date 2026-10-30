@@ -6,7 +6,7 @@
 
 use oasis_app_core::testing::{AppHarness, fuzz_app};
 use oasis_app_core::{App, AppAction};
-use oasis_app_radio::{PlayState, RadioApp};
+use oasis_app_radio::{PlayState, RadioApp, STATUS_POLL_MS};
 use oasis_audio::radio::station::StationRegistry;
 use oasis_audio::{RADIO_REQUEST_PATH, RADIO_STATUS_PATH};
 use oasis_types::input::{Button, Key};
@@ -34,23 +34,24 @@ fn radio() -> AppHarness {
     AppHarness::with_vfs(app, vfs)
 }
 
+/// The latest radio request since the last call (the host performs every
+/// queued request in order, so the last one is the resulting state).
 fn request(h: &mut AppHarness) -> Option<String> {
-    h.app_mut().take_pending_request().map(|(path, data)| {
+    let mut last = None;
+    while let Some((path, data)) = h.take_request() {
         assert_eq!(path, RADIO_REQUEST_PATH);
-        data
-    })
+        last = Some(data);
+    }
+    last
 }
 
 fn publish(h: &mut AppHarness, status: &str) {
     h.vfs_mut()
         .write(RADIO_STATUS_PATH, status.as_bytes())
         .unwrap();
-    // `oasis-app`'s radio controller calls `refresh` every frame while the
-    // radio is visible (the harness has no bare refresh, so swap the VFS
-    // out to lend it to the app).
-    let vfs = std::mem::replace(h.vfs_mut(), MemoryVfs::new());
-    h.app_mut().refresh(&vfs);
-    *h.vfs_mut() = vfs;
+    // The app polls the published status from `tick`, at most every
+    // `STATUS_POLL_MS`.
+    h.frame(STATUS_POLL_MS);
 }
 
 fn defaults() -> Vec<String> {

@@ -30,5 +30,16 @@ pub const TV_CHANNELS_PATH: &str = "/etc/tv/channels.toml";
 /// VFS path for TV playback requests (IPC).
 pub const TV_REQUEST_PATH: &str = "/var/tv/request";
 
+/// The `"{url} {seek_secs}"` part of a TV Guide tune request
+/// (`tune_url {url} {seek_secs}` at [`TV_REQUEST_PATH`]), or `None` for any
+/// other request. Hosts route these to their video player instead of
+/// writing them to the VFS.
+pub fn tune_url_request(req: &oasis_app_core::AppRequest) -> Option<&str> {
+    if req.path != TV_REQUEST_PATH {
+        return None;
+    }
+    req.data.strip_prefix("tune_url ")
+}
+
 /// VFS path for TV playback status (IPC).
 pub const TV_STATUS_PATH: &str = "/var/tv/status";
