@@ -105,82 +105,63 @@ pub enum ClipPush {
 /// The stack tracks whether a clip is currently active.  When no clip is
 /// active the first push simply activates the given rectangle.  Subsequent
 /// pushes intersect with the active clip.
-#[derive(Debug, Clone)]
+///
+/// "No clip" is stored as `None`, not as a full-viewport rectangle, so a
+/// pushed clip that happens to equal the viewport restores correctly and
+/// the stack never depends on a viewport size that can go stale on resize.
+#[derive(Debug, Clone, Default)]
 pub struct ClipStack {
-    /// Previous clip states (what to restore on pop).
-    stack: Vec<ClipRect>,
+    /// Previous clip states (what to restore on pop); `None` = no clip.
+    stack: Vec<Option<ClipRect>>,
     /// The current effective clip, or `None` if clipping is disabled.
     current: Option<ClipRect>,
-    /// Viewport dimensions -- used as the sentinel value for "no clip".
-    viewport_w: u32,
-    viewport_h: u32,
 }
 
 impl ClipStack {
-    /// Create a new clip stack for a viewport of the given size.
+    /// Create an empty clip stack.
+    ///
+    /// The viewport dimensions are ignored: they used to be the "no clip"
+    /// sentinel. The parameters are kept so existing backends compile
+    /// unchanged; new code should use [`ClipStack::default`].
     #[must_use]
-    pub fn new(viewport_w: u32, viewport_h: u32) -> Self {
-        Self {
-            stack: Vec::new(),
-            current: None,
-            viewport_w,
-            viewport_h,
-        }
+    pub fn new(_viewport_w: u32, _viewport_h: u32) -> Self {
+        Self::default()
     }
 
     /// Push a new clip rectangle (already translated by the caller).
     ///
     /// Returns what clip the backend should apply on the platform side.
     pub fn push(&mut self, clip: ClipRect) -> ClipPush {
-        if let Some(current) = self.current {
-            self.stack.push(current);
-            match current.intersect(&clip) {
-                Some(isect) => {
-                    self.current = Some(isect);
-                    ClipPush::Clip(isect)
-                },
-                None => {
-                    self.current = Some(ClipRect {
-                        x: 0,
-                        y: 0,
-                        w: 0,
-                        h: 0,
-                    });
-                    ClipPush::Empty
-                },
-            }
-        } else {
-            // No clip was active -- push a sentinel for the full viewport.
-            self.stack.push(ClipRect {
-                x: 0,
-                y: 0,
-                w: self.viewport_w,
-                h: self.viewport_h,
-            });
+        self.stack.push(self.current);
+        let Some(current) = self.current else {
             self.current = Some(clip);
-            ClipPush::Clip(clip)
+            return ClipPush::Clip(clip);
+        };
+        match current.intersect(&clip) {
+            Some(isect) => {
+                self.current = Some(isect);
+                ClipPush::Clip(isect)
+            },
+            None => {
+                self.current = Some(ClipRect {
+                    x: 0,
+                    y: 0,
+                    w: 0,
+                    h: 0,
+                });
+                ClipPush::Empty
+            },
         }
     }
 
     /// Pop the most recent clip.
     ///
     /// Returns `Some(clip)` with the restored clip rectangle, or `None` if
-    /// clipping should be disabled (either the stack was empty or the restored
-    /// state is the full-viewport sentinel).
+    /// clipping should be disabled (the stack was empty or no clip was
+    /// active before the matching push).
     pub fn pop(&mut self) -> Option<ClipRect> {
-        if let Some(prev) = self.stack.pop() {
-            if prev.x == 0 && prev.y == 0 && prev.w == self.viewport_w && prev.h == self.viewport_h
-            {
-                self.current = None;
-                None
-            } else {
-                self.current = Some(prev);
-                Some(prev)
-            }
-        } else {
-            self.current = None;
-            None
-        }
+        self.current = self.stack.pop().flatten();
+        self.current
     }
 
     /// The currently active clip rectangle, or `None` if clipping is disabled.
@@ -361,6 +342,31 @@ mod tests {
         let restored = cs.pop();
         assert!(restored.is_none());
         assert!(cs.current().is_none());
+    }
+
+    #[test]
+    fn clip_equal_to_viewport_restores() {
+        // A nested clip exactly the size of the viewport used to collide
+        // with the "no clip" sentinel and pop to `None`.
+        let mut cs = ClipStack::new(100, 100);
+        let outer = ClipRect {
+            x: 10,
+            y: 10,
+            w: 50,
+            h: 50,
+        };
+        let full = ClipRect {
+            x: 0,
+            y: 0,
+            w: 100,
+            h: 100,
+        };
+        cs.push(full);
+        cs.push(outer);
+        assert_eq!(cs.pop(), Some(full), "restores the full-size clip");
+        assert_eq!(cs.current(), Some(full));
+        assert_eq!(cs.pop(), None);
+        assert_eq!(cs.current(), None);
     }
 
     #[test]

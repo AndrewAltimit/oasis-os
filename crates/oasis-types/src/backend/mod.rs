@@ -13,6 +13,7 @@ mod audio;
 mod clipboard;
 mod extensions;
 mod input;
+mod macros;
 mod network;
 mod sdi_backend;
 mod sdi_core;
@@ -28,10 +29,9 @@ pub const DEFAULT_VIEWPORT_HEIGHT: u32 = 272;
 
 // -- types --
 pub use types::{
-    ArcParams, BITMAP_GLYPH_HEIGHT, BITMAP_GLYPH_WIDTH, BackendErrExt, BlendMode, Color, DashStyle,
-    DrawCommand, GradientStyle, RenderTargetId, StrokeStyle, TextMetrics, TextureId, arc_segments,
-    backend_require, bitmap_measure_text, cos_approx_f32, sin_approx_f32, texture_not_found,
-    validate_rgba_data,
+    ArcParams, BackendErrExt, BlendMode, Color, GradientStyle, RenderTargetId, StrokeStyle,
+    TextMetrics, TextureId, arc_segments, bitmap_measure_text, cos_approx_f32, sin_approx_f32,
+    texture_not_found, validate_rgba_data,
 };
 
 // -- core trait --
@@ -42,8 +42,8 @@ pub use sdi_backend::SdiBackend;
 
 // -- extension traits --
 pub use extensions::{
-    BatchRect, BatchText, GeometryVertex, SdiAlpha, SdiBatch, SdiBlendMode, SdiClipTransform,
-    SdiGeometry, SdiGradients, SdiRenderTarget, SdiShapes, SdiText, SdiTextures, SdiVector,
+    BatchRect, BatchText, SdiAlpha, SdiBatch, SdiClipTransform, SdiGradients, SdiRenderTarget,
+    SdiShapes, SdiText, SdiTextures, SdiVector,
 };
 
 // -- input --

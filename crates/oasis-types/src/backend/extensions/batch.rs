@@ -1,6 +1,4 @@
 //! `SdiBatch` extension trait.
-//!
-//! Extracted from the historical monolithic `extensions.rs`.
 
 use crate::backend::{Color, SdiCore};
 use crate::error::Result;
@@ -39,12 +37,18 @@ pub struct BatchRect {
 
 /// Batch rendering operations (begin/flush command queues).
 pub trait SdiBatch: SdiCore {
-    /// Begin recording draw commands into a batch.
+    /// Mark the start of a group of draw calls a backend may batch.
+    ///
+    /// Reserved hook: no backend overrides it today, so it is a no-op
+    /// everywhere. The browser's display-list replay brackets its draw
+    /// calls with `begin_batch` / `flush_batch` so a batching backend can
+    /// hook in without changing callers.
     fn begin_batch(&mut self) -> Result<()> {
         Ok(())
     }
 
-    /// Flush and execute all batched draw commands.
+    /// Mark the end of a group started by [`Self::begin_batch`]; a no-op
+    /// unless a backend overrides it.
     fn flush_batch(&mut self) -> Result<()> {
         Ok(())
     }

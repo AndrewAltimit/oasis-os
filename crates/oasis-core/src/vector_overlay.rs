@@ -583,7 +583,7 @@ mod tests {
 
     #[test]
     fn static_layers_bake_and_composite() {
-        use oasis_types::backend::DrawCommand;
+        use oasis_test_backend::DrawCommand;
 
         // One static grid + one animated sweep. On a backend with
         // render-target support the static layer bakes once (create /
@@ -666,7 +666,7 @@ mod tests {
 
     #[test]
     fn invalidate_destroys_baked_targets_on_next_render() {
-        use oasis_types::backend::DrawCommand;
+        use oasis_test_backend::DrawCommand;
 
         let layers = vec![grid_layer()];
         let mut rec = oasis_test_backend::RecordingBackend::new(480, 272);
@@ -705,7 +705,7 @@ mod tests {
 
     #[test]
     fn resize_rebakes_at_new_dimensions() {
-        use oasis_types::backend::DrawCommand;
+        use oasis_test_backend::DrawCommand;
 
         let layers = vec![grid_layer()];
         let mut rec = oasis_test_backend::RecordingBackend::new(1024, 768);
@@ -740,7 +740,7 @@ mod tests {
 
     #[test]
     fn over_budget_static_layer_is_not_composited() {
-        use oasis_types::backend::DrawCommand;
+        use oasis_test_backend::DrawCommand;
 
         // A dense grid whose primitive count exceeds the budget must be
         // dropped entirely — no composite, matching the uncached path.

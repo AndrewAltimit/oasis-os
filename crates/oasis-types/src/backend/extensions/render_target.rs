@@ -1,9 +1,12 @@
 //! `SdiRenderTarget` extension trait.
-//!
-//! Extracted from the historical monolithic `extensions.rs`.
 
 use crate::backend::{BlendMode, RenderTargetId, SdiCore};
-use crate::error::{OasisError, Result};
+use crate::error::{BackendError, OasisError, Result};
+
+/// The error the unimplemented defaults return.
+fn unsupported(op: &'static str) -> OasisError {
+    OasisError::Backend(BackendError::Unsupported { op })
+}
 
 // ---------------------------------------------------------------------------
 // SdiRenderTarget
@@ -17,8 +20,8 @@ use crate::error::{OasisError, Result};
 /// properties need the same primitive: render-to-texture +
 /// composite-back.
 ///
-/// All `Result`-returning methods default to `Err(OasisError::Backend("...not
-/// supported"))` except [`destroy_render_target`](Self::destroy_render_target)
+/// All `Result`-returning methods default to
+/// `Err(OasisError::Backend(BackendError::Unsupported { .. }))` except [`destroy_render_target`](Self::destroy_render_target)
 /// which defaults to `Ok(())` for opt-out backends.  Capability probes
 /// ([`supports_render_targets`](Self::supports_render_targets),
 /// [`supports_render_target_readback`](Self::supports_render_target_readback))
@@ -51,7 +54,7 @@ pub trait SdiRenderTarget: SdiCore {
     /// that cannot satisfy the request (e.g. PSP out of VRAM) return
     /// `Err`.
     fn create_render_target(&mut self, _w: u32, _h: u32) -> Result<RenderTargetId> {
-        Err(OasisError::Backend("render targets not supported".into()))
+        Err(unsupported("render targets"))
     }
 
     /// Redirect all subsequent draw calls into the given render target.
@@ -60,7 +63,7 @@ pub trait SdiRenderTarget: SdiCore {
     /// active target) onto an internal stack and clear the clip on the
     /// new target.  Calls are nestable.
     fn bind_render_target(&mut self, _id: RenderTargetId) -> Result<()> {
-        Err(OasisError::Backend("render targets not supported".into()))
+        Err(unsupported("render targets"))
     }
 
     /// Pop the most recent [`bind_render_target`](Self::bind_render_target).
@@ -69,7 +72,7 @@ pub trait SdiRenderTarget: SdiCore {
     /// `bind_render_target` was called.  After the outermost pop,
     /// drawing returns to the framebuffer.
     fn unbind_render_target(&mut self) -> Result<()> {
-        Err(OasisError::Backend("render targets not supported".into()))
+        Err(unsupported("render targets"))
     }
 
     /// Composite a render target into the *currently bound* surface
@@ -93,7 +96,7 @@ pub trait SdiRenderTarget: SdiCore {
             (0.0..=1.0).contains(&_opacity),
             "opacity must be in [0.0, 1.0], got {_opacity}"
         );
-        Err(OasisError::Backend("render targets not supported".into()))
+        Err(unsupported("render targets"))
     }
 
     /// Composite a render target whose pixels hold *premultiplied*
@@ -119,9 +122,7 @@ pub trait SdiRenderTarget: SdiCore {
         _dst_w: u32,
         _dst_h: u32,
     ) -> Result<()> {
-        Err(OasisError::Backend(
-            "premultiplied render-target composite not supported".into(),
-        ))
+        Err(unsupported("premultiplied render-target composite"))
     }
 
     /// Read RGBA8 pixels back from a render target into a
@@ -138,9 +139,7 @@ pub trait SdiRenderTarget: SdiCore {
     /// `dst.len()` must equal the render target's width * height * 4
     /// (the dimensions passed to [`create_render_target`](Self::create_render_target)).
     fn read_render_target(&mut self, _id: RenderTargetId, _dst: &mut [u8]) -> Result<()> {
-        Err(OasisError::Backend(
-            "render-target readback not supported".into(),
-        ))
+        Err(unsupported("render-target readback"))
     }
 
     /// Release a render target previously created with

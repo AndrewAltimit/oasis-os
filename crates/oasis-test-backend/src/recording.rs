@@ -4,10 +4,10 @@
 //! clip/translate stack management so that `SdiBackend` default methods
 //! can be tested end-to-end.
 
+use crate::DrawCommand;
 use oasis_types::backend::{
-    BlendMode, Color, DrawCommand, RenderTargetId, SdiAlpha, SdiBatch, SdiClipTransform, SdiCore,
-    SdiGradients, SdiRenderTarget, SdiShapes, SdiText, SdiTextures, SdiVector, TextureId,
-    bitmap_measure_text,
+    BlendMode, Color, RenderTargetId, SdiAlpha, SdiBatch, SdiClipTransform, SdiCore, SdiGradients,
+    SdiRenderTarget, SdiShapes, SdiText, SdiTextures, SdiVector, TextureId, bitmap_measure_text,
     stacks::{ClipStack, TranslateStack},
 };
 use oasis_types::error::{OasisError, Result};

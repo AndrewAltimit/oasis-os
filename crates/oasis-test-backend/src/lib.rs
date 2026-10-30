@@ -16,17 +16,19 @@
 //! (SDL3, the UE5 software framebuffer) run to prove they render alike.
 
 mod audit;
+mod command;
 pub mod conformance;
 mod mock;
 mod recording;
 
 pub use audit::{ClipAuditBackend, ClipViolation, DrawnRect, DrawnText};
+pub use command::DrawCommand;
 pub use mock::MockSdiCore;
 pub use recording::RecordingBackend;
 
 // Re-export commonly used types so test code does not need to depend on
 // oasis-types directly for basic assertions.
-pub use oasis_types::backend::{Color, DrawCommand, GradientStyle, TextureId};
+pub use oasis_types::backend::{Color, GradientStyle, TextureId};
 
 #[cfg(test)]
 mod tests {
@@ -118,26 +120,28 @@ mod tests {
     // -----------------------------------------------------------------------
 
     #[test]
-    fn recording_fill_rounded_rect_falls_back_to_fill_rect() {
+    fn recording_fill_rounded_rect_default_emits_spans() {
         let mut rec = RecordingBackend::new(480, 272);
         rec.fill_rounded_rect(10, 20, 100, 50, 8, Color::rgb(0, 128, 255))
             .expect("fill_rounded_rect");
 
+        // The default emits the corner rows as spans plus one merged body
+        // rect, all inside the bounds and in the requested colour.
         let cmds = rec.commands();
-        // The default implementation falls back to a single fill_rect.
-        assert_eq!(cmds.len(), 1);
-        match &cmds[0] {
-            DrawCommand::FillRect {
-                x, y, w, h, color, ..
-            } => {
-                assert_eq!(*x, 10);
-                assert_eq!(*y, 20);
-                assert_eq!(*w, 100);
-                assert_eq!(*h, 50);
-                assert_eq!(*color, Color::rgb(0, 128, 255));
-            },
-            other => panic!("expected FillRect, got {other:?}"),
+        assert!(cmds.len() > 1);
+        let mut widest = 0;
+        for cmd in cmds {
+            match cmd {
+                DrawCommand::FillRect { x, y, w, h, color } => {
+                    assert!(*x >= 10 && *x + *w as i32 <= 110, "{cmd:?}");
+                    assert!(*y >= 20 && *y + *h as i32 <= 70, "{cmd:?}");
+                    assert_eq!(*color, Color::rgb(0, 128, 255));
+                    widest = widest.max(*w);
+                },
+                other => panic!("expected FillRect, got {other:?}"),
+            }
         }
+        assert_eq!(widest, 100);
     }
 
     #[test]
@@ -147,13 +151,14 @@ mod tests {
         rec.draw_line(10, 50, 100, 50, 2, color).expect("draw_line");
 
         let cmds = rec.commands();
-        // Horizontal line -> single fill_rect.
+        // Horizontal line -> single fill_rect covering both endpoints, the
+        // 2 px brush centred on the line (rows 49..=50).
         assert_eq!(cmds.len(), 1);
         match &cmds[0] {
             DrawCommand::FillRect { x, y, w, h, .. } => {
-                assert_eq!(*x, 10);
-                assert_eq!(*y, 50);
-                assert_eq!(*w, 90); // |100 - 10| = 90
+                assert_eq!(*x, 9);
+                assert_eq!(*y, 49);
+                assert_eq!(*w, 92);
                 assert_eq!(*h, 2); // line width
             },
             other => panic!("expected FillRect, got {other:?}"),
@@ -167,14 +172,14 @@ mod tests {
         rec.draw_line(50, 10, 50, 100, 3, color).expect("draw_line");
 
         let cmds = rec.commands();
-        // Vertical line -> single fill_rect.
+        // Vertical line -> single fill_rect, endpoints included.
         assert_eq!(cmds.len(), 1);
         match &cmds[0] {
             DrawCommand::FillRect { x, y, w, h, .. } => {
-                assert_eq!(*x, 50);
-                assert_eq!(*y, 10);
+                assert_eq!(*x, 49);
+                assert_eq!(*y, 9);
                 assert_eq!(*w, 3); // line width
-                assert_eq!(*h, 90); // |100 - 10| = 90
+                assert_eq!(*h, 93); // rows 9..=101
             },
             other => panic!("expected FillRect, got {other:?}"),
         }

@@ -42,6 +42,16 @@ pub enum BackendError {
     #[error("texture not found: {id}")]
     TextureNotFound { id: u64 },
 
+    /// The backend does not implement this optional operation (e.g. the
+    /// `SdiRenderTarget` defaults). Callers can match on it to fall back
+    /// instead of treating it as a real failure.
+    #[error("{op} not supported")]
+    Unsupported { op: &'static str },
+
+    /// A referenced render-target ID does not exist.
+    #[error("render target not found: {id}")]
+    RenderTargetNotFound { id: u64 },
+
     /// Catch-all for backend errors without a dedicated variant.
     #[error("{0}")]
     Other(String),
@@ -309,6 +319,16 @@ mod tests {
         assert_eq!(format!("{}", BackendError::NotListening), "not listening");
         let t = BackendError::TextureNotFound { id: 42 };
         assert_eq!(format!("{t}"), "texture not found: 42");
+    }
+
+    #[test]
+    fn backend_error_unsupported_and_render_target_not_found() {
+        let u = BackendError::Unsupported {
+            op: "render targets",
+        };
+        assert_eq!(format!("{u}"), "render targets not supported");
+        let r = BackendError::RenderTargetNotFound { id: 7 };
+        assert_eq!(format!("{r}"), "render target not found: 7");
     }
 
     #[test]

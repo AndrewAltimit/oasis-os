@@ -1,6 +1,4 @@
 //! `SdiGradients` extension trait.
-//!
-//! Extracted from the historical monolithic `extensions.rs`.
 
 use crate::backend::{GradientStyle, SdiCore};
 use crate::error::Result;
