@@ -185,19 +185,25 @@ pub trait Command {
 /// persisted history file).
 pub(crate) const MAX_HISTORY: usize = 500;
 
-/// Maximum shell function call depth (prevents infinite recursion).
-pub(crate) const MAX_CALL_DEPTH: usize = 64;
+/// Maximum shell function call depth (prevents infinite recursion). Below
+/// [`MAX_EXEC_DEPTH`] so runaway recursion reports this, clearer, limit.
+pub(crate) const MAX_CALL_DEPTH: usize = 24;
 
 /// Maximum nesting of `run <script>` (a script running itself would
-/// otherwise recurse until the host's stack overflows).
-pub(crate) const MAX_SCRIPT_DEPTH: usize = 16;
+/// otherwise recurse until the host's stack overflows). Each level also
+/// takes two [`MAX_EXEC_DEPTH`] levels.
+pub(crate) const MAX_SCRIPT_DEPTH: usize = 8;
 
-/// Maximum nesting of [`CommandRegistry::execute`] calls (`$(...)` inside
-/// `$(...)`, functions, scripts, compound bodies). Each level costs host
-/// stack, and the shell also runs on a PSP with a small one.
+/// Maximum shell nesting: [`CommandRegistry::execute`] calls (`$(...)`
+/// inside `$(...)`, function calls, scripts) plus the `if` / loop / `case`
+/// blocks they run, all counted together. Each level recurses on the host
+/// stack: about 2.5 KiB in an optimized build and 11 KiB in a debug one
+/// (measured by `tests/stack_depth.rs`), so 32 levels take ~80 KiB of the
+/// 256 KiB main-thread stack of a PSP EBOOT, and ~350 KiB of a debug
+/// desktop build's 1 MiB Windows main thread.
 ///
 /// [`CommandRegistry::execute`]: crate::CommandRegistry::execute
-pub(crate) const MAX_EXEC_DEPTH: usize = 96;
+pub const MAX_EXEC_DEPTH: usize = 32;
 
 /// Maximum simple commands one top-level command line may run, across all
 /// loops, functions and scripts it starts. Bounds nested loops (the

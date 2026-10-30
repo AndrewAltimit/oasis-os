@@ -16,6 +16,7 @@ mod dev_commands;
 mod doc_commands;
 mod executor;
 pub(crate) mod expander;
+mod expansion;
 mod file_commands;
 mod fun_commands;
 pub mod highlight;
@@ -90,6 +91,9 @@ pub use ui_commands::register_ui_commands;
 
 pub mod cmd_helpers;
 pub use cmd_helpers::{require_args, require_args_exact, time_seed};
+/// How deeply shell constructs may nest (`$(...)`, function calls, scripts,
+/// `if` / loop / `case` blocks, all together).
+pub use types::MAX_EXEC_DEPTH;
 /// What [`Command::execute`] returns (the alias `define_command!` expands to).
 pub type CommandResult = oasis_types::error::Result<CommandOutput>;
 /// Shell job (background or stopped command).

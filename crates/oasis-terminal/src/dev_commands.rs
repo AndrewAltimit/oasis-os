@@ -1,11 +1,9 @@
-//! Developer tool commands: base64, json, uuid, seq, expr, test, xargs.
+//! Developer tool commands: base64, json, uuid, seq, expr, test and `[`.
 
-use oasis_types::error::OasisError;
-#[cfg(test)]
-use oasis_types::error::Result;
+use oasis_types::error::{OasisError, Result};
 use oasis_types::util::base64;
 
-use crate::interpreter::CommandOutput;
+use crate::interpreter::{CommandOutput, Environment};
 
 use crate::cmd_helpers::time_seed;
 
@@ -464,126 +462,92 @@ fn parse_primary(
 }
 
 // ---------------------------------------------------------------------------
-// test
+// test / [
 // ---------------------------------------------------------------------------
+
+/// Evaluate a `test` expression: `! EXPR`, a unary file / string test, a
+/// binary comparison, or a single non-empty string.
+fn eval_test(args: &[&str], env: &mut Environment<'_>) -> Result<bool> {
+    if let Some((&"!", rest)) = args.split_first() {
+        return eval_test(rest, env).map(|b| !b);
+    }
+    let kind = |path: &str, env: &mut Environment<'_>| {
+        let full = crate::interpreter::resolve_path(&env.cwd, path);
+        env.vfs.stat(&full).ok().map(|m| m.kind)
+    };
+    let num = |s: &str| -> Result<i64> {
+        s.trim()
+            .parse()
+            .map_err(|_| OasisError::Command(format!("test: {s}: integer expected").into()))
+    };
+    Ok(match args {
+        [] => false,
+        [s] => !s.is_empty(),
+        ["-e", path] => kind(path, env).is_some(),
+        ["-f", path] => kind(path, env) == Some(oasis_vfs::EntryKind::File),
+        ["-d", path] => kind(path, env) == Some(oasis_vfs::EntryKind::Directory),
+        ["-n", s] => !s.is_empty(),
+        ["-z", s] => s.is_empty(),
+        [a, op, b] => match *op {
+            "=" | "==" => a == b,
+            "!=" => a != b,
+            "-eq" => num(a)? == num(b)?,
+            "-ne" => num(a)? != num(b)?,
+            "-lt" => num(a)? < num(b)?,
+            "-le" => num(a)? <= num(b)?,
+            "-gt" => num(a)? > num(b)?,
+            "-ge" => num(a)? >= num(b)?,
+            _ => {
+                return Err(OasisError::Command(
+                    format!("test: {op}: unknown operator").into(),
+                ));
+            },
+        },
+        _ => {
+            return Err(OasisError::Command(
+                format!("test: too many arguments: {}", args.join(" ")).into(),
+            ));
+        },
+    })
+}
+
+/// Run `test` on `args`: no output, exit status 0 (true) or 1 (false).
+/// A malformed expression is an error (status 1, message on the terminal).
+fn run_test(args: &[&str], env: &mut Environment<'_>) -> Result<CommandOutput> {
+    let truth = eval_test(args, env)?;
+    Ok(CommandOutput::status(
+        i32::from(!truth),
+        CommandOutput::None,
+    ))
+}
 
 define_command!(
     TestCmd,
     "test",
-    "Evaluate conditional expression",
-    "test <expr> | test -f <file> | test -d <dir> | test <a> = <b>",
+    "Evaluate a condition; exit status 0 if true, 1 if false",
+    "test [!] <-e|-f|-d path | -n|-z str | a =|!=|-eq|-ne|-lt|-le|-gt|-ge b | str>",
     "dev",
-    |args, env| {
-        if args.is_empty() {
-            return Ok(CommandOutput::status(
-                1,
-                CommandOutput::Text("false".to_string()),
-            ));
-        }
-        let result = match args[0] {
-            "-f" => {
-                let path = args
-                    .get(1)
-                    .ok_or_else(|| OasisError::Command("usage: test -f <file>".into()))?;
-                let full = crate::interpreter::resolve_path(&env.cwd, path);
-                env.vfs.exists(&full)
-                    && env
-                        .vfs
-                        .stat(&full)
-                        .map(|m| m.kind == oasis_vfs::EntryKind::File)
-                        .unwrap_or(false)
-            },
-            "-d" => {
-                let path = args
-                    .get(1)
-                    .ok_or_else(|| OasisError::Command("usage: test -d <dir>".into()))?;
-                let full = crate::interpreter::resolve_path(&env.cwd, path);
-                env.vfs.exists(&full)
-                    && env
-                        .vfs
-                        .stat(&full)
-                        .map(|m| m.kind == oasis_vfs::EntryKind::Directory)
-                        .unwrap_or(false)
-            },
-            "-n" => args.get(1).is_some_and(|s| !s.is_empty()),
-            "-z" => args.get(1).is_none_or(|s| s.is_empty()),
-            _ => {
-                if args.len() >= 3 {
-                    match args[1] {
-                        "=" | "==" => args[0] == args[2],
-                        "!=" => args[0] != args[2],
-                        "-eq" => {
-                            let a: i64 = args[0].parse().unwrap_or(0);
-                            let b: i64 = args[2].parse().unwrap_or(0);
-                            a == b
-                        },
-                        "-ne" => {
-                            let a: i64 = args[0].parse().unwrap_or(0);
-                            let b: i64 = args[2].parse().unwrap_or(0);
-                            a != b
-                        },
-                        "-lt" => {
-                            let a: i64 = args[0].parse().unwrap_or(0);
-                            let b: i64 = args[2].parse().unwrap_or(0);
-                            a < b
-                        },
-                        "-gt" => {
-                            let a: i64 = args[0].parse().unwrap_or(0);
-                            let b: i64 = args[2].parse().unwrap_or(0);
-                            a > b
-                        },
-                        _ => !args[0].is_empty(),
-                    }
-                } else {
-                    !args[0].is_empty()
-                }
-            },
-        };
-        // Print the verdict and exit 1 on false, so `test ... && cmd`,
-        // `||` and `$?` behave as in a POSIX shell.
-        let text = CommandOutput::Text(if result { "true" } else { "false" }.to_string());
-        Ok(CommandOutput::status(if result { 0 } else { 1 }, text))
-    }
+    |args, env| { run_test(args, env) }
 );
 
-// ---------------------------------------------------------------------------
-// xargs
-// ---------------------------------------------------------------------------
-
 define_command!(
-    XargsCmd,
-    "xargs",
-    "Build command from stdin lines",
-    "xargs <command>",
+    BracketCmd,
+    "[",
+    "Same as test; the last argument must be ]",
+    "[ <expression> ]",
     "dev",
     |args, env| {
-        if args.is_empty() {
-            return Err(OasisError::Command("usage: xargs <command>".into()));
+        match args.split_last() {
+            Some((&"]", expr)) => run_test(expr, env),
+            _ => Err(OasisError::Command("[: missing ']'".into())),
         }
-        let base_cmd = args.join(" ");
-        let input = env.stdin.clone().unwrap_or_default();
-        let items: Vec<&str> = input
-            .lines()
-            .map(|l| l.trim())
-            .filter(|l| !l.is_empty())
-            .collect();
-
-        if items.is_empty() {
-            return Ok(CommandOutput::Text("(no input for xargs)".to_string()));
-        }
-
-        // Build the expanded command line.
-        let full_cmd = format!("{base_cmd} {}", items.join(" "));
-        Ok(CommandOutput::Text(format!(
-            "xargs: would execute: {full_cmd}"
-        )))
     }
 );
 
 register_commands!(
     register_dev_commands,
     [
-        Base64Cmd, JsonCmd, UuidCmd, SeqCmd, ExprCmd, TestCmd, XargsCmd,
+        Base64Cmd, JsonCmd, UuidCmd, SeqCmd, ExprCmd, TestCmd, BracketCmd,
     ]
 );
 
@@ -702,60 +666,61 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_file_exists() {
+    /// Exit status of `expr` run through `test` (0 = true), checking that
+    /// `test` prints nothing.
+    fn test_status(vfs: &mut MemoryVfs, expr: &str) -> i32 {
         let mut reg = CommandRegistry::new();
         register_dev_commands(&mut reg);
+        let out = exec(&reg, vfs, &format!("test {expr}")).unwrap();
+        assert!(matches!(out, CommandOutput::None), "{out:?}");
+        reg.last_exit_code()
+    }
+
+    #[test]
+    fn test_files_and_dirs() {
         let mut vfs = MemoryVfs::new();
         vfs.write("/test.txt", b"data").unwrap();
-        assert_eq!(
-            assert_text!(exec(&reg, &mut vfs, "test -f /test.txt").unwrap()),
-            "true"
-        );
-    }
-
-    #[test]
-    fn test_file_missing() {
-        let mut reg = CommandRegistry::new();
-        register_dev_commands(&mut reg);
-        let mut vfs = MemoryVfs::new();
-        assert_eq!(
-            assert_text!(exec(&reg, &mut vfs, "test -f /nope.txt").unwrap()),
-            "false"
-        );
-    }
-
-    #[test]
-    fn test_dir() {
-        let mut reg = CommandRegistry::new();
-        register_dev_commands(&mut reg);
-        let mut vfs = MemoryVfs::new();
         vfs.mkdir("/tmp").unwrap();
-        assert_eq!(
-            assert_text!(exec(&reg, &mut vfs, "test -d /tmp").unwrap()),
-            "true"
-        );
+        assert_eq!(test_status(&mut vfs, "-f /test.txt"), 0);
+        assert_eq!(test_status(&mut vfs, "-f /nope.txt"), 1);
+        assert_eq!(test_status(&mut vfs, "-f /tmp"), 1);
+        assert_eq!(test_status(&mut vfs, "-d /tmp"), 0);
+        assert_eq!(test_status(&mut vfs, "-e /tmp"), 0);
+        assert_eq!(test_status(&mut vfs, "! -e /tmp"), 1);
     }
 
     #[test]
-    fn test_string_eq() {
-        let mut reg = CommandRegistry::new();
-        register_dev_commands(&mut reg);
+    fn test_strings_and_numbers() {
         let mut vfs = MemoryVfs::new();
-        assert_eq!(
-            assert_text!(exec(&reg, &mut vfs, "test foo = foo").unwrap()),
-            "true"
-        );
+        assert_eq!(test_status(&mut vfs, "foo = foo"), 0);
+        assert_eq!(test_status(&mut vfs, "foo != foo"), 1);
+        assert_eq!(test_status(&mut vfs, "3 -lt 5"), 0);
+        assert_eq!(test_status(&mut vfs, "5 -le 5"), 0);
+        assert_eq!(test_status(&mut vfs, "5 -gt 5"), 1);
+        assert_eq!(test_status(&mut vfs, "-z ''"), 0);
+        assert_eq!(test_status(&mut vfs, "-n ''"), 1);
+        assert_eq!(test_status(&mut vfs, "''"), 1);
+        assert_eq!(test_status(&mut vfs, ""), 1);
     }
 
     #[test]
-    fn test_numeric_lt() {
+    fn test_rejects_bad_expressions() {
         let mut reg = CommandRegistry::new();
         register_dev_commands(&mut reg);
         let mut vfs = MemoryVfs::new();
-        assert_eq!(
-            assert_text!(exec(&reg, &mut vfs, "test 3 -lt 5").unwrap()),
-            "true"
-        );
+        assert!(exec(&reg, &mut vfs, "test x -lt 3").is_err());
+        assert!(exec(&reg, &mut vfs, "test a -wat b").is_err());
+        assert!(exec(&reg, &mut vfs, "[ a = a").is_err());
+    }
+
+    #[test]
+    fn bracket_form() {
+        let mut reg = CommandRegistry::new();
+        register_dev_commands(&mut reg);
+        let mut vfs = MemoryVfs::new();
+        exec(&reg, &mut vfs, "[ a = a ]").unwrap();
+        assert_eq!(reg.last_exit_code(), 0);
+        exec(&reg, &mut vfs, "[ a = b ]").unwrap();
+        assert_eq!(reg.last_exit_code(), 1);
     }
 }

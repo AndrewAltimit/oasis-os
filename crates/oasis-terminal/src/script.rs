@@ -21,7 +21,7 @@
 
 use oasis_types::error::{OasisError, Result};
 
-use crate::expander::{case_pattern_matches, expand_words, resolve_path, tokenize_words};
+use crate::expander::{case_pattern_matches, expand_words, resolve_path};
 use crate::interpreter::{CommandOutput, CommandRegistry, Environment};
 
 /// Maximum iterations for a single `while` / `until` loop.
@@ -155,6 +155,15 @@ pub(crate) fn split_statements(src: &str) -> Vec<Stmt> {
                 } else {
                     flush(&mut cur, &mut out, start_line);
                 }
+            },
+            // A lone `&` ends a statement (keeping the `&`, which the
+            // chain executor turns into a background job): `do cmd & done`.
+            '&' if !nested
+                && chars.peek().is_none_or(|&n| n != '&' && n != '>')
+                && !cur.ends_with(['&', '>', '<']) =>
+            {
+                cur.push(c);
+                flush(&mut cur, &mut out, start_line);
             },
             ';' if !nested => {
                 flush(&mut cur, &mut out, start_line);
@@ -756,12 +765,36 @@ impl CommandRegistry {
     }
 
     fn run_node(&self, node: &Node, env: &mut Environment<'_>, ctx: &mut ExecCtx) {
-        match node {
-            Node::Simple { text, line } => match self.execute_chain(text, env) {
+        if let Node::Simple { text, line } = node {
+            match self.execute_chain(text, env) {
                 Ok(CommandOutput::None) => {},
                 Ok(output) => ctx.push(output),
                 Err(e) => self.report_error(&e, *line, ctx),
-            },
+            }
+            return;
+        }
+        // A block recurses on the host stack like a nested `execute`, so it
+        // counts against the same nesting limit.
+        let depth = self.exec_depth.get();
+        if depth >= crate::types::MAX_EXEC_DEPTH {
+            let e = OasisError::Command(
+                format!(
+                    "maximum nesting depth ({}) exceeded",
+                    crate::types::MAX_EXEC_DEPTH
+                )
+                .into(),
+            );
+            return self.report_error(&e, 0, ctx);
+        }
+        self.exec_depth.set(depth + 1);
+        self.run_block(node, env, ctx);
+        self.exec_depth.set(depth);
+    }
+
+    /// Run an `if` / loop / `case` node (see [`run_node`](Self::run_node)).
+    fn run_block(&self, node: &Node, env: &mut Environment<'_>, ctx: &mut ExecCtx) {
+        match node {
+            Node::Simple { .. } => {},
             Node::If {
                 branches,
                 else_body,
@@ -772,12 +805,17 @@ impl CommandRegistry {
                         return;
                     }
                 }
-                if let Some(body) = else_body {
-                    self.run_nodes(body, env, ctx);
+                match else_body {
+                    Some(body) => self.run_nodes(body, env, ctx),
+                    // No branch ran: the `if` itself succeeds.
+                    None => self.set_status(0),
                 }
             },
             Node::Loop { cond, until, body } => {
                 let mut iterations = 0;
+                // A loop whose body never runs exits 0, not with the
+                // status of its final (failed) condition.
+                let mut body_status = 0;
                 loop {
                     if self.over_budget() {
                         break;
@@ -793,9 +831,14 @@ impl CommandRegistry {
                     if self.eval_condition(cond, env, ctx) == *until {
                         break;
                     }
-                    if self.run_loop_body(body, env, ctx) {
+                    let stop = self.run_loop_body(body, env, ctx);
+                    body_status = self.last_exit_code.get();
+                    if stop {
                         break;
                     }
+                }
+                if !self.return_flag.get() {
+                    self.set_status(body_status);
                 }
             },
             Node::For { var, words, body } => {
@@ -842,47 +885,18 @@ impl CommandRegistry {
     /// Expand a word list the way the shell expands command arguments:
     /// `$(...)`, variables, quote removal, braces and globs.
     fn expand_words(&self, words: &str, env: &mut Environment<'_>) -> Result<Vec<String>> {
-        let subst = self.expand_substitutions(words, env)?;
-        let vars = self.expand_variables(&subst, &env.cwd)?;
-        let words = tokenize_words(&vars)?;
+        let words = self.expand_words_of(words, env)?;
         Ok(expand_words(words, env.vfs, &env.cwd))
     }
 
     /// Evaluate a condition list for `if` / `elif` / `while` / `until`.
     ///
-    /// All statements run (their output is suppressed); the last one
-    /// decides. A simple command is true when it succeeds with exit code 0
-    /// and does not print `false` / `1` / nothing (the built-in `test`
-    /// prints `true` / `false`). A leading `!` negates the result.
-    fn eval_condition(&self, cond: &[Node], env: &mut Environment<'_>, ctx: &ExecCtx) -> bool {
-        let Some((last, init)) = cond.split_last() else {
-            return true;
-        };
-        let mut scratch = ExecCtx::new(ctx.script);
-        self.run_nodes(init, env, &mut scratch);
-        match last {
-            Node::Simple { text, .. } => {
-                let (negate, text) = match text.strip_prefix('!') {
-                    Some(rest) if rest.starts_with(char::is_whitespace) => (true, rest.trim()),
-                    _ => (false, text.as_str()),
-                };
-                let result = self.execute_chain(text, env);
-                let truth = match &result {
-                    Err(_) => false,
-                    Ok(_) if self.last_exit_code.get() != 0 => false,
-                    Ok(CommandOutput::Text(t)) => {
-                        let t = t.trim();
-                        !(t.is_empty() || t == "false" || t == "1")
-                    },
-                    Ok(_) => true,
-                };
-                truth != negate
-            },
-            compound => {
-                self.run_node(compound, env, &mut scratch);
-                self.last_exit_code.get() == 0
-            },
-        }
+    /// The statements run like any others (their output is shown); the
+    /// exit status of the last one decides: 0 is true. `! cmd` negates,
+    /// `a && b` / `a || b` combine, as everywhere else.
+    fn eval_condition(&self, cond: &[Node], env: &mut Environment<'_>, ctx: &mut ExecCtx) -> bool {
+        self.run_nodes(cond, env, ctx);
+        self.last_exit_code.get() == 0
     }
 }
 

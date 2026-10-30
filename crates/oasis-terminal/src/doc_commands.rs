@@ -121,10 +121,13 @@ const LESSONS: &[(&str, &str)] = &[
                             do\n\
                               commands\n\
                             done\n\n\
-         Conditions use the 'test' command:\n\
+         A condition is true when its command exits 0\n\
+         (see $?). 'test' / '[ ... ]' only set the status:\n\
          test -f /path   (file exists)\n\
-         test -d /path   (directory exists)\n\
-         test a = b      (string equality)",
+         [ -d /path ]    (directory exists)\n\
+         test a = b      (string equality)\n\
+         ! cmd           (negate a status)\n\
+         cmd &           (run cmd later, as a job)",
     ),
     (
         "Tips & Tricks",

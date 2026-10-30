@@ -135,9 +135,16 @@ define_command!(
         }
 
         if count_only {
-            Ok(CommandOutput::Text(format!("{}", matches.len())))
+            let code = i32::from(matches.is_empty());
+            Ok(CommandOutput::status(
+                code,
+                CommandOutput::Text(format!("{}", matches.len())),
+            ))
         } else if matches.is_empty() {
-            Ok(CommandOutput::Text("(no matches)".to_string()))
+            Ok(CommandOutput::status(
+                1,
+                CommandOutput::Text("(no matches)".to_string()),
+            ))
         } else {
             Ok(CommandOutput::Text(matches.join("\n")))
         }
@@ -465,7 +472,11 @@ define_command!(
         if output.is_empty() {
             Ok(CommandOutput::Text("Files are identical.".to_string()))
         } else {
-            Ok(CommandOutput::Text(output.join("\n")))
+            // Exit 1 when the files differ, as POSIX diff does.
+            Ok(CommandOutput::status(
+                1,
+                CommandOutput::Text(output.join("\n")),
+            ))
         }
     }
 );
