@@ -506,6 +506,30 @@ fn max_age_zero_logout_deletes_the_session_cookie() {
 }
 
 #[test]
+fn redirect_307_keeps_the_post_body_and_303_drops_it() {
+    let server = TestServer::start(|req| match req.path() {
+        "/" => Reply::html(
+            "<html><body><form action=\"/keep\" method=\"post\">\
+             <p><input type=\"hidden\" name=\"a\" value=\"12345\">\
+             <input type=\"submit\" id=\"keep\" value=\"Keep\"></p></form>\
+             <form action=\"/drop\" method=\"post\">\
+             <p><input type=\"hidden\" name=\"a\" value=\"12345\">\
+             <input type=\"submit\" id=\"drop\" value=\"Drop\"></p></form></body></html>",
+        ),
+        "/keep" => Reply::redirect(307, "/land"),
+        "/drop" => Reply::redirect(303, "/land"),
+        _ => page(&format!("landed-{}-{}", req.method, req.body.len())),
+    });
+    let mut s = Session::new();
+    s.open(&server.url("/"));
+    s.click_element("keep");
+    s.assert_shows("landed-POST-7");
+    s.open(&server.url("/"));
+    s.click_element("drop");
+    s.assert_shows("landed-GET-0");
+}
+
+#[test]
 fn same_site_cookies_are_withheld_from_cross_site_requests() {
     // The "tracker" site sets one cookie of each SameSite flavour.
     let tracker = TestServer::start_on("127.0.0.2", |req| match req.path() {
