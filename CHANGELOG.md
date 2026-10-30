@@ -167,6 +167,11 @@ removal, a restyled site, and docs that match the code.
   or set with `[widget_states.button] text`. The retro-cga, solarized and
   corrupted buttons are readable now and left the accepted low-contrast
   list.
+- `VectorOp::scale` snaps positions as absolute pixels (rect edges rather
+  than position + size, through group translations), so vector icons no
+  longer show 1 px seams between abutting parts at fractional scales;
+  dashboard icon pixels change slightly and the screenshots were
+  regenerated.
 - `impl_sdi_defaults!(T)` writes the eight empty extension impls for mocks;
   `oasis-test-backend` gains `NullBackend` and a stateful
   `RecordingBackend` (with `DrawCommand`), replacing per-crate mocks.

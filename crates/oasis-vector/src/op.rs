@@ -212,107 +212,133 @@ impl VectorOp {
     /// Scale all coordinates and dimensions by the given factor.
     ///
     /// Used to resize icons from design-space (22x22) to display-space.
-    /// Radii, font sizes and rectangle stroke widths scale too (never below
-    /// 1); line, circle, arc and polygon stroke widths and dash patterns are
-    /// kept as authored.
+    ///
+    /// Every coordinate is snapped as an *absolute* position: a point `p`
+    /// lands on `round(p * factor)`, and a rectangle keeps the edges
+    /// `round(x * factor)` and `round((x + w) * factor)` rather than
+    /// scaling its width on its own. Shapes that share an edge or a vertex
+    /// in design space (two abutting rects, a rect against a polygon, ops
+    /// in differently translated groups) therefore still share it at any
+    /// fractional scale. (Truncating `x` and `w` separately, as this used
+    /// to, opened 1 px seams between abutting parts of an icon.)
+    ///
+    /// Radii round too (never below 1); font sizes and rectangle stroke
+    /// widths scale down to whole pixels (never below 1); line, circle,
+    /// arc and polygon stroke widths and dash patterns are kept as
+    /// authored.
     pub fn scale(&mut self, factor: f32) {
-        let s = |v: &mut i32| *v = (*v as f32 * factor) as i32;
-        let su = |v: &mut u32| *v = (*v as f32 * factor) as u32;
-        let su16 = |v: &mut u16| *v = (*v as f32 * factor).max(1.0) as u16;
+        self.scale_at(factor, (0, 0));
+    }
+
+    /// [`scale`](Self::scale) for an op whose coordinates are relative to
+    /// `origin` (the summed translation of its enclosing groups), so its
+    /// absolute positions snap the same way as everyone else's.
+    fn scale_at(&mut self, factor: f32, (ox, oy): (i32, i32)) {
+        let f = f64::from(factor);
+        let snap = |abs: i64| -> i64 { (abs as f64 * f).round() as i64 };
+        let to_i32 = |v: i64| v.clamp(i32::MIN as i64, i32::MAX as i64) as i32;
+        // A coordinate relative to `o`: snap its absolute position, then
+        // express it relative to the snapped origin again.
+        let rel = |o: i32, v: &mut i32| {
+            *v = to_i32(snap(o as i64 + *v as i64) - snap(o as i64));
+        };
+        // A span `v .. v + len` relative to `o`: both edges snapped.
+        let span = |o: i32, v: &mut i32, len: &mut u32| {
+            let start = o as i64 + *v as i64;
+            let (a, b) = (snap(start), snap(start + *len as i64));
+            *v = to_i32(a - snap(o as i64));
+            *len = (b - a).clamp(0, u32::MAX as i64) as u32;
+        };
+        let radius = |v: &mut u16| *v = (f64::from(*v) * f).round().clamp(1.0, 65535.0) as u16;
+        let weight = |v: &mut u16| *v = (f64::from(*v) * f).clamp(1.0, 65535.0) as u16;
+        let rect = |x: &mut i32, y: &mut i32, w: &mut u32, h: &mut u32| {
+            span(ox, x, w);
+            span(oy, y, h);
+        };
+        let point = |x: &mut i32, y: &mut i32| {
+            rel(ox, x);
+            rel(oy, y);
+        };
         match self {
-            Self::FillRect { x, y, w, h, .. } => {
-                s(x);
-                s(y);
-                su(w);
-                su(h);
+            Self::FillRect { x, y, w, h, .. } | Self::RectGradient { x, y, w, h, .. } => {
+                rect(x, y, w, h);
             },
             Self::StrokeRect {
                 x, y, w, h, width, ..
             } => {
-                s(x);
-                s(y);
-                su(w);
-                su(h);
-                su16(width);
+                rect(x, y, w, h);
+                weight(width);
             },
             Self::FillRoundedRect {
-                x, y, w, h, radius, ..
+                x,
+                y,
+                w,
+                h,
+                radius: r,
+                ..
             } => {
-                s(x);
-                s(y);
-                su(w);
-                su(h);
-                su16(radius);
+                rect(x, y, w, h);
+                radius(r);
             },
             Self::StrokeRoundedRect {
                 x,
                 y,
                 w,
                 h,
-                radius,
+                radius: r,
                 width,
                 ..
             } => {
-                s(x);
-                s(y);
-                su(w);
-                su(h);
-                su16(radius);
-                su16(width);
+                rect(x, y, w, h);
+                radius(r);
+                weight(width);
             },
-            Self::FillPolygon { points, .. } | Self::StrokePolygon { points, .. } => {
+            Self::FillPolygon { points, .. }
+            | Self::StrokePolygon { points, .. }
+            | Self::PolygonGradient { points, .. } => {
                 for (px, py) in points.iter_mut() {
-                    s(px);
-                    s(py);
-                }
-            },
-            Self::FillCircle { cx, cy, radius, .. } | Self::StrokeCircle { cx, cy, radius, .. } => {
-                s(cx);
-                s(cy);
-                su16(radius);
-            },
-            Self::FillArc { cx, cy, radius, .. } | Self::StrokeArc { cx, cy, radius, .. } => {
-                s(cx);
-                s(cy);
-                su16(radius);
-            },
-            Self::Line { x1, y1, x2, y2, .. } | Self::DashedLine { x1, y1, x2, y2, .. } => {
-                s(x1);
-                s(y1);
-                s(x2);
-                s(y2);
-            },
-            Self::RectGradient { x, y, w, h, .. } => {
-                s(x);
-                s(y);
-                su(w);
-                su(h);
-            },
-            Self::PolygonGradient { points, .. } => {
-                for (px, py) in points.iter_mut() {
-                    s(px);
-                    s(py);
+                    point(px, py);
                 }
             },
             Self::FillTriangle { points, .. } => {
                 for (px, py) in points.iter_mut() {
-                    s(px);
-                    s(py);
+                    point(px, py);
                 }
+            },
+            Self::FillCircle {
+                cx, cy, radius: r, ..
+            }
+            | Self::StrokeCircle {
+                cx, cy, radius: r, ..
+            }
+            | Self::FillArc {
+                cx, cy, radius: r, ..
+            }
+            | Self::StrokeArc {
+                cx, cy, radius: r, ..
+            } => {
+                point(cx, cy);
+                radius(r);
+            },
+            Self::Line { x1, y1, x2, y2, .. } | Self::DashedLine { x1, y1, x2, y2, .. } => {
+                point(x1, y1);
+                point(x2, y2);
             },
             Self::Text {
                 x, y, font_size, ..
             } => {
-                s(x);
-                s(y);
-                su16(font_size);
+                point(x, y);
+                weight(font_size);
             },
             Self::Group { ops, translate, .. } => {
-                let (dx, dy) = translate;
-                *dx = (*dx as f32 * factor) as i32;
-                *dy = (*dy as f32 * factor) as i32;
+                // The children's origin is this group's absolute offset.
+                let (dx, dy) = *translate;
+                let inner = (ox.saturating_add(dx), oy.saturating_add(dy));
+                let (tx, ty) = translate;
+                rel(ox, tx);
+                rel(oy, ty);
                 for op in ops {
-                    op.scale(factor);
+                    op.scale_at(factor, inner);
                 }
             },
         }
@@ -483,5 +509,90 @@ mod tests {
         };
         // 200 * 128 / 255 = 100
         assert_eq!(color.a, 100);
+    }
+
+    fn rect_x_span(op: &VectorOp) -> (i32, i32) {
+        match op {
+            VectorOp::FillRect { x, w, .. } => (*x, *x + *w as i32),
+            other => panic!("not a FillRect: {other:?}"),
+        }
+    }
+
+    /// Abutting rects keep sharing their edge at any scale (truncating
+    /// `x` and `w` separately opened 1 px seams), also across groups.
+    #[test]
+    fn scale_keeps_shared_edges_shared() {
+        let rect = |x: i32, w: u32| VectorOp::FillRect {
+            x,
+            y: 0,
+            w,
+            h: 4,
+            color: Color::WHITE,
+        };
+        for i in 1..=300 {
+            let f = i as f32 / 97.0;
+            let mut parts = vec![rect(0, 5), rect(5, 6), rect(11, 11)];
+            for p in &mut parts {
+                p.scale(f);
+            }
+            let spans: Vec<_> = parts.iter().map(rect_x_span).collect();
+            assert_eq!(spans[0].1, spans[1].0, "f={f}: {spans:?}");
+            assert_eq!(spans[1].1, spans[2].0, "f={f}: {spans:?}");
+            assert_eq!(spans[0].0, 0);
+
+            // The same edge inside a translated (nested) group.
+            let mut outside = rect(0, 7);
+            let mut grouped =
+                VectorOp::translated(3, 0, vec![VectorOp::translated(1, 0, vec![rect(3, 9)])]);
+            outside.scale(f);
+            grouped.scale(f);
+            let VectorOp::Group {
+                translate: (t0, _),
+                ops,
+                ..
+            } = &grouped
+            else {
+                unreachable!()
+            };
+            let VectorOp::Group {
+                translate: (t1, _),
+                ops: inner,
+                ..
+            } = &ops[0]
+            else {
+                unreachable!()
+            };
+            let (gx0, _) = rect_x_span(&inner[0]);
+            assert_eq!(rect_x_span(&outside).1, t0 + t1 + gx0, "f={f}");
+        }
+    }
+
+    #[test]
+    fn scale_snaps_points_and_radii_by_rounding() {
+        let mut c = VectorOp::FillCircle {
+            cx: 3,
+            cy: 5,
+            radius: 3,
+            color: Color::WHITE,
+        };
+        c.scale(1.5);
+        assert!(matches!(
+            c,
+            VectorOp::FillCircle {
+                cx: 5,
+                cy: 8,
+                radius: 5,
+                ..
+            }
+        ));
+        // Radii never vanish.
+        let mut tiny = VectorOp::FillCircle {
+            cx: 0,
+            cy: 0,
+            radius: 1,
+            color: Color::WHITE,
+        };
+        tiny.scale(0.1);
+        assert!(matches!(tiny, VectorOp::FillCircle { radius: 1, .. }));
     }
 }
