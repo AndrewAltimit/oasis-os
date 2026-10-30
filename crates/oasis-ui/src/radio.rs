@@ -300,17 +300,17 @@ mod tests {
         assert_eq!(r.selected_label(), None);
     }
 
-    // -- Draw / measure tests using MockBackend --
+    // -- Draw / measure tests using RecordingBackend --
 
     use crate::context::DrawContext;
-    use crate::test_utils::MockBackend;
+    use crate::test_utils::RecordingBackend;
     use crate::theme::Theme;
     use crate::widget::Widget;
 
     #[test]
     fn measure_accounts_for_all_items() {
         let theme = Theme::dark();
-        let mut backend = MockBackend::new();
+        let mut backend = RecordingBackend::default();
         let ctx = DrawContext::new(&mut backend, &theme);
         let r = RadioGroup::new(sample());
         let (w, h) = r.measure(&ctx, 200, 300);
@@ -324,7 +324,7 @@ mod tests {
     #[test]
     fn measure_empty_zero_height() {
         let theme = Theme::dark();
-        let mut backend = MockBackend::new();
+        let mut backend = RecordingBackend::default();
         let ctx = DrawContext::new(&mut backend, &theme);
         let r = RadioGroup::new(vec![]);
         let (_, h) = r.measure(&ctx, 200, 300);
@@ -334,7 +334,7 @@ mod tests {
     #[test]
     fn draw_shows_all_labels() {
         let theme = Theme::dark();
-        let mut backend = MockBackend::new();
+        let mut backend = RecordingBackend::default();
         {
             let mut ctx = DrawContext::new(&mut backend, &theme);
             let r = RadioGroup::new(sample());
@@ -348,7 +348,7 @@ mod tests {
     #[test]
     fn draw_selected_item_has_filled_dot() {
         let theme = Theme::dark();
-        let mut backend = MockBackend::new();
+        let mut backend = RecordingBackend::default();
         {
             let mut ctx = DrawContext::new(&mut backend, &theme);
             let r = RadioGroup::new(sample());
@@ -363,7 +363,7 @@ mod tests {
     #[test]
     fn draw_empty_no_panic() {
         let theme = Theme::dark();
-        let mut backend = MockBackend::new();
+        let mut backend = RecordingBackend::default();
         {
             let mut ctx = DrawContext::new(&mut backend, &theme);
             let r = RadioGroup::new(vec![]);
@@ -375,7 +375,7 @@ mod tests {
     #[test]
     fn draw_disabled_no_panic() {
         let theme = Theme::dark();
-        let mut backend = MockBackend::new();
+        let mut backend = RecordingBackend::default();
         {
             let mut ctx = DrawContext::new(&mut backend, &theme);
             let mut r = RadioGroup::new(sample());
@@ -409,7 +409,7 @@ mod tests {
     #[test]
     fn option_at_hit_test() {
         let theme = Theme::dark();
-        let mut backend = MockBackend::new();
+        let mut backend = RecordingBackend::default();
         let ctx = DrawContext::new(&mut backend, &theme);
         let r = RadioGroup::new(vec!["A".into(), "B".into()]);
         let row_h = RadioGroup::row_height(&ctx) as i32;

@@ -234,16 +234,16 @@ mod tests {
         assert_eq!(b.label, "borrowed");
     }
 
-    // -- Draw / measure tests using MockBackend --
+    // -- Draw / measure tests using RecordingBackend --
 
-    use crate::test_utils::MockBackend;
+    use crate::test_utils::RecordingBackend;
     use crate::theme::Theme;
     use crate::widget::Widget;
 
     #[test]
     fn measure_returns_text_width_plus_padding() {
         let theme = Theme::dark();
-        let mut backend = MockBackend::new();
+        let mut backend = RecordingBackend::default();
         let ctx = DrawContext::new(&mut backend, &theme);
         let btn = Button::new("Test");
         let (w, h) = btn.measure(&ctx, 200, 100);
@@ -257,7 +257,7 @@ mod tests {
     #[test]
     fn draw_normal_state_emits_fill_and_text() {
         let theme = Theme::dark();
-        let mut backend = MockBackend::new();
+        let mut backend = RecordingBackend::default();
         {
             let mut ctx = DrawContext::new(&mut backend, &theme);
             let btn = Button::new("Test");
@@ -273,7 +273,7 @@ mod tests {
     #[test]
     fn draw_hover_state() {
         let theme = Theme::dark();
-        let mut backend = MockBackend::new();
+        let mut backend = RecordingBackend::default();
         {
             let mut ctx = DrawContext::new(&mut backend, &theme);
             let mut btn = Button::new("Hov");
@@ -289,7 +289,7 @@ mod tests {
     #[test]
     fn draw_pressed_state() {
         let theme = Theme::dark();
-        let mut backend = MockBackend::new();
+        let mut backend = RecordingBackend::default();
         {
             let mut ctx = DrawContext::new(&mut backend, &theme);
             let mut btn = Button::new("Press");
@@ -305,7 +305,7 @@ mod tests {
     #[test]
     fn draw_disabled_uses_disabled_color() {
         let theme = Theme::dark();
-        let mut backend = MockBackend::new();
+        let mut backend = RecordingBackend::default();
         {
             let mut ctx = DrawContext::new(&mut backend, &theme);
             let mut btn = Button::new("Off");
@@ -321,7 +321,7 @@ mod tests {
     #[test]
     fn draw_primary_style() {
         let theme = Theme::dark();
-        let mut backend = MockBackend::new();
+        let mut backend = RecordingBackend::default();
         {
             let mut ctx = DrawContext::new(&mut backend, &theme);
             let btn = Button::primary("Go");
@@ -334,7 +334,7 @@ mod tests {
     #[test]
     fn draw_outline_style() {
         let theme = Theme::dark();
-        let mut backend = MockBackend::new();
+        let mut backend = RecordingBackend::default();
         {
             let mut ctx = DrawContext::new(&mut backend, &theme);
             let mut btn = Button::new("Outline");
@@ -349,7 +349,7 @@ mod tests {
     #[test]
     fn draw_ghost_normal_no_bg() {
         let theme = Theme::dark();
-        let mut backend = MockBackend::new();
+        let mut backend = RecordingBackend::default();
         {
             let mut ctx = DrawContext::new(&mut backend, &theme);
             let mut btn = Button::new("Ghost");
@@ -370,7 +370,7 @@ mod tests {
             ButtonState::Pressed,
             ButtonState::Disabled,
         ] {
-            let mut backend = MockBackend::new();
+            let mut backend = RecordingBackend::default();
             let mut ctx = DrawContext::new(&mut backend, &theme);
             let mut btn = Button::new("X");
             btn.state = state;
@@ -381,7 +381,7 @@ mod tests {
     #[test]
     fn draw_text_is_centered() {
         let theme = Theme::dark();
-        let mut backend = MockBackend::new();
+        let mut backend = RecordingBackend::default();
         {
             let mut ctx = DrawContext::new(&mut backend, &theme);
             let btn = Button::new("AB");
@@ -422,8 +422,8 @@ mod tests {
     #[test]
     fn unfocused_draws_no_focus_ring() {
         let theme = Theme::dark();
-        let mut backend = MockBackend::new();
-        let mut with_focus = MockBackend::new();
+        let mut backend = RecordingBackend::default();
+        let mut with_focus = RecordingBackend::default();
         {
             let mut ctx = DrawContext::new(&mut backend, &theme);
             Button::new("X").draw(&mut ctx, 0, 0, 60, 24).unwrap();

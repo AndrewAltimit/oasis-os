@@ -635,10 +635,10 @@ mod tests {
         assert_eq!(d.a, 100);
     }
 
-    // -- Draw / measure tests using MockBackend --
+    // -- Draw / measure tests using RecordingBackend --
 
     use crate::context::DrawContext;
-    use crate::test_utils::{self, MockBackend};
+    use crate::test_utils::{self, RecordingBackend};
     use crate::theme::Theme;
     use crate::widget::Widget;
 
@@ -646,7 +646,7 @@ mod tests {
     fn measure_horizontal() {
         let s = Slider::new(0.0, 100.0);
         let theme = Theme::dark();
-        let mut backend = MockBackend::new();
+        let mut backend = RecordingBackend::default();
         let ctx = DrawContext::new(&mut backend, &theme);
         let (w, h) = s.measure(&ctx, 200, 100);
         assert_eq!(w, 200);
@@ -657,7 +657,7 @@ mod tests {
     fn measure_vertical() {
         let s = Slider::new(0.0, 100.0).with_orientation(Orientation::Vertical);
         let theme = Theme::dark();
-        let mut backend = MockBackend::new();
+        let mut backend = RecordingBackend::default();
         let ctx = DrawContext::new(&mut backend, &theme);
         let (w, h) = s.measure(&ctx, 200, 150);
         assert!(w >= 12);
@@ -670,11 +670,11 @@ mod tests {
         let s_label = Slider::new(0.0, 100.0).with_label(true);
         let theme = Theme::dark();
 
-        let mut b1 = MockBackend::new();
+        let mut b1 = RecordingBackend::default();
         let ctx1 = DrawContext::new(&mut b1, &theme);
         let (w1, _) = s_no_label.measure(&ctx1, 200, 100);
 
-        let mut b2 = MockBackend::new();
+        let mut b2 = RecordingBackend::default();
         let ctx2 = DrawContext::new(&mut b2, &theme);
         let (w2, _) = s_label.measure(&ctx2, 200, 100);
 
@@ -686,7 +686,7 @@ mod tests {
         let mut s = Slider::new(0.0, 100.0);
         s.set_value(50.0);
         let theme = Theme::dark();
-        let mut backend = MockBackend::new();
+        let mut backend = RecordingBackend::default();
         {
             let mut ctx = DrawContext::new(&mut backend, &theme);
             s.draw(&mut ctx, 0, 0, 200, 20).unwrap();
@@ -700,7 +700,7 @@ mod tests {
         let mut s = Slider::new(0.0, 100.0).with_orientation(Orientation::Vertical);
         s.set_value(75.0);
         let theme = Theme::dark();
-        let mut backend = MockBackend::new();
+        let mut backend = RecordingBackend::default();
         {
             let mut ctx = DrawContext::new(&mut backend, &theme);
             s.draw(&mut ctx, 0, 0, 20, 150).unwrap();
@@ -712,7 +712,7 @@ mod tests {
     fn draw_zero_value() {
         let s = Slider::new(0.0, 100.0);
         let theme = Theme::dark();
-        let mut backend = MockBackend::new();
+        let mut backend = RecordingBackend::default();
         {
             let mut ctx = DrawContext::new(&mut backend, &theme);
             s.draw(&mut ctx, 0, 0, 200, 20).unwrap();
@@ -726,7 +726,7 @@ mod tests {
         let mut s = Slider::new(0.0, 100.0);
         s.set_value(100.0);
         let theme = Theme::dark();
-        let mut backend = MockBackend::new();
+        let mut backend = RecordingBackend::default();
         {
             let mut ctx = DrawContext::new(&mut backend, &theme);
             s.draw(&mut ctx, 0, 0, 200, 20).unwrap();
@@ -739,7 +739,7 @@ mod tests {
         let mut s = Slider::new(0.0, 100.0).with_label(true);
         s.set_value(75.0);
         let theme = Theme::dark();
-        let mut backend = MockBackend::new();
+        let mut backend = RecordingBackend::default();
         {
             let mut ctx = DrawContext::new(&mut backend, &theme);
             s.draw(&mut ctx, 0, 0, 200, 20).unwrap();
@@ -753,7 +753,7 @@ mod tests {
         s.set_value(50.0);
         s.disabled = true;
         let theme = Theme::dark();
-        let mut backend = MockBackend::new();
+        let mut backend = RecordingBackend::default();
         {
             let mut ctx = DrawContext::new(&mut backend, &theme);
             s.draw(&mut ctx, 0, 0, 200, 20).unwrap();

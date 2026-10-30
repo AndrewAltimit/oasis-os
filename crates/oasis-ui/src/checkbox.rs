@@ -174,17 +174,17 @@ mod tests {
         assert_eq!(c.label, "Dynamic");
     }
 
-    // -- Draw / measure tests using MockBackend --
+    // -- Draw / measure tests using RecordingBackend --
 
     use crate::context::DrawContext;
-    use crate::test_utils::MockBackend;
+    use crate::test_utils::RecordingBackend;
     use crate::theme::Theme;
     use crate::widget::Widget;
 
     #[test]
     fn measure_includes_box_and_label() {
         let theme = Theme::dark();
-        let mut backend = MockBackend::new();
+        let mut backend = RecordingBackend::default();
         let ctx = DrawContext::new(&mut backend, &theme);
         let c = Checkbox::new("Hello", false);
         let (w, h) = c.measure(&ctx, 200, 100);
@@ -195,7 +195,7 @@ mod tests {
     #[test]
     fn draw_unchecked_shows_label() {
         let theme = Theme::dark();
-        let mut backend = MockBackend::new();
+        let mut backend = RecordingBackend::default();
         {
             let mut ctx = DrawContext::new(&mut backend, &theme);
             let c = Checkbox::new("Accept Terms", false);
@@ -209,7 +209,7 @@ mod tests {
     #[test]
     fn draw_checked_shows_checkmark() {
         let theme = Theme::dark();
-        let mut backend = MockBackend::new();
+        let mut backend = RecordingBackend::default();
         {
             let mut ctx = DrawContext::new(&mut backend, &theme);
             let c = Checkbox::new("Accept", true);
@@ -222,7 +222,7 @@ mod tests {
     #[test]
     fn draw_disabled_no_panic() {
         let theme = Theme::dark();
-        let mut backend = MockBackend::new();
+        let mut backend = RecordingBackend::default();
         {
             let mut ctx = DrawContext::new(&mut backend, &theme);
             let mut c = Checkbox::new("Off", false);
@@ -235,7 +235,7 @@ mod tests {
     #[test]
     fn draw_empty_label() {
         let theme = Theme::dark();
-        let mut backend = MockBackend::new();
+        let mut backend = RecordingBackend::default();
         {
             let mut ctx = DrawContext::new(&mut backend, &theme);
             let c = Checkbox::new("", true);

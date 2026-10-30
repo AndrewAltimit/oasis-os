@@ -465,7 +465,7 @@ impl Widget for TreeView {
 mod tests {
     use super::*;
     use crate::context::DrawContext;
-    use crate::test_utils::MockBackend;
+    use crate::test_utils::RecordingBackend;
     use crate::theme::Theme;
     use crate::widget::Widget;
     use oasis_types::backend::SdiText;
@@ -767,13 +767,13 @@ mod tests {
         assert!(tv.focused_id.is_none());
     }
 
-    // -- Draw / measure tests using MockBackend --
+    // -- Draw / measure tests using RecordingBackend --
 
     #[test]
     fn measure_empty_tree() {
         let tv = TreeView::new();
         let theme = Theme::dark();
-        let mut backend = MockBackend::new();
+        let mut backend = RecordingBackend::default();
         let ctx = DrawContext::new(&mut backend, &theme);
         let (w, h) = tv.measure(&ctx, 200, 400);
         assert_eq!(w, 0);
@@ -788,7 +788,7 @@ mod tests {
         tv.expand(root);
 
         let theme = Theme::dark();
-        let mut backend = MockBackend::new();
+        let mut backend = RecordingBackend::default();
         let ctx = DrawContext::new(&mut backend, &theme);
         let (_, h) = tv.measure(&ctx, 200, 400);
         // 2 visible nodes * row_height.
@@ -803,7 +803,7 @@ mod tests {
         tv.add_root("Beta");
 
         let theme = Theme::dark();
-        let mut backend = MockBackend::new();
+        let mut backend = RecordingBackend::default();
         {
             let mut ctx = DrawContext::new(&mut backend, &theme);
             tv.draw(&mut ctx, 0, 0, 200, 100).unwrap();
@@ -820,7 +820,7 @@ mod tests {
         tv.add_child(root, "Child");
 
         let theme = Theme::dark();
-        let mut backend = MockBackend::new();
+        let mut backend = RecordingBackend::default();
         {
             let mut ctx = DrawContext::new(&mut backend, &theme);
             tv.draw(&mut ctx, 0, 0, 200, 100).unwrap();
@@ -837,7 +837,7 @@ mod tests {
         tv.expand(root);
 
         let theme = Theme::dark();
-        let mut backend = MockBackend::new();
+        let mut backend = RecordingBackend::default();
         {
             let mut ctx = DrawContext::new(&mut backend, &theme);
             tv.draw(&mut ctx, 0, 0, 200, 100).unwrap();
@@ -853,7 +853,7 @@ mod tests {
         tv.select(root);
 
         let theme = Theme::dark();
-        let mut backend = MockBackend::new();
+        let mut backend = RecordingBackend::default();
         {
             let mut ctx = DrawContext::new(&mut backend, &theme);
             tv.draw(&mut ctx, 0, 0, 200, 100).unwrap();
@@ -869,7 +869,7 @@ mod tests {
         tv.disabled = true;
 
         let theme = Theme::dark();
-        let mut backend = MockBackend::new();
+        let mut backend = RecordingBackend::default();
         {
             let mut ctx = DrawContext::new(&mut backend, &theme);
             tv.draw(&mut ctx, 0, 0, 200, 100).unwrap();
@@ -888,7 +888,7 @@ mod tests {
         tv.show_lines = true;
 
         let theme = Theme::dark();
-        let mut backend = MockBackend::new();
+        let mut backend = RecordingBackend::default();
         {
             let mut ctx = DrawContext::new(&mut backend, &theme);
             tv.draw(&mut ctx, 0, 0, 200, 100).unwrap();
@@ -902,7 +902,7 @@ mod tests {
     fn draw_empty_tree_no_panic() {
         let tv = TreeView::new();
         let theme = Theme::dark();
-        let mut backend = MockBackend::new();
+        let mut backend = RecordingBackend::default();
         {
             let mut ctx = DrawContext::new(&mut backend, &theme);
             tv.draw(&mut ctx, 0, 0, 200, 100).unwrap();
@@ -929,7 +929,7 @@ mod tests {
         tv.add_root("A very long label that exceeds available width");
 
         let theme = Theme::dark();
-        let mut backend = MockBackend::new();
+        let mut backend = RecordingBackend::default();
         let ctx = DrawContext::new(&mut backend, &theme);
         let (w, _) = tv.measure(&ctx, 50, 400);
         assert!(w <= 50);

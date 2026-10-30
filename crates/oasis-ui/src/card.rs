@@ -197,17 +197,17 @@ mod tests {
         assert_eq!(c.elevation, 0);
     }
 
-    // -- Draw / measure tests using MockBackend --
+    // -- Draw / measure tests using RecordingBackend --
 
     use crate::context::DrawContext;
-    use crate::test_utils::MockBackend;
+    use crate::test_utils::RecordingBackend;
     use crate::theme::Theme;
     use crate::widget::Widget;
 
     #[test]
     fn measure_accounts_for_padding() {
         let theme = Theme::dark();
-        let mut backend = MockBackend::new();
+        let mut backend = RecordingBackend::default();
         let ctx = DrawContext::new(&mut backend, &theme);
         let card = Card::new("Title");
         let (w, h) = card.measure(&ctx, 200, 100);
@@ -218,7 +218,7 @@ mod tests {
     #[test]
     fn draw_emits_shadow_at_elevation() {
         let theme = Theme::dark();
-        let mut backend = MockBackend::new();
+        let mut backend = RecordingBackend::default();
         {
             let mut ctx = DrawContext::new(&mut backend, &theme);
             let mut card = Card::new("Title");
@@ -232,7 +232,7 @@ mod tests {
     #[test]
     fn draw_title_text() {
         let theme = Theme::dark();
-        let mut backend = MockBackend::new();
+        let mut backend = RecordingBackend::default();
         {
             let mut ctx = DrawContext::new(&mut backend, &theme);
             let card = Card::new("Title");
@@ -244,7 +244,7 @@ mod tests {
     #[test]
     fn draw_subtitle() {
         let theme = Theme::dark();
-        let mut backend = MockBackend::new();
+        let mut backend = RecordingBackend::default();
         {
             let mut ctx = DrawContext::new(&mut backend, &theme);
             let mut card = Card::new("Title");
@@ -257,7 +257,7 @@ mod tests {
     #[test]
     fn draw_body() {
         let theme = Theme::dark();
-        let mut backend = MockBackend::new();
+        let mut backend = RecordingBackend::default();
         {
             let mut ctx = DrawContext::new(&mut backend, &theme);
             let mut card = Card::new("Title");
@@ -270,7 +270,7 @@ mod tests {
     #[test]
     fn draw_no_image_full_width() {
         let theme = Theme::dark();
-        let mut backend = MockBackend::new();
+        let mut backend = RecordingBackend::default();
         {
             let mut ctx = DrawContext::new(&mut backend, &theme);
             let card = Card::new("NoImage");
@@ -282,7 +282,7 @@ mod tests {
     #[test]
     fn draw_empty_title() {
         let theme = Theme::dark();
-        let mut backend = MockBackend::new();
+        let mut backend = RecordingBackend::default();
         {
             let mut ctx = DrawContext::new(&mut backend, &theme);
             let card = Card::new("");
@@ -295,7 +295,7 @@ mod tests {
     #[test]
     fn draw_zero_elevation_no_shadow_rects() {
         let theme = Theme::dark();
-        let mut backend_with_shadow = MockBackend::new();
+        let mut backend_with_shadow = RecordingBackend::default();
         {
             let mut ctx = DrawContext::new(&mut backend_with_shadow, &theme);
             let mut card = Card::new("Title");
@@ -304,7 +304,7 @@ mod tests {
         }
         let with_shadow = backend_with_shadow.fill_rect_count();
 
-        let mut backend_no_shadow = MockBackend::new();
+        let mut backend_no_shadow = RecordingBackend::default();
         {
             let mut ctx = DrawContext::new(&mut backend_no_shadow, &theme);
             let mut card = Card::new("Title");

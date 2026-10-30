@@ -1140,10 +1140,10 @@ mod tests {
 
     #[test]
     fn draw_focus_ring_themed_calls_backend() {
-        use crate::test_utils::MockBackend;
+        use crate::test_utils::RecordingBackend;
         let mut theme = crate::theme::Theme::dark();
         theme.focus_ring_color = Some(Color::rgb(255, 128, 0));
-        let mut backend = MockBackend::new();
+        let mut backend = RecordingBackend::default();
         let bounds = Rect::new(10, 20, 80, 40);
         draw_focus_ring_themed(&mut backend, &bounds, &theme).ok();
         assert!(backend.fill_rect_count() > 0);
@@ -1151,11 +1151,11 @@ mod tests {
 
     #[test]
     fn manager_draw_indicator_themed() {
-        use crate::test_utils::MockBackend;
+        use crate::test_utils::RecordingBackend;
         let mut fm = FocusManager::new(3);
         fm.active = true;
         let theme = crate::theme::Theme::dark();
-        let mut backend = MockBackend::new();
+        let mut backend = RecordingBackend::default();
         fm.draw_indicator_themed(&mut backend, 0, &theme, 10, 20, 80, 30)
             .ok();
         assert!(backend.fill_rect_count() > 0);
@@ -1190,9 +1190,9 @@ mod tests {
 
     #[test]
     fn focus_style_draw_calls_backend() {
-        use crate::test_utils::MockBackend;
+        use crate::test_utils::RecordingBackend;
         let s = FocusStyle::from_accent(Color::rgb(0, 255, 0));
-        let mut backend = MockBackend::new();
+        let mut backend = RecordingBackend::default();
         s.draw(&mut backend, 10, 20, 100, 50).ok();
         assert!(backend.fill_rect_count() > 0);
     }
@@ -1379,32 +1379,32 @@ mod tests {
 
     #[test]
     fn manager_draw_indicator_active() {
-        use crate::test_utils::MockBackend;
+        use crate::test_utils::RecordingBackend;
         let mut fm = FocusManager::new(3);
         fm.active = true;
         let s = FocusStyle::from_accent(Color::rgb(80, 160, 255));
-        let mut backend = MockBackend::new();
+        let mut backend = RecordingBackend::default();
         fm.draw_indicator(&mut backend, 0, &s, 10, 20, 80, 30).ok();
         assert!(backend.fill_rect_count() > 0);
     }
 
     #[test]
     fn manager_draw_indicator_wrong_index() {
-        use crate::test_utils::MockBackend;
+        use crate::test_utils::RecordingBackend;
         let mut fm = FocusManager::new(3);
         fm.active = true;
         let s = FocusStyle::from_accent(Color::rgb(80, 160, 255));
-        let mut backend = MockBackend::new();
+        let mut backend = RecordingBackend::default();
         fm.draw_indicator(&mut backend, 1, &s, 10, 20, 80, 30).ok();
         assert_eq!(backend.fill_rect_count(), 0);
     }
 
     #[test]
     fn manager_draw_indicator_inactive() {
-        use crate::test_utils::MockBackend;
+        use crate::test_utils::RecordingBackend;
         let fm = FocusManager::new(3);
         let s = FocusStyle::from_accent(Color::rgb(80, 160, 255));
-        let mut backend = MockBackend::new();
+        let mut backend = RecordingBackend::default();
         fm.draw_indicator(&mut backend, 0, &s, 10, 20, 80, 30).ok();
         assert_eq!(backend.fill_rect_count(), 0);
     }
@@ -1869,8 +1869,8 @@ mod tests {
 
     #[test]
     fn draw_focus_ring_calls_backend() {
-        use crate::test_utils::MockBackend;
-        let mut backend = MockBackend::new();
+        use crate::test_utils::RecordingBackend;
+        let mut backend = RecordingBackend::default();
         let bounds = Rect::new(10, 20, 80, 40);
         draw_focus_ring(&mut backend, &bounds, Color::rgb(0, 120, 255)).ok();
         assert!(backend.fill_rect_count() > 0);

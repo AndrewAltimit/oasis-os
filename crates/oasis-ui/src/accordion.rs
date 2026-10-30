@@ -525,17 +525,17 @@ mod tests {
         assert_eq!(acc.focused(), 0);
     }
 
-    // -- Draw / measure tests using MockBackend --
+    // -- Draw / measure tests using RecordingBackend --
 
     use crate::context::DrawContext;
-    use crate::test_utils::MockBackend;
+    use crate::test_utils::RecordingBackend;
     use crate::theme::Theme;
     use crate::widget::Widget;
 
     #[test]
     fn measure_collapsed_sections() {
         let theme = Theme::dark();
-        let mut backend = MockBackend::new();
+        let mut backend = RecordingBackend::default();
         let ctx = DrawContext::new(&mut backend, &theme);
 
         let mut acc = Accordion::new(AccordionMode::MultiExpand);
@@ -551,7 +551,7 @@ mod tests {
     #[test]
     fn measure_expanded_sections() {
         let theme = Theme::dark();
-        let mut backend = MockBackend::new();
+        let mut backend = RecordingBackend::default();
         let ctx = DrawContext::new(&mut backend, &theme);
 
         let mut acc = Accordion::new(AccordionMode::MultiExpand);
@@ -569,7 +569,7 @@ mod tests {
     #[test]
     fn draw_shows_headers() {
         let theme = Theme::dark();
-        let mut backend = MockBackend::new();
+        let mut backend = RecordingBackend::default();
         {
             let mut ctx = DrawContext::new(&mut backend, &theme);
             let mut acc = Accordion::new(AccordionMode::MultiExpand);
@@ -587,7 +587,7 @@ mod tests {
     #[test]
     fn draw_expanded_shows_content() {
         let theme = Theme::dark();
-        let mut backend = MockBackend::new();
+        let mut backend = RecordingBackend::default();
         {
             let mut ctx = DrawContext::new(&mut backend, &theme);
             let mut acc = Accordion::new(AccordionMode::MultiExpand);
@@ -605,7 +605,7 @@ mod tests {
     #[test]
     fn draw_indicators() {
         let theme = Theme::dark();
-        let mut backend = MockBackend::new();
+        let mut backend = RecordingBackend::default();
         {
             let mut ctx = DrawContext::new(&mut backend, &theme);
             let mut acc = Accordion::new(AccordionMode::MultiExpand);
@@ -622,7 +622,7 @@ mod tests {
     #[test]
     fn draw_empty_accordion_no_panic() {
         let theme = Theme::dark();
-        let mut backend = MockBackend::new();
+        let mut backend = RecordingBackend::default();
         {
             let mut ctx = DrawContext::new(&mut backend, &theme);
             let acc = Accordion::new(AccordionMode::MultiExpand);

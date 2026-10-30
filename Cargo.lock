@@ -1469,6 +1469,7 @@ dependencies = [
 name = "oasis-ui"
 version = "1.4.0"
 dependencies = [
+ "oasis-test-backend",
  "oasis-types",
 ]
 

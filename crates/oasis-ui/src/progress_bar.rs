@@ -135,10 +135,10 @@ mod tests {
         assert!((p.value - 1.0).abs() < f32::EPSILON);
     }
 
-    // -- Draw / measure tests using MockBackend --
+    // -- Draw / measure tests using RecordingBackend --
 
     use crate::context::DrawContext;
-    use crate::test_utils::MockBackend;
+    use crate::test_utils::RecordingBackend;
     use crate::theme::Theme;
     use crate::widget::Widget;
 
@@ -146,7 +146,7 @@ mod tests {
     fn measure_returns_fixed_dimensions() {
         let p = ProgressBar::new(0.5);
         let theme = Theme::dark();
-        let mut backend = MockBackend::new();
+        let mut backend = RecordingBackend::default();
         let ctx = DrawContext::new(&mut backend, &theme);
         let (w, h) = p.measure(&ctx, 200, 100);
         // Bar style: returns (available_w, 8).
@@ -158,7 +158,7 @@ mod tests {
     fn draw_bar_fill_proportional() {
         let p = ProgressBar::new(0.5);
         let theme = Theme::dark();
-        let mut backend = MockBackend::new();
+        let mut backend = RecordingBackend::default();
         {
             let mut ctx = DrawContext::new(&mut backend, &theme);
             p.draw(&mut ctx, 0, 0, 100, 8).unwrap();
@@ -171,7 +171,7 @@ mod tests {
     fn draw_zero_progress() {
         let p = ProgressBar::new(0.0);
         let theme = Theme::dark();
-        let mut backend = MockBackend::new();
+        let mut backend = RecordingBackend::default();
         {
             let mut ctx = DrawContext::new(&mut backend, &theme);
             p.draw(&mut ctx, 0, 0, 100, 8).unwrap();
@@ -184,7 +184,7 @@ mod tests {
     fn draw_full_progress() {
         let p = ProgressBar::new(1.0);
         let theme = Theme::dark();
-        let mut backend = MockBackend::new();
+        let mut backend = RecordingBackend::default();
         {
             let mut ctx = DrawContext::new(&mut backend, &theme);
             p.draw(&mut ctx, 0, 0, 100, 8).unwrap();
@@ -210,7 +210,7 @@ mod tests {
         let mut p = ProgressBar::new(0.75);
         p.show_label = true;
         let theme = Theme::dark();
-        let mut backend = MockBackend::new();
+        let mut backend = RecordingBackend::default();
         {
             let mut ctx = DrawContext::new(&mut backend, &theme);
             p.draw(&mut ctx, 0, 0, 200, 16).unwrap();
@@ -224,7 +224,7 @@ mod tests {
         let mut p = ProgressBar::new(0.5);
         p.style = ProgressStyle::Circular;
         let theme = Theme::dark();
-        let mut backend = MockBackend::new();
+        let mut backend = RecordingBackend::default();
         {
             let mut ctx = DrawContext::new(&mut backend, &theme);
             // Should not panic for circular style.

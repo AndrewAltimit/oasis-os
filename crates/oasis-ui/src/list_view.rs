@@ -211,15 +211,15 @@ mod tests {
         assert_eq!(lv.selected, Some(2));
     }
 
-    // -- Draw / measure tests using MockBackend --
+    // -- Draw / measure tests using RecordingBackend --
 
     use crate::context::DrawContext;
-    use crate::test_utils::MockBackend;
+    use crate::test_utils::RecordingBackend;
     use crate::theme::Theme;
     use crate::widget::Widget;
 
     /// A render callback that actually draws the item text so we can
-    /// assert on `draw_text` calls recorded by `MockBackend`.
+    /// assert on `draw_text` calls recorded by `RecordingBackend`.
     // `&String` is `&T` for `ListView<String>`; the callback type fixes it.
     #[allow(clippy::ptr_arg)]
     fn draw_render(
@@ -239,7 +239,7 @@ mod tests {
         let items: Vec<String> = (0..5).map(|i| i.to_string()).collect();
         let lv = ListView::new(items, 20, dummy_render);
         let theme = Theme::dark();
-        let mut backend = MockBackend::new();
+        let mut backend = RecordingBackend::default();
         let ctx = DrawContext::new(&mut backend, &theme);
         let (w, h) = lv.measure(&ctx, 200, 400);
         assert_eq!(w, 200);
@@ -251,7 +251,7 @@ mod tests {
         let items: Vec<String> = (0..5).map(|i| format!("item{i}")).collect();
         let lv = ListView::new(items, 20, draw_render);
         let theme = Theme::dark();
-        let mut backend = MockBackend::new();
+        let mut backend = RecordingBackend::default();
         {
             let mut ctx = DrawContext::new(&mut backend, &theme);
             lv.draw(&mut ctx, 0, 0, 200, 100).unwrap();
@@ -266,7 +266,7 @@ mod tests {
         let mut lv = ListView::new(items, 20, draw_render);
         lv.selected = Some(1);
         let theme = Theme::dark();
-        let mut backend = MockBackend::new();
+        let mut backend = RecordingBackend::default();
         {
             let mut ctx = DrawContext::new(&mut backend, &theme);
             lv.draw(&mut ctx, 0, 0, 200, 100).unwrap();
@@ -282,7 +282,7 @@ mod tests {
         // Scroll past the first two items (offset = 40 means items 0,1 are above).
         lv.scroll_offset = 40;
         let theme = Theme::dark();
-        let mut backend = MockBackend::new();
+        let mut backend = RecordingBackend::default();
         {
             let mut ctx = DrawContext::new(&mut backend, &theme);
             lv.draw(&mut ctx, 0, 0, 200, 60).unwrap();
@@ -315,7 +315,7 @@ mod tests {
     fn empty_list_draws_nothing() {
         let lv: ListView<String> = ListView::new(vec![], 20, draw_render);
         let theme = Theme::dark();
-        let mut backend = MockBackend::new();
+        let mut backend = RecordingBackend::default();
         {
             let mut ctx = DrawContext::new(&mut backend, &theme);
             lv.draw(&mut ctx, 0, 0, 200, 100).unwrap();
@@ -328,13 +328,13 @@ mod tests {
         let items: Vec<String> = (0..3).map(|i| format!("item{i}")).collect();
         let lv = ListView::new(items, 20, draw_render);
         let theme = Theme::dark();
-        let mut backend = MockBackend::new();
+        let mut backend = RecordingBackend::default();
         {
             let mut ctx = DrawContext::new(&mut backend, &theme);
             lv.draw(&mut ctx, 0, 0, 200, 100).unwrap();
         }
         // draw_at calls push_clip_rect which delegates to set_clip_rect.
-        // MockBackend does not record set_clip_rect in `calls`, but the call
+        // RecordingBackend does not record set_clip_rect in `calls`, but the call
         // must not fail. We verify the draw completed and items were rendered.
         assert!(backend.draw_text_count() > 0);
     }

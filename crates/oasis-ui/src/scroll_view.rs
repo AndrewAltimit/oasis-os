@@ -205,10 +205,10 @@ mod tests {
         assert_ne!(ScrollbarStyle::Wide, ScrollbarStyle::Hidden);
     }
 
-    // -- Draw / measure tests using MockBackend --
+    // -- Draw / measure tests using RecordingBackend --
 
     use crate::context::DrawContext;
-    use crate::test_utils::MockBackend;
+    use crate::test_utils::RecordingBackend;
     use crate::theme::Theme;
     use crate::widget::Widget;
 
@@ -216,7 +216,7 @@ mod tests {
     fn draw_calls_push_clip_rect() {
         let sv = ScrollView::new(500, 200);
         let theme = Theme::dark();
-        let mut backend = MockBackend::new();
+        let mut backend = RecordingBackend::default();
         {
             let mut ctx = DrawContext::new(&mut backend, &theme);
             sv.draw(&mut ctx, 0, 0, 200, 200).unwrap();
@@ -230,7 +230,7 @@ mod tests {
     fn scrollbar_visible_when_content_exceeds() {
         let sv = ScrollView::new(500, 200);
         let theme = Theme::dark();
-        let mut backend = MockBackend::new();
+        let mut backend = RecordingBackend::default();
         {
             let mut ctx = DrawContext::new(&mut backend, &theme);
             sv.draw(&mut ctx, 0, 0, 200, 200).unwrap();
@@ -243,7 +243,7 @@ mod tests {
     fn scrollbar_hidden_when_fits() {
         let sv = ScrollView::new(100, 200);
         let theme = Theme::dark();
-        let mut backend = MockBackend::new();
+        let mut backend = RecordingBackend::default();
         {
             let mut ctx = DrawContext::new(&mut backend, &theme);
             sv.draw(&mut ctx, 0, 0, 200, 200).unwrap();
@@ -283,7 +283,7 @@ mod tests {
     fn scrollbar_thumb_proportional() {
         let sv = ScrollView::new(1000, 200);
         let theme = Theme::dark();
-        let mut backend = MockBackend::new();
+        let mut backend = RecordingBackend::default();
         {
             let mut ctx = DrawContext::new(&mut backend, &theme);
             sv.draw_scrollbar(&mut ctx, 0, 0, 200).unwrap();
@@ -298,7 +298,7 @@ mod tests {
         let mut sv = ScrollView::new(500, 200);
         sv.scroll_y = 300; // max scroll
         let theme = Theme::dark();
-        let mut backend = MockBackend::new();
+        let mut backend = RecordingBackend::default();
         {
             let mut ctx = DrawContext::new(&mut backend, &theme);
             // Should not panic and thumb should stay within track bounds.
@@ -311,7 +311,7 @@ mod tests {
     fn zero_content_height() {
         let sv = ScrollView::new(0, 200);
         let theme = Theme::dark();
-        let mut backend = MockBackend::new();
+        let mut backend = RecordingBackend::default();
         {
             let mut ctx = DrawContext::new(&mut backend, &theme);
             // Should not panic even with content_height = 0.

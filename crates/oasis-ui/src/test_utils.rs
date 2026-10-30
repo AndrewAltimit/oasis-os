@@ -1,124 +1,13 @@
 //! Shared test utilities for oasis-ui widget tests.
 //!
-//! Provides a [`MockBackend`] that records all draw calls for assertion.
+//! Widget tests draw into oasis-test-backend's [`RecordingBackend`] (which
+//! keeps every default-method decomposition, so `fill_rect_count` counts
+//! the primitive rects a rounded rect or a gradient expands into) and
+//! assert on its command log.
 
-use oasis_types::backend::{
-    Color, SdiAlpha, SdiBatch, SdiClipTransform, SdiCore, SdiGradients, SdiRenderTarget, SdiShapes,
-    SdiText, SdiTextures, SdiVector, TextureId,
-};
-use oasis_types::error::Result;
+use oasis_types::backend::Color;
 
-/// A recorded draw call from the mock backend.
-#[derive(Debug, Clone)]
-#[allow(dead_code)]
-pub enum DrawCall {
-    FillRect {
-        x: i32,
-        y: i32,
-        w: u32,
-        h: u32,
-        color: Color,
-    },
-    DrawText {
-        text: String,
-        x: i32,
-        y: i32,
-        font_size: u16,
-        color: Color,
-    },
-    Blit {
-        tex: TextureId,
-        x: i32,
-        y: i32,
-        w: u32,
-        h: u32,
-    },
-}
-
-/// A mock backend that records all draw calls for test assertions.
-pub struct MockBackend {
-    pub calls: Vec<DrawCall>,
-}
-
-impl MockBackend {
-    pub fn new() -> Self {
-        Self { calls: Vec::new() }
-    }
-
-    /// Count of `FillRect` calls.
-    pub fn fill_rect_count(&self) -> usize {
-        self.calls
-            .iter()
-            .filter(|c| matches!(c, DrawCall::FillRect { .. }))
-            .count()
-    }
-
-    /// Count of `DrawText` calls.
-    pub fn draw_text_count(&self) -> usize {
-        self.calls
-            .iter()
-            .filter(|c| matches!(c, DrawCall::DrawText { .. }))
-            .count()
-    }
-
-    /// Return only the `DrawText` entries.
-    #[allow(dead_code)]
-    pub fn text_calls(&self) -> Vec<&DrawCall> {
-        self.calls
-            .iter()
-            .filter(|c| matches!(c, DrawCall::DrawText { .. }))
-            .collect()
-    }
-
-    /// Return text draw calls as `(text, x, y, font_size)` tuples,
-    /// sorted by Y then X position for easy geometric analysis.
-    pub fn text_positions(&self) -> Vec<(&str, i32, i32, u16)> {
-        let mut positions: Vec<_> = self
-            .calls
-            .iter()
-            .filter_map(|c| {
-                if let DrawCall::DrawText {
-                    text,
-                    x,
-                    y,
-                    font_size,
-                    ..
-                } = c
-                {
-                    Some((text.as_str(), *x, *y, *font_size))
-                } else {
-                    None
-                }
-            })
-            .collect();
-        positions.sort_by(|a, b| a.2.cmp(&b.2).then(a.1.cmp(&b.1)));
-        positions
-    }
-
-    /// Check if any `DrawText` call contains the given substring.
-    pub fn has_text(&self, needle: &str) -> bool {
-        self.calls.iter().any(|c| {
-            if let DrawCall::DrawText { text, .. } = c {
-                text.contains(needle)
-            } else {
-                false
-            }
-        })
-    }
-}
-
-impl MockBackend {
-    /// Colors of every `FillRect` call, in draw order.
-    pub fn fill_colors(&self) -> Vec<Color> {
-        self.calls
-            .iter()
-            .filter_map(|c| match c {
-                DrawCall::FillRect { color, .. } => Some(*color),
-                _ => None,
-            })
-            .collect()
-    }
-}
+pub use oasis_test_backend::RecordingBackend;
 
 /// Draw a widget once per [`WidgetState`](crate::states::WidgetState)
 /// and assert that every state produced a distinct sequence of fill
@@ -139,7 +28,7 @@ pub fn assert_states_distinct(
     let fills: Vec<Vec<Color>> = states
         .iter()
         .map(|&st| {
-            let mut backend = MockBackend::new();
+            let mut backend = RecordingBackend::default();
             {
                 let mut ctx = crate::context::DrawContext::new(&mut backend, &theme);
                 f(st, &mut ctx);
@@ -162,7 +51,7 @@ pub fn assert_states_distinct(
 /// it emitted. Helper for "resting rendering unchanged" assertions.
 pub fn fill_colors_of(f: impl FnOnce(&mut crate::context::DrawContext<'_>)) -> Vec<Color> {
     let theme = crate::theme::Theme::dark();
-    let mut backend = MockBackend::new();
+    let mut backend = RecordingBackend::default();
     {
         let mut ctx = crate::context::DrawContext::new(&mut backend, &theme);
         f(&mut ctx);
@@ -170,21 +59,54 @@ pub fn fill_colors_of(f: impl FnOnce(&mut crate::context::DrawContext<'_>)) -> V
     backend.fill_colors()
 }
 
-/// Return all built-in themes for exhaustive widget testing.
-pub fn all_themes() -> [crate::theme::Theme; 7] {
-    use crate::theme::Theme;
+/// A light palette (light surfaces, dark text) for exercising widgets
+/// against something other than [`Theme::dark`](crate::theme::Theme::dark).
+/// Shipping themes come from oasis-skin (`SkinVariant::Light`).
+pub fn light_test_theme() -> crate::theme::Theme {
+    let mut t = crate::theme::Theme::dark();
+    t.background = Color::rgb(245, 245, 250);
+    t.surface = Color::rgb(255, 255, 255);
+    t.surface_variant = Color::rgb(235, 235, 242);
+    t.text_primary = Color::rgb(20, 20, 30);
+    t.text_secondary = Color::rgb(90, 90, 110);
+    t.text_disabled = Color::rgb(170, 170, 185);
+    t.button_bg = Color::rgb(230, 230, 238);
+    t.button_bg_hover = Color::rgb(215, 215, 228);
+    t.button_bg_pressed = Color::rgb(195, 195, 212);
+    t.input_bg = Color::rgb(255, 255, 255);
+    t.border = Color::rgb(200, 200, 212);
+    t
+}
+
+/// A high-contrast palette with no rounding and no shadows (the shape a
+/// `SkinVariant::HighContrast` skin produces), for edge-case geometry.
+pub fn high_contrast_test_theme() -> crate::theme::Theme {
+    let mut t = crate::theme::Theme::dark();
+    t.background = Color::rgb(0, 0, 0);
+    t.surface = Color::rgb(0, 0, 0);
+    t.text_primary = Color::rgb(255, 255, 255);
+    t.border = Color::rgb(255, 255, 255);
+    t.border_radius_sm = 0;
+    t.border_radius_md = 0;
+    t.border_radius_lg = 0;
+    t.border_radius_xl = 0;
+    t.shadow_card = crate::shadow::Shadow::elevation(0);
+    t.shadow_dropdown = crate::shadow::Shadow::elevation(0);
+    t.shadow_modal = crate::shadow::Shadow::elevation(0);
+    t.shadow_tooltip = crate::shadow::Shadow::elevation(0);
+    t
+}
+
+/// The palettes widget tests sweep: dark plus the two fixtures above.
+pub fn all_themes() -> [crate::theme::Theme; 3] {
     [
-        Theme::dark(),
-        Theme::light(),
-        Theme::classic(),
-        Theme::high_contrast(),
-        Theme::colorblind(),
-        Theme::protanopia(),
-        Theme::tritanopia(),
+        crate::theme::Theme::dark(),
+        light_test_theme(),
+        high_contrast_test_theme(),
     ]
 }
 
-/// Test that a widget draws without panicking across all built-in themes.
+/// Test that a widget draws without panicking across [`all_themes`].
 ///
 /// The closure receives a `&mut DrawContext` and should construct + draw the
 /// widget under test:
@@ -197,88 +119,8 @@ pub fn all_themes() -> [crate::theme::Theme; 7] {
 /// ```
 pub fn test_draw_all_themes(mut f: impl FnMut(&mut crate::context::DrawContext<'_>)) {
     for theme in all_themes() {
-        let mut backend = MockBackend::new();
+        let mut backend = RecordingBackend::default();
         let mut ctx = crate::context::DrawContext::new(&mut backend, &theme);
         f(&mut ctx);
     }
 }
-
-impl SdiCore for MockBackend {
-    fn init(&mut self, _width: u32, _height: u32) -> Result<()> {
-        Ok(())
-    }
-
-    fn clear(&mut self, _color: Color) -> Result<()> {
-        Ok(())
-    }
-
-    fn blit(&mut self, tex: TextureId, x: i32, y: i32, w: u32, h: u32) -> Result<()> {
-        self.calls.push(DrawCall::Blit { tex, x, y, w, h });
-        Ok(())
-    }
-
-    fn fill_rect(&mut self, x: i32, y: i32, w: u32, h: u32, color: Color) -> Result<()> {
-        self.calls.push(DrawCall::FillRect { x, y, w, h, color });
-        Ok(())
-    }
-
-    fn draw_text(
-        &mut self,
-        text: &str,
-        x: i32,
-        y: i32,
-        font_size: u16,
-        color: Color,
-    ) -> Result<()> {
-        self.calls.push(DrawCall::DrawText {
-            text: text.to_string(),
-            x,
-            y,
-            font_size,
-            color,
-        });
-        Ok(())
-    }
-
-    fn swap_buffers(&mut self) -> Result<()> {
-        Ok(())
-    }
-
-    fn load_texture(&mut self, _width: u32, _height: u32, _rgba_data: &[u8]) -> Result<TextureId> {
-        Ok(TextureId(0))
-    }
-
-    fn destroy_texture(&mut self, _tex: TextureId) -> Result<()> {
-        Ok(())
-    }
-
-    fn set_clip_rect(&mut self, _x: i32, _y: i32, _w: u32, _h: u32) -> Result<()> {
-        Ok(())
-    }
-
-    fn reset_clip_rect(&mut self) -> Result<()> {
-        Ok(())
-    }
-
-    fn measure_text(&self, text: &str, font_size: u16) -> u32 {
-        oasis_types::backend::bitmap_measure_text(text, font_size)
-    }
-
-    fn read_pixels(&self, _x: i32, _y: i32, _w: u32, _h: u32) -> Result<Vec<u8>> {
-        Ok(Vec::new())
-    }
-
-    fn shutdown(&mut self) -> Result<()> {
-        Ok(())
-    }
-}
-
-impl SdiShapes for MockBackend {}
-impl SdiGradients for MockBackend {}
-impl SdiAlpha for MockBackend {}
-impl SdiText for MockBackend {}
-impl SdiTextures for MockBackend {}
-impl SdiClipTransform for MockBackend {}
-impl SdiVector for MockBackend {}
-impl SdiBatch for MockBackend {}
-impl SdiRenderTarget for MockBackend {}

@@ -429,17 +429,17 @@ mod tests {
         assert_eq!(t.elapsed_ms, u32::MAX);
     }
 
-    // -- Positioning and drawing tests using MockBackend --
+    // -- Positioning and drawing tests using RecordingBackend --
 
     use crate::context::DrawContext;
-    use crate::test_utils::MockBackend;
+    use crate::test_utils::RecordingBackend;
     use crate::theme::Theme;
     use crate::widget::Widget;
 
     #[test]
     fn compute_rect_below() {
         let theme = Theme::dark();
-        let mut backend = MockBackend::new();
+        let mut backend = RecordingBackend::default();
         let ctx = DrawContext::new(&mut backend, &theme);
         let t = Tooltip::new("Test").with_position(TooltipPosition::Below);
         let (x, y, w, h) = t.compute_rect(&ctx, &anchor(100, 50, 40, 20, 480, 272));
@@ -460,7 +460,7 @@ mod tests {
     #[test]
     fn compute_rect_above() {
         let theme = Theme::dark();
-        let mut backend = MockBackend::new();
+        let mut backend = RecordingBackend::default();
         let ctx = DrawContext::new(&mut backend, &theme);
         let t = Tooltip::new("Tip").with_position(TooltipPosition::Above);
         let (_x, y, _w, h) = t.compute_rect(&ctx, &anchor(100, 100, 40, 20, 480, 272));
@@ -471,7 +471,7 @@ mod tests {
     #[test]
     fn compute_rect_left() {
         let theme = Theme::dark();
-        let mut backend = MockBackend::new();
+        let mut backend = RecordingBackend::default();
         let ctx = DrawContext::new(&mut backend, &theme);
         let t = Tooltip::new("Tip").with_position(TooltipPosition::Left);
         let (x, _y, w, _h) = t.compute_rect(&ctx, &anchor(200, 100, 40, 20, 480, 272));
@@ -481,7 +481,7 @@ mod tests {
     #[test]
     fn compute_rect_right() {
         let theme = Theme::dark();
-        let mut backend = MockBackend::new();
+        let mut backend = RecordingBackend::default();
         let ctx = DrawContext::new(&mut backend, &theme);
         let t = Tooltip::new("Tip").with_position(TooltipPosition::Right);
         let (x, _y, _w, _h) = t.compute_rect(&ctx, &anchor(100, 100, 40, 20, 480, 272));
@@ -491,7 +491,7 @@ mod tests {
     #[test]
     fn compute_rect_clamps_right_edge() {
         let theme = Theme::dark();
-        let mut backend = MockBackend::new();
+        let mut backend = RecordingBackend::default();
         let ctx = DrawContext::new(&mut backend, &theme);
         let t = Tooltip::new("Long tooltip text here");
         let (x, _y, w, _h) = t.compute_rect(&ctx, &anchor(460, 100, 20, 20, 480, 272));
@@ -506,7 +506,7 @@ mod tests {
     #[test]
     fn compute_rect_clamps_bottom_edge() {
         let theme = Theme::dark();
-        let mut backend = MockBackend::new();
+        let mut backend = RecordingBackend::default();
         let ctx = DrawContext::new(&mut backend, &theme);
         let t = Tooltip::new("Tip").with_position(TooltipPosition::Below);
         let (_x, y, _w, h) = t.compute_rect(&ctx, &anchor(100, 260, 40, 20, 480, 272));
@@ -521,7 +521,7 @@ mod tests {
     #[test]
     fn compute_rect_clamps_top_edge() {
         let theme = Theme::dark();
-        let mut backend = MockBackend::new();
+        let mut backend = RecordingBackend::default();
         let ctx = DrawContext::new(&mut backend, &theme);
         let t = Tooltip::new("Tip").with_position(TooltipPosition::Above);
         let (_x, y, _w, _h) = t.compute_rect(&ctx, &anchor(100, 0, 40, 20, 480, 272));
@@ -531,7 +531,7 @@ mod tests {
     #[test]
     fn compute_rect_clamps_left_edge() {
         let theme = Theme::dark();
-        let mut backend = MockBackend::new();
+        let mut backend = RecordingBackend::default();
         let ctx = DrawContext::new(&mut backend, &theme);
         let t = Tooltip::new("Tip").with_position(TooltipPosition::Left);
         let (x, _y, _w, _h) = t.compute_rect(&ctx, &anchor(0, 100, 10, 20, 480, 272));
@@ -541,7 +541,7 @@ mod tests {
     #[test]
     fn measure_returns_tooltip_dimensions() {
         let theme = Theme::dark();
-        let mut backend = MockBackend::new();
+        let mut backend = RecordingBackend::default();
         let ctx = DrawContext::new(&mut backend, &theme);
         let t = Tooltip::new("Hello");
         let (w, h) = t.measure(&ctx, 480, 272);
@@ -552,7 +552,7 @@ mod tests {
     #[test]
     fn draw_visible_emits_fill_and_text() {
         let theme = Theme::dark();
-        let mut backend = MockBackend::new();
+        let mut backend = RecordingBackend::default();
         {
             let mut ctx = DrawContext::new(&mut backend, &theme);
             let mut t = Tooltip::new("Info");
@@ -569,7 +569,7 @@ mod tests {
     #[test]
     fn draw_hidden_emits_nothing() {
         let theme = Theme::dark();
-        let mut backend = MockBackend::new();
+        let mut backend = RecordingBackend::default();
         {
             let mut ctx = DrawContext::new(&mut backend, &theme);
             let t = Tooltip::new("Secret");
@@ -589,7 +589,7 @@ mod tests {
     #[test]
     fn draw_at_convenience_visible() {
         let theme = Theme::dark();
-        let mut backend = MockBackend::new();
+        let mut backend = RecordingBackend::default();
         {
             let mut ctx = DrawContext::new(&mut backend, &theme);
             let mut t = Tooltip::new("Help");
@@ -603,7 +603,7 @@ mod tests {
     #[test]
     fn draw_at_convenience_hidden() {
         let theme = Theme::dark();
-        let mut backend = MockBackend::new();
+        let mut backend = RecordingBackend::default();
         {
             let mut ctx = DrawContext::new(&mut backend, &theme);
             let t = Tooltip::new("Nope");
@@ -616,7 +616,7 @@ mod tests {
     #[test]
     fn draw_at_empty_text_no_output() {
         let theme = Theme::dark();
-        let mut backend = MockBackend::new();
+        let mut backend = RecordingBackend::default();
         {
             let mut ctx = DrawContext::new(&mut backend, &theme);
             let mut t = Tooltip::new("");
@@ -644,7 +644,7 @@ mod tests {
             TooltipPosition::Left,
             TooltipPosition::Right,
         ] {
-            let mut backend = MockBackend::new();
+            let mut backend = RecordingBackend::default();
             let mut ctx = DrawContext::new(&mut backend, &theme);
             let mut t = Tooltip::new("Pos test").with_position(pos);
             t.state = TooltipState::Visible;
@@ -656,7 +656,7 @@ mod tests {
     #[test]
     fn compute_rect_tiny_viewport() {
         let theme = Theme::dark();
-        let mut backend = MockBackend::new();
+        let mut backend = RecordingBackend::default();
         let ctx = DrawContext::new(&mut backend, &theme);
         let t = Tooltip::new("Too big for viewport");
         let (x, y, _w, _h) = t.compute_rect(&ctx, &anchor(0, 0, 10, 10, 20, 20));

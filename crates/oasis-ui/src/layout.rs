@@ -564,11 +564,11 @@ mod tests {
         use super::cached_measure;
         use crate::button::Button;
         use crate::context::DrawContext;
-        use crate::test_utils::MockBackend;
+        use crate::test_utils::RecordingBackend;
         use crate::theme::Theme;
 
         let theme = Theme::dark();
-        let mut backend = MockBackend::new();
+        let mut backend = RecordingBackend::default();
         let ctx = DrawContext::new(&mut backend, &theme);
         let btn = Button::new("Hello");
 

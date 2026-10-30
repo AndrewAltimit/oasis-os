@@ -314,17 +314,17 @@ mod tests {
         assert!(!d.open);
     }
 
-    // -- Draw / measure tests using MockBackend --
+    // -- Draw / measure tests using RecordingBackend --
 
     use crate::context::DrawContext;
-    use crate::test_utils::MockBackend;
+    use crate::test_utils::RecordingBackend;
     use crate::theme::Theme;
     use crate::widget::Widget;
 
     #[test]
     fn measure_closed_single_row() {
         let theme = Theme::dark();
-        let mut backend = MockBackend::new();
+        let mut backend = RecordingBackend::default();
         let ctx = DrawContext::new(&mut backend, &theme);
         let d = Dropdown::new(sample_options());
         let (w, h) = d.measure(&ctx, 200, 300);
@@ -336,7 +336,7 @@ mod tests {
     #[test]
     fn measure_open_includes_menu() {
         let theme = Theme::dark();
-        let mut backend = MockBackend::new();
+        let mut backend = RecordingBackend::default();
         let ctx = DrawContext::new(&mut backend, &theme);
         let mut d = Dropdown::new(sample_options());
         d.open = true;
@@ -349,7 +349,7 @@ mod tests {
     #[test]
     fn draw_closed_shows_selected_text() {
         let theme = Theme::dark();
-        let mut backend = MockBackend::new();
+        let mut backend = RecordingBackend::default();
         {
             let mut ctx = DrawContext::new(&mut backend, &theme);
             let d = Dropdown::new(sample_options());
@@ -363,7 +363,7 @@ mod tests {
     #[test]
     fn draw_open_shows_all_options() {
         let theme = Theme::dark();
-        let mut backend = MockBackend::new();
+        let mut backend = RecordingBackend::default();
         {
             let mut ctx = DrawContext::new(&mut backend, &theme);
             let mut d = Dropdown::new(sample_options());
@@ -378,7 +378,7 @@ mod tests {
     #[test]
     fn draw_empty_options_shows_placeholder() {
         let theme = Theme::dark();
-        let mut backend = MockBackend::new();
+        let mut backend = RecordingBackend::default();
         {
             let mut ctx = DrawContext::new(&mut backend, &theme);
             let mut d = Dropdown::new(vec![]);
@@ -391,7 +391,7 @@ mod tests {
     #[test]
     fn draw_selected_option_highlighted() {
         let theme = Theme::dark();
-        let mut backend = MockBackend::new();
+        let mut backend = RecordingBackend::default();
         {
             let mut ctx = DrawContext::new(&mut backend, &theme);
             let mut d = Dropdown::new(sample_options());
@@ -407,7 +407,7 @@ mod tests {
     #[test]
     fn draw_closed_no_menu_items() {
         let theme = Theme::dark();
-        let mut backend = MockBackend::new();
+        let mut backend = RecordingBackend::default();
         {
             let mut ctx = DrawContext::new(&mut backend, &theme);
             let mut d = Dropdown::new(sample_options());
@@ -451,7 +451,7 @@ mod tests {
     #[test]
     fn option_at_maps_rows() {
         let theme = Theme::dark();
-        let mut backend = MockBackend::new();
+        let mut backend = RecordingBackend::default();
         let ctx = DrawContext::new(&mut backend, &theme);
         let mut d = Dropdown::new(sample_options());
         let row_h = Dropdown::row_height(&ctx) as i32;

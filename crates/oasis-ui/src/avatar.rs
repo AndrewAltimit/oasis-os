@@ -116,17 +116,17 @@ mod tests {
         assert_eq!(a.size, 0);
     }
 
-    // -- Draw / measure tests using MockBackend --
+    // -- Draw / measure tests using RecordingBackend --
 
     use crate::context::DrawContext;
-    use crate::test_utils::MockBackend;
+    use crate::test_utils::RecordingBackend;
     use crate::theme::Theme;
     use crate::widget::Widget;
 
     #[test]
     fn measure_returns_size() {
         let theme = Theme::dark();
-        let mut backend = MockBackend::new();
+        let mut backend = RecordingBackend::default();
         let ctx = DrawContext::new(&mut backend, &theme);
         let avatar = Avatar::new('A', 32);
         let (w, h) = avatar.measure(&ctx, 200, 200);
@@ -137,7 +137,7 @@ mod tests {
     #[test]
     fn draw_emits_circle_and_text() {
         let theme = Theme::dark();
-        let mut backend = MockBackend::new();
+        let mut backend = RecordingBackend::default();
         {
             let mut ctx = DrawContext::new(&mut backend, &theme);
             let avatar = Avatar::new('A', 32);
@@ -150,7 +150,7 @@ mod tests {
     #[test]
     fn draw_with_custom_bg() {
         let theme = Theme::dark();
-        let mut backend = MockBackend::new();
+        let mut backend = RecordingBackend::default();
         {
             let mut ctx = DrawContext::new(&mut backend, &theme);
             let mut avatar = Avatar::new('Z', 32);
@@ -164,7 +164,7 @@ mod tests {
     #[test]
     fn draw_zero_size_no_panic() {
         let theme = Theme::dark();
-        let mut backend = MockBackend::new();
+        let mut backend = RecordingBackend::default();
         {
             let mut ctx = DrawContext::new(&mut backend, &theme);
             let avatar = Avatar::new('X', 0);
@@ -176,7 +176,7 @@ mod tests {
     #[test]
     fn draw_initial_char() {
         let theme = Theme::dark();
-        let mut backend = MockBackend::new();
+        let mut backend = RecordingBackend::default();
         {
             let mut ctx = DrawContext::new(&mut backend, &theme);
             let avatar = Avatar::new('M', 32);

@@ -79,14 +79,14 @@ impl Widget for Panel {
 mod tests {
     use super::*;
     use crate::context::DrawContext;
-    use crate::test_utils::MockBackend;
+    use crate::test_utils::RecordingBackend;
     use crate::theme::Theme;
     use crate::widget::Widget;
 
     #[test]
     fn measure_returns_available_size() {
         let theme = Theme::dark();
-        let mut backend = MockBackend::new();
+        let mut backend = RecordingBackend::default();
         let ctx = DrawContext::new(&mut backend, &theme);
         let panel = Panel::default();
         let (w, h) = panel.measure(&ctx, 200, 100);
@@ -97,7 +97,7 @@ mod tests {
     #[test]
     fn draw_background() {
         let theme = Theme::dark();
-        let mut backend = MockBackend::new();
+        let mut backend = RecordingBackend::default();
         {
             let mut ctx = DrawContext::new(&mut backend, &theme);
             let panel = Panel {
@@ -112,7 +112,7 @@ mod tests {
     #[test]
     fn draw_border() {
         let theme = Theme::dark();
-        let mut backend = MockBackend::new();
+        let mut backend = RecordingBackend::default();
         {
             let mut ctx = DrawContext::new(&mut backend, &theme);
             let panel = Panel {
@@ -129,7 +129,7 @@ mod tests {
     #[test]
     fn draw_zero_elevation() {
         let theme = Theme::dark();
-        let mut backend = MockBackend::new();
+        let mut backend = RecordingBackend::default();
         {
             let mut ctx = DrawContext::new(&mut backend, &theme);
             let panel = Panel {
@@ -146,7 +146,7 @@ mod tests {
     #[test]
     fn draw_with_radius() {
         let theme = Theme::dark();
-        let mut backend = MockBackend::new();
+        let mut backend = RecordingBackend::default();
         {
             let mut ctx = DrawContext::new(&mut backend, &theme);
             let panel = Panel {
