@@ -27,6 +27,9 @@ removal, a restyled site, and docs that match the code.
   PSP-native skins, growing to 40 % x 45 % of larger screens), and
   cascaded windows stay on screen.
 - The example clock plugin is hidden until `pclock show`.
+- Minimizing a maximized window and restoring it brings it back
+  maximized (the next restore returns the original size); maximizing a
+  minimized window shows it.
 - The browser enforces CSP `script-src` / `style-src` and `SameSite`
   cookies; large images are downscaled instead of shown broken (on PSP
   they are capped at 256 px per side).
@@ -201,6 +204,43 @@ removal, a restyled site, and docs that match the code.
 - Strict `resolve_skin` (plus `resolve_skin_or_classic` for boot);
   `skin lint` flags unknown shader names and the removed `features.toml`
   `command_categories` key. `from_base_colors` delegates to `from_skin`.
+- Derived colors stay readable: primary-button labels on the accent,
+  selection text, app body text and bar text are lifted to 4.5:1 when the
+  derivation fell short (several skins drew labels at 1.0-1.6:1); colors a
+  skin sets explicitly are kept. win95's terminal text is black / navy on
+  the gray app surface.
+- `skin lint` catches malformed colors anywhere in `theme.toml`, unknown
+  layer / anchor / wallpaper / entrance / page-style / easing / density
+  names, short `glass_shard` layers, bad shader-param colors and
+  non-built-in `inherits` parents; TOML errors name the file and line.
+  Every built-in lints clean (`all_builtin_skins_lint_clean`, with an
+  explicit list of accepted palette-constrained contrast misses).
+
+### UI toolkit and window manager
+
+- **(breaking)** `oasis-ui` drops `ToastStack` (the shell's
+  `oasis_core::toast` is the one toast system), `Avatar`, `IconAtlas` /
+  `Icon` with the never-drawn `Button::icon`, and `accessibility` (use
+  `oasis_types::color::{contrast_ratio, meets_wcag_aa}`): 27 widgets.
+  `focus.rs` became `focus/{ring,manager,spatial,style}`.
+- `DrawContext::text_in` ellipsizes text wider than its rect instead of
+  drawing outside the widget. A sweep draws every widget at degenerate
+  sizes; it found `SpinBox` underflowing when narrower than a step button.
+- Widget fixes: `SpatialFocusManager` ignored the `InputEvent::Tab` /
+  `ShiftTab` events keyboards send; `Table` sorting moved the selection
+  to another row; `Slider` could never reach `max` when the range was not
+  a step multiple; circular `ProgressBar` never drew progress; focused
+  `InputField`s put the cursor outside the field for long text (and
+  password masks counted bytes); flex children left up to n-1 pixels
+  unused; tooltips at a screen edge covered their target (now they flip;
+  `ContextMenu::show_within` does the same for menus); `MenuBar` panicked
+  on a stale `open` index; disabled dropdowns still changed selection.
+  New `ListView::scroll_by`, `InputField` cursor movement / `delete`.
+- Window manager fixes: right-edge resize on narrow windows resolved to
+  the left edge; narrow windows could not be dragged to x = 0; a drag in
+  progress undid a tile / maximize / snap / fullscreen on the next mouse
+  move; interrupted open / minimize / restore animations jumped; grid
+  tiling left the partial last row's cells empty.
 
 ### Terminal
 
