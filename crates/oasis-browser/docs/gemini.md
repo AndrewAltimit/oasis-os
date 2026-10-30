@@ -9,13 +9,13 @@ pipeline as a regular page.
 ## Files
 
 ```text
-src/
-├── gemini/
-│   ├── mod.rs        GeminiStatus, response types
-│   ├── parser.rs     .gmi text-format parser (line-oriented)
-│   └── renderer.rs   .gmi → HTML translation
-└── loader/
-    └── gemini_fetch.rs  TLS-only fetcher (no plain TCP fallback)
+crates/oasis-browser/src/gemini/
+├── mod.rs            re-exports the protocol types from oasis-http
+├── parser.rs         .gmi text-format parser (line-oriented)
+└── renderer.rs       .gmi → HTML translation
+crates/oasis-http/src/
+├── gemini.rs         GeminiStatus, GeminiResponse, parse_response, build_request
+└── gemini_fetch.rs   TLS-only fetcher (no plain TCP fallback)
 ```
 
 ## Protocol notes
@@ -82,7 +82,7 @@ crate is the URL scheme dispatch in the loader.
 ## Styling
 
 Gemini pages reuse the default UA stylesheet plus a small `gemini.css`
-that lives in `src/css/default.rs`. The defaults give links the usual
+that lives in `crates/oasis-css/src/default.rs`. The defaults give links the usual
 underlined-blue look, blockquotes a left border, and `<pre>` blocks a
 monospace font and subtle background.
 
@@ -92,7 +92,7 @@ equivalent. If you want a custom theme, edit `gemini.css`.
 
 ## Loader integration
 
-`loader/gemini_fetch.rs` mirrors `loader/http.rs` but enforces
+`oasis-http/src/gemini_fetch.rs` mirrors `oasis-http/src/http.rs` but enforces
 `gemini://` scheme and TLS. Fetches go through the same `IoThread` as
 HTTP requests, so caching, navigation history, and back / forward all
 just work — there is no Gemini-specific cache or history path.

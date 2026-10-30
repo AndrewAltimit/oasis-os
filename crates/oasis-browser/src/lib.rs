@@ -9,6 +9,14 @@
 //! See `docs/` (in the crate root) for architecture, CSS coverage, and
 //! contributor guides. Start with `docs/README.md`.
 //!
+//! # Crates
+//!
+//! The HTML parser and DOM ([`oasis_html`]), the CSS parser and cascade
+//! ([`oasis_css`]) and the resource loader ([`oasis_http`]) are separate
+//! crates. This crate aliases the first two as its private `html` /
+//! `css` modules and re-exports the loader as [`loader`]; benches and
+//! fuzzers reach the parsers through [`internals`].
+//!
 //! # Feature flags
 //!
 //! - `javascript` — enables QuickJS-NG via `oasis-js` for inline
@@ -24,9 +32,11 @@
 //!   [`BrowserConfig::js_memory_limit_bytes`] (smaller defaults under
 //!   `psp`).
 //! - `webp` — enables WebP image decoding via the `image` crate.
-//! - `parallel-style` — parallel style cascade via rayon (desktop only).
+//! - `parallel-style` — parallel style cascade via rayon (desktop only;
+//!   forwards to `oasis-css/parallel-style`).
 //! - `psp` — enables PSP-specific shrink-the-footprint code paths and
-//!   disables features that rely on desktop-only crates.
+//!   disables features that rely on desktop-only crates (forwards to
+//!   `oasis-http/psp`, which swaps in the PSP HTTP client).
 //!
 //! # Rendering
 //!
@@ -67,13 +77,13 @@
 //! `docs/archive/compositor-overhaul-plan.md` §3.6 for the phased revisit plan.
 
 pub mod config;
-pub(crate) mod css;
+pub(crate) use oasis_css as css;
 pub mod forms;
 pub mod gemini;
-pub(crate) mod html;
+pub(crate) use oasis_html as html;
 pub mod image;
 pub(crate) mod layout;
-pub mod loader;
+pub use oasis_http as loader;
 pub mod nav;
 pub(crate) mod paint;
 pub mod reader;
@@ -394,6 +404,10 @@ pub struct BrowserWidget {
     /// Texture atlas for packing small images (reduces GPU bind switches).
     image_atlas: image_atlas::ImageAtlas,
 
+    /// Image / atlas textures of a page navigated away from. Navigation
+    /// has no backend handle, so they are destroyed on the next paint.
+    retired_textures: Vec<TextureId>,
+
     /// Pending image requests to be processed in time-sliced batches.
     pending_images: Vec<(String, ResourceRequest)>,
 
@@ -690,6 +704,7 @@ impl BrowserWidget {
             image_decode_in_flight: 0,
             image_textures: HashMap::new(),
             image_atlas: image_atlas::ImageAtlas::new(),
+            retired_textures: Vec::new(),
             pending_images: Vec::new(),
             deferred_images: Vec::new(),
             decoded_image_bytes: 0,

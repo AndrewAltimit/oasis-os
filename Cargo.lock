@@ -1259,6 +1259,9 @@ dependencies = [
  "image",
  "jpeg-decoder",
  "log",
+ "oasis-css",
+ "oasis-html",
+ "oasis-http",
  "oasis-js",
  "oasis-net",
  "oasis-skin",
@@ -1296,6 +1299,7 @@ dependencies = [
  "oasis-app-tv-guide",
  "oasis-audio",
  "oasis-browser",
+ "oasis-http",
  "oasis-i18n",
  "oasis-net",
  "oasis-platform",
@@ -1317,6 +1321,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "oasis-css"
+version = "1.4.0"
+dependencies = [
+ "criterion",
+ "log",
+ "oasis-html",
+ "oasis-types",
+ "proptest",
+ "rayon",
+ "rustc-hash 2.1.1",
+]
+
+[[package]]
 name = "oasis-ffi"
 version = "1.4.0"
 dependencies = [
@@ -1326,6 +1343,29 @@ dependencies = [
  "oasis-core",
  "oasis-shader",
  "oasis-video",
+]
+
+[[package]]
+name = "oasis-html"
+version = "1.4.0"
+dependencies = [
+ "criterion",
+ "log",
+ "proptest",
+]
+
+[[package]]
+name = "oasis-http"
+version = "1.4.0"
+dependencies = [
+ "brotli",
+ "flate2",
+ "log",
+ "oasis-net",
+ "oasis-types",
+ "oasis-vfs",
+ "rustc-hash 2.1.1",
+ "web-time",
 ]
 
 [[package]]

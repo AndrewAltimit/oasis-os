@@ -38,7 +38,7 @@ The loader picks a fetcher based on URL scheme (`http`, `https`,
 
 ## Cache
 
-`ResourceCache` (`loader/cache.rs`) is an LRU keyed by URL, bounded by
+`ResourceCache` (`oasis-http/src/cache.rs`) is an LRU keyed by URL, bounded by
 total bytes (default 8 MiB, configurable via `BrowserConfig`). Entries
 store the response body, content type, ETag, `Last-Modified`, and the
 parsed forms (e.g. an HTML body keeps a precomputed `Document` so
@@ -50,7 +50,7 @@ the cache first, then falls back to a fresh fetch. Cache validators
 
 ## IO thread
 
-The IO thread (`loader/io_thread.rs`) is the only background thread in
+The IO thread (`oasis-http/src/io_thread.rs`) is the only background thread in
 the crate. It is spawned lazily on the first network request and lives
 for the lifetime of the `BrowserWidget`.
 
@@ -77,7 +77,7 @@ fetch. This is fine for an embedded engine driving one tab.
 
 ## Cookies
 
-`CookieJar` (`loader/cookies.rs`) is a session-only RFC 6265 store
+`CookieJar` (`oasis-http/src/cookies.rs`) is a session-only RFC 6265 store
 (desktop; PSP has none yet):
 
 - host-only cookies unless `Domain=` is given; `Domain=` must
@@ -103,7 +103,7 @@ session. `document.cookie` is a separate per-page map
 
 ## CSP
 
-`loader/csp.rs` parses every `Content-Security-Policy` response header
+`oasis-http/src/csp.rs` parses every `Content-Security-Policy` response header
 (each comma-separated policy must allow a load; report-only and
 `<meta http-equiv>` policies are ignored). `widget/pipeline.rs` and
 `js_dom/fetch.rs` enforce:

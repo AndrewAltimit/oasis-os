@@ -10,6 +10,26 @@ Contributor guide: [`design.md`](design.md) §Browser. ADRs on the
 arena DOM and backend traits: [`adr/001-arena-based-dom.md`](adr/001-arena-based-dom.md),
 [`adr/003-backend-trait-design.md`](adr/003-backend-trait-design.md).
 
+## Crates
+
+The engine is split so the parsers and the loader build and test
+without layout, paint or QuickJS:
+
+| Crate | Contents | Depends on |
+| --- | --- | --- |
+| `oasis-html` | tokenizer, tree builder, arena DOM, `Hook<F>` embedder hooks | `log` |
+| `oasis-css` | CSS tokenizer, parser, cascade, computed values, animations / transitions | `oasis-html`, `oasis-types` |
+| `oasis-http` | `Url`, HTTP/1.1 + HTTP/2, Gemini framing, cookies, cache, CSP, IO thread, VFS loader | `oasis-net`, `oasis-vfs`, `oasis-types` |
+| `oasis-browser` | layout, paint, `BrowserWidget`, forms, JS DOM bindings, `.gmi` parser / renderer, images, fonts, SVG, canvas | all of the above |
+
+`oasis-browser` re-exports `oasis_http` as `loader` and keeps
+`internals::*` for benches, fuzzers and the PSP hook setters, so
+embedders compile unchanged. Features forward: `javascript` →
+`oasis-css/scripting`, `web-fonts` → `oasis-css/web-fonts`,
+`parallel-style` → `oasis-css/parallel-style`, `psp` → `oasis-http/psp`.
+`oasis-core`'s `http` / `browse` terminal commands use `oasis-http`
+directly.
+
 ## Network stack
 
 - **HTTP/1.1 + HTTP/2** — ALPN-negotiated `h2` over rustls. Full HPACK
@@ -24,7 +44,7 @@ arena DOM and backend traits: [`adr/001-arena-based-dom.md`](adr/001-arena-based
   payload is allocated, a HEADERS + CONTINUATION block over 64 KiB gets
   GOAWAY `ENHANCE_YOUR_CALM`, and HPACK output is capped at the
   advertised 64 KiB `MAX_HEADER_LIST_SIZE` (GOAWAY `COMPRESSION_ERROR`).
-- **HTTP/1.1 framing** (`loader/http1.rs`) is shared by the desktop and
+- **HTTP/1.1 framing** (`oasis-http/src/http1.rs`) is shared by the desktop and
   PSP clients: header lines are parsed (not substring-sniffed) to pick
   `Content-Length` / chunked framing, and the chunked terminator is
   found by walking the chunk sizes.
@@ -32,7 +52,7 @@ arena DOM and backend traits: [`adr/001-arena-based-dom.md`](adr/001-arena-based
   lower-cased, `user:pw@` split into `Url::userinfo` (never sent),
   default port elided, `\` treated as `/`. `Url::origin()` is the one
   origin used by CSP `'self'`, `fetch()` CORS and Web Storage.
-- **Cookies** (`loader/cookies.rs`, desktop only) — session-scoped
+- **Cookies** (`oasis-http/src/cookies.rs`, desktop only) — session-scoped
   RFC 6265 jar: host-only cookies, `Domain=` validated (no IP parents, a
   "PSL-lite" public-suffix guard), `Max-Age` / `Expires` expiry and
   deletion, `Secure` (sent over and accepted from `https:` only),
@@ -47,7 +67,7 @@ arena DOM and backend traits: [`adr/001-arena-based-dom.md`](adr/001-arena-based
   original origin; `Referer` follows `strict-origin-when-cross-origin`
   per hop (origin only cross-origin, nothing on an `https:` → `http:`
   downgrade); body headers go with the body on a POST → GET rewrite.
-- **CSP** (`loader/csp.rs`) — every `Content-Security-Policy` header is
+- **CSP** (`oasis-http/src/csp.rs`) — every `Content-Security-Policy` header is
   enforced (report-only and `<meta>` policies are ignored):
   `script-src(-elem)` gates inline `<script>` (matching `nonce`,
   `'sha256-…'` hash, or `'unsafe-inline'` when the list has no nonce /

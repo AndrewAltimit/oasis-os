@@ -2,7 +2,7 @@
 
 **Status:** Accepted
 **Date:** 2026-02-09 (initial release; recorded 2026-02-19)
-**Last reviewed:** 2026-10-30 — decision still current. The browser engine uses an arena-based DOM (`crates/oasis-browser/src/html/dom.rs`) with `NodeId` indices. Tradeoffs and Consequences updated: JavaScript mutation removes subtrees and their slots are reused through a free list, and script-built trees are depth-capped.
+**Last reviewed:** 2026-10-30 — decision still current. The browser engine uses an arena-based DOM (`crates/oasis-html/src/dom.rs`) with `NodeId` indices. Tradeoffs and Consequences updated: JavaScript mutation removes subtrees and their slots are reused through a free list, and script-built trees are depth-capped.
 
 ## Context
 

@@ -1,0 +1,28 @@
+[package]
+name = "oasis-http"
+description = "Resource loader for the OASIS_OS browser: URL, HTTP/1.1 + HTTP/2, Gemini, cookies, cache, CSP"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+documentation = "https://docs.rs/oasis-http"
+
+[features]
+psp = []
+
+[dependencies]
+oasis-types = { workspace = true }
+oasis-vfs = { workspace = true }
+oasis-net = { workspace = true }
+rustc-hash = { workspace = true }
+log = { workspace = true }
+flate2 = { workspace = true }
+brotli = { workspace = true }
+web-time = { workspace = true }
+
+[dev-dependencies]
+oasis-net = { workspace = true, features = ["tls-rustls"] }
+
+[lints]
+workspace = true

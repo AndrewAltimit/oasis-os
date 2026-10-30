@@ -727,6 +727,11 @@ impl BrowserWidget {
     /// to reduce GPU texture bind switches during rendering. Larger
     /// images get individual textures as before.
     pub(crate) fn ensure_image_textures(&mut self, backend: &mut dyn SdiBackend) {
+        // Textures of the previous page (see `retire_image_textures`).
+        for tex in self.retired_textures.drain(..) {
+            let _ = backend.destroy_texture(tex);
+        }
+
         let doc = match &self.document {
             Some(d) => d,
             None => return,

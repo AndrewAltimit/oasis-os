@@ -25,16 +25,16 @@ Files of interest:
 
 | Stage | File |
 | --- | --- |
-| Tokenizer | `src/css/tokenizer.rs` |
-| Parser | `src/css/parser/mod.rs`, `parser/types.rs` |
-| Selectors | `src/css/selectors.rs` |
-| Shorthand expansion | `src/css/shorthand/{background,border,box_model,flex,font,gradient,list}.rs` |
-| Cascade | `src/css/cascade/mod.rs`, `matching.rs`, `var_resolve.rs` |
-| Computed style | `src/css/values/computed.rs` |
-| Apply (parsed → computed) | `src/css/values/apply.rs` |
-| Resolve helpers | `src/css/values/resolve.rs` |
-| Default UA stylesheet | `src/css/default.rs` |
-| Animations / transitions | `src/css/animation.rs`, `src/css/transition.rs` |
+| Tokenizer | `crates/oasis-css/src/tokenizer.rs` |
+| Parser | `crates/oasis-css/src/parser/mod.rs`, `parser/types.rs` |
+| Selectors | `crates/oasis-css/src/selectors.rs` |
+| Shorthand expansion | `crates/oasis-css/src/shorthand/{background,border,box_model,flex,font,gradient,list}.rs` |
+| Cascade | `crates/oasis-css/src/cascade/mod.rs`, `matching.rs`, `var_resolve.rs` |
+| Computed style | `crates/oasis-css/src/values/computed.rs` |
+| Apply (parsed → computed) | `crates/oasis-css/src/values/apply/mod.rs` |
+| Resolve helpers | `crates/oasis-css/src/values/resolve.rs` |
+| Default UA stylesheet | `crates/oasis-css/src/default.rs` |
+| Animations / transitions | `crates/oasis-css/src/animation.rs`, `crates/oasis-css/src/transition.rs` |
 
 ## Parser
 
@@ -74,7 +74,7 @@ and only falls back to string comparison for cold properties (the
 Shorthands like `margin: 1px 2px`, `border: 1px solid red`, or
 `background: url(x.png) no-repeat center / cover` are expanded into
 their longhand declarations *during parsing* by the modules under
-`src/css/shorthand/`. By the time a declaration reaches the cascade,
+`crates/oasis-css/src/shorthand/`. By the time a declaration reaches the cascade,
 every property is a longhand. This keeps the cascade simple — it never
 needs to know about shorthands.
 
@@ -156,11 +156,11 @@ or fails parsing is treated as unsupported.
 
 - `transition` declarations are parsed into `Vec<Transition>` on
   `ComputedStyle`. When a property changes due to a state flip
-  (typically `:hover`), `src/css/transition.rs` interpolates the old →
+  (typically `:hover`), `crates/oasis-css/src/transition.rs` interpolates the old →
   new value over `duration_ms` using the configured `TimingFunction`.
   27 numeric properties are auto-interpolated.
 - `@keyframes` rules are parsed into `KeyframesAtRule` and linked to
-  elements via the `animation-name` property. `src/css/animation.rs`
+  elements via the `animation-name` property. `crates/oasis-css/src/animation.rs`
   drives the per-frame value updates from `BrowserWidget::tick`.
 
 ## Caching
@@ -175,9 +175,9 @@ or fails parsing is treated as unsupported.
 
 ## Tests
 
-- `src/css/parser/tests.rs` — tokenisation and rule-list parsing.
-- `src/css/cascade/tests.rs` — specificity, ordering, inheritance.
-- `src/css/values/apply.rs` (`mod tests`) — per-property parsing tests.
+- `crates/oasis-css/src/parser/tests.rs` — tokenisation and rule-list parsing.
+- `crates/oasis-css/src/cascade/tests.rs` — specificity, ordering, inheritance.
+- `crates/oasis-css/src/values/apply/mod.rs` (`mod tests`) — per-property parsing tests.
   Add one here for every new property you add.
 - A `proptest` block (`prop_tests::cascade_arbitrary_css_no_panic`)
   feeds random CSS into the cascade to catch crashes.

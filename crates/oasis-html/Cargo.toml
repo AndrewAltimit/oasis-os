@@ -1,0 +1,23 @@
+[package]
+name = "oasis-html"
+description = "HTML tokenizer, tree builder and arena DOM for the OASIS_OS browser engine"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+documentation = "https://docs.rs/oasis-html"
+
+[dependencies]
+log = { workspace = true }
+
+[dev-dependencies]
+proptest.workspace = true
+criterion.workspace = true
+
+[[bench]]
+name = "html_parsing"
+harness = false
+
+[lints]
+workspace = true

@@ -10,15 +10,18 @@ documentation = "https://docs.rs/oasis-browser"
 
 [features]
 default = ["web-fonts", "canvas"]
-javascript = ["dep:oasis-js"]
+javascript = ["dep:oasis-js", "oasis-css/scripting"]
 canvas = []
-web-fonts = ["dep:fontdue"]
+web-fonts = ["dep:fontdue", "oasis-css/web-fonts"]
 webp = ["dep:image"]
-parallel-style = ["dep:rayon"]
-psp = []
+parallel-style = ["oasis-css/parallel-style"]
+psp = ["oasis-http/psp"]
 
 [dependencies]
 oasis-types = { workspace = true }
+oasis-html = { workspace = true }
+oasis-css = { workspace = true }
+oasis-http = { workspace = true }
 oasis-vfs = { workspace = true }
 oasis-net = { workspace = true }
 oasis-skin = { workspace = true }
@@ -32,23 +35,16 @@ png = { workspace = true }
 jpeg-decoder = { workspace = true }
 gif = { workspace = true }
 image = { version = "0.25", default-features = false, features = ["webp"], optional = true }
-rayon = { workspace = true, optional = true }
 fontdue = { workspace = true, optional = true }
 web-time = { workspace = true }
 
 [dev-dependencies]
 proptest.workspace = true
-criterion = { version = "0.5", features = ["html_reports"] }
+criterion.workspace = true
 oasis-test-backend = { workspace = true }
+# `examples/triage.rs` fans pages out over rayon under `parallel-style`.
+rayon = { workspace = true }
 oasis-net = { workspace = true, features = ["tls-rustls"] }
-
-[[bench]]
-name = "html_parsing"
-harness = false
-
-[[bench]]
-name = "css_cascade"
-harness = false
 
 [[bench]]
 name = "layout_engine"
