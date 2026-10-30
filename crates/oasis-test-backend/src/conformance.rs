@@ -750,6 +750,60 @@ pub static SCENARIOS: &[Scenario] = &[
             Ok(())
         }
     ),
+    scenario!(
+        "arc_sweep_clamped_to_one_turn",
+        |b| {
+            // More than a full turn draws exactly one turn, filled or
+            // stroked (stroke_arc used to divide the whole sweep into
+            // segments, so a 4pi ring had different vertices).
+            let tau = core::f32::consts::TAU;
+            b.stroke_arc(30, 30, 20, 0.5, 0.5 + 2.0 * tau, 2, YELLOW)?;
+            b.stroke_arc(94, 30, 20, 0.5, 0.5 + tau, 2, YELLOW)?;
+            b.fill_arc(30, 72, 18, 1.0, 1.0 - 3.0 * tau, GREEN)?;
+            b.fill_arc(94, 72, 18, 1.0, 1.0 - tau, GREEN)
+        },
+        check = |f| {
+            for y in 0..CANVAS_H {
+                for x in 0..64 {
+                    if f.rgb(x, y) != f.rgb(x + 64, y) {
+                        return Err(format!("({x}, {y}) differs from the one-turn copy"));
+                    }
+                }
+            }
+            if f.count(rgb_of(YELLOW)) == 0 || f.count(rgb_of(GREEN)) == 0 {
+                return Err("nothing drawn".into());
+            }
+            Ok(())
+        }
+    ),
+    scenario!(
+        "shapes_far_offscreen",
+        |b| {
+            // Coordinates a billion pixels away: only the visible rows are
+            // generated (this used to walk, or allocate, every row), and
+            // the visible part lands where the line really crosses.
+            let g = 1_000_000_000;
+            b.draw_line(-g, -g, g, g, 1, WHITE)?;
+            b.draw_line(-g, 20, g, 20, 3, RED)?;
+            b.draw_line(-g, 40, g, 40, 1, RED)?;
+            b.draw_line(100, -g, 100, g, 4, GREEN)?;
+            b.fill_triangle(-g, 70, g, 70, 0, 2 * g, BLUE)?;
+            b.fill_polygon(&[(-2 * g, 90), (2 * g, 90), (0, 2 * g)], YELLOW)
+        },
+        check = |f| {
+            expect_fill(f, (0, 19, 98, 3), rgb_of(RED), 0)?;
+            expect_fill(f, (0, 40, 98, 1), rgb_of(RED), 0)?;
+            expect_fill(f, (98, 0, 4, 19), rgb_of(GREEN), 0)?;
+            expect_fill(f, (0, 72, CANVAS_W, 15), rgb_of(BLUE), 0)?;
+            expect_fill(f, (0, 91, CANVAS_W, 5), rgb_of(YELLOW), 0)?;
+            for i in [0u32, 10, 60] {
+                if f.rgb(i, i) != rgb_of(WHITE) {
+                    return Err(format!("diagonal misses ({i}, {i})"));
+                }
+            }
+            Ok(())
+        }
+    ),
     scenario!("dashed_lines", |b| {
         b.stroke_line_dashed(5, 10, 120, 10, 1, RED, 6, 4)?;
         b.stroke_line_dashed(5, 20, 120, 60, 1, GREEN, 5, 5)?;

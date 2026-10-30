@@ -556,7 +556,10 @@ impl SdiVector for Ue5Backend {
         if (dx, dy) == (0, 0) {
             self.fb.fill_polygon(points, color);
         } else {
-            let moved: Vec<(i32, i32)> = points.iter().map(|&(x, y)| (x + dx, y + dy)).collect();
+            let moved: Vec<(i32, i32)> = points
+                .iter()
+                .map(|&(x, y)| (x.saturating_add(dx), y.saturating_add(dy)))
+                .collect();
             self.fb.fill_polygon(&moved, color);
         }
         self.dirty = true;

@@ -72,6 +72,23 @@ pub trait SdiClipTransform: SdiCore {
         (0, 0)
     }
 
+    /// The rectangle of draw coordinates that lands on the bound surface:
+    /// the surface ([`viewport_size`](SdiCore::viewport_size)) moved back
+    /// by the current translation.
+    ///
+    /// A draw outside it is invisible whatever the clip, so the span-based
+    /// shape defaults ([`SdiShapes`](crate::backend::SdiShapes),
+    /// [`SdiVector`](crate::backend::SdiVector)) generate spans only
+    /// inside it: a line or polygon reaching far off-screen costs as much
+    /// as its visible part. The clip is deliberately not intersected in:
+    /// `set_clip_rect` can replace the stack's clip, so the stack top is
+    /// not a safe bound.
+    fn draw_bounds(&self) -> ClipRect {
+        let (w, h) = self.viewport_size();
+        let (tx, ty) = self.current_translate();
+        ClipRect::new(0i32.saturating_sub(tx), 0i32.saturating_sub(ty), w, h)
+    }
+
     /// Push a rendering region (translate + clip).
     fn push_region(&mut self, x: i32, y: i32, w: u32, h: u32) -> Result<()> {
         self.push_translate(x, y)?;

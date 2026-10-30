@@ -14,6 +14,11 @@ pub struct ClipRect {
 }
 
 impl ClipRect {
+    /// The whole `i32` coordinate plane (and then some: the far edges lie
+    /// past `i32::MAX`). Passing it as the bounds of a span generator
+    /// generates every row of a shape, however far off-screen.
+    pub const UNBOUNDED: ClipRect = ClipRect::new(i32::MIN, i32::MIN, u32::MAX, u32::MAX);
+
     /// A rectangle at `(x, y)` of `w` x `h` pixels.
     #[must_use]
     pub const fn new(x: i32, y: i32, w: u32, h: u32) -> Self {
