@@ -22,7 +22,7 @@ use oasis_types::error::Result;
 #[cfg(feature = "web-fonts")]
 use super::WebFontRenderer;
 use super::mask::{MaskParams, apply_mask};
-use super::{DisplayItem, DisplayList};
+use super::{DisplayItem, DisplayList, sticky_offset};
 use crate::css::values::BorderStyle;
 use crate::css::values::types::{BlendMode as CssBlendMode, FilterFunction};
 use crate::layout::box_model::Rect;
@@ -375,7 +375,7 @@ impl DisplayList {
                     // Compute the sticky offset difference between replay
                     // scroll and recording scroll.
                     let eff_scroll = self.recording_scroll_y - scroll_dy as f32;
-                    let new_dy = compute_sticky_dy_from_params(
+                    let new_dy = sticky_offset(
                         *natural_y,
                         *box_height,
                         *top_px,
@@ -383,7 +383,7 @@ impl DisplayList {
                         *visible_viewport_h,
                         eff_scroll,
                     );
-                    let rec_dy = compute_sticky_dy_from_params(
+                    let rec_dy = sticky_offset(
                         *natural_y,
                         *box_height,
                         *top_px,
@@ -730,7 +730,7 @@ impl DisplayList {
                     flush_rect_batch(backend, &mut rect_batch)?;
                     flush_text_batch(backend, &mut text_batch, text_batch_key)?;
                     let eff_scroll = self.recording_scroll_y - scroll_dy as f32;
-                    let new_dy = compute_sticky_dy_from_params(
+                    let new_dy = sticky_offset(
                         *natural_y,
                         *box_height,
                         *top_px,
@@ -738,7 +738,7 @@ impl DisplayList {
                         *visible_viewport_h,
                         eff_scroll,
                     );
-                    let rec_dy = compute_sticky_dy_from_params(
+                    let rec_dy = sticky_offset(
                         *natural_y,
                         *box_height,
                         *top_px,
@@ -1130,39 +1130,6 @@ fn apply_layer_opacity(color: Color, opacity: f32) -> Color {
     }
     let a = (color.a as f32 * opacity).round().clamp(0.0, 255.0) as u8;
     Color::rgba(color.r, color.g, color.b, a)
-}
-
-/// Compute the sticky Y offset from the element's parameters and a scroll value.
-///
-/// This mirrors `compute_sticky_dy` in `record.rs` but works from stored
-/// parameters rather than a live layout box, enabling offset recomputation
-/// during scroll-delta replay.
-fn compute_sticky_dy_from_params(
-    natural_y: f32,
-    box_height: f32,
-    top_px: Option<f32>,
-    bottom_px: Option<f32>,
-    visible_viewport_h: f32,
-    scroll_y: f32,
-) -> i32 {
-    if let Some(top) = top_px {
-        let natural = natural_y - scroll_y;
-        if natural < top {
-            (top - natural) as i32
-        } else {
-            0
-        }
-    } else if let Some(bottom) = bottom_px {
-        let natural = natural_y - scroll_y;
-        let threshold = visible_viewport_h - bottom - box_height;
-        if natural > threshold {
-            (threshold - natural) as i32
-        } else {
-            0
-        }
-    } else {
-        0
-    }
 }
 
 /// Test whether two rectangles overlap.

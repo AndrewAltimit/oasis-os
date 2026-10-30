@@ -17,7 +17,7 @@ use crate::layout::box_model::{BoxType, LayoutBox, Rect};
 use crate::transform::{AffineTransform2D, Matrix3d};
 use oasis_types::backend::Color;
 
-use super::display_list::{DisplayItem, DisplayList};
+use super::display_list::{DisplayItem, DisplayList, sticky_offset};
 use super::{LinkRegion, PaintViewport};
 use super::{filters, intersect_rects};
 
@@ -43,6 +43,9 @@ struct RecordContext<'a> {
     /// Used for sticky positioning so elements stick to the visible
     /// area, not the extended culling boundary.
     visible_viewport_height: f32,
+    /// Screen y of the viewport's top edge; sticky offsets are measured
+    /// from it, not from the top of the screen.
+    viewport_y: i32,
     /// Active clipping rectangle from ancestor `overflow: hidden` boxes.
     clip_rect: Option<Rect>,
     /// When true, text overflowing the clip rect gets "..." appended.
@@ -116,6 +119,7 @@ pub fn record(
         viewport_height: viewport.height,
         viewport_width: viewport.width,
         visible_viewport_height: viewport.visible_height,
+        viewport_y: viewport.y,
         clip_rect: None,
         text_overflow_ellipsis: false,
         current_node: None,
@@ -165,30 +169,41 @@ fn record_box(
     ctx: &mut RecordContext,
     link_map: &HashMap<NodeId, String>,
 ) {
-    // Sticky offset computation (same logic as paint_box).
-    let sticky_dy = compute_sticky_dy(layout_box, offset_y, ctx);
-    let offset_y = offset_y + sticky_dy;
-
-    // Sticky elements get their own compositing layer so the display list
-    // isolates them from surrounding content. With GPU render targets this
-    // layer could be translated on the GPU during scroll instead of
-    // re-recording the entire sticky subtree.
+    // `position: sticky`: pin against the visible viewport, and open a
+    // sticky group so replay can re-evaluate the offset for a scroll
+    // delta without re-recording.
     let is_sticky = layout_box.style.position == Position::Sticky;
-    if is_sticky {
+    let sticky_dy = if is_sticky {
+        let natural_y = layout_box.dimensions.content.y + (offset_y - ctx.viewport_y) as f32;
+        let box_height = layout_box.dimensions.margin_box().height;
+        let top_px = match layout_box.style.top {
+            Dimension::Px(t) => Some(t),
+            _ => None,
+        };
+        let bottom_px = match layout_box.style.bottom {
+            Dimension::Px(b) => Some(b),
+            _ => None,
+        };
+        let visible_viewport_h = ctx.visible_viewport_height;
         dl.push(DisplayItem::PushSticky {
-            natural_y: layout_box.dimensions.content.y,
-            box_height: layout_box.dimensions.margin_box().height,
-            top_px: match layout_box.style.top {
-                Dimension::Px(t) => Some(t),
-                _ => None,
-            },
-            bottom_px: match layout_box.style.bottom {
-                Dimension::Px(b) => Some(b),
-                _ => None,
-            },
-            visible_viewport_h: ctx.visible_viewport_height,
+            natural_y,
+            box_height,
+            top_px,
+            bottom_px,
+            visible_viewport_h,
         });
-    }
+        sticky_offset(
+            natural_y,
+            box_height,
+            top_px,
+            bottom_px,
+            visible_viewport_h,
+            ctx.scroll_y,
+        )
+    } else {
+        0
+    };
+    let offset_y = offset_y + sticky_dy;
 
     // Translate-only transforms move the box itself, so culling must
     // account for them. Rotations/scales are not folded in: their
@@ -2601,39 +2616,6 @@ fn record_submit_button(layout_box: &LayoutBox, dl: &mut DisplayList, x: i32, y:
 // -------------------------------------------------------------------
 // Helpers
 // -------------------------------------------------------------------
-
-fn compute_sticky_dy(layout_box: &LayoutBox, offset_y: i32, ctx: &RecordContext) -> i32 {
-    if layout_box.style.position != Position::Sticky {
-        return 0;
-    }
-    let top_px = match layout_box.style.top {
-        Dimension::Px(t) => Some(t),
-        _ => None,
-    };
-    let bottom_px = match layout_box.style.bottom {
-        Dimension::Px(b) => Some(b),
-        _ => None,
-    };
-    if let Some(top) = top_px {
-        let natural = layout_box.dimensions.content.y - ctx.scroll_y + offset_y as f32;
-        if natural < top {
-            (top - natural) as i32
-        } else {
-            0
-        }
-    } else if let Some(bottom) = bottom_px {
-        let natural = layout_box.dimensions.content.y - ctx.scroll_y + offset_y as f32;
-        let box_h = layout_box.dimensions.margin_box().height;
-        let threshold = ctx.visible_viewport_height - bottom - box_h;
-        if natural > threshold {
-            (threshold - natural) as i32
-        } else {
-            0
-        }
-    } else {
-        0
-    }
-}
 
 /// Sort key for `transform-style: preserve-3d` child ordering: the Z
 /// (after the perspective divide) of the child's centre once its own

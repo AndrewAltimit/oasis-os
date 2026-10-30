@@ -538,6 +538,42 @@ impl DisplayList {
     }
 }
 
+/// The vertical offset that keeps a `position: sticky` box pinned.
+///
+/// `natural_y` is the box's content top relative to the top of the
+/// viewport at zero scroll (layout y plus any ancestor offsets, minus
+/// the viewport's screen y). With `top_px` the box is pushed down so it
+/// never scrolls above `top` px from the viewport top; with `bottom_px`
+/// it is pulled up so its margin box (`box_height`) never drops below
+/// `bottom` px from the visible bottom. Shared by the recorder and by
+/// replay, which re-evaluates it for a scroll delta.
+pub(crate) fn sticky_offset(
+    natural_y: f32,
+    box_height: f32,
+    top_px: Option<f32>,
+    bottom_px: Option<f32>,
+    visible_viewport_h: f32,
+    scroll_y: f32,
+) -> i32 {
+    let natural = natural_y - scroll_y;
+    if let Some(top) = top_px {
+        if natural < top {
+            (top - natural) as i32
+        } else {
+            0
+        }
+    } else if let Some(bottom) = bottom_px {
+        let threshold = visible_viewport_h - bottom - box_height;
+        if natural > threshold {
+            (threshold - natural) as i32
+        } else {
+            0
+        }
+    } else {
+        0
+    }
+}
+
 impl Default for DisplayList {
     fn default() -> Self {
         Self::new()

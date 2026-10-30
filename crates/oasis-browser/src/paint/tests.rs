@@ -1725,3 +1725,43 @@ fn compositing_layer_bounds_are_screen_space_under_scroll() {
         .expect("isolation opens a compositing layer");
     assert_eq!((bounds.x, bounds.y), (20.0, 100.0));
 }
+
+#[test]
+fn sticky_top_pins_to_the_viewport_not_the_screen() {
+    // The content viewport starts below the browser chrome (y = 28).
+    // A `top: 0` sticky header scrolled past must pin at the viewport
+    // top (28), not at screen y 0 under the chrome — both when recorded
+    // and when a cached list is replayed for a further scroll.
+    let bg = Color::rgb(7, 7, 7);
+    let style = ComputedStyle {
+        position: Position::Sticky,
+        top: crate::css::values::Dimension::Px(0.0),
+        background_color: bg,
+        ..Default::default()
+    };
+    let sticky = make_block(0.0, 100.0, 200.0, 20.0, style);
+    let mut root = make_block(0.0, 0.0, 200.0, 2000.0, ComputedStyle::default());
+    root.children.push(sticky);
+    let vp = PaintViewport {
+        y: 28,
+        scroll_y: 150.0,
+        ..test_vp()
+    };
+    let fill_y = |backend: &MockBackend| {
+        backend.calls.iter().find_map(|c| match c {
+            DrawCall::FillRect { y, color, .. } if *color == bg => Some(*y),
+            _ => None,
+        })
+    };
+
+    let mut dl = display_list::DisplayList::new();
+    build_display_list(&root, vp, &HashMap::new(), &mut dl, &HashMap::new());
+    let mut backend = MockBackend::new();
+    dl.replay(&mut backend, 0, 0, None).unwrap();
+    assert_eq!(fill_y(&backend), Some(28), "recorded position");
+
+    let mut backend = MockBackend::new();
+    dl.replay(&mut backend, 0, -40, None).unwrap();
+    assert_eq!(fill_y(&backend), Some(28), "replayed after 40 px more scroll");
+}
+

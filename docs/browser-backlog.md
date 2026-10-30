@@ -420,8 +420,8 @@ shipped. Each is small enough for a focused PR.
   (`css/values/apply/mod.rs`), but nothing in `layout/` reads it, so
   clamped text renders every line and no ellipsis is drawn.
 - **`position: sticky` never releases at its containing block.**
-  `compute_sticky_dy` (`paint/record.rs`, mirrored in
-  `paint/display_list/replay.rs`) pins against the viewport `top` /
+  `sticky_offset` (`paint/display_list/mod.rs`, used by both the
+  recorder and replay) pins against the viewport `top` /
   `bottom` only; a sticky header keeps sticking after its parent has
   scrolled away instead of being pushed out with it.
 - **Grid line-name references.** `[name]` groups in track lists are
