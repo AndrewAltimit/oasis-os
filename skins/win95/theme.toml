@@ -27,6 +27,9 @@ btn_maximize = "#C0C0C0"
 frame_shadow_level = 0
 frame_border_radius = 0
 button_radius = 0
+# Gray window content, matching `app_overrides.app_bg`: windowed apps draw
+# the black `text_color` straight onto this (the default is near-black).
+content_bg = "#C0C0C0"
 
 [bar_overrides]
 statusbar_bg = "#C0C0C0"

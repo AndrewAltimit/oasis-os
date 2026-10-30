@@ -338,6 +338,11 @@ mod tests {
         ("corrupted", "dim_text on background", "glitch aesthetic"),
         (
             "corrupted",
+            "app text on window content",
+            "glitch aesthetic",
+        ),
+        (
+            "corrupted",
             "terminal output on app background",
             "glitch aesthetic",
         ),

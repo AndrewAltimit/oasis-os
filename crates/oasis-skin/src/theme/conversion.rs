@@ -682,6 +682,9 @@ impl SkinTheme {
         let bottombar_bg = bar_backdrop(at.bar.bg, at.bar.gradient_top, at.bar.gradient_bottom, bg);
         let app_bg = composite_over(at.app.bg, bg);
         let selection_bg = composite_over(at.app.selected_bg, app_bg);
+        // Windowed apps draw their body text straight onto the window
+        // manager's content fill (`draw_content_windowed` paints no bg).
+        let window_bg = composite_over(self.build_wm_theme().content_bg_color, bg);
 
         let (clock_label, clock_bg) = if clock_in_bottombar {
             ("clock on bottom bar", bottombar_bg)
@@ -717,6 +720,7 @@ impl SkinTheme {
                 app_bg,
                 3.0,
             ),
+            ("app text on window content", at.app.text, window_bg, 4.5),
             // Derived widget surfaces.
             (
                 "button text on button background",

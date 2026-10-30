@@ -33,7 +33,7 @@ const EXPECTED: &[(&str, u64)] = &[
     ("retro-cga", 0x22d654c4fc5a6c40),
     ("solarized", 0x62591788b0c9908c),
     ("vaporwave", 0x51f1f5fbee96a283),
-    ("win95", 0xbb85b1c3ce4841e9),
+    ("win95", 0x09d6cd9e06d259f9),
     ("xp", 0x3fe6c4c5467ec01d),
 ];
 
