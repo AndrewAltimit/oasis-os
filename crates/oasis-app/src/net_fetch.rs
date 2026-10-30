@@ -428,10 +428,10 @@ pub(crate) fn fetch_catalog_blocking(
 
 /// Fetch video catalogs for all TV channels on a background thread.
 pub(crate) fn fetch_tv_catalogs_blocking(
-    channels: &[oasis_core::apps::tv_guide::Channel],
+    channels: &[oasis_apps::tv_guide::Channel],
     tls: &oasis_core::net::RustlsTlsProvider,
-) -> std::result::Result<Vec<Option<oasis_core::apps::tv_guide::ChannelCatalog>>, String> {
-    use oasis_core::apps::tv_guide::catalog::ChannelCatalog;
+) -> std::result::Result<Vec<Option<oasis_apps::tv_guide::ChannelCatalog>>, String> {
+    use oasis_apps::tv_guide::catalog::ChannelCatalog;
 
     log::info!("TV fetch_tv_catalogs_blocking: {} channels", channels.len());
 

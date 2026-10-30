@@ -5,10 +5,7 @@
 use criterion::{BatchSize, Criterion, criterion_group, criterion_main};
 use oasis_core::apps::AppRunner;
 use oasis_core::apps::simple_app::SimpleApp;
-use oasis_core::dashboard::AppEntry;
 use oasis_core::terminal_sdi::{MAX_OUTPUT_LINES, trim_scrollback};
-use oasis_core::vfs::MemoryVfs;
-use oasis_types::backend::Color;
 
 /// A full scrollback followed by a 5000-line command output burst.
 fn full_plus_burst() -> Vec<String> {
@@ -46,13 +43,7 @@ fn bench_trim(c: &mut Criterion) {
 }
 
 fn terminal_runner() -> AppRunner {
-    let entry = AppEntry {
-        title: "Terminal".to_string(),
-        path: "/apps/terminal".to_string(),
-        icon_png: Vec::new(),
-        color: Color::rgb(0, 0, 0),
-    };
-    AppRunner::launch(&entry, &MemoryVfs::new())
+    AppRunner::from_delegate(Box::new(SimpleApp::terminal("/apps/terminal")))
 }
 
 fn bench_sync(c: &mut Criterion) {

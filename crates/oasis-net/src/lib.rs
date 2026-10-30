@@ -1,7 +1,10 @@
 //! Networking: std::net backend, remote terminal listener, outbound client,
-//! and TLS provider abstraction.
+//! TLS provider abstraction, and (feature `vfs`) the FTP-like file
+//! transfer server.
 
 mod client;
+#[cfg(feature = "vfs")]
+pub mod ftp;
 mod hosts;
 #[cfg(not(target_arch = "wasm32"))]
 mod listener;

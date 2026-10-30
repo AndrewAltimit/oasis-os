@@ -156,7 +156,7 @@ fn status_bar_keeps_the_clock_and_tab_across_a_skin_switch() {
     h.settle();
     let tab = h.state().ui.status_bar.active_tab;
     h.vfs_mut()
-        .write(oasis_app_settings::SKIN_CHANGE_REQUEST_PATH, b"modern")
+        .write(oasis_apps::settings::SKIN_CHANGE_REQUEST_PATH, b"modern")
         .unwrap();
     h.step(&[]);
     assert_eq!(h.state().skin.manifest.name, "modern");
@@ -176,7 +176,15 @@ fn status_bar_keeps_the_clock_and_tab_across_a_skin_switch() {
 fn every_registered_app_launches_by_title() {
     let mut h = Harness::new("classic");
     h.settle();
-    for title in oasis_core::apps::registered_app_titles() {
+    let titles: Vec<String> = h
+        .state()
+        .content
+        .apps
+        .titles()
+        .map(str::to_string)
+        .collect();
+    for title in &titles {
+        let title = title.as_str();
         assert!(h.open_app(title), "{title}: not launchable by title");
         h.settle();
         assert_eq!(h.mode(), Mode::Desktop, "{title}");
@@ -445,7 +453,7 @@ fn skin_switch_via_settings_ipc_round_trip() {
     h.settle();
     let classic_bg = h.state().bg_color;
     h.vfs_mut()
-        .write(oasis_app_settings::SKIN_CHANGE_REQUEST_PATH, b"vaporwave")
+        .write(oasis_apps::settings::SKIN_CHANGE_REQUEST_PATH, b"vaporwave")
         .unwrap();
     h.settle();
     assert_eq!(h.state().skin.manifest.name, "vaporwave");
@@ -463,7 +471,7 @@ fn skin_switch_via_settings_ipc_round_trip() {
 
     // And back.
     h.vfs_mut()
-        .write(oasis_app_settings::SKIN_CHANGE_REQUEST_PATH, b"classic")
+        .write(oasis_apps::settings::SKIN_CHANGE_REQUEST_PATH, b"classic")
         .unwrap();
     h.settle();
     assert_eq!(h.state().skin.manifest.name, "classic");
@@ -499,7 +507,7 @@ fn resolution_change_via_settings_ipc() {
     h.settle();
     h.vfs_mut()
         .write(
-            oasis_app_settings::RESOLUTION_CHANGE_REQUEST_PATH,
+            oasis_apps::settings::RESOLUTION_CHANGE_REQUEST_PATH,
             b"800x600",
         )
         .unwrap();

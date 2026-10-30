@@ -3,6 +3,7 @@
 
 use oasis_app::Mode;
 use oasis_app::harness::Harness;
+use oasis_apps::TvGuideRunnerExt as _;
 use oasis_core::input::Key;
 
 /// Escape (Cancel) in a windowed app must reach the app first. The Text
@@ -127,8 +128,8 @@ fn close_button_closes_unmodified_apps_immediately() {
 #[cfg(feature = "_video")]
 mod tv {
     use super::*;
-    use oasis_core::apps::tv_guide::VideoEpisode;
-    use oasis_core::apps::tv_guide::catalog::ChannelCatalog;
+    use oasis_apps::tv_guide::VideoEpisode;
+    use oasis_apps::tv_guide::catalog::ChannelCatalog;
 
     /// Escape while watching returns to the guide (the TV Guide's Cancel
     /// = untune); a second Escape closes it. The host used to close the
@@ -250,7 +251,7 @@ fn custom_skin_save_stays_out_of_the_working_directory() {
     let theme = h.state().skin.theme.to_toml_string().unwrap();
     h.vfs_mut()
         .write(
-            oasis_app_settings::SKIN_SAVE_CUSTOM_REQUEST_PATH,
+            oasis_apps::settings::SKIN_SAVE_CUSTOM_REQUEST_PATH,
             format!("{name}\n{theme}").as_bytes(),
         )
         .unwrap();
@@ -417,7 +418,7 @@ fn plugin_app_survives_skin_switch_and_resolution_change() {
     assert_plugin_app_launches(&mut h, "boot");
 
     h.vfs_mut()
-        .write(oasis_app_settings::SKIN_CHANGE_REQUEST_PATH, b"xp")
+        .write(oasis_apps::settings::SKIN_CHANGE_REQUEST_PATH, b"xp")
         .unwrap();
     h.settle();
     assert_eq!(h.state().skin.manifest.name, "xp");
@@ -425,7 +426,7 @@ fn plugin_app_survives_skin_switch_and_resolution_change() {
 
     h.vfs_mut()
         .write(
-            oasis_app_settings::RESOLUTION_CHANGE_REQUEST_PATH,
+            oasis_apps::settings::RESOLUTION_CHANGE_REQUEST_PATH,
             b"800x600",
         )
         .unwrap();

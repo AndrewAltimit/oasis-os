@@ -6,6 +6,7 @@ use oasis_app::boot_splash::{BootSplash, SplashTheme};
 use oasis_app::harness::{Harness, HarnessOptions};
 use oasis_app::headless::HeadlessBackend;
 use oasis_app::{BootObserver, Mode};
+use oasis_apps::TvGuideRunnerExt as _;
 use oasis_core::backend::{SdiCore, SdiTextures};
 
 // ---------------------------------------------------------------------------
@@ -15,8 +16,8 @@ use oasis_core::backend::{SdiCore, SdiTextures};
 #[cfg(feature = "_video")]
 mod tv {
     use super::*;
-    use oasis_core::apps::tv_guide::catalog::ChannelCatalog;
-    use oasis_core::apps::tv_guide::{TvGuideState, VideoEpisode};
+    use oasis_apps::tv_guide::catalog::ChannelCatalog;
+    use oasis_apps::tv_guide::{TvGuideState, VideoEpisode};
     use oasis_core::input::Key;
 
     fn mock_episodes(channel: u32, count: usize) -> Vec<VideoEpisode> {

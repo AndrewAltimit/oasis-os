@@ -152,7 +152,7 @@ fn take_request(vfs: &mut MemoryVfs, path: &str) -> Option<String> {
 /// each change live and persists it. Returns `true` when anything changed
 /// (the caller then republishes the runtime state).
 pub fn poll_prefs_ipc(state: &mut AppState, sdi: &mut SdiRegistry, vfs: &mut MemoryVfs) -> bool {
-    use oasis_app_settings as s;
+    use oasis_apps::settings as s;
     let mut changed = false;
 
     if let Some(req) = take_request(vfs, s::VOLUME_CHANGE_REQUEST_PATH) {

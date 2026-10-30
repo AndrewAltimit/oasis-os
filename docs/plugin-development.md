@@ -330,7 +330,18 @@ fn init(&mut self, host: &mut PluginHost<'_>) -> Result<()> {
 }
 ```
 
-The factory closure is called each time the user launches the app from the dashboard.
+The factory closure is called each time the app is launched (a fresh
+instance per launch).
+
+After plugin init the host copies the registrations into its app
+registry with `PluginManager::extend_registry(&mut apps)` (an
+`AppRegistration` per plugin app: on the dashboard, at
+`/plugins/<title>`, marked `from_plugin`; calling it again replaces the
+previous plugin entries). From then on a plugin app is an ordinary
+registered app: it gets a dashboard tile that survives skin and
+resolution changes, and it launches through `open <app>`, MCP
+`open_app` / `list_apps` and `OASIS_APP` exactly like a built-in. A
+plugin app with the same title as a built-in replaces it.
 
 ### App Categories
 
@@ -396,8 +407,9 @@ impl App for MyPluginApp {
 }
 ```
 
-The plugin manager's `register_app` test (`crates/oasis-core/src/plugin/manager/mod.rs`)
-shows a complete registration round trip.
+The plugin manager's `extend_registry_adds_launchable_plugin_apps` test
+(`crates/oasis-core/src/plugin/manager/mod.rs`) shows a complete round
+trip: register, extend the registry, launch through `AppRunner`.
 
 > **Breaking change (App trait, 2026-10):** `as_any` / `as_any_mut` are no
 > longer written by apps (blanket `AsAny` impl); `handle_click` takes a
@@ -405,6 +417,11 @@ shows a complete registration round trip.
 > `handle_key`, polling in `tick`); `take_pending_request` /
 > `peek_pending_request` became `drain_requests(&mut Vec<AppRequest>)`;
 > `lines` has a default; new optional hooks `layout` and `handle_scroll`.
+>
+> **Breaking change (app registry, 2026-10):** `PluginManager::create_plugin_app`
+> is gone (hosts launch plugin apps from their `AppRegistry` after
+> `extend_registry`), and `PluginAppRegistration::factory` is an
+> `Arc<dyn PluginAppFactory>` (shared with the registry entry).
 
 ---
 

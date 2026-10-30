@@ -975,9 +975,7 @@ dependencies = [
  "env_logger",
  "log",
  "oasis-app-core",
- "oasis-app-media",
- "oasis-app-settings",
- "oasis-app-system-monitor",
+ "oasis-apps",
  "oasis-audio",
  "oasis-backend-sdl",
  "oasis-backend-ue5",
@@ -989,17 +987,6 @@ dependencies = [
  "oasis-video",
  "png",
  "serde_json",
-]
-
-[[package]]
-name = "oasis-app-browser"
-version = "1.4.0"
-dependencies = [
- "oasis-app-core",
- "oasis-sdi",
- "oasis-skin",
- "oasis-types",
- "oasis-vfs",
 ]
 
 [[package]]
@@ -1065,28 +1052,6 @@ dependencies = [
  "oasis-types",
  "oasis-vfs",
  "png",
-]
-
-[[package]]
-name = "oasis-app-network"
-version = "1.4.0"
-dependencies = [
- "oasis-app-core",
- "oasis-sdi",
- "oasis-skin",
- "oasis-types",
- "oasis-vfs",
-]
-
-[[package]]
-name = "oasis-app-package-manager"
-version = "1.4.0"
-dependencies = [
- "oasis-app-core",
- "oasis-sdi",
- "oasis-skin",
- "oasis-types",
- "oasis-vfs",
 ]
 
 [[package]]
@@ -1176,6 +1141,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "oasis-apps"
+version = "1.4.0"
+dependencies = [
+ "oasis-app-calculator",
+ "oasis-app-core",
+ "oasis-app-file-manager",
+ "oasis-app-games",
+ "oasis-app-media",
+ "oasis-app-paint",
+ "oasis-app-radio",
+ "oasis-app-settings",
+ "oasis-app-system-monitor",
+ "oasis-app-text-editor",
+ "oasis-app-tv-guide",
+ "oasis-core",
+ "oasis-types",
+ "serde",
+ "serde_json",
+ "toml",
+]
+
+[[package]]
 name = "oasis-audio"
 version = "1.4.0"
 dependencies = [
@@ -1231,7 +1218,7 @@ dependencies = [
  "console_error_panic_hook",
  "js-sys",
  "log",
- "oasis-app-media",
+ "oasis-apps",
  "oasis-audio",
  "oasis-core",
  "oasis-platform",
@@ -1283,20 +1270,7 @@ dependencies = [
  "criterion",
  "js-sys",
  "log",
- "oasis-app-browser",
- "oasis-app-calculator",
  "oasis-app-core",
- "oasis-app-file-manager",
- "oasis-app-games",
- "oasis-app-media",
- "oasis-app-network",
- "oasis-app-package-manager",
- "oasis-app-paint",
- "oasis-app-radio",
- "oasis-app-settings",
- "oasis-app-system-monitor",
- "oasis-app-text-editor",
- "oasis-app-tv-guide",
  "oasis-audio",
  "oasis-browser",
  "oasis-http",
@@ -1312,7 +1286,6 @@ dependencies = [
  "oasis-vector",
  "oasis-vfs",
  "oasis-wm",
- "proptest",
  "serde",
  "serde_json",
  "tempfile",
@@ -1404,6 +1377,7 @@ version = "1.4.0"
 dependencies = [
  "log",
  "oasis-types",
+ "oasis-vfs",
  "rcgen",
  "rustls",
  "rustls-pki-types",

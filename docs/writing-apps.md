@@ -4,12 +4,13 @@ Every dashboard app in OASIS_OS (File Manager, Text Editor, Paint,
 Calculator, ...) is a type implementing the `App` trait from
 `oasis-app-core`. Apps only see `oasis-app-core` types and the
 `SdiBackend` / `Vfs` traits, never a platform API. Today the SDL desktop
-app and the WASM build host them through `oasis-core`'s `AppRunner`. The
-desktop shell always draws apps in windows (a "fullscreen" app is a
-kiosk window, still drawn through `draw_windowed`); only the WASM host
-also has a fullscreen mode that uses `update_sdi`. The PSP EBOOT and the
-FFI library have their own app surfaces. This guide covers the trait, how hosts drive it, and
-a minimal working app.
+app and the WASM build host them through `oasis-core`'s `AppRunner`,
+launched from an `AppRegistry` that the `oasis-apps` bundle fills. Both
+hosts always draw apps in windows (a "fullscreen" app is a kiosk window,
+still drawn through `draw_windowed`); neither calls `update_sdi` any
+more (the SDI path stays in the trait for SDI-only hosts). The PSP EBOOT
+and the FFI library have their own app surfaces. This guide covers the
+trait, how hosts drive it, and a minimal working app.
 
 Source of truth: [`crates/oasis-app-core/src/app_trait.rs`](../crates/oasis-app-core/src/app_trait.rs)
 and [`crates/oasis-app-core/src/lib.rs`](../crates/oasis-app-core/src/lib.rs).
@@ -22,16 +23,27 @@ elision).
 - One crate per app: `crates/oasis-app-<name>/`, depending on
   `oasis-app-core`, `oasis-types`, `oasis-vfs`, `oasis-sdi`,
   `oasis-skin` and (for widgets) `oasis-ui` -- never on `oasis-core`.
-- `oasis-core` owns the runtime: `AppRunner` (`src/apps/runner.rs`)
-  wraps a `Box<dyn App>`, and `APP_REGISTRY` (`src/apps/registry.rs`)
-  maps a dashboard title to a factory `fn(&str, &dyn Vfs) -> Box<dyn App>`.
-  Titles not in the registry launch a `SimpleApp` placeholder; plugins
-  can hand a pre-built app to `AppRunner::from_delegate`.
-- The desktop host seeds dashboard entries as `/apps/<Title>`
-  directories (`crates/oasis-app/src/vfs_setup.rs`). Registered apps
-  without a directory (Network, Package Manager, System Monitor) have
-  no tile but still launch by title through MCP `open_app` and
-  `OASIS_APP=<title>`. There is no terminal command that opens an app.
+  (`oasis-app-system-monitor` holds three small info apps: System
+  Monitor, Network and Package Manager.)
+- `oasis-core` owns the runtime but knows no concrete app:
+  `AppRunner` (`src/apps/runner.rs`) wraps a `Box<dyn App>`, and an
+  `AppRegistry` (`src/apps/registry.rs`) maps a title to an
+  `AppRegistration` (factory, optional file factory, dashboard flag,
+  SDI cleanup, owned media). The host owns the registry and passes it
+  to `AppRunner::launch(&apps, &entry, &vfs)`; titles it doesn't know
+  launch a `SimpleApp` placeholder.
+- `crates/oasis-apps` is the bundle: it depends on every app crate and
+  exports `builtin_registry(&HostInfo)` (the host's platform / backend
+  names reach Settings, System Monitor and Package Manager), the `tv`
+  command (`register_commands`) and `TvGuideRunnerExt`. Plugins append
+  their apps to the same registry with
+  `PluginManager::extend_registry`.
+- The desktop host seeds a dashboard tile (`/apps/<Title>` directory,
+  `crates/oasis-app/src/vfs_setup.rs`) for every registration marked
+  `on_dashboard`, plus the host's own Browser. Apps without a tile
+  (Network, Package Manager, System Monitor) launch by title through
+  `open <app> [file]` in the terminal or scripts, MCP `open_app` and
+  `OASIS_APP=<title>` -- all three search the registry.
 
 ## The `App` trait
 
@@ -53,9 +65,9 @@ blanket impl -- don't write it yourself; import
 | `handle_scroll(&mut self, delta, &dyn Vfs) -> bool` | repeats `Up` / `Down` through `handle_input` (max 16 per event) | Mouse wheel over the app's window (desktop and WASM) | `delta` < 0 = toward the top. Return `true` when the view changed. Override where Up / Down isn't list movement (Games, Paint's canvas, Calculator, Settings' Audio tab) |
 | `layout(&mut self, cw, ch, &ActiveTheme)` | no-op | Right before every `draw_windowed` and `handle_click`, with the same size | Record layout metrics (visible rows, hit-test geometry) in plain fields -- no `Cell`s in `draw_windowed`. Keys / buttons / wheel see the metrics of the last drawn frame |
 | `handle_click(&mut self, lx, ly, cw, ch, fullscreen, &dyn Vfs) -> AppAction` | `AppAction::None` | Click / tap in the content area | Content-local coordinates; discrete clicks only (no drag / move events). Read-only VFS follow-ups (re-list a folder, open the clicked file) happen right here |
-| `update_sdi(&mut self, &mut SdiRegistry, &ActiveTheme)` | required | WASM fullscreen rendering | Create / update named SDI objects |
+| `update_sdi(&mut self, &mut SdiRegistry, &ActiveTheme)` | required | Fullscreen SDI rendering (no current host) | Create / update named SDI objects |
 | `draw_windowed(&self, cx, cy, cw, ch, &mut dyn SdiBackend, &ActiveTheme) -> Result<()>` | required | Windowed rendering, inside the WM's clip rect | Draw directly to the backend |
-| `hide_sdi(&self, &mut SdiRegistry)` | required | Leaving WASM fullscreen / switching apps | Hide every SDI object you created |
+| `hide_sdi(&self, &mut SdiRegistry)` | required | Leaving fullscreen SDI rendering | Hide every SDI object you created. Objects outside the shared app pools also need an `AppRegistration::hide_sdi` cleanup, which hosts run every frame |
 | `drain_requests(&mut self, &mut Vec<AppRequest>)` | no-op | Once per frame for every open app | Move every queued VFS IPC request (`AppRequest { path, data }`) into the host's list; the host performs all of them, in order |
 | `apply_vfs_ops(&mut self, &mut dyn Vfs) -> bool` | `false` | Once per frame for every open app | The only hook with **mutable** VFS access: apply queued writes, deletes, renames, binary saves. Return `true` when something was applied |
 | `tick(&mut self, dt_ms: u32, &dyn Vfs) -> bool` | `false` | Once per frame for every open app, even on elided frames | Advance time-driven state by wall time, and poll VFS state you mirror (the Internet Radio's status, Video Embed's search results); return `true` when something you draw changed |
@@ -85,10 +97,10 @@ Returned from `handle_input`, `handle_key` and `handle_click`:
 
 ## Lifecycle and frame order
 
-1. **Launch.** The host calls `AppRunner::launch(&AppEntry, &dyn Vfs)`
-   (or `launch_with_file`), which looks the title up in `APP_REGISTRY`
-   and calls the factory. Construct cheaply; defer VFS reads to the
-   first `tick` if they can be slow.
+1. **Launch.** The host calls `AppRunner::launch(&apps, &AppEntry,
+   &dyn Vfs)` (or `launch_with_file`), which looks the title up in its
+   `AppRegistry` and calls the registration's factory. Construct
+   cheaply; defer VFS reads to the first `tick` if they can be slow.
 2. **Input.** One physical input reaches the focused app (the wheel:
    the window under the pointer) through at most these hooks, in order:
 
@@ -106,12 +118,12 @@ Returned from `handle_input`, `handle_key` and `handle_click`:
    `drain_requests`, `apply_vfs_ops(&mut vfs)`, `tick(dt_ms, &vfs)`,
    `take_close_request`; then closed apps get `release_resources`.
 4. **Draw** (only on frames that are not elided): `layout` +
-   `draw_windowed` for each window (the WASM host's fullscreen mode uses
-   `update_sdi` instead).
+   `draw_windowed` for each window.
 5. **Exit.** On `AppAction::Exit`, the window's close button or a
-   programmatic close (`wm close`, MCP; those ask `on_close_requested`
-   first) the host closes the window, calls `release_resources` and
-   drops the runner.
+   programmatic close (`wm close`, MCP; on the desktop those ask
+   `on_close_requested` first) the host closes the window, stops the
+   media the app owns (`AppRegistration::owns_media`: Music Player,
+   Internet Radio), calls `release_resources` and drops the runner.
 
 Hooks that only receive `&dyn Vfs` cannot write. Queue the work in a
 field and perform it in `apply_vfs_ops` (the Text Editor's saves, the
@@ -149,8 +161,8 @@ Two paths, both required:
   [ui-widgets.md](ui-widgets.md)). Compute your layout in `layout` and
   keep it in a field that both drawing and `handle_click` use, so
   hit-testing matches what was drawn.
-- **Fullscreen** (`update_sdi`, WASM only): create or update named SDI
-  objects and hide them in `hide_sdi`.
+- **Fullscreen SDI** (`update_sdi`, no current host): create or update
+  named SDI objects and hide them in `hide_sdi`.
 
 Line-oriented apps can skip both by embedding a `ContentState` and
 using `impl_content_app_methods!(field)`, which implements `title`,
@@ -281,25 +293,31 @@ way a host does: a `Confirm`, 90 ticks of 16 ms, a lap, `Ctrl+S` through
 ## Registering the app
 
 1. Create `crates/oasis-app-<name>/` (start from
-   [`stopwatch_app.rs`](../crates/oasis-app-core/examples/stopwatch_app.rs)
-   or a small crate such as `oasis-app-package-manager`), add it to the workspace `members` and
-   `[workspace.dependencies]` in the root `Cargo.toml`, and add it as a
-   dependency of `oasis-core`.
-2. Add a factory to `APP_REGISTRY` in
-   `crates/oasis-core/src/apps/registry.rs`:
+   [`stopwatch_app.rs`](../crates/oasis-app-core/examples/stopwatch_app.rs)),
+   add it to the workspace `members` and `[workspace.dependencies]` in
+   the root `Cargo.toml`, and add it as a dependency of `oasis-apps`
+   (not `oasis-core`).
+2. Register it in `builtin_registry` in
+   [`crates/oasis-apps/src/lib.rs`](../crates/oasis-apps/src/lib.rs):
 
    ```rust,ignore
-   ("Stopwatch", |path, _vfs| {
-       Box::new(oasis_app_stopwatch::StopwatchApp::new(path))
-   }),
+   apps.register(
+       AppRegistration::new("Stopwatch", |path, _vfs| {
+           Box::new(oasis_app_stopwatch::StopwatchApp::new(path))
+       })
+       .on_dashboard(),
+   );
    ```
 
-   For "open this file with me" support, add a case to
-   `create_app_delegate_for_file` and return
-   `AppAction::LaunchAppWithFile` from the launching app.
-3. Give it a dashboard tile by adding the title to the `/apps` list in
-   `crates/oasis-app/src/vfs_setup.rs` (and to its
-   `populate_creates_all_app_dirs` test).
+   Builder options: `.on_dashboard()` (a tile on hosts that seed tiles
+   from the registry), `.open_file(|path, file, vfs| ...)` ("open this
+   file with me": `AppAction::LaunchAppWithFile` hand-offs and
+   `open <app> <file>`), `.owns_media(OwnedMedia::Music | Radio)`,
+   `.hide_sdi(fn)` (cleanup for SDI objects outside the shared pools).
+3. Add the title to `oasis_core::apps::BUILTIN_APP_TITLES` (the
+   dashboard icon and label tests cover every title there; an
+   `oasis-apps` test fails until you do) and give it a dashboard icon
+   category in `oasis-core/src/dashboard`.
 
 ## Testing
 

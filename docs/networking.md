@@ -3,9 +3,11 @@
 OASIS_OS networking is split across two crates:
 
 - **`oasis-net`** — TCP transport, PSK authentication, optional rustls TLS, the
-  remote terminal protocol, and the `StdNetworkBackend` desktop backend.
-- **`oasis-core/src/transfer/`** — the FTP-like file transfer service, layered
-  on top of `NetworkBackend` from `oasis-types`.
+  remote terminal protocol, the `StdNetworkBackend` desktop backend, and
+  (feature `vfs`) the FTP-like file transfer server (`oasis_net::ftp`),
+  layered on `NetworkBackend` and `Vfs`.
+- **`oasis-core/src/transfer/`** — the `ftp`, `push` and `pull` terminal
+  commands; re-exports the server types.
 
 The `NetworkBackend` trait itself lives in `oasis-types/src/backend/`. Backends
 (SDL3, WASM, UE5, PSP) implement it; everything above the trait is shared.
@@ -163,11 +165,11 @@ remote terminal endpoints, FTP servers, and future protocols side by side.
 > other credential material — keep it out of version control, restrict
 > filesystem permissions, and rotate the key if the file is exposed.
 
-## File transfer (`oasis-core/src/transfer/`)
+## File transfer (`oasis-net/src/ftp.rs`)
 
 The transfer service is FTP-like in spirit but defines its own minimal
 line-based protocol over TCP. Default port is 2121
-(`transfer/mod.rs`).
+(`oasis-net/src/ftp.rs`).
 
 Verbs:
 
@@ -185,7 +187,7 @@ Verbs:
 
 > **Path resolution and exposure:** path arguments are passed straight
 > through to the active `Vfs` (`process_ftp_request` in
-> `transfer/mod.rs`) — there is no extra chroot, allow-list, or
+> `oasis-net/src/ftp.rs`) — there is no extra chroot, allow-list, or
 > traversal check at the transfer layer. The exposed filesystem is
 > exactly whatever the host's VFS implementation exposes (typically a
 > `MemoryVfs` for headless drivers or a `RealVfs`/`GameAssetVfs` rooted
@@ -195,7 +197,7 @@ Verbs:
 > **`GET` is text-only — binary files and embedded newlines are
 > unsafe.** The server formats responses as
 > `format!("200 {} bytes\n{text}", data.len())` where `text` is
-> `String::from_utf8_lossy(&data)` (`transfer/mod.rs`). Two
+> `String::from_utf8_lossy(&data)` (`oasis-net/src/ftp.rs`). Two
 > consequences:
 >
 > 1. **Binary data is silently corrupted.** Any byte that is not
@@ -218,7 +220,7 @@ Verbs:
 
 > **`PUT` payload size and newline handling:** the protocol is strictly
 > line-based with a 1024-byte per-line cap (`MAX_FTP_LINE_LEN` in
-> `transfer/mod.rs`). The full request — `PUT `, the path, a single
+> `oasis-net/src/ftp.rs`). The full request — `PUT `, the path, a single
 > space, and the entire file body — must fit on one `\n`-terminated
 > line. Effective inline payload is therefore roughly
 > `1024 - 5 - len(path)` bytes, and the body cannot contain a literal
@@ -234,19 +236,19 @@ Verbs:
 > warning above.
 >
 > 1. **Comparison is constant-time** (`constant_time_eq` in
->    `transfer/mod.rs`), like the remote-terminal PSK check. Lines sent
+>    `oasis-net/src/ftp.rs`), like the remote-terminal PSK check. Lines sent
 >    after the third failure on a connection are discarded.
 > 2. **No cross-connection brute-force protection.** The 3-attempt
->    limit (`MAX_AUTH_FAILURES` at `transfer/mod.rs`) is tracked
+>    limit (`MAX_AUTH_FAILURES` at `oasis-net/src/ftp.rs`) is tracked
 >    per-connection only (`FtpConnection::failed_attempts` at
->    `transfer/mod.rs`). The listener does **not** track failures
+>    `oasis-net/src/ftp.rs`). The listener does **not** track failures
 >    by remote IP across reconnections, so the effective brute-force
 >    budget is `3 × unbounded reconnects`. This contrasts with the PSK
 >    path, which does apply per-peer exponential back-off
 >    (`listener.rs`). On a hostile network an attacker can drain
 >    the password space at TCP-accept rate.
 > 3. **Empty passwords are accepted.** `ftp start <port> --password ""`
->    is parsed verbatim (`transfer/mod.rs`) and arms
+>    is parsed verbatim (`oasis-net/src/ftp.rs`) and arms
 >    `FtpServer::with_password("")`. A client can then authenticate by
 >    sending `PASS ` with no value. `--password` without any argument
 >    errors with `--password requires a value`, but `--password ""`
@@ -269,7 +271,7 @@ and the main loop polls connections each frame
 trigger transfers via the VFS.
 
 Authentication is optional and password-based: `ftp start <port> --password
-<pass>` arms `FtpServer::with_password` (`transfer/mod.rs`). Without
+<pass>` arms `FtpServer::with_password` (`oasis-net/src/ftp.rs`). Without
 `--password` (or with an empty one) every accepted connection is
 immediately authenticated, so the server then binds **loopback only**
 (`NetworkBackend::listen_loopback`); with a password it listens on all

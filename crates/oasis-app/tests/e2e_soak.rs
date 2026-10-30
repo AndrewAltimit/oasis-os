@@ -249,7 +249,7 @@ fn skin_switch_cycles_do_not_leak() {
         for skin in skins.iter().chain(std::iter::once(&"classic")) {
             h.vfs_mut()
                 .write(
-                    oasis_app_settings::SKIN_CHANGE_REQUEST_PATH,
+                    oasis_apps::settings::SKIN_CHANGE_REQUEST_PATH,
                     skin.as_bytes(),
                 )
                 .unwrap();
@@ -285,7 +285,7 @@ fn resolution_cycles_do_not_leak() {
         for (w, hh) in sizes {
             h.vfs_mut()
                 .write(
-                    oasis_app_settings::RESOLUTION_CHANGE_REQUEST_PATH,
+                    oasis_apps::settings::RESOLUTION_CHANGE_REQUEST_PATH,
                     format!("{w}x{hh}").as_bytes(),
                 )
                 .unwrap();

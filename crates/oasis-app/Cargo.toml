@@ -55,9 +55,8 @@ oasis-core = { workspace = true, features = ["tls-rustls"] }
 oasis-mcp = { workspace = true, optional = true }
 serde_json = { workspace = true, optional = true }
 oasis-app-core = { workspace = true }
-oasis-app-settings = { workspace = true }
-oasis-app-media = { workspace = true }
-oasis-app-system-monitor = { workspace = true }
+# The built-in app bundle (AppRegistry, `tv` command, app crate re-exports).
+oasis-apps = { workspace = true }
 oasis-audio = { workspace = true }
 oasis-backend-sdl = { path = "../oasis-backend-sdl" }
 # Software RGBA framebuffer behind the headless e2e harness (src/headless.rs).

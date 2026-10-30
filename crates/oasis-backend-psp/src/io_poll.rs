@@ -78,7 +78,7 @@ pub(crate) fn poll_io_responses(
                 if ch_idx < tv.channels.len() {
                     let ch = &tv.channels[ch_idx];
                     let catalog = tv.catalogs[ch_idx].get_or_insert_with(|| {
-                        oasis_core::apps::tv_guide::ChannelCatalog::new(ch.number)
+                        oasis_app_tv_guide::ChannelCatalog::new(ch.number)
                     });
                     if !episodes.is_empty() {
                         catalog.add_episodes(episodes);

@@ -193,7 +193,7 @@ Shell-level actions
 | `windows()`, `find_window(title)` | `WindowInfo { id, title, frame, content, close_button, minimized, fullscreen }`; `find_window` falls back to the window id (the browser's title follows the page) |
 | `window_chrome(title)`, `active_window()` | Titlebar / close / maximize / minimize rects (`rect_center` gives a click point); focused window id |
 | `close_window(title)` | Click the titlebar close button |
-| `app_runner(title)` | The open app's `AppRunner` (e.g. `.tv_guide_state()` to inject fixtures) |
+| `app_runner(title)` | The open app's `AppRunner` (e.g. `.tv_guide_state()`, from `oasis_apps::TvGuideRunnerExt`, to inject fixtures) |
 | `terminal(cmd)` | Open the terminal (Start), type `cmd`, press Enter |
 | `click_sdi_text(text)`, `find_sdi_text(text)`, `sdi_rect(name)` | Hit things by their SDI label / object name |
 | `vfs()`, `vfs_mut()` | The shell VFS (e.g. post a Settings IPC request) |
@@ -249,7 +249,9 @@ Observation
   start menu, OSK, pointer, taskbar, window drag/resize/snap, resolution
   changes), `e2e_soak.rs` (leak baselines over open/close, skin and
   resolution cycles; seeded random-input fuzz; idle-frame counts),
-  `e2e_media.rs`. Heavy soak/fuzz variants are `#[ignore]`d:
+  `e2e_media.rs`, `e2e_apps.rs` (the app registry: `open <app> [file]`,
+  plugin apps, the Network app's live state). Heavy soak/fuzz variants
+  are `#[ignore]`d:
   `cargo test -p oasis-app --release --test e2e_soak -- --ignored`.
 - **Leak checks** compare `resource_counts()` after a warm-up round with
   later rounds: first launches build SDI objects that are only hidden

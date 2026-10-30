@@ -1,13 +1,13 @@
 use crate::shell_backend::ShellBackend;
 use oasis_backend_sdl::shader_bridge::SdlShaderBridge;
 use oasis_core::active_theme::ActiveTheme;
+use oasis_core::apps::AppRegistry;
 use oasis_core::browser::BrowserConfig;
 use oasis_core::cursor::CursorState;
 use oasis_core::dashboard::{AppEntry, DashboardConfig, DashboardState, discover_apps_themed};
 use oasis_core::net::{ListenerConfig, RemoteClient, RemoteListener, StdNetworkBackend};
-use oasis_core::plugin::PluginManager;
 use oasis_core::sdi::SdiRegistry;
-use oasis_core::skin::{Skin, SkinTheme, resolve_skin, resolve_skin_request};
+use oasis_core::skin::{Skin, SkinTheme, resolve_skin_request};
 use oasis_core::startmenu::StartMenuState;
 use oasis_core::terminal::{CommandOutput, CommandSignal, Environment};
 use oasis_core::terminal_sdi;
@@ -216,22 +216,21 @@ pub fn process_command_output(
     None
 }
 
-/// The dashboard's apps: everything installed under `/apps` plus the apps
-/// plugins registered. Boot and every dashboard rebuild (skin swap,
-/// resolution change) use this, so plugin apps never drop off.
+/// The dashboard's apps: everything installed under `/apps` plus the
+/// plugin apps in the registry. Boot and every dashboard rebuild (skin
+/// swap, resolution change) use this, so plugin apps never drop off.
 pub(crate) fn dashboard_apps(
     vfs: &MemoryVfs,
-    plugin_manager: &PluginManager,
+    apps: &AppRegistry,
     at: &ActiveTheme,
 ) -> oasis_core::error::Result<Vec<AppEntry>> {
-    let mut apps = discover_apps_themed(vfs, "/apps", Some("OASISOS"), &at.icon.fallback_colors)?;
-    apps.extend(
-        plugin_manager
-            .plugin_apps()
-            .iter()
+    let mut tiles = discover_apps_themed(vfs, "/apps", Some("OASISOS"), &at.icon.fallback_colors)?;
+    tiles.extend(
+        apps.iter()
+            .filter(|reg| reg.from_plugin && reg.on_dashboard)
             .map(|reg| reg.to_app_entry()),
     );
-    Ok(apps)
+    Ok(tiles)
 }
 
 /// Rebuild the dashboard and start menu for the current skin / theme /
@@ -239,11 +238,10 @@ pub(crate) fn dashboard_apps(
 /// page 0.
 fn rebuild_dashboard(state: &mut AppState, vfs: &MemoryVfs) {
     let dash_config = DashboardConfig::from_features(&state.skin.features, &state.active_theme);
-    let apps =
-        dashboard_apps(vfs, &state.plugin_manager, &state.active_theme).unwrap_or_else(|e| {
-            log::warn!("app discovery failed: {e}");
-            Vec::new()
-        });
+    let apps = dashboard_apps(vfs, &state.content.apps, &state.active_theme).unwrap_or_else(|e| {
+        log::warn!("app discovery failed: {e}");
+        Vec::new()
+    });
     state.ui.dashboard = DashboardState::new(dash_config, apps);
     crate::icon_drag::load_icon_positions(
         &state.settings,
@@ -662,47 +660,28 @@ pub fn apply_resolution_change(
     state.config.screen_width = new_w;
     state.config.screen_height = new_h;
 
-    // Re-apply the current skin's layout at the new target size. This rebuilds
-    // every skin-owned SDI object (taskbar, dashboard tiles, etc.) for the new
-    // canvas. We clone the current skin name because `Skin::swap_scaled`
-    // consumes the new skin, and we want to reuse the already-resolved skin
-    // rather than re-reading it from disk.
-    let current_skin_name = state.skin.manifest.name.clone();
-    match resolve_skin(&current_skin_name) {
-        Ok(fresh_skin) => {
-            let mut swapped = Skin::swap_scaled(&state.skin, fresh_skin, sdi, new_w, new_h);
-            let prefs = crate::user_prefs::current(state);
-            prefs.patch_features(&mut swapped.features);
-            state.active_theme = ActiveTheme::from_skin(&swapped.theme)
-                .with_screen_size(new_w, new_h)
-                .with_features(&swapped.features);
-            prefs.apply_font_scale(&mut state.active_theme);
-            state.browser_config = BrowserConfig::from_skin_theme(&swapped.theme);
-            if let Some(ref mut bw) = state.content.browser {
-                bw.apply_chrome_theme(&state.browser_config);
-            }
-            state.wm.set_theme(swapped.theme.build_wm_theme());
-            state.skin = swapped;
-        },
-        Err(e) => {
-            // Reloading the skin failed (shouldn't happen for a built-in),
-            // but we still need to keep the theme dimensions consistent with
-            // the resized window so rendering doesn't draw to stale coords.
-            // We also refresh the WM theme from the existing `state.skin` so
-            // `state.wm` stays consistent with the skin that's actually
-            // still active (rather than holding whatever theme it was
-            // constructed with before this fallback path ran).
-            state
-                .terminal
-                .print(format!("Warning: skin reload failed: {e}"));
-            state.active_theme = state
-                .active_theme
-                .clone()
-                .with_screen_size(new_w, new_h)
-                .with_features(&state.skin.features);
-            state.wm.set_theme(state.skin.theme.build_wm_theme());
-        },
+    // Re-apply the running skin's layout at the new target size. This
+    // rebuilds every skin-owned SDI object (taskbar, dashboard tiles, etc.)
+    // for the new canvas. The skin is cloned rather than re-resolved by
+    // name: `Skin::swap_scaled` consumes its new skin, and a lookup by name
+    // would fail for external skins (strict resolve) and drop an in-memory
+    // theme preview. Layout coordinates stay at the skin's base resolution
+    // (`apply_layout_scaled` scales on the way into the SDI), so re-applying
+    // a clone is exact.
+    let current = state.skin.clone();
+    let mut swapped = Skin::swap_scaled(&state.skin, current, sdi, new_w, new_h);
+    let prefs = crate::user_prefs::current(state);
+    prefs.patch_features(&mut swapped.features);
+    state.active_theme = ActiveTheme::from_skin(&swapped.theme)
+        .with_screen_size(new_w, new_h)
+        .with_features(&swapped.features);
+    prefs.apply_font_scale(&mut state.active_theme);
+    state.browser_config = BrowserConfig::from_skin_theme(&swapped.theme);
+    if let Some(ref mut bw) = state.content.browser {
+        bw.apply_chrome_theme(&state.browser_config);
     }
+    state.wm.set_theme(swapped.theme.build_wm_theme());
+    state.skin = swapped;
 
     // Rebuild dashboard + bars for the new layout grid.
     rebuild_dashboard(state, vfs);
@@ -737,33 +716,33 @@ pub fn publish_runtime_state(state: &AppState, backend_name: &str, vfs: &mut Mem
     let _ = vfs.mkdir("/system/state");
     let _ = vfs.mkdir("/system/ipc");
     let _ = vfs.write(
-        oasis_app_settings::SKIN_STATE_PATH,
+        oasis_apps::settings::SKIN_STATE_PATH,
         state.skin.manifest.name.as_bytes(),
     );
     let res = format!(
         "{}x{}",
         state.active_theme.screen_w, state.active_theme.screen_h
     );
-    let _ = vfs.write(oasis_app_settings::RESOLUTION_STATE_PATH, res.as_bytes());
+    let _ = vfs.write(oasis_apps::settings::RESOLUTION_STATE_PATH, res.as_bytes());
     let _ = vfs.write(
-        oasis_app_settings::BACKEND_STATE_PATH,
+        oasis_apps::settings::BACKEND_STATE_PATH,
         backend_name.as_bytes(),
     );
     // User preferences shown by the Settings Audio / Language /
     // Accessibility categories.
     let prefs = crate::user_prefs::current(state);
     let volume = state.audio_backend.get_volume().to_string();
-    let _ = vfs.write(oasis_app_settings::VOLUME_STATE_PATH, volume.as_bytes());
+    let _ = vfs.write(oasis_apps::settings::VOLUME_STATE_PATH, volume.as_bytes());
     let _ = vfs.write(
-        oasis_app_settings::LOCALE_STATE_PATH,
+        oasis_apps::settings::LOCALE_STATE_PATH,
         prefs.locale.as_bytes(),
     );
     let _ = vfs.write(
-        oasis_app_settings::FONT_SCALE_STATE_PATH,
+        oasis_apps::settings::FONT_SCALE_STATE_PATH,
         prefs.font_scale.to_string().as_bytes(),
     );
     let reduced = if prefs.reduced_motion { b"1" } else { b"0" };
-    let _ = vfs.write(oasis_app_settings::REDUCED_MOTION_STATE_PATH, reduced);
+    let _ = vfs.write(oasis_apps::settings::REDUCED_MOTION_STATE_PATH, reduced);
 }
 
 /// Poll the Settings IPC paths once per frame and dispatch any pending
@@ -778,20 +757,20 @@ pub fn poll_settings_ipc(
     backend_name: &str,
 ) {
     let mut skin_request: Option<String> = None;
-    if let Ok(data) = vfs.read(oasis_app_settings::SKIN_CHANGE_REQUEST_PATH) {
+    if let Ok(data) = vfs.read(oasis_apps::settings::SKIN_CHANGE_REQUEST_PATH) {
         let req = String::from_utf8_lossy(&data).trim().to_string();
         // Always clear the request so we don't loop on malformed input.
-        let _ = vfs.write(oasis_app_settings::SKIN_CHANGE_REQUEST_PATH, b"");
+        let _ = vfs.write(oasis_apps::settings::SKIN_CHANGE_REQUEST_PATH, b"");
         if !req.is_empty() && req != state.skin.manifest.name {
             skin_request = Some(req);
         }
     }
 
     let mut resolution_request: Option<(u32, u32)> = None;
-    if let Ok(data) = vfs.read(oasis_app_settings::RESOLUTION_CHANGE_REQUEST_PATH) {
+    if let Ok(data) = vfs.read(oasis_apps::settings::RESOLUTION_CHANGE_REQUEST_PATH) {
         let req = String::from_utf8_lossy(&data).trim().to_string();
-        let _ = vfs.write(oasis_app_settings::RESOLUTION_CHANGE_REQUEST_PATH, b"");
-        if let Some((w, h)) = oasis_app_settings::parse_resolution(&req) {
+        let _ = vfs.write(oasis_apps::settings::RESOLUTION_CHANGE_REQUEST_PATH, b"");
+        if let Some((w, h)) = oasis_apps::settings::parse_resolution(&req) {
             resolution_request = Some((w, h));
         } else if !req.is_empty() {
             state
@@ -805,9 +784,9 @@ pub fn poll_settings_ipc(
     // current skin's layout/features/strings are kept and only the theme is
     // replaced. Nothing is written to disk.
     let mut theme_preview: Option<SkinTheme> = None;
-    if let Ok(data) = vfs.read(oasis_app_settings::SKIN_APPLY_THEME_REQUEST_PATH) {
+    if let Ok(data) = vfs.read(oasis_apps::settings::SKIN_APPLY_THEME_REQUEST_PATH) {
         let req = String::from_utf8_lossy(&data).to_string();
-        let _ = vfs.write(oasis_app_settings::SKIN_APPLY_THEME_REQUEST_PATH, b"");
+        let _ = vfs.write(oasis_apps::settings::SKIN_APPLY_THEME_REQUEST_PATH, b"");
         if !req.trim().is_empty() {
             match SkinTheme::from_toml_str(&req) {
                 Ok(theme) => theme_preview = Some(theme),
@@ -825,9 +804,9 @@ pub fn poll_settings_ipc(
     // standard directory format and then swapped in by name through the
     // normal resolution path (which validates the save round-trips).
     let mut save_custom: Option<(String, SkinTheme)> = None;
-    if let Ok(data) = vfs.read(oasis_app_settings::SKIN_SAVE_CUSTOM_REQUEST_PATH) {
+    if let Ok(data) = vfs.read(oasis_apps::settings::SKIN_SAVE_CUSTOM_REQUEST_PATH) {
         let req = String::from_utf8_lossy(&data).to_string();
-        let _ = vfs.write(oasis_app_settings::SKIN_SAVE_CUSTOM_REQUEST_PATH, b"");
+        let _ = vfs.write(oasis_apps::settings::SKIN_SAVE_CUSTOM_REQUEST_PATH, b"");
         if !req.trim().is_empty() {
             match parse_save_custom_request(&req) {
                 Ok(parsed) => save_custom = Some(parsed),
@@ -1140,12 +1119,48 @@ pub fn poll_ftp_server(state: &mut AppState, vfs: &mut MemoryVfs) {
 
 /// VFS IPC paths the `wm` terminal command writes requests to / reads the
 /// window list from.
-pub use oasis_core::ipc::{WM_REQUEST_PATH, WM_STATUS_PATH};
+pub use oasis_core::ipc::{WM_REQUEST_PATH, WM_STATUS_PATH, WmRequest};
+
+/// Publish the network service state (remote-terminal listener, FTP
+/// server, outbound remote connection, MCP server) at
+/// [`NET_STATE_PATH`](oasis_core::ipc::NET_STATE_PATH) for the Network
+/// app. Runs every frame; writes only when the state changed.
+pub fn publish_net_state(state: &AppState, vfs: &mut MemoryVfs) {
+    use oasis_core::ipc::{NET_STATE_PATH, NetState};
+    let net = &state.net;
+    let st = NetState {
+        listener_port: net
+            .listener
+            .as_ref()
+            .filter(|l| l.is_listening())
+            .map(RemoteListener::port),
+        ftp_port: net
+            .ftp_server
+            .as_ref()
+            .filter(|s| s.is_listening())
+            .map(FtpServer::port),
+        remote_connected: net
+            .remote_client
+            .as_ref()
+            .is_some_and(RemoteClient::is_connected),
+        #[cfg(feature = "mcp")]
+        mcp_running: state.mcp.is_some(),
+        #[cfg(not(feature = "mcp"))]
+        mcp_running: false,
+    };
+    let text = st.to_text();
+    if vfs.read(NET_STATE_PATH).ok().as_deref() != Some(text.as_bytes()) {
+        if !vfs.exists("/system/state") {
+            let _ = vfs.mkdir("/system/state");
+        }
+        let _ = vfs.write(NET_STATE_PATH, text.as_bytes());
+    }
+}
 
 /// Service the `wm` terminal command's VFS IPC (local, remote terminal and
 /// MCP `run_command` alike): publish the window list to
-/// [`WM_STATUS_PATH`] and apply `close [--force]|focus|minimize|maximize <id>`
-/// requests from [`WM_REQUEST_PATH`]. Without this bridge `wm` was a no-op
+/// [`WM_STATUS_PATH`] and apply the [`WmRequest`]s (`close [--force]|focus|
+/// minimize|maximize <id>`, `open <app>[\t<file>]`) from [`WM_REQUEST_PATH`]. Without this bridge `wm` was a no-op
 /// in the desktop shell (and failed outright: `/var/wm` did not exist).
 pub fn poll_wm_ipc(state: &mut AppState, sdi: &mut SdiRegistry, vfs: &mut MemoryVfs) {
     if !vfs.exists("/var/wm") && vfs.mkdir("/var/wm").is_err() {
@@ -1165,25 +1180,42 @@ pub fn poll_wm_ipc(state: &mut AppState, sdi: &mut SdiRegistry, vfs: &mut Memory
 }
 
 fn apply_wm_request(request: &str, state: &mut AppState, sdi: &mut SdiRegistry, vfs: &MemoryVfs) {
-    let Some((op, id)) = request.split_once(' ') else {
-        log::warn!("wm request without a window id: {request:?}");
+    let Some(req) = WmRequest::parse(request) else {
+        log::warn!("malformed wm request {request:?}");
         return;
     };
-    let id = id.trim();
-    // `close --force <id>` skips the app's unsaved-changes prompt.
-    let (force, id) = match id.strip_prefix("--force ") {
-        Some(rest) if op == "close" => (true, rest.trim()),
-        _ => (false, id),
+    // `open <app> [file]`: launch (or raise) an app window by title.
+    if let WmRequest::Open { app, file } = &req {
+        let opened = crate::launch::open_by_title(
+            state,
+            sdi,
+            vfs,
+            app,
+            file.as_deref(),
+            crate::launch::LaunchOpts::USER_NO_FADE,
+        );
+        if let Err(msg) = opened {
+            state.terminal.print(format!("open: {msg}"));
+            state.terminal.dirty = true;
+        }
+        return;
+    }
+    let id = match &req {
+        WmRequest::Close { id, .. }
+        | WmRequest::Focus(id)
+        | WmRequest::Minimize(id)
+        | WmRequest::Maximize(id) => id.as_str(),
+        WmRequest::Open { .. } => return,
     };
     if state.wm.get_window(id).is_none() {
         log::warn!("wm request for unknown window {id:?}");
         return;
     }
-    let result = match op {
+    let result = match &req {
         // Without `--force`, same as the titlebar close button: an app with
         // unsaved changes answers with its prompt instead of losing them.
-        "close" => {
-            let how = CloseHow::Programmatic { force };
+        WmRequest::Close { force, .. } => {
+            let how = CloseHow::Programmatic { force: *force };
             if close_app_window(state, sdi, vfs, id, how) == CloseOutcome::Declined {
                 state.terminal.print(format!(
                     "wm: {id} did not close: the app is asking for confirmation"
@@ -1192,16 +1224,13 @@ fn apply_wm_request(request: &str, state: &mut AppState, sdi: &mut SdiRegistry, 
             }
             Ok(())
         },
-        "focus" => state.wm.focus_window(id, sdi),
-        "minimize" => state.wm.minimize_window(id, sdi),
-        "maximize" => state.wm.maximize_window(id, sdi),
-        other => {
-            log::warn!("unknown wm request {other:?}");
-            return;
-        },
+        WmRequest::Focus(_) => state.wm.focus_window(id, sdi),
+        WmRequest::Minimize(_) => state.wm.minimize_window(id, sdi),
+        WmRequest::Maximize(_) => state.wm.maximize_window(id, sdi),
+        WmRequest::Open { .. } => Ok(()),
     };
     if let Err(e) = result {
-        log::warn!("wm {op} {id}: {e}");
+        log::warn!("wm {request:?}: {e}");
     }
 }
 
@@ -1612,7 +1641,7 @@ mod tests {
 
     // -- Settings preference IPC (volume / locale / accessibility) --
 
-    use oasis_app_settings as settings_app;
+    use oasis_apps::settings as settings_app;
     use oasis_core::settings::{SettingsStore, UserPrefs};
 
     /// A VFS with the runtime-state / IPC directories the shell creates.

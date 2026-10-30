@@ -9,20 +9,19 @@
 //! - The backend writes a JSON result blob to [`VIDEO_EMBED_RESULTS_PATH`]
 //!   that the app polls each frame in [`App::tick`].
 //!
-//! Feature-gated behind `wasm-youtube`.
+//! Feature-gated behind `video-embed` (the WASM host's `wasm-youtube`).
 
 use serde::{Deserialize, Serialize};
 
-use crate::active_theme::ActiveTheme;
-use crate::backend::SdiBackend;
-use crate::input::Button;
-use crate::sdi::SdiRegistry;
-use crate::vfs::Vfs;
+use oasis_core::active_theme::ActiveTheme;
+use oasis_core::backend::SdiBackend;
+use oasis_core::input::Button;
+use oasis_core::sdi::SdiRegistry;
+use oasis_core::vfs::Vfs;
 use oasis_types::backend::TextureId;
 use oasis_types::error::Result;
 
-use super::app_trait::App;
-use super::{AppAction, AppRequest, ContentState};
+use oasis_core::apps::{App, AppAction, AppRequest, ContentState};
 
 /// VFS IPC path the app writes commands to.
 pub const VIDEO_EMBED_REQUEST_PATH: &str = "/tmp/video_embed_request";
@@ -792,7 +791,7 @@ mod tests {
 
     #[test]
     fn confirm_with_id_emits_play_request() {
-        use oasis_vfs::MemoryVfs;
+        use oasis_core::vfs::MemoryVfs;
         let mut app = VideoEmbedApp::new("/apps/video-embed");
         app.input_buf = "dQw4w9WgXcQ".to_string();
         let vfs = MemoryVfs::new();
@@ -806,7 +805,7 @@ mod tests {
 
     #[test]
     fn confirm_with_query_emits_search_request() {
-        use oasis_vfs::MemoryVfs;
+        use oasis_core::vfs::MemoryVfs;
         let mut app = VideoEmbedApp::new("/apps/video-embed");
         app.input_buf = "lofi hip hop".to_string();
         let vfs = MemoryVfs::new();
@@ -820,7 +819,7 @@ mod tests {
 
     #[test]
     fn stop_emits_stop_request() {
-        use oasis_vfs::MemoryVfs;
+        use oasis_core::vfs::MemoryVfs;
         let mut app = VideoEmbedApp::new("/apps/video-embed");
         app.input_buf = "dQw4w9WgXcQ".to_string();
         let vfs = MemoryVfs::new();
@@ -833,8 +832,8 @@ mod tests {
 
     #[test]
     fn tick_loads_results_from_vfs() {
-        use oasis_vfs::MemoryVfs;
-        use oasis_vfs::Vfs;
+        use oasis_core::vfs::MemoryVfs;
+        use oasis_core::vfs::Vfs;
         let mut app = VideoEmbedApp::new("/apps/video-embed");
         app.input_buf = "cats".to_string();
         let mut vfs = MemoryVfs::new();
@@ -879,7 +878,7 @@ mod tests {
         let (rx, ry, rw, rh) = VideoEmbedApp::cell_rect(640, 400, TOP_PAD, 0);
         let cx = rx + rw as i32 / 2;
         let cy = ry + rh as i32 / 2;
-        app.handle_click(cx, cy, 640, 400, false, &oasis_vfs::MemoryVfs::new());
+        app.handle_click(cx, cy, 640, 400, false, &oasis_core::vfs::MemoryVfs::new());
         assert_eq!(app.state, EmbedState::Playing);
         let (_, data) = take_request(&mut app).unwrap();
         assert_eq!(data, "play:id_one_aaaa");
@@ -887,7 +886,7 @@ mod tests {
 
     #[test]
     fn cancel_in_search_exits() {
-        use oasis_vfs::MemoryVfs;
+        use oasis_core::vfs::MemoryVfs;
         let mut app = VideoEmbedApp::new("/apps/video-embed");
         let vfs = MemoryVfs::new();
         let action = app.handle_input(&Button::Cancel, &vfs);
@@ -911,7 +910,7 @@ mod tests {
             error: None,
             results,
         };
-        use oasis_vfs::MemoryVfs;
+        use oasis_core::vfs::MemoryVfs;
         let vfs = MemoryVfs::new();
         assert_eq!(app.selection, 0);
         app.handle_input(&Button::Right, &vfs);

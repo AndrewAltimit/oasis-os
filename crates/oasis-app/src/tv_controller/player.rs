@@ -1,6 +1,7 @@
 //! Video player ticking: frame upload, audio feed, untune detection, episode auto-advance.
 
 use crate::app_state::AppState;
+use oasis_apps::TvGuideRunnerExt as _;
 use oasis_core::backend::SdiBackend;
 
 /// Tick video player: upload frames, collect audio chunks.
@@ -218,7 +219,7 @@ pub(super) fn auto_advance_episode(state: &mut AppState, backend: &mut impl SdiB
     let catalog = guide.catalogs.get(channel_idx).and_then(|c| c.as_ref());
     let Some(catalog) = catalog else { return };
     let query_time = {
-        let Some(slot) = oasis_core::apps::tv_guide::schedule_at(catalog, now) else {
+        let Some(slot) = oasis_apps::tv_guide::schedule_at(catalog, now) else {
             return;
         };
         if slot.remaining_secs < 5 || was_rapid {
@@ -231,11 +232,11 @@ pub(super) fn auto_advance_episode(state: &mut AppState, backend: &mut impl SdiB
             now
         }
     };
-    let Some(slot) = oasis_core::apps::tv_guide::schedule_at(catalog, query_time) else {
+    let Some(slot) = oasis_apps::tv_guide::schedule_at(catalog, query_time) else {
         return;
     };
 
-    let url = oasis_core::apps::tv_guide::catalog::ChannelCatalog::download_url(&slot.episode);
+    let url = oasis_apps::tv_guide::catalog::ChannelCatalog::download_url(&slot.episode);
     let seek_secs = slot.elapsed_secs;
     let data = format!("{url} {seek_secs}");
     log::info!(
@@ -271,7 +272,7 @@ mod tests {
 
     #[test]
     fn default_guide_volume_attenuates_video_audio() {
-        let gain = guide_volume_gain(oasis_core::apps::tv_guide::grid_state::DEFAULT_VOLUME);
+        let gain = guide_volume_gain(oasis_apps::tv_guide::grid_state::DEFAULT_VOLUME);
         let mut chunks = vec![chunk(&[1.0, -1.0, 0.5, -0.5]), chunk(&[0.8, 0.2])];
         apply_gain(&mut chunks, gain);
         assert_eq!(chunks[0].pcm_f32, [0.25, -0.25, 0.125, -0.125]);

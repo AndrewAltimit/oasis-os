@@ -63,7 +63,7 @@ fn bench_dashboard_frame(c: &mut Criterion) {
 /// scene and no signature hash.
 fn bench_dashboard_frame_full(c: &mut Criterion) {
     use oasis_app_core::ContentState;
-    use oasis_core::apps::AppRunner;
+    use oasis_core::apps::{AppRegistry, AppRunner};
     use oasis_core::terminal_sdi;
 
     let features = SkinFeatures::default();
@@ -84,7 +84,7 @@ fn bench_dashboard_frame_full(c: &mut Criterion) {
     c.bench_function("dashboard_frame/steady_state_full", |b| {
         b.iter(|| {
             terminal_sdi::set_terminal_visible(&mut sdi, false);
-            AppRunner::hide_sdi(&mut sdi);
+            AppRunner::hide_sdi(&AppRegistry::new(), &mut sdi);
             dash.tick_animation();
             dash.update_sdi(&mut sdi, &at);
             let changed = if sdi.take_scene_dirty() {

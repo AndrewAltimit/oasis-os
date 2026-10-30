@@ -715,8 +715,8 @@ pub(crate) fn draw_radio_windowed(
 // ---------------------------------------------------------------------------
 
 pub(crate) fn draw_tvguide_windowed(
-    channels: &[oasis_core::apps::tv_guide::Channel],
-    catalogs: &[Option<oasis_core::apps::tv_guide::ChannelCatalog>],
+    channels: &[oasis_app_tv_guide::Channel],
+    catalogs: &[Option<oasis_app_tv_guide::ChannelCatalog>],
     selected: usize,
     scroll: usize,
     now_playing: &str,

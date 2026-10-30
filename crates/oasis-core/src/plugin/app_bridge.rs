@@ -4,12 +4,17 @@
 //! [`PluginAppRegistration`] during `init()` via [`PluginHost::register_app`](super::traits::PluginHost::register_app).
 //! The registration includes a factory that creates [`App`] instances on demand.
 //!
-//! When the user launches a plugin app from the dashboard, `AppRunner` calls
-//! the factory to create a fresh `App` delegate, just like built-in apps.
+//! The host appends the registrations to its [`AppRegistry`] with
+//! [`PluginManager::extend_registry`](super::PluginManager::extend_registry),
+//! so plugin apps launch (dashboard, `open`, MCP, `OASIS_APP`) exactly like
+//! built-in apps: `AppRunner` calls the factory for a fresh `App` delegate.
+
+use std::sync::Arc;
 
 use oasis_types::backend::Color;
 use oasis_vfs::Vfs;
 
+use crate::apps::{AppRegistration, AppRegistry};
 use crate::dashboard::AppEntry;
 use oasis_app_core::App;
 
@@ -53,8 +58,9 @@ pub struct PluginAppRegistration {
     pub category: AppCategory,
     /// Fallback display color (used when no icon is available).
     pub color: Color,
-    /// Factory that creates `App` instances on demand.
-    pub factory: Box<dyn PluginAppFactory>,
+    /// Factory that creates `App` instances on demand (shared with the
+    /// host's [`AppRegistry`] entry).
+    pub factory: Arc<dyn PluginAppFactory>,
 }
 
 impl std::fmt::Debug for PluginAppRegistration {
@@ -91,7 +97,7 @@ impl PluginAppRegistration {
                 b: 237,
                 a: 255,
             },
-            factory: Box::new(factory),
+            factory: Arc::new(factory),
         }
     }
 
@@ -131,6 +137,27 @@ impl PluginAppRegistration {
     pub fn create_app(&self, vfs: &dyn Vfs) -> Box<dyn App> {
         let path = self.vfs_path();
         self.factory.create_app(&path, vfs)
+    }
+
+    /// The [`AppRegistry`] entry for this app: on the dashboard, at
+    /// `/plugins/<title>`, marked as plugin-provided.
+    pub fn to_registration(&self) -> AppRegistration {
+        let factory = Arc::clone(&self.factory);
+        let mut reg =
+            AppRegistration::new(&self.title, move |path, vfs| factory.create_app(path, vfs))
+                .with_path(self.vfs_path())
+                .with_color(self.color)
+                .on_dashboard();
+        reg.from_plugin = true;
+        reg
+    }
+}
+
+/// Replace the plugin apps in `registry` with `apps`.
+pub(crate) fn sync_registry(apps: &[PluginAppRegistration], registry: &mut AppRegistry) {
+    registry.remove_plugin_apps();
+    for app in apps {
+        registry.register(app.to_registration());
     }
 }
 

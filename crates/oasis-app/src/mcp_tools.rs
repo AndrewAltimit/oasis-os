@@ -11,7 +11,6 @@
 use std::time::{Duration, Instant};
 
 use oasis_core::active_theme::ActiveTheme;
-use oasis_core::apps::registered_app_titles;
 use oasis_core::backend::{Color, SdiCore};
 use oasis_core::sdi::SdiRegistry;
 use oasis_core::terminal::Environment;
@@ -102,35 +101,30 @@ fn wm_result(res: oasis_core::error::Result<()>, ok_msg: String) -> ToolResult {
 }
 
 impl AppDispatcher<'_> {
+    /// Every launchable app: built-in, plugin-registered and the Browser.
     fn tool_list_apps(&self) -> ToolResult {
-        let titles = registered_app_titles();
-        ToolResult::text(titles.join("\n"))
+        ToolResult::text(launch::launchable_titles(self.state).join("\n"))
     }
 
     fn tool_open_app(&mut self, args: &Value) -> ToolResult {
         let Some(title) = arg_str(args, "title") else {
             return ToolResult::error("missing required argument: title");
         };
-        let known = registered_app_titles();
-        if !known.iter().any(|t| t.eq_ignore_ascii_case(&title)) {
-            return ToolResult::error(format!(
-                "unknown app '{title}'. Available: {}",
-                known.join(", ")
-            ));
+        let file = arg_str(args, "file");
+        match launch::open_by_title(
+            self.state,
+            self.sdi,
+            self.vfs,
+            &title,
+            file.as_deref(),
+            LaunchOpts::QUIET,
+        ) {
+            Ok(title) => match file {
+                Some(file) => ToolResult::text(format!("Opened {title} with {file}")),
+                None => ToolResult::text(format!("Opened {title}")),
+            },
+            Err(msg) => ToolResult::error(msg),
         }
-        // Normalize to the registry's exact casing.
-        let title = known
-            .iter()
-            .find(|t| t.eq_ignore_ascii_case(&title))
-            .map(|t| (*t).to_string())
-            .unwrap_or(title);
-
-        if let Some(file) = arg_str(args, "file") {
-            launch::launch_for_file(self.state, self.sdi, self.vfs, &title, &file);
-            return ToolResult::text(format!("Opened {title} with {file}"));
-        }
-        launch::launch_title(self.state, self.sdi, self.vfs, &title, LaunchOpts::QUIET);
-        ToolResult::text(format!("Opened {title}"))
     }
 
     fn tool_list_windows(&self) -> ToolResult {
@@ -307,7 +301,7 @@ impl AppDispatcher<'_> {
         let request = format!("play_file {path}");
         match self
             .vfs
-            .write(oasis_app_media::MEDIA_REQUEST_PATH, request.as_bytes())
+            .write(oasis_core::ipc::AUDIO_REQUEST_PATH, request.as_bytes())
         {
             Ok(()) => ToolResult::text(format!("Queued playback: {path}")),
             Err(e) => ToolResult::error(format!("{e}")),
@@ -338,10 +332,7 @@ impl AppDispatcher<'_> {
                         "the TV Guide is not open (open_app 'TV Guide' first)",
                     );
                 }
-                (
-                    oasis_core::apps::tv_guide::TV_REQUEST_PATH,
-                    format!("tune_ch:{n}"),
-                )
+                (oasis_core::ipc::TV_REQUEST_PATH, format!("tune_ch:{n}"))
             },
             other => {
                 return ToolResult::error(format!("source must be 'radio' or 'tv', got '{other}'"));

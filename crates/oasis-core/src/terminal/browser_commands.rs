@@ -85,7 +85,7 @@ impl Command for BrowseCmd {
 /// VFS file the `browse` command queues its request in (`open <url>`,
 /// `back`, `reload`, ...); the desktop shell opens the browser and
 /// applies it on its next frame.
-pub const BROWSER_REQUEST_PATH: &str = "/var/browser/request";
+pub use oasis_types::ipc::BROWSER_REQUEST_PATH;
 
 fn queue_browser_request(env: &mut Environment<'_>, request: &str) -> Result<()> {
     for dir in ["/var", "/var/browser"] {

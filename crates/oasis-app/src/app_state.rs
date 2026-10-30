@@ -4,7 +4,7 @@ use oasis_audio::RadioManager;
 use oasis_audio::radio::archive::ArchiveCatalog;
 use oasis_audio::radio::source::RadioSource;
 use oasis_core::active_theme::ActiveTheme;
-use oasis_core::apps::AppRunner;
+use oasis_core::apps::{AppRegistry, AppRunner};
 use oasis_core::backend::AudioTrackId;
 use oasis_core::backend::Color;
 use oasis_core::bottombar::BottomBar;
@@ -146,9 +146,13 @@ impl Default for NetworkLayer {
     }
 }
 
-/// Running applications: windowed app runners, browser, kiosk state.
+/// Running applications: windowed app runners, browser, kiosk state, and
+/// the registry they are launched from.
 #[derive(Default)]
 pub struct ContentLayer {
+    /// Every launchable app: the built-in bundle plus plugin apps
+    /// (`PluginManager::extend_registry`).
+    pub apps: AppRegistry,
     /// App runners by window id (the browser window has none).
     pub open_runners: Vec<(String, AppRunner)>,
     pub browser: Option<BrowserWidget>,
@@ -158,6 +162,16 @@ pub struct ContentLayer {
     /// their backend resources (`AppRunner::release_resources`) before
     /// they are dropped. Input handlers have no backend access.
     pub retired_runners: Vec<AppRunner>,
+}
+
+impl ContentLayer {
+    /// No app running; launches go through `apps`.
+    pub fn new(apps: AppRegistry) -> Self {
+        Self {
+            apps,
+            ..Self::default()
+        }
+    }
 }
 
 /// Internet Radio playback (driven by `radio_controller`).
@@ -194,7 +208,7 @@ impl Default for RadioLayer {
 
 /// Pending TV catalog fetch: per-channel catalogs (or an error).
 pub type TvCatalogFetch =
-    mpsc::Receiver<Result<Vec<Option<oasis_core::apps::tv_guide::ChannelCatalog>>, String>>;
+    mpsc::Receiver<Result<Vec<Option<oasis_apps::tv_guide::ChannelCatalog>>, String>>;
 
 /// TV Guide playback (driven by `tv_controller`).
 pub struct TvLayer {
@@ -376,7 +390,9 @@ impl AppState {
             },
             terminal: TerminalLayer::new(CommandRegistry::new(), Vec::new()),
             net: NetworkLayer::new(),
-            content: ContentLayer::default(),
+            content: ContentLayer::new(oasis_apps::builtin_registry(
+                &oasis_apps::HostInfo::desktop(),
+            )),
             osk: None,
             plugin_manager: PluginManager::new(),
             wm: WindowManager::new(480, 272),
