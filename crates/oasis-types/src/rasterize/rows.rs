@@ -15,7 +15,7 @@
 //! why they live here rather than in `oasis-rasterize` (which re-exports
 //! them unchanged).
 
-use crate::geometry::isqrt_i32;
+use crate::geometry::isqrt_i64;
 
 /// Walk the midpoint circle of radius `r` and report every row offset
 /// `o` in `0..=r` **exactly once** together with the half-width `ext` of
@@ -163,18 +163,22 @@ pub fn stroke_circle_rows(radius: u16, stroke_width: u16, mut f: impl FnMut(i32,
     if radius == 0 {
         return;
     }
-    let r_outer = radius as i32;
-    let r_inner = (r_outer - (stroke_width as i32).max(1)).max(0);
+    // i64: a u16 radius squared does not fit i32.
+    let r_outer = radius as i64;
+    let r_inner = (r_outer - (stroke_width as i64).max(1)).max(0);
     for dy in -r_outer..=r_outer {
-        let outer_x = isqrt_i32(r_outer * r_outer - dy * dy);
-        if r_inner > 0 {
-            let inner_sq = r_inner * r_inner - dy * dy;
-            if inner_sq > 0 {
-                let inner_x = isqrt_i32(inner_sq);
-                f(dy, -outer_x, -inner_x + 1);
-                f(dy, inner_x, outer_x + 1);
-                continue;
+        let outer_x = isqrt_i64(r_outer * r_outer - dy * dy) as i32;
+        let inner_sq = r_inner * r_inner - dy * dy;
+        let dy = dy as i32;
+        if r_inner > 0 && inner_sq >= 0 {
+            // The inner disc covers `-inner_x..=inner_x`; the ring is what
+            // lies outside it.
+            let inner_x = isqrt_i64(inner_sq) as i32;
+            if inner_x < outer_x {
+                f(dy, -outer_x, -inner_x);
+                f(dy, inner_x + 1, outer_x + 1);
             }
+            continue;
         }
         f(dy, -outer_x, outer_x + 1);
     }
@@ -383,6 +387,29 @@ mod tests {
         let a = grid(41, 41, (20, 20), |put| stroke_circle_rows(10, 0, put));
         let b = grid(41, 41, (20, 20), |put| stroke_circle_rows(10, 1, put));
         assert_eq!(a, b);
+    }
+
+    /// Regression: the ring kept the inner disc's edge column, so a 1 px
+    /// stroke was 2 px wide on the rows through the centre.
+    #[test]
+    fn stroke_circle_width_is_exact_on_the_axes() {
+        for (r, sw) in [(10u16, 1u16), (10, 3), (18, 4)] {
+            let g = grid(41, 41, (20, 20), |put| stroke_circle_rows(r, sw, put));
+            let row: u32 = (0..41).map(|x| g[20 * 41 + x]).sum();
+            let col: u32 = (0..41).map(|y| g[y * 41 + 20]).sum();
+            assert_eq!(row, 2 * sw as u32, "r={r} sw={sw} centre row");
+            assert_eq!(col, 2 * sw as u32, "r={r} sw={sw} centre column");
+        }
+    }
+
+    #[test]
+    fn stroke_circle_max_radius_does_not_overflow() {
+        let mut rows = 0u32;
+        stroke_circle_rows(u16::MAX, 2, |_, x0, x1| {
+            assert!(x0 < x1);
+            rows += 1;
+        });
+        assert!(rows > 2 * u16::MAX as u32);
     }
 
     #[test]

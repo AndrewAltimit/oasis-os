@@ -19,6 +19,44 @@ pub use rows::{
     stroke_rounded_rect_rows, thick_line_rows, triangle_rows,
 };
 
+/// Clamp a pixel size to the `i32` coordinate range.
+#[must_use]
+pub fn size_i32(v: u32) -> i32 {
+    i32::try_from(v).unwrap_or(i32::MAX)
+}
+
+/// The rectangles of a `w` x `h` rectangle outline `stroke_width` pixels
+/// thick, drawn inside the rectangle: `f(x, y, w, h)` once per part.
+///
+/// The parts never overlap, so a translucent stroke blends every pixel
+/// once: four bands (full-width top and bottom, inner-height sides), or
+/// the whole rectangle once the stroke is at least half the shorter side.
+/// An empty rectangle or a zero width draws nothing. The `SdiShapes`
+/// default, `SoftwareBuffer` and the SDL backend all stroke through this.
+pub fn stroke_rect_parts(
+    x: i32,
+    y: i32,
+    w: u32,
+    h: u32,
+    stroke_width: u16,
+    mut f: impl FnMut(i32, i32, u32, u32),
+) {
+    let sw = stroke_width as u32;
+    if w == 0 || h == 0 || sw == 0 {
+        return;
+    }
+    if sw * 2 >= w || sw * 2 >= h {
+        f(x, y, w, h);
+        return;
+    }
+    let inner_h = h - sw * 2;
+    let below_top = y.saturating_add(sw as i32);
+    f(x, y, w, sw);
+    f(x, y.saturating_add(size_i32(h - sw)), w, sw);
+    f(x, below_top, sw, inner_h);
+    f(x.saturating_add(size_i32(w - sw)), below_top, sw, inner_h);
+}
+
 /// Abstraction for horizontal-span pixel output.
 ///
 /// Backends implement this to bridge shared rasterization algorithms to their
@@ -73,6 +111,33 @@ mod tests {
         fn draw_hline(&mut self, x1: i32, x2: i32, y: i32, _color: Color) {
             self.spans.push((x1, x2, y));
         }
+    }
+
+    fn stroke_parts(x: i32, y: i32, w: u32, h: u32, sw: u16) -> Vec<(i32, i32, u32, u32)> {
+        let mut v = Vec::new();
+        stroke_rect_parts(x, y, w, h, sw, |a, b, c, d| v.push((a, b, c, d)));
+        v
+    }
+
+    #[test]
+    fn stroke_rect_parts_cases() {
+        assert_eq!(
+            stroke_parts(10, 20, 30, 10, 2),
+            vec![
+                (10, 20, 30, 2),
+                (10, 28, 30, 2),
+                (10, 22, 2, 6),
+                (38, 22, 2, 6)
+            ]
+        );
+        // Degenerate rectangles and zero width draw nothing.
+        assert!(stroke_parts(10, 10, 0, 20, 2).is_empty());
+        assert!(stroke_parts(10, 10, 20, 0, 2).is_empty());
+        assert!(stroke_parts(10, 10, 20, 20, 0).is_empty());
+        // A stroke at least half the shorter side is the whole rect, never
+        // bands that overlap or reach outside it.
+        assert_eq!(stroke_parts(0, 10, 20, 1, 3), vec![(0, 10, 20, 1)]);
+        assert_eq!(stroke_parts(0, 0, 4, 40, 2), vec![(0, 0, 4, 40)]);
     }
 
     #[test]

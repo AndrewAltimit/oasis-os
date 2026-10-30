@@ -4,8 +4,9 @@
 //! circles, triangles, polygons, arcs) and helper functions used by both
 //! this module and the parent `lib.rs` (gradients, clip intersection).
 
-use oasis_types::backend::{Color, SdiCore, StrokeStyle};
+use oasis_types::backend::{BackendErrExt, Color, SdiCore, StrokeStyle};
 use oasis_types::error::Result;
+use oasis_types::rasterize::{size_i32, stroke_rect_parts};
 use sdl3::render::FRect;
 
 use super::{SdlBackend, fpoint, frect};
@@ -17,10 +18,13 @@ use super::{SdlBackend, fpoint, frect};
 impl SdlBackend {
     /// Submit the spans collected in `rect_batch` with a single
     /// `fill_rects` FFI call (using the current draw color).
-    fn flush_rect_batch(&mut self) {
-        if !self.rect_batch.is_empty() {
-            let _ = self.canvas.fill_rects(self.rect_batch.as_slice());
+    fn flush_rect_batch(&mut self) -> Result<()> {
+        if self.rect_batch.is_empty() {
+            return Ok(());
         }
+        self.canvas
+            .fill_rects(self.rect_batch.as_slice())
+            .backend_err()
     }
 
     pub(crate) fn shape_fill_rounded_rect(
@@ -41,8 +45,7 @@ impl SdlBackend {
         // uniformly), all submitted in one `fill_rects` call.
         self.rect_batch.clear();
         rounded_rect_spans(tx, ty, w, h, radius, &mut self.rect_batch);
-        self.flush_rect_batch();
-        Ok(())
+        self.flush_rect_batch()
     }
 
     pub(crate) fn shape_stroke_rect(
@@ -55,25 +58,14 @@ impl SdlBackend {
     ) -> Result<()> {
         let (tx, ty) = self.translate(x, y);
         self.set_color(stroke.color);
-        if stroke.width == 1 {
-            let _ = self.canvas.draw_rect(frect(tx, ty, w, h));
-        } else {
-            let sw = stroke.width as u32;
-            let _ = self.canvas.fill_rect(frect(tx, ty, w, sw));
-            let _ = self
-                .canvas
-                .fill_rect(frect(tx, ty + h as i32 - sw as i32, w, sw));
-            let _ = self
-                .canvas
-                .fill_rect(frect(tx, ty + sw as i32, sw, h.saturating_sub(sw * 2)));
-            let _ = self.canvas.fill_rect(frect(
-                tx + w as i32 - sw as i32,
-                ty + sw as i32,
-                sw,
-                h.saturating_sub(sw * 2),
-            ));
-        }
-        Ok(())
+        // Non-overlapping parts inside the rect, one `fill_rects` call
+        // (shared with the software rasterizer and the trait default).
+        self.rect_batch.clear();
+        let batch = &mut self.rect_batch;
+        stroke_rect_parts(tx, ty, w, h, stroke.width, |px, py, pw, ph| {
+            batch.push(frect(px, py, pw, ph));
+        });
+        self.flush_rect_batch()
     }
 
     pub(crate) fn shape_draw_line(
@@ -89,7 +81,9 @@ impl SdlBackend {
         let (tx2, ty2) = self.translate(x2, y2);
         self.set_color(color);
         if width <= 1 {
-            let _ = self.canvas.draw_line(fpoint(tx1, ty1), fpoint(tx2, ty2));
+            self.canvas
+                .draw_line(fpoint(tx1, ty1), fpoint(tx2, ty2))
+                .backend_err()
         } else {
             // Square brush stamped along the Bresenham path, one span per
             // row (shared with the software rasterizer). The previous
@@ -101,9 +95,8 @@ impl SdlBackend {
             oasis_rasterize::thick_line_rows(tx1, ty1, tx2, ty2, width, |y, xs, xe| {
                 push_row_span(batch, xs, xe - 1, y);
             });
-            self.flush_rect_batch();
+            self.flush_rect_batch()
         }
-        Ok(())
     }
 
     pub(crate) fn shape_fill_circle(
@@ -117,8 +110,7 @@ impl SdlBackend {
         self.set_color(color);
         self.rect_batch.clear();
         circle_spans(tcx, tcy, radius as i32, &mut self.rect_batch);
-        self.flush_rect_batch();
-        Ok(())
+        self.flush_rect_batch()
     }
 
     pub(crate) fn shape_stroke_circle(
@@ -139,8 +131,7 @@ impl SdlBackend {
         oasis_rasterize::stroke_circle_rows(radius, stroke.width, |dy, x0, x1| {
             push_row_span(batch, tcx + x0, tcx + x1 - 1, tcy + dy);
         });
-        self.flush_rect_batch();
-        Ok(())
+        self.flush_rect_batch()
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -160,8 +151,7 @@ impl SdlBackend {
         self.set_color(color);
         self.rect_batch.clear();
         triangle_spans((tx1, ty1), (tx2, ty2), (tx3, ty3), &mut self.rect_batch);
-        self.flush_rect_batch();
-        Ok(())
+        self.flush_rect_batch()
     }
 
     pub(crate) fn shape_stroke_rounded_rect(
@@ -177,7 +167,7 @@ impl SdlBackend {
             return self.shape_stroke_rect(x, y, w, h, stroke);
         }
         let (tx, ty) = self.translate(x, y);
-        let r = (radius as i32).min(w as i32 / 2).min(h as i32 / 2);
+        let r = (radius as u32).min(w / 2).min(h / 2) as i32;
         self.set_color(stroke.color);
         // Filled rounded rect minus the inset inner one (shared with the
         // software rasterizer): corners have the same shape as
@@ -185,14 +175,13 @@ impl SdlBackend {
         self.rect_batch.clear();
         let batch = &mut self.rect_batch;
         oasis_rasterize::stroke_rounded_rect_rows(
-            w as i32,
-            h as i32,
+            size_i32(w),
+            size_i32(h),
             r,
             stroke.width,
             |dy, x0, x1| push_row_span(batch, tx + x0, tx + x1 - 1, ty + dy),
         );
-        self.flush_rect_batch();
-        Ok(())
+        self.flush_rect_batch()
     }
 
     pub(crate) fn shape_fill_polygon(&mut self, points: &[(i32, i32)], color: Color) -> Result<()> {
@@ -207,16 +196,18 @@ impl SdlBackend {
         // it once to (0, 0) covers every vertex.
         let (ox, oy) = self.translate(0, 0);
         self.poly_points.clear();
-        self.poly_points
-            .extend(points.iter().map(|&(x, y)| (x + ox, y + oy)));
+        self.poly_points.extend(
+            points
+                .iter()
+                .map(|&(x, y)| (x.saturating_add(ox), y.saturating_add(oy))),
+        );
 
         self.rect_batch.clear();
         let batch = &mut self.rect_batch;
         oasis_rasterize::polygon_rows(&self.poly_points, &mut self.poly_xs, |y, x0, x1| {
             push_row_span(batch, x0, x1 - 1, y);
         });
-        self.flush_rect_batch();
-        Ok(())
+        self.flush_rect_batch()
     }
 }
 

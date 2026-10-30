@@ -210,6 +210,7 @@ impl SdiCore for RecordingBackend {
         self.width = width;
         self.height = height;
         self.clip_stack = ClipStack::default();
+        self.translate_stack = TranslateStack::new();
         Ok(())
     }
 
@@ -297,6 +298,19 @@ impl SdiCore for RecordingBackend {
     }
 }
 
+impl RecordingBackend {
+    /// Reject `op` on a target that is on the bind chain, as the real
+    /// backends do (UE5 and WASM take a bound target out of storage).
+    fn reject_bound(&self, op: &str, id: RenderTargetId) -> Result<()> {
+        if self.render_target_bind_stack.iter().any(|b| b.id == id) {
+            return Err(OasisError::Backend(
+                format!("{op}: render target {} is bound", id.0).into(),
+            ));
+        }
+        Ok(())
+    }
+}
+
 impl SdiRenderTarget for RecordingBackend {
     fn create_render_target(&mut self, w: u32, h: u32) -> Result<RenderTargetId> {
         let id = RenderTargetId(self.next_render_target_id);
@@ -313,6 +327,7 @@ impl SdiRenderTarget for RecordingBackend {
                 format!("bind_render_target: unknown id {id:?}").into(),
             ));
         };
+        self.reject_bound("bind_render_target", id)?;
         // The target starts untranslated and unclipped in its own
         // coordinates; the parent's state comes back on unbind.
         self.render_target_bind_stack.push(BoundTarget {
@@ -358,6 +373,7 @@ impl SdiRenderTarget for RecordingBackend {
                 format!("composite_render_target: unknown id {id:?}").into(),
             ));
         }
+        self.reject_bound("composite_render_target", id)?;
         self.commands.push(DrawCommand::CompositeRenderTarget {
             id,
             dst_x,
@@ -383,6 +399,7 @@ impl SdiRenderTarget for RecordingBackend {
                 format!("composite_render_target_premultiplied: unknown id {id:?}").into(),
             ));
         }
+        self.reject_bound("composite_render_target_premultiplied", id)?;
         self.commands
             .push(DrawCommand::CompositeRenderTargetPremultiplied {
                 id,
@@ -395,9 +412,20 @@ impl SdiRenderTarget for RecordingBackend {
     }
 
     fn read_render_target(&mut self, id: RenderTargetId, dst: &mut [u8]) -> Result<()> {
-        if !self.live_render_targets.contains_key(&id.0) {
+        let Some(&(w, h)) = self.live_render_targets.get(&id.0) else {
             return Err(OasisError::Backend(
                 format!("read_render_target: unknown id {id:?}").into(),
+            ));
+        };
+        self.reject_bound("read_render_target", id)?;
+        if dst.len() as u64 != w as u64 * h as u64 * 4 {
+            return Err(OasisError::Backend(
+                format!(
+                    "read_render_target: dst holds {} bytes, a {w}x{h} target needs {}",
+                    dst.len(),
+                    w as u64 * h as u64 * 4
+                )
+                .into(),
             ));
         }
         // Recording backend never stores pixel contents; return zeros
@@ -408,6 +436,7 @@ impl SdiRenderTarget for RecordingBackend {
     }
 
     fn destroy_render_target(&mut self, id: RenderTargetId) -> Result<()> {
+        self.reject_bound("destroy_render_target", id)?;
         if self.live_render_targets.remove(&id.0).is_none() {
             return Err(OasisError::Backend(
                 format!("destroy_render_target: unknown id {id:?}").into(),

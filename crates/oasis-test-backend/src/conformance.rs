@@ -467,6 +467,30 @@ pub static SCENARIOS: &[Scenario] = &[
         check = expect_blank
     ),
     scenario!(
+        "stroke_rect_degenerate",
+        |b| {
+            b.stroke_rect(10, 10, 0, 20, 2, RED)?;
+            b.stroke_rect(10, 10, 20, 0, 2, RED)?;
+            b.stroke_rect(10, 10, 20, 20, 0, RED)?;
+            // Thinner than the stroke: exactly the rect, never bands that
+            // reach outside it.
+            b.stroke_rect(40, 10, 20, 1, 3, GREEN)?;
+            // Narrower than two strokes, translucent: blended once.
+            b.stroke_rect(70, 10, 4, 30, 2, Color::rgba(255, 255, 255, 128))
+        },
+        check = |f| {
+            if f.count(rgb_of(RED)) != 0 {
+                return Err("an empty stroke_rect left pixels".into());
+            }
+            expect_rect_exact(f, (40, 10, 20, 1), rgb_of(GREEN))?;
+            let once = blend(Color::rgba(255, 255, 255, 128), rgb_of(BG));
+            expect_fill(f, (70, 10, 4, 30), once, 2)?;
+            expect_ring(f, (70, 10, 4, 30), rgb_of(BG))
+        },
+        Tolerance::BLEND,
+        "alpha-blend rounding"
+    ),
+    scenario!(
         "fill_rect_alpha_zero_is_noop",
         |b| b.fill_rect(10, 10, 40, 40, Color::rgba(255, 255, 255, 0)),
         check = expect_blank
@@ -1730,6 +1754,84 @@ pub fn text_metrics(backend: &dyn SdiBackend) -> Vec<(String, u32)> {
         out.push((format!("font_ascent({fs})"), backend.font_ascent(fs)));
     }
     out
+}
+
+/// Render-target misuse every backend must reject the same way, as a list
+/// of violations (empty = conforming): binding a target that is already
+/// bound, compositing, reading back or destroying the bound target, and
+/// using an id that was destroyed. A rejected call must leave the bind
+/// state alone, so the final unbind still returns to the framebuffer.
+///
+/// Backends without render targets conform trivially.
+pub fn render_target_misuse(backend: &mut dyn SdiBackend) -> Vec<String> {
+    let mut bad = Vec::new();
+    if !backend.supports_render_targets() {
+        return bad;
+    }
+    let rt = match backend.create_render_target(8, 8) {
+        Ok(rt) => rt,
+        Err(e) => return vec![format!("create_render_target: {e}")],
+    };
+    fn expect_err(bad: &mut Vec<String>, what: &str, r: Result<()>) {
+        if r.is_ok() {
+            bad.push(format!("{what} succeeded"));
+        }
+    }
+    match backend.bind_render_target(rt) {
+        Ok(()) => {
+            expect_err(
+                &mut bad,
+                "re-binding the bound target",
+                backend.bind_render_target(rt),
+            );
+            expect_err(
+                &mut bad,
+                "compositing the bound target into itself",
+                backend.composite_render_target(rt, 0, 0, 8, 8, BlendMode::Normal, 1.0),
+            );
+            expect_err(
+                &mut bad,
+                "destroying the bound target",
+                backend.destroy_render_target(rt),
+            );
+            if backend.supports_render_target_readback() {
+                let mut buf = vec![0u8; 8 * 8 * 4];
+                expect_err(
+                    &mut bad,
+                    "reading back the bound target",
+                    backend.read_render_target(rt, &mut buf),
+                );
+            }
+            if backend.unbind_render_target().is_err() {
+                bad.push("unbind after rejected calls failed".into());
+            }
+            expect_err(
+                &mut bad,
+                "unbind with an empty bind stack",
+                backend.unbind_render_target(),
+            );
+        },
+        Err(e) => bad.push(format!("bind_render_target: {e}")),
+    }
+    if let Err(e) = backend.destroy_render_target(rt) {
+        bad.push(format!("destroy_render_target: {e}"));
+    }
+    expect_err(
+        &mut bad,
+        "binding a destroyed target",
+        backend.bind_render_target(rt),
+    );
+    expect_err(
+        &mut bad,
+        "compositing a destroyed target",
+        backend.composite_render_target(rt, 0, 0, 8, 8, BlendMode::Normal, 1.0),
+    );
+    expect_err(
+        &mut bad,
+        "destroying a destroyed target",
+        backend.destroy_render_target(rt),
+    );
+    bad
 }
 
 /// Scenario names must be unique (dump files and failure messages key on

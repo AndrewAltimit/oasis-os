@@ -57,6 +57,12 @@ pub(crate) fn fpoint(x: i32, y: i32) -> FPoint {
     FPoint::new(x as f32, y as f32)
 }
 
+/// The error for a render-target call on a target that is currently bound
+/// (on the bind chain).
+fn bound_target_error(op: &str, id: RenderTargetId) -> OasisError {
+    OasisError::Backend(format!("{op}: render target {} is bound", id.0).into())
+}
+
 /// The surface a render-target bind replaced, restored on unbind.
 ///
 /// SDL3 keeps the clip rectangle per render target, so the parent's
@@ -290,6 +296,16 @@ impl SdlBackend {
         self.clip_stack = ClipStack::default();
         self.translate_stack = TranslateStack::new();
         Ok(())
+    }
+
+    /// Whether `id` is the bound render target or one of the targets the
+    /// current bind chain will return to.
+    fn is_bound(&self, id: RenderTargetId) -> bool {
+        self.current_render_target == Some(id.0)
+            || self
+                .render_target_bind_stack
+                .iter()
+                .any(|b| b.prev_id == Some(id.0))
     }
 
     /// Apply cumulative translation to coordinates.
@@ -745,6 +761,13 @@ impl SdiRenderTarget for SdlBackend {
     }
 
     fn bind_render_target(&mut self, id: RenderTargetId) -> Result<()> {
+        // A bound target is on the bind chain already: re-binding it would
+        // clear its SDL-side clip, which the unbind cannot restore. UE5
+        // and WASM take a bound target out of storage, so they reject it
+        // the same way.
+        if self.is_bound(id) {
+            return Err(bound_target_error("bind_render_target", id));
+        }
         let (raw_tex, size) = match self.render_targets.get(&id.0) {
             Some(tex) => (tex.raw(), (tex.width(), tex.height())),
             None => return Err(render_target_not_found(id)),
@@ -814,6 +837,9 @@ impl SdiRenderTarget for SdlBackend {
             (0.0..=1.0).contains(&opacity),
             "opacity must be in [0.0, 1.0], got {opacity}"
         );
+        if self.is_bound(id) {
+            return Err(bound_target_error("composite_render_target", id));
+        }
         let Self {
             canvas,
             render_targets,
@@ -855,6 +881,12 @@ impl SdiRenderTarget for SdlBackend {
         dst_w: u32,
         dst_h: u32,
     ) -> Result<()> {
+        if self.is_bound(id) {
+            return Err(bound_target_error(
+                "composite_render_target_premultiplied",
+                id,
+            ));
+        }
         let Self {
             canvas,
             render_targets,
@@ -898,17 +930,10 @@ impl SdiRenderTarget for SdlBackend {
     }
 
     fn destroy_render_target(&mut self, id: RenderTargetId) -> Result<()> {
-        // If the caller destroys a still-bound target, refuse — same
-        // contract the RecordingBackend tests enforce.
-        if self.current_render_target == Some(id.0)
-            || self
-                .render_target_bind_stack
-                .iter()
-                .any(|b| b.prev_id == Some(id.0))
-        {
-            return Err(OasisError::Backend(
-                format!("destroy_render_target: id {id:?} is still bound").into(),
-            ));
+        // Destroying a still-bound target would leave the bind chain
+        // pointing at a freed texture.
+        if self.is_bound(id) {
+            return Err(bound_target_error("destroy_render_target", id));
         }
         if self.render_targets.remove(&id.0).is_none() {
             return Err(render_target_not_found(id));

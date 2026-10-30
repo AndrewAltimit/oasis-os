@@ -424,21 +424,11 @@ impl SoftwareBuffer {
 
     /// Stroke a rectangle outline.
     pub fn stroke_rect(&mut self, x: i32, y: i32, w: u32, h: u32, stroke_width: u16, color: Color) {
-        let sw = stroke_width as u32;
-        // Top.
-        self.fill_rect(x, y, w, sw, color);
-        // Bottom.
-        self.fill_rect(x, y + h as i32 - sw as i32, w, sw, color);
-        // Left.
-        self.fill_rect(x, y + sw as i32, sw, h.saturating_sub(sw * 2), color);
-        // Right.
-        self.fill_rect(
-            x + w as i32 - sw as i32,
-            y + sw as i32,
-            sw,
-            h.saturating_sub(sw * 2),
-            color,
-        );
+        // Non-overlapping parts inside the rect (shared with the SDL
+        // backend and the `SdiShapes` default).
+        rasterize::stroke_rect_parts(x, y, w, h, stroke_width, |px, py, pw, ph| {
+            self.fill_rect(px, py, pw, ph, color);
+        });
     }
 
     /// Draw a line using Bresenham's algorithm. Widths above 1 stamp a

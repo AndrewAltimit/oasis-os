@@ -270,3 +270,19 @@ fn inexact_scenarios_document_why() {
         }
     }
 }
+
+/// Render-target misuse (re-binding the bound target, compositing or
+/// destroying it, stale ids) is rejected the same way on SDL and the
+/// software framebuffer.
+#[test]
+fn render_target_misuse_is_rejected() {
+    let sdl_bad = with_sdl(CANVAS_W, CANVAS_H, |sdl| {
+        conformance::render_target_misuse(sdl as &mut dyn SdiBackend)
+    });
+    let mut ue5 = Ue5Backend::new(CANVAS_W, CANVAS_H);
+    let ue5_bad = conformance::render_target_misuse(&mut ue5 as &mut dyn SdiBackend);
+    assert!(
+        sdl_bad.is_empty() && ue5_bad.is_empty(),
+        "sdl: {sdl_bad:?}\nue5: {ue5_bad:?}"
+    );
+}

@@ -80,6 +80,23 @@ pub fn isqrt_i32(n: i32) -> i32 {
     x as i32
 }
 
+/// Integer square root (floor) for `i64` values; 0 for negative inputs.
+///
+/// For squared distances that do not fit `i32` (a radius above 46340).
+pub fn isqrt_i64(n: i64) -> i64 {
+    if n <= 0 {
+        return 0;
+    }
+    let n = n as u64;
+    let mut x = n;
+    let mut y = x.div_ceil(2);
+    while y < x {
+        x = y;
+        y = (x + n / x) / 2;
+    }
+    x as i64
+}
+
 /// Compute the horizontal inset for a rounded-rectangle scanline.
 ///
 /// Given a scanline offset `dy` (0-based from the top of the rect),
@@ -90,12 +107,15 @@ pub fn isqrt_i32(n: i32) -> i32 {
 /// This is the shared formula used by both the SDL gradient rounded-rect
 /// fill and the PSP GU rounded-rect fill.
 pub fn rounded_rect_inset(dy: i32, h: i32, r: i32) -> i32 {
+    // i64: `r * r` overflows i32 for radii above 46340.
+    let inset = |ry: i64| {
+        let r = r as i64;
+        (r - isqrt_i64(r * r - ry * ry)) as i32
+    };
     if dy < r {
-        let ry = r - dy;
-        r - isqrt_i32((r * r - ry * ry).max(0))
+        inset(r as i64 - dy as i64)
     } else if dy >= h - r {
-        let ry = dy - (h - 1 - r);
-        r - isqrt_i32((r * r - ry * ry).max(0))
+        inset(dy as i64 - (h as i64 - 1 - r as i64))
     } else {
         0
     }
@@ -104,6 +124,22 @@ pub fn rounded_rect_inset(dy: i32, h: i32, r: i32) -> i32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn isqrt_i64_matches_i32_and_handles_large_inputs() {
+        for n in [0, 1, 2, 3, 4, 15, 16, 17, 99, 100, 1 << 20, i32::MAX] {
+            assert_eq!(isqrt_i64(n as i64), isqrt_i32(n) as i64, "{n}");
+        }
+        assert_eq!(isqrt_i64(65535 * 65535), 65535);
+        assert_eq!(isqrt_i64(-5), 0);
+    }
+
+    #[test]
+    fn rounded_rect_inset_huge_radius_does_not_overflow() {
+        // `r * r` overflowed i32 (a debug-build panic) above r = 46340.
+        assert_eq!(rounded_rect_inset(0, 131_070, 65535), 65535);
+        assert_eq!(rounded_rect_inset(65535, 131_070, 65535), 1);
+    }
 
     #[test]
     fn intersect_huge_sizes_do_not_wrap() {

@@ -323,3 +323,23 @@ fn all_blend_modes_recorded_distinctly() {
         .collect();
     assert_eq!(recorded, modes);
 }
+
+/// The recorder rejects render-target misuse exactly like the pixel
+/// backends (`conformance::render_target_misuse`), so a caller that
+/// re-binds or destroys a bound target fails in tests too, not only on
+/// SDL / UE5 / WASM.
+#[test]
+fn misuse_is_rejected_like_the_real_backends() {
+    let mut b = RecordingBackend::new(480, 272);
+    let bad = oasis_test_backend::conformance::render_target_misuse(&mut b);
+    assert!(bad.is_empty(), "{bad:?}");
+}
+
+/// `read_render_target` checks the destination length.
+#[test]
+fn read_render_target_checks_dst_len() {
+    let mut b = RecordingBackend::new(480, 272);
+    let id = b.create_render_target(4, 2).expect("create");
+    assert!(b.read_render_target(id, &mut [0u8; 31]).is_err());
+    assert!(b.read_render_target(id, &mut [0u8; 32]).is_ok());
+}

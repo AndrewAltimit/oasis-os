@@ -4,8 +4,8 @@ use super::spans::SpanFill;
 use crate::backend::{Color, SdiCore};
 use crate::error::Result;
 use crate::rasterize::{
-    midpoint_row_extents, rounded_rect_rows, stroke_circle_rows, stroke_rounded_rect_rows,
-    thick_line_rows, triangle_rows,
+    midpoint_row_extents, rounded_rect_rows, stroke_circle_rows, stroke_rect_parts,
+    stroke_rounded_rect_rows, thick_line_rows, triangle_rows,
 };
 
 // ---------------------------------------------------------------------------
@@ -53,7 +53,8 @@ pub trait SdiShapes: SdiCore {
     /// inside the rectangle.
     ///
     /// A stroke at least half as wide as the shorter side fills the whole
-    /// rectangle (the four edges would otherwise overlap and double-blend).
+    /// rectangle (the four edges would otherwise overlap and double-blend);
+    /// see [`stroke_rect_parts`].
     fn stroke_rect(
         &mut self,
         x: i32,
@@ -63,19 +64,13 @@ pub trait SdiShapes: SdiCore {
         stroke_width: u16,
         color: Color,
     ) -> Result<()> {
-        let sw = stroke_width as u32;
-        if w == 0 || h == 0 || sw == 0 {
-            return Ok(());
-        }
-        if sw * 2 >= w || sw * 2 >= h {
-            return self.fill_rect(x, y, w, h, color);
-        }
-        let inner_h = h - sw * 2;
-        self.fill_rect(x, y, w, sw, color)?;
-        self.fill_rect(x, y + (h - sw) as i32, w, sw, color)?;
-        self.fill_rect(x, y + sw as i32, sw, inner_h, color)?;
-        self.fill_rect(x + (w - sw) as i32, y + sw as i32, sw, inner_h, color)?;
-        Ok(())
+        let mut result = Ok(());
+        stroke_rect_parts(x, y, w, h, stroke_width, |px, py, pw, ph| {
+            if result.is_ok() {
+                result = self.fill_rect(px, py, pw, ph, color);
+            }
+        });
+        result
     }
 
     /// Draw the outline of a rounded rectangle.
