@@ -68,7 +68,7 @@ fn subtree_height(doc: &Document, id: NodeId) -> usize {
 /// Convert a JS-supplied node id into a valid arena index.
 fn valid(doc: &Document, nid: i32) -> Option<NodeId> {
     let id = usize::try_from(nid).ok()?;
-    (id < doc.nodes.len()).then_some(id)
+    doc.is_live(id).then_some(id)
 }
 
 /// `nodeType` for a node. Detached `Document`-kind nodes other than the
@@ -133,7 +133,16 @@ pub(super) fn insert_node(
     node: NodeId,
     reference: Option<NodeId>,
 ) -> i32 {
-    if node == doc.root || is_inclusive_ancestor(doc, node, parent) {
+    // Only elements, the document and fragments have children (DOM
+    // "ensure pre-insertion validity"); text under text would also
+    // escape the depth checks that assume leaves stay leaves.
+    if node == doc.root
+        || !matches!(
+            doc.nodes[parent].kind,
+            NodeKind::Element(_) | NodeKind::Document
+        )
+        || is_inclusive_ancestor(doc, node, parent)
+    {
         return INSERT_HIERARCHY_ERROR;
     }
     let is_fragment = node_type(doc, node) == DOCUMENT_FRAGMENT_NODE;
@@ -219,6 +228,12 @@ fn collect_subtree(doc: &Document, id: NodeId, out: &mut Vec<NodeId>) {
 pub(super) fn parse_into(doc: &mut Document, parent: NodeId, html: &str) {
     use crate::html::tokenizer::Tokenizer;
     use crate::html::tree_builder::TreeBuilder;
+    if !matches!(
+        doc.nodes[parent].kind,
+        NodeKind::Element(_) | NodeKind::Document
+    ) {
+        return;
+    }
     let wrapped = format!("<html><body>{html}</body></html>");
     let tokens = Tokenizer::new(&wrapped).tokenize();
     let frag = TreeBuilder::build(tokens);

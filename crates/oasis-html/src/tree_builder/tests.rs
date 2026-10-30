@@ -712,6 +712,40 @@ fn nesting_depth_capped_at_256() {
     );
 }
 
+/// Deepest node depth in `doc` (root = 0), iteratively.
+fn max_tree_depth(doc: &super::super::dom::Document) -> usize {
+    let mut max = 0;
+    let mut stack = vec![(doc.root, 0usize)];
+    while let Some((n, d)) = stack.pop() {
+        max = max.max(d);
+        stack.extend(doc.get(n).children.iter().map(|&c| (c, d + 1)));
+    }
+    max
+}
+
+#[test]
+fn foreign_content_nesting_is_capped_too() {
+    // Regression: SVG / MathML elements bypassed the open-elements cap,
+    // so `<svg>` + 10k `<g>` built a 10k-deep DOM straight from markup.
+    for root in ["svg", "math"] {
+        let mut tokens = vec![start("html"), start("body"), start(root)];
+        tokens.extend((0..10_000).map(|_| start("g")));
+        tokens.push(text("leaf"));
+        tokens.push(Token::Eof);
+        let doc = TreeBuilder::build(tokens);
+        let depth = max_tree_depth(&doc);
+        assert!(depth <= MAX_DOM_DEPTH, "<{root}> depth {depth}");
+    }
+    // Same with the foreign root itself arriving at the cap.
+    let mut tokens = vec![start("html"), start("body")];
+    tokens.extend((0..MAX_NESTING_DEPTH).map(|_| start("div")));
+    tokens.push(start("svg"));
+    tokens.extend((0..100).map(|_| start("g")));
+    tokens.push(Token::Eof);
+    let doc = TreeBuilder::build(tokens);
+    assert!(max_tree_depth(&doc) <= MAX_DOM_DEPTH);
+}
+
 #[test]
 fn nesting_depth_leaf_content_preserved() {
     // Even with extreme nesting, the leaf text should appear

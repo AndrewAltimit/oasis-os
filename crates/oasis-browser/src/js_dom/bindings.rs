@@ -36,7 +36,7 @@ pub(super) fn install_dom_bindings(
             Function::new(ctx.clone(), move |nid: i32| -> String {
                 let doc = d.borrow();
                 let id = nid as NodeId;
-                if id >= doc.nodes.len() {
+                if !doc.is_live(id) {
                     return String::new();
                 }
                 match &doc.nodes[id].kind {
@@ -58,7 +58,7 @@ pub(super) fn install_dom_bindings(
                 move |nid: i32, name: String| -> Option<String> {
                     let doc = d.borrow();
                     let id = nid as NodeId;
-                    if id >= doc.nodes.len() {
+                    if !doc.is_live(id) {
                         return None;
                     }
                     match &doc.nodes[id].kind {
@@ -79,7 +79,7 @@ pub(super) fn install_dom_bindings(
             Function::new(ctx.clone(), move |nid: i32, name: String, value: String| {
                 let mut doc = d.borrow_mut();
                 let id = nid as NodeId;
-                if id < doc.nodes.len()
+                if doc.is_live(id)
                     && let NodeKind::Element(ref mut e) = doc.nodes[id].kind
                 {
                     // Skip dirty mark when value is identical — pages
@@ -111,7 +111,7 @@ pub(super) fn install_dom_bindings(
             Function::new(ctx.clone(), move |nid: i32, name: String| -> bool {
                 let mut doc = d.borrow_mut();
                 let id = nid as NodeId;
-                if id < doc.nodes.len()
+                if doc.is_live(id)
                     && let NodeKind::Element(ref mut e) = doc.nodes[id].kind
                 {
                     // Update the ID index when the `id` attribute is removed.
@@ -143,7 +143,7 @@ pub(super) fn install_dom_bindings(
             Function::new(ctx.clone(), move |nid: i32| -> String {
                 let doc = d.borrow();
                 let id = nid as NodeId;
-                if id >= doc.nodes.len() {
+                if !doc.is_live(id) {
                     return String::new();
                 }
                 doc.text_content(id)
@@ -164,7 +164,7 @@ pub(super) fn install_dom_bindings(
             Function::new(ctx.clone(), move |nid: i32, text: String| {
                 let mut doc = d.borrow_mut();
                 let id = nid as NodeId;
-                if id >= doc.nodes.len() {
+                if !doc.is_live(id) {
                     return;
                 }
                 if let NodeKind::Text(s) | NodeKind::Comment(s) = &mut doc.nodes[id].kind {
@@ -185,7 +185,7 @@ pub(super) fn install_dom_bindings(
             Function::new(ctx.clone(), move |nid: i32| -> Vec<i32> {
                 let doc = d.borrow();
                 let id = nid as NodeId;
-                if id >= doc.nodes.len() {
+                if !doc.is_live(id) {
                     return Vec::new();
                 }
                 doc.nodes[id]
@@ -251,7 +251,7 @@ pub(super) fn install_dom_bindings(
                     else {
                         return INSERT_INVALID;
                     };
-                    if pid >= doc.nodes.len() || cid >= doc.nodes.len() {
+                    if !doc.is_live(pid) || !doc.is_live(cid) {
                         return INSERT_INVALID;
                     }
                     let rc = insert_node(&mut doc, pid, cid, None);
@@ -277,7 +277,7 @@ pub(super) fn install_dom_bindings(
                 let Ok(cid) = usize::try_from(child_nid) else {
                     return NO_NODE;
                 };
-                if cid >= doc.nodes.len() {
+                if !doc.is_live(cid) {
                     return NO_NODE;
                 }
                 let res = doc.detach_node(cid);
@@ -304,7 +304,7 @@ pub(super) fn install_dom_bindings(
                     else {
                         return INSERT_INVALID;
                     };
-                    if pid >= doc.nodes.len() || nid >= doc.nodes.len() {
+                    if !doc.is_live(pid) || !doc.is_live(nid) {
                         return INSERT_INVALID;
                     }
                     // ref_nid of -1 (or one that isn't a child) appends.
@@ -374,7 +374,7 @@ pub(super) fn install_dom_bindings(
             Function::new(ctx.clone(), move |nid: i32| -> String {
                 let doc = d.borrow();
                 let id = nid as NodeId;
-                if id >= doc.nodes.len() {
+                if !doc.is_live(id) {
                     return String::new();
                 }
                 let mut out = String::new();
@@ -396,7 +396,16 @@ pub(super) fn install_dom_bindings(
             Function::new(ctx.clone(), move |nid: i32, html: String| {
                 let mut doc = d.borrow_mut();
                 let id = nid as NodeId;
-                if id >= doc.nodes.len() {
+                // Only elements / fragments have an innerHTML setter; a
+                // write on a text or comment node (reachable via the raw
+                // global or `setter.call(text, ..)`) is a no-op, so leaves
+                // can't grow children past the depth cap.
+                if !doc.is_live(id)
+                    || !matches!(
+                        doc.nodes[id].kind,
+                        NodeKind::Element(_) | NodeKind::Document
+                    )
+                {
                     return;
                 }
                 // Serialize existing children so we can detect no-op writes
@@ -441,7 +450,7 @@ pub(super) fn install_dom_bindings(
             Function::new(ctx.clone(), move |nid: i32, sel: String| -> i32 {
                 let doc = d.borrow();
                 let id = nid as NodeId;
-                if id >= doc.nodes.len() {
+                if !doc.is_live(id) {
                     return NO_NODE;
                 }
                 let Some(parsed) = crate::css::parser::parse_selector_string(&sel) else {
@@ -463,7 +472,7 @@ pub(super) fn install_dom_bindings(
             Function::new(ctx.clone(), move |nid: i32, sel: String| -> Vec<i32> {
                 let doc = d.borrow();
                 let id = nid as NodeId;
-                if id >= doc.nodes.len() {
+                if !doc.is_live(id) {
                     return Vec::new();
                 }
                 let Some(parsed) = crate::css::parser::parse_selector_string(&sel) else {
@@ -486,7 +495,7 @@ pub(super) fn install_dom_bindings(
             Function::new(ctx.clone(), move |nid: i32, prop: String, value: String| {
                 let mut doc = d.borrow_mut();
                 let id = nid as NodeId;
-                if id >= doc.nodes.len() {
+                if !doc.is_live(id) {
                     return;
                 }
                 let e = match &mut doc.nodes[id].kind {
@@ -508,7 +517,7 @@ pub(super) fn install_dom_bindings(
             Function::new(ctx.clone(), move |nid: i32, prop: String| -> String {
                 let doc = d.borrow();
                 let id = nid as NodeId;
-                if id >= doc.nodes.len() {
+                if !doc.is_live(id) {
                     return String::new();
                 }
                 let e = match &doc.nodes[id].kind {

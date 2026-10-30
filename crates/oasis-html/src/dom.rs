@@ -23,6 +23,10 @@ pub struct Document {
     /// `add_node` checks this before appending to avoid unbounded arena
     /// growth when the DOM is repeatedly mutated (e.g. by JavaScript).
     free_list: Vec<NodeId>,
+    /// `freed[id]` is true while slot `id` sits on `free_list` (sized
+    /// lazily; ids past the end are live). Guards against double frees
+    /// and lets callers holding a stale id (JS wrappers) detect it.
+    freed: Vec<bool>,
 }
 
 /// A single node in the DOM tree.
@@ -586,6 +590,7 @@ impl Document {
             root: 0,
             id_index: std::collections::HashMap::new(),
             free_list: Vec::new(),
+            freed: Vec::new(),
         }
     }
 
@@ -600,6 +605,7 @@ impl Document {
         self.nodes.clear();
         self.id_index.clear();
         self.free_list.clear();
+        self.freed.clear();
         self.nodes.push(Node {
             kind: NodeKind::Document,
             parent: None,
@@ -626,6 +632,7 @@ impl Document {
             root,
             id_index,
             free_list: Vec::new(),
+            freed: Vec::new(),
         }
     }
 
@@ -647,6 +654,9 @@ impl Document {
                 parent: None,
                 children: Vec::new(),
             };
+            if let Some(f) = self.freed.get_mut(id) {
+                *f = false;
+            }
             return id;
         }
         let id = self.nodes.len();
@@ -785,13 +795,32 @@ impl Document {
     /// Recursively free a node and all its descendants.
     ///
     /// Removes ID index entries for any elements with `id` attributes
-    /// and pushes all node slots onto the free list for reuse.
+    /// and pushes all node slots onto the free list for reuse. Iterative
+    /// (no recursion on deep trees); a slot that is already free is
+    /// skipped, so a double free can never hand one slot out twice.
     pub fn free_subtree(&mut self, node_id: NodeId) {
-        // Collect children first to avoid borrow conflict.
-        let children: Vec<NodeId> = self.nodes[node_id].children.clone();
-        for child in children {
-            self.free_subtree(child);
+        let mut stack = vec![node_id];
+        while let Some(node_id) = stack.pop() {
+            if node_id >= self.nodes.len() || self.is_freed(node_id) {
+                continue;
+            }
+            stack.append(&mut self.nodes[node_id].children);
+            self.free_slot(node_id);
         }
+    }
+
+    /// Whether `id` is a free arena slot (freed and not yet reused).
+    pub fn is_freed(&self, id: NodeId) -> bool {
+        self.freed.get(id).copied().unwrap_or(false)
+    }
+
+    /// Whether `id` names a live node: in range and not freed.
+    pub fn is_live(&self, id: NodeId) -> bool {
+        id < self.nodes.len() && !self.is_freed(id)
+    }
+
+    /// Release one slot (its children already detached) to the free list.
+    fn free_slot(&mut self, node_id: NodeId) {
         // Remove from ID index.
         if let NodeKind::Element(ref data) = self.nodes[node_id].kind
             && let Some(id) = data.id()
@@ -801,6 +830,10 @@ impl Document {
         }
         self.nodes[node_id].parent = None;
         self.nodes[node_id].children.clear();
+        if self.freed.len() <= node_id {
+            self.freed.resize(self.nodes.len().max(node_id + 1), false);
+        }
+        self.freed[node_id] = true;
         self.free_list.push(node_id);
     }
 
@@ -1140,5 +1173,25 @@ mod tests {
         assert_eq!(doc.remove_child(child), Some(parent));
         assert!(doc.get(parent).children.is_empty());
         assert_eq!(doc.get(child).parent, None);
+    }
+
+    #[test]
+    fn freed_slots_are_tracked_and_never_double_freed() {
+        let mut doc = Document::new();
+        let a = doc.add_node(NodeKind::Element(ElementData::new(TagName::Div)));
+        let b = doc.add_node(NodeKind::Text("x".into()));
+        doc.append_child(a, b);
+        assert!(doc.is_live(a) && doc.is_live(b));
+        doc.free_subtree(a);
+        assert!(doc.is_freed(a) && doc.is_freed(b) && !doc.is_live(b));
+        // A second free of the same slots is a no-op...
+        doc.free_subtree(a);
+        // ...so the next two allocations get two distinct slots.
+        let x = doc.add_node(NodeKind::Text("1".into()));
+        let y = doc.add_node(NodeKind::Text("2".into()));
+        assert_ne!(x, y);
+        assert!(doc.is_live(x) && doc.is_live(y));
+        let z = doc.add_node(NodeKind::Text("3".into()));
+        assert!(z != x && z != y, "fresh slot after the free list drains");
     }
 }

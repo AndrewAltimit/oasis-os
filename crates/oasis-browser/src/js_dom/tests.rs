@@ -1897,6 +1897,85 @@ fn parser_output_respects_dom_depth_cap() {
     );
 }
 
+/// Every node reachable from the root is reached exactly once and
+/// points back at the parent it was reached from (no cycles, no node
+/// listed under two parents).
+fn assert_well_formed(doc: &Document) {
+    let mut seen = vec![false; doc.nodes.len()];
+    let mut stack = vec![doc.root];
+    seen[doc.root] = true;
+    while let Some(n) = stack.pop() {
+        for &c in &doc.nodes[n].children {
+            assert!(!seen[c], "node {c} reachable twice (cycle or shared child)");
+            assert_eq!(doc.nodes[c].parent, Some(n), "node {c} parent link");
+            assert!(doc.is_live(c), "freed node {c} still in the tree");
+            seen[c] = true;
+            stack.push(c);
+        }
+    }
+}
+
+#[test]
+fn stale_wrapper_of_freed_node_cannot_corrupt_the_tree() {
+    // Regression: a wrapper kept across `innerHTML = ''` still carried
+    // its (freed) arena id. Re-inserting it, then letting createElement
+    // reuse the slot, listed one node under two parents and allowed a
+    // parent/child cycle that hung or overflowed the cascade.
+    let (engine, shared) = setup(sample_doc());
+    check(
+        &engine,
+        "var p = document.getElementById('main'); \
+         p.innerHTML = '<i></i>'; var s = p.firstChild; p.innerHTML = ''; \
+         var r = 'ok'; \
+         try { document.body.appendChild(s); } catch (e) { r = e.name; } \
+         var n = document.createElement('b'); \
+         document.documentElement.appendChild(n); \
+         try { n.appendChild(document.body); } catch (e) { r += ',' + e.name; } \
+         r",
+        "NotFoundError",
+    );
+    assert_well_formed(&shared.borrow());
+}
+
+#[test]
+fn double_discarded_fragment_slot_is_not_handed_out_twice() {
+    let (engine, shared) = setup(sample_doc());
+    check(
+        &engine,
+        "var f = __oasis_parse_fragment(''); \
+         __oasis_discard_fragment(f); __oasis_discard_fragment(f); \
+         var a = document.createElement('a'), b = document.createElement('b'); \
+         String(a.__oasis_node_id !== b.__oasis_node_id)",
+        "true",
+    );
+    assert_well_formed(&shared.borrow());
+}
+
+#[test]
+fn text_nodes_cannot_grow_children() {
+    use crate::html::MAX_DOM_DEPTH;
+    let (engine, shared) = setup(sample_doc());
+    // Fill to the cap, then hang markup under the leaf text node through
+    // the innerHTML setter and appendChild: both must leave it a leaf.
+    check(
+        &engine,
+        "var c = document.body; \
+         while (true) { var d = document.createElement('div'); \
+           try { c.appendChild(d); c = d; } catch (e) { break; } } \
+         c.textContent = 'leaf'; var t = c.firstChild; \
+         var set = Object.getOwnPropertyDescriptor(Element.prototype, 'innerHTML').set; \
+         for (var i = 0; i < 2000; i++) { \
+           set.call(t, '<b>x</b>'); __oasis_set_inner_html(t.__oasis_node_id, 'y'); } \
+         var r = 'ok'; \
+         try { t.appendChild(document.createTextNode('z')); } catch (e) { r = e.name; } \
+         r + ',' + t.childNodes.length",
+        "HierarchyRequestError,0",
+    );
+    let doc = shared.borrow();
+    assert_well_formed(&doc);
+    assert!(max_depth(&doc) <= MAX_DOM_DEPTH + 1);
+}
+
 #[test]
 fn reddit_shim_identity_check_skips_clicked_arrow() {
     // togglevote's `s !== el` guard relies on wrapper identity: the
