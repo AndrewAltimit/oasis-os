@@ -395,7 +395,8 @@ impl CalculatorApp {
     /// Create a new calculator app at the given VFS path.
     ///
     /// Persisted history is loaded from [`history::HISTORY_PATH`] on the
-    /// first [`App::refresh`] / [`App::apply_vfs_ops`] call.
+    /// first input ([`App::handle_input`] / [`App::handle_key`] /
+    /// [`App::handle_click`]) or [`App::apply_vfs_ops`] call.
     pub fn new(path: &str) -> Self {
         let content = ContentState::new("Calculator", path);
         let mut app = Self {
