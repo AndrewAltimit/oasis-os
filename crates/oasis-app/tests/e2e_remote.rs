@@ -320,15 +320,20 @@ fn remote_terminal_psk_authentication() {
         net.listener = Some(l);
     }
 
+    // The challenge is `AUTH_REQUIRED <nonce>`; the PSK itself is a wrong
+    // answer (it never crosses the wire).
     let mut bad = Peer::connect(port);
-    bad.until(&mut h, "AUTH_REQUIRED\n");
-    bad.send("guess\n");
+    bad.until(&mut h, "AUTH_REQUIRED ");
+    bad.until(&mut h, "\n");
+    bad.send("s3cret\n");
     let rest = bad.until_eof(&mut h);
     assert!(rest.contains("AUTH_FAIL"), "{rest:?}");
 
     let mut good = Peer::connect(port);
-    good.until(&mut h, "AUTH_REQUIRED\n");
-    good.send("s3cret\n");
+    good.until(&mut h, "AUTH_REQUIRED ");
+    let nonce = good.until(&mut h, "\n");
+    let answer = oasis_core::net::psk_response("s3cret", nonce.trim_end());
+    good.send(&format!("AUTH {answer}\n"));
     good.until(&mut h, "AUTH_OK\n> ");
     assert_eq!(remote_cmd(&mut h, &mut good, "echo authed"), "authed");
 }

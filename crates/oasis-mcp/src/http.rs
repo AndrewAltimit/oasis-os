@@ -6,16 +6,23 @@
 //! bytes — is available, at which point it drains those bytes and returns
 //! [`Framing::Ready`]. This mirrors the line-buffering discipline in
 //! `oasis-net`'s `RemoteListener`.
+//!
+//! The parser is deliberately strict (RFC 9112): the request line must be
+//! `METHOD target HTTP/1.x`, every header line must be `name: value` with
+//! no whitespace in or before the name (obs-fold continuation lines are
+//! rejected), any `Transfer-Encoding` is refused (only `Content-Length`
+//! bodies are supported), and the whole header section is capped at
+//! [`MAX_HEADER_BYTES`] whether or not it arrives in one read.
 
 /// Maximum bytes allowed in the request header section.
-pub const MAX_HEADER_BYTES: usize = 16 * 1024;
+pub(crate) const MAX_HEADER_BYTES: usize = 16 * 1024;
 
 /// Maximum allowed request body size.
-pub const MAX_BODY_BYTES: usize = 1024 * 1024;
+pub(crate) const MAX_BODY_BYTES: usize = 1024 * 1024;
 
-/// A fully-parsed HTTP request.
+/// The parsed header section of a request (everything but the body).
 #[derive(Debug, Clone)]
-pub struct HttpRequest {
+pub(crate) struct RequestHead {
     /// Request method (e.g. `POST`).
     pub method: String,
     /// Request target (e.g. `/mcp`).
@@ -26,17 +33,27 @@ pub struct HttpRequest {
     pub auth_bearer: Option<String>,
     /// Value of the `Host` header, if present.
     pub host: Option<String>,
-    /// Value of the `Origin` header, if present (browsers always send it on
-    /// cross-origin POSTs).
+    /// Value of the `Origin` header, if present.
     pub origin: Option<String>,
     /// Value of the `Content-Type` header, if present.
     pub content_type: Option<String>,
-    /// Request body bytes.
+    /// Declared body length (`0` without a `Content-Length`).
+    pub content_len: usize,
+    /// The client sent `Expect: 100-continue`.
+    pub expect_continue: bool,
+}
+
+/// A fully-parsed HTTP request.
+#[derive(Debug, Clone)]
+pub(crate) struct HttpRequest {
+    /// The header section.
+    pub head: RequestHead,
+    /// Request body bytes (`head.content_len` of them).
     pub body: Vec<u8>,
 }
 
 /// Result of attempting to frame one request from a buffer.
-pub enum Framing {
+pub(crate) enum Framing {
     /// Not enough bytes yet; leave the buffer untouched and try again later.
     Pending,
     /// A complete request was extracted (consumed bytes were drained).
@@ -52,75 +69,80 @@ pub(crate) fn find_subsequence(haystack: &[u8], needle: &[u8]) -> Option<usize> 
     haystack.windows(needle.len()).position(|w| w == needle)
 }
 
-/// Attempt to extract one complete HTTP/1.1 request from `buf`.
+/// Length of the header section (through `CRLFCRLF`) at the start of `buf`.
+pub(crate) fn header_end(buf: &[u8]) -> Option<usize> {
+    find_subsequence(buf, b"\r\n\r\n").map(|i| i + 4)
+}
+
+/// Parse a complete header section (`head` ends with `CRLFCRLF`).
 ///
-/// On [`Framing::Ready`] the consumed bytes are drained from `buf`; on
-/// [`Framing::Pending`] the buffer is left unchanged (except for the header
-/// overflow guard).
-pub fn try_frame(buf: &mut Vec<u8>) -> Framing {
-    let hdr_end = match find_subsequence(buf, b"\r\n\r\n") {
-        Some(i) => i + 4,
-        None => {
-            if buf.len() > MAX_HEADER_BYTES {
-                return Framing::Error(431);
-            }
-            return Framing::Pending;
-        },
-    };
-
-    let Ok(header_str) = std::str::from_utf8(&buf[..hdr_end]) else {
-        return Framing::Error(400);
-    };
-
-    let mut lines = header_str.split("\r\n");
-    let Some(request_line) = lines.next() else {
-        return Framing::Error(400);
-    };
-    let mut parts = request_line.split(' ');
-    let method = parts.next().unwrap_or("").to_string();
-    let path = parts.next().unwrap_or("").to_string();
-    let version = parts.next().unwrap_or("");
-    if method.is_empty() || path.is_empty() {
-        return Framing::Error(400);
+/// Errors are the HTTP status to answer with.
+pub(crate) fn parse_head(head: &[u8]) -> Result<RequestHead, u16> {
+    if head.len() > MAX_HEADER_BYTES {
+        return Err(431);
     }
+    let header_str = std::str::from_utf8(head).map_err(|_| 400u16)?;
+    let mut lines = header_str.split("\r\n");
+    let request_line = lines.next().unwrap_or("");
+    let mut parts = request_line.split(' ');
+    let (Some(method), Some(path), Some(version), None) =
+        (parts.next(), parts.next(), parts.next(), parts.next())
+    else {
+        return Err(400);
+    };
+    if method.is_empty() || path.is_empty() {
+        return Err(400);
+    }
+    let mut keep_alive = match version {
+        "HTTP/1.1" => true,
+        "HTTP/1.0" => false,
+        _ => return Err(505),
+    };
 
     let mut content_len: Option<usize> = None;
-    let mut keep_alive = version != "HTTP/1.0";
     let mut auth_bearer = None;
     let mut host = None;
     let mut origin = None;
     let mut content_type = None;
+    let mut expect_continue = false;
     for line in lines {
         if line.is_empty() {
             break;
         }
+        // No colon, an empty name, or whitespace in / before the name
+        // (including obs-fold continuation lines) is malformed.
         let Some((name, value)) = line.split_once(':') else {
-            continue;
+            return Err(400);
         };
-        let name_l = name.trim().to_ascii_lowercase();
+        if name.is_empty() || name.bytes().any(|b| b.is_ascii_whitespace()) {
+            return Err(400);
+        }
+        let name_l = name.to_ascii_lowercase();
         let value = value.trim();
         match name_l.as_str() {
             "content-length" => {
                 // Reject malformed and duplicate lengths outright: accepting
                 // either is a classic request-smuggling / desync vector.
                 if content_len.is_some() {
-                    return Framing::Error(400);
+                    return Err(400);
                 }
                 if value.is_empty() || !value.bytes().all(|b| b.is_ascii_digit()) {
-                    return Framing::Error(400);
+                    return Err(400);
                 }
                 match value.parse::<usize>() {
                     Ok(n) => content_len = Some(n),
                     // All digits but overflows usize: certainly too large.
-                    Err(_) => return Framing::Error(413),
+                    Err(_) => return Err(413),
                 }
             },
             "host" => host = Some(value.to_string()),
             "origin" => origin = Some(value.to_string()),
             "content-type" => content_type = Some(value.to_string()),
-            "transfer-encoding" if value.eq_ignore_ascii_case("chunked") => {
-                return Framing::Error(411);
-            },
+            // Only `Content-Length` framing is supported: any transfer
+            // coding (`chunked`, `gzip, chunked`, even `identity`) would
+            // otherwise be ignored and its bytes parsed as the next request.
+            "transfer-encoding" => return Err(411),
+            "expect" if value.eq_ignore_ascii_case("100-continue") => expect_continue = true,
             "connection" => {
                 if value.eq_ignore_ascii_case("close") {
                     keep_alive = false;
@@ -129,11 +151,11 @@ pub fn try_frame(buf: &mut Vec<u8>) -> Framing {
                 }
             },
             "authorization" => {
-                let token = value
-                    .strip_prefix("Bearer ")
-                    .or_else(|| value.strip_prefix("bearer "));
-                if let Some(t) = token {
-                    auth_bearer = Some(t.trim().to_string());
+                // The auth scheme is case-insensitive (RFC 9110 11.1).
+                if let Some((scheme, token)) = value.split_once(' ')
+                    && scheme.eq_ignore_ascii_case("bearer")
+                {
+                    auth_bearer = Some(token.trim().to_string());
                 }
             },
             _ => {},
@@ -142,47 +164,48 @@ pub fn try_frame(buf: &mut Vec<u8>) -> Framing {
 
     let content_len = content_len.unwrap_or(0);
     if content_len > MAX_BODY_BYTES {
-        return Framing::Error(413);
+        return Err(413);
     }
+    Ok(RequestHead {
+        method: method.to_string(),
+        path: path.to_string(),
+        keep_alive,
+        auth_bearer,
+        host,
+        origin,
+        content_type,
+        content_len,
+        expect_continue,
+    })
+}
 
-    let total = hdr_end + content_len;
+/// Attempt to extract one complete HTTP/1.1 request from `buf`.
+///
+/// On [`Framing::Ready`] the consumed bytes are drained from `buf`; on
+/// [`Framing::Pending`] the buffer is left unchanged.
+pub(crate) fn try_frame(buf: &mut Vec<u8>) -> Framing {
+    let Some(hdr_end) = header_end(buf) else {
+        if buf.len() > MAX_HEADER_BYTES {
+            return Framing::Error(431);
+        }
+        return Framing::Pending;
+    };
+    let head = match parse_head(&buf[..hdr_end]) {
+        Ok(head) => head,
+        Err(code) => return Framing::Error(code),
+    };
+    let total = hdr_end + head.content_len;
     if buf.len() < total {
         return Framing::Pending;
     }
 
     let raw: Vec<u8> = buf.drain(..total).collect();
     let body = raw[hdr_end..].to_vec();
-    Framing::Ready(HttpRequest {
-        method,
-        path,
-        keep_alive,
-        auth_bearer,
-        host,
-        origin,
-        content_type,
-        body,
-    })
-}
-
-/// Whether `buf` starts with a complete header section carrying
-/// `Expect: 100-continue` (the client waits for an interim `100 Continue`
-/// before sending the body; curl does this for bodies over 1 KiB).
-pub fn expects_continue(buf: &[u8]) -> bool {
-    let Some(end) = find_subsequence(buf, b"\r\n\r\n") else {
-        return false;
-    };
-    let Ok(head) = std::str::from_utf8(&buf[..end]) else {
-        return false;
-    };
-    head.split("\r\n").skip(1).any(|line| {
-        line.split_once(':').is_some_and(|(k, v)| {
-            k.trim().eq_ignore_ascii_case("expect") && v.trim().eq_ignore_ascii_case("100-continue")
-        })
-    })
+    Framing::Ready(HttpRequest { head, body })
 }
 
 /// The interim response sent for `Expect: 100-continue`.
-pub const CONTINUE_RESPONSE: &[u8] = b"HTTP/1.1 100 Continue\r\n\r\n";
+pub(crate) const CONTINUE_RESPONSE: &[u8] = b"HTTP/1.1 100 Continue\r\n\r\n";
 
 fn reason_phrase(status: u16) -> &'static str {
     match status {
@@ -199,6 +222,7 @@ fn reason_phrase(status: u16) -> &'static str {
         413 => "Payload Too Large",
         415 => "Unsupported Media Type",
         431 => "Request Header Fields Too Large",
+        505 => "HTTP Version Not Supported",
         _ => "OK",
     }
 }
@@ -207,7 +231,7 @@ fn reason_phrase(status: u16) -> &'static str {
 ///
 /// `Content-Length` and `Connection` are always emitted (except `Content-Length`
 /// is omitted for `204`). `content_type` and any `extra` headers are appended.
-pub fn build_response(
+pub(crate) fn build_response(
     status: u16,
     keep_alive: bool,
     extra: &[(&str, &str)],
@@ -242,10 +266,10 @@ mod tests {
         let mut buf = b"POST /mcp HTTP/1.1\r\nContent-Length: 5\r\n\r\nhello".to_vec();
         match try_frame(&mut buf) {
             Framing::Ready(req) => {
-                assert_eq!(req.method, "POST");
-                assert_eq!(req.path, "/mcp");
+                assert_eq!(req.head.method, "POST");
+                assert_eq!(req.head.path, "/mcp");
                 assert_eq!(req.body, b"hello");
-                assert!(req.keep_alive);
+                assert!(req.head.keep_alive);
                 assert!(buf.is_empty());
             },
             _ => panic!("expected Ready"),
@@ -278,8 +302,8 @@ mod tests {
         let mut buf = b"POST /mcp HTTP/1.1\r\nAuthorization: Bearer sekret\r\nConnection: close\r\nContent-Length: 0\r\n\r\n".to_vec();
         match try_frame(&mut buf) {
             Framing::Ready(req) => {
-                assert_eq!(req.auth_bearer.as_deref(), Some("sekret"));
-                assert!(!req.keep_alive);
+                assert_eq!(req.head.auth_bearer.as_deref(), Some("sekret"));
+                assert!(!req.head.keep_alive);
                 assert!(req.body.is_empty());
             },
             _ => panic!("expected Ready"),
@@ -327,22 +351,22 @@ mod tests {
             .to_vec();
         match try_frame(&mut buf) {
             Framing::Ready(req) => {
-                assert_eq!(req.host.as_deref(), Some("127.0.0.1:7345"));
-                assert_eq!(req.origin.as_deref(), Some("http://localhost"));
-                assert_eq!(req.content_type.as_deref(), Some("application/json"));
+                assert_eq!(req.head.host.as_deref(), Some("127.0.0.1:7345"));
+                assert_eq!(req.head.origin.as_deref(), Some("http://localhost"));
+                assert_eq!(req.head.content_type.as_deref(), Some("application/json"));
             },
             _ => panic!("expected Ready"),
         }
+    }
+
+    fn expects_continue(head: &[u8]) -> bool {
+        parse_head(head).is_ok_and(|h| h.expect_continue)
     }
 
     #[test]
     fn detects_expect_continue() {
         assert!(expects_continue(
             b"POST /mcp HTTP/1.1\r\nexpect: 100-Continue\r\nContent-Length: 9\r\n\r\n"
-        ));
-        // Headers not complete yet.
-        assert!(!expects_continue(
-            b"POST /mcp HTTP/1.1\r\nExpect: 100-continue\r\n"
         ));
         assert!(!expects_continue(
             b"POST /mcp HTTP/1.1\r\nContent-Length: 9\r\n\r\n"
@@ -351,6 +375,70 @@ mod tests {
         assert!(!expects_continue(
             b"POST /expect:100-continue HTTP/1.1\r\n\r\n"
         ));
+    }
+
+    fn status_of(raw: &[u8]) -> Option<u16> {
+        match try_frame(&mut raw.to_vec()) {
+            Framing::Error(code) => Some(code),
+            _ => None,
+        }
+    }
+
+    #[test]
+    fn header_cap_holds_when_terminator_arrives_in_one_read() {
+        // The 431 check used to run only while `CRLFCRLF` was missing, so a
+        // 60 KiB header block delivered whole was accepted.
+        let mut raw = b"POST /mcp HTTP/1.1\r\n".to_vec();
+        for i in 0..2000 {
+            raw.extend_from_slice(format!("X-Pad-{i}: aaaaaaaaaaaaaaaaaaaa\r\n").as_bytes());
+        }
+        raw.extend_from_slice(b"Content-Length: 0\r\n\r\n");
+        assert!(raw.len() > MAX_HEADER_BYTES);
+        assert_eq!(status_of(&raw), Some(431));
+    }
+
+    #[test]
+    fn any_transfer_encoding_is_rejected() {
+        for te in ["chunked", "gzip, chunked", "identity", "CHUNKED"] {
+            let raw = format!(
+                "POST /mcp HTTP/1.1\r\nTransfer-Encoding: {te}\r\nContent-Length: 2\r\n\r\n{{}}"
+            );
+            assert_eq!(status_of(raw.as_bytes()), Some(411), "{te}");
+        }
+    }
+
+    #[test]
+    fn malformed_header_lines_are_rejected() {
+        for bad in [
+            "Content-Length : 0",
+            " Content-Length: 0",
+            "\tfolded continuation",
+            "no colon here",
+            ": empty name",
+        ] {
+            let raw = format!("POST /mcp HTTP/1.1\r\nHost: x\r\n{bad}\r\n\r\n");
+            assert_eq!(status_of(raw.as_bytes()), Some(400), "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn request_line_and_version_are_checked() {
+        assert_eq!(status_of(b"POST /mcp HTTP/2.0\r\n\r\n"), Some(505));
+        assert_eq!(status_of(b"POST /mcp\r\n\r\n"), Some(400));
+        assert_eq!(status_of(b"POST /mcp HTTP/1.1 extra\r\n\r\n"), Some(400));
+        let mut ok = b"POST /mcp HTTP/1.0\r\n\r\n".to_vec();
+        assert!(matches!(try_frame(&mut ok), Framing::Ready(ref r) if !r.head.keep_alive));
+    }
+
+    #[test]
+    fn bearer_scheme_is_case_insensitive() {
+        for scheme in ["Bearer", "bearer", "BEARER"] {
+            let raw = format!("POST /mcp HTTP/1.1\r\nAuthorization: {scheme} t0k\r\n\r\n");
+            match try_frame(&mut raw.into_bytes()) {
+                Framing::Ready(req) => assert_eq!(req.head.auth_bearer.as_deref(), Some("t0k")),
+                _ => panic!("expected Ready"),
+            }
+        }
     }
 
     #[test]

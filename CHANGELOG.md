@@ -36,6 +36,31 @@ removal, a restyled site, and docs that match the code.
 - Desktop JavaScript is optional: `oasis-app` without the `javascript`
   feature links no QuickJS (the WASM and UE5 FFI builds don't link it
   either).
+- **Remote terminal PSK protocol (breaking):** the key no longer crosses
+  the wire (it was sent in clear; the docs' "TLS-protected" claim was
+  wrong). The listener sends `AUTH_REQUIRED <nonce>` and expects
+  `AUTH <hex HMAC-SHA256(psk, nonce)>` (`oasis_net::psk_response`); a bare
+  PSK is a failed attempt. PSK auth now works without the `tls-rustls`
+  feature. Unauthenticated connections close after 20 s; failed logins
+  (remote terminal and FTP `PASS`) feed a server-wide lockout.
+- FTP `GET` returns the raw bytes (binary-safe; the length header now
+  matches the body).
+- MCP server: stricter HTTP parsing (`Transfer-Encoding` of any kind, bad
+  header lines and non-HTTP/1.x are refused), the Origin / token checks run
+  before a body is buffered or `100 Continue` is sent, a 30 s whole-request
+  deadline, a 60 s keep-alive idle timeout, `DELETE` returns `405`, `null`
+  JSON-RPC ids are rejected and client-posted responses get `202`.
+- VFS: every backend resolves `.` / `..` the same way (`..` above `/` and
+  NUL bytes are errors); `write` never replaces a directory and nothing is
+  created beneath a file; `RealVfs` rejects Windows drive / stream /
+  device-name segments and removes or renames a symlink itself, not its
+  target.
+- Shell: `'$HOME'` is literal, `"*"` / `'{a,b}'` are not expanded, `""`
+  is an argument, operators inside `$( ... )` no longer split the outer
+  line, piped stdin does not leak into the next command, `run` passes
+  `$1..$n`, and runaway lines stop at resource limits (100k commands,
+  256 KiB expansions, nesting depth) instead of hanging or overflowing
+  the stack.
 
 ### Architecture and crate layout
 

@@ -4,12 +4,13 @@
 //! directory is prepended to all paths, providing sandboxing -- the VFS
 //! cannot escape its root.
 
+use std::borrow::Cow;
 use std::fs;
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 
-use oasis_types::error::{OasisError, Result};
+use oasis_types::error::{OasisError, Result, VfsError};
 
-use crate::{EntryKind, FilePermissions, RenamePlan, Vfs, VfsEntry, VfsMetadata};
+use crate::{EntryKind, FilePermissions, RenamePlan, Vfs, VfsEntry, VfsMetadata, normalize_path};
 
 /// A VFS backed by the real filesystem, rooted at a configurable directory.
 #[derive(Debug)]
@@ -35,28 +36,67 @@ impl RealVfs {
         })
     }
 
-    /// Resolve a VFS path to a real filesystem path, ensuring it stays
-    /// within the root directory.
-    ///
-    /// `.`/`..` are resolved lexically first (a VFS path cannot climb above
-    /// `/`). Then the deepest ancestor that exists on disk -- the path
-    /// itself, if it exists -- is canonicalized, which follows every
-    /// symlink in the existing part of the path, and must still lie inside
-    /// the root. The components that do not exist yet are appended to that
-    /// canonical prefix, so `create_dir_all` / `write` cannot be steered
-    /// through a symlink: a link pointing outside the root fails here even
-    /// when several levels below it are still missing (`/link/new/x`).
-    fn resolve(&self, vfs_path: &str) -> Result<PathBuf> {
-        let relative = vfs_path.trim_start_matches(std::path::is_separator);
-        let candidate = normalize_path(&self.root.join(relative));
-        if !candidate.starts_with(&self.root) {
+    /// Map a VFS path onto the host filesystem without touching it: the
+    /// path is normalized ([`normalize_path`]; on Windows `\\` also counts
+    /// as a separator) and each segment is checked by [`check_host_segment`]
+    /// before being appended to the root, so a segment can never be read by
+    /// the host as a drive, UNC prefix or device.
+    fn host_path(&self, vfs_path: &str) -> Result<PathBuf> {
+        let vfs_path: Cow<'_, str> = if cfg!(windows) && vfs_path.contains('\\') {
+            Cow::Owned(vfs_path.replace('\\', "/"))
+        } else {
+            Cow::Borrowed(vfs_path)
+        };
+        let normalized = normalize_path(&vfs_path)?;
+        let mut out = self.root.clone();
+        for seg in normalized.split('/').filter(|s| !s.is_empty()) {
+            check_host_segment(seg)?;
+            out.push(seg);
+        }
+        // Defence in depth: the checks above already guarantee this.
+        if !out.starts_with(&self.root) {
             return Err(OasisError::Vfs("path escapes VFS root".into()));
         }
+        Ok(out)
+    }
 
+    /// Resolve a VFS path to a real filesystem path, following symlinks,
+    /// and ensure it stays within the root directory.
+    ///
+    /// The deepest ancestor that exists on disk -- the path itself, if it
+    /// exists -- is canonicalized, which follows every symlink in the
+    /// existing part of the path, and must still lie inside the root. The
+    /// components that do not exist yet are appended to that canonical
+    /// prefix, so `create_dir_all` / `write` cannot be steered through a
+    /// symlink: a link pointing outside the root fails here even when
+    /// several levels below it are still missing (`/link/new/x`).
+    fn resolve(&self, vfs_path: &str) -> Result<PathBuf> {
+        self.confine(&self.host_path(vfs_path)?)
+    }
+
+    /// Like [`resolve`](Self::resolve), but the final component is not
+    /// followed: the result names the directory entry itself. `remove` and
+    /// `rename` use this so they act on a symlink, not on its target (a
+    /// link pointing outside the root can still be deleted or renamed; its
+    /// target is never touched).
+    fn resolve_entry(&self, vfs_path: &str) -> Result<PathBuf> {
+        let host = self.host_path(vfs_path)?;
+        if host == self.root {
+            return Ok(host);
+        }
+        match (host.parent(), host.file_name()) {
+            (Some(parent), Some(name)) => Ok(self.confine(parent)?.join(name)),
+            _ => Err(OasisError::Vfs("invalid path".into())),
+        }
+    }
+
+    /// Canonicalize the existing prefix of `candidate` (see
+    /// [`resolve`](Self::resolve)) and check it is inside the root.
+    fn confine(&self, candidate: &Path) -> Result<PathBuf> {
         // Split into the deepest existing ancestor and the missing tail.
         // `symlink_metadata` does not follow the final link, so a dangling
         // symlink counts as existing and then fails to canonicalize.
-        let mut existing = candidate.as_path();
+        let mut existing = candidate;
         let mut tail = Vec::new();
         while fs::symlink_metadata(existing).is_err() {
             let Some(name) = existing.file_name() else {
@@ -78,37 +118,32 @@ impl RealVfs {
     }
 }
 
-/// Normalize a path by resolving `.` and `..` components lexically
-/// (without touching the filesystem).
-fn normalize_path(path: &Path) -> PathBuf {
-    let mut out = PathBuf::new();
-    for component in path.components() {
-        match component {
-            Component::ParentDir => {
-                out.pop();
-            },
-            Component::CurDir => {},
-            other => out.push(other),
+/// Reject a path segment the host would not treat as a plain file name.
+///
+/// On Windows that is any segment with a `:` (a drive prefix such as `C:`
+/// replaces the whole path when joined, and `name:stream` addresses an
+/// NTFS alternate data stream) and the reserved device names (`CON`, `NUL`,
+/// `COM1`, ... with or without an extension), which open a device instead
+/// of a file. Elsewhere every segment [`normalize_path`] accepts is fine.
+fn check_host_segment(seg: &str) -> Result<()> {
+    if cfg!(windows) {
+        if seg.contains(':') {
+            return Err(VfsError::Other(format!("invalid path segment: {seg}")).into());
+        }
+        let stem = seg.split('.').next().unwrap_or(seg).trim_end_matches(' ');
+        let reserved = matches!(
+            stem.to_ascii_uppercase().as_str(),
+            "CON" | "PRN" | "AUX" | "NUL" | "CONIN$" | "CONOUT$"
+        ) || (stem.len() == 4
+            && stem
+                .get(..3)
+                .is_some_and(|p| p.eq_ignore_ascii_case("COM") || p.eq_ignore_ascii_case("LPT"))
+            && stem.as_bytes()[3].is_ascii_digit());
+        if reserved {
+            return Err(VfsError::Other(format!("reserved device name: {seg}")).into());
         }
     }
-    out
-}
-
-/// Normalize a VFS path lexically: leading `/`, no empty or `.` segments,
-/// `..` resolved (clamped at `/`), no trailing `/`. Splits on the same
-/// separators as `RealVfs::resolve` (`/`, plus `\` on Windows).
-fn normalize_vfs_path(path: &str) -> String {
-    let mut parts: Vec<&str> = Vec::new();
-    for seg in path.split(std::path::is_separator) {
-        match seg {
-            "" | "." => {},
-            ".." => {
-                parts.pop();
-            },
-            s => parts.push(s),
-        }
-    }
-    format!("/{}", parts.join("/"))
+    Ok(())
 }
 
 impl Vfs for RealVfs {
@@ -173,12 +208,17 @@ impl Vfs for RealVfs {
     }
 
     fn remove(&mut self, path: &str) -> Result<()> {
-        let real_path = self.resolve(path)?;
+        let real_path = self.resolve_entry(path)?;
         if real_path == self.root {
             return Err(OasisError::Vfs("cannot remove VFS root".into()));
         }
-        if real_path.is_dir() {
+        // `symlink_metadata`: a symlink is removed itself, never its target.
+        let meta = fs::symlink_metadata(&real_path)?;
+        if meta.is_dir() {
             fs::remove_dir(&real_path)?;
+        } else if meta.file_type().is_symlink() && cfg!(windows) {
+            // Windows directory symlinks / junctions are removed as dirs.
+            fs::remove_file(&real_path).or_else(|_| fs::remove_dir(&real_path))?;
         } else {
             fs::remove_file(&real_path)?;
         }
@@ -186,17 +226,21 @@ impl Vfs for RealVfs {
     }
 
     fn rename(&mut self, from: &str, to: &str) -> Result<()> {
-        let real_from = self.resolve(from)?;
-        let real_to = self.resolve(to)?;
-        // On case-insensitive filesystems `/Dir` -> `/dir` resolves both
-        // sides to the same entry: that is a case change, not a move onto
-        // an existing directory.
-        if real_from == real_to && from != to && real_from != self.root {
+        let real_from = self.resolve_entry(from)?;
+        let real_to = self.resolve_entry(to)?;
+        let from_norm = normalize_path(from)?;
+        let to_norm = normalize_path(to)?;
+        // On case-insensitive filesystems `/Dir` -> `/dir` names the same
+        // entry twice: that is a case change, not a move onto an existing
+        // directory.
+        if from_norm != to_norm
+            && from_norm.eq_ignore_ascii_case(&to_norm)
+            && real_from != self.root
+            && self.resolve(from)? == self.resolve(to)?
+        {
             fs::rename(&real_from, &real_to)?;
             return Ok(());
         }
-        let from_norm = normalize_vfs_path(from);
-        let to_norm = normalize_vfs_path(to);
         if self.validate_rename(&from_norm, &to_norm)? == RenamePlan::NoOp {
             return Ok(());
         }
@@ -653,11 +697,93 @@ mod tests {
     }
 
     #[test]
-    fn normalize_vfs_path_cases() {
-        assert_eq!(normalize_vfs_path("/"), "/");
-        assert_eq!(normalize_vfs_path(""), "/");
-        assert_eq!(normalize_vfs_path("a//b/"), "/a/b");
-        assert_eq!(normalize_vfs_path("/a/./b/../c"), "/a/c");
-        assert_eq!(normalize_vfs_path("/../.."), "/");
+    fn climbing_back_into_root_by_name_is_rejected() {
+        // `/../<root name>/x` used to re-enter the root lexically.
+        let (dir, mut vfs) = temp_vfs();
+        let name = dir
+            .path()
+            .file_name()
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .to_string();
+        assert!(vfs.write(&format!("/../{name}/x"), b"x").is_err());
+        assert!(!vfs.exists("/x"));
+    }
+
+    #[test]
+    fn nul_byte_is_rejected() {
+        let (_dir, mut vfs) = temp_vfs();
+        assert!(vfs.write("/a\0b", b"x").is_err());
+        assert!(vfs.readdir("/").unwrap().is_empty());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_prefixes_and_devices_are_rejected() {
+        let (_dir, mut vfs) = temp_vfs();
+        vfs.mkdir("/sub").unwrap();
+        for path in [
+            "/C:/Windows/x.txt",
+            "C:\\x.txt",
+            "/\\\\server\\share\\x",
+            "/a\\..\\..\\x",
+            "/file.txt:stream",
+            "/NUL",
+            "/con.txt",
+            "/sub/COM1",
+            "/lpt9.log",
+        ] {
+            assert!(vfs.write(path, b"x").is_err(), "{path} must be rejected");
+        }
+        // Backslash is a separator on Windows, within the root.
+        vfs.mkdir("/d").unwrap();
+        vfs.write("/d\\f.txt", b"ok").unwrap();
+        assert_eq!(vfs.read("/d/f.txt").unwrap(), b"ok");
+        // Names that merely start like a device are fine.
+        vfs.write("/console.txt", b"ok").unwrap();
+        vfs.write("/com10", b"ok").unwrap();
+        // A 4-byte stem whose third byte is not a char boundary.
+        vfs.write("/ab\u{e9}.txt", b"ok").unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn remove_symlink_removes_the_link_not_the_target() {
+        use std::os::unix::fs::symlink;
+
+        let outside = tempfile::tempdir().unwrap();
+        let outside_file = outside.path().join("keep.txt");
+        fs::write(&outside_file, b"keep").unwrap();
+        let (_dir, mut vfs) = temp_vfs();
+        vfs.write("/target.txt", b"inside").unwrap();
+        symlink(vfs.root.join("target.txt"), vfs.root.join("inner_link")).unwrap();
+        symlink(&outside_file, vfs.root.join("outer_link")).unwrap();
+
+        vfs.remove("/inner_link").unwrap();
+        assert_eq!(vfs.read("/target.txt").unwrap(), b"inside");
+        // A link escaping the root can be deleted; its target survives.
+        vfs.remove("/outer_link").unwrap();
+        assert!(fs::symlink_metadata(vfs.root.join("outer_link")).is_err());
+        assert_eq!(fs::read(&outside_file).unwrap(), b"keep");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn rename_symlink_moves_the_link() {
+        use std::os::unix::fs::symlink;
+
+        let (_dir, mut vfs) = temp_vfs();
+        vfs.mkdir("/real").unwrap();
+        vfs.write("/real/f", b"x").unwrap();
+        symlink(vfs.root.join("real"), vfs.root.join("alias")).unwrap();
+        vfs.rename("/alias", "/alias2").unwrap();
+        assert!(vfs.root.join("real/f").is_file(), "target untouched");
+        assert!(
+            fs::symlink_metadata(vfs.root.join("alias2"))
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
     }
 }

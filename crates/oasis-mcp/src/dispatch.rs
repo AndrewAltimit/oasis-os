@@ -86,6 +86,15 @@ pub fn handle_message(body: &[u8], disp: &mut dyn ToolDispatcher) -> Handled {
             "invalid request: \"jsonrpc\" must be \"2.0\"",
         ));
     }
+    // A JSON-RPC *response* (a reply to a server-to-client request) is
+    // acknowledged with a bare `202`, per Streamable HTTP. This server never
+    // sends requests, so there is nothing to match it against.
+    if !obj.contains_key("method")
+        && raw_id.is_some()
+        && (obj.contains_key("result") || obj.contains_key("error"))
+    {
+        return Handled::Notification;
+    }
     let Some(method) = obj
         .get("method")
         .and_then(Value::as_str)
@@ -97,9 +106,10 @@ pub fn handle_message(body: &[u8], disp: &mut dyn ToolDispatcher) -> Handled {
             "invalid request: missing \"method\" string",
         ));
     };
+    // MCP narrows JSON-RPC here: a request id MUST NOT be null.
     if raw_id
         .as_ref()
-        .is_some_and(|v| !matches!(v, Value::String(_) | Value::Number(_) | Value::Null))
+        .is_some_and(|v| !matches!(v, Value::String(_) | Value::Number(_)))
     {
         return Handled::Response(error_response(
             Value::Null,
@@ -114,7 +124,6 @@ pub fn handle_message(body: &[u8], disp: &mut dyn ToolDispatcher) -> Handled {
     // `202 Accepted`. Request-only methods sent as notifications are ignored
     // rather than executed: in particular a `tools/call` notification would
     // run a side-effecting tool whose result nobody can ever observe.
-    // (`"id": null` is a request, albeit a discouraged one, and gets a reply.)
     let Some(id) = raw_id else {
         if !method.starts_with("notifications/") {
             log::debug!("mcp: ignoring request-only method {method:?} sent as a notification");
@@ -130,6 +139,14 @@ pub fn handle_message(body: &[u8], disp: &mut dyn ToolDispatcher) -> Handled {
             Handled::Response(result_response(id, json!({ "tools": tools })))
         },
         "tools/call" => {
+            // MCP params are by-name: an array would deserialize positionally.
+            if !params.is_object() {
+                return Handled::Response(error_response(
+                    id,
+                    -32602,
+                    "invalid params: expected an object",
+                ));
+            }
             let params: CallToolParams = match serde_json::from_value(params) {
                 Ok(p) => p,
                 Err(e) => {
@@ -293,11 +310,36 @@ mod tests {
     }
 
     #[test]
-    fn null_id_is_a_request() {
+    fn null_id_is_rejected() {
+        // MCP: "the ID MUST NOT be null".
         let body = br#"{"jsonrpc":"2.0","id":null,"method":"ping"}"#;
         let v = resp_json(handle_message(body, &mut StubDispatcher));
         assert!(v["id"].is_null());
-        assert_eq!(v["result"], json!({}));
+        assert_eq!(v["error"]["code"], -32600);
+    }
+
+    #[test]
+    fn client_responses_are_acknowledged_without_a_body() {
+        for body in [
+            &br#"{"jsonrpc":"2.0","id":1,"result":{}}"#[..],
+            br#"{"jsonrpc":"2.0","id":"x","error":{"code":-1,"message":"no"}}"#,
+        ] {
+            assert!(
+                matches!(
+                    handle_message(body, &mut StubDispatcher),
+                    Handled::Notification
+                ),
+                "{}",
+                String::from_utf8_lossy(body)
+            );
+        }
+    }
+
+    #[test]
+    fn tools_call_positional_params_are_rejected() {
+        let body = br#"{"jsonrpc":"2.0","id":3,"method":"tools/call","params":["echo",{}]}"#;
+        let v = resp_json(handle_message(body, &mut StubDispatcher));
+        assert_eq!(v["error"]["code"], -32602);
     }
 
     #[test]

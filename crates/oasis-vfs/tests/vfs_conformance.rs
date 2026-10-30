@@ -115,6 +115,68 @@ macro_rules! vfs_conformance {
                 assert!(vfs.readdir("/ghost").is_err());
             }
 
+            // -- path normalization ---------------------------------------
+
+            #[test]
+            fn dot_segments_resolve_lexically() {
+                let (_g, mut vfs) = make();
+                populate(vfs.as_mut());
+                assert_eq!(vfs.read("/a/./b/../g.txt").unwrap(), b"g");
+                assert_eq!(vfs.read("//a//b//f.txt").unwrap(), b"f");
+                assert_eq!(vfs.read("a/g.txt").unwrap(), b"g", "relative to /");
+                vfs.write("/a/b/../new.txt", b"n").unwrap();
+                assert_eq!(vfs.read("/a/new.txt").unwrap(), b"n");
+                vfs.mkdir("/a/./c/../d").unwrap();
+                assert!(vfs.exists("/a/d") && !vfs.exists("/a/c"));
+                assert_eq!(vfs.stat("/a/..").unwrap().kind, EntryKind::Directory);
+            }
+
+            #[test]
+            fn climbing_above_root_is_an_error() {
+                let (_g, mut vfs) = make();
+                populate(vfs.as_mut());
+                assert!(vfs.read("/../top.txt").is_err());
+                assert!(vfs.read("/a/../../top.txt").is_err());
+                assert!(vfs.write("/../x", b"x").is_err());
+                assert!(vfs.mkdir("/../y").is_err());
+                assert!(vfs.remove("/a/b/../../../top.txt").is_err());
+                assert!(vfs.rename("/top.txt", "/../t").is_err());
+                assert!(!vfs.exists("/.."));
+                assert_eq!(tree(vfs.as_ref(), "/"), populated_tree());
+            }
+
+            #[test]
+            fn nul_byte_is_rejected() {
+                let (_g, mut vfs) = make();
+                assert!(vfs.write("/a\0b", b"x").is_err());
+                assert!(vfs.mkdir("/d\0").is_err());
+                assert!(!vfs.exists("/a\0b"));
+                assert!(vfs.readdir("/").unwrap().is_empty());
+            }
+
+            // -- entry types ----------------------------------------------
+
+            #[test]
+            fn write_onto_directory_fails() {
+                let (_g, mut vfs) = make();
+                populate(vfs.as_mut());
+                assert!(vfs.write("/a", b"x").is_err());
+                assert_eq!(vfs.stat("/a").unwrap().kind, EntryKind::Directory);
+                assert_eq!(tree(vfs.as_ref(), "/"), populated_tree());
+            }
+
+            #[test]
+            fn nothing_is_created_beneath_a_file() {
+                let (_g, mut vfs) = make();
+                populate(vfs.as_mut());
+                assert!(vfs.write("/top.txt/x", b"x").is_err());
+                assert!(vfs.mkdir("/top.txt/sub").is_err());
+                assert!(vfs.mkdir("/top.txt/sub/deeper").is_err());
+                assert!(vfs.mkdir("/top.txt").is_err(), "mkdir onto a file");
+                assert_eq!(vfs.read("/top.txt").unwrap(), b"top");
+                assert_eq!(tree(vfs.as_ref(), "/"), populated_tree());
+            }
+
             // -- rename: valid moves --------------------------------------
 
             #[test]

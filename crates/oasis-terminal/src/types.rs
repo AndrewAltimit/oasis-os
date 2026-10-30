@@ -192,6 +192,29 @@ pub(crate) const MAX_CALL_DEPTH: usize = 64;
 /// otherwise recurse until the host's stack overflows).
 pub(crate) const MAX_SCRIPT_DEPTH: usize = 16;
 
+/// Maximum nesting of [`CommandRegistry::execute`] calls (`$(...)` inside
+/// `$(...)`, functions, scripts, compound bodies). Each level costs host
+/// stack, and the shell also runs on a PSP with a small one.
+///
+/// [`CommandRegistry::execute`]: crate::CommandRegistry::execute
+pub(crate) const MAX_EXEC_DEPTH: usize = 96;
+
+/// Maximum simple commands one top-level command line may run, across all
+/// loops, functions and scripts it starts. Bounds nested loops (the
+/// per-loop cap alone allows 1000^depth iterations) so a runaway line ends
+/// with an error instead of freezing the UI frame it runs in.
+pub(crate) const MAX_COMMANDS_PER_LINE: u64 = 100_000;
+
+/// Maximum length of one expanded command line (after `$VAR` and `$(...)`
+/// substitution), so `set x=$x$x` in a loop cannot double memory forever.
+pub(crate) const MAX_EXPANDED_LEN: usize = 256 * 1024;
+
+/// Maximum length of a shell variable value set by `set` / `local`.
+pub(crate) const MAX_VAR_LEN: usize = 64 * 1024;
+
+/// Maximum number of shell variables.
+pub(crate) const MAX_VARIABLES: usize = 4096;
+
 /// A user-defined shell function.
 #[derive(Clone, Debug)]
 pub(crate) struct ShellFunction {

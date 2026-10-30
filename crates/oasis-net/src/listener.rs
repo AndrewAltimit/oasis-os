@@ -1,8 +1,9 @@
 //! Remote terminal listener.
 //!
-//! Accepts inbound TCP connections, authenticates via pre-shared key,
-//! and feeds received command lines into the command interpreter.
-//! Designed for non-blocking polling from the main loop.
+//! Accepts inbound TCP connections, authenticates them with the PSK
+//! challenge-response described in [`crate::auth`], and feeds received
+//! command lines into the command interpreter. Designed for non-blocking
+//! polling from the main loop.
 
 use std::time::{Duration, Instant};
 
@@ -10,6 +11,9 @@ use oasis_types::backend::{NetworkBackend, NetworkStream};
 use oasis_types::error::{OasisError, Result};
 use oasis_types::util::ct_eq;
 
+#[cfg(test)]
+use crate::auth::{AUTH_RATE_LIMIT_BASE_SECS, MAX_AUTH_FAILURES};
+use crate::auth::{AUTH_TIMEOUT, AuthThrottle, psk_response};
 use crate::std_backend::StdNetworkBackend;
 
 /// Maximum number of simultaneous remote connections.
@@ -18,13 +22,10 @@ const DEFAULT_MAX_CONNECTIONS: usize = 4;
 /// Maximum bytes in a single input line.
 const MAX_LINE_LEN: usize = 1024;
 
-/// Maximum failed auth attempts before rate limiting kicks in.
-const MAX_AUTH_FAILURES: u32 = 5;
-
-/// Base rate-limit window for auth failures (seconds).
-/// Doubles with each additional failure beyond the threshold
-/// (exponential backoff: 30s, 60s, 120s, ...).
-const AUTH_RATE_LIMIT_BASE_SECS: u64 = 30;
+/// Maximum command lines taken from one connection in a single poll. The
+/// rest stay buffered (and no more is read) until later polls, so one peer
+/// cannot hand the host thousands of commands in a single frame.
+const MAX_LINES_PER_POLL: usize = 64;
 
 /// Idle connection timeout (seconds).
 const IDLE_TIMEOUT_SECS: u64 = 300;
@@ -43,10 +44,10 @@ const WRITE_COMPACT_THRESHOLD: usize = 1024 * 1024;
 const CLOSE_DRAIN_TIMEOUT: Duration = Duration::from_secs(2);
 
 /// Authentication state for a connection.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 enum AuthState {
-    /// Waiting for client to send the PSK.
-    AwaitingAuth,
+    /// Challenge sent; waiting for `AUTH <response>` to this nonce.
+    AwaitingAuth { nonce: String },
     /// Authenticated and ready for commands.
     Authenticated,
 }
@@ -68,6 +69,8 @@ struct RemoteConnection {
     inflight: usize,
     /// Timestamp of last received data (for idle timeout).
     last_activity: Instant,
+    /// When the connection was accepted (for the auth timeout).
+    accepted_at: Instant,
     /// Set when the connection should close once its output has drained.
     closing_since: Option<Instant>,
     /// Hard failure (read/write error or output backlog overflow): drop now.
@@ -75,16 +78,17 @@ struct RemoteConnection {
 }
 
 impl RemoteConnection {
-    fn new(id: usize, stream: Box<dyn NetworkStream>) -> Self {
+    fn new(id: usize, stream: Box<dyn NetworkStream>, auth: AuthState) -> Self {
         Self {
             id,
             stream,
-            auth: AuthState::AwaitingAuth,
+            auth,
             read_buf: Vec::with_capacity(256),
             write_buf: Vec::new(),
             write_pos: 0,
             inflight: 0,
             last_activity: Instant::now(),
+            accepted_at: Instant::now(),
             closing_since: None,
             dead: false,
         }
@@ -155,12 +159,6 @@ impl RemoteConnection {
     }
 }
 
-/// Tracks failed authentication attempts for rate limiting.
-pub(crate) struct AuthFailureRecord {
-    pub(crate) count: u32,
-    pub(crate) window_start: Instant,
-}
-
 /// Which interfaces the remote terminal listener binds to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ListenerBind {
@@ -179,7 +177,9 @@ pub struct ListenerConfig {
     /// Port to listen on.
     pub port: u16,
     /// Pre-shared key for authentication (empty = no auth required, which is
-    /// only permitted with [`ListenerBind::Loopback`]).
+    /// only permitted with [`ListenerBind::Loopback`]). It never crosses the
+    /// wire: clients prove knowledge of it with the challenge-response in
+    /// [`crate::auth`].
     pub psk: String,
     /// Interfaces to bind (default: loopback only).
     pub bind: ListenerBind,
@@ -212,7 +212,10 @@ pub struct RemoteListener {
     /// Id for the next accepted connection.
     next_id: usize,
     /// Rate-limiting tracker for auth failures.
-    pub(crate) auth_failures: AuthFailureRecord,
+    pub(crate) auth_failures: AuthThrottle,
+    /// Tests pin the challenge nonce so canned input can answer it.
+    #[cfg(test)]
+    pub(crate) test_nonce: Option<String>,
 }
 
 impl RemoteListener {
@@ -223,10 +226,9 @@ impl RemoteListener {
             connections: Vec::new(),
             listening: false,
             next_id: 0,
-            auth_failures: AuthFailureRecord {
-                count: 0,
-                window_start: Instant::now(),
-            },
+            auth_failures: AuthThrottle::new(),
+            #[cfg(test)]
+            test_nonce: None,
         }
     }
 
@@ -248,14 +250,6 @@ impl RemoteListener {
                 backend.listen(self.config.port)?;
             },
         }
-        #[cfg(not(feature = "tls-rustls"))]
-        if !self.config.psk.is_empty() {
-            log::warn!(
-                "Remote terminal listening WITHOUT TLS but PSK is configured. \
-                 Connections attempting PSK auth will be rejected. \
-                 Enable the `tls-rustls` feature for encrypted connections."
-            );
-        }
         self.listening = true;
         Ok(())
     }
@@ -275,44 +269,20 @@ impl RemoteListener {
         self.connections.len()
     }
 
-    /// Compute the current rate-limit window duration.
-    /// Uses exponential backoff: base * 2^(failures - threshold) once
-    /// the failure count exceeds the threshold.
+    /// The current auth lockout length (see [`AuthThrottle`]).
+    #[cfg(test)]
     pub(crate) fn rate_limit_window(&self) -> Duration {
-        let excess = self.auth_failures.count.saturating_sub(MAX_AUTH_FAILURES);
-        let multiplier = 1u64 << excess.min(6); // cap at 64x to prevent overflow
-        Duration::from_secs(AUTH_RATE_LIMIT_BASE_SECS.saturating_mul(multiplier))
+        self.auth_failures.window()
     }
 
-    /// Check whether auth rate limit is in effect.
-    fn is_rate_limited(&mut self) -> bool {
-        let now = Instant::now();
-        let window = self.rate_limit_window();
-        if now.duration_since(self.auth_failures.window_start) > window {
-            // Reset the window.
-            self.auth_failures.count = 0;
-            self.auth_failures.window_start = now;
-        }
-        self.auth_failures.count >= MAX_AUTH_FAILURES
+    /// Whether new connections are turned away after repeated failures.
+    fn is_rate_limited(&self) -> bool {
+        self.auth_failures.is_locked()
     }
 
     /// Record a failed auth attempt.
     pub(crate) fn record_auth_failure(&mut self) {
-        let now = Instant::now();
-        let window = self.rate_limit_window();
-        if now.duration_since(self.auth_failures.window_start) > window {
-            self.auth_failures.count = 0;
-            self.auth_failures.window_start = now;
-        }
-        self.auth_failures.count += 1;
-        if self.auth_failures.count >= MAX_AUTH_FAILURES {
-            log::warn!(
-                "Remote terminal: auth rate limit active ({} failures, \
-                 backoff {:.0}s)",
-                self.auth_failures.count,
-                self.rate_limit_window().as_secs_f64(),
-            );
-        }
+        self.auth_failures.record_failure("Remote terminal");
     }
 
     /// Poll for new connections and incoming data.
@@ -340,11 +310,22 @@ impl RemoteListener {
 
         let mut commands = Vec::new();
         let mut auth_failures = 0u32;
-        let psk_bytes = self.config.psk.as_bytes().to_vec();
+        let psk = self.config.psk.as_str();
 
         for conn in &mut self.connections {
             conn.flush();
             if conn.dead || conn.closing_since.is_some() {
+                continue;
+            }
+
+            // Unauthenticated peers get a short deadline, so idle sockets
+            // cannot hold every slot for the whole idle timeout.
+            if matches!(conn.auth, AuthState::AwaitingAuth { .. })
+                && conn.accepted_at.elapsed() > AUTH_TIMEOUT
+            {
+                conn.queue(b"AUTH_FAIL timeout\n");
+                conn.close_after_flush();
+                conn.flush();
                 continue;
             }
 
@@ -357,9 +338,14 @@ impl RemoteListener {
             }
 
             // Read until the socket would block, EOF, or the per-poll cap.
+            // Lines left over from an earlier burst are worked off first.
             let mut eof = false;
             let mut buf = [0u8; 4096];
-            let mut total = 0usize;
+            let mut total = if conn.read_buf.len() > MAX_LINE_LEN {
+                MAX_READ_PER_POLL
+            } else {
+                0
+            };
             while total < MAX_READ_PER_POLL {
                 match conn.stream.read(&mut buf) {
                     Ok(0) => {
@@ -387,11 +373,15 @@ impl RemoteListener {
 
             // Process complete lines.
             let mut overlong = false;
-            while let Some(newline_pos) = conn.read_buf.iter().position(|&b| b == b'\n') {
+            let mut lines = 0usize;
+            while lines < MAX_LINES_PER_POLL
+                && let Some(newline_pos) = conn.read_buf.iter().position(|&b| b == b'\n')
+            {
                 if newline_pos > MAX_LINE_LEN {
                     overlong = true;
                     break;
                 }
+                lines += 1;
                 let line_bytes: Vec<u8> = conn.read_buf.drain(..=newline_pos).collect();
                 let line = String::from_utf8_lossy(&line_bytes).trim().to_string();
 
@@ -399,9 +389,11 @@ impl RemoteListener {
                     continue;
                 }
 
-                match conn.auth {
-                    AuthState::AwaitingAuth => {
-                        if ct_eq(line.as_bytes(), &psk_bytes) {
+                match &conn.auth {
+                    AuthState::AwaitingAuth { nonce } => {
+                        let expected = psk_response(psk, nonce);
+                        let answer = line.strip_prefix("AUTH ").map(str::trim);
+                        if answer.is_some_and(|a| ct_eq(a.as_bytes(), expected.as_bytes())) {
                             conn.auth = AuthState::Authenticated;
                             conn.queue(b"AUTH_OK\n> ");
                         } else {
@@ -428,17 +420,20 @@ impl RemoteListener {
                 }
             }
 
-            // Guard against overlong lines -- disconnect the peer.
-            if overlong || conn.read_buf.len() > MAX_LINE_LEN {
+            // Guard against overlong lines -- disconnect the peer. (A long
+            // buffer of complete lines left by the per-poll cap is fine.)
+            let unterminated = conn.read_buf.len() > MAX_LINE_LEN
+                && !conn.read_buf[..=MAX_LINE_LEN].contains(&b'\n');
+            if overlong || unterminated {
                 conn.read_buf.clear();
                 conn.queue(b"error: line too long\n");
                 conn.close_after_flush();
-                if conn.auth == AuthState::AwaitingAuth {
+                if matches!(conn.auth, AuthState::AwaitingAuth { .. }) {
                     auth_failures += 1;
                 }
             }
 
-            if eof {
+            if eof && !conn.read_buf.contains(&b'\n') {
                 // Peer closed its side: free the slot as soon as the replies
                 // to anything it sent before closing have been delivered.
                 conn.close_after_flush();
@@ -457,36 +452,32 @@ impl RemoteListener {
     }
 
     /// Set up a freshly accepted connection (or turn it away).
-    fn admit(&mut self, stream: Box<dyn NetworkStream>) {
+    fn admit(&mut self, mut stream: Box<dyn NetworkStream>) {
         let id = self.next_id;
         self.next_id = self.next_id.wrapping_add(1);
-        let mut conn = RemoteConnection::new(id, stream);
-        if !self.config.psk.is_empty() && self.is_rate_limited() {
-            // Rate limit in effect -- reject new connections.
-            let _ = conn.stream.write(b"RATE_LIMITED\n");
-            let _ = conn.stream.close();
-            return;
-        }
         if self.config.psk.is_empty() {
             // No auth required.
-            conn.auth = AuthState::Authenticated;
+            let mut conn = RemoteConnection::new(id, stream, AuthState::Authenticated);
             conn.queue(b"OASIS_OS remote terminal\n> ");
             conn.flush();
             self.connections.push(conn);
             return;
         }
-        #[cfg(not(feature = "tls-rustls"))]
-        {
-            // Reject PSK auth without TLS.
-            let _ = conn.stream.write(b"AUTH_FAIL TLS required for PSK auth\n");
-            let _ = conn.stream.close();
+        if self.is_rate_limited() {
+            // Rate limit in effect -- reject new connections.
+            let _ = stream.write(b"RATE_LIMITED\n");
+            let _ = stream.close();
+            return;
         }
-        #[cfg(feature = "tls-rustls")]
-        {
-            conn.queue(b"AUTH_REQUIRED\n");
-            conn.flush();
-            self.connections.push(conn);
-        }
+        #[cfg(test)]
+        let nonce = self.test_nonce.clone().unwrap_or_else(|| new_nonce(id));
+        #[cfg(not(test))]
+        let nonce = new_nonce(id);
+        let challenge = format!("AUTH_REQUIRED {nonce}\n");
+        let mut conn = RemoteConnection::new(id, stream, AuthState::AwaitingAuth { nonce });
+        conn.queue(challenge.as_bytes());
+        conn.flush();
+        self.connections.push(conn);
     }
 
     /// Drop connections that failed or finished closing.
@@ -539,6 +530,28 @@ impl RemoteListener {
         self.connections.clear();
         self.listening = false;
     }
+}
+
+/// A fresh, unpredictable challenge nonce: 128 bits as 32 hex digits.
+///
+/// `RandomState` keys come from the OS RNG (once per thread, then stepped
+/// per instance); four independently keyed hashes of the connection id and
+/// the clock are condensed with SHA-256. Nonces only need to be unique and
+/// unguessable -- they are not keys.
+fn new_nonce(conn_id: usize) -> String {
+    use std::hash::{BuildHasher, Hasher};
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_nanos());
+    let mut seed = Vec::with_capacity(32);
+    for round in 0u8..4 {
+        let mut h = std::collections::hash_map::RandomState::new().build_hasher();
+        h.write_u8(round);
+        h.write_usize(conn_id);
+        h.write_u128(nanos);
+        seed.extend_from_slice(&h.finish().to_le_bytes());
+    }
+    crate::auth::hex(&crate::auth::sha256(&seed)[..16])
 }
 
 #[cfg(test)]
@@ -596,7 +609,7 @@ mod tests {
     #[test]
     fn test_is_rate_limited_initial_state() {
         let config = ListenerConfig::default();
-        let mut listener = RemoteListener::new(config);
+        let listener = RemoteListener::new(config);
         // Initially, no failures, so not rate limited
         assert!(!listener.is_rate_limited());
     }
@@ -669,17 +682,19 @@ mod tests {
 
     #[test]
     fn test_auth_state_equality() {
-        assert_eq!(AuthState::AwaitingAuth, AuthState::AwaitingAuth);
+        let awaiting = AuthState::AwaitingAuth { nonce: "ab".into() };
+        assert_eq!(awaiting, awaiting.clone());
         assert_eq!(AuthState::Authenticated, AuthState::Authenticated);
-        assert_ne!(AuthState::AwaitingAuth, AuthState::Authenticated);
+        assert_ne!(awaiting, AuthState::Authenticated);
     }
 
     #[test]
-    fn test_remote_connection_new_state() {
-        // We can't easily create a mock NetworkStream without more infrastructure,
-        // but we can test that RemoteConnection implements the expected pattern.
-        // This test validates the structure is correct.
-        assert_eq!(AuthState::AwaitingAuth as u8, 0);
+    fn nonces_are_fresh_hex() {
+        let a = new_nonce(1);
+        let b = new_nonce(1);
+        assert_eq!(a.len(), 32);
+        assert!(a.bytes().all(|c| c.is_ascii_hexdigit()));
+        assert_ne!(a, b, "every challenge must differ");
     }
 
     #[test]
@@ -705,6 +720,117 @@ mod tests {
         assert_eq!(config1.psk, config2.psk);
         assert_eq!(config1.max_connections, config2.max_connections);
         assert_eq!(config1.idle_timeout_secs, config2.idle_timeout_secs);
+    }
+
+    /// In-memory stream: serves `input`, then would-block; records output.
+    struct Scripted {
+        input: Vec<u8>,
+        pos: usize,
+        out: std::sync::Arc<std::sync::Mutex<Vec<u8>>>,
+    }
+
+    impl NetworkStream for Scripted {
+        fn read(&mut self, buf: &mut [u8]) -> Result<usize> {
+            if self.pos >= self.input.len() {
+                return Err(OasisError::Io(std::io::ErrorKind::WouldBlock.into()));
+            }
+            let n = buf.len().min(self.input.len() - self.pos);
+            buf[..n].copy_from_slice(&self.input[self.pos..self.pos + n]);
+            self.pos += n;
+            Ok(n)
+        }
+        fn write(&mut self, data: &[u8]) -> Result<usize> {
+            self.out.lock().unwrap().extend_from_slice(data);
+            Ok(data.len())
+        }
+        fn close(&mut self) -> Result<()> {
+            Ok(())
+        }
+    }
+
+    type Output = std::sync::Arc<std::sync::Mutex<Vec<u8>>>;
+
+    fn admitted(listener: &mut RemoteListener, input: &[u8]) -> Output {
+        let out = Output::default();
+        listener.listening = true;
+        listener.admit(Box::new(Scripted {
+            input: input.to_vec(),
+            pos: 0,
+            out: std::sync::Arc::clone(&out),
+        }));
+        out
+    }
+
+    struct NoAccept;
+
+    impl NetworkBackend for NoAccept {
+        fn listen(&mut self, _port: u16) -> Result<()> {
+            Ok(())
+        }
+        fn accept(&mut self) -> Result<Option<Box<dyn NetworkStream>>> {
+            Ok(None)
+        }
+        fn connect(&mut self, _address: &str, _port: u16) -> Result<Box<dyn NetworkStream>> {
+            Err(OasisError::Backend("no".into()))
+        }
+    }
+
+    #[test]
+    fn unauthenticated_connection_times_out() {
+        let mut listener = RemoteListener::new(ListenerConfig {
+            psk: "k".into(),
+            ..ListenerConfig::default()
+        });
+        let out = admitted(&mut listener, b"");
+        listener.poll(&mut NoAccept);
+        assert_eq!(listener.connection_count(), 1, "still within the deadline");
+        listener.connections[0].accepted_at = Instant::now() - AUTH_TIMEOUT * 2;
+        listener.poll(&mut NoAccept);
+        assert_eq!(listener.connection_count(), 0);
+        let out = String::from_utf8(out.lock().unwrap().clone()).unwrap();
+        assert!(out.ends_with("AUTH_FAIL timeout\n"), "{out:?}");
+        // Timing out is not a wrong guess.
+        assert_eq!(listener.auth_failures.count, 0);
+    }
+
+    #[test]
+    fn authenticated_connection_has_no_auth_deadline() {
+        let mut listener = RemoteListener::new(ListenerConfig::default());
+        admitted(&mut listener, b"");
+        listener.connections[0].accepted_at = Instant::now() - AUTH_TIMEOUT * 2;
+        listener.poll(&mut NoAccept);
+        assert_eq!(listener.connection_count(), 1);
+    }
+
+    #[test]
+    fn command_burst_is_spread_over_polls() {
+        let mut listener = RemoteListener::new(ListenerConfig::default());
+        let burst: String = (0..150).map(|i| format!("c{i}\n")).collect();
+        admitted(&mut listener, burst.as_bytes());
+        let mut seen = Vec::new();
+        for _ in 0..3 {
+            let got = listener.poll(&mut NoAccept);
+            assert!(got.len() <= MAX_LINES_PER_POLL);
+            seen.extend(got.into_iter().map(|(c, _)| c));
+        }
+        let expected: Vec<String> = (0..150).map(|i| format!("c{i}")).collect();
+        assert_eq!(seen, expected, "every line runs, in order");
+        assert_eq!(
+            listener.connection_count(),
+            1,
+            "a long buffer is not overlong"
+        );
+    }
+
+    #[test]
+    fn rate_limited_listener_still_serves_open_loopback() {
+        // Without a PSK there is nothing to throttle.
+        let mut listener = RemoteListener::new(ListenerConfig::default());
+        for _ in 0..MAX_AUTH_FAILURES {
+            listener.record_auth_failure();
+        }
+        admitted(&mut listener, b"");
+        assert_eq!(listener.connection_count(), 1);
     }
 
     #[test]

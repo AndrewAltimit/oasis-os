@@ -6,15 +6,20 @@ use oasis_types::backend::{NetworkBackend, NetworkStream};
 
 use crate::dispatch::{Handled, handle_message};
 use crate::http::{
-    CONTINUE_RESPONSE, Framing, HttpRequest, build_response, expects_continue, find_subsequence,
+    CONTINUE_RESPONSE, Framing, HttpRequest, RequestHead, build_response, header_end, parse_head,
     try_frame,
 };
 use crate::tools::ToolDispatcher;
 
 const DEFAULT_MAX_CONNECTIONS: usize = 4;
-const IDLE_TIMEOUT_SECS: u64 = 300;
+/// A keep-alive connection with no request in progress is closed after
+/// this long, so idle sockets do not hold the few connection slots.
+const IDLE_TIMEOUT_SECS: u64 = 60;
 /// A request's header section must arrive within this window (slowloris guard).
 const HEADER_TIMEOUT_SECS: u64 = 10;
+/// The whole request (headers and body) must arrive within this window, so
+/// a client cannot hold a slot by trickling a body one byte at a time.
+const REQUEST_TIMEOUT_SECS: u64 = 30;
 const READ_CHUNK: usize = 4096;
 /// Maximum bytes read from one connection in a single poll.
 const MAX_READ_PER_POLL: usize = 64 * 1024;
@@ -44,8 +49,10 @@ struct HttpConn {
     /// Peer half-closed the connection (read returned 0).
     eof: bool,
     close_after_flush: bool,
-    /// A `100 Continue` was already sent for the request being received.
-    continue_sent: bool,
+    /// The header section of the request being received has passed the
+    /// Origin / Host / token / route checks (and `100 Continue` was sent if
+    /// asked for): its body may be buffered.
+    head_checked: bool,
     /// Lingering-close state: `(started, last input seen)`.
     linger: Option<(Instant, Instant)>,
 }
@@ -61,7 +68,7 @@ impl HttpConn {
             request_started: Some(now),
             eof: false,
             close_after_flush: false,
-            continue_sent: false,
+            head_checked: false,
             linger: None,
         }
     }
@@ -95,7 +102,34 @@ impl HttpConn {
     }
 
     fn headers_complete(&self) -> bool {
-        find_subsequence(&self.read_buf, b"\r\n\r\n").is_some()
+        header_end(&self.read_buf).is_some()
+    }
+
+    /// A request is pending with its headers in but not its body: vet the
+    /// headers now ([`gate`]), before buffering (up to 1 MiB of) body or
+    /// inviting it with `100 Continue`. A refused request closes the
+    /// connection, since its unread body cannot be skipped.
+    fn vet_pending_head(&mut self, token: Option<&str>) {
+        if self.head_checked {
+            return;
+        }
+        let Some(end) = header_end(&self.read_buf) else {
+            return;
+        };
+        // `try_frame` already reports a malformed head as an error.
+        let Ok(head) = parse_head(&self.read_buf[..end]) else {
+            return;
+        };
+        if let Some(status) = gate(&head, token) {
+            self.read_buf.clear();
+            self.queue_write(&refusal(status, false));
+            self.close_after_flush = true;
+        } else {
+            self.head_checked = true;
+            if head.expect_continue {
+                self.queue_write(CONTINUE_RESPONSE);
+            }
+        }
     }
 
     /// Read until the socket would block, EOF, or `MAX_READ_PER_POLL` bytes.
@@ -162,6 +196,7 @@ pub struct McpServer {
     max_connections: usize,
     idle_timeout: Duration,
     header_timeout: Duration,
+    request_timeout: Duration,
     linger_quiet: Duration,
     linger_max: Duration,
     /// Optional bearer token required on every request.
@@ -180,6 +215,7 @@ impl McpServer {
             max_connections: DEFAULT_MAX_CONNECTIONS,
             idle_timeout: Duration::from_secs(IDLE_TIMEOUT_SECS),
             header_timeout: Duration::from_secs(HEADER_TIMEOUT_SECS),
+            request_timeout: Duration::from_secs(REQUEST_TIMEOUT_SECS),
             linger_quiet: Duration::from_millis(LINGER_QUIET_MS),
             linger_max: Duration::from_secs(LINGER_MAX_SECS),
             token: token.filter(|t| !t.is_empty()),
@@ -214,6 +250,7 @@ impl McpServer {
         let token = self.token.clone();
         let idle_timeout = self.idle_timeout;
         let header_timeout = self.header_timeout;
+        let request_timeout = self.request_timeout;
         let (linger_quiet, linger_max) = (self.linger_quiet, self.linger_max);
         let mut to_remove = Vec::new();
 
@@ -226,13 +263,15 @@ impl McpServer {
             }
 
             // Slowloris guard: a request whose header section has not
-            // completed within the window gets a 408 and the connection closes.
-            if !conn.close_after_flush
-                && conn
-                    .request_started
-                    .is_some_and(|t| t.elapsed() >= header_timeout)
-                && !conn.headers_complete()
-            {
+            // completed within the header window, or that is still incomplete
+            // after the request window, gets a 408 and the connection closes.
+            let late = conn
+                .request_started
+                .map(|t| t.elapsed())
+                .is_some_and(|age| {
+                    age >= request_timeout || (age >= header_timeout && !conn.headers_complete())
+                });
+            if !conn.close_after_flush && late {
                 conn.read_buf.clear();
                 conn.queue_write(&build_response(408, false, &[], None, b""));
                 conn.close_after_flush = true;
@@ -250,12 +289,7 @@ impl McpServer {
                 while conn.write_buf.len() < MAX_WRITE_BUF && !conn.read_buf.is_empty() {
                     match try_frame(&mut conn.read_buf) {
                         Framing::Pending => {
-                            // Headers are in but the body is not: a client
-                            // that sent `Expect: 100-continue` is waiting.
-                            if !conn.continue_sent && expects_continue(&conn.read_buf) {
-                                conn.queue_write(CONTINUE_RESPONSE);
-                                conn.continue_sent = true;
-                            }
+                            conn.vet_pending_head(token.as_deref());
                             break;
                         },
                         Framing::Error(code) => {
@@ -265,9 +299,10 @@ impl McpServer {
                             break;
                         },
                         Framing::Ready(req) => {
-                            conn.continue_sent = false;
-                            let keep_alive = req.keep_alive;
-                            conn.queue_write(&handle_http_request(&req, disp, token.as_deref()));
+                            conn.head_checked = false;
+                            let (response, keep_alive) =
+                                handle_http_request(&req, disp, token.as_deref());
+                            conn.queue_write(&response);
                             // The next request's clock starts when its first
                             // byte is already buffered (pipelining) or arrives.
                             conn.request_started = (!conn.read_buf.is_empty()).then(Instant::now);
@@ -278,7 +313,11 @@ impl McpServer {
                         },
                     }
                 }
-                if conn.eof {
+                // Peer half-closed: finish once every complete request it sent
+                // has been answered (backpressure may have paused the loop
+                // with pipelined requests still buffered).
+                let paused = conn.write_buf.len() >= MAX_WRITE_BUF && !conn.read_buf.is_empty();
+                if conn.eof && !paused {
                     conn.close_after_flush = true;
                 }
                 conn.flush_writes();
@@ -365,64 +404,85 @@ fn is_json_content_type(ct: Option<&str>) -> bool {
     })
 }
 
-fn handle_http_request(
-    req: &HttpRequest,
-    disp: &mut dyn ToolDispatcher,
-    token: Option<&str>,
-) -> Vec<u8> {
-    // Browser-originated attacks: a cross-site page can POST to loopback
-    // (simple `text/plain` requests skip CORS preflight) and DNS rebinding can
-    // make a foreign hostname resolve to 127.0.0.1. Reject both up front.
-    if !origin_allowed(req.origin.as_deref()) || !host_allowed(req.host.as_deref()) {
-        return build_response(403, false, &[], None, b"");
+/// The checks that depend only on the header section, in order: Origin /
+/// Host (browser attacks: a cross-site page can POST to loopback -- simple
+/// `text/plain` requests skip CORS preflight -- and DNS rebinding can make a
+/// foreign hostname resolve to 127.0.0.1), the bearer token, then the
+/// route and media type of a `POST`. Returns the refusal status, or `None`
+/// when the request may proceed.
+///
+/// The server runs this as soon as the headers are in, before buffering a
+/// body or sending `100 Continue`, and again on the complete request.
+fn gate(head: &RequestHead, token: Option<&str>) -> Option<u16> {
+    if !origin_allowed(head.origin.as_deref()) || !host_allowed(head.host.as_deref()) {
+        return Some(403);
     }
-
-    // Bearer-token gate (only POST carries a body worth protecting, but we
-    // check every method for consistency).
     if let Some(expected) = token {
-        let ok = req
+        let ok = head
             .auth_bearer
             .as_deref()
             .is_some_and(|got| oasis_types::util::ct_eq(got.as_bytes(), expected.as_bytes()));
         if !ok {
-            return build_response(
-                401,
-                req.keep_alive,
-                &[("WWW-Authenticate", "Bearer")],
-                None,
-                b"",
-            );
+            return Some(401);
         }
     }
+    if head.method == "POST" {
+        if !path_matches(&head.path) {
+            return Some(404);
+        }
+        // Requiring `application/json` forces a CORS preflight for any
+        // cross-origin browser request (which we never approve).
+        if !is_json_content_type(head.content_type.as_deref()) {
+            return Some(415);
+        }
+    }
+    None
+}
 
-    match req.method.as_str() {
-        "POST" => {
-            if !path_matches(&req.path) {
-                return build_response(404, req.keep_alive, &[], None, b"");
-            }
-            // Requiring `application/json` forces a CORS preflight for any
-            // cross-origin browser request (which we never approve).
-            if !is_json_content_type(req.content_type.as_deref()) {
-                return build_response(415, req.keep_alive, &[], None, b"");
-            }
-            match handle_message(&req.body, disp) {
-                Handled::Notification => build_response(202, req.keep_alive, &[], None, b""),
-                Handled::Response(body) => {
-                    build_response(200, req.keep_alive, &[], Some("application/json"), &body)
-                },
-            }
+/// The response for a [`gate`] refusal.
+fn refusal(status: u16, keep_alive: bool) -> Vec<u8> {
+    let extra: &[(&str, &str)] = if status == 401 {
+        &[("WWW-Authenticate", "Bearer")]
+    } else {
+        &[]
+    };
+    build_response(status, keep_alive, extra, None, b"")
+}
+
+/// Methods advertised in `Allow` (no server-initiated SSE stream, no
+/// sessions to delete).
+const ALLOW: (&str, &str) = ("Allow", "POST, OPTIONS");
+
+/// Answer one complete request. Returns the response bytes and whether the
+/// connection stays open (a `403` always closes it).
+fn handle_http_request(
+    req: &HttpRequest,
+    disp: &mut dyn ToolDispatcher,
+    token: Option<&str>,
+) -> (Vec<u8>, bool) {
+    let keep_alive = req.head.keep_alive;
+    if let Some(status) = gate(&req.head, token) {
+        let keep_alive = keep_alive && status != 403;
+        return (refusal(status, keep_alive), keep_alive);
+    }
+    match req.head.method.as_str() {
+        "POST" => match handle_message(&req.body, disp) {
+            Handled::Notification => (build_response(202, keep_alive, &[], None, b""), keep_alive),
+            Handled::Response(body) => (
+                build_response(200, keep_alive, &[], Some("application/json"), &body),
+                keep_alive,
+            ),
         },
-        // No server-initiated SSE stream: 405 is spec-permitted here.
-        "GET" => build_response(405, req.keep_alive, &[("Allow", "POST, DELETE")], None, b""),
-        "DELETE" => build_response(200, req.keep_alive, &[], None, b""),
-        "OPTIONS" => build_response(
-            204,
-            req.keep_alive,
-            &[("Allow", "POST, GET, DELETE, OPTIONS")],
-            None,
-            b"",
+        "OPTIONS" => (
+            build_response(204, keep_alive, &[ALLOW], None, b""),
+            keep_alive,
         ),
-        _ => build_response(405, req.keep_alive, &[("Allow", "POST, DELETE")], None, b""),
+        // GET (no SSE stream), DELETE (no sessions are issued) and anything
+        // else: 405 is spec-permitted for both GET and DELETE.
+        _ => (
+            build_response(405, keep_alive, &[ALLOW], None, b""),
+            keep_alive,
+        ),
     }
 }
 
@@ -588,7 +648,90 @@ mod tests {
     fn get_returns_405() {
         let resp = roundtrip(b"GET /mcp HTTP/1.1\r\n\r\n");
         assert!(resp.starts_with("HTTP/1.1 405"));
-        assert!(resp.contains("Allow: POST, DELETE"));
+        assert!(resp.contains("Allow: POST, OPTIONS"));
+        // DELETE: no sessions are issued, so there is nothing to delete.
+        let resp = roundtrip(b"DELETE /mcp HTTP/1.1\r\n\r\n");
+        assert!(resp.starts_with("HTTP/1.1 405"), "{resp}");
+        // OPTIONS advertises the same set.
+        let resp = roundtrip(b"OPTIONS /mcp HTTP/1.1\r\n\r\n");
+        assert!(resp.contains("Allow: POST, OPTIONS"), "{resp}");
+    }
+
+    #[test]
+    fn unauthorized_body_is_refused_before_it_is_buffered() {
+        // Headers announce a large body and ask for `100 Continue`: without a
+        // token the server answers 401 at once instead of inviting the body.
+        let head = "POST /mcp HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\n\
+                    Expect: 100-continue\r\nContent-Length: 900000\r\n\r\n";
+        let (mut server, pipe) = server_with(head.as_bytes(), Some("sekret"));
+        let mut disp = StubDispatcher;
+        server.poll(&mut disp);
+        server.poll(&mut disp);
+        let resp = last_http_response(&pipe);
+        assert!(resp.starts_with("HTTP/1.1 401"), "{resp}");
+        assert!(!resp.contains("100 Continue"), "{resp}");
+        // With the token, the same headers get the interim response.
+        let authed = head.replace("Expect:", "Authorization: Bearer sekret\r\nExpect:");
+        let (mut server, pipe) = server_with(authed.as_bytes(), Some("sekret"));
+        server.poll(&mut disp);
+        server.poll(&mut disp);
+        assert!(last_http_response(&pipe).starts_with("HTTP/1.1 100 Continue"));
+    }
+
+    #[test]
+    fn trickled_body_times_out_with_408() {
+        // Headers complete, body never finishes: the request deadline (not
+        // just the header deadline) closes the connection.
+        let head = "POST /mcp HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\n\
+                    Content-Length: 100\r\n\r\n{";
+        let (mut server, pipe) = server_with(head.as_bytes(), None);
+        server.linger_quiet = Duration::ZERO;
+        let mut disp = StubDispatcher;
+        server.poll(&mut disp);
+        server.poll(&mut disp);
+        assert_eq!(server.connection_count(), 1);
+        server.request_timeout = Duration::ZERO;
+        server.poll(&mut disp);
+        assert!(last_http_response(&pipe).starts_with("HTTP/1.1 408"));
+        assert_eq!(server.connection_count(), 0);
+    }
+
+    #[test]
+    fn early_refusal_closes_the_connection() {
+        // Refused on its headers alone, with the body still unread: the
+        // server cannot resync, so it closes instead of keeping alive.
+        let head = "POST /mcp HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: text/plain\r\n\
+                    Content-Length: 500\r\n\r\n";
+        let (mut server, pipe) = server_with(head.as_bytes(), None);
+        let mut disp = StubDispatcher;
+        server.poll(&mut disp);
+        server.poll(&mut disp);
+        let resp = last_http_response(&pipe);
+        assert!(resp.starts_with("HTTP/1.1 415"), "{resp}");
+        assert!(resp.contains("Connection: close"), "{resp}");
+    }
+
+    #[test]
+    fn half_close_with_backlog_still_answers_every_request() {
+        let call = r#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"big"}}"#;
+        let mut input = Vec::new();
+        for _ in 0..8 {
+            input.extend_from_slice(&json_post(call));
+        }
+        let (mut server, pipe) = server_with(&input, None);
+        lock(&pipe).write_blocked = true;
+        lock(&pipe).read_error = None;
+        let mut disp = BigDispatcher;
+        server.poll(&mut disp);
+        server.poll(&mut disp);
+        // The peer shuts down its sending side while responses are backed up.
+        server.conns[0].eof = true;
+        lock(&pipe).write_blocked = false;
+        for _ in 0..20 {
+            server.poll(&mut disp);
+        }
+        let resp = last_http_response(&pipe);
+        assert_eq!(resp.matches("HTTP/1.1 200 OK").count(), 8);
     }
 
     #[test]

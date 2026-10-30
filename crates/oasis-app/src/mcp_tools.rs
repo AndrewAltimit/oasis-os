@@ -298,6 +298,10 @@ impl AppDispatcher<'_> {
         let Some(path) = arg_str(args, "path") else {
             return ToolResult::error("missing required argument: path");
         };
+        // One request per line: a newline would smuggle in a second one.
+        if path.contains(['\n', '\r']) {
+            return ToolResult::error("invalid path: contains a line break");
+        }
         let request = format!("play_file {path}");
         match crate::media_controller::queue_request(self.vfs, &request) {
             Ok(()) => ToolResult::text(format!("Queued playback: {path}")),
@@ -533,8 +537,11 @@ impl ToolDispatcher for AppDispatcher<'_> {
     }
 
     fn call_tool(&mut self, name: &str, args: Value) -> ToolResult {
-        self.state.agent_activity.record(name);
-        log::info!("MCP tool call: {name}");
+        // The name is client-controlled and drawn by the agent overlay every
+        // frame: cap what is recorded / logged.
+        let shown: String = name.chars().take(64).collect();
+        self.state.agent_activity.record(&shown);
+        log::info!("MCP tool call: {shown}");
         match name {
             "list_apps" => self.tool_list_apps(),
             "open_app" => self.tool_open_app(&args),

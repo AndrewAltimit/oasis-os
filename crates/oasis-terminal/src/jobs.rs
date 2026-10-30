@@ -11,6 +11,9 @@ use oasis_types::error::{OasisError, Result};
 
 use crate::interpreter::{CommandOutput, CommandRegistry, Environment};
 
+/// Maximum background jobs waiting to run (running or stopped).
+pub(crate) const MAX_PENDING_JOBS: usize = 64;
+
 /// Current state of a job.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum JobState {
@@ -263,9 +266,23 @@ pub fn parse_job_spec(spec: &str, manager: &JobManager) -> Option<usize> {
 
 impl CommandRegistry {
     /// Queue `cmd` as a background job (trailing `&`).
-    pub(crate) fn queue_job(&self, cmd: &str) -> CommandOutput {
-        let id = self.jobs.borrow_mut().add_job(cmd.to_string());
-        CommandOutput::Text(format!("[{id}] {cmd}"))
+    /// Queue `cmd` as a background job. At most [`MAX_PENDING_JOBS`] jobs
+    /// may be waiting (running or stopped), so a loop of `cmd &` cannot grow
+    /// the job table without bound.
+    pub(crate) fn queue_job(&self, cmd: &str) -> Result<CommandOutput> {
+        let mut jobs = self.jobs.borrow_mut();
+        let pending = jobs
+            .list_jobs()
+            .iter()
+            .filter(|j| !matches!(j.state, JobState::Done(_)))
+            .count();
+        if pending >= MAX_PENDING_JOBS {
+            return Err(OasisError::Command(
+                format!("jobs: too many background jobs (max {MAX_PENDING_JOBS})").into(),
+            ));
+        }
+        let id = jobs.add_job(cmd.to_string());
+        Ok(CommandOutput::Text(format!("[{id}] {cmd}")))
     }
 
     /// Run the oldest runnable background job, if any.
@@ -307,6 +324,7 @@ impl CommandRegistry {
             // `fg` echoes the command like an interactive shell.
             outputs.push(CommandOutput::Text(cmd.to_string()));
         }
+        self.begin_top_level();
         let code = match self.execute_nested(cmd, env) {
             Ok(output) => {
                 outputs.push(output);

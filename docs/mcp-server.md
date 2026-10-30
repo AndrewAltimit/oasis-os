@@ -22,12 +22,15 @@ OASIS is the long-running process that owns the UI and the framebuffer, so it
 
 The server implements the minimal conformant subset for a single local client:
 `POST /mcp` with a JSON-RPC request returns a single `application/json`
-response; notifications (messages without an `id`) return `202` and are never
-answered — a request-only method such as `tools/call` sent without an `id` is
-ignored, not executed; invalid request objects (and batches) get JSON-RPC
-`-32600`; `Expect: 100-continue` gets an interim `100 Continue`; `GET /mcp`
-returns `405` (there is no
-server-initiated SSE stream); no session IDs are issued. It is driven by
+response; notifications (messages without an `id`) and JSON-RPC responses
+posted by the client return `202` with no body — a request-only method such as
+`tools/call` sent without an `id` is ignored, not executed; invalid request
+objects (batches, a `null` id, which MCP forbids) get JSON-RPC `-32600`, and
+`tools/call` params that are not an object get `-32602`; `Expect:
+100-continue` gets an interim `100 Continue` once the headers have passed the
+checks below; `GET` and `DELETE` return `405` with `Allow: POST, OPTIONS`
+(there is no server-initiated SSE stream and no session IDs are issued, so
+there is no session to delete). It is driven by
 per-frame polling on the main thread — no async runtime, no background threads —
 mirroring the existing remote-terminal and FTP servers.
 
@@ -154,14 +157,20 @@ browser. Without further checks a page could reach the server in two ways:
    browser's point of view (so the response becomes readable too).
 
 Because the token is optional, the server enforces these request-level rules
-on every request, before the token check and before any dispatch:
+on every request, before the token check and before any dispatch. They need
+only the header section, so they run as soon as the headers arrive -- before
+any body is buffered or a `100 Continue` is sent; a request refused at that
+point gets its error and the connection closes (its unread body cannot be
+skipped):
 
 | Rule | Response |
 |------|----------|
 | `Origin` present and not `http(s)://` + `127.0.0.1` / `localhost` / `[::1]` (optional `:port`); `Origin: null` is rejected | `403` |
 | `Host` present and not `127.0.0.1` / `localhost` / `[::1]` (optional `:port`) | `403` |
 | `POST` whose `Content-Type` media type is not `application/json` (parameters such as `; charset=utf-8` are fine; missing is rejected) | `415` |
-| Malformed, non-decimal or duplicate `Content-Length` | `400` |
+| Malformed, non-decimal or duplicate `Content-Length`; a header line without a colon or with whitespace in or before its name (incl. obs-fold continuation lines); a request line that is not `METHOD target version` | `400` |
+| Any `Transfer-Encoding` (only `Content-Length` bodies are supported) | `411` |
+| A version other than `HTTP/1.1` / `HTTP/1.0` | `505` |
 
 Non-browser MCP clients (Claude Code, `curl`) send a loopback `Host`, no
 `Origin` and `application/json`, so they are unaffected. Requiring
@@ -174,12 +183,14 @@ Resource limits (the server has only 4 connection slots, so these bound what a
 misbehaving local client can hold):
 
 - A request's header section must complete within **10 s** of the connection
-  opening (or of the first byte of a follow-up request); otherwise the server
-  replies `408` and closes. Idle keep-alive connections between requests fall
-  under the separate 300 s idle timeout.
+  opening (or of the first byte of a follow-up request), and the whole request
+  (headers and body) within **30 s**; otherwise the server replies `408` and
+  closes. Idle keep-alive connections between requests are closed after
+  **60 s** without input.
 - Each poll reads until the socket would block, capped at **64 KiB** per
   connection, so large bodies do not trickle in at 4 KiB per frame.
-- Headers are capped at 16 KiB (`431`) and bodies at 1 MiB (`413`).
+- Headers are capped at 16 KiB (`431`, whether or not the whole header block
+  arrives in one read) and bodies at 1 MiB (`413`).
 - A connection closed after its final response (an error, `Connection: close`,
   HTTP/1.0) *lingers*: further input is read and discarded (never buffered)
   until the peer has been quiet for 100 ms, reaches EOF, or 2 s pass. Closing
@@ -187,7 +198,14 @@ misbehaving local client can hold):
   destroy the `413` a client streaming an oversized body is about to read.
 - Once **4 MiB** of responses are queued for a peer that is not reading them,
   the server stops reading and dispatching further requests on that
-  connection until the backlog drains (backpressure, not data loss).
+  connection until the backlog drains (backpressure, not data loss). A peer
+  that half-closes meanwhile still gets an answer to every complete request it
+  sent.
+- `401` and the `404` / `405` / `415` answers to a complete request keep the
+  connection alive; `403` always closes it.
+- The app records at most 64 characters of a tool name for the activity pill
+  and the log, and `play_media` refuses paths containing line breaks (the
+  media request file is line-based).
 
 Setting `OASIS_MCP_TOKEN` is still recommended when other local users or
 processes on the device are not trusted: the checks above stop browsers, not a

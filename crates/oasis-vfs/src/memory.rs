@@ -6,10 +6,11 @@
 use std::borrow::Cow;
 use std::collections::BTreeMap;
 
-use oasis_types::error::{OasisError, Result};
+use oasis_types::error::{OasisError, Result, VfsError};
 
 use crate::{
     AccessMode, EntryKind, FilePermissions, RenamePlan, Vfs, VfsContext, VfsEntry, VfsMetadata,
+    normalize_path as normalize, parent_path as parent,
 };
 
 #[derive(Debug, Clone)]
@@ -49,60 +50,17 @@ impl Default for MemoryVfs {
     }
 }
 
-/// Check whether a path is already in normal form (starts with `/`, no `//`,
-/// no trailing `/` unless root).
-fn is_normalized(path: &str) -> bool {
-    if !path.starts_with('/') {
-        return false;
-    }
-    if path.len() > 1 && path.ends_with('/') {
-        return false;
-    }
-    !path.contains("//")
-}
-
-/// Normalize a path: ensure leading `/`, collapse `//`, strip trailing `/`
-/// (except for root). Returns the input unchanged (zero-alloc) when already
-/// in normal form.
-fn normalize(path: &str) -> Cow<'_, str> {
-    if is_normalized(path) {
-        return Cow::Borrowed(path);
-    }
-    let path_str = if path.starts_with('/') {
-        Cow::Borrowed(path)
-    } else {
-        Cow::Owned(format!("/{path}"))
-    };
-    // Collapse repeated slashes.
-    let mut result = String::with_capacity(path_str.len());
-    let mut prev_slash = false;
-    for ch in path_str.chars() {
-        if ch == '/' {
-            if !prev_slash {
-                result.push(ch);
-            }
-            prev_slash = true;
-        } else {
-            result.push(ch);
-            prev_slash = false;
+impl MemoryVfs {
+    /// Fail unless `path` is an existing directory (the parent check of
+    /// `write` / `mkdir`: nothing may be created beneath a file).
+    fn require_dir(&self, path: &str) -> Result<()> {
+        match self.nodes.get(path) {
+            Some(Node::Dir) => Ok(()),
+            Some(Node::File(_)) => Err(VfsError::NotADirectory { path: path.into() }.into()),
+            None => Err(OasisError::Vfs(
+                format!("parent directory does not exist: {path}").into(),
+            )),
         }
-    }
-    // Strip trailing slash unless root.
-    if result.len() > 1 && result.ends_with('/') {
-        result.pop();
-    }
-    Cow::Owned(result)
-}
-
-/// Return the parent of a normalized path.
-fn parent(path: &str) -> &str {
-    if path == "/" {
-        return "/";
-    }
-    match path.rfind('/') {
-        Some(0) => "/",
-        Some(i) => &path[..i],
-        None => "/",
     }
 }
 
@@ -112,7 +70,7 @@ impl Vfs for MemoryVfs {
     }
 
     fn readdir(&self, path: &str) -> Result<Vec<VfsEntry>> {
-        let path = normalize(path);
+        let path = normalize(path)?;
         match self.nodes.get(path.as_ref()) {
             Some(Node::Dir) => {
                 self.check_permission(path.as_ref(), AccessMode::Read)?;
@@ -162,7 +120,7 @@ impl Vfs for MemoryVfs {
     }
 
     fn read(&self, path: &str) -> Result<Vec<u8>> {
-        let path = normalize(path);
+        let path = normalize(path)?;
         match self.nodes.get(path.as_ref()) {
             Some(Node::File(data)) => {
                 self.check_permission(path.as_ref(), AccessMode::Read)?;
@@ -174,19 +132,22 @@ impl Vfs for MemoryVfs {
     }
 
     fn write(&mut self, path: &str, data: &[u8]) -> Result<()> {
-        let path = normalize(path);
+        let path = normalize(path)?;
         // Ensure parent directory exists.
         let par = parent(&path);
-        if !self.nodes.contains_key(par) {
-            return Err(OasisError::Vfs(
-                format!("parent directory does not exist: {par}").into(),
-            ));
-        }
+        self.require_dir(par)?;
         // Check parent directory write permission.
         self.check_permission(par, AccessMode::Write)?;
         // Check target file write permission (if it already exists).
-        if self.nodes.contains_key(path.as_ref()) {
-            self.check_permission(path.as_ref(), AccessMode::Write)?;
+        match self.nodes.get(path.as_ref()) {
+            Some(Node::Dir) => {
+                return Err(VfsError::IsDirectory {
+                    path: path.into_owned(),
+                }
+                .into());
+            },
+            Some(Node::File(_)) => self.check_permission(path.as_ref(), AccessMode::Write)?,
+            None => {},
         }
         let owned = path.into_owned();
         self.permissions
@@ -197,7 +158,7 @@ impl Vfs for MemoryVfs {
     }
 
     fn stat(&self, path: &str) -> Result<VfsMetadata> {
-        let path = normalize(path);
+        let path = normalize(path)?;
         match self.nodes.get(path.as_ref()) {
             Some(Node::File(data)) => Ok(VfsMetadata {
                 kind: EntryKind::File,
@@ -212,15 +173,20 @@ impl Vfs for MemoryVfs {
     }
 
     fn mkdir(&mut self, path: &str) -> Result<()> {
-        let path = normalize(path);
-        if self.nodes.contains_key(path.as_ref()) {
-            return Ok(()); // Already exists, no error.
+        let path = normalize(path)?;
+        match self.nodes.get(path.as_ref()) {
+            Some(Node::Dir) => return Ok(()), // Already exists, no error.
+            Some(Node::File(_)) => {
+                return Err(OasisError::Vfs(format!("file exists: {path}").into()));
+            },
+            None => {},
         }
         // Ensure parent exists (create parents recursively).
         let par = parent(&path).to_string();
-        if par != path.as_ref() && !self.nodes.contains_key(&par) {
+        if !self.nodes.contains_key(&par) {
             self.mkdir(&par)?;
         }
+        self.require_dir(&par)?;
         // Check parent directory write permission.
         self.check_permission(&par, AccessMode::Write)?;
         let owned = path.into_owned();
@@ -232,7 +198,7 @@ impl Vfs for MemoryVfs {
     }
 
     fn remove(&mut self, path: &str) -> Result<()> {
-        let path = normalize(path);
+        let path = normalize(path)?;
         if path.as_ref() == "/" {
             return Err(OasisError::Vfs("cannot remove root".into()));
         }
@@ -270,8 +236,8 @@ impl Vfs for MemoryVfs {
     }
 
     fn rename(&mut self, from: &str, to: &str) -> Result<()> {
-        let from = normalize(from);
-        let to = normalize(to);
+        let from = normalize(from)?;
+        let to = normalize(to)?;
         if self.validate_rename(&from, &to)? == RenamePlan::NoOp {
             return Ok(());
         }
@@ -308,12 +274,11 @@ impl Vfs for MemoryVfs {
     }
 
     fn exists(&self, path: &str) -> bool {
-        let path = normalize(path);
-        self.nodes.contains_key(path.as_ref())
+        normalize(path).is_ok_and(|path| self.nodes.contains_key(path.as_ref()))
     }
 
     fn get_permissions(&self, path: &str) -> Result<FilePermissions> {
-        let path = normalize(path);
+        let path = normalize(path)?;
         if !self.nodes.contains_key(path.as_ref()) {
             return Err(OasisError::Vfs(format!("no such path: {path}").into()));
         }
@@ -328,7 +293,7 @@ impl Vfs for MemoryVfs {
     }
 
     fn set_permissions(&mut self, path: &str, perms: FilePermissions) -> Result<()> {
-        let path = normalize(path);
+        let path = normalize(path)?;
         if !self.nodes.contains_key(path.as_ref()) {
             return Err(OasisError::Vfs(format!("no such path: {path}").into()));
         }
@@ -486,24 +451,44 @@ mod tests {
     // -- robustness / edge cases ----------------------------------------
 
     #[test]
-    fn dotdot_is_not_resolved() {
-        // normalize() does NOT resolve `..` -- this documents the current behavior.
+    fn dotdot_is_resolved_lexically() {
         let mut vfs = MemoryVfs::new();
         vfs.mkdir("/a/b").unwrap();
-        // Writing to /a/b/../c creates a literal `..` directory component.
-        let result = vfs.write("/a/b/../c/file", b"data");
-        // Should fail because /a/b/.. is not a real directory.
-        assert!(result.is_err());
+        // /a/b/../c/file is /a/c/file, whose parent does not exist.
+        assert!(vfs.write("/a/b/../c/file", b"data").is_err());
+        vfs.write("/a/b/../file", b"data").unwrap();
+        assert_eq!(vfs.read("/a/file").unwrap(), b"data");
+        // No literal `..` entry is ever created.
+        assert_eq!(vfs.readdir("/a/b").unwrap().len(), 0);
     }
 
     #[test]
     fn dot_component_in_path() {
         let mut vfs = MemoryVfs::new();
         vfs.mkdir("/dir").unwrap();
-        // /dir/./file -- the `.` is kept literally.
-        let result = vfs.write("/dir/./file", b"data");
-        // Should fail (no `./` directory exists as parent).
-        assert!(result.is_err());
+        // /dir/./file is /dir/file.
+        vfs.write("/dir/./file", b"data").unwrap();
+        assert_eq!(vfs.read("/dir/file").unwrap(), b"data");
+    }
+
+    #[test]
+    fn write_onto_directory_keeps_the_directory() {
+        let mut vfs = MemoryVfs::new();
+        vfs.mkdir("/dir/sub").unwrap();
+        assert!(vfs.write("/dir", b"data").is_err());
+        assert_eq!(vfs.stat("/dir").unwrap().kind, EntryKind::Directory);
+        assert!(vfs.exists("/dir/sub"));
+    }
+
+    #[test]
+    fn nothing_is_created_beneath_a_file() {
+        let mut vfs = MemoryVfs::new();
+        vfs.write("/f", b"x").unwrap();
+        assert!(vfs.write("/f/child", b"y").is_err());
+        assert!(vfs.mkdir("/f/sub").is_err());
+        assert!(vfs.mkdir("/f").is_err(), "mkdir onto a file");
+        assert_eq!(vfs.read("/f").unwrap(), b"x");
+        assert!(!vfs.exists("/f/child") && !vfs.exists("/f/sub"));
     }
 
     #[test]
@@ -607,9 +592,8 @@ mod tests {
     fn write_to_dir_path_fails() {
         let mut vfs = MemoryVfs::new();
         vfs.mkdir("/dir").unwrap();
-        // Trying to write to a path that is a directory should fail
-        // (or overwrite with file -- depends on impl). Check it doesn't panic.
-        let _ = vfs.write("/dir", b"data");
+        assert!(vfs.write("/dir", b"data").is_err());
+        assert_eq!(vfs.stat("/dir").unwrap().kind, EntryKind::Directory);
     }
 
     #[test]
@@ -684,13 +668,22 @@ mod tests {
     #[test]
     fn traversal_mkdir_dotdot() {
         let mut vfs = MemoryVfs::new();
-        // mkdir /a/../b should fail -- creates literal ".."
-        // component, parent "/.." does not exist.
-        let result = vfs.mkdir("/a/../b");
-        // Current behavior: mkdir creates parents recursively,
-        // so ".." becomes a literal directory name.
-        // This is acceptable since MemoryVfs does not resolve "..".
-        assert!(vfs.exists("/a") || result.is_err());
+        // `/a/../b` is `/b`: `..` is resolved, never stored literally.
+        vfs.mkdir("/a/../b").unwrap();
+        assert!(vfs.exists("/b"));
+        assert!(!vfs.exists("/a"));
+        // Climbing above the root is an error, not a clamp.
+        assert!(vfs.mkdir("/../c").is_err());
+        assert!(!vfs.exists("/c"));
+    }
+
+    #[test]
+    fn nul_byte_in_path_is_rejected() {
+        let mut vfs = MemoryVfs::new();
+        assert!(vfs.write("/a\0b", b"x").is_err());
+        assert!(vfs.mkdir("/d\0").is_err());
+        assert!(!vfs.exists("/a\0b"));
+        assert!(vfs.readdir("/").unwrap().is_empty());
     }
 
     // -- Concurrent access simulation tests --
@@ -1066,14 +1059,14 @@ mod tests {
         proptest! {
             #[test]
             fn normalize_is_idempotent(path in "[/a-z0-9_.]{1,50}") {
-                let once = normalize(&path);
-                let twice = normalize(&once);
+                let Ok(once) = normalize(&path) else { return Ok(()) };
+                let twice = normalize(&once).unwrap();
                 prop_assert_eq!(&once, &twice, "normalize must be idempotent");
             }
 
             #[test]
             fn normalize_never_has_double_slashes(path in "[/a-z0-9_.]{1,50}") {
-                let normed = normalize(&path);
+                let Ok(normed) = normalize(&path) else { return Ok(()) };
                 prop_assert!(
                     !normed.contains("//"),
                     "normalized path must not contain //: {normed}"
@@ -1082,7 +1075,7 @@ mod tests {
 
             #[test]
             fn normalize_starts_with_slash(path in "[a-z0-9_./]{0,50}") {
-                let normed = normalize(&path);
+                let Ok(normed) = normalize(&path) else { return Ok(()) };
                 prop_assert!(
                     normed.starts_with('/'),
                     "normalized path must start with /: {normed}"
@@ -1091,7 +1084,7 @@ mod tests {
 
             #[test]
             fn normalize_no_trailing_slash_unless_root(path in "[/a-z0-9_.]{1,50}") {
-                let normed = normalize(&path);
+                let Ok(normed) = normalize(&path) else { return Ok(()) };
                 if normed != "/" {
                     prop_assert!(
                         !normed.ends_with('/'),
@@ -1158,7 +1151,7 @@ mod tests {
                 segments in proptest::collection::vec("[a-z]{1,6}", 1..5),
             ) {
                 let joined = format!("/{}", segments.join("/"));
-                let normed = normalize(&joined);
+                let normed = normalize(&joined).unwrap();
                 // Split on '/' skipping the leading empty component.
                 let parts: Vec<&str> = normed.split('/').filter(|s| !s.is_empty()).collect();
                 prop_assert_eq!(parts.len(), segments.len());
