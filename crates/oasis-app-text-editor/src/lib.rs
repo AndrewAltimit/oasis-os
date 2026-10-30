@@ -8,7 +8,7 @@
 //! (Normal / Insert / Find / Replace / prompt modes).
 
 use oasis_app_core::render::{hide_app_sdi, render_app_chrome};
-use oasis_app_core::{App, AppAction, AppRequest, ContentState};
+use oasis_app_core::{App, AppAction, AppRequest, ContentState, MAX_WHEEL_STEPS};
 use oasis_sdi::SdiRegistry;
 use oasis_skin::ActiveTheme;
 use oasis_types::backend::{InMemoryClipboard, SdiBackend};
@@ -353,11 +353,11 @@ impl App for TextEditorApp {
             .buffer
             .line_count()
             .saturating_sub(self.page_lines().max(1));
-        let step = delta.unsigned_abs() as usize * WHEEL_LINES;
+        let step = delta.unsigned_abs().min(MAX_WHEEL_STEPS) as usize * WHEEL_LINES;
         let scroll = if delta < 0 {
             self.content.scroll.saturating_sub(step)
         } else {
-            (self.content.scroll + step).min(max_scroll)
+            self.content.scroll.saturating_add(step).min(max_scroll)
         };
         let changed = scroll != self.content.scroll;
         self.content.scroll = scroll;

@@ -33,9 +33,9 @@ pub const VOLUME_STEP: u8 = 10;
 /// Volume assumed until the radio subsystem publishes one.
 const DEFAULT_VOLUME: u8 = 80;
 
-/// Status refreshes an optimistic volume survives without the published
-/// status confirming it (~1 s of per-frame refreshes).
-const VOLUME_OVERRIDE_TTL: u8 = 60;
+/// Status polls an optimistic volume survives without the published
+/// status confirming it (~1 s at one poll per [`STATUS_POLL_MS`]).
+const VOLUME_OVERRIDE_TTL: u8 = 4;
 
 /// How often (ms of `tick` time) the app re-reads the published radio
 /// status. The radio subsystem republishes it about this often.
