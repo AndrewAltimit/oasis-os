@@ -86,7 +86,7 @@ fn test_tv_guide_launch_shows_loading() -> bool {
     assert!(no_error, "should have no error initially");
     assert!(not_attempted, "fetch_attempted should be false initially");
     assert!(
-        runner.lines.iter().any(|l| l.contains("Loading")),
+        runner.lines().iter().any(|l| l.contains("Loading")),
         "runner lines should contain 'Loading'",
     );
 
@@ -191,7 +191,9 @@ fn test_tv_guide_tune_request_emitted() -> bool {
     use oasis_core::input::Button;
     runner.handle_input(&Button::Confirm, &vfs);
 
-    let request = runner.take_pending_request();
+    let mut requests = Vec::new();
+    runner.drain_requests(&mut requests);
+    let request = requests.pop().map(|r| (r.path, r.data));
     assert!(request.is_some(), "should have a pending tune request");
     let (path, data) = request.unwrap();
     assert_eq!(

@@ -16,7 +16,7 @@ fn browser() -> AppHarness {
 
 #[test]
 fn window_explains_how_to_reach_the_browser() {
-    let h = browser();
+    let mut h = browser();
     let text = h.screen_text();
     assert!(text.contains("Use the browser widget"), "{text}");
     assert!(text.contains("Gemini"), "{text}");

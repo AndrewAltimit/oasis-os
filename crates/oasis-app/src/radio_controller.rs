@@ -14,8 +14,7 @@ use oasis_core::vfs::Vfs;
 pub const STATUS_INTERVAL: Duration = Duration::from_millis(250);
 
 /// Process one frame of radio state at `now`: VFS requests, background
-/// fetch polling, state machine tick, auto-advance, status publish, and
-/// app refresh.
+/// fetch polling, state machine tick, auto-advance and status publish.
 pub fn tick(state: &mut AppState, vfs: &mut dyn Vfs, now: Instant) {
     process_vfs_requests(state, vfs);
     poll_catalog_fetch(state);
@@ -31,11 +30,7 @@ pub fn tick(state: &mut AppState, vfs: &mut dyn Vfs, now: Instant) {
         state.radio.last_status_publish = Some(now);
         let _ = state.radio.manager.publish_status(vfs);
     }
-
-    // Refresh radio app display if visible.
-    for (_, runner) in &mut state.content.open_runners {
-        runner.refresh_radio(vfs);
-    }
+    // The Internet Radio app polls the published status in its own `tick`.
 }
 
 /// Check the VFS for radio requests and process them.

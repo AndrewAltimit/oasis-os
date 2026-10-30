@@ -10,10 +10,9 @@ use oasis_app_core::file_viewer::{
     join_path, list_directory, parent_dir, view_audio_file, view_generic_file, view_image_file,
 };
 use oasis_app_core::render::{
-    WindowedMetrics, draw_content_windowed, hide_app_sdi, render_app_chrome, render_content_sdi,
-    windowed_line_at,
+    draw_content_windowed, hide_app_sdi, render_app_chrome, render_content_sdi, windowed_line_at,
 };
-use oasis_app_core::{App, AppAction, ContentState};
+use oasis_app_core::{App, AppAction, AppRequest, ContentState};
 use oasis_skin::SimpleRng;
 use oasis_types::backend::TextureId;
 use oasis_types::input::Button;
@@ -81,12 +80,6 @@ pub struct BrowsingApp {
     /// host reports a position for *this* file (the progress bar is
     /// hidden meanwhile).
     playback: Option<(u64, u64)>,
-    /// Layout metrics of the last windowed listing draw (click
-    /// hit-testing has no theme).
-    windowed_metrics: Cell<WindowedMetrics>,
-    /// A click activated the selected listing entry; opened on the next
-    /// `refresh` (the first hook with VFS access).
-    pending_activate: bool,
     /// Listing line hit by the previous click: clicking the same line
     /// again opens it (double-click without timing info, as in the File
     /// Manager).
@@ -142,8 +135,6 @@ impl BrowsingApp {
             track_duration_str: None,
             track_size_bytes: None,
             playback: None,
-            windowed_metrics: Cell::new(WindowedMetrics::default()),
-            pending_activate: false,
             last_click_line: None,
         }
     }
@@ -505,8 +496,8 @@ impl BrowsingApp {
                 self.track_size_bytes = Some(data.len());
                 // Ask the host audio subsystem to load + play the
                 // track. Consumed by `oasis-app::media_controller`.
-                self.content.pending_vfs_request =
-                    Some((MEDIA_REQUEST_PATH.to_string(), format!("play_file {path}")));
+                self.content
+                    .post_request(MEDIA_REQUEST_PATH, format!("play_file {path}"));
             },
             ViewerMode::Generic => {},
         }
@@ -664,6 +655,13 @@ impl App for BrowsingApp {
     fn path(&self) -> &str {
         &self.content.app_path
     }
+    fn layout(&mut self, _cw: u32, ch: u32, at: &oasis_skin::ActiveTheme) {
+        // The file listing uses the shared line renderer (and its click
+        // hit-testing); the viewers lay themselves out while drawing.
+        if self.content.viewing_file.is_none() {
+            self.content.update_layout_windowed(ch, at);
+        }
+    }
     fn update_sdi(&mut self, sdi: &mut oasis_sdi::SdiRegistry, at: &oasis_skin::ActiveTheme) {
         self.content.update_layout(at);
         self.content.animate_selection(0.3);
@@ -681,7 +679,6 @@ impl App for BrowsingApp {
     ) -> oasis_types::error::Result<()> {
         // File listing: default content renderer.
         if self.content.viewing_file.is_none() {
-            self.windowed_metrics.set(WindowedMetrics::from_theme(at));
             return draw_content_windowed(&self.content, cx, cy, cw, ch, backend, at);
         }
         match self.viewer_mode {
@@ -705,20 +702,11 @@ impl App for BrowsingApp {
             let _ = backend.destroy_texture(t);
         }
     }
-    fn take_pending_request(&mut self) -> Option<(String, String)> {
-        self.content.pending_vfs_request.take()
-    }
-    fn peek_pending_request(&self) -> Option<&(String, String)> {
-        self.content.pending_vfs_request.as_ref()
+    fn drain_requests(&mut self, out: &mut Vec<AppRequest>) {
+        out.append(&mut self.content.requests);
     }
     fn lines(&self) -> &[String] {
         &self.content.lines
-    }
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-    fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
-        self
     }
 
     /// Windowed listing: a click selects an entry, a second click on it
@@ -730,16 +718,18 @@ impl App for BrowsingApp {
         _cw: u32,
         ch: u32,
         fullscreen: bool,
+        vfs: &dyn Vfs,
     ) -> AppAction {
         if fullscreen || self.content.viewing_file.is_some() || self.content.browse_dir.is_none() {
             return AppAction::None;
         }
-        let Some(idx) = windowed_line_at(&self.content, ch, self.windowed_metrics.get(), ly) else {
+        let metrics = self.content.windowed_metrics();
+        let Some(idx) = windowed_line_at(&self.content, ch, metrics, ly) else {
             return AppAction::None;
         };
         if self.last_click_line == Some(idx) && idx == self.content.scroll + self.content.cursor {
             self.last_click_line = None;
-            self.pending_activate = true;
+            self.enter_selected(vfs);
             return AppAction::None;
         }
         self.last_click_line = Some(idx);
@@ -752,20 +742,13 @@ impl App for BrowsingApp {
         AppAction::None
     }
 
-    fn refresh(&mut self, vfs: &dyn Vfs) {
-        if std::mem::take(&mut self.pending_activate) {
-            self.enter_selected(vfs);
-        }
-    }
-
     fn handle_input(&mut self, button: &Button, vfs: &dyn Vfs) -> AppAction {
         match button {
             Button::Cancel => {
                 if self.content.viewing_file.is_some() {
                     // Stop audio if we were playing a track.
                     if matches!(self.viewer_mode, ViewerMode::Audio) {
-                        self.content.pending_vfs_request =
-                            Some((MEDIA_REQUEST_PATH.to_string(), "stop".to_string()));
+                        self.content.post_request(MEDIA_REQUEST_PATH, "stop");
                     }
                     self.content.viewing_file = None;
                     self.content.scroll = 0;
@@ -1103,9 +1086,8 @@ mod tests {
     #[test]
     fn downcast_works() {
         let vfs = setup_vfs();
-        let app = BrowsingApp::music_player("/apps/music", &vfs);
-        let any = app.as_any();
-        assert!(any.downcast_ref::<BrowsingApp>().is_some());
+        let app: Box<dyn App> = Box::new(BrowsingApp::music_player("/apps/music", &vfs));
+        assert!(app.as_any().downcast_ref::<BrowsingApp>().is_some());
     }
 
     #[test]
@@ -1148,6 +1130,7 @@ mod tests {
         let vfs = setup_vfs();
         let mut app = BrowsingApp::music_player("/apps/music", &vfs);
         let ch = 220;
+        app.layout(300, ch, &oasis_skin::ActiveTheme::default());
         let idx = app
             .content
             .lines
@@ -1164,21 +1147,18 @@ mod tests {
         )
         .expect("visible");
         // First click only selects.
-        app.handle_click(10, y + 2, 300, ch, false);
-        app.refresh(&vfs);
+        app.handle_click(10, y + 2, 300, ch, false, &vfs);
         assert_eq!(app.content.scroll + app.content.cursor, idx);
         assert!(app.content.viewing_file.is_none());
         // Second click on the same line opens it (and asks to play).
-        app.handle_click(10, y + 2, 300, ch, false);
-        app.refresh(&vfs);
+        app.handle_click(10, y + 2, 300, ch, false, &vfs);
         assert_eq!(
             app.content.viewing_file.as_deref(),
             Some("/home/user/music/ambient_dawn.mp3")
         );
-        assert!(app.content.pending_vfs_request.is_some());
+        assert!(!app.content.requests.is_empty());
         // Clicks are ignored while a track is open, and in fullscreen.
-        app.handle_click(10, y + 2, 300, ch, false);
-        app.refresh(&vfs);
+        app.handle_click(10, y + 2, 300, ch, false, &vfs);
         assert_eq!(
             app.content.viewing_file.as_deref(),
             Some("/home/user/music/ambient_dawn.mp3")
@@ -1190,9 +1170,9 @@ mod tests {
         let vfs = setup_vfs();
         let mut app = BrowsingApp::music_player("/apps/music", &vfs);
         app.open_file(&vfs, "/home/user/music/ambient_dawn.mp3");
-        let req = app.content.pending_vfs_request.clone().expect("ipc");
-        assert_eq!(req.0, MEDIA_REQUEST_PATH);
-        assert_eq!(req.1, "play_file /home/user/music/ambient_dawn.mp3");
+        let req = app.content.requests.first().cloned().expect("ipc");
+        assert_eq!(req.path, MEDIA_REQUEST_PATH);
+        assert_eq!(req.data, "play_file /home/user/music/ambient_dawn.mp3");
     }
 
     #[test]
@@ -1201,11 +1181,11 @@ mod tests {
         let mut app = BrowsingApp::music_player("/apps/music", &vfs);
         app.open_file(&vfs, "/home/user/music/ambient_dawn.mp3");
         // Drain the play IPC.
-        let _ = app.content.pending_vfs_request.take();
+        app.content.requests.clear();
         app.handle_input(&Button::Cancel, &vfs);
-        let req = app.content.pending_vfs_request.clone().expect("ipc");
-        assert_eq!(req.0, MEDIA_REQUEST_PATH);
-        assert_eq!(req.1, "stop");
+        let req = app.content.requests.first().cloned().expect("ipc");
+        assert_eq!(req.path, MEDIA_REQUEST_PATH);
+        assert_eq!(req.data, "stop");
     }
 
     #[test]
@@ -1214,7 +1194,7 @@ mod tests {
         let mut app = BrowsingApp::photo_viewer("/apps/photos", &vfs);
         app.open_file(&vfs, "/home/user/photos/sunset.png");
         assert!(
-            app.content.pending_vfs_request.is_none(),
+            app.content.requests.is_empty(),
             "photo viewer must not emit media IPC"
         );
     }

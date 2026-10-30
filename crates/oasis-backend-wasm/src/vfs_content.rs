@@ -47,14 +47,6 @@ pub(crate) fn tv_preview_rect(at: &ActiveTheme) -> (i32, i32, u32, u32) {
     (0, at.statusbar_height as i32, at.screen_w, usable_h)
 }
 
-/// Check if a runner's pending request is a TV Guide tune_url (should not be
-/// consumed by the generic VFS handler).
-pub(crate) fn is_tv_tune_request_wasm(runner: &AppRunner) -> bool {
-    runner.peek_pending_request().is_some_and(|req| {
-        req.0 == oasis_core::apps::tv_guide::TV_REQUEST_PATH && req.1.starts_with("tune_url ")
-    })
-}
-
 /// Populate the WASM VFS with demo content.
 pub(crate) fn populate_wasm_vfs(vfs: &mut MemoryVfs) {
     // Core directory structure.

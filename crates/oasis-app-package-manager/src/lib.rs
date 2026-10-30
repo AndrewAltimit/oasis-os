@@ -39,24 +39,14 @@ impl App for PackageManagerApp {
     impl_content_app_methods!(content);
 
     fn handle_input(&mut self, button: &Button, _vfs: &dyn Vfs) -> AppAction {
-        match button {
-            Button::Cancel => AppAction::Exit,
-            Button::Up => {
-                self.content.navigate_up();
-                AppAction::None
-            },
-            Button::Down => {
-                self.content.navigate_down();
-                AppAction::None
-            },
-            _ => AppAction::None,
-        }
+        self.content.handle_nav(button).unwrap_or(AppAction::None)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use oasis_app_core::AsAny;
     use oasis_vfs::MemoryVfs;
 
     #[test]

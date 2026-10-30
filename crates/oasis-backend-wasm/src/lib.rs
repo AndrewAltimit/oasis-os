@@ -154,6 +154,10 @@ pub struct OasisWasm {
     radio_consecutive_errors: u32,
     video_player: video::VideoPlayer,
     pending_tv_catalog: Option<tv_catalog::WasmTvCatalogFetcher>,
+    /// Next TV tune to start, as `"{url} {seek_secs}"`: a TV Guide
+    /// `tune_url` request from the per-frame request drain, or an
+    /// auto-advance. Consumed by the TV section of the same frame.
+    pending_tv_tune: Option<String>,
     shader_bridge: Option<shader_bridge::WasmShaderBridge>,
     /// Window id of the currently fullscreen-kiosk app (if any).
     fullscreen_app: Option<String>,
@@ -394,6 +398,7 @@ impl OasisWasm {
             radio_consecutive_errors: 0,
             video_player,
             pending_tv_catalog: None,
+            pending_tv_tune: None,
             shader_bridge: shader_bridge::WasmShaderBridge::new(width, height),
             fullscreen_app: None,
             key_filter: oasis_core::input::KeyTwinFilter::default(),
@@ -437,38 +442,28 @@ impl OasisWasm {
         // Run the next queued background terminal job (`cmd &`), if any.
         self.poll_terminal_jobs();
 
-        // Process pending VFS requests from app runners (e.g. radio tune).
-        // Skip TV Guide tune requests — they're handled by the dedicated video
-        // overlay section below.
+        // Carry out every request the open apps queued (radio tune,
+        // settings, ...). TV Guide tunes go to the video overlay section
+        // below, Video Embed commands to the YouTube overlay.
         {
-            let mut pending = None;
-            if let Some(ref mut runner) = self.app_runner
-                && !vfs_content::is_tv_tune_request_wasm(runner)
-            {
-                pending = runner.take_pending_request();
+            let mut requests = Vec::new();
+            if let Some(ref mut runner) = self.app_runner {
+                runner.drain_requests(&mut requests);
             }
-            if pending.is_none() {
-                for (_, runner) in &mut self.open_runners {
-                    if vfs_content::is_tv_tune_request_wasm(runner) {
-                        continue;
-                    }
-                    if let Some(req) = runner.take_pending_request() {
-                        pending = Some(req);
-                        break;
-                    }
+            for (_, runner) in &mut self.open_runners {
+                runner.drain_requests(&mut requests);
+            }
+            for req in requests {
+                if let Some(tune) = oasis_core::apps::tv_guide::tune_url_request(&req) {
+                    self.pending_tv_tune = Some(tune.to_string());
+                    continue;
                 }
-            }
-            if let Some((path, data)) = pending {
                 #[cfg(feature = "wasm-youtube")]
-                if path == oasis_core::apps::video_embed::VIDEO_EMBED_REQUEST_PATH {
-                    self.handle_video_embed_request(&data);
-                } else {
-                    let _ = self.vfs.write(&path, data.as_bytes());
+                if req.path == oasis_core::apps::video_embed::VIDEO_EMBED_REQUEST_PATH {
+                    self.handle_video_embed_request(&req.data);
+                    continue;
                 }
-                #[cfg(not(feature = "wasm-youtube"))]
-                {
-                    let _ = self.vfs.write(&path, data.as_bytes());
-                }
+                let _ = self.vfs.write(&req.path, req.data.as_bytes());
             }
 
             // Let open apps apply queued VFS mutations (file manager
@@ -494,18 +489,10 @@ impl OasisWasm {
             // Editor "Save & close" once the save above is written).
             self.apply_app_close_requests();
 
-            // Drive the YouTube search fetcher and let the embed app
-            // pick up freshly-published results from VFS.
+            // Drive the YouTube search fetcher; the embed app picks up
+            // freshly-published results from VFS in its own `tick`.
             #[cfg(feature = "wasm-youtube")]
-            {
-                self.poll_youtube_search();
-                if let Some(ref mut runner) = self.app_runner {
-                    runner.refresh_video_embed(&self.vfs);
-                }
-                for (_, runner) in &mut self.open_runners {
-                    runner.refresh_video_embed(&self.vfs);
-                }
-            }
+            self.poll_youtube_search();
         }
 
         // -- Radio processing --
@@ -685,14 +672,7 @@ impl OasisWasm {
             if self.frame_counter.is_multiple_of(15) {
                 let _ = self.radio_manager.publish_status(&mut self.vfs);
             }
-
-            // Refresh radio app display if visible.
-            if let Some(ref mut runner) = self.app_runner {
-                runner.refresh_radio(&self.vfs);
-            }
-            for (_, runner) in &mut self.open_runners {
-                runner.refresh_radio(&self.vfs);
-            }
+            // (The Internet Radio app polls the status in its `tick`.)
 
             // Poll pending TV catalog fetch.
             if self
@@ -762,20 +742,19 @@ impl OasisWasm {
                 }
             }
 
-            // Handle TV Guide tune requests via VFS IPC.
+            // Start a queued TV tune (dropped when the guide is closed).
             {
+                let tune = self.pending_tv_tune.take();
                 let runner = vfs_content::find_tv_guide_runner_wasm(
                     &mut self.app_runner,
                     &mut self.open_runners,
                 );
                 if let Some(runner) = runner
-                    && let Some((path, data)) = runner.take_pending_request()
+                    && let Some(data) = tune
                 {
-                    if path == oasis_core::apps::tv_guide::TV_REQUEST_PATH
-                        && data.starts_with("tune_url ")
                     {
-                        // Format: "tune_url {url} {seek_secs}"
-                        let rest = &data["tune_url ".len()..];
+                        // Format: "{url} {seek_secs}"
+                        let rest = data.as_str();
                         let (url, seek_secs) = rest
                             .rsplit_once(' ')
                             .map(|(u, s)| (u, s.parse::<u64>().unwrap_or(0)))
@@ -797,8 +776,6 @@ impl OasisWasm {
                                 console_log!("TV tune: texture={:?} preview={}x{}", tex_id, pw, ph,);
                             }
                         }
-                    } else {
-                        let _ = self.vfs.write(&path, data.as_bytes());
                     }
                 }
             }
@@ -900,7 +877,7 @@ impl OasisWasm {
         if self.mode == Mode::Desktop && self.wm.window_count() > 0 {
             let browser = &mut self.browser;
             let iframe_ref = &mut self.iframe;
-            let open_runners = &self.open_runners;
+            let open_runners = &mut self.open_runners;
             let active_theme = &self.active_theme;
             let dashboard = &self.dashboard;
             let frame = self.frame_counter as u32;
@@ -955,7 +932,7 @@ impl OasisWasm {
                             Ok(())
                         }
                     } else if let Some((_, runner)) =
-                        open_runners.iter().find(|(id, _)| id == window_id)
+                        open_runners.iter_mut().find(|(id, _)| id == window_id)
                     {
                         let r = runner.draw_windowed(cx, cy, cw, ch, be, active_theme);
                         // YouTube iframe: glue to the Video Embed window's
@@ -1236,21 +1213,14 @@ impl OasisWasm {
                 seek_secs,
                 slot.remaining_secs,
             );
-            format!("tune_url {url} {seek_secs}")
+            format!("{url} {seek_secs}")
         };
 
         // Stop the finished player (needs &mut self.video_player + backend).
         self.video_player.stop(&mut self.backend);
 
-        // Write tune request via VFS IPC (same path as manual tune).
-        let runner =
-            vfs_content::find_tv_guide_runner_wasm(&mut self.app_runner, &mut self.open_runners);
-        if let Some(runner) = runner {
-            runner.set_pending_request(
-                oasis_core::apps::tv_guide::TV_REQUEST_PATH.to_string(),
-                tune_data,
-            );
-        }
+        // Queue the tune (same path as a manual tune from the guide).
+        self.pending_tv_tune = Some(tune_data);
     }
 
     // -----------------------------------------------------------------------

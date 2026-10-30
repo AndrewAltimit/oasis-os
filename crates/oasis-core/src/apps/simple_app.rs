@@ -1,11 +1,10 @@
 //! Generic simple app for static-content screens.
 //!
 //! Used as the delegate for the in-core Terminal app (which syncs its
-//! display lines from the desktop terminal pipeline via [`SimpleApp::set_lines`])
-//! and as the placeholder type the plugin system constructs for dynamically
-//! registered apps. The four other static-content apps (Browser, Network,
-//! Package Manager, System Monitor) live in their own `oasis-app-*` crates
-//! and no longer go through this type.
+//! display lines from the desktop terminal pipeline via
+//! [`SimpleApp::sync_terminal_lines`]) and as the placeholder `AppRunner`
+//! shows for a title with no registered app. Plugin apps bring their own
+//! `App` implementation through `PluginAppRegistration`.
 
 use crate::active_theme::ActiveTheme;
 use crate::backend::SdiBackend;
@@ -88,8 +87,9 @@ pub fn sync_lines(dst: &mut Vec<String>, src: &[String]) -> usize {
 #[derive(Debug)]
 pub struct SimpleApp {
     pub content: ContentState,
-    /// Action returned on Confirm press (default: None).
-    confirm_action: AppAction,
+    /// From-the-bottom scroll offset of the last terminal sync, re-applied
+    /// when [`App::layout`] changes the row count.
+    scroll_offset: usize,
     /// Whether the last line of `content.lines` is the prompt appended by
     /// [`Self::sync_terminal_lines`] (stripped before the next sync).
     trailing_prompt: bool,
@@ -105,7 +105,7 @@ impl SimpleApp {
         content.lines = lines;
         Self {
             content,
-            confirm_action: AppAction::None,
+            scroll_offset: 0,
             trailing_prompt: false,
             prompt_cursor: None,
         }
@@ -120,31 +120,11 @@ impl SimpleApp {
         changed
     }
 
-    /// Create the Settings app.
-    pub fn settings(path: &str, skin_name: &str, width: u32, height: u32) -> Self {
-        Self::new(
-            "Settings",
-            path,
-            vec![
-                "OASIS_OS Settings".to_string(),
-                String::new(),
-                format!("  Screen:     {width} x {height}"),
-                format!("  Skin:       {skin_name}"),
-                "  Audio:      Enabled".to_string(),
-                "  Network:    Enabled".to_string(),
-                "  Terminal:   Enabled".to_string(),
-                "  Plugins:    Enabled".to_string(),
-                String::new(),
-                "(Settings are read-only in this build)".to_string(),
-            ],
-        )
-    }
-
     /// Create the Terminal app (windowed interactive terminal).
     ///
     /// Text input and command execution are handled by the desktop input
     /// dispatcher, which syncs output lines back into this app via
-    /// `set_terminal_lines()`.
+    /// [`Self::sync_terminal_lines`].
     pub fn terminal(path: &str) -> Self {
         Self::new(
             "Terminal",
@@ -174,25 +154,39 @@ impl SimpleApp {
     /// incremental (see [`sync_lines`]): appending one line to a full
     /// 2000-line scrollback clones one `String`, not 2000.
     ///
-    /// Returns the number of lines cloned (the prompt counts as one).
+    /// Returns the number of lines that changed: scrollback lines cloned,
+    /// plus one if the prompt line differs from the last sync (0 means the
+    /// lines are unchanged, though trimming can still shorten them).
     pub fn sync_terminal_lines(
         &mut self,
         output: &[String],
         prompt: &str,
         scroll_offset: usize,
     ) -> usize {
-        if self.trailing_prompt {
-            self.content.lines.pop();
-        }
+        let old_prompt = if self.trailing_prompt {
+            self.content.lines.pop()
+        } else {
+            None
+        };
         let cloned = sync_lines(&mut self.content.lines, output);
-        self.content.lines.push(prompt.to_string());
+        let prompt_changed = old_prompt.as_deref() != Some(prompt);
+        match old_prompt {
+            Some(mut line) if !prompt_changed => {
+                // Reuse the old allocation (it already holds `prompt`).
+                line.clear();
+                line.push_str(prompt);
+                self.content.lines.push(line);
+            },
+            _ => self.content.lines.push(prompt.to_string()),
+        }
         self.trailing_prompt = true;
         self.apply_scroll_offset(scroll_offset);
-        cloned + 1
+        cloned + usize::from(prompt_changed)
     }
 
     /// Map a from-the-bottom scroll offset onto `content.scroll`.
     fn apply_scroll_offset(&mut self, scroll_offset: usize) {
+        self.scroll_offset = scroll_offset;
         let len = self.content.lines.len();
         if len > self.content.cached_max_visible {
             let max_scroll = len - self.content.cached_max_visible;
@@ -213,18 +207,16 @@ impl App for SimpleApp {
     }
 
     fn handle_input(&mut self, button: &Button, _vfs: &dyn Vfs) -> AppAction {
-        match button {
-            Button::Cancel => AppAction::Exit,
-            Button::Up => {
-                self.content.navigate_up();
-                AppAction::None
-            },
-            Button::Down => {
-                self.content.navigate_down();
-                AppAction::None
-            },
-            Button::Confirm => self.confirm_action.clone(),
-            _ => AppAction::None,
+        self.content.handle_nav(button).unwrap_or(AppAction::None)
+    }
+
+    fn layout(&mut self, _cw: u32, ch: u32, at: &ActiveTheme) {
+        let rows = self.content.cached_max_visible;
+        self.content.update_layout_windowed(ch, at);
+        // The terminal scrolls from the bottom: keep the newest lines and
+        // the prompt in view at the window's real row count.
+        if self.trailing_prompt && self.content.cached_max_visible != rows {
+            self.apply_scroll_offset(self.scroll_offset);
         }
     }
 
@@ -280,14 +272,6 @@ impl App for SimpleApp {
 
     fn lines(&self) -> &[String] {
         &self.content.lines
-    }
-
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-
-    fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
-        self
     }
 }
 
@@ -375,45 +359,53 @@ mod tests {
     }
 
     #[test]
-    fn sync_terminal_lines_one_append_clones_one_line_plus_prompt() {
+    fn sync_terminal_lines_one_append_clones_one_line() {
         let mut app = SimpleApp::terminal("/apps/terminal");
         let mut output = numbered(0..2000);
         app.sync_terminal_lines(&output, "> ", 0);
         let first = app.content.lines[1].as_ptr();
         output.drain(..1);
         output.push("fresh".into());
-        assert_eq!(app.sync_terminal_lines(&output, "> ", 0), 2);
+        assert_eq!(
+            app.sync_terminal_lines(&output, "> ", 0),
+            1,
+            "an unchanged prompt is not re-cloned"
+        );
+        assert_eq!(app.sync_terminal_lines(&output, "> ", 0), 0, "no change");
+        assert_eq!(app.sync_terminal_lines(&output, "> l", 0), 1, "prompt");
         assert_eq!(app.content.lines.len(), 2001);
         assert_eq!(app.content.lines[0].as_ptr(), first);
         assert_eq!(app.content.lines[1999], "fresh");
-        assert_eq!(app.content.lines[2000], "> ");
+        assert_eq!(app.content.lines[2000], "> l");
+    }
+
+    /// A placeholder-style app with a few lines.
+    fn sample() -> SimpleApp {
+        SimpleApp::new(
+            "Sample",
+            "/apps/sample",
+            vec!["first".into(), String::new(), "third".into()],
+        )
     }
 
     #[test]
-    fn settings_title_and_path() {
-        let app = SimpleApp::settings("/apps/settings", "Classic", 480, 272);
-        assert_eq!(app.title(), "Settings");
-        assert_eq!(app.path(), "/apps/settings");
-    }
-
-    #[test]
-    fn settings_content_lines() {
-        let app = SimpleApp::settings("/apps/settings", "Classic", 480, 272);
-        assert!(app.lines().iter().any(|l| l.contains("OASIS_OS Settings")));
-        assert!(app.lines().iter().any(|l| l.contains("read-only")));
+    fn title_and_path() {
+        let app = sample();
+        assert_eq!(app.title(), "Sample");
+        assert_eq!(app.path(), "/apps/sample");
     }
 
     #[test]
     fn cancel_exits() {
         let vfs = make_vfs();
-        let mut app = SimpleApp::settings("/apps/settings", "Classic", 480, 272);
+        let mut app = sample();
         assert_eq!(app.handle_input(&Button::Cancel, &vfs), AppAction::Exit);
     }
 
     #[test]
     fn navigate_up_down() {
         let vfs = make_vfs();
-        let mut app = SimpleApp::settings("/apps/settings", "Classic", 480, 272);
+        let mut app = sample();
         app.content.cached_max_visible = 20;
         app.handle_input(&Button::Down, &vfs);
         assert_eq!(app.content.cursor, 1);
@@ -434,29 +426,63 @@ mod tests {
 
     #[test]
     fn no_browse_dir_or_viewing_file() {
-        let app = SimpleApp::settings("/apps/settings", "Classic", 480, 272);
+        let app = sample();
         assert!(app.browse_dir().is_none());
         assert!(app.viewing_file().is_none());
     }
 
     #[test]
     fn no_pending_request() {
-        let mut app = SimpleApp::settings("/apps/settings", "Classic", 480, 272);
-        assert!(app.take_pending_request().is_none());
-        assert!(app.peek_pending_request().is_none());
+        let mut app = sample();
+        let mut out = Vec::new();
+        app.drain_requests(&mut out);
+        assert!(out.is_empty());
     }
 
     #[test]
     fn downcast_works() {
-        let app = SimpleApp::settings("/apps/settings", "Classic", 480, 272);
-        let any = app.as_any();
-        assert!(any.downcast_ref::<SimpleApp>().is_some());
+        let app: Box<dyn App> = Box::new(sample());
+        assert!(app.as_any().downcast_ref::<SimpleApp>().is_some());
     }
 
     #[test]
     fn confirm_is_noop() {
         let vfs = make_vfs();
-        let mut app = SimpleApp::settings("/apps/settings", "Classic", 480, 272);
+        let mut app = sample();
         assert_eq!(app.handle_input(&Button::Confirm, &vfs), AppAction::None);
+    }
+
+    /// A terminal window resized to ~6 rows keeps the newest output line
+    /// and the prompt on screen, and a from-the-bottom scroll offset maps
+    /// onto the window's real row count (F14 item 4, app half).
+    #[test]
+    fn short_terminal_window_shows_prompt_and_last_line() {
+        use oasis_test_backend::ClipAuditBackend;
+        let at = ActiveTheme::default();
+        let line_h = at.terminal_line_height.max(12);
+        let ch = oasis_app_core::render::WINDOWED_TOP_PAD + 16 + 6 * line_h;
+        let mut app = SimpleApp::terminal("/apps/terminal");
+        let output = numbered(0..50);
+        app.sync_terminal_lines(&output, "> ls", 0);
+
+        let drawn = |app: &mut SimpleApp| {
+            app.layout(300, ch, &at);
+            let mut b = ClipAuditBackend::new(300, ch, (0, 0, 300, ch));
+            app.draw_windowed(0, 0, 300, ch, &mut b, &at).expect("draw");
+            b.texts().iter().map(|t| t.text.clone()).collect::<Vec<_>>()
+        };
+        let texts = drawn(&mut app);
+        assert!(texts.iter().any(|t| t.ends_with("> ls")), "{texts:?}");
+        assert!(texts.iter().any(|t| t.ends_with("line 49")), "{texts:?}");
+        assert!(!texts.iter().any(|t| t.ends_with("line 43")), "{texts:?}");
+
+        // Scrolled all the way back: the oldest line is the first row.
+        app.sync_terminal_lines(&output, "> ls", 51 - 6);
+        let texts = drawn(&mut app);
+        assert!(texts.iter().any(|t| t.ends_with("line 0")), "{texts:?}");
+        // ...and back at the bottom.
+        app.sync_terminal_lines(&output, "> ls", 0);
+        let texts = drawn(&mut app);
+        assert!(texts.iter().any(|t| t.ends_with("> ls")), "{texts:?}");
     }
 }

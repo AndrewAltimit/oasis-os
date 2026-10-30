@@ -107,7 +107,6 @@ impl RadioApp {
     ) -> oasis_types::error::Result<()> {
         let colors = RadioColors::from_theme(at);
         let l = RadioLayout::compute(cx, cy, cw, ch);
-        self.visible_rows.set(l.visible_rows());
         backend.fill_rect(cx, cy, cw, ch, colors.bg)?;
         self.draw_panel(&l, backend, at, &colors)?;
         self.draw_list(&l, backend, at, &colors)?;

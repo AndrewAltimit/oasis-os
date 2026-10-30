@@ -617,11 +617,11 @@ mod tests {
         );
         let req = app
             .content
-            .pending_vfs_request
-            .take()
+            .requests
+            .pop()
             .expect("music player should emit play_file IPC");
-        assert_eq!(req.0, MEDIA_REQUEST_PATH);
-        assert_eq!(req.1, "play_file /home/user/music/ambient_dawn.mp3");
+        assert_eq!(req.path, MEDIA_REQUEST_PATH);
+        assert_eq!(req.data, "play_file /home/user/music/ambient_dawn.mp3");
     }
 
     /// Text Editor opens a bundled document — routed through the
@@ -637,18 +637,18 @@ mod tests {
         let entry = AppEntry::for_title("Text Editor");
         let runner = AppRunner::launch_with_file(&entry, "/home/user/documents/welcome.txt", &vfs);
         assert_eq!(
-            runner.viewing_file.as_deref(),
+            runner.viewing_file(),
             Some("/home/user/documents/welcome.txt")
         );
         // The text editor renders the file as display lines with line
         // numbers — the welcome content shows up in the rendered output.
         assert!(
             runner
-                .lines
+                .lines()
                 .iter()
                 .any(|l| l.contains("Welcome to OASIS_OS")),
             "editor should render welcome text, got: {:?}",
-            runner.lines,
+            runner.lines(),
         );
     }
 }

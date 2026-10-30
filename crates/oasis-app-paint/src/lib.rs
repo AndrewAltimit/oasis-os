@@ -19,9 +19,6 @@ pub mod palette;
 mod render;
 pub mod tools;
 
-use std::any::Any;
-use std::cell::Cell;
-
 use oasis_app_core::render::{hide_app_sdi, render_app_chrome, render_content_sdi};
 use oasis_app_core::{App, AppAction, ContentState};
 use oasis_sdi::SdiRegistry;
@@ -100,9 +97,9 @@ pub struct PaintApp {
     pending_io: Vec<PaintIo>,
     /// Open picker, when File > Open is active.
     picker: Option<Picker>,
-    /// Visible picker rows from the last draw (for keyboard scrolling;
-    /// `Cell` so the `&self` renderer can update it).
-    cached_picker_rows: Cell<usize>,
+    /// Visible picker rows of the last `App::layout` (for keyboard and
+    /// wheel scrolling).
+    picker_rows: usize,
 }
 
 /// Build the Paint menu bar.
@@ -181,7 +178,7 @@ impl PaintApp {
             status: None,
             pending_io: Vec::new(),
             picker: None,
-            cached_picker_rows: Cell::new(8),
+            picker_rows: 8,
         };
         app.rebuild_display_lines();
         app
@@ -531,7 +528,7 @@ impl PaintApp {
     }
 
     /// Fill in the picker listing and perform a click-chosen load. Needs
-    /// only read access, so it runs from `refresh`, input handlers and
+    /// only read access, so it runs from the input handlers and
     /// `apply_vfs_ops` alike.
     fn service_picker(&mut self, vfs: &dyn Vfs) -> bool {
         let Some(picker) = &mut self.picker else {
@@ -686,8 +683,7 @@ impl App for PaintApp {
 
     fn handle_input(&mut self, button: &Button, vfs: &dyn Vfs) -> AppAction {
         if self.picker.is_some() {
-            let rows = self.cached_picker_rows.get();
-            self.handle_picker_input(button, vfs, rows);
+            self.handle_picker_input(button, vfs, self.picker_rows);
             self.rebuild_display_lines();
             return AppAction::None;
         }
@@ -749,7 +745,7 @@ impl App for PaintApp {
         AppAction::None
     }
 
-    fn handle_key(&mut self, key: &Key, mods: Modifiers, _vfs: &dyn Vfs) -> Option<AppAction> {
+    fn handle_key(&mut self, key: &Key, mods: Modifiers, vfs: &dyn Vfs) -> Option<AppAction> {
         if self.picker.is_some() {
             // Arrows / Enter / Esc reach the picker via their d-pad twins.
             return None;
@@ -763,7 +759,10 @@ impl App for PaintApp {
             },
             _ => {
                 let id = Self::shortcut_action(key, mods)?;
-                return Some(self.run_menu_action(id));
+                let action = self.run_menu_action(id);
+                // Ctrl+O opens the picker: list the files right away.
+                self.service_picker(vfs);
+                return Some(action);
             },
         }
         self.rebuild_display_lines();
@@ -786,11 +785,70 @@ impl App for PaintApp {
         changed
     }
 
-    fn refresh(&mut self, vfs: &dyn Vfs) {
-        self.service_picker(vfs);
+    fn layout(&mut self, cw: u32, ch: u32, _at: &ActiveTheme) {
+        let l = PaintLayout::compute(0, 0, cw, ch, self.canvas.width(), self.canvas.height());
+        self.picker_rows = l.picker_rows();
     }
 
-    fn handle_click(&mut self, lx: i32, ly: i32, cw: u32, ch: u32, _fullscreen: bool) -> AppAction {
+    /// The wheel scrolls the Open picker's list; over the canvas it does
+    /// nothing (Up / Down would move the drawing cursor).
+    fn handle_scroll(&mut self, delta: i32, vfs: &dyn Vfs) -> bool {
+        if self.picker.is_none() {
+            return false;
+        }
+        let button = if delta < 0 { Button::Up } else { Button::Down };
+        for _ in 0..delta.unsigned_abs().min(oasis_app_core::MAX_WHEEL_STEPS) {
+            self.handle_picker_input(&button, vfs, self.picker_rows);
+        }
+        delta != 0
+    }
+
+    fn handle_click(
+        &mut self,
+        lx: i32,
+        ly: i32,
+        cw: u32,
+        ch: u32,
+        _fullscreen: bool,
+        vfs: &dyn Vfs,
+    ) -> AppAction {
+        let action = self.click(lx, ly, cw, ch);
+        // A click can open the picker or choose a file: list / load now.
+        self.service_picker(vfs);
+        action
+    }
+
+    fn update_sdi(&mut self, sdi: &mut SdiRegistry, at: &ActiveTheme) {
+        self.content.update_layout(at);
+        self.content.animate_selection(0.3);
+        render_app_chrome(sdi, at);
+        render_content_sdi(&self.content, sdi, at);
+    }
+
+    fn draw_windowed(
+        &self,
+        cx: i32,
+        cy: i32,
+        cw: u32,
+        ch: u32,
+        backend: &mut dyn SdiBackend,
+        at: &ActiveTheme,
+    ) -> oasis_types::error::Result<()> {
+        self.draw_paint(cx, cy, cw, ch, backend, at)
+    }
+
+    fn hide_sdi(&self, sdi: &mut SdiRegistry) {
+        hide_app_sdi(sdi);
+    }
+
+    fn lines(&self) -> &[String] {
+        &self.content.lines
+    }
+}
+
+impl PaintApp {
+    /// Content-area click (menu, tools, palette, picker, canvas).
+    fn click(&mut self, lx: i32, ly: i32, cw: u32, ch: u32) -> AppAction {
         let l = PaintLayout::compute(0, 0, cw, ch, self.canvas.width(), self.canvas.height());
 
         // 1. Menu bar and its drop-down.
@@ -858,41 +916,6 @@ impl App for PaintApp {
         self.rebuild_display_lines();
         AppAction::None
     }
-
-    fn update_sdi(&mut self, sdi: &mut SdiRegistry, at: &ActiveTheme) {
-        self.content.update_layout(at);
-        self.content.animate_selection(0.3);
-        render_app_chrome(sdi, at);
-        render_content_sdi(&self.content, sdi, at);
-    }
-
-    fn draw_windowed(
-        &self,
-        cx: i32,
-        cy: i32,
-        cw: u32,
-        ch: u32,
-        backend: &mut dyn SdiBackend,
-        at: &ActiveTheme,
-    ) -> oasis_types::error::Result<()> {
-        self.draw_paint(cx, cy, cw, ch, backend, at)
-    }
-
-    fn hide_sdi(&self, sdi: &mut SdiRegistry) {
-        hide_app_sdi(sdi);
-    }
-
-    fn lines(&self) -> &[String] {
-        &self.content.lines
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
-    fn as_any_mut(&mut self) -> &mut dyn Any {
-        self
-    }
 }
 
 // ---------------------------------------------------------------
@@ -903,6 +926,7 @@ impl App for PaintApp {
 mod tests {
     use super::*;
     use canvas::alpha_blend;
+    use oasis_app_core::AsAny;
     use oasis_vfs::MemoryVfs;
 
     fn make_vfs() -> MemoryVfs {
@@ -1553,6 +1577,24 @@ mod tests {
     }
 
     #[test]
+    fn wheel_scrolls_only_the_picker() {
+        let mut vfs = make_vfs();
+        let mut app = PaintApp::new("/apps/paint");
+        assert!(!app.handle_scroll(3, &vfs), "the canvas ignores the wheel");
+        for i in 0..5 {
+            app.new_canvas(4 + i, 4);
+            app.file_path = None;
+            app.save_to_vfs(&mut vfs).expect("save");
+        }
+        app.begin_open();
+        app.apply_vfs_ops(&mut vfs);
+        assert!(app.handle_scroll(2, &vfs));
+        assert_eq!(app.picker.as_ref().map(|p| p.selected), Some(2));
+        assert!(app.handle_scroll(-5, &vfs));
+        assert_eq!(app.picker.as_ref().map(|p| p.selected), Some(0));
+    }
+
+    #[test]
     fn paint_app_downcast_mut() {
         let mut app = PaintApp::new("/apps/paint");
         let any = app.as_any_mut();
@@ -1673,7 +1715,14 @@ mod tests {
         let l = PaintLayout::compute(0, 0, CW, CH, app.canvas.width(), app.canvas.height());
         let r = l.pixel_rect(px, py);
         // Aim at the middle of the on-screen cell.
-        app.handle_click(r.x + r.w as i32 / 2, r.y + r.h as i32 / 2, CW, CH, false);
+        app.handle_click(
+            r.x + r.w as i32 / 2,
+            r.y + r.h as i32 / 2,
+            CW,
+            CH,
+            false,
+            &make_vfs(),
+        );
     }
 
     #[test]
@@ -1716,7 +1765,7 @@ mod tests {
     fn clicks_outside_canvas_do_not_paint() {
         let mut app = PaintApp::new("/apps/paint");
         let before = app.canvas.pixels.clone();
-        app.handle_click(1, CH as i32 - 30, CW, CH, false);
+        app.handle_click(1, CH as i32 - 30, CW, CH, false, &make_vfs());
         assert_eq!(app.canvas.pixels, before);
         assert!(app.undo_stack.is_empty());
     }
@@ -1726,7 +1775,7 @@ mod tests {
         let mut app = PaintApp::new("/apps/paint");
         let l = PaintLayout::compute(0, 0, CW, CH, 64, 48);
         let r = l.swatch_rect(4);
-        app.handle_click(r.x + 1, r.y + 1, CW, CH, false);
+        app.handle_click(r.x + 1, r.y + 1, CW, CH, false, &make_vfs());
         assert_eq!(app.palette_index, 4);
         assert_eq!(app.color, palette()[4]);
     }
@@ -1762,7 +1811,7 @@ mod tests {
         // A fresh app opens it through File > Open.
         let mut other = PaintApp::new("/apps/paint");
         other.run_menu_action("file.open");
-        other.refresh(&vfs);
+        other.apply_vfs_ops(&mut vfs);
         let files = other
             .picker
             .as_ref()
@@ -1787,8 +1836,7 @@ mod tests {
         other.apply_vfs_ops(&mut vfs);
         let l = PaintLayout::compute(0, 0, CW, CH, 64, 48);
         let p = l.picker();
-        other.handle_click(p.x + 5, p.y + PICKER_ROW + 2, CW, CH, false);
-        other.refresh(&vfs);
+        other.handle_click(p.x + 5, p.y + PICKER_ROW + 2, CW, CH, false, &vfs);
         assert_eq!((other.canvas.width(), other.canvas.height()), (16, 8));
     }
 
@@ -1839,7 +1887,7 @@ mod tests {
     fn menu_click_opens_dropdown() {
         let mut app = PaintApp::new("/apps/paint");
         // "File" label sits at the left of the bar.
-        app.handle_click(12, 8, CW, CH, false);
+        app.handle_click(12, 8, CW, CH, false, &make_vfs());
         assert_eq!(app.menu.open, Some(0));
         // Clicking the canvas while open just closes the menu.
         click_canvas_pixel(&mut app, 0, 0);

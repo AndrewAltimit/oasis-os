@@ -365,10 +365,18 @@ impl App for GamesApp {
         action
     }
 
-    fn refresh(&mut self, vfs: &dyn Vfs) {
-        // Game time advances in `tick` only: refresh runs on clicks, and
-        // stepping here made the snake move per click instead of in time.
-        self.load_high_scores(vfs);
+    /// The wheel moves the menu selection only: in a game, Up / Down steer
+    /// (snake) or slide tiles (puzzle), which a scroll must not do.
+    fn handle_scroll(&mut self, delta: i32, _vfs: &dyn Vfs) -> bool {
+        if !matches!(self.active_game, ActiveGame::Menu) || delta == 0 {
+            return false;
+        }
+        let button = if delta < 0 { Button::Up } else { Button::Down };
+        for _ in 0..delta.unsigned_abs().min(oasis_app_core::MAX_WHEEL_STEPS) {
+            self.handle_menu_input(&button);
+        }
+        self.update_lines();
+        true
     }
 
     fn tick(&mut self, dt_ms: u32, vfs: &dyn Vfs) -> bool {
@@ -423,6 +431,7 @@ impl App for GamesApp {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use oasis_app_core::AsAny;
     use oasis_vfs::MemoryVfs;
 
     fn make_vfs() -> MemoryVfs {
@@ -631,17 +640,33 @@ mod tests {
     }
 
     #[test]
-    fn games_app_refresh_does_not_step_snake() {
+    fn games_app_click_and_wheel_do_not_step_or_steer_snake() {
         let vfs = make_vfs();
         let mut app = GamesApp::new("/apps/games");
         app.handle_input(&Button::Confirm, &vfs);
         app.snake.speed = 1;
         let old_head = app.snake.snake[0];
-        app.refresh(&vfs);
+        let old_dir = app.snake.next_direction;
+        app.handle_click(10, 10, 200, 200, false, &vfs);
+        assert!(!app.handle_scroll(3, &vfs), "wheel is ignored in a game");
         assert_eq!(
             app.snake.snake[0], old_head,
             "clicks must not advance game time"
         );
+        assert_eq!(
+            app.snake.next_direction, old_dir,
+            "the wheel must not steer"
+        );
+    }
+
+    #[test]
+    fn wheel_moves_the_menu_selection() {
+        let vfs = make_vfs();
+        let mut app = GamesApp::new("/apps/games");
+        assert!(app.handle_scroll(1, &vfs));
+        assert!(app.lines().iter().any(|l| l.contains("> Memory Match")));
+        assert!(app.handle_scroll(-1, &vfs));
+        assert!(app.lines().iter().any(|l| l.contains("> Snake")));
     }
 
     #[test]
@@ -736,7 +761,7 @@ mod tests {
         assert_eq!(parse_snake_high_score(&text), 7);
 
         let mut fresh = GamesApp::new("/apps/games");
-        fresh.refresh(&vfs);
+        fresh.tick(0, &vfs); // Loads the saved scores.
         assert_eq!(fresh.snake().high_score, 7);
         assert!(!fresh.apply_vfs_ops(&mut vfs), "loaded score is not dirty");
     }

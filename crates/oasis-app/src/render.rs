@@ -1,6 +1,5 @@
 use oasis_backend_sdl::shader_bridge::Visibility;
 use oasis_core::apps::AppRunner;
-use oasis_core::apps::simple_app::SimpleApp;
 use oasis_core::backend::{Color, SdiBackend};
 use oasis_core::bottombar::{BottomBar, MediaTab};
 use oasis_core::browser::BrowserWidget;
@@ -147,10 +146,10 @@ pub fn update_sdi(state: &mut AppState, sdi: &mut SdiRegistry, vfs: &dyn Vfs) {
             // content signature gates the expensive full-scrollback clone to
             // frames where the terminal actually changed — a mouse drag over
             // the desktop must not deep-copy 2000 lines per frame.
-            // A resized terminal window shows a different number of rows,
-            // which changes the scroll mapping: resync even without input.
-            let rows = crate::terminal_input::windowed_rows(state);
-            if state.terminal.dirty || (rows.is_some() && rows != synced_terminal_rows(state)) {
+            // (A resized terminal window needs no resync here: the
+            // runner's `layout` re-maps the scroll offset onto the
+            // window's rows when it is drawn.)
+            if state.terminal.dirty {
                 let (input_text, cursor_col) = state.terminal.session.display();
                 let focused = state.wm.active_window() == Some(TERMINAL_WIN);
                 let term = &state.terminal;
@@ -170,23 +169,10 @@ pub fn update_sdi(state: &mut AppState, sdi: &mut SdiRegistry, vfs: &dyn Vfs) {
                     // Cursor column within the prompt line ("> " + input),
                     // drawn only while the terminal window has focus.
                     runner.set_terminal_cursor(focused.then_some(2 + cursor_col));
-                    // Scroll against the rows the window really shows (the
-                    // app's own default is a fixed fullscreen row count, so
-                    // a short window hid the newest lines and the prompt).
-                    let resized = match (rows, runner.delegate_as_mut::<SimpleApp>()) {
-                        (Some(rows), Some(app)) if app.content.cached_max_visible != rows => {
-                            app.content.cached_max_visible = rows;
-                            true
-                        },
-                        _ => false,
-                    };
                     // A freshly (re)opened runner has not received this
                     // content yet even if the signature matches — its line
                     // count (scrollback + prompt) gives that away.
-                    if changed
-                        || resized
-                        || runner.lines.len() != state.terminal.output_lines.len() + 1
-                    {
+                    if changed || runner.lines().len() != state.terminal.output_lines.len() + 1 {
                         // Incremental sync: only lines not already in the
                         // runner are cloned (was a full scrollback clone
                         // here plus another inside the runner).
@@ -292,18 +278,6 @@ pub fn update_sdi(state: &mut AppState, sdi: &mut SdiRegistry, vfs: &dyn Vfs) {
     if shader_active && let Ok(obj) = sdi.get_mut("content_bg") {
         obj.visible = false;
     }
-}
-
-/// Row count the windowed terminal runner currently scrolls against.
-fn synced_terminal_rows(state: &AppState) -> Option<usize> {
-    let (_, runner) = state
-        .content
-        .open_runners
-        .iter()
-        .find(|(id, _)| id == TERMINAL_WIN)?;
-    runner
-        .delegate_as::<SimpleApp>()
-        .map(|app| app.content.cached_max_visible)
 }
 
 /// Draw the window manager's drag-to-snap preview: a translucent, outlined

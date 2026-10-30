@@ -1217,3 +1217,35 @@ fn fullscreen_terminal_wheel_scrolls_end_to_end() {
     assert!(h.sdi_text_contains("row40"), "{:?}", h.sdi_texts());
     assert!(h.sdi_text_contains("pending"));
 }
+
+/// The wheel over an app window reaches the app (`App::handle_scroll`):
+/// a long document in the Text Editor scrolls and comes back.
+#[test]
+fn wheel_over_an_app_window_scrolls_the_app() {
+    use oasis_core::vfs::Vfs;
+    let mut h = boot("classic");
+    let text: String = (0..80).map(|i| format!("wheel-line-{i:02}\n")).collect();
+    h.vfs_mut()
+        .write("/home/user/long.txt", text.as_bytes())
+        .unwrap();
+    h.open_app_with_file("Text Editor", "/home/user/long.txt");
+    h.settle();
+    let win = h.find_window("Text Editor").expect("editor window");
+    let drawn = text_in_window(&mut h, "Text Editor");
+    assert!(any_contains(&drawn, "wheel-line-00"), "{drawn:?}");
+
+    let (cx, cy) = rect_center(win.content);
+    h.move_to(cx, cy);
+    h.scroll(5);
+    h.settle();
+    let drawn = text_in_window(&mut h, "Text Editor");
+    assert!(
+        !any_contains(&drawn, "wheel-line-00"),
+        "wheel scrolled the document: {drawn:?}"
+    );
+
+    h.scroll(-5);
+    h.settle();
+    let drawn = text_in_window(&mut h, "Text Editor");
+    assert!(any_contains(&drawn, "wheel-line-00"), "{drawn:?}");
+}

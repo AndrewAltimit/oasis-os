@@ -38,35 +38,33 @@ pub(super) fn poll_catalog_fetch(state: &mut AppState) {
                         if let Some(idx) = guide.channels.iter().position(|c| c.number == ch_num) {
                             guide.selected_channel = idx;
                             if let Some(req) = guide.tune() {
-                                use oasis_core::apps::tv_guide::TV_REQUEST_PATH;
                                 let url = oasis_core::apps::tv_guide::catalog::ChannelCatalog::download_url(&req.episode);
                                 let seek_secs = std::env::var("OASIS_TV_SEEK")
                                     .ok()
                                     .and_then(|s| s.parse::<u64>().ok())
                                     .unwrap_or(req.seek_secs);
-                                let data = format!("tune_url {url} {seek_secs}");
+                                let data = format!("{url} {seek_secs}");
                                 log::info!("TV: auto-tune CH{} -> {}", ch_num, req.episode.title,);
-                                runner.set_pending_request(TV_REQUEST_PATH.to_string(), data);
+                                state.tv.pending_tune = Some(data);
                             } else if let Some(catalog) =
                                 guide.catalogs.get(idx).and_then(|c| c.as_ref())
                                 && let Some(ep) = catalog.episodes.first()
                             {
                                 // Force-tune to first episode (schedule has no slot
                                 // at current time, but env var testing needs it).
-                                use oasis_core::apps::tv_guide::TV_REQUEST_PATH;
                                 let url = oasis_core::apps::tv_guide::catalog::ChannelCatalog::download_url(ep);
                                 let seek_secs = std::env::var("OASIS_TV_SEEK")
                                     .ok()
                                     .and_then(|s| s.parse::<u64>().ok())
                                     .unwrap_or(0);
-                                let data = format!("tune_url {url} {seek_secs}");
+                                let data = format!("{url} {seek_secs}");
                                 log::info!(
                                     "TV: force-tune CH{} -> {} (no schedule slot)",
                                     ch_num,
                                     ep.title,
                                 );
                                 guide.tuned_channel = Some(idx);
-                                runner.set_pending_request(TV_REQUEST_PATH.to_string(), data);
+                                state.tv.pending_tune = Some(data);
                             } else {
                                 log::warn!("TV: auto-tune CH{ch_num} failed (no episodes)");
                             }

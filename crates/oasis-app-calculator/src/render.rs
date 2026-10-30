@@ -109,10 +109,6 @@ impl CalculatorApp {
         if let Some(h) = l.history {
             self.draw_history(h, l.history_rows(), backend, at, &colors)?;
         }
-        // Age the pressed-key flash by one frame.
-        if let Some((key, frames)) = self.flash.get() {
-            self.flash.set((frames > 1).then(|| (key, frames - 1)));
-        }
         Ok(())
     }
 
@@ -179,7 +175,7 @@ impl CalculatorApp {
         backend: &mut dyn SdiBackend,
         at: &ActiveTheme,
     ) -> oasis_types::error::Result<()> {
-        let flashed = self.flash.get().map(|(k, _)| k);
+        let flashed = self.flash.map(|(k, _)| k);
         let mut ctx = DrawContext::new(backend, &at.ui_theme);
         for (i, def) in KEYS.iter().enumerate() {
             let r = l.key_rect(i);

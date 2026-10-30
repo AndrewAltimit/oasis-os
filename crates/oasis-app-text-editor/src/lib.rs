@@ -7,11 +7,8 @@
 //! Delete); gamepad hosts reach every feature through `handle_input`
 //! (Normal / Insert / Find / Replace / prompt modes).
 
-use std::any::Any;
-use std::cell::Cell;
-
 use oasis_app_core::render::{hide_app_sdi, render_app_chrome};
-use oasis_app_core::{App, AppAction, ContentState};
+use oasis_app_core::{App, AppAction, AppRequest, ContentState};
 use oasis_sdi::SdiRegistry;
 use oasis_skin::ActiveTheme;
 use oasis_types::backend::{InMemoryClipboard, SdiBackend};
@@ -32,6 +29,9 @@ pub use highlight::{FileType, detect_file_type};
 pub use render::hide_notepad_sdi_objects;
 
 use editor::UndoGroup;
+
+/// Lines one mouse-wheel notch scrolls the editor view.
+const WHEEL_LINES: usize = 3;
 
 // ---------------------------------------------------------------
 // EditorMode
@@ -112,10 +112,11 @@ pub struct TextEditorApp {
     /// A printable key consumed by `handle_key`; its `TextInput` twin
     /// (which hosts still deliver) must not also type.
     pub(crate) swallow_text: Option<char>,
-    /// Text lines that fit the last rendered viewport (0 = not drawn yet).
-    pub(crate) viewport_lines: Cell<usize>,
-    /// Row height of the last rendered viewport (0 = not drawn yet).
-    pub(crate) viewport_line_h: Cell<i32>,
+    /// Text lines that fit the viewport of the last `App::layout` /
+    /// fullscreen render (0 = not laid out yet).
+    pub(crate) viewport_lines: usize,
+    /// Row height of that viewport (0 = not laid out yet).
+    pub(crate) viewport_line_h: i32,
     /// Top menu bar widget (File / Edit / View / Help) with drop-downs.
     pub(crate) menu: MenuBar,
 }
@@ -183,8 +184,8 @@ impl TextEditorApp {
             close_requested: false,
             close_reported: false,
             swallow_text: None,
-            viewport_lines: Cell::new(0),
-            viewport_line_h: Cell::new(0),
+            viewport_lines: 0,
+            viewport_line_h: 0,
             menu: default_menu_bar(),
         };
         editor.rebuild_display_lines();
@@ -339,7 +340,39 @@ impl App for TextEditorApp {
         self.handle_backspace_impl();
     }
 
-    fn handle_click(&mut self, lx: i32, ly: i32, cw: u32, ch: u32, _fullscreen: bool) -> AppAction {
+    fn layout(&mut self, _cw: u32, ch: u32, at: &ActiveTheme) {
+        let (lines, line_h) = render::notepad_viewport(ch, at);
+        self.viewport_lines = lines.max(1);
+        self.viewport_line_h = line_h;
+    }
+
+    /// The wheel scrolls the view three lines per notch without moving
+    /// the caret (the next caret move scrolls it back into view).
+    fn handle_scroll(&mut self, delta: i32, _vfs: &dyn Vfs) -> bool {
+        let max_scroll = self
+            .buffer
+            .line_count()
+            .saturating_sub(self.page_lines().max(1));
+        let step = delta.unsigned_abs() as usize * WHEEL_LINES;
+        let scroll = if delta < 0 {
+            self.content.scroll.saturating_sub(step)
+        } else {
+            (self.content.scroll + step).min(max_scroll)
+        };
+        let changed = scroll != self.content.scroll;
+        self.content.scroll = scroll;
+        changed
+    }
+
+    fn handle_click(
+        &mut self,
+        lx: i32,
+        ly: i32,
+        cw: u32,
+        ch: u32,
+        _fullscreen: bool,
+        _vfs: &dyn Vfs,
+    ) -> AppAction {
         if self.close_requested {
             return AppAction::Exit;
         }
@@ -398,7 +431,7 @@ impl App for TextEditorApp {
         // font; we don't have a backend here to call `measure_text`.
         let pad_left = 8i32;
         let pad_top = 6i32;
-        let line_h = match self.viewport_line_h.get() {
+        let line_h = match self.viewport_line_h {
             0 => 14,
             h => h,
         };
@@ -453,12 +486,8 @@ impl App for TextEditorApp {
         self.draw_notepad(cx, cy, cw, ch, backend, at)
     }
 
-    fn take_pending_request(&mut self) -> Option<(String, String)> {
-        self.content.pending_vfs_request.take()
-    }
-
-    fn peek_pending_request(&self) -> Option<&(String, String)> {
-        self.content.pending_vfs_request.as_ref()
+    fn drain_requests(&mut self, out: &mut Vec<AppRequest>) {
+        out.append(&mut self.content.requests);
     }
 
     fn apply_vfs_ops(&mut self, vfs: &mut dyn Vfs) -> bool {
@@ -478,14 +507,6 @@ impl App for TextEditorApp {
 
     fn viewing_file(&self) -> Option<&str> {
         self.file_path.as_deref()
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
-    fn as_any_mut(&mut self) -> &mut dyn Any {
-        self
     }
 }
 
@@ -556,7 +577,7 @@ mod tests {
         // Click roughly at column 6 in the first line. Area top is
         // menu_h = 18 (menu bar sits at the top of the content area),
         // so ly = 18 + 6 (pad) + 2 puts us on line 0.
-        let action = app.handle_click(8 + 6 * 7, 26, 400, 300, false);
+        let action = app.handle_click(8 + 6 * 7, 26, 400, 300, false, &oasis_vfs::MemoryVfs::new());
         assert_eq!(action, AppAction::None);
         assert_eq!(app.mode, EditorMode::Insert);
         assert_eq!(app.cursor_line, 0);
@@ -570,10 +591,10 @@ mod tests {
         let mut app = TextEditorApp::new("/apps/editor");
         assert!(!app.menu.is_open());
         // "File" label at x=6, menu strip y=0..18 so ly=8 hits it.
-        let _ = app.handle_click(10, 8, 400, 300, false);
+        let _ = app.handle_click(10, 8, 400, 300, false, &oasis_vfs::MemoryVfs::new());
         assert_eq!(app.menu.open, Some(0), "File dropdown should be open");
         // Clicking File again toggles it closed.
-        let _ = app.handle_click(10, 8, 400, 300, false);
+        let _ = app.handle_click(10, 8, 400, 300, false, &oasis_vfs::MemoryVfs::new());
         assert!(!app.menu.is_open(), "second click should close");
     }
 
@@ -586,12 +607,12 @@ mod tests {
         vfs.mkdir("/tmp").expect("mkdir");
         let mut app = TextEditorApp::open_file("/tmp/notes.txt", "hello");
         // Open the File menu.
-        let _ = app.handle_click(10, 8, 400, 300, false);
+        let _ = app.handle_click(10, 8, 400, 300, false, &oasis_vfs::MemoryVfs::new());
         assert!(app.menu.is_open());
         // File dropdown starts just below the menu bar (y=18) with
         // 4px padding, so first item row is y=22..42. New, then
         // Save is the second entry (y=42..62).
-        let action = app.handle_click(20, 46, 400, 300, false);
+        let action = app.handle_click(20, 46, 400, 300, false, &oasis_vfs::MemoryVfs::new());
         assert_eq!(action, AppAction::None);
         assert!(!app.menu.is_open(), "menu should close after dispatch");
         assert!(app.apply_vfs_ops(&mut vfs), "save must be applied");
@@ -603,10 +624,10 @@ mod tests {
     #[test]
     fn click_file_exit_item_returns_exit() {
         let mut app = TextEditorApp::new("/apps/editor");
-        let _ = app.handle_click(10, 8, 400, 300, false);
+        let _ = app.handle_click(10, 8, 400, 300, false, &oasis_vfs::MemoryVfs::new());
         // Exit is the 5th entry (New, Save, Save As, Separator, Exit):
         // y=22+20+20+20+6 = 88 is the exit row.
-        let action = app.handle_click(20, 92, 400, 300, false);
+        let action = app.handle_click(20, 92, 400, 300, false, &oasis_vfs::MemoryVfs::new());
         assert_eq!(action, AppAction::Exit);
     }
 
@@ -1318,7 +1339,7 @@ mod tests {
 
     #[test]
     fn downcast_works() {
-        let app = TextEditorApp::new("/apps/editor");
+        let app: Box<dyn App> = Box::new(TextEditorApp::new("/apps/editor"));
         let any = app.as_any();
         assert!(any.downcast_ref::<TextEditorApp>().is_some());
     }
@@ -1346,7 +1367,9 @@ mod tests {
     #[test]
     fn no_pending_request_initially() {
         let mut app = TextEditorApp::new("/apps/editor");
-        assert!(app.take_pending_request().is_none());
+        let mut out = Vec::new();
+        app.drain_requests(&mut out);
+        assert!(out.is_empty());
     }
 
     #[test]

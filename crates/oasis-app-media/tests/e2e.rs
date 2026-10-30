@@ -157,7 +157,7 @@ fn music_listing_playlist_next_prev_and_ipc() {
     assert_eq!(browsing(&h).track_info().0, Some("Sunrise Song"));
     assert!(h.screen_text().contains("Sunrise Song"));
     assert_eq!(
-        h.app_mut().take_pending_request(),
+        h.take_request(),
         Some((
             MEDIA_REQUEST_PATH.to_string(),
             "play_file /home/user/music/a_tagged.mp3".to_string()
@@ -215,13 +215,10 @@ fn music_listing_playlist_next_prev_and_ipc() {
     assert!(h.screen_text().contains("0:30 / 1:00"));
 
     // Cancel stops playback and returns to the listing; Cancel again exits.
-    h.app_mut().take_pending_request();
+    while h.take_request().is_some() {}
     assert_eq!(h.press(Button::Cancel), AppAction::None);
     assert_eq!(viewing(&h), None);
-    assert_eq!(
-        h.app_mut().take_pending_request().map(|r| r.1),
-        Some("stop".to_string())
-    );
+    assert_eq!(h.take_request().map(|r| r.1), Some("stop".to_string()));
     assert!(h.screen_text().contains("a_tagged.mp3"));
     assert_eq!(h.press(Button::Cancel), AppAction::Exit);
 }

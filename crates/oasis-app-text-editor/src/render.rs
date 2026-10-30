@@ -9,6 +9,20 @@ use oasis_ui::menu_bar::MenuStyle;
 /// Used for both sizing (we create objects up front) and teardown.
 const NP_MAX_VISIBLE_LINES: usize = 64;
 
+/// Gap between the top of the text area and the first text row.
+const NP_PAD_TOP: i32 = 6;
+/// Menu bar and status strip heights of the windowed Notepad layout.
+const NP_MENU_H: u32 = 18;
+const NP_STATUS_H: u32 = 18;
+
+/// `(text rows, row height)` of the windowed editor viewport in a content
+/// area `ch` tall: what `draw_notepad` draws and `App::layout` records.
+pub(crate) fn notepad_viewport(ch: u32, at: &ActiveTheme) -> (usize, i32) {
+    let area_h = ch.saturating_sub(NP_MENU_H + NP_STATUS_H) as i32;
+    let line_h = at.terminal_line_height.max(14) as i32;
+    (((area_h - NP_PAD_TOP) / line_h).max(0) as usize, line_h)
+}
+
 impl TextEditorApp {
     /// Format the buffer lines with line numbers for display.
     pub fn format_display_lines(&self) -> Vec<String> {
@@ -30,7 +44,7 @@ impl TextEditorApp {
     /// viewport, or the fullscreen layout estimate before the first draw
     /// (minus the status line).
     pub(crate) fn page_lines(&self) -> usize {
-        match self.viewport_lines.get() {
+        match self.viewport_lines {
             0 => self.content.cached_max_visible.max(2) - 1,
             n => n,
         }
@@ -212,13 +226,10 @@ impl TextEditorApp {
         backend.fill_rect(cx, area_y, cw, area_h, body_bg)?;
 
         let font_size: u16 = 12;
-        let line_h = at.terminal_line_height.max(14) as i32;
         let pad_left = 8i32;
-        let pad_top = 6i32;
-
-        let max_lines = ((area_h as i32 - pad_top) / line_h).max(0) as usize;
-        self.viewport_lines.set(max_lines.max(1));
-        self.viewport_line_h.set(line_h);
+        let pad_top = NP_PAD_TOP;
+        // Same viewport `App::layout` recorded for scrolling and clicks.
+        let (max_lines, line_h) = notepad_viewport(ch, at);
         let first = self.content.scroll;
         let visible = self
             .buffer
@@ -343,7 +354,7 @@ impl TextEditorApp {
     /// `draw_notepad` produces for windowed mode, but emits named SDI
     /// objects instead of direct backend draw calls so it survives the
     /// classic-skin fullscreen render path.
-    pub(crate) fn render_notepad_sdi(&self, sdi: &mut SdiRegistry, at: &ActiveTheme) {
+    pub(crate) fn render_notepad_sdi(&mut self, sdi: &mut SdiRegistry, at: &ActiveTheme) {
         // Defensive: hide the generic content-listing SDI objects that
         // a previously-open app may have populated and left visible.
         // Without this, stale `app_line_*` text bleeds through our
@@ -469,8 +480,8 @@ impl TextEditorApp {
         let pad_left = 8i32;
         let max_lines = ((area_h as i32 - pad_top) / line_h as i32).max(0) as usize;
         let max_lines = max_lines.min(NP_MAX_VISIBLE_LINES);
-        self.viewport_lines.set(max_lines.max(1));
-        self.viewport_line_h.set(line_h as i32);
+        self.viewport_lines = max_lines.max(1);
+        self.viewport_line_h = line_h as i32;
         let visible = self
             .buffer
             .line_count()

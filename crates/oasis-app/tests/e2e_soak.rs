@@ -154,7 +154,7 @@ fn photo_viewer_textures_are_released_on_close() {
         // Open the first entry (image or folder) a few times to load
         // thumbnails / the full image.
         // The listing of /home/user/photos: select the sample PNG, open it.
-        let lines = h.app_runner("Photo Viewer").unwrap().lines.clone();
+        let lines = h.app_runner("Photo Viewer").unwrap().lines().to_vec();
         let idx = lines
             .iter()
             .position(|l| l.contains(".png"))

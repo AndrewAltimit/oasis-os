@@ -11,10 +11,8 @@
 //! clickable station rows, a click-to-set volume bar and Vol-/Vol+/Stop
 //! buttons.
 
-use std::cell::Cell;
-
 use oasis_app_core::render::{hide_app_sdi, render_app_chrome, render_content_sdi};
-use oasis_app_core::{App, AppAction, ContentState};
+use oasis_app_core::{App, AppAction, AppRequest, ContentState};
 use oasis_audio::radio::station::StationRegistry;
 use oasis_audio::{RADIO_APP_TITLE, RADIO_REQUEST_PATH, RADIO_STATUS_PATH};
 use oasis_sdi::SdiRegistry;
@@ -38,6 +36,10 @@ const DEFAULT_VOLUME: u8 = 80;
 /// Status refreshes an optimistic volume survives without the published
 /// status confirming it (~1 s of per-frame refreshes).
 const VOLUME_OVERRIDE_TTL: u8 = 60;
+
+/// How often (ms of `tick` time) the app re-reads the published radio
+/// status. The radio subsystem republishes it about this often.
+pub const STATUS_POLL_MS: u32 = 250;
 
 /// Number of header lines above the station list in the text view.
 const STATION_HEADER_LINES: usize = 7;
@@ -219,9 +221,11 @@ pub struct RadioApp {
     selected: usize,
     /// First station row shown in the windowed list.
     list_scroll: usize,
-    /// Station rows the windowed list showed last frame (keeps the
-    /// selection scrolled into view).
-    visible_rows: Cell<usize>,
+    /// Station rows the windowed list shows at the last `layout` (keeps
+    /// the selection scrolled into view).
+    visible_rows: usize,
+    /// `tick` time accumulated since the status was last re-read.
+    since_status_poll_ms: u32,
     /// Volume requested but not yet confirmed by the published status,
     /// with the refreshes it has left.
     volume_override: Option<(u8, u8)>,
@@ -238,7 +242,8 @@ impl RadioApp {
             save_pending: false,
             selected: 0,
             list_scroll: 0,
-            visible_rows: Cell::new(8),
+            visible_rows: 8,
+            since_status_poll_ms: 0,
             volume_override: None,
         };
         app.stations = station_rows(&app.registry);
@@ -261,7 +266,7 @@ impl RadioApp {
     }
 
     fn request(&mut self, data: String) {
-        self.content.pending_vfs_request = Some((RADIO_REQUEST_PATH.to_string(), data));
+        self.content.post_request(RADIO_REQUEST_PATH, data);
     }
 
     /// Request a volume (clamped to 0-100).
@@ -323,7 +328,7 @@ impl RadioApp {
 
     /// Keep the selection inside the windowed list viewport.
     fn scroll_into_view(&mut self) {
-        let rows = self.visible_rows.get().max(1);
+        let rows = self.visible_rows.max(1);
         if self.selected < self.list_scroll {
             self.list_scroll = self.selected;
         } else if self.selected >= self.list_scroll + rows {
@@ -445,7 +450,19 @@ impl App for RadioApp {
         Some(AppAction::None)
     }
 
-    fn handle_click(&mut self, lx: i32, ly: i32, cw: u32, ch: u32, _fullscreen: bool) -> AppAction {
+    fn layout(&mut self, cw: u32, ch: u32, _at: &ActiveTheme) {
+        self.visible_rows = RadioLayout::compute(0, 0, cw, ch).visible_rows();
+    }
+
+    fn handle_click(
+        &mut self,
+        lx: i32,
+        ly: i32,
+        cw: u32,
+        ch: u32,
+        _fullscreen: bool,
+        _vfs: &dyn Vfs,
+    ) -> AppAction {
         let l = RadioLayout::compute(0, 0, cw, ch);
         if let Some(button) = l.button_at(lx, ly) {
             match button {
@@ -467,8 +484,13 @@ impl App for RadioApp {
         AppAction::None
     }
 
-    fn refresh(&mut self, vfs: &dyn Vfs) {
-        self.reload_status(vfs);
+    fn tick(&mut self, dt_ms: u32, vfs: &dyn Vfs) -> bool {
+        self.since_status_poll_ms = self.since_status_poll_ms.saturating_add(dt_ms);
+        if self.since_status_poll_ms < STATUS_POLL_MS {
+            return false;
+        }
+        self.since_status_poll_ms = 0;
+        self.reload_status(vfs)
     }
 
     fn apply_vfs_ops(&mut self, vfs: &mut dyn Vfs) -> bool {
@@ -515,30 +537,19 @@ impl App for RadioApp {
         hide_app_sdi(sdi);
     }
 
-    fn take_pending_request(&mut self) -> Option<(String, String)> {
-        self.content.pending_vfs_request.take()
-    }
-
-    fn peek_pending_request(&self) -> Option<&(String, String)> {
-        self.content.pending_vfs_request.as_ref()
+    fn drain_requests(&mut self, out: &mut Vec<AppRequest>) {
+        out.append(&mut self.content.requests);
     }
 
     fn lines(&self) -> &[String] {
         &self.content.lines
-    }
-
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-
-    fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
-        self
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use oasis_app_core::AsAny;
     use oasis_test_backend::{DrawCommand, RecordingBackend};
     use oasis_vfs::MemoryVfs;
 
@@ -558,10 +569,17 @@ mod tests {
     }
 
     fn take(app: &mut RadioApp) -> Option<String> {
-        app.take_pending_request().map(|(path, data)| {
-            assert_eq!(path, RADIO_REQUEST_PATH);
-            data
-        })
+        if app.content.requests.is_empty() {
+            return None;
+        }
+        let req = app.content.requests.remove(0);
+        assert_eq!(req.path, RADIO_REQUEST_PATH);
+        Some(req.data)
+    }
+
+    /// One status poll (what the host's per-frame `tick` amounts to).
+    fn poll(app: &mut RadioApp, vfs: &dyn Vfs) -> bool {
+        app.tick(STATUS_POLL_MS, vfs)
     }
 
     fn drawn_texts(app: &RadioApp, w: u32, h: u32) -> Vec<String> {
@@ -652,7 +670,7 @@ mod tests {
         // Stopped: Escape is left to Cancel (exit).
         assert_eq!(app.handle_key(&Key::Escape, Modifiers::NONE, &vfs), None);
         write_status(&mut vfs, "State: playing\nStation: Jazz FM\n");
-        app.refresh(&vfs);
+        poll(&mut app, &vfs);
         assert_eq!(
             app.handle_key(&Key::Escape, Modifiers::NONE, &vfs),
             Some(AppAction::None)
@@ -717,16 +735,16 @@ mod tests {
         let mut app = RadioApp::new("/apps/radio", &vfs);
         app.change_volume(true);
         // Status not updated yet: keep showing the requested value.
-        app.refresh(&vfs);
+        poll(&mut app, &vfs);
         assert_eq!(app.volume(), 60);
         write_status(&mut vfs, "State: playing\nVolume: 60%\n");
-        app.refresh(&vfs);
+        poll(&mut app, &vfs);
         assert!(app.volume_override.is_none());
         assert_eq!(app.volume(), 60);
         // A request the subsystem never confirms expires.
         app.change_volume(true);
         for _ in 0..VOLUME_OVERRIDE_TTL {
-            app.refresh(&vfs);
+            poll(&mut app, &vfs);
         }
         assert_eq!(app.volume(), 60);
     }
@@ -793,8 +811,9 @@ mod tests {
         let mut app = RadioApp::new("/apps/radio", &vfs);
         let (w, h) = (400, 240);
         let l = RadioLayout::compute(0, 0, w, h);
+        let vfs2 = make_vfs();
         let click = |app: &mut RadioApp, x: i32, y: i32| {
-            app.handle_click(x, y, w, h, false);
+            app.handle_click(x, y, w, h, false, &vfs2);
         };
 
         let stop = l.buttons[2];
@@ -816,14 +835,14 @@ mod tests {
 
         // The panel text area does nothing.
         click(&mut app, l.panel.x + 4, l.panel.y + 4);
-        assert!(app.take_pending_request().is_none());
+        assert!(take(&mut app).is_none());
     }
 
     #[test]
     fn keyboard_selection_scrolls_windowed_list() {
         let vfs = make_vfs();
         let mut app = RadioApp::new("/apps/radio", &vfs);
-        app.visible_rows.set(2);
+        app.visible_rows = 2;
         let n = app.stations.len();
         for _ in 0..n {
             app.handle_input(&Button::Down, &vfs);

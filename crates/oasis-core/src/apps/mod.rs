@@ -21,7 +21,7 @@ pub mod simple_app;
 #[cfg(feature = "wasm-youtube")]
 pub mod video_embed;
 
-pub use app_trait::{App, AppAction, ContentState};
+pub use app_trait::{App, AppAction, AppRequest, AsAny, ContentState};
 pub use oasis_app_core::file_viewer::app_for_file;
 pub use registry::registered_app_titles;
 pub use runner::AppRunner;
