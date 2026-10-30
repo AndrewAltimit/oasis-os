@@ -337,7 +337,7 @@ fn dispatch_event_receives_detail() {
 
 #[test]
 fn retained_engine_fires_events_after_script_exec() {
-    // Simulate what widget/pipeline.rs does: create engine, run
+    // Simulate what widget/pipeline/document.rs does: create engine, run
     // scripts, then dispatch events later.
     let (engine, _doc) = setup(sample_doc());
     engine

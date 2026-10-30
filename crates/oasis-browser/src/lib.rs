@@ -958,10 +958,10 @@ impl BrowserWidget {
         true
     }
 
-    // Navigation/loading methods → widget/pipeline.rs
+    // Navigation/loading methods → widget/pipeline/
     // Image loading methods → widget/images.rs
     // Paint methods → widget/paint.rs
-    // Input handling methods → widget/input.rs
+    // Input handling methods → widget/input/
 
     // ---------------------------------------------------------------
     // Accessors

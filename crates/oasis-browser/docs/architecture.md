@@ -88,8 +88,10 @@ crates/oasis-browser/src/
 ├── lib.rs              BrowserWidget + the public surface
 ├── widget/
 │   ├── paint.rs        paint(): display list record (cached) + replay
-│   ├── input.rs        handle_input(): event routing
-│   ├── pipeline.rs     navigate -> parse -> cascade -> layout glue
+│   ├── input/          handle_input(): event routing (click, focus, forms,
+│   │                   history, hover + transitions, JS events, scroll)
+│   ├── pipeline/       navigate -> parse -> cascade -> layout glue
+│   │                   (navigation, document, stylesheets, scripts, gemini_page)
 │   └── images.rs       async image decode plumbing
 ├── config.rs           viewport, zoom, cache + image caps, feature toggles
 │

@@ -1,4 +1,4 @@
-//! Tests for `widget/input.rs` -- focus traversal, link cycling,
+//! Tests for `widget/input/` -- focus traversal, link cycling,
 //! URL-bar editing, and the `styles_geometry_equal` invariant that
 //! gates the hover-only-restyle optimization.
 //!

@@ -4,7 +4,7 @@
 //! `perspective-origin` against an element's box, building the
 //! composed 2D affine matrix from a `transform:` list, and asking
 //! "does this transform list contain any 3D function?". The
-//! `record_box` recursive walker in `record.rs` uses these to decide
+//! `record_box` recursive walker in `record/mod.rs` uses these to decide
 //! between the cheap 2D-translation fast path, the full affine path,
 //! and the screen-space 3D projection path.
 

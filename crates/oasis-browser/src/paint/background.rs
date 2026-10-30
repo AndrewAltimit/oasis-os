@@ -1,4 +1,4 @@
-//! Background geometry helpers shared by the recorder (`record.rs`)
+//! Background geometry helpers shared by the recorder (`record/`)
 //! and the mask rasterizer (`display_list/mask.rs`): background-image
 //! tiling and gradient-stop sampling.
 
@@ -20,7 +20,7 @@ pub(crate) struct BgTile {
 
 /// Compute the list of background-image tiles to blit.
 ///
-/// Used by `record.rs::record_background` and the mask rasterizer.
+/// Used by `record::decorations::record_background` and the mask rasterizer.
 /// Returns an empty Vec when the image would be invisible (zero size).
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn background_image_tiles(
@@ -163,18 +163,11 @@ fn lerp_color(a: Color, b: Color, t: f32) -> Color {
 }
 
 /// Sample the gradient color at a normalized position `t` (0.0..=1.0).
-///
-/// Exposed as `pub(crate)` for the display list recorder.
-pub(crate) fn sample_gradient_pub(
+pub(crate) fn sample_gradient(
     stops: &[crate::css::values::GradientStop],
     t: f32,
     opacity: f32,
 ) -> Color {
-    sample_gradient(stops, t, opacity)
-}
-
-/// Sample the gradient color at a normalized position `t` (0.0..=1.0).
-fn sample_gradient(stops: &[crate::css::values::GradientStop], t: f32, opacity: f32) -> Color {
     if stops.is_empty() {
         return Color::rgba(0, 0, 0, 0);
     }
