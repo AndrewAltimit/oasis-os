@@ -9,9 +9,9 @@
 //! etc.). `<text>` with `text-anchor`, `letter-spacing`, `font-weight`,
 //! `opacity`, and `<tspan>` children.
 //!
-//! Layout: this module holds the parsed-tree types; [`parse`] builds
-//! them from the DOM, [`path`] turns path data into polylines, and
-//! [`paint`] draws them.
+//! Layout: this module holds the parsed-tree types; `parse` builds
+//! them from the DOM, `path` turns path data into polylines, and
+//! `paint` draws them.
 
 use std::collections::HashMap;
 
