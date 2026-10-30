@@ -441,6 +441,8 @@ mod tests {
         server_to_client: Vec<u8>,
         /// When set, writes fail with `WouldBlock` (peer not draining).
         write_blocked: bool,
+        /// When set, reads fail with this kind once the input is drained.
+        read_error: Option<std::io::ErrorKind>,
         closed: bool,
     }
 
@@ -465,7 +467,10 @@ mod tests {
         fn read(&mut self, buf: &mut [u8]) -> Result<usize> {
             let mut p = lock(&self.pipe);
             if p.client_to_server.is_empty() {
-                return Err(would_block());
+                return Err(match p.read_error {
+                    Some(kind) => OasisError::Io(std::io::Error::from(kind)),
+                    None => would_block(),
+                });
             }
             let n = buf.len().min(p.client_to_server.len());
             let drained: Vec<u8> = p.client_to_server.drain(..n).collect();
@@ -707,6 +712,42 @@ mod tests {
         assert!(!lock(&pipe).closed);
         // Once the peer is quiet long enough, the connection closes.
         server.linger_quiet = Duration::ZERO;
+        server.poll(&mut disp);
+        assert_eq!(server.connection_count(), 0);
+        assert!(lock(&pipe).closed);
+    }
+
+    #[test]
+    fn timed_out_read_drops_the_connection() {
+        // On a non-blocking socket ETIMEDOUT is the kernel declaring the
+        // peer dead; it must not be retried like WouldBlock until the
+        // (5 minute) idle timeout.
+        let (mut server, pipe) = server_with(b"", None);
+        lock(&pipe).read_error = Some(std::io::ErrorKind::TimedOut);
+        let mut disp = StubDispatcher;
+        server.poll(&mut disp);
+        assert_eq!(server.connection_count(), 0);
+    }
+
+    #[test]
+    fn would_block_read_keeps_the_connection() {
+        let (mut server, _pipe) = server_with(b"", None);
+        let mut disp = StubDispatcher;
+        server.poll(&mut disp);
+        server.poll(&mut disp);
+        assert_eq!(server.connection_count(), 1);
+    }
+
+    #[test]
+    fn silent_peer_is_dropped_after_idle_timeout() {
+        // A client that connects and then never sends anything (and never
+        // closes) only ever yields WouldBlock: the idle timeout reaps it.
+        let (mut server, pipe) = server_with(b"", None);
+        let mut disp = StubDispatcher;
+        server.poll(&mut disp);
+        assert_eq!(server.connection_count(), 1);
+        server.idle_timeout = Duration::ZERO;
+        std::thread::sleep(Duration::from_millis(2));
         server.poll(&mut disp);
         assert_eq!(server.connection_count(), 0);
         assert!(lock(&pipe).closed);

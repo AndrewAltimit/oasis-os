@@ -735,6 +735,60 @@ mod tests {
         String::from_utf8_lossy(&output.lock().unwrap()).into_owned()
     }
 
+    /// Yields its input, then fails every read with `kind`.
+    struct FailingStream {
+        input: VecDeque<u8>,
+        kind: std::io::ErrorKind,
+    }
+
+    impl oasis_types::backend::NetworkStream for FailingStream {
+        fn read(&mut self, buf: &mut [u8]) -> oasis_types::error::Result<usize> {
+            if self.input.is_empty() {
+                return Err(OasisError::Io(std::io::Error::from(self.kind)));
+            }
+            let n = buf.len().min(self.input.len());
+            for b in buf.iter_mut().take(n) {
+                *b = self.input.pop_front().unwrap();
+            }
+            Ok(n)
+        }
+
+        fn write(&mut self, data: &[u8]) -> oasis_types::error::Result<usize> {
+            Ok(data.len())
+        }
+
+        fn close(&mut self) -> oasis_types::error::Result<()> {
+            Ok(())
+        }
+    }
+
+    fn poll_with_read_error(kind: std::io::ErrorKind) -> usize {
+        let mut backend = MockBackend::new();
+        backend.add_stream(Box::new(FailingStream {
+            input: VecDeque::from(b"LIST /\n".to_vec()),
+            kind,
+        }));
+        let mut server = FtpServer::new(2121);
+        server.start(&mut backend).unwrap();
+        let mut vfs = MemoryVfs::new();
+        server.poll(&mut backend, &mut vfs).unwrap();
+        server.poll(&mut backend, &mut vfs).unwrap();
+        server.connection_count()
+    }
+
+    #[test]
+    fn ftp_timed_out_read_drops_connection() {
+        // ETIMEDOUT on the non-blocking socket = the kernel gave up on the
+        // peer. Retrying it like WouldBlock would keep a dead connection
+        // (and its slot) until the 5 minute idle timeout.
+        assert_eq!(poll_with_read_error(std::io::ErrorKind::TimedOut), 0);
+    }
+
+    #[test]
+    fn ftp_would_block_read_keeps_connection() {
+        assert_eq!(poll_with_read_error(std::io::ErrorKind::WouldBlock), 1);
+    }
+
     #[test]
     fn ftp_auth_correct_password() {
         let output: WriteBuf = Arc::new(Mutex::new(Vec::new()));

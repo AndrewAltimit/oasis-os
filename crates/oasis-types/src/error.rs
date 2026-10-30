@@ -286,25 +286,43 @@ impl OasisError {
     ///
     /// Matches [`OasisError::Io`] with [`io::ErrorKind::WouldBlock`] (what a
     /// non-blocking `TcpStream` returns: "Resource temporarily unavailable"
-    /// on Linux, WSAEWOULDBLOCK on Windows) or [`io::ErrorKind::TimedOut`]
-    /// (what a socket with a read timeout returns on Windows). Also accepts
-    /// the legacy `Backend("WouldBlock")` / `Backend("would block")` string
-    /// some backends and mocks produce.
+    /// on Linux, WSAEWOULDBLOCK on Windows). Also accepts the legacy
+    /// `Backend("WouldBlock")` / `Backend("would block")` string some
+    /// backends and mocks produce.
+    ///
+    /// [`io::ErrorKind::TimedOut`] is deliberately **not** "try again": on a
+    /// non-blocking socket it is the kernel reporting a dead connection
+    /// (ETIMEDOUT / WSAETIMEDOUT after retransmission or keepalive gave up),
+    /// and on a blocking socket with a read timeout it means the caller's own
+    /// deadline expired. Retrying either forever hangs on a dead peer. Callers
+    /// that really do use a read timeout as a poll interval must check
+    /// [`OasisError::is_timed_out`] explicitly *and* enforce an overall
+    /// deadline or idle timeout of their own.
+    ///
+    /// Even for `WouldBlock`, a loop that retries must bound how long it
+    /// waits: a peer that goes silent without closing the connection yields
+    /// `WouldBlock` forever.
     ///
     /// Use this instead of searching the error's `Display` text: the OS
     /// message never contains "would block", so string matching treats
     /// every empty read on a plain TCP socket as fatal.
     pub fn is_would_block(&self) -> bool {
         match self {
-            Self::Io(e) => matches!(
-                e.kind(),
-                io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
-            ),
+            Self::Io(e) => e.kind() == io::ErrorKind::WouldBlock,
             Self::Backend(BackendError::Other(msg)) => {
                 msg.eq_ignore_ascii_case("wouldblock") || msg.eq_ignore_ascii_case("would block")
             },
             _ => false,
         }
+    }
+
+    /// Whether this error is an I/O timeout ([`io::ErrorKind::TimedOut`]).
+    ///
+    /// See [`OasisError::is_would_block`] for why this is a separate check:
+    /// a timeout is only retryable where the caller set a read timeout as a
+    /// poll interval and tracks its own idle deadline.
+    pub fn is_timed_out(&self) -> bool {
+        matches!(self, Self::Io(e) if e.kind() == io::ErrorKind::TimedOut)
     }
 }
 
@@ -547,14 +565,24 @@ mod tests {
     fn would_block_io_kinds() {
         let wb: OasisError = io::Error::from(io::ErrorKind::WouldBlock).into();
         assert!(wb.is_would_block());
-        let to: OasisError = io::Error::from(io::ErrorKind::TimedOut).into();
-        assert!(to.is_would_block());
         // The OS text never says "would block"; the kind is what matters.
         let os = OasisError::Io(io::Error::new(
             io::ErrorKind::WouldBlock,
             "Resource temporarily unavailable (os error 11)",
         ));
         assert!(os.is_would_block());
+    }
+
+    #[test]
+    fn timed_out_is_not_would_block() {
+        // A dead connection on Linux surfaces as ETIMEDOUT; treating it as
+        // "try again" would spin forever on a peer that is gone.
+        let to: OasisError = io::Error::from(io::ErrorKind::TimedOut).into();
+        assert!(!to.is_would_block());
+        assert!(to.is_timed_out());
+        let wb: OasisError = io::Error::from(io::ErrorKind::WouldBlock).into();
+        assert!(!wb.is_timed_out());
+        assert!(!OasisError::Backend("timed out".into()).is_timed_out());
     }
 
     #[test]

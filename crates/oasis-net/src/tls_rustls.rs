@@ -243,14 +243,17 @@ impl RustlsStream {
 
             match self.tls.read_tls(&mut adapter) {
                 Ok(0) => return Ok(PullResult::Eof),
-                Err(ref e)
-                    if e.kind() == io::ErrorKind::WouldBlock
-                        || e.kind() == io::ErrorKind::TimedOut =>
-                {
+                Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => {
                     return Ok(PullResult::WouldBlock);
                 },
+                // Keep the kind (TimedOut, ConnectionReset, ...) so callers
+                // can tell a dead peer from "no data yet": a TimedOut here is
+                // the kernel giving up on the connection, not a retry hint.
                 Err(e) => {
-                    return Err(OasisError::Backend(format!("TLS read_tls: {e}").into()));
+                    return Err(OasisError::Io(io::Error::new(
+                        e.kind(),
+                        format!("TLS read_tls: {e}"),
+                    )));
                 },
                 Ok(_) => {},
             }
@@ -628,6 +631,63 @@ mod tests {
         let result = connect_to(&provider, port);
         assert!(result.is_ok(), "handshake failed: {:?}", result.err());
         let mut stream = result.unwrap();
+        let _ = stream.close();
+        let _ = handle.join();
+    }
+
+    /// TCP stream whose reads fail with an injected kind once armed.
+    struct InjectStream {
+        tcp: TcpNetworkStream,
+        fail: Arc<std::sync::Mutex<Option<io::ErrorKind>>>,
+    }
+
+    impl NetworkStream for InjectStream {
+        fn read(&mut self, buf: &mut [u8]) -> Result<usize> {
+            if let Some(kind) = *self.fail.lock().unwrap() {
+                return Err(OasisError::Io(io::Error::from(kind)));
+            }
+            self.tcp.read(buf)
+        }
+        fn write(&mut self, data: &[u8]) -> Result<usize> {
+            self.tcp.write(data)
+        }
+        fn close(&mut self) -> Result<()> {
+            self.tcp.close()
+        }
+    }
+
+    /// The TLS layer must pass "no data yet" through as WouldBlock but keep
+    /// a TimedOut (a dead peer on a non-blocking socket) as a real error,
+    /// with its kind intact, instead of folding it into WouldBlock.
+    #[test]
+    fn test_timed_out_is_an_error_not_would_block() {
+        let (server_cfg, cert_key) = make_server_config();
+        let provider = make_client_config(&cert_key);
+        let (handle, port) = spawn_server(server_cfg, Vec::new());
+        let tcp = TcpStream::connect(format!("127.0.0.1:{port}")).unwrap();
+        tcp.set_read_timeout(Some(std::time::Duration::from_secs(5)))
+            .unwrap();
+        let fail = Arc::new(std::sync::Mutex::new(None));
+        let inner: Box<dyn NetworkStream> = Box::new(InjectStream {
+            tcp: TcpNetworkStream(tcp),
+            fail: Arc::clone(&fail),
+        });
+        let mut stream = provider.connect_tls(inner, "localhost").unwrap();
+        let mut buf = [0u8; 64];
+
+        *fail.lock().unwrap() = Some(io::ErrorKind::WouldBlock);
+        let err = stream.read(&mut buf).unwrap_err();
+        assert!(err.is_would_block(), "got {err}");
+
+        *fail.lock().unwrap() = Some(io::ErrorKind::TimedOut);
+        let err = stream.read(&mut buf).unwrap_err();
+        assert!(
+            !err.is_would_block(),
+            "TimedOut folded into WouldBlock: {err}"
+        );
+        assert!(err.is_timed_out(), "kind lost: {err}");
+
+        *fail.lock().unwrap() = None;
         let _ = stream.close();
         let _ = handle.join();
     }
