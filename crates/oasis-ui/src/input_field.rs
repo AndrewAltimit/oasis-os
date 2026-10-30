@@ -49,13 +49,32 @@ impl InputField {
         WidgetState::from_flags(self.hovered, self.pressed, self.disabled)
     }
 
-    /// Display text (masked if password mode).
+    /// Display text (masked if password mode): one `*` per character,
+    /// so the cursor's character index lines up with the mask.
     fn display_text(&self) -> String {
         if self.password_mode {
-            "*".repeat(self.text.len())
+            "*".repeat(self.char_count())
         } else {
             self.text.clone()
         }
+    }
+
+    /// Number of characters (not bytes) in the text.
+    fn char_count(&self) -> usize {
+        self.text.chars().count()
+    }
+
+    /// The cursor, clamped to the text (`cursor_pos` is a public field).
+    fn cursor(&self) -> usize {
+        self.cursor_pos.min(self.char_count())
+    }
+
+    /// Byte offset of character index `char_idx` (or the end).
+    fn byte_at(&self, char_idx: usize) -> usize {
+        self.text
+            .char_indices()
+            .nth(char_idx)
+            .map_or(self.text.len(), |(i, _)| i)
     }
 
     /// Insert a character at the cursor position.
@@ -63,14 +82,10 @@ impl InputField {
         if self.disabled {
             return;
         }
-        let byte_pos = self
-            .text
-            .char_indices()
-            .nth(self.cursor_pos)
-            .map(|(i, _)| i)
-            .unwrap_or(self.text.len());
+        let cursor = self.cursor();
+        let byte_pos = self.byte_at(cursor);
         self.text.insert(byte_pos, ch);
-        self.cursor_pos += 1;
+        self.cursor_pos = cursor + 1;
     }
 
     /// Delete the character before the cursor.
@@ -78,22 +93,44 @@ impl InputField {
         if self.disabled {
             return;
         }
-        if self.cursor_pos > 0 {
-            self.cursor_pos -= 1;
-            let byte_pos = self
-                .text
-                .char_indices()
-                .nth(self.cursor_pos)
-                .map(|(i, _)| i)
-                .unwrap_or(self.text.len());
-            if byte_pos < self.text.len() {
-                let ch_len = self.text[byte_pos..]
-                    .chars()
-                    .next()
-                    .map_or(0, |c| c.len_utf8());
-                self.text.drain(byte_pos..byte_pos + ch_len);
-            }
+        let cursor = self.cursor();
+        if cursor > 0 {
+            self.cursor_pos = cursor - 1;
+            let start = self.byte_at(cursor - 1);
+            let end = self.byte_at(cursor);
+            self.text.drain(start..end);
         }
+    }
+
+    /// Delete the character after the cursor (the Delete key).
+    pub fn delete(&mut self) {
+        if self.disabled {
+            return;
+        }
+        let cursor = self.cursor();
+        let (start, end) = (self.byte_at(cursor), self.byte_at(cursor + 1));
+        self.text.drain(start..end);
+        self.cursor_pos = cursor;
+    }
+
+    /// Move the cursor one character left (stops at the start).
+    pub fn move_left(&mut self) {
+        self.cursor_pos = self.cursor().saturating_sub(1);
+    }
+
+    /// Move the cursor one character right (stops at the end).
+    pub fn move_right(&mut self) {
+        self.cursor_pos = (self.cursor() + 1).min(self.char_count());
+    }
+
+    /// Move the cursor to the start of the text.
+    pub fn move_home(&mut self) {
+        self.cursor_pos = 0;
+    }
+
+    /// Move the cursor to the end of the text.
+    pub fn move_end(&mut self) {
+        self.cursor_pos = self.char_count();
     }
 }
 
@@ -149,20 +186,29 @@ impl Widget for InputField {
                 ctx.theme.text_disabled,
                 max_w,
             )?;
-        } else {
+        } else if !self.focused {
             let display = self.display_text();
             let fg = WidgetStateColors::content_text(ctx.theme, state);
             ctx.backend
                 .draw_text_ellipsis(&display, tx, ty, fs, fg, max_w)?;
-
-            // Cursor.
-            if self.focused {
-                let before = &display[..display
-                    .char_indices()
-                    .nth(self.cursor_pos)
-                    .map(|(i, _)| i)
-                    .unwrap_or(display.len())];
-                let cursor_x = tx + ctx.backend.measure_text(before, fs) as i32;
+        } else {
+            // Focused: show the text around the cursor rather than an
+            // ellipsis, scrolling left just enough to keep the cursor
+            // inside the field, and clip to the text area.
+            let display = self.display_text();
+            let fg = WidgetStateColors::content_text(ctx.theme, state);
+            let cursor_byte = display
+                .char_indices()
+                .nth(self.cursor())
+                .map_or(display.len(), |(i, _)| i);
+            let before_w = ctx.backend.measure_text(&display[..cursor_byte], fs);
+            let scroll = before_w.saturating_sub(max_w.saturating_sub(1)) as i32;
+            ctx.backend.push_clip_rect(tx, y, max_w, h)?;
+            let drawn = ctx.backend.draw_text(&display, tx - scroll, ty, fs, fg);
+            ctx.backend.pop_clip_rect()?;
+            drawn?;
+            if max_w > 0 {
+                let cursor_x = tx + before_w as i32 - scroll;
                 ctx.backend
                     .fill_rect(cursor_x, ty, 1, text_h, ctx.theme.text_primary)?;
             }
@@ -459,5 +505,78 @@ mod tests {
             InputField::new().draw(ctx, 0, 0, 100, 20).unwrap();
         });
         assert_eq!(fills.first(), Some(&theme.input_bg));
+    }
+
+    #[test]
+    fn password_mask_counts_characters_not_bytes() {
+        let mut f = InputField::new();
+        f.password_mode = true;
+        for ch in "h\u{e9}\u{1f600}".chars() {
+            f.insert(ch);
+        }
+        assert_eq!(f.display_text(), "***");
+    }
+
+    #[test]
+    fn stale_cursor_is_clamped_before_editing() {
+        let mut f = InputField::new();
+        f.text = "abc".into();
+        f.cursor_pos = 99;
+        f.insert('d');
+        assert_eq!((f.text.as_str(), f.cursor_pos), ("abcd", 4));
+        f.cursor_pos = 99;
+        f.backspace();
+        assert_eq!((f.text.as_str(), f.cursor_pos), ("abc", 3));
+    }
+
+    #[test]
+    fn cursor_movement_and_delete() {
+        let mut f = InputField::new();
+        for ch in "h\u{e9}llo".chars() {
+            f.insert(ch);
+        }
+        f.move_home();
+        f.move_right();
+        f.delete(); // removes the two-byte e-acute
+        assert_eq!(f.text, "hllo");
+        f.move_end();
+        f.delete(); // nothing after the cursor
+        assert_eq!((f.text.as_str(), f.cursor_pos), ("hllo", 4));
+        f.move_left();
+        f.backspace();
+        assert_eq!((f.text.as_str(), f.cursor_pos), ("hlo", 2));
+        f.move_home();
+        f.move_left();
+        assert_eq!(f.cursor_pos, 0);
+    }
+
+    #[test]
+    fn focused_cursor_stays_inside_a_long_field() {
+        let theme = crate::theme::Theme::dark();
+        let mut backend = crate::test_utils::RecordingBackend::default();
+        let mut f = InputField::new();
+        f.focused = true;
+        for ch in "a very long line of text that overflows".chars() {
+            f.insert(ch);
+        }
+        {
+            let mut ctx = DrawContext::new(&mut backend, &theme);
+            f.draw(&mut ctx, 10, 0, 60, 20).unwrap();
+        }
+        // The 1 px cursor is the only text_primary-colored 1-wide fill.
+        let cursor_x = backend
+            .commands()
+            .iter()
+            .rev()
+            .find_map(|c| match c {
+                oasis_test_backend::DrawCommand::FillRect { x, w: 1, color, .. }
+                    if *color == theme.text_primary =>
+                {
+                    Some(*x)
+                },
+                _ => None,
+            })
+            .expect("cursor drawn");
+        assert!((14..14 + 52).contains(&cursor_x), "cursor at {cursor_x}");
     }
 }

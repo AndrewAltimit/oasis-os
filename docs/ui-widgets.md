@@ -112,7 +112,7 @@ any other:
 | `DatePicker` | `date_picker.rs` | Calendar grid with month / year navigation |
 | `Divider` | `divider.rs` | Horizontal or vertical separator line |
 | `Dropdown` | `dropdown.rs` | Dropdown / combobox with an option list |
-| `InputField` | `input_field.rs` | Single-line text input with cursor |
+| `InputField` | `input_field.rs` | Single-line text input with cursor (`insert`, `backspace`, `delete`, `move_left` / `_right` / `_home` / `_end`); scrolls to keep the cursor visible while focused |
 | `Modal` | `modal.rs` | Modal dialog with input blocking and button presets (`ModalButtons`, `ModalResult`) |
 | `Panel` | `panel.rs` | Container with background, border, shadow and rounded corners |
 | `ProgressBar` | `progress_bar.rs` | Determinate progress / gauge (`ProgressStyle`) |
