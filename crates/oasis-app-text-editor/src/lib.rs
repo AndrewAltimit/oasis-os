@@ -84,6 +84,13 @@ pub struct TextEditorApp {
     pub(crate) anchor: Option<Pos>,
     pub(crate) scroll_x: usize,
     pub(crate) file_path: Option<String>,
+    /// Line terminator the file was opened with (`"\r\n"` or `"\n"`);
+    /// saves write it back unchanged.
+    pub(crate) line_ending: &'static str,
+    /// The file was not valid UTF-8 and was decoded lossily: saving it in
+    /// place would replace the undecodable bytes with U+FFFD, so Save to
+    /// that path is refused (Save As to another path is allowed).
+    pub(crate) read_only: bool,
     pub(crate) modified: bool,
     pub(crate) status_message: Option<String>,
     pub(crate) find_query: String,
@@ -168,6 +175,8 @@ impl TextEditorApp {
             anchor: None,
             scroll_x: 0,
             file_path: path.map(String::from),
+            line_ending: "\n",
+            read_only: false,
             modified: false,
             status_message: None,
             find_query: String::new(),
@@ -203,9 +212,17 @@ impl TextEditorApp {
     /// read, returns an editor with a status message rather than panicking.
     pub fn open_from_vfs(path: &str, vfs: &dyn Vfs) -> Self {
         match vfs.read(path) {
-            Ok(bytes) => {
-                let text = String::from_utf8_lossy(&bytes).into_owned();
-                Self::open_file(path, &text)
+            Ok(bytes) => match String::from_utf8(bytes) {
+                Ok(text) => Self::open_file(path, &text),
+                Err(e) => {
+                    let text = String::from_utf8_lossy(e.as_bytes()).into_owned();
+                    let mut editor = Self::open_file(path, &text);
+                    editor.read_only = true;
+                    editor.status_message =
+                        Some("Not UTF-8: opened read-only (Save As to keep a copy).".into());
+                    editor.rebuild_display_lines();
+                    editor
+                },
             },
             Err(e) => {
                 let mut editor = Self::new("/apps/editor");
@@ -221,7 +238,13 @@ impl TextEditorApp {
         let file_name = path.rsplit('/').next().unwrap_or(path);
         let title = format!("Text Editor - {file_name}");
         let cs = ContentState::new(&title, "/apps/editor");
-        Self::with_state(cs, EditorBuffer::from_text(content), Some(path))
+        let mut editor = Self::with_state(cs, EditorBuffer::from_text(content), Some(path));
+        // Keep CRLF files CRLF: the buffer stores bare lines, and saving
+        // re-joins them with the ending the file was opened with.
+        if content.contains("\r\n") {
+            editor.line_ending = "\r\n";
+        }
+        editor
     }
 
     /// Execute a menu action by its registered id string. Returns an
