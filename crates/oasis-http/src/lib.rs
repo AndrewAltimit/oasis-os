@@ -77,6 +77,11 @@ pub struct ResourceRequest {
     /// header. Set when navigating from one page to another, or when
     /// loading sub-resources (images, stylesheets).
     pub referrer: Option<String>,
+    /// Full URL of the page that initiated the request, for `SameSite`
+    /// cookie enforcement ([`cookies::SameSiteContext`]). `None` for a
+    /// navigation the user started (address bar, history), which counts
+    /// as same-site. Unlike `referrer` it is never stripped or dropped.
+    pub initiator: Option<String>,
 }
 
 /// A loaded resource.
@@ -722,7 +727,9 @@ pub fn detect_content_type(url: &Url) -> ContentType {
 /// VFS first and falls back to the network.
 ///
 /// `tls` is forwarded to the HTTP client for HTTPS support.
-/// `cookie_jar` is used to send/receive HTTP cookies.
+/// `cookie_jar` is used to send/receive HTTP cookies; such a load is
+/// treated as a top-level navigation by `request.initiator` for
+/// `SameSite` (subresources go through the I/O thread).
 /// `cache` is consulted for conditional request headers (ETag /
 /// If-Modified-Since).
 pub fn load_resource(
@@ -855,7 +862,15 @@ fn load_from_network(
                     body,
                     &extra_refs,
                     tls,
-                    jar,
+                    // Synchronous cookie-carrying loads are page loads.
+                    &mut cookies::ScopedJar {
+                        jar,
+                        ctx: cookies::SameSiteContext::new(
+                            request.initiator.as_deref(),
+                            true,
+                            method,
+                        ),
+                    },
                     http::MAX_REDIRECTS,
                 )?,
                 None => http::http_request_full(method, &url, body, &extra_refs, tls)?,

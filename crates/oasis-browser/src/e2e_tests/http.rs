@@ -506,6 +506,59 @@ fn max_age_zero_logout_deletes_the_session_cookie() {
 }
 
 #[test]
+fn same_site_cookies_are_withheld_from_cross_site_requests() {
+    // The "tracker" site sets one cookie of each SameSite flavour.
+    let tracker = TestServer::start_on("127.0.0.2", |req| match req.path() {
+        "/set" => Reply::with(
+            200,
+            &[
+                ("Content-Type", "text/html"),
+                ("Set-Cookie", "s=1; Path=/; SameSite=Strict"),
+                ("Set-Cookie", "l=1; Path=/; SameSite=Lax"),
+                ("Set-Cookie", "n=1; Path=/"),
+            ],
+            "<html><body><p>Set</p></body></html>",
+        ),
+        _ => cookie_echo(req),
+    });
+    let px = tracker.url("/pixel.png");
+    let post = tracker.url("/post");
+    let site = TestServer::start(move |_| {
+        Reply::html(format!(
+            "<html><body><p>Host</p><img src=\"{px}\" width=\"1\" height=\"1\">\
+             <form action=\"{post}\" method=\"post\">\
+             <p><input type=\"hidden\" name=\"a\" value=\"1\">\
+             <input type=\"submit\" id=\"send\" value=\"Send\"></p></form></body></html>"
+        ))
+    });
+    let mut s = Session::new();
+    s.open(&tracker.url("/set"));
+    s.assert_shows("Set");
+    // Same-site (and user-typed) loads carry all three.
+    s.open(&tracker.url("/me"));
+    assert_eq!(
+        tracker.requests_to("/me")[0].header("cookie"),
+        Some("s=1; l=1; n=1")
+    );
+
+    // A cross-site subresource gets only the unrestricted cookie.
+    s.open(&site.url("/"));
+    s.assert_shows("Host");
+    s.settle();
+    let pixel = tracker.requests_to("/pixel.png");
+    assert_eq!(pixel.len(), 1, "image requested");
+    assert_eq!(pixel[0].header("cookie"), Some("n=1"));
+
+    // A cross-site form POST (top-level, unsafe method): no Lax / Strict.
+    s.click_element("send");
+    s.assert_shows("cookie=n=1");
+    assert_eq!(
+        tracker.requests_to("/post")[0].header("cookie"),
+        Some("n=1")
+    );
+}
+
+#[test]
 fn cross_origin_redirect_reduces_the_referer_to_the_origin() {
     let other = TestServer::start_on("127.0.0.2", |_| page("OtherSite"));
     let other_url = other.url("/dest");

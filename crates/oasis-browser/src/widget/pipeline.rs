@@ -46,6 +46,9 @@ impl BrowserWidget {
             method: loader::HttpMethod::Post,
             body: Some(body),
             referrer,
+            // A form post is always page-initiated: cross-site, it gets
+            // no `SameSite=Lax` / `Strict` cookies (CSRF).
+            initiator: self.nav.current_url().map(String::from),
         };
 
         // POST requests always go to the network, so offload to IO thread.
@@ -263,6 +266,10 @@ impl BrowserWidget {
             method: loader::HttpMethod::Get,
             body: None,
             referrer,
+            // GET navigations can't be told apart from typed URLs here,
+            // so they count as user-initiated (same-site): only the
+            // `Strict`-on-cross-site-link-click case is lost.
+            initiator: None,
         };
 
         // Determine if this is a network request that can be offloaded.
@@ -1657,6 +1664,7 @@ impl BrowserWidget {
                 method: crate::loader::HttpMethod::Get,
                 body: None,
                 referrer: referrer.clone(),
+                initiator: base.clone(),
             };
             if url.starts_with("vfs://") {
                 // VFS lookups require the caller's `Vfs` handle, which
@@ -1783,6 +1791,8 @@ impl BrowserWidget {
                 }
             }
             let referrer = loader::strip_referrer(&sheet_url);
+            // The page, not the importing sheet, decides same-site.
+            let initiator = self.nav.current_url().map(String::from);
             for (k, url) in urls.into_iter().enumerate() {
                 let request = ResourceRequest {
                     url: url.clone(),
@@ -1791,6 +1801,7 @@ impl BrowserWidget {
                     method: crate::loader::HttpMethod::Get,
                     body: None,
                     referrer: referrer.clone(),
+                    initiator: initiator.clone(),
                 };
                 if url.starts_with("vfs://") {
                     self.pending_vfs_stylesheets.push((idx + k, request));

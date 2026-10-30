@@ -24,12 +24,18 @@
 //!   at most [`MAX_COOKIES_PER_DOMAIN`] cookies per domain and
 //!   [`MAX_COOKIES`] in total, evicting the oldest.
 //! - `Path` defaults per §5.1.4 and `Cookie:` lists longer paths first.
+//! - **`SameSite` on send.** Requests carry a [`SameSiteContext`] (the
+//!   initiating page, top-level or not, safe method or not): cross-site
+//!   subresources get no `Strict` / `Lax` cookies, cross-site top-level
+//!   navigations get `Lax` ones only with a safe method (see
+//!   [`SameSiteContext`] for the exact rule).
 //!
 //! Not implemented: persistence (the jar lives for the browser session),
-//! `SameSite` *enforcement* (the attribute is parsed and stored, but every
-//! matching cookie is sent regardless of the request's initiator), and
-//! `document.cookie` integration (`js_dom/storage.rs` keeps a separate
-//! per-page map that never reaches the network).
+//! `SameSite` on *store* (a cross-site response may still set `Lax` /
+//! `Strict` cookies), a missing `SameSite` defaulting to `Lax` (it is
+//! treated as `None`), schemeful same-site, and `document.cookie`
+//! integration (`js_dom/storage.rs` keeps a separate per-page map that
+//! never reaches the network).
 
 use std::net::IpAddr;
 
@@ -144,7 +150,7 @@ pub const MULTI_LABEL_SUFFIXES: &[&str] = &[
     "firebaseapp.com",
 ];
 
-/// The `SameSite` attribute (parsed and stored, not enforced).
+/// The `SameSite` attribute, enforced through [`SameSiteContext`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SameSite {
     /// `SameSite=Strict`.
@@ -153,6 +159,82 @@ pub enum SameSite {
     Lax,
     /// `SameSite=None`.
     None,
+}
+
+/// Who asked for a request, for `SameSite` enforcement (RFC 6265bis
+/// §5.2 / §5.8.3, simplified).
+///
+/// A request is *cross-site* when its URL's registrable domain (see
+/// [`registrable_domain`]; schemeless) differs from the initiator's.
+/// Cross-site requests carry only cookies without `SameSite` or with
+/// `SameSite=None` (missing is treated as `None`, the legacy
+/// behaviour), plus `SameSite=Lax` cookies on a top-level navigation
+/// with a safe method. Same-site requests and requests without an
+/// initiator (the user typed the URL) carry every matching cookie. The
+/// context applies to every redirect hop.
+#[derive(Debug, Clone, Default)]
+pub struct SameSiteContext {
+    /// URL of the document that initiated the request; `None` for a
+    /// navigation the user started.
+    pub initiator: Option<Url>,
+    /// A top-level (page) navigation rather than a subresource / fetch.
+    pub top_level: bool,
+    /// The request method is safe (`GET` / `HEAD`).
+    pub safe_method: bool,
+}
+
+impl SameSiteContext {
+    /// Context for a request from `initiator` (a URL string, as carried
+    /// by `ResourceRequest::initiator`; unparsable means none).
+    pub fn new(initiator: Option<&str>, top_level: bool, method: &str) -> Self {
+        Self {
+            initiator: initiator.and_then(Url::parse),
+            top_level,
+            safe_method: matches!(method, "GET" | "HEAD"),
+        }
+    }
+
+    /// Whether `cookie` may be sent on a request to `url` in this context.
+    pub fn allows(&self, cookie: &Cookie, url: &Url) -> bool {
+        let Some(initiator) = self.initiator.as_ref() else {
+            return true;
+        };
+        if is_same_site(initiator, url) {
+            return true;
+        }
+        match cookie.same_site {
+            Some(SameSite::Strict) => false,
+            Some(SameSite::Lax) => self.top_level && self.safe_method,
+            Some(SameSite::None) | None => true,
+        }
+    }
+}
+
+/// The registrable domain ("site") of `host` under the PSL-lite rules:
+/// the public suffix plus one label (`a.b.example.co.uk` ->
+/// `example.co.uk`). IP literals and single-label hosts are their own
+/// site.
+pub fn registrable_domain(host: &str) -> &str {
+    if is_ip_host(host) {
+        return host;
+    }
+    let host = host.trim_end_matches('.');
+    // Walk the labels left to right: the first label whose remainder is
+    // a public suffix starts the site.
+    let mut label_start = 0;
+    while let Some(dot) = host[label_start..].find('.') {
+        if is_public_suffix(&host[label_start + dot + 1..]) {
+            return &host[label_start..];
+        }
+        label_start += dot + 1;
+    }
+    host
+}
+
+/// Whether `a` and `b` are same-site (equal registrable domains).
+pub fn is_same_site(a: &Url, b: &Url) -> bool {
+    let (ha, hb) = (a.host.to_ascii_lowercase(), b.host.to_ascii_lowercase());
+    registrable_domain(&ha) == registrable_domain(&hb)
 }
 
 /// A single HTTP cookie.
@@ -243,6 +325,12 @@ impl CookieJar {
         self.cookie_header_at(url, now_secs())
     }
 
+    /// [`cookie_header`](Self::cookie_header) with `SameSite`
+    /// enforced for a request made in `ctx`.
+    pub fn cookie_header_in(&self, url: &Url, ctx: &SameSiteContext) -> Option<String> {
+        self.cookie_header_filtered(url, now_secs(), |c| ctx.allows(c, url))
+    }
+
     fn set_cookies_at(&mut self, url: &Url, headers: &[(String, String)], now: u64) {
         for (name, value) in headers {
             if name.eq_ignore_ascii_case("set-cookie")
@@ -254,10 +342,19 @@ impl CookieJar {
     }
 
     fn cookie_header_at(&self, url: &Url, now: u64) -> Option<String> {
+        self.cookie_header_filtered(url, now, |_| true)
+    }
+
+    fn cookie_header_filtered(
+        &self,
+        url: &Url,
+        now: u64,
+        allow: impl Fn(&Cookie) -> bool,
+    ) -> Option<String> {
         let mut matching: Vec<&Cookie> = self
             .cookies
             .iter()
-            .filter(|c| cookie_matches(c, url, now))
+            .filter(|c| cookie_matches(c, url, now) && allow(c))
             .collect();
         if matching.is_empty() {
             return None;
@@ -344,6 +441,26 @@ impl CookieHook for CookieJar {
 
     fn store(&mut self, url: &Url, headers: &[(String, String)]) {
         self.set_cookies(url, headers);
+    }
+}
+
+/// A [`CookieJar`] seen through one request's [`SameSiteContext`]: the
+/// hook to hand the HTTP client so every hop's `Cookie:` header honours
+/// `SameSite`.
+pub struct ScopedJar<'a> {
+    /// The jar read and written.
+    pub jar: &'a mut CookieJar,
+    /// The request's initiator context.
+    pub ctx: SameSiteContext,
+}
+
+impl CookieHook for ScopedJar<'_> {
+    fn cookie_header(&mut self, url: &Url) -> Option<String> {
+        self.jar.cookie_header_in(url, &self.ctx)
+    }
+
+    fn store(&mut self, url: &Url, headers: &[(String, String)]) {
+        self.jar.set_cookies(url, headers);
     }
 }
 
@@ -855,6 +972,49 @@ mod tests {
             header(&jar, "https://example.com/"),
             Some("sid=good".into())
         );
+    }
+
+    #[test]
+    fn registrable_domain_uses_the_psl_lite() {
+        assert_eq!(registrable_domain("example.com"), "example.com");
+        assert_eq!(registrable_domain("a.b.example.com"), "example.com");
+        assert_eq!(registrable_domain("shop.example.co.uk"), "example.co.uk");
+        assert_eq!(registrable_domain("me.github.io"), "me.github.io");
+        assert_eq!(registrable_domain("localhost"), "localhost");
+        assert_eq!(registrable_domain("127.0.0.1"), "127.0.0.1");
+        assert_eq!(registrable_domain("[::1]"), "[::1]");
+    }
+
+    #[test]
+    fn same_site_context_filters_cross_site_cookies() {
+        let jar = jar_with(
+            "https://bank.example.com/",
+            &[
+                "s=1; Path=/; SameSite=Strict",
+                "l=1; Path=/; SameSite=Lax",
+                "n=1; Path=/; SameSite=None; Secure",
+                "d=1; Path=/",
+            ],
+        );
+        let target = url("https://bank.example.com/x");
+        let send = |initiator: Option<&str>, top: bool, method: &str| {
+            jar.cookie_header_filtered(&target, NOW, |c| {
+                SameSiteContext::new(initiator, top, method).allows(c, &target)
+            })
+        };
+        let all = Some("s=1; l=1; n=1; d=1".to_string());
+        // User-initiated and same-site (other subdomain) requests: all.
+        assert_eq!(send(None, false, "GET"), all);
+        assert_eq!(send(Some("https://www.example.com/"), false, "POST"), all);
+        // Cross-site subresource: unrestricted cookies only.
+        let loose = Some("n=1; d=1".to_string());
+        assert_eq!(send(Some("https://evil.test/"), false, "GET"), loose);
+        // Cross-site top-level GET adds Lax; POST does not.
+        assert_eq!(
+            send(Some("https://evil.test/"), true, "GET"),
+            Some("l=1; n=1; d=1".to_string())
+        );
+        assert_eq!(send(Some("https://evil.test/"), true, "POST"), loose);
     }
 
     #[test]
