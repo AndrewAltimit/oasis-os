@@ -104,6 +104,12 @@ pub enum VfsError {
     #[error("path traversal not allowed: {path}")]
     PathTraversal { path: String },
 
+    /// The backend cannot perform this operation on this path in place
+    /// (e.g. renaming an immutable base-layer entry). Callers may fall
+    /// back to an equivalent sequence such as copy + delete.
+    #[error("unsupported: {reason}: {path}")]
+    Unsupported { path: String, reason: &'static str },
+
     /// Catch-all for VFS errors without a dedicated variant.
     #[error("{0}")]
     Other(String),

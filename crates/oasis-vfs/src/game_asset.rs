@@ -297,9 +297,10 @@ impl Vfs for GameAssetVfs {
         // Only allow rename if the source exists in the overlay layer.
         // Base-layer-only entries cannot be renamed (they are immutable).
         if !self.overlay.contains_key(from.as_ref()) {
-            return Err(OasisError::Vfs(
-                format!("cannot rename base-layer entry not in overlay: {from}").into(),
-            ));
+            return Err(OasisError::Vfs(VfsError::Unsupported {
+                path: from.into_owned(),
+                reason: "cannot rename base-layer entry not in overlay",
+            }));
         }
         let prefix = format!("{from}/");
         // A visible base-layer descendant cannot move with its directory.
@@ -308,9 +309,10 @@ impl Vfs for GameAssetVfs {
             .keys()
             .any(|k| k.starts_with(&prefix) && !self.deleted.contains(k))
         {
-            return Err(OasisError::Vfs(
-                format!("cannot rename directory containing base-layer entries: {from}").into(),
-            ));
+            return Err(OasisError::Vfs(VfsError::Unsupported {
+                path: from.into_owned(),
+                reason: "cannot rename directory containing base-layer entries",
+            }));
         }
         // Renaming rewrites an entry in both parent directories.
         self.check_permission(parent(&from), AccessMode::Write)?;

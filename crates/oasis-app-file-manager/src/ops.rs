@@ -118,16 +118,16 @@ pub(crate) fn remove_recursive(vfs: &mut dyn Vfs, path: &str) -> Result<(), Stri
 /// (so copy + delete is the right fallback) rather than a real error
 /// such as a missing source, a bad destination or a permission denial.
 ///
-/// The VFS error types carry no dedicated "unsupported" variant, so this
-/// recognises the known cases: a cross-device / unsupported OS rename
-/// (`RealVfs`) and an immutable base-layer entry (`GameAssetVfs`).
+/// Recognises a cross-device / unsupported OS rename (`RealVfs`) and a
+/// backend that can't move the entry in place (`VfsError::Unsupported`,
+/// e.g. an immutable `GameAssetVfs` base-layer entry).
 fn rename_unsupported(err: &OasisError) -> bool {
     match err {
         OasisError::Io(io) => matches!(
             io.kind(),
             std::io::ErrorKind::CrossesDevices | std::io::ErrorKind::Unsupported
         ),
-        OasisError::Vfs(VfsError::Other(msg)) => msg.contains("base-layer"),
+        OasisError::Vfs(VfsError::Unsupported { .. }) => true,
         _ => false,
     }
 }

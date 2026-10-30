@@ -122,7 +122,9 @@ headlessly:
   PCM sample, byte and track operation the shell sends.
 - **Time** is virtual: each frame advances exactly 1/60 s, and the
   platform clock is frozen at `2025-06-15 12:00:00` (the screenshot CI's
-  `OASIS_FIXED_TIME`).
+  `OASIS_FIXED_TIME`). The frozen clock also fixes the Games app's board
+  seed (it seeds from the clock), so any screenshot or e2e flow outside
+  the harness must pin `OASIS_FIXED_TIME` to get reproducible boards.
 - **Network** is off: `AppState::offline` stops TV catalog fetches, video
   downloads and radio streams. A TV tune starts an *injected* decode
   session instead of a download, so scenarios can feed decoded frames and

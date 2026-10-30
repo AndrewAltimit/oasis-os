@@ -21,7 +21,33 @@ pub fn tag_len(data: &[u8]) -> usize {
     if data.len() < 10 || &data[..3] != b"ID3" {
         return 0;
     }
-    10 + syncsafe([data[6], data[7], data[8], data[9]])
+    // v2.4 flag 0x10: a 10-byte footer follows the tag body.
+    let footer = if data[3] == 4 && data[5] & 0x10 != 0 {
+        10
+    } else {
+        0
+    };
+    10 + body_len(data) + footer
+}
+
+/// Size of the tag body (frames, padding and any extended header): the
+/// header's syncsafe size field, which excludes the header and footer.
+fn body_len(data: &[u8]) -> usize {
+    syncsafe([data[6], data[7], data[8], data[9]])
+}
+
+/// Bytes of the extended header at the start of `body` (flag 0x40), or 0.
+/// Its size field counts itself in v2.4 (syncsafe) but not in v2.3.
+fn ext_header_len(major: u8, flags: u8, body: &[u8]) -> usize {
+    if flags & 0x40 == 0 || body.len() < 4 {
+        return 0;
+    }
+    let b = [body[0], body[1], body[2], body[3]];
+    if major == 4 {
+        syncsafe(b)
+    } else {
+        (u32::from_be_bytes(b) as usize).saturating_add(4)
+    }
 }
 
 /// Read the title / artist frames of the ID3v2 tag at the start of `data`.
@@ -34,7 +60,10 @@ pub fn read(data: &[u8]) -> Id3Tags {
     if major != 3 && major != 4 {
         return tags;
     }
-    let tag = &data[10..tag_len(data).min(data.len())];
+    let body = &data[10..(10 + body_len(data)).min(data.len())];
+    let tag = body
+        .get(ext_header_len(major, data[5], body)..)
+        .unwrap_or(&[]);
     let mut i = 0;
     while i + 10 <= tag.len() {
         let id = &tag[i..i + 4];
@@ -179,5 +208,38 @@ mod tests {
         let data = tag(3, &[(b"TIT2", 3, b"abc")]);
         assert_eq!(tag_len(&data), data.len());
         assert_eq!(tag_len(b"\xFF\xFB\x90"), 0);
+    }
+
+    #[test]
+    fn tag_len_includes_v24_footer() {
+        let mut data = tag(4, &[(b"TIT2", 3, b"abc")]);
+        let body_end = data.len();
+        data[5] |= 0x10;
+        data.extend_from_slice(b"3DI\x04\x00\x10\x00\x00\x00\x00");
+        assert_eq!(tag_len(&data), body_end + 10);
+        // The footer is not parsed as a frame.
+        assert_eq!(read(&data).title.as_deref(), Some("abc"));
+    }
+
+    #[test]
+    fn skips_extended_header() {
+        for major in [3u8, 4] {
+            let plain = tag(major, &[(b"TIT2", 3, b"Song")]);
+            // v2.3: 4-byte size excluding itself (6), then 6 bytes.
+            // v2.4: syncsafe size including itself (6), then 2 bytes.
+            let ext: &[u8] = if major == 4 {
+                &[0, 0, 0, 6, 1, 0]
+            } else {
+                &[0, 0, 0, 6, 0, 0, 0, 0, 0, 0]
+            };
+            let mut data = plain[..10].to_vec();
+            data[5] |= 0x40;
+            let body_len = plain.len() - 10 + ext.len();
+            data[6..10].copy_from_slice(&[0, 0, (body_len >> 7) as u8, (body_len & 0x7F) as u8]);
+            data.extend_from_slice(ext);
+            data.extend_from_slice(&plain[10..]);
+            assert_eq!(read(&data).title.as_deref(), Some("Song"), "v2.{major}");
+            assert_eq!(tag_len(&data), data.len(), "v2.{major}");
+        }
     }
 }
