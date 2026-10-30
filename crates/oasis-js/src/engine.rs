@@ -930,7 +930,10 @@ mod tests {
         // between callbacks, so the last admitted one may straddle it.
         let max_per_tick = (BUDGET_MS / SPIN_MS) as usize + 2;
         assert!(ran >= 1, "a tick always makes progress");
-        assert!(ran <= max_per_tick, "ran {ran} > {max_per_tick}: budget not shared");
+        assert!(
+            ran <= max_per_tick,
+            "ran {ran} > {max_per_tick}: budget not shared"
+        );
         assert_eq!(engine.deferred_timer_count(), TIMERS - ran);
         // Subsequent ticks finish the rest without losing any.
         let mut total = ran;
@@ -942,7 +945,10 @@ mod tests {
         }
         assert_eq!(total, TIMERS);
         assert_eq!(engine.deferred_timer_count(), 0);
-        assert_eq!(engine.eval("__started").unwrap(), JsValue::Int(TIMERS as i32));
+        assert_eq!(
+            engine.eval("__started").unwrap(),
+            JsValue::Int(TIMERS as i32)
+        );
     }
 
     #[test]
