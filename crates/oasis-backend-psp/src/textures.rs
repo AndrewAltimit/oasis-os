@@ -275,8 +275,10 @@ impl PspBackend {
     /// power-of-2 padded and 16-byte aligned for GU, with padding rows
     /// zeroed once at allocation time (never re-zeroed).
     pub fn alloc_video_texture(&mut self, width: u32, height: u32) -> Option<TextureId> {
-        // Free any previous video texture.
+        // Free any previous video texture. Unpublish it first so the video
+        // thread stops picking it up as its CSC target.
         if let Some(old) = self.video_tex.take() {
+            crate::video::set_video_texture_buffer(ptr::null_mut(), 0);
             self.destroy_texture_inner(old);
         }
 
@@ -380,6 +382,18 @@ impl PspBackend {
             None => true,
         };
         if needs_alloc {
+            // In the zero-copy case `rgba_data` borrows the current texture
+            // buffer, which reallocating frees: skip this frame's pixels
+            // rather than read freed memory. The decoder writes the next
+            // frame into the new buffer.
+            let aliases_current = self
+                .video_tex
+                .and_then(|id| self.textures.get(id.0 as usize))
+                .and_then(|slot| slot.as_ref())
+                .is_some_and(|tex| core::ptr::eq(rgba_data.as_ptr(), tex.data));
+            if aliases_current {
+                return self.alloc_video_texture(width, height);
+            }
             return self.alloc_video_texture_and_update(width, height, rgba_data);
         }
 
@@ -401,16 +415,24 @@ impl PspBackend {
             return Some(tex_id);
         }
 
-        // Legacy copy path (kept for non-CSC sources like the test/PSMF
-        // pipeline). When source stride matches texture stride (both 512px
-        // from CSC), do a single bulk copy.
+        // Copy path for sources other than the in-place CSC output. When
+        // source stride matches texture stride, do a single bulk copy.
         if src_stride == dst_stride && rgba_data.len() >= total {
+            // SAFETY: `data` holds buf_w * buf_h * 4 >= `total` bytes and
+            // `rgba_data` has at least `total` (checked above); distinct
+            // buffers (the aliasing case returned early).
             unsafe {
                 ptr::copy_nonoverlapping(rgba_data.as_ptr(), data, total);
                 psp::cache::dcache_writeback_range(data as *const core::ffi::c_void, total as u32);
             }
         } else {
             // Fallback: row-by-row copy (no alpha fixup).
+            if rgba_data.len() < src_stride * height as usize || src_stride > dst_stride {
+                return Some(tex_id);
+            }
+            // SAFETY: bounds checked just above: each source row is inside
+            // `rgba_data` and each destination row (src_stride <= dst_stride)
+            // inside the height <= buf_h rows of `data`.
             unsafe {
                 for row in 0..height as usize {
                     let src = rgba_data.as_ptr().add(row * src_stride);

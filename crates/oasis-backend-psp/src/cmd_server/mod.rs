@@ -44,6 +44,8 @@ use core::sync::atomic::{AtomicI32, AtomicU8, Ordering};
 
 use oasis_core::input::{Button, InputEvent, Trigger};
 
+use crate::network::wifi_has_ip;
+
 use wire::{close, parse_hex_u32, parse_u32, recv, send_response, set_recv_timeout, split_arg};
 
 /// TCP port the command server listens on.
@@ -169,14 +171,6 @@ pub fn spawn() {
     }
 }
 
-/// True once the access-point connection has an IP address.
-fn wifi_has_ip() -> bool {
-    let mut state = psp::sys::ApctlState::Disconnected;
-    // SAFETY: `state` is a valid out-pointer for the duration of the call.
-    unsafe { psp::sys::sceNetApctlGetState(&mut state) };
-    matches!(state, psp::sys::ApctlState::GotIp)
-}
-
 /// Try to auto-connect to saved WiFi profile without dialog.
 /// Initializes the full network stack if not already done.
 fn auto_connect_wifi() {
@@ -185,8 +179,6 @@ fn auto_connect_wifi() {
     // WLAN chip isn't ready yet (especially on cold reboot).
     psp::thread::sleep_ms(5000);
 
-    // Check apctl state directly (more reliable than psp::net::is_connected,
-    // which uses a separate flag).
     if wifi_has_ip() {
         log_msg("[CMD] WiFi already connected");
         return;
@@ -209,32 +201,11 @@ fn auto_connect_wifi() {
     }
     log_msg("[CMD] WLAN switch ON");
 
-    // Try profiles 1 and 0.
-    for profile in [1i32, 0] {
-        // SAFETY: scalar argument; the net stack was initialized above.
-        let ret = unsafe { psp::sys::sceNetApctlConnect(profile) };
-        if ret < 0 {
-            log_msg(&format!(
-                "[CMD] apctl connect({profile}) = 0x{:08x}",
-                ret as u32
-            ));
-            continue;
-        }
-
-        for _ in 0..30 {
-            if wifi_has_ip() {
-                log_msg("[CMD] WiFi auto-connected");
-                return;
-            }
-            psp::thread::sleep_ms(500);
-        }
-
-        // SAFETY: argument-less; tears down the failed attempt.
-        unsafe { psp::sys::sceNetApctlDisconnect() };
-        psp::thread::sleep_ms(500);
+    if crate::network::connect_saved_profiles() {
+        log_msg("[CMD] WiFi auto-connected");
+    } else {
+        log_msg("[CMD] WiFi auto-connect failed, will retry on demand");
     }
-
-    log_msg("[CMD] WiFi auto-connect failed, will retry on demand");
 }
 
 fn log_msg(msg: &str) {
