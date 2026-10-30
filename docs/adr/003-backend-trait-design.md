@@ -98,11 +98,15 @@ SDL scales render targets with its default linear filter and the software
 rasterizer samples nearest, so a scaled composite differs at colour seams.
 `oasis_test_backend::conformance` records that as a documented tolerance.
 The conformance scenarios `clip_set_is_absolute_and_replaces`,
-`clip_set_widens_again`, `clear_ignores_clip_and_alpha`,
+`clip_set_widens_again`, `clip_set_and_push_stack_are_independent`,
+`clear_ignores_clip_and_alpha`,
 `render_target_bind_resets_and_restores_state`,
 `render_target_composite_scales` and
 `render_target_premultiplied_matches_direct` pin the contract on SDL and UE5
-(`cargo test -p oasis-backend-sdl --test backend_parity`). WASM has no
+(`cargo test -p oasis-backend-sdl --test backend_parity`). The test
+doubles follow the same render-target rule: oasis-test-backend's
+`RecordingBackend` saves the clip/translate stacks and viewport size on
+bind and restores them on unbind. WASM has no
 automated pixel test yet. Its clip handling keeps exactly one canvas
 `save()` level per applied clip (`WasmBackend::apply_clip`), because Canvas
 2D can only intersect clips, never replace them.

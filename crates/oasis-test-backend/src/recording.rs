@@ -2,20 +2,33 @@
 //!
 //! Extends the mock approach with structured command recording and proper
 //! clip/translate stack management so that `SdiBackend` default methods
-//! can be tested end-to-end.
+//! can be tested end-to-end. Render-target binds follow the drawing-state
+//! contract (ADR-003): a bound target starts with no clip and no
+//! translation and reports its own size, and the unbind restores the
+//! parent's stacks.
 
 use crate::DrawCommand;
 use oasis_types::backend::{
-    BlendMode, Color, RenderTargetId, SdiAlpha, SdiBatch, SdiClipTransform, SdiCore, SdiGradients,
-    SdiRenderTarget, SdiShapes, SdiText, SdiTextures, SdiVector, TextureId, bitmap_measure_text,
-    stacks::{ClipStack, TranslateStack},
+    BlendMode, Color, DEFAULT_VIEWPORT_HEIGHT, DEFAULT_VIEWPORT_WIDTH, RenderTargetId, SdiAlpha,
+    SdiBatch, SdiClipTransform, SdiCore, SdiGradients, SdiRenderTarget, SdiShapes, SdiText,
+    SdiTextures, SdiVector, TextureId, bitmap_measure_text,
+    stacks::{ClipStack, DrawState, TranslateStack},
 };
 use oasis_types::error::{OasisError, Result};
 use oasis_types::geometry::ClipRect;
-use std::collections::HashSet;
+use std::collections::HashMap;
 
 /// Type alias for a custom `measure_text` callback.
 type MeasureTextFn = Box<dyn Fn(&str, u16) -> u32>;
+
+/// What a render-target bind saved from the surface below it.
+struct BoundTarget {
+    id: RenderTargetId,
+    /// The parent's clip and translate stacks.
+    parent_state: DrawState,
+    /// The parent's viewport size.
+    parent_size: (u32, u32),
+}
 
 /// A recording backend that captures every draw call as a [`DrawCommand`]
 /// and maintains clip/translate stacks.
@@ -44,10 +57,10 @@ pub struct RecordingBackend {
     translate_stack: TranslateStack,
     next_texture_id: u64,
     measure_text_fn: Option<MeasureTextFn>,
-    // Render-target pool state.
+    // Render-target pool state: live ids -> size.
     next_render_target_id: u64,
-    live_render_targets: HashSet<u64>,
-    render_target_bind_stack: Vec<RenderTargetId>,
+    live_render_targets: HashMap<u64, (u32, u32)>,
+    render_target_bind_stack: Vec<BoundTarget>,
     render_targets_supported: bool,
 }
 
@@ -64,7 +77,7 @@ impl RecordingBackend {
             next_texture_id: 1,
             measure_text_fn: None,
             next_render_target_id: 1,
-            live_render_targets: HashSet::new(),
+            live_render_targets: HashMap::new(),
             render_target_bind_stack: Vec::new(),
             render_targets_supported: true,
         }
@@ -94,12 +107,79 @@ impl RecordingBackend {
 
     /// Return the id at the top of the bind stack, if any.
     pub fn currently_bound_render_target(&self) -> Option<RenderTargetId> {
-        self.render_target_bind_stack.last().copied()
+        self.render_target_bind_stack.last().map(|b| b.id)
     }
 
     /// Return all recorded draw commands.
     pub fn commands(&self) -> &[DrawCommand] {
         &self.commands
+    }
+
+    /// Number of recorded [`DrawCommand::FillRect`]s (default methods such
+    /// as `fill_rounded_rect` decompose into several).
+    pub fn fill_rect_count(&self) -> usize {
+        self.commands
+            .iter()
+            .filter(|c| matches!(c, DrawCommand::FillRect { .. }))
+            .count()
+    }
+
+    /// Colors of every recorded [`DrawCommand::FillRect`], in draw order.
+    pub fn fill_colors(&self) -> Vec<Color> {
+        self.commands
+            .iter()
+            .filter_map(|c| match c {
+                DrawCommand::FillRect { color, .. } => Some(*color),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// Number of recorded [`DrawCommand::DrawText`]s.
+    pub fn draw_text_count(&self) -> usize {
+        self.commands
+            .iter()
+            .filter(|c| matches!(c, DrawCommand::DrawText { .. }))
+            .count()
+    }
+
+    /// Text of every recorded [`DrawCommand::DrawText`], in draw order.
+    pub fn texts(&self) -> Vec<&str> {
+        self.text_positions().into_iter().map(|t| t.0).collect()
+    }
+
+    /// `(text, x, y, font_size)` of every recorded
+    /// [`DrawCommand::DrawText`], in draw order.
+    pub fn text_positions(&self) -> Vec<(&str, i32, i32, u16)> {
+        self.commands
+            .iter()
+            .filter_map(|c| match c {
+                DrawCommand::DrawText {
+                    text,
+                    x,
+                    y,
+                    font_size,
+                    ..
+                } => Some((text.as_str(), *x, *y, *font_size)),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// Colors of every recorded [`DrawCommand::DrawText`], in draw order.
+    pub fn text_colors(&self) -> Vec<Color> {
+        self.commands
+            .iter()
+            .filter_map(|c| match c {
+                DrawCommand::DrawText { color, .. } => Some(*color),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// Whether any recorded [`DrawCommand::DrawText`] contains `needle`.
+    pub fn has_text(&self, needle: &str) -> bool {
+        self.text_positions().iter().any(|t| t.0.contains(needle))
     }
 
     /// Clear the recorded command history.
@@ -115,6 +195,13 @@ impl RecordingBackend {
         F: Fn(&str, u16) -> u32 + 'static,
     {
         self.measure_text_fn = Some(Box::new(f));
+    }
+}
+
+impl Default for RecordingBackend {
+    /// A recording backend with the default (PSP-native 480x272) viewport.
+    fn default() -> Self {
+        Self::new(DEFAULT_VIEWPORT_WIDTH, DEFAULT_VIEWPORT_HEIGHT)
     }
 }
 
@@ -210,29 +297,40 @@ impl SdiRenderTarget for RecordingBackend {
     fn create_render_target(&mut self, w: u32, h: u32) -> Result<RenderTargetId> {
         let id = RenderTargetId(self.next_render_target_id);
         self.next_render_target_id += 1;
-        self.live_render_targets.insert(id.0);
+        self.live_render_targets.insert(id.0, (w, h));
         self.commands
             .push(DrawCommand::CreateRenderTarget { id, w, h });
         Ok(id)
     }
 
     fn bind_render_target(&mut self, id: RenderTargetId) -> Result<()> {
-        if !self.live_render_targets.contains(&id.0) {
+        let Some(&size) = self.live_render_targets.get(&id.0) else {
             return Err(OasisError::Backend(
                 format!("bind_render_target: unknown id {id:?}").into(),
             ));
-        }
-        self.render_target_bind_stack.push(id);
+        };
+        // The target starts untranslated and unclipped in its own
+        // coordinates; the parent's state comes back on unbind.
+        self.render_target_bind_stack.push(BoundTarget {
+            id,
+            parent_state: DrawState::take(&mut self.clip_stack, &mut self.translate_stack),
+            parent_size: (self.width, self.height),
+        });
+        (self.width, self.height) = size;
         self.commands.push(DrawCommand::BindRenderTarget { id });
         Ok(())
     }
 
     fn unbind_render_target(&mut self) -> Result<()> {
-        if self.render_target_bind_stack.pop().is_none() {
+        let Some(bound) = self.render_target_bind_stack.pop() else {
             return Err(OasisError::Backend(
                 "unbind_render_target: bind stack underflow".into(),
             ));
-        }
+        };
+        bound
+            .parent_state
+            .restore(&mut self.clip_stack, &mut self.translate_stack);
+        (self.width, self.height) = bound.parent_size;
         self.commands.push(DrawCommand::UnbindRenderTarget);
         Ok(())
     }
@@ -251,7 +349,7 @@ impl SdiRenderTarget for RecordingBackend {
             (0.0..=1.0).contains(&opacity),
             "opacity must be in [0.0, 1.0], got {opacity}"
         );
-        if !self.live_render_targets.contains(&id.0) {
+        if !self.live_render_targets.contains_key(&id.0) {
             return Err(OasisError::Backend(
                 format!("composite_render_target: unknown id {id:?}").into(),
             ));
@@ -276,7 +374,7 @@ impl SdiRenderTarget for RecordingBackend {
         dst_w: u32,
         dst_h: u32,
     ) -> Result<()> {
-        if !self.live_render_targets.contains(&id.0) {
+        if !self.live_render_targets.contains_key(&id.0) {
             return Err(OasisError::Backend(
                 format!("composite_render_target_premultiplied: unknown id {id:?}").into(),
             ));
@@ -293,7 +391,7 @@ impl SdiRenderTarget for RecordingBackend {
     }
 
     fn read_render_target(&mut self, id: RenderTargetId, dst: &mut [u8]) -> Result<()> {
-        if !self.live_render_targets.contains(&id.0) {
+        if !self.live_render_targets.contains_key(&id.0) {
             return Err(OasisError::Backend(
                 format!("read_render_target: unknown id {id:?}").into(),
             ));
@@ -306,7 +404,7 @@ impl SdiRenderTarget for RecordingBackend {
     }
 
     fn destroy_render_target(&mut self, id: RenderTargetId) -> Result<()> {
-        if !self.live_render_targets.remove(&id.0) {
+        if self.live_render_targets.remove(&id.0).is_none() {
             return Err(OasisError::Backend(
                 format!("destroy_render_target: unknown id {id:?}").into(),
             ));
