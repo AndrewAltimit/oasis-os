@@ -8,6 +8,7 @@ use crate::css;
 use crate::gemini;
 use crate::html;
 use crate::html::dom::NodeId;
+use crate::html::escape::push_escaped;
 #[cfg(feature = "javascript")]
 use crate::js_dom;
 use crate::layout;
@@ -53,17 +54,4 @@ fn html_for_text_body(content_type: ContentType, body: &[u8]) -> String {
     push_escaped(&mut html, &text);
     html.push_str("</pre></body></html>");
     html
-}
-
-/// Push HTML-escaped text into a string.
-fn push_escaped(out: &mut String, text: &str) {
-    for ch in text.chars() {
-        match ch {
-            '<' => out.push_str("&lt;"),
-            '>' => out.push_str("&gt;"),
-            '&' => out.push_str("&amp;"),
-            '"' => out.push_str("&quot;"),
-            _ => out.push(ch),
-        }
-    }
 }

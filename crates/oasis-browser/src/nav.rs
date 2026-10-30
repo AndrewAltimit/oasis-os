@@ -1,4 +1,10 @@
 //! Navigation controller: history stack, bookmarks, URL bar state.
+//!
+//! Page titles and URLs shown on the internal pages are page-controlled,
+//! so they are HTML-escaped (`escape`); unescaped, a title such as
+//! `</a><script>...` would run script inside them.
+
+use crate::html::escape::escape;
 
 /// A single entry in the navigation history.
 #[derive(Debug, Clone)]
@@ -192,8 +198,8 @@ impl NavigationController {
             };
             html.push_str(&format!(
                 "<li><a href=\"{}\">{}</a></li>",
-                escape_html(&bm.url),
-                escape_html(label)
+                escape(&bm.url),
+                escape(label)
             ));
         }
         html.push_str("</ul></body></html>");
@@ -214,31 +220,13 @@ impl NavigationController {
             };
             html.push_str(&format!(
                 "<li><a href=\"{}\">{}</a></li>",
-                escape_html(&entry.url),
-                escape_html(label)
+                escape(&entry.url),
+                escape(label)
             ));
         }
         html.push_str("</ul></body></html>");
         html
     }
-}
-
-/// Escape text for an HTML text node or a double-quoted attribute. Page
-/// titles and URLs are page-controlled; unescaped, a title such as
-/// `</a><script>...` would run script inside the internal pages.
-fn escape_html(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    for c in s.chars() {
-        match c {
-            '&' => out.push_str("&amp;"),
-            '<' => out.push_str("&lt;"),
-            '>' => out.push_str("&gt;"),
-            '"' => out.push_str("&quot;"),
-            '\'' => out.push_str("&#39;"),
-            c => out.push(c),
-        }
-    }
-    out
 }
 
 #[cfg(test)]
