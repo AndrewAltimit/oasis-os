@@ -717,15 +717,16 @@ mod tests {
     #[test]
     fn button_masks_distinct() {
         let buttons = [
-            BTN_UP, BTN_DOWN, BTN_CROSS, BTN_L_TRIGGER, BTN_R_TRIGGER,
+            BTN_UP,
+            BTN_DOWN,
+            BTN_CROSS,
+            BTN_L_TRIGGER,
+            BTN_R_TRIGGER,
             BTN_START,
         ];
         for i in 0..buttons.len() {
             for j in (i + 1)..buttons.len() {
-                assert_ne!(
-                    buttons[i], buttons[j],
-                    "Button masks must be distinct"
-                );
+                assert_ne!(buttons[i], buttons[j], "Button masks must be distinct");
             }
         }
     }

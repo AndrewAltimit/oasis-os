@@ -378,11 +378,7 @@ unsafe extern "C" fn video_thread_entry(_args: usize, _argp: *mut core::ffi::c_v
                 if fd >= 0 {
                     // SAFETY: Valid fd, seek to beginning.
                     unsafe {
-                        psp::sys::sceIoLseek(
-                            psp::sys::SceUid(fd),
-                            0,
-                            psp::sys::IoWhence::Set,
-                        );
+                        psp::sys::sceIoLseek(psp::sys::SceUid(fd), 0, psp::sys::IoWhence::Set);
                     }
                     // Try reading again after seek.
                     // SAFETY: read_frame reads from valid fd into allocated PIP buffer.
@@ -447,9 +443,7 @@ fn start_playback() {
 
     // Open file.
     // SAFETY: sceIoOpen with valid null-terminated path.
-    let fd = unsafe {
-        psp::sys::sceIoOpen(filepath.as_ptr(), psp::sys::IoOpenFlags::RD_ONLY, 0)
-    };
+    let fd = unsafe { psp::sys::sceIoOpen(filepath.as_ptr(), psp::sys::IoOpenFlags::RD_ONLY, 0) };
     if fd < psp::sys::SceUid(0) {
         log_i32(b"[VIDEO] open failed=", fd.0);
         overlay::show_osd(b"PIP: open failed");
@@ -497,9 +491,8 @@ fn start_playback() {
     let p = copy_bytes(&mut buf, 0, b"PIP: ");
     let name_len = video_name_len();
     // SAFETY: VIDEO_NAME is a valid static buffer; name_len is bounded by 48.
-    let name_slice = unsafe {
-        core::slice::from_raw_parts((&raw const VIDEO_NAME).cast::<u8>(), name_len)
-    };
+    let name_slice =
+        unsafe { core::slice::from_raw_parts((&raw const VIDEO_NAME).cast::<u8>(), name_len) };
     let p = copy_bytes(&mut buf, p, name_slice);
     overlay::show_osd(&buf[..p]);
 }
@@ -546,8 +539,8 @@ pub fn start_video_thread() {
         let thid = psp::sys::sceKernelCreateThread(
             b"OasisVideo\0".as_ptr(),
             video_thread_entry,
-            0x1A,   // Priority (below audio at 24).
-            0x4000, // 16KB stack.
+            0x1A,                                // Priority (below audio at 24).
+            0x4000,                              // 16KB stack.
             psp::sys::ThreadAttributes::empty(), // kernel thread
             core::ptr::null_mut(),
         );
@@ -635,9 +628,7 @@ fn try_play_companion_mp3(rgb_path: &[u8]) {
 
     // Check if the .mp3 file exists by trying to open it.
     // SAFETY: sceIoOpen with valid null-terminated path.
-    let fd = unsafe {
-        psp::sys::sceIoOpen(mp3_path.as_ptr(), psp::sys::IoOpenFlags::RD_ONLY, 0)
-    };
+    let fd = unsafe { psp::sys::sceIoOpen(mp3_path.as_ptr(), psp::sys::IoOpenFlags::RD_ONLY, 0) };
     if fd < psp::sys::SceUid(0) {
         crate::debug_log(b"[VIDEO] no companion .mp3");
         return;

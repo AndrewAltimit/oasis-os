@@ -228,39 +228,50 @@ unsafe extern "C" fn hooked_ctrl_read(pad_data: *mut u8, count: i32) -> i32 {
 ///
 /// # Safety
 /// Must be called during single-threaded init after ctrl driver is resolved.
+#[allow(
+    dead_code,
+    reason = "disabled: the ctrl hooks crash PMPlayer at launch; kept (with the \
+              hooks and statics it installs) until the SyscallHook trampoline \
+              issue is fixed -- see the commented-out call in install_display_hook"
+)]
 unsafe fn install_ctrl_hooks() {
-    let ctrl_modules: &[(&[u8], &[u8])] = &[
-        (b"sceController_Service\0", b"sceCtrl_driver\0"),
-        (b"sceController_Service\0", b"sceCtrl\0"),
-    ];
+    // SAFETY: the caller upholds the `# Safety` contract above (single-threaded init), so writing
+    // CTRL_PEEK_HOOK / CTRL_READ_HOOK cannot race the hooks reading them; module and library names
+    // are NUL-terminated literals.
+    unsafe {
+        let ctrl_modules: &[(&[u8], &[u8])] = &[
+            (b"sceController_Service\0", b"sceCtrl_driver\0"),
+            (b"sceController_Service\0", b"sceCtrl\0"),
+        ];
 
-    // Hook PeekBufferPositive.
-    for &(module, library) in ctrl_modules {
-        let hook = psp::hook::SyscallHook::install(
-            module.as_ptr(),
-            library.as_ptr(),
-            NID_SCE_CTRL_PEEK_BUF_POS,
-            hooked_ctrl_peek as *mut u8,
-        );
-        if let Some(h) = hook {
-            CTRL_PEEK_HOOK = Some(h);
-            crate::debug_log(b"[OASIS] ctrl peek hook installed");
-            break;
+        // Hook PeekBufferPositive.
+        for &(module, library) in ctrl_modules {
+            let hook = psp::hook::SyscallHook::install(
+                module.as_ptr(),
+                library.as_ptr(),
+                NID_SCE_CTRL_PEEK_BUF_POS,
+                hooked_ctrl_peek as *mut u8,
+            );
+            if let Some(h) = hook {
+                CTRL_PEEK_HOOK = Some(h);
+                crate::debug_log(b"[OASIS] ctrl peek hook installed");
+                break;
+            }
         }
-    }
 
-    // Hook ReadBufferPositive.
-    for &(module, library) in ctrl_modules {
-        let hook = psp::hook::SyscallHook::install(
-            module.as_ptr(),
-            library.as_ptr(),
-            NID_SCE_CTRL_READ_BUF_POS,
-            hooked_ctrl_read as *mut u8,
-        );
-        if let Some(h) = hook {
-            CTRL_READ_HOOK = Some(h);
-            crate::debug_log(b"[OASIS] ctrl read hook installed");
-            break;
+        // Hook ReadBufferPositive.
+        for &(module, library) in ctrl_modules {
+            let hook = psp::hook::SyscallHook::install(
+                module.as_ptr(),
+                library.as_ptr(),
+                NID_SCE_CTRL_READ_BUF_POS,
+                hooked_ctrl_read as *mut u8,
+            );
+            if let Some(h) = hook {
+                CTRL_READ_HOOK = Some(h);
+                crate::debug_log(b"[OASIS] ctrl read hook installed");
+                break;
+            }
         }
     }
 }

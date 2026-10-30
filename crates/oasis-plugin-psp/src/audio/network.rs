@@ -1,9 +1,9 @@
 //! Network initialization and utilities for radio streaming.
 
+use super::log_i32;
 use super::nids::*;
 use super::resolve::*;
 use super::state::*;
-use super::log_i32;
 
 /// Load network modules and initialize the PSP network stack.
 /// Only called on first radio activation.
@@ -79,19 +79,13 @@ pub(super) unsafe fn init_network() -> bool {
             core::ptr::write_volatile(&raw mut APCTL_CONNECT_FN, Some(core::mem::transmute(ptr)));
         }
         if let Some(ptr) = resolve_nid(APCTL_MODULES, NID_APCTL_GET_STATE) {
-            core::ptr::write_volatile(
-                &raw mut APCTL_GET_STATE_FN,
-                Some(core::mem::transmute(ptr)),
-            );
+            core::ptr::write_volatile(&raw mut APCTL_GET_STATE_FN, Some(core::mem::transmute(ptr)));
         }
         if let Some(ptr) = resolve_nid(RESOLVER_MODULES, NID_RESOLVER_INIT) {
             core::ptr::write_volatile(&raw mut RESOLVER_INIT_FN, Some(core::mem::transmute(ptr)));
         }
         if let Some(ptr) = resolve_nid(RESOLVER_MODULES, NID_RESOLVER_CREATE) {
-            core::ptr::write_volatile(
-                &raw mut RESOLVER_CREATE_FN,
-                Some(core::mem::transmute(ptr)),
-            );
+            core::ptr::write_volatile(&raw mut RESOLVER_CREATE_FN, Some(core::mem::transmute(ptr)));
         }
         if let Some(ptr) = resolve_nid(RESOLVER_MODULES, NID_RESOLVER_START_N2A) {
             core::ptr::write_volatile(
@@ -100,10 +94,7 @@ pub(super) unsafe fn init_network() -> bool {
             );
         }
         if let Some(ptr) = resolve_nid(RESOLVER_MODULES, NID_RESOLVER_DELETE) {
-            core::ptr::write_volatile(
-                &raw mut RESOLVER_DELETE_FN,
-                Some(core::mem::transmute(ptr)),
-            );
+            core::ptr::write_volatile(&raw mut RESOLVER_DELETE_FN, Some(core::mem::transmute(ptr)));
         }
 
         // Check critical inet NIDs.
