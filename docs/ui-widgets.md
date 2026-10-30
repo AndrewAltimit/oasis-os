@@ -108,7 +108,7 @@ any other:
 | `Card` | `card.rs` | Content card with optional image, title, subtitle and body |
 | `Checkbox` | `checkbox.rs` | Labelled boolean checkbox |
 | `ColorPicker` | `color_picker.rs` | HSV color selection with RGB preview |
-| `ContextMenu` | `context_menu.rs` | Right-click popup with actions, separators and submenus (`MenuItem`) |
+| `ContextMenu` | `context_menu.rs` | Right-click popup with actions, separators and submenus (`MenuItem`); `show_within` opens up / left of the point near the screen edge |
 | `DatePicker` | `date_picker.rs` | Calendar grid with month / year navigation |
 | `Divider` | `divider.rs` | Horizontal or vertical separator line |
 | `Dropdown` | `dropdown.rs` | Dropdown / combobox with an option list |
@@ -127,7 +127,7 @@ any other:
 | `TabBar` | `tab_bar.rs` | Row of tabs (`TabStyle`) |
 | `TextBlock` | `text_block.rs` | Multi-line text with wrapping, truncation and alignment |
 | `Toggle` | `toggle.rs` | On / off switch |
-| `Tooltip` | `tooltip.rs` | Hover-activated text overlay with delay state machine and `TooltipAnchor` positioning |
+| `Tooltip` | `tooltip.rs` | Hover-activated text overlay with delay state machine and `TooltipAnchor` positioning (flips to the opposite side rather than covering its target at a viewport edge) |
 | `TreeView` | `tree_view.rs` | Hierarchical tree with expand / collapse and keyboard navigation |
 
 ## Other components (not `Widget` impls)
