@@ -1178,6 +1178,7 @@ name = "oasis-audio"
 version = "1.4.0"
 dependencies = [
  "log",
+ "oasis-net",
  "oasis-types",
  "oasis-vfs",
  "proptest",

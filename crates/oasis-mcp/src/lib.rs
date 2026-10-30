@@ -20,13 +20,13 @@
 //! server-initiated SSE stream); `DELETE`/`OPTIONS` are handled trivially.
 //! No session IDs are issued (single local client).
 
-mod base64;
 mod dispatch;
 mod http;
 mod server;
 mod tools;
 
-pub use base64::encode as base64_encode;
 pub use dispatch::{PROTOCOL_VERSION, SERVER_NAME, SERVER_VERSION};
+/// Standard base64 encoder used for MCP image content blocks.
+pub use oasis_types::util::base64::encode as base64_encode;
 pub use server::McpServer;
 pub use tools::{ContentBlock, ToolDispatcher, ToolResult, ToolSpec};

@@ -8,7 +8,12 @@
 //!
 //! - `gl-native` — `glow` with native OpenGL loader (SDL3, headless EGL)
 //! - `gl-web` — `glow` with `web_sys::WebGl2RenderingContext`
-//! - `software` — CPU fallback (evaluates shader math in Rust, no GL)
+//! - `parallel` — shade the [`software`] renderer's rows on a rayon pool
+//!   (desktop only)
+//!
+//! The CPU fallback ([`software::SoftwareShaderRenderer`], pure Rust, no GL)
+//! is always compiled. Both renderers draw the shaders listed in
+//! [`BuiltinShader`].
 
 mod compile;
 mod quad;
@@ -17,6 +22,7 @@ mod shaders;
 pub mod software;
 pub mod uniforms;
 
+pub use registry::BuiltinShader;
 pub use uniforms::ShaderParams;
 
 #[cfg(feature = "glow")]
@@ -115,20 +121,9 @@ impl ShaderRenderer {
         };
 
         // Register all known shaders.
-        for name in &[
-            "balatro",
-            "voronoi",
-            "city_lights",
-            "ocean_waves",
-            "calm_waves",
-            "starfield",
-            "plasma",
-            "matrix_rain",
-        ] {
-            if let Some(src) = registry::get_shader_source(name)
-                && let Err(e) = renderer.register(name, src)
-            {
-                log::warn!("failed to compile built-in shader '{name}': {e}");
+        for shader in BuiltinShader::ALL {
+            if let Err(e) = renderer.register(shader.name(), shader.glsl()) {
+                log::warn!("failed to compile built-in shader '{shader}': {e}");
             }
         }
 
@@ -415,19 +410,10 @@ mod tests {
 
     #[test]
     fn registry_has_all_shaders() {
-        for name in &[
-            "balatro",
-            "voronoi",
-            "city_lights",
-            "ocean_waves",
-            "calm_waves",
-            "starfield",
-            "plasma",
-            "matrix_rain",
-        ] {
+        for shader in BuiltinShader::ALL {
             assert!(
-                registry::get_shader_source(name).is_some(),
-                "missing shader: {name}"
+                registry::get_shader_source(shader.name()).is_some(),
+                "missing shader: {shader}"
             );
         }
     }

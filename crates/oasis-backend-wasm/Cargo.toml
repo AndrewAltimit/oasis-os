@@ -38,7 +38,7 @@ oasis-audio = { workspace = true }
 # Direct import: oasis_wm::DesktopManager in lib.rs
 oasis-wm = { workspace = true }
 # Direct import: oasis_shader::{ShaderParams, software::SoftwareShaderRenderer} in shader_bridge.rs
-oasis-shader = { workspace = true, features = ["software"] }
+oasis-shader = { workspace = true }
 # Direct usage: log::info!, log::warn! in shader_bridge.rs, lib.rs
 log = { workspace = true }
 # Direct use: youtube.rs parses Invidious JSON; lib.rs serializes search

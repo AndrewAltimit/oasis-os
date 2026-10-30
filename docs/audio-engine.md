@@ -98,7 +98,7 @@ For continuous streams (radio, video audio track) the backend exposes:
 | `finalize_streaming(track)` | backend/audio.rs:84 | Signal EOF; flushes the lookahead buffer. |
 | `feed_pcm_f32(samples, ch, sr)` | backend/audio.rs:92 | Direct PCM path, used by the software video decoder. |
 
-`RadioManager::tick` (`radio/mod.rs:317`) pumps a stream cooperatively: each
+`RadioManager::tick` (`radio/mod.rs`) pumps a stream cooperatively: each
 host frame it asks `streaming_can_accept`, and only if the answer is yes does
 it pull the next chunk from the source via `RadioSource::poll`. The default
 chunk size is 4 KiB, which at 60 fps gives ~240 KiB/s headroom — enough for a
@@ -106,57 +106,73 @@ chunk size is 4 KiB, which at 60 fps gives ~240 KiB/s headroom — enough for a
 the sawtooth buffer pattern that emerges when SDL3 / PulseAudio drains in
 bursts.
 
-The stub backend's `streaming_can_accept` threshold is 16 KiB
-(`radio/source.rs:562`). Real backends pick a value sized to their mixer
-buffer.
+The stub backend's `streaming_can_accept` threshold is 16 KiB. Real
+backends pick a value sized to their mixer buffer.
 
 ## Radio sources
 
-`RadioSource` (`radio/source.rs:36`) is the source-side interface:
+`RadioSource` (`radio/source.rs`) is the source-side interface:
 
 ```rust
 pub trait RadioSource {
-    fn poll(&mut self) -> Option<AudioChunk>;
+    fn poll(&mut self) -> Result<Option<AudioChunk>>;
     fn disconnect(&mut self);
     fn state(&self) -> SourceState;
-    fn source_type(&self) -> &'static str;
+    fn source_type(&self) -> &str;
     fn streaming_url(&self) -> Option<&str> { None }
 }
 ```
+
+`poll` returns `Ok(None)` when no data is ready yet. The network sources
+read from a non-blocking `NetworkStream`, so an empty socket is the normal
+case, not an error: they test `OasisError::is_would_block()` (an
+`io::ErrorKind::WouldBlock` / `TimedOut`), never the error's display text,
+which on a plain TCP socket is the OS message ("Resource temporarily
+unavailable") and does not say "would block". The loopback tests in
+`source.rs` (`icecast_source_survives_os_would_block_on_plain_tcp`) drive a
+real `StdNetworkBackend` socket to keep it that way.
 
 `streaming_url` is the WASM / UE5 escape hatch — when set, the backend may
 hand the URL to a native streaming player (HTML5 `<audio>` for WASM) instead
 of pumping bytes through `feed_data`.
 
-### IcecastSource (`radio/source.rs:127`)
+Both network sources parse the response head with the shared
+`parse_http_head` (`source.rs`): it waits for `\r\n\r\n` in the raw bytes
+(so partial reads and non-UTF-8 bodies are fine) and returns the status code
+(from `HTTP/1.x NNN` or Shoutcast's `ICY NNN`), case-insensitive header
+lookup, and the body offset.
+
+### IcecastSource
 
 - HTTP/1.0 GET with `Icy-MetaData: 1` so the server interleaves stream titles.
-- Parses `icy-metaint` from response headers (`icy.rs:17`).
-- `IcyDemuxer` (`icy.rs:62`) splits audio from metadata blocks and surfaces
+- Only a 2xx status starts playback. A 3xx with `Location` fails with
+  `redirect:<url>` (same convention as `ArchiveSource`), any other status
+  with `HTTP <code>`, and a garbled status line with an error, so an error
+  page's body is never fed to the decoder as audio.
+- Parses `icy-metaint` from response headers (`icy::parse_icy_metaint`).
+- `IcyDemuxer` (`icy.rs`) splits audio from metadata blocks and surfaces
   `StreamTitle='Artist - Song'` updates.
-- Stateful header parser accumulates bytes into `header_buf` until `\r\n\r\n`
-  (`source.rs:196`), so partial reads are fine.
 
-### ArchiveSource (`radio/source.rs:298`)
+### ArchiveSource
 
 - HTTP/1.1 GET against archive.org.
 - Handles 301 / 302 / 307 by encoding the new URL into the error string as
-  `redirect:<url>` (`source.rs:456`); the manager re-issues against the new
-  URL.
+  `redirect:<url>`; the manager re-issues against the new URL.
 - **No redirect-loop or hop-count protection.** `ArchiveSource` itself does
   not track redirect depth, and `RadioManager::resume_from_redirect`
-  (`radio/mod.rs:143`) just clears the error and reconnects. A misconfigured
+  (`radio/mod.rs`) just clears the error and reconnects. A misconfigured
   CDN that bounces between two URLs (`A` → `B` → `A` …) will cause the
   manager to spin in a tight reconnect loop, repeatedly stalling the audio
   thread. Callers that drive `resume_from_redirect` are responsible for
   capping the number of consecutive redirects and giving up on a sensible
   budget (3–5 hops).
 - 4xx and 5xx responses kill the source.
-- Tracks `Content-Length` (`source.rs:495`).
+- Tracks `Content-Length` and ends the source once that many body bytes
+  arrived.
 - Emits metadata once on the first chunk, populated from a creator/title
-  pre-fetch (`source.rs:472`).
+  pre-fetch.
 
-### VfsSource (`radio/source.rs:62`)
+### VfsSource
 
 In-memory byte buffer, configurable chunk size (default 4 KiB). Used by tests
 and by UE5 asset streaming.

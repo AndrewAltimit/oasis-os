@@ -81,14 +81,10 @@ fn https_get_body(
     while written < req_bytes.len() {
         match stream.write(&req_bytes[written..]) {
             Ok(n) => written += n,
-            Err(e) => {
-                let msg = format!("{e}");
-                if msg.contains("WouldBlock") || msg.contains("would block") {
-                    std::thread::sleep(std::time::Duration::from_millis(1));
-                    continue;
-                }
-                return Err(format!("write: {e}"));
+            Err(e) if e.is_would_block() => {
+                std::thread::sleep(std::time::Duration::from_millis(1));
             },
+            Err(e) => return Err(format!("write: {e}")),
         }
     }
 
@@ -103,12 +99,10 @@ fn https_get_body(
         match stream.read(&mut buf) {
             Ok(0) => break,
             Ok(n) => response.extend_from_slice(&buf[..n]),
+            Err(e) if e.is_would_block() => {
+                std::thread::sleep(std::time::Duration::from_millis(1));
+            },
             Err(e) => {
-                let msg = format!("{e}");
-                if msg.contains("WouldBlock") || msg.contains("would block") {
-                    std::thread::sleep(std::time::Duration::from_millis(1));
-                    continue;
-                }
                 if !response.is_empty() {
                     break;
                 }

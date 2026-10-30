@@ -3,7 +3,6 @@
 use std::time::{Duration, Instant};
 
 use oasis_types::backend::{NetworkBackend, NetworkStream};
-use oasis_types::error::OasisError;
 
 use crate::dispatch::{Handled, handle_message};
 use crate::http::{
@@ -32,22 +31,6 @@ const MAX_WRITE_BUF: usize = 4 * 1024 * 1024;
 const LINGER_QUIET_MS: u64 = 100;
 /// Hard cap on how long a lingering close may take.
 const LINGER_MAX_SECS: u64 = 2;
-
-/// Constant-time byte comparison (avoids leaking the token via timing).
-fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
-    if a.len() != b.len() {
-        return false;
-    }
-    let mut diff = 0u8;
-    for (x, y) in a.iter().zip(b.iter()) {
-        diff |= x ^ y;
-    }
-    diff == 0
-}
-
-fn is_would_block(e: &OasisError) -> bool {
-    matches!(e, OasisError::Io(io) if io.kind() == std::io::ErrorKind::WouldBlock)
-}
 
 struct HttpConn {
     stream: Box<dyn NetworkStream>,
@@ -99,7 +82,7 @@ impl HttpConn {
                     total += n;
                     last_input = now;
                 },
-                Err(ref e) if is_would_block(e) => break,
+                Err(ref e) if e.is_would_block() => break,
                 Err(_) => return true,
             }
         }
@@ -136,7 +119,7 @@ impl HttpConn {
                     }
                     self.read_buf.extend_from_slice(&buf[..n]);
                 },
-                Err(ref e) if is_would_block(e) => break,
+                Err(ref e) if e.is_would_block() => break,
                 Err(e) => {
                     log::debug!("mcp read error: {e}");
                     return false;
@@ -154,7 +137,7 @@ impl HttpConn {
                 Ok(n) => {
                     self.write_buf.drain(..n);
                 },
-                Err(ref e) if is_would_block(e) => break,
+                Err(ref e) if e.is_would_block() => break,
                 Err(e) => {
                     log::debug!("mcp write error: {e}");
                     self.write_buf.clear();
@@ -400,7 +383,7 @@ fn handle_http_request(
         let ok = req
             .auth_bearer
             .as_deref()
-            .is_some_and(|got| constant_time_eq(got.as_bytes(), expected.as_bytes()));
+            .is_some_and(|got| oasis_types::util::ct_eq(got.as_bytes(), expected.as_bytes()));
         if !ok {
             return build_response(
                 401,
@@ -447,7 +430,7 @@ fn handle_http_request(
 mod tests {
     use super::*;
     use crate::tools::{ToolResult, ToolSpec};
-    use oasis_types::error::Result;
+    use oasis_types::error::{OasisError, Result};
     use serde_json::{Value, json};
     use std::sync::{Arc, Mutex};
 
