@@ -97,8 +97,8 @@ If you set `OASIS_MCP_TOKEN`, add the header:
 
 | Tool | Arguments | Effect |
 | ---- | --------- | ------ |
-| `list_apps` | — | List launchable app titles. |
-| `open_app` | `title`, `file?` | Open an app (optionally pre-loading a VFS file). |
+| `list_apps` | — | List launchable app titles: the app registry (built-in and plugin apps, with or without a dashboard tile) plus the Browser. |
+| `open_app` | `title`, `file?` | Open an app by title, case-insensitive (optionally pre-loading a VFS file; an app that does not open files is an error). |
 | `list_windows` | — | List open windows (id, title, pos, size, focus). |
 | `focus_window` / `minimize_window` / `maximize_window` / `restore_window` | `id` | Window lifecycle. |
 | `close_window` | `id`, `force?` | Close a window the way its titlebar close button does (see below). |

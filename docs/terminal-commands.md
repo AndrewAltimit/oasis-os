@@ -262,6 +262,7 @@ VFS metadata only — there is no real Unix permission model behind these.
 | `theme` | `theme [show\|colors]` | Show the current theme (skin name, resolution, base colors), from `/var/theme/current`, which the shell keeps up to date. |
 | `notify` | `notify [--level info\|success\|warning\|error] <message>` | Show a notification: queues `/var/notify/message`, which the shell shows as a toast. |
 | `screenshot` | `screenshot [path]` | Save the next presented frame to a VFS path (default `/tmp/screenshot.bmp`; PNG when the path ends in `.png`, else BMP). Queues `/var/screenshot/request`; the shell prints the result. |
+| `open` | `open <app> [/path/to/file]` | Open (or raise) the window of any registered app by title, case-insensitive, including apps without a dashboard tile (`open system monitor`); a trailing absolute path is opened in it (`open Photo Viewer /home/user/photos/a.png`; only apps that open files accept one). Queues `open <app>\t<file>` on `/var/wm/request`; the shell reports unknown apps in the terminal. |
 
 ## Skin management (`oasis-core/src/terminal/skin_commands.rs`)
 
@@ -355,7 +356,7 @@ the wire protocol and PSK auth.
 | `curl` | `curl <url>` | Alias for `fetch`. |
 | `sandbox` | `sandbox on \| sandbox off` | Toggle browser sandbox mode. |
 
-## TV Guide (`oasis-core/src/terminal/tv_commands.rs`)
+## TV Guide (`oasis-apps/src/tv_command.rs`)
 
 | Command | Usage | Description |
 | --- | --- | --- |
@@ -385,11 +386,11 @@ the wire protocol and PSK auth.
   builtins are not registered; the executor dispatches them.
 - `oasis_core::terminal::register_builtins` adds `skin` on top of that and
   is what the desktop, WASM and UE5 hosts call.
-- `register_browser_commands`, `register_agent_commands`,
-  `register_plugin_commands`, and `register_tv_commands` in
-  `oasis-core/src/terminal/`, plus `register_script_commands`,
-  `register_transfer_commands` and `register_update_commands`, add the
-  higher-layer commands.
+- `register_browser_commands`, `register_agent_commands` and
+  `register_plugin_commands` in `oasis-core/src/terminal/`, plus
+  `register_script_commands`, `register_transfer_commands` and
+  `register_update_commands`, add the higher-layer commands;
+  `oasis_apps::register_commands` adds the app-specific ones (`tv`).
 
 `man <command>` is the canonical interactive reference; this document is the
 written-form mirror. If they diverge, the source `Command` impl is the

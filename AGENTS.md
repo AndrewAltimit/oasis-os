@@ -101,13 +101,11 @@ oasis-types     (foundation: Color, Button, InputEvent, backend traits, error ty
 ├── oasis-app-radio       (Internet Radio app)
 ├── oasis-app-settings    (Settings app)
 ├── oasis-app-file-manager (File Manager app)
-├── oasis-app-browser     (Browser launcher placeholder)
-├── oasis-app-network     (Network status app)
-├── oasis-app-package-manager (Package Manager app)
-├── oasis-app-system-monitor  (System Monitor app)
+├── oasis-app-system-monitor  (System Monitor + Network + Package Manager apps)
 ├── oasis-backend-sdl  (SDL3 desktop/Pi rendering + input + audio; no oasis-core dependency)
 ├── oasis-backend-ue5  (software RGBA framebuffer for Unreal Engine 5; no oasis-core dependency)
-└── oasis-core       (coordination only: dashboard, agent, plugin, script, terminal; all apps live in oasis-app-* crates)
+└── oasis-core       (coordination only: dashboard, agent, plugin, script, terminal, AppRunner + AppRegistry; no app crate dependency)
+    ├── oasis-apps     (the app bundle hosts depend on: builtin_registry, `tv` command)
     ├── oasis-app      (+ oasis-backend-sdl, oasis-backend-ue5; binaries oasis-app, oasis-screenshot; features javascript, video-decode-ffmpeg (default) / video-decode (openh264), skin-dev, mcp)
     ├── oasis-backend-wasm (Canvas 2D + DOM input + Web Audio; iframe overlay drives a Browser pane and a YouTube embed; YouTube search + thumbnail grid via Invidious; feature: wasm-youtube)
     ├── oasis-ffi      (+ oasis-backend-ue5; cdylib C-ABI for UE5 integration; features video-decode / video-decode-ffmpeg)
@@ -140,19 +138,20 @@ The repository contains 50 crate directories under `crates/`: 40 workspace membe
 - **oasis-vfs** -- Virtual file system: `MemoryVfs` (in-RAM), `RealVfs` (disk), `GameAssetVfs` (UE5 with overlay writes)
 - **oasis-terminal** -- Command interpreter: ~95 registered commands (core, platform, remote, network, audio, radio, text, file, system, dev, fun, UI, security, doc; plus agent/plugin/script/skin/transfer/update/tv/browser registered by oasis-core) and 20 shell builtins. Shell features: variables, globs, aliases, piping, one script engine (`script.rs`: if/while/until/for/case) for inline and `run` scripts, `cmd &` jobs, and a `ShellSession` (`session.rs`) with readline editing, tab completion and persistent history
 - **oasis-wm** -- Window manager (window configs, hit testing, drag/resize, minimize/maximize/close, edge snapping, tiling, open/close/minimize animations). See [`docs/window-manager.md`](docs/window-manager.md)
-- **oasis-net** -- TCP networking with PSK authentication, remote terminal, FTP transfer
+- **oasis-net** -- TCP networking with PSK authentication, remote terminal; FTP transfer server behind feature `vfs`
 - **oasis-audio** -- Audio manager with playlist, shuffle/repeat modes, MP3 ID3 tag parsing
 - **oasis-platform** -- Platform service traits: PowerService, TimeService, UsbService, NetworkService, OskService
 - **oasis-video** -- MP4 / H.264 + AAC decode pipeline. Feature flags: `h264` (openh264 + symphonia demux/AAC), `ffmpeg` (statically linked ffmpeg; mutually exclusive with `h264`), `no-std-demux` (PSP-safe `demux_lite::Mp4Lite`). `video-decode` / `video-decode-ffmpeg` are features of `oasis-app` / `oasis-ffi` that select `h264` / `ffmpeg`. Desktop progressive streaming + PSP in-memory ME-hardware pipeline are documented in [`docs/video-streaming.md`](docs/video-streaming.md) and [`docs/psp-architecture.md`](docs/psp-architecture.md) §Video Streaming.
 - **oasis-vector** -- Resolution-independent vector graphics: scene graph with path-based drawing operations (fill, stroke, arcs, beziers), dashboard icons, and frame-driven animations
 - **oasis-shader** -- Animated shader wallpapers: Shadertoy-style fragment shaders, 8 built-ins (`BuiltinShader`: balatro, voronoi, city_lights, ocean_waves, calm_waves, starfield, plasma, matrix_rain), each with a GLSL and a CPU implementation
 - **oasis-app-core** -- Shared app framework: the `App` trait (input, `handle_key`, `accepts_text`, `tick`, `wants_frame`, `apply_vfs_ops`, SDI + windowed rendering), `AppAction`, render helpers. Guide: [`docs/writing-apps.md`](docs/writing-apps.md)
-- **oasis-app-*** -- 13 extracted app crates: `oasis-app-games`, `oasis-app-paint`, `oasis-app-text-editor`, `oasis-app-calculator`, `oasis-app-media` (Music Player + Photo Viewer), `oasis-app-tv-guide`, `oasis-app-radio`, `oasis-app-settings`, `oasis-app-file-manager`, `oasis-app-browser`, `oasis-app-network`, `oasis-app-package-manager`, `oasis-app-system-monitor`
+- **oasis-app-*** -- 10 app crates: `oasis-app-games`, `oasis-app-paint`, `oasis-app-text-editor`, `oasis-app-calculator`, `oasis-app-media` (Music Player + Photo Viewer), `oasis-app-tv-guide`, `oasis-app-radio`, `oasis-app-settings`, `oasis-app-file-manager`, `oasis-app-system-monitor` (System Monitor + Network + Package Manager)
+- **oasis-apps** -- The built-in app bundle: `builtin_registry(&HostInfo)`, the `tv` command, `TvGuideRunnerExt`
 - **oasis-rasterize** -- Shared software rasterizer (span/row fast paths) used by the UE5, SDL and WASM backends
 - **oasis-i18n** -- Internationalization framework
 - **oasis-test-backend** -- Mock and recording `SdiBackend` implementations for tests
 - **oasis-usb-host** -- Standalone host binary (rusb) that streams frames to / reads input from the PSP USB thin client (`oasis-usb-client-psp`)
-- **oasis-core** -- Coordination layer: dashboard, agent/MCP, plugin, scripting, status/bottom bars, desktop taskbar, in-core Terminal app. All other apps live in `oasis-app-*` crates.
+- **oasis-core** -- Coordination layer: dashboard, agent/MCP, plugin, scripting, status/bottom bars, desktop taskbar, `AppRunner` + host-owned `AppRegistry`, in-core Terminal app. It depends on no app crate; the apps live in `oasis-app-*` crates, bundled by `oasis-apps`.
 
 ### FFI Boundary (oasis-ffi)
 

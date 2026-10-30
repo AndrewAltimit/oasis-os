@@ -40,7 +40,7 @@ The input/key-mapping logic is pure Rust and its unit tests run on the host:
 
 | Feature | Default | Effect |
 |---------|---------|--------|
-| `wasm-youtube` | Yes | Adds a **Video Embed** dashboard app with YouTube search (via Invidious) and playback in the iframe overlay; forwards `oasis-core/wasm-youtube` |
+| `wasm-youtube` | Yes | Adds a **Video Embed** dashboard app with YouTube search (via Invidious) and playback in the iframe overlay; forwards `oasis-apps/video-embed` |
 
 Build without it via
 `wasm-pack build crates/oasis-backend-wasm --target web --no-default-features`.
@@ -93,7 +93,7 @@ URL parameters read by `index.js`:
 | `read_pixels()` | RGBA framebuffer (`width * height * 4` bytes), e.g. for Playwright screenshots |
 | `add_vfs_file(path, bytes)` | Write a file into the in-memory VFS |
 | `screen_width()` / `screen_height()` | Current virtual resolution |
-| `launch_app(title)` | Launch a dashboard app by title (`"Browser"`, `"TV Guide"`, ...) |
+| `launch_app(title)` | Launch an app by title, case-insensitive: any registered app (with or without a dashboard tile), `"Browser"`, or a VFS-discovered tile |
 
 `index.js` also exposes the instance as `window.__oasis` and sets
 `window.__oasisReady = true` for automated tests.
@@ -193,7 +193,7 @@ Limits and behavior:
 
 ## YouTube (`wasm-youtube`)
 
-The Video Embed app (`oasis-core/src/apps/video_embed.rs`) talks to the
+The Video Embed app (`oasis-apps/src/video_embed.rs`, feature `video-embed`) talks to the
 backend over the VFS: it writes `search:<query>`, `play:<video id>`, or `stop`
 to `/tmp/video_embed_request`, and the backend publishes a JSON result blob to
 `/tmp/video_embed_results`.
