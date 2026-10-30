@@ -9,9 +9,11 @@ use std::collections::HashMap;
 
 use oasis_types::error::{OasisError, Result};
 
+use crate::expander::Word;
 use crate::jobs::JobManager;
 use crate::types::{
-    Command, CommandOutput, Environment, MAX_CALL_DEPTH, MAX_HISTORY, ShellFunction,
+    Command, CommandOutput, Environment, MAX_CALL_DEPTH, MAX_COMMANDS_PER_LINE, MAX_EXPANDED_LEN,
+    MAX_HISTORY, MAX_VAR_LEN, MAX_VARIABLES, ShellFunction,
 };
 
 /// Registry of available commands with dispatch.
@@ -44,6 +46,9 @@ pub struct CommandRegistry {
     pub(crate) jobs: RefCell<JobManager>,
     /// Nesting depth of `run <script>` calls.
     pub(crate) script_depth: Cell<usize>,
+    /// Simple commands run since the current top-level line started (see
+    /// [`MAX_COMMANDS_PER_LINE`]).
+    pub(crate) commands_run: Cell<u64>,
 }
 
 impl CommandRegistry {
@@ -68,6 +73,7 @@ impl CommandRegistry {
             exec_depth: Cell::new(0),
             jobs: RefCell::new(JobManager::new()),
             script_depth: Cell::new(0),
+            commands_run: Cell::new(0),
         }
     }
 
@@ -96,6 +102,51 @@ impl CommandRegistry {
         self.variables
             .borrow_mut()
             .insert(name.to_string(), value.to_string());
+    }
+
+    /// Set a variable on behalf of the user (`set`, `local`, `for`):
+    /// like [`set_variable`](Self::set_variable) but refuses values over
+    /// 64 KiB and new names beyond 4096 variables, so a script cannot grow
+    /// the shell's memory without bound.
+    pub(crate) fn assign_variable(&self, name: &str, value: &str) -> Result<()> {
+        if value.len() > MAX_VAR_LEN {
+            return Err(OasisError::Command(
+                format!(
+                    "{name}: value too long ({} bytes, max {MAX_VAR_LEN})",
+                    value.len()
+                )
+                .into(),
+            ));
+        }
+        let vars = self.variables.borrow();
+        if vars.len() >= MAX_VARIABLES && !vars.contains_key(name) {
+            return Err(OasisError::Command(
+                format!("{name}: too many variables (max {MAX_VARIABLES})").into(),
+            ));
+        }
+        drop(vars);
+        self.set_variable(name, value);
+        Ok(())
+    }
+
+    /// Count one simple command against the per-line budget; errors once
+    /// [`MAX_COMMANDS_PER_LINE`] is exceeded.
+    pub(crate) fn charge_command(&self) -> Result<()> {
+        let n = self.commands_run.get().saturating_add(1);
+        self.commands_run.set(n);
+        if n > MAX_COMMANDS_PER_LINE {
+            return Err(OasisError::Command(
+                format!("command limit exceeded ({MAX_COMMANDS_PER_LINE} commands in one line)")
+                    .into(),
+            ));
+        }
+        Ok(())
+    }
+
+    /// Whether the current line has used up its command budget (loops stop
+    /// iterating once it has).
+    pub(crate) fn over_budget(&self) -> bool {
+        self.commands_run.get() > MAX_COMMANDS_PER_LINE
     }
 
     /// Get a shell variable value.
@@ -350,13 +401,55 @@ impl CommandRegistry {
 
     // -- Variable expansion --
 
-    pub(crate) fn expand_variables(&self, input: &str, cwd: &str) -> String {
+    /// Substitute `$VAR`, `${VAR}`, `$?` and `$#`.
+    ///
+    /// Quoting is respected the way [`tokenize`](crate::tokenize) will read
+    /// it afterwards: nothing inside `'...'` is expanded, and a
+    /// backslash-escaped `\$` stays literal. Quotes and escapes are kept in
+    /// the output for the tokenizer to remove. Fails when the result would
+    /// exceed 256 KiB (`$x$x$x...` doubling).
+    pub(crate) fn expand_variables(&self, input: &str, cwd: &str) -> Result<String> {
         let vars = self.variables.borrow();
         let mut result = String::with_capacity(input.len());
         let chars: Vec<char> = input.chars().collect();
         let mut i = 0;
+        let (mut in_single, mut in_double) = (false, false);
 
         while i < chars.len() {
+            if result.len() > MAX_EXPANDED_LEN {
+                return Err(expansion_too_long());
+            }
+            let c = chars[i];
+            if in_single {
+                in_single = c != '\'';
+                result.push(c);
+                i += 1;
+                continue;
+            }
+            match c {
+                '\'' if !in_double => {
+                    in_single = true;
+                    result.push(c);
+                    i += 1;
+                    continue;
+                },
+                '"' => {
+                    in_double = !in_double;
+                    result.push(c);
+                    i += 1;
+                    continue;
+                },
+                '\\' => {
+                    // Keep the escape and the escaped char for the tokenizer.
+                    result.push(c);
+                    if let Some(&next) = chars.get(i + 1) {
+                        result.push(next);
+                    }
+                    i += 2;
+                    continue;
+                },
+                _ => {},
+            }
             if chars[i] == '$' && i + 1 < chars.len() {
                 // Check for $? (last exit code) and $# (arg count).
                 if chars[i + 1] == '?' || chars[i + 1] == '#' {
@@ -396,7 +489,10 @@ impl CommandRegistry {
                 i += 1;
             }
         }
-        result
+        if result.len() > MAX_EXPANDED_LEN {
+            return Err(expansion_too_long());
+        }
+        Ok(result)
     }
 
     fn resolve_var(&self, name: &str, vars: &HashMap<String, String>, cwd: &str) -> String {
@@ -414,21 +510,25 @@ impl CommandRegistry {
 
     // -- Alias expansion --
 
-    pub(crate) fn expand_alias(&self, mut tokens: Vec<String>) -> Vec<String> {
-        if tokens.is_empty() {
-            return tokens;
-        }
+    /// Replace an unquoted first word that names an alias with the alias
+    /// text's words (one level: the result is not expanded again).
+    pub(crate) fn expand_alias_words(&self, mut words: Vec<Word>) -> Vec<Word> {
+        let Some(first) = words.first().filter(|w| !w.quoted) else {
+            return words;
+        };
         let aliases = self.aliases.borrow();
-        if let Some(expansion) = aliases.get(&tokens[0]) {
-            // Replace the first token with the alias expansion.
-            let expanded_tokens = match crate::expander::tokenize(expansion) {
-                Ok(t) => t,
-                Err(_) => return tokens,
-            };
-            tokens.splice(0..1, expanded_tokens);
+        if let Some(expansion) = aliases.get(&first.text)
+            && let Ok(expanded) = crate::expander::tokenize_words(expansion)
+        {
+            words.splice(0..1, expanded);
         }
-        tokens
+        words
     }
+}
+
+/// The error for an expansion over [`MAX_EXPANDED_LEN`].
+pub(crate) fn expansion_too_long() -> OasisError {
+    OasisError::Command(format!("expansion too long (over {MAX_EXPANDED_LEN} bytes)").into())
 }
 
 impl Default for CommandRegistry {
