@@ -33,10 +33,11 @@ absolute path starting with `/`.
 
 ### Layer 2: Permission Enforcement
 
-`VfsPermissions` tracks Unix-style mode bits (owner read/write/execute).
-`MemoryVfs` enforces these on every `read()`, `write()`, and
-`readdir()` call. Files default to `0o644` (owner rw, others r) and
-directories to `0o755`.
+`FilePermissions` tracks an owner and Unix-style mode bits, checked against
+the caller's `VfsContext` by `Vfs::check_permission`. `MemoryVfs` and
+`GameAssetVfs` enforce them on reads, writes, `readdir()`, `mkdir()`,
+`remove()` and both parents of a `rename()`. Files default to `0o644`
+(owner rw, others r) and directories to `0o755`.
 
 ### Layer 3: Jail Roots
 
