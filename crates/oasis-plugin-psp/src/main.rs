@@ -610,6 +610,7 @@ fn psp_main() {
         devloop::start();
         // Park the main thread — devloop runs in its own thread.
         loop {
+            // SAFETY: plain microsecond delay.
             unsafe { psp::sys::sceKernelDelayThread(10_000_000) };
         }
     }
@@ -634,6 +635,8 @@ fn psp_main() {
         me_dump::start_dump_thread();
 
         // Boot ME and hook sceMpegAvcDecode to use sceMeVideo_driver.
+        // SAFETY: called exactly once, here in psp_main, before the hooked
+        // syscall can be reached by the overlay threads started above.
         unsafe { setup_me_decode_hook() };
 
         // If pip_enabled is set in config, send the initial toggle command

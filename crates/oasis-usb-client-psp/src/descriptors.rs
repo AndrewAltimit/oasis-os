@@ -126,10 +126,6 @@ pub struct UsbData {
     pub endp: [UsbDataEndpoint; 3],
 }
 
-// SAFETY: UsbData is only accessed from init thread and USB interrupt context
-unsafe impl Sync for UsbData {}
-unsafe impl Sync for StringDescriptor {}
-
 // ---------------------------------------------------------------------------
 // Static descriptor instances
 // ---------------------------------------------------------------------------

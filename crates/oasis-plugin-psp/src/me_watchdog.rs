@@ -2,15 +2,21 @@
 //! for the SceMediaEngineRpc event flag, preventing infinite deadlocks
 //! in sceMpegAvcDecode's ME RPC path.
 
-use core::sync::atomic::{AtomicI32, Ordering};
+use core::sync::atomic::{AtomicI32, AtomicUsize, Ordering};
 
 /// The SceMediaEngineRpc event flag UID.
 static ME_EVFLAG_UID: AtomicI32 = AtomicI32::new(-1);
 
-/// Original WaitEventFlag function pointer.
-static mut ORIG_WAIT_EVFLAG: Option<
-    unsafe extern "C" fn(i32, u32, u32, *mut u32, *mut u32) -> i32,
-> = None;
+type WaitEventFlagFn = unsafe extern "C" fn(i32, u32, u32, *mut u32, *mut u32) -> i32;
+
+/// Address of the original WaitEventFlag (trampoline or syscall target), 0 until
+/// set. Atomic because the hook goes live inside `SyscallHook::install`, before
+/// this can be stored, and every thread calling sceKernelWaitEventFlag reads it.
+static ORIG_WAIT_EVFLAG: AtomicUsize = AtomicUsize::new(0);
+
+/// The installed hook. Kept for the program's lifetime: for inline hooks the
+/// trampoline that ORIG_WAIT_EVFLAG points at is stored inside it.
+static mut WAIT_HOOK: Option<psp::hook::SyscallHook> = None;
 
 /// NID for sceKernelWaitEventFlag.
 const NID_WAIT_EVENT_FLAG: u32 = 0x402FCF22;
@@ -27,15 +33,18 @@ unsafe extern "C" fn hooked_wait_event_flag(
     out_bits: *mut u32,
     timeout: *mut u32,
 ) -> i32 {
-    // SAFETY: installed in place of sceKernelWaitEventFlag, so the kernel calls it with that
-    // syscall's arguments. ORIG_WAIT_EVFLAG is written once by `install_hook` before the hook is
-    // live and is copied, not borrowed; `out_bits` / `timeout` are forwarded unchanged.
+    let orig_addr = ORIG_WAIT_EVFLAG.load(Ordering::Acquire);
+    if orig_addr == 0 {
+        return -1;
+    }
+    // SAFETY: a non-zero ORIG_WAIT_EVFLAG is the address of the original
+    // sceKernelWaitEventFlag (or its trampoline), stored by `install_hook`, so it
+    // has exactly the `WaitEventFlagFn` signature.
+    let orig: WaitEventFlagFn = unsafe { core::mem::transmute(orig_addr) };
+    // SAFETY: installed in place of sceKernelWaitEventFlag, so the kernel calls it
+    // with that syscall's arguments; `out_bits` is forwarded unchanged, and the
+    // substituted `timeout` points at a live local for the duration of the call.
     unsafe {
-        let orig = match ORIG_WAIT_EVFLAG {
-            Some(f) => f,
-            None => return -1,
-        };
-
         // Only intervene on infinite-timeout calls that match known ME pattern.
         if timeout.is_null() {
             let me_uid = ME_EVFLAG_UID.load(Ordering::Relaxed);
@@ -78,6 +87,9 @@ fn install_hook() {
     ];
 
     for &(module, lib) in modules {
+        // SAFETY: NUL-terminated name literals; `hooked_wait_event_flag` has the
+        // exact C signature of the hooked syscall, and it tolerates being called
+        // before ORIG_WAIT_EVFLAG is set (it returns an error instead).
         let hook = unsafe {
             psp::hook::SyscallHook::install(
                 module.as_ptr(),
@@ -87,15 +99,23 @@ fn install_hook() {
             )
         };
         if let Some(h) = hook {
-            unsafe {
-                let call_addr = if h.is_inline {
-                    h.trampoline.as_ptr() as *const u8
-                } else {
-                    h.original as *const u8
-                };
-                ORIG_WAIT_EVFLAG = Some(core::mem::transmute(call_addr));
-            }
-            core::mem::forget(h);
+            // An inline hook's trampoline lives *inside* the SyscallHook value, so
+            // it must be moved to its final home (a static) before its address is
+            // taken -- the old code took the address of a stack local and then
+            // forgot it, leaving hooked calls jumping into a dead frame. The moved
+            // instructions are then written back and the I-cache invalidated so
+            // the CPU fetches them from the new location.
+            // SAFETY: install() runs once from psp_main during init; WAIT_HOOK is
+            // written only here and never read through a reference elsewhere (the
+            // hook reads the published address from ORIG_WAIT_EVFLAG instead).
+            let call_addr = unsafe {
+                let h = (*(&raw mut WAIT_HOOK)).insert(h);
+                let addr = h.original_ptr() as usize;
+                psp::sys::sceKernelDcacheWritebackAll();
+                psp::sys::sceKernelIcacheInvalidateAll();
+                addr
+            };
+            ORIG_WAIT_EVFLAG.store(call_addr, Ordering::Release);
             crate::debug_log(b"[ME-WD] hook installed OK");
             return;
         }
