@@ -144,6 +144,53 @@ fn boot_status_bar_uses_the_frozen_clock() {
     );
 }
 
+/// A skin switch used to replace the status bar with a fresh one reading
+/// "00:00" until the next periodic info update (about a second later).
+/// The very first frame after the switch shows the real clock, and the
+/// selected top tab is kept.
+#[test]
+fn status_bar_keeps_the_clock_and_tab_across_a_skin_switch() {
+    let mut h = Harness::new("classic");
+    h.settle();
+    h.trigger(Trigger::Left);
+    h.settle();
+    let tab = h.state().ui.status_bar.active_tab;
+    h.vfs_mut()
+        .write(oasis_app_settings::SKIN_CHANGE_REQUEST_PATH, b"modern")
+        .unwrap();
+    h.step(&[]);
+    assert_eq!(h.state().skin.manifest.name, "modern");
+    assert!(
+        h.sdi_text_contains("12:00"),
+        "first frame after the switch shows the frozen clock: {:?}",
+        h.sdi_texts()
+    );
+    assert!(!h.sdi_text_contains("00:00"), "{:?}", h.sdi_texts());
+    assert_eq!(h.state().ui.status_bar.active_tab, tab);
+}
+
+/// `OASIS_APP=<title>` (and `Harness::open_app`) launches every registered
+/// app, including the ones without a dashboard tile (Network, Package
+/// Manager, System Monitor used to be "not found").
+#[test]
+fn every_registered_app_launches_by_title() {
+    let mut h = Harness::new("classic");
+    h.settle();
+    for title in oasis_core::apps::registered_app_titles() {
+        assert!(h.open_app(title), "{title}: not launchable by title");
+        h.settle();
+        assert_eq!(h.mode(), Mode::Desktop, "{title}");
+        let id = title.to_lowercase().replace(' ', "_");
+        assert!(
+            h.state().wm.get_window(&id).is_some(),
+            "{title}: no window {id:?} in {:?}",
+            h.windows()
+        );
+    }
+    // Lower-case titles resolve too.
+    assert!(h.open_app("system monitor"));
+}
+
 // ---------------------------------------------------------------------------
 // Dashboard -> app -> dashboard
 // ---------------------------------------------------------------------------

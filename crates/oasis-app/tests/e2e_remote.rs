@@ -724,6 +724,91 @@ fn mcp_drives_apps_and_windows() {
     assert_eq!(h.mode(), Mode::Dashboard);
 }
 
+/// MCP `close_window` asks the app first, like the titlebar close button:
+/// a Text Editor with unsaved changes declines (showing its prompt) and
+/// keeps the edits; `force: true` closes it anyway. It used to close the
+/// window silently, discarding the edits.
+#[cfg(feature = "mcp")]
+#[test]
+fn mcp_close_window_honours_unsaved_changes_unless_forced() {
+    use serde_json::json;
+    let mut h = Harness::new("classic");
+    h.settle();
+    let port = mcp::start(&mut h);
+
+    mcp::ok(&mut h, port, "open_app", json!({ "title": "Text Editor" }));
+    h.settle();
+    let editor = mcp::window_id(&h, "Text Editor");
+    h.type_text("agent must not lose this");
+    h.settle();
+
+    let msg = mcp::fails(&mut h, port, "close_window", json!({ "id": editor }));
+    assert!(msg.contains("declined"), "{msg}");
+    h.settle();
+    assert!(h.find_window("Text Editor").is_some(), "{:?}", h.windows());
+    h.render_now();
+    assert!(
+        h.text_drawn_contains("agent must not lose this"),
+        "{:?}",
+        h.frame_text()
+    );
+
+    // An unmodified app still closes on the first call.
+    mcp::ok(&mut h, port, "open_app", json!({ "title": "Calculator" }));
+    h.settle();
+    let calc = mcp::window_id(&h, "Calculator");
+    mcp::ok(&mut h, port, "close_window", json!({ "id": calc }));
+    h.settle();
+    assert!(h.find_window("Calculator").is_none());
+
+    let resp = mcp::ok(
+        &mut h,
+        port,
+        "close_window",
+        json!({ "id": editor, "force": true }),
+    );
+    assert!(resp.contains("closed"), "{resp}");
+    h.settle();
+    assert!(h.find_window("Text Editor").is_none(), "{:?}", h.windows());
+    assert!(h.app_runner("Text Editor").is_none(), "runner leaked");
+    assert_eq!(h.mode(), Mode::Dashboard);
+}
+
+/// MCP `close_window` retires the runner so its backend resources are
+/// released: a Photo Viewer opened on an image (MCP `open_app` with a
+/// file) gives its textures back. They used to leak.
+#[cfg(feature = "mcp")]
+#[test]
+fn mcp_close_window_releases_app_textures() {
+    use serde_json::json;
+    let mut h = Harness::new("classic");
+    h.settle();
+    let port = mcp::start(&mut h);
+    h.render_now();
+    let base = h.resource_counts();
+
+    mcp::ok(
+        &mut h,
+        port,
+        "open_app",
+        json!({ "title": "Photo Viewer", "file": "/home/user/photos/oasis_sample.png" }),
+    );
+    h.settle();
+    h.render_now();
+    assert!(
+        h.resource_counts().textures > base.textures,
+        "setup: the viewer uploaded the image"
+    );
+    let id = mcp::window_id(&h, "Photo Viewer");
+    mcp::ok(&mut h, port, "close_window", json!({ "id": id }));
+    h.settle();
+    h.render_now();
+    let now = h.resource_counts();
+    assert_eq!(now.windows, 0);
+    assert_eq!(now.runners, 0);
+    assert_eq!(now.textures, base.textures, "Photo Viewer textures leaked");
+}
+
 #[cfg(feature = "mcp")]
 #[test]
 fn mcp_bad_arguments_are_errors_not_panics() {
@@ -940,7 +1025,7 @@ fn mcp_play_media_and_radio_tune_reach_the_controllers() {
         json!({ "source": "radio", "channel": "0" }),
     );
     h.run_frames(3);
-    let err = h.state().radio_manager.error_msg().to_string();
+    let err = h.state().radio.manager.error_msg().to_string();
     assert!(err.contains("offline"), "radio error: {err:?}");
     let msg = mcp::ok(
         &mut h,
@@ -950,7 +1035,7 @@ fn mcp_play_media_and_radio_tune_reach_the_controllers() {
     );
     assert!(msg.contains("No Such FM"), "{msg}");
     h.run_frames(3);
-    let err = h.state().radio_manager.error_msg().to_string();
+    let err = h.state().radio.manager.error_msg().to_string();
     assert!(err.contains("station not found"), "radio error: {err:?}");
 }
 
@@ -1062,6 +1147,9 @@ fn mcp_tv_tune_starts_playback() {
     h.run_frames(3);
     let g = h.app_runner("TV Guide").unwrap().tv_guide_state().unwrap();
     assert_eq!(g.tuned_channel, Some(target.0));
-    assert!(h.state().video_player.is_active(), "tune started playback");
-    assert!(h.state().tv_audio_track.is_some());
+    assert!(
+        h.state().tv.video_player.is_active(),
+        "tune started playback"
+    );
+    assert!(h.state().tv.audio_track.is_some());
 }

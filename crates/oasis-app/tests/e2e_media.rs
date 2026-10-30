@@ -69,11 +69,11 @@ mod tv {
         );
         let st = h.state();
         assert!(
-            st.video_player.is_active(),
+            st.tv.video_player.is_active(),
             "tune started (injected) playback"
         );
         assert!(
-            st.tv_audio_track.is_some(),
+            st.tv.audio_track.is_some(),
             "tune opened a streaming audio track"
         );
         assert_eq!(st.mode, Mode::Desktop);
@@ -90,7 +90,7 @@ mod tv {
         assert_eq!(log.pcm_chunks.len(), before + 1, "chunk reached the output");
         let chunk = log.pcm_chunks.last().unwrap();
         assert_eq!((chunk.channels, chunk.sample_rate), (2, 48_000));
-        assert_eq!(Some(chunk.track), h.state().tv_audio_track);
+        assert_eq!(Some(chunk.track), h.state().tv.audio_track);
         chunk.samples.clone()
     }
 
@@ -188,7 +188,7 @@ mod tv {
     #[test]
     fn closing_the_tv_guide_stops_playback_and_releases_audio() {
         let mut h = open_and_tune();
-        let track = h.state().tv_audio_track.unwrap();
+        let track = h.state().tv.audio_track.unwrap();
         // Tuning enters kiosk fullscreen; leave it (F11) so the titlebar
         // close button exists, then close the window with the mouse.
         assert!(
@@ -198,7 +198,10 @@ mod tv {
         h.send(&[oasis_core::input::InputEvent::ToggleFullscreen]);
         h.settle();
         assert!(!h.find_window("TV Guide").unwrap().fullscreen);
-        assert!(h.state().video_player.is_active(), "still playing windowed");
+        assert!(
+            h.state().tv.video_player.is_active(),
+            "still playing windowed"
+        );
         assert!(
             h.close_window("TV Guide"),
             "close button: {:?}",
@@ -206,8 +209,8 @@ mod tv {
         );
         h.settle();
         assert!(h.find_window("TV Guide").is_none());
-        assert!(!h.state().video_player.is_active(), "playback stopped");
-        assert!(h.state().tv_audio_track.is_none(), "track released");
+        assert!(!h.state().tv.video_player.is_active(), "playback stopped");
+        assert!(h.state().tv.audio_track.is_none(), "track released");
         assert!(h.audio().tracks_unloaded.contains(&track));
         assert_eq!(h.mode(), Mode::Dashboard);
     }

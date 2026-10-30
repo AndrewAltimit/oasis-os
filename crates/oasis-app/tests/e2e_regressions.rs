@@ -135,7 +135,7 @@ mod tv {
         }
         h.key(Key::Enter);
         h.run_frames(3);
-        let track = h.state().tv_audio_track.expect("tuned");
+        let track = h.state().tv.audio_track.expect("tuned");
 
         h.key(Key::Escape);
         h.settle();
@@ -146,7 +146,7 @@ mod tv {
         );
         let g = h.app_runner("TV Guide").unwrap().tv_guide_state().unwrap();
         assert!(g.tuned_channel.is_none(), "first Escape untunes");
-        assert!(!h.state().video_player.is_active(), "playback stopped");
+        assert!(!h.state().tv.video_player.is_active(), "playback stopped");
         assert!(h.audio().tracks_unloaded.contains(&track), "audio released");
 
         h.key(Key::Escape);
@@ -236,4 +236,170 @@ fn custom_skin_save_stays_out_of_the_working_directory() {
     assert!(root.join(name).join("skin.toml").is_file());
     assert!(!std::path::Path::new("skins").join(name).exists());
     let _ = std::fs::remove_dir_all(&root);
+}
+
+// ---------------------------------------------------------------------------
+// Programmatic close honours the app's close prompt
+// ---------------------------------------------------------------------------
+
+/// Type `command` into the windowed terminal (opened or focused first)
+/// and run it.
+fn run_in_windowed_terminal(h: &mut Harness, command: &str) {
+    assert!(h.open_app("Terminal"));
+    h.settle();
+    assert_eq!(h.active_window().as_deref(), Some("terminal"));
+    h.type_text(command);
+    h.key(Key::Enter);
+    h.settle();
+}
+
+/// `wm close <id>` on a Text Editor with unsaved changes used to drop the
+/// window and the edits without asking. It now behaves like the titlebar
+/// close button: the editor raises its prompt, the shell reports that the
+/// window did not close, and the edits survive.
+#[test]
+fn wm_close_on_modified_text_editor_raises_the_prompt() {
+    let mut h = Harness::new("classic");
+    h.settle();
+    assert!(h.open_app("Text Editor"));
+    h.settle();
+    h.type_text("precious draft");
+    h.settle();
+
+    run_in_windowed_terminal(&mut h, "wm close text_editor");
+    assert!(
+        h.find_window("Text Editor").is_some(),
+        "wm close must not discard unsaved edits: {:?}",
+        h.windows()
+    );
+    assert!(
+        h.state()
+            .terminal
+            .output_lines
+            .iter()
+            .any(|l| l.contains("text_editor did not close")),
+        "{:#?}",
+        h.state().terminal.output_lines
+    );
+    // The editor is focused, showing its prompt; "Discard" closes it.
+    assert_eq!(h.active_window().as_deref(), Some("text_editor"));
+    h.render_now();
+    assert!(
+        h.text_drawn_contains("precious draft"),
+        "{:?}",
+        h.frame_text()
+    );
+    h.key(Key::Char('d'));
+    h.settle();
+    assert!(h.find_window("Text Editor").is_none(), "{:?}", h.windows());
+    assert!(h.app_runner("Text Editor").is_none());
+}
+
+/// `wm close` on an app without unsaved state closes it and drops its
+/// runner, like the titlebar button.
+#[test]
+fn wm_close_closes_an_unmodified_app() {
+    let mut h = Harness::new("classic");
+    h.settle();
+    assert!(h.open_app("Calculator"));
+    h.settle();
+    run_in_windowed_terminal(&mut h, "wm close calculator");
+    assert!(h.find_window("Calculator").is_none(), "{:?}", h.windows());
+    assert!(h.app_runner("Calculator").is_none(), "runner leaked");
+    // The terminal window is still open, so the desktop stays.
+    assert_eq!(h.mode(), Mode::Desktop);
+}
+
+// ---------------------------------------------------------------------------
+// Plugin apps survive dashboard rebuilds
+// ---------------------------------------------------------------------------
+
+mod plugin_tile {
+    use oasis_core::apps::simple_app::SimpleApp;
+    use oasis_core::error::Result;
+    use oasis_core::plugin::{AppCategory, Plugin, PluginAppRegistration, PluginHost, PluginInfo};
+
+    pub const TITLE: &str = "Plugin Tile";
+    pub const CONTENT: &str = "hello from a plugin";
+
+    /// A plugin that registers one dashboard app.
+    struct TilePlugin;
+
+    impl Plugin for TilePlugin {
+        fn info(&self) -> PluginInfo {
+            PluginInfo::new("tile-plugin", "1.0.0")
+        }
+        fn init(&mut self, host: &mut PluginHost<'_>) -> Result<()> {
+            host.register_app(PluginAppRegistration::new(
+                TITLE,
+                AppCategory::Utility,
+                |path, _vfs| Box::new(SimpleApp::new(TITLE, path, vec![CONTENT.to_string()])),
+            ))
+        }
+        fn update(&mut self, _host: &mut PluginHost<'_>) -> Result<()> {
+            Ok(())
+        }
+        fn shutdown(&mut self, _host: &mut PluginHost<'_>) -> Result<()> {
+            Ok(())
+        }
+    }
+
+    pub fn make() -> Box<dyn Plugin> {
+        Box::new(TilePlugin)
+    }
+}
+
+/// The plugin app has a dashboard tile, and the tile opens a window
+/// showing the plugin's content.
+fn assert_plugin_app_launches(h: &mut Harness, what: &str) {
+    let has_tile = h
+        .state()
+        .ui
+        .dashboard
+        .apps
+        .iter()
+        .any(|a| a.title == plugin_tile::TITLE);
+    assert!(has_tile, "{what}: tile missing");
+    assert!(h.open_app(plugin_tile::TITLE), "{what}");
+    h.settle();
+    h.render_now();
+    assert!(
+        h.text_drawn_contains(plugin_tile::CONTENT),
+        "{what}: plugin app not drawn: {:?}",
+        h.frame_text()
+    );
+    assert!(h.close_window(plugin_tile::TITLE), "{what}");
+    h.settle();
+    assert!(h.find_window(plugin_tile::TITLE).is_none(), "{what}");
+}
+
+/// Plugin-registered apps used to vanish from the dashboard after a skin
+/// switch or a resolution change: only the boot path merged them in.
+#[test]
+fn plugin_app_survives_skin_switch_and_resolution_change() {
+    use oasis_app::harness::HarnessOptions;
+    use oasis_core::vfs::Vfs;
+
+    let mut opts = HarnessOptions::new("classic");
+    opts.plugins = vec![plugin_tile::make];
+    let mut h = Harness::with_options(opts).unwrap();
+    h.settle();
+    assert_plugin_app_launches(&mut h, "boot");
+
+    h.vfs_mut()
+        .write(oasis_app_settings::SKIN_CHANGE_REQUEST_PATH, b"xp")
+        .unwrap();
+    h.settle();
+    assert_eq!(h.state().skin.manifest.name, "xp");
+    assert_plugin_app_launches(&mut h, "after skin switch");
+
+    h.vfs_mut()
+        .write(
+            oasis_app_settings::RESOLUTION_CHANGE_REQUEST_PATH,
+            b"800x600",
+        )
+        .unwrap();
+    h.settle();
+    assert_eq!(h.size(), (800, 600));
+    assert_plugin_app_launches(&mut h, "after resolution change");
 }
