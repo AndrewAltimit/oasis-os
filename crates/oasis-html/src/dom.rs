@@ -786,7 +786,7 @@ impl Document {
     ///
     /// Removes ID index entries for any elements with `id` attributes
     /// and pushes all node slots onto the free list for reuse.
-    pub(crate) fn free_subtree(&mut self, node_id: NodeId) {
+    pub fn free_subtree(&mut self, node_id: NodeId) {
         // Collect children first to avoid borrow conflict.
         let children: Vec<NodeId> = self.nodes[node_id].children.clone();
         for child in children {

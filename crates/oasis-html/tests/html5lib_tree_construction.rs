@@ -19,11 +19,9 @@
 //! are easy to read. To extend coverage, drop additional `.dat` files
 //! into `tests/fixtures/html5lib/` and list them in `FIXTURE_FILES`.
 
-use oasis_browser::internals::{Document, NodeKind, Tokenizer, TreeBuilder};
-
-// `NodeId` is a type alias for `usize` in the DOM arena. The internals
-// module doesn't re-export it, so mirror the alias here.
-type NodeId = usize;
+use oasis_html::dom::{Document, NodeId, NodeKind};
+use oasis_html::tokenizer::Tokenizer;
+use oasis_html::tree_builder::TreeBuilder;
 
 const FIXTURE_FILES: &[&str] = &["tree_construction_basic.dat"];
 

@@ -19,6 +19,7 @@ psp = []
 
 [dependencies]
 oasis-types = { workspace = true }
+oasis-html = { workspace = true }
 oasis-vfs = { workspace = true }
 oasis-net = { workspace = true }
 oasis-skin = { workspace = true }
@@ -41,10 +42,6 @@ proptest.workspace = true
 criterion = { version = "0.5", features = ["html_reports"] }
 oasis-test-backend = { workspace = true }
 oasis-net = { workspace = true, features = ["tls-rustls"] }
-
-[[bench]]
-name = "html_parsing"
-harness = false
 
 [[bench]]
 name = "css_cascade"

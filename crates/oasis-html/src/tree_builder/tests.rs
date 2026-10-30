@@ -1871,7 +1871,7 @@ mod fuzz {
     use super::TreeBuilder;
 
     const FIXTURE: &str =
-        include_str!("../../../tests/fixtures/html5lib/tree_construction_basic.dat");
+        include_str!("../../tests/fixtures/html5lib/tree_construction_basic.dat");
 
     /// Extra seeds that target the historically fragile paths:
     /// adoption agency, foster parenting, templates, foreign content,

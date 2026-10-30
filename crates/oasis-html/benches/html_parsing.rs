@@ -1,7 +1,8 @@
 //! Benchmarks for the HTML tokenizer and DOM tree builder.
 
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
-use oasis_browser::internals::{Tokenizer, TreeBuilder};
+use oasis_html::tokenizer::Tokenizer;
+use oasis_html::tree_builder::TreeBuilder;
 
 /// Generate a synthetic HTML document of approximately `target_bytes` size.
 fn generate_html(target_bytes: usize) -> String {

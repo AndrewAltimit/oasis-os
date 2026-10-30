@@ -1,6 +1,6 @@
 //! Tests for the HTML tokenizer.
 
-use crate::html::tokenizer::*;
+use crate::tokenizer::*;
 
 /// Helper: tokenize and strip the trailing Eof.
 fn tok(input: &str) -> Vec<Token> {

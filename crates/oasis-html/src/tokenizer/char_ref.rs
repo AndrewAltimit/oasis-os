@@ -16,7 +16,7 @@ use super::types::{State, Token};
 pub(crate) fn resolve_named_ref(name: &str) -> Option<&'static str> {
     let key = name.strip_suffix(';').unwrap_or(name);
     // Delegate to the central entity table first.
-    if let Some(s) = crate::html::entities::lookup_entity(key) {
+    if let Some(s) = crate::entities::lookup_entity(key) {
         return Some(s);
     }
     // Extra entities used in the tokenizer but not in the main table.

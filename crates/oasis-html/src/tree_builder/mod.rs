@@ -104,7 +104,7 @@ pub(crate) enum InsertionMode {
 /// The cascade, layout-tree build, layout, paint and serialization
 /// passes all recurse once per DOM level and are sized for this cap, so
 /// DOM mutations from script enforce the matching
-/// [`MAX_DOM_DEPTH`] too (`js_dom::node_api::insert_node`).
+/// [`MAX_DOM_DEPTH`] too (`oasis-browser`'s `js_dom::node_api::insert_node`).
 pub const MAX_NESTING_DEPTH: usize = 256;
 
 /// Deepest node depth (the document root is depth 0) the parser can
@@ -114,7 +114,6 @@ pub const MAX_NESTING_DEPTH: usize = 256;
 /// `innerHTML` flattens markup at this depth. The only node that can sit
 /// one level below it is the text leaf a `textContent` / `innerHTML`
 /// write puts inside an element already at the cap.
-#[cfg_attr(not(feature = "javascript"), allow(dead_code))]
 pub const MAX_DOM_DEPTH: usize = MAX_NESTING_DEPTH + 1;
 
 /// Maximum number of DOM nodes allowed in a document. Beyond this

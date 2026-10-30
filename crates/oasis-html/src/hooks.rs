@@ -14,23 +14,29 @@ use std::sync::OnceLock;
 /// The first [`set`](Self::set) wins and later calls are ignored: hooks
 /// are wired once at boot, and a lock-free [`get`](Self::get) matters
 /// more on the hot paths that poll them than re-installation does.
-pub(crate) struct Hook<F: Copy + Send + Sync + 'static>(OnceLock<F>);
+pub struct Hook<F: Copy + Send + Sync + 'static>(OnceLock<F>);
 
 impl<F: Copy + Send + Sync + 'static> Hook<F> {
     /// An empty hook.
-    pub(crate) const fn new() -> Self {
+    pub const fn new() -> Self {
         Self(OnceLock::new())
     }
 
     /// Install `hook` unless one is already installed.
-    pub(crate) fn set(&self, hook: F) {
+    pub fn set(&self, hook: F) {
         let _ = self.0.set(hook);
     }
 
     /// The installed hook, if any.
     #[inline]
-    pub(crate) fn get(&self) -> Option<F> {
+    pub fn get(&self) -> Option<F> {
         self.0.get().copied()
+    }
+}
+
+impl<F: Copy + Send + Sync + 'static> Default for Hook<F> {
+    fn default() -> Self {
+        Self::new()
     }
 }
 

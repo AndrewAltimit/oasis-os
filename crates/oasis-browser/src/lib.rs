@@ -70,7 +70,7 @@ pub mod config;
 pub(crate) mod css;
 pub mod forms;
 pub mod gemini;
-pub(crate) mod html;
+pub(crate) use oasis_html as html;
 pub mod image;
 pub(crate) mod layout;
 pub mod loader;
