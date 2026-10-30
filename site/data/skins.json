@@ -1,0 +1,129 @@
+{
+  "$comment": "Single source of the site's skin list. The landing-page gallery (site/index.html) and the demo skin pickers (site/demo/index.html, www/index.html) are generated from it: edit this file, then run scripts/gen-skin-list.sh. Resolutions come from skins/<id>/skin.toml. `cargo test -p oasis-backend-wasm --test site_skins` (part of the workspace tests) fails when the pages are out of step.",
+  "categories": [
+    {
+      "id": "dashboard",
+      "label": "PSP dashboard",
+      "short": "PSP dashboard"
+    },
+    {
+      "id": "desktop",
+      "label": "Desktop",
+      "short": "Desktop"
+    },
+    {
+      "id": "aesthetic",
+      "label": "Aesthetic",
+      "short": "Aesthetic"
+    },
+    {
+      "id": "special",
+      "label": "Terminal & accessibility",
+      "short": "Terminal & a11y"
+    }
+  ],
+  "skins": [
+    {
+      "id": "psix-hifi",
+      "name": "PSIX HiFi",
+      "category": "dashboard",
+      "blurb": "High-fidelity PSIX homebrew tribute: baked ribbon wallpaper, bold psix wordmark, left-column desktop icons, media-dock footer."
+    },
+    {
+      "id": "psix-tribute",
+      "name": "PSIX Tribute",
+      "category": "dashboard",
+      "blurb": "Tribute to the PSIX homebrew shell: shaped orange chrome, free desktop icons and an assemble entrance animation."
+    },
+    {
+      "id": "classic",
+      "name": "Classic",
+      "category": "dashboard",
+      "blurb": "PSP-style icon grid dashboard with virtual desktops, status bar and cursor navigation."
+    },
+    {
+      "id": "altimit",
+      "name": "Altimit",
+      "category": "dashboard",
+      "blurb": "Vector icon dashboard inspired by the desktop OS in .hack//SIGN."
+    },
+    {
+      "id": "xp",
+      "name": "XP",
+      "category": "desktop",
+      "blurb": "Windows XP Luna-inspired blue theme with gradient titlebars and taskbar."
+    },
+    {
+      "id": "win95",
+      "name": "Win95",
+      "category": "desktop",
+      "blurb": "Windows 95/98 classic look with raised 3D borders, system gray and blue titlebars."
+    },
+    {
+      "id": "macos",
+      "name": "macOS",
+      "category": "desktop",
+      "blurb": "macOS-inspired light skin with traffic-light buttons and a dock-style app bar."
+    },
+    {
+      "id": "gnome",
+      "name": "GNOME",
+      "category": "desktop",
+      "blurb": "GNOME/Adwaita-inspired dark theme with a top bar and rounded headerbars."
+    },
+    {
+      "id": "desktop",
+      "name": "Desktop",
+      "category": "desktop",
+      "blurb": "Desktop-style interface with window manager and taskbar."
+    },
+    {
+      "id": "modern",
+      "name": "Modern",
+      "category": "desktop",
+      "blurb": "Modern UI with rounded corners, gradients and shadows."
+    },
+    {
+      "id": "balatro",
+      "name": "Balatro",
+      "category": "aesthetic",
+      "blurb": "Balatro-inspired: dark background, glowing accents, scanlines and a live swirl shader wallpaper."
+    },
+    {
+      "id": "vaporwave",
+      "name": "Vaporwave",
+      "category": "aesthetic",
+      "blurb": "A E S T H E T I C vaporwave palette with purple, pink and cyan gradients."
+    },
+    {
+      "id": "solarized",
+      "name": "Solarized",
+      "category": "aesthetic",
+      "blurb": "Solarized Dark palette by Ethan Schoonover: clean and developer-focused."
+    },
+    {
+      "id": "paper",
+      "name": "Paper",
+      "category": "aesthetic",
+      "blurb": "Minimal paper/e-reader skin: cream background, no shadows, maximum readability, calm-waves shader."
+    },
+    {
+      "id": "retro-cga",
+      "name": "Retro CGA",
+      "category": "aesthetic",
+      "blurb": "Retro CGA/EGA four-color skin with a blocky DOS-era aesthetic."
+    },
+    {
+      "id": "corrupted",
+      "name": "Corrupted",
+      "category": "special",
+      "blurb": "Damaged terminal with visual corruption and garbled output."
+    },
+    {
+      "id": "highcontrast",
+      "name": "High Contrast",
+      "category": "special",
+      "blurb": "High-contrast accessibility theme: black background, white text, yellow accents."
+    }
+  ]
+}

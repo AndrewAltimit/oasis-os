@@ -299,11 +299,13 @@
 
     <div class="gallery" id="gallery">
       <div class="gallery__filters" role="group" aria-label="Filter skins by category">
+        <!-- BEGIN skins:chips (generated from site/data/skins.json by scripts/gen-skin-list.sh; do not edit) -->
         <button type="button" class="chip is-active" data-filter="all" aria-pressed="true">All <span>17</span></button>
         <button type="button" class="chip" data-filter="dashboard" aria-pressed="false">PSP dashboard <span>4</span></button>
         <button type="button" class="chip" data-filter="desktop" aria-pressed="false">Desktop <span>6</span></button>
         <button type="button" class="chip" data-filter="aesthetic" aria-pressed="false">Aesthetic <span>5</span></button>
         <button type="button" class="chip" data-filter="special" aria-pressed="false">Terminal &amp; a11y <span>2</span></button>
+        <!-- END skins:chips -->
       </div>
 
       <div class="gallery__body">
@@ -336,6 +338,7 @@
         </div>
 
         <div class="skin-list" role="listbox" id="skin-list" aria-label="Skins" tabindex="0" aria-activedescendant="skin-psix-hifi">
+          <!-- BEGIN skins:gallery (generated from site/data/skins.json by scripts/gen-skin-list.sh; do not edit) -->
           <!-- data-res is the real PNG size of screenshots/<id>/01_dashboard.png -->
           <div role="option" class="skin is-active" id="skin-psix-hifi" aria-selected="true" data-skin="psix-hifi" data-cat="dashboard" data-name="PSIX HiFi" data-res="480&times;272" data-src="skins/psix-hifi" data-desc="High-fidelity PSIX homebrew tribute: baked ribbon wallpaper, bold psix wordmark, left-column desktop icons, media-dock footer.">
             <img src="screenshots/psix-hifi/01_dashboard.png" alt="" loading="lazy" width="480" height="272"><span>PSIX HiFi</span>
@@ -388,6 +391,7 @@
           <div role="option" class="skin" id="skin-highcontrast" aria-selected="false" data-skin="highcontrast" data-cat="special" data-name="High Contrast" data-res="480&times;272" data-src="skins/highcontrast" data-desc="High-contrast accessibility theme: black background, white text, yellow accents.">
             <img src="screenshots/highcontrast/01_dashboard.png" alt="" loading="lazy" width="480" height="272"><span>High Contrast</span>
           </div>
+          <!-- END skins:gallery -->
         </div>
       </div>
     </div>
