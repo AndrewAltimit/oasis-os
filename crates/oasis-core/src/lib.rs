@@ -64,7 +64,6 @@ pub mod cursor;
 pub mod dashboard;
 pub mod image_layers;
 pub mod media_page;
-pub mod notifications;
 pub mod osk;
 pub mod plugin;
 pub mod script;
