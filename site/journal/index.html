@@ -66,12 +66,27 @@
         a 2004 handheld&rsquo;s Media Engine to TLS&nbsp;1.3 on MIPS and a relay-driven rig that let
         an AI agent iterate on real hardware. Entries are dated; where the code has moved on, an
         <span class="update-chip">Update</span> note says so instead of rewriting history.</p>
+      <ul class="jhero__stats" aria-label="At a glance">
+        <li class="badge"><span class="dot" aria-hidden="true"></span>9 entries</li>
+        <li class="badge">86 minutes of reading</li>
+        <li class="badge">Mar &ndash; Apr 2026, updated Oct 2026</li>
+      </ul>
     </div>
   </header>
 
   <section class="wrap jlist-wrap" aria-label="Entries">
+    <div class="jfilters" id="jfilters" role="group" aria-label="Filter entries by topic" hidden>
+      <button type="button" class="chip is-active" data-filter="all" aria-pressed="true">All <span>9</span></button>
+      <button type="button" class="chip" data-filter="psp" aria-pressed="false">PSP <span>6</span></button>
+      <button type="button" class="chip" data-filter="architecture" aria-pressed="false">Architecture <span>3</span></button>
+      <button type="button" class="chip" data-filter="reverse-engineering" aria-pressed="false">Reverse engineering <span>2</span></button>
+      <button type="button" class="chip" data-filter="hardware" aria-pressed="false">Hardware <span>2</span></button>
+      <button type="button" class="chip" data-filter="media" aria-pressed="false">Media &amp; video <span>2</span></button>
+      <button type="button" class="chip" data-filter="tooling" aria-pressed="false">Tooling <span>3</span></button>
+      <p class="jfilters__count" id="jcount" aria-live="polite">Showing all 9 entries</p>
+    </div>
     <ol class="jlist">
-      <li>
+      <li data-tags="architecture">
         <a class="jcard" href="01-unified-embedded-os.html">
           <span class="jcard__no" aria-hidden="true">01</span>
           <span class="jcard__body">
@@ -82,7 +97,7 @@
           </span>
         </a>
       </li>
-      <li>
+      <li data-tags="psp">
         <a class="jcard" href="02-tls-on-psp.html">
           <span class="jcard__no" aria-hidden="true">02</span>
           <span class="jcard__body">
@@ -93,7 +108,7 @@
           </span>
         </a>
       </li>
-      <li>
+      <li data-tags="media architecture">
         <a class="jcard" href="03-streaming-video.html">
           <span class="jcard__no" aria-hidden="true">03</span>
           <span class="jcard__body">
@@ -104,18 +119,18 @@
           </span>
         </a>
       </li>
-      <li>
+      <li data-tags="psp tooling">
         <a class="jcard" href="04-rust-psp-sdk.html">
           <span class="jcard__no" aria-hidden="true">04</span>
           <span class="jcard__body">
             <span class="jcard__meta"><time datetime="2026-03-11">Mar 11, 2026</time> &middot; 6 min read</span>
             <span class="jcard__title">Modernizing the rust-psp SDK: Safety Hardening for Bare Metal MIPS</span>
-            <span class="jcard__desc">Hardening a Rust SDK for PSP homebrew: LLVM memcpy recursion on MIPS, weak-import stub flags that break real hardware, DNS byte order, and 38 high-level modules with RAII resource management.</span>
+            <span class="jcard__desc">Hardening a Rust SDK for PSP homebrew: LLVM memcpy recursion on MIPS, weak-import stub flags that break real hardware, kernel syscall hooks and 38 high-level modules with RAII resource management.</span>
             <span class="jcard__tags">sdk &middot; safety &middot; mips</span>
           </span>
         </a>
       </li>
-      <li>
+      <li data-tags="psp hardware reverse-engineering">
         <a class="jcard" href="05-psp-usb-research.html">
           <span class="jcard__no" aria-hidden="true">05</span>
           <span class="jcard__body">
@@ -126,7 +141,7 @@
           </span>
         </a>
       </li>
-      <li>
+      <li data-tags="architecture">
         <a class="jcard" href="06-backend-trait-system.html">
           <span class="jcard__no" aria-hidden="true">06</span>
           <span class="jcard__body">
@@ -137,7 +152,7 @@
           </span>
         </a>
       </li>
-      <li>
+      <li data-tags="psp media reverse-engineering">
         <a class="jcard" href="07-psp-media-engine.html">
           <span class="jcard__no" aria-hidden="true">07</span>
           <span class="jcard__body">
@@ -148,7 +163,7 @@
           </span>
         </a>
       </li>
-      <li>
+      <li data-tags="psp hardware tooling">
         <a class="jcard" href="08-remote-dev-automation.html">
           <span class="jcard__no" aria-hidden="true">08</span>
           <span class="jcard__body">
@@ -159,11 +174,11 @@
           </span>
         </a>
       </li>
-      <li>
+      <li data-tags="psp tooling">
         <a class="jcard" href="09-javascript-on-psp.html">
           <span class="jcard__no" aria-hidden="true">09</span>
           <span class="jcard__body">
-            <span class="jcard__meta"><time datetime="2026-04-13">Apr 13, 2026</time> &middot; 14 min read</span>
+            <span class="jcard__meta"><time datetime="2026-04-13">Apr 13, 2026</time> &middot; 14 min read <span class="jcard__new">Latest</span></span>
             <span class="jcard__title">JavaScript on a 2004 Handheld: boa_engine, std Overlay Bugs, and a Misdiagnosed Panic</span>
             <span class="jcard__desc">Three hardware-only bring-up bugs between a JavaScript engine and 333&nbsp;MHz MIPS: an alignment trap in std&rsquo;s random module, an orphaned <code>Instant</code> overlay and a too-small thread stack. Written about boa_engine; the PSP has since moved to QuickJS-NG.</span>
             <span class="jcard__tags">javascript &middot; rust-psp &middot; debugging</span>
@@ -173,11 +188,11 @@
     </ol>
 
     <div class="jextra">
-      <a class="jextra__card" href="../blueprint.html">
+      <a class="jextra__card surface surface--interactive" href="../blueprint.html">
         <img src="../img/blueprint-psp-usb-adapter.png" alt="" width="841" height="645" loading="lazy">
         <span><strong>Hardware blueprints</strong>Interactive 3D diagrams of the PSP USB-C adapter and the hard-reset relay.</span>
       </a>
-      <a class="jextra__card" href="https://github.com/AndrewAltimit/oasis-os/blob/main/docs/README.md">
+      <a class="jextra__card surface surface--interactive" href="https://github.com/AndrewAltimit/oasis-os/blob/main/docs/README.md">
         <span class="jextra__glyph" aria-hidden="true">docs/</span>
         <span><strong>Reference docs</strong>The design document, ADRs and subsystem guides live in the repository.</span>
       </a>
@@ -206,5 +221,6 @@
 </footer>
 
 <script src="../js/site.js" defer></script>
+<script src="../js/journal.js" defer></script>
 </body>
 </html>
