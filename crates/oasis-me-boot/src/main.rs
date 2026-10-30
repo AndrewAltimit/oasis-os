@@ -52,13 +52,14 @@ fn psp_main() {
         // SAFETY: sceMeBootStart660 takes one i32 arg: mebooterType (0 or 1).
         // cooleyesBridge passes mebooterType=0 and clears K1 protection bits.
         // K1 clearing is critical — kernel functions check K1 for address validation.
-        let me_boot: unsafe extern "C" fn(i32) -> i32 =
-            unsafe { core::mem::transmute(ptr) };
+        let me_boot: unsafe extern "C" fn(i32) -> i32 = unsafe { core::mem::transmute(ptr) };
 
         // Clear K1 protection bits (like pspSdkSetK1(0) in cooleyesBridge).
         let old_k1 = unsafe { set_k1(0) };
         let ret = unsafe { me_boot(0) }; // mebooterType = 0
-        unsafe { set_k1(old_k1); }
+        unsafe {
+            set_k1(old_k1);
+        }
 
         // Log result to file (kernel mode — can't use std I/O).
         log_result(b"[ME-BOOT] sceMeBootStart660 = ", ret as u32);
@@ -84,7 +85,11 @@ fn log_result(prefix: &[u8], val: u32) {
             hex[1] = b'x';
             for i in 0..8 {
                 let nibble = ((val >> (28 - i * 4)) & 0xF) as u8;
-                hex[2 + i] = if nibble < 10 { b'0' + nibble } else { b'a' + nibble - 10 };
+                hex[2 + i] = if nibble < 10 {
+                    b'0' + nibble
+                } else {
+                    b'a' + nibble - 10
+                };
             }
             psp::sys::sceIoWrite(fd, hex.as_ptr() as *const _, 10);
             psp::sys::sceIoWrite(fd, b"\n".as_ptr() as *const _, 1);

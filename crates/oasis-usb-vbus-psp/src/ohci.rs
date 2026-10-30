@@ -13,9 +13,8 @@
 //!   BD800060 — MUSBMHDRC DevCtl (session/host mode)
 
 use psp::hw::{
+    OHCI_BASE, SYSREG_PERIPH_CLK1, SYSREG_PERIPH_CLK2, SYSREG_TACHYON_VER, SYSREG_USB_CLK,
     hw_read32, hw_write32,
-    OHCI_BASE, MUSB_BASE, SYSREG_TACHYON_VER,
-    SYSREG_PERIPH_CLK1, SYSREG_PERIPH_CLK2, SYSREG_USB_CLK,
 };
 
 // Clock registers (using psp::hw constants where available)
@@ -32,7 +31,6 @@ const OHCI_RH_STATUS: u32 = OHCI_BASE + 0x1034;
 const OHCI_RH_PORT_STATUS: u32 = OHCI_BASE + 0x1038;
 
 // MUSBMHDRC registers (offsets from MUSB_BASE)
-const MUSB_DEVCTL: u32 = MUSB_BASE + 0x060;
 
 /// Snapshot of USB controller registers.
 #[derive(Clone, Copy)]
@@ -75,10 +73,15 @@ static mut CLOCKS_ENABLED: bool = false;
 
 /// Ensure clocks are enabled (idempotent).
 pub unsafe fn ensure_clocks() {
-    if !core::ptr::read_volatile(&raw const CLOCKS_ENABLED) {
-        enable_clocks();
-        psp::sys::sceKernelDelayThread(10_000);
-        core::ptr::write_volatile(&raw mut CLOCKS_ENABLED, true);
+    // SAFETY: kernel-mode binary; CLOCKS_ENABLED is only accessed with read_volatile /
+    // write_volatile through raw pointers from the single main thread, and enable_clocks only sets
+    // clock-enable bits.
+    unsafe {
+        if !core::ptr::read_volatile(&raw const CLOCKS_ENABLED) {
+            enable_clocks();
+            psp::sys::sceKernelDelayThread(10_000);
+            core::ptr::write_volatile(&raw mut CLOCKS_ENABLED, true);
+        }
     }
 }
 
@@ -86,28 +89,36 @@ pub unsafe fn ensure_clocks() {
 ///
 /// Sets bits in BC100050, BC100058, BC100078 per firmware init sequence.
 pub unsafe fn enable_clocks() {
-    let v50 = hw_read32(SYS_CLK1);
-    // SAFETY: kernel-mode MMIO write — enable USB peripheral clock.
-    hw_write32(SYS_CLK1, v50 | 0x4000);
+    // SAFETY: kernel-mode MMIO read-modify-write of the sysreg clock registers (each write is
+    // commented below); the caller runs on the single main thread.
+    unsafe {
+        let v50 = hw_read32(SYS_CLK1);
+        // SAFETY: kernel-mode MMIO write — enable USB peripheral clock.
+        hw_write32(SYS_CLK1, v50 | 0x4000);
 
-    let v58 = hw_read32(SYS_CLK2);
-    // SAFETY: kernel-mode MMIO write — enable USB clock 2.
-    hw_write32(SYS_CLK2, v58 | 0x200);
+        let v58 = hw_read32(SYS_CLK2);
+        // SAFETY: kernel-mode MMIO write — enable USB clock 2.
+        hw_write32(SYS_CLK2, v58 | 0x200);
 
-    let v78 = hw_read32(OHCI_CLK);
-    // SAFETY: kernel-mode MMIO write — enable OHCI clock.
-    hw_write32(OHCI_CLK, v78 | 0x8_0000);
+        let v78 = hw_read32(OHCI_CLK);
+        // SAFETY: kernel-mode MMIO write — enable OHCI clock.
+        hw_write32(OHCI_CLK, v78 | 0x8_0000);
 
-    // Memory barrier
-    core::sync::atomic::fence(core::sync::atomic::Ordering::SeqCst);
+        // Memory barrier
+        core::sync::atomic::fence(core::sync::atomic::Ordering::SeqCst);
+    }
 }
 
 /// Enable OHCI clock bit 1 (separate from the main OHCI clock enable).
 pub unsafe fn enable_ohci_clock_bit1() {
-    ensure_clocks();
-    let v78 = hw_read32(OHCI_CLK);
-    // SAFETY: kernel-mode MMIO write — enable OHCI clock bit 1.
-    hw_write32(OHCI_CLK, v78 | 2);
+    // SAFETY: kernel-mode MMIO read-modify-write of the OHCI clock register after ensure_clocks has
+    // enabled the bus.
+    unsafe {
+        ensure_clocks();
+        let v78 = hw_read32(OHCI_CLK);
+        // SAFETY: kernel-mode MMIO write — enable OHCI clock bit 1.
+        hw_write32(OHCI_CLK, v78 | 2);
+    }
 }
 
 /// Set OHCI root hub port status to enable port power + port enable.
@@ -118,9 +129,13 @@ pub unsafe fn enable_ohci_clock_bit1() {
 ///   bit 8 = PortPowerStatus (read) / SetPortPower (write)
 ///   bit 9 = LowSpeedDeviceAttached (read) / ClearPortPower (write)
 pub unsafe fn set_port_power() {
-    ensure_clocks();
-    // SAFETY: kernel-mode MMIO write — set OHCI port power + enable.
-    hw_write32(OHCI_RH_PORT_STATUS, 0x0303);
+    // SAFETY: kernel-mode MMIO write to HcRhPortStatus after ensure_clocks has enabled the OHCI
+    // clocks, so the register is accessible.
+    unsafe {
+        ensure_clocks();
+        // SAFETY: kernel-mode MMIO write — set OHCI port power + enable.
+        hw_write32(OHCI_RH_PORT_STATUS, 0x0303);
+    }
 }
 
 /// Set MUSBMHDRC DevCtl to host mode + session.
@@ -152,14 +167,6 @@ pub fn vbus_level() -> u32 {
     0xFF
 }
 
-/// Try reading MUSB DevCtl. Returns None if not accessible.
-/// Call only after confirming MUSB bus is enabled.
-pub unsafe fn try_musb_devctl() -> Option<u32> {
-    // For now, MUSB is not accessible — return None.
-    // TODO: find MUSB bus enable register.
-    None
-}
-
 /// Get human-readable VBUS level description.
 pub fn vbus_level_str(level: u32) -> &'static str {
     match level {
@@ -174,8 +181,10 @@ pub fn vbus_level_str(level: u32) -> &'static str {
 /// Read back OHCI root hub port status register.
 pub fn port_status() -> u32 {
     // SAFETY: kernel-mode MMIO read; ensure_clocks prevents bus-fault.
-    unsafe { ensure_clocks() };
-    unsafe { hw_read32(OHCI_RH_PORT_STATUS) }
+    unsafe {
+        ensure_clocks();
+        hw_read32(OHCI_RH_PORT_STATUS)
+    }
 }
 
 /// Read Tachyon mode register (BC100040).
@@ -189,7 +198,11 @@ pub fn tachyon_mode() -> u32 {
 /// Firmware writes: BC100040 = (BC100040 & 0xFFFFFFFC) | 1
 /// WARNING: Tachyon may monitor this continuously. Test carefully.
 pub unsafe fn set_tachyon_host_mode() {
-    let val = hw_read32(TACHYON_REG);
-    // SAFETY: kernel-mode MMIO write — set Tachyon USB host mode bit.
-    hw_write32(TACHYON_REG, (val & 0xFFFF_FFFC) | 1);
+    // SAFETY: kernel-mode MMIO read-modify-write of the Tachyon mode register; only bits 0-1 change
+    // (see the WARNING above).
+    unsafe {
+        let val = hw_read32(TACHYON_REG);
+        // SAFETY: kernel-mode MMIO write — set Tachyon USB host mode bit.
+        hw_write32(TACHYON_REG, (val & 0xFFFF_FFFC) | 1);
+    }
 }

@@ -90,7 +90,6 @@ static mut LAST_SEND_STATUS: i32 = 0;
 /// Flag for main loop to detect new completions
 static mut ECHO_UPDATED: bool = false;
 
-
 // ---------------------------------------------------------------------------
 // Thin-client protocol constants (must match host protocol.rs)
 // ---------------------------------------------------------------------------
@@ -129,11 +128,7 @@ static mut CURRENT_INPUT: InputStateData = InputStateData {
 // Completion callbacks (USB interrupt context — NO file I/O)
 // ---------------------------------------------------------------------------
 
-unsafe extern "C" fn recv_complete(
-    req: *mut UsbdDeviceReq,
-    _arg1: i32,
-    _arg2: i32,
-) -> i32 {
+unsafe extern "C" fn recv_complete(req: *mut UsbdDeviceReq, _arg1: i32, _arg2: i32) -> i32 {
     // SAFETY: req is a non-null, valid UsbdDeviceReq pointer guaranteed by the PSP USB
     // firmware when invoking a registered completion callback; subsequent volatile writes
     // target module-statics serialized by the USB interrupt context.
@@ -199,31 +194,28 @@ unsafe fn handle_thin_client_recv(size: usize) {
         let payload = buf.add(MSG_HEADER_SIZE);
         // Use the header's payload_len (not raw USB transfer size) to
         // exclude any ZLP-avoidance padding byte the host may have added.
-        let payload_len = core::ptr::read(buf.add(2)) as usize
-            | ((core::ptr::read(buf.add(3)) as usize) << 8);
+        let payload_len =
+            core::ptr::read(buf.add(2)) as usize | ((core::ptr::read(buf.add(3)) as usize) << 8);
         let payload_size = payload_len.min(size - MSG_HEADER_SIZE);
 
         match msg_type {
             CMD_FRAME_CHUNK => {
                 // flags = chunk_index (0-17)
-                framebuffer::write_chunk(
-                    flags,
-                    core::slice::from_raw_parts(payload, payload_size),
-                );
+                framebuffer::write_chunk(flags, core::slice::from_raw_parts(payload, payload_size));
                 send_input_response();
-            }
+            },
             CMD_FRAME_DONE => {
                 // flags = frame_seq (ignored for now)
                 framebuffer::swap();
                 send_input_response();
-            }
+            },
             CMD_GET_INPUT => {
                 send_input_response();
-            }
+            },
             _ => {
                 // Unknown message type — respond with InputState to keep chain alive
                 send_input_response();
-            }
+            },
         }
     }
 }
@@ -271,11 +263,7 @@ unsafe fn send_input_response() {
     }
 }
 
-unsafe extern "C" fn send_complete(
-    _req: *mut UsbdDeviceReq,
-    _arg1: i32,
-    _arg2: i32,
-) -> i32 {
+unsafe extern "C" fn send_complete(_req: *mut UsbdDeviceReq, _arg1: i32, _arg2: i32) -> i32 {
     // SAFETY: _req is a non-null, valid UsbdDeviceReq pointer guaranteed by the PSP USB
     // firmware when invoking a registered completion callback; subsequent volatile writes
     // target module-statics serialized by the USB interrupt context.
@@ -346,12 +334,6 @@ pub unsafe fn init_endpoints(ep1: *mut UsbEndpoint, ep2: *mut UsbEndpoint) {
         core::ptr::write_volatile(&raw mut EP1_PTR, ep1);
         core::ptr::write_volatile(&raw mut EP2_PTR, ep2);
     }
-}
-
-/// Enable callback-driven echo mode.
-pub fn enable_echo_mode() {
-    // SAFETY: volatile write of a module-static; only mutated under exclusive control of this experiment.
-    unsafe { core::ptr::write_volatile(&raw mut ECHO_MODE, true) };
 }
 
 /// Enable thin-client mode (replaces echo mode).
@@ -465,27 +447,6 @@ unsafe extern "C" fn blocking_recv_complete(
     0
 }
 
-/// Start an async receive on EP2 (bulk OUT, host→PSP).
-/// Matches USBHostFS pattern: invalidate recv buffer cache, then queue.
-pub unsafe fn start_recv(ep2: *mut UsbEndpoint) -> i32 {
-    // SAFETY: PSP-specific unsafe op (kernel-mode hardware / syscall access).
-    unsafe {
-        // Invalidate recv buffer cache (USBHostFS pattern — DMA will write here)
-        let buf_ptr = (&raw mut RECV_BUF.0) as *mut u8;
-        invalidate_dcache_range(buf_ptr, RECV_BUF_SIZE);
-
-        core::ptr::write_bytes(&raw mut RECV_REQ.0, 0, 1);
-
-        RECV_REQ.0.endp = ep2;
-        RECV_REQ.0.data = buf_ptr;
-        RECV_REQ.0.size = RECV_BUF_SIZE as i32;
-        RECV_REQ.0.func = Some(recv_complete);
-
-        flush_dcache();
-        usbd::req_recv(&raw mut RECV_REQ.0)
-    }
-}
-
 /// Send data on EP1 (bulk IN, PSP→host).
 /// Copies data into the send buffer and queues the transfer.
 pub unsafe fn start_send(ep1: *mut UsbEndpoint, data: &[u8]) -> i32 {
@@ -520,15 +481,5 @@ pub fn poll_echo() -> (bool, u32) {
             core::ptr::write_volatile(&raw mut ECHO_UPDATED, false);
         }
         (updated, count)
-    }
-}
-
-/// Get the last recv size and status (for logging).
-pub fn last_recv_info() -> (i32, i32) {
-    // SAFETY: volatile read of a fixed-address register or module-static.
-    unsafe {
-        let size = core::ptr::read_volatile(&raw const LAST_RECV_SIZE);
-        let status = core::ptr::read_volatile(&raw const LAST_RECV_STATUS);
-        (size, status)
     }
 }

@@ -28,10 +28,8 @@ mod syscon;
 use core::ffi::c_void;
 use psp::hw::hw_read32;
 use psp::sys::{
-    self, CtrlButtons, CtrlMode, IoOpenFlags, SceCtrlData,
-    sceCtrlPeekBufferPositive, sceCtrlSetSamplingMode,
-    sceKernelDelayThread,
-    sceUsbActivate, sceUsbGetState, sceUsbStart,
+    self, CtrlButtons, CtrlMode, IoOpenFlags, SceCtrlData, sceCtrlPeekBufferPositive,
+    sceCtrlSetSamplingMode, sceKernelDelayThread, sceUsbActivate, sceUsbGetState, sceUsbStart,
 };
 
 psp::module_kernel!("USBVbusTest", 1, 0);
@@ -57,8 +55,7 @@ impl Logger {
             unsafe {
                 psp::sys::sceIoWrite(
                     fd,
-                    b"\n========== NEW RUN ==========\n".as_ptr()
-                        as *const c_void,
+                    b"\n========== NEW RUN ==========\n".as_ptr() as *const c_void,
                     31,
                 );
                 psp::sys::sceIoClose(fd);
@@ -85,28 +82,10 @@ impl Logger {
         if fd.0 >= 0 {
             // SAFETY: PSP firmware syscall — kernel-mode binary; signature is documented in pspsdk.
             unsafe {
-                psp::sys::sceIoWrite(
-                    fd, s.as_ptr() as *const c_void, s.len(),
-                );
-                psp::sys::sceIoWrite(
-                    fd, b"\n".as_ptr() as *const c_void, 1,
-                );
+                psp::sys::sceIoWrite(fd, s.as_ptr() as *const c_void, s.len());
+                psp::sys::sceIoWrite(fd, b"\n".as_ptr() as *const c_void, 1);
                 psp::sys::sceIoClose(fd);
             }
-        }
-    }
-
-    /// Write to screen only (no log file).
-    fn screen(s: &str) {
-        psp::dprintln!("{}", s);
-    }
-
-    /// Clear screen by flushing dprintln's 27-line character buffer.
-    fn clear_screen() {
-        // dprintln's CharBuffer has ROWS = 272/10 = 27 lines.
-        // Writing 27 blank lines pushes all old content out.
-        for _ in 0..27 {
-            psp::dprintln!("");
         }
     }
 }
@@ -205,39 +184,15 @@ fn log_cmd(desc: &str, ret: i32, rx: &[u8; 16]) {
 
 // ── Input helpers ───────────────────────────────────────────────────────
 
-fn wait_cross() {
-    let mut p = SceCtrlData::default();
-    // Wait for release
-    loop {
-        // SAFETY: PSP firmware syscall — kernel-mode binary; signature is documented in pspsdk.
-        unsafe { sceCtrlPeekBufferPositive(&mut p, 1) };
-        if !p.buttons.intersects(CtrlButtons::CROSS) {
-            break;
-        }
-        // SAFETY: PSP firmware syscall — kernel-mode binary; signature is documented in pspsdk.
-        unsafe { sceKernelDelayThread(16_000) };
-    }
-    // Wait for press
-    loop {
-        // SAFETY: PSP firmware syscall — kernel-mode binary; signature is documented in pspsdk.
-        unsafe { sceCtrlPeekBufferPositive(&mut p, 1) };
-        if p.buttons.intersects(CtrlButtons::CROSS) {
-            return;
-        }
-        // SAFETY: PSP firmware syscall — kernel-mode binary; signature is documented in pspsdk.
-        unsafe { sceKernelDelayThread(16_000) };
-    }
-}
-
 /// Buttons we care about for menu navigation.
 const NAV_BUTTONS: CtrlButtons = CtrlButtons::from_bits_truncate(
     CtrlButtons::UP.bits()
-    | CtrlButtons::DOWN.bits()
-    | CtrlButtons::CROSS.bits()
-    | CtrlButtons::TRIANGLE.bits()
-    | CtrlButtons::CIRCLE.bits()
-    | CtrlButtons::SQUARE.bits()
-    | CtrlButtons::START.bits()
+        | CtrlButtons::DOWN.bits()
+        | CtrlButtons::CROSS.bits()
+        | CtrlButtons::TRIANGLE.bits()
+        | CtrlButtons::CIRCLE.bits()
+        | CtrlButtons::SQUARE.bits()
+        | CtrlButtons::START.bits(),
 );
 
 /// Wait for any navigation button press (edge-triggered).
@@ -278,8 +233,10 @@ fn log_gpio_snapshot(label: &str, snap: &gpio::GpioSnapshot) {
 
 fn log_gpio_diff(before: &gpio::GpioSnapshot, after: &gpio::GpioSnapshot) {
     let d = gpio::diff(before, after);
-    if d.read_changed == 0 && d.output_changed == 0
-        && d.direction_changed == 0 && d.alt_func_changed == 0
+    if d.read_changed == 0
+        && d.output_changed == 0
+        && d.direction_changed == 0
+        && d.alt_func_changed == 0
     {
         Logger::log("  (no GPIO changes)");
         return;
@@ -913,18 +870,15 @@ fn test_gpio_pin(pin: u32, original: &gpio::GpioSnapshot) {
     f.p(")...");
     Logger::log(f.s());
 
-    // SAFETY: GPIO register access via documented PSP-3001 register layout.
-    unsafe {
-        // Test: use find_function()-resolved sceGpioPortSet.
-        // psp_extern! stubs crashed on pins 29-31; find_function() should work.
-        if let Some(ret) = gpio::set_port_mode2(pin, 2) {
-            lr("  SetMode2 ret=", ret as u32);
-        }
-        if let Some(ret) = gpio::port_set(mask) {
-            lr("  PortSet ret=", ret as u32);
-        } else {
-            Logger::log("  PortSet: NID not resolved");
-        }
+    // Test: use find_function()-resolved sceGpioPortSet.
+    // psp_extern! stubs crashed on pins 29-31; find_function() should work.
+    if let Some(ret) = gpio::set_port_mode2(pin, 2) {
+        lr("  SetMode2 ret=", ret as u32);
+    }
+    if let Some(ret) = gpio::port_set(mask) {
+        lr("  PortSet ret=", ret as u32);
+    } else {
+        Logger::log("  PortSet: NID not resolved");
     }
 
     // Wait and check
@@ -933,20 +887,15 @@ fn test_gpio_pin(pin: u32, original: &gpio::GpioSnapshot) {
 
     let new_snap = gpio::snapshot();
     // Only log if something changed (reduce log spam)
-    if new_snap.read != original.read
-        || new_snap.output != original.output
-    {
+    if new_snap.read != original.read || new_snap.output != original.output {
         lr("  Read  =", new_snap.read);
         lr("  Output=", new_snap.output);
         Logger::log("  *** CHANGE DETECTED ***");
     }
 
     // Restore via find_function()-resolved NID calls
-    // SAFETY: GPIO register access via documented PSP-3001 register layout.
-    unsafe {
-        let _ = gpio::port_clear(mask);
-        let _ = gpio::set_port_mode2(pin, 0);
-    }
+    let _ = gpio::port_clear(mask);
+    let _ = gpio::set_port_mode2(pin, 0);
 
     // SAFETY: PSP firmware syscall — kernel-mode binary; signature is documented in pspsdk.
     unsafe { sceKernelDelayThread(50_000) };
@@ -1030,7 +979,9 @@ fn phase5_vbus_enable() {
                 Some(core::mem::transmute(addr)),
             );
             true
-        } else { false }
+        } else {
+            false
+        }
     };
     if !mode2_found {
         Logger::log("ERROR: NID 0x317D9D2C not found!");
@@ -1060,7 +1011,10 @@ fn phase5_vbus_enable() {
                 let func: F = core::mem::transmute(addr);
                 let ret = func(0);
                 let mut f = Fmt::new();
-                f.p("  "); f.p(name); f.p(" ret="); f.h8(ret as u32);
+                f.p("  ");
+                f.p(name);
+                f.p(" ret=");
+                f.h8(ret as u32);
                 Logger::log(f.s());
             }
         }
@@ -1072,14 +1026,11 @@ fn phase5_vbus_enable() {
     Logger::log("2. NID: SetMode(23,2) + PortSet(0x800000)...");
     // SAFETY: volatile read of a fixed-address register or module-static.
     unsafe {
-        let func = core::ptr::read_volatile(
-            &raw const GPIO_PORT_MODE_2_FN,
-        ).expect("resolved");
+        let func = core::ptr::read_volatile(&raw const GPIO_PORT_MODE_2_FN).expect("resolved");
         let r1 = func(23, 2);
         lr("  SetMode ret=", r1 as u32);
     }
-    // SAFETY: GPIO register access via documented PSP-3001 register layout.
-    if let Some(ret) = unsafe { gpio::port_set(0x0080_0000) } {
+    if let Some(ret) = gpio::port_set(0x0080_0000) {
         lr("  PortSet ret=", ret as u32);
     }
 
@@ -1115,9 +1066,12 @@ fn phase5_vbus_enable() {
         // SAFETY: MMIO read of a documented PSP hardware register at a fixed physical address.
         let p0o = unsafe { psp::hw::hw_read32(0xBE24_0008) };
         let mut f = Fmt::new();
-        f.p("  t="); f.decimal(sec + 1);
-        f.p(" R="); f.h8(p0r);
-        f.p(" O="); f.h8(p0o);
+        f.p("  t=");
+        f.decimal(sec + 1);
+        f.p(" R=");
+        f.h8(p0r);
+        f.p(" O=");
+        f.h8(p0o);
         Logger::log(f.s());
 
         let mut p = SceCtrlData::default();
@@ -1136,11 +1090,8 @@ fn phase5_vbus_enable() {
     unsafe {
         let _ = gpio::port_clear(0x0080_0000);
         psp::hw::hw_write32(0xBE24_0018, 0x0080_0000);
-        psp::hw::hw_write32(0xBE24_0008,
-            psp::hw::hw_read32(0xBE24_0008) & !0x0080_0000);
-        let func = core::ptr::read_volatile(
-            &raw const GPIO_PORT_MODE_2_FN,
-        ).expect("resolved");
+        psp::hw::hw_write32(0xBE24_0008, psp::hw::hw_read32(0xBE24_0008) & !0x0080_0000);
+        let func = core::ptr::read_volatile(&raw const GPIO_PORT_MODE_2_FN).expect("resolved");
         func(23, 0);
     }
     Logger::log("Done. Check FNB58 reading.");
@@ -1195,14 +1146,18 @@ fn phase6_step1_fix_syscon_alignment() {
     // SAFETY: reads kernel module export tables via the documented rust-psp helper.
     unsafe {
         let modules: [(*const u8, *const u8); 2] = [
-            (b"sceSyscon_Driver\0".as_ptr(), b"sceSyscon_driver\0".as_ptr()),
-            (b"sceSYSCON_Driver\0".as_ptr(), b"sceSyscon_driver\0".as_ptr()),
+            (
+                b"sceSyscon_Driver\0".as_ptr(),
+                b"sceSyscon_driver\0".as_ptr(),
+            ),
+            (
+                b"sceSYSCON_Driver\0".as_ptr(),
+                b"sceSyscon_driver\0".as_ptr(),
+            ),
         ];
         let mut found = false;
         for (module, library) in &modules {
-            if let Some(addr) = psp::hook::find_function(
-                *module, *library, 0xC8D97773,
-            ) {
+            if let Some(addr) = psp::hook::find_function(*module, *library, 0xC8D97773) {
                 let resolved = addr as u32;
                 lr("  NID resolves to: ", resolved);
                 // Add 12 to skip epilogue of previous function
@@ -1277,22 +1232,29 @@ fn phase6_step1_fix_syscon_alignment() {
     // SAFETY: MMIO read of a documented PSP hardware register at a fixed physical address.
     unsafe {
         let modules: [(*const u8, *const u8); 2] = [
-            (b"sceSyscon_Driver\0".as_ptr(), b"sceSyscon_driver\0".as_ptr()),
-            (b"sceSYSCON_Driver\0".as_ptr(), b"sceSyscon_driver\0".as_ptr()),
+            (
+                b"sceSyscon_Driver\0".as_ptr(),
+                b"sceSyscon_driver\0".as_ptr(),
+            ),
+            (
+                b"sceSYSCON_Driver\0".as_ptr(),
+                b"sceSyscon_driver\0".as_ptr(),
+            ),
         ];
         for (module, library) in &modules {
-            if let Some(addr) = psp::hook::find_function(
-                *module, *library, 0xC8D97773,
-            ) {
+            if let Some(addr) = psp::hook::find_function(*module, *library, 0xC8D97773) {
                 let base = addr as u32;
                 // Dump instructions at base..base+48
                 for off in (0u32..48).step_by(4) {
                     let a = base + off;
                     let instr = psp::hw::hw_read32(a);
                     let mut f = Fmt::new();
-                    f.p("  +"); f.decimal(off);
-                    f.p(" @"); f.h8(a);
-                    f.p(" = "); f.h8(instr);
+                    f.p("  +");
+                    f.decimal(off);
+                    f.p(" @");
+                    f.h8(a);
+                    f.p(" = ");
+                    f.h8(instr);
                     // Flag prologue pattern
                     if instr & 0xFFFF_0000 == 0x27BD_0000 {
                         f.p(" <-- ADDIU $sp");
@@ -1406,23 +1368,23 @@ fn phase6_step3_full_sysreg_init() {
     // Enable sequence first, then query/connect functions
     let nids: [(&str, u32); 14] = [
         // Clock/IO enables (must be first)
-        ("GpioClkEn",       0xEC03F6E2),
-        ("GpioIoEn",        0x72C1CA96),
-        ("UsbClkEn",        0x1561BCD2),
-        ("UsbIoEn",         0x9306F27B),
-        ("UsbBusClkEn",     0x9A6E7BB8),
+        ("GpioClkEn", 0xEC03F6E2),
+        ("GpioIoEn", 0x72C1CA96),
+        ("UsbClkEn", 0x1561BCD2),
+        ("UsbIoEn", 0x9306F27B),
+        ("UsbBusClkEn", 0x9A6E7BB8),
         // Reset control
-        ("UsbResetEn",      0x84A279A4),
-        ("UsbResetDis",     0x6F3B6D7D),
+        ("UsbResetEn", 0x84A279A4),
+        ("UsbResetDis", 0x6F3B6D7D),
         // Status/connect
-        ("UsbGetConnect",   0x87B61303),
-        ("UsbSetConnect",   0x9275DD37),
-        ("UsbQueryIntr",    0x30C0A141),
-        ("UsbAcqIntr",      0x6C0EE043),
+        ("UsbGetConnect", 0x87B61303),
+        ("UsbSetConnect", 0x9275DD37),
+        ("UsbQueryIntr", 0x30C0A141),
+        ("UsbAcqIntr", 0x6C0EE043),
         // Version/misc
-        ("NID_1D233EF9",    0x1D233EF9),
-        ("NID_D7AD9705",    0xD7AD9705),
-        ("NID_E2A5D1EE",    0xE2A5D1EE),
+        ("NID_1D233EF9", 0x1D233EF9),
+        ("NID_D7AD9705", 0xD7AD9705),
+        ("NID_E2A5D1EE", 0xE2A5D1EE),
     ];
 
     Logger::log("");
@@ -1544,7 +1506,10 @@ fn phase6_step4_full_chain_vbus() {
                 let func: F = core::mem::transmute(addr);
                 let ret = func(0);
                 let mut f = Fmt::new();
-                f.p("  "); f.p(name); f.p("="); f.h8(ret as u32);
+                f.p("  ");
+                f.p(name);
+                f.p("=");
+                f.h8(ret as u32);
                 Logger::log(f.s());
             }
         }
@@ -1626,7 +1591,9 @@ fn phase6_step4_full_chain_vbus() {
         let mut tries = 0u32;
         while (psp::hw::hw_read32(0xBE24_0048) & 3) != 0 {
             tries += 1;
-            if tries > 10000 { break; }
+            if tries > 10000 {
+                break;
+            }
         }
         lr("  +48 after wait=", psp::hw::hw_read32(0xBE24_0048));
 
@@ -1683,9 +1650,12 @@ fn phase6_step4_full_chain_vbus() {
         // SAFETY: MMIO read of a documented PSP hardware register at a fixed physical address.
         let p0o = unsafe { psp::hw::hw_read32(0xBE24_0008) };
         let mut f = Fmt::new();
-        f.p("  t="); f.decimal(sec + 1);
-        f.p(" R="); f.h8(p0r);
-        f.p(" O="); f.h8(p0o);
+        f.p("  t=");
+        f.decimal(sec + 1);
+        f.p(" R=");
+        f.h8(p0r);
+        f.p(" O=");
+        f.h8(p0o);
         Logger::log(f.s());
 
         let mut p = SceCtrlData::default();
@@ -1726,8 +1696,13 @@ fn phase6_step5_live_monitor() {
         let m = b"sceLowIO_Driver\0".as_ptr();
         let l = b"sceSysreg_driver\0".as_ptr();
         type F = unsafe extern "C" fn(i32) -> i32;
-        for nid in [0xEC03F6E2u32, 0x72C1CA96, 0x1561BCD2,
-                     0x9306F27B, 0x9A6E7BB8] {
+        for nid in [
+            0xEC03F6E2u32,
+            0x72C1CA96,
+            0x1561BCD2,
+            0x9306F27B,
+            0x9A6E7BB8,
+        ] {
             if let Some(addr) = psp::hook::find_function(m, l, nid) {
                 let func: F = core::mem::transmute(addr);
                 func(0);
@@ -1776,7 +1751,12 @@ fn phase6_step5_live_monitor() {
     let (_, base_rx) = syscon::syscon_get(0x46);
     let mut f = Fmt::new();
     f.p("Base Syscon46=[");
-    for i in 0..6 { if i > 0 { f.p(" "); } f.h2(base_rx[i]); }
+    for i in 0..6 {
+        if i > 0 {
+            f.p(" ");
+        }
+        f.h2(base_rx[i]);
+    }
     f.p("]");
     Logger::log(f.s());
 
@@ -1810,34 +1790,66 @@ fn phase6_step5_live_monitor() {
         let be2c = unsafe { hw_read32(0xBE50_002C) };
 
         // Check for ANY change
-        let changed = outen != base_outen || altfn != base_altfn
-            || p0read != base_read || p1read != base_p1read
-            || v50 != base_50 || v4c != base_4c
-            || vc4 != base_c4 || vb8 != base_b8
-            || be18 != base_be50_18 || be2c != base_be50_2c;
+        let changed = outen != base_outen
+            || altfn != base_altfn
+            || p0read != base_read
+            || p1read != base_p1read
+            || v50 != base_50
+            || v4c != base_4c
+            || vc4 != base_c4
+            || vb8 != base_b8
+            || be18 != base_be50_18
+            || be2c != base_be50_2c;
 
         if changed {
             let sec = tick / 2;
             let mut f = Fmt::new();
-            f.p("!! t="); f.decimal(sec); f.p("s CHANGE:");
+            f.p("!! t=");
+            f.decimal(sec);
+            f.p("s CHANGE:");
             Logger::log(f.s());
 
-            if p0read != base_read { lr("  P0Read=", p0read); }
-            if p1read != base_p1read { lr("  P1Read=", p1read); }
-            if outen != base_outen { lr("  OutEn=", outen); }
-            if altfn != base_altfn { lr("  AltFn=", altfn); }
-            if v50 != base_50 { lr("  BC50=", v50); }
-            if v4c != base_4c { lr("  BC4C=", v4c); }
-            if vc4 != base_c4 { lr("  BCC4=", vc4); }
-            if vb8 != base_b8 { lr("  BCB8=", vb8); }
-            if be18 != base_be50_18 { lr("  BE5018=", be18); }
-            if be2c != base_be50_2c { lr("  BE502C=", be2c); }
+            if p0read != base_read {
+                lr("  P0Read=", p0read);
+            }
+            if p1read != base_p1read {
+                lr("  P1Read=", p1read);
+            }
+            if outen != base_outen {
+                lr("  OutEn=", outen);
+            }
+            if altfn != base_altfn {
+                lr("  AltFn=", altfn);
+            }
+            if v50 != base_50 {
+                lr("  BC50=", v50);
+            }
+            if v4c != base_4c {
+                lr("  BC4C=", v4c);
+            }
+            if vc4 != base_c4 {
+                lr("  BCC4=", vc4);
+            }
+            if vb8 != base_b8 {
+                lr("  BCB8=", vb8);
+            }
+            if be18 != base_be50_18 {
+                lr("  BE5018=", be18);
+            }
+            if be2c != base_be50_2c {
+                lr("  BE502C=", be2c);
+            }
 
             // Also check Syscon
             let (_, rx) = syscon::syscon_get(0x46);
             let mut f = Fmt::new();
             f.p("  Syscon46=[");
-            for i in 0..6 { if i > 0 { f.p(" "); } f.h2(rx[i]); }
+            for i in 0..6 {
+                if i > 0 {
+                    f.p(" ");
+                }
+                f.h2(rx[i]);
+            }
             f.p("]");
             Logger::log(f.s());
         }
@@ -1846,7 +1858,9 @@ fn phase6_step5_live_monitor() {
         if tick % 20 == 0 && tick > 0 {
             let sec = tick / 2;
             let mut f = Fmt::new();
-            f.p("  t="); f.decimal(sec); f.p("s ok");
+            f.p("  t=");
+            f.decimal(sec);
+            f.p("s ok");
             Logger::log(f.s());
         }
 
@@ -1910,20 +1924,27 @@ fn phase6_step5_syscon_scan() {
         if outen != baseline_outen || altfn != baseline_altfn {
             // SOMETHING CHANGED!
             let mut f = Fmt::new();
-            f.p("!!! CMD "); f.h2(cmd);
-            f.p(" OutEn="); f.h8(outen);
-            f.p(" AltFn="); f.h8(altfn);
+            f.p("!!! CMD ");
+            f.h2(cmd);
+            f.p(" OutEn=");
+            f.h8(outen);
+            f.p(" AltFn=");
+            f.h8(altfn);
             Logger::log(f.s());
         }
 
         // Log commands that return success (might be interesting)
         if r == 0 && rx[0] != 0xFF {
             let mut f = Fmt::new();
-            f.p("  GET "); f.h2(cmd);
-            f.p(": r="); f.h8(r as u32);
+            f.p("  GET ");
+            f.h2(cmd);
+            f.p(": r=");
+            f.h8(r as u32);
             f.p(" [");
             for i in 0..6 {
-                if i > 0 { f.p(" "); }
+                if i > 0 {
+                    f.p(" ");
+                }
                 f.h2(rx[i]);
             }
             f.p("]");
@@ -1940,10 +1961,12 @@ fn phase6_step5_syscon_scan() {
     Logger::log("SET scan (even cmds 0x50-0x9E)...");
     for cmd_idx in 0u8..40 {
         let cmd = 0x50 + cmd_idx * 2;
-        if cmd == 0x34 { continue; } // crash
+        if cmd == 0x34 {
+            continue;
+        } // crash
 
         // SAFETY: MMIO read of a documented PSP hardware register at a fixed physical address.
-        let gpio_before = unsafe { psp::hw::hw_read32(0xBE24_0024) };
+        let _gpio_before = unsafe { psp::hw::hw_read32(0xBE24_0024) };
 
         let (r, rx) = syscon::syscon_set(cmd, 1);
 
@@ -1954,19 +1977,25 @@ fn phase6_step5_syscon_scan() {
 
         if outen != baseline_outen || altfn != baseline_altfn {
             let mut f = Fmt::new();
-            f.p("!!! SET "); f.h2(cmd);
-            f.p(" OutEn="); f.h8(outen);
-            f.p(" AltFn="); f.h8(altfn);
+            f.p("!!! SET ");
+            f.h2(cmd);
+            f.p(" OutEn=");
+            f.h8(outen);
+            f.p(" AltFn=");
+            f.h8(altfn);
             Logger::log(f.s());
         }
 
         // Log accepted commands
         if r == 0 {
             let mut f = Fmt::new();
-            f.p("  SET "); f.h2(cmd);
+            f.p("  SET ");
+            f.h2(cmd);
             f.p(" v=1 OK [");
             for i in 0..4 {
-                if i > 0 { f.p(" "); }
+                if i > 0 {
+                    f.p(" ");
+                }
                 f.h2(rx[i]);
             }
             f.p("]");
@@ -2023,7 +2052,9 @@ fn phase6_step5_hook_usb_activate() {
         lr("  UsbAcc=", r2 as u32);
         let r3 = sys::sceUtilityLoadUsbModule(sys::UsbModule::UsbCam);
         lr("  UsbCam=", r3 as u32);
-        if r3 == 0 { loaded_cam = true; }
+        if r3 == 0 {
+            loaded_cam = true;
+        }
         sceKernelDelayThread(100_000);
     }
 
@@ -2105,9 +2136,12 @@ fn phase6_step5_hook_usb_activate() {
         // SAFETY: MMIO read of a documented PSP hardware register at a fixed physical address.
         let p0o = unsafe { psp::hw::hw_read32(0xBE24_0008) };
         let mut f = Fmt::new();
-        f.p("  t="); f.decimal(sec + 1);
-        f.p(" R="); f.h8(p0r);
-        f.p(" O="); f.h8(p0o);
+        f.p("  t=");
+        f.decimal(sec + 1);
+        f.p(" R=");
+        f.h8(p0r);
+        f.p(" O=");
+        f.h8(p0o);
         Logger::log(f.s());
     }
 
@@ -2152,53 +2186,103 @@ struct MenuItem {
 }
 
 const MENU: &[MenuItem] = &[
-    MenuItem { label: "1.1 Dump GPIO registers", func: phase1_step1_dump_gpio },
-    MenuItem { label: "1.2 Resolve GPIO NIDs", func: phase1_step2_resolve_nids },
-    MenuItem { label: "1.3 Monitor GPIO (needs camera)", func: phase1_step3_monitor_usb_init },
-    MenuItem { label: "2.1 Resolve sceSysconCtrlUsbPower", func: phase2_step1_resolve_syscon },
-    MenuItem { label: "2.2 Syscon GET status", func: phase2_step2_syscon_status },
-    MenuItem { label: "2.3 Syscon SET 0x47", func: phase2_step3_syscon_set },
-    MenuItem { label: "3.1 Clock + PHY init", func: phase3_step1_clock_phy },
-    MenuItem { label: "3.2 OHCI port power", func: phase3_step2_ohci_init },
-    MenuItem { label: "3.3 MUSB (disabled)", func: phase3_step3_musb_host },
-    MenuItem { label: "3.4 Tachyon mode bit", func: phase3_step4_tachyon_mode },
-    MenuItem { label: "3.5 Full firmware init", func: phase3_step5_full_sequence },
-    MenuItem { label: "4.1 GPIO sweep (all pins)", func: phase4_step1_gpio_toggle },
-    MenuItem { label: "4.2 Syscon+clocks+GPIO sweep", func: phase4_step2_gpio_plus_init },
-    MenuItem { label: "5.1 >>> VBUS ENABLE (pin 23) <<<", func: phase5_vbus_enable },
-    MenuItem { label: "6.1 Fix SysconCtrlUsbPower align", func: phase6_step1_fix_syscon_alignment },
-    MenuItem { label: "6.2 Probe 0xBE500000 block", func: phase6_step2_probe_be500000 },
-    MenuItem { label: "6.3 Full sceSysreg init (14 NIDs)", func: phase6_step3_full_sysreg_init },
-    MenuItem { label: "6.4 FULL CHAIN + VBUS", func: phase6_step4_full_chain_vbus },
-    MenuItem { label: "6.5 Live OTG monitor (60s)", func: phase6_step5_live_monitor },
-    MenuItem { label: "6.6 Syscon scan 0x50-0xFF", func: phase6_step5_syscon_scan },
-    MenuItem { label: "6.7 Hook sceUsbActivate trace", func: phase6_step5_hook_usb_activate },
+    MenuItem {
+        label: "1.1 Dump GPIO registers",
+        func: phase1_step1_dump_gpio,
+    },
+    MenuItem {
+        label: "1.2 Resolve GPIO NIDs",
+        func: phase1_step2_resolve_nids,
+    },
+    MenuItem {
+        label: "1.3 Monitor GPIO (needs camera)",
+        func: phase1_step3_monitor_usb_init,
+    },
+    MenuItem {
+        label: "2.1 Resolve sceSysconCtrlUsbPower",
+        func: phase2_step1_resolve_syscon,
+    },
+    MenuItem {
+        label: "2.2 Syscon GET status",
+        func: phase2_step2_syscon_status,
+    },
+    MenuItem {
+        label: "2.3 Syscon SET 0x47",
+        func: phase2_step3_syscon_set,
+    },
+    MenuItem {
+        label: "3.1 Clock + PHY init",
+        func: phase3_step1_clock_phy,
+    },
+    MenuItem {
+        label: "3.2 OHCI port power",
+        func: phase3_step2_ohci_init,
+    },
+    MenuItem {
+        label: "3.3 MUSB (disabled)",
+        func: phase3_step3_musb_host,
+    },
+    MenuItem {
+        label: "3.4 Tachyon mode bit",
+        func: phase3_step4_tachyon_mode,
+    },
+    MenuItem {
+        label: "3.5 Full firmware init",
+        func: phase3_step5_full_sequence,
+    },
+    MenuItem {
+        label: "4.1 GPIO sweep (all pins)",
+        func: phase4_step1_gpio_toggle,
+    },
+    MenuItem {
+        label: "4.2 Syscon+clocks+GPIO sweep",
+        func: phase4_step2_gpio_plus_init,
+    },
+    MenuItem {
+        label: "5.1 >>> VBUS ENABLE (pin 23) <<<",
+        func: phase5_vbus_enable,
+    },
+    MenuItem {
+        label: "6.1 Fix SysconCtrlUsbPower align",
+        func: phase6_step1_fix_syscon_alignment,
+    },
+    MenuItem {
+        label: "6.2 Probe 0xBE500000 block",
+        func: phase6_step2_probe_be500000,
+    },
+    MenuItem {
+        label: "6.3 Full sceSysreg init (14 NIDs)",
+        func: phase6_step3_full_sysreg_init,
+    },
+    MenuItem {
+        label: "6.4 FULL CHAIN + VBUS",
+        func: phase6_step4_full_chain_vbus,
+    },
+    MenuItem {
+        label: "6.5 Live OTG monitor (60s)",
+        func: phase6_step5_live_monitor,
+    },
+    MenuItem {
+        label: "6.6 Syscon scan 0x50-0xFF",
+        func: phase6_step5_syscon_scan,
+    },
+    MenuItem {
+        label: "6.7 Hook sceUsbActivate trace",
+        func: phase6_step5_hook_usb_activate,
+    },
 ];
 
-/// Collect menu labels into a fixed array for screen rendering.
-const MENU_LABELS: [&str; 21] = [
-    "1.1 Dump GPIO registers",
-    "1.2 Resolve GPIO NIDs",
-    "1.3 Monitor GPIO (needs camera)",
-    "2.1 Resolve sceSysconCtrlUsbPower",
-    "2.2 Syscon GET status",
-    "2.3 Syscon SET 0x47",
-    "3.1 Clock + PHY init",
-    "3.2 OHCI port power",
-    "3.3 MUSB (disabled)",
-    "3.4 Tachyon mode bit",
-    "3.5 Full firmware init",
-    "4.1 GPIO sweep (all pins)",
-    "4.2 Syscon+clocks+GPIO sweep",
-    "5.1 >>> VBUS ENABLE (pin 23) <<<",
-    "6.1 Fix SysconCtrlUsbPower align",
-    "6.2 Probe 0xBE500000 block",
-    "6.3 Full sceSysreg init (14 NIDs)",
-    "6.4 FULL CHAIN + VBUS",
-    "6.5 Live OTG monitor (60s)",
-    "6.6 Syscon scan 0x50-0xFF",
-    "6.7 Hook sceUsbActivate trace",
-];
+/// The menu labels as a fixed array for screen rendering, taken from `MENU`
+/// so the two lists can't drift apart.
+const MENU_LABELS: [&str; MENU.len()] = {
+    let mut labels = [""; MENU.len()];
+    let mut i = 0;
+    while i < MENU.len() {
+        labels[i] = MENU[i].label;
+        i += 1;
+    }
+    labels
+};
 
 fn psp_main() {
     let _ = psp::callback::setup_exit_callback();
