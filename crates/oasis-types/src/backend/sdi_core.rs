@@ -97,6 +97,8 @@ pub trait SdiCore {
     ///
     /// [`DEFAULT_VIEWPORT_WIDTH`]: crate::backend::DEFAULT_VIEWPORT_WIDTH
     /// [`DEFAULT_VIEWPORT_HEIGHT`]: crate::backend::DEFAULT_VIEWPORT_HEIGHT
+    /// [`SdiRenderTarget::bind_render_target`]:
+    ///     crate::backend::SdiRenderTarget::bind_render_target
     fn viewport_size(&self) -> (u32, u32) {
         (
             crate::backend::DEFAULT_VIEWPORT_WIDTH,
