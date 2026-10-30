@@ -46,6 +46,12 @@ impl Widget for ProgressBar {
     }
 
     fn draw(&self, ctx: &mut DrawContext<'_>, x: i32, y: i32, w: u32, h: u32) -> Result<()> {
+        // `value` is a public field: clamp here too, not only in `new`.
+        let value = if self.value.is_nan() {
+            0.0
+        } else {
+            self.value.clamp(0.0, 1.0)
+        };
         match self.style {
             ProgressStyle::Bar | ProgressStyle::Indeterminate => {
                 let radius = h as u16 / 2;
@@ -53,14 +59,14 @@ impl Widget for ProgressBar {
                 ctx.backend
                     .fill_rounded_rect(x, y, w, h, radius, ctx.theme.scrollbar_track)?;
                 // Fill.
-                let fill_w = (w as f32 * self.value) as u32;
+                let fill_w = (w as f32 * value) as u32;
                 if fill_w > 0 {
                     ctx.backend
                         .fill_rounded_rect(x, y, fill_w, h, radius, ctx.theme.accent)?;
                 }
                 // Label.
                 if self.show_label {
-                    let pct = format!("{}%", (self.value * 100.0) as u32);
+                    let pct = format!("{}%", (value * 100.0) as u32);
                     let fs = ctx.theme.font_size_xs;
                     ctx.text_in(
                         (x, y, w, h),
@@ -78,10 +84,16 @@ impl Widget for ProgressBar {
                 // Background circle.
                 ctx.backend
                     .stroke_circle(cx, cy, r, 2, ctx.theme.scrollbar_track)?;
-                // Progress arc approximated as a partial circle overlay.
-                // Full circle at 100%.
-                if self.value >= 0.99 {
+                // Progress: a clockwise arc from 12 o'clock covering
+                // `value` of the turn (it used to draw nothing below 99 %).
+                // The full ring uses the exact circle stroke.
+                if value >= 1.0 {
                     ctx.backend.stroke_circle(cx, cy, r, 2, ctx.theme.accent)?;
+                } else if value > 0.0 && r > 0 {
+                    let start = -std::f32::consts::FRAC_PI_2;
+                    let end = start + value * std::f32::consts::TAU;
+                    ctx.backend
+                        .stroke_arc(cx, cy, r, start, end, 2, ctx.theme.accent)?;
                 }
             },
         }
@@ -233,5 +245,26 @@ mod tests {
         }
         // stroke_circle falls back to fill_circle then fill_rect in mock.
         assert!(backend.fill_rect_count() >= 1);
+    }
+
+    #[test]
+    fn circular_shows_partial_progress() {
+        let theme = crate::theme::Theme::dark();
+        let accent_drawn = |value: f32| {
+            let mut backend = crate::test_utils::RecordingBackend::default();
+            let mut ctx = DrawContext::new(&mut backend, &theme);
+            let mut p = ProgressBar::new(0.0);
+            p.style = ProgressStyle::Circular;
+            p.value = value;
+            p.draw(&mut ctx, 0, 0, 24, 24).unwrap();
+            backend.fill_colors().contains(&theme.accent)
+        };
+        assert!(!accent_drawn(0.0));
+        assert!(accent_drawn(0.25));
+        assert!(accent_drawn(0.5));
+        assert!(accent_drawn(1.0));
+        // Out-of-range public-field values are clamped, not wrapped.
+        assert!(accent_drawn(7.0));
+        assert!(!accent_drawn(f32::NAN));
     }
 }

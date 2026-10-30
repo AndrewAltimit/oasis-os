@@ -47,7 +47,9 @@ the allocator. `oasis-js` pins this with the `memory_limit_is_enforced`
 test, so no counting allocator is needed. The few buffers QuickJS
 allocates straight from libc (for example through
 `dbuf_default_realloc`, served on PSP by the shim below) are outside
-the limit.
+the limit. Host-side buffers scripts can fill are capped separately:
+the console ring (1000 entries of at most 4 KiB), Web Storage (5 MiB
+per origin), live timers (1000) and script-created DOM nodes (200k).
 
 ## PSP build
 

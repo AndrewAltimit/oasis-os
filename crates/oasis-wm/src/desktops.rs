@@ -135,35 +135,32 @@ impl DesktopManager {
     /// Return all window IDs that are visible on the active desktop.
     ///
     /// This includes windows assigned to the active desktop and all
-    /// sticky windows.
+    /// sticky windows, sorted by id.
     pub fn visible_windows(&self) -> Vec<&str> {
-        self.placements
-            .iter()
-            .filter(|(_, p)| match p {
-                WindowPlacement::AllDesktops => true,
-                WindowPlacement::Desktop(d) => *d == self.active,
-            })
-            .map(|(id, _)| id.as_str())
-            .collect()
+        self.windows_on_desktop(self.active)
     }
 
     /// Return all window IDs assigned to a specific desktop.
     ///
     /// This includes windows explicitly assigned to that desktop and
-    /// all sticky windows. Returns an empty vec if the desktop index
-    /// is out of range.
+    /// all sticky windows, sorted by id (the placements live in a hash
+    /// map, whose iteration order is arbitrary and differs run to run).
+    /// Returns an empty vec if the desktop index is out of range.
     pub fn windows_on_desktop(&self, desktop: DesktopId) -> Vec<&str> {
         if desktop >= self.count {
             return Vec::new();
         }
-        self.placements
+        let mut ids: Vec<&str> = self
+            .placements
             .iter()
             .filter(|(_, p)| match p {
                 WindowPlacement::AllDesktops => true,
                 WindowPlacement::Desktop(d) => *d == desktop,
             })
             .map(|(id, _)| id.as_str())
-            .collect()
+            .collect();
+        ids.sort_unstable();
+        ids
     }
 
     /// Move a window to a different desktop.
@@ -487,6 +484,20 @@ mod tests {
         let mut visible = dm.visible_windows();
         visible.sort();
         assert_eq!(visible, vec!["a", "c", "s"]);
+    }
+
+    #[test]
+    fn window_listings_are_sorted_without_caller_help() {
+        // Used to come back in HashMap iteration order.
+        let mut dm = DesktopManager::new(2);
+        for id in ["zeta", "alpha", "mid", "beta", "omega", "kappa"] {
+            dm.assign_window(id, WindowPlacement::Desktop(0));
+        }
+        let listed = dm.visible_windows();
+        let mut sorted = listed.clone();
+        sorted.sort_unstable();
+        assert_eq!(listed, sorted);
+        assert_eq!(dm.windows_on_desktop(0), sorted);
     }
 
     #[test]

@@ -53,7 +53,7 @@ Per-platform dependencies, feature flags (`skin-dev`, `mcp`), environment variab
 
 **Rendering and theming**
 - Scene graph (SDI) with z-order, gradients, rounded corners, shadows and exact dirty tracking so idle frames skip redraws
-- 29 widgets plus list, menu, nine-patch, icon atlas and flex/grid layout helpers ([catalogue](docs/ui-widgets.md))
+- 27 widgets plus list, menu, nine-patch, focus and flex/grid layout helpers ([catalogue](docs/ui-widgets.md))
 - 17 skins, each an editable TOML directory under [`skins/`](skins/) with theme derivation from 9 base colors ([authoring guide](docs/skin-authoring.md))
 - 8 animated shader wallpapers, each with a GPU and a CPU implementation ([shaders](docs/shaders.md)); resolution-independent vector icons and animations
 
@@ -90,7 +90,7 @@ Core code never calls platform APIs. Rendering, input, networking and audio go t
 
 ```mermaid
 graph TD
-    APP["<b>OASIS_OS</b><br/>oasis-core + oasis-apps (10 app crates)<br/>29 widgets, browser, terminal<br/>17 skins, ~95 commands"]
+    APP["<b>OASIS_OS</b><br/>oasis-core + oasis-apps (10 app crates)<br/>27 widgets, browser, terminal<br/>17 skins, ~95 commands"]
     TRAITS["<b>Backend Traits</b><br/>SdiCore (13 required) + 8 extension traits (46 defaults)<br/>InputBackend / NetworkBackend / AudioBackend"]
 
     SDL["<b>SDL3</b><br/>Desktop + Pi"]

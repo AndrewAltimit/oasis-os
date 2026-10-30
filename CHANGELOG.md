@@ -27,12 +27,40 @@ removal, a restyled site, and docs that match the code.
   PSP-native skins, growing to 40 % x 45 % of larger screens), and
   cascaded windows stay on screen.
 - The example clock plugin is hidden until `pclock show`.
+- Minimizing a maximized window and restoring it brings it back
+  maximized (the next restore returns the original size); maximizing a
+  minimized window shows it.
 - The browser enforces CSP `script-src` / `style-src` and `SameSite`
   cookies; large images are downscaled instead of shown broken (on PSP
   they are capped at 256 px per side).
 - Desktop JavaScript is optional: `oasis-app` without the `javascript`
   feature links no QuickJS (the WASM and UE5 FFI builds don't link it
   either).
+- **Remote terminal PSK protocol (breaking):** the key no longer crosses
+  the wire (it was sent in clear; the docs' "TLS-protected" claim was
+  wrong). The listener sends `AUTH_REQUIRED <nonce>` and expects
+  `AUTH <hex HMAC-SHA256(psk, nonce)>` (`oasis_net::psk_response`); a bare
+  PSK is a failed attempt. PSK auth now works without the `tls-rustls`
+  feature. Unauthenticated connections close after 20 s; failed logins
+  (remote terminal and FTP `PASS`) feed a server-wide lockout.
+- FTP `GET` returns the raw bytes (binary-safe; the length header now
+  matches the body).
+- MCP server: stricter HTTP parsing (`Transfer-Encoding` of any kind, bad
+  header lines and non-HTTP/1.x are refused), the Origin / token checks run
+  before a body is buffered or `100 Continue` is sent, a 30 s whole-request
+  deadline, a 60 s keep-alive idle timeout, `DELETE` returns `405`, `null`
+  JSON-RPC ids are rejected and client-posted responses get `202`.
+- VFS: every backend resolves `.` / `..` the same way (`..` above `/` and
+  NUL bytes are errors); `write` never replaces a directory and nothing is
+  created beneath a file; `RealVfs` rejects Windows drive / stream /
+  device-name segments and removes or renames a symlink itself, not its
+  target.
+- Shell: `'$HOME'` is literal, `"*"` / `'{a,b}'` are not expanded, `""`
+  is an argument, operators inside `$( ... )` no longer split the outer
+  line, piped stdin does not leak into the next command, `run` passes
+  `$1..$n`, and runaway lines stop at resource limits (100k commands,
+  256 KiB expansions, nesting depth) instead of hanging or overflowing
+  the stack.
 
 ### Architecture and crate layout
 
@@ -234,6 +262,22 @@ removal, a restyled site, and docs that match the code.
   (`max_image_dimension` / `max_image_pixels`); previous pages' image
   textures are freed on navigation; `text-align: start/end` follow
   `direction`.
+- **Hostile-input hardening (overhaul 2):** a property-based pipeline
+  fuzz test (`oasis-browser/tests/pipeline_fuzz.rs`) found, and the
+  engine now survives, CSS that allocated tens of gigabytes
+  (`column-count`, huge `colspan` x `rowspan`, `tab-size`, line-box and
+  offscreen-layer sizing) or overflowed paint arithmetic (geometry now
+  saturates at ±2^25 px); a non-ASCII `bgcolor` / SVG `fill` no longer
+  panics; the console buffer is capped (1000 entries, 4 KiB each).
+- **Correctness (overhaul 2):** table spans no longer ride on
+  `min-width` / `max-width`, so `max-width` of 999 px and up applies
+  again (`.container { max-width: 1200px }`) and `min-width` on a cell
+  is not read as a `colspan`; `colspan` / `rowspan` follow HTML's limits.
+  All 148 CSS named colours are recognised, and SVG / canvas colours
+  share the CSS parser (`rgba()`, `hsl()`, 8-digit hex). Relative URLs
+  keep a directory's trailing `/` and absolute paths drop dot segments.
+  `oasis-browser`'s largest files (`svg`, `paint/record`,
+  `widget/pipeline`, `widget/input`) are now module directories.
 
 ### Skins
 
@@ -245,6 +289,48 @@ removal, a restyled site, and docs that match the code.
 - Strict `resolve_skin` (plus `resolve_skin_or_classic` for boot);
   `skin lint` flags unknown shader names and the removed `features.toml`
   `command_categories` key. `from_base_colors` delegates to `from_skin`.
+- Derived colors stay readable: primary-button labels on the accent,
+  selection text, app body text and bar text are lifted to 4.5:1 when the
+  derivation fell short (several skins drew labels at 1.0-1.6:1); colors a
+  skin sets explicitly are kept. win95's terminal text is black / navy on
+  the gray app surface.
+- `skin lint` catches malformed colors anywhere in `theme.toml`, unknown
+  layer / anchor / wallpaper / entrance / page-style / easing / density
+  names, short `glass_shard` layers, bad shader-param colors and
+  non-built-in `inherits` parents; TOML errors name the file and line.
+  Every built-in lints clean (`all_builtin_skins_lint_clean`, with an
+  explicit list of accepted palette-constrained contrast misses).
+
+### UI toolkit and window manager
+
+- **(breaking)** `oasis-ui` drops `ToastStack` (the shell's
+  `oasis_core::toast` is the one toast system), `Avatar`, `IconAtlas` /
+  `Icon` with the never-drawn `Button::icon`, and `accessibility` (use
+  `oasis_types::color::{contrast_ratio, meets_wcag_aa}`): 27 widgets.
+  `focus.rs` became `focus/{ring,manager,spatial,style}`.
+- `DrawContext::text_in` ellipsizes text wider than its rect instead of
+  drawing outside the widget. A sweep draws every widget at degenerate
+  sizes; it found `SpinBox` underflowing when narrower than a step button.
+- Widget fixes: `SpatialFocusManager` ignored the `InputEvent::Tab` /
+  `ShiftTab` events keyboards send; `Table` sorting moved the selection
+  to another row; `Slider` could never reach `max` when the range was not
+  a step multiple; circular `ProgressBar` never drew progress; focused
+  `InputField`s put the cursor outside the field for long text (and
+  password masks counted bytes); flex children left up to n-1 pixels
+  unused; tooltips at a screen edge covered their target (now they flip;
+  `ContextMenu::show_within` does the same for menus); `MenuBar` panicked
+  on a stale `open` index; disabled dropdowns still changed selection.
+  New `ListView::scroll_by`, `InputField` cursor movement / `delete`.
+- Window manager fixes: right-edge resize on narrow windows resolved to
+  the left edge; narrow windows could not be dragged to x = 0; a drag in
+  progress undid a tile / maximize / snap / fullscreen on the next mouse
+  move; interrupted open / minimize / restore animations jumped; grid
+  tiling left the partial last row's cells empty.
+- Scene graph / vector / shaders: SDI `z` / `overlay` edits made through
+  `get_mut` now reorder the next draw; the vector `AnimClock` keeps f64
+  time (animations ran ~2x fast after ~3 days up); matrix-rain wallpaper
+  falls instead of rising; the GLSL shaders match the CPU renderer
+  (orientation, per-shader defaults, hashes).
 
 ### Terminal
 
@@ -274,6 +360,24 @@ removal, a restyled site, and docs that match the code.
   http); archive redirects resolve relative `Location`s.
 - Shaders: `BuiltinShader` is the one catalogue of the 8 built-ins; the
   no-op `software` feature is removed.
+- Shuffle is a real random order (it was the same fixed interleave every
+  time) that starts at the playing track and plays every other track once
+  per round; picking, adding or removing a track keeps the rest of the
+  round. **(breaking)** `Playlist::shuffle` is private: use `shuffle()` /
+  `set_shuffle()`.
+- WAV: `WAVE_FORMAT_EXTENSIBLE` PCM plays; short `fmt ` chunks and 0 Hz
+  rates are rejected. Ogg decode stops at 2^27 samples. Radio responses
+  whose headers never end fail after 16 KiB.
+- `demux_lite` (PSP playback, desktop seek points) is hardened against
+  hostile MP4s: overflow-checked box ends, a nesting limit, table sizes
+  bounded by the bytes in the file, size caps on config boxes and
+  samples; per-sample lookups are indexed binary searches (playback was
+  quadratic in track length). AAC channel count, `esds` parsing and
+  multi-SPS `avcC` are fixed.
+- The symphonia video backend reads only `moov` when opening a stream (it
+  read the whole file into memory), finds `avcC` only inside `moov`, and
+  bounds its per-stream packet queues; the ffmpeg backend no longer leaks
+  its AVIO context and buffer on every close.
 
 ### VFS and networking
 
@@ -328,6 +432,28 @@ removal, a restyled site, and docs that match the code.
   deleted. Fixed a null write when the font atlas allocation fails and
   a read of freed memory when a video frame outgrows its texture. Every
   `unsafe` block in the backend has a `SAFETY` comment.
+- The standalone PSP crates (overlay PRX, PRX decrypter, recovery,
+  devloop, ME boot, USB client) now have a `SAFETY` comment on every
+  `unsafe` block too. Fixed on the way: the ME watchdog's inline hook ran
+  a trampoline in a dead stack frame; hook trampolines are cache-flushed
+  after moving to their statics; unchecked null function pointers;
+  out-of-bounds and non-UTF-8 handling in the PRX decrypter; module-ID
+  buffer sizes; a wrapping size parse in recovery.
+- TV Guide video texture: the main thread no longer frees (or reuses) the
+  CSC target while the video thread may be writing it. The decoder holds
+  a hazard pointer around each decode + CSC and re-acquires the buffer
+  every frame; the main thread unpublishes, waits up to 150 ms and
+  otherwise defers the free. The texture is now 512-stride x
+  `ceil16(height)` rows (+1 guard row) sized at tune time for
+  `max(272, episode height)`, so 480x272 streams decode into it (the old
+  fixed 512x256 buffer was too short: the CSC either errored or, with a
+  reused persistent decoder, overran it by 16 rows) and 557 KB is
+  allocated instead of padding to 512x512. Frames report the stream's
+  own SPS size, and volatile-memory buffers are reused instead of leaking
+  one per tune.
+- Overlay PRX: the shipped `oasis-overlay.prx` is stripped with
+  `prxmin` (293 KB -> 153 KB; the loaded image is identical), and the
+  docs give its measured size instead of the never-met "<64 KB".
 
 ### CI and tooling
 
@@ -339,6 +465,9 @@ removal, a restyled site, and docs that match the code.
   crates, workflows and `docker/psp-build.Dockerfile`.
 - PSP EBOOT, overlay PRX and recovery EBOOT builds deny rustc warnings
   (`PSP_DENY_WARNINGS`).
+- `main-ci.yml` holds the stripped overlay PRX to a 192 KiB budget, and
+  both workflows run the `scripts/test_*.py` unit tests
+  (`psp_remote.py` screencap decoding).
 
 ### Site
 

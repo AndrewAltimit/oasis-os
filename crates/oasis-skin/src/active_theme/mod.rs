@@ -17,6 +17,7 @@
 
 mod defaults;
 mod derive;
+mod layers;
 mod methods;
 mod structs;
 #[cfg(test)]

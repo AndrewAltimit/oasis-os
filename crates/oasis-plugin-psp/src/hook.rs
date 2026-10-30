@@ -31,6 +31,26 @@ static mut CTRL_PEEK_FN: Option<unsafe extern "C" fn(*mut u8, i32) -> i32> = Non
 static mut CTRL_PEEK_HOOK: Option<psp::hook::SyscallHook> = None;
 static mut CTRL_READ_HOOK: Option<psp::hook::SyscallHook> = None;
 
+/// Move `hook` into its `static` slot and make its trampoline executable there.
+///
+/// An inline hook's trampoline is stored inside the `SyscallHook` value, and
+/// `SyscallHook::install` flushes the caches while that value is still a local
+/// of `install`. After the move into the static, the trampoline's new bytes may
+/// sit only in the D-cache, so they are written back and the I-cache
+/// invalidated before anything can call through `original_ptr()`.
+///
+/// # Safety
+/// `slot` must point to a hook static with no live references, written only
+/// during single-threaded init.
+unsafe fn publish_hook(slot: *mut Option<psp::hook::SyscallHook>, hook: psp::hook::SyscallHook) {
+    // SAFETY: the caller guarantees exclusive access to `slot` (see above).
+    unsafe {
+        *slot = Some(hook);
+        psp::sys::sceKernelDcacheWritebackAll();
+        psp::sys::sceKernelIcacheInvalidateAll();
+    }
+}
+
 // -- scePower driver NIDs --
 
 /// scePowerSetClockFrequency(pll, cpu, bus)
@@ -253,7 +273,7 @@ unsafe fn install_ctrl_hooks() {
                 hooked_ctrl_peek as *mut u8,
             );
             if let Some(h) = hook {
-                CTRL_PEEK_HOOK = Some(h);
+                publish_hook(&raw mut CTRL_PEEK_HOOK, h);
                 crate::debug_log(b"[OASIS] ctrl peek hook installed");
                 break;
             }
@@ -268,7 +288,7 @@ unsafe fn install_ctrl_hooks() {
                 hooked_ctrl_read as *mut u8,
             );
             if let Some(h) = hook {
-                CTRL_READ_HOOK = Some(h);
+                publish_hook(&raw mut CTRL_READ_HOOK, h);
                 crate::debug_log(b"[OASIS] ctrl read hook installed");
                 break;
             }
@@ -327,7 +347,7 @@ pub fn install_display_hook() -> bool {
 
     // SAFETY: Single-threaded init, DISPLAY_HOOK is read-only after this.
     unsafe {
-        DISPLAY_HOOK = Some(hook);
+        publish_hook(&raw mut DISPLAY_HOOK, hook);
     }
 
     // Resolve sceCtrlPeekBufferPositive from the kernel driver.

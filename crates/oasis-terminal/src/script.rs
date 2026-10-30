@@ -21,11 +21,15 @@
 
 use oasis_types::error::{OasisError, Result};
 
-use crate::expander::{case_pattern_matches, expand_braces, expand_globs, resolve_path, tokenize};
+use crate::expander::{case_pattern_matches, expand_words, resolve_path, tokenize_words};
 use crate::interpreter::{CommandOutput, CommandRegistry, Environment};
 
 /// Maximum iterations for a single `while` / `until` loop.
 const MAX_LOOP_ITERATIONS: usize = 1000;
+
+/// Maximum nesting of `if` / loop / `case` blocks (the parser recurses
+/// once per level).
+const MAX_BLOCK_NESTING: usize = 64;
 
 // ---------------------------------------------------------------------------
 // Statement splitting
@@ -296,6 +300,8 @@ fn syntax_error(msg: impl std::fmt::Display) -> OasisError {
 struct Parser {
     stmts: Vec<Stmt>,
     pos: usize,
+    /// Current block nesting (see `MAX_BLOCK_NESTING`).
+    depth: usize,
 }
 
 impl Parser {
@@ -343,6 +349,19 @@ impl Parser {
     /// Parse statements until one whose first word is in `terms` (not
     /// consumed) or end of input.
     fn parse_block(&mut self, terms: &[&str]) -> Result<Vec<Node>> {
+        if self.depth >= MAX_BLOCK_NESTING {
+            return Err(syntax_error(format_args!(
+                "blocks nested deeper than {MAX_BLOCK_NESTING} (line {})",
+                self.line()
+            )));
+        }
+        self.depth += 1;
+        let nodes = self.parse_block_inner(terms);
+        self.depth -= 1;
+        nodes
+    }
+
+    fn parse_block_inner(&mut self, terms: &[&str]) -> Result<Vec<Node>> {
         let mut nodes = Vec::new();
         while let Some(word) = self.peek_word() {
             if terms.contains(&word) {
@@ -520,7 +539,11 @@ fn stmt_line(stmts: &[Stmt], idx: usize) -> usize {
 
 /// Parse statements into a node tree.
 pub(crate) fn parse_script(stmts: Vec<Stmt>) -> Result<Vec<Node>> {
-    let mut parser = Parser { stmts, pos: 0 };
+    let mut parser = Parser {
+        stmts,
+        pos: 0,
+        depth: 0,
+    };
     let nodes = parser.parse_block(&[])?;
     if let Some(word) = parser.peek_word() {
         return Err(syntax_error(format_args!(
@@ -535,12 +558,47 @@ pub(crate) fn parse_script(stmts: Vec<Stmt>) -> Result<Vec<Node>> {
 // Executor
 // ---------------------------------------------------------------------------
 
+/// Maximum text a single script / compound line collects before further
+/// output is dropped (with one note).
+const MAX_SCRIPT_OUTPUT: usize = 4 * 1024 * 1024;
+
 /// Per-run execution state: collected outputs plus error formatting mode.
 struct ExecCtx {
     outputs: Vec<CommandOutput>,
     /// Script-file mode reports errors as `error at line N: ...`; inline
     /// mode as `error: ...`.
     script: bool,
+    /// Text bytes collected so far (see [`MAX_SCRIPT_OUTPUT`]).
+    output_bytes: usize,
+    /// The command-budget error has been reported.
+    budget_reported: bool,
+}
+
+impl ExecCtx {
+    fn new(script: bool) -> Self {
+        Self {
+            outputs: Vec::new(),
+            script,
+            output_bytes: 0,
+            budget_reported: false,
+        }
+    }
+
+    /// Collect one statement's output, up to [`MAX_SCRIPT_OUTPUT`].
+    fn push(&mut self, output: CommandOutput) {
+        if self.output_bytes > MAX_SCRIPT_OUTPUT {
+            return;
+        }
+        self.output_bytes += crate::pipeline::output_to_text(&output).len();
+        if self.output_bytes > MAX_SCRIPT_OUTPUT {
+            self.outputs.push(CommandOutput::Text(format!(
+                "warning: output truncated (over {} MiB)",
+                MAX_SCRIPT_OUTPUT >> 20
+            )));
+            return;
+        }
+        self.outputs.push(output);
+    }
 }
 
 /// Flatten command outputs into display lines (script-file mode).
@@ -601,7 +659,11 @@ impl CommandRegistry {
             return Ok(CommandOutput::Text("(empty script)".to_string()));
         }
         self.script_depth.set(script_depth + 1);
-        let lines = self.run_script_source(&source, env);
+        // `$1..$n` are the arguments after the script path (as advertised
+        // by `run <script> [args...]`; they used to be dropped).
+        let lines = self.with_positional_args(&full_path, &args[1..], || {
+            self.run_script_source(&source, env)
+        });
         self.script_depth.set(script_depth);
         let lines = lines?;
         if lines.is_empty() {
@@ -625,10 +687,8 @@ impl CommandRegistry {
         env: &mut Environment<'_>,
     ) -> Result<Vec<String>> {
         let nodes = parse_script(split_statements(source))?;
-        let mut ctx = ExecCtx {
-            outputs: Vec::new(),
-            script: true,
-        };
+        let mut ctx = ExecCtx::new(true);
+        self.begin_top_level();
         let depth = self.exec_depth.get();
         self.exec_depth.set(depth + 1);
         self.run_nodes(&nodes, env, &mut ctx);
@@ -652,10 +712,7 @@ impl CommandRegistry {
         env: &mut Environment<'_>,
     ) -> Result<CommandOutput> {
         let nodes = parse_script(split_statements(line))?;
-        let mut ctx = ExecCtx {
-            outputs: Vec::new(),
-            script: false,
-        };
+        let mut ctx = ExecCtx::new(false);
         self.run_nodes(&nodes, env, &mut ctx);
         Ok(crate::executor::merge_outputs(ctx.outputs))
     }
@@ -670,25 +727,40 @@ impl CommandRegistry {
             if self.return_flag.get() || self.break_flag.get() || self.continue_flag.get() {
                 return;
             }
+            if self.over_budget() {
+                // Report the exhausted budget once, then unwind.
+                if !ctx.budget_reported {
+                    ctx.budget_reported = true;
+                    let e = self.charge_command().err();
+                    if let Some(e) = e {
+                        self.report_error(&e, 0, ctx);
+                    }
+                }
+                return;
+            }
             self.run_node(node, env, ctx);
         }
+    }
+
+    /// Record a failed statement: exit status 1 and an inline error line
+    /// (`error at line N: ...` in script files, `error: ...` inline).
+    fn report_error(&self, e: &OasisError, line: usize, ctx: &mut ExecCtx) {
+        self.last_exit_code.set(1);
+        self.set_variable("?", "1");
+        let msg = if ctx.script && line > 0 {
+            format!("error at line {line}: {e}")
+        } else {
+            format!("error: {e}")
+        };
+        ctx.push(CommandOutput::Text(msg));
     }
 
     fn run_node(&self, node: &Node, env: &mut Environment<'_>, ctx: &mut ExecCtx) {
         match node {
             Node::Simple { text, line } => match self.execute_chain(text, env) {
                 Ok(CommandOutput::None) => {},
-                Ok(output) => ctx.outputs.push(output),
-                Err(e) => {
-                    self.last_exit_code.set(1);
-                    self.set_variable("?", "1");
-                    let msg = if ctx.script {
-                        format!("error at line {line}: {e}")
-                    } else {
-                        format!("error: {e}")
-                    };
-                    ctx.outputs.push(CommandOutput::Text(msg));
-                },
+                Ok(output) => ctx.push(output),
+                Err(e) => self.report_error(&e, *line, ctx),
             },
             Node::If {
                 branches,
@@ -707,8 +779,11 @@ impl CommandRegistry {
             Node::Loop { cond, until, body } => {
                 let mut iterations = 0;
                 loop {
+                    if self.over_budget() {
+                        break;
+                    }
                     if iterations >= MAX_LOOP_ITERATIONS {
-                        ctx.outputs.push(CommandOutput::Text(format!(
+                        ctx.push(CommandOutput::Text(format!(
                             "warning: loop terminated after {MAX_LOOP_ITERATIONS} \
                              iterations (limit reached)"
                         )));
@@ -724,15 +799,24 @@ impl CommandRegistry {
                 }
             },
             Node::For { var, words, body } => {
-                for word in self.expand_words(words, env) {
-                    self.set_variable(var, &word);
-                    if self.run_loop_body(body, env, ctx) {
+                let words = match self.expand_words(words, env) {
+                    Ok(words) => words,
+                    Err(e) => return self.report_error(&e, 0, ctx),
+                };
+                for word in words {
+                    if let Err(e) = self.assign_variable(var, &word) {
+                        return self.report_error(&e, 0, ctx);
+                    }
+                    if self.over_budget() || self.run_loop_body(body, env, ctx) {
                         break;
                     }
                 }
             },
             Node::Case { word, arms } => {
-                let value = self.expand_words(word, env).join(" ");
+                let value = match self.expand_words(word, env) {
+                    Ok(words) => words.join(" "),
+                    Err(e) => return self.report_error(&e, 0, ctx),
+                };
                 for (pattern, body) in arms {
                     if case_pattern_matches(&value, pattern) {
                         self.run_nodes(body, env, ctx);
@@ -757,13 +841,11 @@ impl CommandRegistry {
 
     /// Expand a word list the way the shell expands command arguments:
     /// `$(...)`, variables, quote removal, braces and globs.
-    fn expand_words(&self, words: &str, env: &mut Environment<'_>) -> Vec<String> {
-        let subst = self.expand_substitutions(words, env);
-        let vars = self.expand_variables(&subst, &env.cwd);
-        let tokens = tokenize(&vars)
-            .unwrap_or_else(|_| vars.split_whitespace().map(str::to_string).collect());
-        let tokens = expand_braces(&tokens);
-        expand_globs(&tokens, env.vfs, &env.cwd)
+    fn expand_words(&self, words: &str, env: &mut Environment<'_>) -> Result<Vec<String>> {
+        let subst = self.expand_substitutions(words, env)?;
+        let vars = self.expand_variables(&subst, &env.cwd)?;
+        let words = tokenize_words(&vars)?;
+        Ok(expand_words(words, env.vfs, &env.cwd))
     }
 
     /// Evaluate a condition list for `if` / `elif` / `while` / `until`.
@@ -776,10 +858,7 @@ impl CommandRegistry {
         let Some((last, init)) = cond.split_last() else {
             return true;
         };
-        let mut scratch = ExecCtx {
-            outputs: Vec::new(),
-            script: ctx.script,
-        };
+        let mut scratch = ExecCtx::new(ctx.script);
         self.run_nodes(init, env, &mut scratch);
         match last {
             Node::Simple { text, .. } => {

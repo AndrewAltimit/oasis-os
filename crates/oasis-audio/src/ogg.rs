@@ -13,6 +13,10 @@ use symphonia::core::io::MediaSourceStream;
 use symphonia::core::meta::MetadataOptions;
 use symphonia::core::probe::Hint;
 
+/// Most PCM samples [`decode_ogg`] produces (2^27 ≈ 25 min of 44.1 kHz
+/// stereo, 256 MiB); decoding stops there.
+pub const MAX_DECODED_SAMPLES: usize = 1 << 27;
+
 /// Decoded Ogg Vorbis audio data.
 pub struct OggData {
     /// Interleaved i16 PCM samples.
@@ -62,14 +66,15 @@ pub fn decode_ogg(data: &[u8]) -> Option<OggData> {
     let codec_params = track.codec_params.clone();
     let track_id = track.id;
 
-    let sample_rate = codec_params.sample_rate.unwrap_or(44100);
-    let channels = codec_params.channels.map(|c| c.count() as u16).unwrap_or(2);
+    let mut sample_rate = codec_params.sample_rate.unwrap_or(44100);
+    let mut channels = codec_params.channels.map(|c| c.count() as u16).unwrap_or(2);
 
     let mut decoder = symphonia::default::get_codecs()
         .make(&codec_params, &DecoderOptions::default())
         .ok()?;
 
     let mut all_samples: Vec<i16> = Vec::new();
+    let mut spec_seen = false;
 
     while let Ok(packet) = format.next_packet() {
         if packet.track_id() != track_id {
@@ -87,10 +92,27 @@ pub fn decode_ogg(data: &[u8]) -> Option<OggData> {
         if num_frames == 0 {
             continue;
         }
+        // Label the PCM by what the decoder produced, not the header.
+        if !spec_seen {
+            spec_seen = true;
+            channels = spec.channels.count() as u16;
+            sample_rate = spec.rate;
+        }
 
         let mut sample_buf = SampleBuffer::<i16>::new(num_frames as u64, spec);
         sample_buf.copy_interleaved_ref(decoded);
         all_samples.extend_from_slice(sample_buf.samples());
+        if all_samples.len() >= MAX_DECODED_SAMPLES {
+            // A few-byte Vorbis packet can expand to thousands of frames,
+            // so a small hostile file could otherwise decode to gigabytes.
+            log::warn!("ogg: stopping at {MAX_DECODED_SAMPLES} decoded samples");
+            all_samples.truncate(MAX_DECODED_SAMPLES);
+            break;
+        }
+    }
+
+    if channels == 0 || sample_rate == 0 {
+        return None;
     }
 
     if all_samples.is_empty() {

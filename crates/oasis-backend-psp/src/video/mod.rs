@@ -204,56 +204,171 @@ pub struct StreamFrame {
 /// A decoded video frame ready for texture upload.
 ///
 /// CSC writes directly into the GU video texture buffer (see
-/// `VIDEO_TEX_PTR`); this struct just carries dimensions so the main
+/// [`VIDEO_TEX_PTR`]); this struct just carries dimensions so the main
 /// thread can set the correct UV mapping.
 pub struct DecodedFrame {
+    /// Picture width in pixels (from the stream's SPS).
     pub width: u32,
+    /// Picture height in pixels (from the stream's SPS).
     pub height: u32,
     /// CSC output stride in pixels (512 for ≤480p). Matches texture buf_w.
     pub stride: u32,
 }
 
-/// Pointer to the GU video texture's pixel buffer. Set by `PspBackend::
-/// alloc_video_texture` and read by `NalDecoder::decode` so CSC writes
-/// directly into the GU-bound buffer (zero-copy: no separate frame
-/// buffer, no per-frame memcpy). The buffer is allocated by the main
-/// thread before the channel tune begins (when ~7.5 MB of partition
-/// memory is still free) and reused for every subsequent stream — see
-/// `decoder::PERSISTENT_DECODER` for the parallel reasoning on the
-/// sceMpeg side.
-///
-/// Invariant: the stored pointer outlives the program (allocated through
-/// the texture system, freed only at app exit). Written only on the main
-/// thread before the video thread starts decoding.
-pub static VIDEO_TEX_PTR: AtomicPtr<u8> = AtomicPtr::new(core::ptr::null_mut());
-/// Size in bytes of the buffer pointed to by `VIDEO_TEX_PTR`.
-pub static VIDEO_TEX_SIZE: AtomicUsize = AtomicUsize::new(0);
+// ---------------------------------------------------------------------------
+// Shared CSC target: the GU video texture buffer
+// ---------------------------------------------------------------------------
+//
+// The main thread owns the buffer (allocates, frees, binds it to the GE);
+// the video thread writes each decoded frame into it with
+// `sceMpegBaseCscAvc` (zero-copy: no separate frame buffer fits next to the
+// sceMpeg workspace). The two meet through three atomics:
+//
+// * `VIDEO_TEX_PTR` / `VIDEO_TEX_SIZE` — the published buffer. Only the
+//   main thread writes them. `SIZE` changes only while `PTR` is null.
+// * `VIDEO_TEX_IN_USE` — a hazard pointer: the buffer the video thread is
+//   writing right now (null when idle). The video thread sets it, then
+//   re-checks that the same buffer is still published before touching it
+//   (`acquire_video_texture`); the main thread unpublishes first and only
+//   frees or reuses a buffer once `IN_USE` no longer names it
+//   (`retire_video_texture_buffer`).
+//
+// All accesses are `SeqCst`, which makes the store-then-load pair on each
+// side a Dekker handshake: either the video thread's re-check sees the
+// unpublish (and skips the frame), or the main thread's `IN_USE` load sees
+// the hazard (and waits / defers the free). Never both miss.
 
-/// Publish the texture buffer pointer + size for the video thread to
-/// use as CSC output target. Called by `PspBackend::alloc_video_texture`.
-pub fn set_video_texture_buffer(ptr: *mut u8, size: usize) {
-    VIDEO_TEX_PTR.store(ptr, Ordering::Release);
-    VIDEO_TEX_SIZE.store(size, Ordering::Release);
+/// Row stride of the video texture in pixels. CSC output for any ≤480-wide
+/// picture is 512 px wide, and 512 is a power of two as the GE requires for
+/// the texture buffer width.
+pub const VIDEO_TEX_STRIDE: u32 = 512;
+
+/// Rows pre-allocated at tune time when the stream is no taller: PSP-native
+/// 480×272 (17 macroblock rows) fits without a reallocation.
+pub const VIDEO_TEX_DEFAULT_ROWS: u32 = 272;
+
+/// Rows tried when the [`VIDEO_TEX_DEFAULT_ROWS`] allocation fails: the
+/// 512×256 buffer earlier builds always used (32 KB smaller), so a tight
+/// heap never loses video for streams up to 256 rows.
+pub const VIDEO_TEX_FALLBACK_ROWS: u32 = 256;
+
+/// Rows of CSC output for a picture `height` px tall. The ME converts whole
+/// macroblocks, so it writes `ceil16(height)` rows.
+pub const fn video_tex_rows(height: u32) -> u32 {
+    height.div_ceil(16) * 16
 }
 
-/// Borrow the GU video texture buffer as a mutable slice. Returns
-/// `None` if no texture has been allocated yet.
+/// Bytes of CSC output for a picture `height` px tall at the fixed stride.
+pub const fn video_tex_bytes(height: u32) -> usize {
+    (VIDEO_TEX_STRIDE * video_tex_rows(height) * 4) as usize
+}
+
+/// How long [`retire_video_texture_buffer`] waits for the video thread to
+/// finish an in-flight CSC write before deferring the free. One decode +
+/// CSC takes ~50 ms on the ME.
+const RETIRE_WAIT_MS: u32 = 150;
+
+/// Pointer to the published GU video texture buffer (null when none).
+/// Written only on the main thread by [`publish_video_texture_buffer`] /
+/// [`unpublish_video_texture_buffer`]; the video thread reads it once per
+/// frame through `acquire_video_texture`.
+pub static VIDEO_TEX_PTR: AtomicPtr<u8> = AtomicPtr::new(core::ptr::null_mut());
+/// Capacity in bytes of the buffer at `VIDEO_TEX_PTR`.
+pub static VIDEO_TEX_SIZE: AtomicUsize = AtomicUsize::new(0);
+/// Hazard pointer: the buffer the video thread is writing (null if idle).
+static VIDEO_TEX_IN_USE: AtomicPtr<u8> = AtomicPtr::new(core::ptr::null_mut());
+
+/// Publish `ptr` (`size` bytes, 16-byte aligned) as the CSC output target.
+/// Main thread only. A previously published buffer is unpublished first;
+/// retiring it is the caller's job.
+pub fn publish_video_texture_buffer(ptr: *mut u8, size: usize) {
+    VIDEO_TEX_PTR.store(core::ptr::null_mut(), Ordering::SeqCst);
+    VIDEO_TEX_SIZE.store(size, Ordering::SeqCst);
+    VIDEO_TEX_PTR.store(ptr, Ordering::SeqCst);
+}
+
+/// Stop offering the current buffer to the video thread. Main thread only.
+/// A CSC write already in flight may still land; see
+/// [`retire_video_texture_buffer`].
+pub fn unpublish_video_texture_buffer() {
+    VIDEO_TEX_PTR.store(core::ptr::null_mut(), Ordering::SeqCst);
+}
+
+/// True while the video thread may be writing into `ptr`.
+pub fn video_texture_buffer_in_use(ptr: *const u8) -> bool {
+    core::ptr::eq(VIDEO_TEX_IN_USE.load(Ordering::SeqCst), ptr)
+}
+
+/// Unpublish `ptr` (if it is the published CSC target) and wait — bounded,
+/// yielding the CPU — until the video thread no longer writes into it.
+/// Main thread only.
 ///
-/// # Safety
-///
-/// The caller must guarantee single-writer access. The video thread is
-/// the sole writer during `NalDecoder::decode`; the main thread does not
-/// touch the buffer except via the GU (which reads via DMA).
-unsafe fn video_texture_slice() -> Option<&'static mut [u8]> {
-    let ptr = VIDEO_TEX_PTR.load(Ordering::Acquire);
-    let size = VIDEO_TEX_SIZE.load(Ordering::Acquire);
-    if ptr.is_null() || size == 0 {
-        None
-    } else {
-        // SAFETY: ptr/size point at a single texture buffer owned by
-        // the texture system for the lifetime of the program.
-        Some(unsafe { core::slice::from_raw_parts_mut(ptr, size) })
+/// Returns `true` when `ptr` may be freed or reused. `false` means the video
+/// thread is still inside a decode that holds it (e.g. a hung
+/// `sceMpegAvcDecode` the watchdog has not broken yet): the caller must not
+/// free the buffer now, only later once [`video_texture_buffer_in_use`]
+/// reports `false`.
+pub fn retire_video_texture_buffer(ptr: *const u8) -> bool {
+    if core::ptr::eq(VIDEO_TEX_PTR.load(Ordering::SeqCst), ptr) {
+        unpublish_video_texture_buffer();
     }
+    for _ in 0..RETIRE_WAIT_MS {
+        if !video_texture_buffer_in_use(ptr) {
+            return true;
+        }
+        delay_us(1_000);
+    }
+    !video_texture_buffer_in_use(ptr)
+}
+
+/// Video-thread access to the published texture buffer for one CSC write.
+/// Clears the hazard pointer on drop.
+pub(crate) struct VideoTexGuard {
+    ptr: *mut u8,
+    size: usize,
+}
+
+impl VideoTexGuard {
+    /// The buffer as a mutable byte slice.
+    pub(crate) fn as_mut_slice(&mut self) -> &mut [u8] {
+        // SAFETY: `acquire_video_texture` confirmed that `ptr` was the
+        // published buffer of `size` bytes *after* setting the hazard
+        // pointer, and the main thread never frees or reuses a buffer the
+        // hazard pointer names (`retire_video_texture_buffer`). The video
+        // thread is the only CPU writer; the GE only reads it.
+        unsafe { core::slice::from_raw_parts_mut(self.ptr, self.size) }
+    }
+}
+
+impl Drop for VideoTexGuard {
+    fn drop(&mut self) {
+        VIDEO_TEX_IN_USE.store(core::ptr::null_mut(), Ordering::SeqCst);
+    }
+}
+
+/// Claim the published texture buffer for one frame's CSC write. Video
+/// thread only; call once per frame (the buffer may change between frames).
+/// Returns `None` while no buffer is published (between tunes, or for the
+/// instant the main thread swaps buffers): the caller skips the frame.
+pub(crate) fn acquire_video_texture() -> Option<VideoTexGuard> {
+    // A retry is only needed if the main thread swaps buffers between the
+    // loads; several in a row means it is busy doing so — skip the frame.
+    for _ in 0..3 {
+        let ptr = VIDEO_TEX_PTR.load(Ordering::SeqCst);
+        if ptr.is_null() {
+            return None;
+        }
+        let size = VIDEO_TEX_SIZE.load(Ordering::SeqCst);
+        VIDEO_TEX_IN_USE.store(ptr, Ordering::SeqCst);
+        if VIDEO_TEX_PTR.load(Ordering::SeqCst) == ptr
+            && VIDEO_TEX_SIZE.load(Ordering::SeqCst) == size
+            && size > 0
+        {
+            return Some(VideoTexGuard { ptr, size });
+        }
+        VIDEO_TEX_IN_USE.store(core::ptr::null_mut(), Ordering::SeqCst);
+    }
+    None
 }
 
 // ---------------------------------------------------------------------------
@@ -412,10 +527,12 @@ pub fn frame_pixels_raw(frame: &DecodedFrame) -> &[u8] {
         return &[];
     }
     let take = size.min(buf_size);
-    // SAFETY: VIDEO_TEX_PTR is a stable pointer set once when the
-    // texture is allocated and never reassigned. Single-threaded read
-    // from the main thread; the video thread is the only writer and
-    // we observe its writes via the atomic Acquire load above.
+    // SAFETY: only the main thread (the caller) publishes, retires and
+    // frees the buffer behind VIDEO_TEX_PTR, so it stays allocated for as
+    // long as the caller holds this borrow (it must not reallocate the
+    // video texture while holding it). The video thread may overwrite the
+    // bytes with the next frame; the main thread only compares the slice's
+    // address against the texture buffer and hands it to the GE.
     unsafe { core::slice::from_raw_parts(ptr, take) }
 }
 

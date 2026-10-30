@@ -4,11 +4,10 @@
 
 pub use oasis_types::tls::*;
 
-#[cfg(test)]
+#[cfg(all(test, feature = "tls-rustls"))]
 mod tests {
     use super::*;
 
-    #[cfg(feature = "tls-rustls")]
     #[test]
     fn rustls_provider_is_constructible() {
         let provider = crate::tls_rustls::RustlsTlsProvider::new();

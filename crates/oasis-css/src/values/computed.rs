@@ -21,6 +21,11 @@ use super::types::{
     TransformStyle, Transition, UserSelect, VerticalAlign, Visibility, WhiteSpace, WordBreak,
 };
 
+/// Largest computed `tab-size` (in spaces). Larger values are clamped:
+/// layout expands tabs into spaces, so an unbounded value
+/// (`tab-size: 2147483647`) would allocate gigabytes per tab.
+pub const MAX_TAB_SIZE: u32 = 100;
+
 /// Computed style for a DOM node after cascade resolution.
 ///
 /// All lengths are resolved to absolute pixels. Relative units (em, %)
@@ -235,6 +240,7 @@ pub struct ComputedStyle {
     pub will_change_promotes_layer: bool,
 
     // -- Tab size (for preformatted text) --------------------------------
+    /// `tab-size` in spaces, `1..=MAX_TAB_SIZE`.
     pub tab_size: u32,
 
     // -- Multi-column ---------------------------------------------------

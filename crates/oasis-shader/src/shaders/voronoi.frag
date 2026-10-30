@@ -1,8 +1,10 @@
 #version 300 es
 precision highp float;
 
-// Animated Voronoi cells.
-// Port of https://www.shadertoy.com/view/WdlyRS
+// Animated Voronoi cells. Port of https://www.shadertoy.com/view/WdlyRS.
+// GLSL twin of `software/cells.rs` (the CPU port every backend ships);
+// keep the two in step. The point hash is the CPU's single-sin hash
+// (the original's cos/tan chain is ~3x dearer on the CPU).
 
 uniform float u_time;
 uniform vec2 u_resolution;
@@ -13,10 +15,9 @@ uniform float u_size;
 
 out vec4 fragColor;
 
-vec2 ran(vec2 uv) {
-    uv *= vec2(dot(uv, vec2(127.1, 311.7)), dot(uv, vec2(227.1, 521.7)));
-    return 1.0 - fract(tan(cos(uv) * 123.6) * 3533.3)
-               * fract(tan(cos(uv) * 123.6) * 3533.3);
+vec2 ran(vec2 p) {
+    return fract(sin(vec2(dot(p, vec2(127.1, 311.7)),
+                          dot(p, vec2(269.5, 183.3)))) * 43758.547);
 }
 
 vec2 pt(float t, vec2 id) {
@@ -24,16 +25,14 @@ vec2 pt(float t, vec2 id) {
 }
 
 void main() {
-    float speed = u_speed > 0.0 ? u_speed : 1.0;
-    float size  = u_size  > 0.0 ? u_size  : 30.0;
-    float t = u_time * speed * 2.0;
+    // Top-left origin, y down (matches the CPU renderer).
+    vec2 fragCoord = vec2(gl_FragCoord.x, u_resolution.y - gl_FragCoord.y);
 
-    vec3 col1 = u_color1.a > 0.0 ? u_color1.rgb
-                                  : vec3(193.0, 41.0, 46.0) / 255.0;
-    vec3 col2 = u_color2.a > 0.0 ? u_color2.rgb
-                                  : vec3(241.0, 211.0, 2.0) / 255.0;
+    // A non-positive size would divide by zero: use the default.
+    float size = u_size > 0.0 ? u_size : 30.0;
+    float t = u_time * u_speed * 2.0;
 
-    vec2 uv = (gl_FragCoord.xy - 0.5 * u_resolution.xy) / u_resolution.x;
+    vec2 uv = (fragCoord - 0.5 * u_resolution.xy) / u_resolution.x;
     vec2 off = u_time / vec2(50.0, 30.0);
     uv += off;
     uv *= size;
@@ -42,19 +41,20 @@ void main() {
     vec2 id = floor(uv);
 
     float mindist = 1e9;
-    vec2 vorv;
+    vec2 vorv = vec2(0.0);
     for (float i = -1.0; i <= 1.0; i++) {
         for (float j = -1.0; j <= 1.0; j++) {
             vec2 offv = vec2(i, j);
-            float dist = length(gv + pt(t, id + offv) - offv);
+            vec2 p = pt(t, id + offv);
+            float dist = length(gv + p - offv);
             if (dist < mindist) {
                 mindist = dist;
-                vorv = (id + pt(t, id + offv) + offv) / size - off;
+                vorv = (id + p + offv) / size - off;
             }
         }
     }
 
-    vec3 col = mix(col1, col2,
+    vec3 col = mix(u_color1.rgb, u_color2.rgb,
                    clamp(vorv.x * 2.2 + vorv.y, -1.0, 1.0) * 0.5 + 0.5);
-    fragColor = vec4(col, 1.0);
+    fragColor = vec4(clamp(col, 0.0, 1.0), 1.0);
 }

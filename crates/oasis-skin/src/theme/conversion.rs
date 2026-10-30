@@ -44,6 +44,10 @@ impl SkinTheme {
             .unwrap_or_else(|| lighten(accent, 0.15));
         let accent_pressed = darken(accent, 0.85);
         let accent_subtle = with_alpha(accent, 30);
+        // Labels drawn on the accent fill (primary buttons) must stay readable
+        // even when the base text color is close to the accent (white on a
+        // bright green or cyan primary was 1.2-1.6:1 in several skins).
+        let on_accent = readable_on(text, accent, 4.5);
 
         // Border radius and shadow from extended fields.
         let radius = self.border_radius.unwrap_or(4);
@@ -79,7 +83,7 @@ impl SkinTheme {
             text_primary: text,
             text_secondary: dim,
             text_disabled: darken(dim, 0.6),
-            text_on_accent: text,
+            text_on_accent: on_accent,
 
             accent,
             accent_hover,
@@ -575,6 +579,49 @@ pub fn composite_over(fg: Color, bg: Color) -> Color {
     Color::rgb(blend(fg.r, bg.r), blend(fg.g, bg.g), blend(fg.b, bg.b))
 }
 
+/// Make a *derived* text color readable on an opaque backdrop.
+///
+/// Returns `fg` unchanged when it already reaches `min` contrast on `bg`
+/// (so every skin whose derived colors were fine stays pixel-identical).
+/// Otherwise `fg` is mixed toward whichever of black / white contrasts more
+/// with `bg`, in 5% steps, and the first opaque mix reaching `min` is
+/// returned -- the hue is kept as far as the contrast allows. Explicit skin
+/// colors are never passed through this: authors keep what they wrote, and
+/// `skin lint` reports it instead.
+pub(crate) fn readable_on(fg: Color, bg: Color, min: f64) -> Color {
+    let bg = Color::rgb(bg.r, bg.g, bg.b);
+    let opaque = composite_over(fg, bg);
+    if contrast_ratio(opaque, bg) >= min {
+        return fg;
+    }
+    let target = if contrast_ratio(Color::BLACK, bg) >= contrast_ratio(Color::WHITE, bg) {
+        Color::BLACK
+    } else {
+        Color::WHITE
+    };
+    (1..=20)
+        .map(|step| opaque.lerp(target, step as f32 / 20.0))
+        .map(|c| Color::rgb(c.r, c.g, c.b))
+        .find(|&c| contrast_ratio(c, bg) >= min)
+        .unwrap_or(target)
+}
+
+/// Effective opaque backdrop of a bar: its (possibly translucent) flat fill
+/// over the shell background, or -- for a vertical gradient -- the gradient
+/// midpoint, where the text baseline sits.
+pub(crate) fn bar_backdrop(
+    flat: Color,
+    top: Option<Color>,
+    bottom: Option<Color>,
+    background: Color,
+) -> Color {
+    let flat = composite_over(flat, background);
+    match (top, bottom) {
+        (Some(t), Some(b)) => composite_over(t, flat).lerp(composite_over(b, flat), 0.5),
+        _ => flat,
+    }
+}
+
 /// A contrast warning for a text/background color pair.
 #[derive(Debug, Clone)]
 pub struct ContrastWarning {
@@ -625,23 +672,19 @@ impl SkinTheme {
         let ui = self.to_ui_theme();
         let at = crate::active_theme::ActiveTheme::from_skin(self);
 
-        // Effective (opaque) backdrops for surfaces with alpha. Bars with
-        // a vertical gradient are measured at its midpoint, where the
-        // text baseline sits.
-        let bar_backdrop = |flat: Color, top: Option<Color>, bottom: Option<Color>| {
-            let flat = composite_over(flat, bg);
-            match (top, bottom) {
-                (Some(t), Some(b)) => composite_over(t, flat).lerp(composite_over(b, flat), 0.5),
-                _ => flat,
-            }
-        };
+        // Effective (opaque) backdrops for surfaces with alpha.
         let statusbar_bg = bar_backdrop(
             at.bar.statusbar_bg,
             at.bar.statusbar_gradient_top,
             at.bar.statusbar_gradient_bottom,
+            bg,
         );
-        let bottombar_bg = bar_backdrop(at.bar.bg, at.bar.gradient_top, at.bar.gradient_bottom);
-        let selection_bg = composite_over(at.app.selected_bg, composite_over(at.app.bg, bg));
+        let bottombar_bg = bar_backdrop(at.bar.bg, at.bar.gradient_top, at.bar.gradient_bottom, bg);
+        let app_bg = composite_over(at.app.bg, bg);
+        let selection_bg = composite_over(at.app.selected_bg, app_bg);
+        // Windowed apps draw their body text straight onto the window
+        // manager's content fill (`draw_content_windowed` paints no bg).
+        let window_bg = composite_over(self.build_wm_theme().content_bg_color, bg);
 
         let (clock_label, clock_bg) = if clock_in_bottombar {
             ("clock on bottom bar", bottombar_bg)
@@ -658,9 +701,26 @@ impl SkinTheme {
             // Base palette on the shell background.
             ("text on background", self.text_color(), bg, 4.5),
             ("dim_text on background", self.dim_text_color(), bg, 3.0),
-            ("output on background", self.output_color(), bg, 4.5),
-            ("prompt on background", self.prompt_color(), bg, 3.0),
             ("error on background", self.error_color(), bg, 3.0),
+            // The terminal draws on the app surface, not the wallpaper
+            // background (`TerminalColors::from_theme`).
+            (
+                "terminal output on app background",
+                Color::rgb(
+                    at.app.terminal_output_color.r,
+                    at.app.terminal_output_color.g,
+                    at.app.terminal_output_color.b,
+                ),
+                app_bg,
+                4.5,
+            ),
+            (
+                "terminal prompt on app background",
+                at.app.terminal_prompt_color,
+                app_bg,
+                3.0,
+            ),
+            ("app text on window content", at.app.text, window_bg, 4.5),
             // Derived widget surfaces.
             (
                 "button text on button background",

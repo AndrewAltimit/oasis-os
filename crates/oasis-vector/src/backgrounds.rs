@@ -308,16 +308,15 @@ pub fn floating_polygons(
         // Position: deterministic based on index, drifting over time
         let base_x = (w as f32 * ((i as f32 * 0.37 + 0.1) % 1.0)) as i32;
         let base_y = (h as f32 * ((i as f32 * 0.53 + 0.2) % 1.0)) as i32;
-        let dx = (clock.time_s * drift_x + phase * 10.0) as i32;
-        let dy = (clock.time_s * drift_y + phase * 7.0) as i32;
+        let dx = (clock.time_s() * drift_x + phase * 10.0) as i32;
+        let dy = (clock.time_s() * drift_y + phase * 7.0) as i32;
         let cx = (base_x + dx).rem_euclid(w as i32);
         let cy = (base_y + dy).rem_euclid(h as i32);
         let radius = 8.0 + (i as f32 * 3.7) % 12.0;
 
         let mut points = Vec::with_capacity(sides);
         for s in 0..sides {
-            let angle =
-                core::f32::consts::TAU * s as f32 / sides as f32 + clock.time_s * 0.3 + phase;
+            let angle = core::f32::consts::TAU * s as f32 / sides as f32 + clock.angle(0.3, phase);
             points.push((
                 cx + (radius * angle.cos()) as i32,
                 cy + (radius * angle.sin()) as i32,
@@ -384,7 +383,7 @@ pub fn waves(
     let time = if reduced_motion {
         0.0
     } else {
-        clock.time_s * speed
+        clock.time_s() * speed
     };
 
     // Pre-compute wave points for each row.

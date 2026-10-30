@@ -745,6 +745,105 @@ mod tests {
         assert_eq!(fr, "4 mai 2026");
     }
 
+    /// Literal keys passed to `tr!` / `translate*` in a Rust source file.
+    fn literal_keys(src: &str) -> Vec<String> {
+        const CALLS: [&str; 5] = [
+            "tr!(",
+            "translate(",
+            "translate_for(",
+            "translate_with(",
+            "translate_with_for(",
+        ];
+        let mut keys = Vec::new();
+        for call in CALLS {
+            let mut rest = src;
+            while let Some(i) = rest.find(call) {
+                // Skip longer identifiers ending in the call name
+                // (`my_translate(`) and the function definitions.
+                let prev = rest[..i].chars().next_back();
+                rest = &rest[i + call.len()..];
+                if prev.is_some_and(|c| c.is_alphanumeric() || c == '_') {
+                    continue;
+                }
+                let arg = rest.trim_start();
+                let Some(lit) = arg.strip_prefix('"') else {
+                    continue;
+                };
+                let Some(end) = lit.find('"') else {
+                    continue;
+                };
+                let key = &lit[..end];
+                let is_key = key.contains('.')
+                    && key
+                        .chars()
+                        .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || "._".contains(c));
+                if is_key {
+                    keys.push(key.to_string());
+                }
+            }
+        }
+        keys
+    }
+
+    fn rust_files(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let name = entry.file_name();
+            if path.is_dir() {
+                if name != "target" && name != "fuzz" {
+                    rust_files(&path, out);
+                }
+            } else if path.extension().is_some_and(|e| e == "rs") {
+                out.push(path);
+            }
+        }
+    }
+
+    #[test]
+    fn test_literal_keys_parser() {
+        let src = r#"tr!("a.b"); translate_for( "c.d", l); my_translate("x.y"); tr!(k)"#;
+        assert_eq!(literal_keys(src), ["a.b", "c.d"]);
+    }
+
+    /// Every literal key the workspace looks up exists in `en.toml` (the
+    /// fallback catalogue), so no UI ever shows a raw `section.key`.
+    #[test]
+    fn test_every_key_used_in_code_exists_in_english() {
+        let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let crates_dir = manifest.parent().expect("crates/ dir");
+        let mut files = Vec::new();
+        rust_files(crates_dir, &mut files);
+        let files: Vec<_> = files
+            .into_iter()
+            .filter(|f| !f.starts_with(manifest))
+            .collect();
+        assert!(files.len() > 50, "workspace sources not found");
+        let en_map = CATALOG.locales.get(&Locale::English).expect("en catalog");
+        let mut missing = Vec::new();
+        let mut seen = 0usize;
+        // (This crate's own files are skipped: its tests use made-up keys.)
+        for file in files {
+            let Ok(src) = std::fs::read_to_string(&file) else {
+                continue;
+            };
+            for key in literal_keys(&src) {
+                seen += 1;
+                if !en_map.contains_key(&key) {
+                    missing.push(format!("{}: {key}", file.display()));
+                }
+            }
+        }
+        assert!(seen > 20, "expected to find translated call sites");
+        assert!(
+            missing.is_empty(),
+            "keys missing from en.toml:\n{}",
+            missing.join("\n")
+        );
+    }
+
     #[test]
     fn test_all_en_keys_present_in_all_locales() {
         let catalog = &*CATALOG;

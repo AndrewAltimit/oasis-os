@@ -8,9 +8,28 @@ use oasis_vfs::Vfs;
 /// - Single-quoted strings preserve all characters literally.
 /// - Double-quoted strings allow `$VAR` expansion (done before tokenize).
 /// - Backslash escapes the next character outside of quotes.
+/// - A quoted empty string (`""`, `''`) is an (empty) word.
 pub fn tokenize(input: &str) -> Result<Vec<String>> {
+    Ok(tokenize_words(input)?.into_iter().map(|w| w.text).collect())
+}
+
+/// One word of a command line after quote removal.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Word {
+    /// The text with quotes and escapes removed.
+    pub(crate) text: String,
+    /// Some part of the word was quoted or escaped, so it is not subject to
+    /// brace / glob expansion or alias lookup.
+    pub(crate) quoted: bool,
+}
+
+/// [`tokenize`], keeping track of which words were quoted.
+pub(crate) fn tokenize_words(input: &str) -> Result<Vec<Word>> {
     let mut tokens = Vec::new();
     let mut current = String::new();
+    // The current word has begun (it may be empty: `""`).
+    let mut started = false;
+    let mut quoted = false;
     let mut chars = input.chars().peekable();
     let mut in_single = false;
     let mut in_double = false;
@@ -45,19 +64,33 @@ pub fn tokenize(input: &str) -> Result<Vec<String>> {
             }
         } else {
             match ch {
-                '\'' => in_single = true,
-                '"' => in_double = true,
+                '\'' | '"' => {
+                    in_single = ch == '\'';
+                    in_double = ch == '"';
+                    started = true;
+                    quoted = true;
+                },
                 '\\' => {
                     if let Some(next) = chars.next() {
                         current.push(next);
                     }
+                    started = true;
+                    quoted = true;
                 },
                 c if c.is_whitespace() => {
-                    if !current.is_empty() {
-                        tokens.push(std::mem::take(&mut current));
+                    if started {
+                        tokens.push(Word {
+                            text: std::mem::take(&mut current),
+                            quoted,
+                        });
                     }
+                    started = false;
+                    quoted = false;
                 },
-                _ => current.push(ch),
+                _ => {
+                    current.push(ch);
+                    started = true;
+                },
             }
         }
     }
@@ -69,11 +102,29 @@ pub fn tokenize(input: &str) -> Result<Vec<String>> {
         return Err(OasisError::Command("unterminated double quote".into()));
     }
 
-    if !current.is_empty() {
-        tokens.push(current);
+    if started {
+        tokens.push(Word {
+            text: current,
+            quoted,
+        });
     }
 
     Ok(tokens)
+}
+
+/// Brace- then glob-expand the unquoted words; quoted words pass through
+/// verbatim.
+pub(crate) fn expand_words(words: Vec<Word>, vfs: &mut dyn Vfs, cwd: &str) -> Vec<String> {
+    let mut out = Vec::with_capacity(words.len());
+    for word in words {
+        if word.quoted {
+            out.push(word.text);
+        } else {
+            let braced = expand_braces(std::slice::from_ref(&word.text));
+            out.extend(expand_globs(&braced, vfs, cwd));
+        }
+    }
+    out
 }
 
 /// Expand brace patterns (`{a,b,c}`) in tokens.
@@ -96,14 +147,21 @@ pub(crate) fn expand_braces(tokens: &[String]) -> Vec<String> {
 /// Maximum nesting depth for brace expansion to prevent stack overflow.
 const MAX_BRACE_DEPTH: usize = 16;
 
+/// Maximum words one token may brace-expand to. `{0,1,...,9}` repeated
+/// eight times would otherwise produce 10^8 strings.
+const MAX_BRACE_RESULTS: usize = 4096;
+
 /// Expand a single brace expression. Returns `None` if no valid brace
-/// pattern is found.
+/// pattern is found, or if the expansion would exceed
+/// [`MAX_BRACE_RESULTS`] words (the token is then left as-is).
 fn expand_one_brace(token: &str) -> Option<Vec<String>> {
-    expand_one_brace_inner(token, 0)
+    let mut budget = MAX_BRACE_RESULTS;
+    let result = expand_one_brace_inner(token, 0, &mut budget)?;
+    (budget > 0).then_some(result)
 }
 
-fn expand_one_brace_inner(token: &str, depth: usize) -> Option<Vec<String>> {
-    if depth >= MAX_BRACE_DEPTH {
+fn expand_one_brace_inner(token: &str, depth: usize, budget: &mut usize) -> Option<Vec<String>> {
+    if depth >= MAX_BRACE_DEPTH || *budget == 0 {
         return None;
     }
     let open = token.find('{')?;
@@ -120,11 +178,15 @@ fn expand_one_brace_inner(token: &str, depth: usize) -> Option<Vec<String>> {
     let parts: Vec<&str> = alternatives.split(',').collect();
     let mut result = Vec::with_capacity(parts.len());
     for part in parts {
+        if *budget == 0 {
+            return Some(result);
+        }
         let expanded = format!("{prefix}{part}{suffix}");
         // Recursively expand nested braces in the suffix.
-        if let Some(nested) = expand_one_brace_inner(&expanded, depth + 1) {
+        if let Some(nested) = expand_one_brace_inner(&expanded, depth + 1, budget) {
             result.extend(nested);
-        } else {
+        } else if *budget > 0 {
+            *budget -= 1;
             result.push(expanded);
         }
     }

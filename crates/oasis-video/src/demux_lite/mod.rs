@@ -118,7 +118,7 @@ impl TrackInfo {
         if stss.is_empty() {
             return idx;
         }
-        let one_based = u32::try_from(idx + 1).unwrap_or(u32::MAX);
+        let one_based = u32::try_from(idx.saturating_add(1)).unwrap_or(u32::MAX);
         match stss.binary_search(&one_based) {
             Ok(_) => idx,
             Err(0) => (stss[0] as usize).saturating_sub(1),
@@ -162,7 +162,7 @@ impl TrackInfo {
     ///
     /// Useful for pre-allocating buffers on memory-constrained platforms.
     pub fn max_sample_size(&self) -> u32 {
-        self.table.stsz.iter().copied().max().unwrap_or(0)
+        self.table.stsz.max()
     }
 }
 
@@ -173,6 +173,14 @@ pub struct RawSample {
     pub timestamp_secs: f64,
     pub is_keyframe: bool,
     pub kind: TrackKind,
+}
+
+/// Build the lookup index of every parsed track (see
+/// [`SampleTable::finalize`]).
+fn finalize_tracks(video: &mut Option<TrackInfo>, audio: &mut Option<TrackInfo>) {
+    for track in [video, audio].into_iter().flatten() {
+        track.table.finalize();
+    }
 }
 
 /// Lightweight MP4 parser.
@@ -201,6 +209,7 @@ impl<R: Read + Seek> Mp4Lite<R> {
             &mut video_track,
             &mut audio_track,
         )?;
+        finalize_tracks(&mut video_track, &mut audio_track);
 
         Ok(Self {
             reader,
@@ -295,6 +304,7 @@ pub fn parse_moov_tracks(
     let mut video = None;
     let mut audio = None;
     parse_boxes(&mut cursor, 8, moov_len, &mut video, &mut audio)?;
+    finalize_tracks(&mut video, &mut audio);
     Ok((video, audio))
 }
 
@@ -795,6 +805,147 @@ mod tests {
             let (aoff, _) = audio.sample_offset_size(a).unwrap();
             assert!(p.min_byte <= voff && p.min_byte <= aoff, "secs={secs}");
             assert_eq!(seek_byte_from_moov(&moov, secs), Some(p.min_byte));
+        }
+    }
+
+    // ---------------------------------------------------------------
+    // Fuzz-like robustness: truncated and bit-flipped real files
+    // ---------------------------------------------------------------
+
+    fn streaming_fixtures() -> Vec<(String, Vec<u8>)> {
+        let dir =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/streaming");
+        let mut out = vec![("test_320x240_2s.mp4".to_string(), fixture_bytes())];
+        for entry in std::fs::read_dir(dir).expect("streaming fixtures missing") {
+            let path = entry.unwrap().path();
+            if path.extension().is_some_and(|e| e == "mp4") {
+                let name = path.file_name().unwrap().to_string_lossy().into_owned();
+                out.push((name, std::fs::read(&path).unwrap()));
+            }
+        }
+        out
+    }
+
+    /// Drive every public entry point over `data`; must never panic, hang
+    /// or allocate wildly (errors are fine).
+    fn exercise(data: &[u8]) {
+        if let Ok(mut mp4) = Mp4Lite::open(Cursor::new(data)) {
+            for _ in 0..64 {
+                if !matches!(mp4.next_video_sample(), Ok(Some(_))) {
+                    break;
+                }
+            }
+            for _ in 0..64 {
+                if !matches!(mp4.next_audio_sample(), Ok(Some(_))) {
+                    break;
+                }
+            }
+            for secs in [-1.0, 0.0, 0.7, 1e12, f64::NAN, f64::INFINITY] {
+                mp4.seek(secs).unwrap();
+                let _ = mp4.next_video_sample();
+                let _ = mp4.next_audio_sample();
+            }
+            for track in [mp4.video_track_info(), mp4.audio_track_info()]
+                .into_iter()
+                .flatten()
+            {
+                let n = track.sample_count();
+                for idx in [0, n / 2, n.saturating_sub(1), n, usize::MAX] {
+                    let _ = track.sample_offset_size(idx);
+                    let _ = track.sample_timestamp(idx);
+                    let _ = track.keyframe_at_or_before(idx);
+                    let _ = track.sample_seek_time(idx);
+                }
+                let _ = track.keyframe_times();
+                let _ = track.sample_at_decode_time(f64::MAX);
+            }
+        }
+        let _ = seek_point_from_moov(data, 1.0);
+    }
+
+    /// The bytes of the moov atom (header included), if `data` has one.
+    fn moov_of(data: &[u8]) -> Option<&[u8]> {
+        let mut pos = 0usize;
+        while pos + 8 <= data.len() {
+            let size = u32::from_be_bytes(data[pos..pos + 4].try_into().unwrap()) as usize;
+            if size < 8 {
+                return None;
+            }
+            if &data[pos + 4..pos + 8] == b"moov" {
+                return data.get(pos..pos + size);
+            }
+            pos += size;
+        }
+        None
+    }
+
+    #[test]
+    fn every_fixture_reads_all_samples() {
+        for (name, data) in streaming_fixtures() {
+            let mut mp4 = Mp4Lite::open(Cursor::new(&data)).unwrap();
+            let counts = (
+                mp4.video_track_info().map_or(0, TrackInfo::sample_count),
+                mp4.audio_track_info().map_or(0, TrackInfo::sample_count),
+            );
+            assert!(counts.0 + counts.1 > 0, "{name}: no samples");
+            let mut read = (0, 0);
+            if counts.0 > 0 {
+                while mp4.next_video_sample().unwrap().is_some() {
+                    read.0 += 1;
+                }
+            }
+            if counts.1 > 0 {
+                while mp4.next_audio_sample().unwrap().is_some() {
+                    read.1 += 1;
+                }
+            }
+            assert_eq!(read, counts, "{name}");
+        }
+    }
+
+    #[test]
+    fn truncated_fixtures_never_panic() {
+        for (_, data) in streaming_fixtures() {
+            // Every prefix of the moov (the dense part), then coarser steps
+            // over the whole file.
+            if let Some(moov) = moov_of(&data) {
+                for len in 0..moov.len() {
+                    let _ = parse_moov_tracks(&moov[..len]);
+                }
+            }
+            for len in (0..data.len()).step_by(97) {
+                exercise(&data[..len]);
+            }
+        }
+    }
+
+    #[test]
+    fn bit_flipped_fixtures_never_panic() {
+        // Deterministic xorshift so failures reproduce.
+        let mut state = 0x9E37_79B9_7F4A_7C15u64;
+        let mut next = move || {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            state
+        };
+        for (_, data) in streaming_fixtures() {
+            let Some(moov) = moov_of(&data) else { continue };
+            let moov_start = moov.as_ptr() as usize - data.as_ptr() as usize;
+            let moov_len = moov.len();
+            for _ in 0..300 {
+                let mut mutated = data.clone();
+                for _ in 0..1 + next() % 4 {
+                    // Mostly hit the moov, where every byte is structure.
+                    let pos = if next() % 4 == 0 {
+                        next() as usize % mutated.len()
+                    } else {
+                        moov_start + next() as usize % moov_len
+                    };
+                    mutated[pos] ^= 1 << (next() % 8);
+                }
+                exercise(&mutated);
+            }
         }
     }
 }

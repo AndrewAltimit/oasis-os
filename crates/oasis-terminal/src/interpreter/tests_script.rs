@@ -1300,3 +1300,33 @@ fn status_wrapper_never_reaches_the_host() {
     let piped = assert_text!(reg.execute("fails | wc -c", &mut env).unwrap());
     assert!(piped.contains('4'), "{piped}");
 }
+
+#[test]
+fn command_budget_resets_for_jobs_scripts_and_inline_flow() {
+    let mut reg = CommandRegistry::new();
+    reg.register(Box::new(EchoCmd));
+    let mut vfs = MemoryVfs::new();
+    let mut env = make_env(&mut vfs);
+    let exhausted = crate::types::MAX_COMMANDS_PER_LINE + 1;
+
+    // A job queued earlier runs with a fresh budget.
+    reg.execute("echo job &", &mut env).unwrap();
+    reg.commands_run.set(exhausted);
+    let out = reg.poll_jobs(&mut env).unwrap();
+    assert!(format!("{out:?}").contains("job"), "{out:?}");
+    assert!(!format!("{out:?}").contains("limit"), "{out:?}");
+
+    // So does script source run directly by a host.
+    reg.commands_run.set(exhausted);
+    let lines = reg.run_script_source("echo script", &mut env).unwrap();
+    assert_eq!(lines, ["script"]);
+
+    // And inline control flow run through the facade.
+    reg.commands_run.set(exhausted);
+    let out =
+        crate::control_flow::parse_and_execute("for x in a; do echo $x; done", &reg, &mut env);
+    assert!(
+        matches!(out, Some(Ok(CommandOutput::Text(ref t))) if t == "a"),
+        "{out:?}"
+    );
+}

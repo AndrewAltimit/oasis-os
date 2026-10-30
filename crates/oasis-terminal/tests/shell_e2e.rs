@@ -844,6 +844,19 @@ fn many_background_jobs_drain_in_order() {
     assert_eq!(data.lines().collect::<Vec<_>>(), expected);
 }
 
+#[test]
+fn pending_background_jobs_are_capped() {
+    let mut sh = Shell::memory();
+    for i in 0..64 {
+        sh.ok(&format!("echo {i} &"));
+    }
+    let err = sh.run("echo overflow &").unwrap_err();
+    assert!(err.contains("too many background jobs"), "{err}");
+    // Draining one frees a slot.
+    assert!(sh.tick().is_some());
+    sh.ok("echo again &");
+}
+
 // ---------------------------------------------------------------------------
 // File workflows
 // ---------------------------------------------------------------------------
@@ -1049,4 +1062,145 @@ fn memory_vfs_dotdot_clamps_at_root() {
     assert_eq!(sh.ok("cat ../../../../../tmp/x.txt"), "clamp");
     sh.ok("cd ../../../../..");
     assert_eq!(sh.ok("pwd"), "/");
+}
+
+// ---------------------------------------------------------------------------
+// Parser / expansion hardening (regressions)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn single_quotes_suppress_variable_and_substitution_expansion() {
+    let mut sh = Shell::memory();
+    assert_eq!(sh.ok("echo '$HOME'"), "$HOME");
+    assert_eq!(sh.ok("echo '$(echo hi)'"), "$(echo hi)");
+    assert_eq!(sh.ok("echo \"$HOME\""), "/home");
+    assert_eq!(sh.ok("echo \\$HOME"), "$HOME");
+    // An apostrophe inside double quotes does not open a single quote.
+    assert_eq!(sh.ok("echo \"don't $(echo stop)\""), "don't stop");
+}
+
+#[test]
+fn operators_inside_substitution_do_not_split_the_line() {
+    let mut sh = Shell::memory();
+    sh.cwd = "/home/user".into();
+    sh.ok("touch a.txt");
+    sh.ok("touch b.txt");
+    assert_eq!(sh.ok("echo n=$(ls | wc -l)").trim(), "n=2");
+    // Substituted output is word-split, as in POSIX shells.
+    assert_eq!(sh.ok("echo $(echo a; echo b)"), "a b");
+    sh.ok("write in.txt from-file");
+    assert_eq!(sh.ok("echo $(wc -l < in.txt)").trim(), "1");
+    // An escaped `>` is an argument, not a redirection.
+    assert_eq!(sh.ok("echo a \\> b"), "a > b");
+    assert!(!sh.vfs.exists("/home/user/b"));
+}
+
+#[test]
+fn quoted_words_keep_globs_braces_and_empty_strings() {
+    let mut sh = Shell::memory();
+    sh.cwd = "/home/user".into();
+    sh.ok("touch x.txt");
+    assert_eq!(sh.ok("echo \"*.txt\""), "*.txt");
+    assert_eq!(sh.ok("echo '{a,b}'"), "{a,b}");
+    assert_eq!(sh.ok("echo {a,b}"), "a b");
+    assert_eq!(sh.ok("echo *.txt"), "/home/user/x.txt");
+    assert_eq!(sh.ok("echo \"\" x"), " x");
+}
+
+#[test]
+fn piped_and_redirected_stdin_does_not_leak() {
+    let mut sh = Shell::memory();
+    sh.cwd = "/home/user".into();
+    sh.ok("write f.txt one");
+    // After the pipeline, `wc -l` has no stdin: it must not count "hi".
+    let out = sh.run("echo hi | grep h; wc -l");
+    assert!(
+        out.as_ref().is_ok_and(|t| t.ends_with(
+            "
+0"
+        )),
+        "{out:?}"
+    );
+    let out = sh.run("wc -l < f.txt; wc -l");
+    assert!(
+        out.as_ref()
+            .map_or(true, |t| t.lines().filter(|l| l.trim() == "1").count() == 1),
+        "{out:?}"
+    );
+}
+
+#[test]
+fn malformed_pipes_and_redirects_are_syntax_errors() {
+    let mut sh = Shell::memory();
+    sh.cwd = "/home/user".into();
+    assert!(sh.run("echo a | | cat").is_err());
+    assert!(sh.run("echo a |").is_err());
+    assert!(sh.run("echo hi >").is_err());
+    // The cwd was not clobbered by an empty redirect target.
+    assert_eq!(
+        sh.vfs.stat("/home/user").unwrap().kind,
+        oasis_vfs::EntryKind::Directory
+    );
+}
+
+#[test]
+fn alias_keeps_inner_quotes() {
+    let mut sh = Shell::memory();
+    sh.ok("alias g='echo \"hi there\"'");
+    assert_eq!(sh.ok("g"), "hi there");
+}
+
+#[test]
+fn runaway_scripts_are_bounded() {
+    // Same 1 MiB stack as a Windows host main thread.
+    std::thread::Builder::new()
+        .stack_size(1 << 20)
+        .spawn(runaway_scripts_are_bounded_inner)
+        .unwrap()
+        .join()
+        .unwrap();
+}
+
+fn runaway_scripts_are_bounded_inner() {
+    let mut sh = Shell::memory();
+    // Doubling a variable stops at the size cap instead of exhausting memory.
+    sh.ok("set x=ab");
+    let text = sh
+        .run("while true; do set x=$x$x; done")
+        .unwrap_or_else(|e| e);
+    assert!(text.contains("too long"), "{text}");
+    assert!(sh.reg.get_variable("x").unwrap().len() <= 64 * 1024);
+    // Nested loops (1000^3 iterations) stop at the per-line command budget.
+    let start = std::time::Instant::now();
+    let text = sh
+        .run("while true; do while true; do while true; do echo; done; done; done")
+        .unwrap_or_else(|e| e);
+    assert!(
+        text.contains("command limit"),
+        "{}",
+        &text[text.len().saturating_sub(200)..]
+    );
+    assert!(start.elapsed() < std::time::Duration::from_secs(120));
+    // The next line has a fresh budget.
+    assert_eq!(sh.ok("echo alive"), "alive");
+    // Brace expansion past the result cap stays literal.
+    let bomb = "{0,1,2,3,4,5,6,7,8,9}".repeat(8);
+    assert_eq!(sh.ok(&format!("echo {bomb}")), bomb);
+    // Deeply nested blocks and substitutions are errors, not stack overflows.
+    let deep_if = "if true; then ".repeat(200) + "echo x" + &"; fi".repeat(200);
+    assert!(sh.run(&deep_if).is_err());
+    let deep_subst = "$(echo ".repeat(300) + "x" + &")".repeat(300);
+    let _ = sh.run(&format!("echo {deep_subst}"));
+    assert_eq!(sh.ok("echo alive"), "alive");
+}
+
+#[test]
+fn run_passes_script_arguments() {
+    let mut sh = Shell::memory();
+    sh.vfs
+        .write("/tmp/greet.sh", b"echo hello $1 and $2 ($#)")
+        .unwrap();
+    assert_eq!(sh.ok("run /tmp/greet.sh ann bob"), "hello ann and bob (2)");
+    // The caller's positional parameters are restored afterwards.
+    assert_eq!(sh.ok("echo [$1]"), "[]");
 }

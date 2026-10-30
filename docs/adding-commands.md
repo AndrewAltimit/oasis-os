@@ -122,12 +122,8 @@ impl Command for WordCountCmd {
             OasisError::Command("usage: wc <path>".to_string())
         })?;
 
-        // Resolve relative paths against cwd.
-        let full_path = if path.starts_with('/') {
-            path.to_string()
-        } else {
-            format!("{}/{path}", env.cwd)
-        };
+        // Resolve relative paths (and `.` / `..`) against cwd.
+        let full_path = crate::resolve_path(&env.cwd, path);
 
         let data = env.vfs.read(&full_path)?;
         let text = String::from_utf8_lossy(&data);
@@ -152,9 +148,23 @@ pub fn register_my_commands(reg: &mut crate::CommandRegistry) {
 }
 ```
 
+For small commands the `define_command!` / `register_commands!` macros
+(`command_macro.rs`) generate the struct, the `Command` impl and the
+registration function; the closure returns `oasis_terminal::CommandResult`
+(`Result<CommandOutput>`):
+
+```rust
+oasis_terminal::define_command!(
+    WhoamiCmd, "whoami", "Print current user name", "whoami", "system",
+    |_args, _env| { Ok(CommandOutput::Text("oasis".to_string())) }
+);
+oasis_terminal::register_commands!(register_my_commands, [WhoamiCmd]);
+```
+
 ### Step 3: Wire It Into the Module System
 
-Add your module to `crates/oasis-terminal/src/lib.rs`:
+Add your module to `crates/oasis-terminal/src/lib.rs` (command modules are
+private; only their `register_*` function is part of the crate API):
 
 ```rust
 mod my_commands;
@@ -208,6 +218,19 @@ executor dispatches from it before the command map, and `help`, `which`
 and tab completion read it, so adding a builtin is one table entry plus
 its `CommandRegistry` method. Builtins always win: registering a command
 with a builtin's name has no effect.
+
+### Conventions
+
+- Wrong usage returns `Err(OasisError::Command("usage: <usage line>"))`
+  (`require_args` / `require_args_exact` in `cmd_helpers.rs` build it);
+  any other failure is an `Err` too, never `Ok(Text("error: ..."))`. The
+  executor turns an `Err` into exit status 1 (`$?`, `&&` / `||`, `if`);
+  return `CommandOutput::Status { code, output }` for a non-zero status
+  that still prints something.
+- `env.stdin` holds the previous pipeline stage's output (or a `< file`
+  redirect) for this command only; read it, don't rely on it persisting.
+- Commands run inside the host's frame: no blocking I/O, and loop bounds
+  must come from the input, not from user-controlled counts without a cap.
 
 ---
 
@@ -280,10 +303,19 @@ mod tests {
 
 The interpreter handles these before your `execute()` is called:
 
-- **Argument parsing** -- quoted strings, escape sequences
-- **Variable expansion** -- `$HOME`, `$USER`, `$?` (last exit code)
-- **Glob expansion** -- `*.txt` expanded against VFS
-- **Alias resolution** -- user-defined aliases
-- **Piping** -- `cat file.txt | wc` sets `env.stdin`
-- **Command chaining** -- `cmd1 ; cmd2` and `cmd1 && cmd2`
+- **Argument parsing** -- quoted strings, escape sequences; `""` is an
+  empty argument
+- **Variable expansion** -- `$HOME`, `$USER`, `$?` (last exit code); not
+  inside `'...'` or after a backslash
+- **Command substitution** -- `$(cmd)`, nested, word-split
+- **Glob and brace expansion** -- `*.txt`, `{a,b}` expanded against the VFS
+  for unquoted words only (`"*.txt"` stays literal)
+- **Alias resolution** -- user-defined aliases (unquoted first word)
+- **Piping and redirection** -- `cat file.txt | wc` sets `env.stdin`;
+  `< file`, `>`, `>>`, `2>`, `2>&1`
+- **Command chaining** -- `cmd1 ; cmd2`, `cmd1 && cmd2`, `cmd1 || cmd2`
 - **History** -- all commands are recorded for up-arrow recall
+- **Limits** -- a line may run at most 100,000 simple commands (across
+  loops, functions and scripts), expand to at most 256 KiB, and nest
+  `execute` 96 deep / blocks 64 deep; variables set by `set` / `local` are
+  capped at 64 KiB (4096 variables); at most 64 background jobs wait

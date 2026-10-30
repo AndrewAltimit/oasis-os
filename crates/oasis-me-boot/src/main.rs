@@ -55,8 +55,15 @@ fn psp_main() {
         let me_boot: unsafe extern "C" fn(i32) -> i32 = unsafe { core::mem::transmute(ptr) };
 
         // Clear K1 protection bits (like pspSdkSetK1(0) in cooleyesBridge).
+        // SAFETY: `set_k1` only swaps $k1 (the asm above touches no memory).
+        // This PRX runs in kernel mode, where $k1 = 0 is a legal value; the
+        // previous value is restored right after the call below.
         let old_k1 = unsafe { set_k1(0) };
+        // SAFETY: `me_boot` is the resolved sceMeBootStart660 entry point, whose
+        // contract is `int (int mebooterType)`; 0 is a valid booter type and K1 is
+        // cleared as the driver requires.
         let ret = unsafe { me_boot(0) }; // mebooterType = 0
+        // SAFETY: restores the caller's $k1 saved above; no memory is touched.
         unsafe {
             set_k1(old_k1);
         }
@@ -70,6 +77,9 @@ fn psp_main() {
 
 /// Write a log message + hex value to the EBOOT's log file.
 fn log_result(prefix: &[u8], val: u32) {
+    // SAFETY: the path is a NUL-terminated literal; every sceIoWrite gets a
+    // pointer/length pair from a live slice or local array, and the fd is only
+    // used (and closed once) after sceIoOpen returned a non-negative UID.
     unsafe {
         let fd = psp::sys::sceIoOpen(
             b"ms0:/PSP/GAME/OASISOS/eboot.log\0".as_ptr(),
@@ -99,6 +109,8 @@ fn log_result(prefix: &[u8], val: u32) {
 }
 
 fn log_msg(msg: &[u8]) {
+    // SAFETY: as in `log_result`: NUL-terminated path, slice-backed write
+    // buffers, and the fd is used only after a successful open.
     unsafe {
         let fd = psp::sys::sceIoOpen(
             b"ms0:/PSP/GAME/OASISOS/eboot.log\0".as_ptr(),

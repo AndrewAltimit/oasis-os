@@ -10,7 +10,7 @@
 
 use oasis_types::backend::Color;
 
-use super::computed::ComputedStyle;
+use super::computed::{ComputedStyle, MAX_TAB_SIZE};
 use super::grid::{
     parse_grid_area, parse_grid_auto_flow, parse_grid_auto_tracks, parse_grid_line_pair,
     parse_grid_line_value, parse_grid_template,
@@ -1473,7 +1473,9 @@ impl ComputedStyle {
             // -- Tab size ---------------------------------------------------
             "tab-size" => {
                 if let CssValue::Number(n) = value {
-                    self.tab_size = (*n as u32).max(1);
+                    // Clamped so a hostile `tab-size` cannot make tab expansion
+                    // in layout allocate gigabytes of spaces.
+                    self.tab_size = (*n as u32).clamp(1, MAX_TAB_SIZE);
                 }
             },
 

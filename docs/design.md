@@ -501,7 +501,7 @@ OASIS uses a two-binary design on PSP, inspired by IRShell and similar shells th
 | Binary | Crate | Mode | Purpose |
 |--------|-------|------|---------|
 | EBOOT.PBP | `oasis-backend-psp` | User | Full shell (dashboard, terminal, browser, apps) |
-| PRX | `oasis-plugin-psp` | Kernel | Lightweight overlay + background music, <64 KB |
+| PRX | `oasis-plugin-psp` | Kernel | Lightweight overlay + background music, ~153 KB stripped PRX |
 
 The PRX is loaded by custom firmware at boot via a `PLUGINS.TXT` entry and stays resident when games launch. It patches `sceDisplaySetFrameBuf` via `sctrlHENPatchSyscall` and draws its overlay into the game's framebuffer after each frame. It uses static buffers (no heap on the overlay path) and shares state between the display hook and its audio / config threads through atomics. Background audio streams MP3 files from `ms0:/MUSIC/` through the hardware decoder. A kernel watchdog in the PRX also recovers the EBOOT's ME video decode from a firmware deadlock.
 
@@ -691,11 +691,11 @@ OASIS_OS supports runtime-extensible functionality through plugins: Rust types i
 
 ### 15.1 Widgets
 
-`oasis-ui` provides 29 types implementing the `Widget` trait (`measure` + `draw` against a theme-aware `DrawContext`) plus non-`Widget` helpers (ListView, MenuBar, NinePatch, IconAtlas, flex/grid layout, focus management, tweens; easing curves come from `oasis_types::easing`). The catalogue with source paths is [ui-widgets.md](ui-widgets.md).
+`oasis-ui` provides 27 types implementing the `Widget` trait (`measure` + `draw` against a theme-aware `DrawContext`) plus non-`Widget` helpers (ListView, MenuBar, NinePatch, flex/grid layout, focus management, tweens; easing curves come from `oasis_types::easing`). The catalogue with source paths is [ui-widgets.md](ui-widgets.md).
 
 ### 15.2 Accessibility
 
-`oasis-ui/src/accessibility.rs` provides `AccessibilityLabel` (label, description, role), `relative_luminance()` and `contrast_ratio()` per WCAG 2.0, and `meets_wcag_aa()` / `meets_wcag_aaa()` (4.5:1 / 7:1). The High Contrast skin is designed to meet WCAG AAA contrast.
+WCAG contrast math lives in `oasis_types::color` (`relative_luminance()`, `contrast_ratio()`, `meets_wcag_aa()` / `meets_wcag_aa_large()`); `skin lint` and the skin tests use it to check every built-in skin's text/background pairs, and the High Contrast skin is designed to meet WCAG AAA (7:1). Keyboard-only operation goes through `oasis_ui::focus` (Tab / Shift-Tab cycling and arrow-key spatial navigation with a theme-styled focus ring).
 
 ---
 

@@ -10,21 +10,51 @@ use oasis_types::backend::Color;
 use oasis_types::easing::ease_out_cubic;
 
 /// Unified animation time source bridging frame-counter and time-based worlds.
-#[derive(Debug, Clone)]
+///
+/// Time accumulates in `f64` seconds: an `f32` accumulator loses the
+/// 1/60 s frame step after a few days of uptime (at 2^18 s its spacing is
+/// 1/32 s, so every tick rounds to a double step and animations run at
+/// twice their speed). The oscillators also evaluate their phase in
+/// `f64` and only narrow the final value.
+#[derive(Debug, Clone, Default)]
 pub struct AnimClock {
-    /// Monotonic seconds since start.
-    pub time_s: f32,
-    /// Frame counter (backward compatibility with existing frame-based animations).
-    pub frame: u32,
+    time_s: f64,
+    frame: u32,
 }
 
 impl AnimClock {
     /// Create a new clock at time zero.
     pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Seconds since the clock started (narrowed to `f32`; use the
+    /// oscillators for long-running periodic values).
+    pub fn time_s(&self) -> f32 {
+        self.time_s as f32
+    }
+
+    /// Frames ticked so far (wraps at `u32::MAX`).
+    pub fn frame(&self) -> u32 {
+        self.frame
+    }
+
+    /// A clock positioned at `frame` of a fixed 60 fps timeline (time is
+    /// derived in `f64`, so frame counters of any age stay exact).
+    pub fn from_frame(frame: u32) -> Self {
         Self {
-            time_s: 0.0,
-            frame: 0,
+            time_s: f64::from(frame) / 60.0,
+            frame,
         }
+    }
+
+    /// Rotation angle in radians for a constant angular speed
+    /// (`rad_per_s`), plus `phase`. The accumulated turn is reduced modulo
+    /// a full turn in `f64` first, so the result stays precise (and small)
+    /// for any uptime; trig of the result equals trig of the raw product.
+    pub fn angle(&self, rad_per_s: f32, phase: f32) -> f32 {
+        let turn = (self.time_s * f64::from(rad_per_s)).rem_euclid(core::f64::consts::TAU);
+        (turn + f64::from(phase)) as f32
     }
 
     /// Advance by one frame at 60fps.
@@ -36,12 +66,15 @@ impl AnimClock {
     /// Advance by a delta time in milliseconds.
     pub fn tick_dt(&mut self, dt_ms: u32) {
         self.frame = self.frame.wrapping_add(1);
-        self.time_s += dt_ms as f32 / 1000.0;
+        self.time_s += f64::from(dt_ms) / 1000.0;
     }
 
     /// Sine wave oscillator returning -1..1.
     pub fn sine(&self, freq: f32, phase: f32) -> f32 {
-        (self.time_s * freq * core::f32::consts::TAU + phase).sin()
+        // Reduce the cycle count to [0, 1) in f64 before scaling to radians
+        // so the argument stays small however long the clock has run.
+        let cycles = (self.time_s * f64::from(freq)).rem_euclid(1.0);
+        (cycles * core::f64::consts::TAU + f64::from(phase)).sin() as f32
     }
 
     /// Sine wave oscillator returning 0..1.
@@ -56,13 +89,9 @@ impl AnimClock {
         }
         // `rem_euclid`, not `%` + `abs`: a negative phase must wrap to the
         // far end of the ramp, not mirror back onto it.
-        (self.time_s / period_s + phase).rem_euclid(1.0)
-    }
-}
-
-impl Default for AnimClock {
-    fn default() -> Self {
-        Self::new()
+        let v = (self.time_s / f64::from(period_s) + f64::from(phase)).rem_euclid(1.0) as f32;
+        // Narrowing can round 0.999.. up to 1.0; keep the ramp half-open.
+        if v >= 1.0 { 0.0 } else { v }
     }
 }
 
@@ -100,7 +129,9 @@ pub fn rotate_point(px: i32, py: i32, cx: i32, cy: i32, angle: f32) -> (i32, i32
     let (sin, cos) = (angle.sin(), angle.cos());
     let rx = dx * cos - dy * sin;
     let ry = dx * sin + dy * cos;
-    (cx + rx as i32, cy + ry as i32)
+    // Round, not truncate: truncation pulls negative offsets toward the
+    // centre, so a 180-degree turn of (10, 0) landed on (-9, 0).
+    (cx + rx.round() as i32, cy + ry.round() as i32)
 }
 
 /// Rotate a `FillRect` into a `FillPolygon` by computing its 4 corner positions.
@@ -148,14 +179,16 @@ pub fn pulse_alpha(frame: u32, speed: f32, min_alpha: u8) -> u8 {
 /// Compute blink visibility for a given frame.
 ///
 /// Returns true if the element should be visible (on for 2/3 of interval).
-/// An `interval` of 0 (skins may set one) means "never blink".
+/// An `interval` of 0 or 1 (skins may set one) means "never blink": a
+/// one-frame cycle has no room for an off phase.
 pub fn blink_visible(frame: u32, interval: u32) -> bool {
-    if interval == 0 {
+    if interval <= 1 {
         return true;
     }
-    let phase = frame % interval;
-    // On for first 2/3, off for last 1/3
-    phase < (interval * 2 / 3)
+    let phase = u64::from(frame % interval);
+    // On for the first 2/3 (at least one frame), off for the rest. u64
+    // so `interval * 2` cannot overflow for huge intervals.
+    phase < (u64::from(interval) * 2 / 3).max(1)
 }
 
 #[cfg(test)]
@@ -228,19 +261,19 @@ mod tests {
     #[test]
     fn anim_clock_tick_frame() {
         let mut clock = AnimClock::new();
-        assert_eq!(clock.frame, 0);
-        assert!((clock.time_s - 0.0).abs() < f32::EPSILON);
+        assert_eq!(clock.frame(), 0);
+        assert!((clock.time_s() - 0.0).abs() < f32::EPSILON);
         clock.tick_frame();
-        assert_eq!(clock.frame, 1);
-        assert!((clock.time_s - 1.0 / 60.0).abs() < 0.001);
+        assert_eq!(clock.frame(), 1);
+        assert!((clock.time_s() - 1.0 / 60.0).abs() < 0.001);
     }
 
     #[test]
     fn anim_clock_tick_dt() {
         let mut clock = AnimClock::new();
         clock.tick_dt(16); // ~60fps
-        assert_eq!(clock.frame, 1);
-        assert!((clock.time_s - 0.016).abs() < 0.001);
+        assert_eq!(clock.frame(), 1);
+        assert!((clock.time_s() - 0.016).abs() < 0.001);
     }
 
     #[test]
@@ -309,5 +342,57 @@ mod tests {
         assert!((entrance_scale(0, 0) - 1.0).abs() < f32::EPSILON);
         assert_eq!(entrance_alpha(0, 0), 255);
         assert_eq!(entrance_slide_y(0, 0, 20), 0);
+    }
+
+    #[test]
+    fn anim_clock_keeps_frame_step_after_days_of_uptime() {
+        // Regression: an f32 accumulator at ~3 days (2^18 s) rounds every
+        // 1/60 s tick to 1/32 s, so animations ran at ~2x speed.
+        let mut clock = AnimClock::new();
+        clock.time_s = 262_144.0;
+        let before = clock.time_s;
+        for _ in 0..60 {
+            clock.tick_frame();
+        }
+        assert!((clock.time_s - before - 1.0).abs() < 1e-6);
+        // A 1 Hz sine one quarter-second past a whole second is ~1.
+        clock.time_s = 262_144.25;
+        assert!((clock.sine(1.0, 0.0) - 1.0).abs() < 1e-4);
+    }
+
+    #[test]
+    fn anim_clock_sawtooth_stays_half_open() {
+        let mut clock = AnimClock::new();
+        clock.time_s = 1.0 - 1e-12; // narrows to 1.0f32
+        let v = clock.sawtooth(1.0, 0.0);
+        assert!((0.0..1.0).contains(&v), "{v}");
+    }
+
+    #[test]
+    fn blink_interval_one_is_always_visible() {
+        // Regression: interval 1 gave an on-phase of 1*2/3 = 0 frames, so
+        // the element was permanently hidden.
+        assert!((0..10).all(|f| blink_visible(f, 1)));
+    }
+
+    #[test]
+    fn blink_interval_two_alternates() {
+        assert!(blink_visible(0, 2));
+        assert!(!blink_visible(1, 2));
+    }
+
+    #[test]
+    fn blink_huge_interval_does_not_overflow() {
+        assert!(blink_visible(0, u32::MAX));
+        assert!(!blink_visible(u32::MAX - 1, u32::MAX));
+    }
+
+    #[test]
+    fn rotate_point_half_turn_is_symmetric() {
+        // Regression: truncation toward zero gave (-9, 0).
+        let (rx, ry) = rotate_point(10, 0, 0, 0, core::f32::consts::PI);
+        assert_eq!((rx, ry), (-10, 0));
+        let (rx, ry) = rotate_point(0, 7, 0, 0, core::f32::consts::FRAC_PI_2);
+        assert_eq!((rx, ry), (-7, 0));
     }
 }

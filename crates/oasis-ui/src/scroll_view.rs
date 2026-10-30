@@ -40,13 +40,13 @@ impl ScrollView {
 
     /// Clamp scroll position to valid range.
     pub fn clamp_scroll(&mut self) {
-        let max_scroll = (self.content_height as i32 - self.viewport_height as i32).max(0);
+        let max_scroll = crate::layout::max_scroll(self.content_height, self.viewport_height);
         self.scroll_y = self.scroll_y.clamp(0, max_scroll);
     }
 
     /// Scroll by a delta amount.
     pub fn scroll_by(&mut self, delta: i32) {
-        self.scroll_y += delta;
+        self.scroll_y = self.scroll_y.saturating_add(delta);
         self.clamp_scroll();
     }
 
@@ -319,5 +319,16 @@ mod tests {
         }
         // content_height (0) <= viewport_height (200), so no scrollbar.
         assert_eq!(backend.fill_rect_count(), 0);
+    }
+
+    #[test]
+    fn scroll_by_extremes_saturate_into_range() {
+        let mut sv = ScrollView::new(u32::MAX, 10);
+        sv.scroll_by(i32::MAX);
+        sv.scroll_by(i32::MAX);
+        assert_eq!(sv.scroll_y, i32::MAX);
+        sv.scroll_by(i32::MIN);
+        sv.scroll_by(i32::MIN);
+        assert_eq!(sv.scroll_y, 0);
     }
 }

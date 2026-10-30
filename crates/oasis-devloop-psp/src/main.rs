@@ -26,6 +26,8 @@ fn hex_u32(val: u32, out: &mut [u8]) {
 const CMD_PATH: *const u8 = b"ms0:/seplugins/devloop_cmd.txt\0".as_ptr();
 
 fn log(msg: &[u8]) {
+    // SAFETY: LOG_PATH is a NUL-terminated static; the writes pass pointer/length
+    // pairs of live slices; the fd is used and closed only after a successful open.
     unsafe {
         let fd = psp::sys::sceIoOpen(
             LOG_PATH,
@@ -44,6 +46,9 @@ fn log(msg: &[u8]) {
 
 fn take_screenshot() {
     const FB_SIZE: usize = 512 * 272 * 4;
+    // SAFETY: 0x44000000 is the uncached mirror of the 2 MiB VRAM, always
+    // mapped for kernel code; FB_SIZE (544 KiB, one 512-stride 32bpp frame)
+    // stays inside it. sceIoWrite only reads from the pointer.
     unsafe {
         let fd = psp::sys::sceIoOpen(
             b"ms0:/seplugins/devloop_screen.raw\0".as_ptr(),
@@ -66,6 +71,8 @@ fn launch_eboot(path: &[u8]) {
         (b"ARKCompatLayer\0", b"SystemCtrlForKernel\0"),
     ];
     for &(m, l) in mods {
+        // SAFETY: module and library names are NUL-terminated literals;
+        // find_function only reads them and returns the export or None.
         if let Some(fp) = unsafe { psp::hook::find_function(m.as_ptr(), l.as_ptr(), 0x1DDDAD0C) } {
             #[repr(C)]
             struct P {
@@ -91,8 +98,14 @@ fn launch_eboot(path: &[u8]) {
                 u1: 0,
             };
             type F = unsafe extern "C" fn(i32, *const u8, *mut P) -> i32;
+            // SAFETY: `fp` is the non-null sctrlKernelLoadExecVSH export (NID
+            // 0x1DDDAD0C), whose C signature is `int (int apitype, const char *file,
+            // struct SceKernelLoadExecVSHParam *param)` — exactly `F`.
             let f: F = unsafe { core::mem::transmute(fp) };
             log(b"[DL] launching");
+            // SAFETY: `path` is NUL-terminated (built by execute_cmd) and `p` is a
+            // correctly sized SceKernelLoadExecVSHParam whose pointers are to
+            // 'static literals or `path`, all alive across the call.
             unsafe { f(0x141, path.as_ptr(), &mut p) };
             return;
         }
@@ -102,6 +115,8 @@ fn launch_eboot(path: &[u8]) {
 
 /// Read command file, return bytes read (0 if empty/missing).
 fn read_cmd(buf: &mut [u8]) -> usize {
+    // SAFETY: CMD_PATH is NUL-terminated; sceIoRead writes at most `buf.len()`
+    // bytes into the exclusively borrowed `buf`; the fd is closed exactly once.
     unsafe {
         let fd = psp::sys::sceIoOpen(CMD_PATH, psp::sys::IoOpenFlags::RD_ONLY, 0);
         if fd < psp::sys::SceUid(0) {
@@ -118,6 +133,7 @@ fn read_cmd(buf: &mut [u8]) -> usize {
 
 /// Create/clear the command file (truncate to 0).
 fn clear_cmd() {
+    // SAFETY: CMD_PATH is NUL-terminated; the fd is closed only if the open succeeded.
     unsafe {
         let fd = psp::sys::sceIoOpen(
             CMD_PATH,
@@ -134,6 +150,7 @@ fn clear_cmd() {
 
 fn psp_main() {
     // 10s delay — let system settle before any ms0: I/O.
+    // SAFETY: sceKernelDelayThread takes a plain microsecond count.
     unsafe { psp::sys::sceKernelDelayThread(10_000_000) };
     log(b"[DL] started");
 
@@ -141,6 +158,8 @@ fn psp_main() {
     clear_cmd();
 
     // Spawn TCP server thread (works in game context after EBOOT inits net).
+    // SAFETY: the name is NUL-terminated, `tcp_worker` has the SceKernelThreadEntry
+    // ABI, and it is started with no argument block (len 0, null pointer).
     unsafe {
         let thid = psp::sys::sceKernelCreateThread(
             b"devloop\0".as_ptr(),
@@ -157,6 +176,7 @@ fn psp_main() {
 
     // Main thread: poll command file (fallback when WiFi not available).
     loop {
+        // SAFETY: sceKernelDelayThread takes a plain microsecond count.
         unsafe { psp::sys::sceKernelDelayThread(2_000_000) };
 
         let mut buf = [0u8; 256];
@@ -178,6 +198,7 @@ fn execute_cmd(raw: &[u8]) {
 
     if cmd == b"reboot" {
         log(b"[DL] cmd: reboot");
+        // SAFETY: NUL-terminated name literals; find_function only reads them.
         if let Some(fp) = unsafe {
             psp::hook::find_function(
                 b"scePower_Service\0".as_ptr(),
@@ -185,7 +206,10 @@ fn execute_cmd(raw: &[u8]) {
                 0x0442D852,
             )
         } {
+            // SAFETY: `fp` is the non-null scePowerRequestColdReset export (NID
+            // 0x0442D852), signature `int (int unk)`.
             let f: unsafe extern "C" fn(i32) -> i32 = unsafe { core::mem::transmute(fp) };
+            // SAFETY: takes one integer argument (0 = reset now); no pointers.
             unsafe { f(0) };
         }
     } else if cmd == b"screenshot" {
@@ -251,7 +275,12 @@ unsafe extern "C" fn tcp_worker(_: usize, _: *mut c_void) -> i32 {
         let p_send = find!(0x7AA671BC, inet);
         let p_close = find!(0x8D7284EA, inet);
 
-        if p_bind.is_null() || p_accept.is_null() {
+        // Every pointer below is transmuted to a (non-nullable) fn pointer, so
+        // all of them must have resolved: a null fn pointer is UB, not a no-op.
+        if [p_bind, p_listen, p_accept, p_recv, p_send, p_close]
+            .iter()
+            .any(|p| p.is_null())
+        {
             log(b"[DL] TCP: incomplete resolve");
             return 0;
         }

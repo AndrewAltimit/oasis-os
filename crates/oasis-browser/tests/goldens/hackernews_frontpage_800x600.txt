@@ -54,9 +54,9 @@ draw_text "variadic ", 333, 30, 13, Color { r: 0, g: 0, b: 0, a: 255 }
 draw_text "generics", 387, 30, 13, Color { r: 0, g: 0, b: 0, a: 255 }
 draw_text " ", 435, 30, 13, Color { r: 0, g: 0, b: 0, a: 255 }
 draw_text "(rust-lang.org)", 441, 30, 10, Color { r: 130, g: 130, b: 130, a: 255 }
-fill_rect 4, 59, 3046, 1, Color { r: 204, g: 204, b: 204, a: 255 }
-fill_rect 3049, 59, 1, 19, Color { r: 204, g: 204, b: 204, a: 255 }
-fill_rect 4, 77, 3046, 1, Color { r: 204, g: 204, b: 204, a: 255 }
+fill_rect 4, 59, 746, 1, Color { r: 204, g: 204, b: 204, a: 255 }
+fill_rect 749, 59, 1, 19, Color { r: 204, g: 204, b: 204, a: 255 }
+fill_rect 4, 77, 746, 1, Color { r: 204, g: 204, b: 204, a: 255 }
 fill_rect 4, 59, 1, 19, Color { r: 204, g: 204, b: 204, a: 255 }
 draw_text "412 ", 45, 62, 9, Color { r: 130, g: 130, b: 130, a: 255 }
 draw_text "points", 69, 62, 9, Color { r: 130, g: 130, b: 130, a: 255 }
@@ -101,9 +101,9 @@ draw_text "PSP ", 417, 88, 13, Color { r: 0, g: 0, b: 0, a: 255 }
 draw_text "homebrew", 441, 88, 13, Color { r: 0, g: 0, b: 0, a: 255 }
 draw_text " ", 489, 88, 13, Color { r: 0, g: 0, b: 0, a: 255 }
 draw_text "(github.com/altimit)", 495, 88, 10, Color { r: 130, g: 130, b: 130, a: 255 }
-fill_rect 4, 117, 3046, 1, Color { r: 204, g: 204, b: 204, a: 255 }
-fill_rect 3049, 117, 1, 19, Color { r: 204, g: 204, b: 204, a: 255 }
-fill_rect 4, 135, 3046, 1, Color { r: 204, g: 204, b: 204, a: 255 }
+fill_rect 4, 117, 746, 1, Color { r: 204, g: 204, b: 204, a: 255 }
+fill_rect 749, 117, 1, 19, Color { r: 204, g: 204, b: 204, a: 255 }
+fill_rect 4, 135, 746, 1, Color { r: 204, g: 204, b: 204, a: 255 }
 fill_rect 4, 117, 1, 19, Color { r: 204, g: 204, b: 204, a: 255 }
 draw_text "298 ", 45, 120, 9, Color { r: 130, g: 130, b: 130, a: 255 }
 draw_text "points", 69, 120, 9, Color { r: 130, g: 130, b: 130, a: 255 }
@@ -144,9 +144,9 @@ draw_text "token ", 315, 146, 13, Color { r: 0, g: 0, b: 0, a: 255 }
 draw_text "context", 351, 146, 13, Color { r: 0, g: 0, b: 0, a: 255 }
 draw_text " ", 393, 146, 13, Color { r: 0, g: 0, b: 0, a: 255 }
 draw_text "(anthropic.com)", 399, 146, 10, Color { r: 130, g: 130, b: 130, a: 255 }
-fill_rect 4, 175, 3046, 1, Color { r: 204, g: 204, b: 204, a: 255 }
-fill_rect 3049, 175, 1, 19, Color { r: 204, g: 204, b: 204, a: 255 }
-fill_rect 4, 193, 3046, 1, Color { r: 204, g: 204, b: 204, a: 255 }
+fill_rect 4, 175, 746, 1, Color { r: 204, g: 204, b: 204, a: 255 }
+fill_rect 749, 175, 1, 19, Color { r: 204, g: 204, b: 204, a: 255 }
+fill_rect 4, 193, 746, 1, Color { r: 204, g: 204, b: 204, a: 255 }
 fill_rect 4, 175, 1, 19, Color { r: 204, g: 204, b: 204, a: 255 }
 draw_text "241 ", 45, 178, 9, Color { r: 130, g: 130, b: 130, a: 255 }
 draw_text "points", 69, 178, 9, Color { r: 130, g: 130, b: 130, a: 255 }
@@ -184,9 +184,9 @@ draw_text "finally ", 255, 204, 13, Color { r: 0, g: 0, b: 0, a: 255 }
 draw_text "stabilizes", 303, 204, 13, Color { r: 0, g: 0, b: 0, a: 255 }
 draw_text " ", 363, 204, 13, Color { r: 0, g: 0, b: 0, a: 255 }
 draw_text "(bytecodealliance.org)", 369, 204, 10, Color { r: 130, g: 130, b: 130, a: 255 }
-fill_rect 4, 233, 3046, 1, Color { r: 204, g: 204, b: 204, a: 255 }
-fill_rect 3049, 233, 1, 19, Color { r: 204, g: 204, b: 204, a: 255 }
-fill_rect 4, 251, 3046, 1, Color { r: 204, g: 204, b: 204, a: 255 }
+fill_rect 4, 233, 746, 1, Color { r: 204, g: 204, b: 204, a: 255 }
+fill_rect 749, 233, 1, 19, Color { r: 204, g: 204, b: 204, a: 255 }
+fill_rect 4, 251, 746, 1, Color { r: 204, g: 204, b: 204, a: 255 }
 fill_rect 4, 233, 1, 19, Color { r: 204, g: 204, b: 204, a: 255 }
 draw_text "187 ", 45, 236, 9, Color { r: 130, g: 130, b: 130, a: 255 }
 draw_text "points", 69, 236, 9, Color { r: 130, g: 130, b: 130, a: 255 }
@@ -230,9 +230,9 @@ draw_text "layer ", 333, 262, 13, Color { r: 0, g: 0, b: 0, a: 255 }
 draw_text "caching", 369, 262, 13, Color { r: 0, g: 0, b: 0, a: 255 }
 draw_text " ", 411, 262, 13, Color { r: 0, g: 0, b: 0, a: 255 }
 draw_text "(dropbox.tech)", 417, 262, 10, Color { r: 130, g: 130, b: 130, a: 255 }
-fill_rect 4, 291, 3046, 1, Color { r: 204, g: 204, b: 204, a: 255 }
-fill_rect 3049, 291, 1, 19, Color { r: 204, g: 204, b: 204, a: 255 }
-fill_rect 4, 309, 3046, 1, Color { r: 204, g: 204, b: 204, a: 255 }
+fill_rect 4, 291, 746, 1, Color { r: 204, g: 204, b: 204, a: 255 }
+fill_rect 749, 291, 1, 19, Color { r: 204, g: 204, b: 204, a: 255 }
+fill_rect 4, 309, 746, 1, Color { r: 204, g: 204, b: 204, a: 255 }
 fill_rect 4, 291, 1, 19, Color { r: 204, g: 204, b: 204, a: 255 }
 draw_text "164 ", 45, 294, 9, Color { r: 130, g: 130, b: 130, a: 255 }
 draw_text "points", 69, 294, 9, Color { r: 130, g: 130, b: 130, a: 255 }
@@ -273,9 +273,9 @@ draw_text "of ", 297, 320, 13, Color { r: 0, g: 0, b: 0, a: 255 }
 draw_text "Slack ", 315, 320, 13, Color { r: 0, g: 0, b: 0, a: 255 }
 draw_text "in ", 351, 320, 13, Color { r: 0, g: 0, b: 0, a: 255 }
 draw_text "2026?", 369, 320, 13, Color { r: 0, g: 0, b: 0, a: 255 }
-fill_rect 4, 349, 3046, 1, Color { r: 204, g: 204, b: 204, a: 255 }
-fill_rect 3049, 349, 1, 19, Color { r: 204, g: 204, b: 204, a: 255 }
-fill_rect 4, 367, 3046, 1, Color { r: 204, g: 204, b: 204, a: 255 }
+fill_rect 4, 349, 746, 1, Color { r: 204, g: 204, b: 204, a: 255 }
+fill_rect 749, 349, 1, 19, Color { r: 204, g: 204, b: 204, a: 255 }
+fill_rect 4, 367, 746, 1, Color { r: 204, g: 204, b: 204, a: 255 }
 fill_rect 4, 349, 1, 19, Color { r: 204, g: 204, b: 204, a: 255 }
 draw_text "143 ", 45, 352, 9, Color { r: 130, g: 130, b: 130, a: 255 }
 draw_text "points", 69, 352, 9, Color { r: 130, g: 130, b: 130, a: 255 }
@@ -315,9 +315,9 @@ draw_text "path ", 285, 378, 13, Color { r: 0, g: 0, b: 0, a: 255 }
 draw_text "indexing", 315, 378, 13, Color { r: 0, g: 0, b: 0, a: 255 }
 draw_text " ", 363, 378, 13, Color { r: 0, g: 0, b: 0, a: 255 }
 draw_text "(postgresql.org)", 369, 378, 10, Color { r: 130, g: 130, b: 130, a: 255 }
-fill_rect 4, 407, 3046, 1, Color { r: 204, g: 204, b: 204, a: 255 }
-fill_rect 3049, 407, 1, 19, Color { r: 204, g: 204, b: 204, a: 255 }
-fill_rect 4, 425, 3046, 1, Color { r: 204, g: 204, b: 204, a: 255 }
+fill_rect 4, 407, 746, 1, Color { r: 204, g: 204, b: 204, a: 255 }
+fill_rect 749, 407, 1, 19, Color { r: 204, g: 204, b: 204, a: 255 }
+fill_rect 4, 425, 746, 1, Color { r: 204, g: 204, b: 204, a: 255 }
 fill_rect 4, 407, 1, 19, Color { r: 204, g: 204, b: 204, a: 255 }
 draw_text "98 ", 45, 410, 9, Color { r: 130, g: 130, b: 130, a: 255 }
 draw_text "points", 63, 410, 9, Color { r: 130, g: 130, b: 130, a: 255 }

@@ -976,6 +976,7 @@ impl BrowserWidget {
                 // Re-apply positioning after relayout.
                 let viewport_rect = layout::box_model::Rect::new(0.0, 0.0, viewport_w, viewport_h);
                 layout::positioning::apply_positioning(layout_root, viewport_rect);
+                layout_root.clamp_geometry();
                 self.link_map.clear();
             }
             return;

@@ -575,21 +575,26 @@ fn maximizing_twice_still_restores_the_original_geometry() {
 }
 
 #[test]
-fn minimize_then_restore_a_maximized_window_returns_pre_maximize_geometry() {
-    // Documented behaviour (see `maximize_then_minimize_then_restore`):
-    // restoring from the taskbar goes back to the floating geometry.
+fn minimize_then_restore_a_maximized_window_comes_back_maximized() {
+    // As on mainstream desktops (see `maximize_then_minimize_then_restore`):
+    // restoring from the taskbar brings a maximized window back maximized;
+    // the next restore returns it to the floating geometry.
     let mut sdi = SdiRegistry::new();
     let mut wm = WindowManager::new(SW, SH);
     wm.create_window(&cfg("w", 100, 100, 250, 180), &mut sdi)
         .unwrap();
     let orig = geom(&wm, "w");
     wm.maximize_window("w", &mut sdi).unwrap();
+    let maximized = geom(&wm, "w");
     wm.minimize_window("w", &mut sdi).unwrap();
     assert_eq!(wm.active_window(), None);
     wm.restore_window("w", &mut sdi).unwrap();
+    assert_eq!(wm.get_window("w").unwrap().state, WindowState::Maximized);
+    assert_eq!(geom(&wm, "w"), maximized);
+    assert!(sdi.get("w.frame").unwrap().visible);
+    wm.restore_window("w", &mut sdi).unwrap();
     assert_eq!(wm.get_window("w").unwrap().state, WindowState::Normal);
     assert_eq!(geom(&wm, "w"), orig);
-    assert!(sdi.get("w.frame").unwrap().visible);
 }
 
 #[test]

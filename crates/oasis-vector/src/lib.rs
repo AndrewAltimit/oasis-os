@@ -9,7 +9,7 @@
 
 pub mod anim;
 pub mod background;
-pub mod backgrounds;
+mod backgrounds;
 pub mod icon_set;
 pub mod icons;
 pub mod op;

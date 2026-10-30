@@ -242,21 +242,28 @@ impl DesktopPlatform {
         self.fixed_time = time;
     }
 
-    /// Parse `"YYYY-MM-DD HH:MM:SS"` into a [`SystemTime`].
+    /// Parse `"YYYY-MM-DD HH:MM:SS"` (or with a `T` separator) into a
+    /// [`SystemTime`]. Out-of-range fields (month 13, hour 24, ...) and
+    /// extra components are rejected, so a typo in `OASIS_FIXED_TIME` falls
+    /// back to the real clock instead of producing an impossible date.
     fn parse_fixed_time(s: &str) -> Option<SystemTime> {
-        // Accept "YYYY-MM-DD HH:MM:SS" or "YYYY-MM-DDTHH:MM:SS".
-        let s = s.replace('T', " ");
-        let (date, time) = s.split_once(' ')?;
+        let (date, time) = s.trim().split_once([' ', 'T'])?;
         let mut d = date.split('-');
         let mut t = time.split(':');
-        Some(SystemTime {
+        let parsed = SystemTime {
             year: d.next()?.parse().ok()?,
             month: d.next()?.parse().ok()?,
             day: d.next()?.parse().ok()?,
             hour: t.next()?.parse().ok()?,
             minute: t.next()?.parse().ok()?,
             second: t.next()?.parse().ok()?,
-        })
+        };
+        let in_range = (1..=12).contains(&parsed.month)
+            && (1..=31).contains(&parsed.day)
+            && parsed.hour < 24
+            && parsed.minute < 60
+            && parsed.second < 60;
+        (in_range && d.next().is_none() && t.next().is_none()).then_some(parsed)
     }
 }
 
@@ -1184,6 +1191,25 @@ mod tests {
         assert!(DesktopPlatform::parse_fixed_time("not-a-date").is_none());
         assert!(DesktopPlatform::parse_fixed_time("").is_none());
         assert!(DesktopPlatform::parse_fixed_time("2025-01-01").is_none());
+    }
+
+    #[test]
+    fn parse_fixed_time_rejects_out_of_range_and_extra_fields() {
+        for bad in [
+            "2025-13-01 00:00:00",
+            "2025-00-10 00:00:00",
+            "2025-01-32 00:00:00",
+            "2025-01-01 24:00:00",
+            "2025-01-01 12:60:00",
+            "2025-01-01 12:00:60",
+            "2025-01-01-07 12:00:00",
+            "2025-01-01 12:00:00:99",
+        ] {
+            assert!(
+                DesktopPlatform::parse_fixed_time(bad).is_none(),
+                "{bad} accepted"
+            );
+        }
     }
 
     // ---- Platform trait tests ----

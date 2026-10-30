@@ -39,7 +39,52 @@ symphonia nor openh264.
 
 The probe-mode and keyframe details below describe the symphonia
 backend, which is what `video-decode` builds and the e2e tests in
-`crates/oasis-video/tests/decode_e2e.rs` exercise.
+`crates/oasis-video/tests/decode_e2e.rs` exercise (they are compiled
+only when openh264 is the selected backend, i.e. `h264` without
+`ffmpeg`).
+
+### Opening a stream (symphonia backend)
+
+symphonia does not extract H.264 parameters, so the decoder needs the
+`avcC` box (SPS/PPS + NAL length size) and the `stss` keyframe index
+itself:
+
+- `open_stream_with_moov(source, moov)` — the caller already has the
+  `moov` atom (the streaming download retains it); nothing extra is read.
+- `open_stream(source)` — walks the **top-level box headers** with
+  seeks, skipping `mdat`, reads only `moov` (capped at 64 MiB), then
+  rewinds and hands the source to symphonia. (It used to `read_to_end`
+  the whole source; `open(Vec<u8>)` copied the file a second time.)
+- `avcC` is looked up inside `moov` only, so bytes in `mdat` that happen
+  to spell `avcC` (a moov-at-end file) cannot be taken for it.
+
+While one stream is read, the other stream's packets are buffered, at
+most 2048 per stream: past that the oldest is dropped (a dropped video
+packet restarts decode at the next IDR), so audio-only consumption of a
+file with video does not buffer the whole video track.
+
+### `demux_lite` (PSP, seek points)
+
+`demux_lite::Mp4Lite` / `parse_moov_tracks` parse untrusted network
+bytes on every platform, so they are hardened against hostile files:
+
+- every box is bounds-checked against its parent and its end offset is
+  overflow-checked; container nesting is limited to 16 levels;
+- a sample table must hold the entries it declares (allocation is bounded
+  by the bytes actually in the file); a constant-size `stsz` is stored as
+  `(size, count)`; `avcC` / `esds` are capped at 64 KiB and single samples
+  at 32 MiB;
+- `SampleTable::finalize` builds a per-run index, so offset / PTS / DTS /
+  seek lookups are binary searches rather than walks over the tables
+  (sequential playback was quadratic in track length, and a hostile
+  `stsc` / `stts` could spin a single lookup for billions of steps);
+- `esds` is parsed by walking its descriptors, `mp4a` reads the real
+  `channelcount` (and skips QuickTime v1/v2 sound-entry extensions), and
+  `avcC` keeps the first SPS and PPS.
+
+Unit tests sweep truncations and bit flips of every fixture in
+`tests/fixtures/` through all public entry points, and a proptest checks
+the indexed lookups against the original linear walks.
 
 ### Key mechanisms
 
@@ -119,5 +164,9 @@ backend, which is what `video-decode` builds and the e2e tests in
 ## Related docs
 
 - [`psp-architecture.md`](psp-architecture.md) §Video Streaming — the
-  PSP in-memory path (demux_lite, sceMpeg, sceAudiocodec).
+  PSP in-memory path (demux_lite, sceMpeg, sceAudiocodec), including
+  the zero-copy CSC texture: its row-sized 512-stride layout
+  (≥ 480×272 allocated at tune time) and the hazard-pointer hand-off
+  that keeps the main thread from freeing it while the video thread
+  writes it.
 - `crates/oasis-video/` — shared demux / decode crate.

@@ -20,11 +20,16 @@ For instructions on adding a new command see
 
 The terminal in `oasis-terminal/src/` supports:
 
-- variable expansion (`$VAR`, `${VAR}`)
-- glob expansion (`*.txt`, `dir/*`)
-- aliases via `Environment`
-- pipes (`cmd1 | cmd2`)
-- output redirection (`> file`, `>> file`, `2>`, `2>&1`)
+- quoting: `'...'` is literal, `"..."` allows `$VAR` and `$(...)`, a
+  backslash escapes the next character (`\$HOME`, `\>`); `""` is an empty
+  argument
+- variable expansion (`$VAR`, `${VAR}`, `$?`, `$#`, `$1`..)
+- command substitution (`$(cmd)`, nested; its output is word-split)
+- glob and brace expansion (`*.txt`, `dir/*`, `{a,b}`) on unquoted words
+- aliases (`alias ll='ls -l'`, one level)
+- pipes (`cmd1 | cmd2`; an empty stage is a syntax error)
+- redirection (`< file`, `> file`, `>> file`, `2>`, `2>&1`); operators
+  inside quotes or `$( ... )` belong to the inner command
 - command chaining (`;`, `&&`, `||`)
 - persistent command history (`history`, `!!`, `!N`, Up/Down, Ctrl+R)
 - control flow in one-liners and scripts (see below)
@@ -123,13 +128,22 @@ case $X in start|go) echo run;; stop) echo halt;; *) echo "?";; esac
   variable, `$(...)`, quote, brace and glob expansion.
 - `break`, `continue` and `return` work in loops and functions; `while` /
   `until` stop after 1000 iterations with a warning.
+- `run <script> [args...]` sets `$1`..`$n` and `$#` for the script and
+  restores the caller's afterwards.
+- Resource limits keep a runaway line from freezing the host frame: at most
+  100,000 simple commands per top-level line (across nested loops,
+  functions, scripts and jobs; then `command limit exceeded`), 256 KiB per
+  expanded line, `execute` nesting 96 deep (`$(...)`, functions, scripts),
+  blocks nested 64 deep, function recursion 64, `run` nesting 16, 4 MiB of
+  collected script output, 64 KiB per variable value (4096 variables) and
+  4096 words per brace expansion (beyond that the word stays literal).
 - Missing `fi` / `done` / `esac` or a stray keyword is a syntax error.
 - `#` comments and `\` line continuations are supported in scripts.
 
 ### Background jobs
 
 The interpreter is synchronous and single-threaded (PSP, WASM), so a job
-is *deferred* rather than concurrent: `cmd &` queues the line and prints
+is *deferred* rather than concurrent (at most 64 waiting): `cmd &` queues the line and prints
 `[N] cmd`; the host runs the oldest runnable job on its next tick (one
 job per frame) and prints the job's output followed by
 `[N]+  Done  cmd` (or `Exit <code>`).

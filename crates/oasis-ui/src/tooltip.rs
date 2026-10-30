@@ -22,6 +22,18 @@ pub enum TooltipPosition {
     Right,
 }
 
+impl TooltipPosition {
+    /// The side across the target from this one.
+    pub fn opposite(self) -> Self {
+        match self {
+            Self::Above => Self::Below,
+            Self::Below => Self::Above,
+            Self::Left => Self::Right,
+            Self::Right => Self::Left,
+        }
+    }
+}
+
 /// Current visibility state of the tooltip.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TooltipState {
@@ -149,28 +161,40 @@ impl Tooltip {
         let th = text_h + self.pad_v * 2;
         let gap = self.gap as i32;
 
-        // Compute ideal position based on preference.
-        let (mut x, mut y) = match self.position {
-            TooltipPosition::Below => {
-                let x = target_x + layout::center(target_w, tw);
-                let y = target_y + target_h as i32 + gap;
-                (x, y)
-            },
-            TooltipPosition::Above => {
-                let x = target_x + layout::center(target_w, tw);
-                let y = target_y - th as i32 - gap;
-                (x, y)
-            },
-            TooltipPosition::Right => {
-                let x = target_x + target_w as i32 + gap;
-                let y = target_y + layout::center(target_h, th);
-                (x, y)
-            },
-            TooltipPosition::Left => {
-                let x = target_x - tw as i32 - gap;
-                let y = target_y + layout::center(target_h, th);
-                (x, y)
-            },
+        // Ideal position for each side.
+        let place = |pos: TooltipPosition| match pos {
+            TooltipPosition::Below => (
+                target_x + layout::center(target_w, tw),
+                target_y + target_h as i32 + gap,
+            ),
+            TooltipPosition::Above => (
+                target_x + layout::center(target_w, tw),
+                target_y - th as i32 - gap,
+            ),
+            TooltipPosition::Right => (
+                target_x + target_w as i32 + gap,
+                target_y + layout::center(target_h, th),
+            ),
+            TooltipPosition::Left => (
+                target_x - tw as i32 - gap,
+                target_y + layout::center(target_h, th),
+            ),
+        };
+        let fits = |pos: TooltipPosition, (x, y): (i32, i32)| match pos {
+            TooltipPosition::Below => y + th as i32 <= viewport_h as i32,
+            TooltipPosition::Above => y >= 0,
+            TooltipPosition::Right => x + tw as i32 <= viewport_w as i32,
+            TooltipPosition::Left => x >= 0,
+        };
+        // Prefer the requested side; flip to the opposite side when the
+        // preferred one runs off the viewport and the opposite fits, so
+        // the edge clamp below never pushes the tooltip over its target.
+        let preferred = place(self.position);
+        let opposite = self.position.opposite();
+        let (mut x, mut y) = if !fits(self.position, preferred) && fits(opposite, place(opposite)) {
+            place(opposite)
+        } else {
+            preferred
         };
 
         // Clamp to viewport bounds.
@@ -663,5 +687,33 @@ mod tests {
         let (x, y, _w, _h) = t.compute_rect(&ctx, &anchor(0, 0, 10, 10, 20, 20));
         assert!(x >= 0);
         assert!(y >= 0);
+    }
+
+    #[test]
+    fn tooltip_flips_instead_of_covering_its_target() {
+        let theme = crate::theme::Theme::dark();
+        let mut backend = crate::test_utils::RecordingBackend::default();
+        let ctx = DrawContext::new(&mut backend, &theme);
+        // Target hugs the bottom edge: "Below" would be clamped on top of it.
+        let tip = Tooltip::new("Tip").with_position(TooltipPosition::Below);
+        let anchor = TooltipAnchor::new(100, 250, 40, 20, 480, 272);
+        let (_, y, _, h) = tip.compute_rect(&ctx, &anchor);
+        assert!(
+            y + h as i32 <= 250,
+            "tooltip at y={y} h={h} overlaps the target"
+        );
+        // Target hugs the right edge: "Right" flips to the left side.
+        let tip = Tooltip::new("Tip").with_position(TooltipPosition::Right);
+        let anchor = TooltipAnchor::new(450, 100, 30, 20, 480, 272);
+        let (x, _, w, _) = tip.compute_rect(&ctx, &anchor);
+        assert!(
+            x + w as i32 <= 450,
+            "tooltip at x={x} w={w} overlaps the target"
+        );
+        // Room on the preferred side: unchanged.
+        let tip = Tooltip::new("Tip").with_position(TooltipPosition::Below);
+        let anchor = TooltipAnchor::new(100, 50, 40, 20, 480, 272);
+        let (_, y, _, _) = tip.compute_rect(&ctx, &anchor);
+        assert!(y >= 70);
     }
 }

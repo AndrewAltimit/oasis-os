@@ -214,10 +214,7 @@ pub fn render_layers_cached(
         reduced_motion,
         frame_counter,
     } = frame;
-    let clock = AnimClock {
-        time_s: frame_counter as f32 / 60.0,
-        frame: frame_counter,
-    };
+    let clock = AnimClock::from_frame(frame_counter);
     let key = (w, h, reduced_motion, layers.len());
 
     if cache.built_for != Some(key) {
@@ -387,10 +384,7 @@ pub fn render_vector_background(
     let h = at.screen_h;
 
     // Build a clock from the frame counter (assumes 60fps).
-    let clock = AnimClock {
-        time_s: frame_counter as f32 / 60.0,
-        frame: frame_counter,
-    };
+    let clock = AnimClock::from_frame(frame_counter);
 
     let scene_data = BackgroundScene {
         layers: at.background_layers.clone(),
@@ -544,10 +538,7 @@ mod tests {
 
         let reference = {
             let mut rec = oasis_test_backend::RecordingBackend::new(480, 272);
-            let clock = AnimClock {
-                time_s: frame as f32 / 60.0,
-                frame,
-            };
+            let clock = AnimClock::from_frame(frame);
             let scene = BackgroundScene {
                 layers: layers.clone(),
                 complexity_budget: budget,

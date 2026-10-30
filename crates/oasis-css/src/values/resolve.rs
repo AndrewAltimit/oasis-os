@@ -114,30 +114,9 @@ fn css_color_to_backend(c: &CssColor) -> Color {
     Color::rgba(c.r, c.g, c.b, c.a)
 }
 
-/// Map a named CSS color keyword to an RGBA `Color`.
+/// Map a colour keyword (`transparent` or a CSS named colour) to `Color`.
 fn keyword_color(name: &str) -> Option<Color> {
-    let c = match name {
-        "black" => Color::rgb(0, 0, 0),
-        "white" => Color::rgb(255, 255, 255),
-        "red" => Color::rgb(255, 0, 0),
-        "green" => Color::rgb(0, 128, 0),
-        "blue" => Color::rgb(0, 0, 255),
-        "yellow" => Color::rgb(255, 255, 0),
-        "cyan" | "aqua" => Color::rgb(0, 255, 255),
-        "magenta" | "fuchsia" => Color::rgb(255, 0, 255),
-        "gray" | "grey" => Color::rgb(128, 128, 128),
-        "silver" => Color::rgb(192, 192, 192),
-        "maroon" => Color::rgb(128, 0, 0),
-        "olive" => Color::rgb(128, 128, 0),
-        "lime" => Color::rgb(0, 255, 0),
-        "teal" => Color::rgb(0, 128, 128),
-        "navy" => Color::rgb(0, 0, 128),
-        "purple" => Color::rgb(128, 0, 128),
-        "orange" => Color::rgb(255, 165, 0),
-        "transparent" => Color::rgba(0, 0, 0, 0),
-        _ => return None,
-    };
-    Some(c)
+    crate::color::named_color(name).map(|c| css_color_to_backend(&c))
 }
 
 /// Resolve a `border-style` keyword.

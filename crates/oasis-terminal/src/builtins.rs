@@ -454,7 +454,7 @@ impl CommandRegistry {
             top.entry(name.to_string()).or_insert(old);
             // Set the new value.
             if let Some(v) = value {
-                self.set_variable(name, v);
+                self.assign_variable(name, v)?;
             }
         }
         Ok(CommandOutput::None)
@@ -490,7 +490,7 @@ impl CommandRegistry {
             if name.is_empty() {
                 return Err(OasisError::Command("usage: set VAR=value".into()));
             }
-            self.set_variable(name, value);
+            self.assign_variable(name, value)?;
             Ok(CommandOutput::None)
         } else {
             // Just show the variable value.
@@ -547,7 +547,13 @@ impl CommandRegistry {
         let assignment = args.join(" ");
         if let Some((name, value)) = assignment.split_once('=') {
             let name = name.trim();
-            let value = value.trim().trim_matches('\'').trim_matches('"');
+            // Strip one pair of enclosing quotes only: `alias g='echo "hi"'`
+            // reaches here as `g=echo "hi"`, whose inner quotes must stay.
+            let value = value.trim();
+            let value = ['\'', '"']
+                .iter()
+                .find_map(|q| value.strip_prefix(*q)?.strip_suffix(*q))
+                .unwrap_or(value);
             if name.is_empty() {
                 return Err(OasisError::Command("usage: alias <name>=<command>".into()));
             }

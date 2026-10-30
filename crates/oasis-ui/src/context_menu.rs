@@ -156,6 +156,27 @@ impl ContextMenu {
         self.hovered_index = None;
     }
 
+    /// Show the menu at `(x, y)` like [`show`](Self::show), but kept
+    /// inside a `screen_w` x `screen_h` viewport the way desktop context
+    /// menus open: up and / or left of the point when it would run off the
+    /// right or bottom edge, then clamped to the top-left corner.
+    pub fn show_within(
+        &mut self,
+        ctx: &DrawContext<'_>,
+        x: i32,
+        y: i32,
+        screen_w: u32,
+        screen_h: u32,
+    ) {
+        let (w, h) = self.compute_size(ctx);
+        let fit = |p: i32, size: u32, screen: u32| {
+            let (size, screen) = (size as i32, screen as i32);
+            let p = if p + size > screen { p - size } else { p };
+            p.min(screen - size).max(0)
+        };
+        self.show(fit(x, w, screen_w), fit(y, h, screen_h));
+    }
+
     /// Hide the menu and reset selection state.
     pub fn hide(&mut self) {
         self.visible = false;
@@ -823,5 +844,24 @@ mod tests {
         assert!(!draw(Some(1), Some(1)).contains(&theme.accent_subtle));
         // Disabled action never shows hover.
         assert!(!draw(Some(2), None).contains(&hover_fill));
+    }
+
+    #[test]
+    fn show_within_keeps_the_menu_on_screen() {
+        let theme = crate::theme::Theme::dark();
+        let mut backend = crate::test_utils::RecordingBackend::default();
+        let ctx = DrawContext::new(&mut backend, &theme);
+        let mut menu = ContextMenu::new(vec![MenuItem::action("Open"), MenuItem::action("Delete")]);
+        let (w, h) = menu.compute_size(&ctx);
+        // Plenty of room: opens at the point.
+        menu.show_within(&ctx, 10, 20, 480, 272);
+        assert_eq!((menu.x, menu.y), (10, 20));
+        // Bottom-right corner: opens up and to the left of the point.
+        menu.show_within(&ctx, 470, 265, 480, 272);
+        assert_eq!((menu.x, menu.y), (470 - w as i32, 265 - h as i32));
+        // Screen smaller than the menu: pinned to the origin.
+        menu.show_within(&ctx, 5, 5, 4, 4);
+        assert_eq!((menu.x, menu.y), (0, 0));
+        assert!(menu.visible);
     }
 }
