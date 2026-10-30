@@ -167,6 +167,9 @@ impl AppRegistration {
 #[derive(Debug, Clone, Default)]
 pub struct AppRegistry {
     apps: Vec<AppRegistration>,
+    /// Non-plugin apps a plugin app currently shadows (same title), put
+    /// back by [`Self::remove_plugin_apps`].
+    shadowed: Vec<AppRegistration>,
 }
 
 impl AppRegistry {
@@ -176,10 +179,16 @@ impl AppRegistry {
     }
 
     /// Add `reg`, replacing an app with the same title (so a plugin can
-    /// shadow a built-in).
+    /// shadow a built-in; [`Self::remove_plugin_apps`] brings the
+    /// built-in back).
     pub fn register(&mut self, reg: AppRegistration) {
         match self.apps.iter_mut().find(|a| a.title == reg.title) {
-            Some(slot) => *slot = reg,
+            Some(slot) => {
+                let old = std::mem::replace(slot, reg);
+                if slot.from_plugin && !old.from_plugin {
+                    self.shadowed.push(old);
+                }
+            },
             None => self.apps.push(reg),
         }
     }
@@ -191,9 +200,18 @@ impl AppRegistry {
         self.apps.len() != before
     }
 
-    /// Remove every plugin-registered app.
+    /// Remove every plugin-registered app, restoring the apps they
+    /// shadowed (at their original place in the order).
     pub fn remove_plugin_apps(&mut self) {
+        for app in &mut self.apps {
+            if app.from_plugin
+                && let Some(i) = self.shadowed.iter().position(|s| s.title == app.title)
+            {
+                *app = self.shadowed.swap_remove(i);
+            }
+        }
         self.apps.retain(|a| !a.from_plugin);
+        self.shadowed.clear();
     }
 
     /// All registrations, in registration order.
@@ -348,6 +366,32 @@ mod tests {
         apps.register(plugin);
         apps.remove_plugin_apps();
         assert_eq!(apps.titles().collect::<Vec<_>>(), ["Builtin"]);
+    }
+
+    /// A plugin app may shadow a built-in with the same title; removing
+    /// the plugin apps (every registry re-sync does) used to delete the
+    /// built-in for the rest of the session.
+    #[test]
+    fn removing_a_shadowing_plugin_app_restores_the_builtin() {
+        let mut apps = AppRegistry::new();
+        apps.register(simple("First"));
+        apps.register(simple("Calculator"));
+        apps.register(simple("Last"));
+        let mut plugin = simple("Calculator").with_path("/plugins/calculator");
+        plugin.from_plugin = true;
+        apps.register(plugin);
+        assert_eq!(apps.get("Calculator").unwrap().path, "/plugins/calculator");
+        apps.remove_plugin_apps();
+        assert_eq!(
+            apps.titles().collect::<Vec<_>>(),
+            ["First", "Calculator", "Last"]
+        );
+        let builtin = apps.get("Calculator").unwrap();
+        assert!(!builtin.from_plugin);
+        assert_ne!(builtin.path, "/plugins/calculator");
+        // A second removal is a no-op.
+        apps.remove_plugin_apps();
+        assert_eq!(apps.titles().count(), 3);
     }
 
     #[test]
