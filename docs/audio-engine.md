@@ -87,12 +87,12 @@ backend on desktop, `sceAudiocodec` on PSP, WebAudio on WASM, the engine mixer o
 The crate does ship two format helpers used by tests and a few backends:
 
 - `wav.rs` — PCM WAV reader. Format tag 1 only, 8-bit unsigned or 16-bit
-  little-endian signed, mono or stereo (`wav.rs:38`–73). The reader returns
+  little-endian signed, mono or stereo (`wav.rs`–73). The reader returns
   `Option<WavData>`; any unsupported format tag, bit depth, or channel count
   (and any malformed RIFF / `fmt `/ `data` chunk) yields `None` rather than
   partial or corrupted PCM. Callers must treat `None` as "fall through to the
   next decoder".
-- `ogg.rs` — Ogg/Vorbis decoding via `symphonia` (`ogg.rs:65`). Returns
+- `ogg.rs` — Ogg/Vorbis decoding via `symphonia` (`ogg.rs`). Returns
   interleaved `i16` PCM. Sample rate and channel layout come from the
   codec params; defaults to 44.1 kHz / stereo when missing.
 
@@ -100,7 +100,7 @@ The crate does ship two format helpers used by tests and a few backends:
 deliberately not enabled because backends carry their own MP3 path.
 
 ID3 tag parsing is **not implemented**. `TrackInfo::from_path` falls back to
-the filename when no metadata is supplied (`types.rs:24`); populating tags is
+the filename when no metadata is supplied (`types.rs`); populating tags is
 the caller's responsibility (often handled at the radio source layer for ICY
 metadata, or left blank for local files).
 
@@ -110,11 +110,11 @@ For continuous streams (radio, video audio track) the backend exposes:
 
 | Trait method | Source | Purpose |
 | --- | --- | --- |
-| `load_streaming()` | backend/audio.rs:56 | Allocate a streaming track id. |
-| `feed_data(track, bytes)` | backend/audio.rs:62 | Push a chunk of compressed bytes. |
-| `streaming_can_accept(track)` | backend/audio.rs:75 | "Is there room in the queue?" — back-pressure signal. |
-| `finalize_streaming(track)` | backend/audio.rs:84 | Signal EOF; flushes the lookahead buffer. |
-| `feed_pcm_f32(samples, ch, sr)` | backend/audio.rs:92 | Direct PCM path, used by the software video decoder. |
+| `load_streaming()` | backend/audio.rs | Allocate a streaming track id. |
+| `feed_data(track, bytes)` | backend/audio.rs | Push a chunk of compressed bytes. |
+| `streaming_can_accept(track)` | backend/audio.rs | "Is there room in the queue?" — back-pressure signal. |
+| `finalize_streaming(track)` | backend/audio.rs | Signal EOF; flushes the lookahead buffer. |
+| `feed_pcm_f32(samples, ch, sr)` | backend/audio.rs | Direct PCM path, used by the software video decoder. |
 
 `RadioManager::tick` (`radio/mod.rs`) pumps a stream cooperatively: each
 host frame it asks `streaming_can_accept`, and only if the answer is yes does
@@ -199,7 +199,7 @@ and by UE5 asset streaming.
 
 There is **no automatic reconnect.** When `RadioSource::poll` returns an error
 the `RadioManager` drops the source and transitions to `Error`
-(`radio/mod.rs:313`). The caller (UI or terminal command) creates a new
+(`radio/mod.rs`). The caller (UI or terminal command) creates a new
 source to retry.
 
 ## Sample rate and channel assumptions
