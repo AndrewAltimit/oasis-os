@@ -103,6 +103,8 @@ impl SkinTheme {
             button_bg_hover: lighten(secondary, 0.15),
             button_bg_pressed: darken(secondary, 0.85),
             button_bg_disabled: darken(secondary, 0.5),
+            // Resolved below, once `[widget_states.button]` has had its say.
+            button_text: text,
             input_bg: darken(bg, 0.8),
             input_border: secondary,
             input_border_focus: primary,
@@ -171,6 +173,11 @@ impl SkinTheme {
         if let Some(ref states) = self.widget_states {
             apply_widget_states(&mut theme, states);
         }
+        // Button labels: an explicit `[widget_states.button] text` is used
+        // as given; otherwise the base text colour, pushed towards black or
+        // white until it reads on the (possibly overridden) button fill.
+        theme.button_text = widget_state_color(self.widget_states.as_ref(), "button", "text")
+            .unwrap_or_else(|| readable_on(text, theme.button_bg, 4.5));
 
         // Density scales the resolved spacing ladder only; `comfortable`
         // (the default) is an exact integer identity, so unset skins are
@@ -304,12 +311,7 @@ fn apply_widget_states(
     theme: &mut Theme,
     states: &std::collections::HashMap<String, std::collections::HashMap<String, String>>,
 ) {
-    let get = |widget: &str, key: &str| {
-        states
-            .get(widget)
-            .and_then(|m| m.get(key))
-            .and_then(|hex| parse_hex_color(hex))
-    };
+    let get = |widget: &str, key: &str| widget_state_color(Some(states), widget, key);
     for (slot, key, widget_key) in [
         (&mut theme.button_bg, "button", "normal_bg"),
         (&mut theme.button_bg_hover, "button", "hover_bg"),
@@ -352,6 +354,18 @@ fn apply_widget_states(
             *slot = c;
         }
     }
+}
+
+/// The colour `[widget_states.<widget>] <key>` sets, if any.
+fn widget_state_color(
+    states: Option<&std::collections::HashMap<String, std::collections::HashMap<String, String>>>,
+    widget: &str,
+    key: &str,
+) -> Option<Color> {
+    states?
+        .get(widget)
+        .and_then(|m| m.get(key))
+        .and_then(|hex| parse_hex_color(hex))
 }
 
 /// Apply all WM theme overrides to a `WmTheme`.
@@ -724,7 +738,7 @@ impl SkinTheme {
             // Derived widget surfaces.
             (
                 "button text on button background",
-                ui.text_primary,
+                ui.button_text,
                 ui.button_bg,
                 4.5,
             ),

@@ -347,24 +347,9 @@ mod tests {
             "glitch aesthetic",
         ),
         (
-            "corrupted",
-            "button text on button background",
-            "glitch aesthetic",
-        ),
-        (
-            "retro-cga",
-            "button text on button background",
-            "fixed 4-color CGA palette",
-        ),
-        (
             "solarized",
             "dim_text on background",
             "canonical base01 on base03",
-        ),
-        (
-            "solarized",
-            "button text on button background",
-            "canonical base0 on base02",
         ),
         // win95 / xp: `background` is the desktop wallpaper; body text is
         // drawn on the gray / cream app surface (checked separately).

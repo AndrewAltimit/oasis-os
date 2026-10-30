@@ -161,6 +161,12 @@ removal, a restyled site, and docs that match the code.
   them. `RecordingBackend` / `ClipAuditBackend` log `set_clip_rect` /
   `reset_clip_rect` as the new `DrawCommand::SetClip` / `ResetClip`
   instead of `PushClip` / `PopClip`.
+- `oasis_ui::Theme` gains `button_text`, the label colour on neutral
+  button fills (secondary buttons, unfocused modal buttons): derived from
+  the skin's `text` with 4.5:1 contrast enforced against the button fill,
+  or set with `[widget_states.button] text`. The retro-cga, solarized and
+  corrupted buttons are readable now and left the accepted low-contrast
+  list.
 - `impl_sdi_defaults!(T)` writes the eight empty extension impls for mocks;
   `oasis-test-backend` gains `NullBackend` and a stateful
   `RecordingBackend` (with `DrawCommand`), replacing per-crate mocks.

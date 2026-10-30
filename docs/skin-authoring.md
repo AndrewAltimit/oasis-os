@@ -781,6 +781,7 @@ normal_bg = "#3A3A40"
 hover_bg = "#55555C"
 pressed_bg = "#2A2A2E"
 disabled_bg = "#26262A"
+text = "#F0F0E8"             # label on the button fill (see below)
 disabled_text = "#555555"
 
 [widget_states.input]
@@ -816,6 +817,16 @@ item_text = "#141414"                # drop-down item text
 disabled_text = "#969696"            # disabled item text
 separator = "#AAAAAA"                # drop-down separator line
 ```
+
+Button labels have their own colour, `Theme::button_text`, because the
+button fill is not the background the base `text` colour was picked for.
+Without `[widget_states.button] text` it is derived: the skin's `text`
+colour, kept as is when it reaches 4.5:1 (WCAG AA) against the resolved
+`normal_bg`, otherwise blended towards black or white just far enough to
+get there. Fixed-palette skins (retro-cga, solarized, corrupted) keep
+readable buttons this way without editing their palette; set `text`
+explicitly to pick the label colour yourself (it is used as given, and
+`skin lint` reports it if it falls below 4.5:1).
 
 The `menu` slots feed `MenuStyle::from_theme` in `oasis-ui`; their
 defaults are the classic Win95 grays the menu bar widget has always

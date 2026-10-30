@@ -58,6 +58,14 @@ pub struct Theme {
     pub button_bg_pressed: Color,
     /// Disabled button background.
     pub button_bg_disabled: Color,
+    /// Label text on the neutral button surfaces (`button_bg*`; secondary
+    /// buttons, unfocused modal buttons).
+    ///
+    /// Separate from `text_primary` because the button fill is not the
+    /// background `text_primary` was chosen for: skins derive it from
+    /// `text_primary` with contrast enforced against `button_bg` (WCAG
+    /// 4.5:1) and can set it with `[widget_states.button] text`.
+    pub button_text: Color,
     /// Input field background.
     pub input_bg: Color,
     /// Input field border.
@@ -227,6 +235,16 @@ impl Theme {
 
     /// Text color respecting disabled state.
     ///
+    /// Label color on a neutral button surface: `text_disabled` when
+    /// disabled, `button_text` otherwise.
+    pub fn button_label(&self, disabled: bool) -> Color {
+        if disabled {
+            self.text_disabled
+        } else {
+            self.button_text
+        }
+    }
+
     /// Returns `text_disabled` when disabled, `text_primary` otherwise.
     pub fn interactive_text(&self, disabled: bool) -> Color {
         if disabled {
@@ -267,6 +285,7 @@ impl Theme {
             button_bg_hover: Color::rgb(65, 65, 90),
             button_bg_pressed: Color::rgb(40, 40, 55),
             button_bg_disabled: Color::rgb(35, 35, 45),
+            button_text: Color::rgb(230, 230, 240),
             input_bg: Color::rgb(25, 25, 35),
             input_border: Color::rgb(60, 60, 80),
             input_border_focus: Color::rgb(80, 160, 255),
