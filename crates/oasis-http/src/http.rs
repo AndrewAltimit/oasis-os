@@ -392,6 +392,15 @@ fn http_request_inner(
             current_url = current_url.resolve(&location).ok_or_else(|| {
                 OasisError::Backend(format!("bad redirect Location: {location}").into())
             })?;
+            // A network response may only redirect to the network: a
+            // `Location: vfs://…` / `file:` / `about:` hop would hand the
+            // attacker's body back labelled with a local URL (local-page
+            // privileges: VFS subresources, no fetch origin checks).
+            if current_url.scheme != "http" && current_url.scheme != "https" {
+                return Err(OasisError::Backend(
+                    format!("redirect to non-HTTP scheme blocked: {current_url}").into(),
+                ));
+            }
             if let Some(g) = guard
                 && !(g.redirect_ok)(&current_url)
             {
@@ -452,6 +461,7 @@ fn do_request_with_method(
     tls: Option<&dyn TlsProvider>,
     addr_ok: Option<&dyn Fn(std::net::IpAddr) -> bool>,
 ) -> Result<HttpResponse> {
+    super::validate_request(method, url, extra_headers)?;
     let host = &url.host;
     let is_https = url.scheme == "https";
     let default_port = if is_https { 443 } else { 80 };
@@ -589,11 +599,7 @@ fn send_request(
         _ => url.host.clone(),
     };
 
-    let path = if let Some(ref q) = url.query {
-        format!("{}?{}", url.path, q)
-    } else {
-        url.path.clone()
-    };
+    let path = url.request_target();
 
     let mut request = format!(
         "{method} {path} HTTP/1.1\r\n\
@@ -1044,6 +1050,50 @@ mod tests {
             "expected HTTPS Required page, got: {body}",
         );
         let _ = handle.join();
+    }
+
+    #[test]
+    fn redirect_to_local_scheme_is_refused() {
+        use std::io::Write as IoWrite;
+        use std::net::TcpListener;
+
+        // Regression: `Location: vfs://…` used to be followed (as plain
+        // HTTP to the same host) and the attacker's body came back
+        // labelled `vfs://…`, i.e. with local-page privileges.
+        for target in [
+            "vfs://127.0.0.1/x",
+            "file:///etc/passwd",
+            "gemini://127.0.0.1/",
+        ] {
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let port = listener.local_addr().unwrap().port();
+            let handle = std::thread::spawn(move || {
+                // Serve every connection the same redirect (the vfs://
+                // case would otherwise reconnect here).
+                for _ in 0..2 {
+                    let Ok((mut stream, _)) = listener.accept() else {
+                        return;
+                    };
+                    let mut buf = [0u8; 2048];
+                    let _ = stream.read(&mut buf);
+                    let resp = format!(
+                        "HTTP/1.1 302 Found\r\nLocation: {target}\r\n\
+                         Content-Length: 0\r\nConnection: close\r\n\r\n"
+                    );
+                    let _ = stream.write_all(resp.as_bytes());
+                    let _ = stream.flush();
+                }
+            });
+            let url = Url::parse(&format!("http://127.0.0.1:{port}/page")).unwrap();
+            let err = http_get(&url, None).expect_err(target);
+            assert!(
+                err.to_string().contains("non-HTTP scheme"),
+                "{target}: {err}"
+            );
+            // Unblock the server's second accept and let it exit.
+            let _ = std::net::TcpStream::connect(("127.0.0.1", port));
+            let _ = handle.join();
+        }
     }
 
     #[test]

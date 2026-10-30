@@ -1120,6 +1120,112 @@ fn fetch_reports_real_status_and_rejects_network_errors() {
 }
 
 #[test]
+fn fetch_rejects_crlf_in_header_names_and_values() {
+    let t = MockTransport::default();
+    let engine = setup_page("https://example.com/", None, Some(&t));
+    engine
+        .eval(
+            "globalThis.errs = []; \
+             fetch('/a', {headers: {'Accept': 'x\\r\\nOrigin: https://bank'}}) \
+               .catch(function(e) { errs.push(e.name); }); \
+             fetch('/b', {headers: {'X-A\\nB': '1'}}) \
+               .catch(function(e) { errs.push(e.name); }); \
+             fetch('/c', {headers: {'Accept': 'text/html'}});",
+        )
+        .unwrap();
+    assert_eq!(js_str(&engine, "errs.join()"), "TypeError,TypeError");
+    assert_eq!(
+        t.urls(),
+        vec!["https://example.com/c"],
+        "only the clean request is sent"
+    );
+}
+
+/// Transport double that asks the handler whether a redirect to `next`
+/// may be followed and records the verdict.
+struct RedirectProbe {
+    next: &'static str,
+    verdict: Rc<std::cell::Cell<Option<bool>>>,
+}
+
+impl fetch::FetchTransport for RedirectProbe {
+    fn resolve_host(&self, _host: &str) -> Vec<std::net::IpAddr> {
+        Vec::new()
+    }
+
+    fn supports_https(&self) -> bool {
+        true
+    }
+
+    fn send(
+        &self,
+        req: &fetch::TransportRequest<'_>,
+        redirect_ok: &dyn Fn(&crate::loader::Url) -> bool,
+        _addr_ok: &dyn Fn(std::net::IpAddr) -> bool,
+    ) -> Result<fetch::RawResponse, String> {
+        let next = crate::loader::Url::parse(self.next).ok_or("bad probe url")?;
+        self.verdict.set(Some(redirect_ok(&next)));
+        Ok(fetch::RawResponse {
+            status: 200,
+            headers: Vec::new(),
+            body: Vec::new(),
+            url: req.url.to_string(),
+        })
+    }
+}
+
+#[test]
+fn fetch_redirect_hops_must_satisfy_connect_src() {
+    // Regression: only the first URL was checked against connect-src,
+    // so a same-origin open redirect could bounce a request anywhere.
+    let page = "https://example.com/";
+    let csp = crate::loader::csp::parse_csp("connect-src 'self'");
+    for (next, allowed) in [
+        ("https://example.com/elsewhere", true),
+        ("https://evil.test/collect?d=1", false),
+    ] {
+        let verdict = Rc::new(std::cell::Cell::new(None));
+        let probe = RedirectProbe {
+            next,
+            verdict: Rc::clone(&verdict),
+        };
+        let engine = JsEngine::new(8 * 1024 * 1024).unwrap();
+        engine
+            .with_context(|ctx| {
+                let handler =
+                    fetch::BrowserFetchHandler::new(page, Some(csp.clone()), Box::new(probe));
+                oasis_js::fetch::bind_fetch_handler(&ctx, Box::new(handler))
+            })
+            .unwrap();
+        engine.eval("fetch('/start')").unwrap();
+        assert_eq!(verdict.get(), Some(allowed), "{next}");
+    }
+}
+
+#[test]
+fn fetch_data_url_is_subject_to_connect_src() {
+    let engine = JsEngine::new(8 * 1024 * 1024).unwrap();
+    let csp = crate::loader::csp::parse_csp("connect-src 'self'");
+    engine
+        .with_context(|ctx| {
+            let handler = fetch::BrowserFetchHandler::new(
+                "https://example.com/",
+                Some(csp),
+                Box::new(MockTransport::default()),
+            );
+            oasis_js::fetch::bind_fetch_handler(&ctx, Box::new(handler))
+        })
+        .unwrap();
+    engine
+        .eval(
+            "globalThis.r = 'pending'; fetch('data:text/plain,hi') \
+               .then(function() { r = 'ok'; }, function(e) { r = e.name; })",
+        )
+        .unwrap();
+    assert_eq!(js_str(&engine, "r"), "TypeError");
+}
+
+#[test]
 fn fetch_blocks_loopback_and_private_targets_from_web_origin() {
     let t = MockTransport::default();
     let engine = setup_page("http://example.com/", None, Some(&t));

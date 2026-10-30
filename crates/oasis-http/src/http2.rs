@@ -339,14 +339,9 @@ fn encode_request_headers(
     encode_literal(&mut out, ":method", method);
     encode_literal(&mut out, ":scheme", &url.scheme);
 
-    let path = if let Some(ref q) = url.query {
-        format!("{}?{}", url.path, q)
-    } else {
-        url.path.clone()
-    };
-    // Some servers reject empty :path; normalize "" to "/".
-    let path_ref = if path.is_empty() { "/" } else { path.as_str() };
-    encode_literal(&mut out, ":path", path_ref);
+    // `request_target` normalizes "" to "/" (some servers reject an
+    // empty :path) and percent-encodes controls / space / non-ASCII.
+    encode_literal(&mut out, ":path", &url.request_target());
 
     let default_port = if url.scheme == "https" { 443 } else { 80 };
     let authority = match url.port {

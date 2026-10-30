@@ -274,16 +274,10 @@ impl CookieJar {
     fn insert(&mut self, mut cookie: Cookie, secure_origin: bool, now: u64) {
         self.cookies.retain(|c| !c.is_expired(now));
 
-        // An expiry in the past is a deletion request.
-        if cookie.is_expired(now) {
-            self.cookies.retain(|c| {
-                !(c.name == cookie.name && c.domain == cookie.domain && c.path == cookie.path)
-            });
-            return;
-        }
-
         // RFC 6265bis §5.7 step 16: an insecure response may not
-        // overwrite (or shadow) a Secure cookie of the same name.
+        // overwrite (or shadow) a Secure cookie of the same name. This
+        // runs before the deletion branch below, so plain http can't
+        // delete a Secure cookie with `Max-Age=0` either.
         if !secure_origin
             && self.cookies.iter().any(|c| {
                 c.secure
@@ -293,6 +287,14 @@ impl CookieJar {
                     && path_matches(&cookie.path, &c.path)
             })
         {
+            return;
+        }
+
+        // An expiry in the past is a deletion request.
+        if cookie.is_expired(now) {
+            self.cookies.retain(|c| {
+                !(c.name == cookie.name && c.domain == cookie.domain && c.path == cookie.path)
+            });
             return;
         }
 
@@ -853,6 +855,29 @@ mod tests {
             header(&jar, "https://example.com/"),
             Some("sid=good".into())
         );
+    }
+
+    #[test]
+    fn insecure_response_cannot_delete_a_secure_cookie() {
+        // Regression: the expired-cookie deletion branch ran before the
+        // Secure-shadowing check, so `Max-Age=0` over http wiped it.
+        let mut jar = jar_with("https://example.com/", &["sid=good; Secure; Path=/"]);
+        jar.set_cookies_at(
+            &url("http://example.com/"),
+            &sc("sid=; Max-Age=0; Path=/"),
+            NOW,
+        );
+        assert_eq!(
+            header(&jar, "https://example.com/"),
+            Some("sid=good".into())
+        );
+        // The secure origin itself can still delete it.
+        jar.set_cookies_at(
+            &url("https://example.com/"),
+            &sc("sid=; Max-Age=0; Path=/"),
+            NOW,
+        );
+        assert_eq!(header(&jar, "https://example.com/"), None);
     }
 
     #[test]

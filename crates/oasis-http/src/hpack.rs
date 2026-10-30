@@ -589,19 +589,27 @@ pub fn huffman_decode(input: &[u8]) -> Result<Vec<u8>> {
 // String literal decode
 // ---------------------------------------------------------------------
 
+/// [`decode_integer`] for lengths and indices: refuses values that do
+/// not fit `usize` instead of truncating them (32-bit PSP / wasm).
+fn decode_usize(buf: &[u8], pos: &mut usize, prefix_bits: u8) -> Result<usize> {
+    usize::try_from(decode_integer(buf, pos, prefix_bits)?)
+        .map_err(|_| OasisError::Backend("HPACK integer: exceeds usize".into()))
+}
+
 fn decode_string(buf: &[u8], pos: &mut usize) -> Result<String> {
     if *pos >= buf.len() {
         return Err(OasisError::Backend("HPACK string: short buffer".into()));
     }
     let huffman = buf[*pos] & 0x80 != 0;
-    let len = decode_integer(buf, pos, 7)? as usize;
-    if *pos + len > buf.len() {
-        return Err(OasisError::Backend(
-            "HPACK string: length overruns buffer".into(),
-        ));
-    }
-    let raw = &buf[*pos..*pos + len];
-    *pos += len;
+    let len = decode_usize(buf, pos, 7)?;
+    // Checked: a peer-chosen length near `usize::MAX` must not wrap the
+    // bound check (and then panic slicing).
+    let end = pos
+        .checked_add(len)
+        .filter(|&end| end <= buf.len())
+        .ok_or_else(|| OasisError::Backend("HPACK string: length overruns buffer".into()))?;
+    let raw = &buf[*pos..end];
+    *pos = end;
     let bytes = if huffman {
         huffman_decode(raw)?
     } else {
@@ -674,14 +682,14 @@ pub fn decode_block_limited(
         if first & 0x80 != 0 {
             // 1xxxxxxx — Indexed Header Field
             size_update_allowed = false;
-            let idx = decode_integer(buf, &mut pos, 7)? as usize;
+            let idx = decode_usize(buf, &mut pos, 7)?;
             let (n, v) = lookup(table, idx)?;
             account(&n, &v)?;
             out.push((n, v));
         } else if first & 0x40 != 0 {
             // 01xxxxxx — Literal With Incremental Indexing
             size_update_allowed = false;
-            let name_idx = decode_integer(buf, &mut pos, 6)? as usize;
+            let name_idx = decode_usize(buf, &mut pos, 6)?;
             let name = if name_idx == 0 {
                 decode_string(buf, &mut pos)?
             } else {
@@ -698,7 +706,7 @@ pub fn decode_block_limited(
                     "HPACK: size update not at block start".into(),
                 ));
             }
-            let new_max = decode_integer(buf, &mut pos, 5)? as usize;
+            let new_max = decode_usize(buf, &mut pos, 5)?;
             if new_max > max_table_size {
                 return Err(OasisError::Backend(
                     "HPACK: size update exceeds settings max".into(),
@@ -708,7 +716,7 @@ pub fn decode_block_limited(
         } else {
             // 0000xxxx or 0001xxxx — Literal without / never indexed.
             size_update_allowed = false;
-            let name_idx = decode_integer(buf, &mut pos, 4)? as usize;
+            let name_idx = decode_usize(buf, &mut pos, 4)?;
             let name = if name_idx == 0 {
                 decode_string(buf, &mut pos)?
             } else {
@@ -754,6 +762,20 @@ fn encode_string(out: &mut Vec<u8>, s: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn huge_string_length_is_an_error_not_a_panic() {
+        // Literal header, new name, name length 2^64 - 1: `pos + len`
+        // used to wrap past the bound check and panic slicing.
+        let block = [
+            0x00, 0x7f, 0x80, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x01,
+        ];
+        let mut table = DynamicTable::new(4096);
+        assert!(decode_block_limited(&block, &mut table, 4096, 64 * 1024).is_err());
+        // Just past the buffer end is rejected too.
+        let block = [0x00, 0x05, b'a', b'b'];
+        assert!(decode_block_limited(&block, &mut table, 4096, 64 * 1024).is_err());
+    }
 
     #[test]
     fn indexed_amplification_is_capped() {

@@ -460,6 +460,66 @@ impl Url {
             _ => false,
         }
     }
+
+    /// The HTTP request target (`path[?query]`, `/` when empty) with
+    /// C0 controls, space, DEL and non-ASCII bytes percent-encoded, as
+    /// the WHATWG URL parser would have stored them. A raw CR / LF / SP
+    /// here would otherwise split the HTTP/1.1 request line.
+    pub fn request_target(&self) -> String {
+        let mut out = String::with_capacity(self.path.len() + 1);
+        if self.path.is_empty() {
+            out.push('/');
+        }
+        push_target_encoded(&mut out, &self.path);
+        if let Some(ref q) = self.query {
+            out.push('?');
+            push_target_encoded(&mut out, q);
+        }
+        out
+    }
+}
+
+fn push_target_encoded(out: &mut String, s: &str) {
+    use std::fmt::Write as _;
+    for &b in s.as_bytes() {
+        if b <= b' ' || b >= 0x7f {
+            let _ = write!(out, "%{b:02X}");
+        } else {
+            out.push(char::from(b));
+        }
+    }
+}
+
+/// Whether `s` is an HTTP token (RFC 9110 §5.6.2): valid as a method or
+/// header field name.
+pub fn is_http_token(s: &str) -> bool {
+    !s.is_empty()
+        && s.bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b"!#$%&'*+-.^_`|~".contains(&b))
+}
+
+/// Check what an HTTP client is about to put on the wire: the method
+/// and header names must be tokens, header values and the host free of
+/// CR / LF / NUL. Anything else could inject headers or smuggle a
+/// second request.
+pub fn validate_request(method: &str, url: &Url, headers: &[(&str, &str)]) -> Result<()> {
+    use oasis_types::error::OasisError;
+    if !is_http_token(method) {
+        return Err(OasisError::Backend(
+            format!("invalid HTTP method {method:?}").into(),
+        ));
+    }
+    if url.host.bytes().any(|b| b <= b' ' || b == 0x7f) {
+        return Err(OasisError::Backend("invalid host in request URL".into()));
+    }
+    for (name, value) in headers {
+        if !is_http_token(name) || value.contains(['\r', '\n', '\0']) {
+            return Err(OasisError::Backend(
+                format!("invalid request header {name:?}").into(),
+            ));
+        }
+    }
+    Ok(())
 }
 
 /// Schemes whose authority is a network host: their hosts are
@@ -901,6 +961,37 @@ fn load_from_network(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // -- Request-line / header hygiene --------------------------------------
+
+    #[test]
+    fn request_target_percent_encodes_controls_space_and_non_ascii() {
+        let mut url = Url::parse("http://h/a").unwrap();
+        url.path = "/a\r\n\r\nPOST /x HTTP/1.1".into();
+        url.query = Some("q=a b\u{e9}".into());
+        let target = url.request_target();
+        assert_eq!(target, "/a%0D%0A%0D%0APOST%20/x%20HTTP/1.1?q=a%20b%C3%A9");
+        assert!(!target.contains(['\r', '\n', ' ']));
+        url.path.clear();
+        url.query = None;
+        assert_eq!(url.request_target(), "/");
+        // Already-encoded input is left alone.
+        url.path = "/%41%20b".into();
+        assert_eq!(url.request_target(), "/%41%20b");
+    }
+
+    #[test]
+    fn validate_request_rejects_injection() {
+        let url = Url::parse("http://h/").unwrap();
+        assert!(validate_request("GET", &url, &[("Accept", "text/html")]).is_ok());
+        assert!(validate_request("GET\r\n", &url, &[]).is_err());
+        assert!(validate_request("GET", &url, &[("Accept", "x\r\nCookie: a")]).is_err());
+        assert!(validate_request("GET", &url, &[("X-A\nB", "1")]).is_err());
+        assert!(validate_request("GET", &url, &[("X", "a\0b")]).is_err());
+        let mut bad_host = url.clone();
+        bad_host.host = "h\r\nX: 1".into();
+        assert!(validate_request("GET", &bad_host, &[]).is_err());
+    }
 
     // -- URL parsing -------------------------------------------------------
 

@@ -106,6 +106,13 @@ pub fn http_request_guarded(
             current_url = current_url.resolve(&location).ok_or_else(|| {
                 OasisError::Backend(format!("bad redirect Location: {location}").into())
             })?;
+            // Network responses may only redirect to the network (see
+            // `http::http_request_inner`).
+            if current_url.scheme != "http" && current_url.scheme != "https" {
+                return Err(OasisError::Backend(
+                    format!("redirect to non-HTTP scheme blocked: {current_url}").into(),
+                ));
+            }
             if !redirect_ok(&current_url) {
                 return Err(OasisError::Backend(
                     format!("redirect to {current_url} blocked by request policy").into(),
@@ -158,6 +165,7 @@ fn do_request(
     body: Option<&[u8]>,
     extra_headers: &[(&str, &str)],
 ) -> Result<HttpResponse> {
+    crate::validate_request(method, url, extra_headers)?;
     let host = &url.host;
     let is_https = url.scheme == "https";
     let default_port: u16 = if is_https { 443 } else { 80 };
@@ -175,11 +183,7 @@ fn do_request(
     };
 
     // Build and send HTTP request.
-    let path = if let Some(ref q) = url.query {
-        format!("{}?{}", url.path, q)
-    } else {
-        url.path.clone()
-    };
+    let path = url.request_target();
 
     let host_header = match url.port {
         Some(p) if p != default_port => format!("{host}:{p}"),
