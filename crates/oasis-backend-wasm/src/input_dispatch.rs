@@ -237,10 +237,21 @@ impl OasisWasm {
                     return;
                 }
 
+                // A titlebar close button asks the app first: an editor
+                // with unsaved changes answers with its prompt instead of
+                // closing (the WM would otherwise drop the window, and the
+                // edits, on the spot).
+                if let Some(id) = self.close_button_under(*x, *y) {
+                    self.request_close_window(&id);
+                    return;
+                }
                 let wm_event = self
                     .wm
                     .handle_input(&InputEvent::PointerClick { x: *x, y: *y }, &mut self.sdi);
                 match wm_event {
+                    // The close button is intercepted above; this only
+                    // fires if the WM's own hit test found one ours did
+                    // not. The window is already gone: clean up after it.
                     WmEvent::WindowClosed(id) => self.close_app_window(&id),
                     WmEvent::ContentClick(id, lx, ly) => {
                         if id == "browser"
@@ -332,13 +343,7 @@ impl OasisWasm {
                     self.fullscreen_app = Some(active_id);
                 }
             },
-            InputEvent::ButtonPress(Button::Cancel) => {
-                if let Some(active_id) = self.wm.active_window().map(|s| s.to_string()) {
-                    self.close_app_window(&active_id);
-                } else {
-                    self.mode = Mode::Dashboard;
-                }
-            },
+            InputEvent::ButtonPress(Button::Cancel) => self.desktop_cancel(),
             InputEvent::ButtonPress(Button::Start) if !self.skin.features.window_manager => {
                 self.mode = Mode::Terminal;
             },
@@ -456,13 +461,81 @@ impl OasisWasm {
         }
     }
 
-    /// Close window `id` (titlebar button, Cancel, an app's own `Exit`):
-    /// exit kiosk fullscreen, close the WM window (if the WM hasn't
-    /// already), stop the radio / music the app owned, release the
-    /// runner's backend resources (textures) before dropping it, tear down
-    /// the browser / YouTube overlays, and fall back to the dashboard when
-    /// the last window went away. The WASM counterpart of the desktop
-    /// shell's `windows::close_app_window`.
+    /// The window whose titlebar close button is at `(x, y)`, if any (and
+    /// clickable: not behind a modal, not a kiosk-fullscreen window).
+    fn close_button_under(&self, x: i32, y: i32) -> Option<String> {
+        let id = self.wm.window_at(x, y)?;
+        if self.wm.topmost_modal().is_some_and(|m| m != id) {
+            return None;
+        }
+        let win = self.wm.get_window(id).filter(|w| !w.fullscreen_kiosk)?;
+        let (bx, by, bw, bh) = win.close_btn_rect(self.wm.theme())?;
+        let hit = x >= bx && y >= by && x < bx + bw as i32 && y < by + bh as i32;
+        hit.then(|| id.to_string())
+    }
+
+    /// The user asked to close window `id` (titlebar button, Cancel on a
+    /// window that is not an app): the app is asked first
+    /// (`AppRunner::request_close`), and an app with unsaved changes
+    /// answers with its prompt instead, leaving the window open and
+    /// focused. Returns whether the window closed. The desktop shell's
+    /// `CloseHow::UserChrome`.
+    pub(crate) fn request_close_window(&mut self, id: &str) -> bool {
+        if let Some((_, runner)) = self.open_runners.iter_mut().find(|(rid, _)| rid == id)
+            && runner.request_close(&self.vfs) != AppAction::Exit
+        {
+            let _ = self.wm.focus_window(id, &mut self.sdi);
+            return false;
+        }
+        self.close_app_window(id);
+        true
+    }
+
+    /// Desktop-mode Cancel, as on the desktop shell: app windows own it
+    /// (it backs out of dialogs, leaves viewers, raises the Text Editor's
+    /// unsaved-changes prompt; the window closes only when the app answers
+    /// `Exit`); the browser ends typing first; other windows close.
+    fn desktop_cancel(&mut self) {
+        let Some(active_id) = self.wm.active_window().map(str::to_string) else {
+            if let Some(top) = self.wm.topmost_visible().map(str::to_string) {
+                // Windows on screen but none focused (e.g. after a click
+                // on the bare desktop): focus the top one so the next
+                // Cancel reaches it instead of leaving them dead to input.
+                let _ = self.wm.focus_window(&top, &mut self.sdi);
+            } else {
+                self.mode = Mode::Dashboard;
+            }
+            return;
+        };
+        if active_id != "browser"
+            && active_id != "terminal"
+            && let Some((_, runner)) = self
+                .open_runners
+                .iter_mut()
+                .find(|(id, _)| *id == active_id)
+        {
+            let action = runner.handle_input(&Button::Cancel, &self.vfs);
+            self.apply_window_action(action, active_id);
+            return;
+        }
+        if active_id == "browser"
+            && let Some(ref mut bw) = self.browser
+            && bw.accepts_text()
+        {
+            bw.handle_input(&InputEvent::ButtonPress(Button::Cancel), &self.vfs);
+            return;
+        }
+        self.request_close_window(&active_id);
+    }
+
+    /// Close window `id` unconditionally (an app's own `Exit`, or a window
+    /// the WM already dropped): exit kiosk fullscreen, close the WM window
+    /// (if the WM hasn't already), stop the radio / music the app owned,
+    /// release the runner's backend resources (textures) before dropping
+    /// it, tear down the browser / YouTube overlays, and fall back to the
+    /// dashboard when the last window went away. The WASM counterpart of
+    /// the desktop shell's `windows::close_app_window`; user-initiated
+    /// closes go through [`Self::request_close_window`].
     pub(crate) fn close_app_window(&mut self, id: &str) {
         if self.fullscreen_app.as_deref() == Some(id) {
             let _ = self.wm.exit_fullscreen(id, &mut self.sdi);
@@ -473,10 +546,10 @@ impl OasisWasm {
         }
         if let Some(pos) = self.open_runners.iter().position(|(rid, _)| rid == id) {
             let (_, mut runner) = self.open_runners.remove(pos);
-            // The WASM host has no music controller (Music Player requests
-            // go unserved), so only the radio needs stopping.
-            if self.apps.owned_media(&runner.title) == Some(OwnedMedia::Radio) {
-                self.stop_radio();
+            match self.apps.owned_media(&runner.title) {
+                Some(OwnedMedia::Radio) => self.stop_radio(),
+                Some(OwnedMedia::Music) => self.stop_music(),
+                None => {},
             }
             runner.release_resources(&mut self.backend);
         }
