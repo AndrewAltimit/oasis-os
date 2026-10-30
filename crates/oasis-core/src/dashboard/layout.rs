@@ -29,7 +29,7 @@ impl DashboardState {
     /// to the historical per-icon computation. Free mode uses stored
     /// positions where available and column-major auto-flow for the rest,
     /// skipping cells already claimed by a placed icon.
-    pub fn page_cell_origins(&self) -> Vec<(i32, i32)> {
+    pub(crate) fn page_cell_origins(&self) -> Vec<(i32, i32)> {
         let count = self.current_page_apps().len();
         if !self.config.free_layout {
             let per_page = self.config.icons_per_page as usize;
