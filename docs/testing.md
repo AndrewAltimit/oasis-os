@@ -79,7 +79,11 @@ the shell:
   the drawn text, and `draw_all_sizes_and_themes` sweeps `SIZES` x `THEMES`;
 - `fuzz_app(make, vfs, seed, events)` is the generic property test:
   seeded random events at random sizes and themes, asserting no panic and
-  no clip escape.
+  no clip escape;
+- `click_at(&mut app, lx, ly, cw, ch, &vfs)` is the one-call version for
+  in-module unit tests: `layout(cw, ch, default theme)` then
+  `handle_click(lx, ly, &vfs)`, the host's click sequence
+  (`handle_click` itself takes no size).
 
 ```rust,ignore
 let mut h = AppHarness::new(Box::new(CalculatorApp::new("/apps/calc")));

@@ -321,7 +321,8 @@ way a host does: a `Confirm`, 90 ticks of 16 ms, a lap, `Ctrl+S` through
 
 Apps are plain structs, so test them in-module (`#[cfg(test)] mod tests`)
 against `oasis_vfs::MemoryVfs`: feed `handle_input` / `handle_key` /
-`handle_click`, call `tick` with synthetic `dt_ms`, drain
+`handle_click` (after `layout`, or via `testing::click_at`), call `tick`
+with synthetic `dt_ms`, drain
 `apply_vfs_ops(&mut vfs)` and `drain_requests`, and assert on `lines()`,
 your own state or VFS contents. Drawing can be exercised with the mock
 backends in `oasis-test-backend`.
