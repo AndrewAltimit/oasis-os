@@ -495,7 +495,7 @@ impl SdiCore for PspBackend {
         if self.destroy_texture_inner(tex) {
             Ok(())
         } else {
-            Err(oasis_types::backend::texture_not_found(tex.0))
+            Err(oasis_core::backend::texture_not_found(tex.0))
         }
     }
 
