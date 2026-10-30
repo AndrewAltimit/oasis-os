@@ -137,7 +137,7 @@ any other:
 | `ListView<T>` | `list_view.rs` | Scrollable list with virtualized item rendering (items drawn by a caller `fn`); `scroll_to` / clamped `scroll_by` |
 | `MenuBar` | `menu_bar.rs` | Windows-95-style top menu bar with drop-downs; returns `MenuHit` for clicks (used by Paint, Text Editor) |
 | `NinePatch`, `NinePatchSlices` | `nine_patch.rs` | 9-slice rendering of themed borders from a texture (re-exported from `oasis_types::nine_patch`) |
-| `FlexLayout`, `GridLayout` | `flex.rs` | Lightweight flex and grid layout helpers producing `ComputedRect`s |
+| `FlexLayout`, `GridLayout` | `flex.rs` | Lightweight flex and grid layout helpers producing `ComputedRect`s; flex shares sum to exactly the free space (no stray pixel after the last child) and huge sizes saturate |
 | `Padding`, `center`, `distribute`, `max_scroll`, `HAlign` / `VAlign`, `MeasureCache` | `layout.rs` | Centering, alignment, padding, distribution, scroll bounds, cached text measurement |
 | `FocusRing`, `FocusManager`, `SpatialFocusManager`, `FocusStyle` | `focus/` (`ring.rs`, `manager.rs`, `spatial.rs`, `style.rs`) | Index focus cursor; Tab / Shift-Tab cycling that skips disabled items; tab-index + arrow-key spatial navigation (consumes the backends' `InputEvent::Tab` / `ShiftTab`); focus-ring styling from the theme |
 | `Tween`, `ColorTween`, easing functions | `animation.rs` | Frame-driven animation primitives |
