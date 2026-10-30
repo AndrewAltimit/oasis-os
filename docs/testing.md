@@ -49,12 +49,12 @@ crate can take it as a dev-dependency). Pick the narrowest one:
 Write a custom recorder only when the doubles cannot express the check
 (e.g. `oasis-vector` logs the high-level shape calls themselves, the TV
 e2e `FrameSink` hashes uploaded textures). Implement `SdiCore` and let
-`oasis_types::impl_sdi_defaults!` write the nine extension impls:
+`oasis_types::impl_sdi_defaults!` write the eight extension impls:
 
 ```rust,ignore
 struct MyRecorder { /* ... */ }
 impl SdiCore for MyRecorder { /* the 13 required methods */ }
-// All nine extension traits with their defaults ...
+// All eight extension traits with their defaults ...
 oasis_types::impl_sdi_defaults!(MyRecorder);
 // ... or all but the ones you override yourself.
 oasis_types::impl_sdi_defaults!(MyRecorder; except SdiShapes, SdiVector);
