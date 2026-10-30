@@ -1,11 +1,9 @@
 //! `SdiTextures` and `SdiClipTransform` implementations for the WASM backend.
 
-use oasis_types::backend::stacks::ClipPush;
 use oasis_types::backend::{
     Color, SdiClipTransform, SdiCore, SdiTextures, TextureId, texture_not_found,
 };
 use oasis_types::error::Result;
-use oasis_types::geometry::ClipRect;
 
 use crate::renderer::{WasmBackend, cached_css_color, js_err};
 
@@ -117,41 +115,30 @@ impl SdiTextures for WasmBackend {
 
 impl SdiClipTransform for WasmBackend {
     fn push_clip_rect(&mut self, x: i32, y: i32, w: u32, h: u32) -> Result<()> {
-        let (tx, ty) = self.translate_stack.translate(x, y);
-        let applied = match self.clip_stack.push(ClipRect { x: tx, y: ty, w, h }) {
-            ClipPush::Clip(c) => c,
-            ClipPush::Empty => ClipRect {
-                x: 0,
-                y: 0,
-                w: 0,
-                h: 0,
-            },
-        };
-        self.apply_clip(Some(applied));
+        self.clip.push(&self.ctx, x, y, w, h);
         Ok(())
     }
 
     fn pop_clip_rect(&mut self) -> Result<()> {
-        let prev = self.clip_stack.pop();
-        self.apply_clip(prev);
+        self.clip.pop(&self.ctx);
         Ok(())
     }
 
     fn current_clip_rect(&self) -> Option<(i32, i32, u32, u32)> {
-        self.clip_stack.current_tuple()
+        self.clip.stack.current_tuple()
     }
 
     fn push_translate(&mut self, dx: i32, dy: i32) -> Result<()> {
-        self.translate_stack.push(dx, dy);
+        self.clip.translate.push(dx, dy);
         Ok(())
     }
 
     fn pop_translate(&mut self) -> Result<()> {
-        self.translate_stack.pop();
+        self.clip.translate.pop();
         Ok(())
     }
 
     fn current_translate(&self) -> (i32, i32) {
-        self.translate_stack.current()
+        self.clip.translate.current()
     }
 }
