@@ -9,7 +9,7 @@ hosts all drive the same `WindowManager`; the PSP backend uses a
 PSP-tuned `WmTheme` (`psp_wm_theme()`).
 
 This guide is the practical API summary. The design rationale lives in
-[design.md §4.5](design.md#45-window-manager) (4.5.1 - 4.5.9).
+[design.md §4.5](design.md#45-window-manager) (4.5.1 - 4.5.6).
 
 ## Model
 
