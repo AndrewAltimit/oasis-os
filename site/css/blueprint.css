@@ -65,7 +65,7 @@
 #tabs:empty { display: none; }
 #tabs button {
   font-family: var(--mono); font-size: 0.7rem; letter-spacing: 0.06em; cursor: pointer;
-  padding: 0.4rem 0.75rem; border-radius: 999px;
+  padding: 0.4rem 0.75rem; border-radius: var(--radius-pill);
   background: transparent; color: rgba(207, 230, 255, 0.75);
   border: 1px solid rgba(92, 178, 255, 0.3);
   transition: background-color 0.2s, color 0.2s, border-color 0.2s;
