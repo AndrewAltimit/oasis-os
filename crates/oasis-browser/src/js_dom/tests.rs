@@ -1436,6 +1436,60 @@ const TREE_HTML: &str = "<html><head><title>T</title></head><body>\
     </div><section id=\"other\"></section></body></html>";
 
 #[test]
+fn document_cookie_is_size_and_count_capped() {
+    use crate::loader::cookies::{MAX_COOKIE_SIZE, MAX_COOKIES_PER_DOMAIN};
+    let engine = setup_page("https://example.com/", None, None);
+    // Oversized pairs are ignored, never stored.
+    check(
+        &engine,
+        &format!(
+            "document.cookie = 'big=' + 'x'.repeat({MAX_COOKIE_SIZE}); \
+             document.cookie = 'ok=1; path=/'; document.cookie"
+        ),
+        "ok=1",
+    );
+    // A flood of distinct names keeps only the newest
+    // MAX_COOKIES_PER_DOMAIN, evicting the oldest first.
+    engine
+        .eval("for (var i = 0; i < 10000; i++) document.cookie = 'k' + i + '=v';")
+        .unwrap();
+    let n = MAX_COOKIES_PER_DOMAIN;
+    check(
+        &engine,
+        "String(document.cookie.split('; ').length)",
+        &n.to_string(),
+    );
+    check(
+        &engine,
+        "String(document.cookie.indexOf('k9999=v') >= 0)",
+        "true",
+    );
+    check(
+        &engine,
+        "String(document.cookie.indexOf('ok=') >= 0)",
+        "false",
+    );
+}
+
+#[test]
+fn document_cookie_overwrite_and_delete() {
+    let engine = setup_page("https://example.com/", None, None);
+    check(
+        &engine,
+        "document.cookie = 'a=1'; document.cookie = 'b=2'; document.cookie = 'a=3'; \
+         document.cookie",
+        "a=3; b=2",
+    );
+    check(
+        &engine,
+        "document.cookie = 'a=; max-age=0'; \
+         document.cookie = 'b=; expires=Thu, 01 Jan 1970 00:00:00 GMT'; \
+         document.cookie = 'c=\\u0001'; document.cookie = 'd=4'; document.cookie",
+        "d=4",
+    );
+}
+
+#[test]
 fn wrappers_are_cached_per_node_id() {
     let (engine, _doc) = setup_html(TREE_HTML);
     check(
