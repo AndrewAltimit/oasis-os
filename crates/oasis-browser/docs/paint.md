@@ -29,7 +29,7 @@ src/paint/
 │   ├── replay.rs       replay() / replay_dirty(): clip/opacity/layer/sticky stacks, batching
 │   └── mask.rs         mask-* rasterizers applied when a compositing layer pops
 ├── filter_chain.rs     per-pixel filter chain + CPU blend for compositing layers
-├── filters.rs          per-color filter approximations used while recording
+├── filters.rs          per-color filter approximation (replay fallback without readback)
 ├── stacking.rs         stacking-context / compositing-layer / positioned predicates
 ├── transforms.rs       transform-origin, perspective-origin, 3D detection
 ├── clip_path.rs        clip-path bounding rect, rect intersection
@@ -147,7 +147,10 @@ Replay walks the items in order and keeps:
   target when the backend supports one, and the pop composites it back
   with its blend mode and opacity, running the filter chain and mask on
   CPU readback first where `supports_render_target_readback()`. Without
-  render targets (PSP) a compositing layer degrades to plain opacity;
+  render targets (PSP) or readback a compositing layer degrades to plain
+  opacity, and its box-level `filter` to the per-color approximation
+  (`filters.rs`) applied to every item color inside the layer. Recorded
+  colors are never pre-filtered, so a filter is applied exactly once;
 - a sticky stack that recomputes each sticky group's offset for the
   replay scroll position, so scrolling can replay a cached list.
 
@@ -178,10 +181,9 @@ id and replay only the dirty rectangles.
 - `clip-path` clips to the shape's bounding box (no stencil).
 - `backdrop-filter` isolates the element into a compositing layer, but
   the backdrop is not sampled or filtered.
-- Box-level `filter` colors are approximated per color while recording
-  and, on render-target backends with readback, the per-pixel chain
-  also runs on the layer, so color-only filters on the element's own
-  background and text apply twice there.
+- Without render-target readback, box-level `filter` is a per-color
+  approximation: `blur()` / `drop-shadow()` have no effect and images
+  inside the layer are not filtered.
 
 ## Tests and benches
 

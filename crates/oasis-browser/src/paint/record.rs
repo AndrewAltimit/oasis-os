@@ -18,8 +18,8 @@ use crate::transform::{AffineTransform2D, Matrix3d};
 use oasis_types::backend::Color;
 
 use super::display_list::{DisplayItem, DisplayList, sticky_offset};
+use super::intersect_rects;
 use super::{LinkRegion, PaintViewport};
-use super::{filters, intersect_rects};
 
 // -------------------------------------------------------------------
 // Internal recording context
@@ -809,11 +809,10 @@ fn record_background(
     let w = padding.width as u32;
     let h = padding.height as u32;
 
-    let bg = apply_filters_and_opacity(
-        layout_box.style.background_color,
-        effective_opacity,
-        &layout_box.style.filters,
-    );
+    // Box-level `filter` is not baked in here: the element's
+    // compositing layer applies it at replay (per-pixel on readback, or
+    // the per-color approximation where the backend has no readback).
+    let bg = apply_opacity(layout_box.style.background_color, effective_opacity);
     if bg.a > 0 {
         let sx = padding.x - ctx.scroll_x + offset_x as f32;
         let sy = padding.y - ctx.scroll_y + offset_y as f32;
@@ -1422,7 +1421,8 @@ fn record_text(
 
     // Opacity is handled by PushLayer/PopLayer during replay — use 1.0 here
     // to avoid doubling opacity (once in recording, once during replay).
-    let color = apply_filters_and_opacity(style.color, 1.0, &style.filters);
+    // `filter` is applied by the compositing layer at replay.
+    let color = style.color;
     let bold = style.font_weight.is_bold();
     let italic = style.font_style == crate::css::values::FontStyle::Italic;
     let font_size = style.font_size as u16;
@@ -1508,10 +1508,7 @@ fn record_text(
     });
 
     if !style.text_decoration.line.is_none() {
-        let deco_color = style
-            .text_decoration
-            .color
-            .map_or(color, |c| apply_filters_and_opacity(c, 1.0, &style.filters));
+        let deco_color = style.text_decoration.color.unwrap_or(color);
         let positions: &[(bool, i32)] = &[
             (
                 style.text_decoration.line.has_underline(),
@@ -2662,19 +2659,6 @@ pub(super) fn has_text_content(layout_box: &LayoutBox) -> bool {
 
 fn apply_opacity(color: Color, opacity: f32) -> Color {
     color.apply_opacity(opacity)
-}
-
-fn apply_filters_and_opacity(
-    color: Color,
-    opacity: f32,
-    filter_list: &[crate::css::values::FilterFunction],
-) -> Color {
-    let c = if filter_list.is_empty() {
-        color
-    } else {
-        filters::apply_filters(color, filter_list)
-    };
-    c.apply_opacity(opacity)
 }
 
 #[cfg(test)]

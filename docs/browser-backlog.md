@@ -437,13 +437,11 @@ shipped. Each is small enough for a focused PR.
   scale / skew / 3D transform the recorder emits the background as a
   `FillPolygon` quad, but borders, outlines, text and images keep
   following the translation only (`paint/record.rs`).
-- **Box-level `filter` double-applies on render-target backends.**
-  `record.rs` pre-applies the per-color filter approximation to the
-  element's own background / text colors *and* the compositing layer
-  runs the per-pixel chain on readback (`replay.rs`), so e.g.
-  `filter: invert(1)` cancels out on the element's own colors on
-  SDL / WASM / UE5. Fix: record raw colors and apply the per-color
-  approximation in replay's no-render-target fallback.
+- ~~**Box-level `filter` double-applies on render-target backends.**~~
+  **Fixed (wave 5).** `record.rs` records raw colors; replay applies
+  the per-color approximation only where the per-pixel readback chain
+  does not run (no render target, no readback, `replay_dirty`), to
+  every item color inside the layer.
 - **`backdrop-filter` is not sampled.** It only isolates the element
   into a compositing layer; the backdrop is never read or filtered.
 - **`parallel-style` is not linted in CI.** The feature lives in

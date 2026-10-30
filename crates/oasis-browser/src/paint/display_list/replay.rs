@@ -106,6 +106,12 @@ impl DisplayList {
         // to every drawable inside the layer so contents land at
         // target-local coordinates.
         let mut layer_stack: Vec<ActiveLayer> = Vec::new();
+        // One entry per active compositing layer: the box-level filter
+        // chain to approximate per color on the items inside it. Empty
+        // when the layer's pixels get the real per-pixel chain on
+        // readback (render target + readback support), so a filter is
+        // never applied twice.
+        let mut filter_stack: Vec<&[FilterFunction]> = Vec::new();
         let mut compositor_dx: i32 = 0;
         let mut compositor_dy: i32 = 0;
         // Batch of consecutive FillRect items for batched submission.
@@ -189,11 +195,19 @@ impl DisplayList {
                         compositor_dy = -screen_y;
                     } else {
                         // Fallback: plain opacity stacking. Blend mode
-                        // and filters are dropped — documented as the
+                        // is dropped and filters degrade to the
+                        // per-color approximation — documented as the
                         // accepted degradation in
                         // `docs/archive/compositor-overhaul-plan.md` §3.4 step 4.
                         opacity_stack.push(*opacity);
                     }
+                    let per_pixel_filter =
+                        layer_id.is_some() && backend.supports_render_target_readback();
+                    filter_stack.push(if per_pixel_filter {
+                        &[]
+                    } else {
+                        filters.as_slice()
+                    });
                     layer_stack.push(ActiveLayer {
                         id: layer_id,
                         dst_x: dx,
@@ -213,6 +227,7 @@ impl DisplayList {
                     flush_rect_batch(backend, &mut rect_batch)?;
                     flush_text_batch(backend, &mut text_batch, text_batch_key)?;
                     if let Some(layer) = layer_stack.pop() {
+                        filter_stack.pop();
                         if let Some(id) = layer.id {
                             // Restore the parent layer's compositor
                             // offset (or zero if this was the
@@ -420,7 +435,7 @@ impl DisplayList {
                     x, y, w, h, color, ..
                 } => {
                     flush_text_batch(backend, &mut text_batch, text_batch_key)?;
-                    let c = apply_layer_opacity(*color, layer_opacity);
+                    let c = layer_color(*color, layer_opacity, &filter_stack);
                     rect_batch.push(BatchRect {
                         x: x + scroll_dx,
                         y: y + eff_dy,
@@ -449,7 +464,7 @@ impl DisplayList {
                     #[cfg(feature = "web-fonts")]
                     if let Some(font_id) = web_font_id {
                         flush_text_batch(backend, &mut text_batch, text_batch_key)?;
-                        let c = apply_layer_opacity(*color, layer_opacity);
+                        let c = layer_color(*color, layer_opacity, &filter_stack);
                         if let Some(ref mut renderer) = web_font_renderer {
                             renderer.render(
                                 backend,
@@ -475,7 +490,7 @@ impl DisplayList {
                         continue;
                     }
 
-                    let c = apply_layer_opacity(*color, layer_opacity);
+                    let c = layer_color(*color, layer_opacity, &filter_stack);
                     let key = (*font_size, *bold, *italic);
                     if !text_batch.is_empty() && text_batch_key != key {
                         flush_text_batch(backend, &mut text_batch, text_batch_key)?;
@@ -506,11 +521,11 @@ impl DisplayList {
                     color,
                     ..
                 } => {
-                    let c = apply_layer_opacity(*color, layer_opacity);
+                    let c = layer_color(*color, layer_opacity, &filter_stack);
                     backend.fill_rounded_rect(x + scroll_dx, y + eff_dy, *w, *h, *radius, c)?;
                 },
                 DisplayItem::FillPolygon { points, color, .. } => {
-                    let c = apply_layer_opacity(*color, layer_opacity);
+                    let c = layer_color(*color, layer_opacity, &filter_stack);
                     let shifted = [
                         (points[0].0 + scroll_dx, points[0].1 + eff_dy),
                         (points[1].0 + scroll_dx, points[1].1 + eff_dy),
@@ -563,7 +578,7 @@ impl DisplayList {
                     style,
                     horizontal,
                 } => {
-                    let c = apply_layer_opacity(*color, layer_opacity);
+                    let c = layer_color(*color, layer_opacity, &filter_stack);
                     replay_border_edge(
                         backend,
                         x + scroll_dx,
@@ -587,7 +602,7 @@ impl DisplayList {
                     color,
                     radius,
                 } => {
-                    let c = apply_layer_opacity(*color, layer_opacity);
+                    let c = layer_color(*color, layer_opacity, &filter_stack);
                     backend.fill_shadow(
                         x + scroll_dx,
                         y + eff_dy,
@@ -658,6 +673,7 @@ impl DisplayList {
         backend.begin_batch()?;
 
         let mut opacity_stack: Vec<f32> = Vec::new();
+        let mut filter_stack: Vec<&[FilterFunction]> = Vec::new();
         let mut clip_stack: Vec<(i32, i32, u32, u32)> = Vec::new();
         let mut sticky_dy_stack: Vec<i32> = Vec::new();
         let mut rect_batch: Vec<BatchRect> = Vec::new();
@@ -708,16 +724,22 @@ impl DisplayList {
                     opacity_stack.pop();
                     continue;
                 },
-                DisplayItem::PushCompositingLayer { opacity, .. } => {
+                DisplayItem::PushCompositingLayer {
+                    opacity, filters, ..
+                } => {
+                    // No render targets on the dirty path: opacity
+                    // stacking plus the per-color filter approximation.
                     flush_rect_batch(backend, &mut rect_batch)?;
                     flush_text_batch(backend, &mut text_batch, text_batch_key)?;
                     opacity_stack.push(*opacity);
+                    filter_stack.push(filters.as_slice());
                     continue;
                 },
                 DisplayItem::PopCompositingLayer => {
                     flush_rect_batch(backend, &mut rect_batch)?;
                     flush_text_batch(backend, &mut text_batch, text_batch_key)?;
                     opacity_stack.pop();
+                    filter_stack.pop();
                     continue;
                 },
                 DisplayItem::PushSticky {
@@ -781,7 +803,7 @@ impl DisplayList {
                     x, y, w, h, color, ..
                 } => {
                     flush_text_batch(backend, &mut text_batch, text_batch_key)?;
-                    let c = apply_layer_opacity(*color, layer_opacity);
+                    let c = layer_color(*color, layer_opacity, &filter_stack);
                     rect_batch.push(BatchRect {
                         x: x + scroll_dx,
                         y: y + eff_dy,
@@ -808,7 +830,7 @@ impl DisplayList {
                     #[cfg(feature = "web-fonts")]
                     if let Some(font_id) = web_font_id {
                         flush_text_batch(backend, &mut text_batch, text_batch_key)?;
-                        let c = apply_layer_opacity(*color, layer_opacity);
+                        let c = layer_color(*color, layer_opacity, &filter_stack);
                         if let Some(ref mut renderer) = web_font_renderer {
                             renderer.render(
                                 backend,
@@ -833,7 +855,7 @@ impl DisplayList {
                         continue;
                     }
 
-                    let c = apply_layer_opacity(*color, layer_opacity);
+                    let c = layer_color(*color, layer_opacity, &filter_stack);
                     let key = (*font_size, *bold, *italic);
                     if !text_batch.is_empty() && text_batch_key != key {
                         flush_text_batch(backend, &mut text_batch, text_batch_key)?;
@@ -863,11 +885,11 @@ impl DisplayList {
                     color,
                     ..
                 } => {
-                    let c = apply_layer_opacity(*color, layer_opacity);
+                    let c = layer_color(*color, layer_opacity, &filter_stack);
                     backend.fill_rounded_rect(x + scroll_dx, y + eff_dy, *w, *h, *radius, c)?;
                 },
                 DisplayItem::FillPolygon { points, color, .. } => {
-                    let c = apply_layer_opacity(*color, layer_opacity);
+                    let c = layer_color(*color, layer_opacity, &filter_stack);
                     let shifted = [
                         (points[0].0 + scroll_dx, points[0].1 + eff_dy),
                         (points[1].0 + scroll_dx, points[1].1 + eff_dy),
@@ -920,7 +942,7 @@ impl DisplayList {
                     style,
                     horizontal,
                 } => {
-                    let c = apply_layer_opacity(*color, layer_opacity);
+                    let c = layer_color(*color, layer_opacity, &filter_stack);
                     replay_border_edge(
                         backend,
                         x + scroll_dx,
@@ -944,7 +966,7 @@ impl DisplayList {
                     color,
                     radius,
                 } => {
-                    let c = apply_layer_opacity(*color, layer_opacity);
+                    let c = layer_color(*color, layer_opacity, &filter_stack);
                     backend.fill_shadow(
                         x + scroll_dx,
                         y + eff_dy,
@@ -1130,6 +1152,19 @@ fn apply_layer_opacity(color: Color, opacity: f32) -> Color {
     }
     let a = (color.a as f32 * opacity).round().clamp(0.0, 255.0) as u8;
     Color::rgba(color.r, color.g, color.b, a)
+}
+
+/// A recorded color as drawn inside the active layers: each layer's
+/// per-color filter approximation (innermost first, as filters apply to
+/// a layer's content before its ancestors'), then the layer opacity.
+fn layer_color(color: Color, opacity: f32, filters: &[&[FilterFunction]]) -> Color {
+    let mut c = color;
+    for chain in filters.iter().rev() {
+        if !chain.is_empty() {
+            c = crate::paint::filters::apply_filters(c, chain);
+        }
+    }
+    apply_layer_opacity(c, opacity)
 }
 
 /// Test whether two rectangles overlap.
