@@ -15,7 +15,8 @@
 //! - `QUIT` -- close the connection
 //!
 //! Errors are `400` (bad request), `500` (VFS error) or `530` (auth).
-//! Paths go straight to the served [`Vfs`], which confines them to its root
+//! Paths are resolved inside the served directory ([`FtpServer::with_root`];
+//! the whole VFS by default) and then by the [`Vfs`], which confines them
 //! (see `oasis_vfs::normalize_path`). The password travels in clear text:
 //! with one the server listens on all interfaces, so use it on trusted
 //! networks only. Failed logins are throttled server-wide.
@@ -28,7 +29,7 @@ use std::time::Instant;
 use oasis_types::backend::{NetworkBackend, NetworkStream};
 use oasis_types::error::Result;
 use oasis_types::util::ct_eq;
-use oasis_vfs::Vfs;
+use oasis_vfs::{SubtreeVfs, Vfs};
 
 use crate::auth::{AUTH_TIMEOUT, AuthThrottle};
 
@@ -386,10 +387,13 @@ pub struct FtpServer {
     password: Option<String>,
     /// Server-wide throttle for failed `PASS` attempts.
     auth_failures: AuthThrottle,
+    /// Directory of the VFS that clients see as `/` (normalized).
+    root: String,
 }
 
 impl FtpServer {
-    /// Create a new FTP server on the given port.
+    /// Create a new FTP server on the given port, serving the whole VFS
+    /// (narrow it with [`with_root`](Self::with_root)).
     pub fn new(port: u16) -> Self {
         Self {
             port,
@@ -397,6 +401,7 @@ impl FtpServer {
             listening: false,
             password: None,
             auth_failures: AuthThrottle::new(),
+            root: "/".to_string(),
         }
     }
 
@@ -404,6 +409,24 @@ impl FtpServer {
     pub fn with_password(mut self, password: String) -> Self {
         self.password = Some(password);
         self
+    }
+
+    /// Serve only the directory `root` of the VFS: clients see it as `/`
+    /// and cannot name anything outside it (a [`SubtreeVfs`] view). Hosts
+    /// whose VFS holds system state (`/system`, `/var` IPC files) should
+    /// serve a user directory such as `/home`.
+    ///
+    /// # Errors
+    ///
+    /// When `root` is not a valid VFS path (`..` above `/`, NUL byte).
+    pub fn with_root(mut self, root: &str) -> Result<Self> {
+        self.root = oasis_vfs::normalize_path(root)?.into_owned();
+        Ok(self)
+    }
+
+    /// The served directory (`/` = the whole VFS).
+    pub fn root(&self) -> &str {
+        &self.root
     }
 
     /// Start listening on the configured port.
@@ -474,6 +497,8 @@ impl FtpServer {
         }
 
         let password = self.password.as_deref();
+        // Clients see only the served subtree.
+        let mut view = SubtreeVfs::new(vfs, &self.root)?;
         for conn in &mut self.connections {
             conn.flush();
             if conn.dead || conn.closing_since.is_some() {
@@ -508,7 +533,7 @@ impl FtpServer {
             }
             // Buffered lines are processed every poll, not only when new
             // bytes arrive (a burst beyond MAX_CMDS_PER_POLL would stall).
-            conn.process_lines(password, &mut self.auth_failures, vfs);
+            conn.process_lines(password, &mut self.auth_failures, &mut view);
 
             // Peer closed: once every complete line has been answered, drop
             // it (an unterminated trailing line is a partial transfer and is
@@ -1070,6 +1095,39 @@ mod tests {
             "should not mention auth"
         );
         assert!(written.contains("200"), "LIST should work without auth");
+    }
+
+    #[test]
+    fn ftp_root_confines_clients_to_the_served_directory() {
+        let output: WriteBuf = Arc::new(Mutex::new(Vec::new()));
+        let stream = MockStream::new(
+            b"LIST /\nGET /../system/secret\nGET /system/secret\nPUT /up.txt hi\n\
+              DELETE /\nGET /notes.txt\n",
+            Arc::clone(&output),
+        );
+        let mut backend = MockBackend::new();
+        backend.add_stream(Box::new(stream));
+
+        let mut server = FtpServer::new(2121).with_root("/home/").unwrap();
+        assert_eq!(server.root(), "/home");
+        assert!(FtpServer::new(1).with_root("/../etc").is_err());
+        server.start(&mut backend).unwrap();
+
+        let mut vfs = MemoryVfs::new();
+        vfs.mkdir("/home").unwrap();
+        vfs.write("/home/notes.txt", b"mine").unwrap();
+        vfs.mkdir("/system").unwrap();
+        vfs.write("/system/secret", b"s3cret").unwrap();
+        server.poll(&mut backend, &mut vfs).unwrap();
+
+        let written = read_output(&output);
+        assert!(written.contains("f 4 notes.txt"), "{written}");
+        assert!(written.contains("path traversal not allowed"), "{written}");
+        assert!(!written.contains("s3cret"), "{written}");
+        assert!(written.contains("200 4 bytes\nmine"), "{written}");
+        assert!(written.contains("cannot remove root"), "{written}");
+        assert_eq!(vfs.read("/home/up.txt").unwrap(), b"hi");
+        assert!(!vfs.exists("/up.txt"));
     }
 
     #[test]

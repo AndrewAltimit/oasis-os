@@ -9,11 +9,13 @@ mod game_asset;
 mod memory;
 #[cfg(not(target_arch = "wasm32"))]
 mod real;
+mod subtree;
 
 pub use game_asset::GameAssetVfs;
 pub use memory::MemoryVfs;
 #[cfg(not(target_arch = "wasm32"))]
 pub use real::RealVfs;
+pub use subtree::SubtreeVfs;
 
 use oasis_types::error::{OasisError, Result, VfsError};
 

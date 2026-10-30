@@ -259,6 +259,44 @@ fn memory_vfs_put_get_round_trip_with_checksums() {
 }
 
 #[test]
+fn served_root_hides_the_rest_of_the_vfs() {
+    let server = FtpServer::new(0).with_root("/home").unwrap();
+    let (mut backend, mut server, port) = start(server);
+    let mut vfs = MemoryVfs::new();
+    vfs.mkdir("/home/docs").unwrap();
+    vfs.write("/home/docs/a.txt", b"mine").unwrap();
+    vfs.mkdir("/system/ipc").unwrap();
+    vfs.write("/system/ipc/token", b"TOPSECRET").unwrap();
+    vfs.mkdir("/var/wm").unwrap();
+    let client = thread::spawn(move || {
+        let mut c = Client::open(port);
+        assert_eq!(c.list("/", 1), vec!["docs".to_string()]);
+        assert_eq!(c.get("/docs/a.txt").unwrap(), b"mine");
+        let mut refused = String::new();
+        for req in [
+            "GET /system/ipc/token",
+            "GET ../system/ipc/token",
+            "GET /docs/../../system/ipc/token",
+            "LIST /..",
+            "PUT /../var/wm/request open x",
+            "DELETE /",
+            "RENAME / /gone",
+        ] {
+            let resp = c.cmd(req);
+            assert!(resp.starts_with("500 "), "{req:?} was not refused: {resp}");
+            refused.push_str(&resp);
+        }
+        assert!(c.cmd("PUT /docs/b.txt uploaded").starts_with("200 "));
+        refused
+    });
+    let refused = serve(&mut backend, &mut server, &mut vfs, client);
+    assert!(!refused.contains("TOPSECRET"));
+    assert_eq!(vfs.read("/home/docs/b.txt").unwrap(), b"uploaded");
+    assert!(!vfs.exists("/var/wm/request"));
+    assert!(vfs.exists("/home"));
+}
+
+#[test]
 fn real_vfs_file_workflow() {
     let tmp = tempfile::tempdir().unwrap();
     let mut vfs = RealVfs::new(tmp.path()).unwrap();
