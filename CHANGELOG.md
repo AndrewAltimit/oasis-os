@@ -241,6 +241,11 @@ removal, a restyled site, and docs that match the code.
   progress undid a tile / maximize / snap / fullscreen on the next mouse
   move; interrupted open / minimize / restore animations jumped; grid
   tiling left the partial last row's cells empty.
+- Scene graph / vector / shaders: SDI `z` / `overlay` edits made through
+  `get_mut` now reorder the next draw; the vector `AnimClock` keeps f64
+  time (animations ran ~2x fast after ~3 days up); matrix-rain wallpaper
+  falls instead of rising; the GLSL shaders match the CPU renderer
+  (orientation, per-shader defaults, hashes).
 
 ### Terminal
 
