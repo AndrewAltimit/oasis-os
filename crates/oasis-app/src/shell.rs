@@ -25,7 +25,6 @@ use std::time::{Duration, Instant};
 
 use anyhow::Result;
 
-use oasis_audio::RadioManager;
 use oasis_backend_sdl::shader_bridge::SdlShaderBridge;
 use oasis_core::active_theme::ActiveTheme;
 use oasis_core::backend::SdiBackend;
@@ -33,19 +32,18 @@ use oasis_core::bottombar::BottomBar;
 use oasis_core::browser::BrowserConfig;
 use oasis_core::config::OasisConfig;
 use oasis_core::cursor::CursorState;
-use oasis_core::dashboard::{DashboardConfig, DashboardState, discover_apps_themed};
+use oasis_core::dashboard::{AppEntry, DashboardConfig, DashboardState};
 use oasis_core::input::{InputEvent, KeyTwinFilter};
-use oasis_core::net::{RustlsTlsProvider, StdNetworkBackend};
 use oasis_core::platform::{DesktopPlatform, NetworkService, PowerService, TimeService};
-use oasis_core::plugin::{PluginManager, register_builtin_plugins};
+use oasis_core::plugin::{Plugin, PluginManager, register_builtin_plugins};
 use oasis_core::sdi::SdiRegistry;
 use oasis_core::settings::{SettingsStore, UserPrefs};
 use oasis_core::skin::{Skin, resolve_skin};
 use oasis_core::startmenu::StartMenuState;
 use oasis_core::statusbar::StatusBar;
 use oasis_core::terminal::{
-    CommandRegistry, ShellSession, register_agent_commands, register_builtins,
-    register_plugin_commands, register_tv_commands,
+    CommandRegistry, register_agent_commands, register_builtins, register_plugin_commands,
+    register_tv_commands,
 };
 use oasis_core::terminal_sdi;
 use oasis_core::toast::{ToastLevel, ToastManager};
@@ -55,13 +53,20 @@ use oasis_core::vfs::{MemoryVfs, Vfs};
 use oasis_core::wallpaper;
 use oasis_core::wm::manager::WindowManager;
 
-use crate::app_state::{AppState, ContentLayer, Mode, NetworkLayer, TerminalLayer, UiLayer};
+use crate::app_state::{
+    AppState, ContentLayer, Mode, NetworkLayer, RadioLayer, TerminalLayer, TvLayer, UiLayer,
+};
 use crate::audio_out::ShellAudio;
+use crate::launch::{BROWSER_WIN, LaunchOpts};
 use crate::shell_backend::ShellBackend;
 use crate::{
     commands, frame_stats, icon_drag, input, launch, media_controller, radio_controller, render,
-    sysinfo, terminal_input, tv_controller, ui_ipc, ui_sfx, user_prefs, vfs_setup, video_player,
+    sysinfo, terminal_input, tv_controller, ui_ipc, ui_sfx, user_prefs, vfs_setup,
 };
+
+/// How often the status bar clock / battery / Wi-Fi, the System Monitor
+/// probe and the settings disk mirror refresh.
+const SYSINFO_INTERVAL: Duration = Duration::from_secs(1);
 
 /// After an input event, keep redrawing unconditionally for this long —
 /// covers hover states, drags, key repeat, and any UI that reacts a few
@@ -107,6 +112,10 @@ pub struct BootOptions {
     /// Quit this many seconds after TV video decode starts
     /// (`OASIS_TV_TIMEOUT`).
     pub tv_timeout_secs: Option<u64>,
+    /// Plugins registered next to the built-in ones (embedders, tests);
+    /// initialized with them at boot, so the apps they register get
+    /// dashboard tiles.
+    pub plugins: Vec<Box<dyn Plugin>>,
 }
 
 impl BootOptions {
@@ -164,6 +173,7 @@ impl BootOptions {
             tv_timeout_secs: std::env::var("OASIS_TV_TIMEOUT")
                 .ok()
                 .and_then(|s| s.parse().ok()),
+            plugins: Vec::new(),
         })
     }
 
@@ -190,6 +200,7 @@ impl BootOptions {
             auto_launch_app: None,
             auto_launch_url: None,
             tv_timeout_secs: None,
+            plugins: Vec::new(),
         })
     }
 }
@@ -274,6 +285,12 @@ pub struct Shell<B: ShellBackend> {
     last_present_at: Instant,
     /// Clock for `App::tick` deltas (independent of drawn frames).
     last_app_tick_at: Instant,
+    /// When the status bar / System Monitor info last refreshed
+    /// ([`SYSINFO_INTERVAL`]).
+    last_sysinfo_at: Instant,
+    /// Zero point of the animation clock (shader wallpapers, image decal
+    /// layers), so they run at wall-clock speed at any frame rate.
+    clock_origin: Instant,
     tv_timeout_secs: Option<u64>,
     tv_timeout_start: Option<Instant>,
     /// VFS path the next presented frame is saved to (`screenshot`).
@@ -315,6 +332,7 @@ impl<B: ShellBackend> Shell<B> {
             auto_launch_app,
             auto_launch_url,
             tv_timeout_secs,
+            plugins,
         } = opts;
         log::info!(
             "Starting OASIS_OS ({}x{})",
@@ -354,55 +372,15 @@ impl<B: ShellBackend> Shell<B> {
 
         // Line 2 (1.2s): real RAM + core count probe.
         observer.status("Probing physical memory and CPU topology...");
-        let ram_kb = sysinfo::total_ram_kb();
-        let cpu_cores = sysinfo::cpu_core_count();
-        bios!(
-            observer,
-            2,
-            match (ram_kb, cpu_cores) {
-                (Some(kb), Some(cores)) => format!(
-                    "SYSTEM RAM CHECK... {}K OK ({cores} LOGICAL CORES DETECTED)",
-                    format_thousands(kb)
-                ),
-                (Some(kb), None) => format!("SYSTEM RAM CHECK... {}K OK", format_thousands(kb)),
-                _ => "SYSTEM RAM CHECK... OK".to_string(),
-            }
-        );
+        bios!(observer, 2, ram_bios_line());
         observer.wait_until(&mut backend, BIOS_REVEAL_TIMES[2]);
 
         // Line 3 (1.6s): VFS population. Run the work now so the line can
         // report the real file count + byte total.
         observer.status("Mounting virtual file system and seeding /etc, /apps, /home...");
-        let mut vfs = MemoryVfs::new();
-        vfs_setup::populate_demo_vfs(&mut vfs);
-        oasis_core::terminal::populate_man_pages(&mut vfs);
-        oasis_core::terminal::populate_motd(&mut vfs);
-        oasis_core::terminal::populate_profile(&mut vfs);
-        // Seed /system/settings.toml with the persisted settings.
-        if boot_settings.keys().next().is_some() {
-            let mut seeded = boot_settings.clone();
-            seeded.save(&mut vfs);
-        }
+        let mut vfs = seed_vfs(&boot_settings);
         let disk_sample_rx = load_disk_samples.then(vfs_setup::spawn_disk_sample_loader);
-        let (vfs_files, vfs_dirs, vfs_truncated) = sysinfo::count_vfs_entries(&vfs, "/");
-        let (vfs_bytes, bytes_truncated) = sysinfo::total_vfs_bytes(&vfs, "/");
-        // Append "+" to counts when the depth guard stopped the walk early —
-        // makes it obvious to the user that the numbers are lower bounds
-        // rather than showing a confident-but-wrong total.
-        let trunc_mark = if vfs_truncated || bytes_truncated {
-            "+"
-        } else {
-            ""
-        };
-        bios!(
-            observer,
-            3,
-            format!(
-                "INITIALIZING VIRTUAL FILE SYSTEM... {vfs_files}{trunc_mark} FILES, \
-                 {vfs_dirs}{trunc_mark} DIRS, {}{trunc_mark} KB OK",
-                vfs_bytes / 1024,
-            )
-        );
+        bios!(observer, 3, vfs_bios_line(&vfs));
         observer.wait_until(&mut backend, BIOS_REVEAL_TIMES[3]);
 
         // Line 4 (2.1s): skin info as the "boot drive" label.
@@ -422,25 +400,10 @@ impl<B: ShellBackend> Shell<B> {
 
         // Line 5 (2.6s): command + plugin registration.
         observer.status("Registering shell commands...");
-        let mut cmd_reg = CommandRegistry::new();
-        register_builtins(&mut cmd_reg);
-        oasis_core::script::register_script_commands(&mut cmd_reg);
-        oasis_core::transfer::register_transfer_commands(&mut cmd_reg);
-        oasis_core::update::register_update_commands(&mut cmd_reg);
-        register_plugin_commands(&mut cmd_reg);
-        register_agent_commands(&mut cmd_reg);
-        register_tv_commands(&mut cmd_reg);
-        oasis_core::terminal::register_browser_commands(&mut cmd_reg);
-        #[cfg(feature = "mcp")]
-        crate::mcp_command::register(&mut cmd_reg);
+        let mut cmd_reg = shell_commands();
 
         observer.status("Initializing plugin system...");
-        let mut plugin_manager = PluginManager::new();
-        register_builtin_plugins(&mut plugin_manager);
-        {
-            let mut plugin_sdi = SdiRegistry::new();
-            plugin_manager.init_all(&mut plugin_sdi, &mut vfs, &mut cmd_reg);
-        }
+        let plugin_manager = init_plugins(plugins, &mut vfs, &mut cmd_reg);
         let plugin_count = plugin_manager.active_count();
         let plugin_app_count = plugin_manager.plugin_apps().len();
         log::info!("Plugin system: {plugin_count} plugins active, {plugin_app_count} plugin apps");
@@ -504,24 +467,9 @@ impl<B: ShellBackend> Shell<B> {
 
         // Discover apps and merge plugin-registered apps.
         observer.status("Indexing dashboard apps...");
-        let mut apps = discover_apps_themed(
-            &vfs,
-            "/apps",
-            Some("OASISOS"),
-            &active_theme.icon.fallback_colors,
-        )?;
-        for reg in plugin_manager.plugin_apps() {
-            apps.push(reg.to_app_entry());
-        }
+        let apps = commands::dashboard_apps(&vfs, &plugin_manager, &active_theme)?;
         log::info!("Dashboard: {} apps (including plugin apps)", apps.len());
-
-        // Set up dashboard.
-        let dash_config = DashboardConfig::from_features(&skin.features, &active_theme);
-        let dashboard = DashboardState::new(dash_config, apps);
-
-        // Set up PSIX-style bars.
-        let mut bottom_bar = BottomBar::new();
-        bottom_bar.total_pages = dashboard.page_count();
+        let ui = build_ui_layer(&config, &skin, &active_theme, apps);
 
         // Window manager state (Desktop mode).
         let wm = WindowManager::with_theme(
@@ -539,14 +487,6 @@ impl<B: ShellBackend> Shell<B> {
             config.screen_height,
         );
 
-        let mut mouse_cursor = CursorState::new(config.screen_width, config.screen_height);
-        mouse_cursor.scale = active_theme.cursor_scale;
-
-        let start_menu = StartMenuState::new_with_theme(
-            StartMenuState::default_items(&active_theme),
-            &active_theme,
-        );
-
         // Assemble application state.
         let clear_color = active_theme.clear_color;
         let mut state = AppState {
@@ -555,20 +495,10 @@ impl<B: ShellBackend> Shell<B> {
             active_theme,
             browser_config,
             platform,
-            ui: UiLayer {
-                dashboard,
-                status_bar: StatusBar::new(),
-                bottom_bar,
-                taskbar: oasis_core::taskbar::Taskbar::new(),
-                start_menu,
-                mouse_cursor,
-                desktops: oasis_core::wm::DesktopManager::new(1),
-            },
-            terminal: TerminalLayer {
+            ui,
+            terminal: TerminalLayer::new(
                 cmd_reg,
-                cwd: "/".to_string(),
-                session: ShellSession::new(),
-                output_lines: vec![
+                vec![
                     format!(
                         "OASIS_OS v{} -- Type 'help' for commands",
                         env!("CARGO_PKG_VERSION")
@@ -576,30 +506,9 @@ impl<B: ShellBackend> Shell<B> {
                     "F1=terminal  F2=on-screen keyboard  Escape=quit".to_string(),
                     String::new(),
                 ],
-                scroll_offset: 0,
-                dirty: true,
-                sync_signature: None,
-                sdi_signature: None,
-            },
-            net: NetworkLayer {
-                backend: {
-                    let tls = RustlsTlsProvider::new();
-                    StdNetworkBackend::with_tls(tls)
-                },
-                listener_backend: StdNetworkBackend::new(),
-                ftp_backend: StdNetworkBackend::new(),
-                listener: None,
-                ftp_server: None,
-                remote_client: None,
-                tls_provider: RustlsTlsProvider::new(),
-            },
-            content: ContentLayer {
-                app_runner: None,
-                open_runners: Vec::new(),
-                browser: None,
-                fullscreen_app: None,
-                retired_runners: Vec::new(),
-            },
+            ),
+            net: NetworkLayer::new(),
+            content: ContentLayer::default(),
             osk: None,
             plugin_manager,
             wm,
@@ -615,38 +524,15 @@ impl<B: ShellBackend> Shell<B> {
             icon_drag: None,
             cursor_texture: None,
             settings: SettingsStore::new(),
-            radio_manager: RadioManager::new(),
-            radio_source: None,
-            archive_catalog: None,
-            pending_catalog_fetch: None,
-            pending_source_fetch: None,
+            radio: RadioLayer::new(),
+            tv: TvLayer::new(),
             audio_backend: make_audio(),
             offline,
             custom_skin_root,
             toasts: ToastManager::new(),
             ui_sounds: oasis_core::ui_sound::UiSoundQueue::new(),
             sfx: oasis_audio::sfx::SfxPlayer::new(),
-            pending_tv_catalog_fetch: None,
-            tv_fetch_start: None,
-            video_player: video_player::VideoPlayer::new(),
-            tv_audio_track: None,
             media_track: None,
-            tv_audio_chunks_fed: 0,
-            tv_audio_samples_fed: 0,
-            #[cfg(feature = "_video")]
-            pending_video_download: None,
-            #[cfg(feature = "_video")]
-            tv_video_cache_path: None,
-            #[cfg(feature = "_video")]
-            pending_video_params: None,
-            #[cfg(feature = "_video")]
-            tv_download_progress: None,
-            #[cfg(feature = "_video")]
-            tv_video_cache: Vec::new(),
-            #[cfg(feature = "_video")]
-            tv_stream_session: None,
-            #[cfg(feature = "_video")]
-            tv_current_url: None,
             #[cfg(feature = "mcp")]
             mcp: None,
             #[cfg(feature = "mcp")]
@@ -675,17 +561,7 @@ impl<B: ShellBackend> Shell<B> {
         // frame shows accurate values instead of the "--:--" / "--%"
         // placeholders.
         observer.status("Polling clock and power services...");
-        {
-            let time = state.platform.now().ok();
-            let power = state.platform.power_info().ok();
-            state
-                .ui
-                .status_bar
-                .update_info(time.as_ref(), power.as_ref());
-            let wifi = state.platform.wifi_info().ok();
-            state.ui.status_bar.update_wifi(wifi.as_ref());
-            state.ui.bottom_bar.update_info(time.as_ref());
-        }
+        refresh_status_info(&mut state);
 
         // Load the startup skin's UI sounds (no-op for silent skins).
         ui_sfx::reload_for_skin(&mut state);
@@ -700,7 +576,8 @@ impl<B: ShellBackend> Shell<B> {
         // Load radio stations from VFS.
         observer.status("Parsing radio station registry...");
         state
-            .radio_manager
+            .radio
+            .manager
             .load_stations(&vfs, "/etc/radio/stations.toml")
             .ok();
 
@@ -719,34 +596,7 @@ impl<B: ShellBackend> Shell<B> {
         // Generate + upload the wallpaper texture. Doing it here hides the
         // cost under the splash animation instead of hitching frame 0.
         observer.status("Generating wallpaper texture...");
-        let wallpaper_tex = {
-            let wp_data = wallpaper::generate_with_assets(
-                state.config.screen_width,
-                state.config.screen_height,
-                &state.active_theme,
-                &state.skin.assets,
-            );
-            backend.load_texture(
-                state.config.screen_width,
-                state.config.screen_height,
-                &wp_data,
-            )?
-        };
-        terminal_sdi::setup_wallpaper(
-            &mut sdi,
-            wallpaper_tex,
-            state.config.screen_width,
-            state.config.screen_height,
-        );
-        if get_shader_layer(&state.active_theme).is_some()
-            && let Ok(obj) = sdi.get_mut("wallpaper")
-        {
-            obj.visible = false;
-        }
-        // Upload layout `texture =` references and image decal layers for
-        // the startup skin (skin swaps rebuild these via the pending-refresh
-        // path).
-        commands::refresh_skin_assets(&mut state, &mut sdi, &mut backend);
+        install_wallpaper(&mut state, &mut sdi, &mut backend)?;
         log::info!("Wallpaper loaded");
         observer.wait_until(&mut backend, 5.2);
 
@@ -757,17 +607,13 @@ impl<B: ShellBackend> Shell<B> {
 
         // Apply auto-launch (after scene graph is fully set up).
         if let Some(ref app_name) = auto_launch_app {
-            if launch_by_title(&mut state, &mut sdi, &vfs, app_name) {
-                // Navigate browser to OASIS_URL if specified.
-                if let Some(ref url) = auto_launch_url
-                    && let Some(ref mut bw) = state.content.browser
-                {
-                    bw.navigate_vfs(url, &vfs);
-                    log::info!("Auto-navigated to: {url}");
-                }
-            } else {
-                log::warn!("OASIS_APP={app_name}: app not found in dashboard");
-            }
+            auto_launch(
+                &mut state,
+                &mut sdi,
+                &vfs,
+                app_name,
+                auto_launch_url.as_deref(),
+            );
         }
 
         // Publish the live runtime state (skin / resolution / backend) to
@@ -809,6 +655,8 @@ impl<B: ShellBackend> Shell<B> {
             last_input_at: now,
             last_present_at: now,
             last_app_tick_at: now,
+            last_sysinfo_at: now,
+            clock_origin: now,
             tv_timeout_secs,
             tv_timeout_start: None,
             pending_screenshot: None,
@@ -823,6 +671,14 @@ impl<B: ShellBackend> Shell<B> {
         self.last_input_at = now;
         self.last_present_at = now;
         self.last_app_tick_at = now;
+        self.last_sysinfo_at = now;
+        self.clock_origin = now;
+    }
+
+    /// Seconds on the animation clock at `now`.
+    fn anim_secs(&self, now: Instant) -> f32 {
+        now.saturating_duration_since(self.clock_origin)
+            .as_secs_f32()
     }
 
     /// Run one frame of shell logic for `events` at time `now`: input
@@ -830,6 +686,7 @@ impl<B: ShellBackend> Shell<B> {
     /// scene update and window animations. Rendering is separate
     /// ([`Self::render`]) so the caller can elide idle frames.
     pub fn step(&mut self, events: &[InputEvent], now: Instant) -> StepOutcome {
+        let anim_secs = self.anim_secs(now);
         let state = &mut self.state;
         let sdi = &mut self.sdi;
         let vfs = &mut self.vfs;
@@ -842,17 +699,11 @@ impl<B: ShellBackend> Shell<B> {
             }
         }
 
-        // Update system info every ~60 frames (~1s at 60fps).
-        if state.frame_counter.is_multiple_of(60) {
-            let time = state.platform.now().ok();
-            let power = state.platform.power_info().ok();
-            state
-                .ui
-                .status_bar
-                .update_info(time.as_ref(), power.as_ref());
-            let wifi = state.platform.wifi_info().ok();
-            state.ui.status_bar.update_wifi(wifi.as_ref());
-            state.ui.bottom_bar.update_info(time.as_ref());
+        // Refresh system info once per second of wall time (a frame count
+        // ran 2.4x fast on a 144 Hz display).
+        if now.saturating_duration_since(self.last_sysinfo_at) >= SYSINFO_INTERVAL {
+            self.last_sysinfo_at = now;
+            refresh_status_info(state);
             let _ = self
                 .sysmon_probe
                 .publish(vfs, Some(&state.platform), Some(&state.platform));
@@ -903,23 +754,12 @@ impl<B: ShellBackend> Shell<B> {
         // Skip TV Guide tune requests — they're handled by the dedicated
         // video player section below.
         {
-            let mut pending = None;
-            if let Some(ref mut runner) = state.content.app_runner
-                && !is_tv_tune_request(runner)
-            {
-                pending = runner.take_pending_request();
-            }
-            if pending.is_none() {
-                for (_, runner) in &mut state.content.open_runners {
-                    if is_tv_tune_request(runner) {
-                        continue;
-                    }
-                    if let Some(req) = runner.take_pending_request() {
-                        pending = Some(req);
-                        break;
-                    }
-                }
-            }
+            let pending = state
+                .content
+                .open_runners
+                .iter_mut()
+                .filter(|(_, runner)| !is_tv_tune_request(runner))
+                .find_map(|(_, runner)| runner.take_pending_request());
             if let Some((path, data)) = pending
                 && let Err(e) = vfs.write(&path, data.as_bytes())
             {
@@ -929,9 +769,6 @@ impl<B: ShellBackend> Shell<B> {
 
         // Let open apps apply queued VFS mutations (file manager deletes /
         // renames / copies, paint's binary BMP saves).
-        if let Some(ref mut runner) = state.content.app_runner {
-            runner.apply_vfs_ops(vfs);
-        }
         for (_, runner) in &mut state.content.open_runners {
             runner.apply_vfs_ops(vfs);
         }
@@ -946,9 +783,6 @@ impl<B: ShellBackend> Shell<B> {
             )
             .unwrap_or(u32::MAX);
             self.last_app_tick_at = now;
-            if let Some(ref mut runner) = state.content.app_runner {
-                runner.tick(dt_ms, vfs);
-            }
             for (_, runner) in &mut state.content.open_runners {
                 runner.tick(dt_ms, vfs);
             }
@@ -998,13 +832,13 @@ impl<B: ShellBackend> Shell<B> {
             oasis_core::image_layers::tick_image_layers(
                 sdi,
                 &state.image_layers,
-                state.frame_counter as f32 / 60.0,
+                anim_secs,
                 state.active_theme.background_reduced_motion,
             );
         }
 
         // Tick radio, music player, and TV subsystems.
-        radio_controller::tick(state, vfs);
+        radio_controller::tick(state, vfs, now);
         media_controller::tick(state, vfs);
         tv_controller::tick(state, &mut self.backend, vfs);
 
@@ -1014,7 +848,7 @@ impl<B: ShellBackend> Shell<B> {
 
         // Auto-exit timer for TV streaming tests.
         if let Some(timeout) = self.tv_timeout_secs {
-            if state.video_player.is_active() && self.tv_timeout_start.is_none() {
+            if state.tv.video_player.is_active() && self.tv_timeout_start.is_none() {
                 self.tv_timeout_start = Some(now);
                 log::info!("TV test: decode active, auto-exit in {timeout}s");
             }
@@ -1051,7 +885,7 @@ impl<B: ShellBackend> Shell<B> {
         if let Some(ref mut bw) = state.content.browser {
             bw.tick(vfs);
             let title = launch::browser_window_title(bw);
-            state.wm.set_window_title("browser", &title, sdi);
+            state.wm.set_window_title(BROWSER_WIN, &title, sdi);
         }
 
         let (redraw, scene_changed) = self.needs_redraw(now);
@@ -1078,6 +912,7 @@ impl<B: ShellBackend> Shell<B> {
     ///
     /// Returns `(redraw, scene_changed)`.
     fn needs_redraw(&mut self, now: Instant) -> (bool, bool) {
+        let anim_secs = self.anim_secs(now);
         let state = &self.state;
         let scene_changed = if self.sdi.take_scene_dirty() {
             let sig = self.sdi.scene_signature();
@@ -1091,8 +926,7 @@ impl<B: ShellBackend> Shell<B> {
         // Shader wallpapers advance at the bridge's 30 Hz shade cadence;
         // between shades a redraw would reproduce identical pixels.
         let shader_wants_frame = if let Some(ref bridge) = self.shader_bridge {
-            get_shader_layer(&state.active_theme).is_some()
-                && bridge.would_shade(state.frame_counter as f32 / 60.0)
+            get_shader_layer(&state.active_theme).is_some() && bridge.would_shade(anim_secs)
         } else {
             false
         };
@@ -1125,10 +959,10 @@ impl<B: ShellBackend> Shell<B> {
             );
         let content_active = windows_active
             || state.content.fullscreen_app.is_some()
-            || state.video_player.is_active()
-            || state.radio_source.is_some()
+            || state.tv.video_player.is_active()
+            || state.radio.source.is_some()
             || state.media_track.is_some()
-            || state.tv_audio_track.is_some();
+            || state.tv.audio_track.is_some();
 
         // Keep redrawing while the agent-activity overlay is visible (and
         // so the frame right after a tool call always paints).
@@ -1155,6 +989,7 @@ impl<B: ShellBackend> Shell<B> {
 
     /// Draw and present one frame at time `now`.
     pub fn render(&mut self, now: Instant) -> Result<()> {
+        let anim_secs = self.anim_secs(now);
         let state = &mut self.state;
         let sdi = &mut self.sdi;
         let backend = &mut self.backend;
@@ -1178,12 +1013,7 @@ impl<B: ShellBackend> Shell<B> {
             && let Some(info) = get_shader_layer(&state.active_theme)
         {
             bridge.set_visibility(render::wallpaper_visibility(state));
-            bridge.render_and_blit(
-                backend,
-                &info.name,
-                state.frame_counter as f32 / 60.0,
-                &info.params,
-            );
+            bridge.render_and_blit(backend, &info.name, anim_secs, &info.params);
         }
         if let Some(ref mut pc) = phase_clock {
             pc.lap_shader();
@@ -1210,7 +1040,7 @@ impl<B: ShellBackend> Shell<B> {
                 backend,
                 overlay,
                 |window_id, cx, cy, cw, ch, be| {
-                    if window_id == "browser" {
+                    if window_id == BROWSER_WIN {
                         if let Some(ref mut bw) = state.content.browser {
                             bw.set_window(cx, cy, cw, ch);
                             bw.paint(be)
@@ -1311,9 +1141,6 @@ impl<B: ShellBackend> Shell<B> {
         self.last_present_at = now;
         // Every drawn frame repaints all visible window content, so each
         // runner's pending change is now on screen.
-        if let Some(ref mut runner) = state.content.app_runner {
-            runner.mark_drawn();
-        }
         for (_, runner) in &mut state.content.open_runners {
             runner.mark_drawn();
         }
@@ -1332,14 +1159,14 @@ impl<B: ShellBackend> Shell<B> {
             runner.release_resources(&mut self.backend);
         }
         // Clean up video player before shutting down backend.
-        self.state.video_player.stop(&mut self.backend);
-        if let Some(track) = self.state.tv_audio_track.take() {
+        self.state.tv.video_player.stop(&mut self.backend);
+        if let Some(track) = self.state.tv.audio_track.take() {
             let _ = self.state.audio_backend.unload_track(track);
         }
 
         // Clean up all cached video files.
         #[cfg(feature = "_video")]
-        for (_, path) in &self.state.tv_video_cache {
+        for (_, path) in &self.state.tv.video_cache {
             if let Err(e) = std::fs::remove_file(path) {
                 log::warn!("TV: failed to remove cached file {}: {e}", path.display());
             }
@@ -1351,37 +1178,195 @@ impl<B: ShellBackend> Shell<B> {
     }
 }
 
-/// Launch the dashboard app titled `title` (case-insensitive) the way
-/// `OASIS_APP` auto-launch does. Returns `false` if no such app exists.
+// ---------------------------------------------------------------------------
+// Boot phases (called from `Shell::boot` between splash progress reports)
+// ---------------------------------------------------------------------------
+
+/// BIOS line 2: real RAM + logical core count.
+fn ram_bios_line() -> String {
+    match (sysinfo::total_ram_kb(), sysinfo::cpu_core_count()) {
+        (Some(kb), Some(cores)) => format!(
+            "SYSTEM RAM CHECK... {}K OK ({cores} LOGICAL CORES DETECTED)",
+            format_thousands(kb)
+        ),
+        (Some(kb), None) => format!("SYSTEM RAM CHECK... {}K OK", format_thousands(kb)),
+        _ => "SYSTEM RAM CHECK... OK".to_string(),
+    }
+}
+
+/// The boot VFS: demo content, man pages, motd, profile, and
+/// `/system/settings.toml` seeded with the persisted settings.
+fn seed_vfs(boot_settings: &SettingsStore) -> MemoryVfs {
+    let mut vfs = MemoryVfs::new();
+    vfs_setup::populate_demo_vfs(&mut vfs);
+    oasis_core::terminal::populate_man_pages(&mut vfs);
+    oasis_core::terminal::populate_motd(&mut vfs);
+    oasis_core::terminal::populate_profile(&mut vfs);
+    if boot_settings.keys().next().is_some() {
+        let mut seeded = boot_settings.clone();
+        seeded.save(&mut vfs);
+    }
+    vfs
+}
+
+/// BIOS line 3: the VFS file / dir / byte totals.
+fn vfs_bios_line(vfs: &MemoryVfs) -> String {
+    let (vfs_files, vfs_dirs, vfs_truncated) = sysinfo::count_vfs_entries(vfs, "/");
+    let (vfs_bytes, bytes_truncated) = sysinfo::total_vfs_bytes(vfs, "/");
+    // Append "+" to counts when the depth guard stopped the walk early —
+    // makes it obvious to the user that the numbers are lower bounds
+    // rather than showing a confident-but-wrong total.
+    let trunc_mark = if vfs_truncated || bytes_truncated {
+        "+"
+    } else {
+        ""
+    };
+    format!(
+        "INITIALIZING VIRTUAL FILE SYSTEM... {vfs_files}{trunc_mark} FILES, \
+         {vfs_dirs}{trunc_mark} DIRS, {}{trunc_mark} KB OK",
+        vfs_bytes / 1024,
+    )
+}
+
+/// Every terminal command the desktop shell offers.
+fn shell_commands() -> CommandRegistry {
+    let mut cmd_reg = CommandRegistry::new();
+    register_builtins(&mut cmd_reg);
+    oasis_core::script::register_script_commands(&mut cmd_reg);
+    oasis_core::transfer::register_transfer_commands(&mut cmd_reg);
+    oasis_core::update::register_update_commands(&mut cmd_reg);
+    register_plugin_commands(&mut cmd_reg);
+    register_agent_commands(&mut cmd_reg);
+    register_tv_commands(&mut cmd_reg);
+    oasis_core::terminal::register_browser_commands(&mut cmd_reg);
+    #[cfg(feature = "mcp")]
+    crate::mcp_command::register(&mut cmd_reg);
+    cmd_reg
+}
+
+/// Register the built-in plugins plus `extra`, and initialize them all.
+fn init_plugins(
+    extra: Vec<Box<dyn Plugin>>,
+    vfs: &mut MemoryVfs,
+    cmd_reg: &mut CommandRegistry,
+) -> PluginManager {
+    let mut plugin_manager = PluginManager::new();
+    register_builtin_plugins(&mut plugin_manager);
+    for plugin in extra {
+        plugin_manager.register_static(plugin);
+    }
+    let mut plugin_sdi = SdiRegistry::new();
+    plugin_manager.init_all(&mut plugin_sdi, vfs, cmd_reg);
+    plugin_manager
+}
+
+/// Dashboard (with `apps`), PSIX-style bars, taskbar, start menu and
+/// mouse cursor for the startup skin.
+fn build_ui_layer(
+    config: &OasisConfig,
+    skin: &Skin,
+    at: &ActiveTheme,
+    apps: Vec<AppEntry>,
+) -> UiLayer {
+    let dashboard = DashboardState::new(DashboardConfig::from_features(&skin.features, at), apps);
+    let mut bottom_bar = BottomBar::new();
+    bottom_bar.total_pages = dashboard.page_count();
+    let mut mouse_cursor = CursorState::new(config.screen_width, config.screen_height);
+    mouse_cursor.scale = at.cursor_scale;
+    UiLayer {
+        dashboard,
+        status_bar: StatusBar::new(),
+        bottom_bar,
+        taskbar: oasis_core::taskbar::Taskbar::new(),
+        start_menu: StartMenuState::new_with_theme(StartMenuState::default_items(at), at),
+        mouse_cursor,
+        desktops: oasis_core::wm::DesktopManager::new(1),
+    }
+}
+
+/// Generate and upload the wallpaper texture, then the skin's layout
+/// textures and image decal layers (skin swaps rebuild these via the
+/// pending-refresh path).
+fn install_wallpaper(
+    state: &mut AppState,
+    sdi: &mut SdiRegistry,
+    backend: &mut impl ShellBackend,
+) -> Result<()> {
+    let (w, h) = (state.config.screen_width, state.config.screen_height);
+    let wp_data = wallpaper::generate_with_assets(w, h, &state.active_theme, &state.skin.assets);
+    let wallpaper_tex = backend.load_texture(w, h, &wp_data)?;
+    terminal_sdi::setup_wallpaper(sdi, wallpaper_tex, w, h);
+    if get_shader_layer(&state.active_theme).is_some()
+        && let Ok(obj) = sdi.get_mut("wallpaper")
+    {
+        obj.visible = false;
+    }
+    commands::refresh_skin_assets(state, sdi, backend);
+    Ok(())
+}
+
+/// `OASIS_APP` / `OASIS_URL`: open `app_name`, and navigate the browser to
+/// `url` when it is the browser.
+fn auto_launch(
+    state: &mut AppState,
+    sdi: &mut SdiRegistry,
+    vfs: &MemoryVfs,
+    app_name: &str,
+    url: Option<&str>,
+) {
+    if !launch_by_title(state, sdi, vfs, app_name) {
+        log::warn!("OASIS_APP={app_name}: no such app");
+        return;
+    }
+    if let Some(url) = url
+        && let Some(ref mut bw) = state.content.browser
+    {
+        bw.navigate_vfs(url, vfs);
+        log::info!("Auto-navigated to: {url}");
+    }
+}
+
+/// Refresh the status / bottom bar's clock, battery and Wi-Fi info from
+/// the platform services.
+fn refresh_status_info(state: &mut AppState) {
+    let time = state.platform.now().ok();
+    let power = state.platform.power_info().ok();
+    state
+        .ui
+        .status_bar
+        .update_info(time.as_ref(), power.as_ref());
+    let wifi = state.platform.wifi_info().ok();
+    state.ui.status_bar.update_wifi(wifi.as_ref());
+    state.ui.bottom_bar.update_info(time.as_ref());
+}
+
+/// Launch the app titled `title` (case-insensitive) the way `OASIS_APP`
+/// auto-launch does: a dashboard tile (built-in or plugin app) when there
+/// is one, otherwise any registered app (Network, Package Manager, System
+/// Monitor have no tile). Returns `false` if no such app exists.
 pub fn launch_by_title(
     state: &mut AppState,
     sdi: &mut SdiRegistry,
     vfs: &MemoryVfs,
     title: &str,
 ) -> bool {
-    let Some(app) = state
+    let tile = state
         .ui
         .dashboard
         .apps
         .iter()
         .find(|a| a.title.eq_ignore_ascii_case(title))
-        .cloned()
-    else {
+        .cloned();
+    let app = tile.or_else(|| {
+        oasis_core::apps::registered_app_titles()
+            .into_iter()
+            .find(|t| t.eq_ignore_ascii_case(title))
+            .map(AppEntry::for_title)
+    });
+    let Some(app) = app else {
         return false;
     };
-    let result = launch::launch_app_window(
-        &app,
-        &mut state.wm,
-        sdi,
-        &mut state.content.open_runners,
-        &mut state.content.browser,
-        &state.browser_config,
-        vfs,
-        &state.net.tls_provider,
-        state.skin.features.window_manager,
-        &state.plugin_manager,
-    );
-    launch::apply_launch(result, &mut state.mode);
+    launch::launch(state, sdi, vfs, &app, LaunchOpts::QUIET);
     log::info!("Auto-launched app: {}", app.title);
     true
 }

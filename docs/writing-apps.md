@@ -27,8 +27,9 @@ elision).
   can hand a pre-built app to `AppRunner::from_delegate`.
 - The desktop host seeds dashboard entries as `/apps/<Title>`
   directories (`crates/oasis-app/src/vfs_setup.rs`). Registered apps
-  without a directory (Network, Package Manager, System Monitor) are
-  still launchable by name from the terminal, scripts and MCP.
+  without a directory (Network, Package Manager, System Monitor) have
+  no tile but still launch by title through MCP `open_app` and
+  `OASIS_APP=<title>`. There is no terminal command that opens an app.
 
 ## The `App` trait
 

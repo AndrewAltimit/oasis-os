@@ -4,7 +4,7 @@ use crate::app_state::AppState;
 
 /// Poll pending TV catalog fetch (non-blocking).
 pub(super) fn poll_catalog_fetch(state: &mut AppState) {
-    let Some(ref rx) = state.pending_tv_catalog_fetch else {
+    let Some(ref rx) = state.tv.pending_catalog_fetch else {
         return;
     };
     match rx.try_recv() {
@@ -12,11 +12,8 @@ pub(super) fn poll_catalog_fetch(state: &mut AppState) {
             let loaded = catalogs.iter().filter(|c| c.is_some()).count();
             let total = catalogs.len();
             log::info!("TV catalog fetch result: {loaded}/{total} channels have episodes");
-            state.pending_tv_catalog_fetch = None;
-            let runner = super::find_tv_guide_runner(
-                &mut state.content.app_runner,
-                &mut state.content.open_runners,
-            );
+            state.tv.pending_catalog_fetch = None;
+            let runner = super::find_tv_guide_runner(&mut state.content.open_runners);
             if let Some(runner) = runner {
                 if let Some(guide) = runner.tv_guide_state() {
                     guide.fetch_in_progress = false;
@@ -84,12 +81,9 @@ pub(super) fn poll_catalog_fetch(state: &mut AppState) {
             }
         },
         Ok(Err(e)) => {
-            state.pending_tv_catalog_fetch = None;
+            state.tv.pending_catalog_fetch = None;
             log::error!("TV catalog fetch failed: {e}");
-            let runner = super::find_tv_guide_runner(
-                &mut state.content.app_runner,
-                &mut state.content.open_runners,
-            );
+            let runner = super::find_tv_guide_runner(&mut state.content.open_runners);
             if let Some(runner) = runner {
                 if let Some(guide) = runner.tv_guide_state() {
                     guide.fetch_in_progress = false;
@@ -101,12 +95,9 @@ pub(super) fn poll_catalog_fetch(state: &mut AppState) {
             }
         },
         Err(std::sync::mpsc::TryRecvError::Disconnected) => {
-            state.pending_tv_catalog_fetch = None;
+            state.tv.pending_catalog_fetch = None;
             log::error!("TV catalog fetch thread died");
-            let runner = super::find_tv_guide_runner(
-                &mut state.content.app_runner,
-                &mut state.content.open_runners,
-            );
+            let runner = super::find_tv_guide_runner(&mut state.content.open_runners);
             if let Some(runner) = runner {
                 if let Some(guide) = runner.tv_guide_state() {
                     guide.fetch_in_progress = false;
@@ -117,16 +108,13 @@ pub(super) fn poll_catalog_fetch(state: &mut AppState) {
         },
         Err(std::sync::mpsc::TryRecvError::Empty) => {
             // Timeout after 2 minutes.
-            if let Some(start) = state.tv_fetch_start
+            if let Some(start) = state.tv.fetch_start
                 && start.elapsed().as_secs() >= 120
             {
                 log::warn!("TV: catalog fetch timed out after 120s");
-                state.pending_tv_catalog_fetch = None;
-                state.tv_fetch_start = None;
-                let runner = super::find_tv_guide_runner(
-                    &mut state.content.app_runner,
-                    &mut state.content.open_runners,
-                );
+                state.tv.pending_catalog_fetch = None;
+                state.tv.fetch_start = None;
+                let runner = super::find_tv_guide_runner(&mut state.content.open_runners);
                 if let Some(runner) = runner {
                     if let Some(guide) = runner.tv_guide_state() {
                         guide.fetch_in_progress = false;
@@ -142,13 +130,10 @@ pub(super) fn poll_catalog_fetch(state: &mut AppState) {
 /// Start TV catalog fetch if a TV Guide app needs it.
 pub(super) fn start_catalog_fetch_if_needed(state: &mut AppState) {
     // Offline (headless harness): catalogs are injected by the scenario.
-    if state.offline || state.pending_tv_catalog_fetch.is_some() {
+    if state.offline || state.tv.pending_catalog_fetch.is_some() {
         return;
     }
-    let runner = super::find_tv_guide_runner(
-        &mut state.content.app_runner,
-        &mut state.content.open_runners,
-    );
+    let runner = super::find_tv_guide_runner(&mut state.content.open_runners);
     if let Some(runner) = runner
         && let Some(guide) = runner.tv_guide_state()
         && !guide.fetch_attempted
@@ -172,7 +157,7 @@ pub(super) fn start_catalog_fetch_if_needed(state: &mut AppState) {
             );
             let _ = tx.send(result);
         });
-        state.pending_tv_catalog_fetch = Some(rx);
-        state.tv_fetch_start = Some(std::time::Instant::now());
+        state.tv.pending_catalog_fetch = Some(rx);
+        state.tv.fetch_start = Some(std::time::Instant::now());
     }
 }

@@ -94,7 +94,7 @@ Construction
 | Call | Does |
 |------|------|
 | `Harness::new(skin)` | Boot with defaults (panics if the skin fails to load) |
-| `Harness::with_options(HarnessOptions)` | `skin`, `resolution`, `shader_wallpaper` (off by default: slow in debug), `fixed_time`, `prefs_path` (persist preferences to a real file, see above) |
+| `Harness::with_options(HarnessOptions)` | `skin`, `resolution`, `shader_wallpaper` (off by default: slow in debug), `fixed_time`, `prefs_path` (persist preferences to a real file, see above), `plugins` (extra plugin factories registered at boot, e.g. one that registers a dashboard app) |
 | `Harness::with_observer(opts, &mut obs)` | Also report boot progress (BIOS lines, splash waits) to a `BootObserver` |
 
 Frames and time
@@ -123,7 +123,8 @@ Shell-level actions
 | Call | Does |
 |------|------|
 | `dashboard_apps()`, `app_icon_rect(title)`, `click_app_icon(title)` | Dashboard icons on the current page |
-| `open_app(title)` | Launch like `OASIS_APP` auto-launch (no clicking) |
+| `open_app(title)` | Launch like `OASIS_APP` auto-launch (no clicking): a dashboard tile, or any registered app title |
+| `open_app_with_file(title, path)` | Open a file in an app like an "open with" hand-off (File Manager -> Photo Viewer); an open window of that app is reused |
 | `windows()`, `find_window(title)` | `WindowInfo { id, title, frame, content, close_button, minimized, fullscreen }`; `find_window` falls back to the window id (the browser's title follows the page) |
 | `window_chrome(title)`, `active_window()` | Titlebar / close / maximize / minimize rects (`rect_center` gives a click point); focused window id |
 | `close_window(title)` | Click the titlebar close button |

@@ -1,32 +1,27 @@
 //! MCP tool implementations that drive the OASIS UI.
 //!
-//! [`AppDispatcher`] holds field-level borrows of [`AppState`](crate::app_state::AppState)
-//! (assembled in [`crate::commands::poll_mcp_server`]) and implements
-//! [`oasis_mcp::ToolDispatcher`]. Each `tool_*` method reuses the existing
-//! control-surface functions — the same ones the local input pipeline and the
-//! remote terminal call — so agent-driven actions behave identically to a user
-//! driving the UI.
+//! [`AppDispatcher`] borrows the whole [`AppState`] (the MCP server itself
+//! is taken out of it for the poll, see [`crate::commands::poll_mcp_server`])
+//! and implements [`oasis_mcp::ToolDispatcher`]. Each `tool_*` method reuses
+//! the existing control-surface functions — the same ones the local input
+//! pipeline and the remote terminal call ([`launch::launch`],
+//! [`close_app_window`], the skin swap) — so agent-driven actions behave
+//! identically to a user driving the UI.
 
 use std::time::{Duration, Instant};
 
 use oasis_core::active_theme::ActiveTheme;
-use oasis_core::apps::{AppRunner, registered_app_titles};
+use oasis_core::apps::registered_app_titles;
 use oasis_core::backend::{Color, SdiCore};
-use oasis_core::browser::{BrowserConfig, BrowserWidget};
-use oasis_core::dashboard::AppEntry;
-use oasis_core::net::RustlsTlsProvider;
-use oasis_core::platform::DesktopPlatform;
-use oasis_core::plugin::PluginManager;
 use oasis_core::sdi::SdiRegistry;
-use oasis_core::skin::Skin;
-use oasis_core::terminal::{CommandRegistry, Environment};
+use oasis_core::terminal::Environment;
 use oasis_core::vfs::{MemoryVfs, Vfs};
-use oasis_core::wm::manager::WindowManager;
 use oasis_mcp::{ToolDispatcher, ToolResult, ToolSpec, base64_encode};
 use serde_json::{Value, json};
 
-use crate::app_state::Mode;
-use crate::launch;
+use crate::app_state::AppState;
+use crate::launch::{self, BROWSER_TITLE, LaunchOpts};
+use crate::windows::{CloseHow, CloseOutcome, close_app_window};
 
 /// Rolling record of agent activity, surfaced by the in-UI assistant overlay.
 #[derive(Debug, Default)]
@@ -78,36 +73,17 @@ pub fn draw_agent_overlay(
     Ok(())
 }
 
-/// Borrows of application state needed to service tool calls.
+/// What a tool call can reach: the shell state (minus the MCP server,
+/// which is polling), the scene, the VFS and the framebuffer.
 ///
-/// Constructed per-frame from an [`AppState`](crate::app_state::AppState)
-/// borrow split; lives only for the duration of one
+/// Lives only for the duration of one
 /// [`McpServer::poll`](oasis_mcp::McpServer::poll).
 pub struct AppDispatcher<'a> {
-    pub wm: &'a mut WindowManager,
+    pub state: &'a mut AppState,
     pub sdi: &'a mut SdiRegistry,
     pub vfs: &'a mut MemoryVfs,
-    pub browser: &'a mut Option<BrowserWidget>,
-    pub open_runners: &'a mut Vec<(String, AppRunner)>,
-    pub cmd_reg: &'a mut CommandRegistry,
-    pub cwd: &'a mut String,
-    pub skin: &'a Skin,
-    pub browser_config: &'a mut BrowserConfig,
-    pub platform: &'a DesktopPlatform,
-    pub tls_provider: &'a RustlsTlsProvider,
-    pub plugin_manager: &'a PluginManager,
-    pub mode: &'a mut Mode,
     /// Rendering backend, for `screenshot` (`read_pixels`).
     pub screen: &'a mut dyn SdiCore,
-    pub screen_w: u32,
-    pub screen_h: u32,
-    pub activity: &'a mut AgentActivity,
-    /// Skin resolved by a `run_command` skin swap, applied by the caller
-    /// after the poll (it needs the whole `AppState`).
-    pub pending_skin: Option<Skin>,
-    /// Windows closed by `close_window`; the caller finishes the shell-side
-    /// cleanup (runner, radio / music, mode) after the poll.
-    pub closed_windows: Vec<String>,
 }
 
 fn arg_str(args: &Value, key: &str) -> Option<String> {
@@ -150,44 +126,17 @@ impl AppDispatcher<'_> {
             .unwrap_or(title);
 
         if let Some(file) = arg_str(args, "file") {
-            launch::launch_app_window_for_file(
-                &title,
-                &file,
-                self.wm,
-                self.sdi,
-                self.open_runners,
-                self.vfs,
-            );
-            *self.mode = Mode::Desktop;
+            launch::launch_for_file(self.state, self.sdi, self.vfs, &title, &file);
             return ToolResult::text(format!("Opened {title} with {file}"));
         }
-
-        let entry = AppEntry {
-            title: title.clone(),
-            path: format!("/apps/{title}"),
-            icon_png: Vec::new(),
-            color: Color::rgb(100, 100, 100),
-        };
-        let result = launch::launch_app_window(
-            &entry,
-            self.wm,
-            self.sdi,
-            self.open_runners,
-            self.browser,
-            self.browser_config,
-            self.vfs,
-            self.tls_provider,
-            self.skin.features.window_manager,
-            self.plugin_manager,
-        );
-        launch::apply_launch(result, self.mode);
+        launch::launch_title(self.state, self.sdi, self.vfs, &title, LaunchOpts::QUIET);
         ToolResult::text(format!("Opened {title}"))
     }
 
     fn tool_list_windows(&self) -> ToolResult {
-        let active = self.wm.active_window().map(str::to_string);
-        let windows: Vec<Value> = self
-            .wm
+        let wm = &self.state.wm;
+        let active = wm.active_window().map(str::to_string);
+        let windows: Vec<Value> = wm
             .windows()
             .iter()
             .map(|w| {
@@ -209,34 +158,36 @@ impl AppDispatcher<'_> {
         )
     }
 
+    /// `close_window`: like the titlebar close button, the app is asked
+    /// first; `force: true` closes it regardless (unsaved edits are lost).
+    fn tool_close_window(&mut self, id: &str, args: &Value) -> ToolResult {
+        let force = args.get("force").and_then(Value::as_bool).unwrap_or(false);
+        let how = CloseHow::Programmatic { force };
+        match close_app_window(self.state, self.sdi, self.vfs, id, how) {
+            CloseOutcome::Closed => ToolResult::text(format!("closed {id}")),
+            CloseOutcome::Declined => ToolResult::error(format!(
+                "{id} declined to close: the app is asking for confirmation (e.g. unsaved \
+                 changes; see screenshot). Answer its prompt, or pass force: true to close \
+                 it anyway and discard them."
+            )),
+            CloseOutcome::NotFound => ToolResult::error(format!("no window with id '{id}'")),
+        }
+    }
+
     fn tool_window_op(&mut self, op: &str, args: &Value) -> ToolResult {
         let Some(id) = arg_str(args, "id") else {
             return ToolResult::error("missing required argument: id");
         };
-        if self.wm.get_window(&id).is_none() {
+        let wm = &mut self.state.wm;
+        if wm.get_window(&id).is_none() {
             return ToolResult::error(format!("no window with id '{id}'"));
         }
         match op {
-            "focus" => wm_result(self.wm.focus_window(&id, self.sdi), format!("focused {id}")),
-            "close" => {
-                let res = self.wm.close_window(&id, self.sdi);
-                if res.is_ok() {
-                    self.closed_windows.push(id.clone());
-                }
-                wm_result(res, format!("closed {id}"))
-            },
-            "minimize" => wm_result(
-                self.wm.minimize_window(&id, self.sdi),
-                format!("minimized {id}"),
-            ),
-            "maximize" => wm_result(
-                self.wm.maximize_window(&id, self.sdi),
-                format!("maximized {id}"),
-            ),
-            "restore" => wm_result(
-                self.wm.restore_window(&id, self.sdi),
-                format!("restored {id}"),
-            ),
+            "focus" => wm_result(wm.focus_window(&id, self.sdi), format!("focused {id}")),
+            "close" => self.tool_close_window(&id, args),
+            "minimize" => wm_result(wm.minimize_window(&id, self.sdi), format!("minimized {id}")),
+            "maximize" => wm_result(wm.maximize_window(&id, self.sdi), format!("maximized {id}")),
+            "restore" => wm_result(wm.restore_window(&id, self.sdi), format!("restored {id}")),
             _ => ToolResult::error(format!("unknown window op: {op}")),
         }
     }
@@ -247,7 +198,8 @@ impl AppDispatcher<'_> {
         else {
             return ToolResult::error("requires: id (string), x (int), y (int)");
         };
-        let Some(win) = self.wm.get_window(&id) else {
+        let wm = &mut self.state.wm;
+        let Some(win) = wm.get_window(&id) else {
             return ToolResult::error(format!("no window with id '{id}'"));
         };
         // move_window takes a delta; convert absolute target to a delta.
@@ -257,7 +209,7 @@ impl AppDispatcher<'_> {
         let dx = (x.clamp(-LIMIT, LIMIT) - i64::from(win.x)) as i32;
         let dy = (y.clamp(-LIMIT, LIMIT) - i64::from(win.y)) as i32;
         wm_result(
-            self.wm.move_window(&id, dx, dy, self.sdi),
+            wm.move_window(&id, dx, dy, self.sdi),
             format!("moved {id} toward ({x}, {y})"),
         )
     }
@@ -270,13 +222,14 @@ impl AppDispatcher<'_> {
         ) else {
             return ToolResult::error("requires: id (string), width (int), height (int)");
         };
-        if self.wm.get_window(&id).is_none() {
+        let wm = &mut self.state.wm;
+        if wm.get_window(&id).is_none() {
             return ToolResult::error(format!("no window with id '{id}'"));
         }
         let w = w.clamp(80, 4096) as u32;
         let h = h.clamp(60, 4096) as u32;
         wm_result(
-            self.wm.resize_window(&id, w, h, self.sdi),
+            wm.resize_window(&id, w, h, self.sdi),
             format!("resized {id} to {w}x{h}"),
         )
     }
@@ -285,26 +238,42 @@ impl AppDispatcher<'_> {
         let Some(command) = arg_str(args, "command") else {
             return ToolResult::error("missing required argument: command");
         };
-        let mut env = Environment {
-            cwd: self.cwd.clone(),
-            vfs: self.vfs,
-            power: Some(self.platform),
-            time: Some(self.platform),
-            usb: Some(self.platform),
-            network: None,
-            tls: Some(self.tls_provider),
-            stdin: None,
-            stderr: String::new(),
+        let mut pending_skin = None;
+        let text = {
+            let AppState {
+                ref mut terminal,
+                ref mut content,
+                ref platform,
+                ref net,
+                ref skin,
+                ..
+            } = *self.state;
+            let mut env = Environment {
+                cwd: terminal.cwd.clone(),
+                vfs: &mut *self.vfs,
+                power: Some(platform),
+                time: Some(platform),
+                usb: Some(platform),
+                network: None,
+                tls: Some(&net.tls_provider),
+                stdin: None,
+                stderr: String::new(),
+            };
+            let result = terminal.cmd_reg.execute(&command, &mut env);
+            terminal.cwd = env.cwd;
+            crate::commands::format_remote_response(
+                result,
+                &mut content.browser,
+                skin,
+                self.sdi,
+                &mut pending_skin,
+            )
         };
-        let result = self.cmd_reg.execute(&command, &mut env);
-        *self.cwd = env.cwd;
-        let text = crate::commands::format_remote_response(
-            result,
-            self.browser,
-            self.skin,
-            self.sdi,
-            &mut self.pending_skin,
-        );
+        // A `skin` command resolved a new skin; apply it with the whole
+        // state at hand (see `format_remote_response`).
+        if let Some(new_skin) = pending_skin {
+            crate::commands::apply_skin_object(new_skin, self.state, self.sdi, self.vfs);
+        }
         ToolResult::text(text)
     }
 
@@ -313,28 +282,16 @@ impl AppDispatcher<'_> {
             return ToolResult::error("missing required argument: url");
         };
         // Ensure a Browser widget exists (open it if needed).
-        if self.browser.is_none() {
-            let entry = AppEntry {
-                title: "Browser".to_string(),
-                path: "/apps/Browser".to_string(),
-                icon_png: Vec::new(),
-                color: Color::rgb(100, 100, 100),
-            };
-            let result = launch::launch_app_window(
-                &entry,
-                self.wm,
+        if self.state.content.browser.is_none() {
+            launch::launch_title(
+                self.state,
                 self.sdi,
-                self.open_runners,
-                self.browser,
-                self.browser_config,
                 self.vfs,
-                self.tls_provider,
-                self.skin.features.window_manager,
-                self.plugin_manager,
+                BROWSER_TITLE,
+                LaunchOpts::QUIET,
             );
-            launch::apply_launch(result, self.mode);
         }
-        match self.browser {
+        match self.state.content.browser.as_mut() {
             Some(bw) => {
                 bw.navigate_vfs(&url, self.vfs);
                 ToolResult::text(format!("Navigated to {url}"))
@@ -370,7 +327,13 @@ impl AppDispatcher<'_> {
                 };
                 // The guide owns the channel catalogs; the shell resolves
                 // the request against it (tv_controller::tune).
-                if !self.open_runners.iter().any(|(_, r)| r.title == "TV Guide") {
+                let guide_open = self
+                    .state
+                    .content
+                    .open_runners
+                    .iter()
+                    .any(|(_, r)| r.title == "TV Guide");
+                if !guide_open {
                     return ToolResult::error(
                         "the TV Guide is not open (open_app 'TV Guide' first)",
                     );
@@ -391,25 +354,33 @@ impl AppDispatcher<'_> {
     }
 
     fn tool_get_state(&self) -> ToolResult {
-        let windows: Vec<Value> = self
+        let st = &*self.state;
+        let windows: Vec<Value> = st
             .wm
             .windows()
             .iter()
             .map(|w| json!({ "id": w.id.as_str(), "title": w.title }))
             .collect();
         let state = json!({
-            "mode": format!("{:?}", self.mode),
-            "skin": self.skin.manifest.name,
-            "focused_window": self.wm.active_window(),
+            "mode": format!("{:?}", st.mode),
+            "skin": st.skin.manifest.name,
+            "focused_window": st.wm.active_window(),
             "open_windows": windows,
-            "browser_url": self.browser.as_ref().and_then(|b| b.current_url().map(str::to_string)),
-            "agent_calls": self.activity.call_count,
+            "browser_url": st.content.browser.as_ref().and_then(|b| b.current_url().map(str::to_string)),
+            "agent_calls": st.agent_activity.call_count,
         });
         ToolResult::text(serde_json::to_string_pretty(&state).unwrap_or_else(|_| "{}".to_string()))
     }
 
     fn tool_screenshot(&mut self) -> ToolResult {
-        let (w, h) = (self.screen_w, self.screen_h);
+        // The live framebuffer size: skins are scaled to the configured
+        // resolution, so the manifest's native size can be smaller than
+        // the screen (the screenshot then only captured the top-left
+        // corner).
+        let (w, h) = (
+            self.state.active_theme.screen_w,
+            self.state.active_theme.screen_h,
+        );
         let rgba = match self.screen.read_pixels(0, 0, w, h) {
             Ok(px) => px,
             Err(e) => return ToolResult::error(format!("read_pixels: {e}")),
@@ -470,7 +441,24 @@ impl ToolDispatcher for AppDispatcher<'_> {
                 no_args(),
             ),
             ToolSpec::new("focus_window", "Bring a window to the front.", id_only()),
-            ToolSpec::new("close_window", "Close a window.", id_only()),
+            ToolSpec::new(
+                "close_window",
+                "Close a window. Like the titlebar close button, the app is asked first: an \
+                 app with unsaved changes shows its confirmation prompt and the call fails \
+                 with 'declined'. Pass force: true to close it anyway (unsaved changes are \
+                 lost).",
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "id": { "type": "string", "description": "Window id" },
+                        "force": {
+                            "type": "boolean",
+                            "description": "Close without asking the app (default false)"
+                        }
+                    },
+                    "required": ["id"]
+                }),
+            ),
             ToolSpec::new("minimize_window", "Minimize a window.", id_only()),
             ToolSpec::new("maximize_window", "Maximize a window.", id_only()),
             ToolSpec::new(
@@ -557,7 +545,7 @@ impl ToolDispatcher for AppDispatcher<'_> {
     }
 
     fn call_tool(&mut self, name: &str, args: Value) -> ToolResult {
-        self.activity.record(name);
+        self.state.agent_activity.record(name);
         log::info!("MCP tool call: {name}");
         match name {
             "list_apps" => self.tool_list_apps(),

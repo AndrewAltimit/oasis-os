@@ -696,7 +696,7 @@ fn radio_tune_offline_reports_an_error_and_favorites_persist() {
         "offline error shown: {drawn:?} {}",
         dump(&h, "radio_offline")
     );
-    assert!(h.state().radio_source.is_none(), "no stream opened");
+    assert!(h.state().radio.source.is_none(), "no stream opened");
 
     // Favorite the station (Triangle = Space); the registry is saved.
     let before = h.vfs().read("/etc/radio/stations.toml").unwrap_or_default();

@@ -974,6 +974,7 @@ dependencies = [
  "anyhow",
  "env_logger",
  "log",
+ "oasis-app-core",
  "oasis-app-media",
  "oasis-app-settings",
  "oasis-app-system-monitor",
