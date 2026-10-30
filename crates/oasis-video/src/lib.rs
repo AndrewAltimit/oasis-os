@@ -463,7 +463,7 @@ mod tests {
     #[cfg(all(feature = "symphonia", not(feature = "ffmpeg")))]
     fn open_stream_with_moov_builds_keyframe_index() {
         let data = fixture_bytes();
-        let moov = symphonia_decoder::find_top_level_atom(&data, b"moov")
+        let moov = demux::find_top_level_atom(&data, b"moov")
             .expect("moov")
             .to_vec();
         let dec = SoftwareVideoDecoder::open_stream_with_moov(Box::new(Cursor::new(data)), &moov)

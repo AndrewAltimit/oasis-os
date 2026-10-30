@@ -7,7 +7,7 @@
 //! Gated on the openh264 (`h264`) backend: the exact frame/timestamp
 //! expectations below are for that decoder. The ffmpeg backend (CI's
 //! workspace build) has its own decode path and is not covered here.
-#![cfg(feature = "h264")]
+#![cfg(all(feature = "h264", not(feature = "ffmpeg")))]
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use std::io::{Cursor, Read, Seek, SeekFrom};

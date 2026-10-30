@@ -3,16 +3,22 @@
 //! Provides track discovery and per-packet routing so the caller can dispatch
 //! H.264 video packets and AAC audio packets to their respective decoders.
 
-use std::io::Cursor;
+use std::io::{Cursor, Read, Seek, SeekFrom};
 
-use symphonia::core::codecs::CodecParameters;
+use symphonia::core::codecs::{CODEC_TYPE_AAC, CODEC_TYPE_NULL, CodecParameters};
 use symphonia::core::formats::{FormatOptions, FormatReader, SeekMode, SeekTo};
 use symphonia::core::io::{MediaSource, MediaSourceStream};
 use symphonia::core::meta::MetadataOptions;
 use symphonia::core::probe::Hint;
 use symphonia::core::units::Time;
 
+use crate::demux_lite::avcc::{ANNEX_B_START, append_annex_b};
 use crate::{VideoError, VideoSource};
+
+/// Largest `moov` atom [`read_top_level_atom`] loads (64 MiB).  Even a
+/// multi-hour file's sample tables are a few MB; past this the file is
+/// hostile or not an MP4.
+pub(crate) const MAX_MOOV_BYTES: u64 = 64 * 1024 * 1024;
 
 /// Wraps a `Box<dyn VideoSource>` to implement symphonia's `MediaSource`.
 struct VideoSourceAdapter(Box<dyn VideoSource>);
@@ -54,7 +60,7 @@ pub struct DemuxedPacket {
 }
 
 /// Annex B start code (4-byte variant).
-const ANNEX_B_START_CODE: [u8; 4] = [0x00, 0x00, 0x00, 0x01];
+const ANNEX_B_START_CODE: [u8; 4] = ANNEX_B_START;
 
 /// H.264 AVCC-to-Annex B conversion state parsed from the avcC box.
 pub struct AvccConfig {
@@ -66,142 +72,139 @@ pub struct AvccConfig {
 
 /// Parse the AVCDecoderConfigurationRecord (avcC box contents).
 ///
-/// Returns the NAL length size and SPS/PPS parameter sets as Annex B bytestream.
+/// Returns the NAL length size and every SPS/PPS as one Annex B bytestream
+/// (openh264 takes them all in-band, unlike `demux_lite::AvccConfig`,
+/// which keeps one of each for the PSP's ME decoder).
 fn parse_avcc(data: &[u8]) -> Result<AvccConfig, VideoError> {
     if data.len() < 7 {
         return Err(VideoError::Demux("avcC too short".into()));
     }
-
     let nal_length_size = (usize::from(data[4]) & 0x03) + 1;
-    let num_sps = usize::from(data[5]) & 0x1F;
-
-    let mut offset = 6;
     let mut parameter_sets = Vec::new();
-
-    // Parse SPS entries.
-    for _ in 0..num_sps {
-        if offset + 2 > data.len() {
-            return Err(VideoError::Demux("avcC SPS truncated".into()));
+    let mut pos = 5;
+    for (mask, what) in [(0x1F, "SPS"), (0xFF, "PPS")] {
+        let count = data
+            .get(pos)
+            .ok_or_else(|| VideoError::Demux(format!("avcC {what} count missing")))?
+            & mask;
+        pos += 1;
+        for _ in 0..count {
+            let len = data
+                .get(pos..pos + 2)
+                .map(|b| usize::from(u16::from_be_bytes([b[0], b[1]])))
+                .ok_or_else(|| VideoError::Demux(format!("avcC {what} truncated")))?;
+            pos += 2;
+            let set = data
+                .get(pos..pos + len)
+                .ok_or_else(|| VideoError::Demux(format!("avcC {what} data truncated")))?;
+            parameter_sets.extend_from_slice(&ANNEX_B_START_CODE);
+            parameter_sets.extend_from_slice(set);
+            pos += len;
         }
-        let len = u16::from_be_bytes([data[offset], data[offset + 1]]) as usize;
-        offset += 2;
-        if offset + len > data.len() {
-            return Err(VideoError::Demux("avcC SPS data truncated".into()));
-        }
-        parameter_sets.extend_from_slice(&ANNEX_B_START_CODE);
-        parameter_sets.extend_from_slice(&data[offset..offset + len]);
-        offset += len;
     }
-
-    // Parse PPS entries.
-    if offset >= data.len() {
-        return Err(VideoError::Demux("avcC PPS count missing".into()));
-    }
-    let num_pps = usize::from(data[offset]);
-    offset += 1;
-
-    for _ in 0..num_pps {
-        if offset + 2 > data.len() {
-            return Err(VideoError::Demux("avcC PPS truncated".into()));
-        }
-        let len = u16::from_be_bytes([data[offset], data[offset + 1]]) as usize;
-        offset += 2;
-        if offset + len > data.len() {
-            return Err(VideoError::Demux("avcC PPS data truncated".into()));
-        }
-        parameter_sets.extend_from_slice(&ANNEX_B_START_CODE);
-        parameter_sets.extend_from_slice(&data[offset..offset + len]);
-        offset += len;
-    }
-
     Ok(AvccConfig {
         nal_length_size,
         parameter_sets,
     })
 }
 
-/// Scan raw MP4 bytes for the `avcC` box and parse it.
+/// Find the `avcC` box in MP4 bytes (a whole file or just its `moov`) and
+/// parse it.
 ///
 /// Symphonia is audio-focused and doesn't extract video codec parameters,
-/// so we find the avcC atom ourselves by scanning for the `avcC` fourcc.
-/// Works on the full MP4 or just the moov atom data.
+/// so we find the avcC atom ourselves.  The scan is confined to the `moov`
+/// atom when the bytes start with top-level boxes that include one, so
+/// `avcC`-looking bytes in `mdat` (a moov-at-end file) cannot be mistaken
+/// for it.
 pub fn find_avcc_in_mp4(mp4_data: &[u8]) -> Option<AvccConfig> {
-    // The avcC box is a child of the avc1 sample entry inside stsd.
-    // Structure: [4-byte size][4-byte type='avcC'][AVCDecoderConfigurationRecord]
-    // We scan for the 'avcC' fourcc and parse the box contents.
-    let fourcc = b"avcC";
-    let data = mp4_data;
+    let data = find_top_level_atom(mp4_data, b"moov").unwrap_or(mp4_data);
+    // [4-byte size]['avcC'][AVCDecoderConfigurationRecord]
+    data.windows(8)
+        .enumerate()
+        .filter(|(_, w)| &w[4..8] == b"avcC")
+        .find_map(|(i, w)| {
+            let box_size = u32::from_be_bytes([w[0], w[1], w[2], w[3]]) as usize;
+            let contents = data.get(i + 8..i.checked_add(box_size)?)?;
+            parse_avcc(contents).ok()
+        })
+}
 
-    for i in 0..data.len().saturating_sub(8) {
-        if &data[i + 4..i + 8] == fourcc {
-            let box_size =
-                u32::from_be_bytes([data[i], data[i + 1], data[i + 2], data[i + 3]]) as usize;
-            if box_size < 8 || i + box_size > data.len() {
-                continue;
-            }
-            // Box contents start after the 8-byte header.
-            let contents = &data[i + 8..i + box_size];
-            if let Ok(config) = parse_avcc(contents) {
-                return Some(config);
-            }
+/// Find a top-level MP4 atom (e.g. `moov`) in a complete file buffer and
+/// return it including its header.
+pub(crate) fn find_top_level_atom<'a>(data: &'a [u8], fourcc: &[u8; 4]) -> Option<&'a [u8]> {
+    let mut pos = 0usize;
+    while pos.checked_add(8)? <= data.len() {
+        let size32 = u32::from_be_bytes([data[pos], data[pos + 1], data[pos + 2], data[pos + 3]]);
+        let size = match size32 {
+            0 => data.len() - pos,
+            1 => {
+                let b = data.get(pos + 8..pos + 16)?;
+                usize::try_from(u64::from_be_bytes([
+                    b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7],
+                ]))
+                .ok()?
+            },
+            n => n as usize,
+        };
+        if size < 8 {
+            return None;
         }
+        let end = pos.checked_add(size)?;
+        if &data[pos + 4..pos + 8] == fourcc {
+            return data.get(pos..end);
+        }
+        pos = end;
     }
     None
 }
 
-/// Convert an AVCC-formatted packet to Annex B by replacing length prefixes
-/// with start codes.
-fn avcc_to_annex_b(data: &[u8], nal_length_size: usize) -> Result<Vec<u8>, VideoError> {
-    let mut out = Vec::with_capacity(data.len() + 32);
-    avcc_to_annex_b_into(data, nal_length_size, &mut out)?;
-    Ok(out)
-}
-
-/// Convert AVCC to Annex B, reusing the provided output buffer.
+/// Read the top-level atom `fourcc` (header included) from a seekable
+/// stream by walking the top-level box headers, seeking over every other
+/// box (`mdat` is never read).  Leaves the stream position unspecified.
 ///
-/// Clears `out` before writing.  The caller retains the buffer across calls
-/// so its capacity grows to the largest packet and stays stable, eliminating
-/// per-packet allocation.
-fn avcc_to_annex_b_into(
-    data: &[u8],
-    nal_length_size: usize,
-    out: &mut Vec<u8>,
-) -> Result<(), VideoError> {
-    out.clear();
-    let mut offset = 0;
-
-    while offset + nal_length_size <= data.len() {
-        let nal_len = match nal_length_size {
-            1 => usize::from(data[offset]),
-            2 => u16::from_be_bytes([data[offset], data[offset + 1]]) as usize,
-            3 => {
-                ((data[offset] as usize) << 16)
-                    | ((data[offset + 1] as usize) << 8)
-                    | (data[offset + 2] as usize)
-            },
-            4 => u32::from_be_bytes([
-                data[offset],
-                data[offset + 1],
-                data[offset + 2],
-                data[offset + 3],
-            ]) as usize,
-            _ => return Err(VideoError::Demux("invalid NAL length size".into())),
-        };
-        offset += nal_length_size;
-
-        if offset
-            .checked_add(nal_len)
-            .is_none_or(|end| end > data.len())
-        {
-            return Err(VideoError::Demux("NAL unit exceeds packet bounds".into()));
+/// `Ok(None)` when the stream has no such atom, or it is larger than
+/// `max_bytes`.
+pub(crate) fn read_top_level_atom<R: Read + Seek + ?Sized>(
+    r: &mut R,
+    fourcc: &[u8; 4],
+    max_bytes: u64,
+) -> std::io::Result<Option<Vec<u8>>> {
+    let mut pos = r.seek(SeekFrom::Start(0))?;
+    loop {
+        let mut header = [0u8; 16];
+        match r.read_exact(&mut header[..8]) {
+            Ok(()) => {},
+            Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => return Ok(None),
+            Err(e) => return Err(e),
         }
-
-        out.extend_from_slice(&ANNEX_B_START_CODE);
-        out.extend_from_slice(&data[offset..offset + nal_len]);
-        offset += nal_len;
+        let size = match u32::from_be_bytes([header[0], header[1], header[2], header[3]]) {
+            0 => r.seek(SeekFrom::End(0))?.saturating_sub(pos),
+            1 => {
+                r.read_exact(&mut header[8..16])?;
+                u64::from_be_bytes([
+                    header[8], header[9], header[10], header[11], header[12], header[13],
+                    header[14], header[15],
+                ])
+            },
+            n => u64::from(n),
+        };
+        if size < 8 {
+            return Ok(None);
+        }
+        if &header[4..8] == fourcc {
+            if size > max_bytes {
+                return Ok(None);
+            }
+            r.seek(SeekFrom::Start(pos))?;
+            let mut atom = vec![0u8; size as usize];
+            r.read_exact(&mut atom)?;
+            return Ok(Some(atom));
+        }
+        let Some(next) = pos.checked_add(size) else {
+            return Ok(None);
+        };
+        pos = r.seek(SeekFrom::Start(next))?;
     }
-
-    Ok(())
 }
 
 /// MP4 demuxer backed by symphonia.
@@ -223,43 +226,32 @@ pub struct Mp4Demuxer {
 impl Mp4Demuxer {
     /// Open an MP4 from a streaming source.
     ///
-    /// Accepts any `Read + Seek + Send` source (file, cursor, etc.). Reads
-    /// the full source to scan for the avcC box (required for AVCC→Annex B
-    /// conversion), then seeks back to the start before handing off to
-    /// symphonia.
+    /// Locates the `moov` atom by walking the top-level box headers
+    /// (seeking over `mdat`, so only `moov` is read), takes the avcC
+    /// config from it, then rewinds and hands the source to symphonia.
     pub fn open_stream(source: Box<dyn VideoSource>) -> Result<Self, VideoError> {
-        Self::open_stream_scanned(source, |_| ()).map(|(demuxer, ())| demuxer)
+        Self::open_stream_and_moov(source).map(|(demuxer, _)| demuxer)
     }
 
-    /// [`open_stream`](Self::open_stream), additionally running `scan` over
-    /// the full source bytes (read once for the avcC scan anyway) and
-    /// returning its result.
-    pub fn open_stream_scanned<T>(
+    /// [`open_stream`](Self::open_stream), also returning the `moov` bytes
+    /// (empty if none was found) for callers that index them further.
+    pub(crate) fn open_stream_and_moov(
         mut source: Box<dyn VideoSource>,
-        scan: impl FnOnce(&[u8]) -> T,
-    ) -> Result<(Self, T), VideoError> {
-        // Read the entire source to scan for the avcC box.
-        let mut buf = Vec::new();
+    ) -> Result<(Self, Vec<u8>), VideoError> {
+        let moov = read_top_level_atom(&mut source, b"moov", MAX_MOOV_BYTES)
+            .map_err(|e| VideoError::Demux(format!("read moov: {e}")))?
+            .unwrap_or_default();
         source
-            .read_to_end(&mut buf)
-            .map_err(|e| VideoError::Demux(format!("read source: {e}")))?;
-        let avcc = find_avcc_in_mp4(&buf);
-        let scanned = scan(&buf);
-        // Seek back to the start so symphonia can read from the beginning.
-        source
-            .seek(std::io::SeekFrom::Start(0))
+            .seek(SeekFrom::Start(0))
             .map_err(|e| VideoError::Demux(format!("seek to start: {e}")))?;
-        drop(buf);
-
-        let adapter = VideoSourceAdapter(source);
-        let mss = MediaSourceStream::new(Box::new(adapter), Default::default());
-        Ok((Self::open_from_mss(mss, avcc)?, scanned))
+        let avcc = find_avcc_in_mp4(&moov);
+        Ok((Self::open_stream_with_avcc(source, avcc)?, moov))
     }
 
     /// Open an MP4 from a streaming source with pre-extracted avcC config.
     ///
-    /// Skips the expensive `read_to_end()` scan — the caller has already
-    /// extracted avcC from the moov atom (e.g. via a Range request).
+    /// Skips the `moov` lookup -- the caller has already extracted avcC
+    /// from the moov atom (e.g. via a Range request).
     pub fn open_stream_with_avcc(
         source: Box<dyn VideoSource>,
         avcc: Option<AvccConfig>,
@@ -304,21 +296,19 @@ impl Mp4Demuxer {
 
         for track in reader.tracks() {
             let codec = track.codec_params.codec;
-            let is_video = codec.to_string().contains("h264")
-                || codec == symphonia::core::codecs::CODEC_TYPE_NULL;
-            let is_audio = codec.to_string().contains("aac")
-                || matches!(codec, symphonia::core::codecs::CODEC_TYPE_AAC);
-
-            if is_video && video_track_id.is_none() {
+            // symphonia's isomp4 reader has no video codec types: it reports
+            // every sample entry it does not decode (avc1/avc3 included) as
+            // CODEC_TYPE_NULL, so the first such track is taken as video.
+            if codec == CODEC_TYPE_NULL && video_track_id.is_none() {
                 video_track_id = Some(track.id);
                 if let Some(tb) = track.codec_params.time_base {
-                    video_timebase = (tb.numer as u64, tb.denom as u64);
+                    video_timebase = (u64::from(tb.numer), u64::from(tb.denom));
                 }
                 video_codec_params = Some(track.codec_params.clone());
-            } else if is_audio && audio_track_id.is_none() {
+            } else if codec == CODEC_TYPE_AAC && audio_track_id.is_none() {
                 audio_track_id = Some(track.id);
                 if let Some(tb) = track.codec_params.time_base {
-                    audio_timebase = (tb.numer as u64, tb.denom as u64);
+                    audio_timebase = (u64::from(tb.numer), u64::from(tb.denom));
                 }
                 audio_codec_params = Some(track.codec_params.clone());
             }
@@ -370,25 +360,21 @@ impl Mp4Demuxer {
                 0.0
             };
 
-            let data = if kind == TrackKind::Video {
-                if let Some(avcc) = &self.avcc {
-                    // Convert AVCC length-prefixed NALs to Annex B start codes.
-                    let mut annex_b = avcc_to_annex_b(packet.buf(), avcc.nal_length_size)?;
-                    // Prepend SPS/PPS before the first video packet.
+            let data = match (&self.avcc, kind) {
+                (Some(avcc), TrackKind::Video) => {
+                    // Convert AVCC length-prefixed NALs to Annex B start
+                    // codes, with SPS/PPS before the first video packet.
+                    let mut annex_b =
+                        Vec::with_capacity(avcc.parameter_sets.len() + packet.buf().len() + 32);
                     if !self.sent_params {
-                        let mut with_params =
-                            Vec::with_capacity(avcc.parameter_sets.len() + annex_b.len());
-                        with_params.extend_from_slice(&avcc.parameter_sets);
-                        with_params.append(&mut annex_b);
-                        annex_b = with_params;
+                        annex_b.extend_from_slice(&avcc.parameter_sets);
                         self.sent_params = true;
                     }
+                    append_annex_b(packet.buf(), avcc.nal_length_size, &mut annex_b)
+                        .map_err(|e| VideoError::Demux(e.to_string()))?;
                     annex_b
-                } else {
-                    packet.buf().to_vec()
-                }
-            } else {
-                packet.buf().to_vec()
+                },
+                _ => packet.buf().to_vec(),
             };
 
             return Ok(Some(DemuxedPacket {
@@ -399,13 +385,15 @@ impl Mp4Demuxer {
         }
     }
 
-    /// Seek to a position in seconds.
+    /// Seek to a position in seconds (negative / non-finite = the start).
     pub fn seek(&mut self, secs: f64) -> Result<(), VideoError> {
+        // `Time` wants whole seconds plus a fraction in [0, 1).
+        let secs = if secs.is_finite() { secs.max(0.0) } else { 0.0 };
         self.reader
             .seek(
                 SeekMode::Coarse,
                 SeekTo::Time {
-                    time: Time::new(secs as u64, secs.fract()),
+                    time: Time::new(secs.trunc() as u64, secs.fract()),
                     track_id: None,
                 },
             )
@@ -451,6 +439,14 @@ impl Mp4Demuxer {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// One AVCC packet as Annex B (the conversion `next_packet` applies).
+    fn avcc_to_annex_b(data: &[u8], nal_length_size: usize) -> Result<Vec<u8>, VideoError> {
+        let mut out = Vec::new();
+        append_annex_b(data, nal_length_size, &mut out)
+            .map_err(|e| VideoError::Demux(e.to_string()))?;
+        Ok(out)
+    }
 
     #[test]
     fn parse_avcc_extracts_sps_pps() {
@@ -734,6 +730,65 @@ mod tests {
             Err(_) => {
                 // Error on open is acceptable for data with no mdat/moov.
             },
+        }
+    }
+
+    fn streaming_fixture(name: &str) -> Vec<u8> {
+        let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        std::fs::read(manifest.join("../../tests/fixtures/streaming").join(name))
+            .expect("fixture file missing")
+    }
+
+    #[test]
+    fn read_top_level_atom_finds_moov_at_end() {
+        let data = streaming_fixture("moov_end_4s.mp4");
+        let expected = find_top_level_atom(&data, b"moov").expect("moov").to_vec();
+        let mut cursor = Cursor::new(&data);
+        let moov = read_top_level_atom(&mut cursor, b"moov", MAX_MOOV_BYTES).unwrap();
+        assert_eq!(moov, Some(expected));
+        // Over the size cap: not loaded.
+        let mut cursor = Cursor::new(&data);
+        assert_eq!(read_top_level_atom(&mut cursor, b"moov", 64).unwrap(), None);
+        // Garbage / absent.
+        let mut cursor = Cursor::new(vec![0u8; 3]);
+        assert_eq!(
+            read_top_level_atom(&mut cursor, b"moov", MAX_MOOV_BYTES).unwrap(),
+            None
+        );
+    }
+
+    #[test]
+    fn find_avcc_ignores_decoys_outside_moov() {
+        // Regression: the whole-file byte scan could take `avcC`-looking
+        // bytes in `mdat` (before a moov-at-end) for the real config.
+        #[rustfmt::skip]
+        let decoy: &[u8] = &[
+            0, 0, 0, 0x12, b'a', b'v', b'c', b'C',
+            0x01, 0x42, 0xC0, 0x1E, 0xFC, 0xE1, 0x00, 0x01, 0x67, 0x00,
+        ];
+        let real = streaming_fixture("moov_end_4s.mp4");
+        let moov = find_top_level_atom(&real, b"moov").expect("moov");
+        let mut mdat = vec![0, 0, 0, 0, b'm', b'd', b'a', b't'];
+        mdat.extend_from_slice(decoy);
+        let mdat_len = mdat.len() as u32;
+        mdat[..4].copy_from_slice(&mdat_len.to_be_bytes());
+        let mut file = mdat;
+        file.extend_from_slice(moov);
+        let cfg = find_avcc_in_mp4(&file).expect("avcC");
+        let real_cfg = find_avcc_in_mp4(moov).expect("avcC");
+        assert_eq!(cfg.parameter_sets, real_cfg.parameter_sets);
+        assert_eq!(cfg.nal_length_size, 4);
+    }
+
+    #[test]
+    fn seek_with_hostile_times_does_not_panic() {
+        let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let data = std::fs::read(manifest.join("../../tests/fixtures/test_320x240_2s.mp4"))
+            .expect("fixture file missing");
+        let mut demuxer = Mp4Demuxer::open(data).expect("open");
+        for secs in [-3.5, f64::NAN, f64::INFINITY, f64::NEG_INFINITY, 1.25, 1e30] {
+            let _ = demuxer.seek(secs);
+            let _ = demuxer.next_packet();
         }
     }
 }

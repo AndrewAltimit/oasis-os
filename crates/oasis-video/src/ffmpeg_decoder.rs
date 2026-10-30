@@ -34,7 +34,7 @@ unsafe extern "C" fn read_packet(
     ctx.read_count += 1;
     match ctx.source.read(slice) {
         Ok(0) => {
-            if ctx.read_count <= 20 || ctx.read_count % 1000 == 0 {
+            if ctx.read_count <= 20 || ctx.read_count.is_multiple_of(1000) {
                 log::debug!(
                     "AVIO: read #{} -> EOF (requested {})",
                     ctx.read_count,
@@ -44,7 +44,7 @@ unsafe extern "C" fn read_packet(
             ffi::AVERROR_EOF
         },
         Ok(n) => {
-            if ctx.read_count <= 10 || ctx.read_count % 5000 == 0 {
+            if ctx.read_count <= 10 || ctx.read_count.is_multiple_of(5000) {
                 log::trace!(
                     "AVIO: read #{} -> {} bytes (requested {})",
                     ctx.read_count,
@@ -97,12 +97,14 @@ unsafe extern "C" fn seek_source(
 /// Handles demuxing, video decoding, audio decoding, and format conversion
 /// in a single unified pipeline.
 pub struct FfmpegDecoder {
-    /// FFmpeg format context (owns the AVIO context).
+    /// FFmpeg format context.  Its `pb` is our custom AVIO context, which
+    /// `avformat_close_input` does not free (`AVFMT_FLAG_CUSTOM_IO`): `Drop`
+    /// frees it with [`free_custom_avio`].
     format_ctx: *mut ffi::AVFormatContext,
-    /// The AVIO buffer allocated via `av_malloc` (freed with the context).
-    _avio_buffer: *mut u8,
-    /// Boxed IoContext kept alive for the AVIO callbacks.
-    _io_ctx: Box<IoContext>,
+    /// The AVIO callbacks' `opaque` state, from `Box::into_raw` (a raw
+    /// pointer, not a `Box`, so moving the decoder cannot invalidate the
+    /// pointer ffmpeg holds).  Freed in `Drop` after the format context.
+    io_ctx: *mut IoContext,
 
     // Video
     video_stream_idx: Option<usize>,
@@ -138,45 +140,56 @@ impl FfmpegDecoder {
     pub fn open_stream(source: Box<dyn VideoSource>) -> Result<Self, VideoError> {
         ffmpeg::init().map_err(|e| VideoError::Demux(format!("ffmpeg init: {e}")))?;
 
-        // Set up custom I/O via AVIO context.
-        let io_ctx = Box::new(IoContext {
+        // Set up custom I/O via AVIO context.  On every error path below the
+        // pieces built so far are freed in reverse order: the format
+        // context, then the AVIO context and its buffer, then `io_ctx`.
+        let io_ctx = Box::into_raw(Box::new(IoContext {
             source,
             read_count: 0,
-        });
-        let io_ptr = &*io_ctx as *const IoContext as *mut std::ffi::c_void;
+        }));
+        // SAFETY: `io_ctx` came from `Box::into_raw` above and nothing else
+        // owns it; called at most once, after ffmpeg stopped using it.
+        let free_io = || drop(unsafe { Box::from_raw(io_ctx) });
 
         const AVIO_BUF_SIZE: usize = 32 * 1024;
 
-        // SAFETY: av_malloc allocates memory that ffmpeg manages.
+        // SAFETY: av_malloc has no preconditions; it returns null or a
+        // buffer of AVIO_BUF_SIZE bytes that we hand to the AVIO context.
         let avio_buffer = unsafe { ffi::av_malloc(AVIO_BUF_SIZE) as *mut u8 };
         if avio_buffer.is_null() {
+            free_io();
             return Err(VideoError::Demux("av_malloc failed".into()));
         }
 
-        // SAFETY: Creating AVIO context with our read/seek callbacks.
+        // SAFETY: `avio_buffer` is an av_malloc'd buffer of AVIO_BUF_SIZE
+        // bytes (ownership passes to the context on success); `io_ctx` is a
+        // live `IoContext` that outlives the context (freed after it), which
+        // is what the callbacks require of `opaque`.
         let avio_ctx = unsafe {
             ffi::avio_alloc_context(
                 avio_buffer,
                 AVIO_BUF_SIZE as i32,
                 0, // read-only
-                io_ptr,
+                io_ctx.cast(),
                 Some(read_packet),
                 None, // no write
                 Some(seek_source),
             )
         };
         if avio_ctx.is_null() {
-            // SAFETY: Free the buffer we allocated since avio_alloc_context failed.
-            // SAFETY: avio_buffer was allocated by av_malloc and not yet owned by an AVIO context.
-            unsafe { ffi::av_free(avio_buffer as *mut std::ffi::c_void) };
+            // SAFETY: avio_alloc_context failed, so the av_malloc'd buffer
+            // is still ours.
+            unsafe { ffi::av_free(avio_buffer.cast()) };
+            free_io();
             return Err(VideoError::Demux("avio_alloc_context failed".into()));
         }
 
-        // SAFETY: Allocate format context and assign our AVIO.
-        let format_ctx = unsafe { ffi::avformat_alloc_context() };
+        // SAFETY: no preconditions; returns null or a fresh context.
+        let mut format_ctx = unsafe { ffi::avformat_alloc_context() };
         if format_ctx.is_null() {
-            // SAFETY: avio_ctx was successfully allocated above; free it on error.
-            unsafe { ffi::avio_context_free(&mut (avio_ctx as *mut _)) };
+            // SAFETY: `avio_ctx` is ours alone (no format context has it).
+            unsafe { free_custom_avio(avio_ctx) };
+            free_io();
             return Err(VideoError::Demux("avformat_alloc_context failed".into()));
         }
 
@@ -187,16 +200,22 @@ impl FfmpegDecoder {
             (*format_ctx).flags |= ffi::AVFMT_FLAG_CUSTOM_IO as i32;
         }
 
-        // SAFETY: Open the input. NULL filename since we use custom I/O.
+        // SAFETY: `format_ctx` is a valid pre-allocated context with our
+        // AVIO in `pb`; a null URL is allowed with custom I/O.  On failure
+        // ffmpeg frees the context and nulls `format_ctx`, but leaves the
+        // custom `pb` to us.
         let ret = unsafe {
             ffi::avformat_open_input(
-                &mut (format_ctx as *mut _),
+                &mut format_ctx,
                 std::ptr::null(),
                 std::ptr::null_mut(),
                 std::ptr::null_mut(),
             )
         };
         if ret < 0 {
+            // SAFETY: the format context that referenced `avio_ctx` is gone.
+            unsafe { free_custom_avio(avio_ctx) };
+            free_io();
             return Err(VideoError::Demux(format!(
                 "avformat_open_input failed: {}",
                 ffmpeg_error_string(ret)
@@ -217,8 +236,13 @@ impl FfmpegDecoder {
         // SAFETY: Find stream info.
         let ret = unsafe { ffi::avformat_find_stream_info(format_ctx, std::ptr::null_mut()) };
         if ret < 0 {
-            // SAFETY: format_ctx is valid; free on error before returning.
-            unsafe { ffi::avformat_close_input(&mut (format_ctx as *mut _)) };
+            // SAFETY: format_ctx is a valid opened context; closing it
+            // leaves the custom AVIO (no longer referenced) for us to free.
+            unsafe {
+                ffi::avformat_close_input(&mut format_ctx);
+                free_custom_avio(avio_ctx);
+            }
+            free_io();
             return Err(VideoError::Demux(format!(
                 "avformat_find_stream_info failed: {}",
                 ffmpeg_error_string(ret)
@@ -255,7 +279,7 @@ impl FfmpegDecoder {
             if codec_type == ffi::AVMediaType::AVMEDIA_TYPE_VIDEO && video_stream_idx.is_none() {
                 // SAFETY: stream pointer is valid within the format context.
                 let tb = unsafe { (*stream).time_base };
-                video_time_base = tb.num as f64 / tb.den as f64;
+                video_time_base = time_base_secs(tb);
 
                 // Create video decoder.
                 match Self::create_video_decoder(codecpar) {
@@ -284,7 +308,7 @@ impl FfmpegDecoder {
             {
                 // SAFETY: stream pointer is valid within the format context.
                 let tb = unsafe { (*stream).time_base };
-                audio_time_base = tb.num as f64 / tb.den as f64;
+                audio_time_base = time_base_secs(tb);
 
                 match Self::create_audio_decoder(codecpar) {
                     Ok(dec) => {
@@ -309,8 +333,7 @@ impl FfmpegDecoder {
 
         Ok(Self {
             format_ctx,
-            _avio_buffer: avio_buffer,
-            _io_ctx: io_ctx,
+            io_ctx,
             video_stream_idx,
             video_decoder,
             video_time_base,
@@ -860,13 +883,53 @@ impl Drop for FfmpegDecoder {
         self.resampler.take();
 
         if !self.format_ctx.is_null() {
-            // SAFETY: Close the format context. This also frees the AVIO
-            // context. `format_ctx` was set by `avformat_open_input` and
-            // not yet freed (we just null-checked above).
+            // SAFETY: `format_ctx` is the context `avformat_open_input`
+            // opened and nothing freed yet.  With AVFMT_FLAG_CUSTOM_IO,
+            // `avformat_close_input` leaves `pb` alone, so it is freed
+            // afterwards (it used to leak, with its 32 KiB buffer, on every
+            // decoder drop).
             unsafe {
+                let avio = (*self.format_ctx).pb;
                 ffi::avformat_close_input(&mut self.format_ctx);
+                free_custom_avio(avio);
             }
         }
+        if !self.io_ctx.is_null() {
+            // SAFETY: from `Box::into_raw` in `open_stream`; the AVIO context
+            // that called back into it was freed above.
+            drop(unsafe { Box::from_raw(self.io_ctx) });
+            self.io_ctx = std::ptr::null_mut();
+        }
+    }
+}
+
+/// Free a custom AVIO context and its buffer, which ffmpeg may have
+/// replaced since `avio_alloc_context` (so the original pointer must not
+/// be freed directly).
+///
+/// # Safety
+/// `avio` is null or a live context from `avio_alloc_context` that no
+/// format context references any more.
+unsafe fn free_custom_avio(mut avio: *mut ffi::AVIOContext) {
+    if avio.is_null() {
+        return;
+    }
+    // SAFETY: per the contract `avio` is live and ours; `av_freep` frees
+    // `(*avio).buffer` and nulls it, then `avio_context_free` frees the
+    // context and nulls `avio`.
+    unsafe {
+        ffi::av_freep(std::ptr::addr_of_mut!((*avio).buffer).cast());
+        ffi::avio_context_free(&mut avio);
+    }
+}
+
+/// Seconds per tick of a stream time base (0 for a malformed `x/0` one,
+/// which would otherwise turn every timestamp into inf/NaN).
+fn time_base_secs(tb: ffi::AVRational) -> f64 {
+    if tb.den == 0 {
+        0.0
+    } else {
+        f64::from(tb.num) / f64::from(tb.den)
     }
 }
 
