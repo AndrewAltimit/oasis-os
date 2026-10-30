@@ -120,7 +120,7 @@ oasis-usb-host  (standalone binary, rusb only: host side of the PSP USB thin cli
 
 `oasis-types/src/backend/` defines the only abstraction between core and platform (re-exported by `oasis-core`):
 - `SdiCore` -- required rendering (13 methods: init, clear, blit, fill_rect, draw_text, swap_buffers, load_texture, destroy_texture, set_clip_rect, reset_clip_rect, measure_text, read_pixels, shutdown)
-- `SdiBackend` -- a marker super-trait satisfied by any type implementing `SdiCore` plus all nine extension traits (`SdiShapes`, `SdiGradients`, `SdiAlpha`, `SdiText`, `SdiTextures`, `SdiClipTransform`, `SdiVector`, `SdiBatch`, `SdiRenderTarget`); the extensions live under `extensions/` (one file per trait, re-exported via `extensions/mod.rs`) and provide 53 default-impl methods total (`SdiBlendMode` and `SdiGeometry` are further optional traits outside `SdiBackend`).
+- `SdiBackend` -- a marker super-trait satisfied by any type implementing `SdiCore` plus all nine extension traits (`SdiShapes`, `SdiGradients`, `SdiAlpha`, `SdiText`, `SdiTextures`, `SdiClipTransform`, `SdiVector`, `SdiBatch`, `SdiRenderTarget`); the extensions live under `extensions/` (one file per trait, re-exported via `extensions/mod.rs`) and provide 53 default-impl methods total (`oasis_types::impl_sdi_defaults!(T)` writes the nine empty impls for a mock or null backend).
 - `InputBackend` -- input polling (returns `Vec<InputEvent>`)
 - `NetworkBackend` -- TCP networking
 - `AudioBackend` -- audio playback

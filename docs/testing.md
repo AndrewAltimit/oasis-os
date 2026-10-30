@@ -208,11 +208,15 @@ Observation
 The SDL3 backend, the UE5 software framebuffer (`oasis-rasterize`, what
 the harness and the FFI render with) and the WASM canvas backend must put
 the same pixels on screen for the same `SdiBackend` calls. Shapes, glyphs
-and line metrics come from shared definitions in `oasis-rasterize`
-(`glyph_mask`, `bitmap_line_height` / `bitmap_ascent`, and the span
-generators `thick_line_rows`, `stroke_circle_rows`,
-`stroke_rounded_rect_rows`, `polygon_rows`, `rounded_rect_rows`); the
-parity suites check the backends actually agree.
+and line metrics come from shared definitions: `oasis-rasterize::glyph_mask`,
+`oasis_types::bitmap_font::{bitmap_line_height, bitmap_ascent}`, and the span
+generators in `oasis_types::rasterize` (`midpoint_row_extents`,
+`rounded_rect_rows`, `thick_line_rows`, `stroke_circle_rows`,
+`stroke_rounded_rect_rows`, `polygon_rows`; re-exported by
+`oasis-rasterize`). The `SdiShapes` / `SdiVector` / `SdiText` trait
+defaults use the same generators and metrics, so PSP and every test mock
+cover the same pixels as SDL and UE5. The parity suites check the backends
+actually agree.
 
 ```bash
 # ~60 primitive scenarios, SDL vs software, plus SDL-only texture

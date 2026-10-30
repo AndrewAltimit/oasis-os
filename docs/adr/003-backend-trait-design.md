@@ -1,8 +1,10 @@
-# ADR-003: Backend Trait Design (Five Traits)
+# ADR-003: Backend Trait Design (Split Backend Traits)
 
 **Status:** Accepted
 **Date:** 2025-02-12
-**Last reviewed:** 2026-05-03 — decision still current; method/extension counts updated below to match current source. See `crates/oasis-types/src/backend/`.
+**Last reviewed:** 2026-10-29 — decision still current; counts, the removed
+opt-in traits and the shared span rasterizer updated below to match current
+source. See `crates/oasis-types/src/backend/`.
 
 ## Context
 
@@ -16,7 +18,8 @@ stacks, and audio subsystems. We need an abstraction that:
 
 ## Decision
 
-We define **five separate backend traits** in `oasis-types`:
+We define **separate backend traits** in `oasis-types` (five main ones,
+plus `ClipboardBackend` and the `NetworkStream` connection trait):
 
 1. **`SdiCore`** -- Required rendering: 13 methods (`init`, `clear`, `blit`,
    `fill_rect`, `draw_text`, `swap_buffers`, `load_texture`, `destroy_texture`,
@@ -26,15 +29,17 @@ We define **five separate backend traits** in `oasis-types`:
    type that satisfies `SdiCore` and all nine extensions automatically
    implements `SdiBackend`. The nine extensions are `SdiShapes`,
    `SdiGradients`, `SdiAlpha`, `SdiText`, `SdiTextures`, `SdiClipTransform`,
-   `SdiVector`, `SdiBatch`, and `SdiRenderTarget`, totalling ~55
-   default-implemented methods that fall back to `SdiCore` primitives.
-   `SdiBatch` provides `begin_batch`/`flush_batch` plus
-   `submit_rect_batch`/`submit_text_batch` for batched rect and text
-   geometry submission (used by the browser's light compositor to reduce
-   draw call count). Two further extension traits (`SdiBlendMode`,
-   `SdiGeometry`) live alongside the nine but are intentionally outside the
-   `SdiBackend` bundle — backends opt in only when they support raw
-   geometry submission or arbitrary blend modes.
+   `SdiVector`, `SdiBatch`, and `SdiRenderTarget`, totalling 53
+   default-implemented methods that fall back to `SdiCore` primitives
+   (shapes 8, gradients 2, alpha 3, text 8, textures 4, clip/transform 8,
+   vector 7, batch 4, render target 9).
+   `SdiBatch` provides `begin_batch`/`flush_batch` (reserved hooks, no-ops
+   on every backend today) plus `submit_rect_batch`/`submit_text_batch` for
+   batched rect and text geometry submission (used by the browser's light
+   compositor to reduce draw call count). The former opt-in traits
+   `SdiBlendMode` and `SdiGeometry` had no implementation or caller outside
+   tests and were removed in 2026-10; blend modes are expressed through
+   `SdiRenderTarget::composite_render_target`.
 3. **`InputBackend`** -- Input: `poll_events() -> Vec<InputEvent>`.
 4. **`NetworkBackend`** -- Networking: `listen`, `accept`, `connect`,
    `tls_provider`.
@@ -43,22 +48,26 @@ We define **five separate backend traits** in `oasis-types`:
 
 ## Rationale
 
-- **Granularity.** Not all platforms support all subsystems. UE5 has no audio.
-  PSP user-mode has no network. By splitting traits, backends implement only
+- **Granularity.** Not all platforms support all subsystems (PSP user-mode
+  has no network, for instance; UE5 does have audio through
+  `Ue5AudioBackend` and the FFI's `oasis_audio_*` exports). By splitting traits, backends implement only
   what applies. Core code accepts `Option<&dyn AudioBackend>` where audio is
   optional.
 - **Single responsibility.** Each trait is focused. `SdiCore` is about
   required drawing. `SdiBackend` adds optional accelerated methods. `InputBackend`
   is about events. They can be implemented by different structs if needed.
 - **Two-tier rendering.** `SdiCore` has 13 required methods that every backend
-  must implement. `SdiBackend`'s nine extensions add ~55 default-implemented
+  must implement. `SdiBackend`'s nine extensions add 53 default-implemented
   methods for shapes, gradients, text styling, textures, clip/transform
   stacks, vector graphics, batching, and render targets — all falling back
-  to `SdiCore` calls. Backends progressively override individual extensions
-  for hardware acceleration without having to stub the rest.
-- **Minimal vtable.** Four small vtables instead of one large one. On PSP,
-  indirect calls through vtables are expensive; smaller vtables mean fewer
-  cache misses.
+  to `SdiCore` calls. The shape defaults emit spans from the same generators
+  the SDL and UE5 rasterizers use, so they are pixel-exact, not just
+  approximate. Backends progressively override individual extensions for
+  hardware acceleration without having to stub the rest.
+- **Organisation, not vtables.** Consumers take `&mut dyn SdiBackend`,
+  whose vtable holds every supertrait method, and no extension trait is used
+  as a separate bound or trait object. The split groups the methods by
+  capability; it has no vtable-size benefit.
 
 ## Alternatives Considered
 
@@ -67,15 +76,23 @@ We define **five separate backend traits** in `oasis-types`:
 - **Capability queries** (`has_audio() -> bool`). Rejected: runtime checks are
   error-prone. Type system (trait presence) is better.
 - **No traits, conditional compilation only.** Rejected: prevents testing core
-  code without a real backend. `MockBackend` implements all four traits.
+  code without a real backend (see the mocks in `oasis-test-backend`).
 
 ## Consequences
 
 - Core code uses `&mut dyn SdiBackend` for rendering, never SDL/PSP directly.
 - `oasis-app` composes all four traits into a single application state.
-- `MockBackend` in `oasis-types` records all draw calls for test assertions.
-- New backends only need to implement `SdiCore` + `SdiBackend` + `InputBackend` at minimum.
+- Recording and mock backends live in `oasis-test-backend` (`MockSdiCore`,
+  `RecordingBackend` with its `DrawCommand` log, `ClipAuditBackend`, and the
+  `conformance` scenarios).
+- `SdiBackend` cannot be implemented directly (blanket impl). A new backend
+  implements `SdiCore`, the nine extension traits (empty impls allowed;
+  `oasis_types::impl_sdi_defaults!(T)` writes them, `; except A, B` skips the
+  ones it overrides) and `InputBackend`.
 - Four backends implemented: SDL3 (desktop), WASM (browser), UE5 (game engine), PSP (hardware).
 - A sixth trait, `ClipboardBackend`, handles copy/paste with an `InMemoryClipboard` fallback.
-- Shared rasterization algorithms in `oasis-types::rasterize` (`PixelSink` trait) reduce
-  per-backend implementation effort for shapes, circles, and rounded rectangles.
+- Shared rasterization in `oasis_types::rasterize`: the span generators for
+  circles, rings, rounded rects, thick lines and even-odd polygons (used by
+  the trait defaults, the SDL backend and `oasis-rasterize::SoftwareBuffer`,
+  which re-exports them) and `PixelSink` + `rasterize_triangle` (used by UE5
+  and `SoftwareBuffer`).
