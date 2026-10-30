@@ -26,10 +26,20 @@
     .nf__screen p { font-size: clamp(0.8rem, 2.4vw, 0.95rem); line-height: 1.7; }
     .nf__code { color: var(--accent); }
     .nf__ok { margin-top: 1rem; font-size: 0.78rem; color: #9fb3d1; }
-    .nf__ok b { display: inline-grid; place-items: center; width: 1.4em; height: 1.4em; border-radius: 50%; border: 1px solid currentColor; font-weight: 400; margin-right: 0.35rem; }
-    .nf h1 { margin-top: 2.5rem; font-size: clamp(1.8rem, 4vw, 2.5rem); letter-spacing: -0.03em; text-align: center; }
+    .nf__ok { display: inline-flex; align-items: center; gap: 0.45rem; }
+    .nf__ok b { width: 1.15em; height: 1.15em; border-radius: 50%; border: 2px solid #ff6b8b; }
+    .nf__path { margin-top: 0.5rem; font-size: 0.72rem; color: #7d8ea8; overflow-wrap: anywhere; }
+    .nf__path:empty { display: none; }
+    .nf h1 { margin-top: 2.5rem; font-size: clamp(1.8rem, 4vw, 2.5rem); line-height: var(--lh-snug); letter-spacing: -0.03em; text-align: center; }
     .nf__lede { margin-top: 0.75rem; color: var(--muted); text-align: center; }
     .nf__ctas { margin-top: 1.75rem; display: flex; flex-wrap: wrap; gap: 0.6rem; justify-content: center; }
+    .nf > div { width: 100%; min-width: 0; }
+    .nf__screen { margin-inline: auto; }
+    .nf__more { margin-top: var(--space-xl); display: grid; gap: var(--space-xs); grid-template-columns: repeat(auto-fit, minmax(min(200px, 100%), 1fr)); max-width: 46rem; margin-inline: auto; }
+    .nf__more a { display: grid; gap: 0.2rem; padding: var(--space-s); color: var(--text); }
+    .nf__more a:hover { text-decoration: none; }
+    .nf__more span { font-family: var(--mono); font-size: var(--step--2); letter-spacing: 0.12em; text-transform: uppercase; color: var(--accent); }
+    .nf__more strong { font-weight: 600; font-size: 0.95rem; }
   </style>
 </head>
 <body>
@@ -70,7 +80,8 @@
       <div>
         <p>The page could not be started.</p>
         <p class="nf__code">(80020148)</p>
-        <p class="nf__ok"><b aria-hidden="true">&#9675;</b>OK</p>
+        <p class="nf__path" id="nf-path"></p>
+        <p class="nf__ok"><b aria-hidden="true"></b>OK</p>
       </div>
     </div>
     <h1>404 &mdash; nothing at this address.</h1>
@@ -80,6 +91,11 @@
       <a class="btn btn--ghost" href="journal/">Developer&rsquo;s journal</a>
       <a class="btn btn--ghost" href="demo/">Live demo</a>
     </div>
+    <nav class="nf__more" aria-label="Popular pages">
+      <a class="surface surface--interactive" href="journal/07-psp-media-engine.html"><span>Journal 07</span><strong>Reverse engineering the PSP Media Engine</strong></a>
+      <a class="surface surface--interactive" href="journal/01-unified-embedded-os.html"><span>Journal 01</span><strong>One codebase, five platforms</strong></a>
+      <a class="surface surface--interactive" href="blueprint.html"><span>Hardware</span><strong>Interactive 3D blueprints</strong></a>
+    </nav>
   </div>
 </main>
 
@@ -104,5 +120,9 @@
 </footer>
 
 <script src="js/site.js" defer></script>
+<script>
+  // Echo the missing path on the "handheld" screen.
+  document.getElementById("nf-path").textContent = window.location.pathname;
+</script>
 </body>
 </html>

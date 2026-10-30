@@ -395,6 +395,10 @@ flowchart TD
     for PSP. The TV Guide app in <code>oasis-core</code> is platform-agnostic &mdash;
     it calls the same scheduling and playback API regardless of backend.
   </p>
+  <aside class="callout update" role="note">
+    <div class="callout-title">Update (Oct 2026)</div>
+    <p>The feature names have changed: <code>oasis-video</code>&rsquo;s flags are now the additive <code>demux-lite</code> (the PSP parser), <code>symphonia</code>, <code>h264</code> and <code>ffmpeg</code>, with <code>video-decode</code> / <code>video-decode-ffmpeg</code> living on <code>oasis-app</code> and <code>oasis-ffi</code>. The TV Guide has moved out of <code>oasis-core</code> into its own <code>oasis-app-tv-guide</code> crate, and the desktop <code>StreamingBuffer</code> lives in <code>oasis-app</code> (<code>src/tv_controller/streaming_buffer.rs</code>).</p>
+  </aside>
     </div>
   </div>
 

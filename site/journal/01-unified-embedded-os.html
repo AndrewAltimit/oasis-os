@@ -137,7 +137,7 @@
 ├── <span class="hl-accent">SdiVector</span>       begin_path, move_to, line_to, arc, bezier, fill, stroke
 └── <span class="hl-accent">SdiBatch</span>        begin_batch, end_batch
 
-<span class="hl-accent">InputBackend</span>     poll() → Vec&lt;InputEvent&gt;
+<span class="hl-accent">InputBackend</span>     poll_events() → Vec&lt;InputEvent&gt;
 <span class="hl-accent">NetworkBackend</span>   TCP connect, read, write
 <span class="hl-accent">AudioBackend</span>     play, pause, set_volume, load_audio</code></pre>
     <div class="diagram-caption">The five backend traits that define the entire platform abstraction boundary</div>
@@ -312,6 +312,10 @@ graph TD
     identically everywhere &mdash; including on the PSP where the system font API
     (<code>psp::font</code>) supplements the bitmap glyphs with TrueType via a VRAM atlas.
   </p>
+  <aside class="callout update" role="note">
+    <div class="callout-title">Update (Oct 2026)</div>
+    <p>The per-backend copies are gone: there is now one bitmap glyph table, <code>oasis-types/src/bitmap_font.rs</code>, and one rasterizer for it, <code>oasis-rasterize::glyph_mask</code>, shared by SDL, UE5 and WASM; the PSP EBOOT builds its atlas from the same table. Only the standalone <code>oasis-plugin-psp/src/font.rs</code> keeps a copy, because the PRX must stay self-contained. The SDL backend can additionally draw skin TTF/OTF fonts through fontdue.</p>
+  </aside>
 
   <h2 id="what-20-crates-buys-you"><a class="anchor" href="#what-20-crates-buys-you" aria-hidden="true" tabindex="-1">#</a>What 20 Crates Buys You</h2>
 
@@ -337,7 +341,7 @@ graph TD
 
   <aside class="callout update" role="note">
     <div class="callout-title">Update (Oct 2026)</div>
-    <p>The video features have been reshuffled. <code>oasis-video</code> now offers <code>h264</code> (openh264 + symphonia), <code>ffmpeg</code> (mutually exclusive with <code>h264</code>) and <code>no-std-demux</code>; <code>video-decode</code> and <code>video-decode-ffmpeg</code> are features of <code>oasis-app</code> and <code>oasis-ffi</code> that pick one of the two, and ffmpeg is the desktop default.</p>
+    <p>The video features have been reshuffled. <code>oasis-video</code> now has four additive features, none on by default: <code>demux-lite</code> (the dependency-free parser the PSP builds with, formerly <code>no-std-demux</code>), <code>symphonia</code>, <code>h264</code> (openh264 on top of symphonia) and <code>ffmpeg</code> (which wins as the decoder when both it and <code>h264</code> are on); <code>video-decode</code> and <code>video-decode-ffmpeg</code> are features of <code>oasis-app</code> and <code>oasis-ffi</code> that pick one of the two, and ffmpeg is the desktop default.</p>
   </aside>
 
 

@@ -137,7 +137,7 @@
   &#9500;&#9472; <span class="hl-accent">SdiVector</span>       begin_path, move_to, line_to, arc, bezier, fill, stroke
   &#9492;&#9472; <span class="hl-accent">SdiBatch</span>        begin_batch, end_batch, submit_rect_batch, submit_text_batch
 
-<span class="hl-accent">InputBackend</span>       poll() &rarr; Vec&lt;InputEvent&gt;
+<span class="hl-accent">InputBackend</span>       poll_events() &rarr; Vec&lt;InputEvent&gt;
 <span class="hl-accent">NetworkBackend</span>     listen, accept, connect &rarr; NetworkStream (read/write/close)
 <span class="hl-accent">AudioBackend</span>       load_track, play, pause, stop, set_volume, feed_pcm</code></pre>
     <div class="diagram-caption">The complete platform abstraction boundary lives in oasis-types/src/backend/</div>

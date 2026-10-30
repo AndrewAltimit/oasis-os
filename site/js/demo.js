@@ -63,12 +63,66 @@
   }
 
   // Boot indicator: hidden once index.js reports the shell is running.
+  // If the WASM build is missing (index.js or pkg/ 404 — e.g. site/ served
+  // without running scripts/build-wasm.sh) or the browser lacks WebAssembly,
+  // the indicator turns into a fallback card instead of spinning forever.
   var boot = document.getElementById("boot");
+  var failed = null; // null, or why the demo could not start
+
+  function fail(kind) {
+    if (failed || window.__oasisReady || !boot) return;
+    failed = kind;
+    clearTimeout(autoHide);
+    if (card) card.hidden = true;
+    if (help) help.setAttribute("aria-expanded", "false");
+    var brand = document.querySelector(".demo-bar .brand");
+    var homeHref = brand ? brand.getAttribute("href") : "../";
+    var why = kind === "nowasm"
+      ? "This browser does not support WebAssembly, which the demo needs. Any current " +
+        "Chrome, Edge, Firefox or Safari will run it."
+      : kind === "slow"
+        ? "The shell has not started after 30 seconds. A slow connection or a blocked " +
+          "download can cause this; reloading usually helps."
+        : "The WebAssembly build is not present on this server. The public site builds it " +
+          "on deploy; locally, run <code>./scripts/build-wasm.sh</code> and open " +
+          "<code>/www/</code> from the repository root.";
+    boot.className = "boot is-failed";
+    boot.innerHTML =
+      '<div class="boot__card">' +
+      '<p class="boot__code">' + (kind === "slow" ? "Still booting" : "Demo unavailable") + "</p>" +
+      '<p class="boot__why">' + why + "</p>" +
+      '<div class="boot__actions">' +
+      (kind === "slow"
+        ? '<button type="button" class="btn btn--primary btn--sm" id="boot-reload">Reload</button>'
+        : "") +
+      '<a class="btn btn--' + (kind === "slow" ? "ghost" : "primary") + ' btn--sm" href="' +
+      homeHref + '">Watch the video tour</a>' +
+      '<a class="btn btn--ghost btn--sm" href="https://github.com/AndrewAltimit/oasis-os/blob/main/docs/wasm-backend.md">Build notes</a>' +
+      "</div></div>";
+    var reload = document.getElementById("boot-reload");
+    if (reload) reload.addEventListener("click", function () { window.location.reload(); });
+  }
+
+  if (typeof WebAssembly !== "object") fail("nowasm");
+  // index.js (and the pkg/ module it imports) fire "error" on the <script>
+  // element when they cannot be fetched.
+  Array.prototype.forEach.call(document.querySelectorAll('script[type="module"]'), function (s) {
+    s.addEventListener("error", function () { fail("missing"); });
+  });
+
   if (boot) {
     var started = Date.now();
     (function poll() {
-      if (window.__oasisReady) { boot.classList.add("is-done"); return; }
-      if (Date.now() - started > 15000) boot.classList.add("is-slow");
+      if (window.__oasisReady) {
+        boot.classList.add("is-done");
+        // A late start after the "slow" card still wins.
+        if (failed) boot.innerHTML = "";
+        return;
+      }
+      if (failed && failed !== "slow") return; // nothing left to wait for
+      var waited = Date.now() - started;
+      if (waited > 12000) boot.classList.add("is-slow");
+      if (waited > 30000) fail("slow");
       setTimeout(poll, 150);
     })();
   }

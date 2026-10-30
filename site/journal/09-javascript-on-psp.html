@@ -86,15 +86,15 @@
       <p class="toc__title">On this page</p>
       <ol>
         <li><a href="#the-epic-as-it-was-written">The Epic, As It Was Written</a></li>
-        <li><a href="#symptom-1-instant-crashes-on-allegrex-except-it-doesn-t">Symptom 1: &amp;ldquo;Instant Crashes on Allegrex&amp;rdquo; (Except It Doesn&amp;rsquo;t)</a></li>
+        <li><a href="#symptom-1-instant-crashes-on-allegrex-except-it-doesn-t">Symptom 1: &ldquo;Instant Crashes on Allegrex&rdquo; (Except It Doesn&rsquo;t)</a></li>
         <li><a href="#reading-eboot-log-through-a-bricked-eboot">Reading eboot.log Through a Bricked EBOOT</a></li>
         <li><a href="#root-cause-1-a-u8-where-a-u32-was-required">Root Cause 1: A [u8] Where a [u32] Was Required</a></li>
         <li><a href="#symptom-2-instant-now-still-crashes">Symptom 2: Instant::now() Still Crashes</a></li>
         <li><a href="#fix-2-wire-the-overlay-back-in">Fix 2: Wire the Overlay Back In</a></li>
         <li><a href="#why-boa-instead-of-quickjs">Why boa Instead of QuickJS</a></li>
-        <li><a href="#symptom-3-help-my-stack-is-only-16-kb">Symptom 3: &amp;ldquo;Help, My Stack Is Only 16 KB&amp;rdquo;</a></li>
+        <li><a href="#symptom-3-help-my-stack-is-only-16-kb">Symptom 3: &ldquo;Help, My Stack Is Only 16 KB&rdquo;</a></li>
         <li><a href="#a-tour-of-what-works">A Tour of What Works</a></li>
-        <li><a href="#what-didn-t-ship-yet">What Didn&amp;rsquo;t Ship (Yet)</a></li>
+        <li><a href="#what-didn-t-ship-yet">What Didn&rsquo;t Ship (Yet)</a></li>
         <li><a href="#bugs-that-only-live-on-hardware">Bugs That Only Live on Hardware</a></li>
         <li><a href="#the-footnote-neither-roadmap-predicted">The Footnote Neither Roadmap Predicted</a></li>
       </ol>
@@ -626,6 +626,10 @@ js: object</code></pre>
     as blocking and only run expressions known to terminate. A runaway
     <code>while (true) {}</code> on PSP hardware is not a good time.
   </p>
+  <aside class="callout update" role="note">
+    <div class="callout-title">Update (Oct 2026)</div>
+    <p>Both gaps have since closed with the move to QuickJS-NG. The PSP build now enables <code>oasis-browser</code>&rsquo;s <code>psp</code> and <code>javascript</code> features, and <code>oasis-js</code> has dropped the <code>boa</code> feature: rquickjs is its only engine, with a <code>psp-bindgen</code> feature for the PSP target. The DOM glue has also moved from a single <code>js_dom.rs</code> into the <code>oasis-browser/src/js_dom/</code> directory, and runaway scripts are bounded by an execution watchdog (<code>JsEngine::with_context_guarded</code>, bounded microtask drains, timer limits).</p>
+  </aside>
 
   <h2 id="bugs-that-only-live-on-hardware"><a class="anchor" href="#bugs-that-only-live-on-hardware" aria-hidden="true" tabindex="-1">#</a>Bugs That Only Live on Hardware</h2>
 
