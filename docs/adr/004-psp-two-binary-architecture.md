@@ -72,3 +72,16 @@ Deploy as **two separate binaries**:
   `sctrlHENPatchSyscall` to intercept display buffer swaps.
 - Static atomics (`AtomicU8` / `AtomicBool` command, volume and state cells)
   share state between the display hook and the audio / config threads.
+
+## Update (2026-10-30)
+
+- **One deliberate interaction with the EBOOT.** "No shared memory
+  complexity" still holds (no IPC channel), but the PRX installs an ME
+  decode watchdog (`oasis-plugin-psp/src/me_watchdog.rs`): it hooks
+  `sceKernelWaitEventFlag` and adds a timeout to waits on the
+  `SceMediaEngineRpc` event flag from `mpeg_vsh370.prx`, which recovers the
+  EBOOT's hardware video decode from a firmware deadlock. See
+  [`psp-architecture.md`](../psp-architecture.md).
+- **Size.** The release artifact is the `prxmin`-stripped PRX
+  (`oasis-overlay.prx`, ~153 KB at v1.4.0); CI fails the build when it
+  exceeds 192 KiB (`PRX_SIZE_BUDGET` in `main-ci.yml`).

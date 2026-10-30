@@ -78,6 +78,16 @@ TOML at compile time.
   `theme.toml`, enumerated names that would otherwise fall back silently,
   assets, and advisory WCAG contrast. Every built-in must lint clean apart
   from the documented `ACCEPTED_CONTRAST` entries (CI test
-  `all_builtin_skins_lint_clean`).- The `ActiveTheme` struct provides runtime-mutable access to all derived colors.
+  `all_builtin_skins_lint_clean`).
+- The `ActiveTheme` struct provides runtime-mutable access to all derived colors.
 - Adding a new skin requires only TOML files -- no Rust code changes. Adding a
   complete directory under `skins/` makes it a built-in.
+
+## Update (2026-10-30)
+
+The Decision section lists four parts; a skin directory today holds
+`skin.toml` (manifest, including the optional `inherits = "<parent>"`),
+`layout.toml`, `features.toml`, `theme.toml` (its own file, not a section)
+and `strings.toml`, plus an optional `corrupted.toml` and an `assets/`
+directory for images and fonts. The full reference is
+[`skin-authoring.md`](../skin-authoring.md).

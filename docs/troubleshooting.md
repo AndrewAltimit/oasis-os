@@ -27,7 +27,7 @@ sudo dnf install cmake gcc-c++ make libXtst-devel libX11-devel \
 
 **macOS (Homebrew):**
 ```bash
-brew install cmake
+brew install cmake pkg-config ffmpeg   # ffmpeg only for the default video-decode-ffmpeg feature
 ```
 
 **Arch Linux:**
@@ -42,7 +42,16 @@ If cmake fails with `Couldn't find dependency package for XTEST` (or similar), i
 
 ## PSP Build Setup
 
-The PSP backend is excluded from the workspace and requires:
+The PSP backend is excluded from the workspace. The easiest setup on any host
+is the `psp-build` Docker profile, which bundles everything below (see
+[getting-started.md](getting-started.md#build-in-docker-any-host)):
+
+```bash
+docker compose --profile psp-build run --rm psp-build \
+  bash -c 'cd crates/oasis-backend-psp && RUST_PSP_BUILD_STD=1 cargo psp --release'
+```
+
+A native build requires:
 
 1. **Rust nightly toolchain** -- the `mipsel-sony-psp` target uses `-Z build-std`.
    Each PSP crate's `rust-toolchain.toml` pins the nightly (with `rust-src`);
@@ -51,6 +60,9 @@ The PSP backend is excluded from the workspace and requires:
    dependency pins (`RUST_PSP_REV` in `.github/workflows/main-ci.yml`):
    `cargo install --git https://github.com/AndrewAltimit/rust-psp --rev <RUST_PSP_REV> cargo-psp --locked`.
    The crates.io `cargo-psp` is upstream's and cannot find the fork's std overlay.
+   It also installs `prxgen`, `pack-pbp`, `mksfo` and `prxmin`.
+3. **The pspdev toolchain at `/opt/pspdev`** (`psp-gcc` / `psp-ld` build and
+   link QuickJS-NG into the EBOOT) and **libclang** (bindgen).
 
 Build the EBOOT:
 
@@ -59,11 +71,14 @@ cd crates/oasis-backend-psp
 RUST_PSP_BUILD_STD=1 cargo psp --release
 ```
 
-Build the kernel PRX plugin:
+Build the kernel PRX plugin, then strip it with `prxmin` (the unstripped PRX
+carries ~135 KB of debug sections; CI ships the stripped file and fails above
+192 KiB):
 
 ```bash
 cd crates/oasis-plugin-psp
 RUST_PSP_BUILD_STD=1 cargo psp --release
+prxmin target/mipsel-sony-psp-std/release/oasis-plugin-psp.prx oasis-overlay.prx
 ```
 
 ### MIPS memcpy/memset Recursion
@@ -74,7 +89,8 @@ LLVM on `mipsel-sony-psp` can emit calls to `memcpy`/`memset` inside their own i
 
 ## PPSSPP Setup for PSP Testing
 
-PPSSPP is used for headless screenshot testing in CI. The Docker Compose service handles setup automatically:
+The `psp` Compose profile runs PPSSPP (GUI or headless) against the EBOOT in
+`crates/oasis-backend-psp/target/mipsel-sony-psp-std/`, mounted at `/roms`:
 
 ```bash
 # Build the PPSSPP container (one-time)
@@ -84,10 +100,13 @@ docker compose --profile psp build ppsspp
 docker compose --profile psp run --rm -e PPSSPP_HEADLESS=1 ppsspp /roms/release/EBOOT.PBP
 ```
 
-CI's emulator gate is `scripts/psp-smoke-test.sh` (no GPU needed). It boots
+CI's emulator gate is `scripts/psp-smoke-test.sh` (no GPU needed; it builds
+`docker/ppsspp.Dockerfile` itself unless `PPSSPP_IMAGE` is set). It boots
 the release EBOOTs in PPSSPPHeadless and fails on a crash, an early exit, or
 missing boot markers in `eboot.log` / `selftest.log`; the script header lists
-the checks. Run it locally after `cargo psp --release`.
+the checks. Run it locally after `cargo psp --release` (on Windows, from Git
+Bash). The PSP tooling scripts also have unit tests that CI runs:
+`python3 -m unittest discover -s scripts -p "test_*.py"`.
 
 ### GPU Passthrough
 

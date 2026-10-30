@@ -3,7 +3,7 @@
 ## An Embeddable Operating System Framework in Rust
 
 **Technical Design Document**
-Version 3.0 -- October 2026
+Version 3.1 -- October 2026
 Author: Andrew
 Classification: Personal Project -- Open Source
 
@@ -20,6 +20,7 @@ section links to the doc that owns the details. The full index is
 | Version | Date | Changes |
 |---------|------|---------|
 | 3.0 | 2026-10 | Backend drawing-state contract and span-exact defaults (§5); slimmed `App` trait (§4.3); every skin generated from `skins/` with strict resolution (§6); one close / launch path in the desktop shell (§4.6); music IPC (§14); VFS rename invariants and symlink jail (§11); browser network hardening and script budgets (§16). Reference tables that duplicated the subsystem docs (command catalogue, FFI signatures, WM shortcuts, planned PPSSPP MCP patch set) were replaced by links. |
+| 3.1 | 2026-10 | Remote terminal PSK challenge-response and the unencrypted-session caveat (§4.4, §16); eight extension traits (§5.1); `oasis_types::ipc` as the one IPC home (§11.2); music IPC on WASM (§14); PRX size gate and Python tooling tests in CI (§17.2). |
 | 2.6 | 2026-09 | App VFS access, ticking and idle-frame elision; window snapping, tiling and animations |
 
 ---
@@ -231,7 +232,7 @@ Video/audio playback, kiosk apps, the input grace window and the 1 s heartbeat s
 
 On platforms with networking (PSP via infrastructure WiFi, Linux, desktop), the framework runs a TCP listener that accepts remote terminal connections. The remote terminal feeds lines into the same command interpreter as local input. This is functional on real hardware and in PPSSPP (1.19+ maps `sceNetInet` to host sockets). In UE5, the terminal is available for debugging.
 
-On the briefcase Pi, the remote terminal is the primary access path for headless operation. OASIS_OS can also act as a client, establishing outbound TCP sessions to remote machines with the `remote` command (see Section 10). The listener binds loopback by default and refuses to listen on all interfaces without a pre-shared key, and PSK authentication requires TLS. Protocol, auth handshake and limits: [networking.md](networking.md).
+On the briefcase Pi, the remote terminal is the primary access path for headless operation. OASIS_OS can also act as a client, establishing outbound TCP sessions to remote machines with the `remote` command (see Section 10). The listener binds loopback by default and refuses to listen on all interfaces without a pre-shared key. The PSK never crosses the wire: the listener sends `AUTH_REQUIRED <nonce>` and expects `AUTH <hex HMAC-SHA256(psk, nonce)>` (`oasis_net::psk_response`); unauthenticated connections close after 20 s and failed logins feed a server-wide lockout. The session itself is not encrypted, so use it on trusted networks or tunnel it. Protocol, auth handshake and limits: [networking.md](networking.md).
 
 ### 4.5 Window Manager
 
@@ -305,10 +306,10 @@ The backend traits live in `oasis-types/src/backend/` and are re-exported by `oa
 
 ### 5.1 Rendering Backend Traits
 
-Every rendering operation passes through `SdiCore` (13 required methods: `init`, `clear`, `blit`, `fill_rect`, `draw_text`, `swap_buffers`, `load_texture`, `destroy_texture`, `set_clip_rect`, `reset_clip_rect`, `measure_text`, `read_pixels`, `shutdown`; plus the provided `viewport_size`) and eight extension traits with 46 default-implemented methods: `SdiShapes` (8), `SdiGradients` (2), `SdiText` (7), `SdiTextures` (4), `SdiClipTransform` (8), `SdiVector` (6), `SdiBatch` (2) and `SdiRenderTarget` (9). `SdiBackend` is a marker super-trait with a blanket impl for any type implementing all nine, and every consumer takes `&mut dyn SdiBackend`.
+Every rendering operation passes through `SdiCore` (13 required methods: `init`, `clear`, `blit`, `fill_rect`, `draw_text`, `swap_buffers`, `load_texture`, `destroy_texture`, `set_clip_rect`, `reset_clip_rect`, `measure_text`, `read_pixels`, `shutdown`; plus the provided `viewport_size`) and eight extension traits with 46 default-implemented methods: `SdiShapes` (8), `SdiGradients` (2), `SdiText` (7), `SdiTextures` (4), `SdiClipTransform` (8), `SdiVector` (6), `SdiBatch` (2) and `SdiRenderTarget` (9). `SdiBackend` is a marker super-trait with a blanket impl for any type implementing `SdiCore` plus all eight extensions, and every consumer takes `&mut dyn SdiBackend`.
 
 - **Span-exact defaults.** The shape defaults (circles, rings, rounded rects, thick lines, even-odd polygons) emit `fill_rect` spans from the shared generators in `oasis_types::rasterize`, the same generators the SDL and UE5 rasterizers use, so a backend that only implements `SdiCore` draws the same pixels; overriding is for speed, not correctness. PSP and every test mock rely on the defaults.
-- **Boilerplate.** `oasis_types::impl_sdi_defaults!(T)` writes the nine empty extension impls for a mock or null backend (`impl_sdi_defaults!(T; except SdiShapes, ..)` skips the ones a type writes itself).
+- **Boilerplate.** `oasis_types::impl_sdi_defaults!(T)` writes the eight empty extension impls for a mock or null backend (`impl_sdi_defaults!(T; except SdiShapes, ..)` skips the ones a type writes itself).
 - **Typed errors.** `BackendError::{TextureNotFound, Unsupported, RenderTargetNotFound}`; the render-target defaults return `Unsupported`.
 
 | Backend | Crate | Surface | Notes |
@@ -357,7 +358,7 @@ A skin is a data-driven configuration that defines the visual and behavioral per
 
 | Skin Component | Description | Format |
 |---------------|-------------|--------|
-| Manifest | Name, version, author, description, target resolution, optional parent skin | `skin.toml` |
+| Manifest | Name, version, author, description, target resolution, optional parent skin (`inherits = "classic"`) | `skin.toml` |
 | Layout | SDI object definitions: names, positions, sizes, z-order, visibility defaults | `layout.toml` |
 | Theme | 9 base colors from which ~30 UI element colors are derived, plus overrides, WM theme, effects, wallpapers (incl. shader wallpapers) | `theme.toml` + assets |
 | Feature gates | Dashboard, terminal, window manager, browser, ... | `features.toml` |
@@ -380,7 +381,7 @@ Skins with distinct behavior:
 | Skin | Description | Primary Target |
 |------|-------------|---------------|
 | Classic | PSIX-style icon grid dashboard with document icons, tabbed status/bottom bars, chrome bezels, wave arc wallpaper | PSP / Pi / Desktop |
-| PSIX Tribute / PSIX HiFi | PSIX tributes layered on Classic (`parent` inheritance): shaped chrome, baked wallpaper, media dock | PSP / Desktop |
+| PSIX Tribute / PSIX HiFi | PSIX tributes layered on Classic (`inherits` manifest inheritance): shaped chrome, baked wallpaper, media dock | PSP / Desktop |
 | XP | Windows XP Luna-inspired theme with gradient titlebars, taskbar and start menu | Desktop / UE5 |
 | Desktop | Window-like panels, taskbar, start menu analog, multiple apps visible simultaneously | UE5 / Pi |
 | Corrupted | Glitch aesthetic; designed for randomized positions, garbled output and "repair" puzzles (§4.5.6) | UE5 |
@@ -535,7 +536,7 @@ On the Raspberry Pi, OASIS_OS operates as a kiosk-mode application booting direc
 
 ## 10. PSP Remote Agent Control
 
-> **Status:** Partially implemented. The `listen`, `remote` and `hosts` commands exist (`oasis-terminal/src/remote_commands.rs`), backed by `oasis-net`'s `RemoteListener`, outbound `RemoteClient` (non-blocking, PSK authentication over TLS) and saved-hosts parser (`hosts.rs`); the desktop and WASM hosts wire `remote` sessions into the terminal. Not yet implemented: VT100 emulation (terminal output only understands SGR foreground colors, `oasis-core/src/ansi.rs`), the PSP backend's `remote` session wiring, and the PSP command palette / d-pad shortcuts described in §10.4.
+> **Status:** Partially implemented. The `listen`, `remote` and `hosts` commands exist (`oasis-terminal/src/remote_commands.rs`), backed by `oasis-net`'s `RemoteListener`, outbound `RemoteClient` (non-blocking, answers the PSK challenge-response) and saved-hosts parser (`hosts.rs`); the desktop and WASM hosts wire `remote` sessions into the terminal. Not yet implemented: VT100 emulation (terminal output only understands SGR foreground colors, `oasis-core/src/ansi.rs`), the PSP backend's `remote` session wiring, and the PSP command palette / d-pad shortcuts described in §10.4.
 
 ### 10.1 Concept
 
@@ -613,7 +614,7 @@ The `Vfs` trait (`oasis-vfs/src/lib.rs`) has `readdir`, `read`, `write`, `stat`,
 
 ### 11.2 VFS as IPC
 
-Hosts and apps also use well-known VFS paths as IPC: `oasis_types::ipc` holds the `/var/audio`, `/var/radio` and `/var/wm` path constants and the typed `MediaRequest` (§14); the browser listens on `/var/browser/request`; apps hand host requests over through `App::drain_requests` (§4.3.2). Plugins use the same mechanism ([plugin-development.md](plugin-development.md)).
+Hosts and apps also use well-known VFS paths as IPC: `oasis_types::ipc` is the one home for the path constants (`/var/audio`, `/var/radio`, `/var/wm`, `/var/tv`, `/var/plugin`, `/var/browser/request`, the Settings `/system/ipc/*` requests and `/system/state/*` mirrors, including `/system/state/net`) and the typed requests (`MediaRequest` (§14), `WmRequest`, `PluginRequest`, `NetState`); apps hand host requests over through `App::drain_requests` (§4.3.2). Plugins use the same mechanism ([plugin-development.md](plugin-development.md)).
 
 ### 11.3 Game Asset VFS
 
@@ -681,7 +682,7 @@ OASIS_OS supports runtime-extensible functionality through plugins: Rust types i
 
 `oasis-audio` holds the audio logic; backends implement `AudioBackend` (§5.3). The manager, playlists, radio sources, decoders and streaming back-pressure are described in [audio-engine.md](audio-engine.md).
 
-- **Music IPC.** `AudioManager` is a backend-free state machine (playlist, repeat / shuffle, playback state): it turns each `MediaRequest` into a `MediaAction` for the host. The `music` command and the Music Player write typed `MediaRequest` lines to `/var/audio/request`; on desktop the shell's media controller applies them, carries out the actions on the SDL audio backend, and publishes `/var/audio/status` (write-on-change) and `/var/audio/position`. Other hosts do not service this IPC yet.
+- **Music IPC.** `AudioManager` is a backend-free state machine (playlist, repeat / shuffle, playback state): it turns each `MediaRequest` into a `MediaAction` for the host. The `music` command and the Music Player write typed `MediaRequest` lines to `/var/audio/request`; `oasis_audio::MusicController` carries out the actions on the host's audio backend and publishes `/var/audio/status` (write-on-change) and `/var/audio/position`. The desktop shell (SDL audio) and the WASM backend (`<audio>` element) both run it; the PSP, UE5 / FFI hosts do not service this IPC yet.
 - **Internet radio.** `RadioManager` streams Icecast and Internet Archive sources over non-blocking sockets (`is_would_block()` for "no data yet", non-2xx responses rejected).
 - **Decoders.** WAV (PCM 8/16-bit) and Ogg Vorbis (symphonia) for sound effects and assets; MP3 on the backends.
 
@@ -706,12 +707,12 @@ The security model, per-subsystem defenses and known gaps are in [security.md](s
 | Threat | Mitigation |
 |--------|-----------|
 | Buffer overflow in network input parsing | Rust memory safety; bounded line lengths (1024 B listener, 16 KiB client), bounded MP4 tables |
-| Unauthorized remote access | PSK authentication over TLS; the remote listener binds loopback by default and refuses all-interfaces binds without a PSK; constant-time compare and per-peer back-off; the MCP server is loopback-only with Origin/Host checks and an optional bearer token |
+| Unauthorized remote access | PSK challenge-response (HMAC-SHA256 over a per-connection nonce; the key never crosses the wire); the remote listener binds loopback by default and refuses all-interfaces binds without a PSK; constant-time compare, a 20 s unauthenticated timeout and a server-wide lockout after repeated failures (FTP `PASS` is throttled the same way); the MCP server is loopback-only with Origin/Host checks and an optional bearer token |
 | Hostile web content | CSP `script-src` / `style-src` (nonces, sha256 hashes) and `connect-src` enforced; `fetch` blocks more-private targets and enforces CORS; RFC 6265 cookie jar with cookies attached and stored per redirect hop, credentials and `Cookie` / `Authorization` dropped off-origin; web-origin pages cannot load `vfs://`; HTTP/2 frame / header-block / HPACK caps; decompressed bodies capped (8 MB desktop, 2 MB PSP); DOM depth cap and selector-match budget; JS time budget and heap cap per tick |
 | VFS escape | Path canonicalization, permission bits, shared rename invariants, `RealVfs` symlink jail, `GameAssetVfs` overlay writes never touch base assets |
 | Plugin loading malicious code | Plugins are compiled in; no remote plugin installation |
 | Memory corruption via unsafe blocks | Unsafe limited to platform FFI wrappers and documented with `// SAFETY:` comments |
-| Man-in-the-middle on terminal connection | TLS (rustls on desktop; `embedded-tls` TLS 1.3 on PSP, with optional host pinning because PSP has no usable CA store) |
+| Man-in-the-middle / eavesdropping | Remote terminal and FTP-like transfer sessions are **not** encrypted (the PSK challenge-response only authenticates): use them on trusted networks or tunnel them over SSH. Outbound HTTPS / Gemini use TLS (rustls on desktop; `embedded-tls` TLS 1.3 on PSP, with optional host pinning because PSP has no usable CA store) |
 | UE5 FFI boundary safety | Null checks on every entry point; opaque handles; no panics cross the boundary |
 | Briefcase physical compromise | Delegated to the separate tamper-briefcase services (dual-sensor detection, LUKS2, cryptographic wipe) |
 
@@ -733,7 +734,7 @@ Build commands and feature flags are in [getting-started.md](getting-started.md)
 
 ### 17.2 CI Pipeline
 
-CI runs on self-hosted runners; every Rust step runs in the `rust-ci` Docker image (pinned to `rust:1.99-slim`), and the PSP steps use the rust-psp revision every PSP crate pins (CI checks the pins). `main-ci.yml` (pushes to `main`) gates on format, clippy with `-D warnings` over all targets and over the supported non-default feature sets, rustdoc with `-D warnings`, the markdown link check, tests (cargo-nextest + doc-tests), the release build, cargo-deny, warning-free PSP EBOOT / overlay PRX / recovery EBOOT builds and a PPSSPP headless smoke test, and then deploys the WASM build to GitHub Pages. `pr-validation.yml` runs a subset on pull requests plus the Claude reviews and auto-fix agents. The step-by-step order is in [CLAUDE.md](../CLAUDE.md#ci-pipeline-order) and the agent workflow in [AGENTS.md](../AGENTS.md#ci-pipeline). Separate workflows run memory analysis (`memory-ci.yml`: ASAN, Valgrind massif), nightly streaming tests (`nightly-streaming.yml`) and fuzzing (`fuzz.yml`).
+CI runs on self-hosted runners; every Rust step runs in the `rust-ci` Docker image (pinned to `rust:1.99-slim`), and the PSP steps use the rust-psp revision every PSP crate pins (CI checks the pins). `main-ci.yml` (pushes to `main`) gates on format, clippy with `-D warnings` over all targets and over the supported non-default feature sets, rustdoc with `-D warnings`, the markdown link check, tests (cargo-nextest + doc-tests), the release build, screenshot regression, cargo-deny, benchmarks, the `scripts/test_*.py` PSP tooling unit tests, warning-free PSP EBOOT / overlay PRX / recovery EBOOT builds (the overlay PRX is stripped with `prxmin` and held to a 192 KiB size budget) and a PPSSPP headless smoke test, and then deploys the WASM build to GitHub Pages. `pr-validation.yml` runs a subset on pull requests plus the Claude reviews and auto-fix agents. The step-by-step order is in [CLAUDE.md](../CLAUDE.md#ci-pipeline-order) and the agent workflow in [AGENTS.md](../AGENTS.md#ci-pipeline). Separate workflows run memory analysis (`memory-ci.yml`: ASAN, Valgrind massif), nightly streaming tests (`nightly-streaming.yml`) and fuzzing (`fuzz.yml`).
 
 ---
 
@@ -756,7 +757,7 @@ The original C source (`psixpsp.7z`, not checked in) contains ~15,000 lines of C
 | 11 -- Polish | Transitions, update checker, scripting, file transfer server | **Complete** |
 | 12 -- PSP GU backend | Hardware-accelerated sceGu rendering, PSIX-style UI matching desktop layout | **Complete** |
 
-The Rust codebase is about 400,000 lines in 795 source files across 51 crate directories (counted with `git ls-files 'crates/*.rs' | xargs cat | wc -l`, tests included), far beyond the original C because of the framework abstraction, 10 app crates, the browser engine with JS bindings, video decode, vector graphics, shader wallpapers, the window manager, the VFS and UE5 integration. The vendored ffmpeg (~176,000 lines) is gone.
+The Rust codebase is about 400,000 lines in 858 source files across 51 crate directories (counted with `git ls-files 'crates/*.rs' | xargs cat | wc -l`, tests included), far beyond the original C because of the framework abstraction, 10 app crates, the browser engine with JS bindings, video decode, vector graphics, shader wallpapers, the window manager, the VFS and UE5 integration. The vendored ffmpeg (~176,000 lines) is gone.
 
 ---
 

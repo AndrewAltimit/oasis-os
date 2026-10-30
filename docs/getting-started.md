@@ -76,10 +76,17 @@ brew install cmake pkg-config ffmpeg
 ```
 
 **Windows:** install Visual Studio (Desktop development with C++) and CMake.
-For the default ffmpeg build, install ffmpeg via [vcpkg](https://vcpkg.io)
+Most Windows developers skip ffmpeg and use the
+[ffmpeg-free build](#building-without-ffmpeg), which needs nothing else:
+
+```powershell
+cargo run -p oasis-app --no-default-features --features javascript,video-decode
+```
+
+For the default ffmpeg build instead, install ffmpeg via [vcpkg](https://vcpkg.io)
 (`vcpkg install ffmpeg:x64-windows`, with `VCPKG_ROOT` set) or point
 `FFMPEG_DIR` at an ffmpeg dev build, and make LLVM's `libclang` available
-(`LIBCLANG_PATH`). Most Windows developers use the ffmpeg-free build below.
+(`LIBCLANG_PATH`).
 
 The authoritative Linux package list is the CI image,
 [`docker/rust-ci.Dockerfile`](../docker/rust-ci.Dockerfile).
@@ -104,7 +111,9 @@ cargo run -p oasis-app --no-default-features --features javascript,video-decode
 ```
 
 Use the same flags for any other `cargo build/test/clippy -p oasis-app`
-command on a machine without ffmpeg dev libraries.
+command on a machine without ffmpeg dev libraries. Drop `javascript` as well
+(`--no-default-features --features video-decode`) for a build that links no
+QuickJS (no JavaScript in the browser).
 
 ### Feature flags (`oasis-app`)
 
@@ -159,12 +168,16 @@ layer. `RUST_LOG` controls logging (default `info`).
 | `OASIS_MCP` | `1` starts the MCP control server at boot (requires the `mcp` feature) | `OASIS_MCP=1` |
 | `OASIS_MCP_PORT` | MCP server port (default 7345, loopback only) | `OASIS_MCP_PORT=7345` |
 | `OASIS_MCP_TOKEN` | Optional bearer token the MCP server requires | `OASIS_MCP_TOKEN=secret` |
+| `OASIS_SETTINGS_FILE` | Where saved preferences (skin, resolution, volume, font scale, reduced motion, locale) live; default `<config dir>/oasis-os/settings.toml` (`$XDG_CONFIG_HOME`, `%APPDATA%` or `~/.config`) | `OASIS_SETTINGS_FILE=/tmp/oasis.toml` |
 
-Test-only switches: `OASIS_E2E_NETWORK`, `OASIS_NETWORK_SCREENSHOTS` and
-`OASIS_LIVE_CSS` enable network-dependent `oasis-app` tests;
+Test-only switches: `OASIS_E2E_NETWORK` (the `e2e-tests` binary),
+`OASIS_NETWORK_SCREENSHOTS` and `OASIS_LIVE_CSS` (`screenshot-tests`) enable
+network-dependent `oasis-app` runs;
 `OASIS_SOAK_SECS` / `OASIS_SOAK_TICK_MS` tune the ignored radio soak test;
 `OASIS_LAYOUT_BUDGET_SCALE` scales the browser layout time budgets in
-`crates/oasis-browser/tests/layout_budget.rs`.
+`crates/oasis-browser/tests/layout_budget.rs`; `OASIS_PARITY_RENDER_DRIVER` /
+`OASIS_PARITY_DUMP` steer the backend parity suites
+([testing.md](testing.md#backend-parity)).
 
 ### Screenshots
 
@@ -182,13 +195,17 @@ update the goldens).
 
 ```bash
 rustup target add wasm32-unknown-unknown
-# install wasm-pack: https://rustwasm.github.io/wasm-pack/installer/
-./scripts/build-wasm.sh --release       # outputs pkg/
+cargo install wasm-pack                 # or: https://rustwasm.github.io/wasm-pack/installer/
+./scripts/build-wasm.sh --release       # outputs pkg/ (omit --release for a debug build)
 node scripts/serve-wasm.mjs             # or: python3 -m http.server 8080
 # open http://localhost:8080/www/?skin=classic
 ```
 
-No C toolchain is needed for the WASM build. Build details, the JS API, input
+`build-wasm.sh` is a bash script; on Windows run it from Git Bash or WSL (or
+run `wasm-pack build crates/oasis-backend-wasm --target web --release --out-dir ../../pkg`
+directly; `--out-dir` is relative to the crate). `serve-wasm.mjs` also proxies cross-origin requests for the
+browser app (`/cors-proxy/`), which a plain static server cannot. No C
+toolchain is needed for the WASM build. Build details, the JS API, input
 mapping, the iframe overlay used for real web pages, and the optional YouTube
 feature are covered in [wasm-backend.md](wasm-backend.md).
 
@@ -274,9 +291,8 @@ nightly, `RUST_PSP_REV` or the pspdev release, change the matching
 if the Dockerfile, the workflows and the crates disagree.
 
 Boot-test the result in PPSSPPHeadless, as CI does. The script needs a POSIX
-shell. On Windows, use Git Bash with `MSYS_NO_PATHCONV=1` set; that is the
-setup this was tested with, and it stops Git Bash from rewriting container
-paths:
+shell and Docker; on Windows run it from Git Bash (it sets
+`MSYS_NO_PATHCONV=1` itself so Git Bash does not rewrite container paths):
 
 ```bash
 scripts/psp-smoke-test.sh            # backend + recovery EBOOTs
@@ -292,12 +308,16 @@ RUST_PSP_BUILD_STD=1 cargo psp --release
 # Kernel-mode overlay plugin -> target/mipsel-sony-psp-std/release/oasis-plugin-psp.prx
 cd crates/oasis-plugin-psp
 RUST_PSP_BUILD_STD=1 cargo psp --release
+# ... then strip it (drops ~135 KB of debug sections the loader never reads;
+# CI ships the stripped file and fails the build above 192 KiB)
+prxmin target/mipsel-sony-psp-std/release/oasis-plugin-psp.prx oasis-overlay.prx
 
 # Network recovery EBOOT -> target/mipsel-sony-psp-std/release/EBOOT.PBP
 cd crates/oasis-recovery-psp
 RUST_PSP_BUILD_STD=1 cargo psp --release
 ```
 
+Each block starts from the repository root.
 `crates/oasis-backend-psp/build.sh [release]` wraps the EBOOT build. Copy the
 EBOOT to `ms0:/PSP/GAME/OASISOS/EBOOT.PBP` on a memory stick. The PRX plugin is
 loaded by custom firmware via `PLUGINS.TXT`; the `plugin install` terminal
@@ -370,7 +390,10 @@ docker compose --profile ci run --rm rust-ci cargo clippy --workspace --all-targ
 ```
 
 The image is `rust:1.99-slim` plus cmake, X11/audio/ffmpeg dev headers, Rust
-nightly, and `cargo-deny`. Run clippy through it before opening a PR: lints
+nightly, and `cargo-deny`. On Windows run these from PowerShell (Git Bash
+rewrites the container paths), and give the container its own target
+directory so its Linux artifacts don't mix with the host's:
+`docker compose --profile ci run --rm -e CARGO_TARGET_DIR=/app/target/linux rust-ci ...`. Run clippy through it before opening a PR: lints
 change between Rust releases, so a different local toolchain can pass while CI
 fails.
 

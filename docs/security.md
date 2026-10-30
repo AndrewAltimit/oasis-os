@@ -27,9 +27,15 @@ against path traversal attacks:
 
 ### Layer 1: Path Canonicalization
 
-All paths are normalized before use. `..` components are resolved
-against the current working directory, and the result is always an
-absolute path starting with `/`.
+All paths are normalized before use, the same way by every backend
+(`oasis_vfs` path normal form): relative paths resolve against the
+current working directory, `.` and `..` are folded, and the result is
+always an absolute path starting with `/`. A `..` above `/` and a NUL
+byte are errors rather than being clamped or passed through (see
+`normalize_path` and [ADR-002](adr/002-vfs-abstraction.md)). On Windows
+`RealVfs` also rejects drive, alternate-stream and device-name segments
+(`C:`, `a:stream`, `NUL`), so a VFS path cannot name a host path or
+device outside the root.
 
 ### Layer 2: Permission Enforcement
 
@@ -97,6 +103,14 @@ multiple levels:
   with stdout piped to stdin; each command is isolated
 - **Command substitution** -- `$(...)` executes the inner command
   and substitutes its output
+- **Quoting** -- one quote-aware scanner splits lines: `'$HOME'` stays
+  literal, quoted `"*"` / `'{a,b}'` are not expanded, and operators
+  inside quotes or `$( ... )` do not split the outer line
+- **Resource limits** -- a top-level line (with everything it runs:
+  functions, scripts, substitutions, loops) stops at 100,000 commands,
+  256 KiB of expanded text and bounded nesting (`$(...)`, function and
+  `run` depth), so a runaway or recursive script errors out instead of
+  hanging the host or overflowing its stack (the PSP's included)
 
 Commands that modify system state (e.g. `chmod`, `write`) operate
 only on the VFS, never on the host filesystem.
@@ -170,22 +184,33 @@ The browser feature and limit catalogue is
 `oasis-net` provides TCP networking with pre-shared key (PSK)
 authentication for remote terminal connections:
 
-- PSK authentication **requires TLS** (`tls-rustls` feature). Without
-  TLS the client refuses to transmit the key and the listener rejects
-  connections that attempt PSK auth, preventing plaintext key leakage
+- **Challenge-response, no key on the wire** -- the listener sends
+  `AUTH_REQUIRED <nonce>` (a fresh random nonce per connection) and
+  expects `AUTH <hex HMAC-SHA256(psk, nonce)>` (`oasis_net::psk_response`,
+  `oasis-net/src/auth.rs`); a bare PSK is a failed attempt. A passive
+  observer learns neither the key nor a replayable answer. This works
+  without the `tls-rustls` feature
+- **Sessions are not encrypted** -- after authentication, commands and
+  output travel in clear. Use the remote terminal on trusted networks or
+  tunnel it (e.g. over SSH)
 - The listener binds loopback by default and refuses to bind all
   interfaces without a non-empty PSK, so the terminal `listen` command
   (which cannot supply one) is loopback-only
-- The key is compared in constant time (`oasis_types::util::ct_eq`);
-  five consecutive failures from one peer start an exponential back-off
-- Authentication has a 30-second timeout to prevent indefinite hangs
-  from malicious or unresponsive servers
+- The answer is compared in constant time (`oasis_types::util::ct_eq`);
+  five failed logins lock authentication out server-wide, with a lockout
+  that doubles on each further failure (30 s, 60 s, ... capped at 64x)
+- Unauthenticated connections are closed after 20 s, so idle peers cannot
+  hold every connection slot; the outbound client gives up on a server
+  that does not finish authentication within 30 s
 - **Line length cap** -- the listener drops a connection whose line
   exceeds 1024 bytes and the client one that exceeds 16 KiB, so a peer
   cannot exhaust memory by sending data without newlines
 - The FTP-like transfer server (`oasis-net/src/ftp.rs`, feature `vfs`) is opt-in
-  (`ftp start [port] [--password <pass>]`); after three failed logins the
-  connection is dropped. The limit is per connection, not per peer; see
+  (`ftp start [port] [--password <pass>]`). Without a password it binds
+  loopback only. After three failed `PASS` attempts the connection is
+  dropped, and failures also feed a server-wide throttle that bounds
+  reconnect-and-retry. The password and all transfers travel in
+  plaintext; see
   [networking.md](networking.md#file-transfer-oasis-netsrcftprs) for
   its caveats
 - The optional MCP control server (`oasis-mcp`, off by default) listens
@@ -198,12 +223,21 @@ authentication for remote terminal connections:
 The lightweight MP4 parser (`oasis-video/src/demux_lite/`, feature `demux-lite`) processes
 untrusted media files from the Internet Archive. Hardening measures:
 
+- **Bounded boxes** -- every box is bounds-checked against its parent
+  and its end offset is overflow-checked; container nesting stops at 16
+  levels; `avcC` / `esds` are capped at 64 KiB and single samples at
+  32 MiB
 - **Table size cap** -- all 7 sample table parsers (`stts`, `ctts`,
   `stsc`, `stsz`, `stco`, `co64`, `stss`) enforce a
-  `MAX_TABLE_ENTRIES` (10M) limit. Malformed files with inflated
-  counts are rejected before allocation, preventing OOM
-- **Checked arithmetic** -- the `sample_to_chunk()` accumulator uses
-  `checked_add` to prevent integer overflow from corrupt chunk tables
+  `MAX_TABLE_ENTRIES` (10M) limit, and a table must actually hold the
+  entries it declares, so allocation is bounded by the bytes in the file
+- **Indexed lookups** -- `SampleTable::finalize` builds a per-run index,
+  so offset / timestamp / seek lookups are binary searches (a hostile
+  `stsc` / `stts` used to spin one lookup for billions of steps); offset
+  arithmetic is checked
+- **Corruption sweeps** -- unit tests feed truncations and bit flips of
+  every fixture through all public entry points, and a proptest checks
+  the indexed lookups against linear walks
 - **StreamingBuffer gap handling** -- reads from evicted buffer
   regions return `io::Error` instead of zero-filled data, preventing
   silent decode corruption
@@ -217,10 +251,11 @@ untrusted media files from the Internet Archive. Hardening measures:
 - `unsafe impl Send/Sync` appears in the PSP crates (`PspTlsProvider`,
   `PspTlsStream`, `PspNetworkStream`, the USB client's static
   descriptors), where the hardware is single-core with cooperative
-  scheduling, and once in `oasis-browser` (`ParallelStyles`, behind the
-  non-default `parallel-style` feature: each thread writes a disjoint
-  per-node cell). All other thread safety derives from standard library
-  primitives
+  scheduling; in `oasis-css` (`ParallelStyles`, behind the non-default
+  `parallel-style` feature: each thread writes a disjoint per-node cell);
+  and in `oasis-video` (`FfmpegDecoder` is `Send`, owned by one decode
+  thread at a time). All other thread safety derives from standard
+  library primitives
 
 ## PSP TLS Host Pinning
 

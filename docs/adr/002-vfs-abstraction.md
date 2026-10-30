@@ -2,7 +2,7 @@
 
 **Status:** Accepted
 **Date:** 2026-02-09 (initial release; recorded 2026-02-19)
-**Last reviewed:** 2026-10-30 — still current. `MemoryVfs`, `RealVfs`, and `GameAssetVfs` ship today in `crates/oasis-vfs/`. Since the original decision the trait gained one path normal form (`normalize_path`), a shared `validate_rename` invariant check, entry-type rules, and a cross-implementation conformance suite (see "Shared invariants" below).
+**Last reviewed:** 2026-10-30 — still current (see "Update (2026-10-30)" for which host uses which implementation). `MemoryVfs`, `RealVfs`, and `GameAssetVfs` ship today in `crates/oasis-vfs/`. Since the original decision the trait gained one path normal form (`normalize_path`), a shared `validate_rename` invariant check, entry-type rules, and a cross-implementation conformance suite (see "Shared invariants" below).
 
 ## Context
 
@@ -101,3 +101,19 @@ integrity.
 - The `Environment` struct in the terminal carries `&mut dyn Vfs`.
 - The FFI layer wraps a `MemoryVfs` inside the opaque `OasisInstance`.
 - Path security is enforced in the `Vfs` implementations, not in callers.
+
+## Update (2026-10-30)
+
+The decision stands; which host uses which implementation has changed
+since it was written, so read the Decision and Consequences bullets with
+these corrections:
+
+- The desktop shell (`oasis-app`) and the WASM build boot a `MemoryVfs`
+  seeded at startup (`crates/oasis-app/src/vfs_setup.rs`); no shipped host
+  mounts `RealVfs`, which remains for tools and tests (and is jailed, see
+  "Shared invariants").
+- The UE5 / FFI library (`oasis-ffi`) owns a `GameAssetVfs`, not a
+  `MemoryVfs`: `oasis_set_vfs_root` resets it and `oasis_add_vfs_file`
+  writes into it.
+- Hosts also use well-known VFS paths as IPC; their constants and typed
+  requests live in one place, `oasis_types::ipc`.
