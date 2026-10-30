@@ -6,8 +6,8 @@ use psp::mpeg::{AvcDecoder, AvcNal};
 
 use super::sps::parse_sps_info;
 use super::{
-    DecodedFrame, MPEG_INTERNAL_SEMA, StreamFrame, VIDEO_TEX_PTR, modules, now_us,
-    video_texture_slice, vlog,
+    DecodedFrame, MPEG_INTERNAL_SEMA, StreamFrame, VIDEO_TEX_PTR, VIDEO_TEX_SIZE, VIDEO_TEX_STRIDE,
+    acquire_video_texture, modules, now_us, video_tex_bytes, vlog,
 };
 
 /// NAL-based H.264 decoder using the high-level `psp::mpeg::AvcDecoder`.
@@ -22,6 +22,11 @@ pub(super) struct NalDecoder {
     sps: Vec<u8>,
     pps: Vec<u8>,
     first_frame: bool,
+    /// This stream's picture size (from its SPS). The persistent decoder's
+    /// own `width()`/`height()` keep the size of the stream it was created
+    /// for, so they are not used for the frame size.
+    width: u32,
+    height: u32,
 }
 
 /// Persistent `AvcDecoder` kept alive across channel switches.
@@ -125,20 +130,35 @@ impl NalDecoder {
             },
         };
 
-        // CSC writes directly into the pre-allocated GU video texture
-        // (see `VIDEO_TEX_PTR`), sized for the largest ≤480p frame
-        // (512 × 256 × 4 = 524288 bytes) and reused across streams. A
-        // separate frame buffer would not fit: by this point the
-        // persistent sceMpeg DDR workspace has eaten ~6.5 MB of partition
-        // memory, leaving roughly 1 MB free.
-        if VIDEO_TEX_PTR.load(Ordering::Acquire).is_null() {
+        // CSC writes directly into the GU video texture the main thread
+        // allocated at tune time (see `VIDEO_TEX_PTR`): 512-px stride,
+        // `ceil16(height)` rows. A separate frame buffer would not fit: by
+        // this point the persistent sceMpeg DDR workspace has eaten
+        // ~6.5 MB of partition memory, leaving roughly 1 MB free.
+        //
+        // Check the capacity against *this* stream's SPS height, not
+        // `decoder.height()`: a reused persistent decoder still reports the
+        // first stream's size, and `decode_csc_direct` only checks `dst`
+        // against that, while the CSC writes the real picture's rows.
+        let need = video_tex_bytes(height);
+        let have = VIDEO_TEX_SIZE.load(Ordering::SeqCst);
+        let published = !VIDEO_TEX_PTR.load(Ordering::SeqCst).is_null();
+        if !published || have < need || decoder.stride() != VIDEO_TEX_STRIDE {
             // Park the decoder before bailing out: `NalDecoder::Drop` is
             // the only other place that re-parks, and leaking it would make
             // the next tune's `AvcDecoder::new` fail with 0x80628002.
+            let stride = decoder.stride();
             park(decoder);
-            return Err("GU video texture not pre-allocated (TV Guide tune-press \
-                 path is responsible for calling PspBackend::alloc_video_texture)"
-                .to_string());
+            return Err(if published {
+                format!(
+                    "GU video texture too small for {width}x{height} \
+                     (have {have} B, need {need} B, stride {stride})"
+                )
+            } else {
+                "GU video texture not pre-allocated (TV Guide tune-press path is \
+                 responsible for calling PspBackend::alloc_video_texture)"
+                    .to_string()
+            });
         }
 
         // Publish the internal semaphore ID for the main-thread watchdog.
@@ -152,6 +172,8 @@ impl NalDecoder {
             sps,
             pps,
             first_frame: true,
+            width,
+            height,
         })
     }
 
@@ -173,6 +195,28 @@ impl NalDecoder {
         let call_num = DECODE_COUNT.fetch_add(1, Ordering::Relaxed);
         let verbose = call_num < 10;
 
+        // Zero-copy CSC: write directly into the GU video texture buffer.
+        // The main thread allocates it when the user presses X to tune
+        // (`PspBackend::alloc_video_texture`) and may swap it for a larger
+        // one, so it is re-acquired every frame. Holding `tex` sets the
+        // hazard pointer that keeps the main thread from freeing it until
+        // the CSC write below has finished (see `acquire_video_texture`).
+        let Some(mut tex) = acquire_video_texture() else {
+            // Unpublished for a buffer swap (or between streams): skip the
+            // access unit. The next keyframe repairs the reference chain.
+            if verbose {
+                vlog("[VIDEO] NAL: no texture buffer published, skipping");
+            }
+            return Ok(None);
+        };
+        let dst = tex.as_mut_slice();
+        if dst.len() < video_tex_bytes(self.height) {
+            if verbose {
+                vlog("[VIDEO] NAL: texture buffer smaller than the picture");
+            }
+            return Err(());
+        }
+
         let is_first = self.first_frame;
         self.first_frame = false;
 
@@ -184,26 +228,14 @@ impl NalDecoder {
             is_first_frame: is_first,
         };
 
-        // Zero-copy CSC: write directly into the GU video texture buffer.
-        // The texture is pre-allocated by the main thread when the user
-        // presses X to tune (`PspBackend::alloc_video_texture` →
-        // `set_video_texture_buffer`). Single-buffered to fit memory
-        // alongside the persistent sceMpeg DDR workspace.
-        // SAFETY: video thread is the sole writer; main thread reads via
-        // GU DMA, which fences on `sceGuFinish`.
-        let Some(dst) = (unsafe { video_texture_slice() }) else {
-            if verbose {
-                vlog("[VIDEO] NAL: no texture buffer registered, skipping");
-            }
-            return Err(());
-        };
-
         let t0 = now_us();
         let Some(dec) = self.decoder.as_mut() else {
             // Unreachable: only `Drop` takes the decoder.
             return Err(());
         };
         let result = dec.decode_csc_direct(&nal, dst);
+        // Release the hazard pointer as soon as the CSC write is done.
+        drop(tex);
         match result {
             Ok(true) => {
                 if verbose {
@@ -211,8 +243,8 @@ impl NalDecoder {
                     vlog(&format!("[VIDEO] NAL: FRAME DECODED! ({dt_ms}ms)"));
                 }
                 Ok(Some(DecodedFrame {
-                    width: dec.width(),
-                    height: dec.height(),
+                    width: self.width,
+                    height: self.height,
                     stride: dec.stride(),
                 }))
             },

@@ -154,9 +154,13 @@ pub struct PspBackend {
     /// Pre-allocated video frame texture (reused across frames to avoid
     /// per-frame alloc/dealloc churn during TV Guide playback).
     pub(crate) video_tex: Option<oasis_core::backend::TextureId>,
-    /// Dimensions of the current video texture buffer (stride, 0 if not allocated).
+    /// Stride and row capacity of the current video texture buffer (0 if
+    /// not allocated).
     pub(crate) video_tex_w: u32,
     pub(crate) video_tex_h: u32,
+    /// Video buffers unpublished while the decoder still held them; freed
+    /// once it lets go (see `textures.rs`, video frame texture).
+    pub(crate) video_tex_retired: Vec<Texture>,
     /// Actual video content dimensions (may be smaller than texture stride).
     /// Used for correct UV mapping in blit (avoids stretching padding pixels).
     pub(crate) video_content_w: u32,
@@ -182,6 +186,7 @@ impl PspBackend {
             video_tex: None,
             video_tex_w: 0,
             video_tex_h: 0,
+            video_tex_retired: Vec::new(),
             video_content_w: 0,
             video_content_h: 0,
         }

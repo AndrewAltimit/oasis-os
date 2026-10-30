@@ -167,14 +167,37 @@ order.
   482 KB double-buffer is gone. Single-buffered: GE samples the same
   buffer the ME is writing into; the race window is in microseconds
   and tearing has not been observed in practice.
-- **Texture pre-allocation in `dispatch_tv_confirm`** — the 524 KB
+- **Texture sized by rows, allocated in `dispatch_tv_confirm`** — the
   GU texture is allocated on `X` press, while ~7.5 MB of partition
   memory is still free. By the time `AvcDecoder::new` lands its
-  6.47 MB DDR workspace, only ~1 MB remains — too little to fit the
-  texture. Reserving up-front and reusing across channel switches
-  avoids the OOM. Cancel handler clears `tv.preview_tex` so the
-  cleanup branch in `main.rs` doesn't free the freshly pre-allocated
-  texture before the next stream starts.
+  6.47 MB DDR workspace, only ~1 MB remains — too little to allocate
+  (or grow) the texture then. The stride is 512 px (the CSC stride for
+  any ≤480-wide picture, and a power of two as the GE requires for the
+  buffer width); the height is `ceil16(rows)` (the ME converts whole
+  macroblocks) plus one zeroed guard row, *not* padded to a power of
+  two: `max(272, episode height)` rows, so PSP-native 480×272 takes
+  557 KB instead of a 1 MB 512×512 buffer. Only the size declared to
+  `sceGuTexImage` is rounded up to a power of two; the GE fetches just
+  the texels the UVs address, and the blit's V range is clamped to the
+  content height (`set_video_content_size`), so it never reads past the
+  allocation (bilinear filtering can touch one row below the content —
+  the guard row). A buffer that is big enough is zeroed and reused on
+  the next tune; a volatile-memory buffer is kept when playback stops
+  (the bump allocator cannot reclaim it). `NalDecoder::try_init` checks
+  the capacity against the stream's own SPS height (a reused persistent
+  decoder still reports the first stream's size) and falls back to
+  audio-only rather than let the CSC overrun a short buffer.
+- **Texture hand-off (no use-after-free)** — the main thread owns the
+  buffer; the video thread writes it. `VIDEO_TEX_PTR` / `VIDEO_TEX_SIZE`
+  publish it and `VIDEO_TEX_IN_USE` is a hazard pointer the video
+  thread sets around each decode + CSC (`acquire_video_texture`,
+  re-acquired every frame, a null pointer skips the frame). Before
+  freeing or reusing a buffer the main thread unpublishes it and waits
+  up to 150 ms (yielding via `sceKernelDelayThread`) for the hazard to
+  clear (`retire_video_texture_buffer`); if a stuck decode still holds
+  it, the free is deferred (`video_tex_retired`) until it lets go. All
+  of it is `SeqCst`, so either the decoder sees the unpublish or the
+  main thread sees the hazard.
 - **Persistent `AvcDecoder` reuse** — `rust-psp` skips
   `sceMpegDelete` in `Drop` to avoid an intermittent firmware crash,
   which leaves the sceMpeg instance leaked. On the next
