@@ -26,6 +26,7 @@ pub fn parse_and_execute(
     env: &mut Environment<'_>,
 ) -> Option<Result<CommandOutput>> {
     if crate::script::is_compound(input) {
+        registry.begin_top_level();
         Some(registry.execute_compound(input.trim(), env))
     } else {
         None

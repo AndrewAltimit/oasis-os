@@ -684,6 +684,7 @@ impl CommandRegistry {
     ) -> Result<Vec<String>> {
         let nodes = parse_script(split_statements(source))?;
         let mut ctx = ExecCtx::new(true);
+        self.begin_top_level();
         let depth = self.exec_depth.get();
         self.exec_depth.set(depth + 1);
         self.run_nodes(&nodes, env, &mut ctx);

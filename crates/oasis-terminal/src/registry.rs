@@ -129,6 +129,15 @@ impl CommandRegistry {
         Ok(())
     }
 
+    /// Start a fresh per-line command budget if no command is running
+    /// (every host entry point -- `execute`, scripts, jobs, inline control
+    /// flow -- calls this, so the budget never carries over between lines).
+    pub(crate) fn begin_top_level(&self) {
+        if self.exec_depth.get() == 0 {
+            self.commands_run.set(0);
+        }
+    }
+
     /// Count one simple command against the per-line budget; errors once
     /// [`MAX_COMMANDS_PER_LINE`] is exceeded.
     pub(crate) fn charge_command(&self) -> Result<()> {

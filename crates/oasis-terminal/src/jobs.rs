@@ -324,6 +324,7 @@ impl CommandRegistry {
             // `fg` echoes the command like an interactive shell.
             outputs.push(CommandOutput::Text(cmd.to_string()));
         }
+        self.begin_top_level();
         let code = match self.execute_nested(cmd, env) {
             Ok(output) => {
                 outputs.push(output);

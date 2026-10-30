@@ -83,8 +83,7 @@ impl CommandRegistry {
         if depth == 0 {
             // Push to history (after history expansion, before execution).
             self.push_history(&line);
-            // A new top-level line gets a fresh command budget.
-            self.commands_run.set(0);
+            self.begin_top_level();
         } else if depth >= MAX_EXEC_DEPTH {
             return Err(nesting_error());
         }
