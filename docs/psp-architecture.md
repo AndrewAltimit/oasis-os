@@ -21,6 +21,23 @@ game's framebuffer and claims a PSP audio channel for background MP3
 playback. No dependency on `oasis-core` — direct framebuffer rendering
 only (<64 KB binary).
 
+## Building
+
+Only `oasis-backend-psp` depends on workspace crates: `oasis-core`
+(no default features), `oasis-app-tv-guide`, `oasis-browser`
+(`psp` + `javascript`), `oasis-js` (`psp-bindgen`), `oasis-video`
+(`demux-lite`) and `oasis-shader`. The plugin, recovery and USB/devloop
+crates are self-contained. When you change a shared API, rebuild the EBOOT.
+It has its own `Cargo.lock`, so let cargo update that file during the
+build; don't edit it by hand.
+
+The reproducible environment is `docker/psp-build.Dockerfile`, compose
+profile `psp-build`: pspdev, libclang, the pinned nightly and cargo-psp
+from `RUST_PSP_REV`. Commands and prerequisites are in
+[`getting-started.md` § PSP](getting-started.md#psp). Run
+`scripts/psp-smoke-test.sh` afterwards to boot both EBOOTs in
+PPSSPPHeadless the way CI does.
+
 ## GU Rendering Constraints
 
 The PSP GU (Graphics Unit) has a fixed-size command buffer

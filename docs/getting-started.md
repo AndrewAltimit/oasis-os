@@ -254,6 +254,33 @@ non-standard requirements; see [psp-architecture.md](psp-architecture.md) and
 
 Building on Linux (or WSL) is the tested path.
 
+### Build in Docker (any host)
+
+`docker/psp-build.Dockerfile` (compose profile `psp-build`) bundles all five
+prerequisites: the pinned pspdev release, libclang, the pinned nightly with
+`rust-src`, and cargo-psp from `RUST_PSP_REV`. This matches the CI runner. It
+works from PowerShell on Windows as well as from Linux:
+
+```bash
+docker compose --profile psp-build build psp-build      # once
+docker compose --profile psp-build run --rm psp-build \
+  bash -c 'cd crates/oasis-backend-psp && RUST_PSP_BUILD_STD=1 cargo psp --release'
+```
+
+The cargo registry and git cache persist in the `psp-cargo-cache` volume. Build
+output lands in each crate's own `target/` on the host. If you bump the
+nightly, `RUST_PSP_REV` or the pspdev release, change the matching
+`ARG`s in the Dockerfile too.
+
+Boot-test the result in PPSSPPHeadless, as CI does. The script needs a POSIX
+shell. On Windows, use Git Bash with `MSYS_NO_PATHCONV=1` set; that is the
+setup this was tested with, and it stops Git Bash from rewriting container
+paths:
+
+```bash
+scripts/psp-smoke-test.sh            # backend + recovery EBOOTs
+```
+
 ### Build
 
 ```bash
@@ -261,8 +288,12 @@ Building on Linux (or WSL) is the tested path.
 cd crates/oasis-backend-psp
 RUST_PSP_BUILD_STD=1 cargo psp --release
 
-# Kernel-mode overlay plugin -> target/mipsel-sony-psp-std/release/oasis_plugin_psp.prx
+# Kernel-mode overlay plugin -> target/mipsel-sony-psp-std/release/oasis-plugin-psp.prx
 cd crates/oasis-plugin-psp
+RUST_PSP_BUILD_STD=1 cargo psp --release
+
+# Network recovery EBOOT -> target/mipsel-sony-psp-std/release/EBOOT.PBP
+cd crates/oasis-recovery-psp
 RUST_PSP_BUILD_STD=1 cargo psp --release
 ```
 
