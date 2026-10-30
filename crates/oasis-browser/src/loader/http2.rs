@@ -25,7 +25,7 @@ use std::io::{Read, Write};
 use oasis_types::error::{OasisError, Result};
 
 use super::Url;
-use super::hpack::{DynamicTable, decode_block, encode_literal};
+use super::hpack::{DynamicTable, decode_block_limited, encode_literal};
 use super::http::HttpResponse;
 
 // --- Constants -------------------------------------------------------
@@ -44,6 +44,11 @@ const MAX_FRAME_SIZE: u32 = 1 << 20; // 1 MiB
 
 /// Header table size we advertise to the peer.
 const HEADER_TABLE_SIZE: usize = 4096;
+
+/// `SETTINGS_MAX_HEADER_LIST_SIZE` we advertise and enforce: the cap on
+/// the encoded header block (HEADERS + CONTINUATION payloads) and on the
+/// decoded header list.
+const MAX_HEADER_LIST_SIZE: usize = 64 * 1024;
 
 // --- Frame types (RFC 9113 §11.2) ------------------------------------
 
@@ -80,6 +85,8 @@ const ERROR_CODE_FLOW_CONTROL_ERROR: u32 = 0x3;
 const ERROR_CODE_FRAME_SIZE_ERROR: u32 = 0x6;
 const ERROR_CODE_REFUSED_STREAM: u32 = 0x7;
 const ERROR_CODE_CANCEL: u32 = 0x8;
+const ERROR_CODE_COMPRESSION_ERROR: u32 = 0x9;
+const ERROR_CODE_ENHANCE_YOUR_CALM: u32 = 0xb;
 
 // --- Frame header ----------------------------------------------------
 
@@ -271,7 +278,11 @@ fn send_initial_settings<W: Write>(w: &mut W) -> Result<()> {
         SETTINGS_HEADER_TABLE_SIZE,
         HEADER_TABLE_SIZE as u32,
     );
-    push_setting(&mut payload, SETTINGS_MAX_HEADER_LIST_SIZE, 64 * 1024);
+    push_setting(
+        &mut payload,
+        SETTINGS_MAX_HEADER_LIST_SIZE,
+        MAX_HEADER_LIST_SIZE as u32,
+    );
     // Only one concurrent stream (we only ever open stream 1).
     push_setting(&mut payload, SETTINGS_MAX_CONCURRENT_STREAMS, 1);
 
@@ -437,7 +448,18 @@ fn read_response<S: Read + Write>(stream: &mut S) -> Result<HttpResponse> {
             return Err(OasisError::Backend("HTTP/2 response timed out".into()));
         }
 
-        let fh = read_frame_header(stream)?;
+        let fh = match read_frame_header(stream) {
+            Ok(fh) => fh,
+            Err(e) => {
+                // RFC 9113 §4.2: a frame larger than our advertised
+                // SETTINGS_MAX_FRAME_SIZE is a FRAME_SIZE_ERROR. The
+                // header check runs before the payload is allocated.
+                if e.to_string().contains("frame too large") {
+                    let _ = send_goaway(stream, 0, ERROR_CODE_FRAME_SIZE_ERROR);
+                }
+                return Err(e);
+            },
+        };
         if waiting_continuation && fh.frame_type != FRAME_CONTINUATION {
             let _ = send_goaway(stream, 1, ERROR_CODE_PROTOCOL_ERROR);
             return Err(OasisError::Backend(
@@ -533,10 +555,10 @@ fn read_response<S: Read + Write>(stream: &mut S) -> Result<HttpResponse> {
                     continue;
                 }
                 let block = strip_headers_padding_and_priority(&payload, fh.flags)?;
-                header_buf.extend_from_slice(block);
+                extend_header_block(stream, &mut header_buf, block)?;
 
                 if fh.flags & FLAG_END_HEADERS != 0 {
-                    let headers = decode_block(&header_buf, &mut table, HEADER_TABLE_SIZE)?;
+                    let headers = decode_header_block(stream, &header_buf, &mut table)?;
                     response_headers = Some(headers);
                     header_buf.clear();
                     waiting_continuation = false;
@@ -555,9 +577,9 @@ fn read_response<S: Read + Write>(stream: &mut S) -> Result<HttpResponse> {
                         "HTTP/2: unexpected CONTINUATION".into(),
                     ));
                 }
-                header_buf.extend_from_slice(&payload);
+                extend_header_block(stream, &mut header_buf, &payload)?;
                 if fh.flags & FLAG_END_HEADERS != 0 {
-                    let headers = decode_block(&header_buf, &mut table, HEADER_TABLE_SIZE)?;
+                    let headers = decode_header_block(stream, &header_buf, &mut table)?;
                     response_headers = Some(headers);
                     header_buf.clear();
                     waiting_continuation = false;
@@ -750,6 +772,35 @@ fn read_response<S: Read + Write>(stream: &mut S) -> Result<HttpResponse> {
     })
 }
 
+/// Append a HEADERS / CONTINUATION fragment, refusing header blocks
+/// larger than [`MAX_HEADER_LIST_SIZE`]. Without the cap a peer can
+/// stream CONTINUATION frames without END_HEADERS until the 30 s deadline
+/// (the CVE-2024-27316 class of DoS); we answer with GOAWAY
+/// `ENHANCE_YOUR_CALM`.
+fn extend_header_block<W: Write>(w: &mut W, header_buf: &mut Vec<u8>, frag: &[u8]) -> Result<()> {
+    if header_buf.len() + frag.len() > MAX_HEADER_LIST_SIZE {
+        let _ = send_goaway(w, 1, ERROR_CODE_ENHANCE_YOUR_CALM);
+        return Err(OasisError::Backend(
+            format!("HTTP/2: header block exceeds {MAX_HEADER_LIST_SIZE} bytes").into(),
+        ));
+    }
+    header_buf.extend_from_slice(frag);
+    Ok(())
+}
+
+/// HPACK-decode a complete header block with the decoded-size cap. A
+/// decoding failure is a connection-level COMPRESSION_ERROR (RFC 9113
+/// §4.3).
+fn decode_header_block<W: Write>(
+    w: &mut W,
+    block: &[u8],
+    table: &mut DynamicTable,
+) -> Result<Vec<(String, String)>> {
+    decode_block_limited(block, table, HEADER_TABLE_SIZE, MAX_HEADER_LIST_SIZE).inspect_err(|_| {
+        let _ = send_goaway(w, 1, ERROR_CODE_COMPRESSION_ERROR);
+    })
+}
+
 fn strip_headers_padding_and_priority(payload: &[u8], flags: u8) -> Result<&[u8]> {
     let mut start = 0usize;
     let mut end = payload.len();
@@ -800,7 +851,105 @@ fn strip_data_padding(payload: &[u8], flags: u8) -> Result<&[u8]> {
 
 #[cfg(test)]
 mod tests {
+    use super::super::hpack::decode_block;
     use super::*;
+
+    /// Frame types + error codes of every GOAWAY the client wrote.
+    fn goaway_codes(written: &[u8]) -> Vec<u32> {
+        let mut codes = Vec::new();
+        let mut i = CLIENT_PREFACE.len();
+        while i + 9 <= written.len() {
+            let len = ((written[i] as usize) << 16)
+                | ((written[i + 1] as usize) << 8)
+                | (written[i + 2] as usize);
+            if written[i + 3] == FRAME_GOAWAY && i + 9 + 8 <= written.len() {
+                let p = &written[i + 9..i + 17];
+                codes.push(u32::from_be_bytes([p[4], p[5], p[6], p[7]]));
+            }
+            i += 9 + len;
+        }
+        codes
+    }
+
+    #[test]
+    fn oversized_frame_is_refused_before_allocation() {
+        // Header claims MAX_FRAME_SIZE + 1 bytes; no payload follows, so
+        // the client must fail on the length alone.
+        let len = MAX_FRAME_SIZE + 1;
+        let mut server = vec![
+            (len >> 16) as u8,
+            (len >> 8) as u8,
+            len as u8,
+            FRAME_DATA,
+            0,
+            0,
+            0,
+            0,
+            1,
+        ];
+        server.extend(build_frame(FRAME_SETTINGS, 0, 0, &[]));
+        let mut stream = MemStream::new(server);
+        let url = crate::loader::Url::parse("https://example.com/").unwrap();
+        let err = h2_request(&mut stream, "GET", &url, None, &[]).unwrap_err();
+        assert!(err.to_string().contains("frame too large"), "{err}");
+        assert_eq!(
+            goaway_codes(&stream.written),
+            vec![ERROR_CODE_FRAME_SIZE_ERROR]
+        );
+    }
+
+    #[test]
+    fn endless_continuation_is_capped() {
+        let mut server = Vec::new();
+        server.extend(build_frame(FRAME_SETTINGS, 0, 0, &[]));
+        // HEADERS without END_HEADERS, then CONTINUATIONs that never end.
+        let frag = vec![0u8; 16 * 1024];
+        server.extend(build_frame(FRAME_HEADERS, FLAG_END_STREAM, 1, &frag));
+        for _ in 0..8 {
+            server.extend(build_frame(FRAME_CONTINUATION, 0, 1, &frag));
+        }
+        let mut stream = MemStream::new(server);
+        let url = crate::loader::Url::parse("https://example.com/").unwrap();
+        let err = h2_request(&mut stream, "GET", &url, None, &[]).unwrap_err();
+        assert!(err.to_string().contains("header block exceeds"), "{err}");
+        assert_eq!(
+            goaway_codes(&stream.written),
+            vec![ERROR_CODE_ENHANCE_YOUR_CALM]
+        );
+    }
+
+    #[test]
+    fn hpack_amplification_is_a_compression_error() {
+        // A small block whose indexed references decode past the cap.
+        let mut block = Vec::new();
+        block.push(0x40);
+        encode_literal_for_test(&mut block, "x-big", &"v".repeat(4000));
+        block.extend(std::iter::repeat_n(0x80 | 62, 40));
+        let mut server = Vec::new();
+        server.extend(build_frame(FRAME_SETTINGS, 0, 0, &[]));
+        server.extend(build_frame(
+            FRAME_HEADERS,
+            FLAG_END_HEADERS | FLAG_END_STREAM,
+            1,
+            &block,
+        ));
+        let mut stream = MemStream::new(server);
+        let url = crate::loader::Url::parse("https://example.com/").unwrap();
+        let err = h2_request(&mut stream, "GET", &url, None, &[]).unwrap_err();
+        assert!(err.to_string().contains("exceeds"), "{err}");
+        assert_eq!(
+            goaway_codes(&stream.written),
+            vec![ERROR_CODE_COMPRESSION_ERROR]
+        );
+    }
+
+    /// Name + value raw string literals (the tail of a literal field).
+    fn encode_literal_for_test(out: &mut Vec<u8>, name: &str, value: &str) {
+        for s in [name, value] {
+            super::super::hpack::encode_integer(out, 0, 7, s.len() as u64);
+            out.extend_from_slice(s.as_bytes());
+        }
+    }
 
     /// A [`Read`]+[`Write`] pair of in-memory buffers that lets tests
     /// script an HTTP/2 dialog.
