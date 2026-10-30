@@ -1,30 +1,86 @@
 //! Application runner -- manages launched app screens.
 //!
-//! When the user selects an app from the dashboard and presses Confirm,
-//! an `AppRunner` is created. It renders a title bar and scrollable
-//! content area, and handles input for navigation and exit.
+//! A host owns an [`AppRegistry`] of launchable apps (the built-in apps are
+//! bundled by the `oasis-apps` crate; plugins append theirs). When the user
+//! launches one, an [`AppRunner`] is created from the registry: it wraps
+//! the app and adds the host-facing bookkeeping (redraw tracking, input
+//! routing, windowed drawing).
 //!
-//! The `App` trait defines the extensible interface that each application
-//! implements. `AppRunner` delegates to the active app implementation.
+//! The `App` trait (from `oasis-app-core`) is the interface each
+//! application implements. `oasis-core` itself knows no concrete app
+//! except the Terminal delegate and the placeholder, both [`SimpleApp`].
 
 mod app_trait;
-/// Re-export File Manager crate for backwards compatibility.
-pub use oasis_app_file_manager as file_manager;
-pub(crate) mod file_viewer;
 mod input;
 pub mod layout_calc;
-mod queries;
 mod registry;
 mod runner;
 mod runner_sdi;
 pub mod simple_app;
-#[cfg(feature = "wasm-youtube")]
-pub mod video_embed;
 
 pub use app_trait::{App, AppAction, AppRequest, AsAny, ContentState};
 pub use oasis_app_core::file_viewer::app_for_file;
-pub use registry::registered_app_titles;
+pub use registry::{AppFactory, AppRegistration, AppRegistry, FileFactory, OwnedMedia};
 pub use runner::AppRunner;
+pub use simple_app::SimpleApp;
 
-/// Re-export TV Guide crate for backwards compatibility with external crates.
-pub use oasis_app_tv_guide as tv_guide;
+/// Window id of the app titled `title` ("Photo Viewer" -> "photo_viewer").
+/// Hosts key app windows (and their runners) by it.
+pub fn window_id(title: &str) -> String {
+    title.to_lowercase().replace(' ', "_")
+}
+
+/// Size of a newly opened app window on a `screen_w` x `screen_h` screen:
+/// 380x220 (the PSP-native size, which is what small screens get), growing
+/// with the resolution to 40% x 45% of the screen so windows don't open as
+/// postage stamps on large screens while several still fit side by side
+/// over the dashboard. Never larger than the screen.
+pub fn default_window_size(screen_w: u32, screen_h: u32) -> (u32, u32) {
+    let w = (screen_w * 2 / 5).max(380).min(screen_w);
+    let h = (screen_h * 9 / 20).max(220).min(screen_h);
+    (w, h)
+}
+
+/// Titles of the apps the built-in dashboard knows (icons, labels): the
+/// `oasis-apps` bundle's registry plus the host-provided Browser. Kept
+/// here so `oasis-core`'s icon and label tests can cover every built-in
+/// app without depending on the app crates; `oasis-apps` tests that it
+/// matches its registry.
+#[doc(hidden)]
+pub const BUILTIN_APP_TITLES: &[&str] = &[
+    "File Manager",
+    "Settings",
+    "Network",
+    "Package Manager",
+    "System Monitor",
+    "Terminal",
+    "Music Player",
+    "Photo Viewer",
+    "Text Editor",
+    "Calculator",
+    "Paint",
+    "Games",
+    "Internet Radio",
+    "TV Guide",
+    "Browser",
+];
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn window_id_lowercases_and_joins_words() {
+        assert_eq!(window_id("Photo Viewer"), "photo_viewer");
+        assert_eq!(window_id("Terminal"), "terminal");
+    }
+
+    #[test]
+    fn default_window_size_scales_with_the_screen() {
+        assert_eq!(default_window_size(480, 272), (380, 220));
+        assert_eq!(default_window_size(1280, 720), (512, 324));
+        assert_eq!(default_window_size(1920, 1080), (768, 486));
+        // Never larger than the screen.
+        assert_eq!(default_window_size(320, 200), (320, 200));
+    }
+}

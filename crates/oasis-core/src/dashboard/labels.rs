@@ -159,7 +159,7 @@ pub(crate) fn draw_label(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::apps::registered_app_titles;
+    use crate::apps::BUILTIN_APP_TITLES;
     use crate::text_fit::{ELLIPSIS, text_width};
 
     #[test]
@@ -172,7 +172,7 @@ mod tests {
             let cfg = super::super::DashboardConfig::from_features(&skin.features, &at);
             let psp_native = skin.manifest.screen_width == 480;
             for cell_w in [cfg.cell_w, cfg.free_cell_w] {
-                for title in registered_app_titles() {
+                for &title in BUILTIN_APP_TITLES {
                     let lines = wrap_label(title, label_max_width(cell_w), at.font_small);
                     assert!(
                         !lines.is_empty() && lines.len() <= LABEL_MAX_LINES,

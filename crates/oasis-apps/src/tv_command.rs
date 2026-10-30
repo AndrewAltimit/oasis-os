@@ -6,9 +6,9 @@
 //! - `tv tune <channel>` — tune to a channel (writes IPC request)
 //! - `tv guide`          — show a text-mode schedule grid
 
-use crate::error::{OasisError, Result};
-use crate::terminal::{Command, CommandOutput, Environment};
 use oasis_app_tv_guide::{self as tv_guide, ChannelConfig};
+use oasis_core::error::{OasisError, Result};
+use oasis_core::terminal::{Command, CommandOutput, Environment};
 
 /// Load channel config from VFS.
 fn load_channels(env: &mut Environment<'_>) -> Result<ChannelConfig> {
@@ -155,15 +155,15 @@ fn tv_guide(env: &mut Environment<'_>) -> Result<CommandOutput> {
 }
 
 /// Register TV commands into a command registry.
-pub fn register_tv_commands(reg: &mut crate::terminal::CommandRegistry) {
+pub fn register_tv_commands(reg: &mut oasis_core::terminal::CommandRegistry) {
     reg.register(Box::new(TvCmd));
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::terminal::{CommandRegistry, Environment};
-    use crate::vfs::{MemoryVfs, Vfs};
+    use oasis_core::terminal::{CommandRegistry, Environment};
+    use oasis_core::vfs::{MemoryVfs, Vfs};
 
     fn setup_tv_env() -> (CommandRegistry, MemoryVfs) {
         let mut reg = CommandRegistry::new();

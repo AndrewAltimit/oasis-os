@@ -17,8 +17,8 @@ pub(crate) fn setup_tv_channels(sdi: &mut SdiRegistry) {
 
 pub(crate) fn update_tv_channels(
     sdi: &mut SdiRegistry,
-    channels: &[oasis_core::apps::tv_guide::Channel],
-    catalogs: &[Option<oasis_core::apps::tv_guide::ChannelCatalog>],
+    channels: &[oasis_app_tv_guide::Channel],
+    catalogs: &[Option<oasis_app_tv_guide::ChannelCatalog>],
     selected: usize,
     scroll: usize,
     at: &ActiveTheme,

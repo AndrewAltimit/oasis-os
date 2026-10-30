@@ -1,6 +1,6 @@
 [package]
 name = "oasis-app-system-monitor"
-description = "System Monitor app for OASIS_OS: platform info plus CPU / memory / battery / uptime gauges"
+description = "System info apps for OASIS_OS: System Monitor (CPU / memory / battery / uptime gauges), Network status, Package Manager"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

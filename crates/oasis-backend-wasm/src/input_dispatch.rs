@@ -12,7 +12,7 @@
 //! backend appears with the same pattern, consider a shared
 //! `InputDispatcher` trait in `oasis-types`.
 
-use oasis_core::apps::{AppAction, AppRunner};
+use oasis_core::apps::{AppAction, OwnedMedia};
 use oasis_core::bottombar::MediaTab;
 use oasis_core::input::{Button, InputEvent, Key, Modifiers, Trigger};
 use oasis_core::osk::{OskConfig, OskState};
@@ -241,28 +241,7 @@ impl OasisWasm {
                     .wm
                     .handle_input(&InputEvent::PointerClick { x: *x, y: *y }, &mut self.sdi);
                 match wm_event {
-                    WmEvent::WindowClosed(id) => {
-                        if self.fullscreen_app.as_deref() == Some(id.as_str()) {
-                            self.fullscreen_app = None;
-                        }
-                        self.drop_window_runner(&id);
-                        if id == "browser" {
-                            self.browser = None;
-                            self.iframe.hide();
-                        }
-                        #[cfg(feature = "wasm-youtube")]
-                        if id == "video_embed" {
-                            self.youtube_active_id = None;
-                            self.youtube_active_url = None;
-                            self.iframe.hide();
-                            for tex in self.youtube_thumb_textures.drain(..) {
-                                let _ = self.backend.destroy_texture(tex);
-                            }
-                        }
-                        if self.wm.window_count() == 0 {
-                            self.mode = Mode::Dashboard;
-                        }
-                    },
+                    WmEvent::WindowClosed(id) => self.close_app_window(&id),
                     WmEvent::ContentClick(id, lx, ly) => {
                         if id == "browser"
                             && let Some(ref mut bw) = self.browser
@@ -355,19 +334,7 @@ impl OasisWasm {
             },
             InputEvent::ButtonPress(Button::Cancel) => {
                 if let Some(active_id) = self.wm.active_window().map(|s| s.to_string()) {
-                    if self.fullscreen_app.as_deref() == Some(active_id.as_str()) {
-                        let _ = self.wm.exit_fullscreen(&active_id, &mut self.sdi);
-                        self.fullscreen_app = None;
-                    }
-                    let _ = self.wm.close_window(&active_id, &mut self.sdi);
-                    self.drop_window_runner(&active_id);
-                    if active_id == "browser" {
-                        self.browser = None;
-                        self.iframe.hide();
-                    }
-                    if self.wm.window_count() == 0 {
-                        self.mode = Mode::Dashboard;
-                    }
+                    self.close_app_window(&active_id);
                 } else {
                     self.mode = Mode::Dashboard;
                 }
@@ -472,29 +439,13 @@ impl OasisWasm {
     }
 
     // -----------------------------------------------------------------------
-    // Input dispatch: App (fullscreen) mode
+    // Closing app windows
     // -----------------------------------------------------------------------
-
-    pub(crate) fn handle_app_input(&mut self, event: &InputEvent) {
-        if let Some(ref mut runner) = self.app_runner
-            && let InputEvent::ButtonPress(btn) = event
-        {
-            let action = runner.handle_input(btn, &self.vfs);
-            self.apply_fullscreen_action(action);
-        }
-    }
 
     /// Close every open app that asked to close itself outside an input
     /// handler (`AppRunner::take_close_request`). Called once per frame
     /// after the runners' `apply_vfs_ops` and `tick`.
     pub(crate) fn apply_app_close_requests(&mut self) {
-        if self
-            .app_runner
-            .as_mut()
-            .is_some_and(AppRunner::take_close_request)
-        {
-            self.apply_fullscreen_action(AppAction::Exit);
-        }
         let closing: Vec<String> = self
             .open_runners
             .iter_mut()
@@ -505,68 +456,64 @@ impl OasisWasm {
         }
     }
 
-    /// Drop window `id`'s runner after its window closed, releasing the
-    /// app's backend resources (textures) first.
-    pub(crate) fn drop_window_runner(&mut self, id: &str) {
+    /// Close window `id` (titlebar button, Cancel, an app's own `Exit`):
+    /// exit kiosk fullscreen, close the WM window (if the WM hasn't
+    /// already), stop the radio / music the app owned, release the
+    /// runner's backend resources (textures) before dropping it, tear down
+    /// the browser / YouTube overlays, and fall back to the dashboard when
+    /// the last window went away. The WASM counterpart of the desktop
+    /// shell's `windows::close_app_window`.
+    pub(crate) fn close_app_window(&mut self, id: &str) {
+        if self.fullscreen_app.as_deref() == Some(id) {
+            let _ = self.wm.exit_fullscreen(id, &mut self.sdi);
+            self.fullscreen_app = None;
+        }
+        if self.wm.get_window(id).is_some() {
+            let _ = self.wm.close_window(id, &mut self.sdi);
+        }
         if let Some(pos) = self.open_runners.iter().position(|(rid, _)| rid == id) {
             let (_, mut runner) = self.open_runners.remove(pos);
+            // The WASM host has no music controller (Music Player requests
+            // go unserved), so only the radio needs stopping.
+            if self.apps.owned_media(&runner.title) == Some(OwnedMedia::Radio) {
+                self.stop_radio();
+            }
             runner.release_resources(&mut self.backend);
+        }
+        if id == "browser" {
+            self.browser = None;
+            self.iframe.hide();
+        }
+        #[cfg(feature = "wasm-youtube")]
+        if id == "video_embed" {
+            self.youtube_active_id = None;
+            self.youtube_active_url = None;
+            self.iframe.hide();
+            for tex in self.youtube_thumb_textures.drain(..) {
+                let _ = self.backend.destroy_texture(tex);
+            }
+        }
+        if self.wm.window_count() == 0 && self.mode == Mode::Desktop {
+            self.mode = Mode::Dashboard;
         }
     }
 
-    /// Drop the fullscreen (`Mode::App`) runner, releasing its backend
-    /// resources first.
-    fn drop_fullscreen_runner(&mut self) {
-        if let Some(mut runner) = self.app_runner.take() {
-            runner.release_resources(&mut self.backend);
-        }
-    }
-
-    /// Apply an [`AppAction`] returned by the fullscreen (`Mode::App`) runner.
-    fn apply_fullscreen_action(&mut self, action: AppAction) {
-        match action {
-            AppAction::Exit => {
-                AppRunner::hide_sdi(&mut self.sdi);
-                self.drop_fullscreen_runner();
-                self.mode = Mode::Dashboard;
-            },
-            AppAction::SwitchToTerminal => {
-                AppRunner::hide_sdi(&mut self.sdi);
-                self.drop_fullscreen_runner();
-                self.mode = Mode::Terminal;
-            },
-            AppAction::LaunchAppWithFile {
-                app_title,
-                file_path,
-            } => {
-                AppRunner::hide_sdi(&mut self.sdi);
-                self.drop_fullscreen_runner();
-                let entry = oasis_core::dashboard::AppEntry {
-                    title: app_title.clone(),
-                    path: format!("/apps/{app_title}"),
-                    icon_png: Vec::new(),
-                    color: oasis_core::backend::Color::rgb(100, 100, 100),
-                };
-                self.app_runner = Some(AppRunner::launch_with_file(&entry, &file_path, &self.vfs));
-            },
-            AppAction::RequestFullscreen | AppAction::None => {},
+    /// Stop radio playback and drop the station's catalog / source, as
+    /// the desktop shell does when the Internet Radio window closes:
+    /// otherwise the stream keeps playing with no UI to control it.
+    fn stop_radio(&mut self) {
+        let _ = self.radio_manager.process_request("stop", &mut self.audio);
+        self.archive_catalog = None;
+        self.pending_catalog = None;
+        if let Some(mut src) = self.radio_source.take() {
+            src.disconnect();
         }
     }
 
     /// Apply an [`AppAction`] returned by the windowed runner `active_id`.
     fn apply_window_action(&mut self, action: AppAction, active_id: String) {
         match action {
-            AppAction::Exit => {
-                if self.fullscreen_app.as_deref() == Some(active_id.as_str()) {
-                    let _ = self.wm.exit_fullscreen(&active_id, &mut self.sdi);
-                    self.fullscreen_app = None;
-                }
-                let _ = self.wm.close_window(&active_id, &mut self.sdi);
-                self.drop_window_runner(&active_id);
-                if self.wm.window_count() == 0 {
-                    self.mode = Mode::Dashboard;
-                }
-            },
+            AppAction::Exit => self.close_app_window(&active_id),
             AppAction::SwitchToTerminal => {
                 self.mode = Mode::Terminal;
             },
@@ -595,10 +542,6 @@ impl OasisWasm {
     pub(crate) fn text_focus(&self) -> bool {
         match self.mode {
             Mode::Terminal => true,
-            Mode::App => self
-                .app_runner
-                .as_ref()
-                .is_some_and(AppRunner::accepts_text),
             Mode::Desktop => match self.wm.active_window() {
                 Some("terminal") => true,
                 Some("browser") => self.browser.as_ref().is_some_and(|bw| bw.accepts_text()),
@@ -616,16 +559,6 @@ impl OasisWasm {
     /// `true` when the app consumed it (its action has been applied).
     fn route_key(&mut self, key: &Key, mods: Modifiers) -> bool {
         match self.mode {
-            Mode::App => {
-                let Some(runner) = self.app_runner.as_mut() else {
-                    return false;
-                };
-                let Some(action) = runner.handle_key(key, mods, &self.vfs) else {
-                    return false;
-                };
-                self.apply_fullscreen_action(action);
-                true
-            },
             Mode::Desktop => {
                 let Some(active_id) = self
                     .wm
@@ -743,7 +676,6 @@ impl OasisWasm {
         match self.mode {
             Mode::Osk => self.handle_osk_input(event),
             Mode::Desktop => self.handle_desktop_input(event),
-            Mode::App => self.handle_app_input(event),
             _ => self.handle_default_input(event),
         }
     }

@@ -784,7 +784,7 @@ fn request_resolution(h: &mut Harness, w: u32, hh: u32) {
     use oasis_core::vfs::Vfs;
     h.vfs_mut()
         .write(
-            oasis_app_settings::RESOLUTION_CHANGE_REQUEST_PATH,
+            oasis_apps::settings::RESOLUTION_CHANGE_REQUEST_PATH,
             format!("{w}x{hh}").as_bytes(),
         )
         .unwrap();
@@ -979,7 +979,7 @@ fn icon_drag_reorder_persists() {
     for name in ["classic", skin] {
         h.vfs_mut()
             .write(
-                oasis_app_settings::SKIN_CHANGE_REQUEST_PATH,
+                oasis_apps::settings::SKIN_CHANGE_REQUEST_PATH,
                 name.as_bytes(),
             )
             .unwrap();
@@ -1082,7 +1082,7 @@ fn open_windows_adopt_the_new_skin_chrome() {
     for skin in ["xp", "macos", "win95", "classic"] {
         h.vfs_mut()
             .write(
-                oasis_app_settings::SKIN_CHANGE_REQUEST_PATH,
+                oasis_apps::settings::SKIN_CHANGE_REQUEST_PATH,
                 skin.as_bytes(),
             )
             .unwrap();

@@ -8,17 +8,13 @@
 //! drops the browser widget for the browser window, plays the close sound
 //! and falls back to the dashboard when the last window went away.
 
-use oasis_audio::RADIO_APP_TITLE;
-use oasis_core::apps::AppAction;
+use oasis_core::apps::{AppAction, OwnedMedia};
 use oasis_core::sdi::SdiRegistry;
 use oasis_core::ui_sound::UiSound;
 use oasis_core::vfs::MemoryVfs;
 
 use crate::app_state::{AppState, Mode};
 use crate::launch::BROWSER_WIN;
-
-/// Title of the Music Player app (its track is torn down on close).
-const MUSIC_APP_TITLE: &str = "Music Player";
 
 /// Who is closing the window, which decides whether the app gets a say.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -105,20 +101,21 @@ pub fn close_app_window(
     CloseOutcome::Closed
 }
 
-/// Stop the radio / music when the closing runner is the Internet Radio /
-/// Music Player app: otherwise audio keeps playing with no UI to control
-/// it (the apps' own `stop` IPC only runs on their Cancel path).
+/// Stop the radio / music when the closing runner's app owns it
+/// ([`OwnedMedia`] in its registration: Internet Radio, Music Player):
+/// otherwise audio keeps playing with no UI to control it (the apps' own
+/// `stop` IPC only runs on their Cancel path).
 fn stop_owned_media(state: &mut AppState, id: &str) {
-    let title = state
+    let media = state
         .content
         .open_runners
         .iter()
         .find(|(rid, _)| rid == id)
-        .map(|(_, runner)| runner.title.as_str());
-    match title {
-        Some(RADIO_APP_TITLE) => stop_radio(state),
-        Some(MUSIC_APP_TITLE) => crate::media_controller::shutdown(state),
-        _ => {},
+        .and_then(|(_, runner)| state.content.apps.owned_media(&runner.title));
+    match media {
+        Some(OwnedMedia::Radio) => stop_radio(state),
+        Some(OwnedMedia::Music) => crate::media_controller::shutdown(state),
+        None => {},
     }
 }
 

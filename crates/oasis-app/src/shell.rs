@@ -43,7 +43,6 @@ use oasis_core::startmenu::StartMenuState;
 use oasis_core::statusbar::StatusBar;
 use oasis_core::terminal::{
     CommandRegistry, register_agent_commands, register_builtins, register_plugin_commands,
-    register_tv_commands,
 };
 use oasis_core::terminal_sdi;
 use oasis_core::toast::{ToastLevel, ToastManager};
@@ -277,7 +276,7 @@ pub struct Shell<B: ShellBackend> {
     pub backend: B,
     pub shader_bridge: Option<SdlShaderBridge>,
     key_filter: KeyTwinFilter,
-    sysmon_probe: oasis_app_system_monitor::probe::HostProbe,
+    sysmon_probe: oasis_apps::system_monitor::probe::HostProbe,
     settings_mirror: user_prefs::DiskMirror,
     disk_sample_rx: Option<mpsc::Receiver<(String, Vec<u8>)>>,
     frame_stats: Option<frame_stats::FrameStats>,
@@ -406,6 +405,8 @@ impl<B: ShellBackend> Shell<B> {
 
         observer.status("Initializing plugin system...");
         let plugin_manager = init_plugins(plugins, &mut vfs, &mut cmd_reg);
+        let mut apps = oasis_apps::builtin_registry(&oasis_apps::HostInfo::desktop());
+        plugin_manager.extend_registry(&mut apps);
         let plugin_count = plugin_manager.active_count();
         let plugin_app_count = plugin_manager.plugin_apps().len();
         log::info!("Plugin system: {plugin_count} plugins active, {plugin_app_count} plugin apps");
@@ -469,9 +470,9 @@ impl<B: ShellBackend> Shell<B> {
 
         // Discover apps and merge plugin-registered apps.
         observer.status("Indexing dashboard apps...");
-        let apps = commands::dashboard_apps(&vfs, &plugin_manager, &active_theme)?;
-        log::info!("Dashboard: {} apps (including plugin apps)", apps.len());
-        let ui = build_ui_layer(&config, &skin, &active_theme, apps);
+        let tiles = commands::dashboard_apps(&vfs, &apps, &active_theme)?;
+        log::info!("Dashboard: {} apps (including plugin apps)", tiles.len());
+        let ui = build_ui_layer(&config, &skin, &active_theme, tiles);
 
         // Window manager state (Desktop mode).
         let wm = WindowManager::with_theme(
@@ -510,7 +511,7 @@ impl<B: ShellBackend> Shell<B> {
                 ],
             ),
             net: NetworkLayer::new(),
-            content: ContentLayer::default(),
+            content: ContentLayer::new(apps),
             osk: None,
             plugin_manager,
             wm,
@@ -646,7 +647,7 @@ impl<B: ShellBackend> Shell<B> {
             key_filter: KeyTwinFilter::default(),
             // Publishes CPU / memory / battery / uptime to /var/sysmon/status
             // for the System Monitor app.
-            sysmon_probe: oasis_app_system_monitor::probe::HostProbe::new(
+            sysmon_probe: oasis_apps::system_monitor::probe::HostProbe::new(
                 &format!("Desktop ({})", B::NAME),
                 B::NAME,
             ),
@@ -742,6 +743,9 @@ impl<B: ShellBackend> Shell<B> {
         // Poll remote client for received data.
         commands::poll_remote_client(state);
 
+        // Network service state for the Network app.
+        commands::publish_net_state(state, vfs);
+
         // `wm` terminal command IPC (window list + close/focus/... requests).
         commands::poll_wm_ipc(state, sdi, vfs);
 
@@ -762,7 +766,7 @@ impl<B: ShellBackend> Shell<B> {
                 runner.drain_requests(&mut requests);
             }
             for req in requests {
-                if let Some(tune) = oasis_core::apps::tv_guide::tune_url_request(&req) {
+                if let Some(tune) = oasis_apps::tv_guide::tune_url_request(&req) {
                     state.tv.pending_tune = Some(tune.to_string());
                 } else if let Err(e) = vfs.write(&req.path, req.data.as_bytes()) {
                     log::warn!("app VFS request write failed ({}): {e}", req.path);
@@ -1240,7 +1244,7 @@ fn shell_commands() -> CommandRegistry {
     oasis_core::update::register_update_commands(&mut cmd_reg);
     register_plugin_commands(&mut cmd_reg);
     register_agent_commands(&mut cmd_reg);
-    register_tv_commands(&mut cmd_reg);
+    oasis_apps::register_commands(&mut cmd_reg);
     oasis_core::terminal::register_browser_commands(&mut cmd_reg);
     #[cfg(feature = "mcp")]
     crate::mcp_command::register(&mut cmd_reg);
@@ -1344,34 +1348,25 @@ fn refresh_status_info(state: &mut AppState) {
 }
 
 /// Launch the app titled `title` (case-insensitive) the way `OASIS_APP`
-/// auto-launch does: a dashboard tile (built-in or plugin app) when there
-/// is one, otherwise any registered app (Network, Package Manager, System
-/// Monitor have no tile). Returns `false` if no such app exists.
+/// auto-launch does: any app in the registry (built-in or plugin, with or
+/// without a dashboard tile) or the Browser. Returns `false` if no such
+/// app exists.
 pub fn launch_by_title(
     state: &mut AppState,
     sdi: &mut SdiRegistry,
     vfs: &MemoryVfs,
     title: &str,
 ) -> bool {
-    let tile = state
-        .ui
-        .dashboard
-        .apps
-        .iter()
-        .find(|a| a.title.eq_ignore_ascii_case(title))
-        .cloned();
-    let app = tile.or_else(|| {
-        oasis_core::apps::registered_app_titles()
-            .into_iter()
-            .find(|t| t.eq_ignore_ascii_case(title))
-            .map(AppEntry::for_title)
-    });
-    let Some(app) = app else {
-        return false;
-    };
-    launch::launch(state, sdi, vfs, &app, LaunchOpts::QUIET);
-    log::info!("Auto-launched app: {}", app.title);
-    true
+    match launch::open_by_title(state, sdi, vfs, title, None, LaunchOpts::QUIET) {
+        Ok(title) => {
+            log::info!("Auto-launched app: {title}");
+            true
+        },
+        Err(msg) => {
+            log::warn!("OASIS_APP: {msg}");
+            false
+        },
+    }
 }
 
 /// Format a large number with underscore thousand separators — matches the

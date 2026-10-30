@@ -1,6 +1,7 @@
 //! TV catalog fetch logic: polling background fetch results and starting new fetches.
 
 use crate::app_state::AppState;
+use oasis_apps::TvGuideRunnerExt as _;
 
 /// Poll pending TV catalog fetch (non-blocking).
 pub(super) fn poll_catalog_fetch(state: &mut AppState) {
@@ -38,7 +39,10 @@ pub(super) fn poll_catalog_fetch(state: &mut AppState) {
                         if let Some(idx) = guide.channels.iter().position(|c| c.number == ch_num) {
                             guide.selected_channel = idx;
                             if let Some(req) = guide.tune() {
-                                let url = oasis_core::apps::tv_guide::catalog::ChannelCatalog::download_url(&req.episode);
+                                let url =
+                                    oasis_apps::tv_guide::catalog::ChannelCatalog::download_url(
+                                        &req.episode,
+                                    );
                                 let seek_secs = std::env::var("OASIS_TV_SEEK")
                                     .ok()
                                     .and_then(|s| s.parse::<u64>().ok())
@@ -52,7 +56,8 @@ pub(super) fn poll_catalog_fetch(state: &mut AppState) {
                             {
                                 // Force-tune to first episode (schedule has no slot
                                 // at current time, but env var testing needs it).
-                                let url = oasis_core::apps::tv_guide::catalog::ChannelCatalog::download_url(ep);
+                                let url =
+                                    oasis_apps::tv_guide::catalog::ChannelCatalog::download_url(ep);
                                 let seek_secs = std::env::var("OASIS_TV_SEEK")
                                     .ok()
                                     .and_then(|s| s.parse::<u64>().ok())

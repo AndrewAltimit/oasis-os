@@ -23,10 +23,10 @@ mod capture_assets;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use oasis_apps::tv_guide::TvGuideState;
+use oasis_apps::tv_guide::channel::{ChannelConfig, DEFAULT_CHANNELS_TOML};
 use oasis_backend_sdl::SdlBackend;
 use oasis_core::active_theme::ActiveTheme;
-use oasis_core::apps::tv_guide::TvGuideState;
-use oasis_core::apps::tv_guide::channel::{ChannelConfig, DEFAULT_CHANNELS_TOML};
 use oasis_core::backend::{Color, SdiCore};
 use oasis_core::bottombar::BottomBar;
 use oasis_core::browser::{BrowserConfig, BrowserWidget};
@@ -1646,10 +1646,10 @@ fn run_tv_guide_scenario(
         "tv_guide_populated" => {
             // Inject mock catalogs for all channels.
             for (i, ch) in guide.channels.clone().iter().enumerate() {
-                let catalog = oasis_core::apps::tv_guide::catalog::ChannelCatalog::new(ch.number);
+                let catalog = oasis_apps::tv_guide::catalog::ChannelCatalog::new(ch.number);
                 let mut cat = catalog;
-                let episodes: Vec<oasis_core::apps::tv_guide::VideoEpisode> = (0..5)
-                    .map(|j| oasis_core::apps::tv_guide::VideoEpisode {
+                let episodes: Vec<oasis_apps::tv_guide::VideoEpisode> = (0..5)
+                    .map(|j| oasis_apps::tv_guide::VideoEpisode {
                         item_id: format!("mock-{}-{j}", ch.number),
                         filename: format!("ep{j:02}.mp4"),
                         title: format!("Episode {}", j + 1),
@@ -1670,9 +1670,9 @@ fn run_tv_guide_scenario(
         "tv_guide_tuned" => {
             // Populated + tuned to channel 0.
             for (i, ch) in guide.channels.clone().iter().enumerate() {
-                let mut cat = oasis_core::apps::tv_guide::catalog::ChannelCatalog::new(ch.number);
-                let episodes: Vec<oasis_core::apps::tv_guide::VideoEpisode> = (0..5)
-                    .map(|j| oasis_core::apps::tv_guide::VideoEpisode {
+                let mut cat = oasis_apps::tv_guide::catalog::ChannelCatalog::new(ch.number);
+                let episodes: Vec<oasis_apps::tv_guide::VideoEpisode> = (0..5)
+                    .map(|j| oasis_apps::tv_guide::VideoEpisode {
                         item_id: format!("mock-{}-{j}", ch.number),
                         filename: format!("ep{j:02}.mp4"),
                         title: format!("Episode {}", j + 1),

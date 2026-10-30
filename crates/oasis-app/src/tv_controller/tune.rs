@@ -1,6 +1,7 @@
 //! TV Guide tune/untune logic: handling tune requests and starting video playback.
 
 use crate::app_state::AppState;
+use oasis_apps::TvGuideRunnerExt as _;
 use oasis_core::backend::SdiBackend;
 use oasis_core::vfs::Vfs;
 
@@ -11,10 +12,10 @@ use oasis_core::vfs::Vfs;
 /// Nothing consumed these requests before, so both entry points silently
 /// did nothing.
 ///
-/// [`TV_REQUEST_PATH`]: oasis_core::apps::tv_guide::TV_REQUEST_PATH
+/// [`TV_REQUEST_PATH`]: oasis_apps::tv_guide::TV_REQUEST_PATH
 fn tune_channel_from_vfs(state: &mut AppState, vfs: &mut dyn Vfs) {
-    use oasis_core::apps::tv_guide::TV_REQUEST_PATH;
-    use oasis_core::apps::tv_guide::catalog::ChannelCatalog;
+    use oasis_apps::tv_guide::TV_REQUEST_PATH;
+    use oasis_apps::tv_guide::catalog::ChannelCatalog;
 
     let Ok(data) = vfs.read(TV_REQUEST_PATH) else {
         return;

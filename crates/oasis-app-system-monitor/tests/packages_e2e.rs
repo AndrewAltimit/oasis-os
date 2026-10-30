@@ -6,12 +6,15 @@
 
 use oasis_app_core::testing::{AppHarness, fuzz_app};
 use oasis_app_core::{App, AppAction};
-use oasis_app_package_manager::PackageManagerApp;
+use oasis_app_system_monitor::PackageManagerApp;
 use oasis_types::input::{Button, Key};
 use oasis_vfs::{MemoryVfs, Vfs};
 
 fn pm() -> AppHarness {
-    AppHarness::new(Box::new(PackageManagerApp::new("/apps/Package Manager")))
+    AppHarness::new(Box::new(PackageManagerApp::new(
+        "/apps/Package Manager",
+        "SDL3",
+    )))
 }
 
 #[test]
@@ -23,8 +26,8 @@ fn lists_installed_packages_with_the_workspace_version() {
         text.contains(&format!("oasis-core      {version}")),
         "{text}"
     );
-    assert!(text.contains("classic-skin"), "{text}");
-    assert!(text.contains("No updates available."), "{text}");
+    assert!(text.contains("SDL3"), "{text}");
+    assert!(text.contains("No package sources configured."), "{text}");
 }
 
 #[test]
@@ -40,7 +43,7 @@ fn navigation_moves_the_selection_and_cancel_exits() {
         h.press(Button::Down);
     }
     let sel = h.draw().find_text_containing("> ").unwrap().text.clone();
-    assert!(sel.contains("No updates"), "{sel}");
+    assert!(sel.contains("No package sources"), "{sel}");
     assert_eq!(h.press(Button::Confirm), AppAction::None);
     assert_eq!(h.click(10, 10), AppAction::None);
     assert_eq!(h.press(Button::Cancel), AppAction::Exit);
@@ -54,8 +57,9 @@ fn draws_inside_window_at_all_sizes_and_themes() {
 
 #[test]
 fn fuzz_random_input_never_panics_or_escapes_window() {
-    let make =
-        |_: &dyn Vfs| -> Box<dyn App> { Box::new(PackageManagerApp::new("/apps/Package Manager")) };
+    let make = |_: &dyn Vfs| -> Box<dyn App> {
+        Box::new(PackageManagerApp::new("/apps/Package Manager", "SDL3"))
+    };
     for seed in 1..=3 {
         fuzz_app(&make, MemoryVfs::new(), seed, 3000);
     }

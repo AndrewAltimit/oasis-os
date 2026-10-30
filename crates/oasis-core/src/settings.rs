@@ -314,7 +314,7 @@ impl UserPrefs {
                 .map(str::to_string),
             resolution: store
                 .get_string(pref_keys::RESOLUTION)
-                .and_then(oasis_app_settings::parse_resolution)
+                .and_then(crate::ipc::parse_resolution)
                 .filter(|(w, h)| *w > 0 && *h > 0),
             volume: store
                 .get_int(pref_keys::VOLUME)

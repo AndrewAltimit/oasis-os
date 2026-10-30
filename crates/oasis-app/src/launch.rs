@@ -20,25 +20,16 @@ pub const BROWSER_WIN: &str = "browser";
 /// Window id of the windowed terminal.
 pub const TERMINAL_WIN: &str = "terminal";
 /// Dashboard title of the browser.
-pub const BROWSER_TITLE: &str = "Browser";
+pub const BROWSER_TITLE: &str = oasis_apps::titles::BROWSER;
 /// Dashboard title of the terminal.
-pub const TERMINAL_TITLE: &str = "Terminal";
+pub const TERMINAL_TITLE: &str = oasis_apps::titles::TERMINAL;
 
-/// Window id of the app titled `title` ("Photo Viewer" -> "photo_viewer").
-pub fn window_id(title: &str) -> String {
-    title.to_lowercase().replace(' ', "_")
-}
+pub use oasis_core::apps::window_id;
 
-/// Size of a newly opened app window: 380x220 (the PSP-native size, which
-/// is what small screens get), growing with the resolution to 40% x 45%
-/// of the screen so windows don't open as postage stamps on large screens
-/// while several still fit side by side over the dashboard. (Scaling the
-/// PSP proportions 1:1, as the WASM host does, opens every window at ~80%
-/// of a 1280x720 screen, covering the dashboard icons.)
+/// Size of a newly opened app window on the current screen (see
+/// [`oasis_core::apps::default_window_size`], shared with the WASM host).
 pub fn default_window_size(at: &ActiveTheme) -> (u32, u32) {
-    let w = (at.screen_w * 2 / 5).max(380).min(at.screen_w);
-    let h = (at.screen_h * 9 / 20).max(220).min(at.screen_h);
-    (w, h)
+    oasis_core::apps::default_window_size(at.screen_w, at.screen_h)
 }
 
 /// Feedback for a launch.
@@ -104,8 +95,8 @@ fn create_window(state: &mut AppState, sdi: &mut SdiRegistry, id: &str, title: &
 
 /// Launch `app`: open its window (or raise the open one) and switch to
 /// Desktop mode. The Terminal on a skin without a window manager opens
-/// fullscreen (Terminal mode) instead. Plugin-registered apps are looked
-/// up before the built-in registry.
+/// fullscreen (Terminal mode) instead. The app is built from the
+/// registry (`ContentLayer::apps`: built-in and plugin apps).
 pub fn launch(
     state: &mut AppState,
     sdi: &mut SdiRegistry,
@@ -136,10 +127,7 @@ pub fn launch(
             raise_window(&mut state.wm, &win_id, sdi);
         } else {
             create_window(state, sdi, &win_id, &app.title);
-            let runner = match state.plugin_manager.create_plugin_app(&app.title, vfs) {
-                Some(delegate) => AppRunner::from_delegate(delegate),
-                None => AppRunner::launch(app, vfs),
-            };
+            let runner = AppRunner::launch(&state.content.apps, app, vfs);
             state.content.open_runners.push((win_id, runner));
         }
         state.mode = Mode::Desktop;
@@ -152,7 +140,8 @@ pub fn launch(
     }
 }
 
-/// [`launch`] the app titled `title` (no dashboard tile needed).
+/// [`launch`] the app titled `title` (no dashboard tile needed; a
+/// registered app launches at its registered path).
 pub fn launch_title(
     state: &mut AppState,
     sdi: &mut SdiRegistry,
@@ -160,7 +149,19 @@ pub fn launch_title(
     title: &str,
     opts: LaunchOpts,
 ) {
-    launch(state, sdi, vfs, &AppEntry::for_title(title), opts);
+    let entry = entry_for_title(state, title);
+    launch(state, sdi, vfs, &entry, opts);
+}
+
+/// Launch entry for `title`: the registered app's own entry (title and
+/// path), or a bare tile-less entry for host-provided apps (Browser) and
+/// unknown titles.
+fn entry_for_title(state: &AppState, title: &str) -> AppEntry {
+    state
+        .content
+        .apps
+        .get(title)
+        .map_or_else(|| AppEntry::for_title(title), |reg| reg.to_app_entry())
 }
 
 /// Open `file_path` in the app titled `app_title` (File Manager handing
@@ -179,8 +180,8 @@ pub fn launch_for_file(
     file_path: &str,
 ) {
     let win_id = window_id(app_title);
-    let entry = AppEntry::for_title(app_title);
-    let runner = AppRunner::launch_with_file(&entry, file_path, vfs);
+    let entry = entry_for_title(state, app_title);
+    let runner = AppRunner::launch_with_file(&state.content.apps, &entry, file_path, vfs);
     if state.wm.get_window(&win_id).is_some() {
         raise_window(&mut state.wm, &win_id, sdi);
     } else {
@@ -199,6 +200,50 @@ pub fn launch_for_file(
         None => content.open_runners.push((win_id, runner)),
     }
     state.mode = Mode::Desktop;
+}
+
+/// Every title [`open_by_title`] accepts: the registry (built-in and
+/// plugin apps) plus the host's Browser.
+pub fn launchable_titles(state: &AppState) -> Vec<String> {
+    let mut titles: Vec<String> = state.content.apps.titles().map(str::to_string).collect();
+    titles.push(BROWSER_TITLE.to_string());
+    titles
+}
+
+/// Open the app titled `title` (ASCII case-insensitive), optionally with
+/// `file` pre-opened: the path behind `open <app> [file]`, MCP `open_app`
+/// and `OASIS_APP`. Returns the app's exact title, or a message naming
+/// what was wrong (unknown app, or one that does not open files).
+pub fn open_by_title(
+    state: &mut AppState,
+    sdi: &mut SdiRegistry,
+    vfs: &MemoryVfs,
+    title: &str,
+    file: Option<&str>,
+    opts: LaunchOpts,
+) -> Result<String, String> {
+    let (exact, opens_files) = if title.eq_ignore_ascii_case(BROWSER_TITLE) {
+        (BROWSER_TITLE.to_string(), false)
+    } else {
+        let Some(reg) = state.content.apps.find(title) else {
+            return Err(format!(
+                "unknown app '{title}'. Available: {}",
+                launchable_titles(state).join(", ")
+            ));
+        };
+        (reg.title.clone(), reg.opens_files())
+    };
+    match file {
+        Some(_) if !opens_files => Err(format!("{exact} does not open files")),
+        Some(file) => {
+            launch_for_file(state, sdi, vfs, &exact, file);
+            Ok(exact)
+        },
+        None => {
+            launch_title(state, sdi, vfs, &exact, opts);
+            Ok(exact)
+        },
+    }
 }
 
 /// Title of the browser window: the page's `<title>` (or a
@@ -257,27 +302,16 @@ mod tests {
     use super::*;
 
     #[test]
-    fn window_id_lowercases_and_joins_words() {
-        assert_eq!(window_id("Photo Viewer"), "photo_viewer");
-        assert_eq!(window_id("Terminal"), TERMINAL_WIN);
+    fn window_ids_of_the_host_windows() {
+        assert_eq!(window_id(TERMINAL_TITLE), TERMINAL_WIN);
         assert_eq!(window_id(BROWSER_TITLE), BROWSER_WIN);
     }
 
     #[test]
-    fn default_window_size_scales_with_the_screen() {
+    fn default_window_size_follows_the_theme_screen() {
         let mut at = ActiveTheme::default();
-        at.screen_w = 480;
-        at.screen_h = 272;
-        assert_eq!(default_window_size(&at), (380, 220));
         at.screen_w = 1280;
         at.screen_h = 720;
         assert_eq!(default_window_size(&at), (512, 324));
-        at.screen_w = 1920;
-        at.screen_h = 1080;
-        assert_eq!(default_window_size(&at), (768, 486));
-        // Never larger than the screen.
-        at.screen_w = 320;
-        at.screen_h = 200;
-        assert_eq!(default_window_size(&at), (320, 200));
     }
 }

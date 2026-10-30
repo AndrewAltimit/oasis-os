@@ -12,18 +12,6 @@ use crate::terminal::{Command, CommandOutput, CommandRegistry, Environment};
 pub const STARTUP_SCRIPT_PATH: &str = "/etc/startup.sh";
 pub const CRON_DIR: &str = "/etc/cron";
 
-/// Parse a script file into executable lines.
-///
-/// Filters out comments (`#`), blank lines, and trims whitespace.
-pub fn parse_script(source: &str) -> Vec<String> {
-    source
-        .lines()
-        .map(|l| l.trim())
-        .filter(|l| !l.is_empty() && !l.starts_with('#'))
-        .map(|l| l.to_string())
-        .collect()
-}
-
 /// Execute a script from VFS, returning collected output.
 ///
 /// Runs through the terminal's shared script engine
@@ -236,26 +224,6 @@ mod tests {
     }
 
     #[test]
-    fn parse_script_filters_comments_and_blanks() {
-        let src = "# This is a comment\necho hello\n\n# Another comment\necho world\n";
-        let lines = parse_script(src);
-        assert_eq!(lines, vec!["echo hello", "echo world"]);
-    }
-
-    #[test]
-    fn parse_script_trims() {
-        let src = "  echo hello  \n  ls  \n";
-        let lines = parse_script(src);
-        assert_eq!(lines, vec!["echo hello", "ls"]);
-    }
-
-    #[test]
-    fn parse_script_empty() {
-        assert!(parse_script("").is_empty());
-        assert!(parse_script("# only comments\n# here\n").is_empty());
-    }
-
-    #[test]
     fn run_script_executes_commands() {
         let (reg, mut vfs) = setup();
         vfs.write("/tmp/test.sh", b"# test script\necho hello\necho world")
@@ -443,70 +411,5 @@ mod tests {
         };
         let output = run_startup(&reg, &mut env).unwrap();
         assert_eq!(output, vec!["booted"]);
-    }
-
-    mod prop {
-        use super::*;
-        use proptest::prelude::*;
-
-        proptest! {
-            /// parse_script is idempotent: parsing the output joined by
-            /// newlines yields the same result.
-            #[test]
-            fn parse_script_idempotent(src in ".{0,200}") {
-                let first = parse_script(&src);
-                let rejoined = first.join("\n");
-                let second = parse_script(&rejoined);
-                prop_assert_eq!(first, second);
-            }
-
-            /// No output line starts with '#'.
-            #[test]
-            fn parse_script_no_comments(src in ".{0,200}") {
-                let lines = parse_script(&src);
-                for line in &lines {
-                    prop_assert!(
-                        !line.starts_with('#'),
-                        "output line should not start with '#': {line}",
-                    );
-                }
-            }
-
-            /// No output line is empty or whitespace-only.
-            #[test]
-            fn parse_script_no_blanks(src in ".{0,200}") {
-                let lines = parse_script(&src);
-                for line in &lines {
-                    prop_assert!(
-                        !line.trim().is_empty(),
-                        "output line should not be blank: '{line}'",
-                    );
-                }
-            }
-
-            /// All output lines are trimmed (no leading/trailing whitespace).
-            #[test]
-            fn parse_script_trimmed(src in ".{0,200}") {
-                let lines = parse_script(&src);
-                for line in &lines {
-                    prop_assert_eq!(
-                        line.as_str(),
-                        line.trim(),
-                        "output line should be trimmed",
-                    );
-                }
-            }
-
-            /// Output line count <= input line count.
-            #[test]
-            fn parse_script_count_bounded(src in ".{0,200}") {
-                let input_lines = src.lines().count();
-                let output_lines = parse_script(&src).len();
-                prop_assert!(
-                    output_lines <= input_lines,
-                    "output lines ({output_lines}) should be <= input lines ({input_lines})",
-                );
-            }
-        }
     }
 }

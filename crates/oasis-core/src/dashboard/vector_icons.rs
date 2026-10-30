@@ -1056,7 +1056,7 @@ mod tests {
     #[test]
     fn no_builtin_app_gets_a_generic_icon() {
         let cfg = default_icon_theme();
-        for title in crate::apps::registered_app_titles() {
+        for &title in crate::apps::BUILTIN_APP_TITLES {
             assert_ne!(
                 IconCategory::from_app_title(title),
                 IconCategory::Generic,
@@ -1101,7 +1101,7 @@ mod tests {
     fn builtin_altimit_icons_are_distinct() {
         let cfg = default_icon_theme();
         let mut seen = std::collections::HashSet::new();
-        for (i, title) in crate::apps::registered_app_titles().into_iter().enumerate() {
+        for (i, &title) in crate::apps::BUILTIN_APP_TITLES.iter().enumerate() {
             let name = icon_for_app("altimit", &app(title), i, 0, &cfg).name;
             assert!(seen.insert(name), "{title} reuses {name}");
         }
@@ -1129,7 +1129,7 @@ mod tests {
         // Semantic sets are strict; the legacy Altimit glyphs are drawn
         // edge-to-edge, so allow their centred 2px strokes 1px of overhang.
         let cfg = default_icon_theme();
-        for title in crate::apps::registered_app_titles() {
+        for &title in crate::apps::BUILTIN_APP_TITLES {
             for preset in ["outline", "solid", "pixel", "altimit"] {
                 let icon = icon_for_app(preset, &app(title), 0, 0, &cfg);
                 let (x0, y0, x1, y1) = icon_set::ops_bounds(&icon.ops).expect("icon has ops");

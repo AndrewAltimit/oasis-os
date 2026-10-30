@@ -20,29 +20,18 @@ tls-rustls = ["oasis-net/tls-rustls"]
 # default-features = false and never compiles fontdue.
 skin-ttf = ["oasis-skin/ttf"]
 javascript = ["oasis-browser/javascript"]
-wasm-youtube = []
 test-data = []
 
 [dependencies]
+# The App trait and shared app helpers only: the concrete apps live in the
+# oasis-app-* crates, bundled for hosts by oasis-apps.
 oasis-app-core = { workspace = true }
-oasis-app-games = { workspace = true }
-oasis-app-paint = { workspace = true }
-oasis-app-text-editor = { workspace = true }
-oasis-app-calculator = { workspace = true }
-oasis-app-media = { workspace = true }
-oasis-app-tv-guide = { workspace = true }
-oasis-app-radio = { workspace = true }
-oasis-app-settings = { workspace = true }
-oasis-app-file-manager = { workspace = true }
-oasis-app-browser = { workspace = true }
-oasis-app-network = { workspace = true }
-oasis-app-package-manager = { workspace = true }
-oasis-app-system-monitor = { workspace = true }
 oasis-types = { workspace = true }
 oasis-vfs = { workspace = true }
 oasis-platform = { workspace = true }
 oasis-sdi = { workspace = true }
-oasis-net = { workspace = true }
+# `vfs`: the FTP server behind the `ftp` / `push` / `pull` commands.
+oasis-net = { workspace = true, features = ["vfs"] }
 oasis-audio = { workspace = true }
 oasis-ui = { workspace = true }
 oasis-wm = { workspace = true }
@@ -63,7 +52,6 @@ js-sys = { workspace = true }
 [dev-dependencies]
 oasis-test-backend = { workspace = true }
 tempfile = "3"
-proptest.workspace = true
 criterion = { workspace = true }
 
 [[bench]]

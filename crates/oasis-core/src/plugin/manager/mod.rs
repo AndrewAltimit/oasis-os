@@ -509,7 +509,8 @@ auto_load = true
     }
 
     #[test]
-    fn create_plugin_app_found() {
+    fn extend_registry_adds_launchable_plugin_apps() {
+        use crate::apps::{AppRegistration, AppRegistry, AppRunner};
         let mut mgr = PluginManager::new();
         mgr.register_static(Box::new(AppPlugin));
 
@@ -518,16 +519,26 @@ auto_load = true
         let mut cmds = CommandRegistry::new();
         mgr.init_all(&mut sdi, &mut vfs, &mut cmds);
 
-        let app = mgr.create_plugin_app("Plugin App", &vfs);
-        assert!(app.is_some());
-        assert_eq!(app.unwrap().title(), "Plugin App");
-    }
+        let mut apps = AppRegistry::new();
+        apps.register(AppRegistration::new("Builtin", |path, _vfs| {
+            Box::new(crate::apps::SimpleApp::new("Builtin", path, Vec::new()))
+        }));
+        mgr.extend_registry(&mut apps);
+        // Idempotent: a second sync replaces, it does not duplicate.
+        mgr.extend_registry(&mut apps);
+        assert_eq!(apps.titles().collect::<Vec<_>>(), ["Builtin", "Plugin App"]);
 
-    #[test]
-    fn create_plugin_app_not_found() {
-        let mgr = PluginManager::new();
-        let vfs = MemoryVfs::new();
-        assert!(mgr.create_plugin_app("Nonexistent", &vfs).is_none());
+        let reg = apps.get("Plugin App").unwrap();
+        assert!(reg.from_plugin && reg.on_dashboard);
+        assert_eq!(reg.path, "/plugins/plugin-app");
+        let runner = AppRunner::launch(&apps, &reg.to_app_entry(), &vfs);
+        assert_eq!(runner.title, "Plugin App");
+        assert_eq!(runner.path, "/plugins/plugin-app");
+        assert!(runner.lines().iter().any(|l| l == "Plugin app content"));
+
+        // With no plugin apps left, a sync removes them again.
+        PluginManager::new().extend_registry(&mut apps);
+        assert_eq!(apps.titles().collect::<Vec<_>>(), ["Builtin"]);
     }
 
     #[test]

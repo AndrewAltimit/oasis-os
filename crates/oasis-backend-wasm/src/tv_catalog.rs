@@ -9,8 +9,8 @@ use std::rc::Rc;
 use wasm_bindgen::JsCast;
 use wasm_bindgen_futures::JsFuture;
 
-use oasis_core::apps::tv_guide::catalog::ChannelCatalog;
-use oasis_core::apps::tv_guide::channel::Channel;
+use oasis_apps::tv_guide::catalog::ChannelCatalog;
+use oasis_apps::tv_guide::channel::Channel;
 
 struct FetchState {
     catalogs: Vec<Option<ChannelCatalog>>,

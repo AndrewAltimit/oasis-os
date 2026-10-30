@@ -1,6 +1,8 @@
-//! System Monitor app for OASIS_OS.
+//! System information apps for OASIS_OS: System Monitor, plus the
+//! [`NetworkApp`] (network service status) and the [`PackageManagerApp`]
+//! (what the build ships), which used to be separate placeholder crates.
 //!
-//! Shows platform identification, active backend and VFS type, plus
+//! The System Monitor shows platform identification, active backend and VFS type, plus
 //! themed gauges for CPU, memory, battery and uptime. Live values come
 //! from a [`SysStatus`] snapshot the host publishes to
 //! [`status::STATUS_PATH`] (see [`probe::HostProbe`]); anything the host
@@ -19,10 +21,14 @@ use oasis_types::backend::SdiBackend;
 use oasis_types::input::Button;
 use oasis_vfs::Vfs;
 
+pub mod network;
+pub mod packages;
 pub mod probe;
 mod render;
 pub mod status;
 
+pub use network::NetworkApp;
+pub use packages::PackageManagerApp;
 pub use render::SysmonColors;
 pub use status::{Gauge, Level, STATUS_PATH, SysStatus};
 

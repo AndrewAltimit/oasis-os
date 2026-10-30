@@ -19,20 +19,14 @@ pub(crate) fn trim_output(output_lines: &mut Vec<String>) {
 // VFS population
 // ---------------------------------------------------------------------------
 
-/// Find a TV Guide runner in either the full-screen or windowed runners.
-pub(crate) fn find_tv_guide_runner_wasm<'a>(
-    app_runner: &'a mut Option<AppRunner>,
-    open_runners: &'a mut [(String, AppRunner)],
-) -> Option<&'a mut AppRunner> {
-    if let Some(ref mut runner) = *app_runner
-        && runner.title == "TV Guide"
-    {
-        return Some(runner);
-    }
+/// Find the TV Guide's runner among the open app windows.
+pub(crate) fn find_tv_guide_runner_wasm(
+    open_runners: &mut [(String, AppRunner)],
+) -> Option<&mut AppRunner> {
     open_runners
         .iter_mut()
         .map(|(_, runner)| runner)
-        .find(|runner| runner.title == "TV Guide")
+        .find(|runner| runner.title == oasis_apps::titles::TV_GUIDE)
 }
 
 /// Compute the TV video capture dimensions `(x, y, w, h)`.
@@ -115,7 +109,7 @@ pub(crate) fn populate_wasm_vfs(vfs: &mut MemoryVfs) {
     let _ = vfs.mkdir("/var/tv/cache");
     let _ = vfs.write(
         "/etc/tv/channels.toml",
-        oasis_core::apps::tv_guide::channel::DEFAULT_CHANNELS_TOML.as_bytes(),
+        oasis_apps::tv_guide::channel::DEFAULT_CHANNELS_TOML.as_bytes(),
     );
 
     // Browser home page content.

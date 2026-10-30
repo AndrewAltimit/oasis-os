@@ -1,0 +1,40 @@
+[package]
+name = "oasis-apps"
+description = "The built-in OASIS_OS app bundle: one AppRegistry of every oasis-app-* crate for hosts"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+documentation = "https://docs.rs/oasis-apps"
+
+# Feature flags:
+# - video-embed: the WASM host's YouTube "Video Embed" app (search via
+#   Invidious, playback in the host's iframe overlay).
+[features]
+default = []
+video-embed = ["dep:serde", "dep:serde_json"]
+
+[dependencies]
+oasis-core = { workspace = true }
+oasis-app-core = { workspace = true }
+oasis-app-games = { workspace = true }
+oasis-app-paint = { workspace = true }
+oasis-app-text-editor = { workspace = true }
+oasis-app-calculator = { workspace = true }
+oasis-app-media = { workspace = true }
+oasis-app-tv-guide = { workspace = true }
+oasis-app-radio = { workspace = true }
+oasis-app-settings = { workspace = true }
+oasis-app-file-manager = { workspace = true }
+oasis-app-system-monitor = { workspace = true }
+oasis-types = { workspace = true }
+serde = { workspace = true, optional = true }
+serde_json = { workspace = true, optional = true }
+toml = { workspace = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }
+
+[lints]
+workspace = true

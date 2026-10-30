@@ -9,6 +9,7 @@
 //! thread: every wait steps the harness (one frame) between non-blocking
 //! reads, with a wall-clock deadline.
 
+use oasis_apps::TvGuideRunnerExt as _;
 use std::io::{ErrorKind, Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::time::{Duration, Instant};
@@ -444,7 +445,7 @@ fn remote_terminal_refuses_server_toggles() {
 /// that nothing consumed; the shell now tunes the open TV Guide with it.
 #[test]
 fn remote_tv_tune_tunes_the_open_guide() {
-    use oasis_core::apps::tv_guide::catalog::{ChannelCatalog, VideoEpisode};
+    use oasis_apps::tv_guide::catalog::{ChannelCatalog, VideoEpisode};
 
     let mut h = Harness::new("classic");
     h.settle();
@@ -492,7 +493,7 @@ fn remote_tv_tune_tunes_the_open_guide() {
     // The request was consumed.
     let pending = h
         .vfs()
-        .read(oasis_core::apps::tv_guide::TV_REQUEST_PATH)
+        .read(oasis_apps::tv_guide::TV_REQUEST_PATH)
         .unwrap_or_default();
     assert!(
         !String::from_utf8_lossy(&pending).contains("tune_ch"),
@@ -627,7 +628,15 @@ fn mcp_drives_apps_and_windows() {
 
     // list_apps includes the dashboard apps.
     let apps = mcp::ok(&mut h, port, "list_apps", json!({}));
-    for title in ["Calculator", "Terminal", "Browser", "TV Guide"] {
+    // ... and the tile-less info apps (the registry, not the tiles).
+    for title in [
+        "Calculator",
+        "Terminal",
+        "Browser",
+        "TV Guide",
+        "Network",
+        "System Monitor",
+    ] {
         assert!(apps.lines().any(|l| l == title), "{title} missing: {apps}");
     }
 
@@ -1011,7 +1020,7 @@ fn mcp_play_media_and_radio_tune_reach_the_controllers() {
     h.run_frames(3);
     let pending = h
         .vfs()
-        .read(oasis_app_media::MEDIA_REQUEST_PATH)
+        .read(oasis_apps::media::MEDIA_REQUEST_PATH)
         .unwrap_or_default();
     assert!(pending.is_empty(), "request left queued: {pending:?}");
     assert!(h.state().media_track.is_none());
@@ -1093,7 +1102,7 @@ fn base64_decode(s: &str) -> Vec<u8> {
 #[cfg(all(feature = "mcp", feature = "_video"))]
 #[test]
 fn mcp_tv_tune_starts_playback() {
-    use oasis_core::apps::tv_guide::catalog::{ChannelCatalog, VideoEpisode};
+    use oasis_apps::tv_guide::catalog::{ChannelCatalog, VideoEpisode};
     use serde_json::json;
 
     let mut h = Harness::new("classic");

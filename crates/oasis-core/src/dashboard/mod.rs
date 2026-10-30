@@ -777,7 +777,7 @@ pub(crate) mod tests {
         crate::terminal_sdi::setup_terminal_objects(&mut sdi, &lines, "/", "", 0, &at, true);
         let frame = |dash: &mut DashboardState, sdi: &mut SdiRegistry| {
             crate::terminal_sdi::set_terminal_visible(sdi, false);
-            crate::apps::AppRunner::hide_sdi(sdi);
+            crate::apps::AppRunner::hide_sdi(&crate::apps::AppRegistry::new(), sdi);
             dash.tick_animation();
             dash.update_sdi(sdi, &at);
         };

@@ -3,6 +3,7 @@
 use crate::active_theme::ActiveTheme;
 use crate::sdi::SdiRegistry;
 
+use super::registry::AppRegistry;
 use super::runner::AppRunner;
 
 impl AppRunner {
@@ -11,26 +12,15 @@ impl AppRunner {
         self.delegate.update_sdi(sdi, at);
     }
 
-    /// Hide all app-related SDI objects.
-    pub fn hide_sdi(sdi: &mut SdiRegistry) {
-        // Generic chrome + line pools (change-detecting: this runs every
-        // frame outside app mode and must leave an idle scene clean).
+    /// Hide all app-related SDI objects: the shared app chrome and line
+    /// pools, then every registered app's own objects
+    /// ([`AppRegistration::hide_sdi`](super::AppRegistration::hide_sdi)).
+    ///
+    /// Runs every frame outside app mode, so the shared pass is
+    /// change-detecting and the per-app cleanups skip themselves while
+    /// their objects don't exist.
+    pub fn hide_sdi(apps: &AppRegistry, sdi: &mut SdiRegistry) {
         oasis_app_core::render::hide_app_sdi(sdi);
-
-        // Hide TV Guide objects. Both TV Guide render paths (grid and
-        // expanded video) create `tv_hdr_bg` before any other `tv_*`
-        // object, so until it exists there is nothing to hide — skip the
-        // ~200 name formats + lookups the full pass costs every frame.
-        if sdi.contains("tv_hdr_bg") {
-            oasis_app_tv_guide::TvGuideState::hide_sdi(sdi);
-        }
-
-        // Hide Text Editor Notepad chrome. The authoritative cleanup
-        // lives on the text-editor crate, which owns the pool sizes
-        // for the menu/dropdown/line slots. `np_menu_bg` is the first
-        // `np_*` object its renderer creates (same skip as above).
-        if sdi.contains("np_menu_bg") {
-            oasis_app_text_editor::hide_notepad_sdi_objects(sdi);
-        }
+        apps.hide_sdi(sdi);
     }
 }
