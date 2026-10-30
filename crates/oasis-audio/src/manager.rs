@@ -408,6 +408,31 @@ mod tests {
         assert_eq!(seen.len(), 3, "{seen:?}");
     }
 
+    /// `music play <file>` with shuffle on used to leave the shuffle cursor
+    /// where it was, so `next` could replay the track just picked (or
+    /// skip unrelated ones). Shuffle now continues from the picked track.
+    #[test]
+    fn shuffle_next_after_play_file_moves_on() {
+        let mut mgr = AudioManager::new();
+        mgr.apply(&MediaRequest::Shuffle);
+        mgr.apply(&MediaRequest::Repeat(RepeatMode::All));
+        let paths: Vec<String> = (0..4).map(|i| format!("/music/{i}.mp3")).collect();
+        for p in &paths {
+            mgr.apply(&MediaRequest::PlayFile(p.clone()));
+        }
+        for p in &paths {
+            mgr.apply(&MediaRequest::PlayFile(p.clone()));
+            let MediaAction::PlayPath(next) = mgr.apply(&MediaRequest::Next) else {
+                panic!("next plays a track");
+            };
+            assert_ne!(&next, p, "next after play_file {p} replayed it");
+            let MediaAction::PlayPath(back) = mgr.apply(&MediaRequest::Prev) else {
+                panic!("prev plays a track");
+            };
+            assert_eq!(&back, p, "prev returns to the picked track");
+        }
+    }
+
     #[test]
     fn format_status_reports_everything() {
         let mut mgr = setup();

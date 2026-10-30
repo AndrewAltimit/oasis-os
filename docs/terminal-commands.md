@@ -259,7 +259,7 @@ VFS metadata only — there is no real Unix permission model behind these.
 
 | Command | Usage | Description |
 | --- | --- | --- |
-| `wm` | `wm [list\|close [--force] <id>\|focus <id>\|minimize <id>\|maximize <id>]` | Window manager control (the shell publishes `/var/wm/status` and applies `/var/wm/request`). `close` asks an app with unsaved changes first, like the titlebar button; `close --force` closes without asking. |
+| `wm` | `wm [list\|close [--force] <id>\|focus <id>\|minimize <id>\|maximize <id>]` | Window manager control (the shell publishes `/var/wm/status` and applies every request line queued on `/var/wm/request`, so `wm close a; wm close b` closes both). `close` asks an app with unsaved changes first, like the titlebar button; `close --force` closes without asking. |
 | `sdi` | `sdi [list\|get <name>]` | Inspect SDI scene objects: `list` prints every object (z-ordered, hidden ones marked); `get` prints all fields of one object (position, size, z, visibility, colors, text, texture, radius, gradient, stroke, shadow). Resolved by the host via `CommandSignal::SdiInspect`. |
 | `theme` | `theme [show\|colors]` | Show the current theme (skin name, resolution, base colors), from `/var/theme/current`, which the shell keeps up to date. |
 | `notify` | `notify [--level info\|success\|warning\|error] <message>` | Show a notification: queues `/var/notify/message`, which the shell shows as a toast. |

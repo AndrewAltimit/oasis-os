@@ -1034,6 +1034,47 @@ mod tests {
         }
     }
 
+    /// A cascaded window that would cross the bottom / right edge is pulled
+    /// back on screen (a default-size window at 480x272 is nearly as tall
+    /// as the screen); one larger than the screen sits at the corner.
+    #[test]
+    fn cascaded_windows_stay_on_screen() {
+        let mut sdi = SdiRegistry::new();
+        let mut wm = WindowManager::new(480, 272);
+        for i in 0..6 {
+            let config = WindowConfig {
+                id: format!("w{i}"),
+                title: format!("W{i}"),
+                x: None,
+                y: None,
+                width: 380,
+                height: 220,
+                window_type: WindowType::AppWindow,
+                always_on_top: false,
+                modal: false,
+            };
+            wm.create_window(&config, &mut sdi).unwrap();
+            let win = wm.get_window(&format!("w{i}")).unwrap();
+            assert!(win.x >= 0 && win.y >= 0, "w{i}");
+            assert!(win.x + win.outer_w as i32 <= 480, "w{i} x={}", win.x);
+            assert!(win.y + win.outer_h as i32 <= 272, "w{i} y={}", win.y);
+        }
+        let huge = WindowConfig {
+            id: "huge".into(),
+            title: "Huge".into(),
+            x: None,
+            y: None,
+            width: 900,
+            height: 900,
+            window_type: WindowType::AppWindow,
+            always_on_top: false,
+            modal: false,
+        };
+        wm.create_window(&huge, &mut sdi).unwrap();
+        let win = wm.get_window("huge").unwrap();
+        assert_eq!((win.x, win.y), (0, 0));
+    }
+
     #[test]
     fn explicit_position_overrides_cascade() {
         let mut sdi = SdiRegistry::new();

@@ -776,6 +776,14 @@ impl Harness {
             .inject_frame(rgba, w, h, pts_secs)
     }
 
+    /// Run the app teardown [`Self::shutdown`] starts with: every app,
+    /// open or closed, releases its backend resources and is dropped
+    /// (windows stay on screen, empty). Lets a scenario check
+    /// [`Self::resource_counts`] after the exit path.
+    pub fn release_all_apps(&mut self) {
+        self.shell.release_all_apps();
+    }
+
     /// Shut the shell down the way the binary does on exit (persists any
     /// settings changed since the last periodic sync, stops media).
     pub fn shutdown(self) -> Result<()> {

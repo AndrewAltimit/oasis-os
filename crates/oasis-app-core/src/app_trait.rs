@@ -213,7 +213,8 @@ pub trait App: AsAny + std::fmt::Debug + Send {
     /// Move every queued VFS IPC request into `out`, oldest first.
     ///
     /// Hosts call this once per frame for every open app and carry out
-    /// all of them. Default: the app makes no requests.
+    /// all of them, including the last requests of an app that closed
+    /// during the frame. Default: the app makes no requests.
     fn drain_requests(&mut self, _out: &mut Vec<AppRequest>) {}
 
     /// Apply VFS mutations the app has queued (deletes, renames, copies,

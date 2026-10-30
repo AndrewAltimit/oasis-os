@@ -299,10 +299,7 @@ impl AppDispatcher<'_> {
             return ToolResult::error("missing required argument: path");
         };
         let request = format!("play_file {path}");
-        match self
-            .vfs
-            .write(oasis_core::ipc::AUDIO_REQUEST_PATH, request.as_bytes())
-        {
+        match crate::media_controller::queue_request(self.vfs, &request) {
             Ok(()) => ToolResult::text(format!("Queued playback: {path}")),
             Err(e) => ToolResult::error(format!("{e}")),
         }

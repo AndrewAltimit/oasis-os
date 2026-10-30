@@ -46,12 +46,12 @@ impl WindowManager {
         }
 
         // Determine initial position.
-        let (x, y) = match (config.x, config.y) {
-            (Some(x), Some(y)) => (x, y),
+        let (x, y, cascaded) = match (config.x, config.y) {
+            (Some(x), Some(y)) => (x, y, false),
             _ => {
                 let pos = (self.next_cascade_x, self.next_cascade_y);
                 self.advance_cascade();
-                pos
+                (pos.0, pos.1, true)
             },
         };
 
@@ -59,7 +59,15 @@ impl WindowManager {
         // so the two don't share SDI objects.
         self.flush_closing(Some(&config.id), sdi);
 
-        let window = Window::new(config, x, y, &self.theme);
+        let mut window = Window::new(config, x, y, &self.theme);
+        if cascaded {
+            // A cascade step must not push the frame past the right /
+            // bottom edge (at 480x272 a default-size window is nearly as
+            // tall as the screen): pull it back so it fits, or to the
+            // top-left corner when it is larger than the screen.
+            window.x = fit_on_screen(window.x, window.outer_w, self.screen_w);
+            window.y = fit_on_screen(window.y, window.outer_h, self.screen_h);
+        }
         let is_modal = window.modal;
 
         // Create modal overlay before the window if this is a modal window.
@@ -378,7 +386,8 @@ impl WindowManager {
         }
     }
 
-    /// Advance the cascade position for the next window.
+    /// Advance the cascade position for the next window (see also
+    /// [`fit_on_screen`], applied to each cascaded window).
     pub(crate) fn advance_cascade(&mut self) {
         self.next_cascade_x += CASCADE_OFFSET;
         self.next_cascade_y += CASCADE_OFFSET;
@@ -391,4 +400,12 @@ impl WindowManager {
             self.next_cascade_y = CASCADE_OFFSET;
         }
     }
+}
+
+/// `pos` moved back so a `size`-long span starting there ends within a
+/// `screen`-long axis, but never before 0.
+fn fit_on_screen(pos: i32, size: u32, screen: u32) -> i32 {
+    let max = i64::from(screen) - i64::from(size);
+    // In i32 range: the result lies between 0 and `pos`.
+    i64::from(pos).min(max).max(0) as i32
 }

@@ -61,3 +61,6 @@ __pycache__/
 # Scratch
 scratch/
 .local/
+
+# Custom skins saved by Settings when the shell runs from the repo root
+skins/custom-*/
