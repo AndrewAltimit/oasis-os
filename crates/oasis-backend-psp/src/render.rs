@@ -23,7 +23,7 @@ use psp::sys::{
 
 use oasis_core::backend::Color;
 
-use crate::{ColorExt, PspBackend};
+use crate::PspBackend;
 
 // ---------------------------------------------------------------------------
 // Vertex types for 2D GU rendering
@@ -93,7 +93,7 @@ impl PspBackend {
         for idx in 0u32..95 {
             let col = idx % ATLAS_COLS;
             let row = idx / ATLAS_COLS;
-            let glyph_data = crate::font::glyph((idx + 32) as u8 as char);
+            let glyph_data = oasis_core::bitmap_font::glyph((idx + 32) as u8 as char);
 
             for gy in 0..8u32 {
                 let bits = glyph_data[gy as usize];
@@ -263,7 +263,7 @@ impl PspBackend {
             // Blit the full 8x8 atlas cell but only advance by the
             // proportional width. The atlas cell's rightmost columns are
             // blank for narrow glyphs, so the visual result is correct.
-            let blit_w = (crate::font::GLYPH_WIDTH as f32) * scale;
+            let blit_w = (oasis_core::bitmap_font::GLYPH_WIDTH as f32) * scale;
             batch.draw_rect(
                 cx,
                 y as f32,

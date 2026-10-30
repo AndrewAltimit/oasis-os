@@ -26,7 +26,7 @@ use oasis_core::backend::{Color, GradientStyle};
 
 use oasis_core::geometry::rounded_rect_inset;
 
-use crate::{ColorExt, PspBackend, SCREEN_HEIGHT, SCREEN_WIDTH};
+use crate::PspBackend;
 
 // ---------------------------------------------------------------------------
 // Color-only vertex (no texture, position + color)
@@ -604,17 +604,6 @@ impl PspBackend {
 
             sys::sceGuEnable(sys::GuState::Texture2D);
         }
-    }
-
-    /// Dim the entire screen using a full-viewport semi-transparent rect.
-    pub fn dim_screen_inner(&mut self, alpha: u8) {
-        self.fill_rect_inner(
-            0,
-            0,
-            SCREEN_WIDTH,
-            SCREEN_HEIGHT,
-            Color::rgba(0, 0, 0, alpha),
-        );
     }
 }
 
