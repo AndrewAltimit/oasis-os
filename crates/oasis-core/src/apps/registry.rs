@@ -171,6 +171,11 @@ impl AppRegistry {
     /// shadow a built-in; [`Self::remove_plugin_apps`] brings the
     /// built-in back).
     pub fn register(&mut self, reg: AppRegistration) {
+        if !reg.from_plugin {
+            // A built-in (re-)registration supersedes any older built-in a
+            // plugin app shadows under this title.
+            self.shadowed.retain(|s| s.title != reg.title);
+        }
         match self.apps.iter_mut().find(|a| a.title == reg.title) {
             Some(slot) => {
                 let old = std::mem::replace(slot, reg);
@@ -182,8 +187,10 @@ impl AppRegistry {
         }
     }
 
-    /// Remove the app titled `title`. Returns whether it was registered.
+    /// Remove the app titled `title`, including a built-in a plugin app
+    /// shadows under it. Returns whether it was registered.
     pub fn unregister(&mut self, title: &str) -> bool {
+        self.shadowed.retain(|s| s.title != title);
         let before = self.apps.len();
         self.apps.retain(|a| a.title != title);
         self.apps.len() != before
@@ -374,6 +381,38 @@ mod tests {
         // A second removal is a no-op.
         apps.remove_plugin_apps();
         assert_eq!(apps.titles().count(), 3);
+    }
+
+    fn plugin(title: &'static str) -> AppRegistration {
+        let mut reg = simple(title).with_path(format!("/plugins/{title}"));
+        reg.from_plugin = true;
+        reg
+    }
+
+    /// Unregistering a title also forgets the built-in a plugin shadowed
+    /// there: the next plugin re-sync used to resurrect it.
+    #[test]
+    fn unregister_forgets_the_shadowed_builtin() {
+        let mut apps = AppRegistry::new();
+        apps.register(simple("Calculator"));
+        apps.register(plugin("Calculator"));
+        assert!(apps.unregister("Calculator"));
+        apps.register(plugin("Calculator"));
+        apps.remove_plugin_apps();
+        assert!(apps.is_empty(), "{:?}", apps.titles().collect::<Vec<_>>());
+    }
+
+    /// A built-in registered over a plugin app supersedes the built-in the
+    /// plugin shadowed; removing a later plugin restores the newer one.
+    #[test]
+    fn builtin_reregistration_supersedes_the_shadowed_copy() {
+        let mut apps = AppRegistry::new();
+        apps.register(simple("Calculator"));
+        apps.register(plugin("Calculator"));
+        apps.register(simple("Calculator").with_path("/apps/calc-v2"));
+        apps.register(plugin("Calculator"));
+        apps.remove_plugin_apps();
+        assert_eq!(apps.get("Calculator").unwrap().path, "/apps/calc-v2");
     }
 
     #[test]

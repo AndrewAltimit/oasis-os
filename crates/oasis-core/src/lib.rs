@@ -1,14 +1,20 @@
-//! OASIS_OS core framework.
+//! OASIS_OS coordination layer.
 //!
-//! Platform-agnostic embeddable OS framework providing a scene graph (SDI),
-//! backend abstraction traits, input event pipeline, configuration, and
-//! error types. This crate has zero platform dependencies.
+//! Ties the subsystem crates into a shell a host can drive: the dashboard,
+//! status / bottom bars, desktop taskbar and start menu, the terminal's SDI
+//! scene ([`terminal_sdi`]) and the dashboard media pages ([`media_page`]),
+//! the app runtime ([`apps`]: `AppRunner` + `AppRegistry`, with the `App`
+//! trait from `oasis-app-core`), plugins, scripting, the agent / MCP
+//! commands and transfers. It knows no concrete app (hosts get the
+//! built-in apps from the `oasis-apps` bundle) and calls no platform API:
+//! everything platform-specific goes through the backend traits.
 //!
 //! # Public API
 //!
 //! The [`prelude`] module re-exports the most commonly used types for
-//! convenient single-import access. Individual sub-crate modules are also
-//! available for full access.
+//! convenient single-import access. The foundation and subsystem crates
+//! are re-exported as modules (`backend`, `sdi`, `skin`, `vfs`, `wm`, ...)
+//! so hosts can depend on `oasis-core` alone.
 
 // -----------------------------------------------------------------------
 // Re-exports from oasis-types (foundation types and traits)
@@ -41,8 +47,6 @@ pub use oasis_platform as platform;
 pub use oasis_sdi as sdi;
 pub use oasis_skin as skin;
 pub use oasis_skin::active_theme;
-#[doc(hidden)]
-pub use oasis_skin::legacy_theme as theme;
 pub use oasis_ui as ui;
 pub use oasis_vector as vector;
 pub use oasis_vfs as vfs;
@@ -59,6 +63,7 @@ pub mod bottombar;
 pub mod cursor;
 pub mod dashboard;
 pub mod image_layers;
+pub mod media_page;
 pub mod notifications;
 pub mod osk;
 pub mod plugin;

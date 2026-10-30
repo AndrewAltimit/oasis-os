@@ -1,6 +1,6 @@
 [package]
 name = "oasis-core"
-description = "Platform-agnostic core framework for OASIS_OS: scene graph, backend traits, input, config"
+description = "OASIS_OS coordination layer: dashboard, shell chrome, app runtime, plugins, scripting"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
