@@ -3,6 +3,7 @@
 //! Renders to an HTML `<canvas>` element using the Canvas 2D API,
 //! maps DOM events to `InputEvent`, and plays audio through HTML `<audio>` elements.
 
+mod app_requests;
 pub mod archive;
 pub mod audio;
 mod batch;
@@ -141,6 +142,9 @@ pub struct OasisWasm {
     /// Launchable apps (the `oasis-apps` bundle).
     apps: AppRegistry,
     open_runners: Vec<(String, AppRunner)>,
+    /// Requests drained from apps that closed or were replaced since the
+    /// last tick; carried out ahead of the open apps' (see `app_requests`).
+    closed_app_requests: Vec<oasis_core::apps::AppRequest>,
     browser: Option<BrowserWidget>,
     iframe: IframeOverlay,
     toasts: ToastManager,
@@ -386,6 +390,7 @@ impl OasisWasm {
             wm,
             apps,
             open_runners: Vec::new(),
+            closed_app_requests: Vec::new(),
             browser: None,
             iframe,
             toasts: ToastManager::new(),
@@ -458,14 +463,13 @@ impl OasisWasm {
         // Run the next queued background terminal job (`cmd &`), if any.
         self.poll_terminal_jobs();
 
-        // Carry out every request the open apps queued (radio tune,
-        // settings, ...). TV Guide tunes go to the video overlay section
-        // below, Video Embed commands to the YouTube overlay.
+        // Carry out every request the apps queued (radio tune, settings,
+        // ...), those of apps that closed this frame first. TV Guide tunes
+        // go to the video overlay section below, Video Embed commands to
+        // the YouTube overlay; the line-queued request files are appended.
         {
-            let mut requests = Vec::new();
-            for (_, runner) in &mut self.open_runners {
-                runner.drain_requests(&mut requests);
-            }
+            let requests =
+                app_requests::gather(&mut self.closed_app_requests, &mut self.open_runners);
             for req in requests {
                 if let Some(tune) = oasis_apps::tv_guide::tune_url_request(&req) {
                     self.pending_tv_tune = Some(tune.to_string());
@@ -476,8 +480,12 @@ impl OasisWasm {
                     self.handle_video_embed_request(&req.data);
                     continue;
                 }
-                let _ = self.vfs.write(&req.path, req.data.as_bytes());
+                if let Err(e) = app_requests::write(&mut self.vfs, &req) {
+                    log::warn!("app VFS request write failed ({}): {e}", req.path);
+                }
             }
+            // `wm` / `open` commands (terminal, scripts).
+            self.poll_wm_ipc();
 
             // Let open apps apply queued VFS mutations (file manager
             // deletes / renames / copies, paint's binary BMP saves).
@@ -1466,6 +1474,8 @@ impl OasisWasm {
         match self.open_runners.iter_mut().find(|(id, _)| *id == win_id) {
             Some((_, slot)) => {
                 let mut old = std::mem::replace(slot, runner);
+                // The replaced app's last requests still get carried out.
+                old.drain_requests(&mut self.closed_app_requests);
                 old.release_resources(&mut self.backend);
             },
             None => self.open_runners.push((win_id, runner)),

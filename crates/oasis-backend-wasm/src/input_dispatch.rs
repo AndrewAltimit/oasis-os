@@ -546,6 +546,10 @@ impl OasisWasm {
         }
         if let Some(pos) = self.open_runners.iter().position(|(rid, _)| rid == id) {
             let (_, mut runner) = self.open_runners.remove(pos);
+            // Requests the app made this frame (a skin picked right before
+            // Escape) are carried out by the next request pass instead of
+            // being dropped with the runner.
+            runner.drain_requests(&mut self.closed_app_requests);
             match self.apps.owned_media(&runner.title) {
                 Some(OwnedMedia::Radio) => self.stop_radio(),
                 Some(OwnedMedia::Music) => self.stop_music(),
