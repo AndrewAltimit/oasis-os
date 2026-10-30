@@ -1081,6 +1081,9 @@ dependencies = [
  "gif",
  "jpeg-decoder",
  "log",
+ "oasis-css",
+ "oasis-html",
+ "oasis-http",
  "oasis-js",
  "oasis-net",
  "oasis-skin",
@@ -1114,6 +1117,7 @@ dependencies = [
  "oasis-app-tv-guide",
  "oasis-audio",
  "oasis-browser",
+ "oasis-http",
  "oasis-i18n",
  "oasis-net",
  "oasis-platform",
@@ -1129,6 +1133,37 @@ dependencies = [
  "serde_json",
  "thiserror",
  "toml",
+]
+
+[[package]]
+name = "oasis-css"
+version = "1.4.0"
+dependencies = [
+ "log",
+ "oasis-html",
+ "oasis-types",
+ "rustc-hash",
+]
+
+[[package]]
+name = "oasis-html"
+version = "1.4.0"
+dependencies = [
+ "log",
+]
+
+[[package]]
+name = "oasis-http"
+version = "1.4.0"
+dependencies = [
+ "brotli",
+ "flate2",
+ "log",
+ "oasis-net",
+ "oasis-types",
+ "oasis-vfs",
+ "rustc-hash",
+ "web-time",
 ]
 
 [[package]]
@@ -1191,6 +1226,7 @@ version = "1.4.0"
 dependencies = [
  "log",
  "oasis-sdi",
+ "oasis-shader",
  "oasis-types",
  "oasis-ui",
  "oasis-vector",
@@ -1206,10 +1242,8 @@ name = "oasis-terminal"
 version = "1.4.0"
 dependencies = [
  "log",
- "oasis-audio",
  "oasis-net",
  "oasis-platform",
- "oasis-skin",
  "oasis-types",
  "oasis-vfs",
 ]
