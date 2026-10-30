@@ -46,7 +46,7 @@ oasis-net = { workspace = true }
 oasis-audio = { workspace = true }
 oasis-ui = { workspace = true }
 oasis-wm = { workspace = true }
-oasis-skin = { workspace = true }
+oasis-skin = { workspace = true, features = ["serialize"] }  # `skin export`
 oasis-vector = { workspace = true }
 oasis-terminal = { workspace = true }
 oasis-browser = { workspace = true }

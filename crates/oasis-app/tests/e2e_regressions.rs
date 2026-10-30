@@ -79,6 +79,36 @@ fn close_button_on_modified_text_editor_prompts_instead_of_discarding() {
     assert_eq!(h.mode(), Mode::Dashboard);
 }
 
+/// `wm close <id>` (the terminal command's VFS request) asks a modified
+/// Text Editor first, like the close button; `wm close --force <id>`
+/// closes it without the prompt.
+#[test]
+fn wm_close_force_skips_the_unsaved_changes_prompt() {
+    use oasis_core::vfs::Vfs;
+    let mut h = Harness::new("classic");
+    h.settle();
+    assert!(h.click_app_icon("Text Editor"));
+    h.settle();
+    let id = h.find_window("Text Editor").expect("editor window").id;
+    h.type_text("unsaved words");
+    h.settle();
+
+    h.vfs_mut()
+        .write("/var/wm/request", format!("close {id}").as_bytes())
+        .unwrap();
+    h.settle();
+    assert!(
+        h.find_window("Text Editor").is_some(),
+        "plain wm close must prompt, not discard"
+    );
+
+    h.vfs_mut()
+        .write("/var/wm/request", format!("close --force {id}").as_bytes())
+        .unwrap();
+    h.settle();
+    assert!(h.find_window("Text Editor").is_none(), "{:?}", h.windows());
+}
+
 /// Unmodified apps still close on the first click of the close button.
 #[test]
 fn close_button_closes_unmodified_apps_immediately() {

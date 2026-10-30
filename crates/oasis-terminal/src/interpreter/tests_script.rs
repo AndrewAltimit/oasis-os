@@ -1187,3 +1187,97 @@ fn ampersand_inside_quotes_or_and_is_not_background() {
     );
     assert_eq!(reg.pending_jobs(), 0);
 }
+
+#[test]
+fn kill_accepts_a_bare_job_number() {
+    let reg = make_full_reg();
+    let mut vfs = MemoryVfs::new();
+    let mut env = make_env(&mut vfs);
+    reg.execute("echo one &", &mut env).unwrap();
+    let killed = assert_text!(reg.execute("kill 1", &mut env).unwrap());
+    assert!(killed.contains("Terminated"), "{killed}");
+    // A bare number with no such job is a job error, not "unknown command".
+    let err = reg.execute("kill 7", &mut env).unwrap_err().to_string();
+    assert!(err.contains("no such job"), "{err}");
+    assert!(reg.execute("kill", &mut env).is_err());
+}
+
+#[test]
+fn builtins_win_over_registered_commands_and_are_described() {
+    struct FakeKill;
+    impl Command for FakeKill {
+        fn name(&self) -> &str {
+            "kill"
+        }
+        fn description(&self) -> &str {
+            "shadowed"
+        }
+        fn usage(&self) -> &str {
+            "kill"
+        }
+        fn execute(&self, _: &[&str], _: &mut Environment<'_>) -> Result<CommandOutput> {
+            Ok(CommandOutput::Text("registered kill ran".into()))
+        }
+    }
+    let mut reg = make_full_reg();
+    reg.register(Box::new(FakeKill));
+    let mut vfs = MemoryVfs::new();
+    let mut env = make_env(&mut vfs);
+    assert!(reg.execute("kill 1", &mut env).is_err(), "builtin ran");
+
+    let help = assert_text!(reg.execute("help fg", &mut env).unwrap());
+    assert!(help.contains("shell built-in"), "{help}");
+    assert!(help.contains("Usage: fg"), "{help}");
+    let listing = assert_text!(reg.execute("help", &mut env).unwrap());
+    assert!(listing.contains("List background jobs"), "{listing}");
+    let which = assert_text!(reg.execute("which kill", &mut env).unwrap());
+    assert_eq!(which, "kill: shell built-in");
+}
+
+#[test]
+fn test_command_sets_exit_status() {
+    let reg = make_full_reg();
+    let mut vfs = MemoryVfs::new();
+    let mut env = make_env(&mut vfs);
+    let out = assert_text!(reg.execute("test a = b || echo differ", &mut env).unwrap());
+    assert_eq!(out, "false\ndiffer");
+    let out = assert_text!(reg.execute("test a = a && echo same", &mut env).unwrap());
+    assert_eq!(out, "true\nsame");
+    reg.execute("test -z ''", &mut env).unwrap();
+    assert_eq!(reg.get_variable("?").as_deref(), Some("0"));
+    reg.execute("test -n ''", &mut env).unwrap();
+    assert_eq!(reg.get_variable("?").as_deref(), Some("1"));
+    let out = assert_text!(reg.execute("false || echo recovered", &mut env).unwrap());
+    assert_eq!(out, "recovered");
+}
+
+#[test]
+fn status_wrapper_never_reaches_the_host() {
+    struct Fails;
+    impl Command for Fails {
+        fn name(&self) -> &str {
+            "fails"
+        }
+        fn description(&self) -> &str {
+            "prints and exits 3"
+        }
+        fn usage(&self) -> &str {
+            "fails"
+        }
+        fn execute(&self, _: &[&str], _: &mut Environment<'_>) -> Result<CommandOutput> {
+            Ok(CommandOutput::status(3, CommandOutput::Text("oops".into())))
+        }
+    }
+    let mut reg = make_full_reg();
+    reg.register(Box::new(Fails));
+    let mut vfs = MemoryVfs::new();
+    let mut env = make_env(&mut vfs);
+    let out = reg.execute("fails", &mut env).unwrap();
+    assert!(
+        matches!(&out, CommandOutput::Text(t) if t == "oops"),
+        "{out:?}"
+    );
+    assert_eq!(reg.get_variable("?").as_deref(), Some("3"));
+    let piped = assert_text!(reg.execute("fails | wc -c", &mut env).unwrap());
+    assert!(piped.contains('4'), "{piped}");
+}

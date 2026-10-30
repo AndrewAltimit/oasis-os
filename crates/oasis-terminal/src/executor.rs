@@ -214,11 +214,21 @@ impl CommandRegistry {
         }
     }
 
-    /// Mark the current command as failed (exit status 1) without an error
-    /// message.
-    fn set_failed_status(&self) {
-        self.last_exit_code.set(1);
-        self.set_variable("?", "1");
+    /// Consume a [`CommandOutput::Status`] wrapper: record its exit code
+    /// (so `&&` / `||` / `$?` / `if` see it) and return the inner output.
+    /// Callers above the executor never see the wrapper.
+    fn apply_status(&self, result: Result<CommandOutput>) -> Result<CommandOutput> {
+        let mut output = result?;
+        while let CommandOutput::Status {
+            code,
+            output: inner,
+        } = output
+        {
+            self.last_exit_code.set(code);
+            self.set_variable("?", &code.to_string());
+            output = *inner;
+        }
+        Ok(output)
     }
 
     /// Expand a raw redirect target: `$VAR` / `${VAR}` substitution, then
@@ -398,46 +408,13 @@ impl CommandRegistry {
         let arg_strings: Vec<String> = tokens[1..].to_vec();
         let args: Vec<&str> = arg_strings.iter().map(|s| s.as_str()).collect();
 
-        // Intercept built-in commands that need registry access.
-        match name_lower.as_str() {
-            "help" => return self.execute_help(&args),
-            "run" => return self.execute_run(&args, env),
-            "history" => return self.execute_history_cmd(&args),
-            "set" => return self.execute_set(&args),
-            "unset" => return self.execute_unset(&args),
-            "env" => return self.execute_env(),
-            "alias" => return self.execute_alias(&args),
-            "unalias" => return self.execute_unalias(&args),
-            "which" => return self.execute_which(&args),
-            "return" => return self.execute_return(&args),
-            "break" => return self.execute_break(),
-            "continue" => return self.execute_continue(),
-            "local" => return self.execute_local(&args),
-            "jobs" => return self.execute_jobs(),
-            "fg" => return self.execute_fg(&args, env),
-            "bg" => return self.execute_bg(&args),
-            "kill" if args.iter().any(|a| a.starts_with('%')) => {
-                return self.execute_kill(&args);
-            },
-            "true" => return Ok(CommandOutput::None),
-            "false" => {
-                self.set_failed_status();
-                return Ok(CommandOutput::None);
-            },
-            _ => {},
+        // Shell builtins (they need registry access) win over registered
+        // commands, then registered commands, then user-defined functions.
+        if let Some(b) = crate::builtins::builtin(&name_lower) {
+            return self.apply_status((b.run)(self, &args, env));
         }
-
-        // Check registered commands first, then user-defined
-        // functions.
         if let Some(cmd) = self.commands.get(name_lower.as_str()) {
-            let result = cmd.execute(&args, env);
-            // `test` reports its verdict as text; a `false` verdict is also
-            // a failing exit status so `test ... && cmd` / `||` behave.
-            if name_lower == "test" && matches!(&result, Ok(CommandOutput::Text(t)) if t == "false")
-            {
-                self.set_failed_status();
-            }
-            return result;
+            return self.apply_status(cmd.execute(&args, env));
         }
 
         // Check user-defined functions.

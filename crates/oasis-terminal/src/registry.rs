@@ -296,7 +296,7 @@ impl CommandRegistry {
     /// functions (unsorted; used for tab completion).
     pub fn completion_names(&self) -> Vec<String> {
         let mut names: Vec<String> = self.commands.keys().cloned().collect();
-        names.extend(crate::types::BUILTIN_NAMES.iter().map(|s| s.to_string()));
+        names.extend(crate::builtins::BUILTINS.iter().map(|b| b.name.to_string()));
         names.extend(self.aliases.borrow().keys().cloned());
         names.extend(self.functions.borrow().keys().cloned());
         names

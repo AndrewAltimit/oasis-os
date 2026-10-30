@@ -107,7 +107,7 @@ oasis-os/
 |   +-- oasis-ui/                    # 29 Widget impls + ListView, MenuBar, NinePatch, icons, flex/grid layout
 |   +-- oasis-wm/                    # Window manager: lifecycle, drag/resize, hit testing, snapping, tiling, animations
 |   +-- oasis-skin/                  # TOML skin engine, 17 built-in skins, theme derivation from 9 base colors
-|   +-- oasis-terminal/              # ~95 commands + 18 shell builtins, script engine, jobs, line editing
+|   +-- oasis-terminal/              # ~95 commands + 20 shell builtins, script engine, jobs, line editing
 |   +-- oasis-browser/               # HTML/CSS/Gemini engine: DOM, cascade, flex/grid/table layout, transforms, compositor, JS DOM bindings
 |   +-- oasis-js/                    # QuickJS-NG: console, DOM glue, Promise fetch, per-origin storage, watchdog
 |   +-- oasis-video/                 # MP4/H.264+AAC decode (openh264 + symphonia, or ffmpeg; PSP-safe demux_lite)
@@ -280,7 +280,7 @@ SDI is deliberately simple. It is not a DOM, not a layout engine, and not a reta
 
 The command interpreter is a registry-based dispatch system in the `oasis-terminal` crate. Commands implement a `Command` trait with an `execute()` method returning structured output. The interpreter includes full shell features: variable expansion (`$VAR`, `${VAR}`), glob expansion, aliases, history (`!!`, `!n`), piping, redirects, and command chaining (`&&`, `||`, `;`). Inline control flow and `run` scripts share one parser (`script.rs`) with nested `if`/`elif`/`else`, `while`/`until`, `for` and `case` blocks; a trailing `&` queues a background job managed with `jobs`/`fg`/`bg`/`kill %N`. Hosts drive interactive terminals through a `ShellSession` (`session.rs`) that adds readline-style editing, tab completion (commands, `$VARS`, VFS paths), Ctrl+R history search and history persisted to `/home/user/.oasis_history`. Skins control which commands are registered -- a terminal-focused skin exposes everything, a locked-down kiosk skin exposes only approved commands, a corrupted skin registers broken versions of standard commands that produce garbled output. The shell ships with agent-management commands for remote agent interaction (see Section 10).
 
-About 95 registered commands (76 from `oasis-terminal`, 19 registered by `oasis-core`) plus 18 shell builtins. The catalogue lives in [`terminal-commands.md`](terminal-commands.md).
+About 95 registered commands (74 from `oasis-terminal`, 20 registered by `oasis-core`, plus `mcp-server` from `oasis-app` with the `mcp` feature) plus 20 shell builtins. The catalogue lives in [`terminal-commands.md`](terminal-commands.md).
 
 | Command Module | Commands | Description |
 |----------------|----------|-------------|

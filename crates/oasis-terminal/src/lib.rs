@@ -31,7 +31,6 @@ pub mod remote_commands;
 mod script;
 pub mod security_commands;
 pub mod session;
-pub mod skin_commands;
 pub mod system_commands;
 pub mod text_commands;
 mod types;
@@ -42,7 +41,7 @@ mod test_helpers;
 
 /// Register audio playback commands (music) into a registry.
 pub use audio_commands::register_audio_commands;
-/// Register all built-in commands (fs, system, network, audio, skin) into a registry.
+/// Register all of this crate's commands (fs, system, network, audio, radio, ...).
 pub use commands::register_builtins;
 /// Register core filesystem and shell commands (ls, cd, pwd, cat, echo, etc.).
 pub use core_commands::register_core_commands;
@@ -70,6 +69,8 @@ pub use interpreter::CommandRegistry;
 pub use interpreter::CommandSignal;
 /// Shared mutable environment passed to every command.
 pub use interpreter::Environment;
+/// Resolve a (possibly relative) path against a working directory.
+pub use interpreter::resolve_path;
 /// Register network commands (wifi, ping, http) into a registry.
 pub use network_commands::register_network_commands;
 /// Register platform service commands (power, clock, memory, usb) into a registry.
@@ -80,8 +81,6 @@ pub use radio_commands::register_radio_commands;
 pub use remote_commands::register_remote_commands;
 /// Register security commands (chmod, chown, passwd, audit).
 pub use security_commands::register_security_commands;
-/// Register skin management commands (skin list/switch) into a registry.
-pub use skin_commands::register_skin_commands;
 /// Register system commands (uptime, df, whoami, hostname, date, sleep).
 pub use system_commands::register_system_commands;
 /// Register text processing commands (head, tail, wc, grep, sort, uniq, tee, tr, cut, diff).

@@ -555,6 +555,7 @@ fn outputs_to_lines(outputs: Vec<CommandOutput>, lines: &mut Vec<String>) {
             CommandOutput::Clear => lines.push("(clear)".to_string()),
             CommandOutput::None => {},
             CommandOutput::Multi(inner) => outputs_to_lines(inner, lines),
+            CommandOutput::Status { output, .. } => outputs_to_lines(vec![*output], lines),
             CommandOutput::Signal(_) => {
                 lines.push("(signal command skipped in script)".to_string());
             },

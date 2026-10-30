@@ -51,9 +51,10 @@ impl TrackInfo {
 }
 
 /// Current playback state.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum PlaybackState {
     /// No track loaded or playback stopped.
+    #[default]
     Stopped,
     /// A track is actively playing.
     Playing,
@@ -71,38 +72,9 @@ impl std::fmt::Display for PlaybackState {
     }
 }
 
-/// Repeat mode for the playlist.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum RepeatMode {
-    /// No repeat -- stop after last track.
-    Off,
-    /// Repeat the entire playlist.
-    All,
-    /// Repeat the current track.
-    One,
-}
-
-impl std::fmt::Display for RepeatMode {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Off => write!(f, "off"),
-            Self::All => write!(f, "all"),
-            Self::One => write!(f, "one"),
-        }
-    }
-}
-
-impl RepeatMode {
-    /// Parse from a string (case-insensitive).
-    pub fn parse(s: &str) -> Option<Self> {
-        match s.to_lowercase().as_str() {
-            "off" | "none" => Some(Self::Off),
-            "all" | "playlist" => Some(Self::All),
-            "one" | "track" | "single" => Some(Self::One),
-            _ => None,
-        }
-    }
-}
+/// Repeat mode for the playlist (defined with the IPC request format in
+/// [`oasis_types::ipc`]).
+pub use oasis_types::ipc::RepeatMode;
 
 #[cfg(test)]
 mod tests {
@@ -133,21 +105,5 @@ mod tests {
         assert_eq!(PlaybackState::Stopped.to_string(), "stopped");
         assert_eq!(PlaybackState::Playing.to_string(), "playing");
         assert_eq!(PlaybackState::Paused.to_string(), "paused");
-    }
-
-    #[test]
-    fn repeat_mode_parse() {
-        assert_eq!(RepeatMode::parse("off"), Some(RepeatMode::Off));
-        assert_eq!(RepeatMode::parse("ALL"), Some(RepeatMode::All));
-        assert_eq!(RepeatMode::parse("one"), Some(RepeatMode::One));
-        assert_eq!(RepeatMode::parse("track"), Some(RepeatMode::One));
-        assert_eq!(RepeatMode::parse("invalid"), None);
-    }
-
-    #[test]
-    fn repeat_mode_display() {
-        assert_eq!(RepeatMode::Off.to_string(), "off");
-        assert_eq!(RepeatMode::All.to_string(), "all");
-        assert_eq!(RepeatMode::One.to_string(), "one");
     }
 }

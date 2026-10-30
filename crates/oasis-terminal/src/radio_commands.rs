@@ -4,10 +4,10 @@
 //! radio playback. Uses VFS-based IPC: reads status from `/var/radio/status`
 //! and writes requests to `/var/radio/request`.
 
-use oasis_audio::{RADIO_REQUEST_PATH, RADIO_STATUS_PATH};
 use oasis_types::error::OasisError;
 #[cfg(test)]
 use oasis_types::error::Result;
+use oasis_types::ipc::{RADIO_REQUEST_PATH, RADIO_STATUS_PATH};
 
 use crate::CommandOutput;
 define_command!(

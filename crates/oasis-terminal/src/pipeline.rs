@@ -424,6 +424,7 @@ pub(crate) fn output_to_text(output: &CommandOutput) -> String {
             }
             out
         },
+        CommandOutput::Status { output, .. } => output_to_text(output),
         _ => String::new(),
     }
 }

@@ -1436,10 +1436,8 @@ name = "oasis-terminal"
 version = "1.4.0"
 dependencies = [
  "log",
- "oasis-audio",
  "oasis-net",
  "oasis-platform",
- "oasis-skin",
  "oasis-types",
  "oasis-vfs",
  "proptest",

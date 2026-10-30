@@ -6,7 +6,7 @@ apps (Music Player, Internet Radio, video apps) and the per-target
 side; this crate's job is sequencing, metadata, and streaming back-pressure.
 
 The `AudioBackend` trait is defined in
-`oasis-types/src/backend/audio.rs`. Backends (SDL3 via `rodio`, WASM via
+`oasis-types/src/backend/audio.rs`. Backends (SDL3 on desktop/Pi, WASM via
 WebAudio, UE5 via the engine mixer, PSP via `sceAudio` + `sceAudiocodec`)
 implement it.
 
@@ -14,38 +14,56 @@ implement it.
 
 All in `crates/oasis-audio/src/`.
 
-- `AudioManager` (`manager.rs:19`) — top-level facade. Holds a `Playlist`,
-  current volume, and `PlaybackState`, and delegates actual playback to an
-  `AudioBackend`.
+- `AudioManager` (`manager.rs`) — the music playlist + playback-state
+  machine behind the `/var/audio/*` VFS IPC. It never touches an
+  `AudioBackend`: `apply(&MediaRequest)` updates the playlist/state and
+  returns a `MediaAction` (`PlayPath`, `Pause`, `Resume`, `Stop`,
+  `SetVolume`, `None`) for the host to carry out.
 - `Playlist` (`playlist.rs`) — ordered tracks plus shuffle/repeat state.
-- `TrackInfo` (`types.rs:8`) — title, artist, duration, VFS path, builder
+- `TrackInfo` (`types.rs`) — title, artist, duration, VFS path, builder
   setters.
-- `PlaybackState` (`types.rs:54`) — `Stopped`, `Playing`, `Paused`.
-- `RepeatMode` (`types.rs:75`) — `Off`, `All`, `One`. Case-insensitive parse.
+- `PlaybackState` (`types.rs`) — `Stopped` (default), `Playing`, `Paused`.
+- `RepeatMode` — `Off`, `All`, `One`; case-insensitive parse. Defined in
+  `oasis-types/src/ipc.rs` next to `MediaRequest` and re-exported here.
 - `RadioManager` (`radio/mod.rs`) plus `RadioSource` trait and three sources:
   `IcecastSource`, `ArchiveSource`, `VfsSource`.
+- `mixer` — the two PCM helpers the SFX engine uses (`mono_to_stereo_i16`,
+  `resample_nearest_i16`).
 
-## AudioManager API
+## Music IPC (`/var/audio/*`)
 
-| Method | Source | Notes |
+The paths and the request grammar live in `oasis_types::ipc` so producers
+and the consumer cannot drift apart:
+
+| Path | Direction | Contents |
 | --- | --- | --- |
-| `play()` / `pause()` / `resume()` / `stop()` | manager.rs:73–114 | Standard transport. |
-| `next()` / `prev()` | manager.rs:117–144 | Honour shuffle and repeat. |
-| `set_repeat(mode)` | manager.rs:147 | Off / All / One. |
-| `toggle_shuffle()` | manager.rs:154 | Reshuffles the playlist deterministically. |
-| `set_volume(0..=100)` | manager.rs:49 | Clamped at 100. |
-| `add_track_from_vfs(path)` | manager.rs:55 | Reads bytes via VFS, hands to `backend.load_track`. |
-| `process_request(cmd)` | manager.rs:191 | Handles VFS IPC requests under `/var/audio/`. |
-| `publish_status()` | manager.rs:183 | Writes `/var/audio/status` for headless drivers. |
+| `AUDIO_REQUEST_PATH` = `/var/audio/request` | in | One `MediaRequest` per line: `play_file <path>`, `play`, `pause`, `resume`, `stop`, `next`, `prev`, `vol <0-100>`, `repeat <off\|all\|one>`, `shuffle`. |
+| `AUDIO_STATUS_PATH` = `/var/audio/status` | out | `State`, `Volume`, `Track`, `Path`, `Position` (while not stopped), `Repeat`, `Shuffle`, `Playlist: N tracks` lines. |
+| `AUDIO_POSITION_PATH` = `/var/audio/position` | out | `<position_ms> <duration_ms> <path>` for the Music Player's progress bar. |
 
-The VFS IPC pattern (`/var/audio/request` in, `/var/audio/status` out) is what
-the `music` terminal command uses, and what the WASM backend listens on.
+Producers: the `music` terminal command (`oasis-terminal/src/audio_commands.rs`,
+which appends so several requests in one frame all arrive), the Music
+Player app (`play_file` / `stop`), and the MCP `play_media` tool.
+
+The only consumer is the **desktop shell** (`oasis-app/src/media_controller.rs`):
+each tick it drains every recognised line, feeds it to `state.media`
+(an `AudioManager`), performs the returned `MediaAction` on the backend
+(guarding the process-global `stop` / `pause` / `resume` while TV Guide
+audio is streaming), and republishes position and status. The playlist is
+every file played through `play_file`, in first-play order; `next` / `prev`
+honour repeat and shuffle; `next` / `prev` while stopped only move the
+selection. A track that finishes on its own does not auto-advance yet.
+
+Other hosts do not service this IPC: the WASM backend only watches
+`/var/radio/request` (for the radio overlay), and the UE5 FFI host has no
+media controller, so `music status` there prints
+"(audio subsystem not initialized)".
 
 ## Playlist semantics
 
-`Playlist` keeps a `Vec<TrackInfo>` in insertion order (`playlist.rs:13`).
+`Playlist` keeps a `Vec<TrackInfo>` in insertion order.
 
-Shuffle (`playlist.rs:186`) is a deterministic riffle/interleave shuffle: it
+Shuffle (`Playlist::rebuild_shuffle`) is a deterministic riffle/interleave shuffle: it
 splits the index list into two halves and interleaves the first half with the
 reversed second half. It is **not** Fisher-Yates and **not** cryptographically
 random — it just needs to be reproducible for tests. The shuffle order is
@@ -54,17 +72,17 @@ rebuilt whenever you toggle shuffle on or add a new track.
 Repeat modes:
 
 - `Off` — `advance()` returns false at the end, so the manager transitions to
-  `Stopped` (`playlist.rs:141`).
+  `Stopped`.
 - `All` — `advance()` wraps from the last index back to 0
-  (`playlist.rs:137`).
+  .
 - `One` — both `advance()` and `go_back()` return the same index, so the
-  current track loops on natural completion (`playlist.rs:119`, `154`).
+  same track is replayed on `next` / `prev`.
 
 ## Decoding pipeline
 
 There is **no MP3 decoder in this crate.** `AudioBackend::load_track(data)`
-takes raw bytes and the backend decides what to do with them — `rodio` on
-desktop, `sceAudiocodec` on PSP, WebAudio on WASM, the engine mixer on UE5.
+takes raw bytes and the backend decides what to do with them — the SDL3
+backend on desktop, `sceAudiocodec` on PSP, WebAudio on WASM, the engine mixer on UE5.
 
 The crate does ship two format helpers used by tests and a few backends:
 
@@ -200,8 +218,8 @@ match the output device.
 
 `oasis-audio` itself spawns no threads. All decoding happens synchronously on
 the caller's thread inside `backend.load_track()` and friends. The backends
-that need a worker (PSP feeds `sceAudio` from a dedicated thread; SDL3 lets
-`rodio` own its mixer thread) handle that internally and expose
+that need a worker (PSP feeds `sceAudio` from a dedicated thread; SDL3
+drains its audio stream on SDL's own audio thread) handle that internally and expose
 `streaming_can_accept` so the host knows when to stop pushing.
 
 ## Cargo features

@@ -5,20 +5,20 @@
 //! - [`core_commands`] -- filesystem and shell basics (ls, cd, cat, echo, etc.)
 //! - [`platform_commands`] -- platform service queries (power, clock, memory, usb)
 //! - [`remote_commands`] -- remote terminal (listen, remote, hosts)
-//! - Plus existing modules: network, audio, radio, skin, text, file, system,
+//! - Plus existing modules: network, audio, radio, text, file, system,
 //!   dev, fun, ui, security, doc.
-
-use oasis_types::error::Result;
-
-use crate::interpreter::{Command, CommandOutput, Environment};
+//!
+//! Shell builtins (`help`, `run`, `kill`, ...) are not registered here: the
+//! executor dispatches them from the `BUILTINS` table in `builtins.rs`.
 
 /// Register all built-in commands into a registry.
 ///
-/// This registers the core commands (fs, system, network) plus audio/network/skin
-/// command modules. Additional command modules (agent, plugin, script, transfer,
-/// update) are registered by `oasis-core` via `register_all_commands`.
+/// This registers the core commands (fs, system, network) plus the audio,
+/// radio and other command modules of this crate. Commands that need the
+/// UI / skin stack or other `oasis-core` subsystems (skin, agent, plugin,
+/// script, transfer, update, tv, browser) are registered by `oasis-core`
+/// (its `terminal::register_builtins` adds `skin` on top of this).
 pub fn register_builtins(reg: &mut crate::CommandRegistry) {
-    reg.register(Box::new(HelpCmd));
     // Core filesystem and shell commands.
     crate::register_core_commands(reg);
     // Platform service commands.
@@ -31,8 +31,6 @@ pub fn register_builtins(reg: &mut crate::CommandRegistry) {
     crate::register_audio_commands(reg);
     // Internet radio commands.
     crate::register_radio_commands(reg);
-    // Skin switching commands.
-    crate::register_skin_commands(reg);
     // Text processing commands.
     crate::register_text_commands(reg);
     // File utility commands.
@@ -51,36 +49,12 @@ pub fn register_builtins(reg: &mut crate::CommandRegistry) {
     crate::register_doc_commands(reg);
 }
 
-// ---------------------------------------------------------------------------
-// help
-// ---------------------------------------------------------------------------
-
-struct HelpCmd;
-impl Command for HelpCmd {
-    fn name(&self) -> &str {
-        "help"
-    }
-    fn description(&self) -> &str {
-        "List available commands"
-    }
-    fn usage(&self) -> &str {
-        "help"
-    }
-    fn execute(&self, _args: &[&str], _env: &mut Environment<'_>) -> Result<CommandOutput> {
-        // We can't access the registry from here, so we return a static list.
-        // The caller wraps this with the actual registry listing.
-        // Instead, produce a marker that the registry intercepts.
-        Ok(CommandOutput::Text(
-            "Use 'help' at the terminal for a list of commands.".to_string(),
-        ))
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::test_helpers::assert_text;
-    use crate::{CommandOutput, CommandRegistry, CommandSignal};
+    use crate::{CommandOutput, CommandRegistry, Environment};
+    use oasis_types::error::Result;
     use oasis_vfs::{MemoryVfs, Vfs};
 
     fn setup() -> (CommandRegistry, MemoryVfs) {
@@ -265,35 +239,6 @@ mod tests {
         )
         .unwrap();
         assert!(vfs.exists("/home/user/docs/notes2.txt"));
-    }
-
-    #[test]
-    fn session_skin_commands() {
-        use crate::register_skin_commands;
-        let mut reg = CommandRegistry::new();
-        register_builtins(&mut reg);
-        register_skin_commands(&mut reg);
-        let mut vfs = MemoryVfs::new();
-        let mut cwd = "/".to_string();
-
-        // List skins.
-        let s = assert_text!(exec(&reg, &mut vfs, &mut cwd, "skin list").unwrap());
-        assert!(s.contains("classic"));
-        assert!(s.contains("modern"));
-
-        // Switch to a skin.
-        let __out = exec(&reg, &mut vfs, &mut cwd, "skin modern").unwrap();
-        let CommandOutput::Signal(CommandSignal::SkinSwap { name }) = __out else {
-            panic!("expected SkinSwap, got {__out:?}");
-        };
-        assert_eq!(name, "modern");
-
-        // Switch to another skin.
-        let __out = exec(&reg, &mut vfs, &mut cwd, "skin classic").unwrap();
-        let CommandOutput::Signal(CommandSignal::SkinSwap { name }) = __out else {
-            panic!("expected SkinSwap, got {__out:?}");
-        };
-        assert_eq!(name, "classic");
     }
 
     #[test]

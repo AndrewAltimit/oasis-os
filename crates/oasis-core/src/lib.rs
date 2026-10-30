@@ -18,6 +18,7 @@ pub use oasis_types::backend;
 pub use oasis_types::config;
 pub use oasis_types::error;
 pub use oasis_types::input;
+pub use oasis_types::ipc;
 pub use oasis_types::tls;
 
 pub use oasis_types::bitmap_font;

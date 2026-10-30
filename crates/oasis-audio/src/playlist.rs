@@ -109,6 +109,25 @@ impl Playlist {
         }
     }
 
+    /// Index of the track with this VFS path.
+    pub fn position_of(&self, path: &str) -> Option<usize> {
+        self.tracks.iter().position(|t| t.path == path)
+    }
+
+    /// Turn shuffle on or off. Turning it on builds a fresh shuffle order
+    /// that continues from the current track.
+    pub fn set_shuffle(&mut self, on: bool) {
+        self.shuffle = on;
+        if on {
+            self.rebuild_shuffle();
+            if let Some(cur) = self.current
+                && let Some(pos) = self.shuffle_order.iter().position(|&i| i == cur)
+            {
+                self.shuffle_pos = pos;
+            }
+        }
+    }
+
     /// Advance to the next track in the playlist.
     /// Returns `true` if there is a next track. Respects repeat mode and shuffle.
     pub fn advance(&mut self) -> bool {
