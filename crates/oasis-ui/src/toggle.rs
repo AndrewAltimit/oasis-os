@@ -226,17 +226,17 @@ mod tests {
         assert!(t.progress < 1.0);
     }
 
-    // -- Draw / measure tests using MockBackend --
+    // -- Draw / measure tests using RecordingBackend --
 
     use crate::context::DrawContext;
-    use crate::test_utils::MockBackend;
+    use crate::test_utils::RecordingBackend;
     use crate::theme::Theme;
     use crate::widget::Widget;
 
     #[test]
     fn measure_returns_fixed_size() {
         let theme = Theme::dark();
-        let mut backend = MockBackend::new();
+        let mut backend = RecordingBackend::default();
         let ctx = DrawContext::new(&mut backend, &theme);
         let t = Toggle::new(false);
         let (w, h) = t.measure(&ctx, 200, 100);
@@ -247,32 +247,32 @@ mod tests {
     #[test]
     fn draw_off_state_no_panic() {
         let theme = Theme::dark();
-        let mut backend = MockBackend::new();
+        let mut backend = RecordingBackend::default();
         {
             let mut ctx = DrawContext::new(&mut backend, &theme);
             let t = Toggle::new(false);
             t.draw(&mut ctx, 0, 0, 28, 16).unwrap();
         }
         // Should complete without panic.
-        assert!(!backend.calls.is_empty());
+        assert!(!backend.commands().is_empty());
     }
 
     #[test]
     fn draw_on_state_no_panic() {
         let theme = Theme::dark();
-        let mut backend = MockBackend::new();
+        let mut backend = RecordingBackend::default();
         {
             let mut ctx = DrawContext::new(&mut backend, &theme);
             let t = Toggle::new(true);
             t.draw(&mut ctx, 0, 0, 28, 16).unwrap();
         }
-        assert!(!backend.calls.is_empty());
+        assert!(!backend.commands().is_empty());
     }
 
     #[test]
     fn draw_emits_fill_rects() {
         let theme = Theme::dark();
-        let mut backend = MockBackend::new();
+        let mut backend = RecordingBackend::default();
         {
             let mut ctx = DrawContext::new(&mut backend, &theme);
             let t = Toggle::new(true);
@@ -362,7 +362,7 @@ mod tests {
     #[test]
     fn draw_partial_progress() {
         let theme = Theme::dark();
-        let mut backend = MockBackend::new();
+        let mut backend = RecordingBackend::default();
         {
             let mut ctx = DrawContext::new(&mut backend, &theme);
             let mut t = Toggle::new(false);

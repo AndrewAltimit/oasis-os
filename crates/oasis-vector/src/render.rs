@@ -234,10 +234,7 @@ fn render_op(backend: &mut dyn SdiBackend, op: &VectorOp, group_alpha: u8) -> Re
 #[cfg(test)]
 mod tests {
     use super::*;
-    use oasis_types::backend::{
-        Color, SdiAlpha, SdiBatch, SdiClipTransform, SdiCore, SdiGradients, SdiShapes, SdiText,
-        SdiTextures, SdiVector, TextureId,
-    };
+    use oasis_types::backend::{Color, SdiClipTransform, SdiCore, SdiShapes, SdiVector, TextureId};
     use oasis_types::error::Result;
 
     /// Minimal mock backend that records calls.
@@ -378,12 +375,9 @@ mod tests {
             Ok(())
         }
     }
-    impl SdiGradients for MockBackend {}
-    impl SdiAlpha for MockBackend {}
-    impl SdiText for MockBackend {}
-    impl SdiTextures for MockBackend {}
-    impl SdiBatch for MockBackend {}
-    impl oasis_types::backend::SdiRenderTarget for MockBackend {}
+    // Records the high-level shape calls themselves (not their default
+    // decomposition), so it overrides three traits and defaults the rest.
+    oasis_types::impl_sdi_defaults!(MockBackend; except SdiShapes, SdiVector, SdiClipTransform);
 
     #[test]
     fn test_render_empty_scene() {

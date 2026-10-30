@@ -9,7 +9,7 @@ cargo-fuzz = true
 
 [dependencies]
 libfuzzer-sys = "0.4"
-oasis-video = { path = "..", default-features = false }
+oasis-video = { path = "..", default-features = false, features = ["demux-lite"] }
 
 # Prevent this from interfering with workspaces
 [workspace]

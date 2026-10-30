@@ -11,5 +11,8 @@ documentation = "https://docs.rs/oasis-ui"
 [dependencies]
 oasis-types = { workspace = true }
 
+[dev-dependencies]
+oasis-test-backend = { workspace = true }
+
 [lints]
 workspace = true

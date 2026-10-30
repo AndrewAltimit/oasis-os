@@ -6,6 +6,7 @@ OASIS_OS has three layers of automated tests:
 |-------|-------|-----------------|
 | Unit tests | `#[cfg(test)] mod tests` in every crate | Logic of one module in isolation |
 | Integration suites | `crates/*/tests/` | A crate's public API end to end |
+| **App end-to-end** | `crates/oasis-app-*/tests/e2e.rs` | One app driven through the `App` trait the way the shell hosts it (`AppHarness`) |
 | **Shell end-to-end** | `crates/oasis-app/tests/e2e_*.rs` | Full user flows through the real desktop shell |
 | **Backend parity** | `crates/oasis-backend-sdl/tests/backend_parity.rs`, `crates/oasis-app/tests/sdl_parity.rs` | SDL rendering differently from the software rasterizer the harness uses |
 
@@ -30,6 +31,67 @@ the slow e2e suites run in parallel instead of back to back. Its config,
 `.config/nextest.toml`, kills any single test still running after 5
 minutes. Because each test gets its own process, tests must not depend on
 process-global state set up by another test.
+
+## Test backends
+
+Code that draws through `&mut dyn SdiBackend` is tested against the
+doubles in `oasis-test-backend` (it depends only on `oasis-types`, so any
+crate can take it as a dev-dependency). Pick the narrowest one:
+
+| Backend | Use it when |
+|---------|-------------|
+| `NullBackend` | You need *a* backend but assert elsewhere (window-manager geometry, decoder state) or bench caller-side cost. Every draw is a no-op; `measure_text` uses the bitmap font (override with `set_measure_text_fn` / `with_measure_text_fn`); `viewport_size` is configurable (`NullBackend::new(w, h)`, `Default` = 480x272) |
+| `RecordingBackend` | You assert on what was drawn. It logs every primitive as a `DrawCommand` (the extension-trait defaults decompose first, so a rounded rect is several `FillRect`s), keeps real clip/translate stacks and render-target state (bind starts fresh, unbind restores; ADR-003), and has query helpers: `fill_rect_count`, `fill_colors`, `draw_text_count`, `texts`, `text_positions`, `text_colors`, `has_text` |
+| `MockSdiCore` | You assert on raw `SdiCore` calls as `(method, params)` strings |
+| `ClipAuditBackend` | Code draws into a host-provided region (an app in a window) and must never put visible pixels outside it |
+| `conformance` | Not a backend: the shared pixel scenarios real backends run (see [Backend parity](#backend-parity)) |
+
+Write a custom recorder only when the doubles cannot express the check
+(e.g. `oasis-vector` logs the high-level shape calls themselves, the TV
+e2e `FrameSink` hashes uploaded textures). Implement `SdiCore` and let
+`oasis_types::impl_sdi_defaults!` write the nine extension impls:
+
+```rust,ignore
+struct MyRecorder { /* ... */ }
+impl SdiCore for MyRecorder { /* the 13 required methods */ }
+// All nine extension traits with their defaults ...
+oasis_types::impl_sdi_defaults!(MyRecorder);
+// ... or all but the ones you override yourself.
+oasis_types::impl_sdi_defaults!(MyRecorder; except SdiShapes, SdiVector);
+```
+
+## The app e2e harness (`AppHarness`)
+
+`oasis_app_core::testing` (feature `testing`, enabled from an app crate's
+dev-dependencies) hosts one `App` the way the desktop shell does, without
+the shell:
+
+- keyboard input goes `handle_key` -> gamepad twin -> `TextInput`
+  (honouring `accepts_text`); `key`, `key_mods`, `ctrl`, `type_text`,
+  `press(Button)`;
+- clicks and wheel notches are content-local and preceded by
+  `App::layout`; `click_text` / `click_text_last` /
+  `click_text_containing` click the drawn label;
+- `frame` / `frames` pump `tick`, `apply_vfs_ops` and the close request;
+  queued VFS IPC requests are collected (`requests`, `take_request`);
+- `draw` renders into a `ClipAuditBackend` and fails the test if anything
+  visible escapes the window's content rectangle; `screen_text` returns
+  the drawn text, and `draw_all_sizes_and_themes` sweeps `SIZES` x `THEMES`;
+- `fuzz_app(make, vfs, seed, events)` is the generic property test:
+  seeded random events at random sizes and themes, asserting no panic and
+  no clip escape.
+
+```rust,ignore
+let mut h = AppHarness::new(Box::new(CalculatorApp::new("/apps/calc")));
+h.click_text("7");
+h.type_text("+3");
+h.key(Key::Enter);
+assert!(h.screen_text().contains("10"));
+```
+
+Every app crate has a `tests/e2e.rs` built on it. Flows that cross the
+app boundary (window manager, taskbar, audio, host key handling) belong
+in the shell harness below.
 
 ## The shell e2e harness
 

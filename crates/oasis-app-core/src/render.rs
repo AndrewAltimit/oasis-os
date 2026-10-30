@@ -446,65 +446,7 @@ pub fn hide_app_sdi(sdi: &mut SdiRegistry) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use oasis_types::backend::{Color, SdiCore, TextureId};
-    use oasis_types::error::Result;
-
-    /// Backend that records every `draw_text` call as `(text, x, y)`.
-    #[derive(Default)]
-    struct TextRecorder(Vec<(String, i32, i32)>);
-
-    impl SdiCore for TextRecorder {
-        fn init(&mut self, _w: u32, _h: u32) -> Result<()> {
-            Ok(())
-        }
-        fn clear(&mut self, _color: Color) -> Result<()> {
-            Ok(())
-        }
-        fn blit(&mut self, _t: TextureId, _x: i32, _y: i32, _w: u32, _h: u32) -> Result<()> {
-            Ok(())
-        }
-        fn fill_rect(&mut self, _x: i32, _y: i32, _w: u32, _h: u32, _c: Color) -> Result<()> {
-            Ok(())
-        }
-        fn draw_text(&mut self, t: &str, x: i32, y: i32, _fs: u16, _c: Color) -> Result<()> {
-            self.0.push((t.to_string(), x, y));
-            Ok(())
-        }
-        fn swap_buffers(&mut self) -> Result<()> {
-            Ok(())
-        }
-        fn load_texture(&mut self, _w: u32, _h: u32, _d: &[u8]) -> Result<TextureId> {
-            Ok(TextureId(0))
-        }
-        fn destroy_texture(&mut self, _t: TextureId) -> Result<()> {
-            Ok(())
-        }
-        fn set_clip_rect(&mut self, _x: i32, _y: i32, _w: u32, _h: u32) -> Result<()> {
-            Ok(())
-        }
-        fn reset_clip_rect(&mut self) -> Result<()> {
-            Ok(())
-        }
-        fn measure_text(&self, _t: &str, _fs: u16) -> u32 {
-            0
-        }
-        fn read_pixels(&self, _x: i32, _y: i32, _w: u32, _h: u32) -> Result<Vec<u8>> {
-            Ok(vec![])
-        }
-        fn shutdown(&mut self) -> Result<()> {
-            Ok(())
-        }
-    }
-
-    impl oasis_types::backend::SdiShapes for TextRecorder {}
-    impl oasis_types::backend::SdiGradients for TextRecorder {}
-    impl oasis_types::backend::SdiAlpha for TextRecorder {}
-    impl oasis_types::backend::SdiText for TextRecorder {}
-    impl oasis_types::backend::SdiTextures for TextRecorder {}
-    impl oasis_types::backend::SdiClipTransform for TextRecorder {}
-    impl oasis_types::backend::SdiVector for TextRecorder {}
-    impl oasis_types::backend::SdiBatch for TextRecorder {}
-    impl oasis_types::backend::SdiRenderTarget for TextRecorder {}
+    use oasis_test_backend::RecordingBackend;
 
     #[test]
     fn windowed_line_at_inverts_windowed_line_origin() {
@@ -583,16 +525,16 @@ mod tests {
         let mut content = ContentState::new("Paint", "/apps/paint");
         content.lines = vec!["first".into(), "second".into()];
 
-        let mut rec = TextRecorder::default();
+        let mut rec = RecordingBackend::default();
         let at = ActiveTheme::default();
         draw_content_windowed(&content, 0, 0, 300, 200, &mut rec, &at).unwrap();
 
+        let texts = rec.text_positions();
         assert!(
-            !rec.0.iter().any(|(t, _, _)| t.contains("Paint")),
-            "windowed content must not repeat the app title: {:?}",
-            rec.0
+            !rec.has_text("Paint"),
+            "windowed content must not repeat the app title: {texts:?}"
         );
-        let first = rec.0.first().expect("content lines drawn");
+        let first = texts.first().expect("content lines drawn");
         assert!(first.0.contains("first"));
         assert_eq!(first.2, WINDOWED_TOP_PAD as i32);
     }
@@ -605,17 +547,17 @@ mod tests {
         content.viewing_file = Some("/notes.txt".into());
         content.lines = vec!["hello".into()];
 
-        let mut rec = TextRecorder::default();
+        let mut rec = RecordingBackend::default();
         let at = ActiveTheme::default();
         draw_content_windowed(&content, 0, 0, 300, 200, &mut rec, &at).unwrap();
 
-        assert!(rec.0.iter().any(|(t, _, _)| t.contains("[/notes.txt]")));
-        assert!(!rec.0.iter().any(|(t, _, _)| t.contains("File Manager")));
+        assert!(rec.has_text("[/notes.txt]"));
+        assert!(!rec.has_text("File Manager"));
         // Content starts below the header row.
         let line = rec
-            .0
-            .iter()
-            .find(|(t, _, _)| t.contains("hello"))
+            .text_positions()
+            .into_iter()
+            .find(|t| t.0.contains("hello"))
             .expect("content line drawn");
         assert_eq!(line.2, at.app.title_bar_height as i32);
     }

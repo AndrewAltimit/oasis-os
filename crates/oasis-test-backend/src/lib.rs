@@ -4,6 +4,9 @@
 //! and other code that depends on [`SdiCore`](oasis_types::backend::SdiCore)/[`SdiBackend`](oasis_types::backend::SdiBackend) without a real
 //! graphics backend.
 //!
+//! [`NullBackend`] draws nothing and only measures text, for tests and
+//! benches that need a `&mut dyn SdiBackend` but assert elsewhere.
+//!
 //! Also provides [`RecordingBackend`] which extends `MockSdiCore` with full
 //! [`DrawCommand`] history recording and clip/translate stack support, useful
 //! for verifying that `SdiBackend` default method implementations produce the
@@ -19,11 +22,13 @@ mod audit;
 mod command;
 pub mod conformance;
 mod mock;
+mod null;
 mod recording;
 
 pub use audit::{ClipAuditBackend, ClipViolation, DrawnRect, DrawnText};
 pub use command::DrawCommand;
 pub use mock::MockSdiCore;
+pub use null::NullBackend;
 pub use recording::RecordingBackend;
 
 // Re-export commonly used types so test code does not need to depend on
@@ -426,5 +431,103 @@ mod tests {
 
         // Intersection: (50,50) to min(100,150) x min(100,150) = (50,50,50,50)
         assert_eq!(rec.current_clip_rect(), Some((50, 50, 50, 50)));
+    }
+
+    // -----------------------------------------------------------------------
+    // RecordingBackend render-target state contract (ADR-003)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn recording_bind_starts_fresh_and_unbind_restores() {
+        use oasis_types::backend::SdiRenderTarget;
+        let mut rec = RecordingBackend::new(480, 272);
+        rec.push_translate(10, 10).expect("translate");
+        rec.push_clip_rect(0, 0, 30, 30).expect("clip");
+        let rt = rec.create_render_target(40, 20).expect("create");
+        rec.bind_render_target(rt).expect("bind");
+        assert_eq!(rec.current_translate(), (0, 0));
+        assert_eq!(rec.current_clip_rect(), None);
+        assert_eq!(rec.viewport_size(), (40, 20));
+        // State changed inside the target does not leak out.
+        rec.push_translate(3, 3).expect("inner translate");
+        rec.push_clip_rect(1, 1, 5, 5).expect("inner clip");
+        rec.unbind_render_target().expect("unbind");
+        assert_eq!(rec.current_translate(), (10, 10));
+        assert_eq!(rec.current_clip_rect(), Some((10, 10, 30, 30)));
+        assert_eq!(rec.viewport_size(), (480, 272));
+        rec.pop_clip_rect().expect("pop parent clip");
+        assert_eq!(rec.current_clip_rect(), None);
+    }
+
+    #[test]
+    fn recording_clear_inside_target_covers_target() {
+        use oasis_types::backend::SdiRenderTarget;
+        let mut rec = RecordingBackend::default();
+        let rt = rec.create_render_target(16, 8).expect("create");
+        rec.bind_render_target(rt).expect("bind");
+        rec.clear(Color::TRANSPARENT).expect("clear");
+        rec.unbind_render_target().expect("unbind");
+        assert!(rec.commands().contains(&DrawCommand::FillRect {
+            x: 0,
+            y: 0,
+            w: 16,
+            h: 8,
+            color: Color::TRANSPARENT,
+        }));
+    }
+
+    #[test]
+    fn recording_runs_render_target_contract_scenario() {
+        // The scenario's draw function itself errors when a bound target
+        // inherits the parent's clip/translate or misreports its size.
+        let s = conformance::SCENARIOS
+            .iter()
+            .find(|s| s.name == "render_target_bind_resets_and_restores_state")
+            .expect("scenario exists");
+        let mut rec = RecordingBackend::new(conformance::CANVAS_W, conformance::CANVAS_H);
+        (s.draw)(&mut rec).expect("contract holds on RecordingBackend");
+    }
+
+    #[test]
+    fn recording_query_helpers() {
+        let mut rec = RecordingBackend::default();
+        rec.fill_rect(0, 0, 1, 1, Color::rgb(1, 2, 3)).ok();
+        rec.draw_text("hello", 4, 5, 8, Color::WHITE).ok();
+        rec.draw_text("world", 6, 7, 12, Color::BLACK).ok();
+        assert_eq!(rec.fill_rect_count(), 1);
+        assert_eq!(rec.fill_colors(), [Color::rgb(1, 2, 3)]);
+        assert_eq!(rec.draw_text_count(), 2);
+        assert_eq!(rec.texts(), ["hello", "world"]);
+        assert_eq!(rec.text_positions()[1], ("world", 6, 7, 12));
+        assert_eq!(rec.text_colors(), [Color::WHITE, Color::BLACK]);
+        assert!(rec.has_text("orl"));
+        assert!(!rec.has_text("xyz"));
+    }
+
+    // -----------------------------------------------------------------------
+    // NullBackend
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn null_backend_draws_nothing_and_measures() {
+        use oasis_types::backend::SdiText;
+        let mut null = NullBackend::new(800, 600);
+        assert_eq!(null.viewport_size(), (800, 600));
+        null.fill_rounded_rect(0, 0, 10, 10, 3, Color::WHITE)
+            .expect("rounded");
+        null.draw_text_wrapped("a b c", 0, 0, 8, Color::WHITE, 20, 0)
+            .ok();
+        assert_eq!(
+            null.measure_text("hello", 12),
+            oasis_types::backend::bitmap_measure_text("hello", 12)
+        );
+        let a = null.load_texture(1, 1, &[0; 4]).expect("tex");
+        let b = null.load_texture(1, 1, &[0; 4]).expect("tex");
+        assert_ne!(a, b);
+        assert_eq!(null.read_pixels(0, 0, 2, 3).expect("read").len(), 24);
+
+        let null = NullBackend::default().with_measure_text_fn(|_, _| 7);
+        assert_eq!(null.measure_text("anything", 16), 7);
+        assert_eq!(null.viewport_size(), (480, 272));
     }
 }

@@ -6,7 +6,8 @@
 
 use oasis_skin::ActiveTheme;
 use oasis_types::backend::{Color, SdiBackend};
-use oasis_ui::button::{Button as UiButton, ButtonState, ButtonStyle};
+use oasis_ui::WidgetState;
+use oasis_ui::button::{Button as UiButton, ButtonStyle};
 use oasis_ui::{DrawContext, Widget};
 
 use crate::keypad::{CalcLayout, HISTORY_ROW_H, KEYS, KeyGroup, Rect};
@@ -182,7 +183,7 @@ impl CalculatorApp {
             let mut button = UiButton::new(def.key.label());
             button.style = style_for(def.key.group());
             if flashed == Some(i) {
-                button.state = ButtonState::Pressed;
+                button.state = WidgetState::Pressed;
             }
             button.focused = self.cursor_visible && self.cursor == i;
             button.draw(&mut ctx, r.x, r.y, r.w, r.h)?;

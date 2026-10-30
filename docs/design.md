@@ -128,7 +128,7 @@ oasis-os/
 
 `oasis-app` is the desktop shell: a library (`oasis_app::Shell`, plus the headless `harness` used by the e2e suites) and four binaries -- `oasis-app` (the shell), `oasis-screenshot` (per-skin captures), `screenshot-tests` (the visual regression run in CI) and `e2e-tests` (a TV Guide streaming pass/fail runner, not run in CI).
 
-The rust-psp SDK is an external dependency hosted at [github.com/AndrewAltimit/rust-psp](https://github.com/AndrewAltimit/rust-psp) (MIT), a modernized fork with edition 2024, safety fixes and kernel mode support, referenced as a git dependency pinned to one revision across every PSP crate (CI checks the pins). The PSP backend is excluded from the workspace because it requires the `mipsel-sony-psp` target and is built separately with `cargo psp`; it depends on `oasis-core` (without default features), `oasis-browser` (`psp` + `javascript`), `oasis-js` (`psp-bindgen`), `oasis-video` (`no-std-demux`) and `oasis-shader`.
+The rust-psp SDK is an external dependency hosted at [github.com/AndrewAltimit/rust-psp](https://github.com/AndrewAltimit/rust-psp) (MIT), a modernized fork with edition 2024, safety fixes and kernel mode support, referenced as a git dependency pinned to one revision across every PSP crate (CI checks the pins). The PSP backend is excluded from the workspace because it requires the `mipsel-sony-psp` target and is built separately with `cargo psp`; it depends on `oasis-core` (without default features), `oasis-browser` (`psp` + `javascript`), `oasis-js` (`psp-bindgen`), `oasis-video` (`demux-lite`) and `oasis-shader`.
 
 **Planned crates (not yet created):**
 

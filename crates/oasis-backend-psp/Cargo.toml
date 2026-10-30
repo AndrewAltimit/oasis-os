@@ -63,7 +63,7 @@ oasis-core = { path = "../oasis-core", default-features = false }
 # `src/app_states.rs`, which stores `widget: Option<BrowserWidget>`.
 oasis-browser = { path = "../oasis-browser", default-features = false, features = ["psp", "javascript"] }
 oasis-js = { path = "../oasis-js", features = ["psp-bindgen"] }
-oasis-video = { path = "../oasis-video", default-features = false, features = ["no-std-demux"] }
+oasis-video = { path = "../oasis-video", default-features = false, features = ["demux-lite"] }
 oasis-shader = { path = "../oasis-shader", default-features = false }
 libm = "0.2"
 

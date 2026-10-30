@@ -1,7 +1,7 @@
 //! DatePicker widget: calendar grid with month/year navigation.
 
 use crate::context::DrawContext;
-use crate::layout;
+use crate::layout::{self, HAlign};
 use crate::widget::Widget;
 use oasis_types::error::Result;
 
@@ -161,10 +161,13 @@ impl Widget for DatePicker {
 
         // Header: "< January 2025 >"
         let header = self.header_text();
-        let header_w = ctx.backend.measure_text(&header, fs);
-        let hx = x + layout::center(w, header_w);
-        let hy = y + layout::center(HEADER_HEIGHT, text_h);
-        ctx.backend.draw_text(&header, hx, hy, fs, text_color)?;
+        ctx.text_in(
+            (x, y, w, HEADER_HEIGHT),
+            &header,
+            fs,
+            text_color,
+            HAlign::Center,
+        )?;
 
         // Navigation arrows.
         let arrow_y = y + layout::center(HEADER_HEIGHT, text_h);
@@ -177,9 +180,13 @@ impl Widget for DatePicker {
         let dow_y = y + HEADER_HEIGHT as i32;
         for (i, label) in DOW_LABELS.iter().enumerate() {
             let dx = x + (i as u32 * CELL_SIZE) as i32;
-            let tx = dx + layout::center(CELL_SIZE, ctx.backend.measure_text(label, fs));
-            let ty = dow_y + layout::center(DOW_HEIGHT, text_h);
-            ctx.backend.draw_text(label, tx, ty, fs, dim_color)?;
+            ctx.text_in(
+                (dx, dow_y, CELL_SIZE, DOW_HEIGHT),
+                label,
+                fs,
+                dim_color,
+                HAlign::Center,
+            )?;
         }
 
         // Separator.
@@ -206,14 +213,18 @@ impl Widget for DatePicker {
             }
 
             let label = format!("{day}");
-            let tx = cx + layout::center(CELL_SIZE, ctx.backend.measure_text(&label, fs));
-            let ty = cy + layout::center(CELL_SIZE, text_h);
             let fg = if is_selected {
                 ctx.theme.background
             } else {
                 text_color
             };
-            ctx.backend.draw_text(&label, tx, ty, fs, fg)?;
+            ctx.text_in(
+                (cx, cy, CELL_SIZE, CELL_SIZE),
+                &label,
+                fs,
+                fg,
+                HAlign::Center,
+            )?;
         }
 
         Ok(())
@@ -301,14 +312,14 @@ mod tests {
     }
 
     use crate::context::DrawContext;
-    use crate::test_utils::MockBackend;
+    use crate::test_utils::RecordingBackend;
     use crate::theme::Theme;
     use crate::widget::Widget;
 
     #[test]
     fn draw_shows_header_and_days() {
         let theme = Theme::dark();
-        let mut backend = MockBackend::new();
+        let mut backend = RecordingBackend::default();
         {
             let mut ctx = DrawContext::new(&mut backend, &theme);
             let dp = DatePicker::new(2025, 3);

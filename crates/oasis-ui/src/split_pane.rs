@@ -234,7 +234,7 @@ impl Widget for SplitPane {
 mod tests {
     use super::*;
     use crate::context::DrawContext;
-    use crate::test_utils::{MockBackend, test_draw_all_themes};
+    use crate::test_utils::{RecordingBackend, test_draw_all_themes};
     use crate::theme::Theme;
     use crate::widget::Widget;
 
@@ -426,7 +426,7 @@ mod tests {
     #[test]
     fn measure_returns_available_size() {
         let theme = Theme::dark();
-        let mut backend = MockBackend::new();
+        let mut backend = RecordingBackend::default();
         let ctx = DrawContext::new(&mut backend, &theme);
         let sp = SplitPane::new(SplitOrientation::Horizontal);
         let (w, h) = sp.measure(&ctx, 400, 300);
@@ -437,7 +437,7 @@ mod tests {
     #[test]
     fn draw_emits_fill_rect() {
         let theme = Theme::dark();
-        let mut backend = MockBackend::new();
+        let mut backend = RecordingBackend::default();
         {
             let mut ctx = DrawContext::new(&mut backend, &theme);
             let sp = SplitPane::new(SplitOrientation::Horizontal);
@@ -449,7 +449,7 @@ mod tests {
     #[test]
     fn draw_hovered_uses_border_strong() {
         let theme = Theme::dark();
-        let mut backend = MockBackend::new();
+        let mut backend = RecordingBackend::default();
         {
             let mut ctx = DrawContext::new(&mut backend, &theme);
             let mut sp = SplitPane::new(SplitOrientation::Horizontal);
@@ -457,8 +457,8 @@ mod tests {
             sp.draw(&mut ctx, 0, 0, 200, 100).unwrap();
         }
         // Verify the fill_rect used border_strong color.
-        let fill = backend.calls.iter().find_map(|c| {
-            if let crate::test_utils::DrawCall::FillRect { color, .. } = c {
+        let fill = backend.commands().iter().find_map(|c| {
+            if let oasis_test_backend::DrawCommand::FillRect { color, .. } = c {
                 Some(*color)
             } else {
                 None

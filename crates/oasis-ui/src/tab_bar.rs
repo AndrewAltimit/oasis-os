@@ -1,7 +1,7 @@
 //! TabBar widget.
 
 use crate::context::DrawContext;
-use crate::layout;
+use crate::layout::HAlign;
 use crate::states::{WidgetState, WidgetStateColors};
 use crate::widget::Widget;
 use oasis_types::error::Result;
@@ -96,7 +96,6 @@ impl Widget for TabBar {
         let tab_w = w / n;
         let remainder = w % n;
         let fs = ctx.theme.font_size_md;
-        let text_h = ctx.backend.measure_text_height(fs);
 
         for (i, tab) in self.tabs.iter().enumerate() {
             // Distribute remainder pixels across the first N tabs.
@@ -163,9 +162,6 @@ impl Widget for TabBar {
                 )?;
             }
 
-            let text_w = ctx.backend.measure_text(tab, fs);
-            let label_x = tx + layout::center(this_tab_w, text_w);
-            let label_y = y + layout::center(h, text_h);
             let color = if active {
                 match self.style {
                     TabStyle::Underline => ctx.theme.accent,
@@ -176,7 +172,7 @@ impl Widget for TabBar {
             } else {
                 ctx.theme.text_secondary
             };
-            ctx.backend.draw_text(tab, label_x, label_y, fs, color)?;
+            ctx.text_in((tx, y, this_tab_w, h), tab, fs, color, HAlign::Center)?;
         }
 
         // Bottom border for underline style.
@@ -233,17 +229,17 @@ mod tests {
         assert_eq!(tb.active, 0);
     }
 
-    // -- Draw / measure tests using MockBackend --
+    // -- Draw / measure tests using RecordingBackend --
 
     use crate::context::DrawContext;
-    use crate::test_utils::MockBackend;
+    use crate::test_utils::RecordingBackend;
     use crate::theme::Theme;
     use crate::widget::Widget;
 
     #[test]
     fn measure_spans_all_tabs() {
         let theme = Theme::dark();
-        let mut backend = MockBackend::new();
+        let mut backend = RecordingBackend::default();
         let ctx = DrawContext::new(&mut backend, &theme);
         let tb = TabBar::new(vec!["A".into(), "B".into(), "C".into()]);
         let (w, h) = tb.measure(&ctx, 300, 100);
@@ -254,7 +250,7 @@ mod tests {
     #[test]
     fn draw_active_tab_highlight() {
         let theme = Theme::dark();
-        let mut backend = MockBackend::new();
+        let mut backend = RecordingBackend::default();
         {
             let mut ctx = DrawContext::new(&mut backend, &theme);
             let mut tb = TabBar::new(vec!["Home".into(), "Settings".into()]);
@@ -270,7 +266,7 @@ mod tests {
     #[test]
     fn draw_underline_style() {
         let theme = Theme::dark();
-        let mut backend = MockBackend::new();
+        let mut backend = RecordingBackend::default();
         {
             let mut ctx = DrawContext::new(&mut backend, &theme);
             let mut tb = TabBar::new(vec!["A".into(), "B".into()]);
@@ -284,7 +280,7 @@ mod tests {
     #[test]
     fn draw_filled_style() {
         let theme = Theme::dark();
-        let mut backend = MockBackend::new();
+        let mut backend = RecordingBackend::default();
         {
             let mut ctx = DrawContext::new(&mut backend, &theme);
             let mut tb = TabBar::new(vec!["A".into(), "B".into()]);
@@ -298,7 +294,7 @@ mod tests {
     #[test]
     fn draw_pill_style() {
         let theme = Theme::dark();
-        let mut backend = MockBackend::new();
+        let mut backend = RecordingBackend::default();
         {
             let mut ctx = DrawContext::new(&mut backend, &theme);
             let mut tb = TabBar::new(vec!["A".into(), "B".into()]);
@@ -312,7 +308,7 @@ mod tests {
     #[test]
     fn draw_single_tab_no_panic() {
         let theme = Theme::dark();
-        let mut backend = MockBackend::new();
+        let mut backend = RecordingBackend::default();
         {
             let mut ctx = DrawContext::new(&mut backend, &theme);
             let tb = TabBar::new(vec!["Only".into()]);
@@ -324,7 +320,7 @@ mod tests {
     #[test]
     fn draw_empty_tabs_no_panic() {
         let theme = Theme::dark();
-        let mut backend = MockBackend::new();
+        let mut backend = RecordingBackend::default();
         {
             let mut ctx = DrawContext::new(&mut backend, &theme);
             let tb = TabBar::new(Vec::new());
@@ -338,7 +334,7 @@ mod tests {
     #[test]
     fn draw_tab_labels() {
         let theme = Theme::dark();
-        let mut backend = MockBackend::new();
+        let mut backend = RecordingBackend::default();
         {
             let mut ctx = DrawContext::new(&mut backend, &theme);
             let tb = TabBar::new(vec!["Home".into(), "Settings".into(), "About".into()]);

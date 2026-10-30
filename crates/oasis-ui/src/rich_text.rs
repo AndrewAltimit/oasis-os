@@ -185,14 +185,14 @@ mod tests {
     }
 
     use crate::context::DrawContext;
-    use crate::test_utils::MockBackend;
+    use crate::test_utils::RecordingBackend;
     use crate::theme::Theme;
     use crate::widget::Widget;
 
     #[test]
     fn draw_shows_all_spans() {
         let theme = Theme::dark();
-        let mut backend = MockBackend::new();
+        let mut backend = RecordingBackend::default();
         {
             let mut ctx = DrawContext::new(&mut backend, &theme);
             let mut rt = RichText::new();
@@ -206,7 +206,7 @@ mod tests {
     #[test]
     fn draw_empty_no_panic() {
         let theme = Theme::dark();
-        let mut backend = MockBackend::new();
+        let mut backend = RecordingBackend::default();
         {
             let mut ctx = DrawContext::new(&mut backend, &theme);
             let rt = RichText::new();
@@ -218,7 +218,7 @@ mod tests {
     #[test]
     fn measure_empty_zero() {
         let theme = Theme::dark();
-        let mut backend = MockBackend::new();
+        let mut backend = RecordingBackend::default();
         let ctx = DrawContext::new(&mut backend, &theme);
         let rt = RichText::new();
         let (_, h) = rt.measure(&ctx, 200, 200);

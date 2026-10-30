@@ -171,64 +171,14 @@ mod tests {
     use super::*;
     use crate::manager::WindowManager;
     use crate::window::{WindowConfig, WindowType};
-    use oasis_types::backend::{Color, SdiCore, TextureId};
+    use oasis_test_backend::RecordingBackend;
+    use oasis_types::backend::Color;
 
-    /// Backend that records the red channel of every `fill_rect`, which the
-    /// tests use as a per-object tag.
-    struct TagRecorder(Vec<u8>);
-
-    impl SdiCore for TagRecorder {
-        fn init(&mut self, _w: u32, _h: u32) -> Result<()> {
-            Ok(())
-        }
-        fn clear(&mut self, _color: Color) -> Result<()> {
-            Ok(())
-        }
-        fn blit(&mut self, _t: TextureId, _x: i32, _y: i32, _w: u32, _h: u32) -> Result<()> {
-            Ok(())
-        }
-        fn fill_rect(&mut self, _x: i32, _y: i32, _w: u32, _h: u32, color: Color) -> Result<()> {
-            self.0.push(color.r);
-            Ok(())
-        }
-        fn draw_text(&mut self, _t: &str, _x: i32, _y: i32, _fs: u16, _c: Color) -> Result<()> {
-            Ok(())
-        }
-        fn swap_buffers(&mut self) -> Result<()> {
-            Ok(())
-        }
-        fn load_texture(&mut self, _w: u32, _h: u32, _d: &[u8]) -> Result<TextureId> {
-            Ok(TextureId(0))
-        }
-        fn destroy_texture(&mut self, _t: TextureId) -> Result<()> {
-            Ok(())
-        }
-        fn set_clip_rect(&mut self, _x: i32, _y: i32, _w: u32, _h: u32) -> Result<()> {
-            Ok(())
-        }
-        fn reset_clip_rect(&mut self) -> Result<()> {
-            Ok(())
-        }
-        fn measure_text(&self, _t: &str, _fs: u16) -> u32 {
-            0
-        }
-        fn read_pixels(&self, _x: i32, _y: i32, _w: u32, _h: u32) -> Result<Vec<u8>> {
-            Ok(vec![])
-        }
-        fn shutdown(&mut self) -> Result<()> {
-            Ok(())
-        }
+    /// The red channel of every recorded `fill_rect`, which the tests use
+    /// as a per-object tag.
+    fn tags(backend: &RecordingBackend) -> Vec<u8> {
+        backend.fill_colors().iter().map(|c| c.r).collect()
     }
-
-    impl oasis_types::backend::SdiShapes for TagRecorder {}
-    impl oasis_types::backend::SdiGradients for TagRecorder {}
-    impl oasis_types::backend::SdiAlpha for TagRecorder {}
-    impl oasis_types::backend::SdiText for TagRecorder {}
-    impl oasis_types::backend::SdiTextures for TagRecorder {}
-    impl oasis_types::backend::SdiClipTransform for TagRecorder {}
-    impl oasis_types::backend::SdiVector for TagRecorder {}
-    impl oasis_types::backend::SdiBatch for TagRecorder {}
-    impl oasis_types::backend::SdiRenderTarget for TagRecorder {}
 
     /// Tag an SDI object so the recorder can identify it in the draw stream.
     fn tag(sdi: &mut SdiRegistry, name: &str, tag: u8, overlay: bool) {
@@ -264,11 +214,11 @@ mod tests {
         tag(&mut sdi, "w1.stray", 2, false);
         tag(&mut sdi, "cursor", 3, true);
 
-        let mut backend = TagRecorder(Vec::new());
+        let mut backend = RecordingBackend::default();
         wm.draw_with_clips(&mut sdi, &mut backend, |_, _, _, _, _, _| Ok(()))
             .unwrap();
 
-        let tags = &backend.0;
+        let tags = tags(&backend);
         assert!(tags.contains(&1), "wallpaper must draw in the base pass");
         assert!(!tags.contains(&2), "window-owned objects must be excluded");
         // Cursor is an overlay: it draws after the window's chrome.
@@ -285,12 +235,12 @@ mod tests {
         tag(&mut sdi, "w1x", 7, false);
         tag(&mut sdi, "w10.frame", 8, false);
 
-        let mut backend = TagRecorder(Vec::new());
+        let mut backend = RecordingBackend::default();
         wm.draw_with_clips(&mut sdi, &mut backend, |_, _, _, _, _, _| Ok(()))
             .unwrap();
 
-        assert!(backend.0.contains(&7));
-        assert!(backend.0.contains(&8));
+        assert!(tags(&backend).contains(&7));
+        assert!(tags(&backend).contains(&8));
     }
 
     #[test]
@@ -305,15 +255,15 @@ mod tests {
         };
 
         let (mut sdi_a, wm_a) = build();
-        let mut a = TagRecorder(Vec::new());
+        let mut a = RecordingBackend::default();
         wm_a.draw_with_clips(&mut sdi_a, &mut a, |_, _, _, _, _, _| Ok(()))
             .unwrap();
 
         let (mut sdi_b, wm_b) = build();
-        let mut b = TagRecorder(Vec::new());
+        let mut b = RecordingBackend::default();
         wm_b.draw_with_clips_noalloc(&mut sdi_b, &mut b, |_, _, _, _, _, _| Ok(()))
             .unwrap();
 
-        assert_eq!(a.0, b.0);
+        assert_eq!(tags(&a), tags(&b));
     }
 }

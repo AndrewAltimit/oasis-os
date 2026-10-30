@@ -222,100 +222,8 @@ impl WindowManager {
 mod tests {
     use super::*;
     use crate::window::{WindowConfig, WindowState, WindowType};
-    use oasis_types::backend::{Color, SdiCore, TextureId};
-
-    /// Minimal no-op backend for tests that require `&mut dyn SdiBackend`.
-    struct NullBackend;
-
-    impl SdiCore for NullBackend {
-        fn init(&mut self, _w: u32, _h: u32) -> oasis_types::error::Result<()> {
-            Ok(())
-        }
-        fn clear(&mut self, _color: Color) -> oasis_types::error::Result<()> {
-            Ok(())
-        }
-        fn blit(
-            &mut self,
-            _tex: TextureId,
-            _x: i32,
-            _y: i32,
-            _w: u32,
-            _h: u32,
-        ) -> oasis_types::error::Result<()> {
-            Ok(())
-        }
-        fn fill_rect(
-            &mut self,
-            _x: i32,
-            _y: i32,
-            _w: u32,
-            _h: u32,
-            _color: Color,
-        ) -> oasis_types::error::Result<()> {
-            Ok(())
-        }
-        fn draw_text(
-            &mut self,
-            _text: &str,
-            _x: i32,
-            _y: i32,
-            _font_size: u16,
-            _color: Color,
-        ) -> oasis_types::error::Result<()> {
-            Ok(())
-        }
-        fn swap_buffers(&mut self) -> oasis_types::error::Result<()> {
-            Ok(())
-        }
-        fn load_texture(
-            &mut self,
-            _w: u32,
-            _h: u32,
-            _data: &[u8],
-        ) -> oasis_types::error::Result<TextureId> {
-            Ok(TextureId(0))
-        }
-        fn destroy_texture(&mut self, _tex: TextureId) -> oasis_types::error::Result<()> {
-            Ok(())
-        }
-        fn set_clip_rect(
-            &mut self,
-            _x: i32,
-            _y: i32,
-            _w: u32,
-            _h: u32,
-        ) -> oasis_types::error::Result<()> {
-            Ok(())
-        }
-        fn reset_clip_rect(&mut self) -> oasis_types::error::Result<()> {
-            Ok(())
-        }
-        fn measure_text(&self, _text: &str, _font_size: u16) -> u32 {
-            0
-        }
-        fn read_pixels(
-            &self,
-            _x: i32,
-            _y: i32,
-            _w: u32,
-            _h: u32,
-        ) -> oasis_types::error::Result<Vec<u8>> {
-            Ok(vec![])
-        }
-        fn shutdown(&mut self) -> oasis_types::error::Result<()> {
-            Ok(())
-        }
-    }
-
-    impl oasis_types::backend::SdiShapes for NullBackend {}
-    impl oasis_types::backend::SdiGradients for NullBackend {}
-    impl oasis_types::backend::SdiAlpha for NullBackend {}
-    impl oasis_types::backend::SdiText for NullBackend {}
-    impl oasis_types::backend::SdiTextures for NullBackend {}
-    impl oasis_types::backend::SdiClipTransform for NullBackend {}
-    impl oasis_types::backend::SdiVector for NullBackend {}
-    impl oasis_types::backend::SdiBatch for NullBackend {}
-    impl oasis_types::backend::SdiRenderTarget for NullBackend {}
+    use oasis_test_backend::NullBackend;
+    use oasis_types::backend::{Color, TextureId};
 
     fn app_config(id: &str) -> WindowConfig {
         WindowConfig {
@@ -1553,7 +1461,10 @@ mod tests {
         let wm = WindowManager::new(800, 600);
         // Calling draw_with_clips on an empty WM should not panic.
         // We use a no-op content callback since there are no windows.
-        let result = wm.draw_with_clips(&mut sdi, &mut NullBackend, |_, _, _, _, _, _| Ok(()));
+        let result =
+            wm.draw_with_clips(&mut sdi, &mut NullBackend::default(), |_, _, _, _, _, _| {
+                Ok(())
+            });
         assert!(result.is_ok());
     }
 

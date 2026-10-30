@@ -1,7 +1,7 @@
 //! Checkbox widget.
 
 use crate::context::DrawContext;
-use crate::layout;
+use crate::layout::{self, HAlign};
 use crate::states::{WidgetState, WidgetStateColors};
 use crate::widget::Widget;
 use oasis_types::error::Result;
@@ -73,7 +73,7 @@ impl Widget for Checkbox {
         (w, h)
     }
 
-    fn draw(&self, ctx: &mut DrawContext<'_>, x: i32, y: i32, _w: u32, h: u32) -> Result<()> {
+    fn draw(&self, ctx: &mut DrawContext<'_>, x: i32, y: i32, w: u32, h: u32) -> Result<()> {
         let fs = ctx.theme.font_size_md;
         let radius = ctx.theme.border_radius_sm;
         let box_y = y + layout::center(h, BOX_SIZE);
@@ -85,13 +85,8 @@ impl Widget for Checkbox {
         } else {
             WidgetStateColors::input_bg(ctx.theme, state)
         };
-        ctx.backend
-            .fill_rounded_rect(x, box_y, BOX_SIZE, BOX_SIZE, radius, box_bg)?;
-
-        // Box border.
         let border_color = ctx.theme.interactive_border(self.disabled, self.checked);
-        ctx.backend
-            .stroke_rounded_rect(x, box_y, BOX_SIZE, BOX_SIZE, radius, 1, border_color)?;
+        ctx.frame((x, box_y, BOX_SIZE, BOX_SIZE), box_bg, border_color, radius)?;
 
         // Keyboard focus ring around the box.
         if self.focused && !self.disabled {
@@ -107,25 +102,24 @@ impl Widget for Checkbox {
         // Checkmark.
         if self.checked {
             let check_fs = fs.min(10);
-            let ch_w = ctx.backend.measure_text("\u{2713}", check_fs);
-            let ch_h = ctx.backend.measure_text_height(check_fs);
-            let cx = x + layout::center(BOX_SIZE, ch_w);
-            let cy = box_y + layout::center(BOX_SIZE, ch_h);
-            ctx.backend
-                .draw_text("\u{2713}", cx, cy, check_fs, ctx.theme.text_on_accent)?;
+            ctx.text_in(
+                (x, box_y, BOX_SIZE, BOX_SIZE),
+                "\u{2713}",
+                check_fs,
+                ctx.theme.text_on_accent,
+                HAlign::Center,
+            )?;
         }
 
         // Label.
         if !self.label.is_empty() {
-            let text_h = ctx.backend.measure_text_height(fs);
             let tx = x + BOX_SIZE as i32 + LABEL_GAP as i32;
-            let ty = y + layout::center(h, text_h);
-            ctx.backend.draw_text(
+            ctx.text_in(
+                (tx, y, w.saturating_sub(BOX_SIZE + LABEL_GAP), h),
                 &self.label,
-                tx,
-                ty,
                 fs,
                 ctx.theme.interactive_text(self.disabled),
+                HAlign::Left,
             )?;
         }
 
@@ -174,17 +168,17 @@ mod tests {
         assert_eq!(c.label, "Dynamic");
     }
 
-    // -- Draw / measure tests using MockBackend --
+    // -- Draw / measure tests using RecordingBackend --
 
     use crate::context::DrawContext;
-    use crate::test_utils::MockBackend;
+    use crate::test_utils::RecordingBackend;
     use crate::theme::Theme;
     use crate::widget::Widget;
 
     #[test]
     fn measure_includes_box_and_label() {
         let theme = Theme::dark();
-        let mut backend = MockBackend::new();
+        let mut backend = RecordingBackend::default();
         let ctx = DrawContext::new(&mut backend, &theme);
         let c = Checkbox::new("Hello", false);
         let (w, h) = c.measure(&ctx, 200, 100);
@@ -195,7 +189,7 @@ mod tests {
     #[test]
     fn draw_unchecked_shows_label() {
         let theme = Theme::dark();
-        let mut backend = MockBackend::new();
+        let mut backend = RecordingBackend::default();
         {
             let mut ctx = DrawContext::new(&mut backend, &theme);
             let c = Checkbox::new("Accept Terms", false);
@@ -209,7 +203,7 @@ mod tests {
     #[test]
     fn draw_checked_shows_checkmark() {
         let theme = Theme::dark();
-        let mut backend = MockBackend::new();
+        let mut backend = RecordingBackend::default();
         {
             let mut ctx = DrawContext::new(&mut backend, &theme);
             let c = Checkbox::new("Accept", true);
@@ -222,7 +216,7 @@ mod tests {
     #[test]
     fn draw_disabled_no_panic() {
         let theme = Theme::dark();
-        let mut backend = MockBackend::new();
+        let mut backend = RecordingBackend::default();
         {
             let mut ctx = DrawContext::new(&mut backend, &theme);
             let mut c = Checkbox::new("Off", false);
@@ -235,7 +229,7 @@ mod tests {
     #[test]
     fn draw_empty_label() {
         let theme = Theme::dark();
-        let mut backend = MockBackend::new();
+        let mut backend = RecordingBackend::default();
         {
             let mut ctx = DrawContext::new(&mut backend, &theme);
             let c = Checkbox::new("", true);

@@ -482,19 +482,13 @@ impl VideoPlayer {
                 },
             );
             let t0 = std::time::Instant::now();
-            // With the symphonia backend, extract avcC (and the keyframe
-            // index, so the seek below lands on a keyframe) from moov to
-            // skip the full-file scan. With ffmpeg, it handles both
-            // internally.
-            #[cfg(not(feature = "video-decode-ffmpeg"))]
+            // With the symphonia backend, the retained moov supplies avcC
+            // and the keyframe index (so the seek below lands on a
+            // keyframe) and skips the full-file scan. ffmpeg reads the
+            // container itself and ignores it.
             let open_result = if let Some(ref moov) = moov_data {
                 oasis_video::SoftwareVideoDecoder::open_stream_with_moov(source, moov)
             } else {
-                oasis_video::SoftwareVideoDecoder::open_stream(source)
-            };
-            #[cfg(feature = "video-decode-ffmpeg")]
-            let open_result = {
-                let _ = &moov_data; // suppress unused warning
                 oasis_video::SoftwareVideoDecoder::open_stream(source)
             };
             let mut decoder = match open_result {
@@ -1160,66 +1154,7 @@ impl Drop for VideoPlayer {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use oasis_core::backend::{
-        Color, SdiAlpha, SdiBatch, SdiClipTransform, SdiCore, SdiGradients, SdiShapes, SdiText,
-        SdiTextures, SdiVector, TextureId,
-    };
-    use oasis_core::error::Result;
-
-    /// Minimal mock backend for video_player tests.
-    struct MockBackend;
-
-    impl SdiCore for MockBackend {
-        fn init(&mut self, _w: u32, _h: u32) -> Result<()> {
-            Ok(())
-        }
-        fn clear(&mut self, _c: Color) -> Result<()> {
-            Ok(())
-        }
-        fn blit(&mut self, _t: TextureId, _x: i32, _y: i32, _w: u32, _h: u32) -> Result<()> {
-            Ok(())
-        }
-        fn fill_rect(&mut self, _x: i32, _y: i32, _w: u32, _h: u32, _c: Color) -> Result<()> {
-            Ok(())
-        }
-        fn draw_text(&mut self, _t: &str, _x: i32, _y: i32, _s: u16, _c: Color) -> Result<()> {
-            Ok(())
-        }
-        fn swap_buffers(&mut self) -> Result<()> {
-            Ok(())
-        }
-        fn load_texture(&mut self, _w: u32, _h: u32, _d: &[u8]) -> Result<TextureId> {
-            Ok(TextureId(1))
-        }
-        fn destroy_texture(&mut self, _t: TextureId) -> Result<()> {
-            Ok(())
-        }
-        fn set_clip_rect(&mut self, _x: i32, _y: i32, _w: u32, _h: u32) -> Result<()> {
-            Ok(())
-        }
-        fn reset_clip_rect(&mut self) -> Result<()> {
-            Ok(())
-        }
-        fn measure_text(&self, _t: &str, _s: u16) -> u32 {
-            0
-        }
-        fn read_pixels(&self, _x: i32, _y: i32, _w: u32, _h: u32) -> Result<Vec<u8>> {
-            Ok(Vec::new())
-        }
-        fn shutdown(&mut self) -> Result<()> {
-            Ok(())
-        }
-    }
-
-    impl SdiShapes for MockBackend {}
-    impl SdiGradients for MockBackend {}
-    impl SdiAlpha for MockBackend {}
-    impl SdiText for MockBackend {}
-    impl SdiTextures for MockBackend {}
-    impl SdiClipTransform for MockBackend {}
-    impl SdiVector for MockBackend {}
-    impl SdiBatch for MockBackend {}
-    impl oasis_core::backend::SdiRenderTarget for MockBackend {}
+    use oasis_test_backend::NullBackend;
 
     #[test]
     fn new_is_idle() {
@@ -1233,7 +1168,7 @@ mod tests {
     #[test]
     fn stop_when_idle_is_noop() {
         let mut player = VideoPlayer::new();
-        let mut backend = MockBackend;
+        let mut backend = NullBackend::default();
         player.stop(&mut backend);
         assert_eq!(player.state, PlayerState::Idle);
     }
@@ -1241,7 +1176,7 @@ mod tests {
     #[test]
     fn double_stop_is_safe() {
         let mut player = VideoPlayer::new();
-        let mut backend = MockBackend;
+        let mut backend = NullBackend::default();
         player.stop(&mut backend);
         player.stop(&mut backend);
         assert_eq!(player.state, PlayerState::Idle);
@@ -1250,7 +1185,7 @@ mod tests {
     #[test]
     fn tick_when_idle_returns_none() {
         let mut player = VideoPlayer::new();
-        let mut backend = MockBackend;
+        let mut backend = NullBackend::default();
         let (tex, audio) = player.tick(&mut backend);
         assert!(tex.is_none());
         assert!(matches!(audio, AudioOutput::None));

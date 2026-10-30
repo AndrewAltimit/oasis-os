@@ -254,6 +254,23 @@ pub fn expect_rect_exact(f: &Frame, rect: (i32, i32, u32, u32), rgb: [u8; 3]) ->
     expect_ring(f, rect, rgb_of(BG))
 }
 
+/// Ink in the columns selected by `cols` stays inside `rect`.
+fn check_ink_box(f: &Frame, cols: impl Fn(u32) -> bool, rect: (i32, i32, u32, u32)) -> Check {
+    let (rx, ry, rw, rh) = rect;
+    for y in 0..f.h {
+        for x in (0..f.w).filter(|&x| cols(x)) {
+            if f.rgb(x, y) == rgb_of(BG) {
+                continue;
+            }
+            let (xi, yi) = (x as i32, y as i32);
+            if xi < rx || yi < ry || xi >= rx + rw as i32 || yi >= ry + rh as i32 {
+                return Err(format!("ink at ({x},{y}) outside {rect:?}"));
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Nothing was drawn.
 pub fn expect_blank(f: &Frame) -> Check {
     match f.ink_bounds() {
@@ -598,6 +615,29 @@ pub static SCENARIOS: &[Scenario] = &[
         Tolerance::BLEND,
         "alpha-blend rounding"
     ),
+    scenario!(
+        "circle_translucent_single_coverage",
+        |b| b.fill_circle(64, 48, 30, Color::rgba(230, 40, 30, 120)),
+        check = |f| {
+            // Every pixel is blended at most once: overlapping spans would
+            // show up as a darker, double-blended color.
+            let once = blend(Color::rgba(230, 40, 30, 120), rgb_of(BG));
+            for y in 0..CANVAS_H {
+                for x in 0..CANVAS_W {
+                    let px = f.rgb(x, y);
+                    if px != rgb_of(BG) && !near(px, once, 2) {
+                        return Err(format!("({x},{y}) is {px:?}, single blend is {once:?}"));
+                    }
+                }
+            }
+            if !near(f.rgb(64, 48), once, 2) {
+                return Err("circle center not covered".into());
+            }
+            expect_ink_within(f, (33, 17, 63, 63))
+        },
+        Tolerance::BLEND,
+        "alpha-blend rounding"
+    ),
     scenario!("triangles", |b| {
         b.fill_triangle(10, 5, 2, 40, 40, 30, RED)?;
         b.fill_triangle(50, 5, 90, 5, 70, 45, GREEN)?;
@@ -629,12 +669,62 @@ pub static SCENARIOS: &[Scenario] = &[
         b.stroke_polygon(&[(70, 50), (120, 55), (100, 90), (65, 80)], 1, YELLOW)?;
         b.stroke_polyline(&[(70, 92), (85, 70), (100, 92), (115, 70)], 1, WHITE)
     }),
+    scenario!(
+        "polygon_concave_exact",
+        |b| {
+            // A "U": the notch between the arms must stay empty (a convex
+            // fan fill would cover it).
+            b.fill_polygon(
+                &[
+                    (10, 10),
+                    (50, 10),
+                    (50, 50),
+                    (40, 50),
+                    (40, 20),
+                    (20, 20),
+                    (20, 50),
+                    (10, 50),
+                ],
+                GREEN,
+            )
+        },
+        check = |f| {
+            expect_fill(f, (12, 22, 6, 26), rgb_of(GREEN), 0)?;
+            expect_fill(f, (42, 22, 6, 26), rgb_of(GREEN), 0)?;
+            expect_fill(f, (12, 12, 36, 6), rgb_of(GREEN), 0)?;
+            expect_fill(f, (22, 22, 16, 28), rgb_of(BG), 0)?;
+            expect_ink_within(f, (10, 10, 41, 41))
+        }
+    ),
     scenario!("arcs", |b| {
         b.fill_arc(30, 30, 25, 0.0, 1.5, RED)?;
         b.fill_arc(30, 30, 25, 3.2, 4.4, GREEN)?;
         b.stroke_arc(90, 40, 30, 0.5, 3.0, 1, YELLOW)?;
         b.stroke_arc(90, 40, 20, 3.5, 6.0, 3, BLUE)
     }),
+    scenario!(
+        "arcs_through_pi",
+        |b| {
+            // Wedges across the +-pi seam, where a range-limited sin/cos
+            // approximation used to overshoot (r = 50 plotted at cx - 60).
+            b.fill_arc(40, 30, 25, 2.6, 3.7, RED)?;
+            b.stroke_arc(100, 60, 20, -3.6, -2.7, 1, YELLOW)
+        },
+        check = |f| {
+            // Left wedge: inside its bounding box and filled at angle pi.
+            let left = |x: u32| x < 70;
+            check_ink_box(f, left, (14, 4, 28, 53))?;
+            if f.rgb(40 - 15, 30) != rgb_of(RED) {
+                return Err("fill_arc misses the point at angle pi".into());
+            }
+            // Right arc: inside its bounding box and through (cx - r, cy).
+            check_ink_box(f, |x| x >= 70, (79, 39, 23, 43))?;
+            if !(79..=81).any(|x| f.rgb(x, 60) == rgb_of(YELLOW)) {
+                return Err("stroke_arc misses the point at angle -pi".into());
+            }
+            Ok(())
+        }
+    ),
     scenario!("dashed_lines", |b| {
         b.stroke_line_dashed(5, 10, 120, 10, 1, RED, 6, 4)?;
         b.stroke_line_dashed(5, 20, 120, 60, 1, GREEN, 5, 5)?;
@@ -1424,6 +1514,34 @@ pub static SCENARIOS: &[Scenario] = &[
             expect_fill(f, (10, 10, 100, 20), [60, 60, 60], 0)?;
             expect_fill(f, (0, 80, 110, 10), rgb_of(BG), 0)?;
             expect_rect_exact(f, (120, 90, 8, 6), rgb_of(WHITE))
+        }
+    ),
+    scenario!(
+        "clip_set_and_push_stack_are_independent",
+        |b| {
+            // One active clip, last call wins: `set_clip_rect` does not
+            // touch the push stack, and the next push/pop re-applies the
+            // stack's clip.
+            b.push_clip_rect(10, 10, 60, 60)?;
+            b.set_clip_rect(80, 0, 40, 40)?;
+            b.fill_rect(0, 0, 128, 96, RED)?;
+            // Intersected with the pushed (10,10,60,60), not the set clip.
+            b.push_clip_rect(20, 20, 20, 20)?;
+            b.fill_rect(0, 0, 128, 96, GREEN)?;
+            b.pop_clip_rect()?;
+            // Back to (10,10,60,60).
+            b.fill_rect(0, 60, 128, 36, BLUE)?;
+            b.pop_clip_rect()?;
+            b.reset_clip_rect()
+        },
+        check = |f| {
+            expect_rect_exact(f, (80, 0, 40, 40), rgb_of(RED))?;
+            expect_rect_exact(f, (20, 20, 20, 20), rgb_of(GREEN))?;
+            expect_rect_exact(f, (10, 60, 60, 10), rgb_of(BLUE))?;
+            if f.count(rgb_of(BG)) != (CANVAS_W * CANVAS_H) as usize - 1600 - 400 - 600 {
+                return Err("ink outside the three clipped fills".into());
+            }
+            Ok(())
         }
     ),
     scenario!(
