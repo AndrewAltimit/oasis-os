@@ -2,6 +2,7 @@
 
 pub mod dom;
 pub mod entities;
+pub(crate) mod hooks;
 pub mod tokenizer;
 pub mod tree_builder;
 

@@ -260,43 +260,39 @@ pub fn stylesheets_use_container_queries(sheets: &[&super::parser::Stylesheet]) 
 // hogs the main thread for tens of seconds on a Wikipedia-sized DOM
 // (2430 elements) and the firmware kills the WLAN driver.
 
+use crate::html::hooks::Hook;
+
 type CascadeProgressFn = fn(u64, u64);
 type CascadeYieldFn = fn();
-static CASCADE_PROGRESS_HOOK: std::sync::atomic::AtomicUsize =
-    std::sync::atomic::AtomicUsize::new(0);
-static CASCADE_YIELD_HOOK: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+static CASCADE_PROGRESS_HOOK: Hook<CascadeProgressFn> = Hook::new();
+static CASCADE_YIELD_HOOK: Hook<CascadeYieldFn> = Hook::new();
 
 /// Install a cascade progress hook fired every 256 element styled.
 /// Args are `(elements_styled, total_elements)`.
+///
+/// The first installation wins; later calls are ignored.
 pub fn set_cascade_progress_hook(hook: CascadeProgressFn) {
-    CASCADE_PROGRESS_HOOK.store(hook as usize, std::sync::atomic::Ordering::Release);
+    CASCADE_PROGRESS_HOOK.set(hook);
 }
 
 /// Install a cooperative yield hook fired every 64 elements styled.
+///
+/// The first installation wins; later calls are ignored.
 pub fn set_cascade_yield_hook(hook: CascadeYieldFn) {
-    CASCADE_YIELD_HOOK.store(hook as usize, std::sync::atomic::Ordering::Release);
+    CASCADE_YIELD_HOOK.set(hook);
 }
 
 fn cascade_progress(idx: u64, total: u64) {
-    let raw = CASCADE_PROGRESS_HOOK.load(std::sync::atomic::Ordering::Acquire);
-    if raw == 0 {
-        return;
+    if let Some(hook) = CASCADE_PROGRESS_HOOK.get() {
+        hook(idx, total);
     }
-    // SAFETY: raw is either 0 (handled above) or a `CascadeProgressFn`
-    // we previously stored.
-    let hook: CascadeProgressFn = unsafe { std::mem::transmute::<usize, CascadeProgressFn>(raw) };
-    hook(idx, total);
 }
 
 #[cfg(not(feature = "parallel-style"))]
 fn cascade_yield_fn() {
-    let raw = CASCADE_YIELD_HOOK.load(std::sync::atomic::Ordering::Acquire);
-    if raw == 0 {
-        return;
+    if let Some(hook) = CASCADE_YIELD_HOOK.get() {
+        hook();
     }
-    // SAFETY: raw is either 0 or a `CascadeYieldFn` we stored.
-    let hook: CascadeYieldFn = unsafe { std::mem::transmute::<usize, CascadeYieldFn>(raw) };
-    hook();
 }
 
 /// Style a DOM tree by applying stylesheets and inline styles.

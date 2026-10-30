@@ -19,61 +19,56 @@ use super::tokenizer::Token;
 // Diagnostic progress + yield hooks
 // ---------------------------------------------------------------------------
 
+use super::hooks::Hook;
+
 type TreeProgressFn = fn(u64, usize, usize);
 type TreeYieldFn = fn();
 type TreeRawLogFn = fn(&str);
-static TREE_PROGRESS_HOOK: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
-static TREE_YIELD_HOOK: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
-static TREE_RAW_LOG_HOOK: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+static TREE_PROGRESS_HOOK: Hook<TreeProgressFn> = Hook::new();
+static TREE_YIELD_HOOK: Hook<TreeYieldFn> = Hook::new();
+static TREE_RAW_LOG_HOOK: Hook<TreeRawLogFn> = Hook::new();
 
 /// Install a raw log hook fired at tree builder entry points to
 /// distinguish "function never called" from "function called but
 /// progress hook silently failed". Used by PSP backend wired to
 /// `vlog_force`.
+///
+/// The first installation wins; later calls are ignored.
 pub fn set_tree_builder_raw_log_hook(hook: TreeRawLogFn) {
-    TREE_RAW_LOG_HOOK.store(hook as usize, std::sync::atomic::Ordering::Release);
+    TREE_RAW_LOG_HOOK.set(hook);
 }
 
-#[allow(dead_code)] // Only called from per-step bisect builds.
-pub(crate) fn tree_raw_log(msg: &str) {
-    let raw = TREE_RAW_LOG_HOOK.load(std::sync::atomic::Ordering::Acquire);
-    if raw == 0 {
-        return;
+fn tree_raw_log(msg: &str) {
+    if let Some(hook) = TREE_RAW_LOG_HOOK.get() {
+        hook(msg);
     }
-    // SAFETY: raw is either 0 or a `TreeRawLogFn` we stored.
-    let hook: TreeRawLogFn = unsafe { std::mem::transmute::<usize, TreeRawLogFn>(raw) };
-    hook(msg);
 }
 
 /// Install a tree-builder progress hook. Called every 256 tokens with
 /// `(tokens_processed, total_tokens, dom_nodes)`.
+///
+/// The first installation wins; later calls are ignored.
 pub fn set_tree_builder_progress_hook(hook: TreeProgressFn) {
-    TREE_PROGRESS_HOOK.store(hook as usize, std::sync::atomic::Ordering::Release);
+    TREE_PROGRESS_HOOK.set(hook);
 }
 
 /// Install a cooperative yield hook fired every 128 tree builder iters.
+///
+/// The first installation wins; later calls are ignored.
 pub fn set_tree_builder_yield_hook(hook: TreeYieldFn) {
-    TREE_YIELD_HOOK.store(hook as usize, std::sync::atomic::Ordering::Release);
+    TREE_YIELD_HOOK.set(hook);
 }
 
 fn tree_progress_log(idx: u64, total: usize, nodes: usize) {
-    let raw = TREE_PROGRESS_HOOK.load(std::sync::atomic::Ordering::Acquire);
-    if raw == 0 {
-        return;
+    if let Some(hook) = TREE_PROGRESS_HOOK.get() {
+        hook(idx, total, nodes);
     }
-    // SAFETY: raw is either 0 or a `TreeProgressFn` we stored.
-    let hook: TreeProgressFn = unsafe { std::mem::transmute::<usize, TreeProgressFn>(raw) };
-    hook(idx, total, nodes);
 }
 
 fn tree_yield() {
-    let raw = TREE_YIELD_HOOK.load(std::sync::atomic::Ordering::Acquire);
-    if raw == 0 {
-        return;
+    if let Some(hook) = TREE_YIELD_HOOK.get() {
+        hook();
     }
-    // SAFETY: raw is either 0 or a `TreeYieldFn` we stored.
-    let hook: TreeYieldFn = unsafe { std::mem::transmute::<usize, TreeYieldFn>(raw) };
-    hook();
 }
 
 // ------------------------------------------------------------------
@@ -181,6 +176,7 @@ impl TreeBuilder {
 
     /// Build a DOM tree from a token stream.
     pub fn build(tokens: Vec<Token>) -> Document {
+        tree_raw_log("[BR/TREE] build enter");
         let mut builder = TreeBuilder::new();
         let total = tokens.len();
         for (idx, token) in tokens.into_iter().enumerate() {
@@ -196,6 +192,7 @@ impl TreeBuilder {
             }
             builder.process_token(token);
         }
+        tree_raw_log("[BR/TREE] tokens consumed, finishing");
         builder.finish()
     }
 
@@ -218,6 +215,7 @@ impl TreeBuilder {
             template_form_stack: Vec::new(),
             foreign_depth: 0,
         };
+        tree_raw_log("[BR/TREE] build_reuse enter");
         let total = tokens.len();
         for (idx, token) in tokens.into_iter().enumerate() {
             if builder.doc.nodes.len() >= MAX_DOM_NODES {
@@ -231,6 +229,7 @@ impl TreeBuilder {
             }
             builder.process_token(token);
         }
+        tree_raw_log("[BR/TREE] tokens consumed, finishing");
         builder.finish()
     }
 

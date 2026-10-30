@@ -56,47 +56,43 @@ use types::{DoctypeBuilder, State, TagBuilder};
 // pathological input is observable from the remote test harness.
 // Set to a no-op pointer if not configured.
 
+use super::hooks::Hook;
+
 type ProgressFn = fn(u64, usize, usize, usize, u32);
 type YieldFn = fn();
-static PROGRESS_HOOK: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
-static YIELD_HOOK: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+static PROGRESS_HOOK: Hook<ProgressFn> = Hook::new();
+static YIELD_HOOK: Hook<YieldFn> = Hook::new();
 
 /// Install a tokenizer progress hook. Called every 2048 state-machine
 /// iterations with `(iter_count, pos, input_len, tokens_emitted, state_id)`.
 /// Embedders use this on real hardware to spot infinite loops or
 /// pathological slowdowns inside `Tokenizer::tokenize`.
+///
+/// The first installation wins; later calls are ignored.
 pub fn set_tokenize_progress_hook(hook: ProgressFn) {
-    PROGRESS_HOOK.store(hook as usize, std::sync::atomic::Ordering::Release);
+    PROGRESS_HOOK.set(hook);
 }
 
 /// Install a cooperative yield hook fired every 2048 tokenize iters.
 /// Lets PSP cooperatively yield CPU to the cmd_server thread so the
 /// remote test harness stays responsive while a long synchronous
 /// `navigate_vfs` is running.
+///
+/// The first installation wins; later calls are ignored.
 pub fn set_tokenize_yield_hook(hook: YieldFn) {
-    YIELD_HOOK.store(hook as usize, std::sync::atomic::Ordering::Release);
+    YIELD_HOOK.set(hook);
 }
 
 fn tokenize_progress_log(iter: u64, pos: usize, input_len: usize, tokens: usize, state_id: u32) {
-    let raw = PROGRESS_HOOK.load(std::sync::atomic::Ordering::Acquire);
-    if raw == 0 {
-        return;
+    if let Some(hook) = PROGRESS_HOOK.get() {
+        hook(iter, pos, input_len, tokens, state_id);
     }
-    // SAFETY: raw is either 0 (handled above) or a function pointer
-    // we previously stored from `set_tokenize_progress_hook`. The
-    // signature matches `ProgressFn`.
-    let hook: ProgressFn = unsafe { std::mem::transmute::<usize, ProgressFn>(raw) };
-    hook(iter, pos, input_len, tokens, state_id);
 }
 
 fn tokenize_yield() {
-    let raw = YIELD_HOOK.load(std::sync::atomic::Ordering::Acquire);
-    if raw == 0 {
-        return;
+    if let Some(hook) = YIELD_HOOK.get() {
+        hook();
     }
-    // SAFETY: raw is either 0 or a `YieldFn` we stored.
-    let hook: YieldFn = unsafe { std::mem::transmute::<usize, YieldFn>(raw) };
-    hook();
 }
 
 // ---------------------------------------------------------------------------
