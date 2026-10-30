@@ -71,6 +71,7 @@ png = { workspace = true }
 
 [dev-dependencies]
 oasis-test-backend = { workspace = true }
+oasis-types = { workspace = true }
 
 [lints]
 workspace = true

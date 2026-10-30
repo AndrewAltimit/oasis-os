@@ -773,10 +773,7 @@ fn seek_restart_skips_ahead_with_range_request() {
 mod player {
     use super::*;
     use crate::video_player::{AudioOutput, PlayerState, VideoPlayer};
-    use oasis_core::backend::{
-        Color, SdiAlpha, SdiBatch, SdiClipTransform, SdiCore, SdiGradients, SdiShapes, SdiText,
-        SdiTextures, SdiVector, TextureId,
-    };
+    use oasis_core::backend::{Color, SdiCore, TextureId};
     use oasis_core::error::Result as OResult;
 
     /// Backend recording uploaded frame textures.
@@ -842,15 +839,9 @@ mod player {
             Ok(())
         }
     }
-    impl SdiShapes for FrameSink {}
-    impl SdiGradients for FrameSink {}
-    impl SdiAlpha for FrameSink {}
-    impl SdiText for FrameSink {}
-    impl SdiTextures for FrameSink {}
-    impl SdiClipTransform for FrameSink {}
-    impl SdiVector for FrameSink {}
-    impl SdiBatch for FrameSink {}
-    impl oasis_core::backend::SdiRenderTarget for FrameSink {}
+    // Needs its own texture bookkeeping, so it is a custom `SdiCore` with
+    // every extension trait defaulted.
+    oasis_types::impl_sdi_defaults!(FrameSink);
 
     /// What happened during a playback session.
     #[derive(Default, Debug)]

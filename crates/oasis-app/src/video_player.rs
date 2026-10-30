@@ -1154,66 +1154,7 @@ impl Drop for VideoPlayer {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use oasis_core::backend::{
-        Color, SdiAlpha, SdiBatch, SdiClipTransform, SdiCore, SdiGradients, SdiShapes, SdiText,
-        SdiTextures, SdiVector, TextureId,
-    };
-    use oasis_core::error::Result;
-
-    /// Minimal mock backend for video_player tests.
-    struct MockBackend;
-
-    impl SdiCore for MockBackend {
-        fn init(&mut self, _w: u32, _h: u32) -> Result<()> {
-            Ok(())
-        }
-        fn clear(&mut self, _c: Color) -> Result<()> {
-            Ok(())
-        }
-        fn blit(&mut self, _t: TextureId, _x: i32, _y: i32, _w: u32, _h: u32) -> Result<()> {
-            Ok(())
-        }
-        fn fill_rect(&mut self, _x: i32, _y: i32, _w: u32, _h: u32, _c: Color) -> Result<()> {
-            Ok(())
-        }
-        fn draw_text(&mut self, _t: &str, _x: i32, _y: i32, _s: u16, _c: Color) -> Result<()> {
-            Ok(())
-        }
-        fn swap_buffers(&mut self) -> Result<()> {
-            Ok(())
-        }
-        fn load_texture(&mut self, _w: u32, _h: u32, _d: &[u8]) -> Result<TextureId> {
-            Ok(TextureId(1))
-        }
-        fn destroy_texture(&mut self, _t: TextureId) -> Result<()> {
-            Ok(())
-        }
-        fn set_clip_rect(&mut self, _x: i32, _y: i32, _w: u32, _h: u32) -> Result<()> {
-            Ok(())
-        }
-        fn reset_clip_rect(&mut self) -> Result<()> {
-            Ok(())
-        }
-        fn measure_text(&self, _t: &str, _s: u16) -> u32 {
-            0
-        }
-        fn read_pixels(&self, _x: i32, _y: i32, _w: u32, _h: u32) -> Result<Vec<u8>> {
-            Ok(Vec::new())
-        }
-        fn shutdown(&mut self) -> Result<()> {
-            Ok(())
-        }
-    }
-
-    impl SdiShapes for MockBackend {}
-    impl SdiGradients for MockBackend {}
-    impl SdiAlpha for MockBackend {}
-    impl SdiText for MockBackend {}
-    impl SdiTextures for MockBackend {}
-    impl SdiClipTransform for MockBackend {}
-    impl SdiVector for MockBackend {}
-    impl SdiBatch for MockBackend {}
-    impl oasis_core::backend::SdiRenderTarget for MockBackend {}
+    use oasis_test_backend::NullBackend;
 
     #[test]
     fn new_is_idle() {
@@ -1227,7 +1168,7 @@ mod tests {
     #[test]
     fn stop_when_idle_is_noop() {
         let mut player = VideoPlayer::new();
-        let mut backend = MockBackend;
+        let mut backend = NullBackend::default();
         player.stop(&mut backend);
         assert_eq!(player.state, PlayerState::Idle);
     }
@@ -1235,7 +1176,7 @@ mod tests {
     #[test]
     fn double_stop_is_safe() {
         let mut player = VideoPlayer::new();
-        let mut backend = MockBackend;
+        let mut backend = NullBackend::default();
         player.stop(&mut backend);
         player.stop(&mut backend);
         assert_eq!(player.state, PlayerState::Idle);
@@ -1244,7 +1185,7 @@ mod tests {
     #[test]
     fn tick_when_idle_returns_none() {
         let mut player = VideoPlayer::new();
-        let mut backend = MockBackend;
+        let mut backend = NullBackend::default();
         let (tex, audio) = player.tick(&mut backend);
         assert!(tex.is_none());
         assert!(matches!(audio, AudioOutput::None));

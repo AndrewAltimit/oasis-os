@@ -985,6 +985,7 @@ dependencies = [
  "oasis-mcp",
  "oasis-shader",
  "oasis-test-backend",
+ "oasis-types",
  "oasis-video",
  "png",
  "serde_json",
@@ -1393,6 +1394,7 @@ version = "1.4.0"
 dependencies = [
  "criterion",
  "log",
+ "oasis-test-backend",
  "oasis-types",
  "proptest",
  "serde",

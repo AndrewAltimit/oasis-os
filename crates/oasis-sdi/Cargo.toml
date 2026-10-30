@@ -16,6 +16,7 @@ log = { workspace = true }
 
 [dev-dependencies]
 proptest.workspace = true
+oasis-test-backend = { workspace = true }
 criterion = { version = "0.5", features = ["html_reports"] }
 
 [[bench]]

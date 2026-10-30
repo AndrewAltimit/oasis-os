@@ -867,7 +867,8 @@ impl Default for SdiRegistry {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use oasis_types::backend::{SdiCore, TextureId};
+    use oasis_test_backend::{DrawCommand, RecordingBackend};
+    use oasis_types::backend::TextureId;
 
     #[test]
     fn create_and_get() {
@@ -1332,7 +1333,7 @@ font_size = 16
         let mut reg = SdiRegistry::new();
         reg.create("img");
         reg.clear_scene_dirty();
-        let (mut backend, _calls) = RecordingBackend::new();
+        let mut backend = RecordingBackend::default();
         reg.load_image("img", 2, 2, &[0u8; 16], &mut backend)
             .unwrap();
         assert!(reg.is_scene_dirty());
@@ -1345,7 +1346,7 @@ font_size = 16
         obj.w = 4;
         obj.h = 4;
         reg.clear_scene_dirty();
-        let (mut backend, _calls) = RecordingBackend::new();
+        let mut backend = RecordingBackend::default();
         reg.draw(&mut backend).unwrap();
         assert!(
             !reg.is_scene_dirty(),
@@ -1436,58 +1437,6 @@ font_size = 16
 
     // -- Overlay z-order and object alpha --
 
-    /// Records `(kind, text-or-empty, color)` for every fill and text call.
-    #[derive(Default)]
-    struct ColorLog {
-        calls: Vec<(&'static str, String, Color)>,
-    }
-
-    impl SdiCore for ColorLog {
-        fn init(&mut self, _w: u32, _h: u32) -> Result<()> {
-            Ok(())
-        }
-        fn clear(&mut self, _color: Color) -> Result<()> {
-            Ok(())
-        }
-        fn blit(&mut self, _t: TextureId, _x: i32, _y: i32, _w: u32, _h: u32) -> Result<()> {
-            Ok(())
-        }
-        fn fill_rect(&mut self, _x: i32, _y: i32, _w: u32, _h: u32, color: Color) -> Result<()> {
-            self.calls.push(("fill", String::new(), color));
-            Ok(())
-        }
-        fn draw_text(&mut self, text: &str, _x: i32, _y: i32, _fs: u16, c: Color) -> Result<()> {
-            self.calls.push(("text", text.to_string(), c));
-            Ok(())
-        }
-        fn swap_buffers(&mut self) -> Result<()> {
-            Ok(())
-        }
-        fn load_texture(&mut self, _w: u32, _h: u32, _data: &[u8]) -> Result<TextureId> {
-            Ok(TextureId(0))
-        }
-        fn destroy_texture(&mut self, _tex: TextureId) -> Result<()> {
-            Ok(())
-        }
-        fn set_clip_rect(&mut self, _x: i32, _y: i32, _w: u32, _h: u32) -> Result<()> {
-            Ok(())
-        }
-        fn reset_clip_rect(&mut self) -> Result<()> {
-            Ok(())
-        }
-        fn measure_text(&self, text: &str, _font_size: u16) -> u32 {
-            text.len() as u32 * 8
-        }
-        fn read_pixels(&self, _x: i32, _y: i32, _w: u32, _h: u32) -> Result<Vec<u8>> {
-            Ok(Vec::new())
-        }
-        fn shutdown(&mut self) -> Result<()> {
-            Ok(())
-        }
-    }
-
-    oasis_types::impl_sdi_defaults!(ColorLog);
-
     #[test]
     fn overlay_layer_resorts_after_create_without_base_pass() {
         let mut reg = SdiRegistry::new();
@@ -1496,7 +1445,7 @@ font_size = 16
             o.overlay = true;
             o.text = Some(name.into());
         }
-        let mut log = ColorLog::default();
+        let mut log = RecordingBackend::default();
         reg.draw(&mut log).unwrap();
         // Create and destroy overlay objects, then draw only the overlay:
         // it must not walk the stale handle list (wrong objects or an
@@ -1505,16 +1454,16 @@ font_size = 16
         let o = reg.create("c");
         o.overlay = true;
         o.text = Some("c".into());
-        let mut log = ColorLog::default();
+        let mut log = RecordingBackend::default();
         reg.draw_overlay_layer(&mut log).unwrap();
-        let texts: Vec<_> = log.calls.iter().map(|c| c.1.as_str()).collect();
+        let texts = log.texts();
         assert_eq!(texts, ["b", "c"]);
 
         reg.destroy("b").unwrap();
         reg.destroy("c").unwrap();
-        let mut log = ColorLog::default();
+        let mut log = RecordingBackend::default();
         reg.draw_overlay_filtered(&mut log, |_| true).unwrap();
-        assert!(log.calls.is_empty());
+        assert_eq!(log.fill_rect_count() + log.draw_text_count(), 0);
     }
 
     #[test]
@@ -1531,26 +1480,16 @@ font_size = 16
         o.text_shadow_offset = Some((1, 1));
         o.text_shadow_color = Some(Color::rgba(0, 0, 0, 100));
         o.alpha = 128;
-        let mut log = ColorLog::default();
+        let mut log = RecordingBackend::default();
         reg.draw(&mut log).unwrap();
 
-        let fills: Vec<Color> = log
-            .calls
-            .iter()
-            .filter(|c| c.0 == "fill")
-            .map(|c| c.2)
-            .collect();
+        let fills = log.fill_colors();
         assert_eq!(fills[0], Color::rgba(10, 20, 30, 128), "fill");
         assert!(
             fills[1..].iter().all(|&c| c == Color::rgba(1, 2, 3, 100)),
             "stroke: {fills:?}"
         );
-        let texts: Vec<Color> = log
-            .calls
-            .iter()
-            .filter(|c| c.0 == "text")
-            .map(|c| c.2)
-            .collect();
+        let texts = log.text_colors();
         assert_eq!(
             texts,
             [Color::rgba(0, 0, 0, 50), Color::rgba(250, 250, 250, 128)]
@@ -1558,117 +1497,6 @@ font_size = 16
     }
 
     // -- Draw pipeline tests using a recording backend --
-
-    use std::cell::RefCell;
-    use std::rc::Rc;
-
-    /// Recording backend that tracks all draw calls for verification.
-    struct RecordingBackend {
-        calls: Rc<RefCell<Vec<DrawCall>>>,
-    }
-
-    #[derive(Debug, Clone)]
-    #[allow(dead_code)]
-    enum DrawCall {
-        Clear(Color),
-        FillRect {
-            x: i32,
-            y: i32,
-            w: u32,
-            h: u32,
-        },
-        DrawText {
-            text: String,
-            x: i32,
-            y: i32,
-            font_size: u16,
-        },
-        Blit {
-            tex: TextureId,
-        },
-    }
-
-    impl RecordingBackend {
-        fn new() -> (Self, Rc<RefCell<Vec<DrawCall>>>) {
-            let calls = Rc::new(RefCell::new(Vec::new()));
-            (
-                Self {
-                    calls: Rc::clone(&calls),
-                },
-                calls,
-            )
-        }
-    }
-
-    impl SdiCore for RecordingBackend {
-        fn init(&mut self, _w: u32, _h: u32) -> Result<()> {
-            Ok(())
-        }
-        fn clear(&mut self, color: Color) -> Result<()> {
-            self.calls.borrow_mut().push(DrawCall::Clear(color));
-            Ok(())
-        }
-        fn blit(&mut self, tex: TextureId, _x: i32, _y: i32, _w: u32, _h: u32) -> Result<()> {
-            self.calls.borrow_mut().push(DrawCall::Blit { tex });
-            Ok(())
-        }
-        fn fill_rect(&mut self, x: i32, y: i32, w: u32, h: u32, _color: Color) -> Result<()> {
-            self.calls
-                .borrow_mut()
-                .push(DrawCall::FillRect { x, y, w, h });
-            Ok(())
-        }
-        fn draw_text(
-            &mut self,
-            text: &str,
-            x: i32,
-            y: i32,
-            font_size: u16,
-            _color: Color,
-        ) -> Result<()> {
-            self.calls.borrow_mut().push(DrawCall::DrawText {
-                text: text.to_string(),
-                x,
-                y,
-                font_size,
-            });
-            Ok(())
-        }
-        fn swap_buffers(&mut self) -> Result<()> {
-            Ok(())
-        }
-        fn load_texture(&mut self, _w: u32, _h: u32, _data: &[u8]) -> Result<TextureId> {
-            Ok(TextureId(0))
-        }
-        fn destroy_texture(&mut self, _tex: TextureId) -> Result<()> {
-            Ok(())
-        }
-        fn set_clip_rect(&mut self, _x: i32, _y: i32, _w: u32, _h: u32) -> Result<()> {
-            Ok(())
-        }
-        fn reset_clip_rect(&mut self) -> Result<()> {
-            Ok(())
-        }
-        fn measure_text(&self, text: &str, font_size: u16) -> u32 {
-            text.len() as u32 * (font_size as u32 * 6 / 10).max(1)
-        }
-        fn read_pixels(&self, _x: i32, _y: i32, w: u32, h: u32) -> Result<Vec<u8>> {
-            Ok(vec![0u8; (w * h * 4) as usize])
-        }
-        fn shutdown(&mut self) -> Result<()> {
-            Ok(())
-        }
-    }
-
-    impl oasis_types::backend::SdiShapes for RecordingBackend {}
-    impl oasis_types::backend::SdiGradients for RecordingBackend {}
-    impl oasis_types::backend::SdiAlpha for RecordingBackend {}
-    impl oasis_types::backend::SdiText for RecordingBackend {}
-    impl oasis_types::backend::SdiTextures for RecordingBackend {}
-    impl oasis_types::backend::SdiClipTransform for RecordingBackend {}
-    impl oasis_types::backend::SdiVector for RecordingBackend {}
-    impl oasis_types::backend::SdiBatch for RecordingBackend {}
-    impl oasis_types::backend::SdiRenderTarget for RecordingBackend {}
 
     #[test]
     fn draw_dispatches_fill_rect_for_colored_objects() {
@@ -1680,18 +1508,19 @@ font_size = 16
         obj.h = 50;
         obj.color = Color::rgb(255, 0, 0);
 
-        let (mut backend, calls) = RecordingBackend::new();
+        let mut backend = RecordingBackend::default();
         reg.draw(&mut backend).unwrap();
 
-        let calls = calls.borrow();
+        let calls = backend.commands();
         assert!(
             calls.iter().any(|c| matches!(
                 c,
-                DrawCall::FillRect {
+                DrawCommand::FillRect {
                     x: 10,
                     y: 20,
                     w: 100,
-                    h: 50
+                    h: 50,
+                    ..
                 }
             )),
             "expected fill_rect call for colored object"
@@ -1706,16 +1535,16 @@ font_size = 16
         obj.font_size = 12;
         obj.text_color = Color::WHITE;
 
-        let (mut backend, calls) = RecordingBackend::new();
+        let mut backend = RecordingBackend::default();
         reg.draw(&mut backend).unwrap();
 
-        let calls = calls.borrow();
+        let calls = backend.commands();
         let text_calls: Vec<_> = calls
             .iter()
-            .filter(|c| matches!(c, DrawCall::DrawText { .. }))
+            .filter(|c| matches!(c, DrawCommand::DrawText { .. }))
             .collect();
         assert_eq!(text_calls.len(), 1, "expected exactly one draw_text call");
-        if let DrawCall::DrawText { text, .. } = &text_calls[0] {
+        if let DrawCommand::DrawText { text, .. } = &text_calls[0] {
             assert_eq!(text, "Hello World");
         }
     }
@@ -1727,10 +1556,10 @@ font_size = 16
         obj.text = Some("invisible".to_string());
         obj.visible = false;
 
-        let (mut backend, calls) = RecordingBackend::new();
+        let mut backend = RecordingBackend::default();
         reg.draw(&mut backend).unwrap();
 
-        let calls = calls.borrow();
+        let calls = backend.commands();
         assert!(
             calls.is_empty(),
             "invisible object should not produce any draw calls"
@@ -1744,10 +1573,10 @@ font_size = 16
         obj.text = Some("ghost".to_string());
         obj.alpha = 0;
 
-        let (mut backend, calls) = RecordingBackend::new();
+        let mut backend = RecordingBackend::default();
         reg.draw(&mut backend).unwrap();
 
-        let calls = calls.borrow();
+        let calls = backend.commands();
         assert!(
             calls.is_empty(),
             "zero-alpha object should not produce any draw calls"
@@ -1762,17 +1591,21 @@ font_size = 16
         obj.h = 0;
         obj.text = Some("just text".to_string());
 
-        let (mut backend, calls) = RecordingBackend::new();
+        let mut backend = RecordingBackend::default();
         reg.draw(&mut backend).unwrap();
 
-        let calls = calls.borrow();
+        let calls = backend.commands();
         // Should have draw_text but NOT fill_rect.
         assert!(
-            calls.iter().any(|c| matches!(c, DrawCall::DrawText { .. })),
+            calls
+                .iter()
+                .any(|c| matches!(c, DrawCommand::DrawText { .. })),
             "text-only object should call draw_text"
         );
         assert!(
-            !calls.iter().any(|c| matches!(c, DrawCall::FillRect { .. })),
+            !calls
+                .iter()
+                .any(|c| matches!(c, DrawCommand::FillRect { .. })),
             "text-only object should NOT call fill_rect"
         );
     }
@@ -1790,19 +1623,21 @@ font_size = 16
         obj.text_color = Color::WHITE;
         obj.font_size = 12;
 
-        let (mut backend, calls) = RecordingBackend::new();
+        let mut backend = RecordingBackend::default();
         reg.draw(&mut backend).unwrap();
 
-        let calls = calls.borrow();
+        let calls = backend.commands();
         // Should have BOTH fill_rect and draw_text.
         assert!(
-            calls.iter().any(|c| matches!(c, DrawCall::FillRect { .. })),
+            calls
+                .iter()
+                .any(|c| matches!(c, DrawCommand::FillRect { .. })),
             "button should have fill_rect"
         );
         assert!(
             calls
                 .iter()
-                .any(|c| matches!(c, DrawCall::DrawText { text, .. } if text == "Click")),
+                .any(|c| matches!(c, DrawCommand::DrawText { text, .. } if text == "Click")),
             "button should have draw_text with 'Click'"
         );
     }
@@ -1822,14 +1657,14 @@ font_size = 16
         obj.z = 10;
         obj.color = Color::rgb(0, 255, 0);
 
-        let (mut backend, calls) = RecordingBackend::new();
+        let mut backend = RecordingBackend::default();
         reg.draw(&mut backend).unwrap();
 
-        let calls = calls.borrow();
+        let calls = backend.commands();
         // The first fill_rect should be for "back" (lower z), second for "front".
         let rects: Vec<_> = calls
             .iter()
-            .filter(|c| matches!(c, DrawCall::FillRect { .. }))
+            .filter(|c| matches!(c, DrawCommand::FillRect { .. }))
             .collect();
         assert_eq!(rects.len(), 2);
     }
@@ -1843,13 +1678,13 @@ font_size = 16
             obj.y = i * 16;
         }
 
-        let (mut backend, calls) = RecordingBackend::new();
+        let mut backend = RecordingBackend::default();
         reg.draw(&mut backend).unwrap();
 
-        let calls = calls.borrow();
+        let calls = backend.commands();
         let text_calls: Vec<_> = calls
             .iter()
-            .filter(|c| matches!(c, DrawCall::DrawText { .. }))
+            .filter(|c| matches!(c, DrawCommand::DrawText { .. }))
             .collect();
         assert_eq!(text_calls.len(), 5, "should render all 5 text objects");
     }
