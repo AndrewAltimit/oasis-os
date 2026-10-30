@@ -5,6 +5,8 @@
 use std::io::Write;
 use std::time::{Duration, Instant};
 
+use oasis_vfs::Vfs;
+
 use super::harness::{Reply, Session, Step, TestServer};
 use crate::LoadingState;
 
@@ -397,4 +399,192 @@ fn cookies_round_trip() {
     s.assert_shows("cookie=sid=abc123");
     // The first request carried no cookie.
     assert_eq!(server.requests_to("/login")[0].header("cookie"), None);
+}
+
+/// A page that echoes the `Cookie` header it was sent.
+fn cookie_echo(req: &super::harness::Req) -> Reply {
+    page(&format!(
+        "cookie={}",
+        req.header("cookie").unwrap_or("none")
+    ))
+}
+
+#[test]
+fn cross_site_redirect_does_not_leak_or_misfile_cookies() {
+    // "evil" is another host (cookies are per host, not per port).
+    let evil = TestServer::start_on("127.0.0.2", |req| match req.path() {
+        "/land" => Reply::with(
+            200,
+            &[
+                ("Content-Type", "text/html"),
+                ("Set-Cookie", "session=attacker; Path=/"),
+            ],
+            "<html><body><p>EvilLanding</p></body></html>",
+        ),
+        _ => cookie_echo(req),
+    });
+    let evil_land = evil.url("/land");
+    let bank = TestServer::start(move |req| match req.path() {
+        "/login" => Reply::with(
+            200,
+            &[
+                ("Content-Type", "text/html"),
+                ("Set-Cookie", "sid=bank; Path=/"),
+            ],
+            "<html><body><p>LoggedIn</p></body></html>",
+        ),
+        "/go" => Reply::redirect(302, &evil_land),
+        _ => cookie_echo(req),
+    });
+    let mut s = Session::new();
+    s.open(&bank.url("/login"));
+    s.assert_shows("LoggedIn");
+    s.open(&bank.url("/go"));
+    s.assert_shows("EvilLanding");
+
+    // (a) The bank's cookie was sent to the bank hop only.
+    assert_eq!(
+        bank.requests_to("/go")[0].header("cookie"),
+        Some("sid=bank")
+    );
+    assert_eq!(evil.requests_to("/land")[0].header("cookie"), None);
+
+    // (b) evil's Set-Cookie was filed under evil, not under the bank.
+    s.open(&bank.url("/whoami"));
+    s.assert_shows("cookie=sid=bank");
+    assert!(!s.shows("attacker"), "evil cookie planted on the bank");
+    s.open(&evil.url("/check"));
+    s.assert_shows("cookie=session=attacker");
+}
+
+#[test]
+fn set_cookie_on_a_redirect_hop_is_kept() {
+    // login -> 302 (sets the session) -> dashboard.
+    let server = TestServer::start(|req| match req.path() {
+        "/login" => Reply::with(
+            302,
+            &[("Location", "/dash"), ("Set-Cookie", "sid=fresh; Path=/")],
+            Vec::new(),
+        ),
+        _ => cookie_echo(req),
+    });
+    let mut s = Session::new();
+    s.open(&server.url("/login"));
+    assert_eq!(s.url(), server.url("/dash"));
+    s.assert_shows("cookie=sid=fresh");
+}
+
+#[test]
+fn max_age_zero_logout_deletes_the_session_cookie() {
+    let server = TestServer::start(|req| match req.path() {
+        "/login" => Reply::with(
+            200,
+            &[
+                ("Content-Type", "text/html"),
+                ("Set-Cookie", "sid=s1; Path=/"),
+            ],
+            "<html><body><p>In</p></body></html>",
+        ),
+        "/logout" => Reply::with(
+            200,
+            &[
+                ("Content-Type", "text/html"),
+                ("Set-Cookie", "sid=; Path=/; Max-Age=0"),
+            ],
+            "<html><body><p>Out</p></body></html>",
+        ),
+        _ => cookie_echo(req),
+    });
+    let mut s = Session::new();
+    s.open(&server.url("/login"));
+    s.open(&server.url("/me"));
+    s.assert_shows("cookie=sid=s1");
+    s.open(&server.url("/logout"));
+    s.assert_shows("Out");
+    s.open(&server.url("/me2"));
+    s.assert_shows("cookie=none");
+}
+
+#[test]
+fn cross_origin_redirect_reduces_the_referer_to_the_origin() {
+    let other = TestServer::start_on("127.0.0.2", |_| page("OtherSite"));
+    let other_url = other.url("/dest");
+    let server = TestServer::start(move |req| match req.path() {
+        "/" => Reply::html("<html><body><a href=\"/hop?secret=1\">HopLink</a></body></html>"),
+        "/hop" => Reply::redirect(302, &other_url),
+        _ => Reply::not_found(),
+    });
+    let mut s = Session::new();
+    s.open(&server.url("/"));
+    s.click_text("HopLink");
+    s.assert_shows("OtherSite");
+    let origin_only = format!("{}/", server.origin());
+    assert_eq!(
+        other.requests_to("/dest")[0].header("referer"),
+        Some(origin_only.as_str())
+    );
+}
+
+#[test]
+fn web_pages_cannot_load_vfs_subresources() {
+    // The shell's VFS holds a stylesheet that would hide the marker.
+    let server = TestServer::start(|_| {
+        Reply::html(
+            "<html><head><link rel=\"stylesheet\" href=\"vfs://home/hide.css\"></head>\
+             <body><p class=\"x\">StillVisible</p></body></html>",
+        )
+    });
+    let mut s = Session::new();
+    s.vfs.mkdir("/home").unwrap();
+    s.vfs
+        .write("/home/hide.css", b".x { display: none; }")
+        .unwrap();
+    s.open(&server.url("/"));
+    s.assert_shows("StillVisible");
+
+    // A local (vfs://) page keeps access to the same sheet.
+    s.vfs
+        .write(
+            "/home/page.html",
+            b"<html><head><link rel=\"stylesheet\" href=\"vfs://home/hide.css\"></head>\
+              <body><p class=\"x\">HiddenLocally</p><p>LocalPage</p></body></html>",
+        )
+        .unwrap();
+    s.open("vfs://home/page.html");
+    s.assert_shows("LocalPage");
+    assert!(!s.shows("HiddenLocally"));
+}
+
+#[test]
+fn csp_style_src_blocks_inline_styles_but_allows_nonced_and_self() {
+    let server = TestServer::start(|req| match req.path() {
+        "/ok.css" => Reply::with(
+            200,
+            &[("Content-Type", "text/css")],
+            ".l { display: none; }",
+        ),
+        _ => Reply::with(
+            200,
+            &[
+                ("Content-Type", "text/html"),
+                ("Content-Security-Policy", "style-src 'self' 'nonce-n0nce'"),
+            ],
+            "<html><head>\
+             <style>.a { display: none; }</style>\
+             <style nonce=\"n0nce\">.b { display: none; }</style>\
+             <link rel=\"stylesheet\" href=\"/ok.css\">\
+             </head><body>\
+             <p class=\"a\">UnnoncedStyleIgnored</p>\
+             <p class=\"b\">NoncedStyleHid</p>\
+             <p class=\"l\">LinkedSelfHid</p>\
+             <p style=\"display:none\">StyleAttrIgnored</p>\
+             </body></html>",
+        ),
+    });
+    let mut s = Session::new();
+    s.open(&server.url("/"));
+    s.assert_shows("UnnoncedStyleIgnored");
+    s.assert_shows("StyleAttrIgnored");
+    assert!(!s.shows("NoncedStyleHid"));
+    assert!(!s.shows("LinkedSelfHid"));
 }

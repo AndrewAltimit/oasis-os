@@ -317,3 +317,58 @@ fn script_set_values_are_edited_and_submitted() {
     s.assert_shows("posted-q-presetX");
     s.assert_shows("posted-tok-jstoken");
 }
+
+#[test]
+fn csp_script_src_runs_only_nonced_inline_scripts() {
+    let server = TestServer::start(|_| {
+        Reply::with(
+            200,
+            &[
+                ("Content-Type", "text/html"),
+                (
+                    "Content-Security-Policy",
+                    "script-src 'nonce-r4nd' 'unsafe-inline'",
+                ),
+            ],
+            "<html><body><p id=\"a\">NoncePending</p><p id=\"b\">PlainPending</p>\
+             <p><button id=\"h\" onclick=\"document.getElementById('a').textContent = \
+             'HandlerRan'\">H</button></p>\
+             <script nonce=\"r4nd\">document.getElementById('a').textContent = 'NonceRan';\
+             </script>\
+             <script>document.getElementById('b').textContent = 'PlainRan';</script>\
+             </body></html>",
+        )
+    });
+    let mut s = Session::new();
+    s.open(&server.url("/"));
+    s.assert_shows("NonceRan");
+    // A nonce disables 'unsafe-inline': the plain script must not run...
+    s.assert_shows("PlainPending");
+    assert!(!s.shows("PlainRan"));
+    // ...and neither may inline event handlers.
+    s.click_element("h");
+    s.assert_shows("NonceRan");
+    assert!(!s.shows("HandlerRan"));
+}
+
+#[test]
+fn csp_without_script_src_keeps_inline_scripts_running() {
+    let server = TestServer::start(|_| {
+        Reply::with(
+            200,
+            &[
+                ("Content-Type", "text/html"),
+                (
+                    "Content-Security-Policy",
+                    "img-src 'self'; style-src 'unsafe-inline'",
+                ),
+            ],
+            "<html><body><p id=\"a\">Pending</p>\
+             <script>document.getElementById('a').textContent = 'ScriptRan';</script>\
+             </body></html>",
+        )
+    });
+    let mut s = Session::new();
+    s.open(&server.url("/"));
+    s.assert_shows("ScriptRan");
+}
