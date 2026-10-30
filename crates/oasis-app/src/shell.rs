@@ -222,6 +222,18 @@ fn hermetic_skin_root() -> PathBuf {
 /// PSP-native (480x272) skins scaled to 1280x720 unless they pin
 /// `desktop_width` / `desktop_height`, and a resolution picked in
 /// Settings wins over both.
+/// Whether the active skin's corrupted modifiers should distort this frame
+/// (the skin enables `corrupted`, intensity > 0, and the user has not asked
+/// for reduced motion).
+fn corruption_active(state: &AppState) -> bool {
+    !state.active_theme.ui_theme.reduced_motion
+        && state
+            .skin
+            .corrupted_modifiers
+            .as_ref()
+            .is_some_and(|m| m.is_active())
+}
+
 pub fn resolve_screen_size(config: &mut OasisConfig, skin: &Skin, prefs: &UserPrefs) {
     config.screen_width = skin.manifest.screen_width;
     config.screen_height = skin.manifest.screen_height;
@@ -625,6 +637,10 @@ impl<B: ShellBackend> Shell<B> {
         // values instead of compile-time defaults.
         commands::publish_runtime_state(&state, B::NAME, &mut vfs);
 
+        // Shell profile + `startup` script, now that the registry, plugins
+        // and VFS are final. Output lands in the terminal scrollback.
+        crate::terminal_input::run_boot_scripts(&mut state, &mut vfs);
+
         // BIOS phase ended at 3.6s; clear the status line so nothing
         // lingers under the splash-phase logo.
         observer.status("");
@@ -950,7 +966,9 @@ impl<B: ShellBackend> Shell<B> {
                 &state.active_theme.chrome_layers,
                 state.active_theme.background_reduced_motion,
             )
-            || state.wm.is_animating();
+            || state.wm.is_animating()
+            // The corrupted skin's per-frame glitch never settles.
+            || corruption_active(state);
 
         // Windowed app content (browser, app runners) paints via draw
         // callbacks the SDI registry can't see: redraw while a visible
@@ -1026,6 +1044,16 @@ impl<B: ShellBackend> Shell<B> {
             pc.lap_shader();
         }
 
+        // Corrupted-skin glitch: distort the final layout for this one
+        // frame only; restored right after the SDI pass below.
+        let corruption = corruption_active(state)
+            .then_some(state.skin.corrupted_modifiers.as_ref())
+            .flatten()
+            .map(|m| {
+                let seed = state.frame_counter as u32;
+                m.apply(sdi, &mut oasis_core::skin::SimpleRng::new(seed))
+            });
+
         if state.mode == Mode::Desktop && state.wm.window_count() > 0 {
             // Vector-icon dashboards paint glyphs directly to the backend
             // (outside SDI), so we need an extra step between base SDI and
@@ -1090,6 +1118,9 @@ impl<B: ShellBackend> Shell<B> {
             sdi.draw_overlay_layer(backend)?;
         } else {
             sdi.draw(backend)?;
+        }
+        if let Some(undo) = corruption {
+            undo.restore(sdi);
         }
         if let Some(ref mut pc) = phase_clock {
             pc.lap_sdi();

@@ -8,7 +8,6 @@ pub mod active_theme;
 pub mod assets;
 pub mod builtin;
 pub mod corrupted;
-pub mod effects;
 pub mod legacy_theme;
 mod loader;
 #[cfg(feature = "serialize")]
@@ -22,8 +21,7 @@ pub use active_theme::{
     ScrollbarTheme, StartMenuTheme, ToastTheme, WallpaperTheme,
 };
 pub use assets::SkinAsset;
-pub use corrupted::{CorruptedModifiers, SimpleRng};
-pub use effects::{CorruptedEffect, ScanlineEffect, SkinEffect};
+pub use corrupted::{CorruptedModifiers, CorruptionUndo, SimpleRng};
 pub use loader::{Skin, SkinFeatures, SkinLayout, SkinManifest, SkinObjectDef, SkinSources};
 #[cfg(feature = "serialize")]
 pub use serialize::SkinTomlParts;

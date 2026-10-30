@@ -120,29 +120,91 @@ impl SimpleRng {
         (self.next_u32() >> 8) as f32 / (1u32 << 24) as f32
     }
 
-    /// Generate an i32 in [-range, +range].
+    /// Generate an i32 in `[-|range|, +|range|]`.
+    ///
+    /// Computed in 64-bit so a huge skin-supplied range (e.g.
+    /// `tear_max = 2147483647`) cannot overflow.
     pub fn next_range(&mut self, range: i32) -> i32 {
-        if range == 0 {
+        let r = i64::from(range).abs();
+        if r == 0 {
             return 0;
         }
-        let span = (range * 2 + 1) as u32;
-        (self.next_u32() % span) as i32 - range
+        let span = (r * 2 + 1) as u64;
+        let v = (u64::from(self.next_u32()) % span) as i64 - r;
+        v.clamp(i64::from(i32::MIN), i64::from(i32::MAX)) as i32
     }
 }
 
 /// Glitch characters used for text garbling.
 const GLITCH_CHARS: &[u8] = b"@#$%&*!?/\\|~^<>{}[]";
 
+/// Original state of one object touched by [`CorruptedModifiers::apply`].
+#[derive(Debug, Clone)]
+struct Saved {
+    name: String,
+    x: i32,
+    y: i32,
+    alpha: u8,
+    text: Option<String>,
+    text_shadow_offset: Option<(i32, i32)>,
+    text_shadow_color: Option<oasis_types::backend::Color>,
+}
+
+/// Undo record returned by [`CorruptedModifiers::apply`].
+///
+/// The distortion is meant to last exactly one drawn frame: apply it, draw
+/// the scene, then [`restore`](Self::restore) the clean state. Restoring is
+/// what keeps jitter from accumulating into a random walk across frames
+/// (most SDI objects are only rewritten when their content changes), and
+/// because the restored properties hash identically, the SDI dirty tracker
+/// does not see a spurious scene change.
+#[derive(Debug, Default)]
+#[must_use = "restore the scene after drawing, or the distortion accumulates"]
+pub struct CorruptionUndo {
+    saved: Vec<Saved>,
+}
+
+impl CorruptionUndo {
+    /// Number of objects whose state was saved.
+    pub fn len(&self) -> usize {
+        self.saved.len()
+    }
+
+    /// Whether nothing was distorted.
+    pub fn is_empty(&self) -> bool {
+        self.saved.is_empty()
+    }
+
+    /// Put every distorted object back the way it was before `apply`.
+    /// Objects destroyed in the meantime are skipped.
+    pub fn restore(self, sdi: &mut SdiRegistry) {
+        for s in self.saved {
+            if let Ok(obj) = sdi.get_mut(&s.name) {
+                obj.x = s.x;
+                obj.y = s.y;
+                obj.alpha = s.alpha;
+                obj.text = s.text;
+                obj.text_shadow_offset = s.text_shadow_offset;
+                obj.text_shadow_color = s.text_shadow_color;
+            }
+        }
+    }
+}
+
 impl CorruptedModifiers {
-    /// Apply corrupted modifiers to all visible SDI objects.
+    /// Whether these modifiers distort anything (`intensity > 0`).
+    pub fn is_active(&self) -> bool {
+        self.intensity > 0.0
+    }
+
+    /// Distort all visible SDI objects for one frame.
     ///
-    /// This should be called once per frame, after the normal layout is set
-    /// and before drawing. The modifications are cosmetic and ephemeral --
-    /// they should be re-applied from the clean state each frame (i.e., the
-    /// skin system restores base positions before calling this).
-    pub fn apply(&self, sdi: &mut SdiRegistry, rng: &mut SimpleRng) {
-        if self.intensity <= 0.0 {
-            return;
+    /// Call after the frame's layout is final and before drawing, then call
+    /// [`CorruptionUndo::restore`] on the result once the frame is drawn.
+    pub fn apply(&self, sdi: &mut SdiRegistry, rng: &mut SimpleRng) -> CorruptionUndo {
+        let mut undo = CorruptionUndo::default();
+        if !self.is_active() {
+            return undo;
         }
 
         let jitter = (self.position_jitter as f32 * self.intensity) as i32;
@@ -176,20 +238,27 @@ impl CorruptedModifiers {
         // Collect names first to avoid borrow issues.
         let names: Vec<String> = sdi.names().map(String::from).collect();
 
-        for name in &names {
-            let obj = match sdi.get_mut(name) {
-                Ok(o) => o,
-                Err(_) => continue,
+        for name in names {
+            let Ok(obj) = sdi.get_mut(&name) else {
+                continue;
             };
-
             if !obj.visible {
                 continue;
             }
+            let saved = Saved {
+                name,
+                x: obj.x,
+                y: obj.y,
+                alpha: obj.alpha,
+                text: obj.text.clone(),
+                text_shadow_offset: obj.text_shadow_offset,
+                text_shadow_color: obj.text_shadow_color,
+            };
 
             // Position jitter.
             if jitter > 0 {
-                obj.x += rng.next_range(jitter);
-                obj.y += rng.next_range(jitter);
+                obj.x = obj.x.saturating_add(rng.next_range(jitter));
+                obj.y = obj.y.saturating_add(rng.next_range(jitter));
             }
 
             // Alpha flicker.
@@ -203,9 +272,9 @@ impl CorruptedModifiers {
             // Horizontal tear: shift objects whose Y range overlaps the tear band.
             if let Some((tear_y, tear_h, tear_offset)) = tear_band {
                 let obj_top = obj.y;
-                let obj_bot = obj.y + obj.h as i32;
+                let obj_bot = obj.y.saturating_add_unsigned(obj.h);
                 if obj_bot > tear_y && obj_top < tear_y + tear_h {
-                    obj.x += tear_offset;
+                    obj.x = obj.x.saturating_add(tear_offset);
                 }
             }
 
@@ -222,42 +291,38 @@ impl CorruptedModifiers {
             if garble_chance > 0.0
                 && let Some(ref text) = obj.text
             {
-                let garbled: String = text
-                    .chars()
-                    .map(|ch| {
-                        if ch.is_ascii_alphanumeric() && rng.next_f32() < garble_chance {
-                            let idx = rng.next_u32() as usize % GLITCH_CHARS.len();
-                            GLITCH_CHARS[idx] as char
-                        } else {
-                            ch
-                        }
-                    })
-                    .collect();
+                let garbled = garble(text, garble_chance, rng);
                 if garbled != *text {
                     obj.text = Some(garbled);
                 }
             }
-        }
-    }
 
-    /// Garble a string of text using the corrupted modifier settings.
-    /// Useful for garbling command output before display.
-    pub fn garble_text(&self, text: &str, rng: &mut SimpleRng) -> String {
-        if self.intensity <= 0.0 {
-            return text.to_string();
+            let changed = obj.x != saved.x
+                || obj.y != saved.y
+                || obj.alpha != saved.alpha
+                || obj.text != saved.text
+                || obj.text_shadow_offset != saved.text_shadow_offset;
+            if changed {
+                undo.saved.push(saved);
+            }
         }
-        let chance = self.text_garble_chance * self.intensity;
-        text.chars()
-            .map(|ch| {
-                if ch.is_ascii_alphanumeric() && rng.next_f32() < chance {
-                    let idx = rng.next_u32() as usize % GLITCH_CHARS.len();
-                    GLITCH_CHARS[idx] as char
-                } else {
-                    ch
-                }
-            })
-            .collect()
+        undo
     }
+}
+
+/// Replace each ASCII alphanumeric char of `text` with a glitch char with
+/// probability `chance`.
+fn garble(text: &str, chance: f32, rng: &mut SimpleRng) -> String {
+    text.chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() && rng.next_f32() < chance {
+                let idx = rng.next_u32() as usize % GLITCH_CHARS.len();
+                GLITCH_CHARS[idx] as char
+            } else {
+                ch
+            }
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -311,7 +376,7 @@ mod tests {
             obj.text = Some("Hello World".to_string());
         }
         let mut rng = SimpleRng::new(0);
-        m.apply(&mut sdi, &mut rng);
+        let _ = m.apply(&mut sdi, &mut rng);
         let obj = sdi.get("test").unwrap();
         assert_eq!(obj.x, 100);
         assert_eq!(obj.y, 200);
@@ -334,7 +399,7 @@ mod tests {
             obj.y = 200;
         }
         let mut rng = SimpleRng::new(42);
-        m.apply(&mut sdi, &mut rng);
+        let _ = m.apply(&mut sdi, &mut rng);
         let obj = sdi.get("test").unwrap();
         // With jitter=10, positions should change (very unlikely to stay exact).
         // We run multiple seeds to ensure at least one changes.
@@ -344,30 +409,73 @@ mod tests {
     }
 
     #[test]
-    fn garble_text_modifies_output() {
-        let m = CorruptedModifiers {
-            text_garble_chance: 1.0, // Garble everything.
-            intensity: 1.0,
-            ..CorruptedModifiers::default()
-        };
+    fn garble_replaces_alphanumerics_only() {
         let mut rng = SimpleRng::new(42);
-        let result = m.garble_text("Hello World 123", &mut rng);
-        // With 100% garble chance, all alphanumeric chars should be replaced.
+        let result = garble("Hello World 123", 1.0, &mut rng);
         assert_ne!(result, "Hello World 123");
-        // Spaces should remain.
-        assert!(result.contains(' '));
+        assert_eq!(result.chars().nth(5), Some(' '));
+        assert!(result.chars().all(|c| !c.is_ascii_alphanumeric()));
+        assert_eq!(garble("Hello", 0.0, &mut rng), "Hello");
     }
 
     #[test]
-    fn garble_text_zero_intensity() {
+    fn restore_undoes_every_distortion() {
         let m = CorruptedModifiers {
+            position_jitter: 10,
+            alpha_flicker_chance: 1.0,
+            alpha_flicker_min: 0,
             text_garble_chance: 1.0,
-            intensity: 0.0,
+            tear_chance: 1.0,
+            color_shift_chance: 1.0,
+            color_shift_offset: 5,
+            intensity: 1.0,
             ..CorruptedModifiers::default()
         };
-        let mut rng = SimpleRng::new(42);
-        let result = m.garble_text("Hello", &mut rng);
-        assert_eq!(result, "Hello");
+        let mut sdi = SdiRegistry::new();
+        {
+            let obj = sdi.create("label");
+            obj.x = 100;
+            obj.y = 50;
+            obj.w = 50;
+            obj.h = 300;
+            obj.text = Some("Hello".to_string());
+        }
+        sdi.clear_scene_dirty();
+        let before = sdi.scene_signature();
+        let alpha_before = sdi.get("label").unwrap().alpha;
+        let mut rng = SimpleRng::new(7);
+        for _ in 0..50 {
+            let undo = m.apply(&mut sdi, &mut rng);
+            assert!(!undo.is_empty());
+            undo.restore(&mut sdi);
+        }
+        let obj = sdi.get("label").unwrap();
+        assert_eq!((obj.x, obj.y, obj.alpha), (100, 50, alpha_before));
+        assert_eq!(obj.text.as_deref(), Some("Hello"));
+        assert_eq!(obj.text_shadow_offset, None);
+        assert_eq!(sdi.scene_signature(), before);
+        assert!(
+            !sdi.take_scene_dirty(),
+            "restored scene must not read as changed"
+        );
+    }
+
+    #[test]
+    fn huge_ranges_do_not_overflow() {
+        let mut rng = SimpleRng::new(1);
+        for _ in 0..100 {
+            assert!(rng.next_range(i32::MAX) >= -i32::MAX);
+            let _ = rng.next_range(i32::MIN);
+        }
+        let m = CorruptedModifiers {
+            tear_chance: 1.0,
+            tear_max: i32::MAX,
+            position_jitter: i32::MAX,
+            ..CorruptedModifiers::default()
+        };
+        let mut sdi = SdiRegistry::new();
+        sdi.create("o").h = u32::MAX;
+        let _ = m.apply(&mut sdi, &mut rng);
     }
 
     #[test]
@@ -399,7 +507,7 @@ intensity = 0.75
             obj.visible = false;
         }
         let mut rng = SimpleRng::new(42);
-        m.apply(&mut sdi, &mut rng);
+        let _ = m.apply(&mut sdi, &mut rng);
         let obj = sdi.get("hidden").unwrap();
         assert_eq!(obj.x, 100);
         assert_eq!(obj.y, 200);
@@ -436,7 +544,7 @@ intensity = 0.75
             obj.h = 300; // Covers full screen height.
         }
         let mut rng = SimpleRng::new(42);
-        m.apply(&mut sdi, &mut rng);
+        let _ = m.apply(&mut sdi, &mut rng);
         let obj = sdi.get("wide").unwrap();
         // Object spans full height so the tear band always overlaps.
         assert_ne!(obj.x, 100);
@@ -473,7 +581,7 @@ intensity = 0.75
                 obj.text_shadow_offset = None;
                 obj.text_shadow_color = None;
             }
-            m.apply(&mut sdi, &mut rng);
+            let _ = m.apply(&mut sdi, &mut rng);
             let obj = sdi.get("label").unwrap();
             if obj.text_shadow_offset.is_some() {
                 got_shadow = true;

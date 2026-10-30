@@ -368,10 +368,12 @@ pub fn populate_profile(vfs: &mut dyn oasis_vfs::Vfs) {
     let _ = vfs.mkdir("/home");
     let profile = "\
 # OASIS OS shell profile
-# This file is executed on terminal startup.
-set USER=oasis
+# Run once at boot by hosts that call oasis_core::script::run_boot_scripts
+# (the desktop shell does), before /etc/startup.sh. Edit the values
+# below to change the shell defaults.
+set USER=user
 set HOME=/home
-set SHELL=oasis-sh
+set SHELL=oasis
 ";
     let _ = vfs.write("/home/.profile", profile.as_bytes());
 }
@@ -502,6 +504,6 @@ mod tests {
         assert!(vfs.exists("/home/.profile"));
         let data = vfs.read("/home/.profile").unwrap();
         let text = String::from_utf8_lossy(&data);
-        assert!(text.contains("USER=oasis"));
+        assert!(text.contains("USER=user"));
     }
 }

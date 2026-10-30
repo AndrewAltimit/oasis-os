@@ -30,10 +30,14 @@ The terminal in `oasis-terminal/src/` supports:
 - control flow in one-liners and scripts (see below)
 - background jobs (`cmd &`, `jobs`, `fg`, `bg`, `kill %N`)
 
-Startup files are seeded but not yet executed: `populate_profile()` writes
-`/home/.profile` (`USER`, `HOME`, `SHELL`), and `oasis_core::script::run_startup`
-runs `/etc/startup.sh` (managed by the `startup` command), but no host calls
-either at boot today.
+Startup files: `populate_profile()` seeds `/home/.profile` (restating the
+default `USER`, `HOME` and `SHELL`), and the `startup` command manages
+`/etc/startup.sh`. At boot the desktop shell calls
+`oasis_core::script::run_boot_scripts`, which runs the profile and then the
+startup script, each only if it exists, through the terminal's own registry
+(so variables the profile sets persist into the session). Their output goes
+to the terminal scrollback, and a failing script reports an `error:` line
+without stopping the other one. Other hosts (WASM, UE5, PSP) don't call it yet.
 
 ### Shell builtins
 

@@ -126,7 +126,6 @@ icons_per_page = 6        # Icons per page
 grid_cols = 3             # Grid columns
 grid_rows = 2             # Grid rows
 corrupted = false         # Enable corrupted visual effects
-command_categories = []   # Restrict to specific command categories
 
 # -- Desktop icon layout --
 icon_layout = "grid"      # "grid" (uniform cells) or "free" (desktop icons)
@@ -443,7 +442,16 @@ alpha_flicker_chance = 0.15 # Probability of alpha flicker
 alpha_flicker_min = 60      # Minimum alpha during flicker
 text_garble_chance = 0.08   # Probability of character garbling
 intensity = 1.0             # Overall effect intensity (0.0-1.0)
+tear_chance = 0.02          # Per-frame chance of a horizontal tear band
+tear_max = 20               # Max horizontal tear offset (px)
+color_shift_chance = 0.03   # Per-frame chance of an RGB-split text shadow
+color_shift_offset = 2      # Max RGB-split offset (px)
+screen_height = 272         # Height tear bands are sampled over
 ```
+
+The values above (except the first five, which the `corrupted` skin sets)
+are the defaults. See [Corrupted Effect](#corrupted-effect) for how hosts
+apply it.
 
 ## Image Assets
 
@@ -902,27 +910,23 @@ Reloads re-read the TOML and assets from disk (even for names that are
 also compiled in as built-ins) and play the skin's entrance transition,
 so what you see is exactly what a fresh boot would show.
 
-## Effect System
+## Corrupted Effect
 
-Effects are pluggable visual modifiers applied each frame. Built-in effects:
+The one per-frame scene effect is **corrupted**: position jitter, alpha
+flicker, text garbling, horizontal tear bands and RGB-split text shadows.
+Enable it in `features.toml` (defaults apply) or ship a `corrupted.toml`
+with your own values (see above):
 
-- **corrupted**: Position jitter, alpha flicker, text garbling
-- **scanlines**: CRT-style horizontal line overlay
-
-Effects are enabled via `features.toml`:
 ```toml
-corrupted = true    # Enable corrupted effect
+corrupted = true    # Enable the corrupted effect
 ```
 
-Custom effects implement the `SkinEffect` trait:
-```rust
-pub trait SkinEffect: Debug {
-    fn name(&self) -> &str;
-    fn intensity(&self) -> f32;
-    fn set_intensity(&mut self, intensity: f32);
-    fn apply(&mut self, sdi: &mut SdiRegistry);
-}
-```
+The desktop shell distorts each drawn frame and restores the clean scene
+right after drawing, so the glitch never drifts; it keeps the shell
+redrawing every frame while active and is skipped under `reduced_motion`.
+Set `intensity = 0.0` in `corrupted.toml` to turn it off. WASM, UE5 and PSP
+hosts don't apply it yet. For static CRT looks use vector layers
+(`kind = "scanlines"`, above) instead.
 
 ## Runtime Switching
 
