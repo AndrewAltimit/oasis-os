@@ -20,21 +20,7 @@ oasis_terminal::register_commands!(register_skin_commands, [SkinCmd]);
 /// `./skins/{name}/`. Unlike `resolve_skin`, does NOT fall back to classic —
 /// a lint of a missing skin must be an error, not a lint of the fallback.
 fn load_for_lint(target: &str) -> Option<oasis_types::error::Result<oasis_skin::Skin>> {
-    if let Ok(skin) = builtin::load_builtin(target) {
-        return Some(Ok(skin));
-    }
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-        let path = std::path::Path::new(target);
-        if path.join("skin.toml").is_file() {
-            return Some(Skin::from_directory(path));
-        }
-        let skins_dir = std::path::Path::new("skins").join(target);
-        if skins_dir.join("skin.toml").is_file() {
-            return Some(Skin::from_directory(&skins_dir));
-        }
-    }
-    None
+    oasis_skin::lookup_skin(target)
 }
 
 /// Run `Skin::validate` on a named skin and format the report.

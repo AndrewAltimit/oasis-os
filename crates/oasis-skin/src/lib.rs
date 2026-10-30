@@ -80,7 +80,8 @@ pub fn resolve_skin(name_or_path: &str) -> Result<Skin> {
     let skin = lookup_skin(name_or_path).unwrap_or_else(|| {
         Err(OasisError::Config(
             format!(
-                "unknown skin '{name_or_path}' (not a built-in name, a directory with                  skin.toml, or a skins/ subdirectory)"
+                "unknown skin '{name_or_path}' (not a built-in name, a directory with \
+                 skin.toml, or a skins/ subdirectory)"
             )
             .into(),
         ))
