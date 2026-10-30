@@ -90,19 +90,15 @@ boot state for crash verification.
 ./scripts/psp-screenshot.sh --list
 ```
 
-## Future Enhancements
+## Input-driven scenarios
 
-When PPSSPP patches are added to `docker/ppsspp-patches/`:
+The terminal, browser, input and audio scenarios above still capture the
+boot state. Input injection does not need PPSSPP patches: build the EBOOT
+with the `autorun-script` feature and drive it from an `AUTORUN.txt`
+(`launch`, `press`, `cursor`, `skin`, `wait`, `screenshot`), as
+`scripts/test-settings-ppsspp.sh` does for the Settings flow. See
+[`docs/psp-autorun.md`](../docs/psp-autorun.md). Porting these scenarios to
+that runner is the remaining work.
 
-1. **Input injection** (`001-input-injection.patch`):
-   - Send D-pad/button events via command-line flags or HTTP API
-   - Enable terminal, browser, and input scenarios
-
-2. **HTTP control API** (`002-http-control-api.patch`):
-   - Remote control PPSSPP from the test script
-   - Wait for specific conditions before capturing
-   - Send input sequences with timing
-
-3. **Frame-based capture** (`003-frame-capture.patch`):
-   - Capture at specific frame count instead of timeout
-   - More deterministic screenshots
+For a pass/fail boot check (boot markers, frame count, the built-in
+self-test, the recovery EBOOT) use `scripts/psp-smoke-test.sh`, which CI runs.

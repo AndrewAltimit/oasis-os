@@ -8,7 +8,7 @@
 //! press/release events.
 //!
 //! Uses `restricted_std` with `RUST_PSP_BUILD_STD=1` for std support on PSP.
-//! Types are imported from `oasis-core` directly.
+//! Core types are re-exported from `oasis-core` below for the EBOOT binary.
 
 #![feature(restricted_std)]
 
@@ -24,8 +24,6 @@ pub mod input;
 pub mod network;
 pub mod power;
 pub mod procedural;
-pub mod psmf;
-pub mod psmf_decode;
 // Rust shim that exposes the libc / libm / time / stdio symbols that
 // rquickjs-sys's QuickJS-NG C sources reference. Pspdev's prebuilt
 // libc.a/libm.a/libcglue.a are eabi32 + single-float + abicalls and
@@ -57,7 +55,7 @@ pub use procedural::{
     generate_gradient, generate_gradient_with,
 };
 pub use sfx::SfxId;
-pub use status::{StatusBarInfo, SystemInfo};
+pub use status::{StatusBarInfo, SystemInfo, heap_kb};
 pub use threading::{
     AudioCmd, AudioHandle, IoCmd, IoHandle, IoResponse, TvCatalogRequest, spawn_workers,
 };
@@ -218,7 +216,7 @@ impl PspBackend {
             let atlas_layout = Layout::from_size_align(atlas_size, 16).unwrap();
             let atlas_ptr = alloc(atlas_layout);
             if atlas_ptr.is_null() {
-                // Graceful fallback: skip atlas font rendering, use bitmap-only.
+                // Out of memory at boot: nothing sensible to draw text with.
                 self.force_bitmap_font = true;
             } else {
                 self.font_atlas_ptr = atlas_ptr;
@@ -237,46 +235,7 @@ impl PspBackend {
                 BUF_WIDTH as i32,
             );
 
-            // Viewport and coordinate setup.
-            sys::sceGuOffset(2048 - (SCREEN_WIDTH / 2), 2048 - (SCREEN_HEIGHT / 2));
-            sys::sceGuViewport(2048, 2048, SCREEN_WIDTH as i32, SCREEN_HEIGHT as i32);
-
-            // Scissor (full screen).
-            sys::sceGuScissor(0, 0, SCREEN_WIDTH as i32, SCREEN_HEIGHT as i32);
-            sys::sceGuEnable(GuState::ScissorTest);
-
-            // Alpha blending.
-            sys::sceGuEnable(GuState::Blend);
-            sys::sceGuBlendFunc(
-                BlendOp::Add,
-                BlendFactor::SrcAlpha,
-                BlendFactor::OneMinusSrcAlpha,
-                0,
-                0,
-            );
-
-            // Texture state.
-            sys::sceGuEnable(GuState::Texture2D);
-            sys::sceGuTexFunc(TextureEffect::Modulate, TextureColorComponent::Rgba);
-            sys::sceGuTexFilter(TextureFilter::Nearest, TextureFilter::Nearest);
-
-            // Projection: orthographic 2D.
-            sys::sceGumMatrixMode(MatrixMode::Projection);
-            sys::sceGumLoadIdentity();
-            sys::sceGumOrtho(
-                0.0,
-                SCREEN_WIDTH as f32,
-                SCREEN_HEIGHT as f32,
-                0.0,
-                -1.0,
-                1.0,
-            );
-
-            // View and model: identity.
-            sys::sceGumMatrixMode(MatrixMode::View);
-            sys::sceGumLoadIdentity();
-            sys::sceGumMatrixMode(MatrixMode::Model);
-            sys::sceGumLoadIdentity();
+            apply_gu_state();
 
             // Finalize init list, sync, enable display.
             sys::sceGuFinish();
@@ -284,8 +243,11 @@ impl PspBackend {
             sys::sceDisplayWaitVblankStart();
             sys::sceGuDisplay(true);
 
-            // Build bitmap font atlas in RAM (fallback).
-            self.build_font_atlas(atlas_ptr);
+            // Build the bitmap font atlas in RAM (also holds the white texel
+            // fill_rect samples).
+            if !atlas_ptr.is_null() {
+                self.build_font_atlas(atlas_ptr);
+            }
 
             // Try to initialize system TrueType fonts (VRAM glyph atlas).
             // Allocate 512x512 T8 (1 byte/pixel) from VRAM for the atlas.
@@ -372,47 +334,7 @@ impl PspBackend {
         // from the main loop. All sceGu/sceGum calls match init().
         unsafe {
             sys::sceGuStart(GuContextType::Direct, &raw mut DISPLAY_LIST as *mut c_void);
-
-            // Viewport and coordinate setup (matches init).
-            sys::sceGuOffset(2048 - (SCREEN_WIDTH / 2), 2048 - (SCREEN_HEIGHT / 2));
-            sys::sceGuViewport(2048, 2048, SCREEN_WIDTH as i32, SCREEN_HEIGHT as i32);
-
-            // Scissor (full screen).
-            sys::sceGuScissor(0, 0, SCREEN_WIDTH as i32, SCREEN_HEIGHT as i32);
-            sys::sceGuEnable(GuState::ScissorTest);
-
-            // Alpha blending.
-            sys::sceGuEnable(GuState::Blend);
-            sys::sceGuBlendFunc(
-                BlendOp::Add,
-                BlendFactor::SrcAlpha,
-                BlendFactor::OneMinusSrcAlpha,
-                0,
-                0,
-            );
-
-            // Texture state.
-            sys::sceGuEnable(GuState::Texture2D);
-            sys::sceGuTexFunc(TextureEffect::Modulate, TextureColorComponent::Rgba);
-            sys::sceGuTexFilter(TextureFilter::Nearest, TextureFilter::Nearest);
-
-            // Projection: orthographic 2D.
-            sys::sceGumMatrixMode(MatrixMode::Projection);
-            sys::sceGumLoadIdentity();
-            sys::sceGumOrtho(
-                0.0,
-                SCREEN_WIDTH as f32,
-                SCREEN_HEIGHT as f32,
-                0.0,
-                -1.0,
-                1.0,
-            );
-
-            // View and model: identity.
-            sys::sceGumMatrixMode(MatrixMode::View);
-            sys::sceGumLoadIdentity();
-            sys::sceGumMatrixMode(MatrixMode::Model);
-            sys::sceGumLoadIdentity();
+            apply_gu_state();
         }
     }
 
@@ -434,10 +356,6 @@ impl PspBackend {
             .intersects(psp::sys::CtrlButtons::from_bits_truncate(!exclude.bits()))
     }
 
-    /// Query volatile memory cache status.
-    ///
-    /// Returns `(total_bytes, remaining_bytes)` if volatile memory was
-    /// claimed, or `None` on PSP-1000 / if already locked.
     /// Raw pointer to the bitmap font atlas texture in RAM.
     ///
     /// The atlas is a 128x64 RGBA8888 image, 16-byte aligned, built during
@@ -447,10 +365,69 @@ impl PspBackend {
         self.font_atlas_ptr
     }
 
+    /// Query volatile memory cache status.
+    ///
+    /// Returns `(total_bytes, remaining_bytes)` if volatile memory was
+    /// claimed, or `None` on PSP-1000 / if already locked.
     pub fn volatile_mem_info(&self) -> Option<(usize, usize)> {
         self.volatile_alloc
             .as_ref()
             .map(|va| (va.size, va.remaining()))
+    }
+}
+
+/// Apply the 2D rendering state every frame list relies on: viewport,
+/// full-screen scissor, alpha blending, modulated nearest-neighbour
+/// texturing and an orthographic projection. Used by `init` and by
+/// `reinit_gu_frame` after a utility dialog clobbered the GE state.
+///
+/// # Safety
+///
+/// Must be called with a GU display list open (`sceGuStart`).
+unsafe fn apply_gu_state() {
+    // SAFETY: plain GU/GUM state calls on the open display list (caller
+    // contract); no pointers are passed.
+    unsafe {
+        // Viewport and coordinate setup.
+        sys::sceGuOffset(2048 - (SCREEN_WIDTH / 2), 2048 - (SCREEN_HEIGHT / 2));
+        sys::sceGuViewport(2048, 2048, SCREEN_WIDTH as i32, SCREEN_HEIGHT as i32);
+
+        // Scissor (full screen).
+        sys::sceGuScissor(0, 0, SCREEN_WIDTH as i32, SCREEN_HEIGHT as i32);
+        sys::sceGuEnable(GuState::ScissorTest);
+
+        // Alpha blending.
+        sys::sceGuEnable(GuState::Blend);
+        sys::sceGuBlendFunc(
+            BlendOp::Add,
+            BlendFactor::SrcAlpha,
+            BlendFactor::OneMinusSrcAlpha,
+            0,
+            0,
+        );
+
+        // Texture state.
+        sys::sceGuEnable(GuState::Texture2D);
+        sys::sceGuTexFunc(TextureEffect::Modulate, TextureColorComponent::Rgba);
+        sys::sceGuTexFilter(TextureFilter::Nearest, TextureFilter::Nearest);
+
+        // Projection: orthographic 2D.
+        sys::sceGumMatrixMode(MatrixMode::Projection);
+        sys::sceGumLoadIdentity();
+        sys::sceGumOrtho(
+            0.0,
+            SCREEN_WIDTH as f32,
+            SCREEN_HEIGHT as f32,
+            0.0,
+            -1.0,
+            1.0,
+        );
+
+        // View and model: identity.
+        sys::sceGumMatrixMode(MatrixMode::View);
+        sys::sceGumLoadIdentity();
+        sys::sceGumMatrixMode(MatrixMode::Model);
+        sys::sceGumLoadIdentity();
     }
 }
 

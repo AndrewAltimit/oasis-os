@@ -472,12 +472,12 @@ main() {
         # If we already found the compiled default and this isn't it, skip.
         if [ -n "$detected_default" ] && [ "$skin" != "$detected_default" ]; then
             log_warn "$skin -- skipped (not compiled default '$detected_default')"
-            ((skipped++))
+            skipped=$((skipped + 1))
             continue
         fi
 
         if test_shader_activation "$skin"; then
-            ((passed++))
+            passed=$((passed + 1))
             if [ -z "$detected_default" ]; then
                 detected_default="$skin"
             fi
@@ -486,9 +486,9 @@ main() {
             # compiled default -- skip rather than fail.
             if [ -z "$detected_default" ] && [ ${#skins_to_test[@]} -gt 1 ]; then
                 log_warn "$skin -- not the compiled default, skipping"
-                ((skipped++))
+                skipped=$((skipped + 1))
             else
-                ((failed++))
+                failed=$((failed + 1))
             fi
         fi
     done
@@ -504,9 +504,9 @@ main() {
         echo "--- Stability Tests (30s) ---"
         for skin in "${skins_to_test[@]}"; do
             if test_stability "$skin" 30; then
-                ((passed++))
+                passed=$((passed + 1))
             else
-                ((failed++))
+                failed=$((failed + 1))
             fi
         done
         echo ""

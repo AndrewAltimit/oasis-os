@@ -5,7 +5,9 @@
 > via the `sceMpeg` NAL-direct path with `mpeg_vsh370.prx`; see
 > [psp-architecture.md](../psp-architecture.md) and
 > [psp-me-decode-next-steps.md](psp-me-decode-next-steps.md). Kept as a
-> research record.
+> research record. The prototype it describes (`psmf.rs`, `psmf_decode.rs`)
+> was never wired into playback and has since been deleted; it survives in
+> git history.
 
 ## Status
 

@@ -96,6 +96,45 @@ pub(crate) fn load_net_modules_once() {
     }
 }
 
+/// True once the access-point connection has an IP address.
+///
+/// Reads the apctl state directly: `psp::net::is_connected()` tracks its
+/// own flag, which a raw `sceNetApctlConnect` (e.g. the cmd_server's boot
+/// auto-connect) never sets.
+pub fn wifi_has_ip() -> bool {
+    let mut state = sys::ApctlState::Disconnected;
+    // SAFETY: `state` is a valid out-pointer for the duration of the call.
+    unsafe { sys::sceNetApctlGetState(&mut state) };
+    matches!(state, sys::ApctlState::GotIp)
+}
+
+/// Try saved WiFi profiles 1 and 0 without any UI, waiting up to 15 s for
+/// each to get an IP. The network stack must already be initialized.
+pub(crate) fn connect_saved_profiles() -> bool {
+    for profile in [1i32, 0] {
+        // SAFETY: scalar argument; the caller initialized the net stack.
+        let ret = unsafe { sys::sceNetApctlConnect(profile) };
+        if ret < 0 {
+            crate::video::vlog_force(&format!(
+                "[NET] apctl connect({profile}) = {:#010x}",
+                ret as u32
+            ));
+            continue;
+        }
+        for _ in 0..30 {
+            if wifi_has_ip() {
+                return true;
+            }
+            psp::thread::sleep_ms(500);
+        }
+        // Timed out — disconnect and try the next profile.
+        // SAFETY: argument-less; tears down the failed attempt.
+        unsafe { sys::sceNetApctlDisconnect() };
+        psp::thread::sleep_ms(500);
+    }
+    false
+}
+
 /// Initialize the PSP network stack and connect to WiFi access point 1.
 ///
 /// No-op if already initialized. Returns an error if WiFi is unavailable
@@ -129,13 +168,9 @@ fn ensure_net_init() -> Result<()> {
 
     // Check if WiFi is already connected (e.g. cmd_server auto-connected
     // at boot). If so, skip module loading, init, and dialog entirely.
-    {
-        let mut state = psp::sys::ApctlState::Disconnected;
-        unsafe { psp::sys::sceNetApctlGetState(&mut state) };
-        if matches!(state, psp::sys::ApctlState::GotIp) {
-            NET_INITIALIZED.store(true, Ordering::Release);
-            return Ok(());
-        }
+    if wifi_has_ip() {
+        NET_INITIALIZED.store(true, Ordering::Release);
+        return Ok(());
     }
 
     // Load kernel modules before initializing the network stack.
@@ -149,34 +184,9 @@ fn ensure_net_init() -> Result<()> {
         NET_STACK_INITIALIZED.store(true, Ordering::Release);
     }
 
-    // Try silent auto-connect to saved WiFi profiles (1 and 0).
-    let mut auto_connected = false;
-    {
-        for profile in [1i32, 0] {
-            let ret = unsafe { psp::sys::sceNetApctlConnect(profile) };
-            if ret >= 0 {
-                // Wait for connection (state 4 = got IP), up to 15 seconds.
-                for _ in 0..30 {
-                    let mut state = psp::sys::ApctlState::Disconnected;
-                    unsafe { psp::sys::sceNetApctlGetState(&mut state) };
-                    if matches!(state, psp::sys::ApctlState::GotIp) {
-                        auto_connected = true;
-                        break;
-                    }
-                    psp::thread::sleep_ms(500);
-                }
-                if auto_connected {
-                    break;
-                }
-                // Timed out — disconnect and try next profile.
-                unsafe { psp::sys::sceNetApctlDisconnect() };
-                psp::thread::sleep_ms(500);
-            }
-        }
-    }
-
-    // Fall back to the WiFi connection dialog if auto-connect failed.
-    if !auto_connected {
+    // Try silent auto-connect to saved WiFi profiles, falling back to the
+    // WiFi connection dialog.
+    if !connect_saved_profiles() {
         if let Err(e) = psp::net::connect_dialog() {
             psp::net::term();
             NET_STACK_INITIALIZED.store(false, Ordering::Release);
@@ -201,21 +211,7 @@ fn ensure_net_init() -> Result<()> {
         let ip_str = core::str::from_utf8(&ip)
             .unwrap_or("?")
             .trim_end_matches('\0');
-        // Write to log file only (no on-screen overlay).
-        unsafe {
-            let msg = format!("[NET] up, IP: {ip_str}\n");
-            let fd = psp::sys::sceIoOpen(
-                b"ms0:/PSP/GAME/OASISOS/eboot.log\0".as_ptr(),
-                psp::sys::IoOpenFlags::APPEND
-                    | psp::sys::IoOpenFlags::CREAT
-                    | psp::sys::IoOpenFlags::WR_ONLY,
-                0o777,
-            );
-            if fd >= psp::sys::SceUid(0) {
-                psp::sys::sceIoWrite(fd, msg.as_ptr() as *const _, msg.len());
-                psp::sys::sceIoClose(fd);
-            }
-        }
+        crate::video::vlog_force(&format!("[NET] up, IP: {ip_str}"));
     }
 
     Ok(())

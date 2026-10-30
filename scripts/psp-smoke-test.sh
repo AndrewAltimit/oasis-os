@@ -33,6 +33,9 @@ set -euo pipefail
 # Windows `pwd -W` gives the C:/... form Docker Desktop needs; elsewhere it
 # fails and plain `pwd` is used.
 abs_dir() { (cd "$1" && { pwd -W 2>/dev/null || pwd; }); }
+# Git Bash would otherwise rewrite the container-side paths passed to
+# `docker run` (/smoke/...) into Windows paths. No effect elsewhere.
+export MSYS_NO_PATHCONV=1
 
 PROJECT_DIR="$(abs_dir "$(dirname "$0")/..")"
 

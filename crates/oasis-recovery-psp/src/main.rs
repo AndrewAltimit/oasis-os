@@ -12,7 +12,7 @@
 //! 4. Host pushes fixed EBOOT/PRX files over WiFi
 //! 5. User reboots normally → fixed OASIS OS loads
 //!
-//! ## TCP Commands (same protocol as cmd_server.rs)
+//! ## TCP Commands (same protocol as oasis-backend-psp cmd_server)
 //!
 //!   ping                      → "pong\n"
 //!   upload <size> <path>      → receive file and write to ms0:
@@ -104,7 +104,7 @@ fn psp_main() {
 }
 
 // ---------------------------------------------------------------------------
-// WiFi auto-connect (same logic as cmd_server.rs)
+// WiFi auto-connect (same logic as oasis-backend-psp cmd_server)
 // ---------------------------------------------------------------------------
 
 fn auto_connect_wifi() -> bool {

@@ -59,7 +59,8 @@ pub const FONT_ATLAS_H: u32 = 64;
 /// Glyphs per row in the atlas.
 const ATLAS_COLS: u32 = 16;
 
-/// Fully opaque white in ABGR8888 format (used for untinted texture sampling).
+/// Fully opaque white, as a `0xAABBGGRR` color (used for untinted texture
+/// sampling).
 const COLOR_WHITE_ABGR: u32 = 0xFFFF_FFFF;
 
 // ---------------------------------------------------------------------------
@@ -71,16 +72,20 @@ impl PspBackend {
     ///
     /// 16 glyphs per row, 6 rows (95 glyphs for ASCII 32-126).
     /// Each glyph is 8x8. White where bit is set, transparent elsewhere.
-    /// SAFETY: `buf` must point to a valid, 16-byte-aligned allocation of at
-    /// least `FONT_ATLAS_W * FONT_ATLAS_H * 4` bytes. Caller ensures this
-    /// via `alloc(atlas_layout)` with a null check.
+    ///
+    /// # Safety
+    ///
+    /// `buf` must point to a valid, 16-byte-aligned allocation of at least
+    /// `FONT_ATLAS_W * FONT_ATLAS_H * 4` bytes.
     pub(crate) unsafe fn build_font_atlas(&self, buf: *mut u8) {
         let pixels = buf as *mut u32;
         let stride = FONT_ATLAS_W;
         let total = (FONT_ATLAS_W * FONT_ATLAS_H) as usize;
 
-        // Zero the entire atlas first (manual loop -- see MEMORY.md footgun).
+        // Zero the entire atlas first (deliberately a manual loop rather
+        // than `write_bytes`).
         for i in 0..total {
+            // SAFETY: i < total, the atlas size in u32s (caller contract).
             unsafe { pixels.add(i).write(0u32) };
         }
 
@@ -88,6 +93,7 @@ impl PspBackend {
         // Used by fill_rect_inner to draw colored rectangles without toggling
         // Texture2D state (sample white texel * vertex color = fill color).
         let white_offset = ((FONT_ATLAS_H - 1) * stride + (FONT_ATLAS_W - 1)) as usize;
+        // SAFETY: the last pixel of the atlas.
         unsafe { pixels.add(white_offset).write(COLOR_WHITE_ABGR) };
 
         for idx in 0u32..95 {
@@ -102,6 +108,8 @@ impl PspBackend {
                         let px = col * 8 + gx;
                         let py = row * 8 + gy;
                         let offset = (py * stride + px) as usize;
+                        // SAFETY: 95 glyphs in 16 columns x 6 rows of 8x8
+                        // cells fit inside the 128x64 atlas.
                         unsafe { pixels.add(offset).write(COLOR_WHITE_ABGR) };
                     }
                 }

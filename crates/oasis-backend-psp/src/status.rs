@@ -2,6 +2,18 @@
 
 use psp::sys;
 
+/// User-partition heap state in KB: `(total free, largest free block)`.
+pub fn heap_kb() -> (i32, i32) {
+    // SAFETY: argument-less kernel queries returning byte counts.
+    let (free, max_blk) = unsafe {
+        (
+            sys::sceKernelTotalFreeMemSize(),
+            sys::sceKernelMaxFreeMemSize(),
+        )
+    };
+    (free as i32 / 1024, max_blk as i32 / 1024)
+}
+
 /// Runtime hardware info queried from PSP firmware.
 pub struct SystemInfo {
     /// CPU clock frequency in MHz.
