@@ -57,25 +57,45 @@ directly.
   "PSL-lite" public-suffix guard), `Max-Age` / `Expires` expiry and
   deletion, `Secure` (sent over and accepted from `https:` only),
   `__Secure-` / `__Host-` prefixes, control-character and 4 KiB size
-  checks, 50-per-domain / 3000-total caps. `SameSite` is parsed but not
-  enforced. Cookies are computed and stored **per redirect hop**, so a
-  cross-site redirect never carries the first site's cookies and a hop's
-  `Set-Cookie` lands under the host that sent it. `document.cookie` is a
-  separate per-page map that never reaches the network.
+  checks, 50-per-domain / 3000-total caps; plain http can neither
+  overwrite nor delete a `Secure` cookie. `SameSite` is enforced on send
+  (`cookies::SameSiteContext`, from `ResourceRequest::initiator`):
+  cross-site subresources get no `Strict` / `Lax` cookies and cross-site
+  top-level navigations get `Lax` ones only with GET / HEAD; sites are
+  PSL-lite registrable domains, a missing `SameSite` behaves as `None`,
+  and GET navigations count as user-initiated (link clicks and typed
+  URLs share one path). Cookies are computed and stored **per redirect
+  hop**, so a cross-site redirect never carries the first site's
+  cookies and a hop's `Set-Cookie` lands under the host that sent it.
+  `document.cookie` is a separate per-page map (4 KiB per pair, 50
+  pairs, `max-age=0` / past-`expires` deletion) that never reaches the
+  network.
 - **Redirect header policy** — cache validators go on the first hop
   only; `Cookie` / `Authorization` are dropped once a hop leaves the
   original origin; `Referer` follows `strict-origin-when-cross-origin`
   per hop (origin only cross-origin, nothing on an `https:` → `http:`
-  downgrade); body headers go with the body on a POST → GET rewrite.
+  downgrade); 301 / 302 / 303 rewrite POST to GET (body headers go with
+  the body) while 307 / 308 keep method and body. A network response
+  may only redirect to `http:` / `https:` (Gemini: `gemini:`).
+- **Request hygiene** — `Url::request_target` percent-encodes controls,
+  space and non-ASCII in the path and query (h1 request line, h2
+  `:path`, PSP), and `validate_request` rejects non-token methods /
+  header names and CR / LF / NUL in header values or the host before
+  connecting. Keep-alive connections are pooled only after a response
+  that ended at its framed length.
 - **CSP** (`oasis-http/src/csp.rs`) — every `Content-Security-Policy` header is
   enforced (report-only and `<meta>` policies are ignored):
   `script-src(-elem)` gates inline `<script>` (matching `nonce`,
   `'sha256-…'` hash, or `'unsafe-inline'` when the list has no nonce /
   hash / `'strict-dynamic'`); `script-src-attr` gates inline event
-  handlers (`'unsafe-inline'` only); `style-src(-elem)` gates inline
+  handlers one by one (`'unsafe-inline'`, or `'unsafe-hashes'` plus the
+  hash of that handler's text); `style-src(-elem)` gates inline
   `<style>` (nonce / hash / `'unsafe-inline'`) and `<link
   rel=stylesheet>` / `@import` URLs; `style-src-attr` gates
-  parser-inserted `style=""`; `connect-src` gates script `fetch()`.
+  parser-inserted `style=""`; `connect-src` gates script `fetch()`
+  (every redirect hop, and `data:` URLs). The policy is stored with the
+  cached page and restored on back / forward re-renders and `304`s.
+  Scripts and handlers inside `<template>` never run.
   `img-src` is parsed but not enforced, and external `<script src>` is
   never loaded. Scheme (`https:`, `data:`), host (`*.` wildcard, port,
   path), `'self'` and `*` sources follow CSP3 matching. PSP carries the
@@ -129,7 +149,9 @@ directly.
   matches through an outer `B` when the nearest `B` doesn't fit
   (Servo-style failure kinds keep it linear in practice). Each
   selector-vs-element match has a 16k-step traversal budget, shared
-  with `:has()` subtree scans; running out counts as no match.
+  with `:has()` subtree scans and charged for sibling-list scans;
+  running out counts as no match for the whole selector, `:not()`
+  included.
 - `:has()` relational pseudo-class with `>`/`+`/`~` leading
   combinators, scope-bounded inner combinators.
 - Selectors Level 4 `:not(a, b, c)` list form.
@@ -339,7 +361,12 @@ to page scripts include:
   deeper than the parser's own limit (`MAX_DOM_DEPTH`, 257 levels)
   throw `HierarchyRequestError`, and `innerHTML` flattens past it, so
   a script-built chain can't overflow the UI stack in the recursive
-  render passes. Each inline script, event dispatch and per-frame
+  render passes; text / comment nodes never take children. Scripts may
+  grow the document to `MAX_SCRIPT_DOM_NODES` (200k) live nodes, past
+  which node-creating calls throw `QuotaExceededError` (the arena sits
+  outside the JS heap cap). Ids of freed nodes are rejected, so a
+  wrapper kept across `innerHTML = ''` can't corrupt the tree. Each
+  inline script, event dispatch and per-frame
   timer tick runs under `BrowserConfig::js_max_exec_ms` (2 s desktop,
   500 ms PSP; timers still due when a tick's budget runs out wait for
   the next frame), and the QuickJS heap is capped at

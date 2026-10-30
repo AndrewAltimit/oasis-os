@@ -94,9 +94,10 @@ tables.
 The DOM is mutated in two situations:
 
 1. **During parsing** — the tree builder appends nodes as tokens arrive.
-2. **From JavaScript** — `js_dom.rs` mutates the DOM through
-   `Document::create_element`, `append_child`, `set_attribute`,
-   `set_text_content`, `replace_child`, etc.
+2. **From JavaScript** — the `js_dom/` bindings mutate the DOM through
+   `Document::add_node`, `append_child`, `detach_node`, `free_subtree`
+   and `ElementData::set_attribute` (freed slots are tracked with
+   `is_freed` / `is_live`, so stale ids from JS are rejected).
 
 After any mutation the affected subtree is marked dirty. The next call
 to `relayout_if_dirty()` rebuilds layout for those subtrees only — the

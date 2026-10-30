@@ -1768,3 +1768,138 @@ fn sticky_top_pins_to_the_viewport_not_the_screen() {
         "replayed after 40 px more scroll"
     );
 }
+
+/// A red block with `filter: invert(1)`, recorded and replayed into
+/// `backend`: the colors of every `FillRect` the replay issued.
+fn filtered_block_fill_colors(backend: &mut oasis_test_backend::RecordingBackend) -> Vec<Color> {
+    let style = ComputedStyle {
+        background_color: Color::rgb(255, 0, 0),
+        filters: vec![crate::css::values::FilterFunction::Invert(1.0)],
+        ..Default::default()
+    };
+    let lb = make_block(10.0, 20.0, 100.0, 50.0, style);
+    paint(&lb, backend, test_vp(), &HashMap::new()).unwrap();
+    backend.fill_colors()
+}
+
+/// Regression: box-level `filter` used to be baked into the recorded
+/// colors *and* run per pixel on the layer readback, so `invert(1)`
+/// cancelled itself out on render-target backends. With readback the
+/// drawn color stays raw (the per-pixel chain does the filtering).
+#[test]
+fn box_filter_not_baked_into_colors_when_layer_readback_runs() {
+    let mut backend = oasis_test_backend::RecordingBackend::new(480, 272);
+    let colors = filtered_block_fill_colors(&mut backend);
+    assert!(
+        backend
+            .commands()
+            .iter()
+            .any(|c| matches!(c, oasis_test_backend::DrawCommand::BindRenderTarget { .. })),
+        "filtered box must draw into a render target"
+    );
+    assert!(
+        colors.contains(&Color::rgb(255, 0, 0)),
+        "raw color: {colors:?}"
+    );
+    assert!(
+        !colors.contains(&Color::rgb(0, 255, 255)),
+        "double filter: {colors:?}"
+    );
+}
+
+/// Without render targets the layer falls back to opacity stacking and
+/// the filter degrades to the per-color approximation, applied once.
+#[test]
+fn box_filter_approximated_per_color_without_render_targets() {
+    let mut backend = oasis_test_backend::RecordingBackend::new(480, 272);
+    backend.disable_render_targets();
+    let colors = filtered_block_fill_colors(&mut backend);
+    assert!(
+        colors.contains(&Color::rgb(0, 255, 255)),
+        "inverted: {colors:?}"
+    );
+    assert!(
+        !colors.contains(&Color::rgb(255, 0, 0)),
+        "unfiltered: {colors:?}"
+    );
+}
+
+/// The dirty-rect replay never uses render targets, so it applies the
+/// per-color approximation to everything inside the filtered layer
+/// (descendants included), innermost layer first.
+#[test]
+fn dirty_replay_approximates_nested_layer_filters() {
+    use crate::css::values::FilterFunction;
+    use crate::paint::display_list::{DisplayItem, DisplayList};
+    let bounds = Rect {
+        x: 0.0,
+        y: 0.0,
+        width: 100.0,
+        height: 100.0,
+    };
+    let layer = |filters| DisplayItem::PushCompositingLayer {
+        bounds,
+        opacity: 1.0,
+        blend: crate::css::values::types::BlendMode::Normal,
+        filters,
+        mask: None,
+    };
+    let mut dl = DisplayList::new();
+    // Outer: grayscale; inner: invert. Red -> cyan (invert) -> gray.
+    dl.push(layer(vec![FilterFunction::Grayscale(1.0)]));
+    dl.push(layer(vec![FilterFunction::Invert(1.0)]));
+    dl.push(DisplayItem::FillRect {
+        x: 1,
+        y: 1,
+        w: 10,
+        h: 10,
+        color: Color::rgb(255, 0, 0),
+        node_id: None,
+    });
+    dl.push(DisplayItem::PopCompositingLayer);
+    dl.push(DisplayItem::PopCompositingLayer);
+    let mut backend = oasis_test_backend::RecordingBackend::new(480, 272);
+    dl.replay_dirty(&mut backend, &bounds, 0, 0, None).unwrap();
+    let expected = filters::apply_filters(
+        filters::apply_filters(Color::rgb(255, 0, 0), &[FilterFunction::Invert(1.0)]),
+        &[FilterFunction::Grayscale(1.0)],
+    );
+    assert_eq!(backend.fill_colors(), vec![expected]);
+}
+
+/// Regression: the recorder leaves `opacity` to the layer, but the
+/// replay `Gradient` arm ignored it, so a translucent element's linear
+/// gradient painted fully opaque.
+#[test]
+fn gradient_honours_layer_opacity_on_both_replay_paths() {
+    use crate::paint::display_list::{DisplayItem, DisplayList};
+    use oasis_types::backend::GradientStyle;
+    let mut dl = DisplayList::new();
+    dl.push(DisplayItem::PushLayer { opacity: 0.5 });
+    dl.push(DisplayItem::Gradient {
+        x: 0,
+        y: 0,
+        w: 4,
+        h: 4,
+        style: GradientStyle::Vertical {
+            top: Color::rgb(255, 0, 0),
+            bottom: Color::rgb(0, 0, 255),
+        },
+    });
+    dl.push(DisplayItem::PopLayer);
+    let bounds = Rect {
+        x: 0.0,
+        y: 0.0,
+        width: 4.0,
+        height: 4.0,
+    };
+    let mut full = oasis_test_backend::RecordingBackend::new(480, 272);
+    dl.replay(&mut full, 0, 0, None).unwrap();
+    let mut dirty = oasis_test_backend::RecordingBackend::new(480, 272);
+    dl.replay_dirty(&mut dirty, &bounds, 0, 0, None).unwrap();
+    for backend in [&full, &dirty] {
+        let colors = backend.fill_colors();
+        assert!(!colors.is_empty(), "gradient drew nothing");
+        assert!(colors.iter().all(|c| c.a == 128), "alpha: {colors:?}");
+    }
+}

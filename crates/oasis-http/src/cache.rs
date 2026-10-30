@@ -71,6 +71,10 @@ pub struct CacheEntry {
     pub etag: Option<String>,
     /// Last-Modified value from the server's response.
     pub last_modified: Option<String>,
+    /// The page's Content-Security-Policy (from the response headers),
+    /// restored when the page is re-rendered from cache (back / forward,
+    /// `304 Not Modified`) so a cached page never runs without it.
+    pub csp: Option<crate::csp::CspPolicy>,
 }
 
 // -----------------------------------------------------------------------
@@ -207,6 +211,11 @@ impl ResourceCache {
     /// Peek at the cached response for a URL without promoting it.
     pub fn peek_response(&self, url: &str) -> Option<ResourceResponse> {
         self.entries.get(url).map(|entry| entry.response.clone())
+    }
+
+    /// The CSP stored with `url`'s entry, without touching LRU order.
+    pub fn peek_csp(&self, url: &str) -> Option<crate::csp::CspPolicy> {
+        self.entries.get(url).and_then(|entry| entry.csp.clone())
     }
 
     /// Update the cache validators (ETag, Last-Modified) for an
@@ -372,6 +381,7 @@ mod tests {
             texture: None,
             etag: None,
             last_modified: None,
+            csp: None,
         };
         (url.to_string(), entry)
     }

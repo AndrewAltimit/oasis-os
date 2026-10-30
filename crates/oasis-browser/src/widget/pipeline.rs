@@ -46,6 +46,9 @@ impl BrowserWidget {
             method: loader::HttpMethod::Post,
             body: Some(body),
             referrer,
+            // A form post is always page-initiated: cross-site, it gets
+            // no `SameSite=Lax` / `Strict` cookies (CSRF).
+            initiator: self.nav.current_url().map(String::from),
         };
 
         // POST requests always go to the network, so offload to IO thread.
@@ -79,6 +82,7 @@ impl BrowserWidget {
         if let Some(entry) = self.cache.get(key) {
             let body = entry.response.body.clone();
             let ct = entry.response.content_type;
+            let csp = entry.csp.clone();
             if ct == ContentType::Html || ct == ContentType::PlainText || ct == ContentType::Unknown
             {
                 // Re-render from cached HTML without a network round-trip.
@@ -89,7 +93,9 @@ impl BrowserWidget {
                 self.reader_mode = false;
                 self.reader_html = None;
                 self.error_message = None;
-                self.page_csp = None;
+                // The re-render runs the page's scripts again: under the
+                // policy it was served with, not none.
+                self.page_csp = csp;
                 self.page_errors.clear();
                 self.decoded_images.clear();
                 self.mask_image_arcs.clear();
@@ -260,6 +266,10 @@ impl BrowserWidget {
             method: loader::HttpMethod::Get,
             body: None,
             referrer,
+            // GET navigations can't be told apart from typed URLs here,
+            // so they count as user-initiated (same-site): only the
+            // `Strict`-on-cross-site-link-click case is lost.
+            initiator: None,
         };
 
         // Determine if this is a network request that can be offloaded.
@@ -485,6 +495,11 @@ impl BrowserWidget {
                         if loaded.response.status == 304
                             && let Some(cached) = self.cache.peek_response(&loaded.response.url)
                         {
+                            // A 304 may omit the CSP header: keep the
+                            // stored response's policy unless it sends one.
+                            if loaded.csp.is_none() {
+                                loaded.csp = self.cache.peek_csp(&loaded.response.url);
+                            }
                             loaded.response = cached;
                         }
                         let url_str = loaded.response.url.clone();
@@ -648,6 +663,9 @@ impl BrowserWidget {
                 texture: None,
                 etag: None,
                 last_modified: None,
+                // Callers set `page_csp` from this response's headers
+                // before handing it over.
+                csp: self.page_csp.clone(),
             },
         );
 
@@ -831,10 +849,16 @@ impl BrowserWidget {
                     js_dom::install_site_compat_shims(&engine);
                     // Register inline event handlers (onclick, etc.)
                     // after scripts so Element class is available. CSP
-                    // `script-src-attr` gates them as a whole.
-                    if Self::csp_allows_inline_handlers(self.page_csp.as_ref()) {
+                    // `script-src-attr` judges each handler's own text.
+                    {
+                        let csp = self.page_csp.as_ref();
+                        let allowed = |body: &str| {
+                            csp.is_none_or(|p| {
+                                p.allows_inline(InlineKind::ScriptAttribute, None, body)
+                            })
+                        };
                         let doc_borrow = shared.borrow();
-                        js_dom::register_inline_handlers(&engine, &doc_borrow);
+                        js_dom::register_inline_handlers(&engine, &doc_borrow, &allowed);
                     }
                     // readystatechange -> DOMContentLoaded -> window load.
                     js_dom::fire_document_lifecycle(&engine);
@@ -1646,6 +1670,7 @@ impl BrowserWidget {
                 method: crate::loader::HttpMethod::Get,
                 body: None,
                 referrer: referrer.clone(),
+                initiator: base.clone(),
             };
             if url.starts_with("vfs://") {
                 // VFS lookups require the caller's `Vfs` handle, which
@@ -1772,6 +1797,8 @@ impl BrowserWidget {
                 }
             }
             let referrer = loader::strip_referrer(&sheet_url);
+            // The page, not the importing sheet, decides same-site.
+            let initiator = self.nav.current_url().map(String::from);
             for (k, url) in urls.into_iter().enumerate() {
                 let request = ResourceRequest {
                     url: url.clone(),
@@ -1780,6 +1807,7 @@ impl BrowserWidget {
                     method: crate::loader::HttpMethod::Get,
                     body: None,
                     referrer: referrer.clone(),
+                    initiator: initiator.clone(),
                 };
                 if url.starts_with("vfs://") {
                     self.pending_vfs_stylesheets.push((idx + k, request));
@@ -1997,17 +2025,6 @@ impl BrowserWidget {
         Self::collect_inline_styles(doc)
     }
 
-    /// Whether inline event-handler attributes may run under `csp`
-    /// (`script-src-attr` / `script-src`: `'unsafe-inline'`).
-    #[cfg(feature = "javascript")]
-    fn csp_allows_inline_handlers(csp: Option<&CspPolicy>) -> bool {
-        let allowed = csp.is_none_or(|p| p.allows_inline(InlineKind::ScriptAttribute, None, ""));
-        if !allowed {
-            log::warn!("CSP script-src blocked inline event handlers");
-        }
-        allowed
-    }
-
     /// Walk the DOM to collect inline `style=""` attributes and parse
     /// each into a list of declarations keyed by NodeId.
     pub(crate) fn collect_inline_styles(
@@ -2046,8 +2063,9 @@ impl BrowserWidget {
     ) -> (Vec<String>, Vec<String>) {
         let mut immediate = Vec::new();
         let mut deferred = Vec::new();
-        for (id, node) in doc.nodes.iter().enumerate() {
-            if let html::dom::NodeKind::Element(elem) = &node.kind
+        // Document order, skipping inert `<template>` contents.
+        for id in js_dom::active_elements(doc) {
+            if let html::dom::NodeKind::Element(elem) = &doc.nodes[id].kind
                 && elem.tag == html::dom::TagName::Script
                 && elem.get_attribute("src").is_none()
                 && Self::is_js_script_type(elem.get_attribute("type"))

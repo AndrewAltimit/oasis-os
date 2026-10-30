@@ -3435,6 +3435,65 @@ mod backtracking {
         assert!(start.elapsed() < std::time::Duration::from_secs(2));
     }
 
+    /// `n` sibling `<div>`s; the first is `#first`, the last `#last`
+    /// (with class `x`).
+    fn wide_siblings(n: usize) -> String {
+        let mut html = String::from("<section><div id=\"first\"></div>");
+        for _ in 0..n.saturating_sub(2) {
+            html.push_str("<div></div>");
+        }
+        html.push_str("<div id=\"last\" class=\"x\"></div></section>");
+        html
+    }
+
+    #[test]
+    fn wide_sibling_lists_stay_bounded() {
+        // Every sibling step used to rescan the whole child list for the
+        // node's index, uncharged: `:has(~ .x)` over n siblings cost
+        // O(n^2) per element (hours for a few thousand elements).
+        let n = 3_000;
+        let doc = TreeBuilder::build(Tokenizer::new(&wide_siblings(n)).tokenize());
+        let start = std::time::Instant::now();
+        for sel in [
+            "div:has(~ .x)",
+            ".q ~ div",
+            "div + div + .q",
+            "div:has(+ .x)",
+        ] {
+            let list = parse_selector_string(sel).expect("selector parses");
+            for (id, node) in doc.nodes.iter().enumerate() {
+                if matches!(node.kind, NodeKind::Element(_)) {
+                    for s in &list.selectors {
+                        let _ = matching::matches_selector(&doc, id, s, &ctx());
+                    }
+                }
+            }
+        }
+        assert!(
+            start.elapsed() < std::time::Duration::from_secs(20),
+            "took {:?}",
+            start.elapsed()
+        );
+        // Within budget the answers are still right.
+        let html = wide_siblings(50);
+        assert!(hit(&html, "div:has(~ .x)", "first"));
+        assert!(hit(&html, "#first ~ .x", "last"));
+        assert!(!hit(&html, "#last ~ div", "first"));
+    }
+
+    #[test]
+    fn exhausted_budget_never_matches_through_not() {
+        // `.x` is the last of 20k siblings, past the traversal budget, so
+        // `:has(~ .x)` gives up. That used to read as "no .x" and turn
+        // `:not(:has(~ .x))` into a (wrong) match.
+        let html = wide_siblings(20_000);
+        assert!(!hit(&html, "#first:not(:has(~ .x))", "first"));
+        // A small list answers exactly.
+        let html = wide_siblings(10);
+        assert!(!hit(&html, "#first:not(:has(~ .x))", "first"));
+        assert!(hit(&html, "#first:not(:has(~ .nope))", "first"));
+    }
+
     #[test]
     fn has_with_backtracking_inner_selector() {
         let html = r#"<article id="art"><div class="a"><div class="b">

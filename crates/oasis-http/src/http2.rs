@@ -339,14 +339,9 @@ fn encode_request_headers(
     encode_literal(&mut out, ":method", method);
     encode_literal(&mut out, ":scheme", &url.scheme);
 
-    let path = if let Some(ref q) = url.query {
-        format!("{}?{}", url.path, q)
-    } else {
-        url.path.clone()
-    };
-    // Some servers reject empty :path; normalize "" to "/".
-    let path_ref = if path.is_empty() { "/" } else { path.as_str() };
-    encode_literal(&mut out, ":path", path_ref);
+    // `request_target` normalizes "" to "/" (some servers reject an
+    // empty :path) and percent-encodes controls / space / non-ASCII.
+    encode_literal(&mut out, ":path", &url.request_target());
 
     let default_port = if url.scheme == "https" { 443 } else { 80 };
     let authority = match url.port {
@@ -552,7 +547,7 @@ fn read_response<S: Read + Write>(stream: &mut S) -> Result<HttpResponse> {
 
                 if fh.flags & FLAG_END_HEADERS != 0 {
                     let headers = decode_header_block(stream, &header_buf, &mut table)?;
-                    response_headers = Some(headers);
+                    keep_final_headers(&mut response_headers, headers);
                     header_buf.clear();
                     waiting_continuation = false;
                 } else {
@@ -573,7 +568,7 @@ fn read_response<S: Read + Write>(stream: &mut S) -> Result<HttpResponse> {
                 extend_header_block(stream, &mut header_buf, &payload)?;
                 if fh.flags & FLAG_END_HEADERS != 0 {
                     let headers = decode_header_block(stream, &header_buf, &mut table)?;
-                    response_headers = Some(headers);
+                    keep_final_headers(&mut response_headers, headers);
                     header_buf.clear();
                     waiting_continuation = false;
                 }
@@ -779,6 +774,22 @@ fn extend_header_block<W: Write>(w: &mut W, header_buf: &mut Vec<u8>, frag: &[u8
     }
     header_buf.extend_from_slice(frag);
     Ok(())
+}
+
+/// Record a decoded HEADERS block. Interim `1xx` responses (e.g. `103
+/// Early Hints`) are superseded by the final response; any block after
+/// the final response is a trailer section and is ignored (it used to
+/// replace the response headers, losing `:status`). The block must still
+/// have been decoded, to keep the HPACK table in sync.
+fn keep_final_headers(slot: &mut Option<Vec<(String, String)>>, headers: Vec<(String, String)>) {
+    let interim = slot.as_ref().is_some_and(|h| {
+        h.iter()
+            .find(|(k, _)| k == ":status")
+            .is_some_and(|(_, v)| v.starts_with('1'))
+    });
+    if slot.is_none() || interim {
+        *slot = Some(headers);
+    }
 }
 
 /// HPACK-decode a complete header block with the decoded-size cap. A
@@ -1040,6 +1051,45 @@ mod tests {
         assert_eq!(resp.body, b"<hi/>");
         // Confirm the client wrote the preface.
         assert!(stream.written.starts_with(CLIENT_PREFACE));
+    }
+
+    #[test]
+    fn early_hints_and_trailers_keep_the_final_headers() {
+        // 103 Early Hints, then the real 200 headers, DATA, and a
+        // trailer HEADERS block closing the stream. Trailers used to
+        // replace the response headers ("missing :status").
+        let mut server = Vec::new();
+        server.extend(build_frame(FRAME_SETTINGS, 0, 0, &[]));
+        let mut hints = Vec::new();
+        encode_literal(&mut hints, ":status", "103");
+        encode_literal(&mut hints, "link", "</s.css>; rel=preload");
+        server.extend(build_frame(FRAME_HEADERS, FLAG_END_HEADERS, 1, &hints));
+        server.extend(build_frame(
+            FRAME_HEADERS,
+            FLAG_END_HEADERS,
+            1,
+            &make_response_headers(),
+        ));
+        server.extend(build_frame(FRAME_DATA, 0, 1, b"body"));
+        let mut trailers = Vec::new();
+        encode_literal(&mut trailers, "grpc-status", "0");
+        server.extend(build_frame(
+            FRAME_HEADERS,
+            FLAG_END_HEADERS | FLAG_END_STREAM,
+            1,
+            &trailers,
+        ));
+
+        let mut stream = MemStream::new(server);
+        let url = crate::Url::parse("https://example.com/").unwrap();
+        let resp = h2_request(&mut stream, "GET", &url, None, &[]).unwrap();
+        assert_eq!(resp.status_code, 200);
+        assert_eq!(resp.body, b"body");
+        assert!(
+            resp.headers
+                .iter()
+                .any(|(k, v)| k == "content-type" && v == "text/html")
+        );
     }
 
     #[test]
@@ -1470,7 +1520,7 @@ mod tests {
 
     /// Live end-to-end probe against `www.wikipedia.org`. Hidden
     /// behind `#[ignore]` so CI doesn't flake on network failures —
-    /// run with `cargo test -p oasis-browser wikipedia_live -- --ignored`.
+    /// run with `cargo test -p oasis-http wikipedia_live_h2 -- --ignored`.
     #[test]
     #[ignore]
     fn wikipedia_live_h2() {

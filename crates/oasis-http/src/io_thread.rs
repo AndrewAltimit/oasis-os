@@ -18,7 +18,7 @@ mod inner {
     use oasis_net::tls::TlsProvider;
     use oasis_types::error::OasisError;
 
-    use crate::cookies::{CookieHook, CookieJar};
+    use crate::cookies::{CookieHook, CookieJar, SameSiteContext};
     use crate::csp;
     use crate::{HttpMethod, LoadedResource, ResourceRequest, Url};
 
@@ -27,12 +27,14 @@ mod inner {
     /// sent them) for replay on the main-thread jar.
     struct RecordingJar<'a> {
         jar: &'a mut CookieJar,
+        /// `SameSite` context of the request (applies to every hop).
+        ctx: SameSiteContext,
         updates: Vec<(String, Vec<(String, String)>)>,
     }
 
     impl CookieHook for RecordingJar<'_> {
         fn cookie_header(&mut self, url: &Url) -> Option<String> {
-            self.jar.cookie_header(url)
+            self.jar.cookie_header_in(url, &self.ctx)
         }
 
         fn store(&mut self, url: &Url, headers: &[(String, String)]) {
@@ -311,6 +313,11 @@ mod inner {
                 "http" | "https" => {
                     let mut recorder = RecordingJar {
                         jar: cookie_jar,
+                        ctx: SameSiteContext::new(
+                            request.initiator.as_deref(),
+                            work.kind == IoRequestKind::PageLoad,
+                            method,
+                        ),
                         updates: Vec::new(),
                     };
                     let result = crate::http::http_request_with_cookies(
@@ -464,6 +471,7 @@ mod tests {
             method: HttpMethod::Get,
             body: None,
             referrer: None,
+            initiator: None,
         };
         io.send(IoRequestKind::PageLoad, req("/slow"), None, None);
         for i in 0..5 {

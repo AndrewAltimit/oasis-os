@@ -1,11 +1,12 @@
 //! CSS filter effect application: color-based filters (grayscale, invert,
 //! sepia, brightness, contrast, saturate, hue-rotate, opacity, blur).
 //!
-//! These per-color approximations are applied while recording. A
-//! box-level `filter` also opens a compositing layer, and on backends
-//! with render-target readback the real per-pixel chain
-//! (`filter_chain.rs`, including a separable box blur) runs on the
-//! layer at replay.
+//! A box-level `filter` opens a compositing layer. On backends with
+//! render-target readback the real per-pixel chain (`filter_chain.rs`,
+//! including a separable box blur) runs on the layer at replay; these
+//! per-color approximations are the replay fallback everywhere else
+//! (no render targets, no readback, and `replay_dirty`). Recorded
+//! colors are never pre-filtered.
 
 use crate::css::values::FilterFunction;
 use oasis_types::backend::Color;

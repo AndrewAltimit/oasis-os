@@ -250,6 +250,7 @@ mod tests {
             method: HttpMethod::Get,
             body: None,
             referrer: None,
+            initiator: None,
         };
         let resp = load_from_vfs(&vfs, &req).unwrap();
         assert_eq!(resp.status, 200);
@@ -385,6 +386,7 @@ mod tests {
             method: HttpMethod::Get,
             body: None,
             referrer: None,
+            initiator: None,
         };
         assert!(load_from_vfs(&vfs, &req).is_err());
     }
@@ -399,6 +401,7 @@ mod tests {
             method: HttpMethod::Get,
             body: None,
             referrer: None,
+            initiator: None,
         };
         let resp = load_from_vfs(&vfs, &req).unwrap();
         assert_eq!(resp.status, 200);

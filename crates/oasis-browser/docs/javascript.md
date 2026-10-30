@@ -92,7 +92,9 @@ relayout if any DOM mutation happened.
 ### Storage
 - `localStorage.getItem / setItem / removeItem / clear / length / key`
 - `sessionStorage.getItem / setItem / removeItem / clear / length / key`
-- `document.cookie` getter / setter (delegates to the loader cookie jar)
+- `document.cookie` getter / setter: a per-page map (4 KiB per pair,
+  50 pairs, `max-age=0` / past-`expires` deletion), separate from the
+  HTTP cookie jar and never sent on requests
 
 ### Network
 - `fetch(url, init)` returns a `Promise<Response>` (basic JSON / text

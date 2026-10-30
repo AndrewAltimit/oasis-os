@@ -195,7 +195,9 @@ pub fn http_get(url: &Url, tls: Option<&dyn TlsProvider>) -> Result<ResourceResp
 /// provided in `extra_headers`.
 ///
 /// Follows redirects (301/302/307/308) up to `MAX_REDIRECTS` hops.
-/// On redirect, the method falls back to GET (as browsers do for 301/302/303).
+/// A 301/302/303 redirect falls back to GET without the body (as
+/// browsers do); 307/308 keep the method and body. Redirects to a
+/// non-http(s) scheme are refused.
 pub fn http_request(
     method: &str,
     url: &Url,
@@ -227,25 +229,8 @@ pub fn http_request_full(
     )
 }
 
-/// Like [`http_request_full`] but follows at most `max_redirects`
-/// redirects (0 = none) before failing with "too many redirects".
-pub fn http_request_full_limited(
-    method: &str,
-    url: &Url,
-    body: Option<&[u8]>,
-    extra_headers: &[(&str, &str)],
-    tls: Option<&dyn TlsProvider>,
-    max_redirects: u8,
-) -> Result<(ResourceResponse, Vec<(String, String)>)> {
-    let opts = RequestOptions {
-        max_redirects,
-        ..RequestOptions::default()
-    };
-    http_request_inner(method, url, body, extra_headers, tls, opts)
-}
-
-/// Like [`http_request_full_limited`] with cookie handling done per
-/// redirect hop: every hop is sent the `Cookie:` header `cookies` yields
+/// Like [`http_request_full`], following at most `max_redirects`
+/// redirects (0 = none), with cookie handling done per redirect hop: every hop is sent the `Cookie:` header `cookies` yields
 /// for that hop's own URL, and every hop's `Set-Cookie` headers
 /// (redirect responses included) are stored against the hop that sent
 /// them. A `Cookie` header in `extra_headers` is ignored in favour of the
@@ -392,6 +377,15 @@ fn http_request_inner(
             current_url = current_url.resolve(&location).ok_or_else(|| {
                 OasisError::Backend(format!("bad redirect Location: {location}").into())
             })?;
+            // A network response may only redirect to the network: a
+            // `Location: vfs://…` / `file:` / `about:` hop would hand the
+            // attacker's body back labelled with a local URL (local-page
+            // privileges: VFS subresources, no fetch origin checks).
+            if current_url.scheme != "http" && current_url.scheme != "https" {
+                return Err(OasisError::Backend(
+                    format!("redirect to non-HTTP scheme blocked: {current_url}").into(),
+                ));
+            }
             if let Some(g) = guard
                 && !(g.redirect_ok)(&current_url)
             {
@@ -402,12 +396,14 @@ fn http_request_inner(
             if current_url.scheme == "https" && tls.is_none() {
                 return Ok((https_error_page(url, &current_url), Vec::new()));
             }
-            // Redirects revert to GET and drop the body (per HTTP spec
-            // for 301/302/303; 307/308 should preserve, but browsers
-            // typically do not re-POST).
-            method_changed |= current_method != "GET";
-            current_method = "GET".to_string();
-            current_body = None;
+            // 301/302/303 revert to GET and drop the body (what browsers
+            // do); 307/308 must preserve the method and body (RFC 9110
+            // §15.4.8-9), as the PSP client already did.
+            if !matches!(resp.status_code, 307 | 308) {
+                method_changed |= current_method != "GET";
+                current_method = "GET".to_string();
+                current_body = None;
+            }
             continue;
         }
 
@@ -452,6 +448,7 @@ fn do_request_with_method(
     tls: Option<&dyn TlsProvider>,
     addr_ok: Option<&dyn Fn(std::net::IpAddr) -> bool>,
 ) -> Result<HttpResponse> {
+    super::validate_request(method, url, extra_headers)?;
     let host = &url.host;
     let is_https = url.scheme == "https";
     let default_port = if is_https { 443 } else { 80 };
@@ -489,8 +486,10 @@ fn do_request_with_method(
         };
         if let Some(mut stream) = pooled {
             match try_request_on_stream(&mut stream, method, url, body, extra_headers, is_https) {
-                Ok(resp) => {
-                    maybe_return_to_pool(&resp, host, port, stream);
+                Ok((resp, framed)) => {
+                    if framed {
+                        maybe_return_to_pool(&resp, host, port, stream);
+                    }
                     return Ok(resp);
                 },
                 Err(_) => {
@@ -501,9 +500,9 @@ fn do_request_with_method(
 
         let mut stream = tcp_connect(host, port, addr_ok)?;
         send_request(&mut stream, method, url, body, extra_headers, is_https)?;
-        let raw = read_response(&mut stream)?;
+        let (raw, framed) = read_response_framed(&mut stream)?;
         let resp = parse_response(&raw)?;
-        if addr_ok.is_none() {
+        if framed && addr_ok.is_none() {
             maybe_return_to_pool(&resp, host, port, stream);
         }
         Ok(resp)
@@ -521,10 +520,10 @@ fn try_request_on_stream(
     body: Option<&[u8]>,
     extra_headers: &[(&str, &str)],
     is_https: bool,
-) -> Result<HttpResponse> {
+) -> Result<(HttpResponse, bool)> {
     send_request(stream, method, url, body, extra_headers, is_https)?;
-    let raw = read_response(stream)?;
-    parse_response(&raw)
+    let (raw, framed) = read_response_framed(stream)?;
+    Ok((parse_response(&raw)?, framed))
 }
 
 /// Return a plain-HTTP connection to the pool if the response indicates
@@ -589,11 +588,7 @@ fn send_request(
         _ => url.host.clone(),
     };
 
-    let path = if let Some(ref q) = url.query {
-        format!("{}?{}", url.path, q)
-    } else {
-        url.path.clone()
-    };
+    let path = url.request_target();
 
     let mut request = format!(
         "{method} {path} HTTP/1.1\r\n\
@@ -645,6 +640,15 @@ fn send_request(
 /// (`Content-Length`, or the chunked terminator) and stops there; without
 /// either, reading runs until EOF or the read timeout.
 fn read_response(stream: &mut impl Read) -> Result<Vec<u8>> {
+    read_response_framed(stream).map(|(raw, _)| raw)
+}
+
+/// [`read_response`] plus whether the response ended at its framed
+/// length (`Content-Length` / chunked terminator). Only such a
+/// connection may go back to the keep-alive pool: after a timeout or
+/// EOF the response may be truncated, and leftover bytes would be read
+/// as the next request's response.
+fn read_response_framed(stream: &mut impl Read) -> Result<(Vec<u8>, bool)> {
     let mut buf = Vec::with_capacity(8192);
     let mut chunk = [0u8; 8192];
     let mut tracker = ResponseTracker::new();
@@ -659,7 +663,7 @@ fn read_response(stream: &mut impl Read) -> Result<Vec<u8>> {
                 if let Some(end) = tracker.poll(&buf)? {
                     // Trim any excess bytes (pipelined response).
                     buf.truncate(end);
-                    break;
+                    return Ok((buf, true));
                 }
             },
             Err(e)
@@ -672,7 +676,7 @@ fn read_response(stream: &mut impl Read) -> Result<Vec<u8>> {
             },
         }
     }
-    Ok(buf)
+    Ok((buf, false))
 }
 
 /// Parse raw bytes into status code, headers, and body, then undo any
@@ -1044,6 +1048,79 @@ mod tests {
             "expected HTTPS Required page, got: {body}",
         );
         let _ = handle.join();
+    }
+
+    /// Yields `data` once, then a read timeout.
+    struct ThenTimeout(Option<Vec<u8>>);
+
+    impl Read for ThenTimeout {
+        fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+            match self.0.take() {
+                Some(d) => {
+                    buf[..d.len()].copy_from_slice(&d);
+                    Ok(d.len())
+                },
+                None => Err(io::Error::new(io::ErrorKind::TimedOut, "timeout")),
+            }
+        }
+    }
+
+    #[test]
+    fn only_framed_responses_count_as_complete() {
+        // A truncated body ended by a timeout must not be reported as a
+        // framed end: that connection would go back to the keep-alive
+        // pool with the rest of the body still in flight.
+        let partial = b"HTTP/1.1 200 OK\r\nContent-Length: 10\r\n\r\nabc".to_vec();
+        let (raw, framed) = read_response_framed(&mut ThenTimeout(Some(partial))).unwrap();
+        assert!(!framed);
+        assert!(raw.ends_with(b"abc"));
+        let full = b"HTTP/1.1 200 OK\r\nContent-Length: 3\r\n\r\nabc".to_vec();
+        let (_, framed) = read_response_framed(&mut ThenTimeout(Some(full))).unwrap();
+        assert!(framed);
+    }
+
+    #[test]
+    fn redirect_to_local_scheme_is_refused() {
+        use std::io::Write as IoWrite;
+        use std::net::TcpListener;
+
+        // Regression: `Location: vfs://…` used to be followed (as plain
+        // HTTP to the same host) and the attacker's body came back
+        // labelled `vfs://…`, i.e. with local-page privileges.
+        for target in [
+            "vfs://127.0.0.1/x",
+            "file:///etc/passwd",
+            "gemini://127.0.0.1/",
+        ] {
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let port = listener.local_addr().unwrap().port();
+            let handle = std::thread::spawn(move || {
+                // Serve every connection the same redirect (the vfs://
+                // case would otherwise reconnect here).
+                for _ in 0..2 {
+                    let Ok((mut stream, _)) = listener.accept() else {
+                        return;
+                    };
+                    let mut buf = [0u8; 2048];
+                    let _ = stream.read(&mut buf);
+                    let resp = format!(
+                        "HTTP/1.1 302 Found\r\nLocation: {target}\r\n\
+                         Content-Length: 0\r\nConnection: close\r\n\r\n"
+                    );
+                    let _ = stream.write_all(resp.as_bytes());
+                    let _ = stream.flush();
+                }
+            });
+            let url = Url::parse(&format!("http://127.0.0.1:{port}/page")).unwrap();
+            let err = http_get(&url, None).expect_err(target);
+            assert!(
+                err.to_string().contains("non-HTTP scheme"),
+                "{target}: {err}"
+            );
+            // Unblock the server's second accept and let it exit.
+            let _ = std::net::TcpStream::connect(("127.0.0.1", port));
+            let _ = handle.join();
+        }
     }
 
     #[test]

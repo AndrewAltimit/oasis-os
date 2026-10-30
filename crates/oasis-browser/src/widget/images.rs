@@ -234,6 +234,7 @@ impl BrowserWidget {
                         method: crate::loader::HttpMethod::Get,
                         body: None,
                         referrer,
+                        initiator: base_url.clone(),
                     },
                 );
 
@@ -282,6 +283,7 @@ impl BrowserWidget {
                             method: crate::loader::HttpMethod::Get,
                             body: None,
                             referrer,
+                            initiator: base_url.clone(),
                         },
                     ));
                 }

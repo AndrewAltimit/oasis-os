@@ -46,6 +46,13 @@ pub fn gemini_get(url: &Url, tls: Option<&dyn TlsProvider>) -> Result<ResourceRe
             current_url = current_url.resolve(target).ok_or_else(|| {
                 OasisError::Backend(format!("bad Gemini redirect: {target}").into())
             })?;
+            // This loop only speaks Gemini, and a `vfs://` / `file:` hop
+            // would label the server's body with a local URL.
+            if current_url.scheme != "gemini" {
+                return Err(OasisError::Backend(
+                    format!("Gemini redirect to non-gemini URL blocked: {current_url}").into(),
+                ));
+            }
             continue;
         }
 

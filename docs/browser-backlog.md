@@ -437,13 +437,11 @@ shipped. Each is small enough for a focused PR.
   scale / skew / 3D transform the recorder emits the background as a
   `FillPolygon` quad, but borders, outlines, text and images keep
   following the translation only (`paint/record.rs`).
-- **Box-level `filter` double-applies on render-target backends.**
-  `record.rs` pre-applies the per-color filter approximation to the
-  element's own background / text colors *and* the compositing layer
-  runs the per-pixel chain on readback (`replay.rs`), so e.g.
-  `filter: invert(1)` cancels out on the element's own colors on
-  SDL / WASM / UE5. Fix: record raw colors and apply the per-color
-  approximation in replay's no-render-target fallback.
+- ~~**Box-level `filter` double-applies on render-target backends.**~~
+  **Fixed (wave 5).** `record.rs` records raw colors; replay applies
+  the per-color approximation only where the per-pixel readback chain
+  does not run (no render target, no readback, `replay_dirty`), to
+  every item color inside the layer.
 - **`backdrop-filter` is not sampled.** It only isolates the element
   into a compositing layer; the backdrop is never read or filtered.
 - **`parallel-style` is not linted in CI.** The feature lives in
@@ -451,15 +449,35 @@ shipped. Each is small enough for a focused PR.
   clippy-clean today (`cargo clippy -p oasis-css --all-targets
   --features parallel-style -- -D warnings`), but CI only lints default
   features.
-- **Network-stack gaps left after the WP-A hardening.** `SameSite` is
-  parsed but not enforced (every matching cookie is sent regardless of
-  initiator); `<meta http-equiv="Content-Security-Policy">` is ignored;
+- **Network-stack gaps left after the WP-A hardening.**
+  `<meta http-equiv="Content-Security-Policy">` is ignored;
   `'sha384-…'` / `'sha512-…'` CSP hashes never match; script-written
-  `style=""` attributes bypass `style-src-attr`; PSP has no cookie jar
-  (`load_from_network` on PSP carries CSP but not cookies); cookies set
-  by synchronous main-thread loads are not pushed to the I/O thread's
-  jar clone; HTTPS has no connection reuse (fresh TCP + TLS per
-  request, h2 GOAWAY after one stream).
+  `style=""` attributes bypass `style-src-attr`, and `style=""` is still
+  checked as a whole (so `'unsafe-hashes'` style hashes don't match);
+  `'unsafe-eval'` is not enforced (`eval` / `new Function` /
+  `setTimeout(string)` always work); PSP has no cookie jar
+  (`load_from_network` on PSP carries CSP but not cookies); HTTPS has
+  no connection reuse (fresh TCP + TLS per request, h2 GOAWAY after one
+  stream). `SameSite` leftovers: not applied when *storing*, missing
+  `SameSite` is not defaulted to `Lax`, same-site is schemeless, and
+  GET navigations count as user-initiated (link clicks and typed URLs
+  share `navigate_vfs_inner`, so a cross-site link still sends `Strict`
+  cookies). The global cookie cap evicts the oldest cookie of any site,
+  so one site with many subdomains can push out others' sessions.
+  Redirect chains A → B → A re-send `Authorization` on the return hop.
+  A stale JS wrapper whose freed slot was reused aliases the new node
+  (no generation counter; the tree itself stays well-formed).
+  **Fixed in wave 5:** `SameSite` on send; redirects to `vfs:` /
+  `file:` / other non-http(s) schemes; HPACK length overflow panic;
+  request splitting via CR / LF in URLs or `fetch()` headers; `fetch()`
+  redirect hops and `data:` URLs vs `connect-src`; CSP lost on cached
+  back / forward and `304`; per-handler `'unsafe-hashes'`; `<template>`
+  scripts; http deleting `Secure` cookies; `document.cookie` caps; h2
+  trailers; truncated keep-alive responses re-pooled; 307 / 308 method
+  preservation on desktop. The "cookies set by synchronous loads miss
+  the I/O thread's jar" item was not reproducible: the only
+  cookie-carrying synchronous loads happen when no I/O thread runs, and
+  a respawned thread re-clones the main jar.
 
 ---
 

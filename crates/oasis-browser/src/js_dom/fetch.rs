@@ -35,8 +35,8 @@ use oasis_js::fetch::{FetchHandler, FetchRequest, FetchResponse};
 use oasis_js::rquickjs::{Ctx, Result as JsResult};
 use oasis_net::tls::TlsProvider;
 
-use crate::loader::Url;
 use crate::loader::csp::{CspPolicy, CspResourceType};
+use crate::loader::{Url, is_http_token};
 
 /// Bind the browser's fetch handler for a page at `url` into `ctx`.
 pub(super) fn install_fetch_binding(
@@ -218,13 +218,6 @@ fn is_cors_safelisted_header(name: &str) -> bool {
     matches!(name, "accept" | "accept-language" | "content-language")
 }
 
-fn is_valid_method(method: &str) -> bool {
-    !method.is_empty()
-        && method
-            .bytes()
-            .all(|b| b.is_ascii_alphanumeric() || b"!#$%&'*+-.^_`|~".contains(&b))
-}
-
 // ------------------------------------------------------------------
 // Transport
 // ------------------------------------------------------------------
@@ -395,7 +388,7 @@ impl BrowserFetchHandler {
 impl FetchHandler for BrowserFetchHandler {
     fn fetch(&self, request: FetchRequest) -> Result<FetchResponse, String> {
         let method = request.method.as_str();
-        if !is_valid_method(method) {
+        if !is_http_token(method) {
             return Err(format!("invalid method '{method}'"));
         }
         if matches!(
@@ -405,11 +398,27 @@ impl FetchHandler for BrowserFetchHandler {
             return Err(format!("method '{method}' is forbidden"));
         }
 
+        // Header names must be tokens and values free of CR / LF / NUL:
+        // anything else would split the HTTP/1.1 request (header
+        // injection, request smuggling) on the way out.
+        for (name, value) in &request.headers {
+            if !is_http_token(name) || value.contains(['\r', '\n', '\0']) {
+                return Err(format!("invalid header '{name}'"));
+            }
+        }
+
         let raw = request.url.trim();
         if raw
             .get(..5)
             .is_some_and(|p| p.eq_ignore_ascii_case("data:"))
         {
+            // `data:` is a connect-src scheme source like any other.
+            if let Some(ref policy) = self.csp
+                && policy.is_active()
+                && !policy.allows(raw, &self.page_url_str, CspResourceType::Connect)
+            {
+                return Err("data: URL blocked by Content-Security-Policy connect-src".into());
+            }
             return self.fetch_data_uri(raw, method);
         }
 
@@ -488,6 +497,18 @@ impl FetchHandler for BrowserFetchHandler {
 
         let redirect_ok = |next: &Url| -> bool {
             if !is_web_scheme(next) {
+                return false;
+            }
+            // Every hop must satisfy connect-src, not just the first:
+            // otherwise a same-origin open redirect reaches any host.
+            if let Some(ref policy) = self.csp
+                && policy.is_active()
+                && !policy.allows(
+                    &next.to_string(),
+                    &self.page_url_str,
+                    CspResourceType::Connect,
+                )
+            {
                 return false;
             }
             if let Some(pc) = page_class

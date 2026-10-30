@@ -396,6 +396,7 @@ fn fetch_font_data(
         method: loader::HttpMethod::Get,
         body: None,
         referrer: base_url.and_then(loader::strip_referrer),
+        initiator: base_url.map(str::to_string),
     };
 
     #[cfg(native_net)]

@@ -895,25 +895,104 @@ enum MatchResult {
     Globally,
 }
 
-/// Per-match traversal budget shared by combinator walks and `:has()`
-/// subtree scans. Exhaustion is treated as "no match".
-struct Budget(std::cell::Cell<usize>);
+/// Per-match traversal budget shared by combinator walks, sibling-list
+/// scans and `:has()` subtree scans. Exhaustion is treated as "no
+/// match" for the whole selector (including under `:not()`).
+struct Budget {
+    left: std::cell::Cell<usize>,
+    exhausted: std::cell::Cell<bool>,
+}
 
 impl Budget {
     fn new() -> Self {
-        Self(std::cell::Cell::new(MAX_TRAVERSAL_STEPS))
+        Self {
+            left: std::cell::Cell::new(MAX_TRAVERSAL_STEPS),
+            exhausted: std::cell::Cell::new(false),
+        }
     }
 
     /// Consume one step; `false` once the budget is spent.
     #[inline]
     fn tick(&self) -> bool {
-        let left = self.0.get();
-        if left == 0 {
+        self.charge(1)
+    }
+
+    /// Consume `n` steps (the nodes a scan visited); `false` once the
+    /// budget is spent.
+    #[inline]
+    fn charge(&self, n: usize) -> bool {
+        let left = self.left.get();
+        if n > left {
+            self.left.set(0);
+            self.exhausted.set(true);
             return false;
         }
-        self.0.set(left - 1);
+        self.left.set(left - n);
         true
     }
+
+    /// Whether some step was refused: any result computed since is
+    /// unreliable and must not count as a match.
+    #[inline]
+    fn exhausted(&self) -> bool {
+        self.exhausted.get()
+    }
+}
+
+/// Where a node sits among its siblings.
+enum SiblingSlot<'d> {
+    /// `(parent's children, index of the node in them)`.
+    At(&'d [NodeId], usize),
+    /// The node has no parent.
+    Orphan,
+    /// Finding the index would overrun the budget.
+    OutOfBudget,
+}
+
+/// Locate `node` in its parent's child list, charging the scan that
+/// found it to `budget` (sibling lists can be huge, and the index is
+/// re-derived at every sibling-combinator step).
+fn sibling_slot<'d>(doc: &'d Document, node: NodeId, budget: &Budget) -> SiblingSlot<'d> {
+    let Some(parent) = doc.nodes[node].parent else {
+        return SiblingSlot::Orphan;
+    };
+    let kids = doc.nodes[parent].children.as_slice();
+    // Never scan further than the budget could pay for.
+    let affordable = budget.left.get();
+    match kids.iter().take(affordable).position(|&c| c == node) {
+        Some(pos) if budget.charge(pos + 1) => SiblingSlot::At(kids, pos),
+        Some(_) => SiblingSlot::OutOfBudget,
+        None if kids.len() > affordable => {
+            budget.charge(affordable + 1);
+            SiblingSlot::OutOfBudget
+        },
+        None => SiblingSlot::Orphan,
+    }
+}
+
+/// Element siblings before index `pos`, nearest first.
+fn elements_before<'d>(
+    doc: &'d Document,
+    kids: &'d [NodeId],
+    pos: usize,
+) -> impl Iterator<Item = NodeId> + 'd {
+    kids[..pos]
+        .iter()
+        .rev()
+        .copied()
+        .filter(move |&id| matches!(doc.nodes[id].kind, NodeKind::Element(_)))
+}
+
+/// Element siblings after index `pos`, nearest first.
+fn elements_after<'d>(
+    doc: &'d Document,
+    kids: &'d [NodeId],
+    pos: usize,
+) -> impl Iterator<Item = NodeId> + 'd {
+    kids[pos + 1..]
+        .iter()
+        .copied()
+        .filter(move |&id| matches!(doc.nodes[id].kind, NodeKind::Element(_)))
 }
 
 /// Shared state of one complex-selector match.
@@ -962,7 +1041,7 @@ fn matches_selector_scoped(
         scope_combinator,
         budget,
     };
-    m.match_from(parts.len() - 1, node_id) == MatchResult::Matched
+    m.match_from(parts.len() - 1, node_id) == MatchResult::Matched && !budget.exhausted()
 }
 
 impl Matcher<'_, '_> {
@@ -1013,7 +1092,12 @@ impl Matcher<'_, '_> {
                 MatchResult::Globally
             },
             Combinator::AdjacentSibling => {
-                let Some(sid) = previous_sibling_element(doc, node) else {
+                let (kids, pos) = match sibling_slot(doc, node, self.budget) {
+                    SiblingSlot::At(kids, pos) => (kids, pos),
+                    SiblingSlot::Orphan => return MatchResult::RestartFromClosestDescendant,
+                    SiblingSlot::OutOfBudget => return MatchResult::Globally,
+                };
+                let Some(sid) = elements_before(doc, kids, pos).next() else {
                     return MatchResult::RestartFromClosestDescendant;
                 };
                 if !self.budget.tick() {
@@ -1022,15 +1106,12 @@ impl Matcher<'_, '_> {
                 self.match_from(idx - 1, sid)
             },
             Combinator::GeneralSibling => {
-                let Some(parent) = doc.nodes[node].parent else {
-                    return MatchResult::RestartFromClosestDescendant;
+                let (kids, pos) = match sibling_slot(doc, node, self.budget) {
+                    SiblingSlot::At(kids, pos) => (kids, pos),
+                    SiblingSlot::Orphan => return MatchResult::RestartFromClosestDescendant,
+                    SiblingSlot::OutOfBudget => return MatchResult::Globally,
                 };
-                let siblings = &doc.nodes[parent].children;
-                let pos = siblings.iter().position(|&c| c == node).unwrap_or(0);
-                for &sid in siblings[..pos].iter().rev() {
-                    if !matches!(doc.nodes[sid].kind, NodeKind::Element(_)) {
-                        continue;
-                    }
+                for sid in elements_before(doc, kids, pos) {
                     if !self.budget.tick() {
                         return MatchResult::Globally;
                     }
@@ -1054,16 +1135,21 @@ impl Matcher<'_, '_> {
         let doc = self.doc;
         match sc {
             Combinator::Child => parent_element(doc, leftmost) == Some(sid),
-            Combinator::AdjacentSibling => previous_sibling_element(doc, leftmost) == Some(sid),
+            Combinator::AdjacentSibling => match sibling_slot(doc, leftmost, self.budget) {
+                SiblingSlot::At(kids, pos) => elements_before(doc, kids, pos).next() == Some(sid),
+                SiblingSlot::Orphan | SiblingSlot::OutOfBudget => false,
+            },
+            // `leftmost` must be a later sibling of the scope element.
             Combinator::GeneralSibling => {
-                let mut sib = next_sibling_element(doc, sid);
-                while let Some(s) = sib {
-                    if s == leftmost {
-                        return true;
+                doc.nodes[leftmost].parent.is_some()
+                    && doc.nodes[leftmost].parent == doc.nodes[sid].parent
+                    && match (
+                        sibling_slot(doc, sid, self.budget),
+                        sibling_slot(doc, leftmost, self.budget),
+                    ) {
+                        (SiblingSlot::At(_, a), SiblingSlot::At(_, b)) => a < b,
+                        _ => false,
                     }
-                    sib = next_sibling_element(doc, s);
-                }
-                false
             },
             Combinator::Descendant => true,
         }
@@ -1116,9 +1202,14 @@ fn matches_simple(
         SimpleSelector::PseudoClassFn(name, arg) => {
             match_pseudo_class_fn(doc, node_id, elem, name, arg)
         },
-        SimpleSelector::Not(inner_list) => !inner_list
-            .iter()
-            .any(|compound| matches_compound(doc, node_id, compound, ctx, budget)),
+        // An inner result cut short by the budget is "unknown", not
+        // "no match": it must not turn into a `:not()` match.
+        SimpleSelector::Not(inner_list) => {
+            !inner_list
+                .iter()
+                .any(|compound| matches_compound(doc, node_id, compound, ctx, budget))
+                && !budget.exhausted()
+        },
         SimpleSelector::Is(inner_list) | SimpleSelector::Where(inner_list) => inner_list
             .iter()
             .any(|compound| matches_compound(doc, node_id, compound, ctx, budget)),
@@ -1297,54 +1388,28 @@ fn matches_has(
             // the leading-combinator check verifies the leftmost matched
             // compound is a direct child of the subject.
             Combinator::Descendant | Combinator::Child => any_in_subtree(node_id, &matched),
-            Combinator::AdjacentSibling => next_sibling_element(doc, node_id).is_some_and(|sib| {
-                matched(sib) || (sel.parts.len() > 1 && any_in_subtree(sib, &matched))
-            }),
+            Combinator::AdjacentSibling => match sibling_slot(doc, node_id, budget) {
+                SiblingSlot::At(kids, pos) => {
+                    elements_after(doc, kids, pos).next().is_some_and(|sib| {
+                        matched(sib) || (sel.parts.len() > 1 && any_in_subtree(sib, &matched))
+                    })
+                },
+                SiblingSlot::Orphan | SiblingSlot::OutOfBudget => false,
+            },
             Combinator::GeneralSibling => {
-                let mut sib = next_sibling_element(doc, node_id);
-                while let Some(sid) = sib {
+                let SiblingSlot::At(kids, pos) = sibling_slot(doc, node_id, budget) else {
+                    return false;
+                };
+                for sid in elements_after(doc, kids, pos) {
                     if !budget.tick() {
                         return false;
                     }
                     if matched(sid) || (sel.parts.len() > 1 && any_in_subtree(sid, &matched)) {
                         return true;
                     }
-                    sib = next_sibling_element(doc, sid);
                 }
                 false
             },
         }
     })
-}
-
-/// Find the next sibling that is an element node.
-fn next_sibling_element(doc: &Document, node_id: NodeId) -> Option<NodeId> {
-    let parent = doc.nodes[node_id].parent?;
-    let siblings = &doc.nodes[parent].children;
-    let mut seen = false;
-    for &sid in siblings {
-        if seen && matches!(doc.nodes[sid].kind, NodeKind::Element(_)) {
-            return Some(sid);
-        }
-        if sid == node_id {
-            seen = true;
-        }
-    }
-    None
-}
-
-/// Find the previous sibling that is an element node.
-fn previous_sibling_element(doc: &Document, node_id: NodeId) -> Option<NodeId> {
-    let parent = doc.nodes[node_id].parent?;
-    let siblings = &doc.nodes[parent].children;
-    let mut prev_elem = None;
-    for &sid in siblings {
-        if sid == node_id {
-            return prev_elem;
-        }
-        if matches!(doc.nodes[sid].kind, NodeKind::Element(_)) {
-            prev_elem = Some(sid);
-        }
-    }
-    None
 }

@@ -903,33 +903,52 @@ mod tests {
 
     #[test]
     fn many_slow_timers_share_one_tick_budget() {
+        // Robust under CPU contention: nothing here asserts on the host's
+        // wall clock. Every callback spins until `Date.now()` has advanced
+        // SPIN_MS, so each lasts at least SPIN_MS however descheduled the
+        // test thread is, and a shared BUDGET_MS budget therefore admits
+        // at most BUDGET_MS / SPIN_MS (+ rounding slack) callbacks per
+        // tick. If each timer got its own budget, one tick would run all.
+        const BUDGET_MS: u64 = 400;
+        const SPIN_MS: u64 = 20;
+        const TIMERS: usize = 50;
         let mut engine = JsEngine::new(8 * 1024 * 1024).unwrap();
-        engine.set_max_exec_ms(100);
-        // 50 timers of ~20 ms each: ~1 s of work if each got its own
-        // budget; one tick may only spend ~100 ms.
+        // The per-callback interrupt is also BUDGET_MS, far above
+        // SPIN_MS, so a preempted callback is not aborted mid-spin; and
+        // `__started` counts firings, not completions, either way.
+        engine.set_max_exec_ms(BUDGET_MS);
         engine
-            .eval(
-                "var __done = 0; \
-                 function slow() { var t = Date.now(); while (Date.now() - t < 20) {} __done++; } \
-                 for (var i = 0; i < 50; i++) setTimeout(slow, 0);",
-            )
+            .eval(&format!(
+                "var __started = 0; \
+                 function slow() {{ __started++; var t = Date.now(); \
+                   while (Date.now() - t < {SPIN_MS}) {{}} }} \
+                 for (var i = 0; i < {TIMERS}; i++) setTimeout(slow, 0);"
+            ))
             .unwrap();
-        let start = Instant::now();
         let ran = engine.tick_timers(0.0);
-        let took = start.elapsed();
-        assert!(took < Duration::from_millis(400), "one tick took {took:?}");
-        assert!(ran < 50, "ran {ran}");
-        assert_eq!(engine.deferred_timer_count(), 50 - ran);
+        // +2: `Date.now()` has ms granularity and the budget is checked
+        // between callbacks, so the last admitted one may straddle it.
+        let max_per_tick = (BUDGET_MS / SPIN_MS) as usize + 2;
+        assert!(ran >= 1, "a tick always makes progress");
+        assert!(
+            ran <= max_per_tick,
+            "ran {ran} > {max_per_tick}: budget not shared"
+        );
+        assert_eq!(engine.deferred_timer_count(), TIMERS - ran);
         // Subsequent ticks finish the rest without losing any.
         let mut total = ran;
-        for _ in 0..100 {
+        for _ in 0..TIMERS {
             if engine.deferred_timer_count() == 0 {
                 break;
             }
             total += engine.tick_timers(0.0);
         }
-        assert_eq!(total, 50);
-        assert_eq!(engine.eval("__done").unwrap(), JsValue::Int(50));
+        assert_eq!(total, TIMERS);
+        assert_eq!(engine.deferred_timer_count(), 0);
+        assert_eq!(
+            engine.eval("__started").unwrap(),
+            JsValue::Int(TIMERS as i32)
+        );
     }
 
     #[test]
