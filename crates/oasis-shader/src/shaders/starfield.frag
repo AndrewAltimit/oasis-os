@@ -1,31 +1,33 @@
 #version 300 es
 precision highp float;
 
-// Animated starfield tunnel.
-// Inspired by classic Shadertoy starfield effects.
+// Multi-layer twinkling starfield. GLSL twin of `software/procedural.rs`
+// (the CPU port every backend ships); keep the two in step.
 
 uniform float u_time;
 uniform vec2 u_resolution;
-uniform vec4 u_color1; // star colour (default white)
-uniform vec4 u_color2; // background colour (default black)
+uniform vec4 u_color1; // star colour
+uniform vec4 u_color2; // background colour
 uniform float u_speed;
 
 out vec4 fragColor;
 
+#define TAU 6.28318530718
+
+// Same hash as the CPU renderer's `hash2`.
 float hash(vec2 p) {
-    return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
+    return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453);
 }
 
 void main() {
-    float speed = u_speed > 0.0 ? u_speed : 1.0;
-    float time = u_time * speed;
+    // Top-left origin, y down (matches the CPU renderer).
+    vec2 fragCoord = vec2(gl_FragCoord.x, u_resolution.y - gl_FragCoord.y);
 
-    vec2 uv = (gl_FragCoord.xy - 0.5 * u_resolution.xy) / u_resolution.y;
+    float time = u_time * u_speed;
 
-    vec3 starCol = u_color1.a > 0.0 ? u_color1.rgb : vec3(1.0);
-    vec3 bgCol   = u_color2.a > 0.0 ? u_color2.rgb : vec3(0.0, 0.0, 0.05);
+    vec2 uv = (fragCoord - 0.5 * u_resolution.xy) / u_resolution.y;
 
-    vec3 col = bgCol;
+    vec3 col = u_color2.rgb;
 
     // Multiple star layers at different depths.
     for (int layer = 0; layer < 4; layer++) {
@@ -41,12 +43,13 @@ void main() {
         vec2 offset = vec2(h, hash(cell + 0.5)) - 0.5;
         float d = length(f - offset * 0.6);
 
-        // Twinkle.
-        float twinkle = 0.5 + 0.5 * sin(time * 3.0 + h * 6.28);
-        float brightness = smoothstep(0.05, 0.0, d) * twinkle * fade;
+        // Twinkle. (smoothstep(0.05, 0.0, d) written with ordered edges:
+        // edge0 > edge1 is undefined in GLSL.)
+        float twinkle = 0.5 + 0.5 * sin(time * 3.0 + h * TAU);
+        float brightness = (1.0 - smoothstep(0.0, 0.05, d)) * twinkle * fade;
 
-        col += starCol * brightness * h;
+        col += u_color1.rgb * brightness * h;
     }
 
-    fragColor = vec4(col, 1.0);
+    fragColor = vec4(clamp(col, 0.0, 1.0), 1.0);
 }

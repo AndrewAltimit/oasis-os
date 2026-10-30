@@ -11,9 +11,13 @@
 //! - `parallel` — shade the [`software`] renderer's rows on a rayon pool
 //!   (desktop only)
 //!
-//! The CPU fallback ([`software::SoftwareShaderRenderer`], pure Rust, no GL)
-//! is always compiled. Both renderers draw the shaders listed in
-//! [`BuiltinShader`].
+//! The CPU renderer ([`software::SoftwareShaderRenderer`], pure Rust, no GL)
+//! is always compiled and is what every shipping backend draws with; the
+//! GLSL sources are its twins for GPU hosts. Both renderers draw the
+//! shaders listed in [`BuiltinShader`], resolve parameters through
+//! [`BuiltinShader::color`] / [`BuiltinShader::float`], and use a top-left,
+//! y-down origin. The tests pin the GLSL uniform set to the CPU parameter
+//! table and require every declared parameter to change the CPU output.
 
 mod compile;
 mod quad;
@@ -172,6 +176,7 @@ impl ShaderRenderer {
                 self.height,
                 time,
                 params,
+                BuiltinShader::from_name(name),
             );
 
             // Read pixels from FBO.
@@ -214,6 +219,7 @@ impl ShaderRenderer {
                 self.height,
                 time,
                 params,
+                BuiltinShader::from_name(name),
             );
         }
 
@@ -281,6 +287,7 @@ unsafe fn gl_render(
     height: u32,
     time: f32,
     params: &ShaderParams,
+    shader: Option<BuiltinShader>,
 ) {
     // SAFETY: `gl` is a live `glow::Context` and the program/fbo handles
     // were created from the same context. All glow calls below are valid
@@ -298,55 +305,27 @@ unsafe fn gl_render(
             gl.uniform_2_f32(Some(&loc), width as f32, height as f32);
         }
 
-        // Default Balatro colours.
-        let default_c1 = [0.871, 0.267, 0.251, 1.0]; // #DE4440
-        let default_c2 = [0.0, 0.420, 0.706, 1.0]; // #006BB4
-        let default_c3 = [0.086, 0.137, 0.145, 1.0]; // #162325
-
-        let c1 = params.colors.first().copied().unwrap_or(default_c1);
-        let c2 = params.colors.get(1).copied().unwrap_or(default_c2);
-        let c3 = params.colors.get(2).copied().unwrap_or(default_c3);
-
-        if let Some(loc) = gl.get_uniform_location(program, "u_color1") {
-            gl.uniform_4_f32(Some(&loc), c1[0], c1[1], c1[2], c1[3]);
+        // Colors and floats resolve through the same per-shader defaults
+        // the CPU renderer uses. Custom (non-built-in) programs get the
+        // Balatro table, matching the CPU's unknown-name fallback.
+        let shader = shader.unwrap_or(BuiltinShader::Balatro);
+        for slot in 0..3 {
+            let uniform = ["u_color1", "u_color2", "u_color3"][slot];
+            if let Some(loc) = gl.get_uniform_location(program, uniform) {
+                let c = shader.color(params, slot);
+                gl.uniform_4_f32(Some(&loc), c[0], c[1], c[2], c[3]);
+            }
         }
-        if let Some(loc) = gl.get_uniform_location(program, "u_color2") {
-            gl.uniform_4_f32(Some(&loc), c2[0], c2[1], c2[2], c2[3]);
-        }
-        if let Some(loc) = gl.get_uniform_location(program, "u_color3") {
-            gl.uniform_4_f32(Some(&loc), c3[0], c3[1], c3[2], c3[3]);
-        }
-
-        // Named float uniforms with defaults.
-        let get_f =
-            |key: &str, default: f32| -> f32 { params.floats.get(key).copied().unwrap_or(default) };
-
-        if let Some(loc) = gl.get_uniform_location(program, "u_speed") {
-            gl.uniform_1_f32(Some(&loc), get_f("speed", 1.0));
-        }
-        if let Some(loc) = gl.get_uniform_location(program, "u_contrast") {
-            gl.uniform_1_f32(Some(&loc), get_f("contrast", 3.5));
-        }
-        if let Some(loc) = gl.get_uniform_location(program, "u_spin_speed") {
-            gl.uniform_1_f32(Some(&loc), get_f("spin_speed", 1.0));
-        }
-        if let Some(loc) = gl.get_uniform_location(program, "u_spin_amount") {
-            gl.uniform_1_f32(Some(&loc), get_f("spin_amount", 0.25));
-        }
-        if let Some(loc) = gl.get_uniform_location(program, "u_pixel_filter") {
-            gl.uniform_1_f32(Some(&loc), get_f("pixel_filter", 745.0));
-        }
-        if let Some(loc) = gl.get_uniform_location(program, "u_is_rotate") {
-            gl.uniform_1_f32(Some(&loc), get_f("is_rotate", 0.0));
-        }
-        if let Some(loc) = gl.get_uniform_location(program, "u_lighting") {
-            gl.uniform_1_f32(Some(&loc), get_f("lighting", 0.4));
-        }
-        if let Some(loc) = gl.get_uniform_location(program, "u_spin_ease") {
-            gl.uniform_1_f32(Some(&loc), get_f("spin_ease", 1.0));
-        }
-        if let Some(loc) = gl.get_uniform_location(program, "u_size") {
-            gl.uniform_1_f32(Some(&loc), get_f("size", 30.0));
+        let mut keys: Vec<&str> = BuiltinShader::ALL
+            .iter()
+            .flat_map(|s| s.float_params().iter().map(|(k, _)| *k))
+            .collect();
+        keys.sort_unstable();
+        keys.dedup();
+        for key in keys {
+            if let Some(loc) = gl.get_uniform_location(program, &format!("u_{key}")) {
+                gl.uniform_1_f32(Some(&loc), shader.float(params, key));
+            }
         }
 
         quad::draw_fullscreen_triangle(gl, vao);

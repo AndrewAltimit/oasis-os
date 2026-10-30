@@ -4,6 +4,7 @@ use std::fmt;
 use std::str::FromStr;
 
 use crate::shaders;
+use crate::uniforms::ShaderParams;
 
 /// A built-in wallpaper shader.
 ///
@@ -75,6 +76,88 @@ impl BuiltinShader {
     /// Look up a shader by its skin name; `None` for unknown names.
     pub fn from_name(name: &str) -> Option<Self> {
         Self::ALL.into_iter().find(|s| s.name() == name)
+    }
+
+    /// Default RGBA (0..1) for each color slot the shader reads, in slot
+    /// order: slot `i` is `params.colors[i]` and the GLSL uniform
+    /// `u_color{i+1}`. The single source of the defaults for both
+    /// renderers.
+    pub fn default_colors(self) -> &'static [[f32; 4]] {
+        match self {
+            Self::Balatro => &[
+                [0.871, 0.267, 0.251, 1.0], // #DE4440
+                [0.0, 0.420, 0.706, 1.0],   // #006BB4
+                [0.086, 0.137, 0.145, 1.0], // #162325
+            ],
+            Self::Voronoi => &[
+                [193.0 / 255.0, 41.0 / 255.0, 46.0 / 255.0, 1.0],
+                [241.0 / 255.0, 211.0 / 255.0, 2.0 / 255.0, 1.0],
+            ],
+            Self::CityLights => &[],
+            // Gradient start (top row), gradient end (bottom row), waves.
+            Self::OceanWaves => &[
+                [0.0, 0.05, 0.4, 1.0],
+                [0.0, 0.9, 0.9, 1.0],
+                [0.6, 0.6, 0.6, 1.0],
+            ],
+            Self::CalmWaves => &[[102.0 / 255.0, 204.0 / 255.0, 1.0, 1.0]],
+            Self::Starfield => &[[1.0, 1.0, 1.0, 1.0], [0.0, 0.0, 0.05, 1.0]],
+            Self::Plasma => &[
+                [1.0, 0.0, 0.5, 1.0],
+                [0.0, 0.8, 1.0, 1.0],
+                [1.0, 0.9, 0.0, 1.0],
+            ],
+            Self::MatrixRain => &[[0.0, 1.0, 0.3, 1.0], [0.0, 0.02, 0.0, 1.0]],
+        }
+    }
+
+    /// The named float parameters the shader reads (`params.floats` key,
+    /// GLSL uniform `u_<key>`) with their defaults.
+    pub fn float_params(self) -> &'static [(&'static str, f32)] {
+        match self {
+            Self::Balatro => &[
+                ("speed", 1.0),
+                ("contrast", 3.5),
+                ("spin_speed", 1.0),
+                ("spin_amount", 0.25),
+                ("pixel_filter", 745.0),
+                ("is_rotate", 0.0),
+                ("lighting", 0.4),
+                ("spin_ease", 1.0),
+            ],
+            Self::Voronoi | Self::CityLights => &[("speed", 1.0), ("size", 30.0)],
+            Self::OceanWaves
+            | Self::CalmWaves
+            | Self::Starfield
+            | Self::Plasma
+            | Self::MatrixRain => &[("speed", 1.0)],
+        }
+    }
+
+    /// Resolve color slot `slot` from `params`, falling back to
+    /// [`default_colors`](Self::default_colors). Slots past the defaults
+    /// resolve to opaque black.
+    pub fn color(self, params: &ShaderParams, slot: usize) -> [f32; 4] {
+        params
+            .colors
+            .get(slot)
+            .or_else(|| self.default_colors().get(slot))
+            .copied()
+            .unwrap_or([0.0, 0.0, 0.0, 1.0])
+    }
+
+    /// Resolve float parameter `key` from `params`, falling back to its
+    /// [`float_params`](Self::float_params) default. A key this shader does
+    /// not declare takes the default another built-in declares for it
+    /// (custom GLSL programs share the uniform names), else 0.0.
+    pub fn float(self, params: &ShaderParams, key: &str) -> f32 {
+        params.floats.get(key).copied().unwrap_or_else(|| {
+            std::iter::once(self)
+                .chain(Self::ALL)
+                .flat_map(|s| s.float_params())
+                .find(|(k, _)| *k == key)
+                .map_or(0.0, |&(_, v)| v)
+        })
     }
 }
 

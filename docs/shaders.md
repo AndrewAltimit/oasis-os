@@ -3,18 +3,39 @@
 `oasis-shader` ships a library of Shadertoy-style fragment shaders used as
 animated wallpapers. Each shader has two implementations:
 
-- A **GLSL fragment shader** rendered on the GPU via `glow` (OpenGL on
-  desktop, WebGL2 in the browser). Selected by the `gl-native` and `gl-web`
-  Cargo features.
-- A **Rust software renderer** that mirrors the GLSL math per-pixel on the
-  CPU. It is always compiled (there is no feature flag for it) and is the
-  fallback used by the PSP, SDL, WASM and UE5/FFI backends whenever there is
-  no GL context. The optional `parallel` feature shades its rows on a rayon
-  pool (desktop only).
+- A **Rust software renderer** (`software/`) that evaluates the shader math
+  per pixel on the CPU. It is always compiled (there is no feature flag for
+  it) and it is **the implementation every shipping backend draws with**:
+  the SDL, WASM, UE5/FFI and PSP backends all use
+  `SoftwareShaderRenderer`. The optional `parallel` feature shades its rows
+  on a rayon pool (desktop only).
+- A **GLSL fragment shader** (`shaders/*.frag`), the GPU twin of each CPU
+  kernel, rendered via `glow` (OpenGL on desktop, WebGL2 in the browser)
+  behind the `gl-native` / `gl-web` features. No in-tree backend
+  instantiates `ShaderRenderer` today; it is kept for GPU hosts.
 
-The CPU and GPU paths produce visually equivalent output for each shader,
-which is what lets the screenshot regression suite cover both backends with
-the same fixture.
+The CPU port is canonical (skins are tuned against it and the golden
+checksums pin it); the GLSL follows it. The two share:
+
+- **Orientation**: top-left origin, y down. The CPU's row 0 is the first
+  row of the returned buffer; every `.frag` builds
+  `vec2 fragCoord = vec2(gl_FragCoord.x, u_resolution.y - gl_FragCoord.y);`
+  and uses only that.
+- **Parameters**: `BuiltinShader::default_colors()` / `float_params()` are
+  the one table of inputs and defaults; the CPU kernels read them through
+  `BuiltinShader::color(params, slot)` / `float(params, key)` and the GPU
+  `gl_render` uploads the same resolved values.
+- **Math**: the same hashes (`fract(sin(dot(p, k)) * 43758.5453)`, the CPU's
+  cheaper Voronoi hash), constants and edge cases (a non-positive Voronoi /
+  city-lights `size` falls back to 30 on both). The GLSL never calls
+  `smoothstep` with `edge0 > edge1` (undefined in GLSL) and always writes
+  an opaque, clamped colour.
+
+Tests in `software/tests.rs` pin this: `glsl_uniforms_match_cpu_parameters`
+(each `.frag` declares exactly `u_time`, `u_resolution`, one `u_colorN` per
+color slot and one `u_<key>` per float), `glsl_sources_use_top_left_origin`,
+and `every_declared_parameter_affects_cpu_output`. Bit-identical GPU output
+is not a goal: GPU `sin` precision differs from the host libm.
 
 ## Public types
 
@@ -28,9 +49,15 @@ In `crates/oasis-shader/src/lib.rs`:
   parameter bag with `colors: Vec<[f32; 4]>` and `floats: HashMap<String,
   f32>` consumed by both renderers.
 - `BuiltinShader` (`registry.rs`) — the catalogue enum. `ALL`, `name()`
-  (the skin-facing name), `glsl()` (fragment source), `from_name()` and
-  `FromStr`. Both renderers dispatch on it.
-- `SoftwareShaderRenderer` (`software.rs`) — CPU fallback. Renders at
+  (the skin-facing name), `glsl()` (fragment source), `from_name()`,
+  `FromStr`, and the parameter table: `default_colors()`, `float_params()`,
+  `color(params, slot)` and `float(params, key)` (resolve with defaults; a
+  key the shader does not declare takes another built-in's default, else
+  0). Both renderers dispatch on it.
+- `SoftwareShaderRenderer` (`software/mod.rs`; kernels grouped in
+  `swirl.rs` (balatro), `cells.rs` (voronoi, city lights), `waves.rs`
+  (ocean, calm) and `procedural.rs` (starfield, plasma, matrix rain)) —
+  the CPU renderer. Renders at
   `width/3 × height/3` (`RENDER_SCALE = 3`, coarser for very large outputs),
   then upscales nearest-neighbour to the target buffer.
   `render_builtin(BuiltinShader, ..)` dispatches on the enum;
@@ -59,22 +86,25 @@ Each GPU shader has a paired `render_<name>` method on
 
 ## Shader inputs
 
-The shaders use a Shadertoy-compatible uniform set. The Rust code names them
-with the `u_` prefix (`gl_render` in `lib.rs`):
+Every shader gets `u_time` (elapsed seconds) and `u_resolution` (viewport
+size). Color slot `i` is `ShaderParams.colors[i]` / uniform `u_color{i+1}`;
+float `key` is `ShaderParams.floats["key"]` / uniform `u_<key>`. Per shader
+(defaults from `registry.rs`):
 
-| Uniform | Purpose |
-| --- | --- |
-| `u_time` | Elapsed seconds (`f32`). |
-| `u_resolution` | Viewport size (`vec2`). |
-| `u_color1`, `u_color2`, `u_color3` | Theme colours from `ShaderParams.colors`. |
-| `u_speed`, `u_contrast` | Per-shader floats from `ShaderParams.floats`. |
-| `u_spin_speed`, `u_spin_amount`, `u_spin_ease` | Balatro-specific. |
-| `u_pixel_filter` | Optional posterise filter. |
-| `u_is_rotate` | Toggles auxiliary rotation. |
-| `u_lighting`, `u_size` | Per-shader extras. |
+| Shader | Color slots | Floats (default) |
+| --- | --- | --- |
+| `balatro` | 1 main, 2 accent, 3 dark | `speed` 1, `contrast` 3.5, `spin_speed` 1, `spin_amount` 0.25, `pixel_filter` 745, `is_rotate` 0, `lighting` 0.4, `spin_ease` 1 |
+| `voronoi` | 1, 2 (blend ends) | `speed` 1, `size` 30 |
+| `city_lights` | none | `speed` 1, `size` 30 |
+| `ocean_waves` | 1 gradient top, 2 gradient bottom, 3 waves | `speed` 1 |
+| `calm_waves` | 1 sky | `speed` 1 |
+| `starfield` | 1 stars, 2 background | `speed` 1 |
+| `plasma` | 1, 2, 3 (palette) | `speed` 1 |
+| `matrix_rain` | 1 rain, 2 background | `speed` 1 |
 
-`fragCoord` is sourced from `gl_FragCoord` on GPU and from loop indices on
-CPU.
+`speed` is used as given (0 freezes, negative reverses). `fragCoord` is the
+y-down pixel position: flipped `gl_FragCoord` on the GPU, the low-res cell
+centre on the CPU.
 
 ## Execution model
 
@@ -93,12 +123,18 @@ multi-pass support today.
 
 1. Compute size at `RENDER_SCALE = 3` reduction.
 2. Loop pixel-by-pixel evaluating the per-shader math in Rust.
-3. Upscale nearest-neighbour to the target dimensions (`upscale` / `upscale_nn` in `software.rs`).
+3. Upscale nearest-neighbour to the target dimensions (`upscale` /
+   `upscale_nn` in `software/mod.rs`).
+
+`golden_output_checksums` pins every kernel's output bit-for-bit. It runs
+only on x86_64 Linux (the CI container), where the goldens were captured:
+glibc and the MSVC CRT round some `sin` results differently, and the hash
+shaders amplify that last bit.
 
 The reduced internal size is the entire performance story: every shader
 ships a software path because PSP and headless tests both need one, and 1/9
 the pixel count is what makes that affordable. The PSP test budget comment
-in the `software.rs` tests calls out 20–40 ms per frame on hardware against a
+in the `software/tests.rs` tests calls out 20–40 ms per frame on hardware against a
 33 ms / 30 fps target.
 
 There is no caching of any kind. Every call re-evaluates the entire frame.
@@ -136,7 +172,7 @@ needs a new arm. Adding a shader called `my_effect` touches:
    exhaustive, so this is required). Reuse the helpers (`hash2`, `fract`,
    `lerp`, `smoothstep`) already defined in that file.
 
-5. **Test.** Mirror the existing per-shader tests in `software.rs`
+5. **Test.** Mirror the existing per-shader tests in `software/tests.rs`
    asserting the buffer is fully written and that obvious params change
    visible output.
 
