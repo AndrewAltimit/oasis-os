@@ -1,6 +1,6 @@
 //! `OasisInstance` struct definition and safe handle access helpers.
 
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::ffi::{CStr, CString};
 use std::os::raw::c_char;
 
@@ -14,6 +14,7 @@ use oasis_core::skin::Skin;
 use oasis_core::startmenu::StartMenuState;
 use oasis_core::statusbar::StatusBar;
 use oasis_core::terminal::CommandRegistry;
+use oasis_core::vector_overlay::LayerOpsCache;
 use oasis_core::vfs::GameAssetVfs;
 
 use crate::types::OasisCallback;
@@ -31,7 +32,6 @@ pub struct OasisInstance {
     pub(crate) cmd_reg: CommandRegistry,
     pub(crate) vfs: GameAssetVfs,
     pub(crate) platform: DesktopPlatform,
-    #[allow(dead_code)]
     pub(crate) skin: Option<Skin>,
     pub(crate) active_theme: ActiveTheme,
     pub(crate) dashboard: Option<DashboardState>,
@@ -42,8 +42,13 @@ pub struct OasisInstance {
     /// Start button + start menu (drawn when the skin enables `start_menu`).
     pub(crate) start_menu: StartMenuState,
     pub(crate) cwd: String,
-    #[allow(dead_code)]
-    pub(crate) output_lines: Vec<String>,
+    /// Static background layers tessellated (and, with render-target
+    /// support, baked) once and replayed each frame. The skin never
+    /// changes after `oasis_create_full`, so it is never invalidated.
+    pub(crate) background_layer_cache: LayerOpsCache,
+    /// Render stages whose failure was already logged at `warn`
+    /// ([`OasisInstance::report`]).
+    pub(crate) reported_render_errors: BTreeSet<&'static str>,
     pub(crate) callbacks: HashMap<u32, OasisCallback>,
     pub(crate) width: u32,
     pub(crate) height: u32,
@@ -63,6 +68,18 @@ pub struct OasisInstance {
 }
 
 impl OasisInstance {
+    /// Log a failed render stage: at `warn` the first time `stage` fails,
+    /// at `debug` afterwards (a broken skin fails every frame).
+    pub(crate) fn report(&mut self, stage: &'static str, result: oasis_core::error::Result<()>) {
+        if let Err(e) = result {
+            if self.reported_render_errors.insert(stage) {
+                log::warn!("oasis_tick: {stage} failed: {e} (further failures logged at debug)");
+            } else {
+                log::debug!("oasis_tick: {stage} failed: {e}");
+            }
+        }
+    }
+
     /// Fire a callback if registered.
     ///
     /// `c_detail` is bound by the `let Ok(...)` in the `if let` chain, so the
