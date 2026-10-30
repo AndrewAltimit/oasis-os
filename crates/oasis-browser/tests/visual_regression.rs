@@ -4,7 +4,9 @@
 //! display-list golden harness as the "visual regression" layer for
 //! `oasis-browser`. For each checked-in fixture under
 //! `tests/fixtures/`, we run the full pipeline (parse → cascade →
-//! layout → paint) into a `MockSdiCore` that records every draw call,
+//! layout → display-list record → compact/optimize → replay, the same
+//! paint path `BrowserWidget::paint` ships) into a `MockSdiCore` that
+//! records every draw call,
 //! canonicalize the resulting stream to a deterministic text format,
 //! and diff against a golden file under `tests/goldens/`.
 //!

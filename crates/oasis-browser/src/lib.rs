@@ -28,28 +28,38 @@
 //! - `psp` — enables PSP-specific shrink-the-footprint code paths and
 //!   disables features that rely on desktop-only crates.
 //!
-//! # Compositor (overhaul epic)
+//! # Rendering
+//!
+//! There is one renderer: the layout tree is recorded into a display
+//! list (`paint::record`), compacted and optimized, and replayed into
+//! the `SdiBackend`. `BrowserWidget::paint` caches the list across
+//! frames; `internals::paint_page` records and replays once and is
+//! what the goldens, corpus tests and paint bench run. See
+//! `docs/paint.md` (in the crate root).
+//!
+//! # Compositor
 //!
 //! Desktop backends (SDL3, WASM, UE5) support offscreen compositing
-//! via `SdiRenderTarget`. This unlocks, on the backends that opt in:
+//! via `SdiRenderTarget`, so on those backends a compositing layer is
+//! drawn into a render target and composited back:
 //!
-//! - `mix-blend-mode` — WASM renders all 16 CSS blend modes natively
-//!   via Canvas2D `globalCompositeOperation`. SDL3 currently uses
-//!   `Blend`/`Mod` approximations for Normal/Multiply and degrades
-//!   the other 14 modes to plain alpha over; the software path lands
-//!   in a follow-up.
-//! - `backdrop-filter` — parsed and plumbed through `PushCompositingLayer`;
-//!   the backdrop-sample step is scaffolded on top of the filter-chain
-//!   readback pipeline.
-//! - `isolation: isolate` — creates a stacking context and a real
-//!   compositing layer.
+//! - `mix-blend-mode` — composited by the backend's
+//!   `composite_render_target`: WASM uses Canvas2D
+//!   `globalCompositeOperation` (all 16 modes), UE5 blends in
+//!   software, SDL3 approximates Normal/Multiply and draws the other
+//!   modes as alpha over. Layers that also carry a filter or mask are
+//!   blended on CPU (`filter_chain::cpu_blend_composite`).
 //! - box-level `filter` — opacity, grayscale, invert, brightness,
-//!   contrast, sepia, saturate, hue-rotate, and blur (separable
-//!   3-pass box blur) run on CPU via read_render_target → apply →
-//!   upload as texture → blit.
-//! - `mask-*` (8 longhands) — parsed and stored on `ComputedStyle`;
-//!   the destination-in composite path lives on top of the existing
-//!   readback pipeline in a follow-up.
+//!   contrast, sepia, saturate, hue-rotate and blur (separable 3-pass
+//!   box blur) run on CPU via read_render_target → apply → upload →
+//!   blit, on backends with render-target readback.
+//! - `mask-*` — linear / radial gradient and `url()` masks are
+//!   rasterized and applied to the layer alpha when the layer pops
+//!   (`paint/display_list/mask.rs`), also via readback.
+//! - `isolation: isolate` and `will-change` — create a stacking
+//!   context and a real compositing layer.
+//! - `backdrop-filter` — isolates the element into a layer; sampling
+//!   and filtering the backdrop is not implemented.
 //!
 //! PSP opts out: the backend reports `supports_render_targets() = false`
 //! so replay falls back to plain opacity stacking — pages still render,

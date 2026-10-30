@@ -176,7 +176,7 @@ pub fn decode_image(data: &[u8]) -> Option<DecodedImage> {
 ///
 /// JPEGs are DCT-downscaled while decoding (1/2, 1/4 or 1/8), so a
 /// large photo never materializes at full size; other formats decode at
-/// full size (up to [`MAX_SOURCE_DIMENSION`] per side) and are then
+/// full size (up to 4096 px per side, 1024 on PSP) and are then
 /// bilinear-downscaled. The result keeps the source's intrinsic size in
 /// [`DecodedImage::natural_width`] / [`natural_height`](DecodedImage::natural_height).
 ///

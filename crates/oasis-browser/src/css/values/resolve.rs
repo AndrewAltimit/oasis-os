@@ -94,7 +94,8 @@ pub(super) fn resolve_color_with_scheme(value: &CssValue, is_dark: bool) -> Opti
     }
 }
 
-/// Like [`resolve_color_or_current`] but with `light-dark()` awareness.
+/// Resolve a color value, treating `currentcolor` as the element's
+/// `color`, with `light-dark()` awareness.
 pub(super) fn resolve_color_or_current_with_scheme(
     value: &CssValue,
     current_color: Color,
