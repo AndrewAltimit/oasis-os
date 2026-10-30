@@ -24,16 +24,26 @@ The terminal in `oasis-terminal/src/` supports:
   backslash escapes the next character (`\$HOME`, `\>`); `""` is an empty
   argument
 - variable expansion (`$VAR`, `${VAR}`, `$?`, `$#`, `$1`..)
-- command substitution (`$(cmd)`, nested; its output is word-split)
-- glob and brace expansion (`*.txt`, `dir/*`, `{a,b}`) on unquoted words
-- aliases (`alias ll='ls -l'`, one level)
+- command substitution (`$(cmd)`, nested)
+- expansion results are *words*, never shell syntax: an unquoted `$VAR` /
+  `$(...)` is split into fields on whitespace, a quoted one stays one
+  word, and quotes, `$`, `\`, `;` or `|` inside a value are plain
+  characters (`echo $(echo '$HOME')` prints `$HOME`)
+- brace expansion (`{a,b}`) on plain unquoted words; glob expansion
+  (`*.txt`, `dir/*`) wherever a `*` / `?` / `[` is unquoted, including
+  inside an unquoted expansion (`P='*.txt'; echo $P` globs, `"$P"` does
+  not); a quoted `"*"` is always literal
+- aliases (`alias ll='ls -l $HOME'`, one level; the alias text is expanded
+  with the rest of the line)
 - pipes (`cmd1 | cmd2`; an empty stage is a syntax error)
 - redirection (`< file`, `> file`, `>> file`, `2>`, `2>&1`); operators
   inside quotes or `$( ... )` belong to the inner command
-- command chaining (`;`, `&&`, `||`)
+- command lists (`;`, `&&`, `||`, `&`) and pipeline negation (`! cmd`)
+- `#` comments, on typed lines as in scripts (`echo hi # note`; `a#b` and
+  `$#` are not comments)
 - persistent command history (`history`, `!!`, `!N`, Up/Down, Ctrl+R)
 - control flow in one-liners and scripts (see below)
-- background jobs (`cmd &`, `jobs`, `fg`, `bg`, `kill %N`)
+- background jobs (`cmd &` anywhere, `jobs`, `fg`, `bg`, `kill %N`)
 
 Startup files: `populate_profile()` seeds `/home/.profile` (restating the
 default `USER`, `HOME` and `SHELL`), and the `startup` command manages
@@ -46,7 +56,7 @@ without stopping the other one. Other hosts (WASM, UE5, PSP) don't call it yet.
 
 ### Shell builtins
 
-Twenty builtins are dispatched by the executor from one table
+Twenty-one builtins are dispatched by the executor from one table
 (`BUILTINS` in `oasis-terminal/src/builtins.rs`) before the command map, so
 a registered command can never shadow them; `help`, `help <name>`,
 `which` and tab completion read the same table.
@@ -55,23 +65,32 @@ a registered command can never shadow them; `help`, `help <name>`,
 |---|---|
 | general | `help [--category <cat>] [command]`, `which <command>`, `history [clear]` |
 | config | `set [VAR=value]`, `unset <VAR>...`, `env`, `alias [name=command]`, `unalias <name>...` |
-| scripting | `run <script> [args...]`, `function name() { body }`, `return [code]`, `local NAME[=VALUE]...`, `break`, `continue`, `true`, `false` |
+| scripting | `run <script> [args...]`, `xargs [-n N] [-I REPL] [command...]`, `function name() { body }`, `return [code]`, `local NAME[=VALUE]...`, `break`, `continue`, `true`, `false` |
 | jobs | `jobs`, `fg [%job]`, `bg [%job]`, `kill [-STOP\|-CONT\|-TERM] <%job\|N>...` |
+
+`xargs` runs its command (default `echo`) with the whitespace-separated
+words of its stdin appended as arguments: all at once, `N` at a time with
+`-n N`, or once per input line with `-I REPL` replacing `REPL` in the
+arguments (`ls | xargs -I F cp F /backup/F`). Items are passed as words,
+never re-parsed; it reaches builtins and functions too, and exits 123 if
+any run failed.
 
 ### Exit status
 
-Every command has an exit status, seen by `&&`, `||`, `$?` and `if` /
-`while` conditions. An `Err` from a command is status 1; a command can also
-print output *and* fail by returning `CommandOutput::status(code, output)`
-(`test` prints `true` / `false` and exits 0 / 1; `false` exits 1). The
-executor records the code and unwraps the output, so hosts never receive a
-`CommandOutput::Status`.
+Every command finishes with an exit status (0 = success), and that status
+-- not what the command printed -- is what `&&`, `||`, `! cmd`, `$?` and the
+`if` / `elif` / `while` / `until` conditions act on. An `Err` from a command
+is status 1; a command can also print output *and* fail by returning
+`CommandOutput::status(code, output)`. `test` / `[ ... ]` print nothing and
+exit 0 (true) or 1 (false); `grep` exits 1 when nothing matched, `diff` when
+the files differ, `false` always. The executor records the code and unwraps
+the output, so hosts never receive a `CommandOutput::Status`.
 
 ### Line editing
 
 The interactive terminal (fullscreen and windowed, desktop and WASM) is a
 readline-style editor (`oasis-terminal/src/session.rs` wrapping
-`line_edit.rs`). Keyboard and gamepad share one input path, so the d-pad
+`line_edit/`). Keyboard and gamepad share one input path, so the d-pad
 and face buttons keep working on controllers.
 
 | Key | Action |
@@ -105,12 +124,13 @@ scripts or jobs.
 
 ### Control flow
 
-One-liners and `run` scripts share one parser (`oasis-terminal/src/script.rs`),
+One-liners and `run` scripts share one parser (`oasis-terminal/src/script/`),
 so everything below works both inline (`;`-separated) and across lines,
 nested to any depth:
 
 ```sh
-if test -f /tmp/a; then echo file; elif test -d /tmp/a; then echo dir; else echo none; fi
+if test -f /tmp/a; then echo file; elif [ -d /tmp/a ]; then echo dir; else echo none; fi
+if grep -i todo notes.txt; then echo "found some"; fi
 while test $N -lt 3; do echo $N; set N=$(expr $N + 1); done
 until test -f /tmp/ready; do sleep 1; done
 for f in *.txt 'a b' $LIST; do echo $f; done
@@ -121,11 +141,12 @@ case $X in start|go) echo run;; stop) echo halt;; *) echo "?";; esac
   function bodies and `$( ... )` does not.
 - Keywords may share a statement with the next command (`then echo x`,
   `do body`, `else if ...`).
-- A condition is true when its last command succeeds (exit 0) and does not
-  print `false`, `1` or nothing (the built-in `test` prints `true` /
-  `false`). `! cmd` negates. Condition output is not shown.
-- `&&`, `||`, pipes and redirects work inside blocks; `for` word lists get
-  variable, `$(...)`, quote, brace and glob expansion.
+- A condition is true when the exit status of its last command is 0
+  (see [Exit status](#exit-status)); `! cmd` negates. Condition output is
+  shown like any other output. An `if` that runs no branch, and a loop whose
+  body never ran, exit 0.
+- `&&`, `||`, pipes, redirects and `cmd &` work inside blocks; `for` word
+  lists get variable, `$(...)`, quote, brace and glob expansion.
 - `break`, `continue` and `return` work in loops and functions; `while` /
   `until` stop after 1000 iterations with a warning.
 - `run <script> [args...]` sets `$1`..`$n` and `$#` for the script and
@@ -133,8 +154,11 @@ case $X in start|go) echo run;; stop) echo halt;; *) echo "?";; esac
 - Resource limits keep a runaway line from freezing the host frame: at most
   100,000 simple commands per top-level line (across nested loops,
   functions, scripts and jobs; then `command limit exceeded`), 256 KiB per
-  expanded line, `execute` nesting 96 deep (`$(...)`, functions, scripts),
-  blocks nested 64 deep, function recursion 64, `run` nesting 16, 4 MiB of
+  expanded line, nesting 32 deep (`MAX_EXEC_DEPTH`: `$(...)`, function
+  calls, scripts and `if` / loop / `case` blocks together; each level costs
+  about 2.5 KiB of host stack optimized, 11 KiB in debug builds, so the
+  limit fits a PSP EBOOT's 256 KiB main thread -- `tests/stack_depth.rs`
+  checks it), blocks parsed 64 deep, function recursion 24, `run` nesting 8, 4 MiB of
   collected script output, 64 KiB per variable value (4096 variables) and
   4096 words per brace expansion (beyond that the word stays literal).
 - Missing `fi` / `done` / `esac` or a stray keyword is a syntax error.
@@ -143,10 +167,18 @@ case $X in start|go) echo run;; stop) echo halt;; *) echo "?";; esac
 ### Background jobs
 
 The interpreter is synchronous and single-threaded (PSP, WASM), so a job
-is *deferred* rather than concurrent (at most 64 waiting): `cmd &` queues the line and prints
-`[N] cmd`; the host runs the oldest runnable job on its next tick (one
-job per frame) and prints the job's output followed by
-`[N]+  Done  cmd` (or `Exit <code>`).
+is *deferred* rather than concurrent (at most 64 waiting): `cmd &` queues
+the command list before the `&` and prints `[N] cmd`; the host runs the
+oldest runnable job on its next tick (one job per frame) and prints the
+job's output followed by `[N]+  Done  cmd` (or `Exit <code>`).
+
+`&` works anywhere a `;` does: `a & b` queues `a` and runs `b` now,
+`x && y &` queues the whole `x && y`, and inside loops, functions and
+`run` scripts each `cmd &` queues a job. Parameters (`$VAR`, `$1`, `$?`)
+are substituted when the job is queued, so
+`for i in 1 2; do echo $i & done` queues `echo 1` and `echo 2`; `$(...)`
+runs when the job does. A compound line ending in `&`
+(`for ...; done &`) is queued as one job.
 
 | Builtin | Description |
 |---|---|
@@ -192,7 +224,7 @@ shell prints command errors in red (SGR 31).
 | `mv` | `mv <src> <dst>` | Move or rename a file. |
 | `find` | `find [path] <pattern>` | Find files by name pattern. |
 
-## Text processing (`oasis-terminal/src/text_commands.rs`)
+## Text processing (`oasis-terminal/src/text_commands/`)
 
 | Command | Usage | Description |
 | --- | --- | --- |
@@ -219,7 +251,7 @@ shell prints command errors in red (SGR 31).
 | `xxd` | `xxd [-l N] <file>` | Hex dump a file. |
 | `checksum` | `checksum <file>` | Compute simple checksum. |
 
-## Developer tools (`oasis-terminal/src/dev_commands.rs`)
+## Developer tools (`oasis-terminal/src/dev_commands/`)
 
 | Command | Usage | Description |
 | --- | --- | --- |
@@ -228,8 +260,8 @@ shell prints command errors in red (SGR 31).
 | `uuid` | `uuid` | Generate a pseudo-random UUID v4. |
 | `seq` | `seq [start] <end> [step]` | Print a sequence of numbers. |
 | `expr` | `expr <expression>` | Evaluate an arithmetic expression. |
-| `test` | `test <expr>` / `test -f <file>` / `test -d <dir>` / `test <a> = <b>` | Evaluate a conditional expression. |
-| `xargs` | `xargs <command>` | Build a command from stdin lines. |
+| `test` | `test [!] -e\|-f\|-d <path>` / `test -n\|-z <str>` / `test <a> =\|!=\|-eq\|-ne\|-lt\|-le\|-gt\|-ge <b>` / `test <str>` | Evaluate a condition: no output, exit status 0 (true) or 1 (false); a malformed expression is an error. |
+| `[` | `[ <expression> ]` | `test` with a closing `]`. |
 
 ## System (`oasis-terminal/src/system_commands.rs`)
 
@@ -450,7 +482,7 @@ on-screen clock through `/var/pclock/visible`; hidden by default).
 
 Counted from the source: 75 commands in `oasis-terminal`, 19 in `oasis-core`,
 1 in `oasis-apps` (`tv`) and 1 in `oasis-app` (96, or 95 without the `mcp`
-feature), plus the 20 shell builtins. To recount, call
+feature), plus the 21 shell builtins. To recount, call
 `CommandRegistry::list_commands()` after `oasis_terminal::register_builtins`
 (75) and look for `fn name(&self)` / `define_command!` in `oasis-core/src`,
 `oasis-apps/src` and `oasis-app/src` (skipping test modules and the example

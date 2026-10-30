@@ -61,6 +61,29 @@ removal, a restyled site, and docs that match the code.
   `$1..$n`, and runaway lines stop at resource limits (100k commands,
   256 KiB expansions, nesting depth) instead of hanging or overflowing
   the stack.
+- **Shell exit status (breaking):** `if` / `elif` / `while` / `until`
+  decide on the exit status of their condition, not on its printed text
+  (`if echo false` is now true), and condition output is shown. `test` /
+  the new `[ ... ]` print nothing and only set the status (malformed
+  expressions are errors); `grep` exits 1 on no match, `diff` when files
+  differ; `! cmd` negates any pipeline.
+- Shell expansion: `$VAR` and `$(...)` results are inserted as words
+  (split on whitespace when unquoted) and never re-parsed, so quotes, `$`
+  or `\` in command output stay literal; globbing follows quoting per
+  character; alias text is expanded with the line. `#` comments work on
+  typed lines.
+- Shell jobs and `xargs`: a lone `&` ends a command list anywhere
+  (`a & b`, loops, functions, scripts), with parameters frozen when the
+  job is queued. `xargs` is a builtin that actually runs its command
+  (`-n N`, `-I REPL`; exit 123 on failure) instead of printing
+  "would execute". Nesting is capped at 32 levels (`$(...)`, functions,
+  scripts and blocks together; was 96 `execute` levels plus 64 block
+  levels), measured to fit a PSP EBOOT's 256 KiB main-thread stack.
+- **FTP serves a subtree:** `FtpServer::with_root` exposes one VFS
+  directory as `/` (via the new `oasis_vfs::SubtreeVfs`), and the desktop
+  shell's `ftp start` serves `/home` -- clients can no longer read
+  `/system` or write `/var` IPC request files. Paths clients use change
+  accordingly (`/home/x` is now `/x`).
 
 ### Architecture and crate layout
 
@@ -102,7 +125,8 @@ removal, a restyled site, and docs that match the code.
   other than the ones drawn.
 - Shared helpers replace per-crate copies: `oasis_types::easing`,
   `util::ct_eq`, `util::base64`, `OasisError::is_would_block()` /
-  `is_timed_out()`.
+  `is_timed_out()`, and `oasis_types::crypto` (incremental `Sha256`,
+  `hmac_sha256`, `hex`; used by the remote-terminal PSK handshake).
 
 ### Backend contract
 
