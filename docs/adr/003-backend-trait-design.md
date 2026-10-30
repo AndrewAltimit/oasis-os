@@ -204,3 +204,23 @@ clearly better, because callers compare and intersect the result.
   backend and `oasis-rasterize::SoftwareBuffer`, which re-exports the
   generators) and `PixelSink` + `rasterize_triangle` (used by UE5 and
   `SoftwareBuffer`).
+
+## Update (2026-10-30)
+
+Corrections to statements above that predate the current code (the
+decision itself is unchanged):
+
+- `NetworkBackend` also has a provided `listen_loopback(port)`; the remote
+  terminal and the FTP-like transfer server use it unless they are given a
+  PSK / password, and the MCP server always does.
+- `AudioBackend` is `init`, `load_track`, `play`, `pause`, `resume`, `stop`,
+  `set_volume` / `get_volume`, `is_playing`, `position_ms`, `duration_ms`,
+  `unload_track` and `shutdown`, plus a provided streaming path
+  (`load_streaming`, `feed_data`, `streaming_can_accept`,
+  `streaming_queued_ms`, `finalize_streaming`, `feed_pcm_f32`).
+- The PSP EBOOT does have networking: `PspNetworkBackend` implements
+  `NetworkBackend` over `sceNetInet` (WiFi, infrastructure mode). The
+  "PSP networking" examples under Rationale and Alternatives describe the
+  early state; the platform that cannot open TCP sockets today is WASM
+  (`WasmNetworkBackend` returns errors; the browser's own `fetch` is used
+  instead).
