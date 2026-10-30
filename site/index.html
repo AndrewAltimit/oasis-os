@@ -176,8 +176,8 @@
           <div>
             <h3>Implement the contract</h3>
             <p><code>SdiCore</code>&rsquo;s 13 required methods plus <code>InputBackend::poll_events</code>.
-              One macro line fills in nine extension traits &mdash; 53 default methods for shapes,
-              gradients, text, vector paths and render targets.</p>
+              One macro line fills in eight extension traits &mdash; 46 default methods for shapes,
+              gradients, text, textures, clipping, vector paths, batching and render targets.</p>
           </div>
         </li>
         <li class="step">
@@ -216,9 +216,12 @@
     <span class="tk">fn</span> <span class="tf">measure_text</span>(&amp;self, text: &amp;<span class="tt">str</span>, font_size: <span class="tt">u16</span>) -&gt; <span class="tt">u32</span>;
     <span class="tk">fn</span> <span class="tf">read_pixels</span>(&amp;self, x: <span class="tt">i32</span>, y: <span class="tt">i32</span>, w: <span class="tt">u32</span>, h: <span class="tt">u32</span>) -&gt; <span class="tt">Result</span>&lt;<span class="tt">Vec</span>&lt;<span class="tt">u8</span>&gt;&gt;;
     <span class="tk">fn</span> <span class="tf">shutdown</span>(&amp;<span class="tk">mut</span> self) -&gt; <span class="tt">Result</span>&lt;()&gt;;
+
+    <span class="tc">// provided: override to report a resized window or a bound render target</span>
+    <span class="tk">fn</span> <span class="tf">viewport_size</span>(&amp;self) -&gt; (<span class="tt">u32</span>, <span class="tt">u32</span>) { ... }
 }
 
-<span class="tc">// Implement those 13 for your type, then one line buys all nine extension traits:</span>
+<span class="tc">// Implement those 13 for your type, then one line buys all eight extension traits:</span>
 <span class="tm">oasis_types::impl_sdi_defaults!</span>(<span class="tt">MyBackend</span>);</code></pre>
         </div>
         <div role="tabpanel" id="cpanel-ffi" aria-labelledby="ctab-ffi" tabindex="0" hidden>
@@ -247,7 +250,7 @@
         <div role="tabpanel" id="cpanel-app" aria-labelledby="ctab-app" tabindex="0" hidden>
 <pre><code><span class="tc">// crates/oasis-app-core/examples/stopwatch_app.rs (excerpt)</span>
 <span class="tk">impl</span> <span class="tt">App</span> <span class="tk">for</span> <span class="tt">StopwatchApp</span> {
-    <span class="tc">// title, path, lines, layout, update_sdi, draw_windowed, ...</span>
+    <span class="tc">// title, path, lines, layout, draw_windowed, drain_requests, ...</span>
     <span class="tm">impl_content_app_methods!</span>(content);
 
     <span class="tk">fn</span> <span class="tf">handle_input</span>(&amp;<span class="tk">mut</span> self, button: &amp;<span class="tt">Button</span>, _vfs: &amp;<span class="tk">dyn</span> <span class="tt">Vfs</span>) -&gt; <span class="tt">AppAction</span> {
@@ -385,7 +388,7 @@
           <div class="pf__copy">
             <h3>WebAssembly</h3>
             <p class="pf__crate">oasis-backend-wasm</p>
-            <p>Canvas 2D rendering, DOM input and Web Audio. Real web pages and YouTube play in an iframe overlaid on the canvas.</p>
+            <p>Canvas 2D rendering, DOM input and HTML <code>&lt;audio&gt;</code> playback. Real web pages and YouTube play in an iframe overlaid on the canvas.</p>
             <dl class="spec">
               <div><dt>Video</dt><dd>Browser &lt;video&gt; &rarr; canvas</dd></div>
               <div><dt>JS</dt><dd>Off (no C toolchain for wasm)</dd></div>
@@ -489,7 +492,6 @@
             <div class="views" role="tablist" aria-label="Screen">
               <button type="button" role="tab" class="view is-active" aria-selected="true" data-view="01_dashboard"><img src="screenshots/psix-hifi/01_dashboard.png" alt="" width="480" height="272" loading="lazy" decoding="async"><span>Dashboard</span></button>
               <button type="button" role="tab" class="view" aria-selected="false" tabindex="-1" data-view="02_media_tab"><img src="screenshots/psix-hifi/02_media_tab.png" alt="" width="480" height="272" loading="lazy" decoding="async"><span>Media</span></button>
-              <button type="button" role="tab" class="view" aria-selected="false" tabindex="-1" data-view="03_mods_tab"><img src="screenshots/psix-hifi/03_mods_tab.png" alt="" width="480" height="272" loading="lazy" decoding="async"><span>Apps</span></button>
               <button type="button" role="tab" class="view" aria-selected="false" tabindex="-1" data-view="04_terminal"><img src="screenshots/psix-hifi/04_terminal.png" alt="" width="480" height="272" loading="lazy" decoding="async"><span>Terminal</span></button>
             </div>
           </div>
@@ -585,7 +587,7 @@
       <div><dt>Apps</dt><dd>15</dd></div>
       <div><dt>Commands</dt><dd>95</dd></div>
       <div><dt>Shell builtins</dt><dd>20</dd></div>
-      <div><dt>UI widgets</dt><dd>29</dd></div>
+      <div><dt>UI widgets</dt><dd>27</dd></div>
       <div><dt>Shaders</dt><dd>8</dd></div>
       <div><dt>Locales</dt><dd>7</dd></div>
     </dl>
@@ -660,9 +662,9 @@ nightfall_theme.mp3
 
       <article class="tile">
         <p class="tile__tag">oasis-ui</p>
-        <h3>29 widgets</h3>
-        <p>Buttons to tree views, modals, tables, date pickers and toasts &mdash; plus list views,
-          menu bars, nine-patch, icon atlases and flex/grid layout.</p>
+        <h3>27 widgets</h3>
+        <p>Buttons to tree views, modals, tables, date and color pickers &mdash; plus list views,
+          menu bars, nine-patch, focus navigation and flex/grid layout.</p>
       </article>
 
       <article class="tile tile--shader">
@@ -821,7 +823,7 @@ nightfall_theme.mp3
           <g class="arch-trait">
             <rect x="226.9" y="430.5" width="213.4" height="61" rx="10"/>
             <text class="arch-trait-name" x="242.4" y="456" fill="#7cc7ff">SdiBackend</text>
-            <text class="arch-trait-sub" x="242.4" y="476">9 extension traits · 53 defaults</text>
+            <text class="arch-trait-sub" x="242.4" y="476">8 extension traits · 46 defaults</text>
           </g>
           <g class="arch-trait">
             <rect x="453.3" y="430.5" width="213.4" height="61" rx="10"/>
@@ -857,7 +859,7 @@ nightfall_theme.mp3
           <g class="arch-backend">
             <rect x="226.9" y="536.5" width="213.4" height="83" rx="10"/>
             <text class="arch-backend-name" x="242.4" y="562">oasis-backend-wasm</text>
-            <text class="arch-backend-sub" x="242.4" y="582">Canvas 2D · Web Audio</text>
+            <text class="arch-backend-sub" x="242.4" y="582">Canvas 2D · HTML audio</text>
             <text class="arch-backend-target" x="242.4" y="604">&#9656; Any modern browser</text>
           </g>
           <path class="arch-bus" d="M560.0 514 V536"/>
@@ -881,7 +883,7 @@ nightfall_theme.mp3
           <g class="arch-backend is-dim">
             <rect x="906.1" y="536.5" width="213.4" height="83" rx="10"/>
             <text class="arch-backend-name" x="921.6" y="562">oasis-plugin-psp</text>
-            <text class="arch-backend-sub" x="921.6" y="582">kernel PRX · &lt;64 KB</text>
+            <text class="arch-backend-sub" x="921.6" y="582">kernel PRX · no oasis-core</text>
             <text class="arch-backend-target" x="921.6" y="604">&#9656; Overlay on running games</text>
           </g>
         </svg>
@@ -908,22 +910,22 @@ nightfall_theme.mp3
         <p class="arch__boundary"><span>Trait boundary</span></p>
         <ul class="arch__traits" aria-label="Backend traits">
           <li><code>SdiCore</code> 13 required rendering methods</li>
-          <li><code>SdiBackend</code> 9 extension traits, 53 default methods</li>
+          <li><code>SdiBackend</code> 8 extension traits, 46 default methods</li>
           <li><code>InputBackend</code> buttons, keys, pointer, text</li>
           <li><code>NetworkBackend</code> TCP with pluggable TLS</li>
           <li><code>AudioBackend</code> tracks and streaming PCM</li>
         </ul>
         <ul class="arch__backends" aria-label="Backends">
           <li><code>oasis-backend-sdl</code><span>SDL3 &middot; desktop &amp; Raspberry Pi</span></li>
-          <li><code>oasis-backend-wasm</code><span>Canvas 2D &middot; Web Audio &middot; browsers</span></li>
+          <li><code>oasis-backend-wasm</code><span>Canvas 2D &middot; HTML audio &middot; browsers</span></li>
           <li><code>oasis-backend-ue5</code><span>RGBA framebuffer &rarr; oasis-ffi &rarr; UE5</span></li>
           <li><code>oasis-backend-psp</code><span>sceGu &middot; Media Engine &middot; PSP EBOOT</span></li>
-          <li class="is-dim"><code>oasis-plugin-psp</code><span>kernel PRX &middot; &lt;64&nbsp;KB, no core</span></li>
+          <li class="is-dim"><code>oasis-plugin-psp</code><span>kernel PRX &middot; ~150&nbsp;KB, no oasis-core</span></li>
         </ul>
       </div>
       <figcaption class="arch__caption" id="arch-caption">
         Crates depend downward only. Backends implement the <code>oasis-types</code> traits; the PSP
-        overlay PRX stays standalone so it fits in under 64&nbsp;KB.
+        overlay PRX stays standalone, without <code>oasis-core</code>, so it stays small (about 150&nbsp;KB) beside a running game.
       </figcaption>
     </figure>
 

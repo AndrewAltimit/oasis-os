@@ -98,7 +98,7 @@
     <div class="prose">
 <aside class="callout update" role="note">
     <div class="callout-title">Update (Oct 2026)</div>
-    <p>The counts in this entry are from March 2026. <code>SdiBackend</code> is now a marker trait over <strong>nine</strong> extension traits with <strong>53</strong> default methods: <code>SdiRenderTarget</code> (offscreen render targets) was added, and the <code>SdiBatch</code> hooks are <code>begin_batch</code> / <code>flush_batch</code>. The defaults became span-exact &mdash; shapes emit <code>fill_rect</code> spans from shared generators, so they cover exactly the pixels the SDL and UE5 backends draw &mdash; and a mock gets all nine extensions from one <code>impl_sdi_defaults!</code> line. Elsewhere: 29 widgets, ~95 terminal commands plus 20 shell builtins, 17 skins and 15 apps.</p>
+    <p>The prose and counts in this entry are from March 2026; the trait overview, capability matrix and frame diagram below have been redrawn for the current code. <code>SdiBackend</code> is now a marker trait over <strong>eight</strong> extension traits with <strong>46</strong> default methods: <code>SdiRenderTarget</code> (offscreen render targets) was added; <code>SdiAlpha</code> was removed (<code>viewport_size</code> is a provided <code>SdiCore</code> method, and translucent fills are <code>fill_rect</code> with an alpha color), as were the never-used <code>begin_batch</code> / <code>flush_batch</code> hooks; <code>current_clip_rect</code> returns <code>Option&lt;ClipRect&gt;</code>. The defaults became span-exact &mdash; shapes emit <code>fill_rect</code> spans from shared generators, so they cover exactly the pixels the SDL and UE5 backends draw &mdash; and a mock gets all eight extensions from one <code>impl_sdi_defaults!</code> line. Apps draw only through <code>App::draw_windowed</code> (a kiosk-fullscreen app is a window that fills the screen). Elsewhere: 27 widgets, ~95 terminal commands plus 20 shell builtins, 17 skins and 15 apps.</p>
   </aside>
 
 
@@ -123,23 +123,24 @@
   <h2 id="trait-architecture-overview"><a class="anchor" href="#trait-architecture-overview" aria-hidden="true" tabindex="-1">#</a>Trait Architecture Overview</h2>
 
   <div class="diagram">
-    <pre><code><span class="hl-bright">Five Backend Traits</span>
+    <pre><code><span class="hl-bright">Five Backend Traits</span> <span class="hl-dim">(current API, Oct 2026)</span>
 
 <span class="hl-accent">SdiCore</span>            13 required methods &mdash; the minimum viable backend
+                   (+ provided viewport_size)
   &uarr; extends
-<span class="hl-purple">SdiBackend</span>         39 optional accelerated primitives, split into:
-  &#9500;&#9472; <span class="hl-accent">SdiShapes</span>       fill/stroke: rounded_rect, circle, line, triangle, polygon
-  &#9500;&#9472; <span class="hl-accent">SdiGradients</span>    linear_gradient, radial_gradient, fill_rect_gradient
-  &#9500;&#9472; <span class="hl-accent">SdiAlpha</span>        set_global_alpha, fill_rect_alpha
-  &#9500;&#9472; <span class="hl-accent">SdiText</span>         draw_text_styled (bold/italic), draw_text_wrapped
-  &#9500;&#9472; <span class="hl-accent">SdiTextures</span>     blit_rotated, blit_tinted, blit_region, blit_scaled
-  &#9500;&#9472; <span class="hl-accent">SdiClipTransform</span> push/pop_clip, push/pop_translate
-  &#9500;&#9472; <span class="hl-accent">SdiVector</span>       begin_path, move_to, line_to, arc, bezier, fill, stroke
-  &#9492;&#9472; <span class="hl-accent">SdiBatch</span>        begin_batch, end_batch, submit_rect_batch, submit_text_batch
+<span class="hl-purple">SdiBackend</span>         marker over 8 extension traits, 46 default methods:
+  &#9500;&#9472; <span class="hl-accent">SdiShapes</span>        8  rounded rects, stroke_rect, line, circles, triangle, shadow
+  &#9500;&#9472; <span class="hl-accent">SdiGradients</span>     2  fill_rect_gradient, fill_rounded_rect_gradient
+  &#9500;&#9472; <span class="hl-accent">SdiText</span>          7  set_font, metrics, draw_text_styled / _wrapped / _ellipsis
+  &#9500;&#9472; <span class="hl-accent">SdiTextures</span>      4  blit_sub, blit_tinted, blit_sub_tinted, blit_flipped
+  &#9500;&#9472; <span class="hl-accent">SdiClipTransform</span> 8  push/pop clip, translate and region; current_clip_rect
+  &#9500;&#9472; <span class="hl-accent">SdiVector</span>        6  polygons, polyline, fill/stroke_arc, dashed line
+  &#9500;&#9472; <span class="hl-accent">SdiBatch</span>         2  submit_rect_batch, submit_text_batch
+  &#9492;&#9472; <span class="hl-accent">SdiRenderTarget</span>  9  create/bind/unbind/composite/read/destroy offscreen targets
 
 <span class="hl-accent">InputBackend</span>       poll_events() &rarr; Vec&lt;InputEvent&gt;
 <span class="hl-accent">NetworkBackend</span>     listen, accept, connect &rarr; NetworkStream (read/write/close)
-<span class="hl-accent">AudioBackend</span>       load_track, play, pause, stop, set_volume, feed_pcm</code></pre>
+<span class="hl-accent">AudioBackend</span>       load_track, play, pause, stop, set_volume, feed_pcm_f32</code></pre>
     <div class="diagram-caption">The complete platform abstraction boundary lives in oasis-types/src/backend/</div>
   </div>
 
@@ -207,22 +208,24 @@
   </p>
 
   <div class="diagram">
-    <pre><code><span class="hl-bright">Backend Capability Matrix</span>
+    <pre><code><span class="hl-bright">Backend Capability Matrix</span> <span class="hl-dim">(methods each backend overrides, Oct 2026)</span>
 
                       <span class="hl-accent">SDL3</span>    <span class="hl-accent">WASM</span>    <span class="hl-accent">UE5</span>     <span class="hl-accent">PSP</span>
 SdiCore (13 req)      &#10004;       &#10004;       &#10004;       &#10004;
-SdiShapes             HW      Canvas  SW      GU
-SdiGradients          HW      Canvas  SW      GU
-SdiAlpha              HW      Canvas  SW      GU
-SdiText (styled)      bitmap  cached  bitmap  atlas+TTF
-SdiTextures           HW      Canvas  SW      GU+DMA
-SdiClipTransform      stack   Canvas  stack   GU
-SdiVector             SW      Canvas  SW      &mdash;
-SdiBatch              &mdash;      &mdash;      &mdash;      GU list
+SdiShapes        /8   7       7       7       3  GU
+SdiGradients     /2   2       2       2       1  GU
+SdiText          /7   4  TTF  1       1       &mdash;
+SdiTextures      /4   4       3       4       &mdash;
+SdiClipTransform /8   6       6       6       6
+SdiVector        /6   1       5       1       &mdash;
+SdiBatch         /2   2       2       2       &mdash;
+SdiRenderTarget  /9   8       9       9       opts out
 
-<span class="hl-dim">HW = hardware-accelerated, SW = software fallback, GU = PSP Graphics Unit
-Canvas = browser Canvas 2D API, &mdash; = uses default (no-op or software)</span></code></pre>
-    <div class="diagram-caption">Each backend implements what its platform accelerates, falls back for the rest</div>
+<span class="hl-dim">GU = PSP Graphics Unit; &mdash; = every method uses the span-exact default.
+WASM maps shapes, arcs and gradients onto Canvas 2D paths; SDL3 and UE5
+override the rest with their own rasterizers. PSP draws its hot paths
+on the GU and reports render targets as unsupported.</span></code></pre>
+    <div class="diagram-caption">Each backend overrides what its platform accelerates and falls back to the defaults for the rest</div>
   </div>
 
   <h2 id="how-a-frame-renders"><a class="anchor" href="#how-a-frame-renders" aria-hidden="true" tabindex="-1">#</a>How a Frame Renders</h2>
@@ -235,27 +238,24 @@ Canvas = browser Canvas 2D API, &mdash; = uses default (no-op or software)</span
   <pre class="mermaid">
 flowchart TD
     LOOP["Backend main loop\nSDL / WASM / PSP / UE5"]
-    CLEAR["backend.clear - bg_color"]
-    TICK["oasis-core::tick\n&amp;mut backend, &amp;mut sdi, &amp;mut state"]
-    DASH["dashboard.update_sdi\ncreates/updates named objects"]
-    APP["active_app.update_sdi"]
-    STATUS["status_bar.update_sdi"]
+    CLEAR["backend.clear\nor the shader wallpaper"]
+    UPDATE["update_sdi\ndashboard, bars, taskbar, toasts, cursor\ncreate/update named objects"]
+    MODE{"windows open?"}
+    WM["wm.draw_with_clips\nSDI scene, window chrome,\neach app's draw_windowed in its clip"]
     DRAW["sdi.draw - &amp;mut backend\niterates objects by z-order"]
     BASE["sdi.draw_base_layer\nnon-overlay objects"]
-    OBJ["for each visible object:\nfill_rect / blit / draw_text"]
     OVERLAY["sdi.draw_overlay_layer\nbars, toasts, cursors"]
     SWAP["backend.swap_buffers"]
 
-    LOOP --> CLEAR --> TICK
-    TICK --> DASH --> APP --> STATUS --> DRAW
-    DRAW --> BASE --> OBJ
-    DRAW --> OVERLAY
-    OVERLAY --> SWAP
+    LOOP --> CLEAR --> UPDATE --> MODE
+    MODE -- yes --> WM --> SWAP
+    MODE -- no --> DRAW
+    DRAW --> BASE --> OVERLAY --> SWAP
 
     style LOOP fill:#11141c,stroke:#7cc7ff,color:#e8eaf0
-    style TICK fill:#11141c,stroke:#ff8a3d,color:#e8eaf0
+    style UPDATE fill:#11141c,stroke:#ff8a3d,color:#e8eaf0
+    style WM fill:#11141c,stroke:#ff8a3d,color:#e8eaf0
     style DRAW fill:#11141c,stroke:#ff8a3d,color:#e8eaf0
-    style OBJ fill:#11141c,stroke:#7cc7ff,color:#e8eaf0
     style SWAP fill:#11141c,stroke:#7cc7ff,color:#e8eaf0
   </pre>
   <div class="diagram-caption">The SDI registry mediates between application state and backend draw calls</div>
@@ -482,7 +482,7 @@ flowchart TD
 
   <aside class="callout update" role="note">
     <div class="callout-title">Update (Oct 2026)</div>
-    <p>Today: 9 extension traits and 53 default methods, defined across <code>oasis-types/src/backend/</code> and <code>backend/extensions/</code> (one file per extension trait); a new backend running &ldquo;all 15 apps&rdquo; in step 4 above.</p>
+    <p>Today: 8 extension traits and 46 default methods, defined across <code>oasis-types/src/backend/</code> and <code>backend/extensions/</code> (one file per extension trait), plus <code>ClipboardBackend</code> with an in-memory fallback; a new backend running &ldquo;all 15 apps&rdquo; in step 4 above. WASM audio uses HTML <code>&lt;audio&gt;</code> elements rather than Web Audio, and the PSP backend&rsquo;s <code>SpscQueue</code> was removed as unsound.</p>
   </aside>
 </div>
     </div>
