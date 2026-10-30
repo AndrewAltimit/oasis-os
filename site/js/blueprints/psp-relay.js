@@ -7,7 +7,7 @@ var h; // helpers shorthand, set in build()
 BlueprintEngine.register('psp-relay', {
   title: 'PSP Hard Reset Automation',
   subtitle: 'LCUS-2 USB Relay &bull; H-Bridge Wiring &bull; 12V Linear Actuator &bull; CH340 Serial',
-  backLink: {href: 'journal/08-remote-dev-automation.html', text: '&larr; Entry 08: Zero-Touch PSP Development'},
+  backLink: {href: 'journal/08-remote-dev-automation.html', text: 'Journal entry 08: Zero-Touch PSP Development'},
   dims: 'USB relay: 50x26mm PCB\nActuator: 10mm stroke, 188N\n12V 2A power supply\nCH340 serial control',
   legend: [
     {color:'#f44', label:'12V power (from adapter)'},

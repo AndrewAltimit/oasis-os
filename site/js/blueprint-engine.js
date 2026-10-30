@@ -322,6 +322,22 @@ function createOrbitControls(camera, renderer, camConfig){
   el.addEventListener('wheel',function(e){orbit.r+=e.deltaY*0.03;update();},{passive:true});
   el.addEventListener('mousedown',function(e){if(e.button===1)e.preventDefault();});
 
+  // Keyboard orbit: arrows rotate, +/- zoom (the canvas is focusable).
+  el.tabIndex = 0;
+  el.setAttribute('role', 'img');
+  el.setAttribute('aria-label', '3D blueprint. Arrow keys rotate, plus and minus zoom.');
+  el.addEventListener('keydown', function(e){
+    var step = e.shiftKey ? 0.2 : 0.06, handled = true;
+    if(e.key==='ArrowLeft') orbit.theta += step;
+    else if(e.key==='ArrowRight') orbit.theta -= step;
+    else if(e.key==='ArrowUp') orbit.phi -= step;
+    else if(e.key==='ArrowDown') orbit.phi += step;
+    else if(e.key==='+' || e.key==='=') orbit.r -= 2;
+    else if(e.key==='-' || e.key==='_') orbit.r += 2;
+    else handled = false;
+    if(handled){ e.preventDefault(); update(); }
+  });
+
   // Expose globally for screenshot script
   window.orbit = orbit;
   window.camUpdate = update;
@@ -404,6 +420,7 @@ function createTabs(tabs, tabStates, explodeCtrl){
     activeId = id;
     tabsEl.querySelectorAll('button').forEach(function(b){
       b.classList.toggle('active', b.dataset.tabId===id);
+      b.setAttribute('aria-pressed', String(b.dataset.tabId===id));
     });
     var state = tabStates && tabStates[id];
     if(state){
@@ -420,6 +437,7 @@ function createTabs(tabs, tabStates, explodeCtrl){
 
   tabs.forEach(function(tab, i){
     var btn = document.createElement('button');
+    btn.type = 'button';
     btn.textContent = tab.label;
     btn.dataset.tabId = tab.id;
     if(i===0) btn.classList.add('active');
@@ -506,18 +524,13 @@ function init(){
   var params = new URLSearchParams(window.location.search);
   var id = params.get('diagram');
 
-  // No diagram specified — show gallery index
-  if(!id){
-    document.getElementById('loading').style.display = 'none';
-    var gallery = document.getElementById('gallery');
-    if(gallery) gallery.classList.add('active');
-    return;
-  }
-
-  var diagram = diagrams[id];
+  // No (or an unknown) diagram: show the gallery index instead of the viewer.
+  var diagram = id ? diagrams[id] : null;
+  document.body.classList.toggle('is-viewer', !!diagram);
+  document.body.classList.toggle('is-gallery', !diagram);
   if(!diagram){
-    document.getElementById('loading').style.display='flex';
-    document.getElementById('loading').textContent='UNKNOWN DIAGRAM: '+id;
+    document.getElementById('loading').style.display = 'none';
+    if(id && window.console) console.warn('Unknown blueprint diagram: ' + id);
     return;
   }
 
