@@ -1589,8 +1589,8 @@ mod tests {
     fn compositing_layer_drives_render_target_commands() {
         // Against a backend that reports `supports_render_targets()`,
         // replay() must create+bind+draw+unbind+composite+destroy.
+        use oasis_test_backend::DrawCommand;
         use oasis_test_backend::RecordingBackend;
-        use oasis_types::backend::DrawCommand;
 
         let mut dl = DisplayList::new();
         dl.push(push_cl(layer_rect(10.0, 20.0, 80.0, 60.0), 0.75));
@@ -1659,8 +1659,8 @@ mod tests {
 
     #[test]
     fn compositing_layer_translates_contents_to_local_space() {
+        use oasis_test_backend::DrawCommand;
         use oasis_test_backend::RecordingBackend;
-        use oasis_types::backend::DrawCommand;
 
         let mut dl = DisplayList::new();
         dl.push(push_cl(layer_rect(50.0, 100.0, 30.0, 20.0), 1.0));
@@ -1705,8 +1705,8 @@ mod tests {
     /// junk.
     #[test]
     fn nested_compositing_layers_use_per_layer_local_space() {
+        use oasis_test_backend::DrawCommand;
         use oasis_test_backend::RecordingBackend;
-        use oasis_types::backend::DrawCommand;
 
         let mut dl = DisplayList::new();
         dl.push(push_cl(layer_rect(10.0, 20.0, 200.0, 200.0), 1.0));

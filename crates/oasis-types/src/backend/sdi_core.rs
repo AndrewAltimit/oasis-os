@@ -7,9 +7,11 @@ use crate::error::Result;
 ///
 /// These 13 methods are the minimum surface for a rendering backend.
 /// Test mocks and null backends implement this trait plus empty impls
-/// for the 8 extension traits (`SdiShapes`, `SdiGradients`, `SdiAlpha`,
-/// `SdiText`, `SdiTextures`, `SdiClipTransform`, `SdiVector`,
-/// `SdiBatch`) to automatically satisfy `SdiBackend` via blanket impl.
+/// for the nine extension traits (`SdiShapes`, `SdiGradients`,
+/// `SdiAlpha`, `SdiText`, `SdiTextures`, `SdiClipTransform`, `SdiVector`,
+/// `SdiBatch`, `SdiRenderTarget`) -- one
+/// [`impl_sdi_defaults!`](crate::impl_sdi_defaults) line writes them --
+/// to satisfy `SdiBackend` via its blanket impl.
 pub trait SdiCore {
     /// Initialize the rendering subsystem.
     fn init(&mut self, width: u32, height: u32) -> Result<()>;

@@ -1,6 +1,4 @@
 //! `SdiTextures` extension trait.
-//!
-//! Extracted from the historical monolithic `extensions.rs`.
 
 use crate::backend::{Color, SdiCore, TextureId};
 use crate::error::Result;

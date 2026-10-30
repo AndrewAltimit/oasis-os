@@ -6,10 +6,8 @@
 //! These tests lock that sequence down so regressions in the trait
 //! surface or in the recording backend are caught immediately.
 
-use oasis_test_backend::RecordingBackend;
-use oasis_types::backend::{
-    BlendMode, Color, DrawCommand, RenderTargetId, SdiCore, SdiRenderTarget,
-};
+use oasis_test_backend::{DrawCommand, RecordingBackend};
+use oasis_types::backend::{BlendMode, Color, RenderTargetId, SdiCore, SdiRenderTarget};
 
 /// Walk the canonical single-layer recording:
 /// create → bind → fill → text → unbind → composite → destroy.

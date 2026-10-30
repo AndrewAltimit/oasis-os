@@ -1,15 +1,102 @@
-//! Scanline span generators shared by every backend.
+//! Scanline span generators shared by every backend and by the
+//! `SdiShapes` / `SdiVector` trait defaults.
 //!
 //! Each generator reports the pixels a shape covers as horizontal spans,
 //! **one call per covered row** (two for rows a ring passes through twice),
 //! so a translucent fill blends every pixel exactly once. The software
-//! rasterizer fills the spans directly; the SDL backend submits them as
-//! one batched `fill_rects` call. Sharing the generators is what keeps the
-//! backends pixel-identical: there is exactly one definition of which
-//! pixels a thick line, a stroked circle or a polygon covers.
+//! rasterizer (`oasis-rasterize::SoftwareBuffer`) fills the spans directly,
+//! the SDL backend submits them as one batched `fill_rects` call and the
+//! trait defaults (used by PSP and every mock) emit one `fill_rect(.., 1)`
+//! per span. Sharing the generators is what keeps the backends
+//! pixel-identical: there is exactly one definition of which pixels a
+//! circle, a rounded rect, a thick line or a polygon covers.
+//!
+//! The generators are pure integer math with no backend state, which is
+//! why they live here rather than in `oasis-rasterize` (which re-exports
+//! them unchanged).
 
-use crate::rounded_rect_rows;
-use oasis_types::rasterize;
+use crate::geometry::isqrt_i32;
+
+/// Walk the midpoint circle of radius `r` and report every row offset
+/// `o` in `0..=r` **exactly once** together with the half-width `ext` of
+/// the filled disc on that row (the span is `-ext..=ext`).
+///
+/// The classic midpoint fill emits the same row several times (the
+/// `(x, y)` octant pair revisits a row while `y` stays constant), which
+/// double-blends translucent fills. This walk emits the same union of
+/// pixels -- the widest extent seen for each row -- but only once.
+pub fn midpoint_row_extents(r: i32, mut f: impl FnMut(i32, i32)) {
+    if r < 0 {
+        return;
+    }
+    let mut cx = 0i32;
+    let mut cy = r;
+    let mut d = 1 - r;
+    while cx <= cy {
+        // Row `cx` is visited exactly once, with its final extent `cy`.
+        f(cx, cy);
+        let steps_down = d >= 0;
+        // Row `cy` is revisited while `cy` stays constant, with a growing
+        // `cx`; its widest extent is the `cx` of the step that leaves it.
+        // `cx < cy` guarantees row `cy` is never reached as a `cx` row.
+        if steps_down && cx < cy {
+            f(cy, cx);
+        }
+        cx += 1;
+        if steps_down {
+            cy -= 1;
+            d += 2 * (cx - cy) + 1;
+        } else {
+            d += 2 * cx + 1;
+        }
+    }
+}
+
+/// Enumerate the rows of a filled `w x h` rounded rect with corner radius
+/// `r` (already clamped to `w/2`, `h/2`). Calls `f(dy, x0, x1)` exactly
+/// once per covered row, where the row covers columns `x0..x1` (relative
+/// to the rect's left edge, half-open).
+///
+/// The covered pixels match the historical midpoint-based fill exactly;
+/// only the repeated rows are gone.
+pub fn rounded_rect_rows(w: i32, h: i32, r: i32, mut f: impl FnMut(i32, i32, i32)) {
+    if w <= 0 || h <= 0 {
+        return;
+    }
+    if r <= 0 {
+        for dy in 0..h {
+            f(dy, 0, w);
+        }
+        return;
+    }
+    // Columns of a row inset by `r - ext`. When `w == 2r` the pole row
+    // (ext 0) keeps the two center pixels, as the inclusive-endpoint
+    // `hline` always drew it.
+    let span = |ext: i32| {
+        let inset = r - ext;
+        if w - 2 * inset > 0 {
+            (inset, w - inset)
+        } else {
+            (inset - 1, inset + 1)
+        }
+    };
+    midpoint_row_extents(r, |o, ext| {
+        let (x0, x1) = span(ext);
+        // Top arc: offset 0 is the first full-width row.
+        f(r - o, x0, x1);
+        // Bottom arc: offset 0 is covered by the body (or, when h == 2r,
+        // coincides with a top-arc row), so only o >= 1 rows below the
+        // top half are emitted.
+        let dy = h - 1 - r + o;
+        if o >= 1 && dy > r {
+            f(dy, x0, x1);
+        }
+    });
+    // Body rows strictly between the two arcs.
+    for dy in (r + 1)..(h - r) {
+        f(dy, 0, w);
+    }
+}
 
 /// Rows of a line from `(x1, y1)` to `(x2, y2)` stamped with a square
 /// `width` x `width` brush at every Bresenham step (the brush spans
@@ -79,11 +166,11 @@ pub fn stroke_circle_rows(radius: u16, stroke_width: u16, mut f: impl FnMut(i32,
     let r_outer = radius as i32;
     let r_inner = (r_outer - (stroke_width as i32).max(1)).max(0);
     for dy in -r_outer..=r_outer {
-        let outer_x = rasterize::isqrt((r_outer * r_outer - dy * dy) as u32) as i32;
+        let outer_x = isqrt_i32(r_outer * r_outer - dy * dy);
         if r_inner > 0 {
             let inner_sq = r_inner * r_inner - dy * dy;
             if inner_sq > 0 {
-                let inner_x = rasterize::isqrt(inner_sq as u32) as i32;
+                let inner_x = isqrt_i32(inner_sq);
                 f(dy, -outer_x, -inner_x + 1);
                 f(dy, inner_x, outer_x + 1);
                 continue;
@@ -291,5 +378,37 @@ mod tests {
             polygon_rows(&[(1, 1), (5, 5)], &mut xs, put)
         });
         assert!(g.iter().all(|&n| n == 0));
+    }
+
+    #[test]
+    fn rounded_rect_rows_visits_each_row_once() {
+        for w in 1..24 {
+            for h in 1..24 {
+                for r in 0..=(w.min(h) / 2) {
+                    let mut seen = vec![0u32; h as usize];
+                    rounded_rect_rows(w, h, r, |dy, x0, x1| {
+                        assert!((0..h).contains(&dy), "row {dy} outside 0..{h}");
+                        assert!(0 <= x0 && x0 < x1 && x1 <= w, "w={w} r={r}: {x0}..{x1}");
+                        seen[dy as usize] += 1;
+                    });
+                    assert!(seen.iter().all(|&n| n == 1), "w={w} h={h} r={r}: {seen:?}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn midpoint_row_extents_visits_each_offset_once() {
+        for r in 0..200 {
+            let mut ext_of = vec![-1i32; r as usize + 1];
+            midpoint_row_extents(r, |o, ext| {
+                assert!(ext >= 0 && ext <= r);
+                assert_eq!(ext_of[o as usize], -1, "r={r}: offset {o} visited twice");
+                ext_of[o as usize] = ext;
+            });
+            assert!(ext_of.iter().all(|&e| e >= 0), "r={r}: {ext_of:?}");
+            // The extent never grows with distance from the center.
+            assert!(ext_of.windows(2).all(|p| p[0] >= p[1]), "r={r}: {ext_of:?}");
+        }
     }
 }

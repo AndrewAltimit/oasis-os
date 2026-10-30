@@ -1,10 +1,10 @@
 //! `SdiVector` extension trait.
-//!
-//! Extracted from the historical monolithic `extensions.rs`.
 
+use super::spans::SpanFill;
 use crate::backend::SdiShapes;
 use crate::backend::{Color, arc_segments, cos_approx_f32, sin_approx_f32};
 use crate::error::Result;
+use crate::rasterize::polygon_rows;
 
 // ---------------------------------------------------------------------------
 // SdiVector
@@ -13,18 +13,14 @@ use crate::error::Result;
 /// Vector graphics primitives (polygons, arcs, dashed lines).
 #[allow(clippy::too_many_arguments)]
 pub trait SdiVector: SdiShapes {
-    /// Draw a filled convex polygon (triangle-fan decomposition).
+    /// Draw a filled polygon under the even-odd rule ([`polygon_rows`]),
+    /// so concave and self-intersecting paths fill as on the desktop
+    /// backends.
     fn fill_polygon(&mut self, points: &[(i32, i32)], color: Color) -> Result<()> {
-        if points.len() < 3 {
-            return Ok(());
-        }
-        let v0 = points[0];
-        for i in 1..points.len() - 1 {
-            let v1 = points[i];
-            let v2 = points[i + 1];
-            self.fill_triangle(v0.0, v0.1, v1.0, v1.1, v2.0, v2.1, color)?;
-        }
-        Ok(())
+        let mut xs = Vec::new();
+        let mut fill = SpanFill::new(self, color);
+        polygon_rows(points, &mut xs, |y, x0, x1| fill.span(y, x0, x1));
+        fill.finish()
     }
 
     /// Draw the outline of a polygon (closed path).

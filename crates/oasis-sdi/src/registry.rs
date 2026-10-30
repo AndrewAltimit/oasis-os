@@ -10,7 +10,7 @@ use std::hash::{BuildHasherDefault, Hasher};
 use serde::Deserialize;
 
 use oasis_types::backend::{Color, SdiBackend};
-use oasis_types::error::{OasisError, Result};
+use oasis_types::error::{OasisError, Result, SdiError};
 use oasis_types::shadow::Shadow;
 
 use crate::object::SdiObject;
@@ -317,7 +317,7 @@ impl SdiRegistry {
         self.index
             .get(name)
             .map(|&h| &self.objects[h])
-            .ok_or_else(|| OasisError::Sdi(format!("object not found: {name}").into()))
+            .ok_or_else(|| not_found(name))
     }
 
     /// Get a mutable reference to an object by name.
@@ -333,7 +333,7 @@ impl SdiRegistry {
                 self.touch(h);
                 Ok(&mut self.objects[h])
             },
-            None => Err(OasisError::Sdi(format!("object not found: {name}").into())),
+            None => Err(not_found(name)),
         }
     }
 
@@ -391,10 +391,7 @@ impl SdiRegistry {
 
     /// Remove an object from the registry.
     pub fn destroy(&mut self, name: &str) -> Result<()> {
-        let handle = self
-            .index
-            .remove(name)
-            .ok_or_else(|| OasisError::Sdi(format!("object not found: {name}").into()))?;
+        let handle = self.index.remove(name).ok_or_else(|| not_found(name))?;
         self.objects.swap_remove(handle);
         // `swap_remove` moved the former last object into `handle` (unless the
         // removed object *was* last) — repoint its index entry.
@@ -603,7 +600,10 @@ impl SdiRegistry {
     /// Draw only the overlay layer, sorted by z-order.
     ///
     /// Call after [`Self::draw_base_layer`] and any custom mid-layer rendering.
-    pub fn draw_overlay_layer(&self, backend: &mut dyn SdiBackend) -> Result<()> {
+    /// Re-sorts first if objects were created, destroyed or re-ordered, so it
+    /// is also safe to call on its own.
+    pub fn draw_overlay_layer(&mut self, backend: &mut dyn SdiBackend) -> Result<()> {
+        self.ensure_z_sorted();
         for &handle in &self.z_sorted_overlay {
             let obj = &self.objects[handle];
             if !obj.visible || obj.alpha == 0 {
@@ -652,7 +652,7 @@ impl SdiRegistry {
 
     /// Draw only the overlay layer, excluding objects with given prefixes.
     pub fn draw_overlay_excluding_prefixes(
-        &self,
+        &mut self,
         backend: &mut dyn SdiBackend,
         prefixes: &[&str],
     ) -> Result<()> {
@@ -671,10 +671,11 @@ impl SdiRegistry {
     }
 
     /// Draw only the overlay layer, keeping objects for which `keep` returns true.
-    pub fn draw_overlay_filtered<F>(&self, backend: &mut dyn SdiBackend, keep: F) -> Result<()>
+    pub fn draw_overlay_filtered<F>(&mut self, backend: &mut dyn SdiBackend, keep: F) -> Result<()>
     where
         F: Fn(&str) -> bool,
     {
+        self.ensure_z_sorted();
         self.draw_layer_filtered(&self.z_sorted_overlay, backend, &keep)
     }
 
@@ -705,6 +706,9 @@ impl SdiRegistry {
     /// 2. Fill: gradient+radius → gradient → rounded → flat (existing)
     /// 3. Stroke (if `stroke_width` set)
     /// 4. Text (if present)
+    ///
+    /// The object's `alpha` scales every one of these (and a texture's
+    /// tint), so a fading object fades as a whole -- including its label.
     fn draw_object(obj: &SdiObject, backend: &mut dyn SdiBackend) -> Result<()> {
         // Textured object -- blit the texture. A non-opaque `alpha` goes
         // through the tinted path so textures can fade/pulse (backends
@@ -738,26 +742,16 @@ impl SdiRegistry {
                 if let Some(sc) = obj.shadow_color {
                     shadow = shadow.with_color(sc);
                 }
+                shadow = shadow.with_opacity(obj.alpha);
                 shadow.draw(backend, obj.x, obj.y, obj.w, obj.h, radius)?;
             }
 
             // 2. Fill: choose the best primitive.
-            let a = ((obj.color.a as u16) * (obj.alpha as u16) / 255) as u8;
-            let color = Color::rgba(obj.color.r, obj.color.g, obj.color.b, a);
+            let color = fade(obj.color, obj.alpha);
 
             if let (Some(gt), Some(gb)) = (obj.gradient_top, obj.gradient_bottom) {
-                let top = Color::rgba(
-                    gt.r,
-                    gt.g,
-                    gt.b,
-                    ((gt.a as u16) * (obj.alpha as u16) / 255) as u8,
-                );
-                let bot = Color::rgba(
-                    gb.r,
-                    gb.g,
-                    gb.b,
-                    ((gb.a as u16) * (obj.alpha as u16) / 255) as u8,
-                );
+                let top = fade(gt, obj.alpha);
+                let bot = fade(gb, obj.alpha);
                 let gradient = oasis_types::backend::GradientStyle::Vertical { top, bottom: bot };
                 if radius > 0 {
                     backend.fill_rounded_rect_gradient(
@@ -776,7 +770,10 @@ impl SdiRegistry {
             if let Some(sw) = obj.stroke_width
                 && sw > 0
             {
-                let sc = obj.stroke_color.unwrap_or(Color::rgba(255, 255, 255, 128));
+                let sc = fade(
+                    obj.stroke_color.unwrap_or(Color::rgba(255, 255, 255, 128)),
+                    obj.alpha,
+                );
                 if radius > 0 {
                     backend.stroke_rounded_rect(obj.x, obj.y, obj.w, obj.h, radius, sw, sc)?;
                 } else {
@@ -788,10 +785,14 @@ impl SdiRegistry {
         // 4. Text on top (with optional shadow pass).
         if let Some(ref text) = obj.text {
             if let Some((dx, dy)) = obj.text_shadow_offset {
-                let shadow_color = obj.text_shadow_color.unwrap_or(Color::rgba(0, 0, 0, 128));
+                let shadow_color = fade(
+                    obj.text_shadow_color.unwrap_or(Color::rgba(0, 0, 0, 128)),
+                    obj.alpha,
+                );
                 backend.draw_text(text, obj.x + dx, obj.y + dy, obj.font_size, shadow_color)?;
             }
-            backend.draw_text(text, obj.x, obj.y, obj.font_size, obj.text_color)?;
+            let text_color = fade(obj.text_color, obj.alpha);
+            backend.draw_text(text, obj.x, obj.y, obj.font_size, text_color)?;
         }
 
         Ok(())
@@ -840,6 +841,18 @@ struct ThemeEntry {
     shadow_color: Option<String>,
 }
 
+/// The error for a missing object name.
+fn not_found(name: &str) -> OasisError {
+    OasisError::Sdi(SdiError::NotFound {
+        name: name.to_owned(),
+    })
+}
+
+/// Scale `c`'s alpha by an object-level `alpha` (255 = unchanged).
+fn fade(c: Color, alpha: u8) -> Color {
+    c.with_alpha(((c.a as u16) * (alpha as u16) / 255) as u8)
+}
+
 /// Parse a color string like "#RRGGBB" or "#RRGGBBAA".
 fn parse_color(s: &str) -> Option<Color> {
     oasis_types::color::parse_hex_color(s)
@@ -871,8 +884,18 @@ mod tests {
 
     #[test]
     fn get_nonexistent_returns_error() {
-        let reg = SdiRegistry::new();
-        assert!(reg.get("nope").is_err());
+        let mut reg = SdiRegistry::new();
+        for err in [
+            reg.get("nope").map(|_| ()).unwrap_err(),
+            reg.get_mut("nope").map(|_| ()).unwrap_err(),
+            reg.destroy("nope").unwrap_err(),
+        ] {
+            assert!(
+                matches!(&err, OasisError::Sdi(SdiError::NotFound { name }) if name == "nope"),
+                "typed NotFound expected: {err:?}"
+            );
+            assert_eq!(err.to_string(), "SDI error: object not found: nope");
+        }
     }
 
     #[test]
@@ -1408,6 +1431,129 @@ font_size = 16
             reg.scene_signature(),
             sig1,
             "aria metadata never affects pixels"
+        );
+    }
+
+    // -- Overlay z-order and object alpha --
+
+    /// Records `(kind, text-or-empty, color)` for every fill and text call.
+    #[derive(Default)]
+    struct ColorLog {
+        calls: Vec<(&'static str, String, Color)>,
+    }
+
+    impl SdiCore for ColorLog {
+        fn init(&mut self, _w: u32, _h: u32) -> Result<()> {
+            Ok(())
+        }
+        fn clear(&mut self, _color: Color) -> Result<()> {
+            Ok(())
+        }
+        fn blit(&mut self, _t: TextureId, _x: i32, _y: i32, _w: u32, _h: u32) -> Result<()> {
+            Ok(())
+        }
+        fn fill_rect(&mut self, _x: i32, _y: i32, _w: u32, _h: u32, color: Color) -> Result<()> {
+            self.calls.push(("fill", String::new(), color));
+            Ok(())
+        }
+        fn draw_text(&mut self, text: &str, _x: i32, _y: i32, _fs: u16, c: Color) -> Result<()> {
+            self.calls.push(("text", text.to_string(), c));
+            Ok(())
+        }
+        fn swap_buffers(&mut self) -> Result<()> {
+            Ok(())
+        }
+        fn load_texture(&mut self, _w: u32, _h: u32, _data: &[u8]) -> Result<TextureId> {
+            Ok(TextureId(0))
+        }
+        fn destroy_texture(&mut self, _tex: TextureId) -> Result<()> {
+            Ok(())
+        }
+        fn set_clip_rect(&mut self, _x: i32, _y: i32, _w: u32, _h: u32) -> Result<()> {
+            Ok(())
+        }
+        fn reset_clip_rect(&mut self) -> Result<()> {
+            Ok(())
+        }
+        fn measure_text(&self, text: &str, _font_size: u16) -> u32 {
+            text.len() as u32 * 8
+        }
+        fn read_pixels(&self, _x: i32, _y: i32, _w: u32, _h: u32) -> Result<Vec<u8>> {
+            Ok(Vec::new())
+        }
+        fn shutdown(&mut self) -> Result<()> {
+            Ok(())
+        }
+    }
+
+    oasis_types::impl_sdi_defaults!(ColorLog);
+
+    #[test]
+    fn overlay_layer_resorts_after_create_without_base_pass() {
+        let mut reg = SdiRegistry::new();
+        for name in ["a", "b"] {
+            let o = reg.create(name);
+            o.overlay = true;
+            o.text = Some(name.into());
+        }
+        let mut log = ColorLog::default();
+        reg.draw(&mut log).unwrap();
+        // Create and destroy overlay objects, then draw only the overlay:
+        // it must not walk the stale handle list (wrong objects or an
+        // out-of-bounds panic after the slab shrank).
+        reg.destroy("a").unwrap();
+        let o = reg.create("c");
+        o.overlay = true;
+        o.text = Some("c".into());
+        let mut log = ColorLog::default();
+        reg.draw_overlay_layer(&mut log).unwrap();
+        let texts: Vec<_> = log.calls.iter().map(|c| c.1.as_str()).collect();
+        assert_eq!(texts, ["b", "c"]);
+
+        reg.destroy("b").unwrap();
+        reg.destroy("c").unwrap();
+        let mut log = ColorLog::default();
+        reg.draw_overlay_filtered(&mut log, |_| true).unwrap();
+        assert!(log.calls.is_empty());
+    }
+
+    #[test]
+    fn object_alpha_fades_text_stroke_and_fill_together() {
+        let mut reg = SdiRegistry::new();
+        let o = reg.create("win.title");
+        o.w = 20;
+        o.h = 10;
+        o.color = Color::rgba(10, 20, 30, 255);
+        o.stroke_width = Some(1);
+        o.stroke_color = Some(Color::rgba(1, 2, 3, 200));
+        o.text = Some("Title".into());
+        o.text_color = Color::rgba(250, 250, 250, 255);
+        o.text_shadow_offset = Some((1, 1));
+        o.text_shadow_color = Some(Color::rgba(0, 0, 0, 100));
+        o.alpha = 128;
+        let mut log = ColorLog::default();
+        reg.draw(&mut log).unwrap();
+
+        let fills: Vec<Color> = log
+            .calls
+            .iter()
+            .filter(|c| c.0 == "fill")
+            .map(|c| c.2)
+            .collect();
+        assert_eq!(fills[0], Color::rgba(10, 20, 30, 128), "fill");
+        assert!(
+            fills[1..].iter().all(|&c| c == Color::rgba(1, 2, 3, 100)),
+            "stroke: {fills:?}"
+        );
+        let texts: Vec<Color> = log
+            .calls
+            .iter()
+            .filter(|c| c.0 == "text")
+            .map(|c| c.2)
+            .collect();
+        assert_eq!(
+            texts,
+            [Color::rgba(0, 0, 0, 50), Color::rgba(250, 250, 250, 128)]
         );
     }
 

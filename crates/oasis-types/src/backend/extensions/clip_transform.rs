@@ -1,6 +1,4 @@
 //! `SdiClipTransform` extension trait.
-//!
-//! Extracted from the historical monolithic `extensions.rs`.
 
 use crate::backend::SdiCore;
 use crate::error::Result;

@@ -1,9 +1,12 @@
 //! `SdiShapes` extension trait.
-//!
-//! Extracted from the historical monolithic `extensions.rs`.
 
+use super::spans::SpanFill;
 use crate::backend::{Color, SdiCore};
 use crate::error::Result;
+use crate::rasterize::{
+    midpoint_row_extents, rounded_rect_rows, stroke_circle_rows, stroke_rounded_rect_rows,
+    thick_line_rows,
+};
 
 // ---------------------------------------------------------------------------
 // SdiShapes
@@ -11,22 +14,46 @@ use crate::error::Result;
 
 /// Shape drawing primitives (rounded rects, lines, circles,
 /// triangles).
+///
+/// The span-based defaults cover exactly the pixels the desktop backends
+/// draw: they feed the shared span generators in [`crate::rasterize`] into
+/// `fill_rect` calls (one per span, with spans that continue straight down
+/// merged into one rectangle), and every pixel is covered once, so
+/// translucent colours blend uniformly. PSP and all test mocks rely on
+/// them.
 #[allow(clippy::too_many_arguments)]
 pub trait SdiShapes: SdiCore {
     /// Draw a filled rectangle with rounded corners.
+    ///
+    /// `radius` is clamped to half the shorter side.
     fn fill_rounded_rect(
         &mut self,
         x: i32,
         y: i32,
         w: u32,
         h: u32,
-        _radius: u16,
+        radius: u16,
         color: Color,
     ) -> Result<()> {
-        self.fill_rect(x, y, w, h, color)
+        if w == 0 || h == 0 {
+            return Ok(());
+        }
+        if radius == 0 {
+            return self.fill_rect(x, y, w, h, color);
+        }
+        let r = (radius as u32).min(w / 2).min(h / 2) as i32;
+        let mut fill = SpanFill::new(self, color);
+        rounded_rect_rows(w as i32, h as i32, r, |dy, x0, x1| {
+            fill.span(y + dy, x + x0, x + x1);
+        });
+        fill.finish()
     }
 
-    /// Draw the outline of a rectangle.
+    /// Draw the outline of a rectangle, `stroke_width` pixels thick and
+    /// inside the rectangle.
+    ///
+    /// A stroke at least half as wide as the shorter side fills the whole
+    /// rectangle (the four edges would otherwise overlap and double-blend).
     fn stroke_rect(
         &mut self,
         x: i32,
@@ -37,34 +64,53 @@ pub trait SdiShapes: SdiCore {
         color: Color,
     ) -> Result<()> {
         let sw = stroke_width as u32;
+        if w == 0 || h == 0 || sw == 0 {
+            return Ok(());
+        }
+        if sw * 2 >= w || sw * 2 >= h {
+            return self.fill_rect(x, y, w, h, color);
+        }
+        let inner_h = h - sw * 2;
         self.fill_rect(x, y, w, sw, color)?;
-        self.fill_rect(x, y + h as i32 - sw as i32, w, sw, color)?;
-        self.fill_rect(x, y + sw as i32, sw, h.saturating_sub(sw * 2), color)?;
-        self.fill_rect(
-            x + w as i32 - sw as i32,
-            y + sw as i32,
-            sw,
-            h.saturating_sub(sw * 2),
-            color,
-        )?;
+        self.fill_rect(x, y + (h - sw) as i32, w, sw, color)?;
+        self.fill_rect(x, y + sw as i32, sw, inner_h, color)?;
+        self.fill_rect(x + (w - sw) as i32, y + sw as i32, sw, inner_h, color)?;
         Ok(())
     }
 
     /// Draw the outline of a rounded rectangle.
+    ///
+    /// `radius` is clamped to half the shorter side; a zero radius strokes
+    /// a plain rectangle.
     fn stroke_rounded_rect(
         &mut self,
         x: i32,
         y: i32,
         w: u32,
         h: u32,
-        _radius: u16,
+        radius: u16,
         stroke_width: u16,
         color: Color,
     ) -> Result<()> {
-        self.stroke_rect(x, y, w, h, stroke_width, color)
+        if w == 0 || h == 0 {
+            return Ok(());
+        }
+        if radius == 0 {
+            return self.stroke_rect(x, y, w, h, stroke_width, color);
+        }
+        let r = (radius as i32).min(w as i32 / 2).min(h as i32 / 2);
+        let mut fill = SpanFill::new(self, color);
+        stroke_rounded_rect_rows(w as i32, h as i32, r, stroke_width, |dy, x0, x1| {
+            fill.span(y + dy, x + x0, x + x1);
+        });
+        fill.finish()
     }
 
-    /// Draw a line between two points.
+    /// Draw a line between two points (both endpoints included).
+    ///
+    /// A square `width` x `width` brush is stamped at every Bresenham step
+    /// ([`thick_line_rows`]), centred on the step; widths `<= 1` draw the
+    /// single-pixel Bresenham line.
     fn draw_line(
         &mut self,
         x1: i32,
@@ -74,61 +120,22 @@ pub trait SdiShapes: SdiCore {
         width: u16,
         color: Color,
     ) -> Result<()> {
-        if y1 == y2 {
-            let lx = x1.min(x2);
-            let w = (x1 - x2).unsigned_abs();
-            self.fill_rect(lx, y1, w.max(1), width as u32, color)?;
-        } else if x1 == x2 {
-            let ly = y1.min(y2);
-            let h = (y1 - y2).unsigned_abs();
-            self.fill_rect(x1, ly, width as u32, h.max(1), color)?;
-        } else {
-            let w = width as u32;
-            let dx = (x2 - x1).abs();
-            let dy = -(y2 - y1).abs();
-            let sx: i32 = if x1 < x2 { 1 } else { -1 };
-            let sy: i32 = if y1 < y2 { 1 } else { -1 };
-            let mut err = dx + dy;
-            let (mut cx, mut cy) = (x1, y1);
-            loop {
-                self.fill_rect(cx, cy, w, w, color)?;
-                if cx == x2 && cy == y2 {
-                    break;
-                }
-                let e2 = 2 * err;
-                if e2 >= dy {
-                    err += dy;
-                    cx += sx;
-                }
-                if e2 <= dx {
-                    err += dx;
-                    cy += sy;
-                }
-            }
-        }
-        Ok(())
+        let mut fill = SpanFill::new(self, color);
+        thick_line_rows(x1, y1, x2, y2, width, |y, xs, xe| fill.span(y, xs, xe));
+        fill.finish()
     }
 
-    /// Draw a filled circle using the midpoint circle algorithm.
+    /// Draw a filled circle using the midpoint circle algorithm, one span
+    /// per row ([`midpoint_row_extents`]).
     fn fill_circle(&mut self, cx: i32, cy: i32, radius: u16, color: Color) -> Result<()> {
-        let r = radius as i32;
-        let mut x = r;
-        let mut y: i32 = 0;
-        let mut err = 1 - r;
-        while x >= y {
-            self.fill_rect(cx - x, cy + y, (x * 2 + 1) as u32, 1, color)?;
-            self.fill_rect(cx - x, cy - y, (x * 2 + 1) as u32, 1, color)?;
-            self.fill_rect(cx - y, cy + x, (y * 2 + 1) as u32, 1, color)?;
-            self.fill_rect(cx - y, cy - x, (y * 2 + 1) as u32, 1, color)?;
-            y += 1;
-            if err < 0 {
-                err += 2 * y + 1;
-            } else {
-                x -= 1;
-                err += 2 * (y - x) + 1;
+        let mut fill = SpanFill::new(self, color);
+        midpoint_row_extents(radius as i32, |o, ext| {
+            fill.span(cy + o, cx - ext, cx + ext + 1);
+            if o != 0 {
+                fill.span(cy - o, cx - ext, cx + ext + 1);
             }
-        }
-        Ok(())
+        });
+        fill.finish()
     }
 
     /// Draw a filled triangle (scanline fill).
@@ -232,7 +239,9 @@ pub trait SdiShapes: SdiCore {
         Ok(())
     }
 
-    /// Draw the outline of a circle.
+    /// Draw the outline of a circle: the ring between `radius` and
+    /// `radius - stroke_width` ([`stroke_circle_rows`]; a zero width counts
+    /// as 1). The centre stays untouched.
     fn stroke_circle(
         &mut self,
         cx: i32,
@@ -241,7 +250,10 @@ pub trait SdiShapes: SdiCore {
         stroke_width: u16,
         color: Color,
     ) -> Result<()> {
-        let _ = stroke_width;
-        self.fill_circle(cx, cy, radius, color)
+        let mut fill = SpanFill::new(self, color);
+        stroke_circle_rows(radius, stroke_width, |dy, x0, x1| {
+            fill.span(cy + dy, cx + x0, cx + x1);
+        });
+        fill.finish()
     }
 }

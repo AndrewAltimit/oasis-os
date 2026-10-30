@@ -1,6 +1,4 @@
 //! `SdiText` extension trait.
-//!
-//! Extracted from the historical monolithic `extensions.rs`.
 
 use crate::backend::{Color, SdiCore, TextMetrics};
 use crate::error::Result;
@@ -21,15 +19,21 @@ pub trait SdiText: SdiCore {
     /// bitmap path pixel-identical.
     fn set_font(&mut self, _font: Option<&[u8]>) {}
     /// Measure the height of text at the given font size.
+    ///
+    /// The default is the bitmap font's line box,
+    /// [`bitmap_line_height`](crate::bitmap_font::bitmap_line_height), the
+    /// same value every desktop backend reports for the bitmap font.
+    #[must_use]
     fn measure_text_height(&self, font_size: u16) -> u32 {
-        let fs = font_size as u32;
-        (fs * 6).div_ceil(5)
+        crate::bitmap_font::bitmap_line_height(font_size)
     }
 
     /// Measure the font's ascent.
+    ///
+    /// The default is [`bitmap_ascent`](crate::bitmap_font::bitmap_ascent).
+    #[must_use]
     fn font_ascent(&self, font_size: u16) -> u32 {
-        let fs = font_size as u32;
-        (fs * 17).div_ceil(20)
+        crate::bitmap_font::bitmap_ascent(font_size)
     }
 
     /// Return full text metrics (width, height, ascent) for a string.
