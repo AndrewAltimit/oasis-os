@@ -167,6 +167,22 @@ removal, a restyled site, and docs that match the code.
   (`max_image_dimension` / `max_image_pixels`); previous pages' image
   textures are freed on navigation; `text-align: start/end` follow
   `direction`.
+- **Hostile-input hardening (overhaul 2):** a property-based pipeline
+  fuzz test (`oasis-browser/tests/pipeline_fuzz.rs`) found, and the
+  engine now survives, CSS that allocated tens of gigabytes
+  (`column-count`, huge `colspan` x `rowspan`, `tab-size`, line-box and
+  offscreen-layer sizing) or overflowed paint arithmetic (geometry now
+  saturates at ±2^25 px); a non-ASCII `bgcolor` / SVG `fill` no longer
+  panics; the console buffer is capped (1000 entries, 4 KiB each).
+- **Correctness (overhaul 2):** table spans no longer ride on
+  `min-width` / `max-width`, so `max-width` of 999 px and up applies
+  again (`.container { max-width: 1200px }`) and `min-width` on a cell
+  is not read as a `colspan`; `colspan` / `rowspan` follow HTML's limits.
+  All 148 CSS named colours are recognised, and SVG / canvas colours
+  share the CSS parser (`rgba()`, `hsl()`, 8-digit hex). Relative URLs
+  keep a directory's trailing `/` and absolute paths drop dot segments.
+  `oasis-browser`'s largest files (`svg`, `paint/record`,
+  `widget/pipeline`, `widget/input`) are now module directories.
 
 ### Skins
 

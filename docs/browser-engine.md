@@ -20,7 +20,18 @@ without layout, paint or QuickJS:
 | `oasis-html` | tokenizer, tree builder, arena DOM, `Hook<F>` embedder hooks | `log` |
 | `oasis-css` | CSS tokenizer, parser, cascade, computed values, animations / transitions | `oasis-html`, `oasis-types` |
 | `oasis-http` | `Url`, HTTP/1.1 + HTTP/2, Gemini framing, cookies, cache, CSP, IO thread, VFS loader | `oasis-net`, `oasis-vfs`, `oasis-types` |
-| `oasis-browser` | layout, paint, `BrowserWidget`, forms, JS DOM bindings, `.gmi` parser / renderer, images, fonts, SVG, canvas | all of the above |
+| `oasis-js` | QuickJS-NG engine (`JsEngine`), console, timers, `fetch` plumbing, Web Storage | `rquickjs` |
+| `oasis-browser` | layout, paint, `BrowserWidget`, forms, JS DOM bindings, `.gmi` parser / renderer, images, fonts, SVG, canvas | all of the above (`oasis-js` behind `javascript`) |
+
+Inside `oasis-browser` the larger subsystems are directories:
+`layout/` (block, inline, flex, grid, table, multicol, positioning),
+`paint/record/` (the display-list recorder: box walk in `mod.rs`,
+`decorations`, `text`, `replaced`, form `controls`),
+`paint/display_list/` (items, optimizer, replay), `svg/` (`parse`,
+`path`, `paint`), `widget/pipeline/` (`navigation`, `document`,
+`stylesheets`, `scripts`, `gemini_page`), `widget/input/` (`click`,
+`focus`, `forms`, `history`, `hover`, `js_events`, `scroll`) and
+`js_dom/`.
 
 `oasis-browser` re-exports `oasis_http` as `loader` and keeps
 `internals::*` for benches, fuzzers and the PSP hook setters, so
@@ -50,8 +61,14 @@ directly.
   found by walking the chunk sizes.
 - **URLs** — network-scheme URLs are normalized at parse time: host
   lower-cased, `user:pw@` split into `Url::userinfo` (never sent),
-  default port elided, `\` treated as `/`. `Url::origin()` is the one
-  origin used by CSP `'self'`, `fetch()` CORS and Web Storage.
+  default port elided, `\` treated as `/`. Relative and absolute-path
+  references are resolved with RFC 3986 dot-segment removal (`..` never
+  climbs above `/`, directory references keep their trailing `/`).
+  `Url::origin()` is the one origin used by CSP `'self'`, `fetch()` CORS
+  and Web Storage.
+- **Body caps** — response bodies are capped at 8 MB on desktop (2 MB on
+  PSP), and gzip / deflate / brotli bodies are decoded through the same
+  limit on HTTP/1.1 and HTTP/2, so a decompression bomb errors out.
 - **Cookies** (`oasis-http/src/cookies.rs`, desktop only) — session-scoped
   RFC 6265 jar: host-only cookies, `Domain=` validated (no IP parents, a
   "PSL-lite" public-suffix guard), `Max-Age` / `Expires` expiry and
@@ -158,9 +175,12 @@ directly.
 - `@layer` cascade layers — statement / named-block / anonymous-block
   forms, cross-stylesheet name merging, factored into the cascade
   sort with `!important` inversion.
-- Modern color functions: `hsl/hsla`, `oklch/oklab`, `color(srgb |
-  srgb-linear | display-p3)`, `color-mix(in srgb | oklch | oklab |
-  hsl | srgb-linear)`, `light-dark()` with `color-scheme` tracking.
+- Colours: `#rgb[a]` / `#rrggbb[aa]`, all 148 CSS named colours,
+  `rgb/rgba`, `hsl/hsla`, `oklch/oklab`, `color(srgb | srgb-linear |
+  display-p3)`, `color-mix(in srgb | oklch | oklab | hsl |
+  srgb-linear)`, `light-dark()` with `color-scheme` tracking. One parser
+  serves stylesheets, `bgcolor`, SVG presentation attributes and canvas
+  `fillStyle` / `strokeStyle` (`oasis_css::parse_color`).
 - CSS logical properties: inline-axis logicals (margin / padding /
   border / inset `-inline-start|end`) are resolved against `direction`
   at cascade time, block-axis ones map to top / bottom, and
@@ -176,11 +196,8 @@ directly.
   with their children in the right place. `width: auto` floats use
   one-pass shrink-to-fit (`min(max-content, available)`): children
   lay out at the containing width, then `content.width` clamps down
-  to the rightmost child border-box edge. Float placement returns
-  BFC-local coordinates but the caller adds the containing block's
-  `content.x`, so a float inside a padded parent lands at the parent's
-  content edge instead of overhanging at x=0 (the old.reddit
-  `.midcol` vote-column bug).
+  to the rightmost child border-box edge. A float inside a padded
+  parent lands at the parent's content edge.
 - **CSS Grid.** Paren-aware track lists (`repeat(3, minmax(0, 1fr))`,
   `repeat(2, 1fr 2fr)`, `%` / `em` / `min-content` / `max-content` /
   `fit-content()` tracks), `repeat(auto-fill | auto-fit, ...)` resolved
@@ -189,12 +206,14 @@ directly.
   areas, and row/column auto-flow including `dense`. Subgrid is not
   supported. See `crates/oasis-browser/docs/layout.md`.
 - **Inter-element whitespace.** A text node containing only whitespace
-  between two inline siblings (`<a>x</a>\n<a>y</a>`) now emits a
-  single `space_width` fragment into the line flow, per CSS 2.1 §16.6.
-  Previously the split-into-words pass returned an empty vec on the
-  `" "` collapsed result and swallowed the gap, producing `xy`
-  instead of `x y` on every inline-sibling chain.
-- **Table layout** honours explicit pixel widths on `<td>`/`<th>`
+  between two inline siblings (`<a>x</a>\n<a>y</a>`) emits a single
+  `space_width` fragment into the line flow, per CSS 2.1 §16.6.
+- **Multi-column** (`column-count` / `column-width` / `column-gap`):
+  children are distributed across balanced columns.
+- **Table layout**: `colspan` / `rowspan` follow HTML's integer parsing
+  and limits (1000 / 65534; `rowspan="0"` spans to the last row), and a
+  span is clamped to the rows that exist. Occupancy is tracked per
+  column, so huge spans cost nothing. Explicit pixel widths on `<td>`/`<th>`
   (pinned — not rescaled when the table has slack) and percent
   widths (`<td width="25%">`) via a pre-pass in `distribute_widths`
   that reserves each percent column's share before auto columns
@@ -222,6 +241,15 @@ directly.
   display items.
 - Soft hyphen (U+00AD) line breaking with visible hyphens.
 - Bidi text direction detection (Hebrew / Arabic / Syriac).
+- **Hostile-input bounds.** Layout runs in `f32`; once it finishes,
+  every box's geometry saturates at ±2^25 px (`MAX_LAYOUT_PX`, Chrome's
+  `LayoutUnit` range) so paint's integer arithmetic cannot overflow on
+  `width: 1e30px`. Allocations sized by CSS values are bounded by the
+  content instead (line boxes per fragment, column buckets per child,
+  offscreen layers to the reachable surface; see
+  `paint/display_list/replay.rs`). `tests/pipeline_fuzz.rs` drives the
+  whole parse → style → layout → paint pipeline with generated hostile
+  markup and CSS (raise `PROPTEST_CASES` for a longer run).
 
 ## 2D + 3D transforms
 
@@ -260,8 +288,12 @@ directly.
 
 - **Canvas 2D path API** — `beginPath`, `bezierCurveTo`,
   `quadraticCurveTo`, `fill`, `stroke`, `save`, `restore`.
-- **SVG** — paths with fill-rule / linecap / linejoin, `<g>` group
-  transform composition.
+- **SVG** (`svg/`) — `<rect>`, `<circle>`, `<ellipse>`, `<line>`,
+  `<polygon>`, `<polyline>`, `<path>` (all commands, Bezier flattening)
+  with fill-rule / linecap / linejoin; `<g>` transform composition and
+  presentation-attribute inheritance; `<defs>` linear / radial gradients
+  and patterns via `url(#id)`; `<text>` / `<tspan>` with `text-anchor`.
+  Colours use the CSS parser; `currentColor` paints black.
 - **One renderer: display list record + replay** (`paint/`). The
   recorder walks the layout tree in CSS 2.1 paint order and emits
   display items — including `Svg` / `Canvas` items, so inline SVG and
@@ -371,6 +403,8 @@ to page scripts include:
   500 ms PSP; timers still due when a tick's budget runs out wait for
   the next frame), and the QuickJS heap is capped at
   `BrowserConfig::js_memory_limit_bytes` (64 MiB desktop, 8 MiB PSP).
+  The console buffer, which lives outside that heap, keeps the last
+  1000 messages of at most 4 KiB each.
   See [`oasis-js.md` §Watchdog](oasis-js.md#watchdog).
 - **preventDefault-aware link follow-up.** The inline-handler wrapper
   calls `event.preventDefault()` when the body returns `false` (the
@@ -414,7 +448,7 @@ to page scripts include:
 ## Related docs
 
 - [`browser-backlog.md`](browser-backlog.md) — remaining work and
-  recently shipped epics.
+  known gaps.
 - [`compositor-overhaul-plan.md`](archive/compositor-overhaul-plan.md) —
   compositor deep dive.
 - [`javascript-engine.md`](javascript-engine.md) — JS engine and PSP
