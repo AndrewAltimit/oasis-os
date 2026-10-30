@@ -2,657 +2,765 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>OASIS_OS - Embeddable Operating System Framework in Rust</title>
-  <meta name="description" content="A skinnable shell with scene-graph UI, browser engine, and 90+ terminal commands. Renders anywhere you can provide a pixel buffer.">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>OASIS_OS — an embeddable operating system framework in Rust</title>
+  <meta name="description" content="A skinnable Rust OS shell — window manager, browser engine, terminal, 15 apps, 17 skins — that renders to a PSP, a desktop window, a web page or an Unreal Engine 5 viewport. Give it a pixel buffer and an input stream.">
+  <meta name="theme-color" content="#0a0c11">
+  <meta property="og:title" content="OASIS_OS">
+  <meta property="og:description" content="An embeddable operating system framework in Rust. One shell, five targets: SDL3 desktop and Raspberry Pi, WebAssembly, Unreal Engine 5, and real PSP hardware.">
+  <meta property="og:image" content="screenshots/psix-hifi/01_dashboard.png">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700;800&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="css/style.css">
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="css/home.css">
 </head>
 <body>
 
-<!-- ================================================================== -->
-<!-- Navigation                                                         -->
-<!-- ================================================================== -->
+<a class="skip-link" href="#main">Skip to content</a>
 
-<nav class="site-nav">
-  <a class="nav-brand" href="#">OASIS_OS</a>
-  <button class="nav-toggle" id="nav-toggle" aria-label="Toggle navigation" aria-expanded="false">&#9776;</button>
-  <ul class="nav-links" id="nav-links">
-    <li><a href="#platforms">Platforms</a></li>
-    <li><a href="#gallery">Skins</a></li>
-    <li><a href="#features">Features</a></li>
-    <li><a href="#architecture">Architecture</a></li>
-    <li><a href="#getting-started">Build</a></li>
-    <li><a href="#journal">Journal</a></li>
-    <li><a href="blueprint.html">Blueprints</a></li>
-    <li><a href="demo/">Live Demo</a></li>
-  </ul>
-</nav>
-
-<!-- ================================================================== -->
-<!-- Hero                                                               -->
-<!-- ================================================================== -->
-
-<section class="hero">
-  <div class="hero-content">
-    <h1 class="hero-title"><span class="glow">OASIS</span>_OS</h1>
-    <p class="hero-tagline">An embeddable operating system framework in Rust</p>
-    <p class="hero-sub">
-      Renders a skinnable shell &mdash; scene-graph UI, browser engine, 90+ terminal
-      commands &mdash; anywhere you can provide a pixel buffer. 37 crates, 6,600+ tests.
-    </p>
-    <div class="hero-buttons">
-      <a class="btn btn-primary" href="demo/">Try Live Demo</a>
-      <a class="btn btn-secondary" href="https://github.com/AndrewAltimit/oasis-os">View on GitHub</a>
-    </div>
-    <video class="hero-screenshot"
-           src="https://github.com/AndrewAltimit/oasis-os/raw/refs/heads/main/assets/oasis_demo.mp4"
-           autoplay loop muted playsinline
-           aria-label="OASIS_OS demo video"></video>
-  </div>
-</section>
-
-<!-- ================================================================== -->
-<!-- Platform Targets                                                    -->
-<!-- ================================================================== -->
-
-<section id="platforms">
-  <div class="container fade-in">
-    <h2 class="section-title">Platform Targets</h2>
-    <p class="section-subtitle">One codebase, four deployment targets. Trait-based backends keep core code platform-agnostic.</p>
-    <div class="platforms-grid">
-      <div class="platform-card">
-        <div class="icon">&#128421;</div>
-        <h3>Desktop / Pi</h3>
-        <div class="crate">oasis-backend-sdl</div>
-        <p>SDL3-based backend for Linux, macOS, Windows, and Raspberry Pi with hardware-accelerated rendering.</p>
-      </div>
-      <div class="platform-card">
-        <div class="icon">&#127760;</div>
-        <h3>WebAssembly</h3>
-        <div class="crate">oasis-backend-wasm</div>
-        <p>Canvas 2D + Web Audio. Runs entirely in the browser with no server required.</p>
-      </div>
-      <div class="platform-card">
-        <div class="icon">&#127918;</div>
-        <h3>PlayStation Portable</h3>
-        <div class="crate">oasis-backend-psp</div>
-        <p>Native PSP rendering via sceGu with full SDI scene-graph integration. TLS 1.3 via embedded-tls with RSA certificate support and automatic HTTP&rarr;HTTPS fallback. In-memory MP4 streaming with AAC hardware decode for TV Guide.</p>
-      </div>
-      <div class="platform-card">
-        <div class="icon">&#127916;</div>
-        <h3>Unreal Engine 5</h3>
-        <div class="crate">oasis-ffi</div>
-        <p>Software RGBA framebuffer exposed via C-ABI FFI for embedding in UE5 projects.</p>
-      </div>
-      <div class="platform-card">
-        <div class="icon">&#128187;</div>
-        <h3>Linux Framebuffer <span class="badge-planned">Planned</span></h3>
-        <div class="crate">oasis-backend-fbdev</div>
-        <p>Direct /dev/fb0 rendering for headless or kiosk deployments without a display server.</p>
-      </div>
-    </div>
-  </div>
-</section>
-
-<!-- ================================================================== -->
-<!-- Skin Gallery                                                       -->
-<!-- ================================================================== -->
-
-<section id="gallery">
-  <div class="container fade-in">
-    <h2 class="section-title">Skin Gallery</h2>
-    <p class="section-subtitle">18 skins ship out of the box. Switch at runtime or define your own in TOML.</p>
-
-    <div class="skin-tabs">
-      <button class="skin-tab active" data-skin="classic">Classic</button>
-      <button class="skin-tab" data-skin="xp">XP</button>
-      <button class="skin-tab" data-skin="modern">Modern</button>
-      <button class="skin-tab" data-skin="desktop">Desktop</button>
-      <button class="skin-tab" data-skin="corrupted">Corrupted</button>
-      <button class="skin-tab" data-skin="macos">macOS</button>
-      <button class="skin-tab" data-skin="gnome">GNOME</button>
-      <button class="skin-tab" data-skin="balatro">Balatro</button>
-      <button class="skin-tab" data-skin="retro-cga">Retro CGA</button>
-      <button class="skin-tab" data-skin="paper">Paper</button>
-      <button class="skin-tab" data-skin="win95">Win95</button>
-      <button class="skin-tab" data-skin="solarized">Solarized</button>
-      <button class="skin-tab" data-skin="vaporwave">Vaporwave</button>
-      <button class="skin-tab" data-skin="highcontrast">High Contrast</button>
-      <button class="skin-tab" data-skin="altimit">Altimit</button>
-    </div>
-
-    <!-- Classic -->
-    <div class="skin-panel active" id="skin-classic">
-      <div class="skin-info">
-        <span><span class="label">Style:</span> <span class="value">PSIX icon grid, homebrew shell</span></span>
-        <span><span class="label">Resolution:</span> <span class="value">480x272</span></span>
-        <span><span class="label">Source:</span> <span class="value">External TOML</span></span>
-      </div>
-      <div class="skin-grid">
-        <div><img src="screenshots/classic/01_dashboard.png" alt="Classic - Dashboard" loading="lazy"><div class="caption">Dashboard</div></div>
-        <div><img src="screenshots/classic/02_media_tab.png" alt="Classic - Media Tab" loading="lazy"><div class="caption">Media Tab</div></div>
-        <div><img src="screenshots/classic/03_mods_tab.png" alt="Classic - Mods Tab" loading="lazy"><div class="caption">Mods Tab</div></div>
-        <div><img src="screenshots/classic/04_terminal.png" alt="Classic - Terminal" loading="lazy"><div class="caption">Terminal</div></div>
-      </div>
-    </div>
-
-    <!-- XP -->
-    <div class="skin-panel" id="skin-xp">
-      <div class="skin-info">
-        <span><span class="label">Style:</span> <span class="value">Windows XP Luna-inspired</span></span>
-        <span><span class="label">Resolution:</span> <span class="value">1024x768</span></span>
-        <span><span class="label">Source:</span> <span class="value">External TOML + Built-in</span></span>
-      </div>
-      <div class="skin-grid">
-        <div><img src="screenshots/xp/01_dashboard.png" alt="XP - Dashboard" loading="lazy"><div class="caption">Dashboard</div></div>
-        <div><img src="screenshots/xp/02_media_tab.png" alt="XP - Media Tab" loading="lazy"><div class="caption">Media Tab</div></div>
-        <div><img src="screenshots/xp/03_mods_tab.png" alt="XP - Mods Tab" loading="lazy"><div class="caption">Mods Tab</div></div>
-        <div><img src="screenshots/xp/04_terminal.png" alt="XP - Terminal" loading="lazy"><div class="caption">Terminal</div></div>
-      </div>
-    </div>
-
-    <!-- Modern -->
-    <div class="skin-panel" id="skin-modern">
-      <div class="skin-info">
-        <span><span class="label">Style:</span> <span class="value">Purple accent, rounded corners, modern UI</span></span>
-        <span><span class="label">Resolution:</span> <span class="value">800x600</span></span>
-        <span><span class="label">Source:</span> <span class="value">Built-in</span></span>
-      </div>
-      <div class="skin-grid">
-        <div><img src="screenshots/modern/01_dashboard.png" alt="Modern - Dashboard" loading="lazy"><div class="caption">Dashboard</div></div>
-        <div><img src="screenshots/modern/02_media_tab.png" alt="Modern - Media Tab" loading="lazy"><div class="caption">Media Tab</div></div>
-        <div><img src="screenshots/modern/03_mods_tab.png" alt="Modern - Mods Tab" loading="lazy"><div class="caption">Mods Tab</div></div>
-        <div><img src="screenshots/modern/04_terminal.png" alt="Modern - Terminal" loading="lazy"><div class="caption">Terminal</div></div>
-      </div>
-    </div>
-
-    <!-- Desktop -->
-    <div class="skin-panel" id="skin-desktop">
-      <div class="skin-info">
-        <span><span class="label">Style:</span> <span class="value">Windowed desktop environment</span></span>
-        <span><span class="label">Resolution:</span> <span class="value">1024x768</span></span>
-        <span><span class="label">Source:</span> <span class="value">Built-in</span></span>
-      </div>
-      <div class="skin-grid">
-        <div><img src="screenshots/desktop/01_dashboard.png" alt="Desktop - Dashboard" loading="lazy"><div class="caption">Dashboard</div></div>
-        <div><img src="screenshots/desktop/02_media_tab.png" alt="Desktop - Media Tab" loading="lazy"><div class="caption">Media Tab</div></div>
-        <div><img src="screenshots/desktop/03_mods_tab.png" alt="Desktop - Mods Tab" loading="lazy"><div class="caption">Mods Tab</div></div>
-        <div><img src="screenshots/desktop/04_terminal.png" alt="Desktop - Terminal" loading="lazy"><div class="caption">Terminal</div></div>
-      </div>
-    </div>
-
-    <!-- Corrupted -->
-    <div class="skin-panel" id="skin-corrupted">
-      <div class="skin-info">
-        <span><span class="label">Style:</span> <span class="value">Glitched terminal aesthetic</span></span>
-        <span><span class="label">Resolution:</span> <span class="value">800x600</span></span>
-        <span><span class="label">Source:</span> <span class="value">Built-in</span></span>
-      </div>
-      <div class="skin-grid">
-        <div><img src="screenshots/corrupted/01_dashboard.png" alt="Corrupted - Dashboard" loading="lazy"><div class="caption">Dashboard</div></div>
-        <div><img src="screenshots/corrupted/02_media_tab.png" alt="Corrupted - Media Tab" loading="lazy"><div class="caption">Media Tab</div></div>
-        <div><img src="screenshots/corrupted/03_mods_tab.png" alt="Corrupted - Mods Tab" loading="lazy"><div class="caption">Mods Tab</div></div>
-        <div><img src="screenshots/corrupted/04_terminal.png" alt="Corrupted - Terminal" loading="lazy"><div class="caption">Terminal</div></div>
-      </div>
-    </div>
-
-    <!-- macOS -->
-    <div class="skin-panel" id="skin-macos">
-      <div class="skin-info">
-        <span><span class="label">Style:</span> <span class="value">macOS-inspired desktop</span></span>
-        <span><span class="label">Resolution:</span> <span class="value">1024x768</span></span>
-        <span><span class="label">Source:</span> <span class="value">External TOML</span></span>
-      </div>
-      <div class="skin-grid">
-        <div><img src="screenshots/macos/01_dashboard.png" alt="macOS - Dashboard" loading="lazy"><div class="caption">Dashboard</div></div>
-        <div><img src="screenshots/macos/02_media_tab.png" alt="macOS - Media Tab" loading="lazy"><div class="caption">Media Tab</div></div>
-        <div><img src="screenshots/macos/03_mods_tab.png" alt="macOS - Mods Tab" loading="lazy"><div class="caption">Mods Tab</div></div>
-        <div><img src="screenshots/macos/04_terminal.png" alt="macOS - Terminal" loading="lazy"><div class="caption">Terminal</div></div>
-      </div>
-    </div>
-
-    <!-- GNOME -->
-    <div class="skin-panel" id="skin-gnome">
-      <div class="skin-info">
-        <span><span class="label">Style:</span> <span class="value">GNOME desktop style</span></span>
-        <span><span class="label">Resolution:</span> <span class="value">1024x768</span></span>
-        <span><span class="label">Source:</span> <span class="value">External TOML</span></span>
-      </div>
-      <div class="skin-grid">
-        <div><img src="screenshots/gnome/01_dashboard.png" alt="GNOME - Dashboard" loading="lazy"><div class="caption">Dashboard</div></div>
-        <div><img src="screenshots/gnome/02_media_tab.png" alt="GNOME - Media Tab" loading="lazy"><div class="caption">Media Tab</div></div>
-        <div><img src="screenshots/gnome/03_mods_tab.png" alt="GNOME - Mods Tab" loading="lazy"><div class="caption">Mods Tab</div></div>
-        <div><img src="screenshots/gnome/04_terminal.png" alt="GNOME - Terminal" loading="lazy"><div class="caption">Terminal</div></div>
-      </div>
-    </div>
-
-    <!-- Balatro -->
-    <div class="skin-panel" id="skin-balatro">
-      <div class="skin-info">
-        <span><span class="label">Style:</span> <span class="value">Neon balatro aesthetic</span></span>
-        <span><span class="label">Resolution:</span> <span class="value">800x600</span></span>
-        <span><span class="label">Source:</span> <span class="value">External TOML</span></span>
-      </div>
-      <div class="skin-grid">
-        <div><img src="screenshots/balatro/01_dashboard.png" alt="Balatro - Dashboard" loading="lazy"><div class="caption">Dashboard</div></div>
-        <div><img src="screenshots/balatro/02_media_tab.png" alt="Balatro - Media Tab" loading="lazy"><div class="caption">Media Tab</div></div>
-        <div><img src="screenshots/balatro/03_mods_tab.png" alt="Balatro - Mods Tab" loading="lazy"><div class="caption">Mods Tab</div></div>
-        <div><img src="screenshots/balatro/04_terminal.png" alt="Balatro - Terminal" loading="lazy"><div class="caption">Terminal</div></div>
-      </div>
-    </div>
-
-    <!-- Retro CGA -->
-    <div class="skin-panel" id="skin-retro-cga">
-      <div class="skin-info">
-        <span><span class="label">Style:</span> <span class="value">CGA 4-color retro palette</span></span>
-        <span><span class="label">Resolution:</span> <span class="value">480x272</span></span>
-        <span><span class="label">Source:</span> <span class="value">External TOML</span></span>
-      </div>
-      <div class="skin-grid">
-        <div><img src="screenshots/retro-cga/01_dashboard.png" alt="Retro CGA - Dashboard" loading="lazy"><div class="caption">Dashboard</div></div>
-        <div><img src="screenshots/retro-cga/02_media_tab.png" alt="Retro CGA - Media Tab" loading="lazy"><div class="caption">Media Tab</div></div>
-        <div><img src="screenshots/retro-cga/03_mods_tab.png" alt="Retro CGA - Mods Tab" loading="lazy"><div class="caption">Mods Tab</div></div>
-        <div><img src="screenshots/retro-cga/04_terminal.png" alt="Retro CGA - Terminal" loading="lazy"><div class="caption">Terminal</div></div>
-      </div>
-    </div>
-
-    <!-- Paper -->
-    <div class="skin-panel" id="skin-paper">
-      <div class="skin-info">
-        <span><span class="label">Style:</span> <span class="value">Minimalist paper/ink style</span></span>
-        <span><span class="label">Resolution:</span> <span class="value">480x272</span></span>
-        <span><span class="label">Source:</span> <span class="value">External TOML</span></span>
-      </div>
-      <div class="skin-grid">
-        <div><img src="screenshots/paper/01_dashboard.png" alt="Paper - Dashboard" loading="lazy"><div class="caption">Dashboard</div></div>
-        <div><img src="screenshots/paper/02_media_tab.png" alt="Paper - Media Tab" loading="lazy"><div class="caption">Media Tab</div></div>
-        <div><img src="screenshots/paper/03_mods_tab.png" alt="Paper - Mods Tab" loading="lazy"><div class="caption">Mods Tab</div></div>
-        <div><img src="screenshots/paper/04_terminal.png" alt="Paper - Terminal" loading="lazy"><div class="caption">Terminal</div></div>
-      </div>
-    </div>
-
-    <!-- Win95 -->
-    <div class="skin-panel" id="skin-win95">
-      <div class="skin-info">
-        <span><span class="label">Style:</span> <span class="value">Windows 95/98 classic 3D borders</span></span>
-        <span><span class="label">Resolution:</span> <span class="value">640x480</span></span>
-        <span><span class="label">Source:</span> <span class="value">External TOML</span></span>
-      </div>
-      <div class="skin-grid">
-        <div><img src="screenshots/win95/01_dashboard.png" alt="Win95 - Dashboard" loading="lazy"><div class="caption">Dashboard</div></div>
-        <div><img src="screenshots/win95/02_media_tab.png" alt="Win95 - Media Tab" loading="lazy"><div class="caption">Media Tab</div></div>
-        <div><img src="screenshots/win95/03_mods_tab.png" alt="Win95 - Mods Tab" loading="lazy"><div class="caption">Mods Tab</div></div>
-        <div><img src="screenshots/win95/04_terminal.png" alt="Win95 - Terminal" loading="lazy"><div class="caption">Terminal</div></div>
-      </div>
-    </div>
-
-    <!-- Solarized -->
-    <div class="skin-panel" id="skin-solarized">
-      <div class="skin-info">
-        <span><span class="label">Style:</span> <span class="value">Solarized Dark developer palette</span></span>
-        <span><span class="label">Resolution:</span> <span class="value">800x600</span></span>
-        <span><span class="label">Source:</span> <span class="value">External TOML</span></span>
-      </div>
-      <div class="skin-grid">
-        <div><img src="screenshots/solarized/01_dashboard.png" alt="Solarized - Dashboard" loading="lazy"><div class="caption">Dashboard</div></div>
-        <div><img src="screenshots/solarized/02_media_tab.png" alt="Solarized - Media Tab" loading="lazy"><div class="caption">Media Tab</div></div>
-        <div><img src="screenshots/solarized/03_mods_tab.png" alt="Solarized - Mods Tab" loading="lazy"><div class="caption">Mods Tab</div></div>
-        <div><img src="screenshots/solarized/04_terminal.png" alt="Solarized - Terminal" loading="lazy"><div class="caption">Terminal</div></div>
-      </div>
-    </div>
-
-    <!-- Vaporwave -->
-    <div class="skin-panel" id="skin-vaporwave">
-      <div class="skin-info">
-        <span><span class="label">Style:</span> <span class="value">Aesthetic vaporwave palette</span></span>
-        <span><span class="label">Resolution:</span> <span class="value">480x272</span></span>
-        <span><span class="label">Source:</span> <span class="value">External TOML</span></span>
-      </div>
-      <div class="skin-grid">
-        <div><img src="screenshots/vaporwave/01_dashboard.png" alt="Vaporwave - Dashboard" loading="lazy"><div class="caption">Dashboard</div></div>
-        <div><img src="screenshots/vaporwave/02_media_tab.png" alt="Vaporwave - Media Tab" loading="lazy"><div class="caption">Media Tab</div></div>
-        <div><img src="screenshots/vaporwave/03_mods_tab.png" alt="Vaporwave - Mods Tab" loading="lazy"><div class="caption">Mods Tab</div></div>
-        <div><img src="screenshots/vaporwave/04_terminal.png" alt="Vaporwave - Terminal" loading="lazy"><div class="caption">Terminal</div></div>
-      </div>
-    </div>
-
-    <!-- High Contrast -->
-    <div class="skin-panel" id="skin-highcontrast">
-      <div class="skin-info">
-        <span><span class="label">Style:</span> <span class="value">High contrast accessibility theme</span></span>
-        <span><span class="label">Resolution:</span> <span class="value">480x272</span></span>
-        <span><span class="label">Source:</span> <span class="value">External TOML</span></span>
-      </div>
-      <div class="skin-grid">
-        <div><img src="screenshots/highcontrast/01_dashboard.png" alt="High Contrast - Dashboard" loading="lazy"><div class="caption">Dashboard</div></div>
-        <div><img src="screenshots/highcontrast/02_media_tab.png" alt="High Contrast - Media Tab" loading="lazy"><div class="caption">Media Tab</div></div>
-        <div><img src="screenshots/highcontrast/03_mods_tab.png" alt="High Contrast - Mods Tab" loading="lazy"><div class="caption">Mods Tab</div></div>
-        <div><img src="screenshots/highcontrast/04_terminal.png" alt="High Contrast - Terminal" loading="lazy"><div class="caption">Terminal</div></div>
-      </div>
-    </div>
-
-    <!-- Altimit -->
-    <div class="skin-panel" id="skin-altimit">
-      <div class="skin-info">
-        <span><span class="label">Style:</span> <span class="value">Altimit-style vector icon grid</span></span>
-        <span><span class="label">Resolution:</span> <span class="value">480x272</span></span>
-        <span><span class="label">Source:</span> <span class="value">External TOML</span></span>
-      </div>
-      <div class="skin-grid">
-        <div><img src="screenshots/altimit/01_dashboard.png" alt="Altimit - Dashboard" loading="lazy"><div class="caption">Dashboard</div></div>
-        <div><img src="screenshots/altimit/02_media_tab.png" alt="Altimit - Media Tab" loading="lazy"><div class="caption">Media Tab</div></div>
-        <div><img src="screenshots/altimit/03_mods_tab.png" alt="Altimit - Mods Tab" loading="lazy"><div class="caption">Mods Tab</div></div>
-        <div><img src="screenshots/altimit/04_terminal.png" alt="Altimit - Terminal" loading="lazy"><div class="caption">Terminal</div></div>
-      </div>
-    </div>
-
-  </div>
-</section>
-
-<!-- ================================================================== -->
-<!-- Key Features                                                       -->
-<!-- ================================================================== -->
-
-<section id="features">
-  <div class="container fade-in">
-    <h2 class="section-title">Key Features</h2>
-    <p class="section-subtitle">A complete operating system shell, not just a UI toolkit. 16 built-in apps including TV Guide and Internet Radio.</p>
-
-    <div class="features-grid">
-      <div class="feature-card">
-        <h3>Browser Engine</h3>
-        <p>Full HTML/CSS/Gemini rendering engine with DOM parser, CSS cascade, flex/grid/table layout, calc(), full 2D CSS transforms (rotate/scale/skew), Canvas 2D path API, SVG paths with fill-rule/linecap/linejoin and &lt;g&gt; groups, light compositor (display list with batched rect+text submission, occlusion culling, clip intersection, granular animation dirty tracking, sticky element scroll caching), animations, hover-triggered CSS transitions, form elements (select dropdown, label association), soft hyphens, bidi text, @supports, cookies, CSP, link navigation, reader mode, and JavaScript execution.</p>
-      </div>
-      <div class="feature-card">
-        <h3>JavaScript Engine</h3>
-        <p>Embedded QuickJS-NG runtime across every backend &mdash; desktop, WASM, UE5, <em>and real PSP hardware</em> &mdash; with console API, inline &lt;script&gt; execution, DOM manipulation, full event dispatch (click, keydown/keyup, mousedown/mouseup/mousemove with detail properties), document.cookie, history.pushState/replaceState, persistent localStorage, and <code>fetch()</code>. The PSP build compiles QuickJS-NG&rsquo;s C sources through the pspdev cross-toolchain (<code>psp-gcc</code> wired into the <code>cc</code> crate) and provides ~40 hand-written libc/libm shim symbols instead of linking newlib. DOM bindings are shared code with the other backends, and the engine is instantiated lazily the first time the user opens the browser app so boot-time cost is zero. See <a href="journal/09-javascript-on-psp.html">journal entry 09</a> for the bring-up story (originally boa_engine, later migrated to QuickJS-NG for the ~10&times; speed-up).</p>
-      </div>
-      <div class="feature-card">
-        <h3>Window Manager</h3>
-        <p>Draggable, resizable overlapping windows with hit testing, minimize/maximize/close decorations, and window snapping.</p>
-      </div>
-      <div class="feature-card">
-        <h3>Terminal</h3>
-        <p>90+ commands across 17 modules. Variable expansion, glob patterns, aliases, history, and piping. A real shell inside the shell.</p>
-      </div>
-      <div class="feature-card">
-        <h3>Widget Toolkit</h3>
-        <p>32 reusable widgets: Button, Card, TabBar, Panel, InputField, ListView, ScrollView, ProgressBar, Toggle, NinePatch, ColorPicker, DatePicker, SpinBox, Table, RichText, SplitPane, TreeView, Accordion, and flex layout.</p>
-      </div>
-      <div class="feature-card">
-        <h3>Audio System</h3>
-        <p>Background MP3 and WAV playback with playlists, shuffle/repeat modes, ID3 tag parsing, and per-channel mixing.</p>
-      </div>
-      <div class="feature-card">
-        <h3>Skin System</h3>
-        <p>18 skins (18 built-in + 14 external TOML) with theme derivation from 9 base colors. Runtime switching without restart.</p>
-      </div>
-      <div class="feature-card">
-        <h3>Virtual File System</h3>
-        <p>MemoryVfs (in-RAM), RealVfs (disk), and GameAssetVfs (UE5 pak with overlay writes). Platform-agnostic file access.</p>
-      </div>
-      <div class="feature-card">
-        <h3>Plugin System</h3>
-        <p>Runtime-extensible plugin architecture with VFS-based IPC and event bus publish/subscribe. Install plugins via the built-in package manager.</p>
-      </div>
-      <div class="feature-card">
-        <h3>Remote Terminal</h3>
-        <p>TCP networking with PSK authentication. Connect to OASIS_OS instances remotely and execute commands over an encrypted channel.</p>
-      </div>
-      <div class="feature-card">
-        <h3>TV Guide</h3>
-        <p>Internet Archive-powered TV channels with a 1980s Prevue Channel aesthetic. Browse channels, view schedules, and watch video &mdash; progressive streaming decode on desktop (no ffmpeg required) with CDN failover and A/V sync, in-canvas on WASM, in-memory streaming with AAC hardware decode on PSP.</p>
-      </div>
-      <div class="feature-card">
-        <h3>Internet Radio</h3>
-        <p>Stream MP3 audio from curated Internet Archive collections. Background playback with channel browsing and real-time metadata display.</p>
-      </div>
-      <div class="feature-card">
-        <h3>Vector Graphics</h3>
-        <p>Resolution-independent scene graph with path-based drawing, Altimit-style dashboard icons, and frame-driven animations via the oasis-vector crate.</p>
-      </div>
-      <div class="feature-card">
-        <h3>TLS 1.3</h3>
-        <p>Pure Rust TLS 1.3 via embedded-tls with RSA certificate support. On PSP, wraps raw TCP sockets with custom PRNG entropy and automatic HTTP&rarr;HTTPS fallback &mdash; enabling HTTPS streaming on hardware whose firmware only supports SSL 3.0. Includes a DNS endianness fix for correct IP resolution on MIPS little-endian.</p>
-      </div>
-    </div>
-  </div>
-</section>
-
-<!-- ================================================================== -->
-<!-- Architecture                                                       -->
-<!-- ================================================================== -->
-
-<section id="architecture">
-  <div class="container fade-in">
-    <h2 class="section-title">Architecture</h2>
-    <p class="section-subtitle">35 workspace crates with a clean trait-based backend abstraction.</p>
-
-    <div class="arch-diagram">
-      <pre><span class="crate-name">oasis-types</span>     (Color, Button, InputEvent, backend traits, error types)
-&#9500;&#9472;&#9472; <span class="crate-name">oasis-vfs</span>        (virtual file system: MemoryVfs, RealVfs, GameAssetVfs)
-&#9500;&#9472;&#9472; <span class="crate-name">oasis-platform</span>   (platform service traits: Power, Time, USB, Network, OSK)
-&#9500;&#9472;&#9472; <span class="crate-name">oasis-sdi</span>        (scene display interface: named objects, z-order)
-&#9500;&#9472;&#9472; <span class="crate-name">oasis-net</span>        (TCP networking, PSK auth, remote terminal, FTP)
-&#9500;&#9472;&#9472; <span class="crate-name">oasis-audio</span>      (audio manager, playlist, MP3/WAV decode, ID3 parsing)
-&#9500;&#9472;&#9472; <span class="crate-name">oasis-ui</span>         (32 widgets: Button, Card, TabBar, ListView, flex layout)
-&#9500;&#9472;&#9472; <span class="crate-name">oasis-wm</span>         (window manager: drag/resize, hit testing, decorations)
-&#9500;&#9472;&#9472; <span class="crate-name">oasis-skin</span>       (TOML skin engine, 18 skins, theme derivation)
-&#9500;&#9472;&#9472; <span class="crate-name">oasis-terminal</span>   (90+ commands, 17 modules, shell features)
-&#9500;&#9472;&#9472; <span class="crate-name">oasis-browser</span>    (HTML/CSS/Gemini: DOM, CSS cascade, flex/grid layout, 2D transforms, Canvas 2D paths, SVG groups, light compositor + text batching + sticky scroll, JS bindings)
-&#9500;&#9472;&#9472; <span class="crate-name">oasis-js</span>         (JavaScript engine: QuickJS-NG via rquickjs across all backends incl. real PSP hardware; console, DOM, event dispatch, fetch)
-&#9500;&#9472;&#9472; <span class="crate-name">oasis-video</span>      (MP4/H.264+AAC decode: StreamingBuffer, progressive playback)
-&#9500;&#9472;&#9472; <span class="crate-name">oasis-vector</span>     (vector graphics: scene graph, path ops, icons, animations)
-&#9500;&#9472;&#9472; <span class="crate-name">oasis-shader</span>     (GPU shader wallpapers: voronoi, city lights, ocean waves)
-&#9492;&#9472;&#9472; <span class="crate-name">oasis-core</span>       (coordination: 16 apps, dashboard, agent, plugin, script)
-    &#9500;&#9472;&#9472; <span class="crate-name">oasis-app-*</span>        (11 extracted app crates: calculator, clock, games, etc.)
-    &#9500;&#9472;&#9472; <span class="crate-name">oasis-backend-sdl</span>  &#8594; <span class="crate-name">oasis-app</span>      (desktop binary)
-    &#9500;&#9472;&#9472; <span class="crate-name">oasis-backend-wasm</span>                    (browser Canvas 2D)
-    &#9500;&#9472;&#9472; <span class="crate-name">oasis-backend-ue5</span> &#8594; <span class="crate-name">oasis-ffi</span>      (UE5 C-ABI)
-    &#9492;&#9472;&#9472; <span class="crate-name">oasis-backend-psp</span>                     (PSP sceGu)</pre>
-    </div>
-
-    <div class="arch-text">
-      <p>
-        Core code never calls platform APIs directly. All rendering, input, networking, and audio
-        flow through <strong>five backend traits</strong> defined in <code>oasis-types</code>.
-        The rendering trait is split into two tiers:
-      </p>
-      <ul style="margin: 0.5em 0 0.5em 1.5em; line-height: 1.8;">
-        <li><code>SdiCore</code> &mdash; <strong>13 required methods</strong> (clear, fill_rect, blit, draw_text, load_texture, etc.) &mdash; the minimum viable backend</li>
-        <li><code>SdiBackend</code> &mdash; <strong>39 optional accelerated primitives</strong> across 8 extension traits (shapes, gradients, alpha, styled text, textures, clip/transform, vector paths, batching) &mdash; each with a software fallback default</li>
-        <li><code>InputBackend</code> &mdash; unified input polling (buttons, mouse, touch, text)</li>
-        <li><code>NetworkBackend</code> &mdash; TCP client/server with optional TLS provider</li>
-        <li><code>AudioBackend</code> &mdash; track-based playback with streaming PCM support</li>
+<!-- ============================================================ -->
+<!-- Top bar (styled after a handheld status bar)                  -->
+<!-- ============================================================ -->
+<header class="topbar" id="topbar">
+  <div class="topbar__inner wrap">
+    <a class="brand" href="./" aria-label="OASIS_OS home">
+      <span class="brand__mark" aria-hidden="true"></span>
+      <span class="brand__name">OASIS<span class="brand__us">_</span>OS</span>
+    </a>
+    <button class="nav-toggle" id="nav-toggle" type="button" aria-expanded="false" aria-controls="site-nav">
+      <span class="sr-only">Menu</span>
+      <span class="nav-toggle__bar" aria-hidden="true"></span>
+    </button>
+    <nav class="site-nav" id="site-nav" aria-label="Primary">
+      <ul>
+        <li><a href="#platforms">Platforms</a></li>
+        <li><a href="#skins">Skins</a></li>
+        <li><a href="#features">Features</a></li>
+        <li><a href="#architecture">Architecture</a></li>
+        <li><a href="#psp">PSP</a></li>
+        <li><a href="#journal">Journal</a></li>
+        <li><a href="#start">Build</a></li>
       </ul>
-      <p style="margin-top: 0.5em;">
-        Backends are <strong>leaf nodes</strong> in the dependency graph &mdash; they depend on core;
-        core never depends on them. A new backend starts with 13 methods (~280 LOC) and the entire OS runs.
-        <a href="journal/06-backend-trait-system.html" style="color: var(--accent);">Read the full architecture deep dive &rarr;</a>
-      </p>
-      <div class="crate-count">35 workspace crates &middot; 2 excluded PSP crates &middot; 5 backend traits</div>
-    </div>
-  </div>
-</section>
-
-<!-- ================================================================== -->
-<!-- PSP Heritage                                                       -->
-<!-- ================================================================== -->
-
-<section id="psp">
-  <div class="container fade-in">
-    <h2 class="section-title">PSP Heritage</h2>
-    <p class="section-subtitle">From C homebrew to Rust framework.</p>
-
-    <div class="psp-section">
-      <div class="psp-text">
-        <p>
-          OASIS_OS was built from scratch in Rust in early 2026, inspired by
-          <strong>PlayStation Portable</strong> homebrew shells like PSIX. The native
-          480&times;272 UI targets the PSP's 4.3" LCD and d-pad navigation.
-        </p>
-        <br>
-        <p>
-          The modern Rust rewrite preserves that heritage with a <strong>two-binary PSP architecture</strong>:
-          an EBOOT.PBP standalone shell and a kernel-mode PRX overlay that hooks into game framebuffers
-          for in-game UI and background audio.
-        </p>
-        <br>
-        <p>
-          The PSP backend features full SDI scene-graph integration, <strong>TLS 1.3</strong> via
-          embedded-tls with RSA certificate support and automatic HTTP&rarr;HTTPS fallback
-          (pure Rust, enabling HTTPS streaming on 2008-era firmware that only speaks SSL 3.0),
-          and <strong>in-memory MP4 streaming</strong> with AAC hardware decode for TV Guide
-          video playback supporting both HTTP and HTTPS CDN nodes. The desktop backend
-          features <strong>progressive streaming video</strong> via a sliding-window
-          <code>StreamingBuffer</code> with deferred tail probe, CDN failover, and
-          PTS-based A/V sync &mdash; no ffmpeg required.
-        </p>
+      <div class="site-nav__cta">
+        <a class="btn btn--ghost btn--sm" href="https://github.com/AndrewAltimit/oasis-os">GitHub</a>
+        <a class="btn btn--primary btn--sm" href="demo/">Live demo</a>
       </div>
-      <img class="psp-screenshot"
-           src="screenshots/classic/01_dashboard.png"
-           alt="Classic skin at PSP native resolution"
-           loading="lazy">
+    </nav>
+  </div>
+</header>
+
+<main id="main">
+
+<!-- ============================================================ -->
+<!-- Hero                                                          -->
+<!-- ============================================================ -->
+<section class="hero" aria-labelledby="hero-title">
+  <div class="hero__grid wrap">
+    <div class="hero__copy">
+      <p class="eyebrow"><span class="dot" aria-hidden="true"></span> v1.4.0 &middot; Rust 2024 &middot; MIT / Unlicense</p>
+      <h1 class="hero__title" id="hero-title">
+        One OS shell.<br>
+        <span class="hero__title-accent">Any pixel buffer.</span>
+      </h1>
+      <p class="hero__lede">
+        OASIS_OS is an embeddable operating system framework in Rust: window manager,
+        browser engine, terminal, 15 apps and 17 skins &mdash; rendering to a 333&nbsp;MHz PSP,
+        a desktop window, a web page or an Unreal Engine&nbsp;5 viewport.
+        Hand it a framebuffer and an input stream; it brings the rest.
+      </p>
+      <div class="hero__ctas">
+        <a class="btn btn--primary" href="demo/">
+          Run it in your browser
+          <svg aria-hidden="true" viewBox="0 0 16 16" width="16" height="16"><path d="M3 8h9M8.5 4.5 12 8l-3.5 3.5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </a>
+        <a class="btn btn--ghost" href="https://github.com/AndrewAltimit/oasis-os">
+          <svg aria-hidden="true" viewBox="0 0 16 16" width="16" height="16"><path fill="currentColor" d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
+          Source on GitHub
+        </a>
+      </div>
+      <dl class="hero__stats">
+        <div><dt>Targets</dt><dd>5</dd></div>
+        <div><dt>Skins</dt><dd>17</dd></div>
+        <div><dt>Crates</dt><dd>50</dd></div>
+        <div><dt>Tests</dt><dd>9k+</dd></div>
+      </dl>
+    </div>
+
+    <figure class="hero__media">
+      <div class="screen">
+        <div class="screen__bar" aria-hidden="true">
+          <span class="screen__lights"><i></i><i></i><i></i></span>
+          <span class="screen__title">oasis_demo.mp4</span>
+          <span class="screen__rec">REC</span>
+        </div>
+        <video class="screen__video"
+               src="https://github.com/AndrewAltimit/oasis-os/raw/refs/heads/main/assets/oasis_demo.mp4"
+               autoplay loop muted playsinline
+               aria-label="OASIS_OS demo: windowed Settings, Terminal and TV Guide apps streaming Internet Archive video"></video>
+      </div>
+      <figcaption class="hero__caption">
+        <span class="mono">&#9656;</span> Recorded in the classic skin: draggable windows, the terminal, and
+        the TV Guide streaming video from the Internet Archive.
+      </figcaption>
+    </figure>
+  </div>
+
+  <div class="ticker" aria-hidden="true">
+    <div class="ticker__track">
+      <span>SDL3 desktop</span><span>Raspberry Pi</span><span>WebAssembly</span><span>Unreal Engine 5</span>
+      <span>PSP EBOOT</span><span>PSP kernel PRX</span><span>QuickJS-NG</span><span>TLS 1.3</span>
+      <span>H.264 + AAC</span><span>CSS Grid</span><span>3D transforms</span><span>MCP</span>
+      <span>SDL3 desktop</span><span>Raspberry Pi</span><span>WebAssembly</span><span>Unreal Engine 5</span>
+      <span>PSP EBOOT</span><span>PSP kernel PRX</span><span>QuickJS-NG</span><span>TLS 1.3</span>
+      <span>H.264 + AAC</span><span>CSS Grid</span><span>3D transforms</span><span>MCP</span>
     </div>
   </div>
 </section>
 
-<!-- ================================================================== -->
-<!-- Developer's Journal                                                -->
-<!-- ================================================================== -->
-
-<section id="journal">
-  <div class="container fade-in">
-    <h2 class="section-title">Developer's Journal</h2>
-    <p class="section-subtitle">Deep technical write-ups on the hardest problems we solved.</p>
-
-    <div class="platforms-grid">
-      <a class="platform-card" href="journal/07-psp-media-engine.html" style="text-decoration:none;color:inherit;">
-        <h3>Media Engine RE</h3>
-        <p>Reverse engineering the PSP's undocumented H.264 coprocessor &mdash; 22 command IDs, 47 NIDs, hardware-accelerated video decode from Rust.</p>
-      </a>
-      <a class="platform-card" href="journal/02-tls-on-psp.html" style="text-decoration:none;color:inherit;">
-        <h3>TLS 1.3 on PSP</h3>
-        <p>Pure Rust TLS 1.3 on bare metal MIPS &mdash; replacing Sony's 2008 SSL stack to stream HTTPS from archive.org.</p>
-      </a>
-      <a class="platform-card" href="journal/05-psp-usb-research.html" style="text-decoration:none;color:inherit;">
-        <h3>USB Research</h3>
-        <p>Firmware decryption, OHCI/MUSB discovery, custom USB device driver in Rust, and a hardware adapter design.</p>
-      </a>
-      <a class="platform-card" href="journal/08-remote-dev-automation.html" style="text-decoration:none;color:inherit;">
-        <h3>Zero-Touch Dev</h3>
-        <p>TCP command server, remote input injection, WiFi deploy, and a physical actuator for hard reboot &mdash; AI-agent-driven hardware development.</p>
-      </a>
-    </div>
-
-    <div style="text-align:center;margin-top:24px;">
-      <a class="btn btn-secondary" href="journal/">Read all journal entries</a>
-      <a class="btn btn-secondary" href="blueprint.html" style="margin-left:12px;">View hardware blueprints</a>
-    </div>
-  </div>
-</section>
-
-<!-- ================================================================== -->
-<!-- Getting Started                                                    -->
-<!-- ================================================================== -->
-
-<section id="getting-started">
-  <div class="container fade-in">
-    <h2 class="section-title">Getting Started</h2>
-    <p class="section-subtitle">Build OASIS_OS for your target platform.</p>
-
-    <div class="build-tabs">
-      <button class="build-tab active" data-target="build-desktop">Desktop</button>
-      <button class="build-tab" data-target="build-wasm">WASM</button>
-      <button class="build-tab" data-target="build-psp">PSP</button>
-      <button class="build-tab" data-target="build-ue5">UE5</button>
-    </div>
-
-    <div class="build-panel active" id="build-desktop">
-      <pre><span class="comment"># Install build deps (Ubuntu/Debian) -- SDL3 is compiled from source</span>
-<span class="cmd">sudo apt install cmake g++ make libxtst-dev libx11-dev libasound2-dev</span>
-
-<span class="comment"># Build and run</span>
-<span class="cmd">cargo build --release -p oasis-app</span>
-<span class="cmd">cargo run -p oasis-app</span>
-
-<span class="comment"># Run tests</span>
-<span class="cmd">cargo test --workspace</span></pre>
-    </div>
-
-    <div class="build-panel" id="build-wasm">
-      <pre><span class="comment"># Install wasm-pack</span>
-<span class="cmd">curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh</span>
-
-<span class="comment"># Build</span>
-<span class="cmd">./scripts/build-wasm.sh --release</span>
-
-<span class="comment"># Serve locally</span>
-<span class="cmd">python3 -m http.server 8080</span>
-<span class="comment"># Visit http://localhost:8080/www/</span></pre>
-    </div>
-
-    <div class="build-panel" id="build-psp">
-      <pre><span class="comment"># Requires Rust nightly + cargo-psp from the rust-psp fork</span>
-<span class="cmd">cargo install --git https://github.com/AndrewAltimit/rust-psp cargo-psp --locked</span>
-
-<span class="comment"># Build EBOOT.PBP</span>
-<span class="cmd">cd crates/oasis-backend-psp</span>
-<span class="cmd">RUST_PSP_BUILD_STD=1 cargo psp --release</span>
-
-<span class="comment"># Build PRX overlay (kernel mode)</span>
-<span class="cmd">cd crates/oasis-plugin-psp</span>
-<span class="cmd">RUST_PSP_BUILD_STD=1 cargo psp --release</span></pre>
-    </div>
-
-    <div class="build-panel" id="build-ue5">
-      <pre><span class="comment"># Build the C-ABI shared library</span>
-<span class="cmd">cargo build --release -p oasis-ffi</span>
-
-<span class="comment"># Output: target/release/liboasis_ffi.so (or .dll / .dylib)</span>
-<span class="comment"># Link into your UE5 project and call oasis_create(), oasis_tick(), etc.</span></pre>
+<!-- ============================================================ -->
+<!-- Pillars                                                       -->
+<!-- ============================================================ -->
+<section class="section" aria-labelledby="what-title">
+  <div class="wrap">
+    <header class="section__head">
+      <p class="kicker">01 &mdash; What it is</p>
+      <h2 id="what-title">A whole operating environment that fits behind thirteen methods.</h2>
+      <p class="section__lede">
+        Not a UI toolkit: a complete shell &mdash; dashboard, windows, apps, a terminal, a browser &mdash;
+        written once against a small set of backend traits.
+      </p>
+    </header>
+    <div class="pillars">
+      <article class="pillar">
+        <span class="pillar__num">A</span>
+        <h3>Embeddable by design</h3>
+        <p>Core code never calls a platform API. Implement <code>SdiCore</code>'s 13 required
+          methods plus input, and the entire shell runs on your surface &mdash; a GPU window, a
+          canvas, a game texture or a 2004 handheld.</p>
+      </article>
+      <article class="pillar">
+        <span class="pillar__num">B</span>
+        <h3>Skinnable to the bone</h3>
+        <p>Layout, chrome, fonts, strings, wallpapers and shader backgrounds are data. Seventeen
+          skins ship &mdash; from PSIX tributes to Windows XP &mdash; and a theme derives from just nine
+          base colors.</p>
+      </article>
+      <article class="pillar">
+        <span class="pillar__num">C</span>
+        <h3>Actually useful inside</h3>
+        <p>A from-scratch HTML/CSS/Gemini browser, a scripting shell with 110+ commands and
+          builtins, video and radio streaming, a text editor, paint, games and more &mdash; 15 apps.</p>
+      </article>
+      <article class="pillar">
+        <span class="pillar__num">D</span>
+        <h3>Drivable by agents</h3>
+        <p>An optional, loopback-only MCP server lets a local agent open apps, move windows, run
+          commands and take screenshots &mdash; the shell as the interface for an on-device assistant.</p>
+      </article>
     </div>
   </div>
 </section>
 
-<!-- ================================================================== -->
-<!-- Footer                                                             -->
-<!-- ================================================================== -->
+<!-- ============================================================ -->
+<!-- Platforms                                                     -->
+<!-- ============================================================ -->
+<section class="section section--alt" id="platforms" aria-labelledby="platforms-title">
+  <div class="wrap">
+    <header class="section__head">
+      <p class="kicker">02 &mdash; Platform targets</p>
+      <h2 id="platforms-title">Same shell, five very different screens.</h2>
+      <p class="section__lede">
+        Backends are leaf crates. Each one maps rendering, input, audio and networking onto
+        whatever the host provides &mdash; and the PSP gets two binaries of its own.
+      </p>
+    </header>
 
-<footer class="site-footer">
-  <div class="container">
-    <div class="footer-row">
-      <span>OASIS_OS</span>
-      <span class="version-badge">v1.2.0</span>
-      <span>Dual-licensed: MIT + Unlicense</span>
-      <a href="https://github.com/AndrewAltimit/oasis-os">GitHub</a>
+    <div class="platforms">
+      <article class="platform">
+        <header class="platform__head">
+          <span class="platform__icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="12" rx="1.5"/><path d="M8 20h8M12 16v4"/></svg>
+          </span>
+          <div>
+            <h3>Desktop</h3>
+            <p class="platform__crate">oasis-backend-sdl &rarr; oasis-app</p>
+          </div>
+        </header>
+        <p>SDL3 window, renderer, input and audio on Linux, macOS and Windows. SDL3 builds from source; no system SDL needed.</p>
+        <dl class="spec">
+          <div><dt>Video</dt><dd>ffmpeg (default) or openh264</dd></div>
+          <div><dt>JS</dt><dd>QuickJS-NG</dd></div>
+          <div><dt>Net</dt><dd>rustls TLS, remote terminal, MCP</dd></div>
+        </dl>
+      </article>
+
+      <article class="platform">
+        <header class="platform__head">
+          <span class="platform__icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16" rx="2"/><rect x="8" y="8" width="8" height="8" rx="1"/><path d="M8 1v3M12 1v3M16 1v3M8 20v3M12 20v3M16 20v3"/></svg>
+          </span>
+          <div>
+            <h3>Raspberry Pi</h3>
+            <p class="platform__crate">oasis-backend-sdl</p>
+          </div>
+        </header>
+        <p>The same SDL3 backend boots on a Pi as a field-deployable shell &mdash; the design target for a tamper-responsive briefcase build.</p>
+        <dl class="spec">
+          <div><dt>Video</dt><dd>ffmpeg or openh264</dd></div>
+          <div><dt>Role</dt><dd>Kiosk / cyberdeck shell</dd></div>
+          <div><dt>Net</dt><dd>Remote terminal over PSK</dd></div>
+        </dl>
+      </article>
+
+      <article class="platform">
+        <header class="platform__head">
+          <span class="platform__icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c3 3.2 3 14.8 0 18M12 3c-3 3.2-3 14.8 0 18"/></svg>
+          </span>
+          <div>
+            <h3>WebAssembly</h3>
+            <p class="platform__crate">oasis-backend-wasm</p>
+          </div>
+        </header>
+        <p>Canvas 2D rendering, DOM input and Web Audio. Real web pages and YouTube play in an iframe overlaid on the canvas. <a href="demo/">Try it&nbsp;&rarr;</a></p>
+        <dl class="spec">
+          <div><dt>Video</dt><dd>Browser &lt;video&gt; &rarr; canvas texture</dd></div>
+          <div><dt>JS</dt><dd>Off (no C toolchain for wasm)</dd></div>
+          <div><dt>Net</dt><dd>fetch() only &mdash; no raw TCP</dd></div>
+        </dl>
+      </article>
+
+      <article class="platform">
+        <header class="platform__head">
+          <span class="platform__icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24"><path d="M12 2 3 7v10l9 5 9-5V7z"/><path d="M3 7l9 5 9-5M12 12v10"/></svg>
+          </span>
+          <div>
+            <h3>Unreal Engine 5</h3>
+            <p class="platform__crate">oasis-backend-ue5 &rarr; oasis-ffi</p>
+          </div>
+        </header>
+        <p>A software RGBA framebuffer behind a C ABI (<code>oasis_create</code>, <code>oasis_tick</code>, <code>oasis_get_buffer</code>&hellip;) &mdash; in-game computers as interactive props.</p>
+        <dl class="spec">
+          <div><dt>Video</dt><dd>Optional <code>oasis_video_*</code> API</dd></div>
+          <div><dt>Files</dt><dd>GameAssetVfs with overlay writes</dd></div>
+          <div><dt>Link</dt><dd>cdylib: .dll / .so / .dylib</dd></div>
+        </dl>
+      </article>
+
+      <article class="platform platform--psp">
+        <header class="platform__head">
+          <span class="platform__icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24"><rect x="1.5" y="6" width="21" height="12" rx="6"/><rect x="7" y="8.5" width="10" height="7" rx=".5"/><path d="M4 11v2M3 12h2"/><circle cx="20" cy="11" r=".6"/><circle cx="20" cy="13" r=".6"/></svg>
+          </span>
+          <div>
+            <h3>PlayStation Portable</h3>
+            <p class="platform__crate">oasis-backend-psp &middot; oasis-plugin-psp</p>
+          </div>
+        </header>
+        <p>Native sceGu rendering on a 333&nbsp;MHz MIPS with 32&nbsp;MB of RAM. A shell EBOOT, plus a kernel-mode PRX that draws an overlay on top of running games.</p>
+        <dl class="spec">
+          <div><dt>Video</dt><dd>Media Engine H.264 + sceAudiocodec AAC</dd></div>
+          <div><dt>JS</dt><dd>QuickJS-NG via psp-gcc</dd></div>
+          <div><dt>Net</dt><dd>Pure-Rust TLS 1.3 (embedded-tls)</dd></div>
+        </dl>
+      </article>
     </div>
+  </div>
+</section>
+
+<!-- ============================================================ -->
+<!-- Skins                                                         -->
+<!-- ============================================================ -->
+<section class="section" id="skins" aria-labelledby="skins-title">
+  <div class="wrap">
+    <header class="section__head section__head--split">
+      <div>
+        <p class="kicker">03 &mdash; Skin gallery</p>
+        <h2 id="skins-title">Seventeen personalities, zero code changes.</h2>
+      </div>
+      <p class="section__lede">
+        Every capture below is an unretouched frame from <code>oasis-screenshot</code> at the skin's
+        native resolution. Fourteen skins ship as editable TOML in <code>skins/</code>; three are built in.
+      </p>
+    </header>
+
+    <div class="gallery" id="gallery">
+      <div class="gallery__filters" role="group" aria-label="Filter skins by category">
+        <button type="button" class="chip is-active" data-filter="all" aria-pressed="true">All <span>17</span></button>
+        <button type="button" class="chip" data-filter="dashboard" aria-pressed="false">PSP dashboard <span>4</span></button>
+        <button type="button" class="chip" data-filter="desktop" aria-pressed="false">Desktop <span>6</span></button>
+        <button type="button" class="chip" data-filter="aesthetic" aria-pressed="false">Aesthetic <span>5</span></button>
+        <button type="button" class="chip" data-filter="special" aria-pressed="false">Terminal &amp; a11y <span>2</span></button>
+      </div>
+
+      <div class="gallery__body">
+        <div class="gallery__stage">
+          <div class="stage-frame">
+            <img id="stage-img" class="stage-frame__img"
+                 src="screenshots/psix-hifi/01_dashboard.png"
+                 width="480" height="272"
+                 alt="PSIX HiFi skin, dashboard view">
+          </div>
+          <div class="stage-bar">
+            <div class="views" role="tablist" aria-label="Screen">
+              <button type="button" role="tab" class="view is-active" aria-selected="true" data-view="01_dashboard">Dashboard</button>
+              <button type="button" role="tab" class="view" aria-selected="false" tabindex="-1" data-view="02_media_tab">Media</button>
+              <button type="button" role="tab" class="view" aria-selected="false" tabindex="-1" data-view="03_mods_tab">Apps</button>
+              <button type="button" role="tab" class="view" aria-selected="false" tabindex="-1" data-view="04_terminal">Terminal</button>
+            </div>
+          </div>
+          <div class="stage-meta" aria-live="polite">
+            <div>
+              <h3 id="stage-name">PSIX HiFi</h3>
+              <p id="stage-desc">High-fidelity PSIX homebrew tribute: baked ribbon wallpaper, bold psix wordmark, left-column desktop icons, media-dock footer.</p>
+            </div>
+            <dl class="stage-meta__facts">
+              <div><dt>Resolution</dt><dd id="stage-res">480&times;272</dd></div>
+              <div><dt>Source</dt><dd id="stage-src">skins/psix-hifi</dd></div>
+            </dl>
+            <a class="btn btn--ghost btn--sm" id="stage-demo" href="demo/?skin=psix-hifi">Open in live demo &rarr;</a>
+          </div>
+        </div>
+
+        <div class="skin-list" role="listbox" id="skin-list" aria-label="Skins" tabindex="0" aria-activedescendant="skin-psix-hifi">
+          <!-- data-res is the real PNG size of screenshots/<id>/01_dashboard.png -->
+          <div role="option" class="skin is-active" id="skin-psix-hifi" aria-selected="true" data-skin="psix-hifi" data-cat="dashboard" data-name="PSIX HiFi" data-res="480&times;272" data-src="skins/psix-hifi" data-desc="High-fidelity PSIX homebrew tribute: baked ribbon wallpaper, bold psix wordmark, left-column desktop icons, media-dock footer.">
+            <img src="screenshots/psix-hifi/01_dashboard.png" alt="" loading="lazy" width="480" height="272"><span>PSIX HiFi</span>
+          </div>
+          <div role="option" class="skin" id="skin-psix-tribute" aria-selected="false" data-skin="psix-tribute" data-cat="dashboard" data-name="PSIX Tribute" data-res="480&times;272" data-src="skins/psix-tribute" data-desc="Tribute to the PSIX homebrew shell: shaped orange chrome, free desktop icons and an assemble entrance animation.">
+            <img src="screenshots/psix-tribute/01_dashboard.png" alt="" loading="lazy" width="480" height="272"><span>PSIX Tribute</span>
+          </div>
+          <div role="option" class="skin" id="skin-classic" aria-selected="false" data-skin="classic" data-cat="dashboard" data-name="Classic" data-res="480&times;272" data-src="skins/classic" data-desc="PSP-style icon grid dashboard with virtual desktops, status bar and cursor navigation.">
+            <img src="screenshots/classic/01_dashboard.png" alt="" loading="lazy" width="480" height="272"><span>Classic</span>
+          </div>
+          <div role="option" class="skin" id="skin-altimit" aria-selected="false" data-skin="altimit" data-cat="dashboard" data-name="Altimit" data-res="480&times;272" data-src="skins/altimit" data-desc="Vector icon dashboard inspired by the desktop OS in .hack//SIGN.">
+            <img src="screenshots/altimit/01_dashboard.png" alt="" loading="lazy" width="480" height="272"><span>Altimit</span>
+          </div>
+          <div role="option" class="skin" id="skin-xp" aria-selected="false" data-skin="xp" data-cat="desktop" data-name="XP" data-res="1024&times;768" data-src="Built-in (+ skins/xp)" data-desc="Windows XP Luna-inspired blue theme with gradient titlebars and taskbar.">
+            <img src="screenshots/xp/01_dashboard.png" alt="" loading="lazy" width="1024" height="768"><span>XP</span>
+          </div>
+          <div role="option" class="skin" id="skin-win95" aria-selected="false" data-skin="win95" data-cat="desktop" data-name="Win95" data-res="640&times;480" data-src="skins/win95" data-desc="Windows 95/98 classic look with raised 3D borders, system gray and blue titlebars.">
+            <img src="screenshots/win95/01_dashboard.png" alt="" loading="lazy" width="640" height="480"><span>Win95</span>
+          </div>
+          <div role="option" class="skin" id="skin-macos" aria-selected="false" data-skin="macos" data-cat="desktop" data-name="macOS" data-res="800&times;600" data-src="skins/macos" data-desc="macOS-inspired light skin with traffic-light buttons and a dock-style app bar.">
+            <img src="screenshots/macos/01_dashboard.png" alt="" loading="lazy" width="800" height="600"><span>macOS</span>
+          </div>
+          <div role="option" class="skin" id="skin-gnome" aria-selected="false" data-skin="gnome" data-cat="desktop" data-name="GNOME" data-res="800&times;600" data-src="skins/gnome" data-desc="GNOME/Adwaita-inspired dark theme with a top bar and rounded headerbars.">
+            <img src="screenshots/gnome/01_dashboard.png" alt="" loading="lazy" width="800" height="600"><span>GNOME</span>
+          </div>
+          <div role="option" class="skin" id="skin-desktop" aria-selected="false" data-skin="desktop" data-cat="desktop" data-name="Desktop" data-res="800&times;600" data-src="Built-in only" data-desc="Desktop-style interface with window manager and taskbar.">
+            <img src="screenshots/desktop/01_dashboard.png" alt="" loading="lazy" width="800" height="600"><span>Desktop</span>
+          </div>
+          <div role="option" class="skin" id="skin-modern" aria-selected="false" data-skin="modern" data-cat="desktop" data-name="Modern" data-res="480&times;272" data-src="Built-in only" data-desc="Modern UI with rounded corners, gradients and shadows.">
+            <img src="screenshots/modern/01_dashboard.png" alt="" loading="lazy" width="480" height="272"><span>Modern</span>
+          </div>
+          <div role="option" class="skin" id="skin-balatro" aria-selected="false" data-skin="balatro" data-cat="aesthetic" data-name="Balatro" data-res="800&times;600" data-src="skins/balatro" data-desc="Balatro-inspired: dark background, glowing accents, scanlines and a live swirl shader wallpaper.">
+            <img src="screenshots/balatro/01_dashboard.png" alt="" loading="lazy" width="800" height="600"><span>Balatro</span>
+          </div>
+          <div role="option" class="skin" id="skin-vaporwave" aria-selected="false" data-skin="vaporwave" data-cat="aesthetic" data-name="Vaporwave" data-res="480&times;272" data-src="skins/vaporwave" data-desc="A E S T H E T I C vaporwave palette with purple, pink and cyan gradients.">
+            <img src="screenshots/vaporwave/01_dashboard.png" alt="" loading="lazy" width="480" height="272"><span>Vaporwave</span>
+          </div>
+          <div role="option" class="skin" id="skin-solarized" aria-selected="false" data-skin="solarized" data-cat="aesthetic" data-name="Solarized" data-res="800&times;600" data-src="skins/solarized" data-desc="Solarized Dark palette by Ethan Schoonover: clean and developer-focused.">
+            <img src="screenshots/solarized/01_dashboard.png" alt="" loading="lazy" width="800" height="600"><span>Solarized</span>
+          </div>
+          <div role="option" class="skin" id="skin-paper" aria-selected="false" data-skin="paper" data-cat="aesthetic" data-name="Paper" data-res="480&times;272" data-src="skins/paper" data-desc="Minimal paper/e-reader skin: cream background, no shadows, maximum readability, calm-waves shader.">
+            <img src="screenshots/paper/01_dashboard.png" alt="" loading="lazy" width="480" height="272"><span>Paper</span>
+          </div>
+          <div role="option" class="skin" id="skin-retro-cga" aria-selected="false" data-skin="retro-cga" data-cat="aesthetic" data-name="Retro CGA" data-res="480&times;272" data-src="skins/retro-cga" data-desc="Retro CGA/EGA four-color skin with a blocky DOS-era aesthetic.">
+            <img src="screenshots/retro-cga/01_dashboard.png" alt="" loading="lazy" width="480" height="272"><span>Retro CGA</span>
+          </div>
+          <div role="option" class="skin" id="skin-corrupted" aria-selected="false" data-skin="corrupted" data-cat="special" data-name="Corrupted" data-res="480&times;272" data-src="Built-in only" data-desc="Damaged terminal with visual corruption and garbled output.">
+            <img src="screenshots/corrupted/01_dashboard.png" alt="" loading="lazy" width="480" height="272"><span>Corrupted</span>
+          </div>
+          <div role="option" class="skin" id="skin-highcontrast" aria-selected="false" data-skin="highcontrast" data-cat="special" data-name="High Contrast" data-res="480&times;272" data-src="skins/highcontrast" data-desc="High-contrast accessibility theme: black background, white text, yellow accents.">
+            <img src="screenshots/highcontrast/01_dashboard.png" alt="" loading="lazy" width="480" height="272"><span>High Contrast</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================ -->
+<!-- Features                                                      -->
+<!-- ============================================================ -->
+<section class="section section--alt" id="features" aria-labelledby="features-title">
+  <div class="wrap">
+    <header class="section__head">
+      <p class="kicker">04 &mdash; Inside the shell</p>
+      <h2 id="features-title">Subsystems built from scratch, then made small enough to travel.</h2>
+    </header>
+
+    <div class="bento">
+      <article class="tile tile--browser">
+        <p class="tile__tag">oasis-browser &middot; oasis-js</p>
+        <h3>A browser engine, not a webview</h3>
+        <p>Written from the parser up: a full CSS cascade &mdash; <code>@media</code>, <code>@container</code>,
+          <code>@layer</code>, <code>@supports</code>, nesting and <code>:has()</code> &mdash; with <code>var()</code>
+          resolved at computed-value time, 2D and 3D transforms with perspective, and <code>@font-face</code> web fonts.</p>
+        <ul class="tile__chips" aria-label="Highlights">
+          <li>CSS Grid</li><li>preserve-3d</li><li>backface culling</li><li>bidi text</li><li>CSS transitions</li><li>8&nbsp;MB body cap</li>
+        </ul>
+        <dl class="spec spec--wide">
+          <div><dt>Parse</dt><dd>WHATWG HTML &middot; CSS &middot; Gemini</dd></div>
+          <div><dt>Layout</dt><dd>Block, inline, flex, table, CSS Grid, nested scroll</dd></div>
+          <div><dt>Paint</dt><dd>Canvas 2D, SVG, z-index stacking, light compositor</dd></div>
+          <div><dt>Net</dt><dd>HTTP/1.1 + HTTP/2 over rustls, cookies, CSP</dd></div>
+          <div><dt>Script</dt><dd>QuickJS-NG DOM bindings, origin-checked fetch, Web Storage, execution watchdog</dd></div>
+          <div><dt>Chrome</dt><dd>Forms, bookmarks, reader mode</dd></div>
+        </dl>
+      </article>
+
+      <article class="tile tile--wm">
+        <p class="tile__tag">oasis-wm</p>
+        <h3>A real window manager</h3>
+        <p>Drag, resize, minimize, maximize, edge snapping with previews, Alt+Tab, keyboard snapping, five tiling
+          layouts and open/close/minimize animations.</p>
+        <div class="wm-mini" aria-hidden="true">
+          <div class="wm-mini__win wm-mini__win--a"><i></i></div>
+          <div class="wm-mini__win wm-mini__win--b"><i></i></div>
+          <div class="wm-mini__win wm-mini__win--c"><i></i></div>
+        </div>
+      </article>
+
+      <article class="tile tile--term">
+        <p class="tile__tag">oasis-terminal</p>
+        <h3>A shell inside the shell</h3>
+        <p>~95 commands and 18 builtins: pipes, globs, aliases, variables, <code>if</code>/<code>while</code>/<code>for</code>/<code>case</code>
+          scripts, background jobs, tab completion and persistent history.</p>
+        <pre class="term-mini" aria-label="Example terminal session"><span class="t-prompt">/home/user&gt;</span> ls music | grep mp3
+ambient_dawn.mp3
+nightfall_theme.mp3
+<span class="t-prompt">/home/user&gt;</span> skin psix-hifi<span class="caret" aria-hidden="true"></span></pre>
+      </article>
+
+      <article class="tile tile--tv">
+        <p class="tile__tag">oasis-video &middot; oasis-app-tv-guide</p>
+        <h3>TV Guide &amp; Internet Radio</h3>
+        <p>Channels of Internet Archive video, streamed progressively through a sliding-window buffer with deferred
+          tail probing and CDN failover &mdash; and decoded by ffmpeg, openh264, the browser, or the PSP's Media Engine.</p>
+        <img src="screenshots/classic/02_media_tab.png" alt="Classic skin media tab listing audio files" loading="lazy" width="480" height="272" class="pixel">
+      </article>
+
+      <article class="tile">
+        <p class="tile__tag">oasis-ui</p>
+        <h3>29 widgets</h3>
+        <p>Buttons to tree views, modals, tables, date pickers and toasts &mdash; plus list views, menu bars,
+          nine-patch, icon atlases and flex/grid layout.</p>
+      </article>
+
+      <article class="tile">
+        <p class="tile__tag">oasis-mcp</p>
+        <h3>MCP control server</h3>
+        <p>Off by default, compiled out unless asked for. When on: Streamable HTTP on <code>127.0.0.1:7345</code>,
+          Origin/Host checks, optional bearer token, and tools like <code>open_app</code>, <code>run_command</code>,
+          <code>screenshot</code>.</p>
+      </article>
+
+      <article class="tile">
+        <p class="tile__tag">oasis-shader &middot; oasis-vector</p>
+        <h3>Living wallpapers</h3>
+        <p>Shadertoy-style backgrounds &mdash; Voronoi, City Lights, Ocean Waves, Calm Waves, Balatro &mdash; on GPU or
+          in software, plus resolution-independent vector icons and animations.</p>
+      </article>
+
+      <article class="tile tile--wide">
+        <p class="tile__tag">oasis-vfs &middot; oasis-net</p>
+        <h3>Files &amp; wires</h3>
+        <p>In-memory, on-disk and UE5 game-asset filesystems behind one trait; a PSK-authenticated remote
+          terminal and FTP-style transfer; plugins talking over VFS-based IPC.</p>
+      </article>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================ -->
+<!-- Architecture                                                  -->
+<!-- ============================================================ -->
+<section class="section" id="architecture" aria-labelledby="arch-title">
+  <div class="wrap">
+    <header class="section__head section__head--split">
+      <div>
+        <p class="kicker">05 &mdash; Architecture</p>
+        <h2 id="arch-title">Layers in, backends out.</h2>
+      </div>
+      <p class="section__lede">
+        50 crates: 40 workspace members for desktop, WASM and UE5, the excluded PSP backend, and nine standalone
+        PSP-target crates. Everything above the trait line is platform-agnostic.
+      </p>
+    </header>
+
+    <div class="arch">
+      <ol class="arch__stack" aria-label="Crate layers, top to bottom">
+        <li class="layer layer--core">
+          <span class="layer__name">Coordination</span>
+          <ul class="layer__crates"><li>oasis-core</li><li class="note">dashboard &middot; agent &middot; plugins &middot; scripting &middot; taskbar</li></ul>
+        </li>
+        <li class="layer layer--apps">
+          <span class="layer__name">Apps</span>
+          <ul class="layer__crates">
+            <li>oasis-app-core</li><li>browser</li><li>tv-guide</li><li>radio</li><li>media</li><li>file-manager</li>
+            <li>text-editor</li><li>paint</li><li>games</li><li>calculator</li><li>settings</li><li>network</li>
+            <li>package-manager</li><li>system-monitor</li>
+          </ul>
+        </li>
+        <li class="layer layer--engines">
+          <span class="layer__name">Engines</span>
+          <ul class="layer__crates"><li>oasis-browser</li><li>oasis-js</li><li>oasis-terminal</li><li>oasis-video</li><li>oasis-audio</li></ul>
+        </li>
+        <li class="layer layer--ui">
+          <span class="layer__name">Presentation</span>
+          <ul class="layer__crates"><li>oasis-sdi</li><li>oasis-ui</li><li>oasis-wm</li><li>oasis-skin</li><li>oasis-vector</li><li>oasis-shader</li><li>oasis-rasterize</li></ul>
+        </li>
+        <li class="layer layer--svc">
+          <span class="layer__name">Services</span>
+          <ul class="layer__crates"><li>oasis-vfs</li><li>oasis-platform</li><li>oasis-net</li><li>oasis-mcp</li><li>oasis-i18n</li></ul>
+        </li>
+        <li class="layer layer--types">
+          <span class="layer__name">Foundation</span>
+          <ul class="layer__crates"><li>oasis-types</li><li class="note">Color &middot; InputEvent &middot; geometry &middot; errors &middot; <strong>backend traits</strong></li></ul>
+        </li>
+      </ol>
+
+      <div class="arch__line" aria-hidden="true"><span>trait boundary</span></div>
+
+      <div class="traits">
+        <div class="trait trait--big">
+          <code>SdiCore</code>
+          <p><strong>13</strong> required methods &mdash; clear, blit, fill_rect, draw_text, textures, clipping, read_pixels&hellip;</p>
+        </div>
+        <div class="trait">
+          <code>SdiBackend</code>
+          <p><strong>9</strong> extension traits, <strong>53</strong> default methods: shapes, gradients, alpha, text, vector paths, batching, render targets</p>
+        </div>
+        <div class="trait"><code>InputBackend</code><p>buttons, keys, pointer, touch, text</p></div>
+        <div class="trait"><code>NetworkBackend</code><p>TCP with pluggable TLS</p></div>
+        <div class="trait"><code>AudioBackend</code><p>tracks and streaming PCM</p></div>
+      </div>
+
+      <ul class="arch__backends" aria-label="Backends">
+        <li><code>oasis-backend-sdl</code><span>SDL3 &middot; desktop &amp; Pi</span></li>
+        <li><code>oasis-backend-wasm</code><span>Canvas 2D &middot; Web Audio</span></li>
+        <li><code>oasis-backend-ue5</code><span>RGBA framebuffer &rarr; oasis-ffi</span></li>
+        <li><code>oasis-backend-psp</code><span>sceGu &middot; Media Engine</span></li>
+        <li class="is-dim"><code>oasis-plugin-psp</code><span>kernel PRX &middot; &lt;64&nbsp;KB, no core</span></li>
+      </ul>
+    </div>
+
+    <p class="arch__more">
+      Want the full tour? <a href="journal/06-backend-trait-system.html">Anatomy of the backend trait system</a>
+      &middot; <a href="https://github.com/AndrewAltimit/oasis-os/blob/main/docs/design.md">Technical design document</a>
+      &middot; <a href="https://github.com/AndrewAltimit/oasis-os/blob/main/docs/writing-apps.md">Writing apps</a>
+    </p>
+  </div>
+</section>
+
+<!-- ============================================================ -->
+<!-- PSP heritage                                                  -->
+<!-- ============================================================ -->
+<section class="section section--psp" id="psp" aria-labelledby="psp-title">
+  <div class="wrap psp">
+    <div class="psp__copy">
+      <p class="kicker">06 &mdash; The PSP story</p>
+      <h2 id="psp-title">Born on a 2004 handheld. Still runs there.</h2>
+      <p>OASIS_OS started in early 2026 as a love letter to PSP homebrew shells like PSIX. The 480&times;272
+        default resolution is the PSP's LCD; the d-pad navigation never left. And the PSP is still the
+        hardest target in the tree:</p>
+      <ul class="psp__list">
+        <li><strong>TLS 1.3 in pure Rust</strong> on firmware that ships SSL 3.0 and 2008-era root CAs.</li>
+        <li><strong>Hardware H.264</strong> through a reverse-engineered Media Engine RPC protocol &mdash; 22 command IDs, 47 NIDs &mdash; with a kernel watchdog for a firmware deadlock.</li>
+        <li><strong>QuickJS-NG</strong> cross-compiled with pspdev's toolchain against a hand-rolled libc shim.</li>
+        <li><strong>Zero-touch development:</strong> WiFi deploy, remote input and screen capture, a 154&nbsp;KB recovery EBOOT, and a relay-driven actuator for hard reboots.</li>
+      </ul>
+      <div class="psp__ctas">
+        <a class="btn btn--ghost btn--sm" href="journal/07-psp-media-engine.html">Media Engine RE &rarr;</a>
+        <a class="btn btn--ghost btn--sm" href="blueprint.html">Hardware blueprints &rarr;</a>
+      </div>
+    </div>
+    <div class="psp__shots">
+      <figure class="handheld">
+        <div class="handheld__body">
+          <span class="handheld__dpad" aria-hidden="true"></span>
+          <div class="handheld__screen">
+            <img src="img/09-dashboard-remote.png" alt="OASIS_OS dashboard on real PSP hardware" width="480" height="272" loading="lazy" class="pixel">
+          </div>
+          <span class="handheld__btns" aria-hidden="true"><i></i><i></i><i></i><i></i></span>
+        </div>
+        <figcaption>Real PSP hardware, captured over WiFi with the TCP <code>screencap</code> command.</figcaption>
+      </figure>
+      <figure class="psp__minor">
+        <img src="img/07-me-video-decode.png" alt="H.264 video decoded by the PSP Media Engine" width="480" height="272" loading="lazy" class="pixel">
+        <figcaption>Archive.org video over TLS&nbsp;1.3, decoded on the Media Engine.</figcaption>
+      </figure>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================ -->
+<!-- Journal                                                       -->
+<!-- ============================================================ -->
+<section class="section" id="journal" aria-labelledby="journal-title">
+  <div class="wrap">
+    <header class="section__head section__head--split">
+      <div>
+        <p class="kicker">07 &mdash; Developer's journal</p>
+        <h2 id="journal-title">Nine deep dives into the hard parts.</h2>
+      </div>
+      <p class="section__lede">Long-form write-ups on reverse engineering, cryptography on MIPS, streaming video,
+        and the remote rig that let an AI agent iterate on real hardware.</p>
+    </header>
+
+    <ol class="entries">
+      <li><a class="entry entry--feature" href="journal/07-psp-media-engine.html">
+        <span class="entry__no">07</span>
+        <span class="entry__title">Reverse Engineering the PSP Media Engine</span>
+        <span class="entry__desc">From empty firmware stubs to stable hardware H.264: runtime patching, a kernel watchdog hook and P/B-frame skipping.</span>
+        <span class="entry__tags">hardware &middot; reverse-engineering</span>
+      </a></li>
+      <li><a class="entry entry--feature" href="journal/08-remote-dev-automation.html">
+        <span class="entry__no">08</span>
+        <span class="entry__title">Zero-Touch PSP Development</span>
+        <span class="entry__desc">A TCP command server, remote input, live framebuffer streaming and a DIY actuator &mdash; so an AI agent could iterate on hardware.</span>
+        <span class="entry__tags">automation &middot; ai-agents</span>
+      </a></li>
+      <li><a class="entry" href="journal/01-unified-embedded-os.html"><span class="entry__no">01</span><span class="entry__title">One Codebase, Five Platforms</span><span class="entry__tags">architecture</span></a></li>
+      <li><a class="entry" href="journal/02-tls-on-psp.html"><span class="entry__no">02</span><span class="entry__title">TLS 1.3 on a 2004 Handheld</span><span class="entry__tags">psp &middot; security</span></a></li>
+      <li><a class="entry" href="journal/03-streaming-video.html"><span class="entry__no">03</span><span class="entry__title">Streaming Internet Archive Video</span><span class="entry__tags">video</span></a></li>
+      <li><a class="entry" href="journal/04-rust-psp-sdk.html"><span class="entry__no">04</span><span class="entry__title">Modernizing the rust-psp SDK</span><span class="entry__tags">sdk &middot; safety</span></a></li>
+      <li><a class="entry" href="journal/05-psp-usb-research.html"><span class="entry__no">05</span><span class="entry__title">PSP USB Research</span><span class="entry__tags">hardware &middot; usb</span></a></li>
+      <li><a class="entry" href="journal/06-backend-trait-system.html"><span class="entry__no">06</span><span class="entry__title">Anatomy of the Backend Trait System</span><span class="entry__tags">architecture</span></a></li>
+      <li><a class="entry" href="journal/09-javascript-on-psp.html"><span class="entry__no">09</span><span class="entry__title">JavaScript on a 2004 Handheld</span><span class="entry__tags">javascript &middot; debugging</span></a></li>
+      <li><a class="entry entry--more" href="journal/"><span class="entry__no">ALL</span><span class="entry__title">Browse the journal &rarr;</span></a></li>
+    </ol>
+
+    <div class="blueprints">
+      <a class="blueprint" href="blueprint.html?diagram=psp-usb-adapter">
+        <img src="img/blueprint-psp-usb-adapter.png" alt="3D blueprint of the PSP USB-C adapter" loading="lazy" width="841" height="645">
+        <span class="blueprint__label"><span class="mono">BLUEPRINT</span> PSP USB-C adapter</span>
+      </a>
+      <a class="blueprint" href="blueprint.html?diagram=psp-relay">
+        <img src="img/blueprint-psp-relay.png" alt="3D blueprint of the PSP hard-reset relay" loading="lazy" width="1030" height="628">
+        <span class="blueprint__label"><span class="mono">BLUEPRINT</span> Hard-reset relay</span>
+      </a>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================ -->
+<!-- Getting started                                               -->
+<!-- ============================================================ -->
+<section class="section section--alt" id="start" aria-labelledby="start-title">
+  <div class="wrap start">
+    <header class="section__head">
+      <p class="kicker">08 &mdash; Getting started</p>
+      <h2 id="start-title">Build it for your screen.</h2>
+      <p class="section__lede">
+        Per-platform dependencies live in
+        <a href="https://github.com/AndrewAltimit/oasis-os/blob/main/docs/getting-started.md">docs/getting-started.md</a>.
+        CI runs every step inside the <code>rust-ci</code> Docker image, so a local <code>docker compose --profile ci</code> run matches it exactly.
+      </p>
+    </header>
+
+    <div class="console">
+      <div class="console__tabs" role="tablist" aria-label="Build target">
+        <button type="button" role="tab" id="tab-desktop" aria-controls="panel-desktop" aria-selected="true">Desktop</button>
+        <button type="button" role="tab" id="tab-noff" aria-controls="panel-noff" aria-selected="false" tabindex="-1">No ffmpeg</button>
+        <button type="button" role="tab" id="tab-wasm" aria-controls="panel-wasm" aria-selected="false" tabindex="-1">WASM</button>
+        <button type="button" role="tab" id="tab-psp" aria-controls="panel-psp" aria-selected="false" tabindex="-1">PSP</button>
+        <button type="button" role="tab" id="tab-ue5" aria-controls="panel-ue5" aria-selected="false" tabindex="-1">UE5 / FFI</button>
+        <button type="button" role="tab" id="tab-mcp" aria-controls="panel-mcp" aria-selected="false" tabindex="-1">MCP</button>
+      </div>
+
+      <div class="console__panel" role="tabpanel" id="panel-desktop" aria-labelledby="tab-desktop" tabindex="0">
+        <button type="button" class="copy" data-copy>Copy</button>
+<pre><code><span class="c"># SDL3 compiles from source; default features link system ffmpeg</span>
+cargo build --release -p oasis-app
+cargo run --release -p oasis-app
+
+<span class="c"># pick any of the 17 skins</span>
+OASIS_SKIN=psix-hifi cargo run --release -p oasis-app
+
+<span class="c"># run the tests</span>
+cargo test --workspace</code></pre>
+      </div>
+
+      <div class="console__panel" role="tabpanel" id="panel-noff" aria-labelledby="tab-noff" tabindex="0" hidden>
+        <button type="button" class="copy" data-copy>Copy</button>
+<pre><code><span class="c"># no ffmpeg dev libs (e.g. Windows): openh264 + symphonia instead</span>
+cargo build --release -p oasis-app \
+  --no-default-features --features javascript,video-decode</code></pre>
+      </div>
+
+      <div class="console__panel" role="tabpanel" id="panel-wasm" aria-labelledby="tab-wasm" tabindex="0" hidden>
+        <button type="button" class="copy" data-copy>Copy</button>
+<pre><code>rustup target add wasm32-unknown-unknown
+<span class="c"># needs wasm-pack: https://rustwasm.github.io/wasm-pack/installer/</span>
+./scripts/build-wasm.sh --release
+python3 -m http.server 8080
+<span class="c"># open http://localhost:8080/www/</span></code></pre>
+      </div>
+
+      <div class="console__panel" role="tabpanel" id="panel-psp" aria-labelledby="tab-psp" tabindex="0" hidden>
+        <button type="button" class="copy" data-copy>Copy</button>
+<pre><code><span class="c"># cargo-psp from the rust-psp fork, at the revision CI pins (RUST_PSP_REV)</span>
+cargo install --git https://github.com/AndrewAltimit/rust-psp \
+  --rev &lt;RUST_PSP_REV&gt; cargo-psp --locked
+
+<span class="c"># shell EBOOT</span>
+cd crates/oasis-backend-psp && RUST_PSP_BUILD_STD=1 cargo psp --release
+
+<span class="c"># kernel-mode overlay PRX</span>
+cd ../oasis-plugin-psp && RUST_PSP_BUILD_STD=1 cargo psp --release</code></pre>
+      </div>
+
+      <div class="console__panel" role="tabpanel" id="panel-ue5" aria-labelledby="tab-ue5" tabindex="0" hidden>
+        <button type="button" class="copy" data-copy>Copy</button>
+<pre><code>cargo build --profile release-ffi -p oasis-ffi
+<span class="c"># add --features video-decode for the oasis_video_* API</span>
+<span class="c"># output: target/release-ffi/liboasis_ffi.so | liboasis_ffi.dylib | oasis_ffi.dll</span>
+<span class="c"># then: oasis_create() -&gt; oasis_tick() -&gt; oasis_get_buffer()</span></code></pre>
+      </div>
+
+      <div class="console__panel" role="tabpanel" id="panel-mcp" aria-labelledby="tab-mcp" tabindex="0" hidden>
+        <button type="button" class="copy" data-copy>Copy</button>
+<pre><code>cargo build --release -p oasis-app --features mcp
+OASIS_MCP=1 ./target/release/oasis-app
+<span class="c"># agent config (.mcp.json):</span>
+<span class="c"># { "mcpServers": { "oasis": { "type": "http", "url": "http://127.0.0.1:7345/mcp" } } }</span></code></pre>
+      </div>
+    </div>
+
+    <ul class="docs-links">
+      <li><a href="https://github.com/AndrewAltimit/oasis-os/blob/main/docs/skin-authoring.md"><strong>Skin authoring</strong><span>TOML reference &amp; theme derivation</span></a></li>
+      <li><a href="https://github.com/AndrewAltimit/oasis-os/blob/main/docs/writing-apps.md"><strong>Writing apps</strong><span>The <code>App</code> trait lifecycle</span></a></li>
+      <li><a href="https://github.com/AndrewAltimit/oasis-os/blob/main/docs/ffi-integration.md"><strong>FFI integration</strong><span>Embedding in UE5 or any C host</span></a></li>
+      <li><a href="https://github.com/AndrewAltimit/oasis-os/blob/main/docs/mcp-server.md"><strong>MCP server</strong><span>Tools, transport &amp; security</span></a></li>
+    </ul>
+  </div>
+</section>
+
+</main>
+
+<footer class="footer">
+  <div class="wrap footer__inner">
+    <div class="footer__brand">
+      <span class="brand__name">OASIS<span class="brand__us">_</span>OS</span>
+      <p>Built from scratch in Rust. Dual-licensed MIT + Unlicense.</p>
+    </div>
+    <nav aria-label="Footer">
+      <ul class="footer__links">
+        <li><a href="demo/">Live demo</a></li>
+        <li><a href="journal/">Journal</a></li>
+        <li><a href="blueprint.html">Blueprints</a></li>
+        <li><a href="https://github.com/AndrewAltimit/oasis-os">GitHub</a></li>
+        <li><a href="https://github.com/AndrewAltimit/oasis-os/blob/main/docs/README.md">Docs</a></li>
+      </ul>
+    </nav>
+    <p class="footer__status mono" aria-hidden="true">333MHz &middot; 480&times;272 &middot; v1.4.0</p>
   </div>
 </footer>
 
-<script src="js/main.js"></script>
-
-<!-- Build tabs (reuse same pattern as skin tabs) -->
-<script>
-(function() {
-  const buildTabs = document.querySelectorAll(".build-tab");
-  const buildPanels = document.querySelectorAll(".build-panel");
-
-  buildTabs.forEach(tab => {
-    tab.addEventListener("click", () => {
-      const targetId = tab.dataset.target;
-      buildTabs.forEach(t => t.classList.remove("active"));
-      tab.classList.add("active");
-      buildPanels.forEach(panel => {
-        panel.classList.toggle("active", panel.id === targetId);
-      });
-    });
-  });
-})();
-</script>
-
+<script src="js/home.js" defer></script>
 </body>
 </html>
