@@ -9,9 +9,9 @@
 //! keeps those decisions in one place and keeps this type testable
 //! without audio hardware.
 //!
-//! The desktop shell drives it from `oasis-app/src/media_controller.rs`;
-//! the `music` terminal command and the Music Player app produce the
-//! requests.
+//! [`MusicController`](crate::MusicController) carries the actions out
+//! (the desktop shell and the WASM backend both drive one); the `music`
+//! terminal command and the Music Player app produce the requests.
 
 use oasis_types::error::Result;
 use oasis_types::ipc::{AUDIO_STATUS_PATH, MediaRequest};

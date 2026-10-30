@@ -10,9 +10,13 @@
 //! - [`AudioManager`] -- playlist + playback state machine behind the
 //!   `/var/audio/*` VFS IPC ([`oasis_types::ipc::MediaRequest`]); the host
 //!   carries out the [`MediaAction`]s it returns.
+//! - [`MusicController`] -- carries those actions out on an
+//!   `AudioBackend` and publishes position/status; shared by every host
+//!   that runs the Music Player (desktop shell, WASM).
 //! - [`RadioManager`] -- internet-radio streaming state machine.
 //! - [`sfx`] -- UI sound effects.
 
+pub mod controller;
 pub mod manager;
 pub mod mixer;
 pub mod null_backend;
@@ -23,6 +27,7 @@ pub mod sfx;
 pub mod types;
 pub mod wav;
 
+pub use controller::{MusicController, queue_request};
 pub use manager::{AudioManager, MediaAction};
 pub use null_backend::NullAudioBackend;
 pub use oasis_types::ipc::{

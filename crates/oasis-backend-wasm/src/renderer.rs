@@ -6,7 +6,6 @@ use wasm_bindgen::prelude::*;
 use web_sys::{CanvasRenderingContext2d, HtmlCanvasElement, ImageData};
 
 use oasis_rasterize::GlyphCacheKey;
-use oasis_types::backend::stacks::{ClipStack, DrawState, TranslateStack};
 use oasis_types::backend::{
     BlendMode, Color, RenderTargetId, SdiAlpha, SdiCore, SdiRenderTarget, SdiText, SdiVector,
     TextureId, render_target_not_found, texture_not_found, validate_rgba_data,
@@ -14,6 +13,7 @@ use oasis_types::backend::{
 use oasis_types::error::{OasisError, Result};
 use oasis_types::geometry::ClipRect;
 
+use crate::clip::SurfaceClip;
 use crate::font;
 
 // ---------------------------------------------------------------------------
@@ -77,11 +77,9 @@ struct SavedSurface {
     ctx: CanvasRenderingContext2d,
     width: u32,
     height: u32,
-    /// The clip applied on `ctx` (it keeps its clip save level while the
-    /// target is bound).
-    applied_clip: Option<ClipRect>,
-    /// The parent's clip and translate stacks.
-    state: DrawState,
+    /// The parent's clip + translate state (its `ctx` keeps its clip save
+    /// level while the target is bound).
+    clip: SurfaceClip,
 }
 
 pub struct WasmBackend {
@@ -91,18 +89,9 @@ pub struct WasmBackend {
     pub(crate) height: u32,
     pub(crate) textures: HashMap<u64, TextureData>,
     pub(crate) next_texture_id: u64,
-    pub(crate) clip_stack: ClipStack,
-    /// The clip currently applied on `ctx`, or `None`.
-    ///
-    /// Canvas 2D can only *intersect* clips (`clip()`), never replace or
-    /// remove one, except by `restore()`-ing to a state saved before it.
-    /// So an applied clip is exactly one `save()` level on `ctx`, entered
-    /// by [`WasmBackend::apply_clip`]; every clip change (`set_clip_rect`,
-    /// `reset_clip_rect`, `push_clip_rect`, `pop_clip_rect`) restores that
-    /// level and, if a clip remains, saves and clips once again. Nothing
-    /// else may leave a `save()` unbalanced.
-    applied_clip: Option<ClipRect>,
-    pub(crate) translate_stack: TranslateStack,
+    /// Clip + translate stacks of the bound surface and the clip applied
+    /// on `ctx` (one `save()` level; see [`crate::clip`]).
+    pub(crate) clip: SurfaceClip,
     pub(crate) color_cache: HashMap<u32, String>,
     glyph_cache: HashMap<GlyphCacheKey, HtmlCanvasElement>,
     /// Access timestamps for LRU eviction of glyph cache entries.
@@ -143,9 +132,7 @@ impl WasmBackend {
             height,
             textures: HashMap::new(),
             next_texture_id: 1,
-            clip_stack: ClipStack::default(),
-            applied_clip: None,
-            translate_stack: TranslateStack::new(),
+            clip: SurfaceClip::default(),
             color_cache: HashMap::new(),
             glyph_cache: HashMap::new(),
             glyph_access: HashMap::new(),
@@ -169,27 +156,7 @@ impl WasmBackend {
     }
 
     pub(crate) fn translate(&self, x: i32, y: i32) -> (f64, f64) {
-        self.translate_stack.translate_f64(x, y)
-    }
-
-    /// Make `clip` (surface pixels, `None` = no clip) the one clip applied
-    /// on the context, replacing the previous one (see `applied_clip`).
-    pub(crate) fn apply_clip(&mut self, clip: Option<ClipRect>) {
-        if self.applied_clip.take().is_some() {
-            self.ctx.restore();
-        }
-        if let Some(c) = clip {
-            self.ctx.save();
-            self.ctx.begin_path();
-            self.ctx.rect(
-                f64::from(c.x),
-                f64::from(c.y),
-                f64::from(c.w),
-                f64::from(c.h),
-            );
-            self.ctx.clip();
-            self.applied_clip = Some(c);
-        }
+        self.clip.translate.translate_f64(x, y)
     }
 
     /// `drawImage` render target `id` scaled to `dst` with a blend mode
@@ -383,9 +350,7 @@ impl SdiCore for WasmBackend {
         self.canvas.set_width(width);
         self.canvas.set_height(height);
         self.ctx.set_image_smoothing_enabled(false);
-        self.applied_clip = None;
-        self.clip_stack.clear();
-        self.translate_stack.clear();
+        self.clip.forget();
         self.glyph_cache.clear();
         self.glyph_access.clear();
         self.color_cache.clear();
@@ -398,16 +363,17 @@ impl SdiCore for WasmBackend {
     /// opaque or translucent color painted over transparent black, which
     /// leaves exactly that color.
     fn clear(&mut self, color: Color) -> Result<()> {
-        let clip = self.applied_clip;
-        self.apply_clip(None);
         let (w, h) = (f64::from(self.width), f64::from(self.height));
-        self.ctx.clear_rect(0.0, 0.0, w, h);
-        if color.a > 0 {
-            let css = cached_css_color(&mut self.color_cache, color);
-            self.ctx.set_fill_style_str(css);
-            self.ctx.fill_rect(0.0, 0.0, w, h);
-        }
-        self.apply_clip(clip);
+        let ctx = &self.ctx;
+        let color_cache = &mut self.color_cache;
+        self.clip.unclipped(ctx, || {
+            ctx.clear_rect(0.0, 0.0, w, h);
+            if color.a > 0 {
+                let css = cached_css_color(color_cache, color);
+                ctx.set_fill_style_str(css);
+                ctx.fill_rect(0.0, 0.0, w, h);
+            }
+        });
         self.gradient_cache.clear();
         Ok(())
     }
@@ -474,12 +440,12 @@ impl SdiCore for WasmBackend {
     /// was saved, popping a `push_clip_rect` level and desynchronizing
     /// the clip stack.
     fn set_clip_rect(&mut self, x: i32, y: i32, w: u32, h: u32) -> Result<()> {
-        self.apply_clip(Some(ClipRect { x, y, w, h }));
+        self.clip.set(&self.ctx, ClipRect { x, y, w, h });
         Ok(())
     }
 
     fn reset_clip_rect(&mut self) -> Result<()> {
-        self.apply_clip(None);
+        self.clip.reset(&self.ctx);
         Ok(())
     }
 
@@ -504,9 +470,7 @@ impl SdiCore for WasmBackend {
         while !self.render_target_bind_stack.is_empty() {
             self.unbind_render_target()?;
         }
-        self.apply_clip(None);
-        self.clip_stack.clear();
-        self.translate_stack.clear();
+        self.clip.clear(&self.ctx);
         self.render_targets.clear();
         self.textures.clear();
         self.glyph_cache.clear();
@@ -764,8 +728,7 @@ impl SdiRenderTarget for WasmBackend {
             ctx: saved_ctx,
             width: saved_width,
             height: saved_height,
-            applied_clip: self.applied_clip.take(),
-            state: DrawState::take(&mut self.clip_stack, &mut self.translate_stack),
+            clip: self.clip.bind(),
         });
         self.current_render_target = Some(id.0);
         Ok(())
@@ -775,14 +738,15 @@ impl SdiRenderTarget for WasmBackend {
         let saved = self.render_target_bind_stack.pop().ok_or_else(|| {
             OasisError::Backend("unbind_render_target: bind stack underflow".into())
         })?;
-        // Leave no clip level on the target's context for its next bind.
-        self.apply_clip(None);
         // Put the target back into storage under its id, then restore
         // the saved surface.
         let target_canvas = std::mem::replace(&mut self.canvas, saved.canvas);
         let target_ctx = std::mem::replace(&mut self.ctx, saved.ctx);
         let target_w = std::mem::replace(&mut self.width, saved.width);
         let target_h = std::mem::replace(&mut self.height, saved.height);
+        // Leave no clip level on the target's context for its next bind,
+        // and restore the parent's clip state.
+        self.clip.unbind(&target_ctx, saved.clip);
         debug_assert!(
             self.current_render_target.is_some(),
             "unbind_render_target called without active target"
@@ -798,10 +762,6 @@ impl SdiRenderTarget for WasmBackend {
                 },
             );
         }
-        self.applied_clip = saved.applied_clip;
-        saved
-            .state
-            .restore(&mut self.clip_stack, &mut self.translate_stack);
         self.current_render_target = saved.prev_id;
         Ok(())
     }

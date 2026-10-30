@@ -2,7 +2,7 @@
 
 `crates/oasis-backend-wasm` runs the OASIS_OS shell in a web browser. It
 renders with the Canvas 2D API, maps DOM keyboard / mouse / touch events to
-`InputEvent`s, plays audio through Web Audio, and delegates real web pages
+`InputEvent`s, plays audio through HTML `<audio>` elements, and delegates real web pages
 and YouTube playback to a native `<iframe>` overlaid on the canvas. The live
 demo on GitHub Pages is built from this crate on every push to `main`.
 
@@ -33,8 +33,25 @@ To type-check without wasm-pack:
 cargo check -p oasis-backend-wasm --target wasm32-unknown-unknown
 ```
 
-The input/key-mapping logic is pure Rust and its unit tests run on the host:
-`cargo test -p oasis-backend-wasm`.
+### Tests
+
+There is no headless-browser (`wasm-bindgen-test`) job: the CI image has no
+browser or WebDriver. Instead the backend's browser-independent logic is
+factored out and tested on the host with `cargo test -p oasis-backend-wasm`
+(part of `cargo test --workspace`, so CI runs it):
+
+- **Clip state machine** (`src/clip.rs`): Canvas 2D clips only intersect, so
+  each applied clip must be exactly one `save()` level. `SurfaceClip` (set /
+  reset / push / pop / clear / render-target bind + unbind) is written against
+  a three-method `ClipCanvas` trait and tested against a model of Canvas 2D
+  `save` / `restore` / `clip` semantics, including long pseudo-random op
+  sequences checked against `ClipStack`.
+- **Input and key mapping** (`src/input.rs`), letterbox point scaling, audio
+  MIME sniffing, the demo VFS contents.
+- **Site skin lists** (`tests/site_skins.rs`, see [Skin list](#skin-list)).
+
+The rendering itself is checked by loading the release build in a browser
+(see [Previewing the Pages layout](#previewing-the-pages-layout)).
 
 ### Cargo features
 
@@ -71,7 +88,51 @@ is there for manual testing of remote media that lacks CORS headers.
 | File | Role |
 |------|------|
 | `www/index.html` | Local page shell: `<canvas id="oasis">` inside `#container` (the positioned parent the iframe overlay attaches to), a skin `<select>` grouped like the landing page that reloads with `?skin=<name>`, a controls card. Styles and chrome script come from `site/css/{site,demo}.css` and `site/js/demo.js`, shared with the deployed `site/demo/index.html` |
-| `www/index.js` | Loads `pkg/oasis_backend_wasm.js`, constructs `OasisWasm`, drives `tick()` from `requestAnimationFrame`, letterbox-fits the canvas to the window; sets `window.__oasisReady` once booted. The Pages deploy copies it to `demo/index.js` |
+| `www/index.js` | Loads `pkg/oasis_backend_wasm.js`, constructs `OasisWasm`, drives `tick()` from `requestAnimationFrame`, letterbox-fits the canvas to `#container`; sets `window.__oasisReady` once booted. The Pages deploy copies it to `demo/index.js` |
+
+**Canvas fit.** The canvas buffer is the skin's resolution; `index.js` sizes
+its CSS box to fit `#container` with the buffer's aspect ratio (the container
+centers it, so the rest is letterbox). The scale is a whole number when 2x or
+more fits (crisp pixels for the 480x272 skins) and fractional below that,
+rounded down to whole device pixels so the canvas never overflows the
+container (which would clip its right / bottom edge). A `ResizeObserver` on
+`#container` re-fits when the demo bar wraps or the web font loads, not only
+on window resize.
+
+### Skin list
+
+The skin picker in `www/index.html` and `site/demo/index.html` and the
+landing-page gallery (`site/index.html`) are generated from one file,
+`site/data/skins.json` (display name, gallery category, blurb; resolutions
+come from `skins/<id>/skin.toml`). The pages keep the generated HTML between
+`<!-- BEGIN skins:<region> -->` / `<!-- END skins:<region> -->` markers, so
+they stay static files with no build step. After editing `skins.json` (or
+adding a skin), run:
+
+```bash
+./scripts/gen-skin-list.sh           # rewrite the generated regions
+./scripts/gen-skin-list.sh --check   # check only
+```
+
+The generator is the `site_skins` integration test of this crate, so
+`cargo test --workspace` fails in CI when a page is stale, when `skins.json`
+misses or invents a skin under `skins/`, or when a gallery screenshot no
+longer matches its skin's resolution.
+
+### Previewing the Pages layout
+
+The deployed site differs from `www/`: `site/` is the root, `pkg/` sits
+beside it and `www/index.js` becomes `demo/index.js`, all under the
+`/oasis-os/` sub-path. To check the real demo page before a deploy:
+
+```bash
+./scripts/build-wasm.sh --release
+mkdir -p /tmp/pages/oasis-os/demo
+cp -r site/. screenshots pkg /tmp/pages/oasis-os/
+cp www/index.js /tmp/pages/oasis-os/demo/index.js
+(cd /tmp/pages && python3 -m http.server 8080)
+# open http://localhost:8080/oasis-os/demo/?skin=classic
+```
 
 URL parameters read by `index.js`:
 
@@ -155,6 +216,32 @@ Delete/Home/End/PageUp/PageDown (page scrolling), and for Ctrl/Cmd+letter
 shortcuts **except Ctrl+R**, so page reload keeps working. F5 and other
 browser keys are left alone.
 
+## Windows and apps
+
+The WASM host runs the same `oasis-apps` bundle and window manager as the
+desktop shell, with the same close semantics:
+
+- The titlebar close button and Cancel (Esc) on a non-app window **ask the
+  app first** (`AppRunner::request_close`): the Text Editor with unsaved
+  changes answers with its save prompt and the window stays open and focused.
+- In an app window, Cancel goes to the app (backs out of dialogs, leaves
+  viewers, raises the unsaved-changes prompt); the window closes when the app
+  answers `Exit`. In the browser, Cancel first ends typing in the URL bar or a
+  form field.
+- Closing the Internet Radio or Music Player window stops its audio.
+
+### Music
+
+The Music Player and the `music` terminal command talk to the host through
+`/var/audio/request` (`play_file <path>`, `play`, `pause`, `resume`, `stop`,
+`next`, `prev`, `vol`, `repeat`, `shuffle`). The WASM host serves them with
+the same `oasis_audio::MusicController` as the desktop shell (`src/media.rs`),
+publishing `/var/audio/position` (progress bar) and `/var/audio/status`
+(`music status`). Starting a track stops the radio, and tuning the radio
+stops the track. The demo VFS ships one sample track,
+`/home/user/music/ambient_dawn.mp3` (shared with the desktop's demo VFS).
+Uploaded files (`add_vfs_file`) under `/home/user/music` play too.
+
 ## Iframe overlay
 
 The built-in browser engine cannot make synchronous network requests from a
@@ -217,10 +304,15 @@ to `/tmp/video_embed_request`, and the backend publishes a JSON result blob to
   traits. Text uses the shared `oasis-rasterize` glyph cache. Shader
   wallpapers are rendered by the software renderer in `oasis-shader` and
   blitted to the canvas (`src/shader_bridge.rs`).
-- **Audio** (`src/audio.rs`): Web Audio `AudioBuffer` playback for static
-  tracks; streaming (Internet Radio) via an `<audio>` element, using Media
-  Source Extensions where needed. A circuit breaker stops radio auto-advance
-  after repeated failures.
+- **Audio** (`src/audio.rs`): in-memory tracks (`load_track`, music) are
+  wrapped in a typed `Blob` and played by an `<audio>` element, so the
+  browser decodes MP3 / Ogg / WAV / FLAC natively and reports real position
+  and duration (Web Audio's `decodeAudioData` is async, which the
+  synchronous `AudioBackend` API cannot wait for). Streaming (Internet Radio)
+  uses an `<audio>` element pointed at the URL, or Media Source Extensions
+  where needed. A circuit breaker stops radio auto-advance after repeated
+  failures. Playback starts from the frame loop, so browsers allow it only
+  after the user has interacted with the page (any click or key press).
 - **TV Guide video** (`src/video.rs`): plays direct MP4 URLs in a hidden
   `<video>` element and copies frames to an offscreen canvas texture each
   tick. Requires browser H.264 support (Chrome/Chromium have it built in; the
@@ -239,4 +331,6 @@ to `/tmp/video_embed_request`, and the backend publishes a JSON result blob to
 The `deploy-pages` job in `.github/workflows/main-ci.yml` runs
 `./scripts/build-wasm.sh --release` on pushes to `main` and publishes `pkg/`
 together with the `site/` directory (the demo page lives under `site/demo/`,
-with `www/index.js` copied next to it).
+with `www/index.js` copied next to it; see
+[Previewing the Pages layout](#previewing-the-pages-layout) to reproduce it
+locally).
