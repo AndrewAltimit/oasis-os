@@ -33,7 +33,7 @@ pub use status::{Gauge, Level, STATUS_PATH, SysStatus};
 /// Status file re-read interval in milliseconds of wall time (2 Hz).
 pub const POLL_INTERVAL_MS: u32 = 500;
 
-/// Width of the text-mode gauge bars (full-screen SDI view).
+/// Width of the text-mode gauge bars (`App::lines`).
 const TEXT_BAR_W: usize = 16;
 
 /// System Monitor app.
@@ -157,7 +157,7 @@ impl SystemMonitorApp {
         }
     }
 
-    /// Rebuild the text lines (full-screen SDI view).
+    /// Rebuild the text lines (`App::lines`).
     fn rebuild_lines(&mut self) {
         let mut lines = Vec::new();
         for (label, value) in self.info_rows() {

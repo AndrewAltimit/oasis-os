@@ -1,4 +1,4 @@
-//! TV Guide grid state and SDI rendering.
+//! TV Guide grid state and rendering (re-exports + tests).
 //!
 //! Manages the retro cable-TV EPG layout: header bar with current channel
 //! info, time-slot column headers, channel rows with variable-width

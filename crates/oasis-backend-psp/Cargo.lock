@@ -869,10 +869,8 @@ dependencies = [
 name = "oasis-app-core"
 version = "1.4.0"
 dependencies = [
- "oasis-sdi",
  "oasis-skin",
  "oasis-types",
- "oasis-ui",
  "oasis-vfs",
 ]
 
