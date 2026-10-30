@@ -51,6 +51,11 @@ impl Ue5AudioBackend {
         self.callback = Some(cb);
     }
 
+    /// Unregister the audio event callback.
+    pub fn clear_callback(&mut self) {
+        self.callback = None;
+    }
+
     /// Return whether this backend can produce audio output.
     ///
     /// Always returns `false` because the UE5 backend delegates

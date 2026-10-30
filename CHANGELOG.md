@@ -137,6 +137,17 @@ removal, a restyled site, and docs that match the code.
   errors logged; `init` resizes in place. **(breaking)** FFI callback codes
   that never fired (`FILE_ACCESS`, `LOGIN`, `NETWORK_SEND`,
   `PLUGIN_LOAD`) are removed; unknown codes are ignored with a warning.
+- FFI soundness: a NULL callback passed to `oasis_register_callback` /
+  `oasis_set_audio_callback` unregisters it (it used to be stored as a
+  non-null Rust function pointer, which is undefined behaviour);
+  `oasis_destroy` and a new `oasis_video_play` stop and join the decode
+  thread (it used to run on detached); `oasis_video_next_frame` keeps a
+  frame that didn't fit the host buffer and still reports its size;
+  `oasis_video_is_playing` turns 0 once the stream ended and was drained;
+  `oasis_set_vfs_root` re-seeds the dashboard's `/apps`;
+  `oasis_add_vfs_file` with NULL data and length 0 creates an empty file.
+  The crate docs spell out the full safety contract (NULL handles,
+  callback re-entrancy, borrowed / owned pointers, panics).
 
 ### Shell and apps
 
