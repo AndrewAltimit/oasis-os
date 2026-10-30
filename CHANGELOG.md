@@ -241,6 +241,26 @@ removal, a restyled site, and docs that match the code.
 - Shared `oasis-types` glyph table and `Color` ABGR conversion (the
   duplicate table and `ColorExt` are gone); `set_clip_rect` untranslated
   per the contract; browser images fit within 256 px.
+- Screen captures have the right colors. `PSM_8888` pixels are the bytes
+  R, G, B, A (the "ABGR" name describes the `u32`); `psp_remote.py
+  screencap` read them as A, B, G, R and wrote blue/cyan, see-through
+  PNGs. It now writes opaque RGB (unit-tested in
+  `scripts/test_psp_remote.py`), the journal's ffmpeg one-liner uses
+  `rgb0`, and `oasis-usb-host` packs `PSM_5650` with red in the low bits
+  (its "red" test frame used to show blue).
+- `screencap` / `screenshot` capture the framebuffer that is on screen
+  (via `sceDisplayGetFrameBuf`) instead of a fixed VRAM address, which
+  returned the half-drawn back buffer every other frame; replies are sent
+  in full instead of ignoring short writes.
+- The `video-limit` TCP command and the `frame_limit` field of
+  `video-status` are gone: nothing enforced the limit (>480p streams are
+  always audio-only).
+- `cmd_server` and `video` are split into modules; the never-wired PSMF
+  decoder (`psmf.rs`, `psmf_decode.rs`) and the unused ME-call patching
+  code (which still scanned 4,096 kernel UIDs on every first tune) are
+  deleted. Fixed a null write when the font atlas allocation fails and
+  a read of freed memory when a video frame outgrows its texture. Every
+  `unsafe` block in the backend has a `SAFETY` comment.
 
 ### CI and tooling
 
