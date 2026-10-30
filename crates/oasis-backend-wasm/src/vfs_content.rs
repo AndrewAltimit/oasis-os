@@ -6,6 +6,10 @@ use oasis_core::terminal::{populate_man_pages, populate_motd, populate_profile};
 use oasis_core::terminal_sdi;
 use oasis_core::vfs::{MemoryVfs, Vfs};
 
+/// Sample track for the Music Player, shared with the desktop shell's demo
+/// VFS (`oasis-app/assets/samples`). About 200 KB of the `.wasm`.
+const SAMPLE_AMBIENT_MP3: &[u8] = include_bytes!("../../oasis-app/assets/samples/ambient_dawn.mp3");
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -83,6 +87,13 @@ pub(crate) fn populate_wasm_vfs(vfs: &mut MemoryVfs) {
         "/home/user/notes.txt",
         b"Shopping list:\n- Milk\n- Bread\n- Memory Stick PRO Duo\n",
     );
+
+    // Music Player library (it browses /home/user/music) and the music
+    // controller's IPC directory (`/var/audio/request`, `status`,
+    // `position`).
+    let _ = vfs.mkdir("/home/user/music");
+    let _ = vfs.write("/home/user/music/ambient_dawn.mp3", SAMPLE_AMBIENT_MP3);
+    let _ = vfs.mkdir("/var/audio");
 
     // Demo app directories (discovered by the dashboard).
     // Names must match the title strings in AppRunner::init_content().
@@ -337,6 +348,11 @@ mod tests {
         assert!(vfs.read("/home/user/readme.txt").is_ok());
         assert!(vfs.read("/home/user/notes.txt").is_ok());
         assert!(vfs.read("/home/user/startup.sh").is_ok());
+
+        // The Music Player has a real track to play.
+        let mp3 = vfs.read("/home/user/music/ambient_dawn.mp3").unwrap();
+        assert_eq!(mp3.first(), Some(&0xFF), "MPEG frame sync");
+        assert!(vfs.exists("/var/audio"));
 
         // Check hostname content.
         let hostname = vfs.read("/etc/hostname").unwrap();

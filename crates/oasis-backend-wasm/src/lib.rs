@@ -1,11 +1,12 @@
 //! WebAssembly backend for OASIS_OS.
 //!
 //! Renders to an HTML `<canvas>` element using the Canvas 2D API,
-//! maps DOM events to `InputEvent`, and provides Web Audio playback.
+//! maps DOM events to `InputEvent`, and plays audio through HTML `<audio>` elements.
 
 pub mod archive;
 pub mod audio;
 mod batch;
+mod clip;
 pub mod font;
 mod gradients;
 pub mod iframe;
@@ -22,6 +23,7 @@ pub mod video;
 pub mod youtube;
 
 mod input_dispatch;
+mod media;
 mod vfs_content;
 
 use wasm_bindgen::prelude::*;
@@ -166,6 +168,12 @@ pub struct OasisWasm {
     /// can't be decoded (e.g. Firefox MSE quirks) cascades into
     /// hundreds of catalog/track API requests in a few seconds.
     radio_consecutive_errors: u32,
+    /// Music playlist + playback state behind `/var/audio/*` (the Music
+    /// Player app and the `music` command), carried out by
+    /// [`oasis_audio::MusicController`] in [`OasisWasm::tick_music`].
+    media: oasis_audio::AudioManager,
+    /// The loaded music track (an `<audio>` element in the audio backend).
+    media_track: Option<oasis_core::backend::AudioTrackId>,
     video_player: video::VideoPlayer,
     pending_tv_catalog: Option<tv_catalog::WasmTvCatalogFetcher>,
     /// Next TV tune to start, as `"{url} {seek_secs}"`: a TV Guide
@@ -401,6 +409,8 @@ impl OasisWasm {
             archive_catalog: None,
             pending_catalog: None,
             radio_consecutive_errors: 0,
+            media: oasis_audio::AudioManager::new(),
+            media_track: None,
             video_player,
             pending_tv_catalog: None,
             pending_tv_tune: None,
@@ -429,8 +439,9 @@ impl OasisWasm {
     pub fn tick(&mut self, delta_seconds: f32) {
         self.frame_counter += 1;
 
-        // Update system info every ~60 frames (~1s at 60fps).
-        if self.frame_counter.is_multiple_of(60) {
+        // Update system info on the first frame (so the clock never shows
+        // a placeholder) and then every ~60 frames (~1s at 60fps).
+        if self.frame_counter == 1 || self.frame_counter.is_multiple_of(60) {
             use oasis_core::platform::TimeService;
             let time = self.platform.now().ok();
             self.status_bar.update_info(time.as_ref(), None);
@@ -520,6 +531,10 @@ impl OasisWasm {
                             // explicitly retrying after a previous
                             // failure tripped the circuit breaker.
                             self.radio_consecutive_errors = 0;
+                            // Radio and music share the audio backend:
+                            // the tune below stops the backend, so unload
+                            // the music track and mark it stopped too.
+                            self.stop_music();
                             let _ = self.radio_manager.tune(
                                 &station.name,
                                 station.bitrate,
@@ -669,6 +684,9 @@ impl OasisWasm {
                 let _ = self.radio_manager.publish_status(&mut self.vfs);
             }
             // (The Internet Radio app polls the status in its `tick`.)
+
+            // Music Player / `music` command requests.
+            self.tick_music();
 
             // Poll pending TV catalog fetch.
             if self

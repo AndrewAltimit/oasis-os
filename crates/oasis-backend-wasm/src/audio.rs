@@ -1,14 +1,21 @@
-//! `AudioBackend` implementation using the Web Audio API.
+//! `AudioBackend` implementation on HTML media elements.
 //!
-//! Supports both static buffer playback (Web Audio `AudioBuffer`) and
-//! streaming playback via MSE (`MediaSource` + `SourceBuffer("audio/mpeg")`).
+//! Two kinds of track:
+//!
+//! - **In-memory tracks** (`load_track`, the Music Player's files): the
+//!   bytes go into a `Blob` whose object URL feeds an `<audio>` element,
+//!   so the browser decodes MP3 / Ogg / WAV / FLAC natively. That keeps
+//!   the trait's synchronous API (Web Audio's `decodeAudioData` is async)
+//!   and gives real position / duration / pause for the progress bar.
+//! - **Streaming tracks** (`load_streaming`, internet radio): an `<audio>`
+//!   element pointed straight at the stream URL, or fed through MSE
+//!   (`MediaSource` + `SourceBuffer("audio/mpeg")`).
 
 use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, VecDeque};
 use std::rc::Rc;
 
 use wasm_bindgen::prelude::*;
-use web_sys::{AudioBuffer, AudioBufferSourceNode, AudioContext, GainNode};
 
 use oasis_types::backend::{AudioBackend, AudioTrackId};
 use oasis_types::error::{OasisError, Result};
@@ -106,12 +113,56 @@ struct StreamingTrack {
 // WasmAudioBackend
 // ---------------------------------------------------------------------------
 
+/// An in-memory track: an `<audio>` element playing a `Blob` URL.
+struct MemoryTrack {
+    el: web_sys::HtmlAudioElement,
+    /// Object URL of the track's `Blob`, revoked on unload.
+    url: String,
+}
+
+impl MemoryTrack {
+    /// Pause and release the element and its object URL.
+    fn release(self) {
+        let _ = self.el.pause();
+        self.el.remove_attribute("src").ok();
+        let _ = web_sys::Url::revoke_object_url(&self.url);
+    }
+}
+
+/// MIME type for an in-memory track, sniffed from its magic bytes so the
+/// `Blob` is typed (browsers sniff untyped blobs too, but a type makes
+/// `<audio>` pick the decoder without guessing). Unknown data is passed
+/// as `audio/mpeg`, the bundled samples' format.
+pub(crate) fn sniff_audio_mime(data: &[u8]) -> &'static str {
+    match data {
+        [b'O', b'g', b'g', b'S', ..] => "audio/ogg",
+        [
+            b'R',
+            b'I',
+            b'F',
+            b'F',
+            _,
+            _,
+            _,
+            _,
+            b'W',
+            b'A',
+            b'V',
+            b'E',
+            ..,
+        ] => "audio/wav",
+        [b'f', b'L', b'a', b'C', ..] => "audio/flac",
+        [_, _, _, _, b'f', b't', b'y', b'p', ..] => "audio/mp4",
+        _ => "audio/mpeg",
+    }
+}
+
 pub struct WasmAudioBackend {
-    ctx: Option<AudioContext>,
-    gain: Option<GainNode>,
-    tracks: HashMap<u64, AudioBuffer>,
+    /// Loaded in-memory tracks.
+    tracks: HashMap<u64, MemoryTrack>,
     next_id: u64,
-    current_source: Option<AudioBufferSourceNode>,
+    /// The playing (or paused) track: an in-memory track id or the
+    /// streaming track's id.
     current_track: Option<u64>,
     volume: u8,
     playing: bool,
@@ -128,11 +179,8 @@ pub struct WasmAudioBackend {
 impl WasmAudioBackend {
     pub fn new() -> Self {
         Self {
-            ctx: None,
-            gain: None,
             tracks: HashMap::new(),
             next_id: 1,
-            current_source: None,
             current_track: None,
             volume: 80,
             playing: false,
@@ -171,23 +219,38 @@ impl WasmAudioBackend {
             .and_then(|st| st.streaming_error.borrow_mut().take())
     }
 
-    /// Ensure the AudioContext is created and resumed.
-    ///
-    /// Browsers block audio before user interaction, so we lazily create
-    /// the context on first use.
-    fn ensure_context(&mut self) -> Result<&AudioContext> {
-        if self.ctx.is_none() {
-            let ctx = AudioContext::new().map_err(js_err)?;
-            let gain = ctx.create_gain().map_err(js_err)?;
-            gain.connect_with_audio_node(&ctx.destination())
-                .map_err(js_err)?;
-            gain.gain().set_value(self.volume as f32 / 100.0);
-            self.gain = Some(gain);
-            self.ctx = Some(ctx);
+    /// The element of the current track: the in-memory track's, else the
+    /// streaming track's.
+    fn current_element(&self) -> Option<&web_sys::HtmlAudioElement> {
+        let id = self.current_track?;
+        match self.tracks.get(&id) {
+            Some(t) => Some(&t.el),
+            None => self.streaming_track.as_ref().map(|st| &st.audio_el),
         }
-        self.ctx
-            .as_ref()
-            .ok_or_else(|| OasisError::Backend("AudioContext not initialized".into()))
+    }
+}
+
+/// Start `el` playing; a rejected `play()` promise (autoplay policy,
+/// undecodable data) is logged instead of left unhandled.
+fn start_element(el: &web_sys::HtmlAudioElement) -> Result<()> {
+    let promise = el.play().map_err(js_err)?;
+    wasm_bindgen_futures::spawn_local(async move {
+        if let Err(e) = wasm_bindgen_futures::JsFuture::from(promise).await {
+            web_sys::console::warn_1(&JsValue::from_str(&format!(
+                "oasis audio: play() rejected: {e:?}"
+            )));
+        }
+    });
+    Ok(())
+}
+
+/// Media-element time (seconds, NaN / infinite before metadata or for a
+/// live stream) as whole milliseconds, 0 when unknown.
+fn element_ms(secs: f64) -> u64 {
+    if secs.is_finite() && secs > 0.0 {
+        (secs * 1000.0) as u64
+    } else {
+        0
     }
 }
 
@@ -199,52 +262,47 @@ impl Default for WasmAudioBackend {
 
 impl AudioBackend for WasmAudioBackend {
     fn init(&mut self) -> Result<()> {
-        // Defer AudioContext creation to first user interaction.
         Ok(())
     }
 
     fn shutdown(&mut self) -> Result<()> {
         self.stop()?;
-        if let Some(ctx) = self.ctx.take() {
-            let _ = ctx.close();
+        for (_, track) in self.tracks.drain() {
+            track.release();
         }
-        self.gain = None;
-        self.tracks.clear();
         Ok(())
     }
 
     fn load_track(&mut self, data: &[u8]) -> Result<AudioTrackId> {
-        // Web Audio `decodeAudioData` is async, but we need a sync API here.
-        // Store raw bytes and we'll decode on play. For now, create an empty
-        // buffer as a placeholder — the actual decoding would require async.
-        //
-        // For a synchronous API, we store the raw data and create the buffer
-        // during playback using a synchronous-compatible approach.
-        let _ctx = self.ensure_context()?;
-
-        // Store raw data — we'll decode it lazily.
-        // For MVP, create a short silent buffer as a placeholder.
+        let parts = js_sys::Array::of1(&js_sys::Uint8Array::from(data));
+        let bag = web_sys::BlobPropertyBag::new();
+        bag.set_type(sniff_audio_mime(data));
+        let blob =
+            web_sys::Blob::new_with_u8_array_sequence_and_options(&parts, &bag).map_err(js_err)?;
+        let url = web_sys::Url::create_object_url_with_blob(&blob).map_err(js_err)?;
+        let el = match web_sys::HtmlAudioElement::new_with_src(&url) {
+            Ok(el) => el,
+            Err(e) => {
+                let _ = web_sys::Url::revoke_object_url(&url);
+                return Err(js_err(e));
+            },
+        };
+        el.set_preload("auto");
+        el.set_volume(f64::from(self.volume) / 100.0);
         let id = self.next_id;
         self.next_id += 1;
-
-        let ctx = self
-            .ctx
-            .as_ref()
-            .ok_or_else(|| OasisError::Backend("AudioContext not initialized".into()))?;
-        let sample_rate = ctx.sample_rate();
-        // Estimate duration: assume ~128kbps MP3 for reasonable duration.
-        let estimated_samples = (data.len() as f32 * 8.0 / 128000.0 * sample_rate).max(1.0);
-        let buffer = ctx
-            .create_buffer(1, estimated_samples as u32, sample_rate)
-            .map_err(js_err)?;
-        self.tracks.insert(id, buffer);
+        self.tracks.insert(id, MemoryTrack { el, url });
         Ok(AudioTrackId(id))
     }
 
     fn unload_track(&mut self, track: AudioTrackId) -> Result<()> {
-        self.tracks.remove(&track.0);
-        if self.current_track == Some(track.0) {
-            self.stop()?;
+        if self.current_track == Some(track.0) && self.tracks.contains_key(&track.0) {
+            self.current_track = None;
+            self.playing = false;
+            self.paused = false;
+        }
+        if let Some(t) = self.tracks.remove(&track.0) {
+            t.release();
         }
         Ok(())
     }
@@ -277,26 +335,19 @@ impl AudioBackend for WasmAudioBackend {
             return Ok(());
         }
 
-        let buffer = self
+        let el = self
             .tracks
             .get(&track.0)
-            .ok_or_else(|| OasisError::Backend(format!("track {} not found", track.0).into()))?
-            .clone();
-
-        let ctx = self.ensure_context()?;
-
-        // Resume context if suspended (autoplay policy).
-        let _ = ctx.resume();
-
-        let source = ctx.create_buffer_source().map_err(js_err)?;
-        source.set_buffer(Some(&buffer));
-
-        if let Some(ref gain) = self.gain {
-            source.connect_with_audio_node(gain).map_err(js_err)?;
+            .map(|t| t.el.clone())
+            .ok_or_else(|| OasisError::Backend(format!("track {} not found", track.0).into()))?;
+        // One in-memory track plays at a time.
+        if let Some(prev) = self.current_track.filter(|&id| id != track.0)
+            && let Some(t) = self.tracks.get(&prev)
+        {
+            let _ = t.el.pause();
         }
-
-        source.start().map_err(js_err)?;
-        self.current_source = Some(source);
+        el.set_current_time(0.0);
+        start_element(&el)?;
         self.current_track = Some(track.0);
         self.playing = true;
         self.paused = false;
@@ -304,8 +355,8 @@ impl AudioBackend for WasmAudioBackend {
     }
 
     fn pause(&mut self) -> Result<()> {
-        if let Some(ref ctx) = self.ctx {
-            let _ = ctx.suspend();
+        if let Some(el) = self.current_element() {
+            let _ = el.pause();
         }
         self.paused = true;
         self.playing = false;
@@ -313,23 +364,23 @@ impl AudioBackend for WasmAudioBackend {
     }
 
     fn resume(&mut self) -> Result<()> {
-        if let Some(ref ctx) = self.ctx {
-            let _ = ctx.resume();
+        if !self.paused {
+            return Ok(());
         }
-        if self.paused {
-            self.playing = true;
-            self.paused = false;
+        if let Some(el) = self.current_element() {
+            start_element(el)?;
         }
+        self.playing = true;
+        self.paused = false;
         Ok(())
     }
 
     fn stop(&mut self) -> Result<()> {
-        // Stop Web Audio buffer source.
-        if let Some(ref source) = self.current_source {
-            #[allow(deprecated)]
-            let _ = source.stop_with_when(0.0);
+        // Stop the in-memory track (it stays loaded until unloaded).
+        if let Some(t) = self.current_track.and_then(|id| self.tracks.get(&id)) {
+            let _ = t.el.pause();
+            t.el.set_current_time(0.0);
         }
-        self.current_source = None;
         self.current_track = None;
         // Stop MSE streaming track.
         if let Some(st) = self.streaming_track.take() {
@@ -346,11 +397,12 @@ impl AudioBackend for WasmAudioBackend {
 
     fn set_volume(&mut self, volume: u8) -> Result<()> {
         self.volume = volume.min(100);
-        if let Some(ref gain) = self.gain {
-            gain.gain().set_value(self.volume as f32 / 100.0);
+        let v = f64::from(self.volume) / 100.0;
+        for t in self.tracks.values() {
+            t.el.set_volume(v);
         }
         if let Some(ref st) = self.streaming_track {
-            st.audio_el.set_volume(self.volume as f64 / 100.0);
+            st.audio_el.set_volume(v);
         }
         Ok(())
     }
@@ -360,21 +412,22 @@ impl AudioBackend for WasmAudioBackend {
     }
 
     fn is_playing(&self) -> bool {
+        // An in-memory track that reached its end is no longer playing.
         self.playing
+            && !self
+                .current_track
+                .and_then(|id| self.tracks.get(&id))
+                .is_some_and(|t| t.el.ended())
     }
 
     fn position_ms(&self) -> u64 {
-        self.ctx
-            .as_ref()
-            .map(|ctx| (ctx.current_time() * 1000.0) as u64)
-            .unwrap_or(0)
+        self.current_element()
+            .map_or(0, |el| element_ms(el.current_time()))
     }
 
     fn duration_ms(&self) -> u64 {
-        self.current_track
-            .and_then(|id| self.tracks.get(&id))
-            .map(|buf| (buf.duration() * 1000.0) as u64)
-            .unwrap_or(0)
+        self.current_element()
+            .map_or(0, |el| element_ms(el.duration()))
     }
 
     fn load_streaming(&mut self) -> Result<AudioTrackId> {
@@ -681,5 +734,31 @@ impl AudioBackend for WasmAudioBackend {
             }
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sniffs_common_audio_containers() {
+        assert_eq!(sniff_audio_mime(b"OggS\0\x02"), "audio/ogg");
+        assert_eq!(sniff_audio_mime(b"RIFF\x24\0\0\0WAVEfmt "), "audio/wav");
+        assert_eq!(sniff_audio_mime(b"fLaC\0\0\0\x22"), "audio/flac");
+        assert_eq!(sniff_audio_mime(b"\0\0\0\x20ftypM4A "), "audio/mp4");
+        assert_eq!(sniff_audio_mime(b"ID3\x04\0"), "audio/mpeg");
+        assert_eq!(sniff_audio_mime(&[0xFF, 0xFB, 0x90]), "audio/mpeg");
+        // RIFF that is not WAVE (e.g. AVI) is not called WAV.
+        assert_eq!(sniff_audio_mime(b"RIFF\x24\0\0\0AVI LIST"), "audio/mpeg");
+        assert_eq!(sniff_audio_mime(b""), "audio/mpeg");
+    }
+
+    #[test]
+    fn element_time_conversion() {
+        assert_eq!(element_ms(1.5), 1500);
+        assert_eq!(element_ms(f64::NAN), 0);
+        assert_eq!(element_ms(f64::INFINITY), 0);
+        assert_eq!(element_ms(-1.0), 0);
     }
 }

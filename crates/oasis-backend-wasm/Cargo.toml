@@ -1,6 +1,6 @@
 [package]
 name = "oasis-backend-wasm"
-description = "WebAssembly backend for OASIS_OS: Canvas 2D rendering, DOM input, Web Audio"
+description = "WebAssembly backend for OASIS_OS: Canvas 2D rendering, DOM input, HTML media-element audio"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

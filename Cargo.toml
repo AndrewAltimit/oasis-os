@@ -116,8 +116,8 @@ web-sys = { version = "0.3", features = [
     "HtmlVideoElement",
     # Image element (YouTube embed thumbnail loader)
     "HtmlImageElement",
-    # URL (object URLs for MSE)
-    "Url",
+    # URL (object URLs for MSE and in-memory music tracks)
+    "Url", "Blob", "BlobPropertyBag",
 ] }
 js-sys = "0.3"
 wasm-bindgen-futures = "0.4"
