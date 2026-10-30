@@ -260,6 +260,11 @@ impl RemoteListener {
         Ok(())
     }
 
+    /// The configured port.
+    pub fn port(&self) -> u16 {
+        self.config.port
+    }
+
     /// Whether the listener is active.
     pub fn is_listening(&self) -> bool {
         self.listening
