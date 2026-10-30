@@ -402,6 +402,21 @@ fn shuffle_single_track_stays_put() {
 }
 
 #[test]
+fn photo_rotation_resets_when_next_image_opens() {
+    // Rotation turns the decoded pixels; the next image is decoded
+    // upright, so the reported rotation must start over at 0 too.
+    let mut vfs = setup_vfs();
+    oasis_vfs::Vfs::write(&mut vfs, "/home/user/photos/tree.png", b"fake png").unwrap();
+    let mut app = BrowsingApp::photo_viewer("/apps/photos", &vfs);
+    app.open_file(&vfs, "/home/user/photos/sunset.png");
+    app.handle_input(&Button::Square, &vfs);
+    assert_eq!(app.rotation(), 90);
+    app.handle_input(&Button::Right, &vfs);
+    assert_eq!(app.viewing_file(), Some("/home/user/photos/tree.png"));
+    assert_eq!(app.rotation(), 0);
+}
+
+#[test]
 fn photo_cancel_resets_state() {
     let vfs = setup_vfs();
     let mut app = BrowsingApp::photo_viewer("/apps/photos", &vfs);

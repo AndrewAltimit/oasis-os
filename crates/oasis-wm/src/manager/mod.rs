@@ -164,6 +164,7 @@ impl WindowManager {
     /// Move a window by a delta. Updates all SDI object positions.
     /// The final position is clamped to keep the titlebar visible on screen.
     pub fn move_window(&mut self, id: &str, dx: i32, dy: i32, sdi: &mut SdiRegistry) -> Result<()> {
+        self.cancel_drag_of(id);
         let sw = self.screen_w;
         let sh = self.screen_h;
         let tb_h = self.theme.titlebar_height;

@@ -1433,3 +1433,35 @@ fn exit_fullscreen_keeps_minimized_window_hidden() {
     assert!(!sdi.get("w.frame").unwrap().visible);
     assert!(!sdi.get("w.content").unwrap().visible);
 }
+
+/// `move_window` during a pointer resize used to leave the drag running:
+/// the next cursor move recomputed the frame from the drag's stale start
+/// geometry, undoing the programmatic move (e.g. an MCP `move_window`).
+#[test]
+fn move_window_during_resize_drag_ends_the_drag() {
+    use oasis_types::input::InputEvent;
+
+    let mut sdi = SdiRegistry::new();
+    let mut wm = WindowManager::new(800, 600);
+    wm.create_window(&app_config("w"), &mut sdi).unwrap();
+    let g = wm.get_window("w").unwrap().geometry();
+    // Grab the bottom-right resize corner.
+    let (cx, cy) = (g.x + g.w as i32 - 1, g.y + g.h as i32 - 1);
+    wm.handle_input(&InputEvent::PointerClick { x: cx, y: cy }, &mut sdi);
+    assert!(wm.is_dragging());
+    wm.move_window("w", 200, 100, &mut sdi).unwrap();
+    let moved = wm.get_window("w").unwrap().geometry();
+    assert_eq!((moved.x, moved.y), (g.x + 200, g.y + 100));
+    wm.handle_input(
+        &InputEvent::CursorMove {
+            x: cx + 5,
+            y: cy + 5,
+        },
+        &mut sdi,
+    );
+    assert_eq!(
+        wm.get_window("w").unwrap().geometry(),
+        moved,
+        "stale drag undid the move"
+    );
+}

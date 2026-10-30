@@ -457,8 +457,10 @@ impl BrowsingApp {
         self.content.viewing_file = Some(path.to_string());
         self.content.scroll = 0;
         self.content.cursor = 0;
-        // Clear any previous view-specific state.
+        // Clear any previous view-specific state. A new image is decoded
+        // upright, so its rotation starts over.
         self.decoded_image = None;
+        self.rotation = 0;
         // Hand the previous texture to the render path so it can be
         // destroyed on the next frame; clear the active slot so the new
         // image is re-uploaded.
