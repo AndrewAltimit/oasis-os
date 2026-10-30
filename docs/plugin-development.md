@@ -292,7 +292,7 @@ The codebase ships three example plugins in `crates/oasis-core/src/plugin/exampl
 |--------|----------|-------------|
 | `HelloPlugin` | `hello [name]` | Simplest possible plugin -- single command |
 | `ClockWidgetPlugin` | `pclock [show\|hide]` | Creates an SDI clock widget + command |
-| `NotepadPlugin` | `note [list\|read\|write]` | VFS-backed notepad with CRUD operations + dashboard app |
+| `NotepadPlugin` | `note [list\|read\|write]` | VFS-backed notepad with CRUD operations (commands only; it registers no app) |
 
 Study these for patterns on SDI widget creation, VFS interaction, and command registration.
 
@@ -306,7 +306,9 @@ Source: `crates/oasis-core/src/plugin/app_bridge.rs`
 
 ### Registering a Plugin App
 
-During `init()`, call `host.register_app()` with a `PluginAppRegistration`:
+During `init()`, call `host.register_app()` with a `PluginAppRegistration`. It
+returns `Result<()>` and fails unless the plugin declared the
+`PluginCapabilities::app_registration` capability:
 
 ```rust
 use oasis_core::plugin::app_bridge::{AppCategory, PluginAppRegistration};
@@ -323,7 +325,7 @@ fn init(&mut self, host: &mut PluginHost<'_>) -> Result<()> {
         .with_color(oasis_types::backend::Color {
             r: 100, g: 200, b: 50, a: 255,
         }),
-    );
+    )?;
     Ok(())
 }
 ```
@@ -339,17 +341,22 @@ The factory closure is called each time the user launches the app from the dashb
 | `AppCategory::Game` | Games and entertainment |
 | `AppCategory::System` | System tools and monitors |
 | `AppCategory::Network` | Network and communication |
-| `AppCategory::Other` | Uncategorized |
 
 ### Implementing the App Trait
 
-Your plugin app must implement the `App` trait from `oasis_core::apps::app_trait`:
+Your plugin app implements the `App` trait (`oasis_core::apps::App`, a
+re-export of `oasis_app_core::App`; see [writing-apps.md](writing-apps.md)
+for every hook). The quickest route is to embed a `ContentState` and let
+`impl_content_app_methods!` implement the rendering, layout and request
+plumbing, so you only write `handle_input`:
 
 ```rust
+use oasis_app_core::impl_content_app_methods;
 use oasis_core::apps::{App, AppAction, ContentState};
 use oasis_core::input::Button;
 use oasis_core::vfs::Vfs;
 
+#[derive(Debug)]
 struct MyPluginApp {
     content: ContentState,
     counter: i32,
@@ -374,8 +381,9 @@ impl MyPluginApp {
 }
 
 impl App for MyPluginApp {
-    fn title(&self) -> &str { &self.content.title }
-    fn path(&self) -> &str { &self.content.app_path }
+    // title, path, lines, layout, update_sdi, draw_windowed, hide_sdi,
+    // drain_requests, ... (`as_any` comes from the `AsAny` blanket impl).
+    impl_content_app_methods!(content);
 
     fn handle_input(&mut self, button: &Button, _vfs: &dyn Vfs) -> AppAction {
         match button {
@@ -385,15 +393,18 @@ impl App for MyPluginApp {
             _ => AppAction::None,
         }
     }
-
-    fn lines(&self) -> &[String] { &self.content.lines }
-
-    // ... implement remaining required trait methods
-    // (see ContentState helpers for default implementations)
 }
 ```
 
-The `NotepadPlugin` in `examples.rs` demonstrates registering a `SimpleApp`-based plugin app on the dashboard.
+The plugin manager's `register_app` test (`crates/oasis-core/src/plugin/manager/mod.rs`)
+shows a complete registration round trip.
+
+> **Breaking change (App trait, 2026-10):** `as_any` / `as_any_mut` are no
+> longer written by apps (blanket `AsAny` impl); `handle_click` takes a
+> trailing `&dyn Vfs`; `refresh` is gone (do follow-ups in `handle_click` /
+> `handle_key`, polling in `tick`); `take_pending_request` /
+> `peek_pending_request` became `drain_requests(&mut Vec<AppRequest>)`;
+> `lines` has a default; new optional hooks `layout` and `handle_scroll`.
 
 ---
 
