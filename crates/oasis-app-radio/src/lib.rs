@@ -172,13 +172,21 @@ pub struct StationRow {
 }
 
 /// Load the station registry from [`STATIONS_PATH`] (or the defaults).
-fn load_registry(vfs: &dyn Vfs) -> StationRegistry {
-    if vfs.exists(STATIONS_PATH) {
-        let data = vfs.read(STATIONS_PATH).unwrap_or_default();
-        let text = String::from_utf8_lossy(&data);
-        StationRegistry::from_toml(&text).unwrap_or_else(|_| StationRegistry::defaults())
-    } else {
-        StationRegistry::defaults()
+///
+/// A file that exists but can't be read or parsed falls back to the
+/// defaults *and* returns the reason, so the app can say so and must not
+/// save the defaults over the user's file.
+fn load_registry(vfs: &dyn Vfs) -> (StationRegistry, Option<String>) {
+    if !vfs.exists(STATIONS_PATH) {
+        return (StationRegistry::defaults(), None);
+    }
+    let parsed = vfs
+        .read(STATIONS_PATH)
+        .map_err(|e| e.to_string())
+        .and_then(|data| StationRegistry::from_toml(&String::from_utf8_lossy(&data)));
+    match parsed {
+        Ok(registry) => (registry, None),
+        Err(e) => (StationRegistry::defaults(), Some(e)),
     }
 }
 
@@ -226,6 +234,10 @@ pub struct RadioApp {
     registry: StationRegistry,
     /// A favorite changed and the registry must be saved.
     save_pending: bool,
+    /// Why [`STATIONS_PATH`] couldn't be loaded (the list shows the
+    /// defaults). While set, favorites are not saved, so the user's file
+    /// is never overwritten.
+    registry_error: Option<String>,
     /// Selected station index.
     selected: usize,
     /// First station row shown in the windowed list.
@@ -243,13 +255,15 @@ pub struct RadioApp {
 impl RadioApp {
     /// Create a new Internet Radio app, loading initial content from VFS.
     pub fn new(path: &str, vfs: &dyn Vfs) -> Self {
+        let (registry, registry_error) = load_registry(vfs);
         let mut app = Self {
             content: ContentState::new(RADIO_APP_TITLE, path),
             content_size: (0, 0),
             status: RadioStatus::load(vfs),
             stations: Vec::new(),
-            registry: load_registry(vfs),
+            registry,
             save_pending: false,
+            registry_error,
             selected: 0,
             list_scroll: 0,
             visible_rows: 8,
@@ -353,6 +367,9 @@ impl RadioApp {
             // Surface the failure reason inline so it can be diagnosed
             // without dev tools.
             s = format!("{s} - {err}");
+        }
+        if self.registry_error.is_some() {
+            s.push_str(" - stations.toml invalid, using defaults (not saved)");
         }
         s
     }
@@ -499,7 +516,7 @@ impl App for RadioApp {
     }
 
     fn apply_vfs_ops(&mut self, vfs: &mut dyn Vfs) -> bool {
-        if !std::mem::take(&mut self.save_pending) {
+        if !std::mem::take(&mut self.save_pending) || self.registry_error.is_some() {
             return false;
         }
         let Ok(toml) = self.registry.to_toml() else {
@@ -845,6 +862,31 @@ mod tests {
         assert_eq!(app.selected, n - 1);
         assert!(app.list_scroll + 2 > app.selected);
         assert!(app.list_scroll <= app.selected);
+    }
+
+    #[test]
+    fn broken_stations_file_is_reported_and_never_overwritten() {
+        let mut vfs = make_vfs();
+        let dir = STATIONS_PATH.rsplit_once('/').map_or("/", |(d, _)| d);
+        let mut prefix = String::new();
+        for part in dir.split('/').filter(|p| !p.is_empty()) {
+            prefix.push('/');
+            prefix.push_str(part);
+            if !vfs.exists(&prefix) {
+                vfs.mkdir(&prefix).unwrap();
+            }
+        }
+        vfs.write(STATIONS_PATH, b"[[station]\nname = ").unwrap();
+        let mut app = RadioApp::new("/apps/radio", &vfs);
+        assert!(!app.stations.is_empty(), "defaults are shown");
+        assert!(
+            app.lines()
+                .iter()
+                .any(|l| l.contains("stations.toml invalid"))
+        );
+        app.toggle_favorite();
+        assert!(!app.apply_vfs_ops(&mut vfs));
+        assert_eq!(vfs.read(STATIONS_PATH).unwrap(), b"[[station]\nname = ");
     }
 
     #[test]

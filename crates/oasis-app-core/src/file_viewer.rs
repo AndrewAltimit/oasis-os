@@ -153,10 +153,14 @@ fn parse_id3v2_basic(data: &[u8]) -> (Option<String>, Option<String>) {
         let frame_size =
             u32::from_be_bytes([data[pos + 4], data[pos + 5], data[pos + 6], data[pos + 7]])
                 as usize;
-        if frame_size == 0 || pos + 10 + frame_size > end {
+        // Checked: the raw u32 size can wrap `usize` on 32-bit targets.
+        let Some(frame_end) = (pos + 10).checked_add(frame_size) else {
+            break;
+        };
+        if frame_size == 0 || frame_end > end {
             break;
         }
-        let frame_data = &data[pos + 10..pos + 10 + frame_size];
+        let frame_data = &data[pos + 10..frame_end];
         let text = if frame_data.len() > 1 {
             String::from_utf8_lossy(&frame_data[1..])
                 .trim_matches('\0')
@@ -171,7 +175,7 @@ fn parse_id3v2_basic(data: &[u8]) -> (Option<String>, Option<String>) {
             artist = Some(text);
         }
 
-        pos += 10 + frame_size;
+        pos = frame_end;
     }
 
     (title, artist)
@@ -317,6 +321,14 @@ pub fn view_generic_file(path: &str, data: &[u8]) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parse_id3v2_basic_rejects_huge_frame_size() {
+        let mut data = b"ID3\x03\x00\x00\x00\x00\x00\x14".to_vec();
+        data.extend_from_slice(b"TIT2\xFF\xFF\xFF\xFF\x00\x00");
+        data.extend_from_slice(&[0; 10]);
+        assert_eq!(parse_id3v2_basic(&data), (None, None));
+    }
 
     // -- parent_dir --
 

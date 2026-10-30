@@ -390,9 +390,16 @@ impl BrowsingApp {
         };
     }
 
-    /// Rotate image 90 degrees clockwise.
+    /// Rotate image 90 degrees clockwise: the decoded pixels are turned
+    /// and the uploaded texture is retired, so the next frame shows it.
     fn rotate_cw(&mut self) {
         self.rotation = (self.rotation + 90) % 360;
+        if let Some(img) = self.decoded_image.as_mut() {
+            *img = image::rotate_cw(img);
+            if let Some(t) = self.cached_photo_texture.take() {
+                self.stale_photo_textures.borrow_mut().push(t);
+            }
+        }
     }
 
     /// Navigate to next/previous image in slideshow or manual browsing.
@@ -555,7 +562,11 @@ fn id3v2_title(data: &[u8]) -> Option<String> {
             u32::from_be_bytes(size_bytes) as usize
         };
         let body_start = i + 10;
-        let body_end = body_start + frame_size;
+        // Checked: a v2.3 size is a raw u32, which can wrap `usize` on
+        // 32-bit targets (WASM) and move `body_end` backwards.
+        let Some(body_end) = body_start.checked_add(frame_size) else {
+            break;
+        };
         if body_end > tag.len() {
             break;
         }
@@ -864,6 +875,15 @@ mod tests {
     use super::*;
     use oasis_app_core::testing::click_at;
     use oasis_vfs::MemoryVfs;
+
+    #[test]
+    fn id3v2_title_rejects_huge_frame_size() {
+        // v2.3 tag, TIT2 frame claiming 0xFFFFFFFF bytes.
+        let mut data = b"ID3\x03\x00\x00\x00\x00\x00\x14".to_vec();
+        data.extend_from_slice(b"TIT2\xFF\xFF\xFF\xFF\x00\x00");
+        data.extend_from_slice(&[0; 10]);
+        assert_eq!(id3v2_title(&data), None);
+    }
 
     /// Build a minimal ID3v2 tag containing one TIT2 frame.
     /// `major` is the version byte (3 for v2.3, 4 for v2.4).
@@ -1197,8 +1217,24 @@ mod tests {
         let mut app = BrowsingApp::photo_viewer("/apps/photos", &vfs);
         app.open_file(&vfs, "/home/user/photos/sunset.png");
         assert_eq!(app.rotation(), 0);
+        // The sample file is not a real PNG: give the viewer a 2x1 image.
+        app.decoded_image = Some(image::DecodedImage {
+            width: 2,
+            height: 1,
+            rgba: vec![255, 0, 0, 255, 0, 255, 0, 255],
+        });
+        app.cached_photo_texture.set(Some(TextureId(7)));
         app.handle_input(&Button::Square, &vfs);
         assert_eq!(app.rotation(), 90);
+        // The pixels turn (dims swap) and the old texture is retired, so
+        // the rotation is actually drawn.
+        let now = app.decoded_image().expect("image");
+        assert_eq!((now.width, now.height), (1, 2));
+        assert!(app.cached_photo_texture.get().is_none());
+        assert_eq!(
+            app.stale_photo_textures.borrow().as_slice(),
+            &[TextureId(7)]
+        );
         app.handle_input(&Button::Square, &vfs);
         assert_eq!(app.rotation(), 180);
     }
