@@ -1697,3 +1697,31 @@ fn canvas_is_recorded_in_paint_order_and_replays_live_state() {
     dl.replay(&mut backend, 0, 0, None).unwrap();
     assert!(first_fill_index(&backend, SVG_RED).is_some());
 }
+
+#[test]
+fn compositing_layer_bounds_are_screen_space_under_scroll() {
+    // The layer bounds must subtract the scroll like every other item;
+    // they used to be layout-space, so on a scrolled page the render
+    // target sat `scroll_y` px below its contents.
+    let style = ComputedStyle {
+        isolation: crate::css::values::types::Isolation::Isolate,
+        background_color: Color::rgb(1, 1, 1),
+        ..Default::default()
+    };
+    let lb = make_block(20.0, 500.0, 100.0, 40.0, style);
+    let vp = PaintViewport {
+        scroll_y: 400.0,
+        ..test_vp()
+    };
+    let mut dl = display_list::DisplayList::new();
+    build_display_list(&lb, vp, &HashMap::new(), &mut dl, &HashMap::new());
+    let bounds = dl
+        .items()
+        .iter()
+        .find_map(|i| match i {
+            display_list::DisplayItem::PushCompositingLayer { bounds, .. } => Some(*bounds),
+            _ => None,
+        })
+        .expect("isolation opens a compositing layer");
+    assert_eq!((bounds.x, bounds.y), (20.0, 100.0));
+}

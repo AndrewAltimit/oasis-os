@@ -140,8 +140,16 @@ impl DisplayList {
                 } => {
                     flush_rect_batch(backend, &mut rect_batch)?;
                     flush_text_batch(backend, &mut text_batch, text_batch_key)?;
-                    let dx = bounds.x as i32;
-                    let dy = bounds.y as i32;
+                    // `bounds` is screen space at recording time. Where
+                    // the layer lands now: shifted by the replay scroll
+                    // delta and any enclosing sticky correction, then
+                    // expressed in the currently bound surface (the
+                    // framebuffer, or an enclosing layer's target).
+                    let sticky = sticky_dy_stack.last().copied().unwrap_or(0);
+                    let screen_x = bounds.x as i32 + scroll_dx;
+                    let screen_y = bounds.y as i32 + scroll_dy + sticky;
+                    let dx = screen_x + compositor_dx;
+                    let dy = screen_y + compositor_dy;
                     let dw = bounds.width.max(1.0) as u32;
                     let dh = bounds.height.max(1.0) as u32;
                     let blend_backend = css_blend_to_backend(*blend);
@@ -174,8 +182,11 @@ impl DisplayList {
                         // For nested layers this absolute reset is
                         // correct because each render target has its
                         // own coordinate space starting at (0, 0).
-                        compositor_dx = -dx;
-                        compositor_dy = -dy;
+                        // Items add `scroll_dx + compositor_dx` (and the
+                        // sticky correction), so this maps the layer's
+                        // current screen origin to (0, 0).
+                        compositor_dx = -screen_x;
+                        compositor_dy = -screen_y;
                     } else {
                         // Fallback: plain opacity stacking. Blend mode
                         // and filters are dropped — documented as the
@@ -1772,5 +1783,56 @@ mod tests {
         assert_eq!(fills.next(), Some((5, 5, 1, 1)), "outer-before");
         assert_eq!(fills.next(), Some((5, 5, 2, 2)), "inner");
         assert_eq!(fills.next(), Some((6, 6, 3, 3)), "outer-after");
+
+        // The inner layer composites into the outer target, so its
+        // destination is in outer-local space: (50, 60) - (10, 20).
+        let dsts: Vec<(i32, i32)> = cmds
+            .iter()
+            .filter_map(|c| match c {
+                DrawCommand::CompositeRenderTarget { dst_x, dst_y, .. } => Some((*dst_x, *dst_y)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(dsts, vec![(40, 40), (10, 20)], "inner then outer composite");
+    }
+
+    /// Replaying a cached list with a scroll delta must move the layer
+    /// with its contents: before the fix the target stayed at the
+    /// recorded position while the contents shifted inside it, so a
+    /// scrolled filter / blend / isolation layer drew clipped or empty.
+    #[test]
+    fn compositing_layer_follows_replay_scroll_delta() {
+        use oasis_test_backend::DrawCommand;
+        use oasis_test_backend::RecordingBackend;
+
+        let mut dl = DisplayList::new();
+        dl.push(push_cl(layer_rect(10.0, 120.0, 40.0, 40.0), 1.0));
+        dl.push(DisplayItem::FillRect {
+            x: 15,
+            y: 125,
+            w: 4,
+            h: 4,
+            color: Color::rgba(0, 0, 0, 255),
+            node_id: None,
+        });
+        dl.push(DisplayItem::PopCompositingLayer);
+
+        let mut backend = RecordingBackend::new(480, 272);
+        dl.replay(&mut backend, 0, -50, None).unwrap();
+        let cmds = backend.commands();
+        let inner = cmds.iter().find_map(|c| match c {
+            DrawCommand::FillRect { x, y, .. } => Some((*x, *y)),
+            _ => None,
+        });
+        assert_eq!(inner, Some((5, 5)), "contents stay at layer-local (5, 5)");
+        let dst = cmds.iter().find_map(|c| match c {
+            DrawCommand::CompositeRenderTarget { dst_x, dst_y, .. } => Some((*dst_x, *dst_y)),
+            _ => None,
+        });
+        assert_eq!(
+            dst,
+            Some((10, 70)),
+            "layer composited at its scrolled position"
+        );
     }
 }

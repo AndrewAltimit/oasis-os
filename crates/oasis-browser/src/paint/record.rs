@@ -400,11 +400,12 @@ fn record_box(
     match layer_kind {
         Some(LayerKind::Compositing) => {
             // Use the layout margin box as the layer bounds — covers
-            // box shadow, borders, and contents.
+            // box shadow, borders, and contents — in screen space like
+            // every other item (layout coords minus scroll plus offset).
             let mb = layout_box.dimensions.margin_box();
             let bounds = Rect {
-                x: mb.x + tx_offset_x as f32,
-                y: mb.y + tx_offset_y as f32,
+                x: mb.x - ctx.scroll_x + tx_offset_x as f32,
+                y: mb.y - ctx.scroll_y + tx_offset_y as f32,
                 width: mb.width,
                 height: mb.height,
             };
