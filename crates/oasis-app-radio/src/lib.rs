@@ -522,18 +522,9 @@ impl App for RadioApp {
         let Ok(toml) = self.registry.to_toml() else {
             return false;
         };
-        let dir = STATIONS_PATH.rsplit_once('/').map_or("/", |(d, _)| d);
-        let mut prefix = String::new();
-        for part in dir.split('/').filter(|p| !p.is_empty()) {
-            prefix.push('/');
-            prefix.push_str(part);
-            if !vfs.exists(&prefix) {
-                let _ = vfs.mkdir(&prefix);
-            }
-        }
         // A failed save only costs persistence; the in-app flag and the
         // subsystem's registry are already toggled.
-        vfs.write(STATIONS_PATH, toml.as_bytes()).is_ok()
+        oasis_app_core::vfs_util::write_creating_dirs(vfs, STATIONS_PATH, toml.as_bytes()).is_ok()
     }
 
     fn draw_windowed(
@@ -867,16 +858,12 @@ mod tests {
     #[test]
     fn broken_stations_file_is_reported_and_never_overwritten() {
         let mut vfs = make_vfs();
-        let dir = STATIONS_PATH.rsplit_once('/').map_or("/", |(d, _)| d);
-        let mut prefix = String::new();
-        for part in dir.split('/').filter(|p| !p.is_empty()) {
-            prefix.push('/');
-            prefix.push_str(part);
-            if !vfs.exists(&prefix) {
-                vfs.mkdir(&prefix).unwrap();
-            }
-        }
-        vfs.write(STATIONS_PATH, b"[[station]\nname = ").unwrap();
+        oasis_app_core::vfs_util::write_creating_dirs(
+            &mut vfs,
+            STATIONS_PATH,
+            b"[[station]\nname = ",
+        )
+        .unwrap();
         let mut app = RadioApp::new("/apps/radio", &vfs);
         assert!(!app.stations.is_empty(), "defaults are shown");
         assert!(
