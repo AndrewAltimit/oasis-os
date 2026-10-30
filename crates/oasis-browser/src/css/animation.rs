@@ -13,8 +13,6 @@ use super::values::types::{
 /// An active animation instance for a specific node.
 #[derive(Debug, Clone)]
 struct ActiveAnimation {
-    /// The `@keyframes` rule name.
-    name: String,
     /// Total duration per iteration in milliseconds.
     duration_ms: f32,
     /// Delay before first iteration in milliseconds.
@@ -140,7 +138,6 @@ impl AnimationEngine {
                 .collect();
 
             node_anims.push(ActiveAnimation {
-                name: anim.name.clone(),
                 duration_ms: anim.duration_ms,
                 delay_ms: anim.delay_ms,
                 timing: anim.timing,

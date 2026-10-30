@@ -1,4 +1,4 @@
-//! `oasis-browser-triage` — a local-only crawler for bucket-sorting
+//! `triage` — a local-only crawler for bucket-sorting
 //! real-world HTML files by how they exercise the engine.
 //!
 //! This is the "crawler script" from the real-world-compatibility
@@ -8,8 +8,9 @@
 //! 1. Curate a directory of real-world HTML snapshots (curl the
 //!    top-500 Alexa sites, or `wget --mirror` a specific app you
 //!    care about).
-//! 2. Run `cargo run -p oasis-browser --bin oasis-browser-triage --
-//!    --input dir/ --output report.md`.
+//! 2. Run `cargo run -p oasis-browser --example triage --
+//!    --input dir/ --output report.md` (add `--release`, and
+//!    `--features parallel-style` to fan pages out over rayon).
 //! 3. The tool walks the directory, runs each `.html` file through
 //!    `parse → cascade → layout → paint`, and categorizes the
 //!    outcome: `ok`, `panic`, `slow`, `empty-layout`, or
@@ -152,8 +153,9 @@ fn print_help() {
         "oasis-browser-triage — bucket-sort real-world HTML by engine behaviour
 
 USAGE:
-    oasis-browser-triage --input <FILE_OR_DIR> [--output report.md] \\
-                         [--slow-budget-ms 2000] [--viewport 800x600]
+    cargo run -p oasis-browser --example triage -- \\
+        --input <FILE_OR_DIR> [--output report.md] \\
+        [--slow-budget-ms 2000] [--viewport 800x600]
 
 DESCRIPTION:
     Walks the given directory (or reads the given file), runs each

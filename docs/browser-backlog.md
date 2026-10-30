@@ -319,7 +319,10 @@ so you can `git show` for specifics.
   (`feat/browser-realworld-compat-epic`). Display-list golden
   harness for visual regression, hard wall-clock layout budgets
   gating `cargo test`, criterion corpus bench group, and a local-
-  only triage binary for bucket-sorting arbitrary HTML snapshots.
+  only triage tool for bucket-sorting arbitrary HTML snapshots (now
+  `cargo run -p oasis-browser --example triage`). The goldens record
+  through the production display-list record + replay path since the
+  immediate-mode painter was deleted.
 - **WHATWG HTML conformance** (`feat/browser-whatwg-epic-completion`
   + earlier `feat/browser-whatwg-conformance`). Full adoption agency
   algorithm, foster parenting, `<template>` with full DocumentFragment
@@ -417,8 +420,8 @@ shipped. Each is small enough for a focused PR.
   (`css/values/apply/mod.rs`), but nothing in `layout/` reads it, so
   clamped text renders every line and no ellipsis is drawn.
 - **`position: sticky` never releases at its containing block.**
-  `compute_sticky_dy` (`paint/record.rs`, mirrored in
-  `paint/display_list/replay.rs`) pins against the viewport `top` /
+  `sticky_offset` (`paint/display_list/mod.rs`, used by both the
+  recorder and replay) pins against the viewport `top` /
   `bottom` only; a sticky header keeps sticking after its parent has
   scrolled away instead of being pushed out with it.
 - **Grid line-name references.** `[name]` groups in track lists are
@@ -430,10 +433,26 @@ shipped. Each is small enough for a focused PR.
   stretched to the row height and `align-items: center | end` has no
   effect.
 - **Subgrid** (see above).
-- **`parallel-style` feature does not pass clippy.** `cargo clippy
-  -p oasis-browser --features parallel-style -- -D warnings` fails
-  in `css/cascade/mod.rs` (unused `cascade_yield_fn`, needless
-  `return`). CI only lints default features, so this rots silently.
+- **Rotated boxes rotate only their background.** Under a rotate /
+  scale / skew / 3D transform the recorder emits the background as a
+  `FillPolygon` quad, but borders, outlines, text and images keep
+  following the translation only (`paint/record.rs`).
+- **Box-level `filter` double-applies on render-target backends.**
+  `record.rs` pre-applies the per-color filter approximation to the
+  element's own background / text colors *and* the compositing layer
+  runs the per-pixel chain on readback (`replay.rs`), so e.g.
+  `filter: invert(1)` cancels out on the element's own colors on
+  SDL / WASM / UE5. Fix: record raw colors and apply the per-color
+  approximation in replay's no-render-target fallback.
+- **`backdrop-filter` is not sampled.** It only isolates the element
+  into a compositing layer; the backdrop is never read or filtered.
+- **Image textures are not destroyed on navigation.**
+  `reset_for_navigation` clears `image_textures` and the atlas
+  (`clear_without_destroy`) without a backend handle, so their GPU
+  textures leak until the backend is torn down.
+- **`parallel-style` is not linted in CI.** It is clippy-clean today
+  (`cargo clippy -p oasis-browser --all-targets --features
+  parallel-style -- -D warnings`), but CI only lints default features.
 - **Network-stack gaps left after the WP-A hardening.** `SameSite` is
   parsed but not enforced (every matching cookie is sent regardless of
   initiator); `<meta http-equiv="Content-Security-Policy">` is ignored;

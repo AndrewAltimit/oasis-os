@@ -58,10 +58,5 @@ harness = false
 name = "paint"
 harness = false
 
-[[bin]]
-name = "oasis-browser-triage"
-path = "src/bin/triage.rs"
-required-features = []
-
 [lints]
 workspace = true

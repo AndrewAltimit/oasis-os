@@ -1,23 +1,25 @@
 //! Display list recording: walks the layout tree and emits [`DisplayItem`]s.
 //!
-//! This is the display-list counterpart of the immediate-mode paint pass in
-//! `mod.rs`. Instead of calling backend draw methods directly, it records
-//! operations into a [`DisplayList`] that can be cached and replayed.
+//! This is the only painter: it never calls backend draw methods. The
+//! recorded [`DisplayList`] is cached by the widget and replayed (see
+//! `display_list/replay.rs`), or recorded and replayed in one go by
+//! [`super::paint`].
 
 use std::collections::HashMap;
 
+use crate::css::values::types::{BackfaceVisibility, TransformStyle};
 use crate::css::values::{
-    BorderStyle, Dimension, FilterFunction, Overflow, Position, TextOverflow, Visibility,
+    BorderStyle, Dimension, Overflow, Position, TextDecorationStyle, TextOverflow, Visibility,
     WhiteSpace,
 };
 use crate::html::dom::NodeId;
 use crate::layout::box_model::{BoxType, LayoutBox, Rect};
-use crate::transform::Matrix3d;
+use crate::transform::{AffineTransform2D, Matrix3d};
 use oasis_types::backend::Color;
 
-use super::display_list::{DisplayItem, DisplayList};
-use super::filters;
+use super::display_list::{DisplayItem, DisplayList, sticky_offset};
 use super::{LinkRegion, PaintViewport};
+use super::{filters, intersect_rects};
 
 // -------------------------------------------------------------------
 // Internal recording context
@@ -41,6 +43,9 @@ struct RecordContext<'a> {
     /// Used for sticky positioning so elements stick to the visible
     /// area, not the extended culling boundary.
     visible_viewport_height: f32,
+    /// Screen y of the viewport's top edge; sticky offsets are measured
+    /// from it, not from the top of the screen.
+    viewport_y: i32,
     /// Active clipping rectangle from ancestor `overflow: hidden` boxes.
     clip_rect: Option<Rect>,
     /// When true, text overflowing the clip rect gets "..." appended.
@@ -55,39 +60,48 @@ struct RecordContext<'a> {
     focused_node: Option<NodeId>,
     /// `@counter-style` rules for custom list markers.
     counter_styles: Vec<crate::css::parser::CounterStyleRule>,
-    /// Accumulated 4x4 screen-space matrix from 3D-transformed ancestors.
-    /// When `Some`, background rects are projected through this matrix
-    /// to produce `FillPolygon` items for true perspective rendering.
+    /// Accumulated 2D affine transform from ancestor elements, in
+    /// screen space. Descendant backgrounds project through it when it
+    /// is not a pure translation.
+    transform: AffineTransform2D,
+    /// Inherited perspective frame from a `perspective:` ancestor.
+    /// Children of an element with `perspective: d` see their 3D
+    /// transforms projected through `Persp(d)` centred at the
+    /// ancestor's `perspective-origin`.
+    perspective_context: Option<PerspectiveContext>,
+    /// Accumulated 3D matrix from `transform-style: preserve-3d`
+    /// ancestors, in screen space. `None` means "no preserved 3D
+    /// context active".
+    preserved_3d: Option<Matrix3d>,
+    /// Full screen-space 4x4 matrix of the nearest 3D-transformed
+    /// ancestor. Descendant backgrounds project all four corners
+    /// through it (a true trapezoid under steep perspective) instead
+    /// of the 3-corner affine fit in `transform`.
     ambient_screen_matrix: Option<Matrix3d>,
-    /// `perspective:` distance from an ancestor element.
-    perspective_distance: Option<f32>,
-    /// Absolute screen-space vanishing point from `perspective-origin`.
-    perspective_vanishing: Option<(f32, f32)>,
+}
+
+/// A perspective frustum inherited from a `perspective:` ancestor.
+///
+/// `vanishing_x`/`vanishing_y` are the absolute screen-space
+/// coordinates of the perspective vanishing point (the ancestor's
+/// content box offset by `perspective-origin`).
+#[derive(Debug, Clone, Copy)]
+struct PerspectiveContext {
+    distance: f32,
+    vanishing_x: f32,
+    vanishing_y: f32,
 }
 
 // -------------------------------------------------------------------
 // Public entry point
 // -------------------------------------------------------------------
 
-/// Record a layout tree into a display list.
+/// Record a layout tree into `display_list` (cleared first) and return
+/// the link hit regions.
 ///
-/// Returns the display list and link regions, equivalent to [`super::paint`]
-/// but without issuing any draw calls.
+/// `nested_scroll_offsets` maps scroll-container node ids
+/// (`overflow: auto/scroll`) to their `(scroll_x, scroll_y)`.
 pub fn record(
-    layout: &LayoutBox,
-    viewport: PaintViewport,
-    link_map: &HashMap<NodeId, String>,
-    display_list: &mut DisplayList,
-) -> Vec<LinkRegion> {
-    let empty = HashMap::new();
-    record_with_scroll(layout, viewport, link_map, display_list, &empty)
-}
-
-/// Record a layout tree into a display list with nested scroll offsets.
-///
-/// Like [`record`] but accepts per-element scroll offsets for nested
-/// scroll containers (`overflow: auto/scroll`).
-pub fn record_with_scroll(
     layout: &LayoutBox,
     viewport: PaintViewport,
     link_map: &HashMap<NodeId, String>,
@@ -105,15 +119,17 @@ pub fn record_with_scroll(
         viewport_height: viewport.height,
         viewport_width: viewport.width,
         visible_viewport_height: viewport.visible_height,
+        viewport_y: viewport.y,
         clip_rect: None,
         text_overflow_ellipsis: false,
         current_node: None,
         nested_scroll_offsets,
         focused_node: viewport.focused_node,
         counter_styles: viewport.counter_styles.clone(),
+        transform: AffineTransform2D::identity(),
+        perspective_context: None,
+        preserved_3d: None,
         ambient_screen_matrix: None,
-        perspective_distance: None,
-        perspective_vanishing: None,
     };
 
     record_box(
@@ -153,40 +169,59 @@ fn record_box(
     ctx: &mut RecordContext,
     link_map: &HashMap<NodeId, String>,
 ) {
-    // Sticky offset computation (same logic as paint_box).
-    let sticky_dy = compute_sticky_dy(layout_box, offset_y, ctx);
+    // `position: sticky`: pin against the visible viewport, and open a
+    // sticky group so replay can re-evaluate the offset for a scroll
+    // delta without re-recording.
+    let is_sticky = layout_box.style.position == Position::Sticky;
+    let sticky_dy = if is_sticky {
+        let natural_y = layout_box.dimensions.content.y + (offset_y - ctx.viewport_y) as f32;
+        let box_height = layout_box.dimensions.margin_box().height;
+        let top_px = match layout_box.style.top {
+            Dimension::Px(t) => Some(t),
+            _ => None,
+        };
+        let bottom_px = match layout_box.style.bottom {
+            Dimension::Px(b) => Some(b),
+            _ => None,
+        };
+        let visible_viewport_h = ctx.visible_viewport_height;
+        dl.push(DisplayItem::PushSticky {
+            natural_y,
+            box_height,
+            top_px,
+            bottom_px,
+            visible_viewport_h,
+        });
+        sticky_offset(
+            natural_y,
+            box_height,
+            top_px,
+            bottom_px,
+            visible_viewport_h,
+            ctx.scroll_y,
+        )
+    } else {
+        0
+    };
     let offset_y = offset_y + sticky_dy;
 
-    // Sticky elements get their own compositing layer so the display list
-    // isolates them from surrounding content. With GPU render targets this
-    // layer could be translated on the GPU during scroll instead of
-    // re-recording the entire sticky subtree.
-    let is_sticky = layout_box.style.position == Position::Sticky;
-    if is_sticky {
-        dl.set_has_sticky();
-        dl.push(DisplayItem::PushSticky {
-            natural_y: layout_box.dimensions.content.y,
-            box_height: layout_box.dimensions.margin_box().height,
-            top_px: match layout_box.style.top {
-                Dimension::Px(t) => Some(t),
-                _ => None,
-            },
-            bottom_px: match layout_box.style.bottom {
-                Dimension::Px(b) => Some(b),
-                _ => None,
-            },
-            visible_viewport_h: ctx.visible_viewport_height,
-        });
-    }
-
-    // Compute transform translation early so culling accounts for it.
-    let (tx_off_x, tx_off_y) = super::compute_transform_offsets(
-        &layout_box.style.transforms,
-        layout_box.style.transform_origin.as_ref(),
-        &layout_box.dimensions.content,
-        offset_x,
-        offset_y,
-    );
+    // Translate-only transforms move the box itself, so culling must
+    // account for them. Rotations/scales are not folded in: their
+    // matrix translation is pivot compensation, not a box offset.
+    let (tx_off_x, tx_off_y) = if layout_box.style.transforms.is_empty() {
+        (offset_x, offset_y)
+    } else {
+        let m = super::transforms::compute_transform_matrix(
+            &layout_box.style.transforms,
+            layout_box.style.transform_origin.as_ref(),
+            &layout_box.dimensions.content,
+        );
+        if m.is_translation_only() {
+            (offset_x + m.e as i32, offset_y + m.f as i32)
+        } else {
+            (offset_x, offset_y)
+        }
+    };
 
     // Screen-space culling (includes CSS transform translation). Runs
     // BEFORE the 3D ambient context is mutated below — otherwise an early
@@ -213,57 +248,30 @@ fn record_box(
         return;
     }
 
-    // 3D transform context: when this element has 3D transforms or a
-    // `perspective:` property, compute the screen-space 4x4 matrix and
-    // propagate it so descendants emit FillPolygon items for perspective
-    // rendering.
-    let prev_ambient = ctx.ambient_screen_matrix;
-    let prev_persp_distance = ctx.perspective_distance;
-    let prev_persp_vanish = ctx.perspective_vanishing;
-    let has_3d = super::transforms_have_3d(&layout_box.style.transforms);
-    if has_3d || layout_box.style.perspective.is_some() {
+    // backface-visibility: hidden — when the element's effective 3D
+    // transform (its own transforms composed onto any inherited
+    // preserve-3d matrix) turns its front face away from the viewer,
+    // skip the entire subtree.
+    if layout_box.style.backface_visibility == BackfaceVisibility::Hidden
+        && (!layout_box.style.transforms.is_empty() || ctx.preserved_3d.is_some())
+    {
         let content = &layout_box.dimensions.content;
-        let sx = content.x - ctx.scroll_x + offset_x as f32;
-        let sy = content.y - ctx.scroll_y + offset_y as f32;
         let (ox, oy, oz) =
             super::resolve_transform_origin(layout_box.style.transform_origin.as_ref(), content);
-        if has_3d {
-            let local_m3d =
-                Matrix3d::from_css_transforms_3d(&layout_box.style.transforms, 0.0, 0.0, oz);
-            // Apply origin in screen-space.
-            let origin_x = sx + ox;
-            let origin_y = sy + oy;
-            let pre = Matrix3d::translate(origin_x, origin_y, oz);
-            let post = Matrix3d::translate(-origin_x, -origin_y, -oz);
-            let screen_m = pre.multiply(&local_m3d).multiply(&post);
-            // Apply perspective if set on an ancestor.
-            let screen_m = if let Some(d) = ctx.perspective_distance {
-                let (vx, vy) = ctx
-                    .perspective_vanishing
-                    .unwrap_or((sx + content.width / 2.0, sy + content.height / 2.0));
-                let persp = Matrix3d::translate(vx, vy, 0.0)
-                    .multiply(&Matrix3d::perspective(d))
-                    .multiply(&Matrix3d::translate(-vx, -vy, 0.0));
-                persp.multiply(&screen_m)
-            } else {
-                screen_m
-            };
-            // Compose with inherited context.
-            ctx.ambient_screen_matrix = Some(match prev_ambient {
-                Some(parent) => parent.multiply(&screen_m),
-                None => screen_m,
-            });
-        }
-        // Propagate `perspective:` for children.
-        if let Some(d) = layout_box.style.perspective {
-            ctx.perspective_distance = Some(d);
-            let (pox, poy) = super::resolve_perspective_origin(
-                layout_box.style.perspective_origin.as_ref(),
-                &layout_box.dimensions.border_box(),
-            );
-            let bx = layout_box.dimensions.border_box().x - ctx.scroll_x + offset_x as f32;
-            let by = layout_box.dimensions.border_box().y - ctx.scroll_y + offset_y as f32;
-            ctx.perspective_vanishing = Some((bx + pox, by + poy));
+        let local_m3d = if layout_box.style.transforms.is_empty() {
+            Matrix3d::identity()
+        } else {
+            Matrix3d::from_css_transforms_3d(&layout_box.style.transforms, ox, oy, oz)
+        };
+        let effective = match ctx.preserved_3d {
+            Some(p) => p.multiply(&local_m3d),
+            None => local_m3d,
+        };
+        if effective.front_face_normal_z(content.width, content.height) < 0.0 {
+            if is_sticky {
+                dl.push(DisplayItem::PopSticky);
+            }
+            return;
         }
     }
 
@@ -289,6 +297,100 @@ fn record_box(
         false
     };
 
+    // The element's transform. It applies to the element's own box
+    // (decorations, clip, compositing bounds, link region) and to its
+    // descendants. Two paths:
+    //   * Screen-space 3D path: the element participates in a 3D
+    //     rendering context (3D transforms under a perspective
+    //     ancestor, an inherited preserve-3d matrix, or its own
+    //     `transform-style: preserve-3d`, which per CSS Transforms 2 §6
+    //     always establishes one). The full 4x4 screen matrix is built
+    //     and the box rect projected through it.
+    //   * Flat path: the 2D affine flatten, pivoting on the screen-
+    //     space transform origin. Used for plain 2D rotates/scales and
+    //     for 3D transforms with no perspective ancestor.
+    let content = &layout_box.dimensions.content;
+    let has_3d_transforms = super::transforms_have_3d(&layout_box.style.transforms);
+    let needs_screen_path = ctx.preserved_3d.is_some()
+        || (ctx.perspective_context.is_some() && has_3d_transforms)
+        || layout_box.style.transform_style == TransformStyle::Preserve3d;
+    let sx = content.x - ctx.scroll_x + offset_x as f32;
+    let sy = content.y - ctx.scroll_y + offset_y as f32;
+    let mut this_element_screen_matrix: Option<Matrix3d> = None;
+    let child_matrix = if needs_screen_path {
+        let (ox_l, oy_l, oz_l) =
+            super::resolve_transform_origin(layout_box.style.transform_origin.as_ref(), content);
+        let cox = sx + ox_l;
+        let coy = sy + oy_l;
+        let local_no_origin =
+            Matrix3d::from_css_transforms_3d(&layout_box.style.transforms, 0.0, 0.0, 0.0);
+        let m_local_screen = Matrix3d::translate(cox, coy, oz_l)
+            .multiply(&local_no_origin)
+            .multiply(&Matrix3d::translate(-cox, -coy, -oz_l));
+        let m_preserved = match ctx.preserved_3d {
+            Some(p) => p.multiply(&m_local_screen),
+            None => m_local_screen,
+        };
+        // Apply the perspective frustum on the outside, unless an
+        // inherited preserve-3d matrix already contains it.
+        let m_screen = if ctx.preserved_3d.is_none()
+            && let Some(persp) = ctx.perspective_context
+        {
+            Matrix3d::translate(persp.vanishing_x, persp.vanishing_y, 0.0)
+                .multiply(&Matrix3d::perspective(persp.distance))
+                .multiply(&Matrix3d::translate(
+                    -persp.vanishing_x,
+                    -persp.vanishing_y,
+                    0.0,
+                ))
+                .multiply(&m_preserved)
+        } else {
+            m_preserved
+        };
+        this_element_screen_matrix = Some(m_screen);
+        m_screen.project_screen_rect_affine(sx, sy, content.width, content.height)
+    } else if layout_box.style.transforms.is_empty() {
+        AffineTransform2D::identity()
+    } else {
+        // Flat 2D path, built in SCREEN space: the pivot is the
+        // screen-space transform origin, so descendants project through
+        // `ctx.transform` without any extra offset.
+        let (ox_l, oy_l, _oz) =
+            super::resolve_transform_origin(layout_box.style.transform_origin.as_ref(), content);
+        AffineTransform2D::from_css_transforms(&layout_box.style.transforms, sx + ox_l, sy + oy_l)
+    };
+    let prev_transform = ctx.transform;
+    if !child_matrix.is_translation_only() {
+        ctx.transform = ctx.transform.multiply(&child_matrix);
+    }
+    // Child offsets: the screen path and the non-trivial flat path
+    // carry all geometry in the matrices; only a translate-only flat
+    // transform moves descendants through the integer offset.
+    let (tx_offset_x, tx_offset_y) = if !needs_screen_path && child_matrix.is_translation_only() {
+        (
+            offset_x + child_matrix.e as i32,
+            offset_y + child_matrix.f as i32,
+        )
+    } else {
+        (offset_x, offset_y)
+    };
+
+    // Ambient 4x4 matrix for this box's and its descendants'
+    // backgrounds: this element's
+    // screen matrix if it took the screen path; otherwise a non-trivial
+    // 2D transform is lifted to 4D and composed onto the inherited
+    // ambient so it isn't dropped between a 3D ancestor and a
+    // grandchild.
+    let prev_ambient = ctx.ambient_screen_matrix;
+    if let Some(m) = this_element_screen_matrix {
+        ctx.ambient_screen_matrix = Some(m);
+    } else if let Some(parent_ambient) = ctx.ambient_screen_matrix
+        && !child_matrix.is_translation_only()
+    {
+        ctx.ambient_screen_matrix =
+            Some(parent_ambient.multiply(&Matrix3d::from_2d_affine(child_matrix)));
+    }
+
     // Decide which kind of compositing layer (if any) this box needs:
     //
     // * Slow path (`PushCompositingLayer`) — required for
@@ -313,18 +415,16 @@ fn record_box(
     match layer_kind {
         Some(LayerKind::Compositing) => {
             // Use the layout margin box as the layer bounds — covers
-            // box shadow, borders, and contents.
+            // box shadow, borders, and contents — in screen space like
+            // every other item (layout coords minus scroll plus offset).
             let mb = layout_box.dimensions.margin_box();
             let bounds = Rect {
-                x: mb.x + offset_x as f32,
-                y: mb.y + offset_y as f32,
+                x: mb.x - ctx.scroll_x + tx_offset_x as f32,
+                y: mb.y - ctx.scroll_y + tx_offset_y as f32,
                 width: mb.width,
                 height: mb.height,
             };
             let mix_blend = layout_box.style.mix_blend_mode;
-            let has_backdrop = !layout_box.style.backdrop_filters.is_empty();
-            let needs_backdrop =
-                has_backdrop || !matches!(mix_blend, crate::css::values::types::BlendMode::Normal);
             let mask = match &layout_box.style.mask_image {
                 crate::css::values::BackgroundImage::None => None,
                 image => {
@@ -351,9 +451,7 @@ fn record_box(
                 bounds,
                 opacity: layout_box.style.opacity,
                 blend: mix_blend,
-                needs_backdrop,
                 filters: layout_box.style.filters.clone(),
-                backdrop_filters: layout_box.style.backdrop_filters.clone(),
                 mask,
             });
         },
@@ -366,19 +464,6 @@ fn record_box(
     }
     let needs_layer = layer_kind.is_some();
 
-    // Emit a blur hint for GPU backends that support render-target blur.
-    // The software path already applies per-color approximation via
-    // `apply_filters` during color recording below.
-    let blur_radius = layout_box.style.filters.iter().find_map(|f| match f {
-        FilterFunction::Blur(r) => Some(*r),
-        _ => None,
-    });
-    if let Some(radius) = blur_radius {
-        if radius > 0.0 {
-            dl.push(DisplayItem::BlurHint { radius });
-        }
-    }
-
     // When opacity is handled by PushLayer, recording should use 1.0
     // to avoid applying opacity twice (once during recording, once during replay).
     let effective_opacity = if needs_layer {
@@ -389,19 +474,33 @@ fn record_box(
 
     if is_visible {
         // 0. Box shadow.
-        record_box_shadow(layout_box, dl, offset_x, offset_y, ctx, effective_opacity);
+        record_box_shadow(
+            layout_box,
+            dl,
+            tx_offset_x,
+            tx_offset_y,
+            ctx,
+            effective_opacity,
+        );
 
         // 1. Background.
-        record_background(layout_box, dl, offset_x, offset_y, ctx, effective_opacity);
+        record_background(
+            layout_box,
+            dl,
+            tx_offset_x,
+            tx_offset_y,
+            ctx,
+            effective_opacity,
+        );
 
         // 2. Borders.
-        record_borders(layout_box, dl, offset_x, offset_y, ctx);
+        record_borders(layout_box, dl, tx_offset_x, tx_offset_y, ctx);
 
         // 2b. Outline.
-        record_outline(layout_box, dl, offset_x, offset_y, ctx);
+        record_outline(layout_box, dl, tx_offset_x, tx_offset_y, ctx);
     }
 
-    // Overflow clipping.
+    // Overflow clipping and `clip-path`.
     let prev_clip = ctx.clip_rect;
     let prev_ellipsis = ctx.text_overflow_ellipsis;
     let prev_scroll_x = ctx.scroll_x;
@@ -412,11 +511,10 @@ fn record_box(
     );
     if has_overflow_clip {
         let new_clip = layout_box.dimensions.content;
-        let clipped = match ctx.clip_rect {
+        ctx.clip_rect = Some(match ctx.clip_rect {
             Some(existing) => intersect_rects(existing, new_clip),
             None => new_clip,
-        };
-        ctx.clip_rect = Some(clipped);
+        });
         // text-overflow: ellipsis only activates when white-space
         // prevents wrapping (nowrap / pre), so multi-line content is
         // never ellipsized.
@@ -425,27 +523,68 @@ fn record_box(
                 layout_box.style.white_space,
                 WhiteSpace::NoWrap | WhiteSpace::Pre
             );
-
-        dl.push(DisplayItem::PushClip {
-            x: (clipped.x - ctx.scroll_x + offset_x as f32) as i32,
-            y: (clipped.y - ctx.scroll_y + offset_y as f32) as i32,
-            w: clipped.width as u32,
-            h: clipped.height as u32,
+    }
+    // CSS `clip-path`: intersect with the resolved shape's bounding
+    // rect. True shape clipping (circle/ellipse edges) needs stencil
+    // support the backend trait does not expose, so the element is
+    // clipped to the shape's bounding box.
+    if let Some(shape) = &layout_box.style.clip_path
+        && let Some(shape_rect) =
+            super::resolve_clip_path_rect(shape, &layout_box.dimensions.border_box())
+    {
+        ctx.clip_rect = Some(match ctx.clip_rect {
+            Some(existing) => intersect_rects(existing, shape_rect),
+            None => shape_rect,
         });
-
-        // Apply nested scroll offset for this container AFTER pushing
-        // the clip so the clip boundary uses the parent's scroll offset,
-        // not this container's own scroll.
-        if let Some(nid) = layout_box.node {
-            if let Some(&(sx, sy)) = ctx.nested_scroll_offsets.get(&nid) {
-                ctx.scroll_x += sx;
-                ctx.scroll_y += sy;
-            }
-        }
+    }
+    let pushed_clip = ctx.clip_rect != prev_clip;
+    if pushed_clip && let Some(clipped) = ctx.clip_rect {
+        dl.push(DisplayItem::PushClip {
+            x: (clipped.x - ctx.scroll_x + tx_offset_x as f32) as i32,
+            y: (clipped.y - ctx.scroll_y + tx_offset_y as f32) as i32,
+            w: clipped.width.max(0.0) as u32,
+            h: clipped.height.max(0.0) as u32,
+        });
+    }
+    // Apply the nested scroll offset for this container AFTER pushing
+    // the clip so the clip boundary uses the parent's scroll offset,
+    // not this container's own scroll.
+    if has_overflow_clip
+        && let Some(nid) = layout_box.node
+        && let Some(&(sx, sy)) = ctx.nested_scroll_offsets.get(&nid)
+    {
+        ctx.scroll_x += sx;
+        ctx.scroll_y += sy;
     }
 
-    // Reuse transform offsets computed earlier (before culling).
-    let (tx_offset_x, tx_offset_y) = (tx_off_x, tx_off_y);
+    // A `perspective:` element establishes a frustum for its children,
+    // centred at its `perspective-origin` (resolved against the border
+    // box, the transform reference box) in screen space.
+    let prev_perspective_context = ctx.perspective_context;
+    if let Some(d) = layout_box.style.perspective
+        && d > 0.0
+    {
+        let border = layout_box.dimensions.border_box();
+        let (po_x, po_y) = super::resolve_perspective_origin(
+            layout_box.style.perspective_origin.as_ref(),
+            &border,
+        );
+        ctx.perspective_context = Some(PerspectiveContext {
+            distance: d,
+            vanishing_x: border.x - ctx.scroll_x + tx_offset_x as f32 + po_x,
+            vanishing_y: border.y - ctx.scroll_y + tx_offset_y as f32 + po_y,
+        });
+    }
+
+    // `transform-style: preserve-3d` hands this element's 4x4 matrix to
+    // descendants; the default `flat` flushes the preserved context.
+    let preserve3d_parent = if layout_box.style.transform_style == TransformStyle::Preserve3d {
+        this_element_screen_matrix
+    } else {
+        None
+    };
+    let prev_preserved_3d = ctx.preserved_3d;
+    ctx.preserved_3d = preserve3d_parent;
 
     // Children / inline / replaced / markers.
     match &layout_box.box_type {
@@ -469,7 +608,16 @@ fn record_box(
             let mut stacking_pos: Vec<(i32, usize, &LayoutBox)> = Vec::new();
 
             for (idx, child) in layout_box.children.iter().enumerate() {
-                if super::creates_stacking_context(child) {
+                // Inside a preserve-3d context paint order is decided by
+                // projected Z, so the children join one Z-sorted list —
+                // except those with an explicit z-index, which opt out of
+                // the 3D context (CSS Transforms 2 §6.1) and keep the CSS
+                // 2.1 stacking tiers.
+                let in_3d_sort = preserve3d_parent.is_some()
+                    && (child.style.z_index_auto || !super::creates_stacking_context(child));
+                if in_3d_sort {
+                    normal_children.push(child);
+                } else if super::creates_stacking_context(child) {
                     if child.style.z_index < 0 {
                         stacking_neg.push((child.style.z_index, idx, child));
                     } else {
@@ -480,6 +628,23 @@ fn record_box(
                 } else {
                     normal_children.push(child);
                 }
+            }
+
+            // Back-to-front Z sort of the 3D context's children (stable,
+            // so ties keep DOM order).
+            if let Some(m_parent) = preserve3d_parent
+                && normal_children.len() > 1
+            {
+                let mut z_keys: Vec<(f32, usize)> = normal_children
+                    .iter()
+                    .enumerate()
+                    .map(|(i, c)| {
+                        let z = preserve3d_child_z(c, &m_parent, ctx, tx_offset_x, tx_offset_y);
+                        (z, i)
+                    })
+                    .collect();
+                z_keys.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+                normal_children = z_keys.iter().map(|&(_, i)| normal_children[i]).collect();
             }
 
             // Step 2: negative z-index stacking contexts (ascending).
@@ -573,10 +738,7 @@ fn record_box(
     }
 
     // Restore clip.
-    if matches!(
-        layout_box.style.overflow,
-        Overflow::Hidden | Overflow::Scroll | Overflow::Auto
-    ) {
+    if pushed_clip {
         dl.push(DisplayItem::PopClip);
     }
     ctx.clip_rect = prev_clip;
@@ -598,8 +760,8 @@ fn record_box(
             let border = layout_box.dimensions.border_box();
             ctx.links.push(LinkRegion {
                 rect: Rect {
-                    x: border.x - ctx.scroll_x + offset_x as f32,
-                    y: border.y - ctx.scroll_y + offset_y as f32,
+                    x: border.x - ctx.scroll_x + tx_offset_x as f32,
+                    y: border.y - ctx.scroll_y + tx_offset_y as f32,
                     width: border.width,
                     height: border.height,
                 },
@@ -609,10 +771,11 @@ fn record_box(
         }
     }
 
-    // Restore 3D transform context.
+    // Restore the transform context.
+    ctx.transform = prev_transform;
+    ctx.perspective_context = prev_perspective_context;
+    ctx.preserved_3d = prev_preserved_3d;
     ctx.ambient_screen_matrix = prev_ambient;
-    ctx.perspective_distance = prev_persp_distance;
-    ctx.perspective_vanishing = prev_persp_vanish;
 
     // Reset link tracking.
     if entered_link {
@@ -652,21 +815,12 @@ fn record_background(
         &layout_box.style.filters,
     );
     if bg.a > 0 {
-        if !layout_box.style.border_radius.is_zero() {
-            dl.push(DisplayItem::FillRoundedRect {
-                x,
-                y,
-                w,
-                h,
-                radius: layout_box.style.border_radius.max_radius() as u16,
-                color: bg,
-                node_id: ctx.current_node,
-            });
-        } else if let Some(m3d) = ctx.ambient_screen_matrix.as_ref() {
+        let sx = padding.x - ctx.scroll_x + offset_x as f32;
+        let sy = padding.y - ctx.scroll_y + offset_y as f32;
+        let square = layout_box.style.border_radius.is_zero();
+        if square && let Some(m3d) = ctx.ambient_screen_matrix.as_ref() {
             // 3D-transformed ancestor: project all 4 padding-box corners
             // through the full 4x4 matrix for true perspective rendering.
-            let sx = padding.x - ctx.scroll_x + offset_x as f32;
-            let sy = padding.y - ctx.scroll_y + offset_y as f32;
             let fw = padding.width;
             let fh = padding.height;
             let p0 = m3d.apply_point_3d(sx, sy, 0.0);
@@ -692,6 +846,26 @@ fn record_background(
                     node_id: ctx.current_node,
                 });
             }
+        } else if square && !ctx.transform.is_translation_only() {
+            // Non-trivial 2D ancestor transform: a transformed quad.
+            let points =
+                ctx.transform
+                    .transform_rect_to_quad(sx, sy, padding.width, padding.height);
+            dl.push(DisplayItem::FillPolygon {
+                points,
+                color: bg,
+                node_id: ctx.current_node,
+            });
+        } else if !square {
+            dl.push(DisplayItem::FillRoundedRect {
+                x,
+                y,
+                w,
+                h,
+                radius: layout_box.style.border_radius.max_radius() as u16,
+                color: bg,
+                node_id: ctx.current_node,
+            });
         } else {
             dl.push(DisplayItem::FillRect {
                 x,
@@ -719,8 +893,7 @@ fn record_background(
     }
 
     // Background image texture: emit one Blit per tile so background-size,
-    // background-position, and background-repeat are honored in the display
-    // list path (not just immediate-mode).
+    // background-position, and background-repeat are honored.
     if let Some(tex) = layout_box.background_texture {
         let intrinsic = layout_box.background_texture_size.unwrap_or((w, h));
         let tiles = super::background::background_image_tiles(
@@ -1203,35 +1376,9 @@ fn record_inline_content(
     ctx: &mut RecordContext,
     link_map: &HashMap<NodeId, String>,
 ) {
-    // Inline background.
-    let bg = layout_box.style.background_color;
-    if bg.a > 0 {
-        let pb = layout_box.dimensions.padding_box();
-        let x = (pb.x - ctx.scroll_x + offset_x as f32) as i32;
-        let y = (pb.y - ctx.scroll_y + offset_y as f32) as i32;
-        let w = pb.width as u32;
-        let h = pb.height as u32;
-        if !layout_box.style.border_radius.is_zero() {
-            dl.push(DisplayItem::FillRoundedRect {
-                x,
-                y,
-                w,
-                h,
-                radius: layout_box.style.border_radius.max_radius() as u16,
-                color: bg,
-                node_id: ctx.current_node,
-            });
-        } else {
-            dl.push(DisplayItem::FillRect {
-                x,
-                y,
-                w,
-                h,
-                color: bg,
-                node_id: ctx.current_node,
-            });
-        }
-    }
+    // The inline box's background was already recorded by
+    // `record_box` (`record_background`); recording it again here
+    // double-blended translucent inline backgrounds.
 
     // Text content.
     if let Some(ref text) = layout_box.text {
@@ -1263,6 +1410,13 @@ fn record_text(
     offset_y: i32,
     ctx: &RecordContext,
 ) {
+    // Skip empty runs (left when `trim_line_boundary_spaces` strips an
+    // inter-element space at a line edge) and bare newline runs, which
+    // whitespace-only DOM text between inline siblings can carry into
+    // paint: they have no glyph, and backends draw "\n" as tofu.
+    if text.is_empty() || text.chars().all(|c| c == '\n' || c == '\r') {
+        return;
+    }
     let sx = (x - ctx.scroll_x + offset_x as f32) as i32;
     let sy = (y - ctx.scroll_y + offset_y as f32) as i32;
 
@@ -1354,9 +1508,10 @@ fn record_text(
     });
 
     if !style.text_decoration.line.is_none() {
-        let deco_color = style.text_decoration.color.map_or(color, |c| {
-            super::apply_filters_and_opacity(c, 1.0, &style.filters)
-        });
+        let deco_color = style
+            .text_decoration
+            .color
+            .map_or(color, |c| apply_filters_and_opacity(c, 1.0, &style.filters));
         let positions: &[(bool, i32)] = &[
             (
                 style.text_decoration.line.has_underline(),
@@ -1369,18 +1524,65 @@ fn record_text(
             (style.text_decoration.line.has_overline(), sy),
         ];
         for &(active, deco_y) in positions {
-            if !active {
-                continue;
+            if active {
+                let style = style.text_decoration.style;
+                record_decoration_line(dl, sx, deco_y, text_width, deco_color, style, ctx);
             }
-            dl.push(DisplayItem::FillRect {
-                x: sx,
-                y: deco_y,
-                w: text_width,
-                h: 1,
-                color: deco_color,
-                node_id: ctx.current_node,
-            });
         }
+    }
+}
+
+/// Record one text-decoration line (`text-decoration-style`) of
+/// `width` pixels starting at `(x, y)`.
+fn record_decoration_line(
+    dl: &mut DisplayList,
+    x: i32,
+    y: i32,
+    width: u32,
+    color: Color,
+    style: TextDecorationStyle,
+    ctx: &RecordContext,
+) {
+    let mut seg = |dx: u32, dy: i32, w: u32| {
+        dl.push(DisplayItem::FillRect {
+            x: x + dx as i32,
+            y: y + dy,
+            w,
+            h: 1,
+            color,
+            node_id: ctx.current_node,
+        });
+    };
+    match style {
+        TextDecorationStyle::Solid => seg(0, 0, width),
+        TextDecorationStyle::Double => {
+            seg(0, 0, width);
+            seg(0, 2, width);
+        },
+        TextDecorationStyle::Dashed => {
+            // 4 px dash, 4 px gap.
+            let mut pos = 0;
+            while pos < width {
+                seg(pos, 0, 4.min(width - pos));
+                pos += 8;
+            }
+        },
+        TextDecorationStyle::Dotted => {
+            let mut pos = 0;
+            while pos < width {
+                seg(pos, 0, 1);
+                pos += 2;
+            }
+        },
+        TextDecorationStyle::Wavy => {
+            // 2 px runs alternating between the line and one pixel below.
+            let mut pos = 0;
+            while pos < width {
+                let dy = i32::from(!(pos / 2).is_multiple_of(2));
+                seg(pos, dy, 2.min(width - pos));
+                pos += 2;
+            }
+        },
     }
 }
 
@@ -1517,13 +1719,26 @@ fn record_replaced(
                 color,
                 node_id: ctx.current_node,
             });
-            let label = if alt.is_empty() { "\u{00D7}" } else { alt };
-            let label_w = oasis_types::backend::bitmap_measure_text(label, 8);
+            // `×` is an icon: small, in the corner like real browsers'
+            // broken-image chip. Alt text is meant to be read, so it
+            // follows the computed font-size, capped to the interior
+            // height (a 3rem logo wrapper must not draw 30 px text in a
+            // 22 px sprite), and is clipped to the box so long values
+            // don't bleed into siblings.
+            let interior_h = h.saturating_sub(4).max(6) as u16;
+            let (label, font_size) = if alt.is_empty() {
+                ("\u{00D7}", 8u16.min(interior_h))
+            } else {
+                let style_fs = layout_box.style.font_size.round().max(6.0) as u16;
+                (alt.as_str(), style_fs.min(interior_h))
+            };
+            let label_w = oasis_types::backend::bitmap_measure_text(label, font_size);
+            dl.push(DisplayItem::PushClip { x, y, w, h });
             dl.push(DisplayItem::DrawText {
                 text: label.to_string(),
                 x: x + 2,
                 y: y + 2,
-                font_size: 8,
+                font_size,
                 color,
                 bold: false,
                 italic: false,
@@ -1532,6 +1747,7 @@ fn record_replaced(
                 #[cfg(feature = "web-fonts")]
                 web_font_id: None,
             });
+            dl.push(DisplayItem::PopClip);
         },
         ReplacedContent::HorizontalRule => {
             let style = &layout_box.style;
@@ -1599,14 +1815,26 @@ fn record_replaced(
         ReplacedContent::SubmitButton { label } => {
             record_submit_button(layout_box, dl, x, y, label);
         },
-        // SVG and Canvas elements still use immediate-mode rendering
-        // because they have their own complex drawing pipelines.
-        // They'll be recorded as a placeholder and painted in a
-        // second pass during replay.
-        ReplacedContent::Svg { .. } | ReplacedContent::Canvas { .. } => {
-            // Fallback: these elements are painted via the immediate-mode
-            // path in widget/paint.rs. The display list records nothing
-            // for them; the BrowserWidget paint method handles them separately.
+        // SVG and canvas run their own drawing code at replay time, but
+        // are recorded here in paint order so they stack, clip, scroll
+        // and fade like everything else.
+        ReplacedContent::Svg { element } => {
+            dl.push(DisplayItem::Svg {
+                element: std::rc::Rc::clone(element),
+                x,
+                y,
+                width: content.width,
+                height: content.height,
+            });
+        },
+        ReplacedContent::Canvas { state } => {
+            dl.push(DisplayItem::Canvas {
+                state: std::rc::Rc::clone(state),
+                x,
+                y,
+                w: content.width as u32,
+                h: content.height as u32,
+            });
         },
     }
 }
@@ -2389,40 +2617,43 @@ fn record_submit_button(layout_box: &LayoutBox, dl: &mut DisplayList, x: i32, y:
 // Helpers
 // -------------------------------------------------------------------
 
-fn compute_sticky_dy(layout_box: &LayoutBox, offset_y: i32, ctx: &RecordContext) -> i32 {
-    if layout_box.style.position != Position::Sticky {
-        return 0;
-    }
-    let top_px = match layout_box.style.top {
-        Dimension::Px(t) => Some(t),
-        _ => None,
-    };
-    let bottom_px = match layout_box.style.bottom {
-        Dimension::Px(b) => Some(b),
-        _ => None,
-    };
-    if let Some(top) = top_px {
-        let natural = layout_box.dimensions.content.y - ctx.scroll_y + offset_y as f32;
-        if natural < top {
-            (top - natural) as i32
-        } else {
-            0
-        }
-    } else if let Some(bottom) = bottom_px {
-        let natural = layout_box.dimensions.content.y - ctx.scroll_y + offset_y as f32;
-        let box_h = layout_box.dimensions.margin_box().height;
-        let threshold = ctx.visible_viewport_height - bottom - box_h;
-        if natural > threshold {
-            (threshold - natural) as i32
-        } else {
-            0
-        }
+/// Sort key for `transform-style: preserve-3d` child ordering: the Z
+/// (after the perspective divide) of the child's centre once its own
+/// local 3D transform and the parent's screen matrix are applied.
+/// Smaller Z is farther from the viewer, so ascending order is
+/// back-to-front.
+fn preserve3d_child_z(
+    child: &LayoutBox,
+    parent_screen_matrix: &Matrix3d,
+    ctx: &RecordContext,
+    offset_x: i32,
+    offset_y: i32,
+) -> f32 {
+    let c = &child.dimensions.content;
+    let ccx = c.x - ctx.scroll_x + offset_x as f32 + c.width / 2.0;
+    let ccy = c.y - ctx.scroll_y + offset_y as f32 + c.height / 2.0;
+    let child_local = if child.style.transforms.is_empty() {
+        Matrix3d::identity()
     } else {
-        0
-    }
+        let (ox_l, oy_l, oz_l) =
+            super::resolve_transform_origin(child.style.transform_origin.as_ref(), c);
+        let cox = c.x - ctx.scroll_x + offset_x as f32 + ox_l;
+        let coy = c.y - ctx.scroll_y + offset_y as f32 + oy_l;
+        let local = Matrix3d::from_css_transforms_3d(&child.style.transforms, 0.0, 0.0, 0.0);
+        Matrix3d::translate(cox, coy, oz_l)
+            .multiply(&local)
+            .multiply(&Matrix3d::translate(-cox, -coy, -oz_l))
+    };
+    let (_, _, z) = parent_screen_matrix
+        .multiply(&child_local)
+        .apply_point_3d(ccx, ccy, 0.0);
+    z
 }
 
-fn has_text_content(layout_box: &LayoutBox) -> bool {
+/// Returns `true` if the layout box or any descendant is an inline
+/// box (i.e. can carry text), used to decide which boxes contribute
+/// to a link's hit region.
+pub(super) fn has_text_content(layout_box: &LayoutBox) -> bool {
     match &layout_box.box_type {
         BoxType::Inline => true,
         _ => layout_box.children.iter().any(has_text_content),
@@ -2444,19 +2675,6 @@ fn apply_filters_and_opacity(
         filters::apply_filters(color, filter_list)
     };
     c.apply_opacity(opacity)
-}
-
-fn intersect_rects(a: Rect, b: Rect) -> Rect {
-    let x = a.x.max(b.x);
-    let y = a.y.max(b.y);
-    let right = (a.x + a.width).min(b.x + b.width);
-    let bottom = (a.y + a.height).min(b.y + b.height);
-    Rect {
-        x,
-        y,
-        width: (right - x).max(0.0),
-        height: (bottom - y).max(0.0),
-    }
 }
 
 #[cfg(test)]

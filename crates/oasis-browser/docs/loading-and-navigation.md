@@ -21,7 +21,7 @@ src/
 │   ├── csp.rs              Content-Security-Policy parsing + checks
 │   └── vfs.rs              virtual filesystem source
 ├── forms/                  form state, validation, submission
-└── widget_pipeline.rs      hooks IoResult → parse → cascade → layout
+└── widget/pipeline.rs      hooks IoResult → parse → cascade → layout
 ```
 
 ## Resource sources
@@ -179,26 +179,28 @@ and via the JS-exposed `checkValidity()` API.
 
 ## Image loading
 
-`widget_images.rs` plus `image.rs` and `image_atlas.rs` handle image
+`widget/images.rs` plus `image.rs` and `image_atlas.rs` handle image
 decode:
 
 1. `<img src="…">` triggers a loader fetch.
-2. The bytes are dispatched to a worker thread that runs the format
+2. The bytes are dispatched to a decode thread that runs the format
    detector (`image::detect_format`) and the appropriate decoder
-   (PNG / JPEG / GIF / BMP).
-3. The decoded RGBA buffer is uploaded as a backend texture.
-4. Many small images (favicons, icons, list bullets) are packed into a
+   (PNG / JPEG / GIF / BMP, WebP with the `webp` feature) through
+   `image::decode_image_with_limits(data, config.image_limits())`.
+3. Images larger than `BrowserConfig::max_image_dimension` (per side)
+   or `max_image_pixels` are downscaled: JPEGs by DCT scaling during
+   decode (1/2, 1/4, 1/8), other formats bilinearly after decode.
+   Defaults are 4096 px / 2 Mpx on desktop and 1024 px / 1 Mpx on PSP.
+   PNG / GIF / WebP / BMP sources wider or taller than 4096 px (1024 on
+   PSP) are rejected, since they decode at full size first. The decoded
+   image keeps its natural size, which layout uses for `<img>` boxes and
+   background tiles.
+4. The decoded RGBA buffer is uploaded as a backend texture.
+5. Many small images (favicons, icons, list bullets) are packed into a
    shared `ImageAtlas` so they can be drawn with a single `blit_sub`.
 
-The decoder pool is small (typically 2 workers) and uses the same
-channel pattern as the IO thread.
-
-## Plugins
-
-`plugin.rs` exposes a `UrlSchemeHandler` trait. Embedders can register
-custom URL schemes (e.g. `oasis://`) to intercept loads and serve
-content from a Rust function. The PSP build uses this to expose
-in-binary documentation pages without going through the IO thread.
+There is one decode thread on native targets; WASM and PSP decode
+synchronously.
 
 ## Tests
 

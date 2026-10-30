@@ -186,15 +186,21 @@ arena DOM and backend traits: [`adr/001-arena-based-dom.md`](adr/001-arena-based
 - Full 2D CSS transforms plus 3D transform functions (`rotateX/Y/Z`,
   `translate3d`, `scale3d`, `rotate3d`, `matrix3d`, `perspective()`)
   evaluated through a 4x4 `Matrix3d`.
-- Pure 2D transforms flatten orthographically via
-  `AffineTransform2D::from_css_transforms`.
+- A transform applies to the element's own box (background, borders,
+  overflow clip, compositing bounds, link hit region) and to its
+  descendants. Translations move the box; rotations / scales / skews
+  flatten to an `AffineTransform2D` around the screen-space
+  transform origin, and backgrounds under them paint as transformed
+  quads (borders, text and images follow the translation only).
 - 3D transforms under an ancestor `perspective:` property route
   through a screen-space projection path that builds the full
   `T(vp) * Persp(d) * T(-vp) * T(origin) * local * T(-origin)` matrix
   and derives a 3-corner-fit affine via
   `Matrix3d::project_screen_rect_affine`.
 - `transform-style: preserve-3d` propagates the parent's 4x4 matrix
-  to descendants via `PaintContext.preserved_3d`.
+  to descendants, whose backgrounds project all four corners through
+  it (a true trapezoid); children are painted back to front by
+  projected Z, except those with an explicit `z-index`.
 - `transform-origin` (X/Y/Z) and `perspective-origin` parsed into
   structured types, resolved via shared helpers.
 - `backface-visibility: hidden` culls back-facing subtrees via
@@ -214,11 +220,27 @@ arena DOM and backend traits: [`adr/001-arena-based-dom.md`](adr/001-arena-based
   `quadraticCurveTo`, `fill`, `stroke`, `save`, `restore`.
 - **SVG** — paths with fill-rule / linecap / linejoin, `<g>` group
   transform composition.
-- **Light compositor** — display list with batched rect + text
-  submission via `SdiBatch::submit_rect_batch` /
-  `submit_text_batch`, vertical/horizontal strip merging, occluded
-  rect elimination, clip intersection optimization, granular
-  animation dirty tracking.
+- **One renderer: display list record + replay** (`paint/`). The
+  recorder walks the layout tree in CSS 2.1 paint order and emits
+  display items — including `Svg` / `Canvas` items, so inline SVG and
+  `<canvas>` stack under later overlays, clip, scroll inside nested
+  scroll containers and honour `visibility`. The widget caches the
+  list and replays it with a scroll delta or dirty rectangles; tests,
+  the visual-regression goldens and the paint bench run the same
+  record + replay path (`internals::paint_page`). See
+  [`crates/oasis-browser/docs/paint.md`](../crates/oasis-browser/docs/paint.md).
+- **Light compositor** — batched rect + text submission via
+  `SdiBatch::submit_rect_batch` / `submit_text_batch`,
+  vertical/horizontal strip merging, occluded rect elimination,
+  clip intersection, granular animation dirty tracking, and
+  render-target layers for `mix-blend-mode`, `isolation`, box-level
+  `filter` and `mask-*` (CPU filter / mask / blend passes need
+  render-target readback; PSP falls back to plain opacity).
+- **Images** — PNG / JPEG / GIF / BMP (+ WebP with `webp`). Images
+  larger than `BrowserConfig::max_image_dimension` / `max_image_pixels`
+  (desktop 4096 px / 2 Mpx, PSP 1024 px / 1 Mpx) are downscaled —
+  JPEGs by DCT scaling during decode — and keep their natural layout
+  size.
 
 ## Forms
 

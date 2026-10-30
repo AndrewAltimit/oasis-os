@@ -398,7 +398,7 @@ fn fetch_font_data(
         referrer: base_url.and_then(loader::strip_referrer),
     };
 
-    #[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
+    #[cfg(native_net)]
     {
         match loader::load_resource(vfs, &request, tls, None, None) {
             Ok(loaded) if loaded.response.status < 400 && !loaded.response.body.is_empty() => {
@@ -407,7 +407,7 @@ fn fetch_font_data(
             _ => None,
         }
     }
-    #[cfg(any(target_arch = "wasm32", feature = "psp"))]
+    #[cfg(not(native_net))]
     {
         match loader::load_resource(vfs, &request, tls) {
             Ok(loaded) if loaded.response.status < 400 && !loaded.response.body.is_empty() => {

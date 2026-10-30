@@ -1,10 +1,11 @@
 //! CSS filter effect application: color-based filters (grayscale, invert,
 //! sepia, brightness, contrast, saturate, hue-rotate, opacity, blur).
 //!
-//! True Gaussian blur requires per-pixel post-processing via render targets.
-//! The software fallback approximates blur by slightly dimming and desaturating
-//! colors proportional to the blur radius. GPU backends can override via the
-//! `BlurHint` display item.
+//! These per-color approximations are applied while recording. A
+//! box-level `filter` also opens a compositing layer, and on backends
+//! with render-target readback the real per-pixel chain
+//! (`filter_chain.rs`, including a separable box blur) runs on the
+//! layer at replay.
 
 use crate::css::values::FilterFunction;
 use oasis_types::backend::Color;

@@ -1,51 +1,43 @@
 # viewport 480x272
 fill_rect 0, 0, 480, 4428, Color { r: 255, g: 255, b: 255, a: 255 }
 fill_rect 0, 0, 480, 35, Color { r: 53, g: 53, b: 53, a: 255 }
-fill_rect 16, 8, 0, 19, Color { r: 53, g: 53, b: 53, a: 255 }
-fill_rect 16, 8, 0, 19, Color { r: 53, g: 53, b: 53, a: 255 }
 draw_text "std", 16, 8, 13, Color { r: 221, g: 221, b: 221, a: 255 }
-fill_rect 46, 8, 6, 19, Color { r: 53, g: 53, b: 53, a: 255 }
 fill_rect 46, 8, 6, 19, Color { r: 53, g: 53, b: 53, a: 255 }
 draw_text " ", 46, 8, 13, Color { r: 221, g: 221, b: 221, a: 255 }
 draw_text "core", 52, 8, 13, Color { r: 221, g: 221, b: 221, a: 255 }
 fill_rect 88, 8, 6, 19, Color { r: 53, g: 53, b: 53, a: 255 }
-fill_rect 88, 8, 6, 19, Color { r: 53, g: 53, b: 53, a: 255 }
 draw_text " ", 88, 8, 13, Color { r: 221, g: 221, b: 221, a: 255 }
 draw_text "alloc", 94, 8, 13, Color { r: 221, g: 221, b: 221, a: 255 }
-fill_rect 136, 8, 6, 19, Color { r: 53, g: 53, b: 53, a: 255 }
 fill_rect 136, 8, 6, 19, Color { r: 53, g: 53, b: 53, a: 255 }
 draw_text " ", 136, 8, 13, Color { r: 221, g: 221, b: 221, a: 255 }
 draw_text "test", 142, 8, 13, Color { r: 221, g: 221, b: 221, a: 255 }
 fill_rect 178, 8, 6, 19, Color { r: 53, g: 53, b: 53, a: 255 }
-fill_rect 178, 8, 6, 19, Color { r: 53, g: 53, b: 53, a: 255 }
 draw_text " ", 178, 8, 13, Color { r: 221, g: 221, b: 221, a: 255 }
 draw_text "proc_macro", 184, 8, 13, Color { r: 221, g: 221, b: 221, a: 255 }
-fill_rect 256, 8, 0, 19, Color { r: 53, g: 53, b: 53, a: 255 }
-fill_rect 256, 8, 0, 19, Color { r: 53, g: 53, b: 53, a: 255 }
 fill_rect 0, 35, 232, 380, Color { r: 247, g: 247, b: 247, a: 255 }
 fill_rect 232, 35, 1, 380, Color { r: 224, g: 224, b: 224, a: 255 }
 draw_text "Struct ", 16, 59, 14, Color { r: 51, g: 51, b: 51, a: 255 }
 draw_text "Struct ", 17, 59, 14, Color { r: 51, g: 51, b: 51, a: 255 }
 draw_text "Vec", 58, 59, 14, Color { r: 51, g: 51, b: 51, a: 255 }
 draw_text "Vec", 59, 59, 14, Color { r: 51, g: 51, b: 51, a: 255 }
-draw_text "•", -4, 84, 13, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "•", 4, 84, 13, Color { r: 26, g: 26, b: 26, a: 255 }
 draw_text "Fields", 16, 86, 13, Color { r: 56, g: 115, b: 185, a: 255 }
-draw_text "•", -4, 108, 13, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "•", 4, 108, 13, Color { r: 26, g: 26, b: 26, a: 255 }
 draw_text "Methods", 16, 110, 13, Color { r: 56, g: 115, b: 185, a: 255 }
-draw_text "•", -4, 131, 13, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "•", 4, 131, 13, Color { r: 26, g: 26, b: 26, a: 255 }
 draw_text "Trait ", 16, 133, 13, Color { r: 56, g: 115, b: 185, a: 255 }
 draw_text "Implementations", 52, 133, 13, Color { r: 56, g: 115, b: 185, a: 255 }
-draw_text "•", -4, 155, 13, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "•", 4, 155, 13, Color { r: 26, g: 26, b: 26, a: 255 }
 draw_text "Auto ", 16, 157, 13, Color { r: 56, g: 115, b: 185, a: 255 }
 draw_text "Trait ", 46, 157, 13, Color { r: 56, g: 115, b: 185, a: 255 }
 draw_text "Implementations", 82, 157, 13, Color { r: 56, g: 115, b: 185, a: 255 }
 draw_text "Methods", 16, 186, 14, Color { r: 51, g: 51, b: 51, a: 255 }
 draw_text "Methods", 17, 186, 14, Color { r: 51, g: 51, b: 51, a: 255 }
-draw_text "•", -4, 211, 13, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "•", 4, 211, 13, Color { r: 26, g: 26, b: 26, a: 255 }
 draw_text "new", 16, 213, 13, Color { r: 56, g: 115, b: 185, a: 255 }
-draw_text "•", -4, 235, 13, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "•", 4, 235, 13, Color { r: 26, g: 26, b: 26, a: 255 }
 draw_text "with_capacity", 16, 237, 13, Color { r: 56, g: 115, b: 185, a: 255 }
-draw_text "•", -4, 258, 13, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "•", 4, 258, 13, Color { r: 26, g: 26, b: 26, a: 255 }
 draw_text "push", 16, 260, 13, Color { r: 56, g: 115, b: 185, a: 255 }
 draw_text "pub", 232, 59, 20, Color { r: 167, g: 29, b: 93, a: 255 }
 draw_text "pub", 233, 59, 20, Color { r: 167, g: 29, b: 93, a: 255 }
@@ -80,14 +72,6 @@ draw_text "array", 346, 131, 8, Color { r: 26, g: 26, b: 26, a: 255 }
 draw_text "type,", 376, 131, 8, Color { r: 26, g: 26, b: 26, a: 255 }
 draw_text "written", 406, 131, 8, Color { r: 26, g: 26, b: 26, a: 255 }
 draw_text "as", 232, 143, 8, Color { r: 26, g: 26, b: 26, a: 255 }
-fill_rect 244, 146, 36, 1, Color { r: 245, g: 245, b: 245, a: 255 }
-fill_rect 244, 145, 36, 1, Color { r: 245, g: 245, b: 245, a: 255 }
-fill_rect 244, 152, 36, 1, Color { r: 245, g: 245, b: 245, a: 255 }
-fill_rect 246, 143, 32, 1, Color { r: 245, g: 245, b: 245, a: 255 }
-fill_rect 246, 154, 32, 1, Color { r: 245, g: 245, b: 245, a: 255 }
-fill_rect 245, 144, 34, 1, Color { r: 245, g: 245, b: 245, a: 255 }
-fill_rect 245, 153, 34, 1, Color { r: 245, g: 245, b: 245, a: 255 }
-fill_rect 244, 147, 36, 5, Color { r: 245, g: 245, b: 245, a: 255 }
 fill_rect 244, 146, 36, 1, Color { r: 245, g: 245, b: 245, a: 255 }
 fill_rect 244, 145, 36, 1, Color { r: 245, g: 245, b: 245, a: 255 }
 fill_rect 244, 152, 36, 1, Color { r: 245, g: 245, b: 245, a: 255 }
@@ -149,7 +133,7 @@ fill_rect 232, 236, 216, 1, Color { r: 128, g: 128, b: 128, a: 255 }
 fill_rect 447, 236, 1, 104, Color { r: 128, g: 128, b: 128, a: 255 }
 fill_rect 232, 339, 216, 1, Color { r: 128, g: 128, b: 128, a: 255 }
 fill_rect 232, 236, 1, 104, Color { r: 128, g: 128, b: 128, a: 255 }
-set_clip_rect 245, 249, 190, 78
+set_clip_rect 245, 249, 190, 23
 fill_rect 245, 253, 138, 1, Color { r: 245, g: 245, b: 245, a: 255 }
 fill_rect 245, 252, 138, 1, Color { r: 245, g: 245, b: 245, a: 255 }
 fill_rect 245, 264, 138, 1, Color { r: 245, g: 245, b: 245, a: 255 }
@@ -161,19 +145,8 @@ fill_rect 246, 250, 136, 1, Color { r: 245, g: 245, b: 245, a: 255 }
 fill_rect 246, 266, 136, 1, Color { r: 245, g: 245, b: 245, a: 255 }
 fill_rect 245, 254, 138, 10, Color { r: 245, g: 245, b: 245, a: 255 }
 set_clip_rect 245, 249, 138, 19
-fill_rect 245, 253, 138, 1, Color { r: 245, g: 245, b: 245, a: 255 }
-fill_rect 245, 252, 138, 1, Color { r: 245, g: 245, b: 245, a: 255 }
-fill_rect 245, 264, 138, 1, Color { r: 245, g: 245, b: 245, a: 255 }
-fill_rect 248, 249, 132, 1, Color { r: 245, g: 245, b: 245, a: 255 }
-fill_rect 248, 267, 132, 1, Color { r: 245, g: 245, b: 245, a: 255 }
-fill_rect 246, 251, 136, 1, Color { r: 245, g: 245, b: 245, a: 255 }
-fill_rect 246, 265, 136, 1, Color { r: 245, g: 245, b: 245, a: 255 }
-fill_rect 246, 250, 136, 1, Color { r: 245, g: 245, b: 245, a: 255 }
-fill_rect 246, 266, 136, 1, Color { r: 245, g: 245, b: 245, a: 255 }
-fill_rect 245, 254, 138, 10, Color { r: 245, g: 245, b: 245, a: 255 }
 draw_text "let mut v = Vec::new();", 245, 249, 13, Color { r: 26, g: 26, b: 26, a: 255 }
-reset_clip_rect
-set_clip_rect 245, 249, 190, 78
+set_clip_rect 245, 249, 190, 23
 fill_rect 245, 273, 60, 1, Color { r: 245, g: 245, b: 245, a: 255 }
 fill_rect 245, 272, 60, 1, Color { r: 245, g: 245, b: 245, a: 255 }
 fill_rect 245, 284, 60, 1, Color { r: 245, g: 245, b: 245, a: 255 }
@@ -184,20 +157,9 @@ fill_rect 246, 285, 58, 1, Color { r: 245, g: 245, b: 245, a: 255 }
 fill_rect 246, 270, 58, 1, Color { r: 245, g: 245, b: 245, a: 255 }
 fill_rect 246, 286, 58, 1, Color { r: 245, g: 245, b: 245, a: 255 }
 fill_rect 245, 274, 60, 10, Color { r: 245, g: 245, b: 245, a: 255 }
-set_clip_rect 245, 269, 60, 19
-fill_rect 245, 273, 60, 1, Color { r: 245, g: 245, b: 245, a: 255 }
-fill_rect 245, 272, 60, 1, Color { r: 245, g: 245, b: 245, a: 255 }
-fill_rect 245, 284, 60, 1, Color { r: 245, g: 245, b: 245, a: 255 }
-fill_rect 248, 269, 54, 1, Color { r: 245, g: 245, b: 245, a: 255 }
-fill_rect 248, 287, 54, 1, Color { r: 245, g: 245, b: 245, a: 255 }
-fill_rect 246, 271, 58, 1, Color { r: 245, g: 245, b: 245, a: 255 }
-fill_rect 246, 285, 58, 1, Color { r: 245, g: 245, b: 245, a: 255 }
-fill_rect 246, 270, 58, 1, Color { r: 245, g: 245, b: 245, a: 255 }
-fill_rect 246, 286, 58, 1, Color { r: 245, g: 245, b: 245, a: 255 }
-fill_rect 245, 274, 60, 10, Color { r: 245, g: 245, b: 245, a: 255 }
+set_clip_rect 245, 269, 60, 3
 draw_text "v.push(1);", 245, 269, 13, Color { r: 26, g: 26, b: 26, a: 255 }
-reset_clip_rect
-set_clip_rect 245, 249, 190, 78
+set_clip_rect 245, 249, 190, 23
 fill_rect 305, 273, 60, 1, Color { r: 245, g: 245, b: 245, a: 255 }
 fill_rect 305, 272, 60, 1, Color { r: 245, g: 245, b: 245, a: 255 }
 fill_rect 305, 284, 60, 1, Color { r: 245, g: 245, b: 245, a: 255 }
@@ -208,19 +170,8 @@ fill_rect 306, 285, 58, 1, Color { r: 245, g: 245, b: 245, a: 255 }
 fill_rect 306, 270, 58, 1, Color { r: 245, g: 245, b: 245, a: 255 }
 fill_rect 306, 286, 58, 1, Color { r: 245, g: 245, b: 245, a: 255 }
 fill_rect 305, 274, 60, 10, Color { r: 245, g: 245, b: 245, a: 255 }
-set_clip_rect 305, 269, 60, 19
-fill_rect 305, 273, 60, 1, Color { r: 245, g: 245, b: 245, a: 255 }
-fill_rect 305, 272, 60, 1, Color { r: 245, g: 245, b: 245, a: 255 }
-fill_rect 305, 284, 60, 1, Color { r: 245, g: 245, b: 245, a: 255 }
-fill_rect 308, 269, 54, 1, Color { r: 245, g: 245, b: 245, a: 255 }
-fill_rect 308, 287, 54, 1, Color { r: 245, g: 245, b: 245, a: 255 }
-fill_rect 306, 271, 58, 1, Color { r: 245, g: 245, b: 245, a: 255 }
-fill_rect 306, 285, 58, 1, Color { r: 245, g: 245, b: 245, a: 255 }
-fill_rect 306, 270, 58, 1, Color { r: 245, g: 245, b: 245, a: 255 }
-fill_rect 306, 286, 58, 1, Color { r: 245, g: 245, b: 245, a: 255 }
-fill_rect 305, 274, 60, 10, Color { r: 245, g: 245, b: 245, a: 255 }
+set_clip_rect 305, 269, 60, 3
 draw_text "v.push(2);", 305, 269, 13, Color { r: 26, g: 26, b: 26, a: 255 }
-reset_clip_rect
-set_clip_rect 245, 249, 190, 78
-reset_clip_rect
-# totals fill_rect=106 draw_text=107 other=11
+set_clip_rect 245, 249, 190, 23
+set_clip_rect 0, 0, 480, 272
+# totals fill_rect=60 draw_text=107 other=8

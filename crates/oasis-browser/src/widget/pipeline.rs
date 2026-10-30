@@ -19,7 +19,7 @@ use crate::loader::{
 use crate::reader;
 use crate::{BrowserWidget, LoadingState, SimpleTextMeasurer};
 
-#[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
+#[cfg(native_net)]
 use crate::loader::io_thread::{IoRequestKind, IoThread};
 
 impl BrowserWidget {
@@ -49,7 +49,7 @@ impl BrowserWidget {
         };
 
         // POST requests always go to the network, so offload to IO thread.
-        #[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
+        #[cfg(native_net)]
         {
             // `ensure_io_thread` fails only if the OS refuses to spawn a
             // thread; fall through to the synchronous load in that case.
@@ -161,7 +161,7 @@ impl BrowserWidget {
         self.decoded_image_lru.clear();
         self.cached_image_info.clear();
         self.image_info_dirty = false;
-        #[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
+        #[cfg(native_net)]
         {
             self.pending_page_load = None;
             self.pending_page_url = None;
@@ -177,8 +177,6 @@ impl BrowserWidget {
     fn clear_node_references(&mut self) {
         self.hover_node = None;
         self.focused_node = None;
-        self.tab_order.clear();
-        self.tab_focus_index = -1;
         self.transition_engine = css::transition::TransitionEngine::new();
     }
 
@@ -258,7 +256,7 @@ impl BrowserWidget {
         };
 
         // Determine if this is a network request that can be offloaded.
-        #[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
+        #[cfg(native_net)]
         {
             // `ensure_io_thread` fails only if the OS refuses to spawn a
             // thread; fall through to the synchronous load in that case.
@@ -279,9 +277,9 @@ impl BrowserWidget {
             vfs,
             &request,
             self.tls.as_deref(),
-            #[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
+            #[cfg(native_net)]
             Some(&mut self.cookie_jar),
-            #[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
+            #[cfg(native_net)]
             Some(&self.cache),
         ) {
             Ok(loaded) => {
@@ -344,7 +342,7 @@ impl BrowserWidget {
     /// Returns `true` for network-only requests (no VFS fallback needed
     /// for the initial attempt). For `VfsThenNetwork`, we try VFS first
     /// synchronously and only offload to the IO thread on VFS miss.
-    #[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
+    #[cfg(native_net)]
     fn should_use_io_thread(&self, request: &ResourceRequest, vfs: &dyn Vfs) -> bool {
         // VFS-only URLs (vfs://) are always local reads.
         if request.url.starts_with("vfs://") {
@@ -377,7 +375,7 @@ impl BrowserWidget {
     /// The worker receives its own `Arc` clone of the TLS provider, so the
     /// provider stays alive for as long as the thread can use it -- even if
     /// [`BrowserWidget::set_tls_provider`] replaces `self.tls` meanwhile.
-    #[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
+    #[cfg(native_net)]
     pub(crate) fn ensure_io_thread(&mut self) -> bool {
         if let Some(io) = self.io_thread.as_mut() {
             // Every submit comes through here: keep the limit current.
@@ -400,7 +398,7 @@ impl BrowserWidget {
     }
 
     /// Submit a page load request to the I/O thread.
-    #[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
+    #[cfg(native_net)]
     fn submit_page_load_to_io_thread(&mut self, request: ResourceRequest) {
         self.ensure_io_thread();
 
@@ -416,7 +414,7 @@ impl BrowserWidget {
     }
 
     /// Submit an image load request to the I/O thread.
-    #[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
+    #[cfg(native_net)]
     pub(crate) fn submit_image_to_io_thread(
         &mut self,
         resolved_url: String,
@@ -441,7 +439,7 @@ impl BrowserWidget {
     ///
     /// Called from `tick()` each frame. Handles both page load and image
     /// load completions.
-    #[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
+    #[cfg(native_net)]
     pub(crate) fn poll_io_thread(&mut self) {
         let io = match &mut self.io_thread {
             Some(io) => io,
@@ -541,7 +539,10 @@ impl BrowserWidget {
                         self.image_decode_in_flight += 1;
                     } else {
                         // Sync fallback — use placeholder on decode failure.
-                        let decoded = match crate::image::decode_image(&body) {
+                        let decoded = match crate::image::decode_image_with_limits(
+                            &body,
+                            self.config.image_limits(),
+                        ) {
                             Some(img) => img,
                             None => {
                                 self.broken_image_urls.insert(resolved.clone());
@@ -664,7 +665,10 @@ impl BrowserWidget {
                 // `<img>` doesn't trigger a second network round-trip
                 // (and inherit any cookie / redirect / cache failure
                 // path that the page-load fetch already cleared).
-                if let Some(decoded) = crate::image::decode_image(&response.body) {
+                if let Some(decoded) = crate::image::decode_image_with_limits(
+                    &response.body,
+                    self.config.image_limits(),
+                ) {
                     let img_bytes = decoded.width as usize * decoded.height as usize * 4;
                     // Evict oldest decoded images if over budget so the
                     // byte counter tracks actual resident memory.
@@ -892,7 +896,7 @@ impl BrowserWidget {
             .iter()
             .any(|&nid| css_uses_media_queries(&doc.text_content(nid)));
         self.external_stylesheet_positions = linked_positions;
-        #[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
+        #[cfg(native_net)]
         {
             self.pending_io_stylesheets.clear();
             self.pending_vfs_stylesheets.clear();
@@ -1615,7 +1619,7 @@ impl BrowserWidget {
     /// doesn't hold a VFS handle, so routing a VFS request through it
     /// would always return "unsupported network scheme: vfs" and the
     /// slot would never fill.
-    #[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
+    #[cfg(native_net)]
     fn submit_external_stylesheets(&mut self, urls: Vec<String>, base_url: &str) {
         let source = if self.config.features.sandbox_only {
             ResourceSource::Vfs
@@ -1670,13 +1674,13 @@ impl BrowserWidget {
     }
 
     /// WASM/PSP stub: no async I/O path, skip external stylesheet loading.
-    #[cfg(any(target_arch = "wasm32", feature = "psp"))]
+    #[cfg(not(native_net))]
     fn submit_external_stylesheets(&mut self, _urls: Vec<String>, _base_url: &str) {}
 
     /// Drain any VFS-scheme stylesheets queued during `load_html` and
     /// parse them against the caller-supplied VFS. Called from `tick()`
     /// so the initial paint can land without waiting.
-    #[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
+    #[cfg(native_net)]
     pub(crate) fn load_pending_vfs_stylesheets(&mut self, vfs: &dyn Vfs) {
         if self.pending_vfs_stylesheets.is_empty() {
             return;
@@ -1718,7 +1722,7 @@ impl BrowserWidget {
     /// own rules) and is fetched like a `<link>`ed sheet — including its
     /// own imports once it arrives. At most [`MAX_STYLESHEET_IMPORTS`]
     /// distinct URLs per page, which also ends import cycles.
-    #[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
+    #[cfg(native_net)]
     fn queue_stylesheet_imports(&mut self, mut arrived: Vec<(usize, String, String)>) {
         // Highest slot first: inserting slots shifts only the slots at
         // or after the insertion point, never a lower one still to do.
@@ -1783,7 +1787,7 @@ impl BrowserWidget {
 
     /// Remember the source text of external sheet `idx` (for re-parsing
     /// on viewport changes) and note whether it is media-dependent.
-    #[cfg_attr(any(target_arch = "wasm32", feature = "psp"), allow(dead_code))]
+    #[cfg_attr(not(native_net), allow(dead_code))]
     fn record_external_source(&mut self, idx: usize, css_text: String) {
         if css_uses_media_queries(&css_text) {
             self.media_dependent_css = true;
@@ -2258,7 +2262,7 @@ fn gemini_to_html(doc: &gemini::parser::GeminiDocument) -> String {
 }
 
 /// Most `@import`ed stylesheets followed per page.
-#[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
+#[cfg(native_net)]
 const MAX_STYLESHEET_IMPORTS: usize = 16;
 
 /// URLs of the `@import` rules at the head of `css` (imports must come
@@ -2266,7 +2270,7 @@ const MAX_STYLESHEET_IMPORTS: usize = 16;
 /// against `sheet_url`. Print-only imports and schemes the loader can't
 /// fetch are skipped; other media / `layer()` / `supports()` conditions
 /// are not evaluated (the sheet is imported unconditionally).
-#[cfg_attr(any(target_arch = "wasm32", feature = "psp"), allow(dead_code))]
+#[cfg_attr(not(native_net), allow(dead_code))]
 pub(crate) fn css_import_urls(css: &str, sheet_url: &str) -> Vec<String> {
     let base = loader::Url::parse(sheet_url);
     let mut urls = Vec::new();

@@ -9,7 +9,7 @@
 //! access via `Arc`. Cookie updates and cache validators are sent back
 //! with each response so the main thread can apply them.
 
-#[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
+#[cfg(native_net)]
 mod inner {
     use std::sync::Arc;
     use std::sync::atomic::{AtomicBool, Ordering};
@@ -364,10 +364,10 @@ mod inner {
     }
 }
 
-#[cfg(not(any(target_arch = "wasm32", feature = "psp")))]
+#[cfg(native_net)]
 pub use inner::*;
 
-#[cfg(all(test, not(any(target_arch = "wasm32", feature = "psp"))))]
+#[cfg(all(test, native_net))]
 mod tests {
     use std::sync::Arc;
     use std::sync::atomic::{AtomicBool, Ordering};

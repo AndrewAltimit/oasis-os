@@ -7,16 +7,16 @@ draw_text "News ", 38, 8, 11, Color { r: 255, g: 255, b: 255, a: 255 }
 draw_text "News ", 39, 8, 11, Color { r: 255, g: 255, b: 255, a: 255 }
 draw_text "Daily", 68, 8, 11, Color { r: 255, g: 255, b: 255, a: 255 }
 draw_text "Daily", 69, 8, 11, Color { r: 255, g: 255, b: 255, a: 255 }
-draw_text "•", -12, 24, 8, Color { r: 255, g: 255, b: 255, a: 255 }
+draw_text "•", -1, 24, 8, Color { r: 255, g: 255, b: 255, a: 255 }
 draw_text "Home", 8, 24, 8, Color { r: 238, g: 238, b: 238, a: 255 }
 fill_rect 8, 30, 29, 1, Color { r: 238, g: 238, b: 238, a: 255 }
-draw_text "•", -4, 24, 8, Color { r: 255, g: 255, b: 255, a: 255 }
+draw_text "•", 7, 24, 8, Color { r: 255, g: 255, b: 255, a: 255 }
 draw_text "AI", 16, 24, 8, Color { r: 238, g: 238, b: 238, a: 255 }
 fill_rect 16, 30, 14, 1, Color { r: 238, g: 238, b: 238, a: 255 }
-draw_text "•", 4, 24, 8, Color { r: 255, g: 255, b: 255, a: 255 }
+draw_text "•", 15, 24, 8, Color { r: 255, g: 255, b: 255, a: 255 }
 draw_text "Hardware", 24, 24, 8, Color { r: 238, g: 238, b: 238, a: 255 }
 fill_rect 24, 30, 57, 1, Color { r: 238, g: 238, b: 238, a: 255 }
-draw_text "•", 12, 24, 8, Color { r: 255, g: 255, b: 255, a: 255 }
+draw_text "•", 23, 24, 8, Color { r: 255, g: 255, b: 255, a: 255 }
 draw_text "About", 32, 24, 8, Color { r: 238, g: 238, b: 238, a: 255 }
 fill_rect 32, 30, 35, 1, Color { r: 238, g: 238, b: 238, a: 255 }
 fill_rect 0, 44, 480, 81, Color { r: 204, g: 0, b: 0, a: 255 }
@@ -60,7 +60,6 @@ draw_text "changes ", 131, 164, 8, Color { r: 0, g: 0, b: 0, a: 255 }
 draw_text "to ", 179, 164, 8, Color { r: 0, g: 0, b: 0, a: 255 }
 draw_text "the ", 197, 164, 8, Color { r: 0, g: 0, b: 0, a: 255 }
 fill_rect 221, 164, 54, 12, Color { r: 128, g: 128, b: 128, a: 255 }
-fill_rect 221, 164, 54, 12, Color { r: 128, g: 128, b: 128, a: 255 }
 draw_text "sched_ext", 221, 164, 8, Color { r: 0, g: 0, b: 0, a: 255 }
 draw_text "subsystem, ", 17, 176, 8, Color { r: 0, g: 0, b: 0, a: 255 }
 draw_text "letting ", 83, 176, 8, Color { r: 0, g: 0, b: 0, a: 255 }
@@ -103,7 +102,7 @@ fill_rect 320, 338, 152, 1, Color { r: 221, g: 221, b: 221, a: 255 }
 fill_rect 320, 133, 1, 206, Color { r: 221, g: 221, b: 221, a: 255 }
 draw_text "Trending", 329, 153, 8, Color { r: 0, g: 0, b: 0, a: 255 }
 draw_text "Trending", 330, 153, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-draw_text "•", 349, 176, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "•", 360, 176, 8, Color { r: 0, g: 0, b: 0, a: 255 }
 draw_text "Why ", 369, 176, 8, Color { r: 0, g: 102, b: 204, a: 255 }
 fill_rect 369, 182, 26, 1, Color { r: 0, g: 102, b: 204, a: 255 }
 draw_text "syscalls", 393, 176, 8, Color { r: 0, g: 102, b: 204, a: 255 }
@@ -114,7 +113,7 @@ draw_text "getting", 393, 188, 8, Color { r: 0, g: 102, b: 204, a: 255 }
 fill_rect 393, 194, 47, 1, Color { r: 0, g: 102, b: 204, a: 255 }
 draw_text "cheaper", 369, 200, 8, Color { r: 0, g: 102, b: 204, a: 255 }
 fill_rect 369, 206, 49, 1, Color { r: 0, g: 102, b: 204, a: 255 }
-draw_text "•", 349, 212, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "•", 360, 212, 8, Color { r: 0, g: 0, b: 0, a: 255 }
 draw_text "io_uring ", 369, 212, 8, Color { r: 0, g: 102, b: 204, a: 255 }
 fill_rect 369, 218, 57, 1, Color { r: 0, g: 102, b: 204, a: 255 }
 draw_text "at ", 423, 212, 8, Color { r: 0, g: 102, b: 204, a: 255 }
@@ -123,7 +122,7 @@ draw_text "5", 441, 212, 8, Color { r: 0, g: 102, b: 204, a: 255 }
 fill_rect 441, 218, 7, 1, Color { r: 0, g: 102, b: 204, a: 255 }
 draw_text "years", 369, 224, 8, Color { r: 0, g: 102, b: 204, a: 255 }
 fill_rect 369, 230, 35, 1, Color { r: 0, g: 102, b: 204, a: 255 }
-draw_text "•", 349, 236, 8, Color { r: 0, g: 0, b: 0, a: 255 }
+draw_text "•", 360, 236, 8, Color { r: 0, g: 0, b: 0, a: 255 }
 draw_text "WebAssembly", 369, 236, 8, Color { r: 0, g: 102, b: 204, a: 255 }
 fill_rect 369, 242, 77, 1, Color { r: 0, g: 102, b: 204, a: 255 }
 draw_text "component ", 369, 248, 8, Color { r: 0, g: 102, b: 204, a: 255 }
@@ -132,4 +131,4 @@ draw_text "model", 429, 248, 8, Color { r: 0, g: 102, b: 204, a: 255 }
 fill_rect 429, 254, 34, 1, Color { r: 0, g: 102, b: 204, a: 255 }
 draw_text "Newsletter", 329, 270, 8, Color { r: 0, g: 0, b: 0, a: 255 }
 draw_text "Newsletter", 330, 270, 8, Color { r: 0, g: 0, b: 0, a: 255 }
-# totals fill_rect=31 draw_text=102 other=0
+# totals fill_rect=30 draw_text=102 other=0

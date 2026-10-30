@@ -22,7 +22,7 @@ use oasis_types::error::Result;
 #[cfg(feature = "web-fonts")]
 use super::WebFontRenderer;
 use super::mask::{MaskParams, apply_mask};
-use super::{DisplayItem, DisplayList};
+use super::{DisplayItem, DisplayList, sticky_offset};
 use crate::css::values::BorderStyle;
 use crate::css::values::types::{BlendMode as CssBlendMode, FilterFunction};
 use crate::layout::box_model::Rect;
@@ -140,8 +140,16 @@ impl DisplayList {
                 } => {
                     flush_rect_batch(backend, &mut rect_batch)?;
                     flush_text_batch(backend, &mut text_batch, text_batch_key)?;
-                    let dx = bounds.x as i32;
-                    let dy = bounds.y as i32;
+                    // `bounds` is screen space at recording time. Where
+                    // the layer lands now: shifted by the replay scroll
+                    // delta and any enclosing sticky correction, then
+                    // expressed in the currently bound surface (the
+                    // framebuffer, or an enclosing layer's target).
+                    let sticky = sticky_dy_stack.last().copied().unwrap_or(0);
+                    let screen_x = bounds.x as i32 + scroll_dx;
+                    let screen_y = bounds.y as i32 + scroll_dy + sticky;
+                    let dx = screen_x + compositor_dx;
+                    let dy = screen_y + compositor_dy;
                     let dw = bounds.width.max(1.0) as u32;
                     let dh = bounds.height.max(1.0) as u32;
                     let blend_backend = css_blend_to_backend(*blend);
@@ -174,8 +182,11 @@ impl DisplayList {
                         // For nested layers this absolute reset is
                         // correct because each render target has its
                         // own coordinate space starting at (0, 0).
-                        compositor_dx = -dx;
-                        compositor_dy = -dy;
+                        // Items add `scroll_dx + compositor_dx` (and the
+                        // sticky correction), so this maps the layer's
+                        // current screen origin to (0, 0).
+                        compositor_dx = -screen_x;
+                        compositor_dy = -screen_y;
                     } else {
                         // Fallback: plain opacity stacking. Blend mode
                         // and filters are dropped — documented as the
@@ -364,7 +375,7 @@ impl DisplayList {
                     // Compute the sticky offset difference between replay
                     // scroll and recording scroll.
                     let eff_scroll = self.recording_scroll_y - scroll_dy as f32;
-                    let new_dy = compute_sticky_dy_from_params(
+                    let new_dy = sticky_offset(
                         *natural_y,
                         *box_height,
                         *top_px,
@@ -372,7 +383,7 @@ impl DisplayList {
                         *visible_viewport_h,
                         eff_scroll,
                     );
-                    let rec_dy = compute_sticky_dy_from_params(
+                    let rec_dy = sticky_offset(
                         *natural_y,
                         *box_height,
                         *top_px,
@@ -508,26 +519,6 @@ impl DisplayList {
                     ];
                     backend.fill_polygon(&shifted, c)?;
                 },
-                DisplayItem::StrokeRoundedRect {
-                    x,
-                    y,
-                    w,
-                    h,
-                    radius,
-                    stroke_width,
-                    color,
-                } => {
-                    let c = apply_layer_opacity(*color, layer_opacity);
-                    backend.stroke_rounded_rect(
-                        x + scroll_dx,
-                        y + eff_dy,
-                        *w,
-                        *h,
-                        *radius,
-                        *stroke_width,
-                        c,
-                    )?;
-                },
                 DisplayItem::Blit {
                     texture,
                     x,
@@ -634,6 +625,9 @@ impl DisplayList {
                         backend.reset_clip_rect()?;
                     }
                 },
+                DisplayItem::Svg { .. } | DisplayItem::Canvas { .. } => {
+                    replay_embedded(backend, item, scroll_dx, eff_dy, layer_opacity)?;
+                },
                 // Already handled above the match.
                 DisplayItem::FillRect { .. }
                 | DisplayItem::DrawText { .. }
@@ -643,9 +637,6 @@ impl DisplayList {
                 | DisplayItem::PopCompositingLayer
                 | DisplayItem::PushSticky { .. }
                 | DisplayItem::PopSticky => {},
-                // BlurHint is metadata for GPU backends; software fallback
-                // applies per-color approximation during recording.
-                DisplayItem::BlurHint { .. } => {},
             }
         }
 
@@ -739,7 +730,7 @@ impl DisplayList {
                     flush_rect_batch(backend, &mut rect_batch)?;
                     flush_text_batch(backend, &mut text_batch, text_batch_key)?;
                     let eff_scroll = self.recording_scroll_y - scroll_dy as f32;
-                    let new_dy = compute_sticky_dy_from_params(
+                    let new_dy = sticky_offset(
                         *natural_y,
                         *box_height,
                         *top_px,
@@ -747,7 +738,7 @@ impl DisplayList {
                         *visible_viewport_h,
                         eff_scroll,
                     );
-                    let rec_dy = compute_sticky_dy_from_params(
+                    let rec_dy = sticky_offset(
                         *natural_y,
                         *box_height,
                         *top_px,
@@ -885,26 +876,6 @@ impl DisplayList {
                     ];
                     backend.fill_polygon(&shifted, c)?;
                 },
-                DisplayItem::StrokeRoundedRect {
-                    x,
-                    y,
-                    w,
-                    h,
-                    radius,
-                    stroke_width,
-                    color,
-                } => {
-                    let c = apply_layer_opacity(*color, layer_opacity);
-                    backend.stroke_rounded_rect(
-                        x + scroll_dx,
-                        y + eff_dy,
-                        *w,
-                        *h,
-                        *radius,
-                        *stroke_width,
-                        c,
-                    )?;
-                },
                 DisplayItem::Blit {
                     texture,
                     x,
@@ -987,6 +958,9 @@ impl DisplayList {
                         *radius,
                     )?;
                 },
+                DisplayItem::Svg { .. } | DisplayItem::Canvas { .. } => {
+                    replay_embedded(backend, item, scroll_dx, eff_dy, layer_opacity)?;
+                },
                 DisplayItem::FillRect { .. }
                 | DisplayItem::DrawText { .. }
                 | DisplayItem::PushClip { .. }
@@ -997,7 +971,6 @@ impl DisplayList {
                 | DisplayItem::PopCompositingLayer
                 | DisplayItem::PushSticky { .. }
                 | DisplayItem::PopSticky => {},
-                DisplayItem::BlurHint { .. } => {},
             }
         }
 
@@ -1011,6 +984,69 @@ impl DisplayList {
 // ---------------------------------------------------------------------------
 // Replay helpers
 // ---------------------------------------------------------------------------
+
+/// Replay an [`DisplayItem::Svg`] / [`DisplayItem::Canvas`] item, whose
+/// content issues its own backend calls, with its top-left at
+/// `(x + dx, y + dy)`.
+///
+/// The active clip already applies (it is backend state). Under a
+/// translucent opacity layer the content is drawn into an offscreen
+/// render target and composited back at `opacity` when the backend
+/// supports render targets; otherwise it is drawn opaque (the same
+/// degradation `PushCompositingLayer` accepts on PSP).
+fn replay_embedded(
+    backend: &mut dyn SdiBackend,
+    item: &DisplayItem,
+    dx: i32,
+    dy: i32,
+    opacity: f32,
+) -> Result<()> {
+    let Some(bounds) = item.bounds() else {
+        return Ok(());
+    };
+    let x = bounds.x as i32 + dx;
+    let y = bounds.y as i32 + dy;
+    let w = bounds.width.max(0.0).ceil() as u32;
+    let h = bounds.height.max(0.0).ceil() as u32;
+    if w == 0 || h == 0 {
+        return Ok(());
+    }
+    let draw = |backend: &mut dyn SdiBackend, ox: i32, oy: i32| -> Result<()> {
+        match item {
+            DisplayItem::Svg {
+                element,
+                width,
+                height,
+                ..
+            } => crate::svg::paint_svg(element, backend, ox, oy, *width, *height),
+            DisplayItem::Canvas { state, w, h, .. } => match state.try_borrow() {
+                Ok(state) => crate::canvas::paint_canvas(&state, backend, ox, oy, *w, *h),
+                // A JS callback holding the canvas mid-replay can't
+                // happen on the UI thread; skip rather than panic.
+                Err(_) => Ok(()),
+            },
+            _ => Ok(()),
+        }
+    };
+    if opacity < 1.0
+        && backend.supports_render_targets()
+        && let Ok(id) = backend.create_render_target(w, h)
+    {
+        if backend.bind_render_target(id).is_ok() {
+            let drawn = draw(backend, 0, 0);
+            let unbound = backend.unbind_render_target();
+            let composited = if drawn.is_ok() && unbound.is_ok() {
+                backend.composite_render_target(id, x, y, w, h, BackendBlendMode::Normal, opacity)
+            } else {
+                Ok(())
+            };
+            let destroyed = backend.destroy_render_target(id);
+            return drawn.and(unbound).and(composited).and(destroyed);
+        }
+        backend.destroy_render_target(id)?;
+    }
+    draw(backend, x, y)
+}
 
 /// Flush accumulated `FillRect` items as a single batched call.
 ///
@@ -1094,39 +1130,6 @@ fn apply_layer_opacity(color: Color, opacity: f32) -> Color {
     }
     let a = (color.a as f32 * opacity).round().clamp(0.0, 255.0) as u8;
     Color::rgba(color.r, color.g, color.b, a)
-}
-
-/// Compute the sticky Y offset from the element's parameters and a scroll value.
-///
-/// This mirrors `compute_sticky_dy` in `record.rs` but works from stored
-/// parameters rather than a live layout box, enabling offset recomputation
-/// during scroll-delta replay.
-fn compute_sticky_dy_from_params(
-    natural_y: f32,
-    box_height: f32,
-    top_px: Option<f32>,
-    bottom_px: Option<f32>,
-    visible_viewport_h: f32,
-    scroll_y: f32,
-) -> i32 {
-    if let Some(top) = top_px {
-        let natural = natural_y - scroll_y;
-        if natural < top {
-            (top - natural) as i32
-        } else {
-            0
-        }
-    } else if let Some(bottom) = bottom_px {
-        let natural = natural_y - scroll_y;
-        let threshold = visible_viewport_h - bottom - box_height;
-        if natural > threshold {
-            (threshold - natural) as i32
-        } else {
-            0
-        }
-    } else {
-        0
-    }
 }
 
 /// Test whether two rectangles overlap.
@@ -1267,9 +1270,7 @@ mod tests {
             bounds,
             opacity,
             blend: CssBlendMode::Multiply,
-            needs_backdrop: false,
             filters: Vec::new(),
-            backdrop_filters: Vec::new(),
             mask: None,
         }
     }
@@ -1749,5 +1750,56 @@ mod tests {
         assert_eq!(fills.next(), Some((5, 5, 1, 1)), "outer-before");
         assert_eq!(fills.next(), Some((5, 5, 2, 2)), "inner");
         assert_eq!(fills.next(), Some((6, 6, 3, 3)), "outer-after");
+
+        // The inner layer composites into the outer target, so its
+        // destination is in outer-local space: (50, 60) - (10, 20).
+        let dsts: Vec<(i32, i32)> = cmds
+            .iter()
+            .filter_map(|c| match c {
+                DrawCommand::CompositeRenderTarget { dst_x, dst_y, .. } => Some((*dst_x, *dst_y)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(dsts, vec![(40, 40), (10, 20)], "inner then outer composite");
+    }
+
+    /// Replaying a cached list with a scroll delta must move the layer
+    /// with its contents: before the fix the target stayed at the
+    /// recorded position while the contents shifted inside it, so a
+    /// scrolled filter / blend / isolation layer drew clipped or empty.
+    #[test]
+    fn compositing_layer_follows_replay_scroll_delta() {
+        use oasis_test_backend::DrawCommand;
+        use oasis_test_backend::RecordingBackend;
+
+        let mut dl = DisplayList::new();
+        dl.push(push_cl(layer_rect(10.0, 120.0, 40.0, 40.0), 1.0));
+        dl.push(DisplayItem::FillRect {
+            x: 15,
+            y: 125,
+            w: 4,
+            h: 4,
+            color: Color::rgba(0, 0, 0, 255),
+            node_id: None,
+        });
+        dl.push(DisplayItem::PopCompositingLayer);
+
+        let mut backend = RecordingBackend::new(480, 272);
+        dl.replay(&mut backend, 0, -50, None).unwrap();
+        let cmds = backend.commands();
+        let inner = cmds.iter().find_map(|c| match c {
+            DrawCommand::FillRect { x, y, .. } => Some((*x, *y)),
+            _ => None,
+        });
+        assert_eq!(inner, Some((5, 5)), "contents stay at layer-local (5, 5)");
+        let dst = cmds.iter().find_map(|c| match c {
+            DrawCommand::CompositeRenderTarget { dst_x, dst_y, .. } => Some((*dst_x, *dst_y)),
+            _ => None,
+        });
+        assert_eq!(
+            dst,
+            Some((10, 70)),
+            "layer composited at its scrolled position"
+        );
     }
 }

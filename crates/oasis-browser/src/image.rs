@@ -2,14 +2,52 @@
 
 use oasis_types::backend::Color;
 
-/// Maximum image dimension (width or height) we allow to decode.
-/// Anything larger is rejected to prevent OOM from malformed headers.
-/// A 1024x1024 RGBA image is 4MB vs 64MB at 4096.
-const MAX_IMAGE_DIMENSION: u32 = 1024;
+/// Largest source width or height decoded at full resolution: the
+/// decode-memory bound (a 4096x4096 RGBA buffer is 64 MiB, 1024x1024 is
+/// 4 MiB). PNG / GIF / WebP / BMP sources above it are rejected because
+/// their decoders cannot scale while decoding; JPEG sources up to 8x
+/// larger are DCT-downscaled during decode instead (see [`decode_jpeg`]).
+const MAX_SOURCE_DIMENSION: u32 = if cfg!(feature = "psp") { 1024 } else { 4096 };
 
-/// Maximum total pixel count for a decoded image before we force
-/// downscaling during decode. 1M pixels = 4MB RGBA.
-const MAX_IMAGE_PIXELS: u32 = 1_048_576;
+/// Output size limits for decoded images.
+///
+/// Decoded images are downscaled (aspect ratio kept) to fit within
+/// `max_dimension` x `max_dimension` and `max_pixels`. The browser takes
+/// them from [`BrowserConfig::max_image_dimension`] /
+/// [`BrowserConfig::max_image_pixels`](crate::BrowserConfig).
+///
+/// [`BrowserConfig::max_image_dimension`]: crate::BrowserConfig
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ImageLimits {
+    /// Largest decoded width or height.
+    pub max_dimension: u32,
+    /// Largest decoded pixel count (4 bytes each).
+    pub max_pixels: u32,
+}
+
+impl ImageLimits {
+    /// Desktop defaults: 4096 px per side, 2 Mpx (8 MiB, the widget's
+    /// whole decoded-image budget) per image.
+    pub const DESKTOP: Self = Self {
+        max_dimension: 4096,
+        max_pixels: 2 * 1024 * 1024,
+    };
+    /// PSP defaults: 1024 px per side, 1 Mpx (4 MiB) per image.
+    pub const PSP: Self = Self {
+        max_dimension: 1024,
+        max_pixels: 1024 * 1024,
+    };
+}
+
+impl Default for ImageLimits {
+    fn default() -> Self {
+        if cfg!(feature = "psp") {
+            Self::PSP
+        } else {
+            Self::DESKTOP
+        }
+    }
+}
 
 /// Decoded image data (RGBA pixels).
 #[derive(Debug, Clone)]
@@ -20,6 +58,11 @@ pub struct DecodedImage {
     pub pixels: Vec<u8>,
     /// Cached: true when any pixel has alpha < 255.
     pub has_transparency: bool,
+    /// Intrinsic size of the source image. Equal to `width`/`height`
+    /// unless decode downscaled it; layout sizes `<img>` from this, so
+    /// a downscaled image still occupies its natural box.
+    pub natural_width: u32,
+    pub natural_height: u32,
 }
 
 impl DecodedImage {
@@ -30,7 +73,16 @@ impl DecodedImage {
             height,
             pixels,
             has_transparency,
+            natural_width: width,
+            natural_height: height,
         }
+    }
+
+    /// Set the intrinsic (source) size.
+    fn with_natural_size(mut self, width: u32, height: u32) -> Self {
+        self.natural_width = width;
+        self.natural_height = height;
+        self
     }
 }
 
@@ -114,37 +166,55 @@ fn looks_like_svg(data: &[u8]) -> bool {
     probe.windows(4).any(|w| w == b"<svg")
 }
 
-/// Decode an image from raw bytes.
+/// Decode an image from raw bytes with the platform's default
+/// [`ImageLimits`]. See [`decode_image_with_limits`].
+pub fn decode_image(data: &[u8]) -> Option<DecodedImage> {
+    decode_image_with_limits(data, ImageLimits::default())
+}
+
+/// Decode an image from raw bytes, downscaling it to fit `limits`.
 ///
-/// Returns the decoded RGBA pixel data with dimensions. If the decoded
-/// image exceeds `MAX_IMAGE_PIXELS`, it is automatically scaled down to
-/// fit within the pixel budget.
+/// JPEGs are DCT-downscaled while decoding (1/2, 1/4 or 1/8), so a
+/// large photo never materializes at full size; other formats decode at
+/// full size (up to 4096 px per side, 1024 on PSP) and are then
+/// bilinear-downscaled. The result keeps the source's intrinsic size in
+/// [`DecodedImage::natural_width`] / [`natural_height`](DecodedImage::natural_height).
 ///
 /// Corrupt or malformed images are handled gracefully: decoder panics
 /// are caught via `catch_unwind` and treated as decode failures
 /// (returns `None`). Callers that need a visual placeholder for failed
 /// decodes should use [`broken_image_placeholder`].
-pub fn decode_image(data: &[u8]) -> Option<DecodedImage> {
+pub fn decode_image_with_limits(data: &[u8], limits: ImageLimits) -> Option<DecodedImage> {
     let decoded = match detect_format(data) {
         ImageFormat::Bmp => decode_bmp(data),
         ImageFormat::Png => decode_png_safe(data),
-        ImageFormat::Jpeg => decode_jpeg_safe(data),
+        ImageFormat::Jpeg => decode_jpeg_safe(data, limits.max_dimension),
         ImageFormat::Gif => decode_gif_safe(data),
         ImageFormat::Webp => decode_webp_safe(data),
         ImageFormat::Svg => decode_svg_placeholder(data),
         ImageFormat::Unknown => None,
     }?;
+    Some(fit_to_limits(decoded, limits))
+}
 
-    // If the image exceeds the pixel budget, scale it down.
-    let total_pixels = decoded.width as u64 * decoded.height as u64;
-    if total_pixels > MAX_IMAGE_PIXELS as u64 {
-        let scale = (MAX_IMAGE_PIXELS as f32 / total_pixels as f32).sqrt();
-        let new_w = (decoded.width as f32 * scale) as u32;
-        let new_h = (decoded.height as f32 * scale) as u32;
-        Some(bilinear_scale(&decoded, new_w.max(1), new_h.max(1)))
-    } else {
-        Some(decoded)
+/// Downscale `image` (keeping its natural size) so it fits within
+/// `limits`.
+fn fit_to_limits(image: DecodedImage, limits: ImageLimits) -> DecodedImage {
+    let max_dim = limits.max_dimension.max(1);
+    let (w, h) = (image.width.max(1) as f32, image.height.max(1) as f32);
+    let mut scale = (max_dim as f32 / w).min(max_dim as f32 / h).min(1.0);
+    let pixels = w * scale * h * scale;
+    let max_pixels = limits.max_pixels.max(1) as f32;
+    if pixels > max_pixels {
+        scale *= (max_pixels / pixels).sqrt();
     }
+    if scale >= 1.0 {
+        return image;
+    }
+    let (natural_w, natural_h) = (image.natural_width, image.natural_height);
+    let new_w = ((w * scale) as u32).max(1);
+    let new_h = ((h * scale) as u32).max(1);
+    bilinear_scale(&image, new_w, new_h).with_natural_size(natural_w, natural_h)
 }
 
 /// Decode a BMP image (uncompressed 24-bit or 32-bit).
@@ -224,7 +294,7 @@ fn decode_png(data: &[u8]) -> Option<DecodedImage> {
     decoder.set_transformations(png::Transformations::EXPAND);
     let mut reader = decoder.read_info().ok()?;
     let info_header = reader.info();
-    if info_header.width > MAX_IMAGE_DIMENSION || info_header.height > MAX_IMAGE_DIMENSION {
+    if info_header.width > MAX_SOURCE_DIMENSION || info_header.height > MAX_SOURCE_DIMENSION {
         return None;
     }
     let mut buf = vec![0u8; reader.output_buffer_size()];
@@ -272,19 +342,41 @@ fn decode_png(data: &[u8]) -> Option<DecodedImage> {
 }
 
 /// Decode a JPEG image, catching panics from malformed data.
-fn decode_jpeg_safe(data: &[u8]) -> Option<DecodedImage> {
-    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| decode_jpeg(data)))
-        .ok()
-        .flatten()
+fn decode_jpeg_safe(data: &[u8], max_dimension: u32) -> Option<DecodedImage> {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        decode_jpeg(data, max_dimension)
+    }))
+    .ok()
+    .flatten()
+}
+
+/// The JPEG DCT scale divisor (1, 2, 4 or 8) for a `src_w` x `src_h`
+/// image: the smallest that brings the longer side within
+/// `max_dimension`, else 8 if that at least fits the decode-memory bound
+/// [`MAX_SOURCE_DIMENSION`] (the rest is bilinear-scaled afterwards).
+/// `None` when even 1/8 is too large.
+fn jpeg_scale_divisor(src_w: u32, src_h: u32, max_dimension: u32) -> Option<u32> {
+    let longest = src_w.max(src_h);
+    [1u32, 2, 4, 8]
+        .into_iter()
+        .find(|d| longest.div_ceil(*d) <= max_dimension.min(MAX_SOURCE_DIMENSION))
+        .or_else(|| (longest.div_ceil(8) <= MAX_SOURCE_DIMENSION).then_some(8))
 }
 
 /// Decode a JPEG image using the `jpeg-decoder` crate.
-fn decode_jpeg(data: &[u8]) -> Option<DecodedImage> {
+fn decode_jpeg(data: &[u8], max_dimension: u32) -> Option<DecodedImage> {
     let mut decoder = jpeg_decoder::Decoder::new(data);
     decoder.read_info().ok()?;
     let info = decoder.info()?;
-    if (info.width as u32) > MAX_IMAGE_DIMENSION || (info.height as u32) > MAX_IMAGE_DIMENSION {
-        return None;
+    let (src_w, src_h) = (u32::from(info.width), u32::from(info.height));
+    let divisor = jpeg_scale_divisor(src_w, src_h, max_dimension)?;
+    if divisor > 1 {
+        // `scale` picks the smallest DCT scale whose output is at least
+        // the requested size, so asking for exactly src/divisor selects
+        // 1/divisor.
+        let req_w = u16::try_from(src_w.div_ceil(divisor)).ok()?;
+        let req_h = u16::try_from(src_h.div_ceil(divisor)).ok()?;
+        decoder.scale(req_w, req_h).ok()?;
     }
     let pixels_raw = decoder.decode().ok()?;
     let info = decoder.info()?;
@@ -331,7 +423,7 @@ fn decode_jpeg(data: &[u8]) -> Option<DecodedImage> {
         },
     };
 
-    Some(DecodedImage::new(w, h, pixels))
+    Some(DecodedImage::new(w, h, pixels).with_natural_size(src_w, src_h))
 }
 
 /// Decode a GIF image, catching panics from malformed data.
@@ -350,7 +442,7 @@ fn decode_gif(data: &[u8]) -> Option<DecodedImage> {
 
     let w = u32::from(frame.width);
     let h = u32::from(frame.height);
-    if w == 0 || h == 0 || w > MAX_IMAGE_DIMENSION || h > MAX_IMAGE_DIMENSION {
+    if w == 0 || h == 0 || w > MAX_SOURCE_DIMENSION || h > MAX_SOURCE_DIMENSION {
         return None;
     }
 
@@ -384,7 +476,7 @@ fn decode_webp(data: &[u8]) -> Option<DecodedImage> {
         let rgba = img.to_rgba8();
         let w = rgba.width();
         let h = rgba.height();
-        if w > MAX_IMAGE_DIMENSION || h > MAX_IMAGE_DIMENSION {
+        if w > MAX_SOURCE_DIMENSION || h > MAX_SOURCE_DIMENSION {
             return None;
         }
         Some(DecodedImage::new(w, h, rgba.into_raw()))
@@ -435,12 +527,12 @@ fn decode_svg_placeholder(data: &[u8]) -> Option<DecodedImage> {
         .or(viewbox.map(|(_, _, w, _)| w))
         .unwrap_or(32.0)
         .max(1.0)
-        .min(MAX_IMAGE_DIMENSION as f32) as u32;
+        .min(MAX_SOURCE_DIMENSION as f32) as u32;
     let h = height
         .or(viewbox.map(|(_, _, _, h)| h))
         .unwrap_or(32.0)
         .max(1.0)
-        .min(MAX_IMAGE_DIMENSION as f32) as u32;
+        .min(MAX_SOURCE_DIMENSION as f32) as u32;
 
     // Transparent RGBA.
     let pixels = vec![0u8; (w * h * 4) as usize];
@@ -993,15 +1085,53 @@ mod tests {
     }
 
     #[test]
-    fn max_image_dimension_reduced_to_1024() {
-        assert_eq!(MAX_IMAGE_DIMENSION, 1024);
+    fn jpeg_scale_divisor_picks_smallest_fitting_dct_scale() {
+        assert_eq!(jpeg_scale_divisor(800, 600, 1024), Some(1));
+        assert_eq!(jpeg_scale_divisor(2000, 1000, 1024), Some(2));
+        assert_eq!(jpeg_scale_divisor(4000, 3000, 1024), Some(4));
+        // 1/8 still too big for max_dimension but within the memory
+        // bound: decode at 1/8 and bilinear the rest.
+        assert_eq!(jpeg_scale_divisor(16_000, 100, 256), Some(8));
+        assert_eq!(jpeg_scale_divisor(u32::from(u16::MAX), 10, 64), None);
     }
 
     #[test]
-    fn large_bmp_exceeding_pixel_budget_is_scaled() {
-        // We can't easily construct a huge BMP in memory for this test,
-        // so we verify the pixel budget constant is correct.
-        assert_eq!(MAX_IMAGE_PIXELS, 1_048_576);
+    fn jpeg_wider_than_limit_is_downscaled_not_rejected() {
+        let data = include_bytes!("../tests/fixtures/images/wide_1600x400.jpg");
+        let limits = ImageLimits {
+            max_dimension: 1024,
+            max_pixels: 1024 * 1024,
+        };
+        let img = decode_image_with_limits(data, limits).expect("decodes");
+        assert!(
+            img.width <= 1024 && img.height <= 1024,
+            "{}x{}",
+            img.width,
+            img.height
+        );
+        assert_eq!(img.width, 800, "DCT 1/2 scale");
+        assert_eq!((img.natural_width, img.natural_height), (1600, 400));
+    }
+
+    #[test]
+    fn pixel_cap_downscales_and_keeps_natural_size() {
+        let img = DecodedImage::new(400, 200, vec![255u8; 400 * 200 * 4]);
+        let limits = ImageLimits {
+            max_dimension: 4096,
+            max_pixels: 20_000,
+        };
+        let out = fit_to_limits(img, limits);
+        assert!(out.width * out.height <= 20_000);
+        assert_eq!((out.natural_width, out.natural_height), (400, 200));
+        // Aspect ratio kept.
+        assert_eq!(out.width, out.height * 2);
+    }
+
+    #[test]
+    fn image_within_limits_is_untouched() {
+        let img = DecodedImage::new(64, 32, vec![255u8; 64 * 32 * 4]);
+        let out = fit_to_limits(img, ImageLimits::DESKTOP);
+        assert_eq!((out.width, out.height), (64, 32));
     }
 
     #[test]

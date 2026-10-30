@@ -792,18 +792,6 @@ pub(super) fn parse_counter_directive(value: &CssValue) -> Vec<(String, i32)> {
     result
 }
 
-/// Resolve counters in a `content` property value.
-///
-/// Replaces `counter(name)` references with the current counter value.
-#[allow(dead_code)]
-pub(super) fn resolve_content_counters(
-    content: &str,
-    _counters: &std::collections::HashMap<String, i32>,
-) -> String {
-    // Placeholder implementation -- returns content unchanged.
-    content.to_string()
-}
-
 /// Parse `grid-template-areas` value.
 pub(super) fn parse_grid_template_areas(value: &CssValue) -> Vec<Vec<String>> {
     let raw = match value {

@@ -54,10 +54,6 @@ pub(super) struct MatchedDeclaration {
     pub(super) origin: Origin,
     pub(super) specificity: Specificity,
     pub(super) source_order: usize,
-    /// Index of the source stylesheet. Retained for diagnostics; layer
-    /// comparison now uses global indices.
-    #[allow(dead_code)]
-    pub(super) sheet_idx: u16,
     /// Cascade-layer index inside the source stylesheet, or `None`
     /// for unlayered rules / non-stylesheet origins.
     pub(super) layer: Option<u16>,
@@ -328,7 +324,6 @@ pub(super) fn resolve_pseudo_style_indexed(
                     origin: Origin::Stylesheet,
                     specificity,
                     source_order: decl_base + i,
-                    sheet_idx: sheet_idx as u16,
                     layer: global_layer,
                 });
             }
@@ -549,7 +544,6 @@ pub(super) fn collect_matched_declarations(
                     origin: Origin::Stylesheet,
                     specificity,
                     source_order: candidate.source_order_base + decl_idx,
-                    sheet_idx: candidate.sheet_idx as u16,
                     layer: global_layer,
                 });
             }
@@ -583,7 +577,6 @@ pub(super) fn collect_matched_declarations(
                 origin: Origin::Inline,
                 specificity: inline_spec,
                 source_order: inline_base + i,
-                sheet_idx: u16::MAX,
                 layer: None,
             });
         }
@@ -620,7 +613,6 @@ fn collect_presentational_attrs(
             origin: Origin::Presentational,
             specificity: zero_spec,
             source_order: 0,
-            sheet_idx: u16::MAX,
             layer: None,
         });
     };
