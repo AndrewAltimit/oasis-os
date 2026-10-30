@@ -11,7 +11,6 @@
 //! Types are imported from `oasis-core` directly.
 
 #![feature(restricted_std)]
-#![feature(asm_experimental_arch)]
 
 // ---------------------------------------------------------------------------
 // Module declarations
@@ -48,7 +47,6 @@ pub mod video;
 // ---------------------------------------------------------------------------
 
 pub use audio::PspAudioBackend;
-pub use video::vlog_force;
 pub use filesystem::{FileEntry, decode_jpeg, format_size, list_directory, read_file};
 pub use network::{PspNetworkBackend, PspNetworkService};
 #[cfg(feature = "kernel-exception")]
@@ -64,6 +62,7 @@ pub use threading::{
     AudioCmd, AudioHandle, IoCmd, IoHandle, IoResponse, TvCatalogRequest, spawn_workers,
 };
 pub use tls::PspTlsProvider;
+pub use video::vlog_force;
 
 // ---------------------------------------------------------------------------
 // Re-exports from oasis-core
@@ -429,9 +428,10 @@ impl PspBackend {
 
     /// Check if any button OTHER than `exclude` is currently held.
     pub fn is_any_other_button_held(&self, exclude: psp::sys::CtrlButtons) -> bool {
-        self.controller.raw().buttons.intersects(
-            psp::sys::CtrlButtons::from_bits_truncate(!exclude.bits()),
-        )
+        self.controller
+            .raw()
+            .buttons
+            .intersects(psp::sys::CtrlButtons::from_bits_truncate(!exclude.bits()))
     }
 
     /// Query volatile memory cache status.

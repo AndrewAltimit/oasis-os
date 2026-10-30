@@ -39,16 +39,6 @@ pub(crate) fn create_dashboard(
 // SDI update helpers
 // ---------------------------------------------------------------------------
 
-/// Show dashboard icons in the SDI registry (tick animation + update).
-pub(crate) fn show_dashboard_sdi(
-    dashboard: &mut DashboardState,
-    sdi: &mut SdiRegistry,
-    active_theme: &ActiveTheme,
-) {
-    dashboard.tick_animation();
-    dashboard.update_sdi(sdi, active_theme);
-}
-
 /// Hide dashboard icons in the SDI registry.
 pub(crate) fn hide_dashboard_sdi(dashboard: &mut DashboardState, sdi: &mut SdiRegistry) {
     dashboard.hide_sdi(sdi);

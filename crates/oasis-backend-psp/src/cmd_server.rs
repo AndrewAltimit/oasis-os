@@ -165,7 +165,7 @@ fn auto_connect_wifi() {
         Ok(_) => {
             log_msg("[CMD] net init OK");
             crate::network::mark_net_stack_initialized();
-        }
+        },
         Err(_) => log_msg("[CMD] net init err (may be already init)"),
     }
 
@@ -186,7 +186,8 @@ fn auto_connect_wifi() {
         if ret < 0 {
             // Log hex error code.
             log_msg(&format!(
-                "[CMD] apctl connect({}) = 0x{:08x}", profile, ret as u32
+                "[CMD] apctl connect({}) = 0x{:08x}",
+                profile, ret as u32
             ));
             continue;
         }
@@ -288,9 +289,7 @@ fn server_main() {
     loop {
         let mut client_addr: psp::sys::sockaddr = unsafe { core::mem::zeroed() };
         let mut addr_len: u32 = core::mem::size_of::<psp::sys::sockaddr>() as u32;
-        let cfd = unsafe {
-            psp::sys::sceNetInetAccept(fd, &mut client_addr, &mut addr_len)
-        };
+        let cfd = unsafe { psp::sys::sceNetInetAccept(fd, &mut client_addr, &mut addr_len) };
         if cfd < 0 {
             psp::thread::sleep_ms(500);
             continue;
@@ -306,14 +305,7 @@ fn server_main() {
 
 fn handle_client(cfd: i32) {
     let mut buf = [0u8; 256];
-    let n = unsafe {
-        psp::sys::sceNetInetRecv(
-            cfd,
-            buf.as_mut_ptr() as *mut c_void,
-            256,
-            0,
-        )
-    };
+    let n = unsafe { psp::sys::sceNetInetRecv(cfd, buf.as_mut_ptr() as *mut c_void, 256, 0) };
 
     if n <= 0 {
         unsafe { psp::sys::sceNetInetClose(cfd) };
@@ -321,7 +313,8 @@ fn handle_client(cfd: i32) {
     }
 
     let raw = &buf[..n as usize];
-    let cmd = raw.split(|&b| b == b'\n' || b == b'\r')
+    let cmd = raw
+        .split(|&b| b == b'\n' || b == b'\r')
         .next()
         .unwrap_or(raw);
 
@@ -394,8 +387,11 @@ fn handle_client(cfd: i32) {
             let size = parse_u32(parts[0]);
             let path = parts[1];
             if size > 0 && size < 24_000_000 && !path.is_empty() {
-                let header_end = raw.iter().position(|&b| b == b'\n')
-                    .map(|p| p + 1).unwrap_or(n as usize);
+                let header_end = raw
+                    .iter()
+                    .position(|&b| b == b'\n')
+                    .map(|p| p + 1)
+                    .unwrap_or(n as usize);
                 let leftover = &buf[header_end..n as usize];
                 receive_file(cfd, size, path, leftover);
             } else {
@@ -416,8 +412,11 @@ fn handle_client(cfd: i32) {
             None
         };
         if size > 0 && size < 24_000_000 {
-            let header_end = raw.iter().position(|&b| b == b'\n')
-                .map(|p| p + 1).unwrap_or(n as usize);
+            let header_end = raw
+                .iter()
+                .position(|&b| b == b'\n')
+                .map(|p| p + 1)
+                .unwrap_or(n as usize);
             let leftover = &buf[header_end..n as usize];
             receive_deploy(cfd, size, leftover, expected_crc);
         } else {
@@ -444,8 +443,13 @@ fn handle_client(cfd: i32) {
     } else if cmd.starts_with(b"skin ") {
         let key = core::str::from_utf8(&cmd[5..]).unwrap_or("").trim();
         let known = [
-            "psix", "classic", "balatro", "retro-cga", "solarized",
-            "highcontrast", "altimit",
+            "psix",
+            "classic",
+            "balatro",
+            "retro-cga",
+            "solarized",
+            "highcontrast",
+            "altimit",
         ];
         if known.contains(&key) {
             request_skin_change(key);
@@ -454,12 +458,7 @@ fn handle_client(cfd: i32) {
         } else {
             send_response(
                 cfd,
-                format!(
-                    "err: unknown skin '{}'. use: {}\n",
-                    key,
-                    known.join(", "),
-                )
-                .as_bytes(),
+                format!("err: unknown skin '{}'. use: {}\n", key, known.join(", "),).as_bytes(),
             );
         }
     } else {
@@ -572,7 +571,12 @@ fn send_status(cfd: i32) {
     let resp = format!(
         "{{\"kiosk\":\"{}\",\"free_kb\":{},\"max_blk_kb\":{},\
          \"frame\":{},\"audio_only\":{},\"build\":\"{}\"}}\n",
-        kiosk_name(kiosk), free, max_blk, frame, audio_only, BUILD_ID,
+        kiosk_name(kiosk),
+        free,
+        max_blk,
+        frame,
+        audio_only,
+        BUILD_ID,
     );
     send_response(cfd, resp.as_bytes());
 }
@@ -594,10 +598,25 @@ fn send_video_status(cfd: i32) {
          \"upload_avg_us\":{},\
          \"audio_only\":{},\"me_leaked\":{},\"frame_limit\":{},\
          \"decode_step\":{}}}\n",
-        s.width, s.height, s.decoded, s.errors, s.no_pic,
-        s.processed, s.pushed, s.dropped, s.polled, s.poll_attempts,
-        if s.upload_count > 0 { s.upload_us / s.upload_count } else { 0 },
-        s.audio_only, s.me_leaked, s.frame_limit, s.decode_step,
+        s.width,
+        s.height,
+        s.decoded,
+        s.errors,
+        s.no_pic,
+        s.processed,
+        s.pushed,
+        s.dropped,
+        s.polled,
+        s.poll_attempts,
+        if s.upload_count > 0 {
+            s.upload_us / s.upload_count
+        } else {
+            0
+        },
+        s.audio_only,
+        s.me_leaked,
+        s.frame_limit,
+        s.decode_step,
     );
     send_response(cfd, resp.as_bytes());
 }
@@ -616,28 +635,13 @@ fn set_recv_timeout(fd: i32, secs: u32) {
             0xFFFF, // SOL_SOCKET
             0x1006, // SO_RCVTIMEO
             timeval.as_ptr() as *const c_void,
-            8,      // sizeof(timeval) on PSP
+            8, // sizeof(timeval) on PSP
         );
     }
 }
 
-/// CRC32 (ISO 3309) — same polynomial as zlib.crc32() on the host.
-fn crc32(data: &[u8]) -> u32 {
-    let mut crc: u32 = 0xFFFF_FFFF;
-    for &byte in data {
-        crc ^= byte as u32;
-        for _ in 0..8 {
-            if crc & 1 != 0 {
-                crc = (crc >> 1) ^ 0xEDB8_8320;
-            } else {
-                crc >>= 1;
-            }
-        }
-    }
-    !crc
-}
-
-/// Incrementally update a running CRC32 value with a new chunk.
+/// Incrementally update a running CRC32 (ISO 3309, the polynomial of the
+/// host's `zlib.crc32()`) with a new chunk. Start from 0.
 fn crc32_update(crc: u32, data: &[u8]) -> u32 {
     let mut crc = !crc;
     for &byte in data {
@@ -670,7 +674,11 @@ fn parse_hex_u32(data: &[u8]) -> u32 {
 
 fn parse_u32(data: &[u8]) -> u32 {
     data.iter().fold(0u32, |acc, &b| {
-        if b >= b'0' && b <= b'9' { acc * 10 + (b - b'0') as u32 } else { acc }
+        if b >= b'0' && b <= b'9' {
+            acc * 10 + (b - b'0') as u32
+        } else {
+            acc
+        }
     })
 }
 
@@ -743,9 +751,13 @@ fn run_js_eval(cfd: i32, script: &[u8]) {
         Err(_) => {
             send_response(cfd, b"js: error: script is not valid UTF-8\n");
             return;
-        }
+        },
     };
-    log_msg(&format!("[js] eval ({} bytes) source={:?}", script_str.len(), script_str));
+    log_msg(&format!(
+        "[js] eval ({} bytes) source={:?}",
+        script_str.len(),
+        script_str
+    ));
 
     // TODO: promote to JsEngine::eval once the PSP QuickJS integration
     // is stable. Currently bypasses JsEngine to log between every
@@ -784,7 +796,7 @@ fn run_js_eval(cfd: i32, script: &[u8]) {
     context.with(|ctx| {
         log_msg("[js] inside context.with");
 
-        let raw_ctx = unsafe { ctx.as_raw().as_ptr() };
+        let raw_ctx = ctx.as_raw().as_ptr();
 
         let mut src_buf = Vec::with_capacity(script_str.len() + 1);
         src_buf.extend_from_slice(script_str.as_bytes());
@@ -807,9 +819,7 @@ fn run_js_eval(cfd: i32, script: &[u8]) {
             result_msg.extend_from_slice(b"js: error: exception\n");
             unsafe { oasis_js::rquickjs::qjs::JS_FreeValue(raw_ctx, val) };
         } else {
-            let cstr = unsafe {
-                oasis_js::rquickjs::qjs::JS_ToCString(raw_ctx, val)
-            };
+            let cstr = unsafe { oasis_js::rquickjs::qjs::JS_ToCString(raw_ctx, val) };
             if cstr.is_null() {
                 result_msg.extend_from_slice(b"js: undefined\n");
             } else {
@@ -835,12 +845,7 @@ fn run_js_eval(cfd: i32, script: &[u8]) {
 
 fn send_response(cfd: i32, data: &[u8]) {
     unsafe {
-        psp::sys::sceNetInetSend(
-            cfd,
-            data.as_ptr() as *const c_void,
-            data.len(),
-            0,
-        );
+        psp::sys::sceNetInetSend(cfd, data.as_ptr() as *const c_void, data.len(), 0);
     }
 }
 
@@ -855,11 +860,7 @@ fn take_screenshot() {
             0o777,
         );
         if fd >= psp::sys::SceUid(0) {
-            psp::sys::sceIoWrite(
-                fd,
-                0x44000000u32 as *const c_void,
-                FB_SIZE,
-            );
+            psp::sys::sceIoWrite(fd, 0x44000000u32 as *const c_void, FB_SIZE);
             psp::sys::sceIoClose(fd);
         }
     }
@@ -874,9 +875,7 @@ fn send_screencap(cfd: i32) {
     for row in 0..272u32 {
         let row_ptr = unsafe { vram.add((row * 512 * 4) as usize) };
         // SAFETY: reading from VRAM mapped region, 480*4 bytes per row.
-        let row_slice = unsafe {
-            core::slice::from_raw_parts(row_ptr, 480 * 4)
-        };
+        let row_slice = unsafe { core::slice::from_raw_parts(row_ptr, 480 * 4) };
         send_response(cfd, row_slice);
     }
 }
@@ -888,8 +887,11 @@ fn receive_file(cfd: i32, size: u32, path: &[u8], leftover: &[u8]) {
     path_buf.extend_from_slice(path);
     path_buf.push(0);
 
-    log_msg(&format!("[CMD] upload: {} bytes → {}",
-        size, core::str::from_utf8(path).unwrap_or("?")));
+    log_msg(&format!(
+        "[CMD] upload: {} bytes → {}",
+        size,
+        core::str::from_utf8(path).unwrap_or("?")
+    ));
 
     let fd = unsafe {
         psp::sys::sceIoOpen(
@@ -917,11 +919,15 @@ fn receive_file(cfd: i32, size: u32, path: &[u8], leftover: &[u8]) {
     while received < size {
         let n = unsafe {
             psp::sys::sceNetInetRecv(
-                cfd, buf.as_mut_ptr() as *mut c_void,
-                buf.len().min((size - received) as usize), 0,
+                cfd,
+                buf.as_mut_ptr() as *mut c_void,
+                buf.len().min((size - received) as usize),
+                0,
             )
         };
-        if n <= 0 { break; }
+        if n <= 0 {
+            break;
+        }
         unsafe {
             psp::sys::sceIoWrite(fd, buf.as_ptr() as *const c_void, n as usize);
         }
@@ -943,10 +949,8 @@ fn receive_file(cfd: i32, size: u32, path: &[u8], leftover: &[u8]) {
 /// Writes to a temp file first, then renames over the live EBOOT.
 /// If `expected_crc` is provided, validates CRC32 after transfer.
 fn receive_deploy(cfd: i32, size: u32, leftover: &[u8], expected_crc: Option<u32>) {
-    const TEMP_PATH: *const u8 =
-        b"ms0:/PSP/GAME/OASISOS/EBOOT.PBP.tmp\0".as_ptr();
-    const FINAL_PATH: *const u8 =
-        b"ms0:/PSP/GAME/OASISOS/EBOOT.PBP\0".as_ptr();
+    const TEMP_PATH: *const u8 = b"ms0:/PSP/GAME/OASISOS/EBOOT.PBP.tmp\0".as_ptr();
+    const FINAL_PATH: *const u8 = b"ms0:/PSP/GAME/OASISOS/EBOOT.PBP\0".as_ptr();
 
     log_msg("[CMD] deploy: receiving EBOOT");
 
@@ -971,11 +975,7 @@ fn receive_deploy(cfd: i32, size: u32, leftover: &[u8], expected_crc: Option<u32
     // Write leftover bytes from the initial recv.
     if !leftover.is_empty() {
         unsafe {
-            psp::sys::sceIoWrite(
-                fd,
-                leftover.as_ptr() as *const c_void,
-                leftover.len(),
-            );
+            psp::sys::sceIoWrite(fd, leftover.as_ptr() as *const c_void, leftover.len());
         }
         if expected_crc.is_some() {
             running_crc = crc32_update(running_crc, leftover);
@@ -999,11 +999,7 @@ fn receive_deploy(cfd: i32, size: u32, leftover: &[u8], expected_crc: Option<u32
         }
         let chunk = &buf[..n as usize];
         unsafe {
-            psp::sys::sceIoWrite(
-                fd,
-                chunk.as_ptr() as *const c_void,
-                chunk.len(),
-            );
+            psp::sys::sceIoWrite(fd, chunk.as_ptr() as *const c_void, chunk.len());
         }
         if expected_crc.is_some() {
             running_crc = crc32_update(running_crc, chunk);
@@ -1058,9 +1054,7 @@ fn send_log(cfd: i32, max_bytes: usize) {
     }
 
     // Seek to last N bytes.
-    let size = unsafe {
-        psp::sys::sceIoLseek(fd, 0, psp::sys::IoWhence::End)
-    };
+    let size = unsafe { psp::sys::sceIoLseek(fd, 0, psp::sys::IoWhence::End) };
     let offset = if size > max_bytes as i64 {
         size - max_bytes as i64
     } else {
@@ -1075,9 +1069,7 @@ fn send_log(cfd: i32, max_bytes: usize) {
     let mut remaining = max_bytes;
     loop {
         let to_read = remaining.min(buf.len());
-        let n = unsafe {
-            psp::sys::sceIoRead(fd, buf.as_mut_ptr() as *mut c_void, to_read as u32)
-        };
+        let n = unsafe { psp::sys::sceIoRead(fd, buf.as_mut_ptr() as *mut c_void, to_read as u32) };
         if n <= 0 {
             break;
         }

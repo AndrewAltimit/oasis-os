@@ -84,10 +84,10 @@ webpki = { version = "0.22", default-features = false, features = ["std"] }
 getrandom_02 = { package = "getrandom", version = "0.2", features = ["custom"] }
 getrandom = "0.3"
 
-# unicode-width fork: the upstream crate panics on mipsel-sony-psp due to
-# a lookup table issue. This fork patches the panic for the MIPS target.
-[patch.crates-io]
-unicode-width = { git = "https://git.sr.ht/~sajattack/unicode-width", rev = "114ac47" }
+# No `[patch.crates-io] unicode-width` here: nothing in the graph uses
+# unicode-width, so cargo only warned that the patch was unused. If a
+# dependency (e.g. ratatui) pulls it in, re-add rust-psp's MIPS alignment
+# workaround: unicode-width = { git = "https://git.sr.ht/~sajattack/unicode-width", rev = "114ac47" }
 
 [profile.release]
 lto = "thin"

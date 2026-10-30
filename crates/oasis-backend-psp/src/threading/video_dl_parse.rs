@@ -238,7 +238,9 @@ fn push_video_sample(
         ));
     }
 
-    let prefix_size = vt.avcc.as_ref()
+    let prefix_size = vt
+        .avcc
+        .as_ref()
         .map_or(4, |avcc| avcc.nal_length_size as u8);
 
     // Only include SPS/PPS on keyframes — the decoder stores them from

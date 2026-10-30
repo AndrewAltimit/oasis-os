@@ -141,9 +141,7 @@ pub(super) fn dispatch_dashboard_confirm(
                     for (i, ch) in tv.channels.iter().enumerate() {
                         for src in &ch.source {
                             let api_path =
-                                oasis_app_tv_guide::ChannelCatalog::files_api_path(
-                                    &src.item_id,
-                                );
+                                oasis_app_tv_guide::ChannelCatalog::files_api_path(&src.item_id);
                             batch.push(TvCatalogRequest {
                                 url: format!("http://archive.org{}", api_path,),
                                 ch_idx: i,
@@ -372,7 +370,10 @@ pub(super) fn dispatch_tv_confirm(
                 catalog.episodes.len()
             ));
             let best = oasis_app_tv_guide::select_smallest_with_max_width(
-                &catalog.episodes, 20_000_000, 320, 480,
+                &catalog.episodes,
+                20_000_000,
+                320,
+                480,
             );
             if let Some(ep) = best {
                 dbg_log(&format!(

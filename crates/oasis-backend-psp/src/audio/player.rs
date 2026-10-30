@@ -257,11 +257,6 @@ impl AudioPlayer {
         self.load_and_play(temp_path)
     }
 
-    /// Start playback from a borrowed slice (copies data internally).
-    pub fn load_and_play_data(&mut self, data: &[u8]) -> bool {
-        self.load_and_play_owned(data.to_vec())
-    }
-
     /// Refill the read buffer: compact consumed data and read more from file.
     ///
     /// Uses the PRX plugin's compact+stream-refill pattern: when more than

@@ -14,13 +14,7 @@ use oasis_core::active_theme::ActiveTheme;
 // Dashboard rendering
 // ---------------------------------------------------------------------------
 
-pub(crate) fn draw_dashboard(
-    backend: &mut PspBackend,
-    selected: usize,
-    page: usize,
-    viz_frame: u32,
-    at: &ActiveTheme,
-) {
+pub(crate) fn draw_dashboard(backend: &mut PspBackend, page: usize, at: &ActiveTheme) {
     let page_start = page * ICONS_PER_PAGE;
     let page_end = (page_start + ICONS_PER_PAGE).min(APPS.len());
     let page_count = page_end - page_start;
@@ -58,7 +52,13 @@ pub(crate) fn draw_dashboard(
 /// distinct between apps.
 fn draw_icon(backend: &mut PspBackend, app: &AppEntry, ix: i32, iy: i32, at: &ActiveTheme) {
     backend.fill_rect_inner(ix + 2, iy + 3, ICON_W + 2, ICON_H + 1, at.icon.shadow_color);
-    backend.fill_rect_inner(ix - 1, iy - 1, ICON_W + 2, ICON_H + 2, at.icon.outline_color);
+    backend.fill_rect_inner(
+        ix - 1,
+        iy - 1,
+        ICON_W + 2,
+        ICON_H + 2,
+        at.icon.outline_color,
+    );
     backend.fill_rect_inner(ix, iy, ICON_W, ICON_H, at.icon.body_color);
     backend.fill_rect_inner(ix, iy, ICON_W - ICON_FOLD_SIZE, ICON_STRIPE_H, app.color);
     backend.fill_rect_inner(

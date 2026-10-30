@@ -144,9 +144,8 @@ fn ensure_net_init() -> Result<()> {
     // 128 KiB memory pool for the networking stack.
     // Skip if already initialized (e.g. cmd_server called psp::net::init at boot).
     if !NET_STACK_INITIALIZED.load(Ordering::Acquire) {
-        psp::net::init(0x20000).map_err(|e| {
-            OasisError::Backend(format!("net init failed: {e}").into())
-        })?;
+        psp::net::init(0x20000)
+            .map_err(|e| OasisError::Backend(format!("net init failed: {e}").into()))?;
         NET_STACK_INITIALIZED.store(true, Ordering::Release);
     }
 

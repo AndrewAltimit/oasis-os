@@ -142,7 +142,9 @@ impl TlsHttpReader {
 
     /// Open with redirect depth limit and optional Range header.
     fn open_inner(
-        url: &str, redirects_left: u8, range_offset: Option<u64>,
+        url: &str,
+        redirects_left: u8,
+        range_offset: Option<u64>,
     ) -> Result<(Self, u64), String> {
         let (host, port, path, _) = parse_url(url).ok_or_else(|| format!("bad URL: {url}"))?;
 
