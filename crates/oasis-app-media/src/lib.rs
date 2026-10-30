@@ -632,16 +632,16 @@ fn format_duration(secs: u32) -> String {
     format!("{m:02}:{s:02}")
 }
 
-/// VFS IPC path used by the Music Player to talk to the audio host.
-/// The host writes back status here (track loaded, errors) and reads
-/// `play_file <path>` / `stop` requests from the same path.
-pub const MEDIA_REQUEST_PATH: &str = "/var/audio/request";
+/// VFS IPC path the Music Player sends `play_file <path>` / `stop`
+/// requests to (the shared audio request file; the grammar is
+/// [`oasis_types::ipc::MediaRequest`]).
+pub const MEDIA_REQUEST_PATH: &str = oasis_types::ipc::AUDIO_REQUEST_PATH;
 
 /// VFS path where the audio host reports the Music Player track's real
 /// playback position, as `<position_ms> <duration_ms> <path>` (the
 /// values of `AudioBackend::position_ms` / `duration_ms`). The path
 /// field lets the app ignore a stale report for a previous track.
-pub const MEDIA_POSITION_PATH: &str = "/var/audio/position";
+pub const MEDIA_POSITION_PATH: &str = oasis_types::ipc::AUDIO_POSITION_PATH;
 
 /// Parse a [`MEDIA_POSITION_PATH`] report, returning
 /// `(position_ms, duration_ms)` when it refers to `viewing` and the

@@ -20,10 +20,8 @@ pub use source::{ArchiveSource, AudioChunk, IcecastSource, RadioSource, SourceSt
 pub use station::{Station, StationRegistry};
 pub use threaded::ThreadedSource;
 
-/// VFS path where the radio manager publishes its status.
-pub const RADIO_STATUS_PATH: &str = "/var/radio/status";
-/// VFS path where terminal commands write radio requests.
-pub const RADIO_REQUEST_PATH: &str = "/var/radio/request";
+/// VFS paths of the radio IPC (defined in [`oasis_types::ipc`]).
+pub use oasis_types::ipc::{RADIO_REQUEST_PATH, RADIO_STATUS_PATH};
 /// Display title of the Internet Radio app, shared between the app
 /// itself and every place that needs to identify a radio runner (e.g.
 /// the close-handler that stops playback when the window closes). Keep

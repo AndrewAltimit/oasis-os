@@ -12,6 +12,7 @@ pub mod easing;
 pub mod error;
 pub mod geometry;
 pub mod input;
+pub mod ipc;
 pub mod nine_patch;
 pub mod pbp;
 pub mod rasterize;
