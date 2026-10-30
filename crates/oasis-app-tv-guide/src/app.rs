@@ -4,7 +4,6 @@
 //! as all other apps in `AppRunner`.
 
 use oasis_app_core::{App, AppAction, AppRequest};
-use oasis_sdi::SdiRegistry;
 use oasis_skin::active_theme::ActiveTheme;
 use oasis_types::backend::SdiBackend;
 use oasis_types::input::Button;
@@ -138,26 +137,14 @@ impl App for TvGuideApp {
         }
     }
 
-    fn handle_click(
-        &mut self,
-        lx: i32,
-        ly: i32,
-        cw: u32,
-        ch: u32,
-        fullscreen: bool,
-        _vfs: &dyn Vfs,
-    ) -> AppAction {
-        if let Some(req) = self.guide.handle_click(lx, ly, cw, ch, fullscreen) {
+    fn handle_click(&mut self, lx: i32, ly: i32, cw: u32, ch: u32, _vfs: &dyn Vfs) -> AppAction {
+        if let Some(req) = self.guide.handle_click(lx, ly, cw, ch) {
             self.requests.push(Self::make_tune_ipc(&req));
             self.lines = self.guide.text_content();
             return AppAction::RequestFullscreen;
         }
         self.lines = self.guide.text_content();
         AppAction::None
-    }
-
-    fn update_sdi(&mut self, sdi: &mut SdiRegistry, at: &ActiveTheme) {
-        self.guide.update_sdi(sdi, at);
     }
 
     fn draw_windowed(
@@ -170,10 +157,6 @@ impl App for TvGuideApp {
         at: &ActiveTheme,
     ) -> oasis_types::error::Result<()> {
         self.guide.draw_windowed(cx, cy, cw, ch, backend, at)
-    }
-
-    fn hide_sdi(&self, sdi: &mut SdiRegistry) {
-        TvGuideState::hide_sdi(sdi);
     }
 
     fn drain_requests(&mut self, out: &mut Vec<AppRequest>) {

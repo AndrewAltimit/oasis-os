@@ -36,7 +36,6 @@ pub fn update_sdi(state: &mut AppState, sdi: &mut SdiRegistry, vfs: &dyn Vfs) {
     match state.mode {
         Mode::Dashboard => {
             terminal_sdi::set_terminal_visible(sdi, false);
-            AppRunner::hide_sdi(&state.content.apps, sdi);
             state.ui.taskbar.hide_sdi(sdi);
 
             if state.ui.bottom_bar.active_tab == MediaTab::None {
@@ -66,7 +65,6 @@ pub fn update_sdi(state: &mut AppState, sdi: &mut SdiRegistry, vfs: &dyn Vfs) {
         },
         Mode::Terminal => {
             state.ui.dashboard.hide_sdi(sdi);
-            AppRunner::hide_sdi(&state.content.apps, sdi);
             StatusBar::hide_sdi(sdi);
             BottomBar::hide_sdi(sdi);
             state.ui.taskbar.hide_sdi(sdi);
@@ -138,7 +136,6 @@ pub fn update_sdi(state: &mut AppState, sdi: &mut SdiRegistry, vfs: &dyn Vfs) {
         },
         Mode::Desktop => {
             terminal_sdi::set_terminal_visible(sdi, false);
-            AppRunner::hide_sdi(&state.content.apps, sdi);
             terminal_sdi::hide_media_page(sdi);
 
             // Sync terminal output to the windowed terminal runner (only when

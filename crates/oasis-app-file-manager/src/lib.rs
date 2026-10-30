@@ -13,11 +13,8 @@
 //!
 //! This file re-exports the public API and contains the `App` trait impl.
 
-use oasis_app_core::render::{
-    draw_content_windowed, hide_app_sdi, render_app_chrome, render_content_sdi,
-};
+use oasis_app_core::render::draw_content_windowed;
 use oasis_app_core::{App, AppAction};
-use oasis_sdi::SdiRegistry;
 use oasis_skin::ActiveTheme;
 use oasis_types::backend::SdiBackend;
 use oasis_types::input::{Button, Key, Modifiers};
@@ -43,11 +40,8 @@ pub use oasis_app_core::file_viewer::{
     view_image_file,
 };
 
-use dialog::{DialogClick, hide_dialog_sdi};
-use view::{
-    FM_MENU_H, compute_explorer_geom, grid_hit_test, hide_dual_panel_sdi, hide_explorer_sdi,
-    hide_menu_sdi, tree_hit_test,
-};
+use dialog::DialogClick;
+use view::{FM_MENU_H, compute_explorer_geom, grid_hit_test, tree_hit_test};
 
 impl App for FileManagerApp {
     fn title(&self) -> &str {
@@ -114,55 +108,12 @@ impl App for FileManagerApp {
         self.explorer_cols = g.cols;
         self.explorer_visible_rows = g.rows;
         self.cached_font_hint = at.font_hint;
-        self.cached_system_bars = at.statusbar_height + at.bottombar_height;
     }
 
-    fn handle_click(
-        &mut self,
-        lx: i32,
-        ly: i32,
-        cw: u32,
-        ch: u32,
-        fullscreen: bool,
-        vfs: &dyn Vfs,
-    ) -> AppAction {
-        let action = self.click(lx, ly, cw, ch, fullscreen);
+    fn handle_click(&mut self, lx: i32, ly: i32, cw: u32, ch: u32, vfs: &dyn Vfs) -> AppAction {
+        let action = self.click(lx, ly, cw, ch);
         self.apply_pending_navigation(vfs);
         action
-    }
-
-    fn update_sdi(&mut self, sdi: &mut SdiRegistry, at: &ActiveTheme) {
-        self.content.update_layout(at);
-
-        if self.content.viewing_file.is_some() {
-            // File viewer mode: use generic content rendering. Hide
-            // explorer/dual/menu artefacts so they don't bleed through.
-            hide_explorer_sdi(sdi);
-            hide_menu_sdi(sdi);
-            hide_dialog_sdi(sdi);
-            render_app_chrome(sdi, at);
-            if !sdi.contains("app_title_text") {
-                sdi.create("app_title_text");
-            }
-            render_content_sdi(&self.content, sdi, at);
-            return;
-        }
-
-        render_app_chrome(sdi, at);
-        if !sdi.contains("app_title_text") {
-            sdi.create("app_title_text");
-        }
-        match self.view_mode {
-            ViewMode::Dual => {
-                hide_explorer_sdi(sdi);
-                self.update_sdi_dual(sdi, at);
-            },
-            ViewMode::Explorer => {
-                hide_dual_panel_sdi(sdi);
-                self.update_sdi_explorer(sdi, at);
-            },
-        }
-        self.update_dialog_sdi(sdi, at);
     }
 
     fn draw_windowed(
@@ -186,13 +137,6 @@ impl App for FileManagerApp {
         self.draw_dialog_windowed(cx, cy, cw, ch, backend, at)
     }
 
-    fn hide_sdi(&self, sdi: &mut SdiRegistry) {
-        hide_app_sdi(sdi);
-        hide_explorer_sdi(sdi);
-        hide_menu_sdi(sdi);
-        hide_dialog_sdi(sdi);
-    }
-
     fn lines(&self) -> &[String] {
         &self.content.lines
     }
@@ -209,7 +153,7 @@ impl App for FileManagerApp {
 impl FileManagerApp {
     /// Content-area click: hit-test against the geometry recorded by
     /// `App::layout`. Folder activations land in `pending_navigation`.
-    fn click(&mut self, lx: i32, ly: i32, cw: u32, ch: u32, fullscreen: bool) -> AppAction {
+    fn click(&mut self, lx: i32, ly: i32, cw: u32, ch: u32) -> AppAction {
         if self.content.viewing_file.is_some() {
             return AppAction::None;
         }
@@ -223,12 +167,12 @@ impl FileManagerApp {
             return AppAction::None;
         }
         let title_h = self.content.cached_title_bar_height.max(16) as i32;
-        // Only `update_sdi_*` (fullscreen) and `draw_windowed_dual` paint an
-        // inner header row (dual keeps a panel-paths context strip at
-        // `title_bar_height`); `draw_windowed_explorer` reuses the WM
-        // titlebar and starts the menu at the top of the content rect.
-        // Mirror that here so hit-tests align with what's drawn.
-        let inner_title_bar = fullscreen || matches!(self.view_mode, ViewMode::Dual);
+        // Only `draw_windowed_dual` paints an inner header row (a
+        // panel-paths context strip at `title_bar_height`);
+        // `draw_windowed_explorer` reuses the WM titlebar and starts the
+        // menu at the top of the content rect. Mirror that here so
+        // hit-tests align with what's drawn.
+        let inner_title_bar = matches!(self.view_mode, ViewMode::Dual);
         let menu_y = if inner_title_bar { title_h } else { 0 };
 
         // 1. Menu bar.
@@ -263,21 +207,11 @@ impl FileManagerApp {
         }
         // `compute_explorer_geom` carves out the menu strip internally
         // (`addr_y = cy + menu_h`), so `cy` here is the top of the menu.
-        // In fullscreen Explorer mode the menu sits below an inner title
-        // bar (`update_sdi_explorer`); in windowed Explorer mode there is
-        // no inner title bar (`draw_windowed_explorer` skips it) and the
-        // WM-relative click coords already start past the WM titlebar.
+        // There is no inner title bar (`draw_windowed_explorer` skips it)
+        // and the WM-relative click coords already start past the WM
+        // titlebar.
         let body_top = menu_y;
-        // In SDI/fullscreen mode `ch == screen_h` and the renderer subtracts
-        // `statusbar_height + bottombar_height` before computing geometry —
-        // mirror that here so hit-tests don't extend over the system bars.
-        // In windowed mode `ch` already excludes the system bars.
-        let system_bars = if fullscreen {
-            self.cached_system_bars as i32
-        } else {
-            0
-        };
-        let body_h_local = (ch as i32 - body_top - system_bars).max(20) as u32;
+        let body_h_local = (ch as i32 - body_top).max(20) as u32;
         let g = compute_explorer_geom(0, body_top, cw, body_h_local);
 
         // Tree row click: single-click navigates immediately.
@@ -692,12 +626,12 @@ mod tests {
         let tile_x = g.grid_x + 4 + g.tile_w as i32 / 2;
         let tile_y = g.body_y + 4 + g.tile_h as i32 / 2;
         // First click selects.
-        fm.handle_click(tile_x, tile_y, 600, 400, false, &vfs);
+        fm.handle_click(tile_x, tile_y, 600, 400, &vfs);
         assert_eq!(fm.last_click_tile, Some(0));
         assert_eq!(fm.panels[0].browse_dir, "/");
         // Second click on same tile activates (the click has the vfs, so
         // it navigates right away).
-        fm.handle_click(tile_x, tile_y, 600, 400, false, &vfs);
+        fm.handle_click(tile_x, tile_y, 600, 400, &vfs);
         assert_eq!(fm.panels[0].browse_dir, expected_path);
         assert!(fm.pending_navigation.is_none());
     }
@@ -717,7 +651,7 @@ mod tests {
         let row_idx = 1; // "/" entry.
         let tx = g.tree_x + 8;
         let ty = g.body_y + 4 + row_idx * tree_line_h + tree_line_h / 2;
-        fm.handle_click(tx, ty, 600, 400, false, &vfs);
+        fm.handle_click(tx, ty, 600, 400, &vfs);
         assert_eq!(fm.panels[0].browse_dir, "/");
         assert!(fm.pending_navigation.is_none());
     }
@@ -731,7 +665,7 @@ mod tests {
         let file_w = 4 * 7 + 16; // "File"
         let edit_w = 4 * 7 + 16; // "Edit"
         let view_x = 6 + file_w + edit_w + 4;
-        let action = fm.handle_click(view_x, 8, 600, 400, false, &vfs);
+        let action = fm.handle_click(view_x, 8, 600, 400, &vfs);
         assert_eq!(action, AppAction::None);
         assert_eq!(fm.menu.open, Some(2));
     }
@@ -1023,7 +957,7 @@ mod tests {
         select(&mut fm, &vfs, 0, "/etc", "hostname");
         fm.request_delete();
         let g = crate::dialog::dialog_geom(0, 0, 400, 240);
-        fm.handle_click(g.ok.x + 2, g.ok.y + 2, 400, 240, false, &vfs);
+        fm.handle_click(g.ok.x + 2, g.ok.y + 2, 400, 240, &vfs);
         assert!(fm.dialog.is_none());
         fm.apply_vfs_ops(&mut vfs);
         assert!(!vfs.exists("/etc/hostname"));

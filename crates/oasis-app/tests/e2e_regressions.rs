@@ -631,3 +631,52 @@ fn default_windows_fit_the_screen() {
         );
     }
 }
+
+/// Clicks in a kiosk-fullscreen window hit the rows the window draws.
+/// Hosts passed the kiosk flag to `App::handle_click` as `fullscreen`,
+/// which the apps read as "the SDI fullscreen layout" -- a layout no host
+/// draws -- so the Music Player ignored every click in kiosk mode (and
+/// Settings / File Manager / TV Guide hit-tested against other rows).
+#[test]
+fn clicks_in_a_kiosk_window_hit_the_drawn_rows() {
+    use oasis_apps::media::BrowsingApp;
+    use oasis_core::input::InputEvent;
+
+    let mut h = Harness::new("classic");
+    h.settle();
+    assert!(h.open_app("Music Player"));
+    h.settle();
+    h.send(&[InputEvent::ToggleFullscreen]);
+    h.settle();
+    let win = h.find_window("Music Player").unwrap();
+    assert!(win.fullscreen, "{:?}", h.windows());
+    h.render_now();
+
+    let lines = h.app_runner("Music Player").unwrap().lines().to_vec();
+    let (cx, cy, cw, ch) = win.content;
+    let inside = |x: i32, y: i32| x >= cx && y >= cy && x < cx + cw as i32 && y < cy + ch as i32;
+    // The last list row drawn in the window (never the selected first one).
+    let (idx, (x, y)) = h
+        .frame_text_calls()
+        .iter()
+        .filter(|t| inside(t.x, t.y))
+        .filter_map(|t| {
+            let idx = lines
+                .iter()
+                .rposition(|l| !l.is_empty() && t.text.trim_start_matches(['>', ' ']) == l)?;
+            Some((idx, (t.x + 2, t.y + 2)))
+        })
+        .max_by_key(|(idx, _)| *idx)
+        .unwrap_or_else(|| panic!("{lines:?} {:?}", h.frame_text()));
+    assert!(idx > 0, "{lines:?}");
+
+    h.click(x, y);
+    h.settle();
+    let runner = h.app_runner("Music Player").unwrap();
+    let app = runner.delegate_as::<BrowsingApp>().unwrap();
+    assert_eq!(
+        app.content.scroll + app.content.cursor,
+        idx,
+        "the click selects the clicked row: {lines:?}"
+    );
+}

@@ -6,16 +6,15 @@
 //! is one [`AppRegistration`](super::AppRegistration) (the built-in ones
 //! live in the `oasis-apps` bundle); no match arms elsewhere change.
 //!
-//! Input handling lives in [`super::input`] and SDI rendering in
-//! [`super::runner_sdi`].
+//! Input handling lives in [`super::input`].
 
 use crate::active_theme::ActiveTheme;
 use crate::backend::SdiBackend;
 use crate::dashboard::AppEntry;
 use crate::vfs::Vfs;
 
-use super::app_trait::{App, AppAction, AppRequest};
 use super::registry::AppRegistry;
+use super::{App, AppAction, AppRequest};
 
 /// Runtime state for a launched application screen: the app itself plus the
 /// host-facing bookkeeping (redraw tracking).
@@ -202,12 +201,9 @@ impl AppRunner {
         cloned
     }
 
-    /// Render app content directly into a windowed content area.
-    ///
-    /// Unlike `update_sdi()` which creates named SDI objects for full-screen
-    /// display, this draws directly into the clip region provided by the
-    /// window manager's `draw_with_clips` callback. Calls [`App::layout`]
-    /// with the content size first.
+    /// Draw the app into its window's content area (inside the clip region
+    /// the window manager's `draw_with_clips` callback provides). Calls
+    /// [`App::layout`] with the content size first.
     pub fn draw_windowed(
         &mut self,
         cx: i32,
@@ -265,7 +261,6 @@ mod tests {
     use crate::apps::simple_app::SimpleApp;
     use crate::apps::{AppRegistration, ContentState};
     use crate::input::Button;
-    use crate::sdi::SdiRegistry;
     use crate::vfs::MemoryVfs;
 
     const MAX_VISIBLE_LINES: usize = 13;
@@ -450,7 +445,6 @@ mod tests {
         fn handle_input(&mut self, _button: &Button, _vfs: &dyn Vfs) -> AppAction {
             AppAction::None
         }
-        fn update_sdi(&mut self, _sdi: &mut SdiRegistry, _at: &ActiveTheme) {}
         fn draw_windowed(
             &self,
             _cx: i32,
@@ -462,7 +456,6 @@ mod tests {
         ) -> crate::error::Result<()> {
             Ok(())
         }
-        fn hide_sdi(&self, _sdi: &mut SdiRegistry) {}
         fn tick(&mut self, _dt_ms: u32, _vfs: &dyn Vfs) -> bool {
             self.close = true;
             false
@@ -530,28 +523,5 @@ mod tests {
         assert!(!runner.wants_frame());
         assert!(runner.delegate_as_mut::<SimpleApp>().is_some());
         assert!(runner.wants_frame());
-    }
-
-    #[test]
-    fn hide_sdi_runs_registered_cleanups() {
-        fn hide_custom(sdi: &mut SdiRegistry) {
-            if let Ok(obj) = sdi.get_mut("custom_app_obj") {
-                obj.visible = false;
-            }
-        }
-        let mut apps = registry();
-        apps.register(
-            AppRegistration::new("Custom", |path, _vfs| {
-                Box::new(SimpleApp::new("Custom", path, Vec::new()))
-            })
-            .hide_sdi(hide_custom),
-        );
-        let mut sdi = SdiRegistry::new();
-        let mut runner = launch("Terminal");
-        runner.update_sdi(&mut sdi, &ActiveTheme::default());
-        sdi.create("custom_app_obj").visible = true;
-        AppRunner::hide_sdi(&apps, &mut sdi);
-        assert!(!sdi.get("app_bg").unwrap().visible);
-        assert!(!sdi.get("custom_app_obj").unwrap().visible);
     }
 }

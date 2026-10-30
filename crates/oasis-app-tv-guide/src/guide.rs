@@ -295,20 +295,20 @@ mod tests {
     /// Compute grid_y for a given content height (mirrors handle_click layout).
     fn grid_y_for(ch: u32) -> u32 {
         let usable_h = ch;
-        let header_h = (usable_h * 20 / 100).max(60);
-        let time_header_h = (usable_h * 4 / 100).max(20);
+        let header_h = (usable_h * 20 / 100).max(40);
+        let time_header_h = (usable_h * 4 / 100).max(16);
         header_h + time_header_h
     }
 
     /// Compute row height for a given content height and channel count.
     fn row_h_for(ch: u32, num_channels: usize) -> u32 {
         let usable_h = ch;
-        let header_h = (usable_h * 20 / 100).max(60);
-        let time_header_h = (usable_h * 4 / 100).max(20);
-        let footer_h = (usable_h * 5 / 100).max(18);
+        let header_h = (usable_h * 20 / 100).max(40);
+        let time_header_h = (usable_h * 4 / 100).max(16);
+        let footer_h = (usable_h * 5 / 100).max(14);
         let grid_h = usable_h.saturating_sub(header_h + time_header_h + footer_h);
         let row_count = num_channels.clamp(1, VISIBLE_ROWS) as u32;
-        (grid_h / row_count).max(20)
+        (grid_h / row_count).max(16)
     }
 
     #[test]
@@ -324,7 +324,7 @@ mod tests {
 
         // Click on row 2 (third channel).
         let ly = (gy + rh * 2 + rh / 2) as i32;
-        let result = state.handle_click(100, ly, cw, ch, true);
+        let result = state.handle_click(100, ly, cw, ch);
         assert!(result.is_none(), "first click should select, not tune");
         assert_eq!(state.selected_channel, 2);
     }
@@ -357,7 +357,7 @@ mod tests {
 
         // Channel 0 is already selected. Click on row 0.
         let ly = (gy + rh / 2) as i32;
-        let result = state.handle_click(100, ly, cw, ch, true);
+        let result = state.handle_click(100, ly, cw, ch);
         assert!(result.is_some(), "second click on selected should tune");
         assert_eq!(result.unwrap().episode.title, "Click Test");
     }
@@ -371,12 +371,12 @@ mod tests {
         let cw = 800u32;
 
         // Click in header area (y=10, well above grid).
-        let result = state.handle_click(100, 10, cw, ch, true);
+        let result = state.handle_click(100, 10, cw, ch);
         assert!(result.is_none());
         assert_eq!(state.selected_channel, 0);
 
         // Click below grid area (y=ch-1, in footer).
-        let result = state.handle_click(100, ch as i32 - 1, cw, ch, true);
+        let result = state.handle_click(100, ch as i32 - 1, cw, ch);
         assert!(result.is_none());
         assert_eq!(state.selected_channel, 0);
     }
@@ -385,7 +385,7 @@ mod tests {
     fn click_negative_coords_ignored() {
         let config = ChannelConfig::from_toml(DEFAULT_CHANNELS_TOML).unwrap();
         let mut state = TvGuideState::new(&config, &ActiveTheme::default());
-        let result = state.handle_click(-10, -5, 800, 600, true);
+        let result = state.handle_click(-10, -5, 800, 600);
         assert!(result.is_none());
         assert_eq!(state.selected_channel, 0);
     }
@@ -394,7 +394,7 @@ mod tests {
     fn click_empty_channels_ignored() {
         let config: ChannelConfig = toml::from_str("channel = []").unwrap();
         let mut state = TvGuideState::new(&config, &ActiveTheme::default());
-        let result = state.handle_click(100, 200, 800, 600, true);
+        let result = state.handle_click(100, 200, 800, 600);
         assert!(result.is_none());
     }
 

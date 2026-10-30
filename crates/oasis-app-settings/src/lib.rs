@@ -7,10 +7,8 @@
 //! `/system/settings.toml` and publishes the resulting state under
 //! `/system/state/*`, which this app reads back.
 
-use oasis_app_core::render::{hide_app_sdi, render_app_chrome, render_content_sdi};
 use oasis_app_core::{App, AppAction, AppRequest, ContentState};
 use oasis_i18n::{Locale, tr};
-use oasis_sdi::SdiRegistry;
 use oasis_skin::ActiveTheme;
 use oasis_skin::builtin::builtin_names;
 use oasis_skin::theme::{contrast_ratio, parse_hex_color};
@@ -377,8 +375,7 @@ impl SettingsApp {
         rows
     }
 
-    /// Build display lines for the current category (fullscreen SDI path
-    /// and [`App::lines`]).
+    /// Build display lines for the current category ([`App::lines`]).
     fn build_lines(&self) -> Vec<String> {
         let sep = "\u{2500}".repeat(36);
         let mut lines = Vec::new();
@@ -866,14 +863,12 @@ impl SettingsApp {
     ///   2 = section heading
     ///   3 = blank
     ///   4 = first item
-    /// Every list category's rows start with heading + blank, and
-    /// [`Self::handle_click`] uses this to map fullscreen clicks back to
-    /// item indices.
+    /// Every list category's rows start with heading + blank.
     const ITEMS_START: usize = 4;
 
     /// Align `content.cursor` (and scroll, if needed) with the active item
-    /// so the single `>` prefix drawn by the fullscreen renderer lands on
-    /// the item `item_cursor` points at. Only meaningful for categories
+    /// so the `>`-marked line of [`App::lines`] is the item `item_cursor`
+    /// points at. Only meaningful for categories
     /// that actually have a list of selectable items — scrollable text
     /// categories leave content.cursor alone.
     fn sync_content_cursor(&mut self) {
@@ -1084,46 +1079,6 @@ impl SettingsApp {
         }
     }
 
-    /// Re-color the generic SDI objects created by `render_app_chrome` /
-    /// `render_content_sdi` with the per-app palette. When no
-    /// `[app_themes.settings]` overrides exist, [`SettingsColors::from_theme`]
-    /// returns exactly the theme values the shared renderer already applied,
-    /// so this pass is a visual no-op.
-    fn apply_sdi_colors(&self, sdi: &mut SdiRegistry, colors: &SettingsColors) {
-        if let Ok(obj) = sdi.get_mut("app_bg") {
-            obj.color = colors.bg;
-        }
-        if let Ok(obj) = sdi.get_mut("app_title_bg") {
-            obj.color = colors.title_bar_bg;
-        }
-        if let Ok(obj) = sdi.get_mut("app_title_text") {
-            obj.text_color = colors.title_bar_text;
-        }
-        if let Ok(obj) = sdi.get_mut("app_sel_bg") {
-            obj.color = colors.selected_bg;
-        }
-        if let Ok(obj) = sdi.get_mut("app_sel_accent") {
-            obj.color = colors.selection_accent;
-        }
-        if let Ok(obj) = sdi.get_mut("app_scroll") {
-            obj.text_color = colors.dim_text;
-        }
-        // Line objects: same 100-object cap as `hide_app_sdi`.
-        for i in 0..100 {
-            let name = format!("app_line_{i}");
-            if !sdi.contains(&name) {
-                break;
-            }
-            if let Ok(obj) = sdi.get_mut(&name) {
-                obj.text_color = if i == self.content.cursor {
-                    colors.selected_text
-                } else {
-                    colors.text
-                };
-            }
-        }
-    }
-
     /// Windowed layout for a content rect of the given size, using the
     /// font metrics of the last `layout`.
     fn settings_layout(&self, cx: i32, cy: i32, cw: u32, ch: u32) -> SettingsLayout {
@@ -1195,29 +1150,6 @@ impl SettingsApp {
         self.refresh_lines();
         self.sync_content_cursor();
     }
-
-    /// Fullscreen click: map the Y coordinate to a content line using the
-    /// shared content renderer's metrics (content starts at the shared
-    /// `WINDOWED_TOP_PAD`, rows are `cached_line_h` tall).
-    fn handle_fullscreen_click(&mut self, ly: i32) {
-        let content_top = oasis_app_core::render::WINDOWED_TOP_PAD as i32;
-        let line_h = self.content.cached_line_h.max(1) as i32;
-        let y_in_content = ly - content_top;
-        if y_in_content < 0 {
-            return;
-        }
-        let line_idx = self.content.scroll + (y_in_content / line_h) as usize;
-        if line_idx < Self::ITEMS_START || !self.category.has_items() {
-            return;
-        }
-        let item_idx = line_idx - Self::ITEMS_START;
-        if item_idx < self.item_count() {
-            self.item_cursor = item_idx;
-            self.handle_confirm();
-            self.refresh_lines();
-            self.sync_content_cursor();
-        }
-    }
 }
 
 impl App for SettingsApp {
@@ -1227,16 +1159,6 @@ impl App for SettingsApp {
 
     fn path(&self) -> &str {
         &self.content.app_path
-    }
-
-    fn update_sdi(&mut self, sdi: &mut SdiRegistry, at: &ActiveTheme) {
-        // Same sequence as `impl_content_app_methods!`, followed by a
-        // per-app recolor pass driven by `[app_themes.settings]`.
-        self.content.update_layout(at);
-        self.content.animate_selection(0.3);
-        render_app_chrome(sdi, at);
-        render_content_sdi(&self.content, sdi, at);
-        self.apply_sdi_colors(sdi, &SettingsColors::from_theme(at));
     }
 
     /// Windowed renderer: category tab strip, a row list drawn with
@@ -1276,10 +1198,6 @@ impl App for SettingsApp {
             font_body: at.font_body,
             font_hint: at.font_hint,
         };
-    }
-
-    fn hide_sdi(&self, sdi: &mut SdiRegistry) {
-        hide_app_sdi(sdi);
     }
 
     fn drain_requests(&mut self, out: &mut Vec<AppRequest>) {
@@ -1340,9 +1258,8 @@ impl App for SettingsApp {
                         self.adjust_slider(up);
                     },
                     Category::System | Category::About => {
-                        // Plain scrollable text — let the content cursor
-                        // drive itself (fullscreen) and scroll the windowed
-                        // row list.
+                        // Plain scrollable text — move the content cursor
+                        // and scroll the windowed row list.
                         if up {
                             self.content.navigate_up();
                             self.text_scroll = self.text_scroll.saturating_sub(1);
@@ -1386,20 +1303,8 @@ impl App for SettingsApp {
         }
     }
 
-    fn handle_click(
-        &mut self,
-        lx: i32,
-        ly: i32,
-        cw: u32,
-        ch: u32,
-        fullscreen: bool,
-        _vfs: &dyn Vfs,
-    ) -> AppAction {
-        if fullscreen {
-            self.handle_fullscreen_click(ly);
-        } else {
-            self.handle_windowed_click(lx, ly, cw, ch);
-        }
+    fn handle_click(&mut self, lx: i32, ly: i32, cw: u32, ch: u32, _vfs: &dyn Vfs) -> AppAction {
+        self.handle_windowed_click(lx, ly, cw, ch);
         AppAction::None
     }
 }
@@ -1918,7 +1823,7 @@ mod tests {
     fn click_on_skin_row_applies() {
         let mut app = make_app();
         let (x, y) = item_point(&app, 1, 0.2);
-        let _action = app.handle_click(x, y, CW, CH, false, &MemoryVfs::new());
+        let _action = app.handle_click(x, y, CW, CH, &MemoryVfs::new());
         let req = take_req(&mut app);
         let (path, data) = req.expect("click on non-active skin should post IPC");
         assert_eq!(path, SKIN_CHANGE_REQUEST_PATH);
@@ -1931,7 +1836,7 @@ mod tests {
         let mut app = make_app();
         // Item 0 = "classic", which is the active skin.
         let (x, y) = item_point(&app, 0, 0.2);
-        let _action = app.handle_click(x, y, CW, CH, false, &MemoryVfs::new());
+        let _action = app.handle_click(x, y, CW, CH, &MemoryVfs::new());
         assert!(take_req(&mut app).is_none());
     }
 
@@ -1939,7 +1844,7 @@ mod tests {
     fn click_above_content_area_ignored() {
         let mut app = make_app();
         // Top-left padding above the tab strip: nothing to hit.
-        let _action = app.handle_click(1, 1, CW, CH, false, &MemoryVfs::new());
+        let _action = app.handle_click(1, 1, CW, CH, &MemoryVfs::new());
         assert!(take_req(&mut app).is_none());
         assert_eq!(app.category, Category::Display);
     }
@@ -1953,7 +1858,7 @@ mod tests {
             .position(|c| *c == Category::Audio)
             .expect("audio tab");
         let t = l.tabs[audio];
-        app.handle_click(t.x + 2, t.y + 2, CW, CH, false, &MemoryVfs::new());
+        app.handle_click(t.x + 2, t.y + 2, CW, CH, &MemoryVfs::new());
         assert_eq!(app.category, Category::Audio);
     }
 
@@ -1967,23 +1872,11 @@ mod tests {
         assert_eq!(app.category, Category::Resolution);
         // Click the 4th preset (1280x720, index 3).
         let (x, y) = item_point(&app, 3, 0.2);
-        let _action = app.handle_click(x, y, CW, CH, false, &vfs);
+        let _action = app.handle_click(x, y, CW, CH, &vfs);
         let req = take_req(&mut app);
         let (path, data) = req.expect("click on non-active preset should post IPC");
         assert_eq!(path, RESOLUTION_CHANGE_REQUEST_PATH);
         assert_eq!(data, "1280x720");
-    }
-
-    #[test]
-    fn fullscreen_click_maps_content_lines() {
-        let mut app = make_app();
-        // Fullscreen keeps the line-based mapping: items start at content
-        // line 4; with WINDOWED_TOP_PAD = 4 and line_h = 14, line 5 (the
-        // second skin) lives at y = 4 + 5*14 = 74.
-        app.handle_click(10, 74, 400, 220, true, &MemoryVfs::new());
-        let (path, data) = take_req(&mut app).expect("fullscreen click posts");
-        assert_eq!(path, SKIN_CHANGE_REQUEST_PATH);
-        assert_eq!(data, builtin_names()[1]);
     }
 
     // -- Audio / Language / Accessibility --
@@ -2049,7 +1942,7 @@ mod tests {
         let row = row_of_item(&rows, 0).expect("volume row");
         let track = l.control_rect(l.row_rect(row));
         // Click near the left end of the track -> low volume.
-        app.handle_click(track.x + 1, track.y + 2, CW, CH, false, &vfs);
+        app.handle_click(track.x + 1, track.y + 2, CW, CH, &vfs);
         assert!(app.volume <= 5, "volume {}", app.volume);
         let (path, _) = take_req(&mut app).expect("slider click posts");
         assert_eq!(path, VOLUME_CHANGE_REQUEST_PATH);
@@ -2284,54 +2177,6 @@ mod tests {
         assert!(parse_resolution("not a resolution").is_none());
         assert!(parse_resolution("800").is_none());
         assert!(parse_resolution("ax600").is_none());
-    }
-
-    // -- Per-app color theming --
-
-    #[test]
-    fn update_sdi_defaults_match_shared_renderer() {
-        // Without [app_themes.settings], the recolor pass must leave every
-        // object exactly as the shared renderer set it.
-        let mut app = make_app();
-        let mut sdi = SdiRegistry::new();
-        let at = ActiveTheme::default();
-        app.update_sdi(&mut sdi, &at);
-
-        let bg = sdi.get("app_bg").expect("app_bg exists");
-        assert_eq!(bg.color, at.app.bg);
-        let sel = sdi.get("app_sel_bg").expect("app_sel_bg exists");
-        assert_eq!(sel.color, at.app.selected_bg);
-        // The cursor starts on the active skin row (ITEMS_START + 0), so
-        // that line gets selected_text and line 0 gets the normal color.
-        let line = sdi.get("app_line_0").expect("app_line_0 exists");
-        assert_eq!(line.text_color, at.app.text);
-        let cursor_name = format!("app_line_{}", app.content.cursor);
-        let cursor_line = sdi.get(&cursor_name).expect("cursor line exists");
-        assert_eq!(cursor_line.text_color, at.app.selected_text);
-    }
-
-    #[test]
-    fn update_sdi_applies_settings_overrides() {
-        use oasis_types::backend::Color;
-
-        let mut app = make_app();
-        let mut sdi = SdiRegistry::new();
-        let mut at = ActiveTheme::default();
-        let bg = Color::rgba(1, 2, 3, 255);
-        let text = Color::rgba(4, 5, 6, 255);
-        let overrides = at.app_themes.entry("settings".to_string()).or_default();
-        overrides.insert("bg".to_string(), bg);
-        overrides.insert("text".to_string(), text);
-
-        app.update_sdi(&mut sdi, &at);
-
-        let obj = sdi.get("app_bg").expect("app_bg exists");
-        assert_eq!(obj.color, bg);
-        let line = sdi.get("app_line_1").expect("app_line_1 exists");
-        assert_eq!(line.text_color, text);
-        // Slots without overrides keep the theme default.
-        let title = sdi.get("app_title_bg").expect("app_title_bg exists");
-        assert_eq!(title.color, at.app.title_bar_bg);
     }
 
     // -- Appearance editor --

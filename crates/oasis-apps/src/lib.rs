@@ -17,7 +17,6 @@
 
 use oasis_core::active_theme::ActiveTheme;
 use oasis_core::apps::{AppRegistration, AppRegistry, AppRunner, OwnedMedia, SimpleApp};
-use oasis_core::sdi::SdiRegistry;
 use oasis_core::terminal::CommandRegistry;
 
 #[cfg(test)]
@@ -169,7 +168,6 @@ pub fn builtin_registry(host: &HostInfo) -> AppRegistry {
                 file, vfs,
             ))
         })
-        .hide_sdi(hide_notepad_sdi)
         .on_dashboard(),
     );
     apps.register(
@@ -198,7 +196,6 @@ pub fn builtin_registry(host: &HostInfo) -> AppRegistry {
                 &ActiveTheme::default(),
             ))
         })
-        .hide_sdi(hide_tv_guide_sdi)
         .on_dashboard(),
     );
     // Info screens without a tile (open them with `open <app>`, MCP
@@ -232,25 +229,6 @@ pub fn builtin_registry(host: &HostInfo) -> AppRegistry {
         .on_dashboard(),
     );
     apps
-}
-
-/// Hide the TV Guide's own SDI objects. Both TV Guide render paths (grid
-/// and expanded video) create `tv_hdr_bg` before any other `tv_*` object,
-/// so until it exists there is nothing to hide: skip the ~200 name formats
-/// and lookups the full pass costs every frame.
-fn hide_tv_guide_sdi(sdi: &mut SdiRegistry) {
-    if sdi.contains("tv_hdr_bg") {
-        oasis_app_tv_guide::TvGuideState::hide_sdi(sdi);
-    }
-}
-
-/// Hide the Text Editor's Notepad chrome (the text-editor crate owns the
-/// pool sizes). `np_menu_bg` is the first `np_*` object its renderer
-/// creates (same skip as [`hide_tv_guide_sdi`]).
-fn hide_notepad_sdi(sdi: &mut SdiRegistry) {
-    if sdi.contains("np_menu_bg") {
-        oasis_app_text_editor::hide_notepad_sdi_objects(sdi);
-    }
 }
 
 /// Register the app-specific terminal commands (`tv`).

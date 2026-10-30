@@ -412,8 +412,8 @@ impl MyPluginApp {
 }
 
 impl App for MyPluginApp {
-    // title, path, lines, layout, update_sdi, draw_windowed, hide_sdi,
-    // drain_requests, ... (`as_any` comes from the `AsAny` blanket impl).
+    // title, path, lines, layout, draw_windowed, drain_requests, ...
+    // (`as_any` comes from the `AsAny` blanket impl).
     impl_content_app_methods!(content);
 
     fn handle_input(&mut self, button: &Button, _vfs: &dyn Vfs) -> AppAction {

@@ -11,10 +11,9 @@ use std::sync::Arc;
 
 use crate::backend::Color;
 use crate::dashboard::AppEntry;
-use crate::sdi::SdiRegistry;
 use crate::vfs::Vfs;
 
-use super::app_trait::App;
+use super::App;
 
 /// Constructor of an app: `(vfs_path, vfs) -> app`.
 pub type AppFactory = Arc<dyn Fn(&str, &dyn Vfs) -> Box<dyn App> + Send + Sync>;
@@ -45,9 +44,6 @@ pub struct AppRegistration {
     pub color: Color,
     /// Whether the app gets a dashboard tile.
     pub on_dashboard: bool,
-    /// Hide the app's own global SDI objects (fullscreen `update_sdi`
-    /// render paths that create objects outside the shared app pools).
-    pub hide_sdi: Option<fn(&mut SdiRegistry)>,
     /// Media the host stops when the app's window closes.
     pub owned_media: Option<OwnedMedia>,
     /// Registered by a plugin (replaced by
@@ -84,7 +80,6 @@ impl AppRegistration {
             path: entry.path,
             color: entry.color,
             on_dashboard: false,
-            hide_sdi: None,
             owned_media: None,
             from_plugin: false,
             factory: Arc::new(factory),
@@ -104,12 +99,6 @@ impl AppRegistration {
         F: Fn(&str, &str, &dyn Vfs) -> Box<dyn App> + Send + Sync + 'static,
     {
         self.open_file = Some(Arc::new(factory));
-        self
-    }
-
-    /// Set the cleanup for the app's own global SDI objects.
-    pub fn hide_sdi(mut self, hide: fn(&mut SdiRegistry)) -> Self {
-        self.hide_sdi = Some(hide);
         self
     }
 
@@ -275,13 +264,6 @@ impl AppRegistry {
     pub fn owned_media(&self, title: &str) -> Option<OwnedMedia> {
         self.get(title).and_then(|a| a.owned_media)
     }
-
-    /// Run every app's [`AppRegistration::hide_sdi`] cleanup.
-    pub fn hide_sdi(&self, sdi: &mut SdiRegistry) {
-        for hide in self.apps.iter().filter_map(|a| a.hide_sdi) {
-            hide(sdi);
-        }
-    }
 }
 
 #[cfg(test)]
@@ -392,21 +374,6 @@ mod tests {
         // A second removal is a no-op.
         apps.remove_plugin_apps();
         assert_eq!(apps.titles().count(), 3);
-    }
-
-    #[test]
-    fn hide_sdi_runs_every_cleanup() {
-        fn hide(sdi: &mut SdiRegistry) {
-            if let Ok(obj) = sdi.get_mut("custom_obj") {
-                obj.visible = false;
-            }
-        }
-        let mut apps = AppRegistry::new();
-        apps.register(simple("Custom").hide_sdi(hide));
-        let mut sdi = SdiRegistry::new();
-        sdi.create("custom_obj").visible = true;
-        apps.hide_sdi(&mut sdi);
-        assert!(!sdi.get("custom_obj").unwrap().visible);
     }
 
     #[test]

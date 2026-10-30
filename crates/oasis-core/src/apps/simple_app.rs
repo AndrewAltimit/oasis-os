@@ -9,16 +9,12 @@
 use crate::active_theme::ActiveTheme;
 use crate::backend::SdiBackend;
 use crate::input::Button;
-use crate::sdi::SdiRegistry;
 use crate::vfs::Vfs;
 
+use super::App;
 use super::AppAction;
 use super::ContentState;
-use super::app_trait::App;
-use oasis_app_core::render::{
-    WINDOWED_FONT_SIZE, draw_content_windowed, hide_app_sdi, render_app_chrome, render_content_sdi,
-    windowed_line_origin,
-};
+use oasis_app_core::render::{WINDOWED_FONT_SIZE, draw_content_windowed, windowed_line_origin};
 
 /// Candidate front-trim offsets [`sync_lines`] tries before falling back
 /// to a full rewrite.
@@ -220,13 +216,6 @@ impl App for SimpleApp {
         }
     }
 
-    fn update_sdi(&mut self, sdi: &mut SdiRegistry, at: &ActiveTheme) {
-        self.content.update_layout(at);
-        self.content.animate_selection(0.3);
-        render_app_chrome(sdi, at);
-        render_content_sdi(&self.content, sdi, at);
-    }
-
     fn draw_windowed(
         &self,
         cx: i32,
@@ -264,10 +253,6 @@ impl App for SimpleApp {
             )?;
         }
         Ok(())
-    }
-
-    fn hide_sdi(&self, sdi: &mut SdiRegistry) {
-        hide_app_sdi(sdi);
     }
 
     fn lines(&self) -> &[String] {

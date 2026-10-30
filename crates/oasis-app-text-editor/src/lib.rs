@@ -7,9 +7,7 @@
 //! Delete); gamepad hosts reach every feature through `handle_input`
 //! (Normal / Insert / Find / Replace / prompt modes).
 
-use oasis_app_core::render::{hide_app_sdi, render_app_chrome};
 use oasis_app_core::{App, AppAction, AppRequest, ContentState, MAX_WHEEL_STEPS};
-use oasis_sdi::SdiRegistry;
 use oasis_skin::ActiveTheme;
 use oasis_types::backend::{InMemoryClipboard, SdiBackend};
 use oasis_types::input::{Button, Key, Modifiers};
@@ -26,7 +24,6 @@ mod render;
 
 pub use buffer::{EditOperation, EditorBuffer, Pos};
 pub use highlight::{FileType, detect_file_type};
-pub use render::hide_notepad_sdi_objects;
 
 use editor::UndoGroup;
 
@@ -364,15 +361,7 @@ impl App for TextEditorApp {
         changed
     }
 
-    fn handle_click(
-        &mut self,
-        lx: i32,
-        ly: i32,
-        cw: u32,
-        ch: u32,
-        _fullscreen: bool,
-        _vfs: &dyn Vfs,
-    ) -> AppAction {
+    fn handle_click(&mut self, lx: i32, ly: i32, cw: u32, ch: u32, _vfs: &dyn Vfs) -> AppAction {
         if self.close_requested {
             return AppAction::Exit;
         }
@@ -453,23 +442,6 @@ impl App for TextEditorApp {
         AppAction::None
     }
 
-    fn update_sdi(&mut self, sdi: &mut SdiRegistry, at: &ActiveTheme) {
-        self.content.title = self.build_title();
-        self.content.update_layout(at);
-        self.content.animate_selection(0.3);
-        render_app_chrome(sdi, at);
-        // Render Notepad-style chrome (menu bar, text area, status bar)
-        // and our own per-line SDI objects. We deliberately do NOT call
-        // `render_content_sdi` — its listing-style output is wrong for
-        // an editor and would leave a stale "> 1 | text" row visible.
-        self.render_notepad_sdi(sdi, at);
-    }
-
-    fn hide_sdi(&self, sdi: &mut SdiRegistry) {
-        hide_app_sdi(sdi);
-        self.hide_notepad_sdi(sdi);
-    }
-
     fn draw_windowed(
         &self,
         cx: i32,
@@ -521,8 +493,6 @@ mod tests {
     use super::TextEditorApp;
     use oasis_app_core::App;
     use oasis_app_core::AppAction;
-    use oasis_sdi::SdiRegistry;
-    use oasis_skin::ActiveTheme;
     use oasis_types::input::Button;
     use oasis_vfs::MemoryVfs;
 
@@ -577,7 +547,7 @@ mod tests {
         // Click roughly at column 6 in the first line. Area top is
         // menu_h = 18 (menu bar sits at the top of the content area),
         // so ly = 18 + 6 (pad) + 2 puts us on line 0.
-        let action = app.handle_click(8 + 6 * 7, 26, 400, 300, false, &oasis_vfs::MemoryVfs::new());
+        let action = app.handle_click(8 + 6 * 7, 26, 400, 300, &oasis_vfs::MemoryVfs::new());
         assert_eq!(action, AppAction::None);
         assert_eq!(app.mode, EditorMode::Insert);
         assert_eq!(app.cursor_line, 0);
@@ -591,10 +561,10 @@ mod tests {
         let mut app = TextEditorApp::new("/apps/editor");
         assert!(!app.menu.is_open());
         // "File" label at x=6, menu strip y=0..18 so ly=8 hits it.
-        let _ = app.handle_click(10, 8, 400, 300, false, &oasis_vfs::MemoryVfs::new());
+        let _ = app.handle_click(10, 8, 400, 300, &oasis_vfs::MemoryVfs::new());
         assert_eq!(app.menu.open, Some(0), "File dropdown should be open");
         // Clicking File again toggles it closed.
-        let _ = app.handle_click(10, 8, 400, 300, false, &oasis_vfs::MemoryVfs::new());
+        let _ = app.handle_click(10, 8, 400, 300, &oasis_vfs::MemoryVfs::new());
         assert!(!app.menu.is_open(), "second click should close");
     }
 
@@ -607,12 +577,12 @@ mod tests {
         vfs.mkdir("/tmp").expect("mkdir");
         let mut app = TextEditorApp::open_file("/tmp/notes.txt", "hello");
         // Open the File menu.
-        let _ = app.handle_click(10, 8, 400, 300, false, &oasis_vfs::MemoryVfs::new());
+        let _ = app.handle_click(10, 8, 400, 300, &oasis_vfs::MemoryVfs::new());
         assert!(app.menu.is_open());
         // File dropdown starts just below the menu bar (y=18) with
         // 4px padding, so first item row is y=22..42. New, then
         // Save is the second entry (y=42..62).
-        let action = app.handle_click(20, 46, 400, 300, false, &oasis_vfs::MemoryVfs::new());
+        let action = app.handle_click(20, 46, 400, 300, &oasis_vfs::MemoryVfs::new());
         assert_eq!(action, AppAction::None);
         assert!(!app.menu.is_open(), "menu should close after dispatch");
         assert!(app.apply_vfs_ops(&mut vfs), "save must be applied");
@@ -624,10 +594,10 @@ mod tests {
     #[test]
     fn click_file_exit_item_returns_exit() {
         let mut app = TextEditorApp::new("/apps/editor");
-        let _ = app.handle_click(10, 8, 400, 300, false, &oasis_vfs::MemoryVfs::new());
+        let _ = app.handle_click(10, 8, 400, 300, &oasis_vfs::MemoryVfs::new());
         // Exit is the 5th entry (New, Save, Save As, Separator, Exit):
         // y=22+20+20+20+6 = 88 is the exit row.
-        let action = app.handle_click(20, 92, 400, 300, false, &oasis_vfs::MemoryVfs::new());
+        let action = app.handle_click(20, 92, 400, 300, &oasis_vfs::MemoryVfs::new());
         assert_eq!(action, AppAction::Exit);
     }
 
@@ -640,53 +610,6 @@ mod tests {
         app.menu.open = Some(0);
         app.handle_input(&Button::Cancel, &vfs);
         assert!(!app.menu.is_open());
-    }
-
-    /// `update_sdi` must populate the Notepad chrome (menu bar, text
-    /// area, status bar) — not leave the generic content-listing
-    /// objects behind. This guards against the old "> 1 | text" CLI
-    /// style showing in the classic fullscreen path.
-    #[test]
-    fn update_sdi_renders_notepad_chrome() {
-        let mut app = TextEditorApp::open_file("/welcome.txt", "hello\nworld");
-        let mut sdi = SdiRegistry::new();
-        app.update_sdi(&mut sdi, &ActiveTheme::default());
-        // Notepad chrome objects exist and are visible.
-        for name in [
-            "np_menu_bg",
-            "np_area_bg",
-            "np_status_bg",
-            "np_menu_0",
-            "np_status_left",
-            "np_status_right",
-        ] {
-            let obj = sdi
-                .get(name)
-                .unwrap_or_else(|e| panic!("{name} should exist after update_sdi: {e:?}"));
-            assert!(obj.visible, "{name} should be visible");
-        }
-        // Menu labels present.
-        let file_label = sdi.get("np_menu_0").unwrap();
-        assert_eq!(file_label.text.as_deref(), Some("File"));
-        // First buffer line rendered as an np_line_* object.
-        let line0 = sdi.get("np_line_0").unwrap();
-        assert!(line0.visible);
-        assert_eq!(line0.text.as_deref(), Some("hello"));
-    }
-
-    /// After the editor populates its SDI, a subsequent `hide_sdi`
-    /// must drop every Notepad object — otherwise the chrome leaks
-    /// onto whichever app is opened next.
-    #[test]
-    fn hide_sdi_hides_notepad_chrome() {
-        let mut app = TextEditorApp::open_file("/welcome.txt", "hi");
-        let mut sdi = SdiRegistry::new();
-        app.update_sdi(&mut sdi, &ActiveTheme::default());
-        app.hide_sdi(&mut sdi);
-        for name in ["np_menu_bg", "np_area_bg", "np_status_bg", "np_line_0"] {
-            let obj = sdi.get(name).unwrap();
-            assert!(!obj.visible, "{name} should be hidden");
-        }
     }
 
     // -- EditorBuffer tests --

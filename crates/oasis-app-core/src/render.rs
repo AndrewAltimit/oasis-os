@@ -1,210 +1,11 @@
-//! Shared rendering helpers for app chrome (title bar, content, selection).
+//! Shared windowed renderer for line-list apps ([`ContentState`]): the
+//! row layout [`draw_content_windowed`] draws and the inverse mappings
+//! click handlers use ([`windowed_line_at`], [`windowed_line_origin`]).
 
-use oasis_sdi::SdiRegistry;
 use oasis_skin::ActiveTheme;
 use oasis_types::backend::SdiBackend;
-use oasis_ui::flex;
 
 use crate::app_trait::ContentState;
-use crate::layout::AppLayout;
-
-/// Size of the `app_line_{i}` / `app_lp_line_{i}` / `app_rp_line_{i}` pools
-/// the hide pass walks.
-const MAX_APP_LINES: usize = 100;
-
-/// Cached pool object names: `hide_app_sdi` runs every frame in every
-/// non-app mode, and `render_content_sdi` every frame in app mode, so a
-/// `format!` per pool slot per frame was pure allocation churn.
-struct AppLineNames {
-    line: Vec<String>,
-    lp: Vec<String>,
-    rp: Vec<String>,
-}
-
-fn app_line_names() -> &'static AppLineNames {
-    static NAMES: std::sync::OnceLock<AppLineNames> = std::sync::OnceLock::new();
-    NAMES.get_or_init(|| {
-        let pool = |prefix: &str| {
-            (0..MAX_APP_LINES)
-                .map(|i| format!("{prefix}{i}"))
-                .collect::<Vec<_>>()
-        };
-        AppLineNames {
-            line: pool("app_line_"),
-            lp: pool("app_lp_line_"),
-            rp: pool("app_rp_line_"),
-        }
-    })
-}
-
-/// Name of the `app_line_{i}` object (cached for `i < 100`).
-fn app_line_name(i: usize) -> std::borrow::Cow<'static, str> {
-    match app_line_names().line.get(i) {
-        Some(name) => std::borrow::Cow::Borrowed(name.as_str()),
-        None => std::borrow::Cow::Owned(format!("app_line_{i}")),
-    }
-}
-
-/// Render the app background and title bar chrome to SDI.
-pub fn render_app_chrome(sdi: &mut SdiRegistry, at: &ActiveTheme) {
-    if !sdi.contains("app_bg") {
-        sdi.create("app_bg");
-    }
-    if let Ok(obj) = sdi.get_mut("app_bg") {
-        obj.x = 0;
-        obj.y = 0;
-        obj.w = at.screen_w;
-        obj.h = at.screen_h;
-        obj.color = at.app.bg;
-        obj.visible = true;
-        obj.z = 100;
-    }
-
-    if !sdi.contains("app_title_bg") {
-        sdi.create("app_title_bg");
-    }
-    if let Ok(obj) = sdi.get_mut("app_title_bg") {
-        obj.x = 0;
-        obj.y = 0;
-        obj.w = at.screen_w;
-        obj.h = at.app.title_bar_height;
-        obj.color = at.app.title_bar_bg;
-        obj.gradient_top = at.app.title_bar_gradient_top;
-        obj.gradient_bottom = at.app.title_bar_gradient_bottom;
-        obj.shadow_level = Some(1);
-        obj.visible = true;
-        obj.z = 101;
-    }
-}
-
-/// Render generic content (title, lines, scroll indicator, selection) to SDI.
-pub fn render_content_sdi(content: &ContentState, sdi: &mut SdiRegistry, at: &ActiveTheme) {
-    // Title text.
-    if !sdi.contains("app_title_text") {
-        sdi.create("app_title_text");
-    }
-    if let Ok(obj) = sdi.get_mut("app_title_text") {
-        let dir_suffix = if let Some(ref file) = content.viewing_file {
-            format!("  [{file}]")
-        } else {
-            content
-                .browse_dir
-                .as_deref()
-                .map(|d| format!("  [{d}]"))
-                .unwrap_or_default()
-        };
-        obj.text = Some(format!("{}{dir_suffix}", content.title));
-        obj.x = 8;
-        obj.y = 4;
-        obj.font_size = at.font_body;
-        obj.text_color = at.app.title_bar_text;
-        obj.w = 0;
-        obj.h = 0;
-        obj.visible = true;
-        obj.z = 102;
-        if at.app.title_bar_text_shadow {
-            obj.text_shadow_offset = Some((1, 1));
-            obj.text_shadow_color = Some(at.app.title_bar_text_shadow_color);
-        } else {
-            obj.text_shadow_offset = None;
-            obj.text_shadow_color = None;
-        }
-    }
-
-    // Content lines.
-    let app_layout = AppLayout::compute(at, 14);
-    let line_rects = flex::vertical_list(
-        app_layout.content_x,
-        app_layout.content_y,
-        app_layout.content_w,
-        app_layout.line_h,
-        0,
-        app_layout.max_visible,
-    );
-
-    // Selection highlight.
-    if !sdi.contains("app_sel_bg") {
-        sdi.create("app_sel_bg");
-    }
-    let sel_y = app_layout.content_y + (content.visual_selected * app_layout.line_h as f32) as i32;
-    if let Ok(obj) = sdi.get_mut("app_sel_bg") {
-        obj.x = app_layout.content_x;
-        obj.y = sel_y;
-        obj.w = app_layout.content_w;
-        obj.h = at.terminal_line_height;
-        obj.color = at.app.selected_bg;
-        obj.border_radius = Some(at.app.selection_border_radius);
-        obj.visible = !content.lines.is_empty();
-        obj.z = 101;
-    }
-
-    // Selection accent bar.
-    if !sdi.contains("app_sel_accent") {
-        sdi.create("app_sel_accent");
-    }
-    if let Ok(obj) = sdi.get_mut("app_sel_accent") {
-        obj.x = app_layout.content_x;
-        obj.y = sel_y;
-        obj.w = 3;
-        obj.h = at.terminal_line_height;
-        obj.color = at.app.selection_accent_color;
-        obj.border_radius = Some(at.app.selection_border_radius);
-        obj.visible = !content.lines.is_empty();
-        obj.z = 102;
-    }
-
-    for (i, rect) in line_rects.iter().enumerate() {
-        let name = app_line_name(i);
-        if !sdi.contains(&name) {
-            sdi.create(name.as_ref());
-        }
-        if let Ok(obj) = sdi.get_mut(&name) {
-            let line_idx = content.scroll + i;
-            if let Some(line) = content.lines.get(line_idx) {
-                obj.set_text(line);
-                obj.visible = true;
-            } else {
-                obj.text = None;
-                obj.visible = false;
-            }
-            obj.x = rect.x + 6;
-            obj.y = rect.y;
-            obj.font_size = at.font_body;
-            obj.text_color = if i == content.cursor {
-                at.app.selected_text
-            } else {
-                at.app.text
-            };
-            obj.w = 0;
-            obj.h = 0;
-            obj.z = 102;
-        }
-    }
-
-    // Scroll indicator.
-    if !sdi.contains("app_scroll") {
-        sdi.create("app_scroll");
-    }
-    if let Ok(obj) = sdi.get_mut("app_scroll") {
-        if content.lines.len() > app_layout.max_visible {
-            obj.text = Some(format!(
-                "[{}/{}]  Cancel=back",
-                content.scroll + 1,
-                content.lines.len().saturating_sub(app_layout.max_visible) + 1,
-            ));
-        } else {
-            obj.text = Some("Cancel=back".to_string());
-        }
-        obj.x = 8;
-        obj.y = at.screen_h as i32 - 14;
-        obj.font_size = at.font_hint;
-        obj.text_color = at.app.dim_text;
-        obj.w = 0;
-        obj.h = 0;
-        obj.visible = true;
-        obj.z = 102;
-    }
-}
 
 /// Top inset for windowed app content when no context header row is drawn.
 ///
@@ -221,8 +22,8 @@ pub const WINDOWED_FONT_SIZE: u16 = 12;
 /// `max_lines`: `(first line index, selected row, row count)`.
 ///
 /// `ContentState` scrolls against the row count cached by its last
-/// [`ContentState::update_layout_windowed`] (or the fullscreen layout, for
-/// apps that never call it), which can disagree with this window. The drawn
+/// [`ContentState::update_layout_windowed`], which can disagree with this
+/// window (apps that never call it, a resize since the last layout). The drawn
 /// range is shifted so the selected row is always on screen; otherwise the
 /// cursor could walk off the bottom of a small window.
 fn windowed_rows(content: &ContentState, max_lines: usize) -> (usize, usize, usize) {
@@ -406,43 +207,6 @@ pub fn draw_content_windowed(
     Ok(())
 }
 
-/// Hide all generic app-related SDI objects.
-///
-/// This hides objects created by `render_app_chrome` and `render_content_sdi`.
-/// App-specific objects (e.g., TV Guide EPG) should be hidden separately.
-///
-/// Runs every frame outside app mode, so it only touches objects whose
-/// visibility actually changes (see `SdiRegistry::set_visible`): on an
-/// already-hidden pool it is lookups only and leaves the scene clean.
-pub fn hide_app_sdi(sdi: &mut SdiRegistry) {
-    let fixed = [
-        "app_bg",
-        "app_title_bg",
-        "app_title_text",
-        "app_scroll",
-        "app_divider",
-        "app_sel_bg",
-        "app_sel_accent",
-    ];
-    for name in fixed {
-        sdi.set_visible(name, false);
-    }
-    let names = app_line_names();
-    for name in &names.line {
-        if !sdi.contains(name) {
-            break;
-        }
-        sdi.set_visible(name, false);
-    }
-    for (lp, rp) in names.lp.iter().zip(&names.rp) {
-        if !sdi.contains(lp) {
-            break;
-        }
-        sdi.set_visible(lp, false);
-        sdi.set_visible(rp, false);
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -474,47 +238,6 @@ mod tests {
             assert_eq!(windowed_line_at(&content, ch, m, -1), None);
             assert_eq!(windowed_line_at(&content, ch, m, ch as i32), None);
         }
-    }
-
-    #[test]
-    fn hide_app_sdi_repeat_leaves_scene_clean() {
-        let mut content = ContentState::new("Files", "/apps/files");
-        content.lines = (0..50).map(|i| format!("entry {i}")).collect();
-        let at = ActiveTheme::default();
-        let mut sdi = SdiRegistry::new();
-        render_app_chrome(&mut sdi, &at);
-        render_content_sdi(&content, &mut sdi, &at);
-        hide_app_sdi(&mut sdi);
-        assert!(sdi.take_scene_dirty());
-        assert!(!sdi.get("app_line_0").unwrap().visible);
-        assert!(!sdi.get("app_bg").unwrap().visible);
-        // The per-frame repeat must not dirty the scene.
-        hide_app_sdi(&mut sdi);
-        assert!(!sdi.is_scene_dirty());
-    }
-
-    #[test]
-    fn render_content_sdi_idle_frame_is_clean() {
-        let mut content = ContentState::new("Files", "/apps/files");
-        content.lines = (0..50).map(|i| format!("entry {i}")).collect();
-        let at = ActiveTheme::default();
-        let mut sdi = SdiRegistry::new();
-        render_content_sdi(&content, &mut sdi, &at);
-        sdi.clear_scene_dirty();
-        render_content_sdi(&content, &mut sdi, &at);
-        assert!(!sdi.is_scene_dirty());
-        assert_eq!(
-            sdi.get("app_line_1").unwrap().text.as_deref(),
-            Some("entry 1")
-        );
-        // Scrolling changes line text: dirty.
-        content.scroll = 1;
-        render_content_sdi(&content, &mut sdi, &at);
-        assert!(sdi.is_scene_dirty());
-        assert_eq!(
-            sdi.get("app_line_1").unwrap().text.as_deref(),
-            Some("entry 2")
-        );
     }
 
     #[test]

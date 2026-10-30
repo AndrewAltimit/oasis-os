@@ -9,9 +9,7 @@ use std::cell::{Cell, RefCell};
 use oasis_app_core::file_viewer::{
     join_path, list_directory, parent_dir, view_audio_file, view_generic_file, view_image_file,
 };
-use oasis_app_core::render::{
-    draw_content_windowed, hide_app_sdi, render_app_chrome, render_content_sdi, windowed_line_at,
-};
+use oasis_app_core::render::{draw_content_windowed, windowed_line_at};
 use oasis_app_core::{App, AppAction, AppRequest, ContentState};
 use oasis_skin::SimpleRng;
 use oasis_types::backend::TextureId;
@@ -662,12 +660,6 @@ impl App for BrowsingApp {
             self.content.update_layout_windowed(ch, at);
         }
     }
-    fn update_sdi(&mut self, sdi: &mut oasis_sdi::SdiRegistry, at: &oasis_skin::ActiveTheme) {
-        self.content.update_layout(at);
-        self.content.animate_selection(0.3);
-        render_app_chrome(sdi, at);
-        render_content_sdi(&self.content, sdi, at);
-    }
     fn draw_windowed(
         &self,
         cx: i32,
@@ -689,9 +681,6 @@ impl App for BrowsingApp {
             },
         }
     }
-    fn hide_sdi(&self, sdi: &mut oasis_sdi::SdiRegistry) {
-        hide_app_sdi(sdi);
-    }
     fn release_resources(&mut self, backend: &mut dyn oasis_types::backend::SdiBackend) {
         // The photo texture (and any parked stale ones) would otherwise
         // stay in the backend's texture table after the window closes.
@@ -711,16 +700,8 @@ impl App for BrowsingApp {
 
     /// Windowed listing: a click selects an entry, a second click on it
     /// (a double-click) opens it like Confirm.
-    fn handle_click(
-        &mut self,
-        _lx: i32,
-        ly: i32,
-        _cw: u32,
-        ch: u32,
-        fullscreen: bool,
-        vfs: &dyn Vfs,
-    ) -> AppAction {
-        if fullscreen || self.content.viewing_file.is_some() || self.content.browse_dir.is_none() {
+    fn handle_click(&mut self, _lx: i32, ly: i32, _cw: u32, ch: u32, vfs: &dyn Vfs) -> AppAction {
+        if self.content.viewing_file.is_some() || self.content.browse_dir.is_none() {
             return AppAction::None;
         }
         let metrics = self.content.windowed_metrics();
@@ -1147,18 +1128,18 @@ mod tests {
         )
         .expect("visible");
         // First click only selects.
-        app.handle_click(10, y + 2, 300, ch, false, &vfs);
+        app.handle_click(10, y + 2, 300, ch, &vfs);
         assert_eq!(app.content.scroll + app.content.cursor, idx);
         assert!(app.content.viewing_file.is_none());
         // Second click on the same line opens it (and asks to play).
-        app.handle_click(10, y + 2, 300, ch, false, &vfs);
+        app.handle_click(10, y + 2, 300, ch, &vfs);
         assert_eq!(
             app.content.viewing_file.as_deref(),
             Some("/home/user/music/ambient_dawn.mp3")
         );
         assert!(!app.content.requests.is_empty());
         // Clicks are ignored while a track is open, and in fullscreen.
-        app.handle_click(10, y + 2, 300, ch, false, &vfs);
+        app.handle_click(10, y + 2, 300, ch, &vfs);
         assert_eq!(
             app.content.viewing_file.as_deref(),
             Some("/home/user/music/ambient_dawn.mp3")

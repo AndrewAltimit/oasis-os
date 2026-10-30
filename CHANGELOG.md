@@ -62,6 +62,16 @@ removal, a restyled site, and docs that match the code.
   requests (`/var/audio`, `/var/radio`, `/var/wm`, `/var/tv`, Settings,
   terminal UI, plugins, `/system/state/net`; `MediaRequest`, `WmRequest`,
   `PluginRequest`, `NetState`).
+- **(breaking)** The `App` trait has one render path, `draw_windowed`:
+  `update_sdi` / `hide_sdi` (a fullscreen SDI path no host called),
+  `AppRunner::update_sdi` / `hide_sdi`, `AppRegistration::hide_sdi`,
+  `ContentState::update_layout` / `animate_selection`, `AppLayout` and
+  the SDI line-list renderers in `oasis_app_core::render` are gone.
+  `App::handle_click` / `AppRunner::handle_click` lose their
+  `fullscreen` flag: hosts passed the kiosk-window flag, which apps read
+  as "use the SDI layout", so clicks in a kiosk-fullscreen Music Player
+  were ignored and Settings / File Manager / TV Guide hit-tested rows
+  other than the ones drawn.
 - Shared helpers replace per-crate copies: `oasis_types::easing`,
   `util::ct_eq`, `util::base64`, `OasisError::is_would_block()` /
   `is_timed_out()`.

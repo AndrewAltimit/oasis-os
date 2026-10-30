@@ -9,7 +9,6 @@ mod tests {
     use oasis_core::backend::Color;
     use oasis_core::dashboard::AppEntry;
     use oasis_core::input::Button;
-    use oasis_core::sdi::SdiRegistry;
     use oasis_core::vfs::{MemoryVfs, Vfs};
 
     use crate::TvGuideRunnerExt as _;
@@ -206,30 +205,6 @@ mod tests {
         let mut runner = launch(&make_app("Settings"), &vfs);
         let action = runner.handle_input(&Button::Cancel, &vfs);
         assert_eq!(action, AppAction::Exit);
-    }
-
-    #[test]
-    fn update_sdi_creates_objects() {
-        let vfs = setup_vfs();
-        let mut runner = launch(&make_app("Settings"), &vfs);
-        let mut sdi = SdiRegistry::new();
-        runner.update_sdi(&mut sdi, &ActiveTheme::default());
-        assert!(sdi.contains("app_bg"));
-        assert!(sdi.contains("app_title_bg"));
-        assert!(sdi.contains("app_title_text"));
-        assert!(sdi.contains("app_line_0"));
-        assert!(sdi.contains("app_scroll"));
-    }
-
-    #[test]
-    fn hide_sdi_hides_objects() {
-        let vfs = setup_vfs();
-        let mut runner = launch(&make_app("Settings"), &vfs);
-        let mut sdi = SdiRegistry::new();
-        runner.update_sdi(&mut sdi, &ActiveTheme::default());
-        AppRunner::hide_sdi(&apps(), &mut sdi);
-        assert!(!sdi.get("app_bg").unwrap().visible);
-        assert!(!sdi.get("app_title_bg").unwrap().visible);
     }
 
     #[test]
@@ -696,42 +671,6 @@ mod tests {
         assert_eq!(fm.panels[1].browse_dir, "/");
     }
 
-    #[test]
-    fn dual_panel_sdi_objects() {
-        use oasis_app_file_manager::{FileManagerApp, ViewMode};
-        let vfs = setup_vfs();
-        let mut runner = launch(&make_app("File Manager"), &vfs);
-        runner
-            .delegate_as_mut::<FileManagerApp>()
-            .unwrap()
-            .view_mode = ViewMode::Dual;
-        let mut sdi = SdiRegistry::new();
-        runner.update_sdi(&mut sdi, &ActiveTheme::default());
-        assert!(sdi.contains("app_bg"));
-        assert!(sdi.contains("app_divider"));
-        assert!(sdi.contains("app_lp_line_0"));
-        assert!(sdi.contains("app_rp_line_0"));
-        assert!(sdi.contains("app_scroll"));
-    }
-
-    #[test]
-    fn dual_panel_hide_sdi() {
-        use oasis_app_file_manager::{FileManagerApp, ViewMode};
-        let vfs = setup_vfs();
-        let mut runner = launch(&make_app("File Manager"), &vfs);
-        runner
-            .delegate_as_mut::<FileManagerApp>()
-            .unwrap()
-            .view_mode = ViewMode::Dual;
-        let mut sdi = SdiRegistry::new();
-        runner.update_sdi(&mut sdi, &ActiveTheme::default());
-        AppRunner::hide_sdi(&apps(), &mut sdi);
-        assert!(!sdi.get("app_bg").unwrap().visible);
-        assert!(!sdi.get("app_divider").unwrap().visible);
-        assert!(!sdi.get("app_lp_line_0").unwrap().visible);
-        assert!(!sdi.get("app_rp_line_0").unwrap().visible);
-    }
-
     // ---------------------------------------------------------------
     // TV Guide lifecycle tests
     // ---------------------------------------------------------------
@@ -1116,31 +1055,31 @@ mod tests {
         // Content dimensions matching a typical window.
         let (cw, ch) = (800u32, 600u32);
 
-        // Compute layout to find a row 1 y position.
+        // Compute the windowed layout to find a row 1 y position.
         let usable_h = ch;
-        let header_h = (usable_h * 20 / 100).max(60);
-        let time_header_h = (usable_h * 4 / 100).max(20);
-        let footer_h = (usable_h * 5 / 100).max(18);
+        let header_h = (usable_h * 20 / 100).max(40);
+        let time_header_h = (usable_h * 4 / 100).max(16);
+        let footer_h = (usable_h * 5 / 100).max(14);
         let grid_h = usable_h.saturating_sub(header_h + time_header_h + footer_h);
         let row_count = 5u32; // default channels
-        let row_h = (grid_h / row_count).max(20);
+        let row_h = (grid_h / row_count).max(16);
         let grid_y = header_h + time_header_h;
 
         // Click row 1 — should select channel 1 (not tune).
         let ly = (grid_y + row_h + row_h / 2) as i32;
-        let action = runner.handle_click(100, ly, cw, ch, true, &ActiveTheme::default(), &_vfs);
+        let action = runner.handle_click(100, ly, cw, ch, &ActiveTheme::default(), &_vfs);
         assert_eq!(action, AppAction::None);
         assert_eq!(runner.tv_guide_state().unwrap().selected_channel, 1);
         assert!(take_request(&mut runner).is_none());
 
         // Click row 0 — selects channel 0 (catalog is on ch 0).
         let ly0 = (grid_y + row_h / 2) as i32;
-        let action = runner.handle_click(100, ly0, cw, ch, true, &ActiveTheme::default(), &_vfs);
+        let action = runner.handle_click(100, ly0, cw, ch, &ActiveTheme::default(), &_vfs);
         assert_eq!(action, AppAction::None);
         assert_eq!(runner.tv_guide_state().unwrap().selected_channel, 0);
 
         // Click row 0 again — already selected, should tune.
-        let action = runner.handle_click(100, ly0, cw, ch, true, &ActiveTheme::default(), &_vfs);
+        let action = runner.handle_click(100, ly0, cw, ch, &ActiveTheme::default(), &_vfs);
         assert_eq!(action, AppAction::RequestFullscreen);
         let (path, data) = take_request(&mut runner).unwrap();
         assert!(path.contains("tv"));
@@ -1152,7 +1091,7 @@ mod tests {
         let (mut runner, _vfs) = setup_tv_guide_with_catalog("noop-test", "ep.mp4", "Noop");
 
         // Click in the header area.
-        let action = runner.handle_click(100, 10, 800, 600, true, &ActiveTheme::default(), &_vfs);
+        let action = runner.handle_click(100, 10, 800, 600, &ActiveTheme::default(), &_vfs);
         assert_eq!(action, AppAction::None);
         assert!(take_request(&mut runner).is_none());
     }

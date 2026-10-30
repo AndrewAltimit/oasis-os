@@ -1251,7 +1251,6 @@ impl OasisWasm {
         match self.mode {
             Mode::Dashboard => {
                 terminal_sdi::set_terminal_visible(&mut self.sdi, false);
-                AppRunner::hide_sdi(&self.apps, &mut self.sdi);
                 self.taskbar.hide_sdi(&mut self.sdi);
 
                 if self.bottom_bar.active_tab == MediaTab::None {
@@ -1277,7 +1276,6 @@ impl OasisWasm {
             },
             Mode::Terminal => {
                 self.dashboard.hide_sdi(&mut self.sdi);
-                AppRunner::hide_sdi(&self.apps, &mut self.sdi);
                 StatusBar::hide_sdi(&mut self.sdi);
                 BottomBar::hide_sdi(&mut self.sdi);
                 self.taskbar.hide_sdi(&mut self.sdi);
@@ -1301,7 +1299,6 @@ impl OasisWasm {
             },
             Mode::Desktop => {
                 terminal_sdi::set_terminal_visible(&mut self.sdi, false);
-                AppRunner::hide_sdi(&self.apps, &mut self.sdi);
                 terminal_sdi::hide_media_page(&mut self.sdi);
 
                 // Sync terminal output to the windowed terminal runner

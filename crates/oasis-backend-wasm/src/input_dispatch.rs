@@ -275,15 +275,8 @@ impl OasisWasm {
                             && let Some(win) = self.wm.get_window(&id)
                         {
                             let (_, _, cw, ch) = win.content_rect(self.wm.theme());
-                            let action = runner.handle_click(
-                                lx,
-                                ly,
-                                cw,
-                                ch,
-                                win.fullscreen_kiosk,
-                                &self.active_theme,
-                                &self.vfs,
-                            );
+                            let action =
+                                runner.handle_click(lx, ly, cw, ch, &self.active_theme, &self.vfs);
                             if action == AppAction::RequestFullscreen
                                 && self.fullscreen_app.is_none()
                             {
