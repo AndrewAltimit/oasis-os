@@ -202,7 +202,7 @@ five entries (Old Time Radio, LibriVox Audiobooks, Netlabel Music,
   is bypassed (archive MP3s are vanilla files, not icecast). The same
   `psp::audiocodec::AudiocodecDecoder` decode path then plays through
   `AudioChannel::output_blocking`.
-- **`reinit_gu_frame()` discipline** — `dispatch_radio_confirm`
+- **`reinit_gu_frame()` discipline** — the radio Confirm handler
   previously called `backend.reinit_gu_frame()` unconditionally after
   `ensure_net_init_pub`, even on the silent GotIp early-return
   (cmd_server pre-connected WiFi at boot). Calling `sceGuStart` a

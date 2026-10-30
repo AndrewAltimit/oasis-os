@@ -1,7 +1,7 @@
 # ADR-002: Virtual File System Abstraction
 
 **Status:** Accepted
-**Date:** 2025-02-12
+**Date:** 2026-02-09 (initial release; recorded 2026-02-19)
 **Last reviewed:** 2026-10-29 — still current. `MemoryVfs`, `RealVfs`, and `GameAssetVfs` ship today in `crates/oasis-vfs/`. Since the original decision the trait gained a shared `validate_rename` invariant check and a cross-implementation conformance suite (see "Shared invariants" below).
 
 ## Context

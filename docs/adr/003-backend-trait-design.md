@@ -1,7 +1,7 @@
 # ADR-003: Backend Trait Design (Split Backend Traits)
 
 **Status:** Accepted
-**Date:** 2025-02-12
+**Date:** 2026-02-09 (initial release; recorded 2026-02-19)
 **Last reviewed:** 2026-10-30. The decision is still current. Counts, the
 removed opt-in traits and the shared span rasterizer were updated to match
 the source, and the drawing-state contract every backend follows was added.

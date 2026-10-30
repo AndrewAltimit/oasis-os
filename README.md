@@ -1,12 +1,10 @@
 # OASIS_OS
 
-An embeddable operating system framework in Rust. One codebase renders a full desktop environment -- window manager, browser engine, terminal, 15 apps, 17 skins -- to a 333 MHz PSP handheld, a desktop GPU, a web browser, and an Unreal Engine 5 viewport. Give it a pixel buffer and an input stream and it runs anywhere.
+An embeddable operating system framework in Rust. One codebase renders a full desktop environment -- window manager, browser engine, terminal, 15 apps, 17 skins -- to a 333 MHz PSP handheld, a desktop window, a web page, and an Unreal Engine 5 viewport. Give it a pixel buffer and an input stream and it runs anywhere.
 
-**[Try it in your browser](https://andrewaltimit.github.io/oasis-os/demo/)** -- no install required.
+**[Try it in your browser](https://andrewaltimit.github.io/oasis-os/demo/)** -- no install required. | **[Project site](https://andrewaltimit.github.io/oasis-os/)** | **[Developer's Journal](https://andrewaltimit.github.io/oasis-os/journal/)** | **[All 17 skins](SCREENSHOTS.md)**
 
 https://github.com/user-attachments/assets/8e12988e-fb1a-4a4e-a0e5-e1f04d8cd433
-
-**[All 17 skin screenshots](SCREENSHOTS.md)** | **[Developer's Journal](https://andrewaltimit.github.io/oasis-os/journal/)**
 
 | Altimit | Paper | XP | Win95 | Retro CGA |
 |:---:|:---:|:---:|:---:|:---:|
@@ -16,45 +14,84 @@ https://github.com/user-attachments/assets/8e12988e-fb1a-4a4e-a0e5-e1f04d8cd433
 |:---:|:---:|:---:|:---:|:---:|
 | ![macOS](screenshots/macos/01_dashboard.png) | ![GNOME](screenshots/gnome/01_dashboard.png) | ![Balatro](screenshots/balatro/01_dashboard.png) | ![Solarized](screenshots/solarized/01_dashboard.png) | ![Vaporwave](screenshots/vaporwave/01_dashboard.png) |
 
-## The PSP Story
+## Platforms
 
-OASIS_OS was built from scratch in Rust starting in early 2026, inspired by PSP homebrew shells like PSIX. The PSP is both the original muse and the most demanding target -- and the most interesting.
+| Target | Backend | Build | Guide |
+|--------|---------|-------|-------|
+| Desktop (Linux, Windows; Raspberry Pi planned) | SDL3 | `cargo build --release -p oasis-app` | [Getting Started](docs/getting-started.md) |
+| Web | WASM + Canvas 2D | `./scripts/build-wasm.sh --release` | [WASM Backend](docs/wasm-backend.md) |
+| PSP / PPSSPP | sceGu hardware GPU, Media Engine video | `RUST_PSP_BUILD_STD=1 cargo psp --release` in `crates/oasis-backend-psp` | [PSP Architecture](docs/psp-architecture.md) |
+| Unreal Engine 5 (or any C host) | Software RGBA framebuffer over a C ABI | `cargo build --profile release-ffi -p oasis-ffi` | [FFI Integration](docs/ffi-integration.md) |
 
-The PSP is a 2004 handheld with a 333 MHz MIPS CPU, 32 MB RAM, and firmware from 2008. Making a modern streaming video app work on it required:
+## Quick start
 
-- **TLS 1.3 in pure Rust** -- Sony's firmware ships SSL 3.0 with 2008 root CAs. We implemented native TLS 1.3 via `embedded-tls` on bare metal MIPS, discovering privileged instruction traps (`mfc0 $9` is COP0-protected on Allegrex), RSA handshake failures (need the `alloc` feature for RSA scheme advertisement), and DNS endianness bugs. This enables HTTPS connections to modern servers like archive.org.
+```bash
+cargo run --release -p oasis-app            # classic skin
+cargo run --release -p oasis-app -- xp      # any built-in skin by name, or a skin directory
+```
 
-- **Hardware H.264 video decode** -- The PSP's Media Engine is a second MIPS CPU dedicated to multimedia. No public documentation exists for using it from homebrew. We [reverse engineered the ME's RPC protocol](https://andrewaltimit.github.io/oasis-os/journal/07-psp-media-engine.html) -- 22 command IDs, 47 internal NIDs, the complete kernel driver chain -- discovered undocumented `sceMpegCreate` parameters in PMPlayer's source code, and achieved hardware-accelerated H.264 decode from Rust. A firmware deadlock at ~70 frames is handled by a kernel PRX watchdog that hooks `sceKernelWaitEventFlag` with a timeout, plus P/B-frame skipping for indefinite stable streaming.
+SDL3 is compiled from source automatically (needs cmake and the X11/audio headers on Linux). The default features link system ffmpeg for video; without the ffmpeg dev libraries (e.g. on Windows) use the openh264 decoder instead:
 
-- **In-memory video streaming** -- The TV Guide app streams MP4 from archive.org over TLS 1.3, demuxes on the fly, feeds H.264 NAL units to the ME for video and AAC frames to `sceAudiocodec` for audio, all in separate threads with lock-free queues and semaphore-based wakeup. No disk I/O during playback.
+```bash
+cargo run --release -p oasis-app --no-default-features --features javascript,video-decode
+```
 
-- **Kernel-mode overlay plugin** -- A separate PRX binary hooks `sceDisplaySetFrameBuf` to draw an overlay UI on top of any running game's framebuffer, with background MP3 playback via the ME.
+Per-platform dependencies, feature flags (`skin-dev`, `mcp`), environment variables, the WASM, PSP and UE5 builds, and tests are in [Getting Started](docs/getting-started.md). The Docker image CI uses: `docker compose --profile ci run --rm rust-ci cargo build --release -p oasis-app`.
 
-- **Closed-loop remote development** -- A [TCP command server](https://andrewaltimit.github.io/oasis-os/journal/08-remote-dev-automation.html) inside the EBOOT provides WiFi-based build-deploy-reboot-test cycles, remote input injection, live framebuffer streaming, and arbitrary file upload. A network recovery EBOOT (154 KB, triggered by holding R-trigger on boot) makes the device unbrickable over WiFi. An AI agent used this infrastructure to debug the entire H.264 pipeline -- 30+ deploy-test iterations in a single session without touching the device.
+## What's inside
+
+**Shell and apps**
+- 15 apps: File Manager, Browser, TV Guide, Internet Radio, Music Player, Photo Viewer, Paint, Games, Calculator, Text Editor, Terminal, Settings, Network, Package Manager, System Monitor
+- Terminal with ~95 commands plus 20 shell builtins: piping, globs, aliases, `$(...)`, `if`/`while`/`for`/`case` scripting, background jobs, readline editing, tab completion, persistent history ([catalogue](docs/terminal-commands.md))
+- Window manager with drag/resize, snapping, Alt+Tab, tiling layouts, virtual desktops and animations ([API](docs/window-manager.md))
+- TV Guide streams Internet Archive video with hardware H.264 decode on PSP and software decode on desktop; Internet Radio streams curated Archive collections
+
+**Browser engine** ([feature catalogue](docs/browser-engine.md))
+- HTML/CSS with the full cascade, flex, table and Grid layout, 2D + 3D transforms, `@media` / `@container` / `@layer` / `@supports`, `var()`, transitions, Canvas 2D, SVG, forms, web fonts, reader mode, Gemini
+- JavaScript via QuickJS-NG on every backend including real PSP hardware: a broad DOM API, Promise-based `fetch()`, per-origin storage, and per-tick time and heap budgets so runaway scripts cannot freeze the shell
+- HTTP/1.1 + HTTP/2 over rustls with an RFC 6265 cookie jar, enforced CSP and per-hop redirect rules ([security model](docs/security.md))
+
+**Rendering and theming**
+- Scene graph (SDI) with z-order, gradients, rounded corners, shadows and exact dirty tracking so idle frames skip redraws
+- 29 widgets plus list, menu, nine-patch, icon atlas and flex/grid layout helpers ([catalogue](docs/ui-widgets.md))
+- 17 skins, each an editable TOML directory under [`skins/`](skins/) with theme derivation from 9 base colors ([authoring guide](docs/skin-authoring.md))
+- 8 animated shader wallpapers, each with a GPU and a CPU implementation ([shaders](docs/shaders.md)); resolution-independent vector icons and animations
+
+**Platform and integration**
+- Remote terminal with PSK authentication over TLS (loopback-only unless a PSK is set) ([networking](docs/networking.md))
+- Optional MCP control server so a local agent can drive the shell ([MCP server](docs/mcp-server.md))
+- Plugins, VFS-based IPC, and a virtual file system with in-memory, jailed host-directory and UE5 game-asset implementations ([plugins](docs/plugin-development.md))
+
+## The PSP story
+
+The PSP is the original muse and the most demanding target: a 2004 handheld with a 333 MHz MIPS CPU, 32 MB of RAM and firmware from 2008. Making a modern streaming video app work on it took:
+
+- **TLS 1.3 in pure Rust** via `embedded-tls` on bare-metal MIPS -- Sony's firmware ships SSL 3.0 and 2008 root CAs. This enables HTTPS to modern servers like archive.org.
+- **Hardware H.264 decode** on the Media Engine, a second MIPS CPU with no public homebrew documentation. We [reverse engineered the ME's RPC protocol](https://andrewaltimit.github.io/oasis-os/journal/07-psp-media-engine.html) and drive it from Rust; a kernel PRX watchdog recovers a firmware deadlock for indefinite stable streaming.
+- **In-memory streaming**: MP4 over TLS, demuxed on the fly, H.264 NAL units to the ME and AAC frames to `sceAudiocodec`, with no disk I/O during playback.
+- **A kernel-mode overlay PRX** that draws UI over any running game and plays background MP3s.
+- **Closed-loop remote development**: a [TCP command server](https://andrewaltimit.github.io/oasis-os/journal/08-remote-dev-automation.html) inside the EBOOT for WiFi build-deploy-test cycles, input injection and framebuffer capture, plus a 154 KB network recovery EBOOT (hold R on boot) that makes the device unbrickable. An AI agent used it to debug the whole H.264 pipeline -- 30+ deploy-test iterations in one session without touching the device.
 
 https://github.com/user-attachments/assets/3d84aea5-969c-4f38-af67-c088a7c37764
 
-*Closed-loop demo: AI agent connects to PSP over WiFi, launches TV Guide, tunes a channel, windows the app, then power-cycles via USB relay-controlled actuator -- zero human contact.*
+*Closed-loop demo: an AI agent connects to the PSP over WiFi, launches TV Guide, tunes a channel, windows the app, then power-cycles it through a USB relay-controlled actuator -- zero human contact.*
 
-Read the full technical deep dives in the [Developer's Journal](https://andrewaltimit.github.io/oasis-os/journal/).
-
-## Hardware Blueprints
-
-Interactive 3D diagrams of the custom hardware built for PSP development. Click to explore -- rotate, zoom, and hover for component details.
+Interactive 3D blueprints of the custom hardware: the [PSP USB-C adapter](https://andrewaltimit.github.io/oasis-os/blueprint.html?diagram=psp-usb-adapter) (passive bridge: power pads + Mini-B data into one USB-C port) and the [hard reset relay](https://andrewaltimit.github.io/oasis-os/blueprint.html?diagram=psp-relay) (H-bridge wiring for remote reboot).
 
 | PSP USB-C Adapter | PSP Hard Reset Relay |
 |:---:|:---:|
 | [![USB-C Adapter 3D](site/img/blueprint-psp-usb-adapter.png)](https://andrewaltimit.github.io/oasis-os/blueprint.html?diagram=psp-usb-adapter) | [![Relay Wiring 3D](site/img/blueprint-psp-relay.png)](https://andrewaltimit.github.io/oasis-os/blueprint.html?diagram=psp-relay) |
-| Passive bridge: power pads + Mini-B data into one USB-C port | H-bridge wiring: USB relay drives actuator for remote hard reboot |
 
-## Architecture: Write Once, Render Anywhere
+PSP builds, PPSSPP testing and the devloop scripts: [Getting Started § PSP](docs/getting-started.md#psp), [PSP Architecture](docs/psp-architecture.md), [PSP Plugin](docs/psp-plugin.md).
 
-Core code never calls platform APIs directly. All rendering, input, networking, and audio flow through backend traits defined in `oasis-types`. Implement 13 methods and you have a working backend; opt into up to 53 more (across nine extension traits with default implementations) for accelerated rendering.
+## Architecture: write once, render anywhere
+
+Core code never calls platform APIs. Rendering, input, networking and audio go through backend traits in `oasis-types`: implement the 13 required `SdiCore` methods and you have a working backend; the 53 methods of the nine extension traits have defaults that draw the same pixels as the native rasterizers, so overriding them is only for speed. Every backend follows one drawing-state contract, pinned by conformance tests ([design §5](docs/design.md#5-backend-abstraction-layer), [ADR-003](docs/adr/003-backend-trait-design.md)).
 
 ```mermaid
 graph TD
-    APP["<b>OASIS_OS</b><br/>oasis-core + 13 app crates<br/>29 widgets, browser, terminal<br/>17 skins, 110+ commands"]
-    TRAITS["<b>Backend Traits</b><br/>SdiCore (13 required) / SdiBackend (53 optional)<br/>InputBackend / NetworkBackend / AudioBackend"]
+    APP["<b>OASIS_OS</b><br/>oasis-core + 13 app crates<br/>29 widgets, browser, terminal<br/>17 skins, ~95 commands"]
+    TRAITS["<b>Backend Traits</b><br/>SdiCore (13 required) + 9 extension traits (53 defaults)<br/>InputBackend / NetworkBackend / AudioBackend"]
 
     SDL["<b>SDL3</b><br/>Desktop + Pi"]
     WASM["<b>WASM</b><br/>Canvas 2D"]
@@ -75,86 +112,23 @@ graph TD
     style UE5 fill:#0f3460,stroke:#533483,color:#eee
 ```
 
-## Key Features
-
-**Browser Engine**
-- HTML/CSS renderer with DOM, CSS cascade, flex/table layout and CSS Grid (track lists, `repeat(auto-fill/auto-fit)`, named areas, auto-placement incl. `dense`), full 2D + 3D CSS transforms
-- Custom properties with `var()` substituted at computed-value time (fallbacks, cycle detection, `calc(var(...))`)
-- Canvas 2D path API, SVG paths with fill-rule/linecap/linejoin
-- Light compositor: display list batching, occlusion culling, clip intersection, sticky scroll caching
-- Hover-triggered CSS transitions, `@media`/`@supports`/`@container`/`@layer` queries, `calc()`
-- Form elements with select dropdown, label association, Tab focus, GET/POST submission
-- JavaScript engine: QuickJS-NG (via `rquickjs`) across every backend including real PSP hardware — a broad DOM API (cached node wrappers, tree mutation, `classList`/`dataset`, Event/CustomEvent classes, document lifecycle, `requestAnimationFrame`), a Promise-based `fetch()` with origin checks and CORS rules, per-origin quota'd `localStorage`/`sessionStorage`, and an execution watchdog so runaway scripts cannot freeze the OS. PSP bring-up required a pspdev cross-toolchain through the `cc` crate plus ~40 hand-written `quickjs_shim.rs` libc/libm symbols
-
-**Shell & Apps**
-- 110+ terminal commands and shell builtins with piping, globs, aliases, variable expansion, `if`/`while`/`for`/`case` scripting, background jobs (`cmd &`, `jobs`/`fg`/`kill`)
-- Readline-style line editing, tab completion (commands, `$VARS`, VFS paths), Ctrl+R history search and persistent history
-- 15 built-in apps: File Manager, Browser, TV Guide, Internet Radio, Music Player, Photo Viewer, Paint, Games, Calculator, Text Editor, Terminal, Settings, Network, Package Manager, System Monitor
-- Apps get raw keyboard shortcuts (`App::handle_key`), per-frame ticks, and mutable VFS access for saves/renames/copies; e.g. the Text Editor has selection, clipboard, find/replace and syntax highlighting, the File Manager does copy/move/rename/delete with confirmation dialogs
-- TV Guide streams video from Internet Archive with hardware H.264 decode (PSP) or software decode (desktop)
-- Internet Radio streams MP3 from curated Internet Archive collections
-
-**Rendering & UI**
-- Scene graph (SDI) with z-order, gradients, rounded corners, shadows, alpha blending, and exact per-object dirty tracking so idle frames skip redraws
-- 29 widgets (Button, Card, TabBar, ScrollView, Slider, TreeView, Modal, Table, ...) plus ListView, MenuBar, NinePatch, icon atlas and flex/grid layout helpers
-- Window manager with drag/resize, minimize/maximize, drag-to-edge snapping, Alt+Tab, keyboard snapping, tiling layouts and open/close/minimize animations
-- 17 built-in skins, all shipped as editable TOML, with theme derivation from 9 base colors
-- Vector graphics with path operations and frame-driven animations
-- GPU shader wallpapers (Shadertoy-style: Voronoi, City Lights, Ocean Waves, Balatro)
-
-**Networking & Platform**
-- TLS 1.3 in pure Rust via `embedded-tls` (enables HTTPS on PSP hardware)
-- Software MP4/H.264+AAC video decode (desktop); hardware ME decode (PSP)
-- Remote terminal with PSK authentication (loopback-only unless a PSK is set) for headless management
-- Optional MCP control server (loopback, Origin/Host checks) so a local agent can drive the shell
-- Plugin system with VFS-based IPC and manifest discovery
-- Virtual file system: `MemoryVfs` (in-RAM), `RealVfs` (disk), `GameAssetVfs` (UE5)
-
-**PSP-Specific**
-- Hardware GU rendering via `sceGu` with sprite batching and VRAM texture cache
-- Media Engine H.264 decode with kernel PRX watchdog for deadlock recovery
-- WiFi auto-connect, TCP command server, remote input injection, live screencap
-- Network recovery EBOOT for remote unbricking (154 KB, WiFi TCP file server)
-- Kernel-mode overlay PRX: in-game UI + background MP3 via ME coprocessor
-- Hardware AAC decode via `sceAudiocodec`, proportional bitmap + system TrueType fonts
-
-## Skins
-
-17 built-in skins, all data-driven TOML with theme derivation from 9 base colors. Every one is an editable TOML directory under [`skins/`](skins/), compiled in at build time. No code changes are needed to add a skin -- see the [Skin Authoring Guide](docs/skin-authoring.md).
-
-| Category | Skins |
-|----------|-------|
-| **Desktop** | xp, macos, gnome, win95, desktop, modern |
-| **Dashboard (PSP-style)** | classic, altimit, psix-tribute, psix-hifi |
-| **Aesthetic** | balatro, vaporwave, solarized, paper, retro-cga |
-| **Terminal** | corrupted |
-| **Accessibility** | highcontrast |
-
-Skins support animated shader wallpapers (Shadertoy-style fragment shaders: Voronoi, City Lights, Ocean Waves, Calm Waves, Balatro) that render in real-time behind the UI.
-
-Default virtual resolution is 480x272 (PSP native). Skins may override this (e.g. desktop=800x600, xp=1024x768); the backend canvas/window scales to match.
-
 ## Crates
 
-50 crate directories under `crates/`: 40 workspace members, plus the PSP backend (explicitly excluded from the workspace) and 9 standalone PSP-target crates built individually with `cargo psp`.
-
-**Workspace members (40):**
+50 crate directories under `crates/`: 40 workspace members, plus the PSP backend (explicitly excluded from the workspace) and 9 standalone PSP-target crates built individually with `cargo psp`. The dependency graph is in [CLAUDE.md](CLAUDE.md#crate-dependency-graph).
 
 | Layer | Crates | Description |
 |-------|--------|-------------|
-| **Foundation** | `oasis-types`, `oasis-vfs`, `oasis-platform`, `oasis-i18n` | Backend traits + input/geometry types, virtual file system, platform service traits, internationalization |
-| **Rendering** | `oasis-sdi`, `oasis-ui`, `oasis-wm`, `oasis-skin`, `oasis-vector`, `oasis-shader`, `oasis-rasterize` | Scene graph, 29 widgets + layout helpers, window manager, 17 built-in skins, vector graphics, shader wallpapers, software rasterizer |
-| **Content** | `oasis-browser`, `oasis-js`, `oasis-terminal`, `oasis-video`, `oasis-audio` | HTML/CSS/Gemini engine, QuickJS-NG, command interpreter, MP4/H.264+AAC decode, audio manager |
-| **Infrastructure** | `oasis-net`, `oasis-mcp`, `oasis-core` | TCP/PSK networking + remote terminal, optional MCP control server, coordination layer (dashboard, agent, plugins, scripting) |
-| **Apps** | `oasis-app-core` + 13 `oasis-app-*` crates | `App` trait and helpers; `-games`, `-paint`, `-text-editor`, `-calculator`, `-media` (Music Player + Photo Viewer), `-tv-guide`, `-radio`, `-settings`, `-file-manager`, `-browser`, `-network`, `-package-manager`, `-system-monitor` |
-| **Backends** | `oasis-backend-sdl`, `oasis-backend-wasm`, `oasis-backend-ue5`, `oasis-ffi` | SDL3 desktop/Pi, Canvas 2D/browser, UE5 software framebuffer, C-ABI shared library |
-| **Binaries & tools** | `oasis-app`, `oasis-usb-host`, `oasis-test-backend` | Desktop entry points (`oasis-app`, `oasis-screenshot`), host side of the PSP USB thin client, mock/recording backends for tests |
+| **Foundation** | `oasis-types`, `oasis-vfs`, `oasis-platform`, `oasis-i18n` | Backend traits, input/geometry types, span rasterizer, VFS IPC paths; virtual file system; platform service traits; internationalization |
+| **Rendering** | `oasis-sdi`, `oasis-ui`, `oasis-wm`, `oasis-skin`, `oasis-vector`, `oasis-shader`, `oasis-rasterize` | Scene graph, widgets, window manager, skin engine, vector graphics, shader wallpapers, software rasterizer and glyph masks |
+| **Content** | `oasis-browser`, `oasis-js`, `oasis-terminal`, `oasis-video`, `oasis-audio` | HTML/CSS/Gemini engine, QuickJS-NG, command interpreter, MP4/H.264+AAC decode, music state machine + internet radio |
+| **Infrastructure** | `oasis-net`, `oasis-mcp`, `oasis-core` | TCP/PSK/TLS networking + remote terminal, optional MCP control server, coordination layer (dashboard, app runner, plugins, scripting, file transfer) |
+| **Apps** | `oasis-app-core` + 13 `oasis-app-*` crates | `App` trait and helpers; games, paint, text editor, calculator, media (music + photos), TV guide, radio, settings, file manager, browser, network, package manager, system monitor |
+| **Backends** | `oasis-backend-sdl`, `oasis-backend-wasm`, `oasis-backend-ue5`, `oasis-ffi` | SDL3 desktop/Pi, Canvas 2D, UE5 software framebuffer, C-ABI shared library |
+| **Binaries and tools** | `oasis-app`, `oasis-usb-host`, `oasis-test-backend` | Desktop shell library + binaries (`oasis-app`, `oasis-screenshot`, `screenshot-tests`, `e2e-tests`), PSP USB thin-client host, mock/recording/conformance backends |
 
-**PSP-only crates (built with `cargo psp`, not part of the workspace build):**
-
-| Crate | Description |
+| PSP-only crate (built with `cargo psp`) | Description |
 |-------|-------------|
-| `oasis-backend-psp` | The shell EBOOT: sceGu rendering, controller input, ME video decode (explicitly `exclude`d in `Cargo.toml`) |
+| `oasis-backend-psp` | The shell EBOOT: sceGu rendering, controller input, ME video decode (in the workspace `exclude` list) |
 | `oasis-plugin-psp` | Kernel-mode overlay PRX: in-game UI + background MP3 |
 | `oasis-recovery-psp` | Network recovery EBOOT (WiFi TCP file server for unbricking) |
 | `oasis-devloop-psp` | Remote dev-automation PRX (WiFi TCP command server) |
@@ -162,138 +136,20 @@ Default virtual resolution is 480x272 (PSP native). Skins may override this (e.g
 | `oasis-prx-decrypt-psp` | Kirk-based flash0 PRX decryptor |
 | `oasis-usb-client-psp`, `oasis-usb-debug-psp`, `oasis-usb-trace-psp`, `oasis-usb-vbus-psp` | USB thin-client driver and USB host-mode / VBUS research |
 
-## Building
-
-### Desktop (SDL3)
-
-```bash
-cargo build --release -p oasis-app
-
-# Or via Docker (matches CI)
-docker compose --profile ci run --rm rust-ci cargo build --release -p oasis-app
-```
-
-The default `oasis-app` features link against system ffmpeg (`video-decode-ffmpeg`). Without the ffmpeg development libraries (e.g. on Windows), build with the openh264 fallback instead:
-
-```bash
-cargo build --release -p oasis-app --no-default-features --features javascript,video-decode
-```
-
-See [Getting Started](docs/getting-started.md) for per-platform dependencies and the other feature flags (`skin-dev`, `mcp`).
-
-### WebAssembly (Browser)
-
-```bash
-./scripts/build-wasm.sh --release    # requires wasm-pack
-python3 -m http.server 8080          # serve at http://localhost:8080/www/
-```
-
-### PSP
-
-```bash
-# EBOOT (main application)
-cd crates/oasis-backend-psp
-RUST_PSP_BUILD_STD=1 cargo psp --release
-
-# Kernel overlay plugin (PRX)
-cd crates/oasis-plugin-psp
-RUST_PSP_BUILD_STD=1 cargo psp --release
-
-# Network recovery EBOOT
-cd crates/oasis-recovery-psp
-RUST_PSP_BUILD_STD=1 cargo psp --release
-```
-
-### UE5 (FFI Library)
-
-```bash
-cargo build --profile release-ffi -p oasis-ffi
-```
-
-### Screenshots
-
-```bash
-cargo run -p oasis-app --bin oasis-screenshot          # classic (default)
-cargo run -p oasis-app --bin oasis-screenshot xp       # any skin by name
-```
-
-## Environment Variables
-
-Read by the desktop binaries (`oasis-app`, `oasis-screenshot`) and the platform layer:
-
-| Variable | Description | Example |
-|----------|-------------|---------|
-| `OASIS_SKIN` | Skin to start with (a CLI argument takes precedence); also picks the skin for `oasis-screenshot` | `OASIS_SKIN=modern cargo run -p oasis-app` |
-| `OASIS_APP` | Auto-launch a dashboard app by title on startup | `OASIS_APP=Browser` |
-| `OASIS_URL` | Initial browser URL (with `OASIS_APP=Browser`) | `OASIS_URL="vfs://sites/home/js-test.html"` |
-| `OASIS_SKIP_SPLASH` | `1` skips the boot splash animation (init work still runs) | `OASIS_SKIP_SPLASH=1` |
-| `OASIS_FRAME_STATS` | `1` logs per-phase frame timings (p50/p99) and drawn vs. skipped frames every ~5 s | `OASIS_FRAME_STATS=1` |
-| `OASIS_FIXED_TIME` | Freeze the platform clock (status bar, TV Guide grid) for deterministic screenshots | `OASIS_FIXED_TIME="2026-01-01 12:00:00"` |
-| `OASIS_FIXED_FRAME` | Shader wallpaper frame number used by `oasis-screenshot` (default 30) | `OASIS_FIXED_FRAME=0` |
-| `OASIS_TV_CHANNEL` | Auto-tune this TV Guide channel number once the catalog loads (automated testing) | `OASIS_TV_CHANNEL=3` |
-| `OASIS_TV_SEEK` | Override the seek position (seconds) when tuning a TV channel | `OASIS_TV_SEEK=120` |
-| `OASIS_TV_TIMEOUT` | Exit N seconds after video decode starts (automated testing) | `OASIS_TV_TIMEOUT=30` |
-| `OASIS_MCP` | `1` starts the MCP control server at boot (requires the `mcp` feature) | `OASIS_MCP=1` |
-| `OASIS_MCP_PORT` | MCP server port (default 7345, loopback only) | `OASIS_MCP_PORT=7345` |
-| `OASIS_MCP_TOKEN` | Optional bearer token the MCP server requires | `OASIS_MCP_TOKEN=secret` |
-
-Test-only switches: `OASIS_E2E_NETWORK`, `OASIS_NETWORK_SCREENSHOTS` and `OASIS_LIVE_CSS` enable network-dependent `oasis-app` tests; `OASIS_SOAK_SECS` / `OASIS_SOAK_TICK_MS` tune the ignored radio soak test; `OASIS_LAYOUT_BUDGET_SCALE` scales the browser layout time budgets in `crates/oasis-browser/tests/layout_budget.rs`.
-
-## PSP Remote Development
-
-The PSP backend includes a TCP command server for closed-loop development. See the [Developer's Journal Entry 08](https://andrewaltimit.github.io/oasis-os/journal/08-remote-dev-automation.html) for the full design.
-
-```bash
-# Deploy EBOOT over WiFi
-./scripts/psp-devloop.sh cycle target/.../EBOOT.PBP
-
-# Remote UI control
-./scripts/psp-devloop.sh tcp-press cross
-./scripts/psp-devloop.sh tcp-screencap /tmp/psp.png
-
-# Upload kernel plugin
-./scripts/psp-devloop.sh tcp-upload oasis.prx ms0:/seplugins/oasis.prx
-```
-
-## PSP Testing (PPSSPP)
-
-The repo includes a containerized PPSSPP emulator with NVIDIA GPU passthrough:
-
-```bash
-docker compose --profile psp build ppsspp                                                     # first time only
-docker compose --profile psp run --rm ppsspp /roms/release/EBOOT.PBP                          # GUI (X11)
-docker compose --profile psp run --rm -e PPSSPP_HEADLESS=1 ppsspp /roms/release/EBOOT.PBP --timeout=5  # headless
-```
-
-## CI
-
-All CI runs in Docker on a self-hosted runner:
-
-format check -> clippy -> nightly clippy -> docs -> markdown links -> tests -> release build -> screenshot regression -> cargo-deny -> benchmarks -> PSP EBOOT + PPSSPP headless -> coverage -> WASM deploy
-
 ## Documentation
 
-The full index is [docs/README.md](docs/README.md). Highlights:
+The full index is [docs/README.md](docs/README.md). Start with:
 
-- [Getting Started](docs/getting-started.md) -- per-target setup (desktop, WASM, UE5/FFI, PSP), feature flags, testing
-- [Technical Design](docs/design.md) -- architecture, backends, input model, window manager, skins, PSP, VFS, plugins, security
-- [Writing Apps](docs/writing-apps.md) -- the `App` trait lifecycle, hooks and a minimal example app
-- [UI Widgets](docs/ui-widgets.md) -- catalogue of `oasis-ui` widgets and layout helpers
-- [Window Manager](docs/window-manager.md) -- `WindowManager` API, snapping, keyboard shortcuts, animations
-- [Skin Authoring Guide](docs/skin-authoring.md) -- TOML reference, theme derivation, effects
-- [Adding Commands](docs/adding-commands.md) and [Terminal Commands](docs/terminal-commands.md) -- command development and catalogue
-- [Browser Engine](docs/browser-engine.md) and [oasis-js](docs/oasis-js.md) -- HTML/CSS feature catalogue, JS/DOM bindings
-- [Plugin Development](docs/plugin-development.md) -- plugin API, VFS-based IPC
-- [FFI Integration](docs/ffi-integration.md) -- C API for UE5 and external hosts
-- [WASM Backend](docs/wasm-backend.md) -- building, serving and embedding the browser build
-- [MCP Server](docs/mcp-server.md) and [Networking](docs/networking.md) -- agent control server, remote terminal, TLS
-- [PSP Architecture](docs/psp-architecture.md) and [PSP Plugin Guide](docs/psp-plugin.md) -- PSP target and overlay PRX
-- [Security](docs/security.md) and [Troubleshooting](docs/troubleshooting.md)
-- [ADR Index](docs/adr/README.md) -- architectural decision records
-- [Examples](examples/README.md) -- runnable examples
-- [Developer's Journal](https://andrewaltimit.github.io/oasis-os/journal/) -- technical deep dives (TLS on PSP, ME reverse engineering, remote automation)
+- [Getting Started](docs/getting-started.md) -- per-target setup, feature flags, environment variables, tests
+- [Technical Design](docs/design.md) -- architecture, backend contract, platforms, security overview
+- [Writing Apps](docs/writing-apps.md) and [Testing](docs/testing.md) -- the `App` trait and the headless shell harness
+- [Skin Authoring](docs/skin-authoring.md), [Adding Commands](docs/adding-commands.md), [Plugin Development](docs/plugin-development.md)
+- [ADRs](docs/adr/README.md), [Security](docs/security.md), [Troubleshooting](docs/troubleshooting.md), [Examples](examples/README.md)
+- [CHANGELOG](CHANGELOG.md), [CONTRIBUTING](CONTRIBUTING.md) (AI-authored contributions only), [AGENTS.md](AGENTS.md) (agent workflow and CI)
 
-## Security Notice
+CI runs entirely in Docker on self-hosted runners: format, clippy, docs, markdown links, tests, release build, screenshot regression, cargo-deny, benchmarks, coverage, PSP builds and a PPSSPP smoke test, then the WASM deploy to GitHub Pages.
+
+## Security notice
 
 > **OpenAI/Google integrations are disabled within PR reviews.** OpenAI/Google permits government partners unrestricted use of their models. We only allow models with explicit prohibitions on mass surveillance and autonomous weapons.
 

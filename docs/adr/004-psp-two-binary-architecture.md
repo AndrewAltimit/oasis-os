@@ -1,8 +1,8 @@
 # ADR-004: PSP Two-Binary Architecture (EBOOT + PRX)
 
 **Status:** Accepted
-**Date:** 2025-06-01
-**Last reviewed:** 2026-05-02 — still current. `oasis-backend-psp` (EBOOT) and `oasis-plugin-psp` (PRX) both ship and are built independently as documented.
+**Date:** 2026-02-14 (the overlay PRX landed in #17; recorded 2026-02-19)
+**Last reviewed:** 2026-10-30 — still current. `oasis-backend-psp` (EBOOT) and `oasis-plugin-psp` (PRX) both ship and are built independently. Consequences corrected: only the EBOOT crate is in the workspace `exclude` list, the EBOOT now shares the `oasis-types` glyph table, and the PRX shares state through atomics rather than a queue.
 
 ## Context
 
@@ -48,18 +48,23 @@ Deploy as **two separate binaries**:
 
 ## Tradeoffs
 
-- **Code duplication.** Font rendering and basic draw primitives exist in both
-  the EBOOT backend and the PRX overlay. This is intentional -- the PRX needs
-  to be self-contained for kernel stability.
+- **Code duplication.** The PRX carries its own copy of the bitmap glyph
+  table (`oasis-plugin-psp/src/font.rs`) and basic draw primitives. This is
+  intentional -- the PRX needs to be self-contained for kernel stability. The
+  EBOOT builds its glyph atlas from the shared `oasis_types::bitmap_font`
+  table.
 - **No dynamic linking.** The PRX cannot call into the EBOOT or vice versa.
   Features added to one don't automatically appear in the other.
 
 ## Consequences
 
-- Both crates are excluded from the workspace (`exclude` in root `Cargo.toml`)
-  since they require nightly + `cargo-psp` to build.
-- CI builds both independently with separate `cargo psp` commands.
+- Neither crate is a workspace member, since both need nightly + `cargo-psp`:
+  `oasis-backend-psp` is listed in the root `Cargo.toml` `exclude`, and
+  `oasis-plugin-psp` is a standalone package with its own `[workspace]`.
+- CI builds both independently with separate `cargo psp` commands (plus the
+  recovery EBOOT), all pinned to one rust-psp revision.
 - The PRX uses `psp::module_kernel!()` for kernel-mode module declaration.
-- The PRX uses `psp::hook::SyscallHook` to intercept display buffer swaps.
-- Lock-free communication (`psp::sync::SpscQueue`) bridges the display hook
-  thread and the config/input thread.
+- The PRX finds syscalls with `psp::hook::find_function` and patches them with
+  `sctrlHENPatchSyscall` to intercept display buffer swaps.
+- Static atomics (`AtomicU8` / `AtomicBool` command, volume and state cells)
+  share state between the display hook and the audio / config threads.

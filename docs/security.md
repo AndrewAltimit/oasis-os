@@ -33,10 +33,11 @@ absolute path starting with `/`.
 
 ### Layer 2: Permission Enforcement
 
-`VfsPermissions` tracks Unix-style mode bits (owner read/write/execute).
-`MemoryVfs` enforces these on every `read()`, `write()`, and
-`readdir()` call. Files default to `0o644` (owner rw, others r) and
-directories to `0o755`.
+`FilePermissions` tracks an owner and Unix-style mode bits, checked against
+the caller's `VfsContext` by `Vfs::check_permission`. `MemoryVfs` and
+`GameAssetVfs` enforce them on reads, writes, `readdir()`, `mkdir()`,
+`remove()` and both parents of a `rename()`. Files default to `0o644`
+(owner rw, others r) and directories to `0o755`.
 
 ### Layer 3: Jail Roots
 
@@ -44,8 +45,22 @@ directories to `0o755`.
 base directories. Writes create overlay entries that never touch the
 underlying asset files.
 
-`RealVfs` (desktop) operates on the real filesystem but is only used
-in development builds.
+`RealVfs` maps a host directory. No shipped host mounts it (the desktop
+shell, WASM build and FFI library use `MemoryVfs` / `GameAssetVfs`), but
+it is jailed anyway: `resolve` canonicalizes the deepest existing ancestor
+of a path (lstat-based, so dangling symlinks fail), checks it is under the
+root and only then appends the missing tail, so `mkdir("/link/new/x")`
+with `link` pointing outside the root is refused. Renames check the
+resolved paths too.
+
+### Shared rename invariants
+
+`Vfs::validate_rename` (a provided trait method every implementation
+calls) refuses renaming `/`, a missing source, a destination inside the
+source, a missing or non-directory destination parent, an existing
+directory destination, and a directory onto a file.
+`tests/vfs_conformance.rs` runs the same suite against all three
+implementations. See [ADR-002](adr/002-vfs-abstraction.md).
 
 ## FFI Boundary Safety
 
@@ -90,10 +105,20 @@ only on the VFS, never on the host filesystem.
 
 The HTML/CSS engine (`oasis-browser`) processes untrusted content:
 
-- **No script execution by default** -- JavaScript support is
-  feature-gated (`javascript`) and uses QuickJS-NG in a sandboxed
-  runtime with no host filesystem or network access
-- **No `<iframe>` nesting** -- prevents frame injection attacks
+- **Scripts** -- JavaScript (feature `javascript`, on in every shipped
+  build) runs in QuickJS-NG with no host filesystem access. The only
+  network path is `fetch()`, which is origin-checked: CORS, `connect-src`,
+  no credentials in URLs, and no requests to a more private address class
+  than the page's own (public < private / link-local < loopback).
+  Each tick has a time budget and the heap is capped
+  (`BrowserConfig::js_max_exec_ms` / `js_memory_limit_bytes`: 2 s and
+  64 MiB on desktop, 500 ms and 8 MiB on PSP); timers still due when the
+  budget runs out are deferred to the next tick
+- **DOM depth cap** -- the parser and script DOM insertion both stop at
+  `MAX_DOM_DEPTH`, so script-built chains cannot overflow the stack in
+  the recursive cascade / layout / paint passes. The CSS selector matcher
+  has a per-match traversal budget
+- **No nested browsing contexts** -- `<iframe>` content is never loaded
 - **CSS property limits** -- unknown properties are ignored; no
   `expression()` or `-moz-binding` support
 - **Image loading** -- images are decoded in-process with bounds
@@ -109,8 +134,18 @@ The HTML/CSS engine (`oasis-browser`) processes untrusted content:
   Session-only (never persisted); `SameSite` is not enforced
 - **Local files** -- pages with a web origin cannot read `vfs://`
   subresources
+- **Redirects** -- validators are sent on the first hop only;
+  `Cookie` / `Authorization` are dropped when a hop leaves the origin and
+  `Referer` follows `strict-origin-when-cross-origin`. URLs are
+  normalized (lower-cased host, default port elided, userinfo split off
+  and never sent)
 - **HTTP/2** -- frame size, header-block and HPACK decoded-size caps
   bound memory against CONTINUATION floods and HPACK amplification
+- **Body size** -- decompressed HTTP bodies are capped at 8 MB on
+  desktop (2 MB on PSP and for Gemini)
+
+The browser feature and limit catalogue is
+[browser-engine.md](browser-engine.md).
 
 ## Network Security
 
@@ -120,16 +155,24 @@ authentication for remote terminal connections:
 - PSK authentication **requires TLS** (`tls-rustls` feature). Without
   TLS the client refuses to transmit the key and the listener rejects
   connections that attempt PSK auth, preventing plaintext key leakage
-- Connections require a shared secret before command execution
+- The listener binds loopback by default and refuses to bind all
+  interfaces without a non-empty PSK, so the terminal `listen` command
+  (which cannot supply one) is loopback-only
+- The key is compared in constant time (`oasis_types::util::ct_eq`);
+  five consecutive failures from one peer start an exponential back-off
 - Authentication has a 30-second timeout to prevent indefinite hangs
   from malicious or unresponsive servers
-- **Line length cap** -- both client and listener enforce a
-  `MAX_LINE_LEN` (16 KB) limit on incoming data. Overlong lines
-  cause the connection to be dropped, preventing memory exhaustion
-  from malicious peers sending unbounded data without newlines
-- FTP transfers are opt-in and require explicit user action
-- FTP server supports optional password authentication (`ftp on [port] [password]`);
-  after three failed login attempts the connection is dropped
+- **Line length cap** -- the listener drops a connection whose line
+  exceeds 1024 bytes and the client one that exceeds 16 KiB, so a peer
+  cannot exhaust memory by sending data without newlines
+- The FTP-like transfer server (`oasis-core/src/transfer/`) is opt-in
+  (`ftp start [port] [--password <pass>]`); after three failed logins the
+  connection is dropped. The limit is per connection, not per peer; see
+  [networking.md](networking.md#file-transfer-oasis-coresrctransfer) for
+  its caveats
+- The optional MCP control server (`oasis-mcp`, off by default) listens
+  on loopback only, checks `Origin` / `Host` and can require a bearer
+  token; see [mcp-server.md](mcp-server.md)
 - No outbound connections are made without user initiation
 
 ## MP4 Demux Safety
@@ -149,14 +192,17 @@ untrusted media files from the Internet Archive. Hardening measures:
 
 ## Thread Safety
 
-- `MemoryVfs` uses interior mutability via `RefCell` (single-threaded)
-- `GameAssetVfs` uses `RwLock` for thread-safe overlay writes
+- The VFS implementations are not internally synchronized: writes take
+  `&mut self` and each host owns its VFS on the UI thread
 - The FFI video decode thread communicates via `Arc<Mutex<...>>` and
   `AtomicBool` stop flags
-- `unsafe impl Send/Sync` is used only for the PSP backend
-  (`PspTlsProvider`, `PspTlsStream`) where the hardware is
-  single-core with cooperative scheduling; all other thread safety
-  derives from standard library primitives
+- `unsafe impl Send/Sync` appears in the PSP crates (`PspTlsProvider`,
+  `PspTlsStream`, `PspNetworkStream`, the USB client's static
+  descriptors), where the hardware is single-core with cooperative
+  scheduling, and once in `oasis-browser` (`ParallelStyles`, behind the
+  non-default `parallel-style` feature: each thread writes a disjoint
+  per-node cell). All other thread safety derives from standard library
+  primitives
 
 ## PSP TLS Host Pinning
 

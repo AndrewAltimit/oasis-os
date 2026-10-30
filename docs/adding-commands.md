@@ -179,16 +179,16 @@ Commands are organized into modules by category:
 | Module | Category | Examples |
 |--------|----------|----------|
 | `commands.rs` | - | `register_builtins` (registers every module below) |
-| `core_commands.rs` | core | ls, cd, pwd, cat, mkdir, rm, echo, clear |
-| `text_commands.rs` | text | grep, sort, head, tail, cut, tr, tee |
-| `file_commands.rs` | file | find, du, stat, diff, hexdump |
-| `system_commands.rs` | system | uptime, hostname, uname, df, free |
-| `dev_commands.rs` | dev | base64, sha256, json, hexedit, calc |
-| `fun_commands.rs` | fun | fortune, cowsay, figlet, matrix |
-| `security_commands.rs` | security | passwd, hash, encrypt, audit |
+| `core_commands.rs` | core | ls, cd, pwd, cat, mkdir, rm, cp, mv, find |
+| `text_commands.rs` | text | grep, sort, head, tail, cut, tr, tee, diff |
+| `file_commands.rs` | file | write, append, tree, du, stat, xxd, checksum |
+| `system_commands.rs` | system | uptime, hostname, whoami, df, date, sleep |
+| `dev_commands.rs` | dev | base64, json, uuid, seq, expr, test, xargs |
+| `fun_commands.rs` | fun | cal, fortune, banner, matrix, yes, watch, time |
+| `security_commands.rs` | security | chmod, chown, passwd, audit |
 | `doc_commands.rs` | doc | man, tutorial, motd |
 | `audio_commands.rs` | audio | music (play/pause/next/vol/repeat/shuffle via `/var/audio/request`) |
-| `network_commands.rs` | network | ping, wget, curl, ifconfig |
+| `network_commands.rs` | network | wifi, ping, http |
 | `ui_commands.rs` | ui | wm, sdi, theme, notify, screenshot |
 | `radio_commands.rs` | audio | radio |
 | `platform_commands.rs` | system | power, clock, memory, usb |

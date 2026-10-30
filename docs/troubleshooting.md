@@ -136,9 +136,42 @@ After changing dependencies in `Cargo.toml` or updating the Dockerfile:
 docker compose --profile ci build rust-ci
 ```
 
+### Test Binary Crashes Only in Docker
+
+A whole test binary that dies only inside the container -- a bogus "stack
+overflow", `ENOMEM` while writing to `target/`, or an `ld.so` assertion -- is
+usually a corrupted binary from a bind-mounted build, not a bug. Delete the
+linked test binaries and relink before debugging (inside the container, with
+the target dir you used):
+
+```bash
+find target/debug/deps -maxdepth 1 -type f -executable ! -name '*.*' -delete
+```
+
+When you build in Docker from a host checkout that you also build natively
+(e.g. Windows), give Docker its own target dir so the two do not clobber
+each other: `docker compose --profile ci run --rm -e CARGO_TARGET_DIR=/app/target/linux rust-ci ...`.
+
 ---
 
 ## Common Build Failures
+
+### `ffmpeg` / `pkg-config` Errors Building `oasis-app`
+
+The default `oasis-app` features (`video-decode-ffmpeg`) link system ffmpeg.
+Without the ffmpeg development libraries (e.g. on Windows), use the openh264
+decoder instead:
+
+```bash
+cargo build -p oasis-app --no-default-features --features javascript,video-decode
+```
+
+### Unknown Skin
+
+`skin <name>` and `skin lint` fail on an unknown or broken skin instead of
+falling back to `classic`; only the boot paths (CLI argument, `OASIS_SKIN`, the
+WASM `?skin=` parameter) report the problem and boot `classic`. Check the name
+against `skin list` or point at a directory containing `skin.toml`.
 
 ### SDL3 CMake Build Failure
 
@@ -214,13 +247,14 @@ cargo test --workspace -- test_name
 
 ### Screenshot Testing
 
-Take screenshots of all skins for visual regression:
+Take screenshots of every skin, or run CI's visual regression check:
 
 ```bash
-cargo run -p oasis-app --bin oasis-screenshot
+cargo run -p oasis-app --bin oasis-screenshot -- --all
+cargo run -p oasis-app --bin screenshot-tests --release
 ```
 
-Screenshots are saved to the `screenshots/` directory.
+Screenshots are saved to `screenshots/<skin>/`.
 
 ### Format Check
 

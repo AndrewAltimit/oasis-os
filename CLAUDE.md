@@ -68,7 +68,7 @@ cargo run -p oasis-app --bin oasis-screenshot
 
 ## CI Pipeline Order
 
-format check -> clippy -> nightly clippy (advisory) -> doc build -> markdown link check -> test -> release build -> screenshot regression -> cargo-deny -> benchmarks -> PSP EBOOT build -> PPSSPP headless test -> code coverage -> GitHub Pages deploy (WASM)
+`main-ci.yml`: format check -> clippy -> `oasis-app` feature-combination check -> nightly clippy (advisory) -> doc build -> markdown link check (`md-link-checker --internal-only` over `*.md`, `docs/`, `scripts/psp-scenarios.md`) -> test (cargo-nextest + doc-tests) -> release build -> screenshot regression -> cargo-deny -> benchmarks -> code coverage (advisory) -> rust-psp pin check -> PSP EBOOT / overlay PRX / recovery EBOOT builds -> PPSSPP headless smoke test; then release binaries and GitHub Pages deploy (WASM). `pr-validation.yml` runs the same checks on PRs plus Claude security/quality reviews and the auto-fix agents (see [`AGENTS.md`](AGENTS.md)).
 
 All steps run via `docker compose --profile ci run --rm rust-ci`.
 
@@ -76,7 +76,7 @@ All steps run via `docker compose --profile ci run --rm rust-ci`.
 - **ASAN** (AddressSanitizer) -- catches use-after-free, buffer overflow, leaks (~2x slowdown)
 - **Valgrind massif** -- heap profiling with peak memory assertions for video decode
 
-Both jobs use `continue-on-error: true` and run on pushes to main, PRs touching `crates/oasis-video/**` or `crates/oasis-core/**`, and `workflow_dispatch`.
+Both jobs use `continue-on-error: true` and run on pushes to main, PRs touching `oasis-video`, `oasis-core`, `oasis-app`, `oasis-backend-sdl`, `oasis-backend-ue5`, `oasis-types`, `Cargo.toml`/`Cargo.lock` or the workflow itself, and `workflow_dispatch`.
 
 **Nightly streaming** (`nightly-streaming.yml`, separate workflow):
 - End-to-end streaming validation for TV Guide video playback
@@ -167,6 +167,7 @@ URL for fresh 302 redirects. Full details in
 - `InputBackend` -- input polling (returns `Vec<InputEvent>`)
 - `NetworkBackend` -- TCP networking
 - `AudioBackend` -- audio playback
+- `ClipboardBackend` -- copy/paste (`InMemoryClipboard` fallback)
 
 Core code never calls platform APIs directly. All platform interaction goes through these traits.
 
@@ -190,7 +191,7 @@ Each module below is its own crate (previously all in oasis-core):
 - **oasis-vfs** -- Virtual file system: `MemoryVfs` (in-RAM), `RealVfs` (disk), `GameAssetVfs` (UE5 with overlay writes). Shared `Vfs::validate_rename` invariants; `tests/vfs_conformance.rs` runs one suite against all three. See [`docs/adr/002-vfs-abstraction.md`](docs/adr/002-vfs-abstraction.md)
 - **oasis-terminal** -- Command interpreter: ~95 registered commands (core, platform, remote, network, audio, radio, text, file, system, dev, fun, UI, security, doc; plus agent/plugin/script/skin/transfer/update/tv/browser registered by oasis-core) and 20 shell builtins (one `BUILTINS` table in `builtins.rs`). Depends only on oasis-types/vfs/platform/net. Shell features: variables, globs, aliases, piping, one script engine (`script.rs`: if/while/until/for/case) for inline and `run` scripts, `cmd &` jobs, and a `ShellSession` (`session.rs`) with readline editing, tab completion and persistent history
 - **oasis-wm** -- Window manager (window configs, hit testing, drag/resize, minimize/maximize/close, edge snapping, tiling, open/close/minimize animations). See [`docs/window-manager.md`](docs/window-manager.md)
-- **oasis-net** -- TCP networking with PSK authentication, remote terminal, FTP transfer
+- **oasis-net** -- TCP networking (`StdNetworkBackend`), PSK authentication over TLS (`tls-rustls`), remote terminal listener + client, saved hosts. Depends only on `oasis-types`; the FTP-like transfer server and its `ftp` / `push` / `pull` commands live in `oasis-core::transfer`
 - **oasis-mcp** -- Optional MCP control server (off by default). Minimal Streamable-HTTP transport + JSON-RPC 2.0 / MCP dispatch over a non-blocking `NetworkStream`; app-agnostic (depends only on `oasis-types`) with a `ToolDispatcher` callback the app implements in `crates/oasis-app/src/mcp_tools.rs`. Lets an on-device agent drive the shell. See [`docs/mcp-server.md`](docs/mcp-server.md)
 - **oasis-audio** -- `AudioManager` (music playlist + playback state machine; the desktop `media_controller` carries out its actions and serves the `music` command / Music Player over `/var/audio/*`, paths and `MediaRequest` in `oasis_types::ipc`), shuffle/repeat modes, internet radio (`RadioManager`), SFX, WAV/Ogg Vorbis decode
 - **oasis-platform** -- Platform service traits: PowerService, TimeService, UsbService, NetworkService, OskService
@@ -207,7 +208,7 @@ Each module below is its own crate (previously all in oasis-core):
 
 ### Font Rendering
 
-Proportional bitmap font rendering from glyph ink bounds. `oasis-types` provides `glyph_advance()` / `glyph_advance_scaled()` with variable per-character widths (3-8px) and the one bitmap glyph table (`oasis-types/src/bitmap_font.rs`); `oasis-rasterize::glyph_mask` is the single bitmap rasterizer shared by SDL, UE5 and WASM, and `bitmap_font::bitmap_line_height` / `bitmap_ascent` are the line metrics every backend (and the `SdiText` defaults) report. Only `oasis-backend-psp/src/font.rs` (a duplicate) and the standalone `oasis-plugin-psp/src/font.rs` carry copies of the table. The SDL backend can also draw skin TTF/OTF fonts via fontdue (`oasis-rasterize` feature `ttf`, `SdiText::set_font`); UE5 and WASM always use the bitmap font. The PSP backend additionally uses system TrueType fonts via `psp::font` with a VRAM glyph atlas.
+Proportional bitmap font rendering from glyph ink bounds. `oasis-types` provides `glyph_advance()` / `glyph_advance_scaled()` with variable per-character widths (3-8px) and the one bitmap glyph table (`oasis-types/src/bitmap_font.rs`); `oasis-rasterize::glyph_mask` is the single bitmap rasterizer shared by SDL, UE5 and WASM, and `bitmap_font::bitmap_line_height` / `bitmap_ascent` are the line metrics every backend (and the `SdiText` defaults) report. The PSP EBOOT builds its glyph atlas from the same table; only the standalone `oasis-plugin-psp/src/font.rs` carries a copy (the PRX must stay self-contained). The SDL backend can also draw skin TTF/OTF fonts via fontdue (`oasis-rasterize` feature `ttf`, `SdiText::set_font`); UE5 and WASM always use the bitmap font. The PSP backend additionally uses system TrueType fonts via `psp::font` with a VRAM glyph atlas.
 
 ### FFI Boundary (oasis-ffi)
 
@@ -237,7 +238,7 @@ Key documentation files for agents and contributors. Read these for deeper conte
 
 ### Architecture & Design
 - [`docs/README.md`](docs/README.md) -- Index of every document under `docs/`
-- [`docs/design.md`](docs/design.md) -- Technical design document v2.6 (~1400 lines, comprehensive architecture)
+- [`docs/design.md`](docs/design.md) -- Technical design document v3.0 (~830 lines: goals, layering, backend contract, platform notes; links to the subsystem docs)
 - [`docs/browser-engine.md`](docs/browser-engine.md) -- Browser feature catalogue (HTTP, HTML, CSS, layout, fonts, chrome, JS bindings)
 - [`docs/javascript-engine.md`](docs/javascript-engine.md) -- QuickJS-NG integration and PSP cross-compile
 - [`docs/psp-architecture.md`](docs/psp-architecture.md) -- PSP two-binary split, GU, TLS 1.3, ME video decode
@@ -272,11 +273,13 @@ Key documentation files for agents and contributors. Read these for deeper conte
 - [`docs/audio-engine.md`](docs/audio-engine.md) -- AudioManager, playlist/repeat/shuffle, radio sources, streaming back-pressure
 - [`docs/vector-graphics.md`](docs/vector-graphics.md) -- VectorOp/VectorScene, icon catalog, AnimClock, SdiVector integration
 - [`docs/shaders.md`](docs/shaders.md) -- Built-in shader wallpapers, GPU + software backends, extension guide
+- [`docs/i18n.md`](docs/i18n.md) -- `oasis-i18n` locales, locale selection, adding strings and translations
 
 ### Operations
 - [`docs/psp-autorun.md`](docs/psp-autorun.md) -- Boot-time script runner for deterministic PSP/PPSSPP integration tests
 - [`docs/troubleshooting.md`](docs/troubleshooting.md) -- Troubleshooting common issues
 - [`docs/security.md`](docs/security.md) -- Security policy and advisories
 - [`AGENTS.md`](AGENTS.md) -- Multi-agent system configuration and CI workflow
+- [`CHANGELOG.md`](CHANGELOG.md) -- Notable changes by area (update it for user-visible or breaking changes)
 - [`CONTRIBUTING.md`](CONTRIBUTING.md) -- Contribution policy (AI-authored only)
 - [`scripts/psp-scenarios.md`](scripts/psp-scenarios.md) -- PSP test scenario documentation

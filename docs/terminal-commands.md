@@ -30,8 +30,10 @@ The terminal in `oasis-terminal/src/` supports:
 - control flow in one-liners and scripts (see below)
 - background jobs (`cmd &`, `jobs`, `fg`, `bg`, `kill %N`)
 
-`Environment::profile_paths()` and `populate_profile()` honour shell-like
-startup files for site-local aliases.
+Startup files are seeded but not yet executed: `populate_profile()` writes
+`/home/.profile` (`USER`, `HOME`, `SHELL`), and `oasis_core::script::run_startup`
+runs `/etc/startup.sh` (managed by the `startup` command), but no host calls
+either at boot today.
 
 ### Shell builtins
 
@@ -345,6 +347,32 @@ the wire protocol and PSK auth.
 | `cron` | `cron [list\|add <name> <path>\|remove <name>]` | Manage scheduled scripts under `/etc/cron`. |
 | `startup` | `startup [show\|set <path>\|clear]` | Manage the boot script (`/etc/startup.sh`). |
 
+## File transfer (`oasis-core/src/transfer/mod.rs`)
+
+The FTP-like transfer server lives in `oasis-core`, not `oasis-net`; see
+[networking.md](networking.md) for the protocol.
+
+| Command | Usage | Description |
+| --- | --- | --- |
+| `ftp` | `ftp [start [port] [--password <pass>]\|stop\|status]` | Manage the file transfer server. |
+| `push` | `push <source> <dest>` | Copy a file to a transfer staging area. |
+| `pull` | `pull <source> <dest>` | Copy a file from a transfer staging area. |
+
+## Updates (`oasis-core/src/update/mod.rs`)
+
+| Command | Usage | Description |
+| --- | --- | --- |
+| `update` | `update [check\|status\|log]` | Check for system updates. |
+
+## MCP control server (`oasis-app/src/mcp_command.rs`, feature `mcp`)
+
+Registered only by the desktop shell when it is built with the `mcp` feature;
+see [mcp-server.md](mcp-server.md).
+
+| Command | Usage | Description |
+| --- | --- | --- |
+| `mcp-server` | `mcp-server start [port] [--token TOKEN] \| mcp-server stop` | Start or stop the MCP control server for local agents. |
+
 ## Browser (`oasis-core/src/terminal/browser_commands.rs`)
 
 | Command | Usage | Description |
@@ -390,6 +418,15 @@ the wire protocol and PSK auth.
   `oasis-core/src/terminal/`, plus `register_script_commands`,
   `register_transfer_commands` and `register_update_commands`, add the
   higher-layer commands.
+- The desktop shell (`oasis-app`) adds `mcp-server` when built with the
+  `mcp` feature.
+- Plugins register their own commands at load time (the example plugins in
+  `oasis-core/src/plugin/examples.rs` add `hello`, `note` and `pclock`);
+  they are not part of the built-in set.
+
+Counted from the source: 75 commands in `oasis-terminal`, 20 in `oasis-core`
+and 1 in `oasis-app` (96, or 95 without the `mcp` feature), plus the 20 shell
+builtins.
 
 `man <command>` is the canonical interactive reference; this document is the
 written-form mirror. If they diverge, the source `Command` impl is the

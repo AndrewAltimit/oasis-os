@@ -1,7 +1,7 @@
 # ADR-005: TOML Skin System
 
 **Status:** Accepted
-**Date:** 2025-02-12
+**Date:** 2026-02-09 (initial release; recorded 2026-02-19)
 **Last reviewed:** 2026-10-29 — decision still current. Consequences updated: every built-in skin is now generated from its `skins/` directory (the hand-written Rust loaders and constants were removed), and resolution is strict.
 
 ## Context

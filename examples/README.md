@@ -49,8 +49,14 @@ Build `oasis-ffi` with `--features video-decode` and compile the demo with
 
 ## Further examples in the tree
 
-- `crates/oasis-app/src/main.rs` -- the full desktop shell (the best reference
-  for wiring apps, terminal, window manager, and browser together).
+- `crates/oasis-app/src/shell.rs` (`oasis_app::Shell`) -- the full desktop
+  shell, the best reference for wiring apps, terminal, window manager, and
+  browser together; `main.rs` is its thin SDL entry point.
+- `crates/oasis-app-core/examples/stopwatch_app.rs` -- a minimal `App`
+  implementation (`cargo run -p oasis-app-core --example stopwatch_app`; see
+  [docs/writing-apps.md](../docs/writing-apps.md)).
+- `crates/oasis-backend-sdl/examples/` -- audio and video decode probes
+  (`play_mp3`, `stream_mp3`, `decode_compare`).
 - `crates/oasis-app/src/screenshot.rs` -- the screenshot tool used by CI.
 - [`docs/examples/oasis.mcp.json`](../docs/examples/oasis.mcp.json) -- an MCP
   client config for driving the shell from an agent ([docs/mcp-server.md](../docs/mcp-server.md)).
