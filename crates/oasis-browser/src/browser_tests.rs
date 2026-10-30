@@ -3361,6 +3361,27 @@ fn is_print_only_media_query_matches_print_variants_only() {
 
 #[cfg(feature = "javascript")]
 #[test]
+fn js_budget_comes_from_browser_config() {
+    let config = BrowserConfig {
+        js_max_exec_ms: 80,
+        ..Default::default()
+    };
+    let mut browser = BrowserWidget::new(config);
+    browser.set_window(0, 0, 480, 272);
+    let start = std::time::Instant::now();
+    browser.load_html(
+        "<html><body><p id=\"p\">x</p><script>while (1) {}</script></body></html>",
+        "test://js-budget",
+    );
+    // The runaway inline script is cut off at the configured 80 ms, not
+    // the engine's 5 s default.
+    assert!(start.elapsed() < std::time::Duration::from_millis(2_000));
+    let engine = browser.js_engine.as_ref().expect("javascript engine");
+    assert_eq!(engine.max_exec_ms(), 80);
+}
+
+#[cfg(feature = "javascript")]
+#[test]
 fn js_click_handler_infinite_loop_is_interrupted() {
     let vfs = MemoryVfs::new();
     let mut browser = make_browser();
