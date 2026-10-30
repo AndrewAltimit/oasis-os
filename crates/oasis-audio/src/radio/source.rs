@@ -102,6 +102,17 @@ pub(crate) fn parse_http_head(buf: &[u8]) -> Option<HttpHead> {
     })
 }
 
+/// Most response-header bytes a source buffers while waiting for the
+/// blank line that ends them.  A server that never sends one (or streams
+/// garbage) would otherwise grow the buffer forever, rescanning all of it
+/// on every poll.
+pub(crate) const MAX_HEADER_BYTES: usize = 16 * 1024;
+
+/// The error for a response whose headers exceed [`MAX_HEADER_BYTES`].
+fn headers_too_large() -> OasisError {
+    OasisError::Backend(format!("response headers exceed {MAX_HEADER_BYTES} bytes").into())
+}
+
 /// How long a request write may keep hitting `WouldBlock` before the peer
 /// is treated as dead. A request is a few hundred bytes, so a healthy
 /// socket accepts it on the first write.
@@ -359,6 +370,11 @@ impl RadioSource for IcecastSource {
                         }
                         return self.process_body(&body);
                     }
+                    if self.header_buf.len() > MAX_HEADER_BYTES {
+                        self.state = SourceState::Error;
+                        let _ = self.stream.close();
+                        return Err(headers_too_large());
+                    }
                     return Ok(None);
                 }
 
@@ -563,6 +579,11 @@ impl RadioSource for ArchiveSource {
                             data: body,
                             metadata,
                         }));
+                    }
+                    if self.header_buf.len() > MAX_HEADER_BYTES {
+                        self.state = SourceState::Error;
+                        let _ = self.stream.close();
+                        return Err(headers_too_large());
                     }
                     return Ok(None);
                 }
@@ -1272,6 +1293,27 @@ mod tests {
         let r = src.poll().unwrap();
         assert!(r.is_none());
         assert_eq!(src.state(), SourceState::Active);
+    }
+
+    #[test]
+    fn endless_response_headers_are_an_error() {
+        // Regression: a server that never ends its headers grew the header
+        // buffer without bound (and rescanned all of it every poll).
+        let garbage = vec![b'x'; MAX_HEADER_BYTES + 8192];
+        let mut icecast = IcecastSource::new(Box::new(MockStream::new(garbage.clone())), "h", "/");
+        let mut archive =
+            ArchiveSource::new(Box::new(MockStream::new(garbage)), "h", "/", "T", "A");
+        for src in [&mut icecast as &mut dyn RadioSource, &mut archive] {
+            src.poll().unwrap(); // Send the request.
+            let err = loop {
+                match src.poll() {
+                    Ok(_) => continue,
+                    Err(e) => break e,
+                }
+            };
+            assert!(err.to_string().contains("headers exceed"), "{err}");
+            assert_eq!(src.state(), SourceState::Error);
+        }
     }
 
     #[test]

@@ -138,7 +138,7 @@ impl AudioManager {
                 MediaAction::None
             },
             MediaRequest::Shuffle => {
-                self.playlist.set_shuffle(!self.playlist.shuffle);
+                self.playlist.set_shuffle(!self.playlist.shuffle());
                 MediaAction::None
             },
         }
@@ -229,7 +229,7 @@ impl AudioManager {
         lines.push(format!("Repeat: {}", self.playlist.repeat));
         lines.push(format!(
             "Shuffle: {}",
-            if self.playlist.shuffle { "on" } else { "off" }
+            if self.playlist.shuffle() { "on" } else { "off" }
         ));
         lines.push(format!("Playlist: {} tracks", self.playlist.len()));
 
@@ -525,9 +525,9 @@ mod tests {
     fn shuffle_toggles() {
         let mut mgr = setup();
         assert_eq!(mgr.apply(&MediaRequest::Shuffle), MediaAction::None);
-        assert!(mgr.playlist.shuffle);
+        assert!(mgr.playlist.shuffle());
         mgr.apply(&MediaRequest::Shuffle);
-        assert!(!mgr.playlist.shuffle);
+        assert!(!mgr.playlist.shuffle());
     }
 
     #[test]
