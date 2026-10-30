@@ -56,7 +56,7 @@ fn section<T: serde::Serialize>(out: &mut String, name: &str, value: &T) {
 }
 
 /// Canonical, order-independent text form of a loaded skin.
-pub(super) fn canonical_dump(skin: &Skin) -> String {
+pub(crate) fn canonical_dump(skin: &Skin) -> String {
     let mut out = String::new();
     section(&mut out, "manifest", &skin.manifest);
     section(&mut out, "features", &skin.features);

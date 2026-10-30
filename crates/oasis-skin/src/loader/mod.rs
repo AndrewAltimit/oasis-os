@@ -289,13 +289,39 @@ fn parse_toml_lint<T: serde::de::DeserializeOwned>(
     .map_err(|e| OasisError::Config(format!("{file}: {e}").into()))
 }
 
+/// The TOML text of one skin, one field per file of the `skins/<name>/`
+/// directory format. Named fields, so the five same-typed documents cannot
+/// be passed in the wrong order (unlike the positional
+/// [`Skin::from_toml_full`]).
+///
+/// `manifest`, `layout` and `features` are required documents (an empty
+/// string parses as an all-defaults table); an empty `theme` / `strings`
+/// means "use the defaults", and `corrupted: None` (or `Some("")`) means "no
+/// `corrupted.toml`".
+#[derive(Debug, Clone, Copy, Default)]
+pub struct SkinSources<'a> {
+    /// `skin.toml` (manifest).
+    pub manifest: &'a str,
+    /// `layout.toml`.
+    pub layout: &'a str,
+    /// `features.toml`.
+    pub features: &'a str,
+    /// `theme.toml`.
+    pub theme: &'a str,
+    /// `strings.toml`.
+    pub strings: &'a str,
+    /// `corrupted.toml`, if the skin has one.
+    pub corrupted: Option<&'a str>,
+}
+
 impl Skin {
     /// Load a skin from TOML strings (basic 3-file format for backwards compat).
     pub fn from_toml(manifest_toml: &str, layout_toml: &str, features_toml: &str) -> Result<Self> {
         Self::from_toml_full(manifest_toml, layout_toml, features_toml, "", "")
     }
 
-    /// Load a skin from all TOML configuration strings.
+    /// Load a skin from all TOML configuration strings (positional form of
+    /// [`Skin::from_sources`]).
     pub fn from_toml_full(
         manifest_toml: &str,
         layout_toml: &str,
@@ -303,6 +329,28 @@ impl Skin {
         theme_toml: &str,
         strings_toml: &str,
     ) -> Result<Self> {
+        Self::from_sources(&SkinSources {
+            manifest: manifest_toml,
+            layout: layout_toml,
+            features: features_toml,
+            theme: theme_toml,
+            strings: strings_toml,
+            corrupted: None,
+        })
+    }
+
+    /// Load a skin from its per-file TOML documents. This is the one parser
+    /// behind [`Skin::from_directory`], the generated built-in loaders,
+    /// [`Skin::from_toml_full`] and [`Skin::from_toml_corrupted`].
+    pub fn from_sources(src: &SkinSources<'_>) -> Result<Self> {
+        let SkinSources {
+            manifest: manifest_toml,
+            layout: layout_toml,
+            features: features_toml,
+            theme: theme_toml,
+            strings: strings_toml,
+            corrupted: corrupted_toml,
+        } = *src;
         let mut schema_warnings = Vec::new();
         let manifest: SkinManifest =
             parse_toml_lint(manifest_toml, "skin.toml", &mut schema_warnings)?;
@@ -337,10 +385,15 @@ impl Skin {
             }
         }
 
-        let corrupted_modifiers = if features.corrupted {
-            Some(CorruptedModifiers::default())
-        } else {
-            None
+        // An explicit corrupted.toml wins; otherwise `corrupted = true` in
+        // features.toml gets the default modifiers.
+        let corrupted_modifiers = match corrupted_toml.filter(|s| !s.is_empty()) {
+            Some(text) => Some(parse_toml_lint::<CorruptedModifiers>(
+                text,
+                "corrupted.toml",
+                &mut schema_warnings,
+            )?),
+            None => features.corrupted.then(CorruptedModifiers::default),
         };
 
         Ok(Self {
@@ -472,23 +525,14 @@ impl Skin {
         strings_toml: &str,
         corrupted_toml: &str,
     ) -> Result<Self> {
-        let mut skin = Self::from_toml_full(
-            manifest_toml,
-            layout_toml,
-            features_toml,
-            theme_toml,
-            strings_toml,
-        )?;
-
-        if !corrupted_toml.is_empty() {
-            let mut warnings = Vec::new();
-            let modifiers: CorruptedModifiers =
-                parse_toml_lint(corrupted_toml, "corrupted.toml", &mut warnings)?;
-            skin.corrupted_modifiers = Some(modifiers);
-            skin.schema_warnings.append(&mut warnings);
-        }
-
-        Ok(skin)
+        Self::from_sources(&SkinSources {
+            manifest: manifest_toml,
+            layout: layout_toml,
+            features: features_toml,
+            theme: theme_toml,
+            strings: strings_toml,
+            corrupted: Some(corrupted_toml),
+        })
     }
 
     /// Apply this skin's layout to an SDI registry. Existing objects are
@@ -531,11 +575,14 @@ impl Skin {
         let strings = read_opt("strings.toml");
         let corrupted = read_opt("corrupted.toml");
 
-        let mut skin = if corrupted.is_empty() {
-            Self::from_toml_full(&manifest, &layout, &features, &theme, &strings)?
-        } else {
-            Self::from_toml_corrupted(&manifest, &layout, &features, &theme, &strings, &corrupted)?
-        };
+        let mut skin = Self::from_sources(&SkinSources {
+            manifest: &manifest,
+            layout: &layout,
+            features: &features,
+            theme: &theme,
+            strings: &strings,
+            corrupted: Some(&corrupted),
+        })?;
 
         // Load image assets from the skin's assets/ subdirectory.
         skin.load_assets_from(&dir.join("assets"));

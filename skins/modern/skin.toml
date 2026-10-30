@@ -1,0 +1,6 @@
+name = "modern"
+version = "1.0"
+author = "OASIS_OS"
+description = "Modern UI with rounded corners, gradients, and shadows"
+screen_width = 480
+screen_height = 272

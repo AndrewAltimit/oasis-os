@@ -38,7 +38,7 @@ use oasis_core::platform::{DesktopPlatform, NetworkService, PowerService, TimeSe
 use oasis_core::plugin::{Plugin, PluginManager, register_builtin_plugins};
 use oasis_core::sdi::SdiRegistry;
 use oasis_core::settings::{SettingsStore, UserPrefs};
-use oasis_core::skin::{Skin, resolve_skin};
+use oasis_core::skin::{Skin, resolve_skin, resolve_skin_or_classic};
 use oasis_core::startmenu::StartMenuState;
 use oasis_core::statusbar::StatusBar;
 use oasis_core::terminal::{
@@ -141,13 +141,15 @@ impl BootOptions {
         let explicit_skin = std::env::args()
             .nth(1)
             .or_else(|| std::env::var("OASIS_SKIN").ok());
+        // An unknown or broken skin never blocks boot: fall back to classic
+        // (logged), so a typo or a stale preference still shows a shell.
         let mut skin = match (explicit_skin, prefs.skin.as_deref()) {
-            (Some(name), _) => resolve_skin(&name)?,
+            (Some(name), _) => resolve_skin_or_classic(&name)?,
             (None, Some(saved)) => resolve_skin(saved).or_else(|e| {
                 log::warn!("Persisted skin '{saved}' failed to load ({e}); using default");
-                resolve_skin(&default_skin)
+                resolve_skin_or_classic(&default_skin)
             })?,
-            (None, None) => resolve_skin(&default_skin)?,
+            (None, None) => resolve_skin_or_classic(&default_skin)?,
         };
         prefs.patch_features(&mut skin.features);
         log::info!(

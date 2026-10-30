@@ -1,0 +1,5 @@
+position_jitter = 2
+alpha_flicker_chance = 0.15
+alpha_flicker_min = 60
+text_garble_chance = 0.08
+intensity = 1.0

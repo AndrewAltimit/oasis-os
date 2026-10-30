@@ -1,0 +1,10 @@
+[content_bg]
+x = 0
+y = 24
+w = 480
+h = 224
+color = "#14141E"
+gradient_top = "#181828"
+gradient_bottom = "#10101A"
+border_radius = 0
+shadow_level = 0

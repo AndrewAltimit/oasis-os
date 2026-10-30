@@ -98,7 +98,7 @@ graph TD
 - Scene graph (SDI) with z-order, gradients, rounded corners, shadows, alpha blending, and exact per-object dirty tracking so idle frames skip redraws
 - 29 widgets (Button, Card, TabBar, ScrollView, Slider, TreeView, Modal, Table, ...) plus ListView, MenuBar, NinePatch, icon atlas and flex/grid layout helpers
 - Window manager with drag/resize, minimize/maximize, drag-to-edge snapping, Alt+Tab, keyboard snapping, tiling layouts and open/close/minimize animations
-- 17 built-in skins (14 also shipped as TOML) with theme derivation from 9 base colors
+- 17 built-in skins, all shipped as editable TOML, with theme derivation from 9 base colors
 - Vector graphics with path operations and frame-driven animations
 - GPU shader wallpapers (Shadertoy-style: Voronoi, City Lights, Ocean Waves, Balatro)
 
@@ -120,7 +120,7 @@ graph TD
 
 ## Skins
 
-17 built-in skins, all data-driven TOML with theme derivation from 9 base colors. 14 of them also ship as editable TOML directories under [`skins/`](skins/); `corrupted`, `desktop` and `modern` are built-in only. No code changes are needed to add a skin -- see the [Skin Authoring Guide](docs/skin-authoring.md).
+17 built-in skins, all data-driven TOML with theme derivation from 9 base colors. Every one is an editable TOML directory under [`skins/`](skins/), compiled in at build time. No code changes are needed to add a skin -- see the [Skin Authoring Guide](docs/skin-authoring.md).
 
 | Category | Skins |
 |----------|-------|
@@ -132,7 +132,7 @@ graph TD
 
 Skins support animated shader wallpapers (Shadertoy-style fragment shaders: Voronoi, City Lights, Ocean Waves, Calm Waves, Balatro) that render in real-time behind the UI.
 
-Default virtual resolution is 480x272 (PSP native). Skins may override this (e.g. modern=800x600, xp=1024x768); the backend canvas/window scales to match.
+Default virtual resolution is 480x272 (PSP native). Skins may override this (e.g. desktop=800x600, xp=1024x768); the backend canvas/window scales to match.
 
 ## Crates
 

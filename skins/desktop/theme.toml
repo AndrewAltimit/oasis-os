@@ -1,0 +1,37 @@
+background = "#1A1A2D"
+primary = "#3264C8"
+secondary = "#444466"
+text = "#FFFFFF"
+dim_text = "#8888AA"
+status_bar = "#222233"
+prompt = "#00FF00"
+output = "#CCCCCC"
+error = "#FF4444"
+border_radius = 4
+shadow_intensity = 1
+
+[bar_overrides]
+text_shadow = true
+
+[geometry]
+focus_ring_color = "#3264C8B0"
+toast_slide_in = true
+
+[wm_theme]
+titlebar_height = 24
+border_width = 1
+titlebar_active = "#3264C8"
+titlebar_inactive = "#555566"
+titlebar_text = "#FFFFFF"
+frame_color = "#333344"
+content_bg = "#1E1E2E"
+btn_close = "#C83232"
+btn_minimize = "#C8B432"
+btn_maximize = "#32C832"
+button_size = 16
+resize_handle_size = 6
+titlebar_font_size = 12
+titlebar_radius = 4
+frame_shadow_level = 1
+frame_border_radius = 2
+button_radius = 8

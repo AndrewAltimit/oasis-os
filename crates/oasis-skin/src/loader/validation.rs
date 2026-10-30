@@ -424,6 +424,28 @@ impl Skin {
             }
         }
 
+        // Shader background layers: the name must be a built-in shader. An
+        // unknown name draws no wallpaper on the GPU path, so flag typos.
+        if let Some(ref layers) = self.theme.background_layers {
+            for (i, layer) in layers.iter().enumerate() {
+                if layer.kind != "shader" {
+                    continue;
+                }
+                if let Some(ref name) = layer.shader
+                    && oasis_shader::BuiltinShader::from_name(name).is_none()
+                {
+                    let known: Vec<&str> = oasis_shader::BuiltinShader::ALL
+                        .iter()
+                        .map(|s| s.name())
+                        .collect();
+                    warnings.push(format!(
+                        "background_layers[{i}]: unknown shader \"{name}\" (built-in: {})",
+                        known.join(", ")
+                    ));
+                }
+            }
+        }
+
         // Chrome layers are vector-only: image/shader kinds are silently
         // dropped at render time, so flag them here for the author.
         if let Some(ref layers) = self.theme.chrome_layers {
@@ -651,8 +673,6 @@ impl Skin {
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::unwrap_used)]
-
     use crate::assets::tests::make_wav;
     use crate::loader::Skin;
 
@@ -867,5 +887,38 @@ click = "assets/click.wav"
         child.merge_theme_from(&parent);
         assert!(child.theme.sounds.is_some());
         assert!(child.sound_assets.contains_key("assets/click.wav"));
+    }
+
+    #[test]
+    fn unknown_shader_name_warns() {
+        let skin = skin_with_sounds(
+            r#"
+[[background_layers]]
+kind = "shader"
+shader = "balatr0"
+
+[[background_layers]]
+kind = "shader"
+shader = "calm_waves"
+"#,
+        );
+        let warnings = skin.validate();
+        let shader: Vec<_> = warnings.iter().filter(|w| w.contains("shader")).collect();
+        assert_eq!(shader.len(), 1, "{warnings:?}");
+        assert!(shader[0].contains("background_layers[0]"), "{}", shader[0]);
+        assert!(shader[0].contains("balatr0"), "{}", shader[0]);
+    }
+
+    #[test]
+    fn builtin_skin_shader_names_are_known() {
+        for name in crate::builtin::builtin_names() {
+            let skin = crate::builtin::load_builtin(name).unwrap();
+            let bad: Vec<_> = skin
+                .validate()
+                .into_iter()
+                .filter(|w| w.contains("unknown shader"))
+                .collect();
+            assert!(bad.is_empty(), "{name}: {bad:?}");
+        }
     }
 }

@@ -118,8 +118,8 @@ command on a machine without ffmpeg dev libraries.
 
 ### Choosing a skin
 
-There are 17 built-in skins; 14 of them also ship as editable TOML directories
-in [`skins/`](../skins). Select one with a CLI argument or the `OASIS_SKIN`
+There are 17 built-in skins, each an editable TOML directory in
+[`skins/`](../skins). Select one with a CLI argument or the `OASIS_SKIN`
 environment variable:
 
 ```bash
@@ -127,10 +127,10 @@ cargo run -p oasis-app -- modern
 OASIS_SKIN=xp cargo run -p oasis-app
 ```
 
-Built-in names: `classic`, `corrupted`, `desktop`, `modern`, `xp`, `macos`,
-`gnome`, `retro-cga`, `balatro`, `paper`, `win95`, `solarized`, `vaporwave`,
-`highcontrast`, `altimit`, `psix-tribute`, `psix-hifi` (`corrupted`, `desktop`,
-and `modern` are built-in only).
+Built-in names: `classic` (the default), `altimit`, `balatro`, `corrupted`,
+`desktop`, `gnome`, `highcontrast`, `macos`, `modern`, `paper`, `psix-hifi`,
+`psix-tribute`, `retro-cga`, `solarized`, `vaporwave`, `win95`, `xp`. An unknown
+name is reported and the shell boots `classic`.
 
 A directory containing `skin.toml` is also accepted, which is how you develop a
 custom skin (see [skin-authoring.md](skin-authoring.md)):
