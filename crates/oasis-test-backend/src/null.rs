@@ -7,8 +7,7 @@
 //! [`MockSdiCore`](crate::MockSdiCore) to assert on raw `SdiCore` calls.
 
 use oasis_types::backend::{
-    Color, DEFAULT_VIEWPORT_HEIGHT, DEFAULT_VIEWPORT_WIDTH, SdiAlpha, SdiCore, TextureId,
-    bitmap_measure_text,
+    Color, DEFAULT_VIEWPORT_HEIGHT, DEFAULT_VIEWPORT_WIDTH, SdiCore, TextureId, bitmap_measure_text,
 };
 use oasis_types::error::Result;
 
@@ -137,12 +136,10 @@ impl SdiCore for NullBackend {
     fn shutdown(&mut self) -> Result<()> {
         Ok(())
     }
-}
 
-impl SdiAlpha for NullBackend {
     fn viewport_size(&self) -> (u32, u32) {
         (self.width, self.height)
     }
 }
 
-oasis_types::impl_sdi_defaults!(NullBackend; except SdiAlpha);
+oasis_types::impl_sdi_defaults!(NullBackend);

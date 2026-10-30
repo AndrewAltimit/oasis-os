@@ -7,8 +7,8 @@ use web_sys::{CanvasRenderingContext2d, HtmlCanvasElement, ImageData};
 
 use oasis_rasterize::GlyphCacheKey;
 use oasis_types::backend::{
-    BlendMode, Color, RenderTargetId, SdiAlpha, SdiCore, SdiRenderTarget, SdiText, SdiVector,
-    TextureId, render_target_not_found, texture_not_found, validate_rgba_data,
+    BlendMode, Color, RenderTargetId, SdiCore, SdiRenderTarget, SdiText, SdiVector, TextureId,
+    render_target_not_found, texture_not_found, validate_rgba_data,
 };
 use oasis_types::error::{OasisError, Result};
 use oasis_types::geometry::ClipRect;
@@ -22,6 +22,14 @@ use crate::font;
 
 pub(crate) fn js_err<E: std::fmt::Debug>(e: E) -> OasisError {
     OasisError::Backend(format!("{e:?}").into())
+}
+
+/// Whether a thrown JS value is a `SecurityError` `DOMException`.
+fn is_security_error(e: &wasm_bindgen::JsValue) -> bool {
+    js_sys::Reflect::get(e, &wasm_bindgen::JsValue::from_str("name"))
+        .ok()
+        .and_then(|name| name.as_string())
+        .is_some_and(|name| name == "SecurityError")
 }
 
 fn get_2d_context(canvas: &HtmlCanvasElement) -> Result<CanvasRenderingContext2d> {
@@ -343,6 +351,10 @@ impl WasmBackend {
 
 impl SdiCore for WasmBackend {
     fn init(&mut self, width: u32, height: u32) -> Result<()> {
+        // Resize the page canvas, not a bound render target.
+        while !self.render_target_bind_stack.is_empty() {
+            self.unbind_render_target()?;
+        }
         self.width = width;
         self.height = height;
         // Resizing a canvas resets its whole 2D context state (save stack
@@ -454,14 +466,21 @@ impl SdiCore for WasmBackend {
     }
 
     fn read_pixels(&self, x: i32, y: i32, w: u32, h: u32) -> Result<Vec<u8>> {
+        let pixels = w as usize * h as usize;
+        if pixels == 0 {
+            // getImageData throws IndexSizeError for an empty rect.
+            return Ok(Vec::new());
+        }
         // getImageData throws SecurityError if the canvas is tainted by a
-        // cross-origin video frame.  Return opaque black in that case.
+        // cross-origin video frame: return opaque black in that case. Any
+        // other failure is a real error.
         match self
             .ctx
             .get_image_data(x as f64, y as f64, w as f64, h as f64)
         {
             Ok(data) => Ok(data.data().to_vec()),
-            Err(_) => Ok([0, 0, 0, 255].repeat((w * h) as usize)),
+            Err(e) if is_security_error(&e) => Ok([0, 0, 0, 255].repeat(pixels)),
+            Err(e) => Err(js_err(e)),
         }
     }
 
@@ -479,13 +498,7 @@ impl SdiCore for WasmBackend {
         self.gradient_cache.clear();
         Ok(())
     }
-}
 
-// -------------------------------------------------------------------
-// SdiAlpha: Alpha and viewport
-// -------------------------------------------------------------------
-
-impl SdiAlpha for WasmBackend {
     /// The bound surface: the page canvas, or the bound render target.
     fn viewport_size(&self) -> (u32, u32) {
         (self.width, self.height)

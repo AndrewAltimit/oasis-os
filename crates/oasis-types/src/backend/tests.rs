@@ -104,7 +104,6 @@ impl SdiCore for RecordingBackend {
 
 impl SdiShapes for RecordingBackend {}
 impl SdiGradients for RecordingBackend {}
-impl SdiAlpha for RecordingBackend {}
 impl SdiText for RecordingBackend {}
 impl SdiTextures for RecordingBackend {}
 impl SdiClipTransform for RecordingBackend {}
@@ -374,12 +373,47 @@ fn fill_arc_default_stays_within_radius() {
 fn fill_triangle_default() {
     let mut b = RecordingBackend::new();
     b.fill_triangle(0, 0, 10, 0, 5, 10, Color::WHITE).unwrap();
-    let calls = b.calls();
-    // Scanline fill emits one fill_rect per scanline row.
-    assert_eq!(calls.len(), 11); // y=0..=10
-    for call in &calls {
-        assert!(call.starts_with("fill_rect("));
-    }
+    let px = pixels_once(&b);
+    // One span per row, y = 0..=10, apex at x = 5.
+    assert_eq!(px.iter().map(|p| p.1).min(), Some(0));
+    assert_eq!(px.iter().map(|p| p.1).max(), Some(10));
+    assert!(px.contains(&(0, 0)) && px.contains(&(10, 0)) && px.contains(&(5, 10)));
+}
+
+/// Regression: a triangle whose vertices share one row filled
+/// `max - min` pixels (dropping the rightmost vertex) where every other
+/// row is inclusive and `SoftwareBuffer` / SDL cover `min..=max`.
+#[test]
+fn fill_triangle_flat_includes_both_ends() {
+    let mut b = RecordingBackend::new();
+    b.fill_triangle(5, 3, 0, 3, 10, 3, Color::WHITE).unwrap();
+    assert_eq!(b.calls(), vec!["fill_rect(0,3,11,1,255,255,255,255)"]);
+}
+
+/// The default `fill_arc` fills one polygon, so a translucent wedge
+/// covers every pixel once (a triangle fan covered the spokes twice).
+#[test]
+fn fill_arc_covers_each_pixel_once() {
+    let mut b = RecordingBackend::new();
+    b.fill_arc(50, 50, 30, 0.2, 4.0, Color::rgba(255, 0, 0, 128))
+        .unwrap();
+    let px = pixels_once(&b);
+    assert!(px.contains(&(52, 51)), "near the centre");
+    assert!(px.len() > 1000);
+}
+
+/// Regression: `dash == 0 && gap == 0` looped forever (the cycle length
+/// was zero); a zero gap is a solid line and a zero dash draws nothing.
+#[test]
+fn stroke_line_dashed_zero_dash_or_gap_terminates() {
+    let mut b = RecordingBackend::new();
+    b.stroke_line_dashed(0, 0, 20, 0, 1, Color::WHITE, 0, 0)
+        .unwrap();
+    assert_eq!(b.calls(), vec!["fill_rect(0,0,21,1,255,255,255,255)"]);
+    b.clear_calls();
+    b.stroke_line_dashed(0, 0, 20, 0, 1, Color::WHITE, 0, 5)
+        .unwrap();
+    assert!(b.calls().is_empty());
 }
 
 // -- Gradient defaults --
@@ -439,25 +473,12 @@ fn rounded_rect_gradient_default() {
     assert!(calls[0].starts_with("fill_rect(")); // Falls to fill_rounded_rect -> fill_rect
 }
 
-// -- Alpha utilities --
+// -- Viewport --
 
 #[test]
-fn fill_rect_alpha_overrides() {
-    let mut b = RecordingBackend::new();
-    b.fill_rect_alpha(0, 0, 100, 50, Color::rgb(255, 255, 255), 128)
-        .unwrap();
-    let calls = b.calls();
-    assert_eq!(calls.len(), 1);
-    assert!(calls[0].contains(",128)")); // Alpha applied
-}
-
-#[test]
-fn dim_screen_uses_black_overlay() {
-    let mut b = RecordingBackend::new();
-    b.dim_screen(100).unwrap();
-    let calls = b.calls();
-    assert_eq!(calls.len(), 1);
-    assert!(calls[0].starts_with("fill_rect(0,0,480,272,0,0,0,100)"));
+fn viewport_size_default_is_psp_native() {
+    let b = RecordingBackend::new();
+    assert_eq!(b.viewport_size(), (480, 272));
 }
 
 // -- Text system defaults --
@@ -616,16 +637,6 @@ fn push_pop_region() {
     // pop_region: pop_clip_rect (reset_clip) + pop_translate (no-op)
     assert!(calls.contains(&"set_clip(0,0,100,50)".to_string()));
     assert!(calls.contains(&"reset_clip".to_string()));
-}
-
-// -- Batch rendering defaults --
-
-#[test]
-fn begin_flush_batch_noop() {
-    let mut b = RecordingBackend::new();
-    b.begin_batch().unwrap();
-    b.flush_batch().unwrap();
-    assert!(b.calls().is_empty());
 }
 
 // -- stroke_rect edge tests --
@@ -952,11 +963,8 @@ fn sdi_backend_is_object_safe() {
         },
     )
     .unwrap();
-    b.dim_screen(128).unwrap();
     b.push_clip_rect(0, 0, 100, 100).unwrap();
     b.pop_clip_rect().unwrap();
-    b.begin_batch().unwrap();
-    b.flush_batch().unwrap();
     assert_eq!(b.viewport_size(), (480, 272));
     assert_eq!(b.current_translate(), (0, 0));
     assert!(b.current_clip_rect().is_none());
@@ -1131,7 +1139,6 @@ fn empty_sdi_backend_impl_provides_defaults() {
     }
     impl SdiShapes for DefaultBackend {}
     impl SdiGradients for DefaultBackend {}
-    impl SdiAlpha for DefaultBackend {}
     impl SdiText for DefaultBackend {}
     impl SdiTextures for DefaultBackend {}
     impl SdiClipTransform for DefaultBackend {}
@@ -1279,34 +1286,23 @@ fn fill_rounded_rect_preserves_exact_color() {
 // -----------------------------------------------------------------------
 
 #[test]
-fn text_metrics_ascent_less_than_height() {
+fn text_ascent_less_than_height() {
     let b = RecordingBackend::new();
     for fs in [1, 5, 8, 10, 12, 16, 20, 32, 64] {
-        let m = b.text_metrics("Test", fs);
+        let (ascent, height) = (b.font_ascent(fs), b.measure_text_height(fs));
         assert!(
-            m.ascent < m.height,
-            "ascent ({}) must be < height ({}) for font_size {fs}",
-            m.ascent,
-            m.height
+            ascent < height,
+            "ascent ({ascent}) must be < height ({height}) for font_size {fs}"
         );
     }
 }
 
 #[test]
-fn text_metrics_width_matches_measure_text() {
+fn text_extents_match_width_and_height() {
     let b = RecordingBackend::new();
-    let text = "Hello World";
-    let m = b.text_metrics(text, 10);
-    assert_eq!(m.width, b.measure_text(text, 10));
-}
-
-#[test]
-fn text_metrics_extents_matches_text_metrics() {
-    let b = RecordingBackend::new();
-    let m = b.text_metrics("ABCD", 12);
     let (w, h) = b.measure_text_extents("ABCD", 12);
-    assert_eq!(w, m.width);
-    assert_eq!(h, m.height);
+    assert_eq!(w, b.measure_text("ABCD", 12));
+    assert_eq!(h, b.measure_text_height(12));
 }
 
 // -----------------------------------------------------------------------
@@ -1426,7 +1422,6 @@ impl SdiCore for RtRecordingBackend {
 
 impl SdiShapes for RtRecordingBackend {}
 impl SdiGradients for RtRecordingBackend {}
-impl SdiAlpha for RtRecordingBackend {}
 impl SdiText for RtRecordingBackend {}
 impl SdiTextures for RtRecordingBackend {}
 impl SdiClipTransform for RtRecordingBackend {}

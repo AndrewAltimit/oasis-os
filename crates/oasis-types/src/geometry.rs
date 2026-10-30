@@ -14,24 +14,42 @@ pub struct ClipRect {
 }
 
 impl ClipRect {
+    /// A rectangle at `(x, y)` of `w` x `h` pixels.
+    #[must_use]
+    pub const fn new(x: i32, y: i32, w: u32, h: u32) -> Self {
+        Self { x, y, w, h }
+    }
+
+    /// Exclusive right edge, `x + w`, computed without overflow.
+    #[must_use]
+    pub const fn right(&self) -> i64 {
+        self.x as i64 + self.w as i64
+    }
+
+    /// Exclusive bottom edge, `y + h`, computed without overflow.
+    #[must_use]
+    pub const fn bottom(&self) -> i64 {
+        self.y as i64 + self.h as i64
+    }
+
     /// Compute the intersection of two clip rectangles.
     ///
-    /// Returns `None` if the rectangles do not overlap.
+    /// Returns `None` if the rectangles do not overlap. The edges are
+    /// computed in `i64`, so sizes above `i32::MAX` (an "unbounded" clip
+    /// such as `u32::MAX` x `u32::MAX`) intersect correctly.
+    #[must_use]
     pub fn intersect(&self, other: &ClipRect) -> Option<ClipRect> {
-        let ax2 = self.x.saturating_add(self.w as i32);
-        let ay2 = self.y.saturating_add(self.h as i32);
-        let bx2 = other.x.saturating_add(other.w as i32);
-        let by2 = other.y.saturating_add(other.h as i32);
         let x = self.x.max(other.x);
         let y = self.y.max(other.y);
-        let x2 = ax2.min(bx2);
-        let y2 = ay2.min(by2);
-        if x2 > x && y2 > y {
+        let x2 = self.right().min(other.right());
+        let y2 = self.bottom().min(other.bottom());
+        let (w, h) = (x2 - x as i64, y2 - y as i64);
+        if w > 0 && h > 0 {
             Some(ClipRect {
                 x,
                 y,
-                w: (x2 - x) as u32,
-                h: (y2 - y) as u32,
+                w: w.min(u32::MAX as i64) as u32,
+                h: h.min(u32::MAX as i64) as u32,
             })
         } else {
             None
@@ -62,6 +80,23 @@ pub fn isqrt_i32(n: i32) -> i32 {
     x as i32
 }
 
+/// Integer square root (floor) for `i64` values; 0 for negative inputs.
+///
+/// For squared distances that do not fit `i32` (a radius above 46340).
+pub fn isqrt_i64(n: i64) -> i64 {
+    if n <= 0 {
+        return 0;
+    }
+    let n = n as u64;
+    let mut x = n;
+    let mut y = x.div_ceil(2);
+    while y < x {
+        x = y;
+        y = (x + n / x) / 2;
+    }
+    x as i64
+}
+
 /// Compute the horizontal inset for a rounded-rectangle scanline.
 ///
 /// Given a scanline offset `dy` (0-based from the top of the rect),
@@ -72,12 +107,15 @@ pub fn isqrt_i32(n: i32) -> i32 {
 /// This is the shared formula used by both the SDL gradient rounded-rect
 /// fill and the PSP GU rounded-rect fill.
 pub fn rounded_rect_inset(dy: i32, h: i32, r: i32) -> i32 {
+    // i64: `r * r` overflows i32 for radii above 46340.
+    let inset = |ry: i64| {
+        let r = r as i64;
+        (r - isqrt_i64(r * r - ry * ry)) as i32
+    };
     if dy < r {
-        let ry = r - dy;
-        r - isqrt_i32((r * r - ry * ry).max(0))
+        inset(r as i64 - dy as i64)
     } else if dy >= h - r {
-        let ry = dy - (h - 1 - r);
-        r - isqrt_i32((r * r - ry * ry).max(0))
+        inset(dy as i64 - (h as i64 - 1 - r as i64))
     } else {
         0
     }
@@ -86,6 +124,37 @@ pub fn rounded_rect_inset(dy: i32, h: i32, r: i32) -> i32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn isqrt_i64_matches_i32_and_handles_large_inputs() {
+        for n in [0, 1, 2, 3, 4, 15, 16, 17, 99, 100, 1 << 20, i32::MAX] {
+            assert_eq!(isqrt_i64(n as i64), isqrt_i32(n) as i64, "{n}");
+        }
+        assert_eq!(isqrt_i64(65535 * 65535), 65535);
+        assert_eq!(isqrt_i64(-5), 0);
+    }
+
+    #[test]
+    fn rounded_rect_inset_huge_radius_does_not_overflow() {
+        // `r * r` overflowed i32 (a debug-build panic) above r = 46340.
+        assert_eq!(rounded_rect_inset(0, 131_070, 65535), 65535);
+        assert_eq!(rounded_rect_inset(65535, 131_070, 65535), 1);
+    }
+
+    #[test]
+    fn intersect_huge_sizes_do_not_wrap() {
+        // `w as i32` wrapped u32::MAX to -1, so an "unbounded" clip
+        // intersected with anything came back empty.
+        let unbounded = ClipRect::new(0, 0, u32::MAX, u32::MAX);
+        let small = ClipRect::new(10, 10, 5, 5);
+        assert_eq!(unbounded.intersect(&small), Some(small));
+        assert_eq!(small.intersect(&unbounded), Some(small));
+        assert_eq!(unbounded.intersect(&unbounded), Some(unbounded));
+        // Far-left origin with a wide rect: no overflow in `x2 - x`.
+        let far = ClipRect::new(i32::MIN, i32::MIN, u32::MAX, u32::MAX);
+        assert_eq!(far.intersect(&small), Some(small));
+        assert_eq!(far.right(), i32::MAX as i64);
+    }
 
     #[test]
     fn intersect_overlapping() {

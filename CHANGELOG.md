@@ -83,7 +83,30 @@ removal, a restyled site, and docs that match the code.
   `oasis_test_backend::conformance`. Fixes WASM clip narrowing, UE5 stale
   target clips and unbounded scaled composites, and a vector-layer cache
   that disabled itself on UE5, WASM and the e2e harness.
-- `impl_sdi_defaults!(T)` writes the nine empty extension impls for mocks;
+- **(breaking)** Slimmer `SdiBackend`: `SdiAlpha` is gone
+  (`viewport_size` is a provided `SdiCore` method; use
+  `fill_rect(.., color.with_alpha(a))` for `fill_rect_alpha` /
+  `dim_screen`), as are `SdiBatch::begin_batch` / `flush_batch`,
+  `SdiVector::fill_polygon_gradient`, `SdiText::text_metrics` /
+  `TextMetrics` and `ArcParams`. `current_clip_rect` returns
+  `Option<ClipRect>`. Eight extension traits, 46 default methods.
+- Rendering fixes: 1 px circle strokes were 2 px wide through the
+  centre; translucent `fill_arc` wedges double-blended every spoke;
+  `stroke_rect` drew outside thin rects and double-blended narrow ones on
+  SDL / UE5; flat triangles lost their right end in the default;
+  `stroke_line_dashed` hung with `dash = gap = 0`; vector
+  `PolygonGradient` drew only its start colour. Huge sizes and
+  coordinates clip or saturate instead of wrapping or panicking
+  (`ClipRect::intersect`, translate stacks, triangle edges, circle radii,
+  `SoftwareBuffer` sizes / `fill_rect` / `read_pixels`), and sub-blits
+  past a texture's right edge no longer sample the next row.
+- Binding, compositing or destroying a render target that is already
+  bound is an error on every backend (SDL used to accept it and lose the
+  target's clip); `RecordingBackend` enforces the same rules. SDL window
+  resizes drop the SDL-side clip and read back bound targets at their own
+  size; WASM keeps its context save stack balanced when a flipped blit
+  fails.
+- `impl_sdi_defaults!(T)` writes the eight empty extension impls for mocks;
   `oasis-test-backend` gains `NullBackend` and a stateful
   `RecordingBackend` (with `DrawCommand`), replacing per-crate mocks.
 - **(breaking)** Removed traits and types with no production users:

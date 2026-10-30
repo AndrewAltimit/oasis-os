@@ -1,5 +1,4 @@
-//! Core types: Color, TextureId, RenderTargetId, BlendMode, TextMetrics,
-//! GradientStyle and the helpers the trait defaults share.
+//! Core types: Color, TextureId, RenderTargetId, BlendMode, GradientStyle and the helpers the trait defaults share.
 
 use crate::error::Result;
 
@@ -238,17 +237,6 @@ impl BlendMode {
     }
 }
 
-/// Measured dimensions and baseline metrics for a text string.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct TextMetrics {
-    /// Width of the text string in pixels.
-    pub width: u32,
-    /// Total line height (ascent + descent + leading) in pixels.
-    pub height: u32,
-    /// Distance from the baseline to the top of the tallest glyph, in pixels.
-    pub ascent: u32,
-}
-
 /// Gradient direction and associated colors for gradient fill operations.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum GradientStyle {
@@ -287,21 +275,6 @@ pub struct StrokeStyle {
     pub width: u16,
     /// Stroke color.
     pub color: Color,
-}
-
-/// Parameters for arc rendering.
-#[derive(Debug, Clone, Copy)]
-pub struct ArcParams {
-    /// Center X coordinate.
-    pub cx: i32,
-    /// Center Y coordinate.
-    pub cy: i32,
-    /// Arc radius in pixels.
-    pub radius: u16,
-    /// Start angle in radians.
-    pub start_angle: f32,
-    /// End angle in radians.
-    pub end_angle: f32,
 }
 
 // ---------------------------------------------------------------------------

@@ -140,7 +140,13 @@ impl SdiCore for SdlBackend {
         // render target and returns only the intersection, so read that
         // and place it at its offset; pixels outside the target stay 0.
         let mut pixels = vec![0u8; w as usize * h as usize * 4];
-        let (tw, th) = self.canvas.output_size().backend_err()?;
+        // SDL reads the bound surface. `output_size` is the window's even
+        // while a render target is bound, so use the target's size then.
+        let (tw, th) = if self.current_render_target.is_some() {
+            (self.viewport_w, self.viewport_h)
+        } else {
+            self.canvas.output_size().backend_err()?
+        };
         let x0 = x.max(0);
         let y0 = y.max(0);
         let x1 = (x as i64 + w as i64).min(tw as i64) as i32;
@@ -182,6 +188,11 @@ impl SdiCore for SdlBackend {
     fn shutdown(&mut self) -> Result<()> {
         log::info!("SDL3 backend shut down");
         Ok(())
+    }
+
+    /// The bound surface: the window, or the bound render target.
+    fn viewport_size(&self) -> (u32, u32) {
+        (self.viewport_w, self.viewport_h)
     }
 }
 

@@ -37,7 +37,7 @@
 ///     fn shutdown(&mut self) -> Result<()> { Ok(()) }
 /// }
 ///
-/// // All nine extension traits with their defaults, except `SdiShapes`,
+/// // All eight extension traits with their defaults, except `SdiShapes`,
 /// // which this type writes itself.
 /// oasis_types::impl_sdi_defaults!(Null; except SdiShapes);
 /// impl SdiShapes for Null {}
@@ -46,7 +46,7 @@
 /// takes_backend(&mut Null);
 /// ```
 ///
-/// `impl_sdi_defaults!(T)` implements all nine traits;
+/// `impl_sdi_defaults!(T)` implements all eight traits;
 /// `impl_sdi_defaults!(T; except A, B)` skips the listed ones (by their
 /// bare trait names) so the type can provide its own `impl` for them.
 #[macro_export]
@@ -54,7 +54,6 @@ macro_rules! impl_sdi_defaults {
     // A trait named in the skip list: emit nothing.
     (@one $ty:ty; SdiShapes; [SdiShapes $($rest:ident)*]) => {};
     (@one $ty:ty; SdiGradients; [SdiGradients $($rest:ident)*]) => {};
-    (@one $ty:ty; SdiAlpha; [SdiAlpha $($rest:ident)*]) => {};
     (@one $ty:ty; SdiText; [SdiText $($rest:ident)*]) => {};
     (@one $ty:ty; SdiTextures; [SdiTextures $($rest:ident)*]) => {};
     (@one $ty:ty; SdiClipTransform; [SdiClipTransform $($rest:ident)*]) => {};
@@ -72,7 +71,6 @@ macro_rules! impl_sdi_defaults {
     ($ty:ty; except $($skip:ident),* $(,)?) => {
         $crate::impl_sdi_defaults!(@one $ty; SdiShapes; [$($skip)*]);
         $crate::impl_sdi_defaults!(@one $ty; SdiGradients; [$($skip)*]);
-        $crate::impl_sdi_defaults!(@one $ty; SdiAlpha; [$($skip)*]);
         $crate::impl_sdi_defaults!(@one $ty; SdiText; [$($skip)*]);
         $crate::impl_sdi_defaults!(@one $ty; SdiTextures; [$($skip)*]);
         $crate::impl_sdi_defaults!(@one $ty; SdiClipTransform; [$($skip)*]);

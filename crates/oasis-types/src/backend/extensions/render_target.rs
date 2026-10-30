@@ -46,7 +46,7 @@ fn unsupported(op: &'static str) -> OasisError {
 ///   applied clip exactly as they were at the bind, so a
 ///   `pop_clip_rect` after the unbind pops the parent's clip, in the
 ///   parent's coordinates.
-/// - [`viewport_size`](crate::backend::SdiAlpha::viewport_size) reports
+/// - [`viewport_size`](crate::backend::SdiCore::viewport_size) reports
 ///   the bound surface's size.
 ///
 /// [`stacks::DrawState`](crate::backend::stacks::DrawState) holds the

@@ -5,8 +5,8 @@
 //! [`SdiCore`](oasis_types::backend::SdiCore) and [`SdiBackend`](oasis_types::backend::SdiBackend) (with default implementations).
 
 use oasis_types::backend::{
-    Color, SdiAlpha, SdiBatch, SdiClipTransform, SdiCore, SdiGradients, SdiRenderTarget, SdiShapes,
-    SdiText, SdiTextures, SdiVector, TextureId, bitmap_measure_text,
+    Color, SdiBatch, SdiClipTransform, SdiCore, SdiGradients, SdiRenderTarget, SdiShapes, SdiText,
+    SdiTextures, SdiVector, TextureId, bitmap_measure_text,
 };
 use oasis_types::error::Result;
 
@@ -163,6 +163,10 @@ impl SdiCore for MockSdiCore {
         self.record("shutdown", String::new());
         Ok(())
     }
+
+    fn viewport_size(&self) -> (u32, u32) {
+        (self.width, self.height)
+    }
 }
 
 // Pick up all extension trait default implementations (fill_rounded_rect falls
@@ -170,11 +174,6 @@ impl SdiCore for MockSdiCore {
 // The blanket impl on SdiBackend gives us SdiBackend for free.
 impl SdiShapes for MockSdiCore {}
 impl SdiGradients for MockSdiCore {}
-impl SdiAlpha for MockSdiCore {
-    fn viewport_size(&self) -> (u32, u32) {
-        (self.width, self.height)
-    }
-}
 impl SdiText for MockSdiCore {}
 impl SdiTextures for MockSdiCore {}
 impl SdiClipTransform for MockSdiCore {}

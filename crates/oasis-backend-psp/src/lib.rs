@@ -68,7 +68,7 @@ pub use video::vlog_force;
 
 use oasis_core::backend::stacks::{ClipPush, ClipStack, TranslateStack};
 pub use oasis_core::backend::{
-    Color, SdiAlpha, SdiBackend, SdiBatch, SdiClipTransform, SdiCore, SdiGradients, SdiShapes,
+    Color, SdiBackend, SdiBatch, SdiClipTransform, SdiCore, SdiGradients, SdiShapes,
     SdiText, SdiTextures, SdiVector, TextureId,
 };
 pub use oasis_core::error::{OasisError, Result as OasisResult};
@@ -517,6 +517,10 @@ impl SdiCore for PspBackend {
     fn shutdown(&mut self) -> OasisResult<()> {
         Ok(())
     }
+
+    fn viewport_size(&self) -> (u32, u32) {
+        (self.width, self.height)
+    }
 }
 
 // -------------------------------------------------------------------
@@ -575,11 +579,6 @@ impl SdiGradients for PspBackend {
     }
 }
 
-impl SdiAlpha for PspBackend {
-    fn viewport_size(&self) -> (u32, u32) {
-        (self.width, self.height)
-    }
-}
 
 impl SdiText for PspBackend {}
 impl SdiTextures for PspBackend {}
@@ -611,8 +610,8 @@ impl SdiClipTransform for PspBackend {
         Ok(())
     }
 
-    fn current_clip_rect(&self) -> Option<(i32, i32, u32, u32)> {
-        self.clip_stack.current_tuple()
+    fn current_clip_rect(&self) -> Option<ClipRect> {
+        self.clip_stack.current()
     }
 
     fn push_translate(&mut self, dx: i32, dy: i32) -> OasisResult<()> {

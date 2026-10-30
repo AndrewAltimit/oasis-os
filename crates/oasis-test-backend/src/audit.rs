@@ -24,7 +24,7 @@
 
 use crate::DrawCommand;
 use oasis_types::backend::{
-    BlendMode, Color, RenderTargetId, SdiAlpha, SdiBatch, SdiClipTransform, SdiCore, SdiGradients,
+    BlendMode, Color, RenderTargetId, SdiBatch, SdiClipTransform, SdiCore, SdiGradients,
     SdiRenderTarget, SdiShapes, SdiText, SdiTextures, SdiVector, TextureId, bitmap_measure_text,
     stacks::{ClipPush, ClipStack, DrawState, TranslateStack},
 };
@@ -324,15 +324,22 @@ impl SdiCore for ClipAuditBackend {
         self.clip_stack = ClipStack::default();
         self.active_clip = None;
         self.clip_depth = 0;
+        self.translate_stack = TranslateStack::new();
+        self.translate_depth = 0;
         Ok(())
     }
 
     fn clear(&mut self, color: Color) -> Result<()> {
         // Clearing the whole screen from inside an app is always a leak.
-        self.violations.push(ClipViolation {
-            what: "clear() called while drawing app content".to_string(),
-            visible: Some((0, 0, self.width, self.height)),
-        });
+        // Clearing a bound render target (bind, then
+        // `clear(Color::TRANSPARENT)`) is the normal way to start an
+        // offscreen layer and stays inside it.
+        if self.rt_bind_depth == 0 {
+            self.violations.push(ClipViolation {
+                what: "clear() called while drawing app content".to_string(),
+                visible: Some((0, 0, self.width, self.height)),
+            });
+        }
         self.commands.push(DrawCommand::FillRect {
             x: 0,
             y: 0,
@@ -476,6 +483,10 @@ impl SdiCore for ClipAuditBackend {
     fn shutdown(&mut self) -> Result<()> {
         Ok(())
     }
+
+    fn viewport_size(&self) -> (u32, u32) {
+        (self.width, self.height)
+    }
 }
 
 impl SdiClipTransform for ClipAuditBackend {
@@ -511,8 +522,8 @@ impl SdiClipTransform for ClipAuditBackend {
         Ok(())
     }
 
-    fn current_clip_rect(&self) -> Option<(i32, i32, u32, u32)> {
-        self.active_clip.map(|c| (c.x, c.y, c.w, c.h))
+    fn current_clip_rect(&self) -> Option<ClipRect> {
+        self.active_clip
     }
 
     fn push_translate(&mut self, dx: i32, dy: i32) -> Result<()> {
@@ -657,11 +668,6 @@ impl SdiRenderTarget for ClipAuditBackend {
 
 impl SdiShapes for ClipAuditBackend {}
 impl SdiGradients for ClipAuditBackend {}
-impl SdiAlpha for ClipAuditBackend {
-    fn viewport_size(&self) -> (u32, u32) {
-        (self.width, self.height)
-    }
-}
 impl SdiText for ClipAuditBackend {}
 impl SdiTextures for ClipAuditBackend {}
 impl SdiVector for ClipAuditBackend {}
@@ -680,6 +686,34 @@ mod tests {
         b.pop_host_clip();
         assert!(b.violations().is_empty(), "{:?}", b.violations());
         assert!(b.find_text("hi").is_some());
+    }
+
+    /// Clearing a freshly bound render target is how an offscreen layer
+    /// starts; only a clear of the screen itself is a leak.
+    #[test]
+    fn clear_inside_a_render_target_is_not_a_leak() {
+        let mut b = ClipAuditBackend::new(200, 200, (10, 10, 50, 50));
+        b.push_host_clip();
+        let rt = b.create_render_target(20, 20).unwrap();
+        b.bind_render_target(rt).unwrap();
+        b.clear(Color::TRANSPARENT).unwrap();
+        b.unbind_render_target().unwrap();
+        b.pop_host_clip();
+        assert!(b.violations().is_empty(), "{:?}", b.violations());
+
+        b.push_host_clip();
+        b.clear(Color::BLACK).unwrap();
+        b.pop_host_clip();
+        assert_eq!(b.violations().len(), 1, "screen clear is still a leak");
+    }
+
+    /// `init` resets the translate stack along with the clip stack.
+    #[test]
+    fn init_resets_translation() {
+        let mut b = ClipAuditBackend::new(200, 200, (0, 0, 200, 200));
+        b.push_translate(5, 7).unwrap();
+        b.init(100, 100).unwrap();
+        assert_eq!(b.current_translate(), (0, 0));
     }
 
     /// Per the `SdiRenderTarget` contract a bound target starts with no
