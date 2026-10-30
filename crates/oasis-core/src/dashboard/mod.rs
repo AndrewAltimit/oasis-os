@@ -107,8 +107,8 @@ impl DashboardConfig {
         let grid_padding_x = at.grid_padding_x;
         let grid_padding_y = at.grid_padding_y;
         let grid_x = grid_padding_x as i32;
-        let grid_y = i32::try_from(content_top.saturating_add(grid_padding_y as u32))
-            .unwrap_or(i32::MAX);
+        let grid_y =
+            i32::try_from(content_top.saturating_add(grid_padding_y as u32)).unwrap_or(i32::MAX);
         let grid_w = at.screen_w.saturating_sub(2 * grid_padding_x as u32);
         let grid_h = content_h.saturating_sub(2 * grid_padding_y as u32);
 

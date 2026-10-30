@@ -862,16 +862,21 @@ mod tests {
         at.bottombar_height = 300;
         at.grid_padding_x = 500;
         at.grid_padding_y = 500;
-        let mut features = SkinFeatures::default();
-        features.grid_cols = 0;
-        features.grid_rows = 0;
+        let features = SkinFeatures {
+            grid_cols: 0,
+            grid_rows: 0,
+            ..SkinFeatures::default()
+        };
 
         assert_eq!(bottom_bar_y(&at), 0);
         let mut sdi = SdiRegistry::new();
 
         let config = DashboardConfig::from_features(&features, &at);
         assert_eq!((config.grid_w, config.grid_h), (0, 0));
-        let apps = vec![AppEntry::for_title("Terminal"), AppEntry::for_title("Paint")];
+        let apps = vec![
+            AppEntry::for_title("Terminal"),
+            AppEntry::for_title("Paint"),
+        ];
         let mut dash = DashboardState::new(config, apps);
         dash.update_sdi(&mut sdi, &at);
 

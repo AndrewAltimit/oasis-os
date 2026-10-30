@@ -899,7 +899,6 @@ fn rect_visible(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
 /// Gap kept between the left status text and the right-aligned
 /// "Ln / Col" readout.
 const STATUS_GAP: i32 = 8;
@@ -909,9 +908,13 @@ const STATUS_GAP: i32 = 8;
 /// [S]ave / [D]iscard / [Esc] Cancel", a Save-as path) wins: the readout
 /// is dropped instead of being drawn on top of it.
 fn status_position_fits(left_x: i32, left_w: u32, pos_x: i32) -> bool {
-    left_x.saturating_add(left_w as i32).saturating_add(STATUS_GAP) <= pos_x
+    left_x
+        .saturating_add(left_w as i32)
+        .saturating_add(STATUS_GAP)
+        <= pos_x
 }
 
+#[allow(clippy::too_many_arguments)]
 fn text(
     sdi: &mut SdiRegistry,
     name: &str,
@@ -1037,7 +1040,8 @@ mod tests {
         let row = status_texts(&rec, status_y);
         let prompt = row.iter().find(|(t, _)| t.starts_with("Unsaved")).unwrap();
         let pos = row.iter().find(|(t, _)| t.starts_with("Ln ")).unwrap();
-        let prompt_end = prompt.1 + oasis_types::backend::SdiCore::measure_text(&rec, &prompt.0, 11) as i32;
+        let prompt_end =
+            prompt.1 + oasis_types::backend::SdiCore::measure_text(&rec, &prompt.0, 11) as i32;
         assert!(prompt_end < pos.1, "{row:?}");
     }
 
