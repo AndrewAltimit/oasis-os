@@ -5,13 +5,24 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>OASIS_OS — an embeddable operating system framework in Rust</title>
   <meta name="description" content="A skinnable Rust OS shell — window manager, browser engine, terminal, 15 apps, 17 skins — that renders to a PSP, a desktop window, a web page or an Unreal Engine 5 viewport. Give it a pixel buffer and an input stream.">
-  <meta name="theme-color" content="#0a0c11">
-  <meta property="og:title" content="OASIS_OS">
-  <meta property="og:description" content="An embeddable operating system framework in Rust. One shell, five targets: SDL3 desktop and Raspberry Pi, WebAssembly, Unreal Engine 5, and real PSP hardware.">
-  <meta property="og:image" content="screenshots/psix-hifi/01_dashboard.png">
+  <link rel="canonical" href="https://andrewaltimit.github.io/oasis-os/">
+  <meta name="theme-color" content="#08090d">
+  <link rel="icon" href="favicon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="img/apple-touch-icon.png">
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="OASIS_OS">
+  <meta property="og:title" content="OASIS_OS — an embeddable operating system framework in Rust">
+  <meta property="og:description" content="One OS shell, any pixel buffer. Window manager, browser engine, terminal, 15 apps and 17 skins on SDL3 desktop and Raspberry Pi, WebAssembly, Unreal Engine 5 and real PSP hardware.">
+  <meta property="og:url" content="https://andrewaltimit.github.io/oasis-os/">
+  <meta property="og:image" content="https://andrewaltimit.github.io/oasis-os/img/og-card.png">
+  <meta property="og:image:width" content="1200">
+  <meta property="og:image:height" content="630">
+  <meta property="og:image:alt" content="OASIS_OS: one OS shell, any pixel buffer">
+  <meta name="twitter:card" content="summary_large_image">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="css/site.css">
   <link rel="stylesheet" href="css/home.css">
 </head>
 <body>
@@ -189,7 +200,7 @@
         <p>SDL3 window, renderer, input and audio on Linux, macOS and Windows. SDL3 builds from source; no system SDL needed.</p>
         <dl class="spec">
           <div><dt>Video</dt><dd>ffmpeg (default) or openh264</dd></div>
-          <div><dt>JS</dt><dd>QuickJS-NG</dd></div>
+          <div><dt>JS</dt><dd>QuickJS-NG (<code>javascript</code> feature, on by default)</dd></div>
           <div><dt>Net</dt><dd>rustls TLS, remote terminal, MCP</dd></div>
         </dl>
       </article>
@@ -281,7 +292,8 @@
       </div>
       <p class="section__lede">
         Every capture below is an unretouched frame from <code>oasis-screenshot</code> at the skin's
-        native resolution. Fourteen skins ship as editable TOML in <code>skins/</code>; three are built in.
+        native resolution. Every skin is a TOML directory in <code>skins/</code>, embedded at build time &mdash;
+        copy one, edit it, and hot-reload it with the <code>skin-dev</code> feature.
       </p>
     </header>
 
@@ -337,7 +349,7 @@
           <div role="option" class="skin" id="skin-altimit" aria-selected="false" data-skin="altimit" data-cat="dashboard" data-name="Altimit" data-res="480&times;272" data-src="skins/altimit" data-desc="Vector icon dashboard inspired by the desktop OS in .hack//SIGN.">
             <img src="screenshots/altimit/01_dashboard.png" alt="" loading="lazy" width="480" height="272"><span>Altimit</span>
           </div>
-          <div role="option" class="skin" id="skin-xp" aria-selected="false" data-skin="xp" data-cat="desktop" data-name="XP" data-res="1024&times;768" data-src="Built-in (+ skins/xp)" data-desc="Windows XP Luna-inspired blue theme with gradient titlebars and taskbar.">
+          <div role="option" class="skin" id="skin-xp" aria-selected="false" data-skin="xp" data-cat="desktop" data-name="XP" data-res="1024&times;768" data-src="skins/xp" data-desc="Windows XP Luna-inspired blue theme with gradient titlebars and taskbar.">
             <img src="screenshots/xp/01_dashboard.png" alt="" loading="lazy" width="1024" height="768"><span>XP</span>
           </div>
           <div role="option" class="skin" id="skin-win95" aria-selected="false" data-skin="win95" data-cat="desktop" data-name="Win95" data-res="640&times;480" data-src="skins/win95" data-desc="Windows 95/98 classic look with raised 3D borders, system gray and blue titlebars.">
@@ -349,10 +361,10 @@
           <div role="option" class="skin" id="skin-gnome" aria-selected="false" data-skin="gnome" data-cat="desktop" data-name="GNOME" data-res="800&times;600" data-src="skins/gnome" data-desc="GNOME/Adwaita-inspired dark theme with a top bar and rounded headerbars.">
             <img src="screenshots/gnome/01_dashboard.png" alt="" loading="lazy" width="800" height="600"><span>GNOME</span>
           </div>
-          <div role="option" class="skin" id="skin-desktop" aria-selected="false" data-skin="desktop" data-cat="desktop" data-name="Desktop" data-res="800&times;600" data-src="Built-in only" data-desc="Desktop-style interface with window manager and taskbar.">
+          <div role="option" class="skin" id="skin-desktop" aria-selected="false" data-skin="desktop" data-cat="desktop" data-name="Desktop" data-res="800&times;600" data-src="skins/desktop" data-desc="Desktop-style interface with window manager and taskbar.">
             <img src="screenshots/desktop/01_dashboard.png" alt="" loading="lazy" width="800" height="600"><span>Desktop</span>
           </div>
-          <div role="option" class="skin" id="skin-modern" aria-selected="false" data-skin="modern" data-cat="desktop" data-name="Modern" data-res="480&times;272" data-src="Built-in only" data-desc="Modern UI with rounded corners, gradients and shadows.">
+          <div role="option" class="skin" id="skin-modern" aria-selected="false" data-skin="modern" data-cat="desktop" data-name="Modern" data-res="480&times;272" data-src="skins/modern" data-desc="Modern UI with rounded corners, gradients and shadows.">
             <img src="screenshots/modern/01_dashboard.png" alt="" loading="lazy" width="480" height="272"><span>Modern</span>
           </div>
           <div role="option" class="skin" id="skin-balatro" aria-selected="false" data-skin="balatro" data-cat="aesthetic" data-name="Balatro" data-res="800&times;600" data-src="skins/balatro" data-desc="Balatro-inspired: dark background, glowing accents, scanlines and a live swirl shader wallpaper.">
@@ -370,7 +382,7 @@
           <div role="option" class="skin" id="skin-retro-cga" aria-selected="false" data-skin="retro-cga" data-cat="aesthetic" data-name="Retro CGA" data-res="480&times;272" data-src="skins/retro-cga" data-desc="Retro CGA/EGA four-color skin with a blocky DOS-era aesthetic.">
             <img src="screenshots/retro-cga/01_dashboard.png" alt="" loading="lazy" width="480" height="272"><span>Retro CGA</span>
           </div>
-          <div role="option" class="skin" id="skin-corrupted" aria-selected="false" data-skin="corrupted" data-cat="special" data-name="Corrupted" data-res="480&times;272" data-src="Built-in only" data-desc="Damaged terminal with visual corruption and garbled output.">
+          <div role="option" class="skin" id="skin-corrupted" aria-selected="false" data-skin="corrupted" data-cat="special" data-name="Corrupted" data-res="480&times;272" data-src="skins/corrupted" data-desc="Damaged terminal with visual corruption and garbled output.">
             <img src="screenshots/corrupted/01_dashboard.png" alt="" loading="lazy" width="480" height="272"><span>Corrupted</span>
           </div>
           <div role="option" class="skin" id="skin-highcontrast" aria-selected="false" data-skin="highcontrast" data-cat="special" data-name="High Contrast" data-res="480&times;272" data-src="skins/highcontrast" data-desc="High-contrast accessibility theme: black background, white text, yellow accents.">
@@ -400,13 +412,14 @@
           <code>@layer</code>, <code>@supports</code>, nesting and <code>:has()</code> &mdash; with <code>var()</code>
           resolved at computed-value time, 2D and 3D transforms with perspective, and <code>@font-face</code> web fonts.</p>
         <ul class="tile__chips" aria-label="Highlights">
-          <li>CSS Grid</li><li>preserve-3d</li><li>backface culling</li><li>bidi text</li><li>CSS transitions</li><li>8&nbsp;MB body cap</li>
+          <li>CSS Grid</li><li>preserve-3d</li><li>backface culling</li><li>bidi text</li><li>CSS transitions</li><li>CSP nonces &amp; hashes</li><li>8&nbsp;MB body cap</li>
         </ul>
         <dl class="spec spec--wide">
           <div><dt>Parse</dt><dd>WHATWG HTML &middot; CSS &middot; Gemini</dd></div>
           <div><dt>Layout</dt><dd>Block, inline, flex, table, CSS Grid, nested scroll</dd></div>
           <div><dt>Paint</dt><dd>Canvas 2D, SVG, z-index stacking, light compositor</dd></div>
-          <div><dt>Net</dt><dd>HTTP/1.1 + HTTP/2 over rustls, cookies, CSP</dd></div>
+          <div><dt>Net</dt><dd>HTTP/1.1 + HTTP/2 over rustls with capped frames and HPACK; RFC&nbsp;6265 cookies scoped per redirect hop</dd></div>
+          <div><dt>Policy</dt><dd>Enforced CSP: <code>script-src</code> / <code>style-src</code> nonces and hashes, <code>connect-src</code> for fetch; no <code>vfs://</code> from web origins</dd></div>
           <div><dt>Script</dt><dd>QuickJS-NG DOM bindings, origin-checked fetch, Web Storage, execution watchdog</dd></div>
           <div><dt>Chrome</dt><dd>Forms, bookmarks, reader mode</dd></div>
         </dl>
@@ -427,7 +440,7 @@
       <article class="tile tile--term">
         <p class="tile__tag">oasis-terminal</p>
         <h3>A shell inside the shell</h3>
-        <p>~95 commands and 18 builtins: pipes, globs, aliases, variables, <code>if</code>/<code>while</code>/<code>for</code>/<code>case</code>
+        <p>~95 commands and 20 builtins: pipes, globs, aliases, variables, <code>$?</code> exit status, <code>if</code>/<code>while</code>/<code>for</code>/<code>case</code>
           scripts, background jobs, tab completion and persistent history.</p>
         <pre class="term-mini" aria-label="Example terminal session"><span class="t-prompt">/home/user&gt;</span> ls music | grep mp3
 ambient_dawn.mp3
@@ -469,7 +482,9 @@ nightfall_theme.mp3
         <p class="tile__tag">oasis-vfs &middot; oasis-net</p>
         <h3>Files &amp; wires</h3>
         <p>In-memory, on-disk and UE5 game-asset filesystems behind one trait; a PSK-authenticated remote
-          terminal and FTP-style transfer; plugins talking over VFS-based IPC.</p>
+          terminal and FTP-style transfer; and typed VFS IPC (<code>/var/audio</code>, <code>/var/radio</code>,
+          <code>/var/wm</code>) through which the terminal, plugins and agents drive the music player, radio and
+          window manager.</p>
       </article>
     </div>
   </div>
@@ -689,7 +704,10 @@ cargo test --workspace</code></pre>
         <button type="button" class="copy" data-copy>Copy</button>
 <pre><code><span class="c"># no ffmpeg dev libs (e.g. Windows): openh264 + symphonia instead</span>
 cargo build --release -p oasis-app \
-  --no-default-features --features javascript,video-decode</code></pre>
+  --no-default-features --features javascript,video-decode
+
+<span class="c"># leave out javascript for a build without QuickJS-NG</span>
+cargo build --release -p oasis-app --no-default-features --features video-decode</code></pre>
       </div>
 
       <div class="console__panel" role="tabpanel" id="panel-wasm" aria-labelledby="tab-wasm" tabindex="0" hidden>
@@ -750,6 +768,7 @@ OASIS_MCP=1 ./target/release/oasis-app
     </div>
     <nav aria-label="Footer">
       <ul class="footer__links">
+        <li><a href="./">Home</a></li>
         <li><a href="demo/">Live demo</a></li>
         <li><a href="journal/">Journal</a></li>
         <li><a href="blueprint.html">Blueprints</a></li>
@@ -761,6 +780,7 @@ OASIS_MCP=1 ./target/release/oasis-app
   </div>
 </footer>
 
+<script src="js/site.js" defer></script>
 <script src="js/home.js" defer></script>
 </body>
 </html>
