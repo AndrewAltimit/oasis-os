@@ -1023,24 +1023,33 @@ pub static SCENARIOS: &[Scenario] = &[
             }
             expect_ring(f, (10, 10, 64, 64), rgb_of(BG))
         },
+        // Measured (SDL software renderer vs oasis-rasterize): every
+        // non-centre pixel differs, by at most 104 (red/blue checker texels
+        // blending halfway towards a neighbour). 112 leaves a small margin.
         Tolerance {
-            channel: 120,
+            channel: 112,
             pixels: 0,
         },
         "intentional: SDL textures use the renderer's default linear filter when \
          scaled (smooth photos and wallpapers); the software rasterizer samples \
-         nearest. Texel interiors blend towards their neighbours on SDL."
+         nearest. Texel interiors blend towards their neighbours on SDL \
+         (measured max delta 104)."
     ),
     scenario!(
         "texture_blit_downscaled",
         |b| blit_pattern_scaled(b, 100, 60, (4, 4, 50, 30)),
         check = |f| expect_ink_within(f, (4, 4, 50, 30)),
+        // Measured: 1500 pixels differ, 60 by more than 120, 11 by more
+        // than 160, none by more than 187. A misplaced or mis-scaled blit
+        // puts whole rows / columns of full-contrast texels in the wrong
+        // place, far over this budget.
         Tolerance {
-            channel: 255,
-            pixels: 0,
+            channel: 160,
+            pixels: 16,
         },
-        "SDL linear filtering vs rasterizer nearest sampling: only the \
-         destination bounds are compared"
+        "SDL linear filtering vs rasterizer nearest sampling when 2:1 \
+         downscaling a high-contrast pattern: SDL averages texels the \
+         rasterizer skips (measured: 11 px over 160, max delta 187)"
     ),
     scenario!(
         "texture_blit_sub",
@@ -1615,12 +1624,15 @@ pub static SCENARIOS: &[Scenario] = &[
             expect_fill(f, (32, 10, 18, 20), rgb_of(GREEN), 0)?;
             expect_ring(f, (10, 10, 40, 20), rgb_of(BG))
         },
+        // Measured: the 2 columns either side of the seam (40 px) differ by
+        // up to 48; every other pixel is exact.
         Tolerance {
-            channel: 255,
-            pixels: 80,
+            channel: 64,
+            pixels: 0,
         },
         "SDL filters scaled render targets linearly: the columns around the \
-         red/green seam blend on SDL and are nearest-sampled on the rasterizer"
+         red/green seam blend on SDL and are nearest-sampled on the rasterizer \
+         (measured max delta 48)"
     ),
     scenario!(
         "render_target_premultiplied_matches_direct",
