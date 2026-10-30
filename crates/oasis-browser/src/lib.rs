@@ -67,7 +67,7 @@
 //! `docs/archive/compositor-overhaul-plan.md` §3.6 for the phased revisit plan.
 
 pub mod config;
-pub(crate) mod css;
+pub(crate) use oasis_css as css;
 pub mod forms;
 pub mod gemini;
 pub(crate) use oasis_html as html;
