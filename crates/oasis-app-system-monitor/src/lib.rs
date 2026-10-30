@@ -387,16 +387,32 @@ mod tests {
         let at = ActiveTheme::default();
         app.draw_windowed(0, 0, 400, 260, &mut backend, &at)
             .expect("draw");
-        let fills = backend
+        // A rounded fill reaches the backend as several row spans (the
+        // span-exact `fill_rounded_rect` default), so count gauges as
+        // vertically separate bands of accent pixels.
+        let mut rows: Vec<(i32, i32)> = backend
             .commands()
             .iter()
-            .filter(|c| {
-                matches!(c,
-                    DrawCommand::FillRoundedRect { color, .. } | DrawCommand::FillRect { color, .. }
-                    if *color == at.ui_theme.accent)
+            .filter_map(|c| match c {
+                DrawCommand::FillRoundedRect { y, h, color, .. }
+                | DrawCommand::FillRect { y, h, color, .. }
+                    if *color == at.ui_theme.accent =>
+                {
+                    Some((*y, *y + *h as i32))
+                },
+                _ => None,
             })
-            .count();
-        assert_eq!(fills, 4);
+            .collect();
+        rows.sort_unstable();
+        let mut bands = 0;
+        let mut end = i32::MIN;
+        for (y0, y1) in rows {
+            if y0 > end {
+                bands += 1;
+            }
+            end = end.max(y1);
+        }
+        assert_eq!(bands, 4);
     }
 
     #[test]
