@@ -9,11 +9,10 @@ use std::collections::HashMap;
 
 use oasis_types::error::{OasisError, Result};
 
-use crate::expander::Word;
 use crate::jobs::JobManager;
 use crate::types::{
-    Command, CommandOutput, Environment, MAX_CALL_DEPTH, MAX_COMMANDS_PER_LINE, MAX_EXPANDED_LEN,
-    MAX_HISTORY, MAX_VAR_LEN, MAX_VARIABLES, ShellFunction,
+    Command, CommandOutput, Environment, MAX_CALL_DEPTH, MAX_COMMANDS_PER_LINE, MAX_HISTORY,
+    MAX_VAR_LEN, MAX_VARIABLES, ShellFunction,
 };
 
 /// Registry of available commands with dispatch.
@@ -398,159 +397,6 @@ impl CommandRegistry {
             }
         }
     }
-
-    // -- History expansion --
-
-    pub(crate) fn expand_history(&self, input: &str) -> Result<String> {
-        if input == "!!" {
-            let hist = self.history.borrow();
-            return hist
-                .last()
-                .cloned()
-                .ok_or_else(|| OasisError::Command("!!: no previous command".into()));
-        }
-        if let Some(n_str) = input.strip_prefix('!')
-            && let Ok(n) = n_str.parse::<usize>()
-        {
-            let hist = self.history.borrow();
-            if n == 0 || n > hist.len() {
-                return Err(OasisError::Command(format!("!{n}: event not found").into()));
-            }
-            return Ok(hist[n - 1].clone());
-        }
-        Ok(input.to_string())
-    }
-
-    // -- Variable expansion --
-
-    /// Substitute `$VAR`, `${VAR}`, `$?` and `$#`.
-    ///
-    /// Quoting is respected the way [`tokenize`](crate::tokenize) will read
-    /// it afterwards: nothing inside `'...'` is expanded, and a
-    /// backslash-escaped `\$` stays literal. Quotes and escapes are kept in
-    /// the output for the tokenizer to remove. Fails when the result would
-    /// exceed 256 KiB (`$x$x$x...` doubling).
-    pub(crate) fn expand_variables(&self, input: &str, cwd: &str) -> Result<String> {
-        let vars = self.variables.borrow();
-        let mut result = String::with_capacity(input.len());
-        let chars: Vec<char> = input.chars().collect();
-        let mut i = 0;
-        let (mut in_single, mut in_double) = (false, false);
-
-        while i < chars.len() {
-            if result.len() > MAX_EXPANDED_LEN {
-                return Err(expansion_too_long());
-            }
-            let c = chars[i];
-            if in_single {
-                in_single = c != '\'';
-                result.push(c);
-                i += 1;
-                continue;
-            }
-            match c {
-                '\'' if !in_double => {
-                    in_single = true;
-                    result.push(c);
-                    i += 1;
-                    continue;
-                },
-                '"' => {
-                    in_double = !in_double;
-                    result.push(c);
-                    i += 1;
-                    continue;
-                },
-                '\\' => {
-                    // Keep the escape and the escaped char for the tokenizer.
-                    result.push(c);
-                    if let Some(&next) = chars.get(i + 1) {
-                        result.push(next);
-                    }
-                    i += 2;
-                    continue;
-                },
-                _ => {},
-            }
-            if chars[i] == '$' && i + 1 < chars.len() {
-                // Check for $? (last exit code) and $# (arg count).
-                if chars[i + 1] == '?' || chars[i + 1] == '#' {
-                    let name = chars[i + 1].to_string();
-                    let value = self.resolve_var(&name, &vars, cwd);
-                    result.push_str(&value);
-                    i += 2;
-                    continue;
-                }
-                // Check for ${VAR} syntax.
-                if chars[i + 1] == '{'
-                    && let Some(end) = chars[i + 2..].iter().position(|&c| c == '}')
-                {
-                    let name: String = chars[i + 2..i + 2 + end].iter().collect();
-                    let value = self.resolve_var(&name, &vars, cwd);
-                    result.push_str(&value);
-                    i += 3 + end;
-                    continue;
-                }
-                // Bare $VAR.
-                let start = i + 1;
-                let mut end = start;
-                while end < chars.len() && (chars[end].is_alphanumeric() || chars[end] == '_') {
-                    end += 1;
-                }
-                if end > start {
-                    let name: String = chars[start..end].iter().collect();
-                    let value = self.resolve_var(&name, &vars, cwd);
-                    result.push_str(&value);
-                    i = end;
-                    continue;
-                }
-                result.push('$');
-                i += 1;
-            } else {
-                result.push(chars[i]);
-                i += 1;
-            }
-        }
-        if result.len() > MAX_EXPANDED_LEN {
-            return Err(expansion_too_long());
-        }
-        Ok(result)
-    }
-
-    fn resolve_var(&self, name: &str, vars: &HashMap<String, String>, cwd: &str) -> String {
-        match name {
-            "CWD" => cwd.to_string(),
-            // The status of the previous command (the chain executor
-            // updates `?` once a pipeline finishes).
-            "?" => vars
-                .get("?")
-                .cloned()
-                .unwrap_or_else(|| self.last_exit_code.get().to_string()),
-            _ => vars.get(name).cloned().unwrap_or_default(),
-        }
-    }
-
-    // -- Alias expansion --
-
-    /// Replace an unquoted first word that names an alias with the alias
-    /// text's words (one level: the result is not expanded again).
-    pub(crate) fn expand_alias_words(&self, mut words: Vec<Word>) -> Vec<Word> {
-        let Some(first) = words.first().filter(|w| !w.quoted) else {
-            return words;
-        };
-        let aliases = self.aliases.borrow();
-        if let Some(expansion) = aliases.get(&first.text)
-            && let Ok(expanded) = crate::expander::tokenize_words(expansion)
-        {
-            words.splice(0..1, expanded);
-        }
-        words
-    }
-}
-
-/// The error for an expansion over [`MAX_EXPANDED_LEN`].
-pub(crate) fn expansion_too_long() -> OasisError {
-    OasisError::Command(format!("expansion too long (over {MAX_EXPANDED_LEN} bytes)").into())
 }
 
 impl Default for CommandRegistry {

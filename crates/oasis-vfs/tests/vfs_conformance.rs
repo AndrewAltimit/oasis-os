@@ -296,6 +296,17 @@ macro_rules! vfs_conformance {
 
 vfs_conformance!(memory, (Box::new(()), Box::new(MemoryVfs::new())));
 vfs_conformance!(game_asset, (Box::new(()), Box::new(GameAssetVfs::new())));
+// A subtree view must behave like a whole VFS rooted at its directory.
+vfs_conformance!(subtree, {
+    let mut inner = MemoryVfs::new();
+    inner.mkdir("/srv/files").unwrap();
+    inner.write("/outside.txt", b"x").unwrap();
+    let inner: Box<dyn Vfs> = Box::new(inner);
+    (
+        Box::new(()),
+        Box::new(oasis_vfs::SubtreeVfs::new(inner, "/srv/files").unwrap()),
+    )
+});
 #[cfg(not(target_arch = "wasm32"))]
 vfs_conformance!(real, {
     let dir = tempfile::tempdir().unwrap();

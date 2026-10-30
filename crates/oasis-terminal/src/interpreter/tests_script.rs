@@ -210,7 +210,7 @@ fn script_if_true_branch() {
     reg.register(Box::new(EchoCmd));
     let mut vfs = MemoryVfs::new();
     vfs.mkdir("/tmp").unwrap();
-    let out = run_script(&reg, &mut vfs, "if echo true\nthen\necho yes\nfi");
+    let out = run_script(&reg, &mut vfs, "if true\nthen\necho yes\nfi");
     assert_eq!(out, "yes");
 }
 
@@ -220,7 +220,7 @@ fn script_if_false_branch() {
     reg.register(Box::new(EchoCmd));
     let mut vfs = MemoryVfs::new();
     vfs.mkdir("/tmp").unwrap();
-    let out = run_script(&reg, &mut vfs, "if echo false\nthen\necho yes\nfi");
+    let out = run_script(&reg, &mut vfs, "if false\nthen\necho yes\nfi");
     assert!(out.contains("commands executed"));
 }
 
@@ -233,7 +233,7 @@ fn script_if_else() {
     let out = run_script(
         &reg,
         &mut vfs,
-        "if echo false\nthen\necho yes\nelse\necho no\nfi",
+        "if false\nthen\necho yes\nelse\necho no\nfi",
     );
     assert_eq!(out, "no");
 }
@@ -247,7 +247,7 @@ fn script_if_else_true() {
     let out = run_script(
         &reg,
         &mut vfs,
-        "if echo true\nthen\necho correct\nelse\necho wrong\nfi",
+        "if true\nthen\necho correct\nelse\necho wrong\nfi",
     );
     assert_eq!(out, "correct");
 }
@@ -279,7 +279,7 @@ fn script_while_loop() {
     crate::register_dev_commands(&mut reg);
     let mut vfs = MemoryVfs::new();
     vfs.mkdir("/tmp").unwrap();
-    let out = run_script(&reg, &mut vfs, "while echo false\ndo\necho body\ndone");
+    let out = run_script(&reg, &mut vfs, "while false\ndo\necho body\ndone");
     assert!(out.contains("commands executed"));
 }
 
@@ -311,9 +311,10 @@ fn script_nested_if() {
     let out = run_script(
         &reg,
         &mut vfs,
-        "if echo true\nthen\nif echo true\nthen\necho nested\nfi\nfi",
+        "if true\nthen\nif echo cond\nthen\necho nested\nfi\nfi",
     );
-    assert_eq!(out, "nested");
+    // A condition's output is shown; its status (0) decides.
+    assert_eq!(out, "cond\nnested");
 }
 
 #[test]
@@ -325,7 +326,7 @@ fn script_nested_if_outer_false() {
     let out = run_script(
         &reg,
         &mut vfs,
-        "if echo false\nthen\nif echo true\nthen\necho nested\nfi\nfi",
+        "if false\nthen\nif echo true\nthen\necho nested\nfi\nfi",
     );
     assert!(out.contains("commands executed"));
 }
@@ -673,14 +674,15 @@ impl Command for MockTestCmd {
         "test"
     }
     fn execute(&self, args: &[&str], _env: &mut Environment<'_>) -> Result<CommandOutput> {
-        if args.len() == 3 && args[1] == "==" {
-            let result = args[0] == args[2];
-            return Ok(CommandOutput::Text(result.to_string()));
-        }
-        if args.first() == Some(&"true") {
-            return Ok(CommandOutput::Text("true".into()));
-        }
-        Ok(CommandOutput::Text("false".into()))
+        let truth = if args.len() == 3 && args[1] == "==" {
+            args[0] == args[2]
+        } else {
+            args.first() == Some(&"true")
+        };
+        Ok(CommandOutput::status(
+            i32::from(!truth),
+            CommandOutput::None,
+        ))
     }
 }
 
@@ -1240,9 +1242,9 @@ fn test_command_sets_exit_status() {
     let mut vfs = MemoryVfs::new();
     let mut env = make_env(&mut vfs);
     let out = assert_text!(reg.execute("test a = b || echo differ", &mut env).unwrap());
-    assert_eq!(out, "false\ndiffer");
+    assert_eq!(out, "differ");
     let out = assert_text!(reg.execute("test a = a && echo same", &mut env).unwrap());
-    assert_eq!(out, "true\nsame");
+    assert_eq!(out, "same");
     reg.execute("test -z ''", &mut env).unwrap();
     assert_eq!(reg.get_variable("?").as_deref(), Some("0"));
     reg.execute("test -n ''", &mut env).unwrap();

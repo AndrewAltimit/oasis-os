@@ -18,6 +18,9 @@ use oasis_core::wallpaper;
 use crate::app_state::{AppState, NetworkLayer, TerminalLayer};
 use crate::windows::{CloseHow, CloseOutcome, close_app_window, exit_kiosk};
 
+/// The VFS directory `ftp start` serves: clients see it as `/`.
+pub const FTP_ROOT: &str = "/home";
+
 /// Terminal messages of a toggled server (`listen`, `ftp`).
 struct ServiceText {
     stopped: &'static str,
@@ -188,12 +191,19 @@ pub fn process_command_output(
                 },
                 FtpServer::stop,
                 |backend| {
-                    let mut server = FtpServer::new(port);
+                    // Clients get the user's files only, never the shell's
+                    // /system state or /var IPC request files.
+                    let mut server = FtpServer::new(port)
+                        .with_root(FTP_ROOT)
+                        .map_err(|e| format!("FTP server error: {e}"))?;
                     if let Some(pass) = password {
                         server = server.with_password(pass);
                     }
                     match server.start(backend) {
-                        Ok(()) => Ok((server, format!("FTP server listening on port {port}."))),
+                        Ok(()) => Ok((
+                            server,
+                            format!("FTP server listening on port {port} (serving {FTP_ROOT})."),
+                        )),
                         Err(e) => Err(format!("FTP server error: {e}")),
                     }
                 },

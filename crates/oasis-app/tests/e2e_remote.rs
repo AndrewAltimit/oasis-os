@@ -235,13 +235,20 @@ fn remote_terminal_and_ftp_run_side_by_side() {
         remote_cmd(&mut h, &mut term, "echo side-by-side"),
         "side-by-side"
     );
+    // FTP serves /home only: its `/` is the shell's /home, and the shell's
+    // /system state and /var IPC files are out of reach.
     let mut ftp = ftp_client(&mut h, ftp_port);
-    assert!(ftp_cmd(&mut h, &mut ftp, "PUT /tmp/ftp.txt uploaded").starts_with("200"));
-    assert_eq!(h.vfs().read("/tmp/ftp.txt").unwrap(), b"uploaded");
+    assert!(ftp_cmd(&mut h, &mut ftp, "PUT /ftp.txt uploaded").starts_with("200"));
+    assert_eq!(h.vfs().read("/home/ftp.txt").unwrap(), b"uploaded");
+    assert!(h.vfs().exists("/system"));
+    for req in ["STAT /system", "STAT /../system", "LIST /../var"] {
+        let resp = ftp_cmd(&mut h, &mut ftp, req);
+        assert!(resp.starts_with("500 "), "{req}: {resp}");
+    }
 
     // The remote terminal sees the file the FTP client uploaded (one VFS).
     assert_eq!(
-        remote_cmd(&mut h, &mut term, "cat /tmp/ftp.txt"),
+        remote_cmd(&mut h, &mut term, "cat /home/ftp.txt"),
         "uploaded"
     );
 
@@ -282,7 +289,7 @@ fn remote_terminal_and_ftp_run_side_by_side() {
         refused(term_port),
         "terminal port still accepting after `listen stop`"
     );
-    let get = ftp_cmd(&mut h, &mut ftp, "GET /tmp/ftp.txt");
+    let get = ftp_cmd(&mut h, &mut ftp, "GET /ftp.txt");
     assert!(get.starts_with("200 8 bytes"), "{get:?}");
     assert_eq!(ftp.until(&mut h, "uploaded"), "uploaded");
     run(

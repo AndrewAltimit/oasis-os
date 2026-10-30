@@ -87,24 +87,40 @@ pub(crate) enum ChainOp {
 pub(crate) struct ChainSegment {
     pub(crate) command: String,
     pub(crate) chain_op: ChainOp,
+    /// The and-or list this pipeline belongs to ends in `&`: queue it as a
+    /// background job instead of running it.
+    pub(crate) background: bool,
 }
 
-/// Split a command line on top-level `;`, `&&` and `||` (see [`scan`]).
-/// Empty segments (`a ;; b`) are skipped.
+/// Whether the top-level `&` at byte `i` is the background operator (not
+/// half of `&&`, not part of a `>&` / `<&` / `&>` redirection).
+fn is_background_amp(b: &[u8], top: &[bool], i: usize) -> bool {
+    let next_amp = b.get(i + 1) == Some(&b'&') && top.get(i + 1) == Some(&true);
+    let prev_amp = i > 0 && b[i - 1] == b'&' && top[i - 1];
+    let redirect = (i > 0 && matches!(b[i - 1], b'>' | b'<')) || b.get(i + 1) == Some(&b'>');
+    !next_amp && !prev_amp && !redirect
+}
+
+/// Split a command line on top-level `;`, `&`, `&&` and `||` (see
+/// [`scan`]). Empty segments (`a ;; b`) are skipped. A `&` marks every
+/// pipeline of the and-or list it ends as [`ChainSegment::background`].
 pub(crate) fn split_chains(input: &str) -> Result<Vec<ChainSegment>> {
     let Scan { top, .. } = scan(input);
     let b = input.as_bytes();
-    let mut segments = Vec::new();
-    let mut push = |text: &str, chain_op: ChainOp| {
+    let mut segments: Vec<ChainSegment> = Vec::new();
+    let push = |segments: &mut Vec<ChainSegment>, text: &str, chain_op: ChainOp| {
         let command = text.trim();
         if !command.is_empty() {
             segments.push(ChainSegment {
                 command: command.to_string(),
                 chain_op,
+                background: false,
             });
         }
     };
     let (mut start, mut op, mut i) = (0, ChainOp::Always, 0);
+    // Index of the first segment of the current and-or list.
+    let mut list_start = 0;
     while i < b.len() {
         let doubled = b.get(i + 1) == Some(&b[i]) && top.get(i + 1) == Some(&true);
         let next_op = match b[i] {
@@ -112,10 +128,24 @@ pub(crate) fn split_chains(input: &str) -> Result<Vec<ChainSegment>> {
             b';' => Some((ChainOp::Always, 1)),
             b'&' if doubled => Some((ChainOp::And, 2)),
             b'|' if doubled => Some((ChainOp::Or, 2)),
+            b'&' if is_background_amp(b, &top, i) => {
+                push(&mut segments, &input[start..i], op);
+                for s in &mut segments[list_start..] {
+                    s.background = true;
+                }
+                list_start = segments.len();
+                op = ChainOp::Always;
+                i += 1;
+                start = i;
+                continue;
+            },
             _ => None,
         };
         if let Some((next, len)) = next_op {
-            push(&input[start..i], op);
+            push(&mut segments, &input[start..i], op);
+            if next == ChainOp::Always {
+                list_start = segments.len();
+            }
             op = next;
             i += len;
             start = i;
@@ -123,8 +153,38 @@ pub(crate) fn split_chains(input: &str) -> Result<Vec<ChainSegment>> {
             i += 1;
         }
     }
-    push(&input[start..], op);
+    push(&mut segments, &input[start..], op);
     Ok(segments)
+}
+
+/// Remove `#` comments: an unquoted, top-level `#` at the start of a word
+/// comments out the rest of its line (`echo a#b` and `$#` are not
+/// comments; nor is a `#` inside `{ ... }` or `$( ... )`, whose text is
+/// executed, and stripped, later).
+pub(crate) fn strip_comments(input: &str) -> std::borrow::Cow<'_, str> {
+    if !input.contains('#') {
+        return std::borrow::Cow::Borrowed(input);
+    }
+    let Scan { top, .. } = scan(input);
+    let b = input.as_bytes();
+    let mut out = String::with_capacity(input.len());
+    let (mut i, mut copied, mut stripped) = (0, 0, false);
+    while i < b.len() {
+        if b[i] == b'#' && top[i] && (i == 0 || b[i - 1].is_ascii_whitespace()) {
+            out.push_str(&input[copied..i]);
+            // Skip to the end of the line (keep the newline).
+            i = input[i..].find('\n').map_or(b.len(), |n| i + n);
+            copied = i;
+            stripped = true;
+            continue;
+        }
+        i += 1;
+    }
+    if !stripped {
+        return std::borrow::Cow::Borrowed(input);
+    }
+    out.push_str(&input[copied..]);
+    std::borrow::Cow::Owned(out)
 }
 
 /// If `input` ends with an unquoted, unescaped single `&` (background

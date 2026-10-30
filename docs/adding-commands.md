@@ -49,7 +49,7 @@ Commands return a `CommandOutput` enum:
 | `Clear` | Signal to clear the terminal buffer |
 | `Signal(CommandSignal)` | A signal to the app layer (see below) |
 | `Multi(Vec<CommandOutput>)` | Multiple outputs from chained commands |
-| `Status { code, output }` | `output` plus an explicit exit status; build it with `CommandOutput::status(code, output)`. Use it to fail (non-zero `code`) while still printing, e.g. `test` prints `false` and exits 1. The executor records the code for `&&` / `\|\|` / `$?` / `if` and unwraps it, so hosts never see it. Returning `Err` is still the normal way to fail with an error message (status 1). |
+| `Status { code, output }` | `output` plus an explicit exit status; build it with `CommandOutput::status(code, output)`. Use it to fail (non-zero `code`) while still printing (`grep` prints `(no matches)` and exits 1), or to answer a condition silently (`test` returns `status(1, None)` for false). The executor records the code for `&&` / `\|\|` / `$?` / `if` and unwraps it, so hosts never see it. Returning `Err` is still the normal way to fail with an error message (status 1). |
 
 `CommandSignal` variants (intercepted by the app layer to trigger system-level actions):
 
@@ -190,10 +190,10 @@ Commands are organized into modules by category:
 |--------|----------|----------|
 | `commands.rs` | - | `register_builtins` (registers every module below) |
 | `core_commands.rs` | core | ls, cd, pwd, cat, mkdir, rm, cp, mv, find |
-| `text_commands.rs` | text | grep, sort, head, tail, cut, tr, tee, diff |
+| `text_commands/` | text | grep, sort, head, tail, cut, tr, tee, diff |
 | `file_commands.rs` | file | write, append, tree, du, stat, xxd, checksum |
 | `system_commands.rs` | system | uptime, hostname, whoami, df, date, sleep |
-| `dev_commands.rs` | dev | base64, json, uuid, seq, expr, test, xargs |
+| `dev_commands/` | dev | base64, json, uuid, seq, expr, test, `[` |
 | `fun_commands.rs` | fun | cal, fortune, banner, matrix, yes, watch, time |
 | `security_commands.rs` | security | chmod, chown, passwd, audit |
 | `doc_commands.rs` | doc | man, tutorial, motd |
@@ -203,8 +203,8 @@ Commands are organized into modules by category:
 | `radio_commands.rs` | audio | radio |
 | `platform_commands.rs` | system | power, clock, memory, usb |
 | `remote_commands.rs` | network | listen, remote, hosts |
-| `control_flow.rs` / `script.rs` | core | `if`/`while`/`until`/`for`/`case` parser + `run` (shell syntax, not commands) |
-| `builtins.rs` / `jobs.rs` / `script.rs` | - | the 20 shell builtins (help, which, history, set, unset, env, alias, unalias, run, function, return, local, break, continue, true, false, jobs, fg, bg, kill) |
+| `control_flow.rs` / `script/` | core | `if`/`while`/`until`/`for`/`case` parser + `run` (shell syntax, not commands) |
+| `builtins.rs` / `jobs/` / `script/` | - | the 21 shell builtins (help, which, history, set, unset, env, alias, unalias, run, xargs, function, return, local, break, continue, true, false, jobs, fg, bg, kill) |
 
 Additional commands (agent, browser, plugin, script, skin, transfer, tv, update) are registered by `oasis-core`; `oasis-terminal` must not depend on the UI / skin stack, so a command that needs `oasis-skin` (like `skin`, in `oasis-core/src/terminal/skin_commands.rs`) belongs there.
 
@@ -224,9 +224,13 @@ with a builtin's name has no effect.
 - Wrong usage returns `Err(OasisError::Command("usage: <usage line>"))`
   (`require_args` / `require_args_exact` in `cmd_helpers.rs` build it);
   any other failure is an `Err` too, never `Ok(Text("error: ..."))`. The
-  executor turns an `Err` into exit status 1 (`$?`, `&&` / `||`, `if`);
-  return `CommandOutput::Status { code, output }` for a non-zero status
-  that still prints something.
+  executor turns an `Err` into exit status 1 (`$?`, `&&` / `||`, `!`,
+  `if`, `while`); return `CommandOutput::status(code, output)` for a
+  non-zero status that still prints something.
+- Conditions use the exit status only, never the printed text. A command
+  that answers a yes/no question exits 0 for yes and 1 for no (`grep` with
+  no match, `diff` on differing files); a pure predicate like `test`
+  prints nothing: `CommandOutput::status(1, CommandOutput::None)`.
 - `env.stdin` holds the previous pipeline stage's output (or a `< file`
   redirect) for this command only; read it, don't rely on it persisting.
 - Commands run inside the host's frame: no blocking I/O, and loop bounds
@@ -307,15 +311,24 @@ The interpreter handles these before your `execute()` is called:
   empty argument
 - **Variable expansion** -- `$HOME`, `$USER`, `$?` (last exit code); not
   inside `'...'` or after a backslash
-- **Command substitution** -- `$(cmd)`, nested, word-split
+- **Command substitution** -- `$(cmd)`, nested. Expansion values reach
+  your `args` as words: unquoted ones are split on whitespace, quoted ones
+  stay whole, and nothing in a value is parsed as quotes, `$` or operators,
+  so a command never has to unescape its arguments
 - **Glob and brace expansion** -- `*.txt`, `{a,b}` expanded against the VFS
-  for unquoted words only (`"*.txt"` stays literal)
+  (globs wherever a metacharacter is unquoted, braces on plain words;
+  `"*.txt"` stays literal)
 - **Alias resolution** -- user-defined aliases (unquoted first word)
 - **Piping and redirection** -- `cat file.txt | wc` sets `env.stdin`;
   `< file`, `>`, `>>`, `2>`, `2>&1`
-- **Command chaining** -- `cmd1 ; cmd2`, `cmd1 && cmd2`, `cmd1 || cmd2`
+- **Command lists** -- `cmd1 ; cmd2`, `cmd1 && cmd2`, `cmd1 || cmd2`,
+  `! cmd`, `cmd &` (queued as a job); all act on exit status, as `if` and
+  `while` do, so a predicate-like command (a "does it match / exist"
+  check) must report its answer as a status
+- **`xargs`** -- `ls | xargs mycmd` runs your command with stdin words as
+  arguments; nothing extra is needed to support it
 - **History** -- all commands are recorded for up-arrow recall
 - **Limits** -- a line may run at most 100,000 simple commands (across
-  loops, functions and scripts), expand to at most 256 KiB, and nest
-  `execute` 96 deep / blocks 64 deep; variables set by `set` / `local` are
+  loops, functions and scripts), expand to at most 256 KiB, and nest 32
+  deep (`$(...)`, function calls, scripts and blocks together); variables set by `set` / `local` are
   capped at 64 KiB (4096 variables); at most 64 background jobs wait

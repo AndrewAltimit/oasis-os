@@ -99,6 +99,13 @@ pub(crate) static BUILTINS: &[BuiltinSpec] = &[
         run: |reg, args, env| reg.execute_run(args, env),
     },
     BuiltinSpec {
+        name: "xargs",
+        category: "scripting",
+        usage: "xargs [-n N] [-I REPL] [command [args...]]",
+        description: "Run a command with arguments read from stdin",
+        run: |reg, args, env| reg.execute_xargs(args, env),
+    },
+    BuiltinSpec {
         name: "function",
         category: "scripting",
         usage: "function name() { body }",
@@ -393,6 +400,84 @@ impl CommandRegistry {
 
         self.define_function(&name.to_ascii_lowercase(), body);
         Ok(CommandOutput::None)
+    }
+
+    /// Built-in `xargs`: run `command args... ITEMS` with the items read
+    /// from stdin (whitespace-separated; one per line with `-I`).
+    ///
+    /// `-n N` runs the command once per N items; `-I REPL` runs it once
+    /// per input line with every `REPL` in the arguments replaced by the
+    /// line. The command defaults to `echo`. Items are passed as words,
+    /// never re-parsed as shell syntax. Exits 123 if any run failed.
+    pub(crate) fn execute_xargs(
+        &self,
+        args: &[&str],
+        env: &mut Environment<'_>,
+    ) -> Result<CommandOutput> {
+        let usage = || OasisError::Command("usage: xargs [-n N] [-I REPL] [command...]".into());
+        let (mut per_run, mut replace) = (usize::MAX, None);
+        let mut rest = args;
+        loop {
+            match rest {
+                ["-n", n, tail @ ..] => {
+                    per_run = n.parse().ok().filter(|&n| n > 0).ok_or_else(usage)?;
+                    rest = tail;
+                },
+                ["-I", r, tail @ ..] => {
+                    replace = Some(*r);
+                    rest = tail;
+                },
+                [flag, ..] if flag.starts_with('-') && *flag != "-" => return Err(usage()),
+                _ => break,
+            }
+        }
+        let command: Vec<&str> = if rest.is_empty() {
+            vec!["echo"]
+        } else {
+            rest.to_vec()
+        };
+
+        let input = env.stdin.take().unwrap_or_default();
+        let runs: Vec<Vec<String>> = match replace {
+            Some(r) => input
+                .lines()
+                .map(str::trim)
+                .filter(|l| !l.is_empty())
+                .map(|line| command.iter().map(|a| a.replace(r, line)).collect())
+                .collect(),
+            None => {
+                let items: Vec<&str> = input.split_whitespace().collect();
+                items
+                    .chunks(per_run.min(items.len().max(1)))
+                    .map(|chunk| {
+                        let mut words: Vec<String> =
+                            command.iter().map(|s| (*s).to_string()).collect();
+                        words.extend(chunk.iter().map(|s| (*s).to_string()));
+                        words
+                    })
+                    .collect()
+            },
+        };
+
+        let mut outputs = Vec::new();
+        let mut failed = false;
+        for words in &runs {
+            self.charge_command()?;
+            self.last_exit_code.set(0);
+            match self.run_words(words, env) {
+                Ok(out) => {
+                    failed |= self.last_exit_code.get() != 0;
+                    outputs.push(out);
+                },
+                Err(e) => {
+                    failed = true;
+                    outputs.push(CommandOutput::Text(format!("xargs: {}: {e}", words[0])));
+                },
+            }
+            env.stdin = None;
+        }
+        let output = crate::executor::merge_outputs(outputs);
+        Ok(CommandOutput::status(if failed { 123 } else { 0 }, output))
     }
 
     /// Built-in `return` command: set exit code from within a function.

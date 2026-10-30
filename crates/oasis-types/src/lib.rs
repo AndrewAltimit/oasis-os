@@ -8,6 +8,7 @@ pub mod backend;
 pub mod bitmap_font;
 pub mod color;
 pub mod config;
+pub mod crypto;
 pub mod easing;
 pub mod error;
 pub mod geometry;

@@ -123,7 +123,8 @@ PSK is the only built-in identity mechanism. It is configured per-listener via
    nonce is 128 fresh random bits as 32 lowercase hex digits, new for every
    connection.
 2. Client answers `AUTH <hex(HMAC-SHA256(key = psk, message = nonce))>\n`
-   (`oasis_net::psk_response`). By hand:
+   (`oasis_net::psk_response`, on the dependency-free SHA-256 / HMAC in
+   `oasis_types::crypto`). By hand:
    `printf %s "$NONCE" | openssl dgst -sha256 -hmac "$PSK"`.
 3. Server compares with `oasis_types::util::ct_eq`, a constant-time XOR
    loop.
@@ -209,15 +210,19 @@ contain spaces. Verbs:
 | `PASS <password>` | `230 Authenticated`, `530 Authentication failed`, or `530 Too many failures` (after 3 attempts the connection closes). Only meaningful when the server has a password. |
 | `QUIT` | `200 goodbye` and closes the connection. Always allowed, even before authentication. |
 
-> **Path resolution and exposure:** path arguments are passed straight
-> through to the served `Vfs` (`process_ftp_request` in
-> `oasis-net/src/ftp.rs`). Every `Vfs` normalizes paths the same way
+> **Path resolution and exposure:** the server exposes one directory of
+> the VFS it polls, its *root* (`FtpServer::with_root`, default `/` = the
+> whole VFS). Clients see that directory as `/`: `poll` wraps the VFS in an
+> `oasis_vfs::SubtreeVfs`, which normalizes every path
 > (`oasis_vfs::normalize_path`: `..` that climbs above `/` and NUL bytes
-> are errors) and `RealVfs` additionally confines symlinks and rejects
-> Windows drive / device segments, so a client cannot leave the VFS root.
-> The exposed tree is exactly the served VFS -- in the desktop shell that is
-> the live shell VFS, including `/system` and `/var` IPC files.
-> Integrators are responsible for choosing what to serve.
+> are errors) before prefixing the root, so nothing outside it can be
+> named, and refuses to remove or rename the root itself. The served `Vfs`
+> then applies its own checks (`RealVfs` additionally confines symlinks and
+> rejects Windows drive / device segments). The desktop shell serves
+> `/home` (`FTP_ROOT` in `oasis-app/src/commands.rs`), so FTP clients
+> cannot reach the shell's `/system` state or the `/var` IPC request
+> files. Error messages name the inner path (`no such file:
+> /home/x`).
 
 > **`PUT` is inline text.** The whole request -- `PUT `, the path, a space
 > and the content -- must fit on one line, so the payload is at most

@@ -4,14 +4,15 @@
 //! command history, pipes, input/output redirection, command chaining,
 //! and glob expansion.
 //!
-//! The implementation is split across three submodules:
+//! The implementation is split across these submodules:
 //! - [`crate::types`]: core types (`CommandOutput`, `Environment`,
-//!   `Command`, `ShellFunction`, constants)
+//!   `Command`, `ShellFunction`, limits)
 //! - [`crate::registry`]: `CommandRegistry` struct, variable/alias/
-//!   function/history APIs, expansion helpers
-//! - [`crate::executor`]: execution pipeline (`execute`,
-//!   `execute_pipeline`, `execute_with_redirect`,
-//!   `execute_single_cmd`, `expand_substitutions`)
+//!   function/history APIs
+//! - [`crate::expansion`]: history, alias, variable and `$(...)`
+//!   expansion of a command into words (on [`crate::expander`]'s scanner)
+//! - [`crate::executor`]: execution pipeline (`execute`, lists and
+//!   `&`, `!`, pipelines, redirection, `execute_single_cmd`, `run_words`)
 
 // Re-export everything so `use crate::interpreter::*` paths keep working.
 pub use crate::expander::resolve_path;
@@ -46,3 +47,5 @@ mod tests_basic;
 mod tests_pipeline;
 #[cfg(test)]
 mod tests_script;
+#[cfg(test)]
+mod tests_semantics;
