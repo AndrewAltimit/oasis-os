@@ -82,6 +82,11 @@ Input:
   6 px toggles maximize), resize handles, content (`ContentClick` with
   content-local coordinates), then desktop. Clicking an unfocused window
   focuses it first. Modal windows block input to windows below.
+- A maximized window has no resize handles (the convention on Windows,
+  macOS and GNOME: its size is the work area's). Its frame border hits
+  the content instead, clamped to the nearest content pixel, so a
+  pointer pushed against the screen edge reaches the app; dragging the
+  titlebar still un-maximizes it.
 - Keyboard shortcuts are handled by the host, not by
   `handle_input` (see below).
 

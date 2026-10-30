@@ -3,6 +3,8 @@
 //! When a pointer click arrives, the WM walks windows in reverse z-order
 //! (topmost first) and checks regions in priority order:
 //! titlebar buttons > titlebar body > resize handles > content > desktop.
+//! Maximized windows have no resize handles; their frame border hits the
+//! content.
 
 use super::window::{Window, WindowId, WindowState, WmTheme};
 
@@ -93,8 +95,13 @@ fn hit_test_window(window: &Window, x: i32, y: i32, theme: &WmTheme) -> Option<H
         return Some(HitRegion::Titlebar(window.id.clone()));
     }
 
-    // 3. Resize handles (edges and corners).
+    // 3. Resize handles (edges and corners). A maximized window has none,
+    //    as on every mainstream desktop: its size is the work area's, and
+    //    an edge drag used to resize it while it stayed marked maximized
+    //    (restore then jumped back to the pre-maximize geometry).
+    let maximized = window.state == WindowState::Maximized;
     if window.is_resizable()
+        && !maximized
         && let Some(edge) = check_resize_handles(window, x, y, theme)
     {
         return Some(HitRegion::ResizeHandle(window.id.clone(), edge));
@@ -105,6 +112,16 @@ fn hit_test_window(window: &Window, x: i32, y: i32, theme: &WmTheme) -> Option<H
     if point_in_rect(x, y, cx, cy, cw, ch) {
         let local_x = x - cx;
         let local_y = y - cy;
+        return Some(HitRegion::Content(window.id.clone(), local_x, local_y));
+    }
+
+    // A maximized window's frame border runs along the screen edge, so it
+    // belongs to the content (clamped to the nearest content pixel): a
+    // pointer slammed against the edge hits the scrollbar / list there
+    // instead of starting a drag that would un-maximize the window.
+    if maximized && cw > 0 && ch > 0 {
+        let local_x = (x - cx).clamp(0, cw as i32 - 1);
+        let local_y = (y - cy).clamp(0, ch as i32 - 1);
         return Some(HitRegion::Content(window.id.clone(), local_x, local_y));
     }
 
@@ -303,6 +320,25 @@ mod tests {
             result,
             HitRegion::ResizeHandle(WindowId::from("w1"), ResizeEdge::North)
         );
+    }
+
+    #[test]
+    fn maximized_window_has_no_resize_handles() {
+        let theme = WmTheme::default();
+        let mut win = make_window("w1", 0, 0, 200, 150);
+        win.state = WindowState::Maximized;
+        let (cx, cy, cw, ch) = win.content_rect(&theme);
+        let (r, b) = (win.outer_w as i32 - 1, win.outer_h as i32 - 1);
+        // Bottom-right corner and the left / bottom edges: content, clamped.
+        let corner = hit_test(std::slice::from_ref(&win), r, b, &theme);
+        assert_eq!(
+            corner,
+            HitRegion::Content("w1".into(), cw as i32 - 1, ch as i32 - 1)
+        );
+        let left = hit_test(std::slice::from_ref(&win), 0, cy + 10, &theme);
+        assert_eq!(left, HitRegion::Content("w1".into(), 0, 10));
+        let bottom = hit_test(std::slice::from_ref(&win), cx + 5, b, &theme);
+        assert_eq!(bottom, HitRegion::Content("w1".into(), 5, ch as i32 - 1));
     }
 
     #[test]
