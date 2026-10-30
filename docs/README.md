@@ -92,3 +92,9 @@ do not treat the body as a description of current behavior.
 - [`../AGENTS.md`](../AGENTS.md) -- multi-agent workflow and CI
 - [`../CONTRIBUTING.md`](../CONTRIBUTING.md) -- contribution policy
 - [`../examples/README.md`](../examples/README.md) -- runnable examples
+- [`../crates/oasis-browser/docs/README.md`](../crates/oasis-browser/docs/README.md) -- browser engine internals (architecture, HTML/DOM, CSS pipeline and coverage, layout, paint, loading and navigation, Gemini, JavaScript, testing), covering `oasis-browser`, `oasis-html`, `oasis-css` and `oasis-http`
+- [`../crates/oasis-core/fuzz/README.md`](../crates/oasis-core/fuzz/README.md) -- fuzz targets (run nightly by `fuzz.yml`)
+- [`../crates/oasis-usb-debug-psp/README.md`](../crates/oasis-usb-debug-psp/README.md) -- PSP USB host-mode / VBUS debug EBOOTs (research)
+- [`../docker/ppsspp-patches/README.md`](../docker/ppsspp-patches/README.md) -- where PPSSPP source patches for the emulator image go
+- [`../tools/cli/containers/README.md`](../tools/cli/containers/README.md) -- running the OpenCode agent in a container
+- PSP build container: the `psp-build` Docker profile ([getting-started.md § Build in Docker](getting-started.md#build-in-docker-any-host), [psp-architecture.md](psp-architecture.md))

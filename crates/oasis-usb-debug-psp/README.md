@@ -72,4 +72,4 @@ VBUS control may be inside the USB bus driver's internal callback (unreachable
 without a real accessory) or the PSP-1000/3000 hardware may not support VBUS
 sourcing on the Mini-B connector.
 
-See `docs/psp-usb-host-findings.md` for complete technical findings.
+See [`docs/psp-usb-vbus-findings.md`](../../docs/psp-usb-vbus-findings.md) and [`docs/psp-usb-hardware-reference.md`](../../docs/psp-usb-hardware-reference.md) for the full technical findings.
