@@ -234,7 +234,7 @@ fn do_request(
     // 30-second timeout wait on PSP sockets.
     let mut buf = Vec::with_capacity(8192);
     let mut chunk = [0u8; 4096];
-    let mut tracker = ResponseTracker::new();
+    let mut tracker = ResponseTracker::for_method(method);
     // Safety limit: max read iterations to prevent infinite loops when
     // the TLS layer blocks without returning EOF (e.g. missing
     // close_notify from servers that ignore Connection: close).

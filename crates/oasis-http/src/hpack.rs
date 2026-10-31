@@ -517,71 +517,100 @@ static HUFFMAN_CODES: &[(u32, u8)] = &[
     (0x3fffffff, 30), // EOS
 ];
 
-/// Decode a Huffman-encoded byte string. Walks the implicit prefix tree
-/// bit-by-bit, matching against `HUFFMAN_CODES`. The final partial byte
-/// must be 0-padded with 1-bits (RFC 7541 §5.2); any other pattern is an
-/// error.
+/// Canonical-code decoding tables for [`HUFFMAN_CODES`]: for every code
+/// length, the first code of that length and where its symbols start in
+/// the symbol list sorted by `(length, code)`.
+struct HuffmanTables {
+    /// `first_code[len]`: numerically smallest code of bit length `len`.
+    first_code: [u32; 31],
+    /// `count[len]`: how many codes have bit length `len`.
+    count: [u32; 31],
+    /// `offset[len]`: index into `symbols` of the first code of `len`.
+    offset: [usize; 31],
+    /// Symbols ordered by `(length, code)`.
+    symbols: Vec<u16>,
+}
+
+fn huffman_tables() -> &'static HuffmanTables {
+    static TABLES: std::sync::OnceLock<HuffmanTables> = std::sync::OnceLock::new();
+    TABLES.get_or_init(|| {
+        let mut symbols: Vec<u16> = (0..HUFFMAN_CODES.len() as u16).collect();
+        symbols.sort_by_key(|&s| {
+            let (code, len) = HUFFMAN_CODES[usize::from(s)];
+            (len, code)
+        });
+        let mut t = HuffmanTables {
+            first_code: [0; 31],
+            count: [0; 31],
+            offset: [0; 31],
+            symbols,
+        };
+        for (i, &sym) in t.symbols.iter().enumerate() {
+            let (code, len) = HUFFMAN_CODES[usize::from(sym)];
+            let len = usize::from(len);
+            if t.count[len] == 0 {
+                t.first_code[len] = code;
+                t.offset[len] = i;
+            }
+            t.count[len] += 1;
+        }
+        t
+    })
+}
+
+/// Decode a Huffman-encoded byte string (RFC 7541 §5.2, Appendix B).
+///
+/// The HPACK code is canonical, so a symbol is found by extending the
+/// code one bit at a time and checking it against the contiguous range
+/// of codes of that length: at most 30 steps per symbol. (A linear scan
+/// of the 257-entry table per candidate length made a 64 KiB header
+/// block cost billions of comparisons.) The final partial byte must be
+/// padding of at most 7 one-bits, and the EOS symbol must not appear.
 pub fn huffman_decode(input: &[u8]) -> Result<Vec<u8>> {
+    let t = huffman_tables();
     let mut out = Vec::with_capacity(input.len() * 2);
-    let mut current: u64 = 0;
-    let mut bits: u8 = 0;
-    let total_bits = input.len() * 8;
-    let mut consumed: usize = 0;
+    let mut code: u32 = 0;
+    let mut len: usize = 0;
+    // Whether every bit of the pending partial code is a 1 (valid padding).
+    let mut all_ones = true;
 
     for &byte in input {
-        current = (current << 8) | (byte as u64);
-        bits += 8;
-
-        // Try to decode symbols as long as we have at least as many
-        // bits as the longest plausible code.
-        while bits >= 5 {
-            let mut matched = false;
-            // Match from shortest (5) to longest (30) code length.
-            for len in 5u8..=30 {
-                if bits < len {
-                    break;
-                }
-                let code = ((current >> (bits - len)) & ((1u64 << len) - 1)) as u32;
-                // Linear scan: tables are small relative to overall cost.
-                for (sym, &(c, l)) in HUFFMAN_CODES.iter().enumerate() {
-                    if l == len && c == code {
-                        if sym == 256 {
-                            return Err(OasisError::Backend(
-                                "HPACK Huffman: EOS symbol in stream".into(),
-                            ));
-                        }
-                        out.push(sym as u8);
-                        bits -= len;
-                        consumed += len as usize;
-                        matched = true;
-                        break;
-                    }
-                }
-                if matched {
-                    break;
-                }
+        for shift in (0..8).rev() {
+            let bit = u32::from((byte >> shift) & 1);
+            code = (code << 1) | bit;
+            len += 1;
+            all_ones &= bit == 1;
+            if len > 30 {
+                return Err(OasisError::Backend("HPACK Huffman: invalid code".into()));
             }
-            if !matched {
-                break;
+            let first = t.first_code[len];
+            if t.count[len] > 0 && code >= first && code - first < t.count[len] {
+                let sym = t.symbols[t.offset[len] + (code - first) as usize];
+                if sym == 256 {
+                    return Err(OasisError::Backend(
+                        "HPACK Huffman: EOS symbol in stream".into(),
+                    ));
+                }
+                // Symbols below 256 are bytes.
+                out.push(sym as u8);
+                code = 0;
+                len = 0;
+                all_ones = true;
             }
         }
     }
 
     // Whatever remains must be at most 7 bits of all-ones EOS padding.
-    if bits > 7 {
+    if len > 7 {
         return Err(OasisError::Backend(
             "HPACK Huffman: oversized trailing padding".into(),
         ));
     }
-    if bits > 0 {
-        let mask = (1u64 << bits) - 1;
-        if (current & mask) != mask {
-            return Err(OasisError::Backend(
-                "HPACK Huffman: non-EOS padding bits".into(),
-            ));
-        }
+    if !all_ones {
+        return Err(OasisError::Backend(
+            "HPACK Huffman: non-EOS padding bits".into(),
+        ));
     }
-    let _ = (total_bits, consumed);
     Ok(out)
 }
 
@@ -615,7 +644,13 @@ fn decode_string(buf: &[u8], pos: &mut usize) -> Result<String> {
     } else {
         raw.to_vec()
     };
-    String::from_utf8(bytes).map_err(|_| OasisError::Backend("HPACK string: non-UTF-8".into()))
+    // Lossy, like the HTTP/1.1 header parser: servers do send Latin-1
+    // header values (`Content-Disposition` filenames, ...), and refusing
+    // them would fail the whole response with a COMPRESSION_ERROR.
+    Ok(match String::from_utf8(bytes) {
+        Ok(s) => s,
+        Err(e) => String::from_utf8_lossy(e.as_bytes()).into_owned(),
+    })
 }
 
 // ---------------------------------------------------------------------
@@ -904,6 +939,54 @@ mod tests {
         // 'a' (5 bits) followed by 3 padding bits of 000 instead of 111.
         let out = huffman_decode(&[0x18]);
         assert!(out.is_err());
+    }
+
+    /// Reference Huffman encoder for the tests (MSB first, 1-bit padding).
+    fn huffman_encode(input: &[u8]) -> Vec<u8> {
+        let mut out = Vec::new();
+        let (mut acc, mut bits) = (0u64, 0u32);
+        for &b in input {
+            let (code, len) = HUFFMAN_CODES[usize::from(b)];
+            acc = (acc << len) | u64::from(code);
+            bits += u32::from(len);
+            while bits >= 8 {
+                bits -= 8;
+                out.push((acc >> bits) as u8);
+            }
+        }
+        if bits > 0 {
+            let pad = 8 - bits;
+            out.push(((acc << pad) | ((1 << pad) - 1)) as u8);
+        }
+        out
+    }
+
+    #[test]
+    fn huffman_round_trips_every_byte() {
+        let all: Vec<u8> = (0..=255u8).chain((0..=255u8).rev()).collect();
+        assert_eq!(huffman_decode(&huffman_encode(&all)).unwrap(), all);
+        // A maximal-size header block decodes (this used to take
+        // seconds: ~6 600 table comparisons per decoded symbol).
+        let long: Vec<u8> = (0..64 * 1024).map(|i| (i * 7) as u8).collect();
+        assert_eq!(huffman_decode(&huffman_encode(&long)).unwrap(), long);
+    }
+
+    #[test]
+    fn huffman_rejects_eos_and_long_padding() {
+        // EOS (30 one-bits) inside the string.
+        assert!(huffman_decode(&[0xff, 0xff, 0xff, 0xfc]).is_err());
+        // 8+ bits of padding.
+        assert!(huffman_decode(&[0x1f, 0xff]).is_err());
+        assert_eq!(huffman_decode(&[]).unwrap(), b"");
+    }
+
+    #[test]
+    fn non_utf8_header_values_decode_lossily() {
+        // Literal without indexing, new name "x", raw value 0xE9 (Latin-1 é).
+        let block = [0x00, 0x01, b'x', 0x01, 0xe9];
+        let mut table = DynamicTable::new(4096);
+        let out = decode_block(&block, &mut table, 4096).unwrap();
+        assert_eq!(out, vec![("x".into(), "\u{fffd}".into())]);
     }
 
     // Full HPACK decode (RFC 7541 §C examples) -------------------------
