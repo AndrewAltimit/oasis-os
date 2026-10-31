@@ -1295,6 +1295,49 @@ fn plugin_command_registration_and_execution() {
     assert!(matches!(&out, crate::terminal::CommandOutput::Text(s) if s == "Greetings, Rust!"));
 }
 
+/// Registers its command, then fails `init`.
+struct HalfInitPlugin;
+
+impl Plugin for HalfInitPlugin {
+    fn info(&self) -> PluginInfo {
+        PluginInfo::new("half-init", "1.0.0")
+    }
+    fn init(&mut self, host: &mut PluginHost<'_>) -> Result<()> {
+        host.commands.register(Box::new(GreetCmd));
+        Err(OasisError::Plugin("failed after registering".into()))
+    }
+    fn update(&mut self, _host: &mut PluginHost<'_>) -> Result<()> {
+        Ok(())
+    }
+    fn shutdown(&mut self, _host: &mut PluginHost<'_>) -> Result<()> {
+        Ok(())
+    }
+}
+
+/// A plugin whose `init` fails stays inactive and nothing would remove
+/// what it registered before failing: its commands must not leak into the
+/// shell's registry.
+#[test]
+fn failed_init_unregisters_the_commands_it_added() {
+    let mut mgr = PluginManager::new();
+    mgr.register_static(Box::new(HalfInitPlugin));
+    let mut sdi = SdiRegistry::new();
+    let mut vfs = MemoryVfs::new();
+    let mut cmds = CommandRegistry::new();
+    mgr.init_all(&mut sdi, &mut vfs, &mut cmds);
+    assert_eq!(mgr.active_count(), 0);
+    assert!(
+        !cmds.command_names().any(|n| n == "greet"),
+        "failed plugin's command leaked"
+    );
+    // A retry fails the same way, without a duplicate left behind.
+    assert!(
+        mgr.init_plugin("half-init", &mut sdi, &mut vfs, &mut cmds)
+            .is_err()
+    );
+    assert!(!cmds.command_names().any(|n| n == "greet"));
+}
+
 // -- Error handling integration tests --
 
 /// Plugin whose init returns an error. Uses shared state to prove
