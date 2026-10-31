@@ -153,7 +153,7 @@ impl StartMenuState {
         vec![
             StartMenuItem {
                 label: tr!("shell.start_games").to_string(),
-                action: StartMenuAction::LaunchApp("File Manager".to_string()),
+                action: StartMenuAction::LaunchApp("Games".to_string()),
                 color: color(0),
             },
             StartMenuItem {
@@ -163,7 +163,7 @@ impl StartMenuState {
             },
             StartMenuItem {
                 label: tr!("shell.start_video").to_string(),
-                action: StartMenuAction::LaunchApp("Photo Viewer".to_string()),
+                action: StartMenuAction::LaunchApp("TV Guide".to_string()),
                 color: color(2),
             },
             StartMenuItem {

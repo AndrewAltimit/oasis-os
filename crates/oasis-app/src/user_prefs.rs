@@ -25,6 +25,7 @@ use oasis_core::startmenu::StartMenuState;
 use oasis_core::vfs::{MemoryVfs, Vfs};
 
 use crate::app_state::AppState;
+use crate::commands::take_request;
 
 /// Real-storage location of the settings file, if one can be determined.
 pub fn disk_path() -> Option<PathBuf> {
@@ -138,21 +139,13 @@ pub fn rebuild_start_menu(state: &mut AppState) {
     }
 }
 
-/// Read and clear one IPC request path, returning its trimmed payload.
-fn take_request(vfs: &mut MemoryVfs, path: &str) -> Option<String> {
-    let data = vfs.read(path).ok()?;
-    let req = String::from_utf8_lossy(&data).trim().to_string();
-    // Always clear so malformed input doesn't loop.
-    let _ = vfs.write(path, b"");
-    (!req.is_empty()).then_some(req)
-}
-
 /// Dispatch the preference IPC requests posted by the Settings app
 /// (volume, locale, font scale, reduced motion, high contrast). Applies
 /// each change live and persists it. Returns `true` when anything changed
 /// (the caller then republishes the runtime state).
 pub fn poll_prefs_ipc(state: &mut AppState, sdi: &mut SdiRegistry, vfs: &mut MemoryVfs) -> bool {
-    use oasis_apps::settings as s;
+    use oasis_apps::settings::HIGH_CONTRAST_SKIN;
+    use oasis_core::ipc as s;
     let mut changed = false;
 
     if let Some(req) = take_request(vfs, s::VOLUME_CHANGE_REQUEST_PATH) {
@@ -221,17 +214,17 @@ pub fn poll_prefs_ipc(state: &mut AppState, sdi: &mut SdiRegistry, vfs: &mut Mem
     if let Some(req) = take_request(vfs, s::HIGH_CONTRAST_REQUEST_PATH) {
         let current_skin = state.skin.manifest.name.clone();
         let target = if req == "on" {
-            if current_skin != s::HIGH_CONTRAST_SKIN {
+            if current_skin != HIGH_CONTRAST_SKIN {
                 state
                     .settings
                     .set_string(pref_keys::SKIN_BEFORE_HIGH_CONTRAST, current_skin.clone());
             }
-            s::HIGH_CONTRAST_SKIN.to_string()
+            HIGH_CONTRAST_SKIN.to_string()
         } else {
             state
                 .settings
                 .get_string(pref_keys::SKIN_BEFORE_HIGH_CONTRAST)
-                .filter(|n| *n != s::HIGH_CONTRAST_SKIN)
+                .filter(|n| *n != HIGH_CONTRAST_SKIN)
                 .unwrap_or("classic")
                 .to_string()
         };

@@ -1013,10 +1013,13 @@ fn handle_start_menu_action(
     vfs: &MemoryVfs,
 ) {
     match action {
+        // Any registered app, whether or not the skin's dashboard shows a
+        // tile for it (a lookup in the dashboard tiles dropped the pick
+        // silently otherwise).
         StartMenuAction::LaunchApp(title) => {
-            let app = state.ui.dashboard.apps.iter().find(|a| a.title == *title);
-            if let Some(app) = app.cloned() {
-                launch::launch(state, sdi, vfs, &app, LaunchOpts::USER);
+            if let Err(msg) = launch::open_by_title(state, sdi, vfs, title, None, LaunchOpts::USER)
+            {
+                log::warn!("start menu: {msg}");
             }
         },
         StartMenuAction::OpenTerminal => {

@@ -218,10 +218,6 @@ fn hermetic_skin_root() -> PathBuf {
     ))
 }
 
-/// Apply the skin's screen size to `config`: the skin's native size,
-/// PSP-native (480x272) skins scaled to 1280x720 unless they pin
-/// `desktop_width` / `desktop_height`, and a resolution picked in
-/// Settings wins over both.
 /// Whether the active skin's corrupted modifiers should distort this frame
 /// (the skin enables `corrupted`, intensity > 0, and the user has not asked
 /// for reduced motion).
@@ -234,6 +230,10 @@ fn corruption_active(state: &AppState) -> bool {
             .is_some_and(|m| m.is_active())
 }
 
+/// Apply the skin's screen size to `config`: the skin's native size,
+/// PSP-native (480x272) skins scaled to 1280x720 unless they pin
+/// `desktop_width` / `desktop_height`, and a resolution picked in
+/// Settings wins over both.
 pub fn resolve_screen_size(config: &mut OasisConfig, skin: &Skin, prefs: &UserPrefs) {
     config.screen_width = skin.manifest.screen_width;
     config.screen_height = skin.manifest.screen_height;

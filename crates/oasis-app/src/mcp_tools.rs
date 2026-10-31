@@ -13,7 +13,6 @@ use std::time::{Duration, Instant};
 use oasis_core::active_theme::ActiveTheme;
 use oasis_core::backend::{Color, SdiCore};
 use oasis_core::sdi::SdiRegistry;
-use oasis_core::terminal::Environment;
 use oasis_core::vfs::{MemoryVfs, Vfs};
 use oasis_mcp::{ToolDispatcher, ToolResult, ToolSpec, base64_encode};
 use serde_json::{Value, json};
@@ -290,42 +289,9 @@ impl AppDispatcher<'_> {
         let Some(command) = arg_str(args, "command") else {
             return ToolResult::error("missing required argument: command");
         };
-        let mut pending_skin = None;
-        let text = {
-            let AppState {
-                ref mut terminal,
-                ref mut content,
-                ref platform,
-                ref net,
-                ref skin,
-                ..
-            } = *self.state;
-            let mut env = Environment {
-                cwd: terminal.cwd.clone(),
-                vfs: &mut *self.vfs,
-                power: Some(platform),
-                time: Some(platform),
-                usb: Some(platform),
-                network: None,
-                tls: Some(&net.tls_provider),
-                stdin: None,
-                stderr: String::new(),
-            };
-            let result = terminal.cmd_reg.execute(&command, &mut env);
-            terminal.cwd = env.cwd;
-            crate::commands::format_remote_response(
-                result,
-                &mut content.browser,
-                skin,
-                self.sdi,
-                &mut pending_skin,
-            )
-        };
-        // A `skin` command resolved a new skin; apply it with the whole
-        // state at hand (see `format_remote_response`).
-        if let Some(new_skin) = pending_skin {
-            crate::commands::apply_skin_object(new_skin, self.state, self.sdi, self.vfs);
-        }
+        // Same path as the remote-terminal listener: server toggles are
+        // refused, a skin swap is applied to the whole shell.
+        let text = crate::commands::run_remote_command(&command, self.state, self.sdi, self.vfs);
         ToolResult::text(text)
     }
 
@@ -385,7 +351,7 @@ impl AppDispatcher<'_> {
                     .content
                     .open_runners
                     .iter()
-                    .any(|(_, r)| r.title == "TV Guide");
+                    .any(|(_, r)| r.title == oasis_apps::titles::TV_GUIDE);
                 if !guide_open {
                     return ToolResult::error(
                         "the TV Guide is not open (open_app 'TV Guide' first)",
@@ -435,25 +401,10 @@ impl AppDispatcher<'_> {
             Ok(px) => px,
             Err(e) => return ToolResult::error(format!("capture: {e}")),
         };
-        // Force alpha opaque (the framebuffer has no real transparency).
-        let mut opaque = rgba;
-        for px in opaque.as_chunks_mut::<4>().0 {
-            px[3] = 255;
+        match crate::ui_ipc::encode_png(&rgba, w, h) {
+            Ok(png_bytes) => ToolResult::image(base64_encode(&png_bytes), "image/png"),
+            Err(e) => ToolResult::error(format!("png encode: {e}")),
         }
-        let mut png_bytes: Vec<u8> = Vec::new();
-        {
-            let mut encoder = png::Encoder::new(&mut png_bytes, w, h);
-            encoder.set_color(png::ColorType::Rgba);
-            encoder.set_depth(png::BitDepth::Eight);
-            let mut writer = match encoder.write_header() {
-                Ok(wr) => wr,
-                Err(e) => return ToolResult::error(format!("png header: {e}")),
-            };
-            if let Err(e) = writer.write_image_data(&opaque) {
-                return ToolResult::error(format!("png encode: {e}"));
-            }
-        }
-        ToolResult::image(base64_encode(&png_bytes), "image/png")
     }
 }
 
