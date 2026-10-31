@@ -506,25 +506,32 @@ impl App for VideoEmbedApp {
             let bar_h = (SEARCH_BAR_H - 4) as u32;
             backend.fill_rect(bar_x, bar_y, bar_w, bar_h, at.app.selected_bg)?;
             let prompt = format!("Search: {}_", self.input_buf);
-            backend.draw_text(&prompt, bar_x + 4, bar_y + 4, at.font_body, at.app.text)?;
+            let right = bar_x + bar_w as i32 - 4;
+            let (x, size) = (bar_x + 4, at.font_body);
+            text_fit(backend, &prompt, x, bar_y + 4, size, at.app.text, right)?;
         }
 
+        let right = cx + cw as i32 - 4;
         match self.state {
             EmbedState::Search => {
                 let hint_y = cy + title_bar_h + SEARCH_BAR_H + 8;
-                backend.draw_text(
+                text_fit(
+                    backend,
                     "Type a search query, video id, or URL.",
                     cx + 8,
                     hint_y,
                     at.font_body,
                     at.app.text,
+                    right,
                 )?;
-                backend.draw_text(
+                text_fit(
+                    backend,
                     "Confirm = play / search   Cancel = back",
                     cx + 8,
                     hint_y + 14,
                     at.font_hint,
                     at.app.dim_text,
+                    right,
                 )?;
             },
             EmbedState::Results => {
@@ -535,19 +542,23 @@ impl App for VideoEmbedApp {
                 // placeholder behind it (most of it is hidden anyway).
                 let hint_y = cy + title_bar_h + 4;
                 let id = self.playing_video_id.as_deref().unwrap_or("");
-                backend.draw_text(
+                text_fit(
+                    backend,
                     &format!("Now playing: {id}"),
                     cx + 6,
                     hint_y,
                     at.font_body,
                     at.app.text,
+                    right,
                 )?;
-                backend.draw_text(
+                text_fit(
+                    backend,
                     "Cancel = back to results",
                     cx + 6,
                     cy + ch as i32 - 14,
                     at.font_hint,
                     at.app.dim_text,
+                    right,
                 )?;
             },
         }
@@ -571,43 +582,56 @@ fn draw_results_grid(
 ) -> Result<()> {
     let title_bar_h = TOP_PAD;
     let footer_y = cy + ch as i32 - FOOTER_H;
+    let right = cx + cw as i32 - 4;
+    let status_y = cy + title_bar_h + SEARCH_BAR_H + 8;
 
     match app.results.status {
         SearchStatus::Loading => {
-            backend.draw_text(
-                "Searching YouTube...",
+            let text = "Searching YouTube...";
+            text_fit(
+                backend,
+                text,
                 cx + 8,
-                cy + title_bar_h + SEARCH_BAR_H + 8,
+                status_y,
                 at.font_body,
                 at.app.text,
+                right,
             )?;
         },
         SearchStatus::Error => {
             let err = app.results.error.as_deref().unwrap_or("Search failed");
-            backend.draw_text(
-                &format!("Error: {err}"),
+            let text = format!("Error: {err}");
+            text_fit(
+                backend,
+                &text,
                 cx + 8,
-                cy + title_bar_h + SEARCH_BAR_H + 8,
+                status_y,
                 at.font_body,
                 at.app.text,
+                right,
             )?;
-            backend.draw_text(
+            text_fit(
+                backend,
                 "Press Cancel and try a different query.",
                 cx + 8,
-                cy + title_bar_h + SEARCH_BAR_H + 22,
+                status_y + 14,
                 at.font_hint,
                 at.app.dim_text,
+                right,
             )?;
         },
         SearchStatus::Idle => {},
         SearchStatus::Ready => {
             if app.results.results.is_empty() {
-                backend.draw_text(
-                    "No results.",
+                let text = "No results.";
+                text_fit(
+                    backend,
+                    text,
                     cx + 8,
-                    cy + title_bar_h + SEARCH_BAR_H + 8,
+                    status_y,
                     at.font_body,
                     at.app.text,
+                    right,
                 )?;
             } else {
                 let (start, end) = app.page_range();
@@ -693,7 +717,32 @@ fn draw_results_grid(
     } else {
         "Confirm=play  Cancel=back".to_string()
     };
-    backend.draw_text(&footer, cx + 6, footer_y, at.font_hint, at.app.dim_text)?;
+    let right = cx + cw as i32 - 4;
+    text_fit(
+        backend,
+        &footer,
+        cx + 6,
+        footer_y,
+        at.font_hint,
+        at.app.dim_text,
+        right,
+    )?;
+    Ok(())
+}
+
+/// Draw `text` at `(x, y)`, ellipsized so it ends before `right` (small
+/// windows and large-font skins must not draw past the window edge).
+fn text_fit(
+    backend: &mut dyn SdiBackend,
+    text: &str,
+    x: i32,
+    y: i32,
+    size: u16,
+    color: oasis_types::backend::Color,
+    right: i32,
+) -> Result<()> {
+    let max_w = right.saturating_sub(x).max(0) as u32;
+    backend.draw_text_ellipsis(text, x, y, size, color, max_w)?;
     Ok(())
 }
 
