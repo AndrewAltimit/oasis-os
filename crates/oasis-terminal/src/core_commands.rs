@@ -62,7 +62,7 @@ fn ls_lines(
             continue;
         }
         let shown = if e.kind == EntryKind::Directory {
-            format!("\u{1b}[94m{}/\u{1b}[0m", e.name)
+            crate::pipeline::dir_colored(&format!("{}/", e.name))
         } else {
             e.name.clone()
         };
@@ -253,7 +253,7 @@ define_command!(
                 Err(_) if force => continue,
                 Err(e) => return Err(e),
             };
-            if recursive && meta.kind == EntryKind::Directory {
+            if recursive && meta.kind == EntryKind::Directory && !env.vfs.is_symlink(&path) {
                 remove_tree(env.vfs, &path, 0)?;
             } else {
                 env.vfs.remove(&path)?;
@@ -277,7 +277,9 @@ fn remove_tree(vfs: &mut dyn oasis_vfs::Vfs, dir: &str, depth: usize) -> Result<
     }
     for entry in vfs.readdir(dir)? {
         let child = format!("{}/{}", dir.trim_end_matches('/'), entry.name);
-        if entry.kind == EntryKind::Directory {
+        // A link to a directory lists as a directory: remove the link,
+        // never the files of its target (as GNU `rm -r` does).
+        if entry.kind == EntryKind::Directory && !vfs.is_symlink(&child) {
             remove_tree(vfs, &child, depth + 1)?;
         } else {
             vfs.remove(&child)?;
