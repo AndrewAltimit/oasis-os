@@ -28,7 +28,9 @@ The plugin lifecycle is:
 A stopped plugin can be initialized again with `init_plugin` (the terminal's
 `plugin load` after `plugin unload`), so `init` must work after `shutdown`.
 The manager records the commands a plugin's `init` registers and the apps it
-registers, and removes both when the plugin stops.
+registers, and removes both when the plugin stops. If `init` returns an error
+the plugin stays inactive and the commands and apps it registered before
+failing are dropped too.
 
 **Desktop host:** the shell (`oasis-app/src/shell.rs`) initializes plugins
 into its real scene graph at boot, so SDI objects a plugin creates are drawn

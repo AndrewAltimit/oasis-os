@@ -1,7 +1,7 @@
 //! Per-frame VFS IPC plumbing for the WASM host: app requests and the
 //! `wm` / `open` terminal commands' window-manager queue.
 //!
-//! Mirrors the desktop shell (`oasis-app` `shell.rs` / `commands.rs`):
+//! Mirrors the desktop shell (`oasis-app` `shell.rs` / `commands/ipc.rs`):
 //!
 //! - Requests of apps that closed (or were replaced) during the frame are
 //!   carried out first, before those of the apps still open, because they

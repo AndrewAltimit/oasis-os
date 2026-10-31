@@ -128,7 +128,7 @@
 ├── read_pixels
 └── <span class="hl-dim">provided:</span> viewport_size
 
-<span class="hl-purple">SdiBackend</span> <span class="hl-dim">(marker: 8 extension traits, 46 default methods)</span>
+<span class="hl-purple">SdiBackend</span> <span class="hl-dim">(marker: 8 extension traits, 47 default methods)</span>
 ├── <span class="hl-accent">SdiShapes</span>        rounded rects, lines, circles, triangles, shadows
 ├── <span class="hl-accent">SdiGradients</span>     fill_rect_gradient, fill_rounded_rect_gradient
 ├── <span class="hl-accent">SdiText</span>          set_font, metrics, draw_text_styled / _wrapped
@@ -162,7 +162,7 @@
 
   <aside class="callout update" role="note">
     <div class="callout-title">Update (Oct 2026)</div>
-    <p>The diagram above shows the API as it is today; the paragraph above describes it as written in March. The trait definitions have since moved out of a single <code>backend.rs</code> into the <code>oasis-types/src/backend/</code> directory, one file per extension trait under <code>extensions/</code>. <code>SdiBackend</code> is now a marker over <strong>eight</strong> extension traits carrying <strong>46</strong> default methods: <code>SdiRenderTarget</code> (offscreen render targets) was added, and <code>SdiAlpha</code> was removed (<code>viewport_size</code> became a provided <code>SdiCore</code> method; translucent fills are <code>fill_rect</code> with an alpha color), as were the never-used <code>begin_batch</code> / <code>flush_batch</code> hooks. <code>current_clip_rect</code> returns <code>Option&lt;ClipRect&gt;</code>. The defaults are span-exact software implementations, so a backend still starts with the 13 core methods and overrides only what its hardware accelerates.</p>
+    <p>The diagram above shows the API as it is today; the paragraph above describes it as written in March. The trait definitions have since moved out of a single <code>backend.rs</code> into the <code>oasis-types/src/backend/</code> directory, one file per extension trait under <code>extensions/</code>. <code>SdiBackend</code> is now a marker over <strong>eight</strong> extension traits carrying <strong>47</strong> default methods: <code>SdiRenderTarget</code> (offscreen render targets) was added, and <code>SdiAlpha</code> was removed (<code>viewport_size</code> became a provided <code>SdiCore</code> method; translucent fills are <code>fill_rect</code> with an alpha color), as were the never-used <code>begin_batch</code> / <code>flush_batch</code> hooks. <code>current_clip_rect</code> returns <code>Option&lt;ClipRect&gt;</code>. The defaults are span-exact software implementations, so a backend still starts with the 13 core methods and overrides only what its hardware accelerates.</p>
   </aside>
 
 
@@ -394,10 +394,10 @@ graph TD
       <tbody>
         <tr><td>Crates</td><td>34 workspace</td><td>41 workspace + 10 PSP-target (51 dirs)</td></tr>
         <tr><td>UI widgets</td><td>32</td><td>27 <code>Widget</code> impls, plus ListView, MenuBar, NinePatch</td></tr>
-        <tr><td>Terminal</td><td>90+ commands</td><td>~95 commands + 20 shell builtins</td></tr>
+        <tr><td>Terminal</td><td>90+ commands</td><td>~95 commands + 21 shell builtins</td></tr>
         <tr><td>Skins</td><td>18</td><td>17, every one a TOML directory in <code>skins/</code></td></tr>
         <tr><td>Apps</td><td>16 (12 crates)</td><td>15 (10 <code>oasis-app-*</code> crates + Terminal + Browser)</td></tr>
-        <tr><td>SdiBackend default methods</td><td>39 (8 traits)</td><td>46 (8 traits)</td></tr>
+        <tr><td>SdiBackend default methods</td><td>39 (8 traits)</td><td>47 (8 traits)</td></tr>
       </tbody>
     </table></div>
   </aside>

@@ -94,7 +94,11 @@ at 1024 bytes (`listener.rs`); the client buffer caps at 16 KiB
    thousands of commands in one frame. `quit` and `exit` are intercepted and
    close the connection; nothing after them runs.
 4. The host runs each command and replies with
-   `send_response(conn_id, text)`, which queues the text plus a trailing
+   `send_response(conn_id, text)`. The desktop shell runs it through
+   `commands::run_remote_command` (the path MCP `run_command` uses too): the
+   shell's own command registry and working directory, with the server
+   toggles (`listen`, `remote`, `ftp`, `mcp-server`) answered
+   `Not available via remote.`. `send_response` queues the text plus a trailing
    `\n> ` prompt and writes it as the socket accepts it (a peer that lets
    more than 8 MiB back up is dropped).
 5. Connections idle beyond 300 s (`listener.rs`) are closed with

@@ -376,6 +376,13 @@ cargo clippy --workspace --exclude oasis-app --all-targets -- -D warnings
 cargo clippy -p oasis-app --no-default-features --features javascript,video-decode -- -D warnings
 ```
 
+The workspace clippy sees one feature resolution only. CI also checks the
+supported non-default feature sets (`oasis-app` without a video decoder, and
+`oasis-browser`, `oasis-core`, `oasis-video`, `oasis-app`, `oasis-ffi` with other
+features) via `scripts/ci-feature-clippy.sh`; run it in the CI container
+(`docker compose --profile ci run --rm rust-ci scripts/ci-feature-clippy.sh`),
+or pass `--list` to print the commands.
+
 Examples are built by `cargo test`; to build only them:
 `cargo build --examples -p oasis-skin -p oasis-backend-ue5 -p oasis-backend-sdl`.
 
@@ -419,7 +426,9 @@ ms_print massif.out.*
 ```
 
 `video-memprofile` prints machine-readable `PEAK_RSS_KB=` and `FRAME_COUNT=`
-lines for CI assertions.
+lines for CI assertions. Its RSS budgets (`--max-rss-kb N`, with `--loops N`
+for the leak test) run natively, not under massif: valgrind's own footprint
+would count towards the process RSS.
 
 ## Project structure
 

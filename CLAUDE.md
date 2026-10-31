@@ -86,7 +86,7 @@ The Rust steps run via `docker compose --profile ci run --rm rust-ci`; the PSP b
 
 **Memory analysis** (`memory-ci.yml`, separate workflow):
 - **ASAN** (AddressSanitizer) -- catches use-after-free, buffer overflow, leaks (~2x slowdown)
-- **Valgrind massif** -- heap profiling with peak memory assertions for video decode
+- **Valgrind massif** -- heap profiling of video decode (`video-memprofile`), plus a native peak-RSS gate (`--max-rss-kb`, run outside valgrind, whose own footprint would count) and a multi-loop leak test
 
 Both jobs are non-blocking on pull requests (`continue-on-error` there) and run on pushes to main, PRs touching `oasis-video`, `oasis-core`, `oasis-app`, `oasis-backend-sdl`, `oasis-backend-ue5`, `oasis-types`, `Cargo.toml`/`Cargo.lock` or the workflow itself, and `workflow_dispatch`.
 
@@ -134,7 +134,7 @@ oasis-types     (foundation: Color, Button, InputEvent, backend traits, error ty
 ├── oasis-backend-ue5  (software RGBA framebuffer for Unreal Engine 5; needs only oasis-types/-rasterize/-audio)
 └── oasis-core       (coordination only: dashboard, agent, plugin, script, terminal, AppRunner + AppRegistry; depends on oasis-app-core but on no app crate)
     ├── oasis-apps     (+ every oasis-app-* crate: `builtin_registry(&HostInfo)`, `tv` command, `TvGuideRunnerExt`; feature video-embed)
-    ├── oasis-app      (+ oasis-apps, oasis-backend-sdl, oasis-backend-ue5; lib `oasis_app::Shell` + headless e2e harness; binaries oasis-app, oasis-screenshot; features javascript, video-decode-ffmpeg (default) / video-decode (openh264), skin-dev, mcp)
+    ├── oasis-app      (+ oasis-apps, oasis-backend-sdl, oasis-backend-ue5; lib `oasis_app::Shell` + headless e2e harness; binaries oasis-app, oasis-screenshot, screenshot-tests (CI regression), e2e-tests (TV Guide pipeline); features javascript, video-decode-ffmpeg (default) / video-decode (openh264), skin-dev, mcp)
     ├── oasis-backend-wasm (+ oasis-apps; Canvas 2D + DOM input + `<audio>` playback; iframe overlay drives a Browser pane and a YouTube embed; YouTube search + thumbnail grid via Invidious; feature: wasm-youtube)
     ├── oasis-ffi      (+ oasis-backend-ue5; cdylib C-ABI for UE5 integration; features video-decode / video-decode-ffmpeg)
     ├── oasis-backend-psp  (in the workspace `exclude` list, PSP hardware; + oasis-app-tv-guide, oasis-browser[psp,javascript], oasis-js, oasis-shader, oasis-video[demux-lite])
@@ -176,7 +176,7 @@ URL for fresh 302 redirects. Full details in
 
 `oasis-types/src/backend/` defines the only abstraction boundary between core and platform (re-exported by `oasis-core`):
 - `SdiCore` -- required rendering (13 required methods: init, clear, blit, fill_rect, draw_text, swap_buffers, load_texture, destroy_texture, set_clip_rect, reset_clip_rect, measure_text, read_pixels, shutdown; plus the provided `viewport_size`, the bound surface's size)
-- `SdiBackend` -- a marker super-trait with no methods of its own. A blanket impl satisfies it for any type that implements `SdiCore` plus all eight extension traits: `SdiShapes`, `SdiGradients`, `SdiText`, `SdiTextures`, `SdiClipTransform`, `SdiVector`, `SdiBatch`, `SdiRenderTarget`. The extensions live under `oasis-types/src/backend/extensions/` (one file per trait, re-exported via `extensions/mod.rs`) and total 46 default-impl methods (shapes 8, gradients 2, text 7, textures 4, clip/transform 8, vector 6, batch 2, render targets 9). Mocks and null backends get all eight with one `oasis_types::impl_sdi_defaults!(T)` line (`impl_sdi_defaults!(T; except SdiShapes, ..)` skips the ones a type writes itself). The shape defaults emit `fill_rect` spans from the shared generators in `oasis_types::rasterize` (incl. `triangle_rows`, `stroke_rect_parts`), so they cover exactly the pixels SDL/UE5 draw (PSP and every mock rely on them). `SdiBatch` is `submit_rect_batch`/`submit_text_batch` for batched rect and text geometry submission (backends can override with GPU geometry calls). `current_clip_rect` returns `Option<ClipRect>`.
+- `SdiBackend` -- a marker super-trait with no methods of its own. A blanket impl satisfies it for any type that implements `SdiCore` plus all eight extension traits: `SdiShapes`, `SdiGradients`, `SdiText`, `SdiTextures`, `SdiClipTransform`, `SdiVector`, `SdiBatch`, `SdiRenderTarget`. The extensions live under `oasis-types/src/backend/extensions/` (one file per trait, re-exported via `extensions/mod.rs`) and total 47 default-impl methods (shapes 8, gradients 2, text 7, textures 4, clip/transform 9, vector 6, batch 2, render targets 9). Mocks and null backends get all eight with one `oasis_types::impl_sdi_defaults!(T)` line (`impl_sdi_defaults!(T; except SdiShapes, ..)` skips the ones a type writes itself). The shape defaults emit `fill_rect` spans from the shared generators in `oasis_types::rasterize` (incl. `triangle_rows`, `stroke_rect_parts`), so they cover exactly the pixels SDL/UE5 draw (PSP and every mock rely on them). `SdiBatch` is `submit_rect_batch`/`submit_text_batch` for batched rect and text geometry submission (backends can override with GPU geometry calls). `current_clip_rect` returns `Option<ClipRect>`.
 - `InputBackend` -- input polling (returns `Vec<InputEvent>`)
 - `NetworkBackend` -- TCP networking
 - `AudioBackend` -- audio playback
@@ -254,7 +254,7 @@ Key documentation files for agents and contributors. Read these for deeper conte
 
 ### Architecture & Design
 - [`docs/README.md`](docs/README.md) -- Index of every document under `docs/`
-- [`docs/design.md`](docs/design.md) -- Technical design document v3.0 (~830 lines: goals, layering, backend contract, platform notes; links to the subsystem docs)
+- [`docs/design.md`](docs/design.md) -- Technical design document v3.1 (~830 lines: goals, layering, backend contract, platform notes; links to the subsystem docs)
 - [`docs/browser-engine.md`](docs/browser-engine.md) -- Browser feature catalogue (HTTP, HTML, CSS, layout, fonts, chrome, JS bindings)
 - [`docs/javascript-engine.md`](docs/javascript-engine.md) -- QuickJS-NG integration and PSP cross-compile
 - [`docs/psp-architecture.md`](docs/psp-architecture.md) -- PSP two-binary split, GU, TLS 1.3, ME video decode
