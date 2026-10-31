@@ -123,6 +123,39 @@ fn archive_source_sends_request_and_parses_headers() {
 }
 
 #[test]
+fn request_targets_with_whitespace_or_controls_are_refused() {
+    // Nothing is written for a path / host that would split the request
+    // line (header injection); the source fails instead.
+    for (host, path) in [
+        ("h", "/a\r\nX-Injected: 1"),
+        ("h", "/a b"),
+        ("h\r\nX: 1", "/"),
+        ("h", "relative"),
+        ("", "/"),
+    ] {
+        let mut icecast = IcecastSource::new(Box::new(MockStream::new(Vec::new())), host, path);
+        assert!(icecast.poll().is_err(), "{host:?} {path:?}");
+        assert_eq!(icecast.state(), SourceState::Error);
+        let stream = Box::new(MockStream::new(Vec::new()));
+        let mut archive = ArchiveSource::new(stream, host, path, "T", "");
+        assert!(archive.poll().is_err(), "{host:?} {path:?}");
+        assert_eq!(archive.state(), SourceState::Error);
+    }
+    assert!(super::http::is_request_token("/ok?x=%20"));
+}
+
+#[test]
+fn archive_redirect_without_location_is_an_error() {
+    // Its body is an HTML stub, not audio.
+    let response = b"HTTP/1.1 302 Found\r\n\r\n<html>moved</html>".to_vec();
+    let mut src = ArchiveSource::new(Box::new(MockStream::new(response)), "h", "/p", "T", "");
+    src.poll().unwrap();
+    let err = src.poll().unwrap_err();
+    assert!(err.to_string().contains("HTTP 302"), "{err}");
+    assert_eq!(src.state(), SourceState::Error);
+}
+
+#[test]
 fn archive_source_metadata_on_first_chunk() {
     let mut response = b"HTTP/1.1 200 OK\r\n\r\n".to_vec();
     response.extend_from_slice(&[0xAA; 100]);

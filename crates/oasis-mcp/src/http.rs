@@ -223,7 +223,9 @@ fn reason_phrase(status: u16) -> &'static str {
         415 => "Unsupported Media Type",
         431 => "Request Header Fields Too Large",
         505 => "HTTP Version Not Supported",
-        _ => "OK",
+        // Every status the server sends is listed above; never call an
+        // unlisted (error) status "OK".
+        _ => "Unknown",
     }
 }
 

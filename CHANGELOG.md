@@ -164,6 +164,29 @@ larger changes by area. Breaking API changes are marked **(breaking)**.
 - Every page shares a new footer: Explore / Read / Project link columns (adding the crate
   map, changelog, releases and contributing guide) and a back-to-top row.
 
+### Media and networking (oasis-audio, oasis-video, oasis-net, oasis-mcp)
+
+- Internet radio refuses stream URLs, redirect `Location`s, hosts and paths
+  containing whitespace or control bytes (a CR / LF could inject request
+  headers); archive.org item identifiers outside `[A-Za-z0-9._-]` are
+  dropped; remote stream titles lose control characters before reaching
+  the status file. An archive 3xx without `Location` is an error, not audio.
+- A radio track shorter than the 32 KiB start buffer now plays instead of
+  being skipped silently.
+- WAV files with a sample rate outside 1-768 kHz are rejected, and the SFX
+  resampler caps its output, so a 1 Hz header can no longer exhaust memory.
+- MCP server: a `401` closes the connection (one token guess per connection;
+  pipelined guessing on a keep-alive connection is gone).
+- FTP server: `with_password("")` / `ftp start --password ""` means no
+  authentication on loopback (it used to lock every client out); `LIST`
+  shows control characters in file names as `?`.
+- TLS (rustls) streams no longer fail a `write` when the non-blocking
+  socket is momentarily full: the plaintext was already taken, so a caller
+  retrying used to send it twice. The queued ciphertext goes out on the next
+  read, write or `flush` (which TLS streams now implement).
+- oasis-video: one shared `avcC` parser for both demuxers, and the `moov`
+  read no longer allocates the header-declared size before reading.
+
 ## Unreleased -- overhaul (`overhaul/site-code-docs-2026-10`)
 
 A repository-wide cleanup: bug fixes from a full code review and an

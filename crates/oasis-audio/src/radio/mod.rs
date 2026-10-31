@@ -217,7 +217,9 @@ impl RadioManager {
         if let Some(ref meta) = chunk.metadata
             && !meta.title.is_empty()
         {
-            self.now_playing = meta.title.clone();
+            // Titles come from the remote (ICY blocks, archive.org JSON) and
+            // end up in the line-based status file: no control characters.
+            self.now_playing = meta.title.chars().filter(|c| !c.is_control()).collect();
         }
 
         self.audio_buf.write(&chunk.data);
@@ -393,6 +395,11 @@ impl RadioManager {
                     self.set_error(&format!("{e}"));
                     *source = None;
                 } else if ended {
+                    // A track shorter than BUFFER_THRESHOLD ends while still
+                    // buffering: play what arrived instead of dropping it.
+                    if self.state == RadioState::Buffering && self.audio_buf.available() > 0 {
+                        self.start_playback(backend)?;
+                    }
                     // Tell the backend no more data is coming so it can
                     // drain its decode-lookahead side buffer with a
                     // smaller threshold — otherwise the mid-stream

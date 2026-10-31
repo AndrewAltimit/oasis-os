@@ -19,6 +19,10 @@ const WAVE_FORMAT_PCM: u16 = 1;
 /// `fmt ` format tag whose real format is in the SubFormat GUID.
 const WAVE_FORMAT_EXTENSIBLE: u16 = 0xFFFE;
 
+/// Sample rates [`decode_wav`] accepts (Hz): from far below telephone
+/// quality to well above any studio rate.
+pub const SAMPLE_RATES: std::ops::RangeInclusive<u32> = 1_000..=768_000;
+
 /// Check if `data` starts with a RIFF/WAVE header.
 pub fn is_wav(data: &[u8]) -> bool {
     data.len() >= 12 && &data[0..4] == b"RIFF" && &data[8..12] == b"WAVE"
@@ -59,8 +63,10 @@ pub fn decode_wav(data: &[u8]) -> Option<WavData> {
     // bytes 12..13 = block align (skip)
     let bits_per_sample = u16_le(data, fmt_offset + 14);
 
-    // A 0 Hz rate would divide by zero in every player's position math.
-    if channels == 0 || channels > 2 || sample_rate == 0 {
+    // A 0 Hz rate would divide by zero in every player's position math; a
+    // 1 Hz one makes resampling to the output rate allocate 44100 samples
+    // per input sample, and one above `i32::MAX` wraps in the backends.
+    if channels == 0 || channels > 2 || !SAMPLE_RATES.contains(&sample_rate) {
         return None;
     }
     if bits_per_sample != 8 && bits_per_sample != 16 {
@@ -281,6 +287,11 @@ mod tests {
         assert!(decode_wav(&wav).is_none());
         let mut wav = make_wav(&[1, 2], 0, 1);
         assert!(decode_wav(&wav).is_none());
+        // Absurd rates are refused too (1 Hz: a 44100x resampling blow-up).
+        for rate in [1u32, 999, 768_001, u32::MAX] {
+            wav[24..28].copy_from_slice(&rate.to_le_bytes());
+            assert!(decode_wav(&wav).is_none(), "{rate} Hz");
+        }
         wav[24..28].copy_from_slice(&8000u32.to_le_bytes());
         assert!(decode_wav(&wav).is_some());
     }

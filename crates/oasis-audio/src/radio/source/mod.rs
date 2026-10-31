@@ -16,6 +16,8 @@ pub use archive::ArchiveSource;
 pub use icecast::IcecastSource;
 pub use vfs::VfsSource;
 
+pub(crate) use http::is_request_token;
+
 use oasis_types::error::Result;
 
 use super::icy::StreamMetadata;

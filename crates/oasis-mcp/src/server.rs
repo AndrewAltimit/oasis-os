@@ -454,7 +454,12 @@ fn refusal(status: u16, keep_alive: bool) -> Vec<u8> {
 const ALLOW: (&str, &str) = ("Allow", "POST, OPTIONS");
 
 /// Answer one complete request. Returns the response bytes and whether the
-/// connection stays open (a `403` always closes it).
+/// connection stays open.
+///
+/// A `403` always closes it, and so does a `401`: otherwise one keep-alive
+/// connection could pipeline hundreds of token guesses into every poll.
+/// Closing bounds a guesser to one attempt per accepted connection (and
+/// the server accepts one connection per poll).
 fn handle_http_request(
     req: &HttpRequest,
     disp: &mut dyn ToolDispatcher,
@@ -462,7 +467,7 @@ fn handle_http_request(
 ) -> (Vec<u8>, bool) {
     let keep_alive = req.head.keep_alive;
     if let Some(status) = gate(&req.head, token) {
-        let keep_alive = keep_alive && status != 403;
+        let keep_alive = keep_alive && !matches!(status, 401 | 403);
         return (refusal(status, keep_alive), keep_alive);
     }
     match req.head.method.as_str() {
@@ -742,6 +747,31 @@ mod tests {
         server.poll(&mut disp);
         let resp = last_http_response(&pipe);
         assert!(resp.starts_with("HTTP/1.1 401"));
+    }
+
+    #[test]
+    fn wrong_token_closes_the_connection() {
+        // Regression: a 401 kept the connection alive, so one client could
+        // pipeline a burst of token guesses into a single poll.
+        let mut input = Vec::new();
+        for guess in ["a", "b", "c", "sekret"] {
+            input.extend_from_slice(&post(
+                PING_BODY,
+                &format!("Content-Type: application/json\r\nAuthorization: Bearer {guess}\r\n"),
+            ));
+        }
+        let (mut server, pipe) = server_with(&input, Some("sekret"));
+        let mut disp = StubDispatcher;
+        for _ in 0..5 {
+            server.poll(&mut disp);
+        }
+        let out = String::from_utf8_lossy(&lock(&pipe).server_to_client).into_owned();
+        assert_eq!(out.matches("HTTP/1.1 401").count(), 1, "{out}");
+        assert!(
+            !out.contains("HTTP/1.1 200"),
+            "later guesses must not run: {out}"
+        );
+        assert!(out.contains("Connection: close"), "{out}");
     }
 
     #[test]

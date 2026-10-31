@@ -65,6 +65,30 @@ pub(super) fn headers_too_large() -> OasisError {
 /// socket accepts it on the first write.
 const REQUEST_WRITE_TIMEOUT: Duration = Duration::from_secs(10);
 
+/// Whether `s` can be placed in a request line or header value verbatim:
+/// non-empty and free of whitespace and control bytes.
+///
+/// Stream URLs come from station files, playlists and `Location` headers of
+/// remote servers; a CR, LF or space in one would otherwise end the request
+/// line early and let the URL inject request headers.
+pub(crate) fn is_request_token(s: &str) -> bool {
+    !s.is_empty() && s.bytes().all(|b| b > b' ' && b != 0x7F)
+}
+
+/// Build a `GET` request for `path` on `host` (both checked with
+/// [`is_request_token`]) with the given HTTP `version` and extra header
+/// lines (each ending in `\r\n`).
+pub(super) fn get_request(path: &str, host: &str, version: &str, headers: &str) -> Result<String> {
+    if !path.starts_with('/') || !is_request_token(path) || !is_request_token(host) {
+        return Err(OasisError::Backend(
+            format!("refusing malformed request target {host:?} {path:?}").into(),
+        ));
+    }
+    Ok(format!(
+        "GET {path} HTTP/{version}\r\nHost: {host}\r\n{headers}\r\n"
+    ))
+}
+
 /// Write a request to a non-blocking `stream`, retrying `WouldBlock`
 /// until [`REQUEST_WRITE_TIMEOUT`] elapses.
 pub(super) fn write_request(stream: &mut dyn NetworkStream, bytes: &[u8]) -> Result<()> {

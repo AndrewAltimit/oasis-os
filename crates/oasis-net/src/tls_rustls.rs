@@ -171,8 +171,19 @@ impl RustlsStream {
                 return Err(OasisError::Backend("TLS handshake timed out".into()));
             }
             if tls.wants_write() {
-                tls.write_tls(&mut adapter)
-                    .map_err(|e| OasisError::Backend(format!("TLS handshake write: {e}").into()))?;
+                match tls.write_tls(&mut adapter) {
+                    Ok(_) => {},
+                    // Socket send buffer full: retry after a short wait.
+                    Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => {
+                        std::thread::sleep(std::time::Duration::from_millis(1));
+                        continue;
+                    },
+                    Err(e) => {
+                        return Err(OasisError::Backend(
+                            format!("TLS handshake write: {e}").into(),
+                        ));
+                    },
+                }
             }
             if tls.wants_read() {
                 match tls.read_tls(&mut adapter) {
@@ -230,14 +241,7 @@ impl RustlsStream {
             // what rustls::StreamOwned::complete_io() does and prevents
             // deadlocks when the server is waiting for client messages
             // (e.g. post-handshake acknowledgments).
-            {
-                let mut adapter = IoAdapter::new(&mut *self.inner);
-                while self.tls.wants_write() {
-                    self.tls
-                        .write_tls(&mut adapter)
-                        .map_err(|e| OasisError::Backend(format!("TLS write_tls: {e}").into()))?;
-                }
-            }
+            self.flush_tls()?;
 
             let mut adapter = IoAdapter::new(&mut *self.inner);
 
@@ -268,6 +272,31 @@ impl RustlsStream {
             }
             // No plaintext yet -- TLS record may be incomplete, try reading more.
         }
+    }
+
+    /// Push queued ciphertext to the socket until rustls has none left or
+    /// the non-blocking socket is full. On `WouldBlock` the rest stays
+    /// queued inside rustls and goes out on the next read, write or flush,
+    /// so a full send buffer is never reported as a failed write (the
+    /// plaintext was already accepted, and a caller retrying it would send
+    /// it twice).
+    fn flush_tls(&mut self) -> Result<()> {
+        let mut adapter = IoAdapter::new(&mut *self.inner);
+        while self.tls.wants_write() {
+            match self.tls.write_tls(&mut adapter) {
+                // The socket took nothing: stop rather than spin.
+                Ok(0) => break,
+                Ok(_) => {},
+                Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => break,
+                Err(e) => {
+                    return Err(OasisError::Io(io::Error::new(
+                        e.kind(),
+                        format!("TLS write_tls: {e}"),
+                    )));
+                },
+            }
+        }
+        Ok(())
     }
 
     /// Drain any available plaintext from `tls.reader()` into
@@ -315,20 +344,26 @@ impl NetworkStream for RustlsStream {
     }
 
     fn write(&mut self, data: &[u8]) -> Result<usize> {
+        // Make room: ciphertext an earlier full socket left queued.
+        self.flush_tls()?;
         // Feed plaintext into rustls.
         let n = self
             .tls
             .writer()
             .write(data)
             .map_err(|e| OasisError::Backend(format!("TLS write: {e}").into()))?;
-
-        // Flush the resulting ciphertext to the network.
-        let mut adapter = IoAdapter::new(&mut *self.inner);
-        self.tls
-            .write_tls(&mut adapter)
-            .map_err(|e| OasisError::Backend(format!("TLS write_tls: {e}").into()))?;
-
+        if n == 0 && !data.is_empty() {
+            // rustls's buffer is full and the socket is not draining it.
+            return Err(OasisError::Io(io::ErrorKind::WouldBlock.into()));
+        }
+        // `n` bytes are accepted whatever the socket does next; what it
+        // cannot take now stays queued (see `flush_tls`).
+        self.flush_tls()?;
         Ok(n)
+    }
+
+    fn flush(&mut self) -> Result<()> {
+        self.flush_tls()
     }
 
     fn close(&mut self) -> Result<()> {
@@ -454,9 +489,9 @@ mod tests {
     // TcpNetworkStream: wraps TcpStream preserving WouldBlock errors
     // ---------------------------------------------------------------
 
-    /// Unlike [`StdNetworkStream`] which maps `WouldBlock` to `Ok(0)`,
-    /// this wrapper preserves the `WouldBlock` error kind so that
-    /// `IoAdapter` and `pull_plaintext` can distinguish timeout from EOF.
+    /// A raw `TcpStream` as a `NetworkStream` that keeps the `WouldBlock`
+    /// error kind (as `StdNetworkStream` does), so `IoAdapter` and
+    /// `pull_plaintext` can tell "no data yet" from EOF.
     struct TcpNetworkStream(TcpStream);
 
     impl NetworkStream for TcpNetworkStream {
@@ -1025,6 +1060,58 @@ mod tests {
 
         let _ = stream.close();
         let _ = handle.join();
+    }
+
+    /// Records writes; refuses them with `WouldBlock` while `blocked`.
+    struct FullSocket {
+        blocked: Arc<std::sync::atomic::AtomicBool>,
+        written: Arc<std::sync::Mutex<Vec<u8>>>,
+    }
+
+    impl NetworkStream for FullSocket {
+        fn read(&mut self, _buf: &mut [u8]) -> Result<usize> {
+            Err(OasisError::Io(io::ErrorKind::WouldBlock.into()))
+        }
+        fn write(&mut self, data: &[u8]) -> Result<usize> {
+            if self.blocked.load(std::sync::atomic::Ordering::SeqCst) {
+                return Err(OasisError::Io(io::ErrorKind::WouldBlock.into()));
+            }
+            self.written.lock().unwrap().extend_from_slice(data);
+            Ok(data.len())
+        }
+        fn close(&mut self) -> Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn test_full_socket_is_not_a_failed_write() {
+        // Regression: a `WouldBlock` from the socket while flushing
+        // ciphertext failed the whole `write`, although rustls had already
+        // taken the plaintext -- a caller retrying would send it twice.
+        let blocked = Arc::new(std::sync::atomic::AtomicBool::new(true));
+        let written = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let sni = ServerName::try_from("example.com").unwrap();
+        let tls = rustls::ClientConnection::new(Arc::clone(&SHARED_CONFIG), sni).unwrap();
+        let mut stream = RustlsStream {
+            tls,
+            inner: Box::new(FullSocket {
+                blocked: Arc::clone(&blocked),
+                written: Arc::clone(&written),
+            }),
+            plaintext_buf: VecDeque::new(),
+        };
+        // The ClientHello is queued and the socket refuses it.
+        assert!(stream.tls.wants_write());
+        assert_eq!(stream.write(b"GET / HTTP/1.1\r\n").unwrap(), 16);
+        assert!(stream.flush().is_ok());
+        assert!(written.lock().unwrap().is_empty());
+        assert!(stream.read(&mut [0u8; 16]).unwrap_err().is_would_block());
+        // Once the socket drains, the queued ciphertext goes out.
+        blocked.store(false, std::sync::atomic::Ordering::SeqCst);
+        stream.flush().unwrap();
+        assert!(!written.lock().unwrap().is_empty());
+        assert!(!stream.tls.wants_write());
     }
 
     #[test]
