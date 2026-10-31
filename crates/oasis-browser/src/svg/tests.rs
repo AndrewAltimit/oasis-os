@@ -434,7 +434,11 @@ fn group_transforms_compose_and_presentation_attributes_inherit() {
             ..
         } => {
             assert!(near(*cx, 16.0) && near(*cy, 27.0), "({cx}, {cy})");
-            assert_eq!(fill.as_color(), Some(Color::rgb(255, 0, 0)), "fill inherited");
+            assert_eq!(
+                fill.as_color(),
+                Some(Color::rgb(255, 0, 0)),
+                "fill inherited"
+            );
             assert_eq!(stroke.as_color(), Some(Color::rgb(0, 0, 255)));
             assert!(near(*stroke_width, 3.0));
         },
@@ -448,7 +452,11 @@ fn group_transforms_compose_and_presentation_attributes_inherit() {
     }
     match &svg.shapes[2] {
         SvgShape::Rect { fill, .. } => {
-            assert_eq!(fill.as_color(), Some(Color::rgb(0, 128, 0)), "own fill wins");
+            assert_eq!(
+                fill.as_color(),
+                Some(Color::rgb(0, 128, 0)),
+                "own fill wins"
+            );
         },
         other => panic!("{other:?}"),
     }
@@ -462,7 +470,10 @@ fn transform_attribute_functions() {
     let (x, y) = pt("scale(2 3)");
     assert!(near(x, 2.0) && near(y, 0.0));
     let (x, y) = pt("rotate(90)");
-    assert!(near(x, 0.0) && near(y, 1.0), "degrees, clockwise in y-down: ({x}, {y})");
+    assert!(
+        near(x, 0.0) && near(y, 1.0),
+        "degrees, clockwise in y-down: ({x}, {y})"
+    );
     // rotate(a cx cy) turns about (cx, cy).
     let (x, y) = parse_transform_attr("rotate(180 1 1)").apply(1.0, 0.0);
     assert!(near(x, 1.0) && near(y, 2.0), "({x}, {y})");
@@ -472,7 +483,15 @@ fn transform_attribute_functions() {
     let (x, y) = pt("translate(10, 0) scale(2)");
     assert!(near(x, 12.0) && near(y, 0.0), "({x}, {y})");
     // Malformed / unknown functions are the identity, never a panic.
-    for bad in ["", "skewX(30)", "matrix(1 2)", "translate(", "rotate)", "((((", "scale(NaN)"] {
+    for bad in [
+        "",
+        "skewX(30)",
+        "matrix(1 2)",
+        "translate(",
+        "rotate)",
+        "((((",
+        "scale(NaN)",
+    ] {
         let _ = parse_transform_attr(bad).apply(1.0, 1.0);
     }
     let (x, y) = pt("bogus(5) translate(1 1)");
@@ -509,13 +528,22 @@ fn defs_gradients_and_stops_parse_from_markup() {
             // Sorted by offset; stop-opacity folded into alpha.
             assert!(near(stops[0].offset, 0.0) && near(stops[1].offset, 1.0));
             assert_eq!(stops[0].color.r, 255);
-            assert!((126..=128).contains(&stops[0].color.a), "{:?}", stops[0].color);
+            assert!(
+                (126..=128).contains(&stops[0].color.a),
+                "{:?}",
+                stops[0].color
+            );
             assert_eq!(stops[1].color.b, 255);
         },
         other => panic!("linear gradient: {other:?} in {:?}", svg.defs),
     }
     match svg.defs.gradients.get("rg") {
-        Some(SvgGradientDef::Radial { r, stops, user_space, .. }) => {
+        Some(SvgGradientDef::Radial {
+            r,
+            stops,
+            user_space,
+            ..
+        }) => {
             assert!(near(*r, 0.5) && !*user_space);
             assert_eq!(stops.len(), 1);
             assert!(near(stops[0].offset, 0.2));
@@ -525,13 +553,19 @@ fn defs_gradients_and_stops_parse_from_markup() {
     assert_eq!(svg.shapes.len(), 2, "defs children are not drawn");
     match &svg.shapes[0] {
         SvgShape::Rect { fill, .. } => {
-            assert!(matches!(fill, SvgPaint::GradientRef(id) if id == "lg"), "{fill:?}");
+            assert!(
+                matches!(fill, SvgPaint::GradientRef(id) if id == "lg"),
+                "{fill:?}"
+            );
         },
         other => panic!("{other:?}"),
     }
     match &svg.shapes[1] {
         SvgShape::Circle { fill, .. } => {
-            assert!(matches!(fill, SvgPaint::GradientRef(id) if id == "rg"), "{fill:?}");
+            assert!(
+                matches!(fill, SvgPaint::GradientRef(id) if id == "rg"),
+                "{fill:?}"
+            );
         },
         other => panic!("{other:?}"),
     }
@@ -590,21 +624,26 @@ fn text_with_tspans_anchor_and_weight() {
            </svg>"#,
     );
     match &svg.shapes[..] {
-        [SvgShape::Text {
-            text,
-            text_anchor,
-            font_weight,
-            font_size,
-            spans,
-            ..
-        }] => {
+        [
+            SvgShape::Text {
+                text,
+                text_anchor,
+                font_weight,
+                font_size,
+                spans,
+                ..
+            },
+        ] => {
             assert_eq!(*text_anchor, TextAnchor::Middle);
             assert_eq!(*font_weight, 700);
             assert!(near(*font_size, 12.0));
             // Direct text only (here just whitespace); tspans are separate.
             assert_eq!(text, "");
             assert_eq!(spans.len(), 2, "{spans:?}");
-            assert_eq!((spans[0].text.as_str(), spans[1].text.as_str()), ("Hello", "world"));
+            assert_eq!(
+                (spans[0].text.as_str(), spans[1].text.as_str()),
+                ("Hello", "world")
+            );
             assert_eq!(spans[0].class.as_deref(), Some("a"));
         },
         other => panic!("{other:?}"),
@@ -652,7 +691,9 @@ fn group_scale_scales_shape_sizes() {
         other => panic!("{other:?}"),
     }
     match &s[2] {
-        SvgShape::Line { x2, stroke_width, .. } => {
+        SvgShape::Line {
+            x2, stroke_width, ..
+        } => {
             assert!(near(*x2, 2.0) && near(*stroke_width, 2.0));
         },
         other => panic!("{other:?}"),

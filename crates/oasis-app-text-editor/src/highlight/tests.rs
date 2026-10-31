@@ -392,7 +392,10 @@ fn css_kinds(line: &str, open: bool) -> (Vec<(&str, SyntaxKind)>, bool) {
 
 #[test]
 fn css_rule_tokens() {
-    let (k, open) = css_kinds("@media screen { .a { margin: 10px 50%; content: \"x\"; } }", false);
+    let (k, open) = css_kinds(
+        "@media screen { .a { margin: 10px 50%; content: \"x\"; } }",
+        false,
+    );
     assert!(!open);
     assert_eq!(k[0], ("@media", SyntaxKind::Keyword));
     assert!(k.contains(&("10px", SyntaxKind::Number)));
