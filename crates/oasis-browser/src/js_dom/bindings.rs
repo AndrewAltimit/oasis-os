@@ -26,6 +26,20 @@ pub(super) fn install_dom_bindings(
     dirty: &Option<SharedDirty>,
     freed: &FreedLog,
 ) -> JsResult<()> {
+    install_attribute_bindings(ctx, doc, dirty)?;
+    install_text_bindings(ctx, doc, dirty, freed)?;
+    install_tree_bindings(ctx, doc, dirty)?;
+    install_document_bindings(ctx, doc, dirty, freed)?;
+    install_html_bindings(ctx, doc, dirty, freed)?;
+    install_selector_and_style_bindings(ctx, doc, dirty)
+}
+
+/// Install the tag name and attribute get / set / remove helpers.
+fn install_attribute_bindings(
+    ctx: &Ctx<'_>,
+    doc: &SharedDoc,
+    dirty: &Option<SharedDirty>,
+) -> JsResult<()> {
     let globals = ctx.globals();
 
     // -- __oasis_tagname(nid) -> String --------------------------------
@@ -134,6 +148,17 @@ pub(super) fn install_dom_bindings(
             })?,
         )?;
     }
+    Ok(())
+}
+
+/// Install the text content helpers.
+fn install_text_bindings(
+    ctx: &Ctx<'_>,
+    doc: &SharedDoc,
+    dirty: &Option<SharedDirty>,
+    freed: &FreedLog,
+) -> JsResult<()> {
+    let globals = ctx.globals();
 
     // -- __oasis_text(nid) -> String ----------------------------------
     {
@@ -176,6 +201,16 @@ pub(super) fn install_dom_bindings(
             })?,
         )?;
     }
+    Ok(())
+}
+
+/// Install the child lists, `getElementById`, node creation and tree mutation helpers.
+fn install_tree_bindings(
+    ctx: &Ctx<'_>,
+    doc: &SharedDoc,
+    dirty: &Option<SharedDirty>,
+) -> JsResult<()> {
+    let globals = ctx.globals();
 
     // -- __oasis_children(nid) -> Vec<i32> ----------------------------
     {
@@ -324,6 +359,17 @@ pub(super) fn install_dom_bindings(
             )?,
         )?;
     }
+    Ok(())
+}
+
+/// Install the `document.body` and the title helpers.
+fn install_document_bindings(
+    ctx: &Ctx<'_>,
+    doc: &SharedDoc,
+    dirty: &Option<SharedDirty>,
+    freed: &FreedLog,
+) -> JsResult<()> {
+    let globals = ctx.globals();
 
     // -- __oasis_body() -> i32 ----------------------------------------
     {
@@ -371,6 +417,17 @@ pub(super) fn install_dom_bindings(
             })?,
         )?;
     }
+    Ok(())
+}
+
+/// Install the `innerHTML` get / set helpers.
+fn install_html_bindings(
+    ctx: &Ctx<'_>,
+    doc: &SharedDoc,
+    dirty: &Option<SharedDirty>,
+    freed: &FreedLog,
+) -> JsResult<()> {
+    let globals = ctx.globals();
 
     // -- __oasis_inner_html(nid) -> String -----------------------------
     {
@@ -447,6 +504,16 @@ pub(super) fn install_dom_bindings(
             })?,
         )?;
     }
+    Ok(())
+}
+
+/// Install the selectors and inline style helpers.
+fn install_selector_and_style_bindings(
+    ctx: &Ctx<'_>,
+    doc: &SharedDoc,
+    dirty: &Option<SharedDirty>,
+) -> JsResult<()> {
+    let globals = ctx.globals();
 
     // -- __oasis_query_selector(nid, sel) -> i32 ----------------------
     {
@@ -534,7 +601,6 @@ pub(super) fn install_dom_bindings(
             })?,
         )?;
     }
-
     Ok(())
 }
 

@@ -774,15 +774,27 @@ fn break_word_fragment(
     } = fragment
     {
         let chars: Vec<char> = text.chars().collect();
+        // Per-character advances, summed as a piece grows: re-measuring
+        // every candidate prefix was O(L^2), which a 100k-character
+        // `word-break: break-all` word (with zero-width glyphs, so it
+        // never breaks) turned into ~1e10 operations. The final piece
+        // is still measured whole below.
+        let font_px = style.font_size as u16;
+        let advances: Vec<f32> = chars
+            .iter()
+            .map(|c| measurer.measure_text(c.encode_utf8(&mut [0u8; 4]), font_px) as f32)
+            .collect();
         let mut pieces = Vec::new();
         let mut start = 0;
 
         while start < chars.len() {
             let mut end = start + 1;
+            let mut base = advances[start];
             // Greedily extend until the piece exceeds available width.
             while end < chars.len() {
-                let candidate: String = chars[start..=end].iter().collect();
-                let w = measure_word(&candidate, style.font_size, style.letter_spacing, measurer);
+                base += advances[end];
+                let gaps = (end - start) as f32;
+                let w = (base + style.letter_spacing * gaps).max(0.0);
                 if w > available_width && end > start + 1 {
                     break;
                 }
@@ -1102,6 +1114,36 @@ mod tests {
         lb.dimensions.content.x = 0.0;
         lb.dimensions.content.y = 0.0;
         lb
+    }
+
+    /// Regression: breaking a word re-measured every prefix (O(L^2)); a
+    /// long word whose glyphs measure 0 px never breaks, so it took
+    /// ~1e10 steps. Pieces still fit the width.
+    #[test]
+    fn break_word_fragment_is_linear() {
+        let m = FixedMeasurer;
+        let mut style = inline_style();
+        let frag = |text: String, style: &ComputedStyle| InlineFragment::Text {
+            text,
+            x: 0.0,
+            width: 0.0,
+            style: style.clone(),
+            node: None,
+            soft_hyphen: false,
+        };
+        let pieces = break_word_fragment(&frag("abcdefghij".repeat(4), &style), 100.0, &m);
+        assert!(pieces.len() > 1);
+        for p in &pieces {
+            if let InlineFragment::Text { width, .. } = p {
+                assert!(*width <= 100.0, "{width}");
+            }
+        }
+
+        style.letter_spacing = -50.0;
+        let start = std::time::Instant::now();
+        let pieces = break_word_fragment(&frag("x".repeat(100_000), &style), 100.0, &m);
+        assert_eq!(pieces.len(), 1);
+        assert!(start.elapsed() < std::time::Duration::from_secs(5));
     }
 
     // -- single line fitting in width ---------------------------------

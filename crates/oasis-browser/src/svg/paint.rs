@@ -35,6 +35,7 @@ pub fn paint_svg(
         vb_y,
         sx: scale_x,
         sy: scale_y,
+        pattern_depth: 0,
     };
 
     for shape in &svg.shapes {
@@ -52,7 +53,22 @@ pub(super) struct SvgTransform {
     vb_y: f32,
     sx: f32,
     sy: f32,
+    /// How many `<pattern>` fills enclose this paint. Bounded by
+    /// [`MAX_PATTERN_DEPTH`] so self-referencing patterns terminate.
+    pattern_depth: u8,
 }
+
+/// Deepest `<pattern>`-inside-`<pattern>` nesting painted. A pattern
+/// whose content fills with itself (`fill="url(#p)"` inside `#p`), or
+/// an A -> B -> A cycle, used to recurse until the stack overflowed.
+const MAX_PATTERN_DEPTH: u8 = 2;
+/// Most pattern tiles painted for one fill.
+const MAX_PATTERN_TILES: i64 = 4096;
+/// Half-extent of the screen-space square strokes are clipped to before
+/// they are stepped: a line to `x2="1e9"` used to issue ~1e9 rects.
+const STROKE_CLIP: f64 = 16_384.0;
+/// Longest `fill-rule: evenodd` outline triangulated by ear clipping.
+const MAX_EAR_CLIP_POINTS: usize = 2048;
 
 /// Paint a single SVG shape.
 pub(super) fn paint_shape(
@@ -61,7 +77,7 @@ pub(super) fn paint_shape(
     xf: &SvgTransform,
     defs: &SvgDefs,
 ) -> Result<()> {
-    let (ox, oy, vb_x, vb_y, sx, sy) = (xf.ox, xf.oy, xf.vb_x, xf.vb_y, xf.sx, xf.sy);
+    let (sx, sy) = (xf.sx, xf.sy);
     match shape {
         SvgShape::Rect {
             x,
@@ -74,8 +90,7 @@ pub(super) fn paint_shape(
             rx,
             opacity,
         } => {
-            let px = ox + ((x - vb_x) * sx) as i32;
-            let py = oy + ((y - vb_y) * sy) as i32;
+            let (px, py) = xf_point(*x, *y, xf);
             let pw = (width * sx) as u32;
             let ph = (height * sy) as u32;
             if pw == 0 || ph == 0 {
@@ -96,11 +111,6 @@ pub(super) fn paint_shape(
                         let grad = normalize_gradient_for_rect(grad, *x, *y, *width, *height);
                         paint_rect_gradient(backend, px, py, pw, ph, &grad, *opacity)?;
                     } else if let Some(pat) = defs.patterns.get(id.as_str()) {
-                        paint_pattern_fill(backend, px, py, pw, ph, pat, xf, defs, *opacity)?;
-                    }
-                },
-                SvgPaint::PatternRef(id) => {
-                    if let Some(pat) = defs.patterns.get(id.as_str()) {
                         paint_pattern_fill(backend, px, py, pw, ph, pat, xf, defs, *opacity)?;
                     }
                 },
@@ -130,8 +140,7 @@ pub(super) fn paint_shape(
             stroke_width,
             opacity,
         } => {
-            let px = ox + ((cx - vb_x) * sx) as i32;
-            let py = oy + ((cy - vb_y) * sy) as i32;
+            let (px, py) = xf_point(*cx, *cy, xf);
             let radius = (r * sx.min(sy)) as u16;
             if radius == 0 {
                 return Ok(());
@@ -154,15 +163,16 @@ pub(super) fn paint_shape(
             stroke_width,
             opacity,
         } => {
-            let erx = (rx * sx) as i32;
-            let ery = (ry * sy) as i32;
-            let px = ox + ((cx - vb_x) * sx) as i32 - erx;
-            let py = oy + ((cy - vb_y) * sy) as i32 - ery;
-            let pw = (erx * 2) as u32;
-            let ph = (ery * 2) as u32;
-            if pw == 0 || ph == 0 {
+            // Clamped so `2 * r` and `centre - r` stay in range; a
+            // negative radius disables rendering (SVG 2 10.4).
+            let erx = ((rx * sx) as i32).clamp(0, i32::MAX / 4);
+            let ery = ((ry * sy) as i32).clamp(0, i32::MAX / 4);
+            if erx == 0 || ery == 0 {
                 return Ok(());
             }
+            let (cpx, cpy) = xf_point(*cx, *cy, xf);
+            let (px, py) = (cpx.saturating_sub(erx), cpy.saturating_sub(ery));
+            let (pw, ph) = (erx as u32 * 2, ery as u32 * 2);
             let r_val = (erx as u16).min(ery as u16);
             if let Some(fc) = fill.as_color() {
                 backend.fill_rounded_rect(px, py, pw, ph, r_val, apply_opacity(fc, *opacity))?;
@@ -193,28 +203,10 @@ pub(super) fn paint_shape(
                 Some(c) => apply_opacity(c, *opacity),
                 None => return Ok(()),
             };
-            let px1 = ox + ((x1 - vb_x) * sx) as i32;
-            let py1 = oy + ((y1 - vb_y) * sy) as i32;
-            let px2 = ox + ((x2 - vb_x) * sx) as i32;
-            let py2 = oy + ((y2 - vb_y) * sy) as i32;
+            let (px1, py1) = xf_point(*x1, *y1, xf);
+            let (px2, py2) = xf_point(*x2, *y2, xf);
             let sw = (stroke_width * sx.min(sy)).max(1.0) as u32;
-            let dx = (px2 - px1).abs();
-            let dy = (py2 - py1).abs();
-            if dx == 0 || dy == 0 {
-                let lx = px1.min(px2);
-                let ly = py1.min(py2);
-                let lw = (dx as u32).max(sw);
-                let lh = (dy as u32).max(sw);
-                backend.fill_rect(lx, ly, lw, lh, sc)?;
-            } else {
-                let steps = dx.max(dy);
-                for s in 0..=steps {
-                    let t = s as f32 / steps.max(1) as f32;
-                    let px = px1 + ((px2 - px1) as f32 * t) as i32;
-                    let py = py1 + ((py2 - py1) as f32 * t) as i32;
-                    backend.fill_rect(px, py, sw, sw, sc)?;
-                }
-            }
+            stroke_line_bresenham(backend, px1, py1, px2, py2, sw, sc)?;
         },
         SvgShape::Text {
             x,
@@ -238,8 +230,8 @@ pub(super) fn paint_shape(
                 full.push_str(&span.text);
             }
 
-            let mut px = ox + ((x - vb_x) * sx) as i32;
-            let py = oy + ((y - vb_y) * sy) as i32 - scaled_fs as i32;
+            let (mut px, py) = xf_point(*x, *y, xf);
+            let py = py.saturating_sub(i32::from(scaled_fs));
 
             // text-anchor adjustment.
             match text_anchor {
@@ -325,10 +317,13 @@ pub(super) fn paint_shape(
 }
 
 /// Transform a point from SVG viewBox coordinates to screen pixels.
+///
+/// Saturating: hostile coordinates (`1e30`) pin to the `i32` range
+/// instead of overflowing.
 pub(super) fn xf_point(x: f32, y: f32, xf: &SvgTransform) -> (i32, i32) {
     (
-        xf.ox + ((x - xf.vb_x) * xf.sx) as i32,
-        xf.oy + ((y - xf.vb_y) * xf.sy) as i32,
+        xf.ox.saturating_add(((x - xf.vb_x) * xf.sx) as i32),
+        xf.oy.saturating_add(((y - xf.vb_y) * xf.sy) as i32),
     )
 }
 
@@ -355,7 +350,11 @@ pub(super) fn paint_polygon_shape(
     match fill {
         SvgPaint::Color(fc) => {
             let fc = apply_opacity(*fc, opacity);
-            if fill_rule == FillRule::EvenOdd && screen_pts.len() >= 3 {
+            // Ear clipping is O(n^3) worst case; long outlines fall back
+            // to the backend's polygon fill.
+            if fill_rule == FillRule::EvenOdd
+                && (3..=MAX_EAR_CLIP_POINTS).contains(&screen_pts.len())
+            {
                 let float_pts: Vec<(f32, f32)> = screen_pts
                     .iter()
                     .map(|&(x, y)| (x as f32, y as f32))
@@ -379,13 +378,6 @@ pub(super) fn paint_polygon_shape(
                 let mid_color = sample_svg_gradient_at(grad, 0.5, opacity);
                 backend.fill_polygon(&screen_pts, mid_color)?;
             } else if let Some(pat) = defs.patterns.get(id.as_str())
-                && let Some((px, py, pw, ph)) = polygon_aabb(&screen_pts)
-            {
-                paint_pattern_fill(backend, px, py, pw, ph, pat, xf, defs, opacity)?;
-            }
-        },
-        SvgPaint::PatternRef(id) => {
-            if let Some(pat) = defs.patterns.get(id.as_str())
                 && let Some((px, py, pw, ph)) = polygon_aabb(&screen_pts)
             {
                 paint_pattern_fill(backend, px, py, pw, ph, pat, xf, defs, opacity)?;
@@ -708,13 +700,17 @@ pub(super) fn paint_pattern_fill(
         return Ok(());
     }
 
-    let cols = (w as i32 / tile_w) + 1;
-    let rows = (h as i32 / tile_h) + 1;
+    if parent_xf.pattern_depth >= MAX_PATTERN_DEPTH {
+        return Ok(());
+    }
+
+    let cols = (i64::from(w) / i64::from(tile_w) + 1).min(MAX_PATTERN_TILES);
+    let rows = (i64::from(h) / i64::from(tile_h) + 1).min((MAX_PATTERN_TILES / cols).max(1));
 
     for row in 0..rows {
         for col in 0..cols {
-            let tile_x = x + col * tile_w;
-            let tile_y = y + row * tile_h;
+            let tile_x = (i64::from(x) + col * i64::from(tile_w)) as i32;
+            let tile_y = (i64::from(y) + row * i64::from(tile_h)) as i32;
             // Create a mini-transform for this tile.
             let tile_xf = SvgTransform {
                 ox: tile_x,
@@ -723,6 +719,7 @@ pub(super) fn paint_pattern_fill(
                 vb_y: 0.0,
                 sx: parent_xf.sx,
                 sy: parent_xf.sy,
+                pattern_depth: parent_xf.pattern_depth + 1,
             };
             for shape in &pattern.shapes {
                 // Apply opacity to pattern contents.
@@ -770,6 +767,9 @@ pub(super) fn stroke_line_bresenham(
     sw: u32,
     color: Color,
 ) -> Result<()> {
+    let Some((x1, y1, x2, y2)) = clip_segment(x1, y1, x2, y2) else {
+        return Ok(());
+    };
     let dx = (x2 - x1).abs();
     let dy = (y2 - y1).abs();
     if dx == 0 && dy == 0 {
@@ -790,4 +790,38 @@ pub(super) fn stroke_line_bresenham(
         }
     }
     Ok(())
+}
+
+/// Clip a segment to the [`STROKE_CLIP`] square (Liang-Barsky), so a
+/// stroke is stepped only over the part that can reach a surface.
+/// `None` when the segment misses the square entirely.
+fn clip_segment(x1: i32, y1: i32, x2: i32, y2: i32) -> Option<(i32, i32, i32, i32)> {
+    let (x1f, y1f) = (f64::from(x1), f64::from(y1));
+    let (dx, dy) = (f64::from(x2) - x1f, f64::from(y2) - y1f);
+    let (mut t0, mut t1) = (0.0f64, 1.0f64);
+    for (p, q) in [
+        (-dx, x1f + STROKE_CLIP),
+        (dx, STROKE_CLIP - x1f),
+        (-dy, y1f + STROKE_CLIP),
+        (dy, STROKE_CLIP - y1f),
+    ] {
+        if p == 0.0 {
+            if q < 0.0 {
+                return None;
+            }
+        } else {
+            let r = q / p;
+            if p < 0.0 {
+                t0 = t0.max(r);
+            } else {
+                t1 = t1.min(r);
+            }
+            if t0 > t1 {
+                return None;
+            }
+        }
+    }
+    let at = |t: f64| ((x1f + dx * t).round() as i32, (y1f + dy * t).round() as i32);
+    let (a, b) = (at(t0), at(t1));
+    Some((a.0, a.1, b.0, b.1))
 }

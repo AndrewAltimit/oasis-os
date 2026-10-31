@@ -13,11 +13,16 @@ use crate::css::values::Dimension;
 /// `column_count` and `column_width` from the computed style determine
 /// the number and width of columns. Children are distributed across
 /// columns to balance total height.
+///
+/// Returns `false`, laying nothing out, when the box resolves to a
+/// single column (or has no children): the caller then runs normal
+/// block layout. (It used to return without laying out the children at
+/// all, so a one-column multicol box rendered empty at 0 px tall.)
 pub fn layout_multicol(
     container: &mut LayoutBox,
     _containing_width: f32,
     measurer: &dyn TextMeasurer,
-) {
+) -> bool {
     let content_width = container.dimensions.content.width;
     let content_x = container.dimensions.content.x;
     let content_y = container.dimensions.content.y;
@@ -31,7 +36,7 @@ pub fn layout_multicol(
 
     if num_cols <= 1 || container.children.is_empty() {
         // Fall back to normal block layout.
-        return;
+        return false;
     }
 
     let col_gap = container.style.column_gap;
@@ -100,6 +105,7 @@ pub fn layout_multicol(
         let max_h = col_heights.iter().copied().fold(0.0f32, f32::max);
         container.dimensions.content.height = max_h;
     }
+    true
 }
 
 /// Resolve the number of columns and column width from CSS properties.
@@ -206,7 +212,33 @@ mod tests {
             LayoutBox::new(BoxType::Block, style.clone(), None),
             LayoutBox::new(BoxType::Block, style, None),
         ];
-        layout_multicol(&mut container, 480.0, &M);
+        assert!(layout_multicol(&mut container, 480.0, &M));
         assert_eq!(container.dimensions.content.height, 10.0);
+    }
+
+    /// Regression: a box resolving to one column returned before laying
+    /// out its children, so they stayed unlaid at 0,0 and the box was
+    /// 0 px tall. It now falls back to block flow.
+    #[test]
+    fn single_column_multicol_lays_out_as_block() {
+        let child_style = crate::css::values::ComputedStyle {
+            height: Dimension::Px(30.0),
+            ..Default::default()
+        };
+        let mut root = LayoutBox::new(
+            BoxType::Block,
+            crate::css::values::ComputedStyle {
+                column_width: 1000.0,
+                ..Default::default()
+            },
+            None,
+        );
+        root.children = vec![
+            LayoutBox::new(BoxType::Block, child_style.clone(), None),
+            LayoutBox::new(BoxType::Block, child_style, None),
+        ];
+        crate::layout::block::layout_block(&mut root, 480.0, &crate::SimpleTextMeasurer);
+        assert_eq!(root.dimensions.content.height, 60.0);
+        assert_eq!(root.children[1].dimensions.content.y, 30.0);
     }
 }

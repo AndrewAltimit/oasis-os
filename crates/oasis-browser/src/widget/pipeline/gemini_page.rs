@@ -17,6 +17,14 @@ impl BrowserWidget {
     }
 
     /// Toggle reader mode on/off.
+    ///
+    /// Both directions rebuild the page through [`Self::load_html`]
+    /// (without a history entry), so every per-document cache — the
+    /// selector index over the page's author sheets, container lookups,
+    /// external sheets, the script engine, forms — is replaced together.
+    /// Swapping in only the reader DOM left the selector index of the
+    /// original page in place, and the next hover restyle indexed sheets
+    /// that no longer existed.
     pub fn toggle_reader_mode(&mut self) {
         if !self.config.features.reader_mode {
             return;
@@ -25,55 +33,25 @@ impl BrowserWidget {
         self.reader_mode = !self.reader_mode;
         self.nav.update_reader_mode(self.reader_mode);
 
+        let url = self.nav.current_url().unwrap_or("about:reader").to_string();
         if self.reader_mode {
-            // Extract article and re-render.
-            if let Some(doc) = &self.document
-                && let Some(article) = reader::extract_article(doc)
-            {
+            if let Some(article) = self.document.as_ref().and_then(reader::extract_article) {
                 self.reader_html = Some(article.html.clone());
-                // Re-parse the reader HTML.
-                let url = self.nav.current_url().unwrap_or("about:reader").to_string();
-                let tokens = html::tokenizer::Tokenizer::new(&article.html).tokenize();
-                let reader_doc = html::tree_builder::TreeBuilder::build(tokens);
-                let ua_sheet = css::default::default_stylesheet();
-                let reader_ctx = css::cascade::CascadeContext {
-                    hover_node: None,
-                    visited_urls: Some(&self.visited_urls),
-                    focused_node: None,
-                    containers: None,
-                    global_layers: None,
-                };
-                let styles = css::cascade::style_tree(&reader_doc, &[ua_sheet], &[], &reader_ctx);
-                let href_map = Self::build_link_map(&reader_doc);
-                self.cached_author_sheets = Vec::new();
-                self.cached_author_sheet_positions = Vec::new();
-                self.cached_inline_styles = Vec::new();
-                self.external_stylesheets = Vec::new();
-                self.external_stylesheet_positions = Vec::new();
-                self.clear_node_references();
-                self.document = Some(reader_doc);
-                self.styles = styles;
-                self.href_map = href_map;
-                self.layout_root = None;
-                self.link_map.clear();
-                self.scroll.reset();
+                self.skip_nav_push = true;
+                self.load_html(&article.html, &url);
                 self.selected_link = -1;
                 self.nav.update_title(&format!("Reader: {}", article.title));
-                let _ = url; // suppress unused warning
             }
         } else {
-            // Restore original page by re-navigating.
+            // Restore the original page from the cache.
             self.reader_html = None;
-            if let Some(url) = self.nav.current_url() {
-                let url = url.to_string();
-                // Re-parse original from cache if available.
-                if let Some(entry) = self.cache.get(&url) {
-                    let body = entry.response.body.clone();
-                    let ct = entry.response.content_type;
-                    if ct == ContentType::Html || ct == ContentType::PlainText {
-                        let text = html_for_text_body(ct, &body);
-                        self.load_html(&text, &url);
-                    }
+            if let Some(entry) = self.cache.get(&url) {
+                let body = entry.response.body.clone();
+                let ct = entry.response.content_type;
+                if ct == ContentType::Html || ct == ContentType::PlainText {
+                    let text = html_for_text_body(ct, &body);
+                    self.skip_nav_push = true;
+                    self.load_html(&text, &url);
                 }
             }
         }
@@ -85,7 +63,9 @@ impl BrowserWidget {
 fn gemini_to_html(doc: &gemini::parser::GeminiDocument) -> String {
     let mut html = String::from("<html><head><title>");
     if let Some(title) = doc.title() {
-        html.push_str(title);
+        // Escaped like every other line: a `# </title><script>` heading
+        // must not become markup.
+        push_escaped(&mut html, title);
     }
     html.push_str("</title></head><body>");
 

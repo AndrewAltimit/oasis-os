@@ -997,6 +997,64 @@ mod tests {
         assert_eq!(mgr.get_value(fid, "q"), Some(""));
     }
 
+    /// Regression: Enter in a field (the PSP's main submit path) skipped
+    /// validation, so an empty `required` form was submitted.
+    #[test]
+    fn keyboard_submit_runs_validation() {
+        let mut mgr = FormManager::new();
+        let fid = mgr.add_form("/", FormMethod::Get);
+        mgr.add_element(
+            fid,
+            FormElement::TextInput {
+                name: "q".into(),
+                value: String::new(),
+                placeholder: String::new(),
+                maxlength: None,
+                input_type: InputType::Text,
+                required: true,
+                minlength: None,
+                pattern: None,
+                min: None,
+                max: None,
+            },
+        );
+        mgr.focus_element(fid, "q");
+        assert_eq!(mgr.handle_input(FormKey::Enter), FormAction::None);
+        assert!(!mgr.validation_errors.is_empty());
+
+        mgr.set_value(fid, "q", "ok");
+        assert!(matches!(
+            mgr.handle_input(FormKey::Enter),
+            FormAction::Submit(_)
+        ));
+        assert!(mgr.validation_errors.is_empty());
+    }
+
+    /// Regression: Enter in a `<textarea>` submitted the form, so a
+    /// newline could never be typed.
+    #[test]
+    fn enter_in_textarea_inserts_a_newline() {
+        let mut mgr = FormManager::new();
+        let fid = mgr.add_form("/", FormMethod::Get);
+        mgr.add_element(
+            fid,
+            FormElement::TextArea {
+                name: "t".into(),
+                value: "a".into(),
+                rows: 2,
+                cols: 20,
+                placeholder: String::new(),
+                required: false,
+                minlength: None,
+                maxlength: None,
+            },
+        );
+        mgr.focus_element(fid, "t");
+        assert_eq!(mgr.handle_input(FormKey::Enter), FormAction::ValueChanged);
+        mgr.handle_input(FormKey::Char('b'));
+        assert_eq!(mgr.get_value(fid, "t"), Some("a\nb"));
+    }
+
     // -- URL encoding ---------------------------------------------------
 
     #[test]

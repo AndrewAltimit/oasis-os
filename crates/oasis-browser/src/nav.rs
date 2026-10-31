@@ -6,6 +6,9 @@
 
 use crate::html::escape::escape;
 
+/// Most back-history entries kept (older ones are dropped).
+pub const MAX_HISTORY: usize = 100;
+
 /// A single entry in the navigation history.
 #[derive(Debug, Clone)]
 pub struct BrowserHistoryEntry {
@@ -48,6 +51,11 @@ impl NavigationController {
     pub fn navigate(&mut self, url: &str, title: &str) {
         if let Some(entry) = self.current.take() {
             self.back_stack.push(entry);
+            // A script location loop navigates every tick; keep the
+            // most recent entries only.
+            if self.back_stack.len() > MAX_HISTORY {
+                self.back_stack.remove(0);
+            }
         }
         self.forward_stack.clear();
         self.current = Some(BrowserHistoryEntry {
@@ -242,6 +250,19 @@ mod tests {
         assert!(!html.contains("<script>"), "{html}");
         assert!(html.contains("&lt;/a&gt;&lt;script&gt;"), "{html}");
         assert!(html.contains("q=&quot;x&quot;"), "{html}");
+    }
+
+    /// Regression: the back stack grew without bound (a script
+    /// `location` loop navigates every tick).
+    #[test]
+    fn back_history_is_capped() {
+        let mut nav = NavigationController::new("about:home");
+        for i in 0..(MAX_HISTORY * 3) {
+            nav.navigate(&format!("https://a.test/{i}"), "p");
+        }
+        assert_eq!(nav.back_stack.len(), MAX_HISTORY);
+        let prev = nav.go_back().expect("has history");
+        assert_eq!(prev.url, format!("https://a.test/{}", MAX_HISTORY * 3 - 2));
     }
 
     #[test]

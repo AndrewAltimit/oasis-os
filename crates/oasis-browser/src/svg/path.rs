@@ -13,6 +13,7 @@ pub(super) fn parse_point_list(s: &str) -> Vec<(f32, f32)> {
         .split(|c: char| c == ',' || c.is_ascii_whitespace())
         .filter(|p| !p.is_empty())
         .filter_map(|p| p.parse::<f32>().ok())
+        .map(clamp_coord)
         .collect();
     nums.as_chunks::<2>()
         .0
@@ -183,7 +184,7 @@ pub(super) fn tokenize_path(d: &str) -> Vec<PathToken> {
         }
         if i > start {
             if let Ok(n) = d[start..i].parse::<f32>() {
-                tokens.push(PathToken::Num(n));
+                tokens.push(PathToken::Num(clamp_coord(n)));
             }
         } else {
             i += 1; // skip unparseable
@@ -336,6 +337,24 @@ pub(crate) fn flatten_cubic(
 /// pathological coordinates.
 pub(super) const MAX_FLATTEN_DEPTH: u8 = 16;
 
+/// Total points one flattened path may hold. Past it, curves are
+/// emitted as straight segments: 1000 curves with `1e30` control
+/// points each subdivided to the full depth (~65k points apiece).
+pub(crate) const MAX_PATH_POINTS: usize = 1 << 16;
+
+/// Largest coordinate magnitude kept from path data. `1e39` parses to
+/// infinity, whose NaN differences defeat the flatness test; clamping
+/// (rather than dropping) keeps the command's argument count intact.
+const MAX_COORD: f32 = 1e7;
+
+fn clamp_coord(n: f32) -> f32 {
+    if n.is_nan() {
+        0.0
+    } else {
+        n.clamp(-MAX_COORD, MAX_COORD)
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(super) fn flatten_cubic_inner(
     points: &mut Vec<(f32, f32)>,
@@ -355,7 +374,11 @@ pub(super) fn flatten_cubic_inner(
     let d = ((x1 - x3) * dy - (y1 - y3) * dx).abs() + ((x2 - x3) * dy - (y2 - y3) * dx).abs();
     let len_sq = dx * dx + dy * dy;
     // Tolerance: 0.5 pixels.
-    if d * d <= 0.25 * len_sq || len_sq < 1.0 || depth >= MAX_FLATTEN_DEPTH {
+    if d * d <= 0.25 * len_sq
+        || len_sq < 1.0
+        || depth >= MAX_FLATTEN_DEPTH
+        || points.len() >= MAX_PATH_POINTS
+    {
         points.push((x3, y3));
         return;
     }

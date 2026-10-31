@@ -3773,3 +3773,213 @@ mod tls_lifetime {
         assert!(b_dropped.load(Ordering::SeqCst));
     }
 }
+
+// ---------------------------------------------------------------
+// Injection / reader-mode regressions
+// ---------------------------------------------------------------
+
+/// Whether the loaded document holds a `<script>` element.
+fn has_script_element(browser: &BrowserWidget) -> bool {
+    let doc = browser.document.as_ref().expect("document");
+    (0..doc.nodes.len()).any(|id| {
+        doc.element(id)
+            .is_some_and(|e| e.tag == html::dom::TagName::Script)
+    })
+}
+
+/// Regression: the Gemini title went into `<title>` unescaped, so a
+/// `# </title><script>` heading became live markup.
+#[test]
+fn gemini_title_is_escaped() {
+    let mut browser = make_browser();
+    browser.load_gemini("# </title><script>x()</script>\nbody", "gemini://g/");
+    assert!(!has_script_element(&browser));
+}
+
+/// Regression: a stylesheet opened directly was wrapped in `<pre>`
+/// unescaped, so `</pre><script>` in it ran as page script.
+#[test]
+fn css_response_is_shown_escaped() {
+    let mut browser = make_browser();
+    browser.process_response(ResourceResponse {
+        url: "vfs://test/evil.css".to_string(),
+        content_type: ContentType::Css,
+        body: b"a{}</pre><script>x()</script>".to_vec(),
+        status: 200,
+    });
+    assert!(!has_script_element(&browser));
+}
+
+/// Regression: toggling reader mode swapped in the reader DOM but kept
+/// the original page's selector index, so the next hover restyle
+/// indexed author sheets that no longer existed (out-of-bounds panic),
+/// and the page stayed blank until something forced a relayout.
+#[test]
+fn reader_mode_toggle_then_hover_does_not_panic() {
+    let mut vfs = test_vfs();
+    vfs.write(
+        "/sites/home/styled.html",
+        b"<html><head><style>a{color:red} *:hover{color:blue}</style></head>\
+          <body><article>\
+          <p>This is a long enough paragraph to pass the minimum scoring \
+          threshold for reader mode extraction in the OASIS browser.</p>\
+          <p>And here is another paragraph with <a href=\"x\">a link</a> \
+          and plenty of text content for the scoring algorithm.</p>\
+          </article></body></html>",
+    )
+    .unwrap();
+    let mut browser = make_browser();
+    browser.set_window(0, 0, 480, 272);
+    browser.navigate_vfs("vfs://sites/home/styled.html", &vfs);
+    let mut backend = MockBackend::new();
+    browser.paint(&mut backend).unwrap();
+
+    browser.toggle_reader_mode();
+    assert!(browser.reader_mode);
+    assert!(browser.layout_root.is_some(), "reader page laid out");
+    assert_eq!(browser.current_url(), Some("vfs://sites/home/styled.html"));
+    browser.paint(&mut backend).unwrap();
+    for y in (40..200).step_by(8) {
+        browser.handle_input(&InputEvent::CursorMove { x: 40, y }, &vfs);
+    }
+    browser.paint(&mut backend).unwrap();
+
+    // Toggling back restores the page without a new history entry.
+    browser.toggle_reader_mode();
+    assert!(!browser.reader_mode);
+    assert!(!browser.nav.can_go_back(), "no history entry added");
+}
+
+// ---------------------------------------------------------------
+// Flexbox regressions (through the full parse -> cascade -> layout)
+// ---------------------------------------------------------------
+
+/// Lay out `html` in a 480 x 272 browser and return its layout root.
+fn layout_of(html: &str) -> layout::box_model::LayoutBox {
+    let mut browser = make_browser();
+    browser.set_window(0, 0, 480, 272);
+    browser.load_html(html, "vfs://flex");
+    browser.layout_root.expect("laid out")
+}
+
+/// The first box (pre-order) in `b`'s subtree matching `pred`.
+fn find_box<'a>(
+    b: &'a layout::box_model::LayoutBox,
+    pred: &dyn Fn(&layout::box_model::LayoutBox) -> bool,
+) -> Option<&'a layout::box_model::LayoutBox> {
+    if pred(b) {
+        return Some(b);
+    }
+    b.children.iter().find_map(|c| find_box(c, pred))
+}
+
+fn flex_box(root: &layout::box_model::LayoutBox) -> &layout::box_model::LayoutBox {
+    find_box(root, &|b| {
+        matches!(b.box_type, layout::box_model::BoxType::Flex)
+    })
+    .expect("flex box")
+}
+
+/// Regression: the container's padding was added to the content-box
+/// origin again (items sat `padding` too far in) and to its height.
+#[test]
+fn flex_padding_is_counted_once() {
+    let root = layout_of(
+        "<body style='margin:0'><div style='display:flex;padding:20px'>\
+         <div style='width:10px;height:10px'></div></div></body>",
+    );
+    let flex = flex_box(&root);
+    let item = &flex.children[0];
+    assert_eq!(item.dimensions.content.x, flex.dimensions.content.x);
+    assert_eq!(item.dimensions.content.y, flex.dimensions.content.y);
+    assert_eq!(flex.dimensions.content.height, 10.0);
+}
+
+/// Regression: row items with `width: auto` had a 0 px basis, so text
+/// broke one word per line and siblings overlapped at the same x.
+#[test]
+fn flex_auto_width_items_size_to_content() {
+    let root = layout_of(
+        "<body style='margin:0'><div style='display:flex'>\
+         <div>Hello world</div><div>Second</div></div></body>",
+    );
+    let flex = flex_box(&root);
+    let (a, b) = (&flex.children[0], &flex.children[1]);
+    assert!(
+        a.dimensions.content.width > 40.0,
+        "{}",
+        a.dimensions.content.width
+    );
+    assert!(b.dimensions.content.x >= a.dimensions.content.x + a.dimensions.content.width);
+    assert_eq!(flex.dimensions.content.height, 12.0, "one line of text");
+}
+
+/// Regression: a column container's auto height was the sum of its
+/// lines' *cross* sizes (item widths), not its items' heights; and an
+/// explicit height was never applied at all (0 px), so `align-items`
+/// had nothing to centre in.
+#[test]
+fn flex_container_heights() {
+    let root = layout_of(
+        "<body style='margin:0'><div style='display:flex;flex-direction:column'>\
+         <div style='height:30px;width:100px'></div>\
+         <div style='height:30px;width:100px'></div></div></body>",
+    );
+    assert_eq!(flex_box(&root).dimensions.content.height, 60.0);
+
+    let root = layout_of(
+        "<body style='margin:0'><div style='display:flex;height:100px;align-items:center'>\
+         <div style='width:10px;height:10px'></div></div></body>",
+    );
+    let flex = flex_box(&root);
+    assert_eq!(flex.dimensions.content.height, 100.0);
+    assert_eq!(flex.children[0].dimensions.content.y, 45.0);
+
+    let root = layout_of(
+        "<body style='margin:0'><div style='display:flex;flex-direction:column;height:100px'>\
+         <div style='flex-grow:1'>a</div><div style='height:20px'></div></div></body>",
+    );
+    let flex = flex_box(&root);
+    assert_eq!(flex.children[0].dimensions.content.height, 80.0);
+    assert_eq!(flex.children[1].dimensions.content.y, 80.0);
+}
+
+/// Regression: every flex level laid each item out twice in full, so
+/// nesting cost 2^depth leaf layouts (30 levels ~ 1e9).
+#[test]
+fn deeply_nested_flex_lays_out_quickly() {
+    let depth = 40;
+    let html = format!(
+        "<body>{}x{}</body>",
+        "<div style='display:flex'>".repeat(depth),
+        "</div>".repeat(depth)
+    );
+    let start = std::time::Instant::now();
+    let root = layout_of(&html);
+    assert!(root.dimensions.content.height > 0.0);
+    assert!(
+        start.elapsed() < std::time::Duration::from_secs(10),
+        "{:?}",
+        start.elapsed()
+    );
+}
+/// Regression: an all-inline flex container (a nav bar of links, or a
+/// bare text run) handed inline boxes to block layout as flex items,
+/// which sized each 0 x 0, so the links never rendered.
+#[test]
+fn inline_children_become_flex_items() {
+    let root = layout_of(
+        "<body style='margin:0'><div style='display:flex'>\
+         <a href='a'>One</a> <a href='b'>Two</a></div></body>",
+    );
+    let flex = flex_box(&root);
+    assert_eq!(
+        flex.children.len(),
+        2,
+        "whitespace between items is dropped"
+    );
+    let (a, b) = (&flex.children[0], &flex.children[1]);
+    assert!(a.dimensions.content.width > 0.0 && a.dimensions.content.height > 0.0);
+    assert!(b.dimensions.content.x >= a.dimensions.content.x + a.dimensions.content.width);
+    assert_eq!(flex.dimensions.content.height, 12.0);
+}

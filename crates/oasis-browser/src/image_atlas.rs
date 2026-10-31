@@ -16,8 +16,14 @@ use oasis_types::backend::{SdiBackend, TextureId};
 /// Maximum image dimension (width or height) eligible for atlas packing.
 pub const MAX_ATLAS_IMAGE_SIZE: u32 = 128;
 
-/// Default atlas texture size (width and height).
-const ATLAS_SIZE: u32 = 2048;
+/// Atlas page size (width and height). One page is `size^2 * 4` bytes
+/// of RAM plus the same in texture memory: 16 MiB at 2048, so the PSP
+/// (32 MB in all) uses 512 (1 MiB).
+const ATLAS_SIZE: u32 = if cfg!(feature = "psp") { 512 } else { 2048 };
+
+/// Most atlas pages kept; images that fit in none of them get their own
+/// texture (and so count against the image memory budget) instead.
+const MAX_ATLAS_PAGES: usize = if cfg!(feature = "psp") { 2 } else { 4 };
 
 /// A sub-region within an atlas texture.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -50,6 +56,9 @@ struct AtlasPage {
     pixels: Vec<u8>,
     /// Whether the pixel buffer has been modified since the last upload.
     dirty: bool,
+    /// The texture upload failed: the page is abandoned (its images
+    /// fall back to their own textures) rather than retried every frame.
+    failed: bool,
 }
 
 impl AtlasPage {
@@ -64,13 +73,14 @@ impl AtlasPage {
             row_height: 0,
             pixels: vec![0; size],
             dirty: false,
+            failed: false,
         }
     }
 
     /// Try to insert an image into this page. Returns the region on
     /// success, or `None` if there is not enough space.
     fn try_insert(&mut self, img_w: u32, img_h: u32, pixels: &[u8]) -> Option<AtlasRegion> {
-        if img_w == 0 || img_h == 0 {
+        if img_w == 0 || img_h == 0 || self.failed {
             return None;
         }
 
@@ -210,6 +220,9 @@ impl ImageAtlas {
         }
 
         // Create a new page.
+        if self.pages.len() >= MAX_ATLAS_PAGES {
+            return None;
+        }
         let mut page = AtlasPage::new(self.atlas_size, self.atlas_size);
         let region = page.try_insert(img_w, img_h, pixels)?;
         let idx = self.pages.len();
@@ -219,9 +232,20 @@ impl ImageAtlas {
     }
 
     /// Upload any dirty atlas pages to the GPU.
+    ///
+    /// A page whose upload fails is abandoned and its images dropped
+    /// from the atlas, so they fall back to individual textures; it used
+    /// to retry the whole-page upload every frame while `contains()`
+    /// kept those images from ever being drawn another way.
     pub fn upload_dirty(&mut self, backend: &mut dyn SdiBackend) {
-        for page in &mut self.pages {
-            page.upload(backend);
+        for (idx, page) in self.pages.iter_mut().enumerate() {
+            if page.failed || page.upload(backend).is_some() {
+                continue;
+            }
+            page.failed = true;
+            page.dirty = false;
+            page.pixels = Vec::new();
+            self.entries.retain(|_, (page_idx, _)| *page_idx != idx);
         }
     }
 
@@ -304,18 +328,18 @@ mod tests {
     #[test]
     fn row_wrap_when_full() {
         let mut atlas = ImageAtlas::new();
-        // Fill most of a row with 128px-wide images in a 2048-wide atlas.
-        // 2048 / 128 = 16 images per row.
+        // Fill a row with 128px-wide images.
+        let per_row = ATLAS_SIZE / 128;
         let pixels = vec![255u8; 4 * 128 * 64];
-        for i in 0..16 {
+        for i in 0..per_row {
             let url = format!("img{i}");
             let r = atlas.insert(&url, 128, 64, &pixels).unwrap();
-            assert_eq!(r.x, (i as u32) * 128);
+            assert_eq!(r.x, i * 128);
             assert_eq!(r.y, 0);
         }
 
-        // 17th image should wrap to the next row.
-        let r = atlas.insert("img16", 128, 64, &pixels).unwrap();
+        // The next image wraps to the next row.
+        let r = atlas.insert("next", 128, 64, &pixels).unwrap();
         assert_eq!(r.x, 0);
         assert_eq!(r.y, 64); // row_height of first row was 64
     }
@@ -352,5 +376,23 @@ mod tests {
         let mut atlas = ImageAtlas::new();
         let pixels = vec![255u8; 4 * 256 * 256];
         assert!(atlas.insert("big", 256, 256, &pixels).is_none());
+    }
+
+    /// Regression: atlas pages were never capped, so many distinct small
+    /// images kept adding 16 MiB pages outside the image memory budget.
+    #[test]
+    fn page_count_is_capped() {
+        let mut atlas = ImageAtlas::new();
+        let pixels = vec![255u8; 4 * 128 * 128];
+        let per_page = (ATLAS_SIZE / 128).pow(2) as usize;
+        let inserted = (0..per_page * (MAX_ATLAS_PAGES + 2))
+            .filter(|i| {
+                atlas
+                    .insert(&format!("img{i}"), 128, 128, &pixels)
+                    .is_some()
+            })
+            .count();
+        assert_eq!(inserted, per_page * MAX_ATLAS_PAGES);
+        assert_eq!(atlas.pages.len(), MAX_ATLAS_PAGES);
     }
 }

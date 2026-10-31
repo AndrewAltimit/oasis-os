@@ -12,6 +12,9 @@ use super::registry::{FontId, FontRegistry};
 /// Glyph cache key: (font_id, codepoint, size_tenths, r, g, b, a).
 type GlyphTexKey = (u32, char, u32, u8, u8, u8, u8);
 
+/// Most glyph textures [`GlyphTextureCache`] keeps before it is emptied.
+pub const MAX_GLYPH_TEXTURES: usize = 4096;
+
 /// Cache of uploaded glyph textures keyed by font, codepoint, size, and color.
 ///
 /// Textures are uploaded once and reused across frames until the cache
@@ -32,6 +35,14 @@ impl GlyphTextureCache {
         for (_, tex_id) in self.textures.drain() {
             let _ = backend.destroy_texture(tex_id);
         }
+    }
+
+    /// Empty the cache, handing its textures to `out` for destruction
+    /// later (navigation has no backend). Called when a page load
+    /// rebuilds the font registry: font ids restart at 0, so entries
+    /// keyed by the old ids would draw the previous page's glyphs.
+    pub fn clear_into(&mut self, out: &mut Vec<TextureId>) {
+        out.extend(self.textures.drain().map(|(_, tex)| tex));
     }
 
     /// Number of cached glyph textures.
@@ -102,6 +113,14 @@ pub fn render_web_font_text(
         let x_off = glyph.x_offset;
         let y_off = glyph.y_offset;
 
+        // Keys include the colour, so an animated colour mints a texture
+        // per glyph per step: past the cap, start over.
+        if tex_cache.textures.len() >= MAX_GLYPH_TEXTURES
+            && !tex_cache.textures.contains_key(&cache_key)
+        {
+            tex_cache.clear(backend);
+        }
+
         // Get or create glyph texture.
         if let std::collections::hash_map::Entry::Vacant(e) = tex_cache.textures.entry(cache_key)
             && glyph_w > 0
@@ -133,4 +152,28 @@ pub fn render_web_font_text(
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Regression: the glyph cache was never emptied, so after a page
+    /// load rebuilt the font registry (ids restart at 0) the next page
+    /// drew the previous page's glyphs, and textures leaked.
+    #[test]
+    fn clear_into_hands_back_every_texture() {
+        let mut cache = GlyphTextureCache::new();
+        cache
+            .textures
+            .insert((0, 'a', 120, 0, 0, 0, 255), TextureId(7));
+        cache
+            .textures
+            .insert((0, 'b', 120, 0, 0, 0, 255), TextureId(8));
+        let mut retired = Vec::new();
+        cache.clear_into(&mut retired);
+        assert!(cache.is_empty());
+        retired.sort_by_key(|t| t.0);
+        assert_eq!(retired, vec![TextureId(7), TextureId(8)]);
+    }
 }

@@ -1,5 +1,5 @@
 # viewport 480x272
-fill_rect 0, 0, 480, 4428, Color { r: 255, g: 255, b: 255, a: 255 }
+fill_rect 0, 0, 480, 1125, Color { r: 255, g: 255, b: 255, a: 255 }
 fill_rect 0, 0, 480, 35, Color { r: 53, g: 53, b: 53, a: 255 }
 draw_text "std", 16, 8, 13, Color { r: 221, g: 221, b: 221, a: 255 }
 fill_rect 46, 8, 6, 19, Color { r: 53, g: 53, b: 53, a: 255 }

@@ -80,9 +80,23 @@ pub(super) fn build_children(
     base_url: Option<&str>,
     image_info: &HashMap<String, (u32, u32)>,
 ) -> Vec<LayoutBox> {
+    // Whitespace-only text between block siblings is dropped; decide
+    // that once per sibling list (asking per text node walked every
+    // sibling each time: O(n^2) on long inline-only runs).
+    let block_siblings = children
+        .iter()
+        .any(|&c| matches!(&doc.get(c).kind, NodeKind::Element(e) if is_block_tag(&e.tag)));
     let mut boxes = Vec::with_capacity(children.len());
     for &child_id in children {
-        build_box_for_node(doc, child_id, styles, base_url, image_info, &mut boxes);
+        build_box_for_node(
+            doc,
+            child_id,
+            styles,
+            base_url,
+            image_info,
+            block_siblings,
+            &mut boxes,
+        );
     }
     boxes
 }
@@ -104,9 +118,10 @@ fn build_box_for_node(
     styles: &[Option<ComputedStyle>],
     base_url: Option<&str>,
     image_info: &HashMap<String, (u32, u32)>,
+    block_siblings: bool,
     out: &mut Vec<LayoutBox>,
 ) {
-    match begin_box_for_node(doc, node_id, styles, base_url, image_info) {
+    match begin_box_for_node(doc, node_id, styles, base_url, image_info, block_siblings) {
         BoxStart::Skip => {},
         BoxStart::Leaf(lb) => push_box(out, lb),
         BoxStart::Container {
@@ -127,7 +142,11 @@ fn build_box_for_node(
                 push_box(&mut child_boxes, after);
             }
 
-            lb.children = wrap_anonymous(child_boxes, &lb.style);
+            lb.children = if matches!(lb.box_type, BoxType::Flex | BoxType::Grid) {
+                wrap_flex_items(child_boxes, &lb.style)
+            } else {
+                wrap_anonymous(child_boxes, &lb.style)
+            };
             push_box(out, lb);
         },
     }
@@ -168,6 +187,7 @@ fn begin_box_for_node(
     styles: &[Option<ComputedStyle>],
     base_url: Option<&str>,
     image_info: &HashMap<String, (u32, u32)>,
+    block_siblings: bool,
 ) -> BoxStart {
     let node = doc.get(node_id);
 
@@ -311,11 +331,8 @@ fn begin_box_for_node(
             // them when they're between inline siblings so that
             // `<em>hello</em> <strong>world</strong>` preserves
             // the space.
-            if text.trim().is_empty() {
-                let dominated_by_blocks = has_block_sibling(doc, node_id);
-                if dominated_by_blocks {
-                    return BoxStart::Skip;
-                }
+            if text.trim().is_empty() && block_siblings {
+                return BoxStart::Skip;
             }
             let style = find_inherited_style(doc, node_id, styles);
             let mut inline_style = style;
@@ -561,32 +578,11 @@ fn resolve_img_src(base_url: Option<&str>, src: &str) -> String {
     }
 }
 
-/// Check if a text node's siblings include block-level elements.
-///
-/// When whitespace text sits between block elements (e.g.
-/// `<div>\n<p>text</p>\n</div>`), the whitespace is insignificant
-/// and should be dropped. When it sits between inline elements
-/// (e.g. `<em>a</em> <strong>b</strong>`), the space is significant.
-fn has_block_sibling(doc: &Document, node_id: NodeId) -> bool {
-    let parent_id = match doc.get(node_id).parent {
-        Some(p) => p,
-        None => return true,
-    };
-    let siblings = &doc.get(parent_id).children;
-    for &sib in siblings {
-        if sib == node_id {
-            continue;
-        }
-        if let NodeKind::Element(elem) = &doc.get(sib).kind
-            && is_block_tag(&elem.tag)
-        {
-            return true;
-        }
-    }
-    false
-}
-
 /// Returns true if the tag is normally block-level.
+///
+/// Whitespace text among block siblings (`<div>\n<p>text</p>\n</div>`)
+/// is insignificant and dropped; among inline siblings
+/// (`<em>a</em> <strong>b</strong>`) the space is significant.
 fn is_block_tag(tag: &TagName) -> bool {
     matches!(
         tag,
@@ -692,6 +688,75 @@ pub(super) fn wrap_anonymous(
     }
 
     result
+}
+
+/// Turn a flex or grid container's children into items (CSS Flexbox
+/// §4): each inline element child (`<a>`, `<span>`) is blockified into
+/// its own anonymous item carrying its flex properties, consecutive
+/// text runs share one, and whitespace-only runs are dropped. Without
+/// this an all-inline container (a nav bar of links) handed bare inline
+/// boxes to block layout, which sized each one 0 x 0.
+#[inline(never)]
+pub(super) fn wrap_flex_items(
+    children: Vec<LayoutBox>,
+    parent_style: &ComputedStyle,
+) -> Vec<LayoutBox> {
+    if !children
+        .iter()
+        .any(|c| matches!(c.box_type, BoxType::Inline))
+    {
+        return children;
+    }
+    let is_blank = |c: &LayoutBox| c.text.as_deref().is_some_and(|t| t.trim().is_empty());
+    let mut out = Vec::with_capacity(children.len());
+    let mut text_run: Vec<LayoutBox> = Vec::new();
+    let flush = |run: &mut Vec<LayoutBox>, out: &mut Vec<LayoutBox>| {
+        if !run.is_empty() && !run.iter().all(is_blank) {
+            out.push(anonymous_flex_item(std::mem::take(run), parent_style, None));
+        }
+        run.clear();
+    };
+    for child in children {
+        if !matches!(child.box_type, BoxType::Inline) {
+            flush(&mut text_run, &mut out);
+            out.push(child);
+        } else if child.text.is_some() {
+            text_run.push(child);
+        } else {
+            flush(&mut text_run, &mut out);
+            let item_style = child.style.clone();
+            out.push(anonymous_flex_item(
+                vec![child],
+                parent_style,
+                Some(&item_style),
+            ));
+        }
+    }
+    flush(&mut text_run, &mut out);
+    out
+}
+
+/// An anonymous block flex/grid item around `children`. Its flex
+/// properties are the blockified element's (`item`), or the initial
+/// values for a text run — never the container's own.
+fn anonymous_flex_item(
+    children: Vec<LayoutBox>,
+    parent_style: &ComputedStyle,
+    item: Option<&ComputedStyle>,
+) -> LayoutBox {
+    let mut lb = make_anonymous_block(children, parent_style);
+    let initial = ComputedStyle::default();
+    let src = item.unwrap_or(&initial);
+    lb.style.flex_grow = src.flex_grow;
+    lb.style.flex_shrink = src.flex_shrink;
+    lb.style.flex_basis = src.flex_basis;
+    lb.style.order = src.order;
+    lb.style.align_self = src.align_self;
+    lb.style.grid_column_start = src.grid_column_start.clone();
+    lb.style.grid_column_end = src.grid_column_end.clone();
+    lb.style.grid_row_start = src.grid_row_start.clone();
+    lb.style.grid_row_end = src.grid_row_end.clone();
+    lb
 }
 
 /// Create an anonymous block box wrapping the given inline children.

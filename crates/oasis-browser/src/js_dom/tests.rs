@@ -1141,6 +1141,83 @@ fn fetch_rejects_crlf_in_header_names_and_values() {
     );
 }
 
+/// Regression: `innerHTML` escaped the text of raw-text elements, so a
+/// `<style>` round trip turned `div > p` into `div &gt; p`; and names a
+/// script created that the parser never would were emitted raw, which
+/// re-parsed into real attributes.
+#[test]
+fn inner_html_keeps_raw_text_and_drops_unsafe_names() {
+    let engine = setup_page("https://example.com/", None, None);
+    let html = js_str(
+        &engine,
+        "var d = document.createElement('div'); \
+         var s = document.createElement('style'); \
+         s.textContent = 'div > p { color: red }'; \
+         d.appendChild(s); \
+         var p = document.createElement('p'); \
+         try { p.setAttribute('x onclick', 'f()'); } catch (e) {} \
+         p.textContent = 'a < b'; \
+         d.appendChild(p); \
+         d.innerHTML",
+    );
+    assert_eq!(html, "<style>div > p { color: red }</style><p>a &lt; b</p>");
+}
+
+/// [`MockTransport`] whose DNS answers every name with `addrs`.
+#[derive(Clone)]
+struct DnsTransport {
+    inner: MockTransport,
+    addrs: Vec<std::net::IpAddr>,
+}
+
+impl fetch::FetchTransport for DnsTransport {
+    fn resolve_host(&self, _host: &str) -> Vec<std::net::IpAddr> {
+        self.addrs.clone()
+    }
+
+    fn supports_https(&self) -> bool {
+        true
+    }
+
+    fn send(
+        &self,
+        req: &fetch::TransportRequest<'_>,
+        redirect_ok: &dyn Fn(&crate::loader::Url) -> bool,
+        addr_ok: &dyn Fn(std::net::IpAddr) -> bool,
+    ) -> Result<fetch::RawResponse, String> {
+        self.inner.send(req, redirect_ok, addr_ok)
+    }
+}
+
+/// Regression: the page's own network class was the *most* private of
+/// its DNS records, so `evil.test` publishing `[public, 127.0.0.1]`
+/// counted as a loopback page and could fetch loopback services.
+#[test]
+fn page_with_a_private_dns_record_cannot_reach_the_private_network() {
+    let inner = MockTransport::default();
+    let t = DnsTransport {
+        inner: inner.clone(),
+        addrs: vec![[203, 0, 113, 5].into(), [127, 0, 0, 1].into()],
+    };
+    let engine = JsEngine::new(32 * 1024 * 1024).unwrap();
+    let shared: SharedDoc = Rc::new(RefCell::new(sample_doc()));
+    let nav: SharedNavActions = Rc::new(RefCell::new(Vec::new()));
+    let url = "http://evil.test/";
+    engine
+        .with_context(|ctx| {
+            install_document_global_full(&ctx, &shared, url, &nav, None, None, None, None, None)?;
+            let handler = fetch::BrowserFetchHandler::new(url, None, Box::new(t.clone()));
+            oasis_js::fetch::bind_fetch_handler(&ctx, Box::new(handler))?;
+            Ok(())
+        })
+        .unwrap();
+    engine
+        .eval("fetch('http://127.0.0.1/admin').catch(function(e) { globalThis.err = e.name; })")
+        .unwrap();
+    assert_eq!(js_str(&engine, "err"), "TypeError");
+    assert!(inner.urls().is_empty(), "nothing was sent");
+}
+
 /// Transport double that asks the handler whether a redirect to `next`
 /// may be followed and records the verdict.
 struct RedirectProbe {

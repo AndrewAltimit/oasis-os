@@ -10,15 +10,15 @@ draw_text "Daily", 69, 8, 11, Color { r: 255, g: 255, b: 255, a: 255 }
 draw_text "•", -1, 24, 8, Color { r: 255, g: 255, b: 255, a: 255 }
 draw_text "Home", 8, 24, 8, Color { r: 238, g: 238, b: 238, a: 255 }
 fill_rect 8, 30, 29, 1, Color { r: 238, g: 238, b: 238, a: 255 }
-draw_text "•", 7, 24, 8, Color { r: 255, g: 255, b: 255, a: 255 }
-draw_text "AI", 16, 24, 8, Color { r: 238, g: 238, b: 238, a: 255 }
-fill_rect 16, 30, 14, 1, Color { r: 238, g: 238, b: 238, a: 255 }
-draw_text "•", 15, 24, 8, Color { r: 255, g: 255, b: 255, a: 255 }
-draw_text "Hardware", 24, 24, 8, Color { r: 238, g: 238, b: 238, a: 255 }
-fill_rect 24, 30, 57, 1, Color { r: 238, g: 238, b: 238, a: 255 }
-draw_text "•", 23, 24, 8, Color { r: 255, g: 255, b: 255, a: 255 }
-draw_text "About", 32, 24, 8, Color { r: 238, g: 238, b: 238, a: 255 }
-fill_rect 32, 30, 35, 1, Color { r: 238, g: 238, b: 238, a: 255 }
+draw_text "•", 31, 24, 8, Color { r: 255, g: 255, b: 255, a: 255 }
+draw_text "AI", 40, 24, 8, Color { r: 238, g: 238, b: 238, a: 255 }
+fill_rect 40, 30, 14, 1, Color { r: 238, g: 238, b: 238, a: 255 }
+draw_text "•", 51, 24, 8, Color { r: 255, g: 255, b: 255, a: 255 }
+draw_text "Hardware", 60, 24, 8, Color { r: 238, g: 238, b: 238, a: 255 }
+fill_rect 60, 30, 57, 1, Color { r: 238, g: 238, b: 238, a: 255 }
+draw_text "•", 107, 24, 8, Color { r: 255, g: 255, b: 255, a: 255 }
+draw_text "About", 116, 24, 8, Color { r: 238, g: 238, b: 238, a: 255 }
+fill_rect 116, 30, 35, 1, Color { r: 238, g: 238, b: 238, a: 255 }
 fill_rect 0, 44, 480, 81, Color { r: 204, g: 0, b: 0, a: 255 }
 draw_text "Major ", 16, 60, 16, Color { r: 255, g: 255, b: 255, a: 255 }
 draw_text "Major ", 17, 60, 16, Color { r: 255, g: 255, b: 255, a: 255 }

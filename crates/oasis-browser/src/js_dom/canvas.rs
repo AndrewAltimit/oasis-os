@@ -15,6 +15,19 @@ pub fn install_canvas_bindings(
     ctx: &Ctx<'_>,
     canvas_map: &crate::canvas::SharedCanvasMap,
 ) -> JsResult<()> {
+    install_canvas_rect_text_bindings(ctx, canvas_map)?;
+    install_canvas_shape_bindings(ctx, canvas_map)?;
+    install_canvas_path_bindings(ctx, canvas_map)?;
+    install_canvas_state_bindings(ctx, canvas_map)?;
+    install_canvas_class(ctx)?;
+    Ok(())
+}
+
+/// Install the rectangle, text and drawing-style helpers.
+fn install_canvas_rect_text_bindings(
+    ctx: &Ctx<'_>,
+    canvas_map: &crate::canvas::SharedCanvasMap,
+) -> JsResult<()> {
     let globals = ctx.globals();
 
     // -- __oasis_canvas_fill_rect(nid, x, y, w, h) -------------------
@@ -29,7 +42,7 @@ pub fn install_canvas_bindings(
                     if let Some(state) = map.get(&(nid as NodeId)) {
                         let mut s = state.borrow_mut();
                         let color = s.fill_color;
-                        s.commands.push(crate::canvas::CanvasCommand::FillRect {
+                        s.push_command(crate::canvas::CanvasCommand::FillRect {
                             x: x as f32,
                             y: y as f32,
                             w: w as f32,
@@ -55,7 +68,7 @@ pub fn install_canvas_bindings(
                         let mut s = state.borrow_mut();
                         let color = s.stroke_color;
                         let lw = s.line_width;
-                        s.commands.push(crate::canvas::CanvasCommand::StrokeRect {
+                        s.push_command(crate::canvas::CanvasCommand::StrokeRect {
                             x: x as f32,
                             y: y as f32,
                             w: w as f32,
@@ -80,7 +93,7 @@ pub fn install_canvas_bindings(
                     let map = m.borrow();
                     if let Some(state) = map.get(&(nid as NodeId)) {
                         let mut s = state.borrow_mut();
-                        s.commands.push(crate::canvas::CanvasCommand::ClearRect {
+                        s.push_command(crate::canvas::CanvasCommand::ClearRect {
                             x: x as f32,
                             y: y as f32,
                             w: w as f32,
@@ -105,7 +118,7 @@ pub fn install_canvas_bindings(
                         let mut s = state.borrow_mut();
                         let color = s.fill_color;
                         let font_size = s.font_size;
-                        s.commands.push(crate::canvas::CanvasCommand::FillText {
+                        s.push_command(crate::canvas::CanvasCommand::FillText {
                             text,
                             x: x as f32,
                             y: y as f32,
@@ -185,6 +198,15 @@ pub fn install_canvas_bindings(
             })?,
         )?;
     }
+    Ok(())
+}
+
+/// Install the line and arc helpers.
+fn install_canvas_shape_bindings(
+    ctx: &Ctx<'_>,
+    canvas_map: &crate::canvas::SharedCanvasMap,
+) -> JsResult<()> {
+    let globals = ctx.globals();
 
     // -- __oasis_canvas_line(nid, x1, y1, x2, y2, is_fill) -----------
     {
@@ -203,7 +225,7 @@ pub fn install_canvas_bindings(
                             s.stroke_color
                         };
                         let lw = s.line_width;
-                        s.commands.push(crate::canvas::CanvasCommand::Line {
+                        s.push_command(crate::canvas::CanvasCommand::Line {
                             x1: x1 as f32,
                             y1: y1 as f32,
                             x2: x2 as f32,
@@ -229,7 +251,7 @@ pub fn install_canvas_bindings(
                     if let Some(state) = map.get(&(nid as NodeId)) {
                         let mut s = state.borrow_mut();
                         let color = if fill { s.fill_color } else { s.stroke_color };
-                        s.commands.push(crate::canvas::CanvasCommand::Arc {
+                        s.push_command(crate::canvas::CanvasCommand::Arc {
                             cx: cx as f32,
                             cy: cy as f32,
                             r: r as f32,
@@ -241,6 +263,15 @@ pub fn install_canvas_bindings(
             )?,
         )?;
     }
+    Ok(())
+}
+
+/// Install the path-building and path fill / stroke helpers.
+fn install_canvas_path_bindings(
+    ctx: &Ctx<'_>,
+    canvas_map: &crate::canvas::SharedCanvasMap,
+) -> JsResult<()> {
+    let globals = ctx.globals();
 
     // -- __oasis_canvas_begin_path(nid) ---------------------------------
     {
@@ -268,7 +299,7 @@ pub fn install_canvas_bindings(
                 if let Some(state) = map.get(&(nid as NodeId)) {
                     let mut s = state.borrow_mut();
                     let pt = (x as f32, y as f32);
-                    s.current_path.push(pt);
+                    s.push_path_point(pt);
                     s.path_start = Some(pt);
                 }
             })?,
@@ -283,7 +314,7 @@ pub fn install_canvas_bindings(
             Function::new(ctx.clone(), move |nid: i32, x: f64, y: f64| {
                 let map = m.borrow();
                 if let Some(state) = map.get(&(nid as NodeId)) {
-                    state.borrow_mut().current_path.push((x as f32, y as f32));
+                    state.borrow_mut().push_path_point((x as f32, y as f32));
                 }
             })?,
         )?;
@@ -355,7 +386,7 @@ pub fn install_canvas_bindings(
                 if let Some(state) = map.get(&(nid as NodeId)) {
                     let mut s = state.borrow_mut();
                     if let Some(start) = s.path_start {
-                        s.current_path.push(start);
+                        s.push_path_point(start);
                     }
                 }
             })?,
@@ -374,8 +405,7 @@ pub fn install_canvas_bindings(
                     if s.current_path.len() >= 3 {
                         let color = s.fill_color;
                         let points = std::mem::take(&mut s.current_path);
-                        s.commands
-                            .push(crate::canvas::CanvasCommand::FillPath { points, color });
+                        s.push_command(crate::canvas::CanvasCommand::FillPath { points, color });
                     }
                     s.current_path.clear();
                     s.path_start = None;
@@ -397,7 +427,7 @@ pub fn install_canvas_bindings(
                         let color = s.stroke_color;
                         let lw = s.line_width;
                         let points = std::mem::take(&mut s.current_path);
-                        s.commands.push(crate::canvas::CanvasCommand::StrokePath {
+                        s.push_command(crate::canvas::CanvasCommand::StrokePath {
                             points,
                             color,
                             line_width: lw,
@@ -409,6 +439,15 @@ pub fn install_canvas_bindings(
             })?,
         )?;
     }
+    Ok(())
+}
+
+/// Install the save / restore helpers.
+fn install_canvas_state_bindings(
+    ctx: &Ctx<'_>,
+    canvas_map: &crate::canvas::SharedCanvasMap,
+) -> JsResult<()> {
+    let globals = ctx.globals();
 
     // -- __oasis_canvas_save(nid) / __oasis_canvas_restore(nid) -------
     {
@@ -435,13 +474,16 @@ pub fn install_canvas_bindings(
             })?,
         )?;
     }
+    Ok(())
+}
 
+/// Install the JS CanvasRenderingContext2D class (wrapping the helpers).
+fn install_canvas_class(ctx: &Ctx<'_>) -> JsResult<()> {
     // -- JavaScript CanvasRenderingContext2D class ---------------------
     #[cfg(feature = "canvas")]
     {
         let _: () = ctx.eval(JS_CANVAS_BOOTSTRAP)?;
     }
-
     Ok(())
 }
 

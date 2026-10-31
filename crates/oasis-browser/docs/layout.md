@@ -72,9 +72,11 @@ the `LayoutBox` tree by dispatching on each element's `display`:
 - `table` / `table-row` / `table-cell` → table layout
 - `none` → skipped entirely (no `LayoutBox` is created)
 
-Anonymous boxes are inserted as needed: an inline that ends up directly
-inside a `display: flex` is wrapped in an anonymous `Block`; a
-`<td>` outside a `<tr>` gets wrapped in an anonymous `TableRow`.
+Anonymous boxes are inserted as needed: inline children of a
+`display: flex` / `grid` container become anonymous `Block` items (one
+per inline element, carrying its flex / grid properties; one per text
+run; whitespace-only runs dropped); a `<td>` outside a `<tr>` gets
+wrapped in an anonymous `TableRow`.
 
 ## Block layout
 
@@ -127,8 +129,13 @@ which makes lookups effectively free for steady-state pages.
 - **Flex** (`flex.rs`) implements the CSS Flexible Box Module Level 1:
   `flex-direction`, `flex-wrap`, `justify-content`, `align-items`,
   `align-self`, `align-content`, `flex-grow`, `flex-shrink`,
-  `flex-basis`, `gap`, `order`. It does not implement
-  `align-tracks` / `justify-tracks`.
+  `flex-basis`, `gap`, `order`. Items without a definite basis size to
+  fit-content (`block::fit_content_width`, shared with float
+  shrink-to-fit). A column container without a definite height is as
+  tall as its items. Each item is laid out once to measure its base size
+  and again only if flexing changed it, then translated into place, so
+  nested flex containers cost a bounded number of layouts per level. It
+  does not implement `align-tracks` / `justify-tracks`.
 - **Grid** (`grid.rs`) supports `grid-template-{columns,rows,areas}`,
   `grid-auto-{columns,rows}`, `grid-auto-flow: [row | column] || dense`,
   `gap`, and explicit / implicit grids. Track lists are parsed by

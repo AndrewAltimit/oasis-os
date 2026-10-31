@@ -79,6 +79,23 @@ pub enum CanvasCommand {
     },
 }
 
+impl CanvasCommand {
+    /// Path points the command holds (0 for non-path commands).
+    fn point_count(&self) -> usize {
+        match self {
+            Self::FillPath { points, .. } | Self::StrokePath { points, .. } => points.len(),
+            _ => 0,
+        }
+    }
+}
+
+/// Most commands one canvas keeps (see [`CanvasState::push_command`]).
+pub const MAX_CANVAS_COMMANDS: usize = 16_384;
+/// Most path points one canvas's commands hold in total.
+pub const MAX_CANVAS_POINTS: usize = 1 << 20;
+/// Deepest `save()` stack kept.
+pub const MAX_SAVE_DEPTH: usize = 1024;
+
 /// Saved canvas drawing state for save()/restore().
 #[derive(Debug, Clone)]
 struct CanvasSavedState {
@@ -111,6 +128,8 @@ pub struct CanvasState {
     pub path_start: Option<(f32, f32)>,
     /// State save stack.
     state_stack: Vec<CanvasSavedState>,
+    /// Path points held by `commands` (pushed via [`Self::push_command`]).
+    held_points: usize,
 }
 
 impl CanvasState {
@@ -127,11 +146,56 @@ impl CanvasState {
             current_path: Vec::new(),
             path_start: None,
             state_stack: Vec::new(),
+            held_points: 0,
         }
     }
 
-    /// Save the current drawing state.
+    /// Record a drawing command.
+    ///
+    /// The command list is replayed on every paint and lives outside the
+    /// script heap limit, so it is bounded: a `clearRect` covering the
+    /// whole canvas drops everything before it (the standard animation
+    /// loop, `clearRect` + redraw per frame, used to grow it forever),
+    /// and past [`MAX_CANVAS_COMMANDS`] commands or
+    /// [`MAX_CANVAS_POINTS`] path points the oldest half is dropped.
+    pub fn push_command(&mut self, cmd: CanvasCommand) {
+        if let CanvasCommand::ClearRect { x, y, w, h } = cmd
+            && x <= 0.0
+            && y <= 0.0
+            && x + w >= self.width as f32
+            && y + h >= self.height as f32
+        {
+            self.commands.clear();
+            self.held_points = 0;
+            return;
+        }
+        self.held_points += cmd.point_count();
+        self.commands.push(cmd);
+        if self.commands.len() > MAX_CANVAS_COMMANDS || self.held_points > MAX_CANVAS_POINTS {
+            let keep_from = self.commands.len() / 2;
+            let dropped: usize = self
+                .commands
+                .drain(..keep_from)
+                .map(|c| c.point_count())
+                .sum();
+            self.held_points -= dropped;
+        }
+    }
+
+    /// Append a point to the current path, up to the SVG path point
+    /// budget (65 536; further points are dropped).
+    pub fn push_path_point(&mut self, point: (f32, f32)) {
+        if self.current_path.len() < crate::svg::MAX_PATH_POINTS {
+            self.current_path.push(point);
+        }
+    }
+
+    /// Save the current drawing state (up to [`MAX_SAVE_DEPTH`] deep;
+    /// deeper saves are ignored).
     pub fn save(&mut self) {
+        if self.state_stack.len() >= MAX_SAVE_DEPTH {
+            return;
+        }
         self.state_stack.push(CanvasSavedState {
             fill_color: self.fill_color,
             stroke_color: self.stroke_color,
@@ -375,5 +439,69 @@ mod tests {
         let mut backend = crate::test_utils::MockBackend::new();
         let result = paint_canvas(&cs, &mut backend, 0, 0, 0, 0);
         assert!(result.is_ok());
+    }
+
+    /// Regression: the command list was never cleared, so the standard
+    /// animation loop (`clearRect` + redraw each frame) grew it, and the
+    /// per-paint replay, forever.
+    #[test]
+    fn full_canvas_clear_drops_earlier_commands() {
+        let mut cs = CanvasState::new(64, 32);
+        for i in 0..10_000 {
+            cs.push_command(CanvasCommand::ClearRect {
+                x: 0.0,
+                y: 0.0,
+                w: 64.0,
+                h: 32.0,
+            });
+            cs.push_command(CanvasCommand::FillRect {
+                x: i as f32 % 60.0,
+                y: 0.0,
+                w: 4.0,
+                h: 4.0,
+                color: Color::BLACK,
+            });
+        }
+        assert_eq!(cs.commands.len(), 1);
+        // A partial clear is kept (it is not a reset).
+        cs.push_command(CanvasCommand::ClearRect {
+            x: 1.0,
+            y: 0.0,
+            w: 10.0,
+            h: 10.0,
+        });
+        assert_eq!(cs.commands.len(), 2);
+    }
+
+    /// Without clears, commands, path points and save depth stay bounded.
+    #[test]
+    fn canvas_state_growth_is_bounded() {
+        let mut cs = CanvasState::new(10, 10);
+        for _ in 0..(MAX_CANVAS_COMMANDS * 3) {
+            cs.push_command(CanvasCommand::FillRect {
+                x: 0.0,
+                y: 0.0,
+                w: 1.0,
+                h: 1.0,
+                color: Color::BLACK,
+            });
+        }
+        assert!(cs.commands.len() <= MAX_CANVAS_COMMANDS);
+        for i in 0..200_000 {
+            cs.push_path_point((i as f32, 0.0));
+        }
+        assert_eq!(cs.current_path.len(), crate::svg::MAX_PATH_POINTS);
+        for _ in 0..40 {
+            let points = cs.current_path.clone();
+            cs.push_command(CanvasCommand::FillPath {
+                points,
+                color: Color::BLACK,
+            });
+        }
+        assert!(cs.held_points <= MAX_CANVAS_POINTS);
+        for _ in 0..5000 {
+            cs.save();
+        }
+        assert_eq!(cs.state_stack.len(), MAX_SAVE_DEPTH);
     }
 }

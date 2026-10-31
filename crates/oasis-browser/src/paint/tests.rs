@@ -1648,6 +1648,79 @@ fn svg_follows_nested_scroll_container_offset() {
     );
 }
 
+/// Regression: `repeating-linear-gradient(red 0%, blue 1e-9%)` asked
+/// for ~4e9 repetitions and `box-shadow: inset 0 0 2e9px` for ~2e9
+/// rings; both loops spun for minutes. They now record in bounded time.
+#[test]
+fn degenerate_gradient_and_inset_shadow_record_in_bounded_time() {
+    use crate::css::values::types::{BoxShadow, GradientDirection, GradientStop, LinearGradient};
+    let style = ComputedStyle {
+        background_image: crate::css::values::BackgroundImage::Gradient(LinearGradient {
+            direction: GradientDirection::ToBottom,
+            repeating: true,
+            stops: vec![
+                GradientStop {
+                    color: Color::rgb(255, 0, 0),
+                    position: 0.0,
+                },
+                GradientStop {
+                    color: Color::rgb(0, 0, 255),
+                    position: 1e-11,
+                },
+            ],
+        }),
+        box_shadow: vec![BoxShadow {
+            offset_x: 0.0,
+            offset_y: 0.0,
+            blur: 2e9,
+            spread: 0.0,
+            color: Color::rgb(0, 0, 0),
+            inset: true,
+        }],
+        ..Default::default()
+    };
+    let root = make_block(0.0, 0.0, 100.0, 100.0, style);
+    let start = std::time::Instant::now();
+    let mut dl = display_list::DisplayList::new();
+    build_display_list(&root, test_vp(), &HashMap::new(), &mut dl, &HashMap::new());
+    assert!(start.elapsed() < std::time::Duration::from_secs(5));
+    assert!(dl.len() < 10_000, "{} items", dl.len());
+}
+
+/// Regression: children of a scrolled `overflow: auto` box were culled
+/// against the container's clip in unscrolled layout coordinates, so
+/// content scrolled into view (layout y 150, container 100 px tall,
+/// scrolled by 120) was never painted.
+#[test]
+fn content_scrolled_into_a_nested_container_is_painted() {
+    let green = Color::rgb(0, 200, 0);
+    let scroller_style = ComputedStyle {
+        overflow: crate::css::values::Overflow::Auto,
+        ..Default::default()
+    };
+    let mut scroller = make_block(0.0, 0.0, 100.0, 100.0, scroller_style);
+    scroller.node = Some(5);
+    let child_style = ComputedStyle {
+        background_color: green,
+        ..Default::default()
+    };
+    scroller
+        .children
+        .push(make_block(0.0, 150.0, 100.0, 40.0, child_style));
+
+    let mut dl = display_list::DisplayList::new();
+    let nested: HashMap<NodeId, (f32, f32)> = [(5, (0.0, 120.0))].into_iter().collect();
+    build_display_list(&scroller, test_vp(), &HashMap::new(), &mut dl, &nested);
+    let mut backend = MockBackend::new();
+    dl.replay(&mut backend, 0, 0, None).unwrap();
+
+    let y = backend.calls.iter().find_map(|c| match c {
+        DrawCall::FillRect { y, color, .. } if *color == green => Some(*y),
+        _ => None,
+    });
+    assert_eq!(y, Some(30), "child drawn at its scrolled position");
+}
+
 #[test]
 fn hidden_svg_is_not_painted() {
     let mut svg = make_svg(10.0, 10.0, 40.0, 40.0);

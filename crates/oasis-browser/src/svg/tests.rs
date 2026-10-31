@@ -285,3 +285,112 @@ fn parse_svg_ellipse() {
         _ => panic!("expected Ellipse"),
     }
 }
+
+fn rect_filled_with(paint: SvgPaint) -> SvgShape {
+    SvgShape::Rect {
+        x: 0.0,
+        y: 0.0,
+        width: 10.0,
+        height: 10.0,
+        fill: paint,
+        stroke: SvgPaint::None,
+        stroke_width: 1.0,
+        rx: 0.0,
+        opacity: 1.0,
+    }
+}
+
+/// Regression: a `<pattern>` whose content fills with itself (or an
+/// A -> B -> A cycle) recursed until the stack overflowed.
+#[test]
+fn self_referencing_patterns_terminate() {
+    let mut defs = SvgDefs::default();
+    for (id, other) in [("p", "p"), ("a", "b"), ("b", "a")] {
+        defs.patterns.insert(
+            id.to_string(),
+            SvgPatternDef {
+                width: 5.0,
+                height: 5.0,
+                shapes: vec![rect_filled_with(SvgPaint::GradientRef(other.to_string()))],
+            },
+        );
+    }
+    let svg = SvgElement {
+        width: 100.0,
+        height: 100.0,
+        viewbox: None,
+        shapes: vec![
+            rect_filled_with(SvgPaint::GradientRef("p".into())),
+            rect_filled_with(SvgPaint::GradientRef("a".into())),
+        ],
+        defs,
+    };
+    let mut backend = crate::test_utils::MockBackend::new();
+    paint_svg(&svg, &mut backend, 0, 0, 100.0, 100.0).unwrap();
+}
+
+/// Regression: `1e39` parsed to infinity, the NaN flatness test never
+/// passed and every curve subdivided to the full depth; a long `d` held
+/// hundreds of millions of points. Coordinates clamp and the point
+/// count is budgeted.
+#[test]
+fn hostile_path_data_flattens_to_a_bounded_point_count() {
+    let d = "M0 0 ".to_string() + &"C1e39 0 0 1e39 -1e39 -1e39 ".repeat(1000);
+    let points = flatten_path_data(&d);
+    assert!(
+        points.len() <= MAX_PATH_POINTS + 1001,
+        "{} points",
+        points.len()
+    );
+    assert!(points.iter().all(|&(x, y)| x.is_finite() && y.is_finite()));
+}
+
+/// Regression: a stroke to `x2="1e9"` issued one rect per pixel of its
+/// (off-screen) length, ~1e9 backend calls.
+#[test]
+fn far_off_screen_stroke_is_clipped_before_stepping() {
+    let svg = SvgElement {
+        width: 100.0,
+        height: 100.0,
+        viewbox: None,
+        shapes: vec![SvgShape::Line {
+            x1: 0.0,
+            y1: 0.0,
+            x2: 1e9,
+            y2: 3e8,
+            stroke: SvgPaint::Color(Color::rgb(0, 0, 0)),
+            stroke_width: 1.0,
+            opacity: 1.0,
+        }],
+        defs: SvgDefs::default(),
+    };
+    let mut backend = crate::test_utils::MockBackend::new();
+    paint_svg(&svg, &mut backend, 0, 0, 100.0, 100.0).unwrap();
+    let n = backend.fill_rect_count();
+    assert!(n > 0 && n <= 2 * 16_384 + 1, "{n} rects");
+}
+
+/// A negative ellipse radius disables rendering instead of painting a
+/// ~4e9-pixel rect.
+#[test]
+fn negative_ellipse_radius_paints_nothing() {
+    let svg = SvgElement {
+        width: 100.0,
+        height: 100.0,
+        viewbox: None,
+        shapes: vec![SvgShape::Ellipse {
+            cx: 50.0,
+            cy: 50.0,
+            rx: -10.0,
+            ry: 10.0,
+            fill: SvgPaint::Color(Color::rgb(0, 0, 0)),
+            stroke: SvgPaint::None,
+            stroke_width: 1.0,
+            opacity: 1.0,
+        }],
+        defs: SvgDefs::default(),
+    };
+    let mut backend = crate::test_utils::MockBackend::new();
+    paint_svg(&svg, &mut backend, 0, 0, 100.0, 100.0).unwrap();
+    assert!(backend.calls.is_empty());
+}
