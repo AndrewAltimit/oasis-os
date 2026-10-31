@@ -15,6 +15,8 @@ larger changes by area. Breaking API changes are marked **(breaking)**.
   of xp, not of the skin active before the line ran.
 - The Internet Radio app's Stop closes the stream connection (the shell
   kept it open and redrew every frame until the station changed).
+- Settings: a rejected resolution no longer pins the current one for later
+  skins, and high-contrast "off" on a non-high-contrast skin is a no-op.
 - A plugin whose `init` fails no longer leaves the commands it registered
   in the shell's command registry.
 - **(breaking)** `oasis_core::settings` (`SettingsStore`, `UserPrefs`,
