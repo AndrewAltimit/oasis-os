@@ -5,20 +5,7 @@
 //! `Sprites` primitives with per-vertex colors.
 
 use std::ffi::c_void;
-use std::mem::size_of;
 use std::ptr;
-
-#[cfg(debug_assertions)]
-use core::sync::atomic::{AtomicU32, Ordering};
-
-/// Global counter for GU display list overflow events in shapes.rs.
-/// Only active in debug builds; capped at 10 warnings to avoid spam.
-#[cfg(debug_assertions)]
-static GU_OVERFLOW_COUNT: AtomicU32 = AtomicU32::new(0);
-
-/// Maximum number of GU overflow warnings to emit before going silent.
-#[cfg(debug_assertions)]
-const GU_OVERFLOW_WARN_LIMIT: u32 = 10;
 
 use psp::sys::{self, GuPrimitive, VertexType};
 
@@ -26,7 +13,8 @@ use oasis_core::backend::{Color, GradientStyle};
 
 use oasis_core::geometry::rounded_rect_inset;
 
-use crate::PspBackend;
+use crate::gu_mem::{self, coord};
+use crate::{PspBackend, SCREEN_HEIGHT};
 
 // ---------------------------------------------------------------------------
 // Color-only vertex (no texture, position + color)
@@ -132,7 +120,9 @@ impl PspBackend {
     ///
     /// Draws the shape as a series of horizontal scanlines. The corner
     /// insets are computed using an integer square root approximation
-    /// to avoid the midpoint circle overhead for each frame.
+    /// to avoid the midpoint circle overhead for each frame. Only the
+    /// scanlines on screen are emitted (the PSP has no render targets), so
+    /// a tall browser box costs at most `SCREEN_HEIGHT` rows.
     pub fn fill_rounded_rect_inner(
         &mut self,
         x: i32,
@@ -146,76 +136,40 @@ impl PspBackend {
             self.fill_rect_inner(x, y, w, h, color);
             return;
         }
-        let r = (radius as i32).min(w as i32 / 2).min(h as i32 / 2);
+        let h = h.min(i32::MAX as u32) as i32;
+        let w = w.min(i32::MAX as u32) as i32;
+        let r = (radius as i32).min(w / 2).min(h / 2);
         let abgr = color.to_abgr();
+
+        // Visible rows `dy` with `0 <= y + dy < SCREEN_HEIGHT`.
+        let first = y.saturating_neg().clamp(0, h);
+        let last = (SCREEN_HEIGHT as i32).saturating_sub(y).clamp(first, h);
+        if first == last {
+            return;
+        }
+        // Vertices for the visible scanlines (2 per line: left and right
+        // endpoints as a Sprites primitive).
+        let vert_count = ((last - first) as usize) * 2;
 
         // Draw scanline by scanline: each scanline is a 1px-tall
         // filled rect. The rounded corners are achieved by insetting
         // the left/right edges in the top and bottom `r` rows.
-        // SAFETY: Disabling Texture2D and using sceGuGetMemory for
-        // vertices within the active display list frame.
+        // SAFETY: `verts` holds `vert_count` vertices, one pair written per
+        // row in `first..last`.
         unsafe {
-            sys::sceGuDisable(sys::GuState::Texture2D);
-
-            // Allocate vertices for all scanlines (2 per line: left
-            // and right endpoints as a Sprites primitive).
-            let vert_count = (h as usize) * 2;
-            let verts = sys::sceGuGetMemory((vert_count * size_of::<ColorVertex>()) as i32)
-                as *mut ColorVertex;
-            if verts.is_null() {
-                #[cfg(debug_assertions)]
-                {
-                    let n = GU_OVERFLOW_COUNT.fetch_add(1, Ordering::Relaxed);
-                    if n < GU_OVERFLOW_WARN_LIMIT {
-                        psp::dprintln!(
-                            "GU display list overflow in fill_rounded_rect_inner ({}/{})",
-                            n + 1,
-                            GU_OVERFLOW_WARN_LIMIT
-                        );
-                    }
-                }
-                sys::sceGuEnable(sys::GuState::Texture2D);
+            let Some(verts) = gu_mem::alloc::<ColorVertex>(vert_count, "rounded_rect") else {
                 return;
-            }
-
+            };
             let mut vi = 0usize;
-            for dy in 0..h as i32 {
-                let inset = rounded_rect_inset(dy, h as i32, r);
-
-                let lx = x + inset;
-                let rx = x + w as i32 - inset;
-                ptr::write(
-                    verts.add(vi),
-                    ColorVertex {
-                        color: abgr,
-                        x: lx as i16,
-                        y: (y + dy) as i16,
-                        z: 0,
-                        _pad: 0,
-                    },
-                );
-                ptr::write(
-                    verts.add(vi + 1),
-                    ColorVertex {
-                        color: abgr,
-                        x: rx as i16,
-                        y: (y + dy + 1) as i16,
-                        z: 0,
-                        _pad: 0,
-                    },
-                );
+            for dy in first..last {
+                let inset = rounded_rect_inset(dy, h, r);
+                let lx = x.saturating_add(inset);
+                let rx = x.saturating_add(w - inset);
+                write_color_vert(verts, vi, abgr, lx, y + dy);
+                write_color_vert(verts, vi + 1, abgr, rx, y + dy + 1);
                 vi += 2;
             }
-
-            sys::sceGuDrawArray(
-                GuPrimitive::Sprites,
-                COLOR_VTYPE,
-                vert_count as i32,
-                ptr::null(),
-                verts as *const c_void,
-            );
-
-            sys::sceGuEnable(sys::GuState::Texture2D);
+            draw_untextured(GuPrimitive::Sprites, verts, vert_count);
         }
     }
 
@@ -229,90 +183,38 @@ impl PspBackend {
         }
         let abgr = color.to_abgr();
         let r = radius as i32;
+        // center + CIRCLE_SEGMENTS + 1 (closing vertex).
+        let vert_count = CIRCLE_SEGMENTS + 2;
 
-        // SAFETY: Disabling Texture2D and allocating GU memory for
-        // the triangle fan vertices within the active display list.
+        // SAFETY: `verts` holds `vert_count` vertices: the center, the
+        // CIRCLE_SEGMENTS perimeter points and the closing point.
         unsafe {
-            sys::sceGuDisable(sys::GuState::Texture2D);
-
-            // center + CIRCLE_SEGMENTS + 1 (closing vertex).
-            let vert_count = CIRCLE_SEGMENTS + 2;
-            let verts = sys::sceGuGetMemory((vert_count * size_of::<ColorVertex>()) as i32)
-                as *mut ColorVertex;
-            if verts.is_null() {
-                #[cfg(debug_assertions)]
-                {
-                    let n = GU_OVERFLOW_COUNT.fetch_add(1, Ordering::Relaxed);
-                    if n < GU_OVERFLOW_WARN_LIMIT {
-                        psp::dprintln!(
-                            "GU display list overflow in fill_circle_inner ({}/{})",
-                            n + 1,
-                            GU_OVERFLOW_WARN_LIMIT
-                        );
-                    }
-                }
-                sys::sceGuEnable(sys::GuState::Texture2D);
+            let Some(verts) = gu_mem::alloc::<ColorVertex>(vert_count, "circle") else {
                 return;
-            }
-
-            // Center vertex.
-            ptr::write(
-                verts,
-                ColorVertex {
-                    color: abgr,
-                    x: cx as i16,
-                    y: cy as i16,
-                    z: 0,
-                    _pad: 0,
-                },
-            );
-
-            // Perimeter vertices.
-            for i in 0..CIRCLE_SEGMENTS {
-                let (cos_val, sin_val) = CIRCLE_TABLE[i];
+            };
+            write_color_vert(verts, 0, abgr, cx, cy);
+            for (i, &(cos_val, sin_val)) in CIRCLE_TABLE.iter().enumerate() {
                 let px = cx + (r * cos_val) / 1024;
                 let py = cy + (r * sin_val) / 1024;
-                ptr::write(
-                    verts.add(1 + i),
-                    ColorVertex {
-                        color: abgr,
-                        x: px as i16,
-                        y: py as i16,
-                        z: 0,
-                        _pad: 0,
-                    },
-                );
+                write_color_vert(verts, 1 + i, abgr, px, py);
             }
-
             // Close the fan by repeating the first perimeter vertex.
             let (cos0, sin0) = CIRCLE_TABLE[0];
-            ptr::write(
-                verts.add(1 + CIRCLE_SEGMENTS),
-                ColorVertex {
-                    color: abgr,
-                    x: (cx + (r * cos0) / 1024) as i16,
-                    y: (cy + (r * sin0) / 1024) as i16,
-                    z: 0,
-                    _pad: 0,
-                },
+            write_color_vert(
+                verts,
+                1 + CIRCLE_SEGMENTS,
+                abgr,
+                cx + (r * cos0) / 1024,
+                cy + (r * sin0) / 1024,
             );
-
-            sys::sceGuDrawArray(
-                GuPrimitive::TriangleFan,
-                COLOR_VTYPE,
-                vert_count as i32,
-                ptr::null(),
-                verts as *const c_void,
-            );
-
-            sys::sceGuEnable(sys::GuState::Texture2D);
+            draw_untextured(GuPrimitive::TriangleFan, verts, vert_count);
         }
     }
 
     /// Draw a line between two points using GU line primitives.
     ///
     /// For `width > 1`, draws parallel lines offset perpendicular to
-    /// the line direction. Uses integer arithmetic only.
+    /// the line direction.
     pub fn draw_line_inner(
         &mut self,
         x1: i32,
@@ -325,134 +227,50 @@ impl PspBackend {
         let abgr = color.to_abgr();
         let w = (width as i32).max(1);
 
-        // SAFETY: Disabling Texture2D and using GU memory for line
-        // vertices within the active display list.
-        unsafe {
-            sys::sceGuDisable(sys::GuState::Texture2D);
-
-            if w <= 1 {
-                // Single line: 2 vertices.
-                let verts =
-                    sys::sceGuGetMemory((2 * size_of::<ColorVertex>()) as i32) as *mut ColorVertex;
-                if verts.is_null() {
-                    #[cfg(debug_assertions)]
-                    {
-                        let n = GU_OVERFLOW_COUNT.fetch_add(1, Ordering::Relaxed);
-                        if n < GU_OVERFLOW_WARN_LIMIT {
-                            psp::dprintln!(
-                                "GU display list overflow in draw_line_inner ({}/{})",
-                                n + 1,
-                                GU_OVERFLOW_WARN_LIMIT
-                            );
-                        }
-                    }
-                    sys::sceGuEnable(sys::GuState::Texture2D);
+        if w <= 1 {
+            // SAFETY: `verts` holds the 2 vertices written below.
+            unsafe {
+                let Some(verts) = gu_mem::alloc::<ColorVertex>(2, "line") else {
                     return;
-                }
-
-                ptr::write(
-                    verts,
-                    ColorVertex {
-                        color: abgr,
-                        x: x1 as i16,
-                        y: y1 as i16,
-                        z: 0,
-                        _pad: 0,
-                    },
-                );
-                ptr::write(
-                    verts.add(1),
-                    ColorVertex {
-                        color: abgr,
-                        x: x2 as i16,
-                        y: y2 as i16,
-                        z: 0,
-                        _pad: 0,
-                    },
-                );
-
-                sys::sceGuDrawArray(
-                    GuPrimitive::Lines,
-                    COLOR_VTYPE,
-                    2,
-                    ptr::null(),
-                    verts as *const c_void,
-                );
-            } else {
-                // Multiple parallel lines for thickness.
-                let dx = (x2 - x1) as f32;
-                let dy = (y2 - y1) as f32;
-                let len = libm::sqrtf(dx * dx + dy * dy).max(1.0);
-                let nx = -dy / len;
-                let ny = dx / len;
-                let half = w / 2;
-                let line_count = w as usize;
-
-                let verts = sys::sceGuGetMemory((line_count * 2 * size_of::<ColorVertex>()) as i32)
-                    as *mut ColorVertex;
-                if verts.is_null() {
-                    #[cfg(debug_assertions)]
-                    {
-                        let n = GU_OVERFLOW_COUNT.fetch_add(1, Ordering::Relaxed);
-                        if n < GU_OVERFLOW_WARN_LIMIT {
-                            psp::dprintln!(
-                                "GU display list overflow in draw_line_inner/thick ({}/{})",
-                                n + 1,
-                                GU_OVERFLOW_WARN_LIMIT
-                            );
-                        }
-                    }
-                    sys::sceGuEnable(sys::GuState::Texture2D);
-                    return;
-                }
-
-                for i in 0..line_count {
-                    let offset = i as i32 - half;
-                    let ox = (nx * offset as f32) as i32;
-                    let oy = (ny * offset as f32) as i32;
-                    ptr::write(
-                        verts.add(i * 2),
-                        ColorVertex {
-                            color: abgr,
-                            x: (x1 + ox) as i16,
-                            y: (y1 + oy) as i16,
-                            z: 0,
-                            _pad: 0,
-                        },
-                    );
-                    ptr::write(
-                        verts.add(i * 2 + 1),
-                        ColorVertex {
-                            color: abgr,
-                            x: (x2 + ox) as i16,
-                            y: (y2 + oy) as i16,
-                            z: 0,
-                            _pad: 0,
-                        },
-                    );
-                }
-
-                sys::sceGuDrawArray(
-                    GuPrimitive::Lines,
-                    COLOR_VTYPE,
-                    (line_count * 2) as i32,
-                    ptr::null(),
-                    verts as *const c_void,
-                );
+                };
+                write_color_vert(verts, 0, abgr, x1, y1);
+                write_color_vert(verts, 1, abgr, x2, y2);
+                draw_untextured(GuPrimitive::Lines, verts, 2);
             }
+            return;
+        }
 
-            sys::sceGuEnable(sys::GuState::Texture2D);
+        // Multiple parallel lines for thickness.
+        let dx = (x2 - x1) as f32;
+        let dy = (y2 - y1) as f32;
+        let len = libm::sqrtf(dx * dx + dy * dy).max(1.0);
+        let nx = -dy / len;
+        let ny = dx / len;
+        let half = w / 2;
+        let line_count = w as usize;
+
+        // SAFETY: `verts` holds `line_count * 2` vertices, one pair written
+        // per line.
+        unsafe {
+            let Some(verts) = gu_mem::alloc::<ColorVertex>(line_count * 2, "thick_line") else {
+                return;
+            };
+            for i in 0..line_count {
+                let offset = i as i32 - half;
+                let ox = (nx * offset as f32) as i32;
+                let oy = (ny * offset as f32) as i32;
+                write_color_vert(verts, i * 2, abgr, x1 + ox, y1 + oy);
+                write_color_vert(verts, i * 2 + 1, abgr, x2 + ox, y2 + oy);
+            }
+            draw_untextured(GuPrimitive::Lines, verts, line_count * 2);
         }
     }
 
     /// Draw a filled rectangle with a gradient using per-vertex colors.
     ///
-    /// Vertical gradients use a single Sprites primitive with the top
-    /// and bottom vertex colors set to the gradient endpoints. The GE
-    /// hardware interpolates the color across the primitive.
-    ///
-    /// Horizontal and four-corner gradients use two or four triangles
-    /// to achieve bilinear interpolation.
+    /// Every style is two triangles forming the quad; the GE interpolates
+    /// the vertex colors across them (vertical: top / bottom colors,
+    /// horizontal: left / right, four-corner: one color per corner).
     pub fn fill_rect_gradient_inner(
         &mut self,
         x: i32,
@@ -464,145 +282,45 @@ impl PspBackend {
         if w == 0 || h == 0 {
             return;
         }
+        // Corner colors: top-left, top-right, bottom-left, bottom-right.
+        let [tl, tr, bl, br] = match *gradient {
+            GradientStyle::Vertical { top, bottom } => {
+                let (t, b) = (top.to_abgr(), bottom.to_abgr());
+                [t, t, b, b]
+            },
+            GradientStyle::Horizontal { left, right } => {
+                let (l, r) = (left.to_abgr(), right.to_abgr());
+                [l, r, l, r]
+            },
+            GradientStyle::FourCorner {
+                top_left,
+                top_right,
+                bottom_left,
+                bottom_right,
+            } => [
+                top_left.to_abgr(),
+                top_right.to_abgr(),
+                bottom_left.to_abgr(),
+                bottom_right.to_abgr(),
+            ],
+        };
+        let x2 = x.saturating_add_unsigned(w);
+        let y2 = y.saturating_add_unsigned(h);
 
-        // SAFETY: Disabling Texture2D and allocating GU vertices
-        // for gradient rendering within the active display list.
+        // SAFETY: `verts` holds the 6 vertices written below.
         unsafe {
-            sys::sceGuDisable(sys::GuState::Texture2D);
-
-            match *gradient {
-                GradientStyle::Vertical { top, bottom } => {
-                    // Two triangles forming a quad. The GE interpolates
-                    // vertex colors linearly across the primitive.
-                    let top_abgr = top.to_abgr();
-                    let bot_abgr = bottom.to_abgr();
-
-                    let verts = sys::sceGuGetMemory((6 * size_of::<ColorVertex>()) as i32)
-                        as *mut ColorVertex;
-                    if verts.is_null() {
-                        #[cfg(debug_assertions)]
-                        {
-                            let n = GU_OVERFLOW_COUNT.fetch_add(1, Ordering::Relaxed);
-                            if n < GU_OVERFLOW_WARN_LIMIT {
-                                psp::dprintln!(
-                                    "GU display list overflow in gradient/vertical ({}/{})",
-                                    n + 1,
-                                    GU_OVERFLOW_WARN_LIMIT
-                                );
-                            }
-                        }
-                    } else {
-                        let x2 = x + w as i32;
-                        let y2 = y + h as i32;
-
-                        // Triangle 1: top-left, top-right, bottom-left.
-                        write_color_vert(verts, 0, top_abgr, x, y);
-                        write_color_vert(verts, 1, top_abgr, x2, y);
-                        write_color_vert(verts, 2, bot_abgr, x, y2);
-                        // Triangle 2: top-right, bottom-right, bottom-left.
-                        write_color_vert(verts, 3, top_abgr, x2, y);
-                        write_color_vert(verts, 4, bot_abgr, x2, y2);
-                        write_color_vert(verts, 5, bot_abgr, x, y2);
-
-                        sys::sceGuDrawArray(
-                            GuPrimitive::Triangles,
-                            COLOR_VTYPE,
-                            6,
-                            ptr::null(),
-                            verts as *const c_void,
-                        );
-                    }
-                },
-                GradientStyle::Horizontal { left, right } => {
-                    let left_abgr = left.to_abgr();
-                    let right_abgr = right.to_abgr();
-
-                    let verts = sys::sceGuGetMemory((6 * size_of::<ColorVertex>()) as i32)
-                        as *mut ColorVertex;
-                    if verts.is_null() {
-                        #[cfg(debug_assertions)]
-                        {
-                            let n = GU_OVERFLOW_COUNT.fetch_add(1, Ordering::Relaxed);
-                            if n < GU_OVERFLOW_WARN_LIMIT {
-                                psp::dprintln!(
-                                    "GU display list overflow in gradient/horizontal ({}/{})",
-                                    n + 1,
-                                    GU_OVERFLOW_WARN_LIMIT
-                                );
-                            }
-                        }
-                    } else {
-                        let x2 = x + w as i32;
-                        let y2 = y + h as i32;
-
-                        // Triangle 1: top-left, top-right, bottom-left.
-                        write_color_vert(verts, 0, left_abgr, x, y);
-                        write_color_vert(verts, 1, right_abgr, x2, y);
-                        write_color_vert(verts, 2, left_abgr, x, y2);
-                        // Triangle 2: top-right, bottom-right, bottom-left.
-                        write_color_vert(verts, 3, right_abgr, x2, y);
-                        write_color_vert(verts, 4, right_abgr, x2, y2);
-                        write_color_vert(verts, 5, left_abgr, x, y2);
-
-                        sys::sceGuDrawArray(
-                            GuPrimitive::Triangles,
-                            COLOR_VTYPE,
-                            6,
-                            ptr::null(),
-                            verts as *const c_void,
-                        );
-                    }
-                },
-                GradientStyle::FourCorner {
-                    top_left,
-                    top_right,
-                    bottom_left,
-                    bottom_right,
-                } => {
-                    let tl = top_left.to_abgr();
-                    let tr = top_right.to_abgr();
-                    let bl = bottom_left.to_abgr();
-                    let br = bottom_right.to_abgr();
-
-                    let verts = sys::sceGuGetMemory((6 * size_of::<ColorVertex>()) as i32)
-                        as *mut ColorVertex;
-                    if verts.is_null() {
-                        #[cfg(debug_assertions)]
-                        {
-                            let n = GU_OVERFLOW_COUNT.fetch_add(1, Ordering::Relaxed);
-                            if n < GU_OVERFLOW_WARN_LIMIT {
-                                psp::dprintln!(
-                                    "GU display list overflow in gradient/four_corner ({}/{})",
-                                    n + 1,
-                                    GU_OVERFLOW_WARN_LIMIT
-                                );
-                            }
-                        }
-                    } else {
-                        let x2 = x + w as i32;
-                        let y2 = y + h as i32;
-
-                        // Triangle 1: TL, TR, BL.
-                        write_color_vert(verts, 0, tl, x, y);
-                        write_color_vert(verts, 1, tr, x2, y);
-                        write_color_vert(verts, 2, bl, x, y2);
-                        // Triangle 2: TR, BR, BL.
-                        write_color_vert(verts, 3, tr, x2, y);
-                        write_color_vert(verts, 4, br, x2, y2);
-                        write_color_vert(verts, 5, bl, x, y2);
-
-                        sys::sceGuDrawArray(
-                            GuPrimitive::Triangles,
-                            COLOR_VTYPE,
-                            6,
-                            ptr::null(),
-                            verts as *const c_void,
-                        );
-                    }
-                },
-            }
-
-            sys::sceGuEnable(sys::GuState::Texture2D);
+            let Some(verts) = gu_mem::alloc::<ColorVertex>(6, "gradient") else {
+                return;
+            };
+            // Triangle 1: TL, TR, BL.
+            write_color_vert(verts, 0, tl, x, y);
+            write_color_vert(verts, 1, tr, x2, y);
+            write_color_vert(verts, 2, bl, x, y2);
+            // Triangle 2: TR, BR, BL.
+            write_color_vert(verts, 3, tr, x2, y);
+            write_color_vert(verts, 4, br, x2, y2);
+            write_color_vert(verts, 5, bl, x, y2);
+            draw_untextured(GuPrimitive::Triangles, verts, 6);
         }
     }
 }
@@ -611,22 +329,47 @@ impl PspBackend {
 // Helpers
 // ---------------------------------------------------------------------------
 
-/// Write a `ColorVertex` at `verts[index]`.
+/// Write a `ColorVertex` at `verts[index]` (coordinates saturated to the
+/// GE's 16-bit range).
 ///
-/// SAFETY: Caller must ensure `verts.add(index)` is valid for a write.
+/// # Safety
+///
+/// `verts.add(index)` must be valid for a write.
 unsafe fn write_color_vert(verts: *mut ColorVertex, index: usize, color: u32, x: i32, y: i32) {
-    // SAFETY: Caller guarantees `verts.add(index)` is within the allocated sceGuGetMemory buffer.
+    // SAFETY: caller guarantees `verts.add(index)` is within the allocation.
     unsafe {
         ptr::write(
             verts.add(index),
             ColorVertex {
                 color,
-                x: x as i16,
-                y: y as i16,
+                x: coord(x),
+                y: coord(y),
                 z: 0,
                 _pad: 0,
             },
         );
+    }
+}
+
+/// Draw `count` untextured `verts` as `prim`: Texture2D is disabled for the
+/// draw and re-enabled after it (the rest of the backend draws textured).
+///
+/// # Safety
+///
+/// Inside an open GU frame; `verts` is display-list memory holding `count`
+/// initialized vertices.
+unsafe fn draw_untextured(prim: GuPrimitive, verts: *const ColorVertex, count: usize) {
+    // SAFETY: caller contract; the GE reads `verts` while running the list.
+    unsafe {
+        sys::sceGuDisable(sys::GuState::Texture2D);
+        sys::sceGuDrawArray(
+            prim,
+            COLOR_VTYPE,
+            count as i32,
+            ptr::null(),
+            verts as *const c_void,
+        );
+        sys::sceGuEnable(sys::GuState::Texture2D);
     }
 }
 
