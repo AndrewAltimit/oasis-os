@@ -79,7 +79,7 @@
     "video-decode",
     "video-decode-ffmpeg"
    ],
-   "loc": 35314,
+   "loc": 35303,
    "files": 65,
    "deps": [
     {
@@ -209,8 +209,8 @@
    "features": [
     "video-embed"
    ],
-   "loc": 2824,
-   "files": 4,
+   "loc": 2890,
+   "files": 5,
    "deps": [
     {
      "name": "oasis-app-calculator",
@@ -263,6 +263,10 @@
     {
      "name": "oasis-types",
      "kind": "normal"
+    },
+    {
+     "name": "oasis-vfs",
+     "kind": "dev"
     }
    ]
   },
@@ -283,7 +287,7 @@
     "test-data",
     "tls-rustls"
    ],
-   "loc": 24894,
+   "loc": 24897,
    "files": 71,
    "deps": [
     {
@@ -366,7 +370,7 @@
    "features": [
     "testing"
    ],
-   "loc": 2751,
+   "loc": 2929,
    "files": 8,
    "deps": [
     {
@@ -404,7 +408,7 @@
    "features": [
     "test-data"
    ],
-   "loc": 4573,
+   "loc": 4638,
    "files": 11,
    "deps": [
     {
@@ -441,7 +445,7 @@
    "crate_type": [],
    "bins": [],
    "features": [],
-   "loc": 1632,
+   "loc": 1618,
    "files": 4,
    "deps": [
     {
@@ -486,7 +490,7 @@
    "crate_type": [],
    "bins": [],
    "features": [],
-   "loc": 2948,
+   "loc": 3011,
    "files": 8,
    "deps": [
     {
@@ -523,7 +527,7 @@
    "crate_type": [],
    "bins": [],
    "features": [],
-   "loc": 4011,
+   "loc": 4065,
    "files": 10,
    "deps": [
     {
@@ -564,7 +568,7 @@
    "crate_type": [],
    "bins": [],
    "features": [],
-   "loc": 6749,
+   "loc": 6917,
    "files": 19,
    "deps": [
     {
@@ -605,7 +609,7 @@
    "crate_type": [],
    "bins": [],
    "features": [],
-   "loc": 3561,
+   "loc": 3735,
    "files": 10,
    "deps": [
     {
@@ -646,7 +650,7 @@
    "crate_type": [],
    "bins": [],
    "features": [],
-   "loc": 3060,
+   "loc": 3103,
    "files": 7,
    "deps": [
     {
@@ -679,7 +683,7 @@
    "crate_type": [],
    "bins": [],
    "features": [],
-   "loc": 2998,
+   "loc": 3144,
    "files": 7,
    "deps": [
     {
@@ -765,7 +769,7 @@
    "crate_type": [],
    "bins": [],
    "features": [],
-   "loc": 2035,
+   "loc": 2046,
    "files": 9,
    "deps": [
     {
@@ -817,8 +821,8 @@
     "web-fonts",
     "webp"
    ],
-   "loc": 60279,
-   "files": 110,
+   "loc": 61182,
+   "files": 109,
    "deps": [
     {
      "name": "oasis-css",
@@ -873,8 +877,8 @@
    "crate_type": [],
    "bins": [],
    "features": [],
-   "loc": 9001,
-   "files": 18,
+   "loc": 10934,
+   "files": 21,
    "deps": []
   },
   {
@@ -893,8 +897,8 @@
     "scripting",
     "web-fonts"
    ],
-   "loc": 28272,
-   "files": 43,
+   "loc": 29581,
+   "files": 45,
    "deps": [
     {
      "name": "oasis-html",
@@ -920,7 +924,7 @@
    "features": [
     "psp"
    ],
-   "loc": 10270,
+   "loc": 10695,
    "files": 15,
    "deps": [
     {
@@ -968,7 +972,7 @@
    "crate_type": [],
    "bins": [],
    "features": [],
-   "loc": 21039,
+   "loc": 21036,
    "files": 68,
    "deps": [
     {
@@ -1008,7 +1012,7 @@
     "h264",
     "symphonia"
    ],
-   "loc": 7847,
+   "loc": 7887,
    "files": 18,
    "deps": []
   },
@@ -1024,7 +1028,7 @@
    "crate_type": [],
    "bins": [],
    "features": [],
-   "loc": 8982,
+   "loc": 9202,
    "files": 24,
    "deps": [
     {
@@ -1078,7 +1082,7 @@
    "crate_type": [],
    "bins": [],
    "features": [],
-   "loc": 18478,
+   "loc": 18949,
    "files": 45,
    "deps": [
     {
@@ -1103,7 +1107,7 @@
    "crate_type": [],
    "bins": [],
    "features": [],
-   "loc": 12547,
+   "loc": 12775,
    "files": 26,
    "deps": [
     {
@@ -1135,8 +1139,8 @@
     "serialize",
     "ttf"
    ],
-   "loc": 14927,
-   "files": 33,
+   "loc": 15371,
+   "files": 34,
    "deps": [
     {
      "name": "oasis-sdi",
@@ -1180,7 +1184,7 @@
    "crate_type": [],
    "bins": [],
    "features": [],
-   "loc": 6140,
+   "loc": 6257,
    "files": 14,
    "deps": [
     {
@@ -1204,7 +1208,7 @@
     "gl-native",
     "parallel"
    ],
-   "loc": 2420,
+   "loc": 2508,
    "files": 13,
    "deps": [
     {
@@ -1293,7 +1297,7 @@
     "tls-rustls",
     "vfs"
    ],
-   "loc": 7013,
+   "loc": 7135,
    "files": 11,
    "deps": [
     {
@@ -1321,7 +1325,7 @@
    "crate_type": [],
    "bins": [],
    "features": [],
-   "loc": 2855,
+   "loc": 2892,
    "files": 6,
    "deps": [
     {
@@ -1367,7 +1371,7 @@
    "crate_type": [],
    "bins": [],
    "features": [],
-   "loc": 11564,
+   "loc": 11760,
    "files": 40,
    "deps": []
   },
@@ -1383,7 +1387,7 @@
    "crate_type": [],
    "bins": [],
    "features": [],
-   "loc": 4765,
+   "loc": 4763,
    "files": 8,
    "deps": [
     {
@@ -1404,8 +1408,8 @@
    "crate_type": [],
    "bins": [],
    "features": [],
-   "loc": 7032,
-   "files": 16,
+   "loc": 7038,
+   "files": 18,
    "deps": [
     {
      "name": "oasis-audio",
@@ -1458,7 +1462,7 @@
    "features": [
     "wasm-youtube"
    ],
-   "loc": 9437,
+   "loc": 9439,
    "files": 24,
    "deps": [
     {
@@ -1511,7 +1515,7 @@
    "crate_type": [],
    "bins": [],
    "features": [],
-   "loc": 2629,
+   "loc": 2568,
    "files": 5,
    "deps": [
     {
@@ -1562,8 +1566,8 @@
     "kernel-mode",
     "kernel-volatile"
    ],
-   "loc": 21335,
-   "files": 65,
+   "loc": 21276,
+   "files": 66,
    "deps": [
     {
      "name": "oasis-app-tv-guide",
@@ -1605,7 +1609,7 @@
     "oasis-plugin-psp"
    ],
    "features": [],
-   "loc": 10330,
+   "loc": 10395,
    "files": 17,
    "deps": []
   },
