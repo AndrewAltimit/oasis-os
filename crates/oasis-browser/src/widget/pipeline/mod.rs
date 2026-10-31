@@ -29,7 +29,7 @@ mod navigation;
 mod scripts;
 mod stylesheets;
 
-#[cfg(test)]
+#[cfg(all(test, native_net))]
 pub(crate) use stylesheets::css_import_urls;
 
 /// Whether a stylesheet's source contains media-dependent rules.
