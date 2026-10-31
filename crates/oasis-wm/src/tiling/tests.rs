@@ -624,3 +624,40 @@ fn overcrowded_layouts_never_wrap_tile_sizes() {
         }
     }
 }
+
+#[test]
+fn huge_gap_and_margin_do_not_overflow_or_leave_the_area() {
+    // `margin * 2`, `gap * (n - 1)` and `(cell + gap) as i32 * idx` used
+    // to overflow (a debug-build panic) for large configured values.
+    for layout in [
+        TilingLayout::MasterStack,
+        TilingLayout::Grid,
+        TilingLayout::Columns,
+        TilingLayout::Rows,
+        TilingLayout::Monocle,
+    ] {
+        for (gap, margin) in [
+            (u32::MAX, 0),
+            (0, u32::MAX),
+            (u32::MAX, u32::MAX),
+            (500, 300),
+        ] {
+            let mut mgr = TilingManager::with_layout(layout);
+            mgr.config_mut().gap = gap;
+            mgr.config_mut().margin = margin;
+            mgr.config_mut().min_width = 0;
+            mgr.config_mut().min_height = 0;
+            let tiles = mgr.compute_layout(&["a", "b", "c", "d", "e"], 800, 600);
+            assert_eq!(tiles.len(), 5);
+            for t in &tiles {
+                let g = &t.geometry;
+                assert!(g.x >= 0 && g.y >= 0, "{layout:?} {gap} {margin}: {g:?}");
+                assert!(
+                    i64::from(g.x) + i64::from(g.w) <= 800
+                        && i64::from(g.y) + i64::from(g.h) <= 600,
+                    "{layout:?} gap={gap} margin={margin}: {g:?} leaves the area"
+                );
+            }
+        }
+    }
+}
