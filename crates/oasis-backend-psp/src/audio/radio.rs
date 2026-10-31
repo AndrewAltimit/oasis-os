@@ -70,7 +70,18 @@ impl RadioStreamer {
     }
 
     /// Seed the read buffer with initial data received during header parsing.
+    ///
+    /// Those bytes are the start of the response body, so on an ICY stream
+    /// they count toward the first `icy_metaint` and may already hold a
+    /// metadata block: they go through the same demuxer as later receives.
+    /// (Copying them in raw left the metaint counter short by the seed's
+    /// length, so every later block was looked for at the wrong offset --
+    /// metadata text decoded as MP3 and audio swallowed as metadata.)
     pub fn seed_buffer(&mut self, data: &[u8]) {
+        if self.icy_metaint > 0 && self.socket_fd >= 0 {
+            self.push_icy(data);
+            return;
+        }
         let n = data.len().min(Self::BUF_SIZE);
         // SAFETY: Manual byte copy to avoid LLVM memcpy recursion on MIPS.
         let ptr = self.read_buf.as_mut_ptr();
@@ -217,58 +228,68 @@ impl RadioStreamer {
                 }
             } else {
                 self.recv_fail_count = 0;
-                let received = n as usize;
-                let mut i = 0;
-                while i < received {
-                    if self.icy_in_meta {
-                        if self.icy_meta_remaining == 0 {
-                            // Read the metadata length byte.
-                            let meta_len = tmp[i] as usize * 16;
-                            i += 1;
-                            if meta_len == 0 {
-                                // Empty metadata block.
-                                self.icy_in_meta = false;
-                                continue;
-                            }
-                            self.icy_meta_remaining = meta_len;
-                            self.icy_meta_buf.clear();
-                        }
-                        // Consuming metadata bytes.
-                        let avail = received - i;
-                        let take = avail.min(self.icy_meta_remaining);
-                        for j in 0..take {
-                            self.icy_meta_buf.push(tmp[i + j]);
-                        }
-                        i += take;
-                        self.icy_meta_remaining -= take;
-                        if self.icy_meta_remaining == 0 {
-                            self.parse_icy_meta();
-                            self.icy_meta_buf.clear();
-                            self.icy_in_meta = false;
-                        }
-                    } else {
-                        let until_meta = self.icy_metaint - self.icy_audio_count;
-                        let avail = received - i;
-                        let take = avail.min(until_meta).min(Self::BUF_SIZE - self.buf_valid);
-                        if take == 0 {
-                            break; // Buffer full.
-                        }
-                        // Copy audio bytes into read buffer.
-                        for j in 0..take {
-                            self.read_buf[self.buf_valid + j] = tmp[i + j];
-                        }
-                        self.buf_valid += take;
-                        self.icy_audio_count += take;
-                        i += take;
-                        if self.icy_audio_count >= self.icy_metaint {
-                            // Enter metadata mode; the length byte will
-                            // be consumed by the meta branch (handles
-                            // both inline and cross-recv boundaries).
-                            self.icy_audio_count = 0;
-                            self.icy_in_meta = true;
-                            self.icy_meta_remaining = 0;
-                        }
+                // `chunk <= room`, and metadata bytes take no buffer
+                // space, so every audio byte fits.
+                self.push_icy(&tmp[..n as usize]);
+            }
+        }
+    }
+
+    /// Demux `data` -- body bytes straight off an ICY stream -- into the
+    /// read buffer, routing each metadata block to [`Self::parse_icy_meta`].
+    /// The position within the `icy_metaint` cycle carries across calls, so
+    /// a block split over two receives (or over the header seed and the
+    /// first receive) is still found. Audio past a full read buffer is
+    /// dropped (receives never ask for more than the free room).
+    fn push_icy(&mut self, data: &[u8]) {
+        let received = data.len();
+        let mut i = 0;
+        while i < received {
+            if self.icy_in_meta {
+                if self.icy_meta_remaining == 0 {
+                    // Read the metadata length byte.
+                    let meta_len = data[i] as usize * 16;
+                    i += 1;
+                    if meta_len == 0 {
+                        // Empty metadata block.
+                        self.icy_in_meta = false;
+                        continue;
                     }
+                    self.icy_meta_remaining = meta_len;
+                    self.icy_meta_buf.clear();
+                }
+                // Consuming metadata bytes.
+                let take = (received - i).min(self.icy_meta_remaining);
+                self.icy_meta_buf.extend_from_slice(&data[i..i + take]);
+                i += take;
+                self.icy_meta_remaining -= take;
+                if self.icy_meta_remaining == 0 {
+                    self.parse_icy_meta();
+                    self.icy_meta_buf.clear();
+                    self.icy_in_meta = false;
+                }
+            } else {
+                let until_meta = self.icy_metaint - self.icy_audio_count;
+                let take = (received - i)
+                    .min(until_meta)
+                    .min(Self::BUF_SIZE - self.buf_valid);
+                if take == 0 {
+                    break; // Buffer full.
+                }
+                // Copy audio bytes into read buffer.
+                for j in 0..take {
+                    self.read_buf[self.buf_valid + j] = data[i + j];
+                }
+                self.buf_valid += take;
+                self.icy_audio_count += take;
+                i += take;
+                if self.icy_audio_count >= self.icy_metaint {
+                    // Enter metadata mode; the length byte will be
+                    // consumed by the meta branch (handles both inline
+                    // and cross-recv boundaries).
+                    self.icy_audio_count = 0;
+                    self.icy_in_meta = true;
+                    self.icy_meta_remaining = 0;
                 }
             }
         }

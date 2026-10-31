@@ -497,13 +497,17 @@ fn psp_main() {
         if !video_fullscreen {
             active_theme.bar.url_text.clear();
             status_bar.update_sdi(&mut sdi, &active_theme, &skin_features);
+            // The bar lays out first and leaves the taskbar its free span
+            // (clear of the URL plate, USB label and media dock), as on
+            // the desktop shell.
+            bottom_bar.reserve_taskbar = !wm.windows().is_empty();
             bottom_bar.update_sdi(&mut sdi, &active_theme, &skin_features);
-            taskbar.update_sdi(
+            taskbar.update_sdi_in(
                 &mut sdi,
                 &active_theme,
                 wm.windows(),
                 wm.active_window(),
-                false,
+                bottom_bar.taskbar_span(),
             );
         }
 
