@@ -6,6 +6,35 @@ larger changes by area. Breaking API changes are marked **(breaking)**.
 
 ## Unreleased -- overhaul 3
 
+### Skins, vector graphics & shaders
+
+- Skin inheritance (`inherits = "<parent>"`) now fills *every* field the child omits: the nine
+  base colors, `text_scale` and each `strings.toml` entry came from the built-in defaults
+  instead of the parent, and `density`, `[elevation]` and `[background_performance]` were
+  never inherited. Keys the child sets still win, even when equal to the default.
+- Derived Dark / Light / High-contrast variants keep `text_scale`, `density`, typography,
+  sounds, animation timing and transition style, and no longer carry palette-tuned colors
+  (`titlebar_text_active/inactive`, icon `data_led_color` / `fallback_colors`, the start
+  menu's `item_fallback_color`, the transition fade color, cursor fill / outline). Contrast
+  repair moves text toward the luminance pole, fixing darkened text on saturated blues.
+- `skin lint` additions: `url_text` contrast against its chrome bezel, `text_scale` range,
+  lone / zero desktop size, `font_size = 0` text objects, `success` / `warning` hex values.
+  The lint no longer overflows on absurd sizes; huge `fade_ms` / `slide_ms` no longer
+  overflow the frame conversion; a NaN `text_scale` / sound `volume` falls back to 1.0.
+- Skins: readable bottom-bar URL labels in `altimit` and `balatro`, legible `solarized` icon
+  labels on the wave wallpaper, a visible white bar edge in `win95`.
+- `oasis-skin` build script: numbered loader functions and escaped string literals (odd
+  directory / asset names can no longer break the generated code), cargo warnings for
+  incomplete skin directories, and no rewrite when the output is unchanged.
+- `oasis-vector`: `AnimClock::wrapped(rate, period)`; drifting / wave layers and the
+  frame-counter oscillators keep full precision after days of uptime; layer factories and
+  `rotate_point` / `rotate_rect` saturate instead of overflowing on extreme parameters (a
+  spacing above `i32::MAX` used to loop forever).
+- `oasis-shader`: shader time wraps every hour (`TIME_WRAP_S`, `wrap_time`) in both the CPU
+  and GL paths, zero-sized outputs are handled, and the nearest-neighbour upscale copies
+  whole rows. `SoftwareShaderRenderer::render_balatro` is no longer public; use
+  `render_builtin(BuiltinShader::Balatro, ..)` **(breaking)**.
+
 ### Crate map
 
 - New interactive site page, `site/crates.html`: all 51 crates in their layers; hover / focus

@@ -75,6 +75,8 @@ bar_gradient_top = "#14142A"
 bar_gradient_bottom = "#08081A"
 version_text = "NEON://OS"
 url_text = "NET://OASIS"
+# The label sits on the gray chrome bezel: the derived dim blue was unreadable.
+url_color = "#00F0FF"
 
 [wallpaper]
 style = "scanlines"

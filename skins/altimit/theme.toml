@@ -65,6 +65,8 @@ bar_gradient_top = "#0E0E22"
 bar_gradient_bottom = "#080816"
 version_text = "ALTIMIT"
 url_text = "THE WORLD"
+# The label sits on the gray chrome bezel: the derived dim green was ~1.6:1.
+url_color = "#00CC88"
 
 [wallpaper]
 style = "solid"

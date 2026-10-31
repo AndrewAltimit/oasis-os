@@ -3,6 +3,7 @@
 //! The theme defines the color palette and optional WM visual overrides
 //! for a skin. Loaded from `theme.toml`.
 
+mod contrast;
 mod conversion;
 pub mod overrides;
 mod presets;
@@ -11,8 +12,8 @@ use serde::Deserialize;
 
 use oasis_types::backend::Color;
 
-pub use conversion::{ContrastWarning, composite_over, contrast_ratio};
-pub(crate) use conversion::{bar_backdrop, readable_on};
+pub use contrast::{ContrastWarning, composite_over, contrast_ratio};
+pub(crate) use contrast::{bar_backdrop, readable_on};
 pub use overrides::{
     AnimationPreset, AppOverrides, BackgroundLayerConfig, BackgroundPerformanceConfig,
     BarOverrides, BootOverrides, BrowserOverrides, CursorConfig, Density, ElevationLayerConfig,
@@ -328,9 +329,13 @@ impl SkinSounds {
             .and_then(|(_, path)| path)
     }
 
-    /// Master volume clamped to 0.0–1.0 (default 1.0).
+    /// Master volume clamped to 0.0–1.0 (default 1.0; a non-finite value
+    /// also means the default, never NaN samples).
     pub fn effective_volume(&self) -> f32 {
-        self.volume.unwrap_or(1.0).clamp(0.0, 1.0)
+        self.volume
+            .filter(|v| v.is_finite())
+            .unwrap_or(1.0)
+            .clamp(0.0, 1.0)
     }
 }
 
@@ -476,9 +481,14 @@ impl SkinTheme {
     /// Clamped global accessibility text-size multiplier. `1.0` = no change.
     ///
     /// The raw `text_scale` field is clamped to `0.5..=3.0` so a malformed
-    /// skin cannot shrink text to nothing or blow it up unboundedly.
+    /// skin cannot shrink text to nothing or blow it up unboundedly; a
+    /// non-finite value (TOML accepts `nan` / `inf`) means "no change".
     pub fn text_scale_factor(&self) -> f32 {
-        self.text_scale.clamp(0.5, 3.0)
+        if self.text_scale.is_finite() {
+            self.text_scale.clamp(0.5, 3.0)
+        } else {
+            1.0
+        }
     }
 
     /// Scale a base font size by the accessibility `text_scale`, rounded and

@@ -37,6 +37,8 @@ text_color = "#000000"
 text_shadow = false
 gradient_top = "#C0C0C0"
 gradient_bottom = "#C0C0C0"
+# White bevel line along the bar edges: gray-on-gray bars were invisible.
+separator_color = "#FFFFFF"
 
 [icon_overrides]
 body_color = "#C0C0C0"

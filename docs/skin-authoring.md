@@ -908,11 +908,16 @@ Recognized slots per app:
 
 `inherits = "<builtin-name>"` in skin.toml bases a skin on a built-in
 parent — the recommended authoring pattern for variants. Merging is
-fill-only and child-wins: any file/table/field the child sets is used
-verbatim; anything it omits comes from the parent. Layout objects and
-assets merge by name, collection tables (`app_themes`, `widget_states`,
-`gradients`, `animations`) inherit whole-table only when the child
-defines none. Maximum depth is 3.
+fill-only and child-wins: any table/field the child sets is used
+verbatim; anything it omits comes from the parent. That includes the
+nine base colors, `text_scale` and every `strings.toml` entry: a key
+the child's file leaves out is inherited, while a key it sets wins even
+when it equals the built-in default. Every other theme table merges
+whole (a child `[bar_overrides]` replaces the parent's). Layout objects
+and assets merge by name, collection tables (`app_themes`,
+`widget_states`, `gradients`, `animations`) inherit whole-table only
+when the child defines none. `features.toml` is not inherited (it is a
+required file). Maximum depth is 3.
 
 The shipped `psix-tribute` skin demonstrates the pattern: it inherits
 `classic` and its files contain only the PSIX-specific overrides.
@@ -1007,6 +1012,12 @@ silently do nothing:
   `color_1..3`, `[wallpaper] style`, `[transition] entrance` /
   `page_style` / `easing`, `[animations.*] easing`,
   `[icon_overrides] entrance_style` and `density`.
+- Values that are clamped or ignored at runtime are reported: a
+  `text_scale` outside 0.5–3.0 (or `nan` / `inf`), a lone
+  `desktop_width` / `desktop_height` (only the pair is honoured) or a
+  zero / over-8K desktop size, and a text-bearing layout object with
+  `font_size = 0`. `success` / `warning` get the same hex check as the
+  other base-palette extras.
 - A skin directory whose `inherits` parent is not a built-in loads
   alone and reports it; TOML syntax errors name the skin directory,
   the file and the line.
@@ -1018,7 +1029,8 @@ silently do nothing:
   actually render text: `text`/`dim_text`/`error` on the background,
   terminal output / prompt on the app surface they are drawn on, button text on the button background, selected text
   on the selection highlight, and status/bottom bar text on their bar
-  backgrounds. The clock is checked against the bar it is actually
+  backgrounds. A `[bar_overrides] url_text` label is measured against the
+  gray chrome bezel plate it is drawn on, not the bare bar. The clock is checked against the bar it is actually
   drawn on — the bottom bar when `clock_in_bottombar` is set (the
   default), otherwise the status bar — and bars with a
   `gradient_top`/`gradient_bottom` are measured at the gradient

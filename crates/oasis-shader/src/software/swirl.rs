@@ -9,7 +9,7 @@ impl SoftwareShaderRenderer {
     /// 5-iteration distortion, distance-based 3-colour weighting.
     ///
     /// Renders at reduced internal resolution and upscales for performance.
-    pub fn render_balatro(&mut self, time: f32, params: &ShaderParams) -> &[u8] {
+    pub(super) fn render_balatro(&mut self, time: f32, params: &ShaderParams) -> &[u8] {
         let sh = BuiltinShader::Balatro;
         let c1 = sh.color(params, 0);
         let c2 = sh.color(params, 1);

@@ -16,7 +16,7 @@ mod manifest;
 mod parsing;
 mod validation;
 
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 
 use oasis_sdi::SdiRegistry;
 use oasis_types::backend::{SdiBackend, TextureId};
@@ -67,6 +67,36 @@ pub struct Skin {
     /// table. Decoding to PCM happens at playback-load time in the shell,
     /// so `oasis-skin` only stores and header-validates the bytes.
     pub sound_assets: HashMap<String, Vec<u8>>,
+    /// Top-level keys the skin's own `theme.toml` / `strings.toml` set.
+    /// Fields with serde defaults (the nine base colors, `text_scale`, every
+    /// string) cannot tell "omitted" from "set to the default" after
+    /// parsing, so inheritance consults this to fill only what the child
+    /// really left out.
+    pub(crate) explicit_keys: ExplicitKeys,
+}
+
+/// Top-level keys present in a skin's source documents (see
+/// [`Skin::merge_theme_from`]).
+#[derive(Debug, Clone, Default)]
+pub(crate) struct ExplicitKeys {
+    pub(crate) theme: BTreeSet<String>,
+    pub(crate) strings: BTreeSet<String>,
+}
+
+/// Top-level keys of a TOML document (empty when it does not parse; the
+/// typed parse reports that error).
+fn top_level_keys(content: &str) -> BTreeSet<String> {
+    content
+        .parse::<toml::Table>()
+        .map(|t| t.keys().cloned().collect())
+        .unwrap_or_default()
+}
+
+/// Convert a millisecond duration to 60 fps frames (at least one), without
+/// overflowing on absurd values.
+fn ms_to_frames(ms: u32) -> u32 {
+    let frames = (u64::from(ms) * 60 / 1000).max(1);
+    u32::try_from(frames).unwrap_or(u32::MAX)
 }
 
 /// Parse a TOML document, collecting any keys the target type ignores.
@@ -178,14 +208,19 @@ impl Skin {
             if features.transition_fade_frames.is_none()
                 && let Some(ms) = t.fade_ms
             {
-                features.transition_fade_frames = Some((ms * 60 / 1000).max(1));
+                features.transition_fade_frames = Some(ms_to_frames(ms));
             }
             if features.transition_slide_frames.is_none()
                 && let Some(ms) = t.slide_ms
             {
-                features.transition_slide_frames = Some((ms * 60 / 1000).max(1));
+                features.transition_slide_frames = Some(ms_to_frames(ms));
             }
         }
+
+        let explicit_keys = ExplicitKeys {
+            theme: top_level_keys(theme_toml),
+            strings: top_level_keys(strings_toml),
+        };
 
         // An explicit corrupted.toml wins; otherwise `corrupted = true` in
         // features.toml gets the default modifiers.
@@ -209,6 +244,7 @@ impl Skin {
             assets: HashMap::new(),
             font_assets: HashMap::new(),
             sound_assets: HashMap::new(),
+            explicit_keys,
         })
     }
 

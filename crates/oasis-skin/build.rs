@@ -4,7 +4,7 @@
 //
 // For each skin directory that contains `skin.toml`, `layout.toml`,
 // `features.toml`, `theme.toml`, and `strings.toml`, this generates a Rust
-// function `gen_{name}_skin() -> Result<Skin>` that embeds the files with
+// function `gen_skin_<n>() -> Result<Skin>` that embeds the files with
 // `include_str!` and parses them with `Skin::from_sources()` -- the same
 // parser `Skin::from_directory` uses -- including `corrupted.toml` when the
 // directory has one. Files in the skin's
@@ -15,18 +15,33 @@
 // It also emits `GENERATED_SKIN_NAMES` (the built-in list: `classic` first,
 // since it is the default and fallback skin, then the rest alphabetically)
 // and the `load_generated_skin(name)` dispatch.
+//
+// Robustness: loader functions are numbered (not derived from the directory
+// name, which may not be a valid or unique Rust identifier), every embedded
+// path / name is written as an escaped string literal, directories that are
+// almost skins (a `skin.toml` but a missing file) or have non-UTF-8 names
+// produce a cargo warning instead of silently vanishing, and the output file
+// is only rewritten when its content changes.
 
 use std::env;
+use std::fmt::Write as _;
 use std::fs;
-use std::io::Write;
 use std::path::Path;
 
 /// The default skin; always listed first in `GENERATED_SKIN_NAMES`.
 const DEFAULT_SKIN: &str = "classic";
 
+/// Files every built-in skin directory must have.
+const REQUIRED: [&str; 5] = [
+    "skin.toml",
+    "layout.toml",
+    "features.toml",
+    "theme.toml",
+    "strings.toml",
+];
+
 struct SkinDir {
     dir_name: String,
-    fn_name: String,
     corrupted: bool,
     images: Vec<String>,
     fonts: Vec<String>,
@@ -48,93 +63,140 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Re-run if any skin directory is added or removed.
     println!("cargo::rerun-if-changed={}", skins_dir.display());
 
-    let mut skins: Vec<SkinDir> = Vec::new();
-
-    if let Ok(entries) = fs::read_dir(&skins_dir) {
-        let mut dirs: Vec<_> = entries.filter_map(|e| e.ok()).collect();
-        dirs.sort_by_key(|e| e.file_name());
-
-        for entry in &dirs {
-            let path = entry.path();
-            if !path.is_dir() {
-                continue;
-            }
-
-            let dir_name = entry.file_name().to_string_lossy().to_string();
-            // Settings saves user skins as `skins/custom-<base>/` (relative
-            // to the working directory, so into the repository when the
-            // shell runs from it): those are not built-ins.
-            if dir_name.starts_with("custom-") {
-                continue;
-            }
-
-            let required = [
-                "skin.toml",
-                "layout.toml",
-                "features.toml",
-                "theme.toml",
-                "strings.toml",
-            ];
-            // Register every file (present or not) for change detection.
-            for f in required.iter().chain(&["corrupted.toml"]) {
-                println!("cargo::rerun-if-changed={}", path.join(f).display());
-            }
-            if !required.iter().all(|f| path.join(f).exists()) {
-                continue;
-            }
-            let corrupted = path.join("corrupted.toml").exists();
-
-            // Collect assets from the skin's assets/ subdirectory.
-            let assets_dir = path.join("assets");
-            println!("cargo::rerun-if-changed={}", assets_dir.display());
-            let mut images = Vec::new();
-            let mut fonts = Vec::new();
-            let mut sounds = Vec::new();
-            if let Ok(asset_entries) = fs::read_dir(&assets_dir) {
-                for ae in asset_entries.filter_map(|e| e.ok()) {
-                    let ap = ae.path();
-                    let ext_is = |wanted: &str| {
-                        ap.extension()
-                            .is_some_and(|ext| ext.eq_ignore_ascii_case(wanted))
-                    };
-                    let bucket = if ext_is("png") {
-                        &mut images
-                    } else if ext_is("ttf") || ext_is("otf") {
-                        &mut fonts
-                    } else if ext_is("wav") {
-                        &mut sounds
-                    } else {
-                        continue;
-                    };
-                    println!("cargo::rerun-if-changed={}", ap.display());
-                    bucket.push(ae.file_name().to_string_lossy().to_string());
-                }
-                images.sort();
-                fonts.sort();
-                sounds.sort();
-            }
-
-            // Directory name to a valid Rust identifier ("retro-cga" -> "retro_cga").
-            let fn_name = dir_name.replace('-', "_");
-            skins.push(SkinDir {
-                dir_name,
-                fn_name,
-                corrupted,
-                images,
-                fonts,
-                sounds,
-            });
-        }
-    }
+    let mut skins = collect_skins(&skins_dir);
 
     // Stable order: the default skin first, then alphabetical (already sorted).
-    if let Some(pos) = skins.iter().position(|s| s.dir_name == DEFAULT_SKIN) {
-        let default = skins.remove(pos);
-        skins.insert(0, default);
+    match skins.iter().position(|s| s.dir_name == DEFAULT_SKIN) {
+        Some(pos) => {
+            let default = skins.remove(pos);
+            skins.insert(0, default);
+        },
+        None => println!(
+            "cargo::warning=no `{DEFAULT_SKIN}` skin under {}: the default/fallback \
+             skin will fail to load",
+            skins_dir.display()
+        ),
     }
 
-    let mut out = fs::File::create(&out_path)?;
+    let code = generate(&skins)?;
+    // Leave an identical file untouched so its mtime does not trigger
+    // needless recompiles.
+    if fs::read_to_string(&out_path).ok().as_deref() != Some(code.as_str()) {
+        fs::write(&out_path, code)?;
+    }
+    Ok(())
+}
 
+/// Scan `skins_dir` for complete skin directories, sorted by name.
+fn collect_skins(skins_dir: &Path) -> Vec<SkinDir> {
+    let Ok(entries) = fs::read_dir(skins_dir) else {
+        println!(
+            "cargo::warning=skin directory {} not readable: no built-in skins",
+            skins_dir.display()
+        );
+        return Vec::new();
+    };
+    let mut dirs: Vec<_> = entries.filter_map(|e| e.ok()).collect();
+    dirs.sort_by_key(|e| e.file_name());
+
+    let mut skins = Vec::new();
+    for entry in &dirs {
+        let path = entry.path();
+        if !path.is_dir() {
+            continue;
+        }
+        let Some(dir_name) = entry.file_name().to_str().map(str::to_owned) else {
+            println!(
+                "cargo::warning=skipping skin directory with a non-UTF-8 name: {}",
+                path.display()
+            );
+            continue;
+        };
+        // Settings saves user skins as `skins/custom-<base>/` (relative
+        // to the working directory, so into the repository when the
+        // shell runs from it): those are not built-ins.
+        if dir_name.starts_with("custom-") {
+            continue;
+        }
+
+        // Register every file (present or not) for change detection.
+        for f in REQUIRED.iter().chain(&["corrupted.toml"]) {
+            println!("cargo::rerun-if-changed={}", path.join(f).display());
+        }
+        let missing: Vec<&str> = REQUIRED
+            .iter()
+            .copied()
+            .filter(|f| !path.join(f).is_file())
+            .collect();
+        if !missing.is_empty() {
+            // A directory with a manifest is meant to be a skin: say why it
+            // is not built in rather than dropping it without a word.
+            if path.join("skin.toml").is_file() {
+                println!(
+                    "cargo::warning=skins/{dir_name} is not built in: missing {}",
+                    missing.join(", ")
+                );
+            }
+            continue;
+        }
+        let corrupted = path.join("corrupted.toml").is_file();
+
+        // Collect assets from the skin's assets/ subdirectory.
+        let assets_dir = path.join("assets");
+        println!("cargo::rerun-if-changed={}", assets_dir.display());
+        let (mut images, mut fonts, mut sounds) = (Vec::new(), Vec::new(), Vec::new());
+        if let Ok(asset_entries) = fs::read_dir(&assets_dir) {
+            for ae in asset_entries.filter_map(|e| e.ok()) {
+                let ap = ae.path();
+                if !ap.is_file() {
+                    continue;
+                }
+                let ext = ap
+                    .extension()
+                    .and_then(|e| e.to_str())
+                    .map(str::to_ascii_lowercase);
+                let bucket = match ext.as_deref() {
+                    Some("png") => &mut images,
+                    Some("ttf" | "otf") => &mut fonts,
+                    Some("wav") => &mut sounds,
+                    _ => continue,
+                };
+                let Some(name) = ae.file_name().to_str().map(str::to_owned) else {
+                    println!(
+                        "cargo::warning=skipping asset with a non-UTF-8 name: {}",
+                        ap.display()
+                    );
+                    continue;
+                };
+                println!("cargo::rerun-if-changed={}", ap.display());
+                bucket.push(name);
+            }
+            images.sort();
+            fonts.sort();
+            sounds.sort();
+        }
+
+        skins.push(SkinDir {
+            dir_name,
+            corrupted,
+            images,
+            fonts,
+            sounds,
+        });
+    }
+    skins
+}
+
+/// `include_str!` / `include_bytes!` of a path under `skins/`, with the
+/// relative part written as an escaped string literal.
+fn include(mac: &str, rel: &str) -> String {
+    let suffix = format!("/../../skins/{rel}");
+    format!("{mac}!(concat!(env!(\"CARGO_MANIFEST_DIR\"), {suffix:?}))")
+}
+
+/// The generated Rust source.
+fn generate(skins: &[SkinDir]) -> Result<String, std::fmt::Error> {
+    let mut out = String::new();
     writeln!(
         out,
         "// Auto-generated skin loader functions from `skins/` TOML directories."
@@ -146,27 +208,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     writeln!(out, "use crate::loader::{{Skin, SkinSources}};")?;
     writeln!(out)?;
 
-    let file = |dir: &str, name: &str| {
-        format!(
-            "include_str!(concat!(env!(\"CARGO_MANIFEST_DIR\"), \
-             \"/../../skins/{dir}/{name}\"))"
-        )
-    };
-    let bytes = |dir: &str, name: &str| {
-        format!(
-            "include_bytes!(concat!(env!(\"CARGO_MANIFEST_DIR\"), \
-             \"/../../skins/{dir}/assets/{name}\"))"
-        )
-    };
-
-    for skin in &skins {
+    for (i, skin) in skins.iter().enumerate() {
         let d = skin.dir_name.as_str();
         let with_assets = skin.has_assets();
-        writeln!(
-            out,
-            "/// Load the `{d}` skin (generated from `skins/{d}/`)."
-        )?;
-        writeln!(out, "fn gen_{}_skin() -> Result<Skin> {{", skin.fn_name)?;
+        // `{:?}` keeps an odd directory name from breaking the doc comment.
+        writeln!(out, "/// Load the {d:?} skin (generated from `skins/`).")?;
+        writeln!(out, "fn gen_skin_{i}() -> Result<Skin> {{")?;
         if with_assets {
             writeln!(out, "    let mut skin = Skin::from_sources(&SkinSources {{")?;
         } else {
@@ -180,38 +227,39 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             ("theme", "theme.toml"),
             ("strings", "strings.toml"),
         ] {
-            writeln!(out, "        {field}: {},", file(d, name))?;
+            writeln!(
+                out,
+                "        {field}: {},",
+                include("include_str", &format!("{d}/{name}"))
+            )?;
         }
         if skin.corrupted {
             writeln!(
                 out,
                 "        corrupted: Some({}),",
-                file(d, "corrupted.toml")
+                include("include_str", &format!("{d}/corrupted.toml"))
             )?;
         } else {
             writeln!(out, "        corrupted: None,")?;
         }
         writeln!(out, "    }}){}", if with_assets { "?;" } else { "" })?;
+        let asset = |name: &str| {
+            (
+                format!("{:?}", format!("assets/{name}")),
+                include("include_bytes", &format!("{d}/assets/{name}")),
+            )
+        };
         for img in &skin.images {
-            writeln!(
-                out,
-                "    skin.add_asset_png(\"assets/{img}\", {})?;",
-                bytes(d, img)
-            )?;
+            let (key, bytes) = asset(img);
+            writeln!(out, "    skin.add_asset_png({key}, {bytes})?;")?;
         }
         for font in &skin.fonts {
-            writeln!(
-                out,
-                "    skin.add_asset_font(\"assets/{font}\", {}.to_vec());",
-                bytes(d, font)
-            )?;
+            let (key, bytes) = asset(font);
+            writeln!(out, "    skin.add_asset_font({key}, {bytes}.to_vec());")?;
         }
         for snd in &skin.sounds {
-            writeln!(
-                out,
-                "    skin.add_asset_wav(\"assets/{snd}\", {})?;",
-                bytes(d, snd)
-            )?;
+            let (key, bytes) = asset(snd);
+            writeln!(out, "    skin.add_asset_wav({key}, {bytes})?;")?;
         }
         if with_assets {
             writeln!(out, "    Ok(skin)")?;
@@ -225,8 +273,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         "/// Names of the built-in skins: `{DEFAULT_SKIN}` first, then alphabetical."
     )?;
     writeln!(out, "pub const GENERATED_SKIN_NAMES: &[&str] = &[")?;
-    for skin in &skins {
-        writeln!(out, "    \"{}\",", skin.dir_name)?;
+    for skin in skins {
+        writeln!(out, "    {:?},", skin.dir_name)?;
     }
     writeln!(out, "];")?;
     writeln!(out)?;
@@ -240,16 +288,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         "pub fn load_generated_skin(name: &str) -> Option<Result<Skin>> {{"
     )?;
     writeln!(out, "    match name {{")?;
-    for skin in &skins {
-        writeln!(
-            out,
-            "        \"{}\" => Some(gen_{}_skin()),",
-            skin.dir_name, skin.fn_name
-        )?;
+    for (i, skin) in skins.iter().enumerate() {
+        writeln!(out, "        {:?} => Some(gen_skin_{i}()),", skin.dir_name)?;
     }
     writeln!(out, "        _ => None,")?;
     writeln!(out, "    }}")?;
     writeln!(out, "}}")?;
-
-    Ok(())
+    Ok(out)
 }

@@ -10,13 +10,16 @@
 //! dropped -- they encode literal hex values tuned for the original palette
 //! and would clash with the transformed base colors. Structural overrides
 //! (geometry, WM titlebar metrics, icon style / animation settings, start
-//! menu layout) are preserved so the variant keeps the skin's shape.
+//! menu layout, typography, transitions, sounds, text scale and density)
+//! are preserved so the variant keeps the skin's shape -- and the user's
+//! accessibility text size.
 
 use oasis_types::backend::Color;
 
 use crate::loader::Skin;
 use crate::theme::{
-    GeometryOverrides, IconOverrides, SkinTheme, StartMenuOverrides, WmThemeOverrides,
+    CursorConfig, GeometryOverrides, IconOverrides, SkinTheme, StartMenuOverrides,
+    TransitionOverrides, WmThemeOverrides,
 };
 
 /// Prefix for skin-swap request names that ask for a derived variant of the
@@ -172,12 +175,17 @@ fn lightness(c: Color) -> f32 {
 /// WCAG contrast ratio reaches `min_ratio` (or the lightness range is
 /// exhausted). Hue and saturation are preserved.
 fn ensure_contrast(fg: Color, bg: Color, min_ratio: f64) -> Color {
-    if crate::theme::contrast_ratio(fg, bg) >= min_ratio {
+    use crate::theme::contrast_ratio;
+    if contrast_ratio(fg, bg) >= min_ratio {
         return fg;
     }
     let (h, s, mut l) = rgb_to_hsl(fg);
-    // Move away from the background's lightness pole.
-    let step = if lightness(bg) < 0.5 { 0.05 } else { -0.05 };
+    // Move toward whichever pole contrasts more with the background. HSL
+    // lightness is not luminance: saturated blue (#0000FF) has l = 0.5 but
+    // is nearly black to the eye, so deciding on `lightness(bg)` darkened
+    // text on dark blues.
+    let lighten = contrast_ratio(Color::WHITE, bg) > contrast_ratio(Color::BLACK, bg);
+    let step = if lighten { 0.05 } else { -0.05 };
     let mut best = fg;
     for _ in 0..20 {
         l = (l + step).clamp(0.0, 1.0);
@@ -209,6 +217,8 @@ fn strip_wm_colors(wm: &WmThemeOverrides) -> WmThemeOverrides {
     out.titlebar_active = None;
     out.titlebar_inactive = None;
     out.titlebar_text = None;
+    out.titlebar_text_active = None;
+    out.titlebar_text_inactive = None;
     out.frame_color = None;
     out.content_bg = None;
     out.btn_close = None;
@@ -242,6 +252,8 @@ fn strip_icon_colors(icons: &IconOverrides) -> IconOverrides {
     out.label_color = None;
     out.cursor_color = None;
     out.focus_glow_color = None;
+    out.data_led_color = None;
+    out.fallback_colors = None;
     out
 }
 
@@ -266,6 +278,7 @@ fn strip_start_menu_colors(menu: &StartMenuOverrides) -> StartMenuOverrides {
     out.button_gradient_bottom = None;
     out.item_colors = None;
     out.item_separator_color = None;
+    out.item_fallback_color = None;
     out
 }
 
@@ -274,6 +287,21 @@ fn strip_geometry_colors(geo: &GeometryOverrides) -> GeometryOverrides {
     let mut out = geo.clone();
     out.focus_ring_color = None;
     out
+}
+
+/// Keep transition timing / style but drop the fade color.
+fn strip_transition_colors(t: &TransitionOverrides) -> TransitionOverrides {
+    let mut out = t.clone();
+    out.fade_color = None;
+    out
+}
+
+/// Keep a cursor texture and hotspot but drop the procedural arrow colors.
+fn strip_cursor_colors(c: &CursorConfig) -> Option<CursorConfig> {
+    let mut out = c.clone();
+    out.fill = None;
+    out.outline = None;
+    (out.texture.is_some() || out.hotspot.is_some()).then_some(out)
 }
 
 // ---------------------------------------------------------------------------
@@ -432,6 +460,15 @@ impl SkinTheme {
                 .as_ref()
                 .map(strip_start_menu_colors),
             geometry: self.geometry.as_ref().map(strip_geometry_colors),
+            transition: self.transition.as_ref().map(strip_transition_colors),
+            cursor: self.cursor.as_ref().and_then(strip_cursor_colors),
+            // Color-free structure: typography (font + size ladder), the
+            // accessibility text scale, density, sounds, animation timing.
+            typography: self.typography.clone(),
+            text_scale: self.text_scale,
+            density: self.density.clone(),
+            sounds: self.sounds.clone(),
+            animations: self.animations.clone(),
             // Everything below is a literal-color override tuned for the
             // original palette -- drop it and let derivation recolor.
             ..SkinTheme::default()
@@ -628,5 +665,87 @@ mod tests {
         // Smoke check: derived app screen text is readable on its background.
         let ratio = contrast_ratio(active.app.text, active.app.bg);
         assert!(ratio >= 4.5, "derived app text/bg ratio {ratio:.2} too low");
+    }
+
+    #[test]
+    fn ensure_contrast_lightens_on_saturated_dark_blue() {
+        // Regression: #0000FF has HSL lightness 0.5, so the old pole test
+        // darkened the foreground on a background that is nearly black.
+        let bg = Color::rgb(0, 0, 255);
+        let fg = ensure_contrast(Color::rgb(60, 60, 140), bg, 4.5);
+        assert!(contrast_ratio(fg, bg) >= 4.5, "{fg:?}");
+    }
+
+    #[test]
+    fn variant_keeps_accessibility_and_typography() {
+        let mut theme = builtin::load_builtin("classic").unwrap().theme;
+        theme.text_scale = 1.75;
+        theme.density = Some("spacious".to_string());
+        let dark = theme.derive_variant(SkinVariant::Dark);
+        assert!((dark.text_scale - 1.75).abs() < f32::EPSILON);
+        assert_eq!(dark.density.as_deref(), Some("spacious"));
+        assert_eq!(
+            dark.typography.is_some(),
+            theme.typography.is_some(),
+            "typography carried over"
+        );
+    }
+
+    /// No literal color tuned for the source palette may survive into a
+    /// variant except the nine re-derived base colors: a missed `*_color`
+    /// field in a `strip_*` helper shows up here for whichever built-in
+    /// sets it.
+    #[cfg(feature = "serialize")]
+    #[test]
+    fn variants_carry_no_source_palette_colors() {
+        const BASE: &[&str] = &[
+            "background",
+            "primary",
+            "secondary",
+            "text",
+            "dim_text",
+            "status_bar",
+            "prompt",
+            "output",
+            "error",
+        ];
+        fn walk(path: &str, v: &toml::Value, out: &mut Vec<String>) {
+            match v {
+                toml::Value::String(s) if crate::theme::parse_hex_color(s).is_some() => {
+                    out.push(format!("{path} = {s}"));
+                },
+                toml::Value::Array(items) => {
+                    for (i, item) in items.iter().enumerate() {
+                        walk(&format!("{path}[{i}]"), item, out);
+                    }
+                },
+                toml::Value::Table(t) => {
+                    for (k, item) in t {
+                        walk(&format!("{path}.{k}"), item, out);
+                    }
+                },
+                _ => {},
+            }
+        }
+        let mut leaks = Vec::new();
+        for name in builtin::builtin_names() {
+            let skin = builtin::load_builtin(name).unwrap();
+            for variant in SkinVariant::ALL {
+                let theme = skin.theme.derive_variant(variant);
+                let toml::Value::Table(doc) = toml::Value::try_from(&theme).unwrap() else {
+                    panic!("theme serializes to a table");
+                };
+                for (key, value) in &doc {
+                    if !BASE.contains(&key.as_str()) {
+                        walk(
+                            &format!("{name}/{}: {key}", variant.name()),
+                            value,
+                            &mut leaks,
+                        );
+                    }
+                }
+            }
+        }
+        assert!(leaks.is_empty(), "stale colors:\n{}", leaks.join("\n"));
     }
 }
