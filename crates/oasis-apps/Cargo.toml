@@ -35,6 +35,7 @@ toml = { workspace = true }
 
 [dev-dependencies]
 oasis-app-core = { workspace = true, features = ["testing"] }
+oasis-test-backend = { workspace = true }
 oasis-vfs = { workspace = true }
 serde_json = { workspace = true }
 

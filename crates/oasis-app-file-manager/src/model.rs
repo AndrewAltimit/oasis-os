@@ -278,16 +278,6 @@ pub struct TreeEntry {
 /// Kind of entry shown in the Explorer view.
 pub(crate) use oasis_app_core::file_viewer::ListingKind as EntryKind;
 
-/// Cut an Explorer tile label to `max_chars` characters (`…` when cut).
-pub(crate) fn truncate_label(s: &str, max_chars: usize) -> String {
-    if s.chars().count() <= max_chars || max_chars < 2 {
-        return s.to_string();
-    }
-    let mut out: String = s.chars().take(max_chars.saturating_sub(1)).collect();
-    out.push('\u{2026}');
-    out
-}
-
 /// Build the folder-tree-pane entries for `current`. The tree shows the
 /// "Desktop" alias, root, and at every ancestor level the full set of
 /// child directories — the directory on the path-to-current is expanded

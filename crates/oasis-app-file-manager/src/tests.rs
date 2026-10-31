@@ -402,8 +402,10 @@ fn click_on_view_label_opens_dropdown() {
     let mut fm = FileManagerApp::new("/apps/fm", &vfs);
     // Default view is Explorer + windowed: no inner title bar, so the
     // menu bar starts at y=0 (height 18). View is the third entry.
-    let file_w = 4 * 7 + 16; // "File"
-    let edit_w = 4 * 7 + 16; // "Edit"
+    // Labels are as wide as the font draws them (11 px bitmap) + padding.
+    let label_w = |l: &str| oasis_types::backend::bitmap_measure_text(l, 11) as i32 + 16;
+    let file_w = label_w("File");
+    let edit_w = label_w("Edit");
     let view_x = 6 + file_w + edit_w + 4;
     let action = click_at(&mut fm, view_x, 8, 600, 400, &vfs);
     assert_eq!(action, AppAction::None);
@@ -495,6 +497,43 @@ fn rescan_keeps_moved_selection_visible() {
         p.cursor
     );
     assert!(p.lines[p.scroll + p.cursor].starts_with("z.txt"));
+}
+
+/// Explorer tile labels are cut to the tile in pixels: a character-count
+/// cut let wide names spill into the next tile.
+#[test]
+fn explorer_tile_labels_stay_inside_their_tile() {
+    let mut vfs = setup_vfs();
+    vfs.write("/a_rather_long_file_name.txt", b"x").unwrap();
+    vfs.write("/WWWWWWWWW", b"x").unwrap();
+    let fm = FileManagerApp::new("/apps/fm", &vfs);
+    let at = ActiveTheme::default();
+    let mut rec = oasis_test_backend::RecordingBackend::new(480, 272);
+    fm.draw_windowed_explorer(0, 0, 480, 272, &mut rec, &at)
+        .unwrap();
+    let g = compute_explorer_geom(0, 0, 480, 272);
+    let label_y = g.body_y + 4 + 4 + g.icon_h as i32 + 2;
+    let labels: Vec<(String, i32)> = rec
+        .text_positions()
+        .into_iter()
+        .filter(|&(_, _, y, _)| (y - label_y) % g.tile_h as i32 == 0 && y >= label_y)
+        .map(|(t, x, _, size)| {
+            (
+                t.to_string(),
+                x + oasis_types::backend::bitmap_measure_text(t, size) as i32,
+            )
+        })
+        .collect();
+    assert!(labels.iter().any(|(t, _)| t.ends_with("...")), "{labels:?}");
+    assert!(labels.iter().any(|(t, _)| t == "etc"), "{labels:?}");
+    for (text, right) in &labels {
+        let col = (right - 1 - (g.grid_x + 4)) / g.tile_w as i32;
+        let tile_right = g.grid_x + 4 + (col + 1) * g.tile_w as i32;
+        assert!(
+            *right <= tile_right,
+            "{text:?} ends at {right}, tile at {tile_right}"
+        );
+    }
 }
 
 #[test]

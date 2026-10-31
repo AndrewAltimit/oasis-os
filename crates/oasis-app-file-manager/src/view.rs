@@ -11,7 +11,7 @@ use oasis_types::backend::{BatchRect, BatchText, Color, SdiBackend};
 use oasis_ui::menu_bar::MenuStyle;
 
 use crate::colors::FileManagerColors;
-use crate::model::{EntryKind, TreeEntry, truncate_label};
+use crate::model::{EntryKind, TreeEntry};
 use crate::state::FileManagerApp;
 
 /// Pixel height reserved for the file-manager menu bar (matches the
@@ -407,7 +407,7 @@ impl FileManagerApp {
         // Drop-down floats above the rest of the windowed content.
         if self.menu.is_open() {
             self.menu
-                .draw_dropdown(backend, cx, menu_y, FM_MENU_H, &menu_style)?;
+                .draw_dropdown(backend, (cx, menu_y, cw, FM_MENU_H), &menu_style)?;
         }
 
         Ok(())
@@ -447,8 +447,11 @@ impl FileManagerApp {
             at.font_hint,
             colors.dim_text,
         )?;
-        let addr_field_x = g.menu_x + 56;
-        let addr_field_w = g.menu_w.saturating_sub(60);
+        // The field starts after the label as the font draws it (a fixed
+        // 56 px let wider fonts run the label into the path).
+        let addr_label_w = backend.measure_text("Address:", at.font_hint) as i32;
+        let addr_field_x = g.menu_x + (addr_label_w + 8).max(56);
+        let addr_field_w = (g.menu_x + g.menu_w as i32 - 4 - addr_field_x).max(0) as u32;
         backend.fill_rect(
             addr_field_x,
             g.addr_y + 1,
@@ -464,8 +467,16 @@ impl FileManagerApp {
             g.addr_h - 2,
             dark,
         )?;
-        backend.draw_text(
+        // A path too long for the field keeps its tail (the folder you
+        // are in), led by "...".
+        let path = path_tail(
+            &*backend,
             &panel.browse_dir,
+            at.font_hint,
+            addr_field_w.saturating_sub(8),
+        );
+        backend.draw_text(
+            &path,
             addr_field_x + 4,
             g.addr_y + 3,
             at.font_hint,
@@ -518,7 +529,8 @@ impl FileManagerApp {
         let mut tile_rects: Vec<BatchRect> = Vec::with_capacity(count_visible * 7);
         // Labels are owned `String`s held here so the `BatchText<'_>`
         // entries can borrow them with a stable lifetime.
-        let mut tile_labels: Vec<(i32, i32, Color, String)> = Vec::with_capacity(count_visible);
+        let mut tile_labels: Vec<(i32, i32, Color, String, u16)> =
+            Vec::with_capacity(count_visible);
         for i in 0..count_visible {
             let abs_idx = panel.scroll + i;
             let Some(line) = panel.lines.get(abs_idx) else {
@@ -559,31 +571,46 @@ impl FileManagerApp {
                 kind,
                 &colors,
             );
-            // Tile labels keep a character-count cut: a pixel cut at the tile
-            // width would hide most names (`notes.txt`) behind an ellipsis.
-            let max_chars = (g.tile_w as usize / 7).max(4);
-            let label = truncate_label(&name, max_chars);
+            // Tile labels fit the tile in pixels (as the font draws them),
+            // centred under the icon: a name too wide first drops to a
+            // smaller size (down to 8 px), then is ellipsized. A
+            // character-count cut spilled wide glyphs into the next tile.
+            let label_max_w = g.tile_w.saturating_sub(2);
+            let size = (8..=at.font_hint.max(8))
+                .rev()
+                .find(|&s| backend.measure_text(&name, s) <= label_max_w)
+                .unwrap_or(8.min(at.font_hint));
+            let label =
+                oasis_app_core::render::ellipsize(&*backend, &name, size, label_max_w).into_owned();
+            let label_w = backend.measure_text(&label, size);
+            let label_x = tx + (g.tile_w as i32 - label_w as i32).max(2) / 2;
             let label_color = if is_selected {
                 colors.selected_text
             } else {
                 colors.pane_text
             };
-            tile_labels.push((tx + 2, icon_y + g.icon_h as i32 + 2, label_color, label));
+            let label_y = icon_y + g.icon_h as i32 + 2;
+            tile_labels.push((label_x, label_y, label_color, label, size));
         }
         if !tile_rects.is_empty() {
             backend.submit_rect_batch(&tile_rects)?;
         }
-        if !tile_labels.is_empty() {
+        // One batch per font size (shrunk labels draw smaller).
+        let mut sizes: Vec<u16> = tile_labels.iter().map(|l| l.4).collect();
+        sizes.sort_unstable();
+        sizes.dedup();
+        for size in sizes {
             let text_batch: Vec<BatchText<'_>> = tile_labels
                 .iter()
-                .map(|(x, y, color, label)| BatchText {
+                .filter(|l| l.4 == size)
+                .map(|(x, y, color, label, _)| BatchText {
                     text: label.as_str(),
                     x: *x,
                     y: *y,
                     color: *color,
                 })
                 .collect();
-            backend.submit_text_batch(&text_batch, at.font_hint, false, false)?;
+            backend.submit_text_batch(&text_batch, size, false, false)?;
         }
 
         // Status.
@@ -604,10 +631,35 @@ impl FileManagerApp {
 
         // Drop-down floats above the rest of the windowed content.
         if self.menu.is_open() {
-            self.menu
-                .draw_dropdown(backend, g.menu_x, g.menu_y, g.menu_h, &menu_style)?;
+            self.menu.draw_dropdown(
+                backend,
+                (g.menu_x, g.menu_y, g.menu_w, g.menu_h),
+                &menu_style,
+            )?;
         }
 
         Ok(())
+    }
+}
+
+/// `path` cut from the front to fit `max_w` pixels: `"..."` plus as much
+/// of its end as fits (empty when not even that does).
+fn path_tail<'a>(
+    backend: &dyn SdiBackend,
+    path: &'a str,
+    font_size: u16,
+    max_w: u32,
+) -> std::borrow::Cow<'a, str> {
+    if backend.measure_text(path, font_size) <= max_w {
+        return path.into();
+    }
+    let room = max_w.saturating_sub(backend.measure_text("...", font_size));
+    let start = path
+        .char_indices()
+        .map(|(i, _)| i)
+        .find(|&i| backend.measure_text(&path[i..], font_size) <= room);
+    match start {
+        Some(i) if i < path.len() => format!("...{}", &path[i..]).into(),
+        _ => "".into(),
     }
 }

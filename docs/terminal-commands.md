@@ -477,7 +477,7 @@ see [mcp-server.md](mcp-server.md).
 
 | Command | Usage | Description |
 | --- | --- | --- |
-| `tv` | `tv [list\|now\|tune <ch>\|guide]` | Internet Archive TV Guide. |
+| `tv` | `tv [list\|now\|tune <ch>\|guide]` | Internet Archive TV Guide (`tune` needs an open TV Guide window). |
 
 ## Plugin (`oasis-core/src/terminal/plugin_commands.rs`)
 

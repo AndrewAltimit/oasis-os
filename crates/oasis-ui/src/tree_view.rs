@@ -309,7 +309,10 @@ impl TreeView {
         }
     }
 
-    /// Draw connecting lines for a node at the given position and depth.
+    /// Draw connecting lines for a node at the given position and depth:
+    /// its own branch, plus a pass-through guide in the column of every
+    /// ancestor level in `guides` (ancestors with siblings still to come).
+    #[allow(clippy::too_many_arguments)]
     fn draw_lines(
         ctx: &mut DrawContext<'_>,
         x: i32,
@@ -318,12 +321,19 @@ impl TreeView {
         indent: u16,
         row_h: u32,
         is_last: bool,
+        guides: &[usize],
     ) -> Result<()> {
         if depth == 0 {
             return Ok(());
         }
         let line_color = ctx.theme.border_subtle;
-        let ix = x + (depth as i32 - 1) * indent as i32 + indent as i32 / 2;
+        let column = |d: usize| x + (d as i32 - 1) * indent as i32 + indent as i32 / 2;
+        for &level in guides {
+            let gx = column(level);
+            ctx.backend
+                .draw_line(gx, y, gx, y + row_h as i32, 1, line_color)?;
+        }
+        let ix = column(depth);
         let mid_y = y + row_h as i32 / 2;
 
         // Horizontal branch from vertical line to node.
@@ -351,6 +361,26 @@ fn last_sibling_flags(depths: &[usize]) -> Vec<bool> {
                 .iter()
                 .take_while(|&&d| d >= depth)
                 .any(|&d| d == depth)
+        })
+        .collect()
+}
+
+/// For each row of a flattened tree (given by depth), the ancestor levels
+/// `1..depth` whose connector passes through the row: the ancestor at that
+/// level has a sibling further down, so its vertical line must run past
+/// this row's subtree. (Only the row's own level was drawn, so the line
+/// from a parent to its next sibling broke across the parent's children.)
+fn ancestor_guides(depths: &[usize]) -> Vec<Vec<usize>> {
+    (0..depths.len())
+        .map(|i| {
+            (1..depths[i])
+                .filter(|&level| {
+                    depths[i + 1..]
+                        .iter()
+                        .take_while(|&&d| d >= level)
+                        .any(|&d| d == level)
+                })
+                .collect()
         })
         .collect()
 }
@@ -396,6 +426,7 @@ impl Widget for TreeView {
 
         let depths: Vec<usize> = visible.iter().map(|n| n.2).collect();
         let is_last_at_depth = last_sibling_flags(&depths);
+        let guides = ancestor_guides(&depths);
 
         for (row_idx, (id, node, depth)) in visible.iter().enumerate() {
             let row_y = y + row_idx as i32 * row_h as i32;
@@ -423,6 +454,7 @@ impl Widget for TreeView {
                     self.indent_width,
                     row_h,
                     is_last_at_depth[row_idx],
+                    &guides[row_idx],
                 )?;
             }
 
@@ -648,6 +680,51 @@ mod tests {
         // Two roots: the first continues to the second.
         assert_eq!(last_sibling_flags(&[0, 1, 0]), [false, true, true]);
         assert!(last_sibling_flags(&[]).is_empty());
+    }
+
+    #[test]
+    fn ancestor_guides_pass_through_subtrees_of_non_last_nodes() {
+        // Root, A, A1, A1a, B: A has a sibling (B) below its subtree, so
+        // A's level-1 line runs through A1 and A1a; A1 is last, so nothing
+        // passes at level 2.
+        assert_eq!(
+            ancestor_guides(&[0, 1, 2, 3, 1]),
+            [vec![], vec![], vec![1], vec![1], vec![]]
+        );
+        // Last child's subtree: no guide.
+        assert!(ancestor_guides(&[0, 1, 2]).iter().all(Vec::is_empty));
+    }
+
+    #[test]
+    fn guide_line_is_drawn_through_a_childs_row() {
+        use oasis_test_backend::DrawCommand;
+        let mut tv = TreeView::new();
+        let root = tv.add_root("Root");
+        let a = tv.add_child(root, "A").unwrap();
+        tv.add_child(a, "A1").unwrap();
+        tv.add_child(root, "B").unwrap();
+        tv.expand_all();
+        tv.show_lines = true;
+        let theme = Theme::dark();
+        let mut backend = RecordingBackend::default();
+        {
+            let mut ctx = DrawContext::new(&mut backend, &theme);
+            tv.draw(&mut ctx, 0, 0, 200, 200).unwrap();
+        }
+        let row_h = ROW_HEIGHT.max(backend.measure_text_height(theme.font_size_md)) as i32;
+        let level1_x = tv.indent_width as i32 / 2;
+        // Row 2 (A1) carries a vertical at A's column down to its bottom
+        // edge (lines are drawn as fill_rect spans).
+        let a1_bottom = 3 * row_h - 1;
+        let covers = |px: i32, py: i32| {
+            backend.commands().iter().any(|c| {
+                matches!(c, DrawCommand::FillRect { x, y, w, h, color }
+                    if *color == theme.border_subtle
+                        && (*x..*x + *w as i32).contains(&px)
+                        && (*y..*y + *h as i32).contains(&py))
+            })
+        };
+        assert!(covers(level1_x, a1_bottom), "{:?}", backend.commands());
     }
 
     #[test]

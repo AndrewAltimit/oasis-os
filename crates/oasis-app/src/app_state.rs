@@ -243,6 +243,9 @@ pub struct TvLayer {
     pub audio_chunks_fed: u64,
     /// Diagnostic: total audio samples fed to the backend since last tune.
     pub audio_samples_fed: u64,
+    /// Whether `TV_STATUS_PATH` last said the TV Guide was open (`None`
+    /// before the first publish).
+    pub guide_status_published: Option<bool>,
     /// Pending video file download (software decode path).
     #[cfg(feature = "_video")]
     pub pending_video_download: Option<mpsc::Receiver<Result<std::path::PathBuf, String>>>,
@@ -277,6 +280,7 @@ impl TvLayer {
             audio_track: None,
             audio_chunks_fed: 0,
             audio_samples_fed: 0,
+            guide_status_published: None,
             #[cfg(feature = "_video")]
             pending_video_download: None,
             #[cfg(feature = "_video")]

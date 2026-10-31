@@ -95,8 +95,15 @@ pub struct TextEditorApp {
     /// that path is refused (Save As to another path is allowed).
     pub(crate) read_only: bool,
     pub(crate) modified: bool,
+    /// `EditorBuffer::content_hash` of the text as last loaded or saved:
+    /// undo / redo back to it clears `modified`.
+    pub(crate) saved_hash: u64,
     pub(crate) status_message: Option<String>,
     pub(crate) find_query: String,
+    /// The query was carried over from the last search when Find / Replace
+    /// opened: like a pre-selected field, the first typed character
+    /// replaces it (and Backspace clears it) instead of appending.
+    pub(crate) query_primed: bool,
     pub(crate) replace_text: String,
     /// In Replace mode: typing goes to the replacement (vs. the query).
     pub(crate) replace_focus: bool,
@@ -109,9 +116,9 @@ pub struct TextEditorApp {
     pub(crate) group_open: bool,
     pub(crate) clipboard: InMemoryClipboard,
     pub(crate) file_type: FileType,
-    /// Queued write `(path, data, buffer generation)`, flushed by
-    /// `apply_vfs_ops`.
-    pub(crate) pending_save: Option<(String, String, u64)>,
+    /// Queued write `(path, data, buffer generation, content hash)`,
+    /// flushed by `apply_vfs_ops`.
+    pub(crate) pending_save: Option<(String, String, u64, u64)>,
     /// Close / New waiting on the unsaved-changes prompt or a save.
     pub(crate) pending_close: Option<PendingClose>,
     /// Set once "Save & close" finished; every input hook returns Exit.
@@ -168,6 +175,7 @@ fn default_menu_bar() -> MenuBar {
 
 impl TextEditorApp {
     fn with_state(content: ContentState, buffer: EditorBuffer, path: Option<&str>) -> Self {
+        let saved_hash = buffer.content_hash();
         let mut editor = Self {
             content,
             content_size: (0, 0),
@@ -181,8 +189,10 @@ impl TextEditorApp {
             line_ending: "\n",
             read_only: false,
             modified: false,
+            saved_hash,
             status_message: None,
             find_query: String::new(),
+            query_primed: false,
             replace_text: String::new(),
             replace_focus: false,
             find_active: false,

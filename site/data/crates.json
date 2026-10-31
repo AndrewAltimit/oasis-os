@@ -79,7 +79,7 @@
     "video-decode",
     "video-decode-ffmpeg"
    ],
-   "loc": 35792,
+   "loc": 35894,
    "files": 65,
    "deps": [
     {
@@ -209,7 +209,7 @@
    "features": [
     "video-embed"
    ],
-   "loc": 2944,
+   "loc": 3041,
    "files": 5,
    "deps": [
     {
@@ -263,6 +263,10 @@
     {
      "name": "oasis-types",
      "kind": "normal"
+    },
+    {
+     "name": "oasis-test-backend",
+     "kind": "dev"
     },
     {
      "name": "oasis-vfs",
@@ -442,7 +446,7 @@
    "crate_type": [],
    "bins": [],
    "features": [],
-   "loc": 1618,
+   "loc": 1624,
    "files": 4,
    "deps": [
     {
@@ -524,7 +528,7 @@
    "crate_type": [],
    "bins": [],
    "features": [],
-   "loc": 4066,
+   "loc": 4147,
    "files": 10,
    "deps": [
     {
@@ -565,7 +569,7 @@
    "crate_type": [],
    "bins": [],
    "features": [],
-   "loc": 7039,
+   "loc": 7158,
    "files": 19,
    "deps": [
     {
@@ -606,7 +610,7 @@
    "crate_type": [],
    "bins": [],
    "features": [],
-   "loc": 3756,
+   "loc": 3759,
    "files": 10,
    "deps": [
     {
@@ -721,7 +725,7 @@
    "crate_type": [],
    "bins": [],
    "features": [],
-   "loc": 3378,
+   "loc": 3439,
    "files": 11,
    "deps": [
     {
@@ -766,7 +770,7 @@
    "crate_type": [],
    "bins": [],
    "features": [],
-   "loc": 2046,
+   "loc": 2118,
    "files": 9,
    "deps": [
     {
@@ -1078,7 +1082,7 @@
    "crate_type": [],
    "bins": [],
    "features": [],
-   "loc": 19216,
+   "loc": 19597,
    "files": 45,
    "deps": [
     {
@@ -1367,7 +1371,7 @@
    "crate_type": [],
    "bins": [],
    "features": [],
-   "loc": 12007,
+   "loc": 12037,
    "files": 40,
    "deps": []
   },
