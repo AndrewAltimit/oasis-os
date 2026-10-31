@@ -241,6 +241,20 @@ fn split_line_into_words(line: &str, out: &mut Vec<TextWord>) {
 // Text measurement
 // -------------------------------------------------------------------
 
+/// The run's `@font-face` face (`ComputedStyle::web_font_id`), or `None`
+/// when the `web-fonts` feature is off.
+pub(crate) fn web_font_of(style: &crate::css::values::ComputedStyle) -> Option<u32> {
+    #[cfg(feature = "web-fonts")]
+    {
+        style.web_font_id
+    }
+    #[cfg(not(feature = "web-fonts"))]
+    {
+        let _ = style;
+        None
+    }
+}
+
 /// Measure a word's pixel width using the backend text measurer.
 ///
 /// Adds `letter_spacing` between each pair of characters. `web_font` is

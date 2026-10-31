@@ -181,8 +181,11 @@ pub fn layout_inline(parent: &mut LayoutBox, measurer: &dyn TextMeasurer) {
         }) = line.fragments.last_mut()
             && *soft_hyphen
         {
-            let hyphen_w =
-                measurer.measure_text_font("-", style.font_size as u16, style.web_font_id) as f32;
+            let hyphen_w = measurer.measure_text_font(
+                "-",
+                style.font_size as u16,
+                super::text::web_font_of(style),
+            ) as f32;
             text.push('-');
             *width += hyphen_w;
             *soft_hyphen = false; // consumed
@@ -273,7 +276,7 @@ pub fn layout_inline(parent: &mut LayoutBox, measurer: &dyn TextMeasurer) {
                     let sw = measure_space(
                         style.font_size,
                         style.word_spacing,
-                        style.web_font_id,
+                        super::text::web_font_of(style),
                         measurer,
                     );
                     *width += sw;
@@ -681,7 +684,12 @@ pub fn make_text_fragments(
     let font_size = style.font_size;
     let letter_spacing = style.letter_spacing;
     let word_spacing = style.word_spacing;
-    let space_width = measure_space(font_size, word_spacing, style.web_font_id, measurer);
+    let space_width = measure_space(
+        font_size,
+        word_spacing,
+        super::text::web_font_of(style),
+        measurer,
+    );
     let mut fragments = Vec::with_capacity(words.len());
 
     for word in &words {
@@ -703,7 +711,7 @@ pub fn make_text_fragments(
             &word.text,
             font_size,
             letter_spacing,
-            style.web_font_id,
+            super::text::web_font_of(style),
             measurer,
         );
         let mut total_width = word_width;
@@ -797,7 +805,7 @@ fn break_word_fragment(
             .map(|c| {
                 let mut buf = [0u8; 4];
                 let ch = c.encode_utf8(&mut buf);
-                measurer.measure_text_font(ch, font_px, style.web_font_id) as f32
+                measurer.measure_text_font(ch, font_px, super::text::web_font_of(style)) as f32
             })
             .collect();
         let mut pieces = Vec::new();
@@ -822,7 +830,7 @@ fn break_word_fragment(
                 &piece_text,
                 style.font_size,
                 style.letter_spacing,
-                style.web_font_id,
+                super::text::web_font_of(style),
                 measurer,
             );
             pieces.push(InlineFragment::Text {
@@ -864,7 +872,7 @@ fn trim_line_boundary_spaces(line: &mut LineBox, measurer: &dyn TextMeasurer) {
         let sw = measure_space(
             style.font_size,
             style.word_spacing,
-            style.web_font_id,
+            super::text::web_font_of(style),
             measurer,
         );
         *width = (*width - sw).max(0.0);
@@ -880,7 +888,7 @@ fn trim_line_boundary_spaces(line: &mut LineBox, measurer: &dyn TextMeasurer) {
         let sw = measure_space(
             style.font_size,
             style.word_spacing,
-            style.web_font_id,
+            super::text::web_font_of(style),
             measurer,
         );
         *width = (*width - sw).max(0.0);
