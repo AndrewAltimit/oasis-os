@@ -53,7 +53,8 @@ use oasis_core::wallpaper;
 use oasis_core::wm::manager::WindowManager;
 
 use crate::app_state::{
-    AppState, ContentLayer, Mode, NetworkLayer, RadioLayer, TerminalLayer, TvLayer, UiLayer,
+    AppState, ContentLayer, Mode, NetworkLayer, RadioLayer, SkinAssets, TerminalLayer, TvLayer,
+    UiLayer,
 };
 use crate::audio_out::ShellAudio;
 use crate::launch::{BROWSER_WIN, LaunchOpts};
@@ -547,13 +548,8 @@ impl<B: ShellBackend> Shell<B> {
             bg_color: clear_color,
             active_transition,
             frame_counter: 0,
-            pending_wallpaper_refresh: false,
-            skin_layout_textures: Vec::new(),
-            image_layers: Vec::new(),
-            background_layer_cache: oasis_core::vector_overlay::LayerOpsCache::new(),
-            chrome_layer_cache: oasis_core::vector_overlay::LayerOpsCache::new(),
+            skin_assets: SkinAssets::default(),
             icon_drag: None,
-            cursor_texture: None,
             settings: SettingsStore::new(),
             radio: RadioLayer::new(),
             tv: TvLayer::new(),
@@ -894,10 +890,10 @@ impl<B: ShellBackend> Shell<B> {
 
         // Animate image decal layers (drift/pulse) by mutating their SDI
         // objects; static layers cost nothing here.
-        if !state.image_layers.is_empty() {
+        if !state.skin_assets.image_layers.is_empty() {
             oasis_core::image_layers::tick_image_layers(
                 sdi,
-                &state.image_layers,
+                &state.skin_assets.image_layers,
                 anim_secs,
                 state.active_theme.background_reduced_motion,
             );
@@ -1249,7 +1245,7 @@ fn draw_frame<B: ShellBackend>(
             backend,
             &state.active_theme,
             state.frame_counter as u32,
-            &mut state.background_layer_cache,
+            &mut state.skin_assets.background_cache,
         )?;
         state.ui.dashboard.render_vector_icons(
             backend,
@@ -1274,7 +1270,7 @@ fn draw_frame<B: ShellBackend>(
             backend,
             &state.active_theme,
             state.frame_counter as u32,
-            &mut state.chrome_layer_cache,
+            &mut state.skin_assets.chrome_cache,
         )?;
     }
 

@@ -445,7 +445,7 @@ fn skin_switch_from_terminal_at_runtime() {
         h.state().terminal.output_lines
     );
     assert!(
-        !h.state().pending_wallpaper_refresh,
+        !h.state().skin_assets.pending_refresh,
         "wallpaper regenerated"
     );
     h.button(Button::Cancel); // back to the dashboard

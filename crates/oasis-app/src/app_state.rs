@@ -284,6 +284,30 @@ impl Default for TvLayer {
     }
 }
 
+/// Backend-side resources derived from the active skin: rebuilt by
+/// `commands::refresh_skin_assets` after every skin swap and resolution
+/// change (the old textures are destroyed first).
+#[derive(Default)]
+pub struct SkinAssets {
+    /// Set by a skin swap / resolution change when the wallpaper texture
+    /// must be regenerated against the new theme. The shell step (which
+    /// holds the backend needed to upload textures) consumes it via
+    /// `commands::refresh_wallpaper_if_pending`, which also rebuilds the
+    /// rest of these assets.
+    pub pending_refresh: bool,
+    /// Textures uploaded for the skin's layout `texture =` references, bar
+    /// tab textures and WM nine-patch chrome.
+    pub layout_textures: Vec<oasis_core::backend::TextureId>,
+    /// Image background layers (watermark decals).
+    pub image_layers: Vec<oasis_core::image_layers::ImageLayerObject>,
+    /// Cached ops for static `background_layers` (perf item D4).
+    pub background_cache: oasis_core::vector_overlay::LayerOpsCache,
+    /// Cached ops for static `chrome_layers` (perf item D4).
+    pub chrome_cache: oasis_core::vector_overlay::LayerOpsCache,
+    /// Software cursor texture (only when `features.software_cursor`).
+    pub cursor_texture: Option<oasis_core::backend::TextureId>,
+}
+
 /// All mutable application state except `backend`, `sdi`, and `vfs`
 /// (which stay as separate local variables in main() for borrow-splitting).
 pub struct AppState {
@@ -303,26 +327,10 @@ pub struct AppState {
     pub bg_color: Color,
     pub active_transition: Option<transition::TransitionState>,
     pub frame_counter: u64,
-    /// Set by `apply_skin_swap` when the wallpaper texture needs to be
-    /// regenerated against the new skin's theme. Consumed by the main loop
-    /// (which holds the backend needed to upload textures) and cleared.
-    /// Also triggers re-upload of skin layout textures and image layers.
-    pub pending_wallpaper_refresh: bool,
-    /// Backend textures uploaded for the current skin's layout
-    /// `texture =` references. Destroyed and re-uploaded on skin swap.
-    pub skin_layout_textures: Vec<oasis_core::backend::TextureId>,
-    /// Image background layers (watermark decals) for the current skin.
-    pub image_layers: Vec<oasis_core::image_layers::ImageLayerObject>,
-    /// Cached ops for static `background_layers` (perf item D4).
-    /// Invalidated on skin swap / resolution change.
-    pub background_layer_cache: oasis_core::vector_overlay::LayerOpsCache,
-    /// Cached ops for static `chrome_layers` (perf item D4).
-    pub chrome_layer_cache: oasis_core::vector_overlay::LayerOpsCache,
+    /// Backend resources built from the active skin.
+    pub skin_assets: SkinAssets,
     /// Armed or active desktop-icon drag (free icon layout only).
     pub icon_drag: Option<crate::icon_drag::IconDrag>,
-    /// Software cursor texture (only when `features.software_cursor`).
-    /// Destroyed and re-uploaded on skin swap.
-    pub cursor_texture: Option<oasis_core::backend::TextureId>,
     /// Persistent key-value settings (icon positions, ...), stored in the
     /// VFS at `/system/settings.toml`.
     pub settings: crate::settings::SettingsStore,
@@ -400,13 +408,8 @@ impl AppState {
             bg_color: Color::rgb(0, 0, 0),
             active_transition: None,
             frame_counter: 0,
-            pending_wallpaper_refresh: false,
-            skin_layout_textures: Vec::new(),
-            image_layers: Vec::new(),
-            background_layer_cache: oasis_core::vector_overlay::LayerOpsCache::new(),
-            chrome_layer_cache: oasis_core::vector_overlay::LayerOpsCache::new(),
+            skin_assets: SkinAssets::default(),
             icon_drag: None,
-            cursor_texture: None,
             settings: crate::settings::SettingsStore::new(),
             radio: RadioLayer::new(),
             tv: TvLayer::new(),

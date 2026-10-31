@@ -145,7 +145,7 @@ pub fn apply_skin_object(
     // (grid color, gradient stops, shader-layer visibility). The main
     // loop holds the backend needed to upload a fresh texture, so
     // flag it here and let `refresh_wallpaper_if_pending` do the work.
-    state.pending_wallpaper_refresh = true;
+    state.skin_assets.pending_refresh = true;
     // Play the new skin's entrance so swaps feel like PSIX theme
     // loads (also masks the wallpaper regeneration pop).
     state.active_transition = crate::launch::make_entrance(
@@ -186,7 +186,7 @@ fn clear_component_sdi_objects(sdi: &mut SdiRegistry) {
     }
 }
 
-/// If `state.pending_wallpaper_refresh` is set, regenerate the wallpaper
+/// If `state.skin_assets.pending_refresh` is set, regenerate the wallpaper
 /// texture against the current theme and toggle its SDI visibility based on
 /// whether the new skin uses a shader layer. The flag is cleared after
 /// processing. No-op when not set.
@@ -195,7 +195,7 @@ pub fn refresh_wallpaper_if_pending(
     sdi: &mut SdiRegistry,
     backend: &mut impl ShellBackend,
 ) {
-    if !state.pending_wallpaper_refresh {
+    if !state.skin_assets.pending_refresh {
         return;
     }
 
@@ -208,7 +208,7 @@ pub fn refresh_wallpaper_if_pending(
             // Only clear the flag on a successful upload so transient backend
             // failures (GPU OOM, driver hiccups) retry on the next frame
             // instead of leaving the wallpaper stale until the next skin swap.
-            state.pending_wallpaper_refresh = false;
+            state.skin_assets.pending_refresh = false;
             terminal_sdi::setup_wallpaper(sdi, new_tex, w, h);
             // Hide the raster wallpaper under shader-driven skins so the
             // shader's output isn't overdrawn by the SDI wallpaper object.
@@ -243,16 +243,16 @@ pub fn refresh_skin_assets(
     // the outgoing font.
     backend.set_font(state.skin.active_font_bytes());
 
-    for tex in state.skin_layout_textures.drain(..) {
+    for tex in state.skin_assets.layout_textures.drain(..) {
         let _ = backend.destroy_texture(tex);
     }
-    oasis_core::image_layers::destroy_image_layers(sdi, backend, &state.image_layers);
+    oasis_core::image_layers::destroy_image_layers(sdi, backend, &state.skin_assets.image_layers);
 
     // Cached vector layer ops belong to the outgoing theme/resolution (D4).
-    state.background_layer_cache.invalidate();
-    state.chrome_layer_cache.invalidate();
+    state.skin_assets.background_cache.invalidate();
+    state.skin_assets.chrome_cache.invalidate();
 
-    state.skin_layout_textures = state.skin.upload_layout_textures(sdi, backend);
+    state.skin_assets.layout_textures = state.skin.upload_layout_textures(sdi, backend);
 
     // Top-tab pill textures (B5): upload the skin's `tab_texture_*` bar
     // slots and hand the ids to the status bar. They share the layout
@@ -261,13 +261,13 @@ pub fn refresh_skin_assets(
         &state.skin,
         state.active_theme.bar.tab_texture_active.as_deref(),
         backend,
-        &mut state.skin_layout_textures,
+        &mut state.skin_assets.layout_textures,
     );
     state.ui.status_bar.tab_texture_inactive = upload_bar_texture(
         &state.skin,
         state.active_theme.bar.tab_texture_inactive.as_deref(),
         backend,
-        &mut state.skin_layout_textures,
+        &mut state.skin_assets.layout_textures,
     );
 
     // WM nine-patch chrome (A2): resolve the theme's titlebar/frame patch
@@ -278,13 +278,13 @@ pub fn refresh_skin_assets(
             &state.skin,
             wm_theme.titlebar_nine_patch.as_ref(),
             backend,
-            &mut state.skin_layout_textures,
+            &mut state.skin_assets.layout_textures,
         );
         wm_theme.frame_patch = upload_wm_patch(
             &state.skin,
             wm_theme.frame_nine_patch.as_ref(),
             backend,
-            &mut state.skin_layout_textures,
+            &mut state.skin_assets.layout_textures,
         );
         let dirty = wm_theme.titlebar_patch.is_some() || wm_theme.frame_patch.is_some();
         state.wm.set_theme(wm_theme);
@@ -300,7 +300,7 @@ pub fn refresh_skin_assets(
     let base_w = state.skin.manifest.screen_width.max(1) as f32;
     let base_h = state.skin.manifest.screen_height.max(1) as f32;
     let scale = (sw as f32 / base_w).min(sh as f32 / base_h);
-    state.image_layers = oasis_core::image_layers::create_image_layers(
+    state.skin_assets.image_layers = oasis_core::image_layers::create_image_layers(
         sdi,
         backend,
         &state.active_theme.image_layers,
@@ -313,7 +313,7 @@ pub fn refresh_skin_assets(
     // Software cursor: themed `[cursor]` texture when the skin ships one,
     // procedural arrow otherwise. Skins that don't opt in keep the host
     // OS pointer (and no SDI cursor object is shown).
-    if let Some(tex) = state.cursor_texture.take() {
+    if let Some(tex) = state.skin_assets.cursor_texture.take() {
         let _ = backend.destroy_texture(tex);
     }
     if state.skin.features.software_cursor {
@@ -329,7 +329,7 @@ pub fn refresh_skin_assets(
         });
         match backend.load_texture(cw, ch, &pixels) {
             Ok(tex) => {
-                state.cursor_texture = Some(tex);
+                state.skin_assets.cursor_texture = Some(tex);
                 let cursor = &mut state.ui.mouse_cursor;
                 cursor.size = is_themed.then_some((cw, ch));
                 cursor.hotspot = if is_themed {
@@ -495,7 +495,7 @@ pub fn apply_resolution_change(
 
     // Regenerate the wallpaper texture at the new size. The old wallpaper
     // object survived `swap_scaled` (it isn't a skin-layout object).
-    state.pending_wallpaper_refresh = true;
+    state.skin_assets.pending_refresh = true;
     refresh_wallpaper_if_pending(state, sdi, backend);
 
     state.terminal.print(format!("Resolution: {new_w}x{new_h}"));
