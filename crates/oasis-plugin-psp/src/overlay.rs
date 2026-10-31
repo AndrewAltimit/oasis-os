@@ -95,7 +95,9 @@ const BTN_START: u32 = 0x8;
 pub unsafe fn on_frame(fb: *mut u32, stride: u32) {
     // Validate stride to prevent integer overflow in pixel offset
     // calculations (py * stride + px). Games may pass unexpected values.
-    if stride == 0 || stride > render::MAX_STRIDE {
+    // The draw helpers clip x to SCREEN_WIDTH, not to the stride, so a
+    // stride under 480 would let the last rows write past `stride * 272`.
+    if !(render::SCREEN_WIDTH..=render::MAX_STRIDE).contains(&stride) {
         return;
     }
 
@@ -186,7 +188,12 @@ impl OverlayState {
 
 /// Show a brief OSD notification.
 pub fn show_osd(msg: &[u8]) {
-    // SAFETY: Called from single-threaded context (audio thread or menu action).
+    // SAFETY: OSD_MSG / OSD_MSG_LEN are plain statics written here (from the
+    // audio thread, the video thread or a menu action in the display hook)
+    // and read by `draw_osd` in the display hook, without a lock. Every
+    // index is bounded (`len <= 47` < 48 and the reader slices
+    // `..OSD_MSG_LEN`, always <= 47), so a racing write can at worst show a
+    // torn message for a frame; it cannot read or write out of bounds.
     unsafe {
         let len = msg.len().min(47);
         let mut i = 0;

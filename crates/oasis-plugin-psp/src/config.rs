@@ -195,14 +195,7 @@ fn parse_config(data: &[u8], config: &mut PluginConfig) {
                     config.trigger = TriggerButton::Note;
                 }
             } else if bytes_eq_ci(key, b"music_dir") {
-                let len = val.len().min(MAX_PATH - 1);
-                let mut i = 0;
-                while i < len {
-                    config.music_dir[i] = val[i];
-                    i += 1;
-                }
-                config.music_dir[len] = 0;
-                config.music_dir_len = len;
+                config.music_dir_len = set_dir(&mut config.music_dir, val);
             } else if bytes_eq_ci(key, b"opacity") {
                 if let Some(n) = parse_u8(val) {
                     config.opacity = n;
@@ -220,14 +213,7 @@ fn parse_config(data: &[u8], config: &mut PluginConfig) {
                 config.radio_mode =
                     bytes_eq_ci(val, b"true") || bytes_eq_ci(val, b"1") || bytes_eq_ci(val, b"yes");
             } else if bytes_eq_ci(key, b"video_dir") {
-                let len = val.len().min(MAX_PATH - 1);
-                let mut i = 0;
-                while i < len {
-                    config.video_dir[i] = val[i];
-                    i += 1;
-                }
-                config.video_dir[len] = 0;
-                config.video_dir_len = len;
+                config.video_dir_len = set_dir(&mut config.video_dir, val);
             } else if bytes_eq_ci(key, b"pip_enabled") {
                 config.pip_enabled =
                     bytes_eq_ci(val, b"true") || bytes_eq_ci(val, b"1") || bytes_eq_ci(val, b"yes");
@@ -283,6 +269,25 @@ fn parse_u8(s: &[u8]) -> Option<u8> {
         }
     }
     Some(result as u8)
+}
+
+/// Store directory `val` NUL-terminated in `dst`, with a trailing `/` added
+/// when missing (callers append file names directly, so `ms0:/MUSIC` would
+/// otherwise yield `ms0:/MUSICsong.mp3`). Returns the length without the NUL.
+fn set_dir(dst: &mut [u8; MAX_PATH], val: &[u8]) -> usize {
+    // Leave room for the '/' and the NUL.
+    let mut len = val.len().min(MAX_PATH - 2);
+    let mut i = 0;
+    while i < len {
+        dst[i] = val[i];
+        i += 1;
+    }
+    if len > 0 && dst[len - 1] != b'/' {
+        dst[len] = b'/';
+        len += 1;
+    }
+    dst[len] = 0;
+    len
 }
 
 #[cfg(test)]
@@ -633,7 +638,16 @@ mod tests {
         }
         long_ini.push(b'\n');
         parse_config(&long_ini, &mut cfg);
-        // Should be truncated to MAX_PATH - 1 = 63
+        // Should be truncated to MAX_PATH - 1 = 63 (62 bytes + the '/')
         assert_eq!(cfg.music_dir_len, 63);
+        assert_eq!(cfg.music_dir[62], b'/');
+    }
+
+    #[test]
+    fn parse_config_dir_gets_trailing_slash() {
+        let mut cfg = PluginConfig::default();
+        parse_config(b"music_dir = ms0:/MP3\nvideo_dir = ms0:/MOVIES\n", &mut cfg);
+        assert_eq!(&cfg.music_dir[..cfg.music_dir_len + 1], b"ms0:/MP3/\0");
+        assert_eq!(&cfg.video_dir[..cfg.video_dir_len + 1], b"ms0:/MOVIES/\0");
     }
 }
