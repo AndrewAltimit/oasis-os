@@ -111,6 +111,13 @@ autoplay = false
 | `music_dir` | path | `ms0:/MUSIC/` | Directory to scan for MP3 files |
 | `opacity` | 0-255 | 180 | Overlay background transparency |
 | `autoplay` | `true`/`false` | `false` | Start music automatically on plugin load |
+| `devloop` | `true`/`false` | `false` | Dev only: skip the display hooks and run the WiFi devloop server on TCP 9293 |
+| `devloop_psk` | 8-64 bytes | unset | Pre-shared key the devloop server requires; without it the server stays off even with `devloop = true` |
+
+The devloop server (`screenshot`, `reboot`, `launch <path>`) makes every
+connection answer the remote terminal's PSK challenge first -- see
+[networking.md § PSP dev servers](networking.md#psp-dev-servers). The PRX
+carries its own small SHA-256 / HMAC (`src/auth.rs`) to stay self-contained.
 
 ## Music Playback
 

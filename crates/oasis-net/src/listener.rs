@@ -9,11 +9,10 @@ use std::time::{Duration, Instant};
 
 use oasis_types::backend::{NetworkBackend, NetworkStream};
 use oasis_types::error::{OasisError, Result};
-use oasis_types::util::ct_eq;
 
 #[cfg(test)]
 use crate::auth::{AUTH_RATE_LIMIT_BASE_SECS, MAX_AUTH_FAILURES};
-use crate::auth::{AUTH_TIMEOUT, AuthThrottle, psk_response};
+use crate::auth::{AUTH_TIMEOUT, AuthThrottle, verify_auth_line};
 use crate::std_backend::StdNetworkBackend;
 
 /// Maximum number of simultaneous remote connections.
@@ -391,9 +390,7 @@ impl RemoteListener {
 
                 match &conn.auth {
                     AuthState::AwaitingAuth { nonce } => {
-                        let expected = psk_response(psk, nonce);
-                        let answer = line.strip_prefix("AUTH ").map(str::trim);
-                        if answer.is_some_and(|a| ct_eq(a.as_bytes(), expected.as_bytes())) {
+                        if verify_auth_line(psk, nonce, &line) {
                             conn.auth = AuthState::Authenticated;
                             conn.queue(b"AUTH_OK\n> ");
                         } else {

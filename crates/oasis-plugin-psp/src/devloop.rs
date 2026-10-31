@@ -1,9 +1,19 @@
 //! Remote development loop via WiFi TCP server.
 //!
-//! Connects to saved WiFi profile 1, listens on TCP port 9293.
+//! Dev only, and off unless `oasis.ini` sets both `devloop = true` and a
+//! `devloop_psk` of at least [`MIN_PSK_LEN`] bytes. Connects to saved WiFi
+//! profile 1 and listens on TCP port 9293. Every connection must first pass
+//! the PSK HMAC challenge-response in [`crate::auth`] (`AUTH_REQUIRED
+//! <nonce>` / `AUTH <hmac>` / `AUTH_OK`, the remote terminal's protocol);
+//! then one command line is read and answered with `OK`.
 //! Commands: "screenshot", "reboot", "launch <path>"
 
 use core::ffi::c_void;
+
+use crate::auth;
+
+/// Shortest `devloop_psk` accepted; shorter keys leave the server off.
+pub const MIN_PSK_LEN: usize = 8;
 
 const LOG_FILE: &[u8] = b"ms0:/seplugins/.devloop_log\0";
 
@@ -147,6 +157,12 @@ unsafe extern "C" fn devloop_thread(_: usize, _: *mut c_void) -> i32 {
     // buffers passed with their real lengths.
     unsafe {
         psp::sys::sceKernelDelayThread(5_000_000);
+        let config = crate::config::get_config();
+        let psk = config.devloop_psk();
+        if psk.len() < MIN_PSK_LEN {
+            devlog(b"[DEV] devloop_psk unset or < 8 bytes; server disabled");
+            return 0;
+        }
         devlog(b"[DEV] starting...");
 
         // Load net modules.
@@ -184,6 +200,8 @@ unsafe extern "C" fn devloop_thread(_: usize, _: *mut c_void) -> i32 {
         let p_recv = resolve!(0xCDA85C99, inet);
         let p_send = resolve!(0x7AA671BC, inet);
         let p_close = resolve!(0x8D7284EA, inet);
+        // Optional: without it a silent peer can hold the server.
+        let p_setsockopt = resolve!(0x2FE71FE7, inet);
 
         // Every pointer is transmuted to a non-nullable fn pointer below, so all
         // of them must have resolved (a null fn pointer is UB, not a no-op).
@@ -221,6 +239,7 @@ unsafe extern "C" fn devloop_thread(_: usize, _: *mut c_void) -> i32 {
         type Faccept = unsafe extern "C" fn(i32, *mut u8, *mut u32) -> i32;
         type Frecv = unsafe extern "C" fn(i32, *mut c_void, usize, i32) -> i32;
         type Fsend = unsafe extern "C" fn(i32, *const c_void, usize, i32) -> i32;
+        type Fsockopt = unsafe extern "C" fn(i32, i32, i32, *const c_void, u32) -> i32;
 
         let net_init: F5 = core::mem::transmute(p_net_init);
         let inet_init: F0 = core::mem::transmute(p_inet_init);
@@ -234,6 +253,8 @@ unsafe extern "C" fn devloop_thread(_: usize, _: *mut c_void) -> i32 {
         let recv: Frecv = core::mem::transmute(p_recv);
         let send: Fsend = core::mem::transmute(p_send);
         let close: F1 = core::mem::transmute(p_close);
+        let setsockopt: Option<Fsockopt> =
+            (!p_setsockopt.is_null()).then(|| core::mem::transmute(p_setsockopt));
 
         let mut r = *b"[DEV] init: XXXXXXXX";
         let rv = net_init(0x20000, 0x20, 0x1000, 0x20, 0x1000);
@@ -285,6 +306,9 @@ unsafe extern "C" fn devloop_thread(_: usize, _: *mut c_void) -> i32 {
         }
         devlog(b"[DEV] TCP :9293 ready");
 
+        // Seed for the next nonce: previous nonce | clock | counter | peer.
+        let mut seed = [0u8; auth::NONCE_HEX_LEN + 8 + 4 + 16];
+        let mut counter: u32 = 0;
         loop {
             let mut ca = [0u8; 16];
             let mut al: u32 = 16;
@@ -293,6 +317,43 @@ unsafe extern "C" fn devloop_thread(_: usize, _: *mut c_void) -> i32 {
                 psp::sys::sceKernelDelayThread(1_000_000);
                 continue;
             }
+            if let Some(setsockopt) = setsockopt {
+                // SO_RCVTIMEO = 10 s (struct timeval of two 32-bit longs).
+                let tv: [i32; 2] = [10, 0];
+                setsockopt(cfd, 0xFFFF, 0x1006, tv.as_ptr() as *const c_void, 8);
+            }
+
+            // Challenge-response before any command is read.
+            counter = counter.wrapping_add(1);
+            let n = auth::NONCE_HEX_LEN;
+            let now = psp::sys::sceKernelGetSystemTimeWide();
+            seed[n..n + 8].copy_from_slice(&now.to_le_bytes());
+            seed[n + 8..n + 12].copy_from_slice(&counter.to_le_bytes());
+            seed[n + 12..].copy_from_slice(&ca);
+            let nonce = auth::nonce_from_seed(&seed);
+            seed[..n].copy_from_slice(&nonce);
+            let mut challenge = *b"AUTH_REQUIRED 00000000000000000000000000000000\n";
+            challenge[14..14 + n].copy_from_slice(&nonce);
+            send(cfd, challenge.as_ptr() as *const c_void, challenge.len(), 0);
+
+            let mut line = [0u8; 128];
+            let mut len = 0usize;
+            while len < line.len() && !line[..len].contains(&b'\n') {
+                let got = recv(cfd, line[len..].as_mut_ptr() as *mut c_void, line.len() - len, 0);
+                if got <= 0 {
+                    break;
+                }
+                len += got as usize;
+            }
+            if !auth::verify_auth_line(psk, &nonce, &line[..len]) {
+                send(cfd, b"AUTH_FAIL\n".as_ptr() as *const c_void, 10, 0);
+                close(cfd);
+                devlog(b"[DEV] auth failed");
+                // Single-threaded accept loop: this throttles PSK guessing.
+                psp::sys::sceKernelDelayThread(2_000_000);
+                continue;
+            }
+            send(cfd, b"AUTH_OK\n".as_ptr() as *const c_void, 8, 0);
 
             let mut buf = [0u8; 512];
             let n = recv(cfd, buf.as_mut_ptr() as *mut c_void, 512, 0);

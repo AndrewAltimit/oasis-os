@@ -55,6 +55,8 @@ autorun-script = []
 [dependencies]
 psp = { git = "https://github.com/AndrewAltimit/rust-psp", rev = "e4cc06f6fa50fa45dc3ae8b332e8a2b67625f588", features = ["std"] }
 oasis-core = { path = "../oasis-core", default-features = false }
+# SHA-256 / hex for the command server's challenge nonces (cmd_server/auth.rs).
+oasis-types = { path = "../oasis-types" }
 # TV Guide types (channels, catalogs, schedule) for the PSP's own guide
 # view. oasis-core no longer bundles the app crates; the PSP doesn't use
 # AppRunner, so it depends on just this one instead of `oasis-apps`.

@@ -26,6 +26,7 @@
 psp::module_kernel!("OasisPlugin", 1, 0);
 
 mod audio;
+mod auth;
 mod config;
 mod devloop;
 mod font;

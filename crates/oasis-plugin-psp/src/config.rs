@@ -12,6 +12,9 @@
 //! opacity = 180
 //! # Auto-start music on game launch
 //! autoplay = false
+//! # Dev only: WiFi devloop server; it also needs devloop_psk (8+ bytes)
+//! devloop = false
+//! devloop_psk = change-me-long-random-key
 //! ```
 
 use core::sync::atomic::{AtomicU8, Ordering};
@@ -57,6 +60,12 @@ pub struct PluginConfig {
     pub pip_enabled: bool,
     /// Enable remote development loop (USB auto-activation, command file).
     pub devloop: bool,
+    /// Pre-shared key for the devloop TCP server (not NUL-terminated).
+    /// The server stays off unless this holds at least
+    /// `crate::devloop::MIN_PSK_LEN` bytes.
+    pub devloop_psk: [u8; MAX_PATH],
+    /// Length of `devloop_psk` in bytes.
+    pub devloop_psk_len: usize,
 }
 
 impl PluginConfig {
@@ -89,12 +98,19 @@ impl PluginConfig {
             video_dir_len: 11,
             pip_enabled: false,
             devloop: false,
+            devloop_psk: [0u8; MAX_PATH],
+            devloop_psk_len: 0,
         }
     }
 
     /// Get video directory as a byte slice (with null terminator).
     pub fn video_dir_str(&self) -> &[u8] {
         &self.video_dir[..self.video_dir_len + 1]
+    }
+
+    /// The devloop pre-shared key (empty when unset).
+    pub fn devloop_psk(&self) -> &[u8] {
+        &self.devloop_psk[..self.devloop_psk_len]
     }
 
     /// Get the trigger button mask for controller polling.
@@ -220,6 +236,10 @@ fn parse_config(data: &[u8], config: &mut PluginConfig) {
             } else if bytes_eq_ci(key, b"devloop") {
                 config.devloop =
                     bytes_eq_ci(val, b"true") || bytes_eq_ci(val, b"1") || bytes_eq_ci(val, b"yes");
+            } else if bytes_eq_ci(key, b"devloop_psk") {
+                let len = val.len().min(MAX_PATH);
+                config.devloop_psk[..len].copy_from_slice(&val[..len]);
+                config.devloop_psk_len = len;
             }
         }
     }
