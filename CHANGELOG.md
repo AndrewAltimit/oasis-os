@@ -4,6 +4,19 @@ Notable changes to OASIS_OS. GitHub releases (tags `v1.1.0` ... `v1.5.0`)
 carry generated notes listing every merged PR; this file summarizes the
 larger changes by area. Breaking API changes are marked **(breaking)**.
 
+## Unreleased -- overhaul 3
+
+### Website
+
+- Landing page polish (hero video kept): the contract section puts the three steps beside
+  the `SdiCore` code on wide screens; feature stats gain one-line notes; the features
+  section gets a lede; platform tabs fit one row on tablets; pillar / stat / trait grids
+  no longer leave orphan cells; journal feature cards align.
+- Landing page facts re-checked against the repo: 21 shell builtins (was 20); the
+  architecture diagram now accounts for all 51 crates (new Hosts row with `oasis-app`,
+  `oasis-ffi`, `oasis-usb-host`; `oasis-test-backend` under Foundation; the eight
+  undrawn standalone PSP tools named in the caption); code-comment color meets WCAG AA.
+
 ## Unreleased -- overhaul (`overhaul/site-code-docs-2026-10`)
 
 A repository-wide cleanup: bug fixes from a full code review and an

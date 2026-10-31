@@ -310,7 +310,7 @@ kbd {
 .tf { color: #e6d47a; }
 .ts { color: #b8e45a; }
 .tn { color: #c7a6ff; }
-.tc { color: #6f778a; font-style: italic; }
+.tc { color: #7b8396; font-style: italic; } /* 5.1:1 on the code background (AA) */
 .tm { color: #ff7aa2; }
 
 /* ---------- Tabs (segmented) ---------- */

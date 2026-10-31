@@ -209,7 +209,8 @@
     <span class="tk">fn</span> <span class="tf">draw_text</span>(&amp;<span class="tk">mut</span> self, text: &amp;<span class="tt">str</span>, x: <span class="tt">i32</span>, y: <span class="tt">i32</span>, font_size: <span class="tt">u16</span>, color: <span class="tt">Color</span>)
     -&gt; <span class="tt">Result</span>&lt;()&gt;;
     <span class="tk">fn</span> <span class="tf">swap_buffers</span>(&amp;<span class="tk">mut</span> self) -&gt; <span class="tt">Result</span>&lt;()&gt;;
-    <span class="tk">fn</span> <span class="tf">load_texture</span>(&amp;<span class="tk">mut</span> self, width: <span class="tt">u32</span>, height: <span class="tt">u32</span>, rgba_data: &amp;[<span class="tt">u8</span>]) -&gt; <span class="tt">Result</span>&lt;<span class="tt">TextureId</span>&gt;;
+    <span class="tk">fn</span> <span class="tf">load_texture</span>(&amp;<span class="tk">mut</span> self, width: <span class="tt">u32</span>, height: <span class="tt">u32</span>, rgba_data: &amp;[<span class="tt">u8</span>])
+    -&gt; <span class="tt">Result</span>&lt;<span class="tt">TextureId</span>&gt;;
     <span class="tk">fn</span> <span class="tf">destroy_texture</span>(&amp;<span class="tk">mut</span> self, tex: <span class="tt">TextureId</span>) -&gt; <span class="tt">Result</span>&lt;()&gt;;
     <span class="tk">fn</span> <span class="tf">set_clip_rect</span>(&amp;<span class="tk">mut</span> self, x: <span class="tt">i32</span>, y: <span class="tt">i32</span>, w: <span class="tt">u32</span>, h: <span class="tt">u32</span>) -&gt; <span class="tt">Result</span>&lt;()&gt;;
     <span class="tk">fn</span> <span class="tf">reset_clip_rect</span>(&amp;<span class="tk">mut</span> self) -&gt; <span class="tt">Result</span>&lt;()&gt;;
@@ -578,18 +579,25 @@
 <!-- ============================================================ -->
 <section class="section section--alt" id="features" aria-labelledby="features-title">
   <div class="wrap">
-    <header class="section__head">
-      <p class="kicker">04 &mdash; Inside the shell</p>
-      <h2 id="features-title">Subsystems built from scratch, then made small enough to travel.</h2>
+    <header class="section__head section__head--split">
+      <div>
+        <p class="kicker">04 &mdash; Inside the shell</p>
+        <h2 id="features-title">Subsystems built from scratch, then made small enough to travel.</h2>
+      </div>
+      <p class="section__lede">
+        Each subsystem is its own crate with its own tests &mdash; a browser engine, a window manager,
+        a scriptable shell, video and audio pipelines &mdash; and most of them are lean enough to run on a
+        32&nbsp;MB handheld.
+      </p>
     </header>
 
     <dl class="numbers">
-      <div><dt>Apps</dt><dd>15</dd></div>
-      <div><dt>Commands</dt><dd>95</dd></div>
-      <div><dt>Shell builtins</dt><dd>20</dd></div>
-      <div><dt>UI widgets</dt><dd>27</dd></div>
-      <div><dt>Shaders</dt><dd>8</dd></div>
-      <div><dt>Locales</dt><dd>7</dd></div>
+      <div><dt>Apps</dt><dd>15</dd><dd class="numbers__note">browser to paint</dd></div>
+      <div><dt>Commands</dt><dd>95</dd><dd class="numbers__note">desktop build</dd></div>
+      <div><dt>Shell builtins</dt><dd>21</dd><dd class="numbers__note">if &middot; for &middot; case</dd></div>
+      <div><dt>UI widgets</dt><dd>27</dd><dd class="numbers__note">plus flex &amp; grid</dd></div>
+      <div><dt>Shaders</dt><dd>8</dd><dd class="numbers__note">GLSL + CPU each</dd></div>
+      <div><dt>Locales</dt><dd>7</dd><dd class="numbers__note">en de es fr ja ko zh</dd></div>
     </dl>
 
     <div class="bento">
@@ -611,6 +619,9 @@
 .cube {
   <span class="tf">transform-style</span>: preserve-3d;
   <span class="tf">transform</span>: <span class="tf">perspective</span>(<span class="tn">600px</span>) <span class="tf">rotateY</span>(<span class="tn">32deg</span>);
+}
+<span class="tk">@scope</span> (.card) to (.content) {
+  img { <span class="tf">border-radius</span>: <span class="tn">8px</span>; }
 }</code></pre>
         </div>
         <ul class="tile__chips" aria-label="Highlights">
@@ -647,7 +658,7 @@
 ambient_dawn.mp3
 nightfall_theme.mp3
 <span class="t-prompt">/home/user&gt;</span> music play music/nightfall_theme.mp3
-<span class="t-prompt">/home/user&gt;</span> open text editor notes.txt
+<span class="t-prompt">/home/user&gt;</span> open Text Editor notes.txt
 <span class="t-prompt">/home/user&gt;</span> skin psix-hifi<span class="caret" aria-hidden="true"></span></pre>
       </article>
 
@@ -668,7 +679,7 @@ nightfall_theme.mp3
       </article>
 
       <article class="tile tile--shader">
-        <p class="tile__tag">oasis-shader &middot; oasis-vector</p>
+        <p class="tile__tag">oasis-shader &middot; -vector</p>
         <h3>Living wallpapers</h3>
         <p>Eight Shadertoy-style backgrounds, each with a GLSL and a CPU implementation, plus
           resolution-independent vector icons.</p>
@@ -703,7 +714,20 @@ nightfall_theme.mp3
 
     <figure class="arch" aria-labelledby="arch-caption">
       <div class="arch__diagram">
-        <svg class="arch-svg" viewBox="0 0 1120 622" width="1120" height="622" aria-hidden="true" focusable="false">
+        <svg class="arch-svg" viewBox="0 0 1120 676" width="1120" height="676" aria-hidden="true" focusable="false">
+          <g class="arch-layer" style="--c:#b69cff">
+            <rect class="arch-band" x="0.5" y="0.5" width="1119" height="45" rx="10"/>
+            <rect x="0.5" y="8" width="3" height="30" rx="1.5" fill="#b69cff"/>
+            <text class="arch-label" x="22" y="27.0" fill="#b69cff">HOSTS</text>
+            <rect class="arch-pill" x="168" y="10.0" width="81" height="26" rx="6"/>
+            <text class="arch-crate" x="208.5" y="27.0" text-anchor="middle">oasis-app</text>
+            <rect class="arch-pill" x="255" y="10.0" width="81" height="26" rx="6"/>
+            <text class="arch-crate" x="295.5" y="27.0" text-anchor="middle">oasis-ffi</text>
+            <rect class="arch-pill" x="342" y="10.0" width="115" height="26" rx="6"/>
+            <text class="arch-crate" x="399.5" y="27.0" text-anchor="middle">oasis-usb-host</text>
+            <text class="arch-note" x="473" y="27.0">desktop shell + oasis-screenshot · C ABI cdylib for UE5 · PSP USB thin-client host</text>
+          </g>
+          <g transform="translate(0 54)">
           <g class="arch-layer" style="--c:#ff6b6b">
             <rect class="arch-band" x="0.5" y="0.5" width="1119" height="45" rx="10"/>
             <rect x="0.5" y="8" width="3" height="30" rx="1.5" fill="#ff6b6b"/>
@@ -808,7 +832,9 @@ nightfall_theme.mp3
             <text class="arch-label" x="22" y="351.0" fill="#7cc7ff">FOUNDATION</text>
             <rect class="arch-pill" x="168" y="334.0" width="94" height="26" rx="6"/>
             <text class="arch-crate" x="215.0" y="351.0" text-anchor="middle">oasis-types</text>
-            <text class="arch-note" x="278" y="351.0">Color · InputEvent · geometry · errors · backend traits</text>
+            <rect class="arch-pill" x="268" y="334.0" width="143" height="26" rx="6"/>
+            <text class="arch-crate" x="339.5" y="351.0" text-anchor="middle">oasis-test-backend</text>
+            <text class="arch-note" x="427" y="351.0">Color · InputEvent · geometry · errors · backend traits · test doubles</text>
           </g>
           <line class="arch-boundary" x1="0" y1="400" x2="1120" y2="400"/>
           <rect x="494.2" y="389" width="131.60000000000002" height="22" rx="11" class="arch-boundary-tag"/>
@@ -886,12 +912,15 @@ nightfall_theme.mp3
             <text class="arch-backend-sub" x="921.6" y="582">kernel PRX · no oasis-core</text>
             <text class="arch-backend-target" x="921.6" y="604">&#9656; Overlay on running games</text>
           </g>
+          </g>
         </svg>
       </div>
 
       <!-- The accessible (and small-screen) version of the diagram above. -->
       <div class="arch__text">
         <ol class="arch__stack" aria-label="Crate layers, top to bottom">
+          <li class="layer layer--hosts"><span class="layer__name">Hosts</span>
+            <ul class="layer__crates"><li>oasis-app</li><li>oasis-ffi</li><li>oasis-usb-host</li><li class="note">desktop shell &middot; C ABI for UE5 &middot; PSP USB host</li></ul></li>
           <li class="layer layer--registry"><span class="layer__name">Registry</span>
             <ul class="layer__crates"><li>oasis-apps</li><li class="note">app table &middot; host glue over core + app crates</li></ul></li>
           <li class="layer layer--core"><span class="layer__name">Coordination</span>
@@ -905,7 +934,7 @@ nightfall_theme.mp3
           <li class="layer layer--svc"><span class="layer__name">Services</span>
             <ul class="layer__crates"><li>oasis-vfs</li><li>oasis-platform</li><li>oasis-net</li><li>oasis-mcp</li><li>oasis-i18n</li></ul></li>
           <li class="layer layer--types"><span class="layer__name">Foundation</span>
-            <ul class="layer__crates"><li>oasis-types</li><li class="note">Color &middot; InputEvent &middot; geometry &middot; errors &middot; <strong>backend traits</strong></li></ul></li>
+            <ul class="layer__crates"><li>oasis-types</li><li>oasis-test-backend</li><li class="note">Color &middot; InputEvent &middot; geometry &middot; errors &middot; <strong>backend traits</strong></li></ul></li>
         </ol>
         <p class="arch__boundary"><span>Trait boundary</span></p>
         <ul class="arch__traits" aria-label="Backend traits">
@@ -924,8 +953,11 @@ nightfall_theme.mp3
         </ul>
       </div>
       <figcaption class="arch__caption" id="arch-caption">
-        Crates depend downward only. Backends implement the <code>oasis-types</code> traits; the PSP
+        Crates depend downward; only the hosts also link a backend from below the line. Backends
+        implement the <code>oasis-types</code> traits; the PSP
         overlay PRX stays standalone, without <code>oasis-core</code>, so it stays small (about 150&nbsp;KB) beside a running game.
+        Not drawn: eight more standalone PSP tools &mdash; the recovery EBOOT, the dev loop, ME boot,
+        PRX decrypt and four USB client / debug / trace / VBUS crates.
       </figcaption>
     </figure>
 
