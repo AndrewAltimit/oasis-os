@@ -4,6 +4,7 @@
 //! All geometry comes from [`PaintLayout`] so drawing and hit-testing
 //! agree; all colors come from the active theme via [`PaintColors`].
 
+use oasis_app_core::render::draw_status_strip;
 use oasis_skin::ActiveTheme;
 use oasis_types::backend::{BatchRect, Color, SdiBackend};
 use oasis_ui::menu_bar::MenuStyle;
@@ -145,12 +146,19 @@ impl PaintApp {
             self.cursor_x,
             self.cursor_y,
         );
+        // Tool info on the left, the file / status message on the right; in
+        // a narrow window the right one gives way and the left is cut.
         let text_x = l.info.x + 8 + sw as i32;
-        backend.draw_text(&info, text_x, l.info.y + 2, at.font_hint, colors.text)?;
+        let strip_w = (l.info.x + l.info.w as i32 - 2 - (text_x - 4)).max(0) as u32;
         let right = self.status.clone().unwrap_or_else(|| self.file_label());
-        let right_w = backend.measure_text(&right, at.font_hint) as i32;
-        let right_x = (l.info.x + l.info.w as i32 - right_w - 6).max(text_x + 8);
-        backend.draw_text(&right, right_x, l.info.y + 2, at.font_hint, colors.dim_text)
+        draw_status_strip(
+            backend,
+            (text_x - 4, l.info.y, strip_w, l.info.h),
+            &info,
+            &right,
+            at.font_hint,
+            (colors.text, colors.dim_text),
+        )
     }
 
     /// Draw the canvas clipped to its view (1 px of slack for the frame),

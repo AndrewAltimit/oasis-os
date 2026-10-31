@@ -103,7 +103,8 @@ impl SystemMonitorApp {
         for (i, (label, value)) in rows.iter().enumerate() {
             let ry = y + 3 + i as i32 * INFO_ROW_H;
             backend.draw_text(label, x + 6, ry, font, colors.label)?;
-            backend.draw_text(value, x + 6 + INFO_LABEL_W, ry, font, colors.text)?;
+            let value_w = (inner_w as i32 - 12 - INFO_LABEL_W).max(0) as u32;
+            backend.draw_text_ellipsis(value, x + 6 + INFO_LABEL_W, ry, font, colors.text, value_w)?;
         }
         y += card_h as i32 + GAUGE_GAP + 2;
 
@@ -132,6 +133,8 @@ impl SystemMonitorApp {
 
         // Footer.
         let footer_y = (cy + ch as i32 - PAD - GAUGE_TEXT_H).max(y);
-        backend.draw_text(self.footer(), x, footer_y, font, colors.dim_text)
+        backend
+            .draw_text_ellipsis(self.footer(), x, footer_y, font, colors.dim_text, inner_w)
+            .map(|_| ())
     }
 }

@@ -47,38 +47,42 @@ impl TvGuideState {
         let row_count = self.channels.len().clamp(1, VISIBLE_ROWS);
         let row_h = (grid_h / row_count as u32).max(16);
 
-        // Header.
+        // Header. Its text stops short of the preview box on the right.
+        let preview_w = (cw * 30 / 100).max(60);
+        let preview_h = header_h.saturating_sub(8);
+        let preview_x = cx + cw as i32 - preview_w as i32 - 4;
+        let header_text_w = (preview_x - 4 - (cx + 6)).max(0) as u32;
         backend.fill_rect(cx, cy, cw, header_h, colors.header_bg)?;
         let date_str = schedule::format_date(self.current_time);
         let time_str = schedule::format_time(self.current_time);
-        backend.draw_text(
+        backend.draw_text_ellipsis(
             &format!("{date_str}  |  {time_str}"),
             cx + 6,
             cy + 3,
             at.font_hint,
             colors.date_text,
+            header_text_w,
         )?;
         let ch_info = self.build_channel_info();
-        backend.draw_text(
+        backend.draw_text_ellipsis(
             &ch_info,
             cx + 6,
             cy + 3 + at.font_hint as i32 + 2,
             at.font_small,
             colors.channel_label,
+            header_text_w,
         )?;
         let now_title = self.build_now_playing_title();
-        backend.draw_text(
+        backend.draw_text_ellipsis(
             &now_title,
             cx + 6,
             cy + 3 + at.font_hint as i32 + at.font_small as i32 + 4,
             at.font_hint,
             colors.playing_text,
+            header_text_w,
         )?;
 
         // Preview box (right side of header).
-        let preview_w = (cw * 30 / 100).max(60);
-        let preview_h = header_h.saturating_sub(8);
-        let preview_x = cx + cw as i32 - preview_w as i32 - 4;
         let preview_y = cy + 4;
         backend.fill_rect(preview_x, preview_y, preview_w, preview_h, colors.bg)?;
         if let Some(tex) = self.preview_texture {
@@ -112,8 +116,17 @@ impl TvGuideState {
             let col_x = cx + label_w as i32 + col as i32 * slot_w as i32;
             // Vertical separator between time-header columns.
             backend.fill_rect(col_x, time_y, 1, time_h, colors.grid_line)?;
-            backend.draw_text(
+            // Column labels never run into the next column (or past the
+            // window edge in a narrow window).
+            let label = oasis_app_core::render::ellipsize(
+                backend,
                 &schedule::format_time(slot_time),
+                at.font_hint,
+                slot_w.saturating_sub(6),
+            )
+            .into_owned();
+            backend.draw_text(
+                &label,
                 col_x + 4,
                 time_y + 2,
                 at.font_hint,
@@ -231,7 +244,20 @@ impl TvGuideState {
             self.current_page(),
             self.total_pages(),
         );
-        backend.draw_text(&nav, cx + 6, ftr_y + 2, at.font_hint, colors.dim_text)?;
+        // The hint ends before the volume bar the footer shows when tuned.
+        let nav_end = if self.tuned_channel.is_some() {
+            cx + volume_bar_rect(cw, ch, false).x - 6
+        } else {
+            cx + cw as i32 - 6
+        };
+        oasis_app_core::render::draw_status_strip(
+            backend,
+            (cx + 2, ftr_y, (nav_end - cx - 2).max(0) as u32, footer_h),
+            &nav,
+            "",
+            at.font_hint,
+            (colors.dim_text, colors.dim_text),
+        )?;
 
         // Volume bar in footer when tuned.
         if self.tuned_channel.is_some() {

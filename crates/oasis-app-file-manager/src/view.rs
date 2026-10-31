@@ -583,7 +583,7 @@ impl FileManagerApp {
             &self.status_or(&format!("{count} object(s)")),
             "View>List  Cancel=back",
             at.font_hint,
-            colors.status_text,
+            (colors.status_text, colors.status_text),
         )?;
 
         // Drop-down floats above the rest of the windowed content.

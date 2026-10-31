@@ -1144,6 +1144,7 @@ dependencies = [
  "oasis-app-tv-guide",
  "oasis-core",
  "oasis-types",
+ "oasis-vfs",
  "serde",
  "serde_json",
  "toml",
