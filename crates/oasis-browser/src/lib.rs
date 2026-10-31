@@ -590,6 +590,11 @@ pub struct BrowserWidget {
     /// response headers).
     page_csp: Option<loader::csp::CspPolicy>,
 
+    /// The page's CSP while reader mode shows our own generated page
+    /// (whose `<style>` a `style-src 'self'` policy would block); put back
+    /// when reader mode is toggled off.
+    reader_saved_csp: Option<loader::csp::CspPolicy>,
+
     /// Persistent text measurement cache shared across layout passes.
     /// Cleared only when the effective font size changes (e.g. zoom).
     text_cache: layout::text_cache::SharedTextCache,
@@ -781,6 +786,7 @@ impl BrowserWidget {
             animation_engine: css::animation::AnimationEngine::new(),
             last_tick_time: None,
             page_csp: None,
+            reader_saved_csp: None,
             text_cache: layout::text_cache::new_shared_cache(),
             #[cfg(feature = "web-fonts")]
             font_registry: std::cell::RefCell::new(font::FontRegistry::new()),

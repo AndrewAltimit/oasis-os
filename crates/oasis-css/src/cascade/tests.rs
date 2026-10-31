@@ -3653,6 +3653,27 @@ mod spec_followups {
     }
 
     #[test]
+    fn revert_rolls_back_to_the_user_agent_value() {
+        // The "new CSS reset": `all: unset` then `display: revert` must
+        // keep block elements blocks (it made every `<div>` inline).
+        let html = r#"<div id="t">a</div><span id="s">b</span>"#;
+        let css = "* { all: unset; display: revert }";
+        let doc = TreeBuilder::build(Tokenizer::new(html).tokenize());
+        let author = Stylesheet::parse(css);
+        let refs = [crate::default::default_stylesheet(), &author];
+        let styles = style_tree(&doc, &refs, &[], &ctx());
+        let style = |id| {
+            let node = doc.get_element_by_id(id).expect("element with id");
+            styles[node].clone().expect("element style")
+        };
+        assert_eq!(style("t").display, Display::Block);
+        // No UA value for a span's display: `revert` acts as `unset`.
+        assert_eq!(style("s").display, Display::Inline);
+        // Without the UA sheet in the cascade, `revert` is `unset`.
+        assert_eq!(styles_of(html, &[css], "t").display, Display::Inline);
+    }
+
+    #[test]
     fn flex_shorthand_reaches_the_computed_style() {
         let html = r#"<div><i id="a"></i><i id="b"></i><i id="c"></i><i id="d"></i></div>"#;
         let css = "#a { flex: 1 } #b { flex: auto } #c { flex: none } #d { flex: 2 1 0 }";

@@ -71,6 +71,30 @@ fn attributes_are_capped_and_deduplicated() {
     assert_eq!(doc.get_element_by_id("b"), Some(divs[1]));
 }
 
+/// Stray `<body>` tags merge their new attributes into the body; distinct
+/// names in each tag used to pile up without bound (and each merge
+/// rescanned them all).
+#[test]
+fn merged_body_attributes_are_capped() {
+    let mut html = String::from("<body>x");
+    for t in 0..300 {
+        let attrs: String = (0..200).map(|i| format!(" t{t}a{i}")).collect();
+        html.push_str(&format!("<body{attrs}>"));
+    }
+    let start = Instant::now();
+    let doc = parse(&html);
+    assert_fast(start, "body attribute merge");
+    let body = find(&doc, &TagName::Body)[0];
+    assert!(doc.element(body).unwrap().attributes.len() <= 256);
+    // A legitimate late attribute still lands.
+    let doc = parse("<body>x<body class=late>");
+    let body = find(&doc, &TagName::Body)[0];
+    assert_eq!(
+        doc.element(body).unwrap().get_attribute("class"),
+        Some("late")
+    );
+}
+
 /// Reopening a `<b>` with thousands of attributes after every `<p>`
 /// multiplied them: 37 KB of markup became ten million attributes.
 #[test]
@@ -196,6 +220,16 @@ fn character_reference_edge_cases() {
     assert_eq!(text_of("&#0abc"), "\u{FFFD}abc");
     assert_eq!(text_of("&#150;&#128;"), "\u{2013}\u{20AC}");
     assert_eq!(text_of("&#65;&#x42;"), "AB");
+    // RCDATA (`<title>`, `<textarea>`) maps C1 references the same way.
+    let doc = parse("<title>A &#151; B</title><textarea>&#x96;</textarea>");
+    assert_eq!(
+        doc.text_content(find(&doc, &TagName::Title)[0]),
+        "A \u{2014} B"
+    );
+    assert_eq!(
+        doc.text_content(find(&doc, &TagName::Textarea)[0]),
+        "\u{2013}"
+    );
     // In attributes, a `;`-less reference followed by `=` stays literal.
     let doc = parse(r#"<a href="/s?q=1&pi=3&copy=2&amp;x&copy;">l</a>"#);
     let a = find(&doc, &TagName::A)[0];

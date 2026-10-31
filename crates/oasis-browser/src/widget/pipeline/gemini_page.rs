@@ -38,13 +38,19 @@ impl BrowserWidget {
             if let Some(article) = self.document.as_ref().and_then(reader::extract_article) {
                 self.reader_html = Some(article.html.clone());
                 self.skip_nav_push = true;
+                // The reader page is ours (an element whitelist, no
+                // scripts): the page's CSP must not block its `<style>`.
+                self.reader_saved_csp = self.page_csp.take();
                 self.load_html(&article.html, &url);
                 self.selected_link = -1;
                 self.nav.update_title(&format!("Reader: {}", article.title));
             }
         } else {
-            // Restore the original page from the cache.
+            // Restore the original page (and its CSP) from the cache.
             self.reader_html = None;
+            if let Some(csp) = self.reader_saved_csp.take() {
+                self.page_csp = Some(csp);
+            }
             if let Some(entry) = self.cache.get(&url) {
                 let body = entry.response.body.clone();
                 let ct = entry.response.content_type;

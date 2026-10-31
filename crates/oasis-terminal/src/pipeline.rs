@@ -440,9 +440,24 @@ pub(crate) fn output_to_text(output: &CommandOutput) -> String {
     }
 }
 
+/// SGR the shell itself puts around directory names (`ls`, `tree`):
+/// bright blue. The redundant `24` (underline off) makes the sequence one
+/// that files practically never contain, so [`capture_text`] can remove
+/// exactly the shell's colouring and leave other ANSI text alone.
+pub(crate) const DIR_COLOR_ON: &str = "\u{1b}[94;24m";
+/// Ends [`DIR_COLOR_ON`] (default foreground).
+pub(crate) const DIR_COLOR_OFF: &str = "\u{1b}[39;24m";
+
+/// `name` in the shell's directory colour.
+pub(crate) fn dir_colored(name: &str) -> String {
+    format!("{DIR_COLOR_ON}{name}{DIR_COLOR_OFF}")
+}
+
 /// The text of `output` as a pipe, `$(...)` or redirect receives it:
-/// [`output_to_text`] without ANSI escape sequences (`ls` colours
+/// [`output_to_text`] without the shell's own colouring (`ls` colours
 /// directory names for the terminal, which `for d in $(ls)` must not see).
+/// Other escape sequences pass through: `cat art.ans > copy.ans` copies
+/// the file byte for byte.
 pub(crate) fn capture_text(output: &CommandOutput) -> String {
     let text = output_to_text(output);
     match strip_ansi(&text) {
@@ -451,27 +466,13 @@ pub(crate) fn capture_text(output: &CommandOutput) -> String {
     }
 }
 
-/// Remove ANSI CSI escape sequences (`ESC [ params final`) from `text`.
+/// Remove the shell's colour sequences ([`DIR_COLOR_ON`] /
+/// [`DIR_COLOR_OFF`]) from `text`.
 pub(crate) fn strip_ansi(text: &str) -> Cow<'_, str> {
-    if !text.contains('\u{1b}') {
+    if !text.contains(DIR_COLOR_ON) && !text.contains(DIR_COLOR_OFF) {
         return Cow::Borrowed(text);
     }
-    let mut out = String::with_capacity(text.len());
-    let mut chars = text.chars().peekable();
-    while let Some(c) = chars.next() {
-        if c == '\u{1b}' && chars.peek() == Some(&'[') {
-            chars.next();
-            // Parameter / intermediate bytes, then one final byte.
-            for n in chars.by_ref() {
-                if ('\u{40}'..='\u{7e}').contains(&n) {
-                    break;
-                }
-            }
-            continue;
-        }
-        out.push(c);
-    }
-    Cow::Owned(out)
+    Cow::Owned(text.replace(DIR_COLOR_ON, "").replace(DIR_COLOR_OFF, ""))
 }
 
 /// The path a redirect to which discards its text.
@@ -540,8 +541,14 @@ mod tests {
     }
 
     #[test]
-    fn strip_ansi_removes_sgr() {
-        assert_eq!(strip_ansi("\u{1b}[94mdir/\u{1b}[0m file"), "dir/ file");
+    fn strip_ansi_removes_only_the_shells_colouring() {
+        assert_eq!(
+            strip_ansi(&format!("{} file", dir_colored("dir/"))),
+            "dir/ file"
+        );
         assert_eq!(strip_ansi("plain"), "plain");
+        // File contents with their own escapes are left alone.
+        let art = "\u{1b}[31mred\u{1b}[0m \u{1b}[";
+        assert_eq!(strip_ansi(art), art);
     }
 }

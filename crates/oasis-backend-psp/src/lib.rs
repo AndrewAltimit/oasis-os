@@ -122,6 +122,27 @@ struct Align16<T>(T);
 
 static mut DISPLAY_LIST: Align16<[u8; DISPLAY_LIST_SIZE]> = Align16([0u8; DISPLAY_LIST_SIZE]);
 
+/// `sceGuScissor` arguments (start x / y, exclusive end x / y) for the clip
+/// rect `x, y, w, h`, clamped to the screen.
+///
+/// The GE stores the start and the inclusive end (`end - 1`) in 10-bit
+/// fields, so unclamped values wrap: a clip starting left of / above the
+/// screen (a window dragged partly off it) started near 1023 and hid all
+/// its content, and an empty clip (`ClipRect::EMPTY`, nested clips that
+/// miss) had its end wrap from -1 to 1023, which drew everywhere. An empty
+/// result is encoded as start (1, 1), inclusive end (0, 0): nothing passes.
+fn scissor_args(x: i32, y: i32, w: u32, h: u32) -> (i32, i32, i32, i32) {
+    let (sw, sh) = (SCREEN_WIDTH as i32, SCREEN_HEIGHT as i32);
+    let x0 = x.clamp(0, sw);
+    let y0 = y.clamp(0, sh);
+    let x1 = x.saturating_add_unsigned(w).clamp(0, sw);
+    let y1 = y.saturating_add_unsigned(h).clamp(0, sh);
+    if x1 <= x0 || y1 <= y0 {
+        return (1, 1, 1, 1);
+    }
+    (x0, y0, x1, y1)
+}
+
 /// Set when a PSP utility dialog (OSK, message / error dialog, WiFi connect
 /// dialog) took over the GE; consumed by `PspBackend::reinit_gu_frame`.
 static GU_DIALOG_RAN: AtomicBool = AtomicBool::new(false);
@@ -304,9 +325,10 @@ impl PspBackend {
 
     /// Set the clipping rectangle via GU scissor.
     pub fn set_clip_rect_inner(&mut self, x: i32, y: i32, w: u32, h: u32) {
+        let (x0, y0, x1, y1) = scissor_args(x, y, w, h);
         // SAFETY: sceGuScissor is a GU FFI call operating on the display list.
         unsafe {
-            sys::sceGuScissor(x, y, x + w as i32, y + h as i32);
+            sys::sceGuScissor(x0, y0, x1, y1);
         }
     }
 

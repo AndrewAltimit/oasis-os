@@ -103,9 +103,10 @@ pub(crate) fn copy_recursive(vfs: &mut dyn Vfs, from: &str, to: &str) -> Result<
     }
 }
 
-/// Recursively delete `path` (children first, then the entry itself).
+/// Recursively delete `path` (children first, then the entry itself). A
+/// symlink to a directory is removed as a link; its target is untouched.
 pub(crate) fn remove_recursive(vfs: &mut dyn Vfs, path: &str) -> Result<(), String> {
-    if is_dir(vfs, path) {
+    if is_dir(vfs, path) && !vfs.is_symlink(path) {
         let entries = vfs.readdir(path).map_err(|e| e.to_string())?;
         for entry in entries {
             remove_recursive(vfs, &join_path(path, &entry.name))?;
