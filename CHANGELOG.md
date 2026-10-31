@@ -9,7 +9,23 @@ larger changes by area. Breaking API changes are marked **(breaking)**.
 ### Final review fixes
 
 - Inline `style=""` attributes expand shorthands like stylesheet rules do: `style="flex: 1"`
-  (and other shorthands the value applier has no case for) now takes effect.
+  and multi-value `style="margin: 4px 0"` / `padding: 28px 0 14px` (read as 0 before) now
+  take effect.
+- CSS `revert !important` rolls back past every author declaration to the UA value (it fell
+  back to a normal author rule), and `revert` / `revert-layer` on a longhand find a
+  lower-layer shorthand that still holds `var()` (`@layer a { div { background: var(--bg) } }`
+  then `background-color: revert-layer`), applying only that longhand.
+- A flex item's max-content measure no longer subtracts a negative inline-box margin (its
+  text wrapped onto a second line).
+- MenuBar: a `»` overflow menu left open when the bar widens no longer swallows the next
+  key, and a menu folded into `»` since it opened moves with Left / Right from the `»` slot.
+- File Manager: Space activating a highlighted menu item no longer types a space into the
+  dialog it opens (Edit > New Folder).
+- Skins without a start menu (psix-hifi) no longer open an invisible one from a click on the
+  hidden start button in Dashboard mode, and Esc in a terminal-only skin (corrupted) no
+  longer blanks the terminal.
+- `ClipAuditBackend` reports a bound render target's size as its viewport, so shape draws
+  inside a target larger than the screen are recorded and audited.
 - Shell redirections apply left to right, as in a POSIX shell: `cmd 2>&1 > f` leaves stderr
   on the terminal and writes only stdout to `f` (it behaved like `cmd > f 2>&1`),
   `cmd >&2 2> f` keeps stdout on the terminal, and an overridden `> a` (`> a > b`) is still
