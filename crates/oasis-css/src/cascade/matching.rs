@@ -1108,16 +1108,22 @@ impl Budget {
                 }
                 let mut index = Vec::with_capacity(kids.len());
                 let mut count = 0u32;
-                for &c in kids {
+                // Start the hint at `node` so the lookup below is not a
+                // second scan: this check costs exactly the indexing scan.
+                let mut hint = 0;
+                for (slot, &c) in kids.iter().enumerate() {
                     let is_elem = matches!(doc.nodes[c].kind, NodeKind::Element(_));
                     count += u32::from(is_elem);
                     index.push(if is_elem { count } else { 0 });
+                    if c == node {
+                        hint = slot;
+                    }
                 }
                 *memo = SiblingMemo::Indexed {
                     parent,
                     index,
                     count: count as usize,
-                    hint: 0,
+                    hint,
                 };
                 drop(memo);
                 return self.sibling_pos(doc, node);
