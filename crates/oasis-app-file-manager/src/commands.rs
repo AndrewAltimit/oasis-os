@@ -8,7 +8,7 @@
 use oasis_app_core::AppAction;
 use oasis_app_core::file_viewer::{app_for_file, join_path, parent_dir, view_generic_file};
 use oasis_types::input::{Button, Key, Modifiers};
-use oasis_ui::menu_bar::{Menu, MenuBar, MenuEntry};
+use oasis_ui::menu_bar::{Menu, MenuBar, MenuEntry, MenuKey};
 use oasis_vfs::Vfs;
 
 use crate::model::{Clipboard, Dialog, EntryKind, FileOp, NamePurpose, NavTarget, ViewMode};
@@ -437,6 +437,14 @@ impl FileManagerApp {
     pub(crate) fn handle_fm_key(&mut self, key: &Key, mods: Modifiers) -> Option<AppAction> {
         if self.content.viewing_file.is_some() {
             return None;
+        }
+        // F10 opens the menu bar; an open menu takes every key.
+        if self.dialog.is_none() {
+            match self.menu.handle_key(*key, self.content_size.0) {
+                MenuKey::Ignored => {},
+                MenuKey::Handled => return Some(AppAction::None),
+                MenuKey::Activate(id) => return Some(self.run_menu_action(&id)),
+            }
         }
         if let Some(dialog) = &self.dialog {
             let is_confirm = matches!(dialog, Dialog::ConfirmDelete { .. });

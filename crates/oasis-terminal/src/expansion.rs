@@ -77,16 +77,20 @@ enum Dollar {
 /// A `${...}` form beyond the plain `${NAME}`.
 enum ParamExpr {
     /// `${NAME:-WORD}` (`colon`: also when empty) / `${NAME-WORD}`.
+    /// `quoted`: the expansion is inside double quotes, so `WORD` is
+    /// double-quoted text (`"${X:-it's}"`).
     Default {
         name: String,
         word: String,
         colon: bool,
+        quoted: bool,
     },
     /// `${NAME:=WORD}` / `${NAME=WORD}`: like `Default`, and assigns.
     Assign {
         name: String,
         word: String,
         colon: bool,
+        quoted: bool,
     },
     /// `${#NAME}`: the length of the value in characters.
     Length(String),
@@ -105,8 +109,8 @@ pub(crate) fn is_param_name(name: &str) -> bool {
     }
 }
 
-/// Parse the body of a `${...}`.
-fn parse_braced(body: &str) -> Dollar {
+/// Parse the body of a `${...}` (`quoted`: inside double quotes).
+fn parse_braced(body: &str, quoted: bool) -> Dollar {
     if is_param_name(body) {
         return Dollar::Var(body.to_string());
     }
@@ -130,8 +134,22 @@ fn parse_braced(body: &str) -> Dollar {
         let word = it.as_str().to_string();
         let name = name.to_string();
         match op {
-            Some('-') => return Dollar::Param(ParamExpr::Default { name, word, colon }),
-            Some('=') => return Dollar::Param(ParamExpr::Assign { name, word, colon }),
+            Some('-') => {
+                return Dollar::Param(ParamExpr::Default {
+                    name,
+                    word,
+                    colon,
+                    quoted,
+                });
+            },
+            Some('=') => {
+                return Dollar::Param(ParamExpr::Assign {
+                    name,
+                    word,
+                    colon,
+                    quoted,
+                });
+            },
             _ => {},
         }
     }
@@ -139,35 +157,55 @@ fn parse_braced(body: &str) -> Dollar {
 }
 
 /// Index of the `}` closing a `${` whose body starts at `start` (nested
-/// `{` / `}` balance).
-fn find_brace_end(chars: &[char], start: usize) -> Option<usize> {
-    let mut depth = 1usize;
-    for (j, &c) in chars.iter().enumerate().skip(start) {
-        match c {
-            '{' => depth += 1,
-            '}' => {
-                depth -= 1;
-                if depth == 0 {
-                    return Some(j);
-                }
-            },
-            _ => {},
+/// `{` / `}` balance). Braces that are quoted or backslash-escaped in the
+/// body do not count (`${X:-"}"}`, `${X:-\}}`). `in_double`: the `${` is
+/// inside double quotes, where a `'` is a plain character
+/// (`"${X:-it's}"`).
+fn find_brace_end(chars: &[char], start: usize, in_double: bool) -> Option<usize> {
+    let (mut depth, mut j) = (1usize, start);
+    let (mut in_sq, mut in_dq) = (false, false);
+    while j < chars.len() {
+        let c = chars[j];
+        if in_sq {
+            in_sq = c != '\'';
+        } else if in_dq {
+            match c {
+                '"' => in_dq = false,
+                '\\' => j += 1,
+                _ => {},
+            }
+        } else {
+            match c {
+                '\'' if !in_double => in_sq = true,
+                '"' => in_dq = true,
+                '\\' => j += 1,
+                '{' => depth += 1,
+                '}' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        return Some(j);
+                    }
+                },
+                _ => {},
+            }
         }
+        j += 1;
     }
     None
 }
 
-/// Parse the expansion starting at the `$` at `chars[i]`. Returns it and
-/// the index just past it, or `None` for a literal `$`.
-fn parse_dollar(chars: &[char], i: usize) -> Option<(Dollar, usize)> {
+/// Parse the expansion starting at the `$` at `chars[i]` (`in_double`:
+/// inside double quotes). Returns it and the index just past it, or `None`
+/// for a literal `$`.
+fn parse_dollar(chars: &[char], i: usize, in_double: bool) -> Option<(Dollar, usize)> {
     match *chars.get(i + 1)? {
         c @ ('?' | '#' | '@' | '*') => Some((Dollar::Var(c.to_string()), i + 2)),
         // `$1x` is `${1}x`: positional names are one digit.
         c if c.is_ascii_digit() => Some((Dollar::Var(c.to_string()), i + 2)),
         '{' => {
-            let close = find_brace_end(chars, i + 2)?;
+            let close = find_brace_end(chars, i + 2, in_double)?;
             let body: String = chars[i + 2..close].iter().collect();
-            Some((parse_braced(&body), close + 1))
+            Some((parse_braced(&body, in_double), close + 1))
         },
         '(' => {
             let close = find_subst_end(chars, i + 2)?;
@@ -226,7 +264,7 @@ impl CommandRegistry {
     ) -> Result<Vec<Word>> {
         let home = self.get_variable("HOME").filter(|h| !h.is_empty());
         split_words(input, home.as_deref(), &mut |chars, i, in_double, out| {
-            let Some((dollar, end)) = parse_dollar(chars, i) else {
+            let Some((dollar, end)) = parse_dollar(chars, i, in_double) else {
                 return Ok(None);
             };
             let whole = in_double || !split;
@@ -301,14 +339,24 @@ impl CommandRegistry {
             ParamExpr::Length(name) => {
                 Ok(self.var_value(&name, &env.cwd).chars().count().to_string())
             },
-            ParamExpr::Default { name, word, colon } => {
+            ParamExpr::Default {
+                name,
+                word,
+                colon,
+                quoted,
+            } => {
                 if unset_or_empty(&name, colon) {
-                    self.expand_param_word(&word, env)
+                    self.expand_param_word(&word, quoted, env)
                 } else {
                     Ok(self.var_value(&name, &env.cwd))
                 }
             },
-            ParamExpr::Assign { name, word, colon } => {
+            ParamExpr::Assign {
+                name,
+                word,
+                colon,
+                quoted,
+            } => {
                 if !unset_or_empty(&name, colon) {
                     return Ok(self.var_value(&name, &env.cwd));
                 }
@@ -317,7 +365,7 @@ impl CommandRegistry {
                         format!("${{{name}}}: cannot assign in this way").into(),
                     ));
                 }
-                let value = self.expand_param_word(&word, env)?;
+                let value = self.expand_param_word(&word, quoted, env)?;
                 self.assign_variable(&name, &value)?;
                 Ok(value)
             },
@@ -327,9 +375,19 @@ impl CommandRegistry {
         }
     }
 
-    /// Expand the `WORD` of `${NAME:-WORD}` into one string.
-    fn expand_param_word(&self, word: &str, env: &mut Environment<'_>) -> Result<String> {
-        let words = self.expand_words_of(word, env)?;
+    /// Expand the `WORD` of `${NAME:-WORD}` into one string (`quoted`:
+    /// the expansion is inside double quotes, and so is `WORD`).
+    fn expand_param_word(
+        &self,
+        word: &str,
+        quoted: bool,
+        env: &mut Environment<'_>,
+    ) -> Result<String> {
+        let words = if quoted {
+            self.expand_words_of(&format!("\"{word}\""), env)?
+        } else {
+            self.expand_words_of(word, env)?
+        };
         Ok(words
             .into_iter()
             .map(|w| w.text)
@@ -410,7 +468,7 @@ impl CommandRegistry {
                     i += 2;
                     continue;
                 },
-                '$' => match parse_dollar(&chars, i) {
+                '$' => match parse_dollar(&chars, i, in_double) {
                     Some((Dollar::Var(name), end)) => {
                         let value = self.var_value(&name, cwd);
                         quote_into(&mut out, &value, in_double);

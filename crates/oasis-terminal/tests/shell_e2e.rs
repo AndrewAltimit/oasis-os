@@ -827,6 +827,23 @@ fn background_jobs_lifecycle() {
     assert!(out.contains("Exit") || out.contains("error"), "{out}");
 }
 
+/// A background job is a subshell: its exit status and `cd` don't reach
+/// the interactive session's `$?`, cwd or `$OLDPWD`.
+#[test]
+fn background_jobs_leave_the_session_status_and_dirs_alone() {
+    let mut sh = Shell::memory();
+    sh.ok("cd /home/user");
+    sh.ok("cd /tmp");
+    sh.ok("cd / && false &");
+    sh.ok("true");
+    let out = sh.tick().unwrap();
+    assert!(out.contains("Exit 1"), "{out}");
+    assert_eq!(sh.ok("echo $? $OLDPWD $CWD"), "0 /home/user /tmp");
+    assert_eq!(sh.cwd, "/tmp");
+    // `cd -` still goes back to where the user was, not the job's dir.
+    assert_eq!(sh.ok("cd -"), "/home/user");
+}
+
 #[test]
 fn many_background_jobs_drain_in_order() {
     let mut sh = Shell::memory();
@@ -1416,6 +1433,76 @@ fn parameter_expansion_forms() {
     assert_eq!(sh.ok("echo ${NOPE:-$V}"), "val");
     let err = sh.run("echo ${V%x}").unwrap_err();
     assert!(err.contains("bad substitution"), "{err}");
+}
+
+/// The `}` closing `${...}` is found past quoted or escaped braces in the
+/// word, and inside double quotes a `'` in the word is a plain character.
+#[test]
+fn parameter_expansion_braces_respect_quotes() {
+    let mut sh = Shell::memory();
+    assert_eq!(sh.ok("echo ${NOPE:-\"}\"}"), "}");
+    assert_eq!(sh.ok("echo ${NOPE:-'a}b'}x"), "a}bx");
+    assert_eq!(sh.ok("echo ${NOPE:-\\}}"), "}");
+    assert_eq!(sh.ok("echo \"${NOPE:-it's}\""), "it's");
+    assert_eq!(sh.ok("echo \"[${NOPE:-a  b}]\""), "[a  b]");
+    sh.ok("set V=val");
+    assert_eq!(sh.ok("echo \"${V:-it's}\" ${V:-'}'}"), "val val");
+    assert_eq!(sh.ok("echo ${NEW:='x}y'} $NEW"), "x}y x}y");
+}
+
+/// A failing stage before the last feeds the next one nothing instead of
+/// aborting the pipeline; the pipeline's status is the last stage's.
+#[test]
+fn failing_early_pipeline_stage_does_not_abort_the_pipeline() {
+    let mut sh = Shell::memory();
+    let out = sh.ok("cat /missing | wc -l");
+    let lines: Vec<&str> = out.lines().collect();
+    assert_eq!(lines.len(), 2, "{out}");
+    assert!(lines[0].starts_with("error:"), "{out}");
+    assert_eq!(lines[1].trim(), "0", "{out}");
+    assert_eq!(sh.ok("echo $?"), "0");
+    sh.ok("cat /missing | wc -l > /tmp/n.txt && echo ran");
+    assert_eq!(
+        String::from_utf8(sh.vfs.read("/tmp/n.txt").unwrap())
+            .unwrap()
+            .trim(),
+        "0"
+    );
+    // The last stage failing still fails the pipeline.
+    assert!(sh.run("echo hi | nosuchcmd").is_err());
+    let out = sh.ok("echo hi | nosuchcmd || echo fallback");
+    assert!(
+        out.contains("nosuchcmd") && out.ends_with("\nfallback"),
+        "{out}"
+    );
+}
+
+/// `NAME=value` assigns a shell variable; before a command it holds for
+/// that command only. Values are not field-split.
+#[test]
+fn posix_variable_assignments() {
+    let mut sh = Shell::memory();
+    sh.ok("A=1 B=\"two words\"");
+    assert_eq!(sh.ok("echo $A [$B]"), "1 [two words]");
+    sh.ok("C=$B");
+    assert_eq!(sh.ok("echo \"[$C]\""), "[two words]");
+    sh.ok("D=$(echo x  y)");
+    assert_eq!(sh.ok("echo \"[$D]\""), "[x y]");
+    sh.ok("function show() { echo [$P]; }");
+    assert_eq!(sh.ok("P=temp show"), "[temp]");
+    assert_eq!(sh.ok("echo [$P]"), "[]");
+    sh.ok("P=kept");
+    assert_eq!(sh.ok("P=temp show; echo $P"), "[temp]\nkept");
+    // An assignment's status is its last `$(...)`'s; a command's is its
+    // own (a substitution in its arguments does not leak into it).
+    sh.ok("E=$(false)");
+    assert_eq!(sh.ok("echo $?"), "1");
+    assert_eq!(sh.ok("echo $(false)x; echo $?"), "x\n0");
+    assert_eq!(sh.ok("echo $(false)x && echo ok"), "x\nok");
+    // Not assignments: a quoted name, or `=` later in the word.
+    assert!(sh.run("'Q=1'").is_err());
+    assert_eq!(sh.ok("echo X=1"), "X=1");
+    assert!(sh.run("1X=2").is_err());
 }
 
 #[test]

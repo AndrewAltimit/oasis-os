@@ -8,6 +8,12 @@
 //! The widget owns open/close state and hover tracking; it renders its
 //! bar + any active drop-down via the [`oasis_types::backend::SdiBackend`]
 //! trait so it works on every backend (SDL3, WASM, UE5, PSP).
+//!
+//! Keyboard hosts route raw keys through [`MenuBar::handle_key`] first:
+//! F10 opens the first menu (Alt belongs to the window manager), Left /
+//! Right switch menus, Up / Down / Home / End pick an item (the highlight
+//! is [`MenuBar::hovered_item`]), Enter or Space runs it, Esc or F10
+//! closes.
 
 use std::borrow::Cow;
 use std::cell::RefCell;
@@ -15,6 +21,7 @@ use std::collections::HashMap;
 
 use oasis_types::backend::{Color, SdiBackend, bitmap_measure_text};
 use oasis_types::error::Result;
+use oasis_types::input::Key;
 
 /// An entry inside a drop-down. Either a clickable action with an
 /// `id` the host recognises, or a horizontal separator.
@@ -134,6 +141,18 @@ pub enum MenuHit {
     /// The click was outside the bar and any open drop-down — the
     /// host should close the drop-down.
     Outside,
+}
+
+/// What [`MenuBar::handle_key`] did with a key press.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MenuKey {
+    /// Not for the menus (they are closed and the key is not F10): handle
+    /// it as usual.
+    Ignored,
+    /// The key opened, navigated or closed the menus: the app consumes it.
+    Handled,
+    /// Enter / Space on an item: the menus closed; run action `id`.
+    Activate(String),
 }
 
 /// Visual parameters — Windows-95 bezel defaults.
@@ -390,6 +409,95 @@ impl MenuBar {
             entries.extend(menu.entries.iter().cloned());
         }
         Some(Cow::Owned(Menu::new(OVERFLOW_LABEL, entries)))
+    }
+
+    /// Label indices of a bar `bar_w` wide in on-screen order: the shown
+    /// menus, then the `»` overflow menu (`menus.len()`) if any.
+    fn label_order(&self, bar_w: u32) -> (Vec<usize>, BarLayout) {
+        let layout = self.bar_layout(bar_w);
+        let mut order: Vec<usize> = (0..layout.slots.len()).collect();
+        if layout.overflow.is_some() {
+            order.push(self.menus.len());
+        }
+        (order, layout)
+    }
+
+    /// Open label `index` from the keyboard, highlighting its first
+    /// enabled item.
+    fn open_from_keyboard(&mut self, index: usize, layout: &BarLayout) {
+        let first = self
+            .menu_at(index, layout)
+            .and_then(|menu| menu.entries.iter().position(|e| e.action_id().is_some()));
+        self.open = Some(index);
+        self.hovered_item = first;
+    }
+
+    /// Route a raw key press to the menus of a bar `bar_w` wide (the
+    /// width hit-tests and draws use, which decides what is folded into
+    /// `»`). See the module docs for the keys. While a menu is open every
+    /// key is consumed; one that means nothing to the menus closes them.
+    pub fn handle_key(&mut self, key: Key, bar_w: u32) -> MenuKey {
+        let (order, layout) = self.label_order(bar_w);
+        let Some(open) = self.open else {
+            if key == Key::F(10)
+                && let Some(&first) = order.first()
+            {
+                self.open_from_keyboard(first, &layout);
+                return MenuKey::Handled;
+            }
+            return MenuKey::Ignored;
+        };
+        // Enabled entries of the open menu (`None`: it no longer exists).
+        let entries: Option<Vec<Option<String>>> = self.menu_at(open, &layout).map(|menu| {
+            menu.entries
+                .iter()
+                .map(|e| e.action_id().map(str::to_string))
+                .collect()
+        });
+        let Some(entries) = entries else {
+            self.close();
+            return MenuKey::Handled;
+        };
+        let enabled: Vec<usize> = (0..entries.len())
+            .filter(|&i| entries[i].is_some())
+            .collect();
+        let at = self
+            .hovered_item
+            .and_then(|h| enabled.iter().position(|&i| i == h));
+        match key {
+            Key::Left | Key::Right => {
+                let pos = order.iter().position(|&i| i == open).unwrap_or(0);
+                let n = order.len().max(1);
+                let next = if key == Key::Left {
+                    (pos + n - 1) % n
+                } else {
+                    (pos + 1) % n
+                };
+                if let Some(&index) = order.get(next) {
+                    self.open_from_keyboard(index, &layout);
+                }
+            },
+            Key::Up | Key::Down | Key::Home | Key::End => {
+                if let Some(last) = enabled.len().checked_sub(1) {
+                    let pos = match (key, at) {
+                        (Key::Home, _) | (Key::Down, None) => 0,
+                        (Key::Down, Some(p)) => (p + 1) % enabled.len(),
+                        (Key::Up, Some(p)) => p.checked_sub(1).unwrap_or(last),
+                        // End, or Up with nothing highlighted.
+                        _ => last,
+                    };
+                    self.hovered_item = Some(enabled[pos]);
+                }
+            },
+            Key::Enter | Key::Space => {
+                if let Some(id) = at.and_then(|p| entries[enabled[p]].clone()) {
+                    self.close();
+                    return MenuKey::Activate(id);
+                }
+            },
+            _ => self.close(),
+        }
+        MenuKey::Handled
     }
 
     /// Natural width of a drop-down listing `menu`.
@@ -775,6 +883,79 @@ mod tests {
         let bar = demo_bar();
         let hit = bar.hit_test(500, 500, 0, 20, 400, 18);
         assert_eq!(hit, MenuHit::Outside);
+    }
+
+    #[test]
+    fn keyboard_opens_navigates_and_activates() {
+        let mut bar = demo_bar();
+        // Closed: only F10 is a menu key.
+        assert_eq!(bar.handle_key(Key::Down, 400), MenuKey::Ignored);
+        assert_eq!(bar.handle_key(Key::F(10), 400), MenuKey::Handled);
+        assert_eq!((bar.open, bar.hovered_item), (Some(0), Some(0)));
+        // Down skips the separator; Down from the last item wraps.
+        bar.handle_key(Key::Down, 400);
+        bar.handle_key(Key::Down, 400);
+        assert_eq!(bar.hovered_item, Some(3), "Exit, past the separator");
+        bar.handle_key(Key::Down, 400);
+        assert_eq!(bar.hovered_item, Some(0), "wraps to New");
+        bar.handle_key(Key::Up, 400);
+        assert_eq!(bar.hovered_item, Some(3));
+        // Right opens Edit at its first enabled item; Right again wraps.
+        bar.handle_key(Key::Right, 400);
+        assert_eq!((bar.open, bar.hovered_item), (Some(1), Some(0)));
+        // Redo is disabled: Down stays on Undo.
+        bar.handle_key(Key::Down, 400);
+        assert_eq!(bar.hovered_item, Some(0));
+        bar.handle_key(Key::Right, 400);
+        assert_eq!(bar.open, Some(0));
+        bar.handle_key(Key::Left, 400);
+        assert_eq!(bar.open, Some(1));
+        assert_eq!(
+            bar.handle_key(Key::Enter, 400),
+            MenuKey::Activate("edit.undo".into())
+        );
+        assert!(!bar.is_open());
+    }
+
+    #[test]
+    fn keyboard_closes_on_escape_f10_and_other_keys() {
+        let mut bar = demo_bar();
+        for close in [Key::Escape, Key::F(10), Key::Char('x')] {
+            bar.handle_key(Key::F(10), 400);
+            assert!(bar.is_open());
+            assert_eq!(bar.handle_key(close, 400), MenuKey::Handled);
+            assert!(!bar.is_open(), "{close:?} closes");
+            assert_eq!(bar.hovered_item, None);
+        }
+        assert_eq!(bar.handle_key(Key::Escape, 400), MenuKey::Ignored);
+    }
+
+    #[test]
+    fn keyboard_reaches_folded_menus_through_overflow() {
+        let mut bar = demo_bar();
+        bar.menus.push(Menu::new(
+            "Help",
+            vec![MenuEntry::action("About", "help.about")],
+        ));
+        // Narrow enough that the trailing menus fold into `»`.
+        let w = 60;
+        let (order, layout) = bar.label_order(w);
+        assert!(layout.overflow.is_some(), "{layout:?}");
+        assert_eq!(order.last(), Some(&bar.menus.len()));
+        bar.handle_key(Key::F(10), w);
+        bar.handle_key(Key::Left, w);
+        assert_eq!(
+            bar.open,
+            Some(bar.menus.len()),
+            "Left wraps to the overflow"
+        );
+        // The folded menus' headings are disabled: End reaches the last
+        // folded item.
+        assert_eq!(bar.handle_key(Key::End, w), MenuKey::Handled);
+        assert_eq!(
+            bar.handle_key(Key::Enter, w),
+            MenuKey::Activate("help.about".into())
+        );
     }
 
     #[test]

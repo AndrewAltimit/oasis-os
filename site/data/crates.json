@@ -79,7 +79,7 @@
     "video-decode",
     "video-decode-ffmpeg"
    ],
-   "loc": 35894,
+   "loc": 35974,
    "files": 65,
    "deps": [
     {
@@ -290,7 +290,7 @@
     "skin-ttf",
     "tls-rustls"
    ],
-   "loc": 25673,
+   "loc": 25751,
    "files": 72,
    "deps": [
     {
@@ -528,7 +528,7 @@
    "crate_type": [],
    "bins": [],
    "features": [],
-   "loc": 4147,
+   "loc": 4155,
    "files": 10,
    "deps": [
     {
@@ -569,7 +569,7 @@
    "crate_type": [],
    "bins": [],
    "features": [],
-   "loc": 7158,
+   "loc": 7250,
    "files": 19,
    "deps": [
     {
@@ -610,7 +610,7 @@
    "crate_type": [],
    "bins": [],
    "features": [],
-   "loc": 3759,
+   "loc": 3771,
    "files": 10,
    "deps": [
     {
@@ -972,7 +972,7 @@
    "crate_type": [],
    "bins": [],
    "features": [],
-   "loc": 22447,
+   "loc": 22733,
    "files": 69,
    "deps": [
     {
@@ -1082,7 +1082,7 @@
    "crate_type": [],
    "bins": [],
    "features": [],
-   "loc": 19597,
+   "loc": 19829,
    "files": 45,
    "deps": [
     {
@@ -1408,7 +1408,7 @@
    "crate_type": [],
    "bins": [],
    "features": [],
-   "loc": 7114,
+   "loc": 7126,
    "files": 18,
    "deps": [
     {
@@ -1462,7 +1462,7 @@
    "features": [
     "wasm-youtube"
    ],
-   "loc": 9585,
+   "loc": 9587,
    "files": 26,
    "deps": [
     {

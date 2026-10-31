@@ -26,7 +26,15 @@ The terminal in `oasis-terminal/src/` supports:
 - variable expansion (`$VAR`, `${VAR}`, `$?`, `$#`, `$0`..`$9` -- one digit,
   so `$1x` is `${1}x` --, `$@` / `$*`, and `"$@"` as one word per
   argument), `${VAR:-default}` / `${VAR-default}`, `${VAR:=default}`,
-  `${#VAR}`; any other `${...}` form is a `bad substitution` error
+  `${#VAR}`; any other `${...}` form is a `bad substitution` error. The
+  `}` closing a `${...}` is found past quoted or escaped braces in the
+  word (`${X:-"}"}`), and inside double quotes the word is double-quoted
+  text (`"${X:-it's}"`)
+- variable assignments: `NAME=value` sets a shell variable (`A=1 B="x y"`;
+  the value gets expansion and quote removal but no field splitting or
+  globbing, so `C=$B` keeps the spaces). Before a command
+  (`P=temp myfunc`) the assignments hold only while that command runs.
+  `set NAME=value` still works
 - tilde expansion: an unquoted `~` starting a word (`~`, `~/notes`) is
   `$HOME`
 - command substitution (`$(cmd)`, nested)
@@ -45,7 +53,10 @@ The terminal in `oasis-terminal/src/` supports:
   operators work; an alias does not expand again inside its own text
 - pipes (`cmd1 | cmd2`; an empty stage is a syntax error). There are no
   subshells: every stage runs in the shell itself, so a builtin or `cd` in
-  a pipeline still takes effect (`cd /tmp | cat` changes directory)
+  a pipeline still takes effect (`cd /tmp | cat` changes directory). A
+  pipeline's status is its last stage's; a stage before the last that
+  fails shows its error and feeds the next stage empty input
+  (`cat missing | wc -l` prints the error, then `0`, and succeeds)
 - redirection (`< file`, `> file`, `>> file`, `1>`, `2>`, `2>>`, `2>&1`,
   `>&2`, `&> file`, `&>> file`); the target is the one word after the
   operator (`echo a > f b` writes `a b`), `/dev/null` discards, and
@@ -227,6 +238,13 @@ runs when the job does. A compound line ending in `&`
 
 Job specs: `%N`, `%%` / `%+` / `%` (most recent), `%-` (previous). A bare
 number (`kill 1`, `fg 2`) means `%N`: the shell has no process ids.
+
+A job polled in the background behaves like a POSIX subshell for the
+session state a user relies on: its exit status and `cd`s do not change
+the interactive `$?`, working directory, `$OLDPWD` or `$CWD`
+(`CommandRegistry::run_detached`; cron jobs run the same way). Other
+variables it sets do persist, since there is no forked environment. `fg`
+runs the job in the foreground shell itself.
 
 ### SGR color output
 
@@ -433,7 +451,7 @@ the wire protocol and PSK auth.
 
 | Command | Usage | Description |
 | --- | --- | --- |
-| `cron` | `cron [list\|add <name> <interval> <script>\|remove <name>]` | Run a script every `<interval>` (`30s`, `5m`, `2h`, `1d`; a bare number is seconds; 1 s to 30 d). Jobs are files under `/etc/cron` (`<interval> <script>`); the host runs due ones from its frame loop (the desktop shell about once a second, `oasis-ffi` on `oasis_tick`), output prefixed `[cron <name>]`. A job first runs one interval after the host first sees it, starts in `/`, and an overdue job runs once. Schedules are not persisted across restarts. |
+| `cron` | `cron [list\|add <name> <interval> <script>\|remove <name>]` | Run a script every `<interval>` (`30s`, `5m`, `2h`, `1d`; a bare number is seconds; 1 s to 30 d). Jobs are files under `/etc/cron` (`<interval> <script>`); the host runs due ones from its frame loop (the desktop shell about once a second, `oasis-ffi` on `oasis_tick`), output prefixed `[cron <name>]`. A job first runs one interval after the host first sees it, starts in `/`, and leaves the session's `$?`, cwd and `$OLDPWD` alone. Runs keep to that first schedule however coarsely the host ticks; a job overdue by several intervals (a long sleep) runs once and resumes at its next slot, with no burst of catch-up runs. Schedules are not persisted across restarts. |
 | `startup` | `startup [show\|set <path>\|clear]` | Manage the boot script (`/etc/startup.sh`). |
 
 ## File transfer (`oasis-core/src/transfer/mod.rs`)

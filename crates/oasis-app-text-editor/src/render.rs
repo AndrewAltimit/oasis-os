@@ -1,7 +1,9 @@
+use std::collections::HashMap;
+
 use crate::colors::EditorColors;
 use crate::{EditorMode, FileType, TextEditorApp};
 use oasis_skin::ActiveTheme;
-use oasis_types::backend::SdiBackend;
+use oasis_types::backend::{SdiBackend, bitmap_measure_text};
 
 /// Gap between the top of the text area and the first text row.
 const NP_PAD_TOP: i32 = 6;
@@ -15,6 +17,55 @@ pub(crate) const NP_PAD_LEFT: i32 = 8;
 pub(crate) const NP_FONT_SIZE: u16 = 12;
 /// Room the caret keeps from the text area's right edge.
 const H_SCROLL_MARGIN: u32 = 16;
+
+/// Text whose backend width identifies the text-area font: when it
+/// changes (a skin swap to or from a TTF), [`Advances`] starts over.
+const FONT_PROBE: &str = "Wi0";
+/// Most characters [`Advances`] remembers before starting over.
+const MAX_ADVANCES: usize = 4096;
+
+/// Per-character advances of the text-area font as the backend measured
+/// them while drawing. Clicks get no backend, so caret hit-testing sums
+/// these instead of the bitmap font's widths: under a TTF skin a click
+/// lands on the glyph drawn there. A character not drawn yet falls back
+/// to its bitmap-font advance.
+#[derive(Debug, Default)]
+pub(crate) struct Advances {
+    /// Backend width of [`FONT_PROBE`] when the table was filled.
+    probe: u32,
+    table: HashMap<char, u32>,
+}
+
+impl Advances {
+    /// Measure every character of `text` the table does not know yet,
+    /// first starting over if the backend's font changed.
+    pub(crate) fn learn(&mut self, text: &str, backend: &dyn SdiBackend) {
+        let probe = backend.measure_text(FONT_PROBE, NP_FONT_SIZE);
+        if probe != self.probe || self.table.len() > MAX_ADVANCES {
+            self.table.clear();
+            self.probe = probe;
+        }
+        let mut buf = [0u8; 4];
+        for c in text.chars() {
+            self.table
+                .entry(c)
+                .or_insert_with(|| backend.measure_text(c.encode_utf8(&mut buf), NP_FONT_SIZE));
+        }
+    }
+
+    /// Advance of `c` in the text-area font.
+    pub(crate) fn advance(&self, c: char) -> u32 {
+        self.table
+            .get(&c)
+            .copied()
+            .unwrap_or_else(|| bitmap_measure_text(c.encode_utf8(&mut [0u8; 4]), NP_FONT_SIZE))
+    }
+
+    /// Width of `text` in the text-area font.
+    pub(crate) fn width(&self, text: &str) -> u32 {
+        text.chars().map(|c| self.advance(c)).sum()
+    }
+}
 
 /// Horizontal scroll (px) of a text area `cw` wide whose caret sits
 /// `caret_px` from the text origin: 0 while the caret fits, otherwise just
@@ -255,6 +306,16 @@ impl TextEditorApp {
         // Scroll horizontally so a caret past the right edge stays visible;
         // the text area is clipped so scrolled text can't spill out.
         let caret_line = self.buffer.get_line(self.cursor_line).unwrap_or("");
+        // Remember the drawn glyphs' advances for click hit-testing.
+        {
+            let mut advances = self.advances.borrow_mut();
+            advances.learn(caret_line, &*backend);
+            let (rows, _) = notepad_viewport(ch, at);
+            let end = (self.content.scroll + rows).min(self.buffer.line_count());
+            for line in self.content.scroll..end {
+                advances.learn(self.buffer.get_line(line).unwrap_or(""), &*backend);
+            }
+        }
         let caret_px = backend.measure_text(
             &caret_line[..caret_line.floor_char_boundary(self.cursor_col)],
             font_size,

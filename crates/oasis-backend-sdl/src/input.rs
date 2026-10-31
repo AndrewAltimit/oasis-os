@@ -9,7 +9,6 @@
 
 use sdl3::event::Event;
 use sdl3::keyboard::{Keycode, Mod};
-use sdl3::mouse::MouseWheelDirection;
 
 use oasis_types::input::{InputEvent, Key, Modifiers};
 
@@ -38,14 +37,14 @@ pub(crate) struct InputState {
 impl InputState {
     /// Add one SDL wheel event's vertical motion and return the whole
     /// steps it completes (0 while still accumulating).
-    fn wheel_steps(&mut self, y: f32, direction: MouseWheelDirection) -> i32 {
-        // SDL `y > 0` scrolls up; OASIS `delta > 0` scrolls down. A
-        // flipped ("natural scrolling") device reports the opposite sign.
-        let y = if matches!(direction, MouseWheelDirection::Flipped) {
-            -y
-        } else {
-            y
-        };
+    ///
+    /// SDL `y > 0` scrolls up; OASIS `delta > 0` scrolls down. `y` is used
+    /// as reported, whatever the event's `direction`: SDL3 delivers it
+    /// already in the user's chosen sense, and `MouseWheelDirection::
+    /// Flipped` only says that the OS's "natural scrolling" inverted it
+    /// (SDL: "multiply by -1 to change them back"). Undoing that, as this
+    /// once did, scrolled natural-scrolling users the traditional way.
+    fn wheel_steps(&mut self, y: f32) -> i32 {
         if !y.is_finite() {
             return 0;
         }
@@ -90,7 +89,7 @@ pub(crate) fn map_sdl_event(event: Event, state: &mut InputState, out: &mut Vec<
             x: x as i32,
             y: y as i32,
         }),
-        Event::MouseWheel { y, direction, .. } => match state.wheel_steps(y, direction) {
+        Event::MouseWheel { y, .. } => match state.wheel_steps(y) {
             0 => None,
             delta => Some(InputEvent::MouseWheel { delta }),
         },
@@ -438,7 +437,11 @@ mod tests {
         out
     }
 
-    fn wheel(state: &mut InputState, y: f32, direction: MouseWheelDirection) -> Vec<InputEvent> {
+    fn wheel(
+        state: &mut InputState,
+        y: f32,
+        direction: sdl3::mouse::MouseWheelDirection,
+    ) -> Vec<InputEvent> {
         let mut out = Vec::new();
         let event = Event::MouseWheel {
             timestamp: 0,
@@ -457,7 +460,7 @@ mod tests {
     #[test]
     fn wheel_whole_notches_invert_sign() {
         let mut st = InputState::default();
-        let normal = MouseWheelDirection::Normal;
+        let normal = sdl3::mouse::MouseWheelDirection::Normal;
         assert_eq!(
             wheel(&mut st, 3.0, normal),
             vec![InputEvent::MouseWheel { delta: -3 }]
@@ -471,7 +474,7 @@ mod tests {
     #[test]
     fn wheel_fractions_accumulate_into_steps() {
         let mut st = InputState::default();
-        let normal = MouseWheelDirection::Normal;
+        let normal = sdl3::mouse::MouseWheelDirection::Normal;
         // Touchpad: 0.25 of a notch per event used to truncate to nothing.
         let mut steps = Vec::new();
         for _ in 0..8 {
@@ -487,11 +490,20 @@ mod tests {
     }
 
     #[test]
-    fn wheel_flipped_device_scrolls_the_same_way() {
+    fn wheel_flipped_device_keeps_the_os_natural_scrolling() {
+        // With natural scrolling on, SDL already reports the inverted `y`
+        // (and marks it `Flipped`): the shell must scroll the way that
+        // value says, as every other app on the desktop does, not undo
+        // the user's setting.
         let mut st = InputState::default();
+        let flipped = sdl3::mouse::MouseWheelDirection::Flipped;
         assert_eq!(
-            wheel(&mut st, -1.0, MouseWheelDirection::Flipped),
-            vec![InputEvent::MouseWheel { delta: -1 }]
+            wheel(&mut st, -1.0, flipped),
+            vec![InputEvent::MouseWheel { delta: 1 }]
+        );
+        assert_eq!(
+            wheel(&mut st, 2.0, flipped),
+            vec![InputEvent::MouseWheel { delta: -2 }]
         );
     }
 

@@ -90,6 +90,36 @@ larger changes by area. Breaking API changes are marked **(breaking)**.
 - `TreeView` connector lines run through the rows of a node's children when the node has a
   later sibling (the guide used to break across the subtree).
 
+### Terminal / shell
+
+- Background jobs (`cmd &`) and cron jobs run detached from the session, like a POSIX
+  subshell: their exit status and `cd`s no longer overwrite the interactive `$?`, working
+  directory, `$OLDPWD` or `$CWD` (`CommandRegistry::run_detached`).
+- `cron` keeps each job on its first schedule however coarsely the host ticks (an FFI host
+  ticking with > 1 s deltas ran jobs slowly, rescheduling from each tick); after a long
+  sleep an overdue job still runs once and resumes at its next slot, with no burst.
+- `${...}` finds its closing `}` past quoted or escaped braces (`${X:-"}"}`), and inside
+  double quotes the word is double-quoted text (`"${X:-it's}"` used to be a literal `$`).
+- `NAME=value` assigns a shell variable (no field splitting: `C=$B` keeps the spaces), and
+  before a command (`P=temp myfunc`) holds only while it runs; it used to be "unknown
+  command".
+- A failing pipeline stage before the last no longer aborts the pipeline: its error is
+  shown and the next stage reads empty input (`cat missing | wc -l` prints `0` and
+  succeeds), as in a POSIX shell.
+
+### Input & widgets
+
+- App menu bars open from the keyboard: F10 opens the first menu, Left / Right switch
+  menus (the `»` overflow included), Up / Down / Home / End pick an item, Enter / Space run
+  it, Esc / F10 close (`MenuBar::handle_key` -> `MenuKey`). Text Editor, Paint and File
+  Manager route keys through it (Alt belongs to the window manager); WASM keeps the
+  browser from taking F10.
+- The SDL backend honours the OS "natural scrolling" setting: SDL3 already reports wheel
+  motion in the user's direction, and negating `Flipped` events undid it.
+- Text Editor clicks land on the glyph drawn under the pointer under a TTF skin: hit-testing
+  uses the advances the backend measured while drawing instead of the bitmap font's.
+- `RichText` aligns mixed-size spans on a common baseline (they were top-aligned).
+
 ### Build, features & dependencies
 
 - Feature cleanup: `oasis-js` drops `rquickjs-engine` (rquickjs is always linked; the

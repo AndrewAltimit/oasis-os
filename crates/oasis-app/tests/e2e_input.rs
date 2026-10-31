@@ -1355,3 +1355,83 @@ fn wheel_over_an_app_window_scrolls_the_app() {
     let drawn = text_in_window(&mut h, "Text Editor");
     assert!(any_contains(&drawn, "wheel-line-00"), "{drawn:?}");
 }
+
+/// Menu bars open from the keyboard (Alt belongs to the window manager):
+/// F10 opens the first menu, arrows move, Enter runs the item, Esc closes
+/// the menu without closing the window, and typing while a menu is open
+/// does not reach the document.
+#[test]
+fn f10_opens_the_text_editor_menu_and_arrows_pick_an_item() {
+    use oasis_core::vfs::Vfs;
+    let mut h = boot("classic");
+    h.vfs_mut()
+        .write("/home/user/menu.txt", b"menu test\n")
+        .unwrap();
+    h.open_app_with_file("Text Editor", "/home/user/menu.txt");
+    h.settle();
+
+    h.key(Key::F(10));
+    h.settle();
+    let drawn = joined(&text_in_window(&mut h, "Text Editor"));
+    assert!(drawn.contains("Save As"), "File menu open: {drawn}");
+    // Esc closes the menu, not the editor.
+    h.key(Key::Escape);
+    h.settle();
+    assert!(h.find_window("Text Editor").is_some(), "{:?}", h.windows());
+    let drawn = joined(&text_in_window(&mut h, "Text Editor"));
+    assert!(!drawn.contains("Save As"), "menu closed: {drawn}");
+
+    // A key that means nothing to the menu closes it without typing.
+    h.key(Key::F(10));
+    h.type_text("q");
+    h.settle();
+    let drawn = joined(&text_in_window(&mut h, "Text Editor"));
+    assert!(
+        !drawn.contains("menu.txt*"),
+        "typing reached the file: {drawn}"
+    );
+    assert!(!drawn.contains("Save As"), "{drawn}");
+
+    // Edit > Go To Line... (the last item) through the keyboard.
+    h.key(Key::F(10));
+    h.key(Key::Right);
+    h.settle();
+    let drawn = joined(&text_in_window(&mut h, "Text Editor"));
+    assert!(drawn.contains("Select All"), "Edit menu open: {drawn}");
+    h.key(Key::End);
+    h.key(Key::Enter);
+    h.settle();
+    let drawn = joined(&text_in_window(&mut h, "Text Editor"));
+    assert!(drawn.contains("Go to line:"), "Go To Line ran: {drawn}");
+}
+
+/// Paint and the File Manager take the same keyboard route to their menus.
+#[test]
+fn f10_menus_in_paint_and_file_manager() {
+    let mut h = boot("classic");
+    open(&mut h, "Paint");
+    h.key(Key::F(10));
+    h.settle();
+    let drawn = joined(&text_in_window(&mut h, "Paint"));
+    assert!(drawn.contains("Open..."), "Paint File menu open: {drawn}");
+    // File > Exit is the last item.
+    h.key(Key::End);
+    h.key(Key::Enter);
+    h.settle();
+    assert!(h.find_window("Paint").is_none(), "{:?}", h.windows());
+
+    open(&mut h, "File Manager");
+    h.key(Key::F(10));
+    h.key(Key::Left);
+    h.settle();
+    let drawn = joined(&text_in_window(&mut h, "File Manager"));
+    assert!(drawn.contains("List"), "Left wraps to View: {drawn}");
+    h.key(Key::Right);
+    h.key(Key::Enter);
+    h.settle();
+    assert!(
+        h.find_window("File Manager").is_none(),
+        "File > Close: {:?}",
+        h.windows()
+    );
+}

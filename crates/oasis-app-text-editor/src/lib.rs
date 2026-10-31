@@ -9,7 +9,7 @@
 
 use oasis_app_core::{App, AppAction, AppRequest, ContentState, MAX_WHEEL_STEPS};
 use oasis_skin::ActiveTheme;
-use oasis_types::backend::{InMemoryClipboard, SdiBackend, bitmap_measure_text};
+use oasis_types::backend::{InMemoryClipboard, SdiBackend};
 use oasis_types::input::{Button, Key, Modifiers};
 use oasis_ui::menu_bar::{Menu, MenuBar, MenuEntry, MenuHit};
 use oasis_vfs::Vfs;
@@ -136,6 +136,8 @@ pub struct TextEditorApp {
     pub(crate) viewport_line_h: i32,
     /// Top menu bar widget (File / Edit / View / Help) with drop-downs.
     pub(crate) menu: MenuBar,
+    /// Glyph advances of the last draw, for click hit-testing.
+    pub(crate) advances: std::cell::RefCell<render::Advances>,
 }
 
 /// Build the default Text-Editor menu.
@@ -209,6 +211,7 @@ impl TextEditorApp {
             swallow_text: None,
             viewport_lines: 0,
             viewport_line_h: 0,
+            advances: std::cell::RefCell::default(),
             menu: default_menu_bar(),
         };
         editor.rebuild_display_lines();
@@ -458,9 +461,10 @@ impl App for TextEditorApp {
         }
 
         // Clicks in the text area: place the caret at the nearest character
-        // boundary, measured with the bitmap font's proportional advances
-        // (there is no backend here) under the same horizontal scroll
-        // `draw_notepad` applies.
+        // boundary, measured with the advances the backend reported while
+        // drawing (there is no backend here; the bitmap font's before the
+        // first draw) under the same horizontal scroll `draw_notepad`
+        // applies.
         let pad_top = 6i32;
         let line_h = match self.viewport_line_h {
             0 => 14,
@@ -470,7 +474,8 @@ impl App for TextEditorApp {
         let clicked_line = (relative_y / line_h).max(0) as usize;
         let target_line =
             (self.content.scroll + clicked_line).min(self.buffer.line_count().saturating_sub(1));
-        let measure = |s: &str| bitmap_measure_text(s, render::NP_FONT_SIZE);
+        let advances = self.advances.borrow();
+        let measure = |s: &str| advances.width(s);
         let caret_line = self.buffer.get_line(self.cursor_line).unwrap_or("");
         let caret_px = measure(&caret_line[..caret_line.floor_char_boundary(self.cursor_col)]);
         let x = (lx - render::NP_PAD_LEFT).max(0) as u32 + render::h_scroll(caret_px, cw);
@@ -478,7 +483,7 @@ impl App for TextEditorApp {
         let mut target_col = line_text.len();
         let mut acc = 0u32;
         for (i, c) in line_text.char_indices() {
-            let adv = measure(&line_text[i..i + c.len_utf8()]);
+            let adv = advances.advance(c);
             // Nearest boundary: past a glyph's midpoint means after it.
             if x < acc + adv / 2 {
                 target_col = i;
@@ -486,6 +491,7 @@ impl App for TextEditorApp {
             }
             acc += adv;
         }
+        drop(advances);
 
         if matches!(self.mode, EditorMode::Normal | EditorMode::Saving) {
             self.mode = EditorMode::Insert;

@@ -385,10 +385,68 @@ mod tests {
             vec!["[cron beat] tick"]
         );
         assert!(cron_tick(&mut sched, 61, &reg, &mut vfs).is_empty());
-        // Overdue by several intervals: one run, then one interval later.
+        // Overdue by several intervals (a long sleep): one run, no burst,
+        // then the next slot of the original schedule.
         assert_eq!(cron_tick(&mut sched, 400, &reg, &mut vfs).len(), 1);
-        assert!(cron_tick(&mut sched, 459, &reg, &mut vfs).is_empty());
-        assert_eq!(cron_tick(&mut sched, 460, &reg, &mut vfs).len(), 1);
+        assert!(cron_tick(&mut sched, 401, &reg, &mut vfs).is_empty());
+        assert!(cron_tick(&mut sched, 419, &reg, &mut vfs).is_empty());
+        assert_eq!(cron_tick(&mut sched, 420, &reg, &mut vfs).len(), 1);
+    }
+
+    #[test]
+    fn cron_keeps_its_cadence_under_coarse_ticks() {
+        // An FFI host ticking every 1.5 s: a 2 s job must run every 2 s on
+        // average (rescheduling from the tick time ran it every 3 s).
+        let (reg, mut vfs) = setup();
+        vfs.write("/tmp/job.sh", b"echo tick").unwrap();
+        exec(&reg, &mut vfs, "cron add beat 2s /tmp/job.sh").unwrap();
+        let mut sched = CronScheduler::new();
+        let mut runs = 0;
+        for step in 0..=40u32 {
+            let now = std::time::Duration::from_millis(u64::from(step) * 1500);
+            let mut env = Environment {
+                cwd: "/".to_string(),
+                vfs: &mut vfs,
+                power: None,
+                time: None,
+                usb: None,
+                network: None,
+                tls: None,
+                stdin: None,
+                stderr: String::new(),
+            };
+            runs += sched.tick(now, &reg, &mut env).len();
+        }
+        // 60 s of ticks, first due at 2 s: slots 2, 4, ..., 60.
+        assert_eq!(runs, 30);
+    }
+
+    #[test]
+    fn cron_jobs_leave_the_session_status_and_dirs_alone() {
+        let (reg, mut vfs) = setup();
+        vfs.write("/tmp/job.sh", b"cd /tmp\nfalse").unwrap();
+        exec(&reg, &mut vfs, "cron add j 1s /tmp/job.sh").unwrap();
+        let mut env = Environment {
+            cwd: "/home".to_string(),
+            vfs: &mut vfs,
+            power: None,
+            time: None,
+            usb: None,
+            network: None,
+            tls: None,
+            stdin: None,
+            stderr: String::new(),
+        };
+        reg.execute("cd /etc", &mut env).unwrap();
+        reg.execute("cd /home", &mut env).unwrap();
+        reg.execute("true", &mut env).unwrap();
+        let mut sched = CronScheduler::new();
+        sched.tick(std::time::Duration::ZERO, &reg, &mut env);
+        sched.tick(std::time::Duration::from_secs(1), &reg, &mut env);
+        assert_eq!(reg.last_exit_code(), 0);
+        assert_eq!(reg.get_variable("?").as_deref(), Some("0"));
+        assert_eq!(reg.get_variable("OLDPWD").as_deref(), Some("/etc"));
+        assert_eq!(env.cwd, "/home");
     }
 
     #[test]
