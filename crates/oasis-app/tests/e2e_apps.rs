@@ -258,7 +258,11 @@ fn text_editor_undo_to_saved_is_clean_and_find_replaces_the_query() {
     h.key_with(Key::Char('z'), Modifiers::CTRL);
     h.settle();
     h.render_now();
-    assert!(!h.text_drawn_contains("readme.txt*"), "{:?}", h.frame_text());
+    assert!(
+        !h.text_drawn_contains("readme.txt*"),
+        "{:?}",
+        h.frame_text()
+    );
 
     h.key_with(Key::Char('f'), Modifiers::CTRL);
     h.type_text("first");
