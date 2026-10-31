@@ -288,7 +288,7 @@ dependencies = [
 
 [[package]]
 name = "oasis-browser"
-version = "1.4.0"
+version = "1.6.0"
 dependencies = [
  "brotli",
  "flate2",
@@ -318,7 +318,7 @@ dependencies = [
 
 [[package]]
 name = "oasis-css"
-version = "1.4.0"
+version = "1.6.0"
 dependencies = [
  "log",
  "oasis-html",
@@ -328,14 +328,14 @@ dependencies = [
 
 [[package]]
 name = "oasis-html"
-version = "1.4.0"
+version = "1.6.0"
 dependencies = [
  "log",
 ]
 
 [[package]]
 name = "oasis-http"
-version = "1.4.0"
+version = "1.6.0"
 dependencies = [
  "brotli",
  "flate2",
@@ -349,7 +349,7 @@ dependencies = [
 
 [[package]]
 name = "oasis-net"
-version = "1.4.0"
+version = "1.6.0"
 dependencies = [
  "log",
  "oasis-types",
@@ -359,7 +359,7 @@ dependencies = [
 
 [[package]]
 name = "oasis-sdi"
-version = "1.4.0"
+version = "1.6.0"
 dependencies = [
  "log",
  "oasis-types",
@@ -369,7 +369,7 @@ dependencies = [
 
 [[package]]
 name = "oasis-shader"
-version = "1.4.0"
+version = "1.6.0"
 dependencies = [
  "log",
  "oasis-types",
@@ -377,7 +377,7 @@ dependencies = [
 
 [[package]]
 name = "oasis-skin"
-version = "1.4.0"
+version = "1.6.0"
 dependencies = [
  "log",
  "oasis-sdi",
@@ -394,7 +394,7 @@ dependencies = [
 
 [[package]]
 name = "oasis-types"
-version = "1.4.0"
+version = "1.6.0"
 dependencies = [
  "log",
  "serde",
@@ -405,28 +405,28 @@ dependencies = [
 
 [[package]]
 name = "oasis-ui"
-version = "1.4.0"
+version = "1.6.0"
 dependencies = [
  "oasis-types",
 ]
 
 [[package]]
 name = "oasis-vector"
-version = "1.4.0"
+version = "1.6.0"
 dependencies = [
  "oasis-types",
 ]
 
 [[package]]
 name = "oasis-vfs"
-version = "1.4.0"
+version = "1.6.0"
 dependencies = [
  "oasis-types",
 ]
 
 [[package]]
 name = "oasis-wm"
-version = "1.4.0"
+version = "1.6.0"
 dependencies = [
  "log",
  "oasis-sdi",

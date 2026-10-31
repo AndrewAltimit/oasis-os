@@ -1,7 +1,7 @@
 {
  "generated_by": "scripts/gen-crate-map.py",
  "repo": "https://github.com/AndrewAltimit/oasis-os",
- "version": "1.4.0",
+ "version": "1.6.0",
  "layers": [
   {
    "id": "hosts",
@@ -1543,7 +1543,7 @@
    "description": "PSP backend for OASIS_OS: hardware-accelerated GU rendering, controller input",
    "target": "psp",
    "membership": "excluded",
-   "version": "1.4.0",
+   "version": "1.6.0",
    "lib": true,
    "crate_type": [],
    "bins": [
@@ -1598,7 +1598,7 @@
    "description": "PSP overlay plugin PRX: in-game overlay + background music for OASIS_OS",
    "target": "psp",
    "membership": "standalone",
-   "version": "1.4.0",
+   "version": "1.6.0",
    "lib": false,
    "crate_type": [],
    "bins": [
@@ -1616,7 +1616,7 @@
    "description": "PSP network recovery EBOOT: WiFi TCP file server for unbricking",
    "target": "psp",
    "membership": "standalone",
-   "version": "1.4.0",
+   "version": "1.6.0",
    "lib": false,
    "crate_type": [],
    "bins": [

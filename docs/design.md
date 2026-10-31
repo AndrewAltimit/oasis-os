@@ -108,7 +108,7 @@ The backends depend only on the foundation crates: `oasis-backend-sdl` needs `oa
 
 ### 3.2 Repository Structure
 
-The project is a Cargo workspace at the repository root (edition 2024, workspace version 1.4.0, 41 members). The authoritative crate list, with one line per crate, is the dependency graph in [`CLAUDE.md`](../CLAUDE.md#crate-dependency-graph); the README has the [crate table by layer](../README.md#crates).
+The project is a Cargo workspace at the repository root (edition 2024, workspace version 1.6.0, 41 members). The authoritative crate list, with one line per crate, is the dependency graph in [`CLAUDE.md`](../CLAUDE.md#crate-dependency-graph); the README has the [crate table by layer](../README.md#crates).
 
 ```
 oasis-os/
