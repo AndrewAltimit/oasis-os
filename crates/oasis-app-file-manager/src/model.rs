@@ -127,6 +127,8 @@ impl FilePanel {
     pub(crate) fn reveal(&mut self, idx: usize, step: usize, page: usize) {
         let step = step.max(1);
         let page = page.max(step);
+        // Align first (a dual-view scroll moves one line at a time).
+        self.scroll = self.scroll / step * step;
         if idx < self.scroll {
             self.scroll = idx / step * step;
         } else if idx >= self.scroll + page {

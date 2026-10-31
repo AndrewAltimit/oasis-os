@@ -108,6 +108,7 @@ impl App for FileManagerApp {
         let g = compute_explorer_geom(0, 0, cw, ch);
         self.explorer_cols = g.cols;
         self.explorer_visible_rows = g.rows;
+        self.dual_visible_rows = view::dual_max_lines(ch, at);
         self.cached_font_hint = at.font_hint;
     }
 
