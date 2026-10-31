@@ -579,6 +579,9 @@ fn psp_main() {
             if let Err(e) = oasis_backend_psp::network::ensure_net_init_pub() {
                 dbg_log(&format!("[CMD] browse net init failed: {:?}", e));
             }
+            // No-op on the fast path; re-opens the frame if the WiFi dialog
+            // had to run after all (and clears its flag either way).
+            backend.reinit_gu_frame();
             let _ = br.ensure_widget();
             oasis_backend_psp::vlog_force(&format!("[BR/MAIN] navigate_vfs start: {}", url));
             let BrowserState { widget, vfs, .. } = &mut br;
