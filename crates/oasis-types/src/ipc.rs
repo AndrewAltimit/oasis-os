@@ -102,8 +102,38 @@ pub const NET_STATE_PATH: &str = "/system/state/net";
 pub const TV_CHANNELS_PATH: &str = "/etc/tv/channels.toml";
 /// TV playback requests (`tune_url <url> <seek_secs>`, ...).
 pub const TV_REQUEST_PATH: &str = "/var/tv/request";
-/// TV playback status.
+/// TV Guide status published by the host ([`TvStatus`]); absent on hosts
+/// that do not publish it.
 pub const TV_STATUS_PATH: &str = "/var/tv/status";
+
+/// Contents of [`TV_STATUS_PATH`]: whether a TV Guide window is open to
+/// act on `tune_ch:` requests.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TvStatus {
+    /// A TV Guide is open.
+    GuideOpen,
+    /// No TV Guide is open: channel tune requests are ignored.
+    GuideClosed,
+}
+
+impl TvStatus {
+    /// The wire form ([`TvStatus::parse`] round-trips it).
+    pub fn as_line(self) -> &'static str {
+        match self {
+            Self::GuideOpen => "guide open",
+            Self::GuideClosed => "guide closed",
+        }
+    }
+
+    /// Parse the file's text (surrounding whitespace ignored).
+    pub fn parse(text: &str) -> Option<Self> {
+        match text.trim() {
+            "guide open" => Some(Self::GuideOpen),
+            "guide closed" => Some(Self::GuideClosed),
+            _ => None,
+        }
+    }
+}
 
 /// Parse a `"WIDTHxHEIGHT"` resolution (whitespace around either number is
 /// allowed).

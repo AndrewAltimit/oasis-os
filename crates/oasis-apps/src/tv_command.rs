@@ -8,6 +8,7 @@
 
 use oasis_app_tv_guide::{self as tv_guide, ChannelConfig};
 use oasis_core::error::{OasisError, Result};
+use oasis_core::ipc;
 use oasis_core::terminal::{Command, CommandOutput, Environment};
 
 /// Load channel config from VFS.
@@ -117,6 +118,17 @@ fn tv_tune(ch_str: &str, env: &mut Environment<'_>) -> Result<CommandOutput> {
         .iter()
         .find(|c| c.number == ch_num)
         .ok_or_else(|| OasisError::Command(format!("channel {ch_num} not found").into()))?;
+
+    // A host that publishes the guide's status and says it is closed
+    // would drop the request: say so instead of claiming to tune.
+    let status = env.vfs.read(ipc::TV_STATUS_PATH).ok();
+    if status.and_then(|s| ipc::TvStatus::parse(&String::from_utf8_lossy(&s)))
+        == Some(ipc::TvStatus::GuideClosed)
+    {
+        return Err(OasisError::Command(
+            "the TV Guide is not open (run 'open TV Guide' first)".into(),
+        ));
+    }
 
     // Write channel-based tune request for the app layer to resolve.
     let request = format!("tune_ch:{ch_num}");
@@ -248,6 +260,18 @@ mod tests {
     fn tv_tune_unknown_channel() {
         let (reg, mut vfs) = setup_tv_env();
         assert!(exec(&reg, &mut vfs, "tv tune 99").is_err());
+    }
+
+    #[test]
+    fn tv_tune_refuses_when_the_host_says_the_guide_is_closed() {
+        let (reg, mut vfs) = setup_tv_env();
+        vfs.write(ipc::TV_STATUS_PATH, b"guide closed").unwrap();
+        let err = exec(&reg, &mut vfs, "tv tune 2").unwrap_err();
+        assert!(err.to_string().contains("not open"), "{err}");
+        assert!(vfs.read(ipc::TV_REQUEST_PATH).is_err(), "no request written");
+        // Once the guide is open the request goes through.
+        vfs.write(ipc::TV_STATUS_PATH, b"guide open").unwrap();
+        assert!(exec(&reg, &mut vfs, "tv tune 2").is_ok());
     }
 
     #[test]

@@ -33,6 +33,11 @@ pub use status::{Gauge, Level, STATUS_PATH, SysStatus};
 /// Status file re-read interval in milliseconds of wall time (2 Hz).
 pub const POLL_INTERVAL_MS: u32 = 500;
 
+/// A snapshot whose uptime has not advanced for this long (ms of wall
+/// time) is stale: the host stopped publishing (it rewrites the file every
+/// second, and the uptime in it ticks with each write).
+pub const STALE_AFTER_MS: u32 = 5_000;
+
 /// Width of the text-mode gauge bars (`App::lines`).
 const TEXT_BAR_W: usize = 16;
 
@@ -48,6 +53,10 @@ pub struct SystemMonitorApp {
     status: SysStatus,
     /// Whether the host has published a status file.
     live: bool,
+    /// The host's snapshot stopped changing (see [`STALE_AFTER_MS`]).
+    stale: bool,
+    /// Wall time the status file's bytes have stayed the same.
+    unchanged_ms: u32,
     /// Wall time accumulated since the status file was last read.
     since_poll_ms: u32,
     /// Raw bytes of the last status file read (skip re-parsing unchanged
@@ -80,6 +89,8 @@ impl SystemMonitorApp {
             status: base.clone(),
             base,
             live: false,
+            stale: false,
+            unchanged_ms: 0,
             // Read on the first tick rather than waiting a full interval.
             since_poll_ms: POLL_INTERVAL_MS,
             last_raw: None,
@@ -93,9 +104,16 @@ impl SystemMonitorApp {
         &self.status
     }
 
-    /// Whether the host has published live data.
+    /// Whether the host is publishing live data (a status file that is
+    /// still being updated).
     pub fn is_live(&self) -> bool {
-        self.live
+        self.live && !self.stale
+    }
+
+    /// Whether the host published a status file that then stopped
+    /// updating (the values shown are its last ones).
+    pub fn is_stale(&self) -> bool {
+        self.stale
     }
 
     /// Advance the poll timer by `dt_ms` and re-read [`STATUS_PATH`] once
@@ -108,8 +126,21 @@ impl SystemMonitorApp {
         }
         // Reset rather than subtract: after a long stall one read catches
         // up, there is no backlog of reads to replay.
-        self.since_poll_ms = 0;
-        self.reload(vfs)
+        let elapsed = std::mem::take(&mut self.since_poll_ms);
+        if self.reload(vfs) {
+            return true;
+        }
+        self.unchanged_ms = self.unchanged_ms.saturating_add(elapsed);
+        // Only a snapshot carrying an uptime must change every publish.
+        let stale = self.live
+            && self.status.uptime_secs.is_some()
+            && self.unchanged_ms >= STALE_AFTER_MS;
+        if stale == self.stale {
+            return false;
+        }
+        self.stale = stale;
+        self.rebuild_lines();
+        true
     }
 
     /// Read [`STATUS_PATH`] now. Returns `true` when the data changed.
@@ -122,6 +153,8 @@ impl SystemMonitorApp {
         if raw == self.last_raw {
             return false;
         }
+        self.unchanged_ms = 0;
+        self.stale = false;
         match &raw {
             Some(data) => {
                 let live = SysStatus::parse(&String::from_utf8_lossy(data));
@@ -150,7 +183,9 @@ impl SystemMonitorApp {
 
     /// Status line under the gauges.
     fn footer(&self) -> &'static str {
-        if self.live {
+        if self.stale {
+            "Stale - the host stopped updating"
+        } else if self.live {
             "Live - updates every second"
         } else {
             "Waiting for host status (live data N/A)"
@@ -425,6 +460,38 @@ mod tests {
         // idle monitor does not force redraws.
         assert!(!app.tick(POLL_INTERVAL_MS, &vfs));
         assert!(!app.reload(&vfs));
+    }
+
+    /// A host that stops publishing leaves its last file behind: the
+    /// footer used to keep saying "Live" over frozen values.
+    #[test]
+    fn frozen_snapshot_turns_stale_and_recovers() {
+        let mut vfs = MemoryVfs::new();
+        let mut app = app();
+        let up = |secs| SysStatus {
+            uptime_secs: Some(secs),
+            ..SysStatus::default()
+        };
+        publish(&mut vfs, &up(1));
+        assert!(app.tick(16, &vfs));
+        assert!(app.is_live());
+        let mut changed = false;
+        for _ in 0..(STALE_AFTER_MS / POLL_INTERVAL_MS + 1) {
+            changed |= app.tick(POLL_INTERVAL_MS, &vfs);
+        }
+        assert!(changed, "turning stale redraws");
+        assert!(app.is_stale() && !app.is_live());
+        assert!(app.lines().iter().any(|l| l.contains("Stale")));
+        // Publishing again makes it live.
+        publish(&mut vfs, &up(9));
+        assert!(app.tick(POLL_INTERVAL_MS, &vfs));
+        assert!(app.is_live() && !app.is_stale());
+        // Without an uptime the snapshot need not change: never stale.
+        publish(&mut vfs, &SysStatus::default());
+        for _ in 0..(2 * STALE_AFTER_MS / POLL_INTERVAL_MS) {
+            app.tick(POLL_INTERVAL_MS, &vfs);
+        }
+        assert!(app.is_live());
     }
 
     #[test]

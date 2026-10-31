@@ -8,13 +8,19 @@ use super::*;
 /// Preference controls (volume, font scale, reduced motion) update the UI
 /// optimistically and post a request; the shell applies it a frame later.
 /// Syncing only when a state file *changes* keeps a stale published value
-/// from snapping the control back in the meantime.
+/// from snapping the control back in the meantime. Once the shell has
+/// consumed a request (`pending_*` set, request file gone) the published
+/// value is adopted even if unchanged: a request the shell rejected or
+/// clamped to the old value must not leave the control showing it.
 #[derive(Debug, Default)]
 pub(super) struct SeenState {
     pub(super) volume: Option<String>,
     pub(super) locale: Option<String>,
     pub(super) font_scale: Option<String>,
     pub(super) reduced_motion: Option<String>,
+    pub(super) pending_volume: bool,
+    pub(super) pending_font_scale: bool,
+    pub(super) pending_reduced_motion: bool,
 }
 
 impl SettingsApp {
@@ -84,6 +90,20 @@ impl SettingsApp {
     /// sync (see [`SeenState`]). Returns `true` when anything changed.
     pub(super) fn sync_prefs(&mut self, vfs: &dyn Vfs) -> bool {
         let mut changed = false;
+        // A settled request re-reads its state whether or not it changed.
+        if self.request_settled(vfs, VOLUME_CHANGE_REQUEST_PATH, self.seen.pending_volume) {
+            self.seen.pending_volume = false;
+            self.seen.volume = None;
+        }
+        if self.request_settled(vfs, FONT_SCALE_REQUEST_PATH, self.seen.pending_font_scale) {
+            self.seen.pending_font_scale = false;
+            self.seen.font_scale = None;
+        }
+        let motion_pending = self.seen.pending_reduced_motion;
+        if self.request_settled(vfs, REDUCED_MOTION_REQUEST_PATH, motion_pending) {
+            self.seen.pending_reduced_motion = false;
+            self.seen.reduced_motion = None;
+        }
         if let Some(v) = read_changed(vfs, VOLUME_STATE_PATH, &mut self.seen.volume)
             .and_then(|s| s.parse::<u32>().ok())
         {
@@ -118,6 +138,17 @@ impl SettingsApp {
             self.reduced_motion = on;
         }
         changed
+    }
+}
+
+impl SettingsApp {
+    /// Whether a `pending` request to `path` has been handed to the shell
+    /// (no longer queued here) and consumed by it (the file is gone or
+    /// emptied).
+    fn request_settled(&self, vfs: &dyn Vfs, path: &str, pending: bool) -> bool {
+        pending
+            && !self.content.requests.iter().any(|r| r.path == path)
+            && read_utf8(vfs, path).is_none()
     }
 }
 
