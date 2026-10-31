@@ -33,11 +33,12 @@ const MAX_TRAVERSAL_STEPS: usize = 16_384;
 
 /// Sibling nodes structural pseudo-classes may scan while matching one
 /// selector against one element (see `Budget::charge_scan`): one check
-/// on a list of up to this many children always fits. It is also the
-/// per-element cost of a hostile `:has(~ :nth-last-child(..))` repeated
-/// over a long sibling list, so it is kept to a few full scans of a
-/// large list (4 000 siblings x 32 Ki stays a few seconds unoptimized).
-const MAX_STRUCTURAL_SCAN: usize = 32 * 1024;
+/// on a list of up to this many children always fits, as do a compound's
+/// few checks (`li:nth-child(odd):not(:last-child)`) on a list of a
+/// fraction of it. Child-index checks repeated on one parent are
+/// memoized (`Budget::sibling_pos`), so they pay a few scans, not one
+/// each.
+const MAX_STRUCTURAL_SCAN: usize = 128 * 1024;
 
 // -----------------------------------------------------------------------
 // Matched declaration types
@@ -947,6 +948,19 @@ pub fn matches_selector(
     matches_selector_scoped(doc, node_id, selector, ctx, None, None, &Budget::new())
 }
 
+/// [`matches_selector`] plus the budget (steps and scan units) it spent.
+#[cfg(test)]
+pub(super) fn matches_selector_cost(
+    doc: &Document,
+    node_id: NodeId,
+    selector: &super::super::parser::Selector,
+    ctx: &CascadeContext<'_>,
+) -> (bool, usize) {
+    let budget = Budget::new();
+    let matched = matches_selector_scoped(doc, node_id, selector, ctx, None, None, &budget);
+    (matched, budget.spent())
+}
+
 /// Outcome of matching a selector suffix against one candidate element.
 ///
 /// The three failure kinds let the right-to-left walk prune retries
@@ -977,6 +991,38 @@ struct Budget {
     /// ([`Budget::charge_scan`]).
     scan_left: std::cell::Cell<usize>,
     exhausted: std::cell::Cell<bool>,
+    /// Memoized sibling positions ([`Budget::sibling_pos`]).
+    siblings: std::cell::RefCell<SiblingMemo>,
+}
+
+/// Where an element sits among its parent's element children: all a
+/// sibling-index pseudo-class (`:nth-child()`, `:last-of-type`, ...)
+/// needs. 1-based.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct SiblingPos {
+    index: usize,
+    count: usize,
+}
+
+/// Per-match memo of one parent's sibling positions, so a check repeated
+/// for many siblings (`:has(> li:last-child)`, `:has(~ :nth-last-child(..))`,
+/// `li:nth-child(odd) ~ li`) costs O(1) per check instead of a scan of the
+/// whole list each time. Only the first check on a parent is a plain scan
+/// (one `li:nth-child(odd)` per element stays as cheap as before); the
+/// second indexes the parent with one more scan and no hashing.
+enum SiblingMemo {
+    Empty,
+    /// One plain scan of this parent was done.
+    Scanned(NodeId),
+    Indexed {
+        parent: NodeId,
+        /// 1-based element index per child slot (0 for non-elements).
+        index: Vec<u32>,
+        count: usize,
+        /// Child slot of the last lookup: candidates are usually visited
+        /// in order, so the next one is at or right after it.
+        hint: usize,
+    },
 }
 
 impl Budget {
@@ -985,7 +1031,82 @@ impl Budget {
             left: std::cell::Cell::new(MAX_TRAVERSAL_STEPS),
             scan_left: std::cell::Cell::new(MAX_STRUCTURAL_SCAN),
             exhausted: std::cell::Cell::new(false),
+            siblings: std::cell::RefCell::new(SiblingMemo::Empty),
         }
+    }
+
+    /// `node`'s position among its parent's element children for the
+    /// child-indexed pseudo-classes (`:first-child`, `:nth-last-child()`,
+    /// ...; the `*-of-type` ones scan on their own), or `None` for an
+    /// orphan / non-element or once the scan allowance is spent.
+    fn sibling_pos(&self, doc: &Document, node: NodeId) -> Option<SiblingPos> {
+        let parent = doc.nodes[node].parent?;
+        let kids = doc.nodes[parent].children.as_slice();
+        let mut memo = self.siblings.borrow_mut();
+        match &mut *memo {
+            SiblingMemo::Indexed {
+                parent: p,
+                index,
+                count,
+                hint,
+            } if *p == parent => {
+                // `index` was built from this list; a lookup off the hint
+                // is a scan, charged like one.
+                let at = |i: usize| kids.get(i) == Some(&node);
+                let slot = if at(*hint) {
+                    *hint
+                } else if at(*hint + 1) {
+                    *hint + 1
+                } else {
+                    if !self.charge_scan(kids.len()) {
+                        return None;
+                    }
+                    kids.iter().position(|&c| c == node)?
+                };
+                *hint = slot;
+                let i = *index.get(slot)? as usize;
+                return (i > 0).then_some(SiblingPos {
+                    index: i,
+                    count: *count,
+                });
+            },
+            SiblingMemo::Scanned(p) if *p == parent => {
+                if !self.charge_scan(kids.len()) {
+                    return None;
+                }
+                let mut index = Vec::with_capacity(kids.len());
+                let mut count = 0u32;
+                for &c in kids {
+                    let is_elem = matches!(doc.nodes[c].kind, NodeKind::Element(_));
+                    count += u32::from(is_elem);
+                    index.push(if is_elem { count } else { 0 });
+                }
+                *memo = SiblingMemo::Indexed {
+                    parent,
+                    index,
+                    count: count as usize,
+                    hint: 0,
+                };
+                drop(memo);
+                return self.sibling_pos(doc, node);
+            },
+            _ => {},
+        }
+        if !self.charge_scan(kids.len()) {
+            return None;
+        }
+        *memo = SiblingMemo::Scanned(parent);
+        let (mut index, mut count) = (0, 0);
+        for &c in kids {
+            if matches!(doc.nodes[c].kind, NodeKind::Element(_)) {
+                count += 1;
+                if c == node {
+                    index = count;
+                }
+            }
+        }
+        (index > 0 && matches!(doc.nodes[node].kind, NodeKind::Element(_)))
+            .then_some(SiblingPos { index, count })
     }
 
     /// Consume `n` nodes of sibling-list scanning by a structural
@@ -1031,6 +1152,13 @@ impl Budget {
     #[inline]
     fn exhausted(&self) -> bool {
         self.exhausted.get()
+    }
+
+    /// Steps plus scan units spent so far (tests pin the cost of
+    /// pathological selectors with it).
+    #[cfg(test)]
+    fn spent(&self) -> usize {
+        (MAX_TRAVERSAL_STEPS - self.left.get()) + (MAX_STRUCTURAL_SCAN - self.scan_left.get())
     }
 }
 
@@ -1294,7 +1422,34 @@ fn matches_simple(
         SimpleSelector::Class(cls) => elem.has_class(cls),
         SimpleSelector::Id(id) => elem.get_attribute("id").is_some_and(|v| v == id),
         // Sibling-index pseudo-classes scan the parent's child list: that
-        // work is charged like a sibling combinator walk.
+        // work is charged like a sibling combinator walk (and memoized
+        // per parent for the child-indexed ones).
+        SimpleSelector::PseudoClass(pseudo)
+            if matches!(pseudo.as_str(), "first-child" | "last-child" | "only-child") =>
+        {
+            budget
+                .sibling_pos(doc, node_id)
+                .is_some_and(|p| match pseudo.as_str() {
+                    "first-child" => p.index == 1,
+                    "last-child" => p.index == p.count,
+                    _ => p.count == 1,
+                })
+        },
+        SimpleSelector::PseudoClassFn(name, arg)
+            if matches!(name.as_str(), "nth-child" | "nth-last-child") =>
+        {
+            let Some(anb) = selectors::AnB::parse(arg) else {
+                return false;
+            };
+            budget.sibling_pos(doc, node_id).is_some_and(|p| {
+                let i = if name == "nth-child" {
+                    p.index
+                } else {
+                    p.count - p.index + 1
+                };
+                i32::try_from(i).is_ok_and(|i| anb.matches(i))
+            })
+        },
         SimpleSelector::PseudoClass(pseudo) => {
             budget.charge_scan(selectors::structural_scan_cost(&doc.nodes, node_id, pseudo))
                 && match_pseudo_class(doc, node_id, elem, pseudo, ctx)
