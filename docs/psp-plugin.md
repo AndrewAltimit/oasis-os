@@ -142,14 +142,16 @@ The overlay renders directly to the game's framebuffer using alpha-blended recta
 ### Memory Budget
 
 Measured at plugin v1.4.0 (`opt-level = "z"`, fat LTO, one codegen unit); the
-stripped PRX was 156,546 B at the 2026-10-30 review:
+stripped PRX was 156,546 B at the 2026-10-30 review and 163,146 B once the
+devloop server gained its PSK challenge (SHA-256 / HMAC, `src/auth.rs`). The
+section rows below are from the review:
 
 | | Size |
 |---|---|
 | `.text` (code) | ~82 KB, of which ~15 KB is `libunwind` (the `psp` crate links it for `panic = "unwind"`) |
 | `.rodata`, `.eh_frame`, stubs, `.data` | ~30 KB |
 | Relocations (needed: the loader relocates the PRX) | ~40 KB |
-| **Stripped PRX file** (`prxmin`) | **~153 KB** (156,426 B) |
+| **Stripped PRX file** (`prxmin`) | **~159 KB** (163,146 B; 156,426 B at the review) |
 | `.bss` (zeroed at load, not in the file) | ~101 KB: 64 KB MP3 stream buffer, 18 KB PCM, playlist, network buffers |
 | **Resident footprint** (code + data + bss) | **~212 KB** |
 

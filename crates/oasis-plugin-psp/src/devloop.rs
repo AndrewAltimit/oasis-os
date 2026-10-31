@@ -339,7 +339,12 @@ unsafe extern "C" fn devloop_thread(_: usize, _: *mut c_void) -> i32 {
             let mut line = [0u8; 128];
             let mut len = 0usize;
             while len < line.len() && !line[..len].contains(&b'\n') {
-                let got = recv(cfd, line[len..].as_mut_ptr() as *mut c_void, line.len() - len, 0);
+                let got = recv(
+                    cfd,
+                    line[len..].as_mut_ptr() as *mut c_void,
+                    line.len() - len,
+                    0,
+                );
                 if got <= 0 {
                     break;
                 }

@@ -66,7 +66,16 @@ fn compress(state: &mut [u32; 8], block: &[u8]) {
             .wrapping_add(w[i]);
         let s0 = a.rotate_right(2) ^ a.rotate_right(13) ^ a.rotate_right(22);
         let maj = (a & b) ^ (a & c) ^ (b & c);
-        v = [t1.wrapping_add(s0.wrapping_add(maj)), a, b, c, d.wrapping_add(t1), e, f, g];
+        v = [
+            t1.wrapping_add(s0.wrapping_add(maj)),
+            a,
+            b,
+            c,
+            d.wrapping_add(t1),
+            e,
+            f,
+            g,
+        ];
     }
     for (slot, x) in state.iter_mut().zip(v) {
         *slot = slot.wrapping_add(x);
@@ -154,7 +163,13 @@ pub fn verify_auth_line(psk: &[u8], nonce: &[u8], line: &[u8]) -> bool {
 }
 
 fn trim(s: &[u8]) -> &[u8] {
-    let start = s.iter().position(|b| !b.is_ascii_whitespace()).unwrap_or(s.len());
-    let end = s.iter().rposition(|b| !b.is_ascii_whitespace()).map_or(start, |e| e + 1);
+    let start = s
+        .iter()
+        .position(|b| !b.is_ascii_whitespace())
+        .unwrap_or(s.len());
+    let end = s
+        .iter()
+        .rposition(|b| !b.is_ascii_whitespace())
+        .map_or(start, |e| e + 1);
     &s[start..end]
 }

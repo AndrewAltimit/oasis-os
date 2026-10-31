@@ -154,10 +154,18 @@ pub unsafe fn on_frame(fb: *mut u32, stride: u32) {
             if triggered {
                 STATE.store(OverlayState::Hidden as u8, Ordering::Relaxed);
             } else {
-                // SAFETY: CURSOR only modified in display hook.
+                // SAFETY: CURSOR and the OSD statics are only modified in
+                // the display hook (or, for the OSD, bounded writes; see
+                // show_osd).
                 unsafe {
                     handle_menu_input(pressed);
                     draw_menu(fb, stride);
+                    // A notification raised while the menu is open shows
+                    // on top of it instead of closing it.
+                    if OSD_FRAMES > 0 {
+                        OSD_FRAMES -= 1;
+                        draw_osd(fb, stride);
+                    }
                 }
             }
         },
@@ -184,6 +192,15 @@ impl OverlayState {
             _ => Self::Hidden,
         }
     }
+
+    /// The state after a notification is raised in this one: the menu
+    /// stays open (the OSD is drawn over it); otherwise the OSD shows.
+    fn with_osd(self) -> Self {
+        match self {
+            Self::Menu => Self::Menu,
+            Self::Hidden | Self::Osd => Self::Osd,
+        }
+    }
 }
 
 /// Show a brief OSD notification.
@@ -205,7 +222,11 @@ pub fn show_osd(msg: &[u8]) {
         OSD_MSG_LEN = len;
         OSD_FRAMES = 120; // ~2 seconds at 60fps
     }
-    STATE.store(OverlayState::Osd as u8, Ordering::Relaxed);
+    // Status messages from the audio / video threads used to store Osd
+    // unconditionally, closing the menu under the user's thumb.
+    let _ = STATE.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |s| {
+        Some(OverlayState::from_u8(s).with_osd() as u8)
+    });
 }
 
 /// Draw the OSD notification bar at the top of the screen.
@@ -590,6 +611,13 @@ mod tests {
     fn overlay_state_from_u8_invalid_defaults_hidden() {
         assert_eq!(OverlayState::from_u8(3), OverlayState::Hidden);
         assert_eq!(OverlayState::from_u8(255), OverlayState::Hidden);
+    }
+
+    #[test]
+    fn a_notification_does_not_close_the_menu() {
+        assert_eq!(OverlayState::Menu.with_osd(), OverlayState::Menu);
+        assert_eq!(OverlayState::Hidden.with_osd(), OverlayState::Osd);
+        assert_eq!(OverlayState::Osd.with_osd(), OverlayState::Osd);
     }
 
     #[test]
