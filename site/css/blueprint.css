@@ -116,6 +116,10 @@
 }
 .hud__reset:hover { border-color: var(--bp-accent); color: #fff; }
 .hud__reset:focus-visible { outline-color: var(--bp-accent); }
+.hud__legend-btn {
+  display: none; padding: 0 12px; cursor: pointer; font-size: 0.7rem; color: var(--bp-ink);
+}
+.hud__legend-btn[aria-expanded="true"] { border-color: var(--bp-accent); color: #fff; }
 
 .state-note {
   position: fixed; z-index: 10; right: 20px; bottom: 76px; max-width: 220px;
@@ -145,11 +149,18 @@
     font-size: 0.62rem; line-height: 1.75;
   }
   #legend .row { min-width: 0; }
+  /* folded behind the dock's Legend button (js/blueprint-page.js) */
+  .page-blueprint:not(.legend-open) #legend { display: none; }
+  .hud__legend-btn:not([hidden]) { display: inline-flex; align-items: center; }
+  .hud__crumbs { flex-wrap: nowrap; min-width: 0; }
+  #back-link { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .hud__dock { left: 12px; right: 12px; bottom: 12px; }
   .hud__reset span { display: none; }
   .hud__reset { padding: 0 12px; }
-  #explode-slider { flex: 1; justify-content: center; }
-  #explode-slider input { flex: 1; width: auto; }
+  .hud__dock > button { flex: none; }
+  #explode-slider { flex: 1; min-width: 0; justify-content: center; padding-inline: 12px; }
+  #explode-slider input { flex: 1; min-width: 0; width: auto; }
+  #explode-slider > span { display: none; }
   .state-note { display: none; }
 }
 
@@ -183,4 +194,17 @@
 .card-body { display: grid; gap: 0.35rem; padding: 1.1rem 1.25rem 1.3rem; }
 .card-kicker { font-family: var(--mono); font-size: 0.68rem; letter-spacing: 0.14em; text-transform: uppercase; color: var(--bp-accent); }
 .card-title { font-size: 1.15rem; font-weight: 650; color: #fff; letter-spacing: -0.01em; }
-.card-desc { font-size: 0.92rem; color: rgba(207, 230, 255, 0.7); }
+.card-desc { font-size: 0.92rem; color: rgba(207, 230, 255, 0.72); }
+.card-cta {
+  margin-top: 0.5rem; font-family: var(--mono); font-size: 0.74rem; letter-spacing: 0.04em;
+  color: var(--bp-accent);
+}
+#gallery .card:hover .card-cta { color: #fff; }
+.gallery__hints {
+  margin-top: 1.25rem; display: flex; flex-wrap: wrap; gap: 0.5rem 1.25rem;
+  font-family: var(--mono); font-size: 0.74rem; color: rgba(207, 230, 255, 0.66);
+}
+.gallery__hints kbd {
+  font-size: 0.7rem; border-color: rgba(92, 178, 255, 0.35); background: rgba(92, 178, 255, 0.08);
+  color: var(--bp-ink);
+}

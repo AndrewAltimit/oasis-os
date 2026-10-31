@@ -87,7 +87,7 @@ is there for manual testing of remote media that lacks CORS headers.
 
 | File | Role |
 |------|------|
-| `www/index.html` | Local page shell: `<canvas id="oasis">` inside `#container` (the positioned parent the iframe overlay attaches to), a skin `<select>` grouped like the landing page that reloads with `?skin=<name>`, a controls card. Styles and chrome script come from `site/css/{site,demo}.css` and `site/js/demo.js`, shared with the deployed `site/demo/index.html` |
+| `www/index.html` | Local page shell: `<canvas id="oasis">` inside `#container` (the positioned parent the iframe overlay attaches to), a skin `<select>` grouped like the landing page that reloads with `?skin=<name>`, a controls card, a full-screen toggle and a boot panel. Styles and chrome script come from `site/css/{site,demo}.css` and `site/js/demo.js`, shared with the deployed `site/demo/index.html` |
 | `www/index.js` | Loads `pkg/oasis_backend_wasm.js`, constructs `OasisWasm`, drives `tick()` from `requestAnimationFrame`, letterbox-fits the canvas to `#container`; sets `window.__oasisReady` once booted. The Pages deploy copies it to `demo/index.js` |
 
 **Canvas fit.** The canvas buffer is the skin's resolution; `index.js` sizes
@@ -156,7 +156,9 @@ URL parameters read by `index.js`:
 | `launch_app(title)` | Launch an app by title, case-insensitive: any registered app (with or without a dashboard tile), `"Browser"`, or a VFS-discovered tile |
 
 `index.js` also exposes the instance as `window.__oasis` and sets
-`window.__oasisReady = true` for automated tests.
+`window.__oasisReady = true` for automated tests. If the boot fails it sets
+`window.__oasisBootError` to the error and dispatches an `oasis:boot-error` event,
+which the page chrome (`site/js/demo.js`) turns into an error card.
 
 ## Input mapping
 

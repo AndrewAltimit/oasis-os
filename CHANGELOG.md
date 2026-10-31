@@ -144,6 +144,26 @@ larger changes by area. Breaking API changes are marked **(breaking)**.
   `scroll::SCROLL_ACCELERATION` and `SvgPaint::PatternRef` (pattern
   fills are `GradientRef`s that resolve to a `<pattern>`) **(breaking)**.
 
+### Website: journal, demo, blueprints, shared chrome
+
+- Journal index is a card grid: newest first with the latest entry featured, generated
+  per-topic covers, topic filters plus a newest / oldest sort, and "Read the latest" /
+  "Start at entry 01" calls to action.
+- Journal articles: running text held to ~70 characters at 18px while code, tables and
+  figures break out on wide screens; an "Updated" field on entries with Oct 2026 notes;
+  BlogPosting JSON-LD; an end-of-article row (tags, back to top, all entries); wide
+  tables scroll with edge shadows and keyboard focus; the table of contents tracks
+  jumps as well as scrolling.
+- Live demo: a boot panel naming the skin being loaded, a two-column controls card
+  (keyboard / mouse and touch) that no longer covers the screen on portrait phones, a
+  full-screen button, and an immediate error card when the WebAssembly boot fails
+  (`www/index.js` now sets `window.__oasisBootError` and fires `oasis:boot-error`).
+- Blueprints: the gallery no longer downloads three.js (~700 KB, now fetched only for a
+  `?diagram=` view); viewer hints and "Open the 3D model" cues; on phones the legend
+  folds behind a dock button and the dock fits.
+- Every page shares a new footer: Explore / Read / Project link columns (adding the crate
+  map, changelog, releases and contributing guide) and a back-to-top row.
+
 ## Unreleased -- overhaul (`overhaul/site-code-docs-2026-10`)
 
 A repository-wide cleanup: bug fixes from a full code review and an

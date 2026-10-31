@@ -25,6 +25,33 @@
   <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&amp;display=swap" rel="stylesheet">
   <link rel="stylesheet" href="../css/site.css">
   <link rel="stylesheet" href="../css/journal.css">
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "BlogPosting",
+    "headline": "Reverse Engineering the PSP Media Engine",
+    "description": "Reverse engineering the PSP Media Engine coprocessor for stable H.264 video streaming from Rust homebrew — discovering hidden kernel modules, mapping the RPC protocol, tracing a firmware deadlock through disassembled PRX code, and building three solutions from runtime binary patching to a kernel watchdog hook.",
+    "datePublished": "2026-03-26",
+    "url": "https://andrewaltimit.github.io/oasis-os/journal/07-psp-media-engine.html",
+    "mainEntityOfPage": "https://andrewaltimit.github.io/oasis-os/journal/07-psp-media-engine.html",
+    "image": "https://andrewaltimit.github.io/oasis-os/img/og-card.png",
+    "keywords": [
+      "hardware",
+      "reverse-engineering",
+      "media-engine"
+    ],
+    "author": {
+      "@type": "Person",
+      "name": "AndrewAltimit",
+      "url": "https://github.com/AndrewAltimit"
+    },
+    "isPartOf": {
+      "@type": "Blog",
+      "name": "OASIS_OS Developer's Journal",
+      "url": "https://andrewaltimit.github.io/oasis-os/journal/"
+    }
+  }
+  </script>
 </head>
 <body class="page-article">
 
@@ -983,6 +1010,10 @@ Keyframe 2   --&gt; decode frames 0..50   --&gt; skip P/B until keyframe 3
   </div>
 
   <footer class="article__foot wrap">
+  <div class="article__end">
+    <ul class="article__tags" aria-label="Tags"><li>hardware</li><li>reverse-engineering</li><li>media-engine</li></ul>
+    <p class="article__end-links"><a href="#main">Back to top <span aria-hidden="true">&uarr;</span></a><a href="./">All entries</a><a href="https://github.com/AndrewAltimit/oasis-os">Browse the code</a></p>
+  </div>
   <nav class="pager" aria-label="More entries">
     <a class="pager__link pager__link--prev" href="06-backend-trait-system.html" rel="prev"><span class="pager__dir">&larr; Previous &middot; 06</span><span class="pager__title">Anatomy of the Backend Trait System</span></a>
     <a class="pager__link pager__link--next" href="08-remote-dev-automation.html" rel="next"><span class="pager__dir">Next &middot; 08 &rarr;</span><span class="pager__title">Zero-Touch PSP Development</span></a>
@@ -992,22 +1023,48 @@ Keyframe 2   --&gt; decode frames 0..50   --&gt; skip P/B until keyframe 3
 </main>
 
 <footer class="footer">
-  <div class="wrap footer__inner">
+  <div class="wrap footer__grid">
     <div class="footer__brand">
-      <span class="brand__name">OASIS<span class="brand__us">_</span>OS</span>
-      <p>Built from scratch in Rust. Dual-licensed MIT + Unlicense.</p>
+      <a class="brand" href="../" aria-label="OASIS_OS home">
+        <span class="brand__mark" aria-hidden="true"></span>
+        <span class="brand__name">OASIS<span class="brand__us">_</span>OS</span>
+      </a>
+      <p>An embeddable OS framework, built from scratch in Rust. One shell, any pixel buffer.</p>
+      <p class="footer__status mono" aria-hidden="true">333MHz &middot; 480&times;272 &middot; v1.4.0</p>
     </div>
-    <nav aria-label="Footer">
-      <ul class="footer__links">
-        <li><a href="../">Home</a></li>
-        <li><a href="../demo/">Live demo</a></li>
-        <li><a href="../journal/">Journal</a></li>
-        <li><a href="../blueprint.html">Blueprints</a></li>
-        <li><a href="https://github.com/AndrewAltimit/oasis-os">GitHub</a></li>
-        <li><a href="https://github.com/AndrewAltimit/oasis-os/blob/main/docs/README.md">Docs</a></li>
-      </ul>
+    <nav class="footer__nav" aria-label="Footer">
+      <div>
+        <p class="footer__head">Explore</p>
+        <ul class="footer__links">
+          <li><a href="../">Home</a></li>
+          <li><a href="../demo/">Live demo</a></li>
+          <li><a href="../crates.html">Crate map</a></li>
+          <li><a href="../blueprint.html">Blueprints</a></li>
+        </ul>
+      </div>
+      <div>
+        <p class="footer__head">Read</p>
+        <ul class="footer__links">
+          <li><a href="../journal/">Developer&rsquo;s journal</a></li>
+          <li><a href="https://github.com/AndrewAltimit/oasis-os/blob/main/docs/README.md">Documentation</a></li>
+          <li><a href="https://github.com/AndrewAltimit/oasis-os/blob/main/docs/getting-started.md">Getting started</a></li>
+          <li><a href="https://github.com/AndrewAltimit/oasis-os/blob/main/CHANGELOG.md">Changelog</a></li>
+        </ul>
+      </div>
+      <div>
+        <p class="footer__head">Project</p>
+        <ul class="footer__links">
+          <li><a href="https://github.com/AndrewAltimit/oasis-os">GitHub</a></li>
+          <li><a href="https://github.com/AndrewAltimit/oasis-os/releases">Releases</a></li>
+          <li><a href="https://github.com/AndrewAltimit/oasis-os/blob/main/CONTRIBUTING.md">Contributing</a></li>
+          <li><a href="https://github.com/AndrewAltimit/oasis-os/blob/main/LICENSE">License</a></li>
+        </ul>
+      </div>
     </nav>
-    <p class="footer__status mono" aria-hidden="true">333MHz &middot; 480&times;272 &middot; v1.4.0</p>
+  </div>
+  <div class="wrap footer__base">
+    <p>Dual-licensed MIT + Unlicense.</p>
+    <a class="footer__top" href="#main">Back to top <span aria-hidden="true">&uarr;</span></a>
   </div>
 </footer>
 

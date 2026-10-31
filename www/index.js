@@ -110,4 +110,8 @@ function tick(now) {
 
 boot().catch((err) => {
   console.error("OASIS_OS boot failed:", err);
+  // The demo page chrome (site/js/demo.js) shows an error card instead of
+  // waiting for its slow-boot timeout.
+  window.__oasisBootError = err;
+  window.dispatchEvent(new CustomEvent("oasis:boot-error", { detail: err }));
 });

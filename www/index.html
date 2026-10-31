@@ -56,6 +56,9 @@
     </label>
     <nav class="demo-bar__links" aria-label="Demo">
       <button type="button" id="help-btn" aria-expanded="true" aria-controls="instructions">Controls</button>
+      <button type="button" id="fullscreen-btn" class="demo-bar__icon" aria-label="Full screen" hidden>
+        <svg aria-hidden="true" viewBox="0 0 16 16" width="16" height="16"><path d="M2.5 6V2.5H6M10 2.5h3.5V6M13.5 10v3.5H10M6 13.5H2.5V10" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </button>
       <a class="hide-sm" href="../site/journal/">Journal</a>
       <a class="hide-sm" href="https://github.com/AndrewAltimit/oasis-os/blob/main/docs/wasm-backend.md">Docs</a>
       <a class="is-boxed" href="https://github.com/AndrewAltimit/oasis-os">GitHub</a>
@@ -63,15 +66,38 @@
   </header>
 
   <main id="container">
+    <h1 class="sr-only">OASIS_OS live demo</h1>
     <canvas id="oasis" width="480" height="272" tabindex="0" aria-label="OASIS_OS shell"></canvas>
-    <div class="boot" id="boot" role="status"><span class="boot__msg">Booting OASIS_OS</span><span class="boot__bar" aria-hidden="true"></span></div>
+    <div class="boot" id="boot" role="status">
+      <div class="boot__panel">
+        <span class="brand__mark boot__mark" aria-hidden="true"></span>
+        <span class="boot__msg">Booting OASIS_OS</span>
+        <span class="boot__sub" id="boot-sub">Downloading the WebAssembly build</span>
+        <span class="boot__bar" aria-hidden="true"></span>
+      </div>
+    </div>
     <section class="instructions" id="instructions" aria-labelledby="controls-title">
       <h2 id="controls-title">Controls</h2>
-      <ul>
-        <li><kbd>&larr;</kbd><kbd>&uarr;</kbd><kbd>&rarr;</kbd><kbd>&darr;</kbd> navigate &nbsp; <kbd>Enter</kbd> select &nbsp; <kbd>Esc</kbd> back</li>
-        <li>Mouse or touch: click / tap icons, drag and resize windows. Type in the Terminal app.</li>
-        <li>This WebAssembly build has no in-page JavaScript engine or raw TCP; live web pages and YouTube open in an overlay above the canvas.</li>
-      </ul>
+      <div class="instructions__grid">
+        <div>
+          <h3>Keyboard</h3>
+          <ul>
+            <li><span class="keys"><kbd>&larr;</kbd><kbd>&uarr;</kbd><kbd>&rarr;</kbd><kbd>&darr;</kbd></span> navigate</li>
+            <li><span class="keys"><kbd>Enter</kbd></span> select</li>
+            <li><span class="keys"><kbd>Esc</kbd></span> back</li>
+          </ul>
+        </div>
+        <div>
+          <h3>Mouse &amp; touch</h3>
+          <ul>
+            <li>Click or tap icons to open apps</li>
+            <li>Drag title bars to move windows; drag edges to resize</li>
+            <li>Type in the Terminal app</li>
+          </ul>
+        </div>
+      </div>
+      <p class="instructions__note">This WebAssembly build has no in-page JavaScript engine or raw TCP; live web pages and YouTube open in an overlay above the canvas.</p>
+      <p class="instructions__rotate">Turn your phone sideways for a bigger screen.</p>
       <div class="instructions__foot">
         <a href="../site/#skins">Compare all 17 skins &rarr;</a>
         <button type="button" class="dismiss" id="dismiss-btn">Got it</button>

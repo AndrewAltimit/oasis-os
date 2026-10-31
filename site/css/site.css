@@ -41,7 +41,7 @@
                            token spans .tk .tt .tf .ts .tn .tc .tm
      .tabs / [role="tab"]  segmented tab row
      .topbar .brand .site-nav .nav-toggle           shared header
-     .footer                                        shared footer
+     .footer (__grid __brand __nav __head __links __base __top)  shared footer
      .reveal / .is-in      scroll reveal (JS adds it only when motion is OK)
      .sr-only .skip-link .mono .pixel               utilities
 
@@ -416,16 +416,47 @@ kbd {
 .link-arrow { font-weight: 600; color: var(--accent); }
 
 /* ---------- Footer ---------- */
+/* Brand + three link columns, then a base row (license, back to top). */
 .footer {
-  border-top: 1px solid var(--line); padding-block: 2.5rem 3rem;
+  position: relative; border-top: 1px solid var(--line);
+  padding-block: clamp(2.75rem, 6vw, 4rem) 1.75rem;
   background: linear-gradient(180deg, var(--bg-2), var(--bg));
 }
-.footer__inner { display: flex; flex-wrap: wrap; gap: 1.5rem 3rem; align-items: center; justify-content: space-between; }
-.footer__brand p { color: var(--faint); font-size: 0.88rem; margin-top: 0.3rem; }
-.footer__links { display: flex; flex-wrap: wrap; gap: 0.5rem 1.5rem; }
-.footer__links a { color: var(--muted); font-size: 0.9rem; }
-.footer__links a:hover { color: var(--text); }
-.footer__status { font-size: 0.72rem; color: var(--faint); letter-spacing: 0.1em; }
+.footer::before {
+  /* the ribbon's warm-to-lime hairline, faded at both ends */
+  content: ""; position: absolute; left: 0; right: 0; top: -1px; height: 1px;
+  background: linear-gradient(90deg, transparent, rgba(255, 138, 61, 0.55) 30%,
+    rgba(184, 228, 90, 0.45) 70%, transparent);
+}
+.footer__grid { display: grid; gap: 2.5rem 3rem; }
+@media (min-width: 860px) {
+  .footer__grid { grid-template-columns: minmax(0, 1fr) minmax(0, 1.6fr); }
+}
+.footer__brand { display: grid; gap: 0.75rem; align-content: start; max-width: 22rem; }
+.footer__brand p { color: var(--muted); font-size: 0.9rem; line-height: 1.6; }
+.footer__nav { display: grid; gap: 2rem 1.5rem; grid-template-columns: repeat(auto-fit, minmax(8rem, 1fr)); }
+.footer__head {
+  font-family: var(--mono); font-size: 0.7rem; letter-spacing: 0.14em; text-transform: uppercase;
+  color: var(--faint); margin-bottom: 0.85rem;
+}
+.footer__links { display: grid; gap: 0.15rem; }
+.footer__links a {
+  display: inline-block; padding-block: 0.3rem; color: var(--muted); font-size: 0.92rem;
+  transition: color var(--dur-1);
+}
+.footer__links a:hover { color: var(--text); text-decoration: none; }
+.footer__brand .footer__status, .footer__status { font-size: 0.72rem; color: var(--faint); letter-spacing: 0.1em; }
+.footer__base {
+  display: flex; flex-wrap: wrap; gap: 0.75rem 2rem; align-items: center; justify-content: space-between;
+  position: relative; margin-top: clamp(2.25rem, 5vw, 3rem); padding-top: 1.25rem;
+  font-size: 0.82rem; color: var(--faint);
+}
+.footer__base::before {
+  content: ""; position: absolute; top: 0; left: var(--gutter); right: var(--gutter);
+  border-top: 1px solid var(--line);
+}
+.footer__top { color: var(--muted); font-size: 0.82rem; }
+.footer__top:hover { color: var(--text); text-decoration: none; }
 
 /* ---------- Reveal on scroll (JS adds .reveal only when motion is OK) ---------- */
 .reveal {

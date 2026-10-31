@@ -1,6 +1,7 @@
-// OASIS_OS live demo chrome: skin picker, controls card, boot indicator.
-// The WASM itself is booted by index.js (copied from www/index.js), which
-// sets window.__oasisReady once the shell is running.
+// OASIS_OS live demo chrome: skin picker, controls card, full-screen
+// toggle, boot indicator. The WASM itself is booted by index.js (copied from
+// www/index.js), which sets window.__oasisReady once the shell is running,
+// or window.__oasisBootError (+ an "oasis:boot-error" event) if it failed.
 (function () {
   "use strict";
 
@@ -18,6 +19,30 @@
       var url = new URL(window.location.href);
       url.searchParams.set("skin", select.value);
       window.location.href = url.toString();
+    });
+  }
+  var sub = document.getElementById("boot-sub");
+  if (sub && select && select.selectedIndex >= 0) {
+    sub.textContent = "Loading the WebAssembly build · " +
+      select.options[select.selectedIndex].text + " skin";
+  }
+
+  // Full screen: the stage (#container) so the canvas re-fits to the screen
+  // and the web-page overlay index.js attaches there comes along.
+  var fsBtn = document.getElementById("fullscreen-btn");
+  var stage = document.getElementById("container");
+  if (fsBtn && stage && document.fullscreenEnabled && stage.requestFullscreen) {
+    fsBtn.hidden = false;
+    fsBtn.addEventListener("click", function () {
+      if (document.fullscreenElement) document.exitFullscreen();
+      else stage.requestFullscreen().catch(function () { /* denied: stay windowed */ });
+    });
+    document.addEventListener("fullscreenchange", function () {
+      var on = !!document.fullscreenElement;
+      fsBtn.setAttribute("aria-label", on ? "Exit full screen" : "Full screen");
+      fsBtn.classList.toggle("is-on", on);
+      var canvas = document.getElementById("oasis");
+      if (canvas) canvas.focus();
     });
   }
 
@@ -70,14 +95,22 @@
   var failed = null; // null, or why the demo could not start
 
   function fail(kind) {
-    if (failed || window.__oasisReady || !boot) return;
+    if (failed && !(failed === "slow" && kind === "error")) return;
+    if (window.__oasisReady || !boot) return;
     failed = kind;
     clearTimeout(autoHide);
     if (card) card.hidden = true;
     if (help) help.setAttribute("aria-expanded", "false");
     var brand = document.querySelector(".demo-bar .brand");
     var homeHref = brand ? brand.getAttribute("href") : "../";
-    var why = kind === "nowasm"
+    var detail = window.__oasisBootError;
+    var why = kind === "error"
+      ? "The shell failed to start: <code>" +
+        String((detail && detail.message) || detail || "unknown error")
+          .replace(/&/g, "&amp;").replace(/</g, "&lt;").slice(0, 200) +
+        "</code>. Reloading usually helps; if it keeps happening, the browser console " +
+        "has the details."
+      : kind === "nowasm"
       ? "This browser does not support WebAssembly, which the demo needs. Any current " +
         "Chrome, Edge, Firefox or Safari will run it."
       : kind === "slow"
@@ -89,13 +122,14 @@
     boot.className = "boot is-failed";
     boot.innerHTML =
       '<div class="boot__card">' +
-      '<p class="boot__code">' + (kind === "slow" ? "Still booting" : "Demo unavailable") + "</p>" +
+      '<p class="boot__code">' + (kind === "slow" ? "Still booting" : kind === "error"
+        ? "Boot failed" : "Demo unavailable") + "</p>" +
       '<p class="boot__why">' + why + "</p>" +
       '<div class="boot__actions">' +
-      (kind === "slow"
+      (kind === "slow" || kind === "error"
         ? '<button type="button" class="btn btn--primary btn--sm" id="boot-reload">Reload</button>'
         : "") +
-      '<a class="btn btn--' + (kind === "slow" ? "ghost" : "primary") + ' btn--sm" href="' +
+      '<a class="btn btn--' + (kind === "slow" || kind === "error" ? "ghost" : "primary") + ' btn--sm" href="' +
       homeHref + '">Watch the video tour</a>' +
       '<a class="btn btn--ghost btn--sm" href="https://github.com/AndrewAltimit/oasis-os/blob/main/docs/wasm-backend.md">Build notes</a>' +
       "</div></div>";
@@ -104,6 +138,8 @@
   }
 
   if (typeof WebAssembly !== "object") fail("nowasm");
+  if (window.__oasisBootError) fail("error");
+  window.addEventListener("oasis:boot-error", function () { fail("error"); });
   // index.js (and the pkg/ module it imports) fire "error" on the <script>
   // element when they cannot be fetched.
   Array.prototype.forEach.call(document.querySelectorAll('script[type="module"]'), function (s) {
@@ -121,7 +157,10 @@
       }
       if (failed && failed !== "slow") return; // nothing left to wait for
       var waited = Date.now() - started;
-      if (waited > 12000) boot.classList.add("is-slow");
+      if (waited > 12000 && !boot.classList.contains("is-slow")) {
+        boot.classList.add("is-slow");
+        if (sub) sub.textContent = "Still loading — the first visit downloads the whole OS";
+      }
       if (waited > 30000) fail("slow");
       setTimeout(poll, 150);
     })();
