@@ -284,10 +284,16 @@ fn audio_drain_stream_copies_streamed_bytes() {
     }
     assert_eq!(unsafe { oasis_audio_stream_buffered(handle) }, 11);
     let mut buf = [0u8; 5];
-    assert_eq!(unsafe { oasis_audio_drain_stream(handle, buf.as_mut_ptr(), 5) }, 5);
+    assert_eq!(
+        unsafe { oasis_audio_drain_stream(handle, buf.as_mut_ptr(), 5) },
+        5
+    );
     assert_eq!(&buf, b"radio");
     let mut rest = [0u8; 64];
-    assert_eq!(unsafe { oasis_audio_drain_stream(handle, rest.as_mut_ptr(), 64) }, 6);
+    assert_eq!(
+        unsafe { oasis_audio_drain_stream(handle, rest.as_mut_ptr(), 64) },
+        6
+    );
     assert_eq!(&rest[..6], b"-bytes");
     assert_eq!(unsafe { oasis_audio_stream_buffered(handle) }, 0);
     assert_eq!(
@@ -296,7 +302,10 @@ fn audio_drain_stream_copies_streamed_bytes() {
     );
     unsafe { oasis_destroy(handle) };
     let null = std::ptr::null_mut();
-    assert_eq!(unsafe { oasis_audio_drain_stream(null, rest.as_mut_ptr(), 64) }, 0);
+    assert_eq!(
+        unsafe { oasis_audio_drain_stream(null, rest.as_mut_ptr(), 64) },
+        0
+    );
     assert_eq!(unsafe { oasis_audio_stream_buffered(null) }, 0);
 }
 

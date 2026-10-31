@@ -151,9 +151,11 @@ impl RegisteredCallback {
     pub(crate) fn call(self, event: u32, detail: *const c_char) {
         match self {
             Self::Plain(cb) => cb(event, detail),
-            Self::WithData(cb, user_data) => {
-                cb(event, detail, std::ptr::with_exposed_provenance_mut(user_data))
-            },
+            Self::WithData(cb, user_data) => cb(
+                event,
+                detail,
+                std::ptr::with_exposed_provenance_mut(user_data),
+            ),
         }
     }
 }

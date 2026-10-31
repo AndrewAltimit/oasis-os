@@ -529,14 +529,20 @@ mod tests {
         let ptr = (&raw mut context).cast::<std::ffi::c_void>();
         b.set_callback_ex(ex_cb, ptr);
         b.set_volume(10).unwrap();
-        assert_eq!(EX_EVENT.load(Ordering::SeqCst), AudioEvent::VolumeChange as u32);
+        assert_eq!(
+            EX_EVENT.load(Ordering::SeqCst),
+            AudioEvent::VolumeChange as u32
+        );
         assert_eq!(EX_USER_DATA.load(Ordering::SeqCst), ptr as usize);
         // The plain setter replaces it.
         assert_eq!(LAST_EVENT.load(Ordering::SeqCst), u32::MAX);
         b.set_callback(test_cb);
         b.stop().unwrap();
         assert_eq!(LAST_EVENT.load(Ordering::SeqCst), AudioEvent::Stop as u32);
-        assert_eq!(EX_EVENT.load(Ordering::SeqCst), AudioEvent::VolumeChange as u32);
+        assert_eq!(
+            EX_EVENT.load(Ordering::SeqCst),
+            AudioEvent::VolumeChange as u32
+        );
     }
 
     #[test]

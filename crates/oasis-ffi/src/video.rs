@@ -106,16 +106,8 @@ impl VideoThreadState {
     /// audio chunk is waiting to be polled.
     fn is_playing(&self) -> bool {
         let decoding = self.thread.as_ref().is_some_and(|t| !t.is_finished());
-        let frame_pending = self
-            .shared
-            .latest_frame
-            .lock()
-            .is_ok_and(|f| f.is_some());
-        let audio_pending = self
-            .shared
-            .audio_buffer
-            .lock()
-            .is_ok_and(|a| !a.is_empty());
+        let frame_pending = self.shared.latest_frame.lock().is_ok_and(|f| f.is_some());
+        let audio_pending = self.shared.audio_buffer.lock().is_ok_and(|a| !a.is_empty());
         decoding || frame_pending || audio_pending
     }
 }
@@ -572,7 +564,10 @@ mod tests {
         unsafe {
             with_instance(handle, (), |inst| {
                 let shared = VideoShared::default();
-                *shared.latest_frame.lock().unwrap() = Some(frame);
+                *shared
+                    .latest_frame
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner()) = Some(frame);
                 inst.video_state = Some(VideoThreadState {
                     shared,
                     thread: None,
@@ -628,15 +623,25 @@ mod tests {
         let start = Instant::now();
         // Timestamps start at 5 s: media time is relative to the first one.
         decode_loop(
-            Fake::new(&[5.0, 5.1, 5.2, 5.3], (0..30).map(|i| 5.0 + f64::from(i) * 0.01)),
+            Fake::new(
+                &[5.0, 5.1, 5.2, 5.3],
+                (0..30).map(|i| 5.0 + f64::from(i) * 0.01),
+            ),
             shared.clone(),
         );
         let elapsed = start.elapsed().as_secs_f64();
-        assert!(elapsed >= 0.29, "finished after {elapsed:.3}s, frames ran ahead");
+        assert!(
+            elapsed >= 0.29,
+            "finished after {elapsed:.3}s, frames ran ahead"
+        );
         assert!(elapsed < 3.0, "finished after {elapsed:.3}s");
         let last = shared.latest_frame.lock().unwrap().take().unwrap();
         assert_eq!(last.timestamp_secs, 5.3);
-        assert_eq!(shared.audio_buffer.lock().unwrap().len(), 30, "no chunk dropped");
+        assert_eq!(
+            shared.audio_buffer.lock().unwrap().len(),
+            30,
+            "no chunk dropped"
+        );
         assert_eq!(shared.audio_format.get(), (44_100, 2));
     }
 
@@ -646,7 +651,10 @@ mod tests {
         let worker = shared.clone();
         // Audio-only, 10 s of 10 ms chunks: far more than the ring holds.
         let thread = std::thread::spawn(move || {
-            decode_loop(Fake::new(&[], (0..1000).map(|i| f64::from(i) * 0.01)), worker)
+            decode_loop(
+                Fake::new(&[], (0..1000).map(|i| f64::from(i) * 0.01)),
+                worker,
+            )
         });
         std::thread::sleep(Duration::from_millis(100));
         let queued = shared.audio_buffer.lock().unwrap().len();
@@ -661,7 +669,10 @@ mod tests {
     fn audio_format_reports_active_stream() {
         let h = create();
         let (mut rate, mut ch) = (0u32, 0u32);
-        assert_eq!(unsafe { oasis_video_audio_format(h, &mut rate, &mut ch) }, -1);
+        assert_eq!(
+            unsafe { oasis_video_audio_format(h, &mut rate, &mut ch) },
+            -1
+        );
         unsafe {
             with_instance(h, (), |inst| {
                 let shared = VideoShared::default();
@@ -672,12 +683,18 @@ mod tests {
                 });
             });
         }
-        assert_eq!(unsafe { oasis_video_audio_format(h, &mut rate, &mut ch) }, 0);
+        assert_eq!(
+            unsafe { oasis_video_audio_format(h, &mut rate, &mut ch) },
+            0
+        );
         assert_eq!((rate, ch), (48_000, 2));
         let null = std::ptr::null_mut();
         assert_eq!(unsafe { oasis_video_audio_format(h, null, null) }, 0);
         unsafe { crate::oasis_destroy(h) };
-        assert_eq!(unsafe { oasis_video_audio_format(std::ptr::null_mut(), &mut rate, &mut ch) }, -1);
+        assert_eq!(
+            unsafe { oasis_video_audio_format(std::ptr::null_mut(), &mut rate, &mut ch) },
+            -1
+        );
     }
 
     fn create() -> *mut OasisInstance {
