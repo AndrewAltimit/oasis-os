@@ -999,7 +999,7 @@ fn icon_drag_reorder_persists() {
     );
     let saved = String::from_utf8(
         h.vfs()
-            .read(oasis_core::settings::DEFAULT_PATH)
+            .read(oasis_app::settings::DEFAULT_PATH)
             .unwrap_or_default(),
     )
     .unwrap();

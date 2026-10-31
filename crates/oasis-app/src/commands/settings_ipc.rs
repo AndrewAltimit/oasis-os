@@ -203,8 +203,8 @@ mod tests {
     }
     // -- Settings preference IPC (volume / locale / accessibility) --
 
+    use crate::settings::{SettingsStore, UserPrefs};
     use oasis_apps::settings as settings_app;
-    use oasis_core::settings::{SettingsStore, UserPrefs};
 
     /// A VFS with the runtime-state / IPC directories the shell creates.
     fn prefs_vfs(state: &AppState) -> MemoryVfs {

@@ -11,8 +11,8 @@
 //! [`DashboardState::set_icon_position`]:
 //!     oasis_core::dashboard::DashboardState::set_icon_position
 
+use crate::settings::SettingsStore;
 use oasis_core::dashboard::DashboardState;
-use oasis_core::settings::SettingsStore;
 use oasis_core::vfs::MemoryVfs;
 
 use crate::app_state::AppState;

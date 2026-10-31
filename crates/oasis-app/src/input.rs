@@ -1,3 +1,4 @@
+use crate::ui_sound::UiSound;
 use oasis_core::apps::AppAction;
 use oasis_core::bottombar::MediaTab;
 use oasis_core::input::{Button, InputEvent, Key, KeyTwinFilter, Modifiers, Trigger};
@@ -5,7 +6,6 @@ use oasis_core::osk::{OskConfig, OskState};
 use oasis_core::sdi::SdiRegistry;
 use oasis_core::startmenu::StartMenuAction;
 use oasis_core::transition;
-use oasis_core::ui_sound::UiSound;
 use oasis_core::vfs::MemoryVfs;
 use oasis_core::wm::manager::WmEvent;
 

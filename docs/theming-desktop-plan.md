@@ -341,7 +341,7 @@ additive mode.
 ### B3. Position persistence
 
 - Persist `app path → (x, y, page)` per skin via the existing settings
-  mechanism (`oasis-core/src/settings.rs`), key `icon_positions.<skin>`.
+  mechanism (`oasis-app/src/settings.rs`), key `icon_positions.<skin>`.
   Written on drop, loaded on dashboard build; invalid/off-screen entries are
   clamped, missing entries auto-flow (B1).
 

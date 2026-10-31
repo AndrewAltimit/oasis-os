@@ -25,6 +25,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::Result;
 
+use crate::settings::{SettingsStore, UserPrefs};
 use oasis_backend_sdl::shader_bridge::SdlShaderBridge;
 use oasis_core::active_theme::ActiveTheme;
 use oasis_core::backend::SdiBackend;
@@ -37,7 +38,6 @@ use oasis_core::input::{InputEvent, KeyTwinFilter};
 use oasis_core::platform::{DesktopPlatform, NetworkService, PowerService, TimeService};
 use oasis_core::plugin::{Plugin, PluginContext, PluginManager, register_builtin_plugins};
 use oasis_core::sdi::SdiRegistry;
-use oasis_core::settings::{SettingsStore, UserPrefs};
 use oasis_core::skin::{Skin, resolve_skin, resolve_skin_or_classic};
 use oasis_core::startmenu::StartMenuState;
 use oasis_core::statusbar::StatusBar;
@@ -561,7 +561,7 @@ impl<B: ShellBackend> Shell<B> {
             offline,
             custom_skin_root,
             toasts: ToastManager::new(),
-            ui_sounds: oasis_core::ui_sound::UiSoundQueue::new(),
+            ui_sounds: crate::ui_sound::UiSoundQueue::new(),
             sfx: oasis_audio::sfx::SfxPlayer::new(),
             media_track: None,
             media: oasis_audio::AudioManager::new(),

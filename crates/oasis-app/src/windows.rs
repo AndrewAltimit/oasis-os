@@ -8,9 +8,9 @@
 //! drops the browser widget for the browser window, plays the close sound
 //! and falls back to the dashboard when the last window went away.
 
+use crate::ui_sound::UiSound;
 use oasis_core::apps::{AppAction, OwnedMedia};
 use oasis_core::sdi::SdiRegistry;
-use oasis_core::ui_sound::UiSound;
 use oasis_core::vfs::MemoryVfs;
 
 use crate::app_state::{AppState, Mode};

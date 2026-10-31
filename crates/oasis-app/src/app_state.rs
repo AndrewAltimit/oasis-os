@@ -325,7 +325,7 @@ pub struct AppState {
     pub cursor_texture: Option<oasis_core::backend::TextureId>,
     /// Persistent key-value settings (icon positions, ...), stored in the
     /// VFS at `/system/settings.toml`.
-    pub settings: oasis_core::settings::SettingsStore,
+    pub settings: crate::settings::SettingsStore,
     pub radio: RadioLayer,
     pub tv: TvLayer,
     /// Audio output: the SDL device in the desktop binary, a recording
@@ -342,7 +342,7 @@ pub struct AppState {
     pub toasts: ToastManager,
     /// UI sound events queued by input/toast chokepoints this frame,
     /// drained once per frame by `ui_sfx::tick`.
-    pub ui_sounds: oasis_core::ui_sound::UiSoundQueue,
+    pub ui_sounds: crate::ui_sound::UiSoundQueue,
     /// Skin-defined one-shot UI samples (loaded on skin swap; empty for
     /// skins without a `[sounds]` table).
     pub sfx: oasis_audio::sfx::SfxPlayer,
@@ -407,14 +407,14 @@ impl AppState {
             chrome_layer_cache: oasis_core::vector_overlay::LayerOpsCache::new(),
             icon_drag: None,
             cursor_texture: None,
-            settings: oasis_core::settings::SettingsStore::new(),
+            settings: crate::settings::SettingsStore::new(),
             radio: RadioLayer::new(),
             tv: TvLayer::new(),
             audio_backend: Box::new(oasis_backend_sdl::SdlAudioBackend::new()),
             offline: true,
             custom_skin_root: std::env::temp_dir().join("oasis-unit-skins"),
             toasts: ToastManager::new(),
-            ui_sounds: oasis_core::ui_sound::UiSoundQueue::new(),
+            ui_sounds: crate::ui_sound::UiSoundQueue::new(),
             sfx: oasis_audio::sfx::SfxPlayer::new(),
             media_track: None,
             media: oasis_audio::AudioManager::new(),

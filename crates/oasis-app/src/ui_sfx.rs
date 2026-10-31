@@ -11,7 +11,7 @@
 //! sounds from the toast counters, drains the event queue into voices, and
 //! pumps a small backlog of mixed PCM into the SFX stream.
 
-use oasis_core::ui_sound::UiSound;
+use crate::ui_sound::UiSound;
 
 use crate::app_state::AppState;
 
