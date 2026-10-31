@@ -920,3 +920,96 @@ fn insert_mode_delete_forward_via_rtrigger() {
     app.handle_input(&Button::Square, &vfs);
     assert_eq!(app.buffer.get_line(0), Some("ac"));
 }
+
+/// Char column of the caret (the status bar's "Col" minus one).
+fn char_col(app: &TextEditorApp) -> usize {
+    app.cursor_char_col()
+}
+
+#[test]
+fn vertical_moves_keep_the_character_column() {
+    // Byte columns made `日本語` (9 bytes) land the caret at col 9 below.
+    let mut app = TextEditorApp::open_file("/t.txt", "日本語\nabcdefghij");
+    app.cursor_end();
+    app.cursor_down();
+    assert_eq!((app.cursor_line, char_col(&app)), (1, 3));
+}
+
+#[test]
+fn vertical_moves_remember_the_goal_column_across_short_lines() {
+    let mut app = TextEditorApp::open_file("/t.txt", "0123456789\n\n0123456789");
+    app.cursor_end();
+    app.cursor_down();
+    assert_eq!((app.cursor_line, app.cursor_col), (1, 0));
+    app.cursor_down();
+    assert_eq!(
+        (app.cursor_line, app.cursor_col),
+        (2, 10),
+        "goal column kept"
+    );
+    // Any horizontal move resets the goal.
+    app.cursor_left();
+    app.cursor_up();
+    app.cursor_up();
+    assert_eq!((app.cursor_line, app.cursor_col), (0, 9));
+}
+
+#[test]
+fn page_down_never_scrolls_past_the_last_page() {
+    let text: Vec<String> = (0..50).map(|i| format!("line {i}")).collect();
+    let mut app = TextEditorApp::open_file("/t.txt", &text.join("\n"));
+    app.layout(400, 300, &oasis_skin::ActiveTheme::default());
+    let page = app.page_lines();
+    for _ in 0..10 {
+        app.motion(crate::editor::Motion::PageDown, false);
+    }
+    assert_eq!(app.cursor_line, 49);
+    assert_eq!(
+        app.content.scroll,
+        50 - page,
+        "last page fills the viewport"
+    );
+}
+
+#[test]
+fn click_places_the_caret_at_the_nearest_proportional_boundary() {
+    use oasis_types::backend::bitmap_measure_text;
+    // Narrow glyphs (`i`) followed by wide ones (`W`): a fixed 7 px/char
+    // estimate lands far from the clicked character.
+    let line = "iiiiiiiiiiWWWW";
+    let mut app = TextEditorApp::open_file("/t.txt", line);
+    let x_of = |n: usize| 8 + bitmap_measure_text(&line[..n], 12) as i32;
+    let vfs = make_vfs();
+    // Just right of the boundary after the 10th `i`.
+    click_at(&mut app, x_of(10) + 1, 26, 400, 300, &vfs);
+    assert_eq!(app.cursor_col, 10);
+    // Just left of the boundary after the 2nd `W`.
+    click_at(&mut app, x_of(12) - 1, 26, 400, 300, &vfs);
+    assert_eq!(app.cursor_col, 12);
+}
+
+#[test]
+fn long_lines_scroll_horizontally_to_keep_the_caret_visible() {
+    use oasis_app_core::testing::AppHarness;
+    let long = "x".repeat(300);
+    let app = TextEditorApp::open_file("/t.txt", &format!("{long}END"));
+    let mut h = AppHarness::new(Box::new(app));
+    h.set_size(300, 200);
+    h.key(oasis_types::input::Key::End);
+    let b = h.draw();
+    let (x0, w) = (8, 300);
+    let caret_visible = b.rects().iter().any(|r| {
+        r.w == 2
+            && r.visible
+                .is_some_and(|(vx, _, vw, _)| vx >= x0 && vx + vw as i32 <= x0 + w)
+    });
+    assert!(caret_visible, "caret drawn inside the window after End");
+    // Clicking near the right edge now lands near the end of the line.
+    h.click(w - 20, 26);
+    let app = h.app_as::<TextEditorApp>();
+    assert!(
+        app.cursor_col > 280,
+        "click mapped through the scroll: {}",
+        app.cursor_col
+    );
+}

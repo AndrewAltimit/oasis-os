@@ -9,7 +9,7 @@
 
 use oasis_app_core::{App, AppAction, AppRequest, ContentState, MAX_WHEEL_STEPS};
 use oasis_skin::ActiveTheme;
-use oasis_types::backend::{InMemoryClipboard, SdiBackend};
+use oasis_types::backend::{InMemoryClipboard, SdiBackend, bitmap_measure_text};
 use oasis_types::input::{Button, Key, Modifiers};
 use oasis_ui::menu_bar::{Menu, MenuBar, MenuEntry, MenuHit};
 use oasis_vfs::Vfs;
@@ -82,7 +82,10 @@ pub struct TextEditorApp {
     pub(crate) cursor_col: usize,
     /// Selection anchor; the selection spans anchor..cursor.
     pub(crate) anchor: Option<Pos>,
-    pub(crate) scroll_x: usize,
+    /// Character column Up / Down / PageUp / PageDown aim for: kept across
+    /// consecutive vertical moves so a short line in between does not pull
+    /// the caret left for good (`None` after any other motion or edit).
+    pub(crate) goal_col: Option<usize>,
     pub(crate) file_path: Option<String>,
     /// Line terminator the file was opened with (`"\r\n"` or `"\n"`);
     /// saves write it back unchanged.
@@ -173,7 +176,7 @@ impl TextEditorApp {
             cursor_line: 0,
             cursor_col: 0,
             anchor: None,
-            scroll_x: 0,
+            goal_col: None,
             file_path: path.map(String::from),
             line_ending: "\n",
             read_only: false,
@@ -444,10 +447,10 @@ impl App for TextEditorApp {
             return AppAction::None;
         }
 
-        // Clicks in the text area: place the caret at the nearest
-        // character. Approximate 7px per glyph for the 12px bitmap
-        // font; we don't have a backend here to call `measure_text`.
-        let pad_left = 8i32;
+        // Clicks in the text area: place the caret at the nearest character
+        // boundary, measured with the bitmap font's proportional advances
+        // (there is no backend here) under the same horizontal scroll
+        // `draw_notepad` applies.
         let pad_top = 6i32;
         let line_h = match self.viewport_line_h {
             0 => 14,
@@ -457,12 +460,22 @@ impl App for TextEditorApp {
         let clicked_line = (relative_y / line_h).max(0) as usize;
         let target_line =
             (self.content.scroll + clicked_line).min(self.buffer.line_count().saturating_sub(1));
+        let measure = |s: &str| bitmap_measure_text(s, render::NP_FONT_SIZE);
+        let caret_line = self.buffer.get_line(self.cursor_line).unwrap_or("");
+        let caret_px = measure(&caret_line[..caret_line.floor_char_boundary(self.cursor_col)]);
+        let x = (lx - render::NP_PAD_LEFT).max(0) as u32 + render::h_scroll(caret_px, cw);
         let line_text = self.buffer.get_line(target_line).unwrap_or("");
-        let approx_col = ((lx - pad_left - 8).max(0) / 7) as usize;
-        let target_col = line_text
-            .char_indices()
-            .nth(approx_col)
-            .map_or(line_text.len(), |(i, _)| i);
+        let mut target_col = line_text.len();
+        let mut acc = 0u32;
+        for (i, c) in line_text.char_indices() {
+            let adv = measure(&line_text[i..i + c.len_utf8()]);
+            // Nearest boundary: past a glyph's midpoint means after it.
+            if x < acc + adv / 2 {
+                target_col = i;
+                break;
+            }
+            acc += adv;
+        }
 
         if matches!(self.mode, EditorMode::Normal | EditorMode::Saving) {
             self.mode = EditorMode::Insert;

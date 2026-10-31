@@ -22,6 +22,18 @@ pub(crate) const FM_ADDR_H: u32 = 18;
 /// Pixel height of the status strip in Explorer view.
 pub(crate) const FM_STATUS_H: u32 = 14;
 
+/// Height of the dual view's panel area (below the header row and the
+/// menu strip, above the 14 px hint line).
+fn dual_content_h(ch: u32, at: &ActiveTheme) -> u32 {
+    ch.saturating_sub(at.app.title_bar_height + FM_MENU_H + 14)
+}
+
+/// Rows of a dual-view panel `draw_windowed_dual` draws in a content area
+/// `ch` tall (input navigates against the same count).
+pub(crate) fn dual_max_lines(ch: u32, at: &ActiveTheme) -> usize {
+    (dual_content_h(ch, at) / at.terminal_line_height.max(12)) as usize
+}
+
 // Re-exported for use in `lib.rs` tests that need to mirror the renderer's
 // hit-test geometry exactly.
 pub(crate) use private::{
@@ -307,7 +319,14 @@ impl FileManagerApp {
             "[L: {}]  [R: {}]",
             self.panels[0].browse_dir, self.panels[1].browse_dir,
         );
-        backend.draw_text(&header, cx + 4, cy + 2, 12, colors.dim_text)?;
+        backend.draw_text_ellipsis(
+            &header,
+            cx + 4,
+            cy + 2,
+            12,
+            colors.dim_text,
+            cw.saturating_sub(8),
+        )?;
         backend.fill_rect(
             cx,
             cy + at.app.title_bar_height as i32 - 4,
@@ -325,12 +344,12 @@ impl FileManagerApp {
 
         // Vertical divider below the menu strip.
         let content_y = menu_y + FM_MENU_H as i32;
-        let content_h = ch.saturating_sub(title_h as u32 + FM_MENU_H + 14);
+        let content_h = dual_content_h(ch, at);
         backend.fill_rect(divider_x, content_y, 1, content_h, colors.divider)?;
 
         // Draw each panel.
         let line_h = at.terminal_line_height.max(12) as i32;
-        let max_lines = ((content_h as i32) / line_h).max(0) as usize;
+        let max_lines = dual_max_lines(ch, at);
         for (pi, panel) in self.panels.iter().enumerate() {
             let px = if pi == 0 { cx } else { divider_x + 1 };
             let pw = if pi == 0 {
@@ -357,30 +376,32 @@ impl FileManagerApp {
                 } else {
                     "  "
                 };
-                let max_chars = (pw as usize / 8).saturating_sub(2);
-                let display = if line.len() > max_chars {
-                    &line[..line.floor_char_boundary(max_chars)]
-                } else {
-                    line.as_str()
-                };
-                let text = format!("{prefix}{display}");
+                let text = format!("{prefix}{line}");
                 let text_color = if is_active && i == panel.cursor {
                     colors.selected_text
                 } else {
                     colors.text
                 };
                 let y = content_y + 2 + i as i32 * line_h;
-                backend.draw_text(&text, px + 2, y, 12, text_color)?;
+                backend.draw_text_ellipsis(
+                    &text,
+                    px + 2,
+                    y,
+                    12,
+                    text_color,
+                    pw.saturating_sub(4),
+                )?;
             }
         }
 
         let scroll_y = cy + ch as i32 - 14;
-        backend.draw_text(
+        backend.draw_text_ellipsis(
             &self.status_or(DUAL_HINT),
             cx + 4,
             scroll_y,
             10,
             colors.dim_text,
+            cw.saturating_sub(8),
         )?;
 
         // Drop-down floats above the rest of the windowed content.
@@ -538,6 +559,8 @@ impl FileManagerApp {
                 kind,
                 &colors,
             );
+            // Tile labels keep a character-count cut: a pixel cut at the tile
+            // width would hide most names (`notes.txt`) behind an ellipsis.
             let max_chars = (g.tile_w as usize / 7).max(4);
             let label = truncate_label(&name, max_chars);
             let label_color = if is_selected {
@@ -564,21 +587,19 @@ impl FileManagerApp {
         }
 
         // Status.
-        let count = panel.lines.iter().filter(|l| l.trim() != "..").count();
+        // Real entries only: not `..`, nor an `(empty directory)` / error row.
+        let count = (0..panel.lines.len())
+            .filter_map(|i| panel.entry(i))
+            .filter(|e| e.kind != EntryKind::ParentDir)
+            .count();
         backend.fill_rect(g.menu_x, g.status_y, g.menu_w, g.status_h, colors.status_bg)?;
-        backend.draw_text(
+        oasis_app_core::render::draw_status_strip(
+            backend,
+            (g.menu_x, g.status_y, g.menu_w, g.status_h),
             &self.status_or(&format!("{count} object(s)")),
-            g.menu_x + 4,
-            g.status_y + 1,
-            at.font_hint,
-            colors.status_text,
-        )?;
-        backend.draw_text(
             "View>List  Cancel=back",
-            g.menu_x + g.menu_w as i32 - 180,
-            g.status_y + 1,
             at.font_hint,
-            colors.status_text,
+            (colors.status_text, colors.status_text),
         )?;
 
         // Drop-down floats above the rest of the windowed content.

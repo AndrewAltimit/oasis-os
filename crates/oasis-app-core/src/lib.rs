@@ -24,8 +24,6 @@ pub enum AppAction {
     None,
     /// User wants to exit this app and return to dashboard.
     Exit,
-    /// App wants to switch to terminal mode.
-    SwitchToTerminal,
     /// App requests entering fullscreen kiosk mode.
     RequestFullscreen,
     /// App asks the host to launch `app_title` with `file_path` pre-loaded.

@@ -74,6 +74,9 @@ pub struct PaintApp {
     /// Content-area size recorded by the last `App::layout` (click
     /// hit-testing).
     content_size: (u32, u32),
+    /// Canvas scroll in screen pixels when it is bigger than its view
+    /// (kept by `App::layout` so the drawing cursor stays visible).
+    pan: (u32, u32),
     canvas: Canvas,
     tool: Tool,
     color: Color,
@@ -162,6 +165,7 @@ impl PaintApp {
         let mut app = Self {
             content: ContentState::new("Paint", path),
             content_size: (0, 0),
+            pan: (0, 0),
             canvas: Canvas::new(CANVAS_W, CANVAS_H),
             tool: Tool::Pencil,
             color: pal[0],
@@ -277,6 +281,15 @@ impl PaintApp {
                 self.canvas.refresh_flat();
             },
             Tool::Fill => {
+                // Filling with the colour already there changes nothing:
+                // no undo step, redo history and modified flag kept.
+                let at = (cy >= 0 && cx >= 0)
+                    .then(|| (cy as u32 * w + cx as u32) as usize)
+                    .and_then(|i| self.canvas.active_pixels_mut()?.get(i).copied());
+                if at.is_none_or(|c| c == color) {
+                    self.drawing = false;
+                    return;
+                }
                 self.push_undo();
                 if let Some(px) = self.canvas.active_pixels_mut() {
                     flood_fill(px, w, h, cx, cy, color);
@@ -603,7 +616,14 @@ impl App for PaintApp {
                 }
             },
             Button::Confirm => {
-                self.apply_tool();
+                // Pencil / Eraser: Confirm puts the pen down and paints,
+                // pressing it again lifts the pen (otherwise every later
+                // d-pad move kept painting).
+                if self.drawing && matches!(self.tool, Tool::Pencil | Tool::Eraser) {
+                    self.stop_drawing();
+                } else {
+                    self.apply_tool();
+                }
             },
             Button::Triangle => {
                 self.stop_drawing();
@@ -676,7 +696,8 @@ impl App for PaintApp {
 
     fn layout(&mut self, cw: u32, ch: u32, _at: &ActiveTheme) {
         self.content_size = (cw, ch);
-        let l = PaintLayout::compute(0, 0, cw, ch, self.canvas.width(), self.canvas.height());
+        let l = self.layout_at(0, 0, cw, ch);
+        self.pan = l.pan_to_show(self.pan, self.cursor_x, self.cursor_y);
         self.picker_rows = l.picker_rows();
     }
 
@@ -719,9 +740,16 @@ impl App for PaintApp {
 }
 
 impl PaintApp {
+    /// The layout of a `cw` x `ch` content area at `(cx, cy)` under the
+    /// current pan (what drawing and click hit-testing both use).
+    fn layout_at(&self, cx: i32, cy: i32, cw: u32, ch: u32) -> PaintLayout {
+        let (w, h) = (self.canvas.width(), self.canvas.height());
+        PaintLayout::compute_panned(cx, cy, cw, ch, w, h, self.pan)
+    }
+
     /// Content-area click (menu, tools, palette, picker, canvas).
     fn click(&mut self, lx: i32, ly: i32, cw: u32, ch: u32) -> AppAction {
-        let l = PaintLayout::compute(0, 0, cw, ch, self.canvas.width(), self.canvas.height());
+        let l = self.layout_at(0, 0, cw, ch);
 
         // 1. Menu bar and its drop-down.
         match self

@@ -102,6 +102,21 @@ fn tokenize(expr: &str) -> Result<Vec<Token>, CalcError> {
                     }
                     i += 1;
                 }
+                // Optional exponent (`1.5e-12`): how the display writes
+                // magnitudes its fixed form can't show, so MR / Ans text
+                // must read back.
+                if i < len && (chars[i] == 'e' || chars[i] == 'E') {
+                    let mut j = i + 1;
+                    if j < len && (chars[j] == '+' || chars[j] == '-') {
+                        j += 1;
+                    }
+                    if j < len && chars[j].is_ascii_digit() {
+                        while j < len && chars[j].is_ascii_digit() {
+                            j += 1;
+                        }
+                        i = j;
+                    }
+                }
                 let num_str: String = chars[start..i].iter().collect();
                 let value = num_str.parse::<f64>().map_err(|_| {
                     CalcError::InvalidExpression(format!("invalid number: {num_str}"))
@@ -277,7 +292,8 @@ impl Parser {
 
 /// Evaluate a mathematical expression string and return the result.
 ///
-/// Supports: `+`, `-`, `*`, `/`, `%` (modulo), `^` (power),
+/// Supports: `+`, `-`, `*`, `/`, `%` (modulo), `^` (power), numbers with
+/// an optional exponent (`1.5e-12`),
 /// parentheses, unary minus, integers, and decimals.
 ///
 /// Operator precedence (lowest to highest):

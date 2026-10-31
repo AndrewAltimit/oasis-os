@@ -112,7 +112,7 @@ impl FileManagerApp {
                 AppAction::None
             },
             Button::Down => {
-                self.panels[self.active_panel].navigate_down(self.content.cached_max_visible);
+                self.panels[self.active_panel].navigate_down(self.dual_visible_rows.max(1));
                 AppAction::None
             },
             Button::Confirm => {
@@ -179,16 +179,9 @@ impl FileManagerApp {
         if abs < 0 || abs >= total as isize {
             return;
         }
-        let abs = abs as usize;
-
-        let row = abs / cols;
-        let first_visible_row = p.scroll / cols;
-        if row < first_visible_row {
-            p.scroll = row * cols;
-        } else if row >= first_visible_row + rows {
-            p.scroll = (row + 1 - rows) * cols;
-        }
-        p.cursor = abs - p.scroll;
+        // `reveal` keeps `scroll` row-aligned and `cursor` in range even
+        // when the scroll came from the dual view (one line per step).
+        p.reveal(abs as usize, cols, cols * rows);
     }
 
     /// Handle input in Explorer (single-pane icon grid) mode.

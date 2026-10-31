@@ -90,7 +90,6 @@ Returned from `handle_input`, `handle_key` and `handle_click`:
 |---------|---------------|
 | `None` | Input consumed, nothing else to do |
 | `Exit` | Close the app / window and return to the dashboard |
-| `SwitchToTerminal` | Switch to terminal mode |
 | `RequestFullscreen` | Enter fullscreen kiosk mode |
 | `LaunchAppWithFile { app_title, file_path }` | Launch another app with a file pre-opened (File Manager -> Photo Viewer / Music Player / Text Editor) |
 
@@ -167,9 +166,30 @@ using `impl_content_app_methods!(field)`, which implements `title`,
 `draw_windowed` and `drain_requests` with the shared renderer in
 `oasis_app_core::render`. `ContentState` also provides
 cursor / scroll helpers (`navigate_up`, `navigate_down`, `handle_nav`
-for the standard Cancel / Up / Down), `post_request` to queue a VFS IPC
-request, and `update_layout_windowed` / `windowed_metrics` so a click
-handler can map a click to a line with `render::windowed_line_at`.
+for the standard Cancel / Up / Down, `select(idx)` / `selected()` to
+jump to a line), `post_request` to queue a VFS IPC request, and
+`update_layout_windowed` / `windowed_metrics` so a click handler can
+map a click to a line with `render::windowed_line_at`. The shared
+renderer ellipsizes every row to the window width.
+
+Text must fit the window at every skin size, from a 320x200 window in a
+PSP-size skin to XGA, under large-font skins too (`oasis-apps`'
+`text_fits_window` test checks every built-in app). Helpers in
+`oasis_app_core::render`:
+
+- `backend.draw_text_ellipsis(text, x, y, size, color, max_w)` draws a
+  label cut to a pixel width; `render::ellipsize` returns the cut string
+  for labels you batch or lay out yourself. Never cut by character count:
+  the bitmap font is proportional.
+- `render::draw_status_strip(backend, rect, left, right, size, colors)`
+  is the one-line footer / status bar: the font shrinks to the strip's
+  height, `left` is ellipsized and the `right` hint is dropped before
+  the two would collide.
+
+File-browsing apps list folders with `file_viewer::list_directory_entries`,
+which returns the display rows plus the entry (name, kind) behind each;
+act on the entry, never on a name parsed back out of a row
+(`song  (live).mp3` contains the row's size separator).
 
 Take every color from the `ActiveTheme`; per-app overrides go under
 `[app_themes.<app>]` in the skin (see

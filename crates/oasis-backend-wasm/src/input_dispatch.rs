@@ -584,9 +584,6 @@ impl OasisWasm {
     fn apply_window_action(&mut self, action: AppAction, active_id: String) {
         match action {
             AppAction::Exit => self.close_app_window(&active_id),
-            AppAction::SwitchToTerminal => {
-                self.mode = Mode::Terminal;
-            },
             AppAction::RequestFullscreen => {
                 if self.fullscreen_app.is_none() {
                     let _ = self.wm.enter_fullscreen(&active_id, &mut self.sdi);

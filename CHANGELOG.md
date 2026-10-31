@@ -35,6 +35,32 @@ larger changes by area. Breaking API changes are marked **(breaking)**.
   whole rows. `SoftwareShaderRenderer::render_balatro` is no longer public; use
   `render_builtin(BuiltinShader::Balatro, ..)` **(breaking)**.
 
+### Built-in apps
+
+- Text Editor: long lines scroll horizontally to keep the caret visible; clicks place the
+  caret at the nearest character (proportional font); Up / Down keep a character goal
+  column across short lines and multi-byte text; PageDown stops at the last full page.
+- Calculator: tiny and huge results show in scientific notation (`0-0.00000000004` read
+  `-0`), which the evaluator now accepts; a new operator replaces the whole trailing
+  operator run (`5*-` then `+` is `5+`); Ans / MR replace the number being typed (`2` then
+  Ans gave `24`); history entries the evaluator rejects are skipped on load.
+- File Manager: switching Dual -> Explorer after scrolling no longer underflows the cursor;
+  Dual-view Down keeps the selection on a drawn row; an empty folder says `0 object(s)`.
+- Music Player / Photo Viewer: files whose names contain `  (` open (the name was parsed
+  back out of the row text); a track opened by hand sets the playlist position; leaving
+  the viewer re-selects the file instead of jumping to the top.
+- Paint: Confirm lifts the Pencil / Eraser again (a gamepad could not stop painting);
+  canvases bigger than the window are clipped and pan with the cursor instead of running
+  under the palette; a fill with the colour already there is not an undo step.
+- Snake: two turns within one move no longer reverse the snake into itself; restarting
+  mid-game keeps a new high score. TV Guide: the open guide follows the wall clock.
+- Every app's text stays inside its window from 320x200 to 1024x768 under large-font skins
+  (footers, status strips, list rows and headers are ellipsized by pixel width).
+- `oasis-app-core`: `file_viewer::list_directory_entries` (rows plus the entry behind
+  each), `ContentState::select` / `selected`, `render::ellipsize`,
+  `render::draw_status_strip`. **(breaking)** `AppAction::SwitchToTerminal` is removed
+  (no app returned it).
+
 ### Crate map
 
 - New interactive site page, `site/crates.html`: all 51 crates in their layers; hover / focus

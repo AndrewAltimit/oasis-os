@@ -379,6 +379,24 @@ impl ContentState {
         }
     }
 
+    /// Select line `idx` (clamped to the last line), scrolling as little as
+    /// possible to bring it on screen.
+    pub fn select(&mut self, idx: usize) {
+        let idx = idx.min(self.lines.len().saturating_sub(1));
+        let page = self.cached_max_visible.max(1);
+        if idx < self.scroll {
+            self.scroll = idx;
+        } else if idx >= self.scroll + page {
+            self.scroll = idx + 1 - page;
+        }
+        self.cursor = idx - self.scroll;
+    }
+
+    /// Absolute index of the selected line.
+    pub fn selected(&self) -> usize {
+        self.scroll + self.cursor
+    }
+
     /// Update cached layout for a windowed content area `ch` tall: the
     /// row count, line height and header inset
     /// [`draw_content_windowed`](crate::render::draw_content_windowed)
@@ -555,6 +573,23 @@ mod tests {
         cs.navigate_down();
         assert_eq!(cs.cursor, 1);
         assert_eq!(cs.scroll, 0);
+    }
+
+    #[test]
+    fn select_scrolls_minimally_and_clamps() {
+        let mut cs = ContentState::new("Test", "/apps/test");
+        cs.lines = (0..20).map(|i| format!("line {i}")).collect();
+        cs.cached_max_visible = 5;
+        cs.select(3);
+        assert_eq!((cs.scroll, cs.cursor), (0, 3));
+        cs.select(12);
+        assert_eq!((cs.scroll, cs.cursor), (8, 4));
+        cs.select(9);
+        assert_eq!((cs.scroll, cs.cursor), (8, 1), "already visible: no scroll");
+        cs.select(2);
+        assert_eq!((cs.scroll, cs.cursor), (2, 0));
+        cs.select(99);
+        assert_eq!(cs.selected(), 19);
     }
 
     #[test]

@@ -42,6 +42,9 @@ pub struct FileManagerApp {
     pub(crate) explorer_cols: usize,
     /// Cached visible row count for the Explorer icon grid.
     pub(crate) explorer_visible_rows: usize,
+    /// Cached visible row count of a dual-view panel (the rows
+    /// `draw_windowed_dual` draws), set by `App::layout`.
+    pub(crate) dual_visible_rows: usize,
     /// Cached `font_hint` value from the active theme. Used by the click
     /// handler (which has no `&ActiveTheme`) to derive tree-pane row
     /// heights consistently with the renderer's
@@ -84,6 +87,7 @@ impl FileManagerApp {
             view_mode: ViewMode::Explorer,
             explorer_cols: 1,
             explorer_visible_rows: 1,
+            dual_visible_rows: 13,
             cached_font_hint: 11,
             menu: default_menu_bar(),
             last_click_tile: None,
@@ -98,15 +102,7 @@ impl FileManagerApp {
     /// nearest surviving ancestor. Returns `true` if any listing changed.
     pub(crate) fn rescan(&mut self, vfs: &dyn Vfs) -> bool {
         let mut changed = false;
-        // Scroll granularity and visible-entry count of the active view:
-        // the Explorer grid scrolls by whole rows of `cols` tiles.
-        let (step, page) = match self.view_mode {
-            ViewMode::Dual => (1, self.content.cached_max_visible.max(1)),
-            ViewMode::Explorer => {
-                let cols = self.explorer_cols.max(1);
-                (cols, cols * self.explorer_visible_rows.max(1))
-            },
-        };
+        let (step, page) = self.scroll_step_page();
         for panel in &mut self.panels {
             let mut dir = panel.browse_dir.clone();
             while dir != "/" && !vfs.exists(&dir) {
@@ -140,6 +136,30 @@ impl FileManagerApp {
             ViewMode::Dual => ViewMode::Explorer,
             ViewMode::Explorer => ViewMode::Dual,
         };
+        // The views scroll differently (Explorer by whole rows of tiles):
+        // re-reveal each selection so the scroll suits the new view.
+        let (step, page) = self.scroll_step_page();
+        for panel in &mut self.panels {
+            let selected = panel.scroll + panel.cursor;
+            panel.scroll = 0;
+            panel.reveal(
+                selected.min(panel.lines.len().saturating_sub(1)),
+                step,
+                page,
+            );
+        }
+    }
+
+    /// Scroll granularity and visible-entry count of the active view: the
+    /// Explorer grid scrolls by whole rows of `cols` tiles.
+    pub(crate) fn scroll_step_page(&self) -> (usize, usize) {
+        match self.view_mode {
+            ViewMode::Dual => (1, self.dual_visible_rows.max(1)),
+            ViewMode::Explorer => {
+                let cols = self.explorer_cols.max(1);
+                (cols, cols * self.explorer_visible_rows.max(1))
+            },
+        }
     }
 
     /// Take the oldest queued file operation, if any.

@@ -5,6 +5,7 @@
 //! All geometry comes from [`RadioLayout`] so drawing and hit-testing
 //! agree; all colors come from the active theme via [`RadioColors`].
 
+use oasis_app_core::render::ellipsize;
 use oasis_skin::ActiveTheme;
 use oasis_types::backend::{Color, SdiBackend};
 use oasis_ui::button::{Button as UiButton, ButtonStyle};
@@ -78,22 +79,6 @@ impl RadioColors {
     }
 }
 
-/// Cut `text` to fit `max_w` pixels, ending with `..` when shortened.
-fn fit(backend: &dyn SdiBackend, text: &str, font: u16, max_w: u32) -> String {
-    if backend.measure_text(text, font) <= max_w {
-        return text.to_string();
-    }
-    let mut end = text.len();
-    while end > 0 {
-        end = text.floor_char_boundary(end - 1);
-        let candidate = format!("{}..", &text[..end]);
-        if backend.measure_text(&candidate, font) <= max_w {
-            return candidate;
-        }
-    }
-    String::new()
-}
-
 impl RadioApp {
     /// Draw the whole radio UI into the content rect.
     pub(crate) fn draw_radio(
@@ -110,14 +95,15 @@ impl RadioApp {
         backend.fill_rect(cx, cy, cw, ch, colors.bg)?;
         self.draw_panel(&l, backend, at, &colors)?;
         self.draw_list(&l, backend, at, &colors)?;
-        let hint = "Enter=Tune  Space=Fav  Esc/Start=Stop  +/-=Vol";
-        let hint = fit(backend, hint, at.font_hint, l.footer.w);
-        backend.draw_text(
-            &hint,
-            l.footer.x,
-            l.footer.y + 1,
+        let f = l.footer;
+        // The strip pads 4 px; the footer already starts at the inset.
+        oasis_app_core::render::draw_status_strip(
+            backend,
+            (f.x - 4, f.y, f.w + 8, f.h),
+            "Enter=Tune  Space=Fav  Esc/Start=Stop  +/-=Vol",
+            "",
             at.font_hint,
-            colors.dim_text,
+            (colors.dim_text, colors.dim_text),
         )
     }
 
@@ -143,7 +129,7 @@ impl RadioApp {
         let name_x = p.x + 12 + badge_w as i32;
         let name_w = (p.x + p.w as i32 - 6 - name_x).max(0) as u32;
         let station = self.status.station.as_deref().unwrap_or("No station");
-        let station = fit(backend, station, at.font_body, name_w);
+        let station = ellipsize(backend, station, at.font_body, name_w);
         backend.draw_text(&station, name_x, p.y + 6, at.font_body, colors.text)?;
 
         // Track / error line.
@@ -155,7 +141,7 @@ impl RadioApp {
             },
             _ => (self.status.state_text.as_str(), colors.dim_text),
         };
-        let line = fit(backend, line, font, p.w.saturating_sub(12));
+        let line = ellipsize(backend, line, font, p.w.saturating_sub(12));
         backend.draw_text(&line, p.x + 6, p.y + 22, font, color)?;
 
         // Volume bar + buttons.
@@ -210,12 +196,12 @@ impl RadioApp {
             if s.favorite {
                 backend.draw_text("*", r.x + 4, ty, font, colors.favorite)?;
             }
-            let name = fit(backend, &s.name, font, name_w);
+            let name = ellipsize(backend, &s.name, font, name_w);
             backend.draw_text(&name, r.x + 14, ty, font, text_color)?;
             let genre_x = r.x + 18 + name_w as i32;
-            let genre = fit(backend, &s.genre, font, genre_w);
+            let genre = ellipsize(backend, &s.genre, font, genre_w);
             backend.draw_text(&genre, genre_x, ty, font, colors.dim_text)?;
-            let info = fit(backend, &s.info, font, info_w);
+            let info = ellipsize(backend, &s.info, font, info_w);
             let info_x = r.x + r.w as i32 - 4 - backend.measure_text(&info, font) as i32;
             backend.draw_text(&info, info_x, ty, font, colors.dim_text)?;
         }

@@ -7,7 +7,8 @@
 use std::cell::{Cell, RefCell};
 
 use oasis_app_core::file_viewer::{
-    join_path, list_directory, parent_dir, view_audio_file, view_generic_file, view_image_file,
+    ListingEntry, ListingKind, join_path, list_directory_entries, parent_dir, view_audio_file,
+    view_generic_file, view_image_file,
 };
 use oasis_app_core::render::draw_content_windowed;
 use oasis_app_core::{App, AppAction, AppRequest, ContentState};
@@ -85,6 +86,9 @@ pub struct BrowsingApp {
     /// again opens it (double-click without timing info, as in the File
     /// Manager).
     last_click_line: Option<usize>,
+    /// The directory entry behind each listing row (`content.lines`), so
+    /// a selected row is never parsed back out of its display text.
+    entries: Vec<Option<ListingEntry>>,
 }
 
 /// How files should be viewed when opened.
@@ -108,8 +112,11 @@ impl BrowsingApp {
     ) -> Self {
         let mut content = ContentState::new(title, path);
         content.browse_dir = Some(start_dir.to_string());
+        let mut entries = Vec::new();
         if vfs.exists(start_dir) {
-            content.lines = list_directory(vfs, start_dir);
+            let listing = list_directory_entries(vfs, start_dir);
+            content.lines = listing.lines;
+            entries = listing.entries;
         } else {
             content.lines = vec![
                 format!("({not_found_msg})"),
@@ -137,6 +144,7 @@ impl BrowsingApp {
             track_size_bytes: None,
             playback: None,
             last_click_line: None,
+            entries,
         }
     }
 
@@ -259,35 +267,37 @@ impl BrowsingApp {
         app
     }
 
+    /// List `dir` into the browser (cursor on the first row).
+    fn show_dir(&mut self, vfs: &dyn Vfs, dir: &str) {
+        let listing = list_directory_entries(vfs, dir);
+        self.content.browse_dir = Some(dir.to_string());
+        self.content.lines = listing.lines;
+        self.entries = listing.entries;
+        self.content.scroll = 0;
+        self.content.cursor = 0;
+    }
+
+    /// The selected listing row's entry and the browse directory.
+    fn selected_entry(&self) -> Option<(&ListingEntry, &str)> {
+        let abs_idx = self.content.scroll + self.content.cursor;
+        let entry = self.entries.get(abs_idx)?.as_ref()?;
+        Some((entry, self.content.browse_dir.as_deref()?))
+    }
+
     /// Enter the selected directory or open the selected file.
     fn enter_selected(&mut self, vfs: &dyn Vfs) {
-        let abs_idx = self.content.scroll + self.content.cursor;
-        let Some(line) = self.content.lines.get(abs_idx) else {
+        let Some((entry, dir)) = self.selected_entry() else {
             return;
         };
-        let line = line.trim().to_string();
-        let Some(ref dir) = self.content.browse_dir else {
-            return;
+        let is_file = entry.kind == ListingKind::File;
+        let target = match entry.kind {
+            ListingKind::ParentDir => parent_dir(dir),
+            _ => join_path(dir, &entry.name),
         };
-
-        if line == ".." {
-            let parent = parent_dir(dir);
-            self.content.browse_dir = Some(parent.clone());
-            self.content.lines = list_directory(vfs, &parent);
-            self.content.scroll = 0;
-            self.content.cursor = 0;
-        } else if line.ends_with('/') {
-            let name = &line[..line.len() - 1];
-            let new_dir = join_path(dir, name);
-            self.content.browse_dir = Some(new_dir.clone());
-            self.content.lines = list_directory(vfs, &new_dir);
-            self.content.scroll = 0;
-            self.content.cursor = 0;
+        if is_file {
+            self.open_file(vfs, &target);
         } else {
-            // It's a file -- extract the filename (strip size suffix).
-            let file_name = line.split("  (").next().unwrap_or(&line);
-            let file_path = join_path(dir, file_name);
-            self.open_file(vfs, &file_path);
+            self.show_dir(vfs, &target);
         }
     }
 
@@ -296,19 +306,13 @@ impl BrowsingApp {
         if !matches!(self.viewer_mode, ViewerMode::Audio) {
             return;
         }
-        let abs_idx = self.content.scroll + self.content.cursor;
-        let Some(line) = self.content.lines.get(abs_idx) else {
+        let Some((entry, dir)) = self.selected_entry() else {
             return;
         };
-        let line = line.trim().to_string();
-        if line == ".." || line.ends_with('/') {
+        if entry.kind != ListingKind::File {
             return;
         }
-        let Some(ref dir) = self.content.browse_dir else {
-            return;
-        };
-        let file_name = line.split("  (").next().unwrap_or(&line);
-        let file_path = join_path(dir, file_name);
+        let file_path = join_path(dir, &entry.name);
         if vfs.exists(&file_path) && !self.playlist.contains(&file_path) {
             self.playlist.push(file_path);
         }
@@ -413,17 +417,18 @@ impl BrowsingApp {
         let Some(dir) = self.content.browse_dir.clone() else {
             return;
         };
-        let files = list_directory(vfs, &dir);
         let image_exts = [".png", ".jpg", ".jpeg", ".bmp", ".gif"];
-        // Listing rows are `name  (size)`: match the extension on the name
-        // alone, so `notes.png.txt` or `.jpgs/` are not treated as images.
-        let images: Vec<String> = files
-            .iter()
-            .filter(|f| {
-                let name = f.split("  (").next().unwrap_or(f).to_lowercase();
-                image_exts.iter().any(|ext| name.ends_with(ext))
+        // Files only, matched on the real name: `notes.png.txt` and a
+        // `.jpgs/` folder are not images.
+        let images: Vec<String> = list_directory_entries(vfs, &dir)
+            .entries
+            .into_iter()
+            .flatten()
+            .filter(|e| {
+                let name = e.name.to_lowercase();
+                e.kind == ListingKind::File && image_exts.iter().any(|ext| name.ends_with(ext))
             })
-            .cloned()
+            .map(|e| e.name)
             .collect();
         if images.is_empty() {
             return;
@@ -432,7 +437,7 @@ impl BrowsingApp {
         let current_name = current_file.rsplit('/').next().unwrap_or("");
         let cur_idx = images
             .iter()
-            .position(|f| f.split("  (").next().unwrap_or(f) == current_name)
+            .position(|name| name == current_name)
             .unwrap_or(0);
         let next_idx = if forward {
             (cur_idx + 1) % images.len()
@@ -441,11 +446,7 @@ impl BrowsingApp {
         } else {
             cur_idx - 1
         };
-        let next_name = images[next_idx]
-            .split("  (")
-            .next()
-            .unwrap_or(&images[next_idx]);
-        let next_path = join_path(&dir, next_name);
+        let next_path = join_path(&dir, &images[next_idx]);
         self.open_file(vfs, &next_path);
     }
 
@@ -457,6 +458,13 @@ impl BrowsingApp {
         self.content.viewing_file = Some(path.to_string());
         self.content.scroll = 0;
         self.content.cursor = 0;
+        // The viewer's rows replace the listing (relisted on Cancel).
+        self.entries.clear();
+        // A track opened by hand becomes the playlist position, so
+        // Next / Previous step from it.
+        if let Some(i) = self.playlist.iter().position(|p| p == path) {
+            self.playlist_index = i;
+        }
         // Clear any previous view-specific state. A new image is decoded
         // upright, so its rotation starts over.
         self.decoded_image = None;
@@ -623,14 +631,22 @@ impl App for BrowsingApp {
                     if matches!(self.viewer_mode, ViewerMode::Audio) {
                         self.content.post_request(MEDIA_REQUEST_PATH, "stop");
                     }
-                    self.content.viewing_file = None;
-                    self.content.scroll = 0;
-                    self.content.cursor = 0;
+                    let viewed = self.content.viewing_file.take().unwrap_or_default();
                     self.slideshow = false;
                     self.zoom_level = 1;
                     self.rotation = 0;
-                    if let Some(ref dir) = self.content.browse_dir {
-                        self.content.lines = list_directory(vfs, dir);
+                    if let Some(dir) = self.content.browse_dir.clone() {
+                        self.show_dir(vfs, &dir);
+                        // Back on the row of the file just viewed (which a
+                        // slideshow / Left / Right may have moved on).
+                        let name = viewed.rsplit('/').next().unwrap_or("");
+                        let row = self.entries.iter().position(|e| {
+                            e.as_ref()
+                                .is_some_and(|e| e.kind == ListingKind::File && e.name == name)
+                        });
+                        if let Some(row) = row {
+                            self.content.select(row);
+                        }
                     }
                     AppAction::None
                 } else {

@@ -132,6 +132,88 @@ pub fn windowed_line_at(
     (row < visible).then_some(first + row)
 }
 
+/// `text` cut to fit `max_w` pixels at `font_size`, ending in `...` when
+/// shortened (the same cut `SdiText::draw_text_ellipsis` draws), or empty
+/// when not even the ellipsis fits. For labels an app lays out or batches
+/// itself; to just draw one, call `draw_text_ellipsis`.
+pub fn ellipsize<'a>(
+    backend: &dyn SdiBackend,
+    text: &'a str,
+    font_size: u16,
+    max_w: u32,
+) -> std::borrow::Cow<'a, str> {
+    if backend.measure_text(text, font_size) <= max_w {
+        return text.into();
+    }
+    let ellipsis_w = backend.measure_text("...", font_size);
+    if ellipsis_w > max_w {
+        return "".into();
+    }
+    let target = max_w - ellipsis_w;
+    let mut drawn = 0u32;
+    let mut end = 0;
+    for (i, c) in text.char_indices() {
+        let w = backend.measure_text(&text[i..i + c.len_utf8()], font_size);
+        if drawn + w > target {
+            break;
+        }
+        drawn += w;
+        end = i + c.len_utf8();
+    }
+    format!("{}...", &text[..end]).into()
+}
+
+/// Largest font size, at most `font_size`, whose line box fits in `h`
+/// pixels (never below 8, the smallest bitmap size).
+pub fn font_size_fitting(backend: &dyn SdiBackend, font_size: u16, h: u32) -> u16 {
+    let mut size = font_size.max(8);
+    while size > 8 && backend.measure_text_height(size) > h {
+        size -= 1;
+    }
+    size
+}
+
+/// Draw a one-line status strip into `rect = (x, y, w, h)`: `left` from
+/// the left edge, `right` (a key hint, may be empty) right-aligned.
+///
+/// The shared form of every app's footer / status bar. The font shrinks
+/// (from `font_size`) until a line fits the strip's height and the text is
+/// centred vertically; `left` is ellipsized to the width it has, and
+/// `right` is dropped when it would collide with `left` (the status
+/// message matters more than the hint). `colors` are `(left, right)`;
+/// the caller fills the background.
+pub fn draw_status_strip(
+    backend: &mut dyn SdiBackend,
+    rect: (i32, i32, u32, u32),
+    left: &str,
+    right: &str,
+    font_size: u16,
+    colors: (oasis_types::backend::Color, oasis_types::backend::Color),
+) -> oasis_types::error::Result<()> {
+    const PAD: i32 = 4;
+    const GAP: u32 = 12;
+    let (x, y, w, h) = rect;
+    let size = font_size_fitting(backend, font_size, h);
+    let ty = y + (h as i32 - backend.measure_text_height(size) as i32).max(0) / 2;
+    let inner_w = w.saturating_sub(2 * PAD as u32);
+    let left_w = backend.measure_text(left, size);
+    let right_w = if right.is_empty() {
+        0
+    } else {
+        backend.measure_text(right, size)
+    };
+    let mut left_max = inner_w;
+    if right_w > 0 && left_w + GAP + right_w <= inner_w {
+        let rx = x + w as i32 - PAD - right_w as i32;
+        backend.draw_text(right, rx, ty, size, colors.1)?;
+        left_max = inner_w - GAP - right_w;
+    }
+    if !left.is_empty() {
+        backend.draw_text_ellipsis(left, x + PAD, ty, size, colors.0, left_max)?;
+    }
+    Ok(())
+}
+
 /// Draw generic content to a windowed region.
 ///
 /// The app title is NOT drawn here — the WM titlebar already shows it. A
@@ -153,8 +235,11 @@ pub fn draw_content_windowed(
     } else {
         content.browse_dir.as_deref().map(|d| format!("[{d}]"))
     };
+    // Every row is ellipsized to the content width: long lines, paths and
+    // the footer hint would otherwise be cut mid-glyph by the window clip.
+    let text_w = cw.saturating_sub(8);
     let content_top = if let Some(ctx) = context {
-        backend.draw_text(&ctx, cx + 4, cy + 2, 12, at.app.dim_text)?;
+        backend.draw_text_ellipsis(&ctx, cx + 4, cy + 2, 12, at.app.dim_text, text_w)?;
         backend.fill_rect(
             cx,
             cy + at.app.title_bar_height as i32 - 4,
@@ -188,7 +273,7 @@ pub fn draw_content_windowed(
             at.app.text
         };
         let y = cy + content_top + i as i32 * line_h;
-        backend.draw_text(&text, cx + 4, y, WINDOWED_FONT_SIZE, text_color)?;
+        backend.draw_text_ellipsis(&text, cx + 4, y, WINDOWED_FONT_SIZE, text_color, text_w)?;
     }
 
     // Scroll indicator.
@@ -202,7 +287,7 @@ pub fn draw_content_windowed(
         "Cancel=back".to_string()
     };
     let scroll_y = cy + ch as i32 - 14;
-    backend.draw_text(&scroll_text, cx + 4, scroll_y, 10, at.app.dim_text)?;
+    backend.draw_text_ellipsis(&scroll_text, cx + 4, scroll_y, 10, at.app.dim_text, text_w)?;
 
     Ok(())
 }

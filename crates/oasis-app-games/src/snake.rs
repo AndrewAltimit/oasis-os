@@ -11,6 +11,10 @@ pub struct SnakeGame {
     pub(crate) snake: Vec<(i32, i32)>,
     pub(crate) direction: Direction,
     pub(crate) next_direction: Direction,
+    /// A second turn pressed while `next_direction` is still pending: applied
+    /// on the following move, so a quick Up-then-Left doesn't reverse the
+    /// snake into its own neck.
+    pub(crate) queued_turn: Option<Direction>,
     pub(crate) food: (i32, i32),
     pub(crate) score: u32,
     pub(crate) high_score: u32,
@@ -31,6 +35,7 @@ impl SnakeGame {
             snake: vec![(cx, cy), (cx - 1, cy), (cx - 2, cy)],
             direction: Direction::Right,
             next_direction: Direction::Right,
+            queued_turn: None,
             food: (0, 0),
             score: 0,
             high_score: 0,
@@ -56,6 +61,9 @@ impl SnakeGame {
         self.tick_counter = 0;
 
         self.direction = self.next_direction;
+        if let Some(turn) = self.queued_turn.take() {
+            self.next_direction = turn;
+        }
 
         let (hx, hy) = self.snake[0];
         let new_head = match self.direction {
@@ -95,9 +103,15 @@ impl SnakeGame {
         }
     }
 
-    /// Buffer a direction change (prevents 180-degree reversal).
+    /// Buffer a direction change (prevents 180-degree reversal). A turn
+    /// pressed while another is still pending is checked against that one
+    /// and applied on the move after it.
     pub fn set_direction(&mut self, dir: Direction) {
-        if !dir.is_opposite(self.direction) {
+        if self.next_direction != self.direction {
+            if dir != self.next_direction && !dir.is_opposite(self.next_direction) {
+                self.queued_turn = Some(dir);
+            }
+        } else if !dir.is_opposite(self.direction) {
             self.next_direction = dir;
         }
     }
@@ -139,11 +153,14 @@ impl SnakeGame {
 
     /// Reset the game (keeps high score).
     pub fn reset(&mut self) {
+        // A restart mid-game still counts the score reached.
+        self.high_score = self.high_score.max(self.score);
         let cx = self.width as i32 / 2;
         let cy = self.height as i32 / 2;
         self.snake = vec![(cx, cy), (cx - 1, cy), (cx - 2, cy)];
         self.direction = Direction::Right;
         self.next_direction = Direction::Right;
+        self.queued_turn = None;
         self.score = 0;
         self.state = GameState::Playing;
         self.tick_counter = 0;
@@ -493,5 +510,31 @@ mod tests {
         // Snake ate food and now fills all 6 cells.
         assert_eq!(game.snake.len(), 6);
         assert_eq!(game.state, GameState::Won);
+    }
+
+    #[test]
+    fn two_quick_turns_do_not_reverse_into_the_neck() {
+        let mut game = SnakeGame::new(20, 20, 7);
+        game.speed = 1;
+        game.food = (0, 0);
+        let (hx, hy) = game.snake[0];
+        // Moving Right: Up then Left within one move.
+        game.set_direction(Direction::Up);
+        game.set_direction(Direction::Left);
+        game.tick();
+        assert_eq!(game.state, GameState::Playing, "reversed into itself");
+        assert_eq!(game.snake[0], (hx, hy - 1), "first the Up turn");
+        game.tick();
+        assert_eq!(game.snake[0], (hx - 1, hy - 1), "then the queued Left");
+    }
+
+    #[test]
+    fn restarting_mid_game_keeps_the_high_score() {
+        let mut game = SnakeGame::new(20, 20, 7);
+        game.high_score = 5;
+        game.score = 10;
+        game.reset();
+        assert_eq!(game.high_score, 10);
+        assert_eq!(game.score, 0);
     }
 }

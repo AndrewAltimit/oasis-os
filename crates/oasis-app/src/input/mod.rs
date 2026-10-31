@@ -168,9 +168,6 @@ fn apply_window_action(
         AppAction::Exit => {
             close_app_window(state, sdi, vfs, &active_id, CloseHow::AppExit);
         },
-        AppAction::SwitchToTerminal => {
-            state.mode = Mode::Terminal;
-        },
         AppAction::RequestFullscreen => {
             if state.content.fullscreen_app.is_none() {
                 let _ = state.wm.enter_fullscreen(&active_id, sdi);
