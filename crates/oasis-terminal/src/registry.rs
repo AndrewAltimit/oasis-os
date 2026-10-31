@@ -365,6 +365,32 @@ impl CommandRegistry {
         result
     }
 
+    /// Run `f` detached from the interactive session, as a background job
+    /// (`cmd &`) or a host-scheduled script (cron) runs: like a POSIX
+    /// subshell, its `$?`, `cd`s (`env.cwd`, `$OLDPWD`, `$CWD`) do not
+    /// reach the session, whose values are restored afterwards. Other
+    /// variables it sets stay set (the shell has no forked environment).
+    pub fn run_detached<R>(
+        &self,
+        env: &mut Environment<'_>,
+        f: impl FnOnce(&Self, &mut Environment<'_>) -> R,
+    ) -> R {
+        const SESSION_VARS: [&str; 3] = ["?", "OLDPWD", "CWD"];
+        let code = self.last_exit_code.get();
+        let vars = SESSION_VARS.map(|name| self.get_variable(name));
+        let cwd = env.cwd.clone();
+        let result = f(self, env);
+        self.last_exit_code.set(code);
+        for (name, saved) in SESSION_VARS.into_iter().zip(vars) {
+            match saved {
+                Some(v) => self.set_variable(name, &v),
+                None => self.unset_variable(name),
+            }
+        }
+        env.cwd = cwd;
+        result
+    }
+
     // -- History API --
 
     /// Get command history.

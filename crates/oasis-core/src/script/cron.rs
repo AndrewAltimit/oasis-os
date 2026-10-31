@@ -5,9 +5,17 @@
 //! due jobs by calling [`CronScheduler::tick`] from its frame loop (the
 //! desktop shell does, about once a second). Schedules are relative to the
 //! host's monotonic clock and are not persisted: after a restart every job
-//! first runs one interval after the scheduler first sees it. A job that
-//! is overdue (the host was busy or suspended) runs once, not once per
-//! missed interval.
+//! first runs one interval after the scheduler first sees it. Runs keep to
+//! that first schedule (`due`, `due + interval`, ...) however coarsely the
+//! host ticks, so a host ticking every 1.5 s still runs a 2 s job every
+//! 2 s on average. A job that is overdue by more than one interval (the
+//! host was busy or suspended, or ticks less often than the interval) runs
+//! once, not once per missed interval, and its next run is the next slot
+//! of its schedule: there is no burst of catch-up runs.
+//!
+//! Jobs run detached from the interactive session
+//! ([`CommandRegistry::run_detached`]): their exit status and `cd`s do not
+//! change the session's `$?`, cwd or `$OLDPWD`.
 
 use std::collections::BTreeMap;
 use std::time::Duration;
@@ -150,10 +158,21 @@ fn run_job(
     env: &mut Environment<'_>,
 ) -> Vec<String> {
     let prefix = format!("[cron {name}]");
-    match run_script(&entry.script, registry, env) {
+    match registry.run_detached(env, |reg, env| run_script(&entry.script, reg, env)) {
         Ok(lines) => lines.into_iter().map(|l| format!("{prefix} {l}")).collect(),
         Err(e) => vec![format!("{prefix} error: {}: {e}", entry.script)],
     }
+}
+
+/// The first slot of the schedule `due`, `due + interval`, ... that lies
+/// after `now` (`due <= now`): missed slots are skipped, not queued.
+fn next_due(due: Duration, interval: Duration, now: Duration) -> Duration {
+    let behind = now.saturating_sub(due).as_nanos();
+    let step = interval.as_nanos().max(1);
+    // `interval` is at least 1 s and `now` a host clock, so the slot count
+    // fits a u32 for any realistic uptime; saturate rather than wrap.
+    let slots = u32::try_from(behind / step + 1).unwrap_or(u32::MAX);
+    due.saturating_add(interval.saturating_mul(slots))
 }
 
 /// Per-job schedule state kept by [`CronScheduler`].
@@ -186,8 +205,9 @@ impl CronScheduler {
     /// time since host start) and return their output lines.
     ///
     /// A job seen for the first time, or whose entry changed, is scheduled
-    /// one interval after `now`. After running, a job is next due one
-    /// interval after `now`. A malformed entry yields one `[cron name]
+    /// one interval after `now`. After running, a job is next due at the
+    /// first slot of its schedule after `now` (see the module docs). A
+    /// malformed entry yields one `[cron name]
     /// error: ...` line the first time it is seen and is otherwise skipped.
     pub fn tick(
         &mut self,
@@ -217,7 +237,7 @@ impl CronScheduler {
             match self.slots.get_mut(&name) {
                 Some(slot) if slot.entry == entry => {
                     if now >= slot.due {
-                        slot.due = now + entry.interval;
+                        slot.due = next_due(slot.due, entry.interval, now);
                         out.extend(run_job(&name, &entry, registry, env));
                     }
                 },

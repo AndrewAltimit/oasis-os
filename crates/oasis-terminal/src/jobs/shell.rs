@@ -15,8 +15,7 @@ use crate::interpreter::{CommandOutput, CommandRegistry, Environment};
 // runnable again, `fg %N` runs it right away, and `kill %N` drops it.
 
 impl CommandRegistry {
-    /// Queue `cmd` as a background job (trailing `&`).
-    /// Queue `cmd` as a background job. At most [`MAX_PENDING_JOBS`] jobs
+    /// Queue `cmd` as a background job (trailing `&`). At most [`MAX_PENDING_JOBS`] jobs
     /// may be waiting (running or stopped), so a loop of `cmd &` cannot grow
     /// the job table without bound.
     pub(crate) fn queue_job(&self, cmd: &str) -> Result<CommandOutput> {
@@ -52,7 +51,9 @@ impl CommandRegistry {
                 .find(|j| j.state == JobState::Running)?;
             (job.id, job.command.clone())
         };
-        Some(self.run_job(id, &cmd, env, true))
+        // A background job is a subshell: its status and `cd`s must not
+        // change the interactive session's `$?`, cwd or `$OLDPWD`.
+        Some(self.run_detached(env, |reg, env| reg.run_job(id, &cmd, env, true)))
     }
 
     /// Number of jobs that are queued and runnable.
