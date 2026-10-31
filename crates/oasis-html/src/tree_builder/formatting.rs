@@ -1,8 +1,8 @@
 //! Formatting element helpers and foster parenting.
 
-use super::super::dom::{ElementData, NodeKind, TagName};
+use super::super::dom::{ElementData, NodeId, NodeKind, TagName};
 use super::super::tokenizer::Token;
-use super::TreeBuilder;
+use super::{MAX_CLONED_ATTRIBUTES, TreeBuilder};
 
 impl TreeBuilder {
     // =============================================================
@@ -36,8 +36,6 @@ impl TreeBuilder {
     /// markup like `<b><p></b></p>` round-trip through the tree in a
     /// way that matches real browsers.
     pub(crate) fn close_formatting_element(&mut self, subject: &TagName) {
-        use super::super::dom::{ElementData, NodeKind};
-
         // §13.2.6.4.7 step 1: if the current node is an HTML element
         // whose tag name is subject, and the current node is not in
         // the list of active formatting elements, then pop the
@@ -62,7 +60,7 @@ impl TreeBuilder {
                 // No formatting entry — fall through to the generic
                 // "any other end tag" path so misplaced end tags
                 // still close their element.
-                self.close_to_tag_any_scope(subject);
+                self.close_any_other_end_tag(subject);
                 return;
             };
             let formatting_element = self.active_formatting[fmt_list_pos];
@@ -162,14 +160,10 @@ impl TreeBuilder {
                 // is ever broken, abandon the algorithm rather than panic on
                 // untrusted markup. The tree is still well-formed here (every
                 // move so far was a detach + append).
-                let Some(data) = self.doc.element(node) else {
+                let Some(clone) = self.clone_element(node) else {
                     log::warn!("adoption agency: non-element on open stack; aborting");
                     return;
                 };
-                let (tag, attrs) = (data.tag.clone(), data.attributes.clone());
-                let mut new_data = ElementData::new(tag);
-                new_data.attributes = attrs;
-                let clone = self.doc.add_node(NodeKind::Element(new_data));
                 self.active_formatting[nfp] = clone;
                 self.open_elements[node_stack_pos] = clone;
 
@@ -196,25 +190,23 @@ impl TreeBuilder {
             self.doc.append_child(common_ancestor, last_node);
 
             // Step 15: create a clone of formatting element.
-            let Some(data) = self.doc.element(formatting_element) else {
+            let Some(fmt_clone) = self.clone_element(formatting_element) else {
                 // Unreachable in practice (the entry matched `subject` by tag),
                 // but degrade gracefully instead of panicking on hostile input.
                 log::warn!("adoption agency: formatting entry is not an element; aborting");
                 self.active_formatting.remove(fmt_list_pos);
                 return;
             };
-            let (fmt_tag, fmt_attrs) = (data.tag.clone(), data.attributes.clone());
-            let mut new_fmt = ElementData::new(fmt_tag);
-            new_fmt.attributes = fmt_attrs;
-            let fmt_clone = self.doc.add_node(NodeKind::Element(new_fmt));
 
             // Step 16: take all of furthest block's children and
-            // append them to the clone.
-            let fb_children: Vec<_> = self.doc.nodes[furthest_block].children.clone();
-            for c in fb_children {
-                self.doc.detach_node(c);
-                self.doc.append_child(fmt_clone, c);
+            // append them to the clone. Moved as one list: a detach per
+            // child rescanned the shrinking list each time (quadratic
+            // for a block with 90 000 children).
+            let fb_children = std::mem::take(&mut self.doc.nodes[furthest_block].children);
+            for &c in &fb_children {
+                self.doc.nodes[c].parent = Some(fmt_clone);
             }
+            self.doc.nodes[fmt_clone].children.extend(fb_children);
 
             // Step 17: append the clone to furthest block.
             self.doc.append_child(furthest_block, fmt_clone);
@@ -261,17 +253,30 @@ impl TreeBuilder {
         if self.open_elements.last() != Some(&id) {
             return;
         }
-        let same = |a: &ElementData, b: &ElementData| {
-            a.tag == b.tag
-                && a.attributes.len() == b.attributes.len()
-                && a.attributes.iter().all(|x| b.attributes.contains(x))
-        };
+        // Attribute sets compared order-independently via sorted refs:
+        // `all(contains)` was O(attributes²) per list entry.
+        fn sorted(e: &ElementData) -> Vec<(&str, &str)> {
+            let mut v: Vec<(&str, &str)> = e
+                .attributes
+                .iter()
+                .map(|a| (a.name.as_str(), a.value.as_str()))
+                .collect();
+            v.sort_unstable();
+            v
+        }
         if let Some(new) = self.doc.element(id) {
+            let new_attrs = sorted(new);
             let matching: Vec<usize> = self
                 .active_formatting
                 .iter()
                 .enumerate()
-                .filter(|&(_, &fid)| self.doc.element(fid).is_some_and(|e| same(e, new)))
+                .filter(|&(_, &fid)| {
+                    self.doc.element(fid).is_some_and(|e| {
+                        e.tag == new.tag
+                            && e.attributes.len() == new.attributes.len()
+                            && sorted(e) == new_attrs
+                    })
+                })
                 .map(|(i, _)| i)
                 .collect();
             if matching.len() >= 3 {
@@ -299,20 +304,33 @@ impl TreeBuilder {
             if self.open_elements.len() >= super::MAX_NESTING_DEPTH {
                 break;
             }
-            let (tag, attrs) = if let Some(data) = self.doc.element(id) {
-                (data.tag.clone(), data.attributes.clone())
-            } else {
+            let Some(new_id) = self.clone_element(id) else {
                 continue;
             };
-            let mut new_data = ElementData::new(tag);
-            new_data.attributes = attrs;
-            let new_id = self.doc.add_node(NodeKind::Element(new_data));
             self.insert_element(new_id);
 
             if let Some(pos) = self.active_formatting.iter().position(|&fid| fid == id) {
                 self.active_formatting[pos] = new_id;
             }
         }
+    }
+
+    /// Add a detached copy of element `id` (tag and attributes, no
+    /// children), as the adoption agency and formatting reconstruction
+    /// make. `None` if `id` is not an element.
+    ///
+    /// Clones share a document-wide budget of [`MAX_CLONED_ATTRIBUTES`]
+    /// copied attributes; past it they are made without attributes.
+    /// Reopening one `<b>` with 5 000 attributes after every `<p>` used
+    /// to turn 37 KB of markup into ten million attributes.
+    pub(crate) fn clone_element(&mut self, id: NodeId) -> Option<NodeId> {
+        let data = self.doc.element(id)?;
+        let mut new_data = ElementData::new(data.tag.clone());
+        if self.cloned_attributes + data.attributes.len() <= MAX_CLONED_ATTRIBUTES {
+            self.cloned_attributes += data.attributes.len();
+            new_data.attributes = data.attributes.clone();
+        }
+        Some(self.doc.add_node(NodeKind::Element(new_data)))
     }
 
     // =============================================================
@@ -399,13 +417,16 @@ impl TreeBuilder {
                 let id = self.create_element_from_start_tag(tag);
                 insert(&mut self.doc, id);
                 let tag_name = TagName::from_str(&tag.name.to_ascii_lowercase());
+                // Capped like `insert_element`: foster parenting used to
+                // push unconditionally (`<table>` x 80 000 grew the stack
+                // without bound, every scope scan with it).
                 if !tag_name.is_void() && !tag.self_closing {
-                    self.open_elements.push(id);
+                    self.push_open(id);
                 }
             },
             Token::EndTag(ref tag) => {
                 let tag_name = TagName::from_str(&tag.name.to_ascii_lowercase());
-                self.close_to_tag_any_scope(&tag_name);
+                self.close_any_other_end_tag(&tag_name);
             },
             _ => {},
         }

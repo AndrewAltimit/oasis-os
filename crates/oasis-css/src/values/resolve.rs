@@ -281,11 +281,17 @@ enum CalcUnit {
     Percent,
 }
 
-/// Tokenize a calc expression string into `CalcToken`s.
+/// Deepest parenthesis nesting a `calc()` may use. The evaluator recurses
+/// once per level, so `calc(((((...` 100k deep overflowed the stack.
+const MAX_CALC_DEPTH: usize = 32;
+
+/// Tokenize a calc expression string into `CalcToken`s. `None` for
+/// unknown characters or nesting deeper than [`MAX_CALC_DEPTH`].
 fn tokenize_calc(input: &str) -> Option<Vec<CalcToken>> {
     let mut tokens = Vec::new();
     let chars: Vec<char> = input.chars().collect();
     let mut i = 0;
+    let mut depth = 0usize;
     while i < chars.len() {
         let ch = chars[i];
         if ch.is_ascii_whitespace() {
@@ -293,11 +299,16 @@ fn tokenize_calc(input: &str) -> Option<Vec<CalcToken>> {
             continue;
         }
         if ch == '(' {
+            depth += 1;
+            if depth > MAX_CALC_DEPTH {
+                return None;
+            }
             tokens.push(CalcToken::OpenParen);
             i += 1;
             continue;
         }
         if ch == ')' {
+            depth = depth.saturating_sub(1);
             tokens.push(CalcToken::CloseParen);
             i += 1;
             continue;
@@ -500,6 +511,16 @@ mod tests {
     #[test]
     fn calc_simple_subtraction() {
         // calc(100% - 20px) with containing width 200
+        // `calc(((((...` 100k deep overflowed the evaluator's stack.
+        let deep = format!("{}1px{}", "(".repeat(100_000), ")".repeat(100_000));
+        assert_eq!(resolve_calc(&deep, 16.0, None), None);
+        let ok = format!(
+            "{}1px{}",
+            "(".repeat(MAX_CALC_DEPTH),
+            ")".repeat(MAX_CALC_DEPTH)
+        );
+        assert_eq!(resolve_calc(&ok, 16.0, None), Some(1.0));
+
         let result = resolve_calc("100% - 20px", 16.0, Some(200.0));
         assert_eq!(result, Some(180.0));
     }

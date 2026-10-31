@@ -100,6 +100,9 @@ impl State {
     }
 }
 
+/// Most attributes kept on one start tag; the rest are dropped.
+pub(crate) const MAX_ATTRIBUTES_PER_TAG: usize = 256;
+
 /// Builder used while assembling a tag token.
 #[derive(Debug, Clone)]
 pub(crate) struct TagBuilder {
@@ -124,16 +127,23 @@ impl TagBuilder {
     }
 
     /// Finish the current attribute (if any) and push it.
+    ///
+    /// A repeated attribute name is dropped, keeping the first (the
+    /// spec's "duplicate-attribute" rule; `id=a id=b` used to keep both,
+    /// so lookups and mutations disagreed). At most
+    /// [`MAX_ATTRIBUTES_PER_TAG`] are kept: hostile tags with tens of
+    /// thousands of attributes made the formatting-element bookkeeping
+    /// quadratic and every reopened clone copy them all.
     pub(crate) fn finish_attribute(&mut self) {
-        if !self.current_attr_name.is_empty() {
-            self.attributes.push(Attribute {
-                name: std::mem::take(&mut self.current_attr_name),
-                value: std::mem::take(&mut self.current_attr_value),
-            });
-        } else {
-            self.current_attr_name.clear();
-            self.current_attr_value.clear();
+        let name = std::mem::take(&mut self.current_attr_name);
+        let value = std::mem::take(&mut self.current_attr_value);
+        if name.is_empty()
+            || self.attributes.len() >= MAX_ATTRIBUTES_PER_TAG
+            || self.attributes.iter().any(|a| a.name == name)
+        {
+            return;
         }
+        self.attributes.push(Attribute { name, value });
     }
 
     /// Convert into a `Token`.

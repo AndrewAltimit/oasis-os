@@ -45,27 +45,38 @@ directly.
 
 - **HTTP/1.1 + HTTP/2** — ALPN-negotiated `h2` over rustls. Full HPACK
   (RFC 7541) with static + dynamic table, integer codec, string
-  literals, and Huffman decoder (verified against RFC Appendix C).
+  literals, and a canonical-code Huffman decoder (verified against RFC
+  Appendix C); header values that are not UTF-8 decode lossily.
   Sync frame layer (RFC 9113) handles HEADERS/CONTINUATION reassembly,
-  DATA flow control via `WINDOW_UPDATE`, PING/PONG, graceful GOAWAY,
-  and `PUSH_PROMISE` refusal. One request per connection — no
-  multiplexing, but unblocks every CDN that hard-requires `h2` for the
-  initial GET. DoS caps: frames over the advertised 1 MiB
-  `MAX_FRAME_SIZE` are refused (GOAWAY `FRAME_SIZE_ERROR`) before their
-  payload is allocated, a HEADERS + CONTINUATION block over 64 KiB gets
-  GOAWAY `ENHANCE_YOUR_CALM`, and HPACK output is capped at the
-  advertised 64 KiB `MAX_HEADER_LIST_SIZE` (GOAWAY `COMPRESSION_ERROR`).
+  DATA flow control via `WINDOW_UPDATE` (crediting padding too),
+  PING/PONG, graceful GOAWAY, and `PUSH_PROMISE` refusal; request bodies
+  (up to the 64 KiB default send window) go out as 16 KiB DATA frames.
+  One request per connection — no multiplexing, but unblocks every CDN
+  that hard-requires `h2` for the initial GET. DoS caps: frames over the
+  advertised 1 MiB `MAX_FRAME_SIZE` are refused (GOAWAY
+  `FRAME_SIZE_ERROR`) before their payload is allocated, a HEADERS +
+  CONTINUATION block over 64 KiB gets GOAWAY `ENHANCE_YOUR_CALM`, as do
+  more than 1024 frames without response progress (PING / SETTINGS /
+  empty-DATA floods), and HPACK output is capped at the advertised
+  64 KiB `MAX_HEADER_LIST_SIZE` (GOAWAY `COMPRESSION_ERROR`).
 - **HTTP/1.1 framing** (`oasis-http/src/http1.rs`) is shared by the desktop and
   PSP clients: header lines are parsed (not substring-sniffed) to pick
   `Content-Length` / chunked framing, and the chunked terminator is
-  found by walking the chunk sizes.
+  found by walking the chunk sizes. Interim `1xx` heads (`103 Early
+  Hints`) are skipped (they count against the 16 KiB header cap), and
+  `204` / `304` responses and `HEAD` answers end with their head even
+  when they carry a `Content-Length`. The desktop client gives one
+  response at most 60 s (each read 15 s), sets a write timeout, and
+  tries every resolved address in turn.
 - **URLs** — network-scheme URLs are normalized at parse time: host
   lower-cased, `user:pw@` split into `Url::userinfo` (never sent),
   default port elided, `\` treated as `/`. Relative and absolute-path
   references are resolved with RFC 3986 dot-segment removal (`..` never
   climbs above `/`, directory references keep their trailing `/`).
   `Url::origin()` is the one origin used by CSP `'self'`, `fetch()` CORS
-  and Web Storage.
+  and Web Storage. `data:` URLs (`loader::parse_data_uri`) percent-decode
+  to raw bytes (`+` stays `+`); scheme, media type and `;base64` are
+  case-insensitive.
 - **Body caps** — response bodies are capped at 8 MB on desktop (2 MB on
   PSP), and gzip / deflate / brotli bodies are decoded through the same
   limit on HTTP/1.1 and HTTP/2, so a decompression bomb errors out.
@@ -134,6 +145,22 @@ directly.
   foster parenting, `<template>` with full DocumentFragment scope
   isolation (form + insertion mode), foreign content subset
   (SVG/MathML), parser error reporting.
+- Input preprocessing: CR LF / CR become LF and NUL becomes U+FFFD.
+  Character references: numeric ones map C1 controls through
+  Windows-1252 (`&#150;` is `–`), `&#;` stays literal, and in attributes
+  a `;`-less named reference followed by `=` is left alone
+  (`?a=1&copy=2`). Named references come from a ~110-entry table
+  (`entities.rs`), not the full HTML list.
+- Hostile-input bounds: at most 256 attributes per tag (duplicates
+  dropped, first wins), 100 000 nodes, open elements and DOM depth both
+  capped at `MAX_NESTING_DEPTH` (256; `MAX_DOM_DEPTH` = 257 including
+  children appended at the cap), and a 200 000-attribute budget for the
+  formatting-element clones the adoption agency and reconstruction make.
+  End tags without a dedicated rule follow the spec walk, so a stray
+  `</div>` or `</span>` cannot close an enclosing table cell.
+- Not modelled: formatting-list markers, the caption / colgroup / select
+  insertion modes, script-data escape states, and `<noscript>` parsing
+  with scripting off (it is always raw text).
 - Vendored-subset `html5lib-tests` harness for conformance.
 
 ## CSS cascade & selectors
@@ -144,14 +171,25 @@ directly.
   most 16 imported URLs per page). `@import` in inline `<style>` is not
   followed.
 
+- Tokenizer follows CSS Syntax for escapes (`\f101` in strings,
+  `.md\:flex` in selectors), non-ASCII identifiers and unquoted
+  `url(images/a.png)` / `url(data:…;base64,…)`.
 - Viewport-aware `@media` / `@supports` queries — window dimensions
   threaded into `Stylesheet::parse_with_viewport` so desktop
-  breakpoints no longer collapse to the 480x272 default.
+  breakpoints no longer collapse to the 480x272 default. `em` / `rem`
+  breakpoints use the 16 px initial font size. At-rules nest inside
+  each other (`@media { @supports { … } }`).
 - `var()` custom properties, `calc()`. `var()` is substituted at
   computed-value time anywhere in a value (`calc(var(--gap) * 2)`,
   `rgb(var(--r), 0, 0)`, gradients, shorthands) and re-parsed; names
   are case-sensitive, cycles and missing references without fallback
-  are invalid at computed-value time (`unset` semantics).
+  are invalid at computed-value time (`unset` semantics). Expansion is
+  bounded: 64 KiB per value and 1 MiB per element's custom-property
+  map.
+- Hostile-stylesheet bounds: rule bodies and at-rule blocks nest at
+  most 32 deep, `calc()` parentheses 32 deep, a flattened nested rule
+  carries at most 1024 selectors of at most 64 compounds, `repeat()`
+  grids at most 1000 tracks, and 50 000 rules per sheet.
 - `html { font-size: 62.5% }` resolution — the html element only uses
   the CSS "medium" 16 px baseline; `rem` units track html's computed
   font-size via a thread-local cell.
@@ -161,20 +199,24 @@ directly.
   `ROOT_FONT_SIZE`.
 - CSS length units: `px`, `em`, `rem`, `pt`, `ex`, `ch` (the latter
   two resolve to `0.5em`).
-- CSS Nesting (`&` selector with parse-time desugaring).
+- CSS Nesting (`&` selector with parse-time desugaring); declarations
+  directly inside a nested `@media` apply to the parent selector.
 - Right-to-left selector matching with backtracking, so `A > B C`
   matches through an outer `B` when the nearest `B` doesn't fit
   (Servo-style failure kinds keep it linear in practice). Each
   selector-vs-element match has a 16k-step traversal budget, shared
-  with `:has()` subtree scans and charged for sibling-list scans;
-  running out counts as no match for the whole selector, `:not()`
-  included.
+  with `:has()` subtree scans and charged for sibling-list scans, plus
+  a 128k-node allowance for the sibling scans of structural
+  pseudo-classes (`:nth-child()`, `:last-of-type`, ...); running out
+  counts as no match for the whole selector, `:not()` included.
 - `:has()` relational pseudo-class with `>`/`+`/`~` leading
   combinators, scope-bounded inner combinators.
 - Selectors Level 4 `:not(a, b, c)` list form.
 - `@layer` cascade layers — statement / named-block / anonymous-block
   forms, cross-stylesheet name merging, factored into the cascade
-  sort with `!important` inversion.
+  sort with `!important` inversion. Nested layers are qualified
+  (`@layer a { @layer b }` is `a.b`), but ordered by first appearance:
+  a sublayer currently sorts after its parent's own rules.
 - Colours: `#rgb[a]` / `#rrggbb[aa]`, all 148 CSS named colours,
   `rgb/rgba`, `hsl/hsla`, `oklch/oklab`, `color(srgb | srgb-linear |
   display-p3)`, `color-mix(in srgb | oklch | oklab | hsl |

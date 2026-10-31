@@ -49,3 +49,8 @@ doc = false
 name = "pbp_parser"
 path = "fuzz_targets/pbp_parser.rs"
 doc = false
+
+[[bin]]
+name = "loader_parsers"
+path = "fuzz_targets/loader_parsers.rs"
+doc = false

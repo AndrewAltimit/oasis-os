@@ -216,7 +216,11 @@ pub(super) fn parse_track_list(s: &str, font_size: f32) -> GridTemplate {
             },
             n => {
                 if let Ok(n) = n.parse::<usize>() {
-                    let n = n.min(MAX_REPEAT / tracks.len().max(1));
+                    // The cap is on the whole list, not per `repeat()`:
+                    // `repeat(1000,1px) repeat(1000,1px) ...` otherwise
+                    // builds 1000 tracks per 18 bytes of input.
+                    let room = MAX_REPEAT.saturating_sub(out.tracks.len());
+                    let n = n.min(room / tracks.len().max(1));
                     for _ in 0..n {
                         out.tracks.extend_from_slice(&tracks);
                     }
@@ -473,6 +477,8 @@ mod tests {
     fn huge_repeat_is_capped() {
         let t = parse_track_list("repeat(100000000, 1px)", 16.0);
         assert_eq!(t.tracks.len(), MAX_REPEAT);
+        let many = "repeat(1000, 1px) ".repeat(50);
+        assert_eq!(parse_track_list(&many, 16.0).tracks.len(), MAX_REPEAT);
     }
 
     #[test]

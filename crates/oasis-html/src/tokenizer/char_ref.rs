@@ -14,26 +14,24 @@ use super::types::{State, Token};
 /// Resolve a named character reference (without the leading `&`).
 /// `name` may include a trailing semicolon.
 pub(crate) fn resolve_named_ref(name: &str) -> Option<&'static str> {
-    let key = name.strip_suffix(';').unwrap_or(name);
-    // Delegate to the central entity table first.
-    if let Some(s) = crate::entities::lookup_entity(key) {
-        return Some(s);
-    }
-    // Extra entities used in the tokenizer but not in the main table.
-    match key {
-        "zwnj" => Some("\u{200C}"),
-        "zwj" => Some("\u{200D}"),
-        "lrm" => Some("\u{200E}"),
-        "rlm" => Some("\u{200F}"),
-        "iexcl" => Some("\u{00A1}"),
-        "iquest" => Some("\u{00BF}"),
-        "dagger" => Some("\u{2020}"),
-        "Dagger" => Some("\u{2021}"),
-        "permil" => Some("\u{2030}"),
-        "prime" => Some("\u{2032}"),
-        "Prime" => Some("\u{2033}"),
-        _ => None,
-    }
+    crate::entities::lookup_entity(name.strip_suffix(';').unwrap_or(name))
+}
+
+/// The numeric-reference replacement for a C1 control code point
+/// (0x80-0x9F): its Windows-1252 character, or the code point itself for
+/// the five 1252 leaves unassigned.
+fn windows_1252_c1(code: u32) -> char {
+    const TABLE: [char; 32] = [
+        '\u{20AC}', '\u{81}', '\u{201A}', '\u{0192}', '\u{201E}', '\u{2026}', '\u{2020}',
+        '\u{2021}', '\u{02C6}', '\u{2030}', '\u{0160}', '\u{2039}', '\u{0152}', '\u{8D}',
+        '\u{017D}', '\u{8F}', '\u{90}', '\u{2018}', '\u{2019}', '\u{201C}', '\u{201D}', '\u{2022}',
+        '\u{2013}', '\u{2014}', '\u{02DC}', '\u{2122}', '\u{0161}', '\u{203A}', '\u{0153}',
+        '\u{9D}', '\u{017E}', '\u{0178}',
+    ];
+    usize::try_from(code - 0x80)
+        .ok()
+        .and_then(|i| TABLE.get(i).copied())
+        .unwrap_or('\u{FFFD}')
 }
 
 // ---------------------------------------------------------------------------
@@ -75,8 +73,15 @@ impl Tokenizer {
                 self.state = State::HexCharacterReferenceStart;
                 None
             },
-            _ => {
+            // Decimal start: without a digit, `&#` stays literal (`&#;`
+            // used to become U+FFFD and `&#abc` lost nothing but luck).
+            Some(c) if c.is_ascii_digit() => {
                 self.state = State::DecimalCharacterReference;
+                None
+            },
+            _ => {
+                self.flush_temp_buffer();
+                self.state = self.return_state;
                 None
             },
         }
@@ -135,12 +140,11 @@ impl Tokenizer {
                 self.state = self.return_state;
                 None
             },
+            // At least one digit was consumed (see the start state), so
+            // a missing `;` still resolves: `&#0abc` is U+FFFD + `abc`
+            // (it used to emit `&#abc`, dropping the digit).
             _ => {
-                if self.char_ref_code == 0 {
-                    self.flush_temp_buffer();
-                } else {
-                    self.finish_numeric_char_ref();
-                }
+                self.finish_numeric_char_ref();
                 self.state = self.return_state;
                 None
             },
@@ -163,7 +167,12 @@ impl Tokenizer {
             }
         }
 
-        if let Some(replacement) = resolve_named_ref(&name) {
+        // In an attribute, a reference without `;` followed by `=` is
+        // left alone (§13.2.5.73, "historical reasons"): `?a=1&copy=2`
+        // is a query string, not `?a=1©=2`.
+        let historical_attr_case =
+            !name.ends_with(';') && self.return_state_is_attr() && self.peek() == Some('=');
+        if let Some(replacement) = resolve_named_ref(&name).filter(|_| !historical_attr_case) {
             self.emit_char_ref_text(replacement);
         } else {
             let literal = format!("&{name}");
@@ -181,6 +190,9 @@ impl Tokenizer {
         let ch = match self.char_ref_code {
             0 | 0xD800..=0xDFFF => '\u{FFFD}',
             c if c > 0x10FFFF => '\u{FFFD}',
+            // C1 controls are the Windows-1252 characters pages mean
+            // (`&#150;` is an en dash, §13.2.5.80).
+            c @ 0x80..=0x9F => windows_1252_c1(c),
             c => char::from_u32(c).unwrap_or('\u{FFFD}'),
         };
         let s = ch.to_string();

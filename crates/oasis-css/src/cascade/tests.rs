@@ -1561,6 +1561,26 @@ fn text_wrap_defaults_to_wrap() {
     assert_eq!(style.text_wrap, TextWrap::Wrap);
 }
 
+/// Regression: structural pseudo-classes rescanned (and collected) the
+/// sibling list uncharged for every `:has(~ ..)` candidate, so
+/// `p:has(~ p:nth-last-child(-n+0))` over 4 000 siblings took ~50 s.
+#[test]
+fn structural_checks_inside_has_are_budgeted() {
+    let doc = make_doc(vec![(TagName::P, vec![]); 4000]);
+    let sheet = Stylesheet::parse("p:has(~ p:nth-last-child(-n+0)) { color: red }");
+    let start = std::time::Instant::now();
+    let _ = style_tree(&doc, &[&sheet], &[], &ctx());
+    assert!(
+        start.elapsed() < std::time::Duration::from_secs(30),
+        "{:?}",
+        start.elapsed()
+    );
+    // One check on a long list still matches (separate scan allowance).
+    let doc = make_doc(vec![(TagName::Li, vec![]); 20_000]);
+    let sel = parse_selector("li:nth-child(19999)");
+    assert!(matching::matches_selector(&doc, 3 + 19_998, &sel, &ctx()));
+}
+
 #[test]
 fn has_descendant_matches_article_with_img() {
     let doc = make_has_doc();

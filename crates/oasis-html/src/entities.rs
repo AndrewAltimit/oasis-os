@@ -17,10 +17,23 @@ pub fn lookup_entity(name: &str) -> Option<&'static str> {
         "apos" => "'",
         "nbsp" => "\u{00A0}",
 
-        // ---- Whitespace ---------------------------------------------------
+        // ---- Whitespace / formatting characters ----------------------------
         "ensp" => "\u{2002}",
         "emsp" => "\u{2003}",
         "thinsp" => "\u{2009}",
+        "zwnj" => "\u{200C}",
+        "zwj" => "\u{200D}",
+        "lrm" => "\u{200E}",
+        "rlm" => "\u{200F}",
+
+        // ---- Punctuation marks -------------------------------------------
+        "iexcl" => "\u{00A1}",
+        "iquest" => "\u{00BF}",
+        "dagger" => "\u{2020}",
+        "Dagger" => "\u{2021}",
+        "permil" => "\u{2030}",
+        "prime" => "\u{2032}",
+        "Prime" => "\u{2033}",
 
         // ---- Typography ---------------------------------------------------
         "mdash" => "\u{2014}",

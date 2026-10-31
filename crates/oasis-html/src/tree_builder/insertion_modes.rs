@@ -1,6 +1,6 @@
 //! Insertion mode handlers for each parsing state.
 
-use super::super::dom::{NodeKind, TagName};
+use super::super::dom::{NodeId, NodeKind, TagName};
 use super::super::tokenizer::Token;
 use super::{InsertionMode, TreeBuilder, is_all_whitespace};
 
@@ -115,16 +115,14 @@ impl TreeBuilder {
             Token::StartTag(tag) if tag.name == "title" => {
                 let id = self.create_element_from_start_tag(tag);
                 self.insert_element(id);
-                self.original_mode = self.mode;
-                self.mode = InsertionMode::Text;
+                self.enter_text_mode(id);
             },
             Token::StartTag(tag)
                 if tag.name == "style" || tag.name == "script" || tag.name == "noscript" =>
             {
                 let id = self.create_element_from_start_tag(tag);
                 self.insert_element(id);
-                self.original_mode = self.mode;
-                self.mode = InsertionMode::Text;
+                self.enter_text_mode(id);
             },
             Token::StartTag(tag) if tag.name == "meta" || tag.name == "link" => {
                 let id = self.create_element_from_start_tag(tag);
@@ -146,17 +144,7 @@ impl TreeBuilder {
                 // InBody regardless of the enclosing insertion mode.
                 self.mode = InsertionMode::InBody;
             },
-            Token::EndTag(tag) if tag.name == "template" => {
-                if self.has_in_scope(&TagName::Template) {
-                    self.close_to_tag_any_scope(&TagName::Template);
-                    if let Some((saved_form, saved_mode)) = self.template_form_stack.pop() {
-                        self.form_element = saved_form;
-                        self.mode = saved_mode;
-                    }
-                } else {
-                    log::trace!("html parse error: stray </template>");
-                }
-            },
+            Token::EndTag(tag) if tag.name == "template" => self.close_template(),
             Token::EndTag(tag) if tag.name == "head" => {
                 self.pop_open_element();
                 self.mode = InsertionMode::AfterHead;
@@ -278,7 +266,7 @@ impl TreeBuilder {
             // Unmatched </frame>, </frameset>, <frameset> etc. in body
             // scope are also parse errors — we intentionally do not
             // support framesets at all, so they fall to the generic
-            // arm below and get ignored via `close_to_tag_any_scope`.
+            // arm below and get ignored via `close_any_other_end_tag`.
             TagName::Table => {
                 self.close_p_if_in_scope();
                 let id = self.create_element_from_start_tag(tag);
@@ -368,8 +356,7 @@ impl TreeBuilder {
             TagName::Script | TagName::Style => {
                 let id = self.create_element_from_start_tag(tag);
                 self.insert_element(id);
-                self.original_mode = self.mode;
-                self.mode = InsertionMode::Text;
+                self.enter_text_mode(id);
             },
             TagName::Template => {
                 // See InHead `<template>` for isolation notes.
@@ -461,22 +448,12 @@ impl TreeBuilder {
                 // Misplaced end tag; ignore in body mode.
                 log::trace!("html parse error: </table> with no open table");
             },
-            TagName::Template => {
-                if self.has_in_scope(&TagName::Template) {
-                    self.close_to_tag_any_scope(&TagName::Template);
-                    if let Some((saved_form, saved_mode)) = self.template_form_stack.pop() {
-                        self.form_element = saved_form;
-                        self.mode = saved_mode;
-                    }
-                } else {
-                    log::trace!("html parse error: stray </template>");
-                }
-            },
+            TagName::Template => self.close_template(),
             _ if tag_name.is_formatting() => {
                 self.close_formatting_element(tag_name);
             },
             _ => {
-                self.close_to_tag_any_scope(tag_name);
+                self.close_any_other_end_tag(tag_name);
             },
         }
     }
@@ -726,21 +703,52 @@ impl TreeBuilder {
         }
     }
 
+    /// Switch to the `Text` insertion mode for the raw-text / RCDATA
+    /// element `id` (`<script>`, `<style>`, `<title>`, ...).
+    pub(crate) fn enter_text_mode(&mut self, id: NodeId) {
+        self.original_mode = self.mode;
+        self.mode = InsertionMode::Text;
+        self.text_element = Some(id);
+    }
+
+    /// The `Text` insertion mode. Text goes into the raw-text element
+    /// itself and its end tag pops only that element: at the nesting cap
+    /// the element is not on the stack, and its contents used to become
+    /// visible text of the parent (`<script>` source on the page) while
+    /// the end tag popped the parent.
     pub(crate) fn handle_text(&mut self, token: Token) {
+        let target = self.text_element.unwrap_or_else(|| self.current_node());
         match token {
             Token::Character(ref s) => {
-                self.insert_text(s);
+                self.append_text_to(target, s);
             },
-            Token::EndTag(_) => {
-                self.pop_open_element();
+            Token::EndTag(_) | Token::Eof => {
+                if self.open_elements.last() == Some(&target) {
+                    self.pop_open_element();
+                }
+                self.text_element = None;
                 self.mode = self.original_mode;
-            },
-            Token::Eof => {
-                self.pop_open_element();
-                self.mode = self.original_mode;
-                self.process_token(Token::Eof);
+                if token == Token::Eof {
+                    self.process_token(Token::Eof);
+                }
             },
             _ => {},
+        }
+    }
+
+    /// `</template>` in any HTML insertion mode: close the template and
+    /// restore the form pointer and mode saved when it opened. (Table
+    /// modes used to route it to foster parenting, leaving the parser in
+    /// table mode after the template.)
+    pub(crate) fn close_template(&mut self) {
+        if !self.has_in_scope(&TagName::Template) {
+            log::trace!("html parse error: stray </template>");
+            return;
+        }
+        self.close_to_tag(&TagName::Template);
+        if let Some((saved_form, saved_mode)) = self.template_form_stack.pop() {
+            self.form_element = saved_form;
+            self.mode = saved_mode;
         }
     }
 }
