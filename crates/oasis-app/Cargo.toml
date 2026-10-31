@@ -51,14 +51,16 @@ skin-dev = []
 mcp = ["dep:oasis-mcp", "dep:serde_json"]
 
 [dependencies]
-oasis-core = { workspace = true, features = ["tls-rustls"] }
+# The workspace entry turns oasis-core's defaults off, so name them: TLS, and
+# fontdue-backed font validation for `skin lint` (fontdue is linked anyway).
+oasis-core = { workspace = true, features = ["tls-rustls", "skin-ttf"] }
 oasis-mcp = { workspace = true, optional = true }
 serde_json = { workspace = true, optional = true }
 oasis-app-core = { workspace = true }
 # The built-in app bundle (AppRegistry, `tv` command, app crate re-exports).
 oasis-apps = { workspace = true }
 oasis-audio = { workspace = true }
-oasis-backend-sdl = { path = "../oasis-backend-sdl" }
+oasis-backend-sdl = { workspace = true }
 # Software RGBA framebuffer behind the headless e2e harness (src/headless.rs).
 oasis-backend-ue5 = { workspace = true }
 oasis-video = { workspace = true, optional = true }
