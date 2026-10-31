@@ -438,6 +438,14 @@ impl MenuBar {
     /// key is consumed; one that means nothing to the menus closes them.
     pub fn handle_key(&mut self, key: Key, bar_w: u32) -> MenuKey {
         let (order, layout) = self.label_order(bar_w);
+        // The `»` menu of a bar that has since widened so nothing folds:
+        // close it and treat the key as on a closed bar.
+        if self
+            .open
+            .is_some_and(|open| self.menu_at(open, &layout).is_none())
+        {
+            self.close();
+        }
         let Some(open) = self.open else {
             if key == Key::F(10)
                 && let Some(&first) = order.first()
@@ -447,17 +455,16 @@ impl MenuBar {
             }
             return MenuKey::Ignored;
         };
-        // Enabled entries of the open menu (`None`: it no longer exists).
-        let entries: Option<Vec<Option<String>>> = self.menu_at(open, &layout).map(|menu| {
-            menu.entries
-                .iter()
-                .map(|e| e.action_id().map(str::to_string))
-                .collect()
-        });
-        let Some(entries) = entries else {
-            self.close();
-            return MenuKey::Handled;
-        };
+        // Enabled entries of the open menu (it exists: checked above).
+        let entries: Vec<Option<String>> = self
+            .menu_at(open, &layout)
+            .map(|menu| {
+                menu.entries
+                    .iter()
+                    .map(|e| e.action_id().map(str::to_string))
+                    .collect()
+            })
+            .unwrap_or_default();
         let enabled: Vec<usize> = (0..entries.len())
             .filter(|&i| entries[i].is_some())
             .collect();
@@ -466,7 +473,12 @@ impl MenuBar {
             .and_then(|h| enabled.iter().position(|&i| i == h));
         match key {
             Key::Left | Key::Right => {
-                let pos = order.iter().position(|&i| i == open).unwrap_or(0);
+                // A menu folded into `»` since it opened (the bar
+                // narrowed) moves from the `»` slot, which is last.
+                let pos = order
+                    .iter()
+                    .position(|&i| i == open)
+                    .unwrap_or(order.len().saturating_sub(1));
                 let n = order.len().max(1);
                 let next = if key == Key::Left {
                     (pos + n - 1) % n
@@ -956,6 +968,40 @@ mod tests {
             bar.handle_key(Key::Enter, w),
             MenuKey::Activate("help.about".into())
         );
+    }
+
+    #[test]
+    fn keyboard_survives_a_resize_that_changes_the_overflow() {
+        let mut bar = demo_bar();
+        bar.menus.push(Menu::new(
+            "Help",
+            vec![MenuEntry::action("About", "help.about")],
+        ));
+        let (narrow, wide) = (60, 400);
+        assert!(bar.bar_layout(narrow).overflow.is_some());
+        assert!(bar.bar_layout(wide).overflow.is_none());
+        // The `»` menu open, then the bar widens so nothing folds: the
+        // stale menu closes and the key acts as on a closed bar (F10
+        // opens the first menu instead of being eaten).
+        bar.open = Some(bar.menus.len());
+        assert_eq!(bar.handle_key(Key::F(10), wide), MenuKey::Handled);
+        assert_eq!(bar.open, Some(0));
+        bar.close();
+        bar.open = Some(bar.menus.len());
+        assert_eq!(bar.handle_key(Key::Down, wide), MenuKey::Ignored);
+        assert!(!bar.is_open());
+        // The last menu open, then the bar narrows so it folds: it now
+        // sits behind `»`, so Right wraps to the first label and Left
+        // goes to the label before `»`.
+        let (order, _) = bar.label_order(narrow);
+        let last = bar.menus.len() - 1;
+        assert!(!order.contains(&last), "{order:?}");
+        bar.open = Some(last);
+        bar.handle_key(Key::Right, narrow);
+        assert_eq!(bar.open, order.first().copied());
+        bar.open = Some(last);
+        bar.handle_key(Key::Left, narrow);
+        assert_eq!(bar.open, order.get(order.len().saturating_sub(2)).copied());
     }
 
     #[test]
