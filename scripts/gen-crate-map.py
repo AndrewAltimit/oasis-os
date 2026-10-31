@@ -395,7 +395,7 @@ WALKS = [
                 "(ffmpeg or openh264) and AAC on a decoder thread.",
                 "code": [
                     "crates/oasis-app/src/video_player.rs: start_software_source",
-                    "crates/oasis-video/src/lib.rs: SoftwareVideoDecoder::open_stream",
+                    "crates/oasis-video/src/decoder.rs: SoftwareVideoDecoder::open_stream",
                 ],
             },
             {
