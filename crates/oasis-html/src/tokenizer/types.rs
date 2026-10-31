@@ -33,6 +33,10 @@ pub struct EndTagToken {
 #[derive(Debug, Clone, PartialEq)]
 pub struct DoctypeToken {
     pub name: Option<String>,
+    /// The `PUBLIC "..."` identifier, if any.
+    pub public_id: Option<String>,
+    /// The system identifier (`SYSTEM "..."` or the second `PUBLIC` one).
+    pub system_id: Option<String>,
     pub force_quirks: bool,
 }
 
@@ -70,6 +74,8 @@ pub(crate) enum State {
     Comment,
     CommentEndDash,
     CommentEnd,
+    /// `--!` inside a comment: `--!>` closes it too.
+    CommentEndBang,
     Doctype,
     BeforeDoctypeName,
     DoctypeName,
@@ -172,6 +178,8 @@ impl TagBuilder {
 #[derive(Debug, Clone)]
 pub(crate) struct DoctypeBuilder {
     pub(crate) name: Option<String>,
+    pub(crate) public_id: Option<String>,
+    pub(crate) system_id: Option<String>,
     pub(crate) force_quirks: bool,
 }
 
@@ -179,6 +187,8 @@ impl DoctypeBuilder {
     pub(crate) fn new() -> Self {
         Self {
             name: None,
+            public_id: None,
+            system_id: None,
             force_quirks: false,
         }
     }
@@ -186,6 +196,8 @@ impl DoctypeBuilder {
     pub(crate) fn into_token(self) -> Token {
         Token::Doctype(DoctypeToken {
             name: self.name,
+            public_id: self.public_id,
+            system_id: self.system_id,
             force_quirks: self.force_quirks,
         })
     }

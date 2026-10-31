@@ -5,9 +5,11 @@
 //! the insertion modes including the table, caption, column-group and
 //! select modes, the active formatting list with markers and the
 //! adoption agency, foster parenting, SVG / MathML foreign content with
-//! integration points, and `<noscript>` per the scripting flag. Not
-//! modelled: quirks mode, framesets, the "in template" mode (template
-//! contents parse in "in body"), and element namespaces in the DOM.
+//! integration points, the "in template" mode, quirks mode from the
+//! DOCTYPE, and `<noscript>` per the scripting flag. Not modelled:
+//! framesets (`<frameset>` is ignored), template contents as a separate
+//! DocumentFragment (they are the `<template>`'s children), and element
+//! namespaces in the DOM.
 
 mod foreign;
 mod formatting;
@@ -15,6 +17,7 @@ mod helpers;
 #[cfg(test)]
 mod hostile_tests;
 mod insertion_modes;
+mod quirks;
 #[cfg(test)]
 mod spec_tests;
 mod tables;
@@ -101,6 +104,7 @@ pub(crate) enum InsertionMode {
     InCell,
     InSelect,
     InSelectInTable,
+    InTemplate,
     AfterBody,
     AfterAfterBody,
     Text,
@@ -219,17 +223,12 @@ pub struct TreeBuilder {
     pub(crate) frameset_ok: bool,
     /// Saved mode for returning from `Text` insertion mode.
     pub(crate) original_mode: InsertionMode,
-    /// Saved parser state captured when a `<template>` start tag is
-    /// processed. The spec puts template contents into a separate
-    /// DocumentFragment; the form pointer and insertion mode visible
-    /// outside the template do not leak in, and state opened inside
-    /// the template does not leak out. We mimic that isolation by
-    /// saving and restoring on `<template>` / `</template>` instead
-    /// of introducing a real DocumentFragment node kind.
-    ///
-    /// Each entry stores `(form_element, insertion_mode)` at the
-    /// point the template was opened.
-    pub(crate) template_form_stack: Vec<(Option<NodeId>, InsertionMode)>,
+    /// The stack of template insertion modes (WHATWG §13.2.4.1), one
+    /// entry per open `<template>`: the mode its contents parse in, set
+    /// by the first start tag inside it ("in template" picks "in table",
+    /// "in table body", "in row", ...). Template contents are children
+    /// of the `<template>` element (the DOM has no DocumentFragment).
+    pub(crate) template_modes: Vec<InsertionMode>,
     /// Namespace of every foreign (SVG / MathML) node, by `NodeId`;
     /// nodes past the end (and every HTML node) are [`Ns::Html`].
     pub(crate) node_ns: Vec<Ns>,
@@ -269,7 +268,7 @@ impl TreeBuilder {
             form_element: None,
             frameset_ok: true,
             original_mode: InsertionMode::InBody,
-            template_form_stack: Vec::new(),
+            template_modes: Vec::new(),
             node_ns: Vec::new(),
             text_element: None,
             cloned_attributes: 0,
@@ -344,6 +343,8 @@ impl TreeBuilder {
     /// Feed every token (up to the DOM node cap) and finish the tree.
     fn run(mut self, tokens: Vec<Token>) -> Document {
         let total = tokens.len();
+        // About one node per two tokens (end tags make none).
+        self.reserve_nodes(total / 2);
         for (idx, token) in tokens.into_iter().enumerate() {
             // Enforce DOM node limit to prevent memory exhaustion.
             if self.doc.nodes.len() >= MAX_DOM_NODES {
@@ -369,6 +370,9 @@ impl TreeBuilder {
     fn run_pull(mut self, html: &str) -> Document {
         let mut tokenizer = Tokenizer::with_scripting(html, self.scripting);
         tokenizer.auto_content_state = false;
+        // A conservative node estimate (typical markup runs 20-60 bytes a
+        // node); doubling covers the rest.
+        self.reserve_nodes(html.len() / 64);
         let mut lookahead: Option<Token> = None;
         let mut idx: u64 = 0;
         let mut last_pos = usize::MAX;
@@ -503,10 +507,21 @@ impl TreeBuilder {
             InsertionMode::InCell => self.handle_in_cell(token),
             InsertionMode::InSelect => self.handle_in_select(token),
             InsertionMode::InSelectInTable => self.handle_in_select_in_table(token),
+            InsertionMode::InTemplate => self.handle_in_template(token),
             InsertionMode::AfterBody => self.handle_after_body(token),
             InsertionMode::AfterAfterBody => self.handle_after_after_body(token),
             InsertionMode::Text => self.handle_text(token),
         }
+    }
+
+    /// Reserve arena room for about `estimate` nodes (capped at the DOM
+    /// node limit): growing the arena by doubling copied every node
+    /// several times on large pages.
+    fn reserve_nodes(&mut self, estimate: usize) {
+        let want = estimate.min(MAX_DOM_NODES);
+        self.doc
+            .nodes
+            .reserve(want.saturating_sub(self.doc.nodes.len()));
     }
 
     fn finish(self) -> Document {
@@ -523,6 +538,16 @@ impl Default for TreeBuilder {
 // ------------------------------------------------------------------
 // Utility
 // ------------------------------------------------------------------
+
+/// `name` in ASCII lowercase, borrowed when it already is (the tokenizer
+/// lowercases tag names; only hand-built tokens need a copy).
+pub(crate) fn lowercase(name: &str) -> std::borrow::Cow<'_, str> {
+    if name.bytes().any(|b| b.is_ascii_uppercase()) {
+        std::borrow::Cow::Owned(name.to_ascii_lowercase())
+    } else {
+        std::borrow::Cow::Borrowed(name)
+    }
+}
 
 /// Returns `true` if the string consists entirely of ASCII whitespace.
 pub(crate) fn is_all_whitespace(s: &str) -> bool {

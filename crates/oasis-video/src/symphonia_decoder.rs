@@ -10,6 +10,7 @@
 
 use std::collections::VecDeque;
 
+use crate::decoder::DecoderBackend;
 use crate::demux::{AvccConfig, DemuxedPacket, Mp4Demuxer, TrackKind, find_avcc_in_mp4};
 #[cfg(feature = "h264")]
 use crate::h264;
@@ -59,17 +60,6 @@ pub struct SymphoniaDecoder {
 }
 
 impl SymphoniaDecoder {
-    /// Open an MP4 from a streaming source.
-    ///
-    /// Accepts any `Read + Seek + Send` source (e.g. `File`, network stream)
-    /// and initializes decoders for any H.264 video and AAC audio tracks.
-    pub fn open_stream(source: Box<dyn VideoSource>) -> Result<Self, VideoError> {
-        let (demuxer, moov) = Mp4Demuxer::open_stream_and_moov(source)?;
-        let mut dec = Self::from_demuxer(demuxer)?;
-        dec.keyframes = keyframes_from_moov(&moov);
-        Ok(dec)
-    }
-
     /// Open from a streaming source with pre-extracted avcC config.
     ///
     /// Skips the top-level atom walk that `open_stream` performs to read
@@ -82,21 +72,6 @@ impl SymphoniaDecoder {
     ) -> Result<Self, VideoError> {
         let demuxer = Mp4Demuxer::open_stream_with_avcc(source, avcc)?;
         Self::from_demuxer(demuxer)
-    }
-
-    /// Open from a streaming source using a pre-fetched `moov` atom (the
-    /// complete atom, header included).
-    ///
-    /// Like [`open_stream_with_avcc`](Self::open_stream_with_avcc) (no
-    /// atom walk), and additionally indexes the video keyframes so
-    /// [`seek`](Self::seek) lands on a keyframe.
-    pub fn open_stream_with_moov(
-        source: Box<dyn VideoSource>,
-        moov: &[u8],
-    ) -> Result<Self, VideoError> {
-        let mut dec = Self::open_stream_with_avcc(source, find_avcc_in_mp4(moov))?;
-        dec.keyframes = keyframes_from_moov(moov);
-        Ok(dec)
     }
 
     /// Initialize decoders from a probed demuxer.
@@ -201,6 +176,95 @@ impl SymphoniaDecoder {
         }
     }
 
+    /// Record a video packet timestamp (for timing frames flushed at EOF).
+    #[cfg(feature = "h264")]
+    fn note_video_ts(&mut self, ts: f64) {
+        let (last, dur) = self.last_video_ts;
+        let step = ts - last;
+        let dur = if step > 0.0 && step < 1.0 { step } else { dur };
+        self.last_video_ts = (ts, dur);
+    }
+
+    /// At end of stream, drain the pictures still in the H.264 reorder
+    /// buffer and return the first of them.
+    #[cfg(feature = "h264")]
+    fn flush_video_at_eof(&mut self) -> Option<VideoFrame> {
+        if !self.video_eof {
+            self.video_eof = true;
+            let (last_ts, dur) = self.last_video_ts;
+            if let Some(h264) = self.h264.as_mut() {
+                for (i, frame) in h264.flush().into_iter().enumerate() {
+                    let ts = pop_min_pts(&mut self.pending_pts)
+                        .unwrap_or(last_ts + dur * (i + 1) as f64);
+                    self.flushed_frames.push_back(VideoFrame {
+                        rgba: frame.rgba,
+                        width: frame.width,
+                        height: frame.height,
+                        timestamp_secs: ts,
+                    });
+                }
+            }
+            self.pending_pts.clear();
+        }
+        self.flushed_frames.pop_front()
+    }
+
+    /// Check if an Annex-B bitstream contains an IDR NAL unit (type 5).
+    #[cfg(feature = "h264")]
+    fn contains_idr(data: &[u8]) -> bool {
+        Self::contains_nal_type(data, NAL_IDR)
+    }
+
+    /// Check if an Annex-B bitstream contains a NAL unit of type `nal_type`.
+    #[cfg(feature = "h264")]
+    fn contains_nal_type(data: &[u8], nal_type: u8) -> bool {
+        let mut i = 0;
+        while i + 4 <= data.len() {
+            if data[i] == 0 && data[i + 1] == 0 && data[i + 2] == 0 && data[i + 3] == 1 {
+                if i + 4 < data.len() && (data[i + 4] & 0x1F) == nal_type {
+                    return true;
+                }
+                i += 4;
+            } else if data[i] == 0 && data[i + 1] == 0 && data[i + 2] == 1 {
+                if i + 3 < data.len() && (data[i + 3] & 0x1F) == nal_type {
+                    return true;
+                }
+                i += 3;
+            } else {
+                i += 1;
+            }
+        }
+        false
+    }
+}
+
+impl DecoderBackend for SymphoniaDecoder {
+    /// Open an MP4 from a streaming source.
+    ///
+    /// Accepts any `Read + Seek + Send` source (e.g. `File`, network stream)
+    /// and initializes decoders for any H.264 video and AAC audio tracks.
+    fn open_stream(source: Box<dyn VideoSource>) -> Result<Self, VideoError> {
+        let (demuxer, moov) = Mp4Demuxer::open_stream_and_moov(source)?;
+        let mut dec = Self::from_demuxer(demuxer)?;
+        dec.keyframes = keyframes_from_moov(&moov);
+        Ok(dec)
+    }
+
+    /// Open from a streaming source using a pre-fetched `moov` atom (the
+    /// complete atom, header included).
+    ///
+    /// Like [`open_stream_with_avcc`](Self::open_stream_with_avcc) (no
+    /// atom walk), and additionally indexes the video keyframes so
+    /// [`seek`](Self::seek) lands on a keyframe.
+    fn open_stream_with_moov(
+        source: Box<dyn VideoSource>,
+        moov: &[u8],
+    ) -> Result<Self, VideoError> {
+        let mut dec = Self::open_stream_with_avcc(source, find_avcc_in_mp4(moov))?;
+        dec.keyframes = keyframes_from_moov(moov);
+        Ok(dec)
+    }
+
     /// Decode the next video frame.
     ///
     /// Buffers audio packets internally. Returns `Ok(None)` at end-of-stream,
@@ -209,7 +273,7 @@ impl SymphoniaDecoder {
     ///
     /// openh264 decodes the Baseline profile only, with reinit-on-error
     /// recovery.
-    pub fn next_video_frame(&mut self) -> Result<Option<VideoFrame>, VideoError> {
+    fn next_video_frame(&mut self) -> Result<Option<VideoFrame>, VideoError> {
         #[cfg(not(feature = "h264"))]
         {
             Err(VideoError::NoTrack(
@@ -318,43 +382,10 @@ impl SymphoniaDecoder {
         }
     }
 
-    /// Record a video packet timestamp (for timing frames flushed at EOF).
-    #[cfg(feature = "h264")]
-    fn note_video_ts(&mut self, ts: f64) {
-        let (last, dur) = self.last_video_ts;
-        let step = ts - last;
-        let dur = if step > 0.0 && step < 1.0 { step } else { dur };
-        self.last_video_ts = (ts, dur);
-    }
-
-    /// At end of stream, drain the pictures still in the H.264 reorder
-    /// buffer and return the first of them.
-    #[cfg(feature = "h264")]
-    fn flush_video_at_eof(&mut self) -> Option<VideoFrame> {
-        if !self.video_eof {
-            self.video_eof = true;
-            let (last_ts, dur) = self.last_video_ts;
-            if let Some(h264) = self.h264.as_mut() {
-                for (i, frame) in h264.flush().into_iter().enumerate() {
-                    let ts = pop_min_pts(&mut self.pending_pts)
-                        .unwrap_or(last_ts + dur * (i + 1) as f64);
-                    self.flushed_frames.push_back(VideoFrame {
-                        rgba: frame.rgba,
-                        width: frame.width,
-                        height: frame.height,
-                        timestamp_secs: ts,
-                    });
-                }
-            }
-            self.pending_pts.clear();
-        }
-        self.flushed_frames.pop_front()
-    }
-
     /// The time to seek the demuxer to for a request of `secs`: the seek
     /// time of the last keyframe starting at or before `secs` (the first
     /// keyframe if `secs` precedes it), or `secs` when no index is known.
-    pub fn keyframe_seek_target(&self, secs: f64) -> f64 {
+    fn keyframe_seek_target(&self, secs: f64) -> f64 {
         let n = self
             .keyframes
             .partition_point(|&(decode, _)| decode <= secs);
@@ -364,38 +395,10 @@ impl SymphoniaDecoder {
         }
     }
 
-    /// Check if an Annex-B bitstream contains an IDR NAL unit (type 5).
-    #[cfg(feature = "h264")]
-    fn contains_idr(data: &[u8]) -> bool {
-        Self::contains_nal_type(data, NAL_IDR)
-    }
-
-    /// Check if an Annex-B bitstream contains a NAL unit of type `nal_type`.
-    #[cfg(feature = "h264")]
-    fn contains_nal_type(data: &[u8], nal_type: u8) -> bool {
-        let mut i = 0;
-        while i + 4 <= data.len() {
-            if data[i] == 0 && data[i + 1] == 0 && data[i + 2] == 0 && data[i + 3] == 1 {
-                if i + 4 < data.len() && (data[i + 4] & 0x1F) == nal_type {
-                    return true;
-                }
-                i += 4;
-            } else if data[i] == 0 && data[i + 1] == 0 && data[i + 2] == 1 {
-                if i + 3 < data.len() && (data[i + 3] & 0x1F) == nal_type {
-                    return true;
-                }
-                i += 3;
-            } else {
-                i += 1;
-            }
-        }
-        false
-    }
-
     /// Decode the next chunk of audio.
     ///
     /// Buffers video packets internally. Returns `None` at end-of-stream.
-    pub fn next_audio_samples(&mut self) -> Result<Option<AudioChunk>, VideoError> {
+    fn next_audio_samples(&mut self) -> Result<Option<AudioChunk>, VideoError> {
         if self.aac.is_none() {
             return Err(VideoError::NoTrack("no audio track".into()));
         }
@@ -425,7 +428,7 @@ impl SymphoniaDecoder {
     ///
     /// Drains the internal audio queue (packets already read from the
     /// demuxer during video decoding).
-    pub fn next_buffered_audio(&mut self) -> Option<AudioChunk> {
+    fn next_buffered_audio(&mut self) -> Option<AudioChunk> {
         // Drain from the audio queue (packets buffered during video reads).
         while let Some(pkt) = self.audio_queue.pop_front() {
             let Some(aac) = self.aac.as_mut() else {
@@ -457,7 +460,7 @@ impl SymphoniaDecoder {
     /// Seek to a position in seconds.
     ///
     /// Clears any buffered packets so post-seek reads don't return stale data.
-    pub fn seek(&mut self, secs: f64) -> Result<(), VideoError> {
+    fn seek(&mut self, secs: f64) -> Result<(), VideoError> {
         self.video_queue.clear();
         self.audio_queue.clear();
         let target = self.keyframe_seek_target(secs);
@@ -482,12 +485,12 @@ impl SymphoniaDecoder {
     }
 
     /// Video dimensions (may be 0x0 if no video track or not yet decoded).
-    pub fn video_size(&self) -> (u32, u32) {
+    fn video_size(&self) -> (u32, u32) {
         (self.video_width, self.video_height)
     }
 
     /// Audio sample rate and channel count.
-    pub fn audio_format(&self) -> (u32, u16) {
+    fn audio_format(&self) -> (u32, u16) {
         // The decoder refines rate/channels from the first decoded
         // frame (e.g. a mono stream in a 2-channel sample entry).
         match &self.aac {
@@ -534,139 +537,4 @@ fn keyframes_from_moov(moov: &[u8]) -> Vec<(f64, f64)> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::demux::find_top_level_atom;
-
-    fn fixture_bytes() -> Vec<u8> {
-        let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
-        std::fs::read(manifest.join("../../tests/fixtures/test_320x240_2s.mp4"))
-            .expect("fixture file missing")
-    }
-
-    #[test]
-    fn find_top_level_atom_walks_boxes() {
-        let data = fixture_bytes();
-        let moov = find_top_level_atom(&data, b"moov").expect("moov");
-        assert_eq!(&moov[4..8], b"moov");
-        assert_eq!(moov.len(), 2235);
-        assert!(find_top_level_atom(&data, b"zzzz").is_none());
-        assert!(find_top_level_atom(&[0, 0, 0, 3, b'b', b'a', b'd', b'!'], b"moov").is_none());
-    }
-
-    #[test]
-    fn other_stream_queue_is_bounded() {
-        // Regression: reading only audio from a file with video buffered
-        // every video packet of the file.
-        let mut dec =
-            SymphoniaDecoder::open_stream(Box::new(std::io::Cursor::new(fixture_bytes())))
-                .expect("open");
-        for i in 0..MAX_QUEUED_PACKETS + 100 {
-            for kind in [TrackKind::Video, TrackKind::Audio] {
-                dec.buffer_packet(DemuxedPacket {
-                    kind,
-                    data: vec![0; 4],
-                    timestamp_secs: i as f64,
-                });
-            }
-        }
-        assert_eq!(dec.video_queue.len(), MAX_QUEUED_PACKETS);
-        assert_eq!(dec.audio_queue.len(), MAX_QUEUED_PACKETS);
-        // The oldest packets went first.
-        assert_eq!(
-            dec.audio_queue.front().map(|p| p.timestamp_secs),
-            Some(100.0)
-        );
-    }
-
-    #[test]
-    fn open_stream_reads_keyframes_without_buffering_the_file() {
-        // `open_stream` walks top-level boxes and reads only `moov`.
-        let dec = SymphoniaDecoder::open_stream(Box::new(std::io::Cursor::new(fixture_bytes())))
-            .expect("open");
-        assert_eq!(dec.keyframes.len(), 2);
-    }
-
-    // ---------------------------------------------------------------
-    // Item 76: H.264 NAL unit / SPS/PPS / IDR detection tests
-    // (contains_idr is defined here, gated on feature = "h264")
-    // ---------------------------------------------------------------
-
-    #[cfg(feature = "h264")]
-    mod nal_tests {
-        #![allow(clippy::unwrap_used)]
-
-        use super::*;
-
-        #[test]
-        fn contains_idr_4byte_start_code() {
-            // IDR NAL type = 5 (0x65 = 0b01100101, type = 5)
-            let data = [0x00, 0x00, 0x00, 0x01, 0x65, 0xAA, 0xBB];
-            assert!(SymphoniaDecoder::contains_idr(&data));
-        }
-
-        #[test]
-        fn contains_idr_3byte_start_code() {
-            // 3-byte start code with IDR NAL type 5
-            let data = [0x00, 0x00, 0x01, 0x65, 0xAA];
-            assert!(SymphoniaDecoder::contains_idr(&data));
-        }
-
-        #[test]
-        fn contains_idr_non_idr_nal() {
-            // NAL type 1 (non-IDR coded slice, 0x41 & 0x1F = 1)
-            let data = [0x00, 0x00, 0x00, 0x01, 0x41, 0xAA];
-            assert!(!SymphoniaDecoder::contains_idr(&data));
-        }
-
-        #[test]
-        fn contains_idr_sps_not_idr() {
-            // SPS NAL type = 7 (0x67 & 0x1F = 7)
-            let data = [0x00, 0x00, 0x00, 0x01, 0x67, 0x42, 0xC0];
-            assert!(!SymphoniaDecoder::contains_idr(&data));
-        }
-
-        #[test]
-        fn contains_idr_pps_not_idr() {
-            // PPS NAL type = 8 (0x68 & 0x1F = 8)
-            let data = [0x00, 0x00, 0x00, 0x01, 0x68, 0xCE];
-            assert!(!SymphoniaDecoder::contains_idr(&data));
-        }
-
-        #[test]
-        fn contains_idr_empty_data() {
-            assert!(!SymphoniaDecoder::contains_idr(&[]));
-        }
-
-        #[test]
-        fn contains_idr_too_short_for_start_code() {
-            assert!(!SymphoniaDecoder::contains_idr(&[0x00, 0x00]));
-            assert!(!SymphoniaDecoder::contains_idr(&[0x00, 0x00, 0x01]));
-        }
-
-        #[test]
-        fn contains_idr_multiple_nals_idr_second() {
-            // SPS then IDR
-            let mut data = Vec::new();
-            data.extend_from_slice(&[0x00, 0x00, 0x00, 0x01, 0x67]); // SPS
-            data.extend_from_slice(&[0x42, 0xC0, 0x1E]); // SPS data
-            data.extend_from_slice(&[0x00, 0x00, 0x00, 0x01, 0x65]); // IDR
-            data.extend_from_slice(&[0xAA, 0xBB]); // IDR data
-            assert!(SymphoniaDecoder::contains_idr(&data));
-        }
-
-        #[test]
-        fn contains_idr_idr_with_nal_ref_idc() {
-            // NAL byte = 0x25: nal_ref_idc=1, type=5 (IDR)
-            let data = [0x00, 0x00, 0x00, 0x01, 0x25, 0xAA];
-            assert!(SymphoniaDecoder::contains_idr(&data));
-        }
-
-        #[test]
-        fn contains_idr_start_code_at_end_no_nal_byte() {
-            // Start code is the last bytes, no NAL type byte follows.
-            let data = [0x00, 0x00, 0x00, 0x01];
-            assert!(!SymphoniaDecoder::contains_idr(&data));
-        }
-    }
-}
+mod tests;

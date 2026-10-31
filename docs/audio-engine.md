@@ -171,7 +171,7 @@ backends pick a value sized to their mixer buffer.
 
 ## Radio sources
 
-`RadioSource` (`radio/source.rs`) is the source-side interface:
+`RadioSource` (`radio/source/mod.rs`) is the source-side interface:
 
 ```rust
 pub trait RadioSource {

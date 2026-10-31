@@ -142,6 +142,21 @@ traffic cannot be replayed. The session is **not** encrypted or integrity
 protected after authentication: an active man-in-the-middle can read or
 inject commands. Use the listener on trusted networks, or tunnel it (SSH).
 
+**Challenge relay.** The nonce is not bound to the server's identity, so
+the PSK authenticates the *client* only. A client that connects to an
+impostor (spoofed address, lookalike host) can be relayed: the impostor
+opens its own connection to the real server, passes that server's
+challenge to the client, forwards the answer and is logged in. Mixing the
+server's address or name into the HMAC would not close this without an
+authenticated channel -- the server cannot know which address the client
+dialled (NAT, port forwards, `0.0.0.0` binds), and an on-path attacker can
+relay the plaintext session wholesale anyway -- so the protocol does not
+pretend to. `RemoteClient` limits what a hostile server gains: it answers
+exactly one challenge per connection, and only a nonce of the documented
+form (32 lowercase hex digits, `oasis_net::is_valid_nonce`), so it cannot
+be used as an HMAC oracle over chosen text. When the server's identity
+matters, tunnel over something that authenticates it (SSH).
+
 Brute-force defence is a server-wide throttle (`AuthThrottle` in
 `auth.rs`): failures are counted until a quiet 30 s passes without one; the
 5th locks authentication out for 30 s from that failure, and every further

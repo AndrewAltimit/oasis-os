@@ -21,7 +21,10 @@
 //! answers `204` without approving any CORS preflight.
 //! No session IDs are issued (single local client).
 
+#![warn(missing_docs)]
+
 mod dispatch;
+mod gate;
 mod http;
 mod server;
 mod tools;

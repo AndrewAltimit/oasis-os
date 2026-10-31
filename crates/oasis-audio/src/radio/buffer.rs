@@ -82,6 +82,7 @@ impl StreamBuffer {
     }
 
     /// Total capacity.
+    #[cfg(test)]
     pub fn capacity(&self) -> usize {
         self.capacity
     }

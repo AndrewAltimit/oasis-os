@@ -73,6 +73,7 @@ impl TreeBuilder {
         // the list of active formatting elements, then pop the
         // current node off the stack of open elements and return.
         if let Some(&cur) = self.open_elements.last()
+            && self.ns_of(cur) == super::Ns::Html
             && self.tag_of(cur) == Some(subject)
             && !self.active_formatting.contains(&cur)
         {
@@ -120,7 +121,7 @@ impl TreeBuilder {
             // the special category.
             let furthest_block_pos = self.open_elements[fmt_stack_pos + 1..]
                 .iter()
-                .position(|&id| self.tag_of(id).map(|t| t.is_special()).unwrap_or(false))
+                .position(|&id| self.is_special_node(id))
                 .map(|off| fmt_stack_pos + 1 + off);
 
             // Step 8: if there is no furthest block, pop everything
@@ -213,9 +214,13 @@ impl TreeBuilder {
 
             // Step 14: insert last_node at the "appropriate place for
             // inserting a node" with common_ancestor as the override
-            // target. For the common case that's just append_child.
+            // target: before the table when that is a table element and
+            // foster parenting is on (`<table><b><tr>..</tr>x</b>`).
             self.doc.detach_node(last_node);
-            self.doc.append_child(common_ancestor, last_node);
+            match self.insertion_place_for(common_ancestor) {
+                (parent, Some(before)) => self.doc.insert_before(parent, last_node, before),
+                (parent, None) => self.doc.append_child(parent, last_node),
+            }
 
             // Step 15: create a clone of formatting element.
             let Some(fmt_clone) = self.clone_element(formatting_element) else {

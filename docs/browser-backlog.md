@@ -58,11 +58,15 @@ small enough for a focused PR.
 
 ### Parsers
 
-- **No quirks mode.** The DOCTYPE is ignored, so `<p><table>` always
-  closes the paragraph (quirks documents keep the table inside it) and
-  no quirks-mode CSS rules apply.
-- **No "in template" insertion mode.** Template contents parse "in
-  body", so `<template><tr>` drops the row.
+- **No quirks-mode CSS.** The parser picks the quirks mode from the
+  DOCTYPE (`Document::quirks_mode`) and applies its one tree difference,
+  but no quirks-mode CSS rules (table font inheritance, body height,
+  unitless lengths) apply. `innerHTML` always parses as quirks mode
+  (its wrapper has no DOCTYPE), so `<p><table>` there keeps the table
+  inside the paragraph even in a standards-mode page.
+- **Template contents are children, not a DocumentFragment.** They
+  parse with the "in template" mode, but there is no `template.content`:
+  JS and CSS see them as the element's children.
 - **The DOM stores no namespaces.** The tree builder tracks them while
   parsing, but CSS (`svg|rect`) and JS (`namespaceURI`) cannot see them,
   and an SVG `<title>` is indistinguishable from the HTML one.

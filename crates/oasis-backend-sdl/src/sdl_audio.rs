@@ -335,7 +335,7 @@ impl SdlAudioBackend {
     }
 
     /// Queue one-shot UI sound PCM (interleaved stereo i16 at 48 kHz —
-    /// the mix `oasis_audio::sfx::SfxPlayer::render` produces).
+    /// the mix `oasis_audio::SfxPlayer::render` produces).
     ///
     /// Opens a dedicated SFX stream lazily; SDL mixes it with the music
     /// stream at the device level. The global volume (0-100) is the
@@ -494,17 +494,17 @@ impl SdlAudioBackend {
     /// tracks loaded via `load_track`).
     fn decode_and_queue_all(&mut self, audio_data: &[u8]) -> Result<()> {
         // Try WAV first (cheap header check), then Ogg Vorbis, then MP3.
-        if oasis_audio::wav::is_wav(audio_data) {
+        if oasis_audio::is_wav(audio_data) {
             return self.decode_wav_and_queue(audio_data);
         }
-        if oasis_audio::ogg::is_ogg(audio_data) {
+        if oasis_audio::is_ogg(audio_data) {
             return self.decode_ogg_and_queue(audio_data);
         }
         self.decode_mp3_and_queue(audio_data)
     }
 
     fn decode_ogg_and_queue(&mut self, ogg_data: &[u8]) -> Result<()> {
-        let ogg = oasis_audio::ogg::decode_ogg(ogg_data)
+        let ogg = oasis_audio::decode_ogg(ogg_data)
             .ok_or_else(|| OasisError::Backend("invalid Ogg Vorbis data".into()))?;
 
         self.ensure_stream(ogg.sample_rate as i32, ogg.channels as u8)?;
@@ -512,7 +512,7 @@ impl SdlAudioBackend {
     }
 
     fn decode_wav_and_queue(&mut self, wav_data: &[u8]) -> Result<()> {
-        let wav = oasis_audio::wav::decode_wav(wav_data)
+        let wav = oasis_audio::decode_wav(wav_data)
             .ok_or_else(|| OasisError::Backend("invalid WAV data".into()))?;
 
         self.ensure_stream(wav.sample_rate as i32, wav.channels as u8)?;

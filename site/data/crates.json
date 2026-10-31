@@ -878,8 +878,8 @@
    "crate_type": [],
    "bins": [],
    "features": [],
-   "loc": 10993,
-   "files": 21,
+   "loc": 11672,
+   "files": 22,
    "deps": []
   },
   {
@@ -972,8 +972,8 @@
    "crate_type": [],
    "bins": [],
    "features": [],
-   "loc": 22397,
-   "files": 68,
+   "loc": 22447,
+   "files": 69,
    "deps": [
     {
      "name": "oasis-net",
@@ -1012,8 +1012,8 @@
     "h264",
     "symphonia"
    ],
-   "loc": 7988,
-   "files": 18,
+   "loc": 7845,
+   "files": 26,
    "deps": []
   },
   {
@@ -1028,8 +1028,8 @@
    "crate_type": [],
    "bins": [],
    "features": [],
-   "loc": 9217,
-   "files": 24,
+   "loc": 9224,
+   "files": 27,
    "deps": [
     {
      "name": "oasis-types",
@@ -1297,8 +1297,8 @@
     "tls-rustls",
     "vfs"
    ],
-   "loc": 7242,
-   "files": 11,
+   "loc": 7347,
+   "files": 16,
    "deps": [
     {
      "name": "oasis-types",
@@ -1325,8 +1325,8 @@
    "crate_type": [],
    "bins": [],
    "features": [],
-   "loc": 2892,
-   "files": 6,
+   "loc": 2899,
+   "files": 9,
    "deps": [
     {
      "name": "oasis-types",

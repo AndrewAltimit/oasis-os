@@ -560,7 +560,7 @@ impl<B: ShellBackend> Shell<B> {
             custom_skin_root,
             toasts: ToastManager::new(),
             ui_sounds: crate::ui_sound::UiSoundQueue::new(),
-            sfx: oasis_audio::sfx::SfxPlayer::new(),
+            sfx: oasis_audio::SfxPlayer::new(),
             media_track: None,
             media: oasis_audio::AudioManager::new(),
             #[cfg(feature = "mcp")]

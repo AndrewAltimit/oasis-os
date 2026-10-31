@@ -14,6 +14,63 @@ const CDATA_OPEN: [char; 7] = ['[', 'C', 'D', 'A', 'T', 'A', '['];
 // Tag and data state implementations
 // -----------------------------------------------------------------------
 
+/// Parse what follows a DOCTYPE name (up to, not including, its `>`)
+/// into the public / system identifiers, setting force-quirks where the
+/// spec's identifier states do.
+fn parse_doctype_ids(rest: &str, doctype: &mut super::types::DoctypeBuilder) {
+    /// A quoted identifier at the start of `s` (after whitespace):
+    /// `(value, remainder, closed)`, or `None` without an opening quote.
+    fn quoted(s: &str) -> Option<(String, &str, bool)> {
+        let s = s.trim_start_matches(|c: char| c.is_ascii_whitespace());
+        let quote = s.chars().next().filter(|&c| c == '"' || c == '\'')?;
+        let body = &s[1..];
+        Some(match body.find(quote) {
+            Some(i) => (body[..i].to_string(), &body[i + 1..], true),
+            None => (body.to_string(), "", false),
+        })
+    }
+    fn keyword<'a>(s: &'a str, kw: &str) -> Option<&'a str> {
+        let head = s.get(..kw.len())?;
+        head.eq_ignore_ascii_case(kw).then(|| &s[kw.len()..])
+    }
+    let rest = rest.trim_start_matches(|c: char| c.is_ascii_whitespace());
+    if rest.is_empty() {
+        return;
+    }
+    if let Some(after) = keyword(rest, "public") {
+        let Some((public, after, closed)) = quoted(after) else {
+            doctype.force_quirks = true;
+            return;
+        };
+        doctype.public_id = Some(public);
+        if !closed {
+            doctype.force_quirks = true;
+            return;
+        }
+        let after = after.trim_start_matches(|c: char| c.is_ascii_whitespace());
+        if after.is_empty() {
+            return;
+        }
+        match quoted(after) {
+            Some((system, _, closed)) => {
+                doctype.system_id = Some(system);
+                doctype.force_quirks |= !closed;
+            },
+            None => doctype.force_quirks = true,
+        }
+    } else if let Some(after) = keyword(rest, "system") {
+        match quoted(after) {
+            Some((system, _, closed)) => {
+                doctype.system_id = Some(system);
+                doctype.force_quirks |= !closed;
+            },
+            None => doctype.force_quirks = true,
+        }
+    } else {
+        doctype.force_quirks = true;
+    }
+}
+
 impl Tokenizer {
     /// **Data** -- default entry point.
     pub(crate) fn state_data(&mut self) -> Option<Token> {
@@ -27,7 +84,18 @@ impl Tokenizer {
                 self.state = State::CharacterReference;
                 None
             },
-            Some(ch) => Some(Token::Character(ch.to_string())),
+            Some(_) => {
+                // The whole run up to the next `<` / `&` is one token: a
+                // token (and a `String`) per character was most of the
+                // tokenizer's time on text-heavy pages.
+                let start = self.pos - 1;
+                let end = self.input[self.pos..]
+                    .iter()
+                    .position(|&c| c == '<' || c == '&')
+                    .map_or(self.input.len(), |off| self.pos + off);
+                self.pos = end;
+                Some(Token::Character(self.input[start..end].iter().collect()))
+            },
             None => Some(Token::Eof),
         }
     }
@@ -488,12 +556,41 @@ impl Tokenizer {
                 self.current_comment.push('-');
                 None
             },
+            Some('!') => {
+                self.consume();
+                self.state = State::CommentEndBang;
+                None
+            },
             None => {
                 self.state = State::Data;
                 Some(Token::Comment(std::mem::take(&mut self.current_comment)))
             },
             _ => {
                 self.current_comment.push_str("--");
+                self.state = State::Comment;
+                None
+            },
+        }
+    }
+
+    /// **CommentEndBang** -- saw `--!` inside a comment (WHATWG
+    /// §13.2.5.52): `>` closes the comment (a parse error browsers
+    /// accept), anything else keeps the `--!` as comment text.
+    pub(crate) fn state_comment_end_bang(&mut self) -> Option<Token> {
+        match self.peek() {
+            Some('>') | None => {
+                self.consume();
+                self.state = State::Data;
+                Some(Token::Comment(std::mem::take(&mut self.current_comment)))
+            },
+            Some('-') => {
+                self.consume();
+                self.current_comment.push_str("--!");
+                self.state = State::CommentEndDash;
+                None
+            },
+            _ => {
+                self.current_comment.push_str("--!");
                 self.state = State::Comment;
                 None
             },
@@ -575,23 +672,28 @@ impl Tokenizer {
         }
     }
 
-    /// **AfterDoctypeName** -- skip remaining tokens until `>`.
+    /// **AfterDoctypeName** and the public / system identifier states
+    /// (WHATWG §13.2.5.56-§13.2.5.67), folded into one pass: every one of
+    /// them ends the DOCTYPE at the next `>` (inside a quoted identifier
+    /// that is an abrupt end with force-quirks), so the rest up to `>` is
+    /// read first and then parsed for `PUBLIC "..." "..."` /
+    /// `SYSTEM "..."`. The identifiers decide the quirks mode.
     pub(crate) fn state_after_doctype_name(&mut self) -> Option<Token> {
-        while matches!(self.peek(), Some(c) if c.is_ascii_whitespace()) {
-            self.consume();
+        let start = self.pos;
+        let end = self.input[start..]
+            .iter()
+            .position(|&c| c == '>')
+            .map(|off| start + off);
+        let rest: String = self.input[start..end.unwrap_or(self.input.len())]
+            .iter()
+            .collect();
+        self.pos = end.map_or(self.input.len(), |e| e + 1);
+        if end.is_none() {
+            self.current_doctype.force_quirks = true;
         }
-        match self.consume() {
-            Some('>') => {
-                self.state = State::Data;
-                Some(self.emit_doctype())
-            },
-            None => {
-                self.current_doctype.force_quirks = true;
-                self.state = State::Data;
-                Some(self.emit_doctype())
-            },
-            Some(_) => None, // skip SYSTEM/PUBLIC etc.
-        }
+        parse_doctype_ids(&rest, &mut self.current_doctype);
+        self.state = State::Data;
+        Some(self.emit_doctype())
     }
 
     /// Helper: take the current doctype builder and emit a token.

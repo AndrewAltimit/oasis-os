@@ -27,6 +27,22 @@ pub struct Document {
     /// lazily; ids past the end are live). Guards against double frees
     /// and lets callers holding a stale id (JS wrappers) detect it.
     freed: Vec<bool>,
+    /// The compatibility mode the parser chose from the DOCTYPE (WHATWG
+    /// §13.2.6.4.1); hand-built documents are in no-quirks mode.
+    pub quirks_mode: QuirksMode,
+}
+
+/// A document's compatibility mode (WHATWG "quirks mode").
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum QuirksMode {
+    /// Standards mode (`<!DOCTYPE html>`).
+    #[default]
+    NoQuirks,
+    /// "Almost standards" mode (XHTML 1.0 / HTML 4.01 transitional and
+    /// frameset doctypes with a system identifier).
+    LimitedQuirks,
+    /// Quirks mode: no DOCTYPE, or a legacy one.
+    Quirks,
 }
 
 /// A single node in the DOM tree.
@@ -636,6 +652,7 @@ impl Document {
             id_index: std::collections::HashMap::new(),
             free_list: Vec::new(),
             freed: Vec::new(),
+            quirks_mode: QuirksMode::NoQuirks,
         }
     }
 
@@ -651,6 +668,7 @@ impl Document {
         self.id_index.clear();
         self.free_list.clear();
         self.freed.clear();
+        self.quirks_mode = QuirksMode::NoQuirks;
         self.nodes.push(Node {
             kind: NodeKind::Document,
             parent: None,
@@ -678,6 +696,7 @@ impl Document {
             id_index,
             free_list: Vec::new(),
             freed: Vec::new(),
+            quirks_mode: QuirksMode::NoQuirks,
         }
     }
 

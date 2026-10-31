@@ -4,20 +4,21 @@
 //! playback from swappable `RadioSource` implementations (Icecast, VFS).
 //! Uses VFS-based IPC for terminal command integration.
 
-pub mod archive;
-pub mod buffer;
-pub mod connect;
-pub mod icy;
-pub mod source;
-pub mod station;
-pub mod threaded;
+mod archive;
+mod buffer;
+mod connect;
+mod icy;
+mod source;
+mod station;
+mod threaded;
 
 use oasis_types::backend::{AudioBackend, AudioTrackId};
 use oasis_types::error::{OasisError, Result};
 use oasis_vfs::Vfs;
 
-pub use archive::{ArchiveCatalog, ArchiveTrack};
+pub use archive::{ArchiveCatalog, ArchiveTrack, percent_encode};
 pub use connect::{StreamUrl, connect_icecast};
+pub use icy::StreamMetadata;
 pub use source::{ArchiveSource, AudioChunk, IcecastSource, RadioSource, SourceState, VfsSource};
 pub use station::{Station, StationRegistry};
 pub use threaded::ThreadedSource;

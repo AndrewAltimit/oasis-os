@@ -6,6 +6,22 @@ larger changes by area. Breaking API changes are marked **(breaking)**.
 
 ## Unreleased -- overhaul 3
 
+### Browser (HTML)
+
+- The HTML parser is about 3x faster on typical pages (full parse of a 100 KB page 5.2 ms to
+  1.4 ms; table-heavy pages 7.3 ms to 3.5 ms): text runs are one token instead of one per
+  character, and the tree builder no longer allocates per tag. The tree builder alone is back
+  below its pre-overhaul time.
+- `<template>` contents parse with the spec's "in template" mode: `<template><tr><td>`
+  (the usual row template for scripts) keeps its rows and cells instead of dropping the tags.
+- Quirks mode: the DOCTYPE's public / system identifiers pick quirks, limited-quirks or
+  standards mode (new `Document::quirks_mode`); in quirks mode (no DOCTYPE, or a legacy one)
+  `<table>` no longer closes an open `<p>`, as in browsers. `DoctypeToken` gains `public_id`
+  and `system_id` **(breaking)**.
+- `--!>` ends a comment; text in `<textarea>`, `<xmp>`, `<iframe>`, `<noembed>` no longer
+  gets bold / italic reopened inside it; misnested formatting around a table
+  (`<table><a>1<p>2</a>3`) lands before the table instead of inside it.
+
 ### Browser (CSS)
 
 - The user-agent sheet is its own cascade origin: author rules in any `@layer` now beat it
@@ -42,6 +58,27 @@ larger changes by area. Breaking API changes are marked **(breaking)**.
   tile names (shrunk to 8 px, then ellipsized) and its address bar (keeps the path's tail),
   System Monitor's info column, Internet Radio's favourite mark, Video Embed result cells.
   `oasis-apps/tests/text_fits_window.rs` now also fails on overlapping text runs.
+
+### Crate APIs (oasis-audio, oasis-video, oasis-net, oasis-mcp)
+
+- Remote terminal client: `RemoteClient` answers exactly one `AUTH_REQUIRED` challenge per
+  connection, and only a nonce of the documented form (32 lowercase hex digits; new
+  `oasis_net::is_valid_nonce` / `NONCE_HEX_LEN`), so a hostile server can no longer use it
+  as an HMAC oracle over chosen text. The nonce is not bound to the server's identity; that
+  relay limitation is now documented in `docs/networking.md` and `docs/security.md`.
+- `oasis-audio`: only the crate-root re-exports are public. `oasis_audio::{sfx, wav, ogg}::X`
+  is `oasis_audio::X` (`SfxPlayer`, `decode_wav`, `WavData`, `decode_ogg`, `OggData`, ...),
+  `oasis_audio::radio::{archive, source, station, icy, threaded, connect, buffer}::X` is
+  `oasis_audio::radio::X`, and `mixer` / `playlist` / `manager` / `controller` / `types` /
+  `null_backend` are no longer public modules **(breaking)**.
+- `oasis-video`: `SoftwareVideoDecoder` forwards to a crate-private `DecoderBackend` trait
+  that both backends implement. The `aac`, `demux`, `h264` and `ffmpeg_decoder` modules and
+  `demux_lite::avcc` are private; removed the `AvccConfig` / `find_avcc_in_mp4` re-export
+  (symphonia's, distinct from `demux_lite::AvccConfig`),
+  `SoftwareVideoDecoder::open_stream_with_avcc` and `demux_lite::seek_byte_from_moov`
+  (use `seek_point_from_moov(..).map(|p| p.min_byte)`) **(breaking)**.
+- `oasis-net`: `ftp::process_ftp_request` is crate-private **(breaking)**.
+- `oasis-audio`, `oasis-video`, `oasis-net` and `oasis-mcp` warn on undocumented public items.
 
 ### UI
 
