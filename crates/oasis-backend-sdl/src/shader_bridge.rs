@@ -54,11 +54,21 @@ impl ShaderBlitTarget for super::SdlBackend {
 }
 
 /// Minimum shader-time advance (seconds) between CPU shade passes.
-const SHADE_INTERVAL: f32 = 1.0 / 30.0;
+const SHADE_INTERVAL: f64 = 1.0 / 30.0;
 
 /// Reduced shade rate used while the wallpaper is partially covered by
 /// opaque surfaces (e.g. a large non-maximized window): ~12 Hz.
-const SHADE_INTERVAL_PARTIAL: f32 = 1.0 / 12.0;
+const SHADE_INTERVAL_PARTIAL: f64 = 1.0 / 12.0;
+
+/// The `f32` time the shader itself receives for unwrapped clock time
+/// `time` (seconds): wrapped to [`oasis_shader::TIME_WRAP_S`] *in `f64`*
+/// first. Converting the raw uptime to `f32` before wrapping would lose
+/// the sub-frame precision the wrap exists to keep (after ~3 days `f32`
+/// cannot resolve a 1/30 s step), and non-finite times map to 0.
+pub fn shader_time(time: f64) -> f32 {
+    let wrapped = time.rem_euclid(f64::from(oasis_shader::TIME_WRAP_S));
+    oasis_shader::wrap_time(wrapped as f32)
+}
 
 /// How much of the wallpaper the caller has determined to be visible.
 ///
@@ -86,8 +96,10 @@ pub enum Visibility {
 /// advanced by at least `interval` since the last shade; time moving
 /// backwards (e.g. a frame-counter reset) also forces a shade.
 struct ShadeThrottle {
-    /// Shader time of the last granted shade, `None` before the first.
-    last_shade_time: Option<f32>,
+    /// Clock time (unwrapped seconds) of the last granted shade, `None`
+    /// before the first. `f64`, so the 1/30 s comparison stays exact
+    /// however long the shell has been up.
+    last_shade_time: Option<f64>,
 }
 
 impl ShadeThrottle {
@@ -98,7 +110,7 @@ impl ShadeThrottle {
     }
 
     /// Whether a shade pass would run at `time`, without recording it.
-    fn would_shade(&self, time: f32, interval: f32) -> bool {
+    fn would_shade(&self, time: f64, interval: f64) -> bool {
         match self.last_shade_time {
             None => true,
             Some(last) => time < last || time - last >= interval,
@@ -107,7 +119,7 @@ impl ShadeThrottle {
 
     /// Whether a shade pass should run at `time`. Records `time` as the
     /// last shade when returning `true`.
-    fn should_shade(&mut self, time: f32, interval: f32) -> bool {
+    fn should_shade(&mut self, time: f64, interval: f64) -> bool {
         let shade = self.would_shade(time, interval);
         if shade {
             self.last_shade_time = Some(time);
@@ -155,7 +167,7 @@ impl SdlShaderBridge {
     }
 
     /// The shade interval for the current visibility state.
-    fn shade_interval(&self) -> f32 {
+    fn shade_interval(&self) -> f64 {
         match self.visibility {
             Visibility::PartiallyCovered => SHADE_INTERVAL_PARTIAL,
             Visibility::Visible | Visibility::Occluded => SHADE_INTERVAL,
@@ -177,7 +189,7 @@ impl SdlShaderBridge {
     /// which dirties the scene and forces a redraw on its own).
     /// (A shader *switch* also forces a shade, but that comes from a
     /// skin change, which dirties the scene and forces a redraw anyway.)
-    pub fn would_shade(&self, time: f32) -> bool {
+    pub fn would_shade(&self, time: f64) -> bool {
         if self.visibility == Visibility::Occluded {
             return false;
         }
@@ -216,11 +228,14 @@ impl SdlShaderBridge {
     /// seen, so neither the shade nor the blit is spent). Under
     /// [`Visibility::PartiallyCovered`] the shade rate drops to ~12 Hz
     /// while the per-frame blit continues.
+    ///
+    /// `time` is the unwrapped clock time in seconds (`f64`, e.g. from
+    /// `Duration::as_secs_f64`); the shader gets [`shader_time`] of it.
     pub fn render_and_blit<B: ShaderBlitTarget + ?Sized>(
         &mut self,
         backend: &mut B,
         shader_name: &str,
-        time: f32,
+        time: f64,
         params: &ShaderParams,
     ) {
         if self.visibility == Visibility::Occluded {
@@ -243,7 +258,9 @@ impl SdlShaderBridge {
         }
 
         if self.throttle.should_shade(time, self.shade_interval()) {
-            let pixels = self.renderer.render_shader(shader_name, time, params);
+            let pixels = self
+                .renderer
+                .render_shader(shader_name, shader_time(time), params);
             self.last_shader = shader_name.to_string();
 
             // Refresh the cached texture in place; on failure (e.g. a
@@ -301,6 +318,30 @@ impl SdlShaderBridge {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn shader_time_wraps_in_f64() {
+        let wrap = f64::from(oasis_shader::TIME_WRAP_S);
+        assert_eq!(shader_time(2.5), 2.5);
+        assert_eq!(shader_time(wrap + 2.5), 2.5);
+        assert_eq!(shader_time(f64::NAN), 0.0);
+        assert!((0.0..oasis_shader::TIME_WRAP_S).contains(&shader_time(-1.0)));
+        // A week of uptime: a 1/60 s step still moves the shader clock by
+        // ~1/60 s (converting to f32 before wrapping quantised it to
+        // ~0.06 s, so consecutive frames collapsed onto one value).
+        let week = 7.0 * 86_400.0 + 0.25;
+        let step = shader_time(week + 1.0 / 60.0) - shader_time(week);
+        assert!((step - 1.0 / 60.0).abs() < 1e-4, "step {step}");
+    }
+
+    #[test]
+    fn throttle_still_resolves_frames_after_days() {
+        let mut t = ShadeThrottle::new();
+        let day3 = 3.0 * 86_400.0;
+        assert!(t.should_shade(day3, SHADE_INTERVAL));
+        assert!(!t.should_shade(day3 + 1.0 / 60.0, SHADE_INTERVAL));
+        assert!(t.should_shade(day3 + 2.5 / 60.0, SHADE_INTERVAL));
+    }
 
     #[test]
     fn throttle_first_call_always_shades() {

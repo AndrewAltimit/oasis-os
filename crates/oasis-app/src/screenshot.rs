@@ -461,7 +461,7 @@ fn render_and_save_inner(
             .and_then(|s| s.parse().ok())
             .unwrap_or(30);
         if let (Some(br), Some(info)) = (bridge.as_mut(), shader_info.as_ref()) {
-            let time = fixed_frame as f32 / 60.0;
+            let time = f64::from(fixed_frame) / 60.0;
             br.render_and_blit(b, &info.name, time, &info.params);
         }
         if let Some(ref v) = vector
