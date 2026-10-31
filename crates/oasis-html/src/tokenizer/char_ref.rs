@@ -11,10 +11,40 @@ use super::types::{State, Token};
 // Named character reference table
 // ---------------------------------------------------------------------------
 
-/// Resolve a named character reference (without the leading `&`).
-/// `name` may include a trailing semicolon.
-pub(crate) fn resolve_named_ref(name: &str) -> Option<&'static str> {
-    crate::entities::lookup_entity(name.strip_suffix(';').unwrap_or(name))
+/// Match a named character reference (WHATWG §13.2.5.73). `name` is the
+/// run of ASCII alphanumerics after the `&`, with the `;` that ended it
+/// if any. Returns the replacement and how many bytes of `name` it used;
+/// the rest stays literal text.
+///
+/// With a `;` any known name matches. Without one only the legacy
+/// references do, as the longest such prefix (`&copy2024` is `©2024`,
+/// `&notin` without `;` is `¬in`); `&mdash` stays literal.
+pub(crate) fn match_named_ref(name: &str) -> Option<(&'static str, usize)> {
+    use crate::entities::{is_legacy_entity, lookup_entity};
+    if let Some(base) = name.strip_suffix(';')
+        && let Some(replacement) = lookup_entity(base)
+    {
+        return Some((replacement, name.len()));
+    }
+    let base = name.strip_suffix(';').unwrap_or(name);
+    // The longest legacy name is six characters.
+    (1..=base.len().min(6)).rev().find_map(|n| {
+        let prefix = base.get(..n)?;
+        if is_legacy_entity(prefix) {
+            lookup_entity(prefix).map(|r| (r, n))
+        } else {
+            None
+        }
+    })
+}
+
+/// [`match_named_ref`] as text: replacement plus the unused tail, or
+/// the literal `&name`.
+pub(crate) fn resolve_named_ref_text(name: &str) -> String {
+    match match_named_ref(name) {
+        Some((replacement, used)) => format!("{replacement}{}", &name[used..]),
+        None => format!("&{name}"),
+    }
 }
 
 /// The numeric-reference replacement for a C1 control code point
@@ -167,17 +197,25 @@ impl Tokenizer {
             }
         }
 
-        // In an attribute, a reference without `;` followed by `=` is
-        // left alone (§13.2.5.73, "historical reasons"): `?a=1&copy=2`
-        // is a query string, not `?a=1©=2`.
-        let historical_attr_case =
-            !name.ends_with(';') && self.return_state_is_attr() && self.peek() == Some('=');
-        if let Some(replacement) = resolve_named_ref(&name).filter(|_| !historical_attr_case) {
-            self.emit_char_ref_text(replacement);
-        } else {
-            let literal = format!("&{name}");
-            self.emit_char_ref_text(&literal);
-        }
+        // In an attribute, a reference without `;` followed by `=` or an
+        // alphanumeric is left alone (§13.2.5.73, "historical reasons"):
+        // `?a=1&copy=2` is a query string, not `?a=1©=2`.
+        let text = match match_named_ref(&name) {
+            Some((replacement, used)) => {
+                let rest = &name[used..];
+                let next = rest.chars().next().or(self.peek());
+                let historical_attr_case = !name[..used].ends_with(';')
+                    && self.return_state_is_attr()
+                    && next.is_some_and(|c| c == '=' || c.is_ascii_alphanumeric());
+                if historical_attr_case {
+                    format!("&{name}")
+                } else {
+                    format!("{replacement}{rest}")
+                }
+            },
+            None => format!("&{name}"),
+        };
+        self.emit_char_ref_text(&text);
 
         self.state = self.return_state;
         None

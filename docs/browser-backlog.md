@@ -56,6 +56,22 @@ small enough for a focused PR.
 - **SVG `currentColor` paints black.** `svg::parse_svg_color` has no
   inherited CSS `color` to resolve against.
 
+### Parsers
+
+- **No quirks mode.** The DOCTYPE is ignored, so `<p><table>` always
+  closes the paragraph (quirks documents keep the table inside it) and
+  no quirks-mode CSS rules apply.
+- **No "in template" insertion mode.** Template contents parse "in
+  body", so `<template><tr>` drops the row.
+- **The DOM stores no namespaces.** The tree builder tracks them while
+  parsing, but CSS (`svg|rect`) and JS (`namespaceURI`) cannot see them,
+  and an SVG `<title>` is indistinguishable from the HTML one.
+- **`innerHTML` uses the pre-tokenized path** (`js_dom/node_api.rs`), not
+  fragment parsing: states are chosen by tag name and there is no
+  context element.
+- **Named character references** come from a ~300-entry table (HTML 4
+  plus common HTML5 names), not the full 2 231-name HTML list.
+
 ### Network and security
 
 - `<meta http-equiv="Content-Security-Policy">` is ignored.

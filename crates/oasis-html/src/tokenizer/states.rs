@@ -4,7 +4,7 @@
 //! specification and is called from the main dispatch loop in `mod.rs`.
 
 use super::Tokenizer;
-use super::char_ref::resolve_named_ref;
+use super::char_ref::resolve_named_ref_text;
 use super::types::{State, TagBuilder, Token};
 
 /// What follows `<!` to open a CDATA section (case-sensitive).
@@ -861,9 +861,7 @@ impl Tokenizer {
                         break;
                     }
                 }
-                resolve_named_ref(&name)
-                    .map(String::from)
-                    .unwrap_or_else(|| format!("&{name}"))
+                resolve_named_ref_text(&name)
             },
             _ => "&".into(),
         }
