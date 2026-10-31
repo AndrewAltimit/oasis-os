@@ -170,9 +170,7 @@ pub mod internals {
         ParseOptions, TreeBuilder, set_tree_builder_progress_hook, set_tree_builder_raw_log_hook,
         set_tree_builder_yield_hook,
     };
-    pub use crate::layout::block::{
-        StyleCache, TextMeasurer, build_layout_tree, layout_block_incremental,
-    };
+    pub use crate::layout::block::{TextMeasurer, build_layout_tree, relayout_tree};
     pub use crate::layout::box_model::{BoxType, LayoutBox};
     pub use crate::layout::text_cache::CachingMeasurer;
     pub use crate::paint::PaintViewport;
@@ -1160,6 +1158,9 @@ impl BrowserWidget {
 #[cfg(test)]
 #[path = "browser_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+mod relayout_tests;
 
 #[cfg(all(test, native_net))]
 mod e2e_tests;

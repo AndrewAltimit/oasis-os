@@ -12,6 +12,7 @@ pub mod flex;
 pub mod float;
 pub mod grid;
 pub mod inline;
+pub(crate) mod intrinsic;
 pub mod multicol;
 pub mod positioning;
 pub mod table;

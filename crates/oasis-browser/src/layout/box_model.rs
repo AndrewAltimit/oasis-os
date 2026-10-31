@@ -325,6 +325,36 @@ pub struct LayoutBox {
     pub mask_image_data: Option<Arc<DecodedImage>>,
     /// `colspan` / `rowspan` of a table cell (`1 x 1` for other boxes).
     pub cell_span: CellSpan,
+    /// Sizes a flex / grid container imposes on this box, and its
+    /// cached intrinsic width (see `SizingState`).
+    pub sizing: SizingState,
+    /// The inline content `children` were built from, for a box that
+    /// established an inline formatting context: inline layout replaces
+    /// `children` with positioned line fragments (words with the spaces
+    /// at line ends trimmed, `<pre>` newlines consumed), and lays out
+    /// from this copy again, so a second layout of the same tree (a
+    /// column flex item at its flexed height, a relayout after images
+    /// load) matches the first instead of gluing words together.
+    pub inline_source: Option<Box<Vec<LayoutBox>>>,
+}
+
+/// Layout-time sizing state of a box that is not part of its style.
+///
+/// A flex container resolves an item's main size and a grid container
+/// stretches an item to its cell; both hand the result to the item's
+/// layout here instead of rewriting the item's `style.width` /
+/// `style.height`, so a later layout of the same tree (a relayout after
+/// images load, the item's own measuring pass) still sees the author's
+/// sizes.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct SizingState {
+    /// Content-box width the box must take, overriding `width`.
+    pub forced_width: Option<f32>,
+    /// Content-box height the box must take, overriding `height`.
+    pub forced_height: Option<f32>,
+    /// Cached max-content content-box width and the layout pass it was
+    /// measured in (`layout::intrinsic`); stale in any other pass.
+    pub max_content: Option<(u32, f32)>,
 }
 
 impl LayoutBox {
@@ -342,7 +372,36 @@ impl LayoutBox {
             background_texture_size: None,
             mask_image_data: None,
             cell_span: CellSpan::default(),
+            sizing: SizingState::default(),
+            inline_source: None,
         }
+    }
+
+    /// The box's definite content-box height, if it has one: a size its
+    /// flex container forced on it, or an explicit `px` height (resolved
+    /// for `box-sizing`; `dimensions` must already hold its edges).
+    pub(crate) fn definite_content_height(&self) -> Option<f32> {
+        if let Some(h) = self.sizing.forced_height {
+            return Some(h);
+        }
+        let crate::css::values::Dimension::Px(h) = self.style.height else {
+            return None;
+        };
+        let d = &self.dimensions;
+        Some(
+            if self.style.box_sizing == crate::css::values::BoxSizing::BorderBox {
+                (h - d.padding.vertical() - d.border.vertical()).max(0.0)
+            } else {
+                h.max(0.0)
+            },
+        )
+    }
+
+    /// Whether the box's height is `auto` and not forced by its
+    /// container.
+    pub(crate) fn has_auto_height(&self) -> bool {
+        self.sizing.forced_height.is_none()
+            && matches!(self.style.height, crate::css::values::Dimension::Auto)
     }
 
     /// Saturate every box's geometry to `±MAX_LAYOUT_PX` (and `NaN` to

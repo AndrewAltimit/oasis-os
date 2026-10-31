@@ -41,12 +41,12 @@ use crate::css::values::{
 /// flex item sizes, distributes free space, and positions children
 /// according to the container's flex properties.
 ///
-/// Each item is laid out at most twice: once to measure its base size
-/// and, only when flexing changed its main size, once more at the
-/// resolved size. Positioning then translates the laid-out subtree, so
-/// nested flex containers cost a bounded number of layouts per level
-/// (laying every item out again at its final position doubled the work
-/// at each nesting level: 2^depth).
+/// A row item is laid out once, at its resolved size: base sizes come
+/// from the flex basis or the item's cached max-content width
+/// (`layout::intrinsic`), not from a measuring layout. A column item is
+/// laid out once more only when flexing changed its height. Positioning
+/// then translates the laid-out subtree. Measuring by layout made each
+/// nesting level lay its subtree out again (2^depth, later ~depth^3).
 pub fn layout_flex(container: &mut LayoutBox, _containing_width: f32, measurer: &dyn TextMeasurer) {
     let direction = container.style.flex_direction;
     let justify = container.style.justify_content;
@@ -64,7 +64,7 @@ pub fn layout_flex(container: &mut LayoutBox, _containing_width: f32, measurer: 
         direction,
         FlexDirection::RowReverse | FlexDirection::ColumnReverse
     );
-    let definite_height = definite_content_height(container);
+    let definite_height = container.definite_content_height();
     // The main size free space is measured against: the content width
     // for rows; for columns only an explicit height (otherwise the
     // container is as tall as its items and there is none to share).
@@ -75,32 +75,43 @@ pub fn layout_flex(container: &mut LayoutBox, _containing_width: f32, measurer: 
     };
 
     // -- Phase 1: Resolve each child's base (hypothetical) size ----------
+    // Row items are not laid out here: a definite basis is the base
+    // size, and a content-sized item measures its max-content width
+    // (clamped to the space available: fit-content) without layout.
+    // Column items without a definite basis are laid out once for their
+    // height (`laid_out`), and again in phase 4a only if flexing
+    // changed it.
     let mut items: Vec<FlexItem> = Vec::with_capacity(container.children.len());
+    let mut laid_out = vec![false; container.children.len()];
     for (i, child) in container.children.iter_mut().enumerate() {
+        child.sizing.forced_width = None;
+        child.sizing.forced_height = None;
         resolve_edge_sizes(child, content_width);
         child.dimensions.content.x = 0.0;
         child.dimensions.content.y = 0.0;
-        let main = match (is_row, resolve_flex_basis(child, is_row, content_width)) {
-            (true, Some(basis)) => {
-                layout_block(child, basis, measurer);
-                child.dimensions.margin_box().width
+        let d = &child.dimensions;
+        let (edges, margins) = if is_row {
+            (
+                d.padding.horizontal() + d.border.horizontal(),
+                d.margin.horizontal(),
+            )
+        } else {
+            (
+                d.padding.vertical() + d.border.vertical(),
+                d.margin.vertical(),
+            )
+        };
+        let basis = resolve_flex_basis(child, is_row, content_width, definite_height, edges);
+        let main = match basis {
+            Some(basis) => clamp_main_size(child, is_row, basis) + edges + margins,
+            None if is_row => {
+                let available = (content_width - edges - margins).max(0.0);
+                let fit = super::intrinsic::max_content_width(child, measurer).min(available);
+                fit + edges + margins
             },
-            (true, None) => {
-                // Content-sized: fit-content, i.e. the item's extent when
-                // laid out at the available width.
+            None => {
                 layout_block(child, content_width, measurer);
-                let fit = if child.children.is_empty()
-                    && !matches!(child.box_type, BoxType::Replaced(_))
-                {
-                    0.0
-                } else {
-                    super::block::fit_content_width(child)
-                };
-                let d = &child.dimensions;
-                fit + d.padding.horizontal() + d.border.horizontal() + d.margin.horizontal()
-            },
-            (false, _) => {
-                layout_block(child, content_width, measurer);
+                laid_out[i] = true;
                 child.dimensions.margin_box().height
             },
         };
@@ -133,15 +144,27 @@ pub fn layout_flex(container: &mut LayoutBox, _containing_width: f32, measurer: 
     }
 
     // -- Phase 4a: Lay items out at their resolved main size -------------
+    // The resolved size goes in as a forced content-box size: the
+    // item's own percentages still resolve against this container.
     for (_, line) in &resolved_lines {
         for &(child_idx, item_main) in line {
-            relayout_at_main_size(
-                &mut container.children[child_idx],
-                is_row,
-                item_main,
-                content_width,
-                measurer,
-            );
+            let child = &mut container.children[child_idx];
+            let d = &child.dimensions;
+            if is_row {
+                let edges = d.padding.horizontal() + d.border.horizontal();
+                let new_w = (item_main - d.margin.horizontal() - edges).max(0.0);
+                child.sizing.forced_width = Some(new_w);
+            } else {
+                let edges = d.padding.vertical() + d.border.vertical();
+                let new_h = (item_main - d.margin.vertical() - edges).max(0.0);
+                if laid_out[child_idx] && (new_h - d.content.height).abs() <= 0.01 {
+                    continue;
+                }
+                child.sizing.forced_height = Some(new_h);
+            }
+            child.dimensions.content.x = 0.0;
+            child.dimensions.content.y = 0.0;
+            layout_block(child, content_width, measurer);
         }
     }
 
@@ -263,7 +286,7 @@ pub fn layout_flex(container: &mut LayoutBox, _containing_width: f32, measurer: 
     // Only an auto height is content-sized: rows stack their lines'
     // cross sizes, columns are as tall as their items. (The caller
     // resolves explicit heights.)
-    if matches!(container.style.height, Dimension::Auto) {
+    if container.has_auto_height() {
         container.dimensions.content.height = if is_row {
             total_line_cross + total_line_gaps
         } else {
@@ -286,20 +309,6 @@ struct FlexItem {
     main: f32,
 }
 
-/// The container's content height when it is definite (an explicit
-/// `px` height, resolved for `box-sizing`), else `None`.
-fn definite_content_height(container: &LayoutBox) -> Option<f32> {
-    let Dimension::Px(h) = container.style.height else {
-        return None;
-    };
-    let d = &container.dimensions;
-    Some(if container.style.box_sizing == BoxSizing::BorderBox {
-        (h - d.padding.vertical() - d.border.vertical()).max(0.0)
-    } else {
-        h.max(0.0)
-    })
-}
-
 /// Sum of a line's hypothetical outer main sizes plus its gaps.
 fn line_outer_main(line: &[&FlexItem], gap: f32) -> f32 {
     let gaps = if line.len() > 1 {
@@ -310,57 +319,61 @@ fn line_outer_main(line: &[&FlexItem], gap: f32) -> f32 {
     line.iter().map(|item| item.main).sum::<f32>() + gaps
 }
 
-/// Lay `child` out again, at its origin, when its resolved outer main
-/// size differs from the one phase 1 measured. The size goes in as an
-/// explicit `width` / `height` (in the item's `box-sizing`).
-fn relayout_at_main_size(
-    child: &mut LayoutBox,
+/// Resolve an item's flex basis as a content-box main size: `Some(px)`
+/// for a definite `flex-basis` (or `width` / `height` fallback, in the
+/// item's `box-sizing`; `edges` is its main-axis padding + border),
+/// `None` when the item is content-sized.
+///
+/// Percentages resolve against the container's main size. A column
+/// container without a definite height has none, and its items are
+/// content-sized whatever their basis: it is as tall as its items'
+/// content, which an explicit `flex-basis: 0` must not collapse.
+fn resolve_flex_basis(
+    child: &LayoutBox,
     is_row: bool,
-    outer_main: f32,
     content_width: f32,
-    measurer: &dyn TextMeasurer,
-) {
-    let d = &child.dimensions;
-    let border_box = child.style.box_sizing == BoxSizing::BorderBox;
-    if is_row {
-        let edges = d.padding.horizontal() + d.border.horizontal();
-        let new_w = (outer_main - d.margin.horizontal() - edges).max(0.0);
-        if (new_w - d.content.width).abs() <= 0.01 {
-            return;
-        }
-        child.style.width = Dimension::Px(if border_box { new_w + edges } else { new_w });
-        child.dimensions.content.x = 0.0;
-        child.dimensions.content.y = 0.0;
-        layout_block(child, new_w, measurer);
+    definite_height: Option<f32>,
+    edges: f32,
+) -> Option<f32> {
+    let main_size = if is_row {
+        content_width
     } else {
-        let edges = d.padding.vertical() + d.border.vertical();
-        let new_h = (outer_main - d.margin.vertical() - edges).max(0.0);
-        if (new_h - d.content.height).abs() <= 0.01 {
-            return;
-        }
-        child.style.height = Dimension::Px(if border_box { new_h + edges } else { new_h });
-        child.dimensions.content.x = 0.0;
-        child.dimensions.content.y = 0.0;
-        layout_block(child, content_width, measurer);
-    }
-}
-
-/// Resolve the flex basis for an item: `Some(px)` for a definite
-/// `flex-basis` (or `width` / `height` fallback), `None` when the item
-/// is content-sized.
-fn resolve_flex_basis(child: &LayoutBox, is_row: bool, containing_width: f32) -> Option<f32> {
+        definite_height?
+    };
     let definite = |dim: Dimension| match dim {
         Dimension::Px(px) => Some(px),
-        Dimension::Percent(pct) => Some(containing_width * (pct / 100.0)),
+        Dimension::Percent(pct) => Some(main_size * (pct / 100.0)),
         _ => None,
     };
-    definite(child.style.flex_basis).or_else(|| {
+    let declared = definite(child.style.flex_basis).or_else(|| {
         definite(if is_row {
             child.style.width
         } else {
             child.style.height
         })
+    })?;
+    Some(if child.style.box_sizing == BoxSizing::BorderBox {
+        (declared - edges).max(0.0)
+    } else {
+        declared.max(0.0)
     })
+}
+
+/// Clamp a content-box main size by the item's `min-` / `max-` size.
+fn clamp_main_size(child: &LayoutBox, is_row: bool, size: f32) -> f32 {
+    let (min, max) = if is_row {
+        (child.style.min_width, child.style.max_width)
+    } else {
+        (child.style.min_height, child.style.max_height)
+    };
+    let mut size = size;
+    if let Dimension::Px(max) = max {
+        size = size.min(max);
+    }
+    if let Dimension::Px(min) = min {
+        size = size.max(min);
+    }
+    size
 }
 
 /// Split flex items into lines based on wrap mode and available main size.

@@ -306,21 +306,39 @@ directly.
 - **Flexbox** (`layout/flex.rs`): direction, wrap, `order`, grow /
   shrink, `flex-basis` (or `width` / `height`), `gap`, `justify-content`,
   `align-items` / `align-self`, `align-content` and main-axis auto
-  margins. Content-sized items (`width: auto`, no basis) use the same
-  fit-content measurement as floats. Columns are as tall as their items
-  unless the container has a definite height, which `flex-grow` then
-  fills; a single-line container gives its line the container's cross
-  size. Inline children (a bare text run, `<a>` / `<span>`) are wrapped
-  into anonymous items that carry their flex properties; whitespace-only
-  runs are dropped. An item is laid out again only when flexing changed
-  its size, then translated into place, so nesting stays linear.
+  margins. A definite basis (`px`, or `%` of the container's main size,
+  in the item's `box-sizing`) is the base size as is; a content-sized
+  item (`width: auto`, no basis) takes its max-content width clamped to
+  the space available (fit-content), measured from the box tree without
+  a layout (`layout/intrinsic.rs`, cached per box for one layout pass),
+  so block children no longer count as full width. Columns are as tall
+  as their items unless the container has a definite height, which
+  `flex-grow` then fills and against which a column's `flex-basis`
+  resolves; a single-line container gives its line the container's
+  cross size. Inline children (a bare text run, `<a>` / `<span>`) are
+  wrapped into anonymous items that carry their flex properties;
+  whitespace-only runs are dropped. A row item is laid out once, at its
+  resolved size (a column item again only when flexing changed its
+  height), then translated into place: nesting is linear in depth. The
+  resolved size reaches the item through `LayoutBox::sizing`, never its
+  style, so a relayout sees the author's sizes.
 - **CSS Grid.** Paren-aware track lists (`repeat(3, minmax(0, 1fr))`,
   `repeat(2, 1fr 2fr)`, `%` / `em` / `min-content` / `max-content` /
   `fit-content()` tracks), `repeat(auto-fill | auto-fit, ...)` resolved
   from the container width (auto-fit collapses empty tracks), line
   placement with `span`, negative lines and `a / b` syntax, named
-  areas, and row/column auto-flow including `dense`. Subgrid is not
-  supported. See `crates/oasis-browser/docs/layout.md`.
+  areas, and row/column auto-flow including `dense`. Intrinsic column
+  tracks size from the items' max-content contributions (min-content is
+  not distinguished). Subgrid is not supported. See
+  `crates/oasis-browser/docs/layout.md`.
+- **Relayout.** `layout::block::relayout_tree` lays a built tree out
+  again in place (after images decode, keeping canvas state and
+  textures) with exactly the geometry of a fresh build: inline layout
+  keeps the content it was built from (`LayoutBox::inline_source`)
+  instead of re-reading its own line fragments, and a differential test
+  (`src/relayout_tests.rs`) checks every corpus fixture after a
+  same-width relayout, a detour through another width and an image-size
+  change. There is no partial (dirty-subtree) relayout.
 - **Inter-element whitespace.** A text node containing only whitespace
   between two inline siblings (`<a>x</a>\n<a>y</a>`) emits a single
   `space_width` fragment into the line flow, per CSS 2.1 §16.6.
@@ -338,9 +356,11 @@ directly.
   fight over the remainder. Replaced children (`<input>`, `<img>`,
   etc.) contribute their intrinsic dimensions to cell preferred
   widths via `replaced_dimensions` instead of collapsing the cell
-  to 0 px. A cell with only inline / replaced children is wrapped
-  in an anonymous block so it gets a real inline formatting
-  context.
+  to 0 px. A cell's content is laid out as a block flow (children
+  stack, margins collapse, floats apply; its inline runs are wrapped in
+  anonymous blocks that take no padding of their own). Whitespace-only
+  text directly inside a table, row group or row is not rendered, even
+  when the table sits in inline content.
 - **Presentational HTML attributes → CSS:** `bgcolor`, `align`,
   `valign`, `nowrap`, `cellspacing`, `cellpadding` (table-level,
   propagated to descendant cells via an ancestor walk),
@@ -418,7 +438,9 @@ directly.
   `clearRect` covering the canvas drops everything before it (the usual
   clear-and-redraw animation loop stays constant-size), and commands
   (16 384), path points (65 536 per path, 2^20 in total) and `save()`
-  depth (1024) are capped.
+  depth (1024) are capped. A full list drops further commands and sets
+  `CanvasState::overflowed` until the next full clear, so what is on
+  screen stays put.
 - **SVG** (`svg/`) — `<rect>`, `<circle>`, `<ellipse>`, `<line>`,
   `<polygon>`, `<polyline>`, `<path>` (all commands, Bezier flattening)
   with fill-rule / linecap / linejoin; `<g>` transform composition and
@@ -483,10 +505,14 @@ directly.
   `font-style` / `font-display` / `unicode-range` descriptors.
 - `FontFamily` as ordered name stack with generic fallbacks.
 - `fontdue` TTF/OTF rasterizer behind the `web-fonts` feature.
-- `FontRegistry` with CSS font matching, glyph texture cache for
-  rendering, lazy font loading on first tick. `FontAwareTextMeasurer`
-  exists but layout does not use it yet: web-font text is measured with
-  bitmap-font metrics and drawn with the font's own advances.
+- `FontRegistry` with CSS font matching and lazy font loading on first
+  tick. Layout measures each text run in the face it is painted in:
+  once faces have loaded, the widget's layout measurer is a
+  `FontAwareTextMeasurer`, which answers `measure_text_font` for a run's
+  `web_font_id` from the registry and falls back to the bitmap font.
+- Glyph texture cache (4096 textures, keyed by font, glyph, size and
+  colour): when full, the least recently drawn eighth is evicted, so an
+  animated text colour no longer flushes every cached glyph at once.
 
 ## JavaScript DOM bindings
 

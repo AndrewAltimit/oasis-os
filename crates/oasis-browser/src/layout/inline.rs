@@ -27,8 +27,14 @@ pub fn layout_inline(parent: &mut LayoutBox, measurer: &dyn TextMeasurer) {
     let available_width = parent.dimensions.content.width;
     let text_align = parent.style.text_align;
 
-    // Collect all inline fragments from the children.
-    let fragments = collect_inline_fragments(&parent.children, available_width, measurer);
+    // Collect all inline fragments from the original inline content
+    // (kept across layouts: `children` becomes line fragments below).
+    let source = match parent.inline_source.take() {
+        Some(source) => *source,
+        None => std::mem::take(&mut parent.children),
+    };
+    let fragments = collect_inline_fragments(&source, available_width, measurer);
+    parent.inline_source = Some(Box::new(source));
 
     // Resolve `TextDirection::Auto` by detecting the dominant
     // direction from the first text fragment's content.

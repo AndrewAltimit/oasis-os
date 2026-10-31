@@ -130,6 +130,9 @@ pub struct CanvasState {
     state_stack: Vec<CanvasSavedState>,
     /// Path points held by `commands` (pushed via [`Self::push_command`]).
     held_points: usize,
+    /// Commands were dropped because the list hit its cap (see
+    /// [`Self::push_command`]); reset by a full-canvas `clearRect`.
+    pub overflowed: bool,
 }
 
 impl CanvasState {
@@ -147,6 +150,7 @@ impl CanvasState {
             path_start: None,
             state_stack: Vec::new(),
             held_points: 0,
+            overflowed: false,
         }
     }
 
@@ -157,7 +161,10 @@ impl CanvasState {
     /// whole canvas drops everything before it (the standard animation
     /// loop, `clearRect` + redraw per frame, used to grow it forever),
     /// and past [`MAX_CANVAS_COMMANDS`] commands or
-    /// [`MAX_CANVAS_POINTS`] path points the oldest half is dropped.
+    /// [`MAX_CANVAS_POINTS`] path points further commands are dropped
+    /// and [`Self::overflowed`] is set. Dropping the newest keeps what is
+    /// on screen stable; dropping the oldest half (as this once did)
+    /// erased the start of the drawing and the state it set up.
     pub fn push_command(&mut self, cmd: CanvasCommand) {
         if let CanvasCommand::ClearRect { x, y, w, h } = cmd
             && x <= 0.0
@@ -167,19 +174,25 @@ impl CanvasState {
         {
             self.commands.clear();
             self.held_points = 0;
+            self.overflowed = false;
             return;
         }
-        self.held_points += cmd.point_count();
-        self.commands.push(cmd);
-        if self.commands.len() > MAX_CANVAS_COMMANDS || self.held_points > MAX_CANVAS_POINTS {
-            let keep_from = self.commands.len() / 2;
-            let dropped: usize = self
-                .commands
-                .drain(..keep_from)
-                .map(|c| c.point_count())
-                .sum();
-            self.held_points -= dropped;
+        let points = cmd.point_count();
+        if self.commands.len() >= MAX_CANVAS_COMMANDS
+            || self.held_points.saturating_add(points) > MAX_CANVAS_POINTS
+        {
+            if !self.overflowed {
+                log::warn!(
+                    "canvas command list full ({} commands, {} points): dropping new commands",
+                    self.commands.len(),
+                    self.held_points
+                );
+            }
+            self.overflowed = true;
+            return;
         }
+        self.held_points += points;
+        self.commands.push(cmd);
     }
 
     /// Append a point to the current path, up to the SVG path point
@@ -487,6 +500,7 @@ mod tests {
             });
         }
         assert!(cs.commands.len() <= MAX_CANVAS_COMMANDS);
+        assert!(cs.overflowed);
         for i in 0..200_000 {
             cs.push_path_point((i as f32, 0.0));
         }
@@ -503,5 +517,43 @@ mod tests {
             cs.save();
         }
         assert_eq!(cs.state_stack.len(), MAX_SAVE_DEPTH);
+    }
+
+    /// Regression: past the cap the oldest half of the commands was
+    /// dropped, so a long drawing lost its beginning (and the state it
+    /// set up) while it was being drawn. Now the first commands stay and
+    /// new ones are dropped until a full clear starts over.
+    #[test]
+    fn full_command_list_keeps_the_oldest_commands() {
+        let mut cs = CanvasState::new(10, 10);
+        let rect = |x: f32| CanvasCommand::FillRect {
+            x,
+            y: 0.0,
+            w: 1.0,
+            h: 1.0,
+            color: Color::BLACK,
+        };
+        for i in 0..MAX_CANVAS_COMMANDS + 10 {
+            cs.push_command(rect(i as f32));
+        }
+        assert_eq!(cs.commands.len(), MAX_CANVAS_COMMANDS);
+        assert!(matches!(cs.commands[0], CanvasCommand::FillRect { x, .. } if x == 0.0));
+        let last = MAX_CANVAS_COMMANDS as f32 - 1.0;
+        assert!(matches!(
+            cs.commands.last(),
+            Some(CanvasCommand::FillRect { x, .. }) if *x == last
+        ));
+        assert!(cs.overflowed);
+
+        cs.push_command(CanvasCommand::ClearRect {
+            x: 0.0,
+            y: 0.0,
+            w: 10.0,
+            h: 10.0,
+        });
+        assert!(cs.commands.is_empty());
+        assert!(!cs.overflowed, "a full clear starts over");
+        cs.push_command(rect(1.0));
+        assert_eq!(cs.commands.len(), 1);
     }
 }

@@ -1151,8 +1151,8 @@ mod tests {
         assert_eq!(jpeg_scale_divisor(2000, 1000, 1024), Some(2));
         assert_eq!(jpeg_scale_divisor(4000, 3000, 1024), Some(4));
         // 1/8 still too big for max_dimension but within the memory
-        // bound: decode at 1/8 and bilinear the rest.
-        assert_eq!(jpeg_scale_divisor(16_000, 100, 256), Some(8));
+        // bound (PSP's too): decode at 1/8 and bilinear the rest.
+        assert_eq!(jpeg_scale_divisor(8_000, 100, 256), Some(8));
         assert_eq!(jpeg_scale_divisor(u32::from(u16::MAX), 10, 64), None);
     }
 

@@ -27,7 +27,7 @@ pub fn build_layout_tree(
     styles: &[Option<ComputedStyle>],
     measurer: &dyn TextMeasurer,
     viewport_width: f32,
-    _viewport_height: f32,
+    viewport_height: f32,
     base_url: Option<&str>,
     image_info: &HashMap<String, (u32, u32)>,
 ) -> LayoutBox {
@@ -48,10 +48,25 @@ pub fn build_layout_tree(
     let child_boxes = build_children(doc, &children, styles, base_url, image_info);
     root.children = wrap_anonymous(child_boxes, &root.style);
 
+    relayout_tree(&mut root, measurer, viewport_width, viewport_height);
+    root
+}
+
+/// Lay out a tree built by [`build_layout_tree`] again, in place, for a
+/// `viewport_width` x `viewport_height` viewport: after its content
+/// changed (decoded image sizes) or for a new viewport. The geometry is
+/// the same as building the tree afresh; boxes, their canvas state and
+/// textures are kept.
+pub fn relayout_tree(
+    root: &mut LayoutBox,
+    measurer: &dyn TextMeasurer,
+    viewport_width: f32,
+    viewport_height: f32,
+) {
     // Layout from the root.
     root.dimensions.content.x = 0.0;
     root.dimensions.content.y = 0.0;
-    layout_block_with_height(&mut root, viewport_width, Some(_viewport_height), measurer);
+    layout_block_with_height(root, viewport_width, Some(viewport_height), measurer);
 
     // Shift root content origin to include root's own box-model edges.
     // layout_block_children no longer adds parent padding to children,
@@ -60,15 +75,13 @@ pub fn build_layout_tree(
         root.dimensions.margin.left + root.dimensions.border.left + root.dimensions.padding.left;
     let dy = root.dimensions.margin.top + root.dimensions.border.top + root.dimensions.padding.top;
     if dx != 0.0 || dy != 0.0 {
-        offset_descendant(&mut root, dx, dy);
+        offset_descendant(root, dx, dy);
     }
 
     // Apply CSS positioning (relative/absolute/fixed) as a post-pass.
-    let viewport_rect = Rect::new(0.0, 0.0, viewport_width, _viewport_height);
-    apply_positioning(&mut root, viewport_rect);
+    let viewport_rect = Rect::new(0.0, 0.0, viewport_width, viewport_height);
+    apply_positioning(root, viewport_rect);
     root.clamp_geometry();
-
-    root
 }
 
 /// Recursively build child layout boxes for a list of DOM node IDs.
@@ -330,7 +343,7 @@ fn begin_box_for_node(
             // them when they're between inline siblings so that
             // `<em>hello</em> <strong>world</strong>` preserves
             // the space.
-            if text.trim().is_empty() && block_siblings {
+            if text.trim().is_empty() && (block_siblings || in_table_structure(doc, node.parent)) {
                 return BoxStart::Skip;
             }
             let style = find_inherited_style(doc, node_id, styles);
@@ -419,32 +432,8 @@ fn replaced_content(
 ) -> Option<ReplacedContent> {
     match elem.tag {
         TagName::Img => {
-            let mut width = elem
-                .get_attribute("width")
-                .and_then(|v| v.parse::<u32>().ok())
-                .unwrap_or(0);
-            let mut height = elem
-                .get_attribute("height")
-                .and_then(|v| v.parse::<u32>().ok())
-                .unwrap_or(0);
+            let (width, height) = image_size(elem, base_url, image_info);
             let alt = elem.get_attribute("alt").unwrap_or("").to_string();
-
-            // Use intrinsic dimensions from decoded image if HTML attrs
-            // are missing.
-            if let Some(src) = elem.src() {
-                let resolved = resolve_img_src(base_url, src);
-                if let Some(&(iw, ih)) = image_info.get(&resolved) {
-                    if width == 0 && height == 0 {
-                        width = iw;
-                        height = ih;
-                    } else if width == 0 && ih > 0 {
-                        width = (iw as f32 * height as f32 / ih as f32) as u32;
-                    } else if height == 0 && iw > 0 {
-                        height = (ih as f32 * width as f32 / iw as f32) as u32;
-                    }
-                }
-            }
-
             Some(ReplacedContent::Image {
                 width,
                 height,
@@ -505,6 +494,36 @@ fn replaced_content(
         // function is called, so child text content is used for the label.
         _ => None,
     }
+}
+
+/// The size an `<img>` lays out at: its `width` / `height` attributes,
+/// with the missing ones taken from the decoded image in `image_info`
+/// (scaled to keep its aspect ratio when one attribute is given).
+pub(crate) fn image_size(
+    elem: &ElementData,
+    base_url: Option<&str>,
+    image_info: &HashMap<String, (u32, u32)>,
+) -> (u32, u32) {
+    let attr = |name| {
+        elem.get_attribute(name)
+            .and_then(|v| v.parse::<u32>().ok())
+            .unwrap_or(0)
+    };
+    let (mut width, mut height) = (attr("width"), attr("height"));
+    if let Some(src) = elem.src() {
+        let resolved = resolve_img_src(base_url, src);
+        if let Some(&(iw, ih)) = image_info.get(&resolved) {
+            if width == 0 && height == 0 {
+                width = iw;
+                height = ih;
+            } else if width == 0 && ih > 0 {
+                width = (iw as f32 * height as f32 / ih as f32) as u32;
+            } else if height == 0 && iw > 0 {
+                height = (ih as f32 * width as f32 / iw as f32) as u32;
+            }
+        }
+    }
+    (width, height)
 }
 
 /// Find the display label for a `<select>` element.
@@ -616,6 +635,27 @@ fn is_block_tag(tag: &TagName) -> bool {
             | TagName::Details
             | TagName::Summary
     )
+}
+
+/// Whether `parent` is a table, row group, row or column group, whose
+/// whitespace-only text children are not rendered (CSS 2.1 §17.2.1):
+/// the newlines between `<tr>` / `<td>` tags drew as spaces when the
+/// table ended up in inline content.
+fn in_table_structure(doc: &Document, parent: Option<NodeId>) -> bool {
+    parent.is_some_and(|p| {
+        matches!(
+            &doc.get(p).kind,
+            NodeKind::Element(e) if matches!(
+                e.tag,
+                TagName::Table
+                    | TagName::Thead
+                    | TagName::Tbody
+                    | TagName::Tfoot
+                    | TagName::Tr
+                    | TagName::Colgroup
+            )
+        )
+    })
 }
 
 /// Walk up the DOM to find an inherited style for a text node.
@@ -781,5 +821,7 @@ fn make_anonymous_block(children: Vec<LayoutBox>, parent_style: &ComputedStyle) 
         background_texture_size: None,
         mask_image_data: None,
         cell_span: CellSpan::default(),
+        sizing: SizingState::default(),
+        inline_source: None,
     }
 }

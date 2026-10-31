@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# ci-feature-clippy.sh -- check and lint the supported non-default feature sets.
+# ci-feature-clippy.sh -- check and lint the supported non-default feature sets
+# (and run the test suites whose feature set changes what they test).
 #
 # Usage:
 #   scripts/ci-feature-clippy.sh          # run every check (inside rust-ci)
@@ -51,12 +52,22 @@ CLIPPIES=(
     "-p oasis-backend-wasm --no-default-features"
 )
 
+# Test suites whose cfg differs from the workspace test run. The PSP
+# browser build (no `native_net`, smaller image / DOM caps) runs on the
+# host; its tests had rotted unseen (six failed) before this ran in CI.
+TESTS=(
+    "-p oasis-browser --no-default-features --features psp,javascript"
+)
+
 commands=()
 for args in "${CHECKS[@]}"; do
     commands+=("cargo $args")
 done
 for args in "${CLIPPIES[@]}"; do
     commands+=("cargo clippy --all-targets $args -- -D warnings")
+done
+for args in "${TESTS[@]}"; do
+    commands+=("cargo test $args")
 done
 
 if [ "${1:-}" = "--list" ]; then

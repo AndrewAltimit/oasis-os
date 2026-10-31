@@ -33,14 +33,17 @@
 //! within the BFC. Subsequent block boxes' content area shrinks to
 //! avoid overlap, while `clear` forces the cursor past earlier floats.
 //!
-//! ## Incremental layout
+//! ## Relayout
 //!
-//! Each [`LayoutBox`] carries a `dirty` flag. When only a subtree
-//! changes, callers can mark individual boxes dirty via
-//! [`LayoutBox::mark_dirty`] and then call [`layout_block_incremental`]
-//! to relayout only the dirty subtree while preserving previously
-//! computed dimensions for clean branches. A [`StyleCache`] avoids
-//! redundant style computations during incremental passes.
+//! A built tree can be laid out again in place with [`relayout_tree`]
+//! (the browser does after images decode, to keep canvas state and
+//! textures). That is a full layout of the existing boxes, and gives
+//! the same geometry as building the tree afresh: layout keeps nothing
+//! between passes that it does not recompute (inline content is laid
+//! out from [`LayoutBox::inline_source`], flex / grid sizes go through
+//! [`SizingState`] rather than the style). There is no partial,
+//! dirty-subtree relayout: the one that existed skipped repositioning
+//! clean subtrees, floats and `clear`, and diverged from a full layout.
 
 mod tree_builder;
 
@@ -48,7 +51,8 @@ mod tree_builder;
 mod tests;
 
 // Re-export public API so external paths don't change.
-pub use tree_builder::build_layout_tree;
+pub(crate) use tree_builder::image_size;
+pub use tree_builder::{build_layout_tree, relayout_tree};
 
 use super::box_model::*;
 use super::flex::layout_flex;
@@ -60,7 +64,6 @@ use super::table::layout_table;
 use crate::css::values::{
     BoxSizing, Clear, ComputedStyle, Dimension, Display, Float, Overflow, Position,
 };
-use crate::html::dom::NodeId;
 
 // -------------------------------------------------------------------
 // TextMeasurer trait
@@ -87,346 +90,14 @@ pub trait TextMeasurer {
 }
 
 // -------------------------------------------------------------------
-// Style cache
-// -------------------------------------------------------------------
-
-/// Cache of computed edge sizes (padding/border/margin) keyed by DOM
-/// node ID. Since `NodeId` is `usize`, a `Vec<Option<...>>` provides
-/// O(1) lookup without hashing overhead.
-#[derive(Debug, Default)]
-pub struct StyleCache {
-    edges: Vec<Option<CachedEdges>>,
-}
-
-/// Cached resolved edge sizes for a single layout box.
-#[derive(Debug, Clone)]
-struct CachedEdges {
-    padding: EdgeSizes,
-    border: EdgeSizes,
-    margin: EdgeSizes,
-}
-
-impl StyleCache {
-    /// Create an empty style cache.
-    pub fn new() -> Self {
-        Self { edges: Vec::new() }
-    }
-
-    /// Store resolved edge sizes for a node.
-    pub fn insert_edges(
-        &mut self,
-        node: NodeId,
-        padding: EdgeSizes,
-        border: EdgeSizes,
-        margin: EdgeSizes,
-    ) {
-        if node >= self.edges.len() {
-            self.edges.resize(node + 1, None);
-        }
-        self.edges[node] = Some(CachedEdges {
-            padding,
-            border,
-            margin,
-        });
-    }
-
-    /// Retrieve cached edges for a node. Returns `None` on cache miss.
-    pub fn get_edges(&self, node: NodeId) -> Option<(&EdgeSizes, &EdgeSizes, &EdgeSizes)> {
-        self.edges
-            .get(node)
-            .and_then(|slot| slot.as_ref())
-            .map(|c| (&c.padding, &c.border, &c.margin))
-    }
-
-    /// Number of cached entries (useful for benchmarking).
-    pub fn len(&self) -> usize {
-        self.edges.iter().filter(|e| e.is_some()).count()
-    }
-
-    /// Whether the cache is empty.
-    pub fn is_empty(&self) -> bool {
-        self.edges.iter().all(|e| e.is_none())
-    }
-
-    /// Clear all cached entries.
-    pub fn clear(&mut self) {
-        self.edges.clear();
-    }
-}
-
-// -------------------------------------------------------------------
-// Incremental layout
-// -------------------------------------------------------------------
-
-/// Perform incremental layout on a previously-built layout tree.
-///
-/// Only re-lays-out subtrees where at least one box has its `dirty`
-/// flag set. Clean subtrees are skipped entirely. After layout
-/// completes, all boxes are marked clean. The optional `cache` stores
-/// resolved edge sizes to avoid redundant recomputation.
-///
-/// This is an additive optimisation -- when the entire tree is dirty
-/// (e.g. initial layout), the result is identical to a full
-/// `layout_block` pass.
-pub fn layout_block_incremental(
-    layout_box: &mut LayoutBox,
-    containing_width: f32,
-    measurer: &dyn TextMeasurer,
-    cache: &mut StyleCache,
-) {
-    if !layout_box.dirty && !any_child_dirty(layout_box) {
-        return;
-    }
-
-    // Resolve edge sizes, using cache when available.
-    resolve_edge_sizes_cached(layout_box, containing_width, cache);
-
-    calculate_block_width(layout_box, containing_width);
-
-    if matches!(layout_box.box_type, BoxType::Flex) {
-        layout_flex(layout_box, containing_width, measurer);
-        if !matches!(layout_box.style.height, Dimension::Auto) {
-            calculate_block_height(layout_box, None);
-        }
-    } else if matches!(layout_box.box_type, BoxType::Grid) {
-        layout_grid(layout_box, containing_width, measurer);
-    } else if matches!(layout_box.box_type, BoxType::TableWrapper) {
-        layout_table_children(layout_box, measurer);
-    } else {
-        layout_children_incremental(layout_box, measurer, cache);
-        shrink_float_to_fit(layout_box);
-        calculate_block_height(layout_box, None);
-    }
-
-    layout_box.dirty = false;
-}
-
-/// Check whether any child (or deeper descendant) is dirty.
-fn any_child_dirty(layout_box: &LayoutBox) -> bool {
-    for child in &layout_box.children {
-        if child.dirty || any_child_dirty(child) {
-            return true;
-        }
-    }
-    false
-}
-
-/// Resolve edge sizes with caching. If the box has a DOM node and a
-/// cache hit, the cached values are used directly. Otherwise the
-/// values are resolved from the style and stored in the cache.
-fn resolve_edge_sizes_cached(
-    layout_box: &mut LayoutBox,
-    containing_width: f32,
-    cache: &mut StyleCache,
-) {
-    if let Some(node) = layout_box.node
-        && !layout_box.dirty
-        && let Some((p, b, m)) = cache.get_edges(node)
-    {
-        layout_box.dimensions.padding = *p;
-        layout_box.dimensions.border = *b;
-        layout_box.dimensions.margin = *m;
-        return;
-    }
-
-    resolve_edge_sizes(layout_box, containing_width);
-
-    if let Some(node) = layout_box.node {
-        cache.insert_edges(
-            node,
-            layout_box.dimensions.padding,
-            layout_box.dimensions.border,
-            layout_box.dimensions.margin,
-        );
-    }
-}
-
-/// Incremental version of [`layout_block_children`]. Skips clean
-/// children whose subtrees are also clean.
-fn layout_children_incremental(
-    parent: &mut LayoutBox,
-    measurer: &dyn TextMeasurer,
-    cache: &mut StyleCache,
-) {
-    let all_inline =
-        !parent.children.is_empty() && parent.children.iter().all(|c| !c.is_block_level());
-    if all_inline {
-        // Inline formatting context -- relayout fully when dirty.
-        if parent.dirty || any_child_dirty(parent) {
-            layout_inline(parent, measurer);
-        }
-        return;
-    }
-
-    let content_x = parent.dimensions.content.x;
-    let content_width = parent.dimensions.content.width;
-    let mut cursor_y = parent.dimensions.content.y;
-    let mut prev_margin_bottom: f32 = 0.0;
-
-    let parent_bfc = establishes_bfc(&parent.style);
-    let can_collapse_top =
-        !parent_bfc && parent.dimensions.padding.top == 0.0 && parent.dimensions.border.top == 0.0;
-    let can_collapse_bottom = !parent_bfc
-        && parent.dimensions.padding.bottom == 0.0
-        && parent.dimensions.border.bottom == 0.0
-        && parent.style.height == Dimension::Auto;
-
-    let mut is_first_in_flow = true;
-
-    for child in &mut parent.children {
-        match child.box_type {
-            BoxType::Block
-            | BoxType::ListItem { .. }
-            | BoxType::TableWrapper
-            | BoxType::Flex
-            | BoxType::Grid => {
-                resolve_edge_sizes_cached(child, content_width, cache);
-
-                let child_margin_top = child.dimensions.margin.top;
-                let collapsed = if is_first_in_flow && can_collapse_top {
-                    let parent_mt = parent.dimensions.margin.top;
-                    parent.dimensions.margin.top = collapse_margins(parent_mt, child_margin_top);
-                    child.dimensions.margin.top = 0.0;
-                    0.0
-                } else {
-                    collapse_margins(prev_margin_bottom, child_margin_top)
-                };
-                is_first_in_flow = false;
-
-                child.dimensions.content.x = content_x
-                    + child.dimensions.margin.left
-                    + child.dimensions.border.left
-                    + child.dimensions.padding.left;
-                child.dimensions.content.y = cursor_y
-                    + collapsed
-                    + child.dimensions.border.top
-                    + child.dimensions.padding.top;
-
-                // `calculate_block_width` inside the recursive layout
-                // call may resolve auto margins (the `margin: 0 auto`
-                // centering pattern) only AFTER we've baked the
-                // pre-resolution margin into `content.x` above. Snapshot
-                // the x that was just written so we can apply the delta
-                // — and shift the whole subtree — once the child is
-                // done. Without this, `.central-textlogo` (Wikipedia's
-                // centered logo wrapper) gets `margin-left = 254.8` on
-                // an 800-wide viewport but paints at `x = 10.2`.
-                let pre_x = child.dimensions.content.x;
-
-                if child.dirty || any_child_dirty(child) {
-                    layout_block_incremental(child, content_width, measurer, cache);
-                }
-
-                let resolved_x = content_x
-                    + child.dimensions.margin.left
-                    + child.dimensions.border.left
-                    + child.dimensions.padding.left;
-                let dx = resolved_x - pre_x;
-                if dx != 0.0 {
-                    offset_descendant(child, dx, 0.0);
-                }
-
-                let bb = child.dimensions.border_box();
-                cursor_y = bb.y + bb.height;
-                prev_margin_bottom = child.dimensions.margin.bottom;
-            },
-            BoxType::Anonymous => {
-                is_first_in_flow = false;
-                child.dimensions.content.x = content_x;
-                child.dimensions.content.y = cursor_y;
-                child.dimensions.content.width = content_width;
-
-                if child.dirty || any_child_dirty(child) {
-                    layout_inline(child, measurer);
-                }
-
-                cursor_y += child.dimensions.content.height;
-                prev_margin_bottom = 0.0;
-            },
-            BoxType::Replaced(_) => {
-                resolve_edge_sizes_cached(child, content_width, cache);
-                let pad_h = child.dimensions.padding.horizontal();
-                let bdr_h = child.dimensions.border.horizontal();
-                let mar_h = child.dimensions.margin.horizontal();
-
-                let child_margin_top = child.dimensions.margin.top;
-                let collapsed = if is_first_in_flow && can_collapse_top {
-                    let parent_mt = parent.dimensions.margin.top;
-                    parent.dimensions.margin.top = collapse_margins(parent_mt, child_margin_top);
-                    child.dimensions.margin.top = 0.0;
-                    0.0
-                } else {
-                    collapse_margins(prev_margin_bottom, child_margin_top)
-                };
-                is_first_in_flow = false;
-
-                child.dimensions.content.x = content_x
-                    + child.dimensions.margin.left
-                    + child.dimensions.border.left
-                    + child.dimensions.padding.left;
-                child.dimensions.content.y = cursor_y
-                    + collapsed
-                    + child.dimensions.border.top
-                    + child.dimensions.padding.top;
-
-                let mut w = (content_width - pad_h - bdr_h - mar_h).max(0.0);
-                if let Dimension::Px(max) = child.style.max_width {
-                    w = w.min(max);
-                }
-                child.dimensions.content.width = w;
-
-                let h = match child.style.height {
-                    Dimension::Px(h) => h,
-                    _ => {
-                        // CSS aspect-ratio on replaced elements: derive
-                        // height from the laid-out width and the ratio.
-                        if let Some(ratio) = child.style.aspect_ratio
-                            && ratio > 0.0
-                        {
-                            w / ratio
-                        } else if let BoxType::Replaced(ref rc) = child.box_type {
-                            match rc {
-                                ReplacedContent::HorizontalRule => 2.0,
-                                ReplacedContent::Image { height, .. } => *height as f32,
-                                ReplacedContent::Svg { element } => element.height,
-                                ReplacedContent::Canvas { state } => state.borrow().height as f32,
-                                _ => 0.0,
-                            }
-                        } else {
-                            0.0
-                        }
-                    },
-                };
-                child.dimensions.content.height = h;
-
-                let bb = child.dimensions.border_box();
-                cursor_y = bb.y + bb.height;
-                prev_margin_bottom = child.dimensions.margin.bottom;
-            },
-            _ => {},
-        }
-    }
-
-    // Parent-last-child bottom margin collapsing.
-    if can_collapse_bottom {
-        let last_block = parent
-            .children
-            .iter()
-            .rposition(|c| c.is_block_level() && !matches!(c.box_type, BoxType::Anonymous));
-        if let Some(idx) = last_block {
-            let child_mb = parent.children[idx].dimensions.margin.bottom;
-            if child_mb > 0.0 {
-                let parent_mb = parent.dimensions.margin.bottom;
-                parent.dimensions.margin.bottom = collapse_margins(parent_mb, child_mb);
-                parent.children[idx].dimensions.margin.bottom = 0.0;
-            }
-        }
-    }
-}
-
-// -------------------------------------------------------------------
 // Block layout algorithm
 // -------------------------------------------------------------------
+
+#[cfg(test)]
+thread_local! {
+    /// Box layouts run on this thread (tests pin layout complexity).
+    pub(crate) static LAYOUT_CALLS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
 
 /// Lay out a block-level box and all its children.
 ///
@@ -449,6 +120,9 @@ pub(crate) fn layout_block_with_height(
     containing_height: Option<f32>,
     measurer: &dyn TextMeasurer,
 ) {
+    #[cfg(test)]
+    LAYOUT_CALLS.with(|c| c.set(c.get() + 1));
+    let _pass = super::intrinsic::PassGuard::enter();
     // 1. Resolve padding, border, and margin from the computed style.
     resolve_edge_sizes(layout_box, containing_width);
 
@@ -461,7 +135,7 @@ pub(crate) fn layout_block_with_height(
         // `layout_flex` sizes an auto height from its lines; an explicit
         // one (and min/max-height) resolves like any block's. It was
         // never set, so `display:flex; height:100px` was 0 px tall.
-        if !matches!(layout_box.style.height, Dimension::Auto) {
+        if !layout_box.has_auto_height() {
             calculate_block_height(layout_box, containing_height);
         }
     } else if matches!(layout_box.box_type, BoxType::Grid) {
@@ -686,92 +360,107 @@ fn calculate_block_width(layout_box: &mut LayoutBox, containing_width: f32) {
     // instead of the right edge. This is the old.reddit sidebar bug.
     let is_float = layout_box.style.float != Float::None;
 
-    match layout_box.style.width {
-        Dimension::Px(w) => {
-            let content_w = if is_border_box {
-                (w - pad_h - bdr_h).max(0.0)
-            } else {
-                w
-            };
-            layout_box.dimensions.content.width = content_w;
-            let available_for_margins = containing_width - content_w - pad_h - bdr_h;
-            if is_abs {
-                // Auto margins on absolute boxes resolve against the
-                // `top`/`left`/`right`/`bottom` constraints in the
-                // positioning pass; here we just leave declared margins
-                // in place (auto → treated as 0 for this pass).
-            } else if is_float {
-                if ml_auto {
-                    layout_box.dimensions.margin.left = 0.0;
+    if let Some(w) = layout_box.sizing.forced_width {
+        // A flex / grid container resolved this box's width; its auto
+        // margins take no space (the container placed the box).
+        layout_box.dimensions.content.width = w;
+        if ml_auto {
+            layout_box.dimensions.margin.left = 0.0;
+        }
+        if mr_auto {
+            layout_box.dimensions.margin.right = 0.0;
+        }
+    } else {
+        match layout_box.style.width {
+            Dimension::Px(w) => {
+                let content_w = if is_border_box {
+                    (w - pad_h - bdr_h).max(0.0)
+                } else {
+                    w
+                };
+                layout_box.dimensions.content.width = content_w;
+                let available_for_margins = containing_width - content_w - pad_h - bdr_h;
+                if is_abs {
+                    // Auto margins on absolute boxes resolve against the
+                    // `top`/`left`/`right`/`bottom` constraints in the
+                    // positioning pass; here we just leave declared margins
+                    // in place (auto → treated as 0 for this pass).
+                } else if is_float {
+                    if ml_auto {
+                        layout_box.dimensions.margin.left = 0.0;
+                    }
+                    if mr_auto {
+                        layout_box.dimensions.margin.right = 0.0;
+                    }
+                } else if ml_auto && mr_auto {
+                    let half = available_for_margins.max(0.0) / 2.0;
+                    layout_box.dimensions.margin.left = half;
+                    layout_box.dimensions.margin.right = half;
+                } else if ml_auto {
+                    layout_box.dimensions.margin.left =
+                        (available_for_margins - layout_box.dimensions.margin.right).max(0.0);
+                } else if mr_auto {
+                    layout_box.dimensions.margin.right =
+                        (available_for_margins - layout_box.dimensions.margin.left).max(0.0);
+                } else {
+                    // Over-constrained: margin-right absorbs overflow.
+                    layout_box.dimensions.margin.right =
+                        available_for_margins - layout_box.dimensions.margin.left;
                 }
-                if mr_auto {
-                    layout_box.dimensions.margin.right = 0.0;
+            },
+            Dimension::Percent(pct) => {
+                let declared_w = containing_width * (pct / 100.0);
+                let content_w = if is_border_box {
+                    (declared_w - pad_h - bdr_h).max(0.0)
+                } else {
+                    declared_w
+                };
+                layout_box.dimensions.content.width = content_w;
+                let available_for_margins = containing_width - content_w - pad_h - bdr_h;
+                if is_abs {
+                    // See note above for the `Dimension::Px` branch.
+                } else if is_float {
+                    if ml_auto {
+                        layout_box.dimensions.margin.left = 0.0;
+                    }
+                    if mr_auto {
+                        layout_box.dimensions.margin.right = 0.0;
+                    }
+                } else if ml_auto && mr_auto {
+                    let half = available_for_margins.max(0.0) / 2.0;
+                    layout_box.dimensions.margin.left = half;
+                    layout_box.dimensions.margin.right = half;
+                } else if ml_auto {
+                    layout_box.dimensions.margin.left =
+                        (available_for_margins - layout_box.dimensions.margin.right).max(0.0);
+                } else if mr_auto {
+                    layout_box.dimensions.margin.right =
+                        (available_for_margins - layout_box.dimensions.margin.left).max(0.0);
                 }
-            } else if ml_auto && mr_auto {
-                let half = available_for_margins.max(0.0) / 2.0;
-                layout_box.dimensions.margin.left = half;
-                layout_box.dimensions.margin.right = half;
-            } else if ml_auto {
-                layout_box.dimensions.margin.left =
-                    (available_for_margins - layout_box.dimensions.margin.right).max(0.0);
-            } else if mr_auto {
-                layout_box.dimensions.margin.right =
-                    (available_for_margins - layout_box.dimensions.margin.left).max(0.0);
-            } else {
-                // Over-constrained: margin-right absorbs overflow.
-                layout_box.dimensions.margin.right =
-                    available_for_margins - layout_box.dimensions.margin.left;
-            }
-        },
-        Dimension::Percent(pct) => {
-            let declared_w = containing_width * (pct / 100.0);
-            let content_w = if is_border_box {
-                (declared_w - pad_h - bdr_h).max(0.0)
-            } else {
-                declared_w
-            };
-            layout_box.dimensions.content.width = content_w;
-            let available_for_margins = containing_width - content_w - pad_h - bdr_h;
-            if is_abs {
-                // See note above for the `Dimension::Px` branch.
-            } else if is_float {
-                if ml_auto {
-                    layout_box.dimensions.margin.left = 0.0;
+            },
+            Dimension::Auto
+            | Dimension::MinContent
+            | Dimension::MaxContent
+            | Dimension::FitContent => {
+                // CSS 2.1 §10.3.5: floats with `width: auto` use shrink-to-
+                // fit = min(max-content, max(min-content, available)). We
+                // provisionally assign the available width here; after the
+                // children are laid out, `layout_block_with_height` clamps
+                // `content.width` down to the actual rightmost child extent
+                // (see `shrink_float_to_fit`). Auto margins on floats
+                // resolve to 0 per §10.3.5.
+                let w = (containing_width - total_extra).max(0.0);
+                layout_box.dimensions.content.width = w;
+                if is_float {
+                    if ml_auto {
+                        layout_box.dimensions.margin.left = 0.0;
+                    }
+                    if mr_auto {
+                        layout_box.dimensions.margin.right = 0.0;
+                    }
                 }
-                if mr_auto {
-                    layout_box.dimensions.margin.right = 0.0;
-                }
-            } else if ml_auto && mr_auto {
-                let half = available_for_margins.max(0.0) / 2.0;
-                layout_box.dimensions.margin.left = half;
-                layout_box.dimensions.margin.right = half;
-            } else if ml_auto {
-                layout_box.dimensions.margin.left =
-                    (available_for_margins - layout_box.dimensions.margin.right).max(0.0);
-            } else if mr_auto {
-                layout_box.dimensions.margin.right =
-                    (available_for_margins - layout_box.dimensions.margin.left).max(0.0);
-            }
-        },
-        Dimension::Auto | Dimension::MinContent | Dimension::MaxContent | Dimension::FitContent => {
-            // CSS 2.1 §10.3.5: floats with `width: auto` use shrink-to-
-            // fit = min(max-content, max(min-content, available)). We
-            // provisionally assign the available width here; after the
-            // children are laid out, `layout_block_with_height` clamps
-            // `content.width` down to the actual rightmost child extent
-            // (see `shrink_float_to_fit`). Auto margins on floats
-            // resolve to 0 per §10.3.5.
-            let w = (containing_width - total_extra).max(0.0);
-            layout_box.dimensions.content.width = w;
-            if is_float {
-                if ml_auto {
-                    layout_box.dimensions.margin.left = 0.0;
-                }
-                if mr_auto {
-                    layout_box.dimensions.margin.right = 0.0;
-                }
-            }
-        },
+            },
+        }
     }
 
     // Apply min-width / max-width constraints.
@@ -856,7 +545,7 @@ fn establishes_bfc(style: &ComputedStyle) -> bool {
 /// to [`layout_inline`] directly. This handles the common case of
 /// `<p>text</p>` or `<p><a>link</a></p>` where the block box
 /// contains only inline content.
-fn layout_block_children(parent: &mut LayoutBox, measurer: &dyn TextMeasurer) {
+pub(crate) fn layout_block_children(parent: &mut LayoutBox, measurer: &dyn TextMeasurer) {
     // If all children are inline, establish an IFC on the parent.
     let all_inline =
         !parent.children.is_empty() && parent.children.iter().all(|c| !c.is_block_level());
@@ -1216,53 +905,60 @@ fn calculate_block_height(layout_box: &mut LayoutBox, containing_height: Option<
     let pad_v = layout_box.dimensions.padding.vertical();
     let bdr_v = layout_box.dimensions.border.vertical();
 
-    match layout_box.style.height {
-        Dimension::Px(h) => {
-            let content_h = if is_border_box {
-                (h - pad_v - bdr_v).max(0.0)
-            } else {
-                h
-            };
-            layout_box.dimensions.content.height = content_h;
-        },
-        Dimension::Percent(pct) => {
-            if let Some(ch) = containing_height {
-                let declared_h = ch * (pct / 100.0);
+    if let Some(h) = layout_box.sizing.forced_height {
+        layout_box.dimensions.content.height = h;
+    } else {
+        match layout_box.style.height {
+            Dimension::Px(h) => {
                 let content_h = if is_border_box {
-                    (declared_h - pad_v - bdr_v).max(0.0)
+                    (h - pad_v - bdr_v).max(0.0)
                 } else {
-                    declared_h
+                    h
                 };
                 layout_box.dimensions.content.height = content_h;
-            } else {
-                // No definite containing height: treat as auto (CSS spec).
-                calculate_auto_height(layout_box);
-            }
-        },
-        Dimension::Auto | Dimension::MinContent | Dimension::MaxContent | Dimension::FitContent => {
-            // Use `aspect-ratio` to derive height from width when
-            // height is auto, matching the CSS Box Sizing Level 4
-            // rule that `aspect-ratio` applies to non-replaced blocks
-            // whose width is definite. Only honor the ratio when the
-            // author explicitly set a width — with `width: auto` the
-            // block fills its containing block and we'd rather let
-            // content drive the height.
-            if let Some(ratio) = layout_box.style.aspect_ratio
-                && ratio > 0.0
-                && !matches!(layout_box.style.width, Dimension::Auto)
-            {
-                let content_w = layout_box.dimensions.content.width;
-                let derived = content_w / ratio;
-                let content_h = if is_border_box {
-                    (derived - pad_v - bdr_v).max(0.0)
+            },
+            Dimension::Percent(pct) => {
+                if let Some(ch) = containing_height {
+                    let declared_h = ch * (pct / 100.0);
+                    let content_h = if is_border_box {
+                        (declared_h - pad_v - bdr_v).max(0.0)
+                    } else {
+                        declared_h
+                    };
+                    layout_box.dimensions.content.height = content_h;
                 } else {
-                    derived.max(0.0)
-                };
-                layout_box.dimensions.content.height = content_h;
-            } else {
-                calculate_auto_height(layout_box);
-            }
-        },
+                    // No definite containing height: treat as auto (CSS spec).
+                    calculate_auto_height(layout_box);
+                }
+            },
+            Dimension::Auto
+            | Dimension::MinContent
+            | Dimension::MaxContent
+            | Dimension::FitContent => {
+                // Use `aspect-ratio` to derive height from width when
+                // height is auto, matching the CSS Box Sizing Level 4
+                // rule that `aspect-ratio` applies to non-replaced blocks
+                // whose width is definite. Only honor the ratio when the
+                // author explicitly set a width — with `width: auto` the
+                // block fills its containing block and we'd rather let
+                // content drive the height.
+                if let Some(ratio) = layout_box.style.aspect_ratio
+                    && ratio > 0.0
+                    && !matches!(layout_box.style.width, Dimension::Auto)
+                {
+                    let content_w = layout_box.dimensions.content.width;
+                    let derived = content_w / ratio;
+                    let content_h = if is_border_box {
+                        (derived - pad_v - bdr_v).max(0.0)
+                    } else {
+                        derived.max(0.0)
+                    };
+                    layout_box.dimensions.content.height = content_h;
+                } else {
+                    calculate_auto_height(layout_box);
+                }
+            },
+        }
     }
 
     // Apply min-height / max-height constraints.
@@ -1295,7 +991,7 @@ fn calculate_block_height(layout_box: &mut LayoutBox, containing_height: Option<
 }
 
 /// Compute auto height from children's occupied space.
-fn calculate_auto_height(layout_box: &mut LayoutBox) {
+pub(crate) fn calculate_auto_height(layout_box: &mut LayoutBox) {
     let content_top = layout_box.dimensions.content.y;
     let mut bottom = content_top;
 

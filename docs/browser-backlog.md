@@ -6,7 +6,7 @@ only: what ships is catalogued in [`browser-engine.md`](browser-engine.md),
 and the history of each epic lives in `git log` (search the commit
 subjects, e.g. `git log --oneline --grep=browser`).
 
-Last updated: 2026-10-30
+Last updated: 2026-10-31
 
 ## Missing CSS features
 
@@ -48,6 +48,16 @@ small enough for a focused PR.
   a compositing layer; the backdrop is never read or filtered.
 - **`rowspan="0"` spans to the end of the table**, not the end of its row
   group (`layout/table.rs` has no row-group boundaries).
+- **Blocks inside inline content are flattened.** A `<table>` or `<div>`
+  inside a `<span>` / `<u>` is not split out onto its own lines (CSS 2.1
+  §9.2.1.1): `collect_inline_fragments` walks into it, so a table's cells
+  run together as one line of text (`adversarial_malformed` fixture).
+- **No min-content sizing.** `layout/intrinsic.rs` measures max-content
+  only; flex items do not shrink below it to their min-content width
+  (the automatic minimum size), and intrinsic grid tracks use
+  max-content for both bounds.
+- **Flex items are not stretched on the cross axis.** `align-items:
+  stretch` (the default) positions items like `flex-start`.
 - **Oversized compositing layers are clipped.** A layer longer than
   4352 px on a side gets an offscreen target covering only the part that
   can reach the surface (`bound_layer_axis` in
@@ -58,6 +68,7 @@ small enough for a focused PR.
 
 ### Parsers
 
+<<<<<<< HEAD
 - **No quirks-mode CSS.** The parser picks the quirks mode from the
   DOCTYPE (`Document::quirks_mode`) and applies its one tree difference,
   but no quirks-mode CSS rules (table font inheritance, body height,
@@ -67,6 +78,18 @@ small enough for a focused PR.
 - **Template contents are children, not a DocumentFragment.** They
   parse with the "in template" mode, but there is no `template.content`:
   JS and CSS see them as the element's children.
+=======
+- **`style=""` attributes do not expand shorthands.**
+  `oasis_css::parser::parse_inline_style` returns the raw declaration
+  list without `expand_shorthands` (stylesheet rules get it), so an
+  inline `flex: 1` / `flex: 0 0 100px` is ignored; shorthands that the
+  value applier handles itself (`margin`, `padding`, ...) still work.
+- **No quirks mode.** The DOCTYPE is ignored, so `<p><table>` always
+  closes the paragraph (quirks documents keep the table inside it) and
+  no quirks-mode CSS rules apply.
+- **No "in template" insertion mode.** Template contents parse "in
+  body", so `<template><tr>` drops the row.
+>>>>>>> worktree-agent-ac5e3519d7c7b347b
 - **The DOM stores no namespaces.** The tree builder tracks them while
   parsing, but CSS (`svg|rect`) and JS (`namespaceURI`) cannot see them,
   and an SVG `<title>` is indistinguishable from the HTML one.

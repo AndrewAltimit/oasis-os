@@ -20,9 +20,7 @@ use std::ops::Range;
 
 use super::block::{TextMeasurer, layout_block, resolve_edge_sizes};
 use super::box_model::*;
-use crate::css::values::{
-    BoxSizing, Dimension, GridLine, GridTemplate, GridTrackSize, TrackBreadth,
-};
+use crate::css::values::{GridLine, GridTemplate, GridTrackSize, TrackBreadth};
 
 /// Hard cap on the number of tracks in either axis, so hostile CSS
 /// (`grid-column: 1 / 100000000`) cannot allocate unbounded grids.
@@ -46,7 +44,7 @@ pub fn layout_grid(container: &mut LayoutBox, _containing_width: f32, measurer: 
     let content_y = container.dimensions.content.y;
     let col_gap = container.style.column_gap;
     let row_gap = container.style.row_gap;
-    let definite_height = definite_content_height(container);
+    let definite_height = container.definite_content_height();
 
     if container.children.is_empty() {
         set_container_height(container, definite_height, 0.0);
@@ -131,18 +129,15 @@ pub fn layout_grid(container: &mut LayoutBox, _containing_width: f32, measurer: 
     let available_for_cols = (content_width - total_col_gaps).max(0.0);
     let mut col_content = vec![0.0f32; num_cols];
     if col_tracks.iter().any(|t| is_intrinsic(*t)) {
-        // Tentatively lay out each item to measure its width. This is a
-        // coarse stand-in for real min/max-content contributions.
-        let temp_width = content_width / num_cols as f32;
+        // Each item's max-content contribution (measured without a
+        // layout; min-content is not distinguished). Laying items out at
+        // a tentative width read auto-width items back as that width.
         for (i, child) in container.children.iter_mut().enumerate() {
             let (col, _, col_span, _) = placements[i];
             if col_span != 1 {
                 continue;
             }
-            child.dimensions.content.x = 0.0;
-            child.dimensions.content.y = 0.0;
-            layout_block(child, temp_width, measurer);
-            let w = child.dimensions.margin_box().width;
+            let w = super::intrinsic::max_content_contribution(child, measurer);
             col_content[col] = col_content[col].max(w);
         }
     }
@@ -161,11 +156,16 @@ pub fn layout_grid(container: &mut LayoutBox, _containing_width: f32, measurer: 
     for (i, child) in container.children.iter_mut().enumerate() {
         let (col, _, col_span, _) = placements[i];
         let cell_w = span_size(&col_widths, col, col_span, col_gap);
-        // Grid items stretch to fill their cell by default. Override
-        // the child's width to auto so that `calculate_block_width`
-        // expands it to fill the cell (containing width).
-        child.style.width = Dimension::Auto;
+        // Grid items stretch to fill their cell by default: force the
+        // content width that fills it (the style keeps its `width`, so
+        // the next layout of this tree measures the same item).
         resolve_edge_sizes(child, cell_w);
+        let d = &child.dimensions;
+        child.sizing.forced_height = None;
+        child.sizing.forced_width = Some(
+            (cell_w - d.margin.horizontal() - d.padding.horizontal() - d.border.horizontal())
+                .max(0.0),
+        );
         child.dimensions.content.x = content_x
             + col_offsets.get(col).copied().unwrap_or(0.0)
             + child.dimensions.margin.left
@@ -215,21 +215,6 @@ pub fn layout_grid(container: &mut LayoutBox, _containing_width: f32, measurer: 
 // -------------------------------------------------------------------
 // Container sizing helpers
 // -------------------------------------------------------------------
-
-/// The container's definite content-box height, if `height` is a length.
-fn definite_content_height(container: &LayoutBox) -> Option<f32> {
-    match container.style.height {
-        Dimension::Px(h) => {
-            let d = &container.dimensions;
-            Some(if container.style.box_sizing == BoxSizing::BorderBox {
-                (h - d.padding.vertical() - d.border.vertical()).max(0.0)
-            } else {
-                h
-            })
-        },
-        _ => None,
-    }
-}
 
 fn set_container_height(container: &mut LayoutBox, definite: Option<f32>, content: f32) {
     container.dimensions.content.height = definite.unwrap_or(content.max(0.0));
@@ -948,7 +933,7 @@ fn cumulative_offsets(sizes: &[f32], gap: f32) -> Vec<f32> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::css::values::{ComputedStyle, Display, GridTrackSize};
+    use crate::css::values::{ComputedStyle, Dimension, Display, GridTrackSize};
     use crate::layout::block::TextMeasurer;
 
     struct FixedMeasurer;

@@ -822,8 +822,8 @@
     "web-fonts",
     "webp"
    ],
-   "loc": 62117,
-   "files": 109,
+   "loc": 62709,
+   "files": 111,
    "deps": [
     {
      "name": "oasis-css",
