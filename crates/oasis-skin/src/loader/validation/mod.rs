@@ -57,6 +57,29 @@ impl Skin {
                 self.manifest.screen_height, MAX_SCREEN,
             ));
         }
+        // Desktop render size: the shell only honours the pair, so a lone
+        // width or height is silently ignored.
+        match (self.manifest.desktop_width, self.manifest.desktop_height) {
+            (Some(_), None) | (None, Some(_)) => warnings.push(
+                "manifest: desktop_width and desktop_height must be set together \
+                 (one alone is ignored)"
+                    .to_string(),
+            ),
+            (Some(w), Some(h)) if w == 0 || h == 0 || w > MAX_SCREEN || h > MAX_SCREEN => {
+                warnings.push(format!(
+                    "manifest: desktop size {w}x{h} is outside 1..={MAX_SCREEN} pixels"
+                ));
+            },
+            _ => {},
+        }
+
+        // -- Theme scalar checks --
+        let ts = self.theme.text_scale;
+        if !ts.is_finite() || !(0.5..=3.0).contains(&ts) {
+            warnings.push(format!(
+                "theme: text_scale {ts} outside 0.5-3.0 (clamped at runtime)"
+            ));
+        }
 
         // -- Theme color checks --
         let theme_colors: &[(&str, &str)] = &[
@@ -83,6 +106,8 @@ impl Skin {
             ("surface", &self.theme.surface),
             ("accent", &self.theme.accent),
             ("accent_hover", &self.theme.accent_hover),
+            ("success", &self.theme.success),
+            ("warning", &self.theme.warning),
         ];
         for (name, value) in opt_colors {
             if let Some(v) = value
@@ -160,34 +185,42 @@ impl Skin {
         }
 
         // -- Layout coordinate checks --
-        let sw = self.manifest.screen_width as i32;
-        let sh = self.manifest.screen_height as i32;
-        // Allow some overshoot for scrollable/off-screen elements (4x).
-        let max_coord = (sw.max(sh) * 4).max(4096);
-        for (obj_name, def) in &self.layout.objects {
+        // Allow some overshoot for scrollable/off-screen elements (4x). In
+        // i64: a bogus screen size must not overflow the lint itself.
+        let screen = i64::from(self.manifest.screen_width.max(self.manifest.screen_height));
+        let max_coord = (screen * 4).max(4096);
+        // Sorted, so the report is stable across runs.
+        let mut objects: Vec<_> = self.layout.objects.iter().collect();
+        objects.sort_by_key(|(name, _)| *name);
+        for (obj_name, def) in objects {
             if let Some(x) = def.x
-                && (x < -max_coord || x > max_coord)
+                && !(-max_coord..=max_coord).contains(&i64::from(x))
             {
                 warnings.push(format!(
                     "layout: '{obj_name}' x={x} outside bounds [-{max_coord}, {max_coord}]"
                 ));
             }
             if let Some(y) = def.y
-                && (y < -max_coord || y > max_coord)
+                && !(-max_coord..=max_coord).contains(&i64::from(y))
             {
                 warnings.push(format!(
                     "layout: '{obj_name}' y={y} outside bounds [-{max_coord}, {max_coord}]"
                 ));
             }
             if let Some(w) = def.w
-                && w > max_coord as u32
+                && i64::from(w) > max_coord
             {
                 warnings.push(format!("layout: '{obj_name}' w={w} exceeds {max_coord}"));
             }
             if let Some(h) = def.h
-                && h > max_coord as u32
+                && i64::from(h) > max_coord
             {
                 warnings.push(format!("layout: '{obj_name}' h={h} exceeds {max_coord}"));
+            }
+            if def.font_size == Some(0) && def.text.is_some() {
+                warnings.push(format!(
+                    "layout: '{obj_name}' font_size = 0 renders no text (omit it for the default)"
+                ));
             }
             // Validate color strings in layout objects.
             let obj_colors: &[(&str, &Option<String>)] = &[
@@ -306,13 +339,11 @@ impl Skin {
         if self.features.icons_per_page == 0 && self.features.dashboard {
             warnings.push("features: dashboard is enabled but icons_per_page is 0".to_string());
         }
-        if self.features.icons_per_page > self.features.grid_cols * self.features.grid_rows {
+        let capacity = u64::from(self.features.grid_cols) * u64::from(self.features.grid_rows);
+        if u64::from(self.features.icons_per_page) > capacity {
             warnings.push(format!(
-                "features: icons_per_page ({}) exceeds grid capacity ({}x{}={})",
-                self.features.icons_per_page,
-                self.features.grid_cols,
-                self.features.grid_rows,
-                self.features.grid_cols * self.features.grid_rows,
+                "features: icons_per_page ({}) exceeds grid capacity ({}x{}={capacity})",
+                self.features.icons_per_page, self.features.grid_cols, self.features.grid_rows,
             ));
         }
 

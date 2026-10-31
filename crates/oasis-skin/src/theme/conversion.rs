@@ -7,7 +7,7 @@ use oasis_ui::theme::Theme;
 use oasis_wm::WmTheme;
 
 use super::overrides::WmThemeOverrides;
-use super::{SkinTheme, parse_hex_color};
+use super::{SkinTheme, parse_hex_color, readable_on};
 
 impl SkinTheme {
     /// Convert the 9-color skin palette into a full `ui::Theme`.
@@ -369,404 +369,102 @@ fn widget_state_color(
 }
 
 /// Apply all WM theme overrides to a `WmTheme`.
+///
+/// Unset fields keep the derived value; color strings that do not parse
+/// are ignored here (`skin lint` reports them).
 fn apply_wm_overrides(theme: &mut WmTheme, ov: &WmThemeOverrides) {
-    if let Some(h) = ov.titlebar_height {
-        theme.titlebar_height = h;
+    // `ov.field` (Copy) -> `theme.target`.
+    macro_rules! copy {
+        ($($field:ident => $target:ident),* $(,)?) => {$(
+            if let Some(v) = ov.$field {
+                theme.$target = v;
+            }
+        )*};
     }
-    if let Some(w) = ov.border_width {
-        theme.border_width = w;
+    // `ov.field` (String) -> `theme.target`.
+    macro_rules! string {
+        ($($field:ident),* $(,)?) => {$(
+            if let Some(ref v) = ov.$field {
+                theme.$field.clone_from(v);
+            }
+        )*};
     }
-    if let Some(ref c) = ov.titlebar_active
-        && let Some(parsed) = parse_hex_color(c)
-    {
-        theme.titlebar_active_color = parsed;
+    // `ov.field` (hex) -> `theme.target` (a `Color`).
+    macro_rules! color {
+        ($($field:ident => $target:ident),* $(,)?) => {$(
+            if let Some(c) = ov.$field.as_deref().and_then(parse_hex_color) {
+                theme.$target = c;
+            }
+        )*};
     }
-    if let Some(ref c) = ov.titlebar_inactive
-        && let Some(parsed) = parse_hex_color(c)
-    {
-        theme.titlebar_inactive_color = parsed;
+    // `ov.field` (hex) -> `theme.field` (an `Option<Color>`).
+    macro_rules! opt_color {
+        ($($field:ident),* $(,)?) => {$(
+            if let Some(c) = ov.$field.as_deref().and_then(parse_hex_color) {
+                theme.$field = Some(c);
+            }
+        )*};
     }
-    if let Some(ref c) = ov.titlebar_text
-        && let Some(parsed) = parse_hex_color(c)
-    {
-        theme.titlebar_text_color = parsed;
-    }
-    // `titlebar_text_active` is a synonym that takes precedence.
-    if let Some(ref c) = ov.titlebar_text_active
-        && let Some(parsed) = parse_hex_color(c)
-    {
-        theme.titlebar_text_color = parsed;
-    }
-    if let Some(ref c) = ov.titlebar_text_inactive
-        && let Some(parsed) = parse_hex_color(c)
-    {
-        theme.titlebar_text_inactive_color = parsed;
-    }
-    if let Some(ref c) = ov.frame_color
-        && let Some(parsed) = parse_hex_color(c)
-    {
-        theme.frame_color = parsed;
-    }
-    if let Some(ref c) = ov.content_bg
-        && let Some(parsed) = parse_hex_color(c)
-    {
-        theme.content_bg_color = parsed;
-    }
-    if let Some(ref c) = ov.btn_close
-        && let Some(parsed) = parse_hex_color(c)
-    {
-        theme.btn_close_color = parsed;
-    }
-    if let Some(ref c) = ov.btn_minimize
-        && let Some(parsed) = parse_hex_color(c)
-    {
-        theme.btn_minimize_color = parsed;
-    }
-    if let Some(ref c) = ov.btn_maximize
-        && let Some(parsed) = parse_hex_color(c)
-    {
-        theme.btn_maximize_color = parsed;
-    }
-    if let Some(s) = ov.button_size {
-        theme.button_size = s;
-    }
-    if let Some(s) = ov.resize_handle_size {
-        theme.resize_handle_size = s;
-    }
-    if let Some(s) = ov.titlebar_font_size {
-        theme.titlebar_font_size = s;
-    }
-    // Extended visual properties.
-    if let Some(r) = ov.titlebar_radius {
-        theme.titlebar_radius = r;
-    }
-    if let Some(g) = ov.titlebar_gradient {
-        theme.titlebar_gradient = g;
-    }
-    if let Some(ref c) = ov.titlebar_gradient_top
-        && let Some(parsed) = parse_hex_color(c)
-    {
-        theme.titlebar_gradient_top = Some(parsed);
-    }
-    if let Some(ref c) = ov.titlebar_gradient_bottom
-        && let Some(parsed) = parse_hex_color(c)
-    {
-        theme.titlebar_gradient_bottom = Some(parsed);
-    }
-    if let Some(ref c) = ov.titlebar_inactive_gradient_top
-        && let Some(parsed) = parse_hex_color(c)
-    {
-        theme.titlebar_inactive_gradient_top = Some(parsed);
-    }
-    if let Some(ref c) = ov.titlebar_inactive_gradient_bottom
-        && let Some(parsed) = parse_hex_color(c)
-    {
-        theme.titlebar_inactive_gradient_bottom = Some(parsed);
-    }
-    if let Some(s) = ov.frame_shadow_level {
-        theme.frame_shadow_level = s;
-    }
-    if let Some(r) = ov.frame_border_radius {
-        theme.frame_border_radius = r;
-    }
-    if let Some(r) = ov.button_radius {
-        theme.button_radius = r;
-    }
-    // Tier 1
-    if let Some(ref s) = ov.button_side {
-        theme.button_side = s.clone();
-    }
-    if let Some(ref s) = ov.glyph_close {
-        theme.glyph_close = s.clone();
-    }
-    if let Some(ref s) = ov.glyph_minimize {
-        theme.glyph_minimize = s.clone();
-    }
-    if let Some(ref s) = ov.glyph_maximize {
-        theme.glyph_maximize = s.clone();
-    }
-    if let Some(ref s) = ov.title_align {
-        theme.title_align = s.clone();
-    }
-    // Tier 2
-    if let Some(v) = ov.separator_enabled {
-        theme.separator_enabled = v;
-    }
-    if let Some(ref c) = ov.separator_color
-        && let Some(parsed) = parse_hex_color(c)
-    {
-        theme.separator_color = parsed;
-    }
-    if let Some(ref c) = ov.glyph_close_color
-        && let Some(parsed) = parse_hex_color(c)
-    {
-        theme.glyph_close_color = parsed;
-    }
-    if let Some(ref c) = ov.glyph_minimize_color
-        && let Some(parsed) = parse_hex_color(c)
-    {
-        theme.glyph_minimize_color = parsed;
-    }
-    if let Some(ref c) = ov.glyph_maximize_color
-        && let Some(parsed) = parse_hex_color(c)
-    {
-        theme.glyph_maximize_color = parsed;
-    }
-    if let Some(s) = ov.button_spacing {
-        theme.button_spacing = s;
-    }
-    // Tier 3
-    if let Some(ref c) = ov.btn_close_hover
-        && let Some(parsed) = parse_hex_color(c)
-    {
-        theme.btn_close_hover = parsed;
-    }
-    if let Some(ref c) = ov.btn_minimize_hover
-        && let Some(parsed) = parse_hex_color(c)
-    {
-        theme.btn_minimize_hover = parsed;
-    }
-    if let Some(ref c) = ov.btn_maximize_hover
-        && let Some(parsed) = parse_hex_color(c)
-    {
-        theme.btn_maximize_hover = parsed;
-    }
-    if let Some(v) = ov.title_text_shadow {
-        theme.title_text_shadow = v;
-    }
-    if let Some(ref c) = ov.title_text_shadow_color
-        && let Some(parsed) = parse_hex_color(c)
-    {
-        theme.title_text_shadow_color = parsed;
-    }
-    if let Some(w) = ov.content_stroke_width {
-        theme.content_stroke_width = w;
-    }
-    if let Some(ref c) = ov.content_stroke_color
-        && let Some(parsed) = parse_hex_color(c)
-    {
-        theme.content_stroke_color = parsed;
-    }
-    if let Some(v) = ov.maximize_top_inset {
-        theme.maximize_top_inset = v;
-    }
-    if let Some(v) = ov.maximize_bottom_inset {
-        theme.maximize_bottom_inset = v;
-    }
-    if let Some(ref c) = ov.modal_overlay_color
-        && let Some(parsed) = parse_hex_color(c)
-    {
-        theme.modal_overlay_color = parsed;
-    }
-    if let Some(a) = ov.inactive_frame_alpha {
-        theme.inactive_frame_alpha = a;
-    }
+
+    copy!(
+        titlebar_height => titlebar_height,
+        border_width => border_width,
+        button_size => button_size,
+        resize_handle_size => resize_handle_size,
+        titlebar_font_size => titlebar_font_size,
+        titlebar_radius => titlebar_radius,
+        titlebar_gradient => titlebar_gradient,
+        frame_shadow_level => frame_shadow_level,
+        frame_border_radius => frame_border_radius,
+        button_radius => button_radius,
+        separator_enabled => separator_enabled,
+        button_spacing => button_spacing,
+        title_text_shadow => title_text_shadow,
+        content_stroke_width => content_stroke_width,
+        maximize_top_inset => maximize_top_inset,
+        maximize_bottom_inset => maximize_bottom_inset,
+        inactive_frame_alpha => inactive_frame_alpha,
+    );
+    string!(
+        button_side,
+        glyph_close,
+        glyph_minimize,
+        glyph_maximize,
+        title_align
+    );
+    color!(
+        titlebar_active => titlebar_active_color,
+        titlebar_inactive => titlebar_inactive_color,
+        titlebar_text => titlebar_text_color,
+        // `titlebar_text_active` is a synonym that takes precedence.
+        titlebar_text_active => titlebar_text_color,
+        titlebar_text_inactive => titlebar_text_inactive_color,
+        frame_color => frame_color,
+        content_bg => content_bg_color,
+        btn_close => btn_close_color,
+        btn_minimize => btn_minimize_color,
+        btn_maximize => btn_maximize_color,
+        separator_color => separator_color,
+        glyph_close_color => glyph_close_color,
+        glyph_minimize_color => glyph_minimize_color,
+        glyph_maximize_color => glyph_maximize_color,
+        btn_close_hover => btn_close_hover,
+        btn_minimize_hover => btn_minimize_hover,
+        btn_maximize_hover => btn_maximize_hover,
+        title_text_shadow_color => title_text_shadow_color,
+        content_stroke_color => content_stroke_color,
+        modal_overlay_color => modal_overlay_color,
+    );
+    opt_color!(
+        titlebar_gradient_top,
+        titlebar_gradient_bottom,
+        titlebar_inactive_gradient_top,
+        titlebar_inactive_gradient_bottom,
+    );
     if let Some(ref np) = ov.titlebar_nine_patch {
         theme.titlebar_nine_patch = Some((np.image.clone(), np.insets));
     }
     if let Some(ref np) = ov.frame_nine_patch {
         theme.frame_nine_patch = Some((np.image.clone(), np.insets));
-    }
-}
-
-/// Compute the WCAG 2.x contrast ratio between two colors.
-///
-/// Returns a value between 1.0 (identical) and 21.0 (black vs white).
-/// Alpha is ignored; composite translucent colors over their backdrop
-/// with [`composite_over`] first.
-pub fn contrast_ratio(a: Color, b: Color) -> f64 {
-    oasis_types::color::contrast_ratio(a, b)
-}
-
-/// Alpha-composite `fg` over an opaque `bg` (source-over).
-///
-/// Used to resolve translucent theme colors (bar backgrounds, selection
-/// highlights) to the effective on-screen color before measuring
-/// contrast. The result is opaque.
-pub fn composite_over(fg: Color, bg: Color) -> Color {
-    if fg.a == 255 {
-        return Color::rgb(fg.r, fg.g, fg.b);
-    }
-    let a = fg.a as u32;
-    let inv = 255 - a;
-    let blend = |f: u8, b: u8| ((f as u32 * a + b as u32 * inv + 127) / 255) as u8;
-    Color::rgb(blend(fg.r, bg.r), blend(fg.g, bg.g), blend(fg.b, bg.b))
-}
-
-/// Make a *derived* text color readable on an opaque backdrop.
-///
-/// Returns `fg` unchanged when it already reaches `min` contrast on `bg`
-/// (so every skin whose derived colors were fine stays pixel-identical).
-/// Otherwise `fg` is mixed toward whichever of black / white contrasts more
-/// with `bg`, in 5% steps, and the first opaque mix reaching `min` is
-/// returned -- the hue is kept as far as the contrast allows. Explicit skin
-/// colors are never passed through this: authors keep what they wrote, and
-/// `skin lint` reports it instead.
-pub(crate) fn readable_on(fg: Color, bg: Color, min: f64) -> Color {
-    let bg = Color::rgb(bg.r, bg.g, bg.b);
-    let opaque = composite_over(fg, bg);
-    if contrast_ratio(opaque, bg) >= min {
-        return fg;
-    }
-    let target = if contrast_ratio(Color::BLACK, bg) >= contrast_ratio(Color::WHITE, bg) {
-        Color::BLACK
-    } else {
-        Color::WHITE
-    };
-    (1..=20)
-        .map(|step| opaque.lerp(target, step as f32 / 20.0))
-        .map(|c| Color::rgb(c.r, c.g, c.b))
-        .find(|&c| contrast_ratio(c, bg) >= min)
-        .unwrap_or(target)
-}
-
-/// Effective opaque backdrop of a bar: its (possibly translucent) flat fill
-/// over the shell background, or -- for a vertical gradient -- the gradient
-/// midpoint, where the text baseline sits.
-pub(crate) fn bar_backdrop(
-    flat: Color,
-    top: Option<Color>,
-    bottom: Option<Color>,
-    background: Color,
-) -> Color {
-    let flat = composite_over(flat, background);
-    match (top, bottom) {
-        (Some(t), Some(b)) => composite_over(t, flat).lerp(composite_over(b, flat), 0.5),
-        _ => flat,
-    }
-}
-
-/// A contrast warning for a text/background color pair.
-#[derive(Debug, Clone)]
-pub struct ContrastWarning {
-    /// Human-readable label for the pair (e.g. "text on background").
-    pub pair: String,
-    /// The computed contrast ratio.
-    pub ratio: f64,
-    /// WCAG AA minimum (4.5 for body text, 3.0 for large/secondary text).
-    pub required: f64,
-}
-
-impl SkinTheme {
-    /// Validate key text/background pairs against WCAG AA contrast
-    /// minimums (4.5:1 for body text, 3:1 for large/secondary text).
-    ///
-    /// Checks the base palette plus the derived surfaces that actually
-    /// render text: buttons (`ui::Theme`), the selection highlight and
-    /// status/bottom bars (`ActiveTheme`). Translucent colors are
-    /// composited over their backdrop first.
-    ///
-    /// These are advisory: stylized skins may fail intentionally, so
-    /// callers surface them as warnings, never errors.
-    ///
-    /// Assumes the clock sits in the top status bar; use
-    /// [`validate_contrast_placed`](Self::validate_contrast_placed) when
-    /// the skin's `clock_in_bottombar` feature is known.
-    pub fn validate_contrast(&self) -> Vec<ContrastWarning> {
-        self.validate_contrast_placed(false)
-    }
-
-    /// [`validate_contrast`](Self::validate_contrast), checking the clock
-    /// against the bar it is actually drawn on (`clock_in_bottombar`).
-    pub fn validate_contrast_placed(&self, clock_in_bottombar: bool) -> Vec<ContrastWarning> {
-        self.contrast_report(clock_in_bottombar)
-            .into_iter()
-            .filter(|c| c.ratio < c.required)
-            .collect()
-    }
-
-    /// Contrast ratio of every checked text/background pair, whether or
-    /// not it meets its WCAG minimum (`required`).
-    ///
-    /// `clock_in_bottombar` selects which bar backdrop the clock is
-    /// measured against; the other bar is then checked with its remaining
-    /// text (battery label for the status bar).
-    pub fn contrast_report(&self, clock_in_bottombar: bool) -> Vec<ContrastWarning> {
-        let bg = self.background_color();
-        let ui = self.to_ui_theme();
-        let at = crate::active_theme::ActiveTheme::from_skin(self);
-
-        // Effective (opaque) backdrops for surfaces with alpha.
-        let statusbar_bg = bar_backdrop(
-            at.bar.statusbar_bg,
-            at.bar.statusbar_gradient_top,
-            at.bar.statusbar_gradient_bottom,
-            bg,
-        );
-        let bottombar_bg = bar_backdrop(at.bar.bg, at.bar.gradient_top, at.bar.gradient_bottom, bg);
-        let app_bg = composite_over(at.app.bg, bg);
-        let selection_bg = composite_over(at.app.selected_bg, app_bg);
-        // Windowed apps draw their body text straight onto the window
-        // manager's content fill (`draw_content_windowed` paints no bg).
-        let window_bg = composite_over(self.build_wm_theme().content_bg_color, bg);
-
-        let (clock_label, clock_bg) = if clock_in_bottombar {
-            ("clock on bottom bar", bottombar_bg)
-        } else {
-            ("status bar text on status bar", statusbar_bg)
-        };
-        let (status_label, status_fg) = if clock_in_bottombar {
-            ("status bar text on status bar", at.bar.battery_color)
-        } else {
-            ("battery text on status bar", at.bar.battery_color)
-        };
-
-        let pairs: &[(&str, Color, Color, f64)] = &[
-            // Base palette on the shell background.
-            ("text on background", self.text_color(), bg, 4.5),
-            ("dim_text on background", self.dim_text_color(), bg, 3.0),
-            ("error on background", self.error_color(), bg, 3.0),
-            // The terminal draws on the app surface, not the wallpaper
-            // background (`TerminalColors::from_theme`).
-            (
-                "terminal output on app background",
-                Color::rgb(
-                    at.app.terminal_output_color.r,
-                    at.app.terminal_output_color.g,
-                    at.app.terminal_output_color.b,
-                ),
-                app_bg,
-                4.5,
-            ),
-            (
-                "terminal prompt on app background",
-                at.app.terminal_prompt_color,
-                app_bg,
-                3.0,
-            ),
-            ("app text on window content", at.app.text, window_bg, 4.5),
-            // Derived widget surfaces.
-            (
-                "button text on button background",
-                ui.button_text,
-                ui.button_bg,
-                4.5,
-            ),
-            // Selection rows carry a non-color cue (the highlight fill
-            // and accent bar), so hold them to the large-text minimum.
-            (
-                "selected text on selection highlight",
-                at.app.selected_text,
-                selection_bg,
-                3.0,
-            ),
-            (clock_label, at.bar.clock_color, clock_bg, 3.0),
-            (status_label, status_fg, statusbar_bg, 3.0),
-            (
-                "bottom bar text on bottom bar",
-                at.bar.url_color,
-                bottombar_bg,
-                3.0,
-            ),
-        ];
-
-        pairs
-            .iter()
-            .map(|&(label, fg, backdrop, required)| ContrastWarning {
-                pair: label.to_string(),
-                ratio: contrast_ratio(composite_over(fg, backdrop), backdrop),
-                required,
-            })
-            .collect()
     }
 }

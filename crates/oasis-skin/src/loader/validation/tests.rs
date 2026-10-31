@@ -280,3 +280,93 @@ fn unknown_parent_skin_warns() {
         skin.validate()
     );
 }
+
+fn lint(manifest: &str, layout: &str, features: &str, theme: &str) -> Vec<String> {
+    Skin::from_toml_full(manifest, layout, features, theme, "")
+        .unwrap()
+        .validate()
+}
+
+fn has(warnings: &[String], needle: &str) -> bool {
+    warnings.iter().any(|w| w.contains(needle))
+}
+
+#[test]
+fn lone_or_bad_desktop_size_warns() {
+    let w = lint("name = \"d\"\ndesktop_width = 1280\n", "", "", "");
+    assert!(has(&w, "must be set together"), "{w:?}");
+    let w = lint(
+        "name = \"d\"\ndesktop_width = 0\ndesktop_height = 720\n",
+        "",
+        "",
+        "",
+    );
+    assert!(has(&w, "desktop size 0x720"), "{w:?}");
+    let w = lint(
+        "name = \"d\"\ndesktop_width = 1280\ndesktop_height = 720\n",
+        "",
+        "",
+        "",
+    );
+    assert!(!has(&w, "desktop"), "{w:?}");
+}
+
+#[test]
+fn out_of_range_text_scale_warns() {
+    for v in ["0.1", "9.0", "nan", "inf"] {
+        let w = lint("name = \"t\"", "", "", &format!("text_scale = {v}\n"));
+        assert!(has(&w, "text_scale"), "{v}: {w:?}");
+    }
+    let w = lint("name = \"t\"", "", "", "text_scale = 1.25\n");
+    assert!(!has(&w, "text_scale"), "{w:?}");
+}
+
+#[test]
+fn named_success_and_warning_colors_warn() {
+    let w = lint(
+        "name = \"c\"",
+        "",
+        "",
+        "success = \"green\"\nwarning = \"#FFF\"\n",
+    );
+    assert!(has(&w, "invalid color for 'success'"), "{w:?}");
+    assert!(has(&w, "invalid color for 'warning'"), "{w:?}");
+}
+
+#[test]
+fn zero_font_size_text_object_warns() {
+    let w = lint(
+        "name = \"f\"",
+        "[label]\ntext = \"hi\"\nfont_size = 0\n",
+        "",
+        "",
+    );
+    assert!(has(&w, "'label' font_size = 0"), "{w:?}");
+}
+
+#[test]
+fn absurd_numbers_do_not_overflow_the_lint() {
+    // Regression: `screen_width as i32 * 4` and `grid_cols * grid_rows`
+    // overflowed (a panic in debug builds) instead of reporting.
+    let w = lint(
+        "name = \"o\"\nscreen_width = 4000000000\n",
+        "[obj]\nx = 5\n",
+        "grid_cols = 4000000000\ngrid_rows = 4000000000\nicons_per_page = 1\n",
+        "",
+    );
+    assert!(has(&w, "screen_width"), "{w:?}");
+}
+
+#[test]
+fn huge_transition_ms_saturates_instead_of_overflowing() {
+    let skin = Skin::from_toml_full(
+        "name = \"t\"",
+        "",
+        "",
+        "[transition]\nfade_ms = 4294967295\nslide_ms = 0\n",
+        "",
+    )
+    .unwrap();
+    assert_eq!(skin.features.transition_fade_frames, Some(257_698_037));
+    assert_eq!(skin.features.transition_slide_frames, Some(1));
+}
