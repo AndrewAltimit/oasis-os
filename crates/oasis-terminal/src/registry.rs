@@ -15,6 +15,14 @@ use crate::types::{
     MAX_VAR_LEN, MAX_VARIABLES, ShellFunction,
 };
 
+/// Whether `name` can be assigned by the user: a letter or `_`, then
+/// letters, digits and `_` (not `?`, `1` or `a b`).
+pub(crate) fn is_var_name(name: &str) -> bool {
+    let mut chars = name.chars();
+    chars.next().is_some_and(|c| c.is_alphabetic() || c == '_')
+        && chars.all(|c| c.is_alphanumeric() || c == '_')
+}
+
 /// Registry of available commands with dispatch.
 ///
 /// Also holds persistent shell state: variables, aliases, and history.
@@ -48,6 +56,9 @@ pub struct CommandRegistry {
     /// Simple commands run since the current top-level line started (see
     /// [`MAX_COMMANDS_PER_LINE`]).
     pub(crate) commands_run: Cell<u64>,
+    /// Aliases being expanded by [`CommandRegistry::operator_alias`] (an
+    /// alias does not expand again inside its own text).
+    pub(crate) alias_stack: RefCell<Vec<String>>,
 }
 
 impl CommandRegistry {
@@ -73,6 +84,7 @@ impl CommandRegistry {
             jobs: RefCell::new(JobManager::new()),
             script_depth: Cell::new(0),
             commands_run: Cell::new(0),
+            alias_stack: RefCell::new(Vec::new()),
         }
     }
 
@@ -108,6 +120,11 @@ impl CommandRegistry {
     /// 64 KiB and new names beyond 4096 variables, so a script cannot grow
     /// the shell's memory without bound.
     pub(crate) fn assign_variable(&self, name: &str, value: &str) -> Result<()> {
+        if !is_var_name(name) {
+            return Err(OasisError::Command(
+                format!("invalid variable name: '{name}'").into(),
+            ));
+        }
         if value.len() > MAX_VAR_LEN {
             return Err(OasisError::Command(
                 format!(

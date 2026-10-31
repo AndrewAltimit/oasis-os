@@ -193,6 +193,31 @@ pub fn run_boot_scripts(state: &mut AppState, vfs: &mut MemoryVfs) {
     }
 }
 
+/// Run the `cron` jobs due at `now` (time since shell start), printing
+/// their output to the terminal.
+pub fn poll_cron(
+    state: &mut AppState,
+    vfs: &mut MemoryVfs,
+    cron: &mut oasis_core::script::CronScheduler,
+    now: std::time::Duration,
+) {
+    // Jobs start in `/` and their `cd`s are dropped: a job firing must not
+    // move the interactive shell's working directory.
+    let lines = {
+        let mut env = make_env(state, vfs);
+        env.cwd = "/".to_string();
+        cron.tick(now, &state.terminal.cmd_reg, &mut env)
+    };
+    if lines.is_empty() {
+        return;
+    }
+    for line in lines {
+        state.terminal.print(line);
+    }
+    state.terminal.dirty = true;
+    commands::trim_output(&mut state.terminal.output_lines);
+}
+
 /// Echo and execute one submitted terminal line, then persist history.
 pub fn run_line(line: &str, state: &mut AppState, sdi: &mut SdiRegistry, vfs: &mut MemoryVfs) {
     state.terminal.scroll_offset = 0;

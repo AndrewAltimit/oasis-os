@@ -141,9 +141,8 @@ pub unsafe extern "C" fn oasis_video_play(handle: *mut OasisInstance, path: *con
 
 #[cfg(feature = "_video")]
 fn video_play_inner(instance: &mut OasisInstance, path_str: &str) -> i32 {
-    // Stop any existing playback.
-    stop_video_thread(instance);
-
+    // Open the new stream before stopping the current one: a bad path
+    // must not end playback that was working.
     let file = match std::fs::File::open(path_str) {
         Ok(f) => f,
         Err(e) => {
@@ -159,6 +158,7 @@ fn video_play_inner(instance: &mut OasisInstance, path_str: &str) -> i32 {
             return -1;
         },
     };
+    stop_video_thread(instance);
 
     let latest_frame = std::sync::Arc::new(std::sync::Mutex::new(None));
     let audio_buffer = std::sync::Arc::new(std::sync::Mutex::new(
@@ -456,6 +456,24 @@ mod tests {
         assert_eq!(r, -1);
         let r = unsafe { oasis_video_next_frame(h, buf.as_mut_ptr(), 64, null, null) };
         assert_eq!(r, 0, "the malformed frame is not offered again");
+        unsafe { crate::oasis_destroy(h) };
+    }
+
+    #[test]
+    fn failed_play_keeps_current_playback() {
+        let h = create();
+        with_frame(
+            h,
+            oasis_video::VideoFrame {
+                rgba: vec![1; 4],
+                width: 1,
+                height: 1,
+                timestamp_secs: 0.0,
+            },
+        );
+        let bad = std::ffi::CString::new("/no/such/video.mp4").unwrap();
+        assert_eq!(unsafe { oasis_video_play(h, bad.as_ptr()) }, -1);
+        assert_eq!(unsafe { oasis_video_is_playing(h) }, 1, "still playing");
         unsafe { crate::oasis_destroy(h) };
     }
 

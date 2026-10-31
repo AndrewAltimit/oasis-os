@@ -3,7 +3,12 @@
 use oasis_types::error::OasisError;
 
 use super::read_text_input;
+use crate::cmd_helpers::{FlagSpec, parse_flags};
 use crate::interpreter::CommandOutput;
+
+const GREP_USAGE: &str = "grep [-cinqv] <pattern> [file]";
+const SORT_USAGE: &str = "sort [-nru] [file]";
+const UNIQ_USAGE: &str = "uniq [-c] [file]";
 
 // ---------------------------------------------------------------------------
 // grep
@@ -13,31 +18,16 @@ define_command!(
     GrepCmd,
     "grep",
     "Search for pattern in text",
-    "grep [-i] [-n] [-v] [-c] <pattern> [file]",
+    GREP_USAGE,
     "text",
     |args, env| {
-        let mut case_insensitive = false;
-        let mut show_numbers = false;
-        let mut invert = false;
-        let mut count_only = false;
-        let mut positional = Vec::new();
-
-        for &arg in args {
-            match arg {
-                "-i" => case_insensitive = true,
-                "-n" => show_numbers = true,
-                "-v" => invert = true,
-                "-c" => count_only = true,
-                _ => positional.push(arg),
-            }
-        }
-        if positional.is_empty() {
-            return Err(OasisError::Command(
-                "usage: grep [-i] [-n] [-v] [-c] <pattern> [file]".into(),
-            ));
-        }
-        let pattern = positional[0];
-        let text = read_text_input(positional.get(1).copied(), env)?;
+        let flags = parse_flags(args, &FlagSpec::switches("cinqv"), GREP_USAGE)?;
+        let (case_insensitive, show_numbers) = (flags.has('i'), flags.has('n'));
+        let (invert, count_only, quiet) = (flags.has('v'), flags.has('c'), flags.has('q'));
+        let Some(&pattern) = flags.positional.first() else {
+            return Err(OasisError::Command(format!("usage: {GREP_USAGE}").into()));
+        };
+        let text = read_text_input(flags.positional.get(1).copied(), env)?;
 
         let pat = if case_insensitive {
             pattern.to_ascii_lowercase()
@@ -62,20 +52,17 @@ define_command!(
             }
         }
 
-        if count_only {
-            let code = i32::from(matches.is_empty());
-            Ok(CommandOutput::status(
-                code,
-                CommandOutput::Text(format!("{}", matches.len())),
-            ))
-        } else if matches.is_empty() {
-            Ok(CommandOutput::status(
-                1,
-                CommandOutput::Text("(no matches)".to_string()),
-            ))
+        // Exit status 1 when nothing matched. No placeholder text: the
+        // output feeds pipes and `$(...)` (`grep x f | wc -l` counts 0).
+        let code = i32::from(matches.is_empty());
+        let output = if quiet || (matches.is_empty() && !count_only) {
+            CommandOutput::None
+        } else if count_only {
+            CommandOutput::Text(matches.len().to_string())
         } else {
-            Ok(CommandOutput::Text(matches.join("\n")))
-        }
+            CommandOutput::Text(matches.join("\n"))
+        };
+        Ok(CommandOutput::status(code, output))
     }
 );
 
@@ -87,41 +74,33 @@ define_command!(
     SortCmd,
     "sort",
     "Sort lines of text",
-    "sort [-r] [-n] [file]",
+    SORT_USAGE,
     "text",
     |args, env| {
-        let mut reverse = false;
-        let mut numeric = false;
-        let mut file_arg = None;
-        for &arg in args {
-            match arg {
-                "-r" => reverse = true,
-                "-n" => numeric = true,
-                _ => file_arg = Some(arg),
-            }
-        }
-        let text = read_text_input(file_arg, env)?;
+        let flags = parse_flags(args, &FlagSpec::switches("nru"), SORT_USAGE)?;
+        let text = read_text_input(flags.positional.first().copied(), env)?;
         let mut lines: Vec<&str> = text.lines().collect();
 
-        if numeric {
+        if flags.has('n') {
+            let key = |s: &str| -> f64 {
+                s.split_whitespace()
+                    .next()
+                    .and_then(|s| s.parse().ok())
+                    .unwrap_or(0.0)
+            };
             lines.sort_by(|a, b| {
-                let na: f64 = a
-                    .split_whitespace()
-                    .next()
-                    .and_then(|s| s.parse().ok())
-                    .unwrap_or(0.0);
-                let nb: f64 = b
-                    .split_whitespace()
-                    .next()
-                    .and_then(|s| s.parse().ok())
-                    .unwrap_or(0.0);
-                na.partial_cmp(&nb).unwrap_or(std::cmp::Ordering::Equal)
+                key(a)
+                    .partial_cmp(&key(b))
+                    .unwrap_or(std::cmp::Ordering::Equal)
             });
         } else {
             lines.sort();
         }
-        if reverse {
+        if flags.has('r') {
             lines.reverse();
+        }
+        if flags.has('u') {
+            lines.dedup();
         }
         Ok(CommandOutput::Text(lines.join("\n")))
     }
@@ -135,43 +114,36 @@ define_command!(
     UniqCmd,
     "uniq",
     "Remove adjacent duplicate lines",
-    "uniq [-c] [file]",
+    UNIQ_USAGE,
     "text",
     |args, env| {
-        let mut show_count = false;
-        let mut file_arg = None;
-        for &arg in args {
-            match arg {
-                "-c" => show_count = true,
-                _ => file_arg = Some(arg),
-            }
-        }
-        let text = read_text_input(file_arg, env)?;
+        let flags = parse_flags(args, &FlagSpec::switches("c"), UNIQ_USAGE)?;
+        let show_count = flags.has('c');
+        let text = read_text_input(flags.positional.first().copied(), env)?;
         let mut result = Vec::new();
         let mut last: Option<&str> = None;
         let mut count = 0usize;
 
+        let mut emit = |prev: &str, count: usize| {
+            if show_count {
+                result.push(format!("{count:>7} {prev}"));
+            } else {
+                result.push(prev.to_string());
+            }
+        };
         for line in text.lines() {
             if last == Some(line) {
                 count += 1;
             } else {
                 if let Some(prev) = last {
-                    if show_count {
-                        result.push(format!("{count:>7} {prev}"));
-                    } else {
-                        result.push(prev.to_string());
-                    }
+                    emit(prev, count);
                 }
                 last = Some(line);
                 count = 1;
             }
         }
         if let Some(prev) = last {
-            if show_count {
-                result.push(format!("{count:>7} {prev}"));
-            } else {
-                result.push(prev.to_string());
-            }
+            emit(prev, count);
         }
         Ok(CommandOutput::Text(result.join("\n")))
     }

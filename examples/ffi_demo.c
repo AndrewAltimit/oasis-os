@@ -101,6 +101,7 @@ extern int32_t oasis_video_get_audio(OasisInstance* handle, float* buf, uint32_t
 #define OASIS_MOD_CTRL 2
 #define OASIS_CB_COMMAND_EXEC 2
 #define OASIS_CB_APP_LAUNCH 3
+#define OASIS_CB_SHELL_OUTPUT 7
 
 /* ------------------------------------------------------------------------
  * Helpers

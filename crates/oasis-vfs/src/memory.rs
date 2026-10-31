@@ -10,7 +10,8 @@ use oasis_types::error::{OasisError, Result, VfsError};
 
 use crate::{
     AccessMode, EntryKind, FilePermissions, RenamePlan, Vfs, VfsContext, VfsEntry, VfsMetadata,
-    normalize_path as normalize, parent_path as parent,
+    authorize_permission_change, check_ancestors_searchable, normalize_path as normalize,
+    parent_path as parent,
 };
 
 #[derive(Debug, Clone)]
@@ -71,6 +72,7 @@ impl Vfs for MemoryVfs {
 
     fn readdir(&self, path: &str) -> Result<Vec<VfsEntry>> {
         let path = normalize(path)?;
+        check_ancestors_searchable(self, &path)?;
         match self.nodes.get(path.as_ref()) {
             Some(Node::Dir) => {
                 self.check_permission(path.as_ref(), AccessMode::Read)?;
@@ -121,6 +123,7 @@ impl Vfs for MemoryVfs {
 
     fn read(&self, path: &str) -> Result<Vec<u8>> {
         let path = normalize(path)?;
+        check_ancestors_searchable(self, &path)?;
         match self.nodes.get(path.as_ref()) {
             Some(Node::File(data)) => {
                 self.check_permission(path.as_ref(), AccessMode::Read)?;
@@ -133,6 +136,7 @@ impl Vfs for MemoryVfs {
 
     fn write(&mut self, path: &str, data: &[u8]) -> Result<()> {
         let path = normalize(path)?;
+        check_ancestors_searchable(self, &path)?;
         // Ensure parent directory exists.
         let par = parent(&path);
         self.require_dir(par)?;
@@ -174,6 +178,7 @@ impl Vfs for MemoryVfs {
 
     fn mkdir(&mut self, path: &str) -> Result<()> {
         let path = normalize(path)?;
+        check_ancestors_searchable(self, &path)?;
         match self.nodes.get(path.as_ref()) {
             Some(Node::Dir) => return Ok(()), // Already exists, no error.
             Some(Node::File(_)) => {
@@ -202,13 +207,17 @@ impl Vfs for MemoryVfs {
         if path.as_ref() == "/" {
             return Err(OasisError::Vfs("cannot remove root".into()));
         }
-        // Check parent directory write permission.
+        check_ancestors_searchable(self, &path)?;
+        if !self.nodes.contains_key(path.as_ref()) {
+            return Err(VfsError::NotFound {
+                path: path.into_owned(),
+            }
+            .into());
+        }
+        // Check parent directory write permission, then the target's own.
         let par = parent(&path);
         self.check_permission(par, AccessMode::Write)?;
-        // Check target's own permission.
-        if self.nodes.contains_key(path.as_ref()) {
-            self.check_permission(path.as_ref(), AccessMode::Write)?;
-        }
+        self.check_permission(path.as_ref(), AccessMode::Write)?;
         match self.nodes.get(path.as_ref()) {
             Some(Node::Dir) => {
                 // Check that directory is empty using BTreeMap range scan.
@@ -238,6 +247,8 @@ impl Vfs for MemoryVfs {
     fn rename(&mut self, from: &str, to: &str) -> Result<()> {
         let from = normalize(from)?;
         let to = normalize(to)?;
+        check_ancestors_searchable(self, &from)?;
+        check_ancestors_searchable(self, &to)?;
         if self.validate_rename(&from, &to)? == RenamePlan::NoOp {
             return Ok(());
         }
@@ -294,9 +305,8 @@ impl Vfs for MemoryVfs {
 
     fn set_permissions(&mut self, path: &str, perms: FilePermissions) -> Result<()> {
         let path = normalize(path)?;
-        if !self.nodes.contains_key(path.as_ref()) {
-            return Err(OasisError::Vfs(format!("no such path: {path}").into()));
-        }
+        let current = self.get_permissions(&path)?;
+        authorize_permission_change(&self.ctx, &path, &current)?;
         self.permissions.insert(path.into_owned(), perms);
         Ok(())
     }

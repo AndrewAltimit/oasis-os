@@ -124,17 +124,26 @@ impl Locale {
         ]
     }
 
-    /// Parse a locale from a code string. Returns `None` if unrecognized.
+    /// Parse a locale from a code or English name, case-insensitively.
+    /// A region / encoding suffix is ignored, so POSIX `LANG` values and
+    /// BCP 47 tags work (`ja_JP.UTF-8`, `zh-Hans-CN`, `de-AT`). Returns
+    /// `None` if unrecognized.
     #[must_use]
     pub fn from_code(code: &str) -> Option<Self> {
-        match code {
-            "en" | "EN" | "english" | "English" => Some(Self::English),
-            "ja" | "JA" | "jp" | "JP" | "japanese" | "Japanese" => Some(Self::Japanese),
-            "es" | "ES" | "spanish" | "Spanish" => Some(Self::Spanish),
-            "de" | "DE" | "german" | "German" => Some(Self::German),
-            "fr" | "FR" | "french" | "French" => Some(Self::French),
-            "zh" | "ZH" | "chinese" | "Chinese" => Some(Self::Chinese),
-            "ko" | "KO" | "korean" | "Korean" => Some(Self::Korean),
+        let lang = code
+            .trim()
+            .split(['-', '_', '.', '@'])
+            .next()
+            .unwrap_or_default()
+            .to_ascii_lowercase();
+        match lang.as_str() {
+            "en" | "english" => Some(Self::English),
+            "ja" | "jp" | "japanese" => Some(Self::Japanese),
+            "es" | "spanish" => Some(Self::Spanish),
+            "de" | "german" => Some(Self::German),
+            "fr" | "french" => Some(Self::French),
+            "zh" | "chinese" => Some(Self::Chinese),
+            "ko" | "korean" => Some(Self::Korean),
             _ => None,
         }
     }
@@ -263,13 +272,38 @@ pub fn translate(key: &str) -> &str {
 /// Returns the key itself if not found in any locale.
 #[must_use]
 pub fn translate_with_for(key: &str, args: &[(&str, &str)], locale: Locale) -> String {
-    let template = translate_for(key, locale);
-    let mut result = template.to_owned();
-    for &(name, value) in args {
-        let placeholder = format!("{{{name}}}");
-        result = result.replace(&placeholder, value);
+    interpolate(translate_for(key, locale), args)
+}
+
+/// Replace each `{name}` in `template` with its value from `args`, in one
+/// pass over the template: a value that itself contains `{other}` (a file
+/// name, user input) is inserted verbatim, never expanded. Unknown
+/// placeholders and unmatched braces are kept as written.
+fn interpolate(template: &str, args: &[(&str, &str)]) -> String {
+    let mut out = String::with_capacity(template.len());
+    let mut rest = template;
+    while let Some(open) = rest.find('{') {
+        out.push_str(&rest[..open]);
+        let after = &rest[open + 1..];
+        let value = after.find('}').and_then(|close| {
+            let name = &after[..close];
+            args.iter()
+                .find(|(n, _)| *n == name)
+                .map(|(_, v)| (*v, close))
+        });
+        match value {
+            Some((v, close)) => {
+                out.push_str(v);
+                rest = &after[close + 1..];
+            },
+            None => {
+                out.push('{');
+                rest = after;
+            },
+        }
     }
-    result
+    out.push_str(rest);
+    out
 }
 
 /// Look up a translation key and perform `{name}` interpolation.
@@ -492,6 +526,27 @@ mod tests {
         assert_eq!(Locale::from_code("zh"), Some(Locale::Chinese));
         assert_eq!(Locale::from_code("ko"), Some(Locale::Korean));
         assert_eq!(Locale::from_code("xx"), None);
+        // Case, region and encoding suffixes don't matter.
+        assert_eq!(Locale::from_code("En"), Some(Locale::English));
+        assert_eq!(Locale::from_code("ja_JP.UTF-8"), Some(Locale::Japanese));
+        assert_eq!(Locale::from_code("zh-Hans-CN"), Some(Locale::Chinese));
+        assert_eq!(Locale::from_code(" de-AT "), Some(Locale::German));
+        assert_eq!(Locale::from_code("FRENCH"), Some(Locale::French));
+        assert_eq!(Locale::from_code(""), None);
+        assert_eq!(Locale::from_code("-en"), None);
+    }
+
+    #[test]
+    fn interpolation_is_single_pass() {
+        // A value containing a placeholder is inserted verbatim.
+        assert_eq!(
+            interpolate("{a} and {b}", &[("a", "{b}"), ("b", "x")]),
+            "{b} and x"
+        );
+        // Unknown placeholders and stray braces are kept.
+        assert_eq!(interpolate("{x} {", &[("a", "1")]), "{x} {");
+        assert_eq!(interpolate("}{a}{{a}", &[("a", "1")]), "}1{1");
+        assert_eq!(interpolate("{a}{a}", &[("a", "é")]), "éé");
     }
 
     #[test]

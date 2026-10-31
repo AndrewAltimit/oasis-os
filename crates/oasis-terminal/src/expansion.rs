@@ -19,7 +19,7 @@ use std::collections::HashMap;
 use oasis_types::error::{OasisError, Result};
 
 use crate::expander::{Word, expand_words, split_words};
-use crate::pipeline::output_to_text;
+use crate::pipeline::capture_text;
 use crate::registry::CommandRegistry;
 use crate::types::{Environment, MAX_EXPANDED_LEN};
 
@@ -66,28 +66,115 @@ pub(crate) fn find_subst_end(chars: &[char], start: usize) -> Option<usize> {
 
 /// Which parameter a `$` at some index names, and where it ends.
 enum Dollar {
-    /// `$NAME`, `${NAME}`, `$?`, `$#`.
+    /// `$NAME`, `${NAME}`, `$?`, `$#`, `$@`, `$*`, `$0`..`$9`.
     Var(String),
+    /// `${NAME<op>WORD}` / `${#NAME}`.
+    Param(ParamExpr),
     /// `$(...)`: the inner command text.
     Subst(String),
+}
+
+/// A `${...}` form beyond the plain `${NAME}`.
+enum ParamExpr {
+    /// `${NAME:-WORD}` (`colon`: also when empty) / `${NAME-WORD}`.
+    Default {
+        name: String,
+        word: String,
+        colon: bool,
+    },
+    /// `${NAME:=WORD}` / `${NAME=WORD}`: like `Default`, and assigns.
+    Assign {
+        name: String,
+        word: String,
+        colon: bool,
+    },
+    /// `${#NAME}`: the length of the value in characters.
+    Length(String),
+    /// Anything else: a "bad substitution" error.
+    Bad(String),
+}
+
+/// Whether `name` is a valid shell variable name (or a special parameter).
+pub(crate) fn is_param_name(name: &str) -> bool {
+    let mut chars = name.chars();
+    match chars.next() {
+        Some('?' | '#' | '@' | '*') => name.len() == 1,
+        Some(c) if c.is_ascii_digit() => chars.all(|c| c.is_ascii_digit()),
+        Some(c) if c.is_alphabetic() || c == '_' => chars.all(|c| c.is_alphanumeric() || c == '_'),
+        _ => false,
+    }
+}
+
+/// Parse the body of a `${...}`.
+fn parse_braced(body: &str) -> Dollar {
+    if is_param_name(body) {
+        return Dollar::Var(body.to_string());
+    }
+    if let Some(name) = body.strip_prefix('#')
+        && is_param_name(name)
+    {
+        return Dollar::Param(ParamExpr::Length(name.to_string()));
+    }
+    let name_end = body
+        .char_indices()
+        .find(|&(_, c)| !(c.is_alphanumeric() || c == '_'))
+        .map_or(body.len(), |(i, _)| i);
+    let (name, rest) = body.split_at(name_end);
+    if is_param_name(name) {
+        let (colon, op_rest) = match rest.strip_prefix(':') {
+            Some(r) => (true, r),
+            None => (false, rest),
+        };
+        let mut it = op_rest.chars();
+        let op = it.next();
+        let word = it.as_str().to_string();
+        let name = name.to_string();
+        match op {
+            Some('-') => return Dollar::Param(ParamExpr::Default { name, word, colon }),
+            Some('=') => return Dollar::Param(ParamExpr::Assign { name, word, colon }),
+            _ => {},
+        }
+    }
+    Dollar::Param(ParamExpr::Bad(body.to_string()))
+}
+
+/// Index of the `}` closing a `${` whose body starts at `start` (nested
+/// `{` / `}` balance).
+fn find_brace_end(chars: &[char], start: usize) -> Option<usize> {
+    let mut depth = 1usize;
+    for (j, &c) in chars.iter().enumerate().skip(start) {
+        match c {
+            '{' => depth += 1,
+            '}' => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(j);
+                }
+            },
+            _ => {},
+        }
+    }
+    None
 }
 
 /// Parse the expansion starting at the `$` at `chars[i]`. Returns it and
 /// the index just past it, or `None` for a literal `$`.
 fn parse_dollar(chars: &[char], i: usize) -> Option<(Dollar, usize)> {
     match *chars.get(i + 1)? {
-        c @ ('?' | '#') => Some((Dollar::Var(c.to_string()), i + 2)),
+        c @ ('?' | '#' | '@' | '*') => Some((Dollar::Var(c.to_string()), i + 2)),
+        // `$1x` is `${1}x`: positional names are one digit.
+        c if c.is_ascii_digit() => Some((Dollar::Var(c.to_string()), i + 2)),
         '{' => {
-            let len = chars[i + 2..].iter().position(|&c| c == '}')?;
-            let name = chars[i + 2..i + 2 + len].iter().collect();
-            Some((Dollar::Var(name), i + 3 + len))
+            let close = find_brace_end(chars, i + 2)?;
+            let body: String = chars[i + 2..close].iter().collect();
+            Some((parse_braced(&body), close + 1))
         },
         '(' => {
             let close = find_subst_end(chars, i + 2)?;
             let inner = chars[i + 2..close].iter().collect();
             Some((Dollar::Subst(inner), close + 1))
         },
-        c if c.is_alphanumeric() || c == '_' => {
+        c if c.is_alphabetic() || c == '_' => {
             let end = chars[i + 1..]
                 .iter()
                 .position(|&c| !(c.is_alphanumeric() || c == '_'))
@@ -110,17 +197,52 @@ impl CommandRegistry {
         input: &str,
         env: &mut Environment<'_>,
     ) -> Result<Vec<Word>> {
-        split_words(input, &mut |chars, i, in_double, out| {
+        self.expand_words_with(input, env, true)
+    }
+
+    /// The `case` word: expanded like [`expand_words_of`](Self::expand_words_of)
+    /// but with no field splitting (`X='a  b'; case $X` sees `a  b`) and
+    /// no globbing; its words are joined with a space.
+    pub(crate) fn expand_case_word(
+        &self,
+        input: &str,
+        env: &mut Environment<'_>,
+    ) -> Result<String> {
+        let words = self.expand_words_with(input, env, false)?;
+        Ok(words
+            .into_iter()
+            .map(|w| w.text)
+            .collect::<Vec<_>>()
+            .join(" "))
+    }
+
+    /// [`expand_words_of`](Self::expand_words_of); `split`: unquoted
+    /// expansions are split into fields.
+    fn expand_words_with(
+        &self,
+        input: &str,
+        env: &mut Environment<'_>,
+        split: bool,
+    ) -> Result<Vec<Word>> {
+        let home = self.get_variable("HOME").filter(|h| !h.is_empty());
+        split_words(input, home.as_deref(), &mut |chars, i, in_double, out| {
             let Some((dollar, end)) = parse_dollar(chars, i) else {
                 return Ok(None);
             };
+            let whole = in_double || !split;
             match dollar {
-                Dollar::Var(name) => {
-                    out.push_expansion(&self.var_value(&name, &env.cwd), in_double)
+                // `"$@"`: one word per positional parameter.
+                Dollar::Var(name) if name == "@" && in_double => {
+                    out.push_quoted_fields(&self.positional_params());
+                },
+                Dollar::Var(name) => out.push_expansion(&self.var_value(&name, &env.cwd), whole),
+                Dollar::Param(expr) => {
+                    let value = self.param_value(expr, env)?;
+                    out.push_expansion(&value, whole);
                 },
                 Dollar::Subst(inner) => {
                     let text = self.substitute(&inner, env);
-                    out.push_expansion(text.trim_end_matches('\n'), in_double);
+                    out.push_expansion(text.trim_end_matches('\n'), whole);
                 },
             }
             if out.len() > MAX_EXPANDED_LEN {
@@ -149,7 +271,7 @@ impl CommandRegistry {
     fn substitute(&self, inner: &str, env: &mut Environment<'_>) -> String {
         let stdin = env.stdin.take();
         let text = match self.execute(inner, env) {
-            Ok(out) => output_to_text(&out),
+            Ok(out) => capture_text(&out),
             Err(e) => {
                 env.stderr.push_str(&format!("command substitution: {e}"));
                 String::new()
@@ -157,6 +279,62 @@ impl CommandRegistry {
         };
         env.stdin = stdin;
         text
+    }
+
+    /// `$1`..`$n` (`n` = `$#`).
+    pub(crate) fn positional_params(&self) -> Vec<String> {
+        let vars = self.variables.borrow();
+        positional(&vars)
+    }
+
+    /// The value of a `${...}` operator form. The `WORD` of `:-` / `:=`
+    /// gets variable and `$(...)` expansion and quote removal.
+    fn param_value(&self, expr: ParamExpr, env: &mut Environment<'_>) -> Result<String> {
+        let unset_or_empty = |name: &str, colon: bool| {
+            let vars = self.variables.borrow();
+            match vars.get(name) {
+                None => !matches!(name, "?" | "#" | "CWD"),
+                Some(v) => colon && v.is_empty(),
+            }
+        };
+        match expr {
+            ParamExpr::Length(name) => {
+                Ok(self.var_value(&name, &env.cwd).chars().count().to_string())
+            },
+            ParamExpr::Default { name, word, colon } => {
+                if unset_or_empty(&name, colon) {
+                    self.expand_param_word(&word, env)
+                } else {
+                    Ok(self.var_value(&name, &env.cwd))
+                }
+            },
+            ParamExpr::Assign { name, word, colon } => {
+                if !unset_or_empty(&name, colon) {
+                    return Ok(self.var_value(&name, &env.cwd));
+                }
+                if !name.starts_with(|c: char| c.is_alphabetic() || c == '_') {
+                    return Err(OasisError::Command(
+                        format!("${{{name}}}: cannot assign in this way").into(),
+                    ));
+                }
+                let value = self.expand_param_word(&word, env)?;
+                self.assign_variable(&name, &value)?;
+                Ok(value)
+            },
+            ParamExpr::Bad(body) => Err(OasisError::Command(
+                format!("${{{body}}}: bad substitution").into(),
+            )),
+        }
+    }
+
+    /// Expand the `WORD` of `${NAME:-WORD}` into one string.
+    fn expand_param_word(&self, word: &str, env: &mut Environment<'_>) -> Result<String> {
+        let words = self.expand_words_of(word, env)?;
+        Ok(words
+            .into_iter()
+            .map(|w| w.text)
+            .collect::<Vec<_>>()
+            .join(" "))
     }
 
     /// The value of shell parameter `name` (empty when unset). `CWD` is the
@@ -170,15 +348,37 @@ impl CommandRegistry {
     /// the command with that word replaced by the alias text (expanded
     /// along with the rest of the line afterwards; one level only).
     pub(crate) fn apply_alias(&self, cmd: &str) -> Option<String> {
+        self.alias_of(cmd).map(|(_, line)| line)
+    }
+
+    /// [`apply_alias`](Self::apply_alias) for an alias whose text holds
+    /// shell operators (`alias ll='ls | sort'`): those must be parsed with
+    /// the line, so the chain executor substitutes it before splitting
+    /// pipes. Returns the alias name and the rewritten command.
+    pub(crate) fn operator_alias(&self, cmd: &str) -> Option<(String, String)> {
+        self.alias_of(cmd).filter(|(name, _)| {
+            self.aliases
+                .borrow()
+                .get(name)
+                .is_some_and(|text| text.contains(['|', ';', '&', '<', '>']))
+        })
+    }
+
+    /// The alias naming the plain first word of `cmd` (not one being
+    /// expanded right now) and `cmd` with that word replaced.
+    fn alias_of(&self, cmd: &str) -> Option<(String, String)> {
         let cmd = cmd.trim_start();
         let end = cmd.find(char::is_whitespace).unwrap_or(cmd.len());
         let first = &cmd[..end];
         if first.is_empty() || first.contains(['\'', '"', '\\', '$']) {
             return None;
         }
+        if self.alias_stack.borrow().iter().any(|a| a == first) {
+            return None;
+        }
         let aliases = self.aliases.borrow();
         let expansion = aliases.get(first)?;
-        Some(format!("{expansion}{}", &cmd[end..]))
+        Some((first.to_string(), format!("{expansion}{}", &cmd[end..])))
     }
 
     /// Replace the parameter expansions (`$VAR`, `${VAR}`, `$?`, `$#`,
@@ -217,7 +417,8 @@ impl CommandRegistry {
                         i = end;
                         continue;
                     },
-                    Some((Dollar::Subst(_), end)) => {
+                    // Operator forms and `$(...)` are left to run time.
+                    Some((Dollar::Subst(_) | Dollar::Param(_), end)) => {
                         out.extend(&chars[i..end]);
                         i = end;
                         continue;
@@ -273,8 +474,17 @@ fn resolve_var(name: &str, vars: &HashMap<String, String>, cwd: &str, last: i32)
         // The status of the previous command (the chain executor updates
         // `?` once a pipeline finishes).
         "?" => vars.get("?").cloned().unwrap_or_else(|| last.to_string()),
+        "@" | "*" => positional(vars).join(" "),
         _ => vars.get(name).cloned().unwrap_or_default(),
     }
+}
+
+/// `$1`..`$n` from the variable table (`n` = `$#`).
+fn positional(vars: &HashMap<String, String>) -> Vec<String> {
+    let n: usize = vars.get("#").and_then(|n| n.parse().ok()).unwrap_or(0);
+    (1..=n)
+        .map(|i| vars.get(&i.to_string()).cloned().unwrap_or_default())
+        .collect()
 }
 
 /// Append `value` to `out` so the tokenizer reads it back verbatim: inside

@@ -750,6 +750,36 @@ fn files_made_in_the_terminal_show_up_in_the_file_manager() {
     assert!(window_shows(&mut h, &editor.title, "typed in the terminal"));
 }
 
+#[test]
+fn cron_jobs_added_in_the_terminal_run_on_their_interval() {
+    let _g = shared();
+    let mut h = boot("classic");
+    h.vfs_mut()
+        .write("/tmp/beat.sh", b"echo cron-beat >> /tmp/beats\n")
+        .unwrap();
+    h.terminal("cron add beat 2s /tmp/beat.sh");
+    h.settle();
+    let beats = |h: &Harness| {
+        h.vfs()
+            .read("/tmp/beats")
+            .map(|d| String::from_utf8_lossy(&d).matches("cron-beat").count())
+            .unwrap_or(0)
+    };
+    assert_eq!(beats(&h), 0, "{:?}", h.state().terminal.output_lines);
+    // Seen on the first scheduler pass, then due every 2 s.
+    h.advance(std::time::Duration::from_secs(7));
+    let n = beats(&h);
+    assert!(
+        (2..=3).contains(&n),
+        "{n} runs {:?}",
+        h.state().terminal.output_lines
+    );
+    h.terminal("cron remove beat");
+    h.settle();
+    h.advance(std::time::Duration::from_secs(5));
+    assert_eq!(beats(&h), n, "the job ran after `cron remove`");
+}
+
 // ---------------------------------------------------------------------------
 // Several apps at once
 // ---------------------------------------------------------------------------

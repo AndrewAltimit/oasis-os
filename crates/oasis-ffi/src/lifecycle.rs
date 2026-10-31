@@ -13,7 +13,7 @@ use oasis_core::sdi::SdiRegistry;
 use oasis_core::terminal::{CommandRegistry, register_builtins};
 use oasis_core::vfs::{GameAssetVfs, Vfs};
 
-use crate::handle::{OasisInstance, c_str_to_str, ffi_guard};
+use crate::handle::{ActiveHandle, OasisInstance, c_str_to_str, ffi_guard};
 
 static INIT_LOGGER: Once = Once::new();
 
@@ -28,7 +28,6 @@ const DEMO_APPS: &[&str] = &[
     "Settings",
     "TV Guide",
     "Terminal",
-    "Video Embed",
 ];
 
 /// A fresh instance VFS: empty `/home`, `/etc`, `/tmp` and the dashboard
@@ -183,6 +182,8 @@ unsafe fn create_instance(
     let mut sdi = SdiRegistry::new();
     let mut cmd_reg = CommandRegistry::new();
     register_builtins(&mut cmd_reg);
+    // `cron` / `startup`: `oasis_tick` runs the due cron jobs.
+    oasis_core::script::register_script_commands(&mut cmd_reg);
 
     let vfs = fresh_vfs();
 
@@ -198,8 +199,16 @@ unsafe fn create_instance(
             theme_str.unwrap_or(""),
             strings_str.unwrap_or(""),
         )
+        .inspect_err(|e| log::error!("oasis_create: skin rejected, running unskinned: {e}"))
         .ok(),
-        _ => None,
+        (None, None, None) => None,
+        _ => {
+            log::error!(
+                "oasis_create: a skin needs manifest, layout and features TOML (all \
+                 non-null, valid UTF-8); running unskinned"
+            );
+            None
+        },
     };
 
     // Scale the theme + layout to the requested buffer resolution (the desktop/
@@ -247,9 +256,10 @@ unsafe fn create_instance(
         width,
         height,
         software_shader: None,
-        shader_time: 0.0,
+        clock: 0.0,
         shader_cache: Vec::new(),
         last_render_time: -1000.0,
+        cron: oasis_core::script::CronScheduler::new(),
         #[cfg(feature = "_video")]
         video_state: None,
     };
@@ -270,12 +280,21 @@ unsafe fn create_instance(
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn oasis_destroy(handle: *mut OasisInstance) {
     ffi_guard("oasis_destroy", (), || {
-        if !handle.is_null() {
-            // SAFETY: Reclaiming ownership of handle allocated by `oasis_create` via `Box::into_raw`.
-            let mut instance = unsafe { Box::from_raw(handle) };
-            let _ = instance.audio.shutdown();
-            let _ = instance.backend.shutdown();
-            drop(instance);
+        if handle.is_null() {
+            return;
         }
+        // Destroying from inside a callback would free the instance the
+        // firing export is still using; refuse. The guard also stays held
+        // through teardown, so a callback fired by it (audio `Shutdown`)
+        // cannot re-enter.
+        let Some(_active) = ActiveHandle::enter(handle, "oasis_destroy") else {
+            return;
+        };
+        // SAFETY: Reclaiming ownership of handle allocated by `oasis_create` via
+        // `Box::into_raw`; no other reference to it is live on this thread.
+        let mut instance = unsafe { Box::from_raw(handle) };
+        let _ = instance.audio.shutdown();
+        let _ = instance.backend.shutdown();
+        drop(instance);
     })
 }

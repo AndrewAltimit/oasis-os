@@ -302,6 +302,8 @@ pub struct Shell<B: ShellBackend> {
     /// When the status bar / System Monitor info last refreshed
     /// ([`SYSINFO_INTERVAL`]).
     last_sysinfo_at: Instant,
+    /// Runs the `cron` jobs, checked with the sysinfo refresh.
+    cron: oasis_core::script::CronScheduler,
     /// Zero point of the animation clock (shader wallpapers, image decal
     /// layers), so they run at wall-clock speed at any frame rate.
     clock_origin: Instant,
@@ -689,6 +691,7 @@ impl<B: ShellBackend> Shell<B> {
             last_present_at: now,
             last_app_tick_at: now,
             last_sysinfo_at: now,
+            cron: oasis_core::script::CronScheduler::new(),
             clock_origin: now,
             tv_timeout_secs,
             tv_timeout_start: None,
@@ -741,6 +744,8 @@ impl<B: ShellBackend> Shell<B> {
                 .sysmon_probe
                 .publish(vfs, Some(&state.platform), Some(&state.platform));
             self.settings_mirror.sync(vfs);
+            let since_start = now.saturating_duration_since(self.clock_origin);
+            terminal_input::poll_cron(state, vfs, &mut self.cron, since_start);
         }
 
         for event in events {

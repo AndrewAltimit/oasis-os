@@ -8,6 +8,16 @@ use oasis_vfs::{MemoryVfs, Vfs};
 
 use super::tests_basic::make_env;
 
+/// Whether `case VALUE in PATTERN)` takes the arm (run through the shell).
+fn case_pattern_matches(value: &str, pattern: &str) -> bool {
+    let mut reg = CommandRegistry::new();
+    reg.register(Box::new(EchoCmd));
+    let mut vfs = MemoryVfs::new();
+    let mut env = make_env(&mut vfs);
+    let line = format!("case '{value}' in {pattern}) echo Y;; esac");
+    matches!(reg.execute(&line, &mut env), Ok(CommandOutput::Text(t)) if t == "Y")
+}
+
 struct EchoCmd;
 impl Command for EchoCmd {
     fn name(&self) -> &str {
@@ -635,13 +645,13 @@ mod prop {
             let _ = parse_redirect(&s);
         }
 
-        /// `parse_redirect` always returns a command part that is a
-        /// substring (or equal) of the original input.
+        /// Every word of the command part `parse_redirect` returns comes
+        /// from the input (words after a redirect target rejoin it).
         #[test]
-        fn parse_redirect_command_part_is_substring(s in "[ -~]{0,80}") {
+        fn parse_redirect_command_words_come_from_input(s in "[ -~]{0,80}") {
             let (cmd, _) = parse_redirect(&s);
             prop_assert!(
-                s.contains(cmd.trim()),
+                cmd.split_whitespace().all(|w| s.contains(w)),
                 "command part '{cmd}' should be within original '{s}'",
             );
         }

@@ -1,9 +1,9 @@
 //! Enhanced tab completion engine for the shell.
 //!
 //! Provides context-aware completion for commands, variables, and file
-//! paths. Supports cycling through candidates on repeated tab presses.
+//! paths, including quoted and backslash-escaped path arguments.
 //!
-//! This module holds the result types and the stateful [`Completer`];
+//! This module holds the result types and the [`Completer`];
 //! submodules hold the rest:
 //!
 //! - `candidates` -- the stateless completers ([`detect_context`],
@@ -22,7 +22,7 @@ pub use candidates::{
 
 use oasis_vfs::Vfs;
 
-use helpers::extract_partial;
+use helpers::{extract_partial, requote, unquote_word};
 
 /// What kind of completion to perform based on cursor position.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -33,11 +33,6 @@ pub enum CompletionContext {
     Variable,
     /// Argument position: complete file paths.
     FilePath,
-    /// After specific commands: contextual completion.
-    Subcommand {
-        /// The command name preceding the cursor.
-        command: String,
-    },
     /// No completion available.
     None,
 }
@@ -57,48 +52,38 @@ pub struct CompletionResult {
     pub is_complete: bool,
 }
 
-/// Tab completion engine for the shell.
-pub struct Completer {
-    /// Current index when cycling through candidates.
-    cycle_index: Option<usize>,
-    /// Candidates available for cycling.
-    cycle_candidates: Vec<String>,
-    /// Start byte offset for the cycling region.
-    cycle_start: usize,
-    /// End byte offset for the cycling region.
-    cycle_end: usize,
-    /// The original (uncompleted) text for the cycling region.
-    cycle_original: String,
-}
+/// Tab completion engine for the shell (stateless: each Tab press
+/// completes afresh).
+#[derive(Debug, Default, Clone, Copy)]
+pub struct Completer;
 
 // ---------------------------------------------------------------------------
 // Completer implementation
 // ---------------------------------------------------------------------------
 
 impl Completer {
-    /// Create a new completer with no cycling state.
+    /// Create a completer.
     pub fn new() -> Self {
-        Self {
-            cycle_index: None,
-            cycle_candidates: Vec::new(),
-            cycle_start: 0,
-            cycle_end: 0,
-            cycle_original: String::new(),
-        }
+        Self
     }
 
     /// Main completion entry point.
     ///
     /// Analyses the input at the cursor position, determines the completion
     /// context, and returns a result (or `None` if nothing matches).
-    #[allow(clippy::too_many_arguments)]
+    /// `commands` are the names completed in command position (commands,
+    /// builtins, aliases, functions).
+    ///
+    /// A path argument may be partly quoted or backslash-escaped
+    /// (`cat "my f`, `cat my\ f`); the replacement keeps an opening quote
+    /// (closing it once the match is complete) and otherwise escapes
+    /// spaces and shell metacharacters, so the result reads back as one
+    /// word.
     pub fn complete(
-        &mut self,
+        &self,
         input: &str,
         cursor: usize,
         commands: &[String],
-        aliases: &[String],
-        functions: &[String],
         variables: &[String],
         cwd: &str,
         vfs: &dyn Vfs,
@@ -109,84 +94,28 @@ impl Completer {
         let (partial, start) = extract_partial(input, clamped, &context);
 
         let result = match context {
-            CompletionContext::Command => complete_command(&partial, commands, aliases, functions),
+            CompletionContext::Command => complete_command(&partial, commands, &[], &[]),
             CompletionContext::Variable => complete_variable(&partial, variables),
-            CompletionContext::FilePath | CompletionContext::Subcommand { .. } => {
-                complete_path(&partial, cwd, vfs)
+            CompletionContext::FilePath => {
+                let (word, quote) = unquote_word(&partial);
+                let mut result = complete_path(&word, cwd, vfs);
+                result.replacement = requote(&result.replacement, quote, result.is_complete);
+                result
             },
             CompletionContext::None => return None,
         };
 
         if result.candidates.is_empty() {
-            self.reset();
             return None;
         }
 
-        // Adjust offsets to be relative to the full input line.
-        let adjusted = CompletionResult {
+        // Offsets relative to the full input line.
+        Some(CompletionResult {
             replacement: result.replacement,
             start,
             end: clamped,
-            candidates: result.candidates.clone(),
+            candidates: result.candidates,
             is_complete: result.is_complete,
-        };
-
-        // Set up cycling state.
-        self.cycle_candidates = result.candidates;
-        self.cycle_start = start;
-        self.cycle_end = clamped;
-        self.cycle_original = partial;
-        self.cycle_index = if adjusted.is_complete { None } else { Some(0) };
-
-        Some(adjusted)
-    }
-
-    /// Cycle to the next candidate on repeated tab presses.
-    ///
-    /// Returns `None` if there is nothing to cycle (single match or no prior
-    /// completion).
-    pub fn cycle_next(&mut self, input: &str, cursor: usize) -> Option<CompletionResult> {
-        let count = self.cycle_candidates.len();
-        if count <= 1 {
-            return None;
-        }
-
-        let idx = match self.cycle_index {
-            Some(i) => (i + 1) % count,
-            None => 0,
-        };
-        self.cycle_index = Some(idx);
-
-        let replacement = self.cycle_candidates[idx].clone();
-        let _ = cursor; // cursor provided for future use
-        let _ = input;
-
-        Some(CompletionResult {
-            replacement,
-            start: self.cycle_start,
-            end: self.cycle_end,
-            candidates: self.cycle_candidates.clone(),
-            is_complete: true,
         })
-    }
-
-    /// Clear cycling state.
-    pub fn reset(&mut self) {
-        self.cycle_index = None;
-        self.cycle_candidates.clear();
-        self.cycle_start = 0;
-        self.cycle_end = 0;
-        self.cycle_original.clear();
-    }
-
-    /// Whether the completer is currently cycling through candidates.
-    pub fn is_cycling(&self) -> bool {
-        self.cycle_index.is_some() && self.cycle_candidates.len() > 1
-    }
-}
-
-impl Default for Completer {
-    fn default() -> Self {
-        Self::new()
     }
 }

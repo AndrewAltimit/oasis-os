@@ -232,71 +232,83 @@ fn lcp_no_common() {
     assert_eq!(longest_common_prefix(&items), "");
 }
 
-// -- Completer cycling ------------------------------------------------
+// -- Completer --------------------------------------------------------
 
 #[test]
-fn cycle_through_candidates() {
-    let mut vfs = make_test_vfs();
-    let mut completer = Completer::new();
+fn ambiguous_command_lists_candidates() {
+    let vfs = MemoryVfs::new();
     let cmds = vec!["echo".into(), "exit".into(), "env".into()];
-
-    let result = completer.complete("e", 1, &cmds, &[], &[], &[], "/", &vfs);
-    assert!(result.is_some());
-    let r = result.unwrap();
+    let r = Completer::new()
+        .complete("e", 1, &cmds, &[], "/", &vfs)
+        .unwrap();
     assert!(!r.is_complete);
     assert_eq!(r.candidates.len(), 3);
-
-    // Cycle: should get each candidate in order.
-    let c1 = completer.cycle_next("e", 1).unwrap();
-    let c2 = completer.cycle_next("e", 1).unwrap();
-    let c3 = completer.cycle_next("e", 1).unwrap();
-    // After 3 cycles we wrap around.
-    let c4 = completer.cycle_next("e", 1).unwrap();
-    assert_eq!(c1.replacement, c4.replacement);
-
-    // All three candidates should appear.
-    let cycled: Vec<String> = vec![c1.replacement, c2.replacement, c3.replacement];
-    assert!(cycled.contains(&"echo".into()));
-    assert!(cycled.contains(&"env".into()));
-    assert!(cycled.contains(&"exit".into()));
-
-    let _ = &mut vfs; // suppress unused warning
 }
 
 #[test]
-fn reset_clears_cycling() {
-    let mut completer = Completer::new();
-    let cmds: Vec<String> = vec!["echo".into(), "exit".into()];
-    let vfs = MemoryVfs::new();
-
-    completer.complete("e", 1, &cmds, &[], &[], &[], "/", &vfs);
-    assert!(completer.is_cycling());
-
-    completer.reset();
-    assert!(!completer.is_cycling());
-    assert!(completer.cycle_next("e", 1).is_none());
-}
-
-#[test]
-fn single_match_not_cycling() {
-    let mut completer = Completer::new();
+fn single_match_is_complete() {
     let cmds: Vec<String> = vec!["echo".into()];
     let vfs = MemoryVfs::new();
-
-    let result = completer.complete("ech", 3, &cmds, &[], &[], &[], "/", &vfs);
+    let result = Completer::new().complete("ech", 3, &cmds, &[], "/", &vfs);
     assert!(result.unwrap().is_complete);
-    assert!(!completer.is_cycling());
+}
+
+#[test]
+fn lcp_respects_char_boundaries() {
+    let items = vec!["café1".into(), "cafè2".into()];
+    assert_eq!(longest_common_prefix(&items), "caf");
+    let items = vec!["añb".into(), "añ".into()];
+    assert_eq!(longest_common_prefix(&items), "añ");
+}
+
+fn spaced_vfs() -> MemoryVfs {
+    let mut vfs = MemoryVfs::new();
+    vfs.write("/my file.txt", b"x").unwrap();
+    vfs.write("/it's.txt", b"x").unwrap();
+    vfs
+}
+
+#[test]
+fn path_with_space_is_escaped() {
+    let vfs = spaced_vfs();
+    let r = Completer::new()
+        .complete("cat my", 6, &[], &[], "/", &vfs)
+        .unwrap();
+    assert_eq!(r.replacement, "my\\ file.txt");
+    assert_eq!((r.start, r.end), (4, 6));
+}
+
+#[test]
+fn escaped_and_quoted_partials_complete() {
+    let vfs = spaced_vfs();
+    let c = Completer::new();
+    let r = c.complete("cat my\\ f", 9, &[], &[], "/", &vfs).unwrap();
+    assert_eq!(r.replacement, "my\\ file.txt");
+    assert_eq!(r.start, 4);
+    let r = c.complete("cat \"my f", 9, &[], &[], "/", &vfs).unwrap();
+    assert_eq!(r.replacement, "\"my file.txt\"");
+    let r = c.complete("cat 'it", 7, &[], &[], "/", &vfs).unwrap();
+    assert_eq!(r.replacement, "'it'\\''s.txt'");
+    let r = c.complete("cat it", 6, &[], &[], "/", &vfs).unwrap();
+    assert_eq!(r.replacement, "it\\'s.txt");
+}
+
+#[test]
+fn quoted_space_does_not_split_the_argument() {
+    assert_eq!(last_arg_start("cat \"a b"), 4);
+    assert_eq!(last_arg_start("cat a\\ b"), 4);
+    assert_eq!(last_arg_start("cat 'a b' c"), 10);
 }
 
 // -- Edge cases -------------------------------------------------------
 
 #[test]
 fn empty_input_returns_all_commands() {
-    let mut completer = Completer::new();
+    let completer = Completer::new();
     let cmds: Vec<String> = vec!["ls".into(), "cd".into()];
     let vfs = MemoryVfs::new();
 
-    let result = completer.complete("", 0, &cmds, &[], &[], &[], "/", &vfs);
+    let result = completer.complete("", 0, &cmds, &[], "/", &vfs);
     assert!(result.is_some());
     let r = result.unwrap();
     assert_eq!(r.candidates.len(), 2);
@@ -309,11 +321,11 @@ fn cursor_at_start_is_command_context() {
 
 #[test]
 fn no_match_returns_none() {
-    let mut completer = Completer::new();
+    let completer = Completer::new();
     let cmds: Vec<String> = vec!["ls".into()];
     let vfs = MemoryVfs::new();
 
-    let result = completer.complete("xyz", 3, &cmds, &[], &[], &[], "/", &vfs);
+    let result = completer.complete("xyz", 3, &cmds, &[], "/", &vfs);
     assert!(result.is_none());
 }
 

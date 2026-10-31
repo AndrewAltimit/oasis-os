@@ -10,7 +10,8 @@ mod audio_commands;
 mod builtins;
 mod commands;
 pub mod completion;
-pub mod control_flow;
+#[cfg(test)]
+mod control_flow;
 mod core_commands;
 mod dev_commands;
 mod doc_commands;
@@ -90,7 +91,7 @@ pub use text_commands::register_text_commands;
 pub use ui_commands::register_ui_commands;
 
 pub mod cmd_helpers;
-pub use cmd_helpers::{require_args, require_args_exact, time_seed};
+pub use cmd_helpers::{FlagSpec, Flags, parse_flags, require_args, require_args_exact, time_seed};
 /// How deeply shell constructs may nest (`$(...)`, function calls, scripts,
 /// `if` / loop / `case` blocks, all together).
 pub use types::MAX_EXEC_DEPTH;

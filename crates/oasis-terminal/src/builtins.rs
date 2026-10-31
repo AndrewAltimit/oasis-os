@@ -13,6 +13,7 @@ use std::collections::HashMap;
 use oasis_types::error::{OasisError, Result};
 
 use crate::interpreter::{CommandOutput, CommandRegistry, Environment};
+use crate::registry::is_var_name;
 
 /// Signature of a builtin's implementation.
 pub(crate) type BuiltinFn =
@@ -537,9 +538,17 @@ impl CommandRegistry {
                 ));
             };
             top.entry(name.to_string()).or_insert(old);
-            // Set the new value.
-            if let Some(v) = value {
-                self.assign_variable(name, v)?;
+            drop(scopes_mut);
+            // Set the new value; `local X` alone starts X unset in the
+            // function (it no longer sees the caller's X).
+            match value {
+                Some(v) => self.assign_variable(name, v)?,
+                None if is_var_name(name) => self.unset_variable(name),
+                None => {
+                    return Err(OasisError::Command(
+                        format!("local: invalid variable name: {name}").into(),
+                    ));
+                },
             }
         }
         Ok(CommandOutput::None)
@@ -568,10 +577,20 @@ impl CommandRegistry {
             // Show all variables.
             return self.execute_env();
         }
+        // `set A=1 B=2` assigns each; `set A=hello world` (the historical
+        // unquoted form) assigns the joined words. Values are kept as
+        // given: `set X="  a "` keeps its spaces.
+        let is_assignment = |a: &&str| a.split_once('=').is_some_and(|(n, _)| is_var_name(n));
+        if args.len() > 1 && args.iter().all(is_assignment) {
+            for arg in args {
+                if let Some((name, value)) = arg.split_once('=') {
+                    self.assign_variable(name, value)?;
+                }
+            }
+            return Ok(CommandOutput::None);
+        }
         let assignment = args.join(" ");
         if let Some((name, value)) = assignment.split_once('=') {
-            let name = name.trim();
-            let value = value.trim();
             if name.is_empty() {
                 return Err(OasisError::Command("usage: set VAR=value".into()));
             }
@@ -677,7 +696,8 @@ impl CommandRegistry {
     }
 
     /// Return completions for a partial command name.
-    pub fn completions(&self, partial: &str) -> Vec<String> {
+    #[cfg(test)]
+    pub(crate) fn completions(&self, partial: &str) -> Vec<String> {
         let lower = partial.to_ascii_lowercase();
         let mut matches: Vec<String> = self
             .commands

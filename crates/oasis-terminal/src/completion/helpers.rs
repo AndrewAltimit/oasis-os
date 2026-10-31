@@ -68,7 +68,7 @@ pub(super) fn extract_partial(
             let trimmed_start = before.len() - partial.len();
             (partial.to_string(), trimmed_start + start)
         },
-        CompletionContext::FilePath | CompletionContext::Subcommand { .. } => {
+        CompletionContext::FilePath => {
             // Find the start of the current argument (last unquoted space).
             let arg_start = last_arg_start(before);
             let partial = &before[arg_start..];
@@ -102,17 +102,86 @@ pub(super) fn find_variable_start(before: &str) -> Option<usize> {
     None
 }
 
-/// Find the start byte offset of the last whitespace-delimited argument.
+/// Find the start byte offset of the last argument: after the last
+/// whitespace that is not quoted or backslash-escaped.
 pub(super) fn last_arg_start(before: &str) -> usize {
-    let bytes = before.as_bytes();
-    let mut i = bytes.len();
-    while i > 0 {
-        i -= 1;
-        if bytes[i] == b' ' || bytes[i] == b'\t' {
-            return i + 1;
+    let (mut in_single, mut in_double, mut escaped) = (false, false, false);
+    let mut start = 0;
+    for (i, c) in before.char_indices() {
+        if escaped {
+            escaped = false;
+            continue;
+        }
+        match c {
+            '\'' if !in_double => in_single = !in_single,
+            '"' if !in_single => in_double = !in_double,
+            '\\' if !in_single => escaped = true,
+            ' ' | '\t' if !in_single && !in_double => start = i + 1,
+            _ => {},
         }
     }
-    0
+    start
+}
+
+/// An argument's typed text with quotes and escapes removed, and the
+/// quote it is still open in (`"my f` -> (`my f`, Some('"'))).
+pub(super) fn unquote_word(raw: &str) -> (String, Option<char>) {
+    let mut out = String::with_capacity(raw.len());
+    let mut quote: Option<char> = None;
+    let mut chars = raw.chars();
+    while let Some(c) = chars.next() {
+        match (quote, c) {
+            (Some(q), c) if c == q => quote = None,
+            (Some('"'), '\\') => out.extend(chars.next()),
+            (Some(_), c) => out.push(c),
+            (None, '\'' | '"') => quote = Some(c),
+            (None, '\\') => out.extend(chars.next()),
+            (None, c) => out.push(c),
+        }
+    }
+    (out, quote)
+}
+
+/// Characters a completed path escapes outside quotes.
+const SHELL_SPECIAL: &[char] = &[
+    ' ', '\t', '\'', '"', '\\', '$', '&', '|', ';', '<', '>', '(', ')', '*', '?', '[', '#', '`',
+    '{', '}', '~',
+];
+
+/// Encode completed path text back into shell syntax: inside the quote
+/// `quote` the word reopens it (and closes it when `complete` and not a
+/// directory); unquoted, specials are backslash-escaped.
+pub(super) fn requote(text: &str, quote: Option<char>, complete: bool) -> String {
+    let mut out = String::with_capacity(text.len() + 2);
+    match quote {
+        Some(q) => {
+            out.push(q);
+            for c in text.chars() {
+                if q == '"' && matches!(c, '"' | '\\' | '$' | '`') {
+                    out.push('\\');
+                }
+                // A `'` cannot appear inside single quotes: close, escape,
+                // reopen.
+                if q == '\'' && c == '\'' {
+                    out.push_str("'\\''");
+                    continue;
+                }
+                out.push(c);
+            }
+            if complete && !text.ends_with('/') {
+                out.push(q);
+            }
+        },
+        None => {
+            for c in text.chars() {
+                if SHELL_SPECIAL.contains(&c) {
+                    out.push('\\');
+                }
+                out.push(c);
+            }
+        },
+    }
+    out
 }
 
 /// Split a user-typed path into (directory_prefix, filename_prefix).

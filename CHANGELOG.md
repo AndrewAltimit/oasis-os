@@ -373,6 +373,94 @@ larger changes by area. Breaking API changes are marked **(breaking)**.
   throw); a failed TV start no longer leaves a `<video>` in the page; URL
   log truncation is char-boundary safe.
 
+### Terminal (oasis-terminal)
+
+- One option parser (`oasis_terminal::parse_flags` / `FlagSpec`) for `ls`, `rm`, `mkdir`,
+  `grep`, `sort`, `uniq`, `wc`, `head`, `tail`, `tee`, `tr`, `cut`, `base64` and `xxd`:
+  combined short options (`-la`, `grep -in`), `-n5` / `-n 5`, `--`, options after operands,
+  and an error with the usage line for an unknown option **(breaking: `-x` used to be taken
+  as a file name or pattern; use `--` for operands that start with `-`)**. New options:
+  `ls -a` / `-l` (plain `ls` now hides dotfiles), `rm -r` / `-f`, `mkdir -p`, `grep -q`,
+  `sort -u`, `head -N` / `tail -N`.
+- `grep` with no match, `ls` of an empty directory and `find` with no hit print nothing
+  (they printed `(no matches)` / `(empty)`, which pipes and `$(...)` then saw). ANSI colour
+  codes (`ls` directories) are stripped from text reaching a pipe, redirect or `$(...)`.
+- `case`: quoted patterns, `$VAR` patterns and quoted `|` work (`case "$X" in "hello")`
+  never matched); the case word is not split or globbed; `case foo.in in` finds the right
+  `in`. A `case` with no matching arm and a `for` over nothing exit 0.
+- Compound commands take a trailing pipe, redirect or `&&` / `||` list
+  (`for ...; done | sort > out`, `fi >> log`; the output used to escape to the terminal and
+  `> out` created an empty file).
+- Redirection: `>/dev/null` and `2>/dev/null` discard (they failed the command), `>&2`,
+  `&>` / `&>>` and `1>` are understood, and a target is one word (`echo a > f b` writes
+  `a b`).
+- Expansion: `$@` / `$*` and `"$@"` (one word per argument), `for VAR; do` over the
+  arguments, single-digit positionals (`$1x` is `${1}x`), `${V:-def}`, `${V-def}`,
+  `${V:=def}`, `${#V}`, `bad substitution` for other `${...}` forms, and `~` / `~/path`
+  tilde expansion. Globs no longer match dotfiles unless the pattern starts with `.`.
+- `cd` with no argument goes to `$HOME` (was `/`), `cd -` to `$OLDPWD`; extra arguments
+  are an error.
+- Aliases whose text has `|`, `;`, `&`, `<` or `>` work (`alias ll='ls | sort'`).
+- `set A=1 B=2` sets both and keeps a quoted value's spaces; variable names are validated
+  (`set 1=x` is an error); `local X` without a value shadows the caller's `X`.
+- `tr` sets take ranges (`tr a-z A-Z`); `find` patterns are globs (`find / '*.txt'`; a
+  pattern without glob characters still matches as a substring).
+- Tab completion no longer panics on non-ASCII names, escapes spaces / metacharacters in
+  completed paths, and completes inside quotes (`cat "my f<Tab>`); an operator inside
+  quotes no longer starts a new command.
+- Multi-line history entries survive a save / reload (`\` and newlines are escaped in
+  `.oasis_history`; an old file's literal `\n` now reads as a newline).
+- **(breaking)** `Completer` is stateless: the unused cycling API (`cycle_next`, `reset`,
+  `is_cycling`), the always-empty `aliases` / `functions` parameters of `complete` and
+  `CompletionContext::Subcommand` are gone. The test-only `control_flow` module and
+  `CommandRegistry::completions` are no longer public.
+
+### Scripting: cron jobs actually run
+
+- `cron` used to store "scheduled scripts" that nothing ever ran. Jobs now have an interval
+  and run: `cron add <name> <interval> <script>` (`30s`, `5m`, `2h`, `1d`, bare number =
+  seconds; 1 s to 30 d), `cron list` shows each job's interval. The old two-argument
+  `cron add <name> <script>` is rejected, and existing interval-less entries are listed as
+  invalid until re-added **(breaking)**.
+- `oasis_core::script::CronScheduler` runs due jobs when a host calls `tick(now, ...)`: the
+  desktop shell does about once a second (output in the terminal, prefixed
+  `[cron <name>]`), `oasis-ffi` on every `oasis_tick`. A job first runs one interval after
+  the host first sees it, starts in `/` without moving the shell's cwd, and an overdue job
+  runs once. The cron code moved to `oasis_core::script::cron`.
+
+### FFI (oasis-ffi)
+
+- A callback that calls back into the API with the handle that fired it is now refused (the
+  call returns its default and logs an error) instead of aliasing the instance; that
+  includes `oasis_destroy` from a callback.
+- `oasis_tick` sanitizes `delta_seconds` (NaN / infinite / negative count as 0, at most
+  1 s per tick) and keeps its clock in `f64`: a single NaN frame time, or about six days
+  of uptime, used to freeze the idle render and animations for good.
+- `oasis_tick` runs queued `cmd &` jobs (they never ran under FFI) and due `cron` jobs, and
+  reports their output through the new `OASIS_CB_SHELL_OUTPUT` (7) callback; `cron` /
+  `startup` are now registered in FFI instances.
+- `oasis_send_command` appends unredirected stderr to its result; callback details with
+  interior NULs fire with U+FFFD instead of being dropped; a rejected or partial skin is
+  logged at `error`; the WASM-only "Video Embed" dashboard entry is gone; a failing
+  `oasis_video_play` no longer stops the video that was playing.
+- CI's release `liboasis_ffi` artifact is built with the `release-ffi` profile
+  (`panic = "unwind"`), so the exports' panic guards work in the shipped library.
+
+### VFS, i18n, platform
+
+- `MemoryVfs` / `GameAssetVfs`: only root or an entry's owner may chmod / chown it (anyone
+  could before), and reaching an entry needs search permission on every ancestor directory,
+  so a `0o700` directory owned by someone else hides its contents **(breaking)**.
+- `GameAssetVfs::add_base_*` keeps the tree well formed (no file under a file, no kind
+  change of a visible entry; content added below a removed directory brings it back).
+- `RealVfs`: chmod works on Windows (it rejected the owner its own `get_permissions`
+  reported); `readdir` follows symlinks like `stat`; dangling or escaping symlinks can be
+  renamed; Windows names ending in `.` / space and `COM¹`-style device names are rejected;
+  writing onto a directory is a typed `IsDirectory` error.
+- `oasis-i18n`: interpolation is single-pass (a value containing `{other}` is no longer
+  expanded); `Locale::from_code` is case-insensitive and accepts `ja_JP.UTF-8`-style codes.
+- `oasis-platform`: `OASIS_FIXED_TIME` rejects impossible dates such as `2025-02-29`.
+
 ## Unreleased -- overhaul (`overhaul/site-code-docs-2026-10`)
 
 A repository-wide cleanup: bug fixes from a full code review and an
