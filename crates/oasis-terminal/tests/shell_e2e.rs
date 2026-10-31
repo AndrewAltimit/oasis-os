@@ -1450,6 +1450,61 @@ fn parameter_expansion_braces_respect_quotes() {
     assert_eq!(sh.ok("echo ${NEW:='x}y'} $NEW"), "x}y x}y");
 }
 
+/// A failing stage before the last feeds the next one nothing instead of
+/// aborting the pipeline; the pipeline's status is the last stage's.
+#[test]
+fn failing_early_pipeline_stage_does_not_abort_the_pipeline() {
+    let mut sh = Shell::memory();
+    let out = sh.ok("cat /missing | wc -l");
+    let lines: Vec<&str> = out.lines().collect();
+    assert_eq!(lines.len(), 2, "{out}");
+    assert!(lines[0].starts_with("error:"), "{out}");
+    assert_eq!(lines[1].trim(), "0", "{out}");
+    assert_eq!(sh.ok("echo $?"), "0");
+    sh.ok("cat /missing | wc -l > /tmp/n.txt && echo ran");
+    assert_eq!(
+        String::from_utf8(sh.vfs.read("/tmp/n.txt").unwrap())
+            .unwrap()
+            .trim(),
+        "0"
+    );
+    // The last stage failing still fails the pipeline.
+    assert!(sh.run("echo hi | nosuchcmd").is_err());
+    let out = sh.ok("echo hi | nosuchcmd || echo fallback");
+    assert!(
+        out.contains("nosuchcmd") && out.ends_with("\nfallback"),
+        "{out}"
+    );
+}
+
+/// `NAME=value` assigns a shell variable; before a command it holds for
+/// that command only. Values are not field-split.
+#[test]
+fn posix_variable_assignments() {
+    let mut sh = Shell::memory();
+    sh.ok("A=1 B=\"two words\"");
+    assert_eq!(sh.ok("echo $A [$B]"), "1 [two words]");
+    sh.ok("C=$B");
+    assert_eq!(sh.ok("echo \"[$C]\""), "[two words]");
+    sh.ok("D=$(echo x  y)");
+    assert_eq!(sh.ok("echo \"[$D]\""), "[x y]");
+    sh.ok("function show() { echo [$P]; }");
+    assert_eq!(sh.ok("P=temp show"), "[temp]");
+    assert_eq!(sh.ok("echo [$P]"), "[]");
+    sh.ok("P=kept");
+    assert_eq!(sh.ok("P=temp show; echo $P"), "[temp]\nkept");
+    // An assignment's status is its last `$(...)`'s; a command's is its
+    // own (a substitution in its arguments does not leak into it).
+    sh.ok("E=$(false)");
+    assert_eq!(sh.ok("echo $?"), "1");
+    assert_eq!(sh.ok("echo $(false)x; echo $?"), "x\n0");
+    assert_eq!(sh.ok("echo $(false)x && echo ok"), "x\nok");
+    // Not assignments: a quoted name, or `=` later in the word.
+    assert!(sh.run("'Q=1'").is_err());
+    assert_eq!(sh.ok("echo X=1"), "X=1");
+    assert!(sh.run("1X=2").is_err());
+}
+
 #[test]
 fn cd_home_oldpwd_and_tilde() {
     let mut sh = Shell::memory();

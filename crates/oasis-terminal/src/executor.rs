@@ -7,8 +7,8 @@ use oasis_types::error::{OasisError, Result};
 
 use crate::expander::resolve_path;
 use crate::pipeline::{
-    ChainOp, Redirections, capture_text, parse_redirect, split_chains, split_pipes, strip_comments,
-    write_redirect,
+    ChainOp, Redirections, Scan, capture_text, parse_redirect, scan, split_chains, split_pipes,
+    strip_comments, write_redirect,
 };
 use crate::types::{CommandOutput, Environment, MAX_EXEC_DEPTH};
 
@@ -58,6 +58,40 @@ fn join_lines(mut first: String, second: &str) -> String {
         first.push_str(second);
     }
     first
+}
+
+/// Split the leading `NAME=value` words off a simple command: their raw
+/// `(name, value)` text and the command after them (empty when the line is
+/// only assignments). `NAME` must be written plainly (an ASCII letter or
+/// `_`, then letters, digits, `_`); a value runs to the next unquoted
+/// blank (`X="a b"`, `X=$(echo a b)`).
+fn split_assignments(cmd: &str) -> (Vec<(&str, &str)>, &str) {
+    let mut out = Vec::new();
+    if !cmd.contains('=') {
+        return (out, cmd);
+    }
+    let Scan { top, .. } = scan(cmd);
+    let b = cmd.as_bytes();
+    let mut i = 0;
+    loop {
+        while i < b.len() && b[i].is_ascii_whitespace() {
+            i += 1;
+        }
+        let start = i;
+        while i < b.len() && (b[i].is_ascii_alphanumeric() || b[i] == b'_') {
+            i += 1;
+        }
+        if i == start || b[start].is_ascii_digit() || b.get(i) != Some(&b'=') {
+            return (out, &cmd[start..]);
+        }
+        let name = &cmd[start..i];
+        i += 1;
+        let value_start = i;
+        while i < b.len() && !(top[i] && b[i].is_ascii_whitespace()) {
+            i += 1;
+        }
+        out.push((name, &cmd[value_start..i]));
+    }
 }
 
 /// Split a leading `!` (pipeline negation) off `cmd`.
@@ -278,8 +312,11 @@ impl CommandRegistry {
 
         // Pipeline: chain stdout -> stdin.
         let mut stdin: Option<String> = env.stdin.take();
+        // Errors of the stages before the last: shown, not piped.
+        let mut errors: Vec<String> = Vec::new();
+        let last = pipe_segments.len() - 1;
 
-        for segment in &pipe_segments {
+        for (n, segment) in pipe_segments.iter().enumerate() {
             env.stdin = stdin.take();
             // A pipeline's status is its last command's (`false | echo hi`
             // succeeds), so each segment starts from success.
@@ -290,7 +327,17 @@ impl CommandRegistry {
             // The piped text belongs to this stage only: it must not leak
             // into the commands after the pipeline (`a | b; wc`).
             env.stdin = None;
-            let result = result?;
+            let result = match result {
+                Ok(output) => output,
+                Err(e) if n == last => return Err(e),
+                // A failing earlier stage feeds the next one nothing, as a
+                // POSIX shell does (`cat missing | wc -l` prints 0 and
+                // succeeds); its message is shown, not piped.
+                Err(e) => {
+                    errors.push(format!("error: {e}"));
+                    CommandOutput::Text(String::new())
+                },
+            };
 
             stdin = match result {
                 CommandOutput::Text(_) | CommandOutput::Table { .. } => Some(capture_text(&result)),
@@ -299,10 +346,17 @@ impl CommandRegistry {
         }
 
         // Return the final output.
-        match stdin {
-            Some(text) => Ok(CommandOutput::Text(text)),
-            None => Ok(CommandOutput::None),
+        let output = match stdin {
+            Some(text) => CommandOutput::Text(text),
+            None => CommandOutput::None,
+        };
+        if errors.is_empty() {
+            return Ok(output);
         }
+        Ok(merge_outputs(vec![
+            CommandOutput::Text(errors.join("\n")),
+            output,
+        ]))
     }
 
     /// Consume a [`CommandOutput::Status`] wrapper: record its exit code
@@ -506,8 +560,68 @@ impl CommandRegistry {
             return self.execute_function_def_raw(rest);
         }
 
+        let (assignments, command) = split_assignments(trimmed);
+        if !assignments.is_empty() {
+            return self.execute_with_assignments(&assignments, command, env);
+        }
         let words = self.expand_args(trimmed, env)?;
-        self.run_words(&words, env)
+        self.run_expanded(&words, env)
+    }
+
+    /// [`run_words`](Self::run_words) for a freshly expanded command: a
+    /// `$(...)` in its words must not leave its status behind (`echo
+    /// $(false)` succeeds), so the command starts from success.
+    fn run_expanded(&self, words: &[String], env: &mut Environment<'_>) -> Result<CommandOutput> {
+        if !words.is_empty() {
+            self.last_exit_code.set(0);
+        }
+        self.run_words(words, env)
+    }
+
+    /// `NAME=value ...` before a command (or alone). The values are
+    /// expanded without field splitting or globbing (`X=$Y` keeps the
+    /// spaces of `$Y`). Alone they set shell variables; before a command
+    /// they hold only while it runs, as POSIX prefix assignments do.
+    #[inline(never)]
+    fn execute_with_assignments(
+        &self,
+        assignments: &[(&str, &str)],
+        command: &str,
+        env: &mut Environment<'_>,
+    ) -> Result<CommandOutput> {
+        let mut values = Vec::with_capacity(assignments.len());
+        for &(name, raw) in assignments {
+            values.push((name, self.expand_case_word(raw, env)?));
+        }
+        if command.is_empty() {
+            for (name, value) in &values {
+                self.assign_variable(name, value)?;
+            }
+            return Ok(CommandOutput::None);
+        }
+        let saved: Vec<(&str, Option<String>)> = values
+            .iter()
+            .map(|(name, _)| (*name, self.get_variable(name)))
+            .collect();
+        let mut result = Ok(CommandOutput::None);
+        for (name, value) in &values {
+            if let Err(e) = self.assign_variable(name, value) {
+                result = Err(e);
+                break;
+            }
+        }
+        if result.is_ok() {
+            result = self
+                .expand_args(command, env)
+                .and_then(|words| self.run_expanded(&words, env));
+        }
+        for (name, old) in saved.into_iter().rev() {
+            match old {
+                Some(v) => self.set_variable(name, &v),
+                None => self.unset_variable(name),
+            }
+        }
+        result
     }
 
     /// Dispatch an already-expanded command: shell builtins (they need
