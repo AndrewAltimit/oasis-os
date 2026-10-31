@@ -45,18 +45,24 @@ impl<T> ListView<T> {
         }
     }
 
-    /// Index of the item at local offset `dy` (pixels from the top of
-    /// the viewport), accounting for the scroll offset.
-    pub fn index_at(&self, dy: i32) -> Option<usize> {
+    /// Index of the item at local offset `dy` (pixels from the top of a
+    /// `viewport_h`-pixel viewport), accounting for the scroll offset
+    /// exactly as [`draw_at`](Self::draw_at) applies it.
+    pub fn index_at(&self, dy: i32, viewport_h: u32) -> Option<usize> {
         if dy < 0 {
             return None;
         }
-        let content_y = dy + self.scroll_offset;
-        if content_y < 0 {
-            return None;
-        }
-        let i = (content_y / self.item_height as i32) as usize;
-        (i < self.items.len()).then_some(i)
+        let content_y = i64::from(dy) + i64::from(self.effective_scroll(viewport_h));
+        // `item_height` is a public field: guard a zero set after `new`.
+        let i = content_y / i64::from(self.item_height.max(1));
+        usize::try_from(i).ok().filter(|&i| i < self.items.len())
+    }
+
+    /// `scroll_offset` clamped to `0..=max_scroll(viewport_h)`: the offset
+    /// drawing and hit testing use. (Items removed under a scrolled list
+    /// used to leave it drawing blank rows past the end.)
+    pub fn effective_scroll(&self, viewport_h: u32) -> i32 {
+        self.scroll_offset.clamp(0, self.max_scroll(viewport_h))
     }
 
     /// Total content height.
@@ -81,13 +87,24 @@ impl<T> ListView<T> {
     }
 
     /// Scroll to make the given index visible.
+    ///
+    /// The result is clamped to `0..=max_scroll(viewport_h)`, so an index
+    /// past the end or a viewport taller than the content cannot scroll
+    /// beyond the last item.
     pub fn scroll_to(&mut self, index: usize, viewport_h: u32) {
-        let item_y = index as i32 * self.item_height as i32;
-        if item_y < self.scroll_offset {
-            self.scroll_offset = item_y;
-        } else if item_y + self.item_height as i32 > self.scroll_offset + viewport_h as i32 {
-            self.scroll_offset = item_y + self.item_height as i32 - viewport_h as i32;
-        }
+        let ih = i64::from(self.item_height.max(1));
+        let item_y = i64::try_from(index).unwrap_or(i64::MAX).saturating_mul(ih);
+        let scroll = i64::from(self.scroll_offset);
+        let item_end = item_y.saturating_add(ih);
+        let target = if item_y < scroll {
+            item_y
+        } else if item_end > scroll + i64::from(viewport_h) {
+            item_end - i64::from(viewport_h)
+        } else {
+            scroll
+        };
+        let max = i64::from(self.max_scroll(viewport_h));
+        self.scroll_offset = target.clamp(0, max) as i32;
     }
 
     /// Draw the list view at the given position.
@@ -96,15 +113,18 @@ impl<T> ListView<T> {
 
         // `item_height` is a public field: guard a zero set after `new`.
         let ih = self.item_height.max(1);
+        let scroll = i64::from(self.effective_scroll(h));
         let result: Result<()> = (|| {
-            let first = (self.scroll_offset / ih as i32).max(0) as usize;
+            let first = usize::try_from(scroll / i64::from(ih)).unwrap_or(0);
             // Exact visible count: items that fit plus one for
             // a partially visible trailing item.
             let visible = h / ih + u32::from(!h.is_multiple_of(ih)) + 1;
             let last = first.saturating_add(visible as usize).min(self.items.len());
 
             for i in first..last {
-                let item_y = y + (i as i32 * ih as i32) - self.scroll_offset;
+                // In i64: `i * ih` overflows i32 deep into a long list.
+                let item_y = i64::from(y) + i as i64 * i64::from(ih) - scroll;
+                let item_y = item_y.clamp(i32::MIN.into(), i32::MAX.into()) as i32;
                 let selected = self.selected == Some(i);
                 let hovered = self.hovered == Some(i);
 
@@ -388,12 +408,44 @@ mod tests {
     fn index_at_accounts_for_scroll() {
         let items: Vec<String> = (0..5).map(|i| format!("item{i}")).collect();
         let mut lv = ListView::new(items, 20, dummy_render);
-        assert_eq!(lv.index_at(0), Some(0));
-        assert_eq!(lv.index_at(45), Some(2));
-        assert_eq!(lv.index_at(-1), None);
-        assert_eq!(lv.index_at(100), None);
+        assert_eq!(lv.index_at(0, 40), Some(0));
+        assert_eq!(lv.index_at(45, 40), Some(2));
+        assert_eq!(lv.index_at(-1, 40), None);
+        assert_eq!(lv.index_at(100, 40), None);
         lv.scroll_offset = 40;
-        assert_eq!(lv.index_at(0), Some(2));
+        assert_eq!(lv.index_at(0, 40), Some(2));
+    }
+
+    /// Items removed under a scrolled list left `scroll_offset` past the
+    /// end: the list drew blank and clicks missed every row.
+    #[test]
+    fn stale_scroll_offset_is_clamped_for_drawing_and_hits() {
+        let items: Vec<String> = (0..50).map(|i| format!("item{i}")).collect();
+        let mut lv = ListView::new(items, 20, dummy_render);
+        lv.scroll_by(10_000, 60);
+        lv.items.truncate(3);
+        assert_eq!(lv.effective_scroll(60), 0);
+        assert_eq!(lv.index_at(0, 60), Some(0));
+        let theme = crate::theme::Theme::dark();
+        let mut backend = crate::test_utils::RecordingBackend::default();
+        {
+            let mut ctx = DrawContext::new(&mut backend, &theme);
+            lv.selected = Some(0);
+            lv.draw(&mut ctx, 0, 0, 100, 60).unwrap();
+        }
+        assert!(!backend.fill_colors().is_empty(), "selected row drawn");
+    }
+
+    #[test]
+    fn scroll_to_never_passes_the_last_item() {
+        let items: Vec<String> = (0..5).map(|i| i.to_string()).collect();
+        let mut lv = ListView::new(items, 20, dummy_render);
+        lv.scroll_to(99, 40);
+        assert_eq!(lv.scroll_offset, lv.max_scroll(40));
+        lv.scroll_to(2, 400);
+        assert_eq!(lv.scroll_offset, 0, "everything fits");
+        lv.scroll_to(usize::MAX, 40);
+        assert_eq!(lv.scroll_offset, 60);
     }
 
     #[test]

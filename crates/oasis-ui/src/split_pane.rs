@@ -65,12 +65,17 @@ impl SplitPane {
 
     /// Set the divider ratio (clamped to min/max bounds).
     pub fn with_ratio(mut self, r: f32) -> Self {
-        self.ratio = r.clamp(self.min_ratio, self.max_ratio);
+        self.set_ratio(r);
         self
     }
 
     /// Set the minimum and maximum allowed ratios.
+    ///
+    /// A NaN bound counts as the widest one (`0.0` / `1.0`); it used to
+    /// reach `f32::clamp` as a bound, which panics.
     pub fn with_min_max(mut self, min: f32, max: f32) -> Self {
+        let min = if min.is_nan() { 0.0 } else { min };
+        let max = if max.is_nan() { 1.0 } else { max };
         self.min_ratio = min.clamp(0.0, 1.0);
         self.max_ratio = max.clamp(self.min_ratio, 1.0);
         // Re-clamp ratio to new bounds.
@@ -84,8 +89,12 @@ impl SplitPane {
     }
 
     /// Set the divider ratio (clamped to min/max bounds).
+    ///
+    /// A NaN ratio is ignored (it would poison every pane rect).
     pub fn set_ratio(&mut self, r: f32) {
-        self.ratio = r.clamp(self.min_ratio, self.max_ratio);
+        if !r.is_nan() {
+            self.ratio = r.clamp(self.min_ratio, self.max_ratio);
+        }
     }
 
     /// Compute the rectangle of the first (left or top) pane.
@@ -96,15 +105,20 @@ impl SplitPane {
             return (x, y, 0, 0);
         }
         let dw = self.divider_width as u32;
+        // With the second pane collapsed the first one runs up to the
+        // divider, which `divider_rect` puts at the far end (it used to
+        // keep its ratio size, leaving an unowned gap).
+        let second_collapsed = self.collapsed_pane == Some(PaneId::Second);
+        let size = |total: u32| {
+            if second_collapsed {
+                total.saturating_sub(dw)
+            } else {
+                self.first_size(total, dw)
+            }
+        };
         match self.orientation {
-            SplitOrientation::Horizontal => {
-                let first_w = self.first_size(w, dw);
-                (x, y, first_w, h)
-            },
-            SplitOrientation::Vertical => {
-                let first_h = self.first_size(h, dw);
-                (x, y, w, first_h)
-            },
+            SplitOrientation::Horizontal => (x, y, size(w), h),
+            SplitOrientation::Vertical => (x, y, w, size(h)),
         }
     }
 
@@ -382,6 +396,22 @@ mod tests {
         let (_, _, sw, sh) = sp.second_rect(0, 0, 200, 100);
         assert_eq!(sw, 0);
         assert_eq!(sh, 0);
+        // The first pane runs up to the divider (no unowned gap).
+        let (fx, _, fw, _) = sp.first_rect(0, 0, 200, 100);
+        let (dx, _, _, _) = sp.divider_rect(0, 0, 200, 100);
+        assert_eq!(fx + fw as i32, dx);
+    }
+
+    /// NaN bounds reached `f32::clamp` (which panics); a NaN ratio
+    /// poisoned the pane rects.
+    #[test]
+    fn nan_ratios_are_rejected() {
+        let sp = SplitPane::new(SplitOrientation::Horizontal).with_min_max(f32::NAN, f32::NAN);
+        assert_eq!((sp.min_ratio, sp.max_ratio), (0.0, 1.0));
+        let mut sp = sp.with_ratio(f32::NAN);
+        assert!((sp.ratio() - 0.5).abs() < f32::EPSILON);
+        sp.set_ratio(f32::NAN);
+        assert!((sp.ratio() - 0.5).abs() < f32::EPSILON);
     }
 
     #[test]

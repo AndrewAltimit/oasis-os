@@ -1,6 +1,7 @@
 //! Dropdown / combobox widget.
 
 use crate::context::DrawContext;
+use crate::focus::{FocusDir, step_wrapping};
 use crate::layout;
 use crate::states::{WidgetState, WidgetStateColors};
 use crate::widget::Widget;
@@ -66,7 +67,7 @@ impl Dropdown {
     /// Index of the open menu option containing local offset `dy`
     /// (pixels from the top of the widget, i.e. including the header).
     pub fn option_at(&self, ctx: &DrawContext<'_>, dy: i32) -> Option<usize> {
-        if !self.open {
+        if !self.is_open() {
             return None;
         }
         let row_h = Self::row_height(ctx) as i32;
@@ -90,24 +91,30 @@ impl Dropdown {
     /// `selected` past the end -- to the first). No-op while disabled,
     /// like [`toggle`](Self::toggle) and `RadioGroup`.
     pub fn select_next(&mut self) {
-        if !self.disabled && !self.options.is_empty() {
-            self.selected = match self.selected.checked_add(1) {
-                Some(next) if next < self.options.len() => next,
-                _ => 0,
-            };
-        }
+        self.step(FocusDir::Next);
     }
 
     /// Select the previous option (wrapping; from the placeholder state to
     /// the last). No-op while disabled.
     pub fn select_prev(&mut self) {
-        if !self.disabled && !self.options.is_empty() {
-            let last = self.options.len() - 1;
-            self.selected = match self.selected {
-                0 => last,
-                i => (i - 1).min(last),
-            };
+        self.step(FocusDir::Prev);
+    }
+
+    fn step(&mut self, dir: FocusDir) {
+        if self.disabled {
+            return;
         }
+        let current = Some(self.selected);
+        if let Some(i) = step_wrapping(current, self.options.len(), dir, |_| true) {
+            self.selected = i;
+        }
+    }
+
+    /// Whether the option list is showing: `open` and not disabled (a
+    /// dropdown disabled while open used to keep its list drawn and
+    /// clickable).
+    pub fn is_open(&self) -> bool {
+        self.open && !self.disabled
     }
 
     /// Toggle the open/closed state.
@@ -131,7 +138,7 @@ impl Dropdown {
 impl Widget for Dropdown {
     fn measure(&self, ctx: &DrawContext<'_>, available_w: u32, _available_h: u32) -> (u32, u32) {
         let row_h = Self::row_height(ctx);
-        let h = if self.open {
+        let h = if self.is_open() {
             row_h + row_h * self.options.len() as u32
         } else {
             row_h
@@ -180,7 +187,11 @@ impl Widget for Dropdown {
         )?;
 
         // Down arrow.
-        let arrow = if self.open { "\u{25B2}" } else { "\u{25BC}" };
+        let arrow = if self.is_open() {
+            "\u{25B2}"
+        } else {
+            "\u{25BC}"
+        };
         let arrow_w = ctx.backend.measure_text(arrow, fs);
         ctx.backend.draw_text(
             arrow,
@@ -191,7 +202,7 @@ impl Widget for Dropdown {
         )?;
 
         // -- Menu panel (only when open) --
-        if self.open && !self.options.is_empty() {
+        if self.is_open() && !self.options.is_empty() {
             let menu_y = y + row_h as i32;
             let menu_h = h.saturating_sub(row_h);
 
@@ -341,6 +352,29 @@ mod tests {
         let row_h = Dropdown::row_height(&ctx);
         // header + 3 option rows
         assert_eq!(h, row_h + row_h * 3);
+    }
+
+    /// Disabling an open dropdown kept its list measured, drawn and
+    /// hit-testable.
+    #[test]
+    fn disabled_while_open_hides_the_list() {
+        let theme = Theme::dark();
+        let mut backend = RecordingBackend::default();
+        let mut d = Dropdown::new(sample_options());
+        d.open = true;
+        d.disabled = true;
+        assert!(!d.is_open());
+        {
+            let ctx = DrawContext::new(&mut backend, &theme);
+            let row_h = Dropdown::row_height(&ctx);
+            assert_eq!(d.measure(&ctx, 200, 300).1, row_h);
+            assert_eq!(d.option_at(&ctx, row_h as i32 + 1), None);
+        }
+        {
+            let mut ctx = DrawContext::new(&mut backend, &theme);
+            d.draw(&mut ctx, 0, 0, 200, 80).unwrap();
+        }
+        assert!(!backend.has_text("Beta"));
     }
 
     #[test]

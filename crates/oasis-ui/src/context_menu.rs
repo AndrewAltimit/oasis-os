@@ -1,6 +1,7 @@
 //! Context menu widget: right-click popup with actions, separators, and submenus.
 
 use crate::context::DrawContext;
+use crate::focus::{FocusDir, step_wrapping};
 use crate::layout;
 use crate::states::WidgetStateColors;
 use crate::widget::Widget;
@@ -197,26 +198,22 @@ impl ContextMenu {
 
     /// Move the selection to the previous selectable item, wrapping around.
     pub fn navigate_up(&mut self) {
-        if self.items.is_empty() {
-            return;
-        }
-        let start = match self.selected_index {
-            Some(0) | None => self.items.len() - 1,
-            Some(i) => i - 1,
-        };
-        self.selected_index = Some(self.find_selectable_backward(start));
+        self.navigate(FocusDir::Prev);
     }
 
     /// Move the selection to the next selectable item, wrapping around.
     pub fn navigate_down(&mut self) {
-        if self.items.is_empty() {
-            return;
-        }
-        let start = match self.selected_index {
-            None => 0,
-            Some(i) => (i + 1) % self.items.len(),
-        };
-        self.selected_index = Some(self.find_selectable_forward(start));
+        self.navigate(FocusDir::Next);
+    }
+
+    /// Step the selection in `dir`. With nothing selectable (only
+    /// separators and disabled actions) the selection clears; it used to
+    /// land on -- and highlight -- an unselectable item.
+    fn navigate(&mut self, dir: FocusDir) {
+        let items = &self.items;
+        self.selected_index = step_wrapping(self.selected_index, items.len(), dir, |i| {
+            items[i].is_selectable()
+        });
     }
 
     /// Activate the currently selected item.
@@ -334,31 +331,6 @@ impl ContextMenu {
     /// Height of a single non-separator row.
     fn row_height(&self, ctx: &DrawContext<'_>) -> u32 {
         ctx.backend.measure_text_height(ctx.theme.font_size_md) + 6
-    }
-
-    /// Starting from `start`, search forward (wrapping) for a selectable item.
-    fn find_selectable_forward(&self, start: usize) -> usize {
-        let n = self.items.len();
-        for offset in 0..n {
-            let i = (start + offset) % n;
-            if self.items[i].is_selectable() {
-                return i;
-            }
-        }
-        // Fallback: nothing selectable, return start.
-        start
-    }
-
-    /// Starting from `start`, search backward (wrapping) for a selectable item.
-    fn find_selectable_backward(&self, start: usize) -> usize {
-        let n = self.items.len();
-        for offset in 0..n {
-            let i = (start + n - offset) % n;
-            if self.items[i].is_selectable() {
-                return i;
-            }
-        }
-        start
     }
 }
 
@@ -552,6 +524,19 @@ mod tests {
         menu.navigate_down();
         // Should skip separator (1) and disabled (2), land on C (3).
         assert_eq!(menu.selected_index, Some(3));
+    }
+
+    /// With nothing selectable the selection used to fall back to (and
+    /// highlight) the unselectable start item.
+    #[test]
+    fn navigate_with_nothing_selectable_clears_selection() {
+        let items = vec![MenuItem::action_disabled("x"), MenuItem::separator()];
+        let mut menu = ContextMenu::new(items);
+        menu.navigate_down();
+        assert_eq!(menu.selected_index, None);
+        menu.selected_index = Some(1);
+        menu.navigate_up();
+        assert_eq!(menu.selected_index, None);
     }
 
     #[test]

@@ -1,6 +1,7 @@
 //! Accordion widget: collapsible sections with single or multi-expand modes.
 
 use crate::context::DrawContext;
+use crate::focus::{FocusDir, step_wrapping};
 use crate::layout::HAlign;
 use crate::widget::Widget;
 use oasis_types::error::Result;
@@ -153,33 +154,24 @@ impl Accordion {
 
     /// Move focus to the previous non-disabled section header.
     pub fn navigate_up(&mut self) {
-        if self.sections.is_empty() {
-            return;
-        }
-        let start = self.focused_index;
-        loop {
-            self.focused_index = if self.focused_index == 0 {
-                self.sections.len() - 1
-            } else {
-                self.focused_index - 1
-            };
-            if !self.sections[self.focused_index].disabled || self.focused_index == start {
-                break;
-            }
-        }
+        self.navigate(FocusDir::Prev);
     }
 
     /// Move focus to the next non-disabled section header.
     pub fn navigate_down(&mut self) {
-        if self.sections.is_empty() {
-            return;
-        }
-        let start = self.focused_index;
-        loop {
-            self.focused_index = (self.focused_index + 1) % self.sections.len();
-            if !self.sections[self.focused_index].disabled || self.focused_index == start {
-                break;
-            }
+        self.navigate(FocusDir::Next);
+    }
+
+    /// Step focus to the next enabled header in `dir` (wrapping); stays put
+    /// when every section is disabled. A `focused_index` left past the end
+    /// by removed sections restarts from the matching end (it used to
+    /// index out of bounds, or spin forever with every section disabled).
+    fn navigate(&mut self, dir: FocusDir) {
+        let sections = &self.sections;
+        if let Some(i) = step_wrapping(Some(self.focused_index), sections.len(), dir, |i| {
+            !sections[i].disabled
+        }) {
+            self.focused_index = i;
         }
     }
 
@@ -302,6 +294,30 @@ mod tests {
     use super::*;
 
     // -- Unit tests (no backend needed) --
+
+    /// A `focused_index` left past the end (sections are a pub Vec)
+    /// indexed out of bounds on `navigate_up` and looped forever on
+    /// `navigate_down` with every section disabled.
+    #[test]
+    fn stale_focus_index_navigates_safely() {
+        let mut acc = Accordion::new(AccordionMode::MultiExpand);
+        for name in ["a", "b", "c"] {
+            acc.add_section(name, vec![]);
+        }
+        acc.focused_index = 5;
+        acc.navigate_up();
+        assert_eq!(acc.focused_index, 2);
+        acc.focused_index = 5;
+        acc.navigate_down();
+        assert_eq!(acc.focused_index, 0);
+        for s in &mut acc.sections {
+            s.disabled = true;
+        }
+        acc.focused_index = 7;
+        acc.navigate_down();
+        acc.navigate_up();
+        assert_eq!(acc.focused_index, 7, "nothing to focus: focus stays put");
+    }
 
     #[test]
     fn new_defaults() {

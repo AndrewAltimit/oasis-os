@@ -186,6 +186,12 @@ impl Widget for InputField {
                 ctx.theme.text_disabled,
                 max_w,
             )?;
+            // A focused empty field still shows where typing goes (the
+            // caret used to vanish until the first character).
+            if self.focused && max_w > 0 {
+                ctx.backend
+                    .fill_rect(tx, ty, 1, text_h, ctx.theme.text_primary)?;
+            }
         } else if !self.focused {
             let display = self.display_text();
             let fg = WidgetStateColors::content_text(ctx.theme, state);
@@ -505,6 +511,22 @@ mod tests {
             InputField::new().draw(ctx, 0, 0, 100, 20).unwrap();
         });
         assert_eq!(fills.first(), Some(&theme.input_bg));
+    }
+
+    /// The caret branch only ran for non-empty text, so a focused empty
+    /// field gave no sign of where typing would go.
+    #[test]
+    fn focused_empty_field_draws_a_caret() {
+        let theme = crate::theme::Theme::dark();
+        let caret = theme.text_primary;
+        let fills = |focused: bool| {
+            let mut f = InputField::new();
+            f.placeholder = "Search".into();
+            f.focused = focused;
+            crate::test_utils::fill_colors_of(|ctx| f.draw(ctx, 0, 0, 120, 24).unwrap())
+        };
+        assert!(fills(true).contains(&caret));
+        assert!(!fills(false).contains(&caret));
     }
 
     #[test]

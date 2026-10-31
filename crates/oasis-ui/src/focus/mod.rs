@@ -19,6 +19,6 @@ mod spatial;
 mod style;
 
 pub use manager::{FocusAction, FocusManager};
-pub use ring::{FocusDir, FocusRing};
+pub use ring::{FocusDir, FocusRing, step_wrapping};
 pub use spatial::{FocusDirection, FocusEvent, FocusableItem, Rect, SpatialFocusManager};
 pub use style::{FocusStyle, draw_focus_ring, draw_focus_ring_themed};

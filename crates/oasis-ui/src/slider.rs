@@ -4,7 +4,7 @@ use crate::context::DrawContext;
 use crate::layout;
 use crate::states::{WidgetState, WidgetStateColors};
 use crate::widget::Widget;
-use oasis_types::backend::Color;
+use oasis_types::backend::{Color, SdiBackend};
 use oasis_types::error::Result;
 use oasis_types::input::Button;
 
@@ -87,8 +87,11 @@ impl Slider {
     ///
     /// The value is normalized internally and snapped to the step grid when
     /// a step is configured.
+    ///
+    /// Never panics: `min` / `max` are pub fields, and `f32::clamp` panics
+    /// when `min > max` or either is NaN. A NaN input lands on `min`.
     pub fn set_value(&mut self, display_val: f32) {
-        let clamped = display_val.clamp(self.min, self.max);
+        let clamped = display_val.max(self.min).min(self.max);
         let range = self.max - self.min;
         let mut norm = if range > 0.0 {
             (clamped - self.min) / range
@@ -98,7 +101,11 @@ impl Slider {
         if let Some(s) = self.step {
             norm = snap_to_step(norm, s, range);
         }
-        self.value = norm.clamp(0.0, 1.0);
+        self.value = if norm.is_nan() {
+            0.0
+        } else {
+            norm.clamp(0.0, 1.0)
+        };
     }
 
     /// Return the normalized value (0.0 to 1.0).
@@ -198,24 +205,15 @@ fn key_step(norm: f32, step_norm: f32, dir: f32) -> f32 {
 }
 
 impl Widget for Slider {
+    /// Fills the available length; the value label is reserved inside
+    /// that (it used to be added on top, measuring wider than offered).
     fn measure(&self, ctx: &DrawContext<'_>, available_w: u32, available_h: u32) -> (u32, u32) {
-        let label_extra = if self.show_value_label {
-            let sample = format!("{:.0}", self.max);
-            let (tw, _) = ctx.measure_text_sized(&sample, ctx.theme.font_size_xs);
-            tw + ctx.theme.spacing_sm as u32
-        } else {
-            0
-        };
+        let thumb = u32::from(self.thumb_size);
         match self.orientation {
-            Orientation::Horizontal => {
-                let w = available_w.min(available_w);
-                let h = DEFAULT_HEIGHT.max(self.thumb_size as u32);
-                (w + label_extra, h)
-            },
+            Orientation::Horizontal => (available_w, DEFAULT_HEIGHT.max(thumb)),
             Orientation::Vertical => {
-                let w = DEFAULT_WIDTH.max(self.thumb_size as u32) + label_extra;
-                let h = available_h.min(available_h);
-                (w, h)
+                let label_w = self.label_text_width(&*ctx.backend, ctx.theme);
+                (DEFAULT_WIDTH.max(thumb).max(label_w), available_h)
             },
         }
     }
@@ -244,14 +242,9 @@ impl Widget for Slider {
         match self.orientation {
             Orientation::Horizontal => {
                 // Reserve space for label on the right if enabled.
-                let label_w = if self.show_value_label {
-                    let sample = format!("{:.0}", self.max);
-                    let (tw, _) = ctx
-                        .backend
-                        .measure_text_extents(&sample, ctx.theme.font_size_xs);
-                    tw + ctx.theme.spacing_sm as u32
-                } else {
-                    0
+                let label_w = match self.label_text_width(&*ctx.backend, ctx.theme) {
+                    0 => 0,
+                    tw => tw.saturating_add(u32::from(ctx.theme.spacing_sm)),
                 };
                 let track_w = w.saturating_sub(label_w);
 
@@ -318,6 +311,17 @@ impl Widget for Slider {
                 }
             },
             Orientation::Vertical => {
+                // The value label sits below the track, inside the rect
+                // (it used to be drawn under it, outside the bounds).
+                let fs = ctx.theme.font_size_xs;
+                let label_h = if self.show_value_label {
+                    ctx.backend
+                        .measure_text_height(fs)
+                        .saturating_add(u32::from(ctx.theme.spacing_xs))
+                } else {
+                    0
+                };
+                let h = h.saturating_sub(label_h);
                 // Track centered horizontally.
                 let track_x = x + layout::center(w, DEFAULT_TRACK_THICKNESS);
                 let track_r = (DEFAULT_TRACK_THICKNESS as u16) / 2;
@@ -368,10 +372,9 @@ impl Widget for Slider {
                     )?;
                 }
 
-                // Value label (below the slider).
+                // Value label (below the track).
                 if self.show_value_label {
                     let label = format_display_value(self.display_value());
-                    let fs = ctx.theme.font_size_xs;
                     let tw = ctx.backend.measure_text(&label, fs);
                     let lx = x + layout::center(w, tw);
                     let ly = y + h as i32 + ctx.theme.spacing_xs as i32;
@@ -381,6 +384,22 @@ impl Widget for Slider {
             },
         }
         Ok(())
+    }
+}
+
+impl Slider {
+    /// Width of the widest value label this slider can show (`0` with the
+    /// label off). Sized from the formatted `min`, `max` and current value:
+    /// sizing from `max` alone ("50") clipped labels like "-100" or "12.5".
+    fn label_text_width(&self, backend: &dyn SdiBackend, theme: &crate::theme::Theme) -> u32 {
+        if !self.show_value_label {
+            return 0;
+        }
+        [self.min, self.max, self.display_value()]
+            .into_iter()
+            .map(|v| backend.measure_text(&format_display_value(v), theme.font_size_xs))
+            .max()
+            .unwrap_or(0)
     }
 }
 
@@ -683,20 +702,54 @@ mod tests {
     }
 
     #[test]
-    fn measure_with_label_wider() {
-        let s_no_label = Slider::new(0.0, 100.0);
+    fn measure_with_label_stays_within_available_width() {
+        // The label used to be added on top of `available_w`.
         let s_label = Slider::new(0.0, 100.0).with_label(true);
         let theme = Theme::dark();
+        let mut b = RecordingBackend::default();
+        let ctx = DrawContext::new(&mut b, &theme);
+        assert_eq!(s_label.measure(&ctx, 200, 100).0, 200);
+        assert_eq!(s_label.measure(&ctx, u32::MAX, 100).0, u32::MAX);
+        // Vertical: wide enough for the widest label ("-100", not "50").
+        let s_v = Slider::new(-100.0, 50.0)
+            .with_label(true)
+            .with_orientation(Orientation::Vertical);
+        let w = s_v.measure(&ctx, 200, 100).0;
+        assert!(w >= ctx.backend.measure_text("-100", theme.font_size_xs));
+    }
 
-        let mut b1 = RecordingBackend::default();
-        let ctx1 = DrawContext::new(&mut b1, &theme);
-        let (w1, _) = s_no_label.measure(&ctx1, 200, 100);
+    #[test]
+    fn vertical_label_is_drawn_inside_the_rect() {
+        use oasis_types::backend::SdiText;
+        let mut s = Slider::new(0.0, 100.0)
+            .with_label(true)
+            .with_orientation(Orientation::Vertical);
+        s.set_value(40.0);
+        let theme = Theme::dark();
+        let mut backend = RecordingBackend::default();
+        {
+            let mut ctx = DrawContext::new(&mut backend, &theme);
+            s.draw(&mut ctx, 0, 0, 30, 100).unwrap();
+        }
+        let th = backend.measure_text_height(theme.font_size_xs) as i32;
+        let texts = backend.text_positions();
+        let (_, _, ly, _) = texts.iter().find(|t| t.0 == "40").expect("label");
+        assert!(*ly + th <= 100, "label at y={ly} spills below the rect");
+    }
 
-        let mut b2 = RecordingBackend::default();
-        let ctx2 = DrawContext::new(&mut b2, &theme);
-        let (w2, _) = s_label.measure(&ctx2, 200, 100);
-
-        assert!(w2 > w1, "label should add width");
+    #[test]
+    fn set_value_survives_bad_ranges() {
+        // `f32::clamp` panicked on a swapped (pub-field) range.
+        let mut s = Slider::new(0.0, 10.0);
+        s.min = 10.0;
+        s.max = 0.0;
+        s.set_value(5.0);
+        assert!((0.0..=1.0).contains(&s.value()));
+        let mut s = Slider::new(0.0, 10.0);
+        s.set_value(f32::NAN);
+        assert_eq!(s.value(), 0.0);
+        assert!(s.handle_key(Button::Right));
+        assert!(!s.value().is_nan());
     }
 
     #[test]

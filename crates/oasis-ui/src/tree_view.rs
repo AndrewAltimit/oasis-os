@@ -146,42 +146,47 @@ impl TreeView {
 
     /// Move focus to the previous visible node.
     pub fn navigate_up(&mut self) {
-        let visible = self.visible_nodes();
-        if visible.is_empty() {
-            return;
-        }
-        match self.focused_id {
-            Some(fid) => {
-                if let Some(pos) = visible.iter().position(|(id, _, _)| *id == fid)
-                    && pos > 0
-                {
-                    self.focused_id = Some(visible[pos - 1].0);
-                }
-            },
-            None => {
-                self.focused_id = Some(visible[0].0);
-            },
-        }
+        self.navigate(|pos, _| pos.checked_sub(1));
     }
 
     /// Move focus to the next visible node.
     pub fn navigate_down(&mut self) {
-        let visible = self.visible_nodes();
-        if visible.is_empty() {
+        self.navigate(|pos, len| (pos + 1 < len).then_some(pos + 1));
+    }
+
+    /// Move focus from its position in the visible list to `step(pos,
+    /// len)` (staying put on `None`). With no focus, the first node gets
+    /// it. Focus on a node hidden by a collapsed ancestor moves to that
+    /// nearest visible ancestor instead (it used to stay stuck, invisible,
+    /// with every arrow press ignored).
+    fn navigate(&mut self, step: impl Fn(usize, usize) -> Option<usize>) {
+        let visible: Vec<usize> = self.visible_nodes().iter().map(|(id, _, _)| *id).collect();
+        let Some(&first) = visible.first() else {
             return;
-        }
-        match self.focused_id {
-            Some(fid) => {
-                if let Some(pos) = visible.iter().position(|(id, _, _)| *id == fid)
-                    && pos + 1 < visible.len()
-                {
-                    self.focused_id = Some(visible[pos + 1].0);
-                }
-            },
-            None => {
-                self.focused_id = Some(visible[0].0);
-            },
-        }
+        };
+        let Some(mut fid) = self.focused_id else {
+            self.focused_id = Some(first);
+            return;
+        };
+        let pos = loop {
+            if let Some(pos) = visible.iter().position(|&id| id == fid) {
+                break pos;
+            }
+            match Self::find_parent_id(&self.roots, fid) {
+                Some(parent) => fid = parent,
+                // A removed node: start over from the top.
+                None => {
+                    self.focused_id = Some(first);
+                    return;
+                },
+            }
+        };
+        let target = if Some(fid) == self.focused_id {
+            step(pos, visible.len()).unwrap_or(pos)
+        } else {
+            pos
+        };
+        self.focused_id = Some(visible[target]);
     }
 
     /// If the focused node has children, expand it. Otherwise toggle it.
@@ -618,6 +623,30 @@ mod tests {
         assert_eq!(vis[0].2, 0); // Root
         assert_eq!(vis[1].2, 1); // Child
         assert_eq!(vis[2].2, 2); // Grandchild
+    }
+
+    /// Collapsing the parent of the focused node left focus on a hidden
+    /// node, and every arrow press was ignored from then on.
+    #[test]
+    fn focus_on_a_collapsed_away_node_moves_to_its_visible_ancestor() {
+        let mut tv = TreeView::new();
+        let root = tv.add_root("Root");
+        let child = tv.add_child(root, "Child").unwrap();
+        let grandchild = tv.add_child(child, "Grandchild").unwrap();
+        let other = tv.add_root("Other");
+        tv.expand_all();
+        tv.select(grandchild);
+        tv.collapse_all();
+        tv.navigate_down();
+        assert_eq!(tv.focused(), Some(root));
+        tv.navigate_down();
+        assert_eq!(tv.focused(), Some(other));
+        tv.navigate_down();
+        assert_eq!(tv.focused(), Some(other), "stays on the last node");
+        // A focus id that no longer exists restarts at the top.
+        tv.focused_id = Some(9_999);
+        tv.navigate_up();
+        assert_eq!(tv.focused(), Some(root));
     }
 
     #[test]
