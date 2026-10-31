@@ -86,7 +86,7 @@ impl PaintApp {
         at: &ActiveTheme,
     ) -> oasis_types::error::Result<()> {
         let colors = PaintColors::from_theme(at);
-        let l = PaintLayout::compute(cx, cy, cw, ch, self.canvas.width(), self.canvas.height());
+        let l = self.layout_at(cx, cy, cw, ch);
         backend.fill_rect(cx, cy, cw, ch, colors.bg)?;
 
         let menu_style = MenuStyle::from_theme(&at.ui_theme);
@@ -153,7 +153,22 @@ impl PaintApp {
         backend.draw_text(&right, right_x, l.info.y + 2, at.font_hint, colors.dim_text)
     }
 
+    /// Draw the canvas clipped to its view (1 px of slack for the frame),
+    /// so a panned canvas bigger than the view never covers the palette.
     fn draw_canvas(
+        &self,
+        l: &PaintLayout,
+        backend: &mut dyn SdiBackend,
+        colors: &PaintColors,
+    ) -> oasis_types::error::Result<()> {
+        let v = l.view;
+        backend.push_clip_rect(v.x - 1, v.y - 1, v.w + 2, v.h + 2)?;
+        let drawn = self.draw_canvas_unclipped(l, backend, colors);
+        backend.pop_clip_rect()?;
+        drawn
+    }
+
+    fn draw_canvas_unclipped(
         &self,
         l: &PaintLayout,
         backend: &mut dyn SdiBackend,
