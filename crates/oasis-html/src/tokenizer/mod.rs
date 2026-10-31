@@ -188,7 +188,7 @@ impl Tokenizer {
     /// Like [`Tokenizer::new`], choosing whether scripting is enabled.
     /// With scripting off, `<noscript>` content is tokenized as markup
     /// (the tree builder must agree: see
-    /// [`TreeBuilder::build_with_scripting`](crate::tree_builder::TreeBuilder::build_with_scripting)).
+    /// [`ParseOptions`](crate::tree_builder::ParseOptions)).
     pub fn with_scripting(input: &str, scripting: bool) -> Self {
         let mut tokenizer = Self::new(input);
         tokenizer.scripting = scripting;
