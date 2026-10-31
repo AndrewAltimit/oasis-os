@@ -640,18 +640,26 @@ jobs:
           fi
 
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v3
-        with:
-          tag_name: ${{ steps.version.outputs.version }}
-          name: Release ${{ steps.version.outputs.version }}
-          body_path: release_notes.md
-          draft: false
-          prerelease: ${{ contains(steps.version.outputs.version, '-') }}
-          files: |
-            release-artifacts/binaries/*
-            release-artifacts/psp/*
+        # First-party gh CLI rather than a third-party release action (this
+        # job holds a contents: write token). A re-run updates the release.
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.version.outputs.version }}
+        run: |
+          shopt -s nullglob
+          FILES=(release-artifacts/binaries/* release-artifacts/psp/*)
+          PRE=()
+          [[ "$TAG" == *-* ]] && PRE=(--prerelease)
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" \
+              --title "Release $TAG" --notes-file release_notes.md "${PRE[@]}"
+            if [ ${#FILES[@]} -gt 0 ]; then
+              gh release upload "$TAG" --repo "$GITHUB_REPOSITORY" --clobber "${FILES[@]}"
+            fi
+          else
+            gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --verify-tag \
+              --title "Release $TAG" --notes-file release_notes.md "${PRE[@]}" "${FILES[@]}"
+          fi
 
   # -- Deploy GitHub Pages --------------------------------------------------
   deploy-pages:

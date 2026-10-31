@@ -696,6 +696,10 @@ New exports are additions; existing exports keep their signatures.
 - Every crate with features documents them under `# Feature flags` in its crate docs.
 - Releases: a `v*` tag whose version differs from the Cargo workspace version (or the shipped
   PSP crates') now fails `create-release` (`scripts/check-release-version.py`).
+  The workspace and the shipped PSP crates are bumped to 1.6.0 (v1.5.0 was tagged on 1.4.0).
+- Workflows use only GitHub-maintained actions and tools: the release is created with the
+  `gh` CLI instead of `softprops/action-gh-release`, and the PR benchmark baseline is fetched
+  with `actions/download-artifact` (`run-id`) instead of `dawidd6/action-download-artifact`.
 - Tests: CSS keyword tables through the real parser, SVG from real markup (groups, `<defs>`
   gradients, `url(#id)` paint, polygons, `<tspan>`), TV Guide catalog fetch outcomes (error,
   empty, dead thread, timeout, success), a rejected-resolution and a chained

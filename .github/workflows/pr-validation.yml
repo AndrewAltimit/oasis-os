@@ -13,6 +13,7 @@ on:
         default: false
 
 permissions:
+  actions: read
   contents: write
   pull-requests: write
   issues: write
@@ -193,19 +194,37 @@ jobs:
       # Run explicitly via:
       #   Actions -> Pull Request Validation -> Run workflow
       #   (set "Run criterion benchmark regression gate" to true)
-      # main-ci.yml still publishes the canonical baseline on every
-      # push to main.
-      - name: Download main branch baseline
+      # main-ci.yml publishes the baseline from a main run dispatched with
+      # run_benchmarks (artifact kept 90 days).
+      # Only GitHub-maintained tooling here (gh CLI + actions/download-artifact):
+      # find the newest unexpired criterion-baseline from main-ci on main, then
+      # download it from that run.
+      - name: Find main branch baseline
+        id: baseline
         timeout-minutes: 5
         if: github.event_name == 'workflow_dispatch' && inputs.run_benchmarks
         continue-on-error: true
-        uses: dawidd6/action-download-artifact@v27
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          RUN_ID=$(gh api "repos/$GITHUB_REPOSITORY/actions/artifacts?name=criterion-baseline&per_page=100" \
+            --jq '[.artifacts[] | select(.expired | not)
+                   | select(.workflow_run.head_branch == "main")][0].workflow_run.id // empty')
+          if [ -z "$RUN_ID" ]; then
+            echo "::warning::No criterion-baseline artifact from main; the gate has no baseline"
+          fi
+          echo "run_id=$RUN_ID" >> "$GITHUB_OUTPUT"
+
+      - name: Download main branch baseline
+        timeout-minutes: 5
+        if: steps.baseline.outputs.run_id != ''
+        continue-on-error: true
+        uses: actions/download-artifact@v8
         with:
-          workflow: main-ci.yml
-          branch: main
           name: criterion-baseline
           path: baseline-criterion/
-          if_no_artifact_found: warn
+          run-id: ${{ steps.baseline.outputs.run_id }}
+          github-token: ${{ github.token }}
 
       - name: Benchmarks
         timeout-minutes: 60
