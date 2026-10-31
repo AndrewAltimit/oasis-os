@@ -55,7 +55,7 @@ impl CronEntry {
 }
 
 /// Parse `30`, `30s`, `5m`, `2h` or `1d` into a duration within
-/// [`MIN_INTERVAL`]..=[`MAX_INTERVAL`].
+/// 1 s ..= 30 days.
 pub fn parse_interval(text: &str) -> Result<Duration> {
     let (digits, unit) = match text.find(|c: char| !c.is_ascii_digit()) {
         Some(i) => text.split_at(i),
@@ -91,11 +91,19 @@ pub fn parse_interval(text: &str) -> Result<Duration> {
 fn format_interval(d: Duration) -> String {
     let secs = d.as_secs();
     for (unit, scale) in [("d", 86_400), ("h", 3_600), ("m", 60)] {
-        if secs % scale == 0 {
+        if secs.is_multiple_of(scale) {
             return format!("{}{unit}", secs / scale);
         }
     }
     format!("{secs}s")
+}
+
+/// `e`'s text without the "command error:" prefix of [`cmd_err`] errors.
+fn message(e: &OasisError) -> String {
+    match e {
+        OasisError::Command(msg) => msg.to_string(),
+        other => other.to_string(),
+    }
 }
 
 fn cmd_err(msg: String) -> OasisError {
@@ -198,7 +206,7 @@ impl CronScheduler {
             let entry = match parsed {
                 Ok(entry) => entry,
                 Err(e) => {
-                    let msg = e.to_string();
+                    let msg = message(&e);
                     if self.reported.get(&name) != Some(&msg) {
                         out.push(format!("[cron {name}] error: {msg}"));
                         self.reported.insert(name, msg);
@@ -311,7 +319,7 @@ fn list(env: &mut Environment<'_>) -> String {
                 format_interval(e.interval),
                 e.script
             )),
-            Err(e) => out.push_str(&format!("  {name}  (invalid: {e})\n")),
+            Err(e) => out.push_str(&format!("  {name}  (invalid: {})\n", message(&e))),
         }
     }
     out
