@@ -39,6 +39,6 @@ pub use oasis_types::ipc::{
 pub use ogg::{OggData, decode_ogg, is_ogg};
 pub use playlist::{Playlist, format_duration, format_playlist};
 pub use radio::{RADIO_APP_TITLE, RADIO_REQUEST_PATH, RADIO_STATUS_PATH, RadioManager};
-pub use sfx::SfxPlayer;
+pub use sfx::{MAX_VOICES, SFX_SAMPLE_RATE, SfxPlayer};
 pub use types::{PlaybackState, RepeatMode, TrackInfo};
 pub use wav::{WavData, decode_wav, is_wav};

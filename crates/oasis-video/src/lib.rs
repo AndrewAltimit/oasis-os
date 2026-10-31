@@ -16,7 +16,7 @@
 //! - `ffmpeg`: statically-linked ffmpeg for demux, H.264 and AAC
 //!   (Main/High profile, SIMD-optimized).
 //!
-//! [`SoftwareVideoDecoder`] exists when `symphonia` or `ffmpeg` is on. When
+//! `SoftwareVideoDecoder` exists when `symphonia` or `ffmpeg` is on. When
 //! both backends are compiled in (e.g. `--all-features`, or one binary
 //! enabling `h264` through one crate and `ffmpeg` through another), the
 //! ffmpeg backend wins; the symphonia modules stay available as libraries.
