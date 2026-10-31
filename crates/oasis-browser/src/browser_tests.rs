@@ -3977,6 +3977,19 @@ fn flex_auto_width_items_size_to_content() {
     assert_eq!(flex.dimensions.content.height, 12.0, "one line of text");
 }
 
+/// The max-content measure of a flex item must count an inline box's
+/// margins as inline layout does: a negative one is not subtracted (it
+/// measured 8 px short and the text wrapped).
+#[test]
+fn flex_item_measure_ignores_negative_inline_margins() {
+    let root = layout_of(
+        "<body style='margin:0'><div style='display:flex'>\
+         <div><span style='margin-left:-8px'>hello world</span></div></div></body>",
+    );
+    let flex = flex_box(&root);
+    assert_eq!(flex.dimensions.content.height, 12.0, "one line of text");
+}
+
 /// Regression: a column container's auto height was the sum of its
 /// lines' *cross* sizes (item widths), not its items' heights; and an
 /// explicit height was never applied at all (0 px), so `align-items`
