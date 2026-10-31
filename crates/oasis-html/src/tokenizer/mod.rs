@@ -462,6 +462,11 @@ impl Tokenizer {
                         return t;
                     }
                 },
+                State::CommentEndBang => {
+                    if let Some(t) = self.state_comment_end_bang() {
+                        return t;
+                    }
+                },
                 State::Doctype => {
                     if let Some(t) = self.state_doctype() {
                         return t;

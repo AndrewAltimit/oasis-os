@@ -105,6 +105,19 @@ impl TreeBuilder {
         self.ns_of(id) == Ns::Html && self.tag_of(id).is_some_and(|t| t.as_str() == name)
     }
 
+    /// Whether `id` is in the special category (WHATWG §13.2.4.2): the
+    /// special HTML elements plus MathML `mi` / `mo` / `mn` / `ms` /
+    /// `mtext` / `annotation-xml` and SVG `foreignObject` / `desc` /
+    /// `title` (an SVG `<style>` is not special).
+    pub(crate) fn is_special_node(&self, id: NodeId) -> bool {
+        let ns = self.ns_of(id);
+        if ns == Ns::Html {
+            self.tag_of(id).is_some_and(TagName::is_special)
+        } else {
+            ns.bounds_scope()
+        }
+    }
+
     /// Whether the current node is the HTML element `name`.
     pub(crate) fn current_is(&self, name: &str) -> bool {
         self.open_elements
@@ -125,7 +138,12 @@ impl TreeBuilder {
     /// `(parent, insert_before)`. With foster parenting on and a table
     /// element as the target, that is just before the last open table.
     fn insertion_place(&self) -> (NodeId, Option<NodeId>) {
-        let target = self.current_node();
+        self.insertion_place_for(self.current_node())
+    }
+
+    /// [`Self::insertion_place`] with an override target (the adoption
+    /// agency's common ancestor).
+    pub(crate) fn insertion_place_for(&self, target: NodeId) -> (NodeId, Option<NodeId>) {
         let table_like = self.ns_of(target) == Ns::Html
             && matches!(
                 self.tag_of(target),
@@ -410,6 +428,44 @@ impl TreeBuilder {
         }
     }
 
+    /// Generate all implied end tags thoroughly (WHATWG §13.2.6.3): the
+    /// implied set plus the table parts.
+    pub(crate) fn generate_implied_end_tags_thoroughly(&mut self) {
+        while let Some(&cur) = self.open_elements.last() {
+            if self.ns_of(cur) != Ns::Html {
+                return;
+            }
+            let Some(name) = self.tag_of(cur).map(TagName::as_str) else {
+                return;
+            };
+            let implied = matches!(
+                name,
+                "caption"
+                    | "colgroup"
+                    | "dd"
+                    | "dt"
+                    | "li"
+                    | "optgroup"
+                    | "option"
+                    | "p"
+                    | "rb"
+                    | "rp"
+                    | "rt"
+                    | "rtc"
+                    | "tbody"
+                    | "td"
+                    | "tfoot"
+                    | "th"
+                    | "thead"
+                    | "tr"
+            );
+            if !implied {
+                return;
+            }
+            self.open_elements.pop();
+        }
+    }
+
     /// Pop elements from the stack through the topmost HTML element with
     /// the given tag. Does nothing if no such element is open.
     ///
@@ -462,7 +518,7 @@ impl TreeBuilder {
                     self.open_elements.truncate(idx);
                     return;
                 },
-                Some(t) if t.is_special() || self.ns_of(id).bounds_scope() => return,
+                Some(_) if self.is_special_node(id) => return,
                 _ => {},
             }
         }
@@ -512,8 +568,13 @@ impl TreeBuilder {
                 "caption" => return InsertionMode::InCaption,
                 "colgroup" => return InsertionMode::InColumnGroup,
                 "table" => return InsertionMode::InTable,
-                // Template contents parse in "in body" here.
-                "template" => return InsertionMode::InBody,
+                "template" => {
+                    return self
+                        .template_modes
+                        .last()
+                        .copied()
+                        .unwrap_or(InsertionMode::InBody);
+                },
                 "head" if !last => return InsertionMode::InHead,
                 "body" => return InsertionMode::InBody,
                 "html" => {

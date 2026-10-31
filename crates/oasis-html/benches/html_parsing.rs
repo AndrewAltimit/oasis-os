@@ -66,11 +66,7 @@ fn bench_tree_builder(c: &mut Criterion) {
             BenchmarkId::new("build_only", &label),
             &tokens,
             |b, tokens| {
-                b.iter_batched(
-                    || tokens.clone(),
-                    TreeBuilder::build,
-                    BatchSize::LargeInput,
-                );
+                b.iter_batched(|| tokens.clone(), TreeBuilder::build, BatchSize::LargeInput);
             },
         );
     }
@@ -107,8 +103,10 @@ fn generate_table_html(target_bytes: usize) -> String {
     let row = "<tr><td><b>Name</b></td><td><a href=\"/x\">link</a> <i>note</i></td>        <td><select><option>a<option>b</select></td></tr>
 ";
     let mut html = String::with_capacity(target_bytes + 256);
-    html.push_str("<!DOCTYPE html><html><head><title>T</title></head><body><table>
-");
+    html.push_str(
+        "<!DOCTYPE html><html><head><title>T</title></head><body><table>
+",
+    );
     while html.len() < target_bytes {
         html.push_str(row);
     }
@@ -128,9 +126,13 @@ fn bench_pull_parse(c: &mut Criterion) {
             b.iter(|| TreeBuilder::parse(html));
         });
         let tables = generate_table_html(size);
-        group.bench_with_input(BenchmarkId::new("parse_tables", &label), &tables, |b, html| {
-            b.iter(|| TreeBuilder::parse(html));
-        });
+        group.bench_with_input(
+            BenchmarkId::new("parse_tables", &label),
+            &tables,
+            |b, html| {
+                b.iter(|| TreeBuilder::parse(html));
+            },
+        );
     }
 
     group.finish();
