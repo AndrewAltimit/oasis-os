@@ -39,7 +39,7 @@ png = { workspace = true }
 
 [dev-dependencies]
 oasis-test-backend = { workspace = true }
-tempfile = "3"
+tempfile = { workspace = true }
 
 [lints]
 workspace = true

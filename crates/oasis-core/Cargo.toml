@@ -20,7 +20,6 @@ tls-rustls = ["oasis-net/tls-rustls"]
 # default-features = false and never compiles fontdue.
 skin-ttf = ["oasis-skin/ttf"]
 javascript = ["oasis-browser/javascript"]
-test-data = []
 
 [dependencies]
 # The App trait and shared app helpers only: the concrete apps live in the
@@ -47,7 +46,7 @@ log = { workspace = true }
 
 [dev-dependencies]
 oasis-test-backend = { workspace = true }
-tempfile = "3"
+tempfile = { workspace = true }
 criterion = { workspace = true }
 
 [[bench]]
