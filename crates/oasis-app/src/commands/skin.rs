@@ -15,7 +15,7 @@ use oasis_core::terminal_sdi;
 use oasis_core::vfs::MemoryVfs;
 use oasis_core::wallpaper;
 
-use crate::app_state::AppState;
+use crate::app_state::{AppState, Mode};
 use crate::shell_backend::ShellBackend;
 /// The dashboard's apps: everything installed under `/apps` plus the
 /// plugin apps in the registry. Boot and every dashboard rebuild (skin
@@ -86,6 +86,8 @@ fn derive_theme(state: &mut AppState, skin: &mut Skin, sw: u32, sh: u32) {
         bw.apply_chrome_theme(&state.browser_config);
     }
     state.wm.set_theme(skin.theme.build_wm_theme());
+    let (top, bottom) = oasis_core::apps::chrome_insets(&state.active_theme, &skin.features);
+    state.wm.set_placement_insets(top, bottom);
 }
 
 /// Apply an already-resolved skin to the running session.
@@ -124,6 +126,10 @@ pub fn apply_skin_object(
         .terminal
         .print(format!("Switched to skin: {}", swapped.manifest.name));
     state.skin = swapped;
+    // A terminal-only skin has no dashboard to rest on.
+    if state.mode == Mode::Dashboard {
+        state.mode = Mode::idle_for(&state.skin.features);
+    }
     rebuild_dashboard(state, vfs);
     // The status bar and taskbar keep their instances: their state (clock,
     // battery and Wi-Fi text, the selected top tab, taskbar order) is not

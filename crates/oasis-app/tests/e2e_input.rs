@@ -915,6 +915,11 @@ fn key_flows_on_every_skin() {
     for name in builtin_names() {
         let mut h = Harness::with_options(HarnessOptions::new(name)).unwrap();
         h.settle();
+        if !h.state().skin.features.dashboard {
+            // No icon grid to launch from (`dashboardless_skins_*` in
+            // e2e_shell covers these skins).
+            continue;
+        }
         let apps = h.dashboard_apps();
         let app = if apps.iter().any(|a| a == "Calculator") {
             "Calculator"
@@ -1109,7 +1114,7 @@ fn page_change_animations_complete() {
     for name in builtin_names() {
         let mut h = boot(name);
         let pages = h.state().ui.dashboard.page_count();
-        if pages < 2 {
+        if pages < 2 || !h.state().skin.features.dashboard {
             continue;
         }
         tested += 1;

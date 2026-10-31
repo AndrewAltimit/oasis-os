@@ -8,8 +8,10 @@
 //! component: `derive_bar_theme`, `derive_icon_theme`, `derive_start_menu_theme`,
 //! `derive_app_screen_theme`, `derive_osk_theme`, `derive_scrollbar_theme`,
 //! `derive_wallpaper_theme` and `derive_toast_theme`, plus `TaskbarColors`,
-//! `TransitionSettings` and the `parse_*` preset-table helpers for the
-//! flat `ActiveTheme` fields. Layer derivation
+//! `TransitionSettings`, `IconMotion`, `CursorSettings` and the `parse_*`
+//! preset-table helpers for the flat `ActiveTheme` fields. `BarKeys` holds
+//! the `[bar_overrides]` fallback rules (own key, then `text_color` /
+//! the generic gradient pair). Layer derivation
 //! (`derive_background_layers` / `_chrome_layers` / `_image_layers`) lives
 //! in `layers.rs`. Derived text colors that the skin did not set explicitly
 //! are kept readable on their surface with `theme::readable_on`.
@@ -199,6 +201,58 @@ impl TransitionSettings {
     }
 }
 
+/// Dashboard icon entrance and focus motion from `[icon_overrides]`.
+struct IconMotion {
+    entrance_style: String,
+    entrance_duration_ms: u32,
+    entrance_stagger_ms: u32,
+    focus_scale: f32,
+    focus_glow: bool,
+    focus_glow_color: Color,
+}
+
+impl IconMotion {
+    fn derive(skin: &SkinTheme, primary: Color) -> Self {
+        let ico = skin.icon_overrides.as_ref();
+        Self {
+            entrance_style: ico
+                .and_then(|i| i.entrance_style.clone())
+                .unwrap_or_else(|| "none".to_string()),
+            entrance_duration_ms: ico.and_then(|i| i.entrance_duration_ms).unwrap_or(200),
+            entrance_stagger_ms: ico.and_then(|i| i.entrance_stagger_ms).unwrap_or(30),
+            focus_scale: ico.and_then(|i| i.focus_scale).unwrap_or(1.0),
+            focus_glow: ico.and_then(|i| i.focus_glow).unwrap_or(false),
+            focus_glow_color: ov(
+                ico.and_then(|i| i.focus_glow_color.as_ref()),
+                with_alpha(primary, 100),
+            ),
+        }
+    }
+}
+
+/// Mouse cursor look from `[cursor]` (the scale comes from the screen).
+struct CursorSettings {
+    fill: Color,
+    outline: Color,
+    texture: Option<String>,
+    hotspot: (i32, i32),
+}
+
+impl CursorSettings {
+    fn derive(skin: &SkinTheme) -> Self {
+        let cur = skin.cursor.as_ref();
+        Self {
+            fill: ov(cur.and_then(|c| c.fill.as_ref()), CURSOR_FILL_DEFAULT),
+            outline: ov(cur.and_then(|c| c.outline.as_ref()), CURSOR_OUTLINE_DEFAULT),
+            texture: cur.and_then(|c| c.texture.clone()),
+            hotspot: cur
+                .and_then(|c| c.hotspot)
+                .map(|[x, y]| (x, y))
+                .unwrap_or((0, 0)),
+        }
+    }
+}
+
 /// `[app_themes.<app>]` color tables; unparseable colors are dropped, and
 /// apps left with none are omitted.
 fn parse_app_themes(skin: &SkinTheme) -> HashMap<String, HashMap<String, Color>> {
@@ -241,6 +295,59 @@ fn parse_animations(skin: &SkinTheme) -> HashMap<String, (u32, String)> {
         .collect()
 }
 
+/// A `[bar_overrides]` key: the field holding an element's color.
+type BarKey = fn(&BarOverrides) -> Option<&String>;
+
+/// `[bar_overrides]` lookups with the bars' fallback rules.
+struct BarKeys<'a> {
+    skin: &'a SkinTheme,
+    overrides: Option<&'a BarOverrides>,
+    /// Status-bar base color: the auto-derived gradients start from it.
+    status_bar_color: Color,
+}
+
+impl<'a> BarKeys<'a> {
+    fn new(skin: &'a SkinTheme, status_bar_color: Color) -> Self {
+        Self {
+            skin,
+            overrides: skin.bar_overrides.as_ref(),
+            status_bar_color,
+        }
+    }
+
+    /// The raw value of `key`.
+    fn get(&self, key: BarKey) -> Option<&'a String> {
+        self.overrides.and_then(key)
+    }
+
+    /// An element color: its own key, else `fallback`.
+    fn color(&self, key: BarKey, fallback: Color) -> Color {
+        ov(self.get(key), fallback)
+    }
+
+    /// An element text color: its own key, else the generic `text_color`,
+    /// else `fallback`.
+    fn text(&self, key: BarKey, fallback: Color) -> Color {
+        ov(
+            self.get(key).or(self.get(|b| b.text_color.as_ref())),
+            fallback,
+        )
+    }
+
+    /// A bar's gradient: its own pair of keys, else the generic
+    /// `gradient_top` / `gradient_bottom` pair (else auto-derived when the
+    /// skin sets `gradient_enabled`).
+    fn gradient(&self, top: BarKey, bottom: BarKey) -> Option<(Color, Color)> {
+        ActiveTheme::bar_gradient_pair(
+            self.skin,
+            self.get(top).or(self.get(|b| b.gradient_top.as_ref())),
+            self.get(bottom)
+                .or(self.get(|b| b.gradient_bottom.as_ref())),
+            self.status_bar_color,
+        )
+    }
+}
+
 impl ActiveTheme {
     /// Derive an `ActiveTheme` from the skin's base color palette.
     ///
@@ -259,9 +366,7 @@ impl ActiveTheme {
         let text = skin.text_color();
         let dim = skin.dim_text_color();
 
-        let ico = skin.icon_overrides.as_ref();
         let bg_perf = skin.background_performance.as_ref();
-        let cur = skin.cursor.as_ref();
         let geo = skin.geometry.as_ref();
         // `[geometry] <field>`, else `default`.
         macro_rules! geo {
@@ -272,6 +377,8 @@ impl ActiveTheme {
 
         let taskbar = TaskbarColors::derive(skin, primary);
         let transition = TransitionSettings::derive(skin);
+        let motion = IconMotion::derive(skin, primary);
+        let cursor = CursorSettings::derive(skin);
         let ansi = apply_palette_overrides(
             derive_ansi_palette(primary, skin.output_color(), text),
             skin.palette.as_ref(),
@@ -279,8 +386,8 @@ impl ActiveTheme {
 
         Self {
             ansi,
-            cursor_fill: ov(cur.and_then(|c| c.fill.as_ref()), CURSOR_FILL_DEFAULT),
-            cursor_outline: ov(cur.and_then(|c| c.outline.as_ref()), CURSOR_OUTLINE_DEFAULT),
+            cursor_fill: cursor.fill,
+            cursor_outline: cursor.outline,
 
             // Component themes.
             bar: Self::derive_bar_theme(skin, status_bar_color, primary, secondary, text, dim),
@@ -301,17 +408,12 @@ impl ActiveTheme {
             background_complexity_budget: bg_perf.and_then(|p| p.complexity_budget).unwrap_or(200),
 
             // Dashboard icon motion and focus.
-            entrance_style: ico
-                .and_then(|i| i.entrance_style.clone())
-                .unwrap_or_else(|| "none".to_string()),
-            entrance_duration_ms: ico.and_then(|i| i.entrance_duration_ms).unwrap_or(200),
-            entrance_stagger_ms: ico.and_then(|i| i.entrance_stagger_ms).unwrap_or(30),
-            focus_scale: ico.and_then(|i| i.focus_scale).unwrap_or(1.0),
-            focus_glow: ico.and_then(|i| i.focus_glow).unwrap_or(false),
-            focus_glow_color: ov(
-                ico.and_then(|i| i.focus_glow_color.as_ref()),
-                with_alpha(primary, 100),
-            ),
+            entrance_style: motion.entrance_style,
+            entrance_duration_ms: motion.entrance_duration_ms,
+            entrance_stagger_ms: motion.entrance_stagger_ms,
+            focus_scale: motion.focus_scale,
+            focus_glow: motion.focus_glow,
+            focus_glow_color: motion.focus_glow_color,
 
             // Taskbar.
             taskbar_height: geo!(taskbar_height, 20),
@@ -365,11 +467,8 @@ impl ActiveTheme {
 
             // Mouse cursor.
             cursor_scale: 1,
-            cursor_texture: cur.and_then(|c| c.texture.clone()),
-            cursor_hotspot: cur
-                .and_then(|c| c.hotspot)
-                .map(|[x, y]| (x, y))
-                .unwrap_or((0, 0)),
+            cursor_texture: cursor.texture,
+            cursor_hotspot: cursor.hotspot,
 
             // Screen transitions.
             transition_fade_color: transition.fade_color,
@@ -425,31 +524,15 @@ impl ActiveTheme {
         text: Color,
         dim: Color,
     ) -> BarTheme {
-        type Key = fn(&BarOverrides) -> Option<&String>;
-        let bar_ov = skin.bar_overrides.as_ref();
-        let bar_text = bar_ov.and_then(|b| b.text_color.as_ref());
-        let grad_top = bar_ov.and_then(|b| b.gradient_top.as_ref());
-        let grad_bottom = bar_ov.and_then(|b| b.gradient_bottom.as_ref());
-        // An element color: its own key, else `fallback`.
-        let pick = |key: Key, fallback: Color| ov(bar_ov.and_then(key), fallback);
-        // An element text color: its own key, else `text_color`, else
-        // `fallback`.
-        let pick_text = |key: Key, fallback: Color| ov(bar_ov.and_then(key).or(bar_text), fallback);
-        // A bar's gradient: its own pair of keys, else the generic pair
-        // (else auto-derived when `gradient_enabled`).
-        let gradient = |top: Key, bottom: Key| {
-            Self::bar_gradient_pair(
-                skin,
-                bar_ov.and_then(top).or(grad_top),
-                bar_ov.and_then(bottom).or(grad_bottom),
-                status_bar_color,
-            )
-        };
-        let statusbar_gradient = gradient(
+        let keys = BarKeys::new(skin, status_bar_color);
+        let bar_ov = keys.overrides;
+        let pick = |key: BarKey, fallback: Color| keys.color(key, fallback);
+        let pick_text = |key: BarKey, fallback: Color| keys.text(key, fallback);
+        let statusbar_gradient = keys.gradient(
             |b| b.statusbar_gradient_top.as_ref(),
             |b| b.statusbar_gradient_bottom.as_ref(),
         );
-        let bar_gradient = gradient(
+        let bar_gradient = keys.gradient(
             |b| b.bar_gradient_top.as_ref(),
             |b| b.bar_gradient_bottom.as_ref(),
         );
@@ -563,7 +646,12 @@ impl ActiveTheme {
             ico.and_then(|i| i.label_color.as_ref()),
             with_alpha(text, 230),
         );
-        let icon_label_shadow = {
+        let icon_label_shadow = if let Some(c) = ico
+            .and_then(|i| i.label_shadow_color.as_ref())
+            .and_then(|s| parse_hex_color(s))
+        {
+            Some(c)
+        } else {
             let brightness = icon_label_color.r as u16 * 3 / 10
                 + icon_label_color.g as u16 * 6 / 10
                 + icon_label_color.b as u16 / 10;
@@ -1070,5 +1158,122 @@ impl ActiveTheme {
             shadow_intensity: Some(3),
             ..SkinTheme::default()
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::theme::IconOverrides;
+
+    fn skin_with_bar(bar: BarOverrides) -> SkinTheme {
+        SkinTheme {
+            bar_overrides: Some(bar),
+            ..SkinTheme::default()
+        }
+    }
+
+    /// Text colors: own key, then `text_color`, then the fallback; plain
+    /// element colors ignore `text_color`.
+    #[test]
+    fn bar_keys_text_falls_back_through_text_color() {
+        let skin = skin_with_bar(BarOverrides {
+            text_color: Some("#112233".into()),
+            url_color: Some("#445566".into()),
+            ..BarOverrides::default()
+        });
+        let keys = BarKeys::new(&skin, Color::BLACK);
+        let fallback = Color::rgb(9, 9, 9);
+        assert_eq!(
+            keys.text(|b| b.url_color.as_ref(), fallback),
+            Color::rgb(0x44, 0x55, 0x66)
+        );
+        assert_eq!(
+            keys.text(|b| b.clock_color.as_ref(), fallback),
+            Color::rgb(0x11, 0x22, 0x33)
+        );
+        assert_eq!(keys.color(|b| b.bar_bg.as_ref(), fallback), fallback);
+        let none = SkinTheme::default();
+        let keys = BarKeys::new(&none, Color::BLACK);
+        assert_eq!(keys.text(|b| b.clock_color.as_ref(), fallback), fallback);
+    }
+
+    /// A bar's own gradient pair wins over the generic pair; with neither
+    /// the gradient is auto-derived only when `gradient_enabled`.
+    #[test]
+    fn bar_keys_gradient_precedence() {
+        let skin = skin_with_bar(BarOverrides {
+            gradient_top: Some("#010101".into()),
+            gradient_bottom: Some("#020202".into()),
+            bar_gradient_top: Some("#0A0A0A".into()),
+            bar_gradient_bottom: Some("#0B0B0B".into()),
+            ..BarOverrides::default()
+        });
+        let keys = BarKeys::new(&skin, Color::BLACK);
+        let bar = keys.gradient(
+            |b| b.bar_gradient_top.as_ref(),
+            |b| b.bar_gradient_bottom.as_ref(),
+        );
+        assert_eq!(bar, Some((Color::rgb(10, 10, 10), Color::rgb(11, 11, 11))));
+        let status = keys.gradient(
+            |b| b.statusbar_gradient_top.as_ref(),
+            |b| b.statusbar_gradient_bottom.as_ref(),
+        );
+        assert_eq!(status, Some((Color::rgb(1, 1, 1), Color::rgb(2, 2, 2))));
+
+        let generic = |keys: &BarKeys<'_>| {
+            keys.gradient(|b| b.gradient_top.as_ref(), |b| b.gradient_bottom.as_ref())
+        };
+        let plain = SkinTheme::default();
+        assert_eq!(
+            generic(&BarKeys::new(&plain, Color::rgb(100, 100, 100))),
+            None
+        );
+        let auto = SkinTheme {
+            gradient_enabled: Some(true),
+            ..SkinTheme::default()
+        };
+        let (top, bottom) =
+            generic(&BarKeys::new(&auto, Color::rgb(100, 100, 100))).expect("auto-derived");
+        assert_eq!(bottom, Color::rgb(100, 100, 100));
+        assert!(top.r > bottom.r);
+    }
+
+    #[test]
+    fn icon_motion_and_cursor_defaults() {
+        let skin = SkinTheme::default();
+        let primary = Color::rgb(10, 20, 30);
+        let motion = IconMotion::derive(&skin, primary);
+        assert_eq!(motion.entrance_style, "none");
+        assert_eq!(
+            (motion.entrance_duration_ms, motion.entrance_stagger_ms),
+            (200, 30)
+        );
+        assert!(!motion.focus_glow);
+        assert_eq!(motion.focus_glow_color, with_alpha(primary, 100));
+        let cursor = CursorSettings::derive(&skin);
+        assert_eq!(cursor.fill, CURSOR_FILL_DEFAULT);
+        assert_eq!(cursor.outline, CURSOR_OUTLINE_DEFAULT);
+        assert_eq!(cursor.hotspot, (0, 0));
+        assert!(cursor.texture.is_none());
+    }
+
+    /// `label_shadow_color` replaces the brightness-based default shadow.
+    #[test]
+    fn icon_label_shadow_override() {
+        let mut skin = SkinTheme {
+            icon_overrides: Some(IconOverrides {
+                label_color: Some("#FFFFFF".into()),
+                ..IconOverrides::default()
+            }),
+            ..SkinTheme::default()
+        };
+        let at = ActiveTheme::from_skin(&skin);
+        assert_eq!(at.icon.label_shadow, Some(Color::rgba(0, 0, 0, 120)));
+        if let Some(ico) = skin.icon_overrides.as_mut() {
+            ico.label_shadow_color = Some("#000000".into());
+        }
+        let at = ActiveTheme::from_skin(&skin);
+        assert_eq!(at.icon.label_shadow, Some(Color::rgb(0, 0, 0)));
     }
 }

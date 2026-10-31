@@ -79,7 +79,7 @@
     "video-decode",
     "video-decode-ffmpeg"
    ],
-   "loc": 35974,
+   "loc": 36122,
    "files": 65,
    "deps": [
     {
@@ -290,7 +290,7 @@
     "skin-ttf",
     "tls-rustls"
    ],
-   "loc": 25751,
+   "loc": 25805,
    "files": 72,
    "deps": [
     {
@@ -1107,7 +1107,7 @@
    "crate_type": [],
    "bins": [],
    "features": [],
-   "loc": 12836,
+   "loc": 12948,
    "files": 26,
    "deps": [
     {
@@ -1139,7 +1139,7 @@
     "serialize",
     "ttf"
    ],
-   "loc": 15346,
+   "loc": 15557,
    "files": 34,
    "deps": [
     {
@@ -1462,7 +1462,7 @@
    "features": [
     "wasm-youtube"
    ],
-   "loc": 9587,
+   "loc": 9592,
    "files": 26,
    "deps": [
     {

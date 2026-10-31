@@ -116,7 +116,9 @@ Available fields per object:
 ### features.toml (Feature Flags)
 
 ```toml
-dashboard = true          # Show icon grid dashboard
+dashboard = true          # Show icon grid dashboard (false: bare desktop, no
+                          # icons or page dots; with window_manager = false
+                          # too, the shell rests in its fullscreen terminal)
 terminal = true           # Enable command terminal
 file_browser = true       # Enable ls/cd/cat commands
 browser = true            # Enable HTML/CSS browser widget
@@ -310,6 +312,10 @@ clock_offset_y = 6
 body_color = "#FAFAF8"
 fold_color = "#D2D2CD"
 label_color = "#FFFFFFE6"
+# 1 px drop shadow under the labels (default: translucent black under
+# bright labels, none under dark ones). Set an opaque color when labels
+# sit on a bright or busy wallpaper / shader.
+label_shadow_color = "#000000"
 cursor_color = "#FFFFFF32"
 icon_border_radius = 6
 cursor_border_radius = 8

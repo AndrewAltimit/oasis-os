@@ -1,6 +1,5 @@
 //! Desktop (window manager) mode input.
 
-use oasis_core::bottombar::MediaTab;
 use oasis_core::input::{Button, InputEvent, Trigger};
 use oasis_core::sdi::SdiRegistry;
 use oasis_core::startmenu::StartMenuAction;
@@ -149,7 +148,7 @@ fn desktop_click(
         WmEvent::DesktopClick(dx, dy) => {
             if state.wm.window_count() == 0 {
                 state.mode = Mode::Dashboard;
-            } else if state.ui.bottom_bar.active_tab == MediaTab::None
+            } else if crate::render::dashboard_icons_visible(state)
                 && let Some(idx) = state.ui.dashboard.icon_at(dx, dy)
             {
                 // Forward desktop clicks to dashboard icons.

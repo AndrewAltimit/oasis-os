@@ -81,6 +81,21 @@ impl WindowManager {
         self.theme = theme;
     }
 
+    /// Reserve `top` / `bottom` rows of the screen for the host's chrome
+    /// (status bar plus tab row, bottom bar). Windows the WM places itself
+    /// (cascaded, no explicit position) open between them, so a new
+    /// window never covers a skin's top tab row. Explicitly positioned
+    /// windows, maximize and snapping are unaffected.
+    pub fn set_placement_insets(&mut self, top: u32, bottom: u32) {
+        self.placement_insets = (top, bottom);
+    }
+
+    /// The `(top, bottom)` rows cascaded windows keep clear (see
+    /// [`Self::set_placement_insets`]).
+    pub fn placement_insets(&self) -> (u32, u32) {
+        self.placement_insets
+    }
+
     /// Update the screen dimensions (e.g. after a live resolution change).
     ///
     /// Existing windows keep their geometry until the caller runs

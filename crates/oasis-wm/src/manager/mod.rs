@@ -119,6 +119,10 @@ pub struct WindowManager {
     pub(crate) anim_visual: Vec<(WindowId, Geometry)>,
     /// Time of the previous `tick_animations` call.
     pub(crate) anim_last_tick: Option<web_time::Instant>,
+    /// Rows at the top / bottom of the screen the host's chrome keeps
+    /// (status bar, tab row, bottom bar): cascaded windows open between
+    /// them. See [`WindowManager::set_placement_insets`].
+    pub(crate) placement_insets: (u32, u32),
 }
 
 impl WindowManager {
@@ -148,6 +152,7 @@ impl WindowManager {
             closing: Vec::new(),
             anim_visual: Vec::new(),
             anim_last_tick: None,
+            placement_insets: (0, 0),
         }
     }
 

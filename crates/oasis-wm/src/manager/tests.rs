@@ -853,6 +853,48 @@ fn cascaded_windows_stay_on_screen() {
     assert_eq!((win.x, win.y), (0, 0));
 }
 
+/// With placement insets (status bar + tab row, bottom bar), cascaded
+/// windows open below the top chrome: above the bottom bar when they fit
+/// there, shortened when taller than the screen below the top chrome.
+#[test]
+fn cascaded_windows_respect_placement_insets() {
+    let mut sdi = SdiRegistry::new();
+    let mut wm = WindowManager::new(480, 272);
+    wm.set_placement_insets(42, 24);
+    assert_eq!(wm.placement_insets(), (42, 24));
+    let cfg = |id: &str, height: u32| WindowConfig {
+        id: id.into(),
+        title: id.into(),
+        x: None,
+        y: None,
+        width: 200,
+        height,
+        window_type: WindowType::AppWindow,
+        always_on_top: false,
+        modal: false,
+    };
+    for i in 0..6 {
+        wm.create_window(&cfg(&format!("s{i}"), 100), &mut sdi)
+            .unwrap();
+        let win = wm.get_window(&format!("s{i}")).unwrap();
+        assert!(win.y >= 42, "s{i} y={}", win.y);
+        assert!(win.y + win.outer_h as i32 <= 272 - 24, "s{i} y={}", win.y);
+    }
+    // Taller than 272 - 42: shortened to fit between the top chrome and
+    // the screen bottom.
+    wm.create_window(&cfg("tall", 260), &mut sdi).unwrap();
+    let win = wm.get_window("tall").unwrap();
+    assert_eq!(win.y, 42);
+    assert_eq!(win.y + win.outer_h as i32, 272);
+    // Explicit positions are left alone.
+    let mut explicit = cfg("explicit", 100);
+    explicit.x = Some(5);
+    explicit.y = Some(3);
+    wm.create_window(&explicit, &mut sdi).unwrap();
+    let win = wm.get_window("explicit").unwrap();
+    assert_eq!((win.x, win.y), (5, 3));
+}
+
 #[test]
 fn explicit_position_overrides_cascade() {
     let mut sdi = SdiRegistry::new();

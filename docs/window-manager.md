@@ -57,6 +57,9 @@ wm.set_screen_size(w, h);          // after a resolution change, then:
 wm.fit_to_screen(&mut sdi);        // refit maximized/snapped/tiled/kiosk windows,
                                    // pull off-screen ones back into the work area
 wm.set_theme(theme);               // after a skin switch
+// Rows the shell chrome keeps (oasis_core::apps::chrome_insets: status bar
+// + tab row, bottom bar): cascaded windows open between them.
+wm.set_placement_insets(top, bottom);
 wm.set_snap_enabled(true);         // drag-to-edge snapping (on by default)
 wm.set_motion_enabled(!skin.features.reduced_motion); // animations (off by default)
 ```
@@ -65,7 +68,7 @@ Lifecycle (all take `&mut SdiRegistry`):
 
 | Method | Effect |
 |--------|--------|
-| `create_window(&WindowConfig, sdi) -> Result<WindowId>` | Create chrome objects, cascade position (pulled back so the frame stays on screen), focus the window |
+| `create_window(&WindowConfig, sdi) -> Result<WindowId>` | Create chrome objects, cascade position (pulled back so the frame stays on screen, below the top placement inset and above the bottom one when it fits; a window taller than the screen below the top inset is shortened), focus the window |
 | `close_window(id, sdi)` / `close_all(sdi)` | Remove the window; with motion on, its chrome animates out before the SDI objects are destroyed |
 | `minimize_window` / `maximize_window` / `restore_window` | State changes; maximize fills the work area. Focus passes to the topmost *visible* window when the active one is minimized or closed. A window minimized while maximized is restored maximized (`Window::minimized_from_maximized`); the next restore returns it to its pre-maximize geometry. Maximizing a minimized window shows it again |
 | `enter_fullscreen` / `exit_fullscreen` | Kiosk fullscreen for an app window |

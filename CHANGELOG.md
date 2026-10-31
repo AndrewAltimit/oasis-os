@@ -22,6 +22,26 @@ larger changes by area. Breaking API changes are marked **(breaking)**.
   gets bold / italic reopened inside it; misnested formatting around a table
   (`<table><a>1<p>2</a>3`) lands before the table instead of inside it.
 
+### Shell chrome / skins
+
+- Skins with `dashboard = false` (`desktop`, `corrupted`) no longer draw the dashboard icon
+  grid (it showed in Dashboard mode and behind windows), and its hidden icons no longer
+  take clicks, hover or d-pad launches. Their bottom bar shows no page dots either. A
+  terminal-only skin (no dashboard and no window manager: `corrupted`) boots into, and
+  returns to, its fullscreen terminal instead of an empty dashboard.
+- New windows open below the skin's top chrome: hosts pass the status bar + tab row and
+  bottom bar heights (`oasis_core::apps::chrome_insets`) to the new
+  `WindowManager::set_placement_insets`, so psix-hifi's windows no longer cover its top tab
+  row. A cascaded window taller than the screen below the top chrome is shortened to fit.
+- The start button is centred vertically in the bottom bar (it was pinned 3 px below the
+  bar's top: macOS's 52 px dock showed it at the top, and on retro-cga / paper it hung
+  past the bar's bottom edge).
+- `[icon_overrides] label_shadow_color` sets the icon-label drop shadow; retro-cga,
+  balatro and solarized use it so labels read on their bright wallpapers / shader.
+- Screenshots: the `desktop` skin's Terminal window shows its text (a later window's
+  focus buried it under the content background) and the media-tab captures keep the start
+  button, as the shell does.
+
 ### Browser (CSS)
 
 - The user-agent sheet is its own cascade origin: author rules in any `@layer` now beat it

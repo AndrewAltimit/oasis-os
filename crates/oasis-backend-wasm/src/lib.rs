@@ -333,7 +333,9 @@ impl OasisWasm {
         );
 
         // Window manager.
-        let wm = WindowManager::with_theme(width, height, skin.theme.build_wm_theme());
+        let mut wm = WindowManager::with_theme(width, height, skin.theme.build_wm_theme());
+        let (top, bottom) = oasis_core::apps::chrome_insets(&active_theme, &skin.features);
+        wm.set_placement_insets(top, bottom);
 
         // Wallpaper texture (composites the skin's image for
         // `style = "image"`), then layout textures and image decals.
@@ -1120,6 +1122,9 @@ impl OasisWasm {
                     .with_features(&swapped.features);
                 self.browser_config = BrowserConfig::from_skin_theme(&swapped.theme);
                 self.wm.set_theme(swapped.theme.build_wm_theme());
+                let (top, bottom) =
+                    oasis_core::apps::chrome_insets(&self.active_theme, &swapped.features);
+                self.wm.set_placement_insets(top, bottom);
                 let dash_config =
                     DashboardConfig::from_features(&swapped.features, &self.active_theme);
                 self.dashboard =

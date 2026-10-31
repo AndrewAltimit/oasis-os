@@ -62,12 +62,7 @@ impl WindowManager {
 
         let mut window = Window::new(config, x, y, &self.theme);
         if cascaded {
-            // A cascade step must not push the frame past the right /
-            // bottom edge (at 480x272 a default-size window is nearly as
-            // tall as the screen): pull it back so it fits, or to the
-            // top-left corner when it is larger than the screen.
-            window.x = fit_on_screen(window.x, window.outer_w, self.screen_w);
-            window.y = fit_on_screen(window.y, window.outer_h, self.screen_h);
+            window = self.place_cascaded(window, config);
         }
         let is_modal = window.modal;
 
@@ -378,6 +373,51 @@ impl WindowManager {
         }
     }
 
+    /// Fit a cascaded window on screen. Horizontally a cascade step must
+    /// not push the frame past the right edge: pull it back, or to the
+    /// left edge when it is wider than the screen. Vertically the window
+    /// opens below the host's top chrome ([`Self::placement_insets`]: the
+    /// status bar and a skin's tab row) and, when it fits, above the bottom
+    /// bar; one taller than the screen below the top chrome is shortened
+    /// to fit (at 480x272 a default-size window is nearly as tall as the
+    /// screen). Without room for even [`MIN_PLACED_CONTENT_H`] it falls
+    /// back to the whole screen.
+    fn place_cascaded(&self, mut window: Window, config: &WindowConfig) -> Window {
+        let (top, bottom) = self.placement_insets();
+        let screen_h = self.screen_h;
+        let room = screen_h.saturating_sub(top);
+        if window.outer_h > room {
+            let chrome = window.outer_h.saturating_sub(config.height);
+            let fitted_h = room.saturating_sub(chrome);
+            if fitted_h >= MIN_PLACED_CONTENT_H.min(config.height) {
+                let fitted = WindowConfig {
+                    height: fitted_h,
+                    ..config.clone()
+                };
+                window = Window::new(&fitted, window.x, window.y, &self.theme);
+            }
+        }
+        window.x = fit_on_screen(window.x, window.outer_w, self.screen_w);
+        window.y = if window.outer_h <= room {
+            // Above the bottom bar when the band holds the window, else
+            // overlapping it (the bars draw over windows).
+            let band_end = if window.outer_h <= room.saturating_sub(bottom) {
+                screen_h - bottom
+            } else {
+                screen_h
+            };
+            fit_span(
+                window.y.saturating_add_unsigned(top),
+                window.outer_h,
+                top,
+                band_end,
+            )
+        } else {
+            fit_on_screen(window.y, window.outer_h, screen_h)
+        };
+        window
+    }
+
     /// Advance the cascade position for the next window (see also
     /// [`fit_on_screen`], applied to each cascaded window).
     pub(crate) fn advance_cascade(&mut self) {
@@ -394,10 +434,20 @@ impl WindowManager {
     }
 }
 
+/// Smallest content height [`WindowManager::place_cascaded`] shortens a
+/// window to (it never grows one).
+const MIN_PLACED_CONTENT_H: u32 = 120;
+
 /// `pos` moved back so a `size`-long span starting there ends within a
 /// `screen`-long axis, but never before 0.
 fn fit_on_screen(pos: i32, size: u32, screen: u32) -> i32 {
-    let max = i64::from(screen) - i64::from(size);
-    // In i32 range: the result lies between 0 and `pos`.
-    i64::from(pos).min(max).max(0) as i32
+    fit_span(pos, size, 0, screen)
+}
+
+/// `pos` moved back so a `size`-long span starting there ends by `end`,
+/// but never before `start`.
+fn fit_span(pos: i32, size: u32, start: u32, end: u32) -> i32 {
+    let max = i64::from(end) - i64::from(size);
+    // In i32 range: the result lies between `start` and `pos`.
+    i64::from(pos).min(max).max(i64::from(start)) as i32
 }

@@ -5,7 +5,6 @@
 //! `dashboard`: the dashboard, the fullscreen terminal and the OSK).
 
 use oasis_core::apps::AppAction;
-use oasis_core::bottombar::MediaTab;
 use oasis_core::input::{Button, InputEvent, Key, KeyTwinFilter, Modifiers};
 use oasis_core::sdi::SdiRegistry;
 use oasis_core::startmenu::StartMenuAction;
@@ -31,7 +30,7 @@ pub use desktop::handle_desktop_input;
 fn update_dashboard_hover(state: &mut AppState, x: i32, y: i32, reachable: bool) {
     let target = (reachable
         && !state.ui.start_menu.open
-        && state.ui.bottom_bar.active_tab == MediaTab::None
+        && crate::render::dashboard_icons_visible(state)
         && !icon_drag::active(state))
     .then(|| state.ui.dashboard.icon_at(x, y))
     .flatten();
@@ -64,7 +63,8 @@ fn launch_dashboard_icon(
 
 /// Where leaving the fullscreen terminal lands: back on the desktop while
 /// windows are on screen (the terminal can be entered from there, e.g. an
-/// app's "switch to terminal"), otherwise the dashboard. The dashboard
+/// app's "switch to terminal"), otherwise the skin's idle mode (the
+/// dashboard, or the terminal itself on a terminal-only skin). The dashboard
 /// mode does not route input to windows, so returning there with windows
 /// visible would leave them painted but unusable.
 fn home_mode(state: &AppState) -> Mode {
@@ -76,7 +76,7 @@ fn home_mode(state: &AppState) -> Mode {
     if windows_visible {
         Mode::Desktop
     } else {
-        Mode::Dashboard
+        Mode::idle_for(&state.skin.features)
     }
 }
 

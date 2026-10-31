@@ -506,11 +506,13 @@ impl<B: ShellBackend> Shell<B> {
         let ui = build_ui_layer(&config, &skin, &active_theme, tiles);
 
         // Window manager state (Desktop mode).
-        let wm = WindowManager::with_theme(
+        let mut wm = WindowManager::with_theme(
             config.screen_width,
             config.screen_height,
             skin.theme.build_wm_theme(),
         );
+        let (top, bottom) = oasis_core::apps::chrome_insets(&active_theme, &skin.features);
+        wm.set_placement_insets(top, bottom);
 
         // Boot entrance: skin-selected ("fade" default, "assemble", "none").
         let fade_frames = skin.features.transition_fade_frames.unwrap_or(15);
@@ -523,6 +525,7 @@ impl<B: ShellBackend> Shell<B> {
 
         // Assemble application state.
         let clear_color = active_theme.clear_color;
+        let mode = Mode::idle_for(&skin.features);
         let mut state = AppState {
             config,
             skin,
@@ -546,7 +549,7 @@ impl<B: ShellBackend> Shell<B> {
             osk: None,
             plugin_manager,
             wm,
-            mode: Mode::Dashboard,
+            mode,
             bg_color: clear_color,
             active_transition,
             frame_counter: 0,
@@ -1204,7 +1207,7 @@ fn draw_frame<B: ShellBackend>(
         // per-window rendering to avoid the dashboard icons disappearing
         // whenever a window is open on top of them.
         let wants_vector_icons =
-            state.skin.features.dashboard && state.active_theme.icon.style == "vector";
+            render::dashboard_icons_visible(state) && state.active_theme.icon.style == "vector";
         let dashboard = &state.ui.dashboard;
         let active_theme = &state.active_theme;
         let frame = state.frame_counter as u32;
@@ -1254,11 +1257,13 @@ fn draw_frame<B: ShellBackend>(
             state.frame_counter as u32,
             &mut state.skin_assets.background_cache,
         )?;
-        state.ui.dashboard.render_vector_icons(
-            backend,
-            &state.active_theme,
-            state.frame_counter as u32,
-        )?;
+        if render::dashboard_icons_visible(state) {
+            state.ui.dashboard.render_vector_icons(
+                backend,
+                &state.active_theme,
+                state.frame_counter as u32,
+            )?;
+        }
         sdi.draw_overlay_layer(backend)?;
     } else {
         sdi.draw(backend)?;

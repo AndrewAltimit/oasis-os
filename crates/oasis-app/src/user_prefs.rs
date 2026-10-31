@@ -122,6 +122,8 @@ fn rebuild_theme(state: &mut AppState) {
         .with_screen_size(sw, sh)
         .with_features(&state.skin.features);
     prefs.apply_font_scale(&mut at);
+    let (top, bottom) = oasis_core::apps::chrome_insets(&at, &state.skin.features);
+    state.wm.set_placement_insets(top, bottom);
     state.active_theme = at;
     rebuild_start_menu(state);
 }

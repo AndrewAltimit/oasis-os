@@ -1,6 +1,5 @@
 //! Dashboard, fullscreen terminal and on-screen keyboard input.
 
-use oasis_core::bottombar::MediaTab;
 use oasis_core::input::{Button, InputEvent, Trigger};
 use oasis_core::osk::{OskConfig, OskState};
 use oasis_core::sdi::SdiRegistry;
@@ -110,7 +109,7 @@ pub fn handle_default_input(
         // Launch app from dashboard as floating window.
         InputEvent::ButtonPress(Button::Confirm) if state.mode == Mode::Dashboard => {
             state.ui.dashboard.trigger_press_flash();
-            if state.ui.bottom_bar.active_tab == MediaTab::None
+            if crate::render::dashboard_icons_visible(state)
                 && let Some(app) = state.ui.dashboard.selected_app().cloned()
             {
                 launch::launch(state, sdi, vfs, &app, LaunchOpts::USER);
@@ -136,7 +135,7 @@ pub fn handle_default_input(
                 }
                 return InputResult::Continue;
             }
-            if state.ui.bottom_bar.active_tab == MediaTab::None
+            if crate::render::dashboard_icons_visible(state)
                 && let Some(idx) = state.ui.dashboard.icon_at(*x, *y)
             {
                 if state.ui.dashboard.config.free_layout {
@@ -226,18 +225,18 @@ pub fn handle_default_input(
         // Dashboard input: D-pad navigation.
         InputEvent::ButtonPress(btn) if state.mode == Mode::Dashboard => match btn {
             Button::Up | Button::Down | Button::Left | Button::Right
-                if state.ui.bottom_bar.active_tab == MediaTab::None =>
+                if crate::render::dashboard_icons_visible(state) =>
             {
                 state.ui.dashboard.handle_input(btn);
                 state.ui_sounds.push_nav(state.frame_counter);
             },
-            Button::Triangle if state.ui.bottom_bar.active_tab == MediaTab::None => {
+            Button::Triangle if crate::render::dashboard_icons_visible(state) => {
                 state.ui.dashboard.next_page();
                 state.ui.bottom_bar.current_page = state.ui.dashboard.page;
                 state.ui_sounds.push_nav(state.frame_counter);
                 apply_page_change_fade(state);
             },
-            Button::Square if state.ui.bottom_bar.active_tab == MediaTab::None => {
+            Button::Square if crate::render::dashboard_icons_visible(state) => {
                 state.ui.dashboard.prev_page();
                 state.ui.bottom_bar.current_page = state.ui.dashboard.page;
                 state.ui_sounds.push_nav(state.frame_counter);
