@@ -310,3 +310,115 @@ fn c_preprocessor_keywords_and_block_comments() {
     assert!(!open);
     assert_eq!(spans[0].kind, SyntaxKind::Comment);
 }
+
+// -- Every language terminates and tiles every line --
+
+/// Lines that stress each scanner: lone `/` (CSS `font: 12px/1.5`,
+/// `grid-area: 1 / 2` used to spin forever: `/` was neither an operator
+/// nor a word byte, so the CSS scanner never advanced), unterminated
+/// strings and comments, stray quotes, multi-byte text.
+const TRICKY_LINES: &[&str] = &[
+    "font: 12px/1.5 serif;",
+    "grid-area: 1 / 2 / 3 / 4;",
+    "a/b c/ /d / //x",
+    "/",
+    "*/ end of comment",
+    "\"unterminated",
+    "'single",
+    "url(a/b.png) @media (min-width: 10em) { .x { y: 50% } }",
+    "-- @ # $ ` ~ ^ & | \\ ! ? < > = + -",
+    "<div a=\"1\" b='2' c=3>text</div><!-- c --> &amp;",
+    "[section] key = \"v\" # comment",
+    "**bold** _em_ `code` [link](http://x) # h",
+    "echo \"$HOME\" 'x' # c | grep -v y > /dev/null",
+    "fn é() { let s = \"ü\"; /* ö */ } // ß",
+    "<p é=1 ü>Grüße</p> <!-- ö -->",
+    "0x1F 1.5e3 .5 10px 99% 3.",
+];
+
+fn all_file_types() -> [FileType; 9] {
+    [
+        FileType::Rust,
+        FileType::C,
+        FileType::Toml,
+        FileType::Html,
+        FileType::Css,
+        FileType::JavaScript,
+        FileType::Markdown,
+        FileType::Shell,
+        FileType::Plain,
+    ]
+}
+
+#[test]
+fn every_highlighter_terminates_and_tiles_tricky_lines() {
+    // On a worker thread so a scanner that stops advancing fails the test
+    // instead of hanging the suite.
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        for ft in all_file_types() {
+            for line in TRICKY_LINES {
+                for open in [false, true] {
+                    let (spans, _) = highlight_line(line, ft, open);
+                    assert_spans_contiguous(&spans, line.len());
+                    for s in &spans {
+                        assert!(line.is_char_boundary(s.start) && line.is_char_boundary(s.end));
+                    }
+                }
+            }
+        }
+        let _ = tx.send(());
+    });
+    match rx.recv_timeout(std::time::Duration::from_secs(20)) {
+        Ok(()) => {},
+        Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+            panic!("a highlighter panicked (see the thread's output)")
+        },
+        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+            panic!("a highlighter stopped advancing on one of TRICKY_LINES")
+        },
+    }
+}
+
+fn css_kinds(line: &str, open: bool) -> (Vec<(&str, SyntaxKind)>, bool) {
+    let (spans, still_open) = highlight_line(line, FileType::Css, open);
+    let kinds = spans
+        .iter()
+        .filter(|s| s.kind != SyntaxKind::Normal || !line[s.start..s.end].trim().is_empty())
+        .map(|s| (&line[s.start..s.end], s.kind))
+        .collect();
+    (kinds, still_open)
+}
+
+#[test]
+fn css_rule_tokens() {
+    let (k, open) = css_kinds(
+        "@media screen { .a { margin: 10px 50%; content: \"x\"; } }",
+        false,
+    );
+    assert!(!open);
+    assert_eq!(k[0], ("@media", SyntaxKind::Keyword));
+    assert!(k.contains(&("10px", SyntaxKind::Number)));
+    assert!(k.contains(&("50%", SyntaxKind::Number)));
+    assert!(k.contains(&("\"x\"", SyntaxKind::StringLiteral)));
+    assert!(k.contains(&("{", SyntaxKind::Operator)));
+    assert!(k.contains(&("margin", SyntaxKind::Normal)));
+    // `/` divides (`font` shorthand) and is an operator.
+    let (k, _) = css_kinds("font: 12px/1.5 serif", false);
+    assert!(k.contains(&("/", SyntaxKind::Operator)), "{k:?}");
+    assert!(k.contains(&("1.5", SyntaxKind::Number)));
+}
+
+#[test]
+fn css_block_comments_span_lines() {
+    let (k, open) = css_kinds("a { color: red; } /* starts", false);
+    assert!(open);
+    assert_eq!(k.last().map(|t| t.1), Some(SyntaxKind::Comment));
+    let (k, open) = css_kinds("still inside", true);
+    assert!(open);
+    assert_eq!(k, vec![("still inside", SyntaxKind::Comment)]);
+    let (k, open) = css_kinds("ends */ b { }", true);
+    assert!(!open);
+    assert_eq!(k[0], ("ends */", SyntaxKind::Comment));
+    assert_eq!(k[1], ("b", SyntaxKind::Normal));
+}
