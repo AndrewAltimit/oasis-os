@@ -118,7 +118,9 @@ pub fn handle_default_input(
 
         // Pointer click on dashboard: start menu takes priority.
         InputEvent::PointerClick { x, y } if state.mode == Mode::Dashboard => {
-            if state.ui.start_menu.hit_test_button(*x, *y) {
+            // A skin without a start menu never draws it: its button's hit
+            // box must not open an invisible menu that takes the d-pad.
+            if state.skin.features.start_menu && state.ui.start_menu.hit_test_button(*x, *y) {
                 state.ui.start_menu.toggle();
                 state.ui_sounds.push(UiSound::Click);
                 return InputResult::Continue;
@@ -254,9 +256,15 @@ pub fn handle_default_input(
             if state.mode == Mode::Terminal
                 && terminal_input::handle_event(event, state, sdi, vfs) => {},
         InputEvent::ButtonPress(Button::Cancel) if state.mode == Mode::Terminal => {
-            terminal_sdi::set_terminal_visible(sdi, false);
-            state.mode = home_mode(state);
-            state.ui_sounds.push(UiSound::Close);
+            // A terminal-only skin (no dashboard, no window manager) has
+            // nowhere to go back to: hiding the terminal would blank the
+            // screen until its next change rebuilt it.
+            let home = home_mode(state);
+            if home != Mode::Terminal {
+                terminal_sdi::set_terminal_visible(sdi, false);
+                state.mode = home;
+                state.ui_sounds.push(UiSound::Close);
+            }
         },
 
         InputEvent::MouseWheel { delta } if state.mode == Mode::Terminal => {
