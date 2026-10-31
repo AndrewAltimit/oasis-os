@@ -27,7 +27,10 @@ For users who need the complete MCP infrastructure:
 ```
 
 This script:
-- Auto-builds all required MCP images if missing
+- Needs the `template-repo-mcp-opencode`, `template-repo-mcp-crush` and
+  `template-repo-openrouter-agents` images, which are built from the upstream
+  template repository these scripts were copied from (this repo ships neither
+  their Dockerfiles nor a `build:` section for them; see Troubleshooting)
 - Integrates with the full docker compose stack
 - Provides access to additional MCP tools
 - Suitable for advanced workflows
@@ -40,7 +43,7 @@ This script:
 | Dependencies | Docker only | Docker + docker compose |
 | Image Size | ~300MB | ~2GB |
 | MCP Tools | No | Yes |
-| Auto-build | Yes | Yes |
+| Auto-build | Yes | No (prebuilt images) |
 | Interactive Mode | Yes | Yes |
 | Single Query Mode | Yes | Yes |
 
@@ -80,21 +83,17 @@ Both scripts support:
 
 ### Images Not Building
 
-If the full infrastructure fails to build:
-1. Ensure docker compose is installed
-2. Check Docker daemon is running
-3. The script now auto-builds missing images
-4. If issues persist, build manually:
-   ```bash
-   # Build base images
-   docker compose build mcp-opencode mcp-crush
+The full-infrastructure script cannot build its images in this repository:
+`docker/openrouter-agents.Dockerfile` and the Dockerfiles behind the
+`mcp-opencode` / `mcp-crush` compose services are not part of OASIS_OS (the
+compose file only names the `template-repo-mcp-*:latest` images). Either:
+1. Build or pull those three images from the upstream template repository,
+   tagged `template-repo-mcp-opencode:latest`, `template-repo-mcp-crush:latest`
+   and `template-repo-openrouter-agents:latest`, then rerun the script; or
+2. Use `./run_opencode_simple.sh`, which builds its own image here.
 
-   # Build agents image (uses docker build to avoid Docker Hub lookups)
-   docker build -f docker/openrouter-agents.Dockerfile \
-     --build-arg OPENCODE_IMAGE=template-repo-mcp-opencode:latest \
-     --build-arg CRUSH_IMAGE=template-repo-mcp-crush:latest \
-     -t template-repo-openrouter-agents:latest .
-   ```
+`run_opencode_container.sh` stops with this explanation when an image is
+missing instead of attempting the build.
 
 ### API Key Issues
 

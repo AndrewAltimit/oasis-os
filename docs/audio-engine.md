@@ -299,7 +299,13 @@ match the output device.
 the caller's thread inside `backend.load_track()` and friends. The backends
 that need a worker (PSP feeds `sceAudio` from a dedicated thread; SDL3
 drains its audio stream on SDL's own audio thread) handle that internally and expose
-`streaming_can_accept` so the host knows when to stop pushing.
+`streaming_can_accept` so the host knows when to stop pushing. SDL's
+`feed_pcm_f32` still queues PCM pushed past its high-water mark (producers such as
+the A/V-synced TV player ignore `can_accept`), up to a hard cap of twice that mark;
+only the excess past the cap is dropped. The UE5 backend buffers streamed bytes
+(1 MiB, `MAX_STREAM_BUFFER`) for the host, announced by the `STREAM_OPENED` /
+`STREAM_DATA` / `STREAM_END` audio events and drained with
+`Ue5AudioBackend::drain_stream`.
 
 ## Cargo features
 

@@ -6,6 +6,32 @@ larger changes by area. Breaking API changes are marked **(breaking)**.
 
 ## Unreleased -- overhaul 3
 
+### Follow-up fixes (security, browser, media, UI)
+
+- **(breaking)** The PSP dev servers on TCP 9293 now require the remote terminal's PSK
+  HMAC challenge and are off unless a key is configured: the EBOOT command server needs
+  `ms0:/PSP/GAME/OASISOS/cmdserver.key` (8+ bytes; `scripts/psp_remote.py` answers from
+  `PSP_PSK`), the overlay PRX devloop needs `devloop_psk` next to `devloop = true` in
+  `oasis.ini`. See [networking.md § PSP dev servers](docs/networking.md#psp-dev-servers).
+  `oasis_net::verify_auth_line` is the shared check.
+- Browser: `fetch()` on PSP now resolves DNS names for the private-network check and
+  checks the address it dials (`TlsProvider::resolve_host` / `connect_tcp_checked`); a
+  wrapper a script holds for a freed node can no longer reach the node that reuses its
+  slot; script-written DOM text / attributes are capped (64 MiB, 4 MiB on PSP); text in
+  an `@font-face` font is laid out with that font's widths; `:hover` / `:focus` restyle
+  descendants and cascade parents first.
+- Media: `demux_lite` sample offsets no longer sum a whole chunk per lookup (hostile
+  files made playback quadratic); the oasis-video fuzz targets run nightly; SDL
+  `feed_pcm_f32` queues past the high-water mark instead of dropping whole chunks; the UE5
+  backend buffers streamed radio bytes for the host (`STREAM_*` audio events,
+  `Ue5AudioBackend::drain_stream`); the WASM YouTube grid no longer leaks a callback per
+  thumbnail and its glyph cache evicts in O(log n).
+- `oasis_types::ipc` gains typed `RadioRequest` / `TvRequest` (wire format unchanged).
+- UI / WM: tiling survives huge gaps and margins; `Modal` fits its wrapped body;
+  `ContextMenu` draws and hit-tests the open submenu; `RichText` lines grow with their
+  largest span; `Spinner::measure` matches what it draws. The overlay PRX keeps its menu
+  open when a status message arrives.
+
 ### Crate map
 
 - New interactive site page, `site/crates.html`: all 51 crates in their layers; hover / focus

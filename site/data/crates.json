@@ -79,7 +79,7 @@
     "video-decode",
     "video-decode-ffmpeg"
    ],
-   "loc": 35314,
+   "loc": 35295,
    "files": 65,
    "deps": [
     {
@@ -283,7 +283,7 @@
     "test-data",
     "tls-rustls"
    ],
-   "loc": 24894,
+   "loc": 24897,
    "files": 71,
    "deps": [
     {
@@ -817,8 +817,8 @@
     "web-fonts",
     "webp"
    ],
-   "loc": 60279,
-   "files": 110,
+   "loc": 61578,
+   "files": 109,
    "deps": [
     {
      "name": "oasis-css",
@@ -873,8 +873,8 @@
    "crate_type": [],
    "bins": [],
    "features": [],
-   "loc": 9001,
-   "files": 18,
+   "loc": 9298,
+   "files": 19,
    "deps": []
   },
   {
@@ -893,8 +893,8 @@
     "scripting",
     "web-fonts"
    ],
-   "loc": 28272,
-   "files": 43,
+   "loc": 28707,
+   "files": 44,
    "deps": [
     {
      "name": "oasis-html",
@@ -920,7 +920,7 @@
    "features": [
     "psp"
    ],
-   "loc": 10270,
+   "loc": 10699,
    "files": 15,
    "deps": [
     {
@@ -968,7 +968,7 @@
    "crate_type": [],
    "bins": [],
    "features": [],
-   "loc": 21039,
+   "loc": 21036,
    "files": 68,
    "deps": [
     {
@@ -1008,7 +1008,7 @@
     "h264",
     "symphonia"
    ],
-   "loc": 7847,
+   "loc": 7988,
    "files": 18,
    "deps": []
   },
@@ -1024,7 +1024,7 @@
    "crate_type": [],
    "bins": [],
    "features": [],
-   "loc": 8982,
+   "loc": 9217,
    "files": 24,
    "deps": [
     {
@@ -1078,7 +1078,7 @@
    "crate_type": [],
    "bins": [],
    "features": [],
-   "loc": 18478,
+   "loc": 19216,
    "files": 45,
    "deps": [
     {
@@ -1103,7 +1103,7 @@
    "crate_type": [],
    "bins": [],
    "features": [],
-   "loc": 12547,
+   "loc": 12836,
    "files": 26,
    "deps": [
     {
@@ -1293,7 +1293,7 @@
     "tls-rustls",
     "vfs"
    ],
-   "loc": 7013,
+   "loc": 7166,
    "files": 11,
    "deps": [
     {
@@ -1321,7 +1321,7 @@
    "crate_type": [],
    "bins": [],
    "features": [],
-   "loc": 2855,
+   "loc": 2892,
    "files": 6,
    "deps": [
     {
@@ -1367,7 +1367,7 @@
    "crate_type": [],
    "bins": [],
    "features": [],
-   "loc": 11564,
+   "loc": 12007,
    "files": 40,
    "deps": []
   },
@@ -1383,7 +1383,7 @@
    "crate_type": [],
    "bins": [],
    "features": [],
-   "loc": 4765,
+   "loc": 4763,
    "files": 8,
    "deps": [
     {
@@ -1404,8 +1404,8 @@
    "crate_type": [],
    "bins": [],
    "features": [],
-   "loc": 7032,
-   "files": 16,
+   "loc": 7073,
+   "files": 18,
    "deps": [
     {
      "name": "oasis-audio",
@@ -1458,8 +1458,8 @@
    "features": [
     "wasm-youtube"
    ],
-   "loc": 9437,
-   "files": 24,
+   "loc": 9580,
+   "files": 26,
    "deps": [
     {
      "name": "oasis-apps",
@@ -1511,7 +1511,7 @@
    "crate_type": [],
    "bins": [],
    "features": [],
-   "loc": 2629,
+   "loc": 2685,
    "files": 5,
    "deps": [
     {
@@ -1562,8 +1562,8 @@
     "kernel-mode",
     "kernel-volatile"
    ],
-   "loc": 21335,
-   "files": 65,
+   "loc": 21689,
+   "files": 68,
    "deps": [
     {
      "name": "oasis-app-tv-guide",
@@ -1586,6 +1586,10 @@
      "kind": "normal"
     },
     {
+     "name": "oasis-types",
+     "kind": "normal"
+    },
+    {
      "name": "oasis-video",
      "kind": "normal"
     }
@@ -1605,8 +1609,8 @@
     "oasis-plugin-psp"
    ],
    "features": [],
-   "loc": 10330,
-   "files": 17,
+   "loc": 10685,
+   "files": 18,
    "deps": []
   },
   {
@@ -1840,7 +1844,7 @@
      "text": "swap_buffers presents: SDL3 on desktop and Pi, Canvas 2D in the browser (oasis-backend-wasm runs the same window loop), an RGBA framebuffer UE5 reads through oasis-ffi's oasis_get_buffer, and sceGu on the PSP (its own loop draws the window manager with per-window draw functions).",
      "code": [
       "crates/oasis-backend-sdl/src/core_impl.rs: swap_buffers",
-      "crates/oasis-backend-wasm/src/lib.rs: draw_with_clips_overlay",
+      "crates/oasis-backend-wasm/src/tick.rs: draw_with_clips_overlay",
       "crates/oasis-ffi/src/render.rs: oasis_tick, oasis_get_buffer",
       "crates/oasis-backend-psp/src/render_desktop.rs: draw_with_clips_noalloc"
      ]
