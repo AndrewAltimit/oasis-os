@@ -1218,3 +1218,86 @@ fn text_decoration_shorthand_lists() {
     let s = styled("text-decoration: underline; text-decoration-line: none overline");
     assert_eq!(s.text_decoration.line, TextDecorationLine::NONE);
 }
+
+// -------------------------------------------------------------------
+// Structured fuzzing: real property names, hostile value token soup
+// -------------------------------------------------------------------
+
+mod fuzz {
+    use proptest::prelude::*;
+
+    use super::styled;
+
+    /// Properties whose values go through a dedicated parser (transforms,
+    /// filters, grid, timing functions, shapes, fonts, ...).
+    const PROPERTIES: &[&str] = &[
+        "transform", "transform-origin", "perspective-origin", "filter", "backdrop-filter",
+        "clip-path", "transition", "transition-timing-function", "animation",
+        "animation-timing-function", "animation-iteration-count", "animation-direction",
+        "grid-template-columns", "grid-template-rows", "grid-template-areas", "grid-area",
+        "grid-column", "grid-row", "grid-auto-rows", "grid-auto-flow", "background-position",
+        "background-size", "background-image", "object-position", "font", "font-family",
+        "font-size", "font-weight", "line-height", "counter-reset", "counter-increment",
+        "content", "box-shadow", "text-shadow", "aspect-ratio", "will-change", "container",
+        "width", "max-width", "height", "margin", "padding", "inset", "flex", "flex-basis",
+        "z-index", "opacity", "vertical-align", "mix-blend-mode", "overscroll-behavior",
+        "justify-self", "column-count", "tab-size", "text-decoration", "border-radius",
+        "letter-spacing", "--custom",
+    ];
+
+    const TOKENS: &[&str] = &[
+        "0", "-1", "1e9", "-2147483648", "4294967296", "3.5px", "50%", "-50%", "2em", "1rem",
+        "1fr", "10vw", "auto", "none", "initial", "inherit", "unset", "calc(1px + 2%)",
+        "calc(1px / 0)", "translate(10px, 5%)", "rotate(45deg)", "rotate(1e30turn)",
+        "matrix(1,0,0,1,0,0)", "matrix3d(1)", "scale(0)", "skew(90deg)", "perspective(0)",
+        "translate3d(1px,2px,3px)", "blur(-5px)", "drop-shadow(1px 1px red)",
+        "url(x.png)", "linear-gradient(red, blue)", "radial-gradient(circle, red 0, blue)",
+        "repeat(3, 1fr)", "repeat(100000, 1px)", "repeat(auto-fill, minmax(10px, 1fr))",
+        "minmax(0, 1fr)", "\"a b\" \"c d\"", "\"a\"", "/", ",", "steps(0)", "steps(-3, end)",
+        "cubic-bezier(2, -1, 0, 9)", "infinite", "-1s", "1e400s", "var(--x)", "var(--x, 1px)",
+        "inset(5% round 1px)", "circle(50% at 0 0)", "ellipse()", "polygon(0 0, 1px 1px)",
+        "rgb(1 2 3 / 50%)", "#fff", "#12345", "NaN", "1e400px", "-1e400px", "span 3",
+        "span -1", "1 / -1", "bold", "900", "1000000", "italic", "serif", "red", "!important",
+    ];
+
+    fn value() -> impl Strategy<Value = String> {
+        prop::collection::vec(prop::sample::select(TOKENS), 0..6).prop_map(|t| t.join(" "))
+    }
+
+    /// Every token as the whole value of every property, deterministically
+    /// (the random soup below reaches only some pairs per run).
+    #[test]
+    fn every_token_on_every_property() {
+        for prop in PROPERTIES {
+            for tok in TOKENS {
+                let s = styled(&format!("{prop}: {tok}"));
+                assert!(
+                    s.font_size.is_finite() && s.font_size >= 0.0,
+                    "{prop}: {tok} -> font-size {}",
+                    s.font_size
+                );
+                assert!(s.line_height.is_finite(), "{prop}: {tok} -> {}", s.line_height);
+                assert!(s.letter_spacing.is_finite(), "{prop}: {tok}");
+                assert!((0.0..=1.0).contains(&s.opacity), "{prop}: {tok}");
+            }
+        }
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(512))]
+
+        /// No property / value combination panics, and the numeric
+        /// results layout reads stay finite and in range.
+        #[test]
+        fn hostile_values_apply_without_panicking(
+            prop in prop::sample::select(PROPERTIES),
+            v in value(),
+        ) {
+            let s = styled(&format!("{prop}: {v}"));
+            prop_assert!(s.font_size.is_finite() && s.font_size >= 0.0, "font-size {}", s.font_size);
+            prop_assert!(s.line_height.is_finite(), "line-height {}", s.line_height);
+            prop_assert!((0.0..=1.0).contains(&s.opacity), "opacity {}", s.opacity);
+            prop_assert!(s.letter_spacing.is_finite(), "letter-spacing {}", s.letter_spacing);
+        }
+    }
+}
