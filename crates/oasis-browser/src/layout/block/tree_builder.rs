@@ -142,7 +142,11 @@ fn build_box_for_node(
                 push_box(&mut child_boxes, after);
             }
 
-            lb.children = wrap_anonymous(child_boxes, &lb.style);
+            lb.children = if matches!(lb.box_type, BoxType::Flex | BoxType::Grid) {
+                wrap_flex_items(child_boxes, &lb.style)
+            } else {
+                wrap_anonymous(child_boxes, &lb.style)
+            };
             push_box(out, lb);
         },
     }
@@ -684,6 +688,75 @@ pub(super) fn wrap_anonymous(
     }
 
     result
+}
+
+/// Turn a flex or grid container's children into items (CSS Flexbox
+/// §4): each inline element child (`<a>`, `<span>`) is blockified into
+/// its own anonymous item carrying its flex properties, consecutive
+/// text runs share one, and whitespace-only runs are dropped. Without
+/// this an all-inline container (a nav bar of links) handed bare inline
+/// boxes to block layout, which sized each one 0 x 0.
+#[inline(never)]
+pub(super) fn wrap_flex_items(
+    children: Vec<LayoutBox>,
+    parent_style: &ComputedStyle,
+) -> Vec<LayoutBox> {
+    if !children
+        .iter()
+        .any(|c| matches!(c.box_type, BoxType::Inline))
+    {
+        return children;
+    }
+    let is_blank = |c: &LayoutBox| c.text.as_deref().is_some_and(|t| t.trim().is_empty());
+    let mut out = Vec::with_capacity(children.len());
+    let mut text_run: Vec<LayoutBox> = Vec::new();
+    let flush = |run: &mut Vec<LayoutBox>, out: &mut Vec<LayoutBox>| {
+        if !run.is_empty() && !run.iter().all(is_blank) {
+            out.push(anonymous_flex_item(std::mem::take(run), parent_style, None));
+        }
+        run.clear();
+    };
+    for child in children {
+        if !matches!(child.box_type, BoxType::Inline) {
+            flush(&mut text_run, &mut out);
+            out.push(child);
+        } else if child.text.is_some() {
+            text_run.push(child);
+        } else {
+            flush(&mut text_run, &mut out);
+            let item_style = child.style.clone();
+            out.push(anonymous_flex_item(
+                vec![child],
+                parent_style,
+                Some(&item_style),
+            ));
+        }
+    }
+    flush(&mut text_run, &mut out);
+    out
+}
+
+/// An anonymous block flex/grid item around `children`. Its flex
+/// properties are the blockified element's (`item`), or the initial
+/// values for a text run — never the container's own.
+fn anonymous_flex_item(
+    children: Vec<LayoutBox>,
+    parent_style: &ComputedStyle,
+    item: Option<&ComputedStyle>,
+) -> LayoutBox {
+    let mut lb = make_anonymous_block(children, parent_style);
+    let initial = ComputedStyle::default();
+    let src = item.unwrap_or(&initial);
+    lb.style.flex_grow = src.flex_grow;
+    lb.style.flex_shrink = src.flex_shrink;
+    lb.style.flex_basis = src.flex_basis;
+    lb.style.order = src.order;
+    lb.style.align_self = src.align_self;
+    lb.style.grid_column_start = src.grid_column_start.clone();
+    lb.style.grid_column_end = src.grid_column_end.clone();
+    lb.style.grid_row_start = src.grid_row_start.clone();
+    lb.style.grid_row_end = src.grid_row_end.clone();
+    lb
 }
 
 /// Create an anonymous block box wrapping the given inline children.

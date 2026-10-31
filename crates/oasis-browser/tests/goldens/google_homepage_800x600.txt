@@ -1,6 +1,70 @@
 # viewport 800x600
 fill_rect 0, 0, 800, 347, Color { r: 255, g: 255, b: 255, a: 255 }
 set_clip_rect 0, 0, 800, 347
+draw_text "Gmail", 53, 18, 27, Color { r: 31, g: 31, b: 31, a: 255 }
+draw_text "Images", 98, 18, 27, Color { r: 31, g: 31, b: 31, a: 255 }
+fill_rect 430, 25, 4, 1, Color { r: 0, g: 0, b: 0, a: 255 }
+fill_rect 436, 25, 4, 1, Color { r: 0, g: 0, b: 0, a: 255 }
+fill_rect 442, 25, 4, 1, Color { r: 0, g: 0, b: 0, a: 255 }
+fill_rect 430, 26, 5, 1, Color { r: 0, g: 0, b: 0, a: 255 }
+fill_rect 436, 26, 5, 1, Color { r: 0, g: 0, b: 0, a: 255 }
+fill_rect 442, 26, 5, 1, Color { r: 0, g: 0, b: 0, a: 255 }
+fill_rect 430, 27, 5, 1, Color { r: 0, g: 0, b: 0, a: 255 }
+fill_rect 436, 27, 5, 1, Color { r: 0, g: 0, b: 0, a: 255 }
+fill_rect 442, 27, 1, 1, Color { r: 0, g: 0, b: 0, a: 255 }
+fill_rect 442, 27, 5, 1, Color { r: 0, g: 0, b: 0, a: 255 }
+fill_rect 430, 28, 4, 1, Color { r: 0, g: 0, b: 0, a: 255 }
+fill_rect 436, 28, 4, 1, Color { r: 0, g: 0, b: 0, a: 255 }
+fill_rect 440, 28, 2, 1, Color { r: 0, g: 0, b: 0, a: 255 }
+fill_rect 442, 28, 4, 1, Color { r: 0, g: 0, b: 0, a: 255 }
+fill_rect 432, 29, 1, 1, Color { r: 0, g: 0, b: 0, a: 255 }
+fill_rect 438, 29, 4, 1, Color { r: 0, g: 0, b: 0, a: 255 }
+fill_rect 432, 30, 2, 1, Color { r: 0, g: 0, b: 0, a: 255 }
+fill_rect 439, 30, 2, 1, Color { r: 0, g: 0, b: 0, a: 255 }
+fill_rect 430, 31, 4, 1, Color { r: 0, g: 0, b: 0, a: 255 }
+fill_rect 433, 31, 2, 1, Color { r: 0, g: 0, b: 0, a: 255 }
+fill_rect 436, 31, 4, 1, Color { r: 0, g: 0, b: 0, a: 255 }
+fill_rect 440, 31, 1, 1, Color { r: 0, g: 0, b: 0, a: 255 }
+fill_rect 442, 31, 4, 1, Color { r: 0, g: 0, b: 0, a: 255 }
+fill_rect 430, 32, 4, 1, Color { r: 0, g: 0, b: 0, a: 255 }
+fill_rect 434, 32, 2, 1, Color { r: 0, g: 0, b: 0, a: 255 }
+fill_rect 436, 32, 4, 1, Color { r: 0, g: 0, b: 0, a: 255 }
+fill_rect 440, 32, 2, 1, Color { r: 0, g: 0, b: 0, a: 255 }
+fill_rect 442, 32, 5, 1, Color { r: 0, g: 0, b: 0, a: 255 }
+fill_rect 430, 33, 5, 1, Color { r: 0, g: 0, b: 0, a: 255 }
+fill_rect 434, 33, 3, 1, Color { r: 0, g: 0, b: 0, a: 255 }
+fill_rect 436, 33, 4, 1, Color { r: 0, g: 0, b: 0, a: 255 }
+fill_rect 440, 33, 3, 1, Color { r: 0, g: 0, b: 0, a: 255 }
+fill_rect 442, 33, 5, 1, Color { r: 0, g: 0, b: 0, a: 255 }
+fill_rect 430, 34, 4, 1, Color { r: 0, g: 0, b: 0, a: 255 }
+fill_rect 434, 34, 3, 1, Color { r: 0, g: 0, b: 0, a: 255 }
+fill_rect 437, 34, 2, 1, Color { r: 0, g: 0, b: 0, a: 255 }
+fill_rect 439, 34, 4, 1, Color { r: 0, g: 0, b: 0, a: 255 }
+fill_rect 443, 34, 3, 1, Color { r: 0, g: 0, b: 0, a: 255 }
+fill_rect 432, 35, 4, 1, Color { r: 0, g: 0, b: 0, a: 255 }
+fill_rect 438, 35, 7, 1, Color { r: 0, g: 0, b: 0, a: 255 }
+fill_rect 432, 36, 4, 1, Color { r: 0, g: 0, b: 0, a: 255 }
+fill_rect 439, 36, 6, 1, Color { r: 0, g: 0, b: 0, a: 255 }
+fill_rect 430, 37, 3, 1, Color { r: 0, g: 0, b: 0, a: 255 }
+fill_rect 433, 37, 4, 1, Color { r: 0, g: 0, b: 0, a: 255 }
+fill_rect 436, 37, 4, 1, Color { r: 0, g: 0, b: 0, a: 255 }
+fill_rect 440, 37, 3, 1, Color { r: 0, g: 0, b: 0, a: 255 }
+fill_rect 444, 37, 2, 1, Color { r: 0, g: 0, b: 0, a: 255 }
+fill_rect 430, 38, 3, 1, Color { r: 0, g: 0, b: 0, a: 255 }
+fill_rect 434, 38, 3, 1, Color { r: 0, g: 0, b: 0, a: 255 }
+fill_rect 436, 38, 5, 1, Color { r: 0, g: 0, b: 0, a: 255 }
+fill_rect 441, 38, 2, 1, Color { r: 0, g: 0, b: 0, a: 255 }
+fill_rect 444, 38, 3, 1, Color { r: 0, g: 0, b: 0, a: 255 }
+fill_rect 430, 39, 3, 1, Color { r: 0, g: 0, b: 0, a: 255 }
+fill_rect 434, 39, 3, 1, Color { r: 0, g: 0, b: 0, a: 255 }
+fill_rect 437, 39, 4, 1, Color { r: 0, g: 0, b: 0, a: 255 }
+fill_rect 442, 39, 1, 1, Color { r: 0, g: 0, b: 0, a: 255 }
+fill_rect 444, 39, 3, 1, Color { r: 0, g: 0, b: 0, a: 255 }
+fill_rect 430, 40, 3, 1, Color { r: 0, g: 0, b: 0, a: 255 }
+fill_rect 433, 40, 4, 1, Color { r: 0, g: 0, b: 0, a: 255 }
+fill_rect 437, 40, 3, 1, Color { r: 0, g: 0, b: 0, a: 255 }
+fill_rect 442, 40, 2, 1, Color { r: 0, g: 0, b: 0, a: 255 }
+fill_rect 444, 40, 2, 1, Color { r: 0, g: 0, b: 0, a: 255 }
 fill_rect 264, 72, 272, 1, Color { r: 31, g: 31, b: 31, a: 255 }
 fill_rect 264, 163, 272, 1, Color { r: 31, g: 31, b: 31, a: 255 }
 fill_rect 264, 72, 1, 92, Color { r: 31, g: 31, b: 31, a: 255 }
@@ -58,4 +122,4 @@ draw_text "Privacy", 609, 327, 10, Color { r: 104, g: 29, b: 168, a: 255 }
 draw_text " - ", 651, 327, 10, Color { r: 99, g: 99, b: 99, a: 255 }
 draw_text "Terms", 669, 327, 10, Color { r: 104, g: 29, b: 168, a: 255 }
 set_clip_rect 0, 0, 800, 600
-# totals fill_rect=38 draw_text=17 other=4
+# totals fill_rect=100 draw_text=19 other=4

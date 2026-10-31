@@ -176,6 +176,9 @@ pub fn layout_block_incremental(
 
     if matches!(layout_box.box_type, BoxType::Flex) {
         layout_flex(layout_box, containing_width, measurer);
+        if !matches!(layout_box.style.height, Dimension::Auto) {
+            calculate_block_height(layout_box, None);
+        }
     } else if matches!(layout_box.box_type, BoxType::Grid) {
         layout_grid(layout_box, containing_width, measurer);
     } else if matches!(layout_box.box_type, BoxType::TableWrapper) {
@@ -446,6 +449,12 @@ pub(crate) fn layout_block_with_height(
     // 3. Layout children.
     if matches!(layout_box.box_type, BoxType::Flex) {
         layout_flex(layout_box, containing_width, measurer);
+        // `layout_flex` sizes an auto height from its lines; an explicit
+        // one (and min/max-height) resolves like any block's. It was
+        // never set, so `display:flex; height:100px` was 0 px tall.
+        if !matches!(layout_box.style.height, Dimension::Auto) {
+            calculate_block_height(layout_box, containing_height);
+        }
     } else if matches!(layout_box.box_type, BoxType::Grid) {
         layout_grid(layout_box, containing_width, measurer);
     } else if matches!(layout_box.box_type, BoxType::TableWrapper) {
@@ -483,6 +492,14 @@ fn shrink_float_to_fit(layout_box: &mut LayoutBox) {
     ) {
         return;
     }
+    layout_box.dimensions.content.width = fit_content_width(layout_box);
+}
+
+/// The content width `layout_box` shrinks to when sized to its content
+/// (`min(max-content, available)`), measured after its children were
+/// laid out at the available width (its current `content.width`).
+/// Shared by float shrink-to-fit and flex items with an auto basis.
+pub(crate) fn fit_content_width(layout_box: &LayoutBox) -> f32 {
     let origin_x = layout_box.dimensions.content.x;
     let available = layout_box.dimensions.content.width;
 
@@ -494,9 +511,7 @@ fn shrink_float_to_fit(layout_box: &mut LayoutBox) {
     // label, not the parent form's 378 px width).
     if let BoxType::Replaced(ref replaced) = layout_box.box_type {
         let (intrinsic_w, _) = super::inline::replaced_dimensions(replaced, &layout_box.style);
-        let shrunk = intrinsic_w.min(available).max(0.0);
-        layout_box.dimensions.content.width = shrunk;
-        return;
+        return intrinsic_w.min(available).max(0.0);
     }
 
     // When the float's children are inline fragments produced by
@@ -550,8 +565,7 @@ fn shrink_float_to_fit(layout_box: &mut LayoutBox) {
     } else {
         layout_box.dimensions.content.width
     };
-    let shrunk = measured.min(available).max(0.0);
-    layout_box.dimensions.content.width = shrunk;
+    measured.min(available).max(0.0)
 }
 
 /// Resolve padding, border, and margin from the computed style into
