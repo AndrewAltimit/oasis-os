@@ -450,10 +450,13 @@ pub(crate) fn layout_block_with_height(
         layout_grid(layout_box, containing_width, measurer);
     } else if matches!(layout_box.box_type, BoxType::TableWrapper) {
         layout_table_children(layout_box, measurer);
-    } else if layout_box.style.column_count > 0 || layout_box.style.column_width > 0.0 {
-        layout_multicol(layout_box, containing_width, measurer);
+    } else if (layout_box.style.column_count > 0 || layout_box.style.column_width > 0.0)
+        && layout_multicol(layout_box, containing_width, measurer)
+    {
         calculate_block_height(layout_box, containing_height);
     } else {
+        // Plain block flow (also a multicol box that resolves to a
+        // single column, e.g. `column-width: 15em` in a 480 px viewport).
         layout_block_children(layout_box, measurer);
         // 4. Float shrink-to-fit (CSS 2.1 §10.3.5): after children
         //    are laid out at the available width, clamp the float's

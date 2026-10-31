@@ -62,6 +62,8 @@ pub struct FloatContext {
     left_floats: Vec<FloatBox>,
     /// All active right floats, ordered by placement.
     right_floats: Vec<FloatBox>,
+    /// Top edge of the most recently placed float (either side).
+    last_top: Option<f32>,
 }
 
 impl FloatContext {
@@ -93,9 +95,14 @@ impl FloatContext {
         containing_width: f32,
     ) -> FloatBox {
         // Find the y position where the float can actually fit.
-        // It must be at or below `y`, and there must be enough
-        // horizontal room between existing floats.
-        let placed_y = self.find_y_for_float(side, width, height, y, containing_width);
+        // It must be at or below `y` and, per CSS 2.1 §9.5.1 rule 5,
+        // not above an earlier float's top; and there must be enough
+        // horizontal room between existing floats. (Starting each
+        // search back at `y` also re-walked every earlier float: 5000
+        // full-width floats took ~1e10 steps.)
+        let start_y = self.last_top.map_or(y, |top| y.max(top));
+        let placed_y = self.find_y_for_float(side, width, height, start_y, containing_width);
+        self.last_top = Some(placed_y);
 
         let rect = match side {
             FloatSide::Left => {
@@ -314,6 +321,36 @@ mod tests {
         let (offset, width) = ctx.available_width(0.0, LINE_HEIGHT, CONTAINING_WIDTH);
         assert_eq!(offset, 0.0);
         assert_eq!(width, CONTAINING_WIDTH);
+    }
+
+    /// Regression: each float searched from the line top, re-walking
+    /// every earlier float (and allowing a later float above an earlier
+    /// one, against CSS 2.1 §9.5.1 rule 5). Full-width floats now stack
+    /// in linear-ish time.
+    #[test]
+    fn stacked_full_width_floats_place_quickly_and_in_order() {
+        let mut ctx = FloatContext::new();
+        let start = std::time::Instant::now();
+        let mut last_y = -1.0;
+        for _ in 0..5000 {
+            let fb = ctx.place_float(
+                FloatSide::Left,
+                CONTAINING_WIDTH,
+                1.0,
+                0.0,
+                CONTAINING_WIDTH,
+            );
+            assert!(fb.rect.y > last_y);
+            last_y = fb.rect.y;
+        }
+        assert_eq!(last_y, 4999.0);
+        assert!(start.elapsed() < std::time::Duration::from_secs(10));
+        // A narrow float after a tall one may not rise above its top.
+        let mut ctx = FloatContext::new();
+        ctx.place_float(FloatSide::Left, 100.0, 50.0, 0.0, CONTAINING_WIDTH);
+        ctx.place_float(FloatSide::Left, 400.0, 10.0, 0.0, CONTAINING_WIDTH);
+        let fb = ctx.place_float(FloatSide::Right, 10.0, 10.0, 0.0, CONTAINING_WIDTH);
+        assert!(fb.rect.y >= 50.0, "{}", fb.rect.y);
     }
 
     #[test]

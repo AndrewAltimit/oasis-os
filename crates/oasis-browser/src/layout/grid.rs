@@ -526,22 +526,44 @@ fn item_spec(
     ItemSpec { f, fs, g, gs }
 }
 
+/// Cells [`Occupancy::conflict`] may inspect across one placement run.
+/// Past it every area counts as free (items may overlap), so hostile
+/// spans (`span 1000` items in a `1000 x 1000` grid under `dense`) end
+/// in bounded time instead of ~1e9 steps per item.
+const PLACEMENT_WORK_BUDGET: u64 = 20_000_000;
+
 /// Occupancy matrix indexed `[g][f]`, growing along `g` on demand.
 struct Occupancy {
     cells: Vec<Vec<bool>>,
     nf: usize,
+    /// Cells inspected so far (see [`PLACEMENT_WORK_BUDGET`]).
+    work: u64,
 }
 
 impl Occupancy {
-    fn fits(&self, f: usize, fs: usize, g: usize, gs: usize) -> bool {
-        if f + fs > self.nf {
-            return false;
+    /// The first occupied cell blocking the `fs x gs` area at `(f, g)`,
+    /// as `(g, rightmost occupied f in that row of the area)`; `None`
+    /// when the area is free. Callers skip past it: every area starting
+    /// at or before that cell in the scan direction overlaps it too.
+    fn conflict(&mut self, f: usize, fs: usize, g: usize, gs: usize) -> Option<(usize, usize)> {
+        if self.work >= PLACEMENT_WORK_BUDGET {
+            return None;
         }
-        (g..g + gs).all(|gg| {
-            self.cells
-                .get(gg)
-                .is_none_or(|row| row[f..f + fs].iter().all(|&o| !o))
-        })
+        // Columns past the matrix (a definite line beyond the track cap)
+        // are never marked, so they count as free.
+        let f_end = (f + fs).min(self.nf);
+        let f = f.min(f_end);
+        for gg in g..(g + gs).min(self.cells.len()) {
+            self.work += (f_end - f) as u64;
+            if let Some(ff) = self.cells[gg][f..f_end].iter().rposition(|&o| o) {
+                return Some((gg, f + ff));
+            }
+        }
+        None
+    }
+
+    fn fits(&mut self, f: usize, fs: usize, g: usize, gs: usize) -> bool {
+        f + fs <= self.nf && self.conflict(f, fs, g, gs).is_none()
     }
 
     fn mark(&mut self, f: usize, fs: usize, g: usize, gs: usize) {
@@ -578,6 +600,7 @@ fn auto_place(
     let mut occ = Occupancy {
         cells: Vec::new(),
         nf,
+        work: 0,
     };
     let mut out: Vec<Option<Placement>> = vec![None; items.len()];
 
@@ -629,11 +652,15 @@ fn auto_place(
                 cur_g += 1;
             }
             let mut g = cur_g;
-            while !occ.fits(f, fs, g, it.gs) && g < MAX_TRACKS {
-                g += 1;
+            while g < MAX_TRACKS {
+                match occ.conflict(f, fs, g, it.gs) {
+                    // Every start row up to the blocking one overlaps it.
+                    Some((blocked_g, _)) => g = blocked_g + 1,
+                    None => break,
+                }
             }
             cur_f = f;
-            (f, g)
+            (f, g.min(MAX_TRACKS))
         } else {
             // Fully automatic.
             let mut g = cur_g;
@@ -647,10 +674,12 @@ fn auto_place(
                     }
                     continue;
                 }
-                if occ.fits(f, fs, g, it.gs) {
-                    break;
+                match occ.conflict(f, fs, g, it.gs) {
+                    // Every start column up to the blocking cell
+                    // overlaps it too.
+                    Some((_, blocked_f)) => f = blocked_f + 1,
+                    None => break,
                 }
-                f += 1;
             }
             cur_f = f;
             (f, g)
@@ -935,6 +964,68 @@ mod tests {
             display: Display::Grid,
             ..Default::default()
         }
+    }
+
+    /// Regression: auto-placement re-scanned a whole `span x span` area
+    /// for every candidate start, one cell step at a time, so a few
+    /// `span 1000` items in a 1000-track `dense` grid took ~1e9 steps
+    /// each. Placement now skips past blocking cells, under a budget.
+    #[test]
+    fn hostile_auto_placement_is_bounded() {
+        let mut items = vec![ItemSpec {
+            f: Some(0),
+            fs: MAX_TRACKS,
+            g: Some(999),
+            gs: 1,
+        }];
+        items.extend((0..20).map(|_| ItemSpec {
+            f: None,
+            fs: MAX_TRACKS,
+            g: None,
+            gs: MAX_TRACKS,
+        }));
+        items.extend((0..2000).map(|_| ItemSpec {
+            f: None,
+            fs: 1,
+            g: None,
+            gs: 1,
+        }));
+        let order: Vec<usize> = (0..items.len()).collect();
+        let start = std::time::Instant::now();
+        let placed = auto_place(&items, MAX_TRACKS, true, &order);
+        assert_eq!(placed.len(), items.len());
+        assert!(start.elapsed() < std::time::Duration::from_secs(10));
+    }
+
+    /// Skipping past conflicts still finds the first free slot.
+    #[test]
+    fn auto_placement_skips_to_the_first_free_slot() {
+        let items = [
+            ItemSpec {
+                f: Some(1),
+                fs: 2,
+                g: Some(0),
+                gs: 1,
+            },
+            ItemSpec {
+                f: None,
+                fs: 2,
+                g: None,
+                gs: 1,
+            },
+            ItemSpec {
+                f: None,
+                fs: 1,
+                g: None,
+                gs: 1,
+            },
+        ];
+        let placed = auto_place(&items, 4, true, &[0, 1, 2]);
+        // 4 columns, [1, 3) taken in row 0: the 2-wide item can't start
+        // at 0 (overlaps column 1), so it goes to row 1; the 1-wide one
+        // fills column 0 of row 0 (dense).
+        assert_eq!(placed[1], (0, 1, 2, 1));
+        assert_eq!(placed[2], (0, 0, 1, 1));
     }
 
     fn item_style(width: f32, height: f32) -> ComputedStyle {

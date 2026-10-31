@@ -174,6 +174,12 @@ pub fn layout_table(
 // Step 1 -- Parse table structure
 // -------------------------------------------------------------------
 
+/// Most columns a table grid gets. Each span is already capped (1000),
+/// but the total was not: 1000 cells of `colspan=1000` (17 KB of HTML)
+/// made a million columns, ~40 MB of per-column vectors, and with
+/// `rowspan=0` every later row walked them all.
+const MAX_TABLE_COLS: usize = 1000;
+
 /// Which grid slots earlier rows' `rowspan`s still cover.
 ///
 /// Rows are parsed top to bottom, so a slot `(row, col)` is taken
@@ -283,7 +289,13 @@ fn parse_row(
 
     for cell_box in cells {
         col_idx = slots.next_free(row_idx, col_idx);
+        if col_idx >= MAX_TABLE_COLS {
+            // Cells past the column cap are dropped (and the rest of
+            // the row with them).
+            break;
+        }
         let (colspan, rowspan) = resolve_span(cell_box.cell_span, row_idx, total_rows);
+        let colspan = colspan.min(MAX_TABLE_COLS - col_idx);
         slots.occupy(row_idx, col_idx, rowspan, colspan);
         tl.num_cols = tl.num_cols.max(col_idx + colspan);
 
@@ -1146,6 +1158,26 @@ mod tests {
             result.dimensions.content.width > 0.0,
             "table should have positive width"
         );
+    }
+
+    /// Regression: per-cell spans were capped but the total column
+    /// count was not, so a handful of wide `colspan`s built a
+    /// million-column grid.
+    #[test]
+    fn total_column_count_is_capped() {
+        let wide = || {
+            let mut c = make_cell(1.0);
+            c.cell_span = CellSpan {
+                cols: 1000,
+                rows: 0,
+            };
+            c
+        };
+        let row = make_row((0..50).map(|_| wide()).collect());
+        let mut tl = TableLayout::new(0.0, false);
+        parse_table_structure(&[row, make_row(vec![make_cell(1.0)])], &mut tl);
+        assert_eq!(tl.num_cols, MAX_TABLE_COLS);
+        assert!(tl.cells.len() <= 2);
     }
 
     // ---------------------------------------------------------------

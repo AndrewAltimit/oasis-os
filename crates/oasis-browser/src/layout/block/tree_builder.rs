@@ -80,9 +80,23 @@ pub(super) fn build_children(
     base_url: Option<&str>,
     image_info: &HashMap<String, (u32, u32)>,
 ) -> Vec<LayoutBox> {
+    // Whitespace-only text between block siblings is dropped; decide
+    // that once per sibling list (asking per text node walked every
+    // sibling each time: O(n^2) on long inline-only runs).
+    let block_siblings = children
+        .iter()
+        .any(|&c| matches!(&doc.get(c).kind, NodeKind::Element(e) if is_block_tag(&e.tag)));
     let mut boxes = Vec::with_capacity(children.len());
     for &child_id in children {
-        build_box_for_node(doc, child_id, styles, base_url, image_info, &mut boxes);
+        build_box_for_node(
+            doc,
+            child_id,
+            styles,
+            base_url,
+            image_info,
+            block_siblings,
+            &mut boxes,
+        );
     }
     boxes
 }
@@ -104,9 +118,10 @@ fn build_box_for_node(
     styles: &[Option<ComputedStyle>],
     base_url: Option<&str>,
     image_info: &HashMap<String, (u32, u32)>,
+    block_siblings: bool,
     out: &mut Vec<LayoutBox>,
 ) {
-    match begin_box_for_node(doc, node_id, styles, base_url, image_info) {
+    match begin_box_for_node(doc, node_id, styles, base_url, image_info, block_siblings) {
         BoxStart::Skip => {},
         BoxStart::Leaf(lb) => push_box(out, lb),
         BoxStart::Container {
@@ -168,6 +183,7 @@ fn begin_box_for_node(
     styles: &[Option<ComputedStyle>],
     base_url: Option<&str>,
     image_info: &HashMap<String, (u32, u32)>,
+    block_siblings: bool,
 ) -> BoxStart {
     let node = doc.get(node_id);
 
@@ -311,11 +327,8 @@ fn begin_box_for_node(
             // them when they're between inline siblings so that
             // `<em>hello</em> <strong>world</strong>` preserves
             // the space.
-            if text.trim().is_empty() {
-                let dominated_by_blocks = has_block_sibling(doc, node_id);
-                if dominated_by_blocks {
-                    return BoxStart::Skip;
-                }
+            if text.trim().is_empty() && block_siblings {
+                return BoxStart::Skip;
             }
             let style = find_inherited_style(doc, node_id, styles);
             let mut inline_style = style;
@@ -561,32 +574,11 @@ fn resolve_img_src(base_url: Option<&str>, src: &str) -> String {
     }
 }
 
-/// Check if a text node's siblings include block-level elements.
-///
-/// When whitespace text sits between block elements (e.g.
-/// `<div>\n<p>text</p>\n</div>`), the whitespace is insignificant
-/// and should be dropped. When it sits between inline elements
-/// (e.g. `<em>a</em> <strong>b</strong>`), the space is significant.
-fn has_block_sibling(doc: &Document, node_id: NodeId) -> bool {
-    let parent_id = match doc.get(node_id).parent {
-        Some(p) => p,
-        None => return true,
-    };
-    let siblings = &doc.get(parent_id).children;
-    for &sib in siblings {
-        if sib == node_id {
-            continue;
-        }
-        if let NodeKind::Element(elem) = &doc.get(sib).kind
-            && is_block_tag(&elem.tag)
-        {
-            return true;
-        }
-    }
-    false
-}
-
 /// Returns true if the tag is normally block-level.
+///
+/// Whitespace text among block siblings (`<div>\n<p>text</p>\n</div>`)
+/// is insignificant and dropped; among inline siblings
+/// (`<em>a</em> <strong>b</strong>`) the space is significant.
 fn is_block_tag(tag: &TagName) -> bool {
     matches!(
         tag,
