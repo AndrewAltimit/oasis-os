@@ -33,8 +33,11 @@ const MAX_TRAVERSAL_STEPS: usize = 16_384;
 
 /// Sibling nodes structural pseudo-classes may scan while matching one
 /// selector against one element (see `Budget::charge_scan`): one check
-/// on a list of up to this many children always fits.
-const MAX_STRUCTURAL_SCAN: usize = 128 * 1024;
+/// on a list of up to this many children always fits. It is also the
+/// per-element cost of a hostile `:has(~ :nth-last-child(..))` repeated
+/// over a long sibling list, so it is kept to a few full scans of a
+/// large list (4 000 siblings x 32 Ki stays a few seconds unoptimized).
+const MAX_STRUCTURAL_SCAN: usize = 32 * 1024;
 
 // -----------------------------------------------------------------------
 // Matched declaration types

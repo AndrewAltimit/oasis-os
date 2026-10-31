@@ -1569,6 +1569,9 @@ fn text_wrap_defaults_to_wrap() {
 /// Regression: structural pseudo-classes rescanned (and collected) the
 /// sibling list uncharged for every `:has(~ ..)` candidate, so
 /// `p:has(~ p:nth-last-child(-n+0))` over 4 000 siblings took ~50 s.
+/// Budgeted it is ~2 s unoptimized locally; the 30 s bound leaves room
+/// for slow, loaded CI runners (the 128 Ki scan allowance once took 31 s
+/// there).
 #[test]
 fn structural_checks_inside_has_are_budgeted() {
     let doc = make_doc(vec![(TagName::P, vec![]); 4000]);
