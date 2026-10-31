@@ -4,8 +4,10 @@
    tokens; shared components (.kicker .chip .badge .codeblock .btn) come
    from there and are not restyled here except where noted.
 
-   Index      .jhero  .jfilters (topic chips; js/journal.js un-hides it)
-              .jlist > li[data-tags] > .jcard   .jextra
+   Index      .jhero (.jhero__ctas)  .jfilters (topic chips + .jsort; js/journal.js
+              un-hides it)  .jlist > li.jentry[data-tags] > article.jcard
+              (.jcard--sky/amber/lime/violet/rose sets --hue; .jcard__cover is a
+              generated cover; .jentry--featured spans the row)  .jextra
    Article    .progress  .article__head (.crumbs .article__meta .article__tags)
               .article__layout > .toc + .prose   .article__foot > .pager
    Prose      headings + .anchor, lists, code (.codeblock added by JS),
@@ -35,6 +37,7 @@
 .jhero__stats {
   margin-top: var(--space-l); display: flex; flex-wrap: wrap; gap: var(--space-2xs);
 }
+.jhero__ctas { margin-top: var(--space-l); display: flex; flex-wrap: wrap; gap: var(--space-2xs); }
 .update-chip {
   display: inline-block; padding: 0.05rem 0.5rem; border-radius: var(--radius-pill);
   font-family: var(--mono); font-size: 0.78em; letter-spacing: 0.04em;
@@ -48,25 +51,82 @@
 }
 .jfilters[hidden] { display: none; }
 .jfilters__count {
-  flex-basis: 100%; margin-top: var(--space-3xs);
+  flex-basis: 100%; order: 10; margin-top: var(--space-3xs);
   font-family: var(--mono); font-size: var(--step--2); color: var(--faint);
 }
-.jlist { display: grid; border-top: 1px solid var(--line); }
-.jlist li { border-bottom: 1px solid var(--line); }
-.jlist li[hidden] { display: none; }
+.jsort {
+  margin-left: auto; display: inline-flex; align-items: center; gap: 0.45rem;
+  height: 36px; padding: 0 0.85rem; border-radius: var(--radius-pill);
+  border: 1px solid transparent; background: transparent; cursor: pointer;
+  font-family: var(--mono); font-size: 0.74rem; color: var(--muted);
+  transition: color var(--dur-1), border-color var(--dur-1);
+}
+.jsort:hover { color: var(--text); border-color: var(--line-2); }
+.jsort svg { transition: transform var(--dur-2) var(--ease); }
+.jsort.is-oldest svg { transform: scaleY(-1); }
+
+/* Card grid. The whole card is one link target: the title's <a> stretches
+   over the card (::after), so the markup stays a plain heading + link. */
+.jlist {
+  display: grid; gap: var(--space-s);
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 330px), 1fr));
+}
+.jlist > li[hidden] { display: none; }
+.jentry { display: flex; min-width: 0; }
 .jcard {
-  display: grid; gap: var(--space-2xs) var(--space-l); grid-template-columns: 4.5rem minmax(0, 1fr);
-  padding: 1.6rem var(--space-xs) 1.7rem; color: var(--text); border-radius: var(--radius-sm);
-  transition: background-color var(--dur-2);
+  --hue: var(--sky); --hue-soft: var(--sky-soft);
+  position: relative; flex: 1; min-width: 0; display: flex; flex-direction: column;
+  border-radius: var(--radius); overflow: hidden;
+  background: var(--surface); border: 1px solid var(--line); box-shadow: var(--shadow-1);
+  transition: border-color var(--dur-2), transform var(--dur-2) var(--ease), box-shadow var(--dur-2);
 }
-.jcard:hover { text-decoration: none; background: var(--surface); }
+.jcard--sky { --hue: var(--sky); --hue-soft: rgba(124, 199, 255, 0.16); }
+.jcard--amber { --hue: var(--accent); --hue-soft: rgba(255, 138, 61, 0.18); }
+.jcard--lime { --hue: var(--lime); --hue-soft: rgba(184, 228, 90, 0.15); }
+.jcard--violet { --hue: var(--violet); --hue-soft: rgba(182, 156, 255, 0.17); }
+.jcard--rose { --hue: var(--rose); --hue-soft: rgba(255, 107, 139, 0.15); }
+.jcard:hover, .jcard:focus-within {
+  border-color: color-mix(in srgb, var(--hue) 55%, var(--line));
+  transform: translateY(-3px); box-shadow: var(--shadow-2);
+}
+.jcard:focus-within { box-shadow: var(--shadow-2), var(--ring); }
+.jcard__title a:focus-visible { outline: none; }
+
+/* Generated cover: a lit dot-grid "screen" with the entry number. */
+.jcard__cover {
+  position: relative; isolation: isolate; overflow: hidden;
+  aspect-ratio: 16 / 6; display: flex; align-items: flex-end; justify-content: space-between;
+  gap: var(--space-xs); padding: var(--space-s) var(--space-m);
+  border-bottom: 1px solid var(--line);
+  background:
+    radial-gradient(90% 140% at 100% 0%, var(--hue-soft), transparent 60%),
+    radial-gradient(1px 1px at 50% 50%, rgba(255, 255, 255, 0.14) 99%, transparent) 0 0 / 14px 14px,
+    linear-gradient(180deg, var(--bg-2), var(--bg));
+}
+.jcard__cover::after {
+  /* a slow sheen on hover */
+  content: ""; position: absolute; inset: 0; z-index: -1; opacity: 0;
+  background: linear-gradient(115deg, transparent 30%, var(--hue-soft) 50%, transparent 70%);
+  transform: translateX(-30%); transition: opacity var(--dur-3), transform var(--dur-3) var(--ease-out);
+}
+.jcard:hover .jcard__cover::after { opacity: 1; transform: none; }
 .jcard__no {
-  font-family: var(--mono); font-weight: 700; font-size: clamp(1.6rem, 3vw, 2.2rem);
-  line-height: 1; color: transparent; -webkit-text-stroke: 1px #4a5165;
-  padding-top: 0.2rem; transition: color var(--dur-2), -webkit-text-stroke-color var(--dur-2);
+  font-family: var(--mono); font-weight: 700; line-height: 0.8; letter-spacing: -0.04em;
+  font-size: clamp(3.2rem, 6vw, 4.4rem);
+  color: transparent; -webkit-text-stroke: 1.5px color-mix(in srgb, var(--hue) 70%, transparent);
+  transition: color var(--dur-2);
 }
-.jcard:hover .jcard__no { color: var(--accent); -webkit-text-stroke-color: var(--accent); }
-.jcard__body { display: grid; gap: 0.4rem; max-width: 52rem; }
+.jcard:hover .jcard__no { color: var(--hue-soft); }
+.jcard__topic {
+  font-family: var(--mono); font-size: 0.68rem; letter-spacing: 0.14em; text-transform: uppercase;
+  color: var(--hue); padding: 0.3rem 0.6rem; border-radius: var(--radius-pill);
+  border: 1px solid color-mix(in srgb, var(--hue) 40%, transparent); background: rgba(7, 8, 12, 0.55);
+}
+
+.jcard__body {
+  flex: 1; display: flex; flex-direction: column; gap: 0.55rem;
+  padding: var(--space-m) var(--space-m) 1.4rem;
+}
 .jcard__meta {
   display: flex; flex-wrap: wrap; align-items: center; gap: 0.25rem 0.6rem;
   font-family: var(--mono); font-size: 0.74rem; color: var(--faint); letter-spacing: 0.04em;
@@ -76,15 +136,42 @@
   color: var(--lime); background: var(--lime-soft); border: 1px solid rgba(184, 228, 90, 0.35);
 }
 .jcard__title {
-  font-size: var(--step-1); font-weight: 650; letter-spacing: -0.015em; line-height: var(--lh-snug);
-  text-wrap: balance; transition: color var(--dur-1);
+  font-size: var(--step-1); font-weight: 680; letter-spacing: -0.015em; line-height: var(--lh-snug);
+  text-wrap: balance;
 }
-.jcard:hover .jcard__title { color: var(--accent); }
-.jcard__desc { color: var(--muted); font-size: 0.95rem; text-wrap: pretty; }
-.jcard__tags { font-family: var(--mono); font-size: 0.72rem; color: var(--sky); opacity: 0.85; }
+.jcard__title a { color: var(--text); transition: color var(--dur-1); }
+.jcard__title a::after { content: ""; position: absolute; inset: 0; border-radius: inherit; }
+.jcard__title a:hover { text-decoration: none; }
+.jcard:hover .jcard__title a { color: var(--hue); }
+.jcard__desc { color: var(--muted); font-size: 0.93rem; line-height: 1.6; text-wrap: pretty; }
+.jcard__tags {
+  margin-top: auto; padding-top: 0.6rem; display: flex; flex-wrap: wrap; gap: 0.35rem;
+}
+.jcard__tags li {
+  font-family: var(--mono); font-size: 0.7rem; padding: 0.15rem 0.55rem;
+  border-radius: var(--radius-pill); border: 1px solid var(--line-2); color: var(--muted);
+}
+
+/* The latest entry spans the row: cover beside the text on wider screens. */
+.jentry--featured { grid-column: 1 / -1; }
+@media (min-width: 760px) {
+  .jentry--featured .jcard { flex-direction: row; }
+  .jentry--featured .jcard__cover {
+    flex: 0 0 40%; aspect-ratio: auto; min-height: 15rem;
+    border-bottom: 0; border-right: 1px solid var(--line);
+    flex-direction: column; align-items: flex-start; padding: var(--space-l);
+  }
+  .jentry--featured .jcard__no { font-size: clamp(5rem, 9vw, 7.5rem); order: 2; margin-top: auto; }
+  .jentry--featured .jcard__body { padding: var(--space-l) var(--space-xl) var(--space-l) var(--space-l); justify-content: center; }
+  .jentry--featured .jcard__title { font-size: var(--step-3); line-height: 1.12; letter-spacing: -0.025em; }
+  .jentry--featured .jcard__desc { font-size: 1.02rem; max-width: 40rem; }
+  .jentry--featured .jcard__tags { margin-top: 0.4rem; }
+}
 @media (max-width: 560px) {
-  .jcard { grid-template-columns: minmax(0, 1fr); padding-inline: var(--space-3xs); }
-  .jcard__no { font-size: 1.1rem; -webkit-text-stroke: 0; color: var(--accent); }
+  .jcard__body { padding: var(--space-s) var(--space-s) 1.15rem; }
+  .jcard__cover { aspect-ratio: 16 / 4.5; padding: var(--space-xs) var(--space-s); }
+  .jcard__no { font-size: 2.6rem; }
+  .jsort { margin-left: 0; }
 }
 
 .jextra {
@@ -119,8 +206,11 @@
 }
 
 /* ---------- Article header ---------- */
-/* Header and footer share the prose column's left edge at every width. */
-.article__head, .article__foot { max-width: calc(46rem + 2 * var(--gutter)); }
+/* Measure: running text is held to --measure (~70 characters at 18px);
+   on wide screens code, tables, figures and diagrams break out to --col.
+   Header and footer share the prose column's left edge at every width. */
+.page-article { --measure: 38rem; --col: 46rem; }
+.article__head, .article__foot { max-width: calc(var(--measure) + 2 * var(--gutter)); }
 @media (min-width: 1200px) {
   .article__head, .article__foot { max-width: calc(66rem + 2 * var(--gutter)); }
   .article__head > *, .article__foot > * { max-width: 52rem; }
@@ -143,6 +233,7 @@
   color: var(--muted);
 }
 .article__lede {
+  max-width: 40rem;
   margin-top: 1.4rem; color: var(--muted); font-size: var(--step-1); line-height: 1.65;
 }
 .article__lede code { font-size: 0.82em; }
@@ -210,7 +301,7 @@
 @media (max-width: 1199px) {
   .toc.is-enhanced {
     display: block; position: sticky; z-index: 30; top: calc(var(--topbar-h) + var(--space-2xs));
-    max-width: 46rem; margin: 0 auto var(--space-l);
+    max-width: var(--measure); margin: 0 auto var(--space-l);
     border: 1px solid var(--line-2); border-radius: var(--radius);
     background: rgba(16, 19, 27, 0.92);
     backdrop-filter: saturate(140%) blur(14px); -webkit-backdrop-filter: saturate(140%) blur(14px);
@@ -245,10 +336,14 @@
 }
 
 /* ---------- Prose ---------- */
-/* ~68 characters per line at 1.0625rem; 1.75 leading for long reads. */
+/* ~70 characters per line at 1.125rem; 1.72 leading for long reads. */
 .prose {
-  max-width: 46rem; margin-inline: auto;
-  font-size: 1.0625rem; line-height: 1.75; color: #d6dae4;
+  max-width: var(--measure); margin-inline: auto;
+  font-size: 1.125rem; line-height: 1.72; color: #d6dae4;
+}
+@media (min-width: 1200px) {
+  .prose { max-width: var(--col); }
+  .prose > :is(p, ul, ol, dl, h2, h3, h4, blockquote, hr, .callout) { max-width: var(--measure); }
 }
 .prose > * + * { margin-top: 1.15em; }
 .prose strong { color: var(--text); font-weight: 650; }
@@ -474,10 +569,20 @@ html.has-lightbox { overflow: hidden; }
 
 /* ---------- Prev / next ---------- */
 .article__foot { padding-bottom: var(--space-section); }
-@media (min-width: 1200px) { .article__foot > .pager { max-width: 46rem; } }
+@media (min-width: 1200px) { .article__foot > :is(.pager, .article__end) { max-width: var(--col); } }
+
+/* End of article: tags, back to top, all entries. */
+.article__end {
+  display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between;
+  gap: var(--space-s) var(--space-m); padding-block: var(--space-l);
+  border-top: 1px solid var(--line);
+}
+.article__end .article__tags { margin-top: 0; }
+.article__end-links { display: flex; flex-wrap: wrap; gap: 0.4rem 1.25rem; font-size: 0.9rem; }
+.article__end-links a { color: var(--muted); }
+.article__end-links a:hover { color: var(--text); }
 .pager {
   display: grid; gap: var(--space-s); grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
-  padding-top: 2.5rem; border-top: 1px solid var(--line);
 }
 .pager__link {
   display: grid; gap: 0.35rem; padding: 1.15rem 1.3rem 1.25rem; border-radius: var(--radius);
@@ -490,7 +595,7 @@ html.has-lightbox { overflow: hidden; }
 .pager__title { font-weight: 650; letter-spacing: -0.01em; line-height: 1.3; }
 
 @media (max-width: 560px) {
-  .prose { font-size: 1.02rem; }
+  .prose { font-size: 1.0625rem; }
   .prose pre { font-size: 0.76rem; padding: 0.9rem 1rem; }
   .pager__link--next { text-align: left; }
 }

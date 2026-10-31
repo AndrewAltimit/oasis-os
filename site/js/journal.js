@@ -5,7 +5,7 @@
 //              (language label, light syntax colours, copy button), a
 //              lightbox for figures, and Mermaid diagrams (fetched from a
 //              CDN only on pages that contain one).
-//   Index      topic filter chips over the entry list.
+//   Index      topic filter chips and a newest/oldest sort over the entry cards.
 (function () {
   "use strict";
 
@@ -73,7 +73,7 @@
   }
 
   var links = $$(".toc ol a");
-  if (links.length && "IntersectionObserver" in window) {
+  if (links.length) {
     var byId = {};
     links.forEach(function (a) { byId[decodeURIComponent(a.hash.slice(1))] = a; });
     var heads = $$(".prose h2[id]").filter(function (h) { return byId[h.id]; });
@@ -104,8 +104,16 @@
       heads.forEach(function (h) { if (h.getBoundingClientRect().top < line) pick = h; });
       if (pick) setCurrent(pick.id);
     };
-    var io = new IntersectionObserver(spy, { rootMargin: "0px 0px -60% 0px", threshold: [0, 1] });
-    heads.forEach(function (h) { io.observe(h); });
+    // Scroll events (rAF-throttled) rather than an IntersectionObserver alone:
+    // a jump (TOC click, find-in-page, restored scroll) can skip past headings
+    // without any of them crossing the observer's edge.
+    var spyQueued = false;
+    window.addEventListener("scroll", function () {
+      if (spyQueued) return;
+      spyQueued = true;
+      window.requestAnimationFrame(function () { spyQueued = false; spy(); });
+    }, { passive: true });
+    window.addEventListener("resize", spy);
     spy();
   }
 
@@ -363,6 +371,24 @@
             chip.firstChild.textContent.trim() + "”";
       }
     });
+
+    // Sort toggle: newest first (the markup order, latest entry featured)
+    // or oldest first (read the series in order, no featured card).
+    var sort = document.getElementById("jsort");
+    var listEl = entries[0].parentNode;
+    var featured = listEl.querySelector(".jentry--featured");
+    if (sort) {
+      sort.addEventListener("click", function () {
+        var oldest = !sort.classList.contains("is-oldest");
+        sort.classList.toggle("is-oldest", oldest);
+        sort.querySelector("span").textContent = oldest ? "Oldest first" : "Newest first";
+        sort.setAttribute("aria-label", oldest
+          ? "Sort order: oldest first. Switch to newest first"
+          : "Sort order: newest first. Switch to oldest first");
+        $$(".jlist > li", document).reverse().forEach(function (li) { listEl.appendChild(li); });
+        if (featured) featured.classList.toggle("jentry--featured", !oldest);
+      });
+    }
   }
 
   // ------------------------------------------------------------------

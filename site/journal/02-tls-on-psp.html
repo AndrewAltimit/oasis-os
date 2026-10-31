@@ -25,6 +25,33 @@
   <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&amp;display=swap" rel="stylesheet">
   <link rel="stylesheet" href="../css/site.css">
   <link rel="stylesheet" href="../css/journal.css">
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "BlogPosting",
+    "headline": "TLS 1.3 on a 2004 Handheld",
+    "description": "Implementing native TLS 1.3 on PSP Allegrex via pure Rust embedded-tls — privileged instruction traps, RSA handshake failures, and DNS endianness bugs.",
+    "datePublished": "2026-03-11",
+    "url": "https://andrewaltimit.github.io/oasis-os/journal/02-tls-on-psp.html",
+    "mainEntityOfPage": "https://andrewaltimit.github.io/oasis-os/journal/02-tls-on-psp.html",
+    "image": "https://andrewaltimit.github.io/oasis-os/img/og-card.png",
+    "keywords": [
+      "psp",
+      "security",
+      "embedded-tls"
+    ],
+    "author": {
+      "@type": "Person",
+      "name": "AndrewAltimit",
+      "url": "https://github.com/AndrewAltimit"
+    },
+    "isPartOf": {
+      "@type": "Blog",
+      "name": "OASIS_OS Developer's Journal",
+      "url": "https://andrewaltimit.github.io/oasis-os/journal/"
+    }
+  }
+  </script>
 </head>
 <body class="page-article">
 
@@ -367,6 +394,10 @@ tls.flush()?;  // ← sends the actual TLS record</code></pre>
   </div>
 
   <footer class="article__foot wrap">
+  <div class="article__end">
+    <ul class="article__tags" aria-label="Tags"><li>psp</li><li>security</li><li>embedded-tls</li></ul>
+    <p class="article__end-links"><a href="#main">Back to top <span aria-hidden="true">&uarr;</span></a><a href="./">All entries</a><a href="https://github.com/AndrewAltimit/oasis-os">Browse the code</a></p>
+  </div>
   <nav class="pager" aria-label="More entries">
     <a class="pager__link pager__link--prev" href="01-unified-embedded-os.html" rel="prev"><span class="pager__dir">&larr; Previous &middot; 01</span><span class="pager__title">One Codebase, Five Platforms</span></a>
     <a class="pager__link pager__link--next" href="03-streaming-video.html" rel="next"><span class="pager__dir">Next &middot; 03 &rarr;</span><span class="pager__title">Streaming Internet Archive Video</span></a>
@@ -376,22 +407,48 @@ tls.flush()?;  // ← sends the actual TLS record</code></pre>
 </main>
 
 <footer class="footer">
-  <div class="wrap footer__inner">
+  <div class="wrap footer__grid">
     <div class="footer__brand">
-      <span class="brand__name">OASIS<span class="brand__us">_</span>OS</span>
-      <p>Built from scratch in Rust. Dual-licensed MIT + Unlicense.</p>
+      <a class="brand" href="../" aria-label="OASIS_OS home">
+        <span class="brand__mark" aria-hidden="true"></span>
+        <span class="brand__name">OASIS<span class="brand__us">_</span>OS</span>
+      </a>
+      <p>An embeddable OS framework, built from scratch in Rust. One shell, any pixel buffer.</p>
+      <p class="footer__status mono" aria-hidden="true">333MHz &middot; 480&times;272 &middot; v1.4.0</p>
     </div>
-    <nav aria-label="Footer">
-      <ul class="footer__links">
-        <li><a href="../">Home</a></li>
-        <li><a href="../demo/">Live demo</a></li>
-        <li><a href="../journal/">Journal</a></li>
-        <li><a href="../blueprint.html">Blueprints</a></li>
-        <li><a href="https://github.com/AndrewAltimit/oasis-os">GitHub</a></li>
-        <li><a href="https://github.com/AndrewAltimit/oasis-os/blob/main/docs/README.md">Docs</a></li>
-      </ul>
+    <nav class="footer__nav" aria-label="Footer">
+      <div>
+        <p class="footer__head">Explore</p>
+        <ul class="footer__links">
+          <li><a href="../">Home</a></li>
+          <li><a href="../demo/">Live demo</a></li>
+          <li><a href="../crates.html">Crate map</a></li>
+          <li><a href="../blueprint.html">Blueprints</a></li>
+        </ul>
+      </div>
+      <div>
+        <p class="footer__head">Read</p>
+        <ul class="footer__links">
+          <li><a href="../journal/">Developer&rsquo;s journal</a></li>
+          <li><a href="https://github.com/AndrewAltimit/oasis-os/blob/main/docs/README.md">Documentation</a></li>
+          <li><a href="https://github.com/AndrewAltimit/oasis-os/blob/main/docs/getting-started.md">Getting started</a></li>
+          <li><a href="https://github.com/AndrewAltimit/oasis-os/blob/main/CHANGELOG.md">Changelog</a></li>
+        </ul>
+      </div>
+      <div>
+        <p class="footer__head">Project</p>
+        <ul class="footer__links">
+          <li><a href="https://github.com/AndrewAltimit/oasis-os">GitHub</a></li>
+          <li><a href="https://github.com/AndrewAltimit/oasis-os/releases">Releases</a></li>
+          <li><a href="https://github.com/AndrewAltimit/oasis-os/blob/main/CONTRIBUTING.md">Contributing</a></li>
+          <li><a href="https://github.com/AndrewAltimit/oasis-os/blob/main/LICENSE">License</a></li>
+        </ul>
+      </div>
     </nav>
-    <p class="footer__status mono" aria-hidden="true">333MHz &middot; 480&times;272 &middot; v1.4.0</p>
+  </div>
+  <div class="wrap footer__base">
+    <p>Dual-licensed MIT + Unlicense.</p>
+    <a class="footer__top" href="#main">Back to top <span aria-hidden="true">&uarr;</span></a>
   </div>
 </footer>
 
