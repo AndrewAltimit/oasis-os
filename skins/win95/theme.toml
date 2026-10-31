@@ -77,6 +77,7 @@ panel_bg = "#C0C0C0"
 button_bg = "#C0C0C0"
 button_text = "#000000"
 button_gradient = false
+button_shape = "bevel"
 panel_width = 200
 panel_border_radius = 0
 columns = 1

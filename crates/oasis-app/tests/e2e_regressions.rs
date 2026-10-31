@@ -885,3 +885,28 @@ fn clicks_in_a_kiosk_window_hit_the_drawn_rows() {
         "the click selects the clicked row: {lines:?}"
     );
 }
+
+/// Desktop-mode taskbar buttons used to start right after the start button,
+/// drawn over the bottom bar's URL plate + USB label (altimit) and over the
+/// media dock's transport pills (psix-hifi). They now sit in the span the
+/// bar leaves free.
+#[test]
+fn taskbar_buttons_clear_bottom_bar_content() {
+    for (skin, left_object) in [("altimit", "bar_usb"), ("psix-hifi", "bar_dock_next")] {
+        let mut h = Harness::new(skin);
+        h.settle();
+        assert!(h.open_app("File Manager"), "{skin}");
+        h.settle();
+        assert_eq!(h.mode(), Mode::Desktop, "{skin}");
+        let (bx, ..) = h
+            .sdi_rect("taskbar_btn_0")
+            .unwrap_or_else(|| panic!("{skin}: taskbar button visible"));
+        let (lx, _, lw, _) = h.sdi_rect(left_object).unwrap();
+        // `bar_usb` is a text object (no width): allow for its label.
+        let left_end = lx + (lw as i32).max(18);
+        assert!(
+            bx >= left_end,
+            "{skin}: button x {bx} overlaps {left_object} ending {left_end}"
+        );
+    }
+}

@@ -195,7 +195,7 @@ fn shader_bridge_streams_exact_pixels() {
         let mut bridge = SdlShaderBridge::new(w, h).expect("bridge");
         for (i, &t) in [0.0f32, 1.25, 2.5].iter().enumerate() {
             sdl.clear(Color::BLACK).expect("clear");
-            bridge.render_and_blit(sdl, "balatro", t, &params);
+            bridge.render_and_blit(sdl, "balatro", f64::from(t), &params);
             let want = reference.render_shader("balatro", t, &params).to_vec();
             assert_shows(sdl, &want, w, h, &format!("shade pass {i} (t={t})"));
         }

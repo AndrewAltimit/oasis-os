@@ -7,16 +7,20 @@
 //! The `from_skin()` method delegates to focused helper methods for each
 //! component: `derive_bar_theme`, `derive_icon_theme`, `derive_start_menu_theme`,
 //! `derive_app_screen_theme`, `derive_osk_theme`, `derive_scrollbar_theme`,
-//! `derive_wallpaper_theme` and `derive_toast_theme`. Layer derivation
+//! `derive_wallpaper_theme` and `derive_toast_theme`, plus `TaskbarColors`,
+//! `TransitionSettings` and the `parse_*` preset-table helpers for the
+//! flat `ActiveTheme` fields. Layer derivation
 //! (`derive_background_layers` / `_chrome_layers` / `_image_layers`) lives
 //! in `layers.rs`. Derived text colors that the skin did not set explicitly
 //! are kept readable on their surface with `theme::readable_on`.
+
+use std::collections::HashMap;
 
 use oasis_types::backend::Color;
 use oasis_types::color::{darken, lighten, with_alpha};
 
 use crate::SkinTheme;
-use crate::theme::{bar_backdrop, composite_over, parse_hex_color, readable_on};
+use crate::theme::{BarOverrides, bar_backdrop, composite_over, parse_hex_color, readable_on};
 
 use super::{
     ActiveTheme, AnsiPalette, AppScreenTheme, BarTheme, IconTheme, OskTheme, ScrollbarTheme,
@@ -113,12 +117,140 @@ fn apply_palette_overrides(
     palette
 }
 
+/// Taskbar colors (`[bar_overrides] taskbar_*`, else derived from primary).
+struct TaskbarColors {
+    bg: Color,
+    btn_active: Color,
+    btn_inactive: Color,
+    btn_minimized: Color,
+    btn_hover: Color,
+    text: Color,
+    separator: Color,
+    indicator: Color,
+}
+
+impl TaskbarColors {
+    fn derive(skin: &SkinTheme, primary: Color) -> Self {
+        let bar_ov = skin.bar_overrides.as_ref();
+        let pick = |get: fn(&BarOverrides) -> Option<&String>, fallback: Color| {
+            ov(bar_ov.and_then(get), fallback)
+        };
+        Self {
+            bg: pick(
+                |b| b.taskbar_bg.as_ref(),
+                with_alpha(darken(primary, 0.6), 120),
+            ),
+            btn_active: pick(|b| b.taskbar_btn_active.as_ref(), with_alpha(primary, 120)),
+            btn_inactive: pick(
+                |b| b.taskbar_btn_inactive.as_ref(),
+                Color::rgba(255, 255, 255, 20),
+            ),
+            btn_minimized: pick(
+                |b| b.taskbar_btn_minimized.as_ref(),
+                Color::rgba(255, 255, 255, 10),
+            ),
+            btn_hover: pick(
+                |b| b.taskbar_btn_hover.as_ref(),
+                with_alpha(lighten(primary, 0.4), 60),
+            ),
+            text: pick(
+                |b| b.taskbar_text_color.as_ref(),
+                Color::rgba(255, 255, 255, 220),
+            ),
+            separator: pick(
+                |b| b.taskbar_separator.as_ref(),
+                Color::rgba(255, 255, 255, 50),
+            ),
+            indicator: pick(|b| b.taskbar_indicator.as_ref(), lighten(primary, 0.3)),
+        }
+    }
+}
+
+/// Screen-transition settings from `[transition]`.
+struct TransitionSettings {
+    fade_color: Color,
+    entrance: String,
+    /// Entrance length in 60 fps frames.
+    entrance_frames: u32,
+    page_style: String,
+    easing: String,
+}
+
+impl TransitionSettings {
+    fn derive(skin: &SkinTheme) -> Self {
+        let tr = skin.transition.as_ref();
+        Self {
+            fade_color: tr
+                .and_then(|t| t.fade_color.as_ref())
+                .and_then(|s| parse_hex_color(s))
+                .unwrap_or_else(|| darken(skin.background_color(), 0.3)),
+            entrance: tr
+                .and_then(|t| t.entrance.clone())
+                .unwrap_or_else(|| "fade".to_string()),
+            entrance_frames: tr
+                .and_then(|t| t.entrance_ms)
+                .map(|ms| (ms * 60 / 1000).max(1))
+                .unwrap_or(45),
+            page_style: tr
+                .and_then(|t| t.page_style.clone())
+                .unwrap_or_else(|| "slide".to_string()),
+            easing: tr.and_then(|t| t.easing.clone()).unwrap_or_default(),
+        }
+    }
+}
+
+/// `[app_themes.<app>]` color tables; unparseable colors are dropped, and
+/// apps left with none are omitted.
+fn parse_app_themes(skin: &SkinTheme) -> HashMap<String, HashMap<String, Color>> {
+    let Some(themes) = skin.app_themes.as_ref() else {
+        return HashMap::new();
+    };
+    themes
+        .iter()
+        .filter_map(|(app_name, colors)| {
+            let parsed: HashMap<String, Color> = colors
+                .iter()
+                .filter_map(|(key, hex)| parse_hex_color(hex).map(|c| (key.clone(), c)))
+                .collect();
+            (!parsed.is_empty()).then(|| (app_name.clone(), parsed))
+        })
+        .collect()
+}
+
+/// `[gradients.<name>]` presets whose endpoints both parse.
+fn parse_gradients(skin: &SkinTheme) -> HashMap<String, (Color, Color)> {
+    let Some(grads) = skin.gradients.as_ref() else {
+        return HashMap::new();
+    };
+    grads
+        .iter()
+        .filter_map(|(name, preset)| {
+            let from = parse_hex_color(&preset.from)?;
+            let to = parse_hex_color(&preset.to)?;
+            Some((name.clone(), (from, to)))
+        })
+        .collect()
+}
+
+/// `[animations.<name>]` presets as `(duration_ms, easing)`.
+fn parse_animations(skin: &SkinTheme) -> HashMap<String, (u32, String)> {
+    skin.animations
+        .iter()
+        .flatten()
+        .map(|(name, preset)| (name.clone(), (preset.duration_ms, preset.easing.clone())))
+        .collect()
+}
+
 impl ActiveTheme {
     /// Derive an `ActiveTheme` from the skin's base color palette.
     ///
     /// The 9 base colors (background, primary, secondary, text, dim_text,
     /// status_bar, prompt, output, error) drive all UI element colors.
     /// Fine-grained overrides (Phase 5) are checked first.
+    ///
+    /// Component themes come from the `derive_*_theme` helpers; this
+    /// function assembles them with the taskbar colors, transition
+    /// settings, `[geometry]` metrics and the named preset tables.
     pub fn from_skin(skin: &SkinTheme) -> Self {
         let status_bar_color =
             parse_hex_color(&skin.status_bar).unwrap_or(Color::rgba(0, 0, 0, 80));
@@ -127,51 +259,48 @@ impl ActiveTheme {
         let text = skin.text_color();
         let dim = skin.dim_text_color();
 
-        let bar = Self::derive_bar_theme(skin, status_bar_color, primary, secondary, text, dim);
-        let icon = Self::derive_icon_theme(skin, primary, text, dim);
-        let menu = Self::derive_start_menu_theme(skin, primary, text);
-        let app_screen = Self::derive_app_screen_theme(skin, status_bar_color, primary, text, dim);
-        let osk_theme = Self::derive_osk_theme(skin, primary, text, dim);
-        let scrollbar_theme = Self::derive_scrollbar_theme(skin, secondary);
-        let wallpaper_theme = Self::derive_wallpaper_theme(skin);
-        let toast_theme = Self::derive_toast_theme(skin, primary, text);
-        let background_layers = Self::derive_background_layers(skin);
-        let chrome_layers = Self::derive_chrome_layers(skin);
-        let image_layers = Self::derive_image_layers(skin);
-
         let ico = skin.icon_overrides.as_ref();
-        let bar_ov = skin.bar_overrides.as_ref();
         let bg_perf = skin.background_performance.as_ref();
+        let cur = skin.cursor.as_ref();
+        let geo = skin.geometry.as_ref();
+        // `[geometry] <field>`, else `default`.
+        macro_rules! geo {
+            ($field:ident, $default:expr) => {
+                geo.and_then(|g| g.$field).unwrap_or($default)
+            };
+        }
 
-        let focus_glow_color = ov(
-            ico.and_then(|i| i.focus_glow_color.as_ref()),
-            with_alpha(primary, 100),
-        );
-
+        let taskbar = TaskbarColors::derive(skin, primary);
+        let transition = TransitionSettings::derive(skin);
         let ansi = apply_palette_overrides(
             derive_ansi_palette(primary, skin.output_color(), text),
             skin.palette.as_ref(),
         );
-        let cur = skin.cursor.as_ref();
 
         Self {
             ansi,
             cursor_fill: ov(cur.and_then(|c| c.fill.as_ref()), CURSOR_FILL_DEFAULT),
             cursor_outline: ov(cur.and_then(|c| c.outline.as_ref()), CURSOR_OUTLINE_DEFAULT),
-            bar,
-            icon,
-            menu,
-            app: app_screen,
-            osk: osk_theme,
-            scrollbar: scrollbar_theme,
-            wallpaper: wallpaper_theme,
-            toast: toast_theme,
-            background_layers,
-            chrome_layers,
-            image_layers,
+
+            // Component themes.
+            bar: Self::derive_bar_theme(skin, status_bar_color, primary, secondary, text, dim),
+            icon: Self::derive_icon_theme(skin, primary, text, dim),
+            menu: Self::derive_start_menu_theme(skin, primary, text),
+            app: Self::derive_app_screen_theme(skin, status_bar_color, primary, text, dim),
+            osk: Self::derive_osk_theme(skin, primary, text, dim),
+            scrollbar: Self::derive_scrollbar_theme(skin, secondary),
+            wallpaper: Self::derive_wallpaper_theme(skin),
+            toast: Self::derive_toast_theme(skin, primary, text),
+
+            // Layers (layers.rs) and their performance budget.
+            background_layers: Self::derive_background_layers(skin),
+            chrome_layers: Self::derive_chrome_layers(skin),
+            image_layers: Self::derive_image_layers(skin),
             background_max_layers: bg_perf.and_then(|p| p.max_layers).unwrap_or(8),
             background_reduced_motion: bg_perf.and_then(|p| p.reduced_motion).unwrap_or(false),
             background_complexity_budget: bg_perf.and_then(|p| p.complexity_budget).unwrap_or(200),
+
+            // Dashboard icon motion and focus.
             entrance_style: ico
                 .and_then(|i| i.entrance_style.clone())
                 .unwrap_or_else(|| "none".to_string()),
@@ -179,302 +308,115 @@ impl ActiveTheme {
             entrance_stagger_ms: ico.and_then(|i| i.entrance_stagger_ms).unwrap_or(30),
             focus_scale: ico.and_then(|i| i.focus_scale).unwrap_or(1.0),
             focus_glow: ico.and_then(|i| i.focus_glow).unwrap_or(false),
-            focus_glow_color,
-            grid_padding_x: skin
-                .geometry
-                .as_ref()
-                .and_then(|g| g.grid_padding_x)
-                .unwrap_or(16),
-            grid_padding_y: skin
-                .geometry
-                .as_ref()
-                .and_then(|g| g.grid_padding_y)
-                .unwrap_or(6),
-            terminal_border_radius: skin
-                .geometry
-                .as_ref()
-                .and_then(|g| g.terminal_border_radius)
-                .unwrap_or(4),
-            taskbar_height: skin
-                .geometry
-                .as_ref()
-                .and_then(|g| g.taskbar_height)
-                .unwrap_or(20),
-            taskbar_bg: ov(
-                bar_ov.and_then(|b| b.taskbar_bg.as_ref()),
-                with_alpha(darken(primary, 0.6), 120),
+            focus_glow_color: ov(
+                ico.and_then(|i| i.focus_glow_color.as_ref()),
+                with_alpha(primary, 100),
             ),
+
+            // Taskbar.
+            taskbar_height: geo!(taskbar_height, 20),
+            taskbar_bg: taskbar.bg,
             taskbar_gradient_top: None,
             taskbar_gradient_bottom: None,
-            taskbar_btn_active: ov(
-                bar_ov.and_then(|b| b.taskbar_btn_active.as_ref()),
-                with_alpha(primary, 120),
-            ),
-            taskbar_btn_inactive: ov(
-                bar_ov.and_then(|b| b.taskbar_btn_inactive.as_ref()),
-                Color::rgba(255, 255, 255, 20),
-            ),
-            taskbar_btn_minimized: ov(
-                bar_ov.and_then(|b| b.taskbar_btn_minimized.as_ref()),
-                Color::rgba(255, 255, 255, 10),
-            ),
-            taskbar_btn_hover: ov(
-                bar_ov.and_then(|b| b.taskbar_btn_hover.as_ref()),
-                with_alpha(lighten(primary, 0.4), 60),
-            ),
-            taskbar_text_color: ov(
-                bar_ov.and_then(|b| b.taskbar_text_color.as_ref()),
-                Color::rgba(255, 255, 255, 220),
-            ),
-            taskbar_separator: ov(
-                bar_ov.and_then(|b| b.taskbar_separator.as_ref()),
-                Color::rgba(255, 255, 255, 50),
-            ),
-            taskbar_indicator: ov(
-                bar_ov.and_then(|b| b.taskbar_indicator.as_ref()),
-                lighten(primary, 0.3),
-            ),
-            statusbar_height: skin
-                .geometry
-                .as_ref()
-                .and_then(|g| g.statusbar_height)
-                .unwrap_or(24),
-            bottombar_height: skin
-                .geometry
-                .as_ref()
-                .and_then(|g| g.bottombar_height)
-                .unwrap_or(24),
-            tab_row_height: skin
-                .geometry
-                .as_ref()
-                .and_then(|g| g.tab_row_height)
-                .unwrap_or(18),
-            icon_width: skin
-                .geometry
-                .as_ref()
-                .and_then(|g| g.icon_width)
-                .unwrap_or(42),
-            icon_height: skin
-                .geometry
-                .as_ref()
-                .and_then(|g| g.icon_height)
-                .unwrap_or(52),
-            font_small: skin
-                .geometry
-                .as_ref()
-                .and_then(|g| g.font_small)
-                .unwrap_or(8),
+            taskbar_btn_active: taskbar.btn_active,
+            taskbar_btn_inactive: taskbar.btn_inactive,
+            taskbar_btn_minimized: taskbar.btn_minimized,
+            taskbar_btn_hover: taskbar.btn_hover,
+            taskbar_text_color: taskbar.text,
+            taskbar_separator: taskbar.separator,
+            taskbar_indicator: taskbar.indicator,
+
+            // Layout metrics (`[geometry]`).
+            grid_padding_x: geo!(grid_padding_x, 16),
+            grid_padding_y: geo!(grid_padding_y, 6),
+            terminal_border_radius: geo!(terminal_border_radius, 4),
+            statusbar_height: geo!(statusbar_height, 24),
+            bottombar_height: geo!(bottombar_height, 24),
+            tab_row_height: geo!(tab_row_height, 18),
+            icon_width: geo!(icon_width, 42),
+            icon_height: geo!(icon_height, 52),
+            font_small: geo!(font_small, 8),
             tab_w: 45,
             tab_h: 16,
             tab_gap: 4,
             tab_start_x: 34,
             pipe_gap: 5,
             r_hint_w: 28,
-            icon_stripe_h: skin
-                .geometry
-                .as_ref()
-                .and_then(|g| g.icon_stripe_h)
-                .unwrap_or(12),
-            icon_fold_size: skin
-                .geometry
-                .as_ref()
-                .and_then(|g| g.icon_fold_size)
-                .unwrap_or(10),
-            icon_gfx_h: skin
-                .geometry
-                .as_ref()
-                .and_then(|g| g.icon_gfx_h)
-                .unwrap_or(22),
-            icon_gfx_pad: skin
-                .geometry
-                .as_ref()
-                .and_then(|g| g.icon_gfx_pad)
-                .unwrap_or(4),
-            icon_label_pad: skin
-                .geometry
-                .as_ref()
-                .and_then(|g| g.icon_label_pad)
-                .unwrap_or(4),
-            icon_stripe_h_override: skin.geometry.as_ref().and_then(|g| g.icon_stripe_h),
-            icon_fold_size_override: skin.geometry.as_ref().and_then(|g| g.icon_fold_size),
-            icon_gfx_h_override: skin.geometry.as_ref().and_then(|g| g.icon_gfx_h),
-            icon_gfx_pad_override: skin.geometry.as_ref().and_then(|g| g.icon_gfx_pad),
-            icon_label_pad_override: skin.geometry.as_ref().and_then(|g| g.icon_label_pad),
-            tab_w_override: skin
-                .geometry
-                .as_ref()
-                .and_then(|g| g.tab_w)
-                .map(|v| v as i32),
-            tab_h_override: skin
-                .geometry
-                .as_ref()
-                .and_then(|g| g.tab_h)
-                .map(|v| v as i32),
-            tab_gap_override: skin
-                .geometry
-                .as_ref()
-                .and_then(|g| g.tab_gap)
-                .map(|v| v as i32),
-            tab_start_x_override: skin.geometry.as_ref().and_then(|g| g.tab_start_x),
+            icon_stripe_h: geo!(icon_stripe_h, 12),
+            icon_fold_size: geo!(icon_fold_size, 10),
+            icon_gfx_h: geo!(icon_gfx_h, 22),
+            icon_gfx_pad: geo!(icon_gfx_pad, 4),
+            icon_label_pad: geo!(icon_label_pad, 4),
+            // Raw overrides, kept so `with_screen_size` scales only the
+            // defaults.
+            icon_stripe_h_override: geo.and_then(|g| g.icon_stripe_h),
+            icon_fold_size_override: geo.and_then(|g| g.icon_fold_size),
+            icon_gfx_h_override: geo.and_then(|g| g.icon_gfx_h),
+            icon_gfx_pad_override: geo.and_then(|g| g.icon_gfx_pad),
+            icon_label_pad_override: geo.and_then(|g| g.icon_label_pad),
+            tab_w_override: geo.and_then(|g| g.tab_w).map(|v| v as i32),
+            tab_h_override: geo.and_then(|g| g.tab_h).map(|v| v as i32),
+            tab_gap_override: geo.and_then(|g| g.tab_gap).map(|v| v as i32),
+            tab_start_x_override: geo.and_then(|g| g.tab_start_x),
             screen_w: 480,
             screen_h: 272,
             clear_color: darken(skin.background_color(), 0.5),
-            terminal_line_height: skin
-                .geometry
-                .as_ref()
-                .and_then(|g| g.terminal_line_height)
-                .unwrap_or(16),
+            terminal_line_height: geo!(terminal_line_height, 16),
+
+            // Mouse cursor.
             cursor_scale: 1,
-            cursor_texture: skin.cursor.as_ref().and_then(|c| c.texture.clone()),
-            cursor_hotspot: skin
-                .cursor
-                .as_ref()
+            cursor_texture: cur.and_then(|c| c.texture.clone()),
+            cursor_hotspot: cur
                 .and_then(|c| c.hotspot)
                 .map(|[x, y]| (x, y))
                 .unwrap_or((0, 0)),
-            transition_fade_color: skin
-                .transition
-                .as_ref()
-                .and_then(|t| t.fade_color.as_ref())
-                .and_then(|s| parse_hex_color(s))
-                .unwrap_or_else(|| darken(skin.background_color(), 0.3)),
-            transition_entrance: skin
-                .transition
-                .as_ref()
-                .and_then(|t| t.entrance.clone())
-                .unwrap_or_else(|| "fade".to_string()),
-            transition_entrance_frames: skin
-                .transition
-                .as_ref()
-                .and_then(|t| t.entrance_ms)
-                .map(|ms| (ms * 60 / 1000).max(1))
-                .unwrap_or(45),
-            transition_page_style: skin
-                .transition
-                .as_ref()
-                .and_then(|t| t.page_style.clone())
-                .unwrap_or_else(|| "slide".to_string()),
-            transition_easing: skin
-                .transition
-                .as_ref()
-                .and_then(|t| t.easing.clone())
-                .unwrap_or_default(),
-            // Accessibility `text_scale` multiplies the resolved font sizes
-            // globally. At the default `1.0` these are unchanged.
-            font_body: skin.scale_font(
-                skin.geometry
-                    .as_ref()
-                    .and_then(|g| g.font_body)
-                    .unwrap_or(12),
-            ),
-            font_hint: skin.scale_font(
-                skin.geometry
-                    .as_ref()
-                    .and_then(|g| g.font_hint)
-                    .unwrap_or(10),
-            ),
-            font_heading: skin.scale_font(
-                skin.geometry
-                    .as_ref()
-                    .and_then(|g| g.font_heading)
-                    .unwrap_or(14),
-            ),
-            font_scale: skin
-                .geometry
-                .as_ref()
+
+            // Screen transitions.
+            transition_fade_color: transition.fade_color,
+            transition_entrance: transition.entrance,
+            transition_entrance_frames: transition.entrance_frames,
+            transition_page_style: transition.page_style,
+            transition_easing: transition.easing,
+
+            // Fonts: accessibility `text_scale` multiplies the resolved
+            // sizes globally (unchanged at the default 1.0).
+            font_body: skin.scale_font(geo!(font_body, 12)),
+            font_hint: skin.scale_font(geo!(font_hint, 10)),
+            font_heading: skin.scale_font(geo!(font_heading, 14)),
+            font_scale: geo
                 .and_then(|g| g.font_scale)
                 .map(|s| s.clamp(0.5, 3.0))
                 .unwrap_or(1.0),
-            terminal_cursor_blink_rate: skin
-                .geometry
-                .as_ref()
-                .and_then(|g| g.cursor_blink_rate)
-                .unwrap_or(30),
-            cursor_lerp_speed: skin
-                .geometry
-                .as_ref()
-                .and_then(|g| g.cursor_lerp_speed)
-                .unwrap_or(0.35),
-            page_slide_duration: skin
-                .geometry
-                .as_ref()
-                .and_then(|g| g.page_slide_duration)
-                .unwrap_or(6),
-            start_menu_anim_speed: skin
-                .geometry
-                .as_ref()
-                .and_then(|g| g.start_menu_anim_speed)
-                .unwrap_or(0.25),
-            press_flash_duration: skin
-                .geometry
-                .as_ref()
-                .and_then(|g| g.press_flash_duration)
-                .unwrap_or(6),
-            cursor_pad: skin
-                .geometry
-                .as_ref()
-                .and_then(|g| g.cursor_pad)
-                .unwrap_or(3),
-            press_flash_lighten: skin
-                .geometry
-                .as_ref()
-                .and_then(|g| g.press_flash_lighten)
-                .unwrap_or(0.25),
-            app_selection_lerp_speed: skin
-                .geometry
-                .as_ref()
-                .and_then(|g| g.app_selection_lerp_speed)
-                .unwrap_or(0.25),
-            page_dot_lerp_speed: skin
-                .geometry
-                .as_ref()
-                .and_then(|g| g.page_dot_lerp_speed)
-                .unwrap_or(0.2),
-            app_themes: {
-                let mut map = std::collections::HashMap::new();
-                if let Some(ref themes) = skin.app_themes {
-                    for (app_name, colors) in themes {
-                        let mut parsed = std::collections::HashMap::new();
-                        for (key, hex) in colors {
-                            if let Some(c) = parse_hex_color(hex) {
-                                parsed.insert(key.clone(), c);
-                            }
-                        }
-                        if !parsed.is_empty() {
-                            map.insert(app_name.clone(), parsed);
-                        }
-                    }
-                }
-                map
-            },
-            gradients: {
-                let mut map = std::collections::HashMap::new();
-                if let Some(ref grads) = skin.gradients {
-                    for (name, preset) in grads {
-                        if let (Some(from), Some(to)) =
-                            (parse_hex_color(&preset.from), parse_hex_color(&preset.to))
-                        {
-                            map.insert(name.clone(), (from, to));
-                        }
-                    }
-                }
-                map
-            },
-            animations: {
-                let mut map = std::collections::HashMap::new();
-                if let Some(ref anims) = skin.animations {
-                    for (name, preset) in anims {
-                        map.insert(name.clone(), (preset.duration_ms, preset.easing.clone()));
-                    }
-                }
-                map
-            },
+
+            // Animation tuning.
+            terminal_cursor_blink_rate: geo!(cursor_blink_rate, 30),
+            cursor_lerp_speed: geo!(cursor_lerp_speed, 0.35),
+            page_slide_duration: geo!(page_slide_duration, 6),
+            start_menu_anim_speed: geo!(start_menu_anim_speed, 0.25),
+            press_flash_duration: geo!(press_flash_duration, 6),
+            cursor_pad: geo!(cursor_pad, 3),
+            press_flash_lighten: geo!(press_flash_lighten, 0.25),
+            app_selection_lerp_speed: geo!(app_selection_lerp_speed, 0.25),
+            page_dot_lerp_speed: geo!(page_dot_lerp_speed, 0.2),
+
+            // Named preset tables.
+            app_themes: parse_app_themes(skin),
+            gradients: parse_gradients(skin),
+            animations: parse_animations(skin),
+
             ui_theme: skin.to_ui_theme(),
             elevation: skin.elevation_ladder(),
         }
     }
 
     /// Derive the bar (status bar + bottom bar) theme from skin overrides.
+    ///
+    /// Each color is its `[bar_overrides]` key when set, else derived from
+    /// the base colors. Text-like colors also fall back to the generic
+    /// `text_color` override first, and both bars' gradients to the
+    /// generic `gradient_top` / `gradient_bottom`. Derived (not explicit)
+    /// text is then lifted to a readable contrast by
+    /// [`Self::keep_bar_text_readable`].
     fn derive_bar_theme(
         skin: &SkinTheme,
         status_bar_color: Color,
@@ -483,133 +425,69 @@ impl ActiveTheme {
         text: Color,
         dim: Color,
     ) -> BarTheme {
+        type Key = fn(&BarOverrides) -> Option<&String>;
         let bar_ov = skin.bar_overrides.as_ref();
-        // Generic `text_color` is the fallback for all element-specific
-        // bar text colors; `gradient_top/bottom` for both bar gradients.
         let bar_text = bar_ov.and_then(|b| b.text_color.as_ref());
         let grad_top = bar_ov.and_then(|b| b.gradient_top.as_ref());
         let grad_bottom = bar_ov.and_then(|b| b.gradient_bottom.as_ref());
+        // An element color: its own key, else `fallback`.
+        let pick = |key: Key, fallback: Color| ov(bar_ov.and_then(key), fallback);
+        // An element text color: its own key, else `text_color`, else
+        // `fallback`.
+        let pick_text = |key: Key, fallback: Color| ov(bar_ov.and_then(key).or(bar_text), fallback);
+        // A bar's gradient: its own pair of keys, else the generic pair
+        // (else auto-derived when `gradient_enabled`).
+        let gradient = |top: Key, bottom: Key| {
+            Self::bar_gradient_pair(
+                skin,
+                bar_ov.and_then(top).or(grad_top),
+                bar_ov.and_then(bottom).or(grad_bottom),
+                status_bar_color,
+            )
+        };
+        let statusbar_gradient = gradient(
+            |b| b.statusbar_gradient_top.as_ref(),
+            |b| b.statusbar_gradient_bottom.as_ref(),
+        );
+        let bar_gradient = gradient(
+            |b| b.bar_gradient_top.as_ref(),
+            |b| b.bar_gradient_bottom.as_ref(),
+        );
+        let tab_active_alpha = bar_ov.and_then(|b| b.tab_active_alpha).unwrap_or(180);
+        let tab_inactive_alpha = bar_ov.and_then(|b| b.tab_inactive_alpha).unwrap_or(60);
+        let media_tab_active = pick(|b| b.media_tab_active.as_ref(), text);
+        let media_tab_inactive = pick(|b| b.media_tab_inactive.as_ref(), dim);
 
         let mut bar = BarTheme {
-            statusbar_bg: ov(
-                bar_ov.and_then(|b| b.statusbar_bg.as_ref()),
+            // Backgrounds.
+            statusbar_bg: pick(
+                |b| b.statusbar_bg.as_ref(),
                 with_alpha(status_bar_color, 80),
             ),
-            bg: ov(
-                bar_ov.and_then(|b| b.bar_bg.as_ref()),
-                with_alpha(status_bar_color, 90),
-            ),
-            separator_color: ov(
-                bar_ov.and_then(|b| b.separator_color.as_ref()),
-                with_alpha(secondary, 50),
-            ),
-            battery_color: ov(
-                bar_ov.and_then(|b| b.battery_color.as_ref()).or(bar_text),
-                lighten(primary, 0.3),
-            ),
-            version_color: ov(
-                bar_ov.and_then(|b| b.version_color.as_ref()).or(bar_text),
-                text,
-            ),
-            clock_color: ov(
-                bar_ov.and_then(|b| b.clock_color.as_ref()).or(bar_text),
-                text,
-            ),
+            bg: pick(|b| b.bar_bg.as_ref(), with_alpha(status_bar_color, 90)),
+            separator_color: pick(|b| b.separator_color.as_ref(), with_alpha(secondary, 50)),
+            statusbar_gradient_top: statusbar_gradient.map(|(t, _)| t),
+            statusbar_gradient_bottom: statusbar_gradient.map(|(_, b)| b),
+            gradient_top: bar_gradient.map(|(t, _)| t),
+            gradient_bottom: bar_gradient.map(|(_, b)| b),
+
+            // Status-bar and footer text.
+            battery_color: pick_text(|b| b.battery_color.as_ref(), lighten(primary, 0.3)),
+            version_color: pick_text(|b| b.version_color.as_ref(), text),
+            clock_color: pick_text(|b| b.clock_color.as_ref(), text),
             clock_offset_y: bar_ov.and_then(|b| b.clock_offset_y).unwrap_or(0),
-            url_color: ov(bar_ov.and_then(|b| b.url_color.as_ref()).or(bar_text), dim),
-            usb_color: ov(bar_ov.and_then(|b| b.usb_color.as_ref()).or(bar_text), dim),
-            tab_active_fill: ov(
-                bar_ov.and_then(|b| b.tab_active_fill.as_ref()),
-                with_alpha(primary, 30),
-            ),
-            tab_inactive_fill: Color::rgba(0, 0, 0, 0),
-            tab_active_alpha: bar_ov.and_then(|b| b.tab_active_alpha).unwrap_or(180),
-            tab_inactive_alpha: bar_ov.and_then(|b| b.tab_inactive_alpha).unwrap_or(60),
-            media_tab_active: ov(bar_ov.and_then(|b| b.media_tab_active.as_ref()), text),
-            media_tab_inactive: ov(bar_ov.and_then(|b| b.media_tab_inactive.as_ref()), dim),
-            // Top tab-row text follows the media-tab colors unless a skin
-            // decouples them (e.g. dark top tabs over a light footer).
-            tab_text_active: ov(
-                bar_ov.and_then(|b| b.tab_text_active.as_ref()),
-                ov(bar_ov.and_then(|b| b.media_tab_active.as_ref()), text),
-            ),
-            tab_text_inactive: ov(
-                bar_ov.and_then(|b| b.tab_text_inactive.as_ref()),
-                ov(bar_ov.and_then(|b| b.media_tab_inactive.as_ref()), dim),
-            ),
-            pipe_color: ov(
-                bar_ov.and_then(|b| b.pipe_color.as_ref()).or(bar_text),
-                with_alpha(text, 60),
-            ),
-            r_hint_color: ov(
-                bar_ov.and_then(|b| b.r_hint_color.as_ref()).or(bar_text),
-                with_alpha(text, 140),
-            ),
-            category_label_color: ov(
-                bar_ov
-                    .and_then(|b| b.category_label_color.as_ref())
-                    .or(bar_text),
+            url_color: pick_text(|b| b.url_color.as_ref(), dim),
+            usb_color: pick_text(|b| b.usb_color.as_ref(), dim),
+            pipe_color: pick_text(|b| b.pipe_color.as_ref(), with_alpha(text, 60)),
+            r_hint_color: pick_text(|b| b.r_hint_color.as_ref(), with_alpha(text, 140)),
+            category_label_color: pick_text(
+                |b| b.category_label_color.as_ref(),
                 with_alpha(text, 220),
             ),
-            page_dot_active: ov(
-                bar_ov.and_then(|b| b.page_dot_active.as_ref()),
-                with_alpha(text, 200),
-            ),
-            page_dot_inactive: ov(
-                bar_ov.and_then(|b| b.page_dot_inactive.as_ref()),
-                with_alpha(text, 50),
-            ),
-            statusbar_gradient_top: Self::bar_gradient_pair(
-                skin,
-                bar_ov
-                    .and_then(|b| b.statusbar_gradient_top.as_ref())
-                    .or(grad_top),
-                bar_ov
-                    .and_then(|b| b.statusbar_gradient_bottom.as_ref())
-                    .or(grad_bottom),
-                status_bar_color,
-            )
-            .map(|(t, _)| t),
-            statusbar_gradient_bottom: Self::bar_gradient_pair(
-                skin,
-                bar_ov
-                    .and_then(|b| b.statusbar_gradient_top.as_ref())
-                    .or(grad_top),
-                bar_ov
-                    .and_then(|b| b.statusbar_gradient_bottom.as_ref())
-                    .or(grad_bottom),
-                status_bar_color,
-            )
-            .map(|(_, b)| b),
-            gradient_top: Self::bar_gradient_pair(
-                skin,
-                bar_ov
-                    .and_then(|b| b.bar_gradient_top.as_ref())
-                    .or(grad_top),
-                bar_ov
-                    .and_then(|b| b.bar_gradient_bottom.as_ref())
-                    .or(grad_bottom),
-                status_bar_color,
-            )
-            .map(|(t, _)| t),
-            gradient_bottom: Self::bar_gradient_pair(
-                skin,
-                bar_ov
-                    .and_then(|b| b.bar_gradient_top.as_ref())
-                    .or(grad_top),
-                bar_ov
-                    .and_then(|b| b.bar_gradient_bottom.as_ref())
-                    .or(grad_bottom),
-                status_bar_color,
-            )
-            .map(|(_, b)| b),
             text_shadow: bar_ov
                 .and_then(|b| b.text_shadow)
                 .unwrap_or(skin.gradient_enabled == Some(true)),
-            text_shadow_color: ov(
-                bar_ov.and_then(|b| b.text_shadow_color.as_ref()),
-                Color::rgba(0, 0, 0, 128),
-            ),
+            text_shadow_color: pick(|b| b.text_shadow_color.as_ref(), Color::rgba(0, 0, 0, 128)),
             version_text: bar_ov
                 .and_then(|b| b.version_text.clone())
                 .unwrap_or_else(|| "Version 0.1".to_string()),
@@ -617,46 +495,44 @@ impl ActiveTheme {
                 .and_then(|b| b.category_label.clone())
                 .unwrap_or_else(|| "OSS".to_string()),
             url_text: bar_ov.and_then(|b| b.url_text.clone()).unwrap_or_default(),
-            tab_active_stroke: with_alpha(
-                text,
-                bar_ov.and_then(|b| b.tab_active_alpha).unwrap_or(180),
-            ),
-            tab_inactive_stroke: with_alpha(
-                text,
-                bar_ov.and_then(|b| b.tab_inactive_alpha).unwrap_or(60),
-            ),
+
+            // Tabs. Top tab-row text follows the media-tab colors unless a
+            // skin decouples them (e.g. dark top tabs over a light footer).
+            tab_active_fill: pick(|b| b.tab_active_fill.as_ref(), with_alpha(primary, 30)),
+            tab_inactive_fill: Color::rgba(0, 0, 0, 0),
+            tab_active_alpha,
+            tab_inactive_alpha,
+            tab_active_stroke: with_alpha(text, tab_active_alpha),
+            tab_inactive_stroke: with_alpha(text, tab_inactive_alpha),
+            media_tab_active,
+            media_tab_inactive,
+            tab_text_active: pick(|b| b.tab_text_active.as_ref(), media_tab_active),
+            tab_text_inactive: pick(|b| b.tab_text_inactive.as_ref(), media_tab_inactive),
             tab_texture_active: bar_ov.and_then(|b| b.tab_texture_active.clone()),
             tab_texture_inactive: bar_ov.and_then(|b| b.tab_texture_inactive.clone()),
-            dock_button_fill: ov(
-                bar_ov.and_then(|b| b.dock_button_fill.as_ref()),
-                with_alpha(primary, 30),
-            ),
-            dock_button_glyph: ov(
-                bar_ov
-                    .and_then(|b| b.dock_button_glyph.as_ref())
-                    .or(bar_text),
-                with_alpha(text, 220),
-            ),
-            dock_progress_track: ov(
-                bar_ov.and_then(|b| b.dock_progress_track.as_ref()),
-                with_alpha(text, 40),
-            ),
-            dock_progress_fill: ov(
-                bar_ov.and_then(|b| b.dock_progress_fill.as_ref()),
-                with_alpha(primary, 200),
-            ),
-            dock_vol_track: ov(
-                bar_ov.and_then(|b| b.dock_vol_track.as_ref()),
-                with_alpha(text, 40),
-            ),
-            dock_vol_fill: ov(
-                bar_ov.and_then(|b| b.dock_vol_fill.as_ref()),
-                with_alpha(secondary, 160),
-            ),
-        };
 
-        // Derived (not skin-specified) bar text must stay readable on the bar
-        // it is drawn on; explicit colors are left to `skin lint`.
+            // Page dots.
+            page_dot_active: pick(|b| b.page_dot_active.as_ref(), with_alpha(text, 200)),
+            page_dot_inactive: pick(|b| b.page_dot_inactive.as_ref(), with_alpha(text, 50)),
+
+            // Media dock (`bottombar_style = "media_dock"`).
+            dock_button_fill: pick(|b| b.dock_button_fill.as_ref(), with_alpha(primary, 30)),
+            dock_button_glyph: pick_text(|b| b.dock_button_glyph.as_ref(), with_alpha(text, 220)),
+            dock_progress_track: pick(|b| b.dock_progress_track.as_ref(), with_alpha(text, 40)),
+            dock_progress_fill: pick(|b| b.dock_progress_fill.as_ref(), with_alpha(primary, 200)),
+            dock_vol_track: pick(|b| b.dock_vol_track.as_ref(), with_alpha(text, 40)),
+            dock_vol_fill: pick(|b| b.dock_vol_fill.as_ref(), with_alpha(secondary, 160)),
+        };
+        Self::keep_bar_text_readable(&mut bar, skin);
+        bar
+    }
+
+    /// Lift the derived URL and battery colors to a 3:1 contrast on the
+    /// bar each is drawn over. Colors the skin set explicitly (their own
+    /// key or `text_color`) are left alone; `skin lint` reports those.
+    fn keep_bar_text_readable(bar: &mut BarTheme, skin: &SkinTheme) {
+        let bar_ov = skin.bar_overrides.as_ref();
+        let bar_text = bar_ov.and_then(|b| b.text_color.as_ref());
         let explicit = |field: Option<&String>| {
             field
                 .or(bar_text)
@@ -677,7 +553,6 @@ impl ActiveTheme {
             );
             bar.battery_color = readable_on(bar.battery_color, backdrop, 3.0);
         }
-        bar
     }
 
     /// Derive the icon theme from skin overrides.

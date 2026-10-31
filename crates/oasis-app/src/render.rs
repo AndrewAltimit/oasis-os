@@ -38,6 +38,7 @@ pub fn update_sdi(state: &mut AppState, sdi: &mut SdiRegistry, vfs: &dyn Vfs) {
         Mode::Dashboard => {
             terminal_sdi::set_terminal_visible(sdi, false);
             state.ui.taskbar.hide_sdi(sdi);
+            state.ui.bottom_bar.reserve_taskbar = false;
 
             if state.ui.bottom_bar.active_tab == MediaTab::None {
                 state.ui.dashboard.update_sdi(sdi, &state.active_theme);
@@ -213,16 +214,19 @@ pub fn update_sdi(state: &mut AppState, sdi: &mut SdiRegistry, vfs: &dyn Vfs) {
                     .ui
                     .status_bar
                     .update_sdi(sdi, &state.active_theme, &state.skin.features);
+                // The bar lays out first and leaves the taskbar its span
+                // (clear of the URL plate, USB label and media dock).
+                state.ui.bottom_bar.reserve_taskbar = !state.wm.windows().is_empty();
                 state
                     .ui
                     .bottom_bar
                     .update_sdi(sdi, &state.active_theme, &state.skin.features);
-                state.ui.taskbar.update_sdi(
+                state.ui.taskbar.update_sdi_in(
                     sdi,
                     &state.active_theme,
                     state.wm.windows(),
                     state.wm.active_window(),
-                    state.skin.features.start_menu,
+                    state.ui.bottom_bar.taskbar_span(),
                 );
                 state.ui.taskbar.update_desktop_indicator(
                     sdi,

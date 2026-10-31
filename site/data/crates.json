@@ -79,7 +79,7 @@
     "video-decode",
     "video-decode-ffmpeg"
    ],
-   "loc": 35375,
+   "loc": 35494,
    "files": 65,
    "deps": [
     {
@@ -209,7 +209,7 @@
    "features": [
     "video-embed"
    ],
-   "loc": 2895,
+   "loc": 2898,
    "files": 5,
    "deps": [
     {
@@ -286,7 +286,7 @@
     "skin-ttf",
     "tls-rustls"
    ],
-   "loc": 25285,
+   "loc": 25645,
    "files": 72,
    "deps": [
     {
@@ -1135,7 +1135,7 @@
     "serialize",
     "ttf"
    ],
-   "loc": 15378,
+   "loc": 15346,
    "files": 34,
    "deps": [
     {
@@ -1404,7 +1404,7 @@
    "crate_type": [],
    "bins": [],
    "features": [],
-   "loc": 7038,
+   "loc": 7079,
    "files": 18,
    "deps": [
     {

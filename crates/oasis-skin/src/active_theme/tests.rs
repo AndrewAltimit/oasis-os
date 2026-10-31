@@ -1216,3 +1216,96 @@ fn derived_bar_text_is_readable_on_its_bar() {
     let status = crate::theme::bar_backdrop(at.bar.statusbar_bg, None, None, bg);
     assert!(ratio(at.bar.battery_color, status) >= 3.0);
 }
+
+// -- Full derivation pin ---------------------------------------------
+
+/// Canonical text form of every field of an `ActiveTheme`: its `Debug`
+/// dump with every `HashMap` (the three map fields and shader-layer float
+/// params) moved into sorted `BTreeMap`s, since `HashMap` iteration order
+/// is randomised per process.
+fn full_theme_dump(at: &ActiveTheme) -> String {
+    use oasis_vector::background::LayerKind;
+    use std::collections::BTreeMap;
+    let mut at = at.clone();
+    let mut shader_floats: Vec<BTreeMap<String, f32>> = Vec::new();
+    for layer in &mut at.background_layers {
+        if let LayerKind::Shader { params, .. } = &mut layer.kind {
+            shader_floats.push(std::mem::take(&mut params.floats).into_iter().collect());
+        }
+    }
+    let app_themes: BTreeMap<_, BTreeMap<_, _>> = std::mem::take(&mut at.app_themes)
+        .into_iter()
+        .map(|(app, colors)| (app, colors.into_iter().collect()))
+        .collect();
+    let gradients: BTreeMap<_, _> = std::mem::take(&mut at.gradients).into_iter().collect();
+    let animations: BTreeMap<_, _> = std::mem::take(&mut at.animations).into_iter().collect();
+    format!("{at:#?}\n{app_themes:#?}\n{gradients:#?}\n{animations:#?}\n{shader_floats:#?}")
+}
+
+fn fnv1a64(bytes: &[u8]) -> u64 {
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    for b in bytes {
+        h ^= u64::from(*b);
+        h = h.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    h
+}
+
+/// Pins *every* field `ActiveTheme::from_skin` derives, for every
+/// built-in skin plus a default (base-colors-only) skin -- unlike
+/// `cross_skin_palette_snapshot`, which samples 13 colors. Guards
+/// refactors of `derive.rs` that must not change behaviour.
+///
+/// On an intentional derivation change the failure prints the new
+/// table; paste it over `EXPECTED`.
+#[test]
+fn from_skin_full_derivation_pinned() {
+    use crate::builtin::{builtin_names, load_builtin};
+
+    const EXPECTED: &[(&str, u64)] = &[
+        ("<default>", 0x28be829252ad0ed7),
+        ("classic", 0xa92c6ef6936fc767),
+        ("altimit", 0xd51b7301db450b2c),
+        ("balatro", 0x9ea9fdb2725b681e),
+        ("corrupted", 0xe1747017ccad2d0c),
+        ("desktop", 0x3af6d26993d176ea),
+        ("gnome", 0xdf018d2ba18fe23f),
+        ("highcontrast", 0x59d10dfa62439c36),
+        ("macos", 0x95ff212ee7c1fd5e),
+        ("modern", 0x33641dd56f5a635b),
+        ("paper", 0x378783fb3bb048d5),
+        ("psix-hifi", 0xb41d6c6fba75cceb),
+        ("psix-tribute", 0xea269c7ec394d9be),
+        ("retro-cga", 0x13434cfd5b4f95a0),
+        ("solarized", 0xe831b2c3bb1b9a46),
+        ("vaporwave", 0x97611038297b2ac9),
+        ("win95", 0x65b113d7b554db41),
+        ("xp", 0x99c4d33754bac4e9),
+    ];
+
+    let mut cases: Vec<(String, SkinTheme)> = vec![("<default>".into(), SkinTheme::default())];
+    for name in builtin_names() {
+        let skin = load_builtin(name).expect("built-in skin loads");
+        cases.push(((*name).to_string(), skin.theme));
+    }
+    let actual: Vec<(String, u64)> = cases
+        .iter()
+        .map(|(name, theme)| {
+            let dump = full_theme_dump(&ActiveTheme::from_skin(theme));
+            (name.clone(), fnv1a64(dump.as_bytes()))
+        })
+        .collect();
+    let matches = actual.len() == EXPECTED.len()
+        && actual
+            .iter()
+            .zip(EXPECTED)
+            .all(|((n, h), (en, eh))| n == en && h == eh);
+    let table: String = actual
+        .iter()
+        .map(|(n, h)| format!("        (\"{n}\", {h:#018x}),\n"))
+        .collect();
+    assert!(
+        matches,
+        "ActiveTheme::from_skin output changed; new table:\n{table}"
+    );
+}

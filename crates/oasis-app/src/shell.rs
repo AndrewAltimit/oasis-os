@@ -711,10 +711,12 @@ impl<B: ShellBackend> Shell<B> {
         self.clock_origin = now;
     }
 
-    /// Seconds on the animation clock at `now`.
-    fn anim_secs(&self, now: Instant) -> f32 {
+    /// Seconds on the animation clock at `now`, unwrapped and in `f64` so
+    /// they keep sub-frame precision over any uptime (the shader bridge
+    /// wraps them before the shader sees them).
+    fn anim_secs(&self, now: Instant) -> f64 {
         now.saturating_duration_since(self.clock_origin)
-            .as_secs_f32()
+            .as_secs_f64()
     }
 
     /// Run one frame of shell logic for `events` at time `now`: input
@@ -899,7 +901,7 @@ impl<B: ShellBackend> Shell<B> {
             oasis_core::image_layers::tick_image_layers(
                 sdi,
                 &state.skin_assets.image_layers,
-                anim_secs,
+                anim_secs as f32,
                 state.active_theme.background_reduced_motion,
             );
         }
@@ -1160,7 +1162,7 @@ fn draw_frame<B: ShellBackend>(
     sdi: &mut SdiRegistry,
     backend: &mut B,
     shader_bridge: &mut Option<SdlShaderBridge>,
-    anim_secs: f32,
+    anim_secs: f64,
     phase_clock: &mut Option<frame_stats::PhaseClock>,
     advance_transition: bool,
 ) -> Result<()> {

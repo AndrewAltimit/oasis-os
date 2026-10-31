@@ -411,6 +411,9 @@ bios_text = "#CCCCCC"      # BIOS log lines + banner subtitle
 [start_menu_overrides]
 # Fallback color for items beyond the item_colors list (default "#646464").
 item_fallback_color = "#646464"
+# Start button shape: "pill" (default), "rect" (2 px corners) or "bevel"
+# (square with Win9x raised 3D edges, sunken while the menu is open).
+button_shape = "pill"
 # Also: panel_bg, panel_border, item_text, highlight_color, button_bg,
 #   button_text, item_colors, layout_mode, columns, ... (see
 #   StartMenuOverrides in oasis-skin for the full list)
