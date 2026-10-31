@@ -239,3 +239,59 @@ fn resolution_change_keeps_the_previewed_theme() {
     assert_eq!(h.state().skin.manifest.name, "classic");
     assert_eq!(h.state().skin.theme.background, "#123456");
 }
+
+/// Undoing back to the opened text left the Text Editor "[Modified]" (and
+/// closing it prompted to save); reopening Find appended to the previous
+/// query instead of replacing it.
+#[test]
+fn text_editor_undo_to_saved_is_clean_and_find_replaces_the_query() {
+    use oasis_core::input::Modifiers;
+    let mut h = Harness::new("classic");
+    h.settle();
+    run(&mut h, "open Text Editor /home/user/readme.txt");
+    h.settle();
+    h.type_text("x");
+    h.settle();
+    h.render_now();
+    assert!(h.text_drawn_contains("[Modified]"), "{:?}", h.frame_text());
+    h.key_with(Key::Char('z'), Modifiers::CTRL);
+    h.settle();
+    h.render_now();
+    assert!(!h.text_drawn_contains("[Modified]"), "{:?}", h.frame_text());
+
+    h.key_with(Key::Char('f'), Modifiers::CTRL);
+    h.type_text("first");
+    h.key(Key::Escape);
+    h.key_with(Key::Char('f'), Modifiers::CTRL);
+    h.settle();
+    h.render_now();
+    assert!(h.text_drawn_contains("Find: [first]"), "{:?}", h.frame_text());
+    h.type_text("second");
+    h.settle();
+    h.render_now();
+    assert!(h.text_drawn_contains("Find: second_"), "{:?}", h.frame_text());
+    assert!(!h.text_drawn_contains("firstsecond"), "{:?}", h.frame_text());
+}
+
+/// `tv tune` used to answer "Tuning to CH ..." with no TV Guide open, while
+/// the shell dropped the request. The shell now publishes the guide's
+/// status and the command reports that nothing can tune.
+#[test]
+fn tv_tune_without_an_open_guide_says_so() {
+    let mut h = Harness::new("classic");
+    h.settle();
+    run(&mut h, "tv tune 2");
+    assert!(
+        output_contains(&h, "the TV Guide is not open"),
+        "{:?}",
+        h.state().terminal.output_lines
+    );
+    assert!(!output_contains(&h, "Tuning to CH"));
+    assert!(h.open_app("TV Guide"));
+    h.settle();
+    let status = h.vfs().read(oasis_core::ipc::TV_STATUS_PATH).unwrap();
+    assert_eq!(
+        oasis_core::ipc::TvStatus::parse(&String::from_utf8_lossy(&status)),
+        Some(oasis_core::ipc::TvStatus::GuideOpen)
+    );
+}
