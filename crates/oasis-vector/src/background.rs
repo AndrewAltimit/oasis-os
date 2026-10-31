@@ -238,8 +238,8 @@ impl BackgroundScene {
         };
 
         let (ax, ay) = layer.position.anchor.resolve(w, h);
-        let cx = ax + (layer.position.offset_x * w as f32) as i32;
-        let cy = ay + (layer.position.offset_y * h as f32) as i32;
+        let cx = ax.saturating_add((layer.position.offset_x * w as f32) as i32);
+        let cy = ay.saturating_add((layer.position.offset_y * h as f32) as i32);
 
         let mut color = layer.color;
         color.a = ((color.a as f32 * pulse_alpha) as u8).max(1);
@@ -265,15 +265,16 @@ impl BackgroundScene {
                 if w == 0 || h == 0 {
                     return Vec::new();
                 }
-                let drift_x = if reduced_motion {
-                    0.0
+                // Wrapped to the viewport in f64: glass_shard wraps the
+                // drift anyway, and an f32 	ime * drift lost precision
+                // (the shard stuttered) as uptime grew.
+                let (drift_x, drift_y) = if reduced_motion {
+                    (0.0, 0.0)
                 } else {
-                    clock.time_s() * anim.drift_x
-                };
-                let drift_y = if reduced_motion {
-                    0.0
-                } else {
-                    clock.time_s() * anim.drift_y
+                    (
+                        clock.wrapped(anim.drift_x, w as f32),
+                        clock.wrapped(anim.drift_y, h as f32),
+                    )
                 };
                 backgrounds::glass_shard(points, w, h, color, drift_x, drift_y)
             },

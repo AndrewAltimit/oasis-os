@@ -146,7 +146,18 @@ Oscillators (`anim.rs`):
 - `sine(freq, phase) -> f32` — `sin(TAU * freq * time + phase)`, range -1..1.
 - `sine_norm(freq, phase) -> f32` — same, mapped to 0..1.
 - `sawtooth(period_s, phase) -> f32` — wrapping 0..1 ramp (negative
-  phases wrap forward).
+  phases wrap forward; a NaN period or phase gives 0).
+- `wrapped(rate, period) -> f32` — `time x rate` reduced modulo `period`
+  in `f64` (`[0, period)`). Drifting layers (`glass_shard`,
+  `floating_polygons`) wrap their drift to the viewport size with it, and
+  `waves` wraps its phase at 10 turns (where both of its harmonics repeat),
+  so motion stays smooth after any uptime.
+
+The frame-counter helpers `float_offset` / `pulse_alpha` reduce `frame x speed`
+to one turn in `f64` for the same reason (an `f32` product stalls past
+2^24 frames), and the layer factories do their coordinate math in `i64` /
+saturating `i32`, so extreme layer parameters (spacings above `i32::MAX`,
+huge bar widths, anchors near the `i32` range) clamp instead of overflowing.
 
 Easing curves (`anim.rs`):
 

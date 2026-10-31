@@ -8,60 +8,59 @@ use oasis_types::backend::Color;
 use crate::anim::AnimClock;
 use crate::op::VectorOp;
 
+/// Saturating `u32` -> `i32` for viewport sizes.
+fn sat_i32(v: u32) -> i32 {
+    i32::try_from(v).unwrap_or(i32::MAX)
+}
+
+/// Saturating `i64` -> `i32` for derived coordinates.
+fn clamp_i32(v: i64) -> i32 {
+    v.clamp(i64::from(i32::MIN), i64::from(i32::MAX)) as i32
+}
+
+/// Interior grid positions `spacing, 2*spacing, ... < len` (none when
+/// `spacing` is 0). Stepping in `u32` cannot overflow or run backwards
+/// the way an `i32` cursor did for spacings above `i32::MAX`.
+fn ticks(len: u32, spacing: u32) -> impl Iterator<Item = i32> {
+    let step = usize::try_from(spacing).unwrap_or(usize::MAX).max(1);
+    let end = if spacing == 0 { 0 } else { len };
+    (spacing..end).step_by(step).map(sat_i32)
+}
+
 /// Grid of thin lines at regular spacing.
 pub fn grid(w: u32, h: u32, spacing: u32, color: Color) -> Vec<VectorOp> {
-    if spacing == 0 {
-        return Vec::new();
-    }
-    let mut ops = Vec::new();
-    let mut x = spacing as i32;
-    while x < w as i32 {
-        ops.push(VectorOp::Line {
-            x1: x,
-            y1: 0,
-            x2: x,
-            y2: h as i32,
-            width: 1,
-            color,
-        });
-        x += spacing as i32;
-    }
-    let mut y = spacing as i32;
-    while y < h as i32 {
-        ops.push(VectorOp::Line {
-            x1: 0,
-            y1: y,
-            x2: w as i32,
-            y2: y,
-            width: 1,
-            color,
-        });
-        y += spacing as i32;
-    }
-    ops
+    let (wi, hi) = (sat_i32(w), sat_i32(h));
+    let vertical = ticks(w, spacing).map(|x| VectorOp::Line {
+        x1: x,
+        y1: 0,
+        x2: x,
+        y2: hi,
+        width: 1,
+        color,
+    });
+    let horizontal = ticks(h, spacing).map(|y| VectorOp::Line {
+        x1: 0,
+        y1: y,
+        x2: wi,
+        y2: y,
+        width: 1,
+        color,
+    });
+    vertical.chain(horizontal).collect()
 }
 
 /// Dot pattern at regular spacing.
 pub fn dot_grid(w: u32, h: u32, spacing: u32, radius: u16, color: Color) -> Vec<VectorOp> {
-    if spacing == 0 {
-        return Vec::new();
-    }
-    let mut ops = Vec::new();
-    let mut x = spacing as i32;
-    while x < w as i32 {
-        let mut y = spacing as i32;
-        while y < h as i32 {
-            ops.push(VectorOp::FillCircle {
+    ticks(w, spacing)
+        .flat_map(|x| {
+            ticks(h, spacing).map(move |y| VectorOp::FillCircle {
                 cx: x,
                 cy: y,
                 radius,
                 color,
-            });
-            y += spacing as i32;
-        }
-        x += spacing as i32;
-    }
-    ops
+            })
+        })
+        .collect()
 }
 
 /// Wireframe sphere with animated rotation.
@@ -84,9 +83,9 @@ pub fn wireframe_sphere(cx: i32, cy: i32, radius: u16, color: Color, angle: f32)
         },
         // Horizontal cross line
         VectorOp::Line {
-            x1: cx - r,
+            x1: cx.saturating_sub(r),
             y1: cy,
-            x2: cx + r,
+            x2: cx.saturating_add(r),
             y2: cy,
             width: 1,
             color,
@@ -94,27 +93,27 @@ pub fn wireframe_sphere(cx: i32, cy: i32, radius: u16, color: Color, angle: f32)
         // Vertical cross line
         VectorOp::Line {
             x1: cx,
-            y1: cy - r,
+            y1: cy.saturating_sub(r),
             x2: cx,
-            y2: cy + r,
+            y2: cy.saturating_add(r),
             width: 1,
             color,
         },
         // Rotating longitude line
         VectorOp::Line {
-            x1: cx + (inner_r as f32 * cos) as i32,
-            y1: cy - r,
-            x2: cx - (inner_r as f32 * cos) as i32,
-            y2: cy + r,
+            x1: cx.saturating_add((inner_r as f32 * cos) as i32),
+            y1: cy.saturating_sub(r),
+            x2: cx.saturating_sub((inner_r as f32 * cos) as i32),
+            y2: cy.saturating_add(r),
             width: 1,
             color,
         },
         // Perpendicular rotating line
         VectorOp::Line {
-            x1: cx + (inner_r as f32 * sin) as i32,
-            y1: cy - r,
-            x2: cx - (inner_r as f32 * sin) as i32,
-            y2: cy + r,
+            x1: cx.saturating_add((inner_r as f32 * sin) as i32),
+            y1: cy.saturating_sub(r),
+            x2: cx.saturating_sub((inner_r as f32 * sin) as i32),
+            y2: cy.saturating_add(r),
             width: 1,
             color,
         },
@@ -196,23 +195,17 @@ pub fn glass_shard(
 
 /// Horizontal scanlines across the viewport.
 pub fn scanlines(w: u32, h: u32, spacing: u16, color: Color) -> Vec<VectorOp> {
-    if spacing == 0 {
-        return Vec::new();
-    }
-    let mut ops = Vec::new();
-    let mut y = spacing as i32;
-    while y < h as i32 {
-        ops.push(VectorOp::Line {
+    let wi = sat_i32(w);
+    ticks(h, u32::from(spacing))
+        .map(|y| VectorOp::Line {
             x1: 0,
             y1: y,
-            x2: w as i32,
+            x2: wi,
             y2: y,
             width: 1,
             color,
-        });
-        y += spacing as i32;
-    }
-    ops
+        })
+        .collect()
 }
 
 /// Audio equalizer bar visualization.
@@ -227,8 +220,10 @@ pub fn eq_visualizer(
     clock: &AnimClock,
     reduced_motion: bool,
 ) -> Vec<VectorOp> {
-    let total_w = count as i32 * (bar_width as i32 + 2) - 2;
-    let start_x = cx - total_w / 2;
+    // i64: a large `bar_width` / `max_height` must not overflow i32.
+    let pitch = i64::from(bar_width) + 2;
+    let total_w = i64::from(count) * pitch - 2;
+    let start_x = i64::from(cx) - total_w / 2;
     let mut ops = Vec::with_capacity(count as usize);
     for i in 0..count {
         let h = if reduced_motion {
@@ -239,8 +234,8 @@ pub fn eq_visualizer(
             (norm * max_height as f32) as u32
         };
         let h = h.max(2);
-        let x = start_x + i as i32 * (bar_width as i32 + 2);
-        let y = cy - h as i32;
+        let x = clamp_i32(start_x + i64::from(i) * pitch);
+        let y = clamp_i32(i64::from(cy) - i64::from(h));
         ops.push(VectorOp::FillRect {
             x,
             y,
@@ -258,9 +253,9 @@ pub fn crosshair(cx: i32, cy: i32, size: u16, color: Color) -> Vec<VectorOp> {
     vec![
         // Horizontal
         VectorOp::Line {
-            x1: cx - s,
+            x1: cx.saturating_sub(s),
             y1: cy,
-            x2: cx + s,
+            x2: cx.saturating_add(s),
             y2: cy,
             width: 1,
             color,
@@ -268,9 +263,9 @@ pub fn crosshair(cx: i32, cy: i32, size: u16, color: Color) -> Vec<VectorOp> {
         // Vertical
         VectorOp::Line {
             x1: cx,
-            y1: cy - s,
+            y1: cy.saturating_sub(s),
             x2: cx,
-            y2: cy + s,
+            y2: cy.saturating_add(s),
             width: 1,
             color,
         },
@@ -306,20 +301,23 @@ pub fn floating_polygons(
     for i in 0..count {
         let phase = base_phase + i as f32 * 2.3;
         // Position: deterministic based on index, drifting over time
-        let base_x = (w as f32 * ((i as f32 * 0.37 + 0.1) % 1.0)) as i32;
-        let base_y = (h as f32 * ((i as f32 * 0.53 + 0.2) % 1.0)) as i32;
-        let dx = (clock.time_s() * drift_x + phase * 10.0) as i32;
-        let dy = (clock.time_s() * drift_y + phase * 7.0) as i32;
-        let cx = (base_x + dx).rem_euclid(w as i32);
-        let cy = (base_y + dy).rem_euclid(h as i32);
+        let (wf, hf) = (w as f32, h as f32);
+        let base_x = (wf * ((i as f32 * 0.37 + 0.1) % 1.0)).floor();
+        let base_y = (hf * ((i as f32 * 0.53 + 0.2) % 1.0)).floor();
+        // The drift is wrapped to the viewport in f64 first: `time * drift`
+        // in f32 lost precision with uptime and overflowed the i32 add.
+        let dx = clock.wrapped(drift_x, wf) + phase * 10.0;
+        let dy = clock.wrapped(drift_y, hf) + phase * 7.0;
+        let cx = (base_x + dx.trunc()).rem_euclid(wf) as i32;
+        let cy = (base_y + dy.trunc()).rem_euclid(hf) as i32;
         let radius = 8.0 + (i as f32 * 3.7) % 12.0;
 
         let mut points = Vec::with_capacity(sides);
         for s in 0..sides {
             let angle = core::f32::consts::TAU * s as f32 / sides as f32 + clock.angle(0.3, phase);
             points.push((
-                cx + (radius * angle.cos()) as i32,
-                cy + (radius * angle.sin()) as i32,
+                cx.saturating_add((radius * angle.cos()) as i32),
+                cy.saturating_add((radius * angle.sin()) as i32),
             ));
         }
         ops.push(VectorOp::FillPolygon { points, color });
@@ -380,10 +378,13 @@ pub fn waves(
     let segments = (w / 12).max(12) as usize;
     let seg_w = w as f32 / segments as f32;
     let mut ops = Vec::with_capacity(rows * segments);
+    // Both harmonics of `wave_y` (phase and 2.3 x phase) repeat after
+    // 10 turns, so wrapping the time term there is seamless -- and keeps
+    // the f32 sine arguments small for any uptime.
     let time = if reduced_motion {
         0.0
     } else {
-        clock.time_s() * speed
+        clock.wrapped(speed, 10.0 * core::f32::consts::TAU)
     };
 
     // Pre-compute wave points for each row.
@@ -540,6 +541,48 @@ mod tests {
     fn pulsing_core_two_ops() {
         let ops = pulsing_core(100, 100, 10, Color::WHITE);
         assert_eq!(ops.len(), 2);
+    }
+
+    #[test]
+    fn huge_spacing_terminates_without_lines() {
+        // Regression: `spacing as i32` went negative above i32::MAX and the
+        // cursor ran backwards forever (overflow panic in debug builds).
+        assert!(grid(480, 272, u32::MAX, Color::WHITE).is_empty());
+        assert!(dot_grid(480, 272, 3_000_000_000, 1, Color::WHITE).is_empty());
+        // Positions still match the old loop for normal sizes.
+        let ops = scanlines(10, 10, 3, Color::WHITE);
+        let ys: Vec<i32> = ops
+            .iter()
+            .map(|op| match op {
+                VectorOp::Line { y1, .. } => *y1,
+                _ => panic!("expected lines"),
+            })
+            .collect();
+        assert_eq!(ys, vec![3, 6, 9]);
+    }
+
+    #[test]
+    fn extreme_layer_parameters_do_not_overflow() {
+        let clock = AnimClock::new();
+        let ops = eq_visualizer(0, 0, 255, u32::MAX, u32::MAX, Color::WHITE, &clock, true);
+        assert_eq!(ops.len(), 255);
+        assert_eq!(
+            crosshair(i32::MAX, i32::MIN, u16::MAX, Color::WHITE).len(),
+            3
+        );
+        assert_eq!(
+            wireframe_sphere(i32::MIN, 0, u16::MAX, Color::WHITE, 1.0).len(),
+            5
+        );
+    }
+
+    #[test]
+    fn floating_polygons_stay_on_screen_after_long_uptime() {
+        // Regression: `time * drift` saturated to i32::MAX and the `+ base`
+        // overflowed after enough uptime with a fast drift.
+        let clock = AnimClock::from_frame(u32::MAX);
+        let ops = floating_polygons(480, 272, 4, 5, Color::WHITE, &clock, 1.0e6, -3.0e5, 0.5);
+        assert_eq!(ops.len(), 4);
     }
 
     #[test]

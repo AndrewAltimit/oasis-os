@@ -57,6 +57,20 @@ impl AnimClock {
         (turn + f64::from(phase)) as f32
     }
 
+    /// `time x rate` reduced modulo `period` (in `[0, period)`), computed in
+    /// `f64` so the result keeps full `f32` precision however long the
+    /// clock has run -- e.g. a drift of `rate` px/s wrapped to the screen
+    /// width, or a phase wrapped to a common period of its harmonics.
+    /// A non-positive or non-finite `period` (or non-finite `rate`) yields 0.
+    pub fn wrapped(&self, rate: f32, period: f32) -> f32 {
+        if !(period.is_finite() && period > 0.0 && rate.is_finite()) {
+            return 0.0;
+        }
+        let v = (self.time_s * f64::from(rate)).rem_euclid(f64::from(period)) as f32;
+        // Narrowing can round up to `period`; keep the range half-open.
+        if v >= period { 0.0 } else { v }
+    }
+
     /// Advance by one frame at 60fps.
     pub fn tick_frame(&mut self) {
         self.frame = self.frame.wrapping_add(1);
@@ -84,7 +98,8 @@ impl AnimClock {
 
     /// Sawtooth wave returning 0..1, wrapping every `period_s` seconds.
     pub fn sawtooth(&self, period_s: f32, phase: f32) -> f32 {
-        if period_s <= 0.0 {
+        // NaN would otherwise come out as NaN.
+        if period_s.is_nan() || period_s <= 0.0 || !phase.is_finite() {
             return 0.0;
         }
         // `rem_euclid`, not `%` + `abs`: a negative phase must wrap to the
@@ -123,29 +138,36 @@ pub fn entrance_slide_y(elapsed_ms: u32, duration_ms: u32, dist: i32) -> i32 {
 }
 
 /// Rotate a point `(px, py)` around `(cx, cy)` by `angle` radians.
+///
+/// Computed in `f64` and saturated back to `i32`, so extreme coordinates
+/// neither overflow nor lose precision.
 pub fn rotate_point(px: i32, py: i32, cx: i32, cy: i32, angle: f32) -> (i32, i32) {
-    let dx = (px - cx) as f32;
-    let dy = (py - cy) as f32;
-    let (sin, cos) = (angle.sin(), angle.cos());
+    let dx = f64::from(px) - f64::from(cx);
+    let dy = f64::from(py) - f64::from(cy);
+    let (sin, cos) = f64::from(angle).sin_cos();
     let rx = dx * cos - dy * sin;
     let ry = dx * sin + dy * cos;
     // Round, not truncate: truncation pulls negative offsets toward the
     // centre, so a 180-degree turn of (10, 0) landed on (-9, 0).
-    (cx + rx.round() as i32, cy + ry.round() as i32)
+    (
+        (f64::from(cx) + rx).round() as i32,
+        (f64::from(cy) + ry).round() as i32,
+    )
 }
 
 /// Rotate a `FillRect` into a `FillPolygon` by computing its 4 corner positions.
 ///
 /// The rotation is around the rectangle's center.
 pub fn rotate_rect(x: i32, y: i32, w: u32, h: u32, angle: f32, color: Color) -> VectorOp {
-    let cx = x + w as i32 / 2;
-    let cy = y + h as i32 / 2;
-    let corners = [
-        (x, y),
-        (x + w as i32, y),
-        (x + w as i32, y + h as i32),
-        (x, y + h as i32),
-    ];
+    // i64 so `x + w` cannot overflow; the far edges saturate to i32.
+    let sat = |v: i64| v.clamp(i64::from(i32::MIN), i64::from(i32::MAX)) as i32;
+    let (x1, y1) = (
+        sat(i64::from(x) + i64::from(w)),
+        sat(i64::from(y) + i64::from(h)),
+    );
+    let cx = sat(i64::from(x) + i64::from(w / 2));
+    let cy = sat(i64::from(y) + i64::from(h / 2));
+    let corners = [(x, y), (x1, y), (x1, y1), (x, y1)];
     let rotated: Vec<(i32, i32)> = corners
         .iter()
         .map(|&(px, py)| rotate_point(px, py, cx, cy, angle))
@@ -161,17 +183,23 @@ pub fn rotate_rect(x: i32, y: i32, w: u32, h: u32, angle: f32, color: Color) -> 
 /// Each slot is phase-shifted so icons bob at different times.
 /// Returns a Y offset in pixels.
 pub fn float_offset(frame: u32, slot: usize, amplitude: f32, speed: f32) -> i32 {
-    let phase = slot as f32 * 0.8; // stagger per icon
-    let t = frame as f32 * speed + phase;
-    (t.sin() * amplitude) as i32
+    let phase = slot as f64 * 0.8; // stagger per icon
+    (frame_phase(frame, speed, phase).sin() * amplitude) as i32
+}
+
+/// `frame x speed + phase` reduced to one turn in `f64`. An `f32` product
+/// stops advancing smoothly once the frame counter passes 2^24 (~3 days at
+/// 60 fps): consecutive frames round to the same value and the motion
+/// stutters.
+fn frame_phase(frame: u32, speed: f32, phase: f64) -> f32 {
+    (f64::from(frame) * f64::from(speed) + phase).rem_euclid(core::f64::consts::TAU) as f32
 }
 
 /// Compute a pulse alpha (0-255) for a given frame.
 ///
 /// Oscillates between `min_alpha` and 255 using a sine wave.
 pub fn pulse_alpha(frame: u32, speed: f32, min_alpha: u8) -> u8 {
-    let t = frame as f32 * speed;
-    let norm = (t.sin() + 1.0) * 0.5; // 0.0 to 1.0
+    let norm = (frame_phase(frame, speed, 0.0).sin() + 1.0) * 0.5; // 0.0 to 1.0
     let range = 255 - min_alpha as u16;
     (min_alpha as u16 + (norm * range as f32) as u16).min(255) as u8
 }
@@ -385,6 +413,51 @@ mod tests {
     fn blink_huge_interval_does_not_overflow() {
         assert!(blink_visible(0, u32::MAX));
         assert!(!blink_visible(u32::MAX - 1, u32::MAX));
+    }
+
+    #[test]
+    fn rotate_handles_extreme_coordinates() {
+        // Regression: `px - cx` overflowed i32 (a debug-build panic).
+        let (rx, _) = rotate_point(i32::MAX, 0, i32::MIN, 0, core::f32::consts::PI);
+        assert_eq!(rx, i32::MIN, "saturates instead of wrapping");
+        let VectorOp::FillPolygon { points, .. } =
+            rotate_rect(i32::MAX - 5, 0, u32::MAX, 10, 0.0, Color::WHITE)
+        else {
+            panic!("expected FillPolygon");
+        };
+        assert_eq!(points[1].0, i32::MAX);
+    }
+
+    #[test]
+    fn wrapped_stays_in_range_and_precise() {
+        let mut clock = AnimClock::new();
+        clock.time_s = 10_000_000.25; // ~4 months of uptime
+        let v = clock.wrapped(4.0, 480.0);
+        // 40_000_001 px mod 480 = 161: the quarter second survives.
+        assert!((v - 161.0).abs() < 1e-3, "{v}");
+        assert_eq!(clock.wrapped(1.0, 0.0), 0.0);
+        assert_eq!(clock.wrapped(1.0, f32::NAN), 0.0);
+        assert_eq!(clock.wrapped(f32::INFINITY, 10.0), 0.0);
+        let neg = clock.wrapped(-4.0, 480.0);
+        assert!((0.0..480.0).contains(&neg), "{neg}");
+    }
+
+    #[test]
+    fn sawtooth_rejects_nan_inputs() {
+        let clock = AnimClock::from_frame(90);
+        assert_eq!(clock.sawtooth(f32::NAN, 0.0), 0.0);
+        assert_eq!(clock.sawtooth(1.0, f32::NAN), 0.0);
+    }
+
+    #[test]
+    fn frame_oscillators_keep_advancing_after_days() {
+        // Past 2^24 frames an f32 `frame * speed` stalls between frames.
+        let f = 1 << 25;
+        let a = pulse_alpha(f, 0.05, 0);
+        let changed = (1..20).any(|d| pulse_alpha(f + d, 0.05, 0) != a);
+        assert!(changed, "pulse frozen at frame {f}");
+        let o = float_offset(f, 0, 50.0, 0.05);
+        assert!((1..20).any(|d| float_offset(f + d, 0, 50.0, 0.05) != o));
     }
 
     #[test]
