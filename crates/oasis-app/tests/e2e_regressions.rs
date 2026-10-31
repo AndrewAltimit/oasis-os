@@ -819,8 +819,10 @@ fn default_windows_fit_the_screen() {
                 w.frame
             );
             let (_, _, cw, ch) = w.content;
+            // Full default size, or shortened to fill the screen below
+            // the skin's top chrome (WindowManager::set_placement_insets).
             assert!(
-                cw >= 380 && ch >= 220,
+                cw >= 380 && (ch >= 220 || y + fh as i32 == sh as i32),
                 "{skin}: {} content {:?}",
                 w.id,
                 w.content
