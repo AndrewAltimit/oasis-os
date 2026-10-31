@@ -1013,3 +1013,23 @@ fn long_lines_scroll_horizontally_to_keep_the_caret_visible() {
         app.cursor_col
     );
 }
+
+#[test]
+fn click_hit_testing_uses_the_backend_font_widths() {
+    // A TTF skin: every glyph 10 px wide, far from the bitmap font's
+    // 3-8 px advances. The caret must land on the glyph drawn under the
+    // click, which needs the widths the backend measured while drawing.
+    use oasis_test_backend::NullBackend;
+    let line = "iiiiiiiiiiWWWW";
+    let mut app = TextEditorApp::open_file("/t.txt", line);
+    let theme = oasis_skin::ActiveTheme::default();
+    app.layout(400, 300, &theme);
+    let mut ttf = NullBackend::default().with_measure_text_fn(|t, _| t.chars().count() as u32 * 10);
+    app.draw_windowed(0, 0, 400, 300, &mut ttf, &theme).unwrap();
+    let vfs = make_vfs();
+    // Just right of the boundary after the 6th glyph (8 px text inset).
+    click_at(&mut app, 8 + 60 + 1, 26, 400, 300, &vfs);
+    assert_eq!(app.cursor_col, 6);
+    click_at(&mut app, 8 + 120 - 1, 26, 400, 300, &vfs);
+    assert_eq!(app.cursor_col, 12);
+}
