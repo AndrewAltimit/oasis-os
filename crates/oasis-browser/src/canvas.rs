@@ -87,12 +87,24 @@ impl CanvasCommand {
             _ => 0,
         }
     }
+
+    /// Text bytes the command holds (0 for non-text commands).
+    fn text_len(&self) -> usize {
+        match self {
+            Self::FillText { text, .. } => text.len(),
+            _ => 0,
+        }
+    }
 }
 
 /// Most commands one canvas keeps (see [`CanvasState::push_command`]).
 pub const MAX_CANVAS_COMMANDS: usize = 16_384;
 /// Most path points one canvas's commands hold in total.
 pub const MAX_CANVAS_POINTS: usize = 1 << 20;
+/// Most `fillText` bytes one canvas's commands hold in total. Without it
+/// the command cap alone let a script park 16 384 copies of one huge
+/// string (each copied out of the JS heap, so not bounded by its limit).
+pub const MAX_CANVAS_TEXT_BYTES: usize = 1 << 20;
 /// Deepest `save()` stack kept.
 pub const MAX_SAVE_DEPTH: usize = 1024;
 
@@ -130,6 +142,8 @@ pub struct CanvasState {
     state_stack: Vec<CanvasSavedState>,
     /// Path points held by `commands` (pushed via [`Self::push_command`]).
     held_points: usize,
+    /// Text bytes held by `commands` (pushed via [`Self::push_command`]).
+    held_text: usize,
     /// Commands were dropped because the list hit its cap (see
     /// [`Self::push_command`]); reset by a full-canvas `clearRect`.
     pub overflowed: bool,
@@ -150,6 +164,7 @@ impl CanvasState {
             path_start: None,
             state_stack: Vec::new(),
             held_points: 0,
+            held_text: 0,
             overflowed: false,
         }
     }
@@ -174,12 +189,15 @@ impl CanvasState {
         {
             self.commands.clear();
             self.held_points = 0;
+            self.held_text = 0;
             self.overflowed = false;
             return;
         }
         let points = cmd.point_count();
+        let text = cmd.text_len();
         if self.commands.len() >= MAX_CANVAS_COMMANDS
             || self.held_points.saturating_add(points) > MAX_CANVAS_POINTS
+            || self.held_text.saturating_add(text) > MAX_CANVAS_TEXT_BYTES
         {
             if !self.overflowed {
                 log::warn!(
@@ -192,6 +210,7 @@ impl CanvasState {
             return;
         }
         self.held_points += points;
+        self.held_text += text;
         self.commands.push(cmd);
     }
 
@@ -517,6 +536,34 @@ mod tests {
             cs.save();
         }
         assert_eq!(cs.state_stack.len(), MAX_SAVE_DEPTH);
+    }
+
+    /// Regression: `fillText` with one huge string, repeated, was bounded
+    /// only by the command count (16 384 copies of the string).
+    #[test]
+    fn canvas_text_bytes_are_bounded() {
+        let mut cs = CanvasState::new(10, 10);
+        let big = "x".repeat(256 * 1024);
+        for _ in 0..64 {
+            cs.push_command(CanvasCommand::FillText {
+                text: big.clone(),
+                x: 0.0,
+                y: 0.0,
+                color: Color::BLACK,
+                font_size: 10.0,
+            });
+        }
+        assert!(cs.held_text <= MAX_CANVAS_TEXT_BYTES);
+        assert_eq!(cs.commands.len(), MAX_CANVAS_TEXT_BYTES / big.len());
+        assert!(cs.overflowed);
+        // A full clear releases the budget.
+        cs.push_command(CanvasCommand::ClearRect {
+            x: 0.0,
+            y: 0.0,
+            w: 10.0,
+            h: 10.0,
+        });
+        assert_eq!(cs.held_text, 0);
     }
 
     /// Regression: past the cap the oldest half of the commands was

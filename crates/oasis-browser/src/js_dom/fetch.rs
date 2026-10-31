@@ -365,6 +365,12 @@ pub(crate) struct BrowserFetchHandler {
     page_url_str: String,
     csp: Option<CspPolicy>,
     transport: Box<dyn FetchTransport>,
+    /// Network class of a web page's host, pinned when the page's bindings
+    /// are installed (right after it loaded). Re-resolving on every
+    /// `fetch()` let classic DNS rebinding promote a page: `evil.example`
+    /// served from a public address, then re-pointed at `127.0.0.1`,
+    /// counted as a loopback page and could read loopback services.
+    page_class: Option<NetClass>,
 }
 
 impl BrowserFetchHandler {
@@ -373,11 +379,17 @@ impl BrowserFetchHandler {
         csp: Option<CspPolicy>,
         transport: Box<dyn FetchTransport>,
     ) -> Self {
+        let parsed = crate::loader::Url::parse(page_url).filter(|u| !u.host.is_empty());
+        let page_class = parsed
+            .as_ref()
+            .filter(|u| is_web_scheme(u))
+            .map(|p| classify_page_host(&p.host, &|h| transport.resolve_host(h)));
         Self {
-            page_url: crate::loader::Url::parse(page_url).filter(|u| !u.host.is_empty()),
+            page_url: parsed,
             page_url_str: page_url.to_string(),
             csp,
             transport,
+            page_class,
         }
     }
 
@@ -495,8 +507,7 @@ impl FetchHandler for BrowserFetchHandler {
         // Web-origin policy: network class, same-origin / CORS.
         let page = self.page_url.as_ref().filter(|u| is_web_scheme(u));
         let page_origin = page.and_then(Url::origin);
-        let page_class =
-            page.map(|p| classify_page_host(&p.host, &|h| self.transport.resolve_host(h)));
+        let page_class = page.and(self.page_class);
         let target_origin = target.origin();
         if let (Some(page_origin), Some(page_class)) = (&page_origin, page_class) {
             let target_class = self.classify(&target);

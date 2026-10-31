@@ -822,7 +822,7 @@
     "web-fonts",
     "webp"
    ],
-   "loc": 62709,
+   "loc": 62868,
    "files": 111,
    "deps": [
     {
@@ -1325,7 +1325,7 @@
    "crate_type": [],
    "bins": [],
    "features": [],
-   "loc": 2899,
+   "loc": 2926,
    "files": 9,
    "deps": [
     {
@@ -1558,7 +1558,7 @@
     "kernel-mode",
     "kernel-volatile"
    ],
-   "loc": 21747,
+   "loc": 21759,
    "files": 68,
    "deps": [
     {
@@ -1605,7 +1605,7 @@
     "oasis-plugin-psp"
    ],
    "features": [],
-   "loc": 10685,
+   "loc": 10692,
    "files": 18,
    "deps": []
   },
@@ -1623,7 +1623,7 @@
     "oasis-recovery-psp"
    ],
    "features": [],
-   "loc": 648,
+   "loc": 660,
    "files": 2,
    "deps": [
     {

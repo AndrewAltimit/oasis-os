@@ -339,6 +339,13 @@ unsafe extern "C" fn devloop_thread(_: usize, _: *mut c_void) -> i32 {
             let mut line = [0u8; 128];
             let mut len = 0usize;
             while len < line.len() && !line[..len].contains(&b'\n') {
+                // SO_RCVTIMEO bounds each recv, not the whole answer: cap
+                // the total too, or a peer trickling one byte per timeout
+                // holds the single-threaded server for ~20 minutes.
+                if psp::sys::sceKernelGetSystemTimeWide() - now > 10_000_000 {
+                    len = 0;
+                    break;
+                }
                 let got = recv(
                     cfd,
                     line[len..].as_mut_ptr() as *mut c_void,

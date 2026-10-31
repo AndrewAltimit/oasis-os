@@ -135,8 +135,20 @@ pub(crate) fn parse_head(head: &[u8]) -> Result<RequestHead, u16> {
                     Err(_) => return Err(413),
                 }
             },
-            "host" => host = Some(value.to_string()),
-            "origin" => origin = Some(value.to_string()),
+            // A second `Host` (RFC 9112 3.2: answer 400) or `Origin` would
+            // silently replace the first, so the gate could vet a different
+            // value than a front proxy or the client meant.
+            "host" | "origin" => {
+                let slot = if name_l == "host" {
+                    &mut host
+                } else {
+                    &mut origin
+                };
+                if slot.is_some() {
+                    return Err(400);
+                }
+                *slot = Some(value.to_string());
+            },
             "content-type" => content_type = Some(value.to_string()),
             // Only `Content-Length` framing is supported: any transfer
             // coding (`chunked`, `gzip, chunked`, even `identity`) would

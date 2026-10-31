@@ -779,6 +779,22 @@ All additions are new symbols; existing exports keep their signatures.
   expanded); `Locale::from_code` is case-insensitive and accepts `ja_JP.UTF-8`-style codes.
 - `oasis-platform`: `OASIS_FIXED_TIME` rejects impossible dates such as `2025-02-29`.
 
+### Security
+
+- Browser `fetch()`: the page's network class is pinned when its bindings are installed
+  instead of re-resolved on every call, so DNS rebinding (the page's name re-pointed at
+  `127.0.0.1` after load) can no longer turn a public page into a loopback one that reads
+  local services.
+- Browser JS: `fillText` text held by one canvas is capped at 1 MiB (16 384 copies of one
+  huge string could exhaust host memory), and the navigation queue is bounded: a new
+  `location` navigation cancels pending ones (a loop no longer queues a page load per
+  iteration) and at most 16 `history.back()` / `forward()` calls queue per frame.
+- MCP server: a request with a duplicate `Host` or `Origin` header is refused with `400`
+  (the last value used to win, so the gate could vet a different value than a proxy did).
+- PSP dev servers (EBOOT command server, recovery file server, overlay devloop): the whole
+  `AUTH` answer must arrive within 10 s; the per-`recv` timeout alone let a peer trickling
+  one byte at a time hold the single-threaded server for ~20 minutes.
+
 ## Unreleased -- overhaul (`overhaul/site-code-docs-2026-10`)
 
 A repository-wide cleanup: bug fixes from a full code review and an

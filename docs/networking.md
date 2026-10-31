@@ -186,7 +186,9 @@ cannot link std crates, carries a bounded one-shot SHA-256 / HMAC copy
 (`oasis-plugin-psp/src/auth.rs`). Nonces condense the RTC / system timer,
 a counter and the previous nonce with SHA-256 (the PSP has no OS entropy
 source). A failed answer costs the peer a 2 s stall of the single-threaded
-accept loop, and an unanswered challenge times out after 10 s. As with the
+accept loop, and the whole `AUTH` line must arrive within 10 s of the
+challenge (a per-`recv` timeout alone let a peer trickle one byte per
+timeout and hold the server for minutes). As with the
 remote terminal the session is plaintext: trusted networks only.
 
 ## TLS
