@@ -39,17 +39,14 @@
 //! - **String / memory** routines (`strchr`, `strcmp`, `memchr`, …)
 //!   are straightforward byte loops — most live on the order of
 //!   5-10 lines each.
-//! - **stdio** (`printf`, `snprintf`, `fwrite`, …) is a tiny format
-//!   string interpreter that handles only the conversions QuickJS
-//!   actually uses (`%d`, `%u`, `%ld`, `%lld`, `%s`, `%c`, `%p`,
-//!   `%x`, `%X`, `%o`, `%%`, `%f`, `%e`, `%g`, width/precision,
-//!   zero-padding, `#` alternate form, and `*` dynamic width).
-//!   Output goes to a PSP log file on the memory stick for
-//!   `stdout`/`stderr`-bound writes and to the caller's buffer for
-//!   `snprintf`-style writes. Not C99-complete, just
-//!   QuickJS-complete.
+//! - **stdio** (`printf`, `snprintf`, `fwrite`, …) are stubs: the
+//!   `printf` family writes nothing, and `snprintf` / `vsnprintf`
+//!   only NUL-terminate the buffer (so C-side formatted messages,
+//!   e.g. some QuickJS error texts, come out empty). `fwrite` /
+//!   `fputc` report success and discard the bytes.
 //! - **Time** wraps `psp::sys::sceRtc*` and returns UTC `struct tm`
-//!   values. Timezone support is stubbed — PSP has no concept of a
+//!   values, with the struct layouts of pspdev's newlib (64-bit
+//!   `time_t`, 36-byte `struct tm`; see the time section). Timezone support is stubbed — PSP has no concept of a
 //!   runtime-configurable timezone and QuickJS only uses these for
 //!   `Date` bookkeeping.
 //! - **`abort`** / **`__assert_func`** dispatch to Rust's panic.
@@ -539,19 +536,35 @@ pub unsafe extern "C" fn fwrite(
 // and stub difftime to a plain subtraction.
 // ---------------------------------------------------------------------------
 
+// These must match the pspdev newlib headers QuickJS is compiled against,
+// as measured with the toolchain in docker/psp-build.Dockerfile
+// (`sizeof` / `offsetof` probe, psp-gcc 15.2): `time_t` is 64-bit (newlib
+// without `_USE_LONG_TIME_T`), `struct timespec` / `struct timeval` are 16
+// bytes with the second field at offset 8, and `struct tm` is the 9 ints
+// (36 bytes) -- newlib has no `tm_gmtoff` / `tm_zone`, which is why
+// QuickJS-NG defines `NO_TM_GMTOFF` for it. A wider Rust struct here
+// writes past the caller's stack `struct tm`.
+
+/// newlib's `time_t`.
+pub type TimeT = i64;
+
 #[repr(C)]
 #[derive(Default)]
 pub struct Timespec {
-    pub tv_sec: c_long,
+    pub tv_sec: TimeT,
     pub tv_nsec: c_long,
 }
 
 #[repr(C)]
 #[derive(Default)]
 pub struct Timeval {
-    pub tv_sec: c_long,
+    pub tv_sec: TimeT,
     pub tv_usec: c_long,
 }
+
+const _: () = assert!(core::mem::size_of::<Timespec>() == 16);
+const _: () = assert!(core::mem::size_of::<Timeval>() == 16);
+const _: () = assert!(core::mem::size_of::<Tm>() == 36);
 
 #[repr(C)]
 #[derive(Default)]
@@ -565,8 +578,6 @@ pub struct Tm {
     pub tm_wday: c_int,
     pub tm_yday: c_int,
     pub tm_isdst: c_int,
-    pub tm_gmtoff: c_long,
-    pub tm_zone: *const c_char,
 }
 
 /// Read the PSP RTC and return (unix seconds, nanoseconds).
@@ -596,7 +607,7 @@ pub unsafe extern "C" fn clock_gettime(_clk_id: c_int, tp: *mut Timespec) -> c_i
     let (s, n) = rtc_now();
     // SAFETY: `tp` is non-null and writable (C contract).
     unsafe {
-        (*tp).tv_sec = s as c_long;
+        (*tp).tv_sec = s;
         (*tp).tv_nsec = n as c_long;
     }
     0
@@ -610,7 +621,7 @@ pub unsafe extern "C" fn gettimeofday(tv: *mut Timeval, _tz: *mut c_void) -> c_i
     let (s, n) = rtc_now();
     // SAFETY: `tv` is non-null and writable (C contract).
     unsafe {
-        (*tv).tv_sec = s as c_long;
+        (*tv).tv_sec = s;
         (*tv).tv_usec = (n / 1000) as c_long;
     }
     0
@@ -661,8 +672,6 @@ fn unix_to_tm(t: i64, out: &mut Tm) {
     }
     out.tm_mon = month as i32;
     out.tm_isdst = 0;
-    out.tm_gmtoff = 0;
-    out.tm_zone = ptr::null();
 }
 
 fn tm_to_unix(t: &Tm) -> i64 {
@@ -687,13 +696,13 @@ fn tm_to_unix(t: &Tm) -> i64 {
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn gmtime_r(t: *const c_long, out: *mut Tm) -> *mut Tm {
+pub unsafe extern "C" fn gmtime_r(t: *const TimeT, out: *mut Tm) -> *mut Tm {
     if t.is_null() || out.is_null() {
         return ptr::null_mut();
     }
     // SAFETY: both pointers are non-null; `t` is readable and `out`
     // writable (C `gmtime_r` contract).
-    let secs = unsafe { *t } as i64;
+    let secs = unsafe { *t };
     // SAFETY: as above.
     unsafe {
         *out = Tm::default();
@@ -703,14 +712,14 @@ pub unsafe extern "C" fn gmtime_r(t: *const c_long, out: *mut Tm) -> *mut Tm {
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn localtime_r(t: *const c_long, out: *mut Tm) -> *mut Tm {
+pub unsafe extern "C" fn localtime_r(t: *const TimeT, out: *mut Tm) -> *mut Tm {
     // PSP has no timezone database; "local" == UTC.
     // SAFETY: same contract as `gmtime_r`.
     unsafe { gmtime_r(t, out) }
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn mktime(t: *mut Tm) -> c_long {
+pub unsafe extern "C" fn mktime(t: *mut Tm) -> TimeT {
     if t.is_null() {
         return -1;
     }
@@ -721,11 +730,11 @@ pub unsafe extern "C" fn mktime(t: *mut Tm) -> c_long {
     unsafe {
         unix_to_tm(secs, &mut *t);
     }
-    secs as c_long
+    secs
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn difftime(a: c_long, b: c_long) -> c_double {
+pub extern "C" fn difftime(a: TimeT, b: TimeT) -> c_double {
     (a - b) as c_double
 }
 

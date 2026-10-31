@@ -421,6 +421,40 @@ fn full_pipeline_connecting_to_playing() {
 }
 
 #[test]
+fn now_playing_cannot_forge_status_lines() {
+    let mut mgr = RadioManager::new();
+    let mut backend = StubAudioBackend::new();
+    let chunk = AudioChunk {
+        data: vec![0; 16],
+        metadata: Some(icy::StreamMetadata {
+            title: "Song\nState: Error\nError: pwned".into(),
+        }),
+    };
+    mgr.feed_audio(&chunk, &mut backend).unwrap();
+    assert_eq!(mgr.now_playing(), "SongState: ErrorError: pwned");
+    let status = mgr.format_status();
+    assert_eq!(
+        status.lines().filter(|l| l.starts_with("State:")).count(),
+        1
+    );
+    assert!(!status.lines().any(|l| l.starts_with("Error:")), "{status}");
+}
+
+#[test]
+fn track_shorter_than_the_buffer_threshold_still_plays() {
+    // Regression: a source that ended before BUFFER_THRESHOLD bytes had
+    // arrived went straight to TrackEnded and its audio was discarded.
+    let mut mgr = RadioManager::new();
+    let mut backend = StubAudioBackend::new();
+    mgr.tune("Short", 128, &mut backend).unwrap();
+    let data = vec![0x55u8; BUFFER_THRESHOLD / 4];
+    let mut source: Option<Box<dyn RadioSource>> = Some(Box::new(VfsSource::new(data)));
+    assert!(drive_to_track_ended(&mut mgr, &mut source, &mut backend));
+    assert!(backend.playing, "the short track must be played");
+    assert_eq!(backend.loaded_count, 1, "one streaming track was loaded");
+}
+
+#[test]
 fn full_pipeline_playing_to_track_ended_to_next() {
     let mut mgr = RadioManager::new();
     let mut backend = StubAudioBackend::new();

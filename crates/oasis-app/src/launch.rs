@@ -2,13 +2,13 @@
 //! (dashboard click / Confirm, start menu, `OASIS_APP`, MCP, the browser
 //! IPC, "open with" hand-offs between apps).
 
+use crate::ui_sound::UiSound;
 use oasis_core::active_theme::ActiveTheme;
 use oasis_core::apps::{AppAction, AppRunner};
 use oasis_core::browser::BrowserWidget;
 use oasis_core::dashboard::AppEntry;
 use oasis_core::sdi::SdiRegistry;
 use oasis_core::transition;
-use oasis_core::ui_sound::UiSound;
 use oasis_core::vfs::MemoryVfs;
 use oasis_core::wm::manager::WindowManager;
 use oasis_core::wm::window::{WindowConfig, WindowState, WindowType};

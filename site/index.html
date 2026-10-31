@@ -37,7 +37,7 @@
     "codeRepository": "https://github.com/AndrewAltimit/oasis-os",
     "programmingLanguage": "Rust",
     "license": ["https://opensource.org/licenses/MIT", "https://unlicense.org/"],
-    "version": "1.4.0",
+    "version": "1.6.0",
     "url": "https://andrewaltimit.github.io/oasis-os/"
   }
   </script>
@@ -65,6 +65,7 @@
         <li><a href="#skins">Skins</a></li>
         <li><a href="#features">Features</a></li>
         <li><a href="#architecture">Architecture</a></li>
+        <li><a href="crates.html">Crates</a></li>
         <li><a href="#psp">PSP</a></li>
         <li><a href="#journal">Journal</a></li>
         <li><a href="#start">Build</a></li>
@@ -85,7 +86,7 @@
 <section class="hero" aria-labelledby="hero-title">
   <div class="hero__grid wrap">
     <div class="hero__copy">
-      <p class="badge"><span class="dot" aria-hidden="true"></span> v1.4.0 &middot; Rust 2024 &middot; MIT / Unlicense</p>
+      <p class="badge"><span class="dot" aria-hidden="true"></span> v1.6.0 &middot; Rust 2024 &middot; MIT / Unlicense</p>
       <h1 class="hero__title" id="hero-title">
         One OS shell.<br>
         <span class="hero__title-accent">Any pixel buffer.</span>
@@ -153,7 +154,7 @@
     <header class="section__head section__head--split">
       <div>
         <p class="kicker">01 &mdash; What it is</p>
-        <h2 id="what-title">A whole operating environment behind thirteen methods.</h2>
+        <h2 id="what-title">A whole operating environment behind twelve methods.</h2>
       </div>
       <p class="section__lede">
         Not a UI toolkit: a complete shell &mdash; dashboard, windows, apps, a terminal, a browser &mdash;
@@ -175,8 +176,8 @@
           <span class="step__no" aria-hidden="true">2</span>
           <div>
             <h3>Implement the contract</h3>
-            <p><code>SdiCore</code>&rsquo;s 13 required methods plus <code>InputBackend::poll_events</code>.
-              One macro line fills in eight extension traits &mdash; 46 default methods for shapes,
+            <p><code>SdiCore</code>&rsquo;s 12 required methods plus <code>InputBackend::poll_events</code>.
+              One macro line fills in eight extension traits &mdash; 45 default methods for shapes,
               gradients, text, textures, clipping, vector paths, batching and render targets.</p>
           </div>
         </li>
@@ -209,19 +210,21 @@
     <span class="tk">fn</span> <span class="tf">draw_text</span>(&amp;<span class="tk">mut</span> self, text: &amp;<span class="tt">str</span>, x: <span class="tt">i32</span>, y: <span class="tt">i32</span>, font_size: <span class="tt">u16</span>, color: <span class="tt">Color</span>)
     -&gt; <span class="tt">Result</span>&lt;()&gt;;
     <span class="tk">fn</span> <span class="tf">swap_buffers</span>(&amp;<span class="tk">mut</span> self) -&gt; <span class="tt">Result</span>&lt;()&gt;;
-    <span class="tk">fn</span> <span class="tf">load_texture</span>(&amp;<span class="tk">mut</span> self, width: <span class="tt">u32</span>, height: <span class="tt">u32</span>, rgba_data: &amp;[<span class="tt">u8</span>]) -&gt; <span class="tt">Result</span>&lt;<span class="tt">TextureId</span>&gt;;
+    <span class="tk">fn</span> <span class="tf">load_texture</span>(&amp;<span class="tk">mut</span> self, width: <span class="tt">u32</span>, height: <span class="tt">u32</span>, rgba_data: &amp;[<span class="tt">u8</span>])
+    -&gt; <span class="tt">Result</span>&lt;<span class="tt">TextureId</span>&gt;;
     <span class="tk">fn</span> <span class="tf">destroy_texture</span>(&amp;<span class="tk">mut</span> self, tex: <span class="tt">TextureId</span>) -&gt; <span class="tt">Result</span>&lt;()&gt;;
     <span class="tk">fn</span> <span class="tf">set_clip_rect</span>(&amp;<span class="tk">mut</span> self, x: <span class="tt">i32</span>, y: <span class="tt">i32</span>, w: <span class="tt">u32</span>, h: <span class="tt">u32</span>) -&gt; <span class="tt">Result</span>&lt;()&gt;;
     <span class="tk">fn</span> <span class="tf">reset_clip_rect</span>(&amp;<span class="tk">mut</span> self) -&gt; <span class="tt">Result</span>&lt;()&gt;;
-    <span class="tk">fn</span> <span class="tf">measure_text</span>(&amp;self, text: &amp;<span class="tt">str</span>, font_size: <span class="tt">u16</span>) -&gt; <span class="tt">u32</span>;
     <span class="tk">fn</span> <span class="tf">read_pixels</span>(&amp;self, x: <span class="tt">i32</span>, y: <span class="tt">i32</span>, w: <span class="tt">u32</span>, h: <span class="tt">u32</span>) -&gt; <span class="tt">Result</span>&lt;<span class="tt">Vec</span>&lt;<span class="tt">u8</span>&gt;&gt;;
     <span class="tk">fn</span> <span class="tf">shutdown</span>(&amp;<span class="tk">mut</span> self) -&gt; <span class="tt">Result</span>&lt;()&gt;;
 
+    <span class="tc">// provided: the bitmap font's width (override for your own fonts)</span>
+    <span class="tk">fn</span> <span class="tf">measure_text</span>(&amp;self, text: &amp;<span class="tt">str</span>, font_size: <span class="tt">u16</span>) -&gt; <span class="tt">u32</span> { ... }
     <span class="tc">// provided: override to report a resized window or a bound render target</span>
     <span class="tk">fn</span> <span class="tf">viewport_size</span>(&amp;self) -&gt; (<span class="tt">u32</span>, <span class="tt">u32</span>) { ... }
 }
 
-<span class="tc">// Implement those 13 for your type, then one line buys all eight extension traits:</span>
+<span class="tc">// Implement those 12 for your type, then one line buys all eight extension traits:</span>
 <span class="tm">oasis_types::impl_sdi_defaults!</span>(<span class="tt">MyBackend</span>);</code></pre>
         </div>
         <div role="tabpanel" id="cpanel-ffi" aria-labelledby="ctab-ffi" tabindex="0" hidden>
@@ -578,18 +581,25 @@
 <!-- ============================================================ -->
 <section class="section section--alt" id="features" aria-labelledby="features-title">
   <div class="wrap">
-    <header class="section__head">
-      <p class="kicker">04 &mdash; Inside the shell</p>
-      <h2 id="features-title">Subsystems built from scratch, then made small enough to travel.</h2>
+    <header class="section__head section__head--split">
+      <div>
+        <p class="kicker">04 &mdash; Inside the shell</p>
+        <h2 id="features-title">Subsystems built from scratch, then made small enough to travel.</h2>
+      </div>
+      <p class="section__lede">
+        Each subsystem is its own crate with its own tests &mdash; a browser engine, a window manager,
+        a scriptable shell, video and audio pipelines &mdash; and most of them are lean enough to run on a
+        32&nbsp;MB handheld.
+      </p>
     </header>
 
     <dl class="numbers">
-      <div><dt>Apps</dt><dd>15</dd></div>
-      <div><dt>Commands</dt><dd>95</dd></div>
-      <div><dt>Shell builtins</dt><dd>20</dd></div>
-      <div><dt>UI widgets</dt><dd>27</dd></div>
-      <div><dt>Shaders</dt><dd>8</dd></div>
-      <div><dt>Locales</dt><dd>7</dd></div>
+      <div><dt>Apps</dt><dd>15</dd><dd class="numbers__note">browser to paint</dd></div>
+      <div><dt>Commands</dt><dd>95</dd><dd class="numbers__note">desktop build</dd></div>
+      <div><dt>Shell builtins</dt><dd>21</dd><dd class="numbers__note">if &middot; for &middot; case</dd></div>
+      <div><dt>UI widgets</dt><dd>27</dd><dd class="numbers__note">plus flex &amp; grid</dd></div>
+      <div><dt>Shaders</dt><dd>8</dd><dd class="numbers__note">GLSL + CPU each</dd></div>
+      <div><dt>Locales</dt><dd>7</dd><dd class="numbers__note">en de es fr ja ko zh</dd></div>
     </dl>
 
     <div class="bento">
@@ -611,6 +621,9 @@
 .cube {
   <span class="tf">transform-style</span>: preserve-3d;
   <span class="tf">transform</span>: <span class="tf">perspective</span>(<span class="tn">600px</span>) <span class="tf">rotateY</span>(<span class="tn">32deg</span>);
+}
+<span class="tk">@scope</span> (.card) to (.content) {
+  img { <span class="tf">border-radius</span>: <span class="tn">8px</span>; }
 }</code></pre>
         </div>
         <ul class="tile__chips" aria-label="Highlights">
@@ -647,7 +660,7 @@
 ambient_dawn.mp3
 nightfall_theme.mp3
 <span class="t-prompt">/home/user&gt;</span> music play music/nightfall_theme.mp3
-<span class="t-prompt">/home/user&gt;</span> open text editor notes.txt
+<span class="t-prompt">/home/user&gt;</span> open Text Editor notes.txt
 <span class="t-prompt">/home/user&gt;</span> skin psix-hifi<span class="caret" aria-hidden="true"></span></pre>
       </article>
 
@@ -668,7 +681,7 @@ nightfall_theme.mp3
       </article>
 
       <article class="tile tile--shader">
-        <p class="tile__tag">oasis-shader &middot; oasis-vector</p>
+        <p class="tile__tag">oasis-shader &middot; -vector</p>
         <h3>Living wallpapers</h3>
         <p>Eight Shadertoy-style backgrounds, each with a GLSL and a CPU implementation, plus
           resolution-independent vector icons.</p>
@@ -703,7 +716,20 @@ nightfall_theme.mp3
 
     <figure class="arch" aria-labelledby="arch-caption">
       <div class="arch__diagram">
-        <svg class="arch-svg" viewBox="0 0 1120 622" width="1120" height="622" aria-hidden="true" focusable="false">
+        <svg class="arch-svg" viewBox="0 0 1120 676" width="1120" height="676" aria-hidden="true" focusable="false">
+          <g class="arch-layer" style="--c:#b69cff">
+            <rect class="arch-band" x="0.5" y="0.5" width="1119" height="45" rx="10"/>
+            <rect x="0.5" y="8" width="3" height="30" rx="1.5" fill="#b69cff"/>
+            <text class="arch-label" x="22" y="27.0" fill="#b69cff">HOSTS</text>
+            <rect class="arch-pill" x="168" y="10.0" width="81" height="26" rx="6"/>
+            <text class="arch-crate" x="208.5" y="27.0" text-anchor="middle">oasis-app</text>
+            <rect class="arch-pill" x="255" y="10.0" width="81" height="26" rx="6"/>
+            <text class="arch-crate" x="295.5" y="27.0" text-anchor="middle">oasis-ffi</text>
+            <rect class="arch-pill" x="342" y="10.0" width="115" height="26" rx="6"/>
+            <text class="arch-crate" x="399.5" y="27.0" text-anchor="middle">oasis-usb-host</text>
+            <text class="arch-note" x="473" y="27.0">desktop shell + oasis-screenshot · C ABI cdylib for UE5 · PSP USB thin-client host</text>
+          </g>
+          <g transform="translate(0 54)">
           <g class="arch-layer" style="--c:#ff6b6b">
             <rect class="arch-band" x="0.5" y="0.5" width="1119" height="45" rx="10"/>
             <rect x="0.5" y="8" width="3" height="30" rx="1.5" fill="#ff6b6b"/>
@@ -808,7 +834,9 @@ nightfall_theme.mp3
             <text class="arch-label" x="22" y="351.0" fill="#7cc7ff">FOUNDATION</text>
             <rect class="arch-pill" x="168" y="334.0" width="94" height="26" rx="6"/>
             <text class="arch-crate" x="215.0" y="351.0" text-anchor="middle">oasis-types</text>
-            <text class="arch-note" x="278" y="351.0">Color · InputEvent · geometry · errors · backend traits</text>
+            <rect class="arch-pill" x="268" y="334.0" width="143" height="26" rx="6"/>
+            <text class="arch-crate" x="339.5" y="351.0" text-anchor="middle">oasis-test-backend</text>
+            <text class="arch-note" x="427" y="351.0">Color · InputEvent · geometry · errors · backend traits · test doubles</text>
           </g>
           <line class="arch-boundary" x1="0" y1="400" x2="1120" y2="400"/>
           <rect x="494.2" y="389" width="131.60000000000002" height="22" rx="11" class="arch-boundary-tag"/>
@@ -818,12 +846,12 @@ nightfall_theme.mp3
           <g class="arch-trait arch-trait--core">
             <rect x="0.5" y="430.5" width="213.4" height="61" rx="10"/>
             <text class="arch-trait-name" x="16.0" y="456" fill="#ff8a3d">SdiCore</text>
-            <text class="arch-trait-sub" x="16.0" y="476">13 required methods</text>
+            <text class="arch-trait-sub" x="16.0" y="476">12 required methods</text>
           </g>
           <g class="arch-trait">
             <rect x="226.9" y="430.5" width="213.4" height="61" rx="10"/>
             <text class="arch-trait-name" x="242.4" y="456" fill="#7cc7ff">SdiBackend</text>
-            <text class="arch-trait-sub" x="242.4" y="476">8 extension traits · 46 defaults</text>
+            <text class="arch-trait-sub" x="242.4" y="476">8 extension traits · 45 defaults</text>
           </g>
           <g class="arch-trait">
             <rect x="453.3" y="430.5" width="213.4" height="61" rx="10"/>
@@ -886,12 +914,15 @@ nightfall_theme.mp3
             <text class="arch-backend-sub" x="921.6" y="582">kernel PRX · no oasis-core</text>
             <text class="arch-backend-target" x="921.6" y="604">&#9656; Overlay on running games</text>
           </g>
+          </g>
         </svg>
       </div>
 
       <!-- The accessible (and small-screen) version of the diagram above. -->
       <div class="arch__text">
         <ol class="arch__stack" aria-label="Crate layers, top to bottom">
+          <li class="layer layer--hosts"><span class="layer__name">Hosts</span>
+            <ul class="layer__crates"><li>oasis-app</li><li>oasis-ffi</li><li>oasis-usb-host</li><li class="note">desktop shell &middot; C ABI for UE5 &middot; PSP USB host</li></ul></li>
           <li class="layer layer--registry"><span class="layer__name">Registry</span>
             <ul class="layer__crates"><li>oasis-apps</li><li class="note">app table &middot; host glue over core + app crates</li></ul></li>
           <li class="layer layer--core"><span class="layer__name">Coordination</span>
@@ -905,12 +936,12 @@ nightfall_theme.mp3
           <li class="layer layer--svc"><span class="layer__name">Services</span>
             <ul class="layer__crates"><li>oasis-vfs</li><li>oasis-platform</li><li>oasis-net</li><li>oasis-mcp</li><li>oasis-i18n</li></ul></li>
           <li class="layer layer--types"><span class="layer__name">Foundation</span>
-            <ul class="layer__crates"><li>oasis-types</li><li class="note">Color &middot; InputEvent &middot; geometry &middot; errors &middot; <strong>backend traits</strong></li></ul></li>
+            <ul class="layer__crates"><li>oasis-types</li><li>oasis-test-backend</li><li class="note">Color &middot; InputEvent &middot; geometry &middot; errors &middot; <strong>backend traits</strong></li></ul></li>
         </ol>
         <p class="arch__boundary"><span>Trait boundary</span></p>
         <ul class="arch__traits" aria-label="Backend traits">
-          <li><code>SdiCore</code> 13 required rendering methods</li>
-          <li><code>SdiBackend</code> 8 extension traits, 46 default methods</li>
+          <li><code>SdiCore</code> 12 required rendering methods</li>
+          <li><code>SdiBackend</code> 8 extension traits, 45 default methods</li>
           <li><code>InputBackend</code> buttons, keys, pointer, text</li>
           <li><code>NetworkBackend</code> TCP with pluggable TLS</li>
           <li><code>AudioBackend</code> tracks and streaming PCM</li>
@@ -920,16 +951,20 @@ nightfall_theme.mp3
           <li><code>oasis-backend-wasm</code><span>Canvas 2D &middot; HTML audio &middot; browsers</span></li>
           <li><code>oasis-backend-ue5</code><span>RGBA framebuffer &rarr; oasis-ffi &rarr; UE5</span></li>
           <li><code>oasis-backend-psp</code><span>sceGu &middot; Media Engine &middot; PSP EBOOT</span></li>
-          <li class="is-dim"><code>oasis-plugin-psp</code><span>kernel PRX &middot; ~150&nbsp;KB, no oasis-core</span></li>
+          <li class="is-dim"><code>oasis-plugin-psp</code><span>kernel PRX &middot; ~160&nbsp;KB, no oasis-core</span></li>
         </ul>
       </div>
       <figcaption class="arch__caption" id="arch-caption">
-        Crates depend downward only. Backends implement the <code>oasis-types</code> traits; the PSP
-        overlay PRX stays standalone, without <code>oasis-core</code>, so it stays small (about 150&nbsp;KB) beside a running game.
+        Crates depend downward; only the hosts also link a backend from below the line. Backends
+        implement the <code>oasis-types</code> traits; the PSP
+        overlay PRX stays standalone, without <code>oasis-core</code>, so it stays small (about 160&nbsp;KB) beside a running game.
+        Not drawn: eight more standalone PSP tools &mdash; the recovery EBOOT, the dev loop, ME boot,
+        PRX decrypt and four USB client / debug / trace / VBUS crates.
       </figcaption>
     </figure>
 
     <ul class="arch__more">
+      <li><a href="crates.html">Interactive crate map <span aria-hidden="true">&rarr;</span></a></li>
       <li><a href="journal/06-backend-trait-system.html">Anatomy of the backend trait system <span aria-hidden="true">&rarr;</span></a></li>
       <li><a href="https://github.com/AndrewAltimit/oasis-os/blob/main/docs/design.md">Technical design document <span aria-hidden="true">&#8599;</span></a></li>
       <li><a href="https://github.com/AndrewAltimit/oasis-os/blob/main/docs/writing-apps.md">Writing apps <span aria-hidden="true">&#8599;</span></a></li>
@@ -1158,6 +1193,40 @@ OASIS_MCP=1 ./target/release/oasis-app
 </section>
 
 <!-- ============================================================ -->
+<!-- What's new (numbers from CHANGELOG.md, overhaul 3)            -->
+<!-- ============================================================ -->
+<section class="section section--alt" id="whats-new" aria-labelledby="new-title">
+  <div class="wrap">
+    <header class="section__head section__head--split">
+      <div>
+        <p class="kicker">09 &mdash; What&rsquo;s new</p>
+        <h2 id="new-title">Faster, stricter, closer to the spec.</h2>
+      </div>
+      <p class="section__lede">
+        The latest overhaul, measured with the in-tree criterion benches. Output stayed
+        pixel-identical: rasterizer goldens, backend parity and frame hashes of every skin.
+      </p>
+    </header>
+
+    <dl class="numbers">
+      <div><dt>HTML parse</dt><dd>3&times;</dd><dd class="numbers__note">100&nbsp;KB page: 5.2 &rarr; 1.4&nbsp;ms</dd></div>
+      <div><dt>CSS cascade</dt><dd>3.2&times;</dd><dd class="numbers__note">1,210 rules: 15.8 &rarr; 4.9&nbsp;ms</dd></div>
+      <div><dt>Nested flex</dt><dd>25&times;</dd><dd class="numbers__note">16 rows: 3.2 &rarr; 0.13&nbsp;ms</dd></div>
+      <div><dt>Software frame</dt><dd>3&times;</dd><dd class="numbers__note">XP 1024&times;768: 1.8 &rarr; 0.59&nbsp;ms</dd></div>
+      <div><dt>Idle frames</dt><dd>&minus;45%</dd><dd class="numbers__note">20&ndash;45% cheaper: IPC files stat-polled</dd></div>
+      <div><dt>PSP dev servers</dt><dd>PSK</dd><dd class="numbers__note">HMAC challenge on 9293</dd></div>
+    </dl>
+
+    <ul class="docs-links">
+      <li><a href="https://github.com/AndrewAltimit/oasis-os/blob/main/docs/browser-engine.md"><strong>HTML &amp; CSS</strong><span>WHATWG table, form and template modes, quirks mode, a UA cascade origin, <code>revert-layer</code></span></a></li>
+      <li><a href="https://github.com/AndrewAltimit/oasis-os/blob/main/docs/terminal-commands.md"><strong>Shell</strong><span><code>NAME=value</code>, detached <code>&amp;</code> jobs, POSIX pipeline errors</span></a></li>
+      <li><a href="https://github.com/AndrewAltimit/oasis-os/blob/main/docs/ui-widgets.md"><strong>Keyboard menus</strong><span>F10 opens app menu bars; narrow bars fold into &raquo;</span></a></li>
+      <li><a href="https://github.com/AndrewAltimit/oasis-os/blob/main/CHANGELOG.md"><strong>Changelog</strong><span>Every change, with breaking ones marked</span></a></li>
+    </ul>
+  </div>
+</section>
+
+<!-- ============================================================ -->
 <!-- Closing call to action                                        -->
 <!-- ============================================================ -->
 <section class="cta-band" aria-labelledby="cta-title">
@@ -1176,22 +1245,48 @@ OASIS_MCP=1 ./target/release/oasis-app
 </main>
 
 <footer class="footer">
-  <div class="wrap footer__inner">
+  <div class="wrap footer__grid">
     <div class="footer__brand">
-      <span class="brand__name">OASIS<span class="brand__us">_</span>OS</span>
-      <p>Built from scratch in Rust. Dual-licensed MIT + Unlicense.</p>
+      <a class="brand" href="./" aria-label="OASIS_OS home">
+        <span class="brand__mark" aria-hidden="true"></span>
+        <span class="brand__name">OASIS<span class="brand__us">_</span>OS</span>
+      </a>
+      <p>An embeddable OS framework, built from scratch in Rust. One shell, any pixel buffer.</p>
+      <p class="footer__status mono" aria-hidden="true">333MHz &middot; 480&times;272 &middot; v1.6.0</p>
     </div>
-    <nav aria-label="Footer">
-      <ul class="footer__links">
-        <li><a href="./">Home</a></li>
-        <li><a href="demo/">Live demo</a></li>
-        <li><a href="journal/">Journal</a></li>
-        <li><a href="blueprint.html">Blueprints</a></li>
-        <li><a href="https://github.com/AndrewAltimit/oasis-os">GitHub</a></li>
-        <li><a href="https://github.com/AndrewAltimit/oasis-os/blob/main/docs/README.md">Docs</a></li>
-      </ul>
+    <nav class="footer__nav" aria-label="Footer">
+      <div>
+        <p class="footer__head">Explore</p>
+        <ul class="footer__links">
+          <li><a href="./">Home</a></li>
+          <li><a href="demo/">Live demo</a></li>
+          <li><a href="crates.html">Crate map</a></li>
+          <li><a href="blueprint.html">Blueprints</a></li>
+        </ul>
+      </div>
+      <div>
+        <p class="footer__head">Read</p>
+        <ul class="footer__links">
+          <li><a href="journal/">Developer&rsquo;s journal</a></li>
+          <li><a href="https://github.com/AndrewAltimit/oasis-os/blob/main/docs/README.md">Documentation</a></li>
+          <li><a href="https://github.com/AndrewAltimit/oasis-os/blob/main/docs/getting-started.md">Getting started</a></li>
+          <li><a href="https://github.com/AndrewAltimit/oasis-os/blob/main/CHANGELOG.md">Changelog</a></li>
+        </ul>
+      </div>
+      <div>
+        <p class="footer__head">Project</p>
+        <ul class="footer__links">
+          <li><a href="https://github.com/AndrewAltimit/oasis-os">GitHub</a></li>
+          <li><a href="https://github.com/AndrewAltimit/oasis-os/releases">Releases</a></li>
+          <li><a href="https://github.com/AndrewAltimit/oasis-os/blob/main/CONTRIBUTING.md">Contributing</a></li>
+          <li><a href="https://github.com/AndrewAltimit/oasis-os/blob/main/LICENSE">License</a></li>
+        </ul>
+      </div>
     </nav>
-    <p class="footer__status mono" aria-hidden="true">333MHz &middot; 480&times;272 &middot; v1.4.0</p>
+  </div>
+  <div class="wrap footer__base">
+    <p>Dual-licensed MIT + Unlicense.</p>
+    <a class="footer__top" href="#main">Back to top <span aria-hidden="true">&uarr;</span></a>
   </div>
 </footer>
 

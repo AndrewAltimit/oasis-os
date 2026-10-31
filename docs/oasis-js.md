@@ -15,7 +15,8 @@ provides a single-threaded, non-reentrant JS context plus a small set of
 host-side primitives (console, timers, fetch, storage) that the browser layer
 extends with DOM bindings.
 
-- Cargo features: `rquickjs-engine` (default, the only supported backend).
+- Cargo features: none by default (rquickjs is always linked; the former
+  `rquickjs-engine` feature could not be turned off and was removed).
   `psp-bindgen` regenerates QuickJS C bindings at build time and is enabled
   only by the PSP backend; desktop never sets it.
 - All public types live at the crate root and are re-exported from
@@ -444,6 +445,9 @@ The handler:
     `127.1` or `2130706433` and IPv4-mapped IPv6) are rejected up front;
     DNS names are checked on the exact address dialled and on every
     redirect hop, so a public name rebound to `127.0.0.1` is refused too.
+    A target name counts as its most private address, the page's own host
+    as its least private one, so a page whose name also resolves to a
+    loopback or LAN address is still a public page.
     A public page therefore cannot drive the local MCP server
     (`127.0.0.1:7345`) or LAN devices.
   - **Same-origin** requests may use any method, headers and body; an

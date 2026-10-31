@@ -13,7 +13,7 @@ use crate::layout;
 #[cfg(not(native_net))]
 use crate::loader::load_resource;
 use crate::loader::{self, ResourceRequest, ResourceSource};
-use crate::{BrowserWidget, LoadingState, SimpleTextMeasurer};
+use crate::{BrowserWidget, LoadingState};
 
 /// Parse an HTML `srcset` attribute into a list of `(url, descriptor)` pairs.
 ///
@@ -101,14 +101,14 @@ fn effective_img_src(elem: &html::dom::ElementData, viewport_w: u32) -> Option<S
 
 /// Update image dimensions in an existing layout tree from decoded image info.
 ///
-/// Walks the layout tree recursively. For each `ReplacedContent::Image`
-/// box with a DOM `node` reference, resolves the image source URL against
-/// `base_url` and looks up intrinsic dimensions in `image_info`. If the
-/// dimensions differ from the current values, updates the box and marks
-/// it (and its ancestors) as dirty for incremental relayout.
+/// Walks the layout tree recursively (inline content's
+/// [`inline_source`](layout::box_model::LayoutBox::inline_source) too,
+/// which the next layout is built from). Each `ReplacedContent::Image`
+/// box with a DOM `node` gets the size a freshly built tree would give
+/// it ([`layout::block::image_size`]), so a relayout matches a rebuild.
 ///
 /// Returns `true` if any image dimensions were updated.
-fn update_image_dimensions(
+pub(crate) fn update_image_dimensions(
     layout_box: &mut layout::box_model::LayoutBox,
     doc: &html::dom::Document,
     base_url: Option<&str>,
@@ -125,30 +125,23 @@ fn update_image_dimensions(
         && let Some(node_id) = layout_box.node
         && let NodeKind::Element(ref elem) = doc.get(node_id).kind
         && elem.tag == TagName::Img
-        && let Some(src) = elem.src()
     {
-        let resolved = match base_url {
-            Some(base) => loader::Url::parse(base)
-                .and_then(|u| u.resolve(src))
-                .map(|u| u.to_string())
-                .unwrap_or_else(|| src.to_string()),
-            None => src.to_string(),
-        };
-        if let Some(&(iw, ih)) = image_info.get(&resolved)
-            && (*width != iw || *height != ih)
-            && (*width == 0 || *height == 0)
-        {
-            *width = iw;
-            *height = ih;
+        let (w, h) = layout::block::image_size(elem, base_url, image_info);
+        if (*width, *height) != (w, h) {
+            *width = w;
+            *height = h;
             layout_box.dirty = true;
             updated = true;
         }
     }
 
-    // Recurse into children.
-    for child in &mut layout_box.children {
+    let source = layout_box
+        .inline_source
+        .as_deref_mut()
+        .into_iter()
+        .flatten();
+    for child in layout_box.children.iter_mut().chain(source) {
         if update_image_dimensions(child, doc, base_url, image_info) {
-            // Propagate dirty flag to ancestors.
             layout_box.dirty = true;
             updated = true;
         }
@@ -940,11 +933,11 @@ impl BrowserWidget {
     /// Rebuild the layout tree with image dimensions after images have
     /// been decoded (second layout pass).
     ///
-    /// When an existing layout tree is available, attempts incremental
-    /// relayout: walks the tree, updates `ReplacedContent::Image`
-    /// dimensions from `cached_image_info`, marks affected subtrees
-    /// dirty, and runs `layout_block_incremental`. Falls back to a
-    /// full rebuild when no existing layout tree is present.
+    /// With an existing layout tree, updates its `ReplacedContent::Image`
+    /// sizes from `cached_image_info` and, if any changed, lays the tree
+    /// out again in place ([`layout::block::relayout_tree`]: the same
+    /// geometry as a rebuild, but canvas state and textures survive).
+    /// Without one, builds the tree.
     fn rebuild_layout_with_images(&mut self) {
         self.refresh_image_info();
         let Some(doc) = &self.document else { return };
@@ -953,8 +946,6 @@ impl BrowserWidget {
         let viewport_w = self.window_w as f32 / self.config.zoom_level;
         let viewport_h = content_h as f32 / self.config.zoom_level;
 
-        // Try incremental relayout: update image dimensions in the
-        // existing layout tree and relayout only affected subtrees.
         if let Some(layout_root) = &mut self.layout_root {
             let updated = update_image_dimensions(
                 layout_root,
@@ -963,33 +954,19 @@ impl BrowserWidget {
                 &self.cached_image_info,
             );
             if updated {
-                let shared = std::rc::Rc::clone(&self.text_cache);
-                let measurer =
-                    layout::text_cache::CachingMeasurer::with_shared(&SimpleTextMeasurer, shared);
-                let mut cache = layout::block::StyleCache::new();
-                layout::block::layout_block_incremental(
-                    layout_root,
-                    viewport_w,
-                    &measurer,
-                    &mut cache,
-                );
-                // Re-apply positioning after relayout.
-                let viewport_rect = layout::box_model::Rect::new(0.0, 0.0, viewport_w, viewport_h);
-                layout::positioning::apply_positioning(layout_root, viewport_rect);
-                layout_root.clamp_geometry();
+                layout_measurer!(self, measurer);
+                layout::block::relayout_tree(layout_root, measurer, viewport_w, viewport_h);
                 self.link_map.clear();
             }
             return;
         }
 
-        // Full rebuild (always used on PSP/WASM, fallback on desktop).
-        let shared = std::rc::Rc::clone(&self.text_cache);
-        let measurer =
-            layout::text_cache::CachingMeasurer::with_shared(&SimpleTextMeasurer, shared);
+        // No tree yet: build one.
+        layout_measurer!(self, measurer);
         let layout_root = layout::block::build_layout_tree(
             doc,
             &self.styles,
-            &measurer,
+            measurer,
             viewport_w,
             viewport_h,
             base_url.as_deref(),

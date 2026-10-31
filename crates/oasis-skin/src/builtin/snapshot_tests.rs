@@ -18,8 +18,8 @@ use crate::loader::Skin;
 
 /// `(skin name, FNV-1a 64 hash of its canonical dump)`, sorted by name.
 const EXPECTED: &[(&str, u64)] = &[
-    ("altimit", 0xa5fefb05e07352aa),
-    ("balatro", 0x7bdf1ad9bbc634a0),
+    ("altimit", 0x300f37bd1cb02c8b),
+    ("balatro", 0x8ba375ea67f4384d),
     ("classic", 0x9f6bc1d5f14c3d3d),
     ("corrupted", 0xa06c163338056501),
     ("desktop", 0x10856f7fe87b9d35),
@@ -30,10 +30,10 @@ const EXPECTED: &[(&str, u64)] = &[
     ("paper", 0x2cff6b69dc956183),
     ("psix-hifi", 0x68548a7a9111db42),
     ("psix-tribute", 0x799c1f869e549b17),
-    ("retro-cga", 0x22d654c4fc5a6c40),
-    ("solarized", 0x62591788b0c9908c),
+    ("retro-cga", 0xeba40f75d17f2d0f),
+    ("solarized", 0x770922c139cd0796),
     ("vaporwave", 0x51f1f5fbee96a283),
-    ("win95", 0x09d6cd9e06d259f9),
+    ("win95", 0x75d30272fad7169d),
     ("xp", 0x3fe6c4c5467ec01d),
 ];
 

@@ -189,6 +189,8 @@ pub(crate) fn lint_color_strings(theme_toml: &str, warnings: &mut Vec<String>) {
         "surface",
         "accent",
         "accent_hover",
+        "success",
+        "warning",
         "palette",
         "cursor",
         "boot",

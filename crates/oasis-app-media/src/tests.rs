@@ -612,3 +612,50 @@ fn music_ui_uses_theme_fonts() {
     assert_eq!(size_of("Now Playing"), Some(at.font_hint));
     assert_eq!(size_of("ambient_dawn"), Some(at.font_body));
 }
+
+#[test]
+fn opening_a_playlist_track_by_hand_moves_the_playlist_position() {
+    let (vfs, mut app) = music_with_playlist(3);
+    let third = app.playlist[2].clone();
+    app.open_file(&vfs, &third);
+    assert_eq!(app.playlist_index, 2);
+    app.handle_input(&Button::Right, &vfs);
+    assert_eq!(app.playlist_index, 0, "Next wraps from the opened track");
+}
+
+#[test]
+fn names_containing_the_size_separator_open_the_real_file() {
+    // Rows read `name  (12 B)`; parsing the name back out of the row
+    // truncated `song  (live).mp3` to `song`.
+    let mut vfs = setup_vfs();
+    let path = "/home/user/music/song  (live).mp3";
+    oasis_vfs::Vfs::write(&mut vfs, path, b"fake mp3").unwrap();
+    let mut app = BrowsingApp::music_player("/apps/music", &vfs);
+    let row = app
+        .lines()
+        .iter()
+        .position(|l| l.starts_with("song  (live)"))
+        .expect("listed");
+    app.content.select(row);
+    app.add_to_playlist(&vfs);
+    assert_eq!(app.playlist(), [path.to_string()]);
+    app.enter_selected(&vfs);
+    assert_eq!(app.viewing_file(), Some(path));
+}
+
+#[test]
+fn leaving_the_viewer_reselects_the_viewed_file() {
+    let vfs = setup_vfs();
+    let mut app = BrowsingApp::music_player("/apps/music", &vfs);
+    let row = app
+        .lines()
+        .iter()
+        .position(|l| l.starts_with("nightfall_theme"))
+        .expect("listed");
+    app.content.select(row);
+    app.enter_selected(&vfs);
+    assert!(app.viewing_file().is_some());
+    app.handle_input(&Button::Cancel, &vfs);
+    assert_eq!(app.viewing_file(), None);
+    assert_eq!(app.content.selected(), row, "cursor back on the track");
+}

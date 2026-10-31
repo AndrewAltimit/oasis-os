@@ -4,18 +4,7 @@ use std::ffi::c_void;
 use std::mem::size_of;
 use std::ptr;
 
-#[cfg(debug_assertions)]
-use core::sync::atomic::{AtomicU32, Ordering};
-
-/// Global counter for GU display list overflow events in render.rs.
-/// Only active in debug builds; capped at 10 warnings to avoid spam.
-#[cfg(debug_assertions)]
-static GU_OVERFLOW_COUNT: AtomicU32 = AtomicU32::new(0);
-
-/// Maximum number of GU overflow warnings to emit before going silent.
-#[cfg(debug_assertions)]
-const GU_OVERFLOW_WARN_LIMIT: u32 = 10;
-
+use psp::gu_ext::SpriteVertex;
 use psp::sys::{
     self, ClearBuffer, GuPrimitive, MipmapLevel, TextureColorComponent, TextureEffect,
     TextureFilter, TexturePixelFormat, VertexType,
@@ -23,7 +12,8 @@ use psp::sys::{
 
 use oasis_core::backend::Color;
 
-use crate::PspBackend;
+use crate::gu_mem::{self, coord};
+use crate::{PspBackend, SCREEN_WIDTH};
 
 // ---------------------------------------------------------------------------
 // Vertex types for 2D GU rendering
@@ -115,6 +105,15 @@ impl PspBackend {
                 }
             }
         }
+
+        // The GE samples the atlas through the uncached mirror, so the
+        // writes above must reach RAM (the white texel, written early, may
+        // otherwise still sit in the data cache).
+        // SAFETY: `buf` is the atlas allocation of `total` u32s (caller
+        // contract).
+        unsafe {
+            psp::cache::dcache_writeback_range(buf as *const c_void, (total * 4) as u32);
+        }
     }
 
     /// Clear the screen to a solid color.
@@ -132,28 +131,15 @@ impl PspBackend {
     /// Uses a 1x1 white texel instead of toggling Texture2D state, avoiding
     /// expensive GE state changes on every call.
     pub fn fill_rect_inner(&mut self, x: i32, y: i32, w: u32, h: u32, color: Color) {
-        // SAFETY: sceGuGetMemory returns a display-list-embedded pointer
-        // valid until sceGuFinish. We write exactly 2 TexturedColorVertex
+        // SAFETY: gu_mem::alloc returns display-list memory for 2 vertices,
+        // valid until the GE has run the frame. We write exactly 2 TexturedColorVertex
         // structs, sampling the solid white texel at the bottom-right corner
         // of the font atlas. Modulate texfunc: white * vertex_color = fill
         // color. This avoids toggling Texture2D state on every rectangle.
         unsafe {
-            let verts = sys::sceGuGetMemory((2 * size_of::<TexturedColorVertex>()) as i32)
-                as *mut TexturedColorVertex;
-            if verts.is_null() {
-                #[cfg(debug_assertions)]
-                {
-                    let n = GU_OVERFLOW_COUNT.fetch_add(1, Ordering::Relaxed);
-                    if n < GU_OVERFLOW_WARN_LIMIT {
-                        psp::dprintln!(
-                            "GU display list overflow in fill_rect_inner ({}/{})",
-                            n + 1,
-                            GU_OVERFLOW_WARN_LIMIT
-                        );
-                    }
-                }
+            let Some(verts) = gu_mem::alloc::<TexturedColorVertex>(2, "fill_rect") else {
                 return;
-            }
+            };
 
             // Bind the font atlas; the white texel is at the bottom-right corner.
             // Validate that the atlas pointer is in cached KSEG0 range before
@@ -183,8 +169,8 @@ impl PspBackend {
                     u: white_u,
                     v: white_v,
                     color: abgr,
-                    x: x as i16,
-                    y: y as i16,
+                    x: coord(x),
+                    y: coord(y),
                     z: 0,
                     _pad: 0,
                 },
@@ -195,8 +181,8 @@ impl PspBackend {
                     u: white_u,
                     v: white_v,
                     color: abgr,
-                    x: (x + w as i32) as i16,
-                    y: (y + h as i32) as i16,
+                    x: coord(x.saturating_add_unsigned(w)),
+                    y: coord(y.saturating_add_unsigned(h)),
                     z: 0,
                     _pad: 0,
                 },
@@ -225,6 +211,11 @@ impl PspBackend {
         if !self.force_bitmap_font
             && let Some(sf) = &mut self.system_font
         {
+            // Up to one sprite (2 vertices) per char, plus the CLUT and
+            // texture state its flush emits.
+            if !gu_mem::has_room(text.len() * 2 * size_of::<SpriteVertex>() + 512, "text") {
+                return;
+            }
             sf.draw_text(x as f32, y as f32, abgr, text);
             // SAFETY: Within an active GU display list (between
             // sceGuStart and sceGuFinish in the main frame loop).
@@ -253,7 +244,13 @@ impl PspBackend {
         let mut batch = psp::gu_ext::SpriteBatch::new(text.len());
 
         let mut cx = x as f32;
+        let mut sprites = 0usize;
         for ch in text.chars() {
+            // Glyphs past the right edge are never visible (no render
+            // targets on PSP); don't spend display-list space on them.
+            if cx >= SCREEN_WIDTH as f32 {
+                break;
+            }
             let idx = (ch as u32).wrapping_sub(32);
             let (u0, v0) = if idx < 95 {
                 let col = idx % ATLAS_COLS;
@@ -283,13 +280,18 @@ impl PspBackend {
                 v0 + 8.0,
                 abgr,
             );
+            sprites += 1;
             cx += advance;
+        }
+        if sprites == 0 || !gu_mem::has_room(sprites * 2 * size_of::<SpriteVertex>(), "text") {
+            return;
         }
 
         // SAFETY: Binds the font atlas texture (RAM pointer via uncached
         // mirror) and flushes the batched sprites. font_atlas_ptr is
-        // checked non-null during init(). No TexFlush/TexSync needed --
-        // the atlas is in uncached RAM so the GE always reads current data.
+        // checked non-null during init(), its contents were written back to
+        // RAM by build_font_atlas, and `has_room` above reserved display-list
+        // space for the batch's vertices.
         unsafe {
             let uncached_atlas = psp::cache::UncachedPtr::from_cached_addr(self.font_atlas_ptr)
                 .as_ptr() as *const c_void;
@@ -340,9 +342,12 @@ impl PspBackend {
 
         // SAFETY: Binds the texture (RAM pointer via uncached mirror) and
         // draws a Sprites primitive. data_ptr validity is ensured by
-        // load_texture_inner (allocated and populated before insertion).
-        // No TexFlush/TexSync -- uncached pointers bypass the GE cache.
+        // load_texture_inner (allocated, populated and written back to RAM
+        // before insertion); `verts` holds the 2 vertices written below.
         unsafe {
+            let Some(verts) = gu_mem::alloc::<TexturedColorVertex>(2, "blit") else {
+                return;
+            };
             let uncached_ptr =
                 psp::cache::UncachedPtr::from_cached_addr(data_ptr).as_ptr() as *const c_void;
             sys::sceGuTexMode(TexturePixelFormat::Psm8888, 0, 0, 0);
@@ -361,31 +366,14 @@ impl PspBackend {
             };
             sys::sceGuTexFunc(TextureEffect::Modulate, tcc);
 
-            let verts = sys::sceGuGetMemory((2 * size_of::<TexturedColorVertex>()) as i32)
-                as *mut TexturedColorVertex;
-            if verts.is_null() {
-                #[cfg(debug_assertions)]
-                {
-                    let n = GU_OVERFLOW_COUNT.fetch_add(1, Ordering::Relaxed);
-                    if n < GU_OVERFLOW_WARN_LIMIT {
-                        psp::dprintln!(
-                            "GU display list overflow in blit_inner ({}/{})",
-                            n + 1,
-                            GU_OVERFLOW_WARN_LIMIT
-                        );
-                    }
-                }
-                return;
-            }
-
             ptr::write(
                 verts,
                 TexturedColorVertex {
                     u: 0,
                     v: 0,
                     color: COLOR_WHITE_ABGR,
-                    x: x as i16,
-                    y: y as i16,
+                    x: coord(x),
+                    y: coord(y),
                     z: 0,
                     _pad: 0,
                 },
@@ -396,8 +384,8 @@ impl PspBackend {
                     u: tex_w,
                     v: tex_h,
                     color: COLOR_WHITE_ABGR,
-                    x: (x + w as i32) as i16,
-                    y: (y + h as i32) as i16,
+                    x: coord(x.saturating_add_unsigned(w)),
+                    y: coord(y.saturating_add_unsigned(h)),
                     z: 0,
                     _pad: 0,
                 },
@@ -438,9 +426,13 @@ impl PspBackend {
 
         // SAFETY: Binds the texture (RAM pointer via uncached mirror) and
         // draws a Sprites primitive with bilinear filtering. data_ptr
-        // validity is ensured by load_texture_inner. Filter state is
-        // restored to Nearest after the draw.
+        // validity is ensured by load_texture_inner; `verts` holds the 2
+        // vertices written below. Filter state is restored to Nearest after
+        // the draw.
         unsafe {
+            let Some(verts) = gu_mem::alloc::<TexturedColorVertex>(2, "blit_scaled") else {
+                return;
+            };
             let uncached_ptr =
                 psp::cache::UncachedPtr::from_cached_addr(data_ptr).as_ptr() as *const c_void;
             sys::sceGuTexMode(TexturePixelFormat::Psm8888, 0, 0, 0);
@@ -463,32 +455,14 @@ impl PspBackend {
             sys::sceGuTexFunc(TextureEffect::Modulate, tcc);
             sys::sceGuTexFilter(TextureFilter::Linear, TextureFilter::Linear);
 
-            let verts = sys::sceGuGetMemory((2 * size_of::<TexturedColorVertex>()) as i32)
-                as *mut TexturedColorVertex;
-            if verts.is_null() {
-                #[cfg(debug_assertions)]
-                {
-                    let n = GU_OVERFLOW_COUNT.fetch_add(1, Ordering::Relaxed);
-                    if n < GU_OVERFLOW_WARN_LIMIT {
-                        psp::dprintln!(
-                            "GU display list overflow in blit_scaled ({}/{})",
-                            n + 1,
-                            GU_OVERFLOW_WARN_LIMIT
-                        );
-                    }
-                }
-                sys::sceGuTexFilter(TextureFilter::Nearest, TextureFilter::Nearest);
-                return;
-            }
-
             ptr::write(
                 verts,
                 TexturedColorVertex {
                     u: 0,
                     v: 0,
                     color: COLOR_WHITE_ABGR,
-                    x: x as i16,
-                    y: y as i16,
+                    x: coord(x),
+                    y: coord(y),
                     z: 0,
                     _pad: 0,
                 },
@@ -499,8 +473,8 @@ impl PspBackend {
                     u: tex_w,
                     v: tex_h,
                     color: COLOR_WHITE_ABGR,
-                    x: (x + w as i32) as i16,
-                    y: (y + h as i32) as i16,
+                    x: coord(x.saturating_add_unsigned(w)),
+                    y: coord(y.saturating_add_unsigned(h)),
                     z: 0,
                     _pad: 0,
                 },

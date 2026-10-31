@@ -94,7 +94,11 @@ at 1024 bytes (`listener.rs`); the client buffer caps at 16 KiB
    thousands of commands in one frame. `quit` and `exit` are intercepted and
    close the connection; nothing after them runs.
 4. The host runs each command and replies with
-   `send_response(conn_id, text)`, which queues the text plus a trailing
+   `send_response(conn_id, text)`. The desktop shell runs it through
+   `commands::run_remote_command` (the path MCP `run_command` uses too): the
+   shell's own command registry and working directory, with the server
+   toggles (`listen`, `remote`, `ftp`, `mcp-server`) answered
+   `Not available via remote.`. `send_response` queues the text plus a trailing
    `\n> ` prompt and writes it as the socket accepts it (a peer that lets
    more than 8 MiB back up is dropped).
 5. Connections idle beyond 300 s (`listener.rs`) are closed with
@@ -138,6 +142,21 @@ traffic cannot be replayed. The session is **not** encrypted or integrity
 protected after authentication: an active man-in-the-middle can read or
 inject commands. Use the listener on trusted networks, or tunnel it (SSH).
 
+**Challenge relay.** The nonce is not bound to the server's identity, so
+the PSK authenticates the *client* only. A client that connects to an
+impostor (spoofed address, lookalike host) can be relayed: the impostor
+opens its own connection to the real server, passes that server's
+challenge to the client, forwards the answer and is logged in. Mixing the
+server's address or name into the HMAC would not close this without an
+authenticated channel -- the server cannot know which address the client
+dialled (NAT, port forwards, `0.0.0.0` binds), and an on-path attacker can
+relay the plaintext session wholesale anyway -- so the protocol does not
+pretend to. `RemoteClient` limits what a hostile server gains: it answers
+exactly one challenge per connection, and only a nonce of the documented
+form (32 lowercase hex digits, `oasis_net::is_valid_nonce`), so it cannot
+be used as an HMAC oracle over chosen text. When the server's identity
+matters, tunnel over something that authenticates it (SSH).
+
 Brute-force defence is a server-wide throttle (`AuthThrottle` in
 `auth.rs`): failures are counted until a quiet 30 s passes without one; the
 5th locks authentication out for 30 s from that failure, and every further
@@ -145,6 +164,32 @@ failure doubles the lockout (capped at 64x). While locked, new connections
 get `RATE_LIMITED\n` and are closed. The throttle is global, not per peer
 (`NetworkStream` exposes no peer address), so a flood of bad attempts also
 delays legitimate clients -- the trade-off for bounding online guessing.
+
+### PSP dev servers
+
+The three PSP development servers on TCP 9293 speak the same handshake
+(steps 1-4, with `AUTH_OK\n` and no prompt), then the one-command-per-
+connection protocol they always had. None accepts a command without a
+configured key, and none has an unauthenticated mode:
+
+| Server | Enabled by | Key | Host client |
+|--------|-----------|-----|-------------|
+| EBOOT command server (`oasis-backend-psp/src/cmd_server/`) | `ms0:/PSP/GAME/OASISOS/cmdserver.key` exists with 8+ bytes | that file, trimmed | `scripts/psp_remote.py` (`PSP_PSK`) |
+| Recovery EBOOT file server (`oasis-recovery-psp/src/auth.rs`) | always listens once WiFi connects; refuses every connection (`AUTH_FAIL no key`) without a key | `ms0:/PSP/SAVEDATA/ARK_01234/oasis-recovery.key`, else `ms0:/PSP/GAME/OASISOS/cmdserver.key` (both trimmed, 8+ bytes) | `scripts/psp_remote.py` (`PSP_PSK`) |
+| Overlay PRX devloop (`oasis-plugin-psp/src/devloop.rs`) | `devloop = true` **and** `devloop_psk` (8+ bytes) in `ms0:/seplugins/oasis.ini` | `devloop_psk` | `psp_remote.PspConnection(psk=...).send_command("launch ms0:/...")` |
+
+Recovery mode exists for when the shell is broken, so its key lookup reads
+only those two plain files -- its own first, kept beside `RECOVERY.PBP` and
+outside the shell's directory -- and never the shell's config. The EBOOT and
+the recovery EBOOT verify with `oasis_net::verify_auth_line`; the PRX, which
+cannot link std crates, carries a bounded one-shot SHA-256 / HMAC copy
+(`oasis-plugin-psp/src/auth.rs`). Nonces condense the RTC / system timer,
+a counter and the previous nonce with SHA-256 (the PSP has no OS entropy
+source). A failed answer costs the peer a 2 s stall of the single-threaded
+accept loop, and the whole `AUTH` line must arrive within 10 s of the
+challenge (a per-`recv` timeout alone let a peer trickle one byte per
+timeout and hold the server for minutes). As with the
+remote terminal the session is plaintext: trusted networks only.
 
 ## TLS
 
@@ -161,6 +206,13 @@ behind `LazyLock`:
 Plaintext bytes between reads are buffered in a `VecDeque<u8>`
 (`tls_rustls.rs`); `drain_deque` uses `as_slices` to copy out without an
 intermediate allocation (`tls_rustls.rs`).
+
+Writes: `write` returns the plaintext bytes rustls accepted even when the
+non-blocking socket refuses (part of) the resulting ciphertext; what the
+socket cannot take stays queued in rustls and goes out on the next `read`,
+`write` or `flush` (the stream implements `NetworkStream::flush`). A write
+only fails with `WouldBlock` when rustls's own buffer is full and nothing
+could be accepted, so a caller that retries never sends bytes twice.
 
 Pinning custom certificates is not implemented. TLS is used by outbound
 clients only (HTTP, Gemini); no server in this crate accepts TLS.
@@ -219,7 +271,7 @@ contain spaces. Verbs:
 > named, and refuses to remove or rename the root itself. The served `Vfs`
 > then applies its own checks (`RealVfs` additionally confines symlinks and
 > rejects Windows drive / device segments). The desktop shell serves
-> `/home` (`FTP_ROOT` in `oasis-app/src/commands.rs`), so FTP clients
+> `/home` (`FTP_ROOT` in `oasis-app/src/commands/services.rs`), so FTP clients
 > cannot reach the shell's `/system` state or the `/var` IPC request
 > files. Error messages name the inner path (`no such file:
 > /home/x`).
@@ -237,8 +289,8 @@ contain spaces. Verbs:
 > `AuthThrottle` as the remote terminal: 5 failures lock logins for 30 s,
 > doubling), during which new connections get `421 Too many failed logins`
 > and are closed. A connection that has not authenticated within 20 s gets
-> `530 Authentication timeout`. `--password ""` arms an empty password,
-> which a bare `PASS ` matches -- pass a real password, or omit the flag.
+> `530 Authentication timeout`. An empty password (`--password ""`) is the
+> same as none: no `PASS` is required and the server binds loopback only.
 > Treat the service as trusted-LAN-only and never reuse a remote-terminal
 > PSK as the FTP password.
 

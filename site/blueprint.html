@@ -43,6 +43,7 @@
         <li><a href="./#skins">Skins</a></li>
         <li><a href="./#features">Features</a></li>
         <li><a href="./#architecture">Architecture</a></li>
+        <li><a href="crates.html">Crates</a></li>
         <li><a href="./#psp">PSP</a></li>
         <li><a href="journal/">Journal</a></li>
         <li><a href="./#start">Build</a></li>
@@ -79,7 +80,8 @@
 <div id="tooltip" role="tooltip"></div>
 
 <div class="hud__dock">
-  <button type="button" id="reset-view" class="hud__panel hud__reset">
+  <button type="button" id="legend-toggle" class="hud__panel hud__legend-btn" aria-expanded="false" aria-controls="legend" hidden>Legend</button>
+  <button type="button" id="reset-view" class="hud__panel hud__reset" aria-label="Reset view">
     <svg aria-hidden="true" viewBox="0 0 16 16" width="14" height="14"><path d="M2.5 8a5.5 5.5 0 1 0 1.6-3.9M2.5 2.5v3h3" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
     <span>Reset view</span>
   </button>
@@ -99,6 +101,12 @@
     <p class="gallery__lede">The physical side of zero-touch PSP development, modelled in three.js:
       rotate, explode and hover each part. Both rigs are written up in the
       <a href="journal/">developer&rsquo;s journal</a>.</p>
+    <ul class="gallery__hints" aria-label="Viewer controls">
+      <li><kbd>Drag</kbd> rotate</li>
+      <li><kbd>Scroll</kbd> zoom</li>
+      <li>Slider: explode the parts</li>
+      <li>Hover a part for its details</li>
+    </ul>
     <div class="cards">
       <a class="card" href="blueprint.html?diagram=psp-usb-adapter">
         <img src="img/blueprint-psp-usb-adapter.png" alt="" width="841" height="645">
@@ -106,6 +114,7 @@
           <span class="card-kicker">Blueprint &middot; entry 05</span>
           <span class="card-title">PSP universal USB-C adapter</span>
           <span class="card-desc">A passive bridge that combines the PSP&rsquo;s proprietary power pads and Mini-B data port into one USB-C receptacle: pogo-pin contacts, screw-mounted shell.</span>
+          <span class="card-cta">Open the 3D model <span aria-hidden="true">&rarr;</span></span>
         </span>
       </a>
       <a class="card" href="blueprint.html?diagram=psp-relay">
@@ -114,6 +123,7 @@
           <span class="card-kicker">Blueprint &middot; entry 08</span>
           <span class="card-title">PSP hard-reset automation</span>
           <span class="card-desc">H-bridge wiring: a two-channel USB relay drives a 12&nbsp;V linear actuator that pushes the PSP&rsquo;s power slider for remote hard reboots.</span>
+          <span class="card-cta">Open the 3D model <span aria-hidden="true">&rarr;</span></span>
         </span>
       </a>
     </div>
@@ -123,32 +133,54 @@
 </main>
 
 <footer class="footer">
-  <div class="wrap footer__inner">
+  <div class="wrap footer__grid">
     <div class="footer__brand">
-      <span class="brand__name">OASIS<span class="brand__us">_</span>OS</span>
-      <p>Built from scratch in Rust. Dual-licensed MIT + Unlicense.</p>
+      <a class="brand" href="./" aria-label="OASIS_OS home">
+        <span class="brand__mark" aria-hidden="true"></span>
+        <span class="brand__name">OASIS<span class="brand__us">_</span>OS</span>
+      </a>
+      <p>An embeddable OS framework, built from scratch in Rust. One shell, any pixel buffer.</p>
+      <p class="footer__status mono" aria-hidden="true">333MHz &middot; 480&times;272 &middot; v1.6.0</p>
     </div>
-    <nav aria-label="Footer">
-      <ul class="footer__links">
-        <li><a href="./">Home</a></li>
-        <li><a href="demo/">Live demo</a></li>
-        <li><a href="journal/">Journal</a></li>
-        <li><a href="blueprint.html">Blueprints</a></li>
-        <li><a href="https://github.com/AndrewAltimit/oasis-os">GitHub</a></li>
-        <li><a href="https://github.com/AndrewAltimit/oasis-os/blob/main/docs/README.md">Docs</a></li>
-      </ul>
+    <nav class="footer__nav" aria-label="Footer">
+      <div>
+        <p class="footer__head">Explore</p>
+        <ul class="footer__links">
+          <li><a href="./">Home</a></li>
+          <li><a href="demo/">Live demo</a></li>
+          <li><a href="crates.html">Crate map</a></li>
+          <li><a href="blueprint.html">Blueprints</a></li>
+        </ul>
+      </div>
+      <div>
+        <p class="footer__head">Read</p>
+        <ul class="footer__links">
+          <li><a href="journal/">Developer&rsquo;s journal</a></li>
+          <li><a href="https://github.com/AndrewAltimit/oasis-os/blob/main/docs/README.md">Documentation</a></li>
+          <li><a href="https://github.com/AndrewAltimit/oasis-os/blob/main/docs/getting-started.md">Getting started</a></li>
+          <li><a href="https://github.com/AndrewAltimit/oasis-os/blob/main/CHANGELOG.md">Changelog</a></li>
+        </ul>
+      </div>
+      <div>
+        <p class="footer__head">Project</p>
+        <ul class="footer__links">
+          <li><a href="https://github.com/AndrewAltimit/oasis-os">GitHub</a></li>
+          <li><a href="https://github.com/AndrewAltimit/oasis-os/releases">Releases</a></li>
+          <li><a href="https://github.com/AndrewAltimit/oasis-os/blob/main/CONTRIBUTING.md">Contributing</a></li>
+          <li><a href="https://github.com/AndrewAltimit/oasis-os/blob/main/LICENSE">License</a></li>
+        </ul>
+      </div>
     </nav>
-    <p class="footer__status mono" aria-hidden="true">333MHz &middot; 480&times;272 &middot; v1.4.0</p>
+  </div>
+  <div class="wrap footer__base">
+    <p>Dual-licensed MIT + Unlicense.</p>
+    <a class="footer__top" href="#main">Back to top <span aria-hidden="true">&uarr;</span></a>
   </div>
 </footer>
 
 <script src="js/site.js" defer></script>
-<!-- Engine + diagrams (order matters: three.js → loader → engine → diagram files) -->
-<script src="js/three.min.js"></script>
-<script src="js/GLTFLoader.js"></script>
-<script src="js/blueprint-engine.js"></script>
-<script src="js/blueprints/psp-relay.js"></script>
-<script src="js/blueprints/psp-usb-adapter.js"></script>
+<!-- Loads the engine + diagrams (and three.js only for ?diagram=), in order. -->
+<script src="js/blueprint-page.js"></script>
 
 </body>
 </html>

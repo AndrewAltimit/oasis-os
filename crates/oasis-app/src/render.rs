@@ -16,6 +16,22 @@ use crate::launch::{BROWSER_WIN, TERMINAL_WIN};
 use oasis_core::media_page;
 use oasis_core::terminal_sdi;
 
+/// Whether the dashboard icon grid is on screen: the skin has one
+/// (`dashboard = false` skins such as `desktop` and `corrupted` show a
+/// bare desktop) and no media tab page replaces it.
+pub(crate) fn dashboard_icons_visible(state: &AppState) -> bool {
+    state.skin.features.dashboard && state.ui.bottom_bar.active_tab == MediaTab::None
+}
+
+/// Show or hide the dashboard icon objects per [`dashboard_icons_visible`].
+fn sync_dashboard_icons(state: &mut AppState, sdi: &mut SdiRegistry) {
+    if dashboard_icons_visible(state) {
+        state.ui.dashboard.update_sdi(sdi, &state.active_theme);
+    } else {
+        state.ui.dashboard.hide_sdi(sdi);
+    }
+}
+
 /// Update the SDI scene graph based on the current mode.
 ///
 /// This controls which UI elements are visible and positioned correctly
@@ -38,12 +54,12 @@ pub fn update_sdi(state: &mut AppState, sdi: &mut SdiRegistry, vfs: &dyn Vfs) {
         Mode::Dashboard => {
             terminal_sdi::set_terminal_visible(sdi, false);
             state.ui.taskbar.hide_sdi(sdi);
+            state.ui.bottom_bar.reserve_taskbar = false;
 
+            sync_dashboard_icons(state, sdi);
             if state.ui.bottom_bar.active_tab == MediaTab::None {
-                state.ui.dashboard.update_sdi(sdi, &state.active_theme);
                 media_page::hide_media_page(sdi);
             } else {
-                state.ui.dashboard.hide_sdi(sdi);
                 media_page::update_media_page_with_vfs(
                     sdi,
                     &state.ui.bottom_bar,
@@ -193,11 +209,7 @@ pub fn update_sdi(state: &mut AppState, sdi: &mut SdiRegistry, vfs: &dyn Vfs) {
                 state.terminal.dirty = false;
             }
             // Keep dashboard icons visible behind windows.
-            if state.ui.bottom_bar.active_tab == MediaTab::None {
-                state.ui.dashboard.update_sdi(sdi, &state.active_theme);
-            } else {
-                state.ui.dashboard.hide_sdi(sdi);
-            }
+            sync_dashboard_icons(state, sdi);
             if state.content.fullscreen_app.is_some() {
                 StatusBar::hide_sdi(sdi);
                 BottomBar::hide_sdi(sdi);
@@ -213,16 +225,19 @@ pub fn update_sdi(state: &mut AppState, sdi: &mut SdiRegistry, vfs: &dyn Vfs) {
                     .ui
                     .status_bar
                     .update_sdi(sdi, &state.active_theme, &state.skin.features);
+                // The bar lays out first and leaves the taskbar its span
+                // (clear of the URL plate, USB label and media dock).
+                state.ui.bottom_bar.reserve_taskbar = !state.wm.windows().is_empty();
                 state
                     .ui
                     .bottom_bar
                     .update_sdi(sdi, &state.active_theme, &state.skin.features);
-                state.ui.taskbar.update_sdi(
+                state.ui.taskbar.update_sdi_in(
                     sdi,
                     &state.active_theme,
                     state.wm.windows(),
                     state.wm.active_window(),
-                    state.skin.features.start_menu,
+                    state.ui.bottom_bar.taskbar_span(),
                 );
                 state.ui.taskbar.update_desktop_indicator(
                     sdi,

@@ -65,8 +65,8 @@ const LESSONS: &[(&str, &str)] = &[
         "Navigation",
         "NAVIGATION\n\n\
          pwd          - Show current directory\n\
-         ls [path]    - List directory contents\n\
-         cd <path>    - Change directory\n\
+         ls [-al] [path] - List directory contents (-a: dotfiles)\n\
+         cd [path|-]  - Change directory (home / previous)\n\
          tree [path]  - Display directory tree\n\n\
          Try it: type 'ls /' to see the root directory.",
     ),
@@ -76,10 +76,10 @@ const LESSONS: &[(&str, &str)] = &[
          cat <file>         - Display file contents\n\
          write <file> text  - Write text to a file\n\
          append <file> text - Append text to a file\n\
-         mkdir <dir>        - Create a directory\n\
+         mkdir [-p] <dir>   - Create a directory (and parents)\n\
          cp <src> <dst>     - Copy a file\n\
          mv <src> <dst>     - Move/rename a file\n\
-         rm <path>          - Delete a file or directory\n\
+         rm [-rf] <path>    - Delete a file or directory (-r: tree)\n\
          stat <path>        - Show file details\n\n\
          Try it: type 'write /tmp/hello.txt Hello World'",
     ),
@@ -284,18 +284,21 @@ pub fn populate_man_pages(vfs: &mut dyn oasis_vfs::Vfs) {
         (
             "ls",
             "NAME\n    ls - list directory contents\n\n\
-             SYNOPSIS\n    ls [path]\n\n\
+             SYNOPSIS\n    ls [-al] [path...]\n\n\
              DESCRIPTION\n    List files and directories at the given path.\n\
              If no path is given, lists the current directory.\n\n\
-             EXAMPLES\n    ls /home\n    ls\n",
+             OPTIONS\n    -a  Include names starting with '.'\n\
+             -l  Long listing: kind and size\n\n\
+             EXAMPLES\n    ls /home\n    ls -la\n",
         ),
         (
             "cd",
             "NAME\n    cd - change directory\n\n\
-             SYNOPSIS\n    cd <path>\n\n\
+             SYNOPSIS\n    cd [path|-]\n\n\
              DESCRIPTION\n    Change the current working directory to <path>.\n\
-             Use '..' to go up one level.\n\n\
-             EXAMPLES\n    cd /home\n    cd ..\n",
+             Use '..' to go up one level. Without a path, go to $HOME;\n\
+             'cd -' returns to the previous directory ($OLDPWD).\n\n\
+             EXAMPLES\n    cd /home\n    cd ..\n    cd ~/notes\n    cd -\n",
         ),
         (
             "cat",
@@ -315,10 +318,11 @@ pub fn populate_man_pages(vfs: &mut dyn oasis_vfs::Vfs) {
         (
             "grep",
             "NAME\n    grep - search text patterns\n\n\
-             SYNOPSIS\n    grep [options] <pattern> <file>\n\n\
+             SYNOPSIS\n    grep [-cinqv] <pattern> [file]\n\n\
              DESCRIPTION\n    Search for lines matching a pattern.\n\n\
              OPTIONS\n    -i  Case insensitive\n    -n  Show line numbers\n\
-             -v  Invert match\n    -c  Count matches\n\n\
+             -v  Invert match\n    -c  Count matches\n\
+             -q  Quiet: exit status only\n\n\
              EXAMPLES\n    grep error /var/log/audit.log\n\
              cat file.txt | grep -i hello\n",
         ),

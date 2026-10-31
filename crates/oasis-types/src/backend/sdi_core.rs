@@ -5,7 +5,8 @@ use crate::error::Result;
 
 /// Core rendering methods that every backend must implement.
 ///
-/// These 13 required methods (plus the provided
+/// These 12 required methods (plus the provided
+/// [`measure_text`](Self::measure_text) and
 /// [`viewport_size`](Self::viewport_size)) are the minimum surface for a
 /// rendering backend. Test mocks and null backends implement this trait
 /// plus empty impls for the eight extension traits (`SdiShapes`,
@@ -79,7 +80,15 @@ pub trait SdiCore {
 
     /// Measure the width of a text string at the given font size.
     /// Returns width in pixels. Used by inline layout for line breaking.
-    fn measure_text(&self, text: &str, font_size: u16) -> u32;
+    ///
+    /// The default is the built-in bitmap font's advance sum
+    /// ([`bitmap_measure_text`](crate::backend::bitmap_measure_text)), the
+    /// width every bitmap-font backend draws and the match for the
+    /// [`SdiText`](crate::backend::SdiText) line-metric defaults. A backend
+    /// that draws another font (SDL with a skin TTF) must override it.
+    fn measure_text(&self, text: &str, font_size: u16) -> u32 {
+        crate::backend::bitmap_measure_text(text, font_size)
+    }
 
     /// Read the current framebuffer as RGBA pixel data.
     fn read_pixels(&self, x: i32, y: i32, w: u32, h: u32) -> Result<Vec<u8>>;
@@ -91,8 +100,8 @@ pub trait SdiCore {
     /// framebuffer, or the render target bound with
     /// [`SdiRenderTarget::bind_render_target`].
     ///
-    /// The one provided method of this trait. The default reports the PSP
-    /// native resolution ([`DEFAULT_VIEWPORT_WIDTH`] x
+    /// Provided, like [`measure_text`](Self::measure_text). The default
+    /// reports the PSP native resolution ([`DEFAULT_VIEWPORT_WIDTH`] x
     /// [`DEFAULT_VIEWPORT_HEIGHT`]); every real backend overrides it.
     ///
     /// [`DEFAULT_VIEWPORT_WIDTH`]: crate::backend::DEFAULT_VIEWPORT_WIDTH

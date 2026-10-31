@@ -944,6 +944,29 @@ fn drain_nav_actions_clears_queue() {
     assert!(actions2.is_empty());
 }
 
+/// Regression: the navigation queue was unbounded and every queued
+/// `Navigate` was loaded in turn. The latest navigation now wins and
+/// traversals are capped.
+#[test]
+fn nav_queue_is_bounded() {
+    let (engine, _doc, nav) = setup_with_nav(sample_doc(), "https://example.com");
+    engine
+        .eval("for (var i = 0; i < 10000; i++) location.href = 'https://x.test/' + i;")
+        .unwrap();
+    let actions = drain_nav_actions(&nav);
+    assert_eq!(
+        actions,
+        vec![JsNavAction::Navigate("https://x.test/9999".into())]
+    );
+    engine
+        .eval("for (var i = 0; i < 10000; i++) history.back();")
+        .unwrap();
+    assert_eq!(
+        drain_nav_actions(&nav).len(),
+        super::bindings::MAX_PENDING_TRAVERSALS
+    );
+}
+
 #[test]
 fn window_location_assign_works() {
     let (engine, _doc, nav) = setup_with_nav(sample_doc(), "https://example.com");
@@ -1139,6 +1162,142 @@ fn fetch_rejects_crlf_in_header_names_and_values() {
         vec!["https://example.com/c"],
         "only the clean request is sent"
     );
+}
+
+/// Regression: `innerHTML` escaped the text of raw-text elements, so a
+/// `<style>` round trip turned `div > p` into `div &gt; p`; and names a
+/// script created that the parser never would were emitted raw, which
+/// re-parsed into real attributes.
+#[test]
+fn inner_html_keeps_raw_text_and_drops_unsafe_names() {
+    let engine = setup_page("https://example.com/", None, None);
+    let html = js_str(
+        &engine,
+        "var d = document.createElement('div'); \
+         var s = document.createElement('style'); \
+         s.textContent = 'div > p { color: red }'; \
+         d.appendChild(s); \
+         var p = document.createElement('p'); \
+         try { p.setAttribute('x onclick', 'f()'); } catch (e) {} \
+         p.textContent = 'a < b'; \
+         d.appendChild(p); \
+         d.innerHTML",
+    );
+    assert_eq!(html, "<style>div > p { color: red }</style><p>a &lt; b</p>");
+}
+
+/// [`MockTransport`] whose DNS answers every name with `addrs`.
+#[derive(Clone)]
+struct DnsTransport {
+    inner: MockTransport,
+    addrs: Vec<std::net::IpAddr>,
+}
+
+impl fetch::FetchTransport for DnsTransport {
+    fn resolve_host(&self, _host: &str) -> Vec<std::net::IpAddr> {
+        self.addrs.clone()
+    }
+
+    fn supports_https(&self) -> bool {
+        true
+    }
+
+    fn send(
+        &self,
+        req: &fetch::TransportRequest<'_>,
+        redirect_ok: &dyn Fn(&crate::loader::Url) -> bool,
+        addr_ok: &dyn Fn(std::net::IpAddr) -> bool,
+    ) -> Result<fetch::RawResponse, String> {
+        self.inner.send(req, redirect_ok, addr_ok)
+    }
+}
+
+/// Regression: the page's own network class was the *most* private of
+/// its DNS records, so `evil.test` publishing `[public, 127.0.0.1]`
+/// counted as a loopback page and could fetch loopback services.
+#[test]
+fn page_with_a_private_dns_record_cannot_reach_the_private_network() {
+    let inner = MockTransport::default();
+    let t = DnsTransport {
+        inner: inner.clone(),
+        addrs: vec![[203, 0, 113, 5].into(), [127, 0, 0, 1].into()],
+    };
+    let engine = JsEngine::new(32 * 1024 * 1024).unwrap();
+    let shared: SharedDoc = Rc::new(RefCell::new(sample_doc()));
+    let nav: SharedNavActions = Rc::new(RefCell::new(Vec::new()));
+    let url = "http://evil.test/";
+    engine
+        .with_context(|ctx| {
+            install_document_global_full(&ctx, &shared, url, &nav, None, None, None, None, None)?;
+            let handler = fetch::BrowserFetchHandler::new(url, None, Box::new(t.clone()));
+            oasis_js::fetch::bind_fetch_handler(&ctx, Box::new(handler))?;
+            Ok(())
+        })
+        .unwrap();
+    engine
+        .eval("fetch('http://127.0.0.1/admin').catch(function(e) { globalThis.err = e.name; })")
+        .unwrap();
+    assert_eq!(js_str(&engine, "err"), "TypeError");
+    assert!(inner.urls().is_empty(), "nothing was sent");
+}
+
+/// [`MockTransport`] whose DNS answer can be changed mid-test.
+#[derive(Clone)]
+struct RebindTransport {
+    inner: MockTransport,
+    addrs: Rc<RefCell<Vec<std::net::IpAddr>>>,
+}
+
+impl fetch::FetchTransport for RebindTransport {
+    fn resolve_host(&self, _host: &str) -> Vec<std::net::IpAddr> {
+        self.addrs.borrow().clone()
+    }
+
+    fn supports_https(&self) -> bool {
+        true
+    }
+
+    fn send(
+        &self,
+        req: &fetch::TransportRequest<'_>,
+        redirect_ok: &dyn Fn(&crate::loader::Url) -> bool,
+        addr_ok: &dyn Fn(std::net::IpAddr) -> bool,
+    ) -> Result<fetch::RawResponse, String> {
+        self.inner.send(req, redirect_ok, addr_ok)
+    }
+}
+
+/// Regression (DNS rebinding): the page's network class was re-resolved
+/// on every `fetch()`, so a page loaded from a public address whose name
+/// was then re-pointed at `127.0.0.1` became a loopback page and could
+/// reach loopback services. The class is pinned when the page loads.
+#[test]
+fn rebinding_the_page_host_does_not_promote_the_page() {
+    let inner = MockTransport::default();
+    let addrs = Rc::new(RefCell::new(vec![std::net::IpAddr::from([203, 0, 113, 5])]));
+    let t = RebindTransport {
+        inner: inner.clone(),
+        addrs: Rc::clone(&addrs),
+    };
+    let engine = JsEngine::new(32 * 1024 * 1024).unwrap();
+    let shared: SharedDoc = Rc::new(RefCell::new(sample_doc()));
+    let nav: SharedNavActions = Rc::new(RefCell::new(Vec::new()));
+    let url = "http://rebind.test/";
+    engine
+        .with_context(|ctx| {
+            install_document_global_full(&ctx, &shared, url, &nav, None, None, None, None, None)?;
+            let handler = fetch::BrowserFetchHandler::new(url, None, Box::new(t.clone()));
+            oasis_js::fetch::bind_fetch_handler(&ctx, Box::new(handler))?;
+            Ok(())
+        })
+        .unwrap();
+    // The attacker's DNS now answers loopback only.
+    *addrs.borrow_mut() = vec![std::net::IpAddr::from([127, 0, 0, 1])];
+    engine
+        .eval("fetch('http://127.0.0.1/admin').catch(function(e) { globalThis.err = e.name; })")
+        .unwrap();
+    assert_eq!(js_str(&engine, "err"), "TypeError");
+    assert!(inner.urls().is_empty(), "nothing was sent");
 }
 
 /// Transport double that asks the handler whether a redirect to `next`
@@ -1523,6 +1682,55 @@ fn freed_nodes_are_evicted_from_wrapper_cache() {
          [fresh[0] !== old, fresh[0].tagName, hits, fresh[0] === outer.firstChild].join()",
         "true,I,0,true",
     );
+}
+
+#[test]
+fn script_dom_bytes_are_capped_but_overwrites_are_not_charged_forever() {
+    let (engine, _doc) = setup_html(TREE_HTML);
+    // Overwriting one node's text far past the cap in total must keep
+    // working: the running bound is recounted against the live bytes.
+    check(
+        &engine,
+        "var p = document.getElementById('p'); var big = 'x'.repeat(1 << 19); \
+         for (var i = 0; i < 200; i++) { p.textContent = big + i; } \
+         p.textContent.length",
+        &((1 << 19) + 3).to_string(),
+    );
+    // Shallow clones copy the 1 MiB attribute each time; the arena is
+    // capped well before 100 of them (after about cap / 1 MiB: 64 on
+    // desktop, 4 on PSP).
+    let at_least = (super::node_api::MAX_SCRIPT_DOM_BYTES >> 20) / 2 - 1;
+    check(
+        &engine,
+        &format!(
+            "var d = document.createElement('div'); d.setAttribute('data-x', 'x'.repeat(1 << 20)); \
+             var n = 0, err = ''; \
+             try {{ for (var i = 0; i < 100; i++) {{ d.cloneNode(false); n++; }} }} \
+             catch (e) {{ err = e.name; }} \
+             d.setAttribute('data-y', 'y'.repeat(1 << 20)); \
+             [n > {at_least} && n < 100, err, d.getAttribute('data-y')].join()"
+        ),
+        "true,QuotaExceededError,",
+    );
+}
+
+#[test]
+fn held_wrapper_of_a_freed_node_does_not_alias_the_reused_slot() {
+    // The freed `<b>` slot is reused by the new `<i>`: writes through the
+    // old wrapper used to land on the new node.
+    let (engine, shared) = setup_html(TREE_HTML);
+    check(
+        &engine,
+        "var outer = document.getElementById('outer'); var old = outer.firstElementChild; \
+         outer.innerHTML = '<i>x</i>'; \
+         old.textContent = 'pwned'; old.setAttribute('id', 'hijack'); \
+         [outer.firstChild.textContent, outer.firstChild.id, old.isConnected, \
+          old.getAttribute('id'), document.getElementById('hijack')].join()",
+        "x,,false,,",
+    );
+    let doc = shared.borrow();
+    let outer = doc.get_element_by_id("outer").unwrap();
+    assert_eq!(doc.text_content(outer), "x");
 }
 
 #[test]

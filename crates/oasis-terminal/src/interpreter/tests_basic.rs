@@ -1,7 +1,7 @@
 //! Basic command, tokenizer, variable, history, alias, glob, and path tests.
 
 use super::*;
-use crate::expander::{glob_match, glob_match_simple};
+use crate::expander::glob_match;
 use crate::test_helpers::{assert_none_output, assert_text};
 use oasis_vfs::{MemoryVfs, Vfs};
 
@@ -776,9 +776,9 @@ fn glob_char_class_in_command() {
 }
 
 #[test]
-fn glob_match_simple_middle() {
-    assert!(glob_match_simple("hello_world", "hello*world"));
-    assert!(!glob_match_simple("hello_earth", "hello*world"));
+fn glob_match_middle_star() {
+    assert!(glob_match("hello*world", "hello_world"));
+    assert!(!glob_match("hello*world", "hello_earth"));
 }
 
 // -- Command substitution tests --

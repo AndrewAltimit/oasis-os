@@ -236,6 +236,8 @@ fn doctype_html() {
         tokens[0],
         Token::Doctype(DoctypeToken {
             name: Some("html".into()),
+            public_id: None,
+            system_id: None,
             force_quirks: false,
         })
     );
@@ -456,6 +458,8 @@ fn full_document() {
         tokens[0],
         Token::Doctype(DoctypeToken {
             name: Some("html".into()),
+            public_id: None,
+            system_id: None,
             force_quirks: false,
         })
     );
@@ -753,9 +757,34 @@ fn consecutive_self_closing_tags() {
 #[test]
 fn malformed_named_entity_passthrough() {
     // Unknown named entity should be passed through verbatim.
-    let tokens = tok("&notareal;");
+    let tokens = tok("&foobar;");
     assert_eq!(tokens.len(), 1);
-    assert_eq!(tokens[0], Token::Character("&notareal;".into()));
+    assert_eq!(tokens[0], Token::Character("&foobar;".into()));
+    // ...even when it starts with a legacy name: the entity table lacks
+    // many HTML5 names, and a prefix match would garble real ones
+    // (`&centerdot;` became `¢erdot;`). Without the `;` the legacy
+    // prefix still matches.
+    assert_eq!(tok("&notareal;"), [Token::Character("&notareal;".into())]);
+    assert_eq!(tok("&centerdot;"), [Token::Character("&centerdot;".into())]);
+    assert_eq!(tok("&notareal"), [Token::Character("\u{AC}areal".into())]);
+}
+
+#[test]
+fn semicolonless_references_follow_the_legacy_table() {
+    // Legacy names match as the longest prefix; others need the `;`.
+    assert_eq!(tok("&copy2024"), [Token::Character("\u{A9}2024".into())]);
+    assert_eq!(tok("a &mdash b"), [Token::Character("a &mdash b".into())]);
+    assert_eq!(tok("&mdash;"), [Token::Character("\u{2014}".into())]);
+    assert_eq!(
+        tok("&check; &lang;"),
+        [Token::Character("\u{2713} \u{27E8}".into())]
+    );
+    // In attributes a legacy name followed by an alphanumeric stays.
+    let Some(Token::StartTag(tag)) = tok("<a href=\"?a=1&copyx=2&notb\">").into_iter().next()
+    else {
+        panic!("start tag");
+    };
+    assert_eq!(tag.attributes[0].value, "?a=1&copyx=2&notb");
 }
 
 #[test]
@@ -1000,4 +1029,64 @@ mod prop {
             );
         }
     }
+}
+
+// -- comment end bang, DOCTYPE identifiers, text runs -------------------
+
+#[test]
+fn comment_end_bang_closes_comment() {
+    let tokens = tok("<!-- a --!>b");
+    assert_eq!(tokens[0], Token::Comment(" a ".into()));
+    assert_eq!(tokens[1], Token::Character("b".into()));
+    // `--!` not followed by `>` stays comment text.
+    let tokens = tok("<!--a--!b-->");
+    assert_eq!(tokens[0], Token::Comment("a--!b".into()));
+}
+
+#[test]
+fn doctype_public_and_system_identifiers() {
+    let tokens = tok("<!DOCTYPE html PUBLIC \"-//W3C//DTD HTML 4.01//EN\" \
+         'http://www.w3.org/TR/html4/strict.dtd'>");
+    let Token::Doctype(d) = &tokens[0] else {
+        panic!("expected doctype, got {tokens:?}");
+    };
+    assert_eq!(d.name.as_deref(), Some("html"));
+    assert_eq!(d.public_id.as_deref(), Some("-//W3C//DTD HTML 4.01//EN"));
+    assert_eq!(
+        d.system_id.as_deref(),
+        Some("http://www.w3.org/TR/html4/strict.dtd")
+    );
+    assert!(!d.force_quirks);
+
+    let tokens = tok("<!doctype html system \"about:legacy-compat\">");
+    let Token::Doctype(d) = &tokens[0] else {
+        panic!("expected doctype");
+    };
+    assert_eq!(d.system_id.as_deref(), Some("about:legacy-compat"));
+    assert!(!d.force_quirks);
+}
+
+#[test]
+fn malformed_doctype_identifiers_force_quirks() {
+    for input in [
+        "<!DOCTYPE html PUBLIC>",
+        "<!DOCTYPE html PUBLIC \"unterminated>",
+        "<!DOCTYPE html bogus>",
+        "<!DOCTYPE html",
+    ] {
+        let tokens = tok(input);
+        let Token::Doctype(d) = &tokens[0] else {
+            panic!("expected doctype for {input:?}");
+        };
+        assert!(d.force_quirks, "{input:?} should force quirks");
+    }
+    // A `>` inside a quoted identifier still ends the DOCTYPE.
+    let tokens = tok("<!DOCTYPE html PUBLIC \"a>b\">");
+    assert_eq!(tokens[1], Token::Character("b\">".into()));
+}
+
+#[test]
+fn data_text_is_one_token_per_run() {
+    let mut t = Tokenizer::new("hello world<b>x &amp; y</b>");
+    assert_eq!(t.next_token(), Token::Character("hello world".into()));
 }

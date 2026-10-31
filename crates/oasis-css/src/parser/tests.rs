@@ -372,6 +372,18 @@ fn inline_style() {
     assert_eq!(decls[1].property, "font-size");
 }
 
+#[test]
+fn inline_style_expands_shorthands() {
+    // `style="flex: 1"` must reach the cascade as longhands, as a
+    // stylesheet rule's does (the value applier has no `flex` case).
+    let decls = parse_inline_style("flex: 1; color: red");
+    let props: Vec<&str> = decls.iter().map(|d| d.property.as_str()).collect();
+    assert!(props.contains(&"flex-grow"), "{props:?}");
+    assert!(props.contains(&"flex-basis"), "{props:?}");
+    assert!(!props.contains(&"flex"), "{props:?}");
+    assert!(props.contains(&"color"), "{props:?}");
+}
+
 // -- test 14: malformed input recovery ---------------------------
 
 #[test]

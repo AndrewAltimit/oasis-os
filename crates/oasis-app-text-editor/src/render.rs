@@ -1,13 +1,80 @@
+use std::collections::HashMap;
+
 use crate::colors::EditorColors;
 use crate::{EditorMode, FileType, TextEditorApp};
 use oasis_skin::ActiveTheme;
-use oasis_types::backend::SdiBackend;
+use oasis_types::backend::{SdiBackend, bitmap_measure_text};
 
 /// Gap between the top of the text area and the first text row.
 const NP_PAD_TOP: i32 = 6;
 /// Menu bar and status strip heights of the windowed Notepad layout.
 const NP_MENU_H: u32 = 18;
 const NP_STATUS_H: u32 = 18;
+
+/// Left inset of the text from the text area's edge.
+pub(crate) const NP_PAD_LEFT: i32 = 8;
+/// Font size of the text area.
+pub(crate) const NP_FONT_SIZE: u16 = 12;
+/// Room the caret keeps from the text area's right edge.
+const H_SCROLL_MARGIN: u32 = 16;
+
+/// Text whose backend width identifies the text-area font: when it
+/// changes (a skin swap to or from a TTF), [`Advances`] starts over.
+const FONT_PROBE: &str = "Wi0";
+/// Most characters [`Advances`] remembers before starting over.
+const MAX_ADVANCES: usize = 4096;
+
+/// Per-character advances of the text-area font as the backend measured
+/// them while drawing. Clicks get no backend, so caret hit-testing sums
+/// these instead of the bitmap font's widths: under a TTF skin a click
+/// lands on the glyph drawn there. A character not drawn yet falls back
+/// to its bitmap-font advance.
+#[derive(Debug, Default)]
+pub(crate) struct Advances {
+    /// Backend width of [`FONT_PROBE`] when the table was filled.
+    probe: u32,
+    table: HashMap<char, u32>,
+}
+
+impl Advances {
+    /// Measure every character of `text` the table does not know yet,
+    /// first starting over if the backend's font changed.
+    pub(crate) fn learn(&mut self, text: &str, backend: &dyn SdiBackend) {
+        let probe = backend.measure_text(FONT_PROBE, NP_FONT_SIZE);
+        if probe != self.probe || self.table.len() > MAX_ADVANCES {
+            self.table.clear();
+            self.probe = probe;
+        }
+        let mut buf = [0u8; 4];
+        for c in text.chars() {
+            self.table
+                .entry(c)
+                .or_insert_with(|| backend.measure_text(c.encode_utf8(&mut buf), NP_FONT_SIZE));
+        }
+    }
+
+    /// Advance of `c` in the text-area font.
+    pub(crate) fn advance(&self, c: char) -> u32 {
+        self.table
+            .get(&c)
+            .copied()
+            .unwrap_or_else(|| bitmap_measure_text(c.encode_utf8(&mut [0u8; 4]), NP_FONT_SIZE))
+    }
+
+    /// Width of `text` in the text-area font.
+    pub(crate) fn width(&self, text: &str) -> u32 {
+        text.chars().map(|c| self.advance(c)).sum()
+    }
+}
+
+/// Horizontal scroll (px) of a text area `cw` wide whose caret sits
+/// `caret_px` from the text origin: 0 while the caret fits, otherwise just
+/// enough to keep it [`H_SCROLL_MARGIN`] from the right edge. Stateless, so
+/// drawing and click hit-testing always agree.
+pub(crate) fn h_scroll(caret_px: u32, cw: u32) -> u32 {
+    let room = cw.saturating_sub(NP_PAD_LEFT as u32 + H_SCROLL_MARGIN);
+    caret_px.saturating_sub(room)
+}
 
 /// `(text rows, row height)` of the windowed editor viewport in a content
 /// area `ch` tall: what `draw_notepad` draws and `App::layout` records.
@@ -68,21 +135,35 @@ impl TextEditorApp {
         }
     }
 
+    /// The find query as the prompt shows it: a primed (carried-over,
+    /// about to be replaced) query is bracketed like a selection.
+    fn query_field(&self) -> String {
+        if self.query_primed {
+            format!("[{}]", self.find_query)
+        } else {
+            self.find_query.clone()
+        }
+    }
+
     /// Left status-bar text: the active prompt, a status message, or the
     /// file summary.
     pub(crate) fn status_left(&self, file_summary: bool) -> String {
         let mode = self.mode_label();
         match self.mode {
-            EditorMode::Find => return format!("{mode}  |  Find: {}_", self.find_query),
+            EditorMode::Find => {
+                let caret = if self.query_primed { "" } else { "_" };
+                return format!("{mode}  |  Find: {}{caret}", self.query_field());
+            },
             EditorMode::Replace => {
-                let (f, r) = if self.replace_focus {
-                    ("", "_")
-                } else {
-                    ("_", "")
+                let (f, r) = match (self.replace_focus, self.query_primed) {
+                    (true, _) => ("", "_"),
+                    (false, true) => ("", ""),
+                    (false, false) => ("_", ""),
                 };
                 return format!(
                     "{mode}  |  Find: {}{f}  Replace: {}{r}  (Enter / Ctrl+Enter all)",
-                    self.find_query, self.replace_text
+                    self.query_field(),
+                    self.replace_text
                 );
             },
             EditorMode::GoToLine => return format!("Go to line: {}_", self.prompt_input),
@@ -110,10 +191,7 @@ impl TextEditorApp {
 
     /// Right status-bar text: 1-based line and character column.
     pub(crate) fn status_position(&self) -> String {
-        let line = self.buffer.get_line(self.cursor_line).unwrap_or("");
-        let col = line[..line.floor_char_boundary(self.cursor_col)]
-            .chars()
-            .count();
+        let col = self.cursor_char_col();
         match self.selection() {
             Some((s, e)) => {
                 let n = self.buffer.text_range(s, e).chars().count();
@@ -156,7 +234,11 @@ impl TextEditorApp {
         // Status bar line at the end.
         let mode_str = self.mode_label().to_uppercase();
         let mod_str = if self.modified { " [Modified]" } else { "" };
-        let pos_str = format!("Ln {}, Col {}", self.cursor_line + 1, self.cursor_col + 1);
+        let pos_str = format!(
+            "Ln {}, Col {}",
+            self.cursor_line + 1,
+            self.cursor_char_col() + 1
+        );
         let status = if let Some(ref msg) = self.status_message {
             format!("-- {mode_str} -- {pos_str}{mod_str}  {msg}")
         } else {
@@ -219,9 +301,27 @@ impl TextEditorApp {
         let area_h = (cy + ch as i32 - area_y - status_h as i32).max(0) as u32;
         backend.fill_rect(cx, area_y, cw, area_h, body_bg)?;
 
-        let font_size: u16 = 12;
-        let pad_left = 8i32;
+        let font_size = NP_FONT_SIZE;
         let pad_top = NP_PAD_TOP;
+        // Scroll horizontally so a caret past the right edge stays visible;
+        // the text area is clipped so scrolled text can't spill out.
+        let caret_line = self.buffer.get_line(self.cursor_line).unwrap_or("");
+        // Remember the drawn glyphs' advances for click hit-testing.
+        {
+            let mut advances = self.advances.borrow_mut();
+            advances.learn(caret_line, &*backend);
+            let (rows, _) = notepad_viewport(ch, at);
+            let end = (self.content.scroll + rows).min(self.buffer.line_count());
+            for line in self.content.scroll..end {
+                advances.learn(self.buffer.get_line(line).unwrap_or(""), &*backend);
+            }
+        }
+        let caret_px = backend.measure_text(
+            &caret_line[..caret_line.floor_char_boundary(self.cursor_col)],
+            font_size,
+        );
+        let pad_left = NP_PAD_LEFT - h_scroll(caret_px, cw) as i32;
+        backend.push_clip_rect(cx, area_y, cw, area_h)?;
         // Same viewport `App::layout` recorded for scrolling and clicks.
         let (max_lines, line_h) = notepad_viewport(ch, at);
         let first = self.content.scroll;
@@ -237,7 +337,8 @@ impl TextEditorApp {
         let theme = &colors.syntax;
         let highlighted = self.file_type != FileType::Plain;
         let window = if highlighted { visible } else { 0 };
-        self.buffer
+        let drawn = self
+            .buffer
             .with_visible_spans(self.file_type, first, window, |spans| {
                 for i in 0..visible {
                     let line_idx = first + i;
@@ -311,7 +412,9 @@ impl TextEditorApp {
                     }
                 }
                 Ok::<(), oasis_types::error::OasisError>(())
-            })?;
+            });
+        backend.pop_clip_rect()?;
+        drawn?;
 
         // Status bar.
         let status_y = cy + ch as i32 - status_h as i32;
@@ -322,7 +425,14 @@ impl TextEditorApp {
         // The file name lives here now that there's no inner title bar.
         let position = self.status_position();
         let status_left = self.status_left(true);
-        backend.draw_text(&status_left, cx + 6, status_y + 4, 11, status_fg)?;
+        backend.draw_text_ellipsis(
+            &status_left,
+            cx + 6,
+            status_y + 4,
+            11,
+            status_fg,
+            cw.saturating_sub(12),
+        )?;
 
         let left_w = backend.measure_text(&status_left, 11);
         let pos_w = backend.measure_text(&position, 11);
@@ -336,7 +446,7 @@ impl TextEditorApp {
         // any z-ordering from the backend.
         if self.menu.is_open() {
             self.menu
-                .draw_dropdown(backend, cx, menu_y, menu_h, &menu_style)?;
+                .draw_dropdown(backend, (cx, menu_y, cw, menu_h), &menu_style)?;
         }
 
         Ok(())

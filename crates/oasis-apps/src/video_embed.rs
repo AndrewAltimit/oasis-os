@@ -506,25 +506,32 @@ impl App for VideoEmbedApp {
             let bar_h = (SEARCH_BAR_H - 4) as u32;
             backend.fill_rect(bar_x, bar_y, bar_w, bar_h, at.app.selected_bg)?;
             let prompt = format!("Search: {}_", self.input_buf);
-            backend.draw_text(&prompt, bar_x + 4, bar_y + 4, at.font_body, at.app.text)?;
+            let right = bar_x + bar_w as i32 - 4;
+            let (x, size) = (bar_x + 4, at.font_body);
+            text_fit(backend, &prompt, x, bar_y + 4, size, at.app.text, right)?;
         }
 
+        let right = cx + cw as i32 - 4;
         match self.state {
             EmbedState::Search => {
                 let hint_y = cy + title_bar_h + SEARCH_BAR_H + 8;
-                backend.draw_text(
+                text_fit(
+                    backend,
                     "Type a search query, video id, or URL.",
                     cx + 8,
                     hint_y,
                     at.font_body,
                     at.app.text,
+                    right,
                 )?;
-                backend.draw_text(
+                text_fit(
+                    backend,
                     "Confirm = play / search   Cancel = back",
                     cx + 8,
                     hint_y + 14,
                     at.font_hint,
                     at.app.dim_text,
+                    right,
                 )?;
             },
             EmbedState::Results => {
@@ -535,19 +542,23 @@ impl App for VideoEmbedApp {
                 // placeholder behind it (most of it is hidden anyway).
                 let hint_y = cy + title_bar_h + 4;
                 let id = self.playing_video_id.as_deref().unwrap_or("");
-                backend.draw_text(
+                text_fit(
+                    backend,
                     &format!("Now playing: {id}"),
                     cx + 6,
                     hint_y,
                     at.font_body,
                     at.app.text,
+                    right,
                 )?;
-                backend.draw_text(
+                text_fit(
+                    backend,
                     "Cancel = back to results",
                     cx + 6,
                     cy + ch as i32 - 14,
                     at.font_hint,
                     at.app.dim_text,
+                    right,
                 )?;
             },
         }
@@ -571,43 +582,56 @@ fn draw_results_grid(
 ) -> Result<()> {
     let title_bar_h = TOP_PAD;
     let footer_y = cy + ch as i32 - FOOTER_H;
+    let right = cx + cw as i32 - 4;
+    let status_y = cy + title_bar_h + SEARCH_BAR_H + 8;
 
     match app.results.status {
         SearchStatus::Loading => {
-            backend.draw_text(
-                "Searching YouTube...",
+            let text = "Searching YouTube...";
+            text_fit(
+                backend,
+                text,
                 cx + 8,
-                cy + title_bar_h + SEARCH_BAR_H + 8,
+                status_y,
                 at.font_body,
                 at.app.text,
+                right,
             )?;
         },
         SearchStatus::Error => {
             let err = app.results.error.as_deref().unwrap_or("Search failed");
-            backend.draw_text(
-                &format!("Error: {err}"),
+            let text = format!("Error: {err}");
+            text_fit(
+                backend,
+                &text,
                 cx + 8,
-                cy + title_bar_h + SEARCH_BAR_H + 8,
+                status_y,
                 at.font_body,
                 at.app.text,
+                right,
             )?;
-            backend.draw_text(
+            text_fit(
+                backend,
                 "Press Cancel and try a different query.",
                 cx + 8,
-                cy + title_bar_h + SEARCH_BAR_H + 22,
+                status_y + 14,
                 at.font_hint,
                 at.app.dim_text,
+                right,
             )?;
         },
         SearchStatus::Idle => {},
         SearchStatus::Ready => {
             if app.results.results.is_empty() {
-                backend.draw_text(
-                    "No results.",
+                let text = "No results.";
+                text_fit(
+                    backend,
+                    text,
                     cx + 8,
-                    cy + title_bar_h + SEARCH_BAR_H + 8,
+                    status_y,
                     at.font_body,
                     at.app.text,
+                    right,
                 )?;
             } else {
                 let (start, end) = app.page_range();
@@ -640,36 +664,41 @@ fn draw_results_grid(
                         let _ = backend.blit(TextureId(r.thumb_tex), tx, ty, tw, th);
                     }
 
-                    // Title (one short line) + author.
+                    // Title (one short line) + author, cut to the cell in
+                    // pixels (a character-count cut overflowed with wide
+                    // glyphs or large-font skins).
                     let title_y = ty + th as i32 + 2;
-                    let max_chars = (rw as usize / 6).max(8);
-                    let truncated = truncate(&r.title, max_chars);
-                    backend.draw_text(
-                        &truncated,
+                    let cell_right = cell_x + rw as i32 - 4;
+                    let title_color = if i == app.selection {
+                        at.app.selected_text
+                    } else {
+                        at.app.text
+                    };
+                    text_fit(
+                        backend,
+                        &r.title,
                         cell_x + 4,
                         title_y,
                         at.font_body,
-                        if i == app.selection {
-                            at.app.selected_text
-                        } else {
-                            at.app.text
-                        },
+                        title_color,
+                        cell_right,
                     )?;
-                    let author = truncate(&r.author, max_chars);
-                    backend.draw_text(
-                        &author,
+                    text_fit(
+                        backend,
+                        &r.author,
                         cell_x + 4,
                         title_y + 12,
                         at.font_hint,
                         at.app.dim_text,
+                        cell_right,
                     )?;
                     if !r.duration.is_empty() {
                         // Right-align inside the cell; clamp to the cell's
                         // left edge so very small cells with long duration
                         // strings don't render the label into the
                         // neighbouring cell.
-                        let dx =
-                            (cell_x + rw as i32 - (r.duration.len() as i32 * 6) - 4).max(cell_x);
+                        let dur_w = backend.measure_text(&r.duration, at.font_hint) as i32;
+                        let dx = (cell_right - dur_w).max(cell_x);
                         backend.draw_text(
                             &r.duration,
                             dx,
@@ -693,21 +722,33 @@ fn draw_results_grid(
     } else {
         "Confirm=play  Cancel=back".to_string()
     };
-    backend.draw_text(&footer, cx + 6, footer_y, at.font_hint, at.app.dim_text)?;
+    let right = cx + cw as i32 - 4;
+    text_fit(
+        backend,
+        &footer,
+        cx + 6,
+        footer_y,
+        at.font_hint,
+        at.app.dim_text,
+        right,
+    )?;
     Ok(())
 }
 
-fn truncate(s: &str, max_chars: usize) -> String {
-    if max_chars == 0 {
-        return String::new();
-    }
-    if s.chars().count() <= max_chars {
-        return s.to_string();
-    }
-    let take = max_chars.saturating_sub(1);
-    let mut out: String = s.chars().take(take).collect();
-    out.push('…');
-    out
+/// Draw `text` at `(x, y)`, ellipsized so it ends before `right` (small
+/// windows and large-font skins must not draw past the window edge).
+fn text_fit(
+    backend: &mut dyn SdiBackend,
+    text: &str,
+    x: i32,
+    y: i32,
+    size: u16,
+    color: oasis_types::backend::Color,
+    right: i32,
+) -> Result<()> {
+    let max_w = right.saturating_sub(x).max(0) as u32;
+    backend.draw_text_ellipsis(text, x, y, size, color, max_w)?;
+    Ok(())
 }
 
 #[cfg(test)]
@@ -879,6 +920,42 @@ mod tests {
         assert_eq!(data, "play:id_one_aaaa");
     }
 
+    /// Result titles were cut by character count (6 px a glyph), so wide
+    /// titles ran out of their cell in small windows.
+    #[test]
+    fn result_labels_stay_inside_their_cell_at_320x200() {
+        use oasis_test_backend::RecordingBackend;
+        let mut app = VideoEmbedApp::new("/apps/video-embed");
+        app.state = EmbedState::Results;
+        app.results = SearchResults {
+            query: "x".to_string(),
+            status: SearchStatus::Ready,
+            error: None,
+            results: vec![SearchResult {
+                id: "id_one_aaaa".to_string(),
+                title: "WWWW MMMM WWWW MMMM WWWW MMMM".to_string(),
+                author: "Mmmmmmmmmmmmmmmmmmmmmmm".to_string(),
+                duration: "1:23:45".to_string(),
+                thumb_tex: 0,
+            }],
+        };
+        let at = ActiveTheme::default();
+        app.layout(320, 200, &at);
+        let mut rec = RecordingBackend::new(480, 272);
+        app.draw_windowed(0, 0, 320, 200, &mut rec, &at).unwrap();
+        let (cx, cy, cw, ch) = VideoEmbedApp::cell_rect(320, 200, TOP_PAD, 0);
+        let in_cell: Vec<_> = rec
+            .text_positions()
+            .into_iter()
+            .filter(|&(_, x, y, _)| x >= cx && y >= cy && y < cy + ch as i32)
+            .collect();
+        assert!(in_cell.len() >= 3, "{in_cell:?}");
+        for (text, x, _, size) in in_cell {
+            let right = x + oasis_types::backend::bitmap_measure_text(text, size) as i32;
+            assert!(right <= cx + cw as i32, "{text:?} ends at {right}");
+        }
+    }
+
     #[test]
     fn cancel_in_search_exits() {
         use oasis_core::vfs::MemoryVfs;
@@ -937,13 +1014,5 @@ mod tests {
         };
         // 14 results / 6 per page = 3 pages.
         assert_eq!(app.page_count(), 3);
-    }
-
-    #[test]
-    fn truncate_long_title() {
-        let s = "this is a very long title that should be truncated";
-        let t = truncate(s, 10);
-        assert!(t.chars().count() <= 10);
-        assert!(t.ends_with('…'));
     }
 }

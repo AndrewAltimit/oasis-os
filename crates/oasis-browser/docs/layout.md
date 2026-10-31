@@ -2,22 +2,25 @@
 
 The layout engine turns a styled DOM (`Document` + per-node
 `ComputedStyle`) into a `LayoutBox` tree with absolute positions and
-sizes. It is a single, recursive top-down walk — there is no separate
-"compute intrinsic widths" pass like Gecko or Blink. Instead, every
-formatting context shares one helper that resolves dimensions on the
-fly.
+sizes. It is a single, recursive top-down walk. Where a container
+needs an item's intrinsic width (a content-sized flex item, an
+intrinsic grid track) it asks `intrinsic::max_content_width`, which
+computes it from the box tree without laying the item out and caches
+it per box for the current layout pass.
 
 ## Files
 
 ```text
 src/layout/
-├── mod.rs            entry points: build_layout_tree, layout_block_incremental
+├── mod.rs            module list
 ├── box_model.rs      LayoutBox, BoxType, Dimensions, Rect, EdgeSizes
 ├── block/            block / inline-block / list-item layout
 │   ├── mod.rs
+│   ├── tree_builder.rs  entry points: build_layout_tree, relayout_tree
 │   ├── float.rs      float context, BFC root tracking
 │   └── tests.rs
 ├── inline.rs         inline run building, line boxes
+├── intrinsic.rs      max-content widths without layout, per-pass cache
 ├── text.rs           word breaking, soft hyphen, bidi run detection
 ├── text_cache.rs     CachingMeasurer + SharedTextCache
 ├── flex.rs           CSS flexbox: main / cross axis, grow / shrink, gap
@@ -36,7 +39,8 @@ pub struct LayoutBox {
     pub dimensions: Dimensions,         // border / padding / margin / content rect
     pub children: Vec<LayoutBox>,
     pub dom_node: Option<NodeId>,       // back-reference for hit testing
-    pub dirty: bool,                    // incremental layout flag
+    pub sizing: SizingState,            // flex / grid forced sizes, max-content cache
+    pub inline_source: Option<Box<Vec<LayoutBox>>>, // inline content an IFC was built from
     // ... line boxes, float info, scroll offset, etc.
 }
 
@@ -72,9 +76,11 @@ the `LayoutBox` tree by dispatching on each element's `display`:
 - `table` / `table-row` / `table-cell` → table layout
 - `none` → skipped entirely (no `LayoutBox` is created)
 
-Anonymous boxes are inserted as needed: an inline that ends up directly
-inside a `display: flex` is wrapped in an anonymous `Block`; a
-`<td>` outside a `<tr>` gets wrapped in an anonymous `TableRow`.
+Anonymous boxes are inserted as needed: inline children of a
+`display: flex` / `grid` container become anonymous `Block` items (one
+per inline element, carrying its flex / grid properties; one per text
+run; whitespace-only runs dropped); a `<td>` outside a `<tr>` gets
+wrapped in an anonymous `TableRow`.
 
 ## Block layout
 
@@ -127,8 +133,16 @@ which makes lookups effectively free for steady-state pages.
 - **Flex** (`flex.rs`) implements the CSS Flexible Box Module Level 1:
   `flex-direction`, `flex-wrap`, `justify-content`, `align-items`,
   `align-self`, `align-content`, `flex-grow`, `flex-shrink`,
-  `flex-basis`, `gap`, `order`. It does not implement
-  `align-tracks` / `justify-tracks`.
+  `flex-basis`, `gap`, `order`. A definite basis (in the item's
+  `box-sizing`) is the base size; items without one size to fit-content,
+  their max-content width (`intrinsic.rs`) clamped to the space
+  available. A column container without a definite height is as tall as
+  its items (and ignores their basis). A row item is laid out once, at
+  its resolved size, passed as `LayoutBox::sizing.forced_width` (never
+  written into the style); a column item again only if flexing changed
+  its height. Positioning translates the laid-out subtree, so nesting
+  is linear in depth (`benches/layout_engine.rs` `layout_nested_flex`).
+  It does not implement `align-tracks` / `justify-tracks`.
 - **Grid** (`grid.rs`) supports `grid-template-{columns,rows,areas}`,
   `grid-auto-{columns,rows}`, `grid-auto-flow: [row | column] || dense`,
   `gap`, and explicit / implicit grids. Track lists are parsed by
@@ -145,23 +159,28 @@ which makes lookups effectively free for steady-state pages.
   main`, or `main-start` / `main-end` lines). Track sizing follows the
   shape of §11 (base sizes, maximize, flexible tracks with minimum
   freezing, auto-track stretch); `fr` rows resolve against a definite
-  container `height`. Item intrinsic widths are approximate. Subgrid,
+  container `height`. Intrinsic tracks size from the items' max-content
+  contributions (min-content is not distinguished); items are stretched
+  to their cell through `sizing.forced_width`. Subgrid,
   `[line-name]` references and `align-items` stretch of grid items are
   **not** implemented.
 - **Table** (`table.rs`) implements `border-collapse: separate` and the
   HTML table model with auto-sizing columns. `border-collapse: collapse`
   is parsed and stored but the painter still draws separate borders.
 
-## Incremental layout
+## Relayout
 
-`layout_block_incremental` only re-runs layout for subtrees whose
-`dirty` flag is set. Mutations from the cascade or DOM mark dirty
-upwards; sibling boxes that depend on the dirty box (because they share
-a containing block whose width changed) are also marked.
-
-The current implementation is **conservative** — when in doubt, it
-walks the whole subtree. The point is to avoid relayout on
-hover / scroll / focus changes, which it does well.
+`relayout_tree` lays an existing tree out again in place (the widget
+does after images decode, so canvas state and textures survive). It is a
+full layout and must give exactly the geometry of a fresh
+`build_layout_tree`; layout therefore keeps nothing between passes that
+it does not recompute: inline layout replaces `children` with line
+fragments but lays out from `inline_source`, and flex / grid sizes go
+through `sizing`, not the style. `src/relayout_tests.rs` checks every
+corpus fixture (same-width relayout, a detour through another width,
+image sizes changing). There is no partial dirty-subtree relayout; the
+one that existed skipped repositioning clean subtrees, floats and
+`clear`.
 
 ## Tests
 
@@ -170,4 +189,5 @@ hover / scroll / focus changes, which it does well.
 - `src/layout/text_cache.rs` — caching invariants.
 - `tests/browser_integration.rs` — full pipeline regression tests for
   block, table, list, and gradient pages.
-- `benches/layout_engine.rs` — layout build / relayout throughput.
+- `src/relayout_tests.rs` — relayout vs fresh layout over the corpus.
+- `benches/layout_engine.rs` — layout build throughput, nested flex.

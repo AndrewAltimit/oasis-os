@@ -228,14 +228,6 @@ impl SdiTextures for HeadlessBackend {
         fn blit_tinted(
             &mut self, tex: TextureId, x: i32, y: i32, w: u32, h: u32, tint: Color
         ) -> Result<()>;
-        fn blit_sub_tinted(
-            &mut self, tex: TextureId, src_x: u32, src_y: u32, src_w: u32, src_h: u32,
-            dst_x: i32, dst_y: i32, dst_w: u32, dst_h: u32, tint: Color
-        ) -> Result<()>;
-        fn blit_flipped(
-            &mut self, tex: TextureId, x: i32, y: i32, w: u32, h: u32, flip_h: bool,
-            flip_v: bool
-        ) -> Result<()>;
     }
 }
 

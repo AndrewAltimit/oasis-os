@@ -259,7 +259,7 @@ impl DesktopPlatform {
             second: t.next()?.parse().ok()?,
         };
         let in_range = (1..=12).contains(&parsed.month)
-            && (1..=31).contains(&parsed.day)
+            && (1..=days_in_month(parsed.year, parsed.month)).contains(&parsed.day)
             && parsed.hour < 24
             && parsed.minute < 60
             && parsed.second < 60;
@@ -395,33 +395,27 @@ pub(crate) fn days_to_ymd(mut days: u64) -> (u16, u8, u8) {
         days -= year_days;
         year += 1;
     }
-    let leap = is_leap(year);
-    let month_days: [u64; 12] = [
-        31,
-        if leap { 29 } else { 28 },
-        31,
-        30,
-        31,
-        30,
-        31,
-        31,
-        30,
-        31,
-        30,
-        31,
-    ];
-    let mut month = 0u8;
-    for (i, &md) in month_days.iter().enumerate() {
-        if days < md {
-            month = (i + 1) as u8;
+    let mut month = 1u8;
+    loop {
+        let md = u64::from(days_in_month(year, month));
+        if days < md || month == 12 {
             break;
         }
         days -= md;
-    }
-    if month == 0 {
-        month = 12;
+        month += 1;
     }
     (year, month, (days + 1) as u8)
+}
+
+/// Number of days in `month` (1-12) of `year`; 0 for an invalid month.
+pub(crate) fn days_in_month(year: u16, month: u8) -> u8 {
+    match month {
+        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+        4 | 6 | 9 | 11 => 30,
+        2 if is_leap(year) => 29,
+        2 => 28,
+        _ => 0,
+    }
 }
 
 pub(crate) fn is_leap(y: u16) -> bool {
@@ -1199,6 +1193,8 @@ mod tests {
             "2025-13-01 00:00:00",
             "2025-00-10 00:00:00",
             "2025-01-32 00:00:00",
+            "2025-02-29 00:00:00",
+            "2025-04-31 00:00:00",
             "2025-01-01 24:00:00",
             "2025-01-01 12:60:00",
             "2025-01-01 12:00:60",
@@ -1210,6 +1206,7 @@ mod tests {
                 "{bad} accepted"
             );
         }
+        assert!(DesktopPlatform::parse_fixed_time("2024-02-29 00:00:00").is_some());
     }
 
     // ---- Platform trait tests ----

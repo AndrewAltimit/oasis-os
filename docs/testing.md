@@ -58,7 +58,7 @@ e2e `FrameSink` hashes uploaded textures). Implement `SdiCore` and let
 
 ```rust,ignore
 struct MyRecorder { /* ... */ }
-impl SdiCore for MyRecorder { /* the 13 required methods */ }
+impl SdiCore for MyRecorder { /* the 12 required methods */ }
 // All eight extension traits with their defaults ...
 oasis_types::impl_sdi_defaults!(MyRecorder);
 // ... or all but the ones you override yourself.
@@ -320,10 +320,12 @@ cargo test -p oasis-app --test sdl_parity
   rasterizer rounds: 1-3 levels) and SDL's linear filtering of *scaled*
   textures (the rasterizer samples nearest). Add a scenario whenever a
   backend grows a new primitive or a rendering bug is fixed.
-- **Misuse checks** (`conformance::render_target_misuse`,
-  `conformance::texture_misuse`) return a list of violations instead of
+- **Misuse and equivalence checks** (`conformance::render_target_misuse`,
+  `conformance::texture_misuse`, `conformance::batch_matches_singles`)
+  return a list of violations instead of
   a frame: calls every backend must reject the same way (binding a bound
-  target, destroying an unknown texture, ...).
+  target, destroying an unknown texture, ...) and batches that must draw
+  exactly what their items drawn one by one do.
 - **Headless SDL**: `SdlBackend::new_headless` forces the `offscreen`
   video driver and the `software` renderer through in-process SDL hints,
   so the suites need no display and run in the CI container. SDL may only
@@ -341,3 +343,51 @@ cargo test -p oasis-app --test sdl_parity
   rendered by SDL only; the UE5 backend keeps the bitmap font. The WASM
   backend's canvas calls cannot run natively; only its shared pure-Rust
   pieces (glyph masks, metrics) are exercised.
+
+## Coverage, hangs and suite health
+
+**Coverage.** CI's advisory job runs
+[cargo-llvm-cov](https://github.com/taiki-e/cargo-llvm-cov) in the CI
+container. Locally (the first line installs it into the shared cargo
+volume):
+
+```bash
+docker compose --profile ci run --rm rust-ci bash -c "
+  rustup component add llvm-tools-preview
+  command -v cargo-llvm-cov || cargo install cargo-llvm-cov --locked
+  cargo llvm-cov --workspace --no-fail-fast \
+    --ignore-filename-regex '(tests?\.rs|benches?\.rs|main\.rs|/tests/|/benches/)' \
+    --summary-only"
+```
+
+Swap `--summary-only` for `--lcov --output-path lcov.info` to list
+uncovered lines, or `cargo llvm-cov report ...` to re-read the last run
+without rebuilding. The low spots are mostly the WASM backend (its canvas
+calls cannot run natively), code that reaches the real network
+(`oasis-app/src/net_fetch.rs`), the USB host and the screenshot binary.
+
+**Hang guards.** A test whose failure mode is "never returns" (a scanner
+that stops advancing, a runaway loop) runs its work on a worker thread and
+waits with `recv_timeout`, so it fails instead of holding the suite until
+nextest's 5-minute kill (see
+`every_highlighter_terminates_and_tiles_tricky_lines` in
+`oasis-app-text-editor`). Wall-clock asserts guard against hangs only and
+keep a wide margin: debug builds under a loaded CI runner are slow.
+
+**Hostile-input sweeps.** Parsers of user data get two kinds of
+robustness tests: a deterministic sweep (every truncation and single-byte
+corruption of a valid input, or every token on every property, as in
+`oasis-app-core`'s ID3 tests and `oasis-css`'s `values::apply::tests::fuzz`)
+and, where the crate already depends on `proptest`, a structured property
+test that draws from real names and hostile values instead of random
+bytes (random strings almost never reach the interesting arms).
+
+**Suite health.** `cargo nextest run --workspace --profile ci` runs about
+9 300 tests in under two minutes on a 32-core host. Check flakiness by
+archiving once and replaying (`cargo nextest archive ...` then
+`cargo nextest run --archive-file ...` a few times). Sockets bind
+`127.0.0.1:0`; network waits poll under a deadline. The slowest tests are
+the every-skin e2e loops (`key_flows_on_every_skin`,
+`open_close_every_app_returns_to_baseline`, 20-40 s each in a debug
+build) and `range_download_survives_a_long_throttle`, which must outlast
+the downloader's real 9 s stall limit.

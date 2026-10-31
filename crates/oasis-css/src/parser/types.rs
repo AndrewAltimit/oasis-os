@@ -44,12 +44,14 @@ pub enum SimpleSelector {
     /// Pseudo-element: `::before`, `::after`.
     PseudoElement(String),
     /// Negation: `:not(selector-list)`. Matches an element that does
-    /// not match any compound in the list (Selectors Level 4 form).
-    Not(Vec<CompoundSelector>),
-    /// `:is(selector-list)` -- matches if any inner selector matches.
-    Is(Vec<CompoundSelector>),
+    /// not match any selector in the list (Selectors Level 4 form, so
+    /// complex selectors like `:not(.a > .b)` are allowed).
+    Not(Vec<Selector>),
+    /// `:is(selector-list)` -- matches if any inner (complex) selector
+    /// matches; the empty list matches nothing.
+    Is(Vec<Selector>),
     /// `:where(selector-list)` -- like `:is()` but zero specificity.
-    Where(Vec<CompoundSelector>),
+    Where(Vec<Selector>),
     /// `:has(relative-selector-list)` -- the relational pseudo-class.
     /// Each entry is a leading combinator (default [`Combinator::Descendant`])
     /// and a full selector evaluated relative to the subject element.
@@ -58,11 +60,17 @@ pub enum SimpleSelector {
     /// enclosing rule's selector. Desugared into concrete selectors at
     /// parse time; should not appear in the final AST.
     Nest,
-    /// Attribute selector: `[attr]`, `[attr=val]`, etc.
+    /// Attribute selector: `[attr]`, `[attr=val]`, `[attr=val i]`, etc.
     Attribute {
         name: String,
         op: AttrOp,
+        /// The value to compare against; ASCII-lowercased when
+        /// `case_insensitive` is set.
         value: Option<String>,
+        /// Compare values ASCII-case-insensitively: the `i` flag, or
+        /// (without an `s` flag) one of the HTML attributes whose values
+        /// are case-insensitive (`type`, `lang`, `dir`, ...).
+        case_insensitive: bool,
     },
 }
 
@@ -118,174 +126,74 @@ pub struct Specificity {
     pub types: u8,
 }
 
-impl Selector {
-    /// Compute the specificity of this selector.  Inline is always 0 here;
-    /// the caller bumps it for inline styles.
-    pub fn specificity(&self) -> Specificity {
-        let mut ids: u8 = 0;
-        let mut classes: u8 = 0;
-        let mut types: u8 = 0;
-        for (compound, _) in &self.parts {
-            for simple in &compound.parts {
-                match simple {
-                    SimpleSelector::Id(_) => {
-                        ids = ids.saturating_add(1);
-                    },
-                    SimpleSelector::Class(_)
-                    | SimpleSelector::PseudoClass(_)
-                    | SimpleSelector::PseudoClassFn(_, _)
-                    | SimpleSelector::Attribute { .. } => {
-                        classes = classes.saturating_add(1);
-                    },
-                    SimpleSelector::Not(inner_list) => {
-                        // :not() itself doesn't count, but the most
-                        // specific compound in its argument list does.
-                        let max_spec = inner_list.iter().map(compound_specificity).max().unwrap_or(
-                            Specificity {
-                                inline: 0,
-                                ids: 0,
-                                classes: 0,
-                                types: 0,
-                            },
-                        );
-                        ids = ids.saturating_add(max_spec.ids);
-                        classes = classes.saturating_add(max_spec.classes);
-                        types = types.saturating_add(max_spec.types);
-                    },
-                    SimpleSelector::Is(inner_list) => {
-                        // :is() takes the max specificity of its arguments.
-                        let max_spec = inner_list.iter().map(compound_specificity).max().unwrap_or(
-                            Specificity {
-                                inline: 0,
-                                ids: 0,
-                                classes: 0,
-                                types: 0,
-                            },
-                        );
-                        ids = ids.saturating_add(max_spec.ids);
-                        classes = classes.saturating_add(max_spec.classes);
-                        types = types.saturating_add(max_spec.types);
-                    },
-                    SimpleSelector::Has(inner_list) => {
-                        // :has() takes the max specificity across the
-                        // relative selectors it contains, the same rule
-                        // as :is().
-                        let max_spec = inner_list
-                            .iter()
-                            .map(|(_, sel)| sel.specificity())
-                            .max()
-                            .unwrap_or(Specificity {
-                                inline: 0,
-                                ids: 0,
-                                classes: 0,
-                                types: 0,
-                            });
-                        ids = ids.saturating_add(max_spec.ids);
-                        classes = classes.saturating_add(max_spec.classes);
-                        types = types.saturating_add(max_spec.types);
-                    },
-                    SimpleSelector::Where(_) => {
-                        // :where() contributes zero specificity.
-                    },
-                    SimpleSelector::Nest => {
-                        // Nest is desugared at parse time; any residual
-                        // marker contributes zero.
-                    },
-                    SimpleSelector::Type(_) | SimpleSelector::PseudoElement(_) => {
-                        types = types.saturating_add(1);
-                    },
-                    SimpleSelector::Universal => {},
-                }
-            }
+impl Specificity {
+    /// `(0, 0, 0, 0)`.
+    pub const ZERO: Self = Self {
+        inline: 0,
+        ids: 0,
+        classes: 0,
+        types: 0,
+    };
+
+    /// Component-wise saturating sum.
+    fn add(self, other: Self) -> Self {
+        Self {
+            inline: self.inline.saturating_add(other.inline),
+            ids: self.ids.saturating_add(other.ids),
+            classes: self.classes.saturating_add(other.classes),
+            types: self.types.saturating_add(other.types),
         }
-        Specificity {
+    }
+
+    /// The largest specificity in `selectors` (zero for none): what
+    /// `:is()`, `:not()` and `:has()` contribute (Selectors 4 §17).
+    fn max_of<'a>(selectors: impl Iterator<Item = &'a Selector>) -> Self {
+        selectors
+            .map(Selector::specificity)
+            .max()
+            .unwrap_or(Self::ZERO)
+    }
+}
+
+impl SimpleSelector {
+    /// This simple selector's contribution to its selector's specificity.
+    fn specificity(&self) -> Specificity {
+        let one = |ids, classes, types| Specificity {
             inline: 0,
             ids,
             classes,
             types,
+        };
+        match self {
+            SimpleSelector::Id(_) => one(1, 0, 0),
+            SimpleSelector::Class(_)
+            | SimpleSelector::PseudoClass(_)
+            | SimpleSelector::PseudoClassFn(_, _)
+            | SimpleSelector::Attribute { .. } => one(0, 1, 0),
+            SimpleSelector::Type(_) | SimpleSelector::PseudoElement(_) => one(0, 0, 1),
+            SimpleSelector::Not(list) | SimpleSelector::Is(list) => {
+                Specificity::max_of(list.iter())
+            },
+            SimpleSelector::Has(list) => Specificity::max_of(list.iter().map(|(_, sel)| sel)),
+            // `:where()` is zero by definition; a residual `&` marker is
+            // desugared at parse time.
+            SimpleSelector::Where(_) | SimpleSelector::Nest | SimpleSelector::Universal => {
+                Specificity::ZERO
+            },
         }
     }
 }
 
-/// Compute the specificity contribution of a single compound selector.
-///
-/// Used by `:not()` and `:is()` to determine the specificity of their
-/// inner selector arguments.
-fn compound_specificity(compound: &CompoundSelector) -> Specificity {
-    let mut ids: u8 = 0;
-    let mut classes: u8 = 0;
-    let mut types: u8 = 0;
-    for simple in &compound.parts {
-        match simple {
-            SimpleSelector::Id(_) => {
-                ids = ids.saturating_add(1);
-            },
-            SimpleSelector::Class(_)
-            | SimpleSelector::PseudoClass(_)
-            | SimpleSelector::PseudoClassFn(_, _)
-            | SimpleSelector::Attribute { .. } => {
-                classes = classes.saturating_add(1);
-            },
-            SimpleSelector::Not(inner_list) => {
-                let max_spec =
-                    inner_list
-                        .iter()
-                        .map(compound_specificity)
-                        .max()
-                        .unwrap_or(Specificity {
-                            inline: 0,
-                            ids: 0,
-                            classes: 0,
-                            types: 0,
-                        });
-                ids = ids.saturating_add(max_spec.ids);
-                classes = classes.saturating_add(max_spec.classes);
-                types = types.saturating_add(max_spec.types);
-            },
-            SimpleSelector::Is(inner_list) => {
-                let max_spec =
-                    inner_list
-                        .iter()
-                        .map(compound_specificity)
-                        .max()
-                        .unwrap_or(Specificity {
-                            inline: 0,
-                            ids: 0,
-                            classes: 0,
-                            types: 0,
-                        });
-                ids = ids.saturating_add(max_spec.ids);
-                classes = classes.saturating_add(max_spec.classes);
-                types = types.saturating_add(max_spec.types);
-            },
-            SimpleSelector::Has(inner_list) => {
-                let max_spec = inner_list
-                    .iter()
-                    .map(|(_, sel)| sel.specificity())
-                    .max()
-                    .unwrap_or(Specificity {
-                        inline: 0,
-                        ids: 0,
-                        classes: 0,
-                        types: 0,
-                    });
-                ids = ids.saturating_add(max_spec.ids);
-                classes = classes.saturating_add(max_spec.classes);
-                types = types.saturating_add(max_spec.types);
-            },
-            SimpleSelector::Where(_) => {},
-            SimpleSelector::Nest => {},
-            SimpleSelector::Type(_) | SimpleSelector::PseudoElement(_) => {
-                types = types.saturating_add(1);
-            },
-            SimpleSelector::Universal => {},
-        }
-    }
-    Specificity {
-        inline: 0,
-        ids,
-        classes,
-        types,
+impl Selector {
+    /// Compute the specificity of this selector.  Inline is always 0 here;
+    /// the caller bumps it for inline styles.
+    pub fn specificity(&self) -> Specificity {
+        self.parts
+            .iter()
+            .flat_map(|(compound, _)| &compound.parts)
+            .fold(Specificity::ZERO, |acc, simple| {
+                acc.add(simple.specificity())
+            })
     }
 }
 
@@ -776,8 +684,10 @@ pub enum FontFaceStyle {
 pub struct Stylesheet {
     pub rules: Vec<Rule>,
     pub keyframes: Vec<KeyframesRule>,
-    /// Cascade layers declared in this stylesheet, in declaration
-    /// order. Each `Rule`'s `layer` field is an index into this list.
+    /// Cascade layers declared in this stylesheet, by full dotted name,
+    /// in cascade order (lowest priority first: sublayers precede their
+    /// parent, siblings follow first declaration). Each `Rule`'s `layer`
+    /// field is an index into this list.
     /// Anonymous layers (from `@layer { ... }`) get a synthetic name
     /// of the form `"__anon_{n}"` so they stay distinct from any
     /// named layer. Empty for stylesheets without any `@layer` rules.

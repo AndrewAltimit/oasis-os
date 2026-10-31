@@ -88,13 +88,10 @@ impl TreeView {
     /// or `None` if the parent was not found.
     pub fn add_child(&mut self, parent_id: usize, label: impl Into<String>) -> Option<usize> {
         let id = self.next_id;
-        let child = TreeNode::new(label, id);
-        if Self::insert_child(&mut self.roots, parent_id, child) {
-            self.next_id += 1;
-            Some(id)
-        } else {
-            None
-        }
+        let parent = Self::find_node_mut(&mut self.roots, parent_id)?;
+        parent.children.push(TreeNode::new(label, id));
+        self.next_id += 1;
+        Some(id)
     }
 
     /// Toggle the expanded state of the node with the given id.
@@ -146,42 +143,47 @@ impl TreeView {
 
     /// Move focus to the previous visible node.
     pub fn navigate_up(&mut self) {
-        let visible = self.visible_nodes();
-        if visible.is_empty() {
-            return;
-        }
-        match self.focused_id {
-            Some(fid) => {
-                if let Some(pos) = visible.iter().position(|(id, _, _)| *id == fid)
-                    && pos > 0
-                {
-                    self.focused_id = Some(visible[pos - 1].0);
-                }
-            },
-            None => {
-                self.focused_id = Some(visible[0].0);
-            },
-        }
+        self.navigate(|pos, _| pos.checked_sub(1));
     }
 
     /// Move focus to the next visible node.
     pub fn navigate_down(&mut self) {
-        let visible = self.visible_nodes();
-        if visible.is_empty() {
+        self.navigate(|pos, len| (pos + 1 < len).then_some(pos + 1));
+    }
+
+    /// Move focus from its position in the visible list to `step(pos,
+    /// len)` (staying put on `None`). With no focus, the first node gets
+    /// it. Focus on a node hidden by a collapsed ancestor moves to that
+    /// nearest visible ancestor instead (it used to stay stuck, invisible,
+    /// with every arrow press ignored).
+    fn navigate(&mut self, step: impl Fn(usize, usize) -> Option<usize>) {
+        let visible: Vec<usize> = self.visible_nodes().iter().map(|(id, _, _)| *id).collect();
+        let Some(&first) = visible.first() else {
             return;
-        }
-        match self.focused_id {
-            Some(fid) => {
-                if let Some(pos) = visible.iter().position(|(id, _, _)| *id == fid)
-                    && pos + 1 < visible.len()
-                {
-                    self.focused_id = Some(visible[pos + 1].0);
-                }
-            },
-            None => {
-                self.focused_id = Some(visible[0].0);
-            },
-        }
+        };
+        let Some(mut fid) = self.focused_id else {
+            self.focused_id = Some(first);
+            return;
+        };
+        let pos = loop {
+            if let Some(pos) = visible.iter().position(|&id| id == fid) {
+                break pos;
+            }
+            match Self::find_parent_id(&self.roots, fid) {
+                Some(parent) => fid = parent,
+                // A removed node: start over from the top.
+                None => {
+                    self.focused_id = Some(first);
+                    return;
+                },
+            }
+        };
+        let target = if Some(fid) == self.focused_id {
+            step(pos, visible.len()).unwrap_or(pos)
+        } else {
+            pos
+        };
+        self.focused_id = Some(visible[target]);
     }
 
     /// If the focused node has children, expand it. Otherwise toggle it.
@@ -289,20 +291,6 @@ impl TreeView {
         None
     }
 
-    /// Insert a child under the node with the given parent id.
-    fn insert_child(nodes: &mut [TreeNode], parent_id: usize, child: TreeNode) -> bool {
-        for node in nodes {
-            if node.id == parent_id {
-                node.children.push(child);
-                return true;
-            }
-            if Self::insert_child(&mut node.children, parent_id, child.clone()) {
-                return true;
-            }
-        }
-        false
-    }
-
     /// Set expanded state recursively on all nodes.
     fn set_expanded_recursive(nodes: &mut [TreeNode], expanded: bool) {
         for node in nodes {
@@ -321,7 +309,10 @@ impl TreeView {
         }
     }
 
-    /// Draw connecting lines for a node at the given position and depth.
+    /// Draw connecting lines for a node at the given position and depth:
+    /// its own branch, plus a pass-through guide in the column of every
+    /// ancestor level in `guides` (ancestors with siblings still to come).
+    #[allow(clippy::too_many_arguments)]
     fn draw_lines(
         ctx: &mut DrawContext<'_>,
         x: i32,
@@ -330,12 +321,19 @@ impl TreeView {
         indent: u16,
         row_h: u32,
         is_last: bool,
+        guides: &[usize],
     ) -> Result<()> {
         if depth == 0 {
             return Ok(());
         }
         let line_color = ctx.theme.border_subtle;
-        let ix = x + (depth as i32 - 1) * indent as i32 + indent as i32 / 2;
+        let column = |d: usize| x + (d as i32 - 1) * indent as i32 + indent as i32 / 2;
+        for &level in guides {
+            let gx = column(level);
+            ctx.backend
+                .draw_line(gx, y, gx, y + row_h as i32, 1, line_color)?;
+        }
+        let ix = column(depth);
         let mid_y = y + row_h as i32 / 2;
 
         // Horizontal branch from vertical line to node.
@@ -348,6 +346,43 @@ impl TreeView {
 
         Ok(())
     }
+}
+
+/// For each row of a flattened tree (given by depth), whether it is the
+/// last of its siblings (its connector stops at mid-row): no later row at
+/// the same depth before the list climbs above it. (Testing only the next
+/// row's depth marked every node followed by a sibling as "last",
+/// breaking the line between siblings.)
+fn last_sibling_flags(depths: &[usize]) -> Vec<bool> {
+    (0..depths.len())
+        .map(|i| {
+            let depth = depths[i];
+            !depths[i + 1..]
+                .iter()
+                .take_while(|&&d| d >= depth)
+                .any(|&d| d == depth)
+        })
+        .collect()
+}
+
+/// For each row of a flattened tree (given by depth), the ancestor levels
+/// `1..depth` whose connector passes through the row: the ancestor at that
+/// level has a sibling further down, so its vertical line must run past
+/// this row's subtree. (Only the row's own level was drawn, so the line
+/// from a parent to its next sibling broke across the parent's children.)
+fn ancestor_guides(depths: &[usize]) -> Vec<Vec<usize>> {
+    (0..depths.len())
+        .map(|i| {
+            (1..depths[i])
+                .filter(|&level| {
+                    depths[i + 1..]
+                        .iter()
+                        .take_while(|&&d| d >= level)
+                        .any(|&d| d == level)
+                })
+                .collect()
+        })
+        .collect()
 }
 
 impl Default for TreeView {
@@ -389,21 +424,9 @@ impl Widget for TreeView {
             ctx.theme.text_primary
         };
 
-        // Precompute which nodes are last among their visible siblings.
-        // For connecting-line drawing, we need to know if a node is the
-        // last child at its depth. We approximate this from the flattened
-        // visible list: a node is "last" if the next node has the same or
-        // lesser depth.
-        let is_last_at_depth: Vec<bool> = visible
-            .iter()
-            .enumerate()
-            .map(|(i, (_, _, depth))| {
-                if i + 1 >= visible.len() {
-                    return true;
-                }
-                visible[i + 1].2 <= *depth
-            })
-            .collect();
+        let depths: Vec<usize> = visible.iter().map(|n| n.2).collect();
+        let is_last_at_depth = last_sibling_flags(&depths);
+        let guides = ancestor_guides(&depths);
 
         for (row_idx, (id, node, depth)) in visible.iter().enumerate() {
             let row_y = y + row_idx as i32 * row_h as i32;
@@ -431,6 +454,7 @@ impl Widget for TreeView {
                     self.indent_width,
                     row_h,
                     is_last_at_depth[row_idx],
+                    &guides[row_idx],
                 )?;
             }
 
@@ -618,6 +642,89 @@ mod tests {
         assert_eq!(vis[0].2, 0); // Root
         assert_eq!(vis[1].2, 1); // Child
         assert_eq!(vis[2].2, 2); // Grandchild
+    }
+
+    /// Collapsing the parent of the focused node left focus on a hidden
+    /// node, and every arrow press was ignored from then on.
+    #[test]
+    fn focus_on_a_collapsed_away_node_moves_to_its_visible_ancestor() {
+        let mut tv = TreeView::new();
+        let root = tv.add_root("Root");
+        let child = tv.add_child(root, "Child").unwrap();
+        let grandchild = tv.add_child(child, "Grandchild").unwrap();
+        let other = tv.add_root("Other");
+        tv.expand_all();
+        tv.select(grandchild);
+        tv.collapse_all();
+        tv.navigate_down();
+        assert_eq!(tv.focused(), Some(root));
+        tv.navigate_down();
+        assert_eq!(tv.focused(), Some(other));
+        tv.navigate_down();
+        assert_eq!(tv.focused(), Some(other), "stays on the last node");
+        // A focus id that no longer exists restarts at the top.
+        tv.focused_id = Some(9_999);
+        tv.navigate_up();
+        assert_eq!(tv.focused(), Some(root));
+    }
+
+    /// Every node followed by a sibling was treated as "last", so its
+    /// connector stopped at mid-row and the line between siblings broke.
+    #[test]
+    fn connector_runs_through_non_last_siblings() {
+        // Root, A (with child A1), B: A is not last although its next row
+        // (A1) is deeper; A1 and B are last of their sibling groups.
+        assert_eq!(last_sibling_flags(&[0, 1, 2, 1]), [true, false, true, true]);
+        // Two plain siblings: only the second one ends the line.
+        assert_eq!(last_sibling_flags(&[0, 1, 1]), [true, false, true]);
+        // Two roots: the first continues to the second.
+        assert_eq!(last_sibling_flags(&[0, 1, 0]), [false, true, true]);
+        assert!(last_sibling_flags(&[]).is_empty());
+    }
+
+    #[test]
+    fn ancestor_guides_pass_through_subtrees_of_non_last_nodes() {
+        // Root, A, A1, A1a, B: A has a sibling (B) below its subtree, so
+        // A's level-1 line runs through A1 and A1a; A1 is last, so nothing
+        // passes at level 2.
+        assert_eq!(
+            ancestor_guides(&[0, 1, 2, 3, 1]),
+            [vec![], vec![], vec![1], vec![1], vec![]]
+        );
+        // Last child's subtree: no guide.
+        assert!(ancestor_guides(&[0, 1, 2]).iter().all(Vec::is_empty));
+    }
+
+    #[test]
+    fn guide_line_is_drawn_through_a_childs_row() {
+        use oasis_test_backend::DrawCommand;
+        let mut tv = TreeView::new();
+        let root = tv.add_root("Root");
+        let a = tv.add_child(root, "A").unwrap();
+        tv.add_child(a, "A1").unwrap();
+        tv.add_child(root, "B").unwrap();
+        tv.expand_all();
+        tv.show_lines = true;
+        let theme = Theme::dark();
+        let mut backend = RecordingBackend::default();
+        {
+            let mut ctx = DrawContext::new(&mut backend, &theme);
+            tv.draw(&mut ctx, 0, 0, 200, 200).unwrap();
+        }
+        let row_h = ROW_HEIGHT.max(backend.measure_text_height(theme.font_size_md)) as i32;
+        let level1_x = tv.indent_width as i32 / 2;
+        // Row 2 (A1) carries a vertical at A's column down to its bottom
+        // edge (lines are drawn as fill_rect spans).
+        let a1_bottom = 3 * row_h - 1;
+        let covers = |px: i32, py: i32| {
+            backend.commands().iter().any(|c| {
+                matches!(c, DrawCommand::FillRect { x, y, w, h, color }
+                    if *color == theme.border_subtle
+                        && (*x..*x + *w as i32).contains(&px)
+                        && (*y..*y + *h as i32).contains(&py))
+            })
+        };
+        assert!(covers(level1_x, a1_bottom), "{:?}", backend.commands());
     }
 
     #[test]

@@ -126,7 +126,9 @@ fn decode_text(body: &[u8]) -> Option<String> {
         3 => String::from_utf8_lossy(text).into_owned(),
         _ => return None,
     };
-    let trimmed = s.trim_matches('\0').trim();
+    // NULs (terminators, padding) and whitespace in any order: `" \0 "`
+    // is no title, not a NUL.
+    let trimmed = s.trim_matches(|c: char| c == '\0' || c.is_whitespace());
     (!trimmed.is_empty()).then(|| trimmed.to_string())
 }
 
@@ -219,6 +221,62 @@ mod tests {
         assert_eq!(tag_len(&data), body_end + 10);
         // The footer is not parsed as a frame.
         assert_eq!(read(&data).title.as_deref(), Some("abc"));
+    }
+
+    /// Tags come from user files: every truncation and every single-byte
+    /// corruption of a valid tag must parse (to something) without
+    /// panicking, and `tag_len` must never claim less than the header.
+    #[test]
+    fn truncated_and_corrupted_tags_never_panic() {
+        let mut ext = tag(
+            4,
+            &[(b"TIT2", 1, &[0xFE, 0xFF, 0, b'A']), (b"TPE1", 2, b"\0B")],
+        );
+        ext[5] |= 0x50; // extended header + footer flags on a body without them
+        for data in [
+            tag(3, &[(b"TIT2", 3, b"Song"), (b"TPE1", 0, b"Band")]),
+            tag(4, &[(b"TALB", 3, b"x"), (b"TIT2", 3, b"Song")]),
+            ext,
+        ] {
+            for end in 0..=data.len() {
+                let prefix = &data[..end];
+                let _ = read(prefix);
+                let len = tag_len(prefix);
+                assert!(
+                    len == 0 || len >= 10,
+                    "tag_len {len} of a {end}-byte prefix"
+                );
+            }
+            for at in 0..data.len() {
+                for byte in [0x00, 0x7F, 0x80, 0xFF] {
+                    let mut bad = data.clone();
+                    bad[at] = byte;
+                    let _ = read(&bad);
+                    let _ = tag_len(&bad);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn odd_encodings_and_padding() {
+        // Unknown encoding byte: no text. Odd UTF-16 byte counts drop the
+        // trailing half unit; unpaired surrogates become U+FFFD.
+        let data = tag(
+            3,
+            &[(b"TIT2", 9, b"nope"), (b"TPE1", 2, &[0, b'O', 0, b'K', 0])],
+        );
+        let t = read(&data);
+        assert_eq!(t.title, None);
+        assert_eq!(t.artist.as_deref(), Some("OK"));
+        let data = tag(3, &[(b"TIT2", 1, &[0xFF, 0xFE, 0x00, 0xD8])]);
+        assert_eq!(read(&data).title.as_deref(), Some("\u{FFFD}"));
+        // Whitespace / NUL-only text is no title.
+        let data = tag(3, &[(b"TIT2", 0, b" \0 ")]);
+        assert_eq!(read(&data).title, None);
+        // The first TIT2 wins over a later duplicate.
+        let data = tag(3, &[(b"TIT2", 3, b"first"), (b"TIT2", 3, b"second")]);
+        assert_eq!(read(&data).title.as_deref(), Some("first"));
     }
 
     #[test]

@@ -470,7 +470,8 @@ pub(crate) fn ear_clip_triangulate(points: &[(f32, f32)]) -> Vec<[usize; 3]> {
         };
     let ccw = area2 > 0.0;
 
-    let mut max_iters = n * n; // safety limit
+    // Safety limit (saturating: `n * n` overflows a 32-bit `usize`).
+    let mut max_iters = n.saturating_mul(n);
     let mut i = 0;
     while indices.len() > 2 && max_iters > 0 {
         max_iters -= 1;

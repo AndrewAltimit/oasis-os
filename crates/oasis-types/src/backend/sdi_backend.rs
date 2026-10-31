@@ -6,7 +6,7 @@
 //!
 //! # For backend implementors
 //!
-//! 1. Implement [`SdiCore`] with the 13 required methods
+//! 1. Implement [`SdiCore`] with the 12 required methods
 //! 2. Implement each extension trait you want to accelerate (override methods)
 //! 3. For extension traits you do not override, add an empty `impl` block
 //!    to pick up the default implementations, or write

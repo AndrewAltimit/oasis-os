@@ -4,6 +4,11 @@
 //! shared script engine (`#` comments, blank lines skipped, full control
 //! flow). Provides the `cron` and `startup` commands; `run <path>` is a
 //! shell builtin in `oasis-terminal` (`CommandRegistry::execute_run`).
+//! Cron jobs run when a host calls [`CronScheduler::tick`] (see [`cron`]).
+
+pub mod cron;
+
+pub use cron::{CronCmd, CronEntry, CronScheduler};
 
 use crate::error::{OasisError, Result};
 use crate::terminal::{Command, CommandOutput, CommandRegistry, Environment};
@@ -12,6 +17,7 @@ use crate::terminal::{Command, CommandOutput, CommandRegistry, Environment};
 pub const STARTUP_SCRIPT_PATH: &str = "/etc/startup.sh";
 /// Shell profile seeded by `populate_profile`; run first at boot.
 pub const PROFILE_PATH: &str = "/home/.profile";
+/// Directory of cron job entries, one `<interval> <script>` file per job.
 pub const CRON_DIR: &str = "/etc/cron";
 
 /// Execute a script from VFS, returning collected output.
@@ -54,96 +60,6 @@ pub fn run_boot_scripts(registry: &CommandRegistry, env: &mut Environment<'_>) -
 // ---------------------------------------------------------------------------
 // Terminal commands
 // ---------------------------------------------------------------------------
-
-/// VFS path of the cron entry `name`, rejecting names that would escape
-/// [`CRON_DIR`] (`cron remove ../startup.sh` used to delete the startup
-/// script).
-fn cron_entry_path(name: &str) -> Result<String> {
-    if name.contains(['/', '\\']) || name == "." || name == ".." {
-        return Err(OasisError::Command(
-            format!("invalid cron job name: {name}").into(),
-        ));
-    }
-    Ok(format!("{CRON_DIR}/{name}"))
-}
-
-/// `cron` -- manage scheduled scripts.
-pub struct CronCmd;
-
-impl Command for CronCmd {
-    fn name(&self) -> &str {
-        "cron"
-    }
-    fn description(&self) -> &str {
-        "Manage scheduled scripts"
-    }
-    fn usage(&self) -> &str {
-        "cron [list|add <name> <path>|remove <name>]"
-    }
-    fn category(&self) -> &str {
-        "scripting"
-    }
-    fn execute(&self, args: &[&str], env: &mut Environment<'_>) -> Result<CommandOutput> {
-        let subcmd = args.first().copied().unwrap_or("list");
-
-        match subcmd {
-            "list" => {
-                if !env.vfs.exists(CRON_DIR) {
-                    return Ok(CommandOutput::Text("(no cron jobs configured)".to_string()));
-                }
-                let entries = env.vfs.readdir(CRON_DIR)?;
-                if entries.is_empty() {
-                    return Ok(CommandOutput::Text("(no cron jobs configured)".to_string()));
-                }
-                let mut output = String::from("Scheduled scripts:\n");
-                for entry in &entries {
-                    let path = format!("{CRON_DIR}/{}", entry.name);
-                    let data = env.vfs.read(&path).unwrap_or_default();
-                    let target = String::from_utf8_lossy(&data);
-                    output.push_str(&format!("  {} -> {}\n", entry.name, target.trim()));
-                }
-                Ok(CommandOutput::Text(output))
-            },
-            "add" => {
-                let name = args
-                    .get(1)
-                    .copied()
-                    .ok_or_else(|| OasisError::Command("usage: cron add <name> <path>".into()))?;
-                let path = args
-                    .get(2)
-                    .copied()
-                    .ok_or_else(|| OasisError::Command("usage: cron add <name> <path>".into()))?;
-
-                let entry_path = cron_entry_path(name)?;
-                if !env.vfs.exists(CRON_DIR) {
-                    env.vfs.mkdir(CRON_DIR)?;
-                }
-                env.vfs.write(&entry_path, path.as_bytes())?;
-                Ok(CommandOutput::Text(format!(
-                    "Cron job '{name}' added: {path}"
-                )))
-            },
-            "remove" => {
-                let name = args
-                    .get(1)
-                    .copied()
-                    .ok_or_else(|| OasisError::Command("usage: cron remove <name>".into()))?;
-                let entry_path = cron_entry_path(name)?;
-                if env.vfs.exists(&entry_path) {
-                    env.vfs.remove(&entry_path)?;
-                    Ok(CommandOutput::Text(format!("Cron job '{name}' removed")))
-                } else {
-                    Err(OasisError::Command(
-                        format!("cron job not found: {name}").into(),
-                    ))
-                }
-            },
-            _ => Err(OasisError::Command(
-                format!("unknown subcommand: {subcmd}\nusage: {}", self.usage()).into(),
-            )),
-        }
-    }
-}
 
 /// `startup` -- configure the startup script.
 pub struct StartupCmd;
@@ -319,39 +235,56 @@ mod tests {
         assert!(s.contains("world"));
     }
 
+    fn text(out: Result<CommandOutput>) -> String {
+        match out {
+            Ok(CommandOutput::Text(s)) => s,
+            other => panic!("expected CommandOutput::Text, got {other:?}"),
+        }
+    }
+
     #[test]
     fn cron_list_empty() {
         let (reg, mut vfs) = setup();
-        let __out = exec(&reg, &mut vfs, "cron list").unwrap();
-        let CommandOutput::Text(s) = __out else {
-            panic!("expected CommandOutput::Text, got {__out:?}");
-        };
-        assert!(s.contains("no cron"));
+        assert!(text(exec(&reg, &mut vfs, "cron list")).contains("no cron"));
     }
 
     #[test]
     fn cron_add_and_list() {
         let (reg, mut vfs) = setup();
         vfs.write("/tmp/job.sh", b"echo cron").unwrap();
-        exec(&reg, &mut vfs, "cron add myjob /tmp/job.sh").unwrap();
-        let __out = exec(&reg, &mut vfs, "cron list").unwrap();
-        let CommandOutput::Text(s) = __out else {
-            panic!("expected CommandOutput::Text, got {__out:?}");
-        };
-        assert!(s.contains("myjob"));
-        assert!(s.contains("/tmp/job.sh"));
+        let added = text(exec(&reg, &mut vfs, "cron add myjob 300 /tmp/job.sh"));
+        assert!(added.contains("every 5m"), "{added}");
+        assert_eq!(vfs.read("/etc/cron/myjob").unwrap(), b"5m /tmp/job.sh\n");
+        let s = text(exec(&reg, &mut vfs, "cron list"));
+        assert!(s.contains("myjob  every 5m  /tmp/job.sh"), "{s}");
+    }
+
+    #[test]
+    fn cron_add_requires_an_interval() {
+        let (reg, mut vfs) = setup();
+        // The pre-scheduler form `cron add <name> <script>` is rejected
+        // rather than stored as a job that never runs.
+        assert!(exec(&reg, &mut vfs, "cron add myjob /tmp/job.sh").is_err());
+        assert!(exec(&reg, &mut vfs, "cron add myjob 0 /tmp/job.sh").is_err());
+        assert!(exec(&reg, &mut vfs, "cron add myjob 5m /a.sh extra").is_err());
+        assert!(!vfs.exists("/etc/cron/myjob"));
+    }
+
+    #[test]
+    fn cron_list_flags_malformed_entries() {
+        let (reg, mut vfs) = setup();
+        vfs.mkdir(CRON_DIR).unwrap();
+        vfs.write("/etc/cron/legacy", b"/tmp/job.sh").unwrap();
+        let s = text(exec(&reg, &mut vfs, "cron list"));
+        assert!(s.contains("legacy  (invalid:"), "{s}");
     }
 
     #[test]
     fn cron_remove() {
         let (reg, mut vfs) = setup();
-        exec(&reg, &mut vfs, "cron add myjob /tmp/job.sh").unwrap();
+        exec(&reg, &mut vfs, "cron add myjob 1m /tmp/job.sh").unwrap();
         exec(&reg, &mut vfs, "cron remove myjob").unwrap();
-        let __out = exec(&reg, &mut vfs, "cron list").unwrap();
-        let CommandOutput::Text(s) = __out else {
-            panic!("expected CommandOutput::Text, got {__out:?}");
-        };
-        assert!(s.contains("no cron"));
+        assert!(text(exec(&reg, &mut vfs, "cron list")).contains("no cron"));
     }
 
     #[test]
@@ -387,13 +320,215 @@ mod tests {
             "startup script deleted"
         );
         assert!(
-            reg.execute("cron add ../startup.sh /tmp/x.sh", &mut env)
+            reg.execute("cron add ../startup.sh 5m /tmp/x.sh", &mut env)
                 .is_err()
         );
         assert_eq!(env.vfs.read(STARTUP_SCRIPT_PATH).unwrap(), b"echo boot");
-        assert!(reg.execute("cron add .. /tmp/x.sh", &mut env).is_err());
+        assert!(reg.execute("cron add .. 5m /tmp/x.sh", &mut env).is_err());
     }
 
+    #[test]
+    fn cron_interval_parsing() {
+        use cron::parse_interval;
+        let secs = |t: &str| parse_interval(t).map(|d| d.as_secs()).ok();
+        assert_eq!(secs("30"), Some(30));
+        assert_eq!(secs("30s"), Some(30));
+        assert_eq!(secs("5m"), Some(300));
+        assert_eq!(secs("2h"), Some(7200));
+        assert_eq!(secs("30d"), Some(30 * 86_400));
+        for bad in [
+            "",
+            "0",
+            "0s",
+            "31d",
+            "5x",
+            "m",
+            "-5",
+            "1.5m",
+            "99999999999999999999",
+        ] {
+            assert_eq!(secs(bad), None, "{bad:?} accepted");
+        }
+    }
+
+    fn cron_tick(
+        sched: &mut CronScheduler,
+        secs: u64,
+        reg: &CommandRegistry,
+        vfs: &mut MemoryVfs,
+    ) -> Vec<String> {
+        let mut env = Environment {
+            cwd: "/".to_string(),
+            vfs,
+            power: None,
+            time: None,
+            usb: None,
+            network: None,
+            tls: None,
+            stdin: None,
+            stderr: String::new(),
+        };
+        sched.tick(std::time::Duration::from_secs(secs), reg, &mut env)
+    }
+
+    #[test]
+    fn cron_scheduler_runs_jobs_every_interval() {
+        let (reg, mut vfs) = setup();
+        vfs.write("/tmp/job.sh", b"echo tick").unwrap();
+        exec(&reg, &mut vfs, "cron add beat 1m /tmp/job.sh").unwrap();
+        let mut sched = CronScheduler::new();
+        assert!(cron_tick(&mut sched, 0, &reg, &mut vfs).is_empty());
+        assert_eq!(sched.len(), 1);
+        assert!(cron_tick(&mut sched, 59, &reg, &mut vfs).is_empty());
+        assert_eq!(
+            cron_tick(&mut sched, 60, &reg, &mut vfs),
+            vec!["[cron beat] tick"]
+        );
+        assert!(cron_tick(&mut sched, 61, &reg, &mut vfs).is_empty());
+        // Overdue by several intervals (a long sleep): one run, no burst,
+        // then the next slot of the original schedule.
+        assert_eq!(cron_tick(&mut sched, 400, &reg, &mut vfs).len(), 1);
+        assert!(cron_tick(&mut sched, 401, &reg, &mut vfs).is_empty());
+        assert!(cron_tick(&mut sched, 419, &reg, &mut vfs).is_empty());
+        assert_eq!(cron_tick(&mut sched, 420, &reg, &mut vfs).len(), 1);
+    }
+
+    #[test]
+    fn cron_keeps_its_cadence_under_coarse_ticks() {
+        // An FFI host ticking every 1.5 s: a 2 s job must run every 2 s on
+        // average (rescheduling from the tick time ran it every 3 s).
+        let (reg, mut vfs) = setup();
+        vfs.write("/tmp/job.sh", b"echo tick").unwrap();
+        exec(&reg, &mut vfs, "cron add beat 2s /tmp/job.sh").unwrap();
+        let mut sched = CronScheduler::new();
+        let mut runs = 0;
+        for step in 0..=40u32 {
+            let now = std::time::Duration::from_millis(u64::from(step) * 1500);
+            let mut env = Environment {
+                cwd: "/".to_string(),
+                vfs: &mut vfs,
+                power: None,
+                time: None,
+                usb: None,
+                network: None,
+                tls: None,
+                stdin: None,
+                stderr: String::new(),
+            };
+            runs += sched.tick(now, &reg, &mut env).len();
+        }
+        // 60 s of ticks, first due at 2 s: slots 2, 4, ..., 60.
+        assert_eq!(runs, 30);
+    }
+
+    #[test]
+    fn cron_jobs_leave_the_session_status_and_dirs_alone() {
+        let (reg, mut vfs) = setup();
+        vfs.write("/tmp/job.sh", b"cd /tmp\nfalse").unwrap();
+        exec(&reg, &mut vfs, "cron add j 1s /tmp/job.sh").unwrap();
+        let mut env = Environment {
+            cwd: "/home".to_string(),
+            vfs: &mut vfs,
+            power: None,
+            time: None,
+            usb: None,
+            network: None,
+            tls: None,
+            stdin: None,
+            stderr: String::new(),
+        };
+        reg.execute("cd /etc", &mut env).unwrap();
+        reg.execute("cd /home", &mut env).unwrap();
+        reg.execute("true", &mut env).unwrap();
+        let mut sched = CronScheduler::new();
+        sched.tick(std::time::Duration::ZERO, &reg, &mut env);
+        sched.tick(std::time::Duration::from_secs(1), &reg, &mut env);
+        assert_eq!(reg.last_exit_code(), 0);
+        assert_eq!(reg.get_variable("?").as_deref(), Some("0"));
+        assert_eq!(reg.get_variable("OLDPWD").as_deref(), Some("/etc"));
+        assert_eq!(env.cwd, "/home");
+    }
+
+    #[test]
+    fn cron_add_resolves_a_relative_script_against_the_cwd() {
+        // Jobs run from `/`, so `cd /home; cron add j 1s j.sh` must store
+        // `/home/j.sh` (it stored `j.sh` and failed every tick).
+        let (reg, mut vfs) = setup();
+        vfs.write("/home/j.sh", b"echo hi").unwrap();
+        let mut env = Environment {
+            cwd: "/home".to_string(),
+            vfs: &mut vfs,
+            power: None,
+            time: None,
+            usb: None,
+            network: None,
+            tls: None,
+            stdin: None,
+            stderr: String::new(),
+        };
+        reg.execute("cron add j 1s j.sh", &mut env).unwrap();
+        let mut sched = CronScheduler::new();
+        assert!(cron_tick(&mut sched, 0, &reg, &mut vfs).is_empty());
+        assert_eq!(
+            cron_tick(&mut sched, 1, &reg, &mut vfs),
+            vec!["[cron j] hi"]
+        );
+    }
+
+    #[test]
+    fn cron_scheduler_follows_entry_changes() {
+        let (reg, mut vfs) = setup();
+        vfs.write("/tmp/job.sh", b"echo tick").unwrap();
+        exec(&reg, &mut vfs, "cron add beat 1m /tmp/job.sh").unwrap();
+        let mut sched = CronScheduler::new();
+        cron_tick(&mut sched, 0, &reg, &mut vfs);
+        // A changed interval reschedules from the tick that sees it.
+        exec(&reg, &mut vfs, "cron add beat 10s /tmp/job.sh").unwrap();
+        assert!(cron_tick(&mut sched, 30, &reg, &mut vfs).is_empty());
+        assert_eq!(cron_tick(&mut sched, 40, &reg, &mut vfs).len(), 1);
+        // Removed jobs stop.
+        exec(&reg, &mut vfs, "cron remove beat").unwrap();
+        assert!(cron_tick(&mut sched, 1000, &reg, &mut vfs).is_empty());
+        assert!(sched.is_empty());
+    }
+
+    #[test]
+    fn cron_scheduler_reports_problems_once() {
+        let (reg, mut vfs) = setup();
+        vfs.mkdir(CRON_DIR).unwrap();
+        vfs.write("/etc/cron/legacy", b"/tmp/job.sh").unwrap();
+        exec(&reg, &mut vfs, "cron add gone 1s /tmp/missing.sh").unwrap();
+        let mut sched = CronScheduler::new();
+        let first = cron_tick(&mut sched, 0, &reg, &mut vfs);
+        assert_eq!(first.len(), 1, "{first:?}");
+        assert!(
+            first[0].starts_with("[cron legacy] error: malformed"),
+            "{first:?}"
+        );
+        // The malformed entry is not reported again; a missing script is
+        // an error each time the job comes due.
+        let later = cron_tick(&mut sched, 1, &reg, &mut vfs);
+        assert_eq!(later.len(), 1, "{later:?}");
+        assert!(
+            later[0].starts_with("[cron gone] error: /tmp/missing.sh"),
+            "{later:?}"
+        );
+    }
+
+    #[test]
+    fn cron_jobs_share_shell_variables() {
+        let (reg, mut vfs) = setup();
+        exec(&reg, &mut vfs, "set WHO=cron").unwrap();
+        vfs.write("/tmp/job.sh", b"if true; then echo hi $WHO; fi")
+            .unwrap();
+        exec(&reg, &mut vfs, "cron add greet 1s /tmp/job.sh").unwrap();
+        let mut sched = CronScheduler::new();
+        cron_tick(&mut sched, 0, &reg, &mut vfs);
+        assert_eq!(
+            cron_tick(&mut sched, 1, &reg, &mut vfs),
+            vec!["[cron greet] hi cron"]
+        );
+    }
     #[test]
     fn startup_show_empty() {
         let (reg, mut vfs) = setup();

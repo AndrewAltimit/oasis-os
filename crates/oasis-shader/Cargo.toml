@@ -11,7 +11,7 @@ authors.workspace = true
 default = []
 # GPU path: `glow` (OpenGL, or WebGL2 through a host-created
 # `glow::Context`); the CPU renderer is always built.
-gl-native = ["glow"]
+gl-native = ["dep:glow"]
 # Multi-threaded software shading (rayon). Desktop-only: do not enable
 # for the WASM or PSP targets (single-threaded; PSP grids are tiny).
 parallel = ["dep:rayon"]

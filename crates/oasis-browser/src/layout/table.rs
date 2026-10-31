@@ -174,6 +174,12 @@ pub fn layout_table(
 // Step 1 -- Parse table structure
 // -------------------------------------------------------------------
 
+/// Most columns a table grid gets. Each span is already capped (1000),
+/// but the total was not: 1000 cells of `colspan=1000` (17 KB of HTML)
+/// made a million columns, ~40 MB of per-column vectors, and with
+/// `rowspan=0` every later row walked them all.
+const MAX_TABLE_COLS: usize = 1000;
+
 /// Which grid slots earlier rows' `rowspan`s still cover.
 ///
 /// Rows are parsed top to bottom, so a slot `(row, col)` is taken
@@ -283,7 +289,13 @@ fn parse_row(
 
     for cell_box in cells {
         col_idx = slots.next_free(row_idx, col_idx);
+        if col_idx >= MAX_TABLE_COLS {
+            // Cells past the column cap are dropped (and the rest of
+            // the row with them).
+            break;
+        }
         let (colspan, rowspan) = resolve_span(cell_box.cell_span, row_idx, total_rows);
+        let colspan = colspan.min(MAX_TABLE_COLS - col_idx);
         slots.occupy(row_idx, col_idx, rowspan, colspan);
         tl.num_cols = tl.num_cols.max(col_idx + colspan);
 
@@ -370,9 +382,16 @@ fn measure_box_widths(layout_box: &LayoutBox, measurer: &dyn TextMeasurer) -> (f
         return (w, w);
     }
 
+    // Measure inline content as built, not the line fragments an
+    // earlier layout of this table left in `children`.
+    let children = layout_box
+        .inline_source
+        .as_deref()
+        .unwrap_or(&layout_box.children);
+
     // Leaf cell with no children: use explicit width if set,
     // otherwise zero.
-    if layout_box.children.is_empty() {
+    if children.is_empty() {
         let explicit = match layout_box.style.width {
             Dimension::Px(w) => w,
             _ => 0.0,
@@ -383,7 +402,7 @@ fn measure_box_widths(layout_box: &LayoutBox, measurer: &dyn TextMeasurer) -> (f
     let mut total_min: f32 = 0.0;
     let mut total_pref: f32 = 0.0;
 
-    for child in &layout_box.children {
+    for child in children {
         let (cmin, cpref) = measure_box_widths(child, measurer);
         // For block children, take the maximum width (they stack
         // vertically). For inline, we sum (they flow horizontally).
@@ -400,10 +419,16 @@ fn measure_box_widths(layout_box: &LayoutBox, measurer: &dyn TextMeasurer) -> (f
         }
     }
 
-    // Account for cell padding and border.
-    let pad_h = layout_box.style.padding_left + layout_box.style.padding_right;
-    let bdr_h = layout_box.style.border_left_width + layout_box.style.border_right_width;
-    let extra = pad_h + bdr_h;
+    // Account for cell padding and border. The anonymous wrapper a
+    // cell's inline run gets carries the cell's style but lays out
+    // without edges: counting them again widened every relaid table.
+    let extra = if matches!(layout_box.box_type, BoxType::Anonymous) {
+        0.0
+    } else {
+        let pad_h = layout_box.style.padding_left + layout_box.style.padding_right;
+        let bdr_h = layout_box.style.border_left_width + layout_box.style.border_right_width;
+        pad_h + bdr_h
+    };
 
     (total_min + extra, total_pref + extra)
 }
@@ -714,26 +739,18 @@ fn layout_cell_content(
     // in normal inline-formatting-context layout inside the wrapper.
     wrap_inline_runs_in_cell(cell_box);
 
-    // Compute content height from children.
-    let mut content_height: f32 = 0.0;
-    let content_width = cell_box.dimensions.content.width;
-
-    for child in &mut cell_box.children {
-        match child.box_type {
-            BoxType::Block
-            | BoxType::Anonymous
-            | BoxType::ListItem { .. }
-            | BoxType::TableWrapper => {
-                super::block::layout_block(child, content_width, measurer);
-                let mb = child.dimensions.margin_box();
-                content_height += mb.height;
-            },
-            _ => {
-                // Inline or other: approximate as a single line.
-                content_height += child.style.line_height;
-            },
-        }
-    }
+    // Lay the content out as a block flow at the origin (the table
+    // offsets it into place): children stack, margins collapse, floats
+    // and `clear` apply. Laying each child out where it happened to be
+    // stacked every block child at y = 0 and, on a second layout of the
+    // table, left them at their old absolute position plus the offset.
+    cell_box.dimensions.content.x = 0.0;
+    cell_box.dimensions.content.y = 0.0;
+    cell_box.dimensions.content.height = 0.0;
+    super::block::layout_block_children(cell_box, measurer);
+    let flowed_height = cell_box.dimensions.content.height;
+    super::block::calculate_auto_height(cell_box);
+    let content_height = cell_box.dimensions.content.height.max(flowed_height);
 
     // Use explicit height if specified and larger.
     let explicit_h = match cell_box.style.height {
@@ -1146,6 +1163,26 @@ mod tests {
             result.dimensions.content.width > 0.0,
             "table should have positive width"
         );
+    }
+
+    /// Regression: per-cell spans were capped but the total column
+    /// count was not, so a handful of wide `colspan`s built a
+    /// million-column grid.
+    #[test]
+    fn total_column_count_is_capped() {
+        let wide = || {
+            let mut c = make_cell(1.0);
+            c.cell_span = CellSpan {
+                cols: 1000,
+                rows: 0,
+            };
+            c
+        };
+        let row = make_row((0..50).map(|_| wide()).collect());
+        let mut tl = TableLayout::new(0.0, false);
+        parse_table_structure(&[row, make_row(vec![make_cell(1.0)])], &mut tl);
+        assert_eq!(tl.num_cols, MAX_TABLE_COLS);
+        assert!(tl.cells.len() <= 2);
     }
 
     // ---------------------------------------------------------------

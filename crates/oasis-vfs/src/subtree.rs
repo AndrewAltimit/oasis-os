@@ -106,6 +106,10 @@ where
         self.map(path).is_ok_and(|p| self.inner.exists(&p))
     }
 
+    fn is_symlink(&self, path: &str) -> bool {
+        self.map(path).is_ok_and(|p| self.inner.is_symlink(&p))
+    }
+
     fn get_permissions(&self, path: &str) -> Result<FilePermissions> {
         self.inner.get_permissions(&self.map(path)?)
     }

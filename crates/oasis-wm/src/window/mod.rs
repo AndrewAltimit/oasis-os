@@ -11,6 +11,7 @@ mod theme;
 
 use oasis_types::bitmap_font::glyph_advance_scaled;
 
+use crate::hit_test::ButtonKind;
 use crate::snap::SnapZone;
 
 pub use id::WindowId;
@@ -29,6 +30,31 @@ pub enum WindowType {
     FloatingWidget,
     /// No frame, no titlebar, covers entire content area.
     Fullscreen,
+}
+
+impl WindowType {
+    /// Frame border width a window of this type gets from `theme` (only
+    /// app windows and dialogs have a border).
+    pub fn border(self, theme: &WmTheme) -> u32 {
+        match self {
+            WindowType::AppWindow | WindowType::Dialog => theme.border_width,
+            _ => 0,
+        }
+    }
+
+    /// Titlebar height a window of this type gets from `theme`
+    /// (everything but [`WindowType::Fullscreen`] has a titlebar).
+    pub fn titlebar_height(self, theme: &WmTheme) -> u32 {
+        match self {
+            WindowType::Fullscreen => 0,
+            _ => theme.titlebar_height,
+        }
+    }
+}
+
+/// `v` as an `i32`, saturating at `i32::MAX`.
+fn to_i32(v: u32) -> i32 {
+    i32::try_from(v).unwrap_or(i32::MAX)
 }
 
 /// Current display state of a window.
@@ -167,21 +193,14 @@ pub struct Window {
 impl Window {
     /// Create a new window from configuration and theme.
     pub fn new(config: &WindowConfig, x: i32, y: i32, theme: &WmTheme) -> Self {
-        let has_titlebar = config.window_type != WindowType::Fullscreen;
-        let has_border = matches!(
-            config.window_type,
-            WindowType::AppWindow | WindowType::Dialog
-        );
+        let border2 = config.window_type.border(theme).saturating_mul(2);
+        let titlebar_h = config.window_type.titlebar_height(theme);
 
-        let border = if has_border { theme.border_width } else { 0 };
-        let titlebar_h = if has_titlebar {
-            theme.titlebar_height
-        } else {
-            0
-        };
-
-        let outer_w = config.width + border * 2;
-        let outer_h = config.height + titlebar_h + border * 2;
+        let outer_w = config.width.saturating_add(border2);
+        let outer_h = config
+            .height
+            .saturating_add(titlebar_h)
+            .saturating_add(border2);
 
         Self {
             id: WindowId::from(config.id.as_str()),
@@ -235,23 +254,20 @@ impl Window {
             return (outer.x, outer.y, outer.w, outer.h);
         }
 
-        let has_titlebar = self.window_type != WindowType::Fullscreen;
-        let has_border = matches!(self.window_type, WindowType::AppWindow | WindowType::Dialog);
+        let border = self.window_type.border(theme);
+        let titlebar_h = self.window_type.titlebar_height(theme);
 
-        let border = if has_border { theme.border_width } else { 0 };
-        let titlebar_h = if has_titlebar {
-            theme.titlebar_height
-        } else {
-            0
-        };
-
-        let cx = outer.x + border as i32;
-        let cy = outer.y + titlebar_h as i32 + border as i32;
-        let cw = outer.w.saturating_sub(border * 2);
+        // Saturating: a frame at the far end of the coordinate space must
+        // not overflow (debug builds panic on it).
+        let cx = outer.x.saturating_add(to_i32(border));
+        let cy = outer
+            .y
+            .saturating_add(to_i32(titlebar_h.saturating_add(border)));
+        let cw = outer.w.saturating_sub(border.saturating_mul(2));
         let ch = outer
             .h
             .saturating_sub(titlebar_h)
-            .saturating_sub(border * 2);
+            .saturating_sub(border.saturating_mul(2));
         (cx, cy, cw, ch)
     }
 
@@ -260,12 +276,10 @@ impl Window {
         if self.fullscreen_kiosk || self.window_type == WindowType::Fullscreen {
             return None;
         }
-        let has_border = matches!(self.window_type, WindowType::AppWindow | WindowType::Dialog);
-        let border = if has_border { theme.border_width } else { 0 };
-
-        let tx = self.x + border as i32;
-        let ty = self.y + border as i32;
-        let tw = self.outer_w.saturating_sub(border * 2);
+        let border = self.window_type.border(theme);
+        let tx = self.x.saturating_add(to_i32(border));
+        let ty = self.y.saturating_add(to_i32(border));
+        let tw = self.outer_w.saturating_sub(border.saturating_mul(2));
         let th = theme.titlebar_height;
         Some((tx, ty, tw, th))
     }
@@ -273,7 +287,7 @@ impl Window {
     /// Compute button inset from the titlebar edge, derived from
     /// the titlebar height so buttons stay proportional.
     fn button_inset(theme: &WmTheme) -> i32 {
-        (theme.titlebar_height as i32 / 8).max(1)
+        ((theme.titlebar_height / 8) as i32).max(1)
     }
 
     /// Compute a button's X position given its index.
@@ -283,72 +297,84 @@ impl Window {
     /// maximize, close (Windows / GNOME convention: close at the corner).
     /// With `button_side == "left"` it is close, minimize, maximize (macOS
     /// traffic-light convention: close at the corner).
-    fn button_x(&self, theme: &WmTheme, tx: i32, tw: u32, idx: i32) -> i32 {
-        let btn_size = theme.button_size.min(theme.titlebar_height) as i32;
-        let sp = theme.button_spacing;
-        let inset = Self::button_inset(theme);
-        if theme.button_side == "left" {
+    ///
+    /// Computed in `i64` and saturated to `i32`, so a titlebar at the far
+    /// end of the coordinate space cannot overflow.
+    fn button_x(theme: &WmTheme, tx: i32, tw: u32, idx: i32) -> i32 {
+        let btn_size = i64::from(theme.button_size.min(theme.titlebar_height));
+        let sp = i64::from(theme.button_spacing);
+        let inset = i64::from(Self::button_inset(theme));
+        let (tx, tw, idx) = (i64::from(tx), i64::from(tw), i64::from(idx));
+        let x = if theme.button_side == "left" {
             tx + inset + idx * (btn_size + sp)
         } else {
-            tx + tw as i32 - (idx + 1) * btn_size - idx * sp - inset
+            tx + tw - (idx + 1) * btn_size - idx * sp - inset
+        };
+        x.clamp(i64::from(i32::MIN), i64::from(i32::MAX)) as i32
+    }
+
+    /// Index of a titlebar button, counted from the button edge.
+    ///
+    /// Close is always at the edge, on either side (and when it is the only
+    /// button, e.g. Dialog/FloatingWidget). Left side: close, minimize,
+    /// maximize from the edge inward. Right side: minimize is furthest from
+    /// the edge (leftmost of the group), maximize in the middle.
+    fn button_idx(theme: &WmTheme, kind: ButtonKind) -> i32 {
+        let left = theme.button_side == "left";
+        match kind {
+            ButtonKind::Close => 0,
+            ButtonKind::Minimize => {
+                if left {
+                    1
+                } else {
+                    2
+                }
+            },
+            ButtonKind::Maximize => {
+                if left {
+                    2
+                } else {
+                    1
+                }
+            },
         }
     }
 
-    /// Index of the minimize button (counted from the button edge).
-    ///
-    /// Left side: second from the edge (after close). Right side: furthest
-    /// from the edge (leftmost of the group).
-    fn minimize_btn_idx(&self, theme: &WmTheme) -> i32 {
-        if theme.button_side == "left" { 1 } else { 2 }
+    /// Whether this window type shows the titlebar button `kind`.
+    pub fn has_button(&self, kind: ButtonKind) -> bool {
+        match kind {
+            ButtonKind::Close => self.has_close_button(),
+            ButtonKind::Minimize => self.has_minimize_button(),
+            ButtonKind::Maximize => self.has_maximize_button(),
+        }
     }
 
-    /// Index of the maximize button (counted from the button edge).
-    ///
-    /// Left side: furthest from the edge. Right side: middle.
-    fn maximize_btn_idx(&self, theme: &WmTheme) -> i32 {
-        if theme.button_side == "left" { 2 } else { 1 }
-    }
-
-    /// Index of the close button: always at the titlebar edge, on either
-    /// side (and when it is the only button, e.g. Dialog/FloatingWidget).
-    fn close_btn_idx(&self) -> i32 {
-        0
+    /// The rectangle of titlebar button `kind`, or `None` when the window
+    /// has no titlebar or no such button.
+    pub fn button_rect(&self, theme: &WmTheme, kind: ButtonKind) -> Option<(i32, i32, u32, u32)> {
+        let (tx, ty, tw, th) = self.titlebar_rect(theme)?;
+        if !self.has_button(kind) {
+            return None;
+        }
+        let btn_size = theme.button_size.min(th);
+        let bx = Self::button_x(theme, tx, tw, Self::button_idx(theme, kind));
+        let by = ty.saturating_add(((th - btn_size) / 2) as i32);
+        Some((bx, by, btn_size, btn_size))
     }
 
     /// Compute close button rectangle.
     pub fn close_btn_rect(&self, theme: &WmTheme) -> Option<(i32, i32, u32, u32)> {
-        let (tx, ty, tw, th) = self.titlebar_rect(theme)?;
-        if !self.has_close_button() {
-            return None;
-        }
-        let btn_size = theme.button_size.min(th);
-        let bx = self.button_x(theme, tx, tw, self.close_btn_idx());
-        let by = ty + (th as i32 - btn_size as i32) / 2;
-        Some((bx, by, btn_size, btn_size))
+        self.button_rect(theme, ButtonKind::Close)
     }
 
     /// Compute minimize button rectangle.
     pub fn minimize_btn_rect(&self, theme: &WmTheme) -> Option<(i32, i32, u32, u32)> {
-        let (tx, ty, tw, th) = self.titlebar_rect(theme)?;
-        if !self.has_minimize_button() {
-            return None;
-        }
-        let btn_size = theme.button_size.min(th);
-        let bx = self.button_x(theme, tx, tw, self.minimize_btn_idx(theme));
-        let by = ty + (th as i32 - btn_size as i32) / 2;
-        Some((bx, by, btn_size, btn_size))
+        self.button_rect(theme, ButtonKind::Minimize)
     }
 
     /// Compute maximize button rectangle.
     pub fn maximize_btn_rect(&self, theme: &WmTheme) -> Option<(i32, i32, u32, u32)> {
-        let (tx, ty, tw, th) = self.titlebar_rect(theme)?;
-        if !self.has_maximize_button() {
-            return None;
-        }
-        let btn_size = theme.button_size.min(th);
-        let bx = self.button_x(theme, tx, tw, self.maximize_btn_idx(theme));
-        let by = ty + (th as i32 - btn_size as i32) / 2;
-        Some((bx, by, btn_size, btn_size))
+        self.button_rect(theme, ButtonKind::Maximize)
     }
 
     /// Number of titlebar buttons this window shows.
@@ -373,38 +399,42 @@ impl Window {
     /// wider than the available space are truncated with `"..."`.
     pub fn title_layout(&self, theme: &WmTheme) -> Option<TitleLayout> {
         let (tx, _ty, tw, _th) = self.titlebar_rect(theme)?;
-        let btn_size = theme.button_size.min(theme.titlebar_height) as i32;
-        let sp = theme.button_spacing;
-        let inset = Self::button_inset(theme);
+        // In i64 (saturated back to i32 at the end), so a titlebar at the
+        // far end of the coordinate space cannot overflow.
+        let btn_size = i64::from(theme.button_size.min(theme.titlebar_height));
+        let sp = i64::from(theme.button_spacing);
+        let inset = i64::from(Self::button_inset(theme));
         let text_inset = inset * 2;
-        let btn_count = self.button_count();
+        let btn_count = i64::from(self.button_count());
         // Pixels reserved on the button side: edge inset + buttons + gap.
         let buttons_w = if btn_count > 0 {
             inset + btn_count * btn_size + (btn_count - 1) * sp + text_inset
         } else {
             text_inset
         };
-        let tw_i = tw as i32;
+        let (tx, tw) = (i64::from(tx), i64::from(tw));
         let font = theme.titlebar_font_size;
 
         let (region_x, region_w) = if theme.title_align == "center" {
-            (tx + buttons_w, tw_i - buttons_w * 2)
+            (tx + buttons_w, tw - buttons_w * 2)
         } else if theme.button_side == "left" {
-            (tx + buttons_w, tw_i - buttons_w - text_inset)
+            (tx + buttons_w, tw - buttons_w - text_inset)
         } else {
-            (tx + text_inset, tw_i - buttons_w - text_inset)
+            (tx + text_inset, tw - buttons_w - text_inset)
         };
-        let region_w = region_w.max(0);
+        let region_w = region_w.clamp(0, i64::from(i32::MAX)) as i32;
 
         let text = truncate_to_width(&self.title, font, region_w);
         let text_w = text_px(&text, font).min(region_w);
+        let (rw, text_w64) = (i64::from(region_w), i64::from(text_w));
         let x = if theme.title_align == "center" {
             // Center on the full titlebar; the symmetric reservation keeps
             // the result inside [region_x, region_x + region_w].
-            (tx + (tw_i - text_w) / 2).clamp(region_x, region_x + region_w - text_w)
+            (tx + (tw - text_w64) / 2).clamp(region_x, region_x + rw - text_w64)
         } else {
             region_x
         };
+        let x = x.clamp(i64::from(i32::MIN), i64::from(i32::MAX)) as i32;
         Some(TitleLayout {
             x,
             avail_w: region_w as u32,

@@ -37,6 +37,24 @@ pub(crate) enum Node {
         word: String,
         arms: Vec<(String, Vec<Node>)>,
     },
+    /// A compound command followed on its closing line by a pipe,
+    /// redirection or and-or list: `done | sort`, `fi > out`,
+    /// `esac && echo ok` (`suffix` = the text after the keyword).
+    Redirected {
+        node: Box<Node>,
+        suffix: String,
+        line: usize,
+    },
+}
+
+/// Whether `rest` (text after a closing `done` / `fi` / `esac`) continues
+/// the compound command: a pipe, redirection or `&&` / `||`.
+fn is_compound_suffix(rest: &str) -> bool {
+    rest.starts_with(['|', '>', '<'])
+        || rest.starts_with("&&")
+        || rest.starts_with("&>")
+        || rest.starts_with("2>")
+        || rest.starts_with("1>")
 }
 
 fn syntax_error(msg: impl std::fmt::Display) -> OasisError {
@@ -48,6 +66,9 @@ struct Parser {
     pos: usize,
     /// Current block nesting (see `MAX_BLOCK_NESTING`).
     depth: usize,
+    /// Suffix (and its line) found after the closing keyword of the
+    /// compound command just parsed (see [`Node::Redirected`]).
+    suffix: Option<(String, usize)>,
 }
 
 impl Parser {
@@ -81,6 +102,24 @@ impl Parser {
         true
     }
 
+    /// Consume the closing keyword `kw` (`done`, `fi`, `esac`) of a
+    /// compound command, recording a pipe / redirection / and-or suffix on
+    /// the same statement (`done | sort`) in `self.suffix`.
+    fn expect_closer(&mut self, kw: &str, construct: &str) -> Result<()> {
+        if let Some(stmt) = self.stmts.get(self.pos) {
+            let text = stmt.text.trim_start();
+            if let Some(rest) = text.strip_prefix(kw)
+                && rest.starts_with(char::is_whitespace)
+                && is_compound_suffix(rest.trim_start())
+            {
+                self.suffix = Some((rest.trim().to_string(), stmt.line));
+                self.pos += 1;
+                return Ok(());
+            }
+        }
+        self.expect_keyword(kw, construct)
+    }
+
     fn expect_keyword(&mut self, kw: &str, construct: &str) -> Result<()> {
         if self.take_keyword(kw) {
             Ok(())
@@ -109,15 +148,30 @@ impl Parser {
 
     fn parse_block_inner(&mut self, terms: &[&str]) -> Result<Vec<Node>> {
         let mut nodes = Vec::new();
-        while let Some(word) = self.peek_word() {
+        while let Some(word) = self.peek_word().map(str::to_string) {
+            let word = word.as_str();
             if terms.contains(&word) {
                 break;
             }
+            let compound = match word {
+                "if" => Some(self.parse_if()?),
+                "while" | "until" => Some(self.parse_loop()?),
+                "for" => Some(self.parse_for()?),
+                "case" => Some(self.parse_case()?),
+                _ => None,
+            };
+            if let Some(node) = compound {
+                nodes.push(match self.suffix.take() {
+                    Some((suffix, line)) => Node::Redirected {
+                        node: Box::new(node),
+                        suffix,
+                        line,
+                    },
+                    None => node,
+                });
+                continue;
+            }
             let node = match word {
-                "if" => self.parse_if()?,
-                "while" | "until" => self.parse_loop()?,
-                "for" => self.parse_for()?,
-                "case" => self.parse_case()?,
                 "then" | "do" | "done" | "fi" | "else" | "elif" | "esac" | ";;" => {
                     return Err(syntax_error(format_args!(
                         "unexpected '{word}' (line {})",
@@ -166,10 +220,10 @@ impl Parser {
                 branches.push((cond, body));
             } else if self.take_keyword("else") {
                 else_body = Some(self.parse_block(&["fi"])?);
-                self.expect_keyword("fi", "if")?;
+                self.expect_closer("fi", "if")?;
                 break;
             } else {
-                self.expect_keyword("fi", "if")?;
+                self.expect_closer("fi", "if")?;
                 break;
             }
         }
@@ -185,7 +239,7 @@ impl Parser {
         self.take_keyword(kw);
         let cond = self.parse_condition("do", kw)?;
         let body = self.parse_block(&["done"])?;
-        self.expect_keyword("done", kw)?;
+        self.expect_closer("done", kw)?;
         Ok(Node::Loop { cond, until, body })
     }
 
@@ -205,7 +259,8 @@ impl Parser {
         let words = if first_word(rest) == "in" {
             rest["in".len()..].trim().to_string()
         } else if rest.is_empty() {
-            String::new()
+            // `for VAR; do` iterates over the positional parameters.
+            "\"$@\"".to_string()
         } else {
             return Err(syntax_error(format_args!(
                 "for: expected 'in' (line {})",
@@ -214,7 +269,7 @@ impl Parser {
         };
         self.expect_keyword("do", "for")?;
         let body = self.parse_block(&["done"])?;
-        self.expect_keyword("done", "for")?;
+        self.expect_closer("done", "for")?;
         Ok(Node::For {
             var: var.to_string(),
             words,
@@ -245,7 +300,7 @@ impl Parser {
                 )));
             };
             if first_word(&stmt.text) == "esac" {
-                self.take_keyword("esac");
+                self.expect_closer("esac", "case")?;
                 break;
             }
             if stmt.text == ";;" {
@@ -289,6 +344,7 @@ pub(crate) fn parse_script(stmts: Vec<Stmt>) -> Result<Vec<Node>> {
         stmts,
         pos: 0,
         depth: 0,
+        suffix: None,
     };
     let nodes = parser.parse_block(&[])?;
     if let Some(word) = parser.peek_word() {

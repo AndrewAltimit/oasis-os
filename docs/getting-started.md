@@ -339,10 +339,17 @@ Deterministic scripted runs use the autorun feature; see
 
 ### Remote development on hardware
 
-The EBOOT runs a WiFi TCP command server for closed-loop build-deploy-test
-cycles ([Developer's Journal entry 08](https://andrewaltimit.github.io/oasis-os/journal/08-remote-dev-automation.html)):
+The EBOOT can run a WiFi TCP command server for closed-loop
+build-deploy-test cycles ([Developer's Journal entry 08](https://andrewaltimit.github.io/oasis-os/journal/08-remote-dev-automation.html)).
+It can deploy EBOOTs, write files and inject input, so it is **off unless
+`ms0:/PSP/GAME/OASISOS/cmdserver.key` holds a pre-shared key** (8+ bytes);
+every connection then answers the remote terminal's PSK challenge
+([networking.md § PSK authentication](networking.md#psk-authentication)).
+Use it on a trusted network only (the session is not encrypted).
 
 ```bash
+head -c 24 /dev/urandom | base64 > cmdserver.key             # copy to ms0:/PSP/GAME/OASISOS/
+export PSP_PSK="$(cat cmdserver.key)"                        # psp_remote.py answers the challenge
 export PSP_IP=192.168.0.249                                  # PSP_PORT defaults to 9293
 python3 scripts/psp_remote.py cycle target/.../EBOOT.PBP     # deploy over WiFi and reboot
 python3 scripts/psp_remote.py press cross                    # remote input
@@ -355,7 +362,10 @@ Run `python3 scripts/psp_remote.py` without arguments for the full command
 list (status, log, hold, cursor, hard-reboot, skins, build-cycle, ...).
 
 The network recovery EBOOT (`crates/oasis-recovery-psp`, built the same way)
-starts a WiFi file server when R is held at boot.
+starts a WiFi file server when R is held at boot. It speaks the same PSK
+handshake, keyed by `ms0:/PSP/SAVEDATA/ARK_01234/oasis-recovery.key` (kept
+next to `RECOVERY.PBP`, so it survives a wiped shell directory) or, failing
+that, the shell's `cmdserver.key`; with neither it refuses every connection.
 
 ## Tests, lint and formatting
 
@@ -375,6 +385,14 @@ and run it separately with the ffmpeg-free features:
 cargo clippy --workspace --exclude oasis-app --all-targets -- -D warnings
 cargo clippy -p oasis-app --no-default-features --features javascript,video-decode -- -D warnings
 ```
+
+The workspace clippy sees one feature resolution only. CI also checks the
+supported non-default feature sets (`oasis-app` without a video decoder, and
+`oasis-browser`, `oasis-core`, `oasis-video`, `oasis-app`, `oasis-ffi`,
+`oasis-shader`, `oasis-backend-wasm` with other features, 17 checks) via
+`scripts/ci-feature-clippy.sh`; run it in the CI container
+(`docker compose --profile ci run --rm rust-ci scripts/ci-feature-clippy.sh`),
+or pass `--list` to print the commands.
 
 Examples are built by `cargo test`; to build only them:
 `cargo build --examples -p oasis-skin -p oasis-backend-ue5 -p oasis-backend-sdl`.
@@ -419,7 +437,9 @@ ms_print massif.out.*
 ```
 
 `video-memprofile` prints machine-readable `PEAK_RSS_KB=` and `FRAME_COUNT=`
-lines for CI assertions.
+lines for CI assertions. Its RSS budgets (`--max-rss-kb N`, with `--loops N`
+for the leak test) run natively, not under massif: valgrind's own footprint
+would count towards the process RSS.
 
 ## Project structure
 

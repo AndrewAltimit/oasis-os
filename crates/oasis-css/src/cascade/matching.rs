@@ -14,6 +14,7 @@ use super::CascadeContext;
 use oasis_html::dom::{Document, ElementData, NodeId, NodeKind};
 
 use rustc_hash::FxHashMap;
+use std::borrow::Cow;
 
 // -----------------------------------------------------------------------
 // Robustness limits
@@ -30,6 +31,11 @@ const MAX_SELECTOR_DEPTH: usize = 64;
 /// selector/DOM combinations; ordinary pages stay far below it.
 const MAX_TRAVERSAL_STEPS: usize = 16_384;
 
+/// Sibling nodes structural pseudo-classes may scan while matching one
+/// selector against one element (see `Budget::charge_scan`): one check
+/// on a list of up to this many children always fits.
+const MAX_STRUCTURAL_SCAN: usize = 128 * 1024;
+
 // -----------------------------------------------------------------------
 // Matched declaration types
 // -----------------------------------------------------------------------
@@ -37,6 +43,9 @@ const MAX_TRAVERSAL_STEPS: usize = 16_384;
 /// The origin of a declaration for cascade ordering.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub(super) enum Origin {
+    /// From the built-in user-agent sheet
+    /// ([`default_stylesheet`](crate::default::default_stylesheet)).
+    UserAgent,
     /// From an HTML presentational attribute (lowest priority author style).
     Presentational,
     /// From a `<link>` or `<style>` stylesheet.
@@ -45,11 +54,78 @@ pub(super) enum Origin {
     Inline,
 }
 
+impl Origin {
+    /// The origin of rules from `sheet`: the user-agent origin for the
+    /// built-in UA sheet (recognised by identity), author otherwise.
+    pub(super) fn of_sheet(sheet: &Stylesheet) -> Self {
+        if std::ptr::eq(sheet, crate::default::default_stylesheet()) {
+            Origin::UserAgent
+        } else {
+            Origin::Stylesheet
+        }
+    }
+}
+
+impl MatchedDeclaration<'_> {
+    /// Origin-and-importance tier (CSS Cascade 5 §6.1), lowest first:
+    /// normal UA < presentational hints < normal author < normal inline
+    /// < important author < important inline < important UA.
+    fn cascade_tier(&self) -> u8 {
+        match (self.important, self.origin) {
+            (false, Origin::UserAgent) => 0,
+            (_, Origin::Presentational) => 1,
+            (false, Origin::Stylesheet) => 2,
+            (false, Origin::Inline) => 3,
+            (true, Origin::Stylesheet) => 4,
+            (true, Origin::Inline) => 5,
+            (true, Origin::UserAgent) => 6,
+        }
+    }
+
+    /// True if `self` sorts in a lower cascade layer than `other` of the
+    /// same tier (what `revert-layer` rolls back to), or in a lower tier.
+    pub(super) fn below_layer_of(&self, other: &Self) -> bool {
+        match self.cascade_tier().cmp(&other.cascade_tier()) {
+            std::cmp::Ordering::Less => true,
+            std::cmp::Ordering::Greater => false,
+            std::cmp::Ordering::Equal => compare_layers(self, other).is_lt(),
+        }
+    }
+
+    /// True if `self` comes from a lower origin than `other` (what
+    /// `revert` rolls back to). Presentational hints and inline styles
+    /// count as author, and importance is not an origin: an author
+    /// `revert !important` rolls back past every author declaration,
+    /// normal ones included, to the user-agent origin.
+    pub(super) fn below_origin_of(&self, other: &Self) -> bool {
+        let origin_rank = |d: &Self| match d.origin {
+            Origin::UserAgent => 0,
+            Origin::Presentational | Origin::Stylesheet | Origin::Inline => 1,
+        };
+        origin_rank(self) < origin_rank(other)
+    }
+}
+
+/// Cascade order of two declarations (ascending: for one property the
+/// last one wins): origin and importance, then layer, specificity and
+/// source order.
+pub(super) fn cascade_order(a: &MatchedDeclaration, b: &MatchedDeclaration) -> std::cmp::Ordering {
+    a.cascade_tier()
+        .cmp(&b.cascade_tier())
+        .then_with(|| compare_layers(a, b))
+        .then_with(|| a.specificity.cmp(&b.specificity))
+        .then_with(|| a.source_order.cmp(&b.source_order))
+}
+
 /// A single declaration together with its cascade metadata.
+///
+/// Property and value borrow from the stylesheet (or inline style) they
+/// came from: every element matches many declarations, and copying each
+/// one's strings and values per element dominated the cascade.
 #[derive(Debug, Clone)]
-pub(super) struct MatchedDeclaration {
-    pub(super) property: String,
-    pub(super) value: CssValue,
+pub(super) struct MatchedDeclaration<'a> {
+    pub(super) property: Cow<'a, str>,
+    pub(super) value: Cow<'a, CssValue>,
     pub(super) important: bool,
     pub(super) origin: Origin,
     pub(super) specificity: Specificity,
@@ -177,7 +253,7 @@ fn eval_feature(f: &ContainerFeature, entry: &super::ContainerEntry) -> bool {
 ///   declarations; `!important` reverses again (earlier layers win).
 /// - Layer indices are global across stylesheets when
 ///   `GlobalLayerMap` is populated.
-pub(super) fn compare_layers(a: &MatchedDeclaration, b: &MatchedDeclaration) -> std::cmp::Ordering {
+fn compare_layers(a: &MatchedDeclaration, b: &MatchedDeclaration) -> std::cmp::Ordering {
     use std::cmp::Ordering;
 
     // Only style-origin declarations participate in layering.
@@ -318,10 +394,10 @@ pub(super) fn resolve_pseudo_style_indexed(
             });
             for (i, decl) in rule.declarations.iter().enumerate() {
                 matched.push(MatchedDeclaration {
-                    property: decl.property.clone(),
-                    value: decl.value.clone(),
+                    property: Cow::Borrowed(&decl.property),
+                    value: Cow::Borrowed(&decl.value),
                     important: decl.important,
-                    origin: Origin::Stylesheet,
+                    origin: Origin::of_sheet(stylesheets[sheet_idx]),
                     specificity,
                     source_order: decl_base + i,
                     layer: global_layer,
@@ -335,39 +411,16 @@ pub(super) fn resolve_pseudo_style_indexed(
     }
 
     // Sort by cascade order.
-    matched.sort_by(|a, b| {
-        a.important
-            .cmp(&b.important)
-            .then_with(|| a.origin.cmp(&b.origin))
-            .then_with(|| compare_layers(a, b))
-            .then_with(|| a.specificity.cmp(&b.specificity))
-            .then_with(|| a.source_order.cmp(&b.source_order))
-    });
+    matched.sort_by(cascade_order);
 
-    // Find the winning `content` value.
+    // The winning `content` value; none (or `content: none | normal`)
+    // means no pseudo-element box.
     let content_value = matched
         .iter()
         .rev()
         .find(|d| d.property == "content")
-        .and_then(|d| match &d.value {
-            CssValue::String(s) => Some(s.clone()),
-            // `content: var(--icon)` — substitute against the originating
-            // element's custom properties.
-            CssValue::Unresolved(text) => {
-                let text =
-                    super::var_resolve::substitute_vars(text, &element_style.custom_properties)?;
-                crate::parser::parse_substituted_declaration("content", &text)
-                    .into_iter()
-                    .find_map(|d| match d.value {
-                        CssValue::String(s) => Some(s),
-                        _ => None,
-                    })
-            },
-            _ => None,
-        });
-
-    // No content declaration or content:none/normal => no pseudo-element.
-    let content_text = content_value?;
+        .map(|d| &*d.value)
+        .filter(|v| matches!(v, CssValue::String(_) | CssValue::Unresolved(_)))?;
 
     // Pseudo-elements inherit from the originating element.
     let mut style = ComputedStyle::inherit(element_style);
@@ -376,32 +429,57 @@ pub(super) fn resolve_pseudo_style_indexed(
 
     let parent_font_size = element_style.font_size;
 
+    // Custom properties first, as for elements: a `var()` in any other
+    // declaration (and in `content`) must see the pseudo-element's own
+    // `--*` values, even when the custom property sorts later in
+    // cascade order.
+    let mut declared_custom: Vec<&str> = Vec::new();
+    for (i, entry) in matched.iter().enumerate() {
+        if entry.property.starts_with("--") {
+            super::apply::apply_matched_custom(&mut style, Some(element_style), &matched, i);
+            declared_custom.push(&entry.property);
+        }
+    }
+    if !declared_custom.is_empty() {
+        super::var_resolve::resolve_custom_properties(
+            std::sync::Arc::make_mut(&mut style.custom_properties),
+            &declared_custom,
+        );
+    }
+
+    let content_text = match content_value {
+        CssValue::String(s) => s.clone(),
+        // `content: var(--icon)`.
+        CssValue::Unresolved(text) => {
+            let text = super::var_resolve::substitute_vars(text, &style.custom_properties)?;
+            crate::parser::parse_substituted_declaration("content", &text)
+                .into_iter()
+                .find_map(|d| match d.value {
+                    CssValue::String(s) => Some(s),
+                    _ => None,
+                })?
+        },
+        _ => return None,
+    };
+
     // Apply font-size first (for em-unit resolution in other properties).
-    for entry in &matched {
+    let parent = Some(element_style);
+    for (i, entry) in matched.iter().enumerate() {
         if entry.property == "font-size" {
-            super::apply_cascaded(
-                &mut style,
-                Some(element_style),
-                "font-size",
-                &entry.value,
-                parent_font_size,
-            );
+            super::apply::apply_matched(&mut style, parent, &matched, i, parent_font_size);
         }
     }
     let pseudo_font_size = style.font_size;
 
     // Apply all other declarations.
-    for entry in &matched {
-        if entry.property == "font-size" || entry.property == "content" {
+    for (i, entry) in matched.iter().enumerate() {
+        if entry.property == "font-size"
+            || entry.property == "content"
+            || entry.property.starts_with("--")
+        {
             continue;
         }
-        super::apply_cascaded(
-            &mut style,
-            Some(element_style),
-            &entry.property,
-            &entry.value,
-            pseudo_font_size,
-        );
+        super::apply::apply_matched(&mut style, parent, &matched, i, pseudo_font_size);
     }
 
     style.content = Some(content_text);
@@ -478,15 +556,15 @@ fn matches_selector_ignoring_pseudo(
 ///
 /// Uses the `SelectorIndex` to test only candidate rules whose subject
 /// selector matches the element's tag/id/classes, instead of all rules.
-pub(super) fn collect_matched_declarations(
+pub(super) fn collect_matched_declarations<'a>(
     doc: &Document,
     node_id: NodeId,
-    stylesheets: &[&Stylesheet],
+    stylesheets: &[&'a Stylesheet],
     index: &super::index::SelectorIndex,
-    inline_map: &FxHashMap<NodeId, &[super::super::parser::Declaration]>,
+    inline_map: &FxHashMap<NodeId, &'a [super::super::parser::Declaration]>,
     ctx: &CascadeContext<'_>,
     tag_cache: &mut FxHashMap<String, String>,
-) -> Vec<MatchedDeclaration> {
+) -> Vec<MatchedDeclaration<'a>> {
     let mut result = Vec::new();
 
     // Extract element info for index lookup.
@@ -508,6 +586,8 @@ pub(super) fn collect_matched_declarations(
 
     // Get candidate rules from the index.
     let candidates = index.candidates_with_lower(tag, tag_lower, id, &classes);
+    // The element's ancestor filter, built on first use.
+    let mut ancestors = None;
 
     for candidate in &candidates {
         let rule = &stylesheets[candidate.sheet_idx].rules[candidate.rule_idx];
@@ -525,7 +605,9 @@ pub(super) fn collect_matched_declarations(
         {
             continue;
         }
-        let best_specificity = matching_specificity(doc, node_id, rule, ctx);
+        let masks = index.selector_masks(candidate.sheet_idx, candidate.rule_idx);
+        let best_specificity =
+            matching_specificity_filtered(doc, node_id, rule, ctx, masks, &mut ancestors);
         if let Some(specificity) = best_specificity {
             // Convert sheet-local layer index to global if the global
             // map is available (cross-stylesheet @layer merging).
@@ -536,12 +618,13 @@ pub(super) fn collect_matched_declarations(
                     Some(local)
                 }
             });
+            let origin = Origin::of_sheet(stylesheets[candidate.sheet_idx]);
             for (decl_idx, decl) in rule.declarations.iter().enumerate() {
                 result.push(MatchedDeclaration {
-                    property: decl.property.clone(),
-                    value: decl.value.clone(),
+                    property: Cow::Borrowed(&decl.property),
+                    value: Cow::Borrowed(&decl.value),
                     important: decl.important,
-                    origin: Origin::Stylesheet,
+                    origin,
                     specificity,
                     source_order: candidate.source_order_base + decl_idx,
                     layer: global_layer,
@@ -564,15 +647,11 @@ pub(super) fn collect_matched_declarations(
             types: 0,
         };
         // Inline source_order is after all stylesheet declarations.
-        let inline_base = stylesheets
-            .iter()
-            .flat_map(|s| &s.rules)
-            .map(|r| r.declarations.len())
-            .sum::<usize>();
+        let inline_base = index.declaration_count();
         for (i, decl) in decls.iter().enumerate() {
             result.push(MatchedDeclaration {
-                property: decl.property.clone(),
-                value: decl.value.clone(),
+                property: Cow::Borrowed(&decl.property),
+                value: Cow::Borrowed(&decl.value),
                 important: decl.important,
                 origin: Origin::Inline,
                 specificity: inline_spec,
@@ -594,7 +673,7 @@ fn collect_presentational_attrs(
     doc: &Document,
     node_id: NodeId,
     elem: &ElementData,
-    result: &mut Vec<MatchedDeclaration>,
+    result: &mut Vec<MatchedDeclaration<'_>>,
 ) {
     use oasis_html::dom::TagName;
 
@@ -605,10 +684,10 @@ fn collect_presentational_attrs(
         types: 0,
     };
 
-    let mut push = |property: &str, value: CssValue| {
+    let mut push = |property: &'static str, value: CssValue| {
         result.push(MatchedDeclaration {
-            property: property.to_string(),
-            value,
+            property: Cow::Borrowed(property),
+            value: Cow::Owned(value),
             important: false,
             origin: Origin::Presentational,
             specificity: zero_spec,
@@ -793,18 +872,32 @@ fn parse_html_dimension(s: &str) -> Option<CssValue> {
 }
 
 /// Return the highest specificity among the rule's selectors that match
-/// `node_id`, or `None` if no selector matches.
-/// Skips selectors that target pseudo-elements (::before, ::after).
-pub(super) fn matching_specificity(
+/// `node_id`, or `None` if no selector matches. Skips selectors that
+/// target pseudo-elements (::before, ::after), and every selector whose
+/// ancestor `masks` (the rule's [`SelectorIndex::selector_masks`]) the
+/// element's ancestor filter (built into `ancestors` on first use) does
+/// not cover: such a selector cannot match, so the result is the same.
+///
+/// [`SelectorIndex::selector_masks`]: super::index::SelectorIndex::selector_masks
+fn matching_specificity_filtered(
     doc: &Document,
     node_id: NodeId,
     rule: &Rule,
     ctx: &CascadeContext<'_>,
+    masks: &[Option<super::ancestor_filter::AncestorMask>],
+    ancestors: &mut Option<super::ancestor_filter::AncestorMask>,
 ) -> Option<Specificity> {
     let mut best: Option<Specificity> = None;
-    for selector in &rule.selectors.selectors {
+    for (i, selector) in rule.selectors.selectors.iter().enumerate() {
         if selector_pseudo_element(selector).is_some() {
             continue; // Skip pseudo-element selectors in normal matching.
+        }
+        if let Some(Some(mask)) = masks.get(i)
+            && !ancestors
+                .get_or_insert_with(|| super::ancestor_filter::ancestor_filter(doc, node_id))
+                .covers(mask)
+        {
+            continue;
         }
         if matches_selector(doc, node_id, selector, ctx) {
             let spec = selector.specificity();
@@ -877,6 +970,9 @@ enum MatchResult {
 /// match" for the whole selector (including under `:not()`).
 struct Budget {
     left: std::cell::Cell<usize>,
+    /// Separate allowance for sibling-index pseudo-class scans
+    /// ([`Budget::charge_scan`]).
+    scan_left: std::cell::Cell<usize>,
     exhausted: std::cell::Cell<bool>,
 }
 
@@ -884,8 +980,27 @@ impl Budget {
     fn new() -> Self {
         Self {
             left: std::cell::Cell::new(MAX_TRAVERSAL_STEPS),
+            scan_left: std::cell::Cell::new(MAX_STRUCTURAL_SCAN),
             exhausted: std::cell::Cell::new(false),
         }
+    }
+
+    /// Consume `n` nodes of sibling-list scanning by a structural
+    /// pseudo-class (`:nth-child()`, `:last-of-type`, ...); `false` once
+    /// that allowance is spent. Kept apart from the step budget so one
+    /// `li:nth-child(odd)` on a huge list still matches, while the same
+    /// check repeated per candidate (`:has(~ :nth-last-child(..))`,
+    /// `.a ~ :nth-child(..)`) can no longer go cubic.
+    #[inline]
+    fn charge_scan(&self, n: usize) -> bool {
+        let left = self.scan_left.get();
+        if n > left {
+            self.scan_left.set(0);
+            self.exhausted.set(true);
+            return false;
+        }
+        self.scan_left.set(left - n);
+        true
     }
 
     /// Consume one step; `false` once the budget is spent.
@@ -1175,25 +1290,36 @@ fn matches_simple(
         SimpleSelector::Type(tag_name) => elem.tag.as_str().eq_ignore_ascii_case(tag_name),
         SimpleSelector::Class(cls) => elem.has_class(cls),
         SimpleSelector::Id(id) => elem.get_attribute("id").is_some_and(|v| v == id),
-        SimpleSelector::PseudoClass(pseudo) => match_pseudo_class(doc, node_id, elem, pseudo, ctx),
+        // Sibling-index pseudo-classes scan the parent's child list: that
+        // work is charged like a sibling combinator walk.
+        SimpleSelector::PseudoClass(pseudo) => {
+            budget.charge_scan(selectors::structural_scan_cost(&doc.nodes, node_id, pseudo))
+                && match_pseudo_class(doc, node_id, elem, pseudo, ctx)
+        },
         SimpleSelector::PseudoClassFn(name, arg) => {
-            match_pseudo_class_fn(doc, node_id, elem, name, arg)
+            budget.charge_scan(selectors::structural_scan_cost(&doc.nodes, node_id, name))
+                && match_pseudo_class_fn(doc, node_id, elem, name, arg)
         },
         // An inner result cut short by the budget is "unknown", not
         // "no match": it must not turn into a `:not()` match.
+        // The argument selectors are complex and unscoped: in
+        // `:is(.a .b)` the `.a` may be any ancestor of the element.
         SimpleSelector::Not(inner_list) => {
             !inner_list
                 .iter()
-                .any(|compound| matches_compound(doc, node_id, compound, ctx, budget))
+                .any(|sel| matches_selector_scoped(doc, node_id, sel, ctx, None, None, budget))
                 && !budget.exhausted()
         },
         SimpleSelector::Is(inner_list) | SimpleSelector::Where(inner_list) => inner_list
             .iter()
-            .any(|compound| matches_compound(doc, node_id, compound, ctx, budget)),
+            .any(|sel| matches_selector_scoped(doc, node_id, sel, ctx, None, None, budget)),
         SimpleSelector::Has(relative_list) => matches_has(doc, node_id, relative_list, ctx, budget),
-        SimpleSelector::Attribute { name, op, value } => {
-            match_attribute(elem, name, op, value.as_deref())
-        },
+        SimpleSelector::Attribute {
+            name,
+            op,
+            value,
+            case_insensitive,
+        } => match_attribute(elem, name, op, value.as_deref(), *case_insensitive),
         SimpleSelector::PseudoElement(_) => {
             // Pseudo-elements don't match real elements directly.
             // They are handled separately by resolve_pseudo_content.
@@ -1286,24 +1412,49 @@ fn match_pseudo_class_fn(
 }
 
 /// Match an attribute selector against an element.
-fn match_attribute(elem: &ElementData, name: &str, op: &AttrOp, value: Option<&str>) -> bool {
-    let attr_val = match elem.get_attribute(name) {
-        Some(v) => v,
-        None => return false,
+///
+/// With `case_insensitive` the selector `value` is already ASCII-lowercase
+/// (the parser folds it), so only the attribute value needs folding.
+/// `^=`, `$=`, `*=` with an empty value and `~=` with an empty or
+/// whitespace-containing value match nothing (Selectors 4 §6.1-6.2).
+fn match_attribute(
+    elem: &ElementData,
+    name: &str,
+    op: &AttrOp,
+    value: Option<&str>,
+    case_insensitive: bool,
+) -> bool {
+    let Some(raw) = elem.get_attribute(name) else {
+        return false;
+    };
+    let Some(v) = value else {
+        return *op == AttrOp::Exists;
+    };
+    let folded;
+    let attr_val = if case_insensitive && raw.bytes().any(|b| b.is_ascii_uppercase()) {
+        folded = raw.to_ascii_lowercase();
+        folded.as_str()
+    } else {
+        raw
     };
 
     match op {
         AttrOp::Exists => true,
-        AttrOp::Equals => value.is_some_and(|v| attr_val == v),
+        AttrOp::Equals => attr_val == v,
         AttrOp::Includes => {
-            value.is_some_and(|v| attr_val.split_whitespace().any(|word| word == v))
+            !v.is_empty()
+                && !v.contains(|c: char| c.is_ascii_whitespace())
+                && attr_val.split_ascii_whitespace().any(|word| word == v)
         },
         AttrOp::DashMatch => {
-            value.is_some_and(|v| attr_val == v || attr_val.starts_with(&format!("{v}-")))
+            attr_val == v
+                || attr_val
+                    .strip_prefix(v)
+                    .is_some_and(|rest| rest.starts_with('-'))
         },
-        AttrOp::Prefix => value.is_some_and(|v| attr_val.starts_with(v)),
-        AttrOp::Suffix => value.is_some_and(|v| attr_val.ends_with(v)),
-        AttrOp::Substring => value.is_some_and(|v| attr_val.contains(v)),
+        AttrOp::Prefix => !v.is_empty() && attr_val.starts_with(v),
+        AttrOp::Suffix => !v.is_empty() && attr_val.ends_with(v),
+        AttrOp::Substring => !v.is_empty() && attr_val.contains(v),
     }
 }
 
@@ -1364,6 +1515,14 @@ fn matches_has(
             // For Descendant the scope bounding is sufficient; for Child
             // the leading-combinator check verifies the leftmost matched
             // compound is a direct child of the subject.
+            // `:has(> x)` with a one-compound selector can only match a
+            // direct child: scanning the whole subtree (last child
+            // first) could spend the budget before reaching one.
+            Combinator::Child if sel.parts.len() == 1 => doc.nodes[node_id]
+                .children
+                .iter()
+                .take_while(|_| budget.tick())
+                .any(|&cid| matches!(doc.nodes[cid].kind, NodeKind::Element(_)) && matched(cid)),
             Combinator::Descendant | Combinator::Child => any_in_subtree(node_id, &matched),
             Combinator::AdjacentSibling => match sibling_slot(doc, node_id, budget) {
                 SiblingSlot::At(kids, pos) => {

@@ -19,7 +19,7 @@ The PSP deployment uses two binaries:
 The PRX hooks `sceDisplaySetFrameBuf` to draw overlay UI into the
 game's framebuffer and claims a PSP audio channel for background MP3
 playback. No dependency on `oasis-core` — direct framebuffer rendering
-only (~153 KB PRX once stripped with `prxmin`, ~212 KB resident
+only (~159 KB PRX once stripped with `prxmin`, ~212 KB resident
 including `.bss`; see [`psp-plugin.md`](psp-plugin.md) §Memory Budget).
 
 ## Building
@@ -39,8 +39,9 @@ from `RUST_PSP_REV`. Commands and prerequisites are in
 `scripts/psp-smoke-test.sh` afterwards to boot both EBOOTs in
 PPSSPPHeadless the way CI does.
 
-Every PSP crate builds without warnings, and CI keeps it that way for the
-EBOOT, overlay PRX and recovery EBOOT: it adds
+Every PSP crate builds without warnings, and CI keeps it that way for all
+ten of them (the EBOOT, overlay PRX and recovery EBOOT, then the ME boot
+PRX, devloop PRX, PRX decryptor and the four USB crates in one loop): it adds
 `--config 'build.rustflags=["-D", "warnings"]'` to `cargo psp`. Pass the same
 flag locally to check a change. Don't use `RUSTFLAGS` for this: it replaces
 the `build.rustflags` in the EBOOT's `.cargo/config.toml` (psp-ld linker
@@ -55,12 +56,30 @@ many elements can generate hundreds of KB of GU commands per frame.
 
 ### Critical rules
 
-- **Never call `reinit_gu_frame()` after `swap_buffers_inner()`.**
+- **Never re-open the display list after `swap_buffers_inner()`.**
   `swap_buffers_inner` already starts a new GU frame via `sceGuStart`.
   A second `sceGuStart` without `sceGuFinish` corrupts the command
-  buffer and hangs `sceGuSync` on the next frame. Only use
-  `reinit_gu_frame()` after utility dialogs (OSK, `psp::dialog`) which
-  run their own GU frames.
+  buffer and hangs `sceGuSync` on the next frame. Utility dialogs (OSK,
+  `psp::dialog`, the WiFi connect dialog) run their own GU frames, so
+  call `oasis_backend_psp::note_utility_dialog()` next to each one;
+  `reinit_gu_frame()` re-opens the list only when that flag is set and
+  is a no-op otherwise, so calling it on a path where no dialog ran is
+  safe.
+
+- **Every draw allocates through `gu_mem`.** rust-psp's
+  `sceGuGetMemory` never fails: it bumps the list pointer past the end
+  of the buffer. `gu_mem::alloc` / `has_room` check the open list's
+  size (`sceGuCheckList`) first and drop the draw (logged as
+  `[GU] display list full` in `eboot.log`, first 10 only) while keeping
+  64 KB free for state commands and `sceGuFinish`. New primitives must
+  use them, before emitting any state command.
+
+- **CPU-written textures must be written back.** The GE samples
+  textures and the font atlas through the uncached mirror, so anything
+  the CPU wrote through cached memory needs
+  `psp::cache::dcache_writeback_range` before the first draw that uses
+  it (`load_texture_inner`, `update_texture_data` and
+  `build_font_atlas` do this).
 
 - **`std::time::Instant` works on PSP Allegrex** (verified on real
   hardware 2026-04-13). The earlier "crashes" claim was a
@@ -202,6 +221,11 @@ order.
   it, the free is deferred (`video_tex_retired`) until it lets go. All
   of it is `SeqCst`, so either the decoder sees the unpublish or the
   main thread sees the hazard.
+- **ME boot module** — before loading `mpeg_vsh370.prx` the video
+  thread loads `ms0:/PSP/GAME/OASISOS/oasis-me-boot.prx` (crate
+  `oasis-me-boot`, shipped as a release asset) to start the Media
+  Engine; if it is missing the log says so and decode relies on the ME
+  having been booted by the AAC path.
 - **Persistent `AvcDecoder` reuse** — `rust-psp` skips
   `sceMpegDelete` in `Drop` to avoid an intermittent firmware crash,
   which leaves the sceMpeg instance leaked. On the next

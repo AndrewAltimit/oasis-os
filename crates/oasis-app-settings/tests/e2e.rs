@@ -173,11 +173,17 @@ fn volume_slider_click_sets_value_and_optimistic_value_survives_stale_state() {
     let (ox, oy) = ORIGIN;
     let track_x = value.x + value.w as i32 + 6;
     h.click(track_x + 1 - ox, value.center().1 - oy);
-    assert_eq!(take_request(&mut h).unwrap().1, "0");
+    let (path, data) = take_request(&mut h).unwrap();
+    assert_eq!(data, "0");
     assert!(lines(&h).contains(" 0%"), "{}", lines(&h));
-    // The shell has not published yet: ticking with the old "80" must not
-    // snap the slider back.
+    // The shell has written the request but not applied it yet: ticking
+    // with the old "80" must not snap the slider back.
+    h.vfs_mut().write(&path, data.as_bytes()).unwrap();
     h.frame(16);
+    h.frame(16);
+    assert!(lines(&h).contains(" 0%"), "{}", lines(&h));
+    h.vfs_mut().write(&path, b"").unwrap(); // consumed and applied
+    h.vfs_mut().write(VOLUME_STATE_PATH, b"0").unwrap();
     h.frame(16);
     assert!(lines(&h).contains(" 0%"), "{}", lines(&h));
     // Keys step by 5 and clamp at 0 / 100.
@@ -187,6 +193,27 @@ fn volume_slider_click_sets_value_and_optimistic_value_survives_stale_state() {
         h.type_text("+");
     }
     assert_eq!(take_request(&mut h).unwrap().1, "100");
+}
+
+/// A request the shell consumed without changing the published value (it
+/// rejected or clamped it) used to leave the control showing the
+/// rejected value for good, since only *changed* state was adopted.
+#[test]
+fn rejected_change_falls_back_to_the_published_value() {
+    let mut h = settings();
+    h.vfs_mut().write(VOLUME_STATE_PATH, b"80").unwrap();
+    h.frame(16);
+    h.click_text("Audio");
+    h.type_text("+");
+    assert!(lines(&h).contains("85%"), "{}", lines(&h));
+    // The shell takes the request but keeps (re-publishes) 80.
+    let (path, data) = take_request(&mut h).unwrap();
+    assert_eq!(data, "85");
+    h.vfs_mut().write(&path, b"").unwrap();
+    h.vfs_mut().write(VOLUME_STATE_PATH, b"80").unwrap();
+    h.frame(16);
+    let text = lines(&h);
+    assert!(text.contains("80%") && !text.contains("85%"), "{text}");
 }
 
 #[test]

@@ -131,7 +131,7 @@ impl Widget for TabBar {
                             tx + 2,
                             y + 2,
                             this_tab_w.saturating_sub(4),
-                            h - 4,
+                            h.saturating_sub(4),
                             ctx.theme.border_radius_sm,
                             active_fill,
                         )?;
@@ -143,8 +143,8 @@ impl Widget for TabBar {
                             tx + 2,
                             y + 2,
                             this_tab_w.saturating_sub(4),
-                            h - 4,
-                            (h - 4) as u16 / 2,
+                            h.saturating_sub(4),
+                            (h.saturating_sub(4) / 2).min(u32::from(u16::MAX)) as u16,
                             active_fill,
                         )?;
                     }

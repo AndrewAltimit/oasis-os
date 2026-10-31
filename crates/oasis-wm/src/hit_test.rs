@@ -48,7 +48,7 @@ pub enum HitRegion {
 ///
 /// The far edges are exclusive and computed in `i64`, so a rectangle near
 /// `i32::MAX` (or wider than `i32::MAX`) cannot wrap around.
-fn point_in_rect(px: i32, py: i32, rx: i32, ry: i32, rw: u32, rh: u32) -> bool {
+pub(crate) fn point_in_rect(px: i32, py: i32, rx: i32, ry: i32, rw: u32, rh: u32) -> bool {
     let (px, py) = (i64::from(px), i64::from(py));
     let (rx, ry) = (i64::from(rx), i64::from(ry));
     px >= rx && py >= ry && px < rx + i64::from(rw) && py < ry + i64::from(rh)
@@ -68,29 +68,16 @@ fn hit_test_window(window: &Window, x: i32, y: i32, theme: &WmTheme) -> Option<H
     }
 
     // 1. Titlebar buttons (highest priority).
-    if let Some((bx, by, bw, bh)) = window.close_btn_rect(theme)
-        && point_in_rect(x, y, bx, by, bw, bh)
-    {
-        return Some(HitRegion::TitlebarButton(
-            window.id.clone(),
-            ButtonKind::Close,
-        ));
-    }
-    if let Some((bx, by, bw, bh)) = window.minimize_btn_rect(theme)
-        && point_in_rect(x, y, bx, by, bw, bh)
-    {
-        return Some(HitRegion::TitlebarButton(
-            window.id.clone(),
-            ButtonKind::Minimize,
-        ));
-    }
-    if let Some((bx, by, bw, bh)) = window.maximize_btn_rect(theme)
-        && point_in_rect(x, y, bx, by, bw, bh)
-    {
-        return Some(HitRegion::TitlebarButton(
-            window.id.clone(),
-            ButtonKind::Maximize,
-        ));
+    for kind in [
+        ButtonKind::Close,
+        ButtonKind::Minimize,
+        ButtonKind::Maximize,
+    ] {
+        if let Some((bx, by, bw, bh)) = window.button_rect(theme, kind)
+            && point_in_rect(x, y, bx, by, bw, bh)
+        {
+            return Some(HitRegion::TitlebarButton(window.id.clone(), kind));
+        }
     }
 
     // 2. Titlebar body (initiates drag).
@@ -143,11 +130,14 @@ fn hit_test_window(window: &Window, x: i32, y: i32, theme: &WmTheme) -> Option<H
 
 /// Check if a point hits one of the resize handles around the window edges.
 fn check_resize_handles(window: &Window, x: i32, y: i32, theme: &WmTheme) -> Option<ResizeEdge> {
-    let handle = theme.resize_handle_size as i32;
-    let wx = window.x;
-    let wy = window.y;
-    let wr = wx + window.outer_w as i32;
-    let wb = wy + window.outer_h as i32;
+    // In i64, like `point_in_rect`: a frame near `i32::MAX` must not wrap
+    // its far edges.
+    let handle = i64::from(theme.resize_handle_size);
+    let (x, y) = (i64::from(x), i64::from(y));
+    let wx = i64::from(window.x);
+    let wy = i64::from(window.y);
+    let wr = wx + i64::from(window.outer_w);
+    let wb = wy + i64::from(window.outer_h);
 
     let mut in_left = x >= wx && x < wx + handle;
     let mut in_right = x >= wr - handle && x < wr;
@@ -590,5 +580,36 @@ mod tests {
         // `rx + rw` overflowed i32 and wrapped negative, missing the point.
         assert!(point_in_rect(i32::MAX - 1, 0, i32::MAX - 10, 0, 100, 10));
         assert!(point_in_rect(5, 5, 0, 0, u32::MAX, u32::MAX));
+    }
+
+    /// A window at the far ends of the coordinate space (multi-monitor
+    /// style offsets, or an explicit `WindowConfig` position) used to
+    /// overflow `x + outer_w` in the resize-handle and button maths, which
+    /// panics in debug builds.
+    #[test]
+    fn windows_at_extreme_coordinates_hit_test_without_overflow() {
+        let theme = WmTheme::default();
+        for (x, y) in [
+            (i32::MAX - 100, i32::MAX - 100),
+            (i32::MAX - 1, 0),
+            (i32::MIN, i32::MIN),
+        ] {
+            let win = make_window("far", x, y, 300, 200);
+            let ws = std::slice::from_ref(&win);
+            for (px, py) in [
+                (x, y),
+                (x.saturating_add(5), y.saturating_add(5)),
+                (x.saturating_add(50), y.saturating_add(50)),
+                (i32::MAX, i32::MAX),
+                (i32::MAX - 2, y.saturating_add(10)),
+            ] {
+                let _ = hit_test(ws, px, py, &theme);
+            }
+        }
+        let win = make_window("edge", i32::MAX - 10, 0, 300, 200);
+        assert_eq!(
+            hit_test(std::slice::from_ref(&win), i32::MAX - 10, 100, &theme),
+            HitRegion::ResizeHandle("edge".into(), ResizeEdge::West)
+        );
     }
 }

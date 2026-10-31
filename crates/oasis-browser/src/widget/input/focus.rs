@@ -95,18 +95,7 @@ impl BrowserWidget {
     pub(super) fn restyle_focus_affected(&mut self, old_focus: Option<NodeId>) {
         let Some(doc) = &self.document else { return };
 
-        let mut affected = rustc_hash::FxHashSet::default();
-        for start in [old_focus, self.focused_node].into_iter().flatten() {
-            let mut cur = Some(start);
-            while let Some(nid) = cur {
-                let Some(node) = doc.nodes.get(nid) else {
-                    break;
-                };
-                affected.insert(nid);
-                cur = node.parent;
-            }
-        }
-
+        let affected = super::hover::state_change_affected(doc, old_focus, self.focused_node);
         if affected.is_empty() {
             return;
         }

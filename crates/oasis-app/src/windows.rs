@@ -8,9 +8,9 @@
 //! drops the browser widget for the browser window, plays the close sound
 //! and falls back to the dashboard when the last window went away.
 
+use crate::ui_sound::UiSound;
 use oasis_core::apps::{AppAction, OwnedMedia};
 use oasis_core::sdi::SdiRegistry;
-use oasis_core::ui_sound::UiSound;
 use oasis_core::vfs::MemoryVfs;
 
 use crate::app_state::{AppState, Mode};
@@ -140,12 +140,7 @@ pub(crate) fn stop_radio(state: &mut AppState) {
         .radio
         .manager
         .process_request("stop", state.audio_backend.as_mut());
-    state.radio.archive_catalog = None;
-    state.radio.pending_catalog_fetch = None;
-    state.radio.pending_source_fetch = None;
-    if let Some(mut src) = state.radio.source.take() {
-        src.disconnect();
-    }
+    state.radio.release_playback();
 }
 
 /// Remove the runner of window `id`, parking it until the shell releases

@@ -410,7 +410,13 @@ impl ComputedStyle {
 
             // -- Font ---------------------------------------------------
             "font-size" => {
-                self.font_size = resolve_font_size(value, parent_font_size);
+                let size = resolve_font_size(value, parent_font_size);
+                // Negative sizes are invalid (the declaration is dropped);
+                // `1e400px` overflows to infinity, which layout cannot use.
+                if !size.is_finite() || size < 0.0 {
+                    return;
+                }
+                self.font_size = size;
                 // Recompute line-height at the default ratio.
                 self.line_height = self.font_size * 1.5;
             },

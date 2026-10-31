@@ -423,3 +423,26 @@ fn wheel_scrolls_a_long_folder() {
     assert_eq!(selected(&h), 0, "wheeling back returns to the top");
     assert!(h.screen_text().contains("file00"));
 }
+
+/// Space activates a highlighted menu item; the `TextInput(' ')` the host
+/// still delivers for that key must not land in the dialog it opened.
+#[test]
+fn space_activating_a_menu_item_does_not_type_into_its_dialog() {
+    let mut h = fm(tree());
+    go_home(&mut h);
+    h.key(Key::F(10));
+    h.key(Key::Right);
+    // Edit > New Folder is highlighted.
+    h.key(Key::Space);
+    let Some(Dialog::NameEntry { text, .. }) = &app(&h).dialog else {
+        panic!("New Folder dialog not open: {:?}", app(&h).dialog);
+    };
+    assert!(!text.ends_with(' '), "{text:?}");
+    let before = text.clone();
+    // Typing afterwards still works.
+    h.type_text(" x");
+    let Some(Dialog::NameEntry { text, .. }) = &app(&h).dialog else {
+        panic!("dialog closed");
+    };
+    assert_eq!(*text, format!("{before} x"));
+}

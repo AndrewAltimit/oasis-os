@@ -43,6 +43,7 @@ fn default_format() -> String {
 /// Collection of stations, serializable as TOML.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StationRegistry {
+    /// The stations, in display order (`[[station]]` tables in TOML).
     #[serde(rename = "station")]
     pub stations: Vec<Station>,
 }
@@ -135,6 +136,19 @@ impl StationRegistry {
     /// Return only favorite stations.
     pub fn favorites(&self) -> Vec<&Station> {
         self.stations.iter().filter(|s| s.favorite).collect()
+    }
+
+    /// The station a tune request names: by index, or by name
+    /// (case-insensitive).
+    pub fn find(&self, station: &oasis_types::ipc::StationRef) -> Option<&Station> {
+        use oasis_types::ipc::StationRef;
+        match station {
+            StationRef::Index(i) => self.stations.get(*i),
+            StationRef::Name(name) => self
+                .stations
+                .iter()
+                .find(|s| s.name.eq_ignore_ascii_case(name)),
+        }
     }
 
     /// Toggle the favorite flag on a station by index.

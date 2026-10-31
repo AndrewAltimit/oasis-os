@@ -1,6 +1,6 @@
 // HTML named character reference lookup table.
 //
-// Covers the ~100 most commonly used entities. Case-sensitive, matching the
+// Covers every HTML 4 entity plus common HTML5 names (~300). Case-sensitive, matching the
 // HTML specification. Names are given *without* the leading `&` and trailing
 // `;` (e.g. pass `"amp"` not `"&amp;"`).
 
@@ -17,10 +17,23 @@ pub fn lookup_entity(name: &str) -> Option<&'static str> {
         "apos" => "'",
         "nbsp" => "\u{00A0}",
 
-        // ---- Whitespace ---------------------------------------------------
+        // ---- Whitespace / formatting characters ----------------------------
         "ensp" => "\u{2002}",
         "emsp" => "\u{2003}",
         "thinsp" => "\u{2009}",
+        "zwnj" => "\u{200C}",
+        "zwj" => "\u{200D}",
+        "lrm" => "\u{200E}",
+        "rlm" => "\u{200F}",
+
+        // ---- Punctuation marks -------------------------------------------
+        "iexcl" => "\u{00A1}",
+        "iquest" => "\u{00BF}",
+        "dagger" => "\u{2020}",
+        "Dagger" => "\u{2021}",
+        "permil" => "\u{2030}",
+        "prime" => "\u{2032}",
+        "Prime" => "\u{2033}",
 
         // ---- Typography ---------------------------------------------------
         "mdash" => "\u{2014}",
@@ -195,15 +208,265 @@ pub fn lookup_entity(name: &str) -> Option<&'static str> {
         "chi" => "\u{03C7}",
         "psi" => "\u{03C8}",
         "omega" => "\u{03C9}",
+        "thetasym" => "\u{03D1}",
+        "upsih" => "\u{03D2}",
+        "piv" => "\u{03D6}",
+
+        // ---- The rest of HTML 4 (Latin-1, symbols, specials) -------------
+        "AMP" => "&",
+        "LT" => "<",
+        "GT" => ">",
+        "QUOT" => "\"",
+        "COPY" => "\u{00A9}",
+        "REG" => "\u{00AE}",
+        "acute" => "\u{00B4}",
+        "brvbar" => "\u{00A6}",
+        "cedil" => "\u{00B8}",
+        "macr" => "\u{00AF}",
+        "not" => "\u{00AC}",
+        "ordf" => "\u{00AA}",
+        "ordm" => "\u{00BA}",
+        "shy" => "\u{00AD}",
+        "sup1" => "\u{00B9}",
+        "sup2" => "\u{00B2}",
+        "sup3" => "\u{00B3}",
+        "uml" => "\u{00A8}",
+        "Yuml" => "\u{0178}",
+        "circ" => "\u{02C6}",
+        "tilde" => "\u{02DC}",
+        "OElig" => "\u{0152}",
+        "oelig" => "\u{0153}",
+        "Scaron" => "\u{0160}",
+        "scaron" => "\u{0161}",
+        "sbquo" => "\u{201A}",
+        "bdquo" => "\u{201E}",
+        "lsaquo" => "\u{2039}",
+        "rsaquo" => "\u{203A}",
+        "oline" => "\u{203E}",
+        "frasl" => "\u{2044}",
+        "weierp" => "\u{2118}",
+        "image" => "\u{2111}",
+        "real" => "\u{211C}",
+        "alefsym" => "\u{2135}",
+        "crarr" => "\u{21B5}",
+        "lArr" => "\u{21D0}",
+        "uArr" => "\u{21D1}",
+        "rArr" => "\u{21D2}",
+        "dArr" => "\u{21D3}",
+        "hArr" => "\u{21D4}",
+        "forall" => "\u{2200}",
+        "part" => "\u{2202}",
+        "exist" => "\u{2203}",
+        "empty" => "\u{2205}",
+        "nabla" => "\u{2207}",
+        "isin" => "\u{2208}",
+        "notin" => "\u{2209}",
+        "ni" => "\u{220B}",
+        "prop" => "\u{221D}",
+        "ang" => "\u{2220}",
+        "and" => "\u{2227}",
+        "or" => "\u{2228}",
+        "cap" => "\u{2229}",
+        "cup" => "\u{222A}",
+        "int" => "\u{222B}",
+        "there4" => "\u{2234}",
+        "cong" => "\u{2245}",
+        "sub" => "\u{2282}",
+        "sup" => "\u{2283}",
+        "nsub" => "\u{2284}",
+        "sube" => "\u{2286}",
+        "supe" => "\u{2287}",
+        "oplus" => "\u{2295}",
+        "otimes" => "\u{2297}",
+        "perp" => "\u{22A5}",
+        "sdot" => "\u{22C5}",
+        "lceil" => "\u{2308}",
+        "rceil" => "\u{2309}",
+        "lfloor" => "\u{230A}",
+        "rfloor" => "\u{230B}",
+        "lang" => "\u{27E8}",
+        "rang" => "\u{27E9}",
+        "loz" => "\u{25CA}",
+        "spades" => "\u{2660}",
+        "clubs" => "\u{2663}",
+        "hearts" => "\u{2665}",
+        "diams" => "\u{2666}",
+
+        // ---- Common HTML5 additions ----------------------------------------
+        "check" => "\u{2713}",
+        "cross" => "\u{2717}",
+        "starf" => "\u{2605}",
+        "star" => "\u{2606}",
+        "hyphen" => "\u{2010}",
+        "dash" => "\u{2010}",
+        "ZeroWidthSpace" => "\u{200B}",
+        "Tab" => "\t",
+        "NewLine" => "\n",
+        "excl" => "!",
+        "num" => "#",
+        "dollar" => "$",
+        "percnt" => "%",
+        "lpar" => "(",
+        "rpar" => ")",
+        "ast" => "*",
+        "plus" => "+",
+        "comma" => ",",
+        "period" => ".",
+        "sol" => "/",
+        "colon" => ":",
+        "semi" => ";",
+        "equals" => "=",
+        "quest" => "?",
+        "commat" => "@",
+        "lsqb" => "[",
+        "lbrack" => "[",
+        "bsol" => "\\",
+        "rsqb" => "]",
+        "rbrack" => "]",
+        "Hat" => "^",
+        "lowbar" => "_",
+        "grave" => "`",
+        "lcub" => "{",
+        "lbrace" => "{",
+        "verbar" => "|",
+        "vert" => "|",
+        "rcub" => "}",
+        "rbrace" => "}",
 
         _ => return None,
     };
     Some(s)
 }
 
+/// Whether `name` is one of the legacy references the HTML spec also
+/// recognises without a trailing `;` (`&copy 2024`, `&nbsp`): the
+/// Latin-1 set plus `amp`, `lt`, `gt`, `quot` and their uppercase forms.
+pub fn is_legacy_entity(name: &str) -> bool {
+    matches!(
+        name,
+        "AElig"
+            | "AMP"
+            | "Aacute"
+            | "Acirc"
+            | "Agrave"
+            | "Aring"
+            | "Atilde"
+            | "Auml"
+            | "COPY"
+            | "Ccedil"
+            | "ETH"
+            | "Eacute"
+            | "Ecirc"
+            | "Egrave"
+            | "Euml"
+            | "GT"
+            | "Iacute"
+            | "Icirc"
+            | "Igrave"
+            | "Iuml"
+            | "LT"
+            | "Ntilde"
+            | "Oacute"
+            | "Ocirc"
+            | "Ograve"
+            | "Oslash"
+            | "Otilde"
+            | "Ouml"
+            | "QUOT"
+            | "REG"
+            | "THORN"
+            | "Uacute"
+            | "Ucirc"
+            | "Ugrave"
+            | "Uuml"
+            | "Yacute"
+            | "aacute"
+            | "acirc"
+            | "acute"
+            | "aelig"
+            | "agrave"
+            | "amp"
+            | "aring"
+            | "atilde"
+            | "auml"
+            | "brvbar"
+            | "ccedil"
+            | "cedil"
+            | "cent"
+            | "copy"
+            | "curren"
+            | "deg"
+            | "divide"
+            | "eacute"
+            | "ecirc"
+            | "egrave"
+            | "eth"
+            | "euml"
+            | "frac12"
+            | "frac14"
+            | "frac34"
+            | "gt"
+            | "iacute"
+            | "icirc"
+            | "iexcl"
+            | "igrave"
+            | "iquest"
+            | "iuml"
+            | "laquo"
+            | "lt"
+            | "macr"
+            | "micro"
+            | "middot"
+            | "nbsp"
+            | "not"
+            | "ntilde"
+            | "oacute"
+            | "ocirc"
+            | "ograve"
+            | "ordf"
+            | "ordm"
+            | "oslash"
+            | "otilde"
+            | "ouml"
+            | "para"
+            | "plusmn"
+            | "pound"
+            | "quot"
+            | "raquo"
+            | "reg"
+            | "sect"
+            | "shy"
+            | "sup1"
+            | "sup2"
+            | "sup3"
+            | "szlig"
+            | "thorn"
+            | "times"
+            | "uacute"
+            | "ucirc"
+            | "ugrave"
+            | "uml"
+            | "uuml"
+            | "yacute"
+            | "yen"
+            | "yuml"
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn legacy_entities_all_resolve() {
+        for name in [
+            "amp", "nbsp", "copy", "not", "frac34", "AElig", "yuml", "QUOT",
+        ] {
+            assert!(is_legacy_entity(name), "{name}");
+            assert!(lookup_entity(name).is_some(), "{name}");
+        }
+        assert!(!is_legacy_entity("mdash"));
+    }
 
     #[test]
     fn essential_entities() {
@@ -278,9 +541,9 @@ mod tests {
         assert_eq!(lookup_entity("Agrave"), Some("\u{00C0}"));
         assert_eq!(lookup_entity("agrave"), Some("\u{00E0}"));
         assert_ne!(lookup_entity("Agrave"), lookup_entity("agrave"));
-        // Non-existent casing returns None.
-        assert_eq!(lookup_entity("AMP"), None);
-        assert_eq!(lookup_entity("LT"), None);
+        // Non-existent casing returns None (`AMP` and `LT` do exist).
+        assert_eq!(lookup_entity("Amp"), None);
+        assert_eq!(lookup_entity("lT"), None);
     }
 
     #[test]

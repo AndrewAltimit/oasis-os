@@ -5,7 +5,7 @@
 //! so the commands talk to it through VFS IPC: the host publishes the
 //! plugin list at [`PLUGIN_STATUS_PATH`] and applies the
 //! [`PluginRequest`] lines queued at [`PLUGIN_REQUEST_PATH`] (the desktop
-//! shell does both every frame, see `oasis-app/src/commands.rs`).
+//! shell does both every frame, see `oasis-app/src/commands/ipc.rs`).
 
 use crate::error::{OasisError, Result};
 pub use crate::ipc::{PLUGIN_REQUEST_PATH, PLUGIN_STATUS_PATH, PluginRequest};

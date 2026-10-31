@@ -4,7 +4,7 @@
 use oasis_types::error::{OasisError, Result};
 use oasis_vfs::EntryKind;
 
-use crate::cmd_helpers::require_args;
+use crate::cmd_helpers::{FlagSpec, parse_flags, require_args};
 use crate::interpreter::{CommandOutput, resolve_path};
 
 /// Maximum file size for `cat` display (10 MiB).
@@ -25,33 +25,89 @@ register_commands!(
 // ls
 // ---------------------------------------------------------------------------
 
+const LS_USAGE: &str = "ls [-al] [path...]";
+
+/// `text`, or no output at all when it is empty (so an empty listing adds
+/// no blank line to a command list's output).
+fn text_or_none(text: String) -> CommandOutput {
+    if text.is_empty() {
+        CommandOutput::None
+    } else {
+        CommandOutput::Text(text)
+    }
+}
+
+/// One `ls` listing of `path`: names (directories as `name/`, in the
+/// skin's bright-blue ANSI slot, SGR 94, which the shell UI resolves via
+/// its ANSI palette and pipes / `$(...)` / redirects strip), dotfiles only
+/// with `all`, `kind size name` rows with `long`.
+fn ls_lines(
+    vfs: &mut dyn oasis_vfs::Vfs,
+    path: &str,
+    all: bool,
+    long: bool,
+) -> Result<Vec<String>> {
+    let meta = vfs.stat(path)?;
+    if meta.kind != EntryKind::Directory {
+        let name = path.rsplit('/').next().unwrap_or(path).to_string();
+        return Ok(vec![if long {
+            format!("-  {:>8}  {name}", meta.size)
+        } else {
+            name
+        }]);
+    }
+    let mut lines = Vec::new();
+    for e in vfs.readdir(path)? {
+        if !all && e.name.starts_with('.') {
+            continue;
+        }
+        let shown = if e.kind == EntryKind::Directory {
+            crate::pipeline::dir_colored(&format!("{}/", e.name))
+        } else {
+            e.name.clone()
+        };
+        lines.push(match (long, e.kind) {
+            (false, _) => shown,
+            (true, EntryKind::Directory) => format!("d  {:>8}  {shown}", "-"),
+            (true, EntryKind::File) => format!("-  {:>8}  {shown}", e.size),
+        });
+    }
+    Ok(lines)
+}
+
 define_command!(
     LsCmd,
     "ls",
     "List directory contents",
-    "ls [path]",
+    LS_USAGE,
     "filesystem",
     |args, env| {
-        let path = if args.is_empty() {
-            env.cwd.clone()
+        let flags = parse_flags(args, &FlagSpec::switches("al"), LS_USAGE)?;
+        let (all, long) = (flags.has('a'), flags.has('l'));
+        let paths: Vec<String> = if flags.positional.is_empty() {
+            vec![env.cwd.clone()]
         } else {
-            resolve_path(&env.cwd, args[0])
+            flags
+                .positional
+                .iter()
+                .map(|p| resolve_path(&env.cwd, p))
+                .collect()
         };
-        let entries = env.vfs.readdir(&path)?;
-        if entries.is_empty() {
-            return Ok(CommandOutput::Text("(empty)".to_string()));
+        if let [path] = &paths[..] {
+            let lines = ls_lines(env.vfs, path, all, long)?;
+            return Ok(text_or_none(lines.join("\n")));
         }
-        let mut lines = Vec::new();
-        for e in &entries {
-            if e.kind == EntryKind::Directory {
-                // Directories render in the skin's bright-blue ANSI slot
-                // (SGR 94); the shell UI resolves it via the ANSI palette.
-                lines.push(format!("\u{1b}[94m{}/\u{1b}[0m", e.name));
-            } else {
-                lines.push(e.name.clone());
+        let mut sections = Vec::new();
+        for path in &paths {
+            let lines = ls_lines(env.vfs, path, all, long)?;
+            let mut section = format!("{path}:");
+            for line in lines {
+                section.push('\n');
+                section.push_str(&line);
             }
+            sections.push(section);
         }
-        Ok(CommandOutput::Text(lines.join("\n")))
+        Ok(CommandOutput::Text(sections.join("\n\n")))
     }
 );
 
@@ -59,17 +115,21 @@ define_command!(
 // cd
 // ---------------------------------------------------------------------------
 
+// `cd` with no argument (`$HOME`) and `cd -` (`$OLDPWD`) need shell
+// variables, which commands cannot see: the executor rewrites those forms
+// before dispatch and records `OLDPWD` afterwards
+// (`CommandRegistry::run_cd`). This command sees a plain path.
 define_command!(
     CdCmd,
     "cd",
     "Change working directory",
-    "cd <path>",
+    "cd [path|-]",
     "filesystem",
     |args, env| {
-        let target = if args.is_empty() {
-            "/".to_string()
-        } else {
-            resolve_path(&env.cwd, args[0])
+        let target = match args {
+            [] => "/".to_string(),
+            [path] => resolve_path(&env.cwd, path),
+            _ => return Err(OasisError::Command("cd: too many arguments".into())),
         };
         let meta = env.vfs.stat(&target)?;
         if meta.kind != EntryKind::Directory {
@@ -103,10 +163,16 @@ define_command!(
     CatCmd,
     "cat",
     "Display file contents",
-    "cat <file>",
+    "cat [file]",
     "filesystem",
     |args, env| {
-        require_args(args, 1, "cat <file>")?;
+        // `echo x | cat`, `cat < f`, `cat <<< word`: pass stdin through.
+        if args.is_empty()
+            && let Some(stdin) = env.stdin.as_ref()
+        {
+            return Ok(CommandOutput::Text(stdin.clone()));
+        }
+        require_args(args, 1, "cat [file]")?;
         let path = resolve_path(&env.cwd, args[0]);
         let meta = env.vfs.stat(&path)?;
         if meta.size as usize > CAT_MAX_SIZE {
@@ -128,17 +194,44 @@ define_command!(
     MkdirCmd,
     "mkdir",
     "Create a directory",
-    "mkdir <path>...",
+    MKDIR_USAGE,
     "filesystem",
     |args, env| {
-        require_args(args, 1, "mkdir <path>...")?;
-        for arg in args {
+        let flags = parse_flags(args, &FlagSpec::switches("p"), MKDIR_USAGE)?;
+        require_args(&flags.positional, 1, MKDIR_USAGE)?;
+        for arg in &flags.positional {
             let path = resolve_path(&env.cwd, arg);
-            env.vfs.mkdir(&path)?;
+            if flags.has('p') {
+                mkdir_parents(env.vfs, &path)?;
+            } else {
+                env.vfs.mkdir(&path)?;
+            }
         }
         Ok(CommandOutput::None)
     }
 );
+
+const MKDIR_USAGE: &str = "mkdir [-p] <path>...";
+
+/// `mkdir -p`: create `path` and any missing ancestors; an existing
+/// directory is fine, an existing file is an error.
+fn mkdir_parents(vfs: &mut dyn oasis_vfs::Vfs, path: &str) -> Result<()> {
+    let mut prefix = String::new();
+    for part in path.split('/').filter(|p| !p.is_empty()) {
+        prefix.push('/');
+        prefix.push_str(part);
+        match vfs.stat(&prefix) {
+            Ok(meta) if meta.kind == EntryKind::Directory => {},
+            Ok(_) => {
+                return Err(OasisError::Command(
+                    format!("mkdir: not a directory: {prefix}").into(),
+                ));
+            },
+            Err(_) => vfs.mkdir(&prefix)?,
+        }
+    }
+    Ok(())
+}
 
 // ---------------------------------------------------------------------------
 // rm
@@ -147,18 +240,60 @@ define_command!(
 define_command!(
     RmCmd,
     "rm",
-    "Remove a file or empty directory",
-    "rm <path>...",
+    "Remove files or directories",
+    RM_USAGE,
     "filesystem",
     |args, env| {
-        require_args(args, 1, "rm <path>...")?;
-        for arg in args {
+        let flags = parse_flags(args, &FlagSpec::switches("rRf"), RM_USAGE)?;
+        let (recursive, force) = (flags.has('r') || flags.has('R'), flags.has('f'));
+        if !force {
+            require_args(&flags.positional, 1, RM_USAGE)?;
+        }
+        for arg in &flags.positional {
             let path = resolve_path(&env.cwd, arg);
-            env.vfs.remove(&path)?;
+            if path == "/" {
+                return Err(OasisError::Command("rm: refusing to remove '/'".into()));
+            }
+            let meta = match env.vfs.stat(&path) {
+                Ok(meta) => meta,
+                Err(_) if force => continue,
+                Err(e) => return Err(e),
+            };
+            if recursive && meta.kind == EntryKind::Directory && !env.vfs.is_symlink(&path) {
+                remove_tree(env.vfs, &path, 0)?;
+            } else {
+                env.vfs.remove(&path)?;
+            }
         }
         Ok(CommandOutput::None)
     }
 );
+
+const RM_USAGE: &str = "rm [-rf] <path>...";
+
+/// Directory depth `rm -r` descends before giving up.
+const MAX_REMOVE_DEPTH: usize = 64;
+
+/// Remove `dir` and everything under it, deepest first.
+fn remove_tree(vfs: &mut dyn oasis_vfs::Vfs, dir: &str, depth: usize) -> Result<()> {
+    if depth >= MAX_REMOVE_DEPTH {
+        return Err(OasisError::Command(
+            format!("rm: {dir}: nested deeper than {MAX_REMOVE_DEPTH}").into(),
+        ));
+    }
+    for entry in vfs.readdir(dir)? {
+        let child = format!("{}/{}", dir.trim_end_matches('/'), entry.name);
+        // A link to a directory lists as a directory: remove the link,
+        // never the files of its target (as GNU `rm -r` does).
+        if entry.kind == EntryKind::Directory && !vfs.is_symlink(&child) {
+            remove_tree(vfs, &child, depth + 1)?;
+        } else {
+            vfs.remove(&child)?;
+        }
+    }
+    vfs.remove(dir)?;
+    Ok(())
+}
 
 // ---------------------------------------------------------------------------
 // echo
@@ -352,23 +487,30 @@ define_command!(
             1 => (env.cwd.clone(), args[0]),
             _ => (resolve_path(&env.cwd, args[0]), args[1]),
         };
-        let mut results = Vec::new();
-        find_recursive(env.vfs, &root, pattern, &mut results)?;
-        if results.is_empty() {
-            Ok(CommandOutput::Text("(no matches)".to_string()))
+        // A pattern without glob characters keeps the historical
+        // substring search (`find / log` finds `syslog.txt`).
+        let pattern = if pattern.contains(['*', '?', '[']) {
+            pattern.to_string()
         } else {
-            Ok(CommandOutput::Text(results.join("\n")))
-        }
+            format!("*{pattern}*")
+        };
+        let mut results = Vec::new();
+        find_recursive(env.vfs, &root, &pattern, &mut results, 0)?;
+        Ok(text_or_none(results.join("\n")))
     }
 );
 
-/// Recursively search for files matching a simple substring pattern.
+/// Recursively search for entries whose name matches glob `pattern`.
 fn find_recursive(
     vfs: &mut dyn oasis_vfs::Vfs,
     dir: &str,
     pattern: &str,
     results: &mut Vec<String>,
+    depth: usize,
 ) -> Result<()> {
+    if depth >= MAX_REMOVE_DEPTH {
+        return Ok(());
+    }
     let entries = vfs.readdir(dir)?;
     for entry in &entries {
         let full = if dir == "/" {
@@ -376,11 +518,11 @@ fn find_recursive(
         } else {
             format!("{}/{}", dir, entry.name)
         };
-        if entry.name.contains(pattern) {
+        if crate::expander::glob_match(pattern, &entry.name) {
             results.push(full.clone());
         }
         if entry.kind == EntryKind::Directory {
-            find_recursive(vfs, &full, pattern, results)?;
+            find_recursive(vfs, &full, pattern, results, depth + 1)?;
         }
     }
     Ok(())
@@ -606,10 +748,9 @@ mod tests {
     fn find_no_matches() {
         let (reg, mut vfs) = setup();
         let mut cwd = "/".to_string();
-        assert!(
-            assert_text!(exec(&reg, &mut vfs, &mut cwd, "find / zzzzz").unwrap())
-                .contains("no matches")
-        );
+        // No placeholder text: `find` output feeds pipes and loops.
+        let out = exec(&reg, &mut vfs, &mut cwd, "find / zzzzz").unwrap();
+        assert!(matches!(out, CommandOutput::None), "{out:?}");
     }
 
     #[test]

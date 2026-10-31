@@ -11,29 +11,72 @@ use super::types::{State, Token};
 // Named character reference table
 // ---------------------------------------------------------------------------
 
-/// Resolve a named character reference (without the leading `&`).
-/// `name` may include a trailing semicolon.
-pub(crate) fn resolve_named_ref(name: &str) -> Option<&'static str> {
-    let key = name.strip_suffix(';').unwrap_or(name);
-    // Delegate to the central entity table first.
-    if let Some(s) = crate::entities::lookup_entity(key) {
-        return Some(s);
+/// Match a named character reference (WHATWG §13.2.5.73). `name` is the
+/// run of ASCII alphanumerics after the `&`, with the `;` that ended it
+/// if any. Returns the replacement and how many bytes of `name` it used;
+/// the rest stays literal text.
+///
+/// With a `;` any known name matches. Without one only the legacy
+/// references do, as the longest such prefix (`&copy2024` is `©2024`,
+/// `&notin` without `;` is `¬in`); `&mdash` stays literal.
+///
+/// An unknown name *with* a `;` stays literal instead of matching a legacy
+/// prefix: the table covers only part of HTML5's names, so `&centerdot;`
+/// or `&parallel;` (real names it lacks) would otherwise come out as
+/// `¢erdot;` / `¶llel;`.
+pub(crate) fn match_named_ref(name: &str) -> Option<(&'static str, usize)> {
+    use crate::entities::{is_legacy_entity, lookup_entity};
+    if let Some(base) = name.strip_suffix(';') {
+        return lookup_entity(base).map(|replacement| (replacement, name.len()));
     }
-    // Extra entities used in the tokenizer but not in the main table.
-    match key {
-        "zwnj" => Some("\u{200C}"),
-        "zwj" => Some("\u{200D}"),
-        "lrm" => Some("\u{200E}"),
-        "rlm" => Some("\u{200F}"),
-        "iexcl" => Some("\u{00A1}"),
-        "iquest" => Some("\u{00BF}"),
-        "dagger" => Some("\u{2020}"),
-        "Dagger" => Some("\u{2021}"),
-        "permil" => Some("\u{2030}"),
-        "prime" => Some("\u{2032}"),
-        "Prime" => Some("\u{2033}"),
-        _ => None,
+    let base = name;
+    // The longest legacy name is six characters.
+    (1..=base.len().min(6)).rev().find_map(|n| {
+        let prefix = base.get(..n)?;
+        if is_legacy_entity(prefix) {
+            lookup_entity(prefix).map(|r| (r, n))
+        } else {
+            None
+        }
+    })
+}
+
+/// [`match_named_ref`] as text: replacement plus the unused tail, or
+/// the literal `&name`.
+pub(crate) fn resolve_named_ref_text(name: &str) -> String {
+    match match_named_ref(name) {
+        Some((replacement, used)) => format!("{replacement}{}", &name[used..]),
+        None => format!("&{name}"),
     }
+}
+
+/// The character a numeric reference `&#code;` stands for (§13.2.5.80):
+/// U+FFFD for NUL, surrogates and out-of-range values, and C1 controls
+/// as the Windows-1252 characters pages mean (`&#150;` is an en dash).
+pub(crate) fn numeric_ref_char(code: u32) -> char {
+    match code {
+        0 | 0xD800..=0xDFFF => '\u{FFFD}',
+        c if c > 0x10FFFF => '\u{FFFD}',
+        c @ 0x80..=0x9F => windows_1252_c1(c),
+        c => char::from_u32(c).unwrap_or('\u{FFFD}'),
+    }
+}
+
+/// The numeric-reference replacement for a C1 control code point
+/// (0x80-0x9F): its Windows-1252 character, or the code point itself for
+/// the five 1252 leaves unassigned.
+fn windows_1252_c1(code: u32) -> char {
+    const TABLE: [char; 32] = [
+        '\u{20AC}', '\u{81}', '\u{201A}', '\u{0192}', '\u{201E}', '\u{2026}', '\u{2020}',
+        '\u{2021}', '\u{02C6}', '\u{2030}', '\u{0160}', '\u{2039}', '\u{0152}', '\u{8D}',
+        '\u{017D}', '\u{8F}', '\u{90}', '\u{2018}', '\u{2019}', '\u{201C}', '\u{201D}', '\u{2022}',
+        '\u{2013}', '\u{2014}', '\u{02DC}', '\u{2122}', '\u{0161}', '\u{203A}', '\u{0153}',
+        '\u{9D}', '\u{017E}', '\u{0178}',
+    ];
+    usize::try_from(code - 0x80)
+        .ok()
+        .and_then(|i| TABLE.get(i).copied())
+        .unwrap_or('\u{FFFD}')
 }
 
 // ---------------------------------------------------------------------------
@@ -75,8 +118,15 @@ impl Tokenizer {
                 self.state = State::HexCharacterReferenceStart;
                 None
             },
-            _ => {
+            // Decimal start: without a digit, `&#` stays literal (`&#;`
+            // used to become U+FFFD and `&#abc` lost nothing but luck).
+            Some(c) if c.is_ascii_digit() => {
                 self.state = State::DecimalCharacterReference;
+                None
+            },
+            _ => {
+                self.flush_temp_buffer();
+                self.state = self.return_state;
                 None
             },
         }
@@ -135,12 +185,11 @@ impl Tokenizer {
                 self.state = self.return_state;
                 None
             },
+            // At least one digit was consumed (see the start state), so
+            // a missing `;` still resolves: `&#0abc` is U+FFFD + `abc`
+            // (it used to emit `&#abc`, dropping the digit).
             _ => {
-                if self.char_ref_code == 0 {
-                    self.flush_temp_buffer();
-                } else {
-                    self.finish_numeric_char_ref();
-                }
+                self.finish_numeric_char_ref();
                 self.state = self.return_state;
                 None
             },
@@ -163,12 +212,25 @@ impl Tokenizer {
             }
         }
 
-        if let Some(replacement) = resolve_named_ref(&name) {
-            self.emit_char_ref_text(replacement);
-        } else {
-            let literal = format!("&{name}");
-            self.emit_char_ref_text(&literal);
-        }
+        // In an attribute, a reference without `;` followed by `=` or an
+        // alphanumeric is left alone (§13.2.5.73, "historical reasons"):
+        // `?a=1&copy=2` is a query string, not `?a=1©=2`.
+        let text = match match_named_ref(&name) {
+            Some((replacement, used)) => {
+                let rest = &name[used..];
+                let next = rest.chars().next().or(self.peek());
+                let historical_attr_case = !name[..used].ends_with(';')
+                    && self.return_state_is_attr()
+                    && next.is_some_and(|c| c == '=' || c.is_ascii_alphanumeric());
+                if historical_attr_case {
+                    format!("&{name}")
+                } else {
+                    format!("{replacement}{rest}")
+                }
+            },
+            None => format!("&{name}"),
+        };
+        self.emit_char_ref_text(&text);
 
         self.state = self.return_state;
         None
@@ -178,12 +240,7 @@ impl Tokenizer {
 
     /// Convert accumulated numeric code point to character and emit.
     pub(crate) fn finish_numeric_char_ref(&mut self) {
-        let ch = match self.char_ref_code {
-            0 | 0xD800..=0xDFFF => '\u{FFFD}',
-            c if c > 0x10FFFF => '\u{FFFD}',
-            c => char::from_u32(c).unwrap_or('\u{FFFD}'),
-        };
-        let s = ch.to_string();
+        let s = numeric_ref_char(self.char_ref_code).to_string();
         self.emit_char_ref_text(&s);
     }
 

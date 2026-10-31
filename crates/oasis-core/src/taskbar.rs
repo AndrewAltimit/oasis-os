@@ -166,7 +166,14 @@ impl Taskbar {
     ///
     /// `windows` should be the WM's window list in z-order. `active_id` is
     /// the currently focused window id (if any). `has_start_menu` controls
-    /// whether buttons start after the start button.
+    /// whether buttons start after the start button; they end at two
+    /// thirds of the screen width. Hosts that lay out a [`BottomBar`]
+    /// should prefer [`Self::update_sdi_in`] with its
+    /// [`BottomBar::taskbar_span`], which also clears the bar's URL plate,
+    /// USB label and media dock.
+    ///
+    /// [`BottomBar`]: crate::bottombar::BottomBar
+    /// [`BottomBar::taskbar_span`]: crate::bottombar::BottomBar::taskbar_span
     pub fn update_sdi(
         &mut self,
         sdi: &mut SdiRegistry,
@@ -174,6 +181,23 @@ impl Taskbar {
         windows: &[crate::wm::window::Window],
         active_id: Option<&str>,
         has_start_menu: bool,
+    ) {
+        let span = (
+            Self::taskbar_start_x(at, has_start_menu),
+            at.screen_w as i32 * 2 / 3,
+        );
+        self.update_sdi_in(sdi, at, windows, active_id, span);
+    }
+
+    /// [`Self::update_sdi`] with the buttons laid out in the horizontal
+    /// span `(start_x, end_x)` of the bottom bar.
+    pub fn update_sdi_in(
+        &mut self,
+        sdi: &mut SdiRegistry,
+        at: &ActiveTheme,
+        windows: &[crate::wm::window::Window],
+        active_id: Option<&str>,
+        (start_x, max_x): (i32, i32),
     ) {
         if windows.is_empty() {
             self.hide_sdi(sdi);
@@ -200,12 +224,7 @@ impl Taskbar {
         // Cache for hit testing.
         self.bar_y = bar_y;
         self.bar_h = bar_h;
-
-        let start_x = Self::taskbar_start_x(at, has_start_menu);
         self.start_x = start_x;
-
-        // Right edge: leave room for media tabs (roughly right third).
-        let max_x = at.screen_w as i32 * 2 / 3;
 
         // Compute button layout within available region.
         let count = self.order.len().min(MAX_BUTTONS);

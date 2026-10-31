@@ -10,7 +10,7 @@ use oasis_types::error::{OasisError, Result, VfsError};
 
 use crate::{
     AccessMode, EntryKind, FilePermissions, RenamePlan, Vfs, VfsContext, VfsEntry, VfsMetadata,
-    normalize_path, parent_path as parent,
+    authorize_permission_change, check_ancestors_searchable, normalize_path, parent_path as parent,
 };
 
 /// An entry in the game asset VFS.
@@ -71,13 +71,44 @@ impl GameAssetVfs {
         self.add_base(path, Node::Dir);
     }
 
+    /// Insert `node` into the base layer, keeping the tree well formed: it
+    /// is ignored when an ancestor is a (visible) file, or when `path` is
+    /// visible as the other kind (a file can't replace a directory, nor a
+    /// directory a file). Re-adding hidden content makes it visible again:
+    /// `path` and its ancestors are taken out of the deleted set, so host
+    /// content is never placed beneath a directory the player removed
+    /// without that directory coming back too.
     fn add_base(&mut self, path: &str, node: Node) {
         let Ok(path) = normalize_path(path) else {
             return;
         };
-        if path == "/" || !ensure_parents(&mut self.base, &path) {
+        if path == "/" {
             return;
         }
+        let ancestors = ancestors_of(&path);
+        if ancestors.iter().any(|a| {
+            matches!(self.overlay.get(*a), Some(Node::File(_)))
+                || matches!(self.base.get(*a), Some(Node::File(_)))
+        }) {
+            return;
+        }
+        if let Some(existing) = self.effective_entry(&path)
+            && matches!(existing, Node::Dir) != matches!(node, Node::Dir)
+        {
+            return;
+        }
+        // A shadowed entry of the other kind in the base would resurface
+        // under the overlay's removal; refuse that too.
+        if let Some(existing) = self.base.get(path.as_ref())
+            && matches!(existing, Node::Dir) != matches!(node, Node::Dir)
+        {
+            return;
+        }
+        for ancestor in ancestors {
+            self.deleted.remove(ancestor);
+            self.base.entry(ancestor.to_string()).or_insert(Node::Dir);
+        }
+        self.deleted.remove(path.as_ref());
         self.base.insert(path.into_owned(), node);
     }
 
@@ -115,6 +146,7 @@ impl Vfs for GameAssetVfs {
 
     fn readdir(&self, path: &str) -> Result<Vec<VfsEntry>> {
         let path = normalize_path(path)?;
+        check_ancestors_searchable(self, &path)?;
         match self.effective_entry(&path) {
             Some(Node::Dir) => {
                 self.check_permission(&path, AccessMode::Read)?;
@@ -171,6 +203,7 @@ impl Vfs for GameAssetVfs {
 
     fn read(&self, path: &str) -> Result<Vec<u8>> {
         let path = normalize_path(path)?;
+        check_ancestors_searchable(self, &path)?;
         match self.effective_entry(&path) {
             Some(Node::File(data)) => {
                 self.check_permission(&path, AccessMode::Read)?;
@@ -183,6 +216,7 @@ impl Vfs for GameAssetVfs {
 
     fn write(&mut self, path: &str, data: &[u8]) -> Result<()> {
         let path = normalize_path(path)?;
+        check_ancestors_searchable(self, &path)?;
         let par = parent(&path);
         self.require_dir(par)?;
         // Check parent directory write permission.
@@ -224,6 +258,7 @@ impl Vfs for GameAssetVfs {
 
     fn mkdir(&mut self, path: &str) -> Result<()> {
         let path = normalize_path(path)?;
+        check_ancestors_searchable(self, &path)?;
         match self.effective_entry(&path) {
             Some(Node::Dir) => return Ok(()),
             Some(Node::File(_)) => {
@@ -253,13 +288,17 @@ impl Vfs for GameAssetVfs {
         if path == "/" {
             return Err(OasisError::Vfs("cannot remove root".into()));
         }
-        // Check parent directory write permission.
+        check_ancestors_searchable(self, &path)?;
+        if self.effective_entry(&path).is_none() {
+            return Err(VfsError::NotFound {
+                path: path.into_owned(),
+            }
+            .into());
+        }
+        // Check parent directory write permission, then the target's own.
         let par = parent(&path);
         self.check_permission(par, AccessMode::Write)?;
-        // Check target's own permission.
-        if self.effective_entry(&path).is_some() {
-            self.check_permission(&path, AccessMode::Write)?;
-        }
+        self.check_permission(&path, AccessMode::Write)?;
         match self.effective_entry(&path) {
             Some(Node::Dir) => {
                 let prefix = format!("{path}/");
@@ -291,6 +330,8 @@ impl Vfs for GameAssetVfs {
     fn rename(&mut self, from: &str, to: &str) -> Result<()> {
         let from = normalize_path(from)?;
         let to = normalize_path(to)?;
+        check_ancestors_searchable(self, &from)?;
+        check_ancestors_searchable(self, &to)?;
         if self.validate_rename(&from, &to)? == RenamePlan::NoOp {
             return Ok(());
         }
@@ -368,9 +409,8 @@ impl Vfs for GameAssetVfs {
 
     fn set_permissions(&mut self, path: &str, perms: FilePermissions) -> Result<()> {
         let path = normalize_path(path)?;
-        if self.effective_entry(&path).is_none() {
-            return Err(OasisError::Vfs(format!("no such path: {path}").into()));
-        }
+        let current = self.get_permissions(&path)?;
+        authorize_permission_change(&self.ctx, &path, &current)?;
         self.permissions.insert(path.into_owned(), perms);
         Ok(())
     }
@@ -393,24 +433,13 @@ fn direct_child(full_path: &str, prefix: &str) -> Option<String> {
     Some(rest.to_string())
 }
 
-/// Ensure all ancestor directories of `path` exist in the given map.
-/// Returns `false` (leaving the map untouched) when an ancestor is a file.
-fn ensure_parents(map: &mut HashMap<String, Node>, path: &str) -> bool {
-    let ancestors: Vec<&str> = path
-        .match_indices('/')
+/// The ancestor directories of a normalized `path`, root excluded
+/// (`/a/b/c` -> `/a`, `/a/b`).
+fn ancestors_of(path: &str) -> Vec<&str> {
+    path.match_indices('/')
         .skip(1)
         .map(|(i, _)| &path[..i])
-        .collect();
-    if ancestors
-        .iter()
-        .any(|a| matches!(map.get(*a), Some(Node::File(_))))
-    {
-        return false;
-    }
-    for ancestor in ancestors {
-        map.entry(ancestor.to_string()).or_insert(Node::Dir);
-    }
-    true
+        .collect()
 }
 
 #[cfg(test)]

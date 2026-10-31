@@ -7,6 +7,7 @@
 use rustc_hash::FxHashMap;
 
 use super::super::parser::{Rule, SimpleSelector, Stylesheet};
+use super::ancestor_filter::{AncestorMask, selector_mask};
 
 /// An indexed reference to a specific rule in a specific stylesheet.
 #[derive(Debug, Clone, Copy)]
@@ -33,6 +34,21 @@ pub struct SelectorIndex {
     /// every element; without this it tested every rule of every sheet
     /// (most of the cascade time on Wikipedia).
     pseudo_element: Option<Box<SelectorIndex>>,
+    /// See [`Self::declaration_count`].
+    declaration_count: usize,
+    /// `[sheet][rule]`: each selector's [`selector_mask`], or an empty
+    /// slice when no selector of the rule has one.
+    selector_masks: Vec<Vec<Box<[Option<AncestorMask>]>>>,
+}
+
+/// Push `entry` unless it is already the bucket's last entry (a rule
+/// whose selector list keys the same bucket twice, `.a, .a:hover`).
+fn push_once(bucket: &mut Vec<IndexedRule>, entry: IndexedRule) {
+    let same =
+        |last: &IndexedRule| last.rule_idx == entry.rule_idx && last.sheet_idx == entry.sheet_idx;
+    if !bucket.last().is_some_and(same) {
+        bucket.push(entry);
+    }
 }
 
 impl SelectorIndex {
@@ -43,6 +59,8 @@ impl SelectorIndex {
             by_tag: FxHashMap::default(),
             universal: Vec::new(),
             pseudo_element: None,
+            declaration_count: 0,
+            selector_masks: Vec::new(),
         }
     }
 
@@ -57,6 +75,21 @@ impl SelectorIndex {
 
         let mut source_order: usize = 0;
         for (sheet_idx, sheet) in stylesheets.iter().enumerate() {
+            index.selector_masks.push(
+                sheet
+                    .rules
+                    .iter()
+                    .map(|rule| {
+                        let masks: Box<[_]> =
+                            rule.selectors.selectors.iter().map(selector_mask).collect();
+                        if masks.iter().all(Option::is_none) {
+                            Box::default()
+                        } else {
+                            masks
+                        }
+                    })
+                    .collect(),
+            );
             for (rule_idx, rule) in sheet.rules.iter().enumerate() {
                 let entry = IndexedRule {
                     sheet_idx,
@@ -79,6 +112,7 @@ impl SelectorIndex {
         }
 
         index.pseudo_element = Some(Box::new(pseudo));
+        index.declaration_count = source_order;
         index
     }
 
@@ -90,35 +124,33 @@ impl SelectorIndex {
         // that bucket. If any selector has NO such key (e.g.
         // `*:hover`), the rule must also go into `universal`
         // so non-keyed elements can still match it.
+        //
+        // A selector is filed under ONE key of its subject, the most
+        // selective (id > class > tag): an element it matches has every
+        // key of the subject, so it still finds the rule there, while
+        // e.g. `#nav p.lead` no longer lands on every `<p>`.
         let mut needs_universal = false;
         for selector in &rule.selectors.selectors {
-            let mut selector_filed = false;
-            if let Some(subject) = selector.parts.last() {
-                for simple in &subject.0.parts {
-                    match simple {
-                        SimpleSelector::Id(id) => {
-                            self.by_id
-                                .entry(id.to_ascii_lowercase())
-                                .or_default()
-                                .push(entry);
-                            selector_filed = true;
-                        },
-                        SimpleSelector::Class(cls) => {
-                            self.by_class.entry(cls.clone()).or_default().push(entry);
-                            selector_filed = true;
-                        },
-                        SimpleSelector::Type(tag) => {
-                            self.by_tag
-                                .entry(tag.to_ascii_lowercase())
-                                .or_default()
-                                .push(entry);
-                            selector_filed = true;
-                        },
-                        _ => {},
-                    }
-                }
-            }
-            if !selector_filed {
+            let subject = selector.parts.last().map_or(&[][..], |s| &s.0.parts[..]);
+            let key = |pick: fn(&SimpleSelector) -> Option<&String>| subject.iter().find_map(pick);
+            if let Some(id) = key(|s| match s {
+                SimpleSelector::Id(id) => Some(id),
+                _ => None,
+            }) {
+                let bucket = self.by_id.entry(id.to_ascii_lowercase()).or_default();
+                push_once(bucket, entry);
+            } else if let Some(cls) = key(|s| match s {
+                SimpleSelector::Class(cls) => Some(cls),
+                _ => None,
+            }) {
+                push_once(self.by_class.entry(cls.clone()).or_default(), entry);
+            } else if let Some(tag) = key(|s| match s {
+                SimpleSelector::Type(tag) => Some(tag),
+                _ => None,
+            }) {
+                let bucket = self.by_tag.entry(tag.to_ascii_lowercase()).or_default();
+                push_once(bucket, entry);
+            } else {
                 needs_universal = true;
             }
         }
@@ -127,6 +159,26 @@ impl SelectorIndex {
         if needs_universal {
             self.universal.push(entry);
         }
+    }
+
+    /// Total declarations across the indexed sheets: the `source_order`
+    /// that follows every stylesheet declaration (inline styles come
+    /// after it).
+    pub(super) fn declaration_count(&self) -> usize {
+        self.declaration_count
+    }
+
+    /// The ancestor masks of the selectors of rule `rule_idx` of sheet
+    /// `sheet_idx`, in selector order (empty: none to filter on).
+    pub(super) fn selector_masks(
+        &self,
+        sheet_idx: usize,
+        rule_idx: usize,
+    ) -> &[Option<AncestorMask>] {
+        self.selector_masks
+            .get(sheet_idx)
+            .and_then(|rules| rules.get(rule_idx))
+            .map_or(&[], |m| &m[..])
     }
 
     /// Candidate rules with a pseudo-element selector that might apply

@@ -29,11 +29,13 @@ const MAX_TICK_MS: u32 = 100;
 
 /// `g` scaled to 90% around its center (open start / close end).
 fn shrunk(g: Geometry) -> Geometry {
-    let w = g.w * 9 / 10;
-    let h = g.h * 9 / 10;
+    // In u64 / saturating: `w * 9` overflowed for frames wider than
+    // ~477M px.
+    let scale = |v: u32| (u64::from(v) * 9 / 10) as u32;
+    let (w, h) = (scale(g.w), scale(g.h));
     Geometry {
-        x: g.x + (g.w - w) as i32 / 2,
-        y: g.y + (g.h - h) as i32 / 2,
+        x: g.x.saturating_add(((g.w - w) / 2) as i32),
+        y: g.y.saturating_add(((g.h - h) / 2) as i32),
         w,
         h,
     }
@@ -326,8 +328,21 @@ fn set_window_alpha(window: &Window, alpha: u8, sdi: &mut SdiRegistry) {
 #[cfg(test)]
 mod tests {
     use crate::manager::WindowManager;
-    use crate::window::{WindowConfig, WindowState, WindowType};
+    use crate::window::{Geometry, WindowConfig, WindowState, WindowType};
     use oasis_sdi::SdiRegistry;
+
+    #[test]
+    fn shrunk_handles_huge_frames() {
+        let g = Geometry {
+            x: i32::MAX - 5,
+            y: 0,
+            w: u32::MAX,
+            h: 100,
+        };
+        let s = super::shrunk(g);
+        assert_eq!((s.w, s.h), ((u64::from(u32::MAX) * 9 / 10) as u32, 90));
+        assert_eq!((s.x, s.y), (i32::MAX, 5));
+    }
 
     fn cfg(id: &str) -> WindowConfig {
         WindowConfig {

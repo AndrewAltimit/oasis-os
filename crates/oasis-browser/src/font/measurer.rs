@@ -6,50 +6,41 @@ use std::cell::RefCell;
 use super::registry::{FontId, FontRegistry};
 use crate::layout::block::TextMeasurer;
 
-/// A text measurer that checks the [`FontRegistry`] for web fonts
-/// before falling back to the bitmap font measurer.
+/// A text measurer that measures runs in a loaded `@font-face` font
+/// with the [`FontRegistry`] and everything else with `inner`.
 ///
-/// Because `measure_text` takes `&self` but rasterization (which
-/// populates the glyph cache on demand) needs `&mut`, the registry
-/// is wrapped in `RefCell`. This is safe because layout is
-/// single-threaded.
+/// Layout passes each run's font (`ComputedStyle::web_font_id`) to
+/// [`TextMeasurer::measure_text_font`]; the browser widget's layout
+/// measurer is one of these once faces have loaded, so web-font text is
+/// broken into lines with the advances it is painted with.
 ///
-/// Usage: call `set_font_id` before each text run's measurement to
-/// select the active web font (from `ComputedStyle::web_font_id`).
+/// The registry is behind a `RefCell` because rasterization (painting)
+/// borrows it mutably; layout only reads it, single-threaded.
 pub struct FontAwareTextMeasurer<'a> {
     inner: &'a dyn TextMeasurer,
     registry: &'a RefCell<FontRegistry>,
-    /// Currently active web font (set per-run).
-    active_font: RefCell<Option<FontId>>,
 }
 
 impl<'a> FontAwareTextMeasurer<'a> {
     /// Create a new font-aware measurer.
     pub fn new(inner: &'a dyn TextMeasurer, registry: &'a RefCell<FontRegistry>) -> Self {
-        FontAwareTextMeasurer {
-            inner,
-            registry,
-            active_font: RefCell::new(None),
-        }
-    }
-
-    /// Set the active web font ID for subsequent measurements.
-    ///
-    /// Pass `None` to fall back to bitmap font measurement.
-    pub fn set_font_id(&self, font_id: Option<u32>) {
-        *self.active_font.borrow_mut() = font_id.map(FontId::from_raw);
+        FontAwareTextMeasurer { inner, registry }
     }
 }
 
 impl TextMeasurer for FontAwareTextMeasurer<'_> {
-    fn measure_text(&self, text: &str, font_size: u16) -> u32 {
-        if let Some(font_id) = *self.active_font.borrow() {
+    fn measure_text_font(&self, text: &str, font_size: u16, web_font: Option<u32>) -> u32 {
+        if let Some(raw) = web_font {
             let reg = self.registry.borrow();
-            if reg.font_count() > font_id.as_raw() as usize {
-                return reg.measure_text(text, font_size as f32, font_id);
+            if reg.font_count() > raw as usize {
+                return reg.measure_text(text, font_size as f32, FontId::from_raw(raw));
             }
         }
-        // Fall back to bitmap font.
+        self.inner.measure_text_font(text, font_size, None)
+    }
+
+    /// Text with no web font: the bitmap (`inner`) measurement.
+    fn measure_text(&self, text: &str, font_size: u16) -> u32 {
         self.inner.measure_text(text, font_size)
     }
 }
@@ -70,10 +61,10 @@ mod tests {
         let reg = RefCell::new(FontRegistry::new());
         let bitmap = BitmapMeasurer;
         let measurer = FontAwareTextMeasurer::new(&bitmap, &reg);
-
-        // No web font set — should use bitmap.
-        let w = measurer.measure_text("hello", 16);
-        assert_eq!(w, oasis_types::backend::bitmap_measure_text("hello", 16),);
+        let expected = oasis_types::backend::bitmap_measure_text("hello", 16);
+        assert_eq!(measurer.measure_text("hello", 16), expected);
+        // An id with no loaded face falls back too.
+        assert_eq!(measurer.measure_text_font("hello", 16, Some(3)), expected);
     }
 
     #[test]
@@ -92,17 +83,11 @@ mod tests {
         let bitmap = BitmapMeasurer;
         let measurer = FontAwareTextMeasurer::new(&bitmap, &reg);
 
-        // Set web font — should use fontdue measurement.
-        measurer.set_font_id(Some(0));
-        let web_w = measurer.measure_text(" ", 16);
-
-        // Clear web font — should use bitmap.
-        measurer.set_font_id(None);
-        let bitmap_w = measurer.measure_text(" ", 16);
-
-        // The widths will differ because fontdue and bitmap use
-        // different metrics. Just verify both produce non-zero results.
+        let web_w = measurer.measure_text_font(" ", 16, Some(0));
+        let expected = reg.borrow().measure_text(" ", 16.0, FontId::from_raw(0));
+        assert_eq!(web_w, expected, "the run's face measures it");
         assert!(web_w > 0, "web font should produce width");
-        assert!(bitmap_w > 0, "bitmap should produce width");
+        let bitmap_w = measurer.measure_text_font(" ", 16, None);
+        assert_eq!(bitmap_w, oasis_types::backend::bitmap_measure_text(" ", 16));
     }
 }

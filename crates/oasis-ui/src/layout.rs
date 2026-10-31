@@ -83,29 +83,29 @@ pub fn max_scroll(content: u32, viewport: u32) -> i32 {
 /// Uses round-up division so that on odd remainders the child is biased
 /// toward the visual center rather than the top-left edge.
 pub fn center(parent_size: u32, child_size: u32) -> i32 {
-    let diff = parent_size as i32 - child_size as i32;
+    // In i64: sizes past i32::MAX used to wrap (a parent of 3e9 px
+    // centered nothing).
+    let diff = i64::from(parent_size) - i64::from(child_size);
     if diff <= 0 {
         return 0;
     }
-    (diff + 1) / 2
-}
-
-/// Compute vertical center for text within a given height.
-pub fn center_text_y(height: u32, font_size: u16, ascent: u32) -> i32 {
-    let text_h = font_size as i32;
-    (height as i32 - text_h) / 2 + ascent as i32
+    ((diff + 1) / 2).min(i64::from(i32::MAX)) as i32
 }
 
 /// Distribute `n` items evenly across `total` pixels with `gap` pixels between.
 ///
-/// Returns `(item_size, positions)`.
+/// Returns `(item_size, positions)`. Gaps that do not fit shrink the items
+/// to 0; positions saturate at `i32::MAX` (no overflow for huge gaps).
 pub fn distribute(total: u32, n: u32, gap: u32) -> (u32, Vec<i32>) {
     if n == 0 {
         return (0, Vec::new());
     }
-    let total_gap = gap * n.saturating_sub(1);
+    let total_gap = gap.saturating_mul(n - 1);
     let item_size = total.saturating_sub(total_gap) / n;
-    let positions = (0..n).map(|i| (i * (item_size + gap)) as i32).collect();
+    let pitch = u64::from(item_size) + u64::from(gap);
+    let positions = (0..u64::from(n))
+        .map(|i| (i * pitch).min(i32::MAX as u64) as i32)
+        .collect();
     (item_size, positions)
 }
 
@@ -136,8 +136,14 @@ pub fn align_x(container_w: u32, child_w: u32, align: HAlign) -> i32 {
     match align {
         HAlign::Left => 0,
         HAlign::Center => center(container_w, child_w),
-        HAlign::Right => (container_w as i32 - child_w as i32).max(0),
+        HAlign::Right => far_offset(container_w, child_w),
     }
+}
+
+/// Offset that puts a `child`-long span flush with the far end of a
+/// `container`-long one (0 when it does not fit), saturating at `i32::MAX`.
+fn far_offset(container: u32, child: u32) -> i32 {
+    i32::try_from(container.saturating_sub(child)).unwrap_or(i32::MAX)
 }
 
 /// Compute y position for vertical alignment.
@@ -145,7 +151,7 @@ pub fn align_y(container_h: u32, child_h: u32, align: VAlign) -> i32 {
     match align {
         VAlign::Top => 0,
         VAlign::Center => center(container_h, child_h),
-        VAlign::Bottom => (container_h as i32 - child_h as i32).max(0),
+        VAlign::Bottom => far_offset(container_h, child_h),
     }
 }
 
@@ -207,11 +213,16 @@ impl MeasureCache {
         }
     }
 
-    /// Advance the generation counter.
+    /// Advance the generation counter, dropping every entry not looked up
+    /// during the generation that just ended.
     ///
-    /// Previous entries are not deleted immediately — they are lazily evicted
-    /// on the next lookup — so this call is O(1).
+    /// Entries from the previous generation are still recomputed on their
+    /// next lookup. (Stale entries used to be kept until the same key came
+    /// back, so a live resize -- a new `available_w` every frame -- grew
+    /// the cache without bound.)
     pub fn next_generation(&mut self) {
+        let current = self.generation;
+        self.entries.retain(|_, e| e.generation == current);
         self.generation = self.generation.wrapping_add(1);
     }
 
@@ -370,9 +381,17 @@ mod tests {
     }
 
     #[test]
-    fn center_text_y_basic() {
-        let y = center_text_y(24, 12, 10);
-        assert_eq!(y, 16); // (24-12)/2 + 10
+    fn center_handles_sizes_past_i32_max() {
+        assert_eq!(center(3_000_000_000, 0), 1_500_000_000);
+        assert_eq!(center(u32::MAX, 0), i32::MAX);
+        assert_eq!(center(0, u32::MAX), 0);
+    }
+
+    #[test]
+    fn distribute_huge_gap_does_not_overflow() {
+        let (size, pos) = distribute(10, 3, u32::MAX);
+        assert_eq!(size, 0);
+        assert_eq!(pos, vec![0, i32::MAX, i32::MAX]);
     }
 
     #[test]
@@ -544,6 +563,18 @@ mod tests {
         });
         assert_eq!(size, (90, 30));
         assert_eq!(call_count.get(), 1);
+    }
+
+    /// A live resize (a new `available_w` every frame) used to grow the
+    /// cache without bound: stale keys were never evicted.
+    #[test]
+    fn cache_evicts_entries_unused_for_a_generation() {
+        let mut cache = MeasureCache::new();
+        for frame in 0..100u32 {
+            cache.next_generation();
+            cache.get_or_measure(1, 200 + frame, || (10, 10));
+        }
+        assert!(cache.len() <= 2, "cache grew to {}", cache.len());
     }
 
     #[test]

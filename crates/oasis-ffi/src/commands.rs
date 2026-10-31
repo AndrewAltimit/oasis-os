@@ -3,10 +3,12 @@
 use std::ffi::CString;
 use std::os::raw::c_char;
 
+use oasis_core::platform::DesktopPlatform;
 use oasis_core::terminal::{CommandOutput, CommandSignal, Environment};
+use oasis_core::vfs::GameAssetVfs;
 
-use crate::handle::{OasisInstance, c_str_to_str, ffi_guard, with_instance};
-use crate::types::OASIS_CB_COMMAND_EXEC;
+use crate::handle::{OasisInstance, c_str_to_str, ffi_guard, to_c_string_lossy, with_instance};
+use crate::types::{OASIS_CB_COMMAND_EXEC, OASIS_CB_SHELL_OUTPUT};
 
 /// Execute a terminal command and return the output as a C string.
 ///
@@ -48,27 +50,66 @@ fn send_command_inner(instance: &mut OasisInstance, cmd_str: &str) -> *mut c_cha
 
     instance.fire_callback(OASIS_CB_COMMAND_EXEC, cmd_str);
 
-    let mut env = Environment {
-        cwd: instance.cwd.clone(),
-        vfs: &mut instance.vfs,
-        power: Some(&instance.platform),
-        time: Some(&instance.platform),
-        usb: Some(&instance.platform),
+    let mut env = command_env(instance.cwd.clone(), &mut instance.vfs, &instance.platform);
+    let mut output = match instance.cmd_reg.execute(cmd_str, &mut env) {
+        Ok(output) => output_text(output),
+        Err(e) => format!("error: {e}"),
+    };
+    // `2>` redirects consume stderr; what is left is the host's to see.
+    let stderr = env.stderr.trim_end();
+    if !stderr.is_empty() {
+        if !output.is_empty() {
+            output.push('\n');
+        }
+        output.push_str(stderr);
+    }
 
+    instance.cwd = env.cwd;
+
+    to_c_string_lossy(output).into_raw()
+}
+
+/// The command environment of an instance's shell (no network access).
+fn command_env<'a>(
+    cwd: String,
+    vfs: &'a mut GameAssetVfs,
+    platform: &'a DesktopPlatform,
+) -> Environment<'a> {
+    Environment {
+        cwd,
+        vfs,
+        power: Some(platform),
+        time: Some(platform),
+        usb: Some(platform),
         network: None,
         tls: None,
         stdin: None,
         stderr: String::new(),
-    };
+    }
+}
 
-    let output = match instance.cmd_reg.execute(cmd_str, &mut env) {
-        Ok(output) => output_text(output),
-        Err(e) => format!("error: {e}"),
-    };
-
-    instance.cwd = env.cwd;
-
-    output_to_c_string(output).into_raw()
+/// Run the shell's background work for one `oasis_tick` at instance clock
+/// `now_secs`: the next queued `cmd &` job, then the due `cron` jobs. Their
+/// output goes to the `OASIS_CB_SHELL_OUTPUT` callback (one call per job).
+pub(crate) fn poll_background(instance: &mut OasisInstance, now_secs: f64) {
+    let mut outputs = Vec::new();
+    if instance.cmd_reg.pending_jobs() > 0 {
+        let mut env = command_env(instance.cwd.clone(), &mut instance.vfs, &instance.platform);
+        if let Some(out) = instance.cmd_reg.poll_jobs(&mut env) {
+            outputs.push(output_text(out));
+        }
+        instance.cwd = env.cwd;
+    }
+    // Cron jobs start in `/` and their `cd`s don't move the shell's cwd.
+    let mut env = command_env("/".to_string(), &mut instance.vfs, &instance.platform);
+    let now = std::time::Duration::from_secs_f64(now_secs.max(0.0));
+    let lines = instance.cron.tick(now, &instance.cmd_reg, &mut env);
+    if !lines.is_empty() {
+        outputs.push(lines.join("\n"));
+    }
+    for text in outputs.iter().filter(|t| !t.is_empty()) {
+        instance.fire_callback(OASIS_CB_SHELL_OUTPUT, text);
+    }
 }
 
 /// Flatten a command's output to the text a C host sees: tables as
@@ -109,16 +150,6 @@ fn output_text(output: CommandOutput) -> String {
 #[cfg(test)]
 pub(crate) fn output_text_for_test(output: CommandOutput) -> String {
     output_text(output)
-}
-
-/// Convert command output to a C string. Interior NUL bytes (e.g. `cat` of a
-/// binary file) cannot be represented, so each is replaced with U+FFFD
-/// instead of failing the whole call -- NULL is reserved for invalid input.
-fn output_to_c_string(output: String) -> CString {
-    CString::new(output).unwrap_or_else(|e| {
-        let text = String::from_utf8_lossy(&e.into_vec()).replace('\0', "\u{FFFD}");
-        CString::new(text).unwrap_or_default()
-    })
 }
 
 /// Free a string previously returned by `oasis_send_command`.

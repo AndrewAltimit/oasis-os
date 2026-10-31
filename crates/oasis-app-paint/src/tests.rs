@@ -1040,3 +1040,95 @@ fn new_canvas_clamps_size() {
     assert_eq!(app.canvas.width(), 256);
     assert_eq!(app.canvas.height(), 256);
 }
+
+#[test]
+fn confirm_again_lifts_the_pencil() {
+    let vfs = make_vfs();
+    let mut app = PaintApp::new("/apps/paint");
+    app.tool = Tool::Pencil;
+    app.handle_input(&Button::Confirm, &vfs); // pen down, paints (0, 0)
+    app.handle_input(&Button::Right, &vfs); // paints (1, 0)
+    app.handle_input(&Button::Confirm, &vfs); // pen up
+    assert!(!app.drawing);
+    let before = app.canvas.get_pixel(3, 0);
+    app.handle_input(&Button::Right, &vfs);
+    app.handle_input(&Button::Right, &vfs);
+    assert_eq!(app.canvas.get_pixel(3, 0), before, "moving with the pen up");
+    assert_eq!(app.undo_stack.len(), 1, "one stroke");
+}
+
+#[test]
+fn filling_with_the_same_colour_is_not_an_undo_step() {
+    let mut app = PaintApp::new("/apps/paint");
+    app.tool = Tool::Fill;
+    click_canvas_pixel(&mut app, 1, 1);
+    app.undo();
+    assert_eq!(app.redo_stack.len(), 1);
+    app.modified = false;
+    // The canvas is already the fill colour here after a second fill.
+    app.color = app.canvas.get_pixel(1, 1);
+    click_canvas_pixel(&mut app, 1, 1);
+    assert!(app.undo_stack.is_empty());
+    assert_eq!(app.redo_stack.len(), 1, "redo history kept");
+    assert!(!app.modified);
+}
+
+#[test]
+fn a_canvas_wider_than_the_view_starts_at_the_view_edge() {
+    // 480 px canvas in a 470 px window: columns 0.. must be reachable at
+    // pan 0 and the last one once panned fully.
+    let l = PaintLayout::compute_panned(0, 0, 470, 400, 480, 64, (0, 0));
+    assert!(l.canvas.w > l.view.w);
+    assert_eq!(l.canvas.x, l.view.x);
+    assert_eq!(
+        l.canvas_pixel_at(l.view.x, l.canvas.y).map(|p| p.0),
+        Some(0)
+    );
+    let end = PaintLayout::compute_panned(0, 0, 470, 400, 480, 64, (u32::MAX, 0));
+    let last_x = end.view.x + end.view.w as i32 - 1;
+    assert_eq!(
+        end.canvas_pixel_at(last_x, end.canvas.y).map(|p| p.0),
+        Some(479)
+    );
+}
+
+#[test]
+fn a_canvas_taller_than_the_window_pans_and_stays_off_the_palette() {
+    use oasis_app_core::testing::AppHarness;
+    let mut app = PaintApp::new("/apps/paint");
+    app.new_canvas(256, 256);
+    let mut h = AppHarness::new(Box::new(app));
+    h.set_size(480, 272);
+    let _ = h.draw();
+    // Walk the cursor to the bottom-right corner with the d-pad.
+    for _ in 0..255 {
+        h.press(Button::Down);
+        h.press(Button::Right);
+    }
+    let b = h.draw();
+    let app = h.app_as::<PaintApp>();
+    assert_eq!((app.cursor_x, app.cursor_y), (255, 255));
+    let l = app.layout_at(8, 20, 480, 272);
+    let cursor = l.pixel_rect(255, 255);
+    assert!(
+        l.view.contains(cursor.x, cursor.y),
+        "the cursor pixel is scrolled into view"
+    );
+    // Nothing the canvas drew is visible over the palette strip.
+    let palette = l.palette;
+    let over_palette = b.rects().iter().any(|r| {
+        r.visible.is_some_and(|(_, vy, _, vh)| {
+            r.w == l.scale
+                && r.h == l.scale
+                && vy < palette.y + palette.h as i32
+                && vy + vh as i32 > palette.y
+        })
+    });
+    assert!(!over_palette, "canvas pixels drawn over the palette");
+    // A click on the visible corner pixel maps back to it.
+    let (lx, ly) = (cursor.x - 8, cursor.y - 20);
+    h.app_as_mut::<PaintApp>().tool = Tool::Pencil;
+    h.click(lx, ly);
+    let app = h.app_as::<PaintApp>();
+    assert_eq!((app.cursor_x, app.cursor_y), (255, 255));
+}

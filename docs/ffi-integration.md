@@ -28,6 +28,7 @@ host:
 | pointer (`oasis_create*`, `oasis_send_command`, `oasis_get_buffer`) | `NULL` |
 | `uint64_t` (`oasis_audio_load`) | `UINT64_MAX` |
 | `uint8_t` (`oasis_audio_get_volume`) | `0` |
+| `uint32_t` (`oasis_audio_drain_stream`, `oasis_audio_stream_buffered`) | `0` |
 | `int32_t` (`oasis_video_*`) | `-1` (`oasis_video_is_playing`: `0`) |
 
 The handle is **not poisoned** by a caught panic: it stays valid and later
@@ -140,6 +141,12 @@ void oasis_destroy(OasisInstance* handle);
  * the accumulated delta_seconds; static background layers are baked into
  * an offscreen buffer once. A failing render stage is logged (log crate,
  * `warn` the first time) and the other stages still draw.
+ *
+ * The instance clock is the sum of the deltas: a NaN, infinite or negative
+ * delta counts as 0 and a delta above 1 s as 1 s. Each tick also runs the
+ * shell's background work: the next queued `cmd &` job and every `cron`
+ * job that is due on that clock; their output goes to the
+ * OASIS_CB_SHELL_OUTPUT callback.
  */
 void oasis_tick(OasisInstance* handle, float delta_seconds);
 
@@ -254,7 +261,9 @@ void oasis_send_input(OasisInstance* handle, const OasisInputEvent* event);
  *
  * The returned string must be freed with oasis_free_string().
  * Returns NULL for a NULL handle or a NULL / non-UTF-8 cmd; a failing
- * command returns its "error: ..." text instead.
+ * command returns its "error: ..." text instead. Diagnostics the command
+ * wrote to stderr (and did not redirect with 2>) follow its output.
+ * Do not write into the string: oasis_free_string() needs it unchanged.
  */
 char* oasis_send_command(OasisInstance* handle, const char* cmd);
 
@@ -291,11 +300,15 @@ void oasis_add_vfs_file(
  * ---------------------------------------------------------------- */
 
 /* Callback event types: OASIS_CB_COMMAND_EXEC (detail = the command line,
- * from oasis_send_command) and OASIS_CB_APP_LAUNCH (detail = app title).
+ * from oasis_send_command), OASIS_CB_APP_LAUNCH (detail = app title) and
+ * OASIS_CB_SHELL_OUTPUT (from oasis_tick; detail = the output of a finished
+ * `cmd &` job, or the lines of the cron jobs that ran, each prefixed
+ * "[cron <name>]"). Interior NULs in a detail are replaced with U+FFFD.
  * Codes 1, 4, 5 and 6 were never-fired placeholders and are retired;
  * registering them (or any other code) is ignored with a logged warning. */
 #define OASIS_CB_COMMAND_EXEC  2
 #define OASIS_CB_APP_LAUNCH    3
+#define OASIS_CB_SHELL_OUTPUT  7
 
 typedef void (*OasisCallback)(uint32_t event, const char* detail);
 
@@ -303,14 +316,29 @@ typedef void (*OasisCallback)(uint32_t event, const char* detail);
  * replaces the previous callback; passing NULL unregisters it.
  *
  * Callbacks (this one and the audio callback) run synchronously inside the
- * oasis_* call that fired them, on the calling thread. They must NOT call
+ * oasis_* call that fired them, on the calling thread. They must not call
  * back into the API with the same handle (the instance is borrowed while
- * they run); queue the work and do it after the call returns. `detail` is
- * only valid during the callback: copy it to keep it. */
+ * they run): such a call is refused -- it does nothing, returns its default
+ * (NULL / false / ...) and logs an error -- and that includes
+ * oasis_destroy(). Queue the work and do it after the call returns.
+ * `detail` is only valid during the callback: copy it to keep it. */
 void oasis_register_callback(
     OasisInstance* handle,
     uint32_t event,
     OasisCallback cb
+);
+
+/* The same with a host context pointer: user_data (e.g. the owning
+ * UObject / component) is passed back unchanged on every call and never
+ * dereferenced by the library. It must stay valid until the event is
+ * re-registered or unregistered, or the handle is destroyed. Either
+ * registration replaces one made with the other. */
+typedef void (*OasisCallbackEx)(uint32_t event, const char* detail, void* user_data);
+void oasis_register_callback_ex(
+    OasisInstance* handle,
+    uint32_t event,
+    OasisCallbackEx cb,
+    void* user_data
 );
 
 /* ----------------------------------------------------------------
@@ -329,12 +357,33 @@ void oasis_register_callback(
 #define OASIS_AUDIO_TRACK_LOADED   5
 #define OASIS_AUDIO_TRACK_UNLOADED 6
 #define OASIS_AUDIO_SHUTDOWN       7
+/* Streaming tracks (internet radio): the encoded bytes (e.g. MP3) are
+ * buffered in the instance (1 MiB cap, MAX_STREAM_BUFFER) for the host to
+ * pull with oasis_audio_drain_stream() below. */
+#define OASIS_AUDIO_STREAM_OPENED  8
+#define OASIS_AUDIO_STREAM_DATA    9  /* value = bytes waiting to be drained */
+#define OASIS_AUDIO_STREAM_END     10 /* source ended; drain the rest */
 
 /* track_id is 0 when not applicable. */
 typedef void (*OasisAudioCallback)(uint32_t event, uint64_t track_id, uint32_t value);
 
 /* Passing NULL unregisters the callback. */
 void oasis_set_audio_callback(OasisInstance* handle, OasisAudioCallback cb);
+
+/* The same with a host context pointer passed back unchanged (see
+ * oasis_register_callback_ex). Replaces a callback set with either. */
+typedef void (*OasisAudioCallbackEx)(uint32_t event, uint64_t track_id,
+                                     uint32_t value, void* user_data);
+void oasis_set_audio_callback_ex(OasisInstance* handle, OasisAudioCallbackEx cb,
+                                 void* user_data);
+
+/* Move up to buf_len buffered stream bytes into buf; returns the number
+ * written (0 when nothing is waiting, or for a NULL handle / buffer).
+ * Call it after STREAM_DATA / STREAM_END -- outside the callback, which
+ * must not re-enter the API. */
+uint32_t oasis_audio_drain_stream(OasisInstance* handle, uint8_t* buf, uint32_t buf_len);
+/* Stream bytes waiting to be drained. */
+uint32_t oasis_audio_stream_buffered(OasisInstance* handle);
 
 /* Load audio data; returns a track ID, or UINT64_MAX on failure.
  * Volume is clamped to 0-100 (VOLUME_CHANGE reports the clamped value);
@@ -357,8 +406,12 @@ bool oasis_audio_is_playing(OasisInstance* handle);
 /* Start software video playback from a local file path.
  *
  * path: Path to an MP4 file on disk.
- * Spawns a background decode thread. Poll frames with oasis_video_next_frame.
- * Returns 0 on success, -1 on error.
+ * Spawns a background decode thread paced to the wall clock: each frame
+ * becomes available at its presentation time, and audio is decoded about
+ * 0.5 s ahead, so a host polling once per frame neither races through the
+ * video nor loses audio. Poll frames with oasis_video_next_frame.
+ * Returns 0 on success, -1 on error. A file that fails to open or decode
+ * leaves the current playback (if any) running.
  */
 int32_t oasis_video_play(OasisInstance* handle, const char* path);
 
@@ -388,10 +441,19 @@ int32_t oasis_video_next_frame(OasisInstance* handle, uint8_t* buf,
 /* Drain decoded audio samples into a host buffer.
  *
  * Copies interleaved f32 PCM into buf, up to max_samples floats.
- * Returns: number of samples copied, or -1 on error.
+ * Returns: number of samples copied, or -1 on error. About 128 chunks
+ * (several seconds) are held; if the host stops draining, the oldest are
+ * dropped.
  */
 int32_t oasis_video_get_audio(OasisInstance* handle, float* buf,
                               uint32_t max_samples);
+
+/* The PCM layout oasis_video_get_audio delivers: sample rate in Hz and
+ * channel count (samples interleaved per channel). Returns 0 and writes
+ * both (either pointer may be NULL); -1 when nothing is playing or the
+ * file has no audio track. */
+int32_t oasis_video_audio_format(OasisInstance* handle, uint32_t* out_rate,
+                                 uint32_t* out_channels);
 
 #ifdef __cplusplus
 }
@@ -423,7 +485,9 @@ OasisInstance* os = oasis_create_full(480, 272,
 ```
 
 The instance starts with an empty `/home`, `/etc`, `/tmp` and one `/apps/<name>`
-directory per default dashboard app.
+directory per default dashboard app. A skin whose TOML fails to parse, or a
+partial set (manifest, layout and features are all required), is logged at
+`error` and the instance runs unskinned.
 
 ### 2. Populate the Virtual File System
 
@@ -481,7 +545,27 @@ void on_app_launch(uint32_t event, const char* detail) {
 oasis_register_callback(os, OASIS_CB_APP_LAUNCH, on_app_launch);
 ```
 
-### 6. Cleanup
+C++ hosts usually want their own object back in the callback; the `_ex`
+registrations carry a `void* user_data` for that:
+
+```cpp
+static void OnOasisEvent(uint32_t Event, const char* Detail, void* UserData) {
+    static_cast<UOasisComponent*>(UserData)->HandleEvent(Event, Detail);
+}
+oasis_register_callback_ex(Oasis, OASIS_CB_APP_LAUNCH, OnOasisEvent, this);
+oasis_set_audio_callback_ex(Oasis, OnOasisAudio, this);
+```
+
+### 6. Streamed Audio and Video Audio
+
+Internet radio reaches the host as encoded bytes: on `OASIS_AUDIO_STREAM_DATA`
+or `OASIS_AUDIO_STREAM_END`, note that data is waiting, then (after the
+callback returns) pull it with `oasis_audio_drain_stream(os, buf, len)` and
+feed it to the engine's decoder. Video audio is decoded PCM: query its layout
+once with `oasis_video_audio_format(os, &rate, &channels)` and pull samples
+each frame with `oasis_video_get_audio`.
+
+### 7. Cleanup
 
 ```c
 oasis_destroy(os);
@@ -505,7 +589,11 @@ The instance's VFS is a `GameAssetVfs` (from `oasis-vfs`), which supports overla
 
 ## Thread Safety
 
-Calls on one `OasisInstance` must be serialized (typically all on the game thread); the FFI functions are not thread-safe. Distinct instances are independent. Callbacks fire synchronously on the calling thread and must not re-enter the API with the same handle. The video decoder is the only internal thread; `oasis_video_stop` and `oasis_destroy` join it.
+Calls on one `OasisInstance` must be serialized (typically all on the game thread); the FFI functions are not thread-safe, and the library does not lock. Distinct instances are independent. Callbacks fire synchronously on the calling thread; a call they make back into the API with the same handle is refused (detected per thread, so it does not make concurrent calls from other threads safe). The video decoder is the only internal thread; `oasis_video_stop` and `oasis_destroy` join it.
+
+### Shell background work
+
+`oasis_tick` is the instance's only clock, so it is also where the shell's deferred work runs: one queued `cmd &` job per tick, then every `cron` job (`cron add <name> <interval> <script>`, see [terminal-commands.md](terminal-commands.md)) that is due on the accumulated `delta_seconds` clock. The output arrives through `OASIS_CB_SHELL_OUTPUT`; register it to show the output, or ignore it. A host that stops ticking pauses both.
 
 ## Safety Contract
 

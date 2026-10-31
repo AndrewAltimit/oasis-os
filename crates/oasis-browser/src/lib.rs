@@ -19,6 +19,11 @@
 //!
 //! # Feature flags
 //!
+//! - `web-fonts` (default) — `@font-face` web fonts: fontdue TTF/OTF
+//!   rasterizer, font registry and glyph texture cache (forwards to
+//!   `oasis-css/web-fonts`).
+//! - `canvas` (default) — the `<canvas>` 2D context JS bindings; only
+//!   has an effect together with `javascript`.
 //! - `javascript` — enables QuickJS-NG via `oasis-js` for inline
 //!   `<script>` execution, `fetch`, `setTimeout`, event dispatch, and
 //!   DOM bindings. The PSP backend now compiles the same QuickJS C
@@ -75,6 +80,31 @@
 //! so replay falls back to plain opacity stacking — pages still render,
 //! but blend modes, filters, and masks do not apply. See
 //! `docs/archive/compositor-overhaul-plan.md` §3.6 for the phased revisit plan.
+
+/// Bind `$m: &dyn TextMeasurer` to the widget's layout text measurer:
+/// the shared width cache over [`SimpleTextMeasurer`], wrapped in the
+/// web-font measurer once `@font-face` faces have loaded, so text in a
+/// web font is laid out with the widths it is painted with. A macro
+/// (not a method) so callers can keep borrowing other fields mutably.
+macro_rules! layout_measurer {
+    ($self:ident, $m:ident) => {
+        let caching = $crate::layout::text_cache::CachingMeasurer::with_shared(
+            &$crate::SimpleTextMeasurer,
+            std::rc::Rc::clone(&$self.text_cache),
+        );
+        #[cfg(feature = "web-fonts")]
+        let font_aware = $crate::font::FontAwareTextMeasurer::new(&caching, &$self.font_registry);
+        #[cfg(feature = "web-fonts")]
+        let $m: &dyn $crate::layout::block::TextMeasurer =
+            if $self.font_registry.borrow().has_fonts() {
+                &font_aware
+            } else {
+                &caching
+            };
+        #[cfg(not(feature = "web-fonts"))]
+        let $m: &dyn $crate::layout::block::TextMeasurer = &caching;
+    };
+}
 
 pub mod config;
 pub(crate) use oasis_css as css;
@@ -137,12 +167,10 @@ pub mod internals {
         Tokenizer, set_tokenize_progress_hook, set_tokenize_yield_hook,
     };
     pub use crate::html::tree_builder::{
-        TreeBuilder, set_tree_builder_progress_hook, set_tree_builder_raw_log_hook,
+        ParseOptions, TreeBuilder, set_tree_builder_progress_hook, set_tree_builder_raw_log_hook,
         set_tree_builder_yield_hook,
     };
-    pub use crate::layout::block::{
-        StyleCache, TextMeasurer, build_layout_tree, layout_block_incremental,
-    };
+    pub use crate::layout::block::{TextMeasurer, build_layout_tree, relayout_tree};
     pub use crate::layout::box_model::{BoxType, LayoutBox};
     pub use crate::layout::text_cache::CachingMeasurer;
     pub use crate::paint::PaintViewport;
@@ -560,6 +588,11 @@ pub struct BrowserWidget {
     /// response headers).
     page_csp: Option<loader::csp::CspPolicy>,
 
+    /// The page's CSP while reader mode shows our own generated page
+    /// (whose `<style>` a `style-src 'self'` policy would block); put back
+    /// when reader mode is toggled off.
+    reader_saved_csp: Option<loader::csp::CspPolicy>,
+
     /// Persistent text measurement cache shared across layout passes.
     /// Cleared only when the effective font size changes (e.g. zoom).
     text_cache: layout::text_cache::SharedTextCache,
@@ -751,6 +784,7 @@ impl BrowserWidget {
             animation_engine: css::animation::AnimationEngine::new(),
             last_tick_time: None,
             page_csp: None,
+            reader_saved_csp: None,
             text_cache: layout::text_cache::new_shared_cache(),
             #[cfg(feature = "web-fonts")]
             font_registry: std::cell::RefCell::new(font::FontRegistry::new()),
@@ -930,15 +964,13 @@ impl BrowserWidget {
             .expect("guarded by is_none() early return above");
         let content_h = self.config.content_height(self.window_h);
         let base_url = self.nav.current_url().map(String::from);
-        let shared = std::rc::Rc::clone(&self.text_cache);
-        let measurer =
-            layout::text_cache::CachingMeasurer::with_shared(&SimpleTextMeasurer, shared);
+        layout_measurer!(self, measurer);
         let viewport_w = self.window_w as f32 / self.config.zoom_level;
         let viewport_h = content_h as f32 / self.config.zoom_level;
         let layout_root = layout::block::build_layout_tree(
             doc,
             &self.styles,
-            &measurer,
+            measurer,
             viewport_w,
             viewport_h,
             base_url.as_deref(),
@@ -1126,6 +1158,9 @@ impl BrowserWidget {
 #[cfg(test)]
 #[path = "browser_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+mod relayout_tests;
 
 #[cfg(all(test, native_net))]
 mod e2e_tests;

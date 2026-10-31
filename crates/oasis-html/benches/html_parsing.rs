@@ -1,6 +1,6 @@
 //! Benchmarks for the HTML tokenizer and DOM tree builder.
 
-use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
+use criterion::{BatchSize, BenchmarkId, Criterion, criterion_group, criterion_main};
 use oasis_html::tokenizer::Tokenizer;
 use oasis_html::tree_builder::TreeBuilder;
 
@@ -60,6 +60,15 @@ fn bench_tree_builder(c: &mut Criterion) {
         group.bench_with_input(BenchmarkId::new("build", &label), &tokens, |b, tokens| {
             b.iter(|| TreeBuilder::build(tokens.clone()));
         });
+        // The tree builder alone: the token clone above is about half of
+        // `build`'s time.
+        group.bench_with_input(
+            BenchmarkId::new("build_only", &label),
+            &tokens,
+            |b, tokens| {
+                b.iter_batched(|| tokens.clone(), TreeBuilder::build, BatchSize::LargeInput);
+            },
+        );
     }
 
     group.finish();
@@ -88,10 +97,52 @@ fn bench_full_parse(c: &mut Criterion) {
     group.finish();
 }
 
+/// A table-heavy document with formatting elements: exercises the table
+/// modes, formatting markers and reconstruction.
+fn generate_table_html(target_bytes: usize) -> String {
+    let row = "<tr><td><b>Name</b></td><td><a href=\"/x\">link</a> <i>note</i></td>        <td><select><option>a<option>b</select></td></tr>
+";
+    let mut html = String::with_capacity(target_bytes + 256);
+    html.push_str(
+        "<!DOCTYPE html><html><head><title>T</title></head><body><table>
+",
+    );
+    while html.len() < target_bytes {
+        html.push_str(row);
+    }
+    html.push_str("</table></body></html>");
+    html
+}
+
+/// `TreeBuilder::parse`: the pull parser the browser uses (the tree
+/// builder drives the tokenizer state).
+fn bench_pull_parse(c: &mut Criterion) {
+    let mut group = c.benchmark_group("html_pull_parse");
+
+    for size in [10_000, 100_000] {
+        let label = format!("{size}B");
+        let html = generate_html(size);
+        group.bench_with_input(BenchmarkId::new("parse", &label), &html, |b, html| {
+            b.iter(|| TreeBuilder::parse(html));
+        });
+        let tables = generate_table_html(size);
+        group.bench_with_input(
+            BenchmarkId::new("parse_tables", &label),
+            &tables,
+            |b, html| {
+                b.iter(|| TreeBuilder::parse(html));
+            },
+        );
+    }
+
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_tokenizer,
     bench_tree_builder,
-    bench_full_parse
+    bench_full_parse,
+    bench_pull_parse
 );
 criterion_main!(benches);

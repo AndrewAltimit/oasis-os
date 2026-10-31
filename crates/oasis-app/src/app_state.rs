@@ -1,8 +1,8 @@
 use std::sync::mpsc;
 
 use oasis_audio::RadioManager;
-use oasis_audio::radio::archive::ArchiveCatalog;
-use oasis_audio::radio::source::RadioSource;
+use oasis_audio::radio::ArchiveCatalog;
+use oasis_audio::radio::RadioSource;
 use oasis_core::active_theme::ActiveTheme;
 use oasis_core::apps::{AppRegistry, AppRunner};
 use oasis_core::backend::AudioTrackId;
@@ -46,6 +46,20 @@ pub enum Mode {
     Terminal,
     Osk,
     Desktop,
+}
+
+impl Mode {
+    /// The mode a skin rests in with no window on screen: the dashboard,
+    /// or the fullscreen terminal on a terminal-only skin (no dashboard
+    /// and no window manager, e.g. `corrupted`), which has nothing else
+    /// to show.
+    pub fn idle_for(features: &oasis_core::skin::SkinFeatures) -> Self {
+        if !features.dashboard && !features.window_manager && features.terminal {
+            Mode::Terminal
+        } else {
+            Mode::Dashboard
+        }
+    }
 }
 
 /// Dashboard, status/bottom bars, taskbar, start menu, and mouse cursor.
@@ -198,6 +212,21 @@ impl RadioLayer {
             last_status_publish: None,
         }
     }
+
+    /// Drop everything behind the current playback: the archive catalog,
+    /// pending catalog / track fetches and the stream source (its
+    /// connection closed). The manager's own state is left to the caller.
+    /// A source left behind kept its pump thread connected and the shell
+    /// redrawing every frame (`Shell::needs_redraw` treats a live source as
+    /// playing media).
+    pub fn release_playback(&mut self) {
+        self.archive_catalog = None;
+        self.pending_catalog_fetch = None;
+        self.pending_source_fetch = None;
+        if let Some(mut src) = self.source.take() {
+            src.disconnect();
+        }
+    }
 }
 
 impl Default for RadioLayer {
@@ -213,11 +242,11 @@ pub type TvCatalogFetch =
 /// TV Guide playback (driven by `tv_controller`).
 pub struct TvLayer {
     pub pending_catalog_fetch: Option<TvCatalogFetch>,
-    /// Next tune to start, as `"{url} {seek_secs}"`: a TV Guide
+    /// Next tune to start: a TV Guide
     /// `tune_url` request routed here by the shell's request drain, or a
     /// host-side tune (catalog auto-tune, auto-advance, `tune_ch:`).
     /// Consumed by `tv_controller::tick` the same frame.
-    pub pending_tune: Option<String>,
+    pub pending_tune: Option<oasis_core::ipc::TvTune>,
     /// When the TV catalog fetch thread was spawned (for timeout detection).
     pub fetch_start: Option<std::time::Instant>,
     /// In-app video player (ffmpeg subprocess or software decode) for TV Guide preview.
@@ -228,6 +257,9 @@ pub struct TvLayer {
     pub audio_chunks_fed: u64,
     /// Diagnostic: total audio samples fed to the backend since last tune.
     pub audio_samples_fed: u64,
+    /// Whether `TV_STATUS_PATH` last said the TV Guide was open (`None`
+    /// before the first publish).
+    pub guide_status_published: Option<bool>,
     /// Pending video file download (software decode path).
     #[cfg(feature = "_video")]
     pub pending_video_download: Option<mpsc::Receiver<Result<std::path::PathBuf, String>>>,
@@ -262,6 +294,7 @@ impl TvLayer {
             audio_track: None,
             audio_chunks_fed: 0,
             audio_samples_fed: 0,
+            guide_status_published: None,
             #[cfg(feature = "_video")]
             pending_video_download: None,
             #[cfg(feature = "_video")]
@@ -284,6 +317,30 @@ impl Default for TvLayer {
     }
 }
 
+/// Backend-side resources derived from the active skin: rebuilt by
+/// `commands::refresh_skin_assets` after every skin swap and resolution
+/// change (the old textures are destroyed first).
+#[derive(Default)]
+pub struct SkinAssets {
+    /// Set by a skin swap / resolution change when the wallpaper texture
+    /// must be regenerated against the new theme. The shell step (which
+    /// holds the backend needed to upload textures) consumes it via
+    /// `commands::refresh_wallpaper_if_pending`, which also rebuilds the
+    /// rest of these assets.
+    pub pending_refresh: bool,
+    /// Textures uploaded for the skin's layout `texture =` references, bar
+    /// tab textures and WM nine-patch chrome.
+    pub layout_textures: Vec<oasis_core::backend::TextureId>,
+    /// Image background layers (watermark decals).
+    pub image_layers: Vec<oasis_core::image_layers::ImageLayerObject>,
+    /// Cached ops for static `background_layers` (perf item D4).
+    pub background_cache: oasis_core::vector_overlay::LayerOpsCache,
+    /// Cached ops for static `chrome_layers` (perf item D4).
+    pub chrome_cache: oasis_core::vector_overlay::LayerOpsCache,
+    /// Software cursor texture (only when `features.software_cursor`).
+    pub cursor_texture: Option<oasis_core::backend::TextureId>,
+}
+
 /// All mutable application state except `backend`, `sdi`, and `vfs`
 /// (which stay as separate local variables in main() for borrow-splitting).
 pub struct AppState {
@@ -303,29 +360,13 @@ pub struct AppState {
     pub bg_color: Color,
     pub active_transition: Option<transition::TransitionState>,
     pub frame_counter: u64,
-    /// Set by `apply_skin_swap` when the wallpaper texture needs to be
-    /// regenerated against the new skin's theme. Consumed by the main loop
-    /// (which holds the backend needed to upload textures) and cleared.
-    /// Also triggers re-upload of skin layout textures and image layers.
-    pub pending_wallpaper_refresh: bool,
-    /// Backend textures uploaded for the current skin's layout
-    /// `texture =` references. Destroyed and re-uploaded on skin swap.
-    pub skin_layout_textures: Vec<oasis_core::backend::TextureId>,
-    /// Image background layers (watermark decals) for the current skin.
-    pub image_layers: Vec<oasis_core::image_layers::ImageLayerObject>,
-    /// Cached ops for static `background_layers` (perf item D4).
-    /// Invalidated on skin swap / resolution change.
-    pub background_layer_cache: oasis_core::vector_overlay::LayerOpsCache,
-    /// Cached ops for static `chrome_layers` (perf item D4).
-    pub chrome_layer_cache: oasis_core::vector_overlay::LayerOpsCache,
+    /// Backend resources built from the active skin.
+    pub skin_assets: SkinAssets,
     /// Armed or active desktop-icon drag (free icon layout only).
     pub icon_drag: Option<crate::icon_drag::IconDrag>,
-    /// Software cursor texture (only when `features.software_cursor`).
-    /// Destroyed and re-uploaded on skin swap.
-    pub cursor_texture: Option<oasis_core::backend::TextureId>,
     /// Persistent key-value settings (icon positions, ...), stored in the
     /// VFS at `/system/settings.toml`.
-    pub settings: oasis_core::settings::SettingsStore,
+    pub settings: crate::settings::SettingsStore,
     pub radio: RadioLayer,
     pub tv: TvLayer,
     /// Audio output: the SDL device in the desktop binary, a recording
@@ -342,10 +383,10 @@ pub struct AppState {
     pub toasts: ToastManager,
     /// UI sound events queued by input/toast chokepoints this frame,
     /// drained once per frame by `ui_sfx::tick`.
-    pub ui_sounds: oasis_core::ui_sound::UiSoundQueue,
+    pub ui_sounds: crate::ui_sound::UiSoundQueue,
     /// Skin-defined one-shot UI samples (loaded on skin swap; empty for
     /// skins without a `[sounds]` table).
-    pub sfx: oasis_audio::sfx::SfxPlayer,
+    pub sfx: oasis_audio::SfxPlayer,
     /// Audio track for the Music Player app.
     pub media_track: Option<AudioTrackId>,
     /// Music playlist + playback state behind `/var/audio/*` (driven by
@@ -400,22 +441,17 @@ impl AppState {
             bg_color: Color::rgb(0, 0, 0),
             active_transition: None,
             frame_counter: 0,
-            pending_wallpaper_refresh: false,
-            skin_layout_textures: Vec::new(),
-            image_layers: Vec::new(),
-            background_layer_cache: oasis_core::vector_overlay::LayerOpsCache::new(),
-            chrome_layer_cache: oasis_core::vector_overlay::LayerOpsCache::new(),
+            skin_assets: SkinAssets::default(),
             icon_drag: None,
-            cursor_texture: None,
-            settings: oasis_core::settings::SettingsStore::new(),
+            settings: crate::settings::SettingsStore::new(),
             radio: RadioLayer::new(),
             tv: TvLayer::new(),
             audio_backend: Box::new(oasis_backend_sdl::SdlAudioBackend::new()),
             offline: true,
             custom_skin_root: std::env::temp_dir().join("oasis-unit-skins"),
             toasts: ToastManager::new(),
-            ui_sounds: oasis_core::ui_sound::UiSoundQueue::new(),
-            sfx: oasis_audio::sfx::SfxPlayer::new(),
+            ui_sounds: crate::ui_sound::UiSoundQueue::new(),
+            sfx: oasis_audio::SfxPlayer::new(),
             media_track: None,
             media: oasis_audio::AudioManager::new(),
             #[cfg(feature = "mcp")]

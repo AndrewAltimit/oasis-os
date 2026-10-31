@@ -45,9 +45,11 @@ own clones).
      subtree dirty so the next paint picks up transitions.
 
 3. **`paint(backend, viewport)`**
-   - Calls `relayout_if_dirty()` which walks the dirty layout subtrees,
-     remeasures text against the cached `SharedTextCache`, and rebuilds
-     just the affected `LayoutBox` ranges.
+   - Calls `relayout_if_dirty()`, which (when the layout is dirty)
+     re-cascades if a resize flipped an `@media` condition and builds the
+     `LayoutBox` tree again. Image decodes lay the existing tree out again
+     in place (`relayout_tree`); both give a fresh load's geometry, as
+     there is no partial subtree relayout.
    - Records a fresh `DisplayList` if anything changed, otherwise replays
      the cached one with adjusted scroll offsets.
    - Replays the display list to the `SdiBackend`, intersecting against
@@ -55,8 +57,8 @@ own clones).
 
 The pipeline is intentionally one-shot: a navigation kicks off
 `navigate_url(url)` which produces a fresh `Document` and `LayoutBox`
-tree. Incremental updates after that point happen at the cascade and
-layout level — the document itself is replaced wholesale.
+tree. Later updates re-run the cascade and layout; the document itself
+is replaced only by the next navigation.
 
 ## Crates and top-level modules
 
@@ -103,7 +105,7 @@ crates/oasis-browser/src/
 ├── forms/              <input>, <textarea>, <select>, validation, submission
 ├── image.rs            format detection, decode + downscale to ImageLimits
 ├── image_atlas.rs      texture atlas packing for many small images
-├── gemini/             .gmi parser + .gmi → layout renderer (protocol in oasis-http)
+├── gemini/             .gmi parser (protocol in oasis-http; HTML translation in widget/)
 ├── js_dom/             QuickJS DOM bindings + JS bootstrap (feature = "javascript")
 └── reader.rs           reader-mode extraction
 ```

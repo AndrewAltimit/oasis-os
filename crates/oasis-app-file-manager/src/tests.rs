@@ -402,8 +402,10 @@ fn click_on_view_label_opens_dropdown() {
     let mut fm = FileManagerApp::new("/apps/fm", &vfs);
     // Default view is Explorer + windowed: no inner title bar, so the
     // menu bar starts at y=0 (height 18). View is the third entry.
-    let file_w = 4 * 7 + 16; // "File"
-    let edit_w = 4 * 7 + 16; // "Edit"
+    // Labels are as wide as the font draws them (11 px bitmap) + padding.
+    let label_w = |l: &str| oasis_types::backend::bitmap_measure_text(l, 11) as i32 + 16;
+    let file_w = label_w("File");
+    let edit_w = label_w("Edit");
     let view_x = 6 + file_w + edit_w + 4;
     let action = click_at(&mut fm, view_x, 8, 600, 400, &vfs);
     assert_eq!(action, AppAction::None);
@@ -481,7 +483,7 @@ fn rescan_keeps_moved_selection_visible() {
     vfs.write("/tmp/z.txt", b"x").unwrap();
     let mut fm = FileManagerApp::new("/apps/fm", &vfs);
     fm.view_mode = ViewMode::Dual;
-    fm.content.cached_max_visible = 4;
+    fm.dual_visible_rows = 4;
     select(&mut fm, &vfs, 0, "/tmp", "z.txt");
     // Many entries appear before the selection.
     for i in 0..20 {
@@ -495,6 +497,43 @@ fn rescan_keeps_moved_selection_visible() {
         p.cursor
     );
     assert!(p.lines[p.scroll + p.cursor].starts_with("z.txt"));
+}
+
+/// Explorer tile labels are cut to the tile in pixels: a character-count
+/// cut let wide names spill into the next tile.
+#[test]
+fn explorer_tile_labels_stay_inside_their_tile() {
+    let mut vfs = setup_vfs();
+    vfs.write("/a_rather_long_file_name.txt", b"x").unwrap();
+    vfs.write("/WWWWWWWWW", b"x").unwrap();
+    let fm = FileManagerApp::new("/apps/fm", &vfs);
+    let at = ActiveTheme::default();
+    let mut rec = oasis_test_backend::RecordingBackend::new(480, 272);
+    fm.draw_windowed_explorer(0, 0, 480, 272, &mut rec, &at)
+        .unwrap();
+    let g = compute_explorer_geom(0, 0, 480, 272);
+    let label_y = g.body_y + 4 + 4 + g.icon_h as i32 + 2;
+    let labels: Vec<(String, i32)> = rec
+        .text_positions()
+        .into_iter()
+        .filter(|&(_, _, y, _)| (y - label_y) % g.tile_h as i32 == 0 && y >= label_y)
+        .map(|(t, x, _, size)| {
+            (
+                t.to_string(),
+                x + oasis_types::backend::bitmap_measure_text(t, size) as i32,
+            )
+        })
+        .collect();
+    assert!(labels.iter().any(|(t, _)| t.ends_with("...")), "{labels:?}");
+    assert!(labels.iter().any(|(t, _)| t == "etc"), "{labels:?}");
+    for (text, right) in &labels {
+        let col = (right - 1 - (g.grid_x + 4)) / g.tile_w as i32;
+        let tile_right = g.grid_x + 4 + (col + 1) * g.tile_w as i32;
+        assert!(
+            *right <= tile_right,
+            "{text:?} ends at {right}, tile at {tile_right}"
+        );
+    }
 }
 
 #[test]
@@ -844,4 +883,73 @@ fn tick_picks_up_changes_made_by_other_apps() {
     );
     // Unchanged listings don't report a change.
     assert!(!fm.tick(state::RESCAN_INTERVAL_MS, &vfs));
+}
+
+/// A VFS with `/many` holding `n` files.
+fn many_files_vfs(n: usize) -> MemoryVfs {
+    let mut vfs = MemoryVfs::new();
+    vfs.mkdir("/many").unwrap();
+    for i in 0..n {
+        vfs.write(&format!("/many/f{i:02}.txt"), b"x").unwrap();
+    }
+    vfs
+}
+
+#[test]
+fn switching_to_explorer_after_dual_scroll_keeps_cursor_valid() {
+    // The dual view scrolls one line at a time; the Explorer grid assumes
+    // whole rows. Switching views used to leave `scroll = 3` with 4
+    // columns, and Left then underflowed `cursor` (a debug panic).
+    let vfs = many_files_vfs(40);
+    let mut fm = FileManagerApp::new("/apps/files", &vfs);
+    fm.panels[0].navigate_to("/many", &vfs);
+    fm.view_mode = ViewMode::Dual;
+    fm.layout(480, 272, &ActiveTheme::default());
+    fm.panels[0].scroll = 3;
+    fm.panels[0].cursor = 0;
+    fm.handle_input(&Button::Select, &vfs);
+    assert_eq!(fm.view_mode, ViewMode::Explorer);
+    fm.layout(480, 272, &ActiveTheme::default());
+    let cols = fm.explorer_cols;
+    assert!(cols > 1, "grid has several columns at 480 wide");
+    let p = &fm.panels[0];
+    assert_eq!(p.scroll % cols, 0, "scroll aligned to a grid row");
+    assert_eq!(p.scroll + p.cursor, 3, "same entry still selected");
+    fm.handle_input(&Button::Left, &vfs);
+    let p = &fm.panels[0];
+    assert_eq!(p.scroll + p.cursor, 2);
+}
+
+#[test]
+fn dual_view_cursor_stays_on_a_drawn_row() {
+    // Navigation used the shared line-list row count, which is taller than
+    // the dual view's panel area: Down walked the `> ` marker off-screen.
+    let vfs = many_files_vfs(40);
+    let mut fm = FileManagerApp::new("/apps/files", &vfs);
+    fm.panels[0].navigate_to("/many", &vfs);
+    fm.view_mode = ViewMode::Dual;
+    let mut h = oasis_app_core::testing::AppHarness::with_vfs(Box::new(fm), vfs);
+    let _ = h.draw();
+    for _ in 0..30 {
+        h.press(Button::Down);
+        let fm = h.app_as::<FileManagerApp>();
+        let p = &fm.panels[0];
+        let selected = p.lines[p.scroll + p.cursor].clone();
+        let shown = h.screen_text();
+        assert!(
+            shown.contains(&format!("> {selected}")),
+            "selected `{selected}` not drawn:\n{shown}"
+        );
+    }
+}
+
+#[test]
+fn explorer_status_counts_real_entries_only() {
+    let mut vfs = MemoryVfs::new();
+    vfs.mkdir("/empty").unwrap();
+    let mut fm = FileManagerApp::new("/apps/files", &vfs);
+    fm.panels[0].navigate_to("/empty", &vfs);
+    let mut h = oasis_app_core::testing::AppHarness::with_vfs(Box::new(fm), vfs);
+    let text = h.screen_text();
+    assert!(text.contains("0 object(s)"), "{text}");
 }

@@ -63,7 +63,7 @@ impl PluginManager {
         Self::validate_api_version(&self.plugins[idx].plugin.info())?;
         let before: HashSet<String> = commands.command_names().map(str::to_string).collect();
         let mut pending_apps = Vec::new();
-        {
+        let result = {
             let mut host = Self::build_host(
                 &self.plugins[idx],
                 self.context,
@@ -73,13 +73,23 @@ impl PluginManager {
                 &mut pending_apps,
                 None,
             );
-            self.plugins[idx].plugin.init(&mut host)?;
-        }
-        self.plugins[idx].registered_commands = commands
+            self.plugins[idx].plugin.init(&mut host)
+        };
+        let new_commands: Vec<String> = commands
             .command_names()
             .filter(|n| !before.contains(*n))
             .map(str::to_string)
             .collect();
+        if let Err(e) = result {
+            // A plugin that failed part-way through `init` stays inactive,
+            // so nothing would ever remove what it registered: drop its
+            // commands (and its pending apps) now.
+            for name in &new_commands {
+                commands.unregister(name);
+            }
+            return Err(e);
+        }
+        self.plugins[idx].registered_commands = new_commands;
         self.plugins[idx].state = PluginState::Active;
         self.collect_apps(idx, pending_apps);
         Ok(())

@@ -34,12 +34,14 @@ pub fn parse(text: &str) -> Vec<CalcHistoryEntry> {
         .filter_map(|line| {
             let (expr, result) = line.rsplit_once('=')?;
             let expr = expr.trim();
-            if expr.is_empty() {
-                return None;
-            }
-            Some(CalcHistoryEntry {
+            // Only entries the calculator could have produced: an
+            // expression it evaluates and a finite result (a hand-edited
+            // `5$=5` or `1=inf` would break recall / negate).
+            crate::evaluate(expr).ok()?;
+            let result: f64 = result.trim().parse().ok()?;
+            result.is_finite().then(|| CalcHistoryEntry {
                 expression: expr.to_string(),
-                result: result.trim().parse().ok()?,
+                result,
             })
         })
         .collect();

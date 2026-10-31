@@ -1,5 +1,5 @@
 # viewport 480x272
-fill_rect 0, 0, 480, 4428, Color { r: 255, g: 255, b: 255, a: 255 }
+fill_rect 0, 0, 480, 1423, Color { r: 255, g: 255, b: 255, a: 255 }
 fill_rect 0, 0, 480, 35, Color { r: 53, g: 53, b: 53, a: 255 }
 draw_text "std", 16, 8, 13, Color { r: 221, g: 221, b: 221, a: 255 }
 fill_rect 46, 8, 6, 19, Color { r: 53, g: 53, b: 53, a: 255 }
@@ -39,139 +39,86 @@ draw_text "•", 4, 235, 13, Color { r: 26, g: 26, b: 26, a: 255 }
 draw_text "with_capacity", 16, 237, 13, Color { r: 56, g: 115, b: 185, a: 255 }
 draw_text "•", 4, 258, 13, Color { r: 26, g: 26, b: 26, a: 255 }
 draw_text "push", 16, 260, 13, Color { r: 56, g: 115, b: 185, a: 255 }
-draw_text "pub", 232, 59, 20, Color { r: 167, g: 29, b: 93, a: 255 }
-draw_text "pub", 233, 59, 20, Color { r: 167, g: 29, b: 93, a: 255 }
-draw_text "struct", 250, 59, 20, Color { r: 167, g: 29, b: 93, a: 255 }
-draw_text "struct", 251, 59, 20, Color { r: 167, g: 29, b: 93, a: 255 }
-draw_text "Vec", 286, 59, 20, Color { r: 24, g: 54, b: 145, a: 255 }
-draw_text "Vec", 287, 59, 20, Color { r: 24, g: 54, b: 145, a: 255 }
-draw_text "<T,", 304, 59, 20, Color { r: 26, g: 26, b: 26, a: 255 }
-draw_text "<T,", 305, 59, 20, Color { r: 26, g: 26, b: 26, a: 255 }
-draw_text "A", 322, 59, 20, Color { r: 26, g: 26, b: 26, a: 255 }
-draw_text "A", 323, 59, 20, Color { r: 26, g: 26, b: 26, a: 255 }
-draw_text "=", 328, 59, 20, Color { r: 26, g: 26, b: 26, a: 255 }
-draw_text "=", 329, 59, 20, Color { r: 26, g: 26, b: 26, a: 255 }
-draw_text "Global>", 334, 59, 20, Color { r: 26, g: 26, b: 26, a: 255 }
-draw_text "Global>", 335, 59, 20, Color { r: 26, g: 26, b: 26, a: 255 }
-draw_text "{", 376, 59, 20, Color { r: 26, g: 26, b: 26, a: 255 }
-draw_text "{", 377, 59, 20, Color { r: 26, g: 26, b: 26, a: 255 }
-draw_text "/*", 382, 59, 20, Color { r: 26, g: 26, b: 26, a: 255 }
-draw_text "/*", 383, 59, 20, Color { r: 26, g: 26, b: 26, a: 255 }
-draw_text "private", 394, 59, 20, Color { r: 26, g: 26, b: 26, a: 255 }
-draw_text "private", 395, 59, 20, Color { r: 26, g: 26, b: 26, a: 255 }
-draw_text "fields", 232, 89, 20, Color { r: 26, g: 26, b: 26, a: 255 }
-draw_text "fields", 233, 89, 20, Color { r: 26, g: 26, b: 26, a: 255 }
-draw_text "*/", 268, 89, 20, Color { r: 26, g: 26, b: 26, a: 255 }
-draw_text "*/", 269, 89, 20, Color { r: 26, g: 26, b: 26, a: 255 }
-draw_text "}", 280, 89, 20, Color { r: 26, g: 26, b: 26, a: 255 }
-draw_text "}", 281, 89, 20, Color { r: 26, g: 26, b: 26, a: 255 }
-draw_text "A", 232, 131, 8, Color { r: 26, g: 26, b: 26, a: 255 }
-draw_text "contiguous", 238, 131, 8, Color { r: 26, g: 26, b: 26, a: 255 }
-draw_text "growable", 298, 131, 8, Color { r: 26, g: 26, b: 26, a: 255 }
-draw_text "array", 346, 131, 8, Color { r: 26, g: 26, b: 26, a: 255 }
-draw_text "type,", 376, 131, 8, Color { r: 26, g: 26, b: 26, a: 255 }
-draw_text "written", 406, 131, 8, Color { r: 26, g: 26, b: 26, a: 255 }
-draw_text "as", 232, 143, 8, Color { r: 26, g: 26, b: 26, a: 255 }
-fill_rect 244, 146, 36, 1, Color { r: 245, g: 245, b: 245, a: 255 }
-fill_rect 244, 145, 36, 1, Color { r: 245, g: 245, b: 245, a: 255 }
-fill_rect 244, 152, 36, 1, Color { r: 245, g: 245, b: 245, a: 255 }
-fill_rect 246, 143, 32, 1, Color { r: 245, g: 245, b: 245, a: 255 }
-fill_rect 246, 154, 32, 1, Color { r: 245, g: 245, b: 245, a: 255 }
-fill_rect 245, 144, 34, 1, Color { r: 245, g: 245, b: 245, a: 255 }
-fill_rect 245, 153, 34, 1, Color { r: 245, g: 245, b: 245, a: 255 }
-fill_rect 244, 147, 36, 5, Color { r: 245, g: 245, b: 245, a: 255 }
-draw_text "Vec<T>", 244, 143, 7, Color { r: 26, g: 26, b: 26, a: 255 }
-draw_text ",", 280, 143, 8, Color { r: 26, g: 26, b: 26, a: 255 }
-draw_text "short", 286, 143, 8, Color { r: 26, g: 26, b: 26, a: 255 }
-draw_text "for", 316, 143, 8, Color { r: 26, g: 26, b: 26, a: 255 }
-draw_text "'vector'.", 334, 143, 8, Color { r: 26, g: 26, b: 26, a: 255 }
-draw_text "Vectors", 232, 163, 8, Color { r: 26, g: 26, b: 26, a: 255 }
-draw_text "are", 274, 163, 8, Color { r: 26, g: 26, b: 26, a: 255 }
-draw_text "a", 292, 163, 8, Color { r: 26, g: 26, b: 26, a: 255 }
-draw_text "fundamental", 298, 163, 8, Color { r: 26, g: 26, b: 26, a: 255 }
-draw_text "collection", 364, 163, 8, Color { r: 26, g: 26, b: 26, a: 255 }
-draw_text "in", 424, 163, 8, Color { r: 26, g: 26, b: 26, a: 255 }
-draw_text "Rust.", 232, 175, 8, Color { r: 26, g: 26, b: 26, a: 255 }
-draw_text "They", 262, 175, 8, Color { r: 26, g: 26, b: 26, a: 255 }
-draw_text "are", 286, 175, 8, Color { r: 26, g: 26, b: 26, a: 255 }
-draw_text "stored", 304, 175, 8, Color { r: 26, g: 26, b: 26, a: 255 }
-draw_text "on", 340, 175, 8, Color { r: 26, g: 26, b: 26, a: 255 }
-draw_text "the", 352, 175, 8, Color { r: 26, g: 26, b: 26, a: 255 }
-draw_text "heap", 370, 175, 8, Color { r: 26, g: 26, b: 26, a: 255 }
-draw_text "and", 394, 175, 8, Color { r: 26, g: 26, b: 26, a: 255 }
-draw_text "can", 412, 175, 8, Color { r: 26, g: 26, b: 26, a: 255 }
-draw_text "grow", 232, 187, 8, Color { r: 26, g: 26, b: 26, a: 255 }
-draw_text "or", 256, 187, 8, Color { r: 26, g: 26, b: 26, a: 255 }
-draw_text "shrink", 268, 187, 8, Color { r: 26, g: 26, b: 26, a: 255 }
-draw_text "at", 304, 187, 8, Color { r: 26, g: 26, b: 26, a: 255 }
-draw_text "runtime.", 316, 187, 8, Color { r: 26, g: 26, b: 26, a: 255 }
-draw_text "Indexing", 364, 187, 8, Color { r: 26, g: 26, b: 26, a: 255 }
-draw_text "is", 412, 187, 8, Color { r: 26, g: 26, b: 26, a: 255 }
-draw_text "O(1),", 232, 199, 8, Color { r: 26, g: 26, b: 26, a: 255 }
-draw_text "pushing", 262, 199, 8, Color { r: 26, g: 26, b: 26, a: 255 }
-draw_text "to", 304, 199, 8, Color { r: 26, g: 26, b: 26, a: 255 }
-draw_text "the", 316, 199, 8, Color { r: 26, g: 26, b: 26, a: 255 }
-draw_text "back", 334, 199, 8, Color { r: 26, g: 26, b: 26, a: 255 }
-draw_text "is", 358, 199, 8, Color { r: 26, g: 26, b: 26, a: 255 }
-draw_text "amortized", 370, 199, 8, Color { r: 26, g: 26, b: 26, a: 255 }
-draw_text "O(1),", 232, 211, 8, Color { r: 26, g: 26, b: 26, a: 255 }
-draw_text "and", 262, 211, 8, Color { r: 26, g: 26, b: 26, a: 255 }
-draw_text "iteration", 280, 211, 8, Color { r: 26, g: 26, b: 26, a: 255 }
-draw_text "is", 334, 211, 8, Color { r: 26, g: 26, b: 26, a: 255 }
-draw_text "cache-friendly.", 346, 211, 8, Color { r: 26, g: 26, b: 26, a: 255 }
-fill_rect 233, 241, 214, 1, Color { r: 245, g: 245, b: 245, a: 255 }
-fill_rect 233, 240, 214, 1, Color { r: 245, g: 245, b: 245, a: 255 }
-fill_rect 233, 335, 214, 1, Color { r: 245, g: 245, b: 245, a: 255 }
-fill_rect 236, 237, 208, 1, Color { r: 245, g: 245, b: 245, a: 255 }
-fill_rect 236, 338, 208, 1, Color { r: 245, g: 245, b: 245, a: 255 }
-fill_rect 234, 239, 212, 1, Color { r: 245, g: 245, b: 245, a: 255 }
-fill_rect 234, 336, 212, 1, Color { r: 245, g: 245, b: 245, a: 255 }
-fill_rect 234, 238, 212, 1, Color { r: 245, g: 245, b: 245, a: 255 }
-fill_rect 234, 337, 212, 1, Color { r: 245, g: 245, b: 245, a: 255 }
-fill_rect 233, 242, 214, 93, Color { r: 245, g: 245, b: 245, a: 255 }
-fill_rect 232, 236, 216, 1, Color { r: 128, g: 128, b: 128, a: 255 }
-fill_rect 447, 236, 1, 104, Color { r: 128, g: 128, b: 128, a: 255 }
-fill_rect 232, 339, 216, 1, Color { r: 128, g: 128, b: 128, a: 255 }
-fill_rect 232, 236, 1, 104, Color { r: 128, g: 128, b: 128, a: 255 }
-set_clip_rect 245, 249, 190, 23
-fill_rect 245, 253, 138, 1, Color { r: 245, g: 245, b: 245, a: 255 }
-fill_rect 245, 252, 138, 1, Color { r: 245, g: 245, b: 245, a: 255 }
-fill_rect 245, 264, 138, 1, Color { r: 245, g: 245, b: 245, a: 255 }
-fill_rect 248, 249, 132, 1, Color { r: 245, g: 245, b: 245, a: 255 }
-fill_rect 248, 267, 132, 1, Color { r: 245, g: 245, b: 245, a: 255 }
-fill_rect 246, 251, 136, 1, Color { r: 245, g: 245, b: 245, a: 255 }
-fill_rect 246, 265, 136, 1, Color { r: 245, g: 245, b: 245, a: 255 }
-fill_rect 246, 250, 136, 1, Color { r: 245, g: 245, b: 245, a: 255 }
-fill_rect 246, 266, 136, 1, Color { r: 245, g: 245, b: 245, a: 255 }
-fill_rect 245, 254, 138, 10, Color { r: 245, g: 245, b: 245, a: 255 }
-set_clip_rect 245, 249, 138, 19
-draw_text "let mut v = Vec::new();", 245, 249, 13, Color { r: 26, g: 26, b: 26, a: 255 }
-set_clip_rect 245, 249, 190, 23
-fill_rect 245, 273, 60, 1, Color { r: 245, g: 245, b: 245, a: 255 }
-fill_rect 245, 272, 60, 1, Color { r: 245, g: 245, b: 245, a: 255 }
-fill_rect 245, 284, 60, 1, Color { r: 245, g: 245, b: 245, a: 255 }
-fill_rect 248, 269, 54, 1, Color { r: 245, g: 245, b: 245, a: 255 }
-fill_rect 248, 287, 54, 1, Color { r: 245, g: 245, b: 245, a: 255 }
-fill_rect 246, 271, 58, 1, Color { r: 245, g: 245, b: 245, a: 255 }
-fill_rect 246, 285, 58, 1, Color { r: 245, g: 245, b: 245, a: 255 }
-fill_rect 246, 270, 58, 1, Color { r: 245, g: 245, b: 245, a: 255 }
-fill_rect 246, 286, 58, 1, Color { r: 245, g: 245, b: 245, a: 255 }
-fill_rect 245, 274, 60, 10, Color { r: 245, g: 245, b: 245, a: 255 }
-set_clip_rect 245, 269, 60, 3
-draw_text "v.push(1);", 245, 269, 13, Color { r: 26, g: 26, b: 26, a: 255 }
-set_clip_rect 245, 249, 190, 23
-fill_rect 305, 273, 60, 1, Color { r: 245, g: 245, b: 245, a: 255 }
-fill_rect 305, 272, 60, 1, Color { r: 245, g: 245, b: 245, a: 255 }
-fill_rect 305, 284, 60, 1, Color { r: 245, g: 245, b: 245, a: 255 }
-fill_rect 308, 269, 54, 1, Color { r: 245, g: 245, b: 245, a: 255 }
-fill_rect 308, 287, 54, 1, Color { r: 245, g: 245, b: 245, a: 255 }
-fill_rect 306, 271, 58, 1, Color { r: 245, g: 245, b: 245, a: 255 }
-fill_rect 306, 285, 58, 1, Color { r: 245, g: 245, b: 245, a: 255 }
-fill_rect 306, 270, 58, 1, Color { r: 245, g: 245, b: 245, a: 255 }
-fill_rect 306, 286, 58, 1, Color { r: 245, g: 245, b: 245, a: 255 }
-fill_rect 305, 274, 60, 10, Color { r: 245, g: 245, b: 245, a: 255 }
-set_clip_rect 305, 269, 60, 3
-draw_text "v.push(2);", 305, 269, 13, Color { r: 26, g: 26, b: 26, a: 255 }
-set_clip_rect 245, 249, 190, 23
-set_clip_rect 0, 0, 480, 272
-# totals fill_rect=60 draw_text=107 other=8
+draw_text "pub ", 265, 59, 20, Color { r: 167, g: 29, b: 93, a: 255 }
+draw_text "pub ", 266, 59, 20, Color { r: 167, g: 29, b: 93, a: 255 }
+draw_text "struct", 289, 59, 20, Color { r: 167, g: 29, b: 93, a: 255 }
+draw_text "struct", 290, 59, 20, Color { r: 167, g: 29, b: 93, a: 255 }
+draw_text " ", 325, 59, 20, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text " ", 326, 59, 20, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "Vec", 331, 59, 20, Color { r: 24, g: 54, b: 145, a: 255 }
+draw_text "Vec", 332, 59, 20, Color { r: 24, g: 54, b: 145, a: 255 }
+draw_text "<T, ", 349, 59, 20, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "<T, ", 350, 59, 20, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "A ", 373, 59, 20, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "A ", 374, 59, 20, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "= ", 385, 59, 20, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "= ", 386, 59, 20, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "Global>", 397, 59, 20, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "Global>", 398, 59, 20, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "{ ", 265, 89, 20, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "{ ", 266, 89, 20, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "/* ", 277, 89, 20, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "/* ", 278, 89, 20, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "private ", 295, 89, 20, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "private ", 296, 89, 20, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "fields ", 343, 89, 20, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "fields ", 344, 89, 20, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "*/ ", 385, 89, 20, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "*/ ", 386, 89, 20, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "}", 403, 89, 20, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "}", 404, 89, 20, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "A ", 265, 131, 8, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "contiguous ", 277, 131, 8, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "growable ", 343, 131, 8, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "array", 397, 131, 8, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "type, ", 265, 143, 8, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "written ", 301, 143, 8, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "as ", 349, 143, 8, Color { r: 26, g: 26, b: 26, a: 255 }
+fill_rect 367, 146, 36, 1, Color { r: 245, g: 245, b: 245, a: 255 }
+fill_rect 367, 145, 36, 1, Color { r: 245, g: 245, b: 245, a: 255 }
+fill_rect 367, 152, 36, 1, Color { r: 245, g: 245, b: 245, a: 255 }
+fill_rect 369, 143, 32, 1, Color { r: 245, g: 245, b: 245, a: 255 }
+fill_rect 369, 154, 32, 1, Color { r: 245, g: 245, b: 245, a: 255 }
+fill_rect 368, 144, 34, 1, Color { r: 245, g: 245, b: 245, a: 255 }
+fill_rect 368, 153, 34, 1, Color { r: 245, g: 245, b: 245, a: 255 }
+fill_rect 367, 147, 36, 5, Color { r: 245, g: 245, b: 245, a: 255 }
+draw_text "Vec<T>", 367, 143, 7, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text ",", 403, 143, 8, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "short ", 265, 155, 8, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "for ", 301, 155, 8, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "'vector'.", 325, 155, 8, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "Vectors ", 265, 175, 8, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "are ", 313, 175, 8, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "a ", 337, 175, 8, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "fundamental", 349, 175, 8, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "collection ", 265, 187, 8, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "in ", 331, 187, 8, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "Rust. ", 349, 187, 8, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "They ", 385, 187, 8, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "are", 415, 187, 8, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "stored ", 265, 199, 8, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "on ", 307, 199, 8, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "the ", 325, 199, 8, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "heap ", 349, 199, 8, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "and ", 379, 199, 8, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "can", 403, 199, 8, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "grow ", 265, 211, 8, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "or ", 295, 211, 8, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "shrink ", 313, 211, 8, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "at ", 355, 211, 8, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "runtime.", 373, 211, 8, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "Indexing ", 265, 223, 8, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "is ", 319, 223, 8, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "O(1), ", 337, 223, 8, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "pushing ", 373, 223, 8, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "to", 421, 223, 8, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "the ", 265, 235, 8, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "back ", 289, 235, 8, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "is ", 319, 235, 8, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "amortized ", 337, 235, 8, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "O(1),", 397, 235, 8, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "and ", 265, 247, 8, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "iteration ", 289, 247, 8, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "is", 349, 247, 8, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "cache-friendly.", 265, 259, 8, Color { r: 26, g: 26, b: 26, a: 255 }
+# totals fill_rect=16 draw_text=106 other=0

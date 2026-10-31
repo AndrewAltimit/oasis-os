@@ -337,6 +337,7 @@ impl SettingsApp {
             return;
         }
         self.volume = volume;
+        self.seen.pending_volume = true;
         self.post(VOLUME_CHANGE_REQUEST_PATH, volume.to_string());
         self.refresh_lines();
     }
@@ -350,6 +351,7 @@ impl SettingsApp {
             return;
         }
         self.font_scale = scale;
+        self.seen.pending_font_scale = true;
         self.post(FONT_SCALE_REQUEST_PATH, format!("{scale}"));
         self.refresh_lines();
     }
@@ -378,6 +380,7 @@ impl SettingsApp {
     fn toggle_reduced_motion(&mut self) {
         self.reduced_motion = !self.reduced_motion;
         let payload = if self.reduced_motion { "1" } else { "0" };
+        self.seen.pending_reduced_motion = true;
         self.post(REDUCED_MOTION_REQUEST_PATH, payload.to_string());
         self.refresh_lines();
     }

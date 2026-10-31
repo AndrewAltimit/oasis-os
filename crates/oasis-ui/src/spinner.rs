@@ -87,6 +87,24 @@ impl Spinner {
         }
     }
 
+    /// Width of the animated indicator, the same in `measure` and `draw`:
+    /// the widest `Text` frame (so the label does not jitter or overflow as
+    /// frames of different widths cycle), the three `Dots`, or the minimum
+    /// `Bar` track.
+    fn indicator_w(&self, ctx: &DrawContext<'_>) -> u32 {
+        let fs = ctx.theme.font_size_md;
+        match self.style {
+            SpinnerStyle::Text => SPINNER_FRAMES
+                .iter()
+                .chain(std::iter::once(&'*'))
+                .map(|c| ctx.backend.measure_text(c.encode_utf8(&mut [0u8; 4]), fs))
+                .max()
+                .unwrap_or(0),
+            SpinnerStyle::Dots => 3 * DOT_SIZE + 2 * DOT_GAP,
+            SpinnerStyle::Bar => MIN_BAR_W,
+        }
+    }
+
     /// Current display character for `Text` style.
     pub fn current_char(&self) -> char {
         SPINNER_FRAMES[self.frame_index() % SPINNER_FRAMES.len()]
@@ -99,18 +117,30 @@ impl Default for Spinner {
     }
 }
 
+/// Inset before the indicator and after the last element.
+const EDGE_PAD: u32 = 2;
+/// Gap between the indicator and the label.
+const LABEL_GAP: u32 = 6;
+/// Side of one `Dots` dot.
+const DOT_SIZE: u32 = 4;
+/// Gap between `Dots` dots.
+const DOT_GAP: u32 = 3;
+/// Narrowest `Bar` track `measure` asks for (`draw` stretches it).
+const MIN_BAR_W: u32 = 40;
+
 impl Widget for Spinner {
+    /// Exactly the extent `draw` uses: pad, indicator, gap + label, pad.
+    /// (It used to size every style for a `-` glyph, so labels overflowed
+    /// the measured box.)
     fn measure(&self, ctx: &DrawContext<'_>, available_w: u32, _available_h: u32) -> (u32, u32) {
         let fs = ctx.theme.font_size_md;
-        let spinner_w = ctx.backend.measure_text("-", fs) + 4;
         let text_h = ctx.backend.measure_text_height(fs);
         let h = text_h + 4;
-        let label_w = if let Some(ref label) = self.label {
-            ctx.backend.measure_text(label, fs) + 6
-        } else {
-            0
-        };
-        let w = (spinner_w + label_w).min(available_w);
+        let label_w = self
+            .label
+            .as_ref()
+            .map_or(0, |label| LABEL_GAP + ctx.backend.measure_text(label, fs));
+        let w = (EDGE_PAD + self.indicator_w(ctx) + label_w + EDGE_PAD).min(available_w);
         (w, h)
     }
 
@@ -130,15 +160,14 @@ impl Widget for Spinner {
                 ctx.backend.draw_text(&s, x + 2, ty, fs, ctx.theme.accent)?;
 
                 if let Some(ref label) = self.label {
-                    let char_w = ctx.backend.measure_text(&s, fs);
-                    let lx = x + 2 + char_w as i32 + 6;
+                    let lx = x + (EDGE_PAD + self.indicator_w(ctx) + LABEL_GAP) as i32;
                     ctx.backend
                         .draw_text(label, lx, ty, fs, ctx.theme.text_secondary)?;
                 }
             },
             SpinnerStyle::Dots => {
-                let dot_size = 4u32;
-                let gap = 3u32;
+                let dot_size = DOT_SIZE;
+                let gap = DOT_GAP;
                 let frame = if ctx.theme.reduced_motion {
                     // Show all dots equally when motion reduced.
                     usize::MAX
@@ -147,7 +176,7 @@ impl Widget for Spinner {
                 };
                 let dot_y = y + layout::center(h, dot_size);
                 for i in 0..3u32 {
-                    let dot_x = x + 2 + (i * (dot_size + gap)) as i32;
+                    let dot_x = x + EDGE_PAD as i32 + (i * (dot_size + gap)) as i32;
                     let alpha = if ctx.theme.reduced_motion {
                         180u8
                     } else if i as usize == frame {
@@ -161,8 +190,7 @@ impl Widget for Spinner {
                 }
 
                 if let Some(ref label) = self.label {
-                    let dots_w = 3 * dot_size + 2 * gap + 4;
-                    let lx = x + 2 + dots_w as i32 + 4;
+                    let lx = x + (EDGE_PAD + self.indicator_w(ctx) + LABEL_GAP) as i32;
                     ctx.backend
                         .draw_text(label, lx, ty, fs, ctx.theme.text_secondary)?;
                 }
@@ -172,15 +200,15 @@ impl Widget for Spinner {
                 let bar_y = y + layout::center(h, bar_h);
                 let label_w = if let Some(ref label) = self.label {
                     let lw = ctx.backend.measure_text(label, fs);
-                    let lx = x + 2;
+                    let lx = x + EDGE_PAD as i32;
                     ctx.backend
                         .draw_text(label, lx, ty, fs, ctx.theme.text_secondary)?;
-                    lw + 6
+                    lw + LABEL_GAP
                 } else {
                     0
                 };
-                let bar_w = w.saturating_sub(4 + label_w);
-                let bar_x = x + 2 + label_w as i32;
+                let bar_w = w.saturating_sub(2 * EDGE_PAD + label_w);
+                let bar_x = x + EDGE_PAD as i32 + label_w as i32;
 
                 // Track.
                 ctx.backend
@@ -220,6 +248,41 @@ impl Widget for Spinner {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn measured_width_covers_what_draw_paints() {
+        use crate::test_utils::RecordingBackend;
+        let theme = crate::theme::Theme::dark();
+        for style in [SpinnerStyle::Text, SpinnerStyle::Dots] {
+            for frame_ms in [0, 150, 300, 450] {
+                let mut backend = RecordingBackend::default();
+                let mut s = Spinner::with_label("Loading files");
+                s.style = style;
+                s.tick(frame_ms);
+                let (w, label_w);
+                {
+                    let mut ctx = DrawContext::new(&mut backend, &theme);
+                    let (mw, mh) = s.measure(&ctx, 480, 272);
+                    w = mw;
+                    label_w = ctx
+                        .backend
+                        .measure_text("Loading files", theme.font_size_md);
+                    s.draw(&mut ctx, 0, 0, mw, mh).unwrap();
+                }
+                let label_x = backend
+                    .text_positions()
+                    .into_iter()
+                    .find(|t| t.0 == "Loading files")
+                    .unwrap()
+                    .1;
+                assert!(
+                    label_x + label_w as i32 + EDGE_PAD as i32 <= w as i32,
+                    "{style:?}@{frame_ms}: label ends at {} past measured {w}",
+                    label_x + label_w as i32
+                );
+            }
+        }
+    }
 
     #[test]
     fn new_defaults() {

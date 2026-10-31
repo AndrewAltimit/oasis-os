@@ -240,141 +240,68 @@ fn wrap_anonymous_all_inline() {
     assert!(matches!(wrapped[0].box_type, BoxType::Inline));
 }
 
-// -- incremental layout -------------------------------------------
+// -- relayout -----------------------------------------------------
 
+/// A block of wrapping text, a `<br>`, and preformatted lines.
+fn text_block(white_space: crate::css::values::WhiteSpace, text: &str) -> LayoutBox {
+    let mut style = block_style();
+    style.white_space = white_space;
+    let mut parent = LayoutBox::new(BoxType::Block, style.clone(), None);
+    let mut inline = style;
+    inline.display = Display::Inline;
+    let mut t = LayoutBox::new(BoxType::Inline, inline, Some(1));
+    t.text = Some(text.to_string());
+    parent.children = vec![t];
+    parent
+}
+
+fn fragments(lb: &LayoutBox) -> Vec<(String, f32, f32)> {
+    lb.children
+        .iter()
+        .map(|c| {
+            let d = &c.dimensions.content;
+            (c.text.clone().unwrap_or_default(), d.x, d.y)
+        })
+        .collect()
+}
+
+/// Regression: inline layout replaced the children with line fragments
+/// (line-end spaces trimmed, `<pre>` newlines consumed), and laying the
+/// box out again read those: the words of a wrapped line were glued
+/// together on a wider line, and preformatted lines joined into one.
 #[test]
-fn incremental_layout_matches_full_layout() {
+fn second_inline_layout_matches_the_first() {
+    use crate::css::values::WhiteSpace;
     let m = FixedMeasurer;
-    let mut parent = LayoutBox::new(BoxType::Block, block_style(), None);
-    let mut s1 = block_style();
-    s1.height = Dimension::Px(30.0);
-    let mut s2 = block_style();
-    s2.height = Dimension::Px(50.0);
-    parent.children = vec![
-        LayoutBox::new(BoxType::Block, s1, None),
-        LayoutBox::new(BoxType::Block, s2, None),
-    ];
-    parent.dimensions.content.x = 0.0;
-    parent.dimensions.content.y = 0.0;
+    for (ws, text) in [
+        (
+            WhiteSpace::Normal,
+            "alpha beta gamma delta epsilon zeta eta theta",
+        ),
+        (WhiteSpace::Pre, "line one\nline two\nline three"),
+    ] {
+        let mut once = text_block(ws, text);
+        layout_block(&mut once, 120.0, &m);
 
-    // Full layout.
-    let mut full = parent.clone();
-    layout_block(&mut full, 480.0, &m);
+        let mut twice = text_block(ws, text);
+        layout_block(&mut twice, 120.0, &m);
+        layout_block(&mut twice, 120.0, &m);
+        assert_eq!(fragments(&once), fragments(&twice), "{ws:?}");
 
-    // Incremental layout (all dirty initially).
-    let mut cache = StyleCache::new();
-    layout_block_incremental(&mut parent, 480.0, &m, &mut cache);
-
-    assert_eq!(
-        parent.dimensions.content.height,
-        full.dimensions.content.height,
-    );
-    assert_eq!(
-        parent.dimensions.content.width,
-        full.dimensions.content.width,
-    );
-}
-
-#[test]
-fn clean_subtree_skipped_in_incremental() {
-    let m = FixedMeasurer;
-    let mut parent = LayoutBox::new(BoxType::Block, block_style(), None);
-    let mut s1 = block_style();
-    s1.height = Dimension::Px(30.0);
-    parent.children = vec![LayoutBox::new(BoxType::Block, s1, None)];
-    parent.dimensions.content.x = 0.0;
-    parent.dimensions.content.y = 0.0;
-
-    // First pass: full incremental layout.
-    let mut cache = StyleCache::new();
-    layout_block_incremental(&mut parent, 480.0, &m, &mut cache);
-
-    // Mark everything clean, then call again -- should be no-op.
-    parent.mark_clean();
-    let old_height = parent.dimensions.content.height;
-    layout_block_incremental(&mut parent, 480.0, &m, &mut cache);
-    assert_eq!(parent.dimensions.content.height, old_height);
-}
-
-#[test]
-fn dirty_child_triggers_relayout() {
-    let m = FixedMeasurer;
-    let mut parent = LayoutBox::new(BoxType::Block, block_style(), None);
-    let mut s1 = block_style();
-    s1.height = Dimension::Px(30.0);
-    parent.children = vec![LayoutBox::new(BoxType::Block, s1, Some(1))];
-    parent.dimensions.content.x = 0.0;
-    parent.dimensions.content.y = 0.0;
-
-    let mut cache = StyleCache::new();
-    layout_block_incremental(&mut parent, 480.0, &m, &mut cache);
-    parent.mark_clean();
-
-    // Dirty the child and change its height.
-    parent.children[0].dirty = true;
-    parent.dirty = true;
-    parent.children[0].style.height = Dimension::Px(60.0);
-    layout_block_incremental(&mut parent, 480.0, &m, &mut cache);
-
-    assert_eq!(parent.dimensions.content.height, 60.0);
-}
-
-// -- style cache --------------------------------------------------
-
-#[test]
-fn style_cache_insert_and_get() {
-    let mut cache = StyleCache::new();
-    assert!(cache.is_empty());
-    let pad = EdgeSizes::new(1.0, 2.0, 3.0, 4.0);
-    let bdr = EdgeSizes::new(5.0, 6.0, 7.0, 8.0);
-    let mar = EdgeSizes::new(9.0, 10.0, 11.0, 12.0);
-    cache.insert_edges(42, pad, bdr, mar);
-    assert_eq!(cache.len(), 1);
-    let (p, b, m) = cache.get_edges(42).expect("cache hit");
-    assert_eq!(*p, pad);
-    assert_eq!(*b, bdr);
-    assert_eq!(*m, mar);
-}
-
-#[test]
-fn style_cache_miss() {
-    let cache = StyleCache::new();
-    assert!(cache.get_edges(99).is_none());
-}
-
-#[test]
-fn style_cache_clear() {
-    let mut cache = StyleCache::new();
-    cache.insert_edges(
-        1,
-        EdgeSizes::default(),
-        EdgeSizes::default(),
-        EdgeSizes::default(),
-    );
-    cache.clear();
-    assert!(cache.is_empty());
-}
-
-#[test]
-fn mark_dirty_propagation() {
-    let mut lb = LayoutBox::new(BoxType::Block, block_style(), None);
-    lb.mark_clean();
-    assert!(!lb.dirty);
-    lb.mark_dirty();
-    assert!(lb.dirty);
-}
-
-#[test]
-fn any_child_dirty_detection() {
-    let mut parent = LayoutBox::new(BoxType::Block, block_style(), None);
-    let mut child = LayoutBox::new(BoxType::Block, block_style(), None);
-    child.dirty = false;
-    parent.children = vec![child];
-    parent.dirty = false;
-    assert!(!any_child_dirty(&parent));
-
-    parent.children[0].dirty = true;
-    assert!(any_child_dirty(&parent));
+        // Narrow, then back: still the same lines.
+        let mut detour = text_block(ws, text);
+        layout_block(&mut detour, 40.0, &m);
+        layout_block(&mut detour, 120.0, &m);
+        assert_eq!(
+            fragments(&once),
+            fragments(&detour),
+            "{ws:?} after a narrow layout"
+        );
+        assert_eq!(
+            once.dimensions.content.height,
+            detour.dimensions.content.height
+        );
+    }
 }
 
 // -- BUG 1: nested padding not double-counted ---------------------

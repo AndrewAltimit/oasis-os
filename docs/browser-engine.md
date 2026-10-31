@@ -21,7 +21,7 @@ without layout, paint or QuickJS:
 | `oasis-css` | CSS tokenizer, parser, cascade, computed values, animations / transitions | `oasis-html`, `oasis-types` |
 | `oasis-http` | `Url`, HTTP/1.1 + HTTP/2, Gemini framing, cookies, cache, CSP, IO thread, VFS loader | `oasis-net`, `oasis-vfs`, `oasis-types` |
 | `oasis-js` | QuickJS-NG engine (`JsEngine`), console, timers, `fetch` plumbing, Web Storage | `rquickjs` |
-| `oasis-browser` | layout, paint, `BrowserWidget`, forms, JS DOM bindings, `.gmi` parser / renderer, images, fonts, SVG, canvas | all of the above (`oasis-js` behind `javascript`) |
+| `oasis-browser` | layout, paint, `BrowserWidget`, forms, JS DOM bindings, `.gmi` parser + HTML translation, images, fonts, SVG, canvas | all of the above (`oasis-js` behind `javascript`) |
 
 Inside `oasis-browser` the larger subsystems are directories:
 `layout/` (block, inline, flex, grid, table, multicol, positioning),
@@ -45,27 +45,38 @@ directly.
 
 - **HTTP/1.1 + HTTP/2** — ALPN-negotiated `h2` over rustls. Full HPACK
   (RFC 7541) with static + dynamic table, integer codec, string
-  literals, and Huffman decoder (verified against RFC Appendix C).
+  literals, and a canonical-code Huffman decoder (verified against RFC
+  Appendix C); header values that are not UTF-8 decode lossily.
   Sync frame layer (RFC 9113) handles HEADERS/CONTINUATION reassembly,
-  DATA flow control via `WINDOW_UPDATE`, PING/PONG, graceful GOAWAY,
-  and `PUSH_PROMISE` refusal. One request per connection — no
-  multiplexing, but unblocks every CDN that hard-requires `h2` for the
-  initial GET. DoS caps: frames over the advertised 1 MiB
-  `MAX_FRAME_SIZE` are refused (GOAWAY `FRAME_SIZE_ERROR`) before their
-  payload is allocated, a HEADERS + CONTINUATION block over 64 KiB gets
-  GOAWAY `ENHANCE_YOUR_CALM`, and HPACK output is capped at the
-  advertised 64 KiB `MAX_HEADER_LIST_SIZE` (GOAWAY `COMPRESSION_ERROR`).
+  DATA flow control via `WINDOW_UPDATE` (crediting padding too),
+  PING/PONG, graceful GOAWAY, and `PUSH_PROMISE` refusal; request bodies
+  (up to the 64 KiB default send window) go out as 16 KiB DATA frames.
+  One request per connection — no multiplexing, but unblocks every CDN
+  that hard-requires `h2` for the initial GET. DoS caps: frames over the
+  advertised 1 MiB `MAX_FRAME_SIZE` are refused (GOAWAY
+  `FRAME_SIZE_ERROR`) before their payload is allocated, a HEADERS +
+  CONTINUATION block over 64 KiB gets GOAWAY `ENHANCE_YOUR_CALM`, as do
+  more than 1024 frames without response progress (PING / SETTINGS /
+  empty-DATA floods), and HPACK output is capped at the advertised
+  64 KiB `MAX_HEADER_LIST_SIZE` (GOAWAY `COMPRESSION_ERROR`).
 - **HTTP/1.1 framing** (`oasis-http/src/http1.rs`) is shared by the desktop and
   PSP clients: header lines are parsed (not substring-sniffed) to pick
   `Content-Length` / chunked framing, and the chunked terminator is
-  found by walking the chunk sizes.
+  found by walking the chunk sizes. Interim `1xx` heads (`103 Early
+  Hints`) are skipped (they count against the 16 KiB header cap), and
+  `204` / `304` responses and `HEAD` answers end with their head even
+  when they carry a `Content-Length`. The desktop client gives one
+  response at most 60 s (each read 15 s), sets a write timeout, and
+  tries every resolved address in turn.
 - **URLs** — network-scheme URLs are normalized at parse time: host
   lower-cased, `user:pw@` split into `Url::userinfo` (never sent),
   default port elided, `\` treated as `/`. Relative and absolute-path
   references are resolved with RFC 3986 dot-segment removal (`..` never
   climbs above `/`, directory references keep their trailing `/`).
   `Url::origin()` is the one origin used by CSP `'self'`, `fetch()` CORS
-  and Web Storage.
+  and Web Storage. `data:` URLs (`loader::parse_data_uri`) percent-decode
+  to raw bytes (`+` stays `+`); scheme, media type and `;base64` are
+  case-insensitive.
 - **Body caps** — response bodies are capped at 8 MB on desktop (2 MB on
   PSP), and gzip / deflate / brotli bodies are decoded through the same
   limit on HTTP/1.1 and HTTP/2, so a decompression bomb errors out.
@@ -130,11 +141,64 @@ directly.
 
 ## HTML parser
 
-- Full WHATWG tokenizer + tree builder: adoption agency algorithm,
-  foster parenting, `<template>` with full DocumentFragment scope
-  isolation (form + insertion mode), foreign content subset
-  (SVG/MathML), parser error reporting.
-- Vendored-subset `html5lib-tests` harness for conformance.
+- WHATWG tokenizer + tree builder (§13.2): every insertion mode except
+  the frameset ones, including in caption / column group / select /
+  select in table / head noscript and "in template" with its stack of
+  template insertion modes (`<template><tr><td>` builds a row; template
+  contents are the `<template>`'s children, not a DocumentFragment).
+  The active formatting list has markers (cells, captions, templates,
+  `applet` / `object` / `marquee`), reconstruction and the adoption
+  agency follow the spec (namespace-aware special category, the common
+  ancestor foster-parented out of tables), and foster parenting runs
+  the in-body rules at the "appropriate place for inserting a node".
+  `textarea`, `xmp`, `iframe`, `noembed` and (scripting on) `noscript`
+  in body fill through the `Text` mode.
+- Quirks mode: the DOCTYPE's public / system identifiers select
+  no-quirks, limited-quirks or quirks mode (`Document::quirks_mode`;
+  no DOCTYPE is quirks). The tree builder applies the one parsing
+  difference (in quirks mode `<table>` does not close an open `<p>`);
+  CSS has no quirks-mode rules.
+- Foreign content: the builder tracks each element's namespace (the DOM
+  does not store it). SVG `foreignObject` / `desc` / `title`, MathML
+  `annotation-xml encoding="text/html"` and the MathML text elements
+  are integration points whose content parses as HTML; SVG tag and
+  attribute names get their camelCase back; HTML breakout pops to the
+  nearest HTML element or integration point.
+- `TreeBuilder::parse_with(html, ParseOptions { scripting })` lets the
+  tree builder drive the tokenizer, as the spec does: raw-text / RCDATA
+  / script-data / PLAINTEXT states only for HTML elements, CDATA
+  sections only in foreign content, and `<noscript>` raw text only with
+  scripting on. `load_html` passes the `javascript` feature, so builds
+  without JS render `<noscript>` content. The pre-tokenized
+  `TreeBuilder::build(Tokenizer::new(..).tokenize())` path remains
+  (`innerHTML`, benches) and picks states by tag name. Script data
+  implements the escaped / double-escaped states
+  (`<!-- document.write("<script>…</script>") -->` stays one script).
+- Input preprocessing: CR LF / CR become LF and NUL becomes U+FFFD.
+  Character references: numeric ones map C1 controls through
+  Windows-1252 (`&#150;` is `–`), `&#;` stays literal. Named references
+  come from a ~300-entry table (`entities.rs`: all of HTML 4 plus common
+  HTML5 names such as `&check;` and the ASCII punctuation names), not
+  the full HTML list. Without a `;` only the legacy Latin-1 names match,
+  as the longest prefix (`&copy2024` is `©2024`, `&mdash` stays
+  literal), and in attributes not even those when an alphanumeric or
+  `=` follows (`?a=1&copy=2`).
+- Hostile-input bounds: at most 256 attributes per tag (duplicates
+  dropped, first wins), 100 000 nodes, open elements and DOM depth both
+  capped at `MAX_NESTING_DEPTH` (256; `MAX_DOM_DEPTH` = 257 including
+  children appended at the cap), and a 200 000-attribute budget for the
+  formatting-element clones the adoption agency and reconstruction make.
+  End tags without a dedicated rule follow the spec walk, so a stray
+  `</div>` or `</span>` cannot close an enclosing table cell.
+- Vendored-subset `html5lib-tests` harness for conformance
+  (`tests/fixtures/html5lib/*.dat`, each case run through both entry
+  points; DOCTYPE lines skipped, template `content` dumped as html5lib
+  does, `#script-off` honoured).
+- Speed: the data state emits one character token per text run (not
+  per character), and the tree builder avoids per-tag allocations;
+  `cargo bench -p oasis-html` has tokenizer, tree-builder (`build_only`
+  excludes the token clone), full-parse and pull-parser
+  (`html_pull_parse`, plain and table-heavy) benches.
 
 ## CSS cascade & selectors
 
@@ -144,14 +208,25 @@ directly.
   most 16 imported URLs per page). `@import` in inline `<style>` is not
   followed.
 
+- Tokenizer follows CSS Syntax for escapes (`\f101` in strings,
+  `.md\:flex` in selectors), non-ASCII identifiers and unquoted
+  `url(images/a.png)` / `url(data:…;base64,…)`.
 - Viewport-aware `@media` / `@supports` queries — window dimensions
   threaded into `Stylesheet::parse_with_viewport` so desktop
-  breakpoints no longer collapse to the 480x272 default.
+  breakpoints no longer collapse to the 480x272 default. `em` / `rem`
+  breakpoints use the 16 px initial font size. At-rules nest inside
+  each other (`@media { @supports { … } }`).
 - `var()` custom properties, `calc()`. `var()` is substituted at
   computed-value time anywhere in a value (`calc(var(--gap) * 2)`,
   `rgb(var(--r), 0, 0)`, gradients, shorthands) and re-parsed; names
   are case-sensitive, cycles and missing references without fallback
-  are invalid at computed-value time (`unset` semantics).
+  are invalid at computed-value time (`unset` semantics). Expansion is
+  bounded: 64 KiB per value and 1 MiB per element's custom-property
+  map.
+- Hostile-stylesheet bounds: rule bodies and at-rule blocks nest at
+  most 32 deep, `calc()` parentheses 32 deep, a flattened nested rule
+  carries at most 1024 selectors of at most 64 compounds, `repeat()`
+  grids at most 1000 tracks, and 50 000 rules per sheet.
 - `html { font-size: 62.5% }` resolution — the html element only uses
   the CSS "medium" 16 px baseline; `rem` units track html's computed
   font-size via a thread-local cell.
@@ -161,20 +236,49 @@ directly.
   `ROOT_FONT_SIZE`.
 - CSS length units: `px`, `em`, `rem`, `pt`, `ex`, `ch` (the latter
   two resolve to `0.5em`).
-- CSS Nesting (`&` selector with parse-time desugaring).
+- CSS Nesting (`&` selector with parse-time desugaring); declarations
+  directly inside a nested `@media` apply to the parent selector.
 - Right-to-left selector matching with backtracking, so `A > B C`
   matches through an outer `B` when the nearest `B` doesn't fit
   (Servo-style failure kinds keep it linear in practice). Each
   selector-vs-element match has a 16k-step traversal budget, shared
-  with `:has()` subtree scans and charged for sibling-list scans;
-  running out counts as no match for the whole selector, `:not()`
-  included.
+  with `:has()` subtree scans and charged for sibling-list scans, plus
+  a 128k-node allowance for the sibling scans of structural
+  pseudo-classes (`:nth-child()`, `:last-of-type`, ...); running out
+  counts as no match for the whole selector, `:not()` included.
 - `:has()` relational pseudo-class with `>`/`+`/`~` leading
   combinators, scope-bounded inner combinators.
-- Selectors Level 4 `:not(a, b, c)` list form.
+- Selectors Level 4 `:is()` / `:where()` / `:not()` with complex
+  selector lists (`:where(.prose > p)`, `:not(.a .b)`; `:is()` /
+  `:where()` forgiving, an invalid `:not()` entry matches nothing),
+  specificity of the most specific argument, and `&` inside them in
+  nested rules (`.a { :where(& > p) {} }`).
+- Cascade origins: the built-in UA sheet is its own origin below
+  presentational hints (`cellpadding`, `align`, ...) and every author
+  rule, layered or not; `!important` reverses the order (important UA
+  beats important inline beats important author).
 - `@layer` cascade layers — statement / named-block / anonymous-block
   forms, cross-stylesheet name merging, factored into the cascade
-  sort with `!important` inversion.
+  sort with `!important` inversion. Nested layers are qualified
+  (`@layer a { @layer b }` is `a.b`) and ordered as a tree (CSS Cascade
+  5): sublayers sort before their parent's own rules, and a sublayer
+  declared late stays inside its parent's slot (`@layer a, b;
+  @layer a.c` orders `a.c < a < b`), across stylesheets too.
+- CSS-wide keywords: `inherit` takes the parent's value for
+  non-inherited properties too (`background-color`, `width`, `border`,
+  `display`, ...), and on shorthands (`border`, `background`, `font`,
+  `outline`, `list-style`, `border-radius`, `flex`) reaches every
+  longhand; `all: unset | initial | inherit` resets every modelled
+  property but `direction`. `revert` rolls back to the UA value and
+  `revert-layer` to the previous cascade layer (`unset` when there is
+  none). On custom properties `initial` is the guaranteed-invalid value
+  (so `var(--x, fallback)` falls back), `inherit` / `unset` take the
+  parent's value. The `flex` shorthand implements every form of Flexbox 1
+  §7.1.1 (`auto`, `none`, `initial`, `<grow> <shrink>? || <basis>`).
+- Attribute selectors: all six operators, the `i` / `s` case flags, and
+  HTML's case-insensitive attribute values (`[type=checkbox]` matches
+  `type="CHECKBOX"`); empty `^=` / `$=` / `*=` / `~=` values and
+  malformed selectors match nothing.
 - Colours: `#rgb[a]` / `#rrggbb[aa]`, all 148 CSS named colours,
   `rgb/rgba`, `hsl/hsla`, `oklch/oklab`, `color(srgb | srgb-linear |
   display-p3)`, `color-mix(in srgb | oklch | oklab | hsl |
@@ -197,22 +301,54 @@ directly.
   one-pass shrink-to-fit (`min(max-content, available)`): children
   lay out at the containing width, then `content.width` clamps down
   to the rightmost child border-box edge. A float inside a padded
-  parent lands at the parent's content edge.
+  parent lands at the parent's content edge. A float never starts above
+  an earlier float's top (§9.5.1 rule 5).
+- **Flexbox** (`layout/flex.rs`): direction, wrap, `order`, grow /
+  shrink, `flex-basis` (or `width` / `height`), `gap`, `justify-content`,
+  `align-items` / `align-self`, `align-content` and main-axis auto
+  margins. A definite basis (`px`, or `%` of the container's main size,
+  in the item's `box-sizing`) is the base size as is; a content-sized
+  item (`width: auto`, no basis) takes its max-content width clamped to
+  the space available (fit-content), measured from the box tree without
+  a layout (`layout/intrinsic.rs`, cached per box for one layout pass),
+  so block children no longer count as full width. Columns are as tall
+  as their items unless the container has a definite height, which
+  `flex-grow` then fills and against which a column's `flex-basis`
+  resolves; a single-line container gives its line the container's
+  cross size. Inline children (a bare text run, `<a>` / `<span>`) are
+  wrapped into anonymous items that carry their flex properties;
+  whitespace-only runs are dropped. A row item is laid out once, at its
+  resolved size (a column item again only when flexing changed its
+  height), then translated into place: nesting is linear in depth. The
+  resolved size reaches the item through `LayoutBox::sizing`, never its
+  style, so a relayout sees the author's sizes.
 - **CSS Grid.** Paren-aware track lists (`repeat(3, minmax(0, 1fr))`,
   `repeat(2, 1fr 2fr)`, `%` / `em` / `min-content` / `max-content` /
   `fit-content()` tracks), `repeat(auto-fill | auto-fit, ...)` resolved
   from the container width (auto-fit collapses empty tracks), line
   placement with `span`, negative lines and `a / b` syntax, named
-  areas, and row/column auto-flow including `dense`. Subgrid is not
-  supported. See `crates/oasis-browser/docs/layout.md`.
+  areas, and row/column auto-flow including `dense`. Intrinsic column
+  tracks size from the items' max-content contributions (min-content is
+  not distinguished). Subgrid is not supported. See
+  `crates/oasis-browser/docs/layout.md`.
+- **Relayout.** `layout::block::relayout_tree` lays a built tree out
+  again in place (after images decode, keeping canvas state and
+  textures) with exactly the geometry of a fresh build: inline layout
+  keeps the content it was built from (`LayoutBox::inline_source`)
+  instead of re-reading its own line fragments, and a differential test
+  (`src/relayout_tests.rs`) checks every corpus fixture after a
+  same-width relayout, a detour through another width and an image-size
+  change. There is no partial (dirty-subtree) relayout.
 - **Inter-element whitespace.** A text node containing only whitespace
   between two inline siblings (`<a>x</a>\n<a>y</a>`) emits a single
   `space_width` fragment into the line flow, per CSS 2.1 §16.6.
 - **Multi-column** (`column-count` / `column-width` / `column-gap`):
-  children are distributed across balanced columns.
+  children are distributed across balanced columns; a box that resolves
+  to a single column is laid out as a normal block.
 - **Table layout**: `colspan` / `rowspan` follow HTML's integer parsing
   and limits (1000 / 65534; `rowspan="0"` spans to the last row), and a
-  span is clamped to the rows that exist. Occupancy is tracked per
+  span is clamped to the rows that exist. A table has at most 1000
+  columns in total (cells past that are dropped). Occupancy is tracked per
   column, so huge spans cost nothing. Explicit pixel widths on `<td>`/`<th>`
   (pinned — not rescaled when the table has slack) and percent
   widths (`<td width="25%">`) via a pre-pass in `distribute_widths`
@@ -220,9 +356,11 @@ directly.
   fight over the remainder. Replaced children (`<input>`, `<img>`,
   etc.) contribute their intrinsic dimensions to cell preferred
   widths via `replaced_dimensions` instead of collapsing the cell
-  to 0 px. A cell with only inline / replaced children is wrapped
-  in an anonymous block so it gets a real inline formatting
-  context.
+  to 0 px. A cell's content is laid out as a block flow (children
+  stack, margins collapse, floats apply; its inline runs are wrapped in
+  anonymous blocks that take no padding of their own). Whitespace-only
+  text directly inside a table, row group or row is not rendered, even
+  when the table sits in inline content.
 - **Presentational HTML attributes → CSS:** `bgcolor`, `align`,
   `valign`, `nowrap`, `cellspacing`, `cellpadding` (table-level,
   propagated to descendant cells via an ancestor walk),
@@ -247,7 +385,15 @@ directly.
   `width: 1e30px`. Allocations sized by CSS values are bounded by the
   content instead (line boxes per fragment, column buckets per child,
   offscreen layers to the reachable surface; see
-  `paint/display_list/replay.rs`). `tests/pipeline_fuzz.rs` drives the
+  `paint/display_list/replay.rs`). Work driven by CSS / markup values is
+  capped too: grid auto-placement runs under a cell-inspection budget,
+  background / mask tiles per box (4096, larger tiles past that),
+  repeating-gradient repetitions (one per pixel), `blur()` sigma (100 px,
+  running-sum passes), SVG `<pattern>` nesting (2), path points (65 536,
+  coordinates clamped to ±1e7), even-odd triangulation (2048 points) and
+  stroke stepping (clipped to ±16 384 px). Image decoders reject
+  oversized headers before allocating (BMP, GIF frames, WebP via
+  `image::Limits`). `tests/pipeline_fuzz.rs` drives the
   whole parse → style → layout → paint pipeline with generated hostile
   markup and CSS (raise `PROPTEST_CASES` for a longer run).
 
@@ -287,7 +433,14 @@ directly.
 ## Canvas, SVG, compositor
 
 - **Canvas 2D path API** — `beginPath`, `bezierCurveTo`,
-  `quadraticCurveTo`, `fill`, `stroke`, `save`, `restore`.
+  `quadraticCurveTo`, `fill`, `stroke`, `save`, `restore`. Commands are
+  recorded and replayed every paint, so the list is bounded: a
+  `clearRect` covering the canvas drops everything before it (the usual
+  clear-and-redraw animation loop stays constant-size), and commands
+  (16 384), path points (65 536 per path, 2^20 in total) and `save()`
+  depth (1024) are capped. A full list drops further commands and sets
+  `CanvasState::overflowed` until the next full clear, so what is on
+  screen stays put.
 - **SVG** (`svg/`) — `<rect>`, `<circle>`, `<ellipse>`, `<line>`,
   `<polygon>`, `<polyline>`, `<path>` (all commands, Bezier flattening)
   with fill-rule / linecap / linejoin; `<g>` transform composition and
@@ -337,8 +490,10 @@ directly.
   and values scripts write (`input.value = ...`, hidden inputs
   included) are adopted by the `FormManager`, so they are edited and
   submitted.
-- Form GET / POST submission; Enter on any text field submits the
-  owning form.
+- Form GET / POST submission (a GET replaces the action URL's query and
+  keeps its fragment). Enter in a text field (or Confirm on a submit
+  button) submits the owning form after the same validation a click
+  runs; Enter in a `<textarea>` inserts a newline.
 - Forms are rebuilt from the DOM on every page load via
   `populate_forms_from_dom` (walks every `<form>` and registers
   inputs, selects, textareas, and submit buttons with the
@@ -350,9 +505,14 @@ directly.
   `font-style` / `font-display` / `unicode-range` descriptors.
 - `FontFamily` as ordered name stack with generic fallbacks.
 - `fontdue` TTF/OTF rasterizer behind the `web-fonts` feature.
-- `FontRegistry` with CSS font matching, `FontAwareTextMeasurer` for
-  layout, glyph texture cache for rendering, lazy font loading on
-  first tick.
+- `FontRegistry` with CSS font matching and lazy font loading on first
+  tick. Layout measures each text run in the face it is painted in:
+  once faces have loaded, the widget's layout measurer is a
+  `FontAwareTextMeasurer`, which answers `measure_text_font` for a run's
+  `web_font_id` from the registry and falls back to the bitmap font.
+- Glyph texture cache (4096 textures, keyed by font, glyph, size and
+  colour): when full, the least recently drawn eighth is evicted, so an
+  animated text colour no longer flushes every cached glyph at once.
 
 ## JavaScript DOM bindings
 
@@ -363,7 +523,9 @@ to page scripts include:
 - `document.getElementById`, `createElement`, `createTextNode`,
   `querySelector`, `querySelectorAll`.
 - `textContent`, attributes, `innerHTML`, `classList`, `style`
-  property.
+  property. `innerHTML` / `outerHTML` serialize the text of raw-text
+  elements (`<style>`, `<script>`, ...) verbatim and drop tag /
+  attribute names a script created that markup cannot represent.
 - `fetch()` (Promise-based, same-origin / private-network policy — see
   [`oasis-js.md`](oasis-js.md#storage-and-fetch)), `setTimeout` /
   `setInterval`.

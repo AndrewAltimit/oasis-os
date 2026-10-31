@@ -43,8 +43,19 @@ pub const MAX_REDIRECTS: u8 = 5;
 /// TCP connect timeout.
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 
-/// TCP read timeout.
+/// TCP read (and write) timeout: the longest one socket call may stall.
 const READ_TIMEOUT: Duration = Duration::from_secs(15);
+
+/// Upper bound on reading one response. The read timeout only bounds a
+/// single `read`, so without this a server trickling a byte every few
+/// seconds would hold the request (and the I/O thread) for hours.
+/// Extended by one second per [`DEADLINE_BYTES_PER_SEC`] received, so
+/// only transfers slower than that are cut off.
+const RESPONSE_DEADLINE: Duration = Duration::from_secs(60);
+
+/// Throughput above which [`RESPONSE_DEADLINE`] never ends a response
+/// (16 KiB/s: the 8 MB body cap then earns ~8.5 more minutes).
+const DEADLINE_BYTES_PER_SEC: usize = 16 * 1024;
 
 /// Maximum idle connections per host in the connection pool.
 const MAX_CONNS_PER_HOST: usize = 2;
@@ -426,11 +437,6 @@ fn http_request_inner(
     Err(OasisError::Backend("too many redirects".into()))
 }
 
-/// Case-insensitive header lookup (public for use by other loader modules).
-pub fn response_find_header<'a>(headers: &'a [(String, String)], name: &str) -> Option<&'a str> {
-    find_header(headers, name)
-}
-
 // -------------------------------------------------------------------
 // Internals
 // -------------------------------------------------------------------
@@ -471,7 +477,7 @@ fn do_request_with_method(
             return super::http2::h2_request(&mut adapter, method, url, body, extra_headers);
         }
         send_request(&mut adapter, method, url, body, extra_headers, is_https)?;
-        let raw = read_response(&mut adapter)?;
+        let (raw, _) = read_response_framed(&mut adapter, method)?;
         parse_response(&raw)
     } else {
         // Try a pooled connection first, but only for idempotent methods.
@@ -500,7 +506,7 @@ fn do_request_with_method(
 
         let mut stream = tcp_connect(host, port, addr_ok)?;
         send_request(&mut stream, method, url, body, extra_headers, is_https)?;
-        let (raw, framed) = read_response_framed(&mut stream)?;
+        let (raw, framed) = read_response_framed(&mut stream, method)?;
         let resp = parse_response(&raw)?;
         if framed && addr_ok.is_none() {
             maybe_return_to_pool(&resp, host, port, stream);
@@ -522,7 +528,7 @@ fn try_request_on_stream(
     is_https: bool,
 ) -> Result<(HttpResponse, bool)> {
     send_request(stream, method, url, body, extra_headers, is_https)?;
-    let (raw, framed) = read_response_framed(stream)?;
+    let (raw, framed) = read_response_framed(stream, method)?;
     Ok((parse_response(&raw)?, framed))
 }
 
@@ -548,28 +554,52 @@ fn tcp_connect(
 ) -> Result<TcpStream> {
     use std::net::ToSocketAddrs;
 
-    let addr = format!("{host}:{port}")
+    let addrs: Vec<std::net::SocketAddr> = format!("{host}:{port}")
         .to_socket_addrs()
         .map_err(|e| OasisError::Backend(format!("DNS resolution failed: {e}").into()))?
-        .next()
-        .ok_or_else(|| OasisError::Backend(format!("no addresses for {host}:{port}").into()))?;
-
-    if let Some(check) = addr_ok
-        && !check(addr.ip())
-    {
+        .collect();
+    if addrs.is_empty() {
         return Err(OasisError::Backend(
-            format!("connection to {} blocked by request policy", addr.ip()).into(),
+            format!("no addresses for {host}:{port}").into(),
         ));
     }
 
-    let stream = TcpStream::connect_timeout(&addr, CONNECT_TIMEOUT)
-        .map_err(|e| OasisError::Backend(format!("TCP connect failed: {e}").into()))?;
+    // Try every resolved address in order (an unreachable IPv6 answer
+    // must not hide a working IPv4 one). A guarded request refuses the
+    // whole connect if *any* answer is disallowed, so a rebinding DNS
+    // reply cannot mix a public address with a private fallback.
+    if let Some(check) = addr_ok
+        && let Some(bad) = addrs.iter().find(|a| !check(a.ip()))
+    {
+        return Err(OasisError::Backend(
+            format!("connection to {} blocked by request policy", bad.ip()).into(),
+        ));
+    }
 
-    stream
-        .set_read_timeout(Some(READ_TIMEOUT))
-        .map_err(|e| OasisError::Backend(format!("set read timeout: {e}").into()))?;
-
-    Ok(stream)
+    let mut last_err = None;
+    for addr in &addrs {
+        match TcpStream::connect_timeout(addr, CONNECT_TIMEOUT) {
+            Ok(stream) => {
+                for (what, res) in [
+                    ("read", stream.set_read_timeout(Some(READ_TIMEOUT))),
+                    ("write", stream.set_write_timeout(Some(READ_TIMEOUT))),
+                ] {
+                    res.map_err(|e| {
+                        OasisError::Backend(format!("set {what} timeout: {e}").into())
+                    })?;
+                }
+                return Ok(stream);
+            },
+            Err(e) => last_err = Some(e),
+        }
+    }
+    Err(OasisError::Backend(
+        format!(
+            "TCP connect failed: {}",
+            last_err.map_or_else(|| "no address".to_string(), |e| e.to_string())
+        )
+        .into(),
+    ))
 }
 
 /// Send an HTTP/1.1 request with the given method, optional body, and
@@ -632,27 +662,43 @@ fn send_request(
     Ok(())
 }
 
-/// Read the entire HTTP response, stopping when we have the complete body.
+/// Read one HTTP response, stopping when the body is complete, and
+/// report whether it ended at its framed length (`Content-Length` /
+/// chunked terminator / bodiless status).
 ///
 /// With `Connection: keep-alive` the server does not close the connection
 /// after the response, so we cannot rely on EOF. A [`ResponseTracker`]
-/// parses the header lines as they arrive to find the body length
-/// (`Content-Length`, or the chunked terminator) and stops there; without
-/// either, reading runs until EOF or the read timeout.
-fn read_response(stream: &mut impl Read) -> Result<Vec<u8>> {
-    read_response_framed(stream).map(|(raw, _)| raw)
+/// parses the header lines as they arrive to find the body length and
+/// stops there; without one, reading runs until EOF or the read timeout,
+/// and never past [`RESPONSE_DEADLINE`].
+///
+/// Only a framed response's connection may go back to the keep-alive
+/// pool: after a timeout or EOF the response may be truncated, and
+/// leftover bytes would be read as the next request's response.
+fn read_response_framed(stream: &mut impl Read, method: &str) -> Result<(Vec<u8>, bool)> {
+    read_response_framed_with(stream, method, Instant::now)
 }
 
-/// [`read_response`] plus whether the response ended at its framed
-/// length (`Content-Length` / chunked terminator). Only such a
-/// connection may go back to the keep-alive pool: after a timeout or
-/// EOF the response may be truncated, and leftover bytes would be read
-/// as the next request's response.
-fn read_response_framed(stream: &mut impl Read) -> Result<(Vec<u8>, bool)> {
+/// [`read_response_framed`] with an injectable clock (tests).
+///
+/// The deadline is [`RESPONSE_DEADLINE`] plus one second per
+/// [`DEADLINE_BYTES_PER_SEC`] received: a server trickling bytes still
+/// gets cut off after about a minute, while a large body on a slow but
+/// working link (a 6 MB image at 80 KB/s) is not.
+fn read_response_framed_with(
+    stream: &mut impl Read,
+    method: &str,
+    mut now: impl FnMut() -> Instant,
+) -> Result<(Vec<u8>, bool)> {
     let mut buf = Vec::with_capacity(8192);
     let mut chunk = [0u8; 8192];
-    let mut tracker = ResponseTracker::new();
+    let mut tracker = ResponseTracker::for_method(method);
+    let start = now();
     loop {
+        let earned = Duration::from_secs((buf.len() / DEADLINE_BYTES_PER_SEC) as u64);
+        if now().duration_since(start) > RESPONSE_DEADLINE + earned {
+            return Err(OasisError::Backend("HTTP response timed out".into()));
+        }
         match stream.read(&mut chunk) {
             Ok(0) => break,
             Ok(n) => {
@@ -666,6 +712,7 @@ fn read_response_framed(stream: &mut impl Read) -> Result<(Vec<u8>, bool)> {
                     return Ok((buf, true));
                 }
             },
+            Err(e) if e.kind() == io::ErrorKind::Interrupted => {},
             Err(e)
                 if e.kind() == io::ErrorKind::WouldBlock || e.kind() == io::ErrorKind::TimedOut =>
             {
@@ -735,7 +782,7 @@ fn read_decoded_bounded(decoder: impl Read, name: &str) -> Result<Vec<u8>> {
 // -------------------------------------------------------------------
 
 /// Adapts a `Box<dyn NetworkStream>` to `std::io::Read` + `std::io::Write`
-/// so it can be used with the generic `send_request` / `read_response`.
+/// so it can be used with the generic `send_request` / `read_response_framed`.
 pub(super) struct NetworkStreamAdapter(pub(super) Box<dyn NetworkStream>);
 
 impl Read for NetworkStreamAdapter {
@@ -1066,12 +1113,57 @@ mod tests {
         // framed end: that connection would go back to the keep-alive
         // pool with the rest of the body still in flight.
         let partial = b"HTTP/1.1 200 OK\r\nContent-Length: 10\r\n\r\nabc".to_vec();
-        let (raw, framed) = read_response_framed(&mut ThenTimeout(Some(partial))).unwrap();
+        let (raw, framed) = read_response_framed(&mut ThenTimeout(Some(partial)), "GET").unwrap();
         assert!(!framed);
         assert!(raw.ends_with(b"abc"));
         let full = b"HTTP/1.1 200 OK\r\nContent-Length: 3\r\n\r\nabc".to_vec();
-        let (_, framed) = read_response_framed(&mut ThenTimeout(Some(full))).unwrap();
+        let (_, framed) = read_response_framed(&mut ThenTimeout(Some(full)), "GET").unwrap();
         assert!(framed);
+    }
+
+    /// Serves `body_len` body bytes in 8 KiB reads, each taking `step` on
+    /// a fake clock.
+    struct SlowBody {
+        head: Option<Vec<u8>>,
+        left: usize,
+    }
+
+    impl Read for SlowBody {
+        fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+            if let Some(h) = self.head.take() {
+                buf[..h.len()].copy_from_slice(&h);
+                return Ok(h.len());
+            }
+            let n = self.left.min(buf.len());
+            buf[..n].fill(b'x');
+            self.left -= n;
+            Ok(n)
+        }
+    }
+
+    fn read_with_rate(body_len: usize, bytes_per_sec: u64) -> Result<(Vec<u8>, bool)> {
+        let head = format!("HTTP/1.1 200 OK\r\nContent-Length: {body_len}\r\n\r\n");
+        let mut stream = SlowBody {
+            head: Some(head.into_bytes()),
+            left: body_len,
+        };
+        let t0 = Instant::now();
+        let mut calls = 0u64;
+        // Each clock reading follows one 8 KiB read.
+        read_response_framed_with(&mut stream, "GET", move || {
+            calls += 1;
+            t0 + Duration::from_millis(calls * 8192 * 1000 / bytes_per_sec)
+        })
+    }
+
+    #[test]
+    fn slow_but_steady_bodies_outlive_the_response_deadline() {
+        // A 6 MB image at 80 KB/s takes ~77 s: it must load.
+        let (raw, framed) = read_with_rate(6_000_000, 80_000).unwrap();
+        assert!(framed);
+        assert!(raw.len() > 6_000_000);
+        // A trickle (1 KB/s) is still cut off.
+        assert!(read_with_rate(1_000_000, 1_000).is_err());
     }
 
     #[test]

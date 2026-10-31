@@ -5,10 +5,8 @@
 
 use oasis_types::error::{OasisError, Result};
 
-use crate::expander::resolve_path;
 use crate::pipeline::{
-    ChainOp, Redirections, output_to_text, parse_redirect, split_chains, split_pipes,
-    strip_comments, write_redirect,
+    ChainOp, Scan, capture_text, parse_redirect, scan, split_chains, split_pipes, strip_comments,
 };
 use crate::types::{CommandOutput, Environment, MAX_EXEC_DEPTH};
 
@@ -46,6 +44,40 @@ pub(crate) fn merge_outputs(outputs: Vec<CommandOutput>) -> CommandOutput {
         0 => CommandOutput::None,
         1 => merged.pop().unwrap_or(CommandOutput::None),
         _ => CommandOutput::Multi(merged),
+    }
+}
+
+/// Split the leading `NAME=value` words off a simple command: their raw
+/// `(name, value)` text and the command after them (empty when the line is
+/// only assignments). `NAME` must be written plainly (an ASCII letter or
+/// `_`, then letters, digits, `_`); a value runs to the next unquoted
+/// blank (`X="a b"`, `X=$(echo a b)`).
+fn split_assignments(cmd: &str) -> (Vec<(&str, &str)>, &str) {
+    let mut out = Vec::new();
+    if !cmd.contains('=') {
+        return (out, cmd);
+    }
+    let Scan { top, .. } = scan(cmd);
+    let b = cmd.as_bytes();
+    let mut i = 0;
+    loop {
+        while i < b.len() && b[i].is_ascii_whitespace() {
+            i += 1;
+        }
+        let start = i;
+        while i < b.len() && (b[i].is_ascii_alphanumeric() || b[i] == b'_') {
+            i += 1;
+        }
+        if i == start || b[start].is_ascii_digit() || b.get(i) != Some(&b'=') {
+            return (out, &cmd[start..]);
+        }
+        let name = &cmd[start..i];
+        i += 1;
+        let value_start = i;
+        while i < b.len() && !(top[i] && b[i].is_ascii_whitespace()) {
+            i += 1;
+        }
+        out.push((name, &cmd[value_start..i]));
     }
 }
 
@@ -214,7 +246,16 @@ impl CommandRegistry {
             // keeps the previous status until this pipeline finishes.
             self.last_exit_code.set(0);
             let (negate, pipeline) = strip_bang(&segment.command);
-            match self.execute_pipeline(pipeline, env) {
+            let result = match self.operator_alias(pipeline) {
+                Some((name, line)) => {
+                    self.alias_stack.borrow_mut().push(name);
+                    let result = self.execute_nested(&line, env);
+                    self.alias_stack.borrow_mut().pop();
+                    result
+                },
+                None => self.execute_pipeline(pipeline, env),
+            };
+            match result {
                 Ok(output) => {
                     let code = self.last_exit_code.get();
                     self.set_status(if negate { i32::from(code == 0) } else { code });
@@ -258,8 +299,11 @@ impl CommandRegistry {
 
         // Pipeline: chain stdout -> stdin.
         let mut stdin: Option<String> = env.stdin.take();
+        // Errors of the stages before the last: shown, not piped.
+        let mut errors: Vec<String> = Vec::new();
+        let last = pipe_segments.len() - 1;
 
-        for segment in &pipe_segments {
+        for (n, segment) in pipe_segments.iter().enumerate() {
             env.stdin = stdin.take();
             // A pipeline's status is its last command's (`false | echo hi`
             // succeeds), so each segment starts from success.
@@ -270,27 +314,36 @@ impl CommandRegistry {
             // The piped text belongs to this stage only: it must not leak
             // into the commands after the pipeline (`a | b; wc`).
             env.stdin = None;
-            let result = result?;
+            let result = match result {
+                Ok(output) => output,
+                Err(e) if n == last => return Err(e),
+                // A failing earlier stage feeds the next one nothing, as a
+                // POSIX shell does (`cat missing | wc -l` prints 0 and
+                // succeeds); its message is shown, not piped.
+                Err(e) => {
+                    errors.push(format!("error: {e}"));
+                    CommandOutput::Text(String::new())
+                },
+            };
 
             stdin = match result {
-                CommandOutput::Text(text) => Some(text),
-                CommandOutput::Table { headers, rows } => {
-                    let mut out = headers.join(" | ");
-                    for row in &rows {
-                        out.push('\n');
-                        out.push_str(&row.join(" | "));
-                    }
-                    Some(out)
-                },
+                CommandOutput::Text(_) | CommandOutput::Table { .. } => Some(capture_text(&result)),
                 _ => None,
             };
         }
 
         // Return the final output.
-        match stdin {
-            Some(text) => Ok(CommandOutput::Text(text)),
-            None => Ok(CommandOutput::None),
+        let output = match stdin {
+            Some(text) => CommandOutput::Text(text),
+            None => CommandOutput::None,
+        };
+        if errors.is_empty() {
+            return Ok(output);
         }
+        Ok(merge_outputs(vec![
+            CommandOutput::Text(errors.join("\n")),
+            output,
+        ]))
     }
 
     /// Consume a [`CommandOutput::Status`] wrapper: record its exit code
@@ -310,23 +363,6 @@ impl CommandRegistry {
         Ok(output)
     }
 
-    /// Expand a raw redirect target like an argument (quote removal,
-    /// `$VAR`, `$(...)`; no globbing). It must name exactly one word.
-    fn redirect_target(&self, raw: &str, env: &mut Environment<'_>) -> Result<String> {
-        if raw.trim().is_empty() {
-            return Err(OasisError::Command(
-                "syntax error: missing file name after redirection".into(),
-            ));
-        }
-        let mut words = self.expand_words_of(raw.trim(), env)?;
-        match words.len() {
-            1 => Ok(words.pop().map(|w| w.text).unwrap_or_default()),
-            _ => Err(OasisError::Command(
-                format!("{}: ambiguous redirect", raw.trim()).into(),
-            )),
-        }
-    }
-
     /// Execute a command, handling output redirection (`>`, `>>`,
     /// `2>`, `2>>`, `2>&1`).
     fn execute_with_redirect(
@@ -341,128 +377,7 @@ impl CommandRegistry {
             env.stderr.clear();
             return self.execute_single_cmd(cmd_part.trim(), env);
         }
-        self.execute_redirected(cmd_part, &redirections, env)
-    }
-
-    /// [`execute_with_redirect`](Self::execute_with_redirect) for a command
-    /// that has at least one redirection.
-    #[inline(never)]
-    fn execute_redirected(
-        &self,
-        cmd_part: &str,
-        redirections: &Redirections<'_>,
-        env: &mut Environment<'_>,
-    ) -> Result<CommandOutput> {
-        let has_stderr_handling = redirections.stderr.is_some() || redirections.stderr_to_stdout;
-        // Redirect targets get the same variable expansion and quote
-        // removal as arguments (`> $DIR/out.txt`, `> "my file"`).
-        let stdin_target = redirections
-            .stdin
-            .map(|p| self.redirect_target(p, env))
-            .transpose()?;
-        let stdout_target = redirections
-            .stdout
-            .as_ref()
-            .map(|r| Ok::<_, OasisError>((self.redirect_target(r.path, env)?, r.append)))
-            .transpose()?;
-        let stderr_target = redirections
-            .stderr
-            .as_ref()
-            .map(|r| Ok::<_, OasisError>((self.redirect_target(r.path, env)?, r.append)))
-            .transpose()?;
-
-        // Clear stderr before each command.
-        env.stderr.clear();
-
-        // Handle stdin redirect: the file's contents are this command's
-        // stdin only (restored afterwards, so it does not leak onward).
-        let outer_stdin = match stdin_target {
-            Some(stdin_path) => {
-                let resolved = resolve_path(&env.cwd, &stdin_path);
-                let data = env.vfs.read(&resolved).map_err(|e| {
-                    OasisError::Command(
-                        format!("cannot redirect stdin from '{stdin_path}': {e}").into(),
-                    )
-                })?;
-                Some(
-                    env.stdin
-                        .replace(String::from_utf8_lossy(&data).into_owned()),
-                )
-            },
-            None => None,
-        };
-
-        let result = self.execute_single_cmd(cmd_part.trim(), env);
-        if let Some(outer) = outer_stdin {
-            env.stdin = outer;
-        }
-
-        // If no stderr redirect/merge, propagate errors normally.
-        if !has_stderr_handling {
-            let result = result?;
-            if let Some((path, append)) = stdout_target {
-                let text = output_to_text(&result);
-                write_redirect(&text, &path, append, &env.cwd, env.vfs)?;
-                return Ok(CommandOutput::None);
-            }
-            return Ok(result);
-        }
-
-        // Capture error messages into stderr.
-        let (result, captured_stderr, was_error) = match result {
-            Ok(output) => (output, std::mem::take(&mut env.stderr), false),
-            Err(e) => {
-                let mut stderr_text = std::mem::take(&mut env.stderr);
-                if !stderr_text.is_empty() {
-                    stderr_text.push('\n');
-                }
-                stderr_text.push_str(&e.to_string());
-                (CommandOutput::None, stderr_text, true)
-            },
-        };
-
-        // If 2>&1, merge stderr into stdout.
-        let (result, captured_stderr) = if redirections.stderr_to_stdout {
-            if captured_stderr.is_empty() {
-                (result, String::new())
-            } else {
-                let merged = match result {
-                    CommandOutput::Text(t) if !t.is_empty() => {
-                        CommandOutput::Text(format!("{t}\n{captured_stderr}"))
-                    },
-                    CommandOutput::Text(_) | CommandOutput::None => {
-                        CommandOutput::Text(captured_stderr)
-                    },
-                    other => other,
-                };
-                (merged, String::new())
-            }
-        } else {
-            (result, captured_stderr)
-        };
-
-        // Handle stdout redirect.
-        let result = if let Some((path, append)) = stdout_target {
-            let text = output_to_text(&result);
-            write_redirect(&text, &path, append, &env.cwd, env.vfs)?;
-            CommandOutput::None
-        } else {
-            result
-        };
-
-        // Handle stderr redirect.
-        if let Some((path, append)) = stderr_target {
-            write_redirect(&captured_stderr, &path, append, &env.cwd, env.vfs)?;
-        }
-
-        // Preserve exit code: if command errored, keep it as exit
-        // code 1 even though we captured the error text.
-        if was_error {
-            self.last_exit_code.set(1);
-            self.set_variable("?", "1");
-        }
-
-        Ok(result)
+        self.execute_redirected(&cmd_part, &redirections, env)
     }
 
     /// Execute a single command (after chaining, piping, and
@@ -489,8 +404,70 @@ impl CommandRegistry {
             return self.execute_function_def_raw(rest);
         }
 
+        let (assignments, command) = split_assignments(trimmed);
+        if !assignments.is_empty() {
+            return self.execute_with_assignments(&assignments, command, env);
+        }
         let words = self.expand_args(trimmed, env)?;
-        self.run_words(&words, env)
+        self.run_expanded(&words, env)
+    }
+
+    /// [`run_words`](Self::run_words) for a freshly expanded command: a
+    /// `$(...)` in its words must not leave its status behind (`echo
+    /// $(false)` succeeds), so the command starts from success.
+    fn run_expanded(&self, words: &[String], env: &mut Environment<'_>) -> Result<CommandOutput> {
+        if !words.is_empty() {
+            self.last_exit_code.set(0);
+        }
+        self.run_words(words, env)
+    }
+
+    /// `NAME=value ...` before a command (or alone). The values are
+    /// expanded without field splitting or globbing (`X=$Y` keeps the
+    /// spaces of `$Y`). Alone they set shell variables; before a command
+    /// they hold only while it runs, as POSIX prefix assignments do.
+    #[inline(never)]
+    fn execute_with_assignments(
+        &self,
+        assignments: &[(&str, &str)],
+        command: &str,
+        env: &mut Environment<'_>,
+    ) -> Result<CommandOutput> {
+        let mut values = Vec::with_capacity(assignments.len());
+        for &(name, raw) in assignments {
+            values.push((name, self.expand_case_word(raw, env)?));
+        }
+        if command.is_empty() {
+            for (name, value) in &values {
+                self.assign_variable(name, value)?;
+            }
+            return Ok(CommandOutput::None);
+        }
+        let saved: Vec<(&str, Option<String>)> = values
+            .iter()
+            .map(|(name, _)| (*name, self.get_variable(name)))
+            .collect();
+        // The command's words expand first, against the old values
+        // (`X=1 echo $X` prints the previous `$X`, as in a POSIX shell);
+        // the assignments then hold while it runs.
+        let words = self.expand_args(command, env)?;
+        let mut result = Ok(CommandOutput::None);
+        for (name, value) in &values {
+            if let Err(e) = self.assign_variable(name, value) {
+                result = Err(e);
+                break;
+            }
+        }
+        if result.is_ok() {
+            result = self.run_expanded(&words, env);
+        }
+        for (name, old) in saved.into_iter().rev() {
+            match old {
+                Some(v) => self.set_variable(name, &v),
+                None => self.unset_variable(name),
+            }
+        }
+        result
     }
 
     /// Dispatch an already-expanded command: shell builtins (they need
@@ -513,6 +490,9 @@ impl CommandRegistry {
             return self.apply_status((b.run)(self, &args, env));
         }
         if let Some(cmd) = self.commands.get(name_lower.as_str()) {
+            if name_lower == "cd" {
+                return self.run_cd(cmd.as_ref(), &args, env);
+            }
             return self.apply_status(cmd.execute(&args, env));
         }
         if self.functions.borrow().contains_key(name_lower.as_str()) {
@@ -521,5 +501,39 @@ impl CommandRegistry {
         Err(OasisError::Command(
             format!("unknown command: {first}").into(),
         ))
+    }
+
+    /// Run the `cd` command with the forms that need shell variables
+    /// resolved: no argument is `$HOME` (`/` when unset), `-` is `$OLDPWD`
+    /// (printing the new directory, as POSIX shells do). A successful
+    /// change records the previous directory in `OLDPWD`.
+    fn run_cd(
+        &self,
+        cmd: &dyn crate::interpreter::Command,
+        args: &[&str],
+        env: &mut Environment<'_>,
+    ) -> Result<CommandOutput> {
+        let var = |name: &str| self.get_variable(name).filter(|v| !v.is_empty());
+        let (target, announce) = match args {
+            [] => (var("HOME").unwrap_or_else(|| "/".to_string()), false),
+            ["-"] => (
+                var("OLDPWD").ok_or_else(|| OasisError::Command("cd: OLDPWD not set".into()))?,
+                true,
+            ),
+            _ => (String::new(), false),
+        };
+        let previous = env.cwd.clone();
+        let output = if target.is_empty() {
+            cmd.execute(args, env)?
+        } else {
+            cmd.execute(&[target.as_str()], env)?
+        };
+        if env.cwd != previous {
+            self.set_variable("OLDPWD", &previous);
+        }
+        if announce {
+            return Ok(CommandOutput::Text(env.cwd.clone()));
+        }
+        self.apply_status(Ok(output))
     }
 }

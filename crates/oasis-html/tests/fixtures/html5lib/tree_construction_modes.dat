@@ -1,0 +1,242 @@
+#data
+<template><tr><td>x</td></tr></template>
+#errors
+#document
+| <html>
+|   <head>
+|     <template>
+|       content
+|         <tr>
+|           <td>
+|             "x"
+|   <body>
+
+#data
+<body><template><td>a<td>b</template>
+#errors
+#document
+| <html>
+|   <head>
+|   <body>
+|     <template>
+|       content
+|         <td>
+|           "a"
+|         <td>
+|           "b"
+
+#data
+<template><col><col></template>
+#errors
+#document
+| <html>
+|   <head>
+|     <template>
+|       content
+|         <col>
+|         <col>
+|   <body>
+
+#data
+<template><caption>c</caption><tbody><tr></tr></tbody></template>
+#errors
+#document
+| <html>
+|   <head>
+|     <template>
+|       content
+|         <caption>
+|           "c"
+|         <tbody>
+|           <tr>
+|   <body>
+
+#data
+<template><div>a</template>b
+#errors
+#document
+| <html>
+|   <head>
+|     <template>
+|       content
+|         <div>
+|           "a"
+|   <body>
+|     "b"
+
+#data
+<table><template><tr><td>x</template></table>
+#errors
+#document
+| <html>
+|   <head>
+|   <body>
+|     <table>
+|       <template>
+|         content
+|           <tr>
+|             <td>
+|               "x"
+
+#data
+<body><template><b>x
+#errors
+#document
+| <html>
+|   <head>
+|   <body>
+|     <template>
+|       content
+|         <b>
+|           "x"
+
+#data
+<body><template><template><tr></template><p>y</template>z
+#errors
+#document
+| <html>
+|   <head>
+|   <body>
+|     <template>
+|       content
+|         <template>
+|           content
+|             <tr>
+|         <p>
+|           "y"
+|     "z"
+
+#data
+<p><table></table>
+#errors
+#document
+| <html>
+|   <head>
+|   <body>
+|     <p>
+|       <table>
+
+#data
+<!DOCTYPE html><p><table></table>
+#errors
+#document
+| <!DOCTYPE html>
+| <html>
+|   <head>
+|   <body>
+|     <p>
+|     <table>
+
+#data
+<!DOCTYPE html PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN" "http://www.w3.org/TR/html4/loose.dtd"><p><table></table>
+#errors
+#document
+| <!DOCTYPE html "-//W3C//DTD HTML 4.01 Transitional//EN" "http://www.w3.org/TR/html4/loose.dtd">
+| <html>
+|   <head>
+|   <body>
+|     <p>
+|     <table>
+
+#data
+<!DOCTYPE html PUBLIC "-//W3C//DTD HTML 3.2 Final//EN"><p><table></table>
+#errors
+#document
+| <!DOCTYPE html "-//W3C//DTD HTML 3.2 Final//EN" "">
+| <html>
+|   <head>
+|   <body>
+|     <p>
+|       <table>
+
+#data
+<!-- a --!> b
+#errors
+#document
+| <!--  a  -->
+| <html>
+|   <head>
+|   <body>
+|     " b"
+
+#data
+<p><b>a</p><textarea>
+x</textarea>
+#errors
+#document
+| <html>
+|   <head>
+|   <body>
+|     <p>
+|       <b>
+|         "a"
+|     <textarea>
+|       "x"
+
+#data
+<b>a<xmp><i>x</i></xmp>
+#errors
+#document
+| <html>
+|   <head>
+|   <body>
+|     <b>
+|       "a"
+|       <xmp>
+|         "<i>x</i>"
+
+#data
+<body><noscript><p>x</p></noscript>
+#errors
+#script-on
+#document
+| <html>
+|   <head>
+|   <body>
+|     <noscript>
+|       "<p>x</p>"
+
+#data
+<body><noscript><p>x</p></noscript>
+#errors
+#script-off
+#document
+| <html>
+|   <head>
+|   <body>
+|     <noscript>
+|       <p>
+|         "x"
+
+#data
+<table><b><tr><td>aaa</td></tr>bbb</table>ccc
+#errors
+#document
+| <html>
+|   <head>
+|   <body>
+|     <b>
+|     <b>
+|       "bbb"
+|     <table>
+|       <tbody>
+|         <tr>
+|           <td>
+|             "aaa"
+|     <b>
+|       "ccc"
+
+#data
+<table><a>1<p>2</a>3</p>
+#errors
+#document
+| <html>
+|   <head>
+|   <body>
+|     <a>
+|       "1"
+|     <p>
+|       <a>
+|         "2"
+|       "3"
+|     <table>

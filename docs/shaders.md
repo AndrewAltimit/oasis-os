@@ -86,7 +86,10 @@ Each GPU shader has a paired `render_<name>` method on
 
 ## Shader inputs
 
-Every shader gets `u_time` (elapsed seconds) and `u_resolution` (viewport
+Every shader gets `u_time` (elapsed seconds, wrapped modulo
+`oasis_shader::TIME_WRAP_S` = 3600 by `wrap_time` in both renderers, so the
+`f32` math keeps its precision over long uptimes at the cost of one jump an
+hour; a non-finite time counts as 0) and `u_resolution` (viewport
 size). Color slot `i` is `ShaderParams.colors[i]` / uniform `u_color{i+1}`;
 float `key` is `ShaderParams.floats["key"]` / uniform `u_<key>`. Per shader
 (defaults from `registry.rs`):

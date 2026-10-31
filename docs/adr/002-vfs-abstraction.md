@@ -36,16 +36,21 @@ Core code never calls `std::fs` directly. Three implementations exist:
   an error, not a clamp. `RealVfs` then appends the normalized segments to
   its root one by one -- on Windows `\` also separates segments, and a
   segment containing `:` (a drive prefix such as `C:`, which would replace
-  the whole path when joined, or an NTFS `name:stream`) or naming a
-  reserved device (`CON`, `NUL`, `COM1`, `LPT9`, ... with or without an
-  extension) is rejected. It canonicalizes the deepest ancestor that exists
+  the whole path when joined, or an NTFS `name:stream`), ending in `.` or a
+  space (Win32 strips those, so `/secret.` would alias `/secret`), or naming
+  a reserved device (`CON`, `NUL`, `COM1`, `LPT9`, `COM¹`, ... with or
+  without an extension) is rejected. It canonicalizes the deepest ancestor that exists
   on disk and requires it to lie inside the root before appending the
   not-yet-existing tail. A symlink inside the root that points outside is
   therefore rejected even when several path levels below it do not exist yet
   (`mkdir /link/new/x`), instead of letting `create_dir_all` follow it out of
   the sandbox. `remove` and `rename` resolve the *parent* that way but act
   on the final entry itself, so they delete or move a symlink, never its
-  target (deleting `/link` used to delete the file it pointed to).
+  target (deleting `/link` used to delete the file it pointed to) -- also
+  a dangling link or one pointing outside the root. `readdir` follows
+  links like `stat`, so a linked directory lists as a directory; recursive
+  deletes ask the provided `Vfs::is_symlink` (`false` except on `RealVfs`)
+  and remove such a link as a link instead of emptying its target.
 - **Testability.** All file operations are testable with `MemoryVfs` -- no temp
   directories, no cleanup, deterministic behavior.
 - **Embedding.** FFI consumers populate `MemoryVfs` via `oasis_add_vfs_file()`
@@ -70,17 +75,26 @@ against every implementation:
   directory into a file in the in-memory backends, orphaning its subtree),
   `mkdir` fails on an existing file, and nothing is created beneath a file
   (`write /f/x`, `mkdir /f/sub` with `/f` a file). `GameAssetVfs::add_base_*`
-  ignores paths that `normalize_path` rejects or that lie under a base file.
+  ignores paths that `normalize_path` rejects, that lie under a file, or
+  that would change a visible entry's kind; adding content below a removed
+  directory makes that directory visible again.
 - **Permissions.** `MemoryVfs` and `GameAssetVfs` require write permission on
   both parent directories for `rename` (as for `write`, `mkdir` and
-  `remove`). `RealVfs` leaves permission enforcement to the OS.
+  `remove`), and search (execute) permission on every ancestor directory
+  for `read`, `readdir`, `write`, `mkdir`, `remove` and `rename` (`stat` and
+  `exists` don't check it, so a locked directory's own entry stays
+  visible). `set_permissions` is allowed for root and for the entry's
+  owner, who may also give it away; anyone else is refused. `RealVfs`
+  leaves enforcement to the OS and reports owner `user` everywhere, which
+  is the only owner it accepts back.
 - **`GameAssetVfs` layering.** Only overlay entries can be renamed; a
   directory with visible base-layer descendants cannot move; a base entry
   shadowed by the moved overlay entry stays hidden at the old path.
 - **`crates/oasis-vfs/tests/vfs_conformance.rs`** runs one macro-generated
   suite against `MemoryVfs`, `GameAssetVfs` and `RealVfs` (temp dir) --
-  normalization, NUL bytes, entry types, rename -- plus unix-only RealVfs
-  symlink-escape tests (run them on Linux or in the CI Docker image) and
+  normalization, NUL bytes, entry types, rename, the permission round trip
+  -- plus the ownership / search-permission rules for the two in-memory
+  backends, `GameAssetVfs` layering tests, unix-only RealVfs symlink tests (run them on Linux or in the CI Docker image) and
   Windows-only drive / device tests in `real.rs`. New trait-level behaviour
   gets a test there.
 

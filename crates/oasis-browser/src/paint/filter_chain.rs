@@ -33,7 +33,7 @@ use oasis_types::backend::BlendMode;
 /// of its own — and any future additions) are skipped with a `log::warn!`
 /// so the page still renders.
 pub fn apply_filter_chain(pixels: &mut [u8], width: u32, height: u32, filters: &[FilterFunction]) {
-    if filters.is_empty() || pixels.len() < (width * height * 4) as usize {
+    if filters.is_empty() || pixels.len() < width as usize * height as usize * 4 {
         return;
     }
     for f in filters {
@@ -45,7 +45,7 @@ pub fn apply_filter_chain(pixels: &mut [u8], width: u32, height: u32, filters: &
             FilterFunction::Contrast(factor) => apply_contrast(pixels, factor),
             FilterFunction::Sepia(amount) => apply_sepia(pixels, amount),
             FilterFunction::Saturate(factor) => apply_saturate(pixels, factor),
-            FilterFunction::HueRotate(radians) => apply_hue_rotate(pixels, radians),
+            FilterFunction::HueRotate(degrees) => apply_hue_rotate(pixels, degrees),
             FilterFunction::Blur(radius) => apply_blur(pixels, width, height, radius),
         }
     }
@@ -145,12 +145,12 @@ fn apply_saturate(pixels: &mut [u8], factor: f32) {
     }
 }
 
-/// `filter: hue-rotate(angle)` — rotate hue around the luma axis.
-fn apply_hue_rotate(pixels: &mut [u8], radians: f32) {
-    let c = radians.cos();
-    let s = radians.sin();
-    // Standard hue-rotation matrix from CSS filters spec.
-    let m = [
+/// The CSS filter-spec hue-rotation matrix (row-major 3x3, applied to
+/// `[r, g, b]`) for `degrees` (the unit `FilterFunction::HueRotate`
+/// carries). Shared with the per-color approximation in `filters.rs`.
+pub(crate) fn hue_rotate_matrix(degrees: f32) -> [f32; 9] {
+    let (s, c) = degrees.to_radians().sin_cos();
+    [
         0.213 + c * 0.787 - s * 0.213,
         0.715 - c * 0.715 - s * 0.715,
         0.072 - c * 0.072 + s * 0.928,
@@ -160,7 +160,12 @@ fn apply_hue_rotate(pixels: &mut [u8], radians: f32) {
         0.213 - c * 0.213 - s * 0.787,
         0.715 - c * 0.715 + s * 0.715,
         0.072 + c * 0.928 + s * 0.072,
-    ];
+    ]
+}
+
+/// `filter: hue-rotate(angle)` — rotate hue around the luma axis.
+fn apply_hue_rotate(pixels: &mut [u8], degrees: f32) {
+    let m = hue_rotate_matrix(degrees);
     for chunk in pixels.as_chunks_mut::<4>().0.iter_mut() {
         let r = chunk[0] as f32;
         let g = chunk[1] as f32;
@@ -174,87 +179,69 @@ fn apply_hue_rotate(pixels: &mut [u8], radians: f32) {
     }
 }
 
+/// Largest blur standard deviation honoured, in pixels. Past this the
+/// result is visually a flat average anyway, and an unclamped
+/// `blur(1e20px)` would make the box width overflow.
+const MAX_BLUR_SIGMA: f32 = 100.0;
+
 /// `filter: blur(radius)` — 3-pass separable box blur. Approximates a
 /// Gaussian within ~3% for typical radii. RGBA is separated so the
 /// alpha channel is blurred in lockstep with RGB.
+///
+/// Each pass is a running sum, so its cost is independent of the
+/// radius (O(w * h) per pass).
 fn apply_blur(pixels: &mut [u8], width: u32, height: u32, radius: f32) {
-    if radius <= 0.0 || width == 0 || height == 0 {
+    // NaN is rejected too.
+    if radius.is_nan() || radius <= 0.0 || width == 0 || height == 0 {
         return;
     }
     // Convert CSS blur radius (pixels of standard deviation) to an
     // equivalent box size. For 3 box blurs, the classic approximation
     // is `box = round(sqrt(12 * σ² / 3 + 1))`.
-    let sigma = radius;
+    let sigma = radius.min(MAX_BLUR_SIGMA);
     let box_w = ((12.0 * sigma * sigma / 3.0 + 1.0).sqrt().round() as u32).max(1);
-    // `box_w` must be odd for a symmetric box blur.
-    let box_w = if box_w.is_multiple_of(2) {
-        box_w + 1
-    } else {
-        box_w
-    };
-    let half = (box_w / 2) as i32;
+    // A window wider than the image only repeats edge pixels; `half`
+    // stays within the image so the running sums stay small.
+    let half = (box_w / 2).min(width.max(height)) as usize;
+    let (w, h) = (width as usize, height as usize);
     let mut tmp = pixels.to_vec();
     for _ in 0..3 {
-        // Horizontal pass: pixels → tmp.
-        box_blur_h(pixels, &mut tmp, width, height, half);
-        // Vertical pass: tmp → pixels.
-        box_blur_v(&tmp, pixels, width, height, half);
-    }
-}
-
-fn box_blur_h(src: &[u8], dst: &mut [u8], width: u32, height: u32, half: i32) {
-    let w = width as i32;
-    let h = height as i32;
-    for y in 0..h {
-        let row_off = (y as usize) * (width as usize) * 4;
+        // Horizontal pass: pixels → tmp, one row at a time.
+        for y in 0..h {
+            box_blur_line(pixels, &mut tmp, y * w * 4, 4, w, half);
+        }
+        // Vertical pass: tmp → pixels, one column at a time.
         for x in 0..w {
-            let mut r = 0u32;
-            let mut g = 0u32;
-            let mut b = 0u32;
-            let mut a = 0u32;
-            let mut n = 0u32;
-            for dx in -half..=half {
-                let sx = (x + dx).clamp(0, w - 1) as usize;
-                let off = row_off + sx * 4;
-                r += src[off] as u32;
-                g += src[off + 1] as u32;
-                b += src[off + 2] as u32;
-                a += src[off + 3] as u32;
-                n += 1;
-            }
-            let off = row_off + (x as usize) * 4;
-            dst[off] = (r / n) as u8;
-            dst[off + 1] = (g / n) as u8;
-            dst[off + 2] = (b / n) as u8;
-            dst[off + 3] = (a / n) as u8;
+            box_blur_line(&tmp, pixels, x * 4, w * 4, h, half);
         }
     }
 }
 
-fn box_blur_v(src: &[u8], dst: &mut [u8], width: u32, height: u32, half: i32) {
-    let w = width as i32;
-    let h = height as i32;
-    for x in 0..w {
-        for y in 0..h {
-            let mut r = 0u32;
-            let mut g = 0u32;
-            let mut b = 0u32;
-            let mut a = 0u32;
-            let mut n = 0u32;
-            for dy in -half..=half {
-                let sy = (y + dy).clamp(0, h - 1) as usize;
-                let off = sy * (width as usize) * 4 + (x as usize) * 4;
-                r += src[off] as u32;
-                g += src[off + 1] as u32;
-                b += src[off + 2] as u32;
-                a += src[off + 3] as u32;
-                n += 1;
-            }
-            let off = (y as usize) * (width as usize) * 4 + (x as usize) * 4;
-            dst[off] = (r / n) as u8;
-            dst[off + 1] = (g / n) as u8;
-            dst[off + 2] = (b / n) as u8;
-            dst[off + 3] = (a / n) as u8;
+/// Box-blur one line of `len` RGBA pixels starting at byte `start`,
+/// `stride` bytes apart, from `src` into `dst`. The window is
+/// `2 * half + 1` pixels, with out-of-range taps clamped to the edge
+/// pixel.
+fn box_blur_line(src: &[u8], dst: &mut [u8], start: usize, stride: usize, len: usize, half: usize) {
+    let at = |i: isize| start + (i.clamp(0, len as isize - 1) as usize) * stride;
+    let half_i = half as isize;
+    let n = (2 * half + 1) as u32;
+    let mut sum = [0u32; 4];
+    for i in -half_i..=half_i {
+        let off = at(i);
+        for (c, s) in sum.iter_mut().enumerate() {
+            *s += u32::from(src[off + c]);
+        }
+    }
+    for i in 0..len as isize {
+        let out = start + i as usize * stride;
+        for (c, s) in sum.iter().enumerate() {
+            dst[out + c] = (s / n) as u8;
+        }
+        // Slide the window: add the pixel entering on the right, drop
+        // the one leaving on the left.
+        let (add, sub) = (at(i + half_i + 1), at(i - half_i));
+        for (c, s) in sum.iter_mut().enumerate() {
+            *s = *s + u32::from(src[add + c]) - u32::from(src[sub + c]);
         }
     }
 }
@@ -580,6 +567,54 @@ mod tests {
             pixels[10] < 255,
             "right-of-boundary pixel should be lowered"
         );
+    }
+
+    /// The running-sum box blur matches a direct windowed average.
+    #[test]
+    fn running_sum_blur_line_matches_direct_average() {
+        let src: Vec<u8> = (0..40u8)
+            .flat_map(|i| [i * 6, 255 - i * 6, i, 255])
+            .collect();
+        let mut dst = vec![0u8; src.len()];
+        let half = 3usize;
+        box_blur_line(&src, &mut dst, 0, 4, 40, half);
+        for i in 0..40isize {
+            for c in 0..4 {
+                let sum: u32 = (i - half as isize..=i + half as isize)
+                    .map(|j| u32::from(src[j.clamp(0, 39) as usize * 4 + c]))
+                    .sum();
+                assert_eq!(u32::from(dst[i as usize * 4 + c]), sum / 7, "px {i} ch {c}");
+            }
+        }
+    }
+
+    /// Regression: `blur(1e20px)` made the box width `u32::MAX`, so the
+    /// window offset overflowed and each pixel looped ~4e9 times. Huge
+    /// radii now clamp and finish immediately.
+    #[test]
+    fn huge_blur_radius_is_bounded() {
+        let mut pixels = vec![
+            0, 0, 0, 255, //
+            255, 255, 255, 255,
+        ];
+        for radius in [1e20, f32::INFINITY, f32::NAN] {
+            apply_filter_chain(&mut pixels, 2, 1, &[FilterFunction::Blur(radius)]);
+        }
+        assert!(pixels[0] > 0 && pixels[4] < 255, "edge smeared");
+    }
+
+    /// Regression: the per-pixel path treated `hue-rotate`'s degrees as
+    /// radians; it must agree with the per-color approximation.
+    #[test]
+    fn hue_rotate_uses_degrees_like_per_color_path() {
+        let mut pixels = solid_rgba(1, 1, 200, 40, 10, 255);
+        let f = [FilterFunction::HueRotate(180.0)];
+        apply_filter_chain(&mut pixels, 1, 1, &f);
+        let c =
+            crate::paint::filters::apply_filters(oasis_types::backend::Color::rgb(200, 40, 10), &f);
+        for (got, want) in pixels[..3].iter().zip([c.r, c.g, c.b]) {
+            assert!(got.abs_diff(want) <= 1, "{got} vs {want}");
+        }
     }
 
     #[test]

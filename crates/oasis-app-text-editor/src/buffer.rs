@@ -136,6 +136,16 @@ impl EditorBuffer {
         self.highlight.get_mut().invalidate_from(line);
     }
 
+    /// Hash of the text (not of the cache or generation): two buffers
+    /// with the same lines hash alike, so undoing back to the saved text
+    /// can tell the document is clean again.
+    pub fn content_hash(&self) -> u64 {
+        use std::hash::{Hash, Hasher};
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        self.lines.hash(&mut hasher);
+        hasher.finish()
+    }
+
     /// Number of lines in the buffer.
     pub fn line_count(&self) -> usize {
         self.lines.len()

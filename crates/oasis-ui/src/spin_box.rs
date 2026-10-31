@@ -80,8 +80,11 @@ impl SpinBox {
     }
 
     /// Set the current value (clamped to range).
+    ///
+    /// Never panics: `min` / `max` are pub fields, and `f64::clamp` panics
+    /// when `min > max` or either is NaN. A NaN `val` lands on `min`.
     pub fn set_value(&mut self, val: f64) {
-        self.value = val.clamp(self.min, self.max);
+        self.value = val.max(self.min).min(self.max);
     }
 
     /// Increment the value by one step.
@@ -101,7 +104,8 @@ impl SpinBox {
     /// Format the current value as a display string.
     pub fn display_value(&self) -> String {
         if self.decimals == 0 {
-            format!("{}", self.value as i64)
+            // Rounded, like the `decimals > 0` branch (2.7 used to show 2).
+            format!("{}", self.value.round() as i64)
         } else {
             format!("{:.prec$}", self.value, prec = self.decimals as usize)
         }
@@ -235,6 +239,29 @@ mod tests {
         assert_eq!(s.value, 10.0);
         s.set_value(-5.0);
         assert_eq!(s.value, 0.0);
+    }
+
+    /// `f64::clamp` panicked on a swapped (pub-field) range or NaN bound.
+    #[test]
+    fn set_value_survives_bad_ranges() {
+        let mut s = SpinBox::new(0.0, 10.0);
+        s.min = 10.0;
+        s.max = 0.0;
+        s.set_value(5.0);
+        assert_eq!(s.value, 0.0);
+        let mut s = SpinBox::new(f64::NAN, 1.0);
+        s.set_value(0.5);
+        assert_eq!(s.value, 0.5);
+        let mut s = SpinBox::new(0.0, 10.0);
+        s.set_value(f64::NAN);
+        assert_eq!(s.value, 0.0);
+    }
+
+    #[test]
+    fn display_value_rounds_without_decimals() {
+        let mut s = SpinBox::new(0.0, 10.0);
+        s.set_value(2.7);
+        assert_eq!(s.display_value(), "3");
     }
 
     #[test]

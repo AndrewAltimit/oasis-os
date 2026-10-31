@@ -1,6 +1,6 @@
 //! Content-area layout for Paint.
 //!
-//! [`PaintLayout::compute`] is the single source of truth for where the
+//! [`PaintLayout::compute_panned`] is the single source of truth for where the
 //! menu bar, info strip, canvas, palette strip and Open picker sit. Both
 //! the renderer and the click hit-tester call it with the same content
 //! size, so a click on a drawn canvas pixel always maps back to that pixel.
@@ -40,8 +40,12 @@ pub(crate) struct PaintLayout {
     pub menu: Rect,
     /// Info text strip under the menu.
     pub info: Rect,
-    /// On-screen canvas rectangle (canvas pixels * `scale`).
+    /// On-screen canvas rectangle (canvas pixels * `scale`), shifted by
+    /// the pan when the canvas is bigger than [`Self::view`].
     pub canvas: Rect,
+    /// The part of the content area the canvas may draw into (clip to
+    /// it: a panned canvas extends past it).
+    pub view: Rect,
     /// Screen pixels per canvas pixel (>= 1).
     pub scale: u32,
     /// Palette strip at the bottom.
@@ -52,7 +56,8 @@ pub(crate) struct PaintLayout {
 
 impl PaintLayout {
     /// Lay out a `cw` x `ch` content rect whose top-left is `(cx, cy)` for
-    /// a `canvas_w` x `canvas_h` canvas.
+    /// a `canvas_w` x `canvas_h` canvas, unpanned.
+    #[cfg(test)]
     pub(crate) fn compute(
         cx: i32,
         cy: i32,
@@ -60,6 +65,21 @@ impl PaintLayout {
         ch: u32,
         canvas_w: u32,
         canvas_h: u32,
+    ) -> Self {
+        Self::compute_panned(cx, cy, cw, ch, canvas_w, canvas_h, (0, 0))
+    }
+
+    /// The layout with the canvas scrolled by `pan` screen pixels
+    /// (clamped to the canvas overhang; 0 on an axis where it fits).
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn compute_panned(
+        cx: i32,
+        cy: i32,
+        cw: u32,
+        ch: u32,
+        canvas_w: u32,
+        canvas_h: u32,
+        pan: (u32, u32),
     ) -> Self {
         let menu = Rect {
             x: cx,
@@ -90,16 +110,27 @@ impl PaintLayout {
             .max(1);
         let px_w = canvas_w * scale;
         let px_h = canvas_h * scale;
+        let pan_x = pan.0.min(px_w.saturating_sub(area_w)) as i32;
+        let pan_y = pan.1.min(px_h.saturating_sub(area_h)) as i32;
         let canvas = Rect {
-            x: cx + (cw.saturating_sub(px_w) / 2) as i32,
-            y: area_top + (area_h.saturating_sub(px_h) / 2) as i32,
+            // Centred in the view, like `y` (centring in `cw` put a wider
+            // canvas's first columns under the left padding, unreachable).
+            x: cx + PAD as i32 + (area_w.saturating_sub(px_w) / 2) as i32 - pan_x,
+            y: area_top + (area_h.saturating_sub(px_h) / 2) as i32 - pan_y,
             w: px_w,
             h: px_h,
+        };
+        let view = Rect {
+            x: cx + PAD as i32,
+            y: area_top,
+            w: area_w,
+            h: area_h,
         };
         Self {
             menu,
             info,
             canvas,
+            view,
             scale,
             palette,
             swatch_w,
@@ -108,11 +139,32 @@ impl PaintLayout {
 
     /// Canvas pixel under `(x, y)`, if the point is on the canvas.
     pub(crate) fn canvas_pixel_at(&self, x: i32, y: i32) -> Option<(i32, i32)> {
-        if !self.canvas.contains(x, y) {
+        if !self.canvas.contains(x, y) || !self.view.contains(x, y) {
             return None;
         }
         let s = self.scale as i32;
         Some(((x - self.canvas.x) / s, (y - self.canvas.y) / s))
+    }
+
+    /// The pan closest to `pan` that keeps canvas pixel `(px, py)` inside
+    /// [`Self::view`] (scrolls only once the pixel would leave it, so a
+    /// mouse stroke over visible pixels never moves the canvas).
+    pub(crate) fn pan_to_show(&self, pan: (u32, u32), px: i32, py: i32) -> (u32, u32) {
+        let s = self.scale;
+        let axis = |pan: u32, p: i32, view: u32, size: u32| {
+            let start = p.max(0) as u32 * s;
+            let mut pan = pan;
+            if start < pan {
+                pan = start;
+            } else if start + s > pan + view {
+                pan = (start + s).saturating_sub(view);
+            }
+            pan.min(size.saturating_sub(view))
+        };
+        (
+            axis(pan.0, px, self.view.w, self.canvas.w),
+            axis(pan.1, py, self.view.h, self.canvas.h),
+        )
     }
 
     /// Screen rectangle of canvas pixel `(px, py)`.

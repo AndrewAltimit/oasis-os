@@ -819,8 +819,10 @@ fn default_windows_fit_the_screen() {
                 w.frame
             );
             let (_, _, cw, ch) = w.content;
+            // Full default size, or shortened to fill the screen below
+            // the skin's top chrome (WindowManager::set_placement_insets).
             assert!(
-                cw >= 380 && ch >= 220,
+                cw >= 380 && (ch >= 220 || y + fh as i32 == sh as i32),
                 "{skin}: {} content {:?}",
                 w.id,
                 w.content
@@ -883,5 +885,74 @@ fn clicks_in_a_kiosk_window_hit_the_drawn_rows() {
         app.content.scroll + app.content.cursor,
         idx,
         "the click selects the clicked row: {lines:?}"
+    );
+}
+
+/// Desktop-mode taskbar buttons used to start right after the start button,
+/// drawn over the bottom bar's URL plate + USB label (altimit) and over the
+/// media dock's transport pills (psix-hifi). They now sit in the span the
+/// bar leaves free.
+#[test]
+fn taskbar_buttons_clear_bottom_bar_content() {
+    for (skin, left_object) in [("altimit", "bar_usb"), ("psix-hifi", "bar_dock_next")] {
+        let mut h = Harness::new(skin);
+        h.settle();
+        assert!(h.open_app("File Manager"), "{skin}");
+        h.settle();
+        assert_eq!(h.mode(), Mode::Desktop, "{skin}");
+        let (bx, ..) = h
+            .sdi_rect("taskbar_btn_0")
+            .unwrap_or_else(|| panic!("{skin}: taskbar button visible"));
+        let (lx, _, lw, _) = h.sdi_rect(left_object).unwrap();
+        // `bar_usb` is a text object (no width): allow for its label.
+        let left_end = lx + (lw as i32).max(18);
+        assert!(
+            bx >= left_end,
+            "{skin}: button x {bx} overlaps {left_object} ending {left_end}"
+        );
+    }
+}
+
+/// A skin without a start menu (`start_menu = false`, psix-hifi) never
+/// draws it, so its button's hit box must not open it from Dashboard mode
+/// (the desktop path already checked): an invisible menu took the d-pad.
+#[test]
+fn hidden_start_button_does_not_open_the_start_menu() {
+    let mut h = Harness::new("psix-hifi");
+    h.settle();
+    assert!(!h.state().skin.features.start_menu);
+    assert_eq!(h.mode(), Mode::Dashboard);
+    let (w, ht) = h.size();
+    let hit = (0..ht as i32)
+        .rev()
+        .flat_map(|y| (0..w as i32).map(move |x| (x, y)))
+        .find(|&(x, y)| h.state().ui.start_menu.hit_test_button(x, y));
+    let (x, y) = hit.expect("the start button keeps a hit box");
+    h.click(x, y);
+    h.settle();
+    assert!(
+        !h.state().ui.start_menu.open,
+        "an undrawn start menu opened"
+    );
+}
+
+/// Escape in a terminal-only skin (corrupted: no dashboard, no window
+/// manager) has nowhere to go back to: the terminal must stay drawn
+/// (it used to hide until the next terminal change rebuilt it).
+#[test]
+fn escape_in_terminal_only_skin_keeps_the_terminal() {
+    let mut h = Harness::new("corrupted");
+    h.settle();
+    assert_eq!(h.mode(), Mode::Terminal);
+    assert!(
+        h.sdi_rect("terminal_bg").is_some(),
+        "terminal drawn at boot"
+    );
+    h.key(Key::Escape);
+    h.settle();
+    assert_eq!(h.mode(), Mode::Terminal);
+    assert!(
+        h.sdi_rect("terminal_bg").is_some(),
+        "terminal hidden by Escape"
     );
 }

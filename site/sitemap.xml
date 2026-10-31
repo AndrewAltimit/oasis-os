@@ -3,17 +3,18 @@
      (andrewaltimit.github.io/robots.txt), so this sitemap is submitted
      directly (e.g. Search Console) rather than advertised from robots.txt. -->
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
-  <url><loc>https://andrewaltimit.github.io/oasis-os/</loc><lastmod>2026-10-30</lastmod></url>
+  <url><loc>https://andrewaltimit.github.io/oasis-os/</loc><lastmod>2026-10-31</lastmod></url>
   <url><loc>https://andrewaltimit.github.io/oasis-os/demo/</loc><lastmod>2026-10-30</lastmod></url>
   <url><loc>https://andrewaltimit.github.io/oasis-os/blueprint.html</loc><lastmod>2026-10-30</lastmod></url>
-  <url><loc>https://andrewaltimit.github.io/oasis-os/journal/</loc><lastmod>2026-10-30</lastmod></url>
-  <url><loc>https://andrewaltimit.github.io/oasis-os/journal/01-unified-embedded-os.html</loc><lastmod>2026-10-30</lastmod></url>
+  <url><loc>https://andrewaltimit.github.io/oasis-os/crates.html</loc><lastmod>2026-10-30</lastmod></url>
+  <url><loc>https://andrewaltimit.github.io/oasis-os/journal/</loc><lastmod>2026-10-31</lastmod></url>
+  <url><loc>https://andrewaltimit.github.io/oasis-os/journal/01-unified-embedded-os.html</loc><lastmod>2026-10-31</lastmod></url>
   <url><loc>https://andrewaltimit.github.io/oasis-os/journal/02-tls-on-psp.html</loc><lastmod>2026-10-30</lastmod></url>
-  <url><loc>https://andrewaltimit.github.io/oasis-os/journal/03-streaming-video.html</loc><lastmod>2026-10-30</lastmod></url>
+  <url><loc>https://andrewaltimit.github.io/oasis-os/journal/03-streaming-video.html</loc><lastmod>2026-10-31</lastmod></url>
   <url><loc>https://andrewaltimit.github.io/oasis-os/journal/04-rust-psp-sdk.html</loc><lastmod>2026-10-30</lastmod></url>
   <url><loc>https://andrewaltimit.github.io/oasis-os/journal/05-psp-usb-research.html</loc><lastmod>2026-10-30</lastmod></url>
-  <url><loc>https://andrewaltimit.github.io/oasis-os/journal/06-backend-trait-system.html</loc><lastmod>2026-10-30</lastmod></url>
+  <url><loc>https://andrewaltimit.github.io/oasis-os/journal/06-backend-trait-system.html</loc><lastmod>2026-10-31</lastmod></url>
   <url><loc>https://andrewaltimit.github.io/oasis-os/journal/07-psp-media-engine.html</loc><lastmod>2026-10-30</lastmod></url>
-  <url><loc>https://andrewaltimit.github.io/oasis-os/journal/08-remote-dev-automation.html</loc><lastmod>2026-10-30</lastmod></url>
+  <url><loc>https://andrewaltimit.github.io/oasis-os/journal/08-remote-dev-automation.html</loc><lastmod>2026-10-31</lastmod></url>
   <url><loc>https://andrewaltimit.github.io/oasis-os/journal/09-javascript-on-psp.html</loc><lastmod>2026-10-30</lastmod></url>
 </urlset>

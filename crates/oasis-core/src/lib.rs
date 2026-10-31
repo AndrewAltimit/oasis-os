@@ -15,6 +15,17 @@
 //! convenient single-import access. The foundation and subsystem crates
 //! are re-exported as modules (`backend`, `sdi`, `skin`, `vfs`, `wm`, ...)
 //! so hosts can depend on `oasis-core` alone.
+//!
+//! # Feature flags
+//!
+//! - `tls-rustls` (default) — TLS 1.3 through rustls for HTTPS / Gemini
+//!   (`oasis-net/tls-rustls`). The PSP build uses embedded-tls instead.
+//! - `skin-ttf` (default) — `skin lint` parses skin fonts with fontdue
+//!   (`oasis-skin/ttf`); without it only existence and size are checked.
+//! - `javascript` — QuickJS-NG in the browser (`oasis-browser/javascript`).
+//!
+//! The workspace dependency entry turns the defaults off, so hosts name the ones
+//! they want (`oasis-app` enables `tls-rustls` + `skin-ttf`).
 
 // -----------------------------------------------------------------------
 // Re-exports from oasis-types (foundation types and traits)
@@ -67,7 +78,6 @@ pub mod media_page;
 pub mod osk;
 pub mod plugin;
 pub mod script;
-pub mod settings;
 pub mod startmenu;
 pub mod statusbar;
 pub mod taskbar;
@@ -77,7 +87,6 @@ pub mod text_fit;
 pub mod toast;
 pub mod transfer;
 pub mod transition;
-pub mod ui_sound;
 pub mod update;
 pub mod vector_overlay;
 pub mod wallpaper;

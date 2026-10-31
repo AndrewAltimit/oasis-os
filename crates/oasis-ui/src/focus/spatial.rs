@@ -39,12 +39,14 @@ impl Rect {
 
     /// Horizontal centre.
     pub fn cx(&self) -> i32 {
-        self.x.saturating_add(self.w as i32 / 2)
+        // `w / 2` always fits an i32 (`w as i32 / 2` went negative for
+        // widths past i32::MAX).
+        self.x.saturating_add((self.w / 2) as i32)
     }
 
     /// Vertical centre.
     pub fn cy(&self) -> i32 {
-        self.y.saturating_add(self.h as i32 / 2)
+        self.y.saturating_add((self.h / 2) as i32)
     }
 }
 
@@ -315,7 +317,9 @@ impl SpatialFocusManager {
         let mut best: Option<(i64, usize)> = None;
 
         for (i, item) in self.items.iter().enumerate() {
-            if i == cur {
+            // Negative tab_index items are not keyboard-focusable: arrow
+            // keys used to land on them although Tab skips them.
+            if i == cur || item.tab_index < 0 {
                 continue;
             }
             let ix = item.bounds.cx();
@@ -681,6 +685,16 @@ mod tests {
         assert_eq!(sm.navigate(FocusDirection::Next), Some(0));
         assert_eq!(sm.navigate(FocusDirection::Next), Some(2));
         assert_eq!(sm.navigate(FocusDirection::Next), Some(0));
+        // Arrow keys skip it too (Right from A used to land on "skip").
+        assert_eq!(sm.navigate(FocusDirection::Right), Some(2));
+        assert_eq!(sm.navigate(FocusDirection::Left), Some(0));
+    }
+
+    #[test]
+    fn rect_center_handles_huge_sizes() {
+        let r = Rect::new(0, 0, u32::MAX, u32::MAX);
+        assert_eq!((r.cx(), r.cy()), (i32::MAX, i32::MAX));
+        assert_eq!(Rect::new(-10, 4, 20, 2).cx(), 0);
     }
 
     #[test]

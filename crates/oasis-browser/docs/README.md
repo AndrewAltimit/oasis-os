@@ -15,7 +15,7 @@ new to the crate.
 | [`html-and-dom.md`](html-and-dom.md) | HTML5 tokenizer, tree builder quirks, the arena-backed DOM. |
 | [`css-pipeline.md`](css-pipeline.md) | CSS tokenizer, parser, selector matching, cascade, specificity, `@media` / `@supports` / `var()` / `calc()`. |
 | [`css-coverage.md`](css-coverage.md) | The authoritative list of supported CSS properties + known gaps. **Update on every CSS change.** |
-| [`layout.md`](layout.md) | The layout engine: block / inline / flex / grid / table, text shaping, the incremental layout cache. |
+| [`layout.md`](layout.md) | The layout engine: block / inline / flex / grid / table, text shaping, relayout. |
 | [`paint.md`](paint.md) | Display list recording, replay, dirty rect tracking, how the painter talks to `SdiBackend`. |
 | [`loading-and-navigation.md`](loading-and-navigation.md) | Resource loader, IO thread, cache, cookies, CSP, navigation history, forms. |
 | [`javascript.md`](javascript.md) | The QuickJS-NG runtime, DOM bindings, event dispatch, `localStorage`, Canvas 2D. |

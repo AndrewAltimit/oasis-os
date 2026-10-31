@@ -4,7 +4,9 @@
 use oasis_types::backend::NetworkStream;
 use oasis_types::error::{OasisError, Result};
 
-use super::http::{MAX_HEADER_BYTES, headers_too_large, parse_http_head, read_some, write_request};
+use super::http::{
+    MAX_HEADER_BYTES, get_request, headers_too_large, parse_http_head, read_some, write_request,
+};
 use super::{AudioChunk, RadioSource, SourceState};
 use crate::radio::icy::{IcyDemuxer, StreamMetadata, parse_icy_metaint};
 
@@ -85,13 +87,14 @@ impl IcecastSource {
 
     /// Send the HTTP GET request with ICY headers.
     fn send_request(&mut self) -> Result<()> {
-        let request = format!(
-            "GET {} HTTP/1.0\r\nHost: {}\r\nIcy-MetaData: 1\r\n\
-             User-Agent: OASIS_OS/0.1\r\nAccept: */*\r\n\r\n",
-            self.url_path, self.host
-        );
-        write_request(&mut *self.stream, request.as_bytes())
-            .inspect_err(|_| self.state = SourceState::Error)
+        get_request(
+            &self.url_path,
+            &self.host,
+            "1.0",
+            "Icy-MetaData: 1\r\nUser-Agent: OASIS_OS/0.1\r\nAccept: */*\r\n",
+        )
+        .and_then(|request| write_request(&mut *self.stream, request.as_bytes()))
+        .inspect_err(|_| self.state = SourceState::Error)
     }
 
     /// Mark the source failed and drop the connection.

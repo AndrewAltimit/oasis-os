@@ -6,6 +6,7 @@
 
 use oasis_app_core::AppAction;
 use oasis_types::input::{Button, Key, Modifiers};
+use oasis_ui::menu_bar::MenuKey;
 
 use crate::editor::Motion;
 use crate::{EditorMode, PendingClose, TextEditorApp};
@@ -20,9 +21,13 @@ impl TextEditorApp {
         if self.close_requested {
             return Some(AppAction::Exit);
         }
-        // An open drop-down is closed by the legacy path (any button).
-        if self.menu.is_open() {
-            return None;
+        // F10 opens the menu bar; an open menu takes every key.
+        if !matches!(self.mode, EditorMode::ConfirmDiscard | EditorMode::Saving) {
+            match self.menu.handle_key(*key, self.content_size.0) {
+                MenuKey::Ignored => {},
+                MenuKey::Handled => return Some(AppAction::None),
+                MenuKey::Activate(id) => return Some(self.run_menu_action(&id)),
+            }
         }
         match self.mode {
             EditorMode::Normal | EditorMode::Insert => self.key_editing(key, mods),
@@ -154,6 +159,7 @@ impl TextEditorApp {
             Key::Enter | Key::F(3) => self.run_find_next(),
             Key::Escape => self.leave_mode(),
             Key::Tab if self.mode == EditorMode::Replace => {
+                self.query_primed = false;
                 self.replace_focus = !self.replace_focus;
                 self.rebuild_display_lines();
             },
@@ -197,6 +203,7 @@ impl TextEditorApp {
     }
 
     fn run_find_next(&mut self) {
+        self.query_primed = false;
         let found = self.find_next();
         self.status_message = if found {
             None
@@ -207,6 +214,7 @@ impl TextEditorApp {
     }
 
     fn run_replace_next(&mut self) {
+        self.query_primed = false;
         let replaced = self.replace_next();
         let still = self.selected_text().as_deref() == Some(self.find_query.as_str());
         self.status_message = match (replaced, still) {
@@ -218,6 +226,7 @@ impl TextEditorApp {
     }
 
     fn run_replace_all(&mut self) {
+        self.query_primed = false;
         let n = self.replace_all();
         self.status_message = Some(format!("Replaced {n} occurrence(s)."));
         self.rebuild_display_lines();
@@ -235,12 +244,12 @@ impl TextEditorApp {
                 self.mode = EditorMode::Insert;
                 self.insert_char(ch);
             },
-            EditorMode::Find => self.find_query.push(ch),
+            EditorMode::Find => self.type_query(ch),
             EditorMode::Replace => {
                 if self.replace_focus {
                     self.replace_text.push(ch);
                 } else {
-                    self.find_query.push(ch);
+                    self.type_query(ch);
                 }
             },
             EditorMode::GoToLine => {
@@ -254,6 +263,24 @@ impl TextEditorApp {
         self.rebuild_display_lines();
     }
 
+    /// Type into the find query; a primed (carried-over) query is
+    /// replaced, as if it had been selected.
+    fn type_query(&mut self, ch: char) {
+        if std::mem::take(&mut self.query_primed) {
+            self.find_query.clear();
+        }
+        self.find_query.push(ch);
+    }
+
+    /// Backspace in the find query: a primed query is cleared whole.
+    fn backspace_query(&mut self) {
+        if std::mem::take(&mut self.query_primed) {
+            self.find_query.clear();
+        } else {
+            self.find_query.pop();
+        }
+    }
+
     pub(crate) fn handle_backspace_impl(&mut self) {
         match self.mode {
             EditorMode::Insert => self.delete_char(),
@@ -263,14 +290,12 @@ impl TextEditorApp {
                 self.mode = EditorMode::Insert;
                 self.delete_char();
             },
-            EditorMode::Find => {
-                self.find_query.pop();
-            },
+            EditorMode::Find => self.backspace_query(),
             EditorMode::Replace => {
                 if self.replace_focus {
                     self.replace_text.pop();
                 } else {
-                    self.find_query.pop();
+                    self.backspace_query();
                 }
             },
             EditorMode::GoToLine | EditorMode::SaveAs => {
@@ -371,6 +396,7 @@ impl TextEditorApp {
             Button::Confirm => self.run_replace_next(),
             Button::Square => self.run_replace_all(),
             Button::Triangle => {
+                self.query_primed = false;
                 self.replace_focus = !self.replace_focus;
                 self.rebuild_display_lines();
             },
@@ -520,6 +546,58 @@ mod tests {
         assert_eq!(app.cursor_position(), (2, 5));
         key(&mut app, Key::F(3), NONE);
         assert_eq!(app.cursor_position(), (0, 4));
+    }
+
+    #[test]
+    fn reopened_find_replaces_the_old_query() {
+        let mut app = app("alpha beta
+beta alpha");
+        key(&mut app, Key::Char('f'), CTRL);
+        type_str(&mut app, "beta");
+        key(&mut app, Key::Enter, NONE);
+        key(&mut app, Key::Escape, NONE);
+        app.motion(crate::editor::Motion::DocStart, false); // drop the selection
+        // Ctrl+F again: the old query is shown selected, typing replaces it.
+        key(&mut app, Key::Char('f'), CTRL);
+        assert!(app.status_left(false).contains("Find: [beta]"));
+        type_str(&mut app, "alpha");
+        assert_eq!(app.find_query, "alpha");
+        key(&mut app, Key::Enter, NONE);
+        assert_eq!(app.selected_text().as_deref(), Some("alpha"));
+        // Backspace on a primed query clears it whole.
+        key(&mut app, Key::Escape, NONE);
+        key(&mut app, Key::Char('f'), CTRL);
+        app.handle_backspace();
+        assert_eq!(app.find_query, "");
+        // Once edited, typing appends as usual.
+        type_str(&mut app, "al");
+        type_str(&mut app, "pha");
+        assert_eq!(app.find_query, "alpha");
+    }
+
+    #[test]
+    fn undo_back_to_saved_text_is_clean() {
+        let mut vfs = vfs();
+        let mut app = app("base");
+        type_str(&mut app, "X");
+        assert!(app.is_modified());
+        key(&mut app, Key::Char('z'), CTRL);
+        assert_eq!(text(&app), "base");
+        assert!(!app.is_modified(), "undo to the opened text is clean");
+        key(&mut app, Key::Char('y'), CTRL);
+        assert!(app.is_modified(), "redo away from it is dirty");
+        // Save the edited text: undoing from there is dirty, redoing back
+        // to it clean.
+        key(&mut app, Key::Char('s'), CTRL);
+        assert!(app.apply_vfs_ops(&mut vfs));
+        assert!(!app.is_modified());
+        key(&mut app, Key::Char('z'), CTRL);
+        assert!(app.is_modified());
+        key(&mut app, Key::Char('y'), CTRL);
+        assert!(!app.is_modified());
+        // A clean document closes without the unsaved-changes prompt.
+        app.handle_input(&Button::Cancel, &vfs); // Insert -> Normal
+        assert_eq!(app.handle_input(&Button::Cancel, &vfs), AppAction::Exit);
     }
 
     #[test]

@@ -220,11 +220,30 @@ impl TlsProvider for PspTlsProvider {
         }))
     }
 
-    /// Open a raw TCP connection using PSP `sceNetInet*` sockets.
+    /// Resolve via the firmware resolver (one IPv4 address), so the
+    /// browser's private-network check sees what `connect_tcp` will dial.
+    fn resolve_host(&self, host: &str) -> Vec<std::net::IpAddr> {
+        if !crate::network::is_net_initialized() {
+            return Vec::new();
+        }
+        let mut host_bytes: Vec<u8> = host.as_bytes().to_vec();
+        host_bytes.push(0);
+        psp::net::resolve_hostname(&host_bytes)
+            .map(|ip| vec![std::net::IpAddr::from(ip.0)])
+            .unwrap_or_default()
+    }
+
+    /// Open a raw TCP connection using PSP `sceNetInet*` sockets, to an
+    /// address `addr_ok` accepts (`connect_tcp` passes accept-all).
     ///
     /// `std::net::TcpStream` is not supported on PSP, so we use the
     /// native PSP networking API directly.
-    fn connect_tcp(&self, host: &str, port: u16) -> Result<Box<dyn NetworkStream>> {
+    fn connect_tcp_checked(
+        &self,
+        host: &str,
+        port: u16,
+        addr_ok: &dyn Fn(std::net::IpAddr) -> bool,
+    ) -> Result<Box<dyn NetworkStream>> {
         use crate::network::PspNetworkStream;
         use std::mem;
 
@@ -239,6 +258,13 @@ impl TlsProvider for PspTlsProvider {
 
         let ip = psp::net::resolve_hostname(&host_bytes)
             .map_err(|e| OasisError::Backend(format!("DNS resolve '{host}' failed: {e}").into()))?;
+        // Check the address actually dialled (no second lookup, so no
+        // DNS-rebinding window).
+        if !addr_ok(std::net::IpAddr::from(ip.0)) {
+            return Err(OasisError::Backend(
+                format!("{host}:{port} blocked by request policy").into(),
+            ));
+        }
 
         // Create TCP socket.
         // SAFETY: AF_INET=2, SOCK_STREAM=1, protocol=0.

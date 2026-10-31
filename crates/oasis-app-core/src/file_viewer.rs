@@ -25,12 +25,65 @@ pub fn join_path(dir: &str, name: &str) -> String {
     }
 }
 
-/// List a VFS directory, returning display lines.
-pub fn list_directory(vfs: &dyn Vfs, path: &str) -> Vec<String> {
-    let mut lines = Vec::new();
+/// What a [`DirListing`] row stands for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ListingKind {
+    /// A regular file.
+    File,
+    /// A subdirectory.
+    Dir,
+    /// The `..` row (absent at `/`).
+    ParentDir,
+}
 
+/// The real directory entry behind one row of a [`DirListing`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ListingEntry {
+    /// Exact entry name (`..` for the parent row).
+    pub name: String,
+    /// What the entry is.
+    pub kind: ListingKind,
+}
+
+/// A listed directory: the display rows ([`list_directory`]'s format and
+/// order) and, per row, the entry it stands for (`None` for the
+/// informational `(empty directory)` / error rows).
+///
+/// Apps that act on a selected row look the entry up here instead of
+/// parsing it back out of the display text, which breaks for names that
+/// contain the `"  ("` size separator or edge spaces.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct DirListing {
+    /// Display rows: `..`, then `dir/`, then `file  (12 KB)`.
+    pub lines: Vec<String>,
+    /// The entry behind each row of `lines` (same length).
+    pub entries: Vec<Option<ListingEntry>>,
+}
+
+impl DirListing {
+    /// The entry behind row `idx`, if it is one.
+    pub fn entry(&self, idx: usize) -> Option<&ListingEntry> {
+        self.entries.get(idx).and_then(Option::as_ref)
+    }
+
+    fn push(&mut self, line: String, entry: Option<ListingEntry>) {
+        self.lines.push(line);
+        self.entries.push(entry);
+    }
+}
+
+/// List a VFS directory: directories first, then files, each sorted by
+/// name, with a `..` row everywhere but `/`.
+pub fn list_directory_entries(vfs: &dyn Vfs, path: &str) -> DirListing {
+    let mut out = DirListing::default();
+    let entry = |name: &str, kind| {
+        Some(ListingEntry {
+            name: name.to_string(),
+            kind,
+        })
+    };
     if path != "/" {
-        lines.push("..".to_string());
+        out.push("..".to_string(), entry("..", ListingKind::ParentDir));
     }
 
     match vfs.readdir(path) {
@@ -47,27 +100,34 @@ pub fn list_directory(vfs: &dyn Vfs, path: &str) -> Vec<String> {
             files.sort_by(|a, b| a.name.cmp(&b.name));
 
             for d in &dirs {
-                lines.push(format!("{}/", d.name));
+                out.push(format!("{}/", d.name), entry(&d.name, ListingKind::Dir));
             }
             for f in &files {
                 let size = f.size;
-                if size >= 1024 {
-                    lines.push(format!("{}  ({} KB)", f.name, size / 1024));
+                let line = if size >= 1024 {
+                    format!("{}  ({} KB)", f.name, size / 1024)
                 } else {
-                    lines.push(format!("{}  ({size} B)", f.name));
-                }
+                    format!("{}  ({size} B)", f.name)
+                };
+                out.push(line, entry(&f.name, ListingKind::File));
             }
 
             if dirs.is_empty() && files.is_empty() {
-                lines.push("(empty directory)".to_string());
+                out.push("(empty directory)".to_string(), None);
             }
         },
         Err(e) => {
-            lines.push(format!("Error reading directory: {e}"));
+            out.push(format!("Error reading directory: {e}"), None);
         },
     }
 
-    lines
+    out
+}
+
+/// List a VFS directory, returning display lines (the rows of
+/// [`list_directory_entries`]).
+pub fn list_directory(vfs: &dyn Vfs, path: &str) -> Vec<String> {
+    list_directory_entries(vfs, path).lines
 }
 
 /// View an audio file: parse headers and show track metadata.

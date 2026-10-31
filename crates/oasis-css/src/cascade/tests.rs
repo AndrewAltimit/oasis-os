@@ -482,6 +482,7 @@ fn attribute_exists_selector() {
                     name: "data-x".to_string(),
                     op: AttrOp::Exists,
                     value: None,
+                    case_insensitive: false,
                 }],
             },
             None,
@@ -507,6 +508,7 @@ fn attribute_equals_selector() {
                     name: "lang".to_string(),
                     op: AttrOp::Equals,
                     value: Some("en".to_string()),
+                    case_insensitive: false,
                 }],
             },
             None,
@@ -521,6 +523,7 @@ fn attribute_equals_selector() {
                     name: "lang".to_string(),
                     op: AttrOp::Equals,
                     value: Some("fr".to_string()),
+                    case_insensitive: false,
                 }],
             },
             None,
@@ -545,6 +548,7 @@ fn attribute_prefix_selector() {
                     name: "href".to_string(),
                     op: AttrOp::Prefix,
                     value: Some("https".to_string()),
+                    case_insensitive: false,
                 }],
             },
             None,
@@ -569,6 +573,7 @@ fn attribute_substring_selector() {
                     name: "class".to_string(),
                     op: AttrOp::Substring,
                     value: Some("widget".to_string()),
+                    case_insensitive: false,
                 }],
             },
             None,
@@ -583,9 +588,7 @@ fn not_selector() {
     let sel = Selector {
         parts: vec![(
             CompoundSelector {
-                parts: vec![SimpleSelector::Not(vec![CompoundSelector {
-                    parts: vec![SimpleSelector::Type("div".to_string())],
-                }])],
+                parts: vec![SimpleSelector::Not(vec![simple_type_selector("div")])],
             },
             None,
         )],
@@ -753,6 +756,7 @@ fn selector_parsing_attribute() {
             name,
             op: AttrOp::Equals,
             value: Some(val),
+            case_insensitive: true,
         } if name == "type" && val == "text"
     ));
 }
@@ -800,6 +804,7 @@ fn attribute_includes_selector() {
                     name: "class".to_string(),
                     op: AttrOp::Includes,
                     value: Some("bar".to_string()),
+                    case_insensitive: false,
                 }],
             },
             None,
@@ -1559,6 +1564,26 @@ fn text_wrap_defaults_to_wrap() {
     let styles = style_tree(&doc, &[&sheet], &[], &ctx());
     let style = styles[3].as_ref().expect("p has style");
     assert_eq!(style.text_wrap, TextWrap::Wrap);
+}
+
+/// Regression: structural pseudo-classes rescanned (and collected) the
+/// sibling list uncharged for every `:has(~ ..)` candidate, so
+/// `p:has(~ p:nth-last-child(-n+0))` over 4 000 siblings took ~50 s.
+#[test]
+fn structural_checks_inside_has_are_budgeted() {
+    let doc = make_doc(vec![(TagName::P, vec![]); 4000]);
+    let sheet = Stylesheet::parse("p:has(~ p:nth-last-child(-n+0)) { color: red }");
+    let start = std::time::Instant::now();
+    let _ = style_tree(&doc, &[&sheet], &[], &ctx());
+    assert!(
+        start.elapsed() < std::time::Duration::from_secs(30),
+        "{:?}",
+        start.elapsed()
+    );
+    // One check on a long list still matches (separate scan allowance).
+    let doc = make_doc(vec![(TagName::Li, vec![]); 20_000]);
+    let sel = parse_selector("li:nth-child(19999)");
+    assert!(matching::matches_selector(&doc, 3 + 19_998, &sel, &ctx()));
 }
 
 #[test]
@@ -3525,4 +3550,458 @@ fn bgcolor_attribute_is_byte_safe_and_knows_all_names() {
     assert_eq!(bg(3), Color::rgba(0, 0, 0, 0));
     assert_eq!(bg(4), Color::rgb(0x46, 0x82, 0xB4));
     assert_eq!(bg(5), Color::rgb(0, 255, 0));
+}
+
+// -- Spec follow-ups: layers, inherit, flex, attribute flags, pseudo vars
+
+mod spec_followups {
+    use super::*;
+    use crate::values::{BorderStyle, Dimension};
+    use oasis_html::tokenizer::Tokenizer;
+    use oasis_html::tree_builder::TreeBuilder;
+
+    fn styles_of(html: &str, sheets: &[&str], id: &str) -> ComputedStyle {
+        let doc = TreeBuilder::build(Tokenizer::new(html).tokenize());
+        let parsed: Vec<Stylesheet> = sheets.iter().map(|c| Stylesheet::parse(c)).collect();
+        let refs: Vec<&Stylesheet> = parsed.iter().collect();
+        let styles = style_tree(&doc, &refs, &[], &ctx());
+        let node = doc.get_element_by_id(id).expect("element with id");
+        styles[node].clone().expect("element style")
+    }
+
+    fn color_of(html: &str, css: &str, id: &str) -> Color {
+        styles_of(html, &[css], id).color
+    }
+
+    const P: &str = r#"<p id="t">x</p>"#;
+    const RED: Color = Color::rgb(255, 0, 0);
+    const BLUE: Color = Color::rgb(0, 0, 255);
+
+    #[test]
+    fn layer_own_rules_beat_its_sublayers() {
+        let css = "@layer a { p { color: red } @layer b { p { color: blue } } }";
+        assert_eq!(color_of(P, css, "t"), RED);
+    }
+
+    #[test]
+    fn late_sublayer_does_not_outrank_later_sibling() {
+        // Order is a.c < a < b, so `b` wins even though `a.c` is last.
+        let css = "@layer a, b; @layer b { p { color: red } } \
+                   @layer a.c { p { color: blue } }";
+        assert_eq!(color_of(P, css, "t"), RED);
+    }
+
+    #[test]
+    fn sublayer_order_merges_across_sheets() {
+        let a = "@layer base { p { color: red } }";
+        let b = "@layer base.reset { p { color: blue } }";
+        assert_eq!(styles_of(P, &[a, b], "t").color, RED);
+    }
+
+    #[test]
+    fn anonymous_layers_are_distinct_per_sheet() {
+        // Two sheets' first anonymous layers are different layers; the
+        // second sheet's comes later and wins.
+        let a = "@layer { p { color: red } }";
+        let b = "@layer x; @layer { p { color: blue } }";
+        assert_eq!(styles_of(P, &[a, b], "t").color, BLUE);
+    }
+
+    #[test]
+    fn inherit_copies_non_inherited_properties() {
+        let html = r#"<div id="p"><span id="t">x</span></div>"#;
+        let css = "#p { background-color: blue; width: 120px; border: 3px solid red; \
+                   padding: 7px; display: flex } \
+                   #t { background-color: inherit; width: inherit; border: inherit; \
+                   padding: inherit; display: inherit }";
+        let s = styles_of(html, &[css], "t");
+        assert_eq!(s.background_color, BLUE);
+        assert_eq!(s.width, Dimension::Px(120.0));
+        assert!((s.border_left_width - 3.0).abs() < 0.01);
+        assert_eq!(s.border_top_style, BorderStyle::Solid);
+        assert_eq!(s.border_right_color, RED);
+        assert!((s.padding_bottom - 7.0).abs() < 0.01);
+        assert_eq!(s.display, Display::Flex);
+    }
+
+    #[test]
+    fn all_unset_resets_every_property() {
+        let html = r#"<div id="p"><span id="t">x</span></div>"#;
+        let css = "#p { color: blue } \
+                   #t { color: red; padding: 5px; background-color: red; display: block; \
+                   border: 2px solid red } \
+                   div #t { all: unset }";
+        let s = styles_of(html, &[css], "t");
+        assert_eq!(s.color, BLUE, "inherited properties inherit");
+        assert_eq!(s.background_color, Color::rgba(0, 0, 0, 0));
+        assert!(s.padding_left.abs() < 0.01);
+        assert!(s.border_top_width.abs() < 0.01);
+        assert_eq!(s.display, Display::Inline);
+        // Later declarations still win over `all`.
+        let css = "#t { all: initial; color: red }";
+        assert_eq!(styles_of(html, &[css], "t").color, RED);
+    }
+
+    #[test]
+    fn unset_still_resets_non_inherited_properties() {
+        let html = r#"<div id="p"><span id="t">x</span></div>"#;
+        let css = "#p { background-color: blue } #t { background-color: unset }";
+        let s = styles_of(html, &[css], "t");
+        assert_eq!(s.background_color, Color::rgba(0, 0, 0, 0));
+    }
+
+    #[test]
+    fn revert_rolls_back_to_the_user_agent_value() {
+        // The "new CSS reset": `all: unset` then `display: revert` must
+        // keep block elements blocks (it made every `<div>` inline).
+        let html = r#"<div id="t">a</div><span id="s">b</span>"#;
+        let css = "* { all: unset; display: revert }";
+        let doc = TreeBuilder::build(Tokenizer::new(html).tokenize());
+        let author = Stylesheet::parse(css);
+        let refs = [crate::default::default_stylesheet(), &author];
+        let styles = style_tree(&doc, &refs, &[], &ctx());
+        let style = |id| {
+            let node = doc.get_element_by_id(id).expect("element with id");
+            styles[node].clone().expect("element style")
+        };
+        assert_eq!(style("t").display, Display::Block);
+        // No UA value for a span's display: `revert` acts as `unset`.
+        assert_eq!(style("s").display, Display::Inline);
+        // Without the UA sheet in the cascade, `revert` is `unset`.
+        assert_eq!(styles_of(html, &[css], "t").display, Display::Inline);
+    }
+
+    #[test]
+    fn flex_shorthand_reaches_the_computed_style() {
+        let html = r#"<div><i id="a"></i><i id="b"></i><i id="c"></i><i id="d"></i></div>"#;
+        let css = "#a { flex: 1 } #b { flex: auto } #c { flex: none } #d { flex: 2 1 0 }";
+        let a = styles_of(html, &[css], "a");
+        assert_eq!((a.flex_grow, a.flex_shrink), (1.0, 1.0));
+        assert_eq!(a.flex_basis, Dimension::Px(0.0));
+        let b = styles_of(html, &[css], "b");
+        assert_eq!(
+            (b.flex_grow, b.flex_shrink, b.flex_basis),
+            (1.0, 1.0, Dimension::Auto)
+        );
+        let c = styles_of(html, &[css], "c");
+        assert_eq!(
+            (c.flex_grow, c.flex_shrink, c.flex_basis),
+            (0.0, 0.0, Dimension::Auto)
+        );
+        let d = styles_of(html, &[css], "d");
+        assert_eq!((d.flex_grow, d.flex_shrink), (2.0, 1.0));
+        assert_eq!(d.flex_basis, Dimension::Px(0.0));
+    }
+
+    #[test]
+    fn flex_shorthand_through_var() {
+        let html = r#"<i id="t"></i>"#;
+        let s = styles_of(html, &[":root { --f: 3 } #t { flex: var(--f) }"], "t");
+        assert_eq!(s.flex_grow, 3.0);
+    }
+
+    #[test]
+    fn attribute_case_flags() {
+        let html = r#"<a id="t" data-k="FooBar" href="/X.PDF">x</a>"#;
+        assert_eq!(color_of(html, "[data-k=foobar i] { color: red }", "t"), RED);
+        assert_eq!(
+            color_of(html, r#"[href$=".pdf" i] { color: red }"#, "t"),
+            RED
+        );
+        assert_ne!(color_of(html, "[data-k=foobar] { color: red }", "t"), RED);
+        assert_ne!(color_of(html, "[data-k=foobar s] { color: red }", "t"), RED);
+        // The flag no longer swallows the rest of the stylesheet.
+        let css = "[data-k=foobar i] { color: blue } a { background-color: red }";
+        assert_eq!(styles_of(html, &[css], "t").background_color, RED);
+    }
+
+    #[test]
+    fn html_enumerated_attributes_match_case_insensitively() {
+        let html = r#"<input id="t" type="CHECKBOX">"#;
+        assert_eq!(color_of(html, "[type=checkbox] { color: red }", "t"), RED);
+        assert_ne!(color_of(html, "[type=checkbox s] { color: red }", "t"), RED);
+    }
+
+    #[test]
+    fn empty_attribute_substring_values_match_nothing() {
+        let html = r#"<a id="t" class="a b" title="x">x</a>"#;
+        for sel in [
+            r#"[title^=""]"#,
+            r#"[title$=""]"#,
+            r#"[title*=""]"#,
+            r#"[class~=""]"#,
+        ] {
+            let css = format!("{sel} {{ color: red }}");
+            assert_ne!(color_of(html, &css, "t"), RED, "{sel}");
+        }
+    }
+
+    #[test]
+    fn malformed_attribute_selector_matches_nothing() {
+        let html = r#"<a id="t" title="x">x</a>"#;
+        assert_ne!(color_of(html, "a[title=x q] { color: red }", "t"), RED);
+        assert_ne!(color_of(html, "a[title%x] { color: red }", "t"), RED);
+    }
+
+    #[test]
+    fn pseudo_element_sees_its_own_custom_properties() {
+        // The `--c` rule sorts *after* `color: var(--c)` (lower
+        // specificity first), so in-order application read a stale value.
+        let html = r#"<p id="t" class="k">x</p>"#;
+        let css = "p { --c: blue } .k::before { content: var(--label); color: var(--c) } \
+                   #t::before { --c: red; --label: 'hi' }";
+        let s = styles_of(html, &[css], "t");
+        let before = s.before_style.expect("::before box");
+        assert_eq!(before.color, RED);
+        assert_eq!(s.before_content.as_deref(), Some("hi"));
+    }
+}
+
+/// Origins and importance (UA vs. presentational hints vs. author),
+/// `revert-layer`, and CSS-wide keywords on custom properties.
+mod origins {
+    use super::*;
+    use crate::parser::Specificity;
+    use matching::{MatchedDeclaration, Origin, cascade_order};
+    use oasis_html::tokenizer::Tokenizer;
+    use oasis_html::tree_builder::TreeBuilder;
+
+    const RED: Color = Color::rgb(255, 0, 0);
+    const BLUE: Color = Color::rgb(0, 0, 255);
+
+    /// Style `id` with the UA sheet followed by `css`.
+    fn ua_styled(html: &str, css: &str, id: &str) -> ComputedStyle {
+        let doc = TreeBuilder::build(Tokenizer::new(html).tokenize());
+        let author = Stylesheet::parse(css);
+        let refs = [default_stylesheet(), &author];
+        let styles = style_tree(&doc, &refs, &[], &ctx());
+        let node = doc.get_element_by_id(id).expect("element with id");
+        styles[node].clone().expect("element style")
+    }
+
+    #[test]
+    fn layered_author_rules_beat_the_user_agent_sheet() {
+        // Unlayered beats layered only *within* the author origin; a UA
+        // `div { display: block }` must lose to any author layer
+        // (Tailwind v4 puts everything in layers).
+        let s = ua_styled(
+            r#"<div id="t">x</div>"#,
+            "@layer base { div { display: inline } }",
+            "t",
+        );
+        assert_eq!(s.display, Display::Inline);
+    }
+
+    #[test]
+    fn presentational_hints_beat_the_user_agent_sheet() {
+        // UA `td { padding: 2px 4px }` must not override `cellpadding`.
+        let html = r#"<table cellpadding="0"><tr><td id="t">x</td></tr></table>"#;
+        let s = ua_styled(html, "", "t");
+        assert_eq!((s.padding_top, s.padding_left), (0.0, 0.0));
+        // ... but author rules still beat the hint.
+        let s = ua_styled(html, "td { padding-left: 3px }", "t");
+        assert_eq!(s.padding_left, 3.0);
+    }
+
+    fn entry(origin: Origin, important: bool, layer: Option<u16>) -> MatchedDeclaration<'static> {
+        MatchedDeclaration {
+            property: "color".into(),
+            value: std::borrow::Cow::Owned(CssValue::Keyword("red".into())),
+            important,
+            origin,
+            specificity: Specificity {
+                inline: 0,
+                ids: 0,
+                classes: 0,
+                types: 0,
+            },
+            source_order: 0,
+            layer,
+        }
+    }
+
+    #[test]
+    fn important_reverses_origin_order() {
+        let ua_important = entry(Origin::UserAgent, true, None);
+        let author_important = entry(Origin::Stylesheet, true, None);
+        let inline_important = entry(Origin::Inline, true, None);
+        let inline = entry(Origin::Inline, false, None);
+        assert!(cascade_order(&author_important, &ua_important).is_lt());
+        assert!(cascade_order(&inline_important, &ua_important).is_lt());
+        assert!(cascade_order(&inline, &author_important).is_lt());
+        // Layered `!important` beats unlayered `!important`; earlier
+        // layers win.
+        let layer0 = entry(Origin::Stylesheet, true, Some(0));
+        let layer1 = entry(Origin::Stylesheet, true, Some(1));
+        assert!(cascade_order(&author_important, &layer0).is_lt());
+        assert!(cascade_order(&layer1, &layer0).is_lt());
+    }
+
+    #[test]
+    fn revert_layer_rolls_back_to_the_previous_layer() {
+        let p = r#"<p id="t">x</p>"#;
+        let css = "@layer a { p { color: red } } @layer b { p { color: blue } \
+                   p { color: revert-layer } }";
+        assert_eq!(ua_styled(p, css, "t").color, RED);
+        // Unlayered `revert-layer` falls back to the layered value.
+        let css = "@layer a { p { color: blue } } p { color: red } p { color: revert-layer }";
+        assert_eq!(ua_styled(p, css, "t").color, BLUE);
+        // Nothing below: behaves as `unset` (inherits the parent's color).
+        let html = r#"<div><p id="t">x</p></div>"#;
+        let css = "div { color: blue } p { color: red; color: revert-layer }";
+        assert_eq!(ua_styled(html, css, "t").color, BLUE);
+    }
+
+    #[test]
+    fn revert_skips_every_author_layer() {
+        let css = "@layer a { div { display: inline } } div { display: revert }";
+        let s = ua_styled(r#"<div id="t">x</div>"#, css, "t");
+        assert_eq!(s.display, Display::Block);
+    }
+
+    #[test]
+    fn important_revert_skips_normal_author_rules_too() {
+        // `revert` rolls back the whole author origin, normal declarations
+        // included: importance is not an origin.
+        let css = "div { display: inline } div { display: revert !important }";
+        let s = ua_styled(r#"<div id="t">x</div>"#, css, "t");
+        assert_eq!(s.display, Display::Block);
+        // Inline `style=""` likewise.
+        let doc = TreeBuilder::build(Tokenizer::new(r#"<div id="t">x</div>"#).tokenize());
+        let node = doc.get_element_by_id("t").expect("element with id");
+        let author = Stylesheet::parse("div { display: inline }");
+        let inline = [(
+            node,
+            crate::parser::parse_inline_style("display: revert !important"),
+        )];
+        let styles = style_tree(&doc, &[default_stylesheet(), &author], &inline, &ctx());
+        let s = styles[node].clone().expect("element style");
+        assert_eq!(s.display, Display::Block);
+    }
+
+    #[test]
+    fn revert_layer_finds_a_var_shorthand_in_a_lower_layer() {
+        // `background: var(--bg)` stays one unexpanded shorthand until
+        // computed-value time; a later longhand `revert-layer` must still
+        // roll back to it, and only for its own longhand.
+        let css = "@layer a { div { background: var(--bg) } } \
+                   div { --bg: red; background-image: none; background-color: revert-layer }";
+        let s = ua_styled(r#"<div id="t">x</div>"#, css, "t");
+        assert_eq!(s.background_color, RED);
+        // A shorthand `revert-layer` (expanded to longhands at parse time)
+        // likewise.
+        let css = "@layer a { p { margin: var(--m) } } p { --m: 3px; margin: revert-layer }";
+        let s = ua_styled(r#"<p id="t">x</p>"#, css, "t");
+        assert_eq!((s.margin_top, s.margin_left), (3.0, 3.0));
+    }
+
+    #[test]
+    fn custom_property_initial_is_guaranteed_invalid() {
+        // The "space toggle": `--x: initial` makes `var()` use its fallback.
+        let css = "p { --x: blue; --x: initial; color: var(--x, red) }";
+        assert_eq!(ua_styled(r#"<p id="t">x</p>"#, css, "t").color, RED);
+    }
+
+    #[test]
+    fn custom_property_inherit_and_unset_take_the_parent_value() {
+        let html = r#"<div class="d"><p id="t">x</p></div>"#;
+        for kw in ["inherit", "unset"] {
+            let css = format!(".d {{ --x: red }} p {{ --x: blue; --x: {kw}; color: var(--x) }}");
+            assert_eq!(ua_styled(html, &css, "t").color, RED, "{kw}");
+        }
+    }
+
+    #[test]
+    fn custom_property_revert_layer() {
+        let css = "@layer a { p { --x: red } } p { --x: blue } p { --x: revert-layer } \
+                   p { color: var(--x, green) }";
+        assert_eq!(ua_styled(r#"<p id="t">x</p>"#, css, "t").color, RED);
+    }
+}
+
+/// Complex selectors inside `:is()` / `:where()` / `:not()`.
+mod complex_functional_pseudo {
+    use super::*;
+    use oasis_html::tokenizer::Tokenizer;
+    use oasis_html::tree_builder::TreeBuilder;
+
+    const RED: Color = Color::rgb(255, 0, 0);
+
+    /// Ids (in `ids`) whose color is red under `css`.
+    fn red_ids(html: &str, css: &str, ids: &[&'static str]) -> Vec<&'static str> {
+        let doc = TreeBuilder::build(Tokenizer::new(html).tokenize());
+        let sheet = Stylesheet::parse(css);
+        let styles = style_tree(&doc, &[&sheet], &[], &ctx());
+        ids.iter()
+            .copied()
+            .filter(|id| {
+                let node = doc.get_element_by_id(id).expect("element with id");
+                styles[node].as_ref().is_some_and(|s| s.color == RED)
+            })
+            .collect()
+    }
+
+    const HTML: &str = r#"<div class="x"><p id="a">a</p><span><p id="b">b</p></span></div>
+        <p id="c">c</p>"#;
+    const IDS: &[&str] = &["a", "b", "c"];
+
+    #[test]
+    fn is_and_where_accept_complex_selectors() {
+        assert_eq!(red_ids(HTML, ":is(.x p) { color: red }", IDS), ["a", "b"]);
+        assert_eq!(red_ids(HTML, ":where(.x > p) { color: red }", IDS), ["a"]);
+        // The rest of the outer selector still parses.
+        assert_eq!(red_ids(HTML, ":is(div span) p { color: red }", IDS), ["b"]);
+    }
+
+    #[test]
+    fn not_accepts_complex_selectors() {
+        assert_eq!(red_ids(HTML, "p:not(.x p) { color: red }", IDS), ["c"]);
+        // Tailwind Typography's opt-out pattern.
+        let html = r#"<div class="prose"><p id="a">a</p>
+            <div class="not-prose"><p id="b">b</p></div></div>"#;
+        let css = r#".prose :where(p):not(:where([class~="not-prose"] *)) { color: red }"#;
+        assert_eq!(red_ids(html, css, &["a", "b"]), ["a"]);
+    }
+
+    #[test]
+    fn invalid_entries() {
+        // `:is()` is forgiving; `:not()` with an invalid entry matches
+        // nothing (instead of everything).
+        assert_eq!(red_ids(HTML, "p:is(%%, .x > p) { color: red }", IDS), ["a"]);
+        assert!(red_ids(HTML, "p:not(%%) { color: red }", IDS).is_empty());
+    }
+
+    #[test]
+    fn specificity_is_the_most_specific_complex_argument() {
+        let sheet = Stylesheet::parse(":is(#a .b, p) { color: red }");
+        let s = sheet.rules[0].selectors.selectors[0].specificity();
+        assert_eq!((s.ids, s.classes, s.types), (1, 1, 0));
+        let sheet = Stylesheet::parse("p:not(div.k span) :where(#z .y) { color: red }");
+        let s = sheet.rules[0].selectors.selectors[0].specificity();
+        assert_eq!((s.ids, s.classes, s.types), (0, 1, 3));
+        // `:is(.x p)` and `p.y` are both (0,1,1): source order decides.
+        let html = r#"<div class="x"><p id="t" class="y">t</p></div>"#;
+        let css = "p.y { color: blue } :is(.x p) { color: red }";
+        assert_eq!(red_ids(html, css, &["t"]), ["t"]);
+    }
+
+    #[test]
+    fn nesting_selector_inside_functional_pseudo_classes() {
+        let css = ".x { :where(& > p) { color: red } }";
+        assert_eq!(red_ids(HTML, css, IDS), ["a"]);
+        let css = "p { &:not(.x &) { color: red } }";
+        assert_eq!(red_ids(HTML, css, IDS), ["c"]);
+    }
+
+    #[test]
+    fn nested_is_of_nesting_selector_is_bounded() {
+        let mut css = String::from(".a, .b, .c, .d");
+        for _ in 0..30 {
+            css.push_str(" { :is(&, &, &) ");
+        }
+        css.push_str("{ color: red }");
+        css.push_str(&"}".repeat(30));
+        // Parses (and drops what grows too large) without blowing up.
+        let _ = Stylesheet::parse(&css);
+    }
 }

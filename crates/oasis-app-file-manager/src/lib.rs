@@ -72,6 +72,9 @@ impl App for FileManagerApp {
     }
 
     fn handle_text_input(&mut self, ch: char) {
+        if self.swallow_text.take() == Some(ch) {
+            return;
+        }
         self.dialog_type_char(ch);
     }
 
@@ -108,6 +111,7 @@ impl App for FileManagerApp {
         let g = compute_explorer_geom(0, 0, cw, ch);
         self.explorer_cols = g.cols;
         self.explorer_visible_rows = g.rows;
+        self.dual_visible_rows = view::dual_max_lines(ch, at);
         self.cached_font_hint = at.font_hint;
     }
 

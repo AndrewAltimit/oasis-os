@@ -1,0 +1,2039 @@
+{
+ "generated_by": "scripts/gen-crate-map.py",
+ "repo": "https://github.com/AndrewAltimit/oasis-os",
+ "version": "1.6.0",
+ "layers": [
+  {
+   "id": "hosts",
+   "title": "Hosts",
+   "blurb": "Binaries and libraries a platform links: the desktop shell, the C ABI for UE5, the PSP USB thin-client host."
+  },
+  {
+   "id": "registry",
+   "title": "Registry",
+   "blurb": "The built-in app bundle hosts depend on: one AppRegistry of every app crate."
+  },
+  {
+   "id": "coordination",
+   "title": "Coordination",
+   "blurb": "Dashboard, shell chrome, AppRunner, plugins, scripting, agent. Depends on the app framework but on no app crate."
+  },
+  {
+   "id": "apps",
+   "title": "Apps",
+   "blurb": "The App trait and the ten app crates; each draws itself through App::draw_windowed."
+  },
+  {
+   "id": "engines",
+   "title": "Engines",
+   "blurb": "The browser engine and its parser / loader crates, JavaScript, the terminal, video and audio."
+  },
+  {
+   "id": "presentation",
+   "title": "Presentation",
+   "blurb": "Scene graph, widgets, window manager, skins, vector art, shader wallpapers and the software rasterizer."
+  },
+  {
+   "id": "services",
+   "title": "Services",
+   "blurb": "Virtual file system, platform services, networking, the MCP server, translations."
+  },
+  {
+   "id": "foundation",
+   "title": "Foundation",
+   "blurb": "Colors, input events, geometry, errors and the backend traits every platform implements; plus the test doubles."
+  },
+  {
+   "id": "backends",
+   "title": "Backends",
+   "blurb": "Below the trait boundary: each implements the oasis-types traits for one platform."
+  },
+  {
+   "id": "psp",
+   "title": "PSP tools",
+   "blurb": "Standalone mipsel-sony-psp crates built one by one with cargo psp: the overlay PRX, recovery, dev loop, Media Engine and USB research."
+  }
+ ],
+ "crates": [
+  {
+   "name": "oasis-app",
+   "dir": "crates/oasis-app",
+   "layer": "hosts",
+   "description": "Desktop entry point for OASIS_OS",
+   "target": "workspace",
+   "membership": "member",
+   "version": null,
+   "lib": true,
+   "crate_type": [],
+   "bins": [
+    "oasis-app",
+    "oasis-screenshot",
+    "screenshot-tests",
+    "e2e-tests"
+   ],
+   "features": [
+    "_video",
+    "javascript",
+    "mcp",
+    "skin-dev",
+    "video-decode",
+    "video-decode-ffmpeg"
+   ],
+   "loc": 36247,
+   "files": 66,
+   "deps": [
+    {
+     "name": "oasis-app-core",
+     "kind": "normal"
+    },
+    {
+     "name": "oasis-apps",
+     "kind": "normal"
+    },
+    {
+     "name": "oasis-audio",
+     "kind": "normal"
+    },
+    {
+     "name": "oasis-backend-sdl",
+     "kind": "normal"
+    },
+    {
+     "name": "oasis-backend-ue5",
+     "kind": "normal"
+    },
+    {
+     "name": "oasis-core",
+     "kind": "normal"
+    },
+    {
+     "name": "oasis-mcp",
+     "kind": "optional",
+     "features": [
+      "mcp"
+     ]
+    },
+    {
+     "name": "oasis-video",
+     "kind": "optional",
+     "features": [
+      "_video",
+      "video-decode",
+      "video-decode-ffmpeg"
+     ]
+    },
+    {
+     "name": "oasis-test-backend",
+     "kind": "dev"
+    },
+    {
+     "name": "oasis-types",
+     "kind": "dev"
+    }
+   ]
+  },
+  {
+   "name": "oasis-ffi",
+   "dir": "crates/oasis-ffi",
+   "layer": "hosts",
+   "description": "OASIS_OS C-ABI FFI boundary for UE5 and external integrations",
+   "target": "workspace",
+   "membership": "member",
+   "version": null,
+   "lib": true,
+   "crate_type": [
+    "cdylib",
+    "rlib"
+   ],
+   "bins": [],
+   "features": [
+    "_video",
+    "video-decode",
+    "video-decode-ffmpeg"
+   ],
+   "loc": 4527,
+   "files": 13,
+   "deps": [
+    {
+     "name": "oasis-backend-ue5",
+     "kind": "normal"
+    },
+    {
+     "name": "oasis-core",
+     "kind": "normal"
+    },
+    {
+     "name": "oasis-shader",
+     "kind": "normal"
+    },
+    {
+     "name": "oasis-video",
+     "kind": "optional",
+     "features": [
+      "_video",
+      "video-decode",
+      "video-decode-ffmpeg"
+     ]
+    }
+   ]
+  },
+  {
+   "name": "oasis-usb-host",
+   "dir": "crates/oasis-usb-host",
+   "layer": "hosts",
+   "description": "USB host for PSP thin client — sends frames, receives input",
+   "target": "workspace",
+   "membership": "member",
+   "version": null,
+   "lib": false,
+   "crate_type": [],
+   "bins": [
+    "oasis-usb-host"
+   ],
+   "features": [],
+   "loc": 822,
+   "files": 3,
+   "deps": []
+  },
+  {
+   "name": "oasis-apps",
+   "dir": "crates/oasis-apps",
+   "layer": "registry",
+   "description": "The built-in OASIS_OS app bundle: one AppRegistry of every oasis-app-* crate for hosts",
+   "target": "workspace",
+   "membership": "member",
+   "version": null,
+   "lib": true,
+   "crate_type": [],
+   "bins": [],
+   "features": [
+    "video-embed"
+   ],
+   "loc": 3041,
+   "files": 5,
+   "deps": [
+    {
+     "name": "oasis-app-calculator",
+     "kind": "normal"
+    },
+    {
+     "name": "oasis-app-core",
+     "kind": "normal"
+    },
+    {
+     "name": "oasis-app-file-manager",
+     "kind": "normal"
+    },
+    {
+     "name": "oasis-app-games",
+     "kind": "normal"
+    },
+    {
+     "name": "oasis-app-media",
+     "kind": "normal"
+    },
+    {
+     "name": "oasis-app-paint",
+     "kind": "normal"
+    },
+    {
+     "name": "oasis-app-radio",
+     "kind": "normal"
+    },
+    {
+     "name": "oasis-app-settings",
+     "kind": "normal"
+    },
+    {
+     "name": "oasis-app-system-monitor",
+     "kind": "normal"
+    },
+    {
+     "name": "oasis-app-text-editor",
+     "kind": "normal"
+    },
+    {
+     "name": "oasis-app-tv-guide",
+     "kind": "normal"
+    },
+    {
+     "name": "oasis-core",
+     "kind": "normal"
+    },
+    {
+     "name": "oasis-types",
+     "kind": "normal"
+    },
+    {
+     "name": "oasis-test-backend",
+     "kind": "dev"
+    },
+    {
+     "name": "oasis-vfs",
+     "kind": "dev"
+    }
+   ]
+  },
+  {
+   "name": "oasis-core",
+   "dir": "crates/oasis-core",
+   "layer": "coordination",
+   "description": "OASIS_OS coordination layer: dashboard, shell chrome, app runtime, plugins, scripting",
+   "target": "workspace",
+   "membership": "member",
+   "version": null,
+   "lib": true,
+   "crate_type": [],
+   "bins": [],
+   "features": [
+    "javascript",
+    "skin-ttf",
+    "tls-rustls"
+   ],
+   "loc": 25805,
+   "files": 72,
+   "deps": [
+    {
+     "name": "oasis-app-core",
+     "kind": "normal"
+    },
+    {
+     "name": "oasis-audio",
+     "kind": "normal"
+    },
+    {
+     "name": "oasis-browser",
+     "kind": "normal"
+    },
+    {
+     "name": "oasis-http",
+     "kind": "normal"
+    },
+    {
+     "name": "oasis-i18n",
+     "kind": "normal"
+    },
+    {
+     "name": "oasis-net",
+     "kind": "normal"
+    },
+    {
+     "name": "oasis-platform",
+     "kind": "normal"
+    },
+    {
+     "name": "oasis-sdi",
+     "kind": "normal"
+    },
+    {
+     "name": "oasis-skin",
+     "kind": "normal"
+    },
+    {
+     "name": "oasis-terminal",
+     "kind": "normal"
+    },
+    {
+     "name": "oasis-types",
+     "kind": "normal"
+    },
+    {
+     "name": "oasis-ui",
+     "kind": "normal"
+    },
+    {
+     "name": "oasis-vector",
+     "kind": "normal"
+    },
+    {
+     "name": "oasis-vfs",
+     "kind": "normal"
+    },
+    {
+     "name": "oasis-wm",
+     "kind": "normal"
+    },
+    {
+     "name": "oasis-test-backend",
+     "kind": "dev"
+    }
+   ]
+  },
+  {
+   "name": "oasis-app-core",
+   "dir": "crates/oasis-app-core",
+   "layer": "apps",
+   "description": "Shared App trait, layout, and rendering helpers for OASIS_OS applications",
+   "target": "workspace",
+   "membership": "member",
+   "version": null,
+   "lib": true,
+   "crate_type": [],
+   "bins": [],
+   "features": [
+    "testing"
+   ],
+   "loc": 3131,
+   "files": 8,
+   "deps": [
+    {
+     "name": "oasis-skin",
+     "kind": "normal"
+    },
+    {
+     "name": "oasis-types",
+     "kind": "normal"
+    },
+    {
+     "name": "oasis-vfs",
+     "kind": "normal"
+    },
+    {
+     "name": "oasis-test-backend",
+     "kind": "optional",
+     "features": [
+      "testing"
+     ]
+    }
+   ]
+  },
+  {
+   "name": "oasis-app-tv-guide",
+   "dir": "crates/oasis-app-tv-guide",
+   "layer": "apps",
+   "description": "TV Guide application for OASIS_OS: EPG grid with Internet Archive catalog",
+   "target": "workspace",
+   "membership": "member",
+   "version": null,
+   "lib": true,
+   "crate_type": [],
+   "bins": [],
+   "features": [],
+   "loc": 4638,
+   "files": 11,
+   "deps": [
+    {
+     "name": "oasis-app-core",
+     "kind": "normal"
+    },
+    {
+     "name": "oasis-audio",
+     "kind": "normal"
+    },
+    {
+     "name": "oasis-skin",
+     "kind": "normal"
+    },
+    {
+     "name": "oasis-types",
+     "kind": "normal"
+    },
+    {
+     "name": "oasis-vfs",
+     "kind": "normal"
+    }
+   ]
+  },
+  {
+   "name": "oasis-app-radio",
+   "dir": "crates/oasis-app-radio",
+   "layer": "apps",
+   "description": "Internet Radio app for OASIS_OS",
+   "target": "workspace",
+   "membership": "member",
+   "version": null,
+   "lib": true,
+   "crate_type": [],
+   "bins": [],
+   "features": [],
+   "loc": 1624,
+   "files": 4,
+   "deps": [
+    {
+     "name": "oasis-app-core",
+     "kind": "normal"
+    },
+    {
+     "name": "oasis-audio",
+     "kind": "normal"
+    },
+    {
+     "name": "oasis-skin",
+     "kind": "normal"
+    },
+    {
+     "name": "oasis-types",
+     "kind": "normal"
+    },
+    {
+     "name": "oasis-ui",
+     "kind": "normal"
+    },
+    {
+     "name": "oasis-vfs",
+     "kind": "normal"
+    },
+    {
+     "name": "oasis-test-backend",
+     "kind": "dev"
+    }
+   ]
+  },
+  {
+   "name": "oasis-app-media",
+   "dir": "crates/oasis-app-media",
+   "layer": "apps",
+   "description": "Media browsing application for OASIS_OS: music player and photo viewer",
+   "target": "workspace",
+   "membership": "member",
+   "version": null,
+   "lib": true,
+   "crate_type": [],
+   "bins": [],
+   "features": [],
+   "loc": 3011,
+   "files": 8,
+   "deps": [
+    {
+     "name": "oasis-app-core",
+     "kind": "normal"
+    },
+    {
+     "name": "oasis-skin",
+     "kind": "normal"
+    },
+    {
+     "name": "oasis-types",
+     "kind": "normal"
+    },
+    {
+     "name": "oasis-vfs",
+     "kind": "normal"
+    },
+    {
+     "name": "oasis-test-backend",
+     "kind": "dev"
+    }
+   ]
+  },
+  {
+   "name": "oasis-app-file-manager",
+   "dir": "crates/oasis-app-file-manager",
+   "layer": "apps",
+   "description": "File Manager application for OASIS_OS: dual-panel browsing with file viewer",
+   "target": "workspace",
+   "membership": "member",
+   "version": null,
+   "lib": true,
+   "crate_type": [],
+   "bins": [],
+   "features": [],
+   "loc": 4198,
+   "files": 10,
+   "deps": [
+    {
+     "name": "oasis-app-core",
+     "kind": "normal"
+    },
+    {
+     "name": "oasis-skin",
+     "kind": "normal"
+    },
+    {
+     "name": "oasis-types",
+     "kind": "normal"
+    },
+    {
+     "name": "oasis-ui",
+     "kind": "normal"
+    },
+    {
+     "name": "oasis-vfs",
+     "kind": "normal"
+    },
+    {
+     "name": "oasis-test-backend",
+     "kind": "dev"
+    }
+   ]
+  },
+  {
+   "name": "oasis-app-text-editor",
+   "dir": "crates/oasis-app-text-editor",
+   "layer": "apps",
+   "description": "Text editor application for OASIS_OS: modal editing with undo/redo",
+   "target": "workspace",
+   "membership": "member",
+   "version": null,
+   "lib": true,
+   "crate_type": [],
+   "bins": [],
+   "features": [],
+   "loc": 7250,
+   "files": 19,
+   "deps": [
+    {
+     "name": "oasis-app-core",
+     "kind": "normal"
+    },
+    {
+     "name": "oasis-skin",
+     "kind": "normal"
+    },
+    {
+     "name": "oasis-types",
+     "kind": "normal"
+    },
+    {
+     "name": "oasis-ui",
+     "kind": "normal"
+    },
+    {
+     "name": "oasis-vfs",
+     "kind": "normal"
+    },
+    {
+     "name": "oasis-test-backend",
+     "kind": "dev"
+    }
+   ]
+  },
+  {
+   "name": "oasis-app-paint",
+   "dir": "crates/oasis-app-paint",
+   "layer": "apps",
+   "description": "Paint application for OASIS_OS: multi-layer canvas with drawing tools",
+   "target": "workspace",
+   "membership": "member",
+   "version": null,
+   "lib": true,
+   "crate_type": [],
+   "bins": [],
+   "features": [],
+   "loc": 3771,
+   "files": 10,
+   "deps": [
+    {
+     "name": "oasis-app-core",
+     "kind": "normal"
+    },
+    {
+     "name": "oasis-skin",
+     "kind": "normal"
+    },
+    {
+     "name": "oasis-types",
+     "kind": "normal"
+    },
+    {
+     "name": "oasis-ui",
+     "kind": "normal"
+    },
+    {
+     "name": "oasis-vfs",
+     "kind": "normal"
+    },
+    {
+     "name": "oasis-test-backend",
+     "kind": "dev"
+    }
+   ]
+  },
+  {
+   "name": "oasis-app-games",
+   "dir": "crates/oasis-app-games",
+   "layer": "apps",
+   "description": "Games application for OASIS_OS: Snake, Memory Match, Sliding Puzzle",
+   "target": "workspace",
+   "membership": "member",
+   "version": null,
+   "lib": true,
+   "crate_type": [],
+   "bins": [],
+   "features": [],
+   "loc": 3103,
+   "files": 7,
+   "deps": [
+    {
+     "name": "oasis-app-core",
+     "kind": "normal"
+    },
+    {
+     "name": "oasis-platform",
+     "kind": "normal"
+    },
+    {
+     "name": "oasis-types",
+     "kind": "normal"
+    },
+    {
+     "name": "oasis-vfs",
+     "kind": "normal"
+    }
+   ]
+  },
+  {
+   "name": "oasis-app-calculator",
+   "dir": "crates/oasis-app-calculator",
+   "layer": "apps",
+   "description": "Calculator application for OASIS_OS: expression parser with history",
+   "target": "workspace",
+   "membership": "member",
+   "version": null,
+   "lib": true,
+   "crate_type": [],
+   "bins": [],
+   "features": [],
+   "loc": 3144,
+   "files": 7,
+   "deps": [
+    {
+     "name": "oasis-app-core",
+     "kind": "normal"
+    },
+    {
+     "name": "oasis-skin",
+     "kind": "normal"
+    },
+    {
+     "name": "oasis-types",
+     "kind": "normal"
+    },
+    {
+     "name": "oasis-ui",
+     "kind": "normal"
+    },
+    {
+     "name": "oasis-vfs",
+     "kind": "normal"
+    },
+    {
+     "name": "oasis-test-backend",
+     "kind": "dev"
+    }
+   ]
+  },
+  {
+   "name": "oasis-app-settings",
+   "dir": "crates/oasis-app-settings",
+   "layer": "apps",
+   "description": "Settings application for OASIS_OS: skin selection, system info, audio config",
+   "target": "workspace",
+   "membership": "member",
+   "version": null,
+   "lib": true,
+   "crate_type": [],
+   "bins": [],
+   "features": [],
+   "loc": 3439,
+   "files": 11,
+   "deps": [
+    {
+     "name": "oasis-app-core",
+     "kind": "normal"
+    },
+    {
+     "name": "oasis-i18n",
+     "kind": "normal"
+    },
+    {
+     "name": "oasis-skin",
+     "kind": "normal"
+    },
+    {
+     "name": "oasis-types",
+     "kind": "normal"
+    },
+    {
+     "name": "oasis-ui",
+     "kind": "normal"
+    },
+    {
+     "name": "oasis-vfs",
+     "kind": "normal"
+    },
+    {
+     "name": "oasis-test-backend",
+     "kind": "dev"
+    }
+   ]
+  },
+  {
+   "name": "oasis-app-system-monitor",
+   "dir": "crates/oasis-app-system-monitor",
+   "layer": "apps",
+   "description": "System info apps for OASIS_OS: System Monitor (CPU / memory / battery / uptime gauges), Network status, Package Manager",
+   "target": "workspace",
+   "membership": "member",
+   "version": null,
+   "lib": true,
+   "crate_type": [],
+   "bins": [],
+   "features": [],
+   "loc": 2118,
+   "files": 9,
+   "deps": [
+    {
+     "name": "oasis-app-core",
+     "kind": "normal"
+    },
+    {
+     "name": "oasis-platform",
+     "kind": "normal"
+    },
+    {
+     "name": "oasis-skin",
+     "kind": "normal"
+    },
+    {
+     "name": "oasis-types",
+     "kind": "normal"
+    },
+    {
+     "name": "oasis-ui",
+     "kind": "normal"
+    },
+    {
+     "name": "oasis-vfs",
+     "kind": "normal"
+    },
+    {
+     "name": "oasis-test-backend",
+     "kind": "dev"
+    }
+   ]
+  },
+  {
+   "name": "oasis-browser",
+   "dir": "crates/oasis-browser",
+   "layer": "engines",
+   "description": "HTML/CSS/Gemini browser engine for OASIS_OS",
+   "target": "workspace",
+   "membership": "member",
+   "version": null,
+   "lib": true,
+   "crate_type": [],
+   "bins": [],
+   "features": [
+    "canvas",
+    "javascript",
+    "parallel-style",
+    "psp",
+    "web-fonts",
+    "webp"
+   ],
+   "loc": 62882,
+   "files": 111,
+   "deps": [
+    {
+     "name": "oasis-css",
+     "kind": "normal"
+    },
+    {
+     "name": "oasis-html",
+     "kind": "normal"
+    },
+    {
+     "name": "oasis-http",
+     "kind": "normal"
+    },
+    {
+     "name": "oasis-net",
+     "kind": "normal"
+    },
+    {
+     "name": "oasis-skin",
+     "kind": "normal"
+    },
+    {
+     "name": "oasis-types",
+     "kind": "normal"
+    },
+    {
+     "name": "oasis-vfs",
+     "kind": "normal"
+    },
+    {
+     "name": "oasis-js",
+     "kind": "optional",
+     "features": [
+      "javascript"
+     ]
+    },
+    {
+     "name": "oasis-test-backend",
+     "kind": "dev"
+    }
+   ]
+  },
+  {
+   "name": "oasis-html",
+   "dir": "crates/oasis-html",
+   "layer": "engines",
+   "description": "HTML tokenizer, tree builder and arena DOM for the OASIS_OS browser engine",
+   "target": "workspace",
+   "membership": "member",
+   "version": null,
+   "lib": true,
+   "crate_type": [],
+   "bins": [],
+   "features": [],
+   "loc": 11672,
+   "files": 22,
+   "deps": []
+  },
+  {
+   "name": "oasis-css",
+   "dir": "crates/oasis-css",
+   "layer": "engines",
+   "description": "CSS parser, cascade and computed values for the OASIS_OS browser engine",
+   "target": "workspace",
+   "membership": "member",
+   "version": null,
+   "lib": true,
+   "crate_type": [],
+   "bins": [],
+   "features": [
+    "parallel-style",
+    "scripting",
+    "web-fonts"
+   ],
+   "loc": 30683,
+   "files": 47,
+   "deps": [
+    {
+     "name": "oasis-html",
+     "kind": "normal"
+    },
+    {
+     "name": "oasis-types",
+     "kind": "normal"
+    }
+   ]
+  },
+  {
+   "name": "oasis-http",
+   "dir": "crates/oasis-http",
+   "layer": "engines",
+   "description": "Resource loader for the OASIS_OS browser: URL, HTTP/1.1 + HTTP/2, Gemini, cookies, cache, CSP",
+   "target": "workspace",
+   "membership": "member",
+   "version": null,
+   "lib": true,
+   "crate_type": [],
+   "bins": [],
+   "features": [
+    "psp"
+   ],
+   "loc": 10765,
+   "files": 15,
+   "deps": [
+    {
+     "name": "oasis-net",
+     "kind": "normal"
+    },
+    {
+     "name": "oasis-types",
+     "kind": "normal"
+    },
+    {
+     "name": "oasis-vfs",
+     "kind": "normal"
+    }
+   ]
+  },
+  {
+   "name": "oasis-js",
+   "dir": "crates/oasis-js",
+   "layer": "engines",
+   "description": "JavaScript engine for OASIS_OS browser (QuickJS-NG via rquickjs)",
+   "target": "workspace",
+   "membership": "member",
+   "version": null,
+   "lib": true,
+   "crate_type": [],
+   "bins": [],
+   "features": [
+    "psp-bindgen"
+   ],
+   "loc": 3194,
+   "files": 7,
+   "deps": []
+  },
+  {
+   "name": "oasis-terminal",
+   "dir": "crates/oasis-terminal",
+   "layer": "engines",
+   "description": "Command interpreter and terminal for OASIS_OS: command registry, shell builtins, scripting, file/text/network/audio commands",
+   "target": "workspace",
+   "membership": "member",
+   "version": null,
+   "lib": true,
+   "crate_type": [],
+   "bins": [],
+   "features": [],
+   "loc": 22925,
+   "files": 69,
+   "deps": [
+    {
+     "name": "oasis-net",
+     "kind": "normal"
+    },
+    {
+     "name": "oasis-platform",
+     "kind": "normal"
+    },
+    {
+     "name": "oasis-types",
+     "kind": "normal"
+    },
+    {
+     "name": "oasis-vfs",
+     "kind": "normal"
+    }
+   ]
+  },
+  {
+   "name": "oasis-video",
+   "dir": "crates/oasis-video",
+   "layer": "engines",
+   "description": "Software MP4/H.264+AAC video decode pipeline for OASIS_OS",
+   "target": "workspace",
+   "membership": "member",
+   "version": null,
+   "lib": true,
+   "crate_type": [],
+   "bins": [
+    "video-memprofile"
+   ],
+   "features": [
+    "demux-lite",
+    "ffmpeg",
+    "h264",
+    "symphonia"
+   ],
+   "loc": 7847,
+   "files": 26,
+   "deps": []
+  },
+  {
+   "name": "oasis-audio",
+   "dir": "crates/oasis-audio",
+   "layer": "engines",
+   "description": "Audio subsystem for OASIS_OS: music playlist and playback state, internet radio, SFX, WAV/Ogg decode",
+   "target": "workspace",
+   "membership": "member",
+   "version": null,
+   "lib": true,
+   "crate_type": [],
+   "bins": [],
+   "features": [],
+   "loc": 9224,
+   "files": 27,
+   "deps": [
+    {
+     "name": "oasis-types",
+     "kind": "normal"
+    },
+    {
+     "name": "oasis-vfs",
+     "kind": "normal"
+    },
+    {
+     "name": "oasis-net",
+     "kind": "dev"
+    }
+   ]
+  },
+  {
+   "name": "oasis-sdi",
+   "dir": "crates/oasis-sdi",
+   "layer": "presentation",
+   "description": "Simple Display Interface scene graph for OASIS_OS",
+   "target": "workspace",
+   "membership": "member",
+   "version": null,
+   "lib": true,
+   "crate_type": [],
+   "bins": [],
+   "features": [],
+   "loc": 3003,
+   "files": 10,
+   "deps": [
+    {
+     "name": "oasis-types",
+     "kind": "normal"
+    },
+    {
+     "name": "oasis-test-backend",
+     "kind": "dev"
+    }
+   ]
+  },
+  {
+   "name": "oasis-ui",
+   "dir": "crates/oasis-ui",
+   "layer": "presentation",
+   "description": "UI widget toolkit for OASIS_OS: buttons, cards, panels, lists, animations, themes",
+   "target": "workspace",
+   "membership": "member",
+   "version": null,
+   "lib": true,
+   "crate_type": [],
+   "bins": [],
+   "features": [],
+   "loc": 19875,
+   "files": 45,
+   "deps": [
+    {
+     "name": "oasis-types",
+     "kind": "normal"
+    },
+    {
+     "name": "oasis-test-backend",
+     "kind": "dev"
+    }
+   ]
+  },
+  {
+   "name": "oasis-wm",
+   "dir": "crates/oasis-wm",
+   "layer": "presentation",
+   "description": "Window manager for OASIS_OS: window configs, hit testing, drag/resize",
+   "target": "workspace",
+   "membership": "member",
+   "version": null,
+   "lib": true,
+   "crate_type": [],
+   "bins": [],
+   "features": [],
+   "loc": 12948,
+   "files": 26,
+   "deps": [
+    {
+     "name": "oasis-sdi",
+     "kind": "normal"
+    },
+    {
+     "name": "oasis-types",
+     "kind": "normal"
+    },
+    {
+     "name": "oasis-test-backend",
+     "kind": "dev"
+    }
+   ]
+  },
+  {
+   "name": "oasis-skin",
+   "dir": "crates/oasis-skin",
+   "layer": "presentation",
+   "description": "Skin system for OASIS_OS: data-driven TOML skins, themes, effects, active theme",
+   "target": "workspace",
+   "membership": "member",
+   "version": null,
+   "lib": true,
+   "crate_type": [],
+   "bins": [],
+   "features": [
+    "serialize",
+    "ttf"
+   ],
+   "loc": 15557,
+   "files": 34,
+   "deps": [
+    {
+     "name": "oasis-sdi",
+     "kind": "normal"
+    },
+    {
+     "name": "oasis-shader",
+     "kind": "normal"
+    },
+    {
+     "name": "oasis-types",
+     "kind": "normal"
+    },
+    {
+     "name": "oasis-ui",
+     "kind": "normal"
+    },
+    {
+     "name": "oasis-vector",
+     "kind": "normal"
+    },
+    {
+     "name": "oasis-wm",
+     "kind": "normal"
+    },
+    {
+     "name": "oasis-test-backend",
+     "kind": "dev"
+    }
+   ]
+  },
+  {
+   "name": "oasis-vector",
+   "dir": "crates/oasis-vector",
+   "layer": "presentation",
+   "description": "Vector graphics layer for OASIS_OS: scene graph, icon definitions, rasterizer",
+   "target": "workspace",
+   "membership": "member",
+   "version": null,
+   "lib": true,
+   "crate_type": [],
+   "bins": [],
+   "features": [],
+   "loc": 6257,
+   "files": 14,
+   "deps": [
+    {
+     "name": "oasis-types",
+     "kind": "normal"
+    }
+   ]
+  },
+  {
+   "name": "oasis-shader",
+   "dir": "crates/oasis-shader",
+   "layer": "presentation",
+   "description": "GPU shader background renderer for OASIS_OS (Shadertoy-style fragment shaders)",
+   "target": "workspace",
+   "membership": "member",
+   "version": null,
+   "lib": true,
+   "crate_type": [],
+   "bins": [],
+   "features": [
+    "gl-native",
+    "parallel"
+   ],
+   "loc": 2508,
+   "files": 13,
+   "deps": [
+    {
+     "name": "oasis-types",
+     "kind": "normal"
+    }
+   ]
+  },
+  {
+   "name": "oasis-rasterize",
+   "dir": "crates/oasis-rasterize",
+   "layer": "presentation",
+   "description": "Shared software rasterization primitives for OASIS_OS backends",
+   "target": "workspace",
+   "membership": "member",
+   "version": null,
+   "lib": true,
+   "crate_type": [],
+   "bins": [],
+   "features": [
+    "ttf"
+   ],
+   "loc": 2756,
+   "files": 4,
+   "deps": [
+    {
+     "name": "oasis-types",
+     "kind": "normal"
+    }
+   ]
+  },
+  {
+   "name": "oasis-vfs",
+   "dir": "crates/oasis-vfs",
+   "layer": "services",
+   "description": "Virtual file system abstraction for OASIS_OS",
+   "target": "workspace",
+   "membership": "member",
+   "version": null,
+   "lib": true,
+   "crate_type": [],
+   "bins": [],
+   "features": [],
+   "loc": 4505,
+   "files": 8,
+   "deps": [
+    {
+     "name": "oasis-types",
+     "kind": "normal"
+    }
+   ]
+  },
+  {
+   "name": "oasis-platform",
+   "dir": "crates/oasis-platform",
+   "layer": "services",
+   "description": "Platform service abstractions for OASIS_OS",
+   "target": "workspace",
+   "membership": "member",
+   "version": null,
+   "lib": true,
+   "crate_type": [],
+   "bins": [],
+   "features": [],
+   "loc": 1509,
+   "files": 3,
+   "deps": [
+    {
+     "name": "oasis-types",
+     "kind": "normal"
+    }
+   ]
+  },
+  {
+   "name": "oasis-net",
+   "dir": "crates/oasis-net",
+   "layer": "services",
+   "description": "Networking: TCP backend, remote terminal, TLS for OASIS_OS",
+   "target": "workspace",
+   "membership": "member",
+   "version": null,
+   "lib": true,
+   "crate_type": [],
+   "bins": [],
+   "features": [
+    "tls-rustls",
+    "vfs"
+   ],
+   "loc": 7352,
+   "files": 16,
+   "deps": [
+    {
+     "name": "oasis-types",
+     "kind": "normal"
+    },
+    {
+     "name": "oasis-vfs",
+     "kind": "optional",
+     "features": [
+      "vfs"
+     ]
+    }
+   ]
+  },
+  {
+   "name": "oasis-mcp",
+   "dir": "crates/oasis-mcp",
+   "layer": "services",
+   "description": "Minimal Model Context Protocol (MCP) server over Streamable HTTP for OASIS_OS",
+   "target": "workspace",
+   "membership": "member",
+   "version": null,
+   "lib": true,
+   "crate_type": [],
+   "bins": [],
+   "features": [],
+   "loc": 2926,
+   "files": 9,
+   "deps": [
+    {
+     "name": "oasis-types",
+     "kind": "normal"
+    },
+    {
+     "name": "oasis-net",
+     "kind": "dev"
+    }
+   ]
+  },
+  {
+   "name": "oasis-i18n",
+   "dir": "crates/oasis-i18n",
+   "layer": "services",
+   "description": "Internationalization framework for OASIS_OS",
+   "target": "workspace",
+   "membership": "member",
+   "version": null,
+   "lib": true,
+   "crate_type": [],
+   "bins": [],
+   "features": [],
+   "loc": 927,
+   "files": 1,
+   "deps": [
+    {
+     "name": "oasis-types",
+     "kind": "normal"
+    }
+   ]
+  },
+  {
+   "name": "oasis-types",
+   "dir": "crates/oasis-types",
+   "layer": "foundation",
+   "description": "Foundation types and traits for OASIS_OS: colors, input events, backend traits, config, errors",
+   "target": "workspace",
+   "membership": "member",
+   "version": null,
+   "lib": true,
+   "crate_type": [],
+   "bins": [],
+   "features": [],
+   "loc": 12037,
+   "files": 40,
+   "deps": []
+  },
+  {
+   "name": "oasis-test-backend",
+   "dir": "crates/oasis-test-backend",
+   "layer": "foundation",
+   "description": "Mock and recording backends for testing OASIS_OS rendering traits",
+   "target": "workspace",
+   "membership": "member",
+   "version": null,
+   "lib": true,
+   "crate_type": [],
+   "bins": [],
+   "features": [],
+   "loc": 4791,
+   "files": 8,
+   "deps": [
+    {
+     "name": "oasis-types",
+     "kind": "normal"
+    }
+   ]
+  },
+  {
+   "name": "oasis-backend-sdl",
+   "dir": "crates/oasis-backend-sdl",
+   "layer": "backends",
+   "description": "SDL3 rendering and input backend for OASIS_OS (desktop and Raspberry Pi)",
+   "target": "workspace",
+   "membership": "member",
+   "version": null,
+   "lib": true,
+   "crate_type": [],
+   "bins": [],
+   "features": [],
+   "loc": 7126,
+   "files": 18,
+   "deps": [
+    {
+     "name": "oasis-audio",
+     "kind": "normal"
+    },
+    {
+     "name": "oasis-net",
+     "kind": "normal"
+    },
+    {
+     "name": "oasis-rasterize",
+     "kind": "normal"
+    },
+    {
+     "name": "oasis-shader",
+     "kind": "normal"
+    },
+    {
+     "name": "oasis-types",
+     "kind": "normal"
+    },
+    {
+     "name": "oasis-backend-ue5",
+     "kind": "dev"
+    },
+    {
+     "name": "oasis-core",
+     "kind": "dev"
+    },
+    {
+     "name": "oasis-test-backend",
+     "kind": "dev"
+    }
+   ]
+  },
+  {
+   "name": "oasis-backend-wasm",
+   "dir": "crates/oasis-backend-wasm",
+   "layer": "backends",
+   "description": "WebAssembly backend for OASIS_OS: Canvas 2D rendering, DOM input, HTML media-element audio",
+   "target": "workspace",
+   "membership": "member",
+   "version": null,
+   "lib": true,
+   "crate_type": [
+    "cdylib",
+    "rlib"
+   ],
+   "bins": [],
+   "features": [
+    "wasm-youtube"
+   ],
+   "loc": 9592,
+   "files": 26,
+   "deps": [
+    {
+     "name": "oasis-apps",
+     "kind": "normal"
+    },
+    {
+     "name": "oasis-audio",
+     "kind": "normal"
+    },
+    {
+     "name": "oasis-core",
+     "kind": "normal"
+    },
+    {
+     "name": "oasis-platform",
+     "kind": "normal"
+    },
+    {
+     "name": "oasis-rasterize",
+     "kind": "normal"
+    },
+    {
+     "name": "oasis-shader",
+     "kind": "normal"
+    },
+    {
+     "name": "oasis-skin",
+     "kind": "normal"
+    },
+    {
+     "name": "oasis-types",
+     "kind": "normal"
+    },
+    {
+     "name": "oasis-wm",
+     "kind": "normal"
+    }
+   ]
+  },
+  {
+   "name": "oasis-backend-ue5",
+   "dir": "crates/oasis-backend-ue5",
+   "layer": "backends",
+   "description": "OASIS_OS UE5 render target backend -- software RGBA framebuffer and FFI input",
+   "target": "workspace",
+   "membership": "member",
+   "version": null,
+   "lib": true,
+   "crate_type": [],
+   "bins": [],
+   "features": [],
+   "loc": 2769,
+   "files": 5,
+   "deps": [
+    {
+     "name": "oasis-audio",
+     "kind": "normal"
+    },
+    {
+     "name": "oasis-rasterize",
+     "kind": "normal"
+    },
+    {
+     "name": "oasis-types",
+     "kind": "normal"
+    },
+    {
+     "name": "oasis-core",
+     "kind": "dev"
+    }
+   ]
+  },
+  {
+   "name": "oasis-backend-psp",
+   "dir": "crates/oasis-backend-psp",
+   "layer": "backends",
+   "description": "PSP backend for OASIS_OS: hardware-accelerated GU rendering, controller input",
+   "target": "psp",
+   "membership": "excluded",
+   "version": "1.6.0",
+   "lib": true,
+   "crate_type": [],
+   "bins": [
+    "oasis-backend-psp"
+   ],
+   "features": [
+    "auto-browse-wiki",
+    "autorun-script",
+    "kernel-exception",
+    "kernel-me",
+    "kernel-me-clock",
+    "kernel-mode",
+    "kernel-volatile"
+   ],
+   "loc": 21759,
+   "files": 68,
+   "deps": [
+    {
+     "name": "oasis-app-tv-guide",
+     "kind": "normal"
+    },
+    {
+     "name": "oasis-browser",
+     "kind": "normal"
+    },
+    {
+     "name": "oasis-core",
+     "kind": "normal"
+    },
+    {
+     "name": "oasis-js",
+     "kind": "normal"
+    },
+    {
+     "name": "oasis-shader",
+     "kind": "normal"
+    },
+    {
+     "name": "oasis-types",
+     "kind": "normal"
+    },
+    {
+     "name": "oasis-video",
+     "kind": "normal"
+    }
+   ]
+  },
+  {
+   "name": "oasis-plugin-psp",
+   "dir": "crates/oasis-plugin-psp",
+   "layer": "psp",
+   "description": "PSP overlay plugin PRX: in-game overlay + background music for OASIS_OS",
+   "target": "psp",
+   "membership": "standalone",
+   "version": "1.6.0",
+   "lib": false,
+   "crate_type": [],
+   "bins": [
+    "oasis-plugin-psp"
+   ],
+   "features": [],
+   "loc": 10692,
+   "files": 18,
+   "deps": []
+  },
+  {
+   "name": "oasis-recovery-psp",
+   "dir": "crates/oasis-recovery-psp",
+   "layer": "psp",
+   "description": "PSP network recovery EBOOT: WiFi TCP file server for unbricking",
+   "target": "psp",
+   "membership": "standalone",
+   "version": "1.6.0",
+   "lib": false,
+   "crate_type": [],
+   "bins": [
+    "oasis-recovery-psp"
+   ],
+   "features": [],
+   "loc": 660,
+   "files": 2,
+   "deps": [
+    {
+     "name": "oasis-net",
+     "kind": "normal"
+    },
+    {
+     "name": "oasis-types",
+     "kind": "normal"
+    }
+   ]
+  },
+  {
+   "name": "oasis-devloop-psp",
+   "dir": "crates/oasis-devloop-psp",
+   "layer": "psp",
+   "description": "PSP remote dev automation PRX: WiFi TCP command server",
+   "target": "psp",
+   "membership": "standalone",
+   "version": "0.1.0",
+   "lib": false,
+   "crate_type": [],
+   "bins": [
+    "oasis-devloop-psp"
+   ],
+   "features": [],
+   "loc": 408,
+   "files": 1,
+   "deps": []
+  },
+  {
+   "name": "oasis-me-boot",
+   "dir": "crates/oasis-me-boot",
+   "layer": "psp",
+   "description": "Minimal kernel PRX that boots the PSP Media Engine.",
+   "target": "psp",
+   "membership": "standalone",
+   "version": "0.1.0",
+   "lib": false,
+   "crate_type": [],
+   "bins": [
+    "oasis-me-boot"
+   ],
+   "features": [],
+   "loc": 128,
+   "files": 1,
+   "deps": []
+  },
+  {
+   "name": "oasis-prx-decrypt-psp",
+   "dir": "crates/oasis-prx-decrypt-psp",
+   "layer": "psp",
+   "description": "PSP PRX decryptor — uses Kirk hardware engine to decrypt flash0 firmware modules",
+   "target": "psp",
+   "membership": "standalone",
+   "version": "0.1.0",
+   "lib": false,
+   "crate_type": [],
+   "bins": [
+    "oasis-prx-decrypt-psp"
+   ],
+   "features": [],
+   "loc": 973,
+   "files": 1,
+   "deps": []
+  },
+  {
+   "name": "oasis-usb-client-psp",
+   "dir": "crates/oasis-usb-client-psp",
+   "layer": "psp",
+   "description": "PSP USB thin client PRX: bulk transfer device driver for external compute",
+   "target": "psp",
+   "membership": "standalone",
+   "version": "0.1.0",
+   "lib": false,
+   "crate_type": [],
+   "bins": [
+    "oasis-usb-client-psp"
+   ],
+   "features": [],
+   "loc": 1887,
+   "files": 6,
+   "deps": []
+  },
+  {
+   "name": "oasis-usb-debug-psp",
+   "dir": "crates/oasis-usb-debug-psp",
+   "layer": "psp",
+   "description": "PSP USB Host Mode Phase 0: Zero-RE VBUS experiment",
+   "target": "psp",
+   "membership": "standalone",
+   "version": "0.1.0",
+   "lib": false,
+   "crate_type": [],
+   "bins": [
+    "oasis-usb-debug-psp"
+   ],
+   "features": [],
+   "loc": 544,
+   "files": 1,
+   "deps": []
+  },
+  {
+   "name": "oasis-usb-trace-psp",
+   "dir": "crates/oasis-usb-trace-psp",
+   "layer": "psp",
+   "description": "PSP USB Host Mode Phase 0b: kernel MMIO trace + register snapshot diff",
+   "target": "psp",
+   "membership": "standalone",
+   "version": "0.1.0",
+   "lib": false,
+   "crate_type": [],
+   "bins": [
+    "oasis-usb-trace-psp"
+   ],
+   "features": [],
+   "loc": 372,
+   "files": 1,
+   "deps": []
+  },
+  {
+   "name": "oasis-usb-vbus-psp",
+   "dir": "crates/oasis-usb-vbus-psp",
+   "layer": "psp",
+   "description": "PSP USB VBUS power output — GPIO discovery, Syscon commands, host mode init",
+   "target": "psp",
+   "membership": "standalone",
+   "version": "0.1.0",
+   "lib": false,
+   "crate_type": [],
+   "bins": [
+    "oasis-usb-vbus-psp"
+   ],
+   "features": [],
+   "loc": 3012,
+   "files": 6,
+   "deps": []
+  }
+ ],
+ "walks": [
+  {
+   "id": "frame",
+   "title": "A frame",
+   "blurb": "From the shell's main loop to pixels on a desktop window, a canvas, a UE5 texture or a PSP screen.",
+   "steps": [
+    {
+     "title": "The shell starts a frame",
+     "crates": [
+      "oasis-app"
+     ],
+     "text": "Shell::render calls draw_frame, which clears the back buffer to the skin's background color and, when the skin has a shader wallpaper, shades it and blits it first.",
+     "code": [
+      "crates/oasis-app/src/shell.rs: Shell::render",
+      "crates/oasis-app/src/shell.rs: draw_frame"
+     ]
+    },
+    {
+     "title": "Shader wallpaper",
+     "crates": [
+      "oasis-shader",
+      "oasis-backend-sdl"
+     ],
+     "text": "The SDL shader bridge renders the skin's Shadertoy-style wallpaper (GPU when it can, the CPU implementation otherwise) and blits it under everything else.",
+     "code": [
+      "crates/oasis-backend-sdl/src/shader_bridge.rs: render_and_blit"
+     ]
+    },
+    {
+     "title": "Scene objects",
+     "crates": [
+      "oasis-sdi",
+      "oasis-core"
+     ],
+     "text": "oasis-core keeps the dashboard, status bar and taskbar as named objects in the SDI registry; SdiRegistry::draw paints them in z-order (or as a base and overlay layer around vector icons).",
+     "code": [
+      "crates/oasis-app/src/render.rs: update_sdi",
+      "crates/oasis-sdi/src/registry/draw.rs: SdiRegistry::draw"
+     ]
+    },
+    {
+     "title": "Window chrome",
+     "crates": [
+      "oasis-wm"
+     ],
+     "text": "In desktop mode WindowManager::draw_with_clips_overlay draws each window's decorations, then clips to its content rect and hands the content area to a callback.",
+     "code": [
+      "crates/oasis-wm/src/render.rs: draw_with_clips_overlay"
+     ]
+    },
+    {
+     "title": "The app draws itself",
+     "crates": [
+      "oasis-core",
+      "oasis-app-core",
+      "oasis-app-calculator"
+     ],
+     "text": "The callback finds the window's AppRunner, which delegates to the app's App::draw_windowed (here, the Calculator) with the content rect and the active theme.",
+     "code": [
+      "crates/oasis-core/src/apps/runner.rs: AppRunner::draw_windowed",
+      "crates/oasis-app-core/src/app_trait.rs: App::draw_windowed"
+     ]
+    },
+    {
+     "title": "Through the trait boundary",
+     "crates": [
+      "oasis-types",
+      "oasis-ui"
+     ],
+     "text": "Apps and widgets only see &mut dyn SdiBackend: fill_rect, draw_text, blit and the extension-trait defaults. Nothing above this line calls a platform API.",
+     "code": [
+      "crates/oasis-types/src/backend/sdi_core.rs: SdiCore",
+      "crates/oasis-types/src/backend/sdi_backend.rs: SdiBackend"
+     ]
+    },
+    {
+     "title": "Pixels on a platform",
+     "crates": [
+      "oasis-backend-sdl",
+      "oasis-backend-wasm",
+      "oasis-backend-ue5",
+      "oasis-backend-psp"
+     ],
+     "text": "swap_buffers presents: SDL3 on desktop and Pi, Canvas 2D in the browser (oasis-backend-wasm runs the same window loop), an RGBA framebuffer UE5 reads through oasis-ffi's oasis_get_buffer, and sceGu on the PSP (its own loop draws the window manager with per-window draw functions).",
+     "code": [
+      "crates/oasis-backend-sdl/src/core_impl.rs: swap_buffers",
+      "crates/oasis-backend-wasm/src/tick.rs: draw_with_clips_overlay",
+      "crates/oasis-ffi/src/render.rs: oasis_tick, oasis_get_buffer",
+      "crates/oasis-backend-psp/src/render_desktop.rs: draw_with_clips_noalloc"
+     ]
+    }
+   ]
+  },
+  {
+   "id": "page",
+   "title": "A web page",
+   "blurb": "From a URL to a laid-out, painted page inside a window.",
+   "steps": [
+    {
+     "title": "Navigate",
+     "crates": [
+      "oasis-browser"
+     ],
+     "text": "Every host opens its own BrowserWidget for the Browser window. navigate_vfs answers from the page cache or the VFS, or queues a page load on the loader's IO thread.",
+     "code": [
+      "crates/oasis-browser/src/widget/pipeline/navigation.rs: navigate_vfs"
+     ]
+    },
+    {
+     "title": "Fetch",
+     "crates": [
+      "oasis-http",
+      "oasis-net"
+     ],
+     "text": "oasis-http parses the Url and fetches on its IO thread: HTTP/1.1 or HTTP/2 over TLS (Gemini framing for gemini://), redirects, cookies and CSP. poll_io_thread drains the results back on the UI thread.",
+     "code": [
+      "crates/oasis-http/src/io_thread.rs: IoThread",
+      "crates/oasis-browser/src/widget/pipeline/navigation.rs: poll_io_thread"
+     ]
+    },
+    {
+     "title": "Parse HTML",
+     "crates": [
+      "oasis-html"
+     ],
+     "text": "load_html hands the source to TreeBuilder::parse_with, which drives the tokenizer itself, as the spec's tree construction does, and builds an arena DOM (parse_reuse keeps the previous document's allocation when it can).",
+     "code": [
+      "crates/oasis-browser/src/widget/pipeline/document.rs: load_html",
+      "crates/oasis-html/src/tree_builder/mod.rs: TreeBuilder::parse_with, TreeBuilder::parse_reuse"
+     ]
+    },
+    {
+     "title": "Cascade CSS",
+     "crates": [
+      "oasis-css"
+     ],
+     "text": "Stylesheets from <style>, <link> and the UA sheet go through cascade::style_tree: selectors, @media / @container / @layer, var() and computed values for every node.",
+     "code": [
+      "crates/oasis-browser/src/widget/pipeline/stylesheets.rs",
+      "crates/oasis-css/src/cascade/mod.rs: style_tree"
+     ]
+    },
+    {
+     "title": "Run scripts",
+     "crates": [
+      "oasis-js"
+     ],
+     "text": "With the javascript feature (desktop and PSP), <script> tags run in QuickJS-NG under a watchdog, against DOM bindings that can mutate the document and trigger a re-cascade.",
+     "code": [
+      "crates/oasis-browser/src/widget/pipeline/scripts.rs"
+     ]
+    },
+    {
+     "title": "Layout",
+     "crates": [
+      "oasis-browser"
+     ],
+     "text": "layout::block::build_layout_tree turns styled nodes into boxes: block, inline, flex, grid, tables, floats, positioning (run twice when container queries need sizes).",
+     "code": [
+      "crates/oasis-browser/src/widget/pipeline/document.rs: build_layout_tree"
+     ]
+    },
+    {
+     "title": "Paint",
+     "crates": [
+      "oasis-browser",
+      "oasis-types"
+     ],
+     "text": "BrowserWidget::paint records a display list once and replays it (or just its dirty parts) into the window's &mut dyn SdiBackend, inside the clip the window manager set.",
+     "code": [
+      "crates/oasis-browser/src/widget/paint.rs: BrowserWidget::paint"
+     ]
+    },
+    {
+     "title": "On screen",
+     "crates": [
+      "oasis-app",
+      "oasis-wm",
+      "oasis-backend-sdl"
+     ],
+     "text": "The shell's window callback calls bw.paint(be) for the Browser window, and the frame presents like any other.",
+     "code": [
+      "crates/oasis-app/src/shell.rs: draw_frame"
+     ]
+    }
+   ]
+  },
+  {
+   "id": "video",
+   "title": "A video stream",
+   "blurb": "From a TV Guide channel to decoded frames and audio on the desktop.",
+   "steps": [
+    {
+     "title": "Pick a channel",
+     "crates": [
+      "oasis-app-tv-guide"
+     ],
+     "text": "The TV Guide app shows an EPG grid over an Internet Archive catalog. Tuning a channel emits a tune request the shell drains each frame.",
+     "code": [
+      "crates/oasis-app-tv-guide/src/grid_state.rs: tune",
+      "crates/oasis-app-tv-guide/src/app.rs: make_tune_ipc"
+     ]
+    },
+    {
+     "title": "Tune",
+     "crates": [
+      "oasis-app"
+     ],
+     "text": "tv_controller::tune::handle_tune_requests cancels any old session and starts a download thread for the URL at the seek offset.",
+     "code": [
+      "crates/oasis-app/src/tv_controller/tune.rs: handle_tune_requests"
+     ]
+    },
+    {
+     "title": "Download",
+     "crates": [
+      "oasis-app",
+      "oasis-net",
+      "oasis-core"
+     ],
+     "text": "stream_download_range speaks HTTP/1.1 over TCP, with rustls for https (oasis-net's provider, through oasis-core), reconnecting on stalls and failing over to a fresh CDN redirect.",
+     "code": [
+      "crates/oasis-app/src/tv_controller/download.rs: stream_download_range",
+      "crates/oasis-app/src/tv_controller/cdn_failover.rs"
+     ]
+    },
+    {
+     "title": "StreamingBuffer",
+     "crates": [
+      "oasis-app"
+     ],
+     "text": "A sliding window (8 MB behind the read cursor, 16 MB lookahead, 2 MB prebuffer) the decoder reads through Read + Seek while the download thread fills it.",
+     "code": [
+      "crates/oasis-app/src/tv_controller/streaming_buffer.rs"
+     ]
+    },
+    {
+     "title": "Decode",
+     "crates": [
+      "oasis-video"
+     ],
+     "text": "SoftwareVideoDecoder::open_stream demuxes the MP4 (symphonia, with the dependency-free demux-lite for seek lookup) and decodes H.264 (ffmpeg or openh264) and AAC on a decoder thread.",
+     "code": [
+      "crates/oasis-app/src/video_player.rs: start_software_source",
+      "crates/oasis-video/src/decoder.rs: SoftwareVideoDecoder::open_stream"
+     ]
+    },
+    {
+     "title": "Frames and samples",
+     "crates": [
+      "oasis-app",
+      "oasis-types"
+     ],
+     "text": "VideoPlayer::tick paces one frame per display interval into a texture with load_texture, and feeds PCM to the AudioBackend's streaming track.",
+     "code": [
+      "crates/oasis-app/src/video_player.rs: VideoPlayer::tick",
+      "crates/oasis-app/src/tv_controller/player.rs: tick_video_player"
+     ]
+    },
+    {
+     "title": "Back in the guide",
+     "crates": [
+      "oasis-app-tv-guide",
+      "oasis-backend-sdl"
+     ],
+     "text": "The texture becomes the guide's preview_texture; its draw_windowed blits it into the window, and SDL presents it. (The PSP plays the same catalog through its own Media Engine pipeline in oasis-backend-psp.)",
+     "code": [
+      "crates/oasis-app-tv-guide/src/grid_render.rs: backend.blit"
+     ]
+    }
+   ]
+  }
+ ]
+}

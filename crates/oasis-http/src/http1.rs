@@ -105,7 +105,8 @@ pub fn parse_header_block(header_bytes: &[u8]) -> Result<(u16, Vec<(String, Stri
 ///
 /// Header *lines* are inspected, so a value such as
 /// `X-Note: transfer-encoding chunked` or a header named
-/// `X-Content-Length` never changes the framing.
+/// `X-Content-Length` never changes the framing. This ignores the status
+/// and request method; [`response_framing`] applies the no-body rules.
 pub fn body_framing(headers: &[(String, String)]) -> BodyFraming {
     let chunked = headers
         .iter()
@@ -121,14 +122,72 @@ pub fn body_framing(headers: &[(String, String)]) -> BodyFraming {
     }
 }
 
+/// Whether a response with `status` to a `method` request has no body
+/// whatever its headers say (RFC 9112 §6.3 rule 1): responses to `HEAD`
+/// and every `1xx`, `204` and `304` response. A `304` (cache
+/// revalidation) or a `HEAD` answer routinely carries the
+/// `Content-Length` of the full representation.
+pub fn has_no_body(method: &str, status: u16) -> bool {
+    method.eq_ignore_ascii_case("HEAD")
+        || (100..200).contains(&status)
+        || matches!(status, 204 | 304)
+}
+
+/// [`body_framing`] for a response with `status` to a `method` request:
+/// [`BodyFraming::Length(0)`](BodyFraming::Length) when [`has_no_body`].
+pub fn response_framing(method: &str, status: u16, headers: &[(String, String)]) -> BodyFraming {
+    if has_no_body(method, status) {
+        BodyFraming::Length(0)
+    } else {
+        body_framing(headers)
+    }
+}
+
+/// Locate the head of the final response in `data`, skipping complete
+/// interim `1xx` heads (RFC 9110 §15.2, e.g. `103 Early Hints`; `101` is
+/// final for us since we never upgrade). `start` is where to look and
+/// advances past every interim head, so repeated calls stay linear;
+/// on success the final head spans `data[*start..end]` and its body
+/// starts at `end + separator length`.
+///
+/// `Ok(None)` while the head is incomplete. Interim heads count against
+/// [`MAX_HEADER_SIZE`], so an endless stream of them is an error too.
+fn locate_final_head(data: &[u8], start: &mut usize) -> Result<Option<(usize, usize)>> {
+    loop {
+        let rest = data.get(*start..).unwrap_or_default();
+        let Some((end, sep)) = find_header_end(rest) else {
+            if data.len() > MAX_HEADER_SIZE {
+                return Err(header_limit_error());
+            }
+            return Ok(None);
+        };
+        let end = *start + end;
+        if end > MAX_HEADER_SIZE {
+            return Err(header_limit_error());
+        }
+        let interim = parse_header_block(&data[*start..end])
+            .is_ok_and(|(status, _)| (100..200).contains(&status) && status != 101);
+        if !interim {
+            return Ok(Some((end, sep)));
+        }
+        *start = end + sep;
+    }
+}
+
 /// Incremental "is the response complete?" detector for read loops.
 ///
 /// Feed it the whole receive buffer after every read; once headers have
 /// arrived it knows the framing, and it reports the total message length
 /// as soon as the body is complete, so keep-alive and `Connection:
-/// close`-ignoring servers don't make the caller wait for EOF.
+/// close`-ignoring servers don't make the caller wait for EOF. Interim
+/// `1xx` heads are skipped, and bodiless responses ([`has_no_body`])
+/// complete with their head.
 #[derive(Debug, Default)]
 pub struct ResponseTracker {
+    /// The request was `HEAD`: the response never has a body.
+    head_request: bool,
+    /// Start of the (final) response head.
+    head_start: usize,
     body_start: Option<usize>,
     framing: Option<BodyFraming>,
     /// Offset (within the body) of the next unparsed chunk-size line.
@@ -136,9 +195,18 @@ pub struct ResponseTracker {
 }
 
 impl ResponseTracker {
-    /// A tracker for a fresh response.
+    /// A tracker for the response to a request with a body-carrying
+    /// response (any method but `HEAD`).
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// A tracker for the response to a `method` request.
+    pub fn for_method(method: &str) -> Self {
+        Self {
+            head_request: method.eq_ignore_ascii_case("HEAD"),
+            ..Self::default()
+        }
     }
 
     /// Offset of the first body byte, once the headers have arrived.
@@ -152,21 +220,16 @@ impl ResponseTracker {
     /// and an error when the header section exceeds [`MAX_HEADER_SIZE`].
     pub fn poll(&mut self, buf: &[u8]) -> Result<Option<usize>> {
         if self.body_start.is_none() {
-            let Some((end, sep)) = find_header_end(buf) else {
-                if buf.len() > MAX_HEADER_SIZE {
-                    return Err(header_limit_error());
-                }
+            let Some((end, sep)) = locate_final_head(buf, &mut self.head_start)? else {
                 return Ok(None);
             };
-            if end > MAX_HEADER_SIZE {
-                return Err(header_limit_error());
-            }
             self.body_start = Some(end + sep);
+            let method = if self.head_request { "HEAD" } else { "GET" };
             // A malformed status line is reported by `parse_response`;
             // here it just means "read until close".
             self.framing = Some(
-                parse_header_block(&buf[..end])
-                    .map(|(_, h)| body_framing(&h))
+                parse_header_block(&buf[self.head_start..end])
+                    .map(|(status, h)| response_framing(method, status, &h))
                     .unwrap_or(BodyFraming::UntilClose),
             );
         }
@@ -299,17 +362,24 @@ pub fn decode_chunked(data: &[u8], limit: BodyLimit) -> Result<Vec<u8>> {
 /// Parse raw bytes into status code, headers, and (de-chunked) body.
 ///
 /// Accepts both `\r\n` (standard) and bare `\n` (RFC 9112 §2.2) line
-/// endings in the header section. Content-decoding (`gzip`, ...) is left
-/// to the caller.
+/// endings in the header section, skips interim `1xx` heads, and gives
+/// `204` / `304` responses an empty body. Content-decoding (`gzip`, ...)
+/// is left to the caller.
 pub fn parse_response(data: &[u8], limit: BodyLimit) -> Result<HttpResponse> {
-    let (header_end, separator_len) = find_header_end(data).ok_or_else(|| {
-        OasisError::Backend("malformed HTTP response: no header terminator".into())
-    })?;
-    if header_end > MAX_HEADER_SIZE {
-        return Err(header_limit_error());
-    }
-    let (status_code, headers) = parse_header_block(&data[..header_end])?;
+    let mut head_start = 0;
+    let (header_end, separator_len) =
+        locate_final_head(data, &mut head_start)?.ok_or_else(|| {
+            OasisError::Backend("malformed HTTP response: no header terminator".into())
+        })?;
+    let (status_code, headers) = parse_header_block(&data[head_start..header_end])?;
     let raw_body = &data[header_end + separator_len..];
+    if has_no_body("GET", status_code) {
+        return Ok(HttpResponse {
+            status_code,
+            headers,
+            body: Vec::new(),
+        });
+    }
 
     let too_large = || {
         OasisError::Backend(
@@ -379,8 +449,12 @@ pub fn is_redirect(status: u16) -> bool {
     matches!(status, 301 | 302 | 303 | 307 | 308)
 }
 
-/// Find the position of a byte subsequence in a slice.
+/// Find the position of a byte subsequence in a slice (an empty `needle`
+/// is found at 0).
 pub fn find_subsequence(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+    if needle.is_empty() {
+        return Some(0);
+    }
     haystack.windows(needle.len()).position(|w| w == needle)
 }
 
@@ -534,6 +608,61 @@ mod tests {
         assert_eq!(scan_chunked(b"zz\r\n", &mut cur), Some(4));
         let mut cur = 0;
         assert_eq!(scan_chunked(b"0\r\n", &mut cur), None);
+    }
+
+    /// Regression: a `304` revalidation (or a `HEAD` answer) carrying the
+    /// full representation's `Content-Length` made the read loop wait for
+    /// a body that never comes, until the 15 s read timeout.
+    #[test]
+    fn bodiless_responses_complete_with_their_head() {
+        let not_modified = b"HTTP/1.1 304 Not Modified\r\nContent-Length: 5000\r\n\r\n";
+        let mut t = ResponseTracker::new();
+        assert_eq!(t.poll(not_modified).unwrap(), Some(not_modified.len()));
+        let no_content = b"HTTP/1.1 204 No Content\r\nTransfer-Encoding: chunked\r\n\r\n";
+        let mut t = ResponseTracker::new();
+        assert_eq!(t.poll(no_content).unwrap(), Some(no_content.len()));
+
+        let head = b"HTTP/1.1 200 OK\r\nContent-Length: 5000\r\n\r\n";
+        let mut t = ResponseTracker::for_method("HEAD");
+        assert_eq!(t.poll(head).unwrap(), Some(head.len()));
+        let mut t = ResponseTracker::for_method("GET");
+        assert_eq!(t.poll(head).unwrap(), None);
+
+        let resp = parse_response(b"HTTP/1.1 304 Not Modified\r\n\r\ngarbage", DESKTOP).unwrap();
+        assert_eq!(resp.status_code, 304);
+        assert!(resp.body.is_empty());
+    }
+
+    /// Regression: an interim `103 Early Hints` head was taken for the
+    /// response, so the real status line and headers ended up in the body.
+    #[test]
+    fn interim_heads_are_skipped() {
+        let msg = b"HTTP/1.1 103 Early Hints\r\nLink: </a.css>; rel=preload\r\n\r\n\
+                    HTTP/1.1 100 Continue\r\n\r\n\
+                    HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nokEXTRA";
+        let mut t = ResponseTracker::new();
+        // Feeding byte by byte must reach the same answer.
+        let mut done = None;
+        for n in 1..=msg.len() {
+            if let Some(end) = t.poll(&msg[..n]).unwrap() {
+                done = Some(end);
+                break;
+            }
+        }
+        assert_eq!(done, Some(msg.len() - 5));
+        let resp = parse_response(msg, DESKTOP).unwrap();
+        assert_eq!(resp.status_code, 200);
+        assert_eq!(resp.body, b"ok");
+        assert!(find_header(&resp.headers, "link").is_none());
+
+        // An endless run of interim heads hits the header limit.
+        let flood = b"HTTP/1.1 100 Continue\r\n\r\n".repeat(MAX_HEADER_SIZE / 20);
+        assert!(ResponseTracker::new().poll(&flood).is_err());
+    }
+
+    #[test]
+    fn empty_needle_does_not_panic() {
+        assert_eq!(find_subsequence(b"abc", b""), Some(0));
     }
 
     #[test]

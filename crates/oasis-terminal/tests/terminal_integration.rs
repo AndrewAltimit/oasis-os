@@ -361,10 +361,10 @@ fn chaining_and_skips_on_failure() {
             &mut env,
         )
         .unwrap();
-    let text = extract_text(output);
+    // The error went to /dev/null and the echo was skipped: no output.
     assert!(
-        !text.contains("should_not_appear"),
-        "second command should be skipped after failure: {text}"
+        matches!(output, CommandOutput::None),
+        "second command should be skipped after failure: {output:?}"
     );
 }
 

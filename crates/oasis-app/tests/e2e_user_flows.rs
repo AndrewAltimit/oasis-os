@@ -309,6 +309,39 @@ fn settings_changes_apply_live_and_persist_across_reboot() {
     let _ = std::fs::remove_dir_all(prefs.parent().unwrap());
 }
 
+/// An out-of-range resolution request is refused without pinning the
+/// current size: persisting it made every later skin open at the size of
+/// the skin that was active when the request was rejected.
+#[test]
+fn rejected_resolution_request_does_not_pin_the_size() {
+    let _g = shared();
+    let prefs = temp_prefs("rejected-resolution");
+    let mut h = boot_with_prefs("xp", &prefs);
+    assert_eq!(h.size(), (1024, 768), "xp opens at its own size");
+
+    for bad in ["100000x100000", "1x1"] {
+        h.vfs_mut()
+            .write(
+                oasis_apps::settings::RESOLUTION_CHANGE_REQUEST_PATH,
+                bad.as_bytes(),
+            )
+            .unwrap();
+        h.settle();
+        assert_eq!(h.size(), (1024, 768), "{bad} refused");
+    }
+    h.shutdown().unwrap();
+    let saved = std::fs::read_to_string(&prefs).unwrap_or_default();
+    assert!(
+        !saved.contains("resolution"),
+        "a refused request persisted nothing: {saved}"
+    );
+
+    // A later boot on another skin opens at that skin's size, not xp's.
+    let h = boot_with_prefs("desktop", &prefs);
+    assert_eq!(h.size(), (800, 600), "desktop keeps its own size");
+    let _ = std::fs::remove_dir_all(prefs.parent().unwrap());
+}
+
 // ---------------------------------------------------------------------------
 // Locale
 // ---------------------------------------------------------------------------
@@ -748,6 +781,36 @@ fn files_made_in_the_terminal_show_up_in_the_file_manager() {
         .find(|w| w.title.starts_with("Text Editor"))
         .unwrap_or_else(|| panic!("{:?}", h.windows()));
     assert!(window_shows(&mut h, &editor.title, "typed in the terminal"));
+}
+
+#[test]
+fn cron_jobs_added_in_the_terminal_run_on_their_interval() {
+    let _g = shared();
+    let mut h = boot("classic");
+    h.vfs_mut()
+        .write("/tmp/beat.sh", b"echo cron-beat >> /tmp/beats\n")
+        .unwrap();
+    h.terminal("cron add beat 2s /tmp/beat.sh");
+    h.settle();
+    let beats = |h: &Harness| {
+        h.vfs()
+            .read("/tmp/beats")
+            .map(|d| String::from_utf8_lossy(&d).matches("cron-beat").count())
+            .unwrap_or(0)
+    };
+    assert_eq!(beats(&h), 0, "{:?}", h.state().terminal.output_lines);
+    // Seen on the first scheduler pass, then due every 2 s.
+    h.advance(std::time::Duration::from_secs(7));
+    let n = beats(&h);
+    assert!(
+        (2..=3).contains(&n),
+        "{n} runs {:?}",
+        h.state().terminal.output_lines
+    );
+    h.terminal("cron remove beat");
+    h.settle();
+    h.advance(std::time::Duration::from_secs(5));
+    assert_eq!(beats(&h), n, "the job ran after `cron remove`");
 }
 
 // ---------------------------------------------------------------------------

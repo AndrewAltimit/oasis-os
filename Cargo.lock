@@ -969,9 +969,10 @@ dependencies = [
 
 [[package]]
 name = "oasis-app"
-version = "1.4.0"
+version = "1.6.0"
 dependencies = [
  "anyhow",
+ "criterion",
  "env_logger",
  "log",
  "oasis-app-core",
@@ -990,7 +991,7 @@ dependencies = [
 
 [[package]]
 name = "oasis-app-calculator"
-version = "1.4.0"
+version = "1.6.0"
 dependencies = [
  "oasis-app-core",
  "oasis-skin",
@@ -1003,7 +1004,7 @@ dependencies = [
 
 [[package]]
 name = "oasis-app-core"
-version = "1.4.0"
+version = "1.6.0"
 dependencies = [
  "oasis-skin",
  "oasis-test-backend",
@@ -1013,7 +1014,7 @@ dependencies = [
 
 [[package]]
 name = "oasis-app-file-manager"
-version = "1.4.0"
+version = "1.6.0"
 dependencies = [
  "oasis-app-core",
  "oasis-skin",
@@ -1025,7 +1026,7 @@ dependencies = [
 
 [[package]]
 name = "oasis-app-games"
-version = "1.4.0"
+version = "1.6.0"
 dependencies = [
  "oasis-app-core",
  "oasis-platform",
@@ -1035,7 +1036,7 @@ dependencies = [
 
 [[package]]
 name = "oasis-app-media"
-version = "1.4.0"
+version = "1.6.0"
 dependencies = [
  "jpeg-decoder",
  "log",
@@ -1049,7 +1050,7 @@ dependencies = [
 
 [[package]]
 name = "oasis-app-paint"
-version = "1.4.0"
+version = "1.6.0"
 dependencies = [
  "oasis-app-core",
  "oasis-skin",
@@ -1061,7 +1062,7 @@ dependencies = [
 
 [[package]]
 name = "oasis-app-radio"
-version = "1.4.0"
+version = "1.6.0"
 dependencies = [
  "oasis-app-core",
  "oasis-audio",
@@ -1074,7 +1075,7 @@ dependencies = [
 
 [[package]]
 name = "oasis-app-settings"
-version = "1.4.0"
+version = "1.6.0"
 dependencies = [
  "oasis-app-core",
  "oasis-i18n",
@@ -1087,7 +1088,7 @@ dependencies = [
 
 [[package]]
 name = "oasis-app-system-monitor"
-version = "1.4.0"
+version = "1.6.0"
 dependencies = [
  "oasis-app-core",
  "oasis-platform",
@@ -1100,7 +1101,7 @@ dependencies = [
 
 [[package]]
 name = "oasis-app-text-editor"
-version = "1.4.0"
+version = "1.6.0"
 dependencies = [
  "criterion",
  "oasis-app-core",
@@ -1113,7 +1114,7 @@ dependencies = [
 
 [[package]]
 name = "oasis-app-tv-guide"
-version = "1.4.0"
+version = "1.6.0"
 dependencies = [
  "js-sys",
  "log",
@@ -1129,7 +1130,7 @@ dependencies = [
 
 [[package]]
 name = "oasis-apps"
-version = "1.4.0"
+version = "1.6.0"
 dependencies = [
  "oasis-app-calculator",
  "oasis-app-core",
@@ -1143,7 +1144,9 @@ dependencies = [
  "oasis-app-text-editor",
  "oasis-app-tv-guide",
  "oasis-core",
+ "oasis-test-backend",
  "oasis-types",
+ "oasis-vfs",
  "serde",
  "serde_json",
  "toml",
@@ -1151,7 +1154,7 @@ dependencies = [
 
 [[package]]
 name = "oasis-audio"
-version = "1.4.0"
+version = "1.6.0"
 dependencies = [
  "log",
  "oasis-net",
@@ -1166,7 +1169,7 @@ dependencies = [
 
 [[package]]
 name = "oasis-backend-sdl"
-version = "1.4.0"
+version = "1.6.0"
 dependencies = [
  "env_logger",
  "log",
@@ -1185,22 +1188,20 @@ dependencies = [
 
 [[package]]
 name = "oasis-backend-ue5"
-version = "1.4.0"
+version = "1.6.0"
 dependencies = [
  "criterion",
  "log",
  "oasis-audio",
- "oasis-browser",
  "oasis-core",
  "oasis-rasterize",
  "oasis-types",
- "oasis-vfs",
  "png",
 ]
 
 [[package]]
 name = "oasis-backend-wasm"
-version = "1.4.0"
+version = "1.6.0"
 dependencies = [
  "console_error_panic_hook",
  "js-sys",
@@ -1223,7 +1224,7 @@ dependencies = [
 
 [[package]]
 name = "oasis-browser"
-version = "1.4.0"
+version = "1.6.0"
 dependencies = [
  "criterion",
  "flate2",
@@ -1250,7 +1251,7 @@ dependencies = [
 
 [[package]]
 name = "oasis-core"
-version = "1.4.0"
+version = "1.6.0"
 dependencies = [
  "criterion",
  "log",
@@ -1277,7 +1278,7 @@ dependencies = [
 
 [[package]]
 name = "oasis-css"
-version = "1.4.0"
+version = "1.6.0"
 dependencies = [
  "criterion",
  "log",
@@ -1290,7 +1291,7 @@ dependencies = [
 
 [[package]]
 name = "oasis-ffi"
-version = "1.4.0"
+version = "1.6.0"
 dependencies = [
  "env_logger",
  "log",
@@ -1302,7 +1303,7 @@ dependencies = [
 
 [[package]]
 name = "oasis-html"
-version = "1.4.0"
+version = "1.6.0"
 dependencies = [
  "criterion",
  "log",
@@ -1311,7 +1312,7 @@ dependencies = [
 
 [[package]]
 name = "oasis-http"
-version = "1.4.0"
+version = "1.6.0"
 dependencies = [
  "brotli",
  "flate2",
@@ -1324,7 +1325,7 @@ dependencies = [
 
 [[package]]
 name = "oasis-i18n"
-version = "1.4.0"
+version = "1.6.0"
 dependencies = [
  "log",
  "oasis-types",
@@ -1334,7 +1335,7 @@ dependencies = [
 
 [[package]]
 name = "oasis-js"
-version = "1.4.0"
+version = "1.6.0"
 dependencies = [
  "rquickjs",
  "thiserror",
@@ -1342,7 +1343,7 @@ dependencies = [
 
 [[package]]
 name = "oasis-mcp"
-version = "1.4.0"
+version = "1.6.0"
 dependencies = [
  "log",
  "oasis-net",
@@ -1353,7 +1354,7 @@ dependencies = [
 
 [[package]]
 name = "oasis-net"
-version = "1.4.0"
+version = "1.6.0"
 dependencies = [
  "log",
  "oasis-types",
@@ -1367,14 +1368,14 @@ dependencies = [
 
 [[package]]
 name = "oasis-platform"
-version = "1.4.0"
+version = "1.6.0"
 dependencies = [
  "oasis-types",
 ]
 
 [[package]]
 name = "oasis-rasterize"
-version = "1.4.0"
+version = "1.6.0"
 dependencies = [
  "criterion",
  "fontdue",
@@ -1383,7 +1384,7 @@ dependencies = [
 
 [[package]]
 name = "oasis-sdi"
-version = "1.4.0"
+version = "1.6.0"
 dependencies = [
  "criterion",
  "oasis-test-backend",
@@ -1395,7 +1396,7 @@ dependencies = [
 
 [[package]]
 name = "oasis-shader"
-version = "1.4.0"
+version = "1.6.0"
 dependencies = [
  "criterion",
  "glow",
@@ -1406,7 +1407,7 @@ dependencies = [
 
 [[package]]
 name = "oasis-skin"
-version = "1.4.0"
+version = "1.6.0"
 dependencies = [
  "fontdue",
  "log",
@@ -1426,7 +1427,7 @@ dependencies = [
 
 [[package]]
 name = "oasis-terminal"
-version = "1.4.0"
+version = "1.6.0"
 dependencies = [
  "oasis-net",
  "oasis-platform",
@@ -1437,14 +1438,14 @@ dependencies = [
 
 [[package]]
 name = "oasis-test-backend"
-version = "1.4.0"
+version = "1.6.0"
 dependencies = [
  "oasis-types",
 ]
 
 [[package]]
 name = "oasis-types"
-version = "1.4.0"
+version = "1.6.0"
 dependencies = [
  "log",
  "proptest",
@@ -1456,7 +1457,7 @@ dependencies = [
 
 [[package]]
 name = "oasis-ui"
-version = "1.4.0"
+version = "1.6.0"
 dependencies = [
  "oasis-test-backend",
  "oasis-types",
@@ -1464,21 +1465,21 @@ dependencies = [
 
 [[package]]
 name = "oasis-usb-host"
-version = "1.4.0"
+version = "1.6.0"
 dependencies = [
  "rusb",
 ]
 
 [[package]]
 name = "oasis-vector"
-version = "1.4.0"
+version = "1.6.0"
 dependencies = [
  "oasis-types",
 ]
 
 [[package]]
 name = "oasis-vfs"
-version = "1.4.0"
+version = "1.6.0"
 dependencies = [
  "criterion",
  "oasis-types",
@@ -1488,7 +1489,7 @@ dependencies = [
 
 [[package]]
 name = "oasis-video"
-version = "1.4.0"
+version = "1.6.0"
 dependencies = [
  "criterion",
  "ffmpeg-next",
@@ -1501,7 +1502,7 @@ dependencies = [
 
 [[package]]
 name = "oasis-wm"
-version = "1.4.0"
+version = "1.6.0"
 dependencies = [
  "log",
  "oasis-sdi",

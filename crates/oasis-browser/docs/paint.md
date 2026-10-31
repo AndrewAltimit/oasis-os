@@ -166,8 +166,12 @@ through `submit_text_batch`. SVG and canvas items call
 layer they draw into a render target composited at the layer opacity
 when the backend supports render targets, and opaque otherwise.
 
-`replay_dirty` replays only the items whose bounds intersect a dirty
-rectangle (clip, layer and sticky markers are always replayed).
+`replay_dirty` runs the same walk (`ReplayState` in `replay.rs`) but
+skips drawables whose bounds miss a dirty rectangle (clip, layer and
+sticky markers are always replayed) and composites layers by opacity
+stacking instead of offscreen targets. Clips are intersected in screen
+space and translated into the bound offscreen layer when applied, so a
+clip inside a translucent / filtered box lines up with the window clip.
 
 ## Widget caching
 

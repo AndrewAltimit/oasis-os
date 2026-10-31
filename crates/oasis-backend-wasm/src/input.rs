@@ -124,9 +124,14 @@ impl WasmInputBackend {
             closures.push(closure);
         }
 
+        // A press that started on the canvas, so its release is delivered
+        // wherever the button comes up (see `mouseup`).
+        let pressed = Rc::new(std::cell::Cell::new(false));
+
         // mousedown
         {
             let ev = Rc::clone(&events);
+            let pressed = Rc::clone(&pressed);
             let cw = width;
             let ch = height;
             let canvas_clone = canvas.clone();
@@ -134,6 +139,7 @@ impl WasmInputBackend {
                 let Ok(me) = e.dyn_into::<MouseEvent>() else {
                     return;
                 };
+                pressed.set(true);
                 let (x, y) = scale_mouse(&canvas_clone, &me, cw, ch);
                 ev.borrow_mut().push(InputEvent::PointerClick { x, y });
             }) as Box<dyn FnMut(web_sys::Event)>);
@@ -142,9 +148,12 @@ impl WasmInputBackend {
             closures.push(closure);
         }
 
-        // mouseup
+        // mouseup, on the window: a drag (window move, slider) released
+        // over the letterbox or outside the canvas still ends. Listening
+        // on the canvas alone left it stuck until the next click.
         {
             let ev = Rc::clone(&events);
+            let pressed = Rc::clone(&pressed);
             let cw = width;
             let ch = height;
             let canvas_clone = canvas.clone();
@@ -152,10 +161,13 @@ impl WasmInputBackend {
                 let Ok(me) = e.dyn_into::<MouseEvent>() else {
                     return;
                 };
+                if !pressed.replace(false) {
+                    return;
+                }
                 let (x, y) = scale_mouse(&canvas_clone, &me, cw, ch);
                 ev.borrow_mut().push(InputEvent::PointerRelease { x, y });
             }) as Box<dyn FnMut(web_sys::Event)>);
-            let _ = target
+            let _ = win_target
                 .add_event_listener_with_callback("mouseup", closure.as_ref().unchecked_ref());
             closures.push(closure);
         }
@@ -168,7 +180,13 @@ impl WasmInputBackend {
                     return;
                 };
                 we.prevent_default();
-                let delta = if we.delta_y() > 0.0 { 1 } else { -1 };
+                // A sideways swipe (or shift+wheel) has no vertical motion:
+                // it is not a scroll up.
+                let delta = match we.delta_y() {
+                    d if d > 0.0 => 1,
+                    d if d < 0.0 => -1,
+                    _ => return,
+                };
                 ev.borrow_mut().push(InputEvent::MouseWheel { delta });
             }) as Box<dyn FnMut(web_sys::Event)>);
             let _ =
@@ -427,14 +445,15 @@ pub(crate) fn mods_from_dom(shift: bool, ctrl: bool, alt: bool, meta: bool) -> M
 
 /// Whether the browser's default action for this key press should be
 /// suppressed: keys with a gamepad-style twin (arrows, Space, Tab, ...),
-/// page-scrolling navigation keys, and Ctrl/Cmd+letter shortcuts (except
+/// page-scrolling navigation keys, F10 (opens app menu bars; the browser
+/// would focus its own menu), and Ctrl/Cmd+letter shortcuts (except
 /// Ctrl+R so page reload keeps working).
 pub(crate) fn should_prevent_default(key: Key, mods: Modifiers) -> bool {
     if key.legacy_press(mods).is_some() {
         return true;
     }
     match key {
-        Key::Delete | Key::Home | Key::End | Key::PageUp | Key::PageDown => true,
+        Key::Delete | Key::Home | Key::End | Key::PageUp | Key::PageDown | Key::F(10) => true,
         Key::Char(c) => (mods.ctrl() || mods.super_key()) && c.is_alphabetic() && c != 'r',
         _ => false,
     }
@@ -1050,5 +1069,6 @@ mod tests {
         assert!(!should_prevent_default(Key::Char('r'), Modifiers::CTRL));
         assert!(!should_prevent_default(Key::Char('a'), Modifiers::NONE));
         assert!(!should_prevent_default(Key::F(5), Modifiers::NONE));
+        assert!(should_prevent_default(Key::F(10), Modifiers::NONE));
     }
 }

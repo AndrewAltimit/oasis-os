@@ -22,6 +22,11 @@ const MAX_VAR_DEPTH: u32 = 32;
 /// `--b: var(--a) var(--a); --c: var(--b) var(--b); ...` stay bounded.
 const MAX_SUBSTITUTED_LEN: usize = 64 * 1024;
 
+/// Upper bound on one element's whole custom-property map (names plus
+/// values) that `var()` expansion may grow it to; see
+/// [`resolve_custom_properties`].
+const MAX_ELEMENT_CUSTOM_BYTES: usize = 1024 * 1024;
+
 #[derive(Debug, Clone, PartialEq)]
 enum SubstError {
     /// Missing reference without fallback, malformed `var()`, or limits
@@ -219,9 +224,23 @@ pub(super) fn resolve_custom_properties(props: &mut FxHashMap<String, String>, d
     let mut updates: Vec<(String, Option<String>)> = Vec::new();
     {
         let mut resolver = Resolver::new(props);
+        // What the map may hold after this element's substitutions.
+        // Each value is capped at MAX_SUBSTITUTED_LEN, but hundreds of
+        // distinct properties each expanding to 64 KiB made every
+        // element's map tens of MiB (and declaring any custom property
+        // deep-clones the inherited map): gigabytes for a few hundred
+        // elements. Values past the budget are invalid.
+        let mut budget = MAX_ELEMENT_CUSTOM_BYTES
+            .saturating_sub(props.iter().map(|(k, v)| k.len() + v.len()).sum::<usize>());
         for &name in declared {
-            if props.get(name).is_some_and(|v| contains_var(v)) {
-                let value = resolver.lookup(name, 0).ok();
+            if let Some(raw) = props.get(name).filter(|v| contains_var(v)) {
+                let raw_len = raw.len();
+                let value = resolver.lookup(name, 0).ok().filter(|v| {
+                    let grow = v.len().saturating_sub(raw_len);
+                    let fits = grow <= budget;
+                    budget = budget.saturating_sub(grow);
+                    fits
+                });
                 updates.push((name.to_string(), value));
             }
         }
@@ -247,6 +266,27 @@ mod tests {
             .iter()
             .map(|(k, v)| ((*k).to_string(), (*v).to_string()))
             .collect()
+    }
+
+    /// Regression: each property was capped at 64 KiB but the element's
+    /// map was not, so 500 copies of a 32 KiB expansion made a 16 MiB map
+    /// (deep-cloned for every element declaring a custom property).
+    #[test]
+    fn element_expansion_budget_bounds_the_whole_map() {
+        let mut pairs = vec![("--v0".to_string(), "x".repeat(16))];
+        for i in 1..12 {
+            pairs.push((format!("--v{i}"), format!("var(--v{0}) var(--v{0})", i - 1)));
+        }
+        for i in 0..500 {
+            pairs.push((format!("--a{i}"), "var(--v11)".to_string()));
+        }
+        let mut p: FxHashMap<String, String> = pairs.iter().cloned().collect();
+        let names: Vec<&str> = pairs.iter().map(|(k, _)| k.as_str()).collect();
+        resolve_custom_properties(&mut p, &names);
+        let total: usize = p.iter().map(|(k, v)| k.len() + v.len()).sum();
+        assert!(total <= MAX_ELEMENT_CUSTOM_BYTES, "{total}");
+        // Early, small expansions still resolve.
+        assert_eq!(p.get("--v1").map(String::len), Some(33));
     }
 
     #[test]

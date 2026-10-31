@@ -91,7 +91,14 @@ impl Table {
         if self.disabled || self.rows.is_empty() {
             return;
         }
-        self.selected_row = Some(self.selected_row.map(|i| i.saturating_sub(1)).unwrap_or(0));
+        // A selection left past the end by removed rows steps from the
+        // last row (it used to stay out of range, highlighting nothing).
+        let last = self.rows.len() - 1;
+        self.selected_row = Some(
+            self.selected_row
+                .map(|i| i.min(last).saturating_sub(1))
+                .unwrap_or(0),
+        );
     }
 
     /// Sort the rows by a column (stable; a second call on the same column
@@ -161,20 +168,38 @@ impl Table {
 
 impl Widget for Table {
     fn measure(&self, _ctx: &DrawContext<'_>, available_w: u32, _available_h: u32) -> (u32, u32) {
-        let w: u32 = self.columns.iter().map(|c| c.width).sum();
+        let w = self
+            .columns
+            .iter()
+            .fold(0u32, |acc, c| acc.saturating_add(c.width));
         let w = w.max(available_w);
         let header_h = if self.show_header { HEADER_HEIGHT } else { 0 };
-        let body_h = ROW_HEIGHT * self.rows.len() as u32;
-        (w, header_h + body_h)
+        let rows = u32::try_from(self.rows.len()).unwrap_or(u32::MAX);
+        let body_h = ROW_HEIGHT.saturating_mul(rows);
+        (w, header_h.saturating_add(body_h))
     }
 
+    /// Draws clipped to the rect: fixed column widths summing past `w`
+    /// used to paint cells beyond the header and row fills.
     fn draw(&self, ctx: &mut DrawContext<'_>, x: i32, y: i32, w: u32, h: u32) -> Result<()> {
+        ctx.backend.push_clip_rect(x, y, w, h)?;
+        let drawn = self.draw_rows(ctx, x, y, w, h);
+        ctx.backend.pop_clip_rect()?;
+        drawn
+    }
+}
+
+impl Table {
+    fn draw_rows(&self, ctx: &mut DrawContext<'_>, x: i32, y: i32, w: u32, h: u32) -> Result<()> {
         let fs = ctx.theme.font_size_sm;
         let text_color = ctx.theme.interactive_text(self.disabled);
         let border = ctx.theme.border;
 
         // Compute column widths, distributing remaining space to zero-width columns.
-        let fixed_total: u32 = self.columns.iter().map(|c| c.width).sum();
+        let fixed_total = self
+            .columns
+            .iter()
+            .fold(0u32, |acc, c| acc.saturating_add(c.width));
         let auto_count = self.columns.iter().filter(|c| c.width == 0).count() as u32;
         let auto_width = if auto_count > 0 && w > fixed_total {
             (w - fixed_total) / auto_count
@@ -286,6 +311,31 @@ mod tests {
         assert_eq!(t.rows.len(), 3);
         assert_eq!(t.selected_row, None);
         assert!(!t.disabled);
+    }
+
+    #[test]
+    fn select_prev_clamps_a_stale_selection() {
+        let mut t = sample_table();
+        t.selected_row = Some(99);
+        t.select_prev();
+        assert_eq!(t.selected_row, Some(1));
+    }
+
+    #[test]
+    fn overwide_columns_are_clipped_to_the_rect() {
+        use crate::test_utils::RecordingBackend;
+        use oasis_test_backend::DrawCommand;
+        let mut t = Table::new(vec![Column::new("A", 200), Column::new("B", 200)]);
+        t.add_row(vec!["left".into(), "right".into()]);
+        let theme = crate::theme::Theme::dark();
+        let mut backend = RecordingBackend::default();
+        {
+            let mut ctx = DrawContext::new(&mut backend, &theme);
+            t.draw(&mut ctx, 0, 0, 300, 100).unwrap();
+        }
+        let cmds = backend.commands();
+        assert!(matches!(cmds.first(), Some(DrawCommand::PushClip { .. })));
+        assert!(matches!(cmds.last(), Some(DrawCommand::PopClip)));
     }
 
     #[test]

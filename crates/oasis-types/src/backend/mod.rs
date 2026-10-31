@@ -31,7 +31,7 @@ pub const DEFAULT_VIEWPORT_HEIGHT: u32 = 272;
 pub use types::{
     BackendErrExt, BlendMode, Color, GradientStyle, RenderTargetId, StrokeStyle, TextureId,
     arc_segments, bitmap_measure_text, clamp_sweep, cos_approx_f32, render_target_not_found,
-    sin_approx_f32, texture_not_found, validate_rgba_data,
+    sin_approx_f32, texture_not_found, unsupported, validate_rgba_data,
 };
 
 // -- core trait --
@@ -59,7 +59,7 @@ pub use audio::{AudioBackend, AudioTrackId};
 pub use clipboard::{ClipboardBackend, InMemoryClipboard};
 
 // -- shared stacks --
-pub use stacks::{ClipPush, ClipStack, TranslateStack};
+pub use stacks::{ClipStack, TranslateStack};
 
 #[cfg(test)]
 mod tests;

@@ -187,6 +187,7 @@ fn ensure_net_init() -> Result<()> {
     // Try silent auto-connect to saved WiFi profiles, falling back to the
     // WiFi connection dialog.
     if !connect_saved_profiles() {
+        crate::note_utility_dialog();
         if let Err(e) = psp::net::connect_dialog() {
             psp::net::term();
             NET_STACK_INITIALIZED.store(false, Ordering::Release);

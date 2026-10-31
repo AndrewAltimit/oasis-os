@@ -106,10 +106,17 @@ pub const OASIS_TRIGGER_RIGHT: u32 = 1;
 pub const OASIS_CB_COMMAND_EXEC: u32 = 2;
 /// Fired when a dashboard app is launched; detail = the app title.
 pub const OASIS_CB_APP_LAUNCH: u32 = 3;
+/// Fired by `oasis_tick` with the output of background shell work: a
+/// finished `cmd &` job (its output plus the `[N]+ Done` notice) or the
+/// `cron` jobs that ran (lines prefixed `[cron <name>]`).
+pub const OASIS_CB_SHELL_OUTPUT: u32 = 7;
 
 /// Whether `event` is a callback code the library fires.
 pub(crate) fn is_callback_event(event: u32) -> bool {
-    matches!(event, OASIS_CB_COMMAND_EXEC | OASIS_CB_APP_LAUNCH)
+    matches!(
+        event,
+        OASIS_CB_COMMAND_EXEC | OASIS_CB_APP_LAUNCH | OASIS_CB_SHELL_OUTPUT
+    )
 }
 
 /// Callback function type: receives an event type and a null-terminated detail string.
@@ -119,3 +126,36 @@ pub type OasisCallback = extern "C" fn(event: u32, detail: *const c_char);
 ///
 /// Parameters: event type (AudioEvent), track ID (0 if N/A), extra value.
 pub type OasisAudioCallback = extern "C" fn(event: u32, track_id: u64, value: u32);
+
+/// [`OasisCallback`] with a host context pointer: `user_data` is the
+/// pointer given to `oasis_register_callback_ex`, passed back unchanged
+/// (the library never dereferences it).
+pub type OasisCallbackEx =
+    extern "C" fn(event: u32, detail: *const c_char, user_data: *mut std::ffi::c_void);
+
+/// [`OasisAudioCallback`] with the `user_data` pointer given to
+/// `oasis_set_audio_callback_ex`.
+pub type OasisAudioCallbackEx =
+    extern "C" fn(event: u32, track_id: u64, value: u32, user_data: *mut std::ffi::c_void);
+
+/// An OS-event callback registered with either registration export.
+#[derive(Clone, Copy)]
+pub(crate) enum RegisteredCallback {
+    Plain(OasisCallback),
+    /// The context pointer is kept as its exposed address (the instance
+    /// stays `Send`); it is only handed back to the host.
+    WithData(OasisCallbackEx, usize),
+}
+
+impl RegisteredCallback {
+    pub(crate) fn call(self, event: u32, detail: *const c_char) {
+        match self {
+            Self::Plain(cb) => cb(event, detail),
+            Self::WithData(cb, user_data) => cb(
+                event,
+                detail,
+                std::ptr::with_exposed_provenance_mut(user_data),
+            ),
+        }
+    }
+}

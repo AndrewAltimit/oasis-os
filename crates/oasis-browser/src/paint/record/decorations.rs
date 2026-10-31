@@ -168,8 +168,13 @@ pub(super) fn record_linear_gradient(
         let last_pos = stops.last().map(|s| s.position).unwrap_or(1.0);
         let first_pos = stops.first().map(|s| s.position).unwrap_or(0.0);
         let pattern_range = last_pos - first_pos;
+        // A pattern narrower than a pixel can't add detail, so at most
+        // one repetition per pixel: `blue 1e-9%` would otherwise ask for
+        // ~4e9 repetitions.
         let repetitions = if grad.repeating && pattern_range > 0.0 {
-            (1.0 / pattern_range).ceil() as u32
+            (1.0 / pattern_range)
+                .ceil()
+                .min(total_len.max(0.0).ceil() + 1.0) as u32
         } else {
             1
         };
@@ -499,7 +504,10 @@ pub(super) fn record_box_shadow(
             let ph = padding.height as u32;
 
             let steps = (shadow.blur as i32).max(1);
-            for i in (0..steps).rev() {
+            // Rings shrunk past the box's half-size draw nothing; only
+            // visit the ones that can (`inset 0 0 2e9px` is 2e9 steps).
+            let live = steps.min((pw.min(ph) / 2).min(i32::MAX as u32 - 1) as i32 + 1);
+            for i in (0..live).rev() {
                 let t = i as f32 / steps as f32;
                 let alpha = ((shadow.color.a as f32) * (1.0 - t) * 0.4) as u8;
                 if alpha == 0 {

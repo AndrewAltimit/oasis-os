@@ -1,6 +1,7 @@
 //! RadioGroup widget: mutually exclusive option selection.
 
 use crate::context::DrawContext;
+use crate::focus::{FocusDir, step_wrapping};
 use crate::layout::{self, HAlign};
 use crate::states::{WidgetState, WidgetStateColors};
 use crate::widget::Widget;
@@ -86,19 +87,21 @@ impl RadioGroup {
 
     /// Select the next option (wrapping).
     pub fn select_next(&mut self) {
-        if !self.disabled && !self.options.is_empty() {
-            self.selected = (self.selected + 1) % self.options.len();
-        }
+        self.step(FocusDir::Next);
     }
 
     /// Select the previous option (wrapping).
     pub fn select_prev(&mut self) {
-        if !self.disabled && !self.options.is_empty() {
-            self.selected = if self.selected == 0 {
-                self.options.len() - 1
-            } else {
-                self.selected - 1
-            };
+        self.step(FocusDir::Prev);
+    }
+
+    fn step(&mut self, dir: FocusDir) {
+        if self.disabled {
+            return;
+        }
+        let current = Some(self.selected);
+        if let Some(i) = step_wrapping(current, self.options.len(), dir, |_| true) {
+            self.selected = i;
         }
     }
 

@@ -9,6 +9,35 @@ pub enum FocusDir {
     Prev,
 }
 
+/// One wrapping step through `len` items from `current` in direction
+/// `dir`, landing on the first index `selectable` accepts.
+///
+/// From a valid `current` the candidates are the following items (the
+/// preceding ones for [`FocusDir::Prev`]), wrapping around and ending at
+/// `current` itself. With no `current` -- `None`, or an index past the end
+/// left by items removed under it -- [`FocusDir::Next`] starts at the first
+/// item and [`FocusDir::Prev`] at the last. Returns `None` when no item is
+/// selectable (or there are none).
+///
+/// The shared keyboard-navigation rule of the list-like widgets (menus,
+/// accordions, radio groups, dropdowns, modal buttons).
+pub fn step_wrapping(
+    current: Option<usize>,
+    len: usize,
+    dir: FocusDir,
+    selectable: impl Fn(usize) -> bool,
+) -> Option<usize> {
+    let current = current.filter(|&c| c < len);
+    (1..=len)
+        .map(|k| match (current, dir) {
+            (Some(c), FocusDir::Next) => (c + k) % len,
+            (Some(c), FocusDir::Prev) => (c + len - k % len) % len,
+            (None, FocusDir::Next) => k - 1,
+            (None, FocusDir::Prev) => len - k,
+        })
+        .find(|&i| selectable(i))
+}
+
 /// Tracks keyboard focus across a group of widgets.
 #[derive(Debug, Clone)]
 pub struct FocusRing {
@@ -108,6 +137,26 @@ mod tests {
     use crate::focus::*;
     #[allow(unused_imports)]
     use oasis_types::backend::Color;
+
+    #[test]
+    fn step_wrapping_skips_and_wraps() {
+        let all = |_| true;
+        assert_eq!(step_wrapping(Some(0), 3, FocusDir::Next, all), Some(1));
+        assert_eq!(step_wrapping(Some(2), 3, FocusDir::Next, all), Some(0));
+        assert_eq!(step_wrapping(Some(0), 3, FocusDir::Prev, all), Some(2));
+        assert_eq!(step_wrapping(None, 3, FocusDir::Next, all), Some(0));
+        assert_eq!(step_wrapping(None, 3, FocusDir::Prev, all), Some(2));
+        // A stale index past the end restarts from the matching end.
+        assert_eq!(step_wrapping(Some(9), 3, FocusDir::Prev, all), Some(2));
+        assert_eq!(step_wrapping(Some(9), 3, FocusDir::Next, all), Some(0));
+        // Skips unselectable items, and returns to itself when alone.
+        let odd = |i: usize| i % 2 == 1;
+        assert_eq!(step_wrapping(Some(1), 4, FocusDir::Next, odd), Some(3));
+        assert_eq!(step_wrapping(Some(3), 4, FocusDir::Next, odd), Some(1));
+        assert_eq!(step_wrapping(Some(1), 2, FocusDir::Prev, odd), Some(1));
+        assert_eq!(step_wrapping(Some(0), 3, FocusDir::Next, |_| false), None);
+        assert_eq!(step_wrapping(None, 0, FocusDir::Next, all), None);
+    }
 
     #[test]
     fn new_defaults() {

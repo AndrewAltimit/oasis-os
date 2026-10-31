@@ -50,7 +50,7 @@ pub fn populate_demo_vfs(vfs: &mut MemoryVfs) {
     // Radio configuration directory and default station list.
     vfs.mkdir("/etc/radio").expect("vfs mkdir /etc/radio");
     vfs.mkdir("/var/radio").expect("vfs mkdir /var/radio");
-    let default_stations = oasis_audio::radio::station::StationRegistry::defaults();
+    let default_stations = oasis_audio::radio::StationRegistry::defaults();
     if let Ok(toml_data) = default_stations.to_toml() {
         vfs.write("/etc/radio/stations.toml", toml_data.as_bytes())
             .expect("vfs write /etc/radio/stations.toml");

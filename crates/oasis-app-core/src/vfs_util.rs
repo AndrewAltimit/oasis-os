@@ -54,4 +54,13 @@ mod tests {
         write_creating_dirs(&mut vfs, "/top.txt", b"t").unwrap();
         assert_eq!(vfs.read("/top.txt").unwrap(), b"t");
     }
+
+    #[test]
+    fn a_file_in_the_way_is_an_error_not_a_silent_overwrite() {
+        let mut vfs = MemoryVfs::new();
+        vfs.write("/notes", b"keep me").unwrap();
+        assert!(write_creating_dirs(&mut vfs, "/notes/today.txt", b"x").is_err());
+        assert_eq!(vfs.read("/notes").unwrap(), b"keep me", "file untouched");
+        assert!(!vfs.exists("/notes/today.txt"));
+    }
 }

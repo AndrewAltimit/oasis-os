@@ -1,5 +1,5 @@
 # viewport 480x272
-fill_rect 0, 0, 480, 2977, Color { r: 255, g: 255, b: 255, a: 255 }
+fill_rect 0, 0, 480, 2590, Color { r: 255, g: 255, b: 255, a: 255 }
 fill_rect 0, 77, 480, 1, Color { r: 224, g: 224, b: 224, a: 255 }
 draw_text "Spare ", 204, 12, 20, Color { r: 26, g: 26, b: 26, a: 255 }
 draw_text "Spare ", 205, 12, 20, Color { r: 26, g: 26, b: 26, a: 255 }

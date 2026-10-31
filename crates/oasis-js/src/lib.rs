@@ -15,6 +15,12 @@
 //! alternative pure-Rust interpreter is shipped — the earlier
 //! `BoaJsEngine` fallback has been removed now that the cross
 //! toolchain is available.
+//!
+//! # Feature flags
+//!
+//! - `psp-bindgen` — regenerate the QuickJS C bindings with `bindgen` at build
+//!   time instead of using rquickjs' vendored per-target files (the PSP target
+//!   is not in that set). Enabled by the PSP backend; needs `libclang`.
 
 mod types;
 pub use types::{JsError, JsValue};

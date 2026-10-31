@@ -7,7 +7,7 @@
 
 use core::sync::atomic::Ordering;
 
-use super::{DOWNLOAD_CANCEL, find_header_end, io_log, parse_url};
+use super::{DOWNLOAD_CANCEL, find_header_end, header_value, io_log, parse_url};
 
 /// Wraps a raw PSP socket fd for `embedded_io::Read + Write`.
 struct PspSocketIo {
@@ -363,8 +363,18 @@ impl TlsHttpReader {
             }
         }
 
-        let header_end = find_header_end(&hdr_buf[..hdr_len])
-            .ok_or_else(|| "incomplete HTTP headers".to_string())?;
+        let Some(header_end) = find_header_end(&hdr_buf[..hdr_len]) else {
+            // Headers over the buffer size, or EOF before the blank line.
+            drop(tls);
+            // SAFETY: Reclaim leaked TLS buffers and close socket; `tls`,
+            // which borrowed them, is dropped above.
+            unsafe {
+                let _ = Box::from_raw(read_buf_ptr);
+                let _ = Box::from_raw(write_buf_ptr);
+                psp::sys::sceNetInetClose(fd);
+            }
+            return Err("incomplete HTTP headers".to_string());
+        };
 
         let hdr_str = core::str::from_utf8(&hdr_buf[..header_end]).unwrap_or("");
         io_log(&format!(
@@ -382,13 +392,10 @@ impl TlsHttpReader {
 
         // Handle redirects (follow up to 5).
         if matches!(status, 301 | 302 | 303 | 307 | 308) {
-            let location = hdr_str.lines().find_map(|l| {
-                if l.len() > 9 && l[..9].eq_ignore_ascii_case("location:") {
-                    l.split_once(':').map(|(_, v)| v.trim().to_string())
-                } else {
-                    None
-                }
-            });
+            let location = hdr_str
+                .lines()
+                .find_map(|l| header_value(l, "location:").filter(|v| !v.is_empty()))
+                .map(str::to_string);
 
             // Clean up current connection.
             drop(tls);
@@ -421,16 +428,24 @@ impl TlsHttpReader {
             return Err(format!("HTTP {status}"));
         }
 
+        // A resume must get the requested range back. A server that ignores
+        // `Range` answers 200 with the body from byte 0, which the caller
+        // would splice in at `offset` and feed misaligned samples to the ME.
+        if range_offset.is_some_and(|o| o > 0) && status != 206 {
+            drop(tls);
+            // SAFETY: Reclaim leaked TLS buffers and close socket.
+            unsafe {
+                let _ = Box::from_raw(read_buf_ptr);
+                let _ = Box::from_raw(write_buf_ptr);
+                psp::sys::sceNetInetClose(fd);
+            }
+            return Err(format!("HTTP {status} to a Range request (want 206)"));
+        }
+
         // Parse Content-Length.
         let content_length: u64 = hdr_str
             .lines()
-            .find_map(|l| {
-                if l.len() > 15 && l[..15].eq_ignore_ascii_case("content-length:") {
-                    l[15..].trim().parse().ok()
-                } else {
-                    None
-                }
-            })
+            .find_map(|l| header_value(l, "content-length:").and_then(|v| v.parse().ok()))
             .unwrap_or(0);
 
         io_log(&format!(

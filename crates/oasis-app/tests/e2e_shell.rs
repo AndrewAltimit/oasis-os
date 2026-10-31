@@ -74,7 +74,10 @@ fn every_builtin_skin_boots_to_a_rendered_dashboard() {
         let mut h = Harness::new(name);
         h.settle();
         h.render_now();
-        assert_eq!(h.mode(), Mode::Dashboard, "{name}: boots to the dashboard");
+        // Terminal-only skins (no dashboard, no window manager) rest in
+        // their fullscreen terminal.
+        let idle = Mode::idle_for(&h.state().skin.features);
+        assert_eq!(h.mode(), idle, "{name}: boots to its idle mode");
         assert_eq!(h.state().skin.manifest.name, *name, "{name}: skin applied");
         let (w, hgt) = h.size();
         assert_eq!(
@@ -110,7 +113,7 @@ fn every_external_skin_directory_boots() {
         let mut h = Harness::new(&name);
         h.settle();
         h.render_now();
-        assert_eq!(h.mode(), Mode::Dashboard, "{name}");
+        assert_eq!(h.mode(), Mode::idle_for(&h.state().skin.features), "{name}");
         let label = dir.file_name().unwrap().to_string_lossy().into_owned();
         assert_not_blank(&h, &format!("external_{label}"));
     }
@@ -260,8 +263,9 @@ fn icon_launch_and_close_on_every_skin() {
     for name in builtin_names() {
         let h = Harness::new(name);
         let apps = h.dashboard_apps();
+        let has_icons = h.state().skin.features.dashboard;
         drop(h);
-        if !apps.iter().any(|a| a == "Calculator") {
+        if !has_icons || !apps.iter().any(|a| a == "Calculator") {
             continue;
         }
         launch_and_close(name, "Calculator");
@@ -317,7 +321,15 @@ fn start_menu_opens_and_launches_settings() {
     let skins: Vec<&str> = builtin_names()
         .iter()
         .copied()
-        .filter(|n| Harness::new(n).state().skin.features.start_menu)
+        // Read the feature from the skin itself: booting a whole shell per
+        // skin just to filter doubled this test's run time.
+        // Terminal-only skins rest in the fullscreen terminal, which has
+        // no bars.
+        .filter(|n| {
+            oasis_core::skin::builtin::load_builtin(n).is_ok_and(|s| {
+                s.features.start_menu && Mode::idle_for(&s.features) == Mode::Dashboard
+            })
+        })
         .collect();
     assert!(!skins.is_empty(), "some skin has a start menu");
     for skin in skins {
@@ -355,7 +367,7 @@ fn dashboard_page_navigation() {
         let mut h = Harness::new(name);
         h.settle();
         let pages = h.state().ui.dashboard.page_count();
-        if pages < 2 {
+        if pages < 2 || !h.state().skin.features.dashboard {
             continue;
         }
         tested += 1;
@@ -445,13 +457,45 @@ fn skin_switch_from_terminal_at_runtime() {
         h.state().terminal.output_lines
     );
     assert!(
-        !h.state().pending_wallpaper_refresh,
+        !h.state().skin_assets.pending_refresh,
         "wallpaper regenerated"
     );
     h.button(Button::Cancel); // back to the dashboard
     h.settle();
     h.render_now();
     assert_not_blank(&h, "skin_switch_terminal");
+}
+
+/// `skin xp; skin @variant:dark` typed in the terminal ends on the dark
+/// variant of xp (it used to derive from the skin active before the line),
+/// and the shell really runs it with its own palette.
+#[test]
+fn chained_skin_and_variant_from_the_terminal() {
+    let mut h = Harness::new("classic");
+    h.settle();
+    h.terminal("skin xp; skin @variant:dark");
+    h.settle();
+    assert_eq!(
+        h.state().skin.manifest.name,
+        "xp-dark",
+        "{:?}",
+        h.state().terminal.output_lines
+    );
+    // xp's desktop background is already dark navy, so compare the whole
+    // derived theme (window / app chrome colors) rather than one color.
+    let dark_theme = format!("{:?}", h.state().active_theme);
+    h.terminal("skin xp");
+    h.settle();
+    assert_eq!(h.state().skin.manifest.name, "xp");
+    assert_ne!(
+        format!("{:?}", h.state().active_theme),
+        dark_theme,
+        "dark variant has its own palette"
+    );
+    h.button(Button::Cancel);
+    h.settle();
+    h.render_now();
+    assert_not_blank(&h, "skin_variant_chain");
 }
 
 #[test]
@@ -470,7 +514,7 @@ fn skin_switch_via_settings_ipc_round_trip() {
     // The persisted preference follows the swap.
     let settings = String::from_utf8(
         h.vfs()
-            .read(oasis_core::settings::DEFAULT_PATH)
+            .read(oasis_app::settings::DEFAULT_PATH)
             .unwrap_or_default(),
     )
     .unwrap();
@@ -649,6 +693,9 @@ fn scene_props(h: &Harness) -> Vec<(String, i32, i32, u8, Option<String>)> {
 fn corrupted_skin_glitches_frames_without_drifting_the_scene() {
     let mut h = Harness::new("corrupted");
     assert!(h.state().skin.corrupted_modifiers.is_some());
+    // The skin rests in its terminal: pin the prompt cursor so its blink
+    // does not count as drift.
+    h.state_mut().active_theme.terminal_cursor_blink_rate = 0;
     h.settle();
     let clean = scene_props(&h);
     let mut drawn = std::collections::HashSet::new();
@@ -663,5 +710,79 @@ fn corrupted_skin_glitches_frames_without_drifting_the_scene() {
         drawn.insert(format!("{frame:?}"));
     }
     assert!(drawn.len() > 1, "drawn output never varied");
-    assert_eq!(scene_props(&h), clean, "corruption leaked into the scene");
+    let now = scene_props(&h);
+    let changed: Vec<_> = now.iter().filter(|p| !clean.contains(p)).collect();
+    assert!(
+        changed.is_empty(),
+        "corruption leaked into the scene: {changed:?}"
+    );
+    assert_eq!(now, clean, "corruption leaked into the scene");
+}
+
+/// Skins with `dashboard = false` (desktop, corrupted) show no icon grid:
+/// no icon objects are drawn, before or after a window opens, and a click
+/// where an icon would sit launches nothing. The terminal-only corrupted
+/// skin rests in its terminal instead of an empty dashboard.
+#[test]
+fn dashboardless_skins_draw_and_launch_no_icons() {
+    for (skin, idle) in [("desktop", Mode::Dashboard), ("corrupted", Mode::Terminal)] {
+        let mut h = Harness::new(skin);
+        assert!(!h.state().skin.features.dashboard, "{skin}");
+        h.settle();
+        assert_eq!(h.mode(), idle, "{skin}");
+        let icon_objects = |h: &Harness| {
+            (0..4)
+                .flat_map(|i| [format!("icon_{i}"), format!("icon_label_{i}")])
+                .filter(|n| h.sdi_rect(n).is_some())
+                .collect::<Vec<_>>()
+        };
+        assert!(
+            icon_objects(&h).is_empty(),
+            "{skin}: icons drawn: {:?} {}",
+            icon_objects(&h),
+            dump(&h, &format!("no_icons_{skin}"))
+        );
+        let rect = h
+            .app_icon_rect("Settings")
+            .expect("layout still has a slot");
+        let (x, y) = oasis_app::harness::rect_center(rect);
+        h.click(x, y);
+        h.settle();
+        assert!(
+            h.find_window("Settings").is_none(),
+            "{skin}: hidden icon launched"
+        );
+        if h.state().skin.features.window_manager {
+            assert!(h.open_app("Terminal"), "{skin}");
+            h.settle();
+            assert!(icon_objects(&h).is_empty(), "{skin}: icons behind windows");
+        }
+    }
+}
+
+/// New windows open below psix-hifi's top tab row (the status bar + tab
+/// row the skin reserves), not over it.
+#[test]
+fn new_windows_open_below_the_tab_row() {
+    let mut h = Harness::new("psix-hifi");
+    h.settle();
+    assert!(h.state().skin.features.show_tabs);
+    let at = &h.state().active_theme;
+    let tab_bottom = (at.statusbar_height + at.tab_row_height) as i32;
+    for title in ["Settings", "Text Editor", "Calculator"] {
+        assert!(h.open_app(title), "{title}");
+        h.settle();
+        let win = h.find_window(title).expect("window opened");
+        assert!(
+            win.frame.1 >= tab_bottom,
+            "{title} frame {:?} covers the tab row (ends at {tab_bottom}) {}",
+            win.frame,
+            dump(&h, &format!("tab_row_{title}"))
+        );
+        let (_, sh) = h.size();
+        assert!(
+            win.frame.1 + win.frame.3 as i32 <= sh as i32,
+            "{title} off screen"
+        );
+    }
 }

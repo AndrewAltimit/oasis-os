@@ -24,9 +24,9 @@
 
 use crate::DrawCommand;
 use oasis_types::backend::{
-    BlendMode, Color, RenderTargetId, SdiBatch, SdiClipTransform, SdiCore, SdiGradients,
-    SdiRenderTarget, SdiShapes, SdiText, SdiTextures, SdiVector, TextureId, bitmap_measure_text,
-    stacks::{ClipPush, ClipStack, DrawState, TranslateStack},
+    BlendMode, Color, RenderTargetId, SdiClipTransform, SdiCore, SdiRenderTarget, SdiText,
+    TextureId,
+    stacks::{ClipStack, DrawState, TranslateStack},
     texture_not_found,
 };
 use oasis_types::error::{OasisError, Result};
@@ -108,7 +108,11 @@ pub struct ClipAuditBackend {
     next_texture_id: u64,
     live_textures: std::collections::HashSet<u64>,
     next_render_target_id: u64,
-    live_render_targets: std::collections::HashSet<u64>,
+    /// Live render targets and their sizes.
+    live_render_targets: std::collections::HashMap<u64, (u32, u32)>,
+    /// Size of the bound render target (`None`: the screen), which
+    /// `viewport_size` reports as the shape defaults' draw bounds.
+    bound_size: Option<(u32, u32)>,
     rt_bind_depth: usize,
     /// The parent surface's draw state for every bound render target
     /// (restored on unbind, per the `SdiRenderTarget` contract).
@@ -122,6 +126,7 @@ struct ParentState {
     active_clip: Option<ClipRect>,
     clip_depth: usize,
     translate_depth: usize,
+    bound_size: Option<(u32, u32)>,
 }
 
 impl ClipAuditBackend {
@@ -155,7 +160,8 @@ impl ClipAuditBackend {
             next_texture_id: 1,
             live_textures: std::collections::HashSet::new(),
             next_render_target_id: 1,
-            live_render_targets: std::collections::HashSet::new(),
+            live_render_targets: std::collections::HashMap::new(),
+            bound_size: None,
             rt_bind_depth: 0,
             bound_parents: Vec::new(),
             auditing: true,
@@ -447,7 +453,7 @@ impl SdiCore for ClipAuditBackend {
         if self.live_textures.remove(&tex.0) {
             Ok(())
         } else {
-            Err(texture_not_found(tex.0))
+            Err(texture_not_found(tex))
         }
     }
 
@@ -476,10 +482,6 @@ impl SdiCore for ClipAuditBackend {
         Ok(())
     }
 
-    fn measure_text(&self, text: &str, font_size: u16) -> u32 {
-        bitmap_measure_text(text, font_size)
-    }
-
     fn read_pixels(&self, _x: i32, _y: i32, w: u32, h: u32) -> Result<Vec<u8>> {
         Ok(vec![0u8; (w as usize) * (h as usize) * 4])
     }
@@ -489,23 +491,14 @@ impl SdiCore for ClipAuditBackend {
     }
 
     fn viewport_size(&self) -> (u32, u32) {
-        (self.width, self.height)
+        self.bound_size.unwrap_or((self.width, self.height))
     }
 }
 
 impl SdiClipTransform for ClipAuditBackend {
     fn push_clip_rect(&mut self, x: i32, y: i32, w: u32, h: u32) -> Result<()> {
         let (tx, ty) = self.translate_stack.translate(x, y);
-        let pushed = self.clip_stack.push(ClipRect { x: tx, y: ty, w, h });
-        self.active_clip = Some(match pushed {
-            ClipPush::Clip(c) => c,
-            ClipPush::Empty => ClipRect {
-                x: 0,
-                y: 0,
-                w: 0,
-                h: 0,
-            },
-        });
+        self.active_clip = Some(self.clip_stack.push(ClipRect { x: tx, y: ty, w, h }));
         self.clip_depth += 1;
         self.commands
             .push(DrawCommand::PushClip { x: tx, y: ty, w, h });
@@ -560,18 +553,18 @@ impl SdiRenderTarget for ClipAuditBackend {
     fn create_render_target(&mut self, w: u32, h: u32) -> Result<RenderTargetId> {
         let id = RenderTargetId(self.next_render_target_id);
         self.next_render_target_id += 1;
-        self.live_render_targets.insert(id.0);
+        self.live_render_targets.insert(id.0, (w, h));
         self.commands
             .push(DrawCommand::CreateRenderTarget { id, w, h });
         Ok(id)
     }
 
     fn bind_render_target(&mut self, id: RenderTargetId) -> Result<()> {
-        if !self.live_render_targets.contains(&id.0) {
+        let Some(&size) = self.live_render_targets.get(&id.0) else {
             return Err(OasisError::Backend(
                 format!("bind_render_target: unknown id {id:?}").into(),
             ));
-        }
+        };
         // The target starts with no clip and no translation; the parent's
         // state comes back on unbind.
         self.bound_parents.push(ParentState {
@@ -579,6 +572,7 @@ impl SdiRenderTarget for ClipAuditBackend {
             active_clip: self.active_clip.take(),
             clip_depth: std::mem::take(&mut self.clip_depth),
             translate_depth: std::mem::take(&mut self.translate_depth),
+            bound_size: self.bound_size.replace(size),
         });
         self.rt_bind_depth += 1;
         self.commands.push(DrawCommand::BindRenderTarget { id });
@@ -599,6 +593,7 @@ impl SdiRenderTarget for ClipAuditBackend {
             self.active_clip = parent.active_clip;
             self.clip_depth = parent.clip_depth;
             self.translate_depth = parent.translate_depth;
+            self.bound_size = parent.bound_size;
         }
         self.commands.push(DrawCommand::UnbindRenderTarget);
         Ok(())
@@ -670,12 +665,7 @@ impl SdiRenderTarget for ClipAuditBackend {
     }
 }
 
-impl SdiShapes for ClipAuditBackend {}
-impl SdiGradients for ClipAuditBackend {}
-impl SdiText for ClipAuditBackend {}
-impl SdiTextures for ClipAuditBackend {}
-impl SdiVector for ClipAuditBackend {}
-impl SdiBatch for ClipAuditBackend {}
+oasis_types::impl_sdi_defaults!(ClipAuditBackend; except SdiClipTransform, SdiRenderTarget);
 
 #[cfg(test)]
 mod tests {
@@ -709,6 +699,26 @@ mod tests {
         b.clear(Color::BLACK).unwrap();
         b.pop_host_clip();
         assert_eq!(b.violations().len(), 1, "screen clear is still a leak");
+    }
+
+    /// The shape defaults draw within `viewport_size`, which must follow a
+    /// bound render target larger than the screen (as on SDL / UE5), or
+    /// lines past the screen edge inside the target were dropped unseen.
+    #[test]
+    fn shapes_in_a_large_render_target_reach_past_the_screen_size() {
+        use oasis_types::backend::SdiShapes as _;
+        let mut b = ClipAuditBackend::new(100, 100, (0, 0, 400, 400));
+        let rt = b.create_render_target(400, 400).unwrap();
+        b.bind_render_target(rt).unwrap();
+        assert_eq!(b.viewport_size(), (400, 400));
+        let before = b.commands().len();
+        b.draw_line(150, 10, 350, 10, 1, Color::WHITE).unwrap();
+        let reached = b.commands()[before..]
+            .iter()
+            .any(|c| matches!(c, DrawCommand::FillRect { x, w, .. } if x + *w as i32 > 300));
+        assert!(reached, "{:?}", &b.commands()[before..]);
+        b.unbind_render_target().unwrap();
+        assert_eq!(b.viewport_size(), (100, 100));
     }
 
     /// `init` resets the translate stack along with the clip stack.

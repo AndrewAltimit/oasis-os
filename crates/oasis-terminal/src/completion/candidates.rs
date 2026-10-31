@@ -132,16 +132,16 @@ pub fn longest_common_prefix(candidates: &[String]) -> String {
         return String::new();
     }
     let first = &candidates[0];
+    // Compare whole characters: a byte-wise prefix can end inside a
+    // multi-byte UTF-8 character (`café` / `cafè`).
     let mut len = first.len();
-
     for other in &candidates[1..] {
-        len = len.min(other.len());
-        for (i, (a, b)) in first.bytes().zip(other.bytes()).enumerate() {
-            if a != b {
-                len = len.min(i);
-                break;
-            }
-        }
+        let common = first
+            .char_indices()
+            .zip(other.chars())
+            .find(|((_, a), b)| a != b)
+            .map_or_else(|| first.len().min(other.len()), |((i, _), _)| i);
+        len = len.min(common);
     }
 
     first[..len].to_string()

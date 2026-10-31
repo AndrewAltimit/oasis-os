@@ -39,14 +39,16 @@ pub const PLUGIN_STATUS_PATH: &str = "/var/plugin/status";
 
 // -- UI requests (terminal `notify` / `screenshot` / `theme` / `browse`) --
 
-/// Toast request (`level:message`) from the `notify` command.
+/// Toast request (a [`Notification`]: `level:message`) from the `notify`
+/// command.
 pub const NOTIFY_PATH: &str = "/var/notify/message";
 /// Screenshot request (a VFS destination path) from the `screenshot`
 /// command; the host captures the next presented frame there.
 pub const SCREENSHOT_REQUEST_PATH: &str = "/var/screenshot/request";
 /// Current theme summary published by the host for the `theme` command.
 pub const THEME_STATUS_PATH: &str = "/var/theme/current";
-/// Browser request (`op [arg]`) from the `browse` command.
+/// Browser request (a [`BrowserRequest`]: `op [arg]`) from the `browse`
+/// command.
 pub const BROWSER_REQUEST_PATH: &str = "/var/browser/request";
 
 // -- Settings (the Settings app and the host talk through these) --
@@ -100,8 +102,38 @@ pub const NET_STATE_PATH: &str = "/system/state/net";
 pub const TV_CHANNELS_PATH: &str = "/etc/tv/channels.toml";
 /// TV playback requests (`tune_url <url> <seek_secs>`, ...).
 pub const TV_REQUEST_PATH: &str = "/var/tv/request";
-/// TV playback status.
+/// TV Guide status published by the host ([`TvStatus`]); absent on hosts
+/// that do not publish it.
 pub const TV_STATUS_PATH: &str = "/var/tv/status";
+
+/// Contents of [`TV_STATUS_PATH`]: whether a TV Guide window is open to
+/// act on `tune_ch:` requests.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TvStatus {
+    /// A TV Guide is open.
+    GuideOpen,
+    /// No TV Guide is open: channel tune requests are ignored.
+    GuideClosed,
+}
+
+impl TvStatus {
+    /// The wire form ([`TvStatus::parse`] round-trips it).
+    pub fn as_line(self) -> &'static str {
+        match self {
+            Self::GuideOpen => "guide open",
+            Self::GuideClosed => "guide closed",
+        }
+    }
+
+    /// Parse the file's text (surrounding whitespace ignored).
+    pub fn parse(text: &str) -> Option<Self> {
+        match text.trim() {
+            "guide open" => Some(Self::GuideOpen),
+            "guide closed" => Some(Self::GuideClosed),
+            _ => None,
+        }
+    }
+}
 
 /// Parse a `"WIDTHxHEIGHT"` resolution (whitespace around either number is
 /// allowed).
@@ -215,6 +247,145 @@ impl PluginRequest {
         match self {
             Self::Load(name) => format!("load {name}"),
             Self::Unload(name) => format!("unload {name}"),
+        }
+    }
+}
+
+/// Severity of a [`Notification`] toast.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum NotifyLevel {
+    /// Informational (the default).
+    #[default]
+    Info,
+    /// An operation succeeded.
+    Success,
+    /// Something needs attention.
+    Warning,
+    /// An operation failed.
+    Error,
+}
+
+impl NotifyLevel {
+    /// The wire name (`info`, `success`, `warning`, `error`).
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Info => "info",
+            Self::Success => "success",
+            Self::Warning => "warning",
+            Self::Error => "error",
+        }
+    }
+
+    /// Parse a level as a user types it: the wire names plus `warn` and
+    /// `err`.
+    pub fn parse(s: &str) -> Option<Self> {
+        Some(match s {
+            "info" => Self::Info,
+            "success" => Self::Success,
+            "warning" | "warn" => Self::Warning,
+            "error" | "err" => Self::Error,
+            _ => return None,
+        })
+    }
+}
+
+/// The toast request on [`NOTIFY_PATH`]: `level:message`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Notification {
+    /// Toast severity.
+    pub level: NotifyLevel,
+    /// Toast text.
+    pub message: String,
+}
+
+impl Notification {
+    /// Parse a payload. A payload without a known `level:` prefix is an
+    /// [`NotifyLevel::Info`] toast of the whole text (so `note: x` keeps
+    /// its colon).
+    pub fn parse(payload: &str) -> Self {
+        // Only the wire names count as a prefix (not the `warn` / `err`
+        // aliases a user may type to the `notify` command).
+        let (level, message) = payload
+            .split_once(':')
+            .and_then(|(prefix, message)| {
+                let level = NotifyLevel::parse(prefix).filter(|l| l.as_str() == prefix)?;
+                Some((level, message))
+            })
+            .unwrap_or((NotifyLevel::Info, payload));
+        Self {
+            level,
+            message: message.trim().to_string(),
+        }
+    }
+
+    /// Serialize to the payload format ([`Notification::parse`]
+    /// round-trips it).
+    pub fn to_payload(&self) -> String {
+        format!("{}:{}", self.level.as_str(), self.message)
+    }
+}
+
+/// One request on [`BROWSER_REQUEST_PATH`]: `open <url>`,
+/// `sandbox <url>`, `back`, `forward`, `reload`, `home`, `reader`,
+/// `bookmarks`, `history`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BrowserRequest {
+    /// Navigate to a URL.
+    Open(String),
+    /// Navigate to a URL with the page sandboxed (no scripts, no network
+    /// beyond the page).
+    Sandbox(String),
+    /// History back.
+    Back,
+    /// History forward.
+    Forward,
+    /// Reload the page.
+    Reload,
+    /// Go to the home page.
+    Home,
+    /// Toggle reader mode.
+    Reader,
+    /// Show the bookmarks page.
+    Bookmarks,
+    /// Show the history page.
+    History,
+}
+
+impl BrowserRequest {
+    /// Parse one request. `None` for unknown ops and a missing URL.
+    pub fn parse(line: &str) -> Option<Self> {
+        let line = line.trim();
+        let (op, arg) = match line.split_once(' ') {
+            Some((op, arg)) => (op, arg.trim()),
+            None => (line, ""),
+        };
+        Some(match op {
+            "open" if !arg.is_empty() => Self::Open(arg.to_string()),
+            "sandbox" if !arg.is_empty() => Self::Sandbox(arg.to_string()),
+            "back" => Self::Back,
+            "forward" => Self::Forward,
+            "reload" => Self::Reload,
+            "home" => Self::Home,
+            "reader" => Self::Reader,
+            "bookmarks" => Self::Bookmarks,
+            "history" => Self::History,
+            _ => return None,
+        })
+    }
+
+    /// Serialize to the request wire format ([`BrowserRequest::parse`]
+    /// round-trips it).
+    pub fn to_line(&self) -> String {
+        match self {
+            Self::Open(url) => format!("open {url}"),
+            Self::Sandbox(url) => format!("sandbox {url}"),
+            Self::Back => "back".to_string(),
+            Self::Forward => "forward".to_string(),
+            Self::Reload => "reload".to_string(),
+            Self::Home => "home".to_string(),
+            Self::Reader => "reader".to_string(),
+            Self::Bookmarks => "bookmarks".to_string(),
+            Self::History => "history".to_string(),
         }
     }
 }
@@ -387,6 +558,148 @@ impl std::fmt::Display for MediaRequest {
     }
 }
 
+/// Which radio station a [`RadioRequest::Tune`] names: an index into the
+/// station list, or a station name (matched case-insensitively).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum StationRef {
+    /// Position in the station list.
+    Index(usize),
+    /// Station name.
+    Name(String),
+}
+
+impl std::fmt::Display for StationRef {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Index(i) => write!(f, "{i}"),
+            Self::Name(n) => f.write_str(n),
+        }
+    }
+}
+
+/// One request on [`RADIO_REQUEST_PATH`] (latest request wins).
+///
+/// Wire format: `tune <index|name>`, `stop`, `vol <0-100>`, `fav <index>`,
+/// `genre [<name>]`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RadioRequest {
+    /// Tune to a station.
+    Tune(StationRef),
+    /// Stop the radio and release the stream.
+    Stop,
+    /// Set the radio volume (0-100).
+    Volume(u8),
+    /// Toggle the favorite flag of the station at this index.
+    Favorite(usize),
+    /// Filter the station list by genre (`None`: list the genres).
+    Genre(Option<String>),
+}
+
+impl RadioRequest {
+    /// Parse one request (surrounding whitespace ignored). `None` for blank
+    /// or unknown requests and malformed arguments.
+    pub fn parse(line: &str) -> Option<Self> {
+        let line = line.trim();
+        let (cmd, arg) = match line.split_once(' ') {
+            Some((c, a)) => (c, a.trim()),
+            None => (line, ""),
+        };
+        let req = match cmd {
+            "tune" if !arg.is_empty() => Self::Tune(match arg.parse::<usize>() {
+                Ok(i) => StationRef::Index(i),
+                Err(_) => StationRef::Name(arg.to_string()),
+            }),
+            "stop" if arg.is_empty() => Self::Stop,
+            "vol" => Self::Volume(arg.parse::<u8>().ok().filter(|v| *v <= 100)?),
+            "fav" => Self::Favorite(arg.parse().ok()?),
+            "genre" => Self::Genre((!arg.is_empty()).then(|| arg.to_string())),
+            _ => return None,
+        };
+        Some(req)
+    }
+
+    /// Serialize to the wire format ([`RadioRequest::parse`] round-trips it).
+    pub fn to_line(&self) -> String {
+        match self {
+            Self::Tune(station) => format!("tune {station}"),
+            Self::Stop => "stop".to_string(),
+            Self::Volume(v) => format!("vol {v}"),
+            Self::Favorite(i) => format!("fav {i}"),
+            Self::Genre(Some(g)) => format!("genre {g}"),
+            Self::Genre(None) => "genre".to_string(),
+        }
+    }
+}
+
+impl std::fmt::Display for RadioRequest {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.to_line())
+    }
+}
+
+/// A video to start: its URL and the offset into it, in seconds.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TvTune {
+    /// Media URL.
+    pub url: String,
+    /// Seconds to seek to once playback starts.
+    pub seek_secs: u64,
+}
+
+/// One request on [`TV_REQUEST_PATH`].
+///
+/// Wire format: `tune_url <url> <seek_secs>` (the TV Guide app; a missing
+/// seek is 0) and `tune_ch:<number>` (the `tv tune` command and the MCP
+/// `tune` tool).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TvRequest {
+    /// Play this URL.
+    TuneUrl(TvTune),
+    /// Tune the open TV Guide to the channel with this number.
+    TuneChannel(u32),
+}
+
+impl TvRequest {
+    /// Parse one request (surrounding whitespace ignored); `None` for any
+    /// other text.
+    pub fn parse(line: &str) -> Option<Self> {
+        let line = line.trim();
+        if let Some(n) = line.strip_prefix("tune_ch:") {
+            return n.trim().parse().ok().map(Self::TuneChannel);
+        }
+        let rest = line.strip_prefix("tune_url ")?.trim();
+        // The seek is the last word when it is a number; otherwise the
+        // whole rest is the URL.
+        let (url, seek_secs) = match rest.rsplit_once(' ') {
+            Some((url, seek)) => match seek.parse::<u64>() {
+                Ok(secs) => (url.trim_end(), secs),
+                Err(_) => (rest, 0),
+            },
+            None => (rest, 0),
+        };
+        (!url.is_empty()).then(|| {
+            Self::TuneUrl(TvTune {
+                url: url.to_string(),
+                seek_secs,
+            })
+        })
+    }
+
+    /// Serialize to the wire format ([`TvRequest::parse`] round-trips it).
+    pub fn to_line(&self) -> String {
+        match self {
+            Self::TuneUrl(t) => format!("tune_url {} {}", t.url, t.seek_secs),
+            Self::TuneChannel(n) => format!("tune_ch:{n}"),
+        }
+    }
+}
+
+impl std::fmt::Display for TvRequest {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.to_line())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -498,6 +811,59 @@ mod tests {
     }
 
     #[test]
+    fn notification_round_trips_and_defaults_to_info() {
+        for level in [
+            NotifyLevel::Info,
+            NotifyLevel::Success,
+            NotifyLevel::Warning,
+            NotifyLevel::Error,
+        ] {
+            let n = Notification {
+                level,
+                message: "disk: 90% full".into(),
+            };
+            assert_eq!(Notification::parse(&n.to_payload()), n);
+        }
+        let plain = Notification::parse("note: no level here");
+        assert_eq!(plain.level, NotifyLevel::Info);
+        assert_eq!(plain.message, "note: no level here");
+        // Aliases are for typing, not a wire prefix.
+        assert_eq!(Notification::parse("warn:x").message, "warn:x");
+        assert_eq!(NotifyLevel::parse("err"), Some(NotifyLevel::Error));
+    }
+
+    #[test]
+    fn browser_request_round_trips_and_rejects_malformed() {
+        for req in [
+            BrowserRequest::Open("https://example.com/a b".into()),
+            BrowserRequest::Sandbox("vfs://x".into()),
+            BrowserRequest::Back,
+            BrowserRequest::Forward,
+            BrowserRequest::Reload,
+            BrowserRequest::Home,
+            BrowserRequest::Reader,
+            BrowserRequest::Bookmarks,
+            BrowserRequest::History,
+        ] {
+            assert_eq!(BrowserRequest::parse(&req.to_line()), Some(req.clone()));
+        }
+        assert_eq!(
+            BrowserRequest::parse(" reload\n"),
+            Some(BrowserRequest::Reload)
+        );
+        for line in [
+            "",
+            "open",
+            "open  ",
+            "sandbox",
+            "fly",
+            "https://example.com",
+        ] {
+            assert_eq!(BrowserRequest::parse(line), None, "{line:?}");
+        }
+    }
+
+    #[test]
     fn net_state_round_trips() {
         let st = NetState {
             listener_port: Some(9000),
@@ -525,5 +891,53 @@ mod tests {
         assert_eq!(RepeatMode::parse("track"), Some(RepeatMode::One));
         assert_eq!(RepeatMode::parse("invalid"), None);
         assert_eq!(RepeatMode::One.to_string(), "one");
+    }
+    #[test]
+    fn radio_requests_round_trip() {
+        for req in [
+            RadioRequest::Tune(StationRef::Index(2)),
+            RadioRequest::Tune(StationRef::Name("Jazz FM".into())),
+            RadioRequest::Stop,
+            RadioRequest::Volume(55),
+            RadioRequest::Favorite(3),
+            RadioRequest::Genre(Some("ambient".into())),
+            RadioRequest::Genre(None),
+        ] {
+            assert_eq!(RadioRequest::parse(&req.to_line()), Some(req.clone()));
+        }
+        assert_eq!(
+            RadioRequest::parse("tune 2\n"),
+            Some(RadioRequest::Tune(StationRef::Index(2)))
+        );
+        for bad in [
+            "", "tune", "tune ", "vol 101", "vol x", "fav", "fav -1", "play",
+        ] {
+            assert_eq!(RadioRequest::parse(bad), None, "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn tv_requests_round_trip() {
+        let tune = TvRequest::TuneUrl(TvTune {
+            url: "https://archive.org/download/x/a b.mp4".into(),
+            seek_secs: 90,
+        });
+        for req in [tune, TvRequest::TuneChannel(7)] {
+            assert_eq!(TvRequest::parse(&req.to_line()), Some(req.clone()));
+        }
+        assert_eq!(
+            TvRequest::parse("tune_url http://x/v.mp4"),
+            Some(TvRequest::TuneUrl(TvTune {
+                url: "http://x/v.mp4".into(),
+                seek_secs: 0
+            }))
+        );
+        assert_eq!(
+            TvRequest::parse(" tune_ch:12\n"),
+            Some(TvRequest::TuneChannel(12))
+        );
+        for bad in ["", "tune_ch:", "tune_ch:x", "tune_url ", "tune http://x"] {
+            assert_eq!(TvRequest::parse(bad), None, "{bad:?}");
+        }
     }
 }

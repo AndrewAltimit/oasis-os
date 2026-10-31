@@ -12,7 +12,7 @@
 //! buttons.
 
 use oasis_app_core::{App, AppAction, AppRequest, ContentState};
-use oasis_audio::radio::station::StationRegistry;
+use oasis_audio::radio::StationRegistry;
 use oasis_audio::{RADIO_APP_TITLE, RADIO_REQUEST_PATH, RADIO_STATUS_PATH};
 use oasis_skin::ActiveTheme;
 use oasis_types::backend::SdiBackend;

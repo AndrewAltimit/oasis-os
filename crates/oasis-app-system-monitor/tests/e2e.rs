@@ -63,8 +63,9 @@ fn shows_na_until_the_host_publishes_then_live_values() {
     assert!(text.contains("25%"), "memory 256 MiB of 1 GiB: {text}");
     assert!(text.contains("1:02:05"), "uptime: {text}");
     assert!(text.contains("64%"), "battery: {text}");
-    // Unchanged data never asks for a redraw.
-    for _ in 0..10 {
+    // Unchanged data does not ask for a redraw (until it has been frozen
+    // for `STALE_AFTER_MS`, which the unit tests cover).
+    for _ in 0..(oasis_app_system_monitor::STALE_AFTER_MS / POLL_INTERVAL_MS - 1) {
         assert!(!h.frame(POLL_INTERVAL_MS));
     }
     // New data does, on the next poll.

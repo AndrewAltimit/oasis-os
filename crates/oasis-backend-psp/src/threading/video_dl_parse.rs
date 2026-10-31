@@ -1,7 +1,7 @@
 //! MP4 parsing and stream demux helpers for video downloads: moov atom
 //! detection, sample table traversal, and interleaved sample extraction.
 
-use super::{AUDIO_QUEUE, AudioCmd, DOWNLOAD_CANCEL};
+use super::{AudioCmd, DOWNLOAD_CANCEL};
 use crate::video::{StreamFrame, try_push_stream_frame};
 use core::sync::atomic::Ordering;
 
@@ -45,14 +45,27 @@ pub(super) fn find_moov_end(header_bytes: &[u8]) -> Option<u64> {
                 header_bytes[pos + 14],
                 header_bytes[pos + 15],
             ]);
-            pos += big as usize;
+            // A box is at least its 16-byte header; anything smaller is
+            // malformed (and 0 would never advance `pos`).
+            if big < 16 {
+                return None;
+            }
+            pos = advance(pos, big)?;
         } else if size == 0 {
             break; // box extends to EOF
+        } else if size < 8 {
+            return None; // smaller than its own header: malformed
         } else {
-            pos += size as usize;
+            pos = advance(pos, size)?;
         }
     }
     None
+}
+
+/// `pos + size` as a buffer offset, or `None` when it overflows `usize`
+/// (32-bit on PSP; box sizes come from the network).
+fn advance(pos: usize, size: u64) -> Option<usize> {
+    usize::try_from(size).ok().and_then(|s| pos.checked_add(s))
 }
 
 // ---------------------------------------------------------------------------
@@ -191,7 +204,7 @@ pub(super) fn process_stream_chunk(
                 // this to ~3, freeing CPU for the audio decode thread.
                 let mut cmd = AudioCmd::VideoAudioAac { data };
                 loop {
-                    match AUDIO_QUEUE.push(cmd) {
+                    match super::push_audio_cmd(cmd) {
                         Ok(()) => break,
                         Err(returned) => {
                             cmd = returned;

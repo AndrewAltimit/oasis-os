@@ -2,7 +2,7 @@
 //!
 //! Bridges the three pieces of the UI sound system:
 //! - the skin's `[sounds]` table + WAV assets (`oasis-skin`),
-//! - the polyphonic one-shot mixer (`oasis_audio::sfx::SfxPlayer`),
+//! - the polyphonic one-shot mixer (`oasis_audio::SfxPlayer`),
 //! - the SDL backend's dedicated SFX stream (`SdlAudioBackend::queue_sfx`).
 //!
 //! `reload_for_skin` runs at boot and on every skin swap: it drops the old
@@ -11,7 +11,7 @@
 //! sounds from the toast counters, drains the event queue into voices, and
 //! pumps a small backlog of mixed PCM into the SFX stream.
 
-use oasis_core::ui_sound::UiSound;
+use crate::ui_sound::UiSound;
 
 use crate::app_state::AppState;
 

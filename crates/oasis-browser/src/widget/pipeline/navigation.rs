@@ -144,6 +144,7 @@ impl BrowserWidget {
         self.reader_html = None;
         self.error_message = None;
         self.page_csp = None;
+        self.reader_saved_csp = None;
         self.page_errors.clear();
         self.document = None;
         self.layout_root = None;
@@ -652,20 +653,19 @@ impl BrowserWidget {
         );
 
         match content_type {
-            ContentType::Html | ContentType::PlainText | ContentType::Unknown => {
+            ContentType::Html
+            | ContentType::PlainText
+            | ContentType::Css
+            | ContentType::Unknown => {
+                // A stylesheet opened directly is shown as escaped text:
+                // it used to be wrapped in `<pre>` raw, so a
+                // `</pre><script>` in it ran as page script.
                 let body = html_for_text_body(content_type, &response.body);
                 self.load_html(&body, &url);
             },
             ContentType::GeminiText => {
                 let body = String::from_utf8_lossy(&response.body);
                 self.load_gemini(&body, &url);
-            },
-            ContentType::Css => {
-                let wrapped = format!(
-                    "<html><body><pre>{}</pre></body></html>",
-                    String::from_utf8_lossy(&response.body)
-                );
-                self.load_html(&wrapped, &url);
             },
             _ if content_type.is_image() => {
                 // Decode the bytes we already have so the wrapping

@@ -3,17 +3,57 @@
 use crate::html::dom::{Document, NodeId, NodeKind};
 use crate::html::escape::push_escaped;
 
+/// Elements whose text children serialize verbatim (HTML fragment
+/// serialization): escaping them corrupted `style.innerHTML` round
+/// trips (`div > p` came back as `div &gt; p`, which re-parses as is).
+fn is_raw_text_element(tag: &str) -> bool {
+    matches!(
+        tag,
+        "script" | "style" | "xmp" | "iframe" | "noembed" | "noframes" | "plaintext"
+    )
+}
+
+/// Whether `name` can be written as a tag or attribute name without
+/// changing the markup's structure. Scripts can create names the parser
+/// never would (`createElement('img src=x onerror=f()')`); emitting them
+/// raw would turn into real attributes when the HTML is parsed back.
+fn is_serializable_name(name: &str) -> bool {
+    !name.is_empty()
+        && !name
+            .chars()
+            .any(|c| c.is_whitespace() || matches!(c, '"' | '\'' | '<' | '>' | '/' | '='))
+}
+
 /// Serialize a DOM node (and its subtree) to an HTML string.
 pub(super) fn serialize_node(doc: &Document, id: NodeId, out: &mut String) {
     match &doc.nodes[id].kind {
         NodeKind::Text(s) => {
-            push_escaped(out, s);
+            let raw = doc.nodes[id]
+                .parent
+                .and_then(|p| doc.element(p))
+                .is_some_and(|e| is_raw_text_element(e.tag.as_str()));
+            if raw {
+                out.push_str(s);
+            } else {
+                push_escaped(out, s);
+            }
         },
         NodeKind::Element(e) => {
             let tag = e.tag.as_str();
+            if !is_serializable_name(tag) {
+                // Keep the content, drop the unrepresentable element.
+                for &child in &doc.nodes[id].children {
+                    serialize_node(doc, child, out);
+                }
+                return;
+            }
             out.push('<');
             out.push_str(tag);
-            for attr in &e.attributes {
+            for attr in e
+                .attributes
+                .iter()
+                .filter(|a| is_serializable_name(&a.name))
+            {
                 out.push(' ');
                 out.push_str(&attr.name);
                 out.push_str("=\"");

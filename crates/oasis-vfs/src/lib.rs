@@ -179,6 +179,49 @@ pub(crate) fn parent_path(path: &str) -> &str {
     }
 }
 
+/// Fail unless `ctx` may search (execute) every directory above the
+/// normalized `path`, as POSIX requires to reach an entry: a `0o700`
+/// directory owned by someone else hides its contents. Ancestors that do
+/// not exist are skipped (the caller reports the missing path). Used by the
+/// in-memory backends; `RealVfs` leaves this to the OS.
+pub(crate) fn check_ancestors_searchable(vfs: &(impl Vfs + ?Sized), path: &str) -> Result<()> {
+    let ctx = vfs.context();
+    if ctx.is_root {
+        return Ok(());
+    }
+    let ancestors =
+        std::iter::once("/").chain(path.match_indices('/').skip(1).map(|(i, _)| &path[..i]));
+    for dir in ancestors.filter(|d| *d != path) {
+        if let Ok(perms) = vfs.get_permissions(dir)
+            && !perms.allows(&ctx, AccessMode::Execute)
+        {
+            return Err(OasisError::Vfs(format!("permission denied: {dir}").into()));
+        }
+    }
+    Ok(())
+}
+
+/// Fail unless `ctx` may change `current` permissions to `new`: root may
+/// do anything; anyone else only on entries they own (they may give an
+/// entry away, as on System V, but cannot take one).
+pub(crate) fn authorize_permission_change(
+    ctx: &VfsContext,
+    path: &str,
+    current: &FilePermissions,
+) -> Result<()> {
+    if ctx.is_root || ctx.current_user == current.owner {
+        Ok(())
+    } else {
+        Err(OasisError::Vfs(
+            format!(
+                "permission denied: {path} is owned by {} (not {})",
+                current.owner, ctx.current_user
+            )
+            .into(),
+        ))
+    }
+}
+
 /// Normalize a VFS path lexically, the one path form every backend uses.
 ///
 /// The result starts with `/`, has no empty or `.` segments and no trailing
@@ -298,6 +341,15 @@ pub trait Vfs {
     /// each override it with their own name.
     fn vfs_type(&self) -> &'static str {
         "UnknownVfs"
+    }
+
+    /// Whether `path` itself is a symbolic link (not followed). `readdir`
+    /// and `stat` report a link to a directory as a directory, so
+    /// recursive deletes check this to remove the link instead of
+    /// descending into (and emptying) its target. Defaults to `false`;
+    /// only `RealVfs` has links.
+    fn is_symlink(&self, _path: &str) -> bool {
+        false
     }
 
     /// Check the invariants every `rename` implementation must enforce.

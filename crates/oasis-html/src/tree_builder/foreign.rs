@@ -1,181 +1,191 @@
-//! Foreign-content (SVG / MathML) insertion — a simplified subset of
-//! WHATWG HTML §13.2.6.5.
+//! Foreign content (SVG / MathML) — WHATWG HTML §13.2.6.5.
 //!
-//! The real algorithm tracks namespaces (HTML / SVG / MathML), applies
-//! tag-name case fixups for a curated list of SVG camelCase identifiers,
-//! runs integration-point checks for MathML `<annotation-xml>`, and has
-//! a large list of HTML "breakout" tags that yank parsing back to HTML.
-//! We don't model namespaces and the tokenizer has already lowercased
-//! every tag name, so we can't preserve SVG camelCase — but real pages
-//! that inline `<svg>` or `<math>` blocks still need to parse without
-//! the HTML auto-close rules firing inside. This file implements that:
-//! while `foreign_depth > 0` every start tag becomes a literal element
-//! and every end tag pops to the matching element without applying
-//! `is_block_level` / `close_p_if_in_scope` / adoption-agency rules.
+//! Every element the builder creates gets a namespace ([`Ns`]), kept
+//! per node by the builder (the DOM has no namespace field). The tree
+//! construction dispatcher (`TreeBuilder::process_token`) sends a token
+//! here while the current node is SVG / MathML, except at integration
+//! points: inside SVG `foreignObject` / `desc` / `title` and MathML
+//! `annotation-xml encoding="text/html"` start tags and text follow the
+//! HTML rules, and so do they (bar `mglyph` / `malignmark`) inside the
+//! MathML text elements `mi`, `mo`, `mn`, `ms`, `mtext`.
 //!
-//! HTML breakout — if we see one of the HTML tags listed in
-//! [`is_html_breakout_tag`] (the canonical set: `b`, `big`, `body`,
-//! `br`, `center`, `code`, `dd`, `div`, `dl`, `dt`, `em`, `embed`,
-//! `h1`…`h6`, `head`, `hr`, `i`, `img`, `li`, `listing`, `menu`,
-//! `meta`, `nobr`, `ol`, `p`, `pre`, `ruby`, `s`, `small`, `span`,
-//! `strong`, `strike`, `sub`, `sup`, `table`, `tt`, `u`, `ul`, `var`),
-//! we pop everything in the foreign subtree off the stack back to the
-//! svg/math root and reprocess the token via the HTML path.
+//! Here no HTML auto-close rules apply: start tags become elements in
+//! the current node's namespace (SVG names and attributes get their
+//! camelCase back), end tags pop to the matching foreign element. An
+//! HTML "breakout" tag ([`is_html_breakout_tag`], `<font>` with
+//! `color` / `face` / `size`, `</br>`, `</p>`) pops back to the nearest
+//! HTML element or integration point and is reprocessed as HTML.
 
 use super::super::dom::{ElementData, NodeKind, TagName};
-use super::super::tokenizer::Token;
-use super::{TreeBuilder, is_all_whitespace};
+use super::super::tokenizer::{StartTagToken, Token};
+use super::{Ns, TreeBuilder, is_all_whitespace};
 
 impl TreeBuilder {
     pub(crate) fn handle_foreign_content(&mut self, token: Token) {
         match token {
             Token::Character(ref s) => {
                 self.insert_text(s);
-                // Per spec, a non-whitespace character token in foreign
-                // content flips frameset_ok. We already tore out
-                // frameset support, so the bookkeeping just mirrors
-                // the flag for completeness.
                 if !is_all_whitespace(s) {
                     self.frameset_ok = false;
                 }
             },
-            Token::Comment(text) => {
-                let id = self.doc.add_node(NodeKind::Comment(text));
-                let parent = self.current_node();
-                self.doc.append_child(parent, id);
-            },
+            Token::Comment(text) => self.insert_comment(text),
             Token::Doctype(_) => {
                 log::trace!("html parse error: doctype in foreign content");
             },
             Token::StartTag(ref tag) => {
                 let lower = tag.name.to_ascii_lowercase();
-                if is_html_breakout_tag(&lower) {
+                let font_breakout = lower == "font"
+                    && tag
+                        .attributes
+                        .iter()
+                        .any(|a| matches!(a.name.as_str(), "color" | "face" | "size"));
+                if is_html_breakout_tag(&lower) || font_breakout {
                     log::trace!("foreign content: breakout on <{lower}>, returning to HTML");
                     self.break_out_of_foreign_content();
-                    self.process_token(token);
+                    self.process_html(token);
                     return;
                 }
-                // Generic foreign-content element insertion. No
-                // auto-close of preceding `<p>`, no
-                // reconstruct_formatting, no void-element lookup (SVG
-                // and MathML self-close via `/>` which the tokenizer
-                // surfaces as `self_closing: true`).
-                //
-                // Apply SVG camelCase fixup before creating the element
-                // so DOM queries return the spec-correct tag name.
                 let id = self.create_foreign_element(tag);
-                let parent = self.current_node();
-                self.doc.append_child(parent, id);
-                // Past the open-elements cap the element is appended but
-                // not pushed, exactly like `insert_element`.
-                if !tag.self_closing && self.open_elements.len() < super::MAX_NESTING_DEPTH {
-                    self.open_elements.push(id);
-                    self.foreign_depth += 1;
+                self.insert_leaf(id);
+                // Self-closing foreign elements are not pushed; past the
+                // open-elements cap nothing is, exactly like
+                // `insert_element`.
+                if !tag.self_closing {
+                    self.push_open(id);
                 }
             },
             Token::EndTag(ref tag) => {
                 let lower = tag.name.to_ascii_lowercase();
-                // Per WHATWG §13.2.6.5: search inside the current
-                // foreign content subtree only — we can't cross back
-                // into HTML via an end tag. Restrict the scan to the
-                // topmost `foreign_depth` elements of the open stack
-                // (the foreign root + its foreign descendants) so a
-                // malformed `</body>` inside `<svg>` can never
-                // accidentally close an HTML ancestor even if the
-                // `foreign_depth` invariant is later weakened.
-                let depth = self.foreign_depth as usize;
-                let stack_len = self.open_elements.len();
-                debug_assert!(
-                    depth <= stack_len,
-                    "foreign_depth {depth} exceeds open_elements.len() {stack_len}"
-                );
-                let subtree_start = stack_len.saturating_sub(depth);
-                let mut found = None;
-                for (i, &id) in self.open_elements[subtree_start..].iter().enumerate().rev() {
+                if lower == "br" || lower == "p" {
+                    self.break_out_of_foreign_content();
+                    self.process_html(token);
+                    return;
+                }
+                // Walk down from the current node through the foreign
+                // elements: a match pops to it; reaching an HTML element
+                // hands the token to the HTML insertion mode.
+                let mut idx = self.open_elements.len();
+                while idx > 1 {
+                    idx -= 1;
+                    let id = self.open_elements[idx];
+                    if !self.ns_of(id).is_foreign() {
+                        self.process_html(token);
+                        return;
+                    }
                     if self
                         .tag_of(id)
-                        .map(TagName::as_str)
-                        .is_some_and(|t| t.eq_ignore_ascii_case(&lower))
+                        .is_some_and(|t| t.as_str().eq_ignore_ascii_case(&lower))
                     {
-                        found = Some(subtree_start + i);
-                        break;
+                        self.open_elements.truncate(idx);
+                        return;
                     }
                 }
-                if let Some(pos) = found {
-                    let pops = stack_len - pos;
-                    self.open_elements.truncate(pos);
-                    debug_assert!(
-                        pops <= self.foreign_depth as usize,
-                        "popping {pops} elements but foreign_depth is only {}",
-                        self.foreign_depth
-                    );
-                    self.foreign_depth -= pops as u32;
-                }
             },
-            Token::Eof => {
-                self.break_out_of_foreign_content();
-                self.process_token(Token::Eof);
-            },
+            Token::Eof => self.process_html(Token::Eof),
         }
     }
 
-    /// Pop every foreign-content element off the open stack and zero
-    /// out `foreign_depth`. Used when an HTML breakout token arrives
-    /// or when the token stream ends.
+    /// Pop until the current node is an HTML element, an HTML
+    /// integration point or a MathML text integration point.
     pub(crate) fn break_out_of_foreign_content(&mut self) {
-        let depth = self.foreign_depth as usize;
-        let keep = self.open_elements.len().saturating_sub(depth);
-        self.open_elements.truncate(keep);
-        self.foreign_depth = 0;
+        while let Some(&cur) = self.open_elements.last() {
+            let ns = self.ns_of(cur);
+            if !ns.is_foreign() || ns.is_html_integration_point() || ns == Ns::MathTextIp {
+                return;
+            }
+            self.open_elements.pop();
+        }
     }
 
-    /// Create an element inside foreign content, applying the WHATWG
-    /// SVG camelCase fixup table (§13.2.6.5) so tag names are stored
-    /// with spec-correct casing (e.g. `foreignObject`, not
-    /// `foreignobject`). Attribute names are similarly fixed up.
-    fn create_foreign_element(
-        &mut self,
-        tag: &super::super::tokenizer::StartTagToken,
-    ) -> super::super::dom::NodeId {
+    /// Create an element in the current node's (foreign) namespace,
+    /// applying the WHATWG SVG camelCase fixups (§13.2.6.5) so names
+    /// are stored with spec-correct casing (`foreignObject`, `viewBox`).
+    fn create_foreign_element(&mut self, tag: &StartTagToken) -> super::super::dom::NodeId {
         let lower = tag.name.to_ascii_lowercase();
-        let fixed = svg_tag_case_fixup(&lower);
-        let tag_name = TagName::from_str(fixed);
-        let mut data = ElementData::new(tag_name);
+        let svg = self.ns_of(self.current_node()).is_svg();
+        let name = if svg {
+            svg_tag_case_fixup(&lower)
+        } else {
+            &lower
+        };
+        let ns = if svg {
+            svg_ns_for(&lower)
+        } else {
+            mathml_ns_for(&lower, tag)
+        };
+        let mut data = ElementData::new(TagName::from_str(name));
         for attr in &tag.attributes {
+            let name = if svg {
+                svg_attr_case_fixup(&attr.name)
+            } else if attr.name.eq_ignore_ascii_case("definitionurl") {
+                "definitionURL".to_string()
+            } else {
+                attr.name.clone()
+            };
             data.attributes.push(super::super::dom::Attribute {
-                name: svg_attr_case_fixup(&attr.name),
+                name,
                 value: attr.value.clone(),
             });
         }
-        self.doc.add_node(NodeKind::Element(data))
+        let id = self.doc.add_node(NodeKind::Element(data));
+        self.set_ns(id, ns);
+        id
     }
 
     /// Entry point used by `handle_start_tag_in_body` when a bare
     /// `<svg>` or `<math>` root is encountered while in normal HTML
     /// parsing. Creates the root element and enters foreign content.
-    pub(crate) fn enter_foreign_root(
-        &mut self,
-        tag: &super::super::tokenizer::StartTagToken,
-        as_tag: TagName,
-    ) {
+    pub(crate) fn enter_foreign_root(&mut self, tag: &StartTagToken, as_tag: TagName) {
         // Don't auto-close a containing <p> — foreign elements are
-        // phrasing content and can live inside a paragraph. We also
-        // don't reconstruct formatting because the foreign root is
-        // outside the HTML formatting list.
+        // phrasing content and can live inside a paragraph.
+        let svg = as_tag == TagName::Svg;
         let mut data = ElementData::new(as_tag);
         for attr in &tag.attributes {
+            let name = if svg {
+                svg_attr_case_fixup(&attr.name)
+            } else {
+                attr.name.clone()
+            };
             data.attributes.push(super::super::dom::Attribute {
-                name: attr.name.clone(),
+                name,
                 value: attr.value.clone(),
             });
         }
         let id = self.doc.add_node(NodeKind::Element(data));
-        let parent = self.current_node();
-        self.doc.append_child(parent, id);
-        if !tag.self_closing && self.open_elements.len() < super::MAX_NESTING_DEPTH {
-            self.open_elements.push(id);
-            self.foreign_depth += 1;
+        self.set_ns(id, if svg { Ns::Svg } else { Ns::Math });
+        self.insert_leaf(id);
+        if !tag.self_closing {
+            self.push_open(id);
         }
+    }
+}
+
+/// Namespace kind of a new SVG element named `lower`.
+fn svg_ns_for(lower: &str) -> Ns {
+    match lower {
+        "foreignobject" | "desc" | "title" => Ns::SvgHtmlIp,
+        _ => Ns::Svg,
+    }
+}
+
+/// Namespace kind of a new MathML element named `lower`.
+fn mathml_ns_for(lower: &str, tag: &StartTagToken) -> Ns {
+    match lower {
+        "mi" | "mo" | "mn" | "ms" | "mtext" => Ns::MathTextIp,
+        "annotation-xml" => {
+            let html = tag.attributes.iter().any(|a| {
+                a.name == "encoding"
+                    && (a.value.eq_ignore_ascii_case("text/html")
+                        || a.value.eq_ignore_ascii_case("application/xhtml+xml"))
+            });
+            if html {
+                Ns::MathHtmlIp
+            } else {
+                Ns::MathAnnotationXml
+            }
+        },
+        _ => Ns::Math,
     }
 }
 

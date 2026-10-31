@@ -417,6 +417,30 @@ mod tests {
     }
 
     #[test]
+    fn url_text_is_checked_against_its_bezel() {
+        // The URL label is drawn on the gray chrome bezel, so a dim label
+        // that passes against the dark bar must still be flagged.
+        let mut skin = load_builtin("altimit").expect("altimit loads");
+        let bars = skin.theme.bar_overrides.as_mut().expect("bar overrides");
+        bars.url_color = Some("#506860".to_string());
+        let report = skin.theme.contrast_report(true);
+        let pair = report
+            .iter()
+            .find(|c| c.pair == "bar url text on its bezel")
+            .expect("bezel pair checked when url_text is set");
+        assert!(pair.ratio < 3.0, "{:.2}", pair.ratio);
+        // Without url_text there is no plate to check.
+        let classic = load_builtin("classic").expect("classic loads");
+        assert!(
+            classic
+                .theme
+                .contrast_report(true)
+                .iter()
+                .all(|c| c.pair != "bar url text on its bezel")
+        );
+    }
+
+    #[test]
     fn highcontrast_icon_colors_are_high_contrast() {
         let skin = load_builtin("highcontrast").expect("highcontrast loads");
         let at = crate::active_theme::ActiveTheme::from_skin(&skin.theme);

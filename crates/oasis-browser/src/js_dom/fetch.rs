@@ -164,8 +164,26 @@ fn parse_ipv4_loose(host: &str) -> Option<Ipv4Addr> {
 }
 
 /// Class of a host name: `localhost` names and IP literals are
-/// classified directly; other names are classified by `resolve`.
+/// classified directly; other names are classified by `resolve`, as
+/// the *most* private of their addresses (a name the page wants to
+/// reach is as sensitive as any address it could connect to).
 fn classify_host(host: &str, resolve: &dyn Fn(&str) -> Vec<IpAddr>) -> NetClass {
+    classify_host_by(host, resolve, true)
+}
+
+/// Class of the page's own host: the *least* private of its addresses.
+/// Taking the most private one let `evil.example` with records
+/// `[public, 192.168.1.1]` count as a private page, which may then
+/// reach the private network.
+fn classify_page_host(host: &str, resolve: &dyn Fn(&str) -> Vec<IpAddr>) -> NetClass {
+    classify_host_by(host, resolve, false)
+}
+
+fn classify_host_by(
+    host: &str,
+    resolve: &dyn Fn(&str) -> Vec<IpAddr>,
+    most_private: bool,
+) -> NetClass {
     let lower = host.trim_end_matches('.').to_ascii_lowercase();
     if lower == "localhost" || lower.ends_with(".localhost") {
         return NetClass::Loopback;
@@ -173,11 +191,13 @@ fn classify_host(host: &str, resolve: &dyn Fn(&str) -> Vec<IpAddr>) -> NetClass 
     if let Some(ip) = parse_ip_host(&lower) {
         return classify_ip(ip);
     }
-    resolve(&lower)
-        .into_iter()
-        .map(classify_ip)
-        .max()
-        .unwrap_or(NetClass::Public)
+    let classes = resolve(&lower).into_iter().map(classify_ip);
+    let class = if most_private {
+        classes.max()
+    } else {
+        classes.min()
+    };
+    class.unwrap_or(NetClass::Public)
 }
 
 // ------------------------------------------------------------------
@@ -267,10 +287,14 @@ impl FetchTransport for NetTransport {
         {
             crate::loader::http::dns_resolve_cached(host).unwrap_or_default()
         }
+        // PSP: the firmware resolver behind the TLS provider, the same
+        // one connect_tcp_checked dials with. (WASM has no provider.)
         #[cfg(not(native_net))]
         {
-            let _ = host;
-            Vec::new()
+            self.tls
+                .as_ref()
+                .map(|tls| tls.resolve_host(host))
+                .unwrap_or_default()
         }
     }
 
@@ -302,17 +326,15 @@ impl FetchTransport for NetTransport {
             )
         };
         #[cfg(feature = "psp")]
-        let result = {
-            let _ = addr_ok;
-            crate::loader::http_psp::http_request_guarded(
-                req.method,
-                req.url,
-                req.body,
-                &headers,
-                tls,
-                redirect_ok,
-            )
-        };
+        let result = crate::loader::http_psp::http_request_guarded(
+            req.method,
+            req.url,
+            req.body,
+            &headers,
+            tls,
+            redirect_ok,
+            addr_ok,
+        );
         #[cfg(all(target_arch = "wasm32", not(feature = "psp")))]
         let result: oasis_types::error::Result<(crate::loader::ResourceResponse, Vec<_>)> = {
             let _ = (redirect_ok, addr_ok, headers, tls);
@@ -343,6 +365,12 @@ pub(crate) struct BrowserFetchHandler {
     page_url_str: String,
     csp: Option<CspPolicy>,
     transport: Box<dyn FetchTransport>,
+    /// Network class of a web page's host, pinned when the page's bindings
+    /// are installed (right after it loaded). Re-resolving on every
+    /// `fetch()` let classic DNS rebinding promote a page: `evil.example`
+    /// served from a public address, then re-pointed at `127.0.0.1`,
+    /// counted as a loopback page and could read loopback services.
+    page_class: Option<NetClass>,
 }
 
 impl BrowserFetchHandler {
@@ -351,11 +379,17 @@ impl BrowserFetchHandler {
         csp: Option<CspPolicy>,
         transport: Box<dyn FetchTransport>,
     ) -> Self {
+        let parsed = crate::loader::Url::parse(page_url).filter(|u| !u.host.is_empty());
+        let page_class = parsed
+            .as_ref()
+            .filter(|u| is_web_scheme(u))
+            .map(|p| classify_page_host(&p.host, &|h| transport.resolve_host(h)));
         Self {
-            page_url: crate::loader::Url::parse(page_url).filter(|u| !u.host.is_empty()),
+            page_url: parsed,
             page_url_str: page_url.to_string(),
             csp,
             transport,
+            page_class,
         }
     }
 
@@ -473,7 +507,7 @@ impl FetchHandler for BrowserFetchHandler {
         // Web-origin policy: network class, same-origin / CORS.
         let page = self.page_url.as_ref().filter(|u| is_web_scheme(u));
         let page_origin = page.and_then(Url::origin);
-        let page_class = page.map(|p| self.classify(p));
+        let page_class = page.and(self.page_class);
         let target_origin = target.origin();
         if let (Some(page_origin), Some(page_class)) = (&page_origin, page_class) {
             let target_class = self.classify(&target);
@@ -578,5 +612,50 @@ impl FetchHandler for BrowserFetchHandler {
                 resp.url
             },
         })
+    }
+}
+
+/// The PSP transport (no `native_net`) resolves through the TLS provider;
+/// before, it returned no addresses, so every DNS name counted as public
+/// and a public page could `fetch()` an intranet host by name.
+#[cfg(all(test, not(native_net)))]
+mod tests {
+    use super::*;
+    use oasis_types::backend::NetworkStream;
+
+    struct FixedDns;
+
+    impl TlsProvider for FixedDns {
+        fn connect_tls(
+            &self,
+            stream: Box<dyn NetworkStream>,
+            _server_name: &str,
+        ) -> oasis_types::error::Result<Box<dyn NetworkStream>> {
+            Ok(stream)
+        }
+
+        fn resolve_host(&self, host: &str) -> Vec<IpAddr> {
+            match host {
+                "intranet.example" => vec![IpAddr::from([192, 168, 1, 5])],
+                "public.example" => vec![IpAddr::from([93, 184, 216, 34])],
+                _ => Vec::new(),
+            }
+        }
+    }
+
+    #[test]
+    fn dns_names_are_classified_through_the_tls_provider() {
+        let t = NetTransport {
+            tls: Some(Arc::new(FixedDns)),
+        };
+        let resolve = |h: &str| t.resolve_host(h);
+        assert_eq!(
+            classify_host("intranet.example", &resolve),
+            NetClass::Private
+        );
+        assert_eq!(
+            classify_page_host("public.example", &resolve),
+            NetClass::Public
+        );
     }
 }

@@ -27,8 +27,14 @@ pub fn layout_inline(parent: &mut LayoutBox, measurer: &dyn TextMeasurer) {
     let available_width = parent.dimensions.content.width;
     let text_align = parent.style.text_align;
 
-    // Collect all inline fragments from the children.
-    let fragments = collect_inline_fragments(&parent.children, available_width, measurer);
+    // Collect all inline fragments from the original inline content
+    // (kept across layouts: `children` becomes line fragments below).
+    let source = match parent.inline_source.take() {
+        Some(source) => *source,
+        None => std::mem::take(&mut parent.children),
+    };
+    let fragments = collect_inline_fragments(&source, available_width, measurer);
+    parent.inline_source = Some(Box::new(source));
 
     // Resolve `TextDirection::Auto` by detecting the dominant
     // direction from the first text fragment's content.
@@ -181,7 +187,11 @@ pub fn layout_inline(parent: &mut LayoutBox, measurer: &dyn TextMeasurer) {
         }) = line.fragments.last_mut()
             && *soft_hyphen
         {
-            let hyphen_w = measurer.measure_text("-", style.font_size as u16) as f32;
+            let hyphen_w = measurer.measure_text_font(
+                "-",
+                style.font_size as u16,
+                super::text::web_font_of(style),
+            ) as f32;
             text.push('-');
             *width += hyphen_w;
             *soft_hyphen = false; // consumed
@@ -269,7 +279,12 @@ pub fn layout_inline(parent: &mut LayoutBox, measurer: &dyn TextMeasurer) {
                     && !text.ends_with('\n')
                 {
                     text.push(' ');
-                    let sw = measure_space(style.font_size, style.word_spacing, measurer);
+                    let sw = measure_space(
+                        style.font_size,
+                        style.word_spacing,
+                        super::text::web_font_of(style),
+                        measurer,
+                    );
                     *width += sw;
                 }
                 // Remove the penultimate line if it's now empty to avoid
@@ -675,7 +690,12 @@ pub fn make_text_fragments(
     let font_size = style.font_size;
     let letter_spacing = style.letter_spacing;
     let word_spacing = style.word_spacing;
-    let space_width = measure_space(font_size, word_spacing, measurer);
+    let space_width = measure_space(
+        font_size,
+        word_spacing,
+        super::text::web_font_of(style),
+        measurer,
+    );
     let mut fragments = Vec::with_capacity(words.len());
 
     for word in &words {
@@ -693,7 +713,13 @@ pub fn make_text_fragments(
             continue;
         }
 
-        let word_width = measure_word(&word.text, font_size, letter_spacing, measurer);
+        let word_width = measure_word(
+            &word.text,
+            font_size,
+            letter_spacing,
+            super::text::web_font_of(style),
+            measurer,
+        );
         let mut total_width = word_width;
         let mut display_text = word.text.clone();
 
@@ -774,15 +800,31 @@ fn break_word_fragment(
     } = fragment
     {
         let chars: Vec<char> = text.chars().collect();
+        // Per-character advances, summed as a piece grows: re-measuring
+        // every candidate prefix was O(L^2), which a 100k-character
+        // `word-break: break-all` word (with zero-width glyphs, so it
+        // never breaks) turned into ~1e10 operations. The final piece
+        // is still measured whole below.
+        let font_px = style.font_size as u16;
+        let advances: Vec<f32> = chars
+            .iter()
+            .map(|c| {
+                let mut buf = [0u8; 4];
+                let ch = c.encode_utf8(&mut buf);
+                measurer.measure_text_font(ch, font_px, super::text::web_font_of(style)) as f32
+            })
+            .collect();
         let mut pieces = Vec::new();
         let mut start = 0;
 
         while start < chars.len() {
             let mut end = start + 1;
+            let mut base = advances[start];
             // Greedily extend until the piece exceeds available width.
             while end < chars.len() {
-                let candidate: String = chars[start..=end].iter().collect();
-                let w = measure_word(&candidate, style.font_size, style.letter_spacing, measurer);
+                base += advances[end];
+                let gaps = (end - start) as f32;
+                let w = (base + style.letter_spacing * gaps).max(0.0);
                 if w > available_width && end > start + 1 {
                     break;
                 }
@@ -790,8 +832,13 @@ fn break_word_fragment(
             }
             // end is now one past the last character that fits.
             let piece_text: String = chars[start..end].iter().collect();
-            let piece_width =
-                measure_word(&piece_text, style.font_size, style.letter_spacing, measurer);
+            let piece_width = measure_word(
+                &piece_text,
+                style.font_size,
+                style.letter_spacing,
+                super::text::web_font_of(style),
+                measurer,
+            );
             pieces.push(InlineFragment::Text {
                 text: piece_text,
                 x: 0.0,
@@ -828,7 +875,12 @@ fn trim_line_boundary_spaces(line: &mut LineBox, measurer: &dyn TextMeasurer) {
         && text.starts_with(' ')
     {
         *text = text[1..].to_string();
-        let sw = measure_space(style.font_size, style.word_spacing, measurer);
+        let sw = measure_space(
+            style.font_size,
+            style.word_spacing,
+            super::text::web_font_of(style),
+            measurer,
+        );
         *width = (*width - sw).max(0.0);
     }
 
@@ -839,7 +891,12 @@ fn trim_line_boundary_spaces(line: &mut LineBox, measurer: &dyn TextMeasurer) {
         && text.ends_with(' ')
     {
         text.pop();
-        let sw = measure_space(style.font_size, style.word_spacing, measurer);
+        let sw = measure_space(
+            style.font_size,
+            style.word_spacing,
+            super::text::web_font_of(style),
+            measurer,
+        );
         *width = (*width - sw).max(0.0);
     }
 }
@@ -1102,6 +1159,36 @@ mod tests {
         lb.dimensions.content.x = 0.0;
         lb.dimensions.content.y = 0.0;
         lb
+    }
+
+    /// Regression: breaking a word re-measured every prefix (O(L^2)); a
+    /// long word whose glyphs measure 0 px never breaks, so it took
+    /// ~1e10 steps. Pieces still fit the width.
+    #[test]
+    fn break_word_fragment_is_linear() {
+        let m = FixedMeasurer;
+        let mut style = inline_style();
+        let frag = |text: String, style: &ComputedStyle| InlineFragment::Text {
+            text,
+            x: 0.0,
+            width: 0.0,
+            style: style.clone(),
+            node: None,
+            soft_hyphen: false,
+        };
+        let pieces = break_word_fragment(&frag("abcdefghij".repeat(4), &style), 100.0, &m);
+        assert!(pieces.len() > 1);
+        for p in &pieces {
+            if let InlineFragment::Text { width, .. } = p {
+                assert!(*width <= 100.0, "{width}");
+            }
+        }
+
+        style.letter_spacing = -50.0;
+        let start = std::time::Instant::now();
+        let pieces = break_word_fragment(&frag("x".repeat(100_000), &style), 100.0, &m);
+        assert_eq!(pieces.len(), 1);
+        assert!(start.elapsed() < std::time::Duration::from_secs(5));
     }
 
     // -- single line fitting in width ---------------------------------
@@ -1422,6 +1509,7 @@ mod tests {
                     text,
                     style.font_size,
                     style.letter_spacing,
+                    None,
                     &m,
                 );
                 assert!(

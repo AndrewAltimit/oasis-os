@@ -1,6 +1,6 @@
 # PSP Overlay Plugin Guide
 
-> **Last reviewed:** 2026-05-02 — still current. Architecture, build flow, and PRX module layout match the present source.
+> **Last reviewed:** 2026-10-30. Architecture, build flow, memory budget and cache handling checked against the source.
 
 The OASIS overlay plugin is a kernel-mode PRX that stays resident in memory alongside PSP games, providing an in-game overlay UI and background MP3 playback.
 
@@ -59,7 +59,9 @@ prxmin target/mipsel-sony-psp-std/release/oasis-plugin-psp.prx oasis_plugin.prx
 which still carries the MIPS `.pdr` procedure descriptors, the symbol table
 and its strings (~135 KB the module loader never reads). `prxmin` drops
 them; the module it loads is byte-for-byte the same. CI does the same and
-ships the stripped file as `oasis-overlay.prx`.
+ships the stripped file as `oasis-overlay.prx`; install it under the name
+above (`oasis_plugin.prx`), which is what `plugin install` / `status` /
+`remove` look for.
 
 ## Controls
 
@@ -91,7 +93,7 @@ The plugin reads `ms0:/seplugins/oasis.ini` at startup:
 # Overlay trigger button: note or screen
 trigger = note
 
-# Music directory path
+# Music directory path (a trailing / is added if missing)
 music_dir = ms0:/MUSIC/
 
 # Overlay background opacity (0-255)
@@ -109,12 +111,19 @@ autoplay = false
 | `music_dir` | path | `ms0:/MUSIC/` | Directory to scan for MP3 files |
 | `opacity` | 0-255 | 180 | Overlay background transparency |
 | `autoplay` | `true`/`false` | `false` | Start music automatically on plugin load |
+| `devloop` | `true`/`false` | `false` | Dev only: skip the display hooks and run the WiFi devloop server on TCP 9293 |
+| `devloop_psk` | 8-64 bytes | unset | Pre-shared key the devloop server requires; without it the server stays off even with `devloop = true` |
+
+The devloop server (`screenshot`, `reboot`, `launch <path>`) makes every
+connection answer the remote terminal's PSK challenge first -- see
+[networking.md § PSP dev servers](networking.md#psp-dev-servers). The PRX
+carries its own small SHA-256 / HMAC (`src/auth.rs`) to stay self-contained.
 
 ## Music Playback
 
 Place MP3 files in `ms0:/MUSIC/` (or the configured `music_dir`). The plugin scans the directory at startup and builds a playlist (up to 32 tracks).
 
-Playback uses the PSP's hardware MP3 decoder (`sceMp3*` APIs) with streaming file I/O -- MP3 data is fed to the decoder in chunks rather than loaded entirely into memory.
+Playback uses the Media Engine's MP3 decoding, through `sceAudiocodec` when the plugin can resolve it (from the game's own import stubs or by NID) and `sceMp3*` otherwise, with streaming file I/O -- MP3 data is fed to the decoder in chunks rather than loaded entirely into memory. The buffers the ME reads and writes start on 64-byte boundaries.
 
 Audio output uses one of the PSP's 8 hardware audio channels at the configured volume level.
 
@@ -126,27 +135,30 @@ When active, the overlay shows:
 - **Now playing**: Current track name (if music is active)
 - **Menu**: Navigable list of actions with cursor highlighting
 
-The overlay renders directly to the game's framebuffer using alpha-blended rectangles and an 8x8 bitmap font. All rendering happens in the `sceDisplaySetFrameBuf` hook -- the game renders normally first, then the overlay is drawn on top.
+The overlay renders directly to the game's framebuffer using alpha-blended rectangles and an 8x8 bitmap font (the plugin's own CGA-style copy in `font.rs`, so the PRX stays self-contained). All rendering happens in the `sceDisplaySetFrameBuf` hook -- the game renders normally first, then the overlay is drawn on top. It only draws on 32-bit (`PSM_8888`) framebuffers with a stride of 480 to 2048 pixels.
 
 ## Technical Details
 
 ### Memory Budget
 
-Measured at plugin v1.4.0 (`opt-level = "z"`, fat LTO, one codegen unit):
+Measured at plugin v1.4.0 (`opt-level = "z"`, fat LTO, one codegen unit); the
+stripped PRX was 156,546 B at the 2026-10-30 review and 163,146 B once the
+devloop server gained its PSK challenge (SHA-256 / HMAC, `src/auth.rs`). The
+section rows below are from the review:
 
 | | Size |
 |---|---|
 | `.text` (code) | ~82 KB, of which ~15 KB is `libunwind` (the `psp` crate links it for `panic = "unwind"`) |
 | `.rodata`, `.eh_frame`, stubs, `.data` | ~30 KB |
 | Relocations (needed: the loader relocates the PRX) | ~40 KB |
-| **Stripped PRX file** (`prxmin`) | **~153 KB** (156,426 B) |
+| **Stripped PRX file** (`prxmin`) | **~159 KB** (163,146 B; 156,546 B at the review) |
 | `.bss` (zeroed at load, not in the file) | ~101 KB: 64 KB MP3 stream buffer, 18 KB PCM, playlist, network buffers |
 | **Resident footprint** (code + data + bss) | **~212 KB** |
 
 The original "<64 KB" target dates from the first version of the plugin
 (overlay + stub audio, ~1.5k lines); MP3/AAC playback, internet radio, PIP
 video, the ME diagnostics and the devloop server have since grown it to
-~5.8k lines (the ME dump diagnostics alone are ~11 KB of code, the devloop
+~10k lines (the ME dump diagnostics alone are ~11 KB of code, the devloop
 server ~3 KB). `main-ci.yml` fails if the stripped PRX exceeds 192 KiB
 (`PRX_SIZE_BUDGET`). PIP video buffers (~113 KB) are allocated on demand
 from user partition 2, not counted above.
@@ -168,8 +180,12 @@ No heap allocator is used for the core overlay logic -- all state is in static b
 
 ### Cache Coherency
 
-- Data cache is flushed after framebuffer writes (`sceKernelDcacheWritebackRange`)
-- Instruction cache is cleared after hook installation (`sceKernelIcacheClearAll`)
+- Overlay pixels are written through the framebuffer's uncached mirror
+  (`addr | 0x4000_0000`), so they reach RAM before the display scans the
+  buffer out and no data-cache flush is needed
+- After installing an inline hook the data cache is written back and the
+  instruction cache invalidated (`sceKernelDcacheWritebackAll` +
+  `sceKernelIcacheInvalidateAll`) so the CPU fetches the patched code
 
 ### CFW Compatibility
 

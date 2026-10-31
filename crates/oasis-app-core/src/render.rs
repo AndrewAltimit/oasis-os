@@ -132,6 +132,88 @@ pub fn windowed_line_at(
     (row < visible).then_some(first + row)
 }
 
+/// `text` cut to fit `max_w` pixels at `font_size`, ending in `...` when
+/// shortened (the same cut `SdiText::draw_text_ellipsis` draws), or empty
+/// when not even the ellipsis fits. For labels an app lays out or batches
+/// itself; to just draw one, call `draw_text_ellipsis`.
+pub fn ellipsize<'a>(
+    backend: &dyn SdiBackend,
+    text: &'a str,
+    font_size: u16,
+    max_w: u32,
+) -> std::borrow::Cow<'a, str> {
+    if backend.measure_text(text, font_size) <= max_w {
+        return text.into();
+    }
+    let ellipsis_w = backend.measure_text("...", font_size);
+    if ellipsis_w > max_w {
+        return "".into();
+    }
+    let target = max_w - ellipsis_w;
+    let mut drawn = 0u32;
+    let mut end = 0;
+    for (i, c) in text.char_indices() {
+        let w = backend.measure_text(&text[i..i + c.len_utf8()], font_size);
+        if drawn + w > target {
+            break;
+        }
+        drawn += w;
+        end = i + c.len_utf8();
+    }
+    format!("{}...", &text[..end]).into()
+}
+
+/// Largest font size, at most `font_size`, whose line box fits in `h`
+/// pixels (never below 8, the smallest bitmap size).
+pub fn font_size_fitting(backend: &dyn SdiBackend, font_size: u16, h: u32) -> u16 {
+    let mut size = font_size.max(8);
+    while size > 8 && backend.measure_text_height(size) > h {
+        size -= 1;
+    }
+    size
+}
+
+/// Draw a one-line status strip into `rect = (x, y, w, h)`: `left` from
+/// the left edge, `right` (a key hint, may be empty) right-aligned.
+///
+/// The shared form of every app's footer / status bar. The font shrinks
+/// (from `font_size`) until a line fits the strip's height and the text is
+/// centred vertically; `left` is ellipsized to the width it has, and
+/// `right` is dropped when it would collide with `left` (the status
+/// message matters more than the hint). `colors` are `(left, right)`;
+/// the caller fills the background.
+pub fn draw_status_strip(
+    backend: &mut dyn SdiBackend,
+    rect: (i32, i32, u32, u32),
+    left: &str,
+    right: &str,
+    font_size: u16,
+    colors: (oasis_types::backend::Color, oasis_types::backend::Color),
+) -> oasis_types::error::Result<()> {
+    const PAD: i32 = 4;
+    const GAP: u32 = 12;
+    let (x, y, w, h) = rect;
+    let size = font_size_fitting(backend, font_size, h);
+    let ty = y + (h as i32 - backend.measure_text_height(size) as i32).max(0) / 2;
+    let inner_w = w.saturating_sub(2 * PAD as u32);
+    let left_w = backend.measure_text(left, size);
+    let right_w = if right.is_empty() {
+        0
+    } else {
+        backend.measure_text(right, size)
+    };
+    let mut left_max = inner_w;
+    if right_w > 0 && left_w + GAP + right_w <= inner_w {
+        let rx = x + w as i32 - PAD - right_w as i32;
+        backend.draw_text(right, rx, ty, size, colors.1)?;
+        left_max = inner_w - GAP - right_w;
+    }
+    if !left.is_empty() {
+        backend.draw_text_ellipsis(left, x + PAD, ty, size, colors.0, left_max)?;
+    }
+    Ok(())
+}
+
 /// Draw generic content to a windowed region.
 ///
 /// The app title is NOT drawn here — the WM titlebar already shows it. A
@@ -153,8 +235,11 @@ pub fn draw_content_windowed(
     } else {
         content.browse_dir.as_deref().map(|d| format!("[{d}]"))
     };
+    // Every row is ellipsized to the content width: long lines, paths and
+    // the footer hint would otherwise be cut mid-glyph by the window clip.
+    let text_w = cw.saturating_sub(8);
     let content_top = if let Some(ctx) = context {
-        backend.draw_text(&ctx, cx + 4, cy + 2, 12, at.app.dim_text)?;
+        backend.draw_text_ellipsis(&ctx, cx + 4, cy + 2, 12, at.app.dim_text, text_w)?;
         backend.fill_rect(
             cx,
             cy + at.app.title_bar_height as i32 - 4,
@@ -188,7 +273,7 @@ pub fn draw_content_windowed(
             at.app.text
         };
         let y = cy + content_top + i as i32 * line_h;
-        backend.draw_text(&text, cx + 4, y, WINDOWED_FONT_SIZE, text_color)?;
+        backend.draw_text_ellipsis(&text, cx + 4, y, WINDOWED_FONT_SIZE, text_color, text_w)?;
     }
 
     // Scroll indicator.
@@ -202,7 +287,7 @@ pub fn draw_content_windowed(
         "Cancel=back".to_string()
     };
     let scroll_y = cy + ch as i32 - 14;
-    backend.draw_text(&scroll_text, cx + 4, scroll_y, 10, at.app.dim_text)?;
+    backend.draw_text_ellipsis(&scroll_text, cx + 4, scroll_y, 10, at.app.dim_text, text_w)?;
 
     Ok(())
 }
@@ -211,6 +296,7 @@ pub fn draw_content_windowed(
 mod tests {
     use super::*;
     use oasis_test_backend::RecordingBackend;
+    use oasis_types::backend::{SdiCore, SdiText};
 
     #[test]
     fn windowed_line_at_inverts_windowed_line_origin() {
@@ -237,6 +323,140 @@ mod tests {
             assert!(seen > 3, "some lines visible");
             assert_eq!(windowed_line_at(&content, ch, m, -1), None);
             assert_eq!(windowed_line_at(&content, ch, m, ch as i32), None);
+        }
+    }
+
+    #[test]
+    fn ellipsize_keeps_fitting_text_and_cuts_the_rest_to_width() {
+        let rec = RecordingBackend::default();
+        let text = "The quick brown fox jumps over the lazy dog";
+        let full = rec.measure_text(text, 12);
+        // Fits: returned unchanged, without allocating.
+        let same = ellipsize(&rec, text, 12, full);
+        assert!(matches!(same, std::borrow::Cow::Borrowed(t) if t == text));
+
+        let dots = rec.measure_text("...", 12);
+        for max_w in dots..full {
+            let cut = ellipsize(&rec, text, 12, max_w);
+            assert!(cut.ends_with("..."), "{max_w}: {cut}");
+            let kept = cut.trim_end_matches("...");
+            assert!(text.starts_with(kept), "{max_w}: a prefix of the text");
+            assert!(rec.measure_text(&cut, 12) <= max_w, "{max_w}: {cut} fits");
+            // The longest prefix that fits: one more char would not.
+            let next = &text[..kept.len() + 1];
+            assert!(
+                rec.measure_text(next, 12) + dots > max_w,
+                "{max_w}: '{kept}' could keep one more char"
+            );
+        }
+        // Not even the ellipsis fits.
+        assert_eq!(ellipsize(&rec, text, 12, dots - 1), "");
+        assert_eq!(ellipsize(&rec, text, 12, 0), "");
+    }
+
+    #[test]
+    fn ellipsize_cuts_multibyte_text_on_char_boundaries() {
+        let rec = RecordingBackend::default();
+        let text = "Grüße aus Köln, schöne Straße";
+        let full = rec.measure_text(text, 10);
+        for max_w in 0..full {
+            // Slicing inside a multi-byte char would panic here.
+            let cut = ellipsize(&rec, text, 10, max_w);
+            assert!(rec.measure_text(&cut, 10) <= max_w);
+        }
+    }
+
+    #[test]
+    fn font_size_fitting_shrinks_to_the_height_but_not_below_8() {
+        let rec = RecordingBackend::default();
+        let h16 = rec.measure_text_height(16);
+        assert_eq!(font_size_fitting(&rec, 16, h16), 16, "already fits");
+        assert_eq!(font_size_fitting(&rec, 16, 10_000), 16, "never grows");
+        let room = h16 - 1;
+        let fitted = font_size_fitting(&rec, 16, room);
+        assert!(fitted < 16);
+        assert!(rec.measure_text_height(fitted) <= room || fitted == 8);
+        assert!(
+            rec.measure_text_height(fitted + 1) > room,
+            "the largest size that fits"
+        );
+        assert_eq!(font_size_fitting(&rec, 16, 0), 8, "floor of 8");
+        assert_eq!(font_size_fitting(&rec, 4, 100), 8, "sizes below 8 round up");
+    }
+
+    #[test]
+    fn status_strip_right_aligns_the_hint_and_drops_it_when_crowded() {
+        let white = oasis_types::backend::Color::WHITE;
+        let colors = (white, white);
+        let (x, y, w, h) = (10, 50, 300, 20);
+
+        // Room for both: the hint ends PAD (4) px from the right edge.
+        let mut rec = RecordingBackend::default();
+        draw_status_strip(&mut rec, (x, y, w, h), "3 items", "Esc=back", 12, colors).unwrap();
+        let drawn = rec.text_positions();
+        let hint = drawn.iter().find(|t| t.0 == "Esc=back").expect("hint");
+        let hint_w = rec.measure_text("Esc=back", hint.3) as i32;
+        assert_eq!(hint.1 + hint_w, x + w as i32 - 4);
+        let left = drawn.iter().find(|t| t.0 == "3 items").expect("status");
+        assert_eq!(left.1, x + 4);
+        // Vertically inside the strip.
+        for t in &drawn {
+            assert!(t.2 >= y && t.2 + rec.measure_text_height(t.3) as i32 <= y + h as i32);
+        }
+
+        // Crowded: the status keeps the room (ellipsized), the hint goes.
+        let long = "a very long status message that cannot share the strip";
+        let mut rec = RecordingBackend::default();
+        draw_status_strip(&mut rec, (x, y, 120, h), long, "Esc=back", 12, colors).unwrap();
+        assert!(!rec.has_text("Esc=back"), "{:?}", rec.texts());
+        let shown = rec.texts();
+        assert_eq!(shown.len(), 1);
+        assert!(shown[0].ends_with("..."));
+        assert!(rec.measure_text(shown[0], 12) <= 120 - 8);
+
+        // Empty texts draw nothing; a too-short strip shrinks the font.
+        let mut rec = RecordingBackend::default();
+        draw_status_strip(&mut rec, (x, y, w, 0), "", "", 12, colors).unwrap();
+        assert_eq!(rec.draw_text_count(), 0);
+        let mut rec = RecordingBackend::default();
+        draw_status_strip(&mut rec, (x, y, w, 9), "tiny", "", 16, colors).unwrap();
+        assert!(rec.text_positions()[0].3 < 16, "font shrank to the strip");
+    }
+
+    #[test]
+    fn windowed_max_lines_is_zero_for_degenerate_windows() {
+        let content = ContentState::new("Files", "/apps/files");
+        let m = WindowedMetrics::default();
+        assert_eq!(windowed_max_lines(&content, 0, m), 0);
+        assert_eq!(windowed_max_lines(&content, 10, m), 0);
+        let zero_line = WindowedMetrics { line_h: 0, ..m };
+        // A zero line height must not divide by zero.
+        assert!(windowed_max_lines(&content, 200, zero_line) > 0);
+        assert_eq!(windowed_line_at(&content, 200, zero_line, 50), None);
+    }
+
+    #[test]
+    fn windowed_draw_keeps_the_cursor_row_on_screen_in_a_small_window() {
+        // The cached layout says 40 rows fit, the window shows far fewer:
+        // the drawn range shifts so the selected row is still drawn.
+        let mut content = ContentState::new("Files", "/apps/files");
+        content.lines = (0..40).map(|i| format!("entry {i}")).collect();
+        content.cursor = 30;
+        let mut rec = RecordingBackend::default();
+        let at = ActiveTheme::default();
+        draw_content_windowed(&content, 0, 0, 300, 120, &mut rec, &at).unwrap();
+        assert!(rec.has_text("> entry 30"), "{:?}", rec.texts());
+        // And every row stays above the scroll indicator.
+        let footer_y = rec
+            .text_positions()
+            .into_iter()
+            .find(|t| t.0.contains("Cancel=back"))
+            .expect("footer")
+            .2;
+        for t in rec.text_positions() {
+            if t.0.contains("entry") {
+                assert!(t.2 < footer_y, "{} overlaps the footer", t.0);
+            }
         }
     }
 

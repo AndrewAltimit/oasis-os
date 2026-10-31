@@ -11,8 +11,9 @@ pipeline as a regular page.
 ```text
 crates/oasis-browser/src/gemini/
 ├── mod.rs            re-exports the protocol types from oasis-http
-├── parser.rs         .gmi text-format parser (line-oriented)
-└── renderer.rs       .gmi → HTML translation
+└── parser.rs         .gmi text-format parser (line-oriented)
+crates/oasis-browser/src/widget/pipeline/
+└── gemini_page.rs    .gmi → HTML translation (`load_gemini`) and reader mode
 crates/oasis-http/src/
 ├── gemini.rs         GeminiStatus, GeminiResponse, parse_response, build_request
 └── gemini_fetch.rs   TLS-only fetcher (no plain TCP fallback)
@@ -63,16 +64,18 @@ is stateful except the preformatted toggle.
 
 ## Translation to HTML
 
-`renderer.rs` walks the parsed lines and emits a synthetic HTML
-document:
+`gemini_to_html` (in `widget/pipeline/gemini_page.rs`) walks the parsed
+lines and emits a synthetic HTML document, escaping every piece of
+text — the `<title>` taken from the first heading included:
 
 ```text
 # heading           → <h1>heading</h1>
 => /faq Frequently  → <p><a href="/faq">Frequently</a></p>
 > quote             → <blockquote>quote</blockquote>
-* item              → <ul><li>item</li></ul>   (consecutive items grouped)
-```` text ````        → <pre>text</pre>           (consecutive pre lines grouped)
+* item              → <li>item</li>
+```` text ````        → <pre>text</pre>           (one block per toggled section)
 plain text          → <p>plain text</p>
+(empty line)        → <br>
 ```
 
 The synthetic HTML is fed to the same `TreeBuilder` and cascade as a
@@ -100,8 +103,8 @@ just work — there is no Gemini-specific cache or history path.
 ## Tests
 
 There are no dedicated Gemini integration tests in this crate yet. The
-parser is exercised by `parser::tests` and the renderer is covered
-indirectly by manual smoke pages in `tests/browser_integration.rs`.
+parser is exercised by `parser::tests`; the HTML translation by the
+widget tests (`gemini_title_is_escaped`, `content_type_dispatch`).
 
 ## Limitations
 

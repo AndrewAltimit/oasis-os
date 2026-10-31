@@ -37,52 +37,34 @@ pub fn tick(state: &mut AppState, vfs: &mut dyn Vfs, now: Instant) {
 fn process_vfs_requests(state: &mut AppState, vfs: &mut dyn Vfs) {
     use oasis_audio::RADIO_REQUEST_PATH;
 
-    if !vfs.exists(RADIO_REQUEST_PATH) {
-        return;
-    }
-    let Ok(data) = vfs.read(RADIO_REQUEST_PATH) else {
+    // Trimmed: a request written with a trailing newline (`tune 2\n`)
+    // must still resolve the station index.
+    let Some(request) = crate::commands::take_request(vfs, RADIO_REQUEST_PATH) else {
         return;
     };
-    let request = String::from_utf8_lossy(&data).to_string();
-    if request.is_empty() {
-        return;
-    }
-    // Clear the request immediately.
-    let _ = vfs.write(RADIO_REQUEST_PATH, b"");
 
-    if let Some(target) = request.strip_prefix("tune ") {
-        process_tune_request(state, target);
+    let Some(request) = oasis_audio::radio::RadioRequest::parse(&request) else {
+        log::warn!("radio: ignoring malformed request {request:?}");
+        return;
+    };
+    if let oasis_audio::radio::RadioRequest::Tune(station) = &request {
+        process_tune_request(state, station);
     } else {
         let _ = state
             .radio
             .manager
-            .process_request(&request, state.audio_backend.as_mut());
-        // Clear catalog on stop.
+            .handle_request(&request, state.audio_backend.as_mut());
+        // A stop releases the catalog, the pending fetches and the stream.
         if state.radio.manager.state() == oasis_audio::radio::RadioState::Stopped {
-            state.radio.archive_catalog = None;
-            state.radio.pending_catalog_fetch = None;
-            state.radio.pending_source_fetch = None;
+            state.radio.release_playback();
         }
     }
 }
 
 /// Tune to a station by index or name.
-fn process_tune_request(state: &mut AppState, target: &str) {
+fn process_tune_request(state: &mut AppState, target: &oasis_audio::radio::StationRef) {
     // Resolve station by index or case-insensitive name.
-    let station = if let Ok(idx) = target.parse::<usize>() {
-        state.radio.manager.registry.stations.get(idx).cloned()
-    } else {
-        state
-            .radio
-            .manager
-            .registry
-            .stations
-            .iter()
-            .find(|s| s.name.eq_ignore_ascii_case(target.trim()))
-            .cloned()
-    };
-
-    let Some(station) = station else {
+    let Some(station) = state.radio.manager.registry.find(target).cloned() else {
         state
             .radio
             .manager
@@ -103,12 +85,7 @@ fn process_tune_request(state: &mut AppState, target: &str) {
         .tune(&station.name, station.bitrate, state.audio_backend.as_mut());
 
     // Clear stale catalog/pending fetches on station change.
-    state.radio.archive_catalog = None;
-    state.radio.pending_catalog_fetch = None;
-    state.radio.pending_source_fetch = None;
-    if let Some(mut old) = state.radio.source.take() {
-        old.disconnect();
-    }
+    state.radio.release_playback();
 
     state
         .radio
@@ -249,5 +226,177 @@ fn auto_advance_track(state: &mut AppState) {
         });
         state.radio.pending_source_fetch = Some(rx);
         state.radio.manager.continue_playing();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::cell::Cell;
+    use std::rc::Rc;
+
+    use oasis_audio::RADIO_REQUEST_PATH;
+    use oasis_audio::radio::{AudioChunk, RadioSource, SourceState, StationRegistry};
+    use oasis_core::vfs::MemoryVfs;
+
+    use super::*;
+
+    /// A stream that records whether it was disconnected.
+    struct FakeSource(Rc<Cell<bool>>);
+
+    impl RadioSource for FakeSource {
+        fn poll(&mut self) -> oasis_core::error::Result<Option<AudioChunk>> {
+            Ok(None)
+        }
+        fn disconnect(&mut self) {
+            self.0.set(true);
+        }
+        fn state(&self) -> SourceState {
+            SourceState::Active
+        }
+        fn source_type(&self) -> &str {
+            "fake"
+        }
+    }
+
+    fn post(vfs: &mut MemoryVfs, request: &str) {
+        if !vfs.exists("/var/radio") {
+            vfs.mkdir("/var").ok();
+            vfs.mkdir("/var/radio").expect("radio dir");
+        }
+        vfs.write(RADIO_REQUEST_PATH, request.as_bytes())
+            .expect("request");
+    }
+
+    /// The app's `stop` request closes the stream: a source left behind
+    /// kept its connection open and the shell redrawing every frame.
+    #[test]
+    fn stop_request_releases_the_stream_source() {
+        let mut state = AppState::new_for_test();
+        let mut vfs = MemoryVfs::new();
+        let closed = Rc::new(Cell::new(false));
+        state.radio.source = Some(Box::new(FakeSource(Rc::clone(&closed))));
+        post(&mut vfs, "stop");
+        process_vfs_requests(&mut state, &mut vfs);
+        assert!(state.radio.source.is_none(), "source dropped");
+        assert!(closed.get(), "source disconnected");
+    }
+
+    /// `tune 0` written with a trailing newline still tunes station 0.
+    #[test]
+    fn tune_request_is_trimmed() {
+        let mut state = AppState::new_for_test();
+        state.radio.manager.registry = StationRegistry::from_toml(
+            "[[station]]\nname = \"Test FM\"\nurl = \"http://example.invalid/s\"\n\
+             genre = \"test\"\n",
+        )
+        .expect("registry");
+        let mut vfs = MemoryVfs::new();
+        post(&mut vfs, "tune 0\n");
+        process_vfs_requests(&mut state, &mut vfs);
+        // Offline fixture: the tune resolved the station, then stopped
+        // short of the network.
+        let err = state.radio.manager.error_msg();
+        assert!(err.contains("offline"), "{err}");
+    }
+
+    /// A `Send` stream (what the fetch threads hand back) recording its
+    /// disconnect.
+    struct SendSource(std::sync::Arc<std::sync::atomic::AtomicBool>);
+
+    impl RadioSource for SendSource {
+        fn poll(&mut self) -> oasis_core::error::Result<Option<AudioChunk>> {
+            Ok(None)
+        }
+        fn disconnect(&mut self) {
+            self.0.store(true, std::sync::atomic::Ordering::SeqCst);
+        }
+        fn state(&self) -> SourceState {
+            SourceState::Active
+        }
+        fn source_type(&self) -> &str {
+            "fetched"
+        }
+    }
+
+    /// A catalog arriving from the fetch thread replaces (and closes) the
+    /// previous stream and installs the catalog; a track fetch likewise.
+    #[test]
+    fn arriving_catalog_and_track_replace_the_old_stream() {
+        let mut state = AppState::new_for_test();
+        let old_closed = Rc::new(Cell::new(false));
+        state.radio.source = Some(Box::new(FakeSource(Rc::clone(&old_closed))));
+        let (tx, rx) = std::sync::mpsc::channel();
+        state.radio.pending_catalog_fetch = Some(rx);
+        // Nothing yet: the fetch stays pending.
+        poll_catalog_fetch(&mut state);
+        assert!(state.radio.pending_catalog_fetch.is_some());
+        let first = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        tx.send(Ok(CatalogFetchResult {
+            catalog: oasis_audio::radio::ArchiveCatalog::new("coll"),
+            source: Box::new(SendSource(std::sync::Arc::clone(&first))),
+        }))
+        .expect("send");
+        poll_catalog_fetch(&mut state);
+        assert!(state.radio.pending_catalog_fetch.is_none());
+        assert!(old_closed.get(), "previous stream disconnected");
+        assert_eq!(
+            state
+                .radio
+                .archive_catalog
+                .as_ref()
+                .map(|c| c.collection.as_str()),
+            Some("coll")
+        );
+        assert_eq!(
+            state.radio.source.as_ref().map(|s| s.source_type()),
+            Some("fetched")
+        );
+
+        let (tx, rx) = std::sync::mpsc::channel();
+        state.radio.pending_source_fetch = Some(rx);
+        tx.send(Ok(TrackFetchResult {
+            source: Box::new(SendSource(std::sync::Arc::new(Default::default()))),
+        }))
+        .expect("send");
+        poll_track_fetch(&mut state);
+        assert!(state.radio.pending_source_fetch.is_none());
+        assert!(
+            first.load(std::sync::atomic::Ordering::SeqCst),
+            "the catalog's first stream closed for the next track"
+        );
+    }
+
+    /// Fetch failures and dead fetch threads surface as the radio error
+    /// (the app shows it) and clear the pending fetch, so a retry can start.
+    #[test]
+    fn fetch_failures_surface_as_radio_errors() {
+        let mut state = AppState::new_for_test();
+        let (tx, rx) = std::sync::mpsc::channel();
+        state.radio.pending_catalog_fetch = Some(rx);
+        tx.send(Err("HTTP 503".into())).expect("send");
+        poll_catalog_fetch(&mut state);
+        assert!(state.radio.pending_catalog_fetch.is_none());
+        assert_eq!(state.radio.manager.error_msg(), "HTTP 503");
+
+        let (tx, rx) = std::sync::mpsc::channel::<Result<CatalogFetchResult, String>>();
+        state.radio.pending_catalog_fetch = Some(rx);
+        drop(tx);
+        poll_catalog_fetch(&mut state);
+        assert!(state.radio.pending_catalog_fetch.is_none());
+        assert_eq!(state.radio.manager.error_msg(), "catalog fetch failed");
+
+        let (tx, rx) = std::sync::mpsc::channel();
+        state.radio.pending_source_fetch = Some(rx);
+        tx.send(Err("track 404".into())).expect("send");
+        poll_track_fetch(&mut state);
+        assert!(state.radio.pending_source_fetch.is_none());
+        assert_eq!(state.radio.manager.error_msg(), "track 404");
+
+        let (tx, rx) = std::sync::mpsc::channel::<Result<TrackFetchResult, String>>();
+        state.radio.pending_source_fetch = Some(rx);
+        drop(tx);
+        poll_track_fetch(&mut state);
+        assert!(state.radio.pending_source_fetch.is_none());
+        assert_eq!(state.radio.manager.error_msg(), "track fetch failed");
     }
 }

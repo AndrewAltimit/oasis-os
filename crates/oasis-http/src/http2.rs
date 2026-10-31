@@ -50,6 +50,19 @@ const HEADER_TABLE_SIZE: usize = 4096;
 /// decoded header list.
 const MAX_HEADER_LIST_SIZE: usize = 64 * 1024;
 
+/// The peer's `SETTINGS_MAX_FRAME_SIZE` before its SETTINGS arrive, and
+/// the floor every peer must accept (RFC 9113 §4.2): our outgoing frames
+/// never exceed it.
+const DEFAULT_MAX_FRAME_SIZE: usize = 16_384;
+
+/// Frames that carry no response progress (PING, SETTINGS, PRIORITY,
+/// WINDOW_UPDATE, empty DATA, frames on other streams, unknown types)
+/// tolerated per response before the connection is dropped with
+/// `ENHANCE_YOUR_CALM` -- the HTTP/2 "ping / settings / empty frame
+/// flood" DoS class (CVE-2019-9512, -9515, -9518). Real servers send a
+/// handful.
+const MAX_IDLE_FRAMES: u32 = 1024;
+
 // --- Frame types (RFC 9113 §11.2) ------------------------------------
 
 const FRAME_DATA: u8 = 0x0;
@@ -204,13 +217,11 @@ pub fn h2_request<S: Read + Write>(
     let end_stream = body.is_none();
     write_header_block(stream, &header_block, 1, end_stream)?;
 
-    // 4. If there's a body, send it as a single DATA frame with
-    //    END_STREAM. The 16 KiB floor applies here too — no real
-    //    server advertises a smaller MAX_FRAME_SIZE, so we don't
-    //    bother fragmenting body DATA for the POST case.
+    // 4. If there's a body, send it as DATA frames of at most the
+    //    default MAX_FRAME_SIZE (the peer's SETTINGS may not have
+    //    arrived yet), END_STREAM on the last.
     if let Some(data) = body {
-        write_frame_header(stream, data.len() as u32, FRAME_DATA, FLAG_END_STREAM, 1)?;
-        write_all(stream, data)?;
+        write_body(stream, data, 1)?;
     }
 
     // 5. Drive the read loop.
@@ -227,7 +238,6 @@ fn write_header_block<W: Write>(
     stream_id: u32,
     end_stream: bool,
 ) -> Result<()> {
-    const DEFAULT_MAX_FRAME_SIZE: usize = 16_384;
     let es_flag = if end_stream { FLAG_END_STREAM } else { 0 };
 
     if block.len() <= DEFAULT_MAX_FRAME_SIZE {
@@ -252,6 +262,30 @@ fn write_header_block<W: Write>(
         write_frame_header(w, chunk.len() as u32, FRAME_CONTINUATION, flags, stream_id)?;
         write_all(w, chunk)?;
         cursor = tail;
+    }
+    Ok(())
+}
+
+/// Write a request body as DATA frames no larger than
+/// [`DEFAULT_MAX_FRAME_SIZE`], with END_STREAM on the last one (an empty
+/// body is one empty END_STREAM frame).
+///
+/// Regression: the body used to go out as one frame, which every server
+/// keeping the default 16 KiB `MAX_FRAME_SIZE` (nginx, most CDNs) must
+/// reject with FRAME_SIZE_ERROR for any POST over 16 KiB.
+fn write_body<W: Write>(w: &mut W, data: &[u8], stream_id: u32) -> Result<()> {
+    let mut chunks = data.chunks(DEFAULT_MAX_FRAME_SIZE).peekable();
+    if chunks.peek().is_none() {
+        return write_frame_header(w, 0, FRAME_DATA, FLAG_END_STREAM, stream_id);
+    }
+    while let Some(chunk) = chunks.next() {
+        let flags = if chunks.peek().is_none() {
+            FLAG_END_STREAM
+        } else {
+            0
+        };
+        write_frame_header(w, chunk.len() as u32, FRAME_DATA, flags, stream_id)?;
+        write_all(w, chunk)?;
     }
     Ok(())
 }
@@ -428,6 +462,7 @@ fn read_response<S: Read + Write>(stream: &mut S) -> Result<HttpResponse> {
 
     // Deadline to bound the read loop in case the server misbehaves.
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    let mut idle_frames = 0u32;
 
     // Keep reading while the request stream is still open, or while
     // we're still stitching CONTINUATION frames together (END_STREAM
@@ -458,6 +493,24 @@ fn read_response<S: Read + Write>(stream: &mut S) -> Result<HttpResponse> {
         // Read payload.
         let mut payload = vec![0u8; fh.length as usize];
         read_exact(stream, &mut payload)?;
+
+        let progress = match fh.frame_type {
+            FRAME_HEADERS | FRAME_CONTINUATION => fh.stream_id == 1,
+            FRAME_DATA => {
+                fh.stream_id == 1 && (!payload.is_empty() || fh.flags & FLAG_END_STREAM != 0)
+            },
+            FRAME_RST_STREAM | FRAME_GOAWAY => true,
+            _ => false,
+        };
+        if !progress {
+            idle_frames += 1;
+            if idle_frames > MAX_IDLE_FRAMES {
+                let _ = send_goaway(stream, 1, ERROR_CODE_ENHANCE_YOUR_CALM);
+                return Err(OasisError::Backend(
+                    "HTTP/2: too many frames without response progress".into(),
+                ));
+            }
+        }
 
         match fh.frame_type {
             FRAME_SETTINGS => {
@@ -581,6 +634,10 @@ fn read_response<S: Read + Write>(stream: &mut S) -> Result<HttpResponse> {
                     return Err(OasisError::Backend("HTTP/2: DATA on stream 0".into()));
                 }
                 if fh.stream_id != 1 {
+                    // The bytes still used up connection-level window.
+                    if !payload.is_empty() {
+                        send_window_update(stream, 0, fh.length)?;
+                    }
                     send_rst_stream(stream, fh.stream_id, ERROR_CODE_CANCEL)?;
                     continue;
                 }
@@ -595,10 +652,13 @@ fn read_response<S: Read + Write>(stream: &mut S) -> Result<HttpResponse> {
                 body.extend_from_slice(data);
 
                 // Replenish the flow-control window (both connection
-                // and stream) so the server can keep sending.
-                if !data.is_empty() {
-                    send_window_update(stream, 0, data.len() as u32)?;
-                    send_window_update(stream, 1, data.len() as u32)?;
+                // and stream) so the server can keep sending. The whole
+                // payload counts, padding included (RFC 9113 §6.1):
+                // crediting only the data let a padding-heavy server
+                // drain the window and stall until the deadline.
+                if !payload.is_empty() && fh.flags & FLAG_END_STREAM == 0 {
+                    send_window_update(stream, 0, fh.length)?;
+                    send_window_update(stream, 1, fh.length)?;
                 }
 
                 if fh.flags & FLAG_END_STREAM != 0 {
@@ -1022,6 +1082,111 @@ mod tests {
         assert_eq!(fh.frame_type, FRAME_HEADERS);
         assert_eq!(fh.flags, FLAG_END_STREAM);
         assert_eq!(fh.stream_id, 1);
+    }
+
+    /// Every frame the client wrote after the preface:
+    /// `(type, flags, stream, payload)`.
+    fn written_frames(written: &[u8]) -> Vec<(u8, u8, u32, Vec<u8>)> {
+        let mut frames = Vec::new();
+        let mut cursor = std::io::Cursor::new(&written[CLIENT_PREFACE.len()..]);
+        while let Ok(fh) = read_frame_header(&mut cursor) {
+            let mut payload = vec![0; fh.length as usize];
+            read_exact(&mut cursor, &mut payload).unwrap();
+            frames.push((fh.frame_type, fh.flags, fh.stream_id, payload));
+        }
+        frames
+    }
+
+    /// A `:status 200` response closed by an empty END_STREAM DATA frame.
+    fn ok_response() -> Vec<u8> {
+        let mut server = build_frame(FRAME_SETTINGS, 0, 0, &[]);
+        let hdr = make_response_headers();
+        server.extend(build_frame(FRAME_HEADERS, FLAG_END_HEADERS, 1, &hdr));
+        server.extend(build_frame(FRAME_DATA, FLAG_END_STREAM, 1, &[]));
+        server
+    }
+
+    /// Regression: a request body went out as one DATA frame, which a
+    /// peer on the default 16 KiB `MAX_FRAME_SIZE` must reject.
+    #[test]
+    fn request_body_is_split_into_default_size_frames() {
+        let mut stream = MemStream::new(ok_response());
+        let url = crate::Url::parse("https://example.com/").unwrap();
+        let body = vec![b'x'; 40_000];
+        h2_request(&mut stream, "POST", &url, Some(&body), &[]).unwrap();
+        let data: Vec<_> = written_frames(&stream.written)
+            .into_iter()
+            .filter(|f| f.0 == FRAME_DATA)
+            .collect();
+        let sizes: Vec<usize> = data.iter().map(|f| f.3.len()).collect();
+        assert_eq!(sizes, [16_384, 16_384, 7_232]);
+        let ends: Vec<bool> = data.iter().map(|f| f.1 & FLAG_END_STREAM != 0).collect();
+        assert_eq!(ends, [false, false, true]);
+
+        let mut stream = MemStream::new(ok_response());
+        h2_request(&mut stream, "POST", &url, Some(&[]), &[]).unwrap();
+        let data: Vec<_> = written_frames(&stream.written)
+            .into_iter()
+            .filter(|f| f.0 == FRAME_DATA)
+            .collect();
+        assert_eq!(data.len(), 1);
+        assert_eq!(data[0].1, FLAG_END_STREAM);
+    }
+
+    /// Regression: WINDOW_UPDATE credited only the unpadded data, so a
+    /// padding-heavy response drained the flow-control window.
+    #[test]
+    fn padded_data_credits_the_whole_payload() {
+        let mut server = build_frame(FRAME_SETTINGS, 0, 0, &[]);
+        let hdr = make_response_headers();
+        server.extend(build_frame(FRAME_HEADERS, FLAG_END_HEADERS, 1, &hdr));
+        // pad_len 200, 3 data bytes, 200 padding bytes: 204 total.
+        let mut padded = vec![200u8];
+        padded.extend_from_slice(b"abc");
+        padded.extend(std::iter::repeat_n(0, 200));
+        server.extend(build_frame(FRAME_DATA, FLAG_PADDED, 1, &padded));
+        server.extend(build_frame(FRAME_DATA, FLAG_END_STREAM, 1, b"d"));
+        let mut stream = MemStream::new(server);
+        let url = crate::Url::parse("https://example.com/").unwrap();
+        let resp = h2_request(&mut stream, "GET", &url, None, &[]).unwrap();
+        assert_eq!(resp.body, b"abcd");
+        let credits: Vec<(u32, u32)> = written_frames(&stream.written)
+            .into_iter()
+            .filter(|f| f.0 == FRAME_WINDOW_UPDATE)
+            .map(|f| (f.2, u32::from_be_bytes([f.3[0], f.3[1], f.3[2], f.3[3]])))
+            .collect();
+        // The connection-window bump from the initial SETTINGS, then
+        // connection + stream credit for the padded frame.
+        assert_eq!(credits[1..], [(0, 204), (1, 204)]);
+    }
+
+    #[test]
+    fn control_frame_flood_is_cut_off() {
+        let mut server = build_frame(FRAME_SETTINGS, 0, 0, &[]);
+        for _ in 0..=MAX_IDLE_FRAMES {
+            server.extend(build_frame(FRAME_PING, 0, 0, &[0; 8]));
+        }
+        server.extend(ok_response());
+        let mut stream = MemStream::new(server);
+        let url = crate::Url::parse("https://example.com/").unwrap();
+        let err = h2_request(&mut stream, "GET", &url, None, &[]).unwrap_err();
+        assert!(
+            err.to_string().contains("without response progress"),
+            "{err}"
+        );
+        assert_eq!(
+            goaway_codes(&stream.written),
+            vec![ERROR_CODE_ENHANCE_YOUR_CALM]
+        );
+        // An empty-DATA flood counts too.
+        let mut server = build_frame(FRAME_SETTINGS, 0, 0, &[]);
+        let hdr = make_response_headers();
+        server.extend(build_frame(FRAME_HEADERS, FLAG_END_HEADERS, 1, &hdr));
+        for _ in 0..=MAX_IDLE_FRAMES {
+            server.extend(build_frame(FRAME_DATA, 0, 1, &[]));
+        }
+        let mut stream = MemStream::new(server);
+        assert!(h2_request(&mut stream, "GET", &url, None, &[]).is_err());
     }
 
     #[test]

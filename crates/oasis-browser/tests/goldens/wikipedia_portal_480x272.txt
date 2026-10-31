@@ -1,5 +1,5 @@
 # viewport 480x272
-fill_rect 0, 4, 480, 4321, Color { r: 255, g: 255, b: 255, a: 255 }
+fill_rect 0, 4, 480, 4962, Color { r: 255, g: 255, b: 255, a: 255 }
 fill_rect 206, 4, 57, 1, Color { r: 32, g: 33, b: 34, a: 255 }
 fill_rect 206, 55, 57, 1, Color { r: 32, g: 33, b: 34, a: 255 }
 fill_rect 206, 4, 1, 52, Color { r: 32, g: 33, b: 34, a: 255 }
@@ -7,11 +7,11 @@ fill_rect 262, 4, 1, 52, Color { r: 32, g: 33, b: 34, a: 255 }
 set_clip_rect 206, 4, 57, 52
 draw_text "×", 208, 6, 8, Color { r: 32, g: 33, b: 34, a: 255 }
 set_clip_rect 0, 0, 480, 272
+set_clip_rect 166, 79, 150, 25
+set_clip_rect 0, 0, 480, 272
 draw_text "The ", 178, 116, 14, Color { r: 32, g: 33, b: 34, a: 255 }
 draw_text "Free ", 202, 116, 14, Color { r: 32, g: 33, b: 34, a: 255 }
 draw_text "Encyclopedia", 232, 116, 14, Color { r: 32, g: 33, b: 34, a: 255 }
-set_clip_rect 166, 91, 150, 25
-set_clip_rect 0, 0, 480, 272
 draw_text "English", 66, 175, 14, Color { r: 51, g: 102, b: 204, a: 255 }
 draw_text "English", 67, 175, 14, Color { r: 51, g: 102, b: 204, a: 255 }
 draw_text "7,166,000+ ", 31, 217, 13, Color { r: 84, g: 89, b: 93, a: 255 }

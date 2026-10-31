@@ -19,8 +19,7 @@ mod inner {
     use oasis_types::error::OasisError;
 
     use crate::cookies::{CookieHook, CookieJar, SameSiteContext};
-    use crate::csp;
-    use crate::{HttpMethod, LoadedResource, ResourceRequest, Url};
+    use crate::{CacheValidators, LoadedResource, ResourceRequest, Url};
 
     /// Cookie hook for one request: reads and writes the worker's jar and
     /// records every hop's `Set-Cookie` headers (with the hop URL that
@@ -79,7 +78,7 @@ mod inner {
         pub request: ResourceRequest,
         /// Pre-extracted conditional-request validators from the cache
         /// (ETag, If-Modified-Since). Avoids sending the non-Send cache.
-        pub cache_validators: Option<(Option<String>, Option<String>)>,
+        pub cache_validators: Option<CacheValidators>,
         /// The resolved image URL key (only for `Image` kind).
         pub image_key: Option<String>,
         /// Redirects to follow before failing.
@@ -182,7 +181,7 @@ mod inner {
             &mut self,
             kind: IoRequestKind,
             request: ResourceRequest,
-            cache_validators: Option<(Option<String>, Option<String>)>,
+            cache_validators: Option<CacheValidators>,
             image_key: Option<String>,
         ) -> IoRequestId {
             let id = self.next_id;
@@ -280,34 +279,10 @@ mod inner {
                 },
             };
 
-            let method = match request.method {
-                HttpMethod::Get => "GET",
-                HttpMethod::Post => "POST",
-            };
-
-            // Build extra headers. Cookies are added per redirect hop by
-            // the HTTP client (see `RecordingJar`).
-            let mut extra: Vec<(String, String)> = Vec::new();
-
-            // Referrer header.
-            if let Some(ref referrer) = request.referrer {
-                extra.push(("Referer".to_string(), referrer.clone()));
-            }
-
-            // Conditional request headers from pre-extracted cache validators.
-            if let Some((ref etag, ref last_mod)) = work.cache_validators {
-                if let Some(e) = etag {
-                    extra.push(("If-None-Match".to_string(), e.clone()));
-                }
-                if let Some(lm) = last_mod {
-                    extra.push(("If-Modified-Since".to_string(), lm.clone()));
-                }
-            }
-
-            let extra_refs: Vec<(&str, &str)> = extra
-                .iter()
-                .map(|(k, v)| (k.as_str(), v.as_str()))
-                .collect();
+            let method = request.method.as_str();
+            let extra =
+                crate::load_headers(request.referrer.as_deref(), work.cache_validators.as_ref());
+            let extra_refs = crate::header_refs(&extra);
 
             match url.scheme.as_str() {
                 "http" | "https" => {
@@ -331,29 +306,9 @@ mod inner {
                     );
                     // Cookies set by hops before a failure still count.
                     let cookie_updates = recorder.updates;
-                    match result {
-                        Ok((resp, headers)) => {
-                            // Extract cache validators.
-                            let etag = crate::http::response_find_header(&headers, "etag")
-                                .map(String::from);
-                            let last_modified =
-                                crate::http::response_find_header(&headers, "last-modified")
-                                    .map(String::from);
-
-                            // CSP of the final response.
-                            let csp = csp::parse_csp_headers(&headers);
-
-                            let loaded = LoadedResource {
-                                response: resp,
-                                etag,
-                                last_modified,
-                                csp,
-                            };
-
-                            (Ok(loaded), cookie_updates)
-                        },
-                        Err(e) => (Err(e), cookie_updates),
-                    }
+                    let loaded =
+                        result.map(|(resp, headers)| LoadedResource::from_http(resp, &headers));
+                    (loaded, cookie_updates)
                 },
                 "gemini" => {
                     let gemini_result = crate::gemini_fetch::gemini_get(&url, tls)

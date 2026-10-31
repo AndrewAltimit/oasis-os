@@ -18,15 +18,46 @@ impl oasis_types::backend::InputBackend for SdlBackend {
     fn poll_events(&mut self) -> Vec<InputEvent> {
         let mut events = Vec::new();
         for event in self.event_pump.poll_iter() {
-            map_sdl_event(event, &mut events);
+            map_sdl_event(event, &mut self.input_state, &mut events);
         }
         events
     }
 }
 
+/// Input state carried across SDL events.
+#[derive(Debug, Default)]
+pub(crate) struct InputState {
+    /// Wheel motion (in OASIS direction: positive scrolls down) not yet
+    /// emitted as a whole [`InputEvent::MouseWheel`] step. Precision
+    /// touchpads send fractions of a notch per event; truncating each one
+    /// to an integer used to drop them all.
+    wheel_remainder: f32,
+}
+
+impl InputState {
+    /// Add one SDL wheel event's vertical motion and return the whole
+    /// steps it completes (0 while still accumulating).
+    ///
+    /// SDL `y > 0` scrolls up; OASIS `delta > 0` scrolls down. `y` is used
+    /// as reported, whatever the event's `direction`: SDL3 delivers it
+    /// already in the user's chosen sense, and `MouseWheelDirection::
+    /// Flipped` only says that the OS's "natural scrolling" inverted it
+    /// (SDL: "multiply by -1 to change them back"). Undoing that, as this
+    /// once did, scrolled natural-scrolling users the traditional way.
+    fn wheel_steps(&mut self, y: f32) -> i32 {
+        if !y.is_finite() {
+            return 0;
+        }
+        self.wheel_remainder -= y;
+        let steps = self.wheel_remainder.trunc();
+        self.wheel_remainder -= steps;
+        steps as i32
+    }
+}
+
 /// Map an SDL3 event to zero or more OASIS_OS input events, appended to
 /// `out` in delivery order.
-pub(crate) fn map_sdl_event(event: Event, out: &mut Vec<InputEvent>) {
+pub(crate) fn map_sdl_event(event: Event, state: &mut InputState, out: &mut Vec<InputEvent>) {
     let mapped = match event {
         Event::Quit { .. } => Some(InputEvent::Quit),
         Event::KeyDown {
@@ -58,8 +89,10 @@ pub(crate) fn map_sdl_event(event: Event, out: &mut Vec<InputEvent>) {
             x: x as i32,
             y: y as i32,
         }),
-        // SDL3 mouse wheel y is f32; truncate to i32.
-        Event::MouseWheel { y, .. } => Some(InputEvent::MouseWheel { delta: -(y as i32) }),
+        Event::MouseWheel { y, .. } => match state.wheel_steps(y) {
+            0 => None,
+            delta => Some(InputEvent::MouseWheel { delta }),
+        },
         Event::Window {
             win_event: sdl3::event::WindowEvent::FocusGained,
             ..
@@ -68,7 +101,12 @@ pub(crate) fn map_sdl_event(event: Event, out: &mut Vec<InputEvent>) {
             win_event: sdl3::event::WindowEvent::FocusLost,
             ..
         } => Some(InputEvent::FocusLost),
-        Event::TextInput { text, .. } => text.chars().next().map(InputEvent::TextInput),
+        // One event per character: an IME commit or a dead-key sequence
+        // arrives as a single multi-character `TextInput`.
+        Event::TextInput { text, .. } => {
+            out.extend(text.chars().map(InputEvent::TextInput));
+            None
+        },
         _ => None,
     };
     if let Some(ev) = mapped {
@@ -393,9 +431,99 @@ mod tests {
                 which: 0,
                 raw: 0,
             },
+            &mut InputState::default(),
             &mut out,
         );
         out
+    }
+
+    fn wheel(
+        state: &mut InputState,
+        y: f32,
+        direction: sdl3::mouse::MouseWheelDirection,
+    ) -> Vec<InputEvent> {
+        let mut out = Vec::new();
+        let event = Event::MouseWheel {
+            timestamp: 0,
+            window_id: 0,
+            which: 0,
+            x: 0.0,
+            y,
+            direction,
+            mouse_x: 0.0,
+            mouse_y: 0.0,
+        };
+        map_sdl_event(event, state, &mut out);
+        out
+    }
+
+    #[test]
+    fn wheel_whole_notches_invert_sign() {
+        let mut st = InputState::default();
+        let normal = sdl3::mouse::MouseWheelDirection::Normal;
+        assert_eq!(
+            wheel(&mut st, 3.0, normal),
+            vec![InputEvent::MouseWheel { delta: -3 }]
+        );
+        assert_eq!(
+            wheel(&mut st, -2.0, normal),
+            vec![InputEvent::MouseWheel { delta: 2 }]
+        );
+    }
+
+    #[test]
+    fn wheel_fractions_accumulate_into_steps() {
+        let mut st = InputState::default();
+        let normal = sdl3::mouse::MouseWheelDirection::Normal;
+        // Touchpad: 0.25 of a notch per event used to truncate to nothing.
+        let mut steps = Vec::new();
+        for _ in 0..8 {
+            steps.extend(wheel(&mut st, -0.25, normal));
+        }
+        assert_eq!(
+            steps,
+            vec![
+                InputEvent::MouseWheel { delta: 1 },
+                InputEvent::MouseWheel { delta: 1 },
+            ]
+        );
+    }
+
+    #[test]
+    fn wheel_flipped_device_keeps_the_os_natural_scrolling() {
+        // With natural scrolling on, SDL already reports the inverted `y`
+        // (and marks it `Flipped`): the shell must scroll the way that
+        // value says, as every other app on the desktop does, not undo
+        // the user's setting.
+        let mut st = InputState::default();
+        let flipped = sdl3::mouse::MouseWheelDirection::Flipped;
+        assert_eq!(
+            wheel(&mut st, -1.0, flipped),
+            vec![InputEvent::MouseWheel { delta: 1 }]
+        );
+        assert_eq!(
+            wheel(&mut st, 2.0, flipped),
+            vec![InputEvent::MouseWheel { delta: -2 }]
+        );
+    }
+
+    #[test]
+    fn text_input_emits_every_character() {
+        let mut out = Vec::new();
+        let event = Event::TextInput {
+            timestamp: 0,
+            window_id: 0,
+            text: "日本ä".to_string(),
+        };
+        map_sdl_event(event, &mut InputState::default(), &mut out);
+        assert_eq!(
+            out,
+            vec![
+                InputEvent::TextInput('日'),
+                InputEvent::TextInput('本'),
+                InputEvent::TextInput('ä'),
+            ]
+        );
     }
 
     #[test]

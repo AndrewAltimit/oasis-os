@@ -1,9 +1,13 @@
 //! Benchmarks for the layout engine.
 //!
-//! Three groups:
+//! Four groups:
 //!
 //! - `layout_blocks` / `layout_table` — synthetic stress tests that
 //!   measure raw layout throughput as a function of element count.
+//! - `layout_nested_flex` — flex containers nested 4 to 16 deep, each
+//!   level a content-sized item beside a growing one (row), or a
+//!   growing item in a definite-height column. Layout cost must grow
+//!   linearly with depth (it was ~depth^3 for rows, 2^depth before).
 //! - `layout_corpus` — real-world fixtures from
 //!   `crates/oasis-browser/tests/fixtures/`, measured end-to-end
 //!   (`parse + cascade + layout`) at two viewport sizes (800×600
@@ -194,10 +198,66 @@ fn bench_corpus_layout(c: &mut Criterion) {
     group.finish();
 }
 
+/// `depth` nested flex levels of `open` ... `close` around a text leaf.
+fn generate_nested(open: &str, close: &str, depth: usize) -> String {
+    format!(
+        "<html><head></head><body>{}leaf text{}</body></html>",
+        open.repeat(depth),
+        close.repeat(depth)
+    )
+}
+
+fn bench_nested_flex(c: &mut Criterion) {
+    let mut group = c.benchmark_group("layout_nested_flex");
+    let css = "div { display: block; } .row { display: flex; } \
+               .grow { flex-grow: 1; padding: 1px; } \
+               .col { display: flex; flex-direction: column; height: 400px; } \
+               .one { flex: 1; }";
+    let measurer = SimpleTextMeasurer;
+    let patterns = [
+        (
+            "row_grow",
+            "<div class=\"row\"><span>a b</span><div class=\"grow\">",
+            "</div></div>",
+        ),
+        ("row_auto", "<div class=\"row\">", "</div>"),
+        (
+            "column_flex1",
+            "<div class=\"col\"><div class=\"one\">",
+            "</div></div>",
+        ),
+    ];
+    for (name, open, close) in patterns {
+        for depth in [4usize, 8, 12, 16] {
+            let html = generate_nested(open, close, depth);
+            let (doc, styles) = prepare_for_layout(&html, css);
+            group.bench_with_input(
+                BenchmarkId::new(name, depth),
+                &(&doc, &styles),
+                |b, (doc, styles)| {
+                    b.iter(|| {
+                        build_layout_tree(
+                            doc,
+                            styles,
+                            &measurer,
+                            800.0,
+                            600.0,
+                            None,
+                            &std::collections::HashMap::new(),
+                        )
+                    });
+                },
+            );
+        }
+    }
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_block_layout,
     bench_table_layout,
+    bench_nested_flex,
     bench_corpus_layout
 );
 criterion_main!(benches);

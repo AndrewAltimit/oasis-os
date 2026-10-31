@@ -12,26 +12,78 @@ use super::registry::{FontId, FontRegistry};
 /// Glyph cache key: (font_id, codepoint, size_tenths, r, g, b, a).
 type GlyphTexKey = (u32, char, u32, u8, u8, u8, u8);
 
+/// Most glyph textures [`GlyphTextureCache`] keeps.
+pub const MAX_GLYPH_TEXTURES: usize = 4096;
+
+/// How many least recently used textures a full cache evicts at once
+/// (an eighth: eviction scans the cache, so it should be rare).
+const GLYPH_EVICT_BATCH: usize = MAX_GLYPH_TEXTURES / 8;
+
 /// Cache of uploaded glyph textures keyed by font, codepoint, size, and color.
 ///
 /// Textures are uploaded once and reused across frames until the cache
-/// is cleared (e.g. on navigation or font registry rebuild).
+/// is cleared (navigation, font registry rebuild). Keys include the
+/// colour, so an animated text colour mints a texture per glyph per
+/// step: at `MAX_GLYPH_TEXTURES` the least recently drawn eighth is
+/// destroyed. (Emptying the whole cache instead re-rasterized every
+/// glyph on the page, the ones drawn this frame included.)
 pub struct GlyphTextureCache {
-    textures: HashMap<GlyphTexKey, TextureId>,
+    /// Texture and the use stamp of its last draw.
+    textures: HashMap<GlyphTexKey, (TextureId, u64)>,
+    /// Monotonic use counter (the stamp source).
+    clock: u64,
 }
 
 impl GlyphTextureCache {
     pub fn new() -> Self {
         GlyphTextureCache {
             textures: HashMap::new(),
+            clock: 0,
         }
     }
 
     /// Destroy all cached textures via the backend.
     pub fn clear(&mut self, backend: &mut dyn SdiBackend) {
-        for (_, tex_id) in self.textures.drain() {
+        for (_, (tex_id, _)) in self.textures.drain() {
             let _ = backend.destroy_texture(tex_id);
         }
+    }
+
+    /// The cached texture for `key`, marking it used.
+    fn get(&mut self, key: &GlyphTexKey) -> Option<TextureId> {
+        self.clock += 1;
+        let clock = self.clock;
+        self.textures.get_mut(key).map(|(tex, used)| {
+            *used = clock;
+            *tex
+        })
+    }
+
+    /// Cache `tex` under `key`, evicting the least recently used
+    /// [`GLYPH_EVICT_BATCH`] textures first when the cache is full.
+    fn insert(&mut self, key: GlyphTexKey, tex: TextureId, backend: &mut dyn SdiBackend) {
+        if self.textures.len() >= MAX_GLYPH_TEXTURES {
+            let mut stamps: Vec<u64> = self.textures.values().map(|&(_, used)| used).collect();
+            let nth = GLYPH_EVICT_BATCH.min(stamps.len()) - 1;
+            let (_, &mut cutoff, _) = stamps.select_nth_unstable(nth);
+            self.textures.retain(|_, &mut (tex, used)| {
+                let keep = used > cutoff;
+                if !keep {
+                    let _ = backend.destroy_texture(tex);
+                }
+                keep
+            });
+        }
+        self.clock += 1;
+        self.textures.insert(key, (tex, self.clock));
+    }
+
+    /// Empty the cache, handing its textures to `out` for destruction
+    /// later (navigation has no backend). Called when a page load
+    /// rebuilds the font registry: font ids restart at 0, so entries
+    /// keyed by the old ids would draw the previous page's glyphs.
+    pub fn clear_into(&mut self, out: &mut Vec<TextureId>) {
+        out.extend(self.textures.drain().map(|(_, (tex, _))| tex));
     }
 
     /// Number of cached glyph textures.
@@ -103,10 +155,8 @@ pub fn render_web_font_text(
         let y_off = glyph.y_offset;
 
         // Get or create glyph texture.
-        if let std::collections::hash_map::Entry::Vacant(e) = tex_cache.textures.entry(cache_key)
-            && glyph_w > 0
-            && glyph_h > 0
-        {
+        let mut cached = tex_cache.get(&cache_key);
+        if cached.is_none() && glyph_w > 0 && glyph_h > 0 {
             // Convert alpha bitmap to RGBA.
             let pixel_count = (glyph_w * glyph_h) as usize;
             let mut rgba = Vec::with_capacity(pixel_count * 4);
@@ -118,12 +168,13 @@ pub fn render_web_font_text(
             }
 
             if let Ok(tex_id) = backend.load_texture(glyph_w, glyph_h, &rgba) {
-                e.insert(tex_id);
+                tex_cache.insert(cache_key, tex_id, backend);
+                cached = Some(tex_id);
             }
         }
 
         // Blit the glyph texture if it exists.
-        if let Some(&tex_id) = tex_cache.textures.get(&cache_key) {
+        if let Some(tex_id) = cached {
             let gx = (cursor_x + x_off) as i32;
             let gy = (baseline_y - y_off) as i32 - glyph_h as i32;
             backend.blit(tex_id, gx, gy, glyph_w, glyph_h)?;
@@ -133,4 +184,54 @@ pub fn render_web_font_text(
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Regression: the glyph cache was never emptied, so after a page
+    /// load rebuilt the font registry (ids restart at 0) the next page
+    /// drew the previous page's glyphs, and textures leaked.
+    #[test]
+    fn clear_into_hands_back_every_texture() {
+        let mut cache = GlyphTextureCache::new();
+        cache
+            .textures
+            .insert((0, 'a', 120, 0, 0, 0, 255), (TextureId(7), 0));
+        cache
+            .textures
+            .insert((0, 'b', 120, 0, 0, 0, 255), (TextureId(8), 0));
+        let mut retired = Vec::new();
+        cache.clear_into(&mut retired);
+        assert!(cache.is_empty());
+        retired.sort_by_key(|t| t.0);
+        assert_eq!(retired, vec![TextureId(7), TextureId(8)]);
+    }
+
+    /// Regression: a full cache emptied itself, destroying (and then
+    /// re-rasterizing) every glyph, the ones just drawn included. Now
+    /// only the least recently used eighth goes.
+    #[test]
+    fn full_cache_evicts_least_recently_used_glyphs() {
+        let mut backend = oasis_test_backend::NullBackend::new(64, 64);
+        let mut cache = GlyphTextureCache::new();
+        let key = |i: usize| (0, 'a', i as u32, 0, 0, 0, 255);
+        for i in 0..MAX_GLYPH_TEXTURES {
+            cache.insert(key(i), TextureId(i as u64), &mut backend);
+        }
+        // Touch the oldest glyph: it is now the most recently used.
+        assert_eq!(cache.get(&key(0)), Some(TextureId(0)));
+        cache.insert(key(MAX_GLYPH_TEXTURES), TextureId(9999), &mut backend);
+
+        assert_eq!(cache.len(), MAX_GLYPH_TEXTURES - GLYPH_EVICT_BATCH + 1);
+        assert!(cache.get(&key(0)).is_some(), "recently drawn glyph kept");
+        assert!(cache.get(&key(1)).is_none(), "least recently used evicted");
+        assert!(cache.get(&key(GLYPH_EVICT_BATCH)).is_none());
+        assert!(cache.get(&key(GLYPH_EVICT_BATCH + 1)).is_some());
+        assert!(
+            cache.get(&key(MAX_GLYPH_TEXTURES)).is_some(),
+            "new glyph cached"
+        );
+    }
 }

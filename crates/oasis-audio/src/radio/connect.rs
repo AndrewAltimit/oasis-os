@@ -14,7 +14,7 @@ use std::time::{Duration, Instant};
 
 use oasis_types::backend::NetworkStream;
 
-use super::source::{IcecastSource, RadioSource, SourceState};
+use super::source::{IcecastSource, RadioSource, SourceState, is_request_token};
 
 /// Maximum number of redirects followed before giving up.
 pub const MAX_REDIRECTS: usize = 5;
@@ -37,9 +37,13 @@ pub struct StreamUrl {
 
 impl StreamUrl {
     /// Parse an absolute `http://` or `https://` URL. Returns `None` for any
-    /// other scheme, an empty host, or a bad port.
+    /// other scheme, an empty host, a bad port, or whitespace / control
+    /// bytes inside the URL (they would split the request line).
     pub fn parse(url: &str) -> Option<Self> {
         let url = url.trim();
+        if !is_request_token(url) {
+            return None;
+        }
         let (https, rest) = if let Some(r) = strip_prefix_ci(url, "https://") {
             (true, r)
         } else {
@@ -102,8 +106,9 @@ impl StreamUrl {
             let scheme = if self.https { "https:" } else { "http:" };
             Self::parse(&format!("{scheme}{location}"))
         } else if location.starts_with('/') {
-            Some(Self {
-                path: location.to_string(),
+            is_request_token(location).then(|| Self {
+                // The fragment is never sent (as in `parse`).
+                path: location.split('#').next().unwrap_or("/").to_string(),
                 ..self.clone()
             })
         } else {
@@ -220,6 +225,27 @@ mod tests {
         assert!(StreamUrl::parse("http:///x").is_none());
         assert!(StreamUrl::parse("http://h:notaport/").is_none());
         assert!(StreamUrl::parse("http://user@h/").is_none());
+    }
+
+    #[test]
+    fn urls_cannot_smuggle_request_headers() {
+        // A CR / LF / space in a station URL or a `Location` header used to
+        // land verbatim in the request line, injecting headers.
+        for bad in [
+            "http://h/a\r\nX-Injected: 1",
+            "http://h/a b",
+            "http://h\r\nX: 1/",
+            "http://h/\tx",
+            "http://h/\x7f",
+        ] {
+            assert!(StreamUrl::parse(bad).is_none(), "{bad:?}");
+        }
+        let base = StreamUrl::parse("http://a.example/s").unwrap();
+        assert!(base.resolve_redirect("/x\rX-Injected: 1").is_err());
+        assert!(base.resolve_redirect("/x y").is_err());
+        assert_eq!(base.resolve_redirect("/x#frag").unwrap().path, "/x");
+        // Surrounding whitespace is still trimmed, as before.
+        assert!(StreamUrl::parse("  http://h/ok \n").is_some());
     }
 
     #[test]

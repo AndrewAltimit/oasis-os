@@ -2,7 +2,8 @@
 //!
 //! Every extension trait has `SdiCore` as its supertrait (`SdiShapes`
 //! builds on `SdiClipTransform`, whose `draw_bounds` limits its span
-//! generators to the visible area, and `SdiVector` on `SdiShapes`) and
+//! generators to the visible area, `SdiVector` on `SdiShapes`, and
+//! `SdiBatch` on `SdiText`, whose styled text its text batches draw) and
 //! default implementations written in terms of
 //! the supertrait methods, so a type that implements `SdiCore` can opt
 //! into any extension with an empty `impl` block --

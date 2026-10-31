@@ -84,7 +84,8 @@ fn small_window_can_scroll_to_the_last_line() {
         h.key(Key::Down);
     }
     let text = h.screen_text();
-    assert!(text.contains("commands to manage them."), "{text}");
+    // The last line, ellipsized to the narrow window.
+    assert!(text.contains("> ") && text.contains("'remote'"), "{text}");
 }
 
 #[test]

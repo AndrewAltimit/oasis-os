@@ -92,6 +92,13 @@ any other:
   (`toggle`, `select_next`, `navigate_down`, `scroll_by`, `handle_key`)
   and local-offset hit tests (`option_at`, `tab_at`, `part_at`,
   `index_at`, `item_at`) that the app calls from its own handlers.
+  List-like keyboard navigation (Accordion, ContextMenu, Dropdown, Modal
+  buttons, RadioGroup) follows one rule, `focus::step_wrapping`: wrap
+  around, skip unselectable items, and treat an index left past the end
+  by removed items as "nothing focused" instead of indexing with it.
+- **Pub fields are untrusted**: state fields are `pub`, so methods
+  tolerate any value an app writes (stale indices, `min > max` or NaN
+  ranges, an out-of-range month) rather than panicking.
 - **Styling**: all colors, font sizes, radii and shadows come from the
   `Theme` in the `DrawContext` (derived from the active skin); widgets
   hard-code geometry only.
@@ -117,7 +124,7 @@ any other:
 | `Panel` | `panel.rs` | Container with background, border, shadow and rounded corners |
 | `ProgressBar` | `progress_bar.rs` | Determinate progress / gauge (`ProgressStyle`) |
 | `RadioGroup` | `radio.rs` | Mutually exclusive option selection |
-| `RichText` | `rich_text.rs` | Formatted text built from styled `Span`s |
+| `RichText` | `rich_text.rs` | Formatted text built from styled `Span`s; mixed sizes share a baseline per line |
 | `ScrollView` | `scroll_view.rs` | Scrollable content region with a scrollbar (`ScrollbarStyle`); `scroll_by` saturates and clamps |
 | `Slider` | `slider.rs` | Value within a range, horizontal or vertical |
 | `SpinBox` | `spin_box.rs` | Numeric input with increment / decrement buttons |
@@ -134,12 +141,12 @@ any other:
 
 | Component | File | Purpose |
 |-----------|------|---------|
-| `ListView<T>` | `list_view.rs` | Scrollable list with virtualized item rendering (items drawn by a caller `fn`); `scroll_to` / clamped `scroll_by` |
-| `MenuBar` | `menu_bar.rs` | Windows-95-style top menu bar with drop-downs; returns `MenuHit` for clicks (used by Paint, Text Editor) |
+| `ListView<T>` | `list_view.rs` | Scrollable list with virtualized item rendering (items drawn by a caller `fn`); `scroll_to` / `scroll_by` clamp, and drawing / `index_at(dy, viewport_h)` use the offset clamped to the content (`effective_scroll`) |
+| `MenuBar` | `menu_bar.rs` | Windows-95-style top menu bar with drop-downs; returns `MenuHit` for clicks and `MenuKey` for keys via `handle_key` (F10 opens, arrows navigate, Enter runs, Esc closes; used by File Manager, Paint, Text Editor). Measures with the drawing backend; on a narrow bar trailing menus fold into a `»` overflow menu |
 | `NinePatch`, `NinePatchSlices` | `nine_patch.rs` | 9-slice rendering of themed borders from a texture (re-exported from `oasis_types::nine_patch`) |
-| `FlexLayout`, `GridLayout` | `flex.rs` | Lightweight flex and grid layout helpers producing `ComputedRect`s; flex shares sum to exactly the free space (no stray pixel after the last child) and huge sizes saturate |
+| `FlexLayout`, `GridLayout` | `flex.rs` | Lightweight flex and grid layout helpers producing `ComputedRect`s; flex shares sum to exactly the free space (no stray pixel after the last child) and huge sizes saturate; children stretch across the cross axis unless given a `cross_size`, which `align_items` / `align_self` then place |
 | `Padding`, `center`, `distribute`, `max_scroll`, `HAlign` / `VAlign`, `MeasureCache` | `layout.rs` | Centering, alignment, padding, distribution, scroll bounds, cached text measurement |
-| `FocusRing`, `FocusManager`, `SpatialFocusManager`, `FocusStyle` | `focus/` (`ring.rs`, `manager.rs`, `spatial.rs`, `style.rs`) | Index focus cursor; Tab / Shift-Tab cycling that skips disabled items; tab-index + arrow-key spatial navigation (consumes the backends' `InputEvent::Tab` / `ShiftTab`); focus-ring styling from the theme |
+| `FocusRing`, `step_wrapping`, `FocusManager`, `SpatialFocusManager`, `FocusStyle` | `focus/` (`ring.rs`, `manager.rs`, `spatial.rs`, `style.rs`) | Index focus cursor and the shared wrapping-step rule; Tab / Shift-Tab cycling that skips disabled items; tab-index + arrow-key spatial navigation (consumes the backends' `InputEvent::Tab` / `ShiftTab`; negative `tab_index` items are skipped by both); focus-ring styling from the theme |
 | `Tween`, `ColorTween`, easing functions | `animation.rs` | Frame-driven animation primitives |
 | `test_utils` | `test_utils.rs` | Test-only, crate-internal: re-exports `oasis_test_backend::RecordingBackend`, plus `all_themes()` / `test_draw_all_themes` / `assert_states_distinct` helpers |
 

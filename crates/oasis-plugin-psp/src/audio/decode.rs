@@ -15,6 +15,13 @@ use crate::overlay;
 // Import stub extraction (resolve via game's resolved import stubs)
 // ---------------------------------------------------------------------------
 
+/// Whether `AUDIO_CMD` value `cmd` ends the track that is playing: next (2),
+/// prev (3), toggle radio (4) or a video MP3 taking over (7). The main loop
+/// handles the command, and the playlist does not advance.
+fn interrupts_track(cmd: u8) -> bool {
+    matches!(cmd, 2 | 3 | 4 | 7)
+}
+
 /// Try to resolve sceAudiocodec functions by finding the game's
 /// resolved import stubs. The game imports sceAudiocodec, so its
 /// import stubs contain the real function addresses.
@@ -959,10 +966,10 @@ pub(super) unsafe extern "C" fn audio_thread_entry(
         }
 
         // Advance to next track only on natural completion.  Skip when
-        // interrupted by any command (2=next, 3=prev, 7=video MP3) -- those
-        // are handled explicitly at the top of the main loop.
+        // interrupted by a command (see `interrupts_track`) -- those are
+        // handled explicitly at the top of the main loop.
         let pending = AUDIO_CMD.load(Ordering::Relaxed);
-        if pending != 2 && pending != 3 && pending != 7 {
+        if !interrupts_track(pending) {
             // SAFETY: Volatile read/write of CURRENT_TRACK; accessed only from audio thread.
             unsafe {
                 let cur = core::ptr::read_volatile(&raw const CURRENT_TRACK);
@@ -997,14 +1004,20 @@ pub(super) unsafe fn play_track_mp3(path: &[u8], channel: i32) -> i32 {
         return -1;
     }
 
-    static mut S_MP3_BUF: [u8; MP3_BUF_SIZE] = [0u8; MP3_BUF_SIZE];
-    static mut S_PCM_BUF: [u8; PCM_BUF_SIZE] = [0u8; PCM_BUF_SIZE];
+    /// 64-byte alignment for the buffers sceMp3 hands to the Media Engine
+    /// (the pspsdk sample declares them `aligned(64)`): the ME reads and
+    /// writes whole cache lines.
+    #[repr(C, align(64))]
+    struct MeAligned<const N: usize>([u8; N]);
+
+    static mut S_MP3_BUF: MeAligned<MP3_BUF_SIZE> = MeAligned([0u8; MP3_BUF_SIZE]);
+    static mut S_PCM_BUF: MeAligned<PCM_BUF_SIZE> = MeAligned([0u8; PCM_BUF_SIZE]);
 
     // SAFETY: Accessing function-local statics; play_track_mp3 is only called
     // from the single audio thread, so no concurrent access.
-    let mp3_buf_ptr = unsafe { (*(&raw mut S_MP3_BUF)).as_mut_ptr() };
+    let mp3_buf_ptr = unsafe { (*(&raw mut S_MP3_BUF)).0.as_mut_ptr() };
     // SAFETY: as above.
-    let pcm_buf_ptr = unsafe { (*(&raw mut S_PCM_BUF)).as_mut_ptr() };
+    let pcm_buf_ptr = unsafe { (*(&raw mut S_PCM_BUF)).0.as_mut_ptr() };
 
     let init = Mp3InitStruct {
         mp3_stream_start: 0,
@@ -1058,7 +1071,7 @@ pub(super) unsafe fn play_track_mp3(path: &[u8], channel: i32) -> i32 {
     let mut result = 0i32;
     loop {
         let cmd = AUDIO_CMD.load(Ordering::Relaxed);
-        if cmd == 2 || cmd == 3 || cmd == 7 {
+        if interrupts_track(cmd) {
             break;
         }
         if cmd == 1 {
@@ -1321,12 +1334,13 @@ pub(super) unsafe fn play_track_codec(path: &[u8], channel: i32) -> i32 {
     };
 
     let mut result = 0i32;
-    let mut frame_count: u32 = 0;
+    // Consecutive decode errors (reset by every decoded frame).
+    let mut decode_errors: u32 = 0;
     let mut zero_consumed: u32 = 0;
 
     loop {
         let cmd = AUDIO_CMD.load(Ordering::Relaxed);
-        if cmd == 2 || cmd == 3 || cmd == 7 {
+        if interrupts_track(cmd) {
             break;
         }
         if cmd == 1 {
@@ -1411,8 +1425,8 @@ pub(super) unsafe fn play_track_codec(path: &[u8], channel: i32) -> i32 {
         let ret = unsafe { decode_fn(codec, CODEC_TYPE_MP3) };
         if ret < 0 {
             // Limit consecutive failures to avoid infinite spin.
-            frame_count += 1;
-            if frame_count > 100 {
+            decode_errors += 1;
+            if decode_errors > 100 {
                 crate::debug_log(b"[OASIS] too many decode errors");
                 break;
             }
@@ -1420,8 +1434,12 @@ pub(super) unsafe fn play_track_codec(path: &[u8], channel: i32) -> i32 {
             continue;
         }
 
+        decode_errors = 0;
+
         // SAFETY: Reading consumed byte count from codec buffer field 7.
-        let consumed = unsafe { *codec.add(7) } as usize;
+        // Clamped to the bytes handed to the decoder: a larger value would
+        // push `buf_pos` past `buf_valid` and underflow the compaction.
+        let consumed = (unsafe { *codec.add(7) } as usize).min(avail);
         if consumed == 0 {
             zero_consumed += 1;
             if zero_consumed > 100 {
@@ -1463,7 +1481,6 @@ pub(super) unsafe fn play_track_codec(path: &[u8], channel: i32) -> i32 {
                 }
             }
         }
-        frame_count += 1;
     }
 
     // SAFETY: Releasing EDRAM allocation and closing file descriptor on cleanup.

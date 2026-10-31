@@ -18,12 +18,15 @@
 //!   caller until passed to `oasis_free_string` (exactly once). The
 //!   framebuffer from `oasis_get_buffer` is borrowed: valid until the next
 //!   `oasis_tick` or `oasis_destroy` on that handle.
-//! - **Callbacks** (`oasis_register_callback`, `oasis_set_audio_callback`)
+//! - **Callbacks** (`oasis_register_callback`, `oasis_set_audio_callback`
+//!   and their `_ex` forms, which also pass back a host `user_data` pointer)
 //!   may be null, which unregisters. They run synchronously inside the
-//!   `oasis_*` call that fired them, on the caller's thread, and **must not
-//!   call back into the API with the same handle** (the instance is
-//!   exclusively borrowed while they run). The `detail` string is only
-//!   valid for the duration of the callback.
+//!   `oasis_*` call that fired them, on the caller's thread. A call they
+//!   make back into the API with the same handle (the instance is
+//!   exclusively borrowed while they run) is refused: it returns its
+//!   default and logs an error; `oasis_destroy` from a callback is refused
+//!   too. The `detail` string is only valid for the duration of the
+//!   callback.
 //! - **Panics** never unwind into C: every export catches them and returns
 //!   its default (null / false / -1 / `UINT64_MAX`), provided the library
 //!   is built with `panic = "unwind"` (the `release-ffi` profile). The
@@ -38,16 +41,27 @@
 //! internal thread is the video decoder's, which `oasis_video_stop` and
 //! `oasis_destroy` join.
 //!
-//! Recommended UE5 integration pattern:
+//! Recommended UE5 integration pattern: own the handle in one component
+//! and make every call from the game thread, so no locking is needed.
 //! ```cpp
-//! // Create on game thread, store in a TSharedPtr
-//! FCriticalSection OasisMutex;
-//! void* OasisHandle = oasis_create(...);
-//!
-//! // Tick on game thread only:
-//! FScopeLock Lock(&OasisMutex);
-//! oasis_tick(OasisHandle);
+//! // BeginPlay:
+//! OasisInstance* Oasis = oasis_create(480, 272, nullptr, nullptr, nullptr);
+//! // TickComponent:
+//! oasis_tick(Oasis, DeltaTime);
+//! // EndPlay:
+//! oasis_destroy(Oasis);
 //! ```
+//! A host that must call from several threads serializes every call on a
+//! handle behind one lock it owns.
+//!
+//! # Feature flags
+//!
+//! - `video-decode` — `oasis_video_*` exports with openh264 decode
+//!   (`oasis-video/h264`).
+//! - `video-decode-ffmpeg` — the same exports with statically linked ffmpeg
+//!   (`oasis-video/ffmpeg`).
+//!
+//! Without either feature the `oasis_video_*` exports are not compiled.
 
 // Modules organized by functionality.
 mod audio;

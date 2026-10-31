@@ -45,6 +45,10 @@ icon_style = "vector"
 vector_preset = "solid"
 icon_container = "chip"
 cursor_style = "fill"
+# base2: the derived base0 labels faded into the bright ocean-wave crests.
+label_color = "#EEE8D5"
+# base03 shadow keeps the labels legible over the cyan wave crests.
+label_shadow_color = "#002B36"
 
 [wallpaper]
 style = "solid"

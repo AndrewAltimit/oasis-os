@@ -25,6 +25,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::Result;
 
+use crate::settings::{SettingsStore, UserPrefs};
 use oasis_backend_sdl::shader_bridge::SdlShaderBridge;
 use oasis_core::active_theme::ActiveTheme;
 use oasis_core::backend::SdiBackend;
@@ -37,7 +38,6 @@ use oasis_core::input::{InputEvent, KeyTwinFilter};
 use oasis_core::platform::{DesktopPlatform, NetworkService, PowerService, TimeService};
 use oasis_core::plugin::{Plugin, PluginContext, PluginManager, register_builtin_plugins};
 use oasis_core::sdi::SdiRegistry;
-use oasis_core::settings::{SettingsStore, UserPrefs};
 use oasis_core::skin::{Skin, resolve_skin, resolve_skin_or_classic};
 use oasis_core::startmenu::StartMenuState;
 use oasis_core::statusbar::StatusBar;
@@ -53,7 +53,8 @@ use oasis_core::wallpaper;
 use oasis_core::wm::manager::WindowManager;
 
 use crate::app_state::{
-    AppState, ContentLayer, Mode, NetworkLayer, RadioLayer, TerminalLayer, TvLayer, UiLayer,
+    AppState, ContentLayer, Mode, NetworkLayer, RadioLayer, SkinAssets, TerminalLayer, TvLayer,
+    UiLayer,
 };
 use crate::audio_out::ShellAudio;
 use crate::launch::{BROWSER_WIN, LaunchOpts};
@@ -218,10 +219,6 @@ fn hermetic_skin_root() -> PathBuf {
     ))
 }
 
-/// Apply the skin's screen size to `config`: the skin's native size,
-/// PSP-native (480x272) skins scaled to 1280x720 unless they pin
-/// `desktop_width` / `desktop_height`, and a resolution picked in
-/// Settings wins over both.
 /// Whether the active skin's corrupted modifiers should distort this frame
 /// (the skin enables `corrupted`, intensity > 0, and the user has not asked
 /// for reduced motion).
@@ -234,6 +231,10 @@ fn corruption_active(state: &AppState) -> bool {
             .is_some_and(|m| m.is_active())
 }
 
+/// Apply the skin's screen size to `config`: the skin's native size,
+/// PSP-native (480x272) skins scaled to 1280x720 unless they pin
+/// `desktop_width` / `desktop_height`, and a resolution picked in
+/// Settings wins over both.
 pub fn resolve_screen_size(config: &mut OasisConfig, skin: &Skin, prefs: &UserPrefs) {
     config.screen_width = skin.manifest.screen_width;
     config.screen_height = skin.manifest.screen_height;
@@ -301,6 +302,8 @@ pub struct Shell<B: ShellBackend> {
     /// When the status bar / System Monitor info last refreshed
     /// ([`SYSINFO_INTERVAL`]).
     last_sysinfo_at: Instant,
+    /// Runs the `cron` jobs, checked with the sysinfo refresh.
+    cron: oasis_core::script::CronScheduler,
     /// Zero point of the animation clock (shader wallpapers, image decal
     /// layers), so they run at wall-clock speed at any frame rate.
     clock_origin: Instant,
@@ -503,11 +506,13 @@ impl<B: ShellBackend> Shell<B> {
         let ui = build_ui_layer(&config, &skin, &active_theme, tiles);
 
         // Window manager state (Desktop mode).
-        let wm = WindowManager::with_theme(
+        let mut wm = WindowManager::with_theme(
             config.screen_width,
             config.screen_height,
             skin.theme.build_wm_theme(),
         );
+        let (top, bottom) = oasis_core::apps::chrome_insets(&active_theme, &skin.features);
+        wm.set_placement_insets(top, bottom);
 
         // Boot entrance: skin-selected ("fade" default, "assemble", "none").
         let fade_frames = skin.features.transition_fade_frames.unwrap_or(15);
@@ -520,6 +525,7 @@ impl<B: ShellBackend> Shell<B> {
 
         // Assemble application state.
         let clear_color = active_theme.clear_color;
+        let mode = Mode::idle_for(&skin.features);
         let mut state = AppState {
             config,
             skin,
@@ -543,17 +549,12 @@ impl<B: ShellBackend> Shell<B> {
             osk: None,
             plugin_manager,
             wm,
-            mode: Mode::Dashboard,
+            mode,
             bg_color: clear_color,
             active_transition,
             frame_counter: 0,
-            pending_wallpaper_refresh: false,
-            skin_layout_textures: Vec::new(),
-            image_layers: Vec::new(),
-            background_layer_cache: oasis_core::vector_overlay::LayerOpsCache::new(),
-            chrome_layer_cache: oasis_core::vector_overlay::LayerOpsCache::new(),
+            skin_assets: SkinAssets::default(),
             icon_drag: None,
-            cursor_texture: None,
             settings: SettingsStore::new(),
             radio: RadioLayer::new(),
             tv: TvLayer::new(),
@@ -561,8 +562,8 @@ impl<B: ShellBackend> Shell<B> {
             offline,
             custom_skin_root,
             toasts: ToastManager::new(),
-            ui_sounds: oasis_core::ui_sound::UiSoundQueue::new(),
-            sfx: oasis_audio::sfx::SfxPlayer::new(),
+            ui_sounds: crate::ui_sound::UiSoundQueue::new(),
+            sfx: oasis_audio::SfxPlayer::new(),
             media_track: None,
             media: oasis_audio::AudioManager::new(),
             #[cfg(feature = "mcp")]
@@ -693,6 +694,7 @@ impl<B: ShellBackend> Shell<B> {
             last_present_at: now,
             last_app_tick_at: now,
             last_sysinfo_at: now,
+            cron: oasis_core::script::CronScheduler::new(),
             clock_origin: now,
             tv_timeout_secs,
             tv_timeout_start: None,
@@ -712,10 +714,12 @@ impl<B: ShellBackend> Shell<B> {
         self.clock_origin = now;
     }
 
-    /// Seconds on the animation clock at `now`.
-    fn anim_secs(&self, now: Instant) -> f32 {
+    /// Seconds on the animation clock at `now`, unwrapped and in `f64` so
+    /// they keep sub-frame precision over any uptime (the shader bridge
+    /// wraps them before the shader sees them).
+    fn anim_secs(&self, now: Instant) -> f64 {
         now.saturating_duration_since(self.clock_origin)
-            .as_secs_f32()
+            .as_secs_f64()
     }
 
     /// Run one frame of shell logic for `events` at time `now`: input
@@ -745,6 +749,8 @@ impl<B: ShellBackend> Shell<B> {
                 .sysmon_probe
                 .publish(vfs, Some(&state.platform), Some(&state.platform));
             self.settings_mirror.sync(vfs);
+            let since_start = now.saturating_duration_since(self.clock_origin);
+            terminal_input::poll_cron(state, vfs, &mut self.cron, since_start);
         }
 
         for event in events {
@@ -894,11 +900,11 @@ impl<B: ShellBackend> Shell<B> {
 
         // Animate image decal layers (drift/pulse) by mutating their SDI
         // objects; static layers cost nothing here.
-        if !state.image_layers.is_empty() {
+        if !state.skin_assets.image_layers.is_empty() {
             oasis_core::image_layers::tick_image_layers(
                 sdi,
-                &state.image_layers,
-                anim_secs,
+                &state.skin_assets.image_layers,
+                anim_secs as f32,
                 state.active_theme.background_reduced_motion,
             );
         }
@@ -1159,7 +1165,7 @@ fn draw_frame<B: ShellBackend>(
     sdi: &mut SdiRegistry,
     backend: &mut B,
     shader_bridge: &mut Option<SdlShaderBridge>,
-    anim_secs: f32,
+    anim_secs: f64,
     phase_clock: &mut Option<frame_stats::PhaseClock>,
     advance_transition: bool,
 ) -> Result<()> {
@@ -1201,7 +1207,7 @@ fn draw_frame<B: ShellBackend>(
         // per-window rendering to avoid the dashboard icons disappearing
         // whenever a window is open on top of them.
         let wants_vector_icons =
-            state.skin.features.dashboard && state.active_theme.icon.style == "vector";
+            render::dashboard_icons_visible(state) && state.active_theme.icon.style == "vector";
         let dashboard = &state.ui.dashboard;
         let active_theme = &state.active_theme;
         let frame = state.frame_counter as u32;
@@ -1249,13 +1255,15 @@ fn draw_frame<B: ShellBackend>(
             backend,
             &state.active_theme,
             state.frame_counter as u32,
-            &mut state.background_layer_cache,
+            &mut state.skin_assets.background_cache,
         )?;
-        state.ui.dashboard.render_vector_icons(
-            backend,
-            &state.active_theme,
-            state.frame_counter as u32,
-        )?;
+        if render::dashboard_icons_visible(state) {
+            state.ui.dashboard.render_vector_icons(
+                backend,
+                &state.active_theme,
+                state.frame_counter as u32,
+            )?;
+        }
         sdi.draw_overlay_layer(backend)?;
     } else {
         sdi.draw(backend)?;
@@ -1274,7 +1282,7 @@ fn draw_frame<B: ShellBackend>(
             backend,
             &state.active_theme,
             state.frame_counter as u32,
-            &mut state.chrome_layer_cache,
+            &mut state.skin_assets.chrome_cache,
         )?;
     }
 
@@ -1333,8 +1341,11 @@ fn carry_out_app_requests(
     requests: Vec<oasis_core::apps::AppRequest>,
 ) {
     for req in requests {
-        if let Some(tune) = oasis_apps::tv_guide::tune_url_request(&req) {
-            state.tv.pending_tune = Some(tune.to_string());
+        if req.path == oasis_core::ipc::TV_REQUEST_PATH
+            && let Some(oasis_core::ipc::TvRequest::TuneUrl(tune)) =
+                oasis_core::ipc::TvRequest::parse(&req.data)
+        {
+            state.tv.pending_tune = Some(tune);
             continue;
         }
         // The music request file is a line queue (several requests per

@@ -108,7 +108,7 @@ The backends depend only on the foundation crates: `oasis-backend-sdl` needs `oa
 
 ### 3.2 Repository Structure
 
-The project is a Cargo workspace at the repository root (edition 2024, workspace version 1.4.0, 41 members). The authoritative crate list, with one line per crate, is the dependency graph in [`CLAUDE.md`](../CLAUDE.md#crate-dependency-graph); the README has the [crate table by layer](../README.md#crates).
+The project is a Cargo workspace at the repository root (edition 2024, workspace version 1.6.0, 41 members). The authoritative crate list, with one line per crate, is the dependency graph in [`CLAUDE.md`](../CLAUDE.md#crate-dependency-graph); the README has the [crate table by layer](../README.md#crates).
 
 ```
 oasis-os/
@@ -170,11 +170,11 @@ Lookups of a missing object return the typed `SdiError::NotFound`. An object's a
 
 ### 4.2 Command Interpreter
 
-The command interpreter is a registry-based dispatch system in the `oasis-terminal` crate, which depends only on `oasis-types`, `oasis-vfs`, `oasis-platform` and `oasis-net`. Commands implement a `Command` trait with an `execute()` method returning structured output (`CommandOutput`). The interpreter includes full shell features: variable expansion (`$VAR`, `${VAR}`), command substitution (`$(...)`), glob expansion, aliases, history (`!!`, `!n`), piping, redirects, and command chaining (`&&`, `||`, `;`). Inline control flow and `run` scripts share one parser (`script/`) with nested `if`/`elif`/`else`, `while`/`until`, `for` and `case` blocks; a trailing `&` queues a background job managed with `jobs`/`fg`/`bg`/`kill`. Hosts drive interactive terminals through a `ShellSession` (`session.rs`) that adds readline-style editing, tab completion (commands, `$VARS`, VFS paths), Ctrl+R history search and history persisted to `/home/user/.oasis_history`.
+The command interpreter is a registry-based dispatch system in the `oasis-terminal` crate, which depends only on `oasis-types`, `oasis-vfs`, `oasis-platform` and `oasis-net`. Commands implement a `Command` trait with an `execute()` method returning structured output (`CommandOutput`). The interpreter includes full shell features: variable expansion (`$VAR`, `${VAR}`), command substitution (`$(...)`), glob expansion, aliases, history (`!!`, `!n`), piping, redirects, and command chaining (`&&`, `||`, `;`). Inline control flow and `run` scripts share one parser (`script/`) with nested `if`/`elif`/`else`, `while`/`until`, `for` and `case` blocks; a trailing `&` queues a background job managed with `jobs`/`fg`/`bg`/`kill`; background and `cron` jobs run detached from the session (`CommandRegistry::run_detached`), so they cannot change its `$?` or working directory. Hosts drive interactive terminals through a `ShellSession` (`session.rs`) that adds readline-style editing, tab completion (commands, `$VARS`, VFS paths), Ctrl+R history search and history persisted to `/home/user/.oasis_history`.
 
 - **Builtins.** The 21 shell builtins (`help`, `run`, `xargs`, `history`, `set`, `alias`, `function`, `jobs`, `kill`, ...) live in one table, `BUILTINS` in `builtins.rs`, which the executor dispatches from before the command map; `help`, `which` and completion read the same table. A builtin always wins over a registered command of the same name.
 - **Exit status.** `CommandOutput::Status { code, output }` lets a command print and fail without an `Err`; the executor records the code for `&&`, `||`, `$?` and `if`.
-- **Layering.** Commands that need higher layers are registered by `oasis-core`: `skin` (it needs `oasis-skin`), agent/MCP, browser, plugin, script (`cron`, `startup`), file transfer, update and TV. `oasis_core::terminal::register_builtins` is the entry point every host calls. The desktop shell adds `mcp-server` when built with the `mcp` feature.
+- **Layering.** Commands that need higher layers are registered by `oasis-core`: `skin` (it needs `oasis-skin`), agent/MCP, browser, plugin, script (`cron`, `startup`), file transfer and update. `oasis_core::terminal::register_builtins` is the entry point every host calls; `oasis-apps` adds `tv` (`oasis_apps::register_commands`), and the desktop shell adds `mcp-server` when built with the `mcp` feature.
 
 Counted from the source: 75 commands in `oasis-terminal`, 19 in `oasis-core`, 1 (`tv`) in `oasis-apps` and 1 in `oasis-app` (feature `mcp`) -- 95 on the default desktop build -- plus the 21 builtins. The catalogue is [terminal-commands.md](terminal-commands.md) and the how-to is [adding-commands.md](adding-commands.md).
 
@@ -294,7 +294,9 @@ The desktop shell (`oasis-app`, `oasis_app::Shell`) is the reference host. Its d
 - **One launch path.** Every launch site (dashboard tile, MCP `open_app`, `OASIS_APP`, file associations, plugin tiles) goes through `launch::launch` with `LaunchOpts`. Titles without a dashboard tile (`AppEntry::for_title`) launch the same way.
 - **One close path.** `windows::close_app_window(state, sdi, vfs, id, CloseHow)` is the only way a window closes. It asks the app first (`App::on_close_requested`, so unsaved edits raise a prompt) unless the close is forced, retires the runner so `release_resources` runs, stops media the window owned, and falls back to the dashboard. `wm close [--force]` and MCP `close_window { force }` use it.
 - **Windows only.** There is no separate fullscreen app mode on desktop; kiosk windows are windows without chrome.
-- **Feature layers.** TV, radio, network and content state live in their own layers (`TvLayer`, `RadioLayer`, ...) of `AppState`; skin swaps and resolution changes rebuild the dashboard from `dashboard_apps()`, which keeps plugin-registered apps, and keep the status bar and taskbar.
+- **Feature layers.** TV, radio, network and content state live in their own layers (`TvLayer`, `RadioLayer`, ...) of `AppState`, and the skin's backend resources (wallpaper, layout textures, decal layers, cursor) in `SkinAssets`; skin swaps and resolution changes rebuild the dashboard from `dashboard_apps()`, which keeps plugin-registered apps, and keep the status bar and taskbar. Shell-only state (the `settings` store and `UserPrefs`, the UI sound queue) lives in `oasis-app`, not `oasis-core`.
+- **One command-output path per caller.** `commands::apply_command_output` runs a local terminal result (server toggles allowed); `commands::run_remote_command` serves the remote-terminal listener and MCP `run_command` alike (server toggles refused). Both resolve `skin` requests in order, so `skin xp; skin @variant:dark` derives from xp.
+- **Per-frame services.** `Shell::step` polls the services in `commands/` (`services`: listener / FTP / MCP / remote client; `ipc`: `wm` and `plugin` request files; `settings_ipc`: the Settings app's `/system/ipc`) plus `ui_ipc` and the media controllers. Every request file is read and cleared through one `take_request` (missing, empty and whitespace-only files are no-ops), and status files are rewritten only when they change (`publish_if_changed`). Input routing is `input/` (`handle_event`, then the `desktop` or `dashboard` mode handler).
 
 Every user-flow change gets an end-to-end scenario in `crates/oasis-app/tests/e2e_*.rs`, driven through the headless harness ([testing.md](testing.md)).
 
@@ -306,7 +308,7 @@ The backend traits live in `oasis-types/src/backend/` and are re-exported by `oa
 
 ### 5.1 Rendering Backend Traits
 
-Every rendering operation passes through `SdiCore` (13 required methods: `init`, `clear`, `blit`, `fill_rect`, `draw_text`, `swap_buffers`, `load_texture`, `destroy_texture`, `set_clip_rect`, `reset_clip_rect`, `measure_text`, `read_pixels`, `shutdown`; plus the provided `viewport_size`) and eight extension traits with 46 default-implemented methods: `SdiShapes` (8), `SdiGradients` (2), `SdiText` (7), `SdiTextures` (4), `SdiClipTransform` (8), `SdiVector` (6), `SdiBatch` (2) and `SdiRenderTarget` (9). `SdiBackend` is a marker super-trait with a blanket impl for any type implementing `SdiCore` plus all eight extensions, and every consumer takes `&mut dyn SdiBackend`.
+Every rendering operation passes through `SdiCore` (12 required methods: `init`, `clear`, `blit`, `fill_rect`, `draw_text`, `swap_buffers`, `load_texture`, `destroy_texture`, `set_clip_rect`, `reset_clip_rect`, `read_pixels`, `shutdown`; plus the provided `measure_text` and `viewport_size`) and eight extension traits with 45 default-implemented methods: `SdiShapes` (8), `SdiGradients` (2), `SdiText` (7), `SdiTextures` (2), `SdiClipTransform` (9), `SdiVector` (6), `SdiBatch` (2) and `SdiRenderTarget` (9). `SdiBackend` is a marker super-trait with a blanket impl for any type implementing `SdiCore` plus all eight extensions, and every consumer takes `&mut dyn SdiBackend`.
 
 - **Span-exact defaults.** The shape defaults (circles, rings, rounded rects, thick lines, even-odd polygons) emit `fill_rect` spans from the shared generators in `oasis_types::rasterize`, the same generators the SDL and UE5 rasterizers use, so a backend that only implements `SdiCore` draws the same pixels; overriding is for speed, not correctness. PSP and every test mock rely on the defaults.
 - **Boilerplate.** `oasis_types::impl_sdi_defaults!(T)` writes the eight empty extension impls for a mock or null backend (`impl_sdi_defaults!(T; except SdiShapes, ..)` skips the ones a type writes itself).
@@ -426,7 +428,7 @@ OASIS_OS compiles as a C-compatible dynamic library (`oasis-ffi`, cdylib) that U
 
 ### 7.2 FFI Boundary
 
-The FFI layer exports 26 C-ABI functions: lifecycle and rendering (`oasis_create`, `oasis_create_full`, `oasis_destroy`, `oasis_tick`, `oasis_send_input`, `oasis_get_buffer`, `oasis_get_dirty`), commands and VFS (`oasis_send_command`, `oasis_free_string`, `oasis_set_vfs_root`, `oasis_add_vfs_file`, `oasis_register_callback`), audio (`oasis_audio_*`, `oasis_set_audio_callback`) and video (`oasis_video_*`, with the `video-decode` / `video-decode-ffmpeg` feature). All internal Rust state is behind the opaque pointer; null handles and strings are checked at every entry point and no panic crosses the boundary.
+The FFI layer exports 31 C-ABI functions: lifecycle and rendering (`oasis_create`, `oasis_create_full`, `oasis_destroy`, `oasis_tick`, `oasis_send_input`, `oasis_get_buffer`, `oasis_get_dirty`), commands and VFS (`oasis_send_command`, `oasis_free_string`, `oasis_set_vfs_root`, `oasis_add_vfs_file`, `oasis_register_callback` / `oasis_register_callback_ex`, the latter with a host `user_data` pointer), audio (`oasis_audio_*` incl. `oasis_audio_drain_stream` / `oasis_audio_stream_buffered` for streamed radio bytes, `oasis_set_audio_callback` / `_ex`) and video (six `oasis_video_*` incl. `oasis_video_audio_format`, with the `video-decode` / `video-decode-ffmpeg` feature; decode is paced to the wall clock). All internal Rust state is behind the opaque pointer; null handles and strings are checked at every entry point and no panic crosses the boundary.
 
 ### 7.3 Render Pipeline
 
@@ -502,7 +504,7 @@ OASIS uses a two-binary design on PSP, inspired by IRShell and similar shells th
 | Binary | Crate | Mode | Purpose |
 |--------|-------|------|---------|
 | EBOOT.PBP | `oasis-backend-psp` | User | Full shell (dashboard, terminal, browser, apps) |
-| PRX | `oasis-plugin-psp` | Kernel | Lightweight overlay + background music, ~153 KB stripped PRX |
+| PRX | `oasis-plugin-psp` | Kernel | Lightweight overlay + background music, ~159 KB stripped PRX |
 
 The PRX is loaded by custom firmware at boot via a `PLUGINS.TXT` entry and stays resident when games launch. It patches `sceDisplaySetFrameBuf` via `sctrlHENPatchSyscall` and draws its overlay into the game's framebuffer after each frame. It uses static buffers (no heap on the overlay path) and shares state between the display hook and its audio / config threads through atomics. Background audio streams MP3 files from `ms0:/MUSIC/` through the hardware decoder. A kernel watchdog in the PRX also recovers the EBOOT's ME video decode from a firmware deadlock.
 
@@ -614,7 +616,7 @@ The `Vfs` trait (`oasis-vfs/src/lib.rs`) has `readdir`, `read`, `write`, `stat`,
 
 ### 11.2 VFS as IPC
 
-Hosts and apps also use well-known VFS paths as IPC: `oasis_types::ipc` is the one home for the path constants (`/var/audio`, `/var/radio`, `/var/wm`, `/var/tv`, `/var/plugin`, `/var/browser/request`, the Settings `/system/ipc/*` requests and `/system/state/*` mirrors, including `/system/state/net`) and the typed requests (`MediaRequest` (§14), `WmRequest`, `PluginRequest`, `NetState`); apps hand host requests over through `App::drain_requests` (§4.3.2). Plugins use the same mechanism ([plugin-development.md](plugin-development.md)).
+Hosts and apps also use well-known VFS paths as IPC: `oasis_types::ipc` is the one home for the path constants (`/var/audio`, `/var/radio`, `/var/wm`, `/var/tv`, `/var/plugin`, `/var/browser/request`, the Settings `/system/ipc/*` requests and `/system/state/*` mirrors, including `/system/state/net`) and the typed requests and states (`MediaRequest` (§14), `RadioRequest`, `TvRequest`, `TvStatus`, `WmRequest`, `PluginRequest`, `BrowserRequest`, `Notification`, `NetState`); apps hand host requests over through `App::drain_requests` (§4.3.2). Plugins use the same mechanism ([plugin-development.md](plugin-development.md)).
 
 ### 11.3 Game Asset VFS
 
@@ -641,7 +643,7 @@ Test layers and the harness API: [testing.md](testing.md). PSP scenarios: [scrip
 
 ### 12.2 PSP Debugging
 
-Today PSP debugging uses the WiFi TCP command server inside the EBOOT (`scripts/psp_remote.py`: deploy, reboot, remote input injection, live framebuffer capture, file upload, scripted sequences), the network recovery EBOOT (hold R on boot) and PPSSPP headless runs in the `psp` Docker profile.
+Today PSP debugging uses the WiFi TCP command server inside the EBOOT (`scripts/psp_remote.py`: deploy, reboot, remote input injection, live framebuffer capture, file upload, scripted sequences), the network recovery EBOOT (hold R on boot) -- both require a PSK and serve no one without a key ([networking.md](networking.md#psp-dev-servers)) -- and PPSSPP headless runs in the `psp` Docker profile.
 
 **Planned: PPSSPP with an embedded MCP server.** A patched PPSSPP container would expose emulator internals as MCP tools (`psp.memory.read/write/search`, `psp.gpu.state/vram_dump/texture_list`, `psp.debug.breakpoint/step/registers/threads/stack_trace`, `psp.net.sockets/capture/inject_latency`, `psp.emu.screenshot/save_state/frame_advance`), built from a pinned PPSSPP commit plus a small patch series under `docker/ppsspp-patches/` (currently a placeholder). It would let an agent inspect GU state, threads and memory of a running EBOOT the way it inspects desktop code. None of it is built yet.
 
@@ -692,7 +694,7 @@ OASIS_OS supports runtime-extensible functionality through plugins: Rust types i
 
 ### 15.1 Widgets
 
-`oasis-ui` provides 27 types implementing the `Widget` trait (`measure` + `draw` against a theme-aware `DrawContext`) plus non-`Widget` helpers (ListView, MenuBar, NinePatch, flex/grid layout, focus management, tweens; easing curves come from `oasis_types::easing`). The catalogue with source paths is [ui-widgets.md](ui-widgets.md).
+`oasis-ui` provides 27 types implementing the `Widget` trait (`measure` + `draw` against a theme-aware `DrawContext`) plus the generic `ListView<T>` (also a `Widget`; a caller `fn` draws its items) and non-`Widget` helpers (MenuBar, NinePatch, flex/grid layout, focus management, tweens; easing curves come from `oasis_types::easing`). The catalogue with source paths is [ui-widgets.md](ui-widgets.md).
 
 ### 15.2 Accessibility
 
@@ -734,7 +736,7 @@ Build commands and feature flags are in [getting-started.md](getting-started.md)
 
 ### 17.2 CI Pipeline
 
-CI runs on self-hosted runners; every Rust step runs in the `rust-ci` Docker image (pinned to `rust:1.99-slim`), and the PSP steps use the rust-psp revision every PSP crate pins (CI checks the pins). `main-ci.yml` (pushes to `main`) gates on format, clippy with `-D warnings` over all targets and over the supported non-default feature sets, rustdoc with `-D warnings`, the markdown link check, tests (cargo-nextest + doc-tests), the release build, screenshot regression, cargo-deny, benchmarks, the `scripts/test_*.py` PSP tooling unit tests, warning-free PSP EBOOT / overlay PRX / recovery EBOOT builds (the overlay PRX is stripped with `prxmin` and held to a 192 KiB size budget) and a PPSSPP headless smoke test, and then deploys the WASM build to GitHub Pages. `pr-validation.yml` runs a subset on pull requests plus the Claude reviews and auto-fix agents. The step-by-step order is in [CLAUDE.md](../CLAUDE.md#ci-pipeline-order) and the agent workflow in [AGENTS.md](../AGENTS.md#ci-pipeline). Separate workflows run memory analysis (`memory-ci.yml`: ASAN, Valgrind massif), nightly streaming tests (`nightly-streaming.yml`) and fuzzing (`fuzz.yml`).
+CI runs on self-hosted runners; every Rust step runs in the `rust-ci` Docker image (pinned to `rust:1.99-slim`), and the PSP steps use the rust-psp revision every PSP crate pins (CI checks the pins). `main-ci.yml` (pushes to `main`) gates on format, clippy with `-D warnings` over all targets and over the supported non-default feature sets, rustdoc with `-D warnings`, the markdown link check, tests (cargo-nextest + doc-tests), the release build, screenshot regression, cargo-deny, the `scripts/test_*.py` PSP tooling unit tests, warning-free PSP EBOOT / overlay PRX / recovery EBOOT builds (the overlay PRX is stripped with `prxmin` and held to a 192 KiB size budget) and builds of the other standalone PSP crates and a PPSSPP headless smoke test, and then deploys the WASM build to GitHub Pages. `pr-validation.yml` runs a subset on pull requests (including the same feature-set checks, from the shared `scripts/ci-feature-clippy.sh`) plus the Claude reviews and auto-fix agents; criterion benchmarks run only on a manual `run_benchmarks` dispatch of either workflow. The step-by-step order is in [CLAUDE.md](../CLAUDE.md#ci-pipeline-order) and the agent workflow in [AGENTS.md](../AGENTS.md#ci-pipeline). Separate workflows run memory analysis (`memory-ci.yml`: ASAN, Valgrind massif), nightly streaming tests (`nightly-streaming.yml`) and fuzzing (`fuzz.yml`).
 
 ---
 

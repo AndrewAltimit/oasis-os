@@ -42,7 +42,7 @@ Per-platform dependencies, feature flags (`skin-dev`, `mcp`), environment variab
 
 **Shell and apps**
 - 15 apps: File Manager, Browser, TV Guide, Internet Radio, Music Player, Photo Viewer, Paint, Games, Calculator, Text Editor, Terminal, Settings, Network, Package Manager, System Monitor
-- Terminal with ~95 commands plus 20 shell builtins: piping, globs, aliases, `$(...)`, `if`/`while`/`for`/`case` scripting, background jobs, readline editing, tab completion, persistent history ([catalogue](docs/terminal-commands.md))
+- Terminal with ~95 commands plus 21 shell builtins: piping, globs, aliases, `$(...)`, `if`/`while`/`for`/`case` scripting, background jobs, readline editing, tab completion, persistent history ([catalogue](docs/terminal-commands.md))
 - Window manager with drag/resize, edge snapping with previews, Alt+Tab, five tiling layouts, virtual desktops and animations ([API](docs/window-manager.md))
 - TV Guide streams Internet Archive video (progressive download, CDN failover, an MP4 demuxer hardened against hostile files) with hardware H.264 decode on PSP and ffmpeg / openh264 on desktop; Internet Radio streams curated Archive collections; the Music Player shuffles, repeats and auto-advances
 
@@ -71,7 +71,7 @@ The PSP is the original muse and the most demanding target: a 2004 handheld with
 - **Hardware H.264 decode** on the Media Engine, a second MIPS CPU with no public homebrew documentation. We [reverse engineered the ME's RPC protocol](https://andrewaltimit.github.io/oasis-os/journal/07-psp-media-engine.html) and drive it from Rust; a kernel PRX watchdog recovers a firmware deadlock for indefinite stable streaming.
 - **In-memory streaming**: MP4 over TLS, demuxed on the fly, H.264 NAL units to the ME and AAC frames to `sceAudiocodec`, with no disk I/O during playback.
 - **A kernel-mode overlay PRX** that draws UI over any running game and plays background MP3s.
-- **Closed-loop remote development**: a [TCP command server](https://andrewaltimit.github.io/oasis-os/journal/08-remote-dev-automation.html) inside the EBOOT for WiFi build-deploy-test cycles, input injection and framebuffer capture, plus a 154 KB network recovery EBOOT (hold R on boot) that makes the device unbrickable. An AI agent used it to debug the whole H.264 pipeline -- 30+ deploy-test iterations in one session without touching the device.
+- **Closed-loop remote development**: a [TCP command server](https://andrewaltimit.github.io/oasis-os/journal/08-remote-dev-automation.html) inside the EBOOT for WiFi build-deploy-test cycles, input injection and framebuffer capture, plus a ~190 KB PSK-authenticated network recovery EBOOT (hold R on boot) that makes the device unbrickable. An AI agent used it to debug the whole H.264 pipeline -- 30+ deploy-test iterations in one session without touching the device.
 
 https://github.com/user-attachments/assets/3d84aea5-969c-4f38-af67-c088a7c37764
 
@@ -87,12 +87,12 @@ PSP builds, PPSSPP testing and the devloop scripts: [Getting Started § PSP](doc
 
 ## Architecture: write once, render anywhere
 
-Core code never calls platform APIs. Rendering, input, networking and audio go through backend traits in `oasis-types`: implement the 13 required `SdiCore` methods and you have a working backend; the 46 methods of the eight extension traits have defaults that draw the same pixels as the native rasterizers, so overriding them is only for speed. Every backend follows one drawing-state contract, pinned by conformance tests ([design §5](docs/design.md#5-backend-abstraction-layer), [ADR-003](docs/adr/003-backend-trait-design.md)).
+Core code never calls platform APIs. Rendering, input, networking and audio go through backend traits in `oasis-types`: implement the 12 required `SdiCore` methods and you have a working backend; the 45 methods of the eight extension traits have defaults that draw the same pixels as the native rasterizers, so overriding them is only for speed. Every backend follows one drawing-state contract, pinned by conformance tests ([design §5](docs/design.md#5-backend-abstraction-layer), [ADR-003](docs/adr/003-backend-trait-design.md)).
 
 ```mermaid
 graph TD
     APP["<b>OASIS_OS</b><br/>oasis-core + oasis-apps (10 app crates)<br/>27 widgets, browser, terminal<br/>17 skins, ~95 commands"]
-    TRAITS["<b>Backend Traits</b><br/>SdiCore (13 required) + 8 extension traits (46 defaults)<br/>InputBackend / NetworkBackend / AudioBackend"]
+    TRAITS["<b>Backend Traits</b><br/>SdiCore (12 required) + 8 extension traits (45 defaults)<br/>InputBackend / NetworkBackend / AudioBackend"]
 
     SDL["<b>SDL3</b><br/>Desktop + Pi"]
     WASM["<b>WASM</b><br/>Canvas 2D"]
@@ -132,8 +132,8 @@ graph TD
 | `oasis-backend-psp` | The shell EBOOT: sceGu rendering, controller input, ME video decode (in the workspace `exclude` list) |
 | `oasis-plugin-psp` | Kernel-mode overlay PRX: in-game UI + background MP3 |
 | `oasis-recovery-psp` | Network recovery EBOOT (WiFi TCP file server for unbricking) |
-| `oasis-devloop-psp` | Remote dev-automation PRX (WiFi TCP command server) |
-| `oasis-me-boot` | Minimal kernel PRX that boots the Media Engine (clean-room replacement for cooleyesBridge) |
+| `oasis-devloop-psp` | Remote dev-automation kernel PRX (polls `ms0:/seplugins/devloop_cmd.txt`: reboot, launch, screenshot) |
+| `oasis-me-boot` | Minimal kernel PRX that boots the Media Engine (clean-room replacement for cooleyesBridge); the EBOOT loads it from its GAME directory before H.264 decode |
 | `oasis-prx-decrypt-psp` | Kirk-based flash0 PRX decryptor |
 | `oasis-usb-client-psp`, `oasis-usb-debug-psp`, `oasis-usb-trace-psp`, `oasis-usb-vbus-psp` | USB thin-client driver and USB host-mode / VBUS research |
 
@@ -148,7 +148,7 @@ The full index is [docs/README.md](docs/README.md). Start with:
 - [ADRs](docs/adr/README.md), [Security](docs/security.md), [Troubleshooting](docs/troubleshooting.md), [Examples](examples/README.md)
 - [CHANGELOG](CHANGELOG.md), [CONTRIBUTING](CONTRIBUTING.md) (AI-authored contributions only), [AGENTS.md](AGENTS.md) (agent workflow and CI)
 
-CI runs on self-hosted runners, the Rust steps inside the pinned `rust-ci` Docker image: format, clippy (workspace plus non-default feature sets), docs, markdown links, tests, release build, screenshot regression, cargo-deny, benchmarks, coverage, warning-free PSP builds and a PPSSPP smoke test, then the WASM deploy to GitHub Pages ([pipeline order](CLAUDE.md#ci-pipeline-order)).
+CI runs on self-hosted runners, the Rust steps inside the pinned `rust-ci` Docker image: format, clippy (workspace plus non-default feature sets, on PRs too), docs, markdown links, tests, release build, screenshot regression, cargo-deny, coverage, warning-free PSP builds and a PPSSPP smoke test, then the WASM deploy to GitHub Pages ([pipeline order](CLAUDE.md#ci-pipeline-order)).
 
 ## Security notice
 

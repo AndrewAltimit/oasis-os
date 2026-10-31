@@ -14,6 +14,11 @@
 //! Editing an app crate rebuilds this bundle and the hosts, not
 //! `oasis-core`. The PSP backend doesn't use `AppRunner` and imports the
 //! app crates it needs (`oasis-app-tv-guide`) directly.
+//!
+//! # Feature flags
+//!
+//! - `video-embed` — the WASM host's YouTube "Video Embed" app (Invidious search,
+//!   playback in the host's iframe overlay). Enabled by `oasis-backend-wasm/wasm-youtube`.
 
 use std::sync::Arc;
 

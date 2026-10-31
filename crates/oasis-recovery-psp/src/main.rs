@@ -8,11 +8,15 @@
 //!
 //! 1. User holds R-trigger during PSP boot → ARK loads this instead of OASIS OS
 //! 2. Recovery connects to saved WiFi profile (no dialog needed)
-//! 3. TCP server on port 9293 accepts file upload commands
-//! 4. Host pushes fixed EBOOT/PRX files over WiFi
+//! 3. TCP server on port 9293 accepts file upload commands, after the
+//!    PSK challenge-response (see [`auth`] for where the key is looked up)
+//! 4. Host pushes fixed EBOOT/PRX files over WiFi (`scripts/psp_remote.py`
+//!    with `PSP_PSK`)
 //! 5. User reboots normally → fixed OASIS OS loads
 //!
 //! ## TCP Commands (same protocol as oasis-backend-psp cmd_server)
+//!
+//! Every connection first answers `AUTH_REQUIRED <nonce>` (see [`auth`]).
 //!
 //!   ping                      → "pong\n"
 //!   upload <size> <path>      → receive file and write to ms0:
@@ -34,6 +38,8 @@
 #![no_main]
 
 psp::module!("OasisRecovery", 1, 0);
+
+mod auth;
 
 use core::ffi::c_void;
 
@@ -102,9 +108,26 @@ fn psp_main() {
     print("  ls <path>               - list directory\n");
     print("  reboot                  - cold restart\n");
     print("  status                  - system info\n\n");
+    let psk = match auth::load_psk() {
+        Some((psk, path)) => {
+            print(&format!("PSK: {path}\n"));
+            Some(psk)
+        },
+        None => {
+            print("\n** No PSK: every connection will be refused **\n");
+            print(&format!(
+                "Put an {}+ byte key in {}\n(or {})\n",
+                auth::MIN_PSK_LEN,
+                auth::KEY_PATHS[0],
+                auth::KEY_PATHS[1]
+            ));
+            print("and reboot into recovery, or use USB mode.\n\n");
+            None
+        },
+    };
     print("Waiting for connections...\n\n");
 
-    server_main();
+    server_main(psk.as_deref());
 }
 
 // ---------------------------------------------------------------------------
@@ -145,7 +168,7 @@ fn auto_connect_wifi() -> bool {
 // TCP server
 // ---------------------------------------------------------------------------
 
-fn server_main() {
+fn server_main(psk: Option<&str>) {
     // SAFETY: plain integer arguments (AF_INET, SOCK_STREAM, default protocol).
     let fd = unsafe { psp::sys::sceNetInetSocket(2, 1, 0) };
     if fd < 0 {
@@ -195,7 +218,16 @@ fn server_main() {
             continue;
         }
 
-        handle_client(cfd);
+        // Unauthenticated peers get 10 s to answer the challenge; then a
+        // 30 s receive timeout so a stalled upload cannot wedge the server.
+        auth::set_recv_timeout(cfd, 10);
+        if auth::authenticate(cfd, psk) {
+            auth::set_recv_timeout(cfd, 30);
+            handle_client(cfd);
+        } else {
+            // SAFETY: closes the accepted socket once; it is not used afterwards.
+            unsafe { psp::sys::sceNetInetClose(cfd) };
+        }
     }
 }
 

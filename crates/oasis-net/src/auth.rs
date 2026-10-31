@@ -14,6 +14,27 @@
 //! encrypted: commands and output travel in clear, so use the listener on
 //! trusted networks or tunnel it (e.g. over SSH).
 //!
+//! # Relay limitation
+//!
+//! The answer proves knowledge of the PSK for *this* nonce, but the nonce
+//! is not bound to the server's identity: nothing in the exchange tells
+//! the client which server issued it. A man-in-the-middle the client
+//! connects to (a spoofed address, a lookalike host) can open its own
+//! connection to the real server, hand the client that server's challenge
+//! and forward the answer, and is then logged in as the client. Binding
+//! a server name or address into the HMAC would not close this without
+//! an authenticated channel: the server cannot know which address or
+//! name the client dialled (NAT, port forwards, `0.0.0.0` binds), and an
+//! on-path attacker can relay the whole plaintext session anyway. The
+//! PSK therefore authenticates the client to whoever relays it; it does
+//! not authenticate the server. Use trusted networks or a tunnel that
+//! authenticates the server (SSH).
+//!
+//! What the client does limit ([`is_valid_nonce`]): it answers exactly
+//! one challenge per connection, and only a nonce of the documented form,
+//! so a malicious server cannot use it as an HMAC oracle over arbitrary
+//! text or harvest many answers from one connection.
+//!
 //! The answer can be computed by hand with OpenSSL:
 //!
 //! ```text
@@ -23,6 +44,7 @@
 use std::time::{Duration, Instant};
 
 use oasis_types::crypto::{hex, hmac_sha256};
+use oasis_types::util::ct_eq;
 
 /// Failed attempts before the throttle locks authentication out.
 pub(crate) const MAX_AUTH_FAILURES: u32 = 5;
@@ -35,10 +57,38 @@ pub(crate) const AUTH_RATE_LIMIT_BASE_SECS: u64 = 30;
 /// so idle unauthenticated peers cannot hold every connection slot.
 pub(crate) const AUTH_TIMEOUT: Duration = Duration::from_secs(20);
 
+/// Length of a challenge nonce: 128 bits as lowercase hex digits. Every
+/// server (desktop listener, PSP EBOOT, recovery EBOOT, overlay PRX)
+/// issues nonces of exactly this form.
+pub const NONCE_HEX_LEN: usize = 32;
+
+/// Whether `nonce` has the form every server issues ([`NONCE_HEX_LEN`]
+/// lowercase hex digits). The client refuses to answer anything else.
+pub fn is_valid_nonce(nonce: &str) -> bool {
+    nonce.len() == NONCE_HEX_LEN
+        && nonce
+            .bytes()
+            .all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
+}
+
 /// The answer to an `AUTH_REQUIRED <nonce>` challenge: lowercase hex of
 /// HMAC-SHA256 keyed with `psk` over the nonce text.
 pub fn psk_response(psk: &str, nonce: &str) -> String {
     hex(&hmac_sha256(psk.as_bytes(), nonce.as_bytes()))
+}
+
+/// Whether `line` is a correct `AUTH <response>` answer to the challenge
+/// `nonce` under `psk`, compared in constant time. Surrounding whitespace
+/// (the line terminator included) is ignored.
+///
+/// Shared by the remote terminal listener and the PSP EBOOT's dev command
+/// server, so both speak exactly one challenge-response protocol.
+pub fn verify_auth_line(psk: &str, nonce: &str, line: &str) -> bool {
+    let expected = psk_response(psk, nonce);
+    line.trim()
+        .strip_prefix("AUTH ")
+        .map(str::trim)
+        .is_some_and(|answer| ct_eq(answer.as_bytes(), expected.as_bytes()))
 }
 
 /// Server-wide throttle for failed authentication attempts.
@@ -117,7 +167,36 @@ mod tests {
         assert_eq!(a.len(), 64);
         assert_eq!(a, psk_response("s3cret", "00112233"));
         assert_ne!(a, psk_response("s3cret", "00112234"));
+        // RFC 2104 HMAC-SHA256 over the nonce text; scripts/test_psp_remote.py
+        // pins the same vector for the Python client.
+        assert_eq!(
+            psk_response("key", "abc"),
+            "9c196e32dc0175f86f4b1cb89289d6619de6bee699e4c378e68309ed97a1a6ab"
+        );
         assert_ne!(a, psk_response("s3cres", "00112233"));
+    }
+
+    #[test]
+    fn verify_auth_line_accepts_only_the_right_answer() {
+        let nonce = "0123456789abcdef0123456789abcdef";
+        let good = format!("AUTH {}\r\n", psk_response("s3cret", nonce));
+        assert!(verify_auth_line("s3cret", nonce, &good));
+        assert!(!verify_auth_line("s3cres", nonce, &good));
+        assert!(!verify_auth_line("s3cret", "00", &good));
+        // The bare PSK (what pre-challenge clients sent) is rejected.
+        assert!(!verify_auth_line("s3cret", nonce, "AUTH s3cret"));
+        assert!(!verify_auth_line("s3cret", nonce, &good[5..]));
+        assert!(!verify_auth_line("s3cret", nonce, ""));
+    }
+
+    #[test]
+    fn nonce_form_is_strict() {
+        assert!(is_valid_nonce("0123456789abcdef0123456789abcdef"));
+        assert!(!is_valid_nonce("0123456789ABCDEF0123456789abcdef"));
+        assert!(!is_valid_nonce("0123456789abcdef"));
+        assert!(!is_valid_nonce("0123456789abcdef0123456789abcdef00"));
+        assert!(!is_valid_nonce("GET / HTTP/1.1 0123456789abcdef01"));
+        assert!(!is_valid_nonce(""));
     }
 
     #[test]

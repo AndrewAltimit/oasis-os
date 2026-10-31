@@ -3,8 +3,10 @@
 use oasis_types::error::OasisError;
 use oasis_types::util::base64;
 
-use crate::cmd_helpers::time_seed;
+use crate::cmd_helpers::{FlagSpec, parse_flags, time_seed};
 use crate::interpreter::CommandOutput;
+
+const BASE64_USAGE: &str = "base64 [-d|--decode] [text]";
 
 // ---------------------------------------------------------------------------
 // base64
@@ -14,22 +16,20 @@ define_command!(
     Base64Cmd,
     "base64",
     "Encode/decode base64",
-    "base64 [-d] <text>",
+    BASE64_USAGE,
     "dev",
     |args, env| {
-        let mut decode = false;
-        let mut text_parts = Vec::new();
-        for &arg in args {
-            if arg == "-d" || arg == "--decode" {
-                decode = true;
-            } else {
-                text_parts.push(arg);
-            }
-        }
-        let input = if text_parts.is_empty() {
+        let spec = FlagSpec {
+            switches: "d",
+            valued: "",
+            long: &[("decode", 'd')],
+        };
+        let flags = parse_flags(args, &spec, BASE64_USAGE)?;
+        let decode = flags.has('d');
+        let input = if flags.positional.is_empty() {
             env.stdin.clone().unwrap_or_default()
         } else {
-            text_parts.join(" ")
+            flags.positional.join(" ")
         };
 
         if decode {

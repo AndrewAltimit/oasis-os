@@ -38,6 +38,23 @@ pub fn default_window_size(screen_w: u32, screen_h: u32) -> (u32, u32) {
     (w, h)
 }
 
+/// `(top, bottom)` screen rows the shell chrome keeps on a skin: the
+/// status bar plus, when the skin shows it, the top tab row, and the
+/// bottom bar. Hosts hand them to
+/// [`crate::wm::WindowManager::set_placement_insets`] so new windows open
+/// below the tab row instead of over it.
+pub fn chrome_insets(
+    at: &crate::active_theme::ActiveTheme,
+    features: &crate::skin::SkinFeatures,
+) -> (u32, u32) {
+    let tab_row = if features.show_tabs {
+        at.tab_row_height.max(u32::try_from(at.tab_h).unwrap_or(0))
+    } else {
+        0
+    };
+    (at.statusbar_height + tab_row, at.bottombar_height)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -55,5 +72,19 @@ mod tests {
         assert_eq!(default_window_size(1920, 1080), (768, 486));
         // Never larger than the screen.
         assert_eq!(default_window_size(320, 200), (320, 200));
+    }
+
+    #[test]
+    fn chrome_insets_count_the_tab_row_only_when_shown() {
+        let skin = crate::skin::resolve_skin("psix-hifi").unwrap();
+        let at = crate::active_theme::ActiveTheme::from_skin(&skin.theme)
+            .with_screen_size(skin.manifest.screen_width, skin.manifest.screen_height);
+        assert!(skin.features.show_tabs);
+        let (top, bottom) = chrome_insets(&at, &skin.features);
+        assert!(top >= at.statusbar_height + at.tab_row_height);
+        assert_eq!(bottom, at.bottombar_height);
+        let mut no_tabs = skin.features.clone();
+        no_tabs.show_tabs = false;
+        assert_eq!(chrome_insets(&at, &no_tabs).0, at.statusbar_height);
     }
 }

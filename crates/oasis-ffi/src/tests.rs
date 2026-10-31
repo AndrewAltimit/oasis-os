@@ -237,6 +237,79 @@ fn null_callback_unregisters() {
 }
 
 #[test]
+fn callbacks_ex_pass_user_data_back() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    static CMD_DATA: AtomicUsize = AtomicUsize::new(0);
+    static AUDIO_DATA: AtomicUsize = AtomicUsize::new(0);
+    extern "C" fn cb(_event: u32, _detail: *const c_char, user_data: *mut std::ffi::c_void) {
+        CMD_DATA.store(user_data as usize, Ordering::SeqCst);
+    }
+    extern "C" fn audio_cb(_e: u32, _t: u64, _v: u32, user_data: *mut std::ffi::c_void) {
+        AUDIO_DATA.store(user_data as usize, Ordering::SeqCst);
+    }
+
+    let mut context = [0u8; 2];
+    let cmd_ptr = (&raw mut context[0]).cast::<std::ffi::c_void>();
+    let audio_ptr = (&raw mut context[1]).cast::<std::ffi::c_void>();
+    let handle = create_instance();
+    unsafe { oasis_register_callback_ex(handle, OASIS_CB_COMMAND_EXEC, Some(cb), cmd_ptr) };
+    unsafe { oasis_set_audio_callback_ex(handle, Some(audio_cb), audio_ptr) };
+
+    let cmd = CString::new("help").unwrap();
+    let out = unsafe { oasis_send_command(handle, cmd.as_ptr()) };
+    unsafe { oasis_free_string(out) };
+    assert!(unsafe { oasis_audio_set_volume(handle, 10) });
+    assert_eq!(CMD_DATA.load(Ordering::SeqCst), cmd_ptr as usize);
+    assert_eq!(AUDIO_DATA.load(Ordering::SeqCst), audio_ptr as usize);
+
+    // Null unregisters, as with the plain exports.
+    unsafe { oasis_register_callback_ex(handle, OASIS_CB_COMMAND_EXEC, None, cmd_ptr) };
+    let empty = unsafe {
+        crate::handle::with_instance_ref(handle, false, |inst| inst.callbacks.is_empty())
+    };
+    assert!(empty);
+    unsafe { oasis_destroy(handle) };
+}
+
+#[test]
+fn audio_drain_stream_copies_streamed_bytes() {
+    use oasis_core::backend::AudioBackend;
+
+    let handle = create_instance();
+    unsafe {
+        crate::handle::with_instance(handle, (), |inst| {
+            let track = inst.audio.load_streaming().unwrap();
+            inst.audio.feed_data(track, b"radio-bytes").unwrap();
+        });
+    }
+    assert_eq!(unsafe { oasis_audio_stream_buffered(handle) }, 11);
+    let mut buf = [0u8; 5];
+    assert_eq!(
+        unsafe { oasis_audio_drain_stream(handle, buf.as_mut_ptr(), 5) },
+        5
+    );
+    assert_eq!(&buf, b"radio");
+    let mut rest = [0u8; 64];
+    assert_eq!(
+        unsafe { oasis_audio_drain_stream(handle, rest.as_mut_ptr(), 64) },
+        6
+    );
+    assert_eq!(&rest[..6], b"-bytes");
+    assert_eq!(unsafe { oasis_audio_stream_buffered(handle) }, 0);
+    assert_eq!(
+        unsafe { oasis_audio_drain_stream(handle, std::ptr::null_mut(), 64) },
+        0
+    );
+    unsafe { oasis_destroy(handle) };
+    let null = std::ptr::null_mut();
+    assert_eq!(
+        unsafe { oasis_audio_drain_stream(null, rest.as_mut_ptr(), 64) },
+        0
+    );
+    assert_eq!(unsafe { oasis_audio_stream_buffered(null) }, 0);
+}
+
+#[test]
 fn add_vfs_file_null_data_with_zero_len_creates_empty_file() {
     let handle = create_instance();
     let path = CString::new("/tmp/zero.txt").unwrap();
@@ -827,4 +900,143 @@ fn static_background_layers_are_baked_once() {
         "the bake is reused, not redone per frame"
     );
     unsafe { oasis_destroy(handle) };
+}
+
+/// Run `cmd` and return its output text.
+fn run(handle: *mut OasisInstance, cmd: &str) -> String {
+    let c = CString::new(cmd).unwrap();
+    let out = unsafe { oasis_send_command(handle, c.as_ptr()) };
+    assert!(!out.is_null(), "{cmd}");
+    let text = unsafe { CStr::from_ptr(out) }.to_str().unwrap().to_string();
+    unsafe { oasis_free_string(out) };
+    text
+}
+
+thread_local! {
+    /// The handle callbacks in the re-entrancy test call back into.
+    static REENTER_HANDLE: std::cell::Cell<*mut OasisInstance> =
+        const { std::cell::Cell::new(std::ptr::null_mut()) };
+    /// Results the re-entrant calls saw: (send_command was null, dirty).
+    static REENTER_SEEN: std::cell::RefCell<Vec<(bool, bool)>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+    /// Details of `OASIS_CB_SHELL_OUTPUT` callbacks.
+    static SHELL_OUTPUT: std::cell::RefCell<Vec<String>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// A callback that calls back into the API with the handle that fired it
+/// is refused (the export holding the instance would be aliased), and so
+/// is destroying that handle from inside the callback.
+#[test]
+fn reentrant_calls_from_callbacks_are_refused() {
+    extern "C" fn reenter(_event: u32, _detail: *const c_char) {
+        let h = REENTER_HANDLE.with(std::cell::Cell::get);
+        let cmd = CString::new("echo nested").unwrap();
+        let out = unsafe { oasis_send_command(h, cmd.as_ptr()) };
+        let null = out.is_null();
+        unsafe { oasis_free_string(out) };
+        let dirty = unsafe { oasis_get_dirty(h) };
+        unsafe { oasis_destroy(h) };
+        REENTER_SEEN.with(|s| s.borrow_mut().push((null, dirty)));
+    }
+
+    let handle = create_instance();
+    REENTER_HANDLE.with(|h| h.set(handle));
+    unsafe { oasis_tick(handle, 0.016) }; // dirty: a re-entrant read would clear it
+    unsafe { oasis_register_callback(handle, OASIS_CB_COMMAND_EXEC, Some(reenter)) };
+    assert_eq!(run(handle, "echo outer"), "outer");
+    assert_eq!(
+        REENTER_SEEN.with(|s| s.borrow().clone()),
+        vec![(true, false)]
+    );
+    // The handle survived the refused destroy and is no longer marked busy.
+    unsafe { oasis_register_callback(handle, OASIS_CB_COMMAND_EXEC, None) };
+    assert_eq!(run(handle, "echo after"), "after");
+    assert!(unsafe { oasis_get_dirty(handle) }, "dirty flag left alone");
+    unsafe { oasis_destroy(handle) };
+}
+
+/// A NaN / infinite / negative frame time does not freeze the clock-driven
+/// idle render.
+#[test]
+fn bad_tick_deltas_do_not_stall_rendering() {
+    let handle = create_instance();
+    for bad in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY, -50.0] {
+        unsafe { oasis_tick(handle, 0.016) };
+        unsafe { oasis_get_dirty(handle) };
+        unsafe { oasis_tick(handle, bad) };
+        unsafe { oasis_get_dirty(handle) };
+        unsafe { oasis_tick(handle, 1.0) };
+        assert!(unsafe { oasis_get_dirty(handle) }, "stalled after {bad}");
+    }
+    assert!(unsafe { &*handle }.clock.is_finite());
+    unsafe { oasis_destroy(handle) };
+}
+
+/// After days of uptime frame-sized ticks still advance the clock (an
+/// `f32` accumulator stopped at ~6 days and froze the idle render).
+#[test]
+fn clock_keeps_advancing_after_days() {
+    let handle = create_instance();
+    unsafe {
+        (*handle).clock = 600_000.0;
+        (*handle).last_render_time = 600_000.0;
+    }
+    unsafe { oasis_get_dirty(handle) };
+    for _ in 0..30 {
+        unsafe { oasis_tick(handle, 1.0 / 60.0) };
+    }
+    assert!(unsafe { oasis_get_dirty(handle) }, "idle render never came");
+    unsafe { oasis_destroy(handle) };
+}
+
+/// Background `cmd &` jobs and `cron` jobs run from `oasis_tick` and
+/// report through `OASIS_CB_SHELL_OUTPUT`.
+#[test]
+fn background_and_cron_jobs_run_on_tick() {
+    extern "C" fn on_output(event: u32, detail: *const c_char) {
+        assert_eq!(event, OASIS_CB_SHELL_OUTPUT);
+        let text = unsafe { CStr::from_ptr(detail) }
+            .to_string_lossy()
+            .into_owned();
+        SHELL_OUTPUT.with(|s| s.borrow_mut().push(text));
+    }
+    let take = || SHELL_OUTPUT.with(|s| std::mem::take(&mut *s.borrow_mut()));
+
+    let handle = create_instance();
+    unsafe { oasis_register_callback(handle, OASIS_CB_SHELL_OUTPUT, Some(on_output)) };
+    run(handle, "echo from-job &");
+    unsafe { oasis_tick(handle, 0.016) };
+    let out = take();
+    assert_eq!(out.len(), 1, "{out:?}");
+    assert!(out[0].contains("from-job"), "{out:?}");
+
+    run(handle, "echo echo cronned > /tmp/job.sh");
+    let added = run(handle, "cron add j 1s /tmp/job.sh");
+    assert!(added.contains("every 1s"), "{added}");
+    unsafe { oasis_tick(handle, 0.5) }; // first seen: scheduled for +1 s
+    assert!(take().is_empty());
+    unsafe { oasis_tick(handle, 0.9) };
+    assert!(take().is_empty());
+    unsafe { oasis_tick(handle, 0.2) };
+    assert_eq!(take(), vec!["[cron j] cronned".to_string()]);
+    unsafe { oasis_tick(handle, 0.5) };
+    assert!(take().is_empty());
+    unsafe { oasis_destroy(handle) };
+}
+
+/// Unredirected stderr (here a failed command substitution) reaches the
+/// host with the command's output.
+#[test]
+fn send_command_returns_stderr() {
+    let handle = create_instance();
+    let out = run(handle, "echo a$(no_such_command)b");
+    assert!(out.contains("command substitution"), "{out:?}");
+    unsafe { oasis_destroy(handle) };
+}
+
+#[test]
+fn c_strings_replace_interior_nuls() {
+    let c = crate::handle::to_c_string_lossy("a\0b".to_string());
+    assert_eq!(c.to_str().unwrap(), "a\u{FFFD}b");
 }

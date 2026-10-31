@@ -163,9 +163,10 @@ impl CssParser {
                 },
                 CssToken::OpenBracket => {
                     self.advance();
-                    if let Some(attr_sel) = self.parse_attribute_selector() {
-                        parts.push(attr_sel);
-                    }
+                    // A malformed attribute selector matches nothing
+                    // (dropping it would widen the selector).
+                    let attr_sel = self.parse_attribute_selector();
+                    parts.push(attr_sel.unwrap_or(SimpleSelector::Is(Vec::new())));
                 },
                 _ => break,
             }
@@ -201,27 +202,21 @@ impl CssParser {
     /// Parse the argument of a functional pseudo-class (after its name
     /// token) and push the resulting simple selector.
     fn parse_selector_function(&mut self, lc: &str, parts: &mut Vec<SimpleSelector>) {
-        if lc == "not" {
-            // Parse :not(selector-list). Selectors Level 4 allows a
-            // comma-separated list of compound selectors here.
-            let inner_list = self.parse_compound_selector_list();
-            self.skip_whitespace();
+        if lc == "not" || lc == "is" || lc == "where" {
+            // Selectors Level 4: a comma-separated list of complex
+            // selectors. `:is()` / `:where()` take a forgiving list
+            // (invalid entries are dropped); an invalid entry makes
+            // `:not()` match nothing rather than widen the selector.
+            let (inner_list, any_invalid) = self.parse_complex_selector_list();
             if self.peek() == &CssToken::CloseParen {
                 self.advance();
             }
-            parts.push(SimpleSelector::Not(inner_list));
-        } else if lc == "is" || lc == "where" {
-            // Parse :is(selector-list) / :where(selector-list)
-            let inner_list = self.parse_compound_selector_list();
-            self.skip_whitespace();
-            if self.peek() == &CssToken::CloseParen {
-                self.advance();
-            }
-            if lc == "is" {
-                parts.push(SimpleSelector::Is(inner_list));
-            } else {
-                parts.push(SimpleSelector::Where(inner_list));
-            }
+            parts.push(match lc {
+                "not" if any_invalid => SimpleSelector::Is(Vec::new()),
+                "not" => SimpleSelector::Not(inner_list),
+                "is" => SimpleSelector::Is(inner_list),
+                _ => SimpleSelector::Where(inner_list),
+            });
         } else if lc == "has" {
             // Parse :has(relative-selector-list).
             let inner_list = self.parse_relative_selector_list();
@@ -282,27 +277,50 @@ impl CssParser {
         list
     }
 
-    /// Parse a comma-separated list of compound selectors inside `:is()` / `:where()`.
-    ///
-    /// Stops at `)` (does not consume it).
-    fn parse_compound_selector_list(&mut self) -> Vec<CompoundSelector> {
+    /// Parse the comma-separated complex selector list inside `:is()` /
+    /// `:where()` / `:not()`, and whether any entry was invalid (and
+    /// skipped). Stops at the closing `)` (does not consume it).
+    fn parse_complex_selector_list(&mut self) -> (Vec<Selector>, bool) {
         let mut list = Vec::new();
+        let mut any_invalid = false;
         loop {
             self.skip_whitespace();
-            if self.peek() == &CssToken::CloseParen || self.peek() == &CssToken::Eof {
+            if matches!(self.peek(), CssToken::CloseParen | CssToken::Eof) {
                 break;
             }
-            if let Some(compound) = self.parse_compound_selector() {
-                list.push(compound);
-            }
+            let sel = self.parse_selector();
             self.skip_whitespace();
+            match (sel, self.peek()) {
+                (Some(sel), CssToken::Comma | CssToken::CloseParen | CssToken::Eof) => {
+                    list.push(sel);
+                },
+                _ => {
+                    any_invalid = true;
+                    self.skip_to_list_separator();
+                },
+            }
             if self.peek() == &CssToken::Comma {
                 self.advance();
             } else {
                 break;
             }
         }
-        list
+        (list, any_invalid)
+    }
+
+    /// Skip to the next `,` or `)` at this nesting level (not consumed).
+    fn skip_to_list_separator(&mut self) {
+        let mut depth = 0usize;
+        loop {
+            match self.peek() {
+                CssToken::Eof => break,
+                CssToken::Comma | CssToken::CloseParen if depth == 0 => break,
+                CssToken::OpenParen | CssToken::Function(_) => depth += 1,
+                CssToken::CloseParen => depth -= 1,
+                _ => {},
+            }
+            self.advance();
+        }
     }
 
     // -- attribute selector / pseudo-class helpers ---------------------
@@ -335,117 +353,165 @@ impl CssParser {
         arg.trim().to_string()
     }
 
-    /// Parse an attribute selector after `[` has been consumed.
-    /// Returns `SimpleSelector::Attribute { .. }`.
+    /// Skip to (and consume) the `]` closing an attribute selector.
+    fn skip_past_close_bracket(&mut self) {
+        while self.peek() != &CssToken::CloseBracket && self.peek() != &CssToken::Eof {
+            self.advance();
+        }
+        if self.peek() == &CssToken::CloseBracket {
+            self.advance();
+        }
+    }
+
+    /// Parse an attribute selector after `[` has been consumed:
+    /// `[name]`, `[name op value]` or `[name op value i|s]`.
+    ///
+    /// A malformed selector yields `None`; the caller turns it into a
+    /// never-matching part rather than silently widening the selector.
     fn parse_attribute_selector(&mut self) -> Option<SimpleSelector> {
         self.skip_whitespace();
-        let name = match self.peek().clone() {
-            CssToken::Ident(n) => {
-                self.advance();
-                n
-            },
-            _ => {
-                // Skip to `]`.
-                while self.peek() != &CssToken::CloseBracket && self.peek() != &CssToken::Eof {
-                    self.advance();
-                }
-                if self.peek() == &CssToken::CloseBracket {
-                    self.advance();
-                }
-                return None;
-            },
+        let CssToken::Ident(name) = self.peek().clone() else {
+            self.skip_past_close_bracket();
+            return None;
         };
-
+        self.advance();
         self.skip_whitespace();
 
-        // Check for operator or `]`.
         if self.peek() == &CssToken::CloseBracket {
             self.advance();
             return Some(SimpleSelector::Attribute {
                 name,
                 op: AttrOp::Exists,
                 value: None,
+                case_insensitive: false,
             });
         }
 
-        // Parse operator: =, ~=, |=, ^=, $=, *=
-        let op = match self.peek().clone() {
-            CssToken::Delim('=') => {
-                self.advance();
-                AttrOp::Equals
-            },
-            CssToken::Delim('~') => {
-                self.advance();
-                // Expect `=`.
-                if self.peek() == &CssToken::Delim('=') {
-                    self.advance();
-                }
-                AttrOp::Includes
-            },
-            CssToken::Delim('|') => {
-                self.advance();
-                if self.peek() == &CssToken::Delim('=') {
-                    self.advance();
-                }
-                AttrOp::DashMatch
-            },
-            CssToken::Delim('^') => {
-                self.advance();
-                if self.peek() == &CssToken::Delim('=') {
-                    self.advance();
-                }
-                AttrOp::Prefix
-            },
-            CssToken::Delim('$') => {
-                self.advance();
-                if self.peek() == &CssToken::Delim('=') {
-                    self.advance();
-                }
-                AttrOp::Suffix
-            },
-            CssToken::Star => {
-                self.advance();
-                if self.peek() == &CssToken::Delim('=') {
-                    self.advance();
-                }
-                AttrOp::Substring
-            },
+        // Operator: =, ~=, |=, ^=, $=, *=
+        let op = match self.peek() {
+            CssToken::Delim('=') => AttrOp::Equals,
+            CssToken::Delim('~') => AttrOp::Includes,
+            CssToken::Delim('|') => AttrOp::DashMatch,
+            CssToken::Delim('^') => AttrOp::Prefix,
+            CssToken::Delim('$') => AttrOp::Suffix,
+            CssToken::Star => AttrOp::Substring,
             _ => {
-                // Unknown operator, skip to `]`.
-                while self.peek() != &CssToken::CloseBracket && self.peek() != &CssToken::Eof {
-                    self.advance();
-                }
-                if self.peek() == &CssToken::CloseBracket {
-                    self.advance();
-                }
-                return Some(SimpleSelector::Attribute {
-                    name,
-                    op: AttrOp::Exists,
-                    value: None,
-                });
+                self.skip_past_close_bracket();
+                return None;
             },
         };
-
+        self.advance();
+        if op != AttrOp::Equals {
+            if self.peek() != &CssToken::Delim('=') {
+                self.skip_past_close_bracket();
+                return None;
+            }
+            self.advance();
+        }
         self.skip_whitespace();
 
-        // Parse value (ident or string).
+        // Value: ident or string.
         let value = match self.peek().clone() {
-            CssToken::Ident(v) => {
+            CssToken::Ident(v) | CssToken::String(v) => {
                 self.advance();
-                Some(v)
+                v
             },
-            CssToken::String(v) => {
+            _ => {
+                self.skip_past_close_bracket();
+                return None;
+            },
+        };
+        self.skip_whitespace();
+
+        // Optional case-sensitivity flag (Selectors 4 §6.3).
+        let flag = match self.peek().clone() {
+            CssToken::Ident(f) => {
                 self.advance();
-                Some(v)
+                self.skip_whitespace();
+                match f.to_ascii_lowercase().as_str() {
+                    "i" => Some(true),
+                    "s" => Some(false),
+                    _ => {
+                        self.skip_past_close_bracket();
+                        return None;
+                    },
+                }
             },
             _ => None,
         };
-
-        self.skip_whitespace();
-        if self.peek() == &CssToken::CloseBracket {
-            self.advance();
+        if self.peek() != &CssToken::CloseBracket {
+            self.skip_past_close_bracket();
+            return None;
         }
+        self.advance();
 
-        Some(SimpleSelector::Attribute { name, op, value })
+        let case_insensitive =
+            flag.unwrap_or_else(|| html_case_insensitive_attribute(&name.to_ascii_lowercase()));
+        let value = if case_insensitive {
+            value.to_ascii_lowercase()
+        } else {
+            value
+        };
+        Some(SimpleSelector::Attribute {
+            name,
+            op,
+            value: Some(value),
+            case_insensitive,
+        })
     }
+}
+
+/// HTML attributes whose values attribute selectors compare
+/// ASCII-case-insensitively unless the selector carries an `s` flag
+/// (HTML §4.16.2 "case-sensitivity of selectors").
+fn html_case_insensitive_attribute(name: &str) -> bool {
+    matches!(
+        name,
+        "accept"
+            | "accept-charset"
+            | "align"
+            | "alink"
+            | "axis"
+            | "bgcolor"
+            | "charset"
+            | "checked"
+            | "clear"
+            | "codetype"
+            | "color"
+            | "compact"
+            | "declare"
+            | "defer"
+            | "dir"
+            | "direction"
+            | "disabled"
+            | "enctype"
+            | "face"
+            | "frame"
+            | "hreflang"
+            | "http-equiv"
+            | "lang"
+            | "language"
+            | "link"
+            | "media"
+            | "method"
+            | "multiple"
+            | "nohref"
+            | "noresize"
+            | "noshade"
+            | "nowrap"
+            | "readonly"
+            | "rel"
+            | "rev"
+            | "rules"
+            | "scope"
+            | "scrolling"
+            | "selected"
+            | "shape"
+            | "target"
+            | "text"
+            | "type"
+            | "valign"
+            | "valuetype"
+            | "vlink"
+    )
 }

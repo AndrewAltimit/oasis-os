@@ -265,14 +265,7 @@ impl BrowserWidget {
 
         match data.method {
             crate::forms::FormMethod::Get => {
-                // Append form data as query string.
-                let url = if encoded.is_empty() {
-                    resolved_action
-                } else if resolved_action.contains('?') {
-                    format!("{resolved_action}&{encoded}")
-                } else {
-                    format!("{resolved_action}?{encoded}")
-                };
+                let url = replace_query(&resolved_action, &encoded);
                 self.visited_urls.insert(url.clone());
                 self.navigate_vfs(&url, vfs);
             },
@@ -282,5 +275,43 @@ impl BrowserWidget {
                 self.navigate_post(&resolved_action, body, vfs);
             },
         }
+    }
+}
+
+/// A GET form's target: `action` with its query replaced by `query`
+/// and its fragment kept (HTML "mutate action URL"). Appending instead
+/// stacked `?q=a&q=b&...` on every resubmit of a results page, and put
+/// the query after a `#fragment`.
+fn replace_query(action: &str, query: &str) -> String {
+    let (rest, fragment) = match action.split_once('#') {
+        Some((rest, fragment)) => (rest, Some(fragment)),
+        None => (action, None),
+    };
+    let base = rest.split_once('?').map_or(rest, |(base, _)| base);
+    let mut url = base.to_string();
+    if !query.is_empty() {
+        url.push('?');
+        url.push_str(query);
+    }
+    if let Some(fragment) = fragment {
+        url.push('#');
+        url.push_str(fragment);
+    }
+    url
+}
+
+#[cfg(test)]
+mod tests {
+    use super::replace_query;
+
+    #[test]
+    fn get_form_replaces_the_action_query() {
+        assert_eq!(replace_query("http://a/s", "q=x"), "http://a/s?q=x");
+        assert_eq!(
+            replace_query("http://a/s?q=old&p=2", "q=x"),
+            "http://a/s?q=x"
+        );
+        assert_eq!(replace_query("http://a/s#top", "q=x"), "http://a/s?q=x#top");
+        assert_eq!(replace_query("http://a/s?q=1", ""), "http://a/s");
     }
 }

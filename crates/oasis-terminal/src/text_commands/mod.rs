@@ -34,30 +34,60 @@ pub fn register_text_commands(reg: &mut CommandRegistry) {
 // Helpers
 // ---------------------------------------------------------------------------
 
-/// Parse `-n N` flag from args, returning (count, optional file path).
-fn parse_n_flag<'a>(args: &[&'a str], default: usize) -> Result<(usize, Option<&'a str>)> {
-    let mut n = default;
-    let mut file = None;
-    let mut i = 0;
-    while i < args.len() {
-        if args[i] == "-n" {
-            i += 1;
-            if i < args.len() {
-                n = args[i]
-                    .parse()
-                    .map_err(|_| OasisError::Command("invalid number".into()))?;
-            }
-        } else {
-            file = Some(args[i]);
+/// Parse `head` / `tail` arguments: `-n N`, `-nN` or the historical `-N`,
+/// and at most one file. Returns (count, optional file path).
+fn parse_n_flag<'a>(
+    args: &[&'a str],
+    default: usize,
+    usage: &str,
+) -> Result<(usize, Option<&'a str>)> {
+    let bad_count = |v: &str| OasisError::Command(format!("invalid line count: {v}").into());
+    let mut n = None;
+    // Only plain digits: `usize::from_str` takes `+5`, which would make
+    // `tail -n +5` (POSIX "from line 5") print the last 5 lines.
+    let count = |v: &str| -> Result<usize> {
+        if v.is_empty() || !v.bytes().all(|b| b.is_ascii_digit()) {
+            return Err(bad_count(v));
         }
-        i += 1;
+        v.parse().map_err(|_| bad_count(v))
+    };
+    let mut rest = Vec::with_capacity(args.len());
+    let mut operands_only = false;
+    for &arg in args {
+        if operands_only {
+            rest.push(arg);
+            continue;
+        }
+        match arg.strip_prefix('-') {
+            // After `--` a `-5` is a file name (`head -- -5`).
+            Some("-") => {
+                operands_only = true;
+                rest.push(arg);
+            },
+            Some(digits) if !digits.is_empty() && digits.bytes().all(|b| b.is_ascii_digit()) => {
+                n = Some(digits.parse().map_err(|_| bad_count(digits))?);
+            },
+            _ => rest.push(arg),
+        }
     }
-    Ok((n, file))
+    let spec = crate::cmd_helpers::FlagSpec {
+        switches: "",
+        valued: "n",
+        long: &[("lines", 'n')],
+    };
+    let flags = crate::cmd_helpers::parse_flags(&rest, &spec, usage)?;
+    if let Some(v) = flags.value('n') {
+        n = Some(count(v)?);
+    }
+    match flags.positional[..] {
+        [] => Ok((n.unwrap_or(default), None)),
+        [file] => Ok((n.unwrap_or(default), Some(file))),
+        _ => Err(OasisError::Command(format!("usage: {usage}").into())),
+    }
 }
-
 /// Read text from a file path or stdin.
 fn read_text_input(file: Option<&str>, env: &mut Environment<'_>) -> Result<String> {
-    if let Some(path) = file {
+    if let Some(path) = file.filter(|&p| p != "-") {
         let full = resolve_path(&env.cwd, path);
         let data = env.vfs.read(&full)?;
         Ok(String::from_utf8_lossy(&data).into_owned())

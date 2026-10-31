@@ -8,12 +8,20 @@
 //! This is intentionally self-contained — we vendor a small curated
 //! subset of fixtures rather than pulling the full html5lib-tests
 //! repository (~20k tests, many of which exercise features we
-//! deliberately don't implement: full SVG namespacing with camelCase
-//! fixup, adoption agency corner cases beyond the 8-iteration limit,
-//! SVG integration points, MathML `<annotation-xml>`, etc.). Fixtures
-//! focus on the features we *do* claim to support: basic tree
-//! construction, the full adoption agency algorithm, foreign content
-//! breakout, and `<template>` parsing.
+//! deliberately don't implement: framesets, namespaced dumps, fragment
+//! parsing). `tree_construction_basic.dat` covers basic construction,
+//! the adoption agency, foreign-content breakout and `<template>`;
+//! `tree_construction_spec.dat` the table / caption / column-group /
+//! select modes, formatting markers, foster parenting, SVG / MathML
+//! integration points and head handling; `tree_construction_modes.dat`
+//! the "in template" mode, quirks mode, raw-text elements in body,
+//! `<noscript>` with scripting on and off, and adoption-agency foster
+//! parenting. Expected dumps omit the html5lib namespace prefixes (the
+//! DOM stores none) and DOCTYPE lines (the DOM keeps no doctype node);
+//! template contents are dumped under a `content` line, as html5lib
+//! does, although they are the `<template>`'s children here. A
+//! `#script-off` case parses with scripting off. Every case runs
+//! through both `TreeBuilder::parse` and `TreeBuilder::build`.
 //!
 //! The harness fails with a unified diff on mismatch so regressions
 //! are easy to read. To extend coverage, drop additional `.dat` files
@@ -21,14 +29,21 @@
 
 use oasis_html::dom::{Document, NodeId, NodeKind};
 use oasis_html::tokenizer::Tokenizer;
-use oasis_html::tree_builder::TreeBuilder;
+use oasis_html::tree_builder::{ParseOptions, TreeBuilder};
 
-const FIXTURE_FILES: &[&str] = &["tree_construction_basic.dat"];
+const FIXTURE_FILES: &[&str] = &[
+    "tree_construction_basic.dat",
+    "tree_construction_spec.dat",
+    "tree_construction_modes.dat",
+];
 
 #[derive(Debug)]
 struct TestCase {
     data: String,
     expected: String,
+    /// Whether the case runs with scripting on (`#script-off` turns it
+    /// off).
+    scripting: bool,
     /// Human-readable label for failure messages — the fixture file
     /// name plus 1-based test index within that file.
     label: String,
@@ -77,6 +92,7 @@ fn parse_dat(contents: &str, file: &str) -> Vec<TestCase> {
         let mut in_data = true;
         let mut expected = String::new();
         let mut in_document = false;
+        let mut scripting = true;
         while let Some(line) = lines.next() {
             match line {
                 "#errors" => {
@@ -96,6 +112,7 @@ fn parse_dat(contents: &str, file: &str) -> Vec<TestCase> {
                 },
                 "#script-off" | "#script-on" => {
                     in_data = false;
+                    scripting = line == "#script-on";
                 },
                 _ if line == "#data" => {
                     // Start of the next test — unread it by
@@ -108,6 +125,7 @@ fn parse_dat(contents: &str, file: &str) -> Vec<TestCase> {
                     cases.push(TestCase {
                         data: data.clone(),
                         expected: expected.clone(),
+                        scripting,
                         label: label.clone(),
                     });
                     // Re-inject by recursing on the remainder.
@@ -133,7 +151,7 @@ fn parse_dat(contents: &str, file: &str) -> Vec<TestCase> {
                             data.push('\n');
                         }
                         data.push_str(line);
-                    } else if in_document {
+                    } else if in_document && !line.starts_with("| <!DOCTYPE") {
                         expected.push_str(line);
                         expected.push('\n');
                     }
@@ -144,6 +162,7 @@ fn parse_dat(contents: &str, file: &str) -> Vec<TestCase> {
         cases.push(TestCase {
             data,
             expected,
+            scripting,
             label,
         });
     }
@@ -189,8 +208,17 @@ fn dump_node(doc: &Document, id: NodeId, depth: usize, out: &mut String) {
                 out.push_str(&attr.value);
                 out.push_str("\"\n");
             }
+            // html5lib dumps template contents under a `content` line.
+            let child_depth = if data.tag.as_str() == "template" {
+                out.push_str("| ");
+                out.push_str(&attr_indent);
+                out.push_str("content\n");
+                depth + 2
+            } else {
+                depth + 1
+            };
             for &c in &doc.get(id).children {
-                dump_node(doc, c, depth + 1, out);
+                dump_node(doc, c, child_depth, out);
             }
         },
         NodeKind::Text(s) => {
@@ -257,19 +285,27 @@ fn run_fixture(file: &str) -> (usize, Vec<String>) {
     let mut failures = Vec::new();
     let total = cases.len();
     for case in cases {
-        let tokens = Tokenizer::new(&case.data).tokenize();
-        let doc = TreeBuilder::build(tokens);
-        let actual = dump_document(&doc);
-        // Normalize trailing whitespace so fixture EOF conventions
-        // don't drive false failures.
-        let expected_n = case.expected.trim_end().to_string();
-        let actual_n = actual.trim_end().to_string();
-        if actual_n != expected_n {
-            let diff = diff_lines(&expected_n, &actual_n);
-            failures.push(format!(
-                "\n==== FAIL {} ====\ninput: {:?}\n{diff}",
-                case.label, case.data
-            ));
+        // Both entry points: the pull parser the browser uses, and the
+        // pre-tokenized stream.
+        let options = ParseOptions {
+            scripting: case.scripting,
+        };
+        let pulled = TreeBuilder::parse_with(&case.data, options);
+        let tokens = Tokenizer::with_scripting(&case.data, case.scripting).tokenize();
+        let built = TreeBuilder::build_with(tokens, options);
+        for (how, doc) in [("parse", pulled), ("build", built)] {
+            let actual = dump_document(&doc);
+            // Normalize trailing whitespace so fixture EOF conventions
+            // don't drive false failures.
+            let expected_n = case.expected.trim_end().to_string();
+            let actual_n = actual.trim_end().to_string();
+            if actual_n != expected_n {
+                let diff = diff_lines(&expected_n, &actual_n);
+                failures.push(format!(
+                    "\n==== FAIL {} ({how}) ====\ninput: {:?}\n{diff}",
+                    case.label, case.data
+                ));
+            }
         }
     }
     (total, failures)

@@ -19,6 +19,7 @@ pub struct StdNetworkBackend {
 }
 
 impl StdNetworkBackend {
+    /// A backend with no listener and the default connect timeout.
     pub fn new() -> Self {
         Self {
             listener: None,
@@ -162,6 +163,7 @@ pub struct StdNetworkStream {
 }
 
 impl StdNetworkStream {
+    /// Wrap a connected `TcpStream` (its blocking mode is left as is).
     pub fn new(stream: TcpStream) -> Self {
         Self { stream }
     }

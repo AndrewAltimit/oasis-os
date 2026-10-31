@@ -13,6 +13,7 @@ on:
         default: false
 
 permissions:
+  actions: read
   contents: write
   pull-requests: write
   issues: write
@@ -91,6 +92,14 @@ jobs:
         timeout-minutes: 10
         run: docker compose --profile ci run --rm rust-ci cargo clippy --workspace --all-targets -- -D warnings
 
+      # -- Feature-set checks ------------------------------------------------
+      # Same script as main-ci.yml: the oasis-app feature-combination check and
+      # clippy over the supported non-default feature sets, which the workspace
+      # clippy never compiles. Without it here a PR can pass and break main.
+      - name: Clippy (non-default feature sets)
+        timeout-minutes: 25
+        run: docker compose --profile ci run --rm rust-ci scripts/ci-feature-clippy.sh
+
       # -- Nightly Warnings Check (advisory) -----------------------------------
       - name: Nightly warnings check
         timeout-minutes: 10
@@ -160,6 +169,8 @@ jobs:
         run: |
           docker compose --profile ci run --rm \
             -e SDL_VIDEODRIVER=dummy -e SDL_RENDER_DRIVER=software \
+            -e OASIS_FIXED_TIME="2025-06-15 12:00:00" \
+            -e OASIS_FIXED_FRAME=0 \
             rust-ci scripts/run-release-bin.sh screenshot-tests
 
       - name: Upload screenshot report
@@ -168,6 +179,7 @@ jobs:
         with:
           name: screenshot-report
           path: screenshots/tests/
+          if-no-files-found: ignore
           retention-days: 14
 
       # -- License / Advisory ------------------------------------------------
@@ -182,20 +194,40 @@ jobs:
       # Run explicitly via:
       #   Actions -> Pull Request Validation -> Run workflow
       #   (set "Run criterion benchmark regression gate" to true)
-      # main-ci.yml still publishes the canonical baseline on every
-      # push to main.
-      - name: Download main branch baseline
+      # main-ci.yml publishes the baseline from a main run dispatched with
+      # run_benchmarks (artifact kept 90 days).
+      # Only GitHub-maintained tooling here (gh CLI + actions/download-artifact):
+      # find the newest unexpired criterion-baseline from main-ci on main, then
+      # download it from that run.
+      - name: Find main branch baseline
+        id: baseline
+        timeout-minutes: 5
         if: github.event_name == 'workflow_dispatch' && inputs.run_benchmarks
         continue-on-error: true
-        uses: dawidd6/action-download-artifact@v6
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          RUN_ID=$(gh api "repos/$GITHUB_REPOSITORY/actions/artifacts?name=criterion-baseline&per_page=100" \
+            --jq '[.artifacts[] | select(.expired | not)
+                   | select(.workflow_run.head_branch == "main")][0].workflow_run.id // empty')
+          if [ -z "$RUN_ID" ]; then
+            echo "::warning::No criterion-baseline artifact from main; the gate has no baseline"
+          fi
+          echo "run_id=$RUN_ID" >> "$GITHUB_OUTPUT"
+
+      - name: Download main branch baseline
+        timeout-minutes: 5
+        if: steps.baseline.outputs.run_id != ''
+        continue-on-error: true
+        uses: actions/download-artifact@v8
         with:
-          workflow: main-ci.yml
-          branch: main
           name: criterion-baseline
           path: baseline-criterion/
-          if_no_artifact_found: warn
+          run-id: ${{ steps.baseline.outputs.run_id }}
+          github-token: ${{ github.token }}
 
       - name: Benchmarks
+        timeout-minutes: 60
         if: github.event_name == 'workflow_dispatch' && inputs.run_benchmarks
         run: |
           set -o pipefail
@@ -206,6 +238,7 @@ jobs:
           echo "::endgroup::"
 
       - name: Benchmark regression gate
+        timeout-minutes: 5
         if: github.event_name == 'workflow_dispatch' && inputs.run_benchmarks
         run: |
           BENCH_GATE=1 bash scripts/bench-compare.sh \
@@ -252,6 +285,7 @@ jobs:
 
       # -- PSP Backend Build -------------------------------------------------
       - name: Check rust-psp pins
+        timeout-minutes: 2
         run: scripts/check-rust-psp-rev.sh "$RUST_PSP_REV"
 
       # Stdlib-only unit tests for the PSP remote tool (scripts/psp_remote.py).
@@ -261,11 +295,13 @@ jobs:
         run: python3 -m unittest discover -s scripts -p "test_*.py" -v
 
       - name: Install cargo-psp
+        timeout-minutes: 30
         uses: ./.github/actions/install-cargo-psp
         with:
           rev: ${{ env.RUST_PSP_REV }}
 
       - name: Build PSP EBOOT
+        timeout-minutes: 30
         run: |
           cd crates/oasis-backend-psp
           RUST_PSP_BUILD_STD=1 cargo psp --release --config "$PSP_DENY_WARNINGS"
@@ -274,6 +310,7 @@ jobs:
       # Boots OASIS-OS (normal boot + built-in self-test); fails on a crash,
       # an early exit or missing boot markers.
       - name: PSP smoke test (PPSSPPHeadless)
+        timeout-minutes: 15
         env:
           PSP_SMOKE_WORKDIR: ${{ runner.temp }}/psp-smoke
         run: >-

@@ -25,6 +25,34 @@
   <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&amp;display=swap" rel="stylesheet">
   <link rel="stylesheet" href="../css/site.css">
   <link rel="stylesheet" href="../css/journal.css">
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "BlogPosting",
+    "headline": "One Codebase, Five Platforms",
+    "description": "How trait-based backend abstraction enables a single Rust OS codebase to render across SDL3, WebAssembly, PSP, Unreal Engine 5, and a kernel-mode overlay.",
+    "datePublished": "2026-03-11",
+    "url": "https://andrewaltimit.github.io/oasis-os/journal/01-unified-embedded-os.html",
+    "mainEntityOfPage": "https://andrewaltimit.github.io/oasis-os/journal/01-unified-embedded-os.html",
+    "image": "https://andrewaltimit.github.io/oasis-os/img/og-card.png",
+    "keywords": [
+      "architecture",
+      "rust",
+      "traits"
+    ],
+    "author": {
+      "@type": "Person",
+      "name": "AndrewAltimit",
+      "url": "https://github.com/AndrewAltimit"
+    },
+    "isPartOf": {
+      "@type": "Blog",
+      "name": "OASIS_OS Developer's Journal",
+      "url": "https://andrewaltimit.github.io/oasis-os/journal/"
+    },
+    "dateModified": "2026-10"
+  }
+  </script>
 </head>
 <body class="page-article">
 
@@ -46,6 +74,7 @@
         <li><a href="../#skins">Skins</a></li>
         <li><a href="../#features">Features</a></li>
         <li><a href="../#architecture">Architecture</a></li>
+        <li><a href="../crates.html">Crates</a></li>
         <li><a href="../#psp">PSP</a></li>
         <li><a href="../journal/" aria-current="page">Journal</a></li>
         <li><a href="../#start">Build</a></li>
@@ -73,6 +102,7 @@
       <div><dt>Entry</dt><dd>01</dd></div>
       <div><dt>Published</dt><dd><time datetime="2026-03-11">Mar 11, 2026</time></dd></div>
       <div><dt>Reading time</dt><dd>7 min</dd></div>
+      <div><dt>Updated</dt><dd>Oct 2026</dd></div>
     </dl>
     <ul class="article__tags" aria-label="Tags"><li>architecture</li><li>rust</li><li>traits</li></ul>
   </header>
@@ -119,20 +149,20 @@
   <div class="diagram">
     <pre><code><span class="hl-bright">Backend Trait Hierarchy</span> <span class="hl-dim">(current API, Oct 2026)</span>
 
-<span class="hl-accent">SdiCore</span> <span class="hl-dim">(13 required methods — every backend must implement)</span>
+<span class="hl-accent">SdiCore</span> <span class="hl-dim">(12 required methods — every backend must implement)</span>
 ├── init, shutdown
 ├── clear, swap_buffers
 ├── fill_rect, blit, load_texture, destroy_texture
-├── draw_text, measure_text
+├── draw_text
 ├── set_clip_rect, reset_clip_rect
 ├── read_pixels
-└── <span class="hl-dim">provided:</span> viewport_size
+└── <span class="hl-dim">provided:</span> measure_text (bitmap font), viewport_size
 
-<span class="hl-purple">SdiBackend</span> <span class="hl-dim">(marker: 8 extension traits, 46 default methods)</span>
+<span class="hl-purple">SdiBackend</span> <span class="hl-dim">(marker: 8 extension traits, 45 default methods)</span>
 ├── <span class="hl-accent">SdiShapes</span>        rounded rects, lines, circles, triangles, shadows
 ├── <span class="hl-accent">SdiGradients</span>     fill_rect_gradient, fill_rounded_rect_gradient
 ├── <span class="hl-accent">SdiText</span>          set_font, metrics, draw_text_styled / _wrapped
-├── <span class="hl-accent">SdiTextures</span>      blit_sub, blit_tinted, blit_sub_tinted, blit_flipped
+├── <span class="hl-accent">SdiTextures</span>      blit_sub, blit_tinted
 ├── <span class="hl-accent">SdiClipTransform</span> push/pop clip, translate and region stacks
 ├── <span class="hl-accent">SdiVector</span>        polygons, polylines, arcs, dashed lines
 ├── <span class="hl-accent">SdiBatch</span>         submit_rect_batch, submit_text_batch
@@ -142,7 +172,6 @@
 <span class="hl-accent">NetworkBackend</span>   listen, accept, connect → NetworkStream; optional TLS
 <span class="hl-accent">AudioBackend</span>     load_track, play, pause, set_volume, streaming PCM</code></pre>
     <div class="diagram-caption">The five backend traits that define the entire platform abstraction boundary</div>
-  </div>
   </div>
 
   <p>
@@ -162,7 +191,7 @@
 
   <aside class="callout update" role="note">
     <div class="callout-title">Update (Oct 2026)</div>
-    <p>The diagram above shows the API as it is today; the paragraph above describes it as written in March. The trait definitions have since moved out of a single <code>backend.rs</code> into the <code>oasis-types/src/backend/</code> directory, one file per extension trait under <code>extensions/</code>. <code>SdiBackend</code> is now a marker over <strong>eight</strong> extension traits carrying <strong>46</strong> default methods: <code>SdiRenderTarget</code> (offscreen render targets) was added, and <code>SdiAlpha</code> was removed (<code>viewport_size</code> became a provided <code>SdiCore</code> method; translucent fills are <code>fill_rect</code> with an alpha color), as were the never-used <code>begin_batch</code> / <code>flush_batch</code> hooks. <code>current_clip_rect</code> returns <code>Option&lt;ClipRect&gt;</code>. The defaults are span-exact software implementations, so a backend still starts with the 13 core methods and overrides only what its hardware accelerates.</p>
+    <p>The diagram above shows the API as it is today; the paragraph above describes it as written in March. The trait definitions have since moved out of a single <code>backend.rs</code> into the <code>oasis-types/src/backend/</code> directory, one file per extension trait under <code>extensions/</code>. <code>SdiBackend</code> is now a marker over <strong>eight</strong> extension traits carrying <strong>45</strong> default methods: <code>SdiRenderTarget</code> (offscreen render targets) was added, and <code>SdiAlpha</code> was removed (<code>viewport_size</code> became a provided <code>SdiCore</code> method; translucent fills are <code>fill_rect</code> with an alpha color), as were the never-used <code>begin_batch</code> / <code>flush_batch</code> hooks and the <code>blit_sub_tinted</code> / <code>blit_flipped</code> texture methods. <code>measure_text</code> became a provided method that measures the bitmap font, which leaves <strong>12</strong> required <code>SdiCore</code> methods. <code>current_clip_rect</code> returns <code>Option&lt;ClipRect&gt;</code>. The defaults are span-exact software implementations, so a backend still starts with the 12 required core methods and overrides only what its hardware accelerates.</p>
   </aside>
 
 
@@ -247,7 +276,7 @@ graph TD
 
   <aside class="callout update" role="note">
     <div class="callout-title">Update (Oct 2026)</div>
-    <p>The &ldquo;&lt;64KB&rdquo; was a target, not a measurement. Measured today, the overlay PRX is about 153&nbsp;KB on disk after rust-psp&rsquo;s <code>prxmin</code> stripping and about 212&nbsp;KB resident; CI fails the build if it grows past 192&nbsp;KiB. It still has no <code>oasis-core</code> dependency.</p>
+    <p>The &ldquo;&lt;64KB&rdquo; was a target, not a measurement. Measured today, the overlay PRX is about 159&nbsp;KB on disk after rust-psp&rsquo;s <code>prxmin</code> stripping and about 212&nbsp;KB resident; CI fails the build if it grows past 192&nbsp;KiB. It still has no <code>oasis-core</code> dependency.</p>
   </aside>
 
   <h2 id="the-crate-dependency-graph"><a class="anchor" href="#the-crate-dependency-graph" aria-hidden="true" tabindex="-1">#</a>The Crate Dependency Graph</h2>
@@ -384,7 +413,7 @@ graph TD
       <tr><td>SdiBackend extended methods</td><td>39</td></tr>
       <tr><td>Backend trait files to implement</td><td>6 (backend/ directory)</td></tr>
     </tbody>
-  </table>
+  </table></div>
 
   <aside class="callout update" role="note">
     <div class="callout-title">Update (Oct 2026)</div>
@@ -394,18 +423,22 @@ graph TD
       <tbody>
         <tr><td>Crates</td><td>34 workspace</td><td>41 workspace + 10 PSP-target (51 dirs)</td></tr>
         <tr><td>UI widgets</td><td>32</td><td>27 <code>Widget</code> impls, plus ListView, MenuBar, NinePatch</td></tr>
-        <tr><td>Terminal</td><td>90+ commands</td><td>~95 commands + 20 shell builtins</td></tr>
+        <tr><td>Terminal</td><td>90+ commands</td><td>~95 commands + 21 shell builtins</td></tr>
         <tr><td>Skins</td><td>18</td><td>17, every one a TOML directory in <code>skins/</code></td></tr>
         <tr><td>Apps</td><td>16 (12 crates)</td><td>15 (10 <code>oasis-app-*</code> crates + Terminal + Browser)</td></tr>
-        <tr><td>SdiBackend default methods</td><td>39 (8 traits)</td><td>46 (8 traits)</td></tr>
+        <tr><td>SdiCore required methods</td><td>13</td><td>12 (+ <code>measure_text</code>, <code>viewport_size</code> provided)</td></tr>
+        <tr><td>SdiBackend default methods</td><td>39 (8 traits)</td><td>45 (8 traits)</td></tr>
       </tbody>
     </table></div>
   </aside>
-</div>
     </div>
   </div>
 
   <footer class="article__foot wrap">
+  <div class="article__end">
+    <ul class="article__tags" aria-label="Tags"><li>architecture</li><li>rust</li><li>traits</li></ul>
+    <p class="article__end-links"><a href="#main">Back to top <span aria-hidden="true">&uarr;</span></a><a href="./">All entries</a><a href="https://github.com/AndrewAltimit/oasis-os">Browse the code</a></p>
+  </div>
   <nav class="pager" aria-label="More entries">
     <a class="pager__link pager__link--prev" href="./"><span class="pager__dir">&larr; Journal</span><span class="pager__title">All entries</span></a>
     <a class="pager__link pager__link--next" href="02-tls-on-psp.html" rel="next"><span class="pager__dir">Next &middot; 02 &rarr;</span><span class="pager__title">TLS 1.3 on a 2004 Handheld</span></a>
@@ -415,22 +448,48 @@ graph TD
 </main>
 
 <footer class="footer">
-  <div class="wrap footer__inner">
+  <div class="wrap footer__grid">
     <div class="footer__brand">
-      <span class="brand__name">OASIS<span class="brand__us">_</span>OS</span>
-      <p>Built from scratch in Rust. Dual-licensed MIT + Unlicense.</p>
+      <a class="brand" href="../" aria-label="OASIS_OS home">
+        <span class="brand__mark" aria-hidden="true"></span>
+        <span class="brand__name">OASIS<span class="brand__us">_</span>OS</span>
+      </a>
+      <p>An embeddable OS framework, built from scratch in Rust. One shell, any pixel buffer.</p>
+      <p class="footer__status mono" aria-hidden="true">333MHz &middot; 480&times;272 &middot; v1.6.0</p>
     </div>
-    <nav aria-label="Footer">
-      <ul class="footer__links">
-        <li><a href="../">Home</a></li>
-        <li><a href="../demo/">Live demo</a></li>
-        <li><a href="../journal/">Journal</a></li>
-        <li><a href="../blueprint.html">Blueprints</a></li>
-        <li><a href="https://github.com/AndrewAltimit/oasis-os">GitHub</a></li>
-        <li><a href="https://github.com/AndrewAltimit/oasis-os/blob/main/docs/README.md">Docs</a></li>
-      </ul>
+    <nav class="footer__nav" aria-label="Footer">
+      <div>
+        <p class="footer__head">Explore</p>
+        <ul class="footer__links">
+          <li><a href="../">Home</a></li>
+          <li><a href="../demo/">Live demo</a></li>
+          <li><a href="../crates.html">Crate map</a></li>
+          <li><a href="../blueprint.html">Blueprints</a></li>
+        </ul>
+      </div>
+      <div>
+        <p class="footer__head">Read</p>
+        <ul class="footer__links">
+          <li><a href="../journal/">Developer&rsquo;s journal</a></li>
+          <li><a href="https://github.com/AndrewAltimit/oasis-os/blob/main/docs/README.md">Documentation</a></li>
+          <li><a href="https://github.com/AndrewAltimit/oasis-os/blob/main/docs/getting-started.md">Getting started</a></li>
+          <li><a href="https://github.com/AndrewAltimit/oasis-os/blob/main/CHANGELOG.md">Changelog</a></li>
+        </ul>
+      </div>
+      <div>
+        <p class="footer__head">Project</p>
+        <ul class="footer__links">
+          <li><a href="https://github.com/AndrewAltimit/oasis-os">GitHub</a></li>
+          <li><a href="https://github.com/AndrewAltimit/oasis-os/releases">Releases</a></li>
+          <li><a href="https://github.com/AndrewAltimit/oasis-os/blob/main/CONTRIBUTING.md">Contributing</a></li>
+          <li><a href="https://github.com/AndrewAltimit/oasis-os/blob/main/LICENSE">License</a></li>
+        </ul>
+      </div>
     </nav>
-    <p class="footer__status mono" aria-hidden="true">333MHz &middot; 480&times;272 &middot; v1.4.0</p>
+  </div>
+  <div class="wrap footer__base">
+    <p>Dual-licensed MIT + Unlicense.</p>
+    <a class="footer__top" href="#main">Back to top <span aria-hidden="true">&uarr;</span></a>
   </div>
 </footer>
 

@@ -64,19 +64,10 @@ pub fn apply_filters(color: Color, filters: &[FilterFunction]) -> Color {
                 b = (luma + (b - luma) * factor).clamp(0.0, 255.0);
             },
             FilterFunction::HueRotate(deg) => {
-                let rad = deg.to_radians();
-                let cos = rad.cos();
-                let sin = rad.sin();
-                // Hue rotation matrix (approximate, from CSS spec).
-                let nr = (0.213 + cos * 0.787 - sin * 0.213) * r
-                    + (0.715 - cos * 0.715 - sin * 0.715) * g
-                    + (0.072 - cos * 0.072 + sin * 0.928) * b;
-                let ng = (0.213 - cos * 0.213 + sin * 0.143) * r
-                    + (0.715 + cos * 0.285 + sin * 0.140) * g
-                    + (0.072 - cos * 0.072 - sin * 0.283) * b;
-                let nb = (0.213 - cos * 0.213 - sin * 0.787) * r
-                    + (0.715 - cos * 0.715 + sin * 0.715) * g
-                    + (0.072 + cos * 0.928 + sin * 0.072) * b;
+                let m = super::filter_chain::hue_rotate_matrix(deg);
+                let nr = m[0] * r + m[1] * g + m[2] * b;
+                let ng = m[3] * r + m[4] * g + m[5] * b;
+                let nb = m[6] * r + m[7] * g + m[8] * b;
                 r = nr.clamp(0.0, 255.0);
                 g = ng.clamp(0.0, 255.0);
                 b = nb.clamp(0.0, 255.0);

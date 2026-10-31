@@ -129,6 +129,19 @@ impl Skin {
         let corrupted_modifiers = doc
             .corrupted
             .or_else(|| doc.features.corrupted.then(CorruptedModifiers::default));
+        // Which theme / strings keys the document sets (for inheritance).
+        let table: toml::Table = toml_str.parse().unwrap_or_default();
+        let keys = |name: &str| {
+            table
+                .get(name)
+                .and_then(toml::Value::as_table)
+                .map(|t| t.keys().cloned().collect())
+                .unwrap_or_default()
+        };
+        let explicit_keys = crate::loader::ExplicitKeys {
+            theme: keys("theme"),
+            strings: keys("strings"),
+        };
         Ok(Self {
             manifest: doc.manifest,
             layout: doc.layout,
@@ -140,6 +153,7 @@ impl Skin {
             assets: std::collections::HashMap::new(),
             font_assets: std::collections::HashMap::new(),
             sound_assets: std::collections::HashMap::new(),
+            explicit_keys,
         })
     }
 

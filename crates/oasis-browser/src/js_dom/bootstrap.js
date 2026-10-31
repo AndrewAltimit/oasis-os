@@ -17,6 +17,9 @@
   // (`a.parentNode === b`) and expando properties work. Entries are
   // evicted when the Rust side frees a node's arena slot (innerHTML /
   // textContent writes), because the slot may be reused for a new node.
+  // A wrapper the script still holds is retired at the same time (its id
+  // becomes -1, which every binding treats as a dead node), so it can
+  // never alias the node that later reuses the slot.
   var __cache = Object.create(null);
   // Event listeners: key (node id, or 'w' for window) -> type -> entries.
   var __listeners = Object.create(null);
@@ -36,7 +39,8 @@
       default: return null;
     }
     w = Object.create(proto);
-    Object.defineProperty(w, '__oasis_node_id', {value: nid});
+    // Configurable so `__sync_freed` can retire it.
+    Object.defineProperty(w, '__oasis_node_id', {value: nid, configurable: true});
     __cache[nid] = w;
     return w;
   }
@@ -60,6 +64,10 @@
   function __sync_freed() {
     var ids = __oasis_take_freed();
     for (var i = 0; i < ids.length; i++) {
+      var stale = __cache[ids[i]];
+      if (stale !== undefined && stale !== document) {
+        Object.defineProperty(stale, '__oasis_node_id', {value: -1});
+      }
       delete __cache[ids[i]];
       delete __listeners[ids[i]];
     }
@@ -85,10 +93,11 @@
   }
 
   // Node-creating bindings return -1 once the document is at the
-  // script node cap (`MAX_SCRIPT_DOM_NODES`).
+  // script node cap (`MAX_SCRIPT_DOM_NODES`) or its text / attribute
+  // byte cap (`MAX_SCRIPT_DOM_BYTES`).
   function __new_id(nid) {
     if (nid < 0) {
-      throw new DOMException('The document has too many nodes.', 'QuotaExceededError');
+      throw new DOMException('The document is too large.', 'QuotaExceededError');
     }
     return nid;
   }

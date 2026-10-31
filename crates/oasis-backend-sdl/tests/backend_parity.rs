@@ -195,7 +195,7 @@ fn shader_bridge_streams_exact_pixels() {
         let mut bridge = SdlShaderBridge::new(w, h).expect("bridge");
         for (i, &t) in [0.0f32, 1.25, 2.5].iter().enumerate() {
             sdl.clear(Color::BLACK).expect("clear");
-            bridge.render_and_blit(sdl, "balatro", t, &params);
+            bridge.render_and_blit(sdl, "balatro", f64::from(t), &params);
             let want = reference.render_shader("balatro", t, &params).to_vec();
             assert_shows(sdl, &want, w, h, &format!("shade pass {i} (t={t})"));
         }
@@ -301,6 +301,46 @@ fn texture_misuse_is_rejected() {
         sdl_bad.is_empty() && ue5_bad.is_empty(),
         "sdl: {sdl_bad:?}\nue5: {ue5_bad:?}"
     );
+}
+
+/// Text and rect batches draw exactly the pixels of the same items drawn
+/// one by one (`SdiBatch` contract), on SDL and the software framebuffer.
+#[test]
+fn batches_match_single_draws() {
+    let sdl_bad = with_sdl(CANVAS_W, CANVAS_H, |sdl| {
+        conformance::batch_matches_singles(sdl as &mut dyn SdiBackend)
+    });
+    let mut ue5 = Ue5Backend::new(CANVAS_W, CANVAS_H);
+    let ue5_bad = conformance::batch_matches_singles(&mut ue5 as &mut dyn SdiBackend);
+    assert!(
+        sdl_bad.is_empty() && ue5_bad.is_empty(),
+        "sdl: {sdl_bad:?}\nue5: {ue5_bad:?}"
+    );
+}
+
+/// A window resize while a render target is bound resets the window's
+/// clip and translation once the bind chain unwinds (they used to come
+/// back from before the resize).
+#[test]
+fn window_resize_while_bound_resets_the_window_state() {
+    let px = with_sdl(64, 32, |sdl| {
+        use oasis_types::backend::{SdiClipTransform, SdiRenderTarget};
+        sdl.push_translate(5, 5).expect("translate");
+        sdl.push_clip_rect(0, 0, 4, 4).expect("clip");
+        let rt = sdl.create_render_target(8, 8).expect("create");
+        sdl.bind_render_target(rt).expect("bind");
+        sdl.set_window_size(80, 40).expect("resize");
+        sdl.unbind_render_target().expect("unbind");
+        sdl.destroy_render_target(rt).expect("destroy");
+        assert_eq!(sdl.current_clip_rect(), None);
+        assert_eq!(sdl.current_translate(), (0, 0));
+        assert_eq!(sdl.viewport_size(), (80, 40));
+        sdl.clear(Color::BLACK).expect("clear");
+        sdl.fill_rect(30, 20, 4, 4, Color::rgb(250, 0, 0))
+            .expect("fill");
+        sdl.read_pixels(31, 21, 1, 1).expect("read")
+    });
+    assert_eq!(&px[..3], &[250, 0, 0]);
 }
 
 /// `read_pixels` while a render target is bound reads the target in full,

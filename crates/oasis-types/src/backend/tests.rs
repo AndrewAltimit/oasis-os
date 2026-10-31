@@ -585,13 +585,32 @@ fn blit_tinted_defaults_to_blit() {
 }
 
 #[test]
-fn blit_flipped_defaults_to_blit() {
-    let mut b = RecordingBackend::new();
-    let tex = TextureId(7);
-    b.blit_flipped(tex, 0, 0, 16, 16, true, false).unwrap();
-    let calls = b.calls();
-    assert_eq!(calls.len(), 1);
-    assert!(calls[0].starts_with("blit(7,"));
+fn submit_text_batch_defaults_to_draw_text_styled_per_item() {
+    let mut batched = RecordingBackend::new();
+    let mut single = RecordingBackend::new();
+    let items = [
+        BatchText {
+            text: "ab",
+            x: 3,
+            y: 4,
+            color: Color::WHITE,
+        },
+        BatchText {
+            text: "c",
+            x: 20,
+            y: 4,
+            color: Color::rgb(1, 2, 3),
+        },
+    ];
+    batched.submit_text_batch(&items, 12, true, true).unwrap();
+    for t in &items {
+        single
+            .draw_text_styled(t.text, t.x, t.y, 12, t.color, true, true)
+            .unwrap();
+    }
+    assert_eq!(batched.calls(), single.calls());
+    // The styled default double-strikes bold: two draws per item.
+    assert_eq!(batched.calls().len(), 4);
 }
 
 // -- Clip/transform stack defaults --
@@ -820,20 +839,6 @@ fn draw_text_wrapped_zero_line_height_uses_default() {
     assert_eq!(h, 24);
 }
 
-// -- blit_sub_tinted --
-
-#[test]
-fn blit_sub_tinted_defaults_to_blit_sub() {
-    let mut b = RecordingBackend::new();
-    let tex = TextureId(9);
-    b.blit_sub_tinted(tex, 0, 0, 16, 16, 10, 20, 32, 32, Color::rgb(255, 0, 0))
-        .unwrap();
-    let calls = b.calls();
-    assert_eq!(calls.len(), 1);
-    // Should ultimately delegate to blit
-    assert!(calls[0].starts_with("blit(9,10,20,32,32)"));
-}
-
 // -- push_region / pop_region --
 
 #[test]
@@ -878,7 +883,7 @@ fn backend_err_ext_io_error() {
 
 #[test]
 fn texture_not_found_message() {
-    let err = texture_not_found(42);
+    let err = texture_not_found(TextureId(42));
     assert_eq!(format!("{err}"), "backend error: texture not found: 42");
     assert!(matches!(
         err,
@@ -971,7 +976,7 @@ fn sdi_backend_is_object_safe() {
 }
 
 /// A minimal `SdiCore`-only impl (no `SdiBackend`) can be used as
-/// `&dyn SdiCore`, proving that PSP-like backends only need 13 methods.
+/// `&dyn SdiCore`, proving that PSP-like backends only need the 12 required methods.
 #[test]
 fn minimal_sdi_core_impl_is_sufficient() {
     struct MinimalCore;
@@ -1044,7 +1049,7 @@ fn minimal_sdi_core_impl_is_sufficient() {
         }
     }
 
-    // Can be used as &dyn SdiCore (13 methods only).
+    // Can be used as &dyn SdiCore (the 12 required methods only).
     let mut m = MinimalCore;
     let core: &mut dyn SdiCore = &mut m;
     core.init(480, 272).unwrap();

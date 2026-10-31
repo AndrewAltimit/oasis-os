@@ -30,6 +30,8 @@
 //! selector (ID > class > tag > universal) so that only a small subset of
 //! rules is tested against each element.
 
+mod ancestor_filter;
+mod apply;
 mod index;
 pub mod matching;
 mod var_resolve;
@@ -37,9 +39,7 @@ mod var_resolve;
 #[cfg(test)]
 mod tests;
 
-use std::cell::RefCell;
 use std::collections::HashSet;
-use std::rc::Rc;
 
 #[cfg(feature = "parallel-style")]
 use std::cell::UnsafeCell;
@@ -49,8 +49,9 @@ use rustc_hash::FxHashMap;
 #[cfg(feature = "parallel-style")]
 use rayon::prelude::*;
 
-use super::parser::{CssValue, Declaration, Stylesheet, parse_substituted_declaration};
+use super::parser::{Declaration, Stylesheet};
 use super::values::ComputedStyle;
+use apply::{apply_matched, apply_matched_custom};
 use oasis_html::dom::{Document, NodeId, NodeKind};
 
 pub use index::SelectorIndex;
@@ -144,25 +145,48 @@ pub type GlobalLayerMap = FxHashMap<(u16, u16), u16>;
 
 /// Build a global layer ordering table from all stylesheets.
 ///
-/// Layer names are assigned global indices in the order they are first
-/// encountered across all stylesheets (which follows source order).
-/// Subsequent sheets that declare the same layer name reuse the index.
-pub fn build_global_layer_map(stylesheets: &[&Stylesheet]) -> GlobalLayerMap {
-    let mut name_to_global: FxHashMap<&str, u16> = FxHashMap::default();
-    let mut next_global: u16 = 0;
-    let mut map = GlobalLayerMap::default();
-
+/// The same layer name in different sheets is one layer. Global indices
+/// follow the cascade order of the merged layer tree (sublayers before
+/// their parent, siblings by first declaration across sheets in source
+/// order). Each sheet's `layers` is already in its own cascade order,
+/// which preserves the sibling order the merge needs. Anonymous layers
+/// are distinct per sheet.
+pub(crate) fn build_global_layer_map(stylesheets: &[&Stylesheet]) -> GlobalLayerMap {
+    let mut names: Vec<String> = Vec::new();
+    let mut seen: FxHashMap<String, usize> = FxHashMap::default();
+    // (sheet, local) -> index into `names`.
+    let mut slots: Vec<((u16, u16), usize)> = Vec::new();
     for (sheet_idx, sheet) in stylesheets.iter().enumerate() {
+        let sheet_key = u16::try_from(sheet_idx).unwrap_or(u16::MAX);
         for (local_idx, name) in sheet.layers.iter().enumerate() {
-            let global = *name_to_global.entry(name.as_str()).or_insert_with(|| {
-                let idx = next_global;
-                next_global = next_global.saturating_add(1);
-                idx
+            let key = if name.contains("__anon_") {
+                // `__anon_N` segments only mean something inside one sheet.
+                name.split('.')
+                    .map(|seg| {
+                        if seg.starts_with("__anon_") {
+                            format!("{seg}#{sheet_idx}")
+                        } else {
+                            seg.to_string()
+                        }
+                    })
+                    .collect::<Vec<_>>()
+                    .join(".")
+            } else {
+                name.clone()
+            };
+            let slot = *seen.entry(key.clone()).or_insert_with(|| {
+                names.push(key);
+                names.len() - 1
             });
-            map.insert((sheet_idx as u16, local_idx as u16), global);
+            let local = u16::try_from(local_idx).unwrap_or(u16::MAX);
+            slots.push(((sheet_key, local), slot));
         }
     }
-    map
+    let ranks = crate::parser::layer_cascade_ranks(&names);
+    slots
+        .into_iter()
+        .map(|(k, slot)| (k, u16::try_from(ranks[slot]).unwrap_or(u16::MAX)))
+        .collect()
 }
 
 /// Per-element container metadata feeding `@container` rule evaluation.
@@ -579,14 +603,7 @@ pub fn compute_style(
 
     // Sort by cascade order: origin, layer, specificity, source order.
     // `!important` declarations come after normal ones.
-    matched.sort_by(|a, b| {
-        a.important
-            .cmp(&b.important)
-            .then_with(|| a.origin.cmp(&b.origin))
-            .then_with(|| matching::compare_layers(a, b))
-            .then_with(|| a.specificity.cmp(&b.specificity))
-            .then_with(|| a.source_order.cmp(&b.source_order))
-    });
+    matched.sort_by(matching::cascade_order);
 
     // Pass 0: `@property` registrations.
     //   * Strip non-inheriting registered properties that we picked up
@@ -623,9 +640,9 @@ pub fn compute_style(
     // Pass 1: Apply custom property declarations (--*) to build the
     // properties map before resolving any var() references.
     let mut declared_custom: Vec<&str> = Vec::new();
-    for entry in &matched {
+    for (i, entry) in matched.iter().enumerate() {
         if entry.property.starts_with("--") {
-            style.apply_declaration(&entry.property, &entry.value, parent_font_size);
+            apply_matched_custom(&mut style, parent_style, &matched, i);
             declared_custom.push(&entry.property);
         }
     }
@@ -645,36 +662,24 @@ pub fn compute_style(
     // `matched` is sorted ascending by cascade order (origin, layer,
     // specificity, source order), so the last `direction` entry is
     // the cascade winner — apply only that one.
-    if let Some(entry) = matched.iter().rfind(|e| e.property == "direction") {
-        apply_cascaded(
-            &mut style,
-            parent_style,
-            "direction",
-            &entry.value,
-            parent_font_size,
-        );
+    if let Some(i) = matched.iter().rposition(|e| e.property == "direction") {
+        apply_matched(&mut style, parent_style, &matched, i, parent_font_size);
     }
 
     // Pass 2b: Apply font-size first so that em units in subsequent
     // properties resolve relative to the element's own computed
     // font-size (CSS spec: em in font-size uses parent, em in all
     // other properties uses the element's own font-size).
-    for entry in &matched {
+    for (i, entry) in matched.iter().enumerate() {
         if entry.property == "font-size" {
-            apply_cascaded(
-                &mut style,
-                parent_style,
-                "font-size",
-                &entry.value,
-                parent_font_size,
-            );
+            apply_matched(&mut style, parent_style, &matched, i, parent_font_size);
         }
     }
     let element_font_size = style.font_size;
 
     // Pass 3: Resolve var() references and apply all other declarations.
     let mut has_explicit_line_height = false;
-    for entry in &matched {
+    for (i, entry) in matched.iter().enumerate() {
         if entry.property.starts_with("--")
             || entry.property == "font-size"
             || entry.property == "direction"
@@ -684,13 +689,7 @@ pub fn compute_style(
         if entry.property == "line-height" {
             has_explicit_line_height = true;
         }
-        apply_cascaded(
-            &mut style,
-            parent_style,
-            &entry.property,
-            &entry.value,
-            element_font_size,
-        );
+        apply_matched(&mut style, parent_style, &matched, i, element_font_size);
     }
 
     // CSS 2.1 §17.21: unitless line-height inherits the *factor*, not
@@ -733,110 +732,4 @@ pub fn compute_style(
     }
 
     style
-}
-
-/// Apply one cascaded declaration to `style`.
-///
-/// [`CssValue::Unresolved`] values have their `var()` references
-/// substituted from `style`'s custom properties and are re-parsed with
-/// the property's normal parser (which may expand a shorthand into
-/// several longhands). A declaration that is invalid at computed-value
-/// time behaves as `unset` (CSS Variables §3.1). The CSS-wide `unset`
-/// and (for inherited properties) `inherit` keywords take their value
-/// from `parent`.
-pub(super) fn apply_cascaded(
-    style: &mut ComputedStyle,
-    parent: Option<&ComputedStyle>,
-    property: &str,
-    value: &CssValue,
-    font_size: f32,
-) {
-    let CssValue::Unresolved(text) = value else {
-        apply_value(style, parent, property, value, font_size);
-        return;
-    };
-    match var_resolve::substitute_vars(text, &style.custom_properties) {
-        Some(substituted) => {
-            for decl in parse_substituted_cached(property, &substituted).iter() {
-                apply_value(style, parent, &decl.property, &decl.value, font_size);
-            }
-        },
-        None => {
-            for decl in parse_substituted_cached(property, "unset").iter() {
-                apply_unset(style, parent, &decl.property);
-            }
-        },
-    }
-}
-
-/// Bound on [`SUBSTITUTED_CACHE`] entries before it is cleared.
-const SUBSTITUTED_CACHE_MAX: usize = 4096;
-
-/// Parsed declarations keyed by property, then by substituted value text.
-#[derive(Default)]
-struct SubstitutedCache {
-    entries: usize,
-    map: FxHashMap<String, FxHashMap<String, Rc<[Declaration]>>>,
-}
-
-thread_local! {
-    /// Parsed (and shorthand-expanded) substituted declarations. Design-
-    /// token CSS resolves the same handful of values for thousands of
-    /// elements, and parsing is pure, so each distinct value is tokenized
-    /// and parsed once per thread.
-    static SUBSTITUTED_CACHE: RefCell<SubstitutedCache> = RefCell::default();
-}
-
-fn parse_substituted_cached(property: &str, text: &str) -> Rc<[Declaration]> {
-    SUBSTITUTED_CACHE.with(|cache| {
-        let mut cache = cache.borrow_mut();
-        if let Some(hit) = cache.map.get(property).and_then(|m| m.get(text)) {
-            return Rc::clone(hit);
-        }
-        let parsed: Rc<[Declaration]> = parse_substituted_declaration(property, text).into();
-        if cache.entries >= SUBSTITUTED_CACHE_MAX {
-            cache.map.clear();
-            cache.entries = 0;
-        }
-        cache
-            .map
-            .entry(property.to_string())
-            .or_default()
-            .insert(text.to_string(), Rc::clone(&parsed));
-        cache.entries += 1;
-        parsed
-    })
-}
-
-fn apply_value(
-    style: &mut ComputedStyle,
-    parent: Option<&ComputedStyle>,
-    property: &str,
-    value: &CssValue,
-    font_size: f32,
-) {
-    if let CssValue::Keyword(kw) = value {
-        if kw.eq_ignore_ascii_case("unset") {
-            apply_unset(style, parent, property);
-            return;
-        }
-        if kw.eq_ignore_ascii_case("inherit")
-            && let Some(p) = parent
-            && style.inherit_property_from(property, p)
-        {
-            return;
-        }
-    }
-    style.apply_declaration(property, value, font_size);
-}
-
-/// `unset`: inherit for inherited properties, `initial` otherwise.
-fn apply_unset(style: &mut ComputedStyle, parent: Option<&ComputedStyle>, property: &str) {
-    let inherited = match parent {
-        Some(p) => style.inherit_property_from(property, p),
-        None => style.inherit_property_from(property, &ComputedStyle::default()),
-    };
-    if !inherited {
-        style.apply_declaration(property, &CssValue::Keyword("initial".into()), 0.0);
-    }
 }

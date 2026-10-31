@@ -297,8 +297,10 @@ impl BrowserWidget {
                         self.replay_dirty_display_list(
                             backend,
                             dirty,
-                            self.display_list_scroll_y - self.scroll.scroll_y,
+                            // (dx, dy): the list was recorded at
+                            // `display_list_scroll_*`.
                             self.display_list_scroll_x - self.scroll.scroll_x,
+                            self.display_list_scroll_y - self.scroll.scroll_y,
                             Some((self.window_x, content_y, self.window_w, content_h)),
                         )?;
                     }

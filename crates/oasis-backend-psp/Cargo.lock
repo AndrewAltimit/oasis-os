@@ -844,7 +844,7 @@ dependencies = [
 
 [[package]]
 name = "oasis-app-core"
-version = "1.4.0"
+version = "1.6.0"
 dependencies = [
  "oasis-skin",
  "oasis-types",
@@ -853,7 +853,7 @@ dependencies = [
 
 [[package]]
 name = "oasis-app-tv-guide"
-version = "1.4.0"
+version = "1.6.0"
 dependencies = [
  "js-sys",
  "log",
@@ -869,7 +869,7 @@ dependencies = [
 
 [[package]]
 name = "oasis-audio"
-version = "1.4.0"
+version = "1.6.0"
 dependencies = [
  "log",
  "oasis-types",
@@ -882,7 +882,7 @@ dependencies = [
 
 [[package]]
 name = "oasis-backend-psp"
-version = "1.4.0"
+version = "1.6.0"
 dependencies = [
  "embedded-io",
  "embedded-tls",
@@ -892,6 +892,7 @@ dependencies = [
  "oasis-core",
  "oasis-js",
  "oasis-shader",
+ "oasis-types",
  "oasis-video",
  "psp",
  "rand_core",
@@ -899,9 +900,8 @@ dependencies = [
 
 [[package]]
 name = "oasis-browser"
-version = "1.4.0"
+version = "1.6.0"
 dependencies = [
- "flate2",
  "fontdue",
  "gif",
  "jpeg-decoder",
@@ -921,7 +921,7 @@ dependencies = [
 
 [[package]]
 name = "oasis-core"
-version = "1.4.0"
+version = "1.6.0"
 dependencies = [
  "log",
  "oasis-app-core",
@@ -945,7 +945,7 @@ dependencies = [
 
 [[package]]
 name = "oasis-css"
-version = "1.4.0"
+version = "1.6.0"
 dependencies = [
  "log",
  "oasis-html",
@@ -955,14 +955,14 @@ dependencies = [
 
 [[package]]
 name = "oasis-html"
-version = "1.4.0"
+version = "1.6.0"
 dependencies = [
  "log",
 ]
 
 [[package]]
 name = "oasis-http"
-version = "1.4.0"
+version = "1.6.0"
 dependencies = [
  "brotli",
  "flate2",
@@ -975,7 +975,7 @@ dependencies = [
 
 [[package]]
 name = "oasis-i18n"
-version = "1.4.0"
+version = "1.6.0"
 dependencies = [
  "log",
  "oasis-types",
@@ -985,7 +985,7 @@ dependencies = [
 
 [[package]]
 name = "oasis-js"
-version = "1.4.0"
+version = "1.6.0"
 dependencies = [
  "rquickjs",
  "thiserror",
@@ -993,7 +993,7 @@ dependencies = [
 
 [[package]]
 name = "oasis-net"
-version = "1.4.0"
+version = "1.6.0"
 dependencies = [
  "log",
  "oasis-types",
@@ -1004,14 +1004,14 @@ dependencies = [
 
 [[package]]
 name = "oasis-platform"
-version = "1.4.0"
+version = "1.6.0"
 dependencies = [
  "oasis-types",
 ]
 
 [[package]]
 name = "oasis-sdi"
-version = "1.4.0"
+version = "1.6.0"
 dependencies = [
  "oasis-types",
  "serde",
@@ -1020,7 +1020,7 @@ dependencies = [
 
 [[package]]
 name = "oasis-shader"
-version = "1.4.0"
+version = "1.6.0"
 dependencies = [
  "log",
  "oasis-types",
@@ -1028,7 +1028,7 @@ dependencies = [
 
 [[package]]
 name = "oasis-skin"
-version = "1.4.0"
+version = "1.6.0"
 dependencies = [
  "log",
  "oasis-sdi",
@@ -1045,7 +1045,7 @@ dependencies = [
 
 [[package]]
 name = "oasis-terminal"
-version = "1.4.0"
+version = "1.6.0"
 dependencies = [
  "oasis-net",
  "oasis-platform",
@@ -1055,7 +1055,7 @@ dependencies = [
 
 [[package]]
 name = "oasis-types"
-version = "1.4.0"
+version = "1.6.0"
 dependencies = [
  "log",
  "serde",
@@ -1066,28 +1066,28 @@ dependencies = [
 
 [[package]]
 name = "oasis-ui"
-version = "1.4.0"
+version = "1.6.0"
 dependencies = [
  "oasis-types",
 ]
 
 [[package]]
 name = "oasis-vector"
-version = "1.4.0"
+version = "1.6.0"
 dependencies = [
  "oasis-types",
 ]
 
 [[package]]
 name = "oasis-vfs"
-version = "1.4.0"
+version = "1.6.0"
 dependencies = [
  "oasis-types",
 ]
 
 [[package]]
 name = "oasis-video"
-version = "1.4.0"
+version = "1.6.0"
 dependencies = [
  "log",
  "thiserror",
@@ -1095,7 +1095,7 @@ dependencies = [
 
 [[package]]
 name = "oasis-wm"
-version = "1.4.0"
+version = "1.6.0"
 dependencies = [
  "log",
  "oasis-sdi",

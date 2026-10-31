@@ -256,9 +256,10 @@ fn parse_one(verb: &str, rest: &str) -> Result<Cmd, String> {
             if rest.is_empty() {
                 return Err("screenshot needs a path".into());
             }
-            if !rest.starts_with(SCREENSHOT_PREFIX) {
+            // `..` would climb out of the prefix directory.
+            if !rest.starts_with(SCREENSHOT_PREFIX) || rest.contains("..") {
                 return Err(format!(
-                    "screenshot path must start with '{SCREENSHOT_PREFIX}'"
+                    "screenshot path must be under '{SCREENSHOT_PREFIX}' (no '..')"
                 ));
             }
             Ok(Cmd::Screenshot(rest.to_string()))
@@ -352,7 +353,7 @@ fn request_screenshot(path: &str) {
     // Belt-and-braces: parse_one already rejects paths outside our
     // dir, but reject again here so any future internal caller can't
     // bypass the prefix check and write to arbitrary ms0: paths.
-    if !path.starts_with(SCREENSHOT_PREFIX) {
+    if !path.starts_with(SCREENSHOT_PREFIX) || path.contains("..") {
         append_log(&format!(
             "[autorun] screenshot rejected (path outside {SCREENSHOT_PREFIX}): {path}"
         ));

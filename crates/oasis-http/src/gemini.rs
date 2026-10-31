@@ -68,16 +68,18 @@ pub fn parse_response(data: &[u8]) -> Option<GeminiResponse> {
     let first_line_end = text.find("\r\n")?;
     let status_line = &text[..first_line_end];
 
-    if status_line.len() < 2 {
+    // `get`, not indexing: a non-ASCII status line must not panic on a
+    // char boundary.
+    let code = status_line.get(..2)?;
+    if !code.bytes().all(|b| b.is_ascii_digit()) {
         return None;
     }
-
-    let code: u8 = status_line[..2].parse().ok()?;
-    let meta = if status_line.len() > 3 {
-        status_line[3..].to_string()
-    } else {
-        String::new()
-    };
+    let code: u8 = code.parse().ok()?;
+    let meta = status_line
+        .get(2..)
+        .map(|m| m.strip_prefix(' ').unwrap_or(m))
+        .unwrap_or_default()
+        .to_string();
 
     let status = GeminiStatus::from_code(code);
 
@@ -124,6 +126,26 @@ mod tests {
         assert_eq!(resp.status, GeminiStatus::PermanentFailure(51));
         assert_eq!(resp.meta, "Not found");
         assert!(resp.body.is_none());
+    }
+
+    /// Regression: the status line was byte-sliced (`[..2]`, `[3..]`),
+    /// panicking when a multi-byte character straddled either cut.
+    #[test]
+    fn non_ascii_status_line_does_not_panic() {
+        for raw in [
+            "aé\r\n",
+            "é\r\n",
+            "20é\r\n",
+            "2é x\r\n",
+            "+1 x\r\n",
+            "2\r\n",
+        ] {
+            let resp = parse_response(raw.as_bytes());
+            assert!(resp.is_none() || raw.starts_with("20"), "{raw:?}");
+        }
+        let resp = parse_response("20 tëxt/gemini\r\nbody".as_bytes()).unwrap();
+        assert_eq!(resp.meta, "tëxt/gemini");
+        assert_eq!(parse_response(b"20\r\n").unwrap().meta, "");
     }
 
     #[test]

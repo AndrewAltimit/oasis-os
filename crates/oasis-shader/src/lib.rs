@@ -29,10 +29,30 @@ pub mod uniforms;
 pub use registry::BuiltinShader;
 pub use uniforms::ShaderParams;
 
-#[cfg(feature = "glow")]
+/// Period, in seconds, at which shader time wraps (one hour).
+///
+/// The shaders take time as `f32` and feed it (scaled) into `sin`, `fract`
+/// and uv offsets. Left unbounded, the arguments grow until `f32` can no
+/// longer resolve a frame step -- after a few days of uptime the wallpaper
+/// stutters, then freezes into blocks. Wrapping costs one visible jump per
+/// hour instead; both renderers apply it, so CPU and GPU output still match.
+pub const TIME_WRAP_S: f32 = 3600.0;
+
+/// Shader time as both renderers use it: `time` modulo [`TIME_WRAP_S`],
+/// with a non-finite time treated as 0.
+pub fn wrap_time(time: f32) -> f32 {
+    if !time.is_finite() {
+        return 0.0;
+    }
+    let t = time.rem_euclid(TIME_WRAP_S);
+    // `rem_euclid` can round up to the period for tiny negative inputs.
+    if t >= TIME_WRAP_S { 0.0 } else { t }
+}
+
+#[cfg(feature = "gl-native")]
 use std::collections::HashMap;
 
-#[cfg(feature = "glow")]
+#[cfg(feature = "gl-native")]
 use glow::HasContext;
 
 /// GPU shader renderer. Owns GL resources (program, FBO, VAO).
@@ -41,7 +61,7 @@ use glow::HasContext;
 /// Call [`render_to_pixels`](ShaderRenderer::render_to_pixels) to render to an
 /// FBO and read back RGBA pixels, or [`render_to_screen`](ShaderRenderer::render_to_screen)
 /// to render directly to the default framebuffer (for WASM).
-#[cfg(feature = "glow")]
+#[cfg(feature = "gl-native")]
 pub struct ShaderRenderer {
     gl: glow::Context,
     programs: HashMap<String, glow::Program>,
@@ -53,7 +73,7 @@ pub struct ShaderRenderer {
     pixel_buf: Vec<u8>,
 }
 
-#[cfg(feature = "glow")]
+#[cfg(feature = "gl-native")]
 impl ShaderRenderer {
     /// Create from an existing glow context (backend provides this).
     ///
@@ -256,7 +276,7 @@ impl ShaderRenderer {
     }
 }
 
-#[cfg(feature = "glow")]
+#[cfg(feature = "gl-native")]
 impl Drop for ShaderRenderer {
     fn drop(&mut self) {
         // SAFETY: glow wraps raw GL calls; no unsafe Rust required.
@@ -276,7 +296,7 @@ impl Drop for ShaderRenderer {
 /// # Safety
 ///
 /// Caller must ensure the GL context is current.
-#[cfg(feature = "glow")]
+#[cfg(feature = "gl-native")]
 #[allow(clippy::too_many_arguments)]
 unsafe fn gl_render(
     gl: &glow::Context,
@@ -299,7 +319,7 @@ unsafe fn gl_render(
 
         // Standard uniforms.
         if let Some(loc) = gl.get_uniform_location(program, "u_time") {
-            gl.uniform_1_f32(Some(&loc), time);
+            gl.uniform_1_f32(Some(&loc), wrap_time(time));
         }
         if let Some(loc) = gl.get_uniform_location(program, "u_resolution") {
             gl.uniform_2_f32(Some(&loc), width as f32, height as f32);
@@ -340,7 +360,7 @@ unsafe fn gl_render(
 /// # Safety
 ///
 /// Caller must ensure the GL context is current.
-#[cfg(feature = "glow")]
+#[cfg(feature = "gl-native")]
 unsafe fn gl_read_pixels(
     gl: &glow::Context,
     fbo: glow::Framebuffer,

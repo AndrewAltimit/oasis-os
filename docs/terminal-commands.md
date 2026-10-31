@@ -23,7 +23,20 @@ The terminal in `oasis-terminal/src/` supports:
 - quoting: `'...'` is literal, `"..."` allows `$VAR` and `$(...)`, a
   backslash escapes the next character (`\$HOME`, `\>`); `""` is an empty
   argument
-- variable expansion (`$VAR`, `${VAR}`, `$?`, `$#`, `$1`..)
+- variable expansion (`$VAR`, `${VAR}`, `$?`, `$#`, `$0`..`$9` -- one digit,
+  so `$1x` is `${1}x` --, `$@` / `$*`, and `"$@"` as one word per
+  argument), `${VAR:-default}` / `${VAR-default}`, `${VAR:=default}`,
+  `${#VAR}`; any other `${...}` form is a `bad substitution` error. The
+  `}` closing a `${...}` is found past quoted or escaped braces in the
+  word (`${X:-"}"}`), and inside double quotes the word is double-quoted
+  text (`"${X:-it's}"`)
+- variable assignments: `NAME=value` sets a shell variable (`A=1 B="x y"`;
+  the value gets expansion and quote removal but no field splitting or
+  globbing, so `C=$B` keeps the spaces). Before a command
+  (`P=temp myfunc`) the assignments hold only while that command runs.
+  `set NAME=value` still works
+- tilde expansion: an unquoted `~` starting a word (`~`, `~/notes`) is
+  `$HOME`
 - command substitution (`$(cmd)`, nested)
 - expansion results are *words*, never shell syntax: an unquoted `$VAR` /
   `$(...)` is split into fields on whitespace, a quoted one stays one
@@ -32,16 +45,33 @@ The terminal in `oasis-terminal/src/` supports:
 - brace expansion (`{a,b}`) on plain unquoted words; glob expansion
   (`*.txt`, `dir/*`) wherever a `*` / `?` / `[` is unquoted, including
   inside an unquoted expansion (`P='*.txt'; echo $P` globs, `"$P"` does
-  not); a quoted `"*"` is always literal
+  not); a quoted `"*"` is always literal. A `*` / `?` does not match a
+  leading `.` (`rm *` spares dotfiles; `.*` matches them)
 - aliases (`alias ll='ls -l $HOME'`, one level; the alias text is expanded
-  with the rest of the line)
-- pipes (`cmd1 | cmd2`; an empty stage is a syntax error)
-- redirection (`< file`, `> file`, `>> file`, `2>`, `2>&1`); operators
-  inside quotes or `$( ... )` belong to the inner command
+  with the rest of the line). An alias holding `|`, `;`, `&`, `<` or `>`
+  (`alias ll='ls | sort'`) is substituted before the line is split, so its
+  operators work; an alias does not expand again inside its own text
+- pipes (`cmd1 | cmd2`; an empty stage is a syntax error). There are no
+  subshells: every stage runs in the shell itself, so a builtin or `cd` in
+  a pipeline still takes effect (`cd /tmp | cat` changes directory). A
+  pipeline's status is its last stage's; a stage before the last that
+  fails shows its error and feeds the next stage empty input
+  (`cat missing | wc -l` prints the error, then `0`, and succeeds)
+- redirection (`< file`, `<<< word`, `> file`, `>> file`, `1>`, `2>`,
+  `2>>`, `2>&1`, `>&2`, `&> file`, `&>> file`), applied left to right
+  (`cmd 2>&1 > f` leaves stderr on the terminal, `cmd > f 2>&1` sends
+  both to `f`; `<<` here-documents are not supported); the target is the
+  one word after the operator (`echo a > f b` writes `a b`), `/dev/null`
+  discards, and
+  operators inside quotes or `$( ... )` belong to the inner command.
+  Text that reaches a pipe, a redirect or `$(...)` loses the shell's own
+  colour codes (`for d in $(ls)` sees plain names); escape sequences in
+  file contents pass through (`cat a.ans > b.ans` copies them)
 - command lists (`;`, `&&`, `||`, `&`) and pipeline negation (`! cmd`)
 - `#` comments, on typed lines as in scripts (`echo hi # note`; `a#b` and
   `$#` are not comments)
 - persistent command history (`history`, `!!`, `!N`, Up/Down, Ctrl+R)
+- `cd` with no argument goes to `$HOME`, `cd -` to `$OLDPWD` (printing it)
 - control flow in one-liners and scripts (see below)
 - background jobs (`cmd &` anywhere, `jobs`, `fg`, `bg`, `kill %N`)
 
@@ -64,7 +94,7 @@ a registered command can never shadow them; `help`, `help <name>`,
 | Category | Builtins |
 |---|---|
 | general | `help [--category <cat>] [command]`, `which <command>`, `history [clear]` |
-| config | `set [VAR=value]`, `unset <VAR>...`, `env`, `alias [name=command]`, `unalias <name>...` |
+| config | `set [VAR=value...]`, `unset <VAR>...`, `env`, `alias [name=command]`, `unalias <name>...` |
 | scripting | `run <script> [args...]`, `xargs [-n N] [-I REPL] [command...]`, `function name() { body }`, `return [code]`, `local NAME[=VALUE]...`, `break`, `continue`, `true`, `false` |
 | jobs | `jobs`, `fg [%job]`, `bg [%job]`, `kill [-STOP\|-CONT\|-TERM] <%job\|N>...` |
 
@@ -75,6 +105,15 @@ arguments (`ls | xargs -I F cp F /backup/F`). Items are passed as words,
 never re-parsed; it reaches builtins and functions too, and exits 123 if
 any run failed.
 
+### Options
+
+Commands that take options parse them with one helper
+(`oasis_terminal::parse_flags`, see `docs/adding-commands.md`), so they
+behave alike: short options combine (`-la`, `grep -in`), a value may be
+attached or separate (`-n5`, `-n 5`), `--` ends the options (`grep -- -x f`)
+and options may follow operands. An unknown option is an error that
+prints the usage line instead of being taken as a file name.
+
 ### Exit status
 
 Every command finishes with an exit status (0 = success), and that status
@@ -83,7 +122,9 @@ Every command finishes with an exit status (0 = success), and that status
 is status 1; a command can also print output *and* fail by returning
 `CommandOutput::status(code, output)`. `test` / `[ ... ]` print nothing and
 exit 0 (true) or 1 (false); `grep` exits 1 when nothing matched, `diff` when
-the files differ, `false` always. The executor records the code and unwraps
+the files differ, `false` always. Commands print no placeholder text for
+an empty result (`grep`, `ls` of an empty directory, `find`), so their
+output pipes cleanly. The executor records the code and unwraps
 the output, so hosts never receive a `CommandOutput::Status`.
 
 ### Line editing
@@ -106,7 +147,7 @@ and face buttons keep working on controllers.
 | Ctrl+T | Swap the two characters before the cursor |
 | Up / Down (d-pad Up / Down), Ctrl+P / Ctrl+N | Previous / next history entry (Down past the newest restores the draft) |
 | Ctrl+R | Reverse incremental history search; Ctrl+R again = older match, Backspace edits the query, Enter runs the match, Esc / Ctrl+G cancel |
-| Tab | Complete command names (also after `\|`, `;`, `&`), `$VARIABLES` and VFS paths; ambiguous matches extend to the common prefix, a second Tab lists the candidates |
+| Tab | Complete command names (also after an unquoted `\|`, `;`, `&`), `$VARIABLES` and VFS paths; ambiguous matches extend to the common prefix, a second Tab lists the candidates. A path may be partly quoted (`cat "my f`) or escaped (`cat my\ f`): the completion keeps the quote (closing it on a full match) or backslash-escapes spaces and metacharacters |
 | Ctrl+L | Clear the screen |
 | Ctrl+C | Abandon the line (echoed with `^C`) |
 | Enter (Cross) | Run the line |
@@ -117,7 +158,9 @@ unchanged.
 
 History is shared with `history` / `!!` and persisted after every command
 to `/home/user/.oasis_history` in the VFS (newest 500 entries). It is
-reloaded at startup; since the desktop VFS is in-memory, it survives for
+reloaded at startup (one line per entry: a `\` is stored as `\\` and a
+newline as `\n`, so multi-line entries survive); since the desktop VFS is
+in-memory, it survives for
 the session unless the host persists the VFS. Only lines typed at the
 prompt are recorded, not commands run inside functions, `$(...)`,
 scripts or jobs.
@@ -146,7 +189,16 @@ case $X in start|go) echo run;; stop) echo halt;; *) echo "?";; esac
   shown like any other output. An `if` that runs no branch, and a loop whose
   body never ran, exit 0.
 - `&&`, `||`, pipes, redirects and `cmd &` work inside blocks; `for` word
-  lists get variable, `$(...)`, quote, brace and glob expansion.
+  lists get variable, `$(...)`, quote, brace and glob expansion, and
+  `for VAR; do` loops over the positional parameters (`"$@"`).
+- A compound command takes a pipe, `>` / `>>` redirect and `&&` / `||`
+  list after its closing keyword: `for ...; done | sort > out`,
+  `fi >> log`, `esac && echo ok`.
+- `case` matches its word (expanded, but not split or globbed) against
+  each `|` alternative; patterns are expanded like words, so quoted parts
+  (`"a*"`, `'a|b'`) match literally and `$PAT` / unquoted `*` `?` `[...]`
+  are globs. A `case` with no matching arm and a `for` over no words
+  exit 0.
 - `break`, `continue` and `return` work in loops and functions; `while` /
   `until` stop after 1000 iterations with a warning.
 - `run <script> [args...]` sets `$1`..`$n` and `$#` for the script and
@@ -190,6 +242,13 @@ runs when the job does. A compound line ending in `&`
 Job specs: `%N`, `%%` / `%+` / `%` (most recent), `%-` (previous). A bare
 number (`kill 1`, `fg 2`) means `%N`: the shell has no process ids.
 
+A job polled in the background behaves like a POSIX subshell for the
+session state a user relies on: its exit status and `cd`s do not change
+the interactive `$?`, working directory, `$OLDPWD` or `$CWD`
+(`CommandRegistry::run_detached`; cron jobs run the same way). Other
+variables it sets do persist, since there is no forked environment. `fg`
+runs the job in the foreground shell itself.
+
 ### SGR color output
 
 Command output may embed ANSI SGR **foreground color** escape sequences,
@@ -210,33 +269,33 @@ shell prints command errors in red (SGR 31).
 
 | Command | Usage | Description |
 | --- | --- | --- |
-| `ls` | `ls [path]` | List directory contents. |
-| `cd` | `cd <path>` | Change working directory. |
+| `ls` | `ls [-al] [path...]` | List directory contents (`-a` includes dotfiles, `-l` adds kind and size). |
+| `cd` | `cd [path\|-]` | Change working directory (`$HOME` without an argument, `$OLDPWD` for `-`). |
 | `pwd` | `pwd` | Print working directory. |
-| `cat` | `cat <file>` | Display file contents. |
-| `mkdir` | `mkdir <path>` | Create a directory. |
-| `rm` | `rm <path>` | Remove a file or empty directory. |
+| `cat` | `cat [file]` | Display file contents (stdin with no file). |
+| `mkdir` | `mkdir [-p] <path>...` | Create directories (`-p`: with missing parents, no error if it exists). |
+| `rm` | `rm [-rf] <path>...` | Remove files or empty directories (`-r`: whole trees, `-f`: ignore missing). |
 | `echo` | `echo [text...]` | Print text. |
 | `clear` | `clear` | Clear terminal output. |
 | `status` | `status` | Show system status. |
 | `touch` | `touch <file>` | Create an empty file. |
 | `cp` | `cp <src> <dst>` | Copy a file. |
 | `mv` | `mv <src> <dst>` | Move or rename a file. |
-| `find` | `find [path] <pattern>` | Find files by name pattern. |
+| `find` | `find [path] <pattern>` | Find files whose name matches a glob (`'*.txt'`); a pattern without `*` / `?` / `[` matches as a substring. |
 
 ## Text processing (`oasis-terminal/src/text_commands/`)
 
 | Command | Usage | Description |
 | --- | --- | --- |
-| `head` | `head [-n N] <file>` | Show first N lines. |
-| `tail` | `tail [-n N] <file>` | Show last N lines. |
-| `wc` | `wc [-l\|-w\|-c] <file>` | Count lines, words, bytes. |
-| `grep` | `grep [-i] [-n] [-v] [-c] <pattern> [file]` | Search for pattern in text. |
-| `sort` | `sort [-r] [-n] [file]` | Sort lines of text. |
+| `head` | `head [-n N\|-N] [file]` | Show first N lines. |
+| `tail` | `tail [-n N\|-N] [file]` | Show last N lines. |
+| `wc` | `wc [-clw] [file]` | Count lines, words, bytes (one count alone prints bare). |
+| `grep` | `grep [-cinqv] <pattern> [file]` | Search for pattern in text (`-q`: status only); prints nothing and exits 1 when nothing matches. |
+| `sort` | `sort [-nru] [file]` | Sort lines of text (`-u`: drop duplicates). |
 | `uniq` | `uniq [-c] [file]` | Remove adjacent duplicate lines. |
 | `tee` | `tee [-a] <file>` | Read stdin, write to file and stdout. |
-| `tr` | `tr [-d] <set1> [set2]` | Translate or delete characters. |
-| `cut` | `cut -d <delim> -f <fields> [file]` | Extract fields or columns. |
+| `tr` | `tr [-d] <set1> [set2]` | Translate or delete characters; sets take ranges (`a-z`) and `\n` / `\t`. |
+| `cut` | `cut [-d <delim>] -f <fields> [file]` | Extract fields or columns. |
 | `diff` | `diff <file1> <file2>` | Compare two files line by line. |
 
 ## File utilities (`oasis-terminal/src/file_commands.rs`)
@@ -255,7 +314,7 @@ shell prints command errors in red (SGR 31).
 
 | Command | Usage | Description |
 | --- | --- | --- |
-| `base64` | `base64 [-d] <text>` | Encode or decode base64. |
+| `base64` | `base64 [-d\|--decode] [text]` | Encode or decode base64. |
 | `json` | `json <text>` / `json validate <text>` | Pretty-print or validate JSON. |
 | `uuid` | `uuid` | Generate a pseudo-random UUID v4. |
 | `seq` | `seq [start] <end> [step]` | Print a sequence of numbers. |
@@ -395,7 +454,7 @@ the wire protocol and PSK auth.
 
 | Command | Usage | Description |
 | --- | --- | --- |
-| `cron` | `cron [list\|add <name> <path>\|remove <name>]` | Manage scheduled scripts under `/etc/cron`. |
+| `cron` | `cron [list\|add <name> <interval> <script>\|remove <name>]` | Run a script every `<interval>` (`30s`, `5m`, `2h`, `1d`; a bare number is seconds; 1 s to 30 d). Jobs are files under `/etc/cron` (`<interval> <script>`); the host runs due ones from its frame loop (the desktop shell about once a second, `oasis-ffi` on `oasis_tick`), output prefixed `[cron <name>]`. A job first runs one interval after the host first sees it, starts in `/`, and leaves the session's `$?`, cwd and `$OLDPWD` alone. Runs keep to that first schedule however coarsely the host ticks; a job overdue by several intervals (a long sleep) runs once and resumes at its next slot, with no burst of catch-up runs. Schedules are not persisted across restarts. |
 | `startup` | `startup [show\|set <path>\|clear]` | Manage the boot script (`/etc/startup.sh`). |
 
 ## File transfer (`oasis-core/src/transfer/mod.rs`)
@@ -439,7 +498,7 @@ see [mcp-server.md](mcp-server.md).
 
 | Command | Usage | Description |
 | --- | --- | --- |
-| `tv` | `tv [list\|now\|tune <ch>\|guide]` | Internet Archive TV Guide. |
+| `tv` | `tv [list\|now\|tune <ch>\|guide]` | Internet Archive TV Guide (`tune` needs an open TV Guide window). |
 
 ## Plugin (`oasis-core/src/terminal/plugin_commands.rs`)
 

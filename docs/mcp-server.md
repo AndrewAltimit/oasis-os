@@ -107,7 +107,7 @@ If you set `OASIS_MCP_TOKEN`, add the header:
 | `close_window` | `id`, `force?` | Close a window the way its titlebar close button does (see below). |
 | `move_window` | `id`, `x`, `y` | Move a window to an absolute position. |
 | `resize_window` | `id`, `width`, `height` | Resize a window. |
-| `run_command` | `command` | Run a terminal command and return its output. |
+| `run_command` | `command` | Run a terminal command in the shell's registry and working directory and return its output (the remote-terminal path: `listen`, `remote`, `ftp` and `mcp-server` toggles answer `Not available via remote.`). |
 | `browser_navigate` | `url` | Open the Browser (if needed) and navigate. |
 | `play_media` | `path` | Play a media file by VFS path. |
 | `tune` | `source` (`radio`/`tv`), `channel` | Tune the radio (station index or name) or the TV (channel number; the TV Guide must be open, it owns the catalogs). |
@@ -168,7 +168,7 @@ skipped):
 | `Origin` present and not `http(s)://` + `127.0.0.1` / `localhost` / `[::1]` (optional `:port`); `Origin: null` is rejected | `403` |
 | `Host` present and not `127.0.0.1` / `localhost` / `[::1]` (optional `:port`) | `403` |
 | `POST` whose `Content-Type` media type is not `application/json` (parameters such as `; charset=utf-8` are fine; missing is rejected) | `415` |
-| Malformed, non-decimal or duplicate `Content-Length`; a header line without a colon or with whitespace in or before its name (incl. obs-fold continuation lines); a request line that is not `METHOD target version` | `400` |
+| Malformed, non-decimal or duplicate `Content-Length`; a duplicate `Host` or `Origin`; a header line without a colon or with whitespace in or before its name (incl. obs-fold continuation lines); a request line that is not `METHOD target version` | `400` |
 | Any `Transfer-Encoding` (only `Content-Length` bodies are supported) | `411` |
 | A version other than `HTTP/1.1` / `HTTP/1.0` | `505` |
 
@@ -201,8 +201,11 @@ misbehaving local client can hold):
   connection until the backlog drains (backpressure, not data loss). A peer
   that half-closes meanwhile still gets an answer to every complete request it
   sent.
-- `401` and the `404` / `405` / `415` answers to a complete request keep the
-  connection alive; `403` always closes it.
+- The `404` / `405` / `415` answers to a complete request keep the
+  connection alive; `403` and `401` always close it, so a client guessing
+  the token gets one attempt per connection instead of pipelining hundreds
+  into one keep-alive connection (and the server accepts one connection per
+  poll).
 - The app records at most 64 characters of a tool name for the activity pill
   and the log, and `play_media` refuses paths containing line breaks (the
   media request file is line-based).

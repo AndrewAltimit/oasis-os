@@ -17,7 +17,7 @@ use oasis_core::terminal::CommandRegistry;
 use oasis_core::vector_overlay::LayerOpsCache;
 use oasis_core::vfs::GameAssetVfs;
 
-use crate::types::OasisCallback;
+use crate::types::RegisteredCallback;
 #[cfg(feature = "_video")]
 use crate::video::VideoThreadState;
 
@@ -49,19 +49,23 @@ pub struct OasisInstance {
     /// Render stages whose failure was already logged at `warn`
     /// ([`OasisInstance::report`]).
     pub(crate) reported_render_errors: BTreeSet<&'static str>,
-    pub(crate) callbacks: HashMap<u32, OasisCallback>,
+    pub(crate) callbacks: HashMap<u32, RegisteredCallback>,
     pub(crate) width: u32,
     pub(crate) height: u32,
     /// Software shader renderer (CPU fallback for GPU shaders).
     pub(crate) software_shader: Option<oasis_shader::software::SoftwareShaderRenderer>,
-    /// Accumulated time for shader animation (seconds).
-    pub(crate) shader_time: f32,
+    /// Instance clock: the sum of the (sanitized) `oasis_tick` deltas, in
+    /// seconds. `f64` so it keeps advancing at frame-sized steps for years
+    /// (an `f32` stops absorbing 1/60 s after about six days).
+    pub(crate) clock: f64,
     /// Scratch full-resolution buffer holding the upscaled shader wallpaper,
     /// reused across renders to avoid reallocating each frame.
     pub(crate) shader_cache: Vec<u8>,
-    /// `shader_time` at the last frame that actually rendered. Drives the render
+    /// `clock` at the last frame that actually rendered. Drives the render
     /// scheduler that skips the expensive render when nothing visible changed.
-    pub(crate) last_render_time: f32,
+    pub(crate) last_render_time: f64,
+    /// Runs the `cron` jobs from `oasis_tick`.
+    pub(crate) cron: oasis_core::script::CronScheduler,
     /// Background video decode thread state (when `video-decode` feature is enabled).
     #[cfg(feature = "_video")]
     pub(crate) video_state: Option<VideoThreadState>,
@@ -80,17 +84,75 @@ impl OasisInstance {
         }
     }
 
-    /// Fire a callback if registered.
+    /// Fire a callback if registered. Interior NULs in `detail` become
+    /// U+FFFD (as in `oasis_send_command`'s result) rather than dropping
+    /// the event.
     ///
-    /// `c_detail` is bound by the `let Ok(...)` in the `if let` chain, so the
-    /// `CString` lives for the entire block body -- the raw pointer from
+    /// `c_detail` lives for the entire block body, so the raw pointer from
     /// `as_ptr()` is valid for the duration of the `cb()` call.
     pub(crate) fn fire_callback(&self, event: u32, detail: &str) {
-        if let Some(cb) = self.callbacks.get(&event)
-            && let Ok(c_detail) = CString::new(detail)
-        {
-            cb(event, c_detail.as_ptr());
+        if let Some(&cb) = self.callbacks.get(&event) {
+            let c_detail = to_c_string_lossy(detail.to_string());
+            cb.call(event, c_detail.as_ptr());
         }
+    }
+}
+
+/// `text` as a C string, each interior NUL (unrepresentable) replaced with
+/// U+FFFD.
+pub(crate) fn to_c_string_lossy(text: String) -> CString {
+    CString::new(text).unwrap_or_else(|e| {
+        let text = String::from_utf8_lossy(&e.into_vec()).replace('\0', "\u{FFFD}");
+        CString::new(text).unwrap_or_default()
+    })
+}
+
+// ---------------------------------------------------------------------------
+// Re-entrancy guard
+// ---------------------------------------------------------------------------
+
+thread_local! {
+    /// Addresses of the handles an export on this thread is using right
+    /// now. Callbacks run inside the export that fired them, while that
+    /// export holds `&mut OasisInstance`; a callback calling back in with
+    /// the same handle would alias it.
+    static ACTIVE_HANDLES: std::cell::RefCell<Vec<usize>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// Marks a handle as in use until dropped (also on unwind).
+pub(crate) struct ActiveHandle(usize);
+
+impl ActiveHandle {
+    /// Mark `handle` in use, or return `None` (and log) when an export on
+    /// this thread is already using it: a re-entrant call from a callback.
+    pub(crate) fn enter(handle: *const OasisInstance, export: &'static str) -> Option<Self> {
+        let addr = handle as usize;
+        let reentrant = ACTIVE_HANDLES.with(|a| {
+            let mut active = a.borrow_mut();
+            if active.contains(&addr) {
+                return true;
+            }
+            active.push(addr);
+            false
+        });
+        if reentrant {
+            log::error!("FFI: {export} called from a callback with the same handle; ignored");
+            return None;
+        }
+        Some(Self(addr))
+    }
+}
+
+impl Drop for ActiveHandle {
+    fn drop(&mut self) {
+        // `try_with`: the thread-local may already be gone at thread exit.
+        let _ = ACTIVE_HANDLES.try_with(|a| {
+            let mut active = a.borrow_mut();
+            if let Some(i) = active.iter().rposition(|&h| h == self.0) {
+                active.swap_remove(i);
+            }
+        });
     }
 }
 
@@ -158,8 +220,9 @@ pub(crate) fn maybe_inject_panic() {
 
 /// Safely access a mutable `OasisInstance` from a raw pointer.
 ///
-/// Returns `default` if `handle` is null; otherwise calls `f` with
-/// an exclusive reference to the instance.
+/// Returns `default` if `handle` is null or already in use by an export
+/// on this thread (a callback re-entering the API, see [`ActiveHandle`]);
+/// otherwise calls `f` with an exclusive reference to the instance.
 ///
 /// # Safety
 ///
@@ -169,7 +232,15 @@ pub(crate) unsafe fn with_instance<F, R>(handle: *mut OasisInstance, default: R,
 where
     F: FnOnce(&mut OasisInstance) -> R,
 {
-    // SAFETY: Caller guarantees `handle` is null or valid per function safety contract.
+    if handle.is_null() {
+        return default;
+    }
+    let Some(_active) = ActiveHandle::enter(handle, "oasis_*") else {
+        return default;
+    };
+    // SAFETY: Caller guarantees `handle` is null or valid per function safety
+    // contract; it is non-null here, and the `ActiveHandle` guard ensures no
+    // other reference to it is live on this thread.
     let Some(instance) = (unsafe { handle.as_mut() }) else {
         return default;
     };
@@ -178,18 +249,25 @@ where
 
 /// Safely access an immutable `OasisInstance` from a raw pointer.
 ///
-/// Returns `default` if `handle` is null; otherwise calls `f` with
-/// a shared reference to the instance.
+/// Returns `default` if `handle` is null or already in use (as
+/// [`with_instance`]); otherwise calls `f` with a shared reference.
 ///
 /// # Safety
 ///
 /// `handle` must be null or a valid pointer previously returned by
 /// `oasis_create`.
-pub(crate) unsafe fn with_instance_ref<F, R>(handle: *mut OasisInstance, default: R, f: F) -> R
+pub(crate) unsafe fn with_instance_ref<F, R>(handle: *const OasisInstance, default: R, f: F) -> R
 where
     F: FnOnce(&OasisInstance) -> R,
 {
-    // SAFETY: Caller guarantees `handle` is null or valid per function safety contract.
+    if handle.is_null() {
+        return default;
+    }
+    let Some(_active) = ActiveHandle::enter(handle, "oasis_*") else {
+        return default;
+    };
+    // SAFETY: Caller guarantees `handle` is null or valid per function safety
+    // contract; no `&mut` to it is live on this thread (guard above).
     let Some(instance) = (unsafe { handle.as_ref() }) else {
         return default;
     };

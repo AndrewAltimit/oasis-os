@@ -19,6 +19,11 @@ impl ClipRect {
     /// generates every row of a shape, however far off-screen.
     pub const UNBOUNDED: ClipRect = ClipRect::new(i32::MIN, i32::MIN, u32::MAX, u32::MAX);
 
+    /// The zero-area rectangle at the origin. As a clip it rejects every
+    /// draw: it is what a clip stack applies when nested clips do not
+    /// overlap.
+    pub const EMPTY: ClipRect = ClipRect::new(0, 0, 0, 0);
+
     /// A rectangle at `(x, y)` of `w` x `h` pixels.
     #[must_use]
     pub const fn new(x: i32, y: i32, w: u32, h: u32) -> Self {

@@ -1,12 +1,7 @@
 //! `SdiRenderTarget` extension trait.
 
-use crate::backend::{BlendMode, RenderTargetId, SdiCore};
-use crate::error::{BackendError, OasisError, Result};
-
-/// The error the unimplemented defaults return.
-fn unsupported(op: &'static str) -> OasisError {
-    OasisError::Backend(BackendError::Unsupported { op })
-}
+use crate::backend::{BlendMode, RenderTargetId, SdiCore, unsupported};
+use crate::error::Result;
 
 // ---------------------------------------------------------------------------
 // SdiRenderTarget
@@ -21,8 +16,9 @@ fn unsupported(op: &'static str) -> OasisError {
 /// composite-back.
 ///
 /// All `Result`-returning methods default to
-/// `Err(OasisError::Backend(BackendError::Unsupported { .. }))` except [`destroy_render_target`](Self::destroy_render_target)
-/// which defaults to `Ok(())` for opt-out backends.  Capability probes
+/// `Err(OasisError::Backend(BackendError::Unsupported { .. }))`
+/// ([`unsupported`](crate::backend::unsupported)) except
+/// [`destroy_render_target`](Self::destroy_render_target), which defaults to `Ok(())` for opt-out backends.  Capability probes
 /// ([`supports_render_targets`](Self::supports_render_targets),
 /// [`supports_render_target_readback`](Self::supports_render_target_readback))
 /// return `bool` and default to `false`.  The browser checks support

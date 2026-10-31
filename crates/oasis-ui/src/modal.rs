@@ -1,6 +1,7 @@
 //! Modal dialog widget with input blocking and button presets.
 
 use crate::context::DrawContext;
+use crate::focus::{FocusDir, step_wrapping};
 use crate::layout;
 use crate::widget::Widget;
 use oasis_types::error::Result;
@@ -111,19 +112,18 @@ impl Modal {
 
     /// Focus the next button (wrapping).
     pub fn focus_next(&mut self) {
-        if !self.buttons.is_empty() {
-            self.focused_button = (self.focused_button + 1) % self.buttons.len();
-        }
+        self.step_focus(FocusDir::Next);
     }
 
     /// Focus the previous button (wrapping).
     pub fn focus_prev(&mut self) {
-        if !self.buttons.is_empty() {
-            self.focused_button = if self.focused_button == 0 {
-                self.buttons.len() - 1
-            } else {
-                self.focused_button - 1
-            };
+        self.step_focus(FocusDir::Prev);
+    }
+
+    fn step_focus(&mut self, dir: FocusDir) {
+        let current = Some(self.focused_button);
+        if let Some(i) = step_wrapping(current, self.buttons.len(), dir, |_| true) {
+            self.focused_button = i;
         }
     }
 
@@ -136,7 +136,12 @@ impl Modal {
     ///
     /// Returns the `ModalResult` for the pressed button.
     pub fn activate(&mut self) -> ModalResult {
-        let result = self.result_for_index(self.focused_button);
+        // `buttons` is pub: a focus index left past the end by a shorter
+        // custom button list activates the last button, not a phantom one.
+        let index = self
+            .focused_button
+            .min(self.buttons.len().saturating_sub(1));
+        let result = self.result_for_index(index);
         self.result = result;
         result
     }
@@ -209,11 +214,16 @@ impl Widget for Modal {
         let body_h = ctx.backend.measure_text_height(fs_body);
         let radius = ctx.theme.border_radius_lg;
 
-        // Compute modal height from content.
-        let content_h =
-            pad as u32 + title_h + 4 + body_h + pad as u32 + Self::BUTTON_H + pad as u32;
+        // Compute modal height from content: the body is as tall as its
+        // wrapped lines (it used to be sized for one line, so longer
+        // messages spilled over the buttons and out of the panel).
         let mw = Self::MODAL_WIDTH;
-        let mh = content_h;
+        let body_w = mw.saturating_sub(pad as u32 * 2);
+        let body_lines = wrapped_line_count(ctx, &self.body, fs_body, body_w);
+        let body_total_h = body_h * body_lines;
+        let content_h =
+            pad as u32 + title_h + 4 + body_total_h + pad as u32 + Self::BUTTON_H + pad as u32;
+        let mh = content_h.min(h);
         let mx = x + layout::center(w, mw);
         let my = y + layout::center(h, mh);
 
@@ -241,7 +251,6 @@ impl Widget for Modal {
         cy += title_h as i32 + 4;
 
         // -- Body --
-        let body_w = mw.saturating_sub(pad as u32 * 2);
         ctx.backend.draw_text_wrapped(
             &self.body,
             mx + pad,
@@ -251,7 +260,7 @@ impl Widget for Modal {
             body_w,
             0,
         )?;
-        cy += body_h as i32 + pad;
+        cy += body_total_h as i32 + pad;
 
         // -- Buttons (right-aligned row) --
         if !self.buttons.is_empty() {
@@ -298,6 +307,37 @@ impl Widget for Modal {
 
         Ok(())
     }
+}
+
+/// Lines `SdiText::draw_text_wrapped` breaks `text` into at `max_width`
+/// (the same greedy word wrap, so the measured and drawn heights agree);
+/// at least one.
+fn wrapped_line_count(ctx: &DrawContext<'_>, text: &str, font_size: u16, max_width: u32) -> u32 {
+    let mut lines = 0u32;
+    for line in text.split('\n') {
+        let mut current = String::new();
+        let mut any = false;
+        for word in line.split_whitespace() {
+            any = true;
+            let test = if current.is_empty() {
+                word.to_string()
+            } else {
+                format!("{current} {word}")
+            };
+            if ctx.backend.measure_text(&test, font_size) > max_width && !current.is_empty() {
+                lines += 1;
+                current = word.to_string();
+            } else {
+                current = test;
+            }
+        }
+        // A blank line still takes one line; a non-empty one ends with its
+        // last partial line.
+        if !any || !current.is_empty() {
+            lines += 1;
+        }
+    }
+    lines.max(1)
 }
 
 #[cfg(test)]
@@ -364,6 +404,18 @@ mod tests {
     fn custom_empty_buttons() {
         let m = Modal::custom("T", "B", vec![]);
         assert!(m.buttons.is_empty());
+        assert_eq!(m.focused_button, 0);
+    }
+
+    /// Replacing a custom modal's buttons with fewer left `focused_button`
+    /// past the end: `activate` reported a button that no longer exists.
+    #[test]
+    fn stale_focused_button_activates_the_last_button() {
+        let mut m = Modal::custom("T", "B", vec!["a".into(), "b".into(), "c".into()]);
+        m.focused_button = 2;
+        m.buttons.truncate(1);
+        assert_eq!(m.activate(), ModalResult::Custom(0));
+        m.focus_prev();
         assert_eq!(m.focused_button, 0);
     }
 
@@ -603,6 +655,31 @@ mod tests {
             m.draw(&mut ctx, 0, 0, 480, 272).ok();
         }
         assert!(backend_without.fill_rect_count() < backend_with.fill_rect_count());
+    }
+
+    #[test]
+    fn long_body_pushes_the_buttons_below_its_last_line() {
+        let theme = Theme::dark();
+        let mut backend = RecordingBackend::default();
+        let body = "word ".repeat(80);
+        {
+            let mut ctx = DrawContext::new(&mut backend, &theme);
+            let m = Modal::new("T", body.trim());
+            m.draw(&mut ctx, 0, 0, 480, 272).ok();
+        }
+        let texts = backend.text_positions();
+        let last_body_y = texts
+            .iter()
+            .filter(|t| t.0.starts_with("word"))
+            .map(|t| t.2)
+            .max()
+            .unwrap();
+        let ok_y = texts.iter().find(|t| t.0 == "OK").unwrap().2;
+        assert!(texts.iter().filter(|t| t.0.starts_with("word")).count() > 1);
+        assert!(
+            ok_y > last_body_y,
+            "button at {ok_y} overlaps body line at {last_body_y}"
+        );
     }
 
     #[test]

@@ -827,6 +827,23 @@ fn background_jobs_lifecycle() {
     assert!(out.contains("Exit") || out.contains("error"), "{out}");
 }
 
+/// A background job is a subshell: its exit status and `cd` don't reach
+/// the interactive session's `$?`, cwd or `$OLDPWD`.
+#[test]
+fn background_jobs_leave_the_session_status_and_dirs_alone() {
+    let mut sh = Shell::memory();
+    sh.ok("cd /home/user");
+    sh.ok("cd /tmp");
+    sh.ok("cd / && false &");
+    sh.ok("true");
+    let out = sh.tick().unwrap();
+    assert!(out.contains("Exit 1"), "{out}");
+    assert_eq!(sh.ok("echo $? $OLDPWD $CWD"), "0 /home/user /tmp");
+    assert_eq!(sh.cwd, "/tmp");
+    // `cd -` still goes back to where the user was, not the job's dir.
+    assert_eq!(sh.ok("cd -"), "/home/user");
+}
+
 #[test]
 fn many_background_jobs_drain_in_order() {
     let mut sh = Shell::memory();
@@ -1203,4 +1220,415 @@ fn run_passes_script_arguments() {
     assert_eq!(sh.ok("run /tmp/greet.sh ann bob"), "hello ann and bob (2)");
     // The caller's positional parameters are restored afterwards.
     assert_eq!(sh.ok("echo [$1]"), "[]");
+}
+
+// ---------------------------------------------------------------------------
+// Overhaul 3 review fixes
+// ---------------------------------------------------------------------------
+
+#[test]
+fn tab_completion_handles_non_ascii_names() {
+    let mut sh = Shell::memory();
+    sh.vfs.write("/tmp/café1", b"").unwrap();
+    sh.vfs.write("/tmp/cafè2", b"").unwrap();
+    sh.cwd = "/tmp".to_string();
+    sh.type_str("cat caf");
+    sh.tab();
+    assert_eq!(sh.session.buffer(), "cat caf");
+}
+
+#[test]
+fn tab_completion_escapes_and_keeps_quotes() {
+    let mut sh = Shell::memory();
+    sh.vfs.write("/tmp/my file.txt", b"hi").unwrap();
+    sh.cwd = "/tmp".to_string();
+    sh.type_str("cat my");
+    sh.tab();
+    assert_eq!(sh.session.buffer(), "cat my\\ file.txt ");
+    assert_eq!(sh.enter().unwrap(), "hi");
+    sh.type_str("cat \"my f");
+    sh.tab();
+    assert_eq!(sh.session.buffer(), "cat \"my file.txt\" ");
+    assert_eq!(sh.enter().unwrap(), "hi");
+    // A `;` inside quotes does not start a new command: `my` is still an
+    // argument, not a command name.
+    sh.type_str("echo \"x;\" my");
+    sh.tab();
+    assert_eq!(sh.session.buffer(), "echo \"x;\" my\\ file.txt ");
+}
+
+#[test]
+fn dev_null_redirects_discard_output() {
+    let mut sh = Shell::memory();
+    assert_eq!(sh.ok("echo ok 2>/dev/null && echo yes"), "ok\nyes");
+    assert_eq!(sh.ok("echo gone >/dev/null; echo kept"), "kept");
+    assert_eq!(sh.ok("nosuchcmd 2>/dev/null || echo failed"), "failed");
+}
+
+#[test]
+fn fd_redirect_forms() {
+    let mut sh = Shell::memory();
+    // `>&2` sends output to stderr: shown, unless stderr is redirected.
+    assert_eq!(sh.ok("echo err >&2"), "err");
+    assert_eq!(sh.ok("echo err 2>/tmp/e >&2"), "");
+    assert_eq!(sh.ok("cat /tmp/e"), "err");
+    sh.ok("echo both &> /tmp/b");
+    assert_eq!(sh.ok("cat /tmp/b"), "both");
+    // A redirect target is one word; later words are arguments.
+    sh.ok("echo a > /tmp/f b");
+    assert_eq!(sh.ok("cat /tmp/f"), "a b");
+}
+
+#[test]
+fn redirections_apply_left_to_right() {
+    let mut sh = Shell::memory();
+    // `2>&1 > f`: stderr goes where stdout pointed *before* `> f` (the
+    // terminal); only stdout lands in the file.
+    let shown = sh.ok("nosuchcmd 2>&1 > /tmp/o");
+    assert!(shown.contains("nosuchcmd"), "{shown}");
+    assert_eq!(sh.ok("cat /tmp/o"), "");
+    // `> f 2>&1`: both streams land in the file.
+    assert_eq!(sh.ok("nosuchcmd > /tmp/o 2>&1"), "");
+    assert!(sh.ok("cat /tmp/o").contains("nosuchcmd"));
+    // `>&2 2> f`: stdout follows the old stderr (the terminal).
+    assert_eq!(sh.ok("echo out >&2 2>/tmp/e"), "out");
+    assert_eq!(sh.ok("cat /tmp/e"), "");
+    // An overridden `> a` is still truncated, as in a POSIX shell.
+    sh.ok("echo old > /tmp/a");
+    sh.ok("echo new > /tmp/a > /tmp/b");
+    assert_eq!(sh.ok("cat /tmp/a"), "");
+    assert_eq!(sh.ok("cat /tmp/b"), "new");
+}
+
+#[test]
+fn here_strings_feed_stdin() {
+    let mut sh = Shell::memory();
+    assert_eq!(sh.ok("cat <<< hello"), "hello");
+    sh.ok("set W=world");
+    assert_eq!(sh.ok("cat <<< \"hi $W\""), "hi world");
+    assert_eq!(sh.ok("cat <<<'a b' > /tmp/h"), "");
+    assert_eq!(sh.ok("cat /tmp/h"), "a b");
+    // Here-documents are not supported, and say so.
+    let err = sh.run("cat << EOF").unwrap_err();
+    assert!(err.contains("not supported"), "{err}");
+}
+
+#[test]
+fn case_patterns_are_quoted_and_expanded() {
+    let mut sh = Shell::memory();
+    sh.ok("set X=hello");
+    sh.ok("set Y=hel*");
+    assert_eq!(sh.ok("case \"$X\" in \"hello\") echo hi;; esac"), "hi");
+    assert_eq!(sh.ok("case $X in $Y) echo glob;; esac"), "glob");
+    assert_eq!(sh.ok("case 'a b' in 'a b') echo spaced;; esac"), "spaced");
+    // A quoted `*` is literal; a quoted `|` is not an alternation.
+    assert_eq!(
+        sh.ok("case x in \"*\") echo star;; *) echo other;; esac"),
+        "other"
+    );
+    assert_eq!(sh.ok("case 'a|b' in \"a|b\") echo bar;; esac"), "bar");
+    assert_eq!(sh.ok("case b in a|b) echo alt;; esac"), "alt");
+    // `in` is a whole word.
+    assert_eq!(sh.ok("case foo.in in foo.in) echo dotted;; esac"), "dotted");
+}
+
+#[test]
+fn case_word_is_not_split_or_globbed_and_status_resets() {
+    let mut sh = Shell::memory();
+    sh.vfs.write("/tmp/zz", b"").unwrap();
+    sh.ok("set X=\"a  b\"");
+    assert_eq!(sh.ok("case $X in 'a  b') echo exact;; esac"), "exact");
+    sh.ok("set S=*");
+    assert_eq!(sh.ok("case $S in '*') echo literal;; esac"), "literal");
+    assert_eq!(sh.ok("false; case x in y) echo no;; esac; echo $?"), "0");
+    assert_eq!(sh.ok("false; for i in; do echo $i; done; echo $?"), "0");
+}
+
+#[test]
+fn compound_commands_take_redirects_and_pipes() {
+    let mut sh = Shell::memory();
+    sh.ok("for i in 3 1 2; do echo $i; done > /tmp/out");
+    assert_eq!(sh.ok("cat /tmp/out"), "3\n1\n2");
+    assert_eq!(sh.ok("for i in 3 1 2; do echo $i; done | sort"), "1\n2\n3");
+    sh.ok("if true; then echo yes; fi >> /tmp/out");
+    assert_eq!(sh.ok("cat /tmp/out"), "3\n1\n2\nyes");
+    assert_eq!(
+        sh.ok("case a in a) echo m;; esac && echo after"),
+        "m\nafter"
+    );
+    assert_eq!(
+        sh.ok("for i in b a; do echo $i; done | sort > /tmp/s; cat /tmp/s"),
+        "a\nb"
+    );
+}
+
+#[test]
+fn aliases_with_operators() {
+    let mut sh = Shell::memory();
+    sh.vfs.write("/tmp/b", b"").unwrap();
+    sh.vfs.write("/tmp/a", b"").unwrap();
+    sh.ok("alias ll='ls /tmp | sort -r'");
+    assert_eq!(sh.ok("ll"), "b\na");
+    assert_eq!(sh.ok("ll | head -n 1"), "b");
+    // An alias naming itself does not loop.
+    sh.ok("alias ls='ls /tmp | sort'");
+    assert_eq!(sh.ok("ls"), "a\nb");
+}
+
+#[test]
+fn flags_are_parsed_consistently() {
+    let mut sh = Shell::memory();
+    sh.ok("mkdir -p /tmp/x/y/z");
+    assert!(sh.vfs.exists("/tmp/x/y/z"));
+    sh.ok("mkdir -p /tmp/x/y");
+    sh.vfs.write("/tmp/x/y/z/f", b"deep").unwrap();
+    assert!(sh.run("rm /tmp/x").is_err());
+    sh.ok("rm -rf /tmp/x /tmp/nope");
+    assert!(!sh.vfs.exists("/tmp/x"));
+    assert!(sh.run("rm /tmp/nope").is_err());
+    sh.vfs.write("/tmp/t", b"Foo\nbar\nfoo\n").unwrap();
+    assert_eq!(sh.ok("grep -in foo /tmp/t"), "1:Foo\n3:foo");
+    assert_eq!(sh.ok("grep -ic foo /tmp/t"), "2");
+    assert_eq!(sh.ok("grep -q foo /tmp/t && echo found"), "found");
+    assert_eq!(sh.ok("head -2 /tmp/t"), "Foo\nbar");
+    assert_eq!(sh.ok("head -n1 /tmp/t"), "Foo");
+    assert_eq!(sh.ok("tail -n 1 /tmp/t"), "foo");
+    assert!(sh.run("head -n").is_err());
+    // `+N` (from line N) is not "last N"; after `--`, `-5` is a file.
+    assert!(sh.run("tail -n +1 /tmp/t").is_err());
+    sh.vfs.write("/tmp/-5", b"x\ny").unwrap();
+    assert_eq!(sh.ok("cd /tmp; head -n 1 -- -5"), "x");
+    assert_eq!(sh.ok("sort -ru /tmp/t"), "foo\nbar\nFoo");
+    assert_eq!(sh.ok("wc -lw /tmp/t"), "       3        3");
+    // `--` ends the options.
+    assert_eq!(sh.ok("grep -c -- -x /tmp/t || echo none"), "0\nnone");
+    let err = sh.run("sort -z /tmp/t").unwrap_err();
+    assert!(
+        err.contains("unknown option '-z'") && err.contains("usage: sort"),
+        "{err}"
+    );
+}
+
+#[test]
+fn ls_flags_and_dotfiles() {
+    let mut sh = Shell::memory();
+    sh.vfs.write("/tmp/.hidden", b"").unwrap();
+    sh.vfs.write("/tmp/seen", b"12345").unwrap();
+    assert_eq!(sh.ok("ls /tmp"), "seen");
+    assert_eq!(sh.ok("ls -a /tmp"), ".hidden\nseen");
+    assert!(sh.ok("ls -la /tmp").contains("5  seen"));
+    // Globs skip dotfiles unless the pattern starts with `.`.
+    assert_eq!(sh.ok("echo /tmp/*"), "/tmp/seen");
+    assert_eq!(sh.ok("echo /tmp/.h*"), "/tmp/.hidden");
+}
+
+#[test]
+fn captured_output_has_no_placeholders_or_colour() {
+    let mut sh = Shell::memory();
+    sh.vfs.mkdir("/tmp/d").unwrap();
+    sh.vfs.mkdir("/tmp/empty").unwrap();
+    sh.vfs.write("/tmp/f", b"abc").unwrap();
+    assert_eq!(sh.ok("grep zzz /tmp/f | wc -l"), "0");
+    assert_eq!(sh.ok("ls /tmp/empty"), "");
+    // `ls` colours directories for the terminal only.
+    assert!(sh.ok("ls /tmp").contains("\u{1b}[94"));
+    assert_eq!(sh.ok("echo $(ls /tmp)"), "d/ empty/ f");
+    sh.ok("ls /tmp > /tmp/listing");
+    assert!(!sh.ok("cat /tmp/listing").contains('\u{1b}'));
+    // A file's own escape sequences survive a pipe / redirect copy.
+    let art = "\u{1b}[31mred\u{1b}[0m";
+    sh.vfs.write("/tmp/art.ans", art.as_bytes()).unwrap();
+    sh.ok("cat /tmp/art.ans > /tmp/copy.ans");
+    assert_eq!(sh.vfs.read("/tmp/copy.ans").unwrap(), art.as_bytes());
+    assert_eq!(sh.ok("cat /tmp/art.ans | head -n 5"), art);
+    assert_eq!(sh.ok("find /tmp '*.none'"), "");
+}
+
+#[test]
+fn parameter_expansion_forms() {
+    let mut sh = Shell::memory();
+    sh.vfs
+        .write(
+            "/tmp/args.sh",
+            b"echo $# $1x\nfor a; do echo [$a]; done\necho \"$*\"",
+        )
+        .unwrap();
+    assert_eq!(
+        sh.ok("run /tmp/args.sh 'one two' three"),
+        "2 one twox\n[one two]\n[three]\none two three"
+    );
+    sh.vfs
+        .write("/tmp/q.sh", b"for a in \"$@\"; do echo \"<$a>\"; done")
+        .unwrap();
+    assert_eq!(sh.ok("run /tmp/q.sh 'a b' c"), "<a b>\n<c>");
+    sh.ok("set V=val");
+    assert_eq!(sh.ok("echo ${V:-def} ${NOPE:-def} ${#V}"), "val def 3");
+    assert_eq!(sh.ok("echo ${NEW:=made} $NEW"), "made made");
+    assert_eq!(sh.ok("echo ${NOPE:-$V}"), "val");
+    let err = sh.run("echo ${V%x}").unwrap_err();
+    assert!(err.contains("bad substitution"), "{err}");
+}
+
+/// The `}` closing `${...}` is found past quoted or escaped braces in the
+/// word, and inside double quotes a `'` in the word is a plain character.
+#[test]
+fn parameter_expansion_braces_respect_quotes() {
+    let mut sh = Shell::memory();
+    assert_eq!(sh.ok("echo ${NOPE:-\"}\"}"), "}");
+    assert_eq!(sh.ok("echo ${NOPE:-'a}b'}x"), "a}bx");
+    assert_eq!(sh.ok("echo ${NOPE:-\\}}"), "}");
+    assert_eq!(sh.ok("echo \"${NOPE:-it's}\""), "it's");
+    assert_eq!(sh.ok("echo \"[${NOPE:-a  b}]\""), "[a  b]");
+    sh.ok("set V=val");
+    assert_eq!(sh.ok("echo \"${V:-it's}\" ${V:-'}'}"), "val val");
+    assert_eq!(sh.ok("echo ${NEW:='x}y'} $NEW"), "x}y x}y");
+}
+
+/// A failing stage before the last feeds the next one nothing instead of
+/// aborting the pipeline; the pipeline's status is the last stage's.
+#[test]
+fn failing_early_pipeline_stage_does_not_abort_the_pipeline() {
+    let mut sh = Shell::memory();
+    let out = sh.ok("cat /missing | wc -l");
+    let lines: Vec<&str> = out.lines().collect();
+    assert_eq!(lines.len(), 2, "{out}");
+    assert!(lines[0].starts_with("error:"), "{out}");
+    assert_eq!(lines[1].trim(), "0", "{out}");
+    assert_eq!(sh.ok("echo $?"), "0");
+    sh.ok("cat /missing | wc -l > /tmp/n.txt && echo ran");
+    assert_eq!(
+        String::from_utf8(sh.vfs.read("/tmp/n.txt").unwrap())
+            .unwrap()
+            .trim(),
+        "0"
+    );
+    // The last stage failing still fails the pipeline.
+    assert!(sh.run("echo hi | nosuchcmd").is_err());
+    let out = sh.ok("echo hi | nosuchcmd || echo fallback");
+    assert!(
+        out.contains("nosuchcmd") && out.ends_with("\nfallback"),
+        "{out}"
+    );
+}
+
+/// `NAME=value` assigns a shell variable; before a command it holds for
+/// that command only. Values are not field-split.
+#[test]
+fn posix_variable_assignments() {
+    let mut sh = Shell::memory();
+    sh.ok("A=1 B=\"two words\"");
+    assert_eq!(sh.ok("echo $A [$B]"), "1 [two words]");
+    sh.ok("C=$B");
+    assert_eq!(sh.ok("echo \"[$C]\""), "[two words]");
+    sh.ok("D=$(echo x  y)");
+    assert_eq!(sh.ok("echo \"[$D]\""), "[x y]");
+    sh.ok("function show() { echo [$P]; }");
+    assert_eq!(sh.ok("P=temp show"), "[temp]");
+    assert_eq!(sh.ok("echo [$P]"), "[]");
+    sh.ok("P=kept");
+    assert_eq!(sh.ok("P=temp show; echo $P"), "[temp]\nkept");
+    // The command's own words expand before its prefix assignments apply.
+    assert_eq!(sh.ok("P=temp echo $P"), "kept");
+    // An assignment's status is its last `$(...)`'s; a command's is its
+    // own (a substitution in its arguments does not leak into it).
+    sh.ok("E=$(false)");
+    assert_eq!(sh.ok("echo $?"), "1");
+    assert_eq!(sh.ok("echo $(false)x; echo $?"), "x\n0");
+    assert_eq!(sh.ok("echo $(false)x && echo ok"), "x\nok");
+    // Not assignments: a quoted name, or `=` later in the word.
+    assert!(sh.run("'Q=1'").is_err());
+    assert_eq!(sh.ok("echo X=1"), "X=1");
+    assert!(sh.run("1X=2").is_err());
+}
+
+#[test]
+fn cd_home_oldpwd_and_tilde() {
+    let mut sh = Shell::memory();
+    sh.reg.set_variable("HOME", "/home/user");
+    sh.ok("cd /tmp");
+    sh.ok("cd");
+    assert_eq!(sh.cwd, "/home/user");
+    assert_eq!(sh.ok("cd -"), "/tmp");
+    assert_eq!(sh.cwd, "/tmp");
+    sh.ok("cd ~");
+    assert_eq!(sh.cwd, "/home/user");
+    sh.vfs.write("/home/user/n.txt", b"note").unwrap();
+    assert_eq!(sh.ok("cat ~/n.txt"), "note");
+    // Quoted or mid-word tildes stay literal.
+    assert_eq!(sh.ok("echo '~' a~"), "~ a~");
+    assert!(sh.run("cd /tmp /home").is_err());
+}
+
+#[test]
+fn set_local_and_variable_names() {
+    let mut sh = Shell::memory();
+    sh.ok("set A=1 B=2");
+    assert_eq!(sh.ok("echo $A $B"), "1 2");
+    sh.ok("set X=\"  a \"");
+    assert_eq!(sh.ok("echo \"[$X]\""), "[  a ]");
+    sh.ok("set W=hello world");
+    assert_eq!(sh.ok("echo $W"), "hello world");
+    // The spaced form worked before names were validated.
+    sh.ok("set S = 5");
+    assert_eq!(sh.ok("echo [$S]"), "[5]");
+    assert!(sh.run("set 1=x").is_err());
+    assert!(sh.run("set ?=x").is_err());
+    sh.ok("set Y=outer");
+    sh.ok("function f() { local Y; echo [$Y]; }");
+    assert_eq!(sh.ok("f"), "[]");
+    assert_eq!(sh.ok("echo $Y"), "outer");
+}
+
+#[test]
+fn tr_ranges() {
+    let mut sh = Shell::memory();
+    assert_eq!(sh.ok("echo hi | tr a-z A-Z"), "HI");
+    assert_eq!(sh.ok("echo hello | tr -d l-m"), "heo");
+}
+
+#[test]
+fn multiline_history_entries_survive_a_reload() {
+    let mut sh = Shell::memory();
+    sh.ok("for i in 1 2\ndo echo $i\ndone");
+    sh.ok("echo back\\slash");
+    sh.save_history();
+    let reg = CommandRegistry::new();
+    assert_eq!(sh.session.load_history(&reg, sh.vfs.as_ref()), 2);
+    assert_eq!(
+        reg.history(),
+        vec!["for i in 1 2\ndo echo $i\ndone", "echo back\\slash"]
+    );
+}
+
+#[test]
+fn find_matches_globs() {
+    let mut sh = Shell::memory();
+    sh.vfs.write("/tmp/a.txt", b"").unwrap();
+    sh.vfs.write("/tmp/b.log", b"").unwrap();
+    assert_eq!(sh.ok("find /tmp '*.txt'"), "/tmp/a.txt");
+    // A plain pattern is still a substring search.
+    assert_eq!(sh.ok("find /tmp .lo"), "/tmp/b.log");
+}
+
+/// `rm -r` removes a symlinked directory's link, never the target's files
+/// (`readdir` / `stat` report the link as a directory).
+#[cfg(unix)]
+#[test]
+fn rm_recursive_does_not_follow_directory_symlinks() {
+    use std::os::unix::fs::symlink;
+    let (tmp, mut sh) = real_sandbox("rm-symlink");
+    let root = tmp.path().join("root");
+    std::fs::create_dir_all(root.join("keep")).unwrap();
+    std::fs::write(root.join("keep/f"), b"data").unwrap();
+    std::fs::create_dir_all(root.join("d")).unwrap();
+    symlink(root.join("keep"), root.join("d/link")).unwrap();
+    symlink(root.join("keep"), root.join("top")).unwrap();
+    sh.ok("rm -r /d");
+    sh.ok("rm -r /top");
+    assert!(
+        root.join("keep/f").exists(),
+        "rm -r emptied the link target"
+    );
+    assert!(!root.join("d").exists());
+    assert!(std::fs::symlink_metadata(root.join("top")).is_err());
 }

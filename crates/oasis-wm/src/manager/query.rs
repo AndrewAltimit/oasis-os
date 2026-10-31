@@ -1,6 +1,7 @@
 //! Query and lookup methods for the window manager.
 
 use super::{CASCADE_OFFSET, WindowManager};
+use crate::hit_test::point_in_rect;
 use crate::window::{Window, WmTheme};
 
 impl WindowManager {
@@ -57,9 +58,7 @@ impl WindowManager {
             .iter()
             .rev()
             .filter(|w| w.state != crate::window::WindowState::Minimized)
-            .find(|w| {
-                px >= w.x && py >= w.y && px < w.x + w.outer_w as i32 && py < w.y + w.outer_h as i32
-            })
+            .find(|w| point_in_rect(px, py, w.x, w.y, w.outer_w, w.outer_h))
             .map(|w| w.id.as_str())
     }
 
@@ -80,6 +79,21 @@ impl WindowManager {
     /// Replace the visual theme at runtime.
     pub fn set_theme(&mut self, theme: WmTheme) {
         self.theme = theme;
+    }
+
+    /// Reserve `top` / `bottom` rows of the screen for the host's chrome
+    /// (status bar plus tab row, bottom bar). Windows the WM places itself
+    /// (cascaded, no explicit position) open between them, so a new
+    /// window never covers a skin's top tab row. Explicitly positioned
+    /// windows, maximize and snapping are unaffected.
+    pub fn set_placement_insets(&mut self, top: u32, bottom: u32) {
+        self.placement_insets = (top, bottom);
+    }
+
+    /// The `(top, bottom)` rows cascaded windows keep clear (see
+    /// [`Self::set_placement_insets`]).
+    pub fn placement_insets(&self) -> (u32, u32) {
+        self.placement_insets
     }
 
     /// Update the screen dimensions (e.g. after a live resolution change).

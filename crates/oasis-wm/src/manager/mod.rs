@@ -119,6 +119,10 @@ pub struct WindowManager {
     pub(crate) anim_visual: Vec<(WindowId, Geometry)>,
     /// Time of the previous `tick_animations` call.
     pub(crate) anim_last_tick: Option<web_time::Instant>,
+    /// Rows at the top / bottom of the screen the host's chrome keeps
+    /// (status bar, tab row, bottom bar): cascaded windows open between
+    /// them. See [`WindowManager::set_placement_insets`].
+    pub(crate) placement_insets: (u32, u32),
 }
 
 impl WindowManager {
@@ -148,6 +152,7 @@ impl WindowManager {
             closing: Vec::new(),
             anim_visual: Vec::new(),
             anim_last_tick: None,
+            placement_insets: (0, 0),
         }
     }
 
@@ -175,23 +180,10 @@ impl WindowManager {
             .find(|w| w.id == id)
             .ok_or_else(|| OasisError::Wm(WmError::WindowNotFound { id: id.to_string() }))?;
 
-        let raw_x = window.x + dx;
-        let raw_y = window.y + dy;
+        let raw_x = window.x.saturating_add(dx);
+        let raw_y = window.y.saturating_add(dy);
         let (cx, cy) = clamp_position(raw_x, raw_y, window.outer_w, sw, sh, tb_h);
-        let actual_dx = cx - window.x;
-        let actual_dy = cy - window.y;
-        window.x = cx;
-        window.y = cy;
-
-        // Update all SDI objects.
-        for suffix in window.sdi_suffixes() {
-            let name = window.sdi_name(suffix);
-            if let Ok(obj) = sdi.get_mut(&name) {
-                obj.x += actual_dx;
-                obj.y += actual_dy;
-            }
-        }
-
+        move_window_to(window, cx, cy, sdi);
         Ok(())
     }
 
@@ -217,6 +209,27 @@ impl WindowManager {
         self.update_sdi_positions(id, sdi);
 
         Ok(())
+    }
+}
+
+/// Move `window` to `(x, y)`, shifting its SDI objects by the same delta
+/// (so objects mid-animation keep their offset). The delta is computed in
+/// `i64` and the object positions saturate, so a window parked at the far
+/// end of the coordinate space cannot overflow.
+pub(crate) fn move_window_to(window: &mut Window, x: i32, y: i32, sdi: &mut SdiRegistry) {
+    let dx = i64::from(x) - i64::from(window.x);
+    let dy = i64::from(y) - i64::from(window.y);
+    window.x = x;
+    window.y = y;
+    if dx == 0 && dy == 0 {
+        return;
+    }
+    let shift = |v: i32, d: i64| (i64::from(v) + d).clamp(i32::MIN.into(), i32::MAX.into()) as i32;
+    for suffix in window.sdi_suffixes() {
+        if let Ok(obj) = sdi.get_mut(&window.sdi_name(suffix)) {
+            obj.x = shift(obj.x, dx);
+            obj.y = shift(obj.y, dy);
+        }
     }
 }
 

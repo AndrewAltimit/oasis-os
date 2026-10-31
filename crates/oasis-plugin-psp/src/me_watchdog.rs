@@ -21,11 +21,15 @@ static mut WAIT_HOOK: Option<psp::hook::SyscallHook> = None;
 /// NID for sceKernelWaitEventFlag.
 const NID_WAIT_EVENT_FLAG: u32 = 0x402FCF22;
 
-/// Hooked WaitEventFlag: adds timeout for infinite waits from MPEG code.
+/// Hooked WaitEventFlag: adds a 5 s timeout to infinite waits that look
+/// like the ME RPC's.
 ///
-/// Only applies the timeout when the caller is within the mpeg_vsh370.prx
-/// address range (detected via $ra return address). This avoids breaking
-/// system event flag waits in other modules (audio, threading, etc.).
+/// There is no caller check: the timeout applies to the learned ME flag
+/// UID *and* to any infinite wait on bits <= 0x3 in OR|CLEAR mode, from
+/// any module. Such a wait in a game or driver thread that legitimately
+/// blocks longer than 5 s gets `SCE_KERNEL_ERROR_WAIT_TIMEOUT` instead.
+/// Narrowing it to callers inside mpeg_vsh370.prx (by `$ra`) would fix
+/// that, but has not been done because it needs testing on hardware.
 unsafe extern "C" fn hooked_wait_event_flag(
     ev_id: i32,
     bits: u32,
@@ -73,8 +77,9 @@ unsafe extern "C" fn hooked_wait_event_flag(
 }
 
 /// Install the WaitEventFlag hook immediately (no deferred scanning).
-/// The hook applies a 5-second timeout to ALL infinite waits, so it
-/// doesn't need to know the ME event flag UID in advance.
+/// The hook applies a 5-second timeout to every infinite wait matching the
+/// ME RPC pattern (see `hooked_wait_event_flag`), so it doesn't need to
+/// know the ME event flag UID in advance.
 pub fn install() {
     install_hook();
 }

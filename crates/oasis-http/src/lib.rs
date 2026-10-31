@@ -222,30 +222,42 @@ pub fn subresource_allowed(page_url: Option<&str>, resource_url: &str) -> bool {
 
 /// Parse a `data:` URI into a `ResourceResponse`.
 ///
-/// Format: `data:[<mediatype>][;base64],<data>`
+/// Format: `data:[<mediatype>][;base64],<data>` (the scheme, media type
+/// and `;base64` are case-insensitive). The data is percent-decoded to
+/// raw bytes, as the WHATWG fetch spec's data: URL processor does: `+`
+/// stays a `+`, and `%C3%A9` is the two bytes of `é`, not two Latin-1
+/// characters.
 pub fn parse_data_uri(uri: &str) -> Option<ResourceResponse> {
-    let rest = uri.strip_prefix("data:")?;
+    let rest = uri
+        .get(..5)
+        .filter(|p| p.eq_ignore_ascii_case("data:"))
+        .map(|_| &uri[5..])?;
     let (meta, data) = rest.split_once(',')?;
 
-    let is_base64 = meta.ends_with(";base64");
-    let mime = if is_base64 {
-        meta.strip_suffix(";base64").unwrap_or("")
-    } else {
-        meta
+    let meta = meta.trim();
+    let base64_at = meta.len().checked_sub(7);
+    let is_base64 = base64_at
+        .and_then(|i| meta.get(i..))
+        .is_some_and(|tail| tail.eq_ignore_ascii_case(";base64"));
+    let mime = match base64_at {
+        Some(i) if is_base64 => &meta[..i],
+        _ => meta,
     };
 
-    let content_type = if mime.is_empty() {
+    let mime = mime.to_ascii_lowercase();
+    let content_type = if mime.is_empty() || mime.starts_with(';') {
         ContentType::PlainText
     } else {
-        ContentType::from_mime(mime)
+        ContentType::from_mime(&mime)
     };
 
+    let decoded = percent_decode(data);
     let body = if is_base64 {
         // Whitespace-tolerant, padding optional.
-        oasis_types::util::base64::decode(data).ok()?
+        let text = std::str::from_utf8(&decoded).ok()?;
+        oasis_types::util::base64::decode(text).ok()?
     } else {
-        // URL-decode the data.
-        url_decode(data).into_bytes()
+        decoded
     };
 
     Some(ResourceResponse {
@@ -256,26 +268,30 @@ pub fn parse_data_uri(uri: &str) -> Option<ResourceResponse> {
     })
 }
 
-/// Simple URL percent-decoding.
-fn url_decode(s: &str) -> String {
-    let mut result = String::with_capacity(s.len());
-    let mut chars = s.chars();
-    while let Some(c) = chars.next() {
-        if c == '%' {
-            let hex: String = chars.by_ref().take(2).collect();
-            if let Ok(byte) = u8::from_str_radix(&hex, 16) {
-                result.push(byte as char);
-            } else {
-                result.push('%');
-                result.push_str(&hex);
-            }
-        } else if c == '+' {
-            result.push(' ');
+/// Percent-decode `s` to bytes (WHATWG URL "percent-decode"): `%XX` with
+/// two hex digits becomes that byte, anything else (including a stray
+/// `%`) is kept as is.
+fn percent_decode(s: &str) -> Vec<u8> {
+    let hex = |b: u8| char::from(b).to_digit(16);
+    let bytes = s.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%'
+            && let (Some(hi), Some(lo)) = (
+                bytes.get(i + 1).copied().and_then(hex),
+                bytes.get(i + 2).copied().and_then(hex),
+            )
+        {
+            // Two hex digits: at most 0xff, so the cast is exact.
+            out.push((hi * 16 + lo) as u8);
+            i += 3;
         } else {
-            result.push(c);
+            out.push(bytes[i]);
+            i += 1;
         }
     }
-    result
+    out
 }
 
 /// Detect the content type for a URL by inspecting its file extension.
@@ -371,6 +387,66 @@ impl LoadedResource {
             csp: None,
         }
     }
+
+    /// Wrap an HTTP response with the cache validators (`ETag`,
+    /// `Last-Modified`) and Content-Security-Policy of its final
+    /// response's `headers`.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn from_http(response: ResourceResponse, headers: &[(String, String)]) -> Self {
+        Self {
+            response,
+            etag: http1::find_header(headers, "etag").map(String::from),
+            last_modified: http1::find_header(headers, "last-modified").map(String::from),
+            csp: csp::parse_csp_headers(headers),
+        }
+    }
+}
+
+/// Cache validators of a cached response: `(ETag, Last-Modified)`.
+pub type CacheValidators = (Option<String>, Option<String>);
+
+/// The headers a network load adds to the request: `Referer` (already
+/// privacy-stripped by the caller) and, from the cached copy's
+/// validators, `If-None-Match` / `If-Modified-Since`. Cookies are not
+/// here: the HTTP client adds them per redirect hop, so they always match
+/// the hop's own URL.
+#[cfg(not(target_arch = "wasm32"))]
+fn load_headers(
+    referrer: Option<&str>,
+    validators: Option<&CacheValidators>,
+) -> Vec<(String, String)> {
+    let mut extra = Vec::new();
+    if let Some(r) = referrer {
+        extra.push(("Referer".to_string(), r.to_string()));
+    }
+    if let Some((etag, last_modified)) = validators {
+        if let Some(e) = etag {
+            extra.push(("If-None-Match".to_string(), e.clone()));
+        }
+        if let Some(lm) = last_modified {
+            extra.push(("If-Modified-Since".to_string(), lm.clone()));
+        }
+    }
+    extra
+}
+
+/// Borrow `(name, value)` pairs as the `&str` pairs the clients take.
+#[cfg(not(target_arch = "wasm32"))]
+fn header_refs(headers: &[(String, String)]) -> Vec<(&str, &str)> {
+    headers
+        .iter()
+        .map(|(k, v)| (k.as_str(), v.as_str()))
+        .collect()
+}
+
+impl HttpMethod {
+    /// The method token on the wire.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            HttpMethod::Get => "GET",
+            HttpMethod::Post => "POST",
+        }
+    }
 }
 
 /// Load a resource over the network (HTTP/HTTPS).
@@ -387,38 +463,10 @@ fn load_from_network(
 
     match url.scheme.as_str() {
         "http" | "https" => {
-            let method = match request.method {
-                HttpMethod::Get => "GET",
-                HttpMethod::Post => "POST",
-            };
-
-            // Build extra headers for the referrer and conditional
-            // requests. Cookies are added per redirect hop by the HTTP
-            // client, so they always match the hop's own URL.
-            let mut extra: Vec<(String, String)> = Vec::new();
-
-            // Add Referer header (privacy-stripped).
-            if let Some(ref referrer) = request.referrer {
-                extra.push(("Referer".to_string(), referrer.clone()));
-            }
-
-            // Add conditional request headers from cache.
-            if let Some(rc) = resource_cache {
-                let url_str = url.to_string();
-                if let Some((etag, last_mod)) = rc.peek_validators(&url_str) {
-                    if let Some(e) = etag {
-                        extra.push(("If-None-Match".to_string(), e));
-                    }
-                    if let Some(lm) = last_mod {
-                        extra.push(("If-Modified-Since".to_string(), lm));
-                    }
-                }
-            }
-
-            let extra_refs: Vec<(&str, &str)> = extra
-                .iter()
-                .map(|(k, v)| (k.as_str(), v.as_str()))
-                .collect();
+            let method = request.method.as_str();
+            let validators = resource_cache.and_then(|rc| rc.peek_validators(&url.to_string()));
+            let extra = load_headers(request.referrer.as_deref(), validators.as_ref());
+            let extra_refs = header_refs(&extra);
 
             let body = request.body.as_deref();
             let (resp, headers) = match cookie_jar {
@@ -441,39 +489,26 @@ fn load_from_network(
                 )?,
                 None => http::http_request_full(method, &url, body, &extra_refs, tls)?,
             };
-
-            // Extract cache validators.
-            let etag = http::response_find_header(&headers, "etag").map(String::from);
-            let last_modified =
-                http::response_find_header(&headers, "last-modified").map(String::from);
-
-            // Content-Security-Policy of the final response.
-            let csp = csp::parse_csp_headers(&headers);
+            let loaded = LoadedResource::from_http(resp, &headers);
 
             // Handle 304 Not Modified -- return cached body.
-            if resp.status == 304
+            if loaded.response.status == 304
                 && let Some(rc) = resource_cache
             {
                 let url_str = url.to_string();
                 if let Some(cached) = rc.peek_response(&url_str) {
                     // A 304 may omit the CSP header: the cached body
                     // keeps the policy it was served with.
-                    let csp = csp.or_else(|| rc.peek_csp(&url_str));
+                    let csp = loaded.csp.or_else(|| rc.peek_csp(&url_str));
                     return Ok(LoadedResource {
                         response: cached,
-                        etag,
-                        last_modified,
                         csp,
+                        ..loaded
                     });
                 }
             }
 
-            Ok(LoadedResource {
-                response: resp,
-                etag,
-                last_modified,
-                csp,
-            })
+            Ok(loaded)
         },
         "gemini" => gemini_fetch::gemini_get(&url, tls).map(LoadedResource::from_response),
         scheme => Err(oasis_types::error::OasisError::Backend(
@@ -497,29 +532,16 @@ fn load_from_network(
 
     match url.scheme.as_str() {
         "http" | "https" => {
-            let method = match request.method {
-                HttpMethod::Get => "GET",
-                HttpMethod::Post => "POST",
-            };
-
-            let mut extra: Vec<(&str, &str)> = Vec::new();
-
-            // Add Referer header (privacy-stripped).
-            let referrer_owned;
-            if let Some(ref referrer) = request.referrer {
-                referrer_owned = referrer.clone();
-                extra.push(("Referer", &referrer_owned));
-            }
-
-            let (resp, headers) =
-                http_psp::http_request_full(method, &url, request.body.as_deref(), &extra, tls)?;
-
-            Ok(LoadedResource {
-                response: resp,
-                etag: http1::find_header(&headers, "etag").map(String::from),
-                last_modified: http1::find_header(&headers, "last-modified").map(String::from),
-                csp: csp::parse_csp_headers(&headers),
-            })
+            let method = request.method.as_str();
+            let extra = load_headers(request.referrer.as_deref(), None);
+            let (resp, headers) = http_psp::http_request_full(
+                method,
+                &url,
+                request.body.as_deref(),
+                &header_refs(&extra),
+                tls,
+            )?;
+            Ok(LoadedResource::from_http(resp, &headers))
         },
         scheme => Err(oasis_types::error::OasisError::Backend(
             format!("unsupported network scheme: {scheme}",).into(),
@@ -575,6 +597,34 @@ mod tests {
         let mut bad_host = url.clone();
         bad_host.host = "h\r\nX: 1".into();
         assert!(validate_request("GET", &bad_host, &[]).is_err());
+    }
+
+    // -- data: URLs ---------------------------------------------------------
+
+    /// Regression: percent-escapes were decoded to Latin-1 *characters*
+    /// and re-encoded as UTF-8 (`%C3%A9` became `Ã©`), and `+` turned into
+    /// a space as if this were a form body.
+    #[test]
+    fn data_uri_percent_decodes_to_bytes() {
+        let r = parse_data_uri("data:text/plain,caf%C3%A9+%2B%zz%4").unwrap();
+        assert_eq!(r.body, "café++%zz%4".as_bytes());
+        assert_eq!(r.content_type, ContentType::PlainText);
+        let r = parse_data_uri("data:,%FF%00").unwrap();
+        assert_eq!(r.body, [0xff, 0]);
+    }
+
+    #[test]
+    fn data_uri_scheme_and_base64_are_case_insensitive() {
+        let r = parse_data_uri("DATA:Text/HTML;BASE64,PGI+").unwrap();
+        assert_eq!(r.content_type, ContentType::Html);
+        assert_eq!(r.body, b"<b>");
+        // Percent-encoded base64 payloads decode too.
+        let r = parse_data_uri("data:;base64,PGI%2B").unwrap();
+        assert_eq!(r.body, b"<b>");
+        assert_eq!(r.content_type, ContentType::PlainText);
+        assert!(parse_data_uri("dat").is_none());
+        assert!(parse_data_uri("data:no-comma").is_none());
+        assert!(parse_data_uri("data:é,x").is_some());
     }
 
     // -- URL parsing -------------------------------------------------------

@@ -7,6 +7,7 @@
 mod containers;
 mod declarations;
 mod font_face;
+mod layers;
 mod nested;
 mod selectors;
 mod supports;
@@ -14,6 +15,8 @@ mod types;
 
 pub use crate::media::MediaViewport;
 pub(crate) use declarations::{parse_substituted_declaration, parse_value_list};
+pub(crate) use layers::layer_cascade_ranks;
+use layers::sort_layers_into_cascade_order;
 #[allow(unused_imports)]
 pub use types::{
     AttrOp, Combinator, CompoundSelector, ContainerCondition, ContainerFeature, CounterStyleRule,
@@ -29,7 +32,7 @@ use font_face::{
     parse_additive_symbols, parse_font_weight_descriptor, parse_unicode_range_list,
     split_counter_symbols, unquote,
 };
-use nested::{ParsedRule, flatten_nested_rule};
+use nested::{ParsedRule, flatten_nested_rule, nesting_selector_list};
 use supports::eval_supports_condition;
 
 use super::shorthand::expand_shorthands;
@@ -69,11 +72,12 @@ pub fn parse_selector_string(input: &str) -> Option<SelectorList> {
     parser.parse_selector_list()
 }
 
-/// Parse an inline `style="..."` attribute into declarations.
+/// Parse an inline `style="..."` attribute into declarations, with
+/// shorthands expanded to longhands as for a stylesheet rule.
 pub fn parse_inline_style(input: &str) -> Vec<Declaration> {
     let tokens = CssTokenizer::new(input).tokenize();
     let mut parser = CssParser::new(tokens, MediaViewport::DEFAULT);
-    parser.parse_declaration_list()
+    expand_shorthands(parser.parse_declaration_list())
 }
 
 // -------------------------------------------------------------------
@@ -87,6 +91,8 @@ struct CssParser {
     /// Declared cascade layers in order of first appearance.
     /// Synthetic `__anon_N` names are used for `@layer { ... }` blocks.
     layers: Vec<String>,
+    /// `layers` by name, so registering stays O(1) per layer.
+    layer_index: rustc_hash::FxHashMap<String, u16>,
     /// If we're currently inside a `@layer name { ... }` block, this
     /// is the layer's index in `layers`; otherwise `None`.
     current_layer: Option<u16>,
@@ -109,6 +115,7 @@ impl CssParser {
             pos: 0,
             viewport,
             layers: Vec::new(),
+            layer_index: rustc_hash::FxHashMap::default(),
             current_layer: None,
             nesting: 0,
         }
@@ -235,14 +242,52 @@ impl CssParser {
                 },
             }
         }
+        let layers = sort_layers_into_cascade_order(std::mem::take(&mut self.layers), &mut rules);
         Stylesheet {
             rules,
             keyframes,
-            layers: std::mem::take(&mut self.layers),
+            layers,
             counter_styles,
             properties,
             font_faces,
         }
+    }
+
+    /// Collect an at-rule prelude (`@media`, `@supports`, `@container`
+    /// condition) up to, not including, the `{`, as text for the
+    /// condition evaluators.
+    fn collect_condition(&mut self) -> String {
+        let mut condition = String::new();
+        loop {
+            if matches!(self.peek(), CssToken::OpenBrace | CssToken::Eof) {
+                break;
+            }
+            let tok = self.advance();
+            match tok {
+                CssToken::Ident(s) => condition.push_str(&s),
+                CssToken::Number(n) => condition.push_str(&format!("{n}")),
+                CssToken::Dimension(n, unit) => condition.push_str(&format!("{n}{unit}")),
+                CssToken::Whitespace => condition.push(' '),
+                CssToken::OpenParen => condition.push('('),
+                CssToken::CloseParen => condition.push(')'),
+                // The tokenizer collapses `<ident>(` into one Function
+                // token, which must not be dropped (zero-space
+                // `@container (a)and(b)` tokenizes `and(` that way).
+                CssToken::Function(s) => {
+                    condition.push_str(&s);
+                    condition.push('(');
+                },
+                CssToken::Colon => condition.push(':'),
+                CssToken::Comma => condition.push(','),
+                CssToken::Hash(h) => {
+                    condition.push('#');
+                    condition.push_str(&h);
+                },
+                CssToken::Delim(c) => condition.push(c),
+                _ => {},
+            }
+        }
+        condition
     }
 
     fn skip_at_rule(&mut self) {
@@ -282,63 +327,15 @@ impl CssParser {
         self.skip_whitespace();
 
         // Collect the media query condition tokens up to the opening brace.
-        let mut condition = String::new();
-        loop {
-            match self.peek() {
-                CssToken::OpenBrace | CssToken::Eof => break,
-                _ => {
-                    let tok = self.peek().clone();
-                    self.advance();
-                    match tok {
-                        CssToken::Ident(s) => condition.push_str(&s),
-                        CssToken::Number(n) => condition.push_str(&format!("{n}")),
-                        CssToken::Dimension(n, unit) => {
-                            condition.push_str(&format!("{n}{unit}"));
-                        },
-                        CssToken::Whitespace => condition.push(' '),
-                        CssToken::OpenParen => condition.push('('),
-                        CssToken::CloseParen => condition.push(')'),
-                        // The CSS tokenizer collapses `<ident>(` into a
-                        // single Function token, which would otherwise
-                        // be silently dropped from the condition string
-                        // (breaking e.g. zero-space `@container (a)and(b)`
-                        // where `and(` tokenizes as Function("and")).
-                        CssToken::Function(ref s) => {
-                            condition.push_str(s);
-                            condition.push('(');
-                        },
-                        CssToken::Colon => condition.push(':'),
-                        CssToken::Comma => condition.push(','),
-                        CssToken::Delim(c) => condition.push(c),
-                        _ => {},
-                    }
-                },
-            }
-        }
+        let condition = self.collect_condition();
 
         // Consume the opening brace.
         if !self.expect(&CssToken::OpenBrace) {
             return Vec::new();
         }
 
-        // Parse inner rules.
-        let mut inner_rules = Vec::new();
-        loop {
-            self.skip_whitespace();
-            if self.at_eof() || self.peek() == &CssToken::CloseBrace {
-                break;
-            }
-            if matches!(self.peek(), CssToken::AtKeyword(_)) {
-                self.skip_at_rule();
-                continue;
-            }
-            if let Some(rule) = self.try_parse_rule() {
-                inner_rules.push(rule);
-            } else {
-                self.advance();
-            }
-        }
-        self.expect(&CssToken::CloseBrace);
+        // Inner rules, nested at-rules included.
+        let inner_rules = self.parse_at_rule_block();
 
         // Evaluate the media condition.
         if eval_media_query_with_viewport(&condition, self.viewport) {
@@ -356,67 +353,15 @@ impl CssParser {
         self.skip_whitespace();
 
         // Collect the condition tokens up to the opening brace.
-        let mut condition = String::new();
-        loop {
-            match self.peek() {
-                CssToken::OpenBrace | CssToken::Eof => break,
-                _ => {
-                    let tok = self.peek().clone();
-                    self.advance();
-                    match tok {
-                        CssToken::Ident(s) => condition.push_str(&s),
-                        CssToken::Number(n) => condition.push_str(&format!("{n}")),
-                        CssToken::Dimension(n, unit) => {
-                            condition.push_str(&format!("{n}{unit}"));
-                        },
-                        CssToken::Whitespace => condition.push(' '),
-                        CssToken::OpenParen => condition.push('('),
-                        CssToken::CloseParen => condition.push(')'),
-                        // The CSS tokenizer collapses `<ident>(` into a
-                        // single Function token, which would otherwise
-                        // be silently dropped from the condition string
-                        // (breaking e.g. zero-space `@container (a)and(b)`
-                        // where `and(` tokenizes as Function("and")).
-                        CssToken::Function(ref s) => {
-                            condition.push_str(s);
-                            condition.push('(');
-                        },
-                        CssToken::Colon => condition.push(':'),
-                        CssToken::Comma => condition.push(','),
-                        CssToken::Hash(h) => {
-                            condition.push('#');
-                            condition.push_str(&h);
-                        },
-                        CssToken::Delim(c) => condition.push(c),
-                        _ => {},
-                    }
-                },
-            }
-        }
+        let condition = self.collect_condition();
 
         // Consume the opening brace.
         if !self.expect(&CssToken::OpenBrace) {
             return Vec::new();
         }
 
-        // Parse inner rules.
-        let mut inner_rules = Vec::new();
-        loop {
-            self.skip_whitespace();
-            if self.at_eof() || self.peek() == &CssToken::CloseBrace {
-                break;
-            }
-            if matches!(self.peek(), CssToken::AtKeyword(_)) {
-                self.skip_at_rule();
-                continue;
-            }
-            if let Some(rule) = self.try_parse_rule() {
-                inner_rules.push(rule);
-            } else {
-                self.advance();
-            }
-        }
-        self.expect(&CssToken::CloseBrace);
+        // Inner rules, nested at-rules included.
+        let inner_rules = self.parse_at_rule_block();
 
         if eval_supports_condition(&condition) {
             inner_rules
@@ -438,8 +383,9 @@ impl CssParser {
     ///    synthetic name so the layer remains distinct.
     ///
     /// Nested layer names like `foo.bar` are parsed as a single name
-    /// string (`"foo.bar"`); we don't currently model hierarchical
-    /// layer nesting, so each dotted name is just an opaque identifier.
+    /// string (`"foo.bar"`); the hierarchy is recovered from the dots
+    /// when the sheet's layers are sorted into cascade order
+    /// (see the `layers` module).
     fn parse_layer_rule(&mut self) -> Vec<ParsedRule> {
         self.advance(); // consume @layer token
         self.skip_whitespace();
@@ -524,39 +470,7 @@ impl CssParser {
         };
 
         // Collect everything up to the opening brace as the condition.
-        let mut condition = String::new();
-        loop {
-            match self.peek() {
-                CssToken::OpenBrace | CssToken::Eof => break,
-                _ => {
-                    let tok = self.peek().clone();
-                    self.advance();
-                    match tok {
-                        CssToken::Ident(s) => condition.push_str(&s),
-                        CssToken::Number(n) => condition.push_str(&format!("{n}")),
-                        CssToken::Dimension(n, unit) => {
-                            condition.push_str(&format!("{n}{unit}"));
-                        },
-                        CssToken::Whitespace => condition.push(' '),
-                        CssToken::OpenParen => condition.push('('),
-                        CssToken::CloseParen => condition.push(')'),
-                        // The CSS tokenizer collapses `<ident>(` into a
-                        // single Function token, which would otherwise
-                        // be silently dropped from the condition string
-                        // (breaking e.g. zero-space `@container (a)and(b)`
-                        // where `and(` tokenizes as Function("and")).
-                        CssToken::Function(ref s) => {
-                            condition.push_str(s);
-                            condition.push('(');
-                        },
-                        CssToken::Colon => condition.push(':'),
-                        CssToken::Comma => condition.push(','),
-                        CssToken::Delim(c) => condition.push(c),
-                        _ => {},
-                    }
-                },
-            }
-        }
+        let condition = self.collect_condition();
 
         if !self.expect(&CssToken::OpenBrace) {
             return Vec::new();
@@ -1227,13 +1141,25 @@ impl CssParser {
 
     /// Register a layer by name if it isn't already registered.
     /// Returns the layer's index in `self.layers`.
+    ///
+    /// Inside `@layer a { ... }` a name `b` is the sublayer `a.b` (CSS
+    /// Cascade 5 §6.4.2), the same layer `@layer a.b` names at the top
+    /// level; it used to collide with a top-level `b`. Past `u16::MAX`
+    /// layers (indices used to wrap) further names share the last one.
     fn register_layer(&mut self, name: &str) -> u16 {
-        if let Some(idx) = self.layers.iter().position(|n| n == name) {
-            return idx as u16;
+        let name = match self.current_layer {
+            Some(parent) => format!("{}.{name}", self.layers[usize::from(parent)]),
+            None => name.to_string(),
+        };
+        if let Some(&idx) = self.layer_index.get(&name) {
+            return idx;
         }
-        let idx = self.layers.len();
-        self.layers.push(name.to_string());
-        idx as u16
+        let Ok(idx) = u16::try_from(self.layers.len()) else {
+            return u16::MAX;
+        };
+        self.layer_index.insert(name.clone(), idx);
+        self.layers.push(name);
+        idx
     }
 
     /// Generate a unique synthetic name for an anonymous `@layer { ... }`.
@@ -1244,6 +1170,21 @@ impl CssParser {
     /// Parse the body of an at-rule that wraps style rules (like
     /// `@layer foo { ... }`). Consumes the closing `}`.
     fn parse_at_rule_block(&mut self) -> Vec<ParsedRule> {
+        // `@layer{@media{@supports{...` recurse through here: bound the
+        // depth like style-rule nesting, or hostile CSS overflows the
+        // stack.
+        if self.nesting >= MAX_CSS_NESTING {
+            self.skip_block_contents();
+            self.expect(&CssToken::CloseBrace);
+            return Vec::new();
+        }
+        self.nesting += 1;
+        let rules = self.parse_at_rule_block_inner();
+        self.nesting -= 1;
+        rules
+    }
+
+    fn parse_at_rule_block_inner(&mut self) -> Vec<ParsedRule> {
         let mut inner_rules = Vec::new();
         loop {
             self.skip_whitespace();
@@ -1404,23 +1345,28 @@ impl CssParser {
     /// Lookahead: scan forward from `self.pos`, tracking paren/bracket
     /// depth. Return `true` if the next block-terminating token at depth 0
     /// is `{` (qualified rule) rather than `;`, `}`, or EOF (declaration).
+    ///
+    /// A `Function` token (`rgb(`, `:not(`) opens a group like `(`.
+    /// Regression: it used not to, so its `)` drove the depth negative,
+    /// `;` / `}` no longer stopped the scan (every declaration with a
+    /// function scanned to the end of the sheet: quadratic parsing), and
+    /// a nested `&:not(.x) {..}` rule was misread as a declaration.
     fn lookahead_is_nested_rule(&self) -> bool {
-        let mut i = self.pos;
-        let mut paren = 0i32;
-        let mut bracket = 0i32;
-        while i < self.tokens.len() {
-            match &self.tokens[i] {
+        let mut depth = 0u32;
+        for tok in &self.tokens[self.pos.min(self.tokens.len())..] {
+            match tok {
                 CssToken::Eof => return false,
-                CssToken::OpenParen => paren += 1,
-                CssToken::CloseParen => paren -= 1,
-                CssToken::OpenBracket => bracket += 1,
-                CssToken::CloseBracket => bracket -= 1,
-                CssToken::OpenBrace if paren == 0 && bracket == 0 => return true,
-                CssToken::Semicolon if paren == 0 && bracket == 0 => return false,
-                CssToken::CloseBrace if paren == 0 && bracket == 0 => return false,
+                CssToken::OpenParen | CssToken::Function(_) | CssToken::OpenBracket => depth += 1,
+                CssToken::CloseParen | CssToken::CloseBracket => {
+                    depth = depth.saturating_sub(1);
+                },
+                CssToken::OpenBrace if depth == 0 => return true,
+                CssToken::Semicolon if depth == 0 => return false,
+                // A `}` always ends the declaration (an unbalanced `(`
+                // must not run the scan past the enclosing block).
+                CssToken::CloseBrace => return false,
                 _ => {},
             }
-            i += 1;
         }
         false
     }
@@ -1446,49 +1392,32 @@ impl CssParser {
     fn parse_nested_media_rule(&mut self) -> Vec<ParsedRule> {
         self.advance(); // @media
         self.skip_whitespace();
-        let mut condition = String::new();
-        loop {
-            match self.peek() {
-                CssToken::OpenBrace | CssToken::Eof => break,
-                _ => {
-                    let tok = self.peek().clone();
-                    self.advance();
-                    match tok {
-                        CssToken::Ident(s) => condition.push_str(&s),
-                        CssToken::Number(n) => condition.push_str(&format!("{n}")),
-                        CssToken::Dimension(n, unit) => {
-                            condition.push_str(&format!("{n}{unit}"));
-                        },
-                        CssToken::Whitespace => condition.push(' '),
-                        CssToken::OpenParen => condition.push('('),
-                        CssToken::CloseParen => condition.push(')'),
-                        // The CSS tokenizer collapses `<ident>(` into a
-                        // single Function token, which would otherwise
-                        // be silently dropped from the condition string
-                        // (breaking e.g. zero-space `@container (a)and(b)`
-                        // where `and(` tokenizes as Function("and")).
-                        CssToken::Function(ref s) => {
-                            condition.push_str(s);
-                            condition.push('(');
-                        },
-                        CssToken::Colon => condition.push(':'),
-                        CssToken::Comma => condition.push(','),
-                        CssToken::Delim(c) => condition.push(c),
-                        _ => {},
-                    }
-                },
-            }
-        }
+        let condition = self.collect_condition();
         if !self.expect(&CssToken::OpenBrace) {
             return Vec::new();
         }
-        let (_decls, inner) = self.parse_rule_body();
+        let (decls, mut inner) = self.parse_rule_body();
         self.expect(&CssToken::CloseBrace);
-        if eval_media_query_with_viewport(&condition, self.viewport) {
-            inner
-        } else {
-            Vec::new()
+        if !eval_media_query_with_viewport(&condition, self.viewport) {
+            return Vec::new();
         }
+        // `.a { @media (..) { color: red } }`: declarations directly in
+        // the nested at-rule apply to the parent selector, i.e. a
+        // nested `& { .. }` rule (they used to be dropped).
+        if !decls.is_empty() {
+            inner.insert(
+                0,
+                ParsedRule {
+                    selectors: nesting_selector_list(),
+                    declarations: expand_shorthands(decls),
+                    nested: Vec::new(),
+                    layer: self.current_layer,
+                    container: None,
+                    scope: None,
+                },
+            );
+        }
+        inner
     }
 
     /// Parse an `@keyframes name { ... }` rule.
@@ -1620,5 +1549,7 @@ impl CssParser {
 // Tests
 // -------------------------------------------------------------------
 
+#[cfg(test)]
+mod hostile_tests;
 #[cfg(test)]
 mod tests;

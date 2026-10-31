@@ -284,7 +284,14 @@ impl ShellSession {
         let cursor = self.editor.cursor();
         // Complete within the current pipeline / chain segment so the
         // command after `|` or `;` is in command position.
-        let seg_start = input[..cursor].rfind(['|', ';', '&']).map_or(0, |i| i + 1);
+        // Only operators outside quotes count (`cat "a|b` is one word).
+        let top = crate::pipeline::scan(&input[..cursor]).top;
+        let seg_start = input[..cursor]
+            .bytes()
+            .enumerate()
+            .rev()
+            .find(|&(i, b)| matches!(b, b'|' | b';' | b'&') && top[i])
+            .map_or(0, |(i, _)| i + 1);
         let seg_start = seg_start
             + (input[seg_start..cursor].len() - input[seg_start..cursor].trim_start().len());
         let segment = &input[seg_start..cursor];
@@ -293,9 +300,8 @@ impl ShellSession {
         names.sort();
         names.dedup();
         let vars: Vec<String> = reg.variables().into_keys().collect();
-        let mut completer = Completer::new();
         let Some(result) =
-            completer.complete(segment, segment.len(), &names, &[], &[], &vars, cwd, vfs)
+            Completer::new().complete(segment, segment.len(), &names, &vars, cwd, vfs)
         else {
             return SessionEvent::Redraw;
         };
@@ -335,7 +341,7 @@ impl ShellSession {
             return 0;
         };
         let text = String::from_utf8_lossy(&data);
-        reg.set_history(text.lines().map(str::to_string).collect());
+        reg.set_history(text.lines().map(unescape_history).collect());
         reg.with_history(<[String]>::len)
     }
 
@@ -348,12 +354,53 @@ impl ShellSession {
         {
             vfs.mkdir(dir)?;
         }
-        let mut data = reg.with_history(|h| h.join("\n"));
-        if !data.is_empty() {
-            data.push('\n');
-        }
+        let mut data = String::new();
+        reg.with_history(|h| {
+            for entry in h {
+                escape_history_into(&mut data, entry);
+                data.push('\n');
+            }
+        });
         vfs.write(&self.history_path, data.as_bytes())
     }
+}
+
+/// Append history `entry` as one file line: `\` is written `\\` and a
+/// newline `\n`, so a multi-line entry (a pasted `for` loop) reloads as
+/// one entry.
+fn escape_history_into(out: &mut String, entry: &str) {
+    for c in entry.chars() {
+        match c {
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            c => out.push(c),
+        }
+    }
+}
+
+/// Decode one history file line (see [`escape_history_into`]). Other
+/// backslashes are kept as written.
+fn unescape_history(line: &str) -> String {
+    let mut out = String::with_capacity(line.len());
+    let mut chars = line.chars();
+    while let Some(c) = chars.next() {
+        if c != '\\' {
+            out.push(c);
+            continue;
+        }
+        match chars.next() {
+            Some('\\') => out.push('\\'),
+            Some('n') => out.push('\n'),
+            Some('r') => out.push('\r'),
+            Some(other) => {
+                out.push('\\');
+                out.push(other);
+            },
+            None => out.push('\\'),
+        }
+    }
+    out
 }
 
 /// The part of a completion candidate worth showing in a listing: the last

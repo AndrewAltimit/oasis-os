@@ -8,7 +8,7 @@
 use oasis_app_core::AppAction;
 use oasis_app_core::file_viewer::{app_for_file, join_path, parent_dir, view_generic_file};
 use oasis_types::input::{Button, Key, Modifiers};
-use oasis_ui::menu_bar::{Menu, MenuBar, MenuEntry};
+use oasis_ui::menu_bar::{Menu, MenuBar, MenuEntry, MenuKey};
 use oasis_vfs::Vfs;
 
 use crate::model::{Clipboard, Dialog, EntryKind, FileOp, NamePurpose, NavTarget, ViewMode};
@@ -112,7 +112,7 @@ impl FileManagerApp {
                 AppAction::None
             },
             Button::Down => {
-                self.panels[self.active_panel].navigate_down(self.content.cached_max_visible);
+                self.panels[self.active_panel].navigate_down(self.dual_visible_rows.max(1));
                 AppAction::None
             },
             Button::Confirm => {
@@ -179,16 +179,9 @@ impl FileManagerApp {
         if abs < 0 || abs >= total as isize {
             return;
         }
-        let abs = abs as usize;
-
-        let row = abs / cols;
-        let first_visible_row = p.scroll / cols;
-        if row < first_visible_row {
-            p.scroll = row * cols;
-        } else if row >= first_visible_row + rows {
-            p.scroll = (row + 1 - rows) * cols;
-        }
-        p.cursor = abs - p.scroll;
+        // `reveal` keeps `scroll` row-aligned and `cursor` in range even
+        // when the scroll came from the dual view (one line per step).
+        p.reveal(abs as usize, cols, cols * rows);
     }
 
     /// Handle input in Explorer (single-pane icon grid) mode.
@@ -444,6 +437,26 @@ impl FileManagerApp {
     pub(crate) fn handle_fm_key(&mut self, key: &Key, mods: Modifiers) -> Option<AppAction> {
         if self.content.viewing_file.is_some() {
             return None;
+        }
+        self.swallow_text = None;
+        // F10 opens the menu bar; an open menu takes every key.
+        if self.dialog.is_none() {
+            let action = match self.menu.handle_key(*key, self.content_size.0) {
+                MenuKey::Ignored => None,
+                MenuKey::Handled => Some(AppAction::None),
+                MenuKey::Activate(id) => Some(self.run_menu_action(&id)),
+            };
+            if action.is_some() && !mods.has_command() {
+                // Its `TextInput` follows (Space activating New Folder).
+                self.swallow_text = match key {
+                    Key::Char(c) => Some(*c),
+                    Key::Space => Some(' '),
+                    _ => None,
+                };
+            }
+            if action.is_some() {
+                return action;
+            }
         }
         if let Some(dialog) = &self.dialog {
             let is_confirm = matches!(dialog, Dialog::ConfirmDelete { .. });

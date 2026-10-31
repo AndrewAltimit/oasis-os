@@ -189,14 +189,22 @@ pub(super) const SUPPORTED_PROPERTIES: &[&str] = &[
 /// Supports simple `(property: value)` conditions and `not (...)`.
 /// Unknown or unsupported conditions evaluate to `false`.
 pub(super) fn eval_supports_condition(condition: &str) -> bool {
+    // `not (...)`, possibly repeated: peeled in a loop (a recursion per
+    // `not` let `not not not ...` overflow the stack).
+    let mut condition = condition.trim();
+    let mut negated = false;
+    while let Some(rest) = condition.strip_prefix("not ") {
+        condition = rest.trim_start();
+        negated = !negated;
+    }
+    eval_supports_positive(condition) != negated
+}
+
+/// [`eval_supports_condition`] without a leading `not`.
+fn eval_supports_positive(condition: &str) -> bool {
     let condition = condition.trim();
     if condition.is_empty() {
         return false;
-    }
-
-    // Handle `not (...)`.
-    if let Some(rest) = condition.strip_prefix("not ") {
-        return !eval_supports_condition(rest.trim());
     }
 
     // Handle compound `(...) and (...)`

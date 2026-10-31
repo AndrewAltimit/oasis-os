@@ -25,6 +25,34 @@
   <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&amp;display=swap" rel="stylesheet">
   <link rel="stylesheet" href="../css/site.css">
   <link rel="stylesheet" href="../css/journal.css">
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "BlogPosting",
+    "headline": "Streaming Internet Archive Video Across Two Architectures",
+    "description": "Building cross-platform video streaming from the Internet Archive — desktop sliding-window buffers and PSP hardware AAC decode with backpressure throttling.",
+    "datePublished": "2026-03-11",
+    "url": "https://andrewaltimit.github.io/oasis-os/journal/03-streaming-video.html",
+    "mainEntityOfPage": "https://andrewaltimit.github.io/oasis-os/journal/03-streaming-video.html",
+    "image": "https://andrewaltimit.github.io/oasis-os/img/og-card.png",
+    "keywords": [
+      "video",
+      "streaming",
+      "cross-platform"
+    ],
+    "author": {
+      "@type": "Person",
+      "name": "AndrewAltimit",
+      "url": "https://github.com/AndrewAltimit"
+    },
+    "isPartOf": {
+      "@type": "Blog",
+      "name": "OASIS_OS Developer's Journal",
+      "url": "https://andrewaltimit.github.io/oasis-os/journal/"
+    },
+    "dateModified": "2026-10"
+  }
+  </script>
 </head>
 <body class="page-article">
 
@@ -46,6 +74,7 @@
         <li><a href="../#skins">Skins</a></li>
         <li><a href="../#features">Features</a></li>
         <li><a href="../#architecture">Architecture</a></li>
+        <li><a href="../crates.html">Crates</a></li>
         <li><a href="../#psp">PSP</a></li>
         <li><a href="../journal/" aria-current="page">Journal</a></li>
         <li><a href="../#start">Build</a></li>
@@ -73,6 +102,7 @@
       <div><dt>Entry</dt><dd>03</dd></div>
       <div><dt>Published</dt><dd><time datetime="2026-03-11">Mar 11, 2026</time></dd></div>
       <div><dt>Reading time</dt><dd>6 min</dd></div>
+      <div><dt>Updated</dt><dd>Oct 2026</dd></div>
     </dl>
     <ul class="article__tags" aria-label="Tags"><li>video</li><li>streaming</li><li>cross-platform</li></ul>
   </header>
@@ -381,13 +411,12 @@ flowchart TD
         <td>TLS fallback on 301 redirect</td>
       </tr>
     </tbody>
-  </table>
+  </table></div>
 
   <aside class="callout update" role="note">
     <div class="callout-title">Update (Oct 2026)</div>
     <p>PSP video is no longer skipped: <a href="07-psp-media-engine.html">entry 07</a> describes how H.264 now decodes on the Media Engine (the <code>sceMpeg</code> NAL path, streams up to 480p) next to <code>sceAudiocodec</code> AAC. On desktop the decode row now reads &ldquo;ffmpeg by default, openh264 as fallback&rdquo;.</p>
   </aside>
-</div>
 
   <p>
     The same <code>oasis-video</code> crate handles both paths via feature flags:
@@ -403,6 +432,10 @@ flowchart TD
   </div>
 
   <footer class="article__foot wrap">
+  <div class="article__end">
+    <ul class="article__tags" aria-label="Tags"><li>video</li><li>streaming</li><li>cross-platform</li></ul>
+    <p class="article__end-links"><a href="#main">Back to top <span aria-hidden="true">&uarr;</span></a><a href="./">All entries</a><a href="https://github.com/AndrewAltimit/oasis-os">Browse the code</a></p>
+  </div>
   <nav class="pager" aria-label="More entries">
     <a class="pager__link pager__link--prev" href="02-tls-on-psp.html" rel="prev"><span class="pager__dir">&larr; Previous &middot; 02</span><span class="pager__title">TLS 1.3 on a 2004 Handheld</span></a>
     <a class="pager__link pager__link--next" href="04-rust-psp-sdk.html" rel="next"><span class="pager__dir">Next &middot; 04 &rarr;</span><span class="pager__title">Modernizing the rust-psp SDK</span></a>
@@ -412,22 +445,48 @@ flowchart TD
 </main>
 
 <footer class="footer">
-  <div class="wrap footer__inner">
+  <div class="wrap footer__grid">
     <div class="footer__brand">
-      <span class="brand__name">OASIS<span class="brand__us">_</span>OS</span>
-      <p>Built from scratch in Rust. Dual-licensed MIT + Unlicense.</p>
+      <a class="brand" href="../" aria-label="OASIS_OS home">
+        <span class="brand__mark" aria-hidden="true"></span>
+        <span class="brand__name">OASIS<span class="brand__us">_</span>OS</span>
+      </a>
+      <p>An embeddable OS framework, built from scratch in Rust. One shell, any pixel buffer.</p>
+      <p class="footer__status mono" aria-hidden="true">333MHz &middot; 480&times;272 &middot; v1.6.0</p>
     </div>
-    <nav aria-label="Footer">
-      <ul class="footer__links">
-        <li><a href="../">Home</a></li>
-        <li><a href="../demo/">Live demo</a></li>
-        <li><a href="../journal/">Journal</a></li>
-        <li><a href="../blueprint.html">Blueprints</a></li>
-        <li><a href="https://github.com/AndrewAltimit/oasis-os">GitHub</a></li>
-        <li><a href="https://github.com/AndrewAltimit/oasis-os/blob/main/docs/README.md">Docs</a></li>
-      </ul>
+    <nav class="footer__nav" aria-label="Footer">
+      <div>
+        <p class="footer__head">Explore</p>
+        <ul class="footer__links">
+          <li><a href="../">Home</a></li>
+          <li><a href="../demo/">Live demo</a></li>
+          <li><a href="../crates.html">Crate map</a></li>
+          <li><a href="../blueprint.html">Blueprints</a></li>
+        </ul>
+      </div>
+      <div>
+        <p class="footer__head">Read</p>
+        <ul class="footer__links">
+          <li><a href="../journal/">Developer&rsquo;s journal</a></li>
+          <li><a href="https://github.com/AndrewAltimit/oasis-os/blob/main/docs/README.md">Documentation</a></li>
+          <li><a href="https://github.com/AndrewAltimit/oasis-os/blob/main/docs/getting-started.md">Getting started</a></li>
+          <li><a href="https://github.com/AndrewAltimit/oasis-os/blob/main/CHANGELOG.md">Changelog</a></li>
+        </ul>
+      </div>
+      <div>
+        <p class="footer__head">Project</p>
+        <ul class="footer__links">
+          <li><a href="https://github.com/AndrewAltimit/oasis-os">GitHub</a></li>
+          <li><a href="https://github.com/AndrewAltimit/oasis-os/releases">Releases</a></li>
+          <li><a href="https://github.com/AndrewAltimit/oasis-os/blob/main/CONTRIBUTING.md">Contributing</a></li>
+          <li><a href="https://github.com/AndrewAltimit/oasis-os/blob/main/LICENSE">License</a></li>
+        </ul>
+      </div>
     </nav>
-    <p class="footer__status mono" aria-hidden="true">333MHz &middot; 480&times;272 &middot; v1.4.0</p>
+  </div>
+  <div class="wrap footer__base">
+    <p>Dual-licensed MIT + Unlicense.</p>
+    <a class="footer__top" href="#main">Back to top <span aria-hidden="true">&uarr;</span></a>
   </div>
 </footer>
 

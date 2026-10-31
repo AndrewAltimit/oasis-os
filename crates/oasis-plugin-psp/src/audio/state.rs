@@ -252,9 +252,16 @@ pub(super) const CODEC_BUF_WORDS: usize = 65;
 pub(super) const CODEC_WORK_SIZE: usize = 16 * 1024;
 
 /// Total user-memory allocation for codec buffers.
-/// Layout: [64-byte pad] [codec: 260] [pcm: 4608] [work: 16384] [read: 32768]
+/// Layout: [pad to 64] [codec: 260] [pad] [pcm: 4608] [pad] [work: 16384]
+/// [pad] [read: 65536]. Every buffer the ME touches starts on a 64-byte
+/// (cache-line) boundary; one 64-byte allowance per buffer covers the pads.
 pub(super) const UMEM_CODEC_SIZE: usize =
-    64 + (CODEC_BUF_WORDS * 4) + (1152 * 2 * 2) + CODEC_WORK_SIZE + READ_BUF_SIZE;
+    4 * 64 + (CODEC_BUF_WORDS * 4) + (1152 * 2 * 2) + CODEC_WORK_SIZE + READ_BUF_SIZE;
+
+/// `off` rounded up to a multiple of 64.
+const fn align64(off: usize) -> usize {
+    (off + 63) & !63
+}
 
 /// UID of user-memory block, 0 = not allocated.
 pub(super) static mut UMEM_BLOCK_ID: psp::sys::SceUid = psp::sys::SceUid(0);
@@ -292,13 +299,15 @@ pub(super) unsafe fn alloc_codec_user_mem() -> bool {
     // Single-threaded init, statics written once.
     unsafe {
         UMEM_BLOCK_ID = block;
-        // Align codec buffer to 64 bytes.
+        // Align each buffer to 64 bytes (offsets relative to `base`, so
+        // align the address, not just the offset, for the first one).
         let codec_off = (64 - (base as usize % 64)) % 64;
         UMEM_CODEC = base.add(codec_off) as *mut u32;
-        let pcm_off = codec_off + CODEC_BUF_WORDS * 4;
+        let pcm_off = codec_off + align64(CODEC_BUF_WORDS * 4);
         UMEM_PCM = base.add(pcm_off) as *mut i16;
-        let work_off = pcm_off + 1152 * 2 * 2;
-        let read_off = work_off + CODEC_WORK_SIZE;
+        let work_off = pcm_off + align64(1152 * 2 * 2);
+        let read_off = work_off + align64(CODEC_WORK_SIZE);
+        debug_assert!(read_off + READ_BUF_SIZE <= UMEM_CODEC_SIZE);
         UMEM_READ = base.add(read_off) as *mut u8;
     }
     log_i32(b"[OASIS] user mem @", base as i32);

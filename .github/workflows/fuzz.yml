@@ -7,6 +7,9 @@ on:
     - cron: "0 3 * * *"
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 concurrency:
   group: fuzz-${{ github.ref }}
   cancel-in-progress: true
@@ -20,13 +23,17 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        target:
-          - html_tokenizer
-          - css_parser
-          - gemini_parser
-          - http_response
-          - skin_toml
-          - pbp_parser
+        # Each target names the cargo-fuzz crate it lives in.
+        include:
+          - {target: html_tokenizer, dir: crates/oasis-core/fuzz}
+          - {target: css_parser, dir: crates/oasis-core/fuzz}
+          - {target: gemini_parser, dir: crates/oasis-core/fuzz}
+          - {target: http_response, dir: crates/oasis-core/fuzz}
+          - {target: loader_parsers, dir: crates/oasis-core/fuzz}
+          - {target: skin_toml, dir: crates/oasis-core/fuzz}
+          - {target: pbp_parser, dir: crates/oasis-core/fuzz}
+          - {target: fuzz_demux_lite, dir: crates/oasis-video/fuzz}
+          - {target: fuzz_avcc_to_annex_b, dir: crates/oasis-video/fuzz}
 
     steps:
       - name: Checkout
@@ -37,8 +44,11 @@ jobs:
           cargo install cargo-fuzz --locked 2>/dev/null || true
 
       - name: Run fuzzer (${{ matrix.target }})
-        working-directory: crates/oasis-core/fuzz
+        working-directory: ${{ matrix.dir }}
+        # pipefail: without it `| tee` hides a fuzz build failure or a crash
+        # exit, and the crash check below only looks at artifacts/.
         run: |
+          set -o pipefail
           cargo +nightly fuzz run ${{ matrix.target }} -- \
             -max_total_time=60 \
             -max_len=4096 \
@@ -46,7 +56,7 @@ jobs:
 
       - name: Check for crashes
         if: always()
-        working-directory: crates/oasis-core/fuzz
+        working-directory: ${{ matrix.dir }}
         run: |
           CRASH_DIR="artifacts/${{ matrix.target }}"
           if [ -d "$CRASH_DIR" ] && [ "$(ls -A "$CRASH_DIR" 2>/dev/null)" ]; then
@@ -66,12 +76,12 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: fuzz-crashes-${{ matrix.target }}
-          path: crates/oasis-core/fuzz/artifacts/
+          path: ${{ matrix.dir }}/artifacts/
           retention-days: 30
 
       - name: Fuzz summary
         if: always()
-        working-directory: crates/oasis-core/fuzz
+        working-directory: ${{ matrix.dir }}
         run: |
           echo "### Fuzz: ${{ matrix.target }}" >> $GITHUB_STEP_SUMMARY
           if [ -f fuzz_output.txt ]; then

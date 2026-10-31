@@ -3,10 +3,9 @@
 //! All oasis-ui widgets render through `DrawContext`, which wraps a
 //! `&mut dyn SdiBackend` and provides access to the active theme.
 
-use crate::layout::{self, HAlign, Padding};
-use crate::shadow::Shadow;
+use crate::layout::{self, HAlign};
 use crate::theme::Theme;
-use oasis_types::backend::{Color, SdiBackend, TextureId};
+use oasis_types::backend::{Color, SdiBackend};
 use oasis_types::error::Result;
 
 /// The truncation marker `SdiText::draw_text_ellipsis` appends.
@@ -27,97 +26,14 @@ impl<'a> DrawContext<'a> {
     }
 
     // -- Convenience drawing methods --
-
-    /// Draw a themed panel background with optional elevation shadow.
-    pub fn panel(&mut self, x: i32, y: i32, w: u32, h: u32, elevation: u8) -> Result<()> {
-        let radius = self.theme.border_radius_lg;
-        let shadow = Shadow::elevation(elevation);
-        shadow.draw(self.backend, x, y, w, h, radius)?;
-        self.backend
-            .fill_rounded_rect(x, y, w, h, radius, self.theme.surface)
-    }
+    //
+    // Widgets otherwise draw through `backend` directly; these cover the
+    // idioms they share (see docs/ui-widgets.md "Drawing helpers").
 
     /// Draw a themed label with default font size and primary text color.
     pub fn label(&mut self, text: &str, x: i32, y: i32) -> Result<()> {
         self.backend
             .draw_text(text, x, y, self.theme.font_size_md, self.theme.text_primary)
-    }
-
-    /// Draw a themed label with a specific style.
-    pub fn label_styled(
-        &mut self,
-        text: &str,
-        x: i32,
-        y: i32,
-        font_size: u16,
-        color: Color,
-    ) -> Result<()> {
-        self.backend.draw_text(text, x, y, font_size, color)
-    }
-
-    /// Draw a themed heading.
-    pub fn heading(&mut self, text: &str, x: i32, y: i32) -> Result<()> {
-        self.backend
-            .draw_text(text, x, y, self.theme.font_size_xl, self.theme.text_primary)
-    }
-
-    /// Draw a divider line.
-    pub fn divider_h(&mut self, x: i32, y: i32, w: u32) -> Result<()> {
-        self.backend
-            .draw_line(x, y, x + w as i32, y, 1, self.theme.border_subtle)
-    }
-
-    /// Draw a vertical divider.
-    pub fn divider_v(&mut self, x: i32, y: i32, h: u32) -> Result<()> {
-        self.backend
-            .draw_line(x, y, x, y + h as i32, 1, self.theme.border_subtle)
-    }
-
-    /// Draw a themed button background.
-    pub fn button_bg(
-        &mut self,
-        x: i32,
-        y: i32,
-        w: u32,
-        h: u32,
-        hover: bool,
-        pressed: bool,
-    ) -> Result<()> {
-        let state = crate::states::WidgetState::from_flags(hover, pressed, false);
-        let color = crate::states::WidgetStateColors::neutral_bg(self.theme, state);
-        let radius = self.theme.border_radius_md;
-        self.backend.fill_rounded_rect(x, y, w, h, radius, color)
-    }
-
-    /// Draw a themed accent button background.
-    pub fn accent_button_bg(
-        &mut self,
-        x: i32,
-        y: i32,
-        w: u32,
-        h: u32,
-        hover: bool,
-        pressed: bool,
-    ) -> Result<()> {
-        let state = crate::states::WidgetState::from_flags(hover, pressed, false);
-        let color = crate::states::WidgetStateColors::accent_bg(self.theme, state);
-        let radius = self.theme.border_radius_md;
-        self.backend.fill_rounded_rect(x, y, w, h, radius, color)
-    }
-
-    /// Blit a texture.
-    pub fn blit(&mut self, tex: TextureId, x: i32, y: i32, w: u32, h: u32) -> Result<()> {
-        self.backend.blit(tex, x, y, w, h)
-    }
-
-    /// Measure text width using theme default font size.
-    pub fn measure_text(&self, text: &str) -> u32 {
-        self.backend.measure_text(text, self.theme.font_size_md)
-    }
-
-    /// Measure text extents with a specific font size.
-    pub fn measure_text_sized(&self, text: &str, font_size: u16) -> (u32, u32) {
-        self.backend.measure_text_extents(text, font_size)
     }
 
     /// Draw `text` inside `rect = (x, y, w, h)`: vertically centered,
@@ -169,18 +85,6 @@ impl<'a> DrawContext<'a> {
         self.backend.fill_rounded_rect(x, y, w, h, radius, bg)?;
         self.backend
             .stroke_rounded_rect(x, y, w, h, radius, 1, border)
-    }
-
-    /// Inner rect after applying padding.
-    pub fn padded_rect(
-        &self,
-        padding: &Padding,
-        x: i32,
-        y: i32,
-        w: u32,
-        h: u32,
-    ) -> (i32, i32, u32, u32) {
-        padding.inner_rect(x, y, w, h)
     }
 
     /// Push a rendering sub-region (translate + clip).

@@ -52,7 +52,10 @@ jobs:
         id: http_check
         continue-on-error: true
         run: |
-          docker compose --profile ci run --rm rust-ci bash -c "
+          # Mount the step-output file: the script inside writes to it.
+          docker compose --profile ci run --rm \
+            -v "$GITHUB_OUTPUT:/tmp/gh-output" -e GITHUB_OUTPUT=/tmp/gh-output \
+            rust-ci bash -c "
             echo 'Testing archive.org connectivity...'
             HTTP_CODE=\$(curl -s -o /dev/null -w '%{http_code}' \
               --max-time 15 --connect-timeout 10 \
@@ -72,6 +75,7 @@ jobs:
         continue-on-error: true
         run: |
           docker compose --profile ci run --rm \
+            -v "$GITHUB_OUTPUT:/tmp/gh-output" -e GITHUB_OUTPUT=/tmp/gh-output \
             -e SDL_VIDEODRIVER=dummy \
             -e SDL_RENDER_DRIVER=software \
             -e OASIS_APP="TV Guide" \
@@ -140,7 +144,7 @@ jobs:
 
           echo "### HTTP Connectivity" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          if [[ "${{ steps.http_check.outcome }}" == "success" ]]; then
+          if [[ "${{ steps.http_check.outputs.reachable }}" == "true" ]]; then
             echo "archive.org: reachable" >> $GITHUB_STEP_SUMMARY
           else
             echo "archive.org: **unreachable** (external service may be down)" >> $GITHUB_STEP_SUMMARY

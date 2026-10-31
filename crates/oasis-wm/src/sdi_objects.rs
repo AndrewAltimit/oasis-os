@@ -6,9 +6,88 @@
 use oasis_sdi::SdiRegistry;
 use oasis_types::backend::Color;
 
-use super::hit_test::{ButtonKind, hit_test};
+use super::hit_test::{ButtonKind, HitRegion, hit_test};
 use super::manager::{MODAL_OVERLAY_ID, WindowManager};
-use super::window::Window;
+use super::window::{Window, WmTheme};
+
+/// Titlebar buttons in creation order.
+const BUTTON_KINDS: [ButtonKind; 3] = [
+    ButtonKind::Close,
+    ButtonKind::Minimize,
+    ButtonKind::Maximize,
+];
+
+/// Per-button SDI names and theme colors.
+struct ButtonStyle<'a> {
+    /// SDI suffix of the button background.
+    suffix: &'static str,
+    /// SDI suffix of the button's glyph text.
+    glyph_suffix: &'static str,
+    color: Color,
+    hover: Color,
+    glyph: &'a str,
+    glyph_color: Color,
+}
+
+impl<'a> ButtonStyle<'a> {
+    fn of(theme: &'a WmTheme, kind: ButtonKind) -> Self {
+        match kind {
+            ButtonKind::Close => Self {
+                suffix: "btn_close",
+                glyph_suffix: "btn_close_glyph",
+                color: theme.btn_close_color,
+                hover: theme.btn_close_hover,
+                glyph: &theme.glyph_close,
+                glyph_color: theme.glyph_close_color,
+            },
+            ButtonKind::Minimize => Self {
+                suffix: "btn_minimize",
+                glyph_suffix: "btn_minimize_glyph",
+                color: theme.btn_minimize_color,
+                hover: theme.btn_minimize_hover,
+                glyph: &theme.glyph_minimize,
+                glyph_color: theme.glyph_minimize_color,
+            },
+            ButtonKind::Maximize => Self {
+                suffix: "btn_maximize",
+                glyph_suffix: "btn_maximize_glyph",
+                color: theme.btn_maximize_color,
+                hover: theme.btn_maximize_hover,
+                glyph: &theme.glyph_maximize,
+                glyph_color: theme.glyph_maximize_color,
+            },
+        }
+    }
+}
+
+/// Font size of the titlebar button glyphs.
+fn glyph_font_size(theme: &WmTheme) -> u16 {
+    theme.button_size.min(12) as u16
+}
+
+/// `pos + (span - size) / 2`, saturating (positions near the ends of the
+/// i32 range must not overflow).
+fn centered(pos: i32, span: u32, size: u32) -> i32 {
+    let off = (i64::from(span) - i64::from(size)) / 2;
+    (i64::from(pos) + off).clamp(i32::MIN.into(), i32::MAX.into()) as i32
+}
+
+/// Top-left of a `size`-pixel glyph centered in button `rect`.
+fn glyph_origin(rect: (i32, i32, u32, u32), size: u16) -> (i32, i32) {
+    let (bx, by, bw, bh) = rect;
+    let size = u32::from(size);
+    (centered(bx, bw, size), centered(by, bh, size))
+}
+
+/// Y of the title text in a titlebar at `ty` of height `th`.
+fn title_text_y(ty: i32, th: u32, theme: &WmTheme) -> i32 {
+    centered(ty, th, u32::from(theme.titlebar_font_size)).saturating_sub(1)
+}
+
+/// Y of the 1px separator along the bottom edge of a titlebar.
+fn separator_y(ty: i32, th: u32) -> i32 {
+    (i64::from(ty) + i64::from(th) - 1).clamp(i32::MIN.into(), i32::MAX.into()) as i32
+}
 
 impl WindowManager {
     /// Create all SDI objects for a window.
@@ -78,7 +157,7 @@ impl WindowManager {
             {
                 let text_x = layout.x;
                 let avail_w = layout.text_w;
-                let text_y = ty + (th as i32 - theme.titlebar_font_size as i32) / 2 - 1;
+                let text_y = title_text_y(ty, th, theme);
                 let obj = sdi.create(window.sdi_name("title_text"));
                 obj.x = text_x;
                 obj.y = text_y;
@@ -92,8 +171,8 @@ impl WindowManager {
                 // Title text shadow (Tier 3).
                 if theme.title_text_shadow {
                     let sobj = sdi.create(window.sdi_name("title_shadow"));
-                    sobj.x = text_x + 1;
-                    sobj.y = text_y + 1;
+                    sobj.x = text_x.saturating_add(1);
+                    sobj.y = text_y.saturating_add(1);
                     sobj.w = avail_w;
                     sobj.h = th;
                     sobj.text = Some(layout.text);
@@ -107,78 +186,32 @@ impl WindowManager {
             if theme.separator_enabled {
                 let obj = sdi.create(window.sdi_name("separator"));
                 obj.x = tx;
-                obj.y = ty + th as i32 - 1;
+                obj.y = separator_y(ty, th);
                 obj.w = tw;
                 obj.h = 1;
                 obj.color = theme.separator_color;
             }
         }
 
-        let glyph_font_size = (theme.button_size as u16).min(12);
-
-        // Close button.
-        if let Some((bx, by, bw, bh)) = window.close_btn_rect(theme) {
-            let obj = sdi.create(window.sdi_name("btn_close"));
-            obj.x = bx;
-            obj.y = by;
-            obj.w = bw;
-            obj.h = bh;
-            obj.color = theme.btn_close_color;
+        // Titlebar buttons + glyphs.
+        let glyph_size = glyph_font_size(theme);
+        for kind in BUTTON_KINDS {
+            let Some(rect) = window.button_rect(theme, kind) else {
+                continue;
+            };
+            let style = ButtonStyle::of(theme, kind);
+            let obj = sdi.create(window.sdi_name(style.suffix));
+            (obj.x, obj.y, obj.w, obj.h) = rect;
+            obj.color = style.color;
             if theme.button_radius > 0 {
                 obj.border_radius = Some(theme.button_radius);
             }
-            let gobj = sdi.create(window.sdi_name("btn_close_glyph"));
-            gobj.x = bx + (bw as i32 - glyph_font_size as i32) / 2;
-            gobj.y = by + (bh as i32 - glyph_font_size as i32) / 2;
-            gobj.w = bw;
-            gobj.h = bh;
-            gobj.text = Some(theme.glyph_close.clone());
-            gobj.font_size = glyph_font_size;
-            gobj.text_color = theme.glyph_close_color;
-            gobj.color = Color::rgba(0, 0, 0, 0);
-        }
-
-        // Minimize button.
-        if let Some((bx, by, bw, bh)) = window.minimize_btn_rect(theme) {
-            let obj = sdi.create(window.sdi_name("btn_minimize"));
-            obj.x = bx;
-            obj.y = by;
-            obj.w = bw;
-            obj.h = bh;
-            obj.color = theme.btn_minimize_color;
-            if theme.button_radius > 0 {
-                obj.border_radius = Some(theme.button_radius);
-            }
-            let gobj = sdi.create(window.sdi_name("btn_minimize_glyph"));
-            gobj.x = bx + (bw as i32 - glyph_font_size as i32) / 2;
-            gobj.y = by + (bh as i32 - glyph_font_size as i32) / 2;
-            gobj.w = bw;
-            gobj.h = bh;
-            gobj.text = Some(theme.glyph_minimize.clone());
-            gobj.font_size = glyph_font_size;
-            gobj.text_color = theme.glyph_minimize_color;
-            gobj.color = Color::rgba(0, 0, 0, 0);
-        }
-
-        // Maximize button.
-        if let Some((bx, by, bw, bh)) = window.maximize_btn_rect(theme) {
-            let obj = sdi.create(window.sdi_name("btn_maximize"));
-            obj.x = bx;
-            obj.y = by;
-            obj.w = bw;
-            obj.h = bh;
-            obj.color = theme.btn_maximize_color;
-            if theme.button_radius > 0 {
-                obj.border_radius = Some(theme.button_radius);
-            }
-            let gobj = sdi.create(window.sdi_name("btn_maximize_glyph"));
-            gobj.x = bx + (bw as i32 - glyph_font_size as i32) / 2;
-            gobj.y = by + (bh as i32 - glyph_font_size as i32) / 2;
-            gobj.w = bw;
-            gobj.h = bh;
-            gobj.text = Some(theme.glyph_maximize.clone());
-            gobj.font_size = glyph_font_size;
-            gobj.text_color = theme.glyph_maximize_color;
+            let gobj = sdi.create(window.sdi_name(style.glyph_suffix));
+            (gobj.x, gobj.y) = glyph_origin(rect, glyph_size);
+            (gobj.w, gobj.h) = (rect.2, rect.3);
+            gobj.text = Some(style.glyph.to_string());
+            gobj.font_size = glyph_size;
+            gobj.text_color = style.glyph_color;
             gobj.color = Color::rgba(0, 0, 0, 0);
         }
 
@@ -288,8 +321,6 @@ impl WindowManager {
             obj.h = window.outer_h;
         }
 
-        let glyph_font_size = (theme.button_size as u16).min(12);
-
         // Titlebar.
         if let Some((tx, ty, tw, th)) = window.titlebar_rect(theme) {
             if let Ok(obj) = sdi.get_mut(&window.sdi_name("titlebar")) {
@@ -301,11 +332,11 @@ impl WindowManager {
             // Title text: re-layout, since a new width can change both the
             // centered position and the ellipsis truncation.
             if let Some(layout) = window.title_layout(theme) {
-                let text_y = ty + (th as i32 - theme.titlebar_font_size as i32) / 2 - 1;
+                let text_y = title_text_y(ty, th, theme);
                 for (suffix, off) in [("title_text", 0), ("title_shadow", 1)] {
                     if let Ok(obj) = sdi.get_mut(&window.sdi_name(suffix)) {
-                        obj.x = layout.x + off;
-                        obj.y = text_y + off;
+                        obj.x = layout.x.saturating_add(off);
+                        obj.y = text_y.saturating_add(off);
                         obj.w = layout.text_w;
                         obj.h = th;
                         if obj.text.as_deref() != Some(layout.text.as_str()) {
@@ -317,47 +348,24 @@ impl WindowManager {
             // Separator.
             if let Ok(obj) = sdi.get_mut(&window.sdi_name("separator")) {
                 obj.x = tx;
-                obj.y = ty + th as i32 - 1;
+                obj.y = separator_y(ty, th);
                 obj.w = tw;
                 obj.h = 1;
             }
         }
 
         // Buttons + glyphs.
-        if let Some((bx, by, bw, bh)) = window.close_btn_rect(theme) {
-            if let Ok(obj) = sdi.get_mut(&window.sdi_name("btn_close")) {
-                obj.x = bx;
-                obj.y = by;
-                obj.w = bw;
-                obj.h = bh;
+        let glyph_size = glyph_font_size(theme);
+        for kind in BUTTON_KINDS {
+            let Some(rect) = window.button_rect(theme, kind) else {
+                continue;
+            };
+            let style = ButtonStyle::of(theme, kind);
+            if let Ok(obj) = sdi.get_mut(&window.sdi_name(style.suffix)) {
+                (obj.x, obj.y, obj.w, obj.h) = rect;
             }
-            if let Ok(obj) = sdi.get_mut(&window.sdi_name("btn_close_glyph")) {
-                obj.x = bx + (bw as i32 - glyph_font_size as i32) / 2;
-                obj.y = by + (bh as i32 - glyph_font_size as i32) / 2;
-            }
-        }
-        if let Some((bx, by, bw, bh)) = window.minimize_btn_rect(theme) {
-            if let Ok(obj) = sdi.get_mut(&window.sdi_name("btn_minimize")) {
-                obj.x = bx;
-                obj.y = by;
-                obj.w = bw;
-                obj.h = bh;
-            }
-            if let Ok(obj) = sdi.get_mut(&window.sdi_name("btn_minimize_glyph")) {
-                obj.x = bx + (bw as i32 - glyph_font_size as i32) / 2;
-                obj.y = by + (bh as i32 - glyph_font_size as i32) / 2;
-            }
-        }
-        if let Some((bx, by, bw, bh)) = window.maximize_btn_rect(theme) {
-            if let Ok(obj) = sdi.get_mut(&window.sdi_name("btn_maximize")) {
-                obj.x = bx;
-                obj.y = by;
-                obj.w = bw;
-                obj.h = bh;
-            }
-            if let Ok(obj) = sdi.get_mut(&window.sdi_name("btn_maximize_glyph")) {
-                obj.x = bx + (bw as i32 - glyph_font_size as i32) / 2;
-                obj.y = by + (bh as i32 - glyph_font_size as i32) / 2;
+            if let Ok(obj) = sdi.get_mut(&window.sdi_name(style.glyph_suffix)) {
+                (obj.x, obj.y) = glyph_origin(rect, glyph_size);
             }
         }
 
@@ -415,34 +423,28 @@ impl WindowManager {
     /// restores the base color on the previously hovered button.
     pub(crate) fn update_button_hover(&mut self, x: i32, y: i32, sdi: &mut SdiRegistry) {
         let region = hit_test(&self.windows, x, y, &self.theme);
+        let modal = self.topmost_modal();
         let new_hover = match &region {
-            super::hit_test::HitRegion::TitlebarButton(id, kind) => Some((id.clone(), *kind)),
+            // Under a modal only its own buttons react (as for clicks).
+            HitRegion::TitlebarButton(id, kind) if modal.is_none_or(|m| m == *id) => {
+                Some((id.clone(), *kind))
+            },
             _ => None,
         };
 
         // If hover changed, restore old button color.
         if self.hover_button != new_hover {
-            if let Some((ref old_id, ref old_kind)) = self.hover_button {
-                let (suffix, base_color) = match old_kind {
-                    ButtonKind::Close => ("btn_close", self.theme.btn_close_color),
-                    ButtonKind::Minimize => ("btn_minimize", self.theme.btn_minimize_color),
-                    ButtonKind::Maximize => ("btn_maximize", self.theme.btn_maximize_color),
-                };
-                let name = format!("{old_id}.{suffix}");
-                if let Ok(obj) = sdi.get_mut(&name) {
-                    obj.color = base_color;
+            if let Some((ref old_id, old_kind)) = self.hover_button {
+                let style = ButtonStyle::of(&self.theme, old_kind);
+                if let Ok(obj) = sdi.get_mut(&format!("{old_id}.{}", style.suffix)) {
+                    obj.color = style.color;
                 }
             }
             // Apply new hover color.
-            if let Some((ref new_id, ref new_kind)) = new_hover {
-                let (suffix, hover_color) = match new_kind {
-                    ButtonKind::Close => ("btn_close", self.theme.btn_close_hover),
-                    ButtonKind::Minimize => ("btn_minimize", self.theme.btn_minimize_hover),
-                    ButtonKind::Maximize => ("btn_maximize", self.theme.btn_maximize_hover),
-                };
-                let name = format!("{new_id}.{suffix}");
-                if let Ok(obj) = sdi.get_mut(&name) {
-                    obj.color = hover_color;
+            if let Some((ref new_id, new_kind)) = new_hover {
+                let style = ButtonStyle::of(&self.theme, new_kind);
+                if let Ok(obj) = sdi.get_mut(&format!("{new_id}.{}", style.suffix)) {
+                    obj.color = style.hover;
                 }
             }
             self.hover_button = new_hover;
