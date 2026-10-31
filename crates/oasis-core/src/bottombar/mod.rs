@@ -136,6 +136,14 @@ pub struct BottomBar {
     /// Cached merged date+clock display string (built once per
     /// `update_info` instead of once per frame).
     clock_display: String,
+    /// Make room for taskbar window buttons. Classic footers always leave
+    /// the gap between their left and right content free; the media dock
+    /// only splits its track area when this is set (the shell sets it in
+    /// Desktop mode while windows are open).
+    pub reserve_taskbar: bool,
+    /// Free `(start_x, end_x)` span for taskbar buttons, recorded by the
+    /// last `update_sdi` (`update_sdi` takes `&self`).
+    taskbar_span: std::cell::Cell<(i32, i32)>,
 }
 
 impl BottomBar {
@@ -151,7 +159,18 @@ impl BottomBar {
             clock_text: "00:00".to_string(),
             date_text: String::new(),
             clock_display: "00:00".to_string(),
+            reserve_taskbar: false,
+            taskbar_span: std::cell::Cell::new((0, 0)),
         }
+    }
+
+    /// The `(start_x, end_x)` span of the bar left free for taskbar window
+    /// buttons by the last [`Self::update_sdi`]: past the start button, URL
+    /// plate, USB label and page dots (or the dock's transport pills), and
+    /// short of the media tabs / clock (or the dock's tracks). Pass it to
+    /// [`crate::taskbar::Taskbar::update_sdi_in`] after updating the bar.
+    pub fn taskbar_span(&self) -> (i32, i32) {
+        self.taskbar_span.get()
     }
 
     /// Update cached clock/date strings used by the XP-style bottom-right clock.
@@ -300,8 +319,10 @@ fn url_offset(at: &ActiveTheme, features: &SkinFeatures) -> i32 {
 
 /// URL label + chrome bezel (PSIX site plate) at the left edge.
 ///
-/// Returns the label's right edge, or `None` (and hides the plate) when
-/// the skin has no `bar_url_text`.
+/// Returns the plate's right edge (the bezel, which is wider than the
+/// label: padding plus a 60 px minimum), or `None` (and hides the plate)
+/// when the skin has no `bar_url_text`. Content placed after the plate
+/// starts from this edge so it never butts against the bezel.
 fn sync_url_plate(
     sdi: &mut SdiRegistry,
     at: &ActiveTheme,
@@ -335,7 +356,7 @@ fn sync_url_plate(
         geo.bezel_h,
         &BezelStyle::chrome(),
     );
-    Some(end)
+    Some(bx + bw as i32)
 }
 
 #[cfg(test)]

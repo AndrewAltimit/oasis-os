@@ -439,7 +439,107 @@ pub(super) struct CachedIconScene {
     color: Color,
     icon_w: u32,
     icon_h: u32,
-    scene: VectorScene,
+    /// Container style + padding: a chip shrinks the glyph into its body.
+    container: String,
+    container_padding: u16,
+    scenes: IconScenes,
+}
+
+/// One icon's glyph plus the box its container is drawn around.
+///
+/// Without a container the glyph *is* the box. A `chip` container keeps
+/// the box at the full fitted icon size but rebuilds the glyph smaller so
+/// it sits inside the chip body, below the accent band (a full-size glyph
+/// overlapped the band and poked out of the chip's bottom edge).
+#[derive(Debug, Clone)]
+struct IconScenes {
+    /// Size of the icon box (the container wraps it with `container_padding`).
+    frame_w: u32,
+    frame_h: u32,
+    /// Glyph ops, origin-relative.
+    glyph: VectorScene,
+    /// Glyph origin relative to the box origin.
+    glyph_dx: i32,
+    glyph_dy: i32,
+}
+
+impl IconScenes {
+    /// Shrink everything by `s` (entrance `scale_up`), keeping the glyph's
+    /// offset proportional so it stays put inside its container.
+    fn scaled(&self, s: f32) -> Self {
+        let mut glyph = self.glyph.clone();
+        for op in &mut glyph.ops {
+            op.scale(s);
+        }
+        glyph.width = (glyph.width as f32 * s) as u32;
+        glyph.height = (glyph.height as f32 * s) as u32;
+        Self {
+            frame_w: (self.frame_w as f32 * s) as u32,
+            frame_h: (self.frame_h as f32 * s) as u32,
+            glyph,
+            glyph_dx: (self.glyph_dx as f32 * s) as i32,
+            glyph_dy: (self.glyph_dy as f32 * s) as i32,
+        }
+    }
+}
+
+/// Accent-band height of a chip container `bh` px tall: ~22% of it, at
+/// least 4 px so it stays readable on PSP-sized dashboards.
+fn chip_band_h(bh: u32) -> u32 {
+    ((bh as f32 * 0.22) as u32).max(4).min(bh.saturating_sub(4))
+}
+
+/// Build the glyph (and container box) for one icon. A `chip` container
+/// (other than with the `pixel` preset, which bakes its own chrome) fits
+/// the glyph into the chip body below the accent band and separator.
+fn build_icon_scenes(
+    app: &AppEntry,
+    global_index: usize,
+    frame: u32,
+    at: &ActiveTheme,
+    flash_color: Option<Color>,
+) -> IconScenes {
+    let cfg = &at.icon;
+    let full = build_icon_scene(
+        app,
+        global_index,
+        frame,
+        cfg,
+        at.icon_width,
+        at.icon_height,
+        flash_color,
+    );
+    let (frame_w, frame_h) = (full.width, full.height);
+    if cfg.container_style != "chip" || cfg.vector_preset == "pixel" {
+        return IconScenes {
+            frame_w,
+            frame_h,
+            glyph: full,
+            glyph_dx: 0,
+            glyph_dy: 0,
+        };
+    }
+    let pad = i32::from(cfg.container_padding);
+    let bw = frame_w as i32 + 2 * pad;
+    let bh = frame_h as i32 + 2 * pad;
+    // Body: below the band and its 1 px separator (both start 1 px inside
+    // the outline), inset by a small gap on every side.
+    let gap = pad.max(2);
+    let body_top = 2 + chip_band_h(bh as u32) as i32 + gap;
+    let avail_w = (bw - 2 * gap).max(1) as u32;
+    let avail_h = (bh - body_top - gap).max(1) as u32;
+    let glyph = build_icon_scene(app, global_index, frame, cfg, avail_w, avail_h, flash_color);
+    // Offsets are relative to the box origin, which sits `pad` inside the
+    // container's top-left corner.
+    let glyph_dx = gap - pad + (avail_w as i32 - glyph.width as i32) / 2;
+    let glyph_dy = body_top - pad + (avail_h as i32 - glyph.height as i32) / 2;
+    IconScenes {
+        frame_w,
+        frame_h,
+        glyph,
+        glyph_dx,
+        glyph_dy,
+    }
 }
 
 /// Whether an icon's glyph depends on the frame counter (spin / pulse /
@@ -527,6 +627,15 @@ impl DashboardState {
             }
         }
 
+        // A container backdrop extends `container_padding` below the icon
+        // box; start the label under it rather than on its bottom edge.
+        let container_pad = if at.icon.container_style != "none" && at.icon.vector_preset != "pixel"
+        {
+            i32::from(at.icon.container_padding)
+        } else {
+            0
+        };
+
         // Draw label using the shared label renderer (still SDI-based).
         super::labels::draw_label(
             sdi,
@@ -534,7 +643,7 @@ impl DashboardState {
             names,
             cell_x,
             self.cell_size().0,
-            iy + lift + icon_h as i32 + text_pad,
+            iy + lift + icon_h as i32 + text_pad + container_pad,
             &app.title,
             left_align.then_some(ix + icon_w as i32 / 2),
             &self.label_wrap_cache,
@@ -593,28 +702,26 @@ impl DashboardState {
             // Same placement as the SDI pass (column layouts left-align).
             let (ix, iy) = self.icon_origin(i, (ox + slide_offset, oy), at);
 
-            // Get or build the scaled icon scene: static icons render from
-            // the cache; animated or flashing icons rebuild each frame.
+            // Get or build the icon scenes: static icons render from the
+            // cache; animated or flashing icons rebuild each frame.
             let global_index = page_start + i;
             let flashing = self.press_flash_frame > 0 && i == self.press_flash_index;
-            let fresh: Option<VectorScene> =
+            let fresh: Option<IconScenes> =
                 if flashing || icon_is_animated(preset, app, global_index, &at.icon) {
                     let flash = flashing
                         .then(|| oasis_types::color::lighten(app.color, at.press_flash_lighten));
-                    Some(build_icon_scene(
+                    Some(build_icon_scenes(
                         app,
                         global_index,
                         frame_counter,
-                        &at.icon,
-                        icon_w,
-                        icon_h,
+                        at,
                         flash,
                     ))
                 } else {
                     None
                 };
             let mut cache = self.scene_cache.borrow_mut();
-            let scene: &VectorScene = match fresh {
+            let scenes: &IconScenes = match fresh {
                 Some(ref s) => s,
                 None => {
                     let build = || CachedIconScene {
@@ -623,15 +730,9 @@ impl DashboardState {
                         color: app.color,
                         icon_w,
                         icon_h,
-                        scene: build_icon_scene(
-                            app,
-                            global_index,
-                            0,
-                            &at.icon,
-                            icon_w,
-                            icon_h,
-                            None,
-                        ),
+                        container: at.icon.container_style.clone(),
+                        container_padding: at.icon.container_padding,
+                        scenes: build_icon_scenes(app, global_index, 0, at, None),
                     };
                     let entry = cache.entry(global_index).or_insert_with(build);
                     if entry.preset != *preset
@@ -639,16 +740,18 @@ impl DashboardState {
                         || entry.color != app.color
                         || entry.icon_w != icon_w
                         || entry.icon_h != icon_h
+                        || entry.container != at.icon.container_style
+                        || entry.container_padding != at.icon.container_padding
                     {
                         *entry = build();
                     }
-                    &entry.scene
+                    &entry.scenes
                 },
             };
 
-            // Center the scaled icon within the cell.
-            let mut ox = ix + (icon_w as i32 - scene.width as i32) / 2;
-            let mut oy = iy + (icon_h as i32 - scene.height as i32) / 2;
+            // Center the icon box within the cell.
+            let mut ox = ix + (icon_w as i32 - scenes.frame_w as i32) / 2;
+            let mut oy = iy + (icon_h as i32 - scenes.frame_h as i32) / 2;
 
             // Apply idle float animation (sine-wave bob).
             if at.icon.idle_float {
@@ -661,9 +764,9 @@ impl DashboardState {
             }
 
             // Entrance animation. `scale_up` shrinks a transient copy so
-            // the cached scene stays pristine.
+            // the cached scenes stay pristine.
             let mut alpha = 255u8;
-            let mut shrunk: Option<VectorScene> = None;
+            let mut shrunk: Option<IconScenes> = None;
             if at.entrance_style != "none"
                 && let Some(elapsed) = self.entrance_elapsed_ms
             {
@@ -676,16 +779,9 @@ impl DashboardState {
                     "scale_up" => {
                         let s = anim::entrance_scale(staggered, dur);
                         if s < 1.0 {
-                            let mut small = scene.clone();
-                            let sw = (small.width as f32 * s) as u32;
-                            let sh = (small.height as f32 * s) as u32;
-                            ox += (small.width as i32 - sw as i32) / 2;
-                            oy += (small.height as i32 - sh as i32) / 2;
-                            for op in &mut small.ops {
-                                op.scale(s);
-                            }
-                            small.width = sw;
-                            small.height = sh;
+                            let small = scenes.scaled(s);
+                            ox += (scenes.frame_w as i32 - small.frame_w as i32) / 2;
+                            oy += (scenes.frame_h as i32 - small.frame_h as i32) / 2;
                             shrunk = Some(small);
                         }
                     },
@@ -696,7 +792,7 @@ impl DashboardState {
                     _ => {},
                 }
             }
-            let scene: &VectorScene = shrunk.as_ref().unwrap_or(scene);
+            let scenes: &IconScenes = shrunk.as_ref().unwrap_or(scenes);
 
             // Container backdrop (drawn before the glyph so it sits underneath).
             // Keeps vector icons legible on busy shader wallpapers.
@@ -704,21 +800,14 @@ impl DashboardState {
             // The `pixel` preset bakes its own chrome into the glyph, so the
             // external backdrop is always skipped for it — otherwise you'd get
             // two stacked containers.
-            //
-            // `glyph_offset_y` nudges the glyph down so it sits in the tile's
-            // body area below the accent band, rather than floating over it.
-            let pixel_preset = preset == "pixel";
-            let glyph_offset_y = if at.icon.container_style == "chip" && !pixel_preset {
-                let bh = scene.height + (2 * at.icon.container_padding as u32);
-                let band_h = ((bh as f32 * 0.22) as i32)
-                    .max(4)
-                    .min((bh as i32 - 4).max(0));
-                band_h / 2
-            } else {
-                0
-            };
-            if at.icon.container_style != "none" && !pixel_preset {
-                let backdrop = build_container_backdrop(at, app.color, ox, oy, scene);
+            if at.icon.container_style != "none" && preset != "pixel" {
+                let backdrop = build_container_backdrop(
+                    at,
+                    app.color,
+                    ox,
+                    oy,
+                    (scenes.frame_w, scenes.frame_h),
+                );
                 render_scene_at(backend, &backdrop, 0, 0, alpha)?;
             }
 
@@ -730,21 +819,27 @@ impl DashboardState {
                 let glow_op = VectorOp::StrokeRoundedRect {
                     x: ox - 2,
                     y: oy - 2,
-                    w: scene.width + 4,
-                    h: scene.height + 4,
+                    w: scenes.frame_w + 4,
+                    h: scenes.frame_h + 4,
                     radius: 4,
                     width: 1,
                     color: gc,
                 };
                 let glow_scene = VectorScene {
-                    width: scene.width + 4,
-                    height: scene.height + 4,
+                    width: scenes.frame_w + 4,
+                    height: scenes.frame_h + 4,
                     ops: vec![glow_op],
                 };
                 render_scene_at(backend, &glow_scene, 0, 0, alpha)?;
             }
 
-            render_scene_at(backend, scene, ox, oy + glyph_offset_y, alpha)?;
+            render_scene_at(
+                backend,
+                &scenes.glyph,
+                ox + scenes.glyph_dx,
+                oy + scenes.glyph_dy,
+                alpha,
+            )?;
         }
 
         Ok(())
@@ -773,13 +868,13 @@ fn build_container_backdrop(
     app_color: Color,
     ox: i32,
     oy: i32,
-    scene: &VectorScene,
+    (frame_w, frame_h): (u32, u32),
 ) -> VectorScene {
     let pad = at.icon.container_padding as i32;
     let bx = ox - pad;
     let by = oy - pad;
-    let bw = scene.width + (2 * pad) as u32;
-    let bh = scene.height + (2 * pad) as u32;
+    let bw = frame_w + (2 * pad) as u32;
+    let bh = frame_h + (2 * pad) as u32;
     let radius = at.icon.border_radius;
 
     match at.icon.container_style.as_str() {
@@ -808,9 +903,7 @@ fn build_container_backdrop(
             }
         },
         "chip" => {
-            // Band height: ~22% of chip height, minimum 4px so it stays
-            // readable even on PSP-sized dashboards.
-            let band_h = ((bh as f32 * 0.22) as u32).max(4).min(bh.saturating_sub(4));
+            let band_h = chip_band_h(bh);
             let band_top = oasis_types::color::lighten(app_color, 0.25);
             let band_bottom = app_color;
             let separator = oasis_types::color::darken(app_color, 0.35);
@@ -1169,6 +1262,43 @@ mod tests {
                         && y1 <= icon.height as i32 + tol,
                     "{preset} {cat:?} ({}) bounds ({x0},{y0})-({x1},{y1})",
                     icon.name
+                );
+            }
+        }
+    }
+
+    /// A chip's glyph must sit inside the chip body: below the accent band
+    /// and its separator, and above the bottom edge (Radio's and TV
+    /// Guide's antennas used to overlap the band in macOS / GNOME).
+    #[test]
+    fn chip_glyph_sits_below_band() {
+        for skin in ["macos", "gnome", "modern", "solarized"] {
+            let skin = crate::skin::resolve_skin(skin).unwrap();
+            let at = ActiveTheme::from_skin(&skin.theme)
+                .with_screen_size(skin.manifest.screen_width, skin.manifest.screen_height);
+            assert_eq!(at.icon.container_style, "chip");
+            for title in ["Radio", "TV Guide", "Browser", "Terminal"] {
+                let s = build_icon_scenes(&app(title), 0, 0, &at, None);
+                let pad = i32::from(at.icon.container_padding);
+                let bh = s.frame_h as i32 + 2 * pad;
+                let bw = s.frame_w as i32 + 2 * pad;
+                // Container-relative glyph bounds.
+                let (x0, y0, x1, y1) = icon_set::ops_bounds(&s.glyph.ops).expect("glyph ops");
+                let (gx, gy) = (s.glyph_dx + pad, s.glyph_dy + pad);
+                let band_bottom = 2 + chip_band_h(bh as u32) as i32;
+                assert!(
+                    gy + y0 >= band_bottom,
+                    "{title}: glyph top {} overlaps band ending {band_bottom}",
+                    gy + y0
+                );
+                assert!(
+                    gy + y1 <= bh - 1,
+                    "{title}: glyph bottom {} past {bh}",
+                    gy + y1
+                );
+                assert!(
+                    gx + x0 >= 1 && gx + x1 <= bw - 1,
+                    "{title}: glyph x out of chip"
                 );
             }
         }

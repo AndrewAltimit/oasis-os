@@ -396,6 +396,27 @@ fn usb_label_follows_url_text_across_skin_swaps() {
     assert!(long_x > url.x + text_px(&at.bar.url_text, at.font_small));
 }
 
+/// The USB label must start past the URL plate's bezel (which pads the
+/// label and has a 60 px minimum width), not right against it.
+#[test]
+fn usb_label_clears_url_bezel() {
+    let bar = BottomBar::new();
+    let mut sdi = SdiRegistry::new();
+    let feat = SkinFeatures::default();
+    let mut at = crate::active_theme::ActiveTheme::default();
+    for url in ["A", "HTTP://A-MUCH-LONGER-URL"] {
+        at.bar.url_text = url.to_string();
+        bar.update_sdi(&mut sdi, &at, &feat);
+        let bezel = sdi.get("bar_url_bezel").unwrap();
+        let bezel_end = bezel.x + bezel.w as i32;
+        let usb_x = sdi.get("bar_usb").unwrap().x;
+        assert!(
+            usb_x >= bezel_end + 4,
+            "{url}: USB x {usb_x} touches the bezel ending at {bezel_end}"
+        );
+    }
+}
+
 /// The right-aligned media tab strip must track the bottom clock's width
 /// (the date arrives after the first frame).
 #[test]
@@ -440,6 +461,72 @@ fn media_dock_draws_transport_and_tracks() {
     assert!(sdi.get("bar_btab_0").unwrap().visible);
     assert!(hidden(&sdi, "bar_tab_bezel"));
     assert!(hidden(&sdi, "bar_page_0"));
+}
+
+/// Taskbar buttons used to start right after the start button, on top of
+/// the URL plate and USB label (classic) or the transport pills (dock).
+#[test]
+fn taskbar_span_clears_left_content() {
+    use crate::taskbar::Taskbar;
+    use crate::wm::window::{Window, WindowConfig, WindowType, WmTheme};
+
+    let window = Window::new(
+        &WindowConfig {
+            id: "w".to_string(),
+            title: "File Manager".to_string(),
+            x: Some(10),
+            y: Some(10),
+            width: 100,
+            height: 80,
+            window_type: WindowType::AppWindow,
+            always_on_top: false,
+            modal: false,
+        },
+        10,
+        10,
+        &WmTheme::default(),
+    );
+    let mut at = crate::active_theme::ActiveTheme::default();
+    at.bar.url_text = "HTTP://OASIS".to_string();
+    // Wide enough that the dock's track area can host a button at all.
+    at.screen_w = 800;
+    let classic = SkinFeatures::default();
+    for (features, after) in [(classic, "bar_usb"), (dock_features(), "bar_dock_next")] {
+        let mut bar = BottomBar::new();
+        bar.reserve_taskbar = true;
+        let mut sdi = SdiRegistry::new();
+        bar.update_sdi(&mut sdi, &at, &features);
+        let mut taskbar = Taskbar::new();
+        taskbar.update_sdi_in(
+            &mut sdi,
+            &at,
+            std::slice::from_ref(&window),
+            None,
+            bar.taskbar_span(),
+        );
+        let left = sdi.get(after).unwrap();
+        let btn = sdi.get("taskbar_btn_0").unwrap();
+        let left_w = if after == "bar_usb" {
+            text_px("USB", at.font_small)
+        } else {
+            left.w as i32
+        };
+        let left_end = left.x + left_w;
+        assert!(
+            btn.x >= left_end,
+            "{after} ends at {left_end}, button at {}",
+            btn.x
+        );
+        if features.bottombar_style == "media_dock" {
+            // The tracks moved right of the button.
+            let track = sdi.get("bar_dock_progress_track").unwrap();
+            assert!(
+                track.x >= btn.x + btn.w as i32,
+                "track {} under button",
+                track.x
+            );
+        }
+    }
 }
 
 #[test]

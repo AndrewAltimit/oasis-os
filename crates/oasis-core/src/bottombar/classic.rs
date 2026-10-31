@@ -32,26 +32,28 @@ impl BottomBar {
 
         // Media category tabs (pipe-separated). Disabled by default; opt in
         // per-skin via `show_media_tabs = true` for PSP-style layouts.
-        if features.show_media_tabs {
-            self.draw_media_tabs(sdi, at, geo, right_edge);
+        let right_content_x = if features.show_media_tabs {
+            self.draw_media_tabs(sdi, at, geo, right_edge)
         } else {
             hide_objects(sdi, &BTAB_NAMES);
             hide_objects(sdi, &BPIPE_NAMES);
             hide_bezel(sdi, "bar_tab_bezel");
-        }
+            right_edge
+        };
 
         // Classic footer never shows the media dock; hide any dock objects
         // left over from a prior dock skin (no-op when they don't exist).
         dock::hide_dock(sdi);
 
-        // USB indicator after the URL text (hidden without a URL plate).
+        // USB indicator after the URL plate (hidden without one), with a
+        // gap from the bezel edge.
         let usb_end = match url_end {
             None => {
                 hide_objects(sdi, &["bar_usb"]);
                 url_offset
             },
             Some(end) => {
-                let usb_x = end + 6;
+                let usb_x = end + 8;
                 place_label(
                     sdi,
                     at,
@@ -64,7 +66,20 @@ impl BottomBar {
             },
         };
 
-        self.sync_page_dots(sdi, at, features, geo, usb_end + 12);
+        let dots_x = usb_end + 12;
+        let left_end = self.sync_page_dots(sdi, at, features, geo, dots_x);
+
+        // Taskbar buttons go in the gap between the left and right content
+        // (they used to start right after the start button, on top of the
+        // URL plate and USB label). With neither a plate nor page dots the
+        // left content is just the start button.
+        let start = if url_end.is_some() || left_end != dots_x {
+            left_end + 8
+        } else {
+            crate::taskbar::Taskbar::taskbar_start_x(at, features.start_menu)
+        };
+        let end = (right_content_x - 8).min(at.screen_w as i32 * 2 / 3);
+        self.taskbar_span.set((start, end.max(start)));
     }
 
     /// Page dots (rounded for circular appearance, with lerp transition).
@@ -73,6 +88,8 @@ impl BottomBar {
     /// lone "active" dot otherwise shows up next to the START button as an
     /// unexplained white speck on skins that inherit the default
     /// `page_dot_active` color.
+    ///
+    /// Returns the right edge of the dots, or `dots_x` when none are shown.
     fn sync_page_dots(
         &self,
         sdi: &mut SdiRegistry,
@@ -80,10 +97,10 @@ impl BottomBar {
         features: &SkinFeatures,
         geo: &BarGeometry,
         dots_x: i32,
-    ) {
+    ) -> i32 {
         if !features.show_page_dots || self.total_pages <= 1 {
             hide_objects(sdi, &PAGE_DOT_NAMES);
-            return;
+            return dots_x;
         }
         let shown = self.total_pages.min(theme::MAX_PAGE_DOTS);
         for (i, name) in PAGE_DOT_NAMES.iter().enumerate().take(shown) {
@@ -102,5 +119,6 @@ impl BottomBar {
             );
         }
         hide_objects(sdi, &PAGE_DOT_NAMES[shown..]);
+        dots_x + (shown as i32 - 1) * 12 + 6
     }
 }

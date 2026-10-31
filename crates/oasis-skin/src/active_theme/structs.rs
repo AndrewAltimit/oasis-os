@@ -241,7 +241,7 @@ pub struct StartMenuTheme {
     pub button_width: u32,
     /// Start button height.
     pub button_height: u32,
-    /// Start button shape: "pill" or "rect".
+    /// Start button shape: "pill", "rect" or "bevel" (square, Win9x 3D edges).
     pub button_shape: String,
     /// Start menu panel width.
     pub panel_width: u32,

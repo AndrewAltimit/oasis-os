@@ -124,11 +124,26 @@ impl BottomBar {
         // bottombar styles never leaks a stale copy.
         let url_offset = url_offset(at, features);
         let left = match sync_url_plate(sdi, at, url_offset, geo) {
-            Some(end) => end + 6,
+            Some(plate_end) => plate_end,
             None => url_offset + 8,
         };
         let pills_end = draw_transport(sdi, at, geo, left + 4);
-        draw_tracks(sdi, at, geo, pills_end + 6, usb_x - 12);
+        // With windows open the taskbar buttons take the left half of the
+        // track area (they were drawn over the transport pills).
+        let tracks_x = pills_end + 6;
+        let tracks_end = usb_x - 12;
+        if self.reserve_taskbar {
+            // At least one minimum-width (40 px) button, at most leaving
+            // the tracks 24 px.
+            let mid = (tracks_x + (tracks_end - tracks_x) / 2)
+                .max(tracks_x + 46)
+                .min(tracks_end - 24);
+            self.taskbar_span.set((tracks_x, mid - 6));
+            draw_tracks(sdi, at, geo, mid, tracks_end);
+        } else {
+            self.taskbar_span.set((tracks_x, tracks_x));
+            draw_tracks(sdi, at, geo, tracks_x, tracks_end);
+        }
     }
 }
 

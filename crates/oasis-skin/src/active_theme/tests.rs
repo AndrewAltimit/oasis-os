@@ -1279,7 +1279,7 @@ fn from_skin_full_derivation_pinned() {
         ("retro-cga", 0x13434cfd5b4f95a0),
         ("solarized", 0xe831b2c3bb1b9a46),
         ("vaporwave", 0x97611038297b2ac9),
-        ("win95", 0x93a1fc408de94c44),
+        ("win95", 0x65b113d7b554db41),
         ("xp", 0x99c4d33754bac4e9),
     ];
 

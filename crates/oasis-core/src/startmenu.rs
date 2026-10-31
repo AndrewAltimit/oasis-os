@@ -28,6 +28,15 @@ const Z_MENU: i32 = 950;
 /// Z-order for the start button (sits on the bottom bar layer).
 const Z_BUTTON: i32 = 903;
 
+/// Edge objects of a `button_shape = "bevel"` start button (top, left,
+/// bottom, right).
+const BEVEL_EDGES: [&str; 4] = [
+    "start_btn_bevel_t",
+    "start_btn_bevel_l",
+    "start_btn_bevel_b",
+    "start_btn_bevel_r",
+];
+
 /// Maximum items supported (for SDI object naming).
 const MAX_ITEMS: usize = 12;
 /// Maximum separator rows.
@@ -370,6 +379,7 @@ impl StartMenuState {
     /// Hide all start menu SDI objects (button + popup).
     pub fn hide_sdi(&self, sdi: &mut SdiRegistry) {
         hide_objects(sdi, &["start_btn_bg", "start_btn_text"]);
+        hide_objects(sdi, &BEVEL_EDGES);
         self.hide_menu_sdi(sdi);
     }
 
@@ -378,10 +388,10 @@ impl StartMenuState {
     fn update_button_sdi(&self, sdi: &mut SdiRegistry, at: &ActiveTheme) {
         let btn_w = at.menu.button_width;
         let btn_h = at.menu.button_height;
-        let radius = if at.menu.button_shape == "rect" {
-            Some(2u16)
-        } else {
-            Some(btn_h as u16 / 2)
+        let radius = match at.menu.button_shape.as_str() {
+            "rect" => Some(2u16),
+            "bevel" => None,
+            _ => Some(btn_h as u16 / 2),
         };
 
         // Button background.
@@ -409,6 +419,34 @@ impl StartMenuState {
             obj.gradient_bottom = at.menu.button_gradient_bottom;
         }
 
+        // "bevel": Win9x 3D edges -- raised (light top/left, dark
+        // bottom/right), sunken while the menu is open. Without them a
+        // button the color of its bar is indistinguishable from the bar.
+        if at.menu.button_shape == "bevel" {
+            let (light, dark) = (Color::rgb(255, 255, 255), Color::rgb(64, 64, 64));
+            let (hi, lo) = if self.anim_target_open {
+                (dark, light)
+            } else {
+                (light, dark)
+            };
+            let (x, y, w, h) = (btn_x, self.btn_y, btn_w, btn_h);
+            let edges = [
+                (x, y, w, 1, hi),
+                (x, y, 1, h, hi),
+                (x, y + h as i32 - 1, w, 1, lo),
+                (x + w as i32 - 1, y, 1, h, lo),
+            ];
+            for (name, (ex, ey, ew, eh, color)) in BEVEL_EDGES.iter().zip(edges) {
+                ensure_border(sdi, name, ex, ey, ew, eh, color);
+                if let Ok(obj) = sdi.get_mut(name) {
+                    obj.overlay = true;
+                    obj.z = Z_BUTTON + 1;
+                }
+            }
+        } else {
+            hide_objects(sdi, &BEVEL_EDGES);
+        }
+
         // Button text.
         if !sdi.contains("start_btn_text") {
             let obj = sdi.create("start_btn_text");
@@ -416,8 +454,9 @@ impl StartMenuState {
             obj.z = Z_BUTTON + 1;
         }
         if let Ok(obj) = sdi.get_mut("start_btn_text") {
-            let char_w = at.font_small.max(8) as i32 / 8 * 8;
-            let text_w = at.menu.button_label.len() as i32 * char_w;
+            // Proportional width: a fixed 8 px per char pushed every label
+            // left of centre (most glyphs are narrower than 8 px).
+            let text_w = text_px(&at.menu.button_label, at.font_small);
             obj.x = btn_x + (btn_w as i32 - text_w) / 2;
             obj.y = self.btn_y + (btn_h as i32 - at.font_small as i32) / 2;
             obj.font_size = at.font_small;
@@ -881,6 +920,44 @@ mod tests {
         assert!(sdi.contains("start_btn_text"));
         // Menu should be hidden.
         assert!(!sdi.contains("sm_bg") || !sdi.get("sm_bg").unwrap().visible);
+    }
+
+    #[test]
+    fn bevel_button_draws_edges_only_for_bevel_shape() {
+        let mut at = ActiveTheme::default();
+        at.menu.button_shape = "bevel".to_string();
+        let sm = StartMenuState::new(StartMenuState::default_items(&at));
+        let mut sdi = SdiRegistry::new();
+        sm.update_sdi(&mut sdi, &at);
+        for name in BEVEL_EDGES {
+            assert!(sdi.get(name).unwrap().visible, "{name}");
+        }
+        assert_eq!(sdi.get("start_btn_bg").unwrap().border_radius, None);
+        // Switching shape (skin swap) hides the edges again.
+        at.menu.button_shape = "pill".to_string();
+        sm.update_sdi(&mut sdi, &at);
+        for name in BEVEL_EDGES {
+            assert!(!sdi.get(name).unwrap().visible, "{name}");
+        }
+    }
+
+    #[test]
+    fn button_label_is_centered() {
+        let mut at = ActiveTheme::default();
+        for label in ["START", "Finder", "Activities", "Menu"] {
+            at.menu.button_label = label.to_string();
+            let sm = StartMenuState::new(StartMenuState::default_items(&at));
+            let mut sdi = SdiRegistry::new();
+            sm.update_sdi(&mut sdi, &at);
+            let bg = sdi.get("start_btn_bg").unwrap();
+            let text = sdi.get("start_btn_text").unwrap();
+            let left = text.x - bg.x;
+            let right = bg.x + bg.w as i32 - (text.x + text_px(label, at.font_small));
+            assert!(
+                (left - right).abs() <= 1,
+                "{label}: margins {left} / {right}"
+            );
+        }
     }
 
     #[test]

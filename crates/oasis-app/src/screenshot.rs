@@ -35,6 +35,7 @@ use oasis_core::skin::builtin::builtin_names;
 use oasis_core::skin::resolve_skin;
 use oasis_core::startmenu::StartMenuState;
 use oasis_core::statusbar::StatusBar;
+use oasis_core::taskbar::Taskbar;
 use oasis_core::vfs::MemoryVfs;
 use oasis_core::wallpaper;
 use oasis_core::wm::{WindowConfig, WindowManager, WindowType};
@@ -103,6 +104,7 @@ fn capture_skin(skin_name: &str) -> anyhow::Result<()> {
     let mut status_bar = StatusBar::new();
     let mut bottom_bar = BottomBar::new();
     bottom_bar.total_pages = dashboard.page_count();
+    let mut taskbar = Taskbar::new();
 
     // Start menu (when enabled by skin).
     let start_menu = if skin.features.start_menu {
@@ -209,8 +211,23 @@ fn capture_skin(skin_name: &str) -> anyhow::Result<()> {
         if let Some(ref sm) = start_menu {
             sm.update_sdi(&mut sdi, &active_theme);
         }
-    } else if has_wm {
-        // WM desktop: windows are already created, show them as-is.
+    } else if let Some(ref wm) = wm {
+        // WM desktop: windows are already created. Draw the chrome the
+        // shell's Desktop mode draws around them (status bar, bottom bar
+        // with the start button + clock, taskbar window buttons) -- without
+        // it the skin's taskbar strip rendered empty.
+        sync_desktop_chrome(
+            &mut sdi,
+            &DesktopChrome {
+                theme: &active_theme,
+                features: &skin.features,
+                start_menu: start_menu.as_ref(),
+            },
+            &mut status_bar,
+            &mut bottom_bar,
+            &mut taskbar,
+            wm,
+        );
     } else if skin.features.terminal {
         populate_skin_terminal(&mut sdi, &DEMO_OUTPUT, "/home/user", "ls");
     }
@@ -287,35 +304,60 @@ fn capture_skin(skin_name: &str) -> anyhow::Result<()> {
     // -- Screenshot 4: Terminal mode --
     if has_dashboard {
         dashboard.hide_sdi(&mut sdi);
-        StatusBar::hide_sdi(&mut sdi);
-        BottomBar::hide_sdi(&mut sdi);
-        if let Some(ref sm) = start_menu {
-            sm.hide_sdi(&mut sdi);
-        }
         hide_media_page(&mut sdi);
-        if has_wm {
-            if let Some(ref mut wm) = wm {
-                let term_cfg = WindowConfig {
-                    id: "demo_terminal".to_string(),
-                    title: "Terminal".to_string(),
-                    x: Some(40),
-                    y: Some(30),
-                    width: (w as i32 - 80).max(300) as u32,
-                    height: (h as i32 - 60).max(200) as u32,
-                    window_type: WindowType::AppWindow,
-                    always_on_top: false,
-                    modal: false,
-                };
-                wm.create_window(&term_cfg, &mut sdi)?;
-                populate_window_content(
-                    &mut sdi,
-                    "demo_terminal",
-                    &DEMO_TERMINAL_CONTENT,
-                    oasis_core::terminal_sdi::TerminalColors::from_theme(&active_theme).output,
-                    8,
-                );
-            }
+        status_bar.active_tab = oasis_core::statusbar::TopTab::Apps;
+        if let Some(ref mut wm) = wm {
+            // Desktop mode, as the shell shows a windowed terminal: the
+            // window fits between the status and bottom bars (its config
+            // size is the *content* area, so subtract the frame), and the
+            // bars + taskbar stay up.
+            let tab_row = if skin.features.show_tabs {
+                active_theme.tab_row_height as i32
+            } else {
+                0
+            };
+            let (top, bottom) = (
+                active_theme.statusbar_height as i32 + tab_row + 6,
+                oasis_core::bottombar::bottom_bar_y(&active_theme) - 6,
+            );
+            let frame_h = (wm.theme().titlebar_height + 2 * wm.theme().border_width) as i32;
+            let term_cfg = WindowConfig {
+                id: "demo_terminal".to_string(),
+                title: "Terminal".to_string(),
+                x: Some(40),
+                y: Some(top),
+                width: (w as i32 - 80).max(300) as u32,
+                height: (bottom - top - frame_h).max(120) as u32,
+                window_type: WindowType::AppWindow,
+                always_on_top: false,
+                modal: false,
+            };
+            wm.create_window(&term_cfg, &mut sdi)?;
+            populate_window_content(
+                &mut sdi,
+                "demo_terminal",
+                &DEMO_TERMINAL_CONTENT,
+                oasis_core::terminal_sdi::TerminalColors::from_theme(&active_theme).output,
+                8,
+            );
+            sync_desktop_chrome(
+                &mut sdi,
+                &DesktopChrome {
+                    theme: &active_theme,
+                    features: &skin.features,
+                    start_menu: start_menu.as_ref(),
+                },
+                &mut status_bar,
+                &mut bottom_bar,
+                &mut taskbar,
+                wm,
+            );
         } else {
+            StatusBar::hide_sdi(&mut sdi);
+            BottomBar::hide_sdi(&mut sdi);
+            if let Some(ref sm) = start_menu {
+                sm.hide_sdi(&mut sdi);
+            }
             setup_terminal_objects(&mut sdi, &DEMO_OUTPUT, "/home/user", "ls", &active_theme);
         }
     } else if let Some(ref mut wm) = wm {
@@ -324,6 +366,18 @@ fn capture_skin(skin_name: &str) -> anyhow::Result<()> {
         for i in 0..20 {
             let _ = sdi.destroy(&format!("demo_files_line_{i}"));
         }
+        sync_desktop_chrome(
+            &mut sdi,
+            &DesktopChrome {
+                theme: &active_theme,
+                features: &skin.features,
+                start_menu: start_menu.as_ref(),
+            },
+            &mut status_bar,
+            &mut bottom_bar,
+            &mut taskbar,
+            wm,
+        );
     }
     mouse_cursor.update_sdi(&mut sdi);
     render_and_save(
@@ -338,6 +392,40 @@ fn capture_skin(skin_name: &str) -> anyhow::Result<()> {
 
     backend.shutdown()?;
     Ok(())
+}
+
+/// Theme inputs of [`sync_desktop_chrome`].
+struct DesktopChrome<'a> {
+    theme: &'a ActiveTheme,
+    features: &'a oasis_core::skin::SkinFeatures,
+    start_menu: Option<&'a StartMenuState>,
+}
+
+/// Lay out the chrome the shell's Desktop mode shows around windows
+/// (`render.rs`, `Mode::Desktop`): status bar, bottom bar, the taskbar's
+/// window buttons and, when the skin has one, the start button.
+fn sync_desktop_chrome(
+    sdi: &mut SdiRegistry,
+    chrome: &DesktopChrome<'_>,
+    status_bar: &mut StatusBar,
+    bottom_bar: &mut BottomBar,
+    taskbar: &mut Taskbar,
+    wm: &WindowManager,
+) {
+    let at = chrome.theme;
+    status_bar.update_sdi(sdi, at, chrome.features);
+    bottom_bar.reserve_taskbar = !wm.windows().is_empty();
+    bottom_bar.update_sdi(sdi, at, chrome.features);
+    taskbar.update_sdi_in(
+        sdi,
+        at,
+        wm.windows(),
+        wm.active_window(),
+        bottom_bar.taskbar_span(),
+    );
+    if let Some(sm) = chrome.start_menu {
+        sm.update_sdi(sdi, at);
+    }
 }
 
 /// Create demo windows with content for WM-only skins.
