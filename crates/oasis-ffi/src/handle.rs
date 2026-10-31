@@ -17,7 +17,7 @@ use oasis_core::terminal::CommandRegistry;
 use oasis_core::vector_overlay::LayerOpsCache;
 use oasis_core::vfs::GameAssetVfs;
 
-use crate::types::OasisCallback;
+use crate::types::RegisteredCallback;
 #[cfg(feature = "_video")]
 use crate::video::VideoThreadState;
 
@@ -49,7 +49,7 @@ pub struct OasisInstance {
     /// Render stages whose failure was already logged at `warn`
     /// ([`OasisInstance::report`]).
     pub(crate) reported_render_errors: BTreeSet<&'static str>,
-    pub(crate) callbacks: HashMap<u32, OasisCallback>,
+    pub(crate) callbacks: HashMap<u32, RegisteredCallback>,
     pub(crate) width: u32,
     pub(crate) height: u32,
     /// Software shader renderer (CPU fallback for GPU shaders).
@@ -91,9 +91,9 @@ impl OasisInstance {
     /// `c_detail` lives for the entire block body, so the raw pointer from
     /// `as_ptr()` is valid for the duration of the `cb()` call.
     pub(crate) fn fire_callback(&self, event: u32, detail: &str) {
-        if let Some(cb) = self.callbacks.get(&event) {
+        if let Some(&cb) = self.callbacks.get(&event) {
             let c_detail = to_c_string_lossy(detail.to_string());
-            cb(event, c_detail.as_ptr());
+            cb.call(event, c_detail.as_ptr());
         }
     }
 }

@@ -126,3 +126,34 @@ pub type OasisCallback = extern "C" fn(event: u32, detail: *const c_char);
 ///
 /// Parameters: event type (AudioEvent), track ID (0 if N/A), extra value.
 pub type OasisAudioCallback = extern "C" fn(event: u32, track_id: u64, value: u32);
+
+/// [`OasisCallback`] with a host context pointer: `user_data` is the
+/// pointer given to `oasis_register_callback_ex`, passed back unchanged
+/// (the library never dereferences it).
+pub type OasisCallbackEx =
+    extern "C" fn(event: u32, detail: *const c_char, user_data: *mut std::ffi::c_void);
+
+/// [`OasisAudioCallback`] with the `user_data` pointer given to
+/// `oasis_set_audio_callback_ex`.
+pub type OasisAudioCallbackEx =
+    extern "C" fn(event: u32, track_id: u64, value: u32, user_data: *mut std::ffi::c_void);
+
+/// An OS-event callback registered with either registration export.
+#[derive(Clone, Copy)]
+pub(crate) enum RegisteredCallback {
+    Plain(OasisCallback),
+    /// The context pointer is kept as its exposed address (the instance
+    /// stays `Send`); it is only handed back to the host.
+    WithData(OasisCallbackEx, usize),
+}
+
+impl RegisteredCallback {
+    pub(crate) fn call(self, event: u32, detail: *const c_char) {
+        match self {
+            Self::Plain(cb) => cb(event, detail),
+            Self::WithData(cb, user_data) => {
+                cb(event, detail, std::ptr::with_exposed_provenance_mut(user_data))
+            },
+        }
+    }
+}

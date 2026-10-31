@@ -71,7 +71,7 @@ The PSP is the original muse and the most demanding target: a 2004 handheld with
 - **Hardware H.264 decode** on the Media Engine, a second MIPS CPU with no public homebrew documentation. We [reverse engineered the ME's RPC protocol](https://andrewaltimit.github.io/oasis-os/journal/07-psp-media-engine.html) and drive it from Rust; a kernel PRX watchdog recovers a firmware deadlock for indefinite stable streaming.
 - **In-memory streaming**: MP4 over TLS, demuxed on the fly, H.264 NAL units to the ME and AAC frames to `sceAudiocodec`, with no disk I/O during playback.
 - **A kernel-mode overlay PRX** that draws UI over any running game and plays background MP3s.
-- **Closed-loop remote development**: a [TCP command server](https://andrewaltimit.github.io/oasis-os/journal/08-remote-dev-automation.html) inside the EBOOT for WiFi build-deploy-test cycles, input injection and framebuffer capture, plus a 154 KB network recovery EBOOT (hold R on boot) that makes the device unbrickable. An AI agent used it to debug the whole H.264 pipeline -- 30+ deploy-test iterations in one session without touching the device.
+- **Closed-loop remote development**: a [TCP command server](https://andrewaltimit.github.io/oasis-os/journal/08-remote-dev-automation.html) inside the EBOOT for WiFi build-deploy-test cycles, input injection and framebuffer capture, plus a ~190 KB PSK-authenticated network recovery EBOOT (hold R on boot) that makes the device unbrickable. An AI agent used it to debug the whole H.264 pipeline -- 30+ deploy-test iterations in one session without touching the device.
 
 https://github.com/user-attachments/assets/3d84aea5-969c-4f38-af67-c088a7c37764
 

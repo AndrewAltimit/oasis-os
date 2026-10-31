@@ -45,13 +45,27 @@ pub const MAX_STREAM_BUFFER: usize = 1024 * 1024;
 /// Parameters: event type, track ID (0 if N/A), extra value (e.g. volume level).
 pub type AudioEventCallback = extern "C" fn(event: u32, track_id: u64, value: u32);
 
+/// [`AudioEventCallback`] with the host's context pointer, registered with
+/// [`Ue5AudioBackend::set_callback_ex`] and passed back unchanged.
+pub type AudioEventCallbackEx =
+    extern "C" fn(event: u32, track_id: u64, value: u32, user_data: *mut std::ffi::c_void);
+
+/// The registered host callback.
+#[derive(Clone, Copy)]
+enum HostCallback {
+    Plain(AudioEventCallback),
+    /// The context pointer is kept as its exposed address so the backend
+    /// stays `Send`; it is only ever handed back to the host.
+    WithData(AudioEventCallbackEx, usize),
+}
+
 /// UE5 audio backend with optional host callback.
 ///
 /// Tracks playback state internally (silent no-ops) while forwarding events
 /// to the host engine via an optional callback.
 pub struct Ue5AudioBackend {
     inner: oasis_audio::NullAudioBackend,
-    callback: Option<AudioEventCallback>,
+    callback: Option<HostCallback>,
     /// A track was paused mid-playback and can be resumed.
     paused: bool,
     /// The open streaming track, if any.
@@ -80,6 +94,16 @@ impl Ue5AudioBackend {
         n
     }
 
+    /// Move up to `out.len()` buffered stream bytes into the front of `out`
+    /// and return how many were moved (the C export's allocation-free form
+    /// of [`Self::drain_stream`]).
+    pub fn drain_stream_into(&mut self, out: &mut [u8]) -> usize {
+        let n = out.len().min(self.stream_buf.len());
+        out[..n].copy_from_slice(&self.stream_buf[..n]);
+        self.stream_buf.drain(..n);
+        n
+    }
+
     /// Encoded stream bytes waiting to be drained.
     pub fn stream_buffered(&self) -> usize {
         self.stream_buf.len()
@@ -87,7 +111,14 @@ impl Ue5AudioBackend {
 
     /// Register a callback for audio events.
     pub fn set_callback(&mut self, cb: AudioEventCallback) {
-        self.callback = Some(cb);
+        self.callback = Some(HostCallback::Plain(cb));
+    }
+
+    /// Register a callback that also receives `user_data` (any pointer the
+    /// host likes, e.g. its audio component; never dereferenced here).
+    /// Replaces a callback set with either setter.
+    pub fn set_callback_ex(&mut self, cb: AudioEventCallbackEx, user_data: *mut std::ffi::c_void) {
+        self.callback = Some(HostCallback::WithData(cb, user_data.expose_provenance()));
     }
 
     /// Unregister the audio event callback.
@@ -105,8 +136,15 @@ impl Ue5AudioBackend {
     }
 
     fn fire(&self, event: AudioEvent, track_id: u64, value: u32) {
-        if let Some(cb) = self.callback {
-            cb(event as u32, track_id, value);
+        match self.callback {
+            Some(HostCallback::Plain(cb)) => cb(event as u32, track_id, value),
+            Some(HostCallback::WithData(cb, user_data)) => cb(
+                event as u32,
+                track_id,
+                value,
+                std::ptr::with_exposed_provenance_mut(user_data),
+            ),
+            None => {},
         }
     }
 }
@@ -256,7 +294,7 @@ impl AudioBackend for Ue5AudioBackend {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::atomic::{AtomicU32, Ordering};
+    use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
     use std::sync::{Mutex, MutexGuard};
 
     /// Serializes tests that use the shared global callback atomics.
@@ -459,6 +497,46 @@ mod tests {
             LAST_EVENT.load(Ordering::SeqCst),
             AudioEvent::StreamEnd as u32
         );
+    }
+
+    #[test]
+    fn drain_stream_into_fills_a_slice() {
+        let (_guard, mut b) = init_backend();
+        let track = b.load_streaming().unwrap();
+        b.feed_data(track, b"abcdef").unwrap();
+        let mut out = [0u8; 4];
+        assert_eq!(b.drain_stream_into(&mut out), 4);
+        assert_eq!(&out, b"abcd");
+        assert_eq!(b.drain_stream_into(&mut out), 2);
+        assert_eq!(&out[..2], b"ef");
+        assert_eq!(b.drain_stream_into(&mut out), 0);
+        assert_eq!(b.drain_stream_into(&mut []), 0);
+    }
+
+    static EX_USER_DATA: AtomicUsize = AtomicUsize::new(0);
+    static EX_EVENT: AtomicU32 = AtomicU32::new(u32::MAX);
+
+    extern "C" fn ex_cb(event: u32, _track: u64, _value: u32, user_data: *mut std::ffi::c_void) {
+        EX_EVENT.store(event, Ordering::SeqCst);
+        EX_USER_DATA.store(user_data as usize, Ordering::SeqCst);
+    }
+
+    #[test]
+    fn callback_ex_receives_user_data() {
+        let (_guard, mut b) = init_backend();
+        reset_globals();
+        let mut context = 7u32;
+        let ptr = (&raw mut context).cast::<std::ffi::c_void>();
+        b.set_callback_ex(ex_cb, ptr);
+        b.set_volume(10).unwrap();
+        assert_eq!(EX_EVENT.load(Ordering::SeqCst), AudioEvent::VolumeChange as u32);
+        assert_eq!(EX_USER_DATA.load(Ordering::SeqCst), ptr as usize);
+        // The plain setter replaces it.
+        assert_eq!(LAST_EVENT.load(Ordering::SeqCst), u32::MAX);
+        b.set_callback(test_cb);
+        b.stop().unwrap();
+        assert_eq!(LAST_EVENT.load(Ordering::SeqCst), AudioEvent::Stop as u32);
+        assert_eq!(EX_EVENT.load(Ordering::SeqCst), AudioEvent::VolumeChange as u32);
     }
 
     #[test]
