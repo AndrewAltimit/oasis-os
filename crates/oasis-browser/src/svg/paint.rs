@@ -114,11 +114,6 @@ pub(super) fn paint_shape(
                         paint_pattern_fill(backend, px, py, pw, ph, pat, xf, defs, *opacity)?;
                     }
                 },
-                SvgPaint::PatternRef(id) => {
-                    if let Some(pat) = defs.patterns.get(id.as_str()) {
-                        paint_pattern_fill(backend, px, py, pw, ph, pat, xf, defs, *opacity)?;
-                    }
-                },
                 SvgPaint::None => {},
             }
             if let Some(sc) = stroke.as_color() {
@@ -383,13 +378,6 @@ pub(super) fn paint_polygon_shape(
                 let mid_color = sample_svg_gradient_at(grad, 0.5, opacity);
                 backend.fill_polygon(&screen_pts, mid_color)?;
             } else if let Some(pat) = defs.patterns.get(id.as_str())
-                && let Some((px, py, pw, ph)) = polygon_aabb(&screen_pts)
-            {
-                paint_pattern_fill(backend, px, py, pw, ph, pat, xf, defs, opacity)?;
-            }
-        },
-        SvgPaint::PatternRef(id) => {
-            if let Some(pat) = defs.patterns.get(id.as_str())
                 && let Some((px, py, pw, ph)) = polygon_aabb(&screen_pts)
             {
                 paint_pattern_fill(backend, px, py, pw, ph, pat, xf, defs, opacity)?;

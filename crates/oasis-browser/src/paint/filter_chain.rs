@@ -191,8 +191,8 @@ const MAX_BLUR_SIGMA: f32 = 100.0;
 /// Each pass is a running sum, so its cost is independent of the
 /// radius (O(w * h) per pass).
 fn apply_blur(pixels: &mut [u8], width: u32, height: u32, radius: f32) {
-    // `!(radius > 0.0)` also rejects NaN.
-    if !(radius > 0.0) || width == 0 || height == 0 {
+    // NaN is rejected too.
+    if radius.is_nan() || radius <= 0.0 || width == 0 || height == 0 {
         return;
     }
     // Convert CSS blur radius (pixels of standard deviation) to an

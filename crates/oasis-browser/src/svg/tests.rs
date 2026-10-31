@@ -321,7 +321,7 @@ fn self_referencing_patterns_terminate() {
         viewbox: None,
         shapes: vec![
             rect_filled_with(SvgPaint::GradientRef("p".into())),
-            rect_filled_with(SvgPaint::PatternRef("a".into())),
+            rect_filled_with(SvgPaint::GradientRef("a".into())),
         ],
         defs,
     };

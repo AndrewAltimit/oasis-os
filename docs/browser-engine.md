@@ -21,7 +21,7 @@ without layout, paint or QuickJS:
 | `oasis-css` | CSS tokenizer, parser, cascade, computed values, animations / transitions | `oasis-html`, `oasis-types` |
 | `oasis-http` | `Url`, HTTP/1.1 + HTTP/2, Gemini framing, cookies, cache, CSP, IO thread, VFS loader | `oasis-net`, `oasis-vfs`, `oasis-types` |
 | `oasis-js` | QuickJS-NG engine (`JsEngine`), console, timers, `fetch` plumbing, Web Storage | `rquickjs` |
-| `oasis-browser` | layout, paint, `BrowserWidget`, forms, JS DOM bindings, `.gmi` parser / renderer, images, fonts, SVG, canvas | all of the above (`oasis-js` behind `javascript`) |
+| `oasis-browser` | layout, paint, `BrowserWidget`, forms, JS DOM bindings, `.gmi` parser + HTML translation, images, fonts, SVG, canvas | all of the above (`oasis-js` behind `javascript`) |
 
 Inside `oasis-browser` the larger subsystems are directories:
 `layout/` (block, inline, flex, grid, table, multicol, positioning),
@@ -197,7 +197,19 @@ directly.
   one-pass shrink-to-fit (`min(max-content, available)`): children
   lay out at the containing width, then `content.width` clamps down
   to the rightmost child border-box edge. A float inside a padded
-  parent lands at the parent's content edge.
+  parent lands at the parent's content edge. A float never starts above
+  an earlier float's top (§9.5.1 rule 5).
+- **Flexbox** (`layout/flex.rs`): direction, wrap, `order`, grow /
+  shrink, `flex-basis` (or `width` / `height`), `gap`, `justify-content`,
+  `align-items` / `align-self`, `align-content` and main-axis auto
+  margins. Content-sized items (`width: auto`, no basis) use the same
+  fit-content measurement as floats. Columns are as tall as their items
+  unless the container has a definite height, which `flex-grow` then
+  fills; a single-line container gives its line the container's cross
+  size. Inline children (a bare text run, `<a>` / `<span>`) are wrapped
+  into anonymous items that carry their flex properties; whitespace-only
+  runs are dropped. An item is laid out again only when flexing changed
+  its size, then translated into place, so nesting stays linear.
 - **CSS Grid.** Paren-aware track lists (`repeat(3, minmax(0, 1fr))`,
   `repeat(2, 1fr 2fr)`, `%` / `em` / `min-content` / `max-content` /
   `fit-content()` tracks), `repeat(auto-fill | auto-fit, ...)` resolved
@@ -209,10 +221,12 @@ directly.
   between two inline siblings (`<a>x</a>\n<a>y</a>`) emits a single
   `space_width` fragment into the line flow, per CSS 2.1 §16.6.
 - **Multi-column** (`column-count` / `column-width` / `column-gap`):
-  children are distributed across balanced columns.
+  children are distributed across balanced columns; a box that resolves
+  to a single column is laid out as a normal block.
 - **Table layout**: `colspan` / `rowspan` follow HTML's integer parsing
   and limits (1000 / 65534; `rowspan="0"` spans to the last row), and a
-  span is clamped to the rows that exist. Occupancy is tracked per
+  span is clamped to the rows that exist. A table has at most 1000
+  columns in total (cells past that are dropped). Occupancy is tracked per
   column, so huge spans cost nothing. Explicit pixel widths on `<td>`/`<th>`
   (pinned — not rescaled when the table has slack) and percent
   widths (`<td width="25%">`) via a pre-pass in `distribute_widths`
@@ -247,7 +261,15 @@ directly.
   `width: 1e30px`. Allocations sized by CSS values are bounded by the
   content instead (line boxes per fragment, column buckets per child,
   offscreen layers to the reachable surface; see
-  `paint/display_list/replay.rs`). `tests/pipeline_fuzz.rs` drives the
+  `paint/display_list/replay.rs`). Work driven by CSS / markup values is
+  capped too: grid auto-placement runs under a cell-inspection budget,
+  background / mask tiles per box (4096, larger tiles past that),
+  repeating-gradient repetitions (one per pixel), `blur()` sigma (100 px,
+  running-sum passes), SVG `<pattern>` nesting (2), path points (65 536,
+  coordinates clamped to ±1e7), even-odd triangulation (2048 points) and
+  stroke stepping (clipped to ±16 384 px). Image decoders reject
+  oversized headers before allocating (BMP, GIF frames, WebP via
+  `image::Limits`). `tests/pipeline_fuzz.rs` drives the
   whole parse → style → layout → paint pipeline with generated hostile
   markup and CSS (raise `PROPTEST_CASES` for a longer run).
 
@@ -287,7 +309,12 @@ directly.
 ## Canvas, SVG, compositor
 
 - **Canvas 2D path API** — `beginPath`, `bezierCurveTo`,
-  `quadraticCurveTo`, `fill`, `stroke`, `save`, `restore`.
+  `quadraticCurveTo`, `fill`, `stroke`, `save`, `restore`. Commands are
+  recorded and replayed every paint, so the list is bounded: a
+  `clearRect` covering the canvas drops everything before it (the usual
+  clear-and-redraw animation loop stays constant-size), and commands
+  (16 384), path points (65 536 per path, 2^20 in total) and `save()`
+  depth (1024) are capped.
 - **SVG** (`svg/`) — `<rect>`, `<circle>`, `<ellipse>`, `<line>`,
   `<polygon>`, `<polyline>`, `<path>` (all commands, Bezier flattening)
   with fill-rule / linecap / linejoin; `<g>` transform composition and
@@ -337,8 +364,10 @@ directly.
   and values scripts write (`input.value = ...`, hidden inputs
   included) are adopted by the `FormManager`, so they are edited and
   submitted.
-- Form GET / POST submission; Enter on any text field submits the
-  owning form.
+- Form GET / POST submission (a GET replaces the action URL's query and
+  keeps its fragment). Enter in a text field (or Confirm on a submit
+  button) submits the owning form after the same validation a click
+  runs; Enter in a `<textarea>` inserts a newline.
 - Forms are rebuilt from the DOM on every page load via
   `populate_forms_from_dom` (walks every `<form>` and registers
   inputs, selects, textareas, and submit buttons with the
@@ -350,9 +379,10 @@ directly.
   `font-style` / `font-display` / `unicode-range` descriptors.
 - `FontFamily` as ordered name stack with generic fallbacks.
 - `fontdue` TTF/OTF rasterizer behind the `web-fonts` feature.
-- `FontRegistry` with CSS font matching, `FontAwareTextMeasurer` for
-  layout, glyph texture cache for rendering, lazy font loading on
-  first tick.
+- `FontRegistry` with CSS font matching, glyph texture cache for
+  rendering, lazy font loading on first tick. `FontAwareTextMeasurer`
+  exists but layout does not use it yet: web-font text is measured with
+  bitmap-font metrics and drawn with the font's own advances.
 
 ## JavaScript DOM bindings
 
@@ -363,7 +393,9 @@ to page scripts include:
 - `document.getElementById`, `createElement`, `createTextNode`,
   `querySelector`, `querySelectorAll`.
 - `textContent`, attributes, `innerHTML`, `classList`, `style`
-  property.
+  property. `innerHTML` / `outerHTML` serialize the text of raw-text
+  elements (`<style>`, `<script>`, ...) verbatim and drop tag /
+  attribute names a script created that markup cannot represent.
 - `fetch()` (Promise-based, same-origin / private-network policy — see
   [`oasis-js.md`](oasis-js.md#storage-and-fetch)), `setTimeout` /
   `setInterval`.

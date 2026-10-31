@@ -4,6 +4,43 @@ Notable changes to OASIS_OS. GitHub releases (tags `v1.1.0` ... `v1.5.0`)
 carry generated notes listing every merged PR; this file summarizes the
 larger changes by area. Breaking API changes are marked **(breaking)**.
 
+## Unreleased -- overhaul 3
+
+### Browser engine
+
+- Flexbox layout fixes: container padding is no longer counted twice;
+  `width: auto` row items size to their content instead of 0 px; column
+  containers are as tall as their items, explicit flex-container heights
+  apply (they were 0 px) and `align-items` centres against them; inline
+  children (a nav bar of links, bare text) become flex / grid items
+  instead of rendering at 0 x 0; nested flex containers no longer cost
+  2^depth layouts.
+- Content scrolled into a nested `overflow: auto` box is painted (it was
+  culled against the unscrolled clip), and `overflow: hidden` children of
+  translucent / filtered boxes are clipped in the right place.
+- Security: Gemini page titles and directly-opened stylesheets are
+  escaped (both could inject live script); `fetch()` judges the page's
+  own network class by its least private address, so a page whose name
+  also resolves to a LAN / loopback address cannot reach those.
+- Hostile-page bounds: BMP / GIF / WebP decodes check sizes before
+  allocating; self-referencing SVG `<pattern>`s, huge path coordinates
+  and far off-screen strokes, `blur()` radii, sub-pixel repeating
+  gradients, tiny `background-size` tiles, million-column tables, dense
+  grid auto-placement, thousands of floats, long unbreakable words and
+  animated `<canvas>` command lists are all bounded.
+- Forms: Enter submits only after validation (as a click does), Enter in
+  a `<textarea>` inserts a newline, and GET submission replaces the
+  action URL's query instead of appending to it.
+- Reader mode rebuilds the page through the normal pipeline (toggling it
+  could panic on the next hover) and keeps no extra history entry;
+  single-column multicol boxes render; `hue-rotate()` on filtered
+  layers uses degrees; 16-bit PNGs decode correctly; `innerHTML` keeps
+  `<style>` / `<script>` text verbatim.
+- Removed the unused `gemini::renderer` module (`render_gemini`,
+  `GeminiTheme`), `reader::reader_stylesheet` (now internal),
+  `scroll::SCROLL_ACCELERATION` and `SvgPaint::PatternRef` (pattern
+  fills are `GradientRef`s that resolve to a `<pattern>`) **(breaking)**.
+
 ## Unreleased -- overhaul (`overhaul/site-code-docs-2026-10`)
 
 A repository-wide cleanup: bug fixes from a full code review and an

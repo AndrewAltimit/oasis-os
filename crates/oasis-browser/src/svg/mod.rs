@@ -82,10 +82,9 @@ pub enum SvgPaint {
     None,
     /// Solid color.
     Color(Color),
-    /// Reference to a `<linearGradient>` or `<radialGradient>` in `<defs>`.
+    /// A `url(#id)` reference into `<defs>`: a `<linearGradient>` /
+    /// `<radialGradient>`, or else a `<pattern>`, with that id.
     GradientRef(String),
-    /// Reference to a `<pattern>` in `<defs>`.
-    PatternRef(String),
 }
 
 impl SvgPaint {

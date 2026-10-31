@@ -4,7 +4,6 @@
 pub const SCROLL_LINE: i32 = 24;
 pub const SCROLL_PAGE_FRACTION: f32 = 0.9;
 pub const SCROLL_WHEEL: i32 = 48;
-pub const SCROLL_ACCELERATION: f32 = 1.5;
 pub const MAX_VELOCITY: f32 = 200.0;
 
 /// Friction applied each tick to decelerate smooth scrolling.

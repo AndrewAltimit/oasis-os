@@ -103,7 +103,7 @@ crates/oasis-browser/src/
 ├── forms/              <input>, <textarea>, <select>, validation, submission
 ├── image.rs            format detection, decode + downscale to ImageLimits
 ├── image_atlas.rs      texture atlas packing for many small images
-├── gemini/             .gmi parser + .gmi → layout renderer (protocol in oasis-http)
+├── gemini/             .gmi parser (protocol in oasis-http; HTML translation in widget/)
 ├── js_dom/             QuickJS DOM bindings + JS bootstrap (feature = "javascript")
 └── reader.rs           reader-mode extraction
 ```
