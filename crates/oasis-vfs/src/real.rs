@@ -12,6 +12,9 @@ use oasis_types::error::{OasisError, Result, VfsError};
 
 use crate::{EntryKind, FilePermissions, RenamePlan, Vfs, VfsEntry, VfsMetadata, normalize_path};
 
+/// The owner `RealVfs` reports for every entry (it cannot map host users).
+const REAL_OWNER: &str = "user";
+
 /// A VFS backed by the real filesystem, rooted at a configurable directory.
 #[derive(Debug)]
 pub struct RealVfs {
@@ -122,28 +125,64 @@ impl RealVfs {
 ///
 /// On Windows that is any segment with a `:` (a drive prefix such as `C:`
 /// replaces the whole path when joined, and `name:stream` addresses an
-/// NTFS alternate data stream) and the reserved device names (`CON`, `NUL`,
-/// `COM1`, ... with or without an extension), which open a device instead
-/// of a file. Elsewhere every segment [`normalize_path`] accepts is fine.
+/// NTFS alternate data stream), a segment ending in `.` or a space (Win32
+/// strips those, so `/secret.` would alias `/secret`), and the reserved
+/// device names (`CON`, `NUL`, `COM1`, `LPT¹`, ... with or without an
+/// extension), which open a device instead of a file. Elsewhere every
+/// segment [`normalize_path`] accepts is fine.
 fn check_host_segment(seg: &str) -> Result<()> {
     if cfg!(windows) {
-        if seg.contains(':') {
+        if seg.contains(':') || seg.ends_with(['.', ' ']) {
             return Err(VfsError::Other(format!("invalid path segment: {seg}")).into());
         }
-        let stem = seg.split('.').next().unwrap_or(seg).trim_end_matches(' ');
-        let reserved = matches!(
-            stem.to_ascii_uppercase().as_str(),
-            "CON" | "PRN" | "AUX" | "NUL" | "CONIN$" | "CONOUT$"
-        ) || (stem.len() == 4
-            && stem
-                .get(..3)
-                .is_some_and(|p| p.eq_ignore_ascii_case("COM") || p.eq_ignore_ascii_case("LPT"))
-            && stem.as_bytes()[3].is_ascii_digit());
-        if reserved {
+        if is_reserved_device_name(seg) {
             return Err(VfsError::Other(format!("reserved device name: {seg}")).into());
         }
     }
     Ok(())
+}
+
+/// Whether `seg` names a Windows device (`NUL`, `com1.txt`, `LPT²`, ...):
+/// the part before the first `.`, trailing spaces ignored, compared
+/// case-insensitively.
+fn is_reserved_device_name(seg: &str) -> bool {
+    let stem = seg.split('.').next().unwrap_or(seg).trim_end_matches(' ');
+    let upper = stem.to_uppercase();
+    if matches!(
+        upper.as_str(),
+        "CON" | "PRN" | "AUX" | "NUL" | "CONIN$" | "CONOUT$"
+    ) {
+        return true;
+    }
+    let Some(rest) = upper
+        .strip_prefix("COM")
+        .or_else(|| upper.strip_prefix("LPT"))
+    else {
+        return false;
+    };
+    let mut chars = rest.chars();
+    matches!(
+        (chars.next(), chars.next()),
+        (Some('0'..='9' | '¹' | '²' | '³'), None)
+    )
+}
+
+impl RealVfs {
+    /// The metadata `readdir` reports for `entry`: its symlinks followed
+    /// (as `stat` does), so a linked directory lists as a directory. A
+    /// dangling link, or one whose target is outside the root, is listed by
+    /// the link's own metadata (as a file) and is only good for `remove` /
+    /// `rename`.
+    fn entry_metadata(&self, entry: &fs::DirEntry) -> Result<fs::Metadata> {
+        let own = entry.metadata()?;
+        if !own.file_type().is_symlink() {
+            return Ok(own);
+        }
+        match self.confine(&entry.path()) {
+            Ok(target) => Ok(fs::metadata(target).unwrap_or(own)),
+            Err(_) => Ok(own),
+        }
+    }
 }
 
 impl Vfs for RealVfs {
@@ -154,12 +193,15 @@ impl Vfs for RealVfs {
     fn readdir(&self, path: &str) -> Result<Vec<VfsEntry>> {
         let real_path = self.resolve(path)?;
         if !real_path.is_dir() {
-            return Err(OasisError::Vfs(format!("not a directory: {path}").into()));
+            if !real_path.exists() {
+                return Err(VfsError::NotFound { path: path.into() }.into());
+            }
+            return Err(VfsError::NotADirectory { path: path.into() }.into());
         }
         let mut entries = Vec::new();
         for entry in fs::read_dir(&real_path)? {
             let entry = entry?;
-            let meta = entry.metadata()?;
+            let meta = self.entry_metadata(&entry)?;
             entries.push(VfsEntry {
                 name: entry.file_name().to_string_lossy().into_owned(),
                 kind: if meta.is_dir() {
@@ -184,6 +226,9 @@ impl Vfs for RealVfs {
 
     fn write(&mut self, path: &str, data: &[u8]) -> Result<()> {
         let real_path = self.resolve(path)?;
+        if real_path.is_dir() {
+            return Err(VfsError::IsDirectory { path: path.into() }.into());
+        }
         fs::write(&real_path, data)?;
         Ok(())
     }
@@ -241,12 +286,34 @@ impl Vfs for RealVfs {
             fs::rename(&real_from, &real_to)?;
             return Ok(());
         }
+        // A symlink is renamed as itself (like `remove`), even when it
+        // dangles or points outside the root, where `exists` -- which
+        // follows it -- is false.
+        let from_is_link = real_from != self.root
+            && fs::symlink_metadata(&real_from).is_ok_and(|m| m.file_type().is_symlink());
+        if from_is_link {
+            if from_norm == to_norm {
+                return Ok(());
+            }
+            if self.stat(&to_norm).is_ok_and(|m| m.kind == EntryKind::Directory) {
+                return Err(VfsError::Other(format!(
+                    "destination exists and is a directory: {to}"
+                ))
+                .into());
+            }
+            fs::rename(&real_from, &real_to)?;
+            return Ok(());
+        }
         if self.validate_rename(&from_norm, &to_norm)? == RenamePlan::NoOp {
             return Ok(());
         }
         // Symlinks inside the root can make a lexically unrelated `to` land
-        // inside `from` on disk; check the resolved paths as well.
-        if real_to.starts_with(&real_from) {
+        // inside `from` on disk, and on a case-insensitive filesystem `/A`
+        // and `/a/sub` are the same tree: compare the resolved source with
+        // the resolved parent of the destination.
+        let from_resolved = self.resolve(&from_norm)?;
+        let to_parent_resolved = self.resolve(crate::parent_path(&to_norm))?;
+        if real_to.starts_with(&real_from) || to_parent_resolved.starts_with(&from_resolved) {
             return Err(OasisError::Vfs(
                 format!("cannot move '{from}' into itself ('{to}')").into(),
             ));
@@ -271,17 +338,21 @@ impl Vfs for RealVfs {
                 .map_err(|e| OasisError::Vfs(format!("cannot read metadata: {e}").into()))?;
             let mode = meta.permissions().mode() & 0o7777;
             Ok(FilePermissions {
-                owner: "user".to_string(),
+                owner: REAL_OWNER.to_string(),
                 mode: mode as u16,
             })
         }
         #[cfg(not(unix))]
         {
-            if real_path.is_dir() {
-                Ok(FilePermissions::default_dir())
-            } else {
-                Ok(FilePermissions::default_file())
+            // The only bit Windows has is read-only (owner write).
+            let mut mode: u16 = if real_path.is_dir() { 0o755 } else { 0o644 };
+            if fs::metadata(&real_path).is_ok_and(|m| m.permissions().readonly()) {
+                mode &= !0o222;
             }
+            Ok(FilePermissions {
+                owner: REAL_OWNER.to_string(),
+                mode,
+            })
         }
     }
 
@@ -291,8 +362,8 @@ impl Vfs for RealVfs {
             return Err(OasisError::Vfs(format!("no such path: {path}").into()));
         }
         // RealVfs cannot change file ownership (requires root/libc).
-        // Check against the hardcoded owner string returned by get_permissions.
-        if perms.owner != "user" {
+        // Check against the owner `get_permissions` reports.
+        if perms.owner != REAL_OWNER {
             return Err(OasisError::Vfs(
                 format!(
                     "RealVfs does not support changing file ownership (from 'user' to '{}')",
@@ -326,6 +397,19 @@ impl Vfs for RealVfs {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn windows_device_names_are_recognised() {
+        for name in [
+            "CON", "nul", "Aux.txt", "com1", "COM9.log", "lpt3", "LPT¹", "com².x", "NUL .txt",
+            "conin$",
+        ] {
+            assert!(is_reserved_device_name(name), "{name}");
+        }
+        for name in ["CONSOLE", "com", "com10", "lpt0x", "nul_", "file", "com¹¹"] {
+            assert!(!is_reserved_device_name(name), "{name}");
+        }
+    }
 
     fn temp_vfs() -> (tempfile::TempDir, RealVfs) {
         let dir = tempfile::tempdir().unwrap();

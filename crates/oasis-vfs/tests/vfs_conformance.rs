@@ -10,6 +10,7 @@
 // allow-in-tests does not cover them.
 #![allow(clippy::unwrap_used)]
 
+use oasis_types::error::{OasisError, VfsError};
 use oasis_vfs::{EntryKind, GameAssetVfs, MemoryVfs, Vfs};
 
 /// Names of every entry under `path`, recursively, as sorted absolute paths.
@@ -290,6 +291,33 @@ macro_rules! vfs_conformance {
                 assert!(vfs.rename("/a/g.txt", "/top.txt/g.txt").is_err());
                 assert_eq!(tree(vfs.as_ref(), "/"), populated_tree());
             }
+
+            // -- permissions and errors -----------------------------------
+
+            #[test]
+            fn permissions_round_trip() {
+                // `chmod` is get-then-set: what a backend reports it must
+                // accept back (RealVfs on Windows used to reject its own
+                // owner).
+                let (_g, mut vfs) = make();
+                populate(vfs.as_mut());
+                for path in ["/top.txt", "/a"] {
+                    let perms = vfs.get_permissions(path).unwrap();
+                    vfs.set_permissions(path, perms.clone()).unwrap();
+                    assert_eq!(vfs.get_permissions(path).unwrap(), perms, "{path}");
+                }
+            }
+
+            #[test]
+            fn write_onto_directory_is_an_is_directory_error() {
+                let (_g, mut vfs) = make();
+                vfs.mkdir("/d").unwrap();
+                let err = vfs.write("/d", b"x").unwrap_err();
+                assert!(
+                    matches!(err, OasisError::Vfs(VfsError::IsDirectory { .. })),
+                    "{err:?}"
+                );
+            }
         }
     };
 }
@@ -349,6 +377,57 @@ macro_rules! rename_permissions {
                 vfs.rename("/rw/f", "/ro/f").unwrap();
                 assert!(vfs.exists("/ro/f"));
             }
+
+            fn perms(owner: &str, mode: u16) -> FilePermissions {
+                FilePermissions {
+                    owner: owner.into(),
+                    mode,
+                }
+            }
+
+            #[test]
+            fn only_the_owner_or_root_changes_permissions() {
+                let mut vfs = $make;
+                vfs.write("/mine", b"m").unwrap();
+                vfs.write("/locked", b"secret").unwrap();
+                vfs.set_context(VfsContext::root());
+                vfs.set_permissions("/locked", perms("root", 0o600)).unwrap();
+                vfs.set_context(VfsContext::default_user());
+                assert!(vfs.read("/locked").is_err());
+                // Not the owner: no chmod, no chown back.
+                assert!(vfs.set_permissions("/locked", perms("oasis", 0o777)).is_err());
+                assert!(vfs.set_permissions("/locked", perms("root", 0o666)).is_err());
+                assert_eq!(vfs.get_permissions("/locked").unwrap(), perms("root", 0o600));
+                assert!(vfs.read("/locked").is_err());
+                // The owner may chmod, and give the entry away.
+                vfs.set_permissions("/mine", perms("oasis", 0o600)).unwrap();
+                vfs.set_permissions("/mine", perms("guest", 0o600)).unwrap();
+                assert!(vfs.set_permissions("/mine", perms("oasis", 0o644)).is_err());
+            }
+
+            #[test]
+            fn unsearchable_directories_hide_their_contents() {
+                let mut vfs = $make;
+                vfs.mkdir("/vault/inner").unwrap();
+                vfs.write("/vault/inner/secret", b"s").unwrap();
+                vfs.write("/vault/note", b"n").unwrap();
+                vfs.set_context(VfsContext::root());
+                vfs.set_permissions("/vault", perms("root", 0o700)).unwrap();
+                vfs.set_context(VfsContext::default_user());
+                assert!(vfs.read("/vault/note").is_err(), "read below");
+                assert!(vfs.read("/vault/inner/secret").is_err(), "two levels below");
+                assert!(vfs.readdir("/vault/inner").is_err());
+                assert!(vfs.write("/vault/inner/new", b"x").is_err());
+                assert!(vfs.mkdir("/vault/inner/d").is_err());
+                assert!(vfs.remove("/vault/note").is_err());
+                vfs.write("/out", b"o").unwrap();
+                assert!(vfs.rename("/out", "/vault/inner/out").is_err());
+                assert!(vfs.rename("/vault/note", "/stolen").is_err());
+                // The directory itself is still visible; root sees inside.
+                assert!(vfs.exists("/vault"));
+                vfs.set_context(VfsContext::root());
+                assert_eq!(vfs.read("/vault/note").unwrap(), b"n");
+            }
         }
     };
 }
@@ -388,6 +467,28 @@ fn game_asset_base_only_entries_cannot_move() {
     assert!(vfs.rename("/base/file", "/moved").is_err());
     assert!(vfs.rename("/base", "/moved").is_err());
     assert!(vfs.exists("/base/file"));
+}
+
+#[test]
+fn game_asset_base_additions_keep_the_tree_well_formed() {
+    let mut vfs = GameAssetVfs::new();
+    // A file can't replace a base directory that has children.
+    vfs.add_base_file("/d/c", b"x");
+    vfs.add_base_file("/d", b"y");
+    assert_eq!(vfs.stat("/d").unwrap().kind, EntryKind::Directory);
+    assert_eq!(vfs.read("/d/c").unwrap(), b"x");
+    // Nothing goes beneath an overlay file.
+    vfs.write("/f", b"").unwrap();
+    vfs.add_base_file("/f/x", b"x");
+    assert!(!vfs.exists("/f/x"));
+    assert_eq!(vfs.stat("/f").unwrap().kind, EntryKind::File);
+    // Content added under a removed directory brings the directory back,
+    // instead of being visible beneath a hidden parent.
+    vfs.add_base_dir("/gone");
+    vfs.remove("/gone").unwrap();
+    vfs.add_base_file("/gone/new", b"n");
+    assert_eq!(vfs.stat("/gone").unwrap().kind, EntryKind::Directory);
+    assert_eq!(tree(&vfs, "/gone"), ["/gone/new"]);
 }
 
 // -- RealVfs symlink sandboxing (unix only) --------------------------------
@@ -438,5 +539,33 @@ mod real_symlinks {
         symlink(root.path().join("a/b"), root.path().join("alias")).unwrap();
         assert!(vfs.rename("/a", "/alias/x").is_err());
         assert!(vfs.stat("/a/b").is_ok());
+    }
+
+    #[test]
+    fn readdir_reports_linked_directories_as_directories() {
+        let root = tempfile::tempdir().unwrap();
+        let vfs = RealVfs::new(root.path()).unwrap();
+        std::fs::create_dir(root.path().join("d")).unwrap();
+        symlink(root.path().join("d"), root.path().join("ln")).unwrap();
+        let listed = vfs.readdir("/").unwrap();
+        let ln = listed.iter().find(|e| e.name == "ln").unwrap();
+        assert_eq!(ln.kind, vfs.stat("/ln").unwrap().kind);
+        assert_eq!(ln.kind, EntryKind::Directory);
+    }
+
+    #[test]
+    fn escaping_and_dangling_links_can_be_renamed() {
+        let root = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        symlink(outside.path(), root.path().join("esc")).unwrap();
+        symlink(root.path().join("nowhere"), root.path().join("dangling")).unwrap();
+        let mut vfs = RealVfs::new(root.path()).unwrap();
+        vfs.rename("/esc", "/esc2").unwrap();
+        vfs.rename("/dangling", "/dangling2").unwrap();
+        let names: Vec<_> = vfs.readdir("/").unwrap().into_iter().map(|e| e.name).collect();
+        assert_eq!(names, ["dangling2", "esc2"]);
+        // The link moved, its target did not.
+        assert!(outside.path().exists());
+        assert!(std::fs::symlink_metadata(root.path().join("esc2")).unwrap().is_symlink());
     }
 }
