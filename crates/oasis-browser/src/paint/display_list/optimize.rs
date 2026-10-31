@@ -191,101 +191,69 @@ impl DisplayList {
     }
 
     /// Remove opaque `FillRect` items fully covered by a later opaque
-    /// `FillRect` within the same clip level.
+    /// `FillRect` in the same clip / sticky / compositing scope.
     ///
     /// Uses a backward scan with a small window (32 items) to keep the
-    /// algorithm O(n × k) rather than O(n²). Only eliminates items in the
-    /// same clip depth to preserve correctness.
+    /// algorithm O(n × k) rather than O(n²). Scopes are compared by
+    /// identity, not nesting depth: two sibling `overflow` boxes sit at
+    /// the same depth under different clips, so a rect in one does not
+    /// hide a rect in the other (it used to, deleting visible content).
     fn eliminate_occluded(&mut self) {
         if self.items.len() < 2 {
             return;
         }
 
         const SCAN_WINDOW: usize = 32;
-        let mut clip_depth: usize = 0;
-        let mut sticky_depth: usize = 0;
-        let mut compositing_depth: usize = 0;
-        let mut clip_depths: Vec<usize> = Vec::with_capacity(self.items.len());
-        let mut sticky_depths: Vec<usize> = Vec::with_capacity(self.items.len());
-        let mut compositing_depths: Vec<usize> = Vec::with_capacity(self.items.len());
-        let mut in_translucent: Vec<bool> = Vec::with_capacity(self.items.len());
+        let n = self.items.len();
+        let mut scopes: Vec<u32> = Vec::with_capacity(n);
+        let mut in_translucent: Vec<bool> = Vec::with_capacity(n);
 
-        // First pass: compute clip/sticky depth and translucent-layer flag.
-        let mut translucent_layer_depth: usize = 0;
+        // First pass: the innermost scope of each item, and whether it is
+        // inside a translucent layer. Every clip, sticky group and
+        // compositing layer opens a fresh scope id.
+        let mut next_scope: u32 = 0;
+        let mut scope_stack: Vec<u32> = vec![0];
+        // Translucency of each open layer; contents of a compositing
+        // layer draw offscreen and may be re-blended with a non-Normal
+        // blend mode or filter, so they count as translucent (they can
+        // neither be eliminated nor act as occluders).
+        let mut layer_stack: Vec<bool> = Vec::new();
+        let mut translucent_open: usize = 0;
         for item in &self.items {
             match item {
-                DisplayItem::PushClip { .. } => {
-                    clip_depths.push(clip_depth);
-                    sticky_depths.push(sticky_depth);
-                    compositing_depths.push(compositing_depth);
-                    in_translucent.push(translucent_layer_depth > 0);
-                    clip_depth += 1;
+                DisplayItem::PushClip { .. }
+                | DisplayItem::PushSticky { .. }
+                | DisplayItem::PushCompositingLayer { .. } => {
+                    next_scope += 1;
+                    scope_stack.push(next_scope);
                 },
-                DisplayItem::PopClip => {
-                    clip_depth = clip_depth.saturating_sub(1);
-                    clip_depths.push(clip_depth);
-                    sticky_depths.push(sticky_depth);
-                    compositing_depths.push(compositing_depth);
-                    in_translucent.push(translucent_layer_depth > 0);
-                },
-                DisplayItem::PushLayer { opacity } => {
-                    clip_depths.push(clip_depth);
-                    sticky_depths.push(sticky_depth);
-                    compositing_depths.push(compositing_depth);
-                    if *opacity < 1.0 {
-                        translucent_layer_depth += 1;
+                DisplayItem::PopClip
+                | DisplayItem::PopSticky
+                | DisplayItem::PopCompositingLayer => {
+                    if scope_stack.len() > 1 {
+                        scope_stack.pop();
                     }
-                    in_translucent.push(translucent_layer_depth > 0);
                 },
-                DisplayItem::PopLayer => {
-                    translucent_layer_depth = translucent_layer_depth.saturating_sub(1);
-                    clip_depths.push(clip_depth);
-                    sticky_depths.push(sticky_depth);
-                    compositing_depths.push(compositing_depth);
-                    in_translucent.push(translucent_layer_depth > 0);
-                },
-                DisplayItem::PushCompositingLayer { .. } => {
-                    clip_depths.push(clip_depth);
-                    sticky_depths.push(sticky_depth);
-                    compositing_depths.push(compositing_depth);
-                    // Contents of a compositing layer draw into an
-                    // offscreen surface and may be re-blended with a
-                    // non-Normal blend mode or filter — treat them as
-                    // translucent so they can neither be eliminated
-                    // nor act as occluders.
-                    compositing_depth += 1;
-                    translucent_layer_depth += 1;
-                    in_translucent.push(true);
-                },
-                DisplayItem::PopCompositingLayer => {
-                    compositing_depth = compositing_depth.saturating_sub(1);
-                    translucent_layer_depth = translucent_layer_depth.saturating_sub(1);
-                    clip_depths.push(clip_depth);
-                    sticky_depths.push(sticky_depth);
-                    compositing_depths.push(compositing_depth);
-                    in_translucent.push(translucent_layer_depth > 0);
-                },
-                DisplayItem::PushSticky { .. } => {
-                    clip_depths.push(clip_depth);
-                    sticky_depths.push(sticky_depth);
-                    compositing_depths.push(compositing_depth);
-                    in_translucent.push(translucent_layer_depth > 0);
-                    sticky_depth += 1;
-                },
-                DisplayItem::PopSticky => {
-                    sticky_depth = sticky_depth.saturating_sub(1);
-                    clip_depths.push(clip_depth);
-                    sticky_depths.push(sticky_depth);
-                    compositing_depths.push(compositing_depth);
-                    in_translucent.push(translucent_layer_depth > 0);
-                },
-                _ => {
-                    clip_depths.push(clip_depth);
-                    sticky_depths.push(sticky_depth);
-                    compositing_depths.push(compositing_depth);
-                    in_translucent.push(translucent_layer_depth > 0);
-                },
+                _ => {},
             }
+            let opened = match item {
+                DisplayItem::PushLayer { opacity } => Some(*opacity < 1.0),
+                DisplayItem::PushCompositingLayer { .. } => Some(true),
+                _ => None,
+            };
+            if let Some(translucent) = opened {
+                layer_stack.push(translucent);
+                translucent_open += usize::from(translucent);
+            }
+            if matches!(
+                item,
+                DisplayItem::PopLayer | DisplayItem::PopCompositingLayer
+            ) && let Some(translucent) = layer_stack.pop()
+            {
+                translucent_open -= usize::from(translucent);
+            }
+            scopes.push(scope_stack.last().copied().unwrap_or(0));
+            in_translucent.push(translucent_open > 0);
         }
 
         // Second pass: mark items fully occluded by later opaque rects.
@@ -303,17 +271,11 @@ impl DisplayList {
                 _ => continue,
             };
 
-            let my_clip = clip_depths[i];
-            let my_sticky = sticky_depths[i];
-            let my_compositing = compositing_depths[i];
+            let my_scope = scopes[i];
             let start = i.saturating_sub(SCAN_WINDOW);
 
             for j in start..i {
-                if remove[j]
-                    || clip_depths[j] != my_clip
-                    || sticky_depths[j] != my_sticky
-                    || compositing_depths[j] != my_compositing
-                {
+                if remove[j] || scopes[j] != my_scope {
                     continue;
                 }
 
@@ -628,6 +590,49 @@ mod tests {
         } else {
             panic!("expected FillRect");
         }
+    }
+
+    /// Regression: occlusion compared clip *depth*, so a rect in one
+    /// `overflow` box was "hidden" by an opaque rect in a sibling box at
+    /// the same depth, even though the sibling's clip keeps it from
+    /// covering anything outside its own area.
+    #[test]
+    fn sibling_clips_do_not_occlude_each_other() {
+        let rect = |x, y, w, h, g| DisplayItem::FillRect {
+            x,
+            y,
+            w,
+            h,
+            color: Color::rgb(0, g, 0),
+            node_id: None,
+        };
+        let mut dl = DisplayList::new();
+        dl.push(DisplayItem::PushClip {
+            x: 0,
+            y: 0,
+            w: 100,
+            h: 100,
+        });
+        dl.push(rect(10, 10, 20, 20, 1));
+        dl.push(DisplayItem::PopClip);
+        dl.push(DisplayItem::PushClip {
+            x: 200,
+            y: 0,
+            w: 100,
+            h: 100,
+        });
+        dl.push(rect(0, 0, 400, 400, 2));
+        dl.push(DisplayItem::PopClip);
+        dl.optimize();
+        let greens: Vec<u8> = dl
+            .items()
+            .iter()
+            .filter_map(|i| match i {
+                DisplayItem::FillRect { color, .. } => Some(color.g),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(greens, vec![1, 2], "the first box's rect survives");
     }
 
     #[test]

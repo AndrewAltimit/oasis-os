@@ -177,6 +177,43 @@ impl DisplayList {
         let supports_rt = dirty.is_none() && backend.supports_render_targets();
         let mut st = ReplayState::new(base_clip);
 
+        let walked = self.walk(
+            &mut st,
+            backend,
+            dirty,
+            scroll_dx,
+            scroll_dy,
+            supports_rt,
+            &mut fonts,
+        );
+
+        // Close the layers the walk left open — an unbalanced list, or a
+        // backend error part-way — so no offscreen target stays bound
+        // (every later draw, shell chrome included, would land in it).
+        let mut closed = Ok(());
+        while !st.layer_stack.is_empty() {
+            if walked.is_ok() {
+                closed = closed.and(st.pop_compositing_layer(backend));
+            } else if let Some(ActiveLayer { id: Some(id), .. }) = st.layer_stack.pop() {
+                let _ = backend.unbind_render_target();
+                let _ = backend.destroy_render_target(id);
+            }
+        }
+        walked.and(closed)
+    }
+
+    /// The item loop of [`Self::replay_inner`].
+    #[allow(clippy::too_many_arguments)]
+    fn walk<'a>(
+        &'a self,
+        st: &mut ReplayState<'a>,
+        backend: &mut dyn SdiBackend,
+        dirty: Option<&Rect>,
+        scroll_dx: i32,
+        scroll_dy: i32,
+        supports_rt: bool,
+        fonts: &mut Fonts<'_>,
+    ) -> Result<()> {
         for item in &self.items {
             // State items: always replayed (dirty culling included), and
             // each one ends the current batches.
@@ -283,7 +320,7 @@ impl DisplayList {
                     continue;
                 }
             }
-            st.draw(backend, item, dx, dy, &mut fonts)?;
+            st.draw(backend, item, dx, dy, fonts)?;
         }
 
         st.flush(backend)
@@ -1604,6 +1641,39 @@ mod tests {
             _ => None,
         });
         assert_eq!(clip, Some((10, 10, 50, 50)), "clip in layer-local space");
+    }
+
+    /// Regression: a layer left open (an unbalanced list, or a backend
+    /// error mid-walk) kept its offscreen target bound after replay, so
+    /// everything drawn afterwards went into it.
+    #[test]
+    fn open_layers_are_closed_after_replay() {
+        use oasis_test_backend::DrawCommand;
+        use oasis_test_backend::RecordingBackend;
+
+        let mut dl = DisplayList::new();
+        dl.push(push_cl(layer_rect(0.0, 0.0, 50.0, 50.0), 0.5));
+        dl.push(DisplayItem::FillRect {
+            x: 1,
+            y: 1,
+            w: 5,
+            h: 5,
+            color: Color::rgba(0, 0, 0, 255),
+            node_id: None,
+        });
+        let mut backend = RecordingBackend::new(480, 272);
+        dl.replay(&mut backend, 0, 0, None).unwrap();
+        let cmds = backend.commands();
+        let count = |f: &dyn Fn(&DrawCommand) -> bool| cmds.iter().filter(|c| f(c)).count();
+        assert_eq!(
+            count(&|c| matches!(c, DrawCommand::BindRenderTarget { .. })),
+            1
+        );
+        assert_eq!(count(&|c| matches!(c, DrawCommand::UnbindRenderTarget)), 1);
+        assert_eq!(
+            count(&|c| matches!(c, DrawCommand::DestroyRenderTarget { .. })),
+            1
+        );
     }
 
     /// The dirty path shares the full walk: clips, sticky offsets and

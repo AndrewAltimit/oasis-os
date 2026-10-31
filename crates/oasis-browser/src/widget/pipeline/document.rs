@@ -123,8 +123,10 @@ impl BrowserWidget {
         #[cfg(feature = "web-fonts")]
         {
             let mut font_reg = self.font_registry.borrow_mut();
-            // Clear previous page's fonts.
+            // Clear previous page's fonts, and the glyph textures keyed
+            // by their (now reused) font ids.
             *font_reg = crate::font::FontRegistry::new();
+            self.glyph_tex_cache.clear_into(&mut self.retired_textures);
             self.fonts_load_attempted = false;
 
             // Collect @font-face rules from all stylesheets.
