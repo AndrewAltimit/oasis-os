@@ -35,7 +35,34 @@ fn close_kiosk(kiosk_app: &mut KioskApp, wm: &mut WindowManager, sdi: &mut SdiRe
     *kiosk_app = KioskApp::None;
 }
 
-/// Handle a single input event for the currently active kiosk app.
+/// Everything a kiosk app's input handler may touch, handed to the one
+/// handler for the active app.
+struct AppInputCtx<'a> {
+    backend: &'a mut PspBackend,
+    kiosk_app: &'a mut KioskApp,
+    dashboard: &'a mut DashboardState,
+    wm: &'a mut WindowManager,
+    sdi: &'a mut SdiRegistry,
+    audio: &'a AudioHandle,
+    io: &'a IoHandle,
+    term: &'a mut TerminalState,
+    fm: &'a mut FileManagerState,
+    pv: &'a mut PhotoViewerState,
+    mp: &'a mut MusicPlayerState,
+    br: &'a mut BrowserState,
+    radio: &'a mut RadioState,
+    tv: &'a mut TvGuideState,
+    settings: &'a mut SettingsState,
+    usb_storage: &'a mut Option<psp::usb::UsbStorageMode>,
+    config: &'a mut psp::config::Config,
+    current_preset: &'a mut skins::PspSkinPreset,
+    active_theme: &'a mut ActiveTheme,
+    skin_features: &'a SkinFeatures,
+    dbg_log: &'a dyn Fn(&str),
+}
+
+/// Handle a single input event for the currently active kiosk app: route
+/// it to that app's handler below.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn dispatch_app_input(
     event: &InputEvent,
@@ -61,11 +88,67 @@ pub(crate) fn dispatch_app_input(
     skin_features: &SkinFeatures,
     dbg_log: &dyn Fn(&str),
 ) -> DispatchResult {
-    match event {
-        InputEvent::Quit => return DispatchResult::Quit,
+    if matches!(event, InputEvent::Quit) {
+        return DispatchResult::Quit;
+    }
+    let app = *kiosk_app;
+    let cx = AppInputCtx {
+        backend,
+        kiosk_app,
+        dashboard,
+        wm,
+        sdi,
+        audio,
+        io,
+        term,
+        fm,
+        pv,
+        mp,
+        br,
+        radio,
+        tv,
+        settings,
+        usb_storage,
+        config,
+        current_preset,
+        active_theme,
+        skin_features,
+        dbg_log,
+    };
+    match app {
+        KioskApp::Terminal => terminal_input(event, cx),
+        KioskApp::FileManager => file_manager_input(event, cx),
+        KioskApp::PhotoViewer => photo_viewer_input(event, cx),
+        KioskApp::MusicPlayer => music_player_input(event, cx),
+        KioskApp::Browser => browser_input(event, cx),
+        KioskApp::Radio => radio_input(event, cx),
+        KioskApp::TvGuide => tv_guide_input(event, cx),
+        KioskApp::Settings => settings_input(event, cx),
+        _ => {},
+    }
+    DispatchResult::Continue
+}
 
-        // -- Terminal input --
-        InputEvent::ButtonPress(Button::Confirm) if *kiosk_app == KioskApp::Terminal => {
+/// Terminal input.
+fn terminal_input(event: &InputEvent, cx: AppInputCtx<'_>) {
+    let AppInputCtx {
+        backend,
+        kiosk_app,
+        dashboard,
+        wm,
+        sdi,
+        audio,
+        term,
+        mp,
+        usb_storage,
+        config,
+        current_preset,
+        active_theme,
+        skin_features,
+        ..
+    } = cx;
+    match event {
+        InputEvent::ButtonPress(Button::Confirm) => {
             dispatch_terminal_confirm(
                 backend,
                 term,
@@ -79,7 +162,7 @@ pub(crate) fn dispatch_app_input(
                 dashboard,
             );
         },
-        InputEvent::ButtonPress(Button::Square) if *kiosk_app == KioskApp::Terminal => {
+        InputEvent::ButtonPress(Button::Square) => {
             oasis_backend_psp::note_utility_dialog();
             match psp::osk::OskBuilder::new("Enter command")
                 .max_chars(256)
@@ -96,7 +179,7 @@ pub(crate) fn dispatch_app_input(
             }
             backend.reinit_gu_frame();
         },
-        InputEvent::ButtonPress(Button::Up) if *kiosk_app == KioskApp::Terminal => {
+        InputEvent::ButtonPress(Button::Up) => {
             let max_scroll = term.lines.len().saturating_sub(MAX_OUTPUT_LINES);
             if term.scroll < max_scroll {
                 term.scroll += 3;
@@ -105,26 +188,41 @@ pub(crate) fn dispatch_app_input(
                 }
             }
         },
-        InputEvent::ButtonPress(Button::Down) if *kiosk_app == KioskApp::Terminal => {
+        InputEvent::ButtonPress(Button::Down) => {
             term.scroll = term.scroll.saturating_sub(3);
         },
-        InputEvent::ButtonPress(Button::Triangle) if *kiosk_app == KioskApp::Terminal => {
+        InputEvent::ButtonPress(Button::Triangle) => {
             close_kiosk(kiosk_app, wm, sdi);
         },
-        InputEvent::ButtonPress(Button::Cancel) if *kiosk_app == KioskApp::Terminal => {
+        InputEvent::ButtonPress(Button::Cancel) => {
             close_kiosk(kiosk_app, wm, sdi);
         },
+        _ => {},
+    }
+}
 
-        // -- File manager input (dual-panel) --
-        InputEvent::ButtonPress(Button::Left) if *kiosk_app == KioskApp::FileManager => {
+/// File manager input (dual-panel).
+fn file_manager_input(event: &InputEvent, cx: AppInputCtx<'_>) {
+    let AppInputCtx {
+        backend,
+        kiosk_app,
+        wm,
+        sdi,
+        audio,
+        term,
+        fm,
+        ..
+    } = cx;
+    match event {
+        InputEvent::ButtonPress(Button::Left) => {
             fm.active_panel = 0;
             audio.send(AudioCmd::PlaySfx(SfxId::Click));
         },
-        InputEvent::ButtonPress(Button::Right) if *kiosk_app == KioskApp::FileManager => {
+        InputEvent::ButtonPress(Button::Right) => {
             fm.active_panel = 1;
             audio.send(AudioCmd::PlaySfx(SfxId::Click));
         },
-        InputEvent::ButtonPress(Button::Up) if *kiosk_app == KioskApp::FileManager => {
+        InputEvent::ButtonPress(Button::Up) => {
             let panel = fm.active_panel_mut();
             if panel.selected > 0 {
                 panel.selected -= 1;
@@ -133,7 +231,7 @@ pub(crate) fn dispatch_app_input(
                 }
             }
         },
-        InputEvent::ButtonPress(Button::Down) if *kiosk_app == KioskApp::FileManager => {
+        InputEvent::ButtonPress(Button::Down) => {
             let panel = fm.active_panel_mut();
             if panel.selected + 1 < panel.entries.len() {
                 panel.selected += 1;
@@ -142,7 +240,7 @@ pub(crate) fn dispatch_app_input(
                 }
             }
         },
-        InputEvent::ButtonPress(Button::Confirm) if *kiosk_app == KioskApp::FileManager => {
+        InputEvent::ButtonPress(Button::Confirm) => {
             let panel = fm.active_panel_mut();
             if panel.selected < panel.entries.len() && panel.entries[panel.selected].is_dir {
                 let dir_name = panel.entries[panel.selected].name.clone();
@@ -154,7 +252,7 @@ pub(crate) fn dispatch_app_input(
                 panel.loaded = false;
             }
         },
-        InputEvent::ButtonPress(Button::Cancel) if *kiosk_app == KioskApp::FileManager => {
+        InputEvent::ButtonPress(Button::Cancel) => {
             let path = if fm.active_panel == 0 {
                 &fm.left.path
             } else {
@@ -196,7 +294,7 @@ pub(crate) fn dispatch_app_input(
                 close_kiosk(kiosk_app, wm, sdi);
             }
         },
-        InputEvent::ButtonPress(Button::Square) if *kiosk_app == KioskApp::FileManager => {
+        InputEvent::ButtonPress(Button::Square) => {
             let panel = fm.active_panel_ref();
             if panel.path.starts_with("disc0:") {
                 term.lines.push("UMD is read-only.".into());
@@ -227,7 +325,7 @@ pub(crate) fn dispatch_app_input(
                 backend.reinit_gu_frame();
             }
         },
-        InputEvent::ButtonPress(Button::Triangle) if *kiosk_app == KioskApp::FileManager => {
+        InputEvent::ButtonPress(Button::Triangle) => {
             if fm.umd_activated {
                 // SAFETY: deactivate UMD drive on exit.
                 unsafe {
@@ -237,11 +335,22 @@ pub(crate) fn dispatch_app_input(
             }
             close_kiosk(kiosk_app, wm, sdi);
         },
+        _ => {},
+    }
+}
 
-        // -- Photo viewer input --
-        InputEvent::ButtonPress(Button::Up)
-            if *kiosk_app == KioskApp::PhotoViewer && !pv.viewing =>
-        {
+/// Photo viewer input.
+fn photo_viewer_input(event: &InputEvent, cx: AppInputCtx<'_>) {
+    let AppInputCtx {
+        kiosk_app,
+        wm,
+        sdi,
+        io,
+        pv,
+        ..
+    } = cx;
+    match event {
+        InputEvent::ButtonPress(Button::Up) if !pv.viewing => {
             if pv.selected > 0 {
                 pv.selected -= 1;
                 if pv.selected < pv.scroll {
@@ -249,9 +358,7 @@ pub(crate) fn dispatch_app_input(
                 }
             }
         },
-        InputEvent::ButtonPress(Button::Down)
-            if *kiosk_app == KioskApp::PhotoViewer && !pv.viewing =>
-        {
+        InputEvent::ButtonPress(Button::Down) if !pv.viewing => {
             if pv.selected + 1 < pv.entries.len() {
                 pv.selected += 1;
                 if pv.selected >= pv.scroll + FM_VISIBLE_ROWS {
@@ -259,9 +366,7 @@ pub(crate) fn dispatch_app_input(
                 }
             }
         },
-        InputEvent::ButtonPress(Button::Confirm)
-            if *kiosk_app == KioskApp::PhotoViewer && !pv.viewing =>
-        {
+        InputEvent::ButtonPress(Button::Confirm) if !pv.viewing => {
             if pv.selected < pv.entries.len() {
                 let entry = &pv.entries[pv.selected];
                 if entry.is_dir {
@@ -287,7 +392,7 @@ pub(crate) fn dispatch_app_input(
                 }
             }
         },
-        InputEvent::ButtonPress(Button::Cancel) if *kiosk_app == KioskApp::PhotoViewer => {
+        InputEvent::ButtonPress(Button::Cancel) => {
             if pv.viewing {
                 pv.viewing = false;
             } else if let Some(pos) = pv.path.rfind('/') {
@@ -303,18 +408,30 @@ pub(crate) fn dispatch_app_input(
                 close_kiosk(kiosk_app, wm, sdi);
             }
         },
-        InputEvent::ButtonPress(Button::Triangle) if *kiosk_app == KioskApp::PhotoViewer => {
+        InputEvent::ButtonPress(Button::Triangle) => {
             if pv.viewing {
                 pv.viewing = false;
             } else {
                 close_kiosk(kiosk_app, wm, sdi);
             }
         },
+        _ => {},
+    }
+}
 
-        // -- Music player input --
-        InputEvent::ButtonPress(Button::Up)
-            if *kiosk_app == KioskApp::MusicPlayer && !audio.is_playing() =>
-        {
+/// Music player input.
+fn music_player_input(event: &InputEvent, cx: AppInputCtx<'_>) {
+    let AppInputCtx {
+        kiosk_app,
+        wm,
+        sdi,
+        audio,
+        term,
+        mp,
+        ..
+    } = cx;
+    match event {
+        InputEvent::ButtonPress(Button::Up) if !audio.is_playing() => {
             if mp.selected > 0 {
                 mp.selected -= 1;
                 if mp.selected < mp.scroll {
@@ -322,9 +439,7 @@ pub(crate) fn dispatch_app_input(
                 }
             }
         },
-        InputEvent::ButtonPress(Button::Down)
-            if *kiosk_app == KioskApp::MusicPlayer && !audio.is_playing() =>
-        {
+        InputEvent::ButtonPress(Button::Down) if !audio.is_playing() => {
             if mp.selected + 1 < mp.entries.len() {
                 mp.selected += 1;
                 if mp.selected >= mp.scroll + FM_VISIBLE_ROWS {
@@ -332,7 +447,7 @@ pub(crate) fn dispatch_app_input(
                 }
             }
         },
-        InputEvent::ButtonPress(Button::Confirm) if *kiosk_app == KioskApp::MusicPlayer => {
+        InputEvent::ButtonPress(Button::Confirm) => {
             if audio.is_playing() {
                 if audio.is_paused() {
                     audio.send(AudioCmd::Resume);
@@ -361,10 +476,10 @@ pub(crate) fn dispatch_app_input(
                 }
             }
         },
-        InputEvent::ButtonPress(Button::Square) if *kiosk_app == KioskApp::MusicPlayer => {
+        InputEvent::ButtonPress(Button::Square) => {
             audio.send(AudioCmd::Stop);
         },
-        InputEvent::ButtonPress(Button::Cancel) if *kiosk_app == KioskApp::MusicPlayer => {
+        InputEvent::ButtonPress(Button::Cancel) => {
             audio.send(AudioCmd::Stop);
             if let Some(pos) = mp.path.rfind('/') {
                 if pos > 0 && !mp.path[..pos].ends_with(':') {
@@ -379,12 +494,26 @@ pub(crate) fn dispatch_app_input(
                 close_kiosk(kiosk_app, wm, sdi);
             }
         },
-        InputEvent::ButtonPress(Button::Triangle) if *kiosk_app == KioskApp::MusicPlayer => {
+        InputEvent::ButtonPress(Button::Triangle) => {
             close_kiosk(kiosk_app, wm, sdi);
         },
+        _ => {},
+    }
+}
 
-        // -- Browser input (full oasis-browser engine) --
-        InputEvent::ButtonPress(Button::Square) if *kiosk_app == KioskApp::Browser => {
+/// Browser input (full oasis-browser engine).
+fn browser_input(event: &InputEvent, cx: AppInputCtx<'_>) {
+    let AppInputCtx {
+        backend,
+        kiosk_app,
+        wm,
+        sdi,
+        br,
+        dbg_log,
+        ..
+    } = cx;
+    match event {
+        InputEvent::ButtonPress(Button::Square) => {
             let current_url = br.url().to_string();
             oasis_backend_psp::note_utility_dialog();
             match psp::osk::OskBuilder::new("Enter URL")
@@ -397,7 +526,7 @@ pub(crate) fn dispatch_app_input(
                         if let Err(e) = oasis_backend_psp::network::ensure_net_init_pub() {
                             br.status_msg = format!("Net error: {e}");
                             backend.reinit_gu_frame();
-                            return DispatchResult::Continue;
+                            return;
                         }
                     }
                     br.loading = true;
@@ -419,13 +548,13 @@ pub(crate) fn dispatch_app_input(
             }
             backend.reinit_gu_frame();
         },
-        InputEvent::ButtonPress(Button::Confirm) if *kiosk_app == KioskApp::Browser => {
+        InputEvent::ButtonPress(Button::Confirm) => {
             dbg_log("[Browser] Confirm pressed");
             if !oasis_backend_psp::network::is_net_initialized() {
                 if let Err(e) = oasis_backend_psp::network::ensure_net_init_pub() {
                     br.status_msg = format!("Net error: {e}");
                     backend.reinit_gu_frame();
-                    return DispatchResult::Continue;
+                    return;
                 }
                 backend.reinit_gu_frame();
             }
@@ -436,55 +565,68 @@ pub(crate) fn dispatch_app_input(
                 w.handle_input(&input_event, &br.vfs);
             }
         },
-        InputEvent::ButtonPress(Button::Up) if *kiosk_app == KioskApp::Browser => {
+        InputEvent::ButtonPress(Button::Up) => {
             if let Some(ref mut w) = br.widget {
                 for _ in 0..3 {
                     w.scroll_mut().scroll_up();
                 }
             }
         },
-        InputEvent::ButtonPress(Button::Down) if *kiosk_app == KioskApp::Browser => {
+        InputEvent::ButtonPress(Button::Down) => {
             if let Some(ref mut w) = br.widget {
                 for _ in 0..3 {
                     w.scroll_mut().scroll_down();
                 }
             }
         },
-        InputEvent::ButtonPress(Button::Left) if *kiosk_app == KioskApp::Browser => {
+        InputEvent::ButtonPress(Button::Left) => {
             if let Some(ref mut w) = br.widget {
                 let event =
                     oasis_backend_psp::InputEvent::ButtonPress(oasis_backend_psp::Button::Left);
                 w.handle_input(&event, &br.vfs);
             }
         },
-        InputEvent::ButtonPress(Button::Right) if *kiosk_app == KioskApp::Browser => {
+        InputEvent::ButtonPress(Button::Right) => {
             if let Some(ref mut w) = br.widget {
                 let event =
                     oasis_backend_psp::InputEvent::ButtonPress(oasis_backend_psp::Button::Right);
                 w.handle_input(&event, &br.vfs);
             }
         },
-        InputEvent::TriggerPress(Trigger::Left) if *kiosk_app == KioskApp::Browser => {
+        InputEvent::TriggerPress(Trigger::Left) => {
             if let Some(ref mut w) = br.widget {
                 w.go_back(&br.vfs);
             }
         },
-        InputEvent::TriggerPress(Trigger::Right) if *kiosk_app == KioskApp::Browser => {
+        InputEvent::TriggerPress(Trigger::Right) => {
             if let Some(ref mut w) = br.widget {
                 w.go_forward(&br.vfs);
             }
         },
-        InputEvent::ButtonPress(Button::Triangle) if *kiosk_app == KioskApp::Browser => {
+        InputEvent::ButtonPress(Button::Triangle) => {
             close_kiosk(kiosk_app, wm, sdi);
         },
-        InputEvent::ButtonPress(Button::Cancel) if *kiosk_app == KioskApp::Browser => {
+        InputEvent::ButtonPress(Button::Cancel) => {
             close_kiosk(kiosk_app, wm, sdi);
         },
+        _ => {},
+    }
+}
 
-        // -- Radio input --
-        InputEvent::ButtonPress(Button::Up)
-            if *kiosk_app == KioskApp::Radio && radio.status == RadioStatus::Stopped =>
-        {
+/// Radio input.
+fn radio_input(event: &InputEvent, cx: AppInputCtx<'_>) {
+    let AppInputCtx {
+        backend,
+        kiosk_app,
+        wm,
+        sdi,
+        audio,
+        io,
+        radio,
+        ..
+    } = cx;
+    match event {
+        InputEvent::ButtonPress(Button::Up) if radio.status == RadioStatus::Stopped => {
             if radio.selected > 0 {
                 radio.selected -= 1;
                 if radio.selected < radio.scroll {
@@ -492,9 +634,7 @@ pub(crate) fn dispatch_app_input(
                 }
             }
         },
-        InputEvent::ButtonPress(Button::Down)
-            if *kiosk_app == KioskApp::Radio && radio.status == RadioStatus::Stopped =>
-        {
+        InputEvent::ButtonPress(Button::Down) if radio.status == RadioStatus::Stopped => {
             if radio.selected + 1 < RADIO_STATIONS.len() {
                 radio.selected += 1;
                 if radio.selected >= radio.scroll + FM_VISIBLE_ROWS {
@@ -502,7 +642,7 @@ pub(crate) fn dispatch_app_input(
                 }
             }
         },
-        InputEvent::ButtonPress(Button::Confirm) if *kiosk_app == KioskApp::Radio => {
+        InputEvent::ButtonPress(Button::Confirm) => {
             if radio.status == RadioStatus::Stopped || radio.status == RadioStatus::Error {
                 if radio.selected < RADIO_STATIONS.len() {
                     if !oasis_backend_psp::network::is_net_initialized() {
@@ -522,7 +662,7 @@ pub(crate) fn dispatch_app_input(
                                 radio.error_msg = format!("Net error: {e}");
                                 radio.status = RadioStatus::Error;
                                 backend.reinit_gu_frame();
-                                return DispatchResult::Continue;
+                                return;
                             },
                         }
                     }
@@ -562,7 +702,7 @@ pub(crate) fn dispatch_app_input(
                 }
             }
         },
-        InputEvent::ButtonPress(Button::Square) if *kiosk_app == KioskApp::Radio => {
+        InputEvent::ButtonPress(Button::Square) => {
             if radio.status != RadioStatus::Stopped {
                 oasis_backend_psp::threading::cancel_radio_stream();
                 audio.send(AudioCmd::RadioStop);
@@ -570,10 +710,10 @@ pub(crate) fn dispatch_app_input(
                 radio.now_playing.clear();
             }
         },
-        InputEvent::ButtonPress(Button::Triangle) if *kiosk_app == KioskApp::Radio => {
+        InputEvent::ButtonPress(Button::Triangle) => {
             close_kiosk(kiosk_app, wm, sdi);
         },
-        InputEvent::ButtonPress(Button::Cancel) if *kiosk_app == KioskApp::Radio => {
+        InputEvent::ButtonPress(Button::Cancel) => {
             if radio.status != RadioStatus::Stopped {
                 oasis_backend_psp::threading::cancel_radio_stream();
                 audio.send(AudioCmd::RadioStop);
@@ -582,11 +722,25 @@ pub(crate) fn dispatch_app_input(
             }
             close_kiosk(kiosk_app, wm, sdi);
         },
+        _ => {},
+    }
+}
 
-        // -- TV Guide input --
-        InputEvent::ButtonPress(Button::Up)
-            if *kiosk_app == KioskApp::TvGuide && tv.tuned.is_none() =>
-        {
+/// TV Guide input.
+fn tv_guide_input(event: &InputEvent, cx: AppInputCtx<'_>) {
+    let AppInputCtx {
+        backend,
+        kiosk_app,
+        wm,
+        sdi,
+        audio,
+        io,
+        tv,
+        dbg_log,
+        ..
+    } = cx;
+    match event {
+        InputEvent::ButtonPress(Button::Up) if tv.tuned.is_none() => {
             if tv.selected > 0 {
                 tv.selected -= 1;
                 if tv.selected < tv.scroll {
@@ -594,9 +748,7 @@ pub(crate) fn dispatch_app_input(
                 }
             }
         },
-        InputEvent::ButtonPress(Button::Down)
-            if *kiosk_app == KioskApp::TvGuide && tv.tuned.is_none() =>
-        {
+        InputEvent::ButtonPress(Button::Down) if tv.tuned.is_none() => {
             if tv.selected + 1 < tv.channels.len() {
                 tv.selected += 1;
                 if tv.selected >= tv.scroll + FM_VISIBLE_ROWS {
@@ -604,10 +756,10 @@ pub(crate) fn dispatch_app_input(
                 }
             }
         },
-        InputEvent::ButtonPress(Button::Confirm) if *kiosk_app == KioskApp::TvGuide => {
+        InputEvent::ButtonPress(Button::Confirm) => {
             dispatch_tv_confirm(tv, io, backend, dbg_log);
         },
-        InputEvent::ButtonPress(Button::Cancel) if *kiosk_app == KioskApp::TvGuide => {
+        InputEvent::ButtonPress(Button::Cancel) => {
             if tv.tuned.is_some() || tv.downloading {
                 // Signal cancellation — I/O and video threads will
                 // clean up asynchronously.
@@ -629,12 +781,31 @@ pub(crate) fn dispatch_app_input(
                 close_kiosk(kiosk_app, wm, sdi);
             }
         },
-        InputEvent::ButtonPress(Button::Triangle) if *kiosk_app == KioskApp::TvGuide => {
+        InputEvent::ButtonPress(Button::Triangle) => {
             close_kiosk(kiosk_app, wm, sdi);
         },
+        _ => {},
+    }
+}
 
-        // -- Settings input (theme picker) --
-        InputEvent::ButtonPress(Button::Up) if *kiosk_app == KioskApp::Settings => {
+/// Settings input (theme picker).
+fn settings_input(event: &InputEvent, cx: AppInputCtx<'_>) {
+    let AppInputCtx {
+        kiosk_app,
+        dashboard,
+        wm,
+        sdi,
+        audio,
+        settings,
+        config,
+        current_preset,
+        active_theme,
+        skin_features,
+        dbg_log,
+        ..
+    } = cx;
+    match event {
+        InputEvent::ButtonPress(Button::Up) => {
             if settings.selected > 0 {
                 settings.selected -= 1;
                 if settings.selected < settings.scroll {
@@ -643,7 +814,7 @@ pub(crate) fn dispatch_app_input(
                 audio.send(AudioCmd::PlaySfx(SfxId::Click));
             }
         },
-        InputEvent::ButtonPress(Button::Down) if *kiosk_app == KioskApp::Settings => {
+        InputEvent::ButtonPress(Button::Down) => {
             if settings.selected + 1 < skins::PspSkinPreset::ALL.len() {
                 settings.selected += 1;
                 if settings.selected >= settings.scroll + LIST_ROWS {
@@ -652,7 +823,7 @@ pub(crate) fn dispatch_app_input(
                 audio.send(AudioCmd::PlaySfx(SfxId::Click));
             }
         },
-        InputEvent::ButtonPress(Button::Confirm) if *kiosk_app == KioskApp::Settings => {
+        InputEvent::ButtonPress(Button::Confirm) => {
             let preset = skins::PspSkinPreset::ALL[settings.selected];
             if skins::apply_skin_preset(
                 preset,
@@ -666,14 +837,12 @@ pub(crate) fn dispatch_app_input(
                 dbg_log(&format!("[SETTINGS] skin -> '{}'", preset.name()));
             }
         },
-        InputEvent::ButtonPress(Button::Cancel) if *kiosk_app == KioskApp::Settings => {
+        InputEvent::ButtonPress(Button::Cancel) => {
             close_kiosk(kiosk_app, wm, sdi);
         },
-        InputEvent::ButtonPress(Button::Triangle) if *kiosk_app == KioskApp::Settings => {
+        InputEvent::ButtonPress(Button::Triangle) => {
             close_kiosk(kiosk_app, wm, sdi);
         },
-
         _ => {},
     }
-    DispatchResult::Continue
 }

@@ -8,6 +8,7 @@
 //! Major subsystems are split into modules:
 //! - `app_states` -- per-app mutable state structs
 //! - `dashboard` -- dashboard init and SDI helpers
+//! - `frame` -- boot helpers and the per-frame stages of the main loop
 //! - `input_dispatch` -- unified input event routing
 //! - `io_poll` -- async I/O response polling
 //! - `render_classic` -- kiosk fullscreen view rendering
@@ -23,7 +24,6 @@ use oasis_backend_psp::{
 
 // oasis-core SDI integration types.
 use oasis_core::bottombar::BottomBar;
-use oasis_core::platform::{BatteryState, CpuClock, PowerInfo, SystemTime};
 use oasis_core::statusbar::StatusBar;
 use oasis_core::taskbar::Taskbar;
 use oasis_core::terminal_sdi;
@@ -36,6 +36,7 @@ mod chrome;
 mod commands;
 mod dashboard;
 mod desktop;
+mod frame;
 mod input_dispatch;
 mod io_poll;
 mod js_selftest;
@@ -66,52 +67,7 @@ fn psp_main() {
 
     dbg_log("[EBOOT] psp_main entered");
 
-    // Wire HTML tokenizer progress hook → on-disk eboot.log so a
-    // synchronous `navigate_vfs` that hangs in tokenize is observable
-    // from the remote test harness.
-    oasis_browser::internals::set_tokenize_progress_hook(|iter, pos, len, tokens, state| {
-        let (free_kb, max_blk_kb) = oasis_backend_psp::heap_kb();
-        oasis_backend_psp::vlog_force(&format!(
-            "[BR/TOK] iter={iter} pos={pos}/{len} tokens={tokens} state={state} \
-             free={free_kb}KB blk={max_blk_kb}KB"
-        ));
-    });
-    // Cooperative yield: lets the cmd_server / audio / video threads
-    // run between batches of tokenizer state-machine iterations so a
-    // long synchronous `navigate_vfs` doesn't starve them.
-    // `sleep_ms(1)` is the smallest unit the PSP scheduler exposes.
-    oasis_browser::internals::set_tokenize_yield_hook(|| {
-        psp::thread::sleep_ms(1);
-    });
-    oasis_browser::internals::set_tree_builder_progress_hook(|idx, total, nodes| {
-        let (free_kb, max_blk_kb) = oasis_backend_psp::heap_kb();
-        oasis_backend_psp::vlog_force(&format!(
-            "[BR/TREE] idx={idx}/{total} nodes={nodes} free={free_kb}KB blk={max_blk_kb}KB"
-        ));
-    });
-    oasis_browser::internals::set_tree_builder_yield_hook(|| {
-        psp::thread::sleep_ms(1);
-    });
-    oasis_browser::internals::set_tree_builder_raw_log_hook(|msg| {
-        oasis_backend_psp::vlog_force(msg);
-    });
-    oasis_browser::internals::set_cascade_progress_hook(|idx, total| {
-        let (free_kb, _) = oasis_backend_psp::heap_kb();
-        oasis_backend_psp::vlog_force(&format!("[BR/CASCADE] idx={idx}/{total} free={free_kb}KB"));
-    });
-    oasis_browser::internals::set_cascade_yield_hook(|| {
-        psp::thread::sleep_ms(1);
-    });
-
-    // Pre-warm the lazily-initialised UA stylesheet so the first
-    // browser navigation doesn't have to parse ~7 KB of CSS through
-    // LazyLock's first-init lock while the cascade is also trying
-    // to allocate. Verified on real PSP that this turns a hard hang
-    // into a clean cascade run.
-    {
-        let _ = oasis_browser::internals::default_stylesheet();
-        dbg_log("[EBOOT] UA stylesheet pre-warmed");
-    }
+    frame::install_browser_hooks();
 
     let mut backend = PspBackend::new();
     backend.init();
@@ -173,45 +129,7 @@ fn psp_main() {
     boot::show_boot_screen(&mut backend, "Generating textures...", 40);
     dbg_log("[EBOOT] textures phase");
 
-    // Load wallpaper texture at reduced resolution (64x64 = 16KB vs 1MB).
-    // The GE scales it up to 480x272 with bilinear filtering during blit.
-    use oasis_backend_psp::{WALLPAPER_TEX_H, WALLPAPER_TEX_W};
-    let wallpaper_data = oasis_backend_psp::generate_gradient_with(
-        WALLPAPER_TEX_W,
-        WALLPAPER_TEX_H,
-        &current_preset.gradient_stops(),
-    );
-    let wallpaper_tex = backend
-        .load_texture_inner(WALLPAPER_TEX_W, WALLPAPER_TEX_H, &wallpaper_data)
-        .unwrap_or(TextureId(0));
-
-    // Software shader renderer for animated wallpapers.
-    // Renders at 32x32 output (internally ~11x11 via RENDER_SCALE=3) to keep
-    // expensive shaders (voronoi: 277ms at 64x64) within budget on 333MHz MIPS.
-    // The 32x32 output is uploaded to the 64x64 wallpaper texture's top-left
-    // quadrant; GE bilinear scaling to 480x272 hides the lower resolution.
-    use oasis_shader::software::SoftwareShaderRenderer;
-    const SHADER_W: u32 = 32;
-    const SHADER_H: u32 = 32;
-    let mut shader_renderer = SoftwareShaderRenderer::new(SHADER_W, SHADER_H);
-    // Pre-allocate a 32x32 shader texture for blitting.
-    let shader_init = vec![0u8; (SHADER_W * SHADER_H * 4) as usize];
-    let shader_tex = backend
-        .load_texture_inner(SHADER_W, SHADER_H, &shader_init)
-        .unwrap_or(TextureId(0));
-    // Cache the shader layer info to avoid traversing background_layers each frame.
-    let mut cached_shader = oasis_core::vector_overlay::get_shader_layer(&active_theme);
-    let mut shader_active = cached_shader.is_some();
-    if let Some(ref info) = cached_shader {
-        dbg_log(&format!(
-            "[SHADER] active: {} ({}x{})",
-            info.name, SHADER_W, SHADER_H
-        ));
-    } else {
-        dbg_log("[SHADER] none (using static gradient)");
-    }
-    // Track current skin key to detect skin changes and regenerate wallpaper.
-    let mut last_skin_key: &str = current_preset.key();
+    let mut wallpaper = frame::Wallpaper::new(&mut backend, current_preset, &active_theme);
 
     // Load cursor texture.
     let cursor_data = oasis_backend_psp::generate_cursor_pixels();
@@ -234,39 +152,7 @@ fn psp_main() {
     let mut viz_frame: u32 = 0;
 
     // -- Per-app state --
-    let vol_info = backend.volatile_mem_info();
-    let mode_label = if cfg!(feature = "kernel-mode") {
-        "kernel"
-    } else {
-        "user"
-    };
-    let initial_lines = vec![
-        format!(
-            "OASIS_OS v{} [PSP] ({mode_label} mode)",
-            env!("CARGO_PKG_VERSION")
-        ),
-        format!(
-            "CPU: {}MHz  Bus: {}MHz  ME: {}MHz",
-            sysinfo.cpu_mhz, sysinfo.bus_mhz, sysinfo.me_mhz,
-        ),
-        if let Some((total, _)) = vol_info {
-            format!("Texture cache: {} KB volatile RAM claimed", total / 1024)
-        } else {
-            String::from("Texture cache: main heap only (PSP-1000)")
-        },
-        String::from("Type 'help' for commands. []=OSK, Up/Down=scroll."),
-        String::new(),
-    ];
-    let mut term = TerminalState::new(initial_lines);
-
-    // Try to restore previous terminal history from save data (silent).
-    if let Ok(saved) = commands::load_terminal_history() {
-        if !saved.is_empty() {
-            term.lines.push(String::from("(restored previous session)"));
-            term.lines.extend(saved);
-            term.lines.push(String::new());
-        }
-    }
+    let mut term = frame::initial_terminal(&backend, &sysinfo);
 
     // Boot-time self-test: if sentinel file exists, run test suite,
     // write results to selftest.log, delete sentinel, then exit.
@@ -424,19 +310,7 @@ fn psp_main() {
         // progressive image loading on PSP.
 
         // Poll radio streaming state from audio thread atomics.
-        if radio.status == RadioStatus::Buffering || radio.status == RadioStatus::Playing {
-            if !audio.is_radio_streaming() {
-                radio.status = RadioStatus::Stopped;
-                radio.now_playing.clear();
-            } else if audio.is_radio_buffering() {
-                radio.status = RadioStatus::Buffering;
-            } else {
-                radio.status = RadioStatus::Playing;
-            }
-            if let Some(meta) = audio.poll_radio_meta() {
-                radio.now_playing = meta;
-            }
-        }
+        frame::poll_radio_status(&audio, &mut radio);
 
         // -- Autorun script tick (one command per frame; injects events
         // into cmd_server's queue, drained by poll_events_inner below). --
@@ -489,107 +363,11 @@ fn psp_main() {
             return;
         }
 
-        // -- Poll video decode frames --
-        // Poll regardless of download state — video decode starts as soon
-        // as the first keyframe arrives, even during HTTP streaming.
-        // Always check for video frames — log state every 5 seconds.
-        if viz_frame % 300 == 1 {
-            let vp = oasis_backend_psp::video::is_video_playing();
-            oasis_backend_psp::video::vlog_force(&format!(
-                "[MAIN] tuned={} vp={} tex={:?} kiosk={:?} frame={}",
-                tv.tuned.is_some(),
-                vp,
-                tv.preview_tex,
-                kiosk_app as u8,
-                viz_frame,
-            ));
-        }
-        if tv.tuned.is_some() {
-            // Drain all queued frames to keep the queue clear.
-            let mut latest = oasis_backend_psp::video::poll_video_frame();
-            while let Some(newer) = oasis_backend_psp::video::poll_video_frame() {
-                latest = Some(newer);
-            }
-            // Upload every frame — direct CSC is fast enough (~15ms).
-            let do_upload = latest.is_some();
-            if let Some(frame) = latest {
-                if do_upload {
-                    let t0 = now_us();
-                    let pixels = oasis_backend_psp::video::frame_pixels_raw(&frame);
-                    let old_tex = tv.preview_tex;
-                    // Pass stride as width so texture buf_w matches CSC
-                    // stride (both 512px). This eliminates row-by-row copy.
-                    tv.preview_tex =
-                        backend.update_video_texture(frame.stride, frame.height, pixels);
-                    // Set actual content dimensions for correct UV mapping.
-                    backend.set_video_content_size(frame.width, frame.height);
-                    let dt = now_us().wrapping_sub(t0);
-                    oasis_backend_psp::video::record_upload_time(dt);
-                    if old_tex.is_none() && tv.preview_tex.is_some() {
-                        oasis_backend_psp::video::vlog_force(&format!(
-                            "[MAIN] first video tex: {}x{} → {:?}",
-                            frame.width, frame.height, tv.preview_tex,
-                        ));
-                    }
-                }
-            }
-            // Only clear tuned state when video WAS playing and stopped
-            // (not during the startup gap before streaming begins).
-            if tv.preview_tex.is_some() && !oasis_backend_psp::video::is_video_playing() {
-                backend.free_video_texture();
-                tv.preview_tex = None;
-                tv.tuned = None;
-                tv.now_playing.clear();
-            }
-        }
-
-        // -- Decode hang watchdog (main thread, every ~0.5s) --
-        // If DECODE_STEP == 2 (stuck inside sceMpegAvcDecode), signal
-        // the internal semaphore to unblock the ME and force an error
-        // return, allowing the video thread to fall back to audio-only.
-        if tv.tuned.is_some() && viz_frame % 30 == 0 {
-            let step = psp::mpeg::DECODE_STEP.load(core::sync::atomic::Ordering::Relaxed);
-            if step == 2 {
-                oasis_backend_psp::video::vlog_force(
-                    "[WATCHDOG] ME stuck in AvcDecode — unblocking",
-                );
-                oasis_backend_psp::video::unblock_stuck_decode();
-            }
-        }
+        // -- Poll video decode frames + decode-hang watchdog --
+        frame::poll_video(&mut backend, &mut tv, kiosk_app, viz_frame);
 
         // -- Poll remote browse requests --
-        // Accepts a URL from the TCP command server and drives a
-        // synchronous `BrowserWidget::navigate_vfs`, switching to the
-        // Browser app if necessary. PSP currently uses `navigate_vfs`
-        // (not `navigate_to`) because the browser's per-frame
-        // `tick()` isn't wired up on PSP — historically because of a
-        // misdiagnosed "std::time::Instant crashes on Allegrex" claim
-        // (the real cause was the orphaned rust-psp std time overlay,
-        // fixed in branch fix/psp-hardware-std-overlay-alignment-and-time).
-        // `navigate_vfs` does the fetch + parse + image load
-        // synchronously inside this single call. Switching PSP to the
-        // async fetch path is a follow-up once we wire `tick()` back in.
-        if let Some(url) = oasis_backend_psp::cmd_server::take_pending_browse() {
-            kiosk_app = KioskApp::Browser;
-            // The cmd_server's auto_connect_wifi sets `NET_STACK_INITIALIZED`
-            // but not the full `NET_INITIALIZED` flag the browser's TLS
-            // provider checks. Call `ensure_net_init_pub` here to take
-            // the GotIp fast path and flip the flag without showing the
-            // WiFi dialog.
-            if let Err(e) = oasis_backend_psp::network::ensure_net_init_pub() {
-                dbg_log(&format!("[CMD] browse net init failed: {:?}", e));
-            }
-            let _ = br.ensure_widget();
-            oasis_backend_psp::vlog_force(&format!("[BR/MAIN] navigate_vfs start: {}", url));
-            let BrowserState { widget, vfs, .. } = &mut br;
-            if let Some(w) = widget.as_mut() {
-                w.navigate_vfs(&url, vfs);
-            }
-            oasis_backend_psp::vlog_force(&format!("[BR/MAIN] navigate_vfs end: {}", url));
-            br.loading = false;
-            br.status_msg = format!("Loaded {}", url);
-            dbg_log(&format!("[CMD] browse -> {}", url));
-        }
+        frame::poll_remote_browse(&mut kiosk_app, &mut br);
 
         // -- Poll remote skin change requests --
         if let Some(key) = oasis_backend_psp::cmd_server::take_pending_skin() {
@@ -621,41 +399,7 @@ fn psp_main() {
             }
 
             // Feed PSP status info into oasis-core's StatusBar.
-            {
-                let st = cached_status;
-                let sys_time = SystemTime {
-                    year: st.year,
-                    month: st.month as u8,
-                    day: st.day as u8,
-                    hour: st.hour as u8,
-                    minute: st.minute as u8,
-                    second: 0,
-                };
-                let bat_state = if st.ac_power && !st.battery_charging {
-                    BatteryState::Full
-                } else if st.battery_charging {
-                    BatteryState::Charging
-                } else if st.battery_percent < 0 {
-                    BatteryState::NoBattery
-                } else {
-                    BatteryState::Discharging
-                };
-                let power = PowerInfo {
-                    battery_percent: if st.battery_percent >= 0 {
-                        Some(st.battery_percent as u8)
-                    } else {
-                        None
-                    },
-                    battery_minutes: None,
-                    state: bat_state,
-                    cpu: CpuClock {
-                        current_mhz: sysinfo.cpu_mhz as u32,
-                        max_mhz: 333,
-                    },
-                };
-                status_bar.update_info(Some(&sys_time), Some(&power));
-                bottom_bar.update_info(Some(&sys_time));
-            }
+            frame::feed_status_bars(&cached_status, &sysinfo, &mut status_bar, &mut bottom_bar);
 
             // Update bottom bar page tracking.
             bottom_bar.current_page = dashboard_state.page;
@@ -664,51 +408,7 @@ fn psp_main() {
 
             backend.clear_inner(Color::BLACK);
 
-            // Detect skin change: update cached shader info AND regenerate
-            // the static gradient wallpaper so non-shader presets visibly
-            // change their background, not just the bars/icons.
-            let cur_key = current_preset.key();
-            if cur_key != last_skin_key {
-                last_skin_key = cur_key;
-                cached_shader = oasis_core::vector_overlay::get_shader_layer(&active_theme);
-                shader_active = cached_shader.is_some();
-                let stops = current_preset.gradient_stops();
-                let pixels = oasis_backend_psp::generate_gradient_with(
-                    WALLPAPER_TEX_W,
-                    WALLPAPER_TEX_H,
-                    &stops,
-                );
-                backend.update_texture_data(wallpaper_tex, &pixels);
-            }
-
-            // Shader wallpaper: render animated shader to a 32x32 texture
-            // every other frame (30fps shader, 60fps UI), then blit fullscreen.
-            // Non-shader skins use the static gradient wallpaper.
-            if shader_active && viz_frame % 2 == 0 {
-                if let Some(ref info) = cached_shader {
-                    let log_this_frame = viz_frame % 600 == 0;
-                    let t0 = if log_this_frame { now_us() } else { 0 };
-                    let time = viz_frame as f32 / 60.0;
-                    let pixels = shader_renderer.render_shader(&info.name, time, &info.params);
-                    backend.update_texture_data(shader_tex, pixels);
-                    // Log shader render time periodically (~every 10s).
-                    if log_this_frame {
-                        let elapsed = now_us().wrapping_sub(t0);
-                        dbg_log(&format!(
-                            "[SHADER] render+upload: {}us (frame {})",
-                            elapsed, viz_frame,
-                        ));
-                    }
-                }
-            }
-
-            if shader_active {
-                // Shader: 32x32 texture scaled to fullscreen by GE (bilinear).
-                backend.blit_scaled(shader_tex, 0, 0, SCREEN_WIDTH, SCREEN_HEIGHT);
-            } else {
-                // Static gradient: 64x64 texture scaled to fullscreen.
-                backend.blit_scaled(wallpaper_tex, 0, 0, SCREEN_WIDTH, SCREEN_HEIGHT);
-            }
+            wallpaper.draw(&mut backend, current_preset, &active_theme, viz_frame);
         }
         let status = cached_status;
         let fps = frame_timer.fps();
