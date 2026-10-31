@@ -80,12 +80,11 @@ impl AnB {
         if self.a == 0 {
             return index == self.b;
         }
-        let diff = index - self.b;
+        // In i64: `index - b` and the division overflow i32 for hostile
+        // values such as `2n-2147483648` (a debug-build panic).
+        let (a, diff) = (i64::from(self.a), i64::from(index) - i64::from(self.b));
         // diff must be divisible by a and the quotient non-negative.
-        if diff % self.a != 0 {
-            return false;
-        }
-        diff / self.a >= 0
+        diff % a == 0 && diff / a >= 0
     }
 }
 
@@ -102,21 +101,69 @@ pub fn element_tag(nodes: &[Node], node: usize) -> Option<&str> {
     }
 }
 
-/// Returns all element-child indices of the given node's parent, in
-/// document order.
-///
-/// If the node has no parent, returns an empty `Vec`.
-pub fn element_siblings(nodes: &[Node], node: usize) -> Vec<usize> {
-    let parent = match nodes[node].parent {
-        Some(p) => p,
-        None => return Vec::new(),
-    };
-    nodes[parent]
-        .children
-        .iter()
-        .copied()
-        .filter(|&id| matches!(nodes[id].kind, NodeKind::Element(_)))
-        .collect()
+/// Where an element sits among its parent's element children (or, for
+/// the `*-of-type` variants, among those with its tag).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct SiblingPosition {
+    /// 1-based index from the first sibling.
+    index: usize,
+    /// How many siblings are counted.
+    count: usize,
+}
+
+impl SiblingPosition {
+    /// 1-based index from the last sibling.
+    fn from_end(self) -> usize {
+        self.count - self.index + 1
+    }
+}
+
+/// [`SiblingPosition`] of `node`, scanning its parent's children once
+/// without allocating; `same_type` counts only siblings with its tag.
+/// `None` for a non-element or a node without a parent.
+fn sibling_position(nodes: &[Node], node: usize, same_type: bool) -> Option<SiblingPosition> {
+    let tag = element_tag(nodes, node)?;
+    let parent = nodes[node].parent?;
+    let mut index = 0;
+    let mut count = 0;
+    for &sib in &nodes[parent].children {
+        let counted = match element_tag(nodes, sib) {
+            Some(t) => !same_type || t == tag,
+            None => false,
+        };
+        if counted {
+            count += 1;
+            if sib == node {
+                index = count;
+            }
+        }
+    }
+    (index > 0).then_some(SiblingPosition { index, count })
+}
+
+/// How many sibling nodes matching structural pseudo-class `name`
+/// against `node` scans: the parent's child count for the sibling-index
+/// ones (`:nth-child()`, `:last-of-type`, ...), else 0. The cascade
+/// charges this to its traversal budget, so `:has(~ :nth-last-child(..))`
+/// over thousands of siblings cannot go cubic.
+pub fn structural_scan_cost(nodes: &[Node], node: usize, name: &str) -> usize {
+    let scans_siblings = matches!(
+        name,
+        "first-child"
+            | "last-child"
+            | "first-of-type"
+            | "last-of-type"
+            | "only-child"
+            | "only-of-type"
+            | "nth-child"
+            | "nth-last-child"
+            | "nth-of-type"
+            | "nth-last-of-type"
+    );
+    match nodes[node].parent {
+        Some(p) if scans_siblings => nodes[p].children.len(),
+        _ => 0,
+    }
 }
 
 /// Check whether an element has an attribute with the given name.
@@ -184,58 +231,25 @@ pub fn matches_last_child(nodes: &[Node], node: usize) -> bool {
 /// Matches `:first-of-type` -- the node is the first sibling with
 /// the same tag name.
 pub fn matches_first_of_type(nodes: &[Node], node: usize) -> bool {
-    let tag = match element_tag(nodes, node) {
-        Some(t) => t,
-        None => return false,
-    };
-    let siblings = element_siblings(nodes, node);
-    for &sib in &siblings {
-        if element_tag(nodes, sib) == Some(tag) {
-            return sib == node;
-        }
-    }
-    false
+    sibling_position(nodes, node, true).is_some_and(|p| p.index == 1)
 }
 
 /// Matches `:last-of-type` -- the node is the last sibling with the
 /// same tag name.
 pub fn matches_last_of_type(nodes: &[Node], node: usize) -> bool {
-    let tag = match element_tag(nodes, node) {
-        Some(t) => t,
-        None => return false,
-    };
-    let siblings = element_siblings(nodes, node);
-    for &sib in siblings.iter().rev() {
-        if element_tag(nodes, sib) == Some(tag) {
-            return sib == node;
-        }
-    }
-    false
+    sibling_position(nodes, node, true).is_some_and(|p| p.index == p.count)
 }
 
 /// Matches `:only-child` -- the node is the only element child of
 /// its parent.
 pub fn matches_only_child(nodes: &[Node], node: usize) -> bool {
-    if !is_element(nodes, node) {
-        return false;
-    }
-    let siblings = element_siblings(nodes, node);
-    siblings.len() == 1 && siblings[0] == node
+    sibling_position(nodes, node, false).is_some_and(|p| p.count == 1)
 }
 
 /// Matches `:only-of-type` -- the node is the only sibling with its
 /// tag name.
 pub fn matches_only_of_type(nodes: &[Node], node: usize) -> bool {
-    let tag = match element_tag(nodes, node) {
-        Some(t) => t,
-        None => return false,
-    };
-    let siblings = element_siblings(nodes, node);
-    let same_type_count = siblings
-        .iter()
-        .filter(|&&sib| element_tag(nodes, sib) == Some(tag))
-        .count();
-    same_type_count == 1
+    sibling_position(nodes, node, true).is_some_and(|p| p.count == 1)
 }
 
 /// Matches `:empty` -- the element has no child elements and no
@@ -260,94 +274,41 @@ pub fn matches_empty(nodes: &[Node], node: usize) -> bool {
     true
 }
 
+/// Match `expr` (an `an+b` formula) against `node`'s position: among all
+/// element siblings or only those of its type, counted from the start
+/// or the end.
+fn matches_nth(nodes: &[Node], node: usize, expr: &str, same_type: bool, from_end: bool) -> bool {
+    let Some(anb) = AnB::parse(expr) else {
+        return false;
+    };
+    sibling_position(nodes, node, same_type).is_some_and(|p| {
+        let index = if from_end { p.from_end() } else { p.index };
+        i32::try_from(index).is_ok_and(|i| anb.matches(i))
+    })
+}
+
 /// Matches `:nth-child(an+b)` -- 1-based position among element
 /// siblings.
 pub fn matches_nth_child(nodes: &[Node], node: usize, expr: &str) -> bool {
-    if !is_element(nodes, node) {
-        return false;
-    }
-    let anb = match AnB::parse(expr) {
-        Some(v) => v,
-        None => return false,
-    };
-    let siblings = element_siblings(nodes, node);
-    let pos = siblings.iter().position(|&s| s == node);
-    match pos {
-        Some(i) => anb.matches(i as i32 + 1),
-        None => false,
-    }
+    matches_nth(nodes, node, expr, false, false)
 }
 
 /// Matches `:nth-last-child(an+b)` -- position counting from the
 /// end among element siblings.
 pub fn matches_nth_last_child(nodes: &[Node], node: usize, expr: &str) -> bool {
-    if !is_element(nodes, node) {
-        return false;
-    }
-    let anb = match AnB::parse(expr) {
-        Some(v) => v,
-        None => return false,
-    };
-    let siblings = element_siblings(nodes, node);
-    let pos = siblings.iter().position(|&s| s == node);
-    match pos {
-        Some(i) => {
-            let from_end = (siblings.len() - i) as i32;
-            anb.matches(from_end)
-        },
-        None => false,
-    }
+    matches_nth(nodes, node, expr, false, true)
 }
 
 /// Matches `:nth-of-type(an+b)` -- 1-based position among siblings
 /// of the same tag type.
 pub fn matches_nth_of_type(nodes: &[Node], node: usize, expr: &str) -> bool {
-    let tag = match element_tag(nodes, node) {
-        Some(t) => t,
-        None => return false,
-    };
-    let anb = match AnB::parse(expr) {
-        Some(v) => v,
-        None => return false,
-    };
-    let siblings = element_siblings(nodes, node);
-    let same_type: Vec<usize> = siblings
-        .iter()
-        .copied()
-        .filter(|&s| element_tag(nodes, s) == Some(tag))
-        .collect();
-    let pos = same_type.iter().position(|&s| s == node);
-    match pos {
-        Some(i) => anb.matches(i as i32 + 1),
-        None => false,
-    }
+    matches_nth(nodes, node, expr, true, false)
 }
 
 /// Matches `:nth-last-of-type(an+b)` -- position counting from the
 /// end among siblings of the same tag type.
 pub fn matches_nth_last_of_type(nodes: &[Node], node: usize, expr: &str) -> bool {
-    let tag = match element_tag(nodes, node) {
-        Some(t) => t,
-        None => return false,
-    };
-    let anb = match AnB::parse(expr) {
-        Some(v) => v,
-        None => return false,
-    };
-    let siblings = element_siblings(nodes, node);
-    let same_type: Vec<usize> = siblings
-        .iter()
-        .copied()
-        .filter(|&s| element_tag(nodes, s) == Some(tag))
-        .collect();
-    let pos = same_type.iter().position(|&s| s == node);
-    match pos {
-        Some(i) => {
-            let from_end = (same_type.len() - i) as i32;
-            anb.matches(from_end)
-        },
-        None => false,
-    }
+    matches_nth(nodes, node, expr, true, true)
 }
 
 /// Matches `:root` -- the element is the document root.
@@ -1223,16 +1184,41 @@ mod tests {
     }
 
     #[test]
-    fn element_siblings_helper() {
+    fn sibling_position_helper() {
         let nodes = build_basic_dom();
-        let sibs = element_siblings(&nodes, 3);
-        assert_eq!(sibs, vec![3, 4, 5]);
+        assert_eq!(
+            sibling_position(&nodes, 4, false),
+            Some(SiblingPosition { index: 2, count: 3 })
+        );
+        assert_eq!(
+            sibling_position(&nodes, 4, false).map(|p| p.from_end()),
+            Some(2)
+        );
     }
 
     #[test]
-    fn element_siblings_no_parent() {
+    fn sibling_position_no_parent() {
         let nodes = vec![elem("div")];
-        assert!(element_siblings(&nodes, 0).is_empty());
+        assert_eq!(sibling_position(&nodes, 0, false), None);
+        assert_eq!(structural_scan_cost(&nodes, 0, "nth-child"), 0);
+    }
+
+    /// Regression: `:nth-child(2n-2147483648)` overflowed `index - b`
+    /// (a panic in debug builds).
+    #[test]
+    fn anb_extremes_do_not_overflow() {
+        let anb = AnB::parse("2n-2147483648").unwrap();
+        assert!(anb.matches(2));
+        assert!(!anb.matches(3));
+        let anb = AnB { a: -1, b: i32::MAX };
+        assert!(anb.matches(i32::MAX));
+        assert!(
+            !AnB {
+                a: i32::MIN,
+                b: i32::MAX
+            }
+            .matches(i32::MIN)
+        );
     }
 
     #[test]

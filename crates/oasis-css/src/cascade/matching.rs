@@ -30,6 +30,11 @@ const MAX_SELECTOR_DEPTH: usize = 64;
 /// selector/DOM combinations; ordinary pages stay far below it.
 const MAX_TRAVERSAL_STEPS: usize = 16_384;
 
+/// Sibling nodes structural pseudo-classes may scan while matching one
+/// selector against one element (see `Budget::charge_scan`): one check
+/// on a list of up to this many children always fits.
+const MAX_STRUCTURAL_SCAN: usize = 128 * 1024;
+
 // -----------------------------------------------------------------------
 // Matched declaration types
 // -----------------------------------------------------------------------
@@ -877,6 +882,9 @@ enum MatchResult {
 /// match" for the whole selector (including under `:not()`).
 struct Budget {
     left: std::cell::Cell<usize>,
+    /// Separate allowance for sibling-index pseudo-class scans
+    /// ([`Budget::charge_scan`]).
+    scan_left: std::cell::Cell<usize>,
     exhausted: std::cell::Cell<bool>,
 }
 
@@ -884,8 +892,27 @@ impl Budget {
     fn new() -> Self {
         Self {
             left: std::cell::Cell::new(MAX_TRAVERSAL_STEPS),
+            scan_left: std::cell::Cell::new(MAX_STRUCTURAL_SCAN),
             exhausted: std::cell::Cell::new(false),
         }
+    }
+
+    /// Consume `n` nodes of sibling-list scanning by a structural
+    /// pseudo-class (`:nth-child()`, `:last-of-type`, ...); `false` once
+    /// that allowance is spent. Kept apart from the step budget so one
+    /// `li:nth-child(odd)` on a huge list still matches, while the same
+    /// check repeated per candidate (`:has(~ :nth-last-child(..))`,
+    /// `.a ~ :nth-child(..)`) can no longer go cubic.
+    #[inline]
+    fn charge_scan(&self, n: usize) -> bool {
+        let left = self.scan_left.get();
+        if n > left {
+            self.scan_left.set(0);
+            self.exhausted.set(true);
+            return false;
+        }
+        self.scan_left.set(left - n);
+        true
     }
 
     /// Consume one step; `false` once the budget is spent.
@@ -1175,9 +1202,15 @@ fn matches_simple(
         SimpleSelector::Type(tag_name) => elem.tag.as_str().eq_ignore_ascii_case(tag_name),
         SimpleSelector::Class(cls) => elem.has_class(cls),
         SimpleSelector::Id(id) => elem.get_attribute("id").is_some_and(|v| v == id),
-        SimpleSelector::PseudoClass(pseudo) => match_pseudo_class(doc, node_id, elem, pseudo, ctx),
+        // Sibling-index pseudo-classes scan the parent's child list: that
+        // work is charged like a sibling combinator walk.
+        SimpleSelector::PseudoClass(pseudo) => {
+            budget.charge_scan(selectors::structural_scan_cost(&doc.nodes, node_id, pseudo))
+                && match_pseudo_class(doc, node_id, elem, pseudo, ctx)
+        },
         SimpleSelector::PseudoClassFn(name, arg) => {
-            match_pseudo_class_fn(doc, node_id, elem, name, arg)
+            budget.charge_scan(selectors::structural_scan_cost(&doc.nodes, node_id, name))
+                && match_pseudo_class_fn(doc, node_id, elem, name, arg)
         },
         // An inner result cut short by the budget is "unknown", not
         // "no match": it must not turn into a `:not()` match.
@@ -1364,6 +1397,14 @@ fn matches_has(
             // For Descendant the scope bounding is sufficient; for Child
             // the leading-combinator check verifies the leftmost matched
             // compound is a direct child of the subject.
+            // `:has(> x)` with a one-compound selector can only match a
+            // direct child: scanning the whole subtree (last child
+            // first) could spend the budget before reaching one.
+            Combinator::Child if sel.parts.len() == 1 => doc.nodes[node_id]
+                .children
+                .iter()
+                .take_while(|_| budget.tick())
+                .any(|&cid| matches!(doc.nodes[cid].kind, NodeKind::Element(_)) && matched(cid)),
             Combinator::Descendant | Combinator::Child => any_in_subtree(node_id, &matched),
             Combinator::AdjacentSibling => match sibling_slot(doc, node_id, budget) {
                 SiblingSlot::At(kids, pos) => {

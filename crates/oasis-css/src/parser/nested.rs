@@ -10,6 +10,33 @@ use super::types::{
     SelectorList,
 };
 
+/// Most selectors one flattened rule may carry. Nesting combines parent
+/// and child lists as a Cartesian product, so `a,b{a,b{a,b{...` doubles
+/// per level (2^32 at the nesting cap); past this the rule and its
+/// children are dropped.
+const MAX_FLATTENED_SELECTORS: usize = 1024;
+
+/// Most compound selectors in one flattened selector: every `&` splices
+/// in the whole parent chain, so `& & &{& & &{...` grows geometrically.
+/// Longer selectors are dropped from their list.
+const MAX_SELECTOR_COMPOUNDS: usize = 64;
+
+/// The selector list `&`: the parent selector. Bare declarations in a
+/// nested at-rule (`.a { @media (..) { color: red } }`) become a nested
+/// rule with it.
+pub(super) fn nesting_selector_list() -> SelectorList {
+    SelectorList {
+        selectors: vec![Selector {
+            parts: vec![(
+                CompoundSelector {
+                    parts: vec![types::SimpleSelector::Nest],
+                },
+                None,
+            )],
+        }],
+    }
+}
+
 /// A rule as it comes out of the parser, possibly carrying nested child
 /// rules from CSS Nesting. Flattened into concrete [`Rule`]s by
 /// [`flatten_nested_rule`] before the stylesheet is finalised.
@@ -48,7 +75,13 @@ pub(super) fn flatten_nested_rule(
 
     let effective = match parent {
         None => selectors,
-        Some(parent_list) => combine_selector_lists(parent_list, &selectors),
+        Some(parent_list) => match combine_selector_lists(parent_list, &selectors) {
+            Some(list) => list,
+            None => {
+                log::warn!("CSS nesting: flattened selector list too large, rule dropped");
+                return;
+            },
+        },
     };
 
     // Skip emitting an empty-body parent rule when it exists purely as a
@@ -71,29 +104,45 @@ pub(super) fn flatten_nested_rule(
 
 /// Combine a parent selector list with a child selector list using the
 /// CSS Nesting desugaring rules. Produces the Cartesian product of
-/// (parent × child) with `&` substituted for each parent selector.
-fn combine_selector_lists(parent: &SelectorList, child: &SelectorList) -> SelectorList {
-    let mut out = Vec::with_capacity(parent.selectors.len() * child.selectors.len());
+/// (parent × child) with `&` substituted for each parent selector, or
+/// `None` when that would exceed [`MAX_FLATTENED_SELECTORS`] (or leave no
+/// selector within [`MAX_SELECTOR_COMPOUNDS`]).
+fn combine_selector_lists(parent: &SelectorList, child: &SelectorList) -> Option<SelectorList> {
+    let count = parent.selectors.len().saturating_mul(child.selectors.len());
+    if count > MAX_FLATTENED_SELECTORS {
+        return None;
+    }
+    let mut out = Vec::with_capacity(count);
     for child_sel in &child.selectors {
         for parent_sel in &parent.selectors {
-            out.push(combine_parent_child(parent_sel, child_sel));
+            if let Some(sel) = combine_parent_child(parent_sel, child_sel) {
+                out.push(sel);
+            }
         }
     }
-    SelectorList { selectors: out }
+    (!out.is_empty()).then_some(SelectorList { selectors: out })
 }
 
 /// Combine one parent selector with one child selector. Replaces each
 /// occurrence of the nesting marker `&` in `child` with `parent`'s
 /// compound chain. If `child` does not contain `&`, the result is
-/// `parent <descendant> child`.
-fn combine_parent_child(parent: &Selector, child: &Selector) -> Selector {
-    let child_has_nest = child.parts.iter().any(|(c, _)| {
-        c.parts
-            .iter()
-            .any(|s| matches!(s, types::SimpleSelector::Nest))
-    });
+/// `parent <descendant> child`. `None` when the result would have more
+/// than [`MAX_SELECTOR_COMPOUNDS`] compounds.
+fn combine_parent_child(parent: &Selector, child: &Selector) -> Option<Selector> {
+    let nests = child
+        .parts
+        .iter()
+        .filter(|(c, _)| {
+            c.parts
+                .iter()
+                .any(|s| matches!(s, types::SimpleSelector::Nest))
+        })
+        .count();
+    if child.parts.len() + parent.parts.len() * nests.max(1) > MAX_SELECTOR_COMPOUNDS {
+        return None;
+    }
 
-    if !child_has_nest {
+    if nests == 0 {
         // Implicit `& descendant`: prepend parent chain before child,
         // with a descendant combinator linking them.
         let mut parts = parent.parts.clone();
@@ -105,7 +154,7 @@ fn combine_parent_child(parent: &Selector, child: &Selector) -> Selector {
             };
             parts.push((compound.clone(), effective_comb));
         }
-        return Selector { parts };
+        return Some(Selector { parts });
     }
 
     // Child contains `&` — splice parent into each occurrence.
@@ -158,5 +207,5 @@ fn combine_parent_child(parent: &Selector, child: &Selector) -> Selector {
         }
     }
 
-    Selector { parts: out }
+    Some(Selector { parts: out })
 }

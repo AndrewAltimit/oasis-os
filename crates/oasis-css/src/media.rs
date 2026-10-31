@@ -65,15 +65,25 @@ pub(crate) fn eval_media_query_with_viewport(query: &str, viewport: MediaViewpor
 }
 
 pub(crate) fn eval_single_media_query(query: &str, viewport: MediaViewport) -> bool {
+    // A leading `not`, possibly repeated, is peeled in a loop: one
+    // recursion per `not` let `not not not ...` overflow the stack.
+    let mut query = query.trim();
+    let mut negated = false;
+    while let Some(rest) = query.strip_prefix("not ") {
+        query = rest.trim_start();
+        negated = !negated;
+    }
+    eval_positive_media_query(query, viewport) != negated
+}
+
+/// [`eval_single_media_query`] without a leading `not`.
+fn eval_positive_media_query(query: &str, viewport: MediaViewport) -> bool {
     let query = query.trim();
     if query.is_empty() || query == "all" || query == "screen" {
         return true;
     }
-    if query == "print" || query == "not screen" {
+    if query == "print" {
         return false;
-    }
-    if let Some(rest) = query.strip_prefix("not ") {
-        return !eval_single_media_query(rest, viewport);
     }
     // Handle compound conditions like "screen and (max-width: 600px)".
     // Split on " and " and evaluate each part.
@@ -157,8 +167,21 @@ pub(crate) fn eval_single_media_query(query: &str, viewport: MediaViewport) -> b
 
 /// Parse a pixel value like "600px" or "600" from a media query.
 pub(crate) fn parse_px_value(s: &str) -> f32 {
-    let s = s.trim().trim_end_matches("px");
-    s.parse::<f32>().unwrap_or(0.0)
+    // `em` / `rem` in a media query are relative to the initial font
+    // size (Media Queries 4 §1.3), 16px. Regression: `48em` parsed as 0,
+    // so every `(min-width: 48em)` breakpoint matched and every
+    // `(max-width: 48em)` one never did.
+    const INITIAL_FONT_SIZE: f32 = 16.0;
+    let s = s.trim();
+    let lower = s.to_ascii_lowercase();
+    let (num, scale) = if let Some(n) = lower.strip_suffix("rem") {
+        (n, INITIAL_FONT_SIZE)
+    } else if let Some(n) = lower.strip_suffix("em") {
+        (n, INITIAL_FONT_SIZE)
+    } else {
+        (lower.strip_suffix("px").unwrap_or(&lower), 1.0)
+    };
+    num.trim().parse::<f32>().map_or(0.0, |v| v * scale)
 }
 
 #[cfg(test)]
@@ -178,6 +201,25 @@ mod tests {
     #[test]
     fn parse_px_value_without_unit() {
         assert!((parse_px_value("480") - 480.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn parse_px_value_em_and_rem_use_the_initial_font_size() {
+        assert!((parse_px_value("48em") - 768.0).abs() < f32::EPSILON);
+        assert!((parse_px_value("2.5REM") - 40.0).abs() < f32::EPSILON);
+        let vp = MediaViewport::DEFAULT;
+        assert!(!eval_single_media_query("(min-width: 48em)", vp));
+        assert!(eval_single_media_query("(max-width: 48em)", vp));
+    }
+
+    #[test]
+    fn repeated_not_is_peeled_iteratively() {
+        let vp = MediaViewport::DEFAULT;
+        assert!(eval_single_media_query("not not screen", vp));
+        assert!(!eval_single_media_query("not screen", vp));
+        // Deep enough to overflow the stack with one frame per `not`.
+        let deep = format!("{}print", "not ".repeat(200_001));
+        assert!(eval_single_media_query(&deep, vp));
     }
 
     #[test]

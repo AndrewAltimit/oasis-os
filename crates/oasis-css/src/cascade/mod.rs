@@ -772,6 +772,9 @@ pub(super) fn apply_cascaded(
 /// Bound on [`SUBSTITUTED_CACHE`] entries before it is cleared.
 const SUBSTITUTED_CACHE_MAX: usize = 4096;
 
+/// Longest substituted value text [`SUBSTITUTED_CACHE`] keeps.
+const SUBSTITUTED_CACHE_MAX_KEY: usize = 1024;
+
 /// Parsed declarations keyed by property, then by substituted value text.
 #[derive(Default)]
 struct SubstitutedCache {
@@ -794,6 +797,11 @@ fn parse_substituted_cached(property: &str, text: &str) -> Rc<[Declaration]> {
             return Rc::clone(hit);
         }
         let parsed: Rc<[Declaration]> = parse_substituted_declaration(property, text).into();
+        // Long values are not worth keeping: design tokens are short, and
+        // 4096 hostile 64 KiB keys would pin 256 MiB per thread.
+        if text.len() > SUBSTITUTED_CACHE_MAX_KEY {
+            return parsed;
+        }
         if cache.entries >= SUBSTITUTED_CACHE_MAX {
             cache.map.clear();
             cache.entries = 0;
