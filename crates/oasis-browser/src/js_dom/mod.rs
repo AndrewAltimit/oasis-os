@@ -190,8 +190,9 @@ fn install_document_global_full(
     let dirty = dom_dirty.map(Rc::clone);
 
     let freed: node_api::FreedLog = Rc::new(RefCell::new(Vec::new()));
-    bindings::install_dom_bindings(ctx, doc, &dirty, &freed)?;
-    node_api::install_node_bindings(ctx, doc, &dirty, &freed)?;
+    let budget: node_api::ByteBudget = Rc::default();
+    bindings::install_dom_bindings(ctx, doc, &dirty, &freed, &budget)?;
+    node_api::install_node_bindings(ctx, doc, &dirty, &freed, &budget)?;
     bindings::install_nav_bindings(ctx, nav_actions)?;
     fetch::install_fetch_binding(ctx, url, csp, tls)?;
     bindings::install_computed_style_binding(ctx, styles)?;

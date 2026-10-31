@@ -181,7 +181,8 @@ pub fn layout_inline(parent: &mut LayoutBox, measurer: &dyn TextMeasurer) {
         }) = line.fragments.last_mut()
             && *soft_hyphen
         {
-            let hyphen_w = measurer.measure_text("-", style.font_size as u16) as f32;
+            let hyphen_w =
+                measurer.measure_text_font("-", style.font_size as u16, style.web_font_id) as f32;
             text.push('-');
             *width += hyphen_w;
             *soft_hyphen = false; // consumed
@@ -269,7 +270,12 @@ pub fn layout_inline(parent: &mut LayoutBox, measurer: &dyn TextMeasurer) {
                     && !text.ends_with('\n')
                 {
                     text.push(' ');
-                    let sw = measure_space(style.font_size, style.word_spacing, measurer);
+                    let sw = measure_space(
+                        style.font_size,
+                        style.word_spacing,
+                        style.web_font_id,
+                        measurer,
+                    );
                     *width += sw;
                 }
                 // Remove the penultimate line if it's now empty to avoid
@@ -675,7 +681,7 @@ pub fn make_text_fragments(
     let font_size = style.font_size;
     let letter_spacing = style.letter_spacing;
     let word_spacing = style.word_spacing;
-    let space_width = measure_space(font_size, word_spacing, measurer);
+    let space_width = measure_space(font_size, word_spacing, style.web_font_id, measurer);
     let mut fragments = Vec::with_capacity(words.len());
 
     for word in &words {
@@ -693,7 +699,13 @@ pub fn make_text_fragments(
             continue;
         }
 
-        let word_width = measure_word(&word.text, font_size, letter_spacing, measurer);
+        let word_width = measure_word(
+            &word.text,
+            font_size,
+            letter_spacing,
+            style.web_font_id,
+            measurer,
+        );
         let mut total_width = word_width;
         let mut display_text = word.text.clone();
 
@@ -782,7 +794,11 @@ fn break_word_fragment(
         let font_px = style.font_size as u16;
         let advances: Vec<f32> = chars
             .iter()
-            .map(|c| measurer.measure_text(c.encode_utf8(&mut [0u8; 4]), font_px) as f32)
+            .map(|c| {
+                let mut buf = [0u8; 4];
+                let ch = c.encode_utf8(&mut buf);
+                measurer.measure_text_font(ch, font_px, style.web_font_id) as f32
+            })
             .collect();
         let mut pieces = Vec::new();
         let mut start = 0;
@@ -802,8 +818,13 @@ fn break_word_fragment(
             }
             // end is now one past the last character that fits.
             let piece_text: String = chars[start..end].iter().collect();
-            let piece_width =
-                measure_word(&piece_text, style.font_size, style.letter_spacing, measurer);
+            let piece_width = measure_word(
+                &piece_text,
+                style.font_size,
+                style.letter_spacing,
+                style.web_font_id,
+                measurer,
+            );
             pieces.push(InlineFragment::Text {
                 text: piece_text,
                 x: 0.0,
@@ -840,7 +861,12 @@ fn trim_line_boundary_spaces(line: &mut LineBox, measurer: &dyn TextMeasurer) {
         && text.starts_with(' ')
     {
         *text = text[1..].to_string();
-        let sw = measure_space(style.font_size, style.word_spacing, measurer);
+        let sw = measure_space(
+            style.font_size,
+            style.word_spacing,
+            style.web_font_id,
+            measurer,
+        );
         *width = (*width - sw).max(0.0);
     }
 
@@ -851,7 +877,12 @@ fn trim_line_boundary_spaces(line: &mut LineBox, measurer: &dyn TextMeasurer) {
         && text.ends_with(' ')
     {
         text.pop();
-        let sw = measure_space(style.font_size, style.word_spacing, measurer);
+        let sw = measure_space(
+            style.font_size,
+            style.word_spacing,
+            style.web_font_id,
+            measurer,
+        );
         *width = (*width - sw).max(0.0);
     }
 }
@@ -1464,6 +1495,7 @@ mod tests {
                     text,
                     style.font_size,
                     style.letter_spacing,
+                    None,
                     &m,
                 );
                 assert!(

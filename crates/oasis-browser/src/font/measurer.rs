@@ -42,6 +42,16 @@ impl<'a> FontAwareTextMeasurer<'a> {
 }
 
 impl TextMeasurer for FontAwareTextMeasurer<'_> {
+    fn measure_text_font(&self, text: &str, font_size: u16, web_font: Option<u32>) -> u32 {
+        if let Some(raw) = web_font {
+            let reg = self.registry.borrow();
+            if reg.font_count() > raw as usize {
+                return reg.measure_text(text, font_size as f32, FontId::from_raw(raw));
+            }
+        }
+        self.inner.measure_text_font(text, font_size, None)
+    }
+
     fn measure_text(&self, text: &str, font_size: u16) -> u32 {
         if let Some(font_id) = *self.active_font.borrow() {
             let reg = self.registry.borrow();

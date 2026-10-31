@@ -4,8 +4,10 @@
 //! [`NetworkStream`] in a TLS session.  The browser and networking
 //! code use this trait so they never depend on a concrete TLS library.
 
+use std::net::IpAddr;
+
 use crate::backend::NetworkStream;
-use crate::error::Result;
+use crate::error::{OasisError, Result};
 
 /// Result of a TLS handshake that carried an ALPN offer.
 ///
@@ -49,25 +51,56 @@ pub trait TlsProvider: Send + Sync {
         })
     }
 
+    /// Resolve `host` to its addresses (empty when it cannot be resolved).
+    ///
+    /// The default uses the std resolver. PSP overrides it with the
+    /// firmware resolver, so callers that classify a host before
+    /// connecting (the browser's private-network check) see the same
+    /// addresses the connection will use.
+    fn resolve_host(&self, host: &str) -> Vec<IpAddr> {
+        use std::net::ToSocketAddrs;
+        (host, 0)
+            .to_socket_addrs()
+            .map(|addrs| addrs.map(|a| a.ip()).collect())
+            .unwrap_or_default()
+    }
+
     /// Open a raw TCP connection to `host:port`.
     ///
     /// The default implementation uses `std::net::TcpStream` which works
     /// on desktop. PSP overrides this with raw `sceNetInet*` sockets
     /// since `std::net` is not supported on that platform.
     fn connect_tcp(&self, host: &str, port: u16) -> Result<Box<dyn NetworkStream>> {
+        self.connect_tcp_checked(host, port, &|_| true)
+    }
+
+    /// Like [`connect_tcp`](Self::connect_tcp), but dial only an address
+    /// `addr_ok` accepts. The host is resolved once and the checked
+    /// address is the one connected to, so a DNS answer cannot change
+    /// between the check and the connect (rebinding). Errors when no
+    /// resolved address passes.
+    fn connect_tcp_checked(
+        &self,
+        host: &str,
+        port: u16,
+        addr_ok: &dyn Fn(IpAddr) -> bool,
+    ) -> Result<Box<dyn NetworkStream>> {
         use std::io::{self, Read, Write};
         use std::net::ToSocketAddrs;
         use std::time::Duration;
 
-        let addr = format!("{host}:{port}")
+        let addrs: Vec<_> = format!("{host}:{port}")
             .to_socket_addrs()
-            .map_err(|e| {
-                crate::error::OasisError::Backend(format!("DNS resolution failed: {e}").into())
-            })?
-            .next()
-            .ok_or_else(|| {
-                crate::error::OasisError::Backend(format!("no addresses for {host}:{port}").into())
-            })?;
+            .map_err(|e| OasisError::Backend(format!("DNS resolution failed: {e}").into()))?
+            .collect();
+        if addrs.is_empty() {
+            return Err(OasisError::Backend(
+                format!("no addresses for {host}:{port}").into(),
+            ));
+        }
+        let addr = addrs.into_iter().find(|a| addr_ok(a.ip())).ok_or_else(|| {
+            OasisError::Backend(format!("{host}:{port} blocked by request policy").into())
+        })?;
 
         let stream =
             std::net::TcpStream::connect_timeout(&addr, Duration::from_secs(15)).map_err(|e| {
@@ -130,6 +163,30 @@ mod tests {
             }
             Ok(_stream) // pass-through for testing
         }
+    }
+
+    #[test]
+    fn checked_connect_refuses_a_rejected_address_before_dialing() {
+        // `localhost` resolves without a network; rejecting every
+        // address must fail before any socket is opened.
+        let err = MockTlsProvider
+            .connect_tcp_checked("localhost", 9, &|_| false)
+            .err()
+            .map(|e| e.to_string())
+            .unwrap_or_default();
+        assert!(err.contains("blocked by request policy"), "{err}");
+    }
+
+    #[test]
+    fn default_resolver_classifies_literals_and_localhost() {
+        let ips = MockTlsProvider.resolve_host("127.0.0.1");
+        assert_eq!(ips, vec![IpAddr::from([127, 0, 0, 1])]);
+        assert!(
+            MockTlsProvider
+                .resolve_host("localhost")
+                .iter()
+                .all(|ip| ip.is_loopback())
+        );
     }
 
     #[test]

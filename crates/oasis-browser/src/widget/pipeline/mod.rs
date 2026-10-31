@@ -18,7 +18,7 @@ use crate::loader::{
     self, ContentType, ResourceRequest, ResourceResponse, ResourceSource, load_resource,
 };
 use crate::reader;
-use crate::{BrowserWidget, LoadingState, SimpleTextMeasurer};
+use crate::{BrowserWidget, LoadingState};
 
 #[cfg(native_net)]
 use crate::loader::io_thread::{IoRequestKind, IoThread};

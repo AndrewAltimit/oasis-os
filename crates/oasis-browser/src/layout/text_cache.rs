@@ -115,6 +115,15 @@ impl<'a> CachingMeasurer<'a> {
 }
 
 impl TextMeasurer for CachingMeasurer<'_> {
+    /// Web-font runs bypass the cache: it is keyed by text and size only,
+    /// so a cached bitmap width would be returned for the web face.
+    fn measure_text_font(&self, text: &str, font_size: u16, web_font: Option<u32>) -> u32 {
+        match web_font {
+            Some(_) => self.inner.measure_text_font(text, font_size, web_font),
+            None => self.measure_text(text, font_size),
+        }
+    }
+
     fn measure_text(&self, text: &str, font_size: u16) -> u32 {
         let hash = text_hash(text);
         let key = (hash, font_size);

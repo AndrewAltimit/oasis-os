@@ -243,14 +243,16 @@ fn split_line_into_words(line: &str, out: &mut Vec<TextWord>) {
 
 /// Measure a word's pixel width using the backend text measurer.
 ///
-/// Adds `letter_spacing` between each pair of characters.
+/// Adds `letter_spacing` between each pair of characters. `web_font` is
+/// the run's `ComputedStyle::web_font_id`.
 pub fn measure_word(
     word: &str,
     font_size: f32,
     letter_spacing: f32,
+    web_font: Option<u32>,
     measurer: &dyn TextMeasurer,
 ) -> f32 {
-    let base = measurer.measure_text(word, font_size as u16) as f32;
+    let base = measurer.measure_text_font(word, font_size as u16, web_font) as f32;
     if letter_spacing != 0.0 {
         let chars = word.chars().count();
         if chars > 1 {
@@ -264,8 +266,13 @@ pub fn measure_word(
 /// size.
 ///
 /// Adds `word_spacing` to the natural space width.
-pub fn measure_space(font_size: f32, word_spacing: f32, measurer: &dyn TextMeasurer) -> f32 {
-    measurer.measure_text(" ", font_size as u16) as f32 + word_spacing
+pub fn measure_space(
+    font_size: f32,
+    word_spacing: f32,
+    web_font: Option<u32>,
+    measurer: &dyn TextMeasurer,
+) -> f32 {
+    measurer.measure_text_font(" ", font_size as u16, web_font) as f32 + word_spacing
 }
 
 // -------------------------------------------------------------------
@@ -561,9 +568,48 @@ mod tests {
     // -- text measurement ---------------------------------------------
 
     #[test]
+    fn measure_word_and_space_use_the_runs_web_font() {
+        // A measurer with a distinct "web font" width: layout used to
+        // measure every run with the bitmap metrics.
+        struct WebFontMeasurer;
+        impl TextMeasurer for WebFontMeasurer {
+            fn measure_text(&self, text: &str, _font_size: u16) -> u32 {
+                text.len() as u32
+            }
+            fn measure_text_font(&self, text: &str, size: u16, web_font: Option<u32>) -> u32 {
+                match web_font {
+                    Some(_) => 10 * text.len() as u32,
+                    None => self.measure_text(text, size),
+                }
+            }
+        }
+        let m = WebFontMeasurer;
+        assert_eq!(measure_word("abc", 16.0, 0.0, None, &m), 3.0);
+        assert_eq!(measure_word("abc", 16.0, 0.0, Some(0), &m), 30.0);
+        assert_eq!(measure_space(16.0, 0.0, Some(0), &m), 10.0);
+    }
+
+    #[test]
+    fn caching_measurer_does_not_serve_bitmap_widths_for_web_fonts() {
+        struct WebFontMeasurer;
+        impl TextMeasurer for WebFontMeasurer {
+            fn measure_text(&self, text: &str, _font_size: u16) -> u32 {
+                text.len() as u32
+            }
+            fn measure_text_font(&self, text: &str, size: u16, web_font: Option<u32>) -> u32 {
+                web_font.map_or_else(|| self.measure_text(text, size), |_| 99)
+            }
+        }
+        let inner = WebFontMeasurer;
+        let cached = crate::layout::text_cache::CachingMeasurer::new(&inner);
+        assert_eq!(cached.measure_text_font("abc", 16, None), 3);
+        assert_eq!(cached.measure_text_font("abc", 16, Some(1)), 99);
+    }
+
+    #[test]
     fn measure_word_stub() {
         let m = StubMeasurer;
-        let w = measure_word("hello", 16.0, 0.0, &m);
+        let w = measure_word("hello", 16.0, 0.0, None, &m);
         // Proportional: h(7)+e(7)+l(5)+l(5)+o(7) = 31, scale=2 at font_size 16 => 62
         assert_eq!(w, 62.0);
     }
@@ -572,21 +618,21 @@ mod tests {
     fn measure_word_with_letter_spacing() {
         let m = StubMeasurer;
         // "hello" = 62px base, 5 chars, letter_spacing 2.0 => 62 + 2*(5-1) = 70
-        let w = measure_word("hello", 16.0, 2.0, &m);
+        let w = measure_word("hello", 16.0, 2.0, None, &m);
         assert_eq!(w, 70.0);
     }
 
     #[test]
     fn measure_space_stub() {
         let m = StubMeasurer;
-        let w = measure_space(16.0, 0.0, &m);
+        let w = measure_space(16.0, 0.0, None, &m);
         assert_eq!(w, 8.0);
     }
 
     #[test]
     fn measure_space_with_word_spacing() {
         let m = StubMeasurer;
-        let w = measure_space(16.0, 3.0, &m);
+        let w = measure_space(16.0, 3.0, None, &m);
         assert_eq!(w, 11.0);
     }
 
@@ -596,7 +642,7 @@ mod tests {
         // "ab" base width = 16 (8*2 at font_size 16 via StubMeasurer)
         // letter_spacing = -100 => 16 + (-100 * 1) = -84
         // Should be clamped to 0.
-        let w = measure_word("ab", 16.0, -100.0, &m);
+        let w = measure_word("ab", 16.0, -100.0, None, &m);
         assert!(
             w >= 0.0,
             "negative letter-spacing should not produce negative width, got {w}",

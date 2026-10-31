@@ -8,7 +8,7 @@
 //! evict its per-node-id wrapper cache and listener tables, so a reused
 //! slot never resolves to a stale wrapper.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 use oasis_js::rquickjs::{Ctx, Function, Result as JsResult};
@@ -43,6 +43,74 @@ pub(super) const INSERT_TOO_DEEP: i32 = -3;
 /// doubling (or a `createElement` loop) could exhaust host memory.
 /// Twice the parser's own node cap.
 pub(super) const MAX_SCRIPT_DOM_NODES: usize = 200_000;
+
+/// Most bytes of text and attribute data the document's arena may hold
+/// before script writes that add more are refused. Like the nodes, those
+/// strings live outside the JS heap limit, so without a cap a loop over
+/// `setAttribute` / `textContent` / `cloneNode` could exhaust host memory
+/// even under [`MAX_SCRIPT_DOM_NODES`].
+pub(super) const MAX_SCRIPT_DOM_BYTES: usize = if cfg!(feature = "psp") {
+    4 * 1024 * 1024
+} else {
+    64 * 1024 * 1024
+};
+
+/// Running upper bound on the document's text + attribute bytes: every
+/// script write adds its size, and [`charge_bytes`] recounts the real
+/// total (frees and overwrites are never credited one by one) only when
+/// the bound reaches [`MAX_SCRIPT_DOM_BYTES`].
+pub(super) type ByteBudget = Rc<Cell<usize>>;
+
+/// Text / comment data and attribute bytes held by one node.
+fn node_bytes(kind: &NodeKind) -> usize {
+    match kind {
+        NodeKind::Text(s) | NodeKind::Comment(s) => s.len(),
+        NodeKind::Element(e) => e
+            .attributes
+            .iter()
+            .map(|a| a.name.len() + a.value.len())
+            .sum(),
+        _ => 0,
+    }
+}
+
+/// Text + attribute bytes of every live arena node (detached ones too:
+/// they still hold their strings).
+pub(super) fn document_bytes(doc: &Document) -> usize {
+    (0..doc.nodes.len())
+        .filter(|&id| doc.is_live(id))
+        .map(|id| node_bytes(&doc.nodes[id].kind))
+        .sum()
+}
+
+/// Text + attribute bytes of `id`'s subtree (what a deep clone copies).
+pub(super) fn subtree_bytes(doc: &Document, id: NodeId) -> usize {
+    let mut n = 0;
+    let mut stack = vec![id];
+    while let Some(c) = stack.pop() {
+        n += node_bytes(&doc.nodes[c].kind);
+        stack.extend(doc.nodes[c].children.iter().copied());
+    }
+    n
+}
+
+/// Reserve `n` bytes for a script write; `false` (write refused) when
+/// the document would exceed [`MAX_SCRIPT_DOM_BYTES`]. Amortised O(1):
+/// the O(nodes) recount runs only when the running bound hits the cap.
+pub(super) fn charge_bytes(doc: &Document, budget: &ByteBudget, n: usize) -> bool {
+    let bound = budget.get().saturating_add(n);
+    if bound <= MAX_SCRIPT_DOM_BYTES {
+        budget.set(bound);
+        return true;
+    }
+    let live = document_bytes(doc);
+    let ok = live.saturating_add(n) <= MAX_SCRIPT_DOM_BYTES;
+    budget.set(if ok { live + n } else { live });
+    if !ok {
+        log::warn!("[JS] DOM write of {n} bytes refused: document at its size limit");
+    }
+    ok
+}
 
 /// Whether `n` more nodes fit under [`MAX_SCRIPT_DOM_NODES`].
 pub(super) fn has_room(doc: &Document, n: usize) -> bool {
@@ -329,10 +397,11 @@ pub(super) fn install_node_bindings(
     doc: &SharedDoc,
     dirty: &Option<SharedDirty>,
     freed: &FreedLog,
+    budget: &ByteBudget,
 ) -> JsResult<()> {
     install_traversal_bindings(ctx, doc)?;
-    install_node_data_bindings(ctx, doc, dirty)?;
-    install_fragment_bindings(ctx, doc, freed)?;
+    install_node_data_bindings(ctx, doc, dirty, budget)?;
+    install_fragment_bindings(ctx, doc, freed, budget)?;
     install_query_bindings(ctx, doc)?;
     install_freed_log_binding(ctx, freed)?;
     Ok(())
@@ -454,6 +523,7 @@ fn install_node_data_bindings(
     ctx: &Ctx<'_>,
     doc: &SharedDoc,
     dirty: &Option<SharedDirty>,
+    budget: &ByteBudget,
 ) -> JsResult<()> {
     let globals = ctx.globals();
 
@@ -476,6 +546,7 @@ fn install_node_data_bindings(
     {
         let d = Rc::clone(doc);
         let dirty = dirty.clone();
+        let budget = Rc::clone(budget);
         globals.set(
             "__oasis_set_node_value",
             Function::new(ctx.clone(), move |nid: i32, text: String| {
@@ -483,6 +554,9 @@ fn install_node_data_bindings(
                 let Some(id) = valid(&doc, nid) else {
                     return;
                 };
+                if !charge_bytes(&doc, &budget, text.len()) {
+                    return;
+                }
                 if let NodeKind::Text(s) | NodeKind::Comment(s) = &mut doc.nodes[id].kind
                     && *s != text
                 {
@@ -514,17 +588,23 @@ fn install_node_data_bindings(
 }
 
 /// Install the comment / fragment creation, fragment parsing and cloning helpers.
-fn install_fragment_bindings(ctx: &Ctx<'_>, doc: &SharedDoc, freed: &FreedLog) -> JsResult<()> {
+fn install_fragment_bindings(
+    ctx: &Ctx<'_>,
+    doc: &SharedDoc,
+    freed: &FreedLog,
+    budget: &ByteBudget,
+) -> JsResult<()> {
     let globals = ctx.globals();
 
     // -- __oasis_create_comment(text) / __oasis_create_fragment() -----
     {
         let d = Rc::clone(doc);
+        let budget_c = Rc::clone(budget);
         globals.set(
             "__oasis_create_comment",
             Function::new(ctx.clone(), move |text: String| -> i32 {
                 let mut doc = d.borrow_mut();
-                if !has_room(&doc, 1) {
+                if !has_room(&doc, 1) || !charge_bytes(&doc, &budget_c, text.len()) {
                     return NO_NODE;
                 }
                 doc.add_node(NodeKind::Comment(text)) as i32
@@ -546,11 +626,13 @@ fn install_fragment_bindings(ctx: &Ctx<'_>, doc: &SharedDoc, freed: &FreedLog) -
     // -- __oasis_parse_fragment(html) -> i32 (detached fragment) ------
     {
         let d = Rc::clone(doc);
+        let budget = Rc::clone(budget);
         globals.set(
             "__oasis_parse_fragment",
             Function::new(ctx.clone(), move |html: String| -> i32 {
                 let mut doc = d.borrow_mut();
-                if !has_room(&doc, 1) {
+                // The markup length bounds the text + attributes it parses to.
+                if !has_room(&doc, 1) || !charge_bytes(&doc, &budget, html.len()) {
                     return NO_NODE;
                 }
                 let frag = doc.add_node(NodeKind::Document);
@@ -585,14 +667,19 @@ fn install_fragment_bindings(ctx: &Ctx<'_>, doc: &SharedDoc, freed: &FreedLog) -
     // -- __oasis_clone(nid, deep) -> i32 ------------------------------
     {
         let d = Rc::clone(doc);
+        let budget = Rc::clone(budget);
         globals.set(
             "__oasis_clone",
             Function::new(ctx.clone(), move |nid: i32, deep: bool| -> i32 {
                 let mut doc = d.borrow_mut();
                 match valid(&doc, nid) {
                     Some(id) if id != doc.root => {
-                        let n = if deep { subtree_size(&doc, id) } else { 1 };
-                        if has_room(&doc, n) {
+                        let (n, bytes) = if deep {
+                            (subtree_size(&doc, id), subtree_bytes(&doc, id))
+                        } else {
+                            (1, node_bytes(&doc.nodes[id].kind))
+                        };
+                        if has_room(&doc, n) && charge_bytes(&doc, &budget, bytes) {
                             clone_node(&mut doc, id, deep) as i32
                         } else {
                             NO_NODE

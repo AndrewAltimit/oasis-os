@@ -10,7 +10,7 @@
 //! positioned boxes, and `overflow` values other than `visible`.
 //! Inside a BFC the algorithm works as follows:
 //!
-//! ```text
+//! ``text
 //!   containing block (available width W)
 //!   +------------------------------------+
 //!   | child A  (width = W, height = ?)   |  <- laid out first
@@ -19,7 +19,7 @@
 //!   +------------------------------------+
 //!   | child B  (width = W, height = ?)   |  <- cursor advances by A.height + margin
 //!   +------------------------------------+
-//! ```
+//! ``
 //!
 //! ## Margin collapsing
 //!
@@ -75,6 +75,15 @@ use crate::html::dom::NodeId;
 pub trait TextMeasurer {
     /// Return the width in pixels of `text` rendered at `font_size`.
     fn measure_text(&self, text: &str, font_size: u16) -> u32;
+
+    /// Width of `text` in the run's `@font-face` font (`web_font`, a
+    /// `ComputedStyle::web_font_id`), so layout measures with the face the
+    /// text is painted in. The default ignores the font; the web-font
+    /// measurer (`crate::font::FontAwareTextMeasurer`) overrides it.
+    fn measure_text_font(&self, text: &str, font_size: u16, web_font: Option<u32>) -> u32 {
+        let _ = web_font;
+        self.measure_text(text, font_size)
+    }
 }
 
 // -------------------------------------------------------------------

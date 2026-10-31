@@ -2233,6 +2233,46 @@ fn hover_restyle_is_partial() {
 }
 
 #[test]
+fn hover_restyle_reaches_descendants_and_inherited_values() {
+    // `a:hover` changes an inherited property and `a:hover b` targets a
+    // descendant: both used to stay stale because only the ancestor chain
+    // was restyled (in hash-set order, so even a parent could be
+    // cascaded after its child).
+    let html = "<html><head><style>\
+                a:hover { color: rgb(255, 0, 0); } a:hover b { color: rgb(0, 0, 255); }\
+                </style></head><body>\
+                <a href=\"x.html\"><span>s</span><b>b</b></a></body></html>";
+    let mut browser = BrowserWidget::new(BrowserConfig::default());
+    browser.load_html(html, "file:///test.html");
+    let doc = browser.document.clone().expect("document");
+    let link = browser.href_map.keys().next().copied().expect("link");
+    let child = |tag: &str| {
+        doc.nodes[link]
+            .children
+            .iter()
+            .copied()
+            .find(|&c| doc.element(c).is_some_and(|e| e.tag.as_str() == tag))
+            .expect("child element")
+    };
+    let (span, b) = (child("span"), child("b"));
+    let color = |browser: &BrowserWidget, n: NodeId| {
+        browser.styles[n].as_ref().map(|s| s.color).expect("styled")
+    };
+    let before = color(&browser, span);
+
+    let old = browser.hover_node;
+    browser.hover_node = Some(link);
+    browser.restyle_hover_affected(old);
+    assert_eq!(color(&browser, span), color(&browser, link));
+    assert_ne!(color(&browser, span), before);
+    assert_ne!(color(&browser, b), color(&browser, link));
+
+    browser.hover_node = None;
+    browser.restyle_hover_affected(Some(link));
+    assert_eq!(color(&browser, span), before);
+}
+
+#[test]
 fn page_swap_drops_stale_hover_and_focus_nodes() {
     // Regression: hovering a node deep in a large page, then loading
     // a smaller page, left `hover_node` pointing past the end of the

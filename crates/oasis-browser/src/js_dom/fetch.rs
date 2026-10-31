@@ -287,10 +287,14 @@ impl FetchTransport for NetTransport {
         {
             crate::loader::http::dns_resolve_cached(host).unwrap_or_default()
         }
+        // PSP: the firmware resolver behind the TLS provider, the same
+        // one connect_tcp_checked dials with. (WASM has no provider.)
         #[cfg(not(native_net))]
         {
-            let _ = host;
-            Vec::new()
+            self.tls
+                .as_ref()
+                .map(|tls| tls.resolve_host(host))
+                .unwrap_or_default()
         }
     }
 
@@ -322,17 +326,15 @@ impl FetchTransport for NetTransport {
             )
         };
         #[cfg(feature = "psp")]
-        let result = {
-            let _ = addr_ok;
-            crate::loader::http_psp::http_request_guarded(
-                req.method,
-                req.url,
-                req.body,
-                &headers,
-                tls,
-                redirect_ok,
-            )
-        };
+        let result = crate::loader::http_psp::http_request_guarded(
+            req.method,
+            req.url,
+            req.body,
+            &headers,
+            tls,
+            redirect_ok,
+            addr_ok,
+        );
         #[cfg(all(target_arch = "wasm32", not(feature = "psp")))]
         let result: oasis_types::error::Result<(crate::loader::ResourceResponse, Vec<_>)> = {
             let _ = (redirect_ok, addr_ok, headers, tls);
@@ -599,5 +601,50 @@ impl FetchHandler for BrowserFetchHandler {
                 resp.url
             },
         })
+    }
+}
+
+/// The PSP transport (no `native_net`) resolves through the TLS provider;
+/// before, it returned no addresses, so every DNS name counted as public
+/// and a public page could `fetch()` an intranet host by name.
+#[cfg(all(test, not(native_net)))]
+mod tests {
+    use super::*;
+    use oasis_types::backend::NetworkStream;
+
+    struct FixedDns;
+
+    impl TlsProvider for FixedDns {
+        fn connect_tls(
+            &self,
+            stream: Box<dyn NetworkStream>,
+            _server_name: &str,
+        ) -> oasis_types::error::Result<Box<dyn NetworkStream>> {
+            Ok(stream)
+        }
+
+        fn resolve_host(&self, host: &str) -> Vec<IpAddr> {
+            match host {
+                "intranet.example" => vec![IpAddr::from([192, 168, 1, 5])],
+                "public.example" => vec![IpAddr::from([93, 184, 216, 34])],
+                _ => Vec::new(),
+            }
+        }
+    }
+
+    #[test]
+    fn dns_names_are_classified_through_the_tls_provider() {
+        let t = NetTransport {
+            tls: Some(Arc::new(FixedDns)),
+        };
+        let resolve = |h: &str| t.resolve_host(h);
+        assert_eq!(
+            classify_host("intranet.example", &resolve),
+            NetClass::Private
+        );
+        assert_eq!(
+            classify_page_host("public.example", &resolve),
+            NetClass::Public
+        );
     }
 }
