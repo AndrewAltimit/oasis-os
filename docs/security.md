@@ -124,6 +124,10 @@ The HTML/CSS engine (`oasis-browser`) processes untrusted content:
   network path is `fetch()`, which is origin-checked: CORS, `connect-src`,
   no credentials in URLs, and no requests to a more private address class
   than the page's own (public < private / link-local < loopback).
+  The page's own class is fixed when its bindings are installed (the
+  least private of its host's addresses), so re-pointing the page's
+  name at `127.0.0.1` afterwards (DNS rebinding) cannot promote it;
+  every address dialled is checked again at connect time.
   Each tick has a time budget and the heap is capped
   (`BrowserConfig::js_max_exec_ms` / `js_memory_limit_bytes`: 2 s and
   64 MiB on desktop, 500 ms and 8 MiB on PSP); timers still due when the
@@ -133,7 +137,10 @@ The HTML/CSS engine (`oasis-browser`) processes untrusted content:
   chains cannot overflow the stack in the recursive cascade / layout /
   paint passes; text and comment nodes never take children. Scripts may
   grow the document to at most 200k live nodes (`QuotaExceededError`
-  past it). Freed DOM slots are tracked, so a stale node reference can't
+  past it). Other script-fed state outside the JS heap is capped too:
+  a canvas keeps at most 16 384 commands, 1 M path points and 1 MiB of
+  `fillText` text; a new `location` navigation cancels pending ones and
+  at most 16 `history` traversals queue between frames. Freed DOM slots are tracked, so a stale node reference can't
   be re-inserted. The CSS selector matcher has a per-match traversal
   budget that also pays for sibling-list scans; running out never counts
   as a match (not even under `:not()`)

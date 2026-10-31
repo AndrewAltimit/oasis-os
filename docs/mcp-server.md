@@ -168,7 +168,7 @@ skipped):
 | `Origin` present and not `http(s)://` + `127.0.0.1` / `localhost` / `[::1]` (optional `:port`); `Origin: null` is rejected | `403` |
 | `Host` present and not `127.0.0.1` / `localhost` / `[::1]` (optional `:port`) | `403` |
 | `POST` whose `Content-Type` media type is not `application/json` (parameters such as `; charset=utf-8` are fine; missing is rejected) | `415` |
-| Malformed, non-decimal or duplicate `Content-Length`; a header line without a colon or with whitespace in or before its name (incl. obs-fold continuation lines); a request line that is not `METHOD target version` | `400` |
+| Malformed, non-decimal or duplicate `Content-Length`; a duplicate `Host` or `Origin`; a header line without a colon or with whitespace in or before its name (incl. obs-fold continuation lines); a request line that is not `METHOD target version` | `400` |
 | Any `Transfer-Encoding` (only `Content-Length` bodies are supported) | `411` |
 | A version other than `HTTP/1.1` / `HTTP/1.0` | `505` |
 

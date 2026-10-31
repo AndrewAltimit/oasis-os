@@ -71,6 +71,21 @@ fn rejects_duplicate_content_length() {
 }
 
 #[test]
+fn rejects_duplicate_host_and_origin() {
+    for dup in [
+        "Host: 127.0.0.1\r\nHost: evil.example",
+        "Origin: http://evil.example\r\nOrigin: http://localhost",
+    ] {
+        let mut buf =
+            format!("POST /mcp HTTP/1.1\r\n{dup}\r\nContent-Length: 0\r\n\r\n").into_bytes();
+        assert!(
+            matches!(try_frame(&mut buf), Framing::Error(400)),
+            "{dup:?} should be rejected"
+        );
+    }
+}
+
+#[test]
 fn rejects_malformed_content_length() {
     for bad in ["abc", "-1", "+5", "1 2", ""] {
         let mut buf = format!("POST /mcp HTTP/1.1\r\nContent-Length: {bad}\r\n\r\n").into_bytes();

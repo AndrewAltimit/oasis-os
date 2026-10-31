@@ -637,6 +637,25 @@ fn set_text_logged(doc: &mut Document, id: NodeId, text: &str, freed: &FreedLog)
     }
 }
 
+/// Most history traversals (`back` / `forward`) queued between drains.
+pub(super) const MAX_PENDING_TRAVERSALS: usize = 16;
+
+/// Queue `action`, keeping the queue bounded. The queue lives outside the
+/// JS heap limit and every queued `Navigate` used to be loaded in turn,
+/// so `for (;;) location.href = big + i` both grew host memory and
+/// queued unbounded page loads. As in a browser, a new navigation
+/// cancels the pending ones; traversals are capped at
+/// [`MAX_PENDING_TRAVERSALS`].
+fn queue_nav(nav: &SharedNavActions, action: JsNavAction) {
+    let mut queue = nav.borrow_mut();
+    if matches!(action, JsNavAction::Navigate(_)) {
+        queue.clear();
+    } else if queue.len() >= MAX_PENDING_TRAVERSALS {
+        return;
+    }
+    queue.push(action);
+}
+
 /// Install `location.assign()` / `history.back()` / `history.forward()`
 /// helpers that push onto the shared navigation queue.
 pub(super) fn install_nav_bindings(ctx: &Ctx<'_>, nav_actions: &SharedNavActions) -> JsResult<()> {
@@ -648,7 +667,7 @@ pub(super) fn install_nav_bindings(ctx: &Ctx<'_>, nav_actions: &SharedNavActions
         globals.set(
             "__oasis_location_assign",
             Function::new(ctx.clone(), move |url: String| {
-                nav.borrow_mut().push(JsNavAction::Navigate(url));
+                queue_nav(&nav, JsNavAction::Navigate(url));
             })?,
         )?;
     }
@@ -659,7 +678,7 @@ pub(super) fn install_nav_bindings(ctx: &Ctx<'_>, nav_actions: &SharedNavActions
         globals.set(
             "__oasis_history_back",
             Function::new(ctx.clone(), move || {
-                nav.borrow_mut().push(JsNavAction::Back);
+                queue_nav(&nav, JsNavAction::Back);
             })?,
         )?;
     }
@@ -670,7 +689,7 @@ pub(super) fn install_nav_bindings(ctx: &Ctx<'_>, nav_actions: &SharedNavActions
         globals.set(
             "__oasis_history_forward",
             Function::new(ctx.clone(), move || {
-                nav.borrow_mut().push(JsNavAction::Forward);
+                queue_nav(&nav, JsNavAction::Forward);
             })?,
         )?;
     }

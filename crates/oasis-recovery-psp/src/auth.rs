@@ -47,6 +47,9 @@ pub const MIN_PSK_LEN: usize = 8;
 /// Longest accepted `AUTH ...` line (the answer is 69 bytes plus CR/LF).
 const MAX_AUTH_LINE: usize = 128;
 
+/// Longest a peer may take to send its whole `AUTH` line, in microseconds.
+const AUTH_DEADLINE_US: i64 = 10_000_000;
+
 /// Connections answered so far; folded into every nonce.
 static NONCE_COUNTER: AtomicU32 = AtomicU32::new(0);
 
@@ -102,7 +105,16 @@ pub fn authenticate(cfd: i32, psk: Option<&str>) -> bool {
     // send their command, so nothing after the newline belongs to us.
     let mut line = [0u8; MAX_AUTH_LINE];
     let mut len = 0;
+    // SAFETY: argument-less timer read.
+    let started = unsafe { psp::sys::sceKernelGetSystemTimeWide() };
     while !line[..len].contains(&b'\n') && len < line.len() {
+        // SO_RCVTIMEO bounds each recv, not the whole answer: without an
+        // overall deadline a peer trickling one byte per timeout could
+        // hold the single-threaded server for ~20 minutes.
+        // SAFETY: argument-less timer read.
+        if unsafe { psp::sys::sceKernelGetSystemTimeWide() } - started > AUTH_DEADLINE_US {
+            return false;
+        }
         let rest = &mut line[len..];
         // SAFETY: `rest` is a live, writable slice of exactly `rest.len()` bytes.
         let n = unsafe {
