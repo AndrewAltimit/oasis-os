@@ -1545,6 +1545,8 @@ fn original_test_page_link_click_navigates() {
     );
 }
 
+// Exercises the desktop HTTP client's error page (PSP / WASM fetch differently).
+#[cfg(native_net)]
 #[test]
 fn test_navigate_https_without_tls_shows_error() {
     let mut bw = make_browser();
@@ -1561,6 +1563,8 @@ fn test_navigate_https_without_tls_shows_error() {
     );
 }
 
+// Exercises the desktop Gemini client's error page (PSP / WASM fetch differently).
+#[cfg(native_net)]
 #[test]
 fn test_navigate_gemini_without_tls_shows_error() {
     let mut bw = make_browser();
@@ -3261,6 +3265,8 @@ fn iframe_http_mode_still_loads_vfs_pages() {
 /// renders as an unstyled vertical bullet list. Verify the engine
 /// fetches the linked sheet (via VFS here so the test is offline) and
 /// applies its rules after the first tick.
+// Exercises linked stylesheets, which load only with `native_net` (PSP / WASM skip them).
+#[cfg(native_net)]
 #[test]
 fn external_stylesheet_fetched_and_applied() {
     let mut vfs = MemoryVfs::new();
@@ -3543,6 +3549,8 @@ fn static_page_stops_wanting_frames() {
 
 /// `@import` inside a `vfs://` linked sheet is followed too (the VFS
 /// sheets load on `tick`, not on the I/O thread).
+// Exercises linked stylesheets, which load only with `native_net` (PSP / WASM skip them).
+#[cfg(native_net)]
 #[test]
 fn vfs_linked_stylesheet_imports_are_followed() {
     let mut vfs = MemoryVfs::new();
@@ -3723,6 +3731,8 @@ fn scroll_wants_frame_until_painted() {
     assert!(!browser.wants_frame(), "scroll replay must settle");
 }
 
+// Exercises the asynchronous image decode of `native_net` builds.
+#[cfg(native_net)]
 #[test]
 fn image_finishing_loading_wants_a_frame() {
     let vfs = test_vfs_with_image();
@@ -4016,6 +4026,62 @@ fn deeply_nested_flex_lays_out_quickly() {
         start.elapsed()
     );
 }
+
+/// Regression: content-sized flex items were measured by laying them
+/// out, then laid out again at their flexed size, so each nesting level
+/// laid its subtree out once more (2^depth, later ~depth^3: 1051 box
+/// layouts at depth 12 with a growing item beside a text item). Now a
+/// row item is laid out once and a column item at most twice, so the
+/// number of box layouts grows linearly with the depth.
+#[test]
+fn nested_flex_layout_count_is_linear_in_depth() {
+    let pats = [
+        ("plain", "<div style='display:flex'>", "</div>"),
+        (
+            "flex1",
+            "<div style='display:flex'><div style='flex-grow:1;flex-basis:0'>",
+            "</div></div>",
+        ),
+        (
+            "grow",
+            "<div style='display:flex'><div style='flex-grow:1'>a</div><div style='flex-grow:1'>",
+            "</div></div>",
+        ),
+        (
+            "col",
+            "<div style='display:flex;flex-direction:column;height:200px'>\
+             <div style='flex-grow:1;flex-basis:0'>",
+            "</div></div>",
+        ),
+        (
+            "colgrow",
+            "<div style='display:flex;flex-direction:column;height:200px'><div style='flex-grow:1'>",
+            "</div></div>",
+        ),
+        (
+            "rowtext",
+            "<div style='display:flex'><span>a b</span><div style='flex-grow:1;padding:1px'>",
+            "</div></div>",
+        ),
+    ];
+    for (name, open, close) in pats {
+        for depth in [4usize, 12, 24] {
+            let html = format!(
+                "<body>{}x{}</body>",
+                open.repeat(depth),
+                close.repeat(depth)
+            );
+            crate::layout::block::LAYOUT_CALLS.with(|c| c.set(0));
+            let _ = layout_of(&html);
+            let n = crate::layout::block::LAYOUT_CALLS.with(|c| c.get());
+            assert!(
+                n <= 4 * depth + 8,
+                "{name}: {n} box layouts for {depth} nested flex levels"
+            );
+        }
+    }
+}
+
 /// Regression: an all-inline flex container (a nav bar of links, or a
 /// bare text run) handed inline boxes to block layout as flex items,
 /// which sized each 0 x 0, so the links never rendered.
@@ -4056,6 +4122,123 @@ fn inline_flex_items_do_not_copy_the_container() {
     }
     let (a, b) = (&flex.children[0], &flex.children[1]);
     assert!(b.dimensions.content.x >= a.dimensions.content.x + a.dimensions.content.width);
+}
+
+/// Regression: a content-sized item with block children measured as the
+/// full container width (its blocks fill whatever they are laid out
+/// at), so there was no free space and the next item sat at the far
+/// edge or wrapped.
+#[test]
+fn flex_item_with_block_children_sizes_to_content() {
+    let root = layout_of(
+        "<body style='margin:0'><div style='display:flex'>\
+         <div><p style='margin:0'>short</p></div><div>next</div></div></body>",
+    );
+    let flex = flex_box(&root);
+    let (a, b) = (&flex.children[0], &flex.children[1]);
+    use layout::block::TextMeasurer;
+    let size = a.children[0].style.font_size as u16;
+    let short_w = SimpleTextMeasurer.measure_text("short", size) as f32;
+    assert!(
+        (a.dimensions.content.width - short_w).abs() < 1.0,
+        "item width {} vs text {short_w}",
+        a.dimensions.content.width
+    );
+    assert!((b.dimensions.content.x - a.dimensions.content.width).abs() < 1.0);
+}
+
+/// Regression: a definite `flex-basis` was used as the item's containing
+/// width, so its margin and padding came out of the basis (and the
+/// over-constrained margin rule ate the margin) and its percentage
+/// children resolved against that.
+#[test]
+fn definite_flex_basis_is_the_content_size() {
+    let root = layout_of(
+        "<body style='margin:0'><div style='display:flex'>\
+         <div style='flex-basis:100px;flex-shrink:0;padding:5px;margin-right:10px'>\
+         <div style='width:50%;height:4px'></div></div><div>x</div></div></body>",
+    );
+    let flex = flex_box(&root);
+    let (a, b) = (&flex.children[0], &flex.children[1]);
+    assert_eq!(a.dimensions.content.width, 100.0);
+    assert_eq!(a.dimensions.margin.right, 10.0);
+    assert_eq!(a.children[0].dimensions.content.width, 50.0);
+    // 100 content + 2 * 5 padding + 10 margin.
+    assert_eq!(b.dimensions.content.x, 120.0);
+    assert_eq!(
+        a.style.width,
+        css::values::Dimension::Auto,
+        "style untouched"
+    );
+}
+
+/// Regression: column containers ignored `flex-basis` and sized every
+/// item to its content before flexing.
+#[test]
+fn column_flex_honours_flex_basis_with_definite_height() {
+    let root = layout_of(
+        "<body style='margin:0'><div style='display:flex;flex-direction:column;height:200px'>\
+         <div style='flex-grow:1;flex-basis:0'>a</div>\
+         <div style='flex-grow:3;flex-basis:0'>b</div>\
+         <div style='flex-basis:40px;flex-shrink:0'></div></div></body>",
+    );
+    let flex = flex_box(&root);
+    let h: Vec<f32> = flex
+        .children
+        .iter()
+        .map(|c| c.dimensions.content.height)
+        .collect();
+    assert_eq!(h, vec![40.0, 120.0, 40.0]);
+
+    // Without a definite height the column is as tall as its content,
+    // whatever the basis: `flex: 1` (basis 0) must not collapse items.
+    let root = layout_of(
+        "<body style='margin:0'><div style='display:flex;flex-direction:column'>\
+         <div style='flex-grow:1;flex-basis:0'>a</div>\
+         <div style='flex-grow:1;flex-basis:0'>b</div></div></body>",
+    );
+    let flex = flex_box(&root);
+    assert!(
+        flex.children
+            .iter()
+            .all(|c| c.dimensions.content.height > 0.0)
+    );
+    assert_eq!(flex.dimensions.content.height, 24.0);
+}
+
+/// Grid items are stretched to their cell without losing their declared
+/// width (it was overwritten with `auto`, so a relayout measured them
+/// differently).
+#[test]
+fn grid_item_style_is_not_rewritten() {
+    let root = layout_of(
+        "<body style='margin:0'><div style='display:grid;grid-template-columns:200px 1fr'>\
+         <div style='width:50px'>a</div><div>b</div></div></body>",
+    );
+    let grid = find_box(&root, &|b| {
+        matches!(b.box_type, layout::box_model::BoxType::Grid)
+    })
+    .expect("grid");
+    let item = &grid.children[0];
+    assert_eq!(item.style.width, css::values::Dimension::Px(50.0));
+    assert_eq!(
+        item.dimensions.content.width, 200.0,
+        "stretched to the cell"
+    );
+}
+
+/// Regression: the newlines between `<tr>` / `<td>` tags of a table in
+/// inline content were laid out as spaces.
+#[test]
+fn whitespace_between_table_parts_is_not_rendered() {
+    let root = layout_of(
+        "<body><p><u>x<table>\n<tr>\n<td>a</td>\n<td>b</td>\n</tr>\n</table></u></p></body>",
+    );
+    fn blank_texts(b: &layout::box_model::LayoutBox) -> usize {
+        let own = usize::from(b.text.as_deref().is_some_and(|t| t.trim().is_empty()));
+        own + b.children.iter().map(blank_texts).sum::<usize>()
+    }
+    assert_eq!(blank_texts(&root), 0);
 }
 
 /// A blockified link item is as wide as its text: a two-word link with a

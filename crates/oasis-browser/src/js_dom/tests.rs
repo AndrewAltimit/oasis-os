@@ -1615,15 +1615,19 @@ fn script_dom_bytes_are_capped_but_overwrites_are_not_charged_forever() {
         &((1 << 19) + 3).to_string(),
     );
     // Shallow clones copy the 1 MiB attribute each time; the arena is
-    // capped well before 100 of them.
+    // capped well before 100 of them (after about cap / 1 MiB: 64 on
+    // desktop, 4 on PSP).
+    let at_least = (super::node_api::MAX_SCRIPT_DOM_BYTES >> 20) / 2 - 1;
     check(
         &engine,
-        "var d = document.createElement('div'); d.setAttribute('data-x', 'x'.repeat(1 << 20)); \
-         var n = 0, err = ''; \
-         try { for (var i = 0; i < 100; i++) { d.cloneNode(false); n++; } } \
-         catch (e) { err = e.name; } \
-         d.setAttribute('data-y', 'y'.repeat(1 << 20)); \
-         [n > 30 && n < 100, err, d.getAttribute('data-y')].join()",
+        &format!(
+            "var d = document.createElement('div'); d.setAttribute('data-x', 'x'.repeat(1 << 20)); \
+             var n = 0, err = ''; \
+             try {{ for (var i = 0; i < 100; i++) {{ d.cloneNode(false); n++; }} }} \
+             catch (e) {{ err = e.name; }} \
+             d.setAttribute('data-y', 'y'.repeat(1 << 20)); \
+             [n > {at_least} && n < 100, err, d.getAttribute('data-y')].join()"
+        ),
         "true,QuotaExceededError,",
     );
 }

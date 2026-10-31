@@ -65,18 +65,18 @@ draw_text "Here's ", 264, 210, 18, Color { r: 85, g: 85, b: 85, a: 255 }
 draw_text "how.", 306, 210, 18, Color { r: 85, g: 85, b: 85, a: 255 }
 fill_rect 24, 263, 680, 1, Color { r: 224, g: 224, b: 224, a: 255 }
 fill_rect 24, 332, 680, 1, Color { r: 224, g: 224, b: 224, a: 255 }
-fill_rect 24, 278, 37, 40, Color { r: 192, g: 192, b: 192, a: 255 }
-draw_text "Andrew ", 61, 276, 14, Color { r: 26, g: 26, b: 26, a: 255 }
-draw_text "Andrew ", 62, 276, 14, Color { r: 26, g: 26, b: 26, a: 255 }
-draw_text "Lee", 103, 276, 14, Color { r: 26, g: 26, b: 26, a: 255 }
-draw_text "Lee", 104, 276, 14, Color { r: 26, g: 26, b: 26, a: 255 }
-draw_text "April ", 61, 298, 14, Color { r: 112, g: 112, b: 112, a: 255 }
-draw_text "15, ", 97, 298, 14, Color { r: 112, g: 112, b: 112, a: 255 }
-draw_text "2026 ", 121, 298, 14, Color { r: 112, g: 112, b: 112, a: 255 }
-draw_text "· ", 151, 298, 14, Color { r: 112, g: 112, b: 112, a: 255 }
-draw_text "12 ", 169, 298, 14, Color { r: 112, g: 112, b: 112, a: 255 }
-draw_text "min ", 187, 298, 14, Color { r: 112, g: 112, b: 112, a: 255 }
-draw_text "read", 211, 298, 14, Color { r: 112, g: 112, b: 112, a: 255 }
+fill_rect 24, 278, 40, 40, Color { r: 192, g: 192, b: 192, a: 255 }
+draw_text "Andrew ", 76, 276, 14, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "Andrew ", 77, 276, 14, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "Lee", 118, 276, 14, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "Lee", 119, 276, 14, Color { r: 26, g: 26, b: 26, a: 255 }
+draw_text "April ", 76, 298, 14, Color { r: 112, g: 112, b: 112, a: 255 }
+draw_text "15, ", 112, 298, 14, Color { r: 112, g: 112, b: 112, a: 255 }
+draw_text "2026 ", 136, 298, 14, Color { r: 112, g: 112, b: 112, a: 255 }
+draw_text "· ", 166, 298, 14, Color { r: 112, g: 112, b: 112, a: 255 }
+draw_text "12 ", 184, 298, 14, Color { r: 112, g: 112, b: 112, a: 255 }
+draw_text "min ", 202, 298, 14, Color { r: 112, g: 112, b: 112, a: 255 }
+draw_text "read", 226, 298, 14, Color { r: 112, g: 112, b: 112, a: 255 }
 draw_text "Every ", 24, 365, 18, Color { r: 26, g: 26, b: 26, a: 255 }
 draw_text "so ", 60, 365, 18, Color { r: 26, g: 26, b: 26, a: 255 }
 draw_text "often ", 78, 365, 18, Color { r: 26, g: 26, b: 26, a: 255 }

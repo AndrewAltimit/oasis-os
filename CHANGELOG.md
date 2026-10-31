@@ -25,6 +25,30 @@ larger changes by area. Breaking API changes are marked **(breaking)**.
 - Four-side shorthands (`margin`, `padding`, `border-width` / `-style` / `-color`) with
   more than four values are dropped as invalid instead of using the first four.
 
+### Browser (layout)
+
+- Flex layout is linear in nesting depth: content-sized items take their max-content width
+  from the box tree (cached per layout pass) instead of a measuring layout, and each row item
+  is laid out once. Sixteen nested `flex-grow` rows went from 3.2 ms to 0.13 ms.
+- Flex sizing fixes: an item with block children sizes to its content (it measured as the
+  full container width, so `justify-content` and siblings had no room); a definite
+  `flex-basis` is the item's size, not its containing width (margins and padding were taken
+  out of it, a 40 px avatar with a 12 px margin drew 37 px wide with no margin); column
+  containers with a definite height honour `flex-basis`. Flex and grid no longer rewrite the
+  item's `width` / `height` style.
+- Relaying a page out (after images decode) gives exactly the layout of a fresh load, checked
+  over the whole corpus: inline layout keeps its source content, so words of a wrapped line
+  no longer glue together and `<pre>` lines no longer merge on a second layout. The partial
+  dirty-subtree relayout, which skipped floats and left clean subtrees in place, is gone:
+  `layout_block_incremental` and `StyleCache` are replaced by `relayout_tree` **(breaking)**.
+- Table cells lay their content out as a block flow (multiple block children stacked on top
+  of each other, and the cell padding was counted twice); whitespace between table tags no
+  longer draws as spaces when a table sits in inline content.
+- Canvas: past the command cap new commands are dropped (`CanvasState::overflowed`), instead
+  of the oldest half of the drawing. Web-font glyph textures are evicted least recently used
+  instead of all at once when the cache fills. `FontAwareTextMeasurer::set_font_id` is
+  removed (layout passes the run's font) **(breaking)**.
+
 ### Apps
 
 - Text Editor: undoing (or redoing) back to the text as last opened or saved clears the
