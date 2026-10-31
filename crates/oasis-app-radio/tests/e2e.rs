@@ -7,7 +7,7 @@
 use oasis_app_core::testing::{AppHarness, fuzz_app};
 use oasis_app_core::{App, AppAction};
 use oasis_app_radio::{PlayState, RadioApp, STATUS_POLL_MS};
-use oasis_audio::radio::station::StationRegistry;
+use oasis_audio::radio::StationRegistry;
 use oasis_audio::{RADIO_REQUEST_PATH, RADIO_STATUS_PATH};
 use oasis_types::input::{Button, Key};
 use oasis_vfs::{MemoryVfs, Vfs};

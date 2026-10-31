@@ -1,7 +1,7 @@
 //! Internet Archive video catalog: data types and JSON parsing.
 //!
 //! Pure data transformation for IA metadata API responses — no network I/O.
-//! Follows the same pattern as `oasis_audio::radio::archive::ArchiveCatalog`.
+//! Follows the same pattern as `oasis_audio::radio::ArchiveCatalog`.
 
 use std::fmt;
 
@@ -212,7 +212,7 @@ impl ChannelCatalog {
         format!(
             "https://archive.org/download/{}/{}",
             episode.item_id,
-            oasis_audio::radio::archive::percent_encode(&episode.filename)
+            oasis_audio::radio::percent_encode(&episode.filename)
         )
     }
 

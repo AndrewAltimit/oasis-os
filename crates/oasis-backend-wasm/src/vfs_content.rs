@@ -109,7 +109,7 @@ pub(crate) fn populate_wasm_vfs(vfs: &mut MemoryVfs) {
     // Radio configuration directory and default station list.
     let _ = vfs.mkdir("/etc/radio");
     let _ = vfs.mkdir("/var/radio");
-    let default_stations = oasis_audio::radio::station::StationRegistry::defaults();
+    let default_stations = oasis_audio::radio::StationRegistry::defaults();
     if let Ok(toml_data) = default_stations.to_toml() {
         let _ = vfs.write("/etc/radio/stations.toml", toml_data.as_bytes());
     }

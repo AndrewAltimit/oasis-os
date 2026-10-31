@@ -11,10 +11,10 @@ use wasm_bindgen::JsCast;
 use wasm_bindgen::prelude::*;
 use wasm_bindgen_futures::JsFuture;
 
+use oasis_audio::radio::ArchiveCatalog;
 use oasis_audio::radio::BUFFER_THRESHOLD;
-use oasis_audio::radio::archive::ArchiveCatalog;
-use oasis_audio::radio::icy::StreamMetadata;
-use oasis_audio::radio::source::{AudioChunk, RadioSource, SourceState};
+use oasis_audio::radio::StreamMetadata;
+use oasis_audio::radio::{AudioChunk, RadioSource, SourceState};
 use oasis_types::error::Result;
 
 /// Size of each synthetic primer chunk: enough that two of them put
