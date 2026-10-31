@@ -349,30 +349,14 @@ pub(super) fn resolve_pseudo_style_indexed(
             .then_with(|| a.source_order.cmp(&b.source_order))
     });
 
-    // Find the winning `content` value.
+    // The winning `content` value; none (or `content: none | normal`)
+    // means no pseudo-element box.
     let content_value = matched
         .iter()
         .rev()
         .find(|d| d.property == "content")
-        .and_then(|d| match &d.value {
-            CssValue::String(s) => Some(s.clone()),
-            // `content: var(--icon)` — substitute against the originating
-            // element's custom properties.
-            CssValue::Unresolved(text) => {
-                let text =
-                    super::var_resolve::substitute_vars(text, &element_style.custom_properties)?;
-                crate::parser::parse_substituted_declaration("content", &text)
-                    .into_iter()
-                    .find_map(|d| match d.value {
-                        CssValue::String(s) => Some(s),
-                        _ => None,
-                    })
-            },
-            _ => None,
-        });
-
-    // No content declaration or content:none/normal => no pseudo-element.
-    let content_text = content_value?;
+        .map(|d| &d.value)
+        .filter(|v| matches!(v, CssValue::String(_) | CssValue::Unresolved(_)))?;
 
     // Pseudo-elements inherit from the originating element.
     let mut style = ComputedStyle::inherit(element_style);
@@ -380,6 +364,39 @@ pub(super) fn resolve_pseudo_style_indexed(
     style.display = Display::Inline;
 
     let parent_font_size = element_style.font_size;
+
+    // Custom properties first, as for elements: a `var()` in any other
+    // declaration (and in `content`) must see the pseudo-element's own
+    // `--*` values, even when the custom property sorts later in
+    // cascade order.
+    let mut declared_custom: Vec<&str> = Vec::new();
+    for entry in &matched {
+        if entry.property.starts_with("--") {
+            style.apply_declaration(&entry.property, &entry.value, parent_font_size);
+            declared_custom.push(&entry.property);
+        }
+    }
+    if !declared_custom.is_empty() {
+        super::var_resolve::resolve_custom_properties(
+            std::sync::Arc::make_mut(&mut style.custom_properties),
+            &declared_custom,
+        );
+    }
+
+    let content_text = match content_value {
+        CssValue::String(s) => s.clone(),
+        // `content: var(--icon)`.
+        CssValue::Unresolved(text) => {
+            let text = super::var_resolve::substitute_vars(text, &style.custom_properties)?;
+            crate::parser::parse_substituted_declaration("content", &text)
+                .into_iter()
+                .find_map(|d| match d.value {
+                    CssValue::String(s) => Some(s),
+                    _ => None,
+                })?
+        },
+        _ => return None,
+    };
 
     // Apply font-size first (for em-unit resolution in other properties).
     for entry in &matched {
@@ -397,7 +414,10 @@ pub(super) fn resolve_pseudo_style_indexed(
 
     // Apply all other declarations.
     for entry in &matched {
-        if entry.property == "font-size" || entry.property == "content" {
+        if entry.property == "font-size"
+            || entry.property == "content"
+            || entry.property.starts_with("--")
+        {
             continue;
         }
         super::apply_cascaded(
@@ -1224,9 +1244,12 @@ fn matches_simple(
             .iter()
             .any(|compound| matches_compound(doc, node_id, compound, ctx, budget)),
         SimpleSelector::Has(relative_list) => matches_has(doc, node_id, relative_list, ctx, budget),
-        SimpleSelector::Attribute { name, op, value } => {
-            match_attribute(elem, name, op, value.as_deref())
-        },
+        SimpleSelector::Attribute {
+            name,
+            op,
+            value,
+            case_insensitive,
+        } => match_attribute(elem, name, op, value.as_deref(), *case_insensitive),
         SimpleSelector::PseudoElement(_) => {
             // Pseudo-elements don't match real elements directly.
             // They are handled separately by resolve_pseudo_content.
@@ -1319,24 +1342,49 @@ fn match_pseudo_class_fn(
 }
 
 /// Match an attribute selector against an element.
-fn match_attribute(elem: &ElementData, name: &str, op: &AttrOp, value: Option<&str>) -> bool {
-    let attr_val = match elem.get_attribute(name) {
-        Some(v) => v,
-        None => return false,
+///
+/// With `case_insensitive` the selector `value` is already ASCII-lowercase
+/// (the parser folds it), so only the attribute value needs folding.
+/// `^=`, `$=`, `*=` with an empty value and `~=` with an empty or
+/// whitespace-containing value match nothing (Selectors 4 §6.1-6.2).
+fn match_attribute(
+    elem: &ElementData,
+    name: &str,
+    op: &AttrOp,
+    value: Option<&str>,
+    case_insensitive: bool,
+) -> bool {
+    let Some(raw) = elem.get_attribute(name) else {
+        return false;
+    };
+    let Some(v) = value else {
+        return *op == AttrOp::Exists;
+    };
+    let folded;
+    let attr_val = if case_insensitive && raw.bytes().any(|b| b.is_ascii_uppercase()) {
+        folded = raw.to_ascii_lowercase();
+        folded.as_str()
+    } else {
+        raw
     };
 
     match op {
         AttrOp::Exists => true,
-        AttrOp::Equals => value.is_some_and(|v| attr_val == v),
+        AttrOp::Equals => attr_val == v,
         AttrOp::Includes => {
-            value.is_some_and(|v| attr_val.split_whitespace().any(|word| word == v))
+            !v.is_empty()
+                && !v.contains(|c: char| c.is_ascii_whitespace())
+                && attr_val.split_ascii_whitespace().any(|word| word == v)
         },
         AttrOp::DashMatch => {
-            value.is_some_and(|v| attr_val == v || attr_val.starts_with(&format!("{v}-")))
+            attr_val == v
+                || attr_val
+                    .strip_prefix(v)
+                    .is_some_and(|rest| rest.starts_with('-'))
         },
-        AttrOp::Prefix => value.is_some_and(|v| attr_val.starts_with(v)),
-        AttrOp::Suffix => value.is_some_and(|v| attr_val.ends_with(v)),
-        AttrOp::Substring => value.is_some_and(|v| attr_val.contains(v)),
+        AttrOp::Prefix => !v.is_empty() && attr_val.starts_with(v),
+        AttrOp::Suffix => !v.is_empty() && attr_val.ends_with(v),
+        AttrOp::Substring => !v.is_empty() && attr_val.contains(v),
     }
 }
 

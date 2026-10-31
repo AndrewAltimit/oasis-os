@@ -7,6 +7,7 @@
 mod containers;
 mod declarations;
 mod font_face;
+mod layers;
 mod nested;
 mod selectors;
 mod supports;
@@ -14,6 +15,8 @@ mod types;
 
 pub use crate::media::MediaViewport;
 pub(crate) use declarations::{parse_substituted_declaration, parse_value_list};
+pub(crate) use layers::layer_cascade_ranks;
+use layers::sort_layers_into_cascade_order;
 #[allow(unused_imports)]
 pub use types::{
     AttrOp, Combinator, CompoundSelector, ContainerCondition, ContainerFeature, CounterStyleRule,
@@ -238,10 +241,11 @@ impl CssParser {
                 },
             }
         }
+        let layers = sort_layers_into_cascade_order(std::mem::take(&mut self.layers), &mut rules);
         Stylesheet {
             rules,
             keyframes,
-            layers: std::mem::take(&mut self.layers),
+            layers,
             counter_styles,
             properties,
             font_faces,
@@ -378,8 +382,9 @@ impl CssParser {
     ///    synthetic name so the layer remains distinct.
     ///
     /// Nested layer names like `foo.bar` are parsed as a single name
-    /// string (`"foo.bar"`); we don't currently model hierarchical
-    /// layer nesting, so each dotted name is just an opaque identifier.
+    /// string (`"foo.bar"`); the hierarchy is recovered from the dots
+    /// when the sheet's layers are sorted into cascade order
+    /// (see the `layers` module).
     fn parse_layer_rule(&mut self) -> Vec<ParsedRule> {
         self.advance(); // consume @layer token
         self.skip_whitespace();

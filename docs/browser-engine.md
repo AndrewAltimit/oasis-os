@@ -141,16 +141,41 @@ directly.
 
 ## HTML parser
 
-- Full WHATWG tokenizer + tree builder: adoption agency algorithm,
-  foster parenting, `<template>` with full DocumentFragment scope
-  isolation (form + insertion mode), foreign content subset
-  (SVG/MathML), parser error reporting.
+- WHATWG tokenizer + tree builder (§13.2): every insertion mode except
+  the frameset and "in template" ones (template contents parse "in
+  body", with DocumentFragment-style isolation of the form pointer and
+  insertion mode), including in caption / column group / select /
+  select in table / head noscript. The active formatting list has
+  markers (cells, captions, templates, `applet` / `object` /
+  `marquee`), reconstruction and the adoption agency follow the spec,
+  and foster parenting runs the in-body rules at the "appropriate place
+  for inserting a node". Quirks mode is not modelled (`<p><table>`
+  always closes the paragraph).
+- Foreign content: the builder tracks each element's namespace (the DOM
+  does not store it). SVG `foreignObject` / `desc` / `title`, MathML
+  `annotation-xml encoding="text/html"` and the MathML text elements
+  are integration points whose content parses as HTML; SVG tag and
+  attribute names get their camelCase back; HTML breakout pops to the
+  nearest HTML element or integration point.
+- `TreeBuilder::parse_with(html, ParseOptions { scripting })` lets the
+  tree builder drive the tokenizer, as the spec does: raw-text / RCDATA
+  / script-data / PLAINTEXT states only for HTML elements, CDATA
+  sections only in foreign content, and `<noscript>` raw text only with
+  scripting on. `load_html` passes the `javascript` feature, so builds
+  without JS render `<noscript>` content. The pre-tokenized
+  `TreeBuilder::build(Tokenizer::new(..).tokenize())` path remains
+  (`innerHTML`, benches) and picks states by tag name. Script data
+  implements the escaped / double-escaped states
+  (`<!-- document.write("<script>…</script>") -->` stays one script).
 - Input preprocessing: CR LF / CR become LF and NUL becomes U+FFFD.
   Character references: numeric ones map C1 controls through
-  Windows-1252 (`&#150;` is `–`), `&#;` stays literal, and in attributes
-  a `;`-less named reference followed by `=` is left alone
-  (`?a=1&copy=2`). Named references come from a ~110-entry table
-  (`entities.rs`), not the full HTML list.
+  Windows-1252 (`&#150;` is `–`), `&#;` stays literal. Named references
+  come from a ~300-entry table (`entities.rs`: all of HTML 4 plus common
+  HTML5 names such as `&check;` and the ASCII punctuation names), not
+  the full HTML list. Without a `;` only the legacy Latin-1 names match,
+  as the longest prefix (`&copy2024` is `©2024`, `&mdash` stays
+  literal), and in attributes not even those when an alphanumeric or
+  `=` follows (`?a=1&copy=2`).
 - Hostile-input bounds: at most 256 attributes per tag (duplicates
   dropped, first wins), 100 000 nodes, open elements and DOM depth both
   capped at `MAX_NESTING_DEPTH` (256; `MAX_DOM_DEPTH` = 257 including
@@ -158,10 +183,9 @@ directly.
   formatting-element clones the adoption agency and reconstruction make.
   End tags without a dedicated rule follow the spec walk, so a stray
   `</div>` or `</span>` cannot close an enclosing table cell.
-- Not modelled: formatting-list markers, the caption / colgroup / select
-  insertion modes, script-data escape states, and `<noscript>` parsing
-  with scripting off (it is always raw text).
-- Vendored-subset `html5lib-tests` harness for conformance.
+- Vendored-subset `html5lib-tests` harness for conformance
+  (`tests/fixtures/html5lib/*.dat`, each case run through both entry
+  points).
 
 ## CSS cascade & selectors
 
@@ -215,8 +239,21 @@ directly.
 - `@layer` cascade layers — statement / named-block / anonymous-block
   forms, cross-stylesheet name merging, factored into the cascade
   sort with `!important` inversion. Nested layers are qualified
-  (`@layer a { @layer b }` is `a.b`), but ordered by first appearance:
-  a sublayer currently sorts after its parent's own rules.
+  (`@layer a { @layer b }` is `a.b`) and ordered as a tree (CSS Cascade
+  5): sublayers sort before their parent's own rules, and a sublayer
+  declared late stays inside its parent's slot (`@layer a, b;
+  @layer a.c` orders `a.c < a < b`), across stylesheets too.
+- CSS-wide keywords: `inherit` takes the parent's value for
+  non-inherited properties too (`background-color`, `width`, `border`,
+  `display`, ...), and on shorthands (`border`, `background`, `font`,
+  `outline`, `list-style`, `border-radius`, `flex`) reaches every
+  longhand; `all: unset | initial | inherit` resets every modelled
+  property but `direction` (`revert` is still ignored). The `flex` shorthand implements every form of Flexbox 1
+  §7.1.1 (`auto`, `none`, `initial`, `<grow> <shrink>? || <basis>`).
+- Attribute selectors: all six operators, the `i` / `s` case flags, and
+  HTML's case-insensitive attribute values (`[type=checkbox]` matches
+  `type="CHECKBOX"`); empty `^=` / `$=` / `*=` / `~=` values and
+  malformed selectors match nothing.
 - Colours: `#rgb[a]` / `#rrggbb[aa]`, all 148 CSS named colours,
   `rgb/rgba`, `hsl/hsla`, `oklch/oklab`, `color(srgb | srgb-linear |
   display-p3)`, `color-mix(in srgb | oklch | oklab | hsl |

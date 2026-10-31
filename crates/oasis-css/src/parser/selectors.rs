@@ -163,9 +163,10 @@ impl CssParser {
                 },
                 CssToken::OpenBracket => {
                     self.advance();
-                    if let Some(attr_sel) = self.parse_attribute_selector() {
-                        parts.push(attr_sel);
-                    }
+                    // A malformed attribute selector matches nothing
+                    // (dropping it would widen the selector).
+                    let attr_sel = self.parse_attribute_selector();
+                    parts.push(attr_sel.unwrap_or(SimpleSelector::Is(Vec::new())));
                 },
                 _ => break,
             }
@@ -335,117 +336,165 @@ impl CssParser {
         arg.trim().to_string()
     }
 
-    /// Parse an attribute selector after `[` has been consumed.
-    /// Returns `SimpleSelector::Attribute { .. }`.
+    /// Skip to (and consume) the `]` closing an attribute selector.
+    fn skip_past_close_bracket(&mut self) {
+        while self.peek() != &CssToken::CloseBracket && self.peek() != &CssToken::Eof {
+            self.advance();
+        }
+        if self.peek() == &CssToken::CloseBracket {
+            self.advance();
+        }
+    }
+
+    /// Parse an attribute selector after `[` has been consumed:
+    /// `[name]`, `[name op value]` or `[name op value i|s]`.
+    ///
+    /// A malformed selector yields `None`; the caller turns it into a
+    /// never-matching part rather than silently widening the selector.
     fn parse_attribute_selector(&mut self) -> Option<SimpleSelector> {
         self.skip_whitespace();
-        let name = match self.peek().clone() {
-            CssToken::Ident(n) => {
-                self.advance();
-                n
-            },
-            _ => {
-                // Skip to `]`.
-                while self.peek() != &CssToken::CloseBracket && self.peek() != &CssToken::Eof {
-                    self.advance();
-                }
-                if self.peek() == &CssToken::CloseBracket {
-                    self.advance();
-                }
-                return None;
-            },
+        let CssToken::Ident(name) = self.peek().clone() else {
+            self.skip_past_close_bracket();
+            return None;
         };
-
+        self.advance();
         self.skip_whitespace();
 
-        // Check for operator or `]`.
         if self.peek() == &CssToken::CloseBracket {
             self.advance();
             return Some(SimpleSelector::Attribute {
                 name,
                 op: AttrOp::Exists,
                 value: None,
+                case_insensitive: false,
             });
         }
 
-        // Parse operator: =, ~=, |=, ^=, $=, *=
-        let op = match self.peek().clone() {
-            CssToken::Delim('=') => {
-                self.advance();
-                AttrOp::Equals
-            },
-            CssToken::Delim('~') => {
-                self.advance();
-                // Expect `=`.
-                if self.peek() == &CssToken::Delim('=') {
-                    self.advance();
-                }
-                AttrOp::Includes
-            },
-            CssToken::Delim('|') => {
-                self.advance();
-                if self.peek() == &CssToken::Delim('=') {
-                    self.advance();
-                }
-                AttrOp::DashMatch
-            },
-            CssToken::Delim('^') => {
-                self.advance();
-                if self.peek() == &CssToken::Delim('=') {
-                    self.advance();
-                }
-                AttrOp::Prefix
-            },
-            CssToken::Delim('$') => {
-                self.advance();
-                if self.peek() == &CssToken::Delim('=') {
-                    self.advance();
-                }
-                AttrOp::Suffix
-            },
-            CssToken::Star => {
-                self.advance();
-                if self.peek() == &CssToken::Delim('=') {
-                    self.advance();
-                }
-                AttrOp::Substring
-            },
+        // Operator: =, ~=, |=, ^=, $=, *=
+        let op = match self.peek() {
+            CssToken::Delim('=') => AttrOp::Equals,
+            CssToken::Delim('~') => AttrOp::Includes,
+            CssToken::Delim('|') => AttrOp::DashMatch,
+            CssToken::Delim('^') => AttrOp::Prefix,
+            CssToken::Delim('$') => AttrOp::Suffix,
+            CssToken::Star => AttrOp::Substring,
             _ => {
-                // Unknown operator, skip to `]`.
-                while self.peek() != &CssToken::CloseBracket && self.peek() != &CssToken::Eof {
-                    self.advance();
-                }
-                if self.peek() == &CssToken::CloseBracket {
-                    self.advance();
-                }
-                return Some(SimpleSelector::Attribute {
-                    name,
-                    op: AttrOp::Exists,
-                    value: None,
-                });
+                self.skip_past_close_bracket();
+                return None;
             },
         };
-
+        self.advance();
+        if op != AttrOp::Equals {
+            if self.peek() != &CssToken::Delim('=') {
+                self.skip_past_close_bracket();
+                return None;
+            }
+            self.advance();
+        }
         self.skip_whitespace();
 
-        // Parse value (ident or string).
+        // Value: ident or string.
         let value = match self.peek().clone() {
-            CssToken::Ident(v) => {
+            CssToken::Ident(v) | CssToken::String(v) => {
                 self.advance();
-                Some(v)
+                v
             },
-            CssToken::String(v) => {
+            _ => {
+                self.skip_past_close_bracket();
+                return None;
+            },
+        };
+        self.skip_whitespace();
+
+        // Optional case-sensitivity flag (Selectors 4 §6.3).
+        let flag = match self.peek().clone() {
+            CssToken::Ident(f) => {
                 self.advance();
-                Some(v)
+                self.skip_whitespace();
+                match f.to_ascii_lowercase().as_str() {
+                    "i" => Some(true),
+                    "s" => Some(false),
+                    _ => {
+                        self.skip_past_close_bracket();
+                        return None;
+                    },
+                }
             },
             _ => None,
         };
-
-        self.skip_whitespace();
-        if self.peek() == &CssToken::CloseBracket {
-            self.advance();
+        if self.peek() != &CssToken::CloseBracket {
+            self.skip_past_close_bracket();
+            return None;
         }
+        self.advance();
 
-        Some(SimpleSelector::Attribute { name, op, value })
+        let case_insensitive =
+            flag.unwrap_or_else(|| html_case_insensitive_attribute(&name.to_ascii_lowercase()));
+        let value = if case_insensitive {
+            value.to_ascii_lowercase()
+        } else {
+            value
+        };
+        Some(SimpleSelector::Attribute {
+            name,
+            op,
+            value: Some(value),
+            case_insensitive,
+        })
     }
+}
+
+/// HTML attributes whose values attribute selectors compare
+/// ASCII-case-insensitively unless the selector carries an `s` flag
+/// (HTML §4.16.2 "case-sensitivity of selectors").
+fn html_case_insensitive_attribute(name: &str) -> bool {
+    matches!(
+        name,
+        "accept"
+            | "accept-charset"
+            | "align"
+            | "alink"
+            | "axis"
+            | "bgcolor"
+            | "charset"
+            | "checked"
+            | "clear"
+            | "codetype"
+            | "color"
+            | "compact"
+            | "declare"
+            | "defer"
+            | "dir"
+            | "direction"
+            | "disabled"
+            | "enctype"
+            | "face"
+            | "frame"
+            | "hreflang"
+            | "http-equiv"
+            | "lang"
+            | "language"
+            | "link"
+            | "media"
+            | "method"
+            | "multiple"
+            | "nohref"
+            | "noresize"
+            | "noshade"
+            | "nowrap"
+            | "readonly"
+            | "rel"
+            | "rev"
+            | "rules"
+            | "scope"
+            | "scrolling"
+            | "selected"
+            | "shape"
+            | "target"
+            | "text"
+            | "type"
+            | "valign"
+            | "valuetype"
+            | "vlink"
+    )
 }

@@ -482,6 +482,7 @@ fn attribute_exists_selector() {
                     name: "data-x".to_string(),
                     op: AttrOp::Exists,
                     value: None,
+                    case_insensitive: false,
                 }],
             },
             None,
@@ -507,6 +508,7 @@ fn attribute_equals_selector() {
                     name: "lang".to_string(),
                     op: AttrOp::Equals,
                     value: Some("en".to_string()),
+                    case_insensitive: false,
                 }],
             },
             None,
@@ -521,6 +523,7 @@ fn attribute_equals_selector() {
                     name: "lang".to_string(),
                     op: AttrOp::Equals,
                     value: Some("fr".to_string()),
+                    case_insensitive: false,
                 }],
             },
             None,
@@ -545,6 +548,7 @@ fn attribute_prefix_selector() {
                     name: "href".to_string(),
                     op: AttrOp::Prefix,
                     value: Some("https".to_string()),
+                    case_insensitive: false,
                 }],
             },
             None,
@@ -569,6 +573,7 @@ fn attribute_substring_selector() {
                     name: "class".to_string(),
                     op: AttrOp::Substring,
                     value: Some("widget".to_string()),
+                    case_insensitive: false,
                 }],
             },
             None,
@@ -753,6 +758,7 @@ fn selector_parsing_attribute() {
             name,
             op: AttrOp::Equals,
             value: Some(val),
+            case_insensitive: true,
         } if name == "type" && val == "text"
     ));
 }
@@ -800,6 +806,7 @@ fn attribute_includes_selector() {
                     name: "class".to_string(),
                     op: AttrOp::Includes,
                     value: Some("bar".to_string()),
+                    case_insensitive: false,
                 }],
             },
             None,
@@ -3545,4 +3552,188 @@ fn bgcolor_attribute_is_byte_safe_and_knows_all_names() {
     assert_eq!(bg(3), Color::rgba(0, 0, 0, 0));
     assert_eq!(bg(4), Color::rgb(0x46, 0x82, 0xB4));
     assert_eq!(bg(5), Color::rgb(0, 255, 0));
+}
+
+// -- Spec follow-ups: layers, inherit, flex, attribute flags, pseudo vars
+
+mod spec_followups {
+    use super::*;
+    use crate::values::{BorderStyle, Dimension};
+    use oasis_html::tokenizer::Tokenizer;
+    use oasis_html::tree_builder::TreeBuilder;
+
+    fn styles_of(html: &str, sheets: &[&str], id: &str) -> ComputedStyle {
+        let doc = TreeBuilder::build(Tokenizer::new(html).tokenize());
+        let parsed: Vec<Stylesheet> = sheets.iter().map(|c| Stylesheet::parse(c)).collect();
+        let refs: Vec<&Stylesheet> = parsed.iter().collect();
+        let styles = style_tree(&doc, &refs, &[], &ctx());
+        let node = doc.get_element_by_id(id).expect("element with id");
+        styles[node].clone().expect("element style")
+    }
+
+    fn color_of(html: &str, css: &str, id: &str) -> Color {
+        styles_of(html, &[css], id).color
+    }
+
+    const P: &str = r#"<p id="t">x</p>"#;
+    const RED: Color = Color::rgb(255, 0, 0);
+    const BLUE: Color = Color::rgb(0, 0, 255);
+
+    #[test]
+    fn layer_own_rules_beat_its_sublayers() {
+        let css = "@layer a { p { color: red } @layer b { p { color: blue } } }";
+        assert_eq!(color_of(P, css, "t"), RED);
+    }
+
+    #[test]
+    fn late_sublayer_does_not_outrank_later_sibling() {
+        // Order is a.c < a < b, so `b` wins even though `a.c` is last.
+        let css = "@layer a, b; @layer b { p { color: red } } \
+                   @layer a.c { p { color: blue } }";
+        assert_eq!(color_of(P, css, "t"), RED);
+    }
+
+    #[test]
+    fn sublayer_order_merges_across_sheets() {
+        let a = "@layer base { p { color: red } }";
+        let b = "@layer base.reset { p { color: blue } }";
+        assert_eq!(styles_of(P, &[a, b], "t").color, RED);
+    }
+
+    #[test]
+    fn anonymous_layers_are_distinct_per_sheet() {
+        // Two sheets' first anonymous layers are different layers; the
+        // second sheet's comes later and wins.
+        let a = "@layer { p { color: red } }";
+        let b = "@layer x; @layer { p { color: blue } }";
+        assert_eq!(styles_of(P, &[a, b], "t").color, BLUE);
+    }
+
+    #[test]
+    fn inherit_copies_non_inherited_properties() {
+        let html = r#"<div id="p"><span id="t">x</span></div>"#;
+        let css = "#p { background-color: blue; width: 120px; border: 3px solid red; \
+                   padding: 7px; display: flex } \
+                   #t { background-color: inherit; width: inherit; border: inherit; \
+                   padding: inherit; display: inherit }";
+        let s = styles_of(html, &[css], "t");
+        assert_eq!(s.background_color, BLUE);
+        assert_eq!(s.width, Dimension::Px(120.0));
+        assert!((s.border_left_width - 3.0).abs() < 0.01);
+        assert_eq!(s.border_top_style, BorderStyle::Solid);
+        assert_eq!(s.border_right_color, RED);
+        assert!((s.padding_bottom - 7.0).abs() < 0.01);
+        assert_eq!(s.display, Display::Flex);
+    }
+
+    #[test]
+    fn all_unset_resets_every_property() {
+        let html = r#"<div id="p"><span id="t">x</span></div>"#;
+        let css = "#p { color: blue } \
+                   #t { color: red; padding: 5px; background-color: red; display: block; \
+                   border: 2px solid red } \
+                   div #t { all: unset }";
+        let s = styles_of(html, &[css], "t");
+        assert_eq!(s.color, BLUE, "inherited properties inherit");
+        assert_eq!(s.background_color, Color::rgba(0, 0, 0, 0));
+        assert!(s.padding_left.abs() < 0.01);
+        assert!(s.border_top_width.abs() < 0.01);
+        assert_eq!(s.display, Display::Inline);
+        // Later declarations still win over `all`.
+        let css = "#t { all: initial; color: red }";
+        assert_eq!(styles_of(html, &[css], "t").color, RED);
+    }
+
+    #[test]
+    fn unset_still_resets_non_inherited_properties() {
+        let html = r#"<div id="p"><span id="t">x</span></div>"#;
+        let css = "#p { background-color: blue } #t { background-color: unset }";
+        let s = styles_of(html, &[css], "t");
+        assert_eq!(s.background_color, Color::rgba(0, 0, 0, 0));
+    }
+
+    #[test]
+    fn flex_shorthand_reaches_the_computed_style() {
+        let html = r#"<div><i id="a"></i><i id="b"></i><i id="c"></i><i id="d"></i></div>"#;
+        let css = "#a { flex: 1 } #b { flex: auto } #c { flex: none } #d { flex: 2 1 0 }";
+        let a = styles_of(html, &[css], "a");
+        assert_eq!((a.flex_grow, a.flex_shrink), (1.0, 1.0));
+        assert_eq!(a.flex_basis, Dimension::Px(0.0));
+        let b = styles_of(html, &[css], "b");
+        assert_eq!(
+            (b.flex_grow, b.flex_shrink, b.flex_basis),
+            (1.0, 1.0, Dimension::Auto)
+        );
+        let c = styles_of(html, &[css], "c");
+        assert_eq!(
+            (c.flex_grow, c.flex_shrink, c.flex_basis),
+            (0.0, 0.0, Dimension::Auto)
+        );
+        let d = styles_of(html, &[css], "d");
+        assert_eq!((d.flex_grow, d.flex_shrink), (2.0, 1.0));
+        assert_eq!(d.flex_basis, Dimension::Px(0.0));
+    }
+
+    #[test]
+    fn flex_shorthand_through_var() {
+        let html = r#"<i id="t"></i>"#;
+        let s = styles_of(html, &[":root { --f: 3 } #t { flex: var(--f) }"], "t");
+        assert_eq!(s.flex_grow, 3.0);
+    }
+
+    #[test]
+    fn attribute_case_flags() {
+        let html = r#"<a id="t" data-k="FooBar" href="/X.PDF">x</a>"#;
+        assert_eq!(color_of(html, "[data-k=foobar i] { color: red }", "t"), RED);
+        assert_eq!(
+            color_of(html, r#"[href$=".pdf" i] { color: red }"#, "t"),
+            RED
+        );
+        assert_ne!(color_of(html, "[data-k=foobar] { color: red }", "t"), RED);
+        assert_ne!(color_of(html, "[data-k=foobar s] { color: red }", "t"), RED);
+        // The flag no longer swallows the rest of the stylesheet.
+        let css = "[data-k=foobar i] { color: blue } a { background-color: red }";
+        assert_eq!(styles_of(html, &[css], "t").background_color, RED);
+    }
+
+    #[test]
+    fn html_enumerated_attributes_match_case_insensitively() {
+        let html = r#"<input id="t" type="CHECKBOX">"#;
+        assert_eq!(color_of(html, "[type=checkbox] { color: red }", "t"), RED);
+        assert_ne!(color_of(html, "[type=checkbox s] { color: red }", "t"), RED);
+    }
+
+    #[test]
+    fn empty_attribute_substring_values_match_nothing() {
+        let html = r#"<a id="t" class="a b" title="x">x</a>"#;
+        for sel in [
+            r#"[title^=""]"#,
+            r#"[title$=""]"#,
+            r#"[title*=""]"#,
+            r#"[class~=""]"#,
+        ] {
+            let css = format!("{sel} {{ color: red }}");
+            assert_ne!(color_of(html, &css, "t"), RED, "{sel}");
+        }
+    }
+
+    #[test]
+    fn malformed_attribute_selector_matches_nothing() {
+        let html = r#"<a id="t" title="x">x</a>"#;
+        assert_ne!(color_of(html, "a[title=x q] { color: red }", "t"), RED);
+        assert_ne!(color_of(html, "a[title%x] { color: red }", "t"), RED);
+    }
+
+    #[test]
+    fn pseudo_element_sees_its_own_custom_properties() {
+        // The `--c` rule sorts *after* `color: var(--c)` (lower
+        // specificity first), so in-order application read a stale value.
+        let html = r#"<p id="t" class="k">x</p>"#;
+        let css = "p { --c: blue } .k::before { content: var(--label); color: var(--c) } \
+                   #t::before { --c: red; --label: 'hi' }";
+        let s = styles_of(html, &[css], "t");
+        let before = s.before_style.expect("::before box");
+        assert_eq!(before.color, RED);
+        assert_eq!(s.before_content.as_deref(), Some("hi"));
+    }
 }

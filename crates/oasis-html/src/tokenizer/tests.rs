@@ -753,9 +753,30 @@ fn consecutive_self_closing_tags() {
 #[test]
 fn malformed_named_entity_passthrough() {
     // Unknown named entity should be passed through verbatim.
-    let tokens = tok("&notareal;");
+    let tokens = tok("&foobar;");
     assert_eq!(tokens.len(), 1);
-    assert_eq!(tokens[0], Token::Character("&notareal;".into()));
+    assert_eq!(tokens[0], Token::Character("&foobar;".into()));
+    // ...unless it starts with a legacy name, which matches without `;`
+    // (the html5lib `&notit;` case).
+    assert_eq!(tok("&notareal;"), [Token::Character("\u{AC}areal;".into())]);
+}
+
+#[test]
+fn semicolonless_references_follow_the_legacy_table() {
+    // Legacy names match as the longest prefix; others need the `;`.
+    assert_eq!(tok("&copy2024"), [Token::Character("\u{A9}2024".into())]);
+    assert_eq!(tok("a &mdash b"), [Token::Character("a &mdash b".into())]);
+    assert_eq!(tok("&mdash;"), [Token::Character("\u{2014}".into())]);
+    assert_eq!(
+        tok("&check; &lang;"),
+        [Token::Character("\u{2713} \u{27E8}".into())]
+    );
+    // In attributes a legacy name followed by an alphanumeric stays.
+    let Some(Token::StartTag(tag)) = tok("<a href=\"?a=1&copyx=2&notb\">").into_iter().next()
+    else {
+        panic!("start tag");
+    };
+    assert_eq!(tag.attributes[0].value, "?a=1&copyx=2&notb");
 }
 
 #[test]

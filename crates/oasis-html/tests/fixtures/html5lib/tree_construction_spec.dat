@@ -1,0 +1,470 @@
+#data
+<table><caption>Cap</caption><tr><td>1</td></tr></table>
+#errors
+#document
+| <html>
+|   <head>
+|   <body>
+|     <table>
+|       <caption>
+|         "Cap"
+|       <tbody>
+|         <tr>
+|           <td>
+|             "1"
+
+#data
+<table><caption>Cap<tr><td>1</table>
+#errors
+#document
+| <html>
+|   <head>
+|   <body>
+|     <table>
+|       <caption>
+|         "Cap"
+|       <tbody>
+|         <tr>
+|           <td>
+|             "1"
+
+#data
+<table><caption><b>x</caption><tr><td>y</table>
+#errors
+#document
+| <html>
+|   <head>
+|   <body>
+|     <table>
+|       <caption>
+|         <b>
+|           "x"
+|       <tbody>
+|         <tr>
+|           <td>
+|             "y"
+
+#data
+<table><colgroup><col><col></colgroup><tbody><tr><td>x</td></tr></tbody></table>
+#errors
+#document
+| <html>
+|   <head>
+|   <body>
+|     <table>
+|       <colgroup>
+|         <col>
+|         <col>
+|       <tbody>
+|         <tr>
+|           <td>
+|             "x"
+
+#data
+<table><col><tr><td>x</table>
+#errors
+#document
+| <html>
+|   <head>
+|   <body>
+|     <table>
+|       <colgroup>
+|         <col>
+|       <tbody>
+|         <tr>
+|           <td>
+|             "x"
+
+#data
+<table><tr><td>a</td></tr><table>
+#errors
+#document
+| <html>
+|   <head>
+|   <body>
+|     <table>
+|       <tbody>
+|         <tr>
+|           <td>
+|             "a"
+|     <table>
+
+#data
+<table> <tr> <td>x</td> </tr> </table>
+#errors
+#document
+| <html>
+|   <head>
+|   <body>
+|     <table>
+|       " "
+|       <tbody>
+|         <tr>
+|           " "
+|           <td>
+|             "x"
+|           " "
+|         " "
+
+#data
+<table>a<tr><td>b</td></tr></table>
+#errors
+#document
+| <html>
+|   <head>
+|   <body>
+|     "a"
+|     <table>
+|       <tbody>
+|         <tr>
+|           <td>
+|             "b"
+
+#data
+<table><b>bold<tr><td>c</td></tr></table>
+#errors
+#document
+| <html>
+|   <head>
+|   <body>
+|     <b>
+|       "bold"
+|     <table>
+|       <tbody>
+|         <tr>
+|           <td>
+|             "c"
+
+#data
+<table><input type=hidden><tr><td>x</table>
+#errors
+#document
+| <html>
+|   <head>
+|   <body>
+|     <table>
+|       <input>
+|         type="hidden"
+|       <tbody>
+|         <tr>
+|           <td>
+|             "x"
+
+#data
+<p><b>x</p><table><tr><td>y</td></tr></table>z
+#errors
+#document
+| <html>
+|   <head>
+|   <body>
+|     <p>
+|       <b>
+|         "x"
+|     <table>
+|       <tbody>
+|         <tr>
+|           <td>
+|             "y"
+|     <b>
+|       "z"
+
+#data
+<select><option>a<option>b</select>x
+#errors
+#document
+| <html>
+|   <head>
+|   <body>
+|     <select>
+|       <option>
+|         "a"
+|       <option>
+|         "b"
+|     "x"
+
+#data
+<select><optgroup label=g><option>a<optgroup><option>b</select>
+#errors
+#document
+| <html>
+|   <head>
+|   <body>
+|     <select>
+|       <optgroup>
+|         label="g"
+|         <option>
+|           "a"
+|       <optgroup>
+|         <option>
+|           "b"
+
+#data
+<select><b>x</b><div>y</div></select>
+#errors
+#document
+| <html>
+|   <head>
+|   <body>
+|     <select>
+|       "xy"
+
+#data
+<select><option>a<input>
+#errors
+#document
+| <html>
+|   <head>
+|   <body>
+|     <select>
+|       <option>
+|         "a"
+|     <input>
+
+#data
+<table><tr><td><select><option>a</td><td>b</table>
+#errors
+#document
+| <html>
+|   <head>
+|   <body>
+|     <table>
+|       <tbody>
+|         <tr>
+|           <td>
+|             <select>
+|               <option>
+|                 "a"
+|           <td>
+|             "b"
+
+#data
+<svg><foreignObject><div>x</div></foreignObject><rect/></svg><p>y
+#errors
+#document
+| <html>
+|   <head>
+|   <body>
+|     <svg>
+|       <foreignObject>
+|         <div>
+|           "x"
+|       <rect>
+|     <p>
+|       "y"
+
+#data
+<math><annotation-xml encoding="text/html"><div>x</div></annotation-xml></math>
+#errors
+#document
+| <html>
+|   <head>
+|   <body>
+|     <math>
+|       <annotation-xml>
+|         encoding="text/html"
+|         <div>
+|           "x"
+
+#data
+<math><annotation-xml><div>x</div></annotation-xml></math>
+#errors
+#document
+| <html>
+|   <head>
+|   <body>
+|     <math>
+|       <annotation-xml>
+|     <div>
+|       "x"
+
+#data
+<math><mi><b>x</b><mglyph></mi></math>
+#errors
+#document
+| <html>
+|   <head>
+|   <body>
+|     <math>
+|       <mi>
+|         <b>
+|           "x"
+|         <mglyph>
+
+#data
+<svg><g><p>x</p></g></svg>
+#errors
+#document
+| <html>
+|   <head>
+|   <body>
+|     <svg>
+|       <g>
+|     <p>
+|       "x"
+
+#data
+<p><sup>1</p><p>text</p>
+#errors
+#document
+| <html>
+|   <head>
+|   <body>
+|     <p>
+|       <sup>
+|         "1"
+|     <p>
+|       "text"
+
+#data
+<p>a<wbr>b<embed src=x>c</p>
+#errors
+#document
+| <html>
+|   <head>
+|   <body>
+|     <p>
+|       "a"
+|       <wbr>
+|       "b"
+|       <embed>
+|         src="x"
+|       "c"
+
+#data
+<meta charset=utf-8><title>T</title><p>x
+#errors
+#document
+| <html>
+|   <head>
+|     <meta>
+|       charset="utf-8"
+|     <title>
+|       "T"
+|   <body>
+|     <p>
+|       "x"
+
+#data
+<head><base href="/"><link rel=x></head><body>
+#errors
+#document
+| <html>
+|   <head>
+|     <base>
+|       href="/"
+|     <link>
+|       rel="x"
+|   <body>
+
+#data
+<head></head><script>s</script><body><p>x
+#errors
+#document
+| <html>
+|   <head>
+|     <script>
+|       "s"
+|   <body>
+|     <p>
+|       "x"
+
+#data
+<button>a<button>b
+#errors
+#document
+| <html>
+|   <head>
+|   <body>
+|     <button>
+|       "a"
+|     <button>
+|       "b"
+
+#data
+<div><my-el/>x</div>
+#errors
+#document
+| <html>
+|   <head>
+|   <body>
+|     <div>
+|       <my-el>
+|         "x"
+
+#data
+<a href=1>a<a href=2>b
+#errors
+#document
+| <html>
+|   <head>
+|   <body>
+|     <a>
+|       href="1"
+|       "a"
+|     <a>
+|       href="2"
+|       "b"
+
+#data
+<dl><dt>a<dd>b<dt>c</dl>
+#errors
+#document
+| <html>
+|   <head>
+|   <body>
+|     <dl>
+|       <dt>
+|         "a"
+|       <dd>
+|         "b"
+|       <dt>
+|         "c"
+
+#data
+<pre>
+x</pre>
+#errors
+#document
+| <html>
+|   <head>
+|   <body>
+|     <pre>
+|       "x"
+
+#data
+<p>a<center>b</center>
+#errors
+#document
+| <html>
+|   <head>
+|   <body>
+|     <p>
+|       "a"
+|     <center>
+|       "b"
+
+#data
+<object><b>x</object>y
+#errors
+#document
+| <html>
+|   <head>
+|   <body>
+|     <object>
+|       <b>
+|         "x"
+|     "y"
+
+#data
+<ul><li>a<section><li>b</section></ul>
+#errors
+#document
+| <html>
+|   <head>
+|   <body>
+|     <ul>
+|       <li>
+|         "a"
+|         <section>
+|           <li>
+|             "b"

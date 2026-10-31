@@ -109,7 +109,7 @@ fn nesting_selector_explosion_is_capped() {
 #[test]
 fn nested_layer_names_are_qualified() {
     let sheet = parse("@layer a { @layer b { p { color: red } } } @layer b { p { color: blue } }");
-    assert_eq!(sheet.layers, vec!["a", "a.b", "b"]);
+    assert_eq!(sheet.layers, vec!["a.b", "a", "b"]);
     let sheet = parse("@layer a { @layer b; } @layer a.b { p { color: red } }");
-    assert_eq!(sheet.layers, vec!["a", "a.b"]);
+    assert_eq!(sheet.layers, vec!["a.b", "a"]);
 }

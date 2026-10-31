@@ -112,6 +112,40 @@ pub struct Tokenizer {
     pub(crate) temp_buffer: String,
     pub(crate) last_start_tag: Option<String>,
     pub(crate) char_ref_code: u32,
+    /// Whether scripting is enabled: `<noscript>` is raw text only then
+    /// (WHATWG §13.2.6.4.4 / §13.2.6.4.7).
+    pub(crate) scripting: bool,
+    /// Switch to the RAWTEXT / RCDATA / script-data / PLAINTEXT state by
+    /// tag name after emitting a start tag. On for [`Tokenizer::tokenize`];
+    /// the tree builder's pull parser turns it off and switches states
+    /// itself, since only it knows whether the element is HTML.
+    pub(crate) auto_content_state: bool,
+    /// Recognise `<![CDATA[` (only when the adjusted current node is in
+    /// foreign content; set by the tree builder's pull parser).
+    pub(crate) allow_cdata: bool,
+}
+
+/// The content model a start tag switches the tokenizer into.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ContentState {
+    RawText,
+    RcData,
+    ScriptData,
+    Plaintext,
+}
+
+impl ContentState {
+    /// The state an HTML element named `name` switches into, if any.
+    pub(crate) fn for_html_element(name: &str, scripting: bool) -> Option<Self> {
+        Some(match name {
+            "script" => Self::ScriptData,
+            "style" | "xmp" | "iframe" | "noembed" | "noframes" => Self::RawText,
+            "noscript" if scripting => Self::RawText,
+            "title" | "textarea" => Self::RcData,
+            "plaintext" => Self::Plaintext,
+            _ => return None,
+        })
+    }
 }
 
 impl Tokenizer {
@@ -145,7 +179,31 @@ impl Tokenizer {
             temp_buffer: String::new(),
             last_start_tag: None,
             char_ref_code: 0,
+            scripting: true,
+            auto_content_state: true,
+            allow_cdata: false,
         }
+    }
+
+    /// Like [`Tokenizer::new`], choosing whether scripting is enabled.
+    /// With scripting off, `<noscript>` content is tokenized as markup
+    /// (the tree builder must agree: see
+    /// [`ParseOptions`](crate::tree_builder::ParseOptions)).
+    pub fn with_scripting(input: &str, scripting: bool) -> Self {
+        let mut tokenizer = Self::new(input);
+        tokenizer.scripting = scripting;
+        tokenizer
+    }
+
+    /// Enter the content state for the start tag just emitted (its name
+    /// is `last_start_tag`).
+    pub(crate) fn switch_content_state(&mut self, state: ContentState) {
+        self.state = match state {
+            ContentState::RawText => State::RawText,
+            ContentState::RcData => State::RcData,
+            ContentState::ScriptData => State::ScriptData,
+            ContentState::Plaintext => State::Plaintext,
+        };
     }
 
     /// Consume the input and return the token stream.
@@ -255,24 +313,13 @@ impl Tokenizer {
             .all(|(i, &expected)| self.input[self.pos + i].eq_ignore_ascii_case(&expected))
     }
 
-    fn is_rawtext_element(name: &str) -> bool {
-        matches!(
-            name,
-            "script" | "style" | "xmp" | "iframe" | "noembed" | "noframes" | "noscript"
-        )
-    }
-
-    fn is_rcdata_element(name: &str) -> bool {
-        matches!(name, "title" | "textarea")
-    }
-
     /// After emitting a start tag, transition to the appropriate
-    /// content state if the tag is RAWTEXT or RCDATA.
+    /// content state if the tag is RAWTEXT, RCDATA, script or PLAINTEXT.
     fn maybe_switch_content_state(&mut self, name: &str) {
-        if Self::is_rawtext_element(name) {
-            self.state = State::RawText;
-        } else if Self::is_rcdata_element(name) {
-            self.state = State::RcData;
+        if self.auto_content_state
+            && let Some(state) = ContentState::for_html_element(name, self.scripting)
+        {
+            self.switch_content_state(state);
         }
     }
 
@@ -300,7 +347,7 @@ impl Tokenizer {
     /// Produce the next token. This drains `temp_buffer` when the
     /// character-reference sub-machine has finished, then resumes the
     /// normal state loop.
-    fn next_token(&mut self) -> Token {
+    pub(crate) fn next_token(&mut self) -> Token {
         loop {
             // Drain temp_buffer left over from a character reference
             // that returned to a data-like state. Must be checked
@@ -469,6 +516,17 @@ impl Tokenizer {
                 },
                 State::RcData => {
                     if let Some(t) = self.state_rcdata() {
+                        return t;
+                    }
+                },
+                State::ScriptData => {
+                    if let Some(t) = self.state_script_data() {
+                        return t;
+                    }
+                },
+                State::Plaintext => return self.state_plaintext(),
+                State::CdataSection => {
+                    if let Some(t) = self.state_cdata_section() {
                         return t;
                     }
                 },

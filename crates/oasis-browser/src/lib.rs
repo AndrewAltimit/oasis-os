@@ -137,7 +137,7 @@ pub mod internals {
         Tokenizer, set_tokenize_progress_hook, set_tokenize_yield_hook,
     };
     pub use crate::html::tree_builder::{
-        TreeBuilder, set_tree_builder_progress_hook, set_tree_builder_raw_log_hook,
+        ParseOptions, TreeBuilder, set_tree_builder_progress_hook, set_tree_builder_raw_log_hook,
         set_tree_builder_yield_hook,
     };
     pub use crate::layout::block::{

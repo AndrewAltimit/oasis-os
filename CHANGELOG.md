@@ -58,6 +58,39 @@ larger changes by area. Breaking API changes are marked **(breaking)**.
   `oasis-ffi`, `oasis-usb-host`; `oasis-test-backend` under Foundation; the eight
   undrawn standalone PSP tools named in the caption); code-comment color meets WCAG AA.
 
+### Browser parsers (oasis-html, oasis-css)
+
+- HTML tree construction follows WHATWG for tables and forms: new "in caption", "in column
+  group", "in select", "in select in table" and "in head noscript" modes (rows after a
+  `<caption>` or `<colgroup>` used to nest inside it), formatting-list markers so bold /
+  italic no longer leak into or out of table cells, spec foster parenting, and the full
+  in-body start / end tag tables (`<button>`, `<li>`, `<option>`, `<wbr>`, `<embed>`, leading
+  newline after `<pre>` / `<textarea>`, late `<body>` attributes merged, `<base>` and
+  post-`</head>` scripts stay in the head).
+- Inline SVG / MathML: `<foreignObject>`, `<desc>`, `<title>` and HTML `annotation-xml`
+  content stays inside the SVG / MathML instead of breaking out of it; CDATA sections work
+  in SVG. Script-data escape states keep `<!-- document.write("<script>…</script>") -->`
+  in one script.
+- `<noscript>` content renders as markup in builds without JavaScript (it was raw text).
+- Named character references cover all of HTML 4 plus common HTML5 names (`&check;`,
+  `&lang;`, `&lpar;`, ...); without a `;` only the legacy Latin-1 names match, as the longest
+  prefix (`&copy2024` is `©2024`; `&mdash` without `;` now stays literal, as in browsers).
+- New `TreeBuilder::parse` / `parse_with` / `parse_reuse` and `ParseOptions { scripting }`:
+  the tree builder drives the tokenizer, as the spec does; `Tokenizer::with_scripting`,
+  `TreeBuilder::build_with` for the pre-tokenized path.
+- **(breaking)** `TagName::is_formatting` is the spec set (adds `code`, `big`, `font`,
+  `nobr`, `strike`, `tt`; drops `mark`, `sub`, `sup`, which no longer reopen in the next
+  paragraph); `is_void` / `is_special` cover the obsolete and unnamed void / special tags.
+- CSS cascade layers order as a tree (sublayers before their parent, late sublayers in their
+  parent's slot) **(breaking: `Stylesheet::layers` is now in cascade order)**; `inherit`
+  works for non-inherited properties and on shorthands; `all: unset` (the common button
+  reset) is supported; the `flex` shorthand handles every
+  form (`flex: auto`, `flex: 2 1 0`, `flex: 100px`); `::before` / `::after` see their own
+  custom properties.
+- Attribute selectors accept the `i` / `s` flags (the flag used to drop the rule) and match
+  HTML's enumerated attributes case-insensitively **(breaking: `SimpleSelector::Attribute`
+  gains `case_insensitive`)**; malformed attribute selectors match nothing.
+
 ### CI and tooling
 
 - PR validation now runs the feature-set checks main runs (the `oasis-app`

@@ -934,6 +934,148 @@ impl ComputedStyle {
         }
         true
     }
+
+    /// Copy one *non-inherited* longhand's computed value from `parent`,
+    /// for an explicit `inherit` (which, unlike `unset`, takes the parent
+    /// value for every property). Returns `false` for properties this
+    /// table does not cover (and inherited ones, see
+    /// [`ComputedStyle::inherit_property_from`]).
+    pub(crate) fn inherit_non_inherited_from(
+        &mut self,
+        property: &str,
+        parent: &ComputedStyle,
+    ) -> bool {
+        match property {
+            "display" => self.display = parent.display,
+            "position" => self.position = parent.position,
+            "top" => self.top = parent.top,
+            "right" => self.right = parent.right,
+            "bottom" => self.bottom = parent.bottom,
+            "left" => self.left = parent.left,
+            "z-index" => {
+                self.z_index = parent.z_index;
+                self.z_index_auto = parent.z_index_auto;
+            },
+            "width" => self.width = parent.width,
+            "height" => self.height = parent.height,
+            "min-width" => self.min_width = parent.min_width,
+            "max-width" => self.max_width = parent.max_width,
+            "min-height" => self.min_height = parent.min_height,
+            "max-height" => self.max_height = parent.max_height,
+            "margin-top" => {
+                self.margin_top = parent.margin_top;
+                self.margin_top_auto = parent.margin_top_auto;
+                self.margin_top_pct = parent.margin_top_pct;
+            },
+            "margin-right" => {
+                self.margin_right = parent.margin_right;
+                self.margin_right_auto = parent.margin_right_auto;
+                self.margin_right_pct = parent.margin_right_pct;
+            },
+            "margin-bottom" => {
+                self.margin_bottom = parent.margin_bottom;
+                self.margin_bottom_auto = parent.margin_bottom_auto;
+                self.margin_bottom_pct = parent.margin_bottom_pct;
+            },
+            "margin-left" => {
+                self.margin_left = parent.margin_left;
+                self.margin_left_auto = parent.margin_left_auto;
+                self.margin_left_pct = parent.margin_left_pct;
+            },
+            "padding-top" => {
+                self.padding_top = parent.padding_top;
+                self.padding_top_pct = parent.padding_top_pct;
+            },
+            "padding-right" => {
+                self.padding_right = parent.padding_right;
+                self.padding_right_pct = parent.padding_right_pct;
+            },
+            "padding-bottom" => {
+                self.padding_bottom = parent.padding_bottom;
+                self.padding_bottom_pct = parent.padding_bottom_pct;
+            },
+            "padding-left" => {
+                self.padding_left = parent.padding_left;
+                self.padding_left_pct = parent.padding_left_pct;
+            },
+            "border-top-width" => self.border_top_width = parent.border_top_width,
+            "border-right-width" => self.border_right_width = parent.border_right_width,
+            "border-bottom-width" => self.border_bottom_width = parent.border_bottom_width,
+            "border-left-width" => self.border_left_width = parent.border_left_width,
+            "border-top-color" => self.border_top_color = parent.border_top_color,
+            "border-right-color" => self.border_right_color = parent.border_right_color,
+            "border-bottom-color" => self.border_bottom_color = parent.border_bottom_color,
+            "border-left-color" => self.border_left_color = parent.border_left_color,
+            "border-top-style" => self.border_top_style = parent.border_top_style,
+            "border-right-style" => self.border_right_style = parent.border_right_style,
+            "border-bottom-style" => self.border_bottom_style = parent.border_bottom_style,
+            "border-left-style" => self.border_left_style = parent.border_left_style,
+            "border-radius" => self.border_radius = parent.border_radius,
+            "border-top-left-radius" => {
+                self.border_radius.top_left = parent.border_radius.top_left;
+            },
+            "border-top-right-radius" => {
+                self.border_radius.top_right = parent.border_radius.top_right;
+            },
+            "border-bottom-right-radius" => {
+                self.border_radius.bottom_right = parent.border_radius.bottom_right;
+            },
+            "border-bottom-left-radius" => {
+                self.border_radius.bottom_left = parent.border_radius.bottom_left;
+            },
+            "background-color" => self.background_color = parent.background_color,
+            "background-image" => self.background_image = parent.background_image.clone(),
+            "background-size" => self.background_size = parent.background_size,
+            "background-position" => self.background_position = parent.background_position,
+            "background-repeat" => self.background_repeat = parent.background_repeat,
+            "background-clip" => self.background_clip = parent.background_clip,
+            "background-origin" => self.background_origin = parent.background_origin,
+            "float" => self.float = parent.float,
+            "clear" => self.clear = parent.clear,
+            "overflow" => {
+                self.overflow = parent.overflow;
+                self.overflow_x = parent.overflow_x;
+                self.overflow_y = parent.overflow_y;
+            },
+            "overflow-x" => self.overflow_x = parent.overflow_x,
+            "overflow-y" => self.overflow_y = parent.overflow_y,
+            "opacity" => self.opacity = parent.opacity,
+            "box-shadow" => self.box_shadow = parent.box_shadow.clone(),
+            "box-sizing" => self.box_sizing = parent.box_sizing,
+            "vertical-align" => self.vertical_align = parent.vertical_align,
+            "outline-width" => self.outline_width = parent.outline_width,
+            "outline-color" => self.outline_color = parent.outline_color,
+            "outline-style" => self.outline_style = parent.outline_style,
+            "outline-offset" => self.outline_offset = parent.outline_offset,
+            "text-overflow" => self.text_overflow = parent.text_overflow,
+            "object-fit" => self.object_fit = parent.object_fit,
+            "object-position" => self.object_position = parent.object_position,
+            "aspect-ratio" => self.aspect_ratio = parent.aspect_ratio,
+            "flex-direction" => self.flex_direction = parent.flex_direction,
+            "flex-wrap" => self.flex_wrap = parent.flex_wrap,
+            "justify-content" => self.justify_content = parent.justify_content,
+            "align-items" => self.align_items = parent.align_items,
+            "align-content" => self.align_content = parent.align_content,
+            "align-self" => self.align_self = parent.align_self,
+            "order" => self.order = parent.order,
+            "flex-grow" => self.flex_grow = parent.flex_grow,
+            "flex-shrink" => self.flex_shrink = parent.flex_shrink,
+            "flex-basis" => self.flex_basis = parent.flex_basis,
+            "gap" => {
+                self.gap = parent.gap;
+                self.column_gap = parent.column_gap;
+                self.row_gap = parent.row_gap;
+            },
+            "column-gap" => self.column_gap = parent.column_gap,
+            "row-gap" => self.row_gap = parent.row_gap,
+            "transform" => self.transforms = parent.transforms.clone(),
+            "transform-origin" => self.transform_origin = parent.transform_origin,
+            "filter" => self.filters = parent.filters.clone(),
+            "table-layout" => self.table_layout_fixed = parent.table_layout_fixed,
+            _ => return false,
+        }
+        true
+    }
 }
 
 #[cfg(test)]

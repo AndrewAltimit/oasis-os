@@ -83,6 +83,13 @@ pub(crate) enum State {
     NamedCharacterReference,
     RawText,
     RcData,
+    /// `<script>` contents, with the escaped / double-escaped sub-states
+    /// (`<!-- ... <script> ... </script> ... -->`).
+    ScriptData,
+    /// `<plaintext>`: everything to EOF is text.
+    Plaintext,
+    /// `<![CDATA[ ... ]]>` in foreign content.
+    CdataSection,
 }
 
 impl State {
