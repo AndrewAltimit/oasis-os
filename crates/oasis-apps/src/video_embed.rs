@@ -506,25 +506,37 @@ impl App for VideoEmbedApp {
             let bar_h = (SEARCH_BAR_H - 4) as u32;
             backend.fill_rect(bar_x, bar_y, bar_w, bar_h, at.app.selected_bg)?;
             let prompt = format!("Search: {}_", self.input_buf);
-            backend.draw_text(&prompt, bar_x + 4, bar_y + 4, at.font_body, at.app.text)?;
+            backend.draw_text_ellipsis(
+                &prompt,
+                bar_x + 4,
+                bar_y + 4,
+                at.font_body,
+                at.app.text,
+                bar_w.saturating_sub(8),
+            )?;
         }
 
+        // Labels are ellipsized to the content width (a 320 px window cut
+        // the hints mid-glyph at the window edge).
+        let text_w = cw.saturating_sub(16);
         match self.state {
             EmbedState::Search => {
                 let hint_y = cy + title_bar_h + SEARCH_BAR_H + 8;
-                backend.draw_text(
+                backend.draw_text_ellipsis(
                     "Type a search query, video id, or URL.",
                     cx + 8,
                     hint_y,
                     at.font_body,
                     at.app.text,
+                    text_w,
                 )?;
-                backend.draw_text(
+                backend.draw_text_ellipsis(
                     "Confirm = play / search   Cancel = back",
                     cx + 8,
                     hint_y + 14,
                     at.font_hint,
                     at.app.dim_text,
+                    text_w,
                 )?;
             },
             EmbedState::Results => {
@@ -535,19 +547,21 @@ impl App for VideoEmbedApp {
                 // placeholder behind it (most of it is hidden anyway).
                 let hint_y = cy + title_bar_h + 4;
                 let id = self.playing_video_id.as_deref().unwrap_or("");
-                backend.draw_text(
+                backend.draw_text_ellipsis(
                     &format!("Now playing: {id}"),
                     cx + 6,
                     hint_y,
                     at.font_body,
                     at.app.text,
+                    text_w,
                 )?;
-                backend.draw_text(
+                backend.draw_text_ellipsis(
                     "Cancel = back to results",
                     cx + 6,
                     cy + ch as i32 - 14,
                     at.font_hint,
                     at.app.dim_text,
+                    text_w,
                 )?;
             },
         }
@@ -571,43 +585,48 @@ fn draw_results_grid(
 ) -> Result<()> {
     let title_bar_h = TOP_PAD;
     let footer_y = cy + ch as i32 - FOOTER_H;
+    let text_w = cw.saturating_sub(16);
 
     match app.results.status {
         SearchStatus::Loading => {
-            backend.draw_text(
+            backend.draw_text_ellipsis(
                 "Searching YouTube...",
                 cx + 8,
                 cy + title_bar_h + SEARCH_BAR_H + 8,
                 at.font_body,
                 at.app.text,
+                text_w,
             )?;
         },
         SearchStatus::Error => {
             let err = app.results.error.as_deref().unwrap_or("Search failed");
-            backend.draw_text(
+            backend.draw_text_ellipsis(
                 &format!("Error: {err}"),
                 cx + 8,
                 cy + title_bar_h + SEARCH_BAR_H + 8,
                 at.font_body,
                 at.app.text,
+                text_w,
             )?;
-            backend.draw_text(
+            backend.draw_text_ellipsis(
                 "Press Cancel and try a different query.",
                 cx + 8,
                 cy + title_bar_h + SEARCH_BAR_H + 22,
                 at.font_hint,
                 at.app.dim_text,
+                text_w,
             )?;
         },
         SearchStatus::Idle => {},
         SearchStatus::Ready => {
             if app.results.results.is_empty() {
-                backend.draw_text(
+                backend.draw_text_ellipsis(
                     "No results.",
                     cx + 8,
                     cy + title_bar_h + SEARCH_BAR_H + 8,
                     at.font_body,
                     at.app.text,
+                    text_w,
                 )?;
             } else {
                 let (start, end) = app.page_range();
@@ -693,7 +712,14 @@ fn draw_results_grid(
     } else {
         "Confirm=play  Cancel=back".to_string()
     };
-    backend.draw_text(&footer, cx + 6, footer_y, at.font_hint, at.app.dim_text)?;
+    backend.draw_text_ellipsis(
+        &footer,
+        cx + 6,
+        footer_y,
+        at.font_hint,
+        at.app.dim_text,
+        cw.saturating_sub(12),
+    )?;
     Ok(())
 }
 
