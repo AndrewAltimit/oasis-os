@@ -110,8 +110,8 @@ fn tree_recursive(
         if entry.kind == EntryKind::Directory {
             // Directories in the bright-blue ANSI slot (SGR 94), matching `ls`.
             lines.push(format!(
-                "{prefix}{connector}\u{1b}[94m{}/\u{1b}[0m",
-                entry.name
+                "{prefix}{connector}{}",
+                crate::pipeline::dir_colored(&format!("{}/", entry.name))
             ));
         } else {
             lines.push(format!("{prefix}{connector}{}", entry.name));

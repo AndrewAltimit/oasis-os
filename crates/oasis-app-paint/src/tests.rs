@@ -1074,6 +1074,25 @@ fn filling_with_the_same_colour_is_not_an_undo_step() {
 }
 
 #[test]
+fn a_canvas_wider_than_the_view_starts_at_the_view_edge() {
+    // 480 px canvas in a 470 px window: columns 0.. must be reachable at
+    // pan 0 and the last one once panned fully.
+    let l = PaintLayout::compute_panned(0, 0, 470, 400, 480, 64, (0, 0));
+    assert!(l.canvas.w > l.view.w);
+    assert_eq!(l.canvas.x, l.view.x);
+    assert_eq!(
+        l.canvas_pixel_at(l.view.x, l.canvas.y).map(|p| p.0),
+        Some(0)
+    );
+    let end = PaintLayout::compute_panned(0, 0, 470, 400, 480, 64, (u32::MAX, 0));
+    let last_x = end.view.x + end.view.w as i32 - 1;
+    assert_eq!(
+        end.canvas_pixel_at(last_x, end.canvas.y).map(|p| p.0),
+        Some(479)
+    );
+}
+
+#[test]
 fn a_canvas_taller_than_the_window_pans_and_stays_off_the_palette() {
     use oasis_app_core::testing::AppHarness;
     let mut app = PaintApp::new("/apps/paint");

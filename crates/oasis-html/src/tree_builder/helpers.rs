@@ -43,10 +43,18 @@ impl TreeBuilder {
 
     /// Add the attributes of a stray `<html>` / `<body>` start tag that
     /// `id` does not have yet (WHATWG §13.2.6.4.7).
+    ///
+    /// The element keeps at most `MAX_ATTRIBUTES_PER_TAG` attributes, as a
+    /// single tag does: repeated `<body a0 .. a255>` tags would otherwise
+    /// pile up attributes without bound (and each merge scans them all).
     pub(crate) fn merge_attributes(&mut self, id: NodeId, attrs: &[TokAttribute]) {
+        use crate::tokenizer::MAX_ATTRIBUTES_PER_TAG;
         let mut new_id = None;
         if let NodeKind::Element(ref mut data) = self.doc.nodes[id].kind {
             for attr in attrs {
+                if data.attributes.len() >= MAX_ATTRIBUTES_PER_TAG {
+                    break;
+                }
                 if data.get_attribute(&attr.name).is_none() {
                     if attr.name == "id" {
                         new_id = Some(attr.value.clone());

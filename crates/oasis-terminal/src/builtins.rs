@@ -591,6 +591,14 @@ impl CommandRegistry {
         }
         let assignment = args.join(" ");
         if let Some((name, value)) = assignment.split_once('=') {
+            // `set X = 5` / `set X= 5`: the spaces around a separate `=`
+            // word come from the join, not from a quoted value.
+            let name = name.trim_end();
+            let value = if args.len() > 1 {
+                value.strip_prefix(' ').unwrap_or(value)
+            } else {
+                value
+            };
             if name.is_empty() {
                 return Err(OasisError::Command("usage: set VAR=value".into()));
             }

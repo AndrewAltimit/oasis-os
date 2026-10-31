@@ -4,7 +4,7 @@
 //! specification and is called from the main dispatch loop in `mod.rs`.
 
 use super::Tokenizer;
-use super::char_ref::resolve_named_ref_text;
+use super::char_ref::{numeric_ref_char, resolve_named_ref_text};
 use super::types::{State, TagBuilder, Token};
 
 /// What follows `<!` to open a CDATA section (case-sensitive).
@@ -901,11 +901,6 @@ impl Tokenizer {
         if !any_digit {
             return if is_hex { "&#x" } else { "&#" }.into();
         }
-        let ch = match code {
-            0 | 0xD800..=0xDFFF => '\u{FFFD}',
-            c if c > 0x10FFFF => '\u{FFFD}',
-            _ => char::from_u32(code).unwrap_or('\u{FFFD}'),
-        };
-        ch.to_string()
+        numeric_ref_char(code).to_string()
     }
 }
