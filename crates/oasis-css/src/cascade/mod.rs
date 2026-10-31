@@ -668,36 +668,24 @@ pub fn compute_style(
     // `matched` is sorted ascending by cascade order (origin, layer,
     // specificity, source order), so the last `direction` entry is
     // the cascade winner — apply only that one.
-    if let Some(entry) = matched.iter().rfind(|e| e.property == "direction") {
-        apply_cascaded(
-            &mut style,
-            parent_style,
-            "direction",
-            &entry.value,
-            parent_font_size,
-        );
+    if let Some(i) = matched.iter().rposition(|e| e.property == "direction") {
+        apply_matched(&mut style, parent_style, &matched, i, parent_font_size);
     }
 
     // Pass 2b: Apply font-size first so that em units in subsequent
     // properties resolve relative to the element's own computed
     // font-size (CSS spec: em in font-size uses parent, em in all
     // other properties uses the element's own font-size).
-    for entry in &matched {
+    for (i, entry) in matched.iter().enumerate() {
         if entry.property == "font-size" {
-            apply_cascaded(
-                &mut style,
-                parent_style,
-                "font-size",
-                &entry.value,
-                parent_font_size,
-            );
+            apply_matched(&mut style, parent_style, &matched, i, parent_font_size);
         }
     }
     let element_font_size = style.font_size;
 
     // Pass 3: Resolve var() references and apply all other declarations.
     let mut has_explicit_line_height = false;
-    for entry in &matched {
+    for (i, entry) in matched.iter().enumerate() {
         if entry.property.starts_with("--")
             || entry.property == "font-size"
             || entry.property == "direction"
@@ -707,13 +695,7 @@ pub fn compute_style(
         if entry.property == "line-height" {
             has_explicit_line_height = true;
         }
-        apply_cascaded(
-            &mut style,
-            parent_style,
-            &entry.property,
-            &entry.value,
-            element_font_size,
-        );
+        apply_matched(&mut style, parent_style, &matched, i, element_font_size);
     }
 
     // CSS 2.1 §17.21: unitless line-height inherits the *factor*, not
@@ -789,6 +771,41 @@ pub(super) fn apply_cascaded(
                 apply_unset(style, parent, &decl.property);
             }
         },
+    }
+}
+
+/// Apply `matched[i]` (sorted in cascade order) via [`apply_cascaded`],
+/// resolving the CSS-wide `revert` keyword first.
+///
+/// An author `revert` rolls the property back to the user-agent value:
+/// the last user-agent declaration of the property earlier in the
+/// cascade, or `unset` when the UA sheet sets none (`all: unset;
+/// display: revert` keeps a `<div>` a block). `revert-layer` is left to
+/// the declaration parser, which keeps the earlier cascaded value.
+fn apply_matched(
+    style: &mut ComputedStyle,
+    parent: Option<&ComputedStyle>,
+    matched: &[matching::MatchedDeclaration],
+    i: usize,
+    font_size: f32,
+) {
+    let entry = &matched[i];
+    let is_revert =
+        matches!(&entry.value, CssValue::Keyword(k) if k.eq_ignore_ascii_case("revert"));
+    if !is_revert {
+        apply_cascaded(style, parent, &entry.property, &entry.value, font_size);
+        return;
+    }
+    let ua_value = (!entry.user_agent)
+        .then(|| {
+            matched[..i]
+                .iter()
+                .rfind(|e| e.user_agent && e.property == entry.property)
+        })
+        .flatten();
+    match ua_value {
+        Some(ua) => apply_cascaded(style, parent, &ua.property, &ua.value, font_size),
+        None => apply_unset(style, parent, &entry.property),
     }
 }
 

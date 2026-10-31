@@ -367,7 +367,7 @@ fn psp_main() {
         frame::poll_video(&mut backend, &mut tv, kiosk_app, viz_frame);
 
         // -- Poll remote browse requests --
-        frame::poll_remote_browse(&mut kiosk_app, &mut br);
+        frame::poll_remote_browse(&mut backend, &mut kiosk_app, &mut br);
 
         // -- Poll remote skin change requests --
         if let Some(key) = oasis_backend_psp::cmd_server::take_pending_skin() {

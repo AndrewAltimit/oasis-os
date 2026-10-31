@@ -62,6 +62,14 @@ pub(super) struct MatchedDeclaration {
     /// Cascade-layer index inside the source stylesheet, or `None`
     /// for unlayered rules / non-stylesheet origins.
     pub(super) layer: Option<u16>,
+    /// From the user-agent stylesheet ([`crate::default::default_stylesheet`]):
+    /// the values an author `revert` rolls back to.
+    pub(super) user_agent: bool,
+}
+
+/// Whether `sheet` is the user-agent stylesheet.
+fn is_user_agent_sheet(sheet: &Stylesheet) -> bool {
+    std::ptr::eq(sheet, crate::default::default_stylesheet())
 }
 
 /// Test whether `node_id`'s nearest matching container ancestor
@@ -321,6 +329,7 @@ pub(super) fn resolve_pseudo_style_indexed(
                     Some(local)
                 }
             });
+            let user_agent = is_user_agent_sheet(stylesheets[sheet_idx]);
             for (i, decl) in rule.declarations.iter().enumerate() {
                 matched.push(MatchedDeclaration {
                     property: decl.property.clone(),
@@ -330,6 +339,7 @@ pub(super) fn resolve_pseudo_style_indexed(
                     specificity,
                     source_order: decl_base + i,
                     layer: global_layer,
+                    user_agent,
                 });
             }
         }
@@ -399,13 +409,13 @@ pub(super) fn resolve_pseudo_style_indexed(
     };
 
     // Apply font-size first (for em-unit resolution in other properties).
-    for entry in &matched {
+    for (i, entry) in matched.iter().enumerate() {
         if entry.property == "font-size" {
-            super::apply_cascaded(
+            super::apply_matched(
                 &mut style,
                 Some(element_style),
-                "font-size",
-                &entry.value,
+                &matched,
+                i,
                 parent_font_size,
             );
         }
@@ -413,18 +423,18 @@ pub(super) fn resolve_pseudo_style_indexed(
     let pseudo_font_size = style.font_size;
 
     // Apply all other declarations.
-    for entry in &matched {
+    for (i, entry) in matched.iter().enumerate() {
         if entry.property == "font-size"
             || entry.property == "content"
             || entry.property.starts_with("--")
         {
             continue;
         }
-        super::apply_cascaded(
+        super::apply_matched(
             &mut style,
             Some(element_style),
-            &entry.property,
-            &entry.value,
+            &matched,
+            i,
             pseudo_font_size,
         );
     }
@@ -561,6 +571,7 @@ pub(super) fn collect_matched_declarations(
                     Some(local)
                 }
             });
+            let user_agent = is_user_agent_sheet(stylesheets[candidate.sheet_idx]);
             for (decl_idx, decl) in rule.declarations.iter().enumerate() {
                 result.push(MatchedDeclaration {
                     property: decl.property.clone(),
@@ -570,6 +581,7 @@ pub(super) fn collect_matched_declarations(
                     specificity,
                     source_order: candidate.source_order_base + decl_idx,
                     layer: global_layer,
+                    user_agent,
                 });
             }
         }
@@ -603,6 +615,7 @@ pub(super) fn collect_matched_declarations(
                 specificity: inline_spec,
                 source_order: inline_base + i,
                 layer: None,
+                user_agent: false,
             });
         }
     }
@@ -639,6 +652,7 @@ fn collect_presentational_attrs(
             specificity: zero_spec,
             source_order: 0,
             layer: None,
+            user_agent: false,
         });
     };
 

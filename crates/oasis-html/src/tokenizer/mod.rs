@@ -43,6 +43,7 @@ mod tests;
 // Token::Doctype(DoctypeToken), StartTagToken { attributes: Vec<Attribute> }).
 pub use types::{Attribute, DoctypeToken, EndTagToken, StartTagToken, Token};
 
+pub(crate) use types::MAX_ATTRIBUTES_PER_TAG;
 use types::{DoctypeBuilder, State, TagBuilder};
 
 // ---------------------------------------------------------------------------
@@ -156,6 +157,11 @@ impl Tokenizer {
     /// attribute values verbatim), and U+0000 becomes U+FFFD, which is
     /// what every state that keeps a NUL turns it into.
     pub fn new(input: &str) -> Self {
+        // Most documents have neither CR nor NUL: skip the per-char
+        // rewrite loop (the plain collect is much faster).
+        if !input.bytes().any(|b| b == b'\r' || b == 0) {
+            return Self::from_chars(input.chars().collect());
+        }
         let mut chars = Vec::with_capacity(input.len());
         let mut iter = input.chars().peekable();
         while let Some(ch) = iter.next() {
@@ -168,6 +174,11 @@ impl Tokenizer {
                 c => chars.push(c),
             }
         }
+        Self::from_chars(chars)
+    }
+
+    /// A tokenizer over already-preprocessed input.
+    fn from_chars(chars: Vec<char>) -> Self {
         Self {
             input: chars,
             pos: 0,

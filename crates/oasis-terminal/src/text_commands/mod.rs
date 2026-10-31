@@ -43,9 +43,27 @@ fn parse_n_flag<'a>(
 ) -> Result<(usize, Option<&'a str>)> {
     let bad_count = |v: &str| OasisError::Command(format!("invalid line count: {v}").into());
     let mut n = None;
+    // Only plain digits: `usize::from_str` takes `+5`, which would make
+    // `tail -n +5` (POSIX "from line 5") print the last 5 lines.
+    let count = |v: &str| -> Result<usize> {
+        if v.is_empty() || !v.bytes().all(|b| b.is_ascii_digit()) {
+            return Err(bad_count(v));
+        }
+        v.parse().map_err(|_| bad_count(v))
+    };
     let mut rest = Vec::with_capacity(args.len());
+    let mut operands_only = false;
     for &arg in args {
+        if operands_only {
+            rest.push(arg);
+            continue;
+        }
         match arg.strip_prefix('-') {
+            // After `--` a `-5` is a file name (`head -- -5`).
+            Some("-") => {
+                operands_only = true;
+                rest.push(arg);
+            },
             Some(digits) if !digits.is_empty() && digits.bytes().all(|b| b.is_ascii_digit()) => {
                 n = Some(digits.parse().map_err(|_| bad_count(digits))?);
             },
@@ -59,7 +77,7 @@ fn parse_n_flag<'a>(
     };
     let flags = crate::cmd_helpers::parse_flags(&rest, &spec, usage)?;
     if let Some(v) = flags.value('n') {
-        n = Some(v.parse().map_err(|_| bad_count(v))?);
+        n = Some(count(v)?);
     }
     match flags.positional[..] {
         [] => Ok((n.unwrap_or(default), None)),

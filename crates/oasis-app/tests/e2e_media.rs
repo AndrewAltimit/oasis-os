@@ -388,6 +388,144 @@ fn radio_tune_releases_the_music_track() {
 }
 
 // ---------------------------------------------------------------------------
+// TV Guide catalog fetch outcomes
+// ---------------------------------------------------------------------------
+
+mod tv_catalog {
+    use std::sync::mpsc;
+    use std::time::{Duration, Instant};
+
+    use oasis_apps::tv_guide::catalog::ChannelCatalog;
+    use oasis_apps::tv_guide::{TvGuideState, VideoEpisode};
+
+    use super::*;
+
+    type FetchResult = Result<Vec<Option<ChannelCatalog>>, String>;
+
+    fn guide(h: &mut Harness) -> &mut TvGuideState {
+        h.app_runner("TV Guide")
+            .expect("TV Guide runner")
+            .tv_guide_state()
+            .expect("TV Guide state")
+    }
+
+    /// Open the TV Guide with a fetch "in flight" on a channel the test
+    /// controls (the harness is offline, so the shell starts none itself).
+    fn open_with_pending_fetch() -> (Harness, mpsc::Sender<FetchResult>) {
+        let mut h = Harness::new("classic");
+        h.settle();
+        assert!(h.click_app_icon("TV Guide"), "{:?}", h.dashboard_apps());
+        h.settle();
+        let g = guide(&mut h);
+        g.fetch_attempted = true;
+        g.fetch_in_progress = true;
+        let (tx, rx) = mpsc::channel();
+        h.state_mut().tv.pending_catalog_fetch = Some(rx);
+        h.state_mut().tv.fetch_start = Some(Instant::now());
+        (h, tx)
+    }
+
+    /// The guide stopped loading and shows `error`.
+    fn assert_shows_error(h: &mut Harness, error: &str) {
+        assert!(
+            h.state().tv.pending_catalog_fetch.is_none(),
+            "fetch cleared"
+        );
+        let g = guide(h);
+        assert!(!g.fetch_in_progress, "no longer loading");
+        assert_eq!(g.fetch_error.as_deref(), Some(error));
+        h.app_runner("TV Guide").unwrap().refresh_tv_text();
+        h.settle();
+        h.render_now();
+        assert!(
+            h.text_drawn_contains(error),
+            "'{error}' on screen: {:?}",
+            h.frame_text()
+        );
+    }
+
+    #[test]
+    fn fetch_error_reaches_the_guide() {
+        let (mut h, tx) = open_with_pending_fetch();
+        tx.send(Err("archive.org unreachable".into())).unwrap();
+        h.settle();
+        assert_shows_error(&mut h, "archive.org unreachable");
+    }
+
+    #[test]
+    fn all_empty_catalogs_report_no_episodes() {
+        let (mut h, tx) = open_with_pending_fetch();
+        let n = guide(&mut h).channels.len();
+        tx.send(Ok(vec![None; n])).unwrap();
+        h.settle();
+        assert_shows_error(&mut h, "No episodes found for any channel");
+    }
+
+    #[test]
+    fn a_dead_fetch_thread_is_an_error_not_an_endless_spinner() {
+        let (mut h, tx) = open_with_pending_fetch();
+        drop(tx);
+        h.settle();
+        assert_shows_error(&mut h, "catalog fetch failed");
+    }
+
+    #[test]
+    fn a_fetch_that_never_answers_times_out() {
+        let (mut h, _tx) = open_with_pending_fetch();
+        h.run_frames(3);
+        assert!(
+            guide(&mut h).fetch_in_progress,
+            "still waiting before the timeout"
+        );
+        h.state_mut().tv.fetch_start = Instant::now().checked_sub(Duration::from_secs(121));
+        h.settle();
+        assert!(h.state().tv.fetch_start.is_none());
+        assert_shows_error(&mut h, "Fetch timed out (2 min)");
+    }
+
+    #[test]
+    fn arriving_catalogs_fill_the_guide() {
+        let (mut h, tx) = open_with_pending_fetch();
+        let channels = guide(&mut h).channels.clone();
+        let catalogs = channels
+            .iter()
+            .enumerate()
+            .map(|(i, ch)| {
+                // The first channel only: the rest stay empty.
+                (i == 0).then(|| {
+                    let mut c = ChannelCatalog::new(ch.number);
+                    c.add_episodes(vec![VideoEpisode {
+                        item_id: "item".into(),
+                        filename: "ep.mp4".into(),
+                        title: "Pilot Episode".into(),
+                        duration_secs: 1800.0,
+                        width: 640,
+                        height: 480,
+                        size_bytes: 1,
+                        format: "MPEG4".into(),
+                        original: None,
+                    }]);
+                    c
+                })
+            })
+            .collect();
+        tx.send(Ok(catalogs)).unwrap();
+        h.settle();
+        assert!(h.state().tv.pending_catalog_fetch.is_none());
+        let g = guide(&mut h);
+        assert!(!g.fetch_in_progress && g.fetch_error.is_none());
+        assert!(g.catalogs[0].is_some());
+        assert!(g.catalogs[1..].iter().all(Option::is_none));
+        h.render_now();
+        assert!(
+            h.text_drawn_contains("PILOT EPISODE"),
+            "the scheduled episode is listed: {:?}",
+            h.frame_text()
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Boot splash
 // ---------------------------------------------------------------------------
 

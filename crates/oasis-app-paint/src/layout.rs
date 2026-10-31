@@ -113,7 +113,9 @@ impl PaintLayout {
         let pan_x = pan.0.min(px_w.saturating_sub(area_w)) as i32;
         let pan_y = pan.1.min(px_h.saturating_sub(area_h)) as i32;
         let canvas = Rect {
-            x: cx + (cw.saturating_sub(px_w) / 2) as i32 - pan_x,
+            // Centred in the view, like `y` (centring in `cw` put a wider
+            // canvas's first columns under the left padding, unreachable).
+            x: cx + PAD as i32 + (area_w.saturating_sub(px_w) / 2) as i32 - pan_x,
             y: area_top + (area_h.saturating_sub(px_h) / 2) as i32 - pan_y,
             w: px_w,
             h: px_h,

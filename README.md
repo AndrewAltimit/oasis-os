@@ -87,12 +87,12 @@ PSP builds, PPSSPP testing and the devloop scripts: [Getting Started § PSP](doc
 
 ## Architecture: write once, render anywhere
 
-Core code never calls platform APIs. Rendering, input, networking and audio go through backend traits in `oasis-types`: implement the 13 required `SdiCore` methods and you have a working backend; the 47 methods of the eight extension traits have defaults that draw the same pixels as the native rasterizers, so overriding them is only for speed. Every backend follows one drawing-state contract, pinned by conformance tests ([design §5](docs/design.md#5-backend-abstraction-layer), [ADR-003](docs/adr/003-backend-trait-design.md)).
+Core code never calls platform APIs. Rendering, input, networking and audio go through backend traits in `oasis-types`: implement the 12 required `SdiCore` methods and you have a working backend; the 45 methods of the eight extension traits have defaults that draw the same pixels as the native rasterizers, so overriding them is only for speed. Every backend follows one drawing-state contract, pinned by conformance tests ([design §5](docs/design.md#5-backend-abstraction-layer), [ADR-003](docs/adr/003-backend-trait-design.md)).
 
 ```mermaid
 graph TD
     APP["<b>OASIS_OS</b><br/>oasis-core + oasis-apps (10 app crates)<br/>27 widgets, browser, terminal<br/>17 skins, ~95 commands"]
-    TRAITS["<b>Backend Traits</b><br/>SdiCore (13 required) + 8 extension traits (47 defaults)<br/>InputBackend / NetworkBackend / AudioBackend"]
+    TRAITS["<b>Backend Traits</b><br/>SdiCore (12 required) + 8 extension traits (45 defaults)<br/>InputBackend / NetworkBackend / AudioBackend"]
 
     SDL["<b>SDL3</b><br/>Desktop + Pi"]
     WASM["<b>WASM</b><br/>Canvas 2D"]

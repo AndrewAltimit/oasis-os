@@ -190,6 +190,12 @@ impl Vfs for RealVfs {
         "RealVfs"
     }
 
+    fn is_symlink(&self, path: &str) -> bool {
+        self.resolve_entry(path)
+            .and_then(|p| Ok(fs::symlink_metadata(p)?))
+            .is_ok_and(|m| m.file_type().is_symlink())
+    }
+
     fn readdir(&self, path: &str) -> Result<Vec<VfsEntry>> {
         let real_path = self.resolve(path)?;
         if !real_path.is_dir() {

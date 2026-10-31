@@ -394,45 +394,154 @@ pub(super) fn parse_gradient_stops(doc: &Document, grad_node: NodeId) -> Vec<Svg
     stops
 }
 
-/// Apply a transform to a shape's coordinates (translating key points).
+/// Apply a transform to a shape: its points move, and its sizes (rect
+/// extent, radii, stroke width, font size) scale with it. Only moving the
+/// key points drew `<g transform="scale(0.5)">` icons with full-size
+/// circles and rects next to correctly scaled paths. A rect under a
+/// rotation or skew becomes the polygon of its corners; circles and
+/// ellipses keep their axes (a rotated non-uniform ellipse is
+/// approximated by its axis lengths).
 pub(super) fn apply_transform_to_shape(shape: &mut SvgShape, xf: &AffineTransform) {
+    // Length scale of each axis and the area-preserving mean, for sizes.
+    let sx = xf.a.hypot(xf.b);
+    let sy = xf.c.hypot(xf.d);
+    let mean = (xf.a * xf.d - xf.b * xf.c).abs().sqrt();
+    let axis_aligned = xf.b.abs() < 1e-6 && xf.c.abs() < 1e-6;
     match shape {
-        SvgShape::Rect { x, y, .. } => {
-            let (nx, ny) = xf.apply(*x, *y);
-            *x = nx;
-            *y = ny;
+        SvgShape::Rect {
+            x,
+            y,
+            width,
+            height,
+            fill,
+            stroke,
+            stroke_width,
+            rx,
+            opacity,
+        } => {
+            if axis_aligned {
+                // Both corners, so a negative (mirroring) scale keeps a
+                // positive extent.
+                let (x0, y0) = xf.apply(*x, *y);
+                let (x1, y1) = xf.apply(*x + *width, *y + *height);
+                *x = x0.min(x1);
+                *y = y0.min(y1);
+                *width = (x1 - x0).abs();
+                *height = (y1 - y0).abs();
+                *rx *= xf.a.abs().min(xf.d.abs());
+                *stroke_width *= mean;
+            } else {
+                let corners = [
+                    (*x, *y),
+                    (*x + *width, *y),
+                    (*x + *width, *y + *height),
+                    (*x, *y + *height),
+                ];
+                *shape = SvgShape::Polygon {
+                    points: corners.iter().map(|&(px, py)| xf.apply(px, py)).collect(),
+                    fill: std::mem::take(fill),
+                    stroke: std::mem::take(stroke),
+                    stroke_width: *stroke_width * mean,
+                    fill_rule: FillRule::NonZero,
+                    stroke_linecap: LineCap::Butt,
+                    stroke_linejoin: LineJoin::Miter,
+                    opacity: *opacity,
+                };
+            }
         },
-        SvgShape::Circle { cx, cy, .. } => {
+        SvgShape::Circle {
+            cx,
+            cy,
+            r,
+            fill,
+            stroke,
+            stroke_width,
+            opacity,
+        } => {
+            let (nx, ny) = xf.apply(*cx, *cy);
+            if (sx - sy).abs() <= 1e-4 * sx.max(sy) {
+                *cx = nx;
+                *cy = ny;
+                *r *= sx;
+                *stroke_width *= mean;
+            } else {
+                *shape = SvgShape::Ellipse {
+                    cx: nx,
+                    cy: ny,
+                    rx: *r * sx,
+                    ry: *r * sy,
+                    fill: std::mem::take(fill),
+                    stroke: std::mem::take(stroke),
+                    stroke_width: *stroke_width * mean,
+                    opacity: *opacity,
+                };
+            }
+        },
+        SvgShape::Ellipse {
+            cx,
+            cy,
+            rx,
+            ry,
+            stroke_width,
+            ..
+        } => {
             let (nx, ny) = xf.apply(*cx, *cy);
             *cx = nx;
             *cy = ny;
+            *rx *= sx;
+            *ry *= sy;
+            *stroke_width *= mean;
         },
-        SvgShape::Ellipse { cx, cy, .. } => {
-            let (nx, ny) = xf.apply(*cx, *cy);
-            *cx = nx;
-            *cy = ny;
-        },
-        SvgShape::Line { x1, y1, x2, y2, .. } => {
+        SvgShape::Line {
+            x1,
+            y1,
+            x2,
+            y2,
+            stroke_width,
+            ..
+        } => {
             let (nx1, ny1) = xf.apply(*x1, *y1);
             let (nx2, ny2) = xf.apply(*x2, *y2);
             *x1 = nx1;
             *y1 = ny1;
             *x2 = nx2;
             *y2 = ny2;
+            *stroke_width *= mean;
         },
-        SvgShape::Text { x, y, .. } => {
+        SvgShape::Text {
+            x,
+            y,
+            font_size,
+            letter_spacing,
+            ..
+        } => {
             let (nx, ny) = xf.apply(*x, *y);
             *x = nx;
             *y = ny;
+            *font_size *= mean;
+            *letter_spacing *= mean;
         },
-        SvgShape::Path { points, .. }
-        | SvgShape::Polygon { points, .. }
-        | SvgShape::Polyline { points, .. } => {
+        SvgShape::Path {
+            points,
+            stroke_width,
+            ..
+        }
+        | SvgShape::Polygon {
+            points,
+            stroke_width,
+            ..
+        }
+        | SvgShape::Polyline {
+            points,
+            stroke_width,
+            ..
+        } => {
             for pt in points.iter_mut() {
                 let (nx, ny) = xf.apply(pt.0, pt.1);
                 pt.0 = nx;
                 pt.1 = ny;
             }
+            *stroke_width *= mean;
         },
     }
 }

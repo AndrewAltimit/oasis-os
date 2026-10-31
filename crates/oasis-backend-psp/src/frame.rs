@@ -321,7 +321,11 @@ pub(crate) fn poll_video(
 /// the fetch + parse + image load synchronously inside this single call.
 /// Switching PSP to the async fetch path is a follow-up once we wire
 /// `tick()` back in.
-pub(crate) fn poll_remote_browse(kiosk_app: &mut KioskApp, br: &mut BrowserState) {
+pub(crate) fn poll_remote_browse(
+    backend: &mut PspBackend,
+    kiosk_app: &mut KioskApp,
+    br: &mut BrowserState,
+) {
     let Some(url) = oasis_backend_psp::cmd_server::take_pending_browse() else {
         return;
     };
@@ -334,6 +338,9 @@ pub(crate) fn poll_remote_browse(kiosk_app: &mut KioskApp, br: &mut BrowserState
     if let Err(e) = oasis_backend_psp::network::ensure_net_init_pub() {
         dbg_log(&format!("[CMD] browse net init failed: {:?}", e));
     }
+    // No-op on the fast path; re-opens the frame if the WiFi dialog
+    // had to run after all (and clears its flag either way).
+    backend.reinit_gu_frame();
     let _ = br.ensure_widget();
     oasis_backend_psp::vlog_force(&format!("[BR/MAIN] navigate_vfs start: {}", url));
     let BrowserState { widget, vfs, .. } = br;

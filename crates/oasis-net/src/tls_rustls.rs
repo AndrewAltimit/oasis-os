@@ -16,6 +16,10 @@ use oasis_types::tls::TlsConnection;
 
 use super::tls::TlsProvider;
 
+/// `write_tls` attempts `close` makes to drain queued ciphertext (about
+/// 100 ms in all on a socket that stays full).
+const CLOSE_FLUSH_ATTEMPTS: usize = 50;
+
 /// Process-wide TLS client configuration (built once, shared by all providers).
 ///
 /// Advertises ALPN protocols `h2` and `http/1.1` so servers that require
@@ -368,8 +372,25 @@ impl NetworkStream for RustlsStream {
 
     fn close(&mut self) -> Result<()> {
         self.tls.send_close_notify();
+        // `write` may have left ciphertext queued on a full socket (it
+        // reported the plaintext as sent): give the socket a short,
+        // bounded chance to take it and the close_notify before closing,
+        // or a write followed straight by close loses the tail.
         let mut adapter = IoAdapter::new(&mut *self.inner);
-        let _ = self.tls.write_tls(&mut adapter);
+        for _ in 0..CLOSE_FLUSH_ATTEMPTS {
+            if !self.tls.wants_write() {
+                break;
+            }
+            match self.tls.write_tls(&mut adapter) {
+                Ok(0) => break,
+                Ok(_) => {},
+                Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => {
+                    #[cfg(not(target_arch = "wasm32"))]
+                    std::thread::sleep(std::time::Duration::from_millis(2));
+                },
+                Err(_) => break,
+            }
+        }
         self.inner.close()
     }
 }
@@ -1112,6 +1133,53 @@ mod tests {
         stream.flush().unwrap();
         assert!(!written.lock().unwrap().is_empty());
         assert!(!stream.tls.wants_write());
+    }
+
+    /// Refuses the first `busy` writes (`WouldBlock`), then takes everything.
+    struct BusyThenOpen {
+        busy: usize,
+        written: Arc<std::sync::Mutex<Vec<u8>>>,
+    }
+
+    impl NetworkStream for BusyThenOpen {
+        fn read(&mut self, _buf: &mut [u8]) -> Result<usize> {
+            Err(OasisError::Io(io::ErrorKind::WouldBlock.into()))
+        }
+        fn write(&mut self, data: &[u8]) -> Result<usize> {
+            if self.busy > 0 {
+                self.busy -= 1;
+                return Err(OasisError::Io(io::ErrorKind::WouldBlock.into()));
+            }
+            self.written.lock().unwrap().extend_from_slice(data);
+            Ok(data.len())
+        }
+        fn close(&mut self) -> Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn test_close_flushes_ciphertext_a_full_socket_held_back() {
+        // `write` reports the plaintext as sent while the socket is full;
+        // a `close` right after must still get the queued bytes out.
+        let written = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let sni = ServerName::try_from("example.com").unwrap();
+        let tls = rustls::ClientConnection::new(Arc::clone(&SHARED_CONFIG), sni).unwrap();
+        let mut stream = RustlsStream {
+            tls,
+            inner: Box::new(BusyThenOpen {
+                busy: 3,
+                written: Arc::clone(&written),
+            }),
+            plaintext_buf: VecDeque::new(),
+        };
+        assert_eq!(stream.write(b"GET / HTTP/1.1\r\n").unwrap(), 16);
+        stream.close().unwrap();
+        assert!(
+            !written.lock().unwrap().is_empty(),
+            "queued ClientHello sent"
+        );
+        assert!(!stream.tls.wants_write(), "nothing left queued");
     }
 
     #[test]

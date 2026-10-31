@@ -1014,3 +1014,399 @@ fn inset_inline_end_resolves_to_left_in_rtl() {
         s.right,
     );
 }
+
+// -------------------------------------------------------------------
+// Keyword tables, through the real parser
+// -------------------------------------------------------------------
+
+/// `css` parsed as a `style=""` attribute and applied to a default style.
+fn styled(css: &str) -> ComputedStyle {
+    let mut s = ComputedStyle::default();
+    for d in crate::parser::parse_inline_style(css) {
+        s.apply_declaration(&d.property, &d.value, 16.0);
+    }
+    s
+}
+
+/// Each `"value" => Expected` of `property` lands in `field`, and an
+/// unknown keyword after it is ignored (the earlier value is kept), as an
+/// invalid declaration must be.
+macro_rules! keyword_table {
+    ($property:literal, |$s:ident| $get:expr, $($kw:literal => $want:expr),+ $(,)?) => {
+        $(
+            let css = concat!($property, ": ", $kw);
+            let $s = styled(css);
+            assert_eq!($get, $want, "{css}");
+            let css = concat!($property, ": ", $kw, "; ", $property, ": no-such-keyword");
+            let $s = styled(css);
+            assert_eq!($get, $want, "{css}");
+        )+
+    };
+}
+
+/// Every keyword the per-property dispatch maps, parsed from CSS text.
+/// Most of these arms were reached by no test (the flex / text layout
+/// tests set the computed fields directly), so a typo in a keyword string
+/// would have gone unnoticed.
+#[test]
+fn keyword_properties_map_every_keyword() {
+    use super::super::types::{
+        AlignContent, AlignItems, AlignSelf, BackgroundRepeat, BackgroundSize, BorderCollapse,
+        BoxSizing, Clear, Cursor, FlexDirection, FlexWrap, Float, JustifyContent,
+        ListStylePosition, ObjectFit, Overflow, PointerEvents, Position, TextDecorationStyle,
+        TextTransform, TextWrap, UserSelect, VerticalAlign, Visibility, WhiteSpace,
+    };
+    keyword_table!("visibility", |s| s.visibility,
+        "hidden" => Visibility::Hidden, "visible" => Visibility::Visible);
+    keyword_table!("text-transform", |s| s.text_transform,
+        "uppercase" => TextTransform::Uppercase, "lowercase" => TextTransform::Lowercase,
+        "capitalize" => TextTransform::Capitalize, "none" => TextTransform::None);
+    keyword_table!("white-space", |s| s.white_space,
+        "nowrap" => WhiteSpace::NoWrap, "pre" => WhiteSpace::Pre,
+        "pre-wrap" => WhiteSpace::PreWrap, "pre-line" => WhiteSpace::PreLine);
+    keyword_table!("text-wrap", |s| s.text_wrap,
+        "nowrap" => TextWrap::Nowrap, "balance" => TextWrap::Balance,
+        "pretty" => TextWrap::Pretty, "stable" => TextWrap::Stable);
+    keyword_table!("text-decoration-style", |s| s.text_decoration.style,
+        "dashed" => TextDecorationStyle::Dashed, "dotted" => TextDecorationStyle::Dotted,
+        "double" => TextDecorationStyle::Double, "wavy" => TextDecorationStyle::Wavy);
+    keyword_table!("list-style-position", |s| s.list_style_position,
+        "inside" => ListStylePosition::Inside, "outside" => ListStylePosition::Outside);
+    keyword_table!("border-collapse", |s| s.border_collapse,
+        "collapse" => BorderCollapse::Collapse, "separate" => BorderCollapse::Separate);
+    keyword_table!("float", |s| s.float, "left" => Float::Left, "right" => Float::Right);
+    keyword_table!("clear", |s| s.clear,
+        "left" => Clear::Left, "right" => Clear::Right, "both" => Clear::Both);
+    keyword_table!("overflow-x", |s| s.overflow_x,
+        "hidden" => Overflow::Hidden, "scroll" => Overflow::Scroll, "auto" => Overflow::Auto);
+    keyword_table!("overflow-y", |s| s.overflow_y,
+        "hidden" => Overflow::Hidden, "scroll" => Overflow::Scroll, "auto" => Overflow::Auto);
+    keyword_table!("object-fit", |s| s.object_fit,
+        "contain" => ObjectFit::Contain, "cover" => ObjectFit::Cover,
+        "none" => ObjectFit::None, "scale-down" => ObjectFit::ScaleDown);
+    keyword_table!("position", |s| s.position,
+        "relative" => Position::Relative, "absolute" => Position::Absolute,
+        "fixed" => Position::Fixed, "sticky" => Position::Sticky);
+    keyword_table!("flex-direction", |s| s.flex_direction,
+        "row-reverse" => FlexDirection::RowReverse, "column" => FlexDirection::Column,
+        "column-reverse" => FlexDirection::ColumnReverse);
+    keyword_table!("flex-wrap", |s| s.flex_wrap,
+        "wrap" => FlexWrap::Wrap, "wrap-reverse" => FlexWrap::WrapReverse);
+    keyword_table!("justify-content", |s| s.justify_content,
+        "flex-end" => JustifyContent::FlexEnd, "end" => JustifyContent::FlexEnd,
+        "center" => JustifyContent::Center, "space-between" => JustifyContent::SpaceBetween,
+        "space-around" => JustifyContent::SpaceAround,
+        "space-evenly" => JustifyContent::SpaceEvenly);
+    keyword_table!("align-items", |s| s.align_items,
+        "flex-start" => AlignItems::FlexStart, "flex-end" => AlignItems::FlexEnd,
+        "center" => AlignItems::Center, "baseline" => AlignItems::Baseline);
+    keyword_table!("align-content", |s| s.align_content,
+        "center" => AlignContent::Center, "space-between" => AlignContent::SpaceBetween,
+        "space-around" => AlignContent::SpaceAround,
+        "space-evenly" => AlignContent::SpaceEvenly, "flex-end" => AlignContent::FlexEnd);
+    keyword_table!("align-self", |s| s.align_self,
+        "center" => AlignSelf::Center, "flex-end" => AlignSelf::FlexEnd,
+        "stretch" => AlignSelf::Stretch, "baseline" => AlignSelf::Baseline);
+    keyword_table!("box-sizing", |s| s.box_sizing,
+        "border-box" => BoxSizing::BorderBox, "content-box" => BoxSizing::ContentBox);
+    keyword_table!("vertical-align", |s| s.vertical_align,
+        "top" => VerticalAlign::Top, "middle" => VerticalAlign::Middle,
+        "bottom" => VerticalAlign::Bottom, "text-top" => VerticalAlign::TextTop,
+        "text-bottom" => VerticalAlign::TextBottom, "sub" => VerticalAlign::Sub,
+        "super" => VerticalAlign::Super);
+    keyword_table!("background-repeat", |s| s.background_repeat,
+        "no-repeat" => BackgroundRepeat::NoRepeat, "repeat-x" => BackgroundRepeat::RepeatX,
+        "repeat-y" => BackgroundRepeat::RepeatY);
+    keyword_table!("background-size", |s| s.background_size,
+        "cover" => BackgroundSize::Cover, "contain" => BackgroundSize::Contain);
+    keyword_table!("cursor", |s| s.cursor,
+        "pointer" => Cursor::Pointer, "text" => Cursor::Text, "move" => Cursor::Move,
+        "not-allowed" => Cursor::NotAllowed, "grab" => Cursor::Grab,
+        "col-resize" => Cursor::ColResize, "nwse-resize" => Cursor::NwseResize,
+        "zoom-out" => Cursor::ZoomOut, "none" => Cursor::None);
+    keyword_table!("pointer-events", |s| s.pointer_events, "none" => PointerEvents::None);
+    keyword_table!("user-select", |s| s.user_select,
+        "none" => UserSelect::None, "text" => UserSelect::Text, "all" => UserSelect::All);
+    keyword_table!("-webkit-user-select", |s| s.user_select, "none" => UserSelect::None);
+}
+
+/// `overflow: auto` sets both axes; one axis promotes the more restrictive
+/// value to `overflow`, which scroll-container detection reads.
+#[test]
+fn overflow_shorthand_and_axis_promotion() {
+    use super::super::types::Overflow;
+    let s = styled("overflow: auto");
+    assert_eq!(
+        (s.overflow, s.overflow_x, s.overflow_y),
+        (Overflow::Auto, Overflow::Auto, Overflow::Auto)
+    );
+    let s = styled("overflow-y: scroll");
+    assert_eq!(s.overflow_x, Overflow::Visible);
+    assert_ne!(s.overflow, Overflow::Visible, "promoted: {:?}", s.overflow);
+}
+
+/// Lengths and numbers of the flex / box properties, and their keyword
+/// resets.
+#[test]
+fn length_and_number_properties_from_css() {
+    let near = |a: f32, b: f32| (a - b).abs() < 1e-4;
+    let s = styled("letter-spacing: 2px; word-spacing: 0.5em; text-indent: 3px");
+    assert!(near(s.letter_spacing, 2.0) && near(s.word_spacing, 8.0));
+    assert!(near(s.text_indent, 3.0));
+    let s = styled("letter-spacing: 2px; letter-spacing: normal; word-spacing: normal");
+    assert!(near(s.letter_spacing, 0.0) && near(s.word_spacing, 0.0));
+
+    let s = styled("gap: 10px; column-gap: 4px; row-gap: 6px");
+    assert!(near(s.gap, 10.0) && near(s.column_gap, 4.0) && near(s.row_gap, 6.0));
+    let s = styled("order: -2; flex-grow: 3; flex-shrink: 0");
+    assert_eq!(s.order, -2);
+    assert!(near(s.flex_grow, 3.0) && near(s.flex_shrink, 0.0));
+
+    let s = styled(
+        "border-top-left-radius: 1px; border-top-right-radius: 2px; \
+         border-bottom-right-radius: 3px; border-bottom-left-radius: 4px",
+    );
+    let r = s.border_radius;
+    assert!(near(r.top_left, 1.0) && near(r.top_right, 2.0));
+    assert!(near(r.bottom_right, 3.0) && near(r.bottom_left, 4.0));
+
+    // Opacity clamps; z-index auto / number.
+    assert!(near(styled("opacity: 1.5").opacity, 1.0));
+    assert!(near(styled("opacity: -1").opacity, 0.0));
+    let s = styled("z-index: 7");
+    assert_eq!((s.z_index, s.z_index_auto), (7, false));
+    let s = styled("z-index: 7; z-index: auto");
+    assert_eq!((s.z_index, s.z_index_auto), (0, true));
+
+    // aspect-ratio: number, ratio, auto; non-positive ratios are ignored.
+    assert_eq!(styled("aspect-ratio: 2").aspect_ratio, Some(2.0));
+    assert_eq!(styled("aspect-ratio: 16 / 8").aspect_ratio, Some(2.0));
+    assert_eq!(
+        styled("aspect-ratio: 2; aspect-ratio: auto").aspect_ratio,
+        None
+    );
+    assert_eq!(styled("aspect-ratio: 0").aspect_ratio, None);
+    assert_eq!(styled("aspect-ratio: 0 / 1").aspect_ratio, None);
+}
+
+/// `place-items` / `place-content` set both axes from one keyword.
+#[test]
+fn place_shorthands_set_both_axes() {
+    use super::super::types::{AlignContent, AlignItems, JustifyContent};
+    let s = styled("place-items: center");
+    assert_eq!(s.align_items, AlignItems::Center);
+    assert_eq!(s.justify_content, JustifyContent::Center);
+    let s = styled("place-content: space-between");
+    assert_eq!(s.align_content, AlignContent::SpaceBetween);
+    assert_eq!(s.justify_content, JustifyContent::SpaceBetween);
+    // `stretch` has no justify-content twin: the earlier value stays.
+    let s = styled("justify-content: flex-end; place-items: stretch");
+    assert_eq!(s.align_items, AlignItems::Stretch);
+    assert_eq!(s.justify_content, JustifyContent::FlexEnd);
+}
+
+/// Multi-keyword `text-decoration`: lines accumulate, `none` clears them
+/// and stops, the style and a color are picked up from the same list.
+#[test]
+fn text_decoration_shorthand_lists() {
+    use super::super::types::{TextDecorationLine, TextDecorationStyle};
+    let s = styled("text-decoration: underline overline dashed red");
+    let d = s.text_decoration;
+    assert!(d.line.has_underline() && d.line.has_overline());
+    assert!(!d.line.has_line_through());
+    assert_eq!(d.style, TextDecorationStyle::Dashed);
+    assert_eq!(d.color, Some(Color::rgb(255, 0, 0)));
+    let s = styled("text-decoration-line: underline line-through");
+    assert!(s.text_decoration.line.has_line_through());
+    let s = styled("text-decoration: underline; text-decoration-line: none overline");
+    assert_eq!(s.text_decoration.line, TextDecorationLine::NONE);
+}
+
+// -------------------------------------------------------------------
+// Structured fuzzing: real property names, hostile value token soup
+// -------------------------------------------------------------------
+
+mod fuzz {
+    use proptest::prelude::*;
+
+    use super::styled;
+
+    /// Properties whose values go through a dedicated parser (transforms,
+    /// filters, grid, timing functions, shapes, fonts, ...).
+    const PROPERTIES: &[&str] = &[
+        "transform",
+        "transform-origin",
+        "perspective-origin",
+        "filter",
+        "backdrop-filter",
+        "clip-path",
+        "transition",
+        "transition-timing-function",
+        "animation",
+        "animation-timing-function",
+        "animation-iteration-count",
+        "animation-direction",
+        "grid-template-columns",
+        "grid-template-rows",
+        "grid-template-areas",
+        "grid-area",
+        "grid-column",
+        "grid-row",
+        "grid-auto-rows",
+        "grid-auto-flow",
+        "background-position",
+        "background-size",
+        "background-image",
+        "object-position",
+        "font",
+        "font-family",
+        "font-size",
+        "font-weight",
+        "line-height",
+        "counter-reset",
+        "counter-increment",
+        "content",
+        "box-shadow",
+        "text-shadow",
+        "aspect-ratio",
+        "will-change",
+        "container",
+        "width",
+        "max-width",
+        "height",
+        "margin",
+        "padding",
+        "inset",
+        "flex",
+        "flex-basis",
+        "z-index",
+        "opacity",
+        "vertical-align",
+        "mix-blend-mode",
+        "overscroll-behavior",
+        "justify-self",
+        "column-count",
+        "tab-size",
+        "text-decoration",
+        "border-radius",
+        "letter-spacing",
+        "--custom",
+    ];
+
+    const TOKENS: &[&str] = &[
+        "0",
+        "-1",
+        "1e9",
+        "-2147483648",
+        "4294967296",
+        "3.5px",
+        "50%",
+        "-50%",
+        "2em",
+        "1rem",
+        "1fr",
+        "10vw",
+        "auto",
+        "none",
+        "initial",
+        "inherit",
+        "unset",
+        "calc(1px + 2%)",
+        "calc(1px / 0)",
+        "translate(10px, 5%)",
+        "rotate(45deg)",
+        "rotate(1e30turn)",
+        "matrix(1,0,0,1,0,0)",
+        "matrix3d(1)",
+        "scale(0)",
+        "skew(90deg)",
+        "perspective(0)",
+        "translate3d(1px,2px,3px)",
+        "blur(-5px)",
+        "drop-shadow(1px 1px red)",
+        "url(x.png)",
+        "linear-gradient(red, blue)",
+        "radial-gradient(circle, red 0, blue)",
+        "repeat(3, 1fr)",
+        "repeat(100000, 1px)",
+        "repeat(auto-fill, minmax(10px, 1fr))",
+        "minmax(0, 1fr)",
+        "\"a b\" \"c d\"",
+        "\"a\"",
+        "/",
+        ",",
+        "steps(0)",
+        "steps(-3, end)",
+        "cubic-bezier(2, -1, 0, 9)",
+        "infinite",
+        "-1s",
+        "1e400s",
+        "var(--x)",
+        "var(--x, 1px)",
+        "inset(5% round 1px)",
+        "circle(50% at 0 0)",
+        "ellipse()",
+        "polygon(0 0, 1px 1px)",
+        "rgb(1 2 3 / 50%)",
+        "#fff",
+        "#12345",
+        "NaN",
+        "1e400px",
+        "-1e400px",
+        "span 3",
+        "span -1",
+        "1 / -1",
+        "bold",
+        "900",
+        "1000000",
+        "italic",
+        "serif",
+        "red",
+        "!important",
+    ];
+
+    fn value() -> impl Strategy<Value = String> {
+        prop::collection::vec(prop::sample::select(TOKENS), 0..6).prop_map(|t| t.join(" "))
+    }
+
+    /// Every token as the whole value of every property, deterministically
+    /// (the random soup below reaches only some pairs per run).
+    #[test]
+    fn every_token_on_every_property() {
+        for prop in PROPERTIES {
+            for tok in TOKENS {
+                let s = styled(&format!("{prop}: {tok}"));
+                assert!(
+                    s.font_size.is_finite() && s.font_size >= 0.0,
+                    "{prop}: {tok} -> font-size {}",
+                    s.font_size
+                );
+                assert!(
+                    s.line_height.is_finite(),
+                    "{prop}: {tok} -> {}",
+                    s.line_height
+                );
+                assert!(s.letter_spacing.is_finite(), "{prop}: {tok}");
+                assert!((0.0..=1.0).contains(&s.opacity), "{prop}: {tok}");
+            }
+        }
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(512))]
+
+        /// No property / value combination panics, and the numeric
+        /// results layout reads stay finite and in range.
+        #[test]
+        fn hostile_values_apply_without_panicking(
+            prop in prop::sample::select(PROPERTIES),
+            v in value(),
+        ) {
+            let s = styled(&format!("{prop}: {v}"));
+            prop_assert!(s.font_size.is_finite() && s.font_size >= 0.0, "font-size {}", s.font_size);
+            prop_assert!(s.line_height.is_finite(), "line-height {}", s.line_height);
+            prop_assert!((0.0..=1.0).contains(&s.opacity), "opacity {}", s.opacity);
+            prop_assert!(s.letter_spacing.is_finite(), "letter-spacing {}", s.letter_spacing);
+        }
+    }
+}

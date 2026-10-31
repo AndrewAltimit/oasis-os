@@ -317,7 +317,12 @@ fn start_menu_opens_and_launches_settings() {
     let skins: Vec<&str> = builtin_names()
         .iter()
         .copied()
-        .filter(|n| Harness::new(n).state().skin.features.start_menu)
+        // Read the feature from the skin itself: booting a whole shell per
+        // skin just to filter doubled this test's run time.
+        .filter(|n| {
+            oasis_core::skin::builtin::load_builtin(n)
+                .is_ok_and(|s| s.features.start_menu)
+        })
         .collect();
     assert!(!skins.is_empty(), "some skin has a start menu");
     for skin in skins {
@@ -452,6 +457,38 @@ fn skin_switch_from_terminal_at_runtime() {
     h.settle();
     h.render_now();
     assert_not_blank(&h, "skin_switch_terminal");
+}
+
+/// `skin xp; skin @variant:dark` typed in the terminal ends on the dark
+/// variant of xp (it used to derive from the skin active before the line),
+/// and the shell really runs it with its own palette.
+#[test]
+fn chained_skin_and_variant_from_the_terminal() {
+    let mut h = Harness::new("classic");
+    h.settle();
+    h.terminal("skin xp; skin @variant:dark");
+    h.settle();
+    assert_eq!(
+        h.state().skin.manifest.name,
+        "xp-dark",
+        "{:?}",
+        h.state().terminal.output_lines
+    );
+    // xp's desktop background is already dark navy, so compare the whole
+    // derived theme (window / app chrome colors) rather than one color.
+    let dark_theme = format!("{:?}", h.state().active_theme);
+    h.terminal("skin xp");
+    h.settle();
+    assert_eq!(h.state().skin.manifest.name, "xp");
+    assert_ne!(
+        format!("{:?}", h.state().active_theme),
+        dark_theme,
+        "dark variant has its own palette"
+    );
+    h.button(Button::Cancel);
+    h.settle();
+    h.render_now();
+    assert_not_blank(&h, "skin_variant_chain");
 }
 
 #[test]
