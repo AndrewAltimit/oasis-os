@@ -4,7 +4,7 @@
 //!
 //! # Feature flags
 //!
-//! - `tls-rustls` — [`RustlsTlsProvider`](tls_rustls::RustlsTlsProvider): TLS
+//! - `tls-rustls` — `tls_rustls::RustlsTlsProvider`: TLS
 //!   1.3 client via rustls with the webpki-roots CA bundle. Without it outbound
 //!   connections are plaintext TCP only.
 //! - `vfs` — the FTP-like file transfer server (`ftp` module), serving a `Vfs`.
