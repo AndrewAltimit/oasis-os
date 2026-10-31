@@ -164,6 +164,25 @@
 .step p { margin-top: 0.4rem; color: var(--muted); font-size: 0.95rem; }
 
 .contract__code { margin-top: clamp(2rem, 4vw, 3rem); }
+
+/* Wide screens: the three steps become a vertical rail beside the code, so the
+   section reads left-to-right (surface -> contract -> shell) instead of
+   stacking a full-width code wall under a row of steps. */
+@media (min-width: 1100px) {
+  .contract {
+    display: grid; align-items: start; gap: clamp(2.5rem, 4vw, 4rem);
+    grid-template-columns: minmax(0, 0.78fr) minmax(0, 1.6fr);
+  }
+  .contract__steps { grid-template-columns: minmax(0, 1fr); gap: 2.25rem; padding-top: 0.25rem; }
+  .contract__steps::before {
+    left: 19.5px; right: auto; top: 20px; bottom: 20px; width: 1px; height: auto;
+    background: linear-gradient(180deg, var(--accent), var(--accent-2) 50%, var(--lime));
+  }
+  .step { grid-template-columns: 40px minmax(0, 1fr); gap: 1.1rem; }
+  .step h3 { padding-top: 0.45rem; }
+  .contract__code { margin-top: 0; }
+  .contract .contract__code pre { font-size: 0.76rem; }
+}
 .contract__code .codeblock__bar { gap: 1rem; }
 .codeblock__lights { display: inline-flex; gap: 6px; flex: none; }
 .codeblock__lights i { width: 10px; height: 10px; border-radius: 50%; background: var(--line-2); }
@@ -175,10 +194,14 @@
 .pillars {
   margin-top: clamp(2rem, 4vw, 3rem);
   display: grid; gap: 1px;
-  grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+  /* explicit counts (1 / 2 / 4) so a row never ends in an orphan cell
+     that would expose the hairline background as a slab */
+  grid-template-columns: minmax(0, 1fr);
   background: var(--line); border: 1px solid var(--line); border-radius: var(--radius);
   overflow: hidden;
 }
+@media (min-width: 560px) { .pillars { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (min-width: 1024px) { .pillars { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
 .pillar { background: var(--bg); padding: 1.5rem 1.5rem 1.6rem; }
 .pillar__icon {
   width: 28px; height: 28px; fill: none; stroke: var(--accent); stroke-width: 1.5;
@@ -224,6 +247,16 @@
 @media (max-width: 1023px) {
   .platforms__tabs small { display: none; }
   .platforms__tabs svg { width: 30px; height: 30px; padding: 5px; }
+}
+/* Tablets: all five targets in one row of equal tiles instead of a strip
+   that silently scrolls the last one out of view. */
+@media (min-width: 560px) and (max-width: 1023px) {
+  .platforms__tabs { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); overflow: visible; }
+  .platforms__tabs [role="tab"] {
+    flex-direction: column; justify-content: center; gap: 0.45rem; text-align: center;
+    padding: 0.8rem 0.4rem;
+  }
+  .platforms__tabs strong { font-size: 0.82rem; line-height: 1.25; }
 }
 
 .pf {
@@ -542,16 +575,30 @@
 
 /* ---------- 04 Features ---------- */
 .numbers {
-  display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); /* 2 / 3 / 6: no orphans */
   border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden;
   background: var(--line); gap: 1px; margin-bottom: 1rem;
 }
+@media (min-width: 640px) { .numbers { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+@media (min-width: 1024px) { .numbers { grid-template-columns: repeat(6, minmax(0, 1fr)); } }
 .numbers div { background: var(--bg-2); padding: 1.1rem 1.25rem 1.2rem; }
 .numbers dt { font-family: var(--mono); font-size: 0.68rem; letter-spacing: 0.12em; text-transform: uppercase; color: var(--faint); }
 .numbers dd {
   margin-top: 0.2rem; font-size: var(--step-3); font-weight: 720; letter-spacing: -0.03em; line-height: 1.1;
   font-variant-numeric: tabular-nums;
   background: linear-gradient(180deg, var(--text), #b8bfcf); -webkit-background-clip: text; background-clip: text; color: transparent;
+}
+.numbers div { position: relative; transition: background-color var(--dur-2); }
+.numbers div::before { /* hairline accent that lights up on hover */
+  content: ""; position: absolute; left: 0; right: 0; top: 0; height: 2px;
+  background: linear-gradient(90deg, var(--accent), var(--accent-2));
+  opacity: 0; transition: opacity var(--dur-2);
+}
+.numbers div:hover { background: var(--surface); }
+.numbers div:hover::before { opacity: 1; }
+.numbers dd.numbers__note {
+  margin-top: 0.15rem; font-size: 0.8rem; font-weight: 400; letter-spacing: 0; line-height: 1.4;
+  background: none; color: var(--faint);
 }
 
 .bento {
@@ -688,6 +735,7 @@
 }
 .layer__crates li.note { background: none; border-color: transparent; color: var(--faint); font-family: var(--sans); font-size: 0.8rem; }
 .layer__crates li.note strong { color: var(--accent); font-weight: 600; }
+.layer--hosts { --c: #b69cff; }
 .layer--registry { --c: #ff6b6b; }
 .layer--core { --c: #ff8a3d; }
 .layer--apps { --c: #ffb86b; }
@@ -709,6 +757,11 @@
   border: 1px solid rgba(124, 199, 255, 0.25); background: rgba(124, 199, 255, 0.05);
 }
 .arch__traits code { display: block; background: none; padding: 0; color: var(--sky); font-weight: 700; font-size: 0.86rem; margin-bottom: 0.2rem; }
+@media (min-width: 640px) {
+  /* five traits in one row, like the SVG; the longer backend names get wider cells */
+  .arch__traits { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+  .arch__backends { grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); }
+}
 .arch__backends { margin-top: 0.75rem; }
 .arch__backends li {
   padding: 0.8rem 0.95rem; border-radius: 10px; border: 1px dashed var(--line-2);
@@ -837,7 +890,7 @@
 .journal { display: grid; gap: 1rem; grid-template-columns: minmax(0, 1fr); }
 @media (min-width: 860px) { .journal { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 .feature {
-  display: grid; overflow: hidden; color: var(--text);
+  display: grid; grid-template-rows: auto 1fr; overflow: hidden; color: var(--text);
   border-radius: var(--radius-lg); border: 1px solid var(--line); background: var(--surface);
   transition: border-color var(--dur-2), transform var(--dur-2) var(--ease);
 }
@@ -845,7 +898,7 @@
 .feature__media { display: block; aspect-ratio: 16 / 7; overflow: hidden; background: #000; border-bottom: 1px solid var(--line); }
 .feature__media img { width: 100%; height: 100%; object-fit: cover; transition: transform var(--dur-3) var(--ease); }
 .feature:hover .feature__media img { transform: scale(1.03); }
-.feature__body { display: grid; gap: 0.4rem; padding: 1.35rem 1.4rem 1.5rem; }
+.feature__body { display: grid; gap: 0.4rem; align-content: start; padding: 1.35rem 1.4rem 1.5rem; }
 .feature__title { font-size: var(--step-2); font-weight: 650; letter-spacing: -0.02em; line-height: var(--lh-snug); }
 .feature:hover .feature__title { color: var(--accent); }
 
@@ -956,6 +1009,8 @@
   .stage-meta__facts { gap: 1.25rem; }
   .psp__specs { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .runs-on__list { gap: 0.6rem 1.25rem; }
+  .tile { padding: 1.2rem 1.15rem; }
+  .codeblock--mini pre, .term-mini { padding-inline: 0.85rem; }
 }
 
 /* ---------- Motion preferences ---------- */
