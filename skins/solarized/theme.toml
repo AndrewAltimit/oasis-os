@@ -45,6 +45,8 @@ icon_style = "vector"
 vector_preset = "solid"
 icon_container = "chip"
 cursor_style = "fill"
+# base1, not the derived base01: labels sit on the bright ocean-wave crests.
+label_color = "#93A1A1"
 
 [wallpaper]
 style = "solid"
