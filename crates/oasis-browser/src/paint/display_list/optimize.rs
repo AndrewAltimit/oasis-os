@@ -229,10 +229,10 @@ impl DisplayList {
                 },
                 DisplayItem::PopClip
                 | DisplayItem::PopSticky
-                | DisplayItem::PopCompositingLayer => {
-                    if scope_stack.len() > 1 {
-                        scope_stack.pop();
-                    }
+                | DisplayItem::PopCompositingLayer
+                    if scope_stack.len() > 1 =>
+                {
+                    scope_stack.pop();
                 },
                 _ => {},
             }

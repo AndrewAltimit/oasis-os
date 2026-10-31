@@ -334,7 +334,7 @@ mod tests {
         for i in 0..per_row {
             let url = format!("img{i}");
             let r = atlas.insert(&url, 128, 64, &pixels).unwrap();
-            assert_eq!(r.x, (i as u32) * 128);
+            assert_eq!(r.x, i * 128);
             assert_eq!(r.y, 0);
         }
 

@@ -16,8 +16,13 @@ larger changes by area. Breaking API changes are marked **(breaking)**.
   instead of rendering at 0 x 0; nested flex containers no longer cost
   2^depth layouts.
 - Content scrolled into a nested `overflow: auto` box is painted (it was
-  culled against the unscrolled clip), and `overflow: hidden` children of
-  translucent / filtered boxes are clipped in the right place.
+  culled against the unscrolled clip), `overflow: hidden` children of
+  translucent / filtered boxes are clipped in the right place, and the
+  display-list optimizer no longer deletes a rect because an opaque rect
+  in a *sibling* clip box covers its coordinates.
+- Web-font glyphs no longer carry over to the next page (font ids are
+  reused per page); the glyph texture cache, image atlas (smaller pages
+  on PSP) and back history (100 entries) are bounded.
 - Security: Gemini page titles and directly-opened stylesheets are
   escaped (both could inject live script); `fetch()` judges the page's
   own network class by its least private address, so a page whose name
