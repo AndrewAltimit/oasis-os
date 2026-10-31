@@ -17,6 +17,7 @@ use std::collections::VecDeque;
 use ffmpeg_next as ffmpeg;
 use ffmpeg_next::ffi;
 
+use crate::decoder::DecoderBackend;
 use crate::{AudioChunk, VideoError, VideoFrame, VideoSource};
 use codec::{
     create_audio_decoder, create_resampler, create_scaler, create_video_decoder,
@@ -69,8 +70,111 @@ pub struct FfmpegDecoder {
 unsafe impl Send for FfmpegDecoder {}
 
 impl FfmpegDecoder {
+    /// Pick the first decodable video and audio streams and set up their
+    /// decoders, scaler and resampler.
+    ///
+    /// We can't use `ffmpeg::format::input()` with custom I/O, so the raw
+    /// context's stream array is inspected directly.
+    fn select_streams(&mut self) {
+        // SAFETY: format_ctx is valid after successful avformat_find_stream_info.
+        let nb_streams = unsafe { (*self.format_ctx).nb_streams } as usize;
+        for i in 0..nb_streams {
+            // SAFETY: `i < nb_streams`, so the stream pointer is in bounds.
+            let stream = unsafe { *(*self.format_ctx).streams.add(i) };
+            // SAFETY: stream is valid; codecpar is a non-null pointer set by ffmpeg.
+            let codecpar = unsafe { &*(*stream).codecpar };
+            // SAFETY: stream pointer is valid within the format context.
+            let time_base = time_base_secs(unsafe { (*stream).time_base });
+
+            match codecpar.codec_type {
+                ffi::AVMediaType::AVMEDIA_TYPE_VIDEO if self.video_stream_idx.is_none() => {
+                    match create_video_decoder(codecpar) {
+                        Ok(dec) => {
+                            self.video_time_base = time_base;
+                            self.video_width = dec.width();
+                            self.video_height = dec.height();
+                            // YUV -> RGBA scaler; created lazily on the first
+                            // frame when the probe left the size unknown.
+                            if dec.width() > 0 && dec.height() > 0 {
+                                self.scaler =
+                                    create_scaler(dec.format(), dec.width(), dec.height()).ok();
+                            }
+                            log::info!(
+                                "FFmpeg: video stream {i}: {}x{} {:?}",
+                                dec.width(),
+                                dec.height(),
+                                codecpar.codec_id
+                            );
+                            self.video_decoder = Some(dec);
+                            self.video_stream_idx = Some(i);
+                        },
+                        Err(e) => log::warn!("FFmpeg: skip video stream {i}: {e}"),
+                    }
+                },
+                ffi::AVMediaType::AVMEDIA_TYPE_AUDIO if self.audio_stream_idx.is_none() => {
+                    match create_audio_decoder(codecpar) {
+                        Ok(dec) => {
+                            self.audio_time_base = time_base;
+                            self.audio_sample_rate = dec.rate();
+                            self.audio_channels = dec.channels() as u16;
+                            // Convert to f32 interleaved.
+                            self.resampler = create_resampler(&dec).ok();
+                            log::info!(
+                                "FFmpeg: audio stream {i}: {}Hz {}ch",
+                                self.audio_sample_rate,
+                                self.audio_channels
+                            );
+                            self.audio_decoder = Some(dec);
+                            self.audio_stream_idx = Some(i);
+                        },
+                        Err(e) => log::warn!("FFmpeg: skip audio stream {i}: {e}"),
+                    }
+                },
+                _ => {},
+            }
+        }
+    }
+
+    /// Whether a video track was found.
+    pub fn has_video(&self) -> bool {
+        self.video_stream_idx.is_some()
+    }
+
+    /// Whether an audio track was found.
+    pub fn has_audio(&self) -> bool {
+        self.audio_stream_idx.is_some()
+    }
+}
+
+impl Drop for FfmpegDecoder {
+    fn drop(&mut self) {
+        // Drop decoders first (they reference codec contexts).
+        self.video_decoder.take();
+        self.audio_decoder.take();
+        self.scaler.take();
+        self.resampler.take();
+
+        if !self.format_ctx.is_null() {
+            // SAFETY: `format_ctx` is the context `avformat_open_input`
+            // opened and nothing freed yet.  With AVFMT_FLAG_CUSTOM_IO,
+            // `avformat_close_input` leaves `pb` alone, so it is freed
+            // afterwards.
+            unsafe {
+                let avio = (*self.format_ctx).pb;
+                ffi::avformat_close_input(&mut self.format_ctx);
+                free_custom_avio(avio);
+            }
+        }
+        // SAFETY: from `alloc_custom_io` in `open_stream`; the AVIO context
+        // that called back into it was freed above.
+        unsafe { free_io_context(self.io_ctx) };
+        self.io_ctx = std::ptr::null_mut();
+    }
+}
+
+impl DecoderBackend for FfmpegDecoder {
     /// Open a video from a streaming source.
-    pub fn open_stream(source: Box<dyn VideoSource>) -> Result<Self, VideoError> {
+    fn open_stream(source: Box<dyn VideoSource>) -> Result<Self, VideoError> {
         ffmpeg::init().map_err(|e| VideoError::Demux(format!("ffmpeg init: {e}")))?;
 
         // On every error path below the pieces built so far are freed in
@@ -165,73 +269,8 @@ impl FfmpegDecoder {
         Ok(dec)
     }
 
-    /// Pick the first decodable video and audio streams and set up their
-    /// decoders, scaler and resampler.
-    ///
-    /// We can't use `ffmpeg::format::input()` with custom I/O, so the raw
-    /// context's stream array is inspected directly.
-    fn select_streams(&mut self) {
-        // SAFETY: format_ctx is valid after successful avformat_find_stream_info.
-        let nb_streams = unsafe { (*self.format_ctx).nb_streams } as usize;
-        for i in 0..nb_streams {
-            // SAFETY: `i < nb_streams`, so the stream pointer is in bounds.
-            let stream = unsafe { *(*self.format_ctx).streams.add(i) };
-            // SAFETY: stream is valid; codecpar is a non-null pointer set by ffmpeg.
-            let codecpar = unsafe { &*(*stream).codecpar };
-            // SAFETY: stream pointer is valid within the format context.
-            let time_base = time_base_secs(unsafe { (*stream).time_base });
-
-            match codecpar.codec_type {
-                ffi::AVMediaType::AVMEDIA_TYPE_VIDEO if self.video_stream_idx.is_none() => {
-                    match create_video_decoder(codecpar) {
-                        Ok(dec) => {
-                            self.video_time_base = time_base;
-                            self.video_width = dec.width();
-                            self.video_height = dec.height();
-                            // YUV -> RGBA scaler; created lazily on the first
-                            // frame when the probe left the size unknown.
-                            if dec.width() > 0 && dec.height() > 0 {
-                                self.scaler =
-                                    create_scaler(dec.format(), dec.width(), dec.height()).ok();
-                            }
-                            log::info!(
-                                "FFmpeg: video stream {i}: {}x{} {:?}",
-                                dec.width(),
-                                dec.height(),
-                                codecpar.codec_id
-                            );
-                            self.video_decoder = Some(dec);
-                            self.video_stream_idx = Some(i);
-                        },
-                        Err(e) => log::warn!("FFmpeg: skip video stream {i}: {e}"),
-                    }
-                },
-                ffi::AVMediaType::AVMEDIA_TYPE_AUDIO if self.audio_stream_idx.is_none() => {
-                    match create_audio_decoder(codecpar) {
-                        Ok(dec) => {
-                            self.audio_time_base = time_base;
-                            self.audio_sample_rate = dec.rate();
-                            self.audio_channels = dec.channels() as u16;
-                            // Convert to f32 interleaved.
-                            self.resampler = create_resampler(&dec).ok();
-                            log::info!(
-                                "FFmpeg: audio stream {i}: {}Hz {}ch",
-                                self.audio_sample_rate,
-                                self.audio_channels
-                            );
-                            self.audio_decoder = Some(dec);
-                            self.audio_stream_idx = Some(i);
-                        },
-                        Err(e) => log::warn!("FFmpeg: skip audio stream {i}: {e}"),
-                    }
-                },
-                _ => {},
-            }
-        }
-    }
-
     /// Decode the next video frame, buffering audio packets encountered along the way.
-    pub fn next_video_frame(&mut self) -> Result<Option<VideoFrame>, VideoError> {
+    fn next_video_frame(&mut self) -> Result<Option<VideoFrame>, VideoError> {
         if self.video_decoder.is_none() {
             return Err(VideoError::NoTrack("no video track".into()));
         }
@@ -269,12 +308,12 @@ impl FfmpegDecoder {
     ///
     /// Used by `drain_audio()` to avoid advancing the stream position.
     /// Only returns audio that was buffered during `next_video_frame()`.
-    pub fn next_buffered_audio(&mut self) -> Option<AudioChunk> {
+    fn next_buffered_audio(&mut self) -> Option<AudioChunk> {
         self.audio_buffer.pop_front()
     }
 
     /// Decode the next audio chunk, buffering video frames encountered along the way.
-    pub fn next_audio_samples(&mut self) -> Result<Option<AudioChunk>, VideoError> {
+    fn next_audio_samples(&mut self) -> Result<Option<AudioChunk>, VideoError> {
         if self.audio_decoder.is_none() {
             return Err(VideoError::NoTrack("no audio track".into()));
         }
@@ -304,7 +343,7 @@ impl FfmpegDecoder {
     }
 
     /// Seek to a position in seconds.
-    pub fn seek(&mut self, secs: f64) -> Result<(), VideoError> {
+    fn seek(&mut self, secs: f64) -> Result<(), VideoError> {
         // Convert seconds to AV_TIME_BASE units.
         let ts = (secs * ffi::AV_TIME_BASE as f64) as i64;
         log::info!("FFmpeg: seeking to {secs}s (ts={ts})");
@@ -345,49 +384,13 @@ impl FfmpegDecoder {
     }
 
     /// Video dimensions (may be 0x0 if no video track).
-    pub fn video_size(&self) -> (u32, u32) {
+    fn video_size(&self) -> (u32, u32) {
         (self.video_width, self.video_height)
     }
 
     /// Audio sample rate and channel count.
-    pub fn audio_format(&self) -> (u32, u16) {
+    fn audio_format(&self) -> (u32, u16) {
         (self.audio_sample_rate, self.audio_channels)
-    }
-
-    /// Whether a video track was found.
-    pub fn has_video(&self) -> bool {
-        self.video_stream_idx.is_some()
-    }
-
-    /// Whether an audio track was found.
-    pub fn has_audio(&self) -> bool {
-        self.audio_stream_idx.is_some()
-    }
-}
-
-impl Drop for FfmpegDecoder {
-    fn drop(&mut self) {
-        // Drop decoders first (they reference codec contexts).
-        self.video_decoder.take();
-        self.audio_decoder.take();
-        self.scaler.take();
-        self.resampler.take();
-
-        if !self.format_ctx.is_null() {
-            // SAFETY: `format_ctx` is the context `avformat_open_input`
-            // opened and nothing freed yet.  With AVFMT_FLAG_CUSTOM_IO,
-            // `avformat_close_input` leaves `pb` alone, so it is freed
-            // afterwards.
-            unsafe {
-                let avio = (*self.format_ctx).pb;
-                ffi::avformat_close_input(&mut self.format_ctx);
-                free_custom_avio(avio);
-            }
-        }
-        // SAFETY: from `alloc_custom_io` in `open_stream`; the AVIO context
-        // that called back into it was freed above.
-        unsafe { free_io_context(self.io_ctx) };
-        self.io_ctx = std::ptr::null_mut();
     }
 }
 
