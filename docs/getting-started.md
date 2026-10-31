@@ -388,8 +388,9 @@ cargo clippy -p oasis-app --no-default-features --features javascript,video-deco
 
 The workspace clippy sees one feature resolution only. CI also checks the
 supported non-default feature sets (`oasis-app` without a video decoder, and
-`oasis-browser`, `oasis-core`, `oasis-video`, `oasis-app`, `oasis-ffi` with other
-features) via `scripts/ci-feature-clippy.sh`; run it in the CI container
+`oasis-browser`, `oasis-core`, `oasis-video`, `oasis-app`, `oasis-ffi`,
+`oasis-shader`, `oasis-backend-wasm` with other features, 17 checks) via
+`scripts/ci-feature-clippy.sh`; run it in the CI container
 (`docker compose --profile ci run --rm rust-ci scripts/ci-feature-clippy.sh`),
 or pass `--list` to print the commands.
 

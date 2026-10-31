@@ -170,7 +170,7 @@ Lookups of a missing object return the typed `SdiError::NotFound`. An object's a
 
 ### 4.2 Command Interpreter
 
-The command interpreter is a registry-based dispatch system in the `oasis-terminal` crate, which depends only on `oasis-types`, `oasis-vfs`, `oasis-platform` and `oasis-net`. Commands implement a `Command` trait with an `execute()` method returning structured output (`CommandOutput`). The interpreter includes full shell features: variable expansion (`$VAR`, `${VAR}`), command substitution (`$(...)`), glob expansion, aliases, history (`!!`, `!n`), piping, redirects, and command chaining (`&&`, `||`, `;`). Inline control flow and `run` scripts share one parser (`script/`) with nested `if`/`elif`/`else`, `while`/`until`, `for` and `case` blocks; a trailing `&` queues a background job managed with `jobs`/`fg`/`bg`/`kill`. Hosts drive interactive terminals through a `ShellSession` (`session.rs`) that adds readline-style editing, tab completion (commands, `$VARS`, VFS paths), Ctrl+R history search and history persisted to `/home/user/.oasis_history`.
+The command interpreter is a registry-based dispatch system in the `oasis-terminal` crate, which depends only on `oasis-types`, `oasis-vfs`, `oasis-platform` and `oasis-net`. Commands implement a `Command` trait with an `execute()` method returning structured output (`CommandOutput`). The interpreter includes full shell features: variable expansion (`$VAR`, `${VAR}`), command substitution (`$(...)`), glob expansion, aliases, history (`!!`, `!n`), piping, redirects, and command chaining (`&&`, `||`, `;`). Inline control flow and `run` scripts share one parser (`script/`) with nested `if`/`elif`/`else`, `while`/`until`, `for` and `case` blocks; a trailing `&` queues a background job managed with `jobs`/`fg`/`bg`/`kill`; background and `cron` jobs run detached from the session (`CommandRegistry::run_detached`), so they cannot change its `$?` or working directory. Hosts drive interactive terminals through a `ShellSession` (`session.rs`) that adds readline-style editing, tab completion (commands, `$VARS`, VFS paths), Ctrl+R history search and history persisted to `/home/user/.oasis_history`.
 
 - **Builtins.** The 21 shell builtins (`help`, `run`, `xargs`, `history`, `set`, `alias`, `function`, `jobs`, `kill`, ...) live in one table, `BUILTINS` in `builtins.rs`, which the executor dispatches from before the command map; `help`, `which` and completion read the same table. A builtin always wins over a registered command of the same name.
 - **Exit status.** `CommandOutput::Status { code, output }` lets a command print and fail without an `Err`; the executor records the code for `&&`, `||`, `$?` and `if`.
@@ -428,7 +428,7 @@ OASIS_OS compiles as a C-compatible dynamic library (`oasis-ffi`, cdylib) that U
 
 ### 7.2 FFI Boundary
 
-The FFI layer exports 26 C-ABI functions: lifecycle and rendering (`oasis_create`, `oasis_create_full`, `oasis_destroy`, `oasis_tick`, `oasis_send_input`, `oasis_get_buffer`, `oasis_get_dirty`), commands and VFS (`oasis_send_command`, `oasis_free_string`, `oasis_set_vfs_root`, `oasis_add_vfs_file`, `oasis_register_callback`), audio (`oasis_audio_*`, `oasis_set_audio_callback`) and video (`oasis_video_*`, with the `video-decode` / `video-decode-ffmpeg` feature). All internal Rust state is behind the opaque pointer; null handles and strings are checked at every entry point and no panic crosses the boundary.
+The FFI layer exports 31 C-ABI functions: lifecycle and rendering (`oasis_create`, `oasis_create_full`, `oasis_destroy`, `oasis_tick`, `oasis_send_input`, `oasis_get_buffer`, `oasis_get_dirty`), commands and VFS (`oasis_send_command`, `oasis_free_string`, `oasis_set_vfs_root`, `oasis_add_vfs_file`, `oasis_register_callback` / `oasis_register_callback_ex`, the latter with a host `user_data` pointer), audio (`oasis_audio_*` incl. `oasis_audio_drain_stream` / `oasis_audio_stream_buffered` for streamed radio bytes, `oasis_set_audio_callback` / `_ex`) and video (six `oasis_video_*` incl. `oasis_video_audio_format`, with the `video-decode` / `video-decode-ffmpeg` feature; decode is paced to the wall clock). All internal Rust state is behind the opaque pointer; null handles and strings are checked at every entry point and no panic crosses the boundary.
 
 ### 7.3 Render Pipeline
 
@@ -616,7 +616,7 @@ The `Vfs` trait (`oasis-vfs/src/lib.rs`) has `readdir`, `read`, `write`, `stat`,
 
 ### 11.2 VFS as IPC
 
-Hosts and apps also use well-known VFS paths as IPC: `oasis_types::ipc` is the one home for the path constants (`/var/audio`, `/var/radio`, `/var/wm`, `/var/tv`, `/var/plugin`, `/var/browser/request`, the Settings `/system/ipc/*` requests and `/system/state/*` mirrors, including `/system/state/net`) and the typed requests (`MediaRequest` (§14), `WmRequest`, `PluginRequest`, `NetState`); apps hand host requests over through `App::drain_requests` (§4.3.2). Plugins use the same mechanism ([plugin-development.md](plugin-development.md)).
+Hosts and apps also use well-known VFS paths as IPC: `oasis_types::ipc` is the one home for the path constants (`/var/audio`, `/var/radio`, `/var/wm`, `/var/tv`, `/var/plugin`, `/var/browser/request`, the Settings `/system/ipc/*` requests and `/system/state/*` mirrors, including `/system/state/net`) and the typed requests and states (`MediaRequest` (§14), `RadioRequest`, `TvRequest`, `TvStatus`, `WmRequest`, `PluginRequest`, `BrowserRequest`, `Notification`, `NetState`); apps hand host requests over through `App::drain_requests` (§4.3.2). Plugins use the same mechanism ([plugin-development.md](plugin-development.md)).
 
 ### 11.3 Game Asset VFS
 
@@ -643,7 +643,7 @@ Test layers and the harness API: [testing.md](testing.md). PSP scenarios: [scrip
 
 ### 12.2 PSP Debugging
 
-Today PSP debugging uses the WiFi TCP command server inside the EBOOT (`scripts/psp_remote.py`: deploy, reboot, remote input injection, live framebuffer capture, file upload, scripted sequences), the network recovery EBOOT (hold R on boot) and PPSSPP headless runs in the `psp` Docker profile.
+Today PSP debugging uses the WiFi TCP command server inside the EBOOT (`scripts/psp_remote.py`: deploy, reboot, remote input injection, live framebuffer capture, file upload, scripted sequences), the network recovery EBOOT (hold R on boot) -- both require a PSK and serve no one without a key ([networking.md](networking.md#psp-dev-servers)) -- and PPSSPP headless runs in the `psp` Docker profile.
 
 **Planned: PPSSPP with an embedded MCP server.** A patched PPSSPP container would expose emulator internals as MCP tools (`psp.memory.read/write/search`, `psp.gpu.state/vram_dump/texture_list`, `psp.debug.breakpoint/step/registers/threads/stack_trace`, `psp.net.sockets/capture/inject_latency`, `psp.emu.screenshot/save_state/frame_advance`), built from a pinned PPSSPP commit plus a small patch series under `docker/ppsspp-patches/` (currently a placeholder). It would let an agent inspect GU state, threads and memory of a running EBOOT the way it inspects desktop code. None of it is built yet.
 
@@ -694,7 +694,7 @@ OASIS_OS supports runtime-extensible functionality through plugins: Rust types i
 
 ### 15.1 Widgets
 
-`oasis-ui` provides 27 types implementing the `Widget` trait (`measure` + `draw` against a theme-aware `DrawContext`) plus non-`Widget` helpers (ListView, MenuBar, NinePatch, flex/grid layout, focus management, tweens; easing curves come from `oasis_types::easing`). The catalogue with source paths is [ui-widgets.md](ui-widgets.md).
+`oasis-ui` provides 27 types implementing the `Widget` trait (`measure` + `draw` against a theme-aware `DrawContext`) plus the generic `ListView<T>` (also a `Widget`; a caller `fn` draws its items) and non-`Widget` helpers (MenuBar, NinePatch, flex/grid layout, focus management, tweens; easing curves come from `oasis_types::easing`). The catalogue with source paths is [ui-widgets.md](ui-widgets.md).
 
 ### 15.2 Accessibility
 

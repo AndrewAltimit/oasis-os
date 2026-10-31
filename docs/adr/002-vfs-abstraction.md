@@ -48,7 +48,9 @@ Core code never calls `std::fs` directly. Three implementations exist:
   on the final entry itself, so they delete or move a symlink, never its
   target (deleting `/link` used to delete the file it pointed to) -- also
   a dangling link or one pointing outside the root. `readdir` follows
-  links like `stat`, so a linked directory lists as a directory.
+  links like `stat`, so a linked directory lists as a directory; recursive
+  deletes ask the provided `Vfs::is_symlink` (`false` except on `RealVfs`)
+  and remove such a link as a link instead of emptying its target.
 - **Testability.** All file operations are testable with `MemoryVfs` -- no temp
   directories, no cleanup, deterministic behavior.
 - **Embedding.** FFI consumers populate `MemoryVfs` via `oasis_add_vfs_file()`

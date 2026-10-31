@@ -28,12 +28,15 @@ oasis-video's features are additive and none is on by default:
 
 oasis-app's `video-decode` / `video-decode-ffmpeg` (and the same pair in
 oasis-ffi) select `h264` / `ffmpeg`; oasis-app also enables `demux-lite`.
-When both `h264` and `ffmpeg` end up enabled (`--all-features`, or two
-crates in one build picking different backends), ffmpeg is the
-`SoftwareVideoDecoder` backend and the symphonia modules stay available
-as libraries. `SoftwareVideoDecoder::open_stream_with_moov` and
-`keyframe_seek_target` exist on both backends (ffmpeg reads the
-container itself, so it ignores the moov and seeks to keyframes on its
+`SoftwareVideoDecoder` forwards every call to the backend selected at
+compile time through a crate-private `DecoderBackend` trait. When both
+`h264` and `ffmpeg` end up enabled (`--all-features`, or two crates in
+one build picking different backends), ffmpeg is the backend and the
+symphonia one is still compiled (and linted) but unused; the demux,
+AAC and H.264 modules are private either way.
+`SoftwareVideoDecoder::open_stream_with_moov` and `keyframe_seek_target`
+exist on both backends (ffmpeg reads the container itself, so it takes
+the trait defaults: it ignores the moov and seeks to keyframes on its
 own). The PSP build enables only `demux-lite` and so links neither
 symphonia nor openh264.
 
