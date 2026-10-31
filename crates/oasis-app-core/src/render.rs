@@ -372,11 +372,12 @@ mod tests {
         let h16 = rec.measure_text_height(16);
         assert_eq!(font_size_fitting(&rec, 16, h16), 16, "already fits");
         assert_eq!(font_size_fitting(&rec, 16, 10_000), 16, "never grows");
-        let fitted = font_size_fitting(&rec, 16, h16 - 1);
+        let room = h16 - 1;
+        let fitted = font_size_fitting(&rec, 16, room);
         assert!(fitted < 16);
-        assert!(rec.measure_text_height(fitted) <= h16 - 1 || fitted == 8);
+        assert!(rec.measure_text_height(fitted) <= room || fitted == 8);
         assert!(
-            rec.measure_text_height(fitted + 1) > h16 - 1,
+            rec.measure_text_height(fitted + 1) > room,
             "the largest size that fits"
         );
         assert_eq!(font_size_fitting(&rec, 16, 0), 8, "floor of 8");
