@@ -9,7 +9,11 @@
 //! bar + any active drop-down via the [`oasis_types::backend::SdiBackend`]
 //! trait so it works on every backend (SDL3, WASM, UE5, PSP).
 
-use oasis_types::backend::{Color, SdiBackend};
+use std::borrow::Cow;
+use std::cell::RefCell;
+use std::collections::HashMap;
+
+use oasis_types::backend::{Color, SdiBackend, bitmap_measure_text};
 use oasis_types::error::Result;
 
 /// An entry inside a drop-down. Either a clickable action with an
@@ -91,17 +95,36 @@ impl Menu {
 /// and the drop-down simply renders without a hover row. The
 /// [`MenuBar::pointer_move`] helper is provided for any future
 /// dispatcher that wants to wire it in.
+///
+/// Label and drop-down widths come from the backend's `measure_text`,
+/// recorded by the last draw so hit-testing matches what is on screen
+/// (before the first draw the bitmap-font metrics stand in). On a bar
+/// too narrow for every label the padding shrinks, then the trailing
+/// menus fold into a `»` overflow menu (index `menus.len()`, reported as
+/// [`MenuHit::Label`] like any other) that lists them under disabled
+/// headings. Drop-downs stay inside the bar's width, dropping shortcut
+/// hints and ellipsizing labels that do not fit.
 #[derive(Debug, Clone)]
 pub struct MenuBar {
     pub menus: Vec<Menu>,
     pub open: Option<usize>,
     pub hovered_item: Option<usize>,
+    /// Text widths measured by the last draw.
+    metrics: RefCell<TextMetrics>,
+}
+
+/// Text widths measured with the backend that last drew the bar.
+#[derive(Debug, Clone, Default)]
+struct TextMetrics {
+    font_size: u16,
+    widths: HashMap<String, u32>,
 }
 
 /// The result of a hit-test on the menu bar.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MenuHit {
     /// A top-level label was clicked (toggle its drop-down).
+    /// `menus.len()` is the overflow (`»`) menu.
     Label(usize),
     /// A drop-down entry was clicked. `id` is the caller's action key.
     Item { id: String },
@@ -148,7 +171,7 @@ impl Default for MenuStyle {
             item_hot_text: Color::rgb(255, 255, 255),
             item_disabled_text: Color::rgb(150, 150, 150),
             separator: Color::rgb(170, 170, 170),
-            font_size: 11,
+            font_size: DEFAULT_FONT_SIZE,
         }
     }
 }
@@ -175,22 +198,36 @@ impl MenuStyle {
             item_hot_text: theme.menu_hover_text,
             item_disabled_text: theme.menu_disabled_text,
             separator: theme.menu_separator,
-            font_size: 11,
+            font_size: DEFAULT_FONT_SIZE,
         }
     }
 }
 
 /// Layout parameters (pixel sizes).
+const DEFAULT_FONT_SIZE: u16 = 11;
 const BAR_PAD_X: i32 = 6;
 const LABEL_PAD_X: i32 = 8;
-const LABEL_CHAR_W: i32 = 7;
+/// Narrowest label padding / bar inset before menus fold into `»`.
+const MIN_LABEL_PAD_X: i32 = 3;
+const MIN_BAR_PAD_X: i32 = 2;
 const ITEM_H: i32 = 20;
 const ITEM_PAD_X: i32 = 22;
+/// Item padding of a drop-down squeezed below its natural width.
+const MIN_ITEM_PAD_X: i32 = 6;
+/// Gap between an item's label and its shortcut hint.
+const SHORTCUT_GAP: i32 = 16;
 const DROPDOWN_MIN_W: u32 = 120;
 const SEPARATOR_H: i32 = 6;
+/// Label of the overflow menu holding the menus that do not fit.
+const OVERFLOW_LABEL: &str = "\u{bb}";
+/// Truncation marker `SdiText::draw_text_ellipsis` appends.
+const ELLIPSIS: &str = "...";
+/// Measured strings kept per bar (menus are small; this only bounds
+/// hosts that keep rebuilding entries with new labels).
+const METRICS_CAP: usize = 512;
 
 /// `(x, y, w, h)` screen rect.
-type Rect = (i32, i32, u32, u32);
+pub type Rect = (i32, i32, u32, u32);
 
 /// Whether `(x, y)` lies inside `rect` (right / bottom edges exclusive).
 fn contains((rx, ry, rw, rh): Rect, x: i32, y: i32) -> bool {
@@ -200,12 +237,41 @@ fn contains((rx, ry, rw, rh): Rect, x: i32, y: i32) -> bool {
         && i64::from(y) < i64::from(ry) + i64::from(rh)
 }
 
+/// Where each label sits on a bar of a given width.
+#[derive(Debug, Clone, PartialEq)]
+struct BarLayout {
+    /// `(x, w)` (bar-local) of each shown menu: `menus[..slots.len()]`.
+    slots: Vec<(i32, i32)>,
+    /// `(x, w)` of the `»` label when trailing menus are folded.
+    overflow: Option<(i32, i32)>,
+    /// Horizontal text padding inside each label.
+    pad: i32,
+}
+
+impl BarLayout {
+    /// `(x, w)` of label `index` (`menus.len()` = overflow); a folded
+    /// menu answers with the overflow label it lives under.
+    fn slot(&self, index: usize) -> Option<(i32, i32)> {
+        self.slots.get(index).copied().or(self.overflow)
+    }
+
+    /// Label index under bar-local `x` (`menu_count` = overflow).
+    fn index_at(&self, x: i32, menu_count: usize) -> Option<usize> {
+        let hit = |&(sx, sw): &(i32, i32)| x >= sx && x < sx + sw;
+        self.slots
+            .iter()
+            .position(hit)
+            .or_else(|| self.overflow.filter(hit).map(|_| menu_count))
+    }
+}
+
 impl MenuBar {
     pub fn new(menus: Vec<Menu>) -> Self {
         Self {
             menus,
             open: None,
             hovered_item: None,
+            metrics: RefCell::new(TextMetrics::default()),
         }
     }
 
@@ -218,27 +284,115 @@ impl MenuBar {
         self.open.is_some()
     }
 
-    /// Width of a top-level label on the bar (fixed per-character
-    /// advance, so hit boxes never depend on the backend's font).
-    fn label_width(menu: &Menu) -> i32 {
-        menu.label.chars().count() as i32 * LABEL_CHAR_W + LABEL_PAD_X * 2
-    }
-
-    /// Compute the X range of a top-level label on the bar.
-    /// Returns `(label_x, label_w)` in bar-local coordinates.
-    fn label_range(&self, index: usize) -> (i32, i32) {
-        let mut x = BAR_PAD_X;
-        for (i, menu) in self.menus.iter().enumerate() {
-            let w = Self::label_width(menu);
-            if i == index {
-                return (x, w);
-            }
-            x += w;
+    /// Measure `texts` with `backend` at `font_size` for the layout of
+    /// the following hit-tests and draws.
+    fn remember<'t>(
+        &self,
+        backend: &dyn SdiBackend,
+        font_size: u16,
+        texts: impl IntoIterator<Item = &'t str>,
+    ) {
+        let mut m = self.metrics.borrow_mut();
+        if m.font_size != font_size || m.widths.len() > METRICS_CAP {
+            m.widths.clear();
+            m.font_size = font_size;
         }
-        (x, 0)
+        for t in texts {
+            if !m.widths.contains_key(t) {
+                let w = backend.measure_text(t, font_size);
+                m.widths.insert(t.to_string(), w);
+            }
+        }
     }
 
-    /// Width required for the currently-open drop-down.
+    /// Width of `text` as the last draw measured it (bitmap-font metrics
+    /// for text not drawn yet).
+    fn text_w(&self, text: &str) -> i32 {
+        let m = self.metrics.borrow();
+        let w = m.widths.get(text).copied().unwrap_or_else(|| {
+            let size = if m.font_size == 0 {
+                DEFAULT_FONT_SIZE
+            } else {
+                m.font_size
+            };
+            bitmap_measure_text(text, size)
+        });
+        w as i32
+    }
+
+    /// Lay the labels out on a bar `bar_w` wide.
+    fn bar_layout(&self, bar_w: u32) -> BarLayout {
+        let bar_w = bar_w as i32;
+        let n = self.menus.len() as i32;
+        let text: Vec<i32> = self.menus.iter().map(|m| self.text_w(&m.label)).collect();
+        let text_sum: i32 = text.iter().sum();
+        let place = |inset: i32, pad: i32, count: usize| {
+            let mut x = inset;
+            text[..count]
+                .iter()
+                .map(|tw| {
+                    let slot = (x, tw + 2 * pad);
+                    x += slot.1;
+                    slot
+                })
+                .collect::<Vec<_>>()
+        };
+        if n == 0 || BAR_PAD_X + text_sum + 2 * LABEL_PAD_X * n <= bar_w {
+            return BarLayout {
+                slots: place(BAR_PAD_X, LABEL_PAD_X, self.menus.len()),
+                overflow: None,
+                pad: LABEL_PAD_X,
+            };
+        }
+        // Squeeze the padding before folding any menu away.
+        let pad = ((bar_w - MIN_BAR_PAD_X - text_sum) / (2 * n)).min(LABEL_PAD_X);
+        if pad >= MIN_LABEL_PAD_X {
+            return BarLayout {
+                slots: place(MIN_BAR_PAD_X, pad, self.menus.len()),
+                overflow: None,
+                pad,
+            };
+        }
+        let pad = MIN_LABEL_PAD_X;
+        let overflow_w = self.text_w(OVERFLOW_LABEL) + 2 * pad;
+        let mut x = MIN_BAR_PAD_X;
+        let mut shown = 0;
+        for tw in &text {
+            if x + tw + 2 * pad + overflow_w > bar_w {
+                break;
+            }
+            x += tw + 2 * pad;
+            shown += 1;
+        }
+        BarLayout {
+            slots: place(MIN_BAR_PAD_X, pad, shown),
+            overflow: Some((x, overflow_w)),
+            pad,
+        }
+    }
+
+    /// The menu behind label `index` on a bar laid out as `layout`: a
+    /// real menu, or (for `menus.len()`) the overflow menu listing the
+    /// folded ones, each under a disabled heading.
+    fn menu_at(&self, index: usize, layout: &BarLayout) -> Option<Cow<'_, Menu>> {
+        if let Some(menu) = self.menus.get(index) {
+            return Some(Cow::Borrowed(menu));
+        }
+        if index != self.menus.len() || layout.overflow.is_none() {
+            return None;
+        }
+        let mut entries = Vec::new();
+        for menu in &self.menus[layout.slots.len()..] {
+            if !entries.is_empty() {
+                entries.push(MenuEntry::Separator);
+            }
+            entries.push(MenuEntry::action(menu.label.clone(), "").disabled());
+            entries.extend(menu.entries.iter().cloned());
+        }
+        Some(Cow::Owned(Menu::new(OVERFLOW_LABEL, entries)))
+    }
+
+    /// Natural width of a drop-down listing `menu`.
     fn dropdown_width(&self, menu: &Menu) -> u32 {
         let mut max_label = 0i32;
         let mut has_shortcut = false;
@@ -248,15 +402,19 @@ impl MenuBar {
                 label, shortcut, ..
             } = e
             {
-                max_label = max_label.max(label.chars().count() as i32 * LABEL_CHAR_W);
+                max_label = max_label.max(self.text_w(label));
                 if let Some(sc) = shortcut {
                     has_shortcut = true;
-                    max_shortcut = max_shortcut.max(sc.chars().count() as i32 * LABEL_CHAR_W);
+                    max_shortcut = max_shortcut.max(self.text_w(sc));
                 }
             }
         }
-        let total =
-            ITEM_PAD_X + max_label + if has_shortcut { 16 + max_shortcut } else { 0 } + ITEM_PAD_X;
+        let shortcut_w = if has_shortcut {
+            SHORTCUT_GAP + max_shortcut
+        } else {
+            0
+        };
+        let total = ITEM_PAD_X + max_label + shortcut_w + ITEM_PAD_X;
         (total as u32).max(DROPDOWN_MIN_W)
     }
 
@@ -271,20 +429,24 @@ impl MenuBar {
         (h + 4) as u32
     }
 
-    /// The open menu and its drop-down rect `(x, y, w, h)` for a bar at
-    /// `(bar_x, bar_y)` that is `bar_h` tall. `None` when nothing is open
-    /// (or `open` names a menu that no longer exists).
-    fn open_dropdown(&self, bar_x: i32, bar_y: i32, bar_h: u32) -> Option<(&Menu, Rect)> {
+    /// The open menu and its drop-down rect `(x, y, w, h)` for the bar
+    /// `bar = (x, y, w, h)`. `None` when nothing is open (or `open` names
+    /// a menu that no longer exists). The drop-down hangs under its label,
+    /// shifted left (and on a very narrow bar shrunk) to stay within the
+    /// bar's width.
+    fn open_dropdown(&self, bar: Rect) -> Option<(Cow<'_, Menu>, Rect)> {
+        let (bar_x, bar_y, bar_w, bar_h) = bar;
         let idx = self.open?;
-        let menu = self.menus.get(idx)?;
-        let (label_x, _) = self.label_range(idx);
-        let rect = (
-            bar_x + label_x,
-            bar_y + bar_h as i32,
-            self.dropdown_width(menu),
-            Self::dropdown_height(menu),
-        );
-        Some((menu, rect))
+        let layout = self.bar_layout(bar_w);
+        let menu = self.menu_at(idx, &layout)?;
+        let (label_x, _) = layout.slot(idx)?;
+        let natural = self.dropdown_width(&menu);
+        let w = if bar_w == 0 { natural } else { natural.min(bar_w) };
+        let x = (bar_x + label_x)
+            .min(bar_x + bar_w as i32 - w as i32)
+            .max(bar_x);
+        let h = Self::dropdown_height(&menu);
+        Some((menu, (x, bar_y + bar_h as i32, w, h)))
     }
 
     /// Index of the drop-down entry whose row contains `y`, for a
@@ -318,24 +480,19 @@ impl MenuBar {
     ) -> MenuHit {
         // On the bar itself?
         if contains((bar_x, bar_y, bar_w, bar_h), x, y) {
-            let rel_x = x - bar_x;
-            let mut cursor = BAR_PAD_X;
-            for (i, menu) in self.menus.iter().enumerate() {
-                let w = Self::label_width(menu);
-                if rel_x >= cursor && rel_x < cursor + w {
-                    return MenuHit::Label(i);
-                }
-                cursor += w;
-            }
-            // Inside the bar but not on a label — close if open.
-            return MenuHit::Outside;
+            let layout = self.bar_layout(bar_w);
+            return match layout.index_at(x - bar_x, self.menus.len()) {
+                Some(i) => MenuHit::Label(i),
+                // Inside the bar but not on a label — close if open.
+                None => MenuHit::Outside,
+            };
         }
 
         // Inside the open drop-down?
-        if let Some((menu, dd)) = self.open_dropdown(bar_x, bar_y, bar_h)
+        if let Some((menu, dd)) = self.open_dropdown((bar_x, bar_y, bar_w, bar_h))
             && contains(dd, x, y)
         {
-            return match Self::entry_at(menu, dd.1, y).map(|i| &menu.entries[i]) {
+            return match Self::entry_at(&menu, dd.1, y).map(|i| &menu.entries[i]) {
                 Some(MenuEntry::Action {
                     id, enabled: true, ..
                 }) => MenuHit::Item { id: id.clone() },
@@ -347,21 +504,22 @@ impl MenuBar {
         MenuHit::Outside
     }
 
-    /// Update the hover state for the currently-open drop-down so the
-    /// next `draw` highlights the correct item. Safe to call with any
-    /// (x, y); a point outside the drop-down clears the hover.
+    /// Update the hover state for the currently-open drop-down of the
+    /// bar `bar = (x, y, w, h)` so the next `draw` highlights the correct
+    /// item. Safe to call with any (x, y); a point outside the drop-down
+    /// clears the hover.
     ///
     /// This is a hook for hosts that have mouse-move input available.
     /// OASIS's desktop dispatcher currently forwards only clicks, text,
     /// and mouse-wheel to app windows; when/if a pointer-move event
     /// variant is added, call this from the dispatcher to enable live
     /// hover highlights.
-    pub fn pointer_move(&mut self, x: i32, y: i32, bar_x: i32, bar_y: i32, bar_h: u32) {
+    pub fn pointer_move(&mut self, x: i32, y: i32, bar: Rect) {
         self.hovered_item = self
-            .open_dropdown(bar_x, bar_y, bar_h)
-            .filter(|&(_, dd)| contains(dd, x, y))
+            .open_dropdown(bar)
+            .filter(|(_, dd)| contains(*dd, x, y))
             .and_then(|(menu, dd)| {
-                Self::entry_at(menu, dd.1, y)
+                Self::entry_at(&menu, dd.1, y)
                     .filter(|&i| matches!(menu.entries[i], MenuEntry::Action { .. }))
             });
     }
@@ -379,16 +537,26 @@ impl MenuBar {
         bar_h: u32,
         style: &MenuStyle,
     ) -> Result<()> {
+        let labels = self.menus.iter().map(|m| m.label.as_str());
+        self.remember(&*backend, style.font_size, labels.chain([OVERFLOW_LABEL]));
         backend.fill_rect(bar_x, bar_y, bar_w, bar_h, style.bar_bg)?;
         backend.fill_rect(bar_x, bar_y + bar_h as i32 - 1, bar_w, 1, style.bar_border)?;
 
-        let mut cursor = BAR_PAD_X;
-        for (i, menu) in self.menus.iter().enumerate() {
-            let w = Self::label_width(menu);
-            let is_open = self.open == Some(i);
+        let layout = self.bar_layout(bar_w);
+        // The open label is lit; a folded menu lights the overflow label.
+        let open_slot = self.open.and_then(|o| layout.slot(o));
+        let labels = self
+            .menus
+            .iter()
+            .map(|m| m.label.as_str())
+            .zip(layout.slots.iter().copied())
+            .chain(layout.overflow.map(|slot| (OVERFLOW_LABEL, slot)));
+        let text_y = bar_y + (bar_h as i32 - style.font_size as i32) / 2;
+        for (label, (x, w)) in labels {
+            let is_open = open_slot == Some((x, w));
             if is_open {
                 backend.fill_rect(
-                    bar_x + cursor,
+                    bar_x + x,
                     bar_y + 2,
                     w as u32,
                     bar_h.saturating_sub(4),
@@ -400,31 +568,46 @@ impl MenuBar {
             } else {
                 style.label_text
             };
-            backend.draw_text(
-                &menu.label,
-                bar_x + cursor + LABEL_PAD_X,
-                bar_y + (bar_h as i32 - style.font_size as i32) / 2,
-                style.font_size,
-                text_color,
-            )?;
-            cursor += w;
+            let text_x = bar_x + x + layout.pad;
+            backend.draw_text(label, text_x, text_y, style.font_size, text_color)?;
         }
         Ok(())
     }
 
-    /// Draw the active drop-down (no-op if none is open). Call after
-    /// the rest of the window content so the drop-down floats on top.
+    /// Draw the active drop-down (no-op if none is open) of the bar
+    /// `bar = (x, y, w, h)`. Call after the rest of the window content so
+    /// the drop-down floats on top.
     pub fn draw_dropdown(
         &self,
         backend: &mut dyn SdiBackend,
-        bar_x: i32,
-        bar_y: i32,
-        bar_h: u32,
+        bar: Rect,
         style: &MenuStyle,
     ) -> Result<()> {
-        let Some((menu, (dd_x, dd_y, dd_w, dd_h))) = self.open_dropdown(bar_x, bar_y, bar_h) else {
+        if let Some(idx) = self.open
+            && let Some(menu) = self.menu_at(idx, &self.bar_layout(bar.2))
+        {
+            let mut texts = vec![ELLIPSIS];
+            for entry in &menu.entries {
+                if let MenuEntry::Action {
+                    label, shortcut, ..
+                } = entry
+                {
+                    texts.push(label);
+                    texts.extend(shortcut.as_deref());
+                }
+            }
+            self.remember(&*backend, style.font_size, texts);
+        }
+        let Some((menu, (dd_x, dd_y, dd_w, dd_h))) = self.open_dropdown(bar) else {
             return Ok(());
         };
+        // A drop-down squeezed below its natural width trims its padding.
+        let pad_x = if dd_w < self.dropdown_width(&menu) {
+            MIN_ITEM_PAD_X
+        } else {
+            ITEM_PAD_X
+        };
+        let inner_w = dd_w as i32 - 2 * pad_x;
 
         // Win95 raised bezel: 1px white top+left over 1px dark
         // bottom+right over grey fill.
@@ -460,7 +643,7 @@ impl MenuBar {
                         backend.fill_rect(
                             dd_x + 2,
                             item_y,
-                            dd_w - 4,
+                            dd_w.saturating_sub(4),
                             ITEM_H as u32,
                             style.item_hot_bg,
                         )?;
@@ -473,18 +656,27 @@ impl MenuBar {
                         style.item_text
                     };
                     let text_y = item_y + (ITEM_H - style.font_size as i32) / 2;
-                    backend.draw_text(
-                        label,
-                        dd_x + ITEM_PAD_X,
-                        text_y,
-                        style.font_size,
-                        text_color,
-                    )?;
-                    if let Some(sc) = shortcut {
-                        let sc_w = backend.measure_text(sc, style.font_size) as i32;
+                    let label_w = self.text_w(label);
+                    if label_w <= inner_w {
+                        let label_x = dd_x + pad_x;
+                        backend.draw_text(label, label_x, text_y, style.font_size, text_color)?;
+                    } else if self.text_w(ELLIPSIS) <= inner_w {
+                        backend.draw_text_ellipsis(
+                            label,
+                            dd_x + pad_x,
+                            text_y,
+                            style.font_size,
+                            text_color,
+                            inner_w as u32,
+                        )?;
+                    }
+                    // The shortcut hint is dropped first when space runs out.
+                    if let Some(sc) = shortcut
+                        && label_w + SHORTCUT_GAP + self.text_w(sc) <= inner_w
+                    {
                         backend.draw_text(
                             sc,
-                            dd_x + dd_w as i32 - sc_w - ITEM_PAD_X,
+                            dd_x + dd_w as i32 - self.text_w(sc) - pad_x,
                             text_y,
                             style.font_size,
                             text_color,
@@ -496,7 +688,7 @@ impl MenuBar {
                     backend.fill_rect(
                         dd_x + 4,
                         item_y + SEPARATOR_H / 2,
-                        dd_w - 8,
+                        dd_w.saturating_sub(8),
                         1,
                         style.separator,
                     )?;
@@ -585,9 +777,9 @@ mod tests {
     fn hover_tracks_item() {
         let mut bar = demo_bar();
         bar.open = Some(0);
-        bar.pointer_move(20, 50, 0, 20, 18);
+        bar.pointer_move(20, 50, (0, 20, 400, 18));
         assert_eq!(bar.hovered_item, Some(0)); // "New" is item 0
-        bar.pointer_move(20, 500, 0, 20, 18);
+        bar.pointer_move(20, 500, (0, 20, 400, 18));
         assert_eq!(bar.hovered_item, None);
     }
 
@@ -637,10 +829,10 @@ mod tests {
         let mut bar = demo_bar();
         bar.open = Some(99);
         assert_eq!(bar.hit_test(10, 30, 0, 0, 300, 20), MenuHit::Outside);
-        bar.pointer_move(10, 30, 0, 0, 20);
+        bar.pointer_move(10, 30, (0, 0, 300, 20));
         assert_eq!(bar.hovered_item, None);
         let mut rec = oasis_test_backend::RecordingBackend::default();
-        bar.draw_dropdown(&mut rec, 0, 0, 20, &MenuStyle::default())
+        bar.draw_dropdown(&mut rec, (0, 0, 300, 20), &MenuStyle::default())
             .unwrap();
     }
 
@@ -657,13 +849,109 @@ mod tests {
     fn hover_skips_separators() {
         let mut bar = demo_bar();
         bar.open = Some(0);
-        let (dx, dy, _, _) = bar.open_dropdown(0, 0, 20).unwrap().1;
+        let (dx, dy, _, _) = bar.open_dropdown((0, 0, 400, 20)).unwrap().1;
         // Walk every row of the drop-down: hover only ever lands on actions.
         for y in dy..dy + 200 {
-            bar.pointer_move(dx + 5, y, 0, 0, 20);
+            bar.pointer_move(dx + 5, y, (0, 0, 400, 20));
             if let Some(i) = bar.hovered_item {
                 assert!(matches!(bar.menus[0].entries[i], MenuEntry::Action { .. }));
             }
         }
+    }
+
+    /// Paint's six menus: wider than a 200 px bar at full padding.
+    fn wide_bar() -> MenuBar {
+        let menu = |label: &str| {
+            Menu::new(
+                label,
+                vec![MenuEntry::action(format!("{label} item"), label.to_lowercase())],
+            )
+        };
+        MenuBar::new(["File", "Edit", "Tool", "Brush", "Layer", "View"].map(menu).to_vec())
+    }
+
+    /// Right edge of every drawn text run (measured like the backend).
+    fn text_right_edges(rec: &oasis_test_backend::RecordingBackend) -> Vec<(String, i32)> {
+        rec.text_positions()
+            .into_iter()
+            .map(|(t, x, _, size)| (t.to_string(), x + bitmap_measure_text(t, size) as i32))
+            .collect()
+    }
+
+    #[test]
+    fn hit_boxes_follow_the_backend_measure() {
+        let bar = demo_bar();
+        let mut rec = oasis_test_backend::RecordingBackend::default();
+        // A wide font: 12 px per character.
+        rec.set_measure_text_fn(|t, _| t.chars().count() as u32 * 12);
+        bar.draw_bar(&mut rec, 0, 0, 400, 18, &MenuStyle::default())
+            .unwrap();
+        // "File" spans 6 + 4 * 12 + 16 = 70: x = 60 is still File (it was
+        // Edit under the fixed 7 px estimate).
+        assert_eq!(bar.hit_test(60, 5, 0, 0, 400, 18), MenuHit::Label(0));
+        assert_eq!(bar.hit_test(75, 5, 0, 0, 400, 18), MenuHit::Label(1));
+    }
+
+    #[test]
+    fn narrow_bar_squeezes_then_folds_menus_into_overflow() {
+        let mut bar = wide_bar();
+        let style = MenuStyle::default();
+        let text_sum: i32 = bar.menus.iter().map(|m| bar.text_w(&m.label)).sum();
+        let natural = (BAR_PAD_X + text_sum + 2 * LABEL_PAD_X * 6) as u32;
+        let squeezed = (MIN_BAR_PAD_X + text_sum + 2 * MIN_LABEL_PAD_X * 6) as u32;
+        assert!(squeezed > 200, "the 200 px case below must overflow");
+        // Narrower than natural but wide enough with squeezed padding:
+        // every label fits, no `»`.
+        for w in [natural - 1, squeezed] {
+            let mut rec = oasis_test_backend::RecordingBackend::default();
+            bar.draw_bar(&mut rec, 0, 0, w, 18, &style).unwrap();
+            assert!(!rec.has_text(OVERFLOW_LABEL), "{w}");
+            let edges = text_right_edges(&rec);
+            assert!(edges.iter().all(|(_, r)| *r <= w as i32), "{w}: {edges:?}");
+        }
+
+        // 200 px: the trailing menus fold into `»`, nothing spills out.
+        let mut rec = oasis_test_backend::RecordingBackend::default();
+        bar.draw_bar(&mut rec, 0, 0, 200, 18, &style).unwrap();
+        let edges = text_right_edges(&rec);
+        assert!(edges.iter().all(|(_, r)| *r <= 200), "{edges:?}");
+        assert!(rec.has_text(OVERFLOW_LABEL));
+        assert!(!rec.has_text("View"));
+
+        // The overflow label opens a menu listing the folded menus.
+        let layout = bar.bar_layout(200);
+        let (ox, _) = layout.overflow.unwrap();
+        assert_eq!(bar.hit_test(ox + 2, 5, 0, 0, 200, 18), MenuHit::Label(6));
+        bar.open = Some(6);
+        let mut rec = oasis_test_backend::RecordingBackend::default();
+        bar.draw_dropdown(&mut rec, (0, 0, 200, 18), &style).unwrap();
+        assert!(rec.has_text("View item"), "{:?}", rec.texts());
+        let (_, (dx, dy, dw, dh)) = bar.open_dropdown((0, 0, 200, 18)).unwrap();
+        assert!(dx >= 0 && dx + dw as i32 <= 200, "drop-down inside the bar");
+        // Every folded entry is clickable and dispatches its own id.
+        let ids: Vec<MenuHit> = (dy..dy + dh as i32)
+            .step_by(ITEM_H as usize / 2)
+            .map(|y| bar.hit_test(dx + 10, y, 0, 0, 200, 18))
+            .filter(|h| matches!(h, MenuHit::Item { .. }))
+            .collect();
+        assert!(ids.contains(&MenuHit::Item { id: "view".into() }), "{ids:?}");
+    }
+
+    #[test]
+    fn dropdown_is_shifted_and_squeezed_into_the_bar() {
+        let mut bar = demo_bar();
+        bar.menus[1].entries[0] =
+            MenuEntry::action("A very long undo label", "edit.undo").with_shortcut("Ctrl+Z");
+        bar.open = Some(1);
+        let style = MenuStyle::default();
+        let mut rec = oasis_test_backend::RecordingBackend::default();
+        bar.draw_bar(&mut rec, 0, 0, 140, 18, &style).unwrap();
+        bar.draw_dropdown(&mut rec, (0, 0, 140, 18), &style).unwrap();
+        let (_, (dx, _, dw, _)) = bar.open_dropdown((0, 0, 140, 18)).unwrap();
+        assert!(dx >= 0 && dx + dw as i32 <= 140);
+        let edges = text_right_edges(&rec);
+        assert!(edges.iter().all(|(_, r)| *r <= 140), "{edges:?}");
+        // The shortcut hint gave way to the label.
+        assert!(!rec.has_text("Ctrl+Z"), "{:?}", rec.texts());
     }
 }

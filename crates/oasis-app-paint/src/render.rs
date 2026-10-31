@@ -103,7 +103,7 @@ impl PaintApp {
         // Drop-down floats above everything else.
         if self.menu.is_open() {
             self.menu
-                .draw_dropdown(backend, l.menu.x, l.menu.y, l.menu.h, &menu_style)?;
+                .draw_dropdown(backend, (l.menu.x, l.menu.y, l.menu.w, l.menu.h), &menu_style)?;
         }
         Ok(())
     }

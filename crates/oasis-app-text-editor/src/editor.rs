@@ -538,6 +538,7 @@ impl TextEditorApp {
         }
         self.restore_cursor(group.before);
         self.redo_stack.push(group);
+        self.modified = self.buffer.content_hash() != self.saved_hash;
     }
 
     /// Redo the last undone edit group.
@@ -551,6 +552,7 @@ impl TextEditorApp {
         self.restore_cursor(group.after);
         self.group_open = false;
         self.undo_stack.push(group);
+        self.modified = self.buffer.content_hash() != self.saved_hash;
     }
 
     fn restore_cursor(&mut self, pos: Pos) {
@@ -560,7 +562,6 @@ impl TextEditorApp {
         self.goal_col = None;
         self.anchor = None;
         self.group_open = false;
-        self.modified = true;
         self.ensure_cursor_visible();
         self.rebuild_display_lines();
     }
@@ -775,12 +776,14 @@ impl TextEditorApp {
             EditorMode::Find | EditorMode::Replace => {
                 self.find_active = true;
                 self.replace_focus = false;
-                // Seed the query from a single-line selection.
+                // Seed the query from a single-line selection; either way a
+                // carried-over query is "selected": typing replaces it.
                 if let Some(sel) = self.selected_text()
                     && !sel.contains('\n')
                 {
                     self.find_query = sel;
                 }
+                self.query_primed = !self.find_query.is_empty();
             },
             EditorMode::GoToLine => self.prompt_input.clear(),
             EditorMode::SaveAs => {
@@ -801,6 +804,7 @@ impl TextEditorApp {
         }
         self.mode = EditorMode::Normal;
         self.find_active = false;
+        self.query_primed = false;
         self.status_message = None;
         self.rebuild_display_lines();
     }
@@ -880,12 +884,17 @@ impl TextEditorApp {
 
     fn queue_save(&mut self, path: String) {
         self.status_message = Some(format!("Saving {path}..."));
-        self.pending_save = Some((path, self.save_content(), self.buffer.generation()));
+        self.pending_save = Some((
+            path,
+            self.save_content(),
+            self.buffer.generation(),
+            self.buffer.content_hash(),
+        ));
     }
 
     /// Write a queued save. Called from `App::apply_vfs_ops`.
     pub(crate) fn flush_save(&mut self, vfs: &mut dyn oasis_vfs::Vfs) -> bool {
-        let Some((path, data, generation)) = self.pending_save.take() else {
+        let Some((path, data, generation, hash)) = self.pending_save.take() else {
             return false;
         };
         match vfs.write(&path, data.as_bytes()) {
@@ -898,6 +907,8 @@ impl TextEditorApp {
                     self.content.title = self.build_title();
                     self.read_only = false;
                 }
+                // The file now holds the text as of the queued save.
+                self.saved_hash = hash;
                 if self.buffer.generation() == generation {
                     self.modified = false;
                 }
@@ -971,6 +982,7 @@ impl TextEditorApp {
         self.redo_stack.clear();
         self.group_open = false;
         self.modified = false;
+        self.saved_hash = self.buffer.content_hash();
         self.file_path = None;
         self.line_ending = "\n";
         self.read_only = false;

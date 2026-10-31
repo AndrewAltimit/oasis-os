@@ -84,21 +84,35 @@ impl TextEditorApp {
         }
     }
 
+    /// The find query as the prompt shows it: a primed (carried-over,
+    /// about to be replaced) query is bracketed like a selection.
+    fn query_field(&self) -> String {
+        if self.query_primed {
+            format!("[{}]", self.find_query)
+        } else {
+            self.find_query.clone()
+        }
+    }
+
     /// Left status-bar text: the active prompt, a status message, or the
     /// file summary.
     pub(crate) fn status_left(&self, file_summary: bool) -> String {
         let mode = self.mode_label();
         match self.mode {
-            EditorMode::Find => return format!("{mode}  |  Find: {}_", self.find_query),
+            EditorMode::Find => {
+                let caret = if self.query_primed { "" } else { "_" };
+                return format!("{mode}  |  Find: {}{caret}", self.query_field());
+            },
             EditorMode::Replace => {
-                let (f, r) = if self.replace_focus {
-                    ("", "_")
-                } else {
-                    ("_", "")
+                let (f, r) = match (self.replace_focus, self.query_primed) {
+                    (true, _) => ("", "_"),
+                    (false, true) => ("", ""),
+                    (false, false) => ("_", ""),
                 };
                 return format!(
                     "{mode}  |  Find: {}{f}  Replace: {}{r}  (Enter / Ctrl+Enter all)",
-                    self.find_query, self.replace_text
+                    self.query_field(),
+                    self.replace_text
                 );
             },
             EditorMode::GoToLine => return format!("Go to line: {}_", self.prompt_input),
@@ -371,7 +385,7 @@ impl TextEditorApp {
         // any z-ordering from the backend.
         if self.menu.is_open() {
             self.menu
-                .draw_dropdown(backend, cx, menu_y, menu_h, &menu_style)?;
+                .draw_dropdown(backend, (cx, menu_y, cw, menu_h), &menu_style)?;
         }
 
         Ok(())

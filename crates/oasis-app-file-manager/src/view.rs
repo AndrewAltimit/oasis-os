@@ -407,7 +407,7 @@ impl FileManagerApp {
         // Drop-down floats above the rest of the windowed content.
         if self.menu.is_open() {
             self.menu
-                .draw_dropdown(backend, cx, menu_y, FM_MENU_H, &menu_style)?;
+                .draw_dropdown(backend, (cx, menu_y, cw, FM_MENU_H), &menu_style)?;
         }
 
         Ok(())
@@ -605,7 +605,7 @@ impl FileManagerApp {
         // Drop-down floats above the rest of the windowed content.
         if self.menu.is_open() {
             self.menu
-                .draw_dropdown(backend, g.menu_x, g.menu_y, g.menu_h, &menu_style)?;
+                .draw_dropdown(backend, (g.menu_x, g.menu_y, g.menu_w, g.menu_h), &menu_style)?;
         }
 
         Ok(())

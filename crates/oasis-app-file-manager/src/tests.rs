@@ -402,8 +402,10 @@ fn click_on_view_label_opens_dropdown() {
     let mut fm = FileManagerApp::new("/apps/fm", &vfs);
     // Default view is Explorer + windowed: no inner title bar, so the
     // menu bar starts at y=0 (height 18). View is the third entry.
-    let file_w = 4 * 7 + 16; // "File"
-    let edit_w = 4 * 7 + 16; // "Edit"
+    // Labels are as wide as the font draws them (11 px bitmap) + padding.
+    let label_w = |l: &str| oasis_types::backend::bitmap_measure_text(l, 11) as i32 + 16;
+    let file_w = label_w("File");
+    let edit_w = label_w("Edit");
     let view_x = 6 + file_w + edit_w + 4;
     let action = click_at(&mut fm, view_x, 8, 600, 400, &vfs);
     assert_eq!(action, AppAction::None);
