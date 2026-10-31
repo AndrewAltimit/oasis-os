@@ -9,19 +9,51 @@ impl TreeBuilder {
     // Formatting element helpers
     // =============================================================
 
-    /// Close an `<a>` element from the active formatting list if one
-    /// is present, before opening a new `<a>`.
-    pub(crate) fn close_formatting_a_if_active(&mut self) {
-        let idx = self
-            .active_formatting
+    /// Start of the active formatting entries after the last marker.
+    pub(crate) fn fmt_scope_start(&self) -> usize {
+        self.fmt_markers
+            .last()
+            .copied()
+            .unwrap_or(0)
+            .min(self.active_formatting.len())
+    }
+
+    /// Push a marker onto the list of active formatting elements.
+    pub(crate) fn insert_formatting_marker(&mut self) {
+        self.fmt_markers.push(self.active_formatting.len());
+    }
+
+    /// Clear the list of active formatting elements up to the last
+    /// marker (cell, caption, template, applet / object / marquee close).
+    pub(crate) fn clear_formatting_to_last_marker(&mut self) {
+        let keep = self.fmt_markers.pop().unwrap_or(0);
+        self.active_formatting.truncate(keep);
+    }
+
+    /// The last active formatting element (after the last marker) that
+    /// is the HTML element `tag`, as a list index.
+    fn last_formatting_entry(&self, tag: &TagName) -> Option<usize> {
+        let start = self.fmt_scope_start();
+        self.active_formatting[start..]
             .iter()
-            .rposition(|&id| self.tag_of(id) == Some(&TagName::A));
-        if let Some(fmt_idx) = idx {
-            let node_id = self.active_formatting[fmt_idx];
-            self.active_formatting.remove(fmt_idx);
-            if let Some(pos) = self.open_elements.iter().rposition(|&id| id == node_id) {
-                self.open_elements.remove(pos);
-            }
+            .rposition(|&id| self.tag_of(id) == Some(tag))
+            .map(|i| start + i)
+    }
+
+    /// A new `<a>` while one is still active (after the last marker):
+    /// run the adoption agency for it, then drop it from the list and
+    /// the stack if it survived (WHATWG §13.2.6.4.7).
+    pub(crate) fn close_formatting_a_if_active(&mut self) {
+        let Some(fmt_idx) = self.last_formatting_entry(&TagName::A) else {
+            return;
+        };
+        let node_id = self.active_formatting[fmt_idx];
+        self.close_formatting_element(&TagName::A);
+        if let Some(pos) = self.active_formatting.iter().rposition(|&id| id == node_id) {
+            self.active_formatting.remove(pos);
+        }
+        if let Some(pos) = self.open_elements.iter().rposition(|&id| id == node_id) {
+            self.open_elements.remove(pos);
         }
     }
 
@@ -50,13 +82,9 @@ impl TreeBuilder {
 
         // Step 2: outer loop, at most 8 iterations.
         for _outer in 0..8 {
-            // Step 3: find the last formatting element with this tag.
-            // We don't model markers; the whole list is one scope.
-            let fmt_list_pos = self
-                .active_formatting
-                .iter()
-                .rposition(|&id| self.tag_of(id) == Some(subject));
-            let Some(fmt_list_pos) = fmt_list_pos else {
+            // Step 3: find the last formatting element with this tag
+            // between the end of the list and the last marker.
+            let Some(fmt_list_pos) = self.last_formatting_entry(subject) else {
                 // No formatting entry — fall through to the generic
                 // "any other end tag" path so misplaced end tags
                 // still close their element.
@@ -264,12 +292,14 @@ impl TreeBuilder {
             v.sort_unstable();
             v
         }
+        let start = self.fmt_scope_start();
         if let Some(new) = self.doc.element(id) {
             let new_attrs = sorted(new);
             let matching: Vec<usize> = self
                 .active_formatting
                 .iter()
                 .enumerate()
+                .skip(start)
                 .filter(|&(_, &fid)| {
                     self.doc.element(fid).is_some_and(|e| {
                         e.tag == new.tag
@@ -286,32 +316,38 @@ impl TreeBuilder {
         self.active_formatting.push(id);
     }
 
-    /// Simplified reconstruction of active formatting elements.
+    /// Reconstruct the active formatting elements (WHATWG §13.2.4.3):
+    /// reopen, in order, the entries after the last marker that follow
+    /// the last entry still open.
     pub(crate) fn reconstruct_formatting(&mut self) {
-        if self.active_formatting.is_empty() {
+        let start = self.fmt_scope_start();
+        let len = self.active_formatting.len();
+        if len == start
+            || self
+                .open_elements
+                .contains(&self.active_formatting[len - 1])
+        {
             return;
         }
-        let to_reopen: Vec<super::super::dom::NodeId> = self
-            .active_formatting
-            .iter()
-            .filter(|&&id| !self.open_elements.contains(&id))
-            .copied()
-            .collect();
-
-        for id in to_reopen {
+        let mut first = len - 1;
+        while first > start
+            && !self
+                .open_elements
+                .contains(&self.active_formatting[first - 1])
+        {
+            first -= 1;
+        }
+        for pos in first..len {
             // At the nesting cap a clone would not be pushed onto the
             // stack either, and would just be cloned again next time.
             if self.open_elements.len() >= super::MAX_NESTING_DEPTH {
                 break;
             }
-            let Some(new_id) = self.clone_element(id) else {
+            let Some(new_id) = self.clone_element(self.active_formatting[pos]) else {
                 continue;
             };
             self.insert_element(new_id);
-
-            if let Some(pos) = self.active_formatting.iter().position(|&fid| fid == id) {
-                self.active_formatting[pos] = new_id;
-            }
+            self.active_formatting[pos] = new_id;
         }
     }
 
@@ -337,98 +373,13 @@ impl TreeBuilder {
     // Foster parenting
     // =============================================================
 
-    /// Foster-parent a token. Per WHATWG HTML §13.2.6.1 ("appropriate
-    /// place for inserting a node"), when foster parenting is enabled
-    /// and the current insertion point would be inside a `<table>`,
-    /// `<tbody>`, `<thead>`, `<tfoot>`, or `<tr>`, the new node is
-    /// inserted **immediately before** the foster-parented `<table>`
-    /// in the table's parent — not appended to that parent. Only when
-    /// the table has no parent (which can only happen if the table is
-    /// the document root, which we never construct) do we fall back to
-    /// the previous open element on the stack.
+    /// Process `token` with the in-body rules and foster parenting on
+    /// (the "anything else" entry of "in table", WHATWG §13.2.6.4.9):
+    /// nodes whose insertion target is a table element go just before
+    /// the table instead (see `TreeBuilder::insertion_place`).
     pub(crate) fn foster_parent(&mut self, token: Token) {
-        let table_idx = self
-            .open_elements
-            .iter()
-            .rposition(|&id| self.tag_of(id) == Some(&TagName::Table));
-
-        // (foster_parent_id, optional reference_child_id)
-        let (foster_target, before_ref) = if let Some(idx) = table_idx {
-            let table_id = self.open_elements[idx];
-            if let Some(parent_id) = self.doc.nodes[table_id].parent {
-                (parent_id, Some(table_id))
-            } else if idx > 0 {
-                (self.open_elements[idx - 1], None)
-            } else {
-                (self.doc.root, None)
-            }
-        } else {
-            (self.current_node(), None)
-        };
-
-        let insert = |doc: &mut super::super::dom::Document, child: super::super::dom::NodeId| {
-            if let Some(reference) = before_ref {
-                doc.insert_before(foster_target, child, reference);
-            } else {
-                doc.append_child(foster_target, child);
-            }
-        };
-
-        match token {
-            Token::Character(ref s) => {
-                // Coalesce into the immediately-previous sibling (the
-                // child that comes right before the reference) when
-                // it's a text node; otherwise insert a fresh text node.
-                let prev_text_id = {
-                    let children = &self.doc.nodes[foster_target].children;
-                    let target_pos = match before_ref {
-                        Some(reference) => {
-                            let pos = children.iter().position(|&id| id == reference);
-                            debug_assert!(
-                                pos.is_some(),
-                                "foster parent: before_ref not in parent children"
-                            );
-                            pos
-                        },
-                        None => Some(children.len()),
-                    };
-                    target_pos.and_then(|pos| {
-                        if pos == 0 {
-                            None
-                        } else {
-                            Some(children[pos - 1])
-                        }
-                    })
-                };
-                if let Some(prev_id) = prev_text_id
-                    && let NodeKind::Text(ref mut t) = self.doc.nodes[prev_id].kind
-                {
-                    t.push_str(s);
-                    return;
-                }
-                let id = self.doc.add_node(NodeKind::Text(s.clone()));
-                insert(&mut self.doc, id);
-            },
-            Token::Comment(text) => {
-                let id = self.doc.add_node(NodeKind::Comment(text));
-                insert(&mut self.doc, id);
-            },
-            Token::StartTag(ref tag) => {
-                let id = self.create_element_from_start_tag(tag);
-                insert(&mut self.doc, id);
-                let tag_name = TagName::from_str(&tag.name.to_ascii_lowercase());
-                // Capped like `insert_element`: foster parenting used to
-                // push unconditionally (`<table>` x 80 000 grew the stack
-                // without bound, every scope scan with it).
-                if !tag_name.is_void() && !tag.self_closing {
-                    self.push_open(id);
-                }
-            },
-            Token::EndTag(ref tag) => {
-                let tag_name = TagName::from_str(&tag.name.to_ascii_lowercase());
-                self.close_any_other_end_tag(&tag_name);
-            },
-            _ => {},
-        }
+        let was = std::mem::replace(&mut self.foster_parenting, true);
+        self.handle_in_body(token);
+        self.foster_parenting = was;
     }
 }

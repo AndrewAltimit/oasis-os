@@ -344,19 +344,34 @@ impl TagName {
         }
     }
 
-    /// Returns `true` if this is a void element (self-closing, no content).
+    /// Returns `true` if this is a void element (self-closing, no content):
+    /// the HTML void elements plus the obsolete ones the parser treats
+    /// the same way (`basefont`, `bgsound`, `frame`, `keygen`, `param`).
     pub fn is_void(&self) -> bool {
-        matches!(
-            self,
+        match self {
             Self::Br
-                | Self::Hr
-                | Self::Img
-                | Self::Input
-                | Self::Meta
-                | Self::Link
-                | Self::Col
-                | Self::Source
-        )
+            | Self::Hr
+            | Self::Img
+            | Self::Input
+            | Self::Meta
+            | Self::Link
+            | Self::Col
+            | Self::Source => true,
+            Self::Unknown(s) => matches!(
+                s.as_str(),
+                "area"
+                    | "base"
+                    | "basefont"
+                    | "bgsound"
+                    | "embed"
+                    | "frame"
+                    | "keygen"
+                    | "param"
+                    | "track"
+                    | "wbr"
+            ),
+            _ => false,
+        }
     }
 
     /// Returns `true` if this is a block-level element by default.
@@ -401,24 +416,26 @@ impl TagName {
         )
     }
 
-    /// Returns `true` if this is a formatting element
-    /// (`b`, `i`, `em`, `strong`, `a`, `u`, `s`, `small`, `mark`,
-    /// `sub`, `sup`).
+    /// Returns `true` if this is a formatting element (WHATWG §13.2.4.3:
+    /// `a`, `b`, `big`, `code`, `em`, `font`, `i`, `nobr`, `s`, `small`,
+    /// `strike`, `strong`, `tt`, `u`): the elements the parser reopens
+    /// across block boundaries and runs the adoption agency for.
+    /// `mark` / `sub` / `sup` are ordinary phrasing elements, so a
+    /// `<sup>` closed by `</p>` must not reappear in the next paragraph.
     pub fn is_formatting(&self) -> bool {
-        matches!(
-            self,
+        match self {
             Self::B
-                | Self::I
-                | Self::Em
-                | Self::Strong
-                | Self::A
-                | Self::U
-                | Self::S
-                | Self::Small
-                | Self::Mark
-                | Self::Sub
-                | Self::Sup
-        )
+            | Self::I
+            | Self::Em
+            | Self::Strong
+            | Self::A
+            | Self::U
+            | Self::S
+            | Self::Small
+            | Self::Code => true,
+            Self::Unknown(s) => matches!(s.as_str(), "big" | "font" | "nobr" | "strike" | "tt"),
+            _ => false,
+        }
     }
 
     /// Returns `true` if this tag enters raw text mode
@@ -436,10 +453,38 @@ impl TagName {
     /// Returns `true` if this tag is in the "special" category per
     /// WHATWG HTML §13.2.4.2. The special category gates which elements
     /// can appear as the "furthest block" in the adoption agency
-    /// algorithm. This is a subset of the full spec list covering the
-    /// tags we actually model — anything we don't recognise falls into
-    /// `Unknown` and is not considered special.
+    /// algorithm (and stop the "any other end tag" stack walk). Tags
+    /// without a variant are matched by name.
     pub fn is_special(&self) -> bool {
+        if let Self::Unknown(s) = self {
+            return matches!(
+                s.as_str(),
+                "applet"
+                    | "area"
+                    | "base"
+                    | "basefont"
+                    | "bgsound"
+                    | "dir"
+                    | "embed"
+                    | "fieldset"
+                    | "frame"
+                    | "frameset"
+                    | "hgroup"
+                    | "keygen"
+                    | "listing"
+                    | "marquee"
+                    | "menu"
+                    | "noembed"
+                    | "noframes"
+                    | "object"
+                    | "param"
+                    | "plaintext"
+                    | "search"
+                    | "track"
+                    | "wbr"
+                    | "xmp"
+            );
+        }
         matches!(
             self,
             Self::Address
@@ -989,7 +1034,10 @@ mod tests {
         assert!(TagName::Strong.is_formatting());
         assert!(TagName::A.is_formatting());
         assert!(TagName::U.is_formatting());
-        assert!(TagName::Mark.is_formatting());
+        assert!(TagName::Code.is_formatting());
+        assert!(TagName::from_str("nobr").is_formatting());
+        assert!(!TagName::Mark.is_formatting());
+        assert!(!TagName::Sup.is_formatting());
 
         assert!(!TagName::Div.is_formatting());
         assert!(!TagName::P.is_formatting());

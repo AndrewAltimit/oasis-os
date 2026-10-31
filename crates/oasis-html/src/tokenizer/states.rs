@@ -7,6 +7,9 @@ use super::Tokenizer;
 use super::char_ref::resolve_named_ref;
 use super::types::{State, TagBuilder, Token};
 
+/// What follows `<!` to open a CDATA section (case-sensitive).
+const CDATA_OPEN: [char; 7] = ['[', 'C', 'D', 'A', 'T', 'A', '['];
+
 // -----------------------------------------------------------------------
 // Tag and data state implementations
 // -----------------------------------------------------------------------
@@ -378,6 +381,10 @@ impl Tokenizer {
             }
             self.state = State::Doctype;
             None
+        } else if self.allow_cdata && self.input[self.pos..].starts_with(&CDATA_OPEN) {
+            self.pos += CDATA_OPEN.len();
+            self.state = State::CdataSection;
+            None
         } else {
             self.current_comment.clear();
             self.state = State::BogusComment;
@@ -611,6 +618,102 @@ impl Tokenizer {
                 self.state = State::Data;
                 Some(Token::Comment(std::mem::take(&mut self.current_comment)))
             },
+        }
+    }
+
+    // -- CDATA / PLAINTEXT / script data -----------------------------------
+
+    /// **CDATA section** (foreign content only): text up to `]]>`.
+    pub(crate) fn state_cdata_section(&mut self) -> Option<Token> {
+        let start = self.pos;
+        let end = self.input[start..]
+            .windows(3)
+            .position(|w| w == [']', ']', '>'])
+            .map(|off| start + off);
+        let text: String = self.input[start..end.unwrap_or(self.input.len())]
+            .iter()
+            .collect();
+        self.pos = end.map_or(self.input.len(), |e| e + 3);
+        self.state = State::Data;
+        (!text.is_empty()).then_some(Token::Character(text))
+    }
+
+    /// **PLAINTEXT**: the rest of the input is text; there is no way out.
+    pub(crate) fn state_plaintext(&mut self) -> Token {
+        if self.pos >= self.input.len() {
+            return Token::Eof;
+        }
+        let text: String = self.input[self.pos..].iter().collect();
+        self.pos = self.input.len();
+        Token::Character(text)
+    }
+
+    /// **Script data**, with the escaped and double-escaped sub-states
+    /// (WHATWG §13.2.5.15–§13.2.5.31) folded into one scan.
+    ///
+    /// After `<!--` the script is *escaped*: `</script>` still ends it,
+    /// but a `<script>` there enters the *double-escaped* state where
+    /// `</script>` only returns to escaped, so legacy
+    /// `<!-- document.write("<script>..</script>") -->` stays one script.
+    /// `-->` leaves either escaped state.
+    pub(crate) fn state_script_data(&mut self) -> Option<Token> {
+        #[derive(PartialEq)]
+        enum Sub {
+            Normal,
+            Escaped,
+            DoubleEscaped,
+        }
+        const END: &str = "</script";
+        let mut sub = Sub::Normal;
+        // Consecutive `-` just seen while escaped (`-->` needs two).
+        let mut dashes = 0usize;
+        let mut text = String::new();
+        loop {
+            let Some(&ch) = self.input.get(self.pos) else {
+                self.state = State::Data;
+                return Some(if text.is_empty() {
+                    Token::Eof
+                } else {
+                    Token::Character(text)
+                });
+            };
+            if ch == '<' {
+                match sub {
+                    Sub::Normal | Sub::Escaped if self.at_content_end_tag(END) => {
+                        self.state = State::Data;
+                        if !text.is_empty() {
+                            return Some(Token::Character(text));
+                        }
+                        return Some(self.consume_content_end_tag(END));
+                    },
+                    Sub::Normal if self.starts_with_ci("<!--") => {
+                        text.push_str("<!--");
+                        self.pos += 4;
+                        sub = Sub::Escaped;
+                        dashes = 2;
+                        continue;
+                    },
+                    Sub::Escaped if self.at_content_end_tag("<script") => {
+                        sub = Sub::DoubleEscaped;
+                    },
+                    Sub::DoubleEscaped if self.at_content_end_tag(END) => {
+                        sub = Sub::Escaped;
+                    },
+                    _ => {},
+                }
+                dashes = 0;
+            } else if sub != Sub::Normal {
+                if ch == '-' {
+                    dashes += 1;
+                } else if ch == '>' && dashes >= 2 {
+                    sub = Sub::Normal;
+                    dashes = 0;
+                } else {
+                    dashes = 0;
+                }
+            }
+            text.push(ch);
+            self.pos += 1;
         }
     }
 

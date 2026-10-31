@@ -28,14 +28,16 @@ impl BrowserWidget {
 
         // 1. Tokenize and build DOM, reusing the previous document's
         //    arena allocation when available to avoid reallocations.
-        self.diag("[BR] html tokenize start");
-        let tokens = html::tokenizer::Tokenizer::new(source).tokenize();
-        self.diag(&format!("[BR] html tokenize done: {} tokens", tokens.len()));
-        self.diag("[BR] tree build start");
+        //    The tree builder drives the tokenizer (raw text only for HTML
+        //    elements, CDATA in SVG); `<noscript>` is markup without JS.
+        self.diag("[BR] html parse start");
+        let options = html::tree_builder::ParseOptions {
+            scripting: cfg!(feature = "javascript"),
+        };
         let doc = if let Some(old_doc) = self.document.take() {
-            html::tree_builder::TreeBuilder::build_reuse(tokens, old_doc)
+            html::tree_builder::TreeBuilder::parse_reuse(source, options, old_doc)
         } else {
-            html::tree_builder::TreeBuilder::build(tokens)
+            html::tree_builder::TreeBuilder::parse_with(source, options)
         };
         self.diag(&format!("[BR] tree build done: {} nodes", doc.nodes.len()));
         // The cascade below reads `hover_node`, so clear the previous

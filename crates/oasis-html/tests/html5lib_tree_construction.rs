@@ -8,12 +8,15 @@
 //! This is intentionally self-contained — we vendor a small curated
 //! subset of fixtures rather than pulling the full html5lib-tests
 //! repository (~20k tests, many of which exercise features we
-//! deliberately don't implement: full SVG namespacing with camelCase
-//! fixup, adoption agency corner cases beyond the 8-iteration limit,
-//! SVG integration points, MathML `<annotation-xml>`, etc.). Fixtures
-//! focus on the features we *do* claim to support: basic tree
-//! construction, the full adoption agency algorithm, foreign content
-//! breakout, and `<template>` parsing.
+//! deliberately don't implement: quirks mode, framesets, the "in
+//! template" insertion mode, namespaced dumps, fragment parsing).
+//! `tree_construction_basic.dat` covers basic construction, the
+//! adoption agency, foreign-content breakout and `<template>`;
+//! `tree_construction_spec.dat` the table / caption / column-group /
+//! select modes, formatting markers, foster parenting, SVG / MathML
+//! integration points and head handling. Expected dumps omit the
+//! html5lib namespace prefixes (the DOM stores none). Every case runs
+//! through both `TreeBuilder::parse` and `TreeBuilder::build`.
 //!
 //! The harness fails with a unified diff on mismatch so regressions
 //! are easy to read. To extend coverage, drop additional `.dat` files
@@ -23,7 +26,7 @@ use oasis_html::dom::{Document, NodeId, NodeKind};
 use oasis_html::tokenizer::Tokenizer;
 use oasis_html::tree_builder::TreeBuilder;
 
-const FIXTURE_FILES: &[&str] = &["tree_construction_basic.dat"];
+const FIXTURE_FILES: &[&str] = &["tree_construction_basic.dat", "tree_construction_spec.dat"];
 
 #[derive(Debug)]
 struct TestCase {
@@ -257,19 +260,23 @@ fn run_fixture(file: &str) -> (usize, Vec<String>) {
     let mut failures = Vec::new();
     let total = cases.len();
     for case in cases {
-        let tokens = Tokenizer::new(&case.data).tokenize();
-        let doc = TreeBuilder::build(tokens);
-        let actual = dump_document(&doc);
-        // Normalize trailing whitespace so fixture EOF conventions
-        // don't drive false failures.
-        let expected_n = case.expected.trim_end().to_string();
-        let actual_n = actual.trim_end().to_string();
-        if actual_n != expected_n {
-            let diff = diff_lines(&expected_n, &actual_n);
-            failures.push(format!(
-                "\n==== FAIL {} ====\ninput: {:?}\n{diff}",
-                case.label, case.data
-            ));
+        // Both entry points: the pull parser the browser uses, and the
+        // pre-tokenized stream.
+        let pulled = TreeBuilder::parse(&case.data);
+        let built = TreeBuilder::build(Tokenizer::new(&case.data).tokenize());
+        for (how, doc) in [("parse", pulled), ("build", built)] {
+            let actual = dump_document(&doc);
+            // Normalize trailing whitespace so fixture EOF conventions
+            // don't drive false failures.
+            let expected_n = case.expected.trim_end().to_string();
+            let actual_n = actual.trim_end().to_string();
+            if actual_n != expected_n {
+                let diff = diff_lines(&expected_n, &actual_n);
+                failures.push(format!(
+                    "\n==== FAIL {} ({how}) ====\ninput: {:?}\n{diff}",
+                    case.label, case.data
+                ));
+            }
         }
     }
     (total, failures)
