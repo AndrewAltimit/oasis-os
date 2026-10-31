@@ -60,9 +60,11 @@ pub(crate) fn take_request(vfs: &mut dyn Vfs, path: &str) -> Option<String> {
 }
 
 /// Write the status file `path` only when its contents differ from `text`
-/// (status files are republished every frame).
+/// (status files are republished every frame). A size mismatch settles it
+/// from a stat, without copying the file out of the VFS.
 pub(crate) fn publish_if_changed(vfs: &mut dyn Vfs, path: &str, text: &str) {
-    if vfs.read(path).ok().as_deref() != Some(text.as_bytes()) {
+    let same_size = vfs.stat(path).is_ok_and(|m| m.size == text.len() as u64);
+    if !same_size || vfs.read(path).ok().as_deref() != Some(text.as_bytes()) {
         let _ = vfs.write(path, text.as_bytes());
     }
 }
