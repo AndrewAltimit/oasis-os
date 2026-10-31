@@ -29,6 +29,7 @@ mod radio_controller;
 #[cfg(test)]
 mod radio_soak;
 mod render;
+pub mod settings;
 pub mod shell;
 pub mod shell_backend;
 mod sysinfo;
@@ -36,6 +37,7 @@ mod terminal_input;
 mod tv_controller;
 mod ui_ipc;
 mod ui_sfx;
+mod ui_sound;
 mod user_prefs;
 mod vfs_setup;
 mod video_player;

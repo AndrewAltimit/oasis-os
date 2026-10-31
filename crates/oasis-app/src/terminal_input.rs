@@ -165,7 +165,9 @@ fn candidate_rows(candidates: &[String], width: usize) -> Vec<String> {
     rows
 }
 
-fn make_env<'a>(state: &'a AppState, vfs: &'a mut MemoryVfs) -> Environment<'a> {
+/// The command environment of the shell's terminal: its working directory,
+/// the VFS and the platform services (no raw network access).
+pub(crate) fn make_env<'a>(state: &'a AppState, vfs: &'a mut MemoryVfs) -> Environment<'a> {
     Environment {
         cwd: state.terminal.cwd.clone(),
         vfs,
@@ -206,10 +208,7 @@ pub fn run_line(line: &str, state: &mut AppState, sdi: &mut SdiRegistry, vfs: &m
             (result, env.cwd)
         };
         state.terminal.cwd = cwd;
-        let pending_skin_swap = commands::process_command_output(result, state);
-        if let Some(name) = pending_skin_swap {
-            commands::apply_skin_swap(&name, state, sdi, vfs);
-        }
+        commands::apply_command_output(result, state, sdi, vfs);
         let term = &state.terminal;
         if let Err(e) = term.session.save_history(&term.cmd_reg, vfs) {
             log::warn!("terminal history not saved: {e}");
@@ -237,9 +236,7 @@ pub fn poll_jobs(state: &mut AppState, sdi: &mut SdiRegistry, vfs: &mut MemoryVf
     // toggle a server (see `commands::refuse_job_server_toggles`).
     let output = commands::refuse_job_server_toggles(output);
     let output = terminal_sdi::resolve_sdi_inspect(output, sdi);
-    if let Some(name) = commands::process_command_output(Ok(output), state) {
-        commands::apply_skin_swap(&name, state, sdi, vfs);
-    }
+    commands::apply_command_output(Ok(output), state, sdi, vfs);
     commands::trim_output(&mut state.terminal.output_lines);
     state.terminal.dirty = true;
 }

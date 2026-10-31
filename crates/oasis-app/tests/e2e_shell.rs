@@ -445,7 +445,7 @@ fn skin_switch_from_terminal_at_runtime() {
         h.state().terminal.output_lines
     );
     assert!(
-        !h.state().pending_wallpaper_refresh,
+        !h.state().skin_assets.pending_refresh,
         "wallpaper regenerated"
     );
     h.button(Button::Cancel); // back to the dashboard
@@ -470,7 +470,7 @@ fn skin_switch_via_settings_ipc_round_trip() {
     // The persisted preference follows the swap.
     let settings = String::from_utf8(
         h.vfs()
-            .read(oasis_core::settings::DEFAULT_PATH)
+            .read(oasis_app::settings::DEFAULT_PATH)
             .unwrap_or_default(),
     )
     .unwrap();

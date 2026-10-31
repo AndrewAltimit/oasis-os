@@ -25,6 +25,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::Result;
 
+use crate::settings::{SettingsStore, UserPrefs};
 use oasis_backend_sdl::shader_bridge::SdlShaderBridge;
 use oasis_core::active_theme::ActiveTheme;
 use oasis_core::backend::SdiBackend;
@@ -37,7 +38,6 @@ use oasis_core::input::{InputEvent, KeyTwinFilter};
 use oasis_core::platform::{DesktopPlatform, NetworkService, PowerService, TimeService};
 use oasis_core::plugin::{Plugin, PluginContext, PluginManager, register_builtin_plugins};
 use oasis_core::sdi::SdiRegistry;
-use oasis_core::settings::{SettingsStore, UserPrefs};
 use oasis_core::skin::{Skin, resolve_skin, resolve_skin_or_classic};
 use oasis_core::startmenu::StartMenuState;
 use oasis_core::statusbar::StatusBar;
@@ -53,7 +53,8 @@ use oasis_core::wallpaper;
 use oasis_core::wm::manager::WindowManager;
 
 use crate::app_state::{
-    AppState, ContentLayer, Mode, NetworkLayer, RadioLayer, TerminalLayer, TvLayer, UiLayer,
+    AppState, ContentLayer, Mode, NetworkLayer, RadioLayer, SkinAssets, TerminalLayer, TvLayer,
+    UiLayer,
 };
 use crate::audio_out::ShellAudio;
 use crate::launch::{BROWSER_WIN, LaunchOpts};
@@ -218,10 +219,6 @@ fn hermetic_skin_root() -> PathBuf {
     ))
 }
 
-/// Apply the skin's screen size to `config`: the skin's native size,
-/// PSP-native (480x272) skins scaled to 1280x720 unless they pin
-/// `desktop_width` / `desktop_height`, and a resolution picked in
-/// Settings wins over both.
 /// Whether the active skin's corrupted modifiers should distort this frame
 /// (the skin enables `corrupted`, intensity > 0, and the user has not asked
 /// for reduced motion).
@@ -234,6 +231,10 @@ fn corruption_active(state: &AppState) -> bool {
             .is_some_and(|m| m.is_active())
 }
 
+/// Apply the skin's screen size to `config`: the skin's native size,
+/// PSP-native (480x272) skins scaled to 1280x720 unless they pin
+/// `desktop_width` / `desktop_height`, and a resolution picked in
+/// Settings wins over both.
 pub fn resolve_screen_size(config: &mut OasisConfig, skin: &Skin, prefs: &UserPrefs) {
     config.screen_width = skin.manifest.screen_width;
     config.screen_height = skin.manifest.screen_height;
@@ -547,13 +548,8 @@ impl<B: ShellBackend> Shell<B> {
             bg_color: clear_color,
             active_transition,
             frame_counter: 0,
-            pending_wallpaper_refresh: false,
-            skin_layout_textures: Vec::new(),
-            image_layers: Vec::new(),
-            background_layer_cache: oasis_core::vector_overlay::LayerOpsCache::new(),
-            chrome_layer_cache: oasis_core::vector_overlay::LayerOpsCache::new(),
+            skin_assets: SkinAssets::default(),
             icon_drag: None,
-            cursor_texture: None,
             settings: SettingsStore::new(),
             radio: RadioLayer::new(),
             tv: TvLayer::new(),
@@ -561,7 +557,7 @@ impl<B: ShellBackend> Shell<B> {
             offline,
             custom_skin_root,
             toasts: ToastManager::new(),
-            ui_sounds: oasis_core::ui_sound::UiSoundQueue::new(),
+            ui_sounds: crate::ui_sound::UiSoundQueue::new(),
             sfx: oasis_audio::sfx::SfxPlayer::new(),
             media_track: None,
             media: oasis_audio::AudioManager::new(),
@@ -894,10 +890,10 @@ impl<B: ShellBackend> Shell<B> {
 
         // Animate image decal layers (drift/pulse) by mutating their SDI
         // objects; static layers cost nothing here.
-        if !state.image_layers.is_empty() {
+        if !state.skin_assets.image_layers.is_empty() {
             oasis_core::image_layers::tick_image_layers(
                 sdi,
-                &state.image_layers,
+                &state.skin_assets.image_layers,
                 anim_secs,
                 state.active_theme.background_reduced_motion,
             );
@@ -1249,7 +1245,7 @@ fn draw_frame<B: ShellBackend>(
             backend,
             &state.active_theme,
             state.frame_counter as u32,
-            &mut state.background_layer_cache,
+            &mut state.skin_assets.background_cache,
         )?;
         state.ui.dashboard.render_vector_icons(
             backend,
@@ -1274,7 +1270,7 @@ fn draw_frame<B: ShellBackend>(
             backend,
             &state.active_theme,
             state.frame_counter as u32,
-            &mut state.chrome_layer_cache,
+            &mut state.skin_assets.chrome_cache,
         )?;
     }
 

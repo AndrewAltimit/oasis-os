@@ -219,7 +219,7 @@ contain spaces. Verbs:
 > named, and refuses to remove or rename the root itself. The served `Vfs`
 > then applies its own checks (`RealVfs` additionally confines symlinks and
 > rejects Windows drive / device segments). The desktop shell serves
-> `/home` (`FTP_ROOT` in `oasis-app/src/commands.rs`), so FTP clients
+> `/home` (`FTP_ROOT` in `oasis-app/src/commands/services.rs`), so FTP clients
 > cannot reach the shell's `/system` state or the `/var` IPC request
 > files. Error messages name the inner path (`no such file:
 > /home/x`).

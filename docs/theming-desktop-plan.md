@@ -196,7 +196,7 @@ resolution, inheritance. But:
 - **Dashboard is pure grid math**: `index → (row, col) → cell_rect`
   (`oasis-core/src/dashboard/mod.rs:51-86`); `AppEntry` has no position;
   hit-testing divides cursor coords by cell size
-  (`oasis-app/src/input.rs:216-259`, `:576-610`); no icon drag; no position
+  (then in `oasis-app/src/input.rs`); no icon drag; no position
   persistence. Cells stretch to fill the screen evenly — the "phone grid".
 - **Bars are hardcoded full-width rectangles** (`statusbar.rs:155`,
   `bottombar.rs:170`); SDI has no polygon primitive and no textured-with-alpha
@@ -327,7 +327,7 @@ additive mode.
 
 ### B2. Real hit-testing + icon drag & drop
 
-- Replace grid-division hit-testing in `oasis-app/src/input.rs:216-259` and
+- Replace grid-division hit-testing in `oasis-app/src/input.rs` (now `input/`) and
   `:576-610` with per-icon rect tests (pattern: `oasis-wm/src/hit_test.rs`).
 - Icon drag: press-hold threshold (≥ 4 px movement or ≥ 250 ms) →
   `IconDrag { index, grab_offset }` state modeled on `oasis-wm`'s
@@ -341,7 +341,7 @@ additive mode.
 ### B3. Position persistence
 
 - Persist `app path → (x, y, page)` per skin via the existing settings
-  mechanism (`oasis-core/src/settings.rs`), key `icon_positions.<skin>`.
+  mechanism (`oasis-app/src/settings.rs`), key `icon_positions.<skin>`.
   Written on drop, loaded on dashboard build; invalid/off-screen entries are
   clamped, missing entries auto-flow (B1).
 

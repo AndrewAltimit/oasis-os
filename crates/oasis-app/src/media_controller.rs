@@ -58,12 +58,7 @@ fn stop_radio_for_music(radio: &mut RadioLayer, audio: &mut dyn oasis_core::back
         return;
     }
     let _ = radio.manager.process_request("stop", audio);
-    radio.archive_catalog = None;
-    radio.pending_catalog_fetch = None;
-    radio.pending_source_fetch = None;
-    if let Some(mut src) = radio.source.take() {
-        src.disconnect();
-    }
+    radio.release_playback();
 }
 
 /// Unload the music track when the Music Player window/app closes.

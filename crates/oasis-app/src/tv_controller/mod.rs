@@ -36,7 +36,7 @@ fn find_tv_guide_runner(open_runners: &mut [(String, AppRunner)]) -> Option<&mut
     open_runners
         .iter_mut()
         .map(|(_, runner)| runner)
-        .find(|runner| runner.title == "TV Guide")
+        .find(|runner| runner.title == oasis_apps::titles::TV_GUIDE)
 }
 
 #[cfg(all(test, feature = "_video"))]

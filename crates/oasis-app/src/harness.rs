@@ -390,7 +390,7 @@ impl Harness {
         let mut boot = BootOptions::hermetic(&opts.skin)?;
         if let Some(path) = opts.prefs_path.as_ref() {
             let store = crate::user_prefs::load_from_disk(Some(path));
-            let prefs = oasis_core::settings::UserPrefs::from_store(&store);
+            let prefs = crate::settings::UserPrefs::from_store(&store);
             // Mirror the shell's boot: a persisted skin that no longer
             // resolves keeps the default (`opts.skin`), with a warning.
             if let Some(saved) = prefs.skin.as_deref() {
@@ -402,7 +402,7 @@ impl Harness {
             prefs.patch_features(&mut boot.skin.features);
             crate::shell::resolve_screen_size(&mut boot.config, &boot.skin, &prefs);
             if store
-                .get_string(oasis_core::settings::pref_keys::LOCALE)
+                .get_string(crate::settings::pref_keys::LOCALE)
                 .is_some()
             {
                 oasis_core::i18n::set_ui_locale(prefs.locale());

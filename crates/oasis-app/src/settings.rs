@@ -9,9 +9,9 @@
 //! motion). Hosts restore it at boot and write it back whenever a Settings
 //! IPC request changes one of them.
 
-use oasis_skin::SkinFeatures;
-use oasis_skin::active_theme::ActiveTheme;
-use oasis_vfs::Vfs;
+use oasis_core::active_theme::ActiveTheme;
+use oasis_core::skin::SkinFeatures;
+use oasis_core::vfs::Vfs;
 use std::collections::BTreeMap;
 
 /// Default VFS path for the settings file.
@@ -314,14 +314,14 @@ impl UserPrefs {
                 .map(str::to_string),
             resolution: store
                 .get_string(pref_keys::RESOLUTION)
-                .and_then(crate::ipc::parse_resolution)
+                .and_then(oasis_core::ipc::parse_resolution)
                 .filter(|(w, h)| *w > 0 && *h > 0),
             volume: store
                 .get_int(pref_keys::VOLUME)
                 .map_or(d.volume, |v| v.clamp(0, 100) as u8),
             locale: store
                 .get_string(pref_keys::LOCALE)
-                .and_then(oasis_i18n::Locale::from_code)
+                .and_then(oasis_core::i18n::Locale::from_code)
                 .map_or(d.locale, |l| l.code().to_string()),
             font_scale: store
                 .get_float(pref_keys::FONT_SCALE)
@@ -357,8 +357,9 @@ impl UserPrefs {
     }
 
     /// The selected locale (English when the stored code is unknown).
-    pub fn locale(&self) -> oasis_i18n::Locale {
-        oasis_i18n::Locale::from_code(&self.locale).unwrap_or(oasis_i18n::Locale::English)
+    pub fn locale(&self) -> oasis_core::i18n::Locale {
+        oasis_core::i18n::Locale::from_code(&self.locale)
+            .unwrap_or(oasis_core::i18n::Locale::English)
     }
 
     /// OR the user's reduced-motion preference into a skin's features so
@@ -404,7 +405,7 @@ pub fn clamp_font_scale(f: f32) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use oasis_vfs::MemoryVfs;
+    use oasis_core::vfs::MemoryVfs;
 
     #[test]
     fn new_is_empty() {
@@ -540,7 +541,7 @@ mod tests {
     fn user_prefs_defaults_from_empty_store() {
         let prefs = UserPrefs::from_store(&SettingsStore::new());
         assert_eq!(prefs, UserPrefs::default());
-        assert_eq!(prefs.locale(), oasis_i18n::Locale::English);
+        assert_eq!(prefs.locale(), oasis_core::i18n::Locale::English);
     }
 
     #[test]

@@ -26,6 +26,23 @@ larger changes by area. Breaking API changes are marked **(breaking)**.
   pass and then break main. The script runs every line and reports all
   failures at once; `--list` prints the commands.
 
+### Desktop shell and oasis-core
+
+- Start menu: "Games" opens Games (it opened the File Manager) and
+  "Video" opens the TV Guide (it opened the Photo Viewer); items launch
+  any registered app, with or without a dashboard tile.
+- `skin xp; skin @variant:dark` in the terminal derives the dark variant
+  of xp, not of the skin active before the line ran.
+- The Internet Radio app's Stop closes the stream connection (the shell
+  kept it open and redrew every frame until the station changed).
+- Settings: a rejected resolution no longer pins the current one for later
+  skins, and high-contrast "off" on a non-high-contrast skin is a no-op.
+- A plugin whose `init` fails no longer leaves the commands it registered
+  in the shell's command registry.
+- **(breaking)** `oasis_core::settings` (`SettingsStore`, `UserPrefs`,
+  `pref_keys`) and `oasis_core::ui_sound` moved into the desktop shell
+  (`oasis_app::settings`); no other host used them.
+
 ## Unreleased -- overhaul (`overhaul/site-code-docs-2026-10`)
 
 A repository-wide cleanup: bug fixes from a full code review and an

@@ -343,6 +343,39 @@ fn start_menu_keyboard_navigation_on_the_dashboard() {
     }
 }
 
+/// Every start menu item opens the app its label names ("Games" opened the
+/// File Manager and "Video" the Photo Viewer).
+#[test]
+fn start_menu_items_open_the_apps_they_name() {
+    let expected = [
+        "Games",
+        "Music Player",
+        "TV Guide",
+        "Photo Viewer",
+        "Settings",
+    ];
+    for (idx, title) in expected.iter().enumerate() {
+        let mut h = boot("classic");
+        let start = rect_center(h.sdi_rect("start_btn_bg").unwrap());
+        h.click(start.0, start.1);
+        h.settle();
+        // The menu is a grid on some skins: select the item directly.
+        assert_eq!(
+            h.state().ui.start_menu.items[idx].label.to_lowercase(),
+            ["games", "music", "video", "photos", "settings"][idx]
+        );
+        h.state_mut().ui.start_menu.selected = idx;
+        h.key(Key::Enter);
+        h.settle();
+        assert!(
+            h.find_window(title).is_some(),
+            "item {idx} opens {title}: {:?}",
+            h.windows()
+        );
+        assert_eq!(h.windows().len(), 1, "only {title} opened");
+    }
+}
+
 /// Same with windows open: arrows and Enter drive the menu, not the app.
 #[test]
 fn start_menu_keyboard_navigation_over_windows() {
@@ -966,7 +999,7 @@ fn icon_drag_reorder_persists() {
     );
     let saved = String::from_utf8(
         h.vfs()
-            .read(oasis_core::settings::DEFAULT_PATH)
+            .read(oasis_app::settings::DEFAULT_PATH)
             .unwrap_or_default(),
     )
     .unwrap();

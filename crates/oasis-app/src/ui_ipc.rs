@@ -20,6 +20,7 @@ use oasis_core::toast::ToastLevel;
 use oasis_core::vfs::{MemoryVfs, Vfs};
 
 use crate::app_state::AppState;
+use crate::commands::{publish_if_changed, take_request};
 use crate::launch::{self, LaunchOpts};
 
 pub use oasis_core::ipc::{
@@ -48,14 +49,6 @@ pub fn poll(state: &mut AppState, sdi: &mut SdiRegistry, vfs: &mut MemoryVfs) ->
     }
     publish_theme(state, vfs);
     take_request(vfs, SCREENSHOT_REQUEST_PATH)
-}
-
-/// Read and clear a request file. `None` when it is missing or empty.
-fn take_request(vfs: &mut MemoryVfs, path: &str) -> Option<String> {
-    let data = vfs.read(path).ok().filter(|d| !d.is_empty())?;
-    let _ = vfs.write(path, b"");
-    let text = String::from_utf8_lossy(&data).trim().to_string();
-    (!text.is_empty()).then_some(text)
 }
 
 /// `level:message` (as `notify` writes it) to a toast.
@@ -91,9 +84,7 @@ fn publish_theme(state: &AppState, vfs: &mut MemoryVfs) {
         t.output,
         t.error,
     );
-    if vfs.read(THEME_STATUS_PATH).ok().as_deref() != Some(status.as_bytes()) {
-        let _ = vfs.write(THEME_STATUS_PATH, status.as_bytes());
-    }
+    publish_if_changed(vfs, THEME_STATUS_PATH, &status);
 }
 
 /// Open the browser window if needed, focus it and apply `request`.
@@ -133,22 +124,28 @@ fn apply_browse_request(
 /// `.png`, else a 24-bit BMP.
 pub fn encode_screenshot(path: &str, rgba: &[u8], w: u32, h: u32) -> Result<Vec<u8>, String> {
     if path.to_ascii_lowercase().ends_with(".png") {
-        let mut opaque = rgba.to_vec();
-        for px in opaque.as_chunks_mut::<4>().0 {
-            px[3] = 255;
-        }
-        let mut out = Vec::new();
-        let mut encoder = png::Encoder::new(&mut out, w, h);
-        encoder.set_color(png::ColorType::Rgba);
-        encoder.set_depth(png::BitDepth::Eight);
-        let mut writer = encoder.write_header().map_err(|e| e.to_string())?;
-        writer
-            .write_image_data(&opaque)
-            .map_err(|e| e.to_string())?;
-        drop(writer);
-        return Ok(out);
+        return encode_png(rgba, w, h);
     }
     Ok(encode_bmp(rgba, w, h))
+}
+
+/// Encode a captured `w`x`h` RGBA8 frame as an opaque PNG (the
+/// framebuffer has no real transparency, so alpha is forced to 255).
+pub fn encode_png(rgba: &[u8], w: u32, h: u32) -> Result<Vec<u8>, String> {
+    let mut opaque = rgba.to_vec();
+    for px in opaque.as_chunks_mut::<4>().0 {
+        px[3] = 255;
+    }
+    let mut out = Vec::new();
+    let mut encoder = png::Encoder::new(&mut out, w, h);
+    encoder.set_color(png::ColorType::Rgba);
+    encoder.set_depth(png::BitDepth::Eight);
+    let mut writer = encoder.write_header().map_err(|e| e.to_string())?;
+    writer
+        .write_image_data(&opaque)
+        .map_err(|e| e.to_string())?;
+    drop(writer);
+    Ok(out)
 }
 
 /// Uncompressed 24-bit bottom-up BMP.

@@ -141,7 +141,7 @@ and `snap_zone_geometry(zone)` expose the same logic programmatically.
 
 `keyboard_snap_window(id, KeyboardSnapDirection, sdi)` and
 `cycle_tiling(sdi) -> Option<TilingLayout>` implement the shortcuts; the
-desktop host (`crates/oasis-app/src/input.rs`, `handle_wm_shortcut`)
+desktop host (`crates/oasis-app/src/input/mod.rs`, `handle_wm_shortcut`)
 maps keys to them before routing keys to the focused app:
 
 | Shortcut | Action |
