@@ -41,7 +41,7 @@
                            token spans .tk .tt .tf .ts .tn .tc .tm
      .tabs / [role="tab"]  segmented tab row
      .topbar .brand .site-nav .nav-toggle           shared header
-     .footer                                        shared footer
+     .footer (__grid __brand __nav __head __links __base __top)  shared footer
      .reveal / .is-in      scroll reveal (JS adds it only when motion is OK)
      .sr-only .skip-link .mono .pixel               utilities
 
