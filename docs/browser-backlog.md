@@ -68,11 +68,6 @@ small enough for a focused PR.
 
 ### Parsers
 
-- **`style=""` attributes do not expand shorthands.**
-  `oasis_css::parser::parse_inline_style` returns the raw declaration
-  list without `expand_shorthands` (stylesheet rules get it), so an
-  inline `flex: 1` / `flex: 0 0 100px` is ignored; shorthands that the
-  value applier handles itself (`margin`, `padding`, ...) still work.
 - **No quirks-mode CSS.** The parser picks the quirks mode from the
   DOCTYPE (`Document::quirks_mode`) and applies its one tree difference,
   but no quirks-mode CSS rules (table font inheritance, body height,
