@@ -12,7 +12,7 @@ use symphonia::core::meta::MetadataOptions;
 use symphonia::core::probe::Hint;
 use symphonia::core::units::Time;
 
-use crate::demux_lite::avcc::{ANNEX_B_START, append_annex_b};
+use crate::demux_lite::avcc::{ANNEX_B_START, append_annex_b, parse_avcc_record};
 use crate::{VideoError, VideoSource};
 
 /// Largest `moov` atom [`read_top_level_atom`] loads (64 MiB).  Even a
@@ -76,34 +76,14 @@ pub struct AvccConfig {
 /// (openh264 takes them all in-band, unlike `demux_lite::AvccConfig`,
 /// which keeps one of each for the PSP's ME decoder).
 fn parse_avcc(data: &[u8]) -> Result<AvccConfig, VideoError> {
-    if data.len() < 7 {
-        return Err(VideoError::Demux("avcC too short".into()));
-    }
-    let nal_length_size = (usize::from(data[4]) & 0x03) + 1;
+    let record = parse_avcc_record(data).map_err(|e| VideoError::Demux(e.to_string()))?;
     let mut parameter_sets = Vec::new();
-    let mut pos = 5;
-    for (mask, what) in [(0x1F, "SPS"), (0xFF, "PPS")] {
-        let count = data
-            .get(pos)
-            .ok_or_else(|| VideoError::Demux(format!("avcC {what} count missing")))?
-            & mask;
-        pos += 1;
-        for _ in 0..count {
-            let len = data
-                .get(pos..pos + 2)
-                .map(|b| usize::from(u16::from_be_bytes([b[0], b[1]])))
-                .ok_or_else(|| VideoError::Demux(format!("avcC {what} truncated")))?;
-            pos += 2;
-            let set = data
-                .get(pos..pos + len)
-                .ok_or_else(|| VideoError::Demux(format!("avcC {what} data truncated")))?;
-            parameter_sets.extend_from_slice(&ANNEX_B_START_CODE);
-            parameter_sets.extend_from_slice(set);
-            pos += len;
-        }
+    for set in record.sps.iter().chain(&record.pps) {
+        parameter_sets.extend_from_slice(&ANNEX_B_START_CODE);
+        parameter_sets.extend_from_slice(set);
     }
     Ok(AvccConfig {
-        nal_length_size,
+        nal_length_size: record.nal_length_size,
         parameter_sets,
     })
 }
@@ -196,8 +176,14 @@ pub(crate) fn read_top_level_atom<R: Read + Seek + ?Sized>(
                 return Ok(None);
             }
             r.seek(SeekFrom::Start(pos))?;
-            let mut atom = vec![0u8; size as usize];
-            r.read_exact(&mut atom)?;
+            // Grow with the bytes actually read rather than allocating the
+            // declared size up front: a truncated file (or a hostile header)
+            // claiming a 64 MiB `moov` must not cost 64 MiB.
+            let mut atom = Vec::new();
+            r.take(size).read_to_end(&mut atom)?;
+            if atom.len() as u64 != size {
+                return Err(std::io::ErrorKind::UnexpectedEof.into());
+            }
             return Ok(Some(atom));
         }
         let Some(next) = pos.checked_add(size) else {
@@ -755,6 +741,36 @@ mod tests {
             read_top_level_atom(&mut cursor, b"moov", MAX_MOOV_BYTES).unwrap(),
             None
         );
+    }
+
+    #[test]
+    fn read_top_level_atom_rejects_a_moov_larger_than_the_file() {
+        // A 16-byte file declaring a 60 MiB `moov`: an error, and no
+        // up-front allocation of the declared size.
+        let mut data = (60u32 << 20).to_be_bytes().to_vec();
+        data.extend_from_slice(b"moov");
+        data.extend_from_slice(&[0; 8]);
+        let mut cursor = Cursor::new(data);
+        let err = read_top_level_atom(&mut cursor, b"moov", MAX_MOOV_BYTES).unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::UnexpectedEof);
+    }
+
+    #[test]
+    fn parse_avcc_keeps_every_parameter_set_in_order() {
+        #[rustfmt::skip]
+        let data: &[u8] = &[
+            0x01, 0x64, 0x00, 0x1F, 0xFF,
+            0xE2, 0, 1, 0x67, 0, 2, 0x67, 0x01, // 2 SPS
+            0x01, 0, 1, 0x68,                   // 1 PPS
+        ];
+        let cfg = parse_avcc(data).unwrap();
+        assert_eq!(
+            cfg.parameter_sets,
+            [0, 0, 0, 1, 0x67, 0, 0, 0, 1, 0x67, 0x01, 0, 0, 0, 1, 0x68]
+        );
+        for len in 0..data.len() {
+            assert!(parse_avcc(&data[..len]).is_err(), "prefix {len}");
+        }
     }
 
     #[test]

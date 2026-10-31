@@ -9,6 +9,7 @@
 
 use std::io::{Read, Seek, SeekFrom};
 
+use super::avcc::parse_avcc_record;
 use super::sample_table::{
     SampleTable, parse_co64, parse_ctts, parse_stco, parse_stsc, parse_stss, parse_stsz, parse_stts,
 };
@@ -355,47 +356,13 @@ fn parse_avc_sample_entry<R: Read + Seek>(
 /// a single corrupt NAL.  Multi-parameter-set streams also carry their
 /// extra sets in-band.
 pub(super) fn parse_avcc_bytes(data: &[u8]) -> Result<AvccConfig, LiteError> {
-    if data.len() < 7 {
-        return Err(LiteError::Parse("avcC too short".into()));
-    }
-    let nal_length_size = (usize::from(data[4]) & 0x03) + 1;
-    let mut pos = 5;
-    let sps = read_param_sets(data, &mut pos, 0x1F, "SPS")?;
-    let pps = read_param_sets(data, &mut pos, 0xFF, "PPS")?;
+    let record = parse_avcc_record(data)?;
+    let first = |sets: &[&[u8]]| sets.first().map(|s| s.to_vec()).unwrap_or_default();
     Ok(AvccConfig {
-        nal_length_size,
-        sps,
-        pps,
+        nal_length_size: record.nal_length_size,
+        sps: first(&record.sps),
+        pps: first(&record.pps),
     })
-}
-
-/// Read a count byte (masked by `count_mask`) and that many
-/// length-prefixed parameter sets at `*pos`; return the first one.
-fn read_param_sets(
-    data: &[u8],
-    pos: &mut usize,
-    count_mask: u8,
-    what: &str,
-) -> Result<Vec<u8>, LiteError> {
-    let count = *data
-        .get(*pos)
-        .ok_or_else(|| LiteError::Parse(format!("avcC {what} count missing")))?
-        & count_mask;
-    *pos += 1;
-    let mut first = None;
-    for _ in 0..count {
-        let len_bytes = data
-            .get(*pos..*pos + 2)
-            .ok_or_else(|| LiteError::Parse(format!("avcC {what} truncated")))?;
-        let len = usize::from(u16::from_be_bytes([len_bytes[0], len_bytes[1]]));
-        *pos += 2;
-        let set = data
-            .get(*pos..*pos + len)
-            .ok_or_else(|| LiteError::Parse(format!("avcC {what} data truncated")))?;
-        first.get_or_insert_with(|| set.to_vec());
-        *pos += len;
-    }
-    Ok(first.unwrap_or_default())
 }
 
 /// Parse an mp4a sample entry (content `[offset, end)`) for its AAC config.
