@@ -1,6 +1,6 @@
 # viewport 800x600
-fill_rect 0, 0, 800, 340, Color { r: 255, g: 255, b: 255, a: 255 }
-set_clip_rect 0, 0, 800, 340
+fill_rect 0, 0, 800, 348, Color { r: 255, g: 255, b: 255, a: 255 }
+set_clip_rect 0, 0, 800, 348
 draw_text "Gmail", 511, 18, 27, Color { r: 31, g: 31, b: 31, a: 255 }
 draw_text "Images", 556, 18, 27, Color { r: 31, g: 31, b: 31, a: 255 }
 fill_rect 623, 25, 4, 1, Color { r: 0, g: 0, b: 0, a: 255 }
@@ -71,47 +71,47 @@ fill_rect 264, 72, 1, 92, Color { r: 31, g: 31, b: 31, a: 255 }
 fill_rect 535, 72, 1, 92, Color { r: 31, g: 31, b: 31, a: 255 }
 set_clip_rect 264, 72, 272, 92
 draw_text "Google", 266, 74, 8, Color { r: 31, g: 31, b: 31, a: 255 }
-set_clip_rect 0, 0, 800, 340
+set_clip_rect 0, 0, 800, 348
 draw_text "\u{a0}", 94, 165, 8, Color { r: 31, g: 31, b: 31, a: 255 }
 fill_rect 201, 165, 496, 25, Color { r: 255, g: 255, b: 255, a: 255 }
 fill_rect 201, 165, 496, 1, Color { r: 118, g: 118, b: 118, a: 255 }
 fill_rect 201, 165, 1, 25, Color { r: 118, g: 118, b: 118, a: 255 }
 fill_rect 201, 189, 496, 1, Color { r: 200, g: 200, b: 200, a: 255 }
 fill_rect 696, 165, 1, 25, Color { r: 200, g: 200, b: 200, a: 255 }
-fill_rect 206, 198, 392, 30, Color { r: 243, g: 245, b: 246, a: 255 }
-fill_rect 205, 197, 394, 1, Color { r: 210, g: 210, b: 210, a: 255 }
-fill_rect 598, 197, 1, 32, Color { r: 112, g: 117, b: 122, a: 255 }
-fill_rect 205, 228, 394, 1, Color { r: 112, g: 117, b: 122, a: 255 }
-fill_rect 205, 197, 1, 32, Color { r: 210, g: 210, b: 210, a: 255 }
-fill_rect 315, 198, 172, 30, Color { r: 239, g: 239, b: 239, a: 255 }
-fill_rect 315, 198, 172, 1, Color { r: 255, g: 255, b: 255, a: 255 }
-fill_rect 315, 198, 1, 30, Color { r: 255, g: 255, b: 255, a: 255 }
-fill_rect 315, 227, 172, 1, Color { r: 160, g: 160, b: 160, a: 255 }
-fill_rect 486, 198, 1, 30, Color { r: 160, g: 160, b: 160, a: 255 }
-draw_text "Google Search", 321, 205, 15, Color { r: 31, g: 31, b: 31, a: 255 }
-fill_rect 604, 198, 392, 30, Color { r: 243, g: 245, b: 246, a: 255 }
-fill_rect 603, 197, 394, 1, Color { r: 210, g: 210, b: 210, a: 255 }
-fill_rect 996, 197, 1, 32, Color { r: 112, g: 117, b: 122, a: 255 }
-fill_rect 603, 228, 394, 1, Color { r: 112, g: 117, b: 122, a: 255 }
-fill_rect 603, 197, 1, 32, Color { r: 210, g: 210, b: 210, a: 255 }
-fill_rect 694, 198, 211, 30, Color { r: 239, g: 239, b: 239, a: 255 }
-fill_rect 694, 198, 211, 1, Color { r: 255, g: 255, b: 255, a: 255 }
-fill_rect 694, 198, 1, 30, Color { r: 255, g: 255, b: 255, a: 255 }
-fill_rect 694, 227, 211, 1, Color { r: 160, g: 160, b: 160, a: 255 }
-fill_rect 904, 198, 1, 30, Color { r: 160, g: 160, b: 160, a: 255 }
-draw_text "I'm Feeling Lucky", 701, 205, 15, Color { r: 31, g: 31, b: 31, a: 255 }
+fill_rect 206, 206, 392, 30, Color { r: 243, g: 245, b: 246, a: 255 }
+fill_rect 205, 205, 394, 1, Color { r: 210, g: 210, b: 210, a: 255 }
+fill_rect 598, 205, 1, 32, Color { r: 112, g: 117, b: 122, a: 255 }
+fill_rect 205, 236, 394, 1, Color { r: 112, g: 117, b: 122, a: 255 }
+fill_rect 205, 205, 1, 32, Color { r: 210, g: 210, b: 210, a: 255 }
+fill_rect 315, 206, 172, 30, Color { r: 239, g: 239, b: 239, a: 255 }
+fill_rect 315, 206, 172, 1, Color { r: 255, g: 255, b: 255, a: 255 }
+fill_rect 315, 206, 1, 30, Color { r: 255, g: 255, b: 255, a: 255 }
+fill_rect 315, 235, 172, 1, Color { r: 160, g: 160, b: 160, a: 255 }
+fill_rect 486, 206, 1, 30, Color { r: 160, g: 160, b: 160, a: 255 }
+draw_text "Google Search", 321, 213, 15, Color { r: 31, g: 31, b: 31, a: 255 }
+fill_rect 604, 206, 392, 30, Color { r: 243, g: 245, b: 246, a: 255 }
+fill_rect 603, 205, 394, 1, Color { r: 210, g: 210, b: 210, a: 255 }
+fill_rect 996, 205, 1, 32, Color { r: 112, g: 117, b: 122, a: 255 }
+fill_rect 603, 236, 394, 1, Color { r: 112, g: 117, b: 122, a: 255 }
+fill_rect 603, 205, 1, 32, Color { r: 210, g: 210, b: 210, a: 255 }
+fill_rect 694, 206, 211, 30, Color { r: 239, g: 239, b: 239, a: 255 }
+fill_rect 694, 206, 211, 1, Color { r: 255, g: 255, b: 255, a: 255 }
+fill_rect 694, 206, 1, 30, Color { r: 255, g: 255, b: 255, a: 255 }
+fill_rect 694, 235, 211, 1, Color { r: 160, g: 160, b: 160, a: 255 }
+fill_rect 904, 206, 1, 30, Color { r: 160, g: 160, b: 160, a: 255 }
+draw_text "I'm Feeling Lucky", 701, 213, 15, Color { r: 31, g: 31, b: 31, a: 255 }
 draw_text "Advanced ", 614, 172, 11, Color { r: 25, g: 103, b: 210, a: 255 }
 draw_text "search", 668, 172, 11, Color { r: 25, g: 103, b: 210, a: 255 }
-draw_text "Advertising", 544, 280, 13, Color { r: 104, g: 29, b: 168, a: 255 }
-draw_text "Business ", 513, 300, 13, Color { r: 104, g: 29, b: 168, a: 255 }
-draw_text "Solutions", 567, 300, 13, Color { r: 104, g: 29, b: 168, a: 255 }
-draw_text "About ", 465, 320, 13, Color { r: 104, g: 29, b: 168, a: 255 }
-draw_text "Google", 501, 320, 13, Color { r: 104, g: 29, b: 168, a: 255 }
-draw_text "© ", 549, 320, 10, Color { r: 99, g: 99, b: 99, a: 255 }
-draw_text "2026 ", 567, 320, 10, Color { r: 99, g: 99, b: 99, a: 255 }
-draw_text "- ", 597, 320, 10, Color { r: 99, g: 99, b: 99, a: 255 }
-draw_text "Privacy", 609, 320, 10, Color { r: 104, g: 29, b: 168, a: 255 }
-draw_text " - ", 651, 320, 10, Color { r: 99, g: 99, b: 99, a: 255 }
-draw_text "Terms", 669, 320, 10, Color { r: 104, g: 29, b: 168, a: 255 }
+draw_text "Advertising", 544, 288, 13, Color { r: 104, g: 29, b: 168, a: 255 }
+draw_text "Business ", 513, 308, 13, Color { r: 104, g: 29, b: 168, a: 255 }
+draw_text "Solutions", 567, 308, 13, Color { r: 104, g: 29, b: 168, a: 255 }
+draw_text "About ", 465, 328, 13, Color { r: 104, g: 29, b: 168, a: 255 }
+draw_text "Google", 501, 328, 13, Color { r: 104, g: 29, b: 168, a: 255 }
+draw_text "© ", 549, 328, 10, Color { r: 99, g: 99, b: 99, a: 255 }
+draw_text "2026 ", 567, 328, 10, Color { r: 99, g: 99, b: 99, a: 255 }
+draw_text "- ", 597, 328, 10, Color { r: 99, g: 99, b: 99, a: 255 }
+draw_text "Privacy", 609, 328, 10, Color { r: 104, g: 29, b: 168, a: 255 }
+draw_text " - ", 651, 328, 10, Color { r: 99, g: 99, b: 99, a: 255 }
+draw_text "Terms", 669, 328, 10, Color { r: 104, g: 29, b: 168, a: 255 }
 set_clip_rect 0, 0, 800, 600
 # totals fill_rect=92 draw_text=19 other=4
