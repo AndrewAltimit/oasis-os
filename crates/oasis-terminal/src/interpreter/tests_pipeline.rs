@@ -5,6 +5,7 @@ use crate::test_helpers::{assert_none_output, assert_text};
 use oasis_vfs::{MemoryVfs, Vfs};
 
 use super::tests_basic::make_env;
+use crate::pipeline::StreamDest;
 
 struct EchoCmd;
 impl Command for EchoCmd {
@@ -278,7 +279,7 @@ fn stderr_to_stdout_with_redirect() {
     let mut vfs = MemoryVfs::new();
     vfs.mkdir("/tmp").unwrap();
     let mut env = make_env(&mut vfs);
-    reg.execute("nosuchcmd 2>&1 > /tmp/out.txt", &mut env)
+    reg.execute("nosuchcmd > /tmp/out.txt 2>&1", &mut env)
         .unwrap();
     let content = String::from_utf8_lossy(&env.vfs.read("/tmp/out.txt").unwrap()).into_owned();
     assert!(content.contains("nosuchcmd"));
@@ -321,16 +322,18 @@ fn stderr_redirect_sets_exit_code() {
 fn parse_redirect_2_to_file() {
     let (cmd, redirections) = parse_redirect("echo hello 2> /tmp/e.txt");
     assert_eq!(cmd, "echo hello ");
-    assert!(redirections.stderr.is_some());
-    assert_eq!(redirections.stderr.unwrap().path, "/tmp/e.txt");
-    assert!(!redirections.stderr_to_stdout);
+    assert_eq!(
+        redirections.stderr_file().map(|r| r.path),
+        Some("/tmp/e.txt")
+    );
+    assert_eq!(redirections.stdout, StreamDest::Stdout);
 }
 
 #[test]
 fn parse_redirect_2_append() {
     let (cmd, redirections) = parse_redirect("cmd 2>> /tmp/e.txt");
     assert_eq!(cmd, "cmd ");
-    let redir = redirections.stderr.unwrap();
+    let redir = redirections.stderr_file().unwrap();
     assert!(redir.append);
     assert_eq!(redir.path, "/tmp/e.txt");
 }
@@ -339,17 +342,16 @@ fn parse_redirect_2_append() {
 fn parse_redirect_2_to_1() {
     let (cmd, redirections) = parse_redirect("cmd 2>&1");
     assert_eq!(cmd, "cmd ");
-    assert!(redirections.stderr_to_stdout);
-    assert!(redirections.stderr.is_none());
+    assert_eq!(redirections.stderr, StreamDest::Stdout);
+    assert!(redirections.files.is_empty());
 }
 
 #[test]
 fn parse_redirect_stdout_only() {
     let (cmd, redirections) = parse_redirect("echo hi > /tmp/out.txt");
     assert_eq!(cmd, "echo hi ");
-    assert!(redirections.stdout.is_some());
-    assert!(redirections.stderr.is_none());
-    assert!(!redirections.stderr_to_stdout);
+    assert!(redirections.stdout_file().is_some());
+    assert_eq!(redirections.stderr, StreamDest::Stderr);
 }
 
 // -- Phase 12: integration tests --

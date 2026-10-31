@@ -163,10 +163,16 @@ define_command!(
     CatCmd,
     "cat",
     "Display file contents",
-    "cat <file>",
+    "cat [file]",
     "filesystem",
     |args, env| {
-        require_args(args, 1, "cat <file>")?;
+        // `echo x | cat`, `cat < f`, `cat <<< word`: pass stdin through.
+        if args.is_empty()
+            && let Some(stdin) = env.stdin.as_ref()
+        {
+            return Ok(CommandOutput::Text(stdin.clone()));
+        }
+        require_args(args, 1, "cat [file]")?;
         let path = resolve_path(&env.cwd, args[0]);
         let meta = env.vfs.stat(&path)?;
         if meta.size as usize > CAT_MAX_SIZE {

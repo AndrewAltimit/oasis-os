@@ -251,36 +251,89 @@ pub(crate) fn split_pipes(input: &str) -> Result<Vec<String>> {
 // Redirection parsing
 // ---------------------------------------------------------------------------
 
-/// A single output redirection.
+/// A single output redirection target (`> f`, `2>> f`, `&> f`).
 pub(crate) struct Redirect<'a> {
     pub(crate) path: &'a str,
     pub(crate) append: bool,
 }
 
+/// Where an output stream (stdout or stderr) ends up after every
+/// redirection of a command is applied, left to right.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum StreamDest {
+    /// The command's original stdout (the terminal, or the next pipe stage).
+    Stdout,
+    /// The command's original stderr (shown on the terminal).
+    Stderr,
+    /// An index into [`Redirections::files`].
+    File(usize),
+}
+
+/// A command's stdin source.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum StdinSource<'a> {
+    /// `< path`.
+    File(&'a str),
+    /// `<<< word`: the expanded word (no trailing newline, like the text
+    /// every command of this shell passes on).
+    HereString(&'a str),
+}
+
 /// Parsed redirections for a command.
-#[derive(Default)]
+///
+/// Operators apply left to right like in a POSIX shell, so
+/// `cmd 2>&1 > f` sends stderr to the terminal and only stdout to `f`,
+/// while `cmd > f 2>&1` sends both to `f`.
 pub(crate) struct Redirections<'a> {
-    /// Stdout redirect (`>` / `>>` / `1>`; `&>` sets this and
-    /// [`stderr_to_stdout`](Self::stderr_to_stdout)).
-    pub(crate) stdout: Option<Redirect<'a>>,
-    /// Stderr redirect (`2>` / `2>>`).
-    pub(crate) stderr: Option<Redirect<'a>>,
-    /// Stdin redirect (`<`).
-    pub(crate) stdin: Option<&'a str>,
-    /// Merge stderr into stdout (`2>&1`).
-    pub(crate) stderr_to_stdout: bool,
-    /// Send stdout to stderr (`>&2`).
-    pub(crate) stdout_to_stderr: bool,
+    /// Every output file opened, in order. A file that no stream ends up
+    /// in (`> a > b` leaves `a`) is still created / truncated.
+    pub(crate) files: Vec<Redirect<'a>>,
+    /// Where stdout goes.
+    pub(crate) stdout: StreamDest,
+    /// Where stderr goes.
+    pub(crate) stderr: StreamDest,
+    /// Stdin source (`<` / `<<<`; the last one wins).
+    pub(crate) stdin: Option<StdinSource<'a>>,
+    /// An operator the shell does not implement (`<<` here-documents).
+    pub(crate) unsupported: Option<&'static str>,
+}
+
+impl Default for Redirections<'_> {
+    fn default() -> Self {
+        Self {
+            files: Vec::new(),
+            stdout: StreamDest::Stdout,
+            stderr: StreamDest::Stderr,
+            stdin: None,
+            unsupported: None,
+        }
+    }
 }
 
 impl Redirections<'_> {
     /// No redirection at all.
     pub(crate) fn is_empty(&self) -> bool {
-        self.stdout.is_none()
-            && self.stderr.is_none()
+        self.files.is_empty()
             && self.stdin.is_none()
-            && !self.stderr_to_stdout
-            && !self.stdout_to_stderr
+            && self.unsupported.is_none()
+            && self.stdout == StreamDest::Stdout
+            && self.stderr == StreamDest::Stderr
+    }
+
+    /// The file stdout ends up in, if any.
+    pub(crate) fn stdout_file(&self) -> Option<&Redirect<'_>> {
+        match self.stdout {
+            StreamDest::File(i) => self.files.get(i),
+            _ => None,
+        }
+    }
+
+    /// The file stderr ends up in, if any.
+    pub(crate) fn stderr_file(&self) -> Option<&Redirect<'_>> {
+        match self.stderr {
+            StreamDest::File(i) => self.files.get(i),
+            _ => None,
+        }
     }
 }
 
@@ -295,11 +348,15 @@ enum RedirOp {
     Both { append: bool },
     /// `<`.
     In,
+    /// `<<<`.
+    HereString,
+    /// `<<` (here-document; unsupported).
+    HereDoc,
     /// `2>&1`.
     ErrToOut,
     /// `>&2` / `1>&2`.
     OutToErr,
-    /// `>&1` (no effect).
+    /// `>&1` / `2>&2` (no effect).
     Noop,
 }
 
@@ -339,18 +396,27 @@ fn redirect_op_at(b: &[u8], i: usize) -> Option<(RedirOp, usize)> {
             Some((RedirOp::Both { append }, if append { 3 } else { 2 }))
         },
         b'>' => out_op(0, 1),
+        b'<' if at(1) == Some(b'<') && at(2) == Some(b'<') => Some((RedirOp::HereString, 3)),
+        b'<' if at(1) == Some(b'<') => Some((RedirOp::HereDoc, 2)),
         b'<' => Some((RedirOp::In, 1)),
         _ => None,
     }
 }
 
+/// Open output file `path` and return the [`StreamDest`] naming it.
+fn open<'a>(files: &mut Vec<Redirect<'a>>, path: &'a str, append: bool) -> StreamDest {
+    files.push(Redirect { path, append });
+    StreamDest::File(files.len() - 1)
+}
+
 /// Parse redirect operators from a command string.
 ///
 /// Supports `> f`, `>> f`, `1> f`, `2> f`, `2>> f`, `&> f`, `&>> f`,
-/// `< f`, `2>&1` and `>&2`. Only top-level operators count (see
-/// [`scan`]): `\>`, `">"` and `$(cat < f)` are not redirections of this
-/// command. A target is the one word after its operator; words after it
-/// are arguments again (`echo a > f b` writes `a b`).
+/// `< f`, `<<< word`, `2>&1` and `>&2`, applied left to right. Only
+/// top-level operators count (see [`scan`]): `\>`, `">"` and
+/// `$(cat < f)` are not redirections of this command. A target is the
+/// one word after its operator; words after it are arguments again
+/// (`echo a > f b` writes `a b`).
 ///
 /// Returns `(command_part, redirections)`.
 pub(crate) fn parse_redirect(input: &str) -> (Cow<'_, str>, Redirections<'_>) {
@@ -382,7 +448,12 @@ pub(crate) fn parse_redirect(input: &str) -> (Cow<'_, str>, Redirections<'_>) {
         let region = &input[op_end..region_end];
         let takes_path = matches!(
             op,
-            RedirOp::Out { .. } | RedirOp::Err { .. } | RedirOp::Both { .. } | RedirOp::In
+            RedirOp::Out { .. }
+                | RedirOp::Err { .. }
+                | RedirOp::Both { .. }
+                | RedirOp::In
+                | RedirOp::HereString
+                | RedirOp::HereDoc
         );
         let (path, rest) = if takes_path {
             // The target is the first top-level word of the region.
@@ -397,16 +468,22 @@ pub(crate) fn parse_redirect(input: &str) -> (Cow<'_, str>, Redirections<'_>) {
         if !rest.trim().is_empty() {
             leftovers.push(rest.trim());
         }
+        let files = &mut parsed.files;
         match op {
-            RedirOp::In => parsed.stdin = Some(path),
-            RedirOp::Out { append } => parsed.stdout = Some(Redirect { path, append }),
-            RedirOp::Err { append } => parsed.stderr = Some(Redirect { path, append }),
-            RedirOp::Both { append } => {
-                parsed.stdout = Some(Redirect { path, append });
-                parsed.stderr_to_stdout = true;
+            RedirOp::In => parsed.stdin = Some(StdinSource::File(path)),
+            RedirOp::HereString => parsed.stdin = Some(StdinSource::HereString(path)),
+            RedirOp::HereDoc => {
+                parsed.unsupported = Some("here-documents (<<) are not supported; use <<< or <");
             },
-            RedirOp::ErrToOut => parsed.stderr_to_stdout = true,
-            RedirOp::OutToErr => parsed.stdout_to_stderr = true,
+            RedirOp::Out { append } => parsed.stdout = open(files, path, append),
+            RedirOp::Err { append } => parsed.stderr = open(files, path, append),
+            RedirOp::Both { append } => {
+                let dest = open(files, path, append);
+                parsed.stdout = dest;
+                parsed.stderr = dest;
+            },
+            RedirOp::ErrToOut => parsed.stderr = parsed.stdout,
+            RedirOp::OutToErr => parsed.stdout = parsed.stderr,
             RedirOp::Noop => {},
         }
     }
@@ -518,26 +595,54 @@ mod tests {
     fn redirect_target_is_one_word() {
         let (cmd, r) = parse_redirect("echo a > f b");
         assert_eq!(cmd, "echo a b");
-        assert_eq!(r.stdout.map(|o| o.path), Some("f"));
+        assert_eq!(r.stdout_file().map(|o| o.path), Some("f"));
         let (cmd, r) = parse_redirect("echo a > \"my file\" b");
         assert_eq!(cmd, "echo a b");
-        assert_eq!(r.stdout.map(|o| o.path), Some("\"my file\""));
+        assert_eq!(r.stdout_file().map(|o| o.path), Some("\"my file\""));
     }
 
     #[test]
     fn fd_duplication_forms() {
         let (cmd, r) = parse_redirect("echo err >&2");
         assert_eq!(cmd.trim(), "echo err");
-        assert!(r.stdout_to_stderr && r.stdout.is_none());
+        assert_eq!(r.stdout, StreamDest::Stderr);
+        assert!(r.files.is_empty());
         let (cmd, r) = parse_redirect("echo x &> f");
         assert_eq!(cmd.trim(), "echo x");
-        assert!(r.stderr_to_stdout);
-        assert_eq!(r.stdout.map(|o| (o.path, o.append)), Some(("f", false)));
+        assert_eq!(r.stderr, r.stdout);
+        assert_eq!(
+            r.stdout_file().map(|o| (o.path, o.append)),
+            Some(("f", false))
+        );
         let (_, r) = parse_redirect("echo x &>> f");
-        assert_eq!(r.stdout.map(|o| o.append), Some(true));
+        assert_eq!(r.stdout_file().map(|o| o.append), Some(true));
         let (cmd, r) = parse_redirect("echo x 1> f");
         assert_eq!(cmd.trim(), "echo x");
-        assert_eq!(r.stdout.map(|o| o.path), Some("f"));
+        assert_eq!(r.stdout_file().map(|o| o.path), Some("f"));
+    }
+
+    #[test]
+    fn redirections_apply_in_order() {
+        // `2>&1 > f`: stderr keeps the old stdout; `> f 2>&1`: both in f.
+        let (_, r) = parse_redirect("cmd 2>&1 > f");
+        assert_eq!(
+            (r.stdout, r.stderr),
+            (StreamDest::File(0), StreamDest::Stdout)
+        );
+        let (_, r) = parse_redirect("cmd > f 2>&1");
+        assert_eq!(
+            (r.stdout, r.stderr),
+            (StreamDest::File(0), StreamDest::File(0))
+        );
+        let (_, r) = parse_redirect("cmd >&2 2> e");
+        assert_eq!(
+            (r.stdout, r.stderr),
+            (StreamDest::Stderr, StreamDest::File(0))
+        );
+        let (cmd, r) = parse_redirect("cat <<< 'a b' x");
+        assert_eq!(cmd, "cat x");
+        assert_eq!(r.stdin, Some(StdinSource::HereString("'a b'")));
+        assert!(parse_redirect("cat << EOF").1.unsupported.is_some());
     }
 
     #[test]

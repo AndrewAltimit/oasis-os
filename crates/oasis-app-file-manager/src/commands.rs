@@ -438,12 +438,24 @@ impl FileManagerApp {
         if self.content.viewing_file.is_some() {
             return None;
         }
+        self.swallow_text = None;
         // F10 opens the menu bar; an open menu takes every key.
         if self.dialog.is_none() {
-            match self.menu.handle_key(*key, self.content_size.0) {
-                MenuKey::Ignored => {},
-                MenuKey::Handled => return Some(AppAction::None),
-                MenuKey::Activate(id) => return Some(self.run_menu_action(&id)),
+            let action = match self.menu.handle_key(*key, self.content_size.0) {
+                MenuKey::Ignored => None,
+                MenuKey::Handled => Some(AppAction::None),
+                MenuKey::Activate(id) => Some(self.run_menu_action(&id)),
+            };
+            if action.is_some() && !mods.has_command() {
+                // Its `TextInput` follows (Space activating New Folder).
+                self.swallow_text = match key {
+                    Key::Char(c) => Some(*c),
+                    Key::Space => Some(' '),
+                    _ => None,
+                };
+            }
+            if action.is_some() {
+                return action;
             }
         }
         if let Some(dialog) = &self.dialog {

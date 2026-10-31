@@ -79,7 +79,7 @@
     "video-decode",
     "video-decode-ffmpeg"
    ],
-   "loc": 36193,
+   "loc": 36247,
    "files": 66,
    "deps": [
     {
@@ -151,7 +151,7 @@
     "video-decode",
     "video-decode-ffmpeg"
    ],
-   "loc": 4505,
+   "loc": 4527,
    "files": 13,
    "deps": [
     {
@@ -528,7 +528,7 @@
    "crate_type": [],
    "bins": [],
    "features": [],
-   "loc": 4155,
+   "loc": 4198,
    "files": 10,
    "deps": [
     {
@@ -822,7 +822,7 @@
     "web-fonts",
     "webp"
    ],
-   "loc": 62868,
+   "loc": 62882,
    "files": 111,
    "deps": [
     {
@@ -898,7 +898,7 @@
     "scripting",
     "web-fonts"
    ],
-   "loc": 30585,
+   "loc": 30683,
    "files": 47,
    "deps": [
     {
@@ -972,7 +972,7 @@
    "crate_type": [],
    "bins": [],
    "features": [],
-   "loc": 22733,
+   "loc": 22925,
    "files": 69,
    "deps": [
     {
@@ -1082,7 +1082,7 @@
    "crate_type": [],
    "bins": [],
    "features": [],
-   "loc": 19829,
+   "loc": 19875,
    "files": 45,
    "deps": [
     {
@@ -1252,7 +1252,7 @@
    "crate_type": [],
    "bins": [],
    "features": [],
-   "loc": 4463,
+   "loc": 4505,
    "files": 8,
    "deps": [
     {
@@ -1387,7 +1387,7 @@
    "crate_type": [],
    "bins": [],
    "features": [],
-   "loc": 4763,
+   "loc": 4791,
    "files": 8,
    "deps": [
     {

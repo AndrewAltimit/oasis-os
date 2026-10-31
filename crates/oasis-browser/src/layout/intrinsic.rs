@@ -246,17 +246,18 @@ fn add_inline_children(
                 if let Some(text) = &c.text {
                     add_text(lines, text, &c.style, measurer);
                 } else {
-                    // Inline layout adds an inline box's horizontal
-                    // margins around its content (not its padding).
+                    // Inline layout adds an inline box's positive
+                    // horizontal margins around its content (not its
+                    // padding); negative ones are not subtracted.
                     let ml = if c.style.margin_left_auto {
                         0.0
                     } else {
-                        c.style.margin_left
+                        c.style.margin_left.max(0.0)
                     };
                     let mr = if c.style.margin_right_auto {
                         0.0
                     } else {
-                        c.style.margin_right
+                        c.style.margin_right.max(0.0)
                     };
                     lines.push(ml, 0.0);
                     add_inline_children(lines, &mut c.children, measurer);

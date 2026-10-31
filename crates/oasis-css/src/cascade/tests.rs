@@ -3860,6 +3860,42 @@ mod origins {
     }
 
     #[test]
+    fn important_revert_skips_normal_author_rules_too() {
+        // `revert` rolls back the whole author origin, normal declarations
+        // included: importance is not an origin.
+        let css = "div { display: inline } div { display: revert !important }";
+        let s = ua_styled(r#"<div id="t">x</div>"#, css, "t");
+        assert_eq!(s.display, Display::Block);
+        // Inline `style=""` likewise.
+        let doc = TreeBuilder::build(Tokenizer::new(r#"<div id="t">x</div>"#).tokenize());
+        let node = doc.get_element_by_id("t").expect("element with id");
+        let author = Stylesheet::parse("div { display: inline }");
+        let inline = [(
+            node,
+            crate::parser::parse_inline_style("display: revert !important"),
+        )];
+        let styles = style_tree(&doc, &[default_stylesheet(), &author], &inline, &ctx());
+        let s = styles[node].clone().expect("element style");
+        assert_eq!(s.display, Display::Block);
+    }
+
+    #[test]
+    fn revert_layer_finds_a_var_shorthand_in_a_lower_layer() {
+        // `background: var(--bg)` stays one unexpanded shorthand until
+        // computed-value time; a later longhand `revert-layer` must still
+        // roll back to it, and only for its own longhand.
+        let css = "@layer a { div { background: var(--bg) } } \
+                   div { --bg: red; background-image: none; background-color: revert-layer }";
+        let s = ua_styled(r#"<div id="t">x</div>"#, css, "t");
+        assert_eq!(s.background_color, RED);
+        // A shorthand `revert-layer` (expanded to longhands at parse time)
+        // likewise.
+        let css = "@layer a { p { margin: var(--m) } } p { --m: 3px; margin: revert-layer }";
+        let s = ua_styled(r#"<p id="t">x</p>"#, css, "t");
+        assert_eq!((s.margin_top, s.margin_left), (3.0, 3.0));
+    }
+
+    #[test]
     fn custom_property_initial_is_guaranteed_invalid() {
         // The "space toggle": `--x: initial` makes `var()` use its fallback.
         let css = "p { --x: blue; --x: initial; color: var(--x, red) }";

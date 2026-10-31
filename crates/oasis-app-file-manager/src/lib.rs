@@ -72,6 +72,9 @@ impl App for FileManagerApp {
     }
 
     fn handle_text_input(&mut self, ch: char) {
+        if self.swallow_text.take() == Some(ch) {
+            return;
+        }
         self.dialog_type_char(ch);
     }
 

@@ -391,14 +391,15 @@ impl CommandRegistry {
         let (cmd, redirections) = crate::pipeline::parse_redirect(redirs);
         if !cmd.trim().is_empty()
             || redirections.stdin.is_some()
-            || redirections.stderr.is_some()
-            || redirections.stdout_to_stderr
+            || redirections.unsupported.is_some()
+            || redirections.stdout == crate::pipeline::StreamDest::Stderr
+            || (redirections.stderr_file().is_some() && redirections.stderr != redirections.stdout)
         {
             return Err(OasisError::Command(
                 format!("syntax error: unsupported text after compound command: {redirs}").into(),
             ));
         }
-        match redirections.stdout {
+        match redirections.stdout_file() {
             Some(r) => {
                 let path = self.redirect_target(r.path, env)?;
                 let text = crate::pipeline::capture_text(&output);

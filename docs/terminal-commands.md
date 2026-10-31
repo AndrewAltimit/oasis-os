@@ -57,9 +57,12 @@ The terminal in `oasis-terminal/src/` supports:
   pipeline's status is its last stage's; a stage before the last that
   fails shows its error and feeds the next stage empty input
   (`cat missing | wc -l` prints the error, then `0`, and succeeds)
-- redirection (`< file`, `> file`, `>> file`, `1>`, `2>`, `2>>`, `2>&1`,
-  `>&2`, `&> file`, `&>> file`); the target is the one word after the
-  operator (`echo a > f b` writes `a b`), `/dev/null` discards, and
+- redirection (`< file`, `<<< word`, `> file`, `>> file`, `1>`, `2>`,
+  `2>>`, `2>&1`, `>&2`, `&> file`, `&>> file`), applied left to right
+  (`cmd 2>&1 > f` leaves stderr on the terminal, `cmd > f 2>&1` sends
+  both to `f`; `<<` here-documents are not supported); the target is the
+  one word after the operator (`echo a > f b` writes `a b`), `/dev/null`
+  discards, and
   operators inside quotes or `$( ... )` belong to the inner command.
   Text that reaches a pipe, a redirect or `$(...)` loses the shell's own
   colour codes (`for d in $(ls)` sees plain names); escape sequences in
@@ -269,7 +272,7 @@ shell prints command errors in red (SGR 31).
 | `ls` | `ls [-al] [path...]` | List directory contents (`-a` includes dotfiles, `-l` adds kind and size). |
 | `cd` | `cd [path\|-]` | Change working directory (`$HOME` without an argument, `$OLDPWD` for `-`). |
 | `pwd` | `pwd` | Print working directory. |
-| `cat` | `cat <file>` | Display file contents. |
+| `cat` | `cat [file]` | Display file contents (stdin with no file). |
 | `mkdir` | `mkdir [-p] <path>...` | Create directories (`-p`: with missing parents, no error if it exists). |
 | `rm` | `rm [-rf] <path>...` | Remove files or empty directories (`-r`: whole trees, `-f`: ignore missing). |
 | `echo` | `echo [text...]` | Print text. |

@@ -72,11 +72,12 @@ pub fn parse_selector_string(input: &str) -> Option<SelectorList> {
     parser.parse_selector_list()
 }
 
-/// Parse an inline `style="..."` attribute into declarations.
+/// Parse an inline `style="..."` attribute into declarations, with
+/// shorthands expanded to longhands as for a stylesheet rule.
 pub fn parse_inline_style(input: &str) -> Vec<Declaration> {
     let tokens = CssTokenizer::new(input).tokenize();
     let mut parser = CssParser::new(tokens, MediaViewport::DEFAULT);
-    parser.parse_declaration_list()
+    expand_shorthands(parser.parse_declaration_list())
 }
 
 // -------------------------------------------------------------------

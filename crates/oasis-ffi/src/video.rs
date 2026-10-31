@@ -197,11 +197,14 @@ pub(crate) fn decode_loop(mut source: impl DecodeSource, shared: VideoShared) {
                 base.get_or_insert(f.timestamp_secs);
             }
         }
-        // Seconds until the pending frame is due (<= 0: due now).
+        // Seconds until the pending frame is due (<= 0: due now). A
+        // non-finite timestamp (a corrupt file) is due now rather than
+        // never.
         let due_in = match (&pending, base) {
-            (Some(f), Some(b)) => (f.timestamp_secs - b) - now,
-            _ => 0.0,
-        };
+            (Some(f), Some(b)) => Some((f.timestamp_secs - b) - now).filter(|d| d.is_finite()),
+            _ => None,
+        }
+        .unwrap_or(0.0);
         if pending.is_some()
             && due_in <= 0.0
             && let Ok(mut slot) = shared.latest_frame.lock()
@@ -235,7 +238,8 @@ pub(crate) fn decode_loop(mut source: impl DecodeSource, shared: VideoShared) {
         // briefly while audio stays ahead; decode the next frame at once
         // when the last one was just published.
         let sleep = if pending.is_some() {
-            Duration::from_secs_f64(due_in.max(0.0)).min(MAX_SLEEP)
+            // `try_`: a frame due 1e30 s ahead exceeds `Duration::MAX`.
+            Duration::try_from_secs_f64(due_in.max(0.0)).map_or(MAX_SLEEP, |d| d.min(MAX_SLEEP))
         } else if video.done {
             MAX_SLEEP
         } else {
@@ -643,6 +647,24 @@ mod tests {
             "no chunk dropped"
         );
         assert_eq!(shared.audio_format.get(), (44_100, 2));
+    }
+
+    #[test]
+    fn absurd_timestamps_do_not_panic_or_spin() {
+        // A corrupt file can yield a frame due 1e30 s from now (beyond
+        // `Duration::MAX`) or a NaN timestamp: the thread must keep
+        // sleeping in short steps and stop on request, not panic.
+        for frames in [[0.0, 1e30], [0.0, f64::NAN]] {
+            let shared = VideoShared::default();
+            let worker = shared.clone();
+            let thread = std::thread::spawn(move || decode_loop(Fake::new(&frames, []), worker));
+            std::thread::sleep(Duration::from_millis(50));
+            shared.stop_flag.store(true, Ordering::Relaxed);
+            assert!(
+                thread.join().is_ok(),
+                "decode thread panicked on {frames:?}"
+            );
+        }
     }
 
     #[test]
