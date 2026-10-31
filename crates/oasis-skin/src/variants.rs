@@ -250,6 +250,7 @@ fn strip_icon_colors(icons: &IconOverrides) -> IconOverrides {
     out.outline_color = None;
     out.shadow_color = None;
     out.label_color = None;
+    out.label_shadow_color = None;
     out.cursor_color = None;
     out.focus_glow_color = None;
     out.data_led_color = None;

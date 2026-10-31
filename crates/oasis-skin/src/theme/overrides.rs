@@ -287,6 +287,11 @@ pub struct IconOverrides {
     pub shadow_color: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub label_color: Option<String>,
+    /// 1 px drop shadow under icon labels. Defaults to translucent black
+    /// for bright labels and none for dark ones; set an opaque color for
+    /// labels over busy or bright wallpapers.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label_shadow_color: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cursor_color: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
