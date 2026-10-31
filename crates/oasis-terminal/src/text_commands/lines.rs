@@ -1,7 +1,12 @@
 //! `head`, `tail` and `wc`.
 
 use super::{parse_n_flag, read_text_input};
+use crate::cmd_helpers::{FlagSpec, parse_flags};
 use crate::interpreter::CommandOutput;
+
+const HEAD_USAGE: &str = "head [-n N] [file]";
+const TAIL_USAGE: &str = "tail [-n N] [file]";
+const WC_USAGE: &str = "wc [-clw] [file]";
 
 // ---------------------------------------------------------------------------
 // head
@@ -11,10 +16,10 @@ define_command!(
     HeadCmd,
     "head",
     "Show first N lines of a file",
-    "head [-n N] <file>",
+    HEAD_USAGE,
     "text",
     |args, env| {
-        let (n, file) = parse_n_flag(args, 10)?;
+        let (n, file) = parse_n_flag(args, 10, HEAD_USAGE)?;
         let text = read_text_input(file, env)?;
         let result: Vec<&str> = text.lines().take(n).collect();
         Ok(CommandOutput::Text(result.join("\n")))
@@ -29,10 +34,10 @@ define_command!(
     TailCmd,
     "tail",
     "Show last N lines of a file",
-    "tail [-n N] <file>",
+    TAIL_USAGE,
     "text",
     |args, env| {
-        let (n, file) = parse_n_flag(args, 10)?;
+        let (n, file) = parse_n_flag(args, 10, TAIL_USAGE)?;
         let text = read_text_input(file, env)?;
         let lines: Vec<&str> = text.lines().collect();
         let start = lines.len().saturating_sub(n);
@@ -48,31 +53,32 @@ define_command!(
     WcCmd,
     "wc",
     "Count lines, words, and bytes",
-    "wc [-l|-w|-c] <file>",
+    WC_USAGE,
     "text",
     |args, env| {
-        let mut mode = "all";
-        let mut file_args = Vec::new();
-        for &arg in args {
-            match arg {
-                "-l" => mode = "lines",
-                "-w" => mode = "words",
-                "-c" => mode = "bytes",
-                _ => file_args.push(arg),
-            }
-        }
-        let text = read_text_input(file_args.first().copied(), env)?;
-        let lines = text.lines().count();
-        let words = text.split_whitespace().count();
-        let bytes = text.len();
-        match mode {
-            "lines" => Ok(CommandOutput::Text(format!("{lines}"))),
-            "words" => Ok(CommandOutput::Text(format!("{words}"))),
-            "bytes" => Ok(CommandOutput::Text(format!("{bytes}"))),
-            _ => Ok(CommandOutput::Text(format!(
-                "{lines:>8} {words:>8} {bytes:>8}"
-            ))),
-        }
+        let flags = parse_flags(args, &FlagSpec::switches("clw"), WC_USAGE)?;
+        let text = read_text_input(flags.positional.first().copied(), env)?;
+        let counts = [
+            ('l', text.lines().count()),
+            ('w', text.split_whitespace().count()),
+            ('c', text.len()),
+        ];
+        let picked: Vec<usize> = counts
+            .iter()
+            .filter(|(c, _)| flags.has(*c))
+            .map(|&(_, n)| n)
+            .collect();
+        let text = match picked[..] {
+            // One count alone prints bare (`wc -l` feeds arithmetic).
+            [n] => n.to_string(),
+            [] => counts.map(|(_, n)| format!("{n:>8}")).join(" "),
+            _ => picked
+                .iter()
+                .map(|n| format!("{n:>8}"))
+                .collect::<Vec<_>>()
+                .join(" "),
+        };
+        Ok(CommandOutput::Text(text))
     }
 );
 

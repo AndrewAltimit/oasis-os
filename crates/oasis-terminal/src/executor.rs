@@ -7,8 +7,8 @@ use oasis_types::error::{OasisError, Result};
 
 use crate::expander::resolve_path;
 use crate::pipeline::{
-    ChainOp, Redirections, output_to_text, parse_redirect, split_chains, split_pipes,
-    strip_comments, write_redirect,
+    ChainOp, Redirections, capture_text, parse_redirect, split_chains, split_pipes, strip_comments,
+    write_redirect,
 };
 use crate::types::{CommandOutput, Environment, MAX_EXEC_DEPTH};
 
@@ -47,6 +47,17 @@ pub(crate) fn merge_outputs(outputs: Vec<CommandOutput>) -> CommandOutput {
         1 => merged.pop().unwrap_or(CommandOutput::None),
         _ => CommandOutput::Multi(merged),
     }
+}
+
+/// `first`, a newline, then `second`.
+fn join_lines(mut first: String, second: &str) -> String {
+    if !second.is_empty() {
+        if !first.is_empty() {
+            first.push('\n');
+        }
+        first.push_str(second);
+    }
+    first
 }
 
 /// Split a leading `!` (pipeline negation) off `cmd`.
@@ -214,7 +225,16 @@ impl CommandRegistry {
             // keeps the previous status until this pipeline finishes.
             self.last_exit_code.set(0);
             let (negate, pipeline) = strip_bang(&segment.command);
-            match self.execute_pipeline(pipeline, env) {
+            let result = match self.operator_alias(pipeline) {
+                Some((name, line)) => {
+                    self.alias_stack.borrow_mut().push(name);
+                    let result = self.execute_nested(&line, env);
+                    self.alias_stack.borrow_mut().pop();
+                    result
+                },
+                None => self.execute_pipeline(pipeline, env),
+            };
+            match result {
                 Ok(output) => {
                     let code = self.last_exit_code.get();
                     self.set_status(if negate { i32::from(code == 0) } else { code });
@@ -273,15 +293,7 @@ impl CommandRegistry {
             let result = result?;
 
             stdin = match result {
-                CommandOutput::Text(text) => Some(text),
-                CommandOutput::Table { headers, rows } => {
-                    let mut out = headers.join(" | ");
-                    for row in &rows {
-                        out.push('\n');
-                        out.push_str(&row.join(" | "));
-                    }
-                    Some(out)
-                },
+                CommandOutput::Text(_) | CommandOutput::Table { .. } => Some(capture_text(&result)),
                 _ => None,
             };
         }
@@ -312,7 +324,7 @@ impl CommandRegistry {
 
     /// Expand a raw redirect target like an argument (quote removal,
     /// `$VAR`, `$(...)`; no globbing). It must name exactly one word.
-    fn redirect_target(&self, raw: &str, env: &mut Environment<'_>) -> Result<String> {
+    pub(crate) fn redirect_target(&self, raw: &str, env: &mut Environment<'_>) -> Result<String> {
         if raw.trim().is_empty() {
             return Err(OasisError::Command(
                 "syntax error: missing file name after redirection".into(),
@@ -341,7 +353,7 @@ impl CommandRegistry {
             env.stderr.clear();
             return self.execute_single_cmd(cmd_part.trim(), env);
         }
-        self.execute_redirected(cmd_part, &redirections, env)
+        self.execute_redirected(&cmd_part, &redirections, env)
     }
 
     /// [`execute_with_redirect`](Self::execute_with_redirect) for a command
@@ -353,7 +365,6 @@ impl CommandRegistry {
         redirections: &Redirections<'_>,
         env: &mut Environment<'_>,
     ) -> Result<CommandOutput> {
-        let has_stderr_handling = redirections.stderr.is_some() || redirections.stderr_to_stdout;
         // Redirect targets get the same variable expansion and quote
         // removal as arguments (`> $DIR/out.txt`, `> "my file"`).
         let stdin_target = redirections
@@ -397,11 +408,14 @@ impl CommandRegistry {
             env.stdin = outer;
         }
 
+        let has_stderr_handling = redirections.stderr.is_some()
+            || redirections.stderr_to_stdout
+            || redirections.stdout_to_stderr;
         // If no stderr redirect/merge, propagate errors normally.
         if !has_stderr_handling {
             let result = result?;
             if let Some((path, append)) = stdout_target {
-                let text = output_to_text(&result);
+                let text = capture_text(&result);
                 write_redirect(&text, &path, append, &env.cwd, env.vfs)?;
                 return Ok(CommandOutput::None);
             }
@@ -409,7 +423,7 @@ impl CommandRegistry {
         }
 
         // Capture error messages into stderr.
-        let (result, captured_stderr, was_error) = match result {
+        let (mut result, mut captured_stderr, was_error) = match result {
             Ok(output) => (output, std::mem::take(&mut env.stderr), false),
             Err(e) => {
                 let mut stderr_text = std::mem::take(&mut env.stderr);
@@ -421,29 +435,32 @@ impl CommandRegistry {
             },
         };
 
-        // If 2>&1, merge stderr into stdout.
-        let (result, captured_stderr) = if redirections.stderr_to_stdout {
-            if captured_stderr.is_empty() {
-                (result, String::new())
-            } else {
-                let merged = match result {
-                    CommandOutput::Text(t) if !t.is_empty() => {
-                        CommandOutput::Text(format!("{t}\n{captured_stderr}"))
-                    },
-                    CommandOutput::Text(_) | CommandOutput::None => {
-                        CommandOutput::Text(captured_stderr)
-                    },
-                    other => other,
-                };
-                (merged, String::new())
+        // `>&2`: the output joins stderr.
+        if redirections.stdout_to_stderr {
+            let text = capture_text(&result);
+            if !text.is_empty() {
+                captured_stderr = join_lines(text, &captured_stderr);
             }
-        } else {
-            (result, captured_stderr)
-        };
+            result = CommandOutput::None;
+        }
+
+        // `2>&1`, or stderr with nowhere else to go (`>&2` alone): it is
+        // shown (or redirected) with stdout.
+        if (redirections.stderr_to_stdout || stderr_target.is_none()) && !captured_stderr.is_empty()
+        {
+            let stderr = std::mem::take(&mut captured_stderr);
+            result = match result {
+                CommandOutput::Text(t) if !t.is_empty() => {
+                    CommandOutput::Text(join_lines(t, &stderr))
+                },
+                CommandOutput::Text(_) | CommandOutput::None => CommandOutput::Text(stderr),
+                other => other,
+            };
+        }
 
         // Handle stdout redirect.
         let result = if let Some((path, append)) = stdout_target {
-            let text = output_to_text(&result);
+            let text = capture_text(&result);
             write_redirect(&text, &path, append, &env.cwd, env.vfs)?;
             CommandOutput::None
         } else {
@@ -513,6 +530,9 @@ impl CommandRegistry {
             return self.apply_status((b.run)(self, &args, env));
         }
         if let Some(cmd) = self.commands.get(name_lower.as_str()) {
+            if name_lower == "cd" {
+                return self.run_cd(cmd.as_ref(), &args, env);
+            }
             return self.apply_status(cmd.execute(&args, env));
         }
         if self.functions.borrow().contains_key(name_lower.as_str()) {
@@ -521,5 +541,39 @@ impl CommandRegistry {
         Err(OasisError::Command(
             format!("unknown command: {first}").into(),
         ))
+    }
+
+    /// Run the `cd` command with the forms that need shell variables
+    /// resolved: no argument is `$HOME` (`/` when unset), `-` is `$OLDPWD`
+    /// (printing the new directory, as POSIX shells do). A successful
+    /// change records the previous directory in `OLDPWD`.
+    fn run_cd(
+        &self,
+        cmd: &dyn crate::interpreter::Command,
+        args: &[&str],
+        env: &mut Environment<'_>,
+    ) -> Result<CommandOutput> {
+        let var = |name: &str| self.get_variable(name).filter(|v| !v.is_empty());
+        let (target, announce) = match args {
+            [] => (var("HOME").unwrap_or_else(|| "/".to_string()), false),
+            ["-"] => (
+                var("OLDPWD").ok_or_else(|| OasisError::Command("cd: OLDPWD not set".into()))?,
+                true,
+            ),
+            _ => (String::new(), false),
+        };
+        let previous = env.cwd.clone();
+        let output = if target.is_empty() {
+            cmd.execute(args, env)?
+        } else {
+            cmd.execute(&[target.as_str()], env)?
+        };
+        if env.cwd != previous {
+            self.set_variable("OLDPWD", &previous);
+        }
+        if announce {
+            return Ok(CommandOutput::Text(env.cwd.clone()));
+        }
+        self.apply_status(Ok(output))
     }
 }

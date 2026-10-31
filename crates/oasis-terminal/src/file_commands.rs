@@ -254,24 +254,22 @@ define_command!(
     "xxd [-l N] <file>",
     "filesystem",
     |args, env| {
-        let mut limit = 256usize;
-        let mut file_arg = None;
-        let mut i = 0;
-        while i < args.len() {
-            if args[i] == "-l" {
-                i += 1;
-                if i < args.len() {
-                    limit = args[i]
-                        .parse()
-                        .map_err(|_| OasisError::Command("invalid length".into()))?;
-                }
-            } else {
-                file_arg = Some(args[i]);
-            }
-            i += 1;
-        }
-        let file =
-            file_arg.ok_or_else(|| OasisError::Command("usage: xxd [-l N] <file>".into()))?;
+        const USAGE: &str = "xxd [-l N] <file>";
+        let spec = crate::cmd_helpers::FlagSpec {
+            switches: "",
+            valued: "l",
+            long: &[],
+        };
+        let flags = crate::cmd_helpers::parse_flags(args, &spec, USAGE)?;
+        let limit: usize = match flags.value('l') {
+            Some(v) => v
+                .parse()
+                .map_err(|_| OasisError::Command("invalid length".into()))?,
+            None => 256,
+        };
+        let [file] = flags.positional[..] else {
+            return Err(OasisError::Command(format!("usage: {USAGE}").into()));
+        };
         let path = resolve_path(&env.cwd, file);
         let data = env.vfs.read(&path)?;
         let data = &data[..data.len().min(limit)];

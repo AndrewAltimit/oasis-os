@@ -104,6 +104,21 @@ impl WordBuilder {
         }
     }
 
+    /// Append `"$@"`: each field a separate quoted word, the first joining
+    /// the current word and the last continuing into what follows. No
+    /// fields (and no other text) produce no word at all.
+    pub(crate) fn push_quoted_fields(&mut self, fields: &[String]) {
+        for (i, field) in fields.iter().enumerate() {
+            if i > 0 {
+                self.finish_word();
+            }
+            self.mark_quoted();
+            for c in field.chars() {
+                self.push_char(c, true);
+            }
+        }
+    }
+
     /// End the current word (if one has begun).
     fn finish_word(&mut self) {
         if self.started {
@@ -139,9 +154,15 @@ impl WordBuilder {
 pub(crate) type DollarHook<'a> =
     dyn FnMut(&[char], usize, bool, &mut WordBuilder) -> Result<Option<usize>> + 'a;
 
-/// Split `input` into words: quote removal, backslash escapes, and `$`
-/// expansions through `on_dollar` (nothing inside `'...'` is expanded).
-pub(crate) fn split_words(input: &str, on_dollar: &mut DollarHook<'_>) -> Result<Vec<Word>> {
+/// Split `input` into words: quote removal, backslash escapes, `$`
+/// expansions through `on_dollar` (nothing inside `'...'` is expanded),
+/// and tilde expansion: an unquoted `~` that starts a word and ends it or
+/// precedes a `/` becomes `home` (when given).
+pub(crate) fn split_words(
+    input: &str,
+    home: Option<&str>,
+    on_dollar: &mut DollarHook<'_>,
+) -> Result<Vec<Word>> {
     let chars: Vec<char> = input.chars().collect();
     let mut out = WordBuilder::default();
     let (mut in_single, mut in_double) = (false, false);
@@ -191,6 +212,16 @@ pub(crate) fn split_words(input: &str, on_dollar: &mut DollarHook<'_>) -> Result
                 }
             },
             c if c.is_whitespace() => out.finish_word(),
+            '~' if !out.started
+                && chars.get(i).is_none_or(|&n| n == '/' || n.is_whitespace())
+                && let Some(home) = home =>
+            {
+                // The home directory is literal text (no globbing).
+                out.mark_quoted();
+                for c in home.chars() {
+                    out.push_char(c, true);
+                }
+            },
             c => out.push_char(c, false),
         }
     }
@@ -207,7 +238,7 @@ pub(crate) fn split_words(input: &str, on_dollar: &mut DollarHook<'_>) -> Result
 /// [`tokenize`], keeping the per-word quoting and glob information.
 #[cfg(test)]
 pub(crate) fn tokenize_words(input: &str) -> Result<Vec<Word>> {
-    split_words(input, &mut |_, _, _, _| Ok(None))
+    split_words(input, None, &mut |_, _, _, _| Ok(None))
 }
 
 /// Brace- then glob-expand the words: brace expansion applies to plain
@@ -376,9 +407,11 @@ fn expand_one_glob(pattern: &str, vfs: &mut dyn Vfs, cwd: &str) -> Vec<String> {
         Err(_) => return Vec::new(),
     };
 
+    // A leading `.` must be matched explicitly (`*` skips dotfiles).
+    let dot_ok = file_pattern.starts_with('.') || file_pattern.starts_with("\\.");
     let mut matches: Vec<String> = entries
         .iter()
-        .filter(|e| glob_match(file_pattern, &e.name))
+        .filter(|e| (dot_ok || !e.name.starts_with('.')) && glob_match(file_pattern, &e.name))
         .map(|e| {
             if dir == "/" {
                 format!("/{}", e.name)
@@ -502,33 +535,45 @@ fn parse_char_class(p: &[char], pi: usize) -> Option<(bool, Vec<char>, usize)> {
 // Case pattern matching
 // ---------------------------------------------------------------------------
 
-/// Match a case pattern against a value.
-///
-/// Supports glob wildcards (`*`, `?`, `[...]`), `|` (alternation), and
-/// literal matching.
-pub(crate) fn case_pattern_matches(value: &str, pattern: &str) -> bool {
-    for alt in pattern.split('|') {
-        let alt = alt.trim();
-        if alt == "*" {
-            return true;
-        }
-        if alt == value {
-            return true;
-        }
-        if glob_match_simple(value, alt) {
-            return true;
+/// Split a `case` arm pattern on its top-level `|` (not inside quotes or
+/// after a backslash): `a|"b|c"` is `a` and `"b|c"`. Each alternative is
+/// returned trimmed and still quoted; the executor expands it.
+pub(crate) fn split_case_alternatives(pattern: &str) -> Vec<&str> {
+    let crate::pipeline::Scan { top, .. } = crate::pipeline::scan(pattern);
+    let mut alts = Vec::new();
+    let mut start = 0;
+    for (i, b) in pattern.bytes().enumerate() {
+        if b == b'|' && top[i] {
+            alts.push(pattern[start..i].trim());
+            start = i + 1;
         }
     }
-    false
+    alts.push(pattern[start..].trim());
+    alts
 }
 
-/// Glob matching with the operands in `(value, pattern)` order.
-///
-/// Formerly a prefix/suffix special case that mishandled patterns with more
-/// than one `*` (e.g. `*alpha*` never matched); now full [`glob_match`]
-/// semantics (`*`, `?`, `[...]`).
-pub(crate) fn glob_match_simple(value: &str, pattern: &str) -> bool {
-    glob_match(pattern, value)
+/// The glob pattern an expanded `case` alternative stands for: its glob
+/// form when it holds an unquoted metacharacter, else its text with every
+/// metacharacter escaped (matched literally).
+pub(crate) fn case_glob(words: &[Word]) -> String {
+    let mut pattern = String::new();
+    for (i, word) in words.iter().enumerate() {
+        if i > 0 {
+            pattern.push(' ');
+        }
+        match &word.glob {
+            Some(glob) => pattern.push_str(glob),
+            None => {
+                for c in word.text.chars() {
+                    if c == '\\' || is_glob_meta(c) {
+                        pattern.push('\\');
+                    }
+                    pattern.push(c);
+                }
+            },
+        }
+    }
+    pattern
 }
 
 // ---------------------------------------------------------------------------

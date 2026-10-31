@@ -4,7 +4,7 @@
 use oasis_types::error::{OasisError, Result};
 
 use super::{Node, parse_script, split_statements};
-use crate::expander::{case_pattern_matches, expand_words, resolve_path};
+use crate::expander::{case_glob, expand_words, glob_match, resolve_path, split_case_alternatives};
 use crate::interpreter::{CommandOutput, CommandRegistry, Environment};
 
 /// Maximum iterations for a single `while` / `until` loop.
@@ -289,6 +289,8 @@ impl CommandRegistry {
                     Ok(words) => words,
                     Err(e) => return self.report_error(&e, 0, ctx),
                 };
+                // Zero iterations exit 0; otherwise the last body command's.
+                self.set_status(0);
                 for word in words {
                     if let Err(e) = self.assign_variable(var, &word) {
                         return self.report_error(&e, 0, ctx);
@@ -299,18 +301,127 @@ impl CommandRegistry {
                 }
             },
             Node::Case { word, arms } => {
-                let value = match self.expand_words(word, env) {
-                    Ok(words) => words.join(" "),
+                let value = match self.expand_case_word(word, env) {
+                    Ok(value) => value,
                     Err(e) => return self.report_error(&e, 0, ctx),
                 };
+                // No matching arm (or an empty one) exits 0.
+                self.set_status(0);
                 for (pattern, body) in arms {
-                    if case_pattern_matches(&value, pattern) {
-                        self.run_nodes(body, env, ctx);
-                        break;
+                    match self.case_arm_matches(&value, pattern, env) {
+                        Ok(true) => {
+                            self.run_nodes(body, env, ctx);
+                            break;
+                        },
+                        Ok(false) => {},
+                        Err(e) => return self.report_error(&e, 0, ctx),
                     }
                 }
             },
+            Node::Redirected { node, suffix, line } => {
+                self.run_redirected(node, suffix, *line, env, ctx);
+            },
         }
+    }
+
+    /// Whether `value` matches one of the `|` alternatives of a `case` arm
+    /// pattern. Each alternative is expanded like a word (quotes removed,
+    /// `$VAR` / `$(...)` substituted, no globbing); its quoted parts match
+    /// literally, unquoted `*` / `?` / `[...]` as globs.
+    fn case_arm_matches(
+        &self,
+        value: &str,
+        pattern: &str,
+        env: &mut Environment<'_>,
+    ) -> Result<bool> {
+        for alt in split_case_alternatives(pattern) {
+            let words = self.expand_words_of(alt, env)?;
+            if glob_match(&case_glob(&words), value) {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
+    /// Run a compound command followed by `| cmd`, `> file`, `>> file`
+    /// and/or `&& cmd` / `|| cmd` (`for ...; done | sort > out`): its
+    /// output goes to the pipe or file, then the and-or list runs on its
+    /// exit status.
+    fn run_redirected(
+        &self,
+        node: &Node,
+        suffix: &str,
+        line: usize,
+        env: &mut Environment<'_>,
+        ctx: &mut ExecCtx,
+    ) {
+        let mut inner = ExecCtx::new(ctx.script);
+        self.run_node(node, env, &mut inner);
+        let output = crate::executor::merge_outputs(inner.outputs);
+        if let Err(e) = self.finish_redirected(output, suffix, env, ctx) {
+            self.report_error(&e, line, ctx);
+        }
+    }
+
+    fn finish_redirected(
+        &self,
+        output: CommandOutput,
+        suffix: &str,
+        env: &mut Environment<'_>,
+        ctx: &mut ExecCtx,
+    ) -> Result<()> {
+        let suffix = suffix.trim();
+        // `| rest`: the rest of the line is a pipeline (and-or list) whose
+        // first stage reads the compound's output.
+        if let Some(rest) = suffix.strip_prefix('|').filter(|r| !r.starts_with('|')) {
+            env.stdin = Some(crate::pipeline::capture_text(&output));
+            let result = self.execute_chain(rest, env);
+            env.stdin = None;
+            match result? {
+                CommandOutput::None => {},
+                out => ctx.push(out),
+            }
+            return Ok(());
+        }
+        // Leading redirections, up to the first `&&` / `||`.
+        let (redirs, chain) = match crate::pipeline::find_and_or(suffix) {
+            Some(i) => (&suffix[..i], &suffix[i..]),
+            None => (suffix, ""),
+        };
+        let (cmd, redirections) = crate::pipeline::parse_redirect(redirs);
+        if !cmd.trim().is_empty()
+            || redirections.stdin.is_some()
+            || redirections.stderr.is_some()
+            || redirections.stdout_to_stderr
+        {
+            return Err(OasisError::Command(
+                format!("syntax error: unsupported text after compound command: {redirs}").into(),
+            ));
+        }
+        match redirections.stdout {
+            Some(r) => {
+                let path = self.redirect_target(r.path, env)?;
+                let text = crate::pipeline::capture_text(&output);
+                crate::pipeline::write_redirect(&text, &path, r.append, &env.cwd, env.vfs)?;
+            },
+            None => ctx.push(output),
+        }
+        let chain = chain.trim();
+        if chain.is_empty() {
+            return Ok(());
+        }
+        let (run, rest) = match (chain.strip_prefix("&&"), chain.strip_prefix("||")) {
+            (Some(rest), _) => (self.last_exit_code.get() == 0, rest),
+            (None, Some(rest)) => (self.last_exit_code.get() != 0, rest),
+            (None, None) => return Ok(()),
+        };
+        if run {
+            match self.execute_chain(rest, env)? {
+                CommandOutput::None => {},
+                out => ctx.push(out),
+            }
+        }
+        Ok(())
     }
 
     /// Run one loop iteration. Returns `true` when the loop must stop

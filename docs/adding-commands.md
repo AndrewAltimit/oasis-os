@@ -203,7 +203,7 @@ Commands are organized into modules by category:
 | `radio_commands.rs` | audio | radio |
 | `platform_commands.rs` | system | power, clock, memory, usb |
 | `remote_commands.rs` | network | listen, remote, hosts |
-| `control_flow.rs` / `script/` | core | `if`/`while`/`until`/`for`/`case` parser + `run` (shell syntax, not commands) |
+| `script/` | core | `if`/`while`/`until`/`for`/`case` parser + `run` (shell syntax, not commands) |
 | `builtins.rs` / `jobs/` / `script/` | - | the 21 shell builtins (help, which, history, set, unset, env, alias, unalias, run, xargs, function, return, local, break, continue, true, false, jobs, fg, bg, kill) |
 
 Additional commands (agent, browser, plugin, script, skin, transfer, update) are registered by `oasis-core`, `tv` by `oasis-apps` and `mcp-server` (feature `mcp`) by `oasis-app`; `oasis-terminal` must not depend on the UI / skin stack, so a command that needs `oasis-skin` (like `skin`, in `oasis-core/src/terminal/skin_commands.rs`) belongs there.
@@ -227,6 +227,35 @@ with a builtin's name has no effect.
   executor turns an `Err` into exit status 1 (`$?`, `&&` / `||`, `!`,
   `if`, `while`); return `CommandOutput::status(code, output)` for a
   non-zero status that still prints something.
+- Parse options with `parse_flags` (`cmd_helpers.rs`, re-exported as
+  `oasis_terminal::parse_flags`) rather than matching `args` by hand, so
+  every command accepts combined short options (`-la`), attached or
+  separate values (`-n5`, `-n 5`), `--` and options after operands, and
+  rejects an unknown option with the usage line instead of treating it as
+  a file name:
+
+  ```rust
+  use oasis_terminal::{FlagSpec, parse_flags};
+
+  const USAGE: &str = "head [-n N] [file]";
+  let spec = FlagSpec { switches: "q", valued: "n", long: &[("lines", 'n')] };
+  let flags = parse_flags(args, &spec, USAGE)?;
+  let n: usize = flags
+      .value('n')
+      .unwrap_or("10")
+      .parse()
+      .map_err(|_| OasisError::Command("invalid count".into()))?;
+  let quiet = flags.has('q');
+  let file = flags.positional.first().copied();
+  ```
+
+  `FlagSpec::switches("rf")` covers commands with value-less switches
+  only. Commands whose arguments are free text (`echo`, `write`) take no
+  options.
+- An empty result prints nothing (`CommandOutput::None`), not a
+  placeholder like `(no matches)`: output feeds pipes, redirects and
+  `$(...)`. Colour codes are fine; they are stripped before text reaches a
+  pipe, file or substitution.
 - Conditions use the exit status only, never the printed text. A command
   that answers a yes/no question exits 0 for yes and 1 for no (`grep` with
   no match, `diff` on differing files); a pure predicate like `test`

@@ -21,8 +21,6 @@ pub use crate::types::{Command, CommandOutput, CommandSignal, Environment};
 
 // Items re-exported only for tests and internal use.
 #[cfg(test)]
-pub(crate) use crate::expander::case_pattern_matches;
-#[cfg(test)]
 pub(crate) use crate::expander::expand_braces;
 #[cfg(test)]
 pub use crate::expander::tokenize;

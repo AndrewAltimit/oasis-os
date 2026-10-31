@@ -169,7 +169,7 @@ pub(crate) fn is_compound(line: &str) -> bool {
         .any(|s| COMPOUND_KEYWORDS.contains(&first_word(&s.text)))
 }
 
-/// Find a keyword in a string at a word boundary, ignoring quoted text
+/// Find a whitespace-delimited keyword in a string, ignoring quoted text
 /// and `{ ... }` groups. Returns the byte offset of the keyword.
 pub(crate) fn find_keyword(input: &str, keyword: &str) -> Option<usize> {
     let bytes = input.as_bytes();
@@ -199,9 +199,11 @@ pub(crate) fn find_keyword(input: &str, keyword: &str) -> Option<usize> {
                 b'{' => depth += 1,
                 b'}' => depth = depth.saturating_sub(1),
                 _ if depth == 0 => {
-                    let at_start = i == 0 || !bytes[i - 1].is_ascii_alphanumeric();
+                    // A keyword is a whole word: whitespace (or the edge)
+                    // on both sides (`case foo.in in` matches the second).
+                    let at_start = i == 0 || bytes[i - 1].is_ascii_whitespace();
                     let at_end =
-                        i + kw_len >= bytes.len() || !bytes[i + kw_len].is_ascii_alphanumeric();
+                        i + kw_len >= bytes.len() || bytes[i + kw_len].is_ascii_whitespace();
                     if at_start && at_end && &bytes[i..i + kw_len] == kw_bytes {
                         return Some(i);
                     }
