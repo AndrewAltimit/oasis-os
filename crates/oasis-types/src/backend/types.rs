@@ -337,9 +337,19 @@ impl<T, E: std::fmt::Display> BackendErrExt<T> for std::result::Result<T, E> {
 }
 
 /// Return a [`BackendError::TextureNotFound`](crate::error::BackendError)
-/// error for the given id.
-pub fn texture_not_found(id: u64) -> crate::error::OasisError {
-    crate::error::OasisError::Backend(crate::error::BackendError::TextureNotFound { id })
+/// error for the given texture id.
+pub fn texture_not_found(id: TextureId) -> crate::error::OasisError {
+    crate::error::OasisError::Backend(crate::error::BackendError::TextureNotFound { id: id.0 })
+}
+
+/// Return a [`BackendError::Unsupported`](crate::error::BackendError)
+/// error for an optional operation the backend does not implement.
+///
+/// Every "not implemented here" default (render targets, audio streaming)
+/// reports this one variant, so a caller can tell "fall back" from a real
+/// failure with a single match.
+pub fn unsupported(op: &'static str) -> crate::error::OasisError {
+    crate::error::OasisError::Backend(crate::error::BackendError::Unsupported { op })
 }
 
 /// Return a [`BackendError::RenderTargetNotFound`](crate::error::BackendError)

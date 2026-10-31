@@ -1,6 +1,6 @@
 //! `SdiBatch` extension trait.
 
-use crate::backend::{Color, SdiCore};
+use crate::backend::{Color, SdiText};
 use crate::error::Result;
 
 // ---------------------------------------------------------------------------
@@ -39,8 +39,10 @@ pub struct BatchRect {
 ///
 /// Both methods take a slice of items that share one draw state, so a GPU
 /// backend can submit them as one geometry call. The defaults loop over
-/// [`SdiCore::fill_rect`] / [`SdiCore::draw_text`].
-pub trait SdiBatch: SdiCore {
+/// [`SdiCore::fill_rect`](crate::backend::SdiCore::fill_rect) /
+/// [`SdiText::draw_text_styled`], so a batch
+/// draws exactly the pixels of the same items drawn one by one.
+pub trait SdiBatch: SdiText {
     /// Submit a batch of solid colored rectangles in a single call.
     ///
     /// Backends can override this to submit all rectangles as GPU geometry
@@ -58,20 +60,20 @@ pub trait SdiBatch: SdiCore {
     ///
     /// All items in the batch share `font_size`, `bold`, and `italic`
     /// but may have different positions and colors. Backends can override
-    /// this to coalesce glyph atlas lookups. The default issues individual
-    /// `draw_text` calls with faux-bold double-strike.
+    /// this to coalesce glyph atlas lookups; an override must keep the
+    /// output of the default, one
+    /// [`draw_text_styled`](SdiText::draw_text_styled) per item (so a
+    /// backend with true bold / italic glyphs uses them here too, instead
+    /// of a double-strike that blends translucent text twice).
     fn submit_text_batch(
         &mut self,
         texts: &[BatchText<'_>],
         font_size: u16,
         bold: bool,
-        _italic: bool,
+        italic: bool,
     ) -> Result<()> {
         for t in texts {
-            self.draw_text(t.text, t.x, t.y, font_size, t.color)?;
-            if bold {
-                self.draw_text(t.text, t.x + 1, t.y, font_size, t.color)?;
-            }
+            self.draw_text_styled(t.text, t.x, t.y, font_size, t.color, bold, italic)?;
         }
         Ok(())
     }

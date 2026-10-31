@@ -5,8 +5,8 @@ use oasis_types::error::OasisError;
 use oasis_types::error::Result;
 
 use oasis_types::ipc::{
-    NOTIFY_PATH, SCREENSHOT_REQUEST_PATH, THEME_STATUS_PATH, WM_REQUEST_PATH, WM_STATUS_PATH,
-    WmRequest,
+    NOTIFY_PATH, Notification, NotifyLevel, SCREENSHOT_REQUEST_PATH, THEME_STATUS_PATH,
+    WM_REQUEST_PATH, WM_STATUS_PATH, WmRequest,
 };
 
 use crate::audio_commands::queue_request_line;
@@ -167,26 +167,23 @@ define_command!(
             ));
         }
 
-        let level = match level_str {
-            "info" => "info",
-            "success" => "success",
-            "warning" | "warn" => "warning",
-            "error" | "err" => "error",
-            other => {
-                return Err(OasisError::Command(
-                    format!("unknown level: {other} (use info|success|warning|error)").into(),
-                ));
-            },
+        let Some(level) = NotifyLevel::parse(level_str) else {
+            return Err(OasisError::Command(
+                format!("unknown level: {level_str} (use info|success|warning|error)").into(),
+            ));
+        };
+        let notification = Notification {
+            level,
+            message: message_args.join(" "),
         };
 
-        let message = message_args.join(" ");
-
         // Write level and message to VFS for the UI layer to pick up.
-        let payload = format!("{level}:{message}");
-        let notify_path = NOTIFY_PATH;
-        env.vfs.write(notify_path, payload.as_bytes())?;
+        env.vfs
+            .write(NOTIFY_PATH, notification.to_payload().as_bytes())?;
         Ok(CommandOutput::Text(format!(
-            "Notification queued [{level}]: {message}"
+            "Notification queued [{}]: {}",
+            level.as_str(),
+            notification.message
         )))
     }
 );

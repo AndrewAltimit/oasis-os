@@ -39,14 +39,16 @@ pub const PLUGIN_STATUS_PATH: &str = "/var/plugin/status";
 
 // -- UI requests (terminal `notify` / `screenshot` / `theme` / `browse`) --
 
-/// Toast request (`level:message`) from the `notify` command.
+/// Toast request (a [`Notification`]: `level:message`) from the `notify`
+/// command.
 pub const NOTIFY_PATH: &str = "/var/notify/message";
 /// Screenshot request (a VFS destination path) from the `screenshot`
 /// command; the host captures the next presented frame there.
 pub const SCREENSHOT_REQUEST_PATH: &str = "/var/screenshot/request";
 /// Current theme summary published by the host for the `theme` command.
 pub const THEME_STATUS_PATH: &str = "/var/theme/current";
-/// Browser request (`op [arg]`) from the `browse` command.
+/// Browser request (a [`BrowserRequest`]: `op [arg]`) from the `browse`
+/// command.
 pub const BROWSER_REQUEST_PATH: &str = "/var/browser/request";
 
 // -- Settings (the Settings app and the host talk through these) --
@@ -215,6 +217,145 @@ impl PluginRequest {
         match self {
             Self::Load(name) => format!("load {name}"),
             Self::Unload(name) => format!("unload {name}"),
+        }
+    }
+}
+
+/// Severity of a [`Notification`] toast.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum NotifyLevel {
+    /// Informational (the default).
+    #[default]
+    Info,
+    /// An operation succeeded.
+    Success,
+    /// Something needs attention.
+    Warning,
+    /// An operation failed.
+    Error,
+}
+
+impl NotifyLevel {
+    /// The wire name (`info`, `success`, `warning`, `error`).
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Info => "info",
+            Self::Success => "success",
+            Self::Warning => "warning",
+            Self::Error => "error",
+        }
+    }
+
+    /// Parse a level as a user types it: the wire names plus `warn` and
+    /// `err`.
+    pub fn parse(s: &str) -> Option<Self> {
+        Some(match s {
+            "info" => Self::Info,
+            "success" => Self::Success,
+            "warning" | "warn" => Self::Warning,
+            "error" | "err" => Self::Error,
+            _ => return None,
+        })
+    }
+}
+
+/// The toast request on [`NOTIFY_PATH`]: `level:message`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Notification {
+    /// Toast severity.
+    pub level: NotifyLevel,
+    /// Toast text.
+    pub message: String,
+}
+
+impl Notification {
+    /// Parse a payload. A payload without a known `level:` prefix is an
+    /// [`NotifyLevel::Info`] toast of the whole text (so `note: x` keeps
+    /// its colon).
+    pub fn parse(payload: &str) -> Self {
+        // Only the wire names count as a prefix (not the `warn` / `err`
+        // aliases a user may type to the `notify` command).
+        let (level, message) = payload
+            .split_once(':')
+            .and_then(|(prefix, message)| {
+                let level = NotifyLevel::parse(prefix).filter(|l| l.as_str() == prefix)?;
+                Some((level, message))
+            })
+            .unwrap_or((NotifyLevel::Info, payload));
+        Self {
+            level,
+            message: message.trim().to_string(),
+        }
+    }
+
+    /// Serialize to the payload format ([`Notification::parse`]
+    /// round-trips it).
+    pub fn to_payload(&self) -> String {
+        format!("{}:{}", self.level.as_str(), self.message)
+    }
+}
+
+/// One request on [`BROWSER_REQUEST_PATH`]: `open <url>`,
+/// `sandbox <url>`, `back`, `forward`, `reload`, `home`, `reader`,
+/// `bookmarks`, `history`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BrowserRequest {
+    /// Navigate to a URL.
+    Open(String),
+    /// Navigate to a URL with the page sandboxed (no scripts, no network
+    /// beyond the page).
+    Sandbox(String),
+    /// History back.
+    Back,
+    /// History forward.
+    Forward,
+    /// Reload the page.
+    Reload,
+    /// Go to the home page.
+    Home,
+    /// Toggle reader mode.
+    Reader,
+    /// Show the bookmarks page.
+    Bookmarks,
+    /// Show the history page.
+    History,
+}
+
+impl BrowserRequest {
+    /// Parse one request. `None` for unknown ops and a missing URL.
+    pub fn parse(line: &str) -> Option<Self> {
+        let line = line.trim();
+        let (op, arg) = match line.split_once(' ') {
+            Some((op, arg)) => (op, arg.trim()),
+            None => (line, ""),
+        };
+        Some(match op {
+            "open" if !arg.is_empty() => Self::Open(arg.to_string()),
+            "sandbox" if !arg.is_empty() => Self::Sandbox(arg.to_string()),
+            "back" => Self::Back,
+            "forward" => Self::Forward,
+            "reload" => Self::Reload,
+            "home" => Self::Home,
+            "reader" => Self::Reader,
+            "bookmarks" => Self::Bookmarks,
+            "history" => Self::History,
+            _ => return None,
+        })
+    }
+
+    /// Serialize to the request wire format ([`BrowserRequest::parse`]
+    /// round-trips it).
+    pub fn to_line(&self) -> String {
+        match self {
+            Self::Open(url) => format!("open {url}"),
+            Self::Sandbox(url) => format!("sandbox {url}"),
+            Self::Back => "back".to_string(),
+            Self::Forward => "forward".to_string(),
+            Self::Reload => "reload".to_string(),
+            Self::Home => "home".to_string(),
+            Self::Reader => "reader".to_string(),
+            Self::Bookmarks => "bookmarks".to_string(),
+            Self::History => "history".to_string(),
         }
     }
 }
@@ -494,6 +635,59 @@ mod tests {
         );
         for line in ["", "load", "load ", "unload  ", "reload hello", "hello"] {
             assert_eq!(PluginRequest::parse(line), None, "{line:?}");
+        }
+    }
+
+    #[test]
+    fn notification_round_trips_and_defaults_to_info() {
+        for level in [
+            NotifyLevel::Info,
+            NotifyLevel::Success,
+            NotifyLevel::Warning,
+            NotifyLevel::Error,
+        ] {
+            let n = Notification {
+                level,
+                message: "disk: 90% full".into(),
+            };
+            assert_eq!(Notification::parse(&n.to_payload()), n);
+        }
+        let plain = Notification::parse("note: no level here");
+        assert_eq!(plain.level, NotifyLevel::Info);
+        assert_eq!(plain.message, "note: no level here");
+        // Aliases are for typing, not a wire prefix.
+        assert_eq!(Notification::parse("warn:x").message, "warn:x");
+        assert_eq!(NotifyLevel::parse("err"), Some(NotifyLevel::Error));
+    }
+
+    #[test]
+    fn browser_request_round_trips_and_rejects_malformed() {
+        for req in [
+            BrowserRequest::Open("https://example.com/a b".into()),
+            BrowserRequest::Sandbox("vfs://x".into()),
+            BrowserRequest::Back,
+            BrowserRequest::Forward,
+            BrowserRequest::Reload,
+            BrowserRequest::Home,
+            BrowserRequest::Reader,
+            BrowserRequest::Bookmarks,
+            BrowserRequest::History,
+        ] {
+            assert_eq!(BrowserRequest::parse(&req.to_line()), Some(req.clone()));
+        }
+        assert_eq!(
+            BrowserRequest::parse(" reload\n"),
+            Some(BrowserRequest::Reload)
+        );
+        for line in [
+            "",
+            "open",
+            "open  ",
+            "sandbox",
+            "fly",
+            "https://example.com",
+        ] {
+            assert_eq!(BrowserRequest::parse(line), None, "{line:?}");
         }
     }
 

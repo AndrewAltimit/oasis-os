@@ -8,6 +8,7 @@
 use oasis_http as loader;
 use oasis_terminal::{Command, CommandOutput, CommandRegistry, Environment};
 use oasis_types::error::Result;
+use oasis_types::ipc::BrowserRequest;
 
 /// Register all browser commands into a registry.
 pub fn register_browser_commands(reg: &mut CommandRegistry) {
@@ -52,48 +53,50 @@ impl Command for BrowseCmd {
             ));
         }
 
-        let (request, message) = match args[0] {
-            "bookmarks" => ("bookmarks".to_string(), "Opening bookmarks page..."),
-            "history" => ("history".to_string(), "Opening history page..."),
-            "home" => ("home".to_string(), "Navigating to home page..."),
-            "back" => ("back".to_string(), "Navigating back..."),
-            "forward" => ("forward".to_string(), "Navigating forward..."),
-            "reload" => ("reload".to_string(), "Reloading..."),
-            "reader" => ("reader".to_string(), "Toggling reader mode..."),
+        let (request, message): (BrowserRequest, String) = match args[0] {
+            "bookmarks" => (
+                BrowserRequest::Bookmarks,
+                "Opening bookmarks page...".into(),
+            ),
+            "history" => (BrowserRequest::History, "Opening history page...".into()),
+            "home" => (BrowserRequest::Home, "Navigating to home page...".into()),
+            "back" => (BrowserRequest::Back, "Navigating back...".into()),
+            "forward" => (BrowserRequest::Forward, "Navigating forward...".into()),
+            "reload" => (BrowserRequest::Reload, "Reloading...".into()),
+            "reader" => (BrowserRequest::Reader, "Toggling reader mode...".into()),
             "sandbox" => {
-                if args.len() < 2 {
+                let Some(url) = args.get(1) else {
                     return Ok(CommandOutput::Text(
                         "Usage: browse sandbox <url>".to_string(),
                     ));
-                }
-                queue_browser_request(env, &format!("sandbox {}", args[1]))?;
-                return Ok(CommandOutput::Text(format!(
-                    "[browser] Opening {} in sandbox mode...",
-                    args[1]
-                )));
+                };
+                (
+                    BrowserRequest::Sandbox(url.to_string()),
+                    format!("Opening {url} in sandbox mode..."),
+                )
             },
-            url => {
-                queue_browser_request(env, &format!("open {url}"))?;
-                return Ok(CommandOutput::Text(format!("[browser] Opening {url}...")));
-            },
+            url => (
+                BrowserRequest::Open(url.to_string()),
+                format!("Opening {url}..."),
+            ),
         };
         queue_browser_request(env, &request)?;
         Ok(CommandOutput::Text(format!("[browser] {message}")))
     }
 }
 
-/// VFS file the `browse` command queues its request in (`open <url>`,
-/// `back`, `reload`, ...); the desktop shell opens the browser and
-/// applies it on its next frame.
+/// VFS file the `browse` command queues its [`BrowserRequest`] in; the
+/// desktop shell opens the browser and applies it on its next frame.
 pub use oasis_types::ipc::BROWSER_REQUEST_PATH;
 
-fn queue_browser_request(env: &mut Environment<'_>, request: &str) -> Result<()> {
+fn queue_browser_request(env: &mut Environment<'_>, request: &BrowserRequest) -> Result<()> {
     for dir in ["/var", "/var/browser"] {
         if !env.vfs.exists(dir) {
             env.vfs.mkdir(dir)?;
         }
     }
-    env.vfs.write(BROWSER_REQUEST_PATH, request.as_bytes())
+    env.vfs
+        .write(BROWSER_REQUEST_PATH, request.to_line().as_bytes())
 }
 
 // -------------------------------------------------------------------

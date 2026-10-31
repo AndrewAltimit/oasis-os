@@ -4,10 +4,7 @@
 //! return values (e.g., what `measure_text` returns). Implements both
 //! [`SdiCore`](oasis_types::backend::SdiCore) and [`SdiBackend`](oasis_types::backend::SdiBackend) (with default implementations).
 
-use oasis_types::backend::{
-    Color, SdiBatch, SdiClipTransform, SdiCore, SdiGradients, SdiRenderTarget, SdiShapes, SdiText,
-    SdiTextures, SdiVector, TextureId, bitmap_measure_text, texture_not_found,
-};
+use oasis_types::backend::{Color, SdiCore, TextureId, bitmap_measure_text, texture_not_found};
 use oasis_types::error::Result;
 use std::collections::HashSet;
 
@@ -141,7 +138,7 @@ impl SdiCore for MockSdiCore {
         if self.live_textures.remove(&tex.0) {
             Ok(())
         } else {
-            Err(texture_not_found(tex.0))
+            Err(texture_not_found(tex))
         }
     }
 
@@ -180,11 +177,4 @@ impl SdiCore for MockSdiCore {
 // Pick up all extension trait default implementations (fill_rounded_rect falls
 // back to fill_rect, draw_line uses Bresenham's, etc.).
 // The blanket impl on SdiBackend gives us SdiBackend for free.
-impl SdiShapes for MockSdiCore {}
-impl SdiGradients for MockSdiCore {}
-impl SdiText for MockSdiCore {}
-impl SdiTextures for MockSdiCore {}
-impl SdiClipTransform for MockSdiCore {}
-impl SdiVector for MockSdiCore {}
-impl SdiBatch for MockSdiCore {}
-impl SdiRenderTarget for MockSdiCore {}
+oasis_types::impl_sdi_defaults!(MockSdiCore);

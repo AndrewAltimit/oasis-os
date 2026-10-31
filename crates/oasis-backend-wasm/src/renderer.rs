@@ -378,7 +378,7 @@ impl WasmBackend {
 }
 
 // ---------------------------------------------------------------------------
-// SdiCore — 13 required methods
+// SdiCore — the 12 required methods
 // ---------------------------------------------------------------------------
 
 impl SdiCore for WasmBackend {
@@ -454,7 +454,7 @@ impl SdiCore for WasmBackend {
         let td = self
             .textures
             .get(&tex.0)
-            .ok_or_else(|| texture_not_found(tex.0))?;
+            .ok_or_else(|| texture_not_found(tex))?;
         let (tx, ty) = self.translate(x, y);
         self.ctx
             .draw_image_with_html_canvas_element_and_dw_and_dh(
@@ -477,7 +477,7 @@ impl SdiCore for WasmBackend {
         self.textures
             .remove(&tex.0)
             .map(drop)
-            .ok_or_else(|| texture_not_found(tex.0))
+            .ok_or_else(|| texture_not_found(tex))
     }
 
     /// Absolute and replacing (SdiCore contract). This used to translate
@@ -494,10 +494,6 @@ impl SdiCore for WasmBackend {
     fn reset_clip_rect(&mut self) -> Result<()> {
         self.clip.reset(&self.ctx);
         Ok(())
-    }
-
-    fn measure_text(&self, text: &str, font_size: u16) -> u32 {
-        oasis_types::backend::bitmap_measure_text(text, font_size)
     }
 
     fn read_pixels(&self, x: i32, y: i32, w: u32, h: u32) -> Result<Vec<u8>> {
@@ -577,7 +573,7 @@ impl SdiVector for WasmBackend {
         self.ctx.close_path();
         let css = cached_css_color(&mut self.color_cache, color);
         self.ctx.set_stroke_style_str(css);
-        self.ctx.set_line_width(f64::from(width));
+        self.ctx.set_line_width(f64::from(width.max(1)));
         self.ctx.stroke();
         Ok(())
     }
@@ -647,7 +643,7 @@ impl SdiVector for WasmBackend {
             .map_err(js_err)?;
         let css = cached_css_color(&mut self.color_cache, color);
         self.ctx.set_stroke_style_str(css);
-        self.ctx.set_line_width(f64::from(width));
+        self.ctx.set_line_width(f64::from(width.max(1)));
         self.ctx.stroke();
         Ok(())
     }
@@ -678,7 +674,7 @@ impl SdiVector for WasmBackend {
         self.ctx.line_to(tx2, ty2);
         let css = cached_css_color(&mut self.color_cache, color);
         self.ctx.set_stroke_style_str(css);
-        self.ctx.set_line_width(f64::from(width));
+        self.ctx.set_line_width(f64::from(width.max(1)));
         self.ctx.stroke();
         // Reset dash pattern.
         self.ctx
@@ -868,10 +864,23 @@ impl SdiRenderTarget for WasmBackend {
                 .into(),
             ));
         }
-        let image_data = target
-            .ctx
-            .get_image_data(0.0, 0.0, target.width as f64, target.height as f64)
-            .map_err(js_err)?;
+        // A target a cross-origin TV frame was drawn into is tainted, and
+        // `getImageData` throws `SecurityError`: read opaque black, as
+        // `read_pixels` does, instead of failing the backdrop filter.
+        let image_data =
+            match target
+                .ctx
+                .get_image_data(0.0, 0.0, target.width as f64, target.height as f64)
+            {
+                Ok(data) => data,
+                Err(e) if is_security_error(&e) => {
+                    for px in dst.as_chunks_mut::<4>().0 {
+                        *px = [0, 0, 0, 255];
+                    }
+                    return Ok(());
+                },
+                Err(e) => return Err(js_err(e)),
+            };
         let data = image_data.data();
         if data.len() != expected {
             return Err(OasisError::Backend(

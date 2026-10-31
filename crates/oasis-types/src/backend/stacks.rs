@@ -152,16 +152,6 @@ impl TranslateStack {
 // ClipStack
 // ---------------------------------------------------------------------------
 
-/// The result of a [`ClipStack::push`] operation, telling the backend what
-/// clip rectangle to apply on the platform side.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ClipPush {
-    /// Apply this clip rectangle.
-    Clip(ClipRect),
-    /// The intersection is empty -- apply a zero-area clip.
-    Empty,
-}
-
 /// Manages a stack of nested clip rectangles with automatic intersection.
 ///
 /// On `push`, the new rectangle is intersected with the current clip.
@@ -169,7 +159,8 @@ pub enum ClipPush {
 ///
 /// The stack tracks whether a clip is currently active.  When no clip is
 /// active the first push simply activates the given rectangle.  Subsequent
-/// pushes intersect with the active clip.
+/// pushes intersect with the active clip; an empty intersection becomes a
+/// zero-area clip ([`ClipRect::EMPTY`]), which rejects every draw.
 ///
 /// "No clip" is stored as `None`, not as a full-viewport rectangle, so a
 /// pushed clip that happens to equal the viewport restores correctly and
@@ -185,28 +176,32 @@ pub struct ClipStack {
 impl ClipStack {
     /// Push a new clip rectangle (already translated by the caller).
     ///
-    /// Returns what clip the backend should apply on the platform side.
-    pub fn push(&mut self, clip: ClipRect) -> ClipPush {
+    /// Returns the clip the backend should apply on the platform side: the
+    /// intersection with the clip below, or [`ClipRect::EMPTY`] when they
+    /// do not overlap.
+    pub fn push(&mut self, clip: ClipRect) -> ClipRect {
         self.stack.push(self.current);
-        let Some(current) = self.current else {
-            self.current = Some(clip);
-            return ClipPush::Clip(clip);
+        let applied = match self.current {
+            None => clip,
+            Some(current) => current.intersect(&clip).unwrap_or(ClipRect::EMPTY),
         };
-        match current.intersect(&clip) {
-            Some(isect) => {
-                self.current = Some(isect);
-                ClipPush::Clip(isect)
-            },
-            None => {
-                self.current = Some(ClipRect {
-                    x: 0,
-                    y: 0,
-                    w: 0,
-                    h: 0,
-                });
-                ClipPush::Empty
-            },
-        }
+        self.current = Some(applied);
+        applied
+    }
+
+    /// [`push`](Self::push) a rectangle given in draw coordinates, moved by
+    /// `translate` first: the body of every backend's
+    /// [`push_clip_rect`](crate::backend::SdiClipTransform::push_clip_rect).
+    pub fn push_translated(
+        &mut self,
+        translate: &TranslateStack,
+        x: i32,
+        y: i32,
+        w: u32,
+        h: u32,
+    ) -> ClipRect {
+        let (x, y) = translate.translate(x, y);
+        self.push(ClipRect { x, y, w, h })
     }
 
     /// Pop the most recent clip.
@@ -311,12 +306,12 @@ mod tests {
         });
         assert_eq!(
             result,
-            ClipPush::Clip(ClipRect {
+            ClipRect {
                 x: 10,
                 y: 10,
                 w: 50,
                 h: 50
-            })
+            }
         );
         assert_eq!(
             cs.current(),
@@ -347,12 +342,12 @@ mod tests {
         // Intersection: (20,20)-(90,90) -> w=70, h=70
         assert_eq!(
             result,
-            ClipPush::Clip(ClipRect {
+            ClipRect {
                 x: 20,
                 y: 20,
                 w: 70,
                 h: 70
-            })
+            }
         );
     }
 
@@ -371,7 +366,20 @@ mod tests {
             w: 10,
             h: 10,
         });
-        assert_eq!(result, ClipPush::Empty);
+        assert_eq!(result, ClipRect::EMPTY);
+        assert_eq!(cs.current(), Some(ClipRect::EMPTY));
+    }
+
+    #[test]
+    fn clip_push_translated_moves_then_intersects() {
+        let mut cs = ClipStack::default();
+        let mut ts = TranslateStack::new();
+        cs.push(ClipRect::new(0, 0, 100, 100));
+        ts.push(90, 5);
+        // (90, 5)..(110, 15) cut at the outer clip's right edge.
+        let applied = cs.push_translated(&ts, 0, 0, 20, 10);
+        assert_eq!(applied, ClipRect::new(90, 5, 10, 10));
+        assert_eq!(cs.current(), Some(applied));
     }
 
     #[test]

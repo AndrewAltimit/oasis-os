@@ -16,7 +16,7 @@
 //! (a nested browser clip never widening again, `reset_clip_rect` popping
 //! a `push_clip_rect` level).
 
-use oasis_types::backend::stacks::{ClipPush, ClipStack, TranslateStack};
+use oasis_types::backend::stacks::{ClipStack, TranslateStack};
 use oasis_types::geometry::ClipRect;
 
 /// The part of a Canvas 2D context the clip logic drives.
@@ -50,15 +50,6 @@ impl ClipCanvas for web_sys::CanvasRenderingContext2d {
         self.clip();
     }
 }
-
-/// Zero-area clip: what a push whose rectangle misses the current clip
-/// applies (nothing may draw until the matching pop).
-const EMPTY: ClipRect = ClipRect {
-    x: 0,
-    y: 0,
-    w: 0,
-    h: 0,
-};
 
 /// Clip + translate stacks of one surface and the clip applied on its
 /// context.
@@ -106,11 +97,7 @@ impl SurfaceClip {
     /// `push_clip_rect`: translated, intersected with the current stack
     /// clip.
     pub(crate) fn push(&mut self, ctx: &impl ClipCanvas, x: i32, y: i32, w: u32, h: u32) {
-        let (tx, ty) = self.translate.translate(x, y);
-        let applied = match self.stack.push(ClipRect { x: tx, y: ty, w, h }) {
-            ClipPush::Clip(c) => c,
-            ClipPush::Empty => EMPTY,
-        };
+        let applied = self.stack.push_translated(&self.translate, x, y, w, h);
         self.apply(ctx, Some(applied));
     }
 
@@ -201,12 +188,12 @@ mod tests {
         }
 
         /// The effective clip: the intersection of every clip region
-        /// (`None` = unclipped; an empty intersection is `EMPTY`).
+        /// (`None` = unclipped; an empty intersection is `ClipRect::EMPTY`).
         fn effective(&self) -> Option<ClipRect> {
             let clips = self.clips.borrow();
             let mut it = clips.iter();
             let first = *it.next()?;
-            Some(it.fold(first, |acc, c| acc.intersect(c).unwrap_or(EMPTY)))
+            Some(it.fold(first, |acc, c| acc.intersect(c).unwrap_or(ClipRect::EMPTY)))
         }
 
         fn area(c: Option<ClipRect>) -> Option<u64> {

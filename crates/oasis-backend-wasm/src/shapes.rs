@@ -55,7 +55,9 @@ impl SdiShapes for WasmBackend {
         stroke_width: u16,
         color: Color,
     ) -> Result<()> {
-        if w == 0 || h == 0 || color.a == 0 {
+        // A zero width draws nothing, as in the trait default (Canvas would
+        // ignore `lineWidth = 0` and stroke with the previous width).
+        if w == 0 || h == 0 || stroke_width == 0 || color.a == 0 {
             return Ok(());
         }
         let (tx, ty) = self.translate(x, y);
@@ -85,12 +87,18 @@ impl SdiShapes for WasmBackend {
         if w == 0 || h == 0 || color.a == 0 {
             return Ok(());
         }
+        if radius == 0 {
+            return self.stroke_rect(x, y, w, h, stroke_width, color);
+        }
         let (tx, ty) = self.translate(x, y);
-        let sw = f64::from(stroke_width);
+        // Zero counts as 1 (trait default); a stroke wider than the box
+        // fills it (and would make the path radius negative, which
+        // `arcTo` rejects with an `IndexSizeError`).
+        let sw = f64::from(stroke_width.max(1)).min(f64::from(w.min(h)));
         let offset = sw / 2.0;
         let fw = w as f64 - sw;
         let fh = h as f64 - sw;
-        let r = f64::from(radius).min(fw / 2.0).min(fh / 2.0);
+        let r = f64::from(radius).min(fw / 2.0).min(fh / 2.0).max(0.0);
 
         self.ctx.begin_path();
         let bx = tx + offset;
@@ -137,7 +145,9 @@ impl SdiShapes for WasmBackend {
         self.ctx.line_to(tx2, ty2);
         let css = cached_css_color(&mut self.color_cache, color);
         self.ctx.set_stroke_style_str(css);
-        self.ctx.set_line_width(f64::from(width));
+        // Widths <= 1 are the 1-pixel line (trait default); Canvas would
+        // ignore a zero and keep the previous stroke's width.
+        self.ctx.set_line_width(f64::from(width.max(1)));
         self.ctx.stroke();
         Ok(())
     }
@@ -175,7 +185,8 @@ impl SdiShapes for WasmBackend {
             .map_err(js_err)?;
         let css = cached_css_color(&mut self.color_cache, color);
         self.ctx.set_stroke_style_str(css);
-        self.ctx.set_line_width(f64::from(stroke_width));
+        // A zero width counts as 1 (trait default).
+        self.ctx.set_line_width(f64::from(stroke_width.max(1)));
         self.ctx.stroke();
         Ok(())
     }

@@ -1160,7 +1160,6 @@ pub static SCENARIOS: &[Scenario] = &[
             let tex = b.load_texture(16, 16, &px)?;
             b.blit_tinted(tex, 4, 4, 16, 16, Color::rgb(255, 128, 0))?;
             b.blit_tinted(tex, 24, 4, 16, 16, Color::rgba(40, 200, 255, 128))?;
-            b.blit_sub_tinted(tex, 4, 4, 8, 8, 44, 4, 8, 8, Color::rgb(0, 255, 0))?;
             // An untinted blit afterwards must not inherit the tint.
             b.blit(tex, 60, 4, 16, 16)?;
             b.destroy_texture(tex)
@@ -1175,38 +1174,6 @@ pub static SCENARIOS: &[Scenario] = &[
         ),
         Tolerance::BLEND,
         "color-mod rounding: SDL truncates `s*m/255`, the rasterizer rounds"
-    ),
-    scenario!(
-        "texture_blit_flipped",
-        |b| {
-            let px = stride_pattern(20, 12);
-            let tex = b.load_texture(20, 12, &px)?;
-            b.blit_flipped(tex, 4, 4, 20, 12, false, false)?;
-            b.blit_flipped(tex, 30, 4, 20, 12, true, false)?;
-            b.blit_flipped(tex, 56, 4, 20, 12, false, true)?;
-            b.blit_flipped(tex, 82, 4, 20, 12, true, true)?;
-            b.destroy_texture(tex)
-        },
-        check = |f| {
-            let px = stride_pattern(20, 12);
-            for y in 0..12u32 {
-                for x in 0..20u32 {
-                    let src = pattern_rgb(&px, 20, x, y);
-                    let checks = [
-                        (4 + x, 4 + y),
-                        (30 + 19 - x, 4 + y),
-                        (56 + x, 4 + 11 - y),
-                        (82 + 19 - x, 4 + 11 - y),
-                    ];
-                    for (i, (sx, sy)) in checks.into_iter().enumerate() {
-                        if f.rgb(sx, sy) != src {
-                            return Err(format!("flip variant {i}: texel ({x},{y})"));
-                        }
-                    }
-                }
-            }
-            Ok(())
-        }
     ),
     scenario!(
         "texture_destroy_and_reuse",
@@ -1358,7 +1325,7 @@ pub static SCENARIOS: &[Scenario] = &[
             b.blit(tex, 0, 0, 13, 7)?;
             b.blit_sub(tex, 0, 0, 13, 7, 20, 0, 13, 7)?;
             b.blit_tinted(tex, 40, 0, 13, 7, WHITE)?;
-            b.blit_flipped(tex, 60, 0, 13, 7, false, false)?;
+            b.blit_tinted(tex, 60, 0, 13, 7, Color::rgba(255, 255, 255, 255))?;
             b.pop_translate()?;
             b.destroy_texture(tex)
         },
@@ -1930,6 +1897,71 @@ pub fn texture_misuse(backend: &mut dyn SdiBackend) -> Vec<String> {
         "blitting a destroyed texture",
         backend.blit(tex, 0, 0, 2, 2),
     );
+    bad
+}
+
+/// Batched draws every backend must render exactly like the same items
+/// drawn one by one, as a list of violations (empty = conforming):
+/// `submit_text_batch` like one `draw_text_styled` per item (bold and
+/// italic included, translucent text blended once) and `submit_rect_batch`
+/// like one `fill_rect` per rect, both under a translation and a clip.
+pub fn batch_matches_singles(backend: &mut dyn SdiBackend) -> Vec<String> {
+    const TEXT: [(&str, i32, i32, Color); 3] = [
+        ("Bold", 2, 2, Color::rgba(255, 255, 255, 160)),
+        ("ital", 2, 24, Color::rgb(255, 220, 0)),
+        ("Mix 12", 60, 40, Color::rgba(0, 255, 120, 200)),
+    ];
+    const RECTS: [(i32, i32, u32, u32, Color); 3] = [
+        (0, 60, 30, 10, Color::rgba(255, 0, 0, 128)),
+        (20, 64, 30, 10, Color::rgba(255, 0, 0, 128)),
+        (-10, 80, 200, 4, Color::rgb(0, 0, 255)),
+    ];
+    fn draw(b: &mut dyn SdiBackend, batched: bool, style: (bool, bool)) -> Result<()> {
+        b.push_translate(3, 1)?;
+        b.push_clip_rect(0, 0, 110, 90)?;
+        if batched {
+            let items: Vec<BatchText<'_>> = TEXT
+                .iter()
+                .map(|&(text, x, y, color)| BatchText { text, x, y, color })
+                .collect();
+            b.submit_text_batch(&items, 14, style.0, style.1)?;
+            let rects: Vec<BatchRect> = RECTS
+                .iter()
+                .map(|&(x, y, w, h, color)| BatchRect { x, y, w, h, color })
+                .collect();
+            b.submit_rect_batch(&rects)?;
+        } else {
+            for (text, x, y, color) in TEXT {
+                b.draw_text_styled(text, x, y, 14, color, style.0, style.1)?;
+            }
+            for (x, y, w, h, color) in RECTS {
+                b.fill_rect(x, y, w, h, color)?;
+            }
+        }
+        b.pop_clip_rect()?;
+        b.pop_translate()
+    }
+    let mut bad = Vec::new();
+    for style in [(false, false), (true, false), (false, true), (true, true)] {
+        let mut frame = |batched| -> Result<Frame> {
+            backend.reset_clip_rect()?;
+            backend.clear(BG)?;
+            draw(backend, batched, style)?;
+            Frame::capture(backend, CANVAS_W, CANVAS_H)
+        };
+        match (frame(false), frame(true)) {
+            (Ok(single), Ok(batch)) => {
+                let d = single.diff(&batch, Tolerance::EXACT);
+                if d.mismatched > 0 {
+                    bad.push(format!(
+                        "bold={} italic={}: batch differs from singles in {} px",
+                        style.0, style.1, d.mismatched
+                    ));
+                }
+            },
+            (Err(e), _) | (_, Err(e)) => bad.push(format!("{style:?}: {e}")),
+        }
+    }
     bad
 }
 

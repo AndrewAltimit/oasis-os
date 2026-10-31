@@ -241,6 +241,50 @@ larger changes by area. Breaking API changes are marked **(breaking)**.
   directory for hardware H.264 decode), and the release notes install the overlay as
   `ms0:/seplugins/oasis_plugin.prx`, the name `plugin status` / `plugin remove` expect.
 
+### Backend traits and desktop / web / UE5 backends
+
+- `SdiTextures::blit_sub_tinted` and `blit_flipped` are removed: nothing
+  called them (45 extension defaults remain) **(breaking)**.
+- `SdiBatch` now builds on `SdiText`, and `submit_text_batch` defaults to
+  one `draw_text_styled` per item; SDL and UE5 drop their identical
+  overrides. WASM text batches draw real bold / italic glyphs instead of
+  double-striking bold, so batched and unbatched text look the same
+  (`conformance::batch_matches_singles` pins this) **(breaking for
+  implementors that bound `SdiBatch` without `SdiText`)**.
+- `SdiCore::measure_text` is a provided method (the bitmap font); 12
+  methods are required now.
+- `ClipStack::push` returns the `ClipRect` to apply (`ClipRect::EMPTY`
+  when nested clips do not overlap) and `ClipStack::push_translated` does
+  the translate-then-push every backend repeated; `ClipPush` is removed
+  **(breaking)**.
+- `backend::unsupported(op)` builds `BackendError::Unsupported`; the
+  `AudioBackend` streaming defaults now return it instead of a free-text
+  error. `texture_not_found` takes a `TextureId` **(breaking)**.
+- Typed IPC: `ipc::BrowserRequest` (`browse` -> the shell) and
+  `ipc::Notification` / `NotifyLevel` (`notify` -> toasts) replace the
+  hand-rolled string parsing on both sides; an unknown browse request no
+  longer opens the browser.
+- SDL: volume is the audio stream's gain, so a change applies at once
+  (it was baked into queued PCM: seconds late on radio, never on a fully
+  queued track); WAV / Ogg tracks no longer play into a stream opened
+  for another format (a mono 44.1 kHz WAV after an MP3 played at double
+  speed); a multi-character `TextInput` (IME commit) delivers every
+  character, not the first; touchpad wheel fractions accumulate into
+  steps and "natural scrolling" devices scroll the right way; a window
+  resize while a render target is bound resets the window's clip and
+  translation; `fill_rect_gradient` generates only the visible rows and
+  columns. `lib.rs` is split (`render_target.rs`, `tests.rs`).
+- UE5: rect batches translate with saturation like every other draw, so
+  a far off-screen rect no longer wraps onto the screen.
+- WASM: releasing a drag outside the canvas ends it; a sideways scroll
+  no longer scrolls up; zero / oversized stroke widths match the trait
+  defaults (Canvas reused the previous width, or `arcTo` threw); reading
+  a render target tainted by a TV frame returns black instead of failing;
+  stopping the TV video or a radio stream removes the element's listeners
+  first and ends its fetch (late events used to call dropped closures and
+  throw); a failed TV start no longer leaves a `<video>` in the page; URL
+  log truncation is char-boundary safe.
+
 ## Unreleased -- overhaul (`overhaul/site-code-docs-2026-10`)
 
 A repository-wide cleanup: bug fixes from a full code review and an

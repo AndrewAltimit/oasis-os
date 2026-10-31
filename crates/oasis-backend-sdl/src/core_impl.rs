@@ -1,8 +1,9 @@
 //! `SdiCore` implementation for the SDL3 backend.
 //!
-//! Contains the 13 required rendering methods: init, clear, blit,
+//! Contains the 12 required rendering methods (init, clear, blit,
 //! fill_rect, draw_text, swap_buffers, load_texture, destroy_texture,
-//! set_clip_rect, reset_clip_rect, measure_text, read_pixels, shutdown.
+//! set_clip_rect, reset_clip_rect, read_pixels, shutdown) plus the
+//! `measure_text` and `viewport_size` overrides.
 
 use sdl3::pixels::PixelFormat;
 use sdl3::rect::Rect;
@@ -29,21 +30,7 @@ impl SdiCore for SdlBackend {
     }
 
     fn blit(&mut self, tex: TextureId, x: i32, y: i32, w: u32, h: u32) -> Result<()> {
-        let (tx, ty) = self.translate(x, y);
-        let texture = self
-            .textures
-            .get_mut(&tex.0)
-            .ok_or_else(|| texture_not_found(tex.0))?;
-        crate::blitting::ensure_texture_mod(
-            &mut self.texture_mods,
-            tex.0,
-            texture,
-            crate::blitting::NEUTRAL_MOD,
-        );
-        self.canvas
-            .copy(texture, None, frect(tx, ty, w, h))
-            .backend_err()?;
-        Ok(())
+        self.copy_texture(tex, None, (x, y, w, h), Color::WHITE)
     }
 
     fn draw_text(
@@ -101,7 +88,7 @@ impl SdiCore for SdlBackend {
         self.textures
             .remove(&tex.0)
             .map(drop)
-            .ok_or_else(|| texture_not_found(tex.0))
+            .ok_or_else(|| texture_not_found(tex))
     }
 
     fn set_clip_rect(&mut self, x: i32, y: i32, w: u32, h: u32) -> Result<()> {
@@ -223,7 +210,7 @@ impl SdlBackend {
         let texture = self
             .textures
             .get_mut(&tex.0)
-            .ok_or_else(|| texture_not_found(tex.0))?;
+            .ok_or_else(|| texture_not_found(tex))?;
 
         let query = texture.query();
         if query.width != width || query.height != height {

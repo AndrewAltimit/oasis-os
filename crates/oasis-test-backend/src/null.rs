@@ -121,7 +121,7 @@ impl SdiCore for NullBackend {
         if self.live_textures.remove(&tex.0) {
             Ok(())
         } else {
-            Err(texture_not_found(tex.0))
+            Err(texture_not_found(tex))
         }
     }
 

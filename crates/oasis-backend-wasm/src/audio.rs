@@ -102,11 +102,45 @@ struct StreamingTrack {
     // Hold closures to prevent GC.
     #[allow(dead_code)]
     closures: Vec<Closure<dyn FnMut()>>,
-    #[allow(dead_code)]
-    closures_ev: Vec<Closure<dyn FnMut(web_sys::Event)>>,
+    /// Event listeners, removed again by [`StreamingTrack::release`].
+    closures_ev: Vec<Listener>,
     // Hold the updateend closure (replaces .forget() leak).
     #[allow(dead_code)]
     update_end_closure: SharedClosure,
+}
+
+/// An event listener a track registered: the target, the event name and
+/// the closure, so the listener can be removed before the closure drops.
+type Listener = (
+    web_sys::EventTarget,
+    &'static str,
+    Closure<dyn FnMut(web_sys::Event)>,
+);
+
+impl StreamingTrack {
+    /// Stop the track and release its element, listeners and object URL.
+    ///
+    /// Listeners are removed before their closures drop: a late `error`
+    /// (the stream connection dropping) or `sourceopen` would otherwise
+    /// call a dropped wasm-bindgen closure and throw. The source goes with
+    /// `removeAttribute("src")` + `load()`, which also ends the element's
+    /// network fetch (removing the element alone does not).
+    fn release(self) {
+        for (target, name, closure) in &self.closures_ev {
+            let _ =
+                target.remove_event_listener_with_callback(name, closure.as_ref().unchecked_ref());
+        }
+        if let Some(sb) = self.source_buffer.borrow().as_ref() {
+            sb.set_onupdateend(None);
+        }
+        let _ = self.audio_el.pause();
+        let _ = self.audio_el.remove_attribute("src");
+        self.audio_el.load();
+        self.audio_el.remove();
+        if !self.object_url.is_empty() {
+            let _ = web_sys::Url::revoke_object_url(&self.object_url);
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -125,6 +159,8 @@ impl MemoryTrack {
     fn release(self) {
         let _ = self.el.pause();
         self.el.remove_attribute("src").ok();
+        // Without `load()` the element keeps its media resource.
+        self.el.load();
         let _ = web_sys::Url::revoke_object_url(&self.url);
     }
 }
@@ -382,13 +418,9 @@ impl AudioBackend for WasmAudioBackend {
             t.el.set_current_time(0.0);
         }
         self.current_track = None;
-        // Stop MSE streaming track.
+        // Stop the streaming track.
         if let Some(st) = self.streaming_track.take() {
-            st.audio_el.pause().ok();
-            st.audio_el.remove();
-            if !st.object_url.is_empty() {
-                let _ = web_sys::Url::revoke_object_url(&st.object_url);
-            }
+            st.release();
         }
         self.playing = false;
         self.paused = false;
@@ -440,14 +472,9 @@ impl AudioBackend for WasmAudioBackend {
         // installed the new track cannot mutate the new track's
         // latched flags.
         if let Some(st) = self.streaming_track.take() {
-            st.audio_el.pause().ok();
-            // Detach the previous audio element so we don't leak it
-            // across station changes. `remove()` is a no-op if it's
-            // already detached.
-            st.audio_el.remove();
-            if !st.object_url.is_empty() {
-                let _ = web_sys::Url::revoke_object_url(&st.object_url);
-            }
+            // Detaches the previous element so it doesn't leak across
+            // station changes.
+            st.release();
         }
 
         // Direct-URL mode: when `set_streaming_url` was called before
@@ -481,7 +508,7 @@ impl AudioBackend for WasmAudioBackend {
             let streaming_ended: Rc<Cell<bool>> = Rc::new(Cell::new(false));
             let streaming_error: Rc<RefCell<Option<String>>> = Rc::new(RefCell::new(None));
 
-            let mut closures_ev: Vec<Closure<dyn FnMut(web_sys::Event)>> = Vec::new();
+            let mut closures_ev: Vec<Listener> = Vec::new();
 
             // Defer the actual `play()` call until the element fires
             // `canplaythrough` — at that point the browser believes
@@ -514,7 +541,7 @@ impl AudioBackend for WasmAudioBackend {
                     "canplaythrough",
                     on_canplaythrough.as_ref().unchecked_ref(),
                 );
-                closures_ev.push(on_canplaythrough);
+                closures_ev.push((audio_el.clone().into(), "canplaythrough", on_canplaythrough));
             }
 
             // `ended` → latch flag for tick loop to advance track.
@@ -525,7 +552,7 @@ impl AudioBackend for WasmAudioBackend {
                 }) as Box<dyn FnMut(web_sys::Event)>);
                 let _ = audio_el
                     .add_event_listener_with_callback("ended", on_ended.as_ref().unchecked_ref());
-                closures_ev.push(on_ended);
+                closures_ev.push((audio_el.clone().into(), "ended", on_ended));
             }
             // `error` → latch a generic message; also flag ended so
             // the outer state machine releases the source rather than
@@ -543,7 +570,7 @@ impl AudioBackend for WasmAudioBackend {
                 }) as Box<dyn FnMut(web_sys::Event)>);
                 let _ = audio_el
                     .add_event_listener_with_callback("error", on_error.as_ref().unchecked_ref());
-                closures_ev.push(on_error);
+                closures_ev.push((audio_el.clone().into(), "error", on_error));
             }
 
             let id = self.next_id;
@@ -598,7 +625,7 @@ impl AudioBackend for WasmAudioBackend {
         let update_end_closure: SharedClosure = Rc::new(RefCell::new(None));
 
         let mut closures: Vec<Closure<dyn FnMut()>> = Vec::new();
-        let mut closures_ev: Vec<Closure<dyn FnMut(web_sys::Event)>> = Vec::new();
+        let mut closures_ev: Vec<Listener> = Vec::new();
 
         // Set up `sourceopen` event to create SourceBuffer.
         {
@@ -664,7 +691,7 @@ impl AudioBackend for WasmAudioBackend {
                 .add_event_listener_with_callback("sourceopen", on_open_ev.as_ref().unchecked_ref())
                 .ok();
             closures.push(on_open);
-            closures_ev.push(on_open_ev);
+            closures_ev.push((media_source.clone().into(), "sourceopen", on_open_ev));
         }
 
         let vol = self.volume as f64 / 100.0;

@@ -6,15 +6,16 @@
 //! [`poll`] runs once per `Shell::step` (next to the `wm` IPC) and makes
 //! them do what they say:
 //!
-//! - `/var/notify/message` (`level:message`, from `notify`): show a toast.
+//! - `/var/notify/message` (a `Notification`, from `notify`): show a toast.
 //! - `/var/screenshot/request` (a VFS path, from `screenshot`): capture
 //!   the next presented frame to that path (PNG for `.png`, else BMP).
 //! - `/var/theme/current` (written by the host): the status `theme`
 //!   prints.
-//! - `/var/browser/request` (`op [arg]`, from `browse`): open or focus
+//! - `/var/browser/request` (a `BrowserRequest`, from `browse`): open or focus
 //!   the browser, then open a URL / back / forward / reload / home /
 //!   reader / bookmarks / history.
 
+use oasis_core::ipc::{BrowserRequest, Notification, NotifyLevel};
 use oasis_core::sdi::SdiRegistry;
 use oasis_core::toast::ToastLevel;
 use oasis_core::vfs::{MemoryVfs, Vfs};
@@ -51,17 +52,17 @@ pub fn poll(state: &mut AppState, sdi: &mut SdiRegistry, vfs: &mut MemoryVfs) ->
     take_request(vfs, SCREENSHOT_REQUEST_PATH)
 }
 
-/// `level:message` (as `notify` writes it) to a toast.
+/// A [`Notification`] payload (as `notify` writes it) to a toast.
 fn show_notification(state: &mut AppState, payload: &str) {
-    let (level, message) = match payload.split_once(':') {
-        Some(("info", m)) => (ToastLevel::Info, m),
-        Some(("success", m)) => (ToastLevel::Success, m),
-        Some(("warning", m)) => (ToastLevel::Warning, m),
-        Some(("error", m)) => (ToastLevel::Error, m),
-        _ => (ToastLevel::Info, payload),
+    let note = Notification::parse(payload);
+    let level = match note.level {
+        NotifyLevel::Info => ToastLevel::Info,
+        NotifyLevel::Success => ToastLevel::Success,
+        NotifyLevel::Warning => ToastLevel::Warning,
+        NotifyLevel::Error => ToastLevel::Error,
     };
     let ttl = state.active_theme.toast.ttl;
-    state.toasts.show(message.trim(), level, ttl);
+    state.toasts.show(note.message, level, ttl);
 }
 
 /// Keep `/var/theme/current` describing the active skin (only rewritten
@@ -94,29 +95,28 @@ fn apply_browse_request(
     sdi: &mut SdiRegistry,
     vfs: &mut MemoryVfs,
 ) {
-    let (op, arg) = match request.split_once(' ') {
-        Some((op, arg)) => (op, arg.trim()),
-        None => (request, ""),
+    let Some(request) = BrowserRequest::parse(request) else {
+        log::warn!("unknown browse request {request:?}");
+        return;
     };
     // Opens the window (at the home page) or focuses the existing one.
     launch::launch_title(state, sdi, vfs, launch::BROWSER_TITLE, LaunchOpts::QUIET);
     let Some(bw) = state.content.browser.as_mut() else {
         return;
     };
-    match op {
-        "open" if !arg.is_empty() => bw.navigate_vfs(arg, vfs),
-        "sandbox" if !arg.is_empty() => {
+    match request {
+        BrowserRequest::Open(url) => bw.navigate_vfs(&url, vfs),
+        BrowserRequest::Sandbox(url) => {
             bw.config.features.sandbox_only = true;
-            bw.navigate_vfs(arg, vfs);
+            bw.navigate_vfs(&url, vfs);
         },
-        "back" => bw.go_back(vfs),
-        "forward" => bw.go_forward(vfs),
-        "reload" => bw.reload(vfs),
-        "home" => bw.go_home(vfs),
-        "reader" => bw.toggle_reader_mode(),
-        "bookmarks" => bw.navigate_vfs("vfs://bookmarks", vfs),
-        "history" => bw.navigate_vfs("vfs://history", vfs),
-        other => log::warn!("unknown browse request {other:?}"),
+        BrowserRequest::Back => bw.go_back(vfs),
+        BrowserRequest::Forward => bw.go_forward(vfs),
+        BrowserRequest::Reload => bw.reload(vfs),
+        BrowserRequest::Home => bw.go_home(vfs),
+        BrowserRequest::Reader => bw.toggle_reader_mode(),
+        BrowserRequest::Bookmarks => bw.navigate_vfs("vfs://bookmarks", vfs),
+        BrowserRequest::History => bw.navigate_vfs("vfs://history", vfs),
     }
 }
 

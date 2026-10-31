@@ -1,7 +1,7 @@
 //! `SdiBatch` overrides for the WASM backend.
 //!
 //! The default implementations in `oasis-types` issue one `fill_rect` /
-//! `draw_text` per item, which on WASM means one wasm-bindgen → JS round
+//! `draw_text_styled` per item, which on WASM means one wasm-bindgen → JS round
 //! trip per item. For a 200-rect frame that is 200 boundary crossings
 //! plus 200 separate `set_fill_style_str` JS string conversions; the
 //! Canvas2D draws themselves are a small fraction of the cost.
@@ -130,24 +130,9 @@ impl SdiBatch for WasmBackend {
         bold: bool,
         italic: bool,
     ) -> Result<()> {
-        // Bold/italic faux-rendering matches the trait default in
-        // `oasis-types/src/backend/extensions/batch.rs`:
-        //   - The default routes through `SdiCore::draw_text(...)`,
-        //     which has no bold/italic parameters and so drops both.
-        //   - For `bold=true` it double-strikes the same non-bold
-        //     glyph at x+1 instead of looking up a true-bold cached
-        //     glyph.
-        //   - `italic` is dropped entirely (default impl marks it
-        //     `_italic` in its signature).
-        // We mirror that here. Single-text spans still go through
-        // `draw_text_styled` (via `flush_text_batch`'s len==1 branch
-        // in the browser display list), which renders TRUE bold and
-        // italic via the cached-glyph path — so single-vs-batched
-        // bold text can look slightly different. That divergence is
-        // a property of the trait contract, not this override; if it
-        // ever needs fixing it should be fixed in the trait default
-        // first so SDL/UE5 behave consistently.
-        let _ = italic;
+        // Same glyphs as `draw_text_styled` (the trait default draws one
+        // per item): true bold and italic cached glyphs, so batched and
+        // single-span text look identical.
         if texts.is_empty() || font_size == 0 {
             return Ok(());
         }
@@ -171,19 +156,14 @@ impl SdiBatch for WasmBackend {
             let (tx, ty) = self.translate(t.x, t.y);
             let mut cx = tx as f32;
             for ch in t.text.chars() {
-                self.ensure_glyph(ch, font_size, t.color, false, false)?;
-                let key = GlyphCacheKey::new(ch, font_size, t.color, false, false);
+                self.ensure_glyph(ch, font_size, t.color, bold, italic)?;
+                let key = GlyphCacheKey::new(ch, font_size, t.color, bold, italic);
                 let canvas = self
                     .glyph_canvas(&key)
                     .expect("ensure_glyph just inserted this key");
                 glyphs.push(canvas);
                 positions.push(cx);
                 positions.push(ty as f32);
-                if bold {
-                    glyphs.push(canvas);
-                    positions.push(cx + 1.0);
-                    positions.push(ty as f32);
-                }
                 cx += font::glyph_advance_scaled(ch, font_size) as f32;
             }
         }

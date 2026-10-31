@@ -67,7 +67,7 @@ pub use video::vlog_force;
 // Re-exports from oasis-core
 // ---------------------------------------------------------------------------
 
-use oasis_core::backend::stacks::{ClipPush, ClipStack, TranslateStack};
+use oasis_core::backend::stacks::{ClipStack, TranslateStack};
 pub use oasis_core::backend::{
     Color, SdiBackend, SdiBatch, SdiClipTransform, SdiCore, SdiGradients, SdiShapes, SdiText,
     SdiTextures, SdiVector, TextureId,
@@ -518,7 +518,7 @@ impl SdiCore for PspBackend {
         if self.destroy_texture_inner(tex) {
             Ok(())
         } else {
-            Err(oasis_core::backend::texture_not_found(tex.0))
+            Err(oasis_core::backend::texture_not_found(tex))
         }
     }
 
@@ -615,16 +615,10 @@ impl SdiTextures for PspBackend {}
 
 impl SdiClipTransform for PspBackend {
     fn push_clip_rect(&mut self, x: i32, y: i32, w: u32, h: u32) -> OasisResult<()> {
-        let (tx, ty) = self.translate_stack.translate(x, y);
-        let new_clip = ClipRect { x: tx, y: ty, w, h };
-        match self.clip_stack.push(new_clip) {
-            ClipPush::Clip(c) => {
-                self.set_clip_rect_inner(c.x, c.y, c.w, c.h);
-            },
-            ClipPush::Empty => {
-                self.set_clip_rect_inner(0, 0, 0, 0);
-            },
-        }
+        let c = self
+            .clip_stack
+            .push_translated(&self.translate_stack, x, y, w, h);
+        self.set_clip_rect_inner(c.x, c.y, c.w, c.h);
         Ok(())
     }
 
