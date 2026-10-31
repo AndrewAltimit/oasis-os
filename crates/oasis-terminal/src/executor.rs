@@ -5,10 +5,8 @@
 
 use oasis_types::error::{OasisError, Result};
 
-use crate::expander::resolve_path;
 use crate::pipeline::{
-    ChainOp, Redirections, capture_text, parse_redirect, split_chains, split_pipes, strip_comments,
-    write_redirect,
+    ChainOp, capture_text, parse_redirect, split_chains, split_pipes, strip_comments,
 };
 use crate::types::{CommandOutput, Environment, MAX_EXEC_DEPTH};
 
@@ -47,17 +45,6 @@ pub(crate) fn merge_outputs(outputs: Vec<CommandOutput>) -> CommandOutput {
         1 => merged.pop().unwrap_or(CommandOutput::None),
         _ => CommandOutput::Multi(merged),
     }
-}
-
-/// `first`, a newline, then `second`.
-fn join_lines(mut first: String, second: &str) -> String {
-    if !second.is_empty() {
-        if !first.is_empty() {
-            first.push('\n');
-        }
-        first.push_str(second);
-    }
-    first
 }
 
 /// Split a leading `!` (pipeline negation) off `cmd`.
@@ -322,23 +309,6 @@ impl CommandRegistry {
         Ok(output)
     }
 
-    /// Expand a raw redirect target like an argument (quote removal,
-    /// `$VAR`, `$(...)`; no globbing). It must name exactly one word.
-    pub(crate) fn redirect_target(&self, raw: &str, env: &mut Environment<'_>) -> Result<String> {
-        if raw.trim().is_empty() {
-            return Err(OasisError::Command(
-                "syntax error: missing file name after redirection".into(),
-            ));
-        }
-        let mut words = self.expand_words_of(raw.trim(), env)?;
-        match words.len() {
-            1 => Ok(words.pop().map(|w| w.text).unwrap_or_default()),
-            _ => Err(OasisError::Command(
-                format!("{}: ambiguous redirect", raw.trim()).into(),
-            )),
-        }
-    }
-
     /// Execute a command, handling output redirection (`>`, `>>`,
     /// `2>`, `2>>`, `2>&1`).
     fn execute_with_redirect(
@@ -354,132 +324,6 @@ impl CommandRegistry {
             return self.execute_single_cmd(cmd_part.trim(), env);
         }
         self.execute_redirected(&cmd_part, &redirections, env)
-    }
-
-    /// [`execute_with_redirect`](Self::execute_with_redirect) for a command
-    /// that has at least one redirection.
-    #[inline(never)]
-    fn execute_redirected(
-        &self,
-        cmd_part: &str,
-        redirections: &Redirections<'_>,
-        env: &mut Environment<'_>,
-    ) -> Result<CommandOutput> {
-        // Redirect targets get the same variable expansion and quote
-        // removal as arguments (`> $DIR/out.txt`, `> "my file"`).
-        let stdin_target = redirections
-            .stdin
-            .map(|p| self.redirect_target(p, env))
-            .transpose()?;
-        let stdout_target = redirections
-            .stdout
-            .as_ref()
-            .map(|r| Ok::<_, OasisError>((self.redirect_target(r.path, env)?, r.append)))
-            .transpose()?;
-        let stderr_target = redirections
-            .stderr
-            .as_ref()
-            .map(|r| Ok::<_, OasisError>((self.redirect_target(r.path, env)?, r.append)))
-            .transpose()?;
-
-        // Clear stderr before each command.
-        env.stderr.clear();
-
-        // Handle stdin redirect: the file's contents are this command's
-        // stdin only (restored afterwards, so it does not leak onward).
-        let outer_stdin = match stdin_target {
-            Some(stdin_path) => {
-                let resolved = resolve_path(&env.cwd, &stdin_path);
-                let data = env.vfs.read(&resolved).map_err(|e| {
-                    OasisError::Command(
-                        format!("cannot redirect stdin from '{stdin_path}': {e}").into(),
-                    )
-                })?;
-                Some(
-                    env.stdin
-                        .replace(String::from_utf8_lossy(&data).into_owned()),
-                )
-            },
-            None => None,
-        };
-
-        let result = self.execute_single_cmd(cmd_part.trim(), env);
-        if let Some(outer) = outer_stdin {
-            env.stdin = outer;
-        }
-
-        let has_stderr_handling = redirections.stderr.is_some()
-            || redirections.stderr_to_stdout
-            || redirections.stdout_to_stderr;
-        // If no stderr redirect/merge, propagate errors normally.
-        if !has_stderr_handling {
-            let result = result?;
-            if let Some((path, append)) = stdout_target {
-                let text = capture_text(&result);
-                write_redirect(&text, &path, append, &env.cwd, env.vfs)?;
-                return Ok(CommandOutput::None);
-            }
-            return Ok(result);
-        }
-
-        // Capture error messages into stderr.
-        let (mut result, mut captured_stderr, was_error) = match result {
-            Ok(output) => (output, std::mem::take(&mut env.stderr), false),
-            Err(e) => {
-                let mut stderr_text = std::mem::take(&mut env.stderr);
-                if !stderr_text.is_empty() {
-                    stderr_text.push('\n');
-                }
-                stderr_text.push_str(&e.to_string());
-                (CommandOutput::None, stderr_text, true)
-            },
-        };
-
-        // `>&2`: the output joins stderr.
-        if redirections.stdout_to_stderr {
-            let text = capture_text(&result);
-            if !text.is_empty() {
-                captured_stderr = join_lines(text, &captured_stderr);
-            }
-            result = CommandOutput::None;
-        }
-
-        // `2>&1`, or stderr with nowhere else to go (`>&2` alone): it is
-        // shown (or redirected) with stdout.
-        if (redirections.stderr_to_stdout || stderr_target.is_none()) && !captured_stderr.is_empty()
-        {
-            let stderr = std::mem::take(&mut captured_stderr);
-            result = match result {
-                CommandOutput::Text(t) if !t.is_empty() => {
-                    CommandOutput::Text(join_lines(t, &stderr))
-                },
-                CommandOutput::Text(_) | CommandOutput::None => CommandOutput::Text(stderr),
-                other => other,
-            };
-        }
-
-        // Handle stdout redirect.
-        let result = if let Some((path, append)) = stdout_target {
-            let text = capture_text(&result);
-            write_redirect(&text, &path, append, &env.cwd, env.vfs)?;
-            CommandOutput::None
-        } else {
-            result
-        };
-
-        // Handle stderr redirect.
-        if let Some((path, append)) = stderr_target {
-            write_redirect(&captured_stderr, &path, append, &env.cwd, env.vfs)?;
-        }
-
-        // Preserve exit code: if command errored, keep it as exit
-        // code 1 even though we captured the error text.
-        if was_error {
-            self.last_exit_code.set(1);
-            self.set_variable("?", "1");
-        }
-
-        Ok(result)
     }
 
     /// Execute a single command (after chaining, piping, and

@@ -2,7 +2,7 @@
 //!
 //! Bridges the three pieces of the UI sound system:
 //! - the skin's `[sounds]` table + WAV assets (`oasis-skin`),
-//! - the polyphonic one-shot mixer (`oasis_audio::sfx::SfxPlayer`),
+//! - the polyphonic one-shot mixer (`oasis_audio::SfxPlayer`),
 //! - the SDL backend's dedicated SFX stream (`SdlAudioBackend::queue_sfx`).
 //!
 //! `reload_for_skin` runs at boot and on every skin swap: it drops the old

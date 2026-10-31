@@ -152,7 +152,7 @@ fn extract_json_str<'a>(obj: &'a str, key: &str) -> &'a str {
 }
 
 /// Percent-encode an HTTP URL path component. Mirrors
-/// `oasis_audio::radio::archive::percent_encode` (kept local so this
+/// `oasis_audio::radio::percent_encode` (kept local so this
 /// module stays compile-light).
 ///
 /// Encodes everything outside the RFC 3986 §2.3 unreserved set

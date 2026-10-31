@@ -17,7 +17,7 @@
 
 use std::time::{Duration, Instant};
 
-use oasis_audio::radio::source::RadioSource;
+use oasis_audio::radio::RadioSource;
 use oasis_audio::radio::{RadioManager, RadioState};
 use oasis_core::backend::AudioBackend;
 

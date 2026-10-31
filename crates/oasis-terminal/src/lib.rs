@@ -28,6 +28,7 @@ mod network_commands;
 pub(crate) mod pipeline;
 mod platform_commands;
 mod radio_commands;
+mod redirect;
 mod registry;
 mod remote_commands;
 mod script;

@@ -235,7 +235,7 @@ pub(crate) fn connect_archive_source(
     track: &oasis_audio::radio::ArchiveTrack,
 ) -> std::result::Result<Box<dyn oasis_audio::radio::RadioSource + Send>, String> {
     use oasis_audio::radio::RadioSource;
-    use oasis_audio::radio::source::SourceState;
+    use oasis_audio::radio::SourceState;
     use oasis_core::backend::NetworkBackend;
     use oasis_core::net::TlsProvider;
 

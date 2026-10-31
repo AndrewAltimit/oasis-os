@@ -59,6 +59,27 @@ larger changes by area. Breaking API changes are marked **(breaking)**.
   System Monitor's info column, Internet Radio's favourite mark, Video Embed result cells.
   `oasis-apps/tests/text_fits_window.rs` now also fails on overlapping text runs.
 
+### Crate APIs (oasis-audio, oasis-video, oasis-net, oasis-mcp)
+
+- Remote terminal client: `RemoteClient` answers exactly one `AUTH_REQUIRED` challenge per
+  connection, and only a nonce of the documented form (32 lowercase hex digits; new
+  `oasis_net::is_valid_nonce` / `NONCE_HEX_LEN`), so a hostile server can no longer use it
+  as an HMAC oracle over chosen text. The nonce is not bound to the server's identity; that
+  relay limitation is now documented in `docs/networking.md` and `docs/security.md`.
+- `oasis-audio`: only the crate-root re-exports are public. `oasis_audio::{sfx, wav, ogg}::X`
+  is `oasis_audio::X` (`SfxPlayer`, `decode_wav`, `WavData`, `decode_ogg`, `OggData`, ...),
+  `oasis_audio::radio::{archive, source, station, icy, threaded, connect, buffer}::X` is
+  `oasis_audio::radio::X`, and `mixer` / `playlist` / `manager` / `controller` / `types` /
+  `null_backend` are no longer public modules **(breaking)**.
+- `oasis-video`: `SoftwareVideoDecoder` forwards to a crate-private `DecoderBackend` trait
+  that both backends implement. The `aac`, `demux`, `h264` and `ffmpeg_decoder` modules and
+  `demux_lite::avcc` are private; removed the `AvccConfig` / `find_avcc_in_mp4` re-export
+  (symphonia's, distinct from `demux_lite::AvccConfig`),
+  `SoftwareVideoDecoder::open_stream_with_avcc` and `demux_lite::seek_byte_from_moov`
+  (use `seek_point_from_moov(..).map(|p| p.min_byte)`) **(breaking)**.
+- `oasis-net`: `ftp::process_ftp_request` is crate-private **(breaking)**.
+- `oasis-audio`, `oasis-video`, `oasis-net` and `oasis-mcp` warn on undocumented public items.
+
 ### UI
 
 - `MenuBar` lays labels and drop-downs out with the backend's `measure_text` (recorded at

@@ -43,6 +43,7 @@ fn default_format() -> String {
 /// Collection of stations, serializable as TOML.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StationRegistry {
+    /// The stations, in display order (`[[station]]` tables in TOML).
     #[serde(rename = "station")]
     pub stations: Vec<Station>,
 }

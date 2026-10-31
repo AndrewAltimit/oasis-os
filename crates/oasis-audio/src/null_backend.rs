@@ -21,6 +21,7 @@ pub struct NullAudioBackend {
 }
 
 impl NullAudioBackend {
+    /// A backend with nothing loaded.
     pub fn new() -> Self {
         Self {
             next_id: 0,

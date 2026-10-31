@@ -1,8 +1,8 @@
 use std::sync::mpsc;
 
 use oasis_audio::RadioManager;
-use oasis_audio::radio::archive::ArchiveCatalog;
-use oasis_audio::radio::source::RadioSource;
+use oasis_audio::radio::ArchiveCatalog;
+use oasis_audio::radio::RadioSource;
 use oasis_core::active_theme::ActiveTheme;
 use oasis_core::apps::{AppRegistry, AppRunner};
 use oasis_core::backend::AudioTrackId;
@@ -372,7 +372,7 @@ pub struct AppState {
     pub ui_sounds: crate::ui_sound::UiSoundQueue,
     /// Skin-defined one-shot UI samples (loaded on skin swap; empty for
     /// skins without a `[sounds]` table).
-    pub sfx: oasis_audio::sfx::SfxPlayer,
+    pub sfx: oasis_audio::SfxPlayer,
     /// Audio track for the Music Player app.
     pub media_track: Option<AudioTrackId>,
     /// Music playlist + playback state behind `/var/audio/*` (driven by
@@ -437,7 +437,7 @@ impl AppState {
             custom_skin_root: std::env::temp_dir().join("oasis-unit-skins"),
             toasts: ToastManager::new(),
             ui_sounds: crate::ui_sound::UiSoundQueue::new(),
-            sfx: oasis_audio::sfx::SfxPlayer::new(),
+            sfx: oasis_audio::SfxPlayer::new(),
             media_track: None,
             media: oasis_audio::AudioManager::new(),
             #[cfg(feature = "mcp")]
