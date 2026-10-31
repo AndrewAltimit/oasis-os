@@ -14,7 +14,9 @@ pub(super) fn highlight_html(line: &str) -> Vec<ColorSpan> {
 
     while pos < len {
         // HTML comment: `<!-- ... -->`.
-        if pos + 3 < len && &line[pos..pos + 4] == "<!--" {
+        // Compared as bytes: slicing `line` four bytes on from an
+        // arbitrary position panicked inside a multi-byte character.
+        if bytes[pos..].starts_with(b"<!--") {
             let start = pos;
             if let Some(end_pos) = line[pos..].find("-->") {
                 pos += end_pos + 3;
@@ -117,12 +119,15 @@ pub(super) fn highlight_html(line: &str) -> Vec<ColorSpan> {
                         kind: SyntaxKind::TagAttribute,
                     });
                 } else {
+                    // One whole character: spans must end on a char
+                    // boundary (the renderer slices the line with them).
+                    let ch_len = line[pos..].chars().next().map_or(1, char::len_utf8);
                     spans.push(ColorSpan {
                         start: pos,
-                        end: pos + 1,
+                        end: pos + ch_len,
                         kind: SyntaxKind::Normal,
                     });
-                    pos += 1;
+                    pos += ch_len;
                 }
             }
             // Closing `>`.

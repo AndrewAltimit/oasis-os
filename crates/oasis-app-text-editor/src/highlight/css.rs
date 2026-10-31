@@ -106,8 +106,13 @@ pub(super) fn highlight_css(line: &str, mut in_block_comment: bool) -> (Vec<Colo
             continue;
         }
 
-        // Braces / operators.
-        if matches!(bytes[pos], b'{' | b'}' | b':' | b';' | b',' | b'(' | b')') {
+        // Braces / operators. A `/` that does not open a comment divides
+        // (`font: 12px/1.5`, `grid-area: 1 / 2`); it ends words below, so
+        // without this arm the scanner never advanced past it.
+        if matches!(
+            bytes[pos],
+            b'{' | b'}' | b':' | b';' | b',' | b'(' | b')' | b'/'
+        ) {
             spans.push(ColorSpan {
                 start: pos,
                 end: pos + 1,
