@@ -193,6 +193,13 @@ authentication for remote terminal connections:
 - **Sessions are not encrypted** -- after authentication, commands and
   output travel in clear. Use the remote terminal on trusted networks or
   tunnel it (e.g. over SSH)
+- **The server is not authenticated** -- the nonce is not bound to the
+  server's identity, so an impostor the client connects to can relay the
+  real server's challenge and log in as the client
+  ([networking.md](networking.md#psk-authentication)). The client answers
+  one well-formed challenge per connection (`oasis_net::is_valid_nonce`),
+  so a hostile server cannot use it as an HMAC oracle; when server
+  identity matters, tunnel over SSH
 - The listener binds loopback by default and refuses to bind all
   interfaces without a non-empty PSK, so the terminal `listen` command
   (which cannot supply one) is loopback-only

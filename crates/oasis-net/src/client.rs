@@ -3,14 +3,18 @@
 //! Connects to a remote OASIS_OS instance (or any TCP text service),
 //! sends commands, and receives output. Designed for non-blocking polling.
 //! With a PSK it answers the listener's `AUTH_REQUIRED <nonce>` challenge
-//! (see [`crate::auth`]); the key itself is never sent.
+//! (see [`crate::auth`]); the key itself is never sent. It answers one
+//! challenge per connection, and only a well-formed nonce
+//! ([`crate::auth::is_valid_nonce`]), so a hostile server cannot use it as
+//! an HMAC oracle. The server is not authenticated: see the relay
+//! limitation in [`crate::auth`].
 
 use std::time::{Duration, Instant};
 
 use oasis_types::backend::{NetworkBackend, NetworkStream};
 use oasis_types::error::{OasisError, Result};
 
-use crate::auth::psk_response;
+use crate::auth::{is_valid_nonce, psk_response};
 
 /// Maximum time (in seconds) to wait for an authentication response.
 const AUTH_TIMEOUT_SECS: u64 = 30;
@@ -69,9 +73,12 @@ pub struct RemoteClient {
     pub(crate) auth_started: Option<Instant>,
     /// Key used to answer the server's challenge while authenticating.
     psk: Option<String>,
+    /// Whether this connection's challenge was already answered.
+    challenge_answered: bool,
 }
 
 impl RemoteClient {
+    /// A disconnected client.
     pub fn new() -> Self {
         Self {
             stream: None,
@@ -80,6 +87,7 @@ impl RemoteClient {
             received_lines: Vec::new(),
             auth_started: None,
             psk: None,
+            challenge_answered: false,
         }
     }
 
@@ -103,6 +111,7 @@ impl RemoteClient {
         self.stream = Some(stream);
 
         self.read_buf.clear();
+        self.challenge_answered = false;
         if let Some(key) = psk {
             self.psk = Some(key.to_string());
             self.state = ClientState::Authenticating;
@@ -178,9 +187,18 @@ impl RemoteClient {
             // Handle auth responses.
             if self.state == ClientState::Authenticating {
                 if let Some(nonce) = line.strip_prefix("AUTH_REQUIRED ") {
+                    let nonce = nonce.trim();
+                    if self.challenge_answered || !is_valid_nonce(nonce) {
+                        self.disconnect();
+                        self.received_lines
+                            .push("Authentication failed: unexpected challenge.".to_string());
+                        self.read_buf.clear();
+                        return std::mem::take(&mut self.received_lines);
+                    }
+                    self.challenge_answered = true;
                     let answer = format!(
                         "AUTH {}\n",
-                        psk_response(self.psk.as_deref().unwrap_or(""), nonce.trim())
+                        psk_response(self.psk.as_deref().unwrap_or(""), nonce)
                     );
                     let sent = self
                         .stream
