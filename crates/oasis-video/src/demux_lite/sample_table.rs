@@ -105,7 +105,10 @@ impl SampleSizes {
         }
     }
 
-    /// Total bytes of samples `start..end` (clamped to the table).
+    /// Total bytes of samples `start..end` (clamped to the table), by a
+    /// linear walk: the reference [`SampleTable::size_sum`] is checked
+    /// against.
+    #[cfg(test)]
     fn sum(&self, start: usize, end: usize) -> u64 {
         let end = end.min(self.len());
         let start = start.min(end);
@@ -138,7 +141,15 @@ struct TableIndex {
     ctts: Vec<u64>,
     /// Non-empty `stsc` runs, ascending by `first_sample`.
     chunks: Vec<ChunkRun>,
+    /// For a per-sample `stsz`: the total size of samples
+    /// `0..k * SIZE_BLOCK`, for `k` in `0..=len / SIZE_BLOCK`.
+    size_blocks: Vec<u64>,
 }
+
+/// Samples per [`TableIndex::size_blocks`] entry: a size prefix sum is
+/// one block lookup plus at most this many adds, for 8 bytes of index per
+/// `SIZE_BLOCK` samples (1/32 of the `stsz` table itself).
+const SIZE_BLOCK: usize = 64;
 
 /// Per-track sample table.
 #[derive(Debug, Clone, Default)]
@@ -192,6 +203,19 @@ impl SampleTable {
             })
             .collect();
 
+        self.index.size_blocks.clear();
+        if let SampleSizes::PerSample(v) = &self.stsz {
+            let mut total = 0u64;
+            self.index.size_blocks.reserve(v.len() / SIZE_BLOCK + 1);
+            self.index.size_blocks.push(0);
+            for block in v.chunks(SIZE_BLOCK) {
+                total += block.iter().map(|&s| u64::from(s)).sum::<u64>();
+                if block.len() == SIZE_BLOCK {
+                    self.index.size_blocks.push(total);
+                }
+            }
+        }
+
         let num_chunks = self.stco.len() as u64;
         let mut sample = 0u64;
         self.index.chunks.clear();
@@ -217,6 +241,34 @@ impl SampleTable {
             });
             sample = sample.saturating_add((end - first).saturating_mul(spc));
         }
+    }
+
+    /// Total size of samples `0..i` (clamped to the table).
+    fn size_prefix(&self, i: usize) -> u64 {
+        let i = i.min(self.stsz.len());
+        match &self.stsz {
+            SampleSizes::Uniform { size, .. } => u64::from(*size).saturating_mul(i as u64),
+            SampleSizes::PerSample(v) => {
+                // Unfinalized tables have no index: walk from the start.
+                let block = (i / SIZE_BLOCK).min(self.index.size_blocks.len().saturating_sub(1));
+                let base = self.index.size_blocks.get(block).copied().unwrap_or(0);
+                let from = if self.index.size_blocks.is_empty() {
+                    0
+                } else {
+                    block * SIZE_BLOCK
+                };
+                base + v[from..i].iter().map(|&s| u64::from(s)).sum::<u64>()
+            },
+        }
+    }
+
+    /// Total size of samples `start..end` (clamped to the table) in
+    /// O(`SIZE_BLOCK`). Per-sample offset lookups used to sum every
+    /// preceding sample of the chunk, so a hostile file with one chunk of
+    /// millions of samples made sequential playback quadratic.
+    fn size_sum(&self, start: usize, end: usize) -> u64 {
+        let end = end.min(self.stsz.len());
+        self.size_prefix(end) - self.size_prefix(start.min(end))
     }
 }
 
@@ -437,7 +489,7 @@ pub(super) fn sample_file_offset(table: &SampleTable, sample_idx: usize) -> Opti
     let (chunk_idx, first_in_chunk) = sample_to_chunk(table, sample_idx)?;
     let chunk_offset = *table.stco.get(chunk_idx)?;
     // Sizes of the samples that precede this one in its chunk.
-    let preceding = table.stsz.sum(first_in_chunk, sample_idx);
+    let preceding = table.size_sum(first_in_chunk, sample_idx);
     Some((chunk_offset.checked_add(preceding)?, size))
 }
 
@@ -856,6 +908,55 @@ mod tests {
             assert_eq!(s.sum(3, 100), 7);
         }
         assert_eq!(SampleSizes::Uniform { size: 7, count: 0 }.max(), 0);
+    }
+
+    #[test]
+    fn indexed_size_sums_match_the_linear_walk() {
+        let sizes: Vec<u32> = (0..1000u32).map(|i| i * 7 % 113).collect();
+        let reference: SampleSizes = sizes.clone().into();
+        let table = finalized(SampleTable {
+            stsz: sizes.into(),
+            ..Default::default()
+        });
+        for (start, end) in [
+            (0, 0),
+            (0, 64),
+            (63, 65),
+            (64, 128),
+            (5, 999),
+            (0, 1000),
+            (900, 5000),
+        ] {
+            assert_eq!(
+                table.size_sum(start, end),
+                reference.sum(start, end),
+                "{start}..{end}"
+            );
+        }
+    }
+
+    #[test]
+    fn offset_lookup_in_a_huge_chunk_is_not_linear() {
+        // One chunk of 2M samples: the last sample's offset used to sum
+        // all 2M preceding sizes on every lookup.
+        let n = 2_000_000usize;
+        let table = finalized(SampleTable {
+            stsc: vec![StscEntry {
+                first_chunk: 1,
+                samples_per_chunk: n as u32,
+            }],
+            stsz: vec![3u32; n].into(),
+            stco: vec![1000],
+            ..Default::default()
+        });
+        let start = std::time::Instant::now();
+        for i in (n - 1000)..n {
+            assert_eq!(
+                sample_file_offset(&table, i),
+                Some((1000 + 3 * i as u64, 3))
+            );
+        }
+        assert!(start.elapsed() < std::time::Duration::from_secs(2));
     }
 
     #[test]

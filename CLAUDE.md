@@ -90,7 +90,7 @@ The Rust steps run via `docker compose --profile ci run --rm rust-ci`; the PSP b
 
 Both jobs are non-blocking on pull requests (`continue-on-error` there) and run on pushes to main, PRs touching `oasis-video`, `oasis-core`, `oasis-app`, `oasis-backend-sdl`, `oasis-backend-ue5`, `oasis-types`, `Cargo.toml`/`Cargo.lock` or the workflow itself, and `workflow_dispatch`.
 
-**Scheduled:** `nightly-streaming.yml` (end-to-end TV Guide video streaming) and `fuzz.yml` (fuzz targets in `crates/oasis-core/fuzz/`).
+**Scheduled:** `nightly-streaming.yml` (end-to-end TV Guide video streaming) and `fuzz.yml` (fuzz targets in `crates/oasis-core/fuzz/` and `crates/oasis-video/fuzz/`).
 
 ## Architecture
 
