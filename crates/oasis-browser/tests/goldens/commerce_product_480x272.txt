@@ -13,16 +13,16 @@ draw_text "Your ", 387, 11, 13, Color { r: 255, g: 255, b: 255, a: 255 }
 draw_text "Account", 417, 11, 13, Color { r: 255, g: 255, b: 255, a: 255 }
 fill_rect 0, 43, 480, 30, Color { r: 243, g: 243, b: 243, a: 255 }
 draw_text "Handhelds", 16, 49, 12, Color { r: 0, g: 102, b: 192, a: 255 }
-fill_rect 70, 49, 60, 18, Color { r: 243, g: 243, b: 243, a: 255 }
-draw_text " &rsaquo; ", 70, 49, 12, Color { r: 85, g: 85, b: 85, a: 255 }
-draw_text "Sony", 130, 49, 12, Color { r: 0, g: 102, b: 192, a: 255 }
-fill_rect 154, 49, 60, 18, Color { r: 243, g: 243, b: 243, a: 255 }
-draw_text " &rsaquo; ", 154, 49, 12, Color { r: 85, g: 85, b: 85, a: 255 }
-draw_text "PSP", 214, 49, 12, Color { r: 0, g: 102, b: 192, a: 255 }
-fill_rect 232, 49, 60, 18, Color { r: 243, g: 243, b: 243, a: 255 }
-draw_text " &rsaquo; ", 232, 49, 12, Color { r: 85, g: 85, b: 85, a: 255 }
-fill_rect 292, 49, 48, 18, Color { r: 243, g: 243, b: 243, a: 255 }
-draw_text "PSP-3000", 292, 49, 12, Color { r: 85, g: 85, b: 85, a: 255 }
+fill_rect 70, 49, 30, 18, Color { r: 243, g: 243, b: 243, a: 255 }
+draw_text " › ", 70, 49, 12, Color { r: 85, g: 85, b: 85, a: 255 }
+draw_text "Sony", 100, 49, 12, Color { r: 0, g: 102, b: 192, a: 255 }
+fill_rect 124, 49, 30, 18, Color { r: 243, g: 243, b: 243, a: 255 }
+draw_text " › ", 124, 49, 12, Color { r: 85, g: 85, b: 85, a: 255 }
+draw_text "PSP", 154, 49, 12, Color { r: 0, g: 102, b: 192, a: 255 }
+fill_rect 172, 49, 30, 18, Color { r: 243, g: 243, b: 243, a: 255 }
+draw_text " › ", 172, 49, 12, Color { r: 85, g: 85, b: 85, a: 255 }
+fill_rect 202, 49, 48, 18, Color { r: 243, g: 243, b: 243, a: 255 }
+draw_text "PSP-3000", 202, 49, 12, Color { r: 85, g: 85, b: 85, a: 255 }
 fill_rect 25, 98, 116, 320, Color { r: 232, g: 232, b: 232, a: 255 }
 fill_rect 24, 97, 118, 1, Color { r: 204, g: 204, b: 204, a: 255 }
 fill_rect 141, 97, 1, 322, Color { r: 204, g: 204, b: 204, a: 255 }

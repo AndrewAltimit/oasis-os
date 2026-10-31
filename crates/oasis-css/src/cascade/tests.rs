@@ -3627,6 +3627,24 @@ mod spec_followups {
     }
 
     #[test]
+    fn all_unset_resets_every_property() {
+        let html = r#"<div id="p"><span id="t">x</span></div>"#;
+        let css = "#p { color: blue } \
+                   #t { color: red; padding: 5px; background-color: red; display: block; \
+                   border: 2px solid red } \
+                   div #t { all: unset }";
+        let s = styles_of(html, &[css], "t");
+        assert_eq!(s.color, BLUE, "inherited properties inherit");
+        assert_eq!(s.background_color, Color::rgba(0, 0, 0, 0));
+        assert!(s.padding_left.abs() < 0.01);
+        assert!(s.border_top_width.abs() < 0.01);
+        assert_eq!(s.display, Display::Inline);
+        // Later declarations still win over `all`.
+        let css = "#t { all: initial; color: red }";
+        assert_eq!(styles_of(html, &[css], "t").color, RED);
+    }
+
+    #[test]
     fn unset_still_resets_non_inherited_properties() {
         let html = r#"<div id="p"><span id="t">x</span></div>"#;
         let css = "#p { background-color: blue } #t { background-color: unset }";

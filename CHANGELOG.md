@@ -54,7 +54,8 @@ larger changes by area. Breaking API changes are marked **(breaking)**.
   paragraph); `is_void` / `is_special` cover the obsolete and unnamed void / special tags.
 - CSS cascade layers order as a tree (sublayers before their parent, late sublayers in their
   parent's slot) **(breaking: `Stylesheet::layers` is now in cascade order)**; `inherit`
-  works for non-inherited properties and on shorthands; the `flex` shorthand handles every
+  works for non-inherited properties and on shorthands; `all: unset` (the common button
+  reset) is supported; the `flex` shorthand handles every
   form (`flex: auto`, `flex: 2 1 0`, `flex: 100px`); `::before` / `::after` see their own
   custom properties.
 - Attribute selectors accept the `i` / `s` flags (the flag used to drop the rule) and match

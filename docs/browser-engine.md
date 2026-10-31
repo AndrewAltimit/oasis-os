@@ -247,7 +247,8 @@ directly.
   non-inherited properties too (`background-color`, `width`, `border`,
   `display`, ...), and on shorthands (`border`, `background`, `font`,
   `outline`, `list-style`, `border-radius`, `flex`) reaches every
-  longhand. The `flex` shorthand implements every form of Flexbox 1
+  longhand; `all: unset | initial | inherit` resets every modelled
+  property but `direction` (`revert` is still ignored). The `flex` shorthand implements every form of Flexbox 1
   §7.1.1 (`auto`, `none`, `initial`, `<grow> <shrink>? || <basis>`).
 - Attribute selectors: all six operators, the `i` / `s` case flags, and
   HTML's case-insensitive attribute values (`[type=checkbox]` matches
