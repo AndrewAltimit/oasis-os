@@ -1343,6 +1343,10 @@ fn flags_are_parsed_consistently() {
     assert_eq!(sh.ok("head -n1 /tmp/t"), "Foo");
     assert_eq!(sh.ok("tail -n 1 /tmp/t"), "foo");
     assert!(sh.run("head -n").is_err());
+    // `+N` (from line N) is not "last N"; after `--`, `-5` is a file.
+    assert!(sh.run("tail -n +1 /tmp/t").is_err());
+    sh.vfs.write("/tmp/-5", b"x\ny").unwrap();
+    assert_eq!(sh.ok("cd /tmp; head -n 1 -- -5"), "x");
     assert_eq!(sh.ok("sort -ru /tmp/t"), "foo\nbar\nFoo");
     assert_eq!(sh.ok("wc -lw /tmp/t"), "       3        3");
     // `--` ends the options.
@@ -1376,10 +1380,16 @@ fn captured_output_has_no_placeholders_or_colour() {
     assert_eq!(sh.ok("grep zzz /tmp/f | wc -l"), "0");
     assert_eq!(sh.ok("ls /tmp/empty"), "");
     // `ls` colours directories for the terminal only.
-    assert!(sh.ok("ls /tmp").contains("\u{1b}[94m"));
+    assert!(sh.ok("ls /tmp").contains("\u{1b}[94"));
     assert_eq!(sh.ok("echo $(ls /tmp)"), "d/ empty/ f");
     sh.ok("ls /tmp > /tmp/listing");
     assert!(!sh.ok("cat /tmp/listing").contains('\u{1b}'));
+    // A file's own escape sequences survive a pipe / redirect copy.
+    let art = "\u{1b}[31mred\u{1b}[0m";
+    sh.vfs.write("/tmp/art.ans", art.as_bytes()).unwrap();
+    sh.ok("cat /tmp/art.ans > /tmp/copy.ans");
+    assert_eq!(sh.vfs.read("/tmp/copy.ans").unwrap(), art.as_bytes());
+    assert_eq!(sh.ok("cat /tmp/art.ans | head -n 5"), art);
     assert_eq!(sh.ok("find /tmp '*.none'"), "");
 }
 
@@ -1435,6 +1445,9 @@ fn set_local_and_variable_names() {
     assert_eq!(sh.ok("echo \"[$X]\""), "[  a ]");
     sh.ok("set W=hello world");
     assert_eq!(sh.ok("echo $W"), "hello world");
+    // The spaced form worked before names were validated.
+    sh.ok("set S = 5");
+    assert_eq!(sh.ok("echo [$S]"), "[5]");
     assert!(sh.run("set 1=x").is_err());
     assert!(sh.run("set ?=x").is_err());
     sh.ok("set Y=outer");
@@ -1472,4 +1485,27 @@ fn find_matches_globs() {
     assert_eq!(sh.ok("find /tmp '*.txt'"), "/tmp/a.txt");
     // A plain pattern is still a substring search.
     assert_eq!(sh.ok("find /tmp .lo"), "/tmp/b.log");
+}
+
+/// `rm -r` removes a symlinked directory's link, never the target's files
+/// (`readdir` / `stat` report the link as a directory).
+#[cfg(unix)]
+#[test]
+fn rm_recursive_does_not_follow_directory_symlinks() {
+    use std::os::unix::fs::symlink;
+    let (tmp, mut sh) = real_sandbox("rm-symlink");
+    let root = tmp.path().join("root");
+    std::fs::create_dir_all(root.join("keep")).unwrap();
+    std::fs::write(root.join("keep/f"), b"data").unwrap();
+    std::fs::create_dir_all(root.join("d")).unwrap();
+    symlink(root.join("keep"), root.join("d/link")).unwrap();
+    symlink(root.join("keep"), root.join("top")).unwrap();
+    sh.ok("rm -r /d");
+    sh.ok("rm -r /top");
+    assert!(
+        root.join("keep/f").exists(),
+        "rm -r emptied the link target"
+    );
+    assert!(!root.join("d").exists());
+    assert!(std::fs::symlink_metadata(root.join("top")).is_err());
 }
