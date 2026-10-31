@@ -1,0 +1,182 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Crate map — OASIS_OS</title>
+  <meta name="description" content="An interactive map of the OASIS_OS workspace: all 51 crates in their layers, what each one uses and what uses it, and guided walks of the path a frame, a web page and a video stream take through the code.">
+  <link rel="canonical" href="https://andrewaltimit.github.io/oasis-os/crates.html">
+  <meta name="theme-color" content="#07080c">
+  <meta name="color-scheme" content="dark">
+  <link rel="icon" href="favicon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="img/apple-touch-icon.png">
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="OASIS_OS">
+  <meta property="og:title" content="Crate map — OASIS_OS">
+  <meta property="og:description" content="All 51 OASIS_OS crates in their layers: hover one to see what it uses and what uses it, or walk the path a frame, a web page and a video stream take.">
+  <meta property="og:url" content="https://andrewaltimit.github.io/oasis-os/crates.html">
+  <meta property="og:image" content="https://andrewaltimit.github.io/oasis-os/img/og-card.png">
+  <meta property="og:image:width" content="1200">
+  <meta property="og:image:height" content="630">
+  <meta property="og:image:alt" content="OASIS_OS: one OS shell, any pixel buffer">
+  <meta name="twitter:card" content="summary_large_image">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&amp;display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="css/site.css">
+  <link rel="stylesheet" href="css/crate-map.css">
+</head>
+<body class="page-crates">
+
+<a class="skip-link" href="#main">Skip to content</a>
+
+<header class="topbar" id="topbar">
+  <div class="topbar__inner wrap">
+    <a class="brand" href="./" aria-label="OASIS_OS home">
+      <span class="brand__mark" aria-hidden="true"></span>
+      <span class="brand__name">OASIS<span class="brand__us">_</span>OS</span>
+    </a>
+    <button class="nav-toggle" id="nav-toggle" type="button" aria-expanded="false" aria-controls="site-nav">
+      <span class="sr-only">Menu</span>
+      <span class="nav-toggle__bar" aria-hidden="true"></span>
+    </button>
+    <nav class="site-nav" id="site-nav" aria-label="Primary">
+      <ul>
+        <li><a href="./#platforms">Platforms</a></li>
+        <li><a href="./#skins">Skins</a></li>
+        <li><a href="./#features">Features</a></li>
+        <li><a href="./#architecture">Architecture</a></li>
+        <li><a href="crates.html" aria-current="page">Crates</a></li>
+        <li><a href="./#psp">PSP</a></li>
+        <li><a href="journal/">Journal</a></li>
+        <li><a href="./#start">Build</a></li>
+      </ul>
+      <div class="site-nav__cta">
+        <a class="btn btn--ghost btn--sm" href="https://github.com/AndrewAltimit/oasis-os">GitHub</a>
+        <a class="btn btn--primary btn--sm" href="demo/">Live demo</a>
+      </div>
+    </nav>
+  </div>
+</header>
+
+<main id="main">
+
+  <header class="cm-hero">
+    <div class="wrap">
+      <p class="kicker">Crate map</p>
+      <h1 class="cm-hero__title">Fifty-one crates, one graph.</h1>
+      <p class="cm-hero__lede">
+        Every crate in the workspace, in its layer. Hover or focus one to light up what it uses and
+        what uses it; click to pin it and read the details. Below the map, walk the path a frame, a
+        web page and a video stream take through the code.
+      </p>
+      <ul class="cm-hero__stats" id="cm-stats-hero" aria-label="At a glance">
+        <li class="badge"><span class="dot" aria-hidden="true"></span>51 crates</li>
+      </ul>
+    </div>
+  </header>
+
+  <section class="cm-section" id="map" aria-labelledby="map-title">
+    <div class="wrap">
+      <h2 class="sr-only" id="map-title">The map</h2>
+
+      <div class="cm-root" id="cm-root">
+        <div class="cm-toolbar" role="group" aria-label="Map filters">
+          <label class="cm-search">
+            <span class="sr-only">Filter crates</span>
+            <svg aria-hidden="true" viewBox="0 0 16 16" width="15" height="15"><circle cx="7" cy="7" r="4.6" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="m10.5 10.5 3.5 3.5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+            <input type="search" id="cm-search" placeholder="Filter: name or description" autocomplete="off" spellcheck="false">
+          </label>
+          <div class="cm-toggles">
+            <button type="button" class="chip is-active" data-filter="optional" aria-pressed="true">Optional deps</button>
+            <button type="button" class="chip" data-filter="dev" aria-pressed="false">Dev deps</button>
+            <button type="button" class="chip is-active" data-filter="psp" aria-pressed="true">PSP crates</button>
+            <button type="button" class="chip" data-filter="transitive" aria-pressed="false">Transitive</button>
+          </div>
+          <p class="cm-count mono" id="cm-count" aria-live="polite"></p>
+        </div>
+
+        <ul class="cm-legend" aria-label="Legend">
+          <li class="k-uses">uses</li>
+          <li class="k-usedby">used by</li>
+          <li class="k-optional">optional (feature-gated)</li>
+          <li class="k-dev">dev / tests only</li>
+          <li class="k-walk">walk</li>
+        </ul>
+
+        <div class="cm-body" id="cm-body">
+          <div class="cm-stage" id="cm-stage">
+            <svg class="cm-edges" id="cm-edges" aria-hidden="true" focusable="false"></svg>
+            <div class="cm-bands" id="cm-bands">
+              <p class="cm-empty">Loading the crate map&hellip;</p>
+            </div>
+            <noscript>
+              <p class="cm-empty">The crate map needs JavaScript. The same graph is in
+                <a href="https://github.com/AndrewAltimit/oasis-os/blob/main/CLAUDE.md#crate-dependency-graph">CLAUDE.md</a>
+                and the raw data is <a href="data/crates.json">data/crates.json</a>.</p>
+            </noscript>
+          </div>
+
+          <aside class="cm-card" id="cm-card" aria-live="polite" aria-label="Crate details">
+            <p class="cm-card__kicker">How to read it</p>
+            <p class="cm-card__lead">Crates depend downward. The hosts at the top link everything they
+              need; <code>oasis-types</code> at the foundation links nothing; the backends sit below the
+              trait boundary and implement its traits.</p>
+            <ul class="cm-card__tips">
+              <li><kbd>Hover</kbd> / <kbd>Tab</kbd> a crate: its edges</li>
+              <li><kbd>Click</kbd> / <kbd>Enter</kbd>: pin it here</li>
+              <li><kbd>&larr;</kbd> <kbd>&rarr;</kbd>: next crate &middot; <kbd>Esc</kbd>: clear</li>
+            </ul>
+            <p class="cm-card__note">Generated from every <code>Cargo.toml</code> by
+              <a href="https://github.com/AndrewAltimit/oasis-os/blob/main/scripts/gen-crate-map.py">scripts/gen-crate-map.py</a>.</p>
+          </aside>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="cm-section cm-section--walks" id="walks" aria-labelledby="walks-title">
+    <div class="wrap">
+      <header class="cm-walks__head">
+        <p class="kicker">Follow the data</p>
+        <h2 id="walks-title">Three paths through the code.</h2>
+        <p class="cm-walks__lede">Each step names the crates it passes through and the code that does
+          the work; <em>Show on the map</em> carries the trace up into the graph.</p>
+      </header>
+
+      <div class="cm-walk" id="cm-walk">
+        <div class="tabs cm-walk__tabs" role="tablist" aria-label="Walks" id="cm-walk-tabs"></div>
+        <div class="cm-walk__body" id="cm-walk-body" role="tabpanel">
+          <ol class="cm-steps" id="cm-steps" aria-label="Steps"></ol>
+          <div class="cm-step" id="cm-step"></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+</main>
+
+<footer class="footer">
+  <div class="wrap footer__inner">
+    <div class="footer__brand">
+      <span class="brand__name">OASIS<span class="brand__us">_</span>OS</span>
+      <p>Built from scratch in Rust. Dual-licensed MIT + Unlicense.</p>
+    </div>
+    <nav aria-label="Footer">
+      <ul class="footer__links">
+        <li><a href="./">Home</a></li>
+        <li><a href="demo/">Live demo</a></li>
+        <li><a href="journal/">Journal</a></li>
+        <li><a href="blueprint.html">Blueprints</a></li>
+        <li><a href="https://github.com/AndrewAltimit/oasis-os">GitHub</a></li>
+        <li><a href="https://github.com/AndrewAltimit/oasis-os/blob/main/docs/README.md">Docs</a></li>
+      </ul>
+    </nav>
+    <p class="footer__status mono" aria-hidden="true">333MHz &middot; 480&times;272 &middot; v1.4.0</p>
+  </div>
+</footer>
+
+<script src="js/site.js" defer></script>
+<script src="js/crate-map.js" defer></script>
+</body>
+</html>

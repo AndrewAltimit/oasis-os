@@ -6,6 +6,18 @@ larger changes by area. Breaking API changes are marked **(breaking)**.
 
 ## Unreleased -- overhaul 3
 
+### Crate map
+
+- New interactive site page, `site/crates.html`: all 51 crates in their layers; hover / focus
+  lights what a crate uses and what uses it, click pins a detail card (description, Rust lines,
+  dependencies by kind, reach, source link); filters for optional / dev edges, the PSP crates and
+  a search box; three guided walks (a frame, a web page, a video stream) that trace onto the map.
+  Linked from the nav, the homepage architecture section and the sitemap.
+- `scripts/gen-crate-map.py` writes its data, `site/data/crates.json`, from every
+  `crates/*/Cargo.toml` (the excluded and standalone PSP crates included). Its unit test
+  (`scripts/test_gen_crate_map.py`, run by CI's python step) fails when the JSON is stale:
+  after adding a crate or changing an internal dependency, run `python3 scripts/gen-crate-map.py`.
+
 ### Website
 
 - Landing page polish (hero video kept): the contract section puts the three steps beside
