@@ -488,33 +488,38 @@ fn bearer_token_gate() {
     let mut disp = FakeDispatcher::default();
     let ping = rpc(1, "ping", json!({}));
     let resps = h.run(&mut disp, move |addr| {
-        let mut c = Client::connect(addr);
-        [
-            c.roundtrip(&json_post(&ping)),
-            c.roundtrip(&http_post(
-                &ping,
-                "Content-Type: application/json\r\nAuthorization: Bearer wrong\r\n",
-            )),
-            c.roundtrip(&http_post(
-                &ping,
-                "Content-Type: application/json\r\nAuthorization: Bearer s3cret-and-more\r\n",
-            )),
-            c.roundtrip(&http_post(
-                &ping,
-                "Content-Type: application/json\r\nAuthorization: Basic s3cret\r\n",
-            )),
-            c.roundtrip(&http_post(
-                &ping,
-                "Content-Type: application/json\r\nAuthorization: Bearer s3cret\r\n",
-            )),
-        ]
+        let auth = |value: &str| format!("Content-Type: application/json\r\n{value}\r\n");
+        let attempts = [
+            json_post(&ping),
+            http_post(&ping, &auth("Authorization: Bearer wrong")),
+            http_post(&ping, &auth("Authorization: Bearer s3cret-and-more")),
+            http_post(&ping, &auth("Authorization: Basic s3cret")),
+            http_post(&ping, &auth("Authorization: Bearer s3cret")),
+        ];
+        // A 401 closes the connection (no pipelined guessing), so every
+        // attempt gets its own.
+        attempts
+            .iter()
+            .map(|req| {
+                let mut c = Client::connect(addr);
+                let resp = c.roundtrip(req);
+                // (Only probe refused ones: a live connection would block
+                // the read until the client timeout.)
+                let closed = resp.status == 401 && c.at_eof();
+                (resp, closed)
+            })
+            .collect::<Vec<_>>()
     });
-    for r in &resps[..4] {
+    for (r, closed) in &resps[..4] {
         assert_eq!(r.status, 401, "{r:?}");
         assert_eq!(r.header("WWW-Authenticate"), Some("Bearer"));
+        assert_eq!(r.header("Connection"), Some("close"));
+        assert!(closed, "a 401 must close the connection");
     }
-    assert_eq!(resps[4].status, 200);
-    assert_eq!(resps[4].json()["id"], 1);
+    let (ok, _) = &resps[4];
+    assert_eq!(ok.status, 200);
+    assert_eq!(ok.json()["id"], 1);
+    assert_eq!(ok.header("Connection"), Some("keep-alive"));
 }
 
 #[test]

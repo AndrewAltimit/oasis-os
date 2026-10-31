@@ -75,7 +75,14 @@ fn process_text_request(line: &str, vfs: &mut dyn Vfs) -> String {
                             oasis_vfs::EntryKind::Directory => "d",
                             oasis_vfs::EntryKind::File => "f",
                         };
-                        resp.push_str(&format!("{kind} {} {}\n", entry.size, entry.name));
+                        // A newline in a (host-side) file name would forge
+                        // listing lines: show control characters as `?`.
+                        let name: String = entry
+                            .name
+                            .chars()
+                            .map(|c| if c.is_control() { '?' } else { c })
+                            .collect();
+                        resp.push_str(&format!("{kind} {} {name}\n", entry.size));
                     }
                     resp
                 },
@@ -183,7 +190,7 @@ const FTP_IDLE_TIMEOUT_SECS: u64 = 300;
 
 /// Maximum failed authentication attempts on one connection before it is
 /// closed (the server-wide [`AuthThrottle`] bounds reconnect-and-retry).
-const MAX_AUTH_FAILURES: u8 = 3;
+const MAX_CONN_AUTH_FAILURES: u8 = 3;
 
 /// A single FTP client connection.
 struct FtpConnection {
@@ -337,7 +344,7 @@ impl FtpConnection {
                     Some(_) => {
                         self.failed_attempts += 1;
                         throttle.record_failure("FTP server");
-                        if self.failed_attempts >= MAX_AUTH_FAILURES || throttle.is_locked() {
+                        if self.failed_attempts >= MAX_CONN_AUTH_FAILURES || throttle.is_locked() {
                             self.queue(b"530 Too many failures\r\n");
                             // No further guesses on this connection.
                             self.read_buf.clear();
@@ -405,9 +412,13 @@ impl FtpServer {
         }
     }
 
-    /// Set an optional password for FTP authentication (builder pattern).
+    /// Set a password for FTP authentication (builder pattern).
+    ///
+    /// An empty password means no authentication, exactly like not calling
+    /// this: [`start`](Self::start) then binds loopback only. (It used to
+    /// demand a `PASS` that could never match, locking every client out.)
     pub fn with_password(mut self, password: String) -> Self {
-        self.password = Some(password);
+        self.password = (!password.is_empty()).then_some(password);
         self
     }
 
@@ -436,7 +447,7 @@ impl FtpServer {
     /// ([`NetworkBackend::listen_loopback`]); with a password it listens on
     /// all interfaces.
     pub fn start(&mut self, backend: &mut dyn NetworkBackend) -> Result<()> {
-        if self.password.as_deref().is_some_and(|p| !p.is_empty()) {
+        if self.password.is_some() {
             backend.listen(self.port)?;
         } else {
             backend.listen_loopback(self.port)?;
@@ -1260,6 +1271,30 @@ mod tests {
         let mut vfs = MemoryVfs::new();
         server.poll(&mut backend, &mut vfs).unwrap();
         assert_eq!(server.connection_count(), 0);
+    }
+
+    #[test]
+    fn ftp_empty_password_means_no_auth_on_loopback() {
+        // Regression: `with_password("")` bound loopback (no password) yet
+        // still demanded a `PASS` that could never match.
+        let output: WriteBuf = Arc::new(Mutex::new(Vec::new()));
+        let mut backend = MockBackend::new();
+        backend.add_stream(Box::new(MockStream::new(b"LIST /\n", Arc::clone(&output))));
+        let mut server = FtpServer::new(2121).with_password(String::new());
+        server.start(&mut backend).unwrap();
+        let mut vfs = MemoryVfs::new();
+        vfs.mkdir("/home").unwrap();
+        server.poll(&mut backend, &mut vfs).unwrap();
+        let written = read_output(&output);
+        assert!(written.contains("d 0 home"), "{written}");
+        assert!(!written.contains("530"), "{written}");
+    }
+
+    #[test]
+    fn ftp_list_escapes_control_characters_in_names() {
+        let mut vfs = MemoryVfs::new();
+        vfs.write("/a\nf 0 forged", b"x").unwrap();
+        assert_eq!(req("LIST /", &mut vfs), "200 f 1 a?f 0 forged\n");
     }
 
     #[test]
