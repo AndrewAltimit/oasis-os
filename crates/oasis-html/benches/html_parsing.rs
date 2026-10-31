@@ -1,6 +1,6 @@
 //! Benchmarks for the HTML tokenizer and DOM tree builder.
 
-use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
+use criterion::{BatchSize, BenchmarkId, Criterion, criterion_group, criterion_main};
 use oasis_html::tokenizer::Tokenizer;
 use oasis_html::tree_builder::TreeBuilder;
 
@@ -60,6 +60,19 @@ fn bench_tree_builder(c: &mut Criterion) {
         group.bench_with_input(BenchmarkId::new("build", &label), &tokens, |b, tokens| {
             b.iter(|| TreeBuilder::build(tokens.clone()));
         });
+        // The tree builder alone: the token clone above is about half of
+        // `build`'s time.
+        group.bench_with_input(
+            BenchmarkId::new("build_only", &label),
+            &tokens,
+            |b, tokens| {
+                b.iter_batched(
+                    || tokens.clone(),
+                    TreeBuilder::build,
+                    BatchSize::LargeInput,
+                );
+            },
+        );
     }
 
     group.finish();

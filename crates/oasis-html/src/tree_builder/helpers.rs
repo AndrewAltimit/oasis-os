@@ -23,15 +23,17 @@ impl TreeBuilder {
     /// Create an HTML element node from a start tag token, and note the
     /// tokenizer state it switches to (`<script>`, `<textarea>`, ...).
     pub(crate) fn create_element_from_start_tag(&mut self, tag: &StartTagToken) -> NodeId {
-        let lower = tag.name.to_ascii_lowercase();
+        let lower = super::lowercase(&tag.name);
         self.pending_content_state = ContentState::for_html_element(&lower, self.scripting);
         let mut data = ElementData::new(TagName::from_str(&lower));
-        for attr in &tag.attributes {
-            data.attributes.push(DomAttribute {
+        data.attributes = tag
+            .attributes
+            .iter()
+            .map(|attr| DomAttribute {
                 name: attr.name.clone(),
                 value: attr.value.clone(),
-            });
-        }
+            })
+            .collect();
         self.doc.add_node(NodeKind::Element(data))
     }
 
@@ -240,6 +242,30 @@ impl TreeBuilder {
                 self.doc.insert_before(parent, id, before);
             },
         }
+    }
+
+    /// [`Self::insert_text`] for an owned string: a new text node takes
+    /// the token's buffer instead of copying it.
+    pub(crate) fn insert_text_owned(&mut self, text: String) {
+        match self.insertion_place() {
+            (parent, None) => self.append_text_owned(parent, text),
+            (_, Some(_)) => self.insert_text(&text),
+        }
+    }
+
+    /// [`Self::append_text_to`] for an owned string.
+    pub(crate) fn append_text_owned(&mut self, parent: NodeId, text: String) {
+        if text.is_empty() {
+            return;
+        }
+        if let Some(&last_child) = self.doc.nodes[parent].children.last()
+            && let NodeKind::Text(ref mut existing) = self.doc.nodes[last_child].kind
+        {
+            existing.push_str(&text);
+            return;
+        }
+        let id = self.doc.add_node(NodeKind::Text(text));
+        self.doc.append_child(parent, id);
     }
 
     /// Append text as the last child of `parent`, coalescing into an

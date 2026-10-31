@@ -324,18 +324,10 @@ impl Tokenizer {
             .all(|(i, &expected)| self.input[self.pos + i].eq_ignore_ascii_case(&expected))
     }
 
-    /// After emitting a start tag, transition to the appropriate
-    /// content state if the tag is RAWTEXT, RCDATA, script or PLAINTEXT.
-    fn maybe_switch_content_state(&mut self, name: &str) {
-        if self.auto_content_state
-            && let Some(state) = ContentState::for_html_element(name, self.scripting)
-        {
-            self.switch_content_state(state);
-        }
-    }
-
     /// Emit a start/end tag from the current tag builder, updating
-    /// `last_start_tag` and the state machine as needed.
+    /// `last_start_tag` and, after a RAWTEXT / RCDATA / script /
+    /// PLAINTEXT start tag, the content state (unless the tree builder
+    /// drives it).
     pub(crate) fn emit_current_tag(&mut self) -> Token {
         let Some(tag) = self.current_tag.take() else {
             // State machine invariant: current_tag is always Some here.
@@ -343,14 +335,19 @@ impl Tokenizer {
             // (defensive: avoids panicking on malformed input).
             return Token::Comment(String::new());
         };
-        let name = tag.name.clone();
-        let is_start = !tag.is_end_tag;
-        let tok = tag.into_token();
-        if is_start {
-            self.last_start_tag = Some(name.clone());
-            self.maybe_switch_content_state(&name);
+        if !tag.is_end_tag {
+            // Reuse the last start tag's buffer: a fresh copy per tag was
+            // two allocations per start tag.
+            let last = self.last_start_tag.get_or_insert_with(String::new);
+            last.clear();
+            last.push_str(&tag.name);
+            if self.auto_content_state
+                && let Some(state) = ContentState::for_html_element(&tag.name, self.scripting)
+            {
+                self.switch_content_state(state);
+            }
         }
-        tok
+        tag.into_token()
     }
 
     // -- main dispatch ------------------------------------------------------

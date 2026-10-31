@@ -5,71 +5,84 @@ use super::super::dom::{NodeId, NodeKind, TagName};
 use super::super::tokenizer::{StartTagToken, Token};
 use super::{InsertionMode, TreeBuilder, is_all_whitespace};
 
+// The tag sets below are `matches!` rather than slices: a `contains`
+// scan string-compared every entry for each tag (the in-body start-tag
+// path ran three of them).
+
 /// Block-ish start tags that close an open `<p>` (WHATWG §13.2.6.4.7).
-const CLOSES_P: &[&str] = &[
-    "address",
-    "article",
-    "aside",
-    "blockquote",
-    "center",
-    "details",
-    "dialog",
-    "dir",
-    "div",
-    "dl",
-    "fieldset",
-    "figcaption",
-    "figure",
-    "footer",
-    "header",
-    "hgroup",
-    "main",
-    "menu",
-    "nav",
-    "ol",
-    "p",
-    "search",
-    "section",
-    "summary",
-    "ul",
-];
+fn closes_p(name: &str) -> bool {
+    matches!(
+        name,
+        "address"
+            | "article"
+            | "aside"
+            | "blockquote"
+            | "center"
+            | "details"
+            | "dialog"
+            | "dir"
+            | "div"
+            | "dl"
+            | "fieldset"
+            | "figcaption"
+            | "figure"
+            | "footer"
+            | "header"
+            | "hgroup"
+            | "main"
+            | "menu"
+            | "nav"
+            | "ol"
+            | "p"
+            | "search"
+            | "section"
+            | "summary"
+            | "ul"
+    )
+}
 
 /// End tags that close their element when it is in scope.
-const BLOCK_END_TAGS: &[&str] = &[
-    "address",
-    "article",
-    "aside",
-    "blockquote",
-    "button",
-    "center",
-    "details",
-    "dialog",
-    "dir",
-    "div",
-    "dl",
-    "fieldset",
-    "figcaption",
-    "figure",
-    "footer",
-    "header",
-    "hgroup",
-    "listing",
-    "main",
-    "menu",
-    "nav",
-    "ol",
-    "pre",
-    "search",
-    "section",
-    "summary",
-    "ul",
-];
+fn is_block_end_tag(name: &str) -> bool {
+    matches!(name, "button" | "listing" | "pre") || (name != "p" && closes_p(name))
+}
 
 /// Start tags handled by the "in head" rules wherever they appear.
-const HEAD_CONTENT: &[&str] = &[
-    "base", "basefont", "bgsound", "link", "meta", "noframes", "script", "style", "template",
-    "title",
-];
+fn is_head_content(name: &str) -> bool {
+    matches!(
+        name,
+        "base"
+            | "basefont"
+            | "bgsound"
+            | "link"
+            | "meta"
+            | "noframes"
+            | "script"
+            | "style"
+            | "template"
+            | "title"
+    )
+}
+
+/// [`TagName::is_formatting`] by name, without building a `TagName`
+/// (which allocates for unknown names).
+fn is_formatting_name(name: &str) -> bool {
+    matches!(
+        name,
+        "a" | "b"
+            | "big"
+            | "code"
+            | "em"
+            | "font"
+            | "i"
+            | "nobr"
+            | "s"
+            | "small"
+            | "strike"
+            | "strong"
+            | "tt"
+            | "u"
+    )
+}
 
 fn is_heading_name(name: &str) -> bool {
     matches!(name, "h1" | "h2" | "h3" | "h4" | "h5" | "h6")
@@ -256,7 +269,7 @@ impl TreeBuilder {
                 self.frameset_ok = false;
                 self.mode = InsertionMode::InBody;
             },
-            Token::StartTag(tag) if HEAD_CONTENT.contains(&tag.name.as_str()) => {
+            Token::StartTag(tag) if is_head_content(&tag.name) => {
                 // Head content after `</head>`: it still goes in the head.
                 let Some(head) = self.head_element else {
                     self.after_head_anything_else(token);
@@ -287,17 +300,17 @@ impl TreeBuilder {
 
     pub(crate) fn handle_in_body(&mut self, token: Token) {
         match token {
-            Token::Character(ref s) => {
+            Token::Character(s) => {
                 self.reconstruct_formatting();
-                self.insert_text(s);
-                if !is_all_whitespace(s) {
+                if !is_all_whitespace(&s) {
                     self.frameset_ok = false;
                 }
+                self.insert_text_owned(s);
             },
             Token::Comment(text) => self.insert_comment(text),
             Token::StartTag(ref tag) => self.handle_start_tag_in_body(tag, &token),
             Token::EndTag(ref tag) => {
-                let name = tag.name.to_ascii_lowercase();
+                let name = super::lowercase(&tag.name);
                 self.handle_end_tag_in_body(&name, &token);
             },
             Token::Eof => {
@@ -311,8 +324,8 @@ impl TreeBuilder {
 
     /// Process a start tag while in InBody mode.
     pub(crate) fn handle_start_tag_in_body(&mut self, tag: &StartTagToken, token: &Token) {
-        let name = tag.name.to_ascii_lowercase();
-        let name = name.as_str();
+        let name = super::lowercase(&tag.name);
+        let name = &*name;
         match name {
             "html" => {
                 if let Some(&html) = self.open_elements.first()
@@ -321,7 +334,7 @@ impl TreeBuilder {
                     self.merge_attributes(html, &tag.attributes);
                 }
             },
-            _ if HEAD_CONTENT.contains(&name) => self.handle_in_head(token.clone()),
+            _ if is_head_content(name) => self.handle_in_head(token.clone()),
             "body" => {
                 let body = self.open_elements.get(1).copied();
                 if let Some(body) = body
@@ -333,7 +346,7 @@ impl TreeBuilder {
                 }
             },
             "frameset" => {},
-            _ if CLOSES_P.contains(&name) => {
+            _ if closes_p(name) => {
                 self.close_p_if_in_scope();
                 self.insert_html(tag);
             },
@@ -395,7 +408,7 @@ impl TreeBuilder {
                 let id = self.insert_html(tag);
                 self.push_active_formatting(id);
             },
-            _ if TagName::from_str(name).is_formatting() => {
+            _ if is_formatting_name(name) => {
                 self.reconstruct_formatting();
                 let id = self.insert_html(tag);
                 self.push_active_formatting(id);
@@ -517,7 +530,7 @@ impl TreeBuilder {
                 // on non-void HTML elements (`<span/>` stays open).
                 self.reconstruct_formatting();
                 let id = self.create_element_from_start_tag(tag);
-                if TagName::from_str(name).is_void() {
+                if self.tag_of(id).is_some_and(TagName::is_void) {
                     self.insert_leaf(id);
                 } else {
                     self.insert_element(id);
@@ -585,7 +598,7 @@ impl TreeBuilder {
                     self.process_token(token.clone());
                 }
             },
-            _ if BLOCK_END_TAGS.contains(&name) => {
+            _ if is_block_end_tag(name) => {
                 if self.has_in_scope(&tag) {
                     self.generate_implied_end_tags(None);
                     self.close_to_tag(&tag);
@@ -737,9 +750,7 @@ impl TreeBuilder {
     pub(crate) fn handle_text(&mut self, token: Token) {
         let target = self.text_element.unwrap_or_else(|| self.current_node());
         match token {
-            Token::Character(ref s) => {
-                self.append_text_to(target, s);
-            },
+            Token::Character(s) => self.append_text_owned(target, s),
             Token::EndTag(_) | Token::Eof => {
                 if self.open_elements.last() == Some(&target) {
                     self.pop_open_element();

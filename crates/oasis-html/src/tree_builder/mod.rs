@@ -344,6 +344,8 @@ impl TreeBuilder {
     /// Feed every token (up to the DOM node cap) and finish the tree.
     fn run(mut self, tokens: Vec<Token>) -> Document {
         let total = tokens.len();
+        // About one node per two tokens (end tags make none).
+        self.reserve_nodes(total / 2);
         for (idx, token) in tokens.into_iter().enumerate() {
             // Enforce DOM node limit to prevent memory exhaustion.
             if self.doc.nodes.len() >= MAX_DOM_NODES {
@@ -369,6 +371,9 @@ impl TreeBuilder {
     fn run_pull(mut self, html: &str) -> Document {
         let mut tokenizer = Tokenizer::with_scripting(html, self.scripting);
         tokenizer.auto_content_state = false;
+        // A conservative node estimate (typical markup runs 20-60 bytes a
+        // node); doubling covers the rest.
+        self.reserve_nodes(html.len() / 64);
         let mut lookahead: Option<Token> = None;
         let mut idx: u64 = 0;
         let mut last_pos = usize::MAX;
@@ -509,6 +514,14 @@ impl TreeBuilder {
         }
     }
 
+    /// Reserve arena room for about `estimate` nodes (capped at the DOM
+    /// node limit): growing the arena by doubling copied every node
+    /// several times on large pages.
+    fn reserve_nodes(&mut self, estimate: usize) {
+        let want = estimate.min(MAX_DOM_NODES);
+        self.doc.nodes.reserve(want.saturating_sub(self.doc.nodes.len()));
+    }
+
     fn finish(self) -> Document {
         self.doc
     }
@@ -523,6 +536,16 @@ impl Default for TreeBuilder {
 // ------------------------------------------------------------------
 // Utility
 // ------------------------------------------------------------------
+
+/// `name` in ASCII lowercase, borrowed when it already is (the tokenizer
+/// lowercases tag names; only hand-built tokens need a copy).
+pub(crate) fn lowercase(name: &str) -> std::borrow::Cow<'_, str> {
+    if name.bytes().any(|b| b.is_ascii_uppercase()) {
+        std::borrow::Cow::Owned(name.to_ascii_lowercase())
+    } else {
+        std::borrow::Cow::Borrowed(name)
+    }
+}
 
 /// Returns `true` if the string consists entirely of ASCII whitespace.
 pub(crate) fn is_all_whitespace(s: &str) -> bool {

@@ -27,7 +27,18 @@ impl Tokenizer {
                 self.state = State::CharacterReference;
                 None
             },
-            Some(ch) => Some(Token::Character(ch.to_string())),
+            Some(_) => {
+                // The whole run up to the next `<` / `&` is one token: a
+                // token (and a `String`) per character was most of the
+                // tokenizer's time on text-heavy pages.
+                let start = self.pos - 1;
+                let end = self.input[self.pos..]
+                    .iter()
+                    .position(|&c| c == '<' || c == '&')
+                    .map_or(self.input.len(), |off| self.pos + off);
+                self.pos = end;
+                Some(Token::Character(self.input[start..end].iter().collect()))
+            },
             None => Some(Token::Eof),
         }
     }
