@@ -664,36 +664,41 @@ fn draw_results_grid(
                         let _ = backend.blit(TextureId(r.thumb_tex), tx, ty, tw, th);
                     }
 
-                    // Title (one short line) + author.
+                    // Title (one short line) + author, cut to the cell in
+                    // pixels (a character-count cut overflowed with wide
+                    // glyphs or large-font skins).
                     let title_y = ty + th as i32 + 2;
-                    let max_chars = (rw as usize / 6).max(8);
-                    let truncated = truncate(&r.title, max_chars);
-                    backend.draw_text(
-                        &truncated,
+                    let cell_right = cell_x + rw as i32 - 4;
+                    let title_color = if i == app.selection {
+                        at.app.selected_text
+                    } else {
+                        at.app.text
+                    };
+                    text_fit(
+                        backend,
+                        &r.title,
                         cell_x + 4,
                         title_y,
                         at.font_body,
-                        if i == app.selection {
-                            at.app.selected_text
-                        } else {
-                            at.app.text
-                        },
+                        title_color,
+                        cell_right,
                     )?;
-                    let author = truncate(&r.author, max_chars);
-                    backend.draw_text(
-                        &author,
+                    text_fit(
+                        backend,
+                        &r.author,
                         cell_x + 4,
                         title_y + 12,
                         at.font_hint,
                         at.app.dim_text,
+                        cell_right,
                     )?;
                     if !r.duration.is_empty() {
                         // Right-align inside the cell; clamp to the cell's
                         // left edge so very small cells with long duration
                         // strings don't render the label into the
                         // neighbouring cell.
-                        let dx =
-                            (cell_x + rw as i32 - (r.duration.len() as i32 * 6) - 4).max(cell_x);
+                        let dur_w = backend.measure_text(&r.duration, at.font_hint) as i32;
+                        let dx = (cell_right - dur_w).max(cell_x);
                         backend.draw_text(
                             &r.duration,
                             dx,
@@ -744,19 +749,6 @@ fn text_fit(
     let max_w = right.saturating_sub(x).max(0) as u32;
     backend.draw_text_ellipsis(text, x, y, size, color, max_w)?;
     Ok(())
-}
-
-fn truncate(s: &str, max_chars: usize) -> String {
-    if max_chars == 0 {
-        return String::new();
-    }
-    if s.chars().count() <= max_chars {
-        return s.to_string();
-    }
-    let take = max_chars.saturating_sub(1);
-    let mut out: String = s.chars().take(take).collect();
-    out.push('…');
-    out
 }
 
 #[cfg(test)]
@@ -928,6 +920,42 @@ mod tests {
         assert_eq!(data, "play:id_one_aaaa");
     }
 
+    /// Result titles were cut by character count (6 px a glyph), so wide
+    /// titles ran out of their cell in small windows.
+    #[test]
+    fn result_labels_stay_inside_their_cell_at_320x200() {
+        use oasis_test_backend::RecordingBackend;
+        let mut app = VideoEmbedApp::new("/apps/video-embed");
+        app.state = EmbedState::Results;
+        app.results = SearchResults {
+            query: "x".to_string(),
+            status: SearchStatus::Ready,
+            error: None,
+            results: vec![SearchResult {
+                id: "id_one_aaaa".to_string(),
+                title: "WWWW MMMM WWWW MMMM WWWW MMMM".to_string(),
+                author: "Mmmmmmmmmmmmmmmmmmmmmmm".to_string(),
+                duration: "1:23:45".to_string(),
+                thumb_tex: 0,
+            }],
+        };
+        let at = ActiveTheme::default();
+        app.layout(320, 200, &at);
+        let mut rec = RecordingBackend::new(480, 272);
+        app.draw_windowed(0, 0, 320, 200, &mut rec, &at).unwrap();
+        let (cx, cy, cw, ch) = VideoEmbedApp::cell_rect(320, 200, TOP_PAD, 0);
+        let in_cell: Vec<_> = rec
+            .text_positions()
+            .into_iter()
+            .filter(|&(_, x, y, _)| x >= cx && y >= cy && y < cy + ch as i32)
+            .collect();
+        assert!(in_cell.len() >= 3, "{in_cell:?}");
+        for (text, x, _, size) in in_cell {
+            let right = x + oasis_types::backend::bitmap_measure_text(text, size) as i32;
+            assert!(right <= cx + cw as i32, "{text:?} ends at {right}");
+        }
+    }
+
     #[test]
     fn cancel_in_search_exits() {
         use oasis_core::vfs::MemoryVfs;
@@ -986,13 +1014,5 @@ mod tests {
         };
         // 14 results / 6 per page = 3 pages.
         assert_eq!(app.page_count(), 3);
-    }
-
-    #[test]
-    fn truncate_long_title() {
-        let s = "this is a very long title that should be truncated";
-        let t = truncate(s, 10);
-        assert!(t.chars().count() <= 10);
-        assert!(t.ends_with('…'));
     }
 }

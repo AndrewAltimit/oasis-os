@@ -1143,6 +1143,7 @@ dependencies = [
  "oasis-app-text-editor",
  "oasis-app-tv-guide",
  "oasis-core",
+ "oasis-test-backend",
  "oasis-types",
  "oasis-vfs",
  "serde",

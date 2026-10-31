@@ -100,18 +100,22 @@ impl SystemMonitorApp {
         let radius = at.ui_theme.border_radius_md;
         backend.fill_rounded_rect(x, y, inner_w, card_h, radius, colors.card_bg)?;
         backend.stroke_rounded_rect(x, y, inner_w, card_h, radius, 1, colors.card_border)?;
+        // The value column starts after the widest label as the font draws
+        // it (a fixed column let large-font skins run labels into values),
+        // but never past half the card.
+        let label_col = rows
+            .iter()
+            .map(|(label, _)| backend.measure_text(label, font) as i32 + 8)
+            .max()
+            .unwrap_or(0)
+            .max(INFO_LABEL_W)
+            .min(inner_w as i32 / 2);
         for (i, (label, value)) in rows.iter().enumerate() {
             let ry = y + 3 + i as i32 * INFO_ROW_H;
-            backend.draw_text(label, x + 6, ry, font, colors.label)?;
-            let value_w = (inner_w as i32 - 12 - INFO_LABEL_W).max(0) as u32;
-            backend.draw_text_ellipsis(
-                value,
-                x + 6 + INFO_LABEL_W,
-                ry,
-                font,
-                colors.text,
-                value_w,
-            )?;
+            let label_w = (label_col - 4).max(0) as u32;
+            backend.draw_text_ellipsis(label, x + 6, ry, font, colors.label, label_w)?;
+            let value_w = (inner_w as i32 - 12 - label_col).max(0) as u32;
+            backend.draw_text_ellipsis(value, x + 6 + label_col, ry, font, colors.text, value_w)?;
         }
         y += card_h as i32 + GAUGE_GAP + 2;
 
@@ -120,7 +124,8 @@ impl SystemMonitorApp {
         for g in self.status.gauges() {
             ctx.backend.draw_text(g.label, x, y, font, colors.label)?;
             let vw = ctx.backend.measure_text(&g.text, font) as i32;
-            let vx = (x + inner_w as i32 - vw).max(x + INFO_LABEL_W);
+            let label_w = ctx.backend.measure_text(g.label, font) as i32;
+            let vx = (x + inner_w as i32 - vw).max(x + label_w + 6);
             ctx.backend
                 .draw_text(&g.text, vx, y, font, colors.value_color(g.level))?;
             let bar_y = y + GAUGE_TEXT_H;

@@ -64,3 +64,53 @@ fn app_text_stays_inside_the_window_at_every_size_and_theme() {
         overflows.join("\n")
     );
 }
+
+/// No two text runs of a built-in app overlap at the small sizes: a label
+/// that does not fit its slot must be cut, not drawn over its neighbour.
+#[test]
+fn app_text_runs_do_not_overlap_at_small_sizes() {
+    let reg = builtin_registry(&HostInfo::default());
+    let mut overlaps = Vec::new();
+    for r in reg.iter() {
+        for &(w, h) in &SIZES[..2] {
+            for theme in THEMES {
+                let vfs = vfs();
+                let app = r.create(&r.to_app_entry().path, &vfs);
+                let mut harness = AppHarness::with_vfs(app, vfs);
+                harness.set_size(w, h).set_theme(theme);
+                harness.frames(3, 16);
+                let b = harness.draw();
+                let texts: Vec<_> = b
+                    .texts()
+                    .iter()
+                    .filter(|t| t.visible && !t.text.trim().is_empty())
+                    .collect();
+                for (i, a) in texts.iter().enumerate() {
+                    for c in &texts[i + 1..] {
+                        // Shadows / faux bold redraw the same run offset by
+                        // a pixel or two.
+                        if a.text == c.text && (a.x - c.x).abs() <= 2 && (a.y - c.y).abs() <= 2 {
+                            continue;
+                        }
+                        let ox = (a.x + a.w as i32).min(c.x + c.w as i32) - a.x.max(c.x);
+                        // Ink height (the line box adds leading below the glyphs).
+                        let (ah, ch) = (i32::from(a.font_size), i32::from(c.font_size));
+                        let oy = (a.y + ah).min(c.y + ch) - a.y.max(c.y);
+                        if ox > 2 && oy > 2 {
+                            overlaps.push(format!(
+                                "{} {w}x{h} {theme}: {:?}@({},{}) / {:?}@({},{})",
+                                r.title, a.text, a.x, a.y, c.text, c.x, c.y
+                            ));
+                        }
+                    }
+                }
+            }
+        }
+    }
+    overlaps.dedup();
+    assert!(
+        overlaps.is_empty(),
+        "overlapping text:\n{}",
+        overlaps.join("\n")
+    );
+}

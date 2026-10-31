@@ -268,7 +268,10 @@ mod tests {
         vfs.write(ipc::TV_STATUS_PATH, b"guide closed").unwrap();
         let err = exec(&reg, &mut vfs, "tv tune 2").unwrap_err();
         assert!(err.to_string().contains("not open"), "{err}");
-        assert!(vfs.read(ipc::TV_REQUEST_PATH).is_err(), "no request written");
+        assert!(
+            vfs.read(ipc::TV_REQUEST_PATH).is_err(),
+            "no request written"
+        );
         // Once the guide is open the request goes through.
         vfs.write(ipc::TV_STATUS_PATH, b"guide open").unwrap();
         assert!(exec(&reg, &mut vfs, "tv tune 2").is_ok());

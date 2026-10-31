@@ -517,14 +517,22 @@ fn explorer_tile_labels_stay_inside_their_tile() {
         .text_positions()
         .into_iter()
         .filter(|&(_, _, y, _)| (y - label_y) % g.tile_h as i32 == 0 && y >= label_y)
-        .map(|(t, x, _, size)| (t.to_string(), x + oasis_types::backend::bitmap_measure_text(t, size) as i32))
+        .map(|(t, x, _, size)| {
+            (
+                t.to_string(),
+                x + oasis_types::backend::bitmap_measure_text(t, size) as i32,
+            )
+        })
         .collect();
     assert!(labels.iter().any(|(t, _)| t.ends_with("...")), "{labels:?}");
     assert!(labels.iter().any(|(t, _)| t == "etc"), "{labels:?}");
     for (text, right) in &labels {
         let col = (right - 1 - (g.grid_x + 4)) / g.tile_w as i32;
         let tile_right = g.grid_x + 4 + (col + 1) * g.tile_w as i32;
-        assert!(*right <= tile_right, "{text:?} ends at {right}, tile at {tile_right}");
+        assert!(
+            *right <= tile_right,
+            "{text:?} ends at {right}, tile at {tile_right}"
+        );
     }
 }
 

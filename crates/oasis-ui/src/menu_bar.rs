@@ -441,7 +441,11 @@ impl MenuBar {
         let menu = self.menu_at(idx, &layout)?;
         let (label_x, _) = layout.slot(idx)?;
         let natural = self.dropdown_width(&menu);
-        let w = if bar_w == 0 { natural } else { natural.min(bar_w) };
+        let w = if bar_w == 0 {
+            natural
+        } else {
+            natural.min(bar_w)
+        };
         let x = (bar_x + label_x)
             .min(bar_x + bar_w as i32 - w as i32)
             .max(bar_x);
@@ -864,10 +868,17 @@ mod tests {
         let menu = |label: &str| {
             Menu::new(
                 label,
-                vec![MenuEntry::action(format!("{label} item"), label.to_lowercase())],
+                vec![MenuEntry::action(
+                    format!("{label} item"),
+                    label.to_lowercase(),
+                )],
             )
         };
-        MenuBar::new(["File", "Edit", "Tool", "Brush", "Layer", "View"].map(menu).to_vec())
+        MenuBar::new(
+            ["File", "Edit", "Tool", "Brush", "Layer", "View"]
+                .map(menu)
+                .to_vec(),
+        )
     }
 
     /// Right edge of every drawn text run (measured like the backend).
@@ -924,7 +935,8 @@ mod tests {
         assert_eq!(bar.hit_test(ox + 2, 5, 0, 0, 200, 18), MenuHit::Label(6));
         bar.open = Some(6);
         let mut rec = oasis_test_backend::RecordingBackend::default();
-        bar.draw_dropdown(&mut rec, (0, 0, 200, 18), &style).unwrap();
+        bar.draw_dropdown(&mut rec, (0, 0, 200, 18), &style)
+            .unwrap();
         assert!(rec.has_text("View item"), "{:?}", rec.texts());
         let (_, (dx, dy, dw, dh)) = bar.open_dropdown((0, 0, 200, 18)).unwrap();
         assert!(dx >= 0 && dx + dw as i32 <= 200, "drop-down inside the bar");
@@ -934,7 +946,10 @@ mod tests {
             .map(|y| bar.hit_test(dx + 10, y, 0, 0, 200, 18))
             .filter(|h| matches!(h, MenuHit::Item { .. }))
             .collect();
-        assert!(ids.contains(&MenuHit::Item { id: "view".into() }), "{ids:?}");
+        assert!(
+            ids.contains(&MenuHit::Item { id: "view".into() }),
+            "{ids:?}"
+        );
     }
 
     #[test]
@@ -946,7 +961,8 @@ mod tests {
         let style = MenuStyle::default();
         let mut rec = oasis_test_backend::RecordingBackend::default();
         bar.draw_bar(&mut rec, 0, 0, 140, 18, &style).unwrap();
-        bar.draw_dropdown(&mut rec, (0, 0, 140, 18), &style).unwrap();
+        bar.draw_dropdown(&mut rec, (0, 0, 140, 18), &style)
+            .unwrap();
         let (_, (dx, _, dw, _)) = bar.open_dropdown((0, 0, 140, 18)).unwrap();
         assert!(dx >= 0 && dx + dw as i32 <= 140);
         let edges = text_right_edges(&rec);

@@ -132,9 +132,8 @@ impl SystemMonitorApp {
         }
         self.unchanged_ms = self.unchanged_ms.saturating_add(elapsed);
         // Only a snapshot carrying an uptime must change every publish.
-        let stale = self.live
-            && self.status.uptime_secs.is_some()
-            && self.unchanged_ms >= STALE_AFTER_MS;
+        let stale =
+            self.live && self.status.uptime_secs.is_some() && self.unchanged_ms >= STALE_AFTER_MS;
         if stale == self.stale {
             return false;
         }

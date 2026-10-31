@@ -179,7 +179,13 @@ impl RadioApp {
 
         let info_w = (l.list.w / 4).max(30);
         let genre_w = (l.list.w / 5).max(30);
-        let name_w = l.list.w.saturating_sub(info_w + genre_w + 24);
+        // The favourite mark's column is as wide as the font draws "*"
+        // (a fixed 10 px let large fonts run it into the name).
+        let mark_w = (backend.measure_text("*", font) as i32 + 6).max(10);
+        let name_w = l
+            .list
+            .w
+            .saturating_sub(info_w + genre_w + 14 + mark_w as u32);
         for (row, idx) in (self.list_scroll..self.stations.len())
             .take(l.visible_rows())
             .enumerate()
@@ -197,8 +203,8 @@ impl RadioApp {
                 backend.draw_text("*", r.x + 4, ty, font, colors.favorite)?;
             }
             let name = ellipsize(backend, &s.name, font, name_w);
-            backend.draw_text(&name, r.x + 14, ty, font, text_color)?;
-            let genre_x = r.x + 18 + name_w as i32;
+            backend.draw_text(&name, r.x + 4 + mark_w, ty, font, text_color)?;
+            let genre_x = r.x + 8 + mark_w + name_w as i32;
             let genre = ellipsize(backend, &s.genre, font, genre_w);
             backend.draw_text(&genre, genre_x, ty, font, colors.dim_text)?;
             let info = ellipsize(backend, &s.info, font, info_w);
