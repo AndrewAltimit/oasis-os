@@ -329,6 +329,22 @@ jobs:
           cd crates/oasis-recovery-psp
           RUST_PSP_BUILD_STD=1 cargo psp --release --config "$PSP_DENY_WARNINGS"
 
+      # The other standalone PSP crates: the ME boot PRX the EBOOT loads for
+      # H.264 decode (shipped below) and the dev / research tools (devloop,
+      # PRX decryptor, USB thin client and host-mode / VBUS experiments),
+      # built so they keep compiling against the pinned rust-psp.
+      - name: Build standalone PSP crates
+        timeout-minutes: 40
+        run: |
+          for crate in oasis-me-boot oasis-devloop-psp oasis-prx-decrypt-psp \
+              oasis-usb-client-psp oasis-usb-debug-psp oasis-usb-trace-psp \
+              oasis-usb-vbus-psp; do
+            echo "::group::$crate"
+            (cd "crates/$crate" && RUST_PSP_BUILD_STD=1 cargo psp --release \
+              --config "$PSP_DENY_WARNINGS")
+            echo "::endgroup::"
+          done
+
       - name: Collect PSP artifacts
         if: always()
         run: |
@@ -339,6 +355,8 @@ jobs:
             psp-artifacts/oasis-overlay.prx 2>/dev/null || true
           cp crates/oasis-recovery-psp/target/mipsel-sony-psp-std/release/EBOOT.PBP \
             psp-artifacts/RECOVERY.PBP 2>/dev/null || true
+          cp crates/oasis-me-boot/target/mipsel-sony-psp-std/release/oasis-me-boot.prx \
+            psp-artifacts/oasis-me-boot.prx 2>/dev/null || true
           ls -la psp-artifacts/
 
       - name: Upload PSP artifacts
@@ -577,7 +595,8 @@ jobs:
           | Binary | Install Path | Description |
           |--------|-------------|-------------|
           | `OASIS-OS.PBP` | `ms0:/PSP/GAME/OASISOS/EBOOT.PBP` | Main application (sceGu rendering, TLS 1.3, ME video decode) |
-          | `oasis-overlay.prx` | `ms0:/seplugins/oasis.prx` | Kernel overlay plugin (in-game UI + background MP3) |
+          | `oasis-me-boot.prx` | `ms0:/PSP/GAME/OASISOS/oasis-me-boot.prx` | Media Engine boot module the main application loads for hardware H.264 decode |
+          | `oasis-overlay.prx` | `ms0:/seplugins/oasis_plugin.prx` | Kernel overlay plugin (in-game UI + background MP3) |
           | `RECOVERY.PBP` | `ms0:/PSP/SAVEDATA/ARK_01234/RECOVERY.PBP` | Network recovery (WiFi TCP file server for unbricking) |
 
           ### Quick Start
@@ -588,7 +607,7 @@ jobs:
           ./oasis-app-linux-*
           ```
 
-          **PSP:** Copy files to Memory Stick, add `game, ms0:/seplugins/oasis.prx, on` to `PLUGINS.TXT`. Requires ARK-4 or PRO CFW on firmware 6.61.
+          **PSP:** Copy files to Memory Stick, add `game, ms0:/seplugins/oasis_plugin.prx, on` to `PLUGINS.TXT` (the name the OASIS terminal's `plugin status` / `plugin remove` expect). Requires ARK-4 or PRO CFW on firmware 6.61.
 
           **Browser:** [Try it online](https://andrewaltimit.github.io/oasis-os/demo/) -- no install required.
 

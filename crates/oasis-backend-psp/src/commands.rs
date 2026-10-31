@@ -345,6 +345,7 @@ fn cmd_rm(trimmed: &str) -> Vec<String> {
     if path.is_empty() {
         return vec!["usage: rm <path>".into()];
     }
+    oasis_backend_psp::note_utility_dialog();
     match psp::dialog::confirm_dialog(&format!("Delete {}?", path)) {
         Ok(psp::dialog::DialogResult::Confirm) => match psp::io::remove_file(path) {
             Ok(()) => vec![format!("Deleted: {}", path)],

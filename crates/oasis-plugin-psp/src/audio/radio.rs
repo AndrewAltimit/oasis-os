@@ -319,8 +319,11 @@ pub(super) unsafe fn play_radio_stream(station_idx: u8, channel: i32) -> i32 {
     }
 
     let mut result = 0i32;
-    let mut frame_count: u32 = 0;
+    // Consecutive decode errors (reset by every decoded frame).
+    let mut decode_errors: u32 = 0;
     let mut zero_consumed: u32 = 0;
+    // The server closed the connection: no more bytes will arrive.
+    let mut closed = false;
 
     loop {
         // Check commands.
@@ -371,6 +374,7 @@ pub(super) unsafe fn play_radio_stream(station_idx: u8, channel: i32) -> i32 {
             if n <= 0 {
                 if n == 0 {
                     crate::debug_log(b"[OASIS] radio: connection closed");
+                    closed = true;
                 }
                 break;
             }
@@ -408,6 +412,13 @@ pub(super) unsafe fn play_radio_stream(station_idx: u8, channel: i32) -> i32 {
             }
         }
 
+        // Once the stream is closed, a tail too short to hold a frame
+        // header never grows: end the stream (the caller reconnects)
+        // instead of waiting on it forever.
+        if closed && buf_valid.saturating_sub(buf_pos) < 8 {
+            result = -1;
+            break;
+        }
         if buf_valid.saturating_sub(buf_pos) < 4 {
             if buf_valid == 0 {
                 result = -1;
@@ -447,17 +458,20 @@ pub(super) unsafe fn play_radio_stream(station_idx: u8, channel: i32) -> i32 {
         // SAFETY: Calling resolved sceAudiocodecDecode with valid codec buffer.
         let ret = unsafe { decode_fn(codec, CODEC_TYPE_MP3) };
         if ret < 0 {
-            frame_count += 1;
-            if frame_count > 100 {
+            decode_errors += 1;
+            if decode_errors > 100 {
                 crate::debug_log(b"[OASIS] radio: too many decode errors");
                 break;
             }
             buf_pos += 1;
             continue;
         }
+        decode_errors = 0;
 
         // SAFETY: Reading consumed byte count from codec buffer field 7.
-        let consumed = unsafe { *codec.add(7) } as usize;
+        // Clamped to the bytes handed to the decoder: a larger value would
+        // push `buf_pos` past `buf_valid` and underflow the compaction.
+        let consumed = (unsafe { *codec.add(7) } as usize).min(avail);
         if consumed == 0 {
             zero_consumed += 1;
             if zero_consumed > 100 {
@@ -497,7 +511,6 @@ pub(super) unsafe fn play_radio_stream(station_idx: u8, channel: i32) -> i32 {
                 }
             }
         }
-        frame_count += 1;
     }
 
     // Cleanup.

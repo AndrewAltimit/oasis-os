@@ -95,12 +95,21 @@ pub(super) fn parse_sps_info(sps: &[u8]) -> Option<SpsInfo> {
     reader.skip(1)?;
 
     // pic_width_in_mbs_minus1
-    let pic_width_mbs = reader.read_ue()? + 1;
+    let pic_width_mbs = reader.read_ue()?.checked_add(1)?;
     // pic_height_in_map_units_minus1
-    let pic_height_map_units = reader.read_ue()? + 1;
+    let pic_height_map_units = reader.read_ue()?.checked_add(1)?;
+    // frame_mbs_only_flag: 0 means a map unit is a field macroblock pair,
+    // so the frame is twice as tall (H.264 7.4.2.1.1, FrameHeightInMbs).
+    // Under-reporting it would let the CSC write past a texture sized
+    // from this height.
+    let frame_mbs_only = reader.read_bit()?;
 
-    let width = pic_width_mbs * 16;
-    let height = pic_height_map_units * 16;
+    // Checked: the sizes come from the stream, and a wrapped value would
+    // slip past the 480p limit the caller enforces.
+    let width = pic_width_mbs.checked_mul(16)?;
+    let height = pic_height_map_units
+        .checked_mul(2 - frame_mbs_only)?
+        .checked_mul(16)?;
 
     Some(SpsInfo {
         width,

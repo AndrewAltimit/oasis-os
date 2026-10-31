@@ -20,6 +20,7 @@ pub mod audio;
 pub mod cmd_server;
 pub mod filesystem;
 pub mod font;
+mod gu_mem;
 pub mod input;
 pub mod network;
 pub mod power;
@@ -68,8 +69,8 @@ pub use video::vlog_force;
 
 use oasis_core::backend::stacks::{ClipPush, ClipStack, TranslateStack};
 pub use oasis_core::backend::{
-    Color, SdiBackend, SdiBatch, SdiClipTransform, SdiCore, SdiGradients, SdiShapes,
-    SdiText, SdiTextures, SdiVector, TextureId,
+    Color, SdiBackend, SdiBatch, SdiClipTransform, SdiCore, SdiGradients, SdiShapes, SdiText,
+    SdiTextures, SdiVector, TextureId,
 };
 pub use oasis_core::error::{OasisError, Result as OasisResult};
 pub use oasis_core::input::{Button, InputEvent, Trigger};
@@ -84,6 +85,7 @@ pub use oasis_core::wm::window::{WindowConfig, WindowType, WmTheme};
 use std::alloc::{Layout, alloc};
 use std::ffi::c_void;
 use std::ptr;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use psp::sys::{
     self, BlendFactor, BlendOp, DisplayPixelFormat, GuContextType, GuState, GuSyncBehavior,
@@ -113,12 +115,24 @@ const BUF_WIDTH: u32 = 512;
 // 1 MB — browser pages generate thousands of GU commands (one per
 // fill_rect, per glyph, per border edge).  256 KB overflows on any
 // non-trivial HTML page, hanging sceGuSync.
-const DISPLAY_LIST_SIZE: usize = 0x100000; // 1 MB
+pub(crate) const DISPLAY_LIST_SIZE: usize = 0x100000; // 1 MB
 
 #[repr(C, align(16))]
 struct Align16<T>(T);
 
 static mut DISPLAY_LIST: Align16<[u8; DISPLAY_LIST_SIZE]> = Align16([0u8; DISPLAY_LIST_SIZE]);
+
+/// Set when a PSP utility dialog (OSK, message / error dialog, WiFi connect
+/// dialog) took over the GE; consumed by `PspBackend::reinit_gu_frame`.
+static GU_DIALOG_RAN: AtomicBool = AtomicBool::new(false);
+
+/// Record that a PSP utility dialog is about to run (or ran) its own GU
+/// frames, so the next [`PspBackend::reinit_gu_frame`] re-opens the display
+/// list. Call it next to every `psp::osk` / `psp::dialog` /
+/// `psp::net::connect_dialog` call.
+pub fn note_utility_dialog() {
+    GU_DIALOG_RAN.store(true, Ordering::Release);
+}
 
 // ---------------------------------------------------------------------------
 // Backend
@@ -333,7 +347,16 @@ impl PspBackend {
     /// settings. They do **not** restore the caller's GE state on exit.
     /// This method re-opens the display list AND re-applies every GU state
     /// that `init()` configures, so subsequent rendering works correctly.
+    ///
+    /// Does nothing unless [`note_utility_dialog`] was called since the last
+    /// reinit: a second `sceGuStart` on the display list that
+    /// `swap_buffers_inner` already opened hangs the next `sceGuSync` on real
+    /// hardware, and several callers reach this on paths where no dialog
+    /// actually ran (e.g. `ensure_net_init` failing before its dialog).
     pub fn reinit_gu_frame(&self) {
+        if !GU_DIALOG_RAN.swap(false, Ordering::AcqRel) {
+            return;
+        }
         // SAFETY: Restores the GU display list and GE rendering state
         // after a utility dialog. DISPLAY_LIST is exclusively accessed
         // from the main loop. All sceGu/sceGum calls match init().
@@ -586,7 +609,6 @@ impl SdiGradients for PspBackend {
         Ok(())
     }
 }
-
 
 impl SdiText for PspBackend {}
 impl SdiTextures for PspBackend {}

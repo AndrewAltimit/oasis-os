@@ -80,6 +80,7 @@ pub(crate) fn dispatch_app_input(
             );
         },
         InputEvent::ButtonPress(Button::Square) if *kiosk_app == KioskApp::Terminal => {
+            oasis_backend_psp::note_utility_dialog();
             match psp::osk::OskBuilder::new("Enter command")
                 .max_chars(256)
                 .initial_text(&term.input)
@@ -208,6 +209,7 @@ pub(crate) fn dispatch_app_input(
                     format!("{}/{}", panel.path, name)
                 };
                 let msg = format!("Delete {}?", name);
+                oasis_backend_psp::note_utility_dialog();
                 match psp::dialog::confirm_dialog(&msg) {
                     Ok(psp::dialog::DialogResult::Confirm) => {
                         match psp::io::remove_file(&full_path) {
@@ -384,6 +386,7 @@ pub(crate) fn dispatch_app_input(
         // -- Browser input (full oasis-browser engine) --
         InputEvent::ButtonPress(Button::Square) if *kiosk_app == KioskApp::Browser => {
             let current_url = br.url().to_string();
+            oasis_backend_psp::note_utility_dialog();
             match psp::osk::OskBuilder::new("Enter URL")
                 .max_chars(256)
                 .initial_text(&current_url)

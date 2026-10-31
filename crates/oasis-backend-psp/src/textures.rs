@@ -183,6 +183,14 @@ impl PspBackend {
                 ptr::copy_nonoverlapping(src, dst, src_stride);
             }
         }
+        // The zero fill and the CPU-copied rows went through the data cache,
+        // but the GE samples the texture through the uncached mirror
+        // (`blit_inner`), so push them to RAM before the texture is used.
+        // (Lines the DMA path wrote are already clean: no-op for them.)
+        // SAFETY: `data` is the `buf_size`-byte allocation made above.
+        unsafe {
+            psp::cache::dcache_writeback_range(data as *const std::ffi::c_void, buf_size as u32);
+        }
 
         let texture = Texture {
             width,

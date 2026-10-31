@@ -163,8 +163,8 @@ pub(super) unsafe fn http_open_with_redirect(
                 let hdr_str = core::str::from_utf8(hdrs).unwrap_or("");
                 hdr_str
                     .lines()
-                    .find(|l| l.len() > 9 && l[..9].eq_ignore_ascii_case("location:"))
-                    .and_then(|l| l.split_once(':').map(|(_, v)| v.trim().to_string()))
+                    .find_map(|l| super::header_value(l, "location:").filter(|v| !v.is_empty()))
+                    .map(str::to_string)
             } else {
                 None
             };
