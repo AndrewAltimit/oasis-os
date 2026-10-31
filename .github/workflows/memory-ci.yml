@@ -150,17 +150,24 @@ jobs:
               --massif-out-file=/app/valgrind-massif/massif.out \
               ./target/debug/video-memprofile \
               tests/fixtures/test_320x240_2s.mp4 --frames 60 \
-              --max-rss-kb 25600 \
               > /app/valgrind-massif/memprofile_stdout.txt \
               2> /app/valgrind-massif/memprofile_stderr.txt
             rc=\$?
 
             ms_print /app/valgrind-massif/massif.out \
               > /app/valgrind-massif/ms_print_report.txt 2>&1 || true
-            # valgrind exits with the profiler status (non-zero over
-            # --max-rss-kb); ms_print running last must not mask it.
+            # ms_print running last must not mask a valgrind/profiler failure.
             exit \$rc
           "
+
+      # The RSS gates run natively: under valgrind the process RSS includes
+      # valgrind itself (~54 MB for this clip vs ~11 MB natively), so a
+      # --max-rss-kb under massif can never pass.
+      - name: Peak RSS gate
+        run: |
+          docker compose --profile ci run --rm rust-ci \
+            ./target/debug/video-memprofile \
+            tests/fixtures/test_320x240_2s.mp4 --frames 60 --max-rss-kb 25600
 
       - name: Leak test (multi-loop)
         run: |
