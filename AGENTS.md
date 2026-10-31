@@ -74,6 +74,10 @@ CI runs on self-hosted runners; the Rust steps run via `docker compose --profile
 4. **Failure Handler Agent** auto-fixes CI failures, max 5 iterations
 5. Iteration tracking via `.github/actions/agent-iteration-check/` -- admins can comment `[CONTINUE]` to extend limits
 6. The `no-auto-fix` label disables the automated fix agents
+7. Both fix agents format and lint their edits before committing with the job env's
+   `AGENT_AUTOFORMAT_CMD` (`cargo fmt --all`) and `AGENT_LINT_CMD` (`cargo clippy --workspace
+   --all-targets -- -D warnings`), run in the `rust-ci` container so the toolchain matches CI;
+   set either to `""` to turn that stage off
 
 Fork PRs are blocked from the self-hosted runners (fork guard).
 

@@ -478,6 +478,12 @@ jobs:
       PR_NUMBER: ${{ github.event.pull_request.number }}
       GITHUB_TOKEN: ${{ secrets.AGENT_TOKEN }}
       GITHUB_REPOSITORY: ${{ github.repository }}
+      # Format / lint the agent's edits before committing, in the CI image so
+      # the pinned toolchain matches the clippy gate ("" turns a stage off).
+      AGENT_AUTOFORMAT_CMD: docker compose --profile ci run --rm rust-ci cargo fmt --all
+      AGENT_LINT_CMD: >-
+        docker compose --profile ci run --rm rust-ci
+        cargo clippy --workspace --all-targets -- -D warnings
     steps:
       - name: Pre-checkout cleanup
         # Earlier containers can leave root-owned files the runner user can't
@@ -578,6 +584,11 @@ jobs:
       PR_NUMBER: ${{ github.event.pull_request.number }}
       GITHUB_TOKEN: ${{ secrets.AGENT_TOKEN }}
       GITHUB_REPOSITORY: ${{ github.repository }}
+      # As in agent-review-response: format / lint in the CI image.
+      AGENT_AUTOFORMAT_CMD: docker compose --profile ci run --rm rust-ci cargo fmt --all
+      AGENT_LINT_CMD: >-
+        docker compose --profile ci run --rm rust-ci
+        cargo clippy --workspace --all-targets -- -D warnings
     steps:
       - name: Pre-checkout cleanup
         # Earlier containers can leave root-owned files the runner user can't
