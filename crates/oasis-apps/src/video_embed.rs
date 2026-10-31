@@ -512,19 +512,22 @@ impl App for VideoEmbedApp {
         match self.state {
             EmbedState::Search => {
                 let hint_y = cy + title_bar_h + SEARCH_BAR_H + 8;
-                backend.draw_text(
+                let hint_w = cw.saturating_sub(16);
+                backend.draw_text_ellipsis(
                     "Type a search query, video id, or URL.",
                     cx + 8,
                     hint_y,
                     at.font_body,
                     at.app.text,
+                    hint_w,
                 )?;
-                backend.draw_text(
+                backend.draw_text_ellipsis(
                     "Confirm = play / search   Cancel = back",
                     cx + 8,
                     hint_y + 14,
                     at.font_hint,
                     at.app.dim_text,
+                    hint_w,
                 )?;
             },
             EmbedState::Results => {
