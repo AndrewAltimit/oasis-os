@@ -142,15 +142,22 @@ directly.
 ## HTML parser
 
 - WHATWG tokenizer + tree builder (§13.2): every insertion mode except
-  the frameset and "in template" ones (template contents parse "in
-  body", with DocumentFragment-style isolation of the form pointer and
-  insertion mode), including in caption / column group / select /
-  select in table / head noscript. The active formatting list has
-  markers (cells, captions, templates, `applet` / `object` /
-  `marquee`), reconstruction and the adoption agency follow the spec,
-  and foster parenting runs the in-body rules at the "appropriate place
-  for inserting a node". Quirks mode is not modelled (`<p><table>`
-  always closes the paragraph).
+  the frameset ones, including in caption / column group / select /
+  select in table / head noscript and "in template" with its stack of
+  template insertion modes (`<template><tr><td>` builds a row; template
+  contents are the `<template>`'s children, not a DocumentFragment).
+  The active formatting list has markers (cells, captions, templates,
+  `applet` / `object` / `marquee`), reconstruction and the adoption
+  agency follow the spec (namespace-aware special category, the common
+  ancestor foster-parented out of tables), and foster parenting runs
+  the in-body rules at the "appropriate place for inserting a node".
+  `textarea`, `xmp`, `iframe`, `noembed` and (scripting on) `noscript`
+  in body fill through the `Text` mode.
+- Quirks mode: the DOCTYPE's public / system identifiers select
+  no-quirks, limited-quirks or quirks mode (`Document::quirks_mode`;
+  no DOCTYPE is quirks). The tree builder applies the one parsing
+  difference (in quirks mode `<table>` does not close an open `<p>`);
+  CSS has no quirks-mode rules.
 - Foreign content: the builder tracks each element's namespace (the DOM
   does not store it). SVG `foreignObject` / `desc` / `title`, MathML
   `annotation-xml encoding="text/html"` and the MathML text elements
@@ -185,7 +192,13 @@ directly.
   `</div>` or `</span>` cannot close an enclosing table cell.
 - Vendored-subset `html5lib-tests` harness for conformance
   (`tests/fixtures/html5lib/*.dat`, each case run through both entry
-  points).
+  points; DOCTYPE lines skipped, template `content` dumped as html5lib
+  does, `#script-off` honoured).
+- Speed: the data state emits one character token per text run (not
+  per character), and the tree builder avoids per-tag allocations;
+  `cargo bench -p oasis-html` has tokenizer, tree-builder (`build_only`
+  excludes the token clone), full-parse and pull-parser
+  (`html_pull_parse`, plain and table-heavy) benches.
 
 ## CSS cascade & selectors
 
