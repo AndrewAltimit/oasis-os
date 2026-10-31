@@ -1291,15 +1291,8 @@ mod tests {
                     "{title}: glyph top {} overlaps band ending {band_bottom}",
                     gy + y0
                 );
-                assert!(
-                    gy + y1 <= bh - 1,
-                    "{title}: glyph bottom {} past {bh}",
-                    gy + y1
-                );
-                assert!(
-                    gx + x0 >= 1 && gx + x1 <= bw - 1,
-                    "{title}: glyph x out of chip"
-                );
+                assert!(gy + y1 < bh, "{title}: glyph bottom {} past {bh}", gy + y1);
+                assert!(gx + x0 >= 1 && gx + x1 < bw, "{title}: glyph x out of chip");
             }
         }
     }
