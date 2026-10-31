@@ -87,43 +87,15 @@ jobs:
         timeout-minutes: 10
         run: docker compose --profile ci run --rm rust-ci cargo clippy --workspace --all-targets -- -D warnings
 
-      # -- Feature-combination check -----------------------------------------
-      # The workspace build only compiles oasis-app's default features
-      # (video-decode-ffmpeg). A build without any video decoder is a
-      # supported configuration and has broken before (code reading
-      # `_video`-only fields), so check it -- and the optional MCP server --
-      # explicitly.
-      - name: Check oasis-app feature combinations
-        timeout-minutes: 10
-        run: |
-          docker compose --profile ci run --rm rust-ci \
-            cargo check -p oasis-app --no-default-features --features javascript
-          docker compose --profile ci run --rm rust-ci \
-            cargo check -p oasis-app --no-default-features --features javascript,mcp
-
-      # Supported non-default feature sets that the workspace clippy never
-      # compiles (feature unification there gives oasis-browser only its
-      # defaults + javascript, and oasis-video only demux-lite + ffmpeg).
-      # Each is a single-crate clippy, so dependencies whose features don't
-      # change are reused from the workspace build.
+      # -- Feature-set checks ------------------------------------------------
+      # The oasis-app feature-combination check plus clippy over the supported
+      # non-default feature sets, none of which the workspace clippy compiles.
+      # The command list lives in the script, shared with pr-validation.yml.
+      # Each line is a single-crate build, so it reuses the workspace build's
+      # dependencies from the clippy step above.
       - name: Clippy (non-default feature sets)
-        timeout-minutes: 20
-        run: |
-          docker compose --profile ci run --rm rust-ci bash -euxc '
-            clippy() { cargo clippy --all-targets "$@" -- -D warnings; }
-            clippy -p oasis-browser --features parallel-style,webp
-            clippy -p oasis-browser --no-default-features
-            clippy -p oasis-browser --no-default-features --features psp,javascript
-            clippy -p oasis-core --no-default-features
-            clippy -p oasis-video
-            clippy -p oasis-video --features demux-lite
-            clippy -p oasis-video --features symphonia
-            clippy -p oasis-video --features h264
-            clippy -p oasis-video --all-features
-            clippy -p oasis-app --no-default-features --features video-decode
-            clippy -p oasis-ffi --features video-decode
-            clippy -p oasis-ffi --features video-decode-ffmpeg
-          '
+        timeout-minutes: 25
+        run: docker compose --profile ci run --rm rust-ci scripts/ci-feature-clippy.sh
 
       # -- Nightly Clippy (advisory) -----------------------------------------
       - name: Clippy (nightly, advisory)
@@ -131,7 +103,7 @@ jobs:
         continue-on-error: true
         run: >
           docker compose --profile ci run --rm rust-ci
-          cargo +nightly clippy --workspace --all-targets -- -D warnings 2>&1 || true
+          cargo +nightly clippy --workspace --all-targets -- -D warnings
 
       # -- Documentation Build -----------------------------------------------
       - name: Doc build
@@ -213,6 +185,7 @@ jobs:
             rust-ci scripts/run-release-bin.sh screenshot-tests
 
       - name: Screenshot regression comparison
+        timeout-minutes: 5
         if: always()
         continue-on-error: true
         run: |
@@ -246,6 +219,7 @@ jobs:
 
       # -- Benchmarks (manual) -----------------------------------------------
       - name: Benchmarks
+        timeout-minutes: 60
         if: inputs.run_benchmarks == true
         run: |
           set -o pipefail
@@ -306,6 +280,7 @@ jobs:
 
       # -- PSP Backend Build -------------------------------------------------
       - name: Check rust-psp pins
+        timeout-minutes: 2
         run: scripts/check-rust-psp-rev.sh "$RUST_PSP_REV"
 
       # Stdlib-only unit tests for the PSP remote tool (scripts/psp_remote.py).
@@ -315,11 +290,13 @@ jobs:
         run: python3 -m unittest discover -s scripts -p "test_*.py" -v
 
       - name: Install cargo-psp
+        timeout-minutes: 30
         uses: ./.github/actions/install-cargo-psp
         with:
           rev: ${{ env.RUST_PSP_REV }}
 
       - name: Build PSP EBOOT
+        timeout-minutes: 30
         run: |
           cd crates/oasis-backend-psp
           RUST_PSP_BUILD_STD=1 cargo psp --release --config "$PSP_DENY_WARNINGS"
@@ -330,6 +307,7 @@ jobs:
       # stripped file is the release artifact and is held to a size budget
       # (see docs/psp-plugin.md, Memory Budget).
       - name: Build PSP Plugin PRX
+        timeout-minutes: 20
         env:
           PRX_SIZE_BUDGET: 196608 # 192 KiB; v1.4.0 strips to ~153 KiB
         run: |
@@ -346,6 +324,7 @@ jobs:
           fi
 
       - name: Build PSP Recovery EBOOT
+        timeout-minutes: 20
         run: |
           cd crates/oasis-recovery-psp
           RUST_PSP_BUILD_STD=1 cargo psp --release --config "$PSP_DENY_WARNINGS"
@@ -375,6 +354,7 @@ jobs:
       # Boots OASIS-OS (normal boot + built-in self-test) and the recovery
       # EBOOT; fails on a crash, an early exit or missing boot markers.
       - name: PSP smoke test (PPSSPPHeadless)
+        timeout-minutes: 15
         env:
           PSP_SMOKE_WORKDIR: ${{ runner.temp }}/psp-smoke
         run: scripts/psp-smoke-test.sh
@@ -456,6 +436,7 @@ jobs:
         run: mkdir -p release-binaries
 
       - name: Build oasis-app and oasis-ffi binaries (release) via container
+        timeout-minutes: 35
         run: |
           ARCH=$(uname -m)
           echo "Building oasis_os binaries for linux-${ARCH}..."
@@ -541,7 +522,7 @@ jobs:
       - name: Determine version
         id: version
         run: |
-          if [[ "${{ github.ref }}" == refs/tags/v* ]]; then
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
             VERSION="${GITHUB_REF#refs/tags/}"
           else
             VERSION="v$(date +%Y.%m.%d)-$(echo ${{ github.sha }} | cut -c1-7)"
@@ -661,12 +642,14 @@ jobs:
         uses: actions/checkout@v7
 
       - name: Install wasm-pack
+        timeout-minutes: 5
         run: |
           if ! command -v wasm-pack &>/dev/null; then
             curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
           fi
 
       - name: Build WASM
+        timeout-minutes: 20
         run: ./scripts/build-wasm.sh --release
 
       - name: Assemble site
