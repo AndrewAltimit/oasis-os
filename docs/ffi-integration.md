@@ -28,6 +28,7 @@ host:
 | pointer (`oasis_create*`, `oasis_send_command`, `oasis_get_buffer`) | `NULL` |
 | `uint64_t` (`oasis_audio_load`) | `UINT64_MAX` |
 | `uint8_t` (`oasis_audio_get_volume`) | `0` |
+| `uint32_t` (`oasis_audio_drain_stream`, `oasis_audio_stream_buffered`) | `0` |
 | `int32_t` (`oasis_video_*`) | `-1` (`oasis_video_is_playing`: `0`) |
 
 The handle is **not poisoned** by a caught panic: it stays valid and later
@@ -327,6 +328,19 @@ void oasis_register_callback(
     OasisCallback cb
 );
 
+/* The same with a host context pointer: user_data (e.g. the owning
+ * UObject / component) is passed back unchanged on every call and never
+ * dereferenced by the library. It must stay valid until the event is
+ * re-registered or unregistered, or the handle is destroyed. Either
+ * registration replaces one made with the other. */
+typedef void (*OasisCallbackEx)(uint32_t event, const char* detail, void* user_data);
+void oasis_register_callback_ex(
+    OasisInstance* handle,
+    uint32_t event,
+    OasisCallbackEx cb,
+    void* user_data
+);
+
 /* ----------------------------------------------------------------
  * Audio
  * ---------------------------------------------------------------- */
@@ -343,10 +357,9 @@ void oasis_register_callback(
 #define OASIS_AUDIO_TRACK_LOADED   5
 #define OASIS_AUDIO_TRACK_UNLOADED 6
 #define OASIS_AUDIO_SHUTDOWN       7
-/* Streaming tracks (internet radio): the encoded bytes are buffered in the
- * instance (1 MiB cap, MAX_STREAM_BUFFER) for the host to pull.
- * Ue5AudioBackend::drain_stream() is the Rust-side drain; it has no C
- * export yet. */
+/* Streaming tracks (internet radio): the encoded bytes (e.g. MP3) are
+ * buffered in the instance (1 MiB cap, MAX_STREAM_BUFFER) for the host to
+ * pull with oasis_audio_drain_stream() below. */
 #define OASIS_AUDIO_STREAM_OPENED  8
 #define OASIS_AUDIO_STREAM_DATA    9  /* value = bytes waiting to be drained */
 #define OASIS_AUDIO_STREAM_END     10 /* source ended; drain the rest */
@@ -356,6 +369,21 @@ typedef void (*OasisAudioCallback)(uint32_t event, uint64_t track_id, uint32_t v
 
 /* Passing NULL unregisters the callback. */
 void oasis_set_audio_callback(OasisInstance* handle, OasisAudioCallback cb);
+
+/* The same with a host context pointer passed back unchanged (see
+ * oasis_register_callback_ex). Replaces a callback set with either. */
+typedef void (*OasisAudioCallbackEx)(uint32_t event, uint64_t track_id,
+                                     uint32_t value, void* user_data);
+void oasis_set_audio_callback_ex(OasisInstance* handle, OasisAudioCallbackEx cb,
+                                 void* user_data);
+
+/* Move up to buf_len buffered stream bytes into buf; returns the number
+ * written (0 when nothing is waiting, or for a NULL handle / buffer).
+ * Call it after STREAM_DATA / STREAM_END -- outside the callback, which
+ * must not re-enter the API. */
+uint32_t oasis_audio_drain_stream(OasisInstance* handle, uint8_t* buf, uint32_t buf_len);
+/* Stream bytes waiting to be drained. */
+uint32_t oasis_audio_stream_buffered(OasisInstance* handle);
 
 /* Load audio data; returns a track ID, or UINT64_MAX on failure.
  * Volume is clamped to 0-100 (VOLUME_CHANGE reports the clamped value);
@@ -378,7 +406,10 @@ bool oasis_audio_is_playing(OasisInstance* handle);
 /* Start software video playback from a local file path.
  *
  * path: Path to an MP4 file on disk.
- * Spawns a background decode thread. Poll frames with oasis_video_next_frame.
+ * Spawns a background decode thread paced to the wall clock: each frame
+ * becomes available at its presentation time, and audio is decoded about
+ * 0.5 s ahead, so a host polling once per frame neither races through the
+ * video nor loses audio. Poll frames with oasis_video_next_frame.
  * Returns 0 on success, -1 on error. A file that fails to open or decode
  * leaves the current playback (if any) running.
  */
@@ -410,10 +441,19 @@ int32_t oasis_video_next_frame(OasisInstance* handle, uint8_t* buf,
 /* Drain decoded audio samples into a host buffer.
  *
  * Copies interleaved f32 PCM into buf, up to max_samples floats.
- * Returns: number of samples copied, or -1 on error.
+ * Returns: number of samples copied, or -1 on error. About 128 chunks
+ * (several seconds) are held; if the host stops draining, the oldest are
+ * dropped.
  */
 int32_t oasis_video_get_audio(OasisInstance* handle, float* buf,
                               uint32_t max_samples);
+
+/* The PCM layout oasis_video_get_audio delivers: sample rate in Hz and
+ * channel count (samples interleaved per channel). Returns 0 and writes
+ * both (either pointer may be NULL); -1 when nothing is playing or the
+ * file has no audio track. */
+int32_t oasis_video_audio_format(OasisInstance* handle, uint32_t* out_rate,
+                                 uint32_t* out_channels);
 
 #ifdef __cplusplus
 }
@@ -505,7 +545,27 @@ void on_app_launch(uint32_t event, const char* detail) {
 oasis_register_callback(os, OASIS_CB_APP_LAUNCH, on_app_launch);
 ```
 
-### 6. Cleanup
+C++ hosts usually want their own object back in the callback; the `_ex`
+registrations carry a `void* user_data` for that:
+
+```cpp
+static void OnOasisEvent(uint32_t Event, const char* Detail, void* UserData) {
+    static_cast<UOasisComponent*>(UserData)->HandleEvent(Event, Detail);
+}
+oasis_register_callback_ex(Oasis, OASIS_CB_APP_LAUNCH, OnOasisEvent, this);
+oasis_set_audio_callback_ex(Oasis, OnOasisAudio, this);
+```
+
+### 6. Streamed Audio and Video Audio
+
+Internet radio reaches the host as encoded bytes: on `OASIS_AUDIO_STREAM_DATA`
+or `OASIS_AUDIO_STREAM_END`, note that data is waiting, then (after the
+callback returns) pull it with `oasis_audio_drain_stream(os, buf, len)` and
+feed it to the engine's decoder. Video audio is decoded PCM: query its layout
+once with `oasis_video_audio_format(os, &rate, &channels)` and pull samples
+each frame with `oasis_video_get_audio`.
+
+### 7. Cleanup
 
 ```c
 oasis_destroy(os);

@@ -7,7 +7,7 @@
 
 use super::types::{
     self, Combinator, CompoundSelector, ContainerCondition, Rule, ScopeCondition, Selector,
-    SelectorList,
+    SelectorList, SimpleSelector,
 };
 
 /// Most selectors one flattened rule may carry. Nesting combines parent
@@ -20,6 +20,11 @@ const MAX_FLATTENED_SELECTORS: usize = 1024;
 /// in the whole parent chain, so `& & &{& & &{...` grows geometrically.
 /// Longer selectors are dropped from their list.
 const MAX_SELECTOR_COMPOUNDS: usize = 64;
+
+/// Most compounds (including those nested in `:is()` & co.) a selector
+/// may reach once `&`s inside functional pseudo-classes are replaced by
+/// `:is(parent)`.
+const MAX_SUBSTITUTED_COMPOUNDS: usize = 1024;
 
 /// The selector list `&`: the parent selector. Bare declarations in a
 /// nested at-rule (`.a { @media (..) { color: red } }`) become a nested
@@ -129,6 +134,22 @@ fn combine_selector_lists(parent: &SelectorList, child: &SelectorList) -> Option
 /// `parent <descendant> child`. `None` when the result would have more
 /// than [`MAX_SELECTOR_COMPOUNDS`] compounds.
 fn combine_parent_child(parent: &Selector, child: &Selector) -> Option<Selector> {
+    // `&` inside a functional pseudo-class (`:where(& > p)`,
+    // `:not(&.x)`) stands for the parent too: substitute `:is(parent)`.
+    // Such a child is not prefixed with an implicit `& `.
+    let mut inner_nest = false;
+    let substituted;
+    let child = if selector_has_inner_nest(child) {
+        inner_nest = true;
+        substituted = substitute_inner_nest(child, parent);
+        // `:is(&, &)` per level would otherwise grow exponentially.
+        if compound_count(&substituted) > MAX_SUBSTITUTED_COMPOUNDS {
+            return None;
+        }
+        &substituted
+    } else {
+        child
+    };
     let nests = child
         .parts
         .iter()
@@ -142,6 +163,9 @@ fn combine_parent_child(parent: &Selector, child: &Selector) -> Option<Selector>
         return None;
     }
 
+    if nests == 0 && inner_nest {
+        return Some(child.clone());
+    }
     if nests == 0 {
         // Implicit `& descendant`: prepend parent chain before child,
         // with a descendant combinator linking them.
@@ -208,4 +232,82 @@ fn combine_parent_child(parent: &Selector, child: &Selector) -> Option<Selector>
     }
 
     Some(Selector { parts: out })
+}
+
+/// The selectors nested inside a functional pseudo-class.
+fn inner_selectors(simple: &SimpleSelector) -> Box<dyn Iterator<Item = &Selector> + '_> {
+    match simple {
+        SimpleSelector::Not(l) | SimpleSelector::Is(l) | SimpleSelector::Where(l) => {
+            Box::new(l.iter())
+        },
+        SimpleSelector::Has(l) => Box::new(l.iter().map(|(_, s)| s)),
+        _ => Box::new(std::iter::empty()),
+    }
+}
+
+/// Compounds in `sel`, counting those inside functional pseudo-classes.
+fn compound_count(sel: &Selector) -> usize {
+    sel.parts
+        .iter()
+        .map(|(c, _)| {
+            1 + c
+                .parts
+                .iter()
+                .flat_map(inner_selectors)
+                .map(compound_count)
+                .sum::<usize>()
+        })
+        .sum()
+}
+
+/// True if `sel` has a `&` anywhere inside a functional pseudo-class.
+fn selector_has_inner_nest(sel: &Selector) -> bool {
+    fn contains_nest(sel: &Selector) -> bool {
+        sel.parts
+            .iter()
+            .flat_map(|(c, _)| &c.parts)
+            .any(|s| matches!(s, SimpleSelector::Nest) || inner_selectors(s).any(contains_nest))
+    }
+    sel.parts
+        .iter()
+        .flat_map(|(c, _)| &c.parts)
+        .any(|s| inner_selectors(s).any(contains_nest))
+}
+
+/// `sel` with every `&` inside a functional pseudo-class replaced by
+/// `:is(parent)` (top-level `&`s are left for the splicing above).
+fn substitute_inner_nest(sel: &Selector, parent: &Selector) -> Selector {
+    fn in_selector(sel: &Selector, parent: &Selector, top: bool) -> Selector {
+        let parts = sel
+            .parts
+            .iter()
+            .map(|(compound, comb)| {
+                let parts = compound
+                    .parts
+                    .iter()
+                    .map(|s| in_simple(s, parent, top))
+                    .collect();
+                (CompoundSelector { parts }, comb.clone())
+            })
+            .collect();
+        Selector { parts }
+    }
+    fn in_simple(simple: &SimpleSelector, parent: &Selector, top: bool) -> SimpleSelector {
+        let list = |l: &[Selector]| -> Vec<Selector> {
+            l.iter().map(|s| in_selector(s, parent, false)).collect()
+        };
+        match simple {
+            SimpleSelector::Nest if !top => SimpleSelector::Is(vec![parent.clone()]),
+            SimpleSelector::Not(l) => SimpleSelector::Not(list(l)),
+            SimpleSelector::Is(l) => SimpleSelector::Is(list(l)),
+            SimpleSelector::Where(l) => SimpleSelector::Where(list(l)),
+            SimpleSelector::Has(l) => SimpleSelector::Has(
+                l.iter()
+                    .map(|(c, s)| (c.clone(), in_selector(s, parent, false)))
+                    .collect(),
+            ),
+            other => other.clone(),
+        }
+    }
+    in_selector(sel, parent, true)
 }

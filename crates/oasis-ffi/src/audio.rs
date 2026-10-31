@@ -3,7 +3,7 @@
 use oasis_core::backend::AudioBackend;
 
 use crate::handle::{OasisInstance, ffi_guard, with_instance, with_instance_ref};
-use crate::types::OasisAudioCallback;
+use crate::types::{OasisAudioCallback, OasisAudioCallbackEx};
 
 /// Register an audio event callback.
 ///
@@ -28,6 +28,86 @@ pub unsafe extern "C" fn oasis_set_audio_callback(
                 Some(cb) => instance.audio.set_callback(cb),
                 None => instance.audio.clear_callback(),
             });
+        }
+    })
+}
+
+/// [`oasis_set_audio_callback`] for a callback that also receives
+/// `user_data` (any host pointer, e.g. the audio component; passed back
+/// unchanged and never dereferenced). Replaces a callback set with either
+/// export; null `cb` unregisters.
+///
+/// # Safety
+///
+/// `handle` must be null or valid. `cb` must be null or a valid function
+/// pointer. `user_data` must stay valid for as long as `cb` may use it.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn oasis_set_audio_callback_ex(
+    handle: *mut OasisInstance,
+    cb: Option<OasisAudioCallbackEx>,
+    user_data: *mut std::ffi::c_void,
+) {
+    ffi_guard("oasis_set_audio_callback_ex", (), || {
+        // SAFETY: Caller guarantees `handle` is valid and non-null per function safety contract.
+        unsafe {
+            with_instance(handle, (), |instance| match cb {
+                Some(cb) => instance.audio.set_callback_ex(cb, user_data),
+                None => instance.audio.clear_callback(),
+            });
+        }
+    })
+}
+
+/// Pull streamed (internet radio) audio bytes into `buf`.
+///
+/// Streaming tracks carry encoded bytes (e.g. MP3) the host never loaded
+/// itself. They are buffered (up to 1 MiB) and announced through the audio
+/// callback: `StreamOpened` (8), `StreamData` (9, `value` = bytes waiting)
+/// and `StreamEnd` (10). Call this after those events -- outside the
+/// callback, which must not re-enter the API -- to move up to `buf_len`
+/// bytes into `buf`. Returns the number of bytes written (0 when nothing
+/// is buffered, or for a null handle / buffer).
+///
+/// # Safety
+///
+/// `handle` must be null or valid. `buf` must be null or valid for
+/// `buf_len` writable bytes.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn oasis_audio_drain_stream(
+    handle: *mut OasisInstance,
+    buf: *mut u8,
+    buf_len: u32,
+) -> u32 {
+    ffi_guard("oasis_audio_drain_stream", 0, || {
+        if buf.is_null() || buf_len == 0 {
+            return 0;
+        }
+        // SAFETY: Caller guarantees `buf` is valid for `buf_len` writable
+        // bytes; null was checked above.
+        let out = unsafe { std::slice::from_raw_parts_mut(buf, buf_len as usize) };
+        // SAFETY: Caller guarantees `handle` is valid and non-null per function safety contract.
+        unsafe {
+            with_instance(handle, 0, |instance| {
+                // `n <= buf_len`, so it fits a u32.
+                instance.audio.drain_stream_into(out) as u32
+            })
+        }
+    })
+}
+
+/// Bytes of streamed audio waiting for [`oasis_audio_drain_stream`].
+///
+/// # Safety
+///
+/// `handle` must be null or valid.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn oasis_audio_stream_buffered(handle: *mut OasisInstance) -> u32 {
+    ffi_guard("oasis_audio_stream_buffered", 0, || {
+        // SAFETY: Caller guarantees `handle` is valid and non-null per function safety contract.
+        unsafe {
+            with_instance_ref(handle, 0, |instance| {
+                u32::try_from(instance.audio.stream_buffered()).unwrap_or(u32::MAX)
+            })
         }
     })
 }

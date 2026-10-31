@@ -152,17 +152,21 @@ delays legitimate clients -- the trade-off for bounding online guessing.
 
 ### PSP dev servers
 
-The two PSP development servers on TCP 9293 speak the same handshake
+The three PSP development servers on TCP 9293 speak the same handshake
 (steps 1-4, with `AUTH_OK\n` and no prompt), then the one-command-per-
-connection protocol they always had. Both are off unless a key is
-configured, and neither has an unauthenticated mode:
+connection protocol they always had. None accepts a command without a
+configured key, and none has an unauthenticated mode:
 
 | Server | Enabled by | Key | Host client |
 |--------|-----------|-----|-------------|
 | EBOOT command server (`oasis-backend-psp/src/cmd_server/`) | `ms0:/PSP/GAME/OASISOS/cmdserver.key` exists with 8+ bytes | that file, trimmed | `scripts/psp_remote.py` (`PSP_PSK`) |
+| Recovery EBOOT file server (`oasis-recovery-psp/src/auth.rs`) | always listens once WiFi connects; refuses every connection (`AUTH_FAIL no key`) without a key | `ms0:/PSP/SAVEDATA/ARK_01234/oasis-recovery.key`, else `ms0:/PSP/GAME/OASISOS/cmdserver.key` (both trimmed, 8+ bytes) | `scripts/psp_remote.py` (`PSP_PSK`) |
 | Overlay PRX devloop (`oasis-plugin-psp/src/devloop.rs`) | `devloop = true` **and** `devloop_psk` (8+ bytes) in `ms0:/seplugins/oasis.ini` | `devloop_psk` | `psp_remote.PspConnection(psk=...).send_command("launch ms0:/...")` |
 
-The EBOOT verifies with `oasis_net::verify_auth_line`; the PRX, which
+Recovery mode exists for when the shell is broken, so its key lookup reads
+only those two plain files -- its own first, kept beside `RECOVERY.PBP` and
+outside the shell's directory -- and never the shell's config. The EBOOT and
+the recovery EBOOT verify with `oasis_net::verify_auth_line`; the PRX, which
 cannot link std crates, carries a bounded one-shot SHA-256 / HMAC copy
 (`oasis-plugin-psp/src/auth.rs`). Nonces condense the RTC / system timer,
 a counter and the previous nonce with SHA-256 (the PSP has no OS entropy

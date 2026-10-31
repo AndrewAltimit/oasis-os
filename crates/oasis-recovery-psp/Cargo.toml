@@ -19,6 +19,12 @@ license = "MIT"
 
 [dependencies]
 psp = { git = "https://github.com/AndrewAltimit/rust-psp", rev = "e4cc06f6fa50fa45dc3ae8b332e8a2b67625f588", features = ["std"] }
+# The PSK challenge-response (src/auth.rs): `verify_auth_line` is the exact
+# check the EBOOT command server and the desktop remote terminal run, and
+# oasis-types' SHA-256 condenses the nonces. Both are pure Rust with no
+# platform code, so they cost the recovery EBOOT only what LTO keeps.
+oasis-net = { path = "../oasis-net" }
+oasis-types = { path = "../oasis-types" }
 
 # No `[patch.crates-io] unicode-width`: nothing in the graph uses it (see
 # crates/oasis-backend-psp/Cargo.toml for the workaround if that changes).

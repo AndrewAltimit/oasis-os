@@ -151,7 +151,7 @@
     "video-decode",
     "video-decode-ffmpeg"
    ],
-   "loc": 3979,
+   "loc": 4505,
    "files": 13,
    "deps": [
     {
@@ -894,8 +894,8 @@
     "scripting",
     "web-fonts"
    ],
-   "loc": 30035,
-   "files": 45,
+   "loc": 30292,
+   "files": 46,
    "deps": [
     {
      "name": "oasis-html",
@@ -1458,7 +1458,7 @@
    "features": [
     "wasm-youtube"
    ],
-   "loc": 9582,
+   "loc": 9585,
    "files": 26,
    "deps": [
     {
@@ -1511,7 +1511,7 @@
    "crate_type": [],
    "bins": [],
    "features": [],
-   "loc": 2685,
+   "loc": 2769,
    "files": 5,
    "deps": [
     {
@@ -1554,7 +1554,7 @@
     "kernel-mode",
     "kernel-volatile"
    ],
-   "loc": 21722,
+   "loc": 21747,
    "files": 68,
    "deps": [
     {
@@ -1619,9 +1619,18 @@
     "oasis-recovery-psp"
    ],
    "features": [],
-   "loc": 471,
-   "files": 1,
-   "deps": []
+   "loc": 648,
+   "files": 2,
+   "deps": [
+    {
+     "name": "oasis-net",
+     "kind": "normal"
+    },
+    {
+     "name": "oasis-types",
+     "kind": "normal"
+    }
+   ]
   },
   {
    "name": "oasis-devloop-psp",

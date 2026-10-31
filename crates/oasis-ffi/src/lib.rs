@@ -18,7 +18,8 @@
 //!   caller until passed to `oasis_free_string` (exactly once). The
 //!   framebuffer from `oasis_get_buffer` is borrowed: valid until the next
 //!   `oasis_tick` or `oasis_destroy` on that handle.
-//! - **Callbacks** (`oasis_register_callback`, `oasis_set_audio_callback`)
+//! - **Callbacks** (`oasis_register_callback`, `oasis_set_audio_callback`
+//!   and their `_ex` forms, which also pass back a host `user_data` pointer)
 //!   may be null, which unregisters. They run synchronously inside the
 //!   `oasis_*` call that fired them, on the caller's thread. A call they
 //!   make back into the API with the same handle (the instance is
