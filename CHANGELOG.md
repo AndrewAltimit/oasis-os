@@ -4,6 +4,17 @@ Notable changes to OASIS_OS. GitHub releases (tags `v1.1.0` ... `v1.5.0`)
 carry generated notes listing every merged PR; this file summarizes the
 larger changes by area. Breaking API changes are marked **(breaking)**.
 
+## Unreleased -- overhaul 3
+
+### CI and tooling
+
+- PR validation now runs the feature-set checks main runs (the `oasis-app`
+  feature combinations and clippy over the non-default feature sets of
+  `oasis-browser`, `oasis-core`, `oasis-video`, `oasis-app`, `oasis-ffi`),
+  from one shared `scripts/ci-feature-clippy.sh`, so a PR can no longer
+  pass and then break main. The script runs every line and reports all
+  failures at once; `--list` prints the commands.
+
 ## Unreleased -- overhaul (`overhaul/site-code-docs-2026-10`)
 
 A repository-wide cleanup: bug fixes from a full code review and an

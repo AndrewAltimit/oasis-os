@@ -7,6 +7,9 @@ on:
     - cron: "0 3 * * *"
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 concurrency:
   group: fuzz-${{ github.ref }}
   cancel-in-progress: true
@@ -38,7 +41,10 @@ jobs:
 
       - name: Run fuzzer (${{ matrix.target }})
         working-directory: crates/oasis-core/fuzz
+        # pipefail: without it `| tee` hides a fuzz build failure or a crash
+        # exit, and the crash check below only looks at artifacts/.
         run: |
+          set -o pipefail
           cargo +nightly fuzz run ${{ matrix.target }} -- \
             -max_total_time=60 \
             -max_len=4096 \

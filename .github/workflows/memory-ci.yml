@@ -153,9 +153,13 @@ jobs:
               --max-rss-kb 25600 \
               > /app/valgrind-massif/memprofile_stdout.txt \
               2> /app/valgrind-massif/memprofile_stderr.txt
+            rc=\$?
 
             ms_print /app/valgrind-massif/massif.out \
               > /app/valgrind-massif/ms_print_report.txt 2>&1 || true
+            # valgrind exits with the profiler status (non-zero over
+            # --max-rss-kb); ms_print running last must not mask it.
+            exit \$rc
           "
 
       - name: Leak test (multi-loop)

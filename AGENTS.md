@@ -66,7 +66,7 @@ cargo run -p oasis-app --bin oasis-screenshot
 
 CI runs on self-hosted runners; the Rust steps run via `docker compose --profile ci run --rm rust-ci`. The step-by-step order of `main-ci.yml` (push to `main`) and of the checks in `pr-validation.yml` is kept in one place, [CLAUDE.md § CI Pipeline Order](CLAUDE.md#ci-pipeline-order).
 
-**`pr-validation.yml` (pull requests):** a subset of the `main-ci.yml` checks (with a benchmark regression gate), plus:
+**`pr-validation.yml` (pull requests):** a subset of the `main-ci.yml` checks, including the feature-set checks (`scripts/ci-feature-clippy.sh`, the same script main runs, so a PR cannot pass what breaks main) and, on manual dispatch, a benchmark regression gate; plus:
 
 1. Claude Code security review and Claude Code quality review
 2. OpenRouter general review (advisory, `continue-on-error`)
