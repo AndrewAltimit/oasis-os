@@ -63,6 +63,10 @@ pub struct FileManagerApp {
     /// Wall time since the panels were last compared against the VFS
     /// (see [`FileManagerApp::rescan`]).
     pub(crate) rescan_elapsed_ms: u32,
+    /// The character of a printable key the menu bar consumed (Space
+    /// activating an item): the host still delivers its `TextInput`,
+    /// which must not reach the dialog the item opened.
+    pub(crate) swallow_text: Option<char>,
 }
 
 /// How often open panels re-list their directory to pick up changes made
@@ -93,6 +97,7 @@ impl FileManagerApp {
             last_click_tile: None,
             pending_navigation: None,
             rescan_elapsed_ms: 0,
+            swallow_text: None,
         }
     }
 
