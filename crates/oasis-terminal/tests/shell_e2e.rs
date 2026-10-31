@@ -1270,13 +1270,47 @@ fn fd_redirect_forms() {
     let mut sh = Shell::memory();
     // `>&2` sends output to stderr: shown, unless stderr is redirected.
     assert_eq!(sh.ok("echo err >&2"), "err");
-    assert_eq!(sh.ok("echo err >&2 2>/tmp/e"), "");
+    assert_eq!(sh.ok("echo err 2>/tmp/e >&2"), "");
     assert_eq!(sh.ok("cat /tmp/e"), "err");
     sh.ok("echo both &> /tmp/b");
     assert_eq!(sh.ok("cat /tmp/b"), "both");
     // A redirect target is one word; later words are arguments.
     sh.ok("echo a > /tmp/f b");
     assert_eq!(sh.ok("cat /tmp/f"), "a b");
+}
+
+#[test]
+fn redirections_apply_left_to_right() {
+    let mut sh = Shell::memory();
+    // `2>&1 > f`: stderr goes where stdout pointed *before* `> f` (the
+    // terminal); only stdout lands in the file.
+    let shown = sh.ok("nosuchcmd 2>&1 > /tmp/o");
+    assert!(shown.contains("nosuchcmd"), "{shown}");
+    assert_eq!(sh.ok("cat /tmp/o"), "");
+    // `> f 2>&1`: both streams land in the file.
+    assert_eq!(sh.ok("nosuchcmd > /tmp/o 2>&1"), "");
+    assert!(sh.ok("cat /tmp/o").contains("nosuchcmd"));
+    // `>&2 2> f`: stdout follows the old stderr (the terminal).
+    assert_eq!(sh.ok("echo out >&2 2>/tmp/e"), "out");
+    assert_eq!(sh.ok("cat /tmp/e"), "");
+    // An overridden `> a` is still truncated, as in a POSIX shell.
+    sh.ok("echo old > /tmp/a");
+    sh.ok("echo new > /tmp/a > /tmp/b");
+    assert_eq!(sh.ok("cat /tmp/a"), "");
+    assert_eq!(sh.ok("cat /tmp/b"), "new");
+}
+
+#[test]
+fn here_strings_feed_stdin() {
+    let mut sh = Shell::memory();
+    assert_eq!(sh.ok("cat <<< hello"), "hello");
+    sh.ok("set W=world");
+    assert_eq!(sh.ok("cat <<< \"hi $W\""), "hi world");
+    assert_eq!(sh.ok("cat <<<'a b' > /tmp/h"), "");
+    assert_eq!(sh.ok("cat /tmp/h"), "a b");
+    // Here-documents are not supported, and say so.
+    let err = sh.run("cat << EOF").unwrap_err();
+    assert!(err.contains("not supported"), "{err}");
 }
 
 #[test]
