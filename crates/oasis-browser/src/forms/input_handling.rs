@@ -119,11 +119,19 @@ impl FormManager {
         // whole match.
         let kind = ElementKind::of(&form.elements[elem_idx]);
 
-        match kind {
+        let action = match kind {
             ElementKind::TextInput { maxlength } => {
                 Self::handle_text_on_form(&key, form, elem_idx, maxlength)
             },
-            ElementKind::TextArea => Self::handle_text_on_form(&key, form, elem_idx, None),
+            // Enter in a textarea is a newline, never a submit.
+            ElementKind::TextArea => {
+                let key = if key == FormKey::Enter {
+                    FormKey::Char('\n')
+                } else {
+                    key
+                };
+                Self::handle_text_on_form(&key, form, elem_idx, None)
+            },
             ElementKind::Checkbox => match key {
                 FormKey::Space | FormKey::Enter => {
                     if let FormElement::Checkbox { checked, .. } = &mut form.elements[elem_idx] {
@@ -185,15 +193,26 @@ impl FormManager {
             },
             ElementKind::ResetButton => match key {
                 FormKey::Space | FormKey::Enter => {
-                    let defaults = form.defaults.clone();
-                    form.elements = defaults;
-                    form.cursor = 0;
+                    form.reset();
                     FormAction::ValueChanged
                 },
                 _ => FormAction::None,
             },
             ElementKind::Hidden => FormAction::None,
+        };
+
+        // Keyboard submission (Enter in a field, Confirm on a submit
+        // button) validates like a click does: it used to submit an
+        // empty `required` form.
+        if matches!(action, FormAction::Submit(_)) {
+            let errors = super::validation::validate_form(&self.forms[fi].elements);
+            if !errors.is_empty() {
+                self.validation_errors = errors;
+                return FormAction::None;
+            }
+            self.validation_errors.clear();
         }
+        action
     }
 
     /// Handle a text key for a text input / textarea at `elem_idx`

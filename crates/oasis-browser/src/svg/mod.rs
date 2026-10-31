@@ -27,8 +27,9 @@ mod tests;
 
 pub use paint::paint_svg;
 pub use parse::{parse_svg, parse_svg_with_styles};
-// Canvas 2D (behind `javascript` + `canvas`) shares the colour parser and the
-// Bezier flattening.
+// Canvas 2D shares the path point budget, and (behind `javascript` +
+// `canvas`) the colour parser and the Bezier flattening.
+pub(crate) use path::MAX_PATH_POINTS;
 #[cfg_attr(
     not(all(feature = "javascript", feature = "canvas")),
     allow(unused_imports)

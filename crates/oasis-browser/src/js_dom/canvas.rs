@@ -29,7 +29,7 @@ pub fn install_canvas_bindings(
                     if let Some(state) = map.get(&(nid as NodeId)) {
                         let mut s = state.borrow_mut();
                         let color = s.fill_color;
-                        s.commands.push(crate::canvas::CanvasCommand::FillRect {
+                        s.push_command(crate::canvas::CanvasCommand::FillRect {
                             x: x as f32,
                             y: y as f32,
                             w: w as f32,
@@ -55,7 +55,7 @@ pub fn install_canvas_bindings(
                         let mut s = state.borrow_mut();
                         let color = s.stroke_color;
                         let lw = s.line_width;
-                        s.commands.push(crate::canvas::CanvasCommand::StrokeRect {
+                        s.push_command(crate::canvas::CanvasCommand::StrokeRect {
                             x: x as f32,
                             y: y as f32,
                             w: w as f32,
@@ -80,7 +80,7 @@ pub fn install_canvas_bindings(
                     let map = m.borrow();
                     if let Some(state) = map.get(&(nid as NodeId)) {
                         let mut s = state.borrow_mut();
-                        s.commands.push(crate::canvas::CanvasCommand::ClearRect {
+                        s.push_command(crate::canvas::CanvasCommand::ClearRect {
                             x: x as f32,
                             y: y as f32,
                             w: w as f32,
@@ -105,7 +105,7 @@ pub fn install_canvas_bindings(
                         let mut s = state.borrow_mut();
                         let color = s.fill_color;
                         let font_size = s.font_size;
-                        s.commands.push(crate::canvas::CanvasCommand::FillText {
+                        s.push_command(crate::canvas::CanvasCommand::FillText {
                             text,
                             x: x as f32,
                             y: y as f32,
@@ -203,7 +203,7 @@ pub fn install_canvas_bindings(
                             s.stroke_color
                         };
                         let lw = s.line_width;
-                        s.commands.push(crate::canvas::CanvasCommand::Line {
+                        s.push_command(crate::canvas::CanvasCommand::Line {
                             x1: x1 as f32,
                             y1: y1 as f32,
                             x2: x2 as f32,
@@ -229,7 +229,7 @@ pub fn install_canvas_bindings(
                     if let Some(state) = map.get(&(nid as NodeId)) {
                         let mut s = state.borrow_mut();
                         let color = if fill { s.fill_color } else { s.stroke_color };
-                        s.commands.push(crate::canvas::CanvasCommand::Arc {
+                        s.push_command(crate::canvas::CanvasCommand::Arc {
                             cx: cx as f32,
                             cy: cy as f32,
                             r: r as f32,
@@ -268,7 +268,7 @@ pub fn install_canvas_bindings(
                 if let Some(state) = map.get(&(nid as NodeId)) {
                     let mut s = state.borrow_mut();
                     let pt = (x as f32, y as f32);
-                    s.current_path.push(pt);
+                    s.push_path_point(pt);
                     s.path_start = Some(pt);
                 }
             })?,
@@ -283,7 +283,7 @@ pub fn install_canvas_bindings(
             Function::new(ctx.clone(), move |nid: i32, x: f64, y: f64| {
                 let map = m.borrow();
                 if let Some(state) = map.get(&(nid as NodeId)) {
-                    state.borrow_mut().current_path.push((x as f32, y as f32));
+                    state.borrow_mut().push_path_point((x as f32, y as f32));
                 }
             })?,
         )?;
@@ -355,7 +355,7 @@ pub fn install_canvas_bindings(
                 if let Some(state) = map.get(&(nid as NodeId)) {
                     let mut s = state.borrow_mut();
                     if let Some(start) = s.path_start {
-                        s.current_path.push(start);
+                        s.push_path_point(start);
                     }
                 }
             })?,
@@ -374,8 +374,7 @@ pub fn install_canvas_bindings(
                     if s.current_path.len() >= 3 {
                         let color = s.fill_color;
                         let points = std::mem::take(&mut s.current_path);
-                        s.commands
-                            .push(crate::canvas::CanvasCommand::FillPath { points, color });
+                        s.push_command(crate::canvas::CanvasCommand::FillPath { points, color });
                     }
                     s.current_path.clear();
                     s.path_start = None;
@@ -397,7 +396,7 @@ pub fn install_canvas_bindings(
                         let color = s.stroke_color;
                         let lw = s.line_width;
                         let points = std::mem::take(&mut s.current_path);
-                        s.commands.push(crate::canvas::CanvasCommand::StrokePath {
+                        s.push_command(crate::canvas::CanvasCommand::StrokePath {
                             points,
                             color,
                             line_width: lw,

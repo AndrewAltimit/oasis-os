@@ -164,8 +164,26 @@ fn parse_ipv4_loose(host: &str) -> Option<Ipv4Addr> {
 }
 
 /// Class of a host name: `localhost` names and IP literals are
-/// classified directly; other names are classified by `resolve`.
+/// classified directly; other names are classified by `resolve`, as
+/// the *most* private of their addresses (a name the page wants to
+/// reach is as sensitive as any address it could connect to).
 fn classify_host(host: &str, resolve: &dyn Fn(&str) -> Vec<IpAddr>) -> NetClass {
+    classify_host_by(host, resolve, true)
+}
+
+/// Class of the page's own host: the *least* private of its addresses.
+/// Taking the most private one let `evil.example` with records
+/// `[public, 192.168.1.1]` count as a private page, which may then
+/// reach the private network.
+fn classify_page_host(host: &str, resolve: &dyn Fn(&str) -> Vec<IpAddr>) -> NetClass {
+    classify_host_by(host, resolve, false)
+}
+
+fn classify_host_by(
+    host: &str,
+    resolve: &dyn Fn(&str) -> Vec<IpAddr>,
+    most_private: bool,
+) -> NetClass {
     let lower = host.trim_end_matches('.').to_ascii_lowercase();
     if lower == "localhost" || lower.ends_with(".localhost") {
         return NetClass::Loopback;
@@ -173,11 +191,13 @@ fn classify_host(host: &str, resolve: &dyn Fn(&str) -> Vec<IpAddr>) -> NetClass 
     if let Some(ip) = parse_ip_host(&lower) {
         return classify_ip(ip);
     }
-    resolve(&lower)
-        .into_iter()
-        .map(classify_ip)
-        .max()
-        .unwrap_or(NetClass::Public)
+    let classes = resolve(&lower).into_iter().map(classify_ip);
+    let class = if most_private {
+        classes.max()
+    } else {
+        classes.min()
+    };
+    class.unwrap_or(NetClass::Public)
 }
 
 // ------------------------------------------------------------------
@@ -473,7 +493,8 @@ impl FetchHandler for BrowserFetchHandler {
         // Web-origin policy: network class, same-origin / CORS.
         let page = self.page_url.as_ref().filter(|u| is_web_scheme(u));
         let page_origin = page.and_then(Url::origin);
-        let page_class = page.map(|p| self.classify(p));
+        let page_class =
+            page.map(|p| classify_page_host(&p.host, &|h| self.transport.resolve_host(h)));
         let target_origin = target.origin();
         if let (Some(page_origin), Some(page_class)) = (&page_origin, page_class) {
             let target_class = self.classify(&target);
