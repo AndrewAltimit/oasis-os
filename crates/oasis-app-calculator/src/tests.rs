@@ -928,3 +928,79 @@ fn all_clear_persists_empty_history() {
     app.apply_vfs_ops(&mut vfs);
     assert!(history::load(&vfs).is_empty());
 }
+
+#[test]
+fn a_new_operator_replaces_the_whole_trailing_operator_run() {
+    let mut app = CalculatorApp::new("/apps/calc");
+    type_str(&mut app, "5*-+");
+    assert_eq!(app.input_buffer, "5+");
+    type_str(&mut app, "2=");
+    assert_eq!(app.display, "7");
+
+    let mut app = CalculatorApp::new("/apps/calc");
+    type_str(&mut app, "-*");
+    assert_eq!(app.input_buffer, "0*");
+}
+
+#[test]
+fn tiny_and_huge_results_use_scientific_notation() {
+    assert_eq!(format_number(-0.0), "0");
+    assert_eq!(format_number(4e-11), "4e-11");
+    assert_eq!(format_number(-1.5e-12), "-1.5e-12");
+    assert_eq!(format_number(1e21), "1e21");
+    assert_eq!(format_number(123_456_789_012_345.0), "123456789012345");
+    // The display text reads back exactly.
+    assert_eq!(evaluate("4e-11*2").ok(), Some(8e-11));
+    assert_eq!(evaluate("1.5E+3").ok(), Some(1500.0));
+
+    let mut app = CalculatorApp::new("/apps/calc");
+    type_str(&mut app, "0-0.00000000004=");
+    assert_eq!(app.display, "-4e-11", "was `-0`");
+    // Ans re-inserts the value as text the evaluator accepts.
+    app.insert_ans();
+    type_str(&mut app, "*-1=");
+    assert_eq!(app.display, "4e-11");
+}
+
+#[test]
+fn ans_and_mr_replace_the_number_being_typed() {
+    let mut app = CalculatorApp::new("/apps/calc");
+    type_str(&mut app, "2+2=");
+    type_str(&mut app, "2");
+    app.insert_ans();
+    assert_eq!(app.input_buffer, "4", "was `24`");
+
+    app.clear();
+    app.memory = -3.0;
+    type_str(&mut app, "5");
+    app.memory_recall();
+    assert_eq!(app.input_buffer, "-3", "was `5-3`");
+
+    app.clear();
+    type_str(&mut app, "10+");
+    app.memory_recall();
+    type_str(&mut app, "=");
+    assert_eq!(app.display, "7");
+
+    app.clear();
+    type_str(&mut app, "(1+1)");
+    app.insert_ans();
+    type_str(&mut app, "=");
+    assert_eq!(app.display, "14", "a closed group multiplies");
+}
+
+#[test]
+fn history_load_rejects_entries_the_calculator_cannot_produce() {
+    let parsed = history::parse("5\u{e9}=5\n1+1=inf\n2*3=6\n4e-11*2=8e-11\n");
+    let exprs: Vec<_> = parsed.iter().map(|e| e.expression.as_str()).collect();
+    assert_eq!(exprs, ["2*3", "4e-11*2"]);
+}
+
+#[test]
+fn negate_after_a_scientific_number_flips_the_whole_number() {
+    let mut s = String::from("2*1.5e-12");
+    toggle_last_sign(&mut s);
+    assert_eq!(s, "2*-1.5e-12");
+    toggle_last_sign(&mut s);
+    assert_eq!(s, "2*1.5e-12");
+}

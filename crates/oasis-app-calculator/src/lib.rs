@@ -163,11 +163,18 @@ impl CalculatorApp {
             }
         }
 
-        // Replace trailing operator with the new one.
-        if let Some(last) = self.input_buffer.chars().last()
-            && "+-*/%^".contains(last)
+        // Replace the trailing operator run with the new one: `5*-` + `+`
+        // is `5+`, not `5*+` (one pop left the `*` behind).
+        while self
+            .input_buffer
+            .chars()
+            .last()
+            .is_some_and(|c| "+-*/%^".contains(c))
         {
             self.input_buffer.pop();
+        }
+        if self.input_buffer.is_empty() {
+            self.input_buffer.push('0');
         }
 
         self.input_buffer.push(op);
@@ -327,12 +334,17 @@ impl CalculatorApp {
         }
     }
 
-    /// Append `value` to the entry (a fresh entry replaces a lone "0").
+    /// Put `value` into the entry as its trailing operand: it replaces the
+    /// number being typed (`2` then Ans used to give `24`), follows an
+    /// operator / `(` as is, and multiplies a closed group (`(1+2)` MR).
     fn insert_value(&mut self, value: f64) {
         self.error_message = None;
         self.recall_index = None;
-        if self.input_buffer == "0" {
-            self.input_buffer.clear();
+        self.chained = None;
+        let number_start = trailing_number_start(&self.input_buffer);
+        self.input_buffer.truncate(number_start);
+        if self.input_buffer.ends_with(')') {
+            self.input_buffer.push('*');
         }
         self.input_buffer.push_str(&format_number(value));
         self.display = self.input_buffer.clone();
@@ -536,9 +548,7 @@ impl CalculatorApp {
 /// the unary minus in front of it, or insert one. With no trailing number
 /// (`5*`), toggle a unary minus at the end; after `)` negate the group.
 fn toggle_last_sign(buf: &mut String) {
-    let mut start = buf
-        .rfind(|c: char| !(c.is_ascii_digit() || c == '.'))
-        .map_or(0, |p| p + 1);
+    let mut start = trailing_number_start(buf);
     if start == buf.len() && buf.ends_with(')') {
         // Negate the whole trailing `( ... )` group.
         let mut depth = 0usize;
@@ -576,7 +586,34 @@ fn toggle_last_sign(buf: &mut String) {
     }
 }
 
-/// Format a number for display, removing trailing zeros from decimals.
+/// Byte index where the number at the end of `buf` starts (`buf.len()`
+/// when it doesn't end in one). Numbers are digits and `.`, with an
+/// optional exponent (`1.5e-12`, as [`format_number`] writes tiny and huge
+/// values).
+fn trailing_number_start(buf: &str) -> usize {
+    let is_num = |c: char| c.is_ascii_digit() || c == '.';
+    let mut start = buf.trim_end_matches(is_num).len();
+    // `<mantissa>e[+-]<digits>`: step over the exponent marker too.
+    if start < buf.len() {
+        let head = &buf[..start];
+        let head = head
+            .strip_suffix(['-', '+'])
+            .unwrap_or(head)
+            .strip_suffix('e');
+        if let Some(mantissa) = head
+            && mantissa.ends_with(|c: char| c.is_ascii_digit())
+        {
+            start = mantissa.trim_end_matches(is_num).len();
+        }
+    }
+    start
+}
+
+/// Format a number for display: integers without decimals, others with up
+/// to 10 decimals, trailing zeros stripped. Magnitudes the fixed form
+/// can't show (below 1e-6, from 1e15) use scientific notation (`4e-11`,
+/// `1.5e20`), which the evaluator reads back, instead of `0` / `-0` or a
+/// 22-digit integer.
 fn format_number(n: f64) -> String {
     if n.is_infinite() {
         return if n.is_sign_positive() {
@@ -588,8 +625,23 @@ fn format_number(n: f64) -> String {
     if n.is_nan() {
         return "NaN".to_string();
     }
-    // If the number is effectively an integer, display without decimals.
-    if n.fract() == 0.0 && n.abs() < 1e15 {
+    if n == 0.0 {
+        return "0".to_string();
+    }
+    if n.abs() < 1e-6 || n.abs() >= 1e15 {
+        let s = format!("{n:.9e}");
+        let (mantissa, exp) = s.split_once('e').unwrap_or((&s, "0"));
+        let mantissa = mantissa.trim_end_matches('0').trim_end_matches('.');
+        let short = format!("{mantissa}e{exp}");
+        // Rounding up near f64::MAX would read back as infinity: fall back
+        // to the exact shortest form there.
+        return if short.parse::<f64>().is_ok_and(f64::is_finite) {
+            short
+        } else {
+            format!("{n:e}")
+        };
+    }
+    if n.fract() == 0.0 {
         format!("{}", n as i64)
     } else {
         // Up to 10 decimal places, strip trailing zeros.
