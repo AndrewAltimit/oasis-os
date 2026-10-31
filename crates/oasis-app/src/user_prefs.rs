@@ -213,7 +213,11 @@ pub fn poll_prefs_ipc(state: &mut AppState, sdi: &mut SdiRegistry, vfs: &mut Mem
 
     if let Some(req) = take_request(vfs, s::HIGH_CONTRAST_REQUEST_PATH) {
         let current_skin = state.skin.manifest.name.clone();
-        let target = if req == "on" {
+        // "off" only leaves the high-contrast skin: on any other skin it
+        // is a no-op (it used to swap to the saved / classic skin).
+        let target = if req != "on" && current_skin != HIGH_CONTRAST_SKIN {
+            current_skin.clone()
+        } else if req == "on" {
             if current_skin != HIGH_CONTRAST_SKIN {
                 state
                     .settings

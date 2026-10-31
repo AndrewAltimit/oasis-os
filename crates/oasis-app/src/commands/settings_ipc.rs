@@ -150,8 +150,13 @@ pub fn poll_settings_ipc(
     }
     if let Some((w, h)) = resolution_request {
         apply_resolution_change(w, h, state, sdi, backend, shader_bridge, vfs);
+        // Persist only a change that took: persisting the current size
+        // after a rejected (out-of-range) request pinned the resolution,
+        // so later skins no longer opened at their own size.
         let applied = (state.active_theme.screen_w, state.active_theme.screen_h);
-        crate::user_prefs::update(state, vfs, |p| p.resolution = Some(applied));
+        if applied == (w, h) {
+            crate::user_prefs::update(state, vfs, |p| p.resolution = Some(applied));
+        }
         changed = true;
     }
 
@@ -375,5 +380,22 @@ mod tests {
         );
         assert_eq!(state.skin.manifest.name, original);
         assert_eq!(reloaded_prefs(&vfs).skin, Some(original));
+    }
+
+    #[test]
+    fn high_contrast_off_on_another_skin_is_a_noop() {
+        let mut state = make_test_state();
+        // Not classic: the old fallback target.
+        state.skin = oasis_core::skin::builtin::load_builtin("xp").expect("xp");
+        let original = state.skin.manifest.name.clone();
+        let mut vfs = prefs_vfs(&state);
+        post(
+            &mut state,
+            &mut vfs,
+            settings_app::HIGH_CONTRAST_REQUEST_PATH,
+            "off",
+        );
+        assert_eq!(state.skin.manifest.name, original);
+        assert_eq!(reloaded_prefs(&vfs).skin, None, "nothing persisted");
     }
 }
