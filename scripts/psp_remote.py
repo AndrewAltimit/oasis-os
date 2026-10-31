@@ -26,9 +26,12 @@ Usage:
 Environment:
     PSP_IP   (default: 192.168.0.249)
     PSP_PORT (default: 9293)
+    PSP_PSK  pre-shared key; must match ms0:/PSP/GAME/OASISOS/cmdserver.key
+             (the EBOOT's command server only listens when that file exists)
 """
 
 import hashlib
+import hmac
 import os
 import socket
 import struct
@@ -56,15 +59,60 @@ EBOOT_PATH = os.path.join(
 )
 
 # ---------------------------------------------------------------------------
+# Authentication — the PSK challenge-response of oasis_net::auth
+# ---------------------------------------------------------------------------
+
+class AuthError(OSError):
+    """The command server rejected (or never offered) the PSK handshake."""
+
+
+def psk_response(psk, nonce):
+    """Answer to `AUTH_REQUIRED <nonce>`: hex HMAC-SHA256(key=psk, msg=nonce)."""
+    return hmac.new(psk.encode(), nonce.encode(), hashlib.sha256).hexdigest()
+
+
+def _recv_line(sock, limit=256):
+    """Read one newline-terminated line (without the terminator)."""
+    buf = b""
+    while not buf.endswith(b"\n"):
+        chunk = sock.recv(1)
+        if not chunk:
+            break
+        buf += chunk
+        if len(buf) > limit:
+            break
+    return buf.decode(errors="replace").strip()
+
+
+def authenticate(sock, psk):
+    """Answer the server's challenge on a freshly connected socket.
+
+    The server sends `AUTH_REQUIRED <nonce>`; we reply with
+    `AUTH <psk_response>` and expect `AUTH_OK` before any command.
+    """
+    line = _recv_line(sock)
+    if not line.startswith("AUTH_REQUIRED "):
+        raise AuthError(f"unexpected greeting from PSP: {line!r}")
+    if not psk:
+        raise AuthError("PSP command server requires a key: set PSP_PSK")
+    nonce = line[len("AUTH_REQUIRED "):].strip()
+    sock.sendall(f"AUTH {psk_response(psk, nonce)}\n".encode())
+    reply = _recv_line(sock)
+    if reply != "AUTH_OK":
+        raise AuthError(f"PSP rejected the key ({reply or 'connection closed'})")
+
+
+# ---------------------------------------------------------------------------
 # PspConnection — low-level TCP communication
 # ---------------------------------------------------------------------------
 
 class PspConnection:
     """Manages a TCP connection to the PSP command server."""
 
-    def __init__(self, ip=None, port=None, timeout=DEFAULT_TIMEOUT):
+    def __init__(self, ip=None, port=None, timeout=DEFAULT_TIMEOUT, psk=None):
         self.ip = ip or os.environ.get("PSP_IP", DEFAULT_IP)
         self.port = int(port or os.environ.get("PSP_PORT", DEFAULT_PORT))
+        self.psk = psk if psk is not None else os.environ.get("PSP_PSK", "")
         self.timeout = timeout
         self._sock = None
 
@@ -74,6 +122,11 @@ class PspConnection:
         s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         s.settimeout(self.timeout)
         s.connect((self.ip, self.port))
+        try:
+            authenticate(s, self.psk)
+        except BaseException:
+            s.close()
+            raise
         self._sock = s
 
     def close(self):
@@ -133,6 +186,8 @@ class PspConnection:
         """Returns True if PSP responds to ping."""
         try:
             return self.send_command("ping") == "pong"
+        except AuthError:
+            raise
         except (OSError, socket.timeout):
             return False
 

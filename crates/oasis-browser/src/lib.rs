@@ -81,6 +81,31 @@
 //! but blend modes, filters, and masks do not apply. See
 //! `docs/archive/compositor-overhaul-plan.md` §3.6 for the phased revisit plan.
 
+/// Bind `$m: &dyn TextMeasurer` to the widget's layout text measurer:
+/// the shared width cache over [`SimpleTextMeasurer`], wrapped in the
+/// web-font measurer once `@font-face` faces have loaded, so text in a
+/// web font is laid out with the widths it is painted with. A macro
+/// (not a method) so callers can keep borrowing other fields mutably.
+macro_rules! layout_measurer {
+    ($self:ident, $m:ident) => {
+        let caching = $crate::layout::text_cache::CachingMeasurer::with_shared(
+            &$crate::SimpleTextMeasurer,
+            std::rc::Rc::clone(&$self.text_cache),
+        );
+        #[cfg(feature = "web-fonts")]
+        let font_aware = $crate::font::FontAwareTextMeasurer::new(&caching, &$self.font_registry);
+        #[cfg(feature = "web-fonts")]
+        let $m: &dyn $crate::layout::block::TextMeasurer =
+            if $self.font_registry.borrow().has_fonts() {
+                &font_aware
+            } else {
+                &caching
+            };
+        #[cfg(not(feature = "web-fonts"))]
+        let $m: &dyn $crate::layout::block::TextMeasurer = &caching;
+    };
+}
+
 pub mod config;
 pub(crate) use oasis_css as css;
 pub mod forms;
@@ -935,15 +960,13 @@ impl BrowserWidget {
             .expect("guarded by is_none() early return above");
         let content_h = self.config.content_height(self.window_h);
         let base_url = self.nav.current_url().map(String::from);
-        let shared = std::rc::Rc::clone(&self.text_cache);
-        let measurer =
-            layout::text_cache::CachingMeasurer::with_shared(&SimpleTextMeasurer, shared);
+        layout_measurer!(self, measurer);
         let viewport_w = self.window_w as f32 / self.config.zoom_level;
         let viewport_h = content_h as f32 / self.config.zoom_level;
         let layout_root = layout::block::build_layout_tree(
             doc,
             &self.styles,
-            &measurer,
+            measurer,
             viewport_w,
             viewport_h,
             base_url.as_deref(),

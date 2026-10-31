@@ -257,7 +257,7 @@ WALKS = [
                 "draw functions).",
                 "code": [
                     "crates/oasis-backend-sdl/src/core_impl.rs: swap_buffers",
-                    "crates/oasis-backend-wasm/src/lib.rs: draw_with_clips_overlay",
+                    "crates/oasis-backend-wasm/src/tick.rs: draw_with_clips_overlay",
                     "crates/oasis-ffi/src/render.rs: oasis_tick, oasis_get_buffer",
                     "crates/oasis-backend-psp/src/render_desktop.rs: draw_with_clips_noalloc",
                 ],

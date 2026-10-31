@@ -284,9 +284,20 @@ pub fn paint_canvas_from_url(canvas: HtmlCanvasElement, url: &str) -> Result<(),
     img.set_cross_origin(Some("anonymous"));
     img.set_decoding("async");
 
+    // One `once` callback serves as both `onload` and `onerror`: exactly
+    // one of them fires, which runs and frees it. Two separate `once`
+    // closures leaked the one that never fired (one per thumbnail, so a
+    // grid's worth per search).
     let canvas_for_load = canvas.clone();
     let img_for_load = img.clone();
-    let onload = Closure::once_into_js(move || {
+    let on_settled = Closure::once_into_js(move || {
+        img_for_load.set_onload(None);
+        img_for_load.set_onerror(None);
+        // On error the canvas stays transparent; the grid still shows the
+        // title / author so the user can pick a video.
+        if !img_for_load.complete() || img_for_load.natural_width() == 0 {
+            return;
+        }
         let Ok(Some(ctx_obj)) = canvas_for_load.get_context("2d") else {
             return;
         };
@@ -299,12 +310,8 @@ pub fn paint_canvas_from_url(canvas: HtmlCanvasElement, url: &str) -> Result<(),
         let _ =
             ctx.draw_image_with_html_image_element_and_dw_and_dh(&img_for_load, 0.0, 0.0, cw, ch);
     });
-    img.set_onload(Some(onload.unchecked_ref()));
-
-    // Onerror: silently ignore — the canvas stays transparent. The grid
-    // still shows the title / author so the user can pick a video.
-    let onerror = Closure::once_into_js(move || {});
-    img.set_onerror(Some(onerror.unchecked_ref()));
+    img.set_onload(Some(on_settled.unchecked_ref()));
+    img.set_onerror(Some(on_settled.unchecked_ref()));
 
     img.set_src(url);
     Ok(())

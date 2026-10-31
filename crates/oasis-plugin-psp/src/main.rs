@@ -16,7 +16,7 @@
 //!
 //! ## Memory Budget
 //!
-//! ~153 KB PRX once stripped with `prxmin` (CI budget 192 KiB), ~212 KB
+//! ~159 KB PRX once stripped with `prxmin` (CI budget 192 KiB), ~212 KB
 //! resident including `.bss`; see docs/psp-plugin.md "Memory Budget". No
 //! heap allocator for the overlay itself -- stack + static buffers only. PIP
 //! video buffers (~113KB) allocated on-demand from user-memory partition 2.
@@ -26,6 +26,7 @@
 psp::module_kernel!("OasisPlugin", 1, 0);
 
 mod audio;
+mod auth;
 mod config;
 mod devloop;
 mod font;

@@ -228,11 +228,11 @@ pub type TvCatalogFetch =
 /// TV Guide playback (driven by `tv_controller`).
 pub struct TvLayer {
     pub pending_catalog_fetch: Option<TvCatalogFetch>,
-    /// Next tune to start, as `"{url} {seek_secs}"`: a TV Guide
+    /// Next tune to start: a TV Guide
     /// `tune_url` request routed here by the shell's request drain, or a
     /// host-side tune (catalog auto-tune, auto-advance, `tune_ch:`).
     /// Consumed by `tv_controller::tick` the same frame.
-    pub pending_tune: Option<String>,
+    pub pending_tune: Option<oasis_core::ipc::TvTune>,
     /// When the TV catalog fetch thread was spawned (for timeout detection).
     pub fetch_start: Option<std::time::Instant>,
     /// In-app video player (ffmpeg subprocess or software decode) for TV Guide preview.

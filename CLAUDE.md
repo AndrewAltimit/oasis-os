@@ -90,7 +90,7 @@ The Rust steps run via `docker compose --profile ci run --rm rust-ci`; the PSP b
 
 Both jobs are non-blocking on pull requests (`continue-on-error` there) and run on pushes to main, PRs touching `oasis-video`, `oasis-core`, `oasis-app`, `oasis-backend-sdl`, `oasis-backend-ue5`, `oasis-types`, `Cargo.toml`/`Cargo.lock` or the workflow itself, and `workflow_dispatch`.
 
-**Scheduled:** `nightly-streaming.yml` (end-to-end TV Guide video streaming) and `fuzz.yml` (fuzz targets in `crates/oasis-core/fuzz/`).
+**Scheduled:** `nightly-streaming.yml` (end-to-end TV Guide video streaming) and `fuzz.yml` (fuzz targets in `crates/oasis-core/fuzz/` and `crates/oasis-video/fuzz/`).
 
 ## Architecture
 
@@ -148,7 +148,7 @@ PSP has meaningful enough constraints that the detail lives in
 [`docs/psp-architecture.md`](docs/psp-architecture.md). Summary:
 
 - **Two binaries** — `oasis-backend-psp` (EBOOT.PBP, the shell) and
-  `oasis-plugin-psp` (PRX overlay loaded by CFW, ~153 KB stripped with
+  `oasis-plugin-psp` (PRX overlay loaded by CFW, ~159 KB stripped with
   `prxmin`, ~212 KB resident; no `oasis-core` dependency). See [ADR 004](docs/adr/004-psp-two-binary-architecture.md).
 - **GU command buffer (1 MB)** overflows with dense pages. Don't
   double-start GU frames after `swap_buffers_inner()`.

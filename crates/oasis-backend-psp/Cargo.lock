@@ -892,6 +892,7 @@ dependencies = [
  "oasis-core",
  "oasis-js",
  "oasis-shader",
+ "oasis-types",
  "oasis-video",
  "psp",
  "rand_core",

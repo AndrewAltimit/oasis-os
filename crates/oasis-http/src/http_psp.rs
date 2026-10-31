@@ -45,13 +45,14 @@ pub fn http_request_full(
     extra_headers: &[(&str, &str)],
     tls: Option<&dyn TlsProvider>,
 ) -> Result<(ResourceResponse, Vec<(String, String)>)> {
-    http_request_guarded(method, url, body, extra_headers, tls, &|_| true)
+    http_request_guarded(method, url, body, extra_headers, tls, &|_| true, &|_| true)
 }
 
 /// Like [`http_request_full`] but consults `redirect_ok` before following
-/// each redirect; `false` aborts with an error. (PSP resolves hosts inside
-/// `TlsProvider::connect_tcp`, so there is no per-connect address hook
-/// here, unlike the desktop client's `RequestGuard`.)
+/// each redirect and `addr_ok` on the address each hop dials (through
+/// `TlsProvider::connect_tcp_checked`, which resolves once, so the checked
+/// address is the connected one); `false` from either aborts with an
+/// error. The PSP counterpart of the desktop client's `RequestGuard`.
 pub fn http_request_guarded(
     method: &str,
     url: &Url,
@@ -59,6 +60,7 @@ pub fn http_request_guarded(
     extra_headers: &[(&str, &str)],
     tls: Option<&dyn TlsProvider>,
     redirect_ok: &dyn Fn(&Url) -> bool,
+    addr_ok: &dyn Fn(std::net::IpAddr) -> bool,
 ) -> Result<(ResourceResponse, Vec<(String, String)>)> {
     if url.scheme != "http" && url.scheme != "https" {
         return Err(OasisError::Backend(
@@ -97,6 +99,7 @@ pub fn http_request_guarded(
             &current_url,
             current_body.as_deref(),
             &header_refs,
+            addr_ok,
         )?;
 
         if is_redirect(resp.status_code)
@@ -159,6 +162,7 @@ fn do_request(
     url: &Url,
     body: Option<&[u8]>,
     extra_headers: &[(&str, &str)],
+    addr_ok: &dyn Fn(std::net::IpAddr) -> bool,
 ) -> Result<HttpResponse> {
     crate::validate_request(method, url, extra_headers)?;
     let host = &url.host;
@@ -166,9 +170,9 @@ fn do_request(
     let default_port: u16 = if is_https { 443 } else { 80 };
     let port = url.port.unwrap_or(default_port);
 
-    // Create raw TCP connection via TlsProvider::connect_tcp.
+    // Create raw TCP connection via TlsProvider::connect_tcp_checked.
     // On PSP this uses sceNetInet* sockets; on desktop it uses std::net.
-    let tcp_stream = tls_provider.connect_tcp(host, port)?;
+    let tcp_stream = tls_provider.connect_tcp_checked(host, port, addr_ok)?;
 
     // For HTTPS, upgrade to TLS.
     let mut stream: Box<dyn NetworkStream> = if is_https {

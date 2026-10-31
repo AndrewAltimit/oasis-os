@@ -13,7 +13,7 @@ use crate::layout;
 #[cfg(not(native_net))]
 use crate::loader::load_resource;
 use crate::loader::{self, ResourceRequest, ResourceSource};
-use crate::{BrowserWidget, LoadingState, SimpleTextMeasurer};
+use crate::{BrowserWidget, LoadingState};
 
 /// Parse an HTML `srcset` attribute into a list of `(url, descriptor)` pairs.
 ///
@@ -963,14 +963,12 @@ impl BrowserWidget {
                 &self.cached_image_info,
             );
             if updated {
-                let shared = std::rc::Rc::clone(&self.text_cache);
-                let measurer =
-                    layout::text_cache::CachingMeasurer::with_shared(&SimpleTextMeasurer, shared);
+                layout_measurer!(self, measurer);
                 let mut cache = layout::block::StyleCache::new();
                 layout::block::layout_block_incremental(
                     layout_root,
                     viewport_w,
-                    &measurer,
+                    measurer,
                     &mut cache,
                 );
                 // Re-apply positioning after relayout.
@@ -983,13 +981,11 @@ impl BrowserWidget {
         }
 
         // Full rebuild (always used on PSP/WASM, fallback on desktop).
-        let shared = std::rc::Rc::clone(&self.text_cache);
-        let measurer =
-            layout::text_cache::CachingMeasurer::with_shared(&SimpleTextMeasurer, shared);
+        layout_measurer!(self, measurer);
         let layout_root = layout::block::build_layout_tree(
             doc,
             &self.styles,
-            &measurer,
+            measurer,
             viewport_w,
             viewport_h,
             base_url.as_deref(),

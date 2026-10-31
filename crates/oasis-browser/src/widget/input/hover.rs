@@ -69,20 +69,7 @@ impl BrowserWidget {
     pub(crate) fn restyle_hover_affected(&mut self, old_hover: Option<NodeId>) {
         let Some(doc) = &self.document else { return };
 
-        // Build the set of affected nodes: ancestors of old + new hover.
-        // Using FxHashSet for O(1) dedup instead of Vec::contains O(n).
-        let mut affected = rustc_hash::FxHashSet::default();
-        for start in [old_hover, self.hover_node].into_iter().flatten() {
-            let mut cur = Some(start);
-            while let Some(nid) = cur {
-                let Some(node) = doc.nodes.get(nid) else {
-                    break;
-                };
-                affected.insert(nid);
-                cur = node.parent;
-            }
-        }
-
+        let affected = state_change_affected(doc, old_hover, self.hover_node);
         if affected.is_empty() {
             return;
         }
@@ -185,8 +172,7 @@ impl BrowserWidget {
             self.full_repaint_needed = true;
         } else if any_changed {
             // Only color/background changed — patchable in-place.
-            let affected_vec: Vec<NodeId> = affected.into_iter().collect();
-            self.mark_hover_focus_dirty(&affected_vec);
+            self.mark_hover_focus_dirty(&affected);
         }
     }
 
@@ -309,6 +295,63 @@ impl BrowserWidget {
         self.layout_dirty = true;
         self.full_repaint_needed = true;
     }
+}
+
+/// Most descendants of a hovered / focused node restyled with it; past
+/// this the rest keep their styles until the next full cascade.
+const MAX_STATE_RESTYLE_DESCENDANTS: usize = 4096;
+
+/// The nodes a `:hover` / `:focus` change between `old` and `new` can
+/// restyle, in an order where every parent precedes its children, so each
+/// node cascades against its parent's *updated* style: both ancestor
+/// chains root-first, then both subtrees in pre-order (`a:hover span`
+/// and inherited properties such as `color` reach descendants). Shared by
+/// the hover and focus restyles.
+pub(super) fn state_change_affected(
+    doc: &html::dom::Document,
+    old: Option<NodeId>,
+    new: Option<NodeId>,
+) -> Vec<NodeId> {
+    let mut seen = rustc_hash::FxHashSet::default();
+    let mut out = Vec::new();
+    let starts: Vec<NodeId> = [old, new]
+        .into_iter()
+        .flatten()
+        .filter(|&n| n < doc.nodes.len())
+        .collect();
+    for &start in &starts {
+        let mut chain = Vec::new();
+        let mut cur = Some(start);
+        while let Some(nid) = cur {
+            let Some(node) = doc.nodes.get(nid) else {
+                break;
+            };
+            chain.push(nid);
+            cur = node.parent;
+        }
+        for &nid in chain.iter().rev() {
+            if seen.insert(nid) {
+                out.push(nid);
+            }
+        }
+    }
+    for &start in &starts {
+        let mut budget = MAX_STATE_RESTYLE_DESCENDANTS;
+        let mut stack: Vec<NodeId> = doc.nodes[start].children.iter().rev().copied().collect();
+        while let Some(nid) = stack.pop() {
+            if budget == 0 {
+                break;
+            }
+            budget -= 1;
+            if seen.insert(nid) {
+                out.push(nid);
+            }
+            if let Some(node) = doc.nodes.get(nid) {
+                stack.extend(node.children.iter().rev().copied());
+            }
+        }
+    }
+    out
 }
 
 /// All CSS properties that can be smoothly transitioned as a single f32.

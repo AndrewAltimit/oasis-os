@@ -150,6 +150,26 @@ get `RATE_LIMITED\n` and are closed. The throttle is global, not per peer
 (`NetworkStream` exposes no peer address), so a flood of bad attempts also
 delays legitimate clients -- the trade-off for bounding online guessing.
 
+### PSP dev servers
+
+The two PSP development servers on TCP 9293 speak the same handshake
+(steps 1-4, with `AUTH_OK\n` and no prompt), then the one-command-per-
+connection protocol they always had. Both are off unless a key is
+configured, and neither has an unauthenticated mode:
+
+| Server | Enabled by | Key | Host client |
+|--------|-----------|-----|-------------|
+| EBOOT command server (`oasis-backend-psp/src/cmd_server/`) | `ms0:/PSP/GAME/OASISOS/cmdserver.key` exists with 8+ bytes | that file, trimmed | `scripts/psp_remote.py` (`PSP_PSK`) |
+| Overlay PRX devloop (`oasis-plugin-psp/src/devloop.rs`) | `devloop = true` **and** `devloop_psk` (8+ bytes) in `ms0:/seplugins/oasis.ini` | `devloop_psk` | `psp_remote.PspConnection(psk=...).send_command("launch ms0:/...")` |
+
+The EBOOT verifies with `oasis_net::verify_auth_line`; the PRX, which
+cannot link std crates, carries a bounded one-shot SHA-256 / HMAC copy
+(`oasis-plugin-psp/src/auth.rs`). Nonces condense the RTC / system timer,
+a counter and the previous nonce with SHA-256 (the PSP has no OS entropy
+source). A failed answer costs the peer a 2 s stall of the single-threaded
+accept loop, and an unanswered challenge times out after 10 s. As with the
+remote terminal the session is plaintext: trusted networks only.
+
 ## TLS
 
 Enabled by the `tls-rustls` Cargo feature. `RustlsTlsProvider`

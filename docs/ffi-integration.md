@@ -343,6 +343,13 @@ void oasis_register_callback(
 #define OASIS_AUDIO_TRACK_LOADED   5
 #define OASIS_AUDIO_TRACK_UNLOADED 6
 #define OASIS_AUDIO_SHUTDOWN       7
+/* Streaming tracks (internet radio): the encoded bytes are buffered in the
+ * instance (1 MiB cap, MAX_STREAM_BUFFER) for the host to pull.
+ * Ue5AudioBackend::drain_stream() is the Rust-side drain; it has no C
+ * export yet. */
+#define OASIS_AUDIO_STREAM_OPENED  8
+#define OASIS_AUDIO_STREAM_DATA    9  /* value = bytes waiting to be drained */
+#define OASIS_AUDIO_STREAM_END     10 /* source ended; drain the rest */
 
 /* track_id is 0 when not applicable. */
 typedef void (*OasisAudioCallback)(uint32_t event, uint64_t track_id, uint32_t value);

@@ -43,13 +43,17 @@ fn process_vfs_requests(state: &mut AppState, vfs: &mut dyn Vfs) {
         return;
     };
 
-    if let Some(target) = request.strip_prefix("tune ") {
-        process_tune_request(state, target.trim());
+    let Some(request) = oasis_audio::radio::RadioRequest::parse(&request) else {
+        log::warn!("radio: ignoring malformed request {request:?}");
+        return;
+    };
+    if let oasis_audio::radio::RadioRequest::Tune(station) = &request {
+        process_tune_request(state, station);
     } else {
         let _ = state
             .radio
             .manager
-            .process_request(&request, state.audio_backend.as_mut());
+            .handle_request(&request, state.audio_backend.as_mut());
         // A stop releases the catalog, the pending fetches and the stream.
         if state.radio.manager.state() == oasis_audio::radio::RadioState::Stopped {
             state.radio.release_playback();
@@ -58,22 +62,9 @@ fn process_vfs_requests(state: &mut AppState, vfs: &mut dyn Vfs) {
 }
 
 /// Tune to a station by index or name.
-fn process_tune_request(state: &mut AppState, target: &str) {
+fn process_tune_request(state: &mut AppState, target: &oasis_audio::radio::StationRef) {
     // Resolve station by index or case-insensitive name.
-    let station = if let Ok(idx) = target.parse::<usize>() {
-        state.radio.manager.registry.stations.get(idx).cloned()
-    } else {
-        state
-            .radio
-            .manager
-            .registry
-            .stations
-            .iter()
-            .find(|s| s.name.eq_ignore_ascii_case(target.trim()))
-            .cloned()
-    };
-
-    let Some(station) = station else {
+    let Some(station) = state.radio.manager.registry.find(target).cloned() else {
         state
             .radio
             .manager

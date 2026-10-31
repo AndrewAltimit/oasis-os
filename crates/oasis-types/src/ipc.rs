@@ -528,6 +528,148 @@ impl std::fmt::Display for MediaRequest {
     }
 }
 
+/// Which radio station a [`RadioRequest::Tune`] names: an index into the
+/// station list, or a station name (matched case-insensitively).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum StationRef {
+    /// Position in the station list.
+    Index(usize),
+    /// Station name.
+    Name(String),
+}
+
+impl std::fmt::Display for StationRef {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Index(i) => write!(f, "{i}"),
+            Self::Name(n) => f.write_str(n),
+        }
+    }
+}
+
+/// One request on [`RADIO_REQUEST_PATH`] (latest request wins).
+///
+/// Wire format: `tune <index|name>`, `stop`, `vol <0-100>`, `fav <index>`,
+/// `genre [<name>]`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RadioRequest {
+    /// Tune to a station.
+    Tune(StationRef),
+    /// Stop the radio and release the stream.
+    Stop,
+    /// Set the radio volume (0-100).
+    Volume(u8),
+    /// Toggle the favorite flag of the station at this index.
+    Favorite(usize),
+    /// Filter the station list by genre (`None`: list the genres).
+    Genre(Option<String>),
+}
+
+impl RadioRequest {
+    /// Parse one request (surrounding whitespace ignored). `None` for blank
+    /// or unknown requests and malformed arguments.
+    pub fn parse(line: &str) -> Option<Self> {
+        let line = line.trim();
+        let (cmd, arg) = match line.split_once(' ') {
+            Some((c, a)) => (c, a.trim()),
+            None => (line, ""),
+        };
+        let req = match cmd {
+            "tune" if !arg.is_empty() => Self::Tune(match arg.parse::<usize>() {
+                Ok(i) => StationRef::Index(i),
+                Err(_) => StationRef::Name(arg.to_string()),
+            }),
+            "stop" if arg.is_empty() => Self::Stop,
+            "vol" => Self::Volume(arg.parse::<u8>().ok().filter(|v| *v <= 100)?),
+            "fav" => Self::Favorite(arg.parse().ok()?),
+            "genre" => Self::Genre((!arg.is_empty()).then(|| arg.to_string())),
+            _ => return None,
+        };
+        Some(req)
+    }
+
+    /// Serialize to the wire format ([`RadioRequest::parse`] round-trips it).
+    pub fn to_line(&self) -> String {
+        match self {
+            Self::Tune(station) => format!("tune {station}"),
+            Self::Stop => "stop".to_string(),
+            Self::Volume(v) => format!("vol {v}"),
+            Self::Favorite(i) => format!("fav {i}"),
+            Self::Genre(Some(g)) => format!("genre {g}"),
+            Self::Genre(None) => "genre".to_string(),
+        }
+    }
+}
+
+impl std::fmt::Display for RadioRequest {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.to_line())
+    }
+}
+
+/// A video to start: its URL and the offset into it, in seconds.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TvTune {
+    /// Media URL.
+    pub url: String,
+    /// Seconds to seek to once playback starts.
+    pub seek_secs: u64,
+}
+
+/// One request on [`TV_REQUEST_PATH`].
+///
+/// Wire format: `tune_url <url> <seek_secs>` (the TV Guide app; a missing
+/// seek is 0) and `tune_ch:<number>` (the `tv tune` command and the MCP
+/// `tune` tool).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TvRequest {
+    /// Play this URL.
+    TuneUrl(TvTune),
+    /// Tune the open TV Guide to the channel with this number.
+    TuneChannel(u32),
+}
+
+impl TvRequest {
+    /// Parse one request (surrounding whitespace ignored); `None` for any
+    /// other text.
+    pub fn parse(line: &str) -> Option<Self> {
+        let line = line.trim();
+        if let Some(n) = line.strip_prefix("tune_ch:") {
+            return n.trim().parse().ok().map(Self::TuneChannel);
+        }
+        let rest = line.strip_prefix("tune_url ")?.trim();
+        // The seek is the last word when it is a number; otherwise the
+        // whole rest is the URL.
+        let (url, seek_secs) = match rest.rsplit_once(' ') {
+            Some((url, seek)) => match seek.parse::<u64>() {
+                Ok(secs) => (url.trim_end(), secs),
+                Err(_) => (rest, 0),
+            },
+            None => (rest, 0),
+        };
+        (!url.is_empty()).then(|| {
+            Self::TuneUrl(TvTune {
+                url: url.to_string(),
+                seek_secs,
+            })
+        })
+    }
+
+    /// Serialize to the wire format ([`TvRequest::parse`] round-trips it).
+    pub fn to_line(&self) -> String {
+        match self {
+            Self::TuneUrl(t) => format!("tune_url {} {}", t.url, t.seek_secs),
+            Self::TuneChannel(n) => format!("tune_ch:{n}"),
+        }
+    }
+}
+
+impl std::fmt::Display for TvRequest {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.to_line())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -719,5 +861,53 @@ mod tests {
         assert_eq!(RepeatMode::parse("track"), Some(RepeatMode::One));
         assert_eq!(RepeatMode::parse("invalid"), None);
         assert_eq!(RepeatMode::One.to_string(), "one");
+    }
+    #[test]
+    fn radio_requests_round_trip() {
+        for req in [
+            RadioRequest::Tune(StationRef::Index(2)),
+            RadioRequest::Tune(StationRef::Name("Jazz FM".into())),
+            RadioRequest::Stop,
+            RadioRequest::Volume(55),
+            RadioRequest::Favorite(3),
+            RadioRequest::Genre(Some("ambient".into())),
+            RadioRequest::Genre(None),
+        ] {
+            assert_eq!(RadioRequest::parse(&req.to_line()), Some(req.clone()));
+        }
+        assert_eq!(
+            RadioRequest::parse("tune 2\n"),
+            Some(RadioRequest::Tune(StationRef::Index(2)))
+        );
+        for bad in [
+            "", "tune", "tune ", "vol 101", "vol x", "fav", "fav -1", "play",
+        ] {
+            assert_eq!(RadioRequest::parse(bad), None, "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn tv_requests_round_trip() {
+        let tune = TvRequest::TuneUrl(TvTune {
+            url: "https://archive.org/download/x/a b.mp4".into(),
+            seek_secs: 90,
+        });
+        for req in [tune, TvRequest::TuneChannel(7)] {
+            assert_eq!(TvRequest::parse(&req.to_line()), Some(req.clone()));
+        }
+        assert_eq!(
+            TvRequest::parse("tune_url http://x/v.mp4"),
+            Some(TvRequest::TuneUrl(TvTune {
+                url: "http://x/v.mp4".into(),
+                seek_secs: 0
+            }))
+        );
+        assert_eq!(
+            TvRequest::parse(" tune_ch:12\n"),
+            Some(TvRequest::TuneChannel(12))
+        );
+        for bad in ["", "tune_ch:", "tune_ch:x", "tune_url ", "tune http://x"] {
+            assert_eq!(TvRequest::parse(bad), None, "{bad:?}");
+        }
     }
 }

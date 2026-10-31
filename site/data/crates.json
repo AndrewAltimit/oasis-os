@@ -79,7 +79,7 @@
     "video-decode",
     "video-decode-ffmpeg"
    ],
-   "loc": 35494,
+   "loc": 35483,
    "files": 65,
    "deps": [
     {
@@ -818,7 +818,7 @@
     "web-fonts",
     "webp"
    ],
-   "loc": 61187,
+   "loc": 61607,
    "files": 109,
    "deps": [
     {
@@ -921,7 +921,7 @@
    "features": [
     "psp"
    ],
-   "loc": 10695,
+   "loc": 10699,
    "files": 15,
    "deps": [
     {
@@ -1008,7 +1008,7 @@
     "h264",
     "symphonia"
    ],
-   "loc": 7887,
+   "loc": 7988,
    "files": 18,
    "deps": []
   },
@@ -1024,7 +1024,7 @@
    "crate_type": [],
    "bins": [],
    "features": [],
-   "loc": 9202,
+   "loc": 9217,
    "files": 24,
    "deps": [
     {
@@ -1078,7 +1078,7 @@
    "crate_type": [],
    "bins": [],
    "features": [],
-   "loc": 18949,
+   "loc": 19216,
    "files": 45,
    "deps": [
     {
@@ -1103,7 +1103,7 @@
    "crate_type": [],
    "bins": [],
    "features": [],
-   "loc": 12775,
+   "loc": 12836,
    "files": 26,
    "deps": [
     {
@@ -1293,7 +1293,7 @@
     "tls-rustls",
     "vfs"
    ],
-   "loc": 7143,
+   "loc": 7174,
    "files": 11,
    "deps": [
     {
@@ -1367,7 +1367,7 @@
    "crate_type": [],
    "bins": [],
    "features": [],
-   "loc": 11760,
+   "loc": 12007,
    "files": 40,
    "deps": []
   },
@@ -1404,7 +1404,7 @@
    "crate_type": [],
    "bins": [],
    "features": [],
-   "loc": 7079,
+   "loc": 7114,
    "files": 18,
    "deps": [
     {
@@ -1458,8 +1458,8 @@
    "features": [
     "wasm-youtube"
    ],
-   "loc": 9444,
-   "files": 24,
+   "loc": 9582,
+   "files": 26,
    "deps": [
     {
      "name": "oasis-apps",
@@ -1511,7 +1511,7 @@
    "crate_type": [],
    "bins": [],
    "features": [],
-   "loc": 2568,
+   "loc": 2685,
    "files": 5,
    "deps": [
     {
@@ -1554,8 +1554,8 @@
     "kernel-mode",
     "kernel-volatile"
    ],
-   "loc": 21276,
-   "files": 66,
+   "loc": 21688,
+   "files": 68,
    "deps": [
     {
      "name": "oasis-app-tv-guide",
@@ -1578,6 +1578,10 @@
      "kind": "normal"
     },
     {
+     "name": "oasis-types",
+     "kind": "normal"
+    },
+    {
      "name": "oasis-video",
      "kind": "normal"
     }
@@ -1597,8 +1601,8 @@
     "oasis-plugin-psp"
    ],
    "features": [],
-   "loc": 10395,
-   "files": 17,
+   "loc": 10685,
+   "files": 18,
    "deps": []
   },
   {
@@ -1832,7 +1836,7 @@
      "text": "swap_buffers presents: SDL3 on desktop and Pi, Canvas 2D in the browser (oasis-backend-wasm runs the same window loop), an RGBA framebuffer UE5 reads through oasis-ffi's oasis_get_buffer, and sceGu on the PSP (its own loop draws the window manager with per-window draw functions).",
      "code": [
       "crates/oasis-backend-sdl/src/core_impl.rs: swap_buffers",
-      "crates/oasis-backend-wasm/src/lib.rs: draw_with_clips_overlay",
+      "crates/oasis-backend-wasm/src/tick.rs: draw_with_clips_overlay",
       "crates/oasis-ffi/src/render.rs: oasis_tick, oasis_get_buffer",
       "crates/oasis-backend-psp/src/render_desktop.rs: draw_with_clips_noalloc"
      ]

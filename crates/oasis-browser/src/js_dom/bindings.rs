@@ -7,8 +7,8 @@ use std::rc::Rc;
 use oasis_js::rquickjs::{Ctx, Function, Result as JsResult};
 
 use super::node_api::{
-    FreedLog, INSERT_INVALID, connected_element_by_id, free_children_logged, has_room, insert_node,
-    parse_into,
+    ByteBudget, FreedLog, INSERT_INVALID, charge_bytes, connected_element_by_id,
+    free_children_logged, has_room, insert_node, parse_into,
 };
 use super::serialize::serialize_node;
 use super::{
@@ -25,13 +25,14 @@ pub(super) fn install_dom_bindings(
     doc: &SharedDoc,
     dirty: &Option<SharedDirty>,
     freed: &FreedLog,
+    budget: &ByteBudget,
 ) -> JsResult<()> {
-    install_attribute_bindings(ctx, doc, dirty)?;
-    install_text_bindings(ctx, doc, dirty, freed)?;
-    install_tree_bindings(ctx, doc, dirty)?;
-    install_document_bindings(ctx, doc, dirty, freed)?;
-    install_html_bindings(ctx, doc, dirty, freed)?;
-    install_selector_and_style_bindings(ctx, doc, dirty)
+    install_attribute_bindings(ctx, doc, dirty, budget)?;
+    install_text_bindings(ctx, doc, dirty, freed, budget)?;
+    install_tree_bindings(ctx, doc, dirty, budget)?;
+    install_document_bindings(ctx, doc, dirty, freed, budget)?;
+    install_html_bindings(ctx, doc, dirty, freed, budget)?;
+    install_selector_and_style_bindings(ctx, doc, dirty, budget)
 }
 
 /// Install the tag name and attribute get / set / remove helpers.
@@ -39,6 +40,7 @@ fn install_attribute_bindings(
     ctx: &Ctx<'_>,
     doc: &SharedDoc,
     dirty: &Option<SharedDirty>,
+    budget: &ByteBudget,
 ) -> JsResult<()> {
     let globals = ctx.globals();
 
@@ -88,12 +90,14 @@ fn install_attribute_bindings(
     {
         let d = Rc::clone(doc);
         let dirty = dirty.clone();
+        let budget = Rc::clone(budget);
         globals.set(
             "__oasis_setattr",
             Function::new(ctx.clone(), move |nid: i32, name: String, value: String| {
                 let mut doc = d.borrow_mut();
                 let id = nid as NodeId;
                 if doc.is_live(id)
+                    && charge_bytes(&doc, &budget, name.len() + value.len())
                     && let NodeKind::Element(ref mut e) = doc.nodes[id].kind
                 {
                     // Skip dirty mark when value is identical — pages
@@ -157,6 +161,7 @@ fn install_text_bindings(
     doc: &SharedDoc,
     dirty: &Option<SharedDirty>,
     freed: &FreedLog,
+    budget: &ByteBudget,
 ) -> JsResult<()> {
     let globals = ctx.globals();
 
@@ -184,12 +189,13 @@ fn install_text_bindings(
         let d = Rc::clone(doc);
         let dirty = dirty.clone();
         let freed = Rc::clone(freed);
+        let budget = Rc::clone(budget);
         globals.set(
             "__oasis_settext",
             Function::new(ctx.clone(), move |nid: i32, text: String| {
                 let mut doc = d.borrow_mut();
                 let id = nid as NodeId;
-                if !doc.is_live(id) {
+                if !doc.is_live(id) || !charge_bytes(&doc, &budget, text.len()) {
                     return;
                 }
                 if let NodeKind::Text(s) | NodeKind::Comment(s) = &mut doc.nodes[id].kind {
@@ -209,6 +215,7 @@ fn install_tree_bindings(
     ctx: &Ctx<'_>,
     doc: &SharedDoc,
     dirty: &Option<SharedDirty>,
+    budget: &ByteBudget,
 ) -> JsResult<()> {
     let globals = ctx.globals();
 
@@ -264,11 +271,12 @@ fn install_tree_bindings(
     // -- __oasis_createtext(text) -> i32 ------------------------------
     {
         let d = Rc::clone(doc);
+        let budget = Rc::clone(budget);
         globals.set(
             "__oasis_createtext",
             Function::new(ctx.clone(), move |text: String| -> i32 {
                 let mut doc = d.borrow_mut();
-                if !has_room(&doc, 1) {
+                if !has_room(&doc, 1) || !charge_bytes(&doc, &budget, text.len()) {
                     return NO_NODE;
                 }
                 doc.add_node(NodeKind::Text(text)) as i32
@@ -368,6 +376,7 @@ fn install_document_bindings(
     doc: &SharedDoc,
     dirty: &Option<SharedDirty>,
     freed: &FreedLog,
+    budget: &ByteBudget,
 ) -> JsResult<()> {
     let globals = ctx.globals();
 
@@ -398,10 +407,14 @@ fn install_document_bindings(
         let d = Rc::clone(doc);
         let dirty = dirty.clone();
         let freed = Rc::clone(freed);
+        let budget = Rc::clone(budget);
         globals.set(
             "__oasis_settitle",
             Function::new(ctx.clone(), move |val: String| {
                 let mut doc = d.borrow_mut();
+                if !charge_bytes(&doc, &budget, val.len()) {
+                    return;
+                }
                 // Per HTML, setting document.title on a document without
                 // a <title> creates one in <head>.
                 let tid = doc.title_element().or_else(|| {
@@ -426,6 +439,7 @@ fn install_html_bindings(
     doc: &SharedDoc,
     dirty: &Option<SharedDirty>,
     freed: &FreedLog,
+    budget: &ByteBudget,
 ) -> JsResult<()> {
     let globals = ctx.globals();
 
@@ -454,6 +468,7 @@ fn install_html_bindings(
         let d = Rc::clone(doc);
         let dirty = dirty.clone();
         let freed = Rc::clone(freed);
+        let budget = Rc::clone(budget);
         globals.set(
             "__oasis_set_inner_html",
             Function::new(ctx.clone(), move |nid: i32, html: String| {
@@ -469,6 +484,11 @@ fn install_html_bindings(
                         NodeKind::Element(_) | NodeKind::Document
                     )
                 {
+                    return;
+                }
+                // The markup length bounds the text + attributes it
+                // parses to; refuse before freeing the old children.
+                if !charge_bytes(&doc, &budget, html.len()) {
                     return;
                 }
                 // Serialize existing children so we can detect no-op writes
@@ -512,6 +532,7 @@ fn install_selector_and_style_bindings(
     ctx: &Ctx<'_>,
     doc: &SharedDoc,
     dirty: &Option<SharedDirty>,
+    budget: &ByteBudget,
 ) -> JsResult<()> {
     let globals = ctx.globals();
 
@@ -563,12 +584,14 @@ fn install_selector_and_style_bindings(
     {
         let d = Rc::clone(doc);
         let dirty = dirty.clone();
+        let budget = Rc::clone(budget);
         globals.set(
             "__oasis_style_set",
             Function::new(ctx.clone(), move |nid: i32, prop: String, value: String| {
                 let mut doc = d.borrow_mut();
                 let id = nid as NodeId;
-                if !doc.is_live(id) {
+                // `prop: value; ` grows the `style` attribute by at most this.
+                if !doc.is_live(id) || !charge_bytes(&doc, &budget, prop.len() + value.len() + 3) {
                     return;
                 }
                 let e = match &mut doc.nodes[id].kind {

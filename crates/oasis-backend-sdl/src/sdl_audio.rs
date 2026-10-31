@@ -29,6 +29,22 @@ const MAX_QUEUE_BYTES: u32 = 1_600_000;
 /// PulseAudio's timing and produced an audible pause-and-catch-up artifact.
 const REFILL_QUEUE_BYTES: u32 = 700_000;
 
+/// Hard ceiling for PCM pushed through `feed_pcm_f32` (twice the
+/// high-water mark). Producers that ignore `streaming_can_accept` (the
+/// A/V-synced TV player) overshoot the high-water mark by a chunk or two;
+/// those chunks are still queued whole, and only PCM past this ceiling is
+/// dropped, so a full queue no longer silences whole chunks.
+const HARD_QUEUE_BYTES: u32 = 2 * MAX_QUEUE_BYTES;
+
+/// How many of `len` interleaved i16 samples fit under
+/// [`HARD_QUEUE_BYTES`] with `queued` bytes already queued, rounded down
+/// to whole `channels`-sample frames.
+fn pcm_samples_that_fit(queued: u32, len: usize, channels: u16) -> usize {
+    let room = (HARD_QUEUE_BYTES.saturating_sub(queued) / 2) as usize;
+    let fit = len.min(room);
+    fit - fit % usize::from(channels.max(1))
+}
+
 /// Fixed output sample rate we resample every MP3 to before handing it
 /// to SDL. 48 kHz is the native rate on essentially all modern Linux
 /// audio hardware (USB/HDMI/onboard), so opening the device here means
@@ -919,17 +935,22 @@ impl AudioBackend for SdlAudioBackend {
                 .push(scaled.clamp(-32768.0, 32767.0) as i16);
         }
 
-        // Apply backpressure: skip if queue is already full to prevent unbounded growth.
+        // Bound the queue: everything up to the hard ceiling is queued
+        // (whole frames), only the excess is dropped.
         let queued = self.queued_bytes();
-        if queued < MAX_QUEUE_BYTES {
-            let staging = std::mem::take(&mut self.pcm_staging);
-            self.queue_pcm(&staging)?;
-            self.pcm_staging = staging;
-        } else {
+        let keep = pcm_samples_that_fit(queued, self.pcm_staging.len(), channels);
+        if keep < self.pcm_staging.len() {
             log::debug!(
-                "SDL audio: queue full ({queued} bytes), dropping {} samples",
+                "SDL audio: queue full ({queued} bytes), dropping {} of {} samples",
+                self.pcm_staging.len() - keep,
                 self.pcm_staging.len(),
             );
+        }
+        if keep > 0 {
+            let staging = std::mem::take(&mut self.pcm_staging);
+            let result = self.queue_pcm(&staging[..keep]);
+            self.pcm_staging = staging;
+            result?;
         }
 
         Ok(())
@@ -944,6 +965,20 @@ mod tests {
         let mut backend = SdlAudioBackend::new();
         backend.init().unwrap();
         backend
+    }
+
+    #[test]
+    fn pcm_past_the_high_water_mark_is_queued_until_the_hard_cap() {
+        // Below / just over the high-water mark: the whole chunk fits
+        // (it used to be dropped entirely once MAX_QUEUE_BYTES was hit).
+        assert_eq!(pcm_samples_that_fit(0, 4096, 2), 4096);
+        assert_eq!(pcm_samples_that_fit(MAX_QUEUE_BYTES + 10, 4096, 2), 4096);
+        // At the hard cap only whole frames that fit are kept.
+        let room_bytes = 2 * 101;
+        let queued = HARD_QUEUE_BYTES - room_bytes;
+        assert_eq!(pcm_samples_that_fit(queued, 4096, 2), 100);
+        assert_eq!(pcm_samples_that_fit(HARD_QUEUE_BYTES, 4096, 2), 0);
+        assert_eq!(pcm_samples_that_fit(u32::MAX, 4096, 1), 0);
     }
 
     #[test]

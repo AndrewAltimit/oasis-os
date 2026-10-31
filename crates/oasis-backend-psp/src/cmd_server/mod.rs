@@ -1,9 +1,16 @@
 //! TCP command server for remote development automation.
 //!
-//! Listens on port 9293 after WiFi connects. Retries WiFi connection
-//! indefinitely if initial auto-connect fails. One command per
-//! connection: the server reads a single line, replies and closes.
-//! `scripts/psp_remote.py` is the host-side client.
+//! **Off unless configured.** The server starts only when
+//! `ms0:/PSP/GAME/OASISOS/cmdserver.key` holds a pre-shared key (8+ bytes),
+//! and every connection must pass the PSK HMAC challenge-response in
+//! [`auth`] (the desktop remote terminal's protocol) first. Without the key
+//! the thread still auto-connects WiFi, then exits without listening.
+//!
+//! When enabled it listens on port 9293 after WiFi connects, retrying the
+//! WiFi connection indefinitely if the initial auto-connect fails. One
+//! command per connection: after `AUTH_OK` the server reads a single line,
+//! replies and closes. `scripts/psp_remote.py` is the host-side client
+//! (`PSP_PSK` holds the key).
 //!
 //! Commands:
 //!   ping              → "pong\n"
@@ -35,6 +42,7 @@
 //!   reboot            → cold reset
 //!   exit              → exit to XMB
 
+mod auth;
 mod diag;
 mod screen;
 mod transfer;
@@ -163,7 +171,10 @@ pub fn spawn() {
         .spawn(move || {
             // Auto-connect WiFi in background before server starts.
             auto_connect_wifi();
-            server_main();
+            match auth::load_psk() {
+                Some(psk) => server_main(&psk),
+                None => log_msg("[CMD] no cmdserver.key; command server disabled"),
+            }
             0
         })
     {
@@ -266,7 +277,7 @@ fn listen() -> Option<i32> {
     Some(fd)
 }
 
-fn server_main() {
+fn server_main(psk: &str) {
     wait_for_wifi();
     let Some(fd) = listen() else {
         return;
@@ -285,11 +296,16 @@ fn server_main() {
             continue;
         }
 
-        // Set receive timeout (30 seconds) so stale connections don't block
-        // the server thread indefinitely.
-        set_recv_timeout(cfd, 30);
-
-        handle_client(cfd);
+        // Unauthenticated peers get 10 s to answer the challenge; then a
+        // 30 s receive timeout so stale connections don't block the server
+        // thread indefinitely.
+        set_recv_timeout(cfd, 10);
+        if auth::authenticate(cfd, psk) {
+            set_recv_timeout(cfd, 30);
+            handle_client(cfd);
+        } else {
+            close(cfd);
+        }
     }
 }
 

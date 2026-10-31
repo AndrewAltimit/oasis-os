@@ -1603,6 +1603,51 @@ fn freed_nodes_are_evicted_from_wrapper_cache() {
 }
 
 #[test]
+fn script_dom_bytes_are_capped_but_overwrites_are_not_charged_forever() {
+    let (engine, _doc) = setup_html(TREE_HTML);
+    // Overwriting one node's text far past the cap in total must keep
+    // working: the running bound is recounted against the live bytes.
+    check(
+        &engine,
+        "var p = document.getElementById('p'); var big = 'x'.repeat(1 << 19); \
+         for (var i = 0; i < 200; i++) { p.textContent = big + i; } \
+         p.textContent.length",
+        &((1 << 19) + 3).to_string(),
+    );
+    // Shallow clones copy the 1 MiB attribute each time; the arena is
+    // capped well before 100 of them.
+    check(
+        &engine,
+        "var d = document.createElement('div'); d.setAttribute('data-x', 'x'.repeat(1 << 20)); \
+         var n = 0, err = ''; \
+         try { for (var i = 0; i < 100; i++) { d.cloneNode(false); n++; } } \
+         catch (e) { err = e.name; } \
+         d.setAttribute('data-y', 'y'.repeat(1 << 20)); \
+         [n > 30 && n < 100, err, d.getAttribute('data-y')].join()",
+        "true,QuotaExceededError,",
+    );
+}
+
+#[test]
+fn held_wrapper_of_a_freed_node_does_not_alias_the_reused_slot() {
+    // The freed `<b>` slot is reused by the new `<i>`: writes through the
+    // old wrapper used to land on the new node.
+    let (engine, shared) = setup_html(TREE_HTML);
+    check(
+        &engine,
+        "var outer = document.getElementById('outer'); var old = outer.firstElementChild; \
+         outer.innerHTML = '<i>x</i>'; \
+         old.textContent = 'pwned'; old.setAttribute('id', 'hijack'); \
+         [outer.firstChild.textContent, outer.firstChild.id, old.isConnected, \
+          old.getAttribute('id'), document.getElementById('hijack')].join()",
+        "x,,false,,",
+    );
+    let doc = shared.borrow();
+    let outer = doc.get_element_by_id("outer").unwrap();
+    assert_eq!(doc.text_content(outer), "x");
+}
+
+#[test]
 fn child_nodes_include_text_nodes() {
     let (engine, shared) = setup_html(TREE_HTML);
     check(

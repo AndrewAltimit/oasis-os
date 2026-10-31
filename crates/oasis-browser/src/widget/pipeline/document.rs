@@ -144,15 +144,13 @@ impl BrowserWidget {
         self.diag("[BR] layout start");
         let content_h = self.config.content_height(self.window_h);
         self.refresh_image_info();
-        let shared = std::rc::Rc::clone(&self.text_cache);
-        let measurer =
-            layout::text_cache::CachingMeasurer::with_shared(&SimpleTextMeasurer, shared);
+        layout_measurer!(self, measurer);
         let viewport_w = self.window_w as f32 / self.config.zoom_level;
         let viewport_h = content_h as f32 / self.config.zoom_level;
         let mut layout_root = layout::block::build_layout_tree(
             &doc,
             &styles,
-            &measurer,
+            measurer,
             viewport_w,
             viewport_h,
             Some(url),
@@ -179,7 +177,7 @@ impl BrowserWidget {
                 layout_root = layout::block::build_layout_tree(
                     &doc,
                     &styles,
-                    &measurer,
+                    measurer,
                     viewport_w,
                     viewport_h,
                     Some(url),

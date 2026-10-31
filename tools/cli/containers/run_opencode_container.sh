@@ -27,25 +27,15 @@ check_and_build_images() {
         images_missing=true
     fi
 
-    # Build missing images
+    # This repository does not ship the Dockerfiles for these images
+    # (docker/openrouter-agents.Dockerfile and the mcp-opencode / mcp-crush
+    # builds live in the upstream template repo), so a missing image cannot
+    # be built here. See README.md > Troubleshooting.
     if [ "$images_missing" = true ]; then
-        echo "🔨 Building required Docker images..."
-        echo "This may take a few minutes on first run..."
-
-        # Build base MCP images first (required by openrouter-agents)
-        echo "Building MCP OpenCode and Crush images..."
-        docker compose build mcp-opencode mcp-crush
-
-        # Build the openrouter-agents image with local image references
-        # Using docker build directly to avoid Docker Hub lookup issues
-        echo "Building OpenRouter agents image..."
-        docker build -f docker/openrouter-agents.Dockerfile \
-            --build-arg OPENCODE_IMAGE=template-repo-mcp-opencode:latest \
-            --build-arg CRUSH_IMAGE=template-repo-mcp-crush:latest \
-            -t template-repo-openrouter-agents:latest .
-
-        echo "✅ Docker images built successfully!"
-        echo ""
+        echo "❌ Required images are missing and cannot be built in this repository."
+        echo "   Build or pull them from the upstream template repo (see README.md),"
+        echo "   or use ./run_opencode_simple.sh instead."
+        exit 1
     fi
 }
 

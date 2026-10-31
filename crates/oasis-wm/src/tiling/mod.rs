@@ -187,14 +187,25 @@ impl TilingManager {
 
     // ── Private layout helpers ──────────────────────────────────────
 
-    /// Usable area after subtracting outer margins from both sides.
+    /// Usable area after subtracting outer margins from both sides. A
+    /// margin wider than half the area is clamped (it used to overflow
+    /// `m * 2` / `m as i32` for huge configured margins).
     fn usable_area(&self, area_w: u32, area_h: u32) -> (i32, i32, u32, u32) {
-        let m = self.config.margin;
-        let x = m as i32;
-        let y = m as i32;
-        let w = area_w.saturating_sub(m * 2);
-        let h = area_h.saturating_sub(m * 2);
-        (x, y, w, h)
+        let mx = self.config.margin.min(area_w / 2);
+        let my = self.config.margin.min(area_h / 2);
+        (
+            to_i32(i64::from(mx)),
+            to_i32(i64::from(my)),
+            area_w - 2 * mx,
+            area_h - 2 * my,
+        )
+    }
+
+    /// The configured gap, shrunk so the `count - 1` gaps between
+    /// `count` tiles fit in `span` (so `gap * (count - 1)` cannot
+    /// overflow and tiles never start past the span).
+    fn gap_for(&self, span: u32, count: u32) -> u32 {
+        self.config.gap.min(span / count.saturating_sub(1).max(1))
     }
 
     /// Enforce minimum size constraints on a geometry.
@@ -211,7 +222,7 @@ impl TilingManager {
     fn layout_master_stack(&self, ids: &[&str], area_w: u32, area_h: u32) -> Vec<TileGeometry> {
         let (ux, uy, uw, uh) = self.usable_area(area_w, area_h);
         let n = ids.len();
-        let gap = self.config.gap;
+        let gap = self.gap_for(uw, 2);
 
         if n == 1 {
             // Single window fills the entire usable area.
@@ -228,7 +239,8 @@ impl TilingManager {
         }
 
         // Master pane on the left.
-        let master_w_raw = (uw as f32 * self.config.master_ratio) as u32;
+        let ratio = self.config.master_ratio.clamp(0.0, 1.0);
+        let master_w_raw = ((uw as f32 * ratio) as u32).min(uw);
         let master_w = master_w_raw.saturating_sub(gap / 2);
         let stack_w = uw
             .saturating_sub(master_w_raw)
@@ -249,14 +261,15 @@ impl TilingManager {
         });
 
         // Stack (right side).
-        let stack_count = (n - 1) as u32;
-        let total_gaps = gap * stack_count.saturating_sub(1);
+        let stack_count = u32::try_from(n - 1).unwrap_or(u32::MAX);
+        let vgap = self.gap_for(uh, stack_count);
+        let total_gaps = vgap * stack_count.saturating_sub(1);
         let per_h = uh.saturating_sub(total_gaps) / stack_count;
-        let stack_x = ux + master_w_raw as i32 + gap as i32 - (gap / 2) as i32;
+        let stack_x = offset(ux, master_w_raw.saturating_add(gap - gap / 2).min(uw), 1);
 
         for (i, id) in ids.iter().enumerate().skip(1) {
-            let idx = (i - 1) as u32;
-            let sy = uy + (per_h + gap) as i32 * idx as i32;
+            let idx = u32::try_from(i - 1).unwrap_or(u32::MAX);
+            let sy = offset(uy, per_h.saturating_add(vgap), idx);
             // Last window absorbs rounding remainder.
             let sh = if idx == stack_count - 1 {
                 remainder(uy, uh, sy)
@@ -281,13 +294,13 @@ impl TilingManager {
     fn layout_grid(&self, ids: &[&str], area_w: u32, area_h: u32) -> Vec<TileGeometry> {
         let (ux, uy, uw, uh) = self.usable_area(area_w, area_h);
         let n = ids.len() as u32;
-        let gap = self.config.gap;
 
         // Compute grid dimensions.
         let cols = ceil_sqrt(n);
         let rows = n.div_ceil(cols);
 
-        let total_gap_y = gap * rows.saturating_sub(1);
+        let gap_y = self.gap_for(uh, rows);
+        let total_gap_y = gap_y * rows.saturating_sub(1);
         let cell_h = uh.saturating_sub(total_gap_y) / rows;
 
         let mut result = Vec::with_capacity(ids.len());
@@ -303,11 +316,12 @@ impl TilingManager {
             } else {
                 cols
             };
-            let total_gap_x = gap * row_cols.saturating_sub(1);
+            let gap_x = self.gap_for(uw, row_cols);
+            let total_gap_x = gap_x * row_cols.saturating_sub(1);
             let cell_w = uw.saturating_sub(total_gap_x) / row_cols;
 
-            let cx = ux + (cell_w + gap) as i32 * col as i32;
-            let cy = uy + (cell_h + gap) as i32 * row as i32;
+            let cx = offset(ux, cell_w.saturating_add(gap_x), col);
+            let cy = offset(uy, cell_h.saturating_add(gap_y), row);
 
             // Last column (of this row) absorbs the horizontal remainder.
             let w = if col == row_cols - 1 {
@@ -335,7 +349,7 @@ impl TilingManager {
     fn layout_columns(&self, ids: &[&str], area_w: u32, area_h: u32) -> Vec<TileGeometry> {
         let (ux, uy, uw, uh) = self.usable_area(area_w, area_h);
         let n = ids.len() as u32;
-        let gap = self.config.gap;
+        let gap = self.gap_for(uw, n);
 
         let total_gaps = gap * n.saturating_sub(1);
         let col_w = uw.saturating_sub(total_gaps) / n;
@@ -343,7 +357,7 @@ impl TilingManager {
         let mut result = Vec::with_capacity(ids.len());
         for (i, id) in ids.iter().enumerate() {
             let idx = i as u32;
-            let cx = ux + (col_w + gap) as i32 * idx as i32;
+            let cx = offset(ux, col_w.saturating_add(gap), idx);
             // Last column absorbs rounding remainder.
             let w = if idx == n - 1 {
                 remainder(ux, uw, cx)
@@ -368,7 +382,7 @@ impl TilingManager {
     fn layout_rows(&self, ids: &[&str], area_w: u32, area_h: u32) -> Vec<TileGeometry> {
         let (ux, uy, uw, uh) = self.usable_area(area_w, area_h);
         let n = ids.len() as u32;
-        let gap = self.config.gap;
+        let gap = self.gap_for(uh, n);
 
         let total_gaps = gap * n.saturating_sub(1);
         let row_h = uh.saturating_sub(total_gaps) / n;
@@ -376,7 +390,7 @@ impl TilingManager {
         let mut result = Vec::with_capacity(ids.len());
         for (i, id) in ids.iter().enumerate() {
             let idx = i as u32;
-            let ry = uy + (row_h + gap) as i32 * idx as i32;
+            let ry = offset(uy, row_h.saturating_add(gap), idx);
             // Last row absorbs rounding remainder.
             let h = if idx == n - 1 {
                 remainder(uy, uh, ry)
@@ -428,6 +442,16 @@ impl Default for TilingManager {
 /// `u32`, when an overcrowded layout puts `pos` past the edge.
 fn remainder(start: i32, len: u32, pos: i32) -> u32 {
     (i64::from(start) + i64::from(len) - i64::from(pos)).max(0) as u32
+}
+
+/// `start + step * idx`, computed in `i64` and saturated to `i32`.
+fn offset(start: i32, step: u32, idx: u32) -> i32 {
+    to_i32(i64::from(start) + i64::from(step) * i64::from(idx))
+}
+
+/// Saturating `i64` -> `i32`.
+fn to_i32(v: i64) -> i32 {
+    v.clamp(i64::from(i32::MIN), i64::from(i32::MAX)) as i32
 }
 
 /// Integer ceiling of the square root of `n`.

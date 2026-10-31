@@ -504,7 +504,7 @@ OASIS uses a two-binary design on PSP, inspired by IRShell and similar shells th
 | Binary | Crate | Mode | Purpose |
 |--------|-------|------|---------|
 | EBOOT.PBP | `oasis-backend-psp` | User | Full shell (dashboard, terminal, browser, apps) |
-| PRX | `oasis-plugin-psp` | Kernel | Lightweight overlay + background music, ~153 KB stripped PRX |
+| PRX | `oasis-plugin-psp` | Kernel | Lightweight overlay + background music, ~159 KB stripped PRX |
 
 The PRX is loaded by custom firmware at boot via a `PLUGINS.TXT` entry and stays resident when games launch. It patches `sceDisplaySetFrameBuf` via `sctrlHENPatchSyscall` and draws its overlay into the game's framebuffer after each frame. It uses static buffers (no heap on the overlay path) and shares state between the display hook and its audio / config threads through atomics. Background audio streams MP3 files from `ms0:/MUSIC/` through the hardware decoder. A kernel watchdog in the PRX also recovers the EBOOT's ME video decode from a firmware deadlock.
 

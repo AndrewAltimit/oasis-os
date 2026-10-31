@@ -3,6 +3,13 @@
 //! Wraps `NullAudioBackend` and adds an optional callback so the UE5 host
 //! can be notified of playback events (play, pause, stop, volume changes).
 //! The host engine is expected to handle actual audio output.
+//!
+//! Streaming tracks (internet radio, `load_streaming` + `feed_data`) carry
+//! bytes the host never saw, so they are buffered here (bounded by
+//! [`MAX_STREAM_BUFFER`], with `streaming_can_accept` back-pressure) and
+//! announced with [`AudioEvent::StreamOpened`] / [`AudioEvent::StreamData`] /
+//! [`AudioEvent::StreamEnd`]; the host pulls the bytes with
+//! [`Ue5AudioBackend::drain_stream`].
 
 use oasis_types::backend::{AudioBackend, AudioTrackId};
 use oasis_types::error::Result;
@@ -19,7 +26,19 @@ pub enum AudioEvent {
     TrackLoaded = 5,
     TrackUnloaded = 6,
     Shutdown = 7,
+    /// A streaming track was opened (`track_id` = the stream).
+    StreamOpened = 8,
+    /// Encoded stream bytes were buffered; `value` = bytes now waiting
+    /// for [`Ue5AudioBackend::drain_stream`].
+    StreamData = 9,
+    /// The stream's source ended; drain what is left.
+    StreamEnd = 10,
 }
+
+/// Most encoded stream bytes buffered for the host (1 MiB, about a minute
+/// of 128 kbit/s MP3). Past it `streaming_can_accept` reports `false` and
+/// `feed_data` drops what does not fit.
+pub const MAX_STREAM_BUFFER: usize = 1024 * 1024;
 
 /// Callback function type for audio events.
 ///
@@ -35,6 +54,10 @@ pub struct Ue5AudioBackend {
     callback: Option<AudioEventCallback>,
     /// A track was paused mid-playback and can be resumed.
     paused: bool,
+    /// The open streaming track, if any.
+    stream_track: Option<AudioTrackId>,
+    /// Encoded bytes fed to [`Self::stream_track`] the host has not drained.
+    stream_buf: Vec<u8>,
 }
 
 impl Ue5AudioBackend {
@@ -43,7 +66,23 @@ impl Ue5AudioBackend {
             inner: oasis_audio::NullAudioBackend::new(),
             callback: None,
             paused: false,
+            stream_track: None,
+            stream_buf: Vec::new(),
         }
+    }
+
+    /// Move up to `max` buffered stream bytes into `out` (appended) and
+    /// return how many were moved. The host calls this after a
+    /// [`AudioEvent::StreamData`] / [`AudioEvent::StreamEnd`] event.
+    pub fn drain_stream(&mut self, out: &mut Vec<u8>, max: usize) -> usize {
+        let n = max.min(self.stream_buf.len());
+        out.extend(self.stream_buf.drain(..n));
+        n
+    }
+
+    /// Encoded stream bytes waiting to be drained.
+    pub fn stream_buffered(&self) -> usize {
+        self.stream_buf.len()
     }
 
     /// Register a callback for audio events.
@@ -156,22 +195,61 @@ impl AudioBackend for Ue5AudioBackend {
 
     fn unload_track(&mut self, track: AudioTrackId) -> Result<()> {
         self.inner.unload_track(track)?;
+        if self.stream_track == Some(track) {
+            self.stream_track = None;
+            self.stream_buf.clear();
+        }
         self.fire(AudioEvent::TrackUnloaded, track.0, 0);
         Ok(())
     }
 
     fn shutdown(&mut self) -> Result<()> {
         self.paused = false;
+        self.stream_track = None;
+        self.stream_buf.clear();
         self.fire(AudioEvent::Shutdown, 0, 0);
         self.inner.shutdown()
     }
 
     fn load_streaming(&mut self) -> Result<AudioTrackId> {
-        self.inner.load_streaming()
+        let id = self.inner.load_streaming()?;
+        self.stream_track = Some(id);
+        self.stream_buf.clear();
+        self.fire(AudioEvent::StreamOpened, id.0, 0);
+        Ok(id)
     }
 
+    /// Buffer the bytes for the host (they used to stop at the null
+    /// backend, so streamed audio never reached UE5).
     fn feed_data(&mut self, track: AudioTrackId, data: &[u8]) -> Result<()> {
-        self.inner.feed_data(track, data)
+        self.inner.feed_data(track, data)?;
+        if self.stream_track != Some(track) || data.is_empty() {
+            return Ok(());
+        }
+        let room = MAX_STREAM_BUFFER.saturating_sub(self.stream_buf.len());
+        if room < data.len() {
+            log::debug!(
+                "UE5 audio: stream buffer full, dropping {} bytes",
+                data.len() - room
+            );
+        }
+        self.stream_buf
+            .extend_from_slice(&data[..room.min(data.len())]);
+        let buffered = u32::try_from(self.stream_buf.len()).unwrap_or(u32::MAX);
+        self.fire(AudioEvent::StreamData, track.0, buffered);
+        Ok(())
+    }
+
+    fn finalize_streaming(&mut self, track: AudioTrackId) -> Result<()> {
+        if self.stream_track == Some(track) {
+            let buffered = u32::try_from(self.stream_buf.len()).unwrap_or(u32::MAX);
+            self.fire(AudioEvent::StreamEnd, track.0, buffered);
+        }
+        Ok(())
+    }
+
+    fn streaming_can_accept(&self, track: AudioTrackId) -> bool {
+        self.stream_track == Some(track) && self.stream_buf.len() < MAX_STREAM_BUFFER
     }
 }
 
@@ -355,6 +433,45 @@ mod tests {
         let (_guard, mut b) = init_backend();
         let track = b.load_streaming().unwrap();
         b.feed_data(track, b"streaming chunk").unwrap();
+    }
+
+    #[test]
+    fn streamed_bytes_reach_the_host() {
+        let (_guard, mut b) = init_backend();
+        let track = b.load_streaming().unwrap();
+        assert_eq!(
+            LAST_EVENT.load(Ordering::SeqCst),
+            AudioEvent::StreamOpened as u32
+        );
+        b.feed_data(track, b"abc").unwrap();
+        b.feed_data(track, b"def").unwrap();
+        assert_eq!(
+            LAST_EVENT.load(Ordering::SeqCst),
+            AudioEvent::StreamData as u32
+        );
+        assert_eq!(LAST_VALUE.load(Ordering::SeqCst), 6);
+        let mut out = Vec::new();
+        assert_eq!(b.drain_stream(&mut out, 4), 4);
+        assert_eq!(b.drain_stream(&mut out, 100), 2);
+        assert_eq!(out, b"abcdef");
+        b.finalize_streaming(track).unwrap();
+        assert_eq!(
+            LAST_EVENT.load(Ordering::SeqCst),
+            AudioEvent::StreamEnd as u32
+        );
+    }
+
+    #[test]
+    fn stream_buffer_is_bounded_with_back_pressure() {
+        let (_guard, mut b) = init_backend();
+        let track = b.load_streaming().unwrap();
+        assert!(b.streaming_can_accept(track));
+        b.feed_data(track, &vec![0u8; MAX_STREAM_BUFFER + 10])
+            .unwrap();
+        assert_eq!(b.stream_buffered(), MAX_STREAM_BUFFER);
+        assert!(!b.streaming_can_accept(track));
+        b.unload_track(track).unwrap();
+        assert_eq!(b.stream_buffered(), 0);
     }
 
     #[test]

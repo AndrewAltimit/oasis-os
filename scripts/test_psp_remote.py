@@ -1,18 +1,29 @@
-"""Unit tests for the screencap decoding in psp_remote.py.
+"""Unit tests for psp_remote.py: screencap decoding and the PSK handshake.
 
 Run: python3 -m unittest discover -s scripts -p "test_*.py"
 """
 
+import hashlib
+import hmac
 import os
+import socket
 import struct
 import sys
 import tempfile
+import threading
 import unittest
 import zlib
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from psp_remote import _write_png_rgb, parse_screencap, psm8888_to_rgb  # noqa: E402
+from psp_remote import (  # noqa: E402
+    AuthError,
+    PspConnection,
+    _write_png_rgb,
+    parse_screencap,
+    psk_response,
+    psm8888_to_rgb,
+)
 
 
 def _psm8888(r, g, b, a=0):
@@ -65,6 +76,71 @@ class WritePngTest(unittest.TestCase):
         self.assertEqual(data[37:41], b"IDAT")
         raw = zlib.decompress(data[41:41 + idat_len])
         self.assertEqual(raw, b"\x00" + rgb)
+
+
+NONCE = "0123456789abcdef0123456789abcdef"
+
+
+def _fake_server(psk):
+    """One-shot server speaking the EBOOT's cmd_server protocol.
+
+    Returns `(port, thread, seen)`; `seen` collects the command line the
+    server received after a successful handshake.
+    """
+    listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    listener.bind(("127.0.0.1", 0))
+    listener.listen(1)
+    port = listener.getsockname()[1]
+    seen = []
+
+    def serve():
+        conn, _ = listener.accept()
+        with conn, listener:
+            f = conn.makefile("rb")
+            conn.sendall(f"AUTH_REQUIRED {NONCE}\n".encode())
+            answer = f.readline().decode().strip()
+            expected = hmac.new(psk.encode(), NONCE.encode(), hashlib.sha256).hexdigest()
+            if answer != f"AUTH {expected}":
+                conn.sendall(b"AUTH_FAIL\n")
+                return
+            conn.sendall(b"AUTH_OK\n")
+            seen.append(f.readline().decode().strip())
+            conn.sendall(b"pong\n")
+
+    thread = threading.Thread(target=serve, daemon=True)
+    thread.start()
+    return port, thread, seen
+
+
+class AuthTest(unittest.TestCase):
+    def test_psk_response_matches_openssl_hmac(self):
+        # printf %s abc | openssl dgst -sha256 -hmac key
+        self.assertEqual(
+            psk_response("key", "abc"),
+            "9c196e32dc0175f86f4b1cb89289d6619de6bee699e4c378e68309ed97a1a6ab",
+        )
+
+    def test_command_runs_after_handshake(self):
+        port, thread, seen = _fake_server("correct horse")
+        conn = PspConnection("127.0.0.1", port, timeout=5, psk="correct horse")
+        self.assertEqual(conn.send_command("ping"), "pong")
+        thread.join(5)
+        self.assertEqual(seen, ["ping"])
+
+    def test_wrong_key_is_rejected(self):
+        port, thread, seen = _fake_server("correct horse")
+        conn = PspConnection("127.0.0.1", port, timeout=5, psk="battery staple")
+        with self.assertRaises(AuthError):
+            conn.send_command("ping")
+        thread.join(5)
+        self.assertEqual(seen, [])
+
+    def test_missing_key_is_an_error(self):
+        port, thread, _ = _fake_server("correct horse")
+        conn = PspConnection("127.0.0.1", port, timeout=5, psk="")
+        with self.assertRaises(AuthError):
+            conn.ping()
+        thread.join(5)
 
 
 if __name__ == "__main__":

@@ -251,7 +251,8 @@ impl ContextMenu {
         }
     }
 
-    /// Check if a click at `(mx, my)` is outside the menu bounds.
+    /// Check if a click at `(mx, my)` is outside the menu bounds (and
+    /// outside its open submenu).
     ///
     /// Returns `true` if the click is outside (caller should dismiss the menu),
     /// `false` if it is inside.
@@ -260,7 +261,31 @@ impl ContextMenu {
             return false;
         }
         let (w, h) = self.compute_size(ctx);
-        !(mx >= self.x && mx < self.x + w as i32 && my >= self.y && my < self.y + h as i32)
+        let inside = |x: i32, y: i32, w: u32, h: u32| {
+            mx >= x && mx < x + w as i32 && my >= y && my < y + h as i32
+        };
+        if inside(self.x, self.y, w, h) {
+            return false;
+        }
+        !self
+            .submenu_panel(ctx, self.x, self.y, w)
+            .is_some_and(|sub| {
+                let (sw, sh) = sub.compute_size(ctx);
+                inside(sub.x, sub.y, sw, sh)
+            })
+    }
+
+    /// Index (within the open submenu's items) of the selectable submenu
+    /// item at `(mx, my)`, if a submenu is open and the point is on one.
+    /// The open submenu is drawn beside its row, overlapping the menu's
+    /// right border.
+    pub fn submenu_item_at(&self, ctx: &DrawContext<'_>, mx: i32, my: i32) -> Option<usize> {
+        if !self.visible {
+            return None;
+        }
+        let (w, _) = self.compute_size(ctx);
+        self.submenu_panel(ctx, self.x, self.y, w)?
+            .item_at(ctx, mx, my)
     }
 
     // -- Internal helpers --
@@ -326,6 +351,36 @@ impl ContextMenu {
                 .fill_rect(x + 1, cy, w.saturating_sub(2), row_h, fill)?;
         }
         Ok(())
+    }
+
+    /// Y offset of row `idx` from the top of the panel.
+    fn row_offset(&self, ctx: &DrawContext<'_>, idx: usize) -> i32 {
+        let row_h = self.row_height(ctx);
+        PAD_V
+            + self
+                .items
+                .iter()
+                .take(idx)
+                .map(|item| match item {
+                    MenuItem::Separator => SEPARATOR_HEIGHT,
+                    _ => row_h,
+                })
+                .sum::<u32>() as i32
+    }
+
+    /// The open submenu as a visible child menu, positioned beside its row
+    /// of a panel drawn at `(x, y)` with width `w` (its first row level
+    /// with the submenu row, overlapping this panel's right border).
+    fn submenu_panel(&self, ctx: &DrawContext<'_>, x: i32, y: i32, w: u32) -> Option<ContextMenu> {
+        let idx = self.open_submenu?;
+        let MenuItem::Submenu { items, .. } = self.items.get(idx)? else {
+            return None;
+        };
+        let mut sub = ContextMenu::new(items.clone());
+        sub.x = x + w as i32 - 2;
+        sub.y = y + self.row_offset(ctx, idx) - PAD_V;
+        sub.visible = true;
+        Some(sub)
     }
 
     /// Height of a single non-separator row.
@@ -402,8 +457,9 @@ impl Widget for ContextMenu {
                     cy += SEPARATOR_HEIGHT as i32;
                 },
                 MenuItem::Submenu { label, .. } => {
-                    // Highlight selected / hovered row.
-                    let hovered = self.hovered_index == Some(i);
+                    // Highlight selected / hovered row (and the row whose
+                    // submenu is open).
+                    let hovered = self.hovered_index == Some(i) || self.open_submenu == Some(i);
                     self.draw_row_bg(ctx, x, cy, w, row_h, i, hovered)?;
 
                     ctx.backend.draw_text_ellipsis(
@@ -428,6 +484,13 @@ impl Widget for ContextMenu {
                     cy += row_h as i32;
                 },
             }
+        }
+
+        // The open submenu, beside its row (`open_submenu` used to be
+        // tracked but never drawn).
+        if let Some(sub) = self.submenu_panel(ctx, x, y, w) {
+            let (sw, sh) = sub.compute_size(ctx);
+            sub.draw(ctx, sub.x, sub.y, sw, sh)?;
         }
 
         Ok(())
@@ -697,6 +760,44 @@ mod tests {
         assert!(backend.has_text("Paste"));
         assert!(backend.has_text("More"));
         assert!(backend.has_text(SUBMENU_ARROW));
+    }
+
+    #[test]
+    fn open_submenu_is_drawn_and_hit_tested() {
+        let theme = Theme::dark();
+        let mut backend = RecordingBackend::default();
+        let mut menu = ContextMenu::new(sample_items());
+        menu.show(10, 10);
+        menu.selected_index = Some(4);
+        menu.activate();
+        let (child_x, child_y, w, h, row_h);
+        {
+            let mut ctx = DrawContext::new(&mut backend, &theme);
+            (w, h) = menu.compute_size(&ctx);
+            row_h = menu.row_height(&ctx) as i32;
+            menu.draw(&mut ctx, 10, 10, w, h).unwrap();
+            let sub = menu.submenu_panel(&ctx, 10, 10, w).unwrap();
+            (child_x, child_y) = (sub.x, sub.y);
+            // The submenu's first item is selectable and sits beside the row.
+            let hit = menu.submenu_item_at(&ctx, child_x + 8, child_y + PAD_V + row_h / 2);
+            assert_eq!(hit, Some(0));
+            assert!(!menu.dismiss_on_click(&ctx, child_x + 8, child_y + PAD_V + 1));
+            assert!(menu.dismiss_on_click(&ctx, child_x + 500, child_y));
+        }
+        assert!(child_x >= 10 + w as i32 - 2);
+        let sub_items: Vec<&str> = match &menu.items[4] {
+            MenuItem::Submenu { items, .. } => items
+                .iter()
+                .filter_map(|i| match i {
+                    MenuItem::Action { label, .. } => Some(label.as_str()),
+                    _ => None,
+                })
+                .collect(),
+            _ => unreachable!(),
+        };
+        for label in sub_items {
+            assert!(backend.has_text(label), "submenu item {label} not drawn");
+        }
     }
 
     #[test]
