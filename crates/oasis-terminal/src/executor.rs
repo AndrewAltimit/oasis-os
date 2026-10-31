@@ -447,6 +447,10 @@ impl CommandRegistry {
             .iter()
             .map(|(name, _)| (*name, self.get_variable(name)))
             .collect();
+        // The command's words expand first, against the old values
+        // (`X=1 echo $X` prints the previous `$X`, as in a POSIX shell);
+        // the assignments then hold while it runs.
+        let words = self.expand_args(command, env)?;
         let mut result = Ok(CommandOutput::None);
         for (name, value) in &values {
             if let Err(e) = self.assign_variable(name, value) {
@@ -455,9 +459,7 @@ impl CommandRegistry {
             }
         }
         if result.is_ok() {
-            result = self
-                .expand_args(command, env)
-                .and_then(|words| self.run_expanded(&words, env));
+            result = self.run_expanded(&words, env);
         }
         for (name, old) in saved.into_iter().rev() {
             match old {

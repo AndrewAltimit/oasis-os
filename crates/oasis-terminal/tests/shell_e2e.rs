@@ -1527,6 +1527,8 @@ fn posix_variable_assignments() {
     assert_eq!(sh.ok("echo [$P]"), "[]");
     sh.ok("P=kept");
     assert_eq!(sh.ok("P=temp show; echo $P"), "[temp]\nkept");
+    // The command's own words expand before its prefix assignments apply.
+    assert_eq!(sh.ok("P=temp echo $P"), "kept");
     // An assignment's status is its last `$(...)`'s; a command's is its
     // own (a substitution in its arguments does not leak into it).
     sh.ok("E=$(false)");
