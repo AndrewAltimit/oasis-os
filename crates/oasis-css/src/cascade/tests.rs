@@ -1569,23 +1569,202 @@ fn text_wrap_defaults_to_wrap() {
 /// Regression: structural pseudo-classes rescanned (and collected) the
 /// sibling list uncharged for every `:has(~ ..)` candidate, so
 /// `p:has(~ p:nth-last-child(-n+0))` over 4 000 siblings took ~50 s.
-/// Budgeted it is ~2 s unoptimized locally; the 30 s bound leaves room
-/// for slow, loaded CI runners (the 128 Ki scan allowance once took 31 s
-/// there).
+/// Later, with each check charged to a per-match 128 Ki scan allowance,
+/// every element could still spend all of it (31 s on CI). Positions are
+/// now memoized per parent, so a match pays a few scans of the list plus
+/// the step budget: pinned by counting the work, not timing it (without
+/// the memo the first elements here spend ~1 000 x 1 000 scan units).
 #[test]
 fn structural_checks_inside_has_are_budgeted() {
-    let doc = make_doc(vec![(TagName::P, vec![]); 4000]);
-    let sheet = Stylesheet::parse("p:has(~ p:nth-last-child(-n+0)) { color: red }");
-    let start = std::time::Instant::now();
-    let _ = style_tree(&doc, &[&sheet], &[], &ctx());
-    assert!(
-        start.elapsed() < std::time::Duration::from_secs(30),
-        "{:?}",
-        start.elapsed()
-    );
-    // One check on a long list still matches (separate scan allowance).
+    const N: usize = 1000;
+    // `MAX_TRAVERSAL_STEPS`.
+    const STEP_BUDGET: usize = 16_384;
+    let doc = make_doc(vec![(TagName::P, vec![]); N]);
+    let sel = parse_selector("p:has(~ p:nth-last-child(-n+0))");
+    for node in 3..3 + N {
+        let (matched, spent) = matching::matches_selector_cost(&doc, node, &sel, &ctx());
+        assert!(!matched);
+        // Plain scan + index build + one lookup off the hint.
+        assert!(spent <= STEP_BUDGET + 3 * N, "node {node}: spent {spent}");
+    }
+
+    // A check repeated for every child of an ordinary list matches.
+    let mut doc = make_doc(vec![(TagName::Ul, vec![])]);
+    for _ in 0..1000 {
+        let li = doc.add_node(NodeKind::Element(ElementData {
+            tag: TagName::Li,
+            attributes: vec![],
+        }));
+        doc.append_child(3, li);
+    }
+    for (src, want) in [
+        ("ul:has(> li:last-child)", true),
+        ("ul:has(> li:nth-child(950):nth-last-child(51))", true),
+        ("ul:has(li:nth-child(999))", true),
+        ("ul:has(> li:nth-child(1001))", false),
+    ] {
+        let got = matching::matches_selector(&doc, 3, &parse_selector(src), &ctx());
+        assert_eq!(got, want, "{src}");
+    }
+}
+
+/// Regression: `an+b` arguments with a step (`2n+1`) are dimension tokens,
+/// which the argument builder dropped, so `:nth-child(2n+1)` parsed as
+/// `:nth-child(+1)`.
+#[test]
+fn nth_arguments_with_a_step_parse_whole() {
+    for (src, want) in [
+        ("2n+1", "2n+1"),
+        ("2n-1", "2n-1"),
+        ("-2n+3", "-2n+3"),
+        ("3n", "3n"),
+        ("odd", "odd"),
+        ("-n+2", "-n+2"),
+        ("5", "5"),
+    ] {
+        let sel = parse_selector(&format!("li:nth-child({src})"));
+        let arg = sel.parts[0].0.parts.iter().find_map(|p| match p {
+            SimpleSelector::PseudoClassFn(_, arg) => Some(arg.clone()),
+            _ => None,
+        });
+        assert_eq!(arg.as_deref(), Some(want), "{src}");
+        assert!(super::super::selectors::AnB::parse(want).is_some(), "{src}");
+    }
+}
+
+/// The memoized positions agree with the `selectors` module, both on a
+/// parent's first (plain scan) check and on later (indexed) ones, with
+/// text nodes among the children.
+#[test]
+fn memoized_sibling_positions_match_plain_scans() {
+    let mut doc = make_doc(vec![(TagName::Div, vec![])]);
+    for i in 0..7 {
+        if i % 3 == 0 {
+            let t = doc.add_node(NodeKind::Text("x".into()));
+            doc.append_child(3, t);
+        }
+        let tag = if i % 2 == 0 {
+            TagName::P
+        } else {
+            TagName::Span
+        };
+        let e = doc.add_node(NodeKind::Element(ElementData {
+            tag,
+            attributes: vec![],
+        }));
+        doc.append_child(3, e);
+    }
+    let kids: Vec<usize> = doc.nodes[3].children.clone();
+    let mut cases: Vec<(String, &str, Option<&str>)> = ["first-child", "last-child", "only-child"]
+        .iter()
+        .map(|p| (format!(":{p}"), *p, None))
+        .collect();
+    for f in ["nth-child", "nth-last-child"] {
+        for a in ["1", "2", "odd", "even", "-n+2", "2n+1", "n", "3n"] {
+            cases.push((format!(":{f}({a})"), f, Some(a)));
+        }
+    }
+    for &node in kids
+        .iter()
+        .filter(|&&k| matches!(doc.nodes[k].kind, NodeKind::Element(_)))
+    {
+        for (pseudo, name, arg) in &cases {
+            let want = match arg {
+                Some(a) => {
+                    super::super::selectors::matches_pseudo_class_fn(&doc.nodes, node, name, a)
+                },
+                None => super::super::selectors::matches_pseudo_class(&doc.nodes, node, name),
+            };
+            // `*:nth-child(n)` (always true) checks the parent first, so
+            // the second form's `pseudo` is answered from the index.
+            for src in [format!("*{pseudo}"), format!("*:nth-child(n){pseudo}")] {
+                let got = matching::matches_selector(&doc, node, &parse_selector(&src), &ctx());
+                assert_eq!(got, want, "{src} on node {node}");
+            }
+        }
+    }
+}
+
+/// `:first-child` / `:last-child` / `:only-child` walk in from one end of
+/// the list instead of scanning all of it, so a rule like `li:first-child`
+/// over a long list stays linear overall.
+#[test]
+fn edge_child_checks_do_not_scan_the_whole_list() {
+    const N: usize = 5000;
+    let mut doc = make_doc(vec![(TagName::Ul, vec![])]);
+    let mut lis = Vec::new();
+    for _ in 0..N {
+        let t = doc.add_node(NodeKind::Text(" ".into()));
+        doc.append_child(3, t);
+        let li = doc.add_node(NodeKind::Element(ElementData {
+            tag: TagName::Li,
+            attributes: vec![],
+        }));
+        doc.append_child(3, li);
+        lis.push(li);
+    }
+    let t = doc.add_node(NodeKind::Text(" ".into()));
+    doc.append_child(3, t);
+    for (src, want_first, want_last) in [
+        ("li:first-child", true, false),
+        ("li:last-child", false, true),
+        ("li:only-child", false, false),
+    ] {
+        let sel = parse_selector(src);
+        for (i, &li) in lis.iter().enumerate() {
+            let (matched, spent) = matching::matches_selector_cost(&doc, li, &sel, &ctx());
+            let want = (i == 0 && want_first) || (i == N - 1 && want_last);
+            assert_eq!(matched, want, "{src} on li {i}");
+            assert!(spent <= 8, "{src} on li {i}: spent {spent}");
+        }
+    }
+    // A lone element among text nodes is the only child.
+    let mut doc = make_doc(vec![(TagName::Ul, vec![])]);
+    for _ in 0..3 {
+        let t = doc.add_node(NodeKind::Text(" ".into()));
+        doc.append_child(3, t);
+    }
+    let li = doc.add_node(NodeKind::Element(ElementData {
+        tag: TagName::Li,
+        attributes: vec![],
+    }));
+    doc.append_child(3, li);
+    let t = doc.add_node(NodeKind::Text(" ".into()));
+    doc.append_child(3, t);
+    let sel = parse_selector("li:only-child");
+    assert!(matching::matches_selector(&doc, li, &sel, &ctx()));
+}
+
+/// A `~` walk over earlier siblings checks a structural pseudo-class on
+/// each; the memo follows it backwards, so the match pays a few scans plus
+/// the step budget rather than a scan per sibling.
+#[test]
+fn backward_sibling_walks_reuse_the_memo() {
+    const N: usize = 1000;
+    // `MAX_TRAVERSAL_STEPS`.
+    const STEP_BUDGET: usize = 16_384;
+    let doc = make_doc(vec![(TagName::Li, vec![]); N]);
+    let sel = parse_selector("li:nth-child(-n+0) ~ li");
+    for node in [3 + N / 2, 3 + N - 1] {
+        let (matched, spent) = matching::matches_selector_cost(&doc, node, &sel, &ctx());
+        assert!(!matched);
+        assert!(spent <= STEP_BUDGET + 3 * N, "node {node}: spent {spent}");
+    }
+    let sel = parse_selector("li:nth-child(1) ~ li");
+    assert!(matching::matches_selector(&doc, 3 + N - 1, &sel, &ctx()));
+}
+
+/// One structural check on a long list matches (separate scan
+/// allowance), and so do a compound's several checks on that list.
+#[test]
+fn structural_checks_on_long_lists_match() {
     let doc = make_doc(vec![(TagName::Li, vec![]); 20_000]);
     let sel = parse_selector("li:nth-child(19999)");
+    assert!(matching::matches_selector(&doc, 3 + 19_998, &sel, &ctx()));
+    let sel = parse_selector("li:nth-child(odd):not(:last-child):nth-last-child(n+2)");
+    assert!(matching::matches_selector(&doc, 3, &sel, &ctx()));
+    assert!(!matching::matches_selector(&doc, 4, &sel, &ctx()));
+    let sel = parse_selector("li:nth-last-child(2):nth-child(19999):not(:first-child)");
     assert!(matching::matches_selector(&doc, 3 + 19_998, &sel, &ctx()));
 }
 

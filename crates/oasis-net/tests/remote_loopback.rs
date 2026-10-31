@@ -40,21 +40,29 @@ fn connect(port: u16) -> TcpStream {
 
 /// Read from `s` until the accumulated bytes contain `marker` (or EOF /
 /// deadline). Returns everything read.
+///
+/// Only the newly read bytes (plus a marker-length overlap) are searched
+/// each time: rescanning all of `acc` after every read was quadratic, and
+/// for the multi-megabyte response in `large_output_arrives_complete` an
+/// unoptimized build spent most of the deadline searching (11 s on CI).
 fn read_until(s: &mut TcpStream, acc: &mut Vec<u8>, marker: &[u8]) -> bool {
     let start = Instant::now();
     let mut buf = vec![0u8; 64 * 1024];
+    // `acc[..searched]` holds no match ending inside it.
+    let mut searched = 0;
     loop {
-        if contains(acc, marker) {
+        if contains(&acc[searched..], marker) {
             return true;
         }
+        searched = acc.len().saturating_sub(marker.len().saturating_sub(1));
         if start.elapsed() > DEADLINE {
             return false;
         }
         match s.read(&mut buf) {
-            Ok(0) => return contains(acc, marker),
+            Ok(0) => return false,
             Ok(n) => acc.extend_from_slice(&buf[..n]),
             Err(e) if matches!(e.kind(), ErrorKind::WouldBlock | ErrorKind::TimedOut) => {},
-            Err(_) => return contains(acc, marker),
+            Err(_) => return false,
         }
     }
 }

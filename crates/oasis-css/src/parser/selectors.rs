@@ -342,6 +342,9 @@ impl CssParser {
                     match tok {
                         CssToken::Ident(s) => arg.push_str(&s),
                         CssToken::Number(n) => arg.push_str(&format!("{n}")),
+                        // `2n`, `-3n`, `2n-1`: an `an+b` with a step is a
+                        // dimension token (unit `n` / `n-1`).
+                        CssToken::Dimension(n, unit) => arg.push_str(&format!("{n}{unit}")),
                         CssToken::Plus => arg.push('+'),
                         CssToken::Whitespace => arg.push(' '),
                         CssToken::Delim(c) => arg.push(c),

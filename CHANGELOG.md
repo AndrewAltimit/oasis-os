@@ -118,6 +118,10 @@ Each item is described, with its migration, in its area below.
 - Deep nesting, `calc()` / `not` chains, nesting selector explosion, `var()` expansion,
   `:has()` with structural pseudo-classes, and `:nth-child(2n-2147483648)` no longer crash or
   hang.
+- `an+b` arguments with a step parse whole: `:nth-child(2n+1)` / `:nth-last-child(3n)` were
+  read as `(+1)` / `()` and matched the wrong elements. Child-index positions are memoized
+  per match, so `ul:has(> li:last-child)` or `:has(~ :nth-last-child(..))` on a long list
+  costs one scan instead of one per sibling.
 - `oasis_css::selectors` and `cascade::build_global_layer_map` are crate-private
   **(breaking)**.
 
