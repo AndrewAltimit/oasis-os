@@ -6,6 +6,29 @@ larger changes by area. Breaking API changes are marked **(breaking)**.
 
 ## Unreleased -- overhaul 3
 
+### Shell chrome polish
+
+- Chip-style dashboard icons (`icon_container = "chip"`: macOS, GNOME, Modern, Paper,
+  Solarized, Vaporwave, Retro CGA, Balatro) fit the glyph inside the chip body below the
+  accent band; tall glyphs (Radio's and TV Guide's antennas) used to cover the band and
+  poke out of the chip, and labels now start below the chip instead of on its edge.
+- The bottom bar's `USB` label keeps a gap from the URL plate's bezel instead of touching it.
+- Desktop-mode taskbar buttons no longer cover the bottom bar's URL plate / USB label or the
+  media dock's transport pills: the bar reports the span it leaves free
+  (`BottomBar::taskbar_span`, `reserve_taskbar`) and `Taskbar::update_sdi_in` lays the
+  buttons out in it (`update_sdi` keeps the old placement for the PSP / WASM hosts).
+- Start-button labels are centred by their real (proportional) width; new
+  `button_shape = "bevel"` (Win9x raised 3D edges, sunken while open), used by `win95`.
+- `oasis-screenshot`: window-manager-only skins (`desktop`) show the bottom bar, start
+  button, clock and taskbar window buttons like the shell does; the windowed terminal shot
+  of desktop skins keeps the bars up and fits the window between them.
+- SDL shader wallpaper: `SdlShaderBridge::render_and_blit` / `would_shade` take the clock
+  time as unwrapped `f64` seconds and wrap it in `f64` before the shader sees it
+  (`shader_bridge::shader_time`), so the 30 Hz throttle and the animation stay smooth after
+  days of uptime **(breaking)**.
+- Site: the demo page's top bar no longer overflows at tablet widths, and the 404 page has
+  a meta description and social card. Regenerated skin screenshots.
+
 ### Skins, vector graphics & shaders
 
 - Skin inheritance (`inherits = "<parent>"`) now fills *every* field the child omits: the nine
