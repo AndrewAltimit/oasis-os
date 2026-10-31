@@ -106,10 +106,17 @@ pub const OASIS_TRIGGER_RIGHT: u32 = 1;
 pub const OASIS_CB_COMMAND_EXEC: u32 = 2;
 /// Fired when a dashboard app is launched; detail = the app title.
 pub const OASIS_CB_APP_LAUNCH: u32 = 3;
+/// Fired by `oasis_tick` with the output of background shell work: a
+/// finished `cmd &` job (its output plus the `[N]+ Done` notice) or the
+/// `cron` jobs that ran (lines prefixed `[cron <name>]`).
+pub const OASIS_CB_SHELL_OUTPUT: u32 = 7;
 
 /// Whether `event` is a callback code the library fires.
 pub(crate) fn is_callback_event(event: u32) -> bool {
-    matches!(event, OASIS_CB_COMMAND_EXEC | OASIS_CB_APP_LAUNCH)
+    matches!(
+        event,
+        OASIS_CB_COMMAND_EXEC | OASIS_CB_APP_LAUNCH | OASIS_CB_SHELL_OUTPUT
+    )
 }
 
 /// Callback function type: receives an event type and a null-terminated detail string.

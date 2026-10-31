@@ -454,10 +454,13 @@ jobs:
               fi
             done
 
-            # FFI shared library
+            # FFI shared library: release-ffi (panic = unwind), so the
+            # exports' catch_unwind guards work; under release's
+            # panic = abort a panic would kill the host process.
+            cargo build --profile release-ffi -p oasis-ffi
             for ext in so dylib dll; do
-              if [ -f \"target/release/liboasis_ffi.\$ext\" ]; then
-                cp \"target/release/liboasis_ffi.\$ext\" \"/app/release-binaries/liboasis_ffi-linux-${ARCH}.\$ext\"
+              if [ -f \"target/release-ffi/liboasis_ffi.\$ext\" ]; then
+                cp \"target/release-ffi/liboasis_ffi.\$ext\" \"/app/release-binaries/liboasis_ffi-linux-${ARCH}.\$ext\"
                 echo \"Built liboasis_ffi.\$ext for linux-${ARCH}\"
               fi
             done

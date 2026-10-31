@@ -57,13 +57,46 @@ pub unsafe extern "C" fn oasis_tick(handle: *mut OasisInstance, delta_seconds: f
     })
 }
 
+/// Longest step one `oasis_tick` may advance the clock by: a host that
+/// stalls (breakpoint, level load) does not fast-forward animations.
+const MAX_TICK_SECS: f64 = 1.0;
+
+/// `delta_seconds` as a clock step: finite and within `0..=MAX_TICK_SECS`.
+/// A NaN or infinite delta (one bad frame time) would otherwise poison the
+/// clock for good, and a negative one would stall the render scheduler.
+fn sanitize_delta(delta_seconds: f32) -> f64 {
+    let dt = f64::from(delta_seconds);
+    if dt.is_finite() {
+        dt.clamp(0.0, MAX_TICK_SECS)
+    } else {
+        0.0
+    }
+}
+
+/// Period the shader wallpaper's time wraps at. Shaders take `f32`
+/// seconds, which loses sub-frame precision after a few days; wrapping
+/// keeps them smooth at the cost of one visual jump per period.
+const SHADER_TIME_PERIOD: f64 = 3600.0;
+
 fn tick_inner(instance: &mut OasisInstance, delta_seconds: f32) {
     #[cfg(test)]
     crate::handle::maybe_inject_panic();
 
-    instance.shader_time += delta_seconds;
+    instance.clock += sanitize_delta(delta_seconds);
 
-    // Process queued input events.
+    let had_input = handle_input(instance);
+    let now = instance.clock;
+    crate::commands::poll_background(instance, now);
+    update_chrome(instance);
+    if should_render(instance, had_input) {
+        instance.last_render_time = instance.clock;
+        render_frame(instance);
+    }
+}
+
+/// Apply the queued input events to the dashboard and fire the resulting
+/// callbacks. Returns whether there was any input.
+fn handle_input(instance: &mut OasisInstance) -> bool {
     let events = instance.input.poll_events();
 
     // Collect callback details to fire after releasing dashboard borrow.
@@ -124,8 +157,11 @@ fn tick_inner(instance: &mut OasisInstance, delta_seconds: f32) {
     for (event, detail) in &pending_callbacks {
         instance.fire_callback(*event, detail);
     }
+    !events.is_empty()
+}
 
-    // Update SDI.
+/// Update the dashboard and the status / bottom bar / start button SDI.
+fn update_chrome(instance: &mut OasisInstance) {
     if let Some(ref mut dashboard) = instance.dashboard {
         dashboard.update_sdi(&mut instance.sdi, &instance.active_theme);
     }
@@ -155,8 +191,10 @@ fn tick_inner(instance: &mut OasisInstance, delta_seconds: f32) {
                 .update_sdi(&mut instance.sdi, &instance.active_theme);
         }
     }
+}
 
-    // --- Render scheduler ---------------------------------------------------
+/// The render scheduler: whether this tick renders.
+fn should_render(instance: &OasisInstance, had_input: bool) -> bool {
     // Skip the (expensive) render entirely when nothing visible changed: no input
     // this tick, and not yet time for either the animated-wallpaper frame or the
     // periodic refresh that catches the clock. Skipping leaves the framebuffer
@@ -168,25 +206,24 @@ fn tick_inner(instance: &mut OasisInstance, delta_seconds: f32) {
             &instance.active_theme.background_layers,
             instance.active_theme.background_reduced_motion,
         );
-    const SHADER_FPS: f32 = 12.0; // animated wallpaper / layer refresh rate
-    const STATIC_FPS: f32 = 4.0; // idle desktop refresh rate (enough to catch the clock)
+    const SHADER_FPS: f64 = 12.0; // animated wallpaper / layer refresh rate
+    const STATIC_FPS: f64 = 4.0; // idle desktop refresh rate (enough to catch the clock)
     let interval = if animated {
         1.0 / SHADER_FPS
     } else {
         1.0 / STATIC_FPS
     };
-    let had_input = !events.is_empty();
-    let should_render = had_input || (instance.shader_time - instance.last_render_time) >= interval;
-    if !should_render {
-        return;
-    }
-    instance.last_render_time = instance.shader_time;
+    had_input || (instance.clock - instance.last_render_time) >= interval
+}
 
+/// Draw one frame into the framebuffer.
+fn render_frame(instance: &mut OasisInstance) {
+    let shader_layer = oasis_core::vector_overlay::get_shader_layer(&instance.active_theme);
     // Render. A failing stage is logged (once per stage at `warn`, so a
     // broken skin does not flood the host's log at the frame rate) and
     // the remaining stages still draw.
     // Vector animation clocks count 60 Hz frames.
-    let frame = (instance.shader_time.max(0.0) * 60.0) as u32;
+    let frame = (instance.clock * 60.0) as u32;
     let r = instance
         .backend
         .clear(oasis_core::backend::Color::rgb(10, 10, 18));
@@ -205,7 +242,8 @@ fn tick_inner(instance: &mut OasisInstance, delta_seconds: f32) {
             .get_or_insert_with(|| oasis_shader::software::SoftwareShaderRenderer::new(qw, qh));
         // `software_shader` and `shader_cache` are disjoint fields: upscale
         // straight from the renderer's frame, no per-frame copy.
-        let pixels = renderer.render_shader(&info.name, instance.shader_time, &info.params);
+        let t = (instance.clock % SHADER_TIME_PERIOD) as f32;
+        let pixels = renderer.render_shader(&info.name, t, &info.params);
         upscale_nearest(pixels, qw, qh, &mut instance.shader_cache, full_w, full_h);
         instance
             .backend
