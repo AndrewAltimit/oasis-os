@@ -120,6 +120,7 @@ findings about Sony firmware and hardware, not OASIS_OS behavior.
 
 - [`../README.md`](../README.md) -- project overview and crate table
 - [`../CLAUDE.md`](../CLAUDE.md) -- developer / agent reference: build commands, crate graph, canonical CI order, conventions
+- [Crate map](https://andrewaltimit.github.io/oasis-os/crates.html) -- interactive site page drawn from every `Cargo.toml` by [`../scripts/gen-crate-map.py`](../scripts/gen-crate-map.py) (regenerate `site/data/crates.json` after changing a crate's dependencies)
 - [`../CHANGELOG.md`](../CHANGELOG.md) -- notable changes by release / branch
 - [`../SCREENSHOTS.md`](../SCREENSHOTS.md) -- every built-in skin, a screenshot per app
 - [`../examples/README.md`](../examples/README.md) -- runnable examples
