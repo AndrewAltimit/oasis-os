@@ -499,6 +499,35 @@ fn rescan_keeps_moved_selection_visible() {
     assert!(p.lines[p.scroll + p.cursor].starts_with("z.txt"));
 }
 
+/// Explorer tile labels are cut to the tile in pixels: a character-count
+/// cut let wide names spill into the next tile.
+#[test]
+fn explorer_tile_labels_stay_inside_their_tile() {
+    let mut vfs = setup_vfs();
+    vfs.write("/a_rather_long_file_name.txt", b"x").unwrap();
+    vfs.write("/WWWWWWWWW", b"x").unwrap();
+    let fm = FileManagerApp::new("/apps/fm", &vfs);
+    let at = ActiveTheme::default();
+    let mut rec = oasis_test_backend::RecordingBackend::new(480, 272);
+    fm.draw_windowed_explorer(0, 0, 480, 272, &mut rec, &at)
+        .unwrap();
+    let g = compute_explorer_geom(0, 0, 480, 272);
+    let label_y = g.body_y + 4 + 4 + g.icon_h as i32 + 2;
+    let labels: Vec<(String, i32)> = rec
+        .text_positions()
+        .into_iter()
+        .filter(|&(_, _, y, _)| (y - label_y) % g.tile_h as i32 == 0 && y >= label_y)
+        .map(|(t, x, _, size)| (t.to_string(), x + oasis_types::backend::bitmap_measure_text(t, size) as i32))
+        .collect();
+    assert!(labels.iter().any(|(t, _)| t.ends_with("...")), "{labels:?}");
+    assert!(labels.iter().any(|(t, _)| t == "etc"), "{labels:?}");
+    for (text, right) in &labels {
+        let col = (right - 1 - (g.grid_x + 4)) / g.tile_w as i32;
+        let tile_right = g.grid_x + 4 + (col + 1) * g.tile_w as i32;
+        assert!(*right <= tile_right, "{text:?} ends at {right}, tile at {tile_right}");
+    }
+}
+
 #[test]
 fn dual_view_draws_at_zero_width() {
     let vfs = setup_vfs();

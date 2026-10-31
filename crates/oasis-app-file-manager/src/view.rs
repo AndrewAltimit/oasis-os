@@ -11,7 +11,7 @@ use oasis_types::backend::{BatchRect, BatchText, Color, SdiBackend};
 use oasis_ui::menu_bar::MenuStyle;
 
 use crate::colors::FileManagerColors;
-use crate::model::{EntryKind, TreeEntry, truncate_label};
+use crate::model::{EntryKind, TreeEntry};
 use crate::state::FileManagerApp;
 
 /// Pixel height reserved for the file-manager menu bar (matches the
@@ -559,16 +559,21 @@ impl FileManagerApp {
                 kind,
                 &colors,
             );
-            // Tile labels keep a character-count cut: a pixel cut at the tile
-            // width would hide most names (`notes.txt`) behind an ellipsis.
-            let max_chars = (g.tile_w as usize / 7).max(4);
-            let label = truncate_label(&name, max_chars);
+            // Tile labels are cut to the tile's width in pixels (as the
+            // font draws them), centred under the icon: a character-count
+            // cut spilled wide glyphs into the neighbouring tile.
+            let label_max_w = g.tile_w.saturating_sub(4);
+            let label =
+                oasis_app_core::render::ellipsize(&*backend, &name, at.font_hint, label_max_w)
+                    .into_owned();
+            let label_w = backend.measure_text(&label, at.font_hint);
+            let label_x = tx + (g.tile_w as i32 - label_w as i32).max(4) / 2;
             let label_color = if is_selected {
                 colors.selected_text
             } else {
                 colors.pane_text
             };
-            tile_labels.push((tx + 2, icon_y + g.icon_h as i32 + 2, label_color, label));
+            tile_labels.push((label_x, icon_y + g.icon_h as i32 + 2, label_color, label));
         }
         if !tile_rects.is_empty() {
             backend.submit_rect_batch(&tile_rects)?;
