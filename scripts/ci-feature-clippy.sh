@@ -43,6 +43,12 @@ CLIPPIES=(
     "-p oasis-app --no-default-features --features video-decode"
     "-p oasis-ffi --features video-decode"
     "-p oasis-ffi --features video-decode-ffmpeg"
+    # The glow GPU shader path: no in-tree host enables it, so nothing else
+    # compiles it.
+    "-p oasis-shader --features gl-native"
+    # WASM without the YouTube app (and so oasis-apps without video-embed,
+    # which the workspace build always unifies on).
+    "-p oasis-backend-wasm --no-default-features"
 )
 
 commands=()

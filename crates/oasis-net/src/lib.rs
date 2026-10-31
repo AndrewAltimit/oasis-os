@@ -1,6 +1,14 @@
 //! Networking: std::net backend, remote terminal listener, outbound client,
 //! TLS provider abstraction, and (feature `vfs`) the FTP-like file
 //! transfer server.
+//!
+//! # Feature flags
+//!
+//! - `tls-rustls` — `tls_rustls::RustlsTlsProvider`: TLS
+//!   1.3 client via rustls with the webpki-roots CA bundle. Without it outbound
+//!   connections are plaintext TCP only.
+//! - `vfs` — the FTP-like file transfer server (`ftp` module), serving a `Vfs`.
+//!   Enabled by `oasis-core` for its `ftp` / `push` / `pull` commands.
 
 pub mod auth;
 mod client;

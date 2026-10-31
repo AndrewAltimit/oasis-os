@@ -1191,11 +1191,9 @@ dependencies = [
  "criterion",
  "log",
  "oasis-audio",
- "oasis-browser",
  "oasis-core",
  "oasis-rasterize",
  "oasis-types",
- "oasis-vfs",
  "png",
 ]
 

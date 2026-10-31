@@ -28,7 +28,6 @@ oasis-skin = { workspace = true }
 oasis-js = { workspace = true, optional = true }
 rustc-hash = { workspace = true }
 log = { workspace = true }
-flate2 = { workspace = true }
 png = { workspace = true }
 jpeg-decoder = { workspace = true }
 gif = { workspace = true }
@@ -37,6 +36,8 @@ fontdue = { workspace = true, optional = true }
 web-time = { workspace = true }
 
 [dev-dependencies]
+# e2e_tests/http.rs gzip/deflate-encodes fixture bodies (decoding is oasis-http).
+flate2 = { workspace = true }
 proptest.workspace = true
 criterion.workspace = true
 oasis-test-backend = { workspace = true }

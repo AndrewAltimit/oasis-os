@@ -901,7 +901,6 @@ dependencies = [
 name = "oasis-browser"
 version = "1.4.0"
 dependencies = [
- "flate2",
  "fontdue",
  "gif",
  "jpeg-decoder",

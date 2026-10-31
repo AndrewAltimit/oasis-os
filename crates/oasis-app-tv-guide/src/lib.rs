@@ -13,7 +13,7 @@ pub mod grid_render;
 pub mod grid_state;
 pub mod guide;
 pub mod schedule;
-#[cfg(any(test, feature = "test-data"))]
+#[cfg(test)]
 pub mod test_data;
 
 pub use app::TvGuideApp;

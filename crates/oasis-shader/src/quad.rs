@@ -3,7 +3,7 @@
 //! Uses `gl_VertexID` in the vertex shader to generate positions for an
 //! oversized triangle that covers the entire viewport.
 
-#[cfg(feature = "glow")]
+#[cfg(feature = "gl-native")]
 use glow::HasContext;
 
 /// Create an empty VAO for the fullscreen triangle draw call.
@@ -11,14 +11,14 @@ use glow::HasContext;
 /// The vertex shader generates positions from `gl_VertexID`, so no
 /// vertex buffer is needed — we just need a bound VAO to satisfy the
 /// GL ES 3.0 requirement.
-#[cfg(feature = "glow")]
+#[cfg(feature = "gl-native")]
 pub fn create_fullscreen_vao(gl: &glow::Context) -> Result<glow::VertexArray, String> {
     // SAFETY: glow wraps raw GL calls; no unsafe Rust required.
     unsafe { gl.create_vertex_array().map_err(|e| e.to_string()) }
 }
 
 /// Draw the fullscreen triangle (3 vertices, no buffer).
-#[cfg(feature = "glow")]
+#[cfg(feature = "gl-native")]
 pub fn draw_fullscreen_triangle(gl: &glow::Context, vao: glow::VertexArray) {
     // SAFETY: glow wraps raw GL calls; no unsafe Rust required.
     unsafe {

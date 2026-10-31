@@ -89,6 +89,7 @@ webpki-roots = "1.0"
 
 # Testing
 proptest = "1"
+tempfile = "3"
 criterion = { version = "0.5", features = ["html_reports"] }
 
 # WASM
@@ -184,6 +185,7 @@ oasis-shader = { path = "crates/oasis-shader", default-features = false }
 oasis-rasterize = { path = "crates/oasis-rasterize" }
 oasis-i18n = { path = "crates/oasis-i18n" }
 oasis-test-backend = { path = "crates/oasis-test-backend" }
+oasis-backend-sdl = { path = "crates/oasis-backend-sdl" }
 oasis-backend-ue5 = { path = "crates/oasis-backend-ue5" }
 oasis-backend-wasm = { path = "crates/oasis-backend-wasm" }
 oasis-video = { path = "crates/oasis-video", default-features = false }

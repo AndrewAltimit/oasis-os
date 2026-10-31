@@ -13,3 +13,6 @@ path = "src/main.rs"
 
 [dependencies]
 rusb = "0.9"
+
+[lints]
+workspace = true

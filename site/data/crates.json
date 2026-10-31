@@ -79,7 +79,7 @@
     "video-decode",
     "video-decode-ffmpeg"
    ],
-   "loc": 35303,
+   "loc": 35375,
    "files": 65,
    "deps": [
     {
@@ -151,7 +151,7 @@
     "video-decode",
     "video-decode-ffmpeg"
    ],
-   "loc": 3636,
+   "loc": 3979,
    "files": 13,
    "deps": [
     {
@@ -209,7 +209,7 @@
    "features": [
     "video-embed"
    ],
-   "loc": 2890,
+   "loc": 2895,
    "files": 5,
    "deps": [
     {
@@ -284,11 +284,10 @@
    "features": [
     "javascript",
     "skin-ttf",
-    "test-data",
     "tls-rustls"
    ],
-   "loc": 24897,
-   "files": 71,
+   "loc": 25285,
+   "files": 72,
    "deps": [
     {
      "name": "oasis-app-core",
@@ -405,9 +404,7 @@
    "lib": true,
    "crate_type": [],
    "bins": [],
-   "features": [
-    "test-data"
-   ],
+   "features": [],
    "loc": 4638,
    "files": 11,
    "deps": [
@@ -821,7 +818,7 @@
     "web-fonts",
     "webp"
    ],
-   "loc": 61182,
+   "loc": 61187,
    "files": 109,
    "deps": [
     {
@@ -953,10 +950,9 @@
    "crate_type": [],
    "bins": [],
    "features": [
-    "psp-bindgen",
-    "rquickjs-engine"
+    "psp-bindgen"
    ],
-   "loc": 3188,
+   "loc": 3194,
    "files": 7,
    "deps": []
   },
@@ -972,7 +968,7 @@
    "crate_type": [],
    "bins": [],
    "features": [],
-   "loc": 21036,
+   "loc": 22326,
    "files": 68,
    "deps": [
     {
@@ -1139,7 +1135,7 @@
     "serialize",
     "ttf"
    ],
-   "loc": 15371,
+   "loc": 15378,
    "files": 34,
    "deps": [
     {
@@ -1231,7 +1227,7 @@
    "features": [
     "ttf"
    ],
-   "loc": 2513,
+   "loc": 2518,
    "files": 4,
    "deps": [
     {
@@ -1252,7 +1248,7 @@
    "crate_type": [],
    "bins": [],
    "features": [],
-   "loc": 4127,
+   "loc": 4444,
    "files": 8,
    "deps": [
     {
@@ -1273,7 +1269,7 @@
    "crate_type": [],
    "bins": [],
    "features": [],
-   "loc": 1512,
+   "loc": 1509,
    "files": 3,
    "deps": [
     {
@@ -1297,7 +1293,7 @@
     "tls-rustls",
     "vfs"
    ],
-   "loc": 7135,
+   "loc": 7143,
    "files": 11,
    "deps": [
     {
@@ -1350,7 +1346,7 @@
    "crate_type": [],
    "bins": [],
    "features": [],
-   "loc": 872,
+   "loc": 927,
    "files": 1,
    "deps": [
     {
@@ -1462,7 +1458,7 @@
    "features": [
     "wasm-youtube"
    ],
-   "loc": 9439,
+   "loc": 9444,
    "files": 24,
    "deps": [
     {
@@ -1531,15 +1527,7 @@
      "kind": "normal"
     },
     {
-     "name": "oasis-browser",
-     "kind": "dev"
-    },
-    {
      "name": "oasis-core",
-     "kind": "dev"
-    },
-    {
-     "name": "oasis-vfs",
      "kind": "dev"
     }
    ]

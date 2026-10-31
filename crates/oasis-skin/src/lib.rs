@@ -3,6 +3,13 @@
 //! A skin is a TOML manifest referencing layout definitions, theme colors,
 //! feature flags, strings, and optional corrupted modifiers. The core
 //! framework interprets skins at runtime. Skins can be hot-swapped.
+//!
+//! # Feature flags
+//!
+//! - `serialize` (default) — write skins back to TOML (`Serialize` derives and
+//!   the `Skin::to_toml_*` writers, used by `skin export` and Settings).
+//! - `ttf` — validate `[typography] font` assets by parsing them with fontdue;
+//!   without it validation checks existence and size budget only.
 
 pub mod active_theme;
 pub mod assets;

@@ -8,13 +8,6 @@ repository.workspace = true
 authors.workspace = true
 
 [features]
-# The rquickjs-backed `JsEngine` plus its console / fetch / storage /
-# timer glue is the only supported backend. The feature name is kept
-# for compatibility with callers that previously selected it
-# explicitly (e.g. host-side tests); disabling it is unsupported.
-default = ["rquickjs-engine"]
-rquickjs-engine = ["dep:rquickjs"]
-
 # Ask rquickjs-sys to regenerate C bindings at build time via
 # `bindgen` instead of using the vendored per-target files. Enabled by
 # the PSP backend because `mipsel-sony-psp-std` isn't in the vendored
@@ -23,7 +16,7 @@ rquickjs-engine = ["dep:rquickjs"]
 psp-bindgen = ["rquickjs/bindgen"]
 
 [dependencies]
-rquickjs = { workspace = true, optional = true }
+rquickjs = { workspace = true }
 thiserror = { workspace = true }
 
 [lints]

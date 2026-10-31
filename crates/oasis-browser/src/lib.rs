@@ -19,6 +19,11 @@
 //!
 //! # Feature flags
 //!
+//! - `web-fonts` (default) — `@font-face` web fonts: fontdue TTF/OTF
+//!   rasterizer, font registry and glyph texture cache (forwards to
+//!   `oasis-css/web-fonts`).
+//! - `canvas` (default) — the `<canvas>` 2D context JS bindings; only
+//!   has an effect together with `javascript`.
 //! - `javascript` — enables QuickJS-NG via `oasis-js` for inline
 //!   `<script>` execution, `fetch`, `setTimeout`, event dispatch, and
 //!   DOM bindings. The PSP backend now compiles the same QuickJS C

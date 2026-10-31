@@ -49,10 +49,10 @@ pub fn wrap_time(time: f32) -> f32 {
     if t >= TIME_WRAP_S { 0.0 } else { t }
 }
 
-#[cfg(feature = "glow")]
+#[cfg(feature = "gl-native")]
 use std::collections::HashMap;
 
-#[cfg(feature = "glow")]
+#[cfg(feature = "gl-native")]
 use glow::HasContext;
 
 /// GPU shader renderer. Owns GL resources (program, FBO, VAO).
@@ -61,7 +61,7 @@ use glow::HasContext;
 /// Call [`render_to_pixels`](ShaderRenderer::render_to_pixels) to render to an
 /// FBO and read back RGBA pixels, or [`render_to_screen`](ShaderRenderer::render_to_screen)
 /// to render directly to the default framebuffer (for WASM).
-#[cfg(feature = "glow")]
+#[cfg(feature = "gl-native")]
 pub struct ShaderRenderer {
     gl: glow::Context,
     programs: HashMap<String, glow::Program>,
@@ -73,7 +73,7 @@ pub struct ShaderRenderer {
     pixel_buf: Vec<u8>,
 }
 
-#[cfg(feature = "glow")]
+#[cfg(feature = "gl-native")]
 impl ShaderRenderer {
     /// Create from an existing glow context (backend provides this).
     ///
@@ -276,7 +276,7 @@ impl ShaderRenderer {
     }
 }
 
-#[cfg(feature = "glow")]
+#[cfg(feature = "gl-native")]
 impl Drop for ShaderRenderer {
     fn drop(&mut self) {
         // SAFETY: glow wraps raw GL calls; no unsafe Rust required.
@@ -296,7 +296,7 @@ impl Drop for ShaderRenderer {
 /// # Safety
 ///
 /// Caller must ensure the GL context is current.
-#[cfg(feature = "glow")]
+#[cfg(feature = "gl-native")]
 #[allow(clippy::too_many_arguments)]
 unsafe fn gl_render(
     gl: &glow::Context,
@@ -360,7 +360,7 @@ unsafe fn gl_render(
 /// # Safety
 ///
 /// Caller must ensure the GL context is current.
-#[cfg(feature = "glow")]
+#[cfg(feature = "gl-native")]
 unsafe fn gl_read_pixels(
     gl: &glow::Context,
     fbo: glow::Framebuffer,

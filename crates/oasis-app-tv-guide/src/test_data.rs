@@ -1,7 +1,7 @@
 //! Mock catalog data for offline testing and CI.
 //!
 //! Provides deterministic test fixtures so TV Guide tests don't need network
-//! access. Gated behind `#[cfg(any(test, feature = "test-data"))]`.
+//! access. Compiled for this crate's unit tests only.
 
 use crate::catalog::{ChannelCatalog, VideoEpisode};
 use crate::channel::Channel;

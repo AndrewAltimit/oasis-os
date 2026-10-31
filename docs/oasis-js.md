@@ -15,7 +15,8 @@ provides a single-threaded, non-reentrant JS context plus a small set of
 host-side primitives (console, timers, fetch, storage) that the browser layer
 extends with DOM bindings.
 
-- Cargo features: `rquickjs-engine` (default, the only supported backend).
+- Cargo features: none by default (rquickjs is always linked; the former
+  `rquickjs-engine` feature could not be turned off and was removed).
   `psp-bindgen` regenerates QuickJS C bindings at build time and is enabled
   only by the PSP backend; desktop never sets it.
 - All public types live at the crate root and are re-exported from
