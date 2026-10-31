@@ -308,14 +308,21 @@ fn default_alpha(kind: AnimationKind) -> (f32, f32) {
 }
 
 /// Linearly interpolate between two `i32` values.
+///
+/// In `f64`, which holds every `i32` / `u32` exactly: in `f32` a
+/// coordinate beyond 2^24 (multi-monitor offsets) lost its low bits, so
+/// even the final frame missed the target. `as` saturates any overshoot.
 fn lerp_i32(a: i32, b: i32, t: f32) -> i32 {
-    (a as f32 + (b as f32 - a as f32) * t).round() as i32
+    lerp_f64(f64::from(a), f64::from(b), t) as i32
 }
 
-/// Linearly interpolate between two `u32` values.
+/// Linearly interpolate between two `u32` values (see [`lerp_i32`]).
 fn lerp_u32(a: u32, b: u32, t: f32) -> u32 {
-    let v = a as f32 + (b as f32 - a as f32) * t;
-    v.round().max(0.0) as u32
+    lerp_f64(f64::from(a), f64::from(b), t) as u32
+}
+
+fn lerp_f64(a: f64, b: f64, t: f32) -> f64 {
+    (a + (b - a) * f64::from(t)).round()
 }
 
 /// Linearly interpolate between two `f32` values.
@@ -746,6 +753,31 @@ mod tests {
         assert_eq!(lerp_u32(0, 200, 1.0), 200);
 
         assert!((lerp_f32(0.0, 1.0, 0.5) - 0.5).abs() < f32::EPSILON);
+    }
+
+    /// `f32` maths rounded coordinates beyond 2^24, so the end frame of an
+    /// animation far from the origin missed its target geometry.
+    #[test]
+    fn lerp_is_exact_at_the_ends_for_large_coordinates() {
+        let (a, b) = (16_777_217, i32::MAX);
+        assert_eq!(lerp_i32(a, b, 0.0), a);
+        assert_eq!(lerp_i32(a, b, 1.0), b);
+        assert_eq!(lerp_i32(i32::MIN, -16_777_217, 1.0), -16_777_217);
+        assert_eq!(lerp_u32(16_777_217, u32::MAX, 0.0), 16_777_217);
+        assert_eq!(lerp_u32(16_777_217, u32::MAX, 1.0), u32::MAX);
+        // Overshooting easings saturate instead of wrapping.
+        assert_eq!(lerp_i32(0, i32::MAX, 1.5), i32::MAX);
+        assert_eq!(lerp_u32(10, 0, 2.0), 0);
+
+        let mut mgr = AnimationManager::new();
+        let end = geom(20_000_001, -20_000_001, 30_000_001, 7);
+        mgr.start_animation(AnimationKind::Restore, "w", geom(0, 0, 1, 1), end);
+        let frame = mgr.tick(u32::MAX).pop().expect("frame");
+        assert!(frame.completed);
+        assert_eq!(
+            (frame.x, frame.y, frame.width, frame.height),
+            (end.x, end.y, end.w, end.h)
+        );
     }
 
     #[test]

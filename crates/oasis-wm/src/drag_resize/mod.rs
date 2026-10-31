@@ -7,8 +7,10 @@
 use oasis_sdi::SdiRegistry;
 
 use super::hit_test::{ButtonKind, HitRegion, ResizeEdge, hit_test};
-use super::manager::{DOUBLE_CLICK_RADIUS, DOUBLE_CLICK_WINDOW, WindowManager, WmEvent};
-use super::window::{Geometry, WindowId, WindowState};
+use super::manager::{
+    DOUBLE_CLICK_RADIUS, DOUBLE_CLICK_WINDOW, WindowManager, WmEvent, move_window_to,
+};
+use super::window::{Geometry, WindowId, WindowState, WmTheme};
 
 /// Active drag/resize operation.
 #[derive(Debug, Clone)]
@@ -210,8 +212,14 @@ impl WindowManager {
                 // click so release-then-reclick at the same spot toggles maximize.
                 let mut start_win_x = start_win_x;
                 let mut start_win_y = start_win_y;
-                if (x - start_cursor_x).abs() > DOUBLE_CLICK_RADIUS
-                    || (y - start_cursor_y).abs() > DOUBLE_CLICK_RADIUS
+                // Saturating: a pointer jumping across the whole i32 range
+                // (multi-monitor coordinates) must not overflow.
+                let (dx, dy) = (
+                    x.saturating_sub(start_cursor_x),
+                    y.saturating_sub(start_cursor_y),
+                );
+                if dx.unsigned_abs() > DOUBLE_CLICK_RADIUS.unsigned_abs()
+                    || dy.unsigned_abs() > DOUBLE_CLICK_RADIUS.unsigned_abs()
                 {
                     self.last_titlebar_click = None;
                     // Dragging a snapped window out restores its size.
@@ -221,8 +229,8 @@ impl WindowManager {
                     }
                 }
 
-                let raw_x = start_win_x + (x - start_cursor_x);
-                let raw_y = start_win_y + (y - start_cursor_y);
+                let raw_x = start_win_x.saturating_add(dx);
+                let raw_y = start_win_y.saturating_add(dy);
 
                 // Get dimensions for snap/clamp before mutable borrow.
                 let dims = self
@@ -244,18 +252,7 @@ impl WindowManager {
                     );
 
                     if let Some(window) = self.windows.iter_mut().find(|w| w.id == *window_id) {
-                        let dx = cx - window.x;
-                        let dy = cy - window.y;
-                        window.x = cx;
-                        window.y = cy;
-
-                        for suffix in window.sdi_suffixes() {
-                            let name = window.sdi_name(suffix);
-                            if let Ok(obj) = sdi.get_mut(&name) {
-                                obj.x += dx;
-                                obj.y += dy;
-                            }
-                        }
+                        move_window_to(window, cx, cy, sdi);
                     }
                 }
                 self.update_drag_snap_preview(window_id.as_str(), x, y);
@@ -268,46 +265,18 @@ impl WindowManager {
                 start_cursor_y,
                 start_geometry,
             } => {
-                let dx = x - start_cursor_x;
-                let dy = y - start_cursor_y;
-
-                let (mut new_x, mut new_y, mut new_w, mut new_h) =
-                    compute_resize(start_geometry, edge, dx, dy, &self.theme);
-
-                // Keep the *dragged* edges from growing past the screen.
-                // Only the edges being dragged are clamped, and never
-                // further in than where they started: a window that is
-                // already partly off-screen (dragged there by its
-                // titlebar) must not jump or shrink below its minimum size
-                // when the user grabs the opposite, on-screen edge.
-                let sw = self.screen_w as i32;
-                let sh = self.screen_h as i32;
-                let g = start_geometry;
-                let (drags_left, drags_right, drags_top, drags_bottom) = edge_sides(edge);
-                let left_limit = g.x.min(0);
-                let top_limit = g.y.min(0);
-                let right_limit = (g.x + g.w as i32).max(sw);
-                let bottom_limit = (g.y + g.h as i32).max(sh);
-                if drags_left && new_x < left_limit {
-                    new_w = new_w.saturating_sub((left_limit - new_x) as u32);
-                    new_x = left_limit;
-                }
-                if drags_top && new_y < top_limit {
-                    new_h = new_h.saturating_sub((top_limit - new_y) as u32);
-                    new_y = top_limit;
-                }
-                if drags_right && new_x + new_w as i32 > right_limit {
-                    new_w = (right_limit - new_x).max(0) as u32;
-                }
-                if drags_bottom && new_y + new_h as i32 > bottom_limit {
-                    new_h = (bottom_limit - new_y).max(0) as u32;
-                }
+                let dx = i64::from(x) - i64::from(start_cursor_x);
+                let dy = i64::from(y) - i64::from(start_cursor_y);
+                let g = resize_on_screen(
+                    start_geometry,
+                    edge,
+                    (dx, dy),
+                    (self.screen_w, self.screen_h),
+                    &self.theme,
+                );
 
                 if let Some(window) = self.windows.iter_mut().find(|w| w.id == *window_id) {
-                    window.x = new_x;
-                    window.y = new_y;
-                    window.outer_w = new_w;
-                    window.outer_h = new_h;
+                    window.set_geometry(g);
                     // A hand-resized window is no longer snapped.
                     window.snap_zone = None;
                     window.pre_snap_geometry = None;
@@ -367,16 +336,21 @@ impl WindowManager {
         sdi: &mut SdiRegistry,
     ) -> Option<(i32, i32)> {
         let window = self.windows.iter_mut().find(|w| w.id == *id)?;
-        let orig = if window.snap_zone.is_some() {
-            let g = window.pre_snap_geometry.take()?;
-            window.snap_zone = None;
-            g
-        } else if window.state == WindowState::Maximized {
+        let orig = if window.state == WindowState::Maximized {
             // Dragging a maximized window by its titlebar un-maximizes it
             // (otherwise a screen-sized window would slide off-screen while
-            // still claiming to be maximized).
-            let g = window.saved_geometry.take()?;
+            // still claiming to be maximized). A window snapped before it
+            // was maximized detaches from both, back to its floating size:
+            // checking the snap first used to leave it marked maximized.
+            let pre_snap = window.pre_snap_geometry.take();
+            let saved = window.saved_geometry.take();
+            let g = pre_snap.or(saved)?;
+            window.snap_zone = None;
             window.state = WindowState::Normal;
+            g
+        } else if window.snap_zone.is_some() {
+            let g = window.pre_snap_geometry.take()?;
+            window.snap_zone = None;
             g
         } else {
             return None;
@@ -417,69 +391,108 @@ fn edge_sides(edge: ResizeEdge) -> (bool, bool, bool, bool) {
     }
 }
 
-/// Compute new geometry after a resize drag.
+/// Compute new geometry after a resize drag (no screen clamping).
+#[cfg(test)]
 pub(crate) fn compute_resize(
     start: Geometry,
     edge: ResizeEdge,
     dx: i32,
     dy: i32,
-    theme: &super::window::WmTheme,
+    theme: &WmTheme,
 ) -> (i32, i32, u32, u32) {
+    let g = to_geometry(resize_wide(
+        start,
+        edge,
+        i64::from(dx),
+        i64::from(dy),
+        theme,
+    ));
+    (g.x, g.y, g.w, g.h)
+}
+
+/// A frame in `i64` (`x, y, w, h`), so resize maths cannot overflow.
+type WideRect = (i64, i64, i64, i64);
+
+/// [`compute_resize`] in `i64`: the dragged edges follow the pointer,
+/// down to the minimum size.
+fn resize_wide(start: Geometry, edge: ResizeEdge, dx: i64, dy: i64, theme: &WmTheme) -> WideRect {
     // A window that is already smaller than the minimum (created that way,
     // or sized by `resize_window`) keeps its size as the floor: grabbing a
     // handle must not make it jump to the minimum before the pointer moves.
-    let min_w = (MIN_RESIZE_W + theme.border_width * 2).min(start.w);
-    let min_h = (MIN_RESIZE_H + theme.titlebar_height + theme.border_width * 2).min(start.h);
+    let border2 = u64::from(theme.border_width) * 2;
+    let min_w = (u64::from(MIN_RESIZE_W) + border2).min(u64::from(start.w)) as i64;
+    let min_h = (u64::from(MIN_RESIZE_H) + u64::from(theme.titlebar_height) + border2)
+        .min(u64::from(start.h)) as i64;
+    let (left, right, top, bottom) = edge_sides(edge);
+    let (x0, y0) = (i64::from(start.x), i64::from(start.y));
+    let (w0, h0) = (i64::from(start.w), i64::from(start.h));
 
-    let mut x = start.x;
-    let mut y = start.y;
-    let mut w = start.w;
-    let mut h = start.h;
-
-    match edge {
-        ResizeEdge::East => {
-            w = (start.w as i32 + dx).max(min_w as i32) as u32;
-        },
-        ResizeEdge::West => {
-            let new_w = (start.w as i32 - dx).max(min_w as i32) as u32;
-            x = start.x + (start.w as i32 - new_w as i32);
-            w = new_w;
-        },
-        ResizeEdge::South => {
-            h = (start.h as i32 + dy).max(min_h as i32) as u32;
-        },
-        ResizeEdge::North => {
-            let new_h = (start.h as i32 - dy).max(min_h as i32) as u32;
-            y = start.y + (start.h as i32 - new_h as i32);
-            h = new_h;
-        },
-        ResizeEdge::SouthEast => {
-            w = (start.w as i32 + dx).max(min_w as i32) as u32;
-            h = (start.h as i32 + dy).max(min_h as i32) as u32;
-        },
-        ResizeEdge::SouthWest => {
-            let new_w = (start.w as i32 - dx).max(min_w as i32) as u32;
-            x = start.x + (start.w as i32 - new_w as i32);
-            w = new_w;
-            h = (start.h as i32 + dy).max(min_h as i32) as u32;
-        },
-        ResizeEdge::NorthEast => {
-            w = (start.w as i32 + dx).max(min_w as i32) as u32;
-            let new_h = (start.h as i32 - dy).max(min_h as i32) as u32;
-            y = start.y + (start.h as i32 - new_h as i32);
-            h = new_h;
-        },
-        ResizeEdge::NorthWest => {
-            let new_w = (start.w as i32 - dx).max(min_w as i32) as u32;
-            x = start.x + (start.w as i32 - new_w as i32);
-            w = new_w;
-            let new_h = (start.h as i32 - dy).max(min_h as i32) as u32;
-            y = start.y + (start.h as i32 - new_h as i32);
-            h = new_h;
-        },
+    let (mut x, mut w) = (x0, w0);
+    if right {
+        w = (w0 + dx).max(min_w);
+    } else if left {
+        w = (w0 - dx).max(min_w);
+        x = x0 + w0 - w;
     }
-
+    let (mut y, mut h) = (y0, h0);
+    if bottom {
+        h = (h0 + dy).max(min_h);
+    } else if top {
+        h = (h0 - dy).max(min_h);
+        y = y0 + h0 - h;
+    }
     (x, y, w, h)
+}
+
+/// The geometry a resize drag of `edge` by `delta` gives, with the
+/// dragged edges kept from growing past the `screen`.
+///
+/// Only the edges being dragged are clamped, and never further in than
+/// where they started: a window that is already partly off-screen
+/// (dragged there by its titlebar) must not jump or shrink below its
+/// minimum size when the user grabs the opposite, on-screen edge.
+fn resize_on_screen(
+    start: Geometry,
+    edge: ResizeEdge,
+    delta: (i64, i64),
+    screen: (u32, u32),
+    theme: &WmTheme,
+) -> Geometry {
+    let (mut x, mut y, mut w, mut h) = resize_wide(start, edge, delta.0, delta.1, theme);
+    let (sw, sh) = (i64::from(screen.0), i64::from(screen.1));
+    let (sx, sy) = (i64::from(start.x), i64::from(start.y));
+    let (left, right, top, bottom) = edge_sides(edge);
+    let left_limit = sx.min(0);
+    let top_limit = sy.min(0);
+    let right_limit = (sx + i64::from(start.w)).max(sw);
+    let bottom_limit = (sy + i64::from(start.h)).max(sh);
+    if left && x < left_limit {
+        w = (w - (left_limit - x)).max(0);
+        x = left_limit;
+    }
+    if top && y < top_limit {
+        h = (h - (top_limit - y)).max(0);
+        y = top_limit;
+    }
+    if right && x + w > right_limit {
+        w = (right_limit - x).max(0);
+    }
+    if bottom && y + h > bottom_limit {
+        h = (bottom_limit - y).max(0);
+    }
+    to_geometry((x, y, w, h))
+}
+
+/// `r` saturated into a [`Geometry`].
+fn to_geometry(r: WideRect) -> Geometry {
+    let pos = |v: i64| v.clamp(i32::MIN.into(), i32::MAX.into()) as i32;
+    let size = |v: i64| v.clamp(0, u32::MAX.into()) as u32;
+    Geometry {
+        x: pos(r.0),
+        y: pos(r.1),
+        w: size(r.2),
+        h: size(r.3),
+    }
 }
 
 /// Clamp a window position to keep the titlebar partially visible on screen.
@@ -514,21 +527,19 @@ pub(crate) fn snap_to_edges(
     screen_w: u32,
     screen_h: u32,
 ) -> (i32, i32) {
-    let sw = screen_w as i32;
-    let sh = screen_h as i32;
-    let mut sx = x;
-    let mut sy = y;
-    if sx.abs() < SNAP_DISTANCE {
-        sx = 0;
-    } else if (sx + outer_w as i32 - sw).abs() < SNAP_DISTANCE {
-        sx = sw - outer_w as i32;
-    }
-    if sy.abs() < SNAP_DISTANCE {
-        sy = 0;
-    } else if (sy + outer_h as i32 - sh).abs() < SNAP_DISTANCE {
-        sy = sh - outer_h as i32;
-    }
-    (sx, sy)
+    // In i64: `pos + size` must not overflow for far-away frames.
+    let snap = |pos: i32, size: u32, screen: u32| -> i32 {
+        let far = i64::from(screen) - i64::from(size);
+        if i64::from(pos).abs() < i64::from(SNAP_DISTANCE) {
+            0
+        } else if (i64::from(pos) - far).abs() < i64::from(SNAP_DISTANCE) {
+            // Within SNAP_DISTANCE of an i32, so in range.
+            far as i32
+        } else {
+            pos
+        }
+    };
+    (snap(x, outer_w, screen_w), snap(y, outer_h, screen_h))
 }
 
 #[cfg(test)]

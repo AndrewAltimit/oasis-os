@@ -106,6 +106,49 @@ fn resize_east() {
     wm.handle_input(&InputEvent::PointerRelease { x: 0, y: 0 }, &mut sdi);
 }
 
+/// Pointer coordinates at the ends of the i32 range (multi-monitor hosts,
+/// or a glitching device) used to overflow the drag / resize deltas.
+#[test]
+fn extreme_pointer_coordinates_do_not_overflow_drag_or_resize() {
+    let extremes = [
+        (i32::MIN, i32::MIN),
+        (i32::MAX, i32::MAX),
+        (i32::MIN, i32::MAX),
+        (0, 0),
+    ];
+    let mut sdi = SdiRegistry::new();
+    let mut wm = WindowManager::new(800, 600);
+    wm.create_window(&app_config("w1"), &mut sdi).unwrap();
+
+    // Titlebar drag.
+    let (tx, ty, _, th) = wm
+        .get_window("w1")
+        .unwrap()
+        .titlebar_rect(&wm.theme)
+        .unwrap();
+    let (px, py) = (tx + 30, ty + th as i32 / 2);
+    wm.handle_input(&InputEvent::PointerClick { x: px, y: py }, &mut sdi);
+    for (x, y) in extremes {
+        wm.handle_input(&InputEvent::CursorMove { x, y }, &mut sdi);
+        let w = wm.get_window("w1").unwrap();
+        assert!(w.y >= 0 && w.y < 600, "titlebar stays on screen: {w:?}");
+    }
+    wm.handle_input(&InputEvent::PointerRelease { x: 0, y: 0 }, &mut sdi);
+
+    // Corner resize.
+    wm.restore_window("w1", &mut sdi).unwrap();
+    let w = wm.get_window("w1").unwrap();
+    let (cx, cy) = (w.x + w.outer_w as i32 - 1, w.y + w.outer_h as i32 - 1);
+    wm.handle_input(&InputEvent::PointerClick { x: cx, y: cy }, &mut sdi);
+    assert!(wm.is_dragging());
+    for (x, y) in extremes {
+        wm.handle_input(&InputEvent::CursorMove { x, y }, &mut sdi);
+        let w = wm.get_window("w1").unwrap();
+        assert!(i64::from(w.x) + i64::from(w.outer_w) <= 800, "{w:?}");
+        assert!(i64::from(w.y) + i64::from(w.outer_h) <= 600, "{w:?}");
+    }
+}
+
 #[test]
 fn close_all_clears_drag_state() {
     let mut sdi = SdiRegistry::new();

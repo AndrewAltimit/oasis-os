@@ -1,6 +1,7 @@
 //! Modal dialog widget with input blocking and button presets.
 
 use crate::context::DrawContext;
+use crate::focus::{FocusDir, step_wrapping};
 use crate::layout;
 use crate::widget::Widget;
 use oasis_types::error::Result;
@@ -111,19 +112,18 @@ impl Modal {
 
     /// Focus the next button (wrapping).
     pub fn focus_next(&mut self) {
-        if !self.buttons.is_empty() {
-            self.focused_button = (self.focused_button + 1) % self.buttons.len();
-        }
+        self.step_focus(FocusDir::Next);
     }
 
     /// Focus the previous button (wrapping).
     pub fn focus_prev(&mut self) {
-        if !self.buttons.is_empty() {
-            self.focused_button = if self.focused_button == 0 {
-                self.buttons.len() - 1
-            } else {
-                self.focused_button - 1
-            };
+        self.step_focus(FocusDir::Prev);
+    }
+
+    fn step_focus(&mut self, dir: FocusDir) {
+        let current = Some(self.focused_button);
+        if let Some(i) = step_wrapping(current, self.buttons.len(), dir, |_| true) {
+            self.focused_button = i;
         }
     }
 
@@ -136,7 +136,12 @@ impl Modal {
     ///
     /// Returns the `ModalResult` for the pressed button.
     pub fn activate(&mut self) -> ModalResult {
-        let result = self.result_for_index(self.focused_button);
+        // `buttons` is pub: a focus index left past the end by a shorter
+        // custom button list activates the last button, not a phantom one.
+        let index = self
+            .focused_button
+            .min(self.buttons.len().saturating_sub(1));
+        let result = self.result_for_index(index);
         self.result = result;
         result
     }
@@ -364,6 +369,18 @@ mod tests {
     fn custom_empty_buttons() {
         let m = Modal::custom("T", "B", vec![]);
         assert!(m.buttons.is_empty());
+        assert_eq!(m.focused_button, 0);
+    }
+
+    /// Replacing a custom modal's buttons with fewer left `focused_button`
+    /// past the end: `activate` reported a button that no longer exists.
+    #[test]
+    fn stale_focused_button_activates_the_last_button() {
+        let mut m = Modal::custom("T", "B", vec!["a".into(), "b".into(), "c".into()]);
+        m.focused_button = 2;
+        m.buttons.truncate(1);
+        assert_eq!(m.activate(), ModalResult::Custom(0));
+        m.focus_prev();
         assert_eq!(m.focused_button, 0);
     }
 

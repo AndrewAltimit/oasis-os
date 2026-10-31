@@ -1,6 +1,7 @@
 //! Query and lookup methods for the window manager.
 
 use super::{CASCADE_OFFSET, WindowManager};
+use crate::hit_test::point_in_rect;
 use crate::window::{Window, WmTheme};
 
 impl WindowManager {
@@ -57,9 +58,7 @@ impl WindowManager {
             .iter()
             .rev()
             .filter(|w| w.state != crate::window::WindowState::Minimized)
-            .find(|w| {
-                px >= w.x && py >= w.y && px < w.x + w.outer_w as i32 && py < w.y + w.outer_h as i32
-            })
+            .find(|w| point_in_rect(px, py, w.x, w.y, w.outer_w, w.outer_h))
             .map(|w| w.id.as_str())
     }
 

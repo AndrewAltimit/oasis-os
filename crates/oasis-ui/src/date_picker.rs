@@ -52,6 +52,7 @@ impl DatePicker {
     /// Navigate to the previous month.
     pub fn prev_month(&mut self) {
         if !self.disabled {
+            self.month = self.month.clamp(1, 12);
             if self.month == 1 {
                 self.month = 12;
                 self.year = self.year.saturating_sub(1);
@@ -65,6 +66,7 @@ impl DatePicker {
     /// Navigate to the next month.
     pub fn next_month(&mut self) {
         if !self.disabled {
+            self.month = self.month.clamp(1, 12);
             if self.month == 12 {
                 self.month = 1;
                 self.year = self.year.saturating_add(1);
@@ -121,8 +123,10 @@ fn first_dow(year: u16, month: u8) -> u8 {
     } else {
         year as i32
     };
-    let m = month as usize;
-    ((y + y / 4 - y / 100 + y / 400 + t[m - 1] + 1) % 7) as u8
+    // `month` is a pub field: out of 1..=12 it used to index out of
+    // bounds (or underflow at 0) and panic in `draw`.
+    let m = usize::from(month.clamp(1, 12));
+    (y + y / 4 - y / 100 + y / 400 + t[m - 1] + 1).rem_euclid(7) as u8
 }
 
 /// Month name from number.
@@ -309,6 +313,27 @@ mod tests {
         assert_eq!(first_dow(2025, 1), 3);
         // Mar 1, 2025 is a Saturday (6).
         assert_eq!(first_dow(2025, 3), 6);
+    }
+
+    /// `month` is a pub field; 0 or 13 used to panic in `draw`
+    /// (`first_dow` indexing) and in `prev_month` (`0 - 1`).
+    #[test]
+    fn out_of_range_month_does_not_panic() {
+        for month in [0, 13, u8::MAX] {
+            let mut dp = DatePicker::new(2025, 1);
+            dp.month = month;
+            assert!(first_dow(dp.year, dp.month) < 7);
+            crate::test_utils::test_draw_all_themes(|ctx| {
+                dp.draw(ctx, 0, 0, 200, 200).unwrap();
+            });
+            dp.prev_month();
+            assert!((1..=12).contains(&dp.month));
+            dp.month = month;
+            dp.next_month();
+            assert!((1..=12).contains(&dp.month));
+        }
+        // Year 0 is a valid (proleptic) year: weekdays stay in range.
+        assert!((1..=12).all(|m| first_dow(0, m) < 7));
     }
 
     use crate::context::DrawContext;

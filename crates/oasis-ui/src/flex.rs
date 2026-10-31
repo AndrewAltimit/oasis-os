@@ -34,6 +34,10 @@ pub struct FlexChild {
     pub size: FlexSize,
     /// Cross-axis override for this child.
     pub align_self: Option<VAlign>,
+    /// Cross-axis size; `None` stretches the child across the container
+    /// (then alignment has nothing to place). A size larger than the
+    /// available cross space is clamped to it.
+    pub cross_size: Option<u32>,
     /// Margin around this child.
     pub margin: Padding,
 }
@@ -44,6 +48,7 @@ impl FlexChild {
         Self {
             size: FlexSize::Fixed(size),
             align_self: None,
+            cross_size: None,
             margin: Padding::ZERO,
         }
     }
@@ -53,6 +58,7 @@ impl FlexChild {
         Self {
             size: FlexSize::Flex(weight),
             align_self: None,
+            cross_size: None,
             margin: Padding::ZERO,
         }
     }
@@ -62,6 +68,7 @@ impl FlexChild {
         Self {
             size: FlexSize::Percent(pct),
             align_self: None,
+            cross_size: None,
             margin: Padding::ZERO,
         }
     }
@@ -75,6 +82,13 @@ impl FlexChild {
     /// Set cross-axis alignment for this child.
     pub fn with_align(mut self, align: VAlign) -> Self {
         self.align_self = Some(align);
+        self
+    }
+
+    /// Give this child a fixed cross-axis size (instead of stretching), so
+    /// `align_self` / the container's `align_items` positions it.
+    pub fn with_cross_size(mut self, size: u32) -> Self {
+        self.cross_size = Some(size);
         self
     }
 }
@@ -262,7 +276,11 @@ impl FlexLayout {
                 child.margin.horizontal()
             };
             let cross_avail = cross_total.saturating_sub(cross_margin);
-            let cross_offset = align_y(cross_avail, cross_avail, align)
+            // Aligning `cross_avail` within itself always gave 0: children
+            // could only stretch, so `align_items` / `align_self` did
+            // nothing. A child with a cross size is now placed by them.
+            let cross = child.cross_size.map_or(cross_avail, |s| s.min(cross_avail));
+            let cross_offset = align_y(cross_avail, cross, align)
                 + if is_row {
                     child.margin.top as i32
                 } else {
@@ -274,15 +292,15 @@ impl FlexLayout {
             let rect = if is_row {
                 ComputedRect {
                     x: parent_x.saturating_add(cursor),
-                    y: parent_y + cross_offset,
+                    y: parent_y.saturating_add(cross_offset),
                     w: main_size,
-                    h: cross_avail,
+                    h: cross,
                 }
             } else {
                 ComputedRect {
-                    x: parent_x + cross_offset,
+                    x: parent_x.saturating_add(cross_offset),
                     y: parent_y.saturating_add(cursor),
-                    w: cross_avail,
+                    w: cross,
                     h: main_size,
                 }
             };
@@ -422,6 +440,29 @@ mod tests {
     use super::*;
 
     // -- FlexLayout -------------------------------------------------------
+
+    /// Cross-axis alignment computed `align_y(avail, avail)` -- always 0 --
+    /// so `align_items` / `align_self` had no effect.
+    #[test]
+    fn cross_axis_alignment_places_sized_children() {
+        let layout = FlexLayout::row().with_align_items(VAlign::Bottom);
+        let children = [
+            FlexChild::fixed(10).with_cross_size(20),
+            FlexChild::fixed(10)
+                .with_cross_size(20)
+                .with_align(VAlign::Center),
+            FlexChild::fixed(10).with_cross_size(500),
+            FlexChild::fixed(10),
+        ];
+        let r = layout.compute(0, 0, 100, 100, &children);
+        assert_eq!((r[0].y, r[0].h), (80, 20));
+        assert_eq!((r[1].y, r[1].h), (40, 20));
+        assert_eq!((r[2].y, r[2].h), (0, 100), "clamped to the container");
+        assert_eq!((r[3].y, r[3].h), (0, 100), "unsized children stretch");
+        let col = FlexLayout::column().with_align_items(VAlign::Center);
+        let r = col.compute(0, 0, 100, 100, &[FlexChild::fixed(10).with_cross_size(30)]);
+        assert_eq!((r[0].x, r[0].w), (35, 30));
+    }
 
     #[test]
     fn row_fixed_children() {

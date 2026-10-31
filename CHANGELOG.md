@@ -187,6 +187,35 @@ larger changes by area. Breaking API changes are marked **(breaking)**.
 - oasis-video: one shared `avcC` parser for both demuxers, and the `moov`
   read no longer allocates the header-declared size before reading.
 
+### UI toolkit and window manager (oasis-ui, oasis-wm)
+
+- Window manager: dragging a window that was snapped and then maximized
+  now un-maximizes it (it slid around still marked maximized); titlebar
+  buttons under a modal no longer show hover feedback; geometry, drag,
+  resize, snapping and animation maths no longer overflow (debug panic)
+  or lose precision for windows and pointers far out in the `i32` range.
+- oasis-ui widgets tolerate stale state in their pub fields: Accordion,
+  ContextMenu, Modal, RadioGroup and Dropdown share one wrapping
+  navigation rule (`focus::step_wrapping`), fixing an out-of-bounds panic
+  and an infinite loop in Accordion and a highlighted unselectable
+  ContextMenu item; TreeView focus no longer gets stuck on a collapsed-away
+  node; ListView / Table clamp stale scroll and selection; DatePicker,
+  Slider, SpinBox and SplitPane no longer panic on out-of-range months or
+  swapped / NaN ranges; TabBar Filled / Pill no longer underflow on short
+  rects.
+- Layout fixes: `FlexLayout` cross-axis alignment works (children get an
+  optional `FlexChild::cross_size`; it was dead code); `MeasureCache`
+  evicts entries unused for a generation; `Slider::measure` stays within
+  the available width; `TextBlock` draws with its `max_lines` and
+  `align`; TreeView connector lines no longer break between siblings;
+  focused empty `InputField`s show a caret.
+- `ListView::index_at` takes the viewport height; removed the uncalled
+  `DrawContext` helpers (`panel`, `heading`, `label_styled`,
+  `divider_h` / `divider_v`, `button_bg`, `accent_button_bg`, `blit`,
+  `measure_text`, `measure_text_sized`, `padded_rect`),
+  `layout::center_text_y`, `InputField::selection` and
+  `MenuBar::dropdown_dimensions` **(breaking)**.
+
 ## Unreleased -- overhaul (`overhaul/site-code-docs-2026-10`)
 
 A repository-wide cleanup: bug fixes from a full code review and an

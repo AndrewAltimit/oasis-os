@@ -1465,3 +1465,51 @@ fn move_window_during_resize_drag_ends_the_drag() {
         "stale drag undid the move"
     );
 }
+
+/// `window_at` computed `x + outer_w` in i32, which overflowed (a debug
+/// panic) for a window parked near `i32::MAX`.
+#[test]
+fn window_at_does_not_overflow_near_i32_max() {
+    let mut sdi = SdiRegistry::new();
+    let mut wm = WindowManager::new(800, 600);
+    let mut cfg = app_config("far");
+    cfg.x = Some(i32::MAX - 10);
+    wm.create_window(&cfg, &mut sdi).unwrap();
+    assert_eq!(wm.window_at(i32::MAX - 5, 20), Some("far"));
+    assert_eq!(wm.window_at(i32::MAX - 11, 20), None);
+}
+
+/// Hovering a titlebar button of a window under a modal dialog lit the
+/// button up although the modal blocks the click.
+#[test]
+fn buttons_under_a_modal_do_not_hover() {
+    use oasis_types::input::InputEvent;
+    let mut sdi = SdiRegistry::new();
+    let mut wm = WindowManager::new(800, 600);
+    wm.create_window(&app_config("w1"), &mut sdi).unwrap();
+    let mut modal = dialog_config("m");
+    modal.modal = true;
+    modal.x = Some(400);
+    modal.y = Some(400);
+    wm.create_window(&modal, &mut sdi).unwrap();
+    let theme = wm.theme().clone();
+    let (bx, by, _, _) = wm.get_window("w1").unwrap().close_btn_rect(&theme).unwrap();
+    let hover = InputEvent::CursorMove {
+        x: bx + 1,
+        y: by + 1,
+    };
+    wm.handle_input(&hover, &mut sdi);
+    assert_eq!(wm.hover_button, None);
+    assert_eq!(
+        sdi.get("w1.btn_close").unwrap().color,
+        theme.btn_close_color
+    );
+    // The modal's own close button still reacts.
+    let (bx, by, _, _) = wm.get_window("m").unwrap().close_btn_rect(&theme).unwrap();
+    let hover = InputEvent::CursorMove {
+        x: bx + 1,
+        y: by + 1,
+    };
+    wm.handle_input(&hover, &mut sdi);
+    assert_eq!(sdi.get("m.btn_close").unwrap().color, theme.btn_close_hover);
+}

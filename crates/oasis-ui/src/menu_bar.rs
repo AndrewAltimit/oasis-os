@@ -271,15 +271,6 @@ impl MenuBar {
         (h + 4) as u32
     }
 
-    /// Drop-down width and height for a given menu, using the same
-    /// layout constants the widget renders with. Exposed so app-side
-    /// SDI renderers (which reimplement `draw_dropdown` over named
-    /// scene-graph objects) can stay aligned with the widget's hit
-    /// boxes and avoid drift.
-    pub fn dropdown_dimensions(&self, menu: &Menu) -> (u32, u32) {
-        (self.dropdown_width(menu), Self::dropdown_height(menu))
-    }
-
     /// The open menu and its drop-down rect `(x, y, w, h)` for a bar at
     /// `(bar_x, bar_y)` that is `bar_h` tall. `None` when nothing is open
     /// (or `open` names a menu that no longer exists).

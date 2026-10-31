@@ -29,7 +29,7 @@ use crate::slider::{Orientation, Slider};
 use crate::spin_box::SpinBox;
 use crate::spinner::Spinner;
 use crate::split_pane::{SplitOrientation, SplitPane};
-use crate::tab_bar::TabBar;
+use crate::tab_bar::{TabBar, TabStyle};
 use crate::table::{Column, Table};
 use crate::test_utils::{RecordingBackend, all_themes};
 use crate::text_block::TextBlock;
@@ -118,6 +118,12 @@ fn all_widgets() -> Vec<(&'static str, Box<dyn Widget>)> {
 
     let mut tabs = TabBar::new(vec![LONG.into(), "b".into(), "c".into()]);
     tabs.active = 2;
+    // `Filled` / `Pill` inset the active tab by `h - 4` (underflowed below
+    // 4 px before it saturated).
+    let mut tabs_filled = TabBar::new(vec!["a".into(), LONG.into()]);
+    tabs_filled.style = TabStyle::Filled;
+    let mut tabs_pill = TabBar::new(vec!["a".into(), LONG.into()]);
+    tabs_pill.style = TabStyle::Pill;
 
     let mut spin = SpinBox::new(-1e9, 1e9);
     spin.set_value(123_456_789.0);
@@ -161,6 +167,8 @@ fn all_widgets() -> Vec<(&'static str, Box<dyn Widget>)> {
             Box::new(SplitPane::new(SplitOrientation::Vertical)),
         ),
         ("TabBar", Box::new(tabs)),
+        ("TabBar(filled)", Box::new(tabs_filled)),
+        ("TabBar(pill)", Box::new(tabs_pill)),
         ("Table", Box::new(table)),
         (
             "TextBlock",

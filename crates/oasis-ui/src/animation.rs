@@ -33,15 +33,12 @@ impl Tween {
     }
 
     /// Advance by `dt_ms` and return the current interpolated value.
+    ///
+    /// Saturating: a huge `dt_ms` (a stalled or wrapped frame clock)
+    /// finishes the tween instead of overflowing.
     pub fn tick(&mut self, dt_ms: u32) -> f32 {
-        self.elapsed_ms = (self.elapsed_ms + dt_ms).min(self.duration_ms);
-        let t = if self.duration_ms > 0 {
-            self.elapsed_ms as f32 / self.duration_ms as f32
-        } else {
-            1.0
-        };
-        let eased = (self.easing)(t);
-        self.start + (self.end - self.start) * eased
+        self.elapsed_ms = self.elapsed_ms.saturating_add(dt_ms).min(self.duration_ms);
+        self.value()
     }
 
     /// Advance by `dt_ms` and return the current interpolated value,
@@ -117,6 +114,22 @@ mod tests {
         assert_eq!(tw.tick(50), 50.0);
         assert_eq!(tw.tick(50), 100.0);
         assert!(tw.is_finished());
+    }
+
+    /// `elapsed + dt` overflowed: a debug panic, and in release a wrapped
+    /// (rewound, un-finished) tween.
+    #[test]
+    fn tween_huge_tick_finishes_without_overflow() {
+        let mut tw = Tween::new(0.0, 100.0, 1000, easing::linear);
+        tw.tick(999);
+        assert_eq!(tw.tick(u32::MAX), 100.0);
+        assert!(tw.is_finished());
+        let mut zero = Tween::new(3.0, 7.0, 0, easing::linear);
+        assert_eq!(zero.tick(u32::MAX), 7.0);
+        let mut long = Tween::new(0.0, 1.0, u32::MAX, easing::linear);
+        long.tick(u32::MAX);
+        long.tick(u32::MAX);
+        assert!(long.is_finished());
     }
 
     #[test]

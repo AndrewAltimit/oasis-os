@@ -556,6 +556,25 @@ mod tests {
         assert!(after.0 <= 400 && 400 < after.0 + after.2 as i32);
     }
 
+    /// Snapping, then maximizing, then dragging the titlebar used to take
+    /// the snap branch of the detach logic: the window slid around while
+    /// still marked maximized (no resize handles, refit to the work area
+    /// on the next screen change).
+    #[test]
+    fn dragging_a_maximized_snapped_window_unmaximizes_it() {
+        let (mut wm, mut sdi) = setup(&["a"]);
+        let before = geom(&wm, "a");
+        wm.snap_window("a", SnapZone::Left, &mut sdi);
+        wm.maximize_window("a", &mut sdi).expect("maximize");
+        drag_to(&mut wm, &mut sdi, "a", 400, 300);
+        let w = wm.get_window("a").expect("a");
+        assert_eq!(w.state, WindowState::Normal);
+        assert!(w.snap_zone.is_none() && w.pre_snap_geometry.is_none());
+        assert!(w.saved_geometry.is_none());
+        let after = geom(&wm, "a");
+        assert_eq!((after.2, after.3), (before.2, before.3));
+    }
+
     #[test]
     fn drag_release_at_right_edge_snaps_right_half() {
         let (mut wm, mut sdi) = setup(&["a"]);
