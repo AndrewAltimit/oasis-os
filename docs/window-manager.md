@@ -100,7 +100,14 @@ Input:
   macOS and GNOME: its size is the work area's). Its frame border hits
   the content instead, clamped to the nearest content pixel, so a
   pointer pushed against the screen edge reaches the app; dragging the
-  titlebar still un-maximizes it.
+  titlebar still un-maximizes it (back to its floating size, also when
+  it was snapped before it was maximized).
+- Titlebar buttons show hover colors only when clickable: under a modal
+  dialog, only the modal's own buttons react.
+- Geometry maths (hit testing, `window_at`, drag / resize deltas, edge
+  magnetism, button and title layout, animation interpolation) runs in
+  `i64` / `f64` and saturates, so windows and pointers anywhere in the
+  `i32` range (multi-monitor-style offsets) cannot overflow.
 - Keyboard shortcuts are handled by the host, not by
   `handle_input` (see below).
 
@@ -212,9 +219,9 @@ on-screen and focus invariants.
 | Module | Contents |
 |--------|----------|
 | `manager/` | `WindowManager` struct, `WmEvent`, `move_window` / `resize_window`; `input.rs` (event dispatch), `query.rs` (read accessors) |
-| `window/` | `Window`, `WindowConfig`, `WindowType`, `WindowState`, `Geometry`, title layout; `id.rs` (`WindowId`), `theme.rs` (`WmTheme`) |
+| `window/` | `Window`, `WindowConfig`, `WindowType` (`border` / `titlebar_height`), `WindowState`, `Geometry`, `button_rect(ButtonKind)`, title layout; `id.rs` (`WindowId`), `theme.rs` (`WmTheme`) |
 | `lifecycle.rs` | create / close / minimize / maximize / restore / fullscreen |
-| `drag_resize/` | Pointer drag + resize state machine, `compute_resize`, `clamp_position`, edge magnetism |
+| `drag_resize/` | Pointer drag + resize state machine, resize geometry (`resize_on_screen`), `clamp_position`, edge magnetism |
 | `hit_test.rs` | Topmost-first hit testing, resize-handle bands |
 | `focus.rs`, `stacking.rs` | Focus, Alt+Tab cycling, z-order groups (normal < always-on-top < modal) |
 | `window_ops.rs`, `snap.rs`, `tiling/` | Snapping, keyboard snapping, tiling layouts |
