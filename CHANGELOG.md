@@ -4,6 +4,41 @@ Notable changes to OASIS_OS. GitHub releases (tags `v1.1.0` ... `v1.5.0`)
 carry generated notes listing every merged PR; this file summarizes the
 larger changes by area. Breaking API changes are marked **(breaking)**.
 
+## Unreleased -- overhaul 3
+
+### Browser parsers and loader (oasis-html, oasis-css, oasis-http)
+
+- HTTP/1.1: `304` / `204` / `1xx` responses and `HEAD` answers no longer
+  wait 15 s for a body their `Content-Length` promises; `103 Early Hints`
+  heads are skipped instead of becoming the response; one response gets
+  at most 60 s; every resolved address is tried. A guarded (`fetch()`)
+  request now refuses to connect if *any* resolved address is disallowed.
+- HTTP/2: POST bodies over 16 KiB are split into frames (they failed on
+  servers with default settings); padded DATA no longer drains the
+  flow-control window; control-frame floods end the connection; faster
+  HPACK Huffman decoding; non-UTF-8 header values decode lossily.
+- `data:` URLs percent-decode to bytes (`%C3%A9` is `é`, `+` stays `+`).
+  Gemini status lines with non-ASCII bytes no longer panic.
+- HTML: CR LF normalised to LF and NUL to U+FFFD; duplicate attributes
+  dropped (first wins) and at most 256 per tag; `&copy=` style query
+  strings in attributes stay literal; `&#150;` maps through
+  Windows-1252. Stray end tags no longer close enclosing table cells or
+  push content outside `<html>`; `<script>` text at the nesting cap stays
+  in the script. Quadratic / multiplicative cases (huge attribute lists,
+  adoption agency, foster parenting, DOM depth) are bounded.
+- CSS: unquoted `url(a/b.png)` and `url(data:...)` parse correctly;
+  string escapes (`"\f101"` icon fonts) and escaped / non-ASCII idents
+  (`.md\:flex`) work; nested rules using `:not()` etc. and declarations
+  inside nested `@media` apply; at-rules nest inside `@media` /
+  `@supports`; `em` media-query breakpoints work; nested `@layer` names
+  are qualified. Deep nesting, `calc()` / `not` chains, nesting selector
+  explosion, `var()` expansion, `:has()` with structural pseudo-classes,
+  and `:nth-child(2n-2147483648)` no longer crash or hang.
+- `oasis_http::http::response_find_header` and
+  `http_psp::response_find_header` removed (use `http1::find_header`),
+  `oasis_html::entities` and `oasis_css::selectors` are crate-private,
+  `cascade::build_global_layer_map` is crate-private **(breaking)**.
+
 ## Unreleased -- overhaul (`overhaul/site-code-docs-2026-10`)
 
 A repository-wide cleanup: bug fixes from a full code review and an

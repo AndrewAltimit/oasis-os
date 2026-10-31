@@ -25,6 +25,7 @@ jobs:
           - css_parser
           - gemini_parser
           - http_response
+          - loader_parsers
           - skin_toml
           - pbp_parser
 
