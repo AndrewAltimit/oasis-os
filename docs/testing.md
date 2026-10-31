@@ -58,7 +58,7 @@ e2e `FrameSink` hashes uploaded textures). Implement `SdiCore` and let
 
 ```rust,ignore
 struct MyRecorder { /* ... */ }
-impl SdiCore for MyRecorder { /* the 13 required methods */ }
+impl SdiCore for MyRecorder { /* the 12 required methods */ }
 // All eight extension traits with their defaults ...
 oasis_types::impl_sdi_defaults!(MyRecorder);
 // ... or all but the ones you override yourself.
@@ -320,10 +320,12 @@ cargo test -p oasis-app --test sdl_parity
   rasterizer rounds: 1-3 levels) and SDL's linear filtering of *scaled*
   textures (the rasterizer samples nearest). Add a scenario whenever a
   backend grows a new primitive or a rendering bug is fixed.
-- **Misuse checks** (`conformance::render_target_misuse`,
-  `conformance::texture_misuse`) return a list of violations instead of
+- **Misuse and equivalence checks** (`conformance::render_target_misuse`,
+  `conformance::texture_misuse`, `conformance::batch_matches_singles`)
+  return a list of violations instead of
   a frame: calls every backend must reject the same way (binding a bound
-  target, destroying an unknown texture, ...).
+  target, destroying an unknown texture, ...) and batches that must draw
+  exactly what their items drawn one by one do.
 - **Headless SDL**: `SdlBackend::new_headless` forces the `offscreen`
   video driver and the `software` renderer through in-process SDL hints,
   so the suites need no display and run in the CI container. SDL may only

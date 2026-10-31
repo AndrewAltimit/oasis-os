@@ -11,11 +11,11 @@ use std::collections::HashMap;
 use std::rc::Rc;
 
 use oasis_rasterize::SoftwareBuffer;
-use oasis_types::backend::stacks::{ClipPush, ClipStack, DrawState, TranslateStack};
+use oasis_types::backend::stacks::{ClipStack, DrawState, TranslateStack};
 use oasis_types::backend::{
-    BatchRect, BatchText, BlendMode, Color, GradientStyle, RenderTargetId, SdiBatch,
-    SdiClipTransform, SdiCore, SdiGradients, SdiRenderTarget, SdiShapes, SdiText, SdiTextures,
-    SdiVector, TextureId, render_target_not_found, texture_not_found, validate_rgba_data,
+    BatchRect, BlendMode, Color, GradientStyle, RenderTargetId, SdiBatch, SdiClipTransform,
+    SdiCore, SdiGradients, SdiRenderTarget, SdiShapes, SdiText, SdiTextures, SdiVector, TextureId,
+    render_target_not_found, texture_not_found, validate_rgba_data,
 };
 use oasis_types::error::{OasisError, Result};
 use oasis_types::geometry::ClipRect;
@@ -189,7 +189,7 @@ impl Ue5Backend {
             .textures
             .get(idx)
             .and_then(|t| t.as_ref())
-            .ok_or_else(|| texture_not_found(tex.0))?;
+            .ok_or_else(|| texture_not_found(tex))?;
         Ok((texture.width, texture.height, Rc::clone(&texture.data)))
     }
 
@@ -389,7 +389,7 @@ impl SdiCore for Ue5Backend {
             .and_then(|idx| self.textures.get_mut(idx));
         match slot.and_then(Option::take) {
             Some(_) => Ok(()),
-            None => Err(texture_not_found(tex.0)),
+            None => Err(texture_not_found(tex)),
         }
     }
 
@@ -403,10 +403,6 @@ impl SdiCore for Ue5Backend {
     fn reset_clip_rect(&mut self) -> Result<()> {
         self.fb.set_clip(None);
         Ok(())
-    }
-
-    fn measure_text(&self, text: &str, font_size: u16) -> u32 {
-        oasis_types::backend::bitmap_measure_text(text, font_size)
     }
 
     fn read_pixels(&self, x: i32, y: i32, w: u32, h: u32) -> Result<Vec<u8>> {
@@ -686,46 +682,6 @@ impl SdiTextures for Ue5Backend {
         self.dirty = true;
         Ok(())
     }
-
-    fn blit_sub_tinted(
-        &mut self,
-        tex: TextureId,
-        src_x: u32,
-        src_y: u32,
-        src_w: u32,
-        src_h: u32,
-        dst_x: i32,
-        dst_y: i32,
-        dst_w: u32,
-        dst_h: u32,
-        tint: Color,
-    ) -> Result<()> {
-        let (tex_w, _tex_h, tex_data) = self.get_texture_data(tex)?;
-        let (tx, ty) = self.translate(dst_x, dst_y);
-        self.fb.blit_texture_sub_tinted(
-            &tex_data, tex_w, src_x, src_y, src_w, src_h, tx, ty, dst_w, dst_h, tint,
-        );
-        self.dirty = true;
-        Ok(())
-    }
-
-    fn blit_flipped(
-        &mut self,
-        tex: TextureId,
-        x: i32,
-        y: i32,
-        w: u32,
-        h: u32,
-        flip_h: bool,
-        flip_v: bool,
-    ) -> Result<()> {
-        let (tex_w, tex_h, tex_data) = self.get_texture_data(tex)?;
-        let (tx, ty) = self.translate(x, y);
-        self.fb
-            .blit_texture_flipped(&tex_data, tex_w, tex_h, tx, ty, w, h, flip_h, flip_v);
-        self.dirty = true;
-        Ok(())
-    }
 }
 
 // -------------------------------------------------------------------
@@ -734,19 +690,10 @@ impl SdiTextures for Ue5Backend {
 
 impl SdiClipTransform for Ue5Backend {
     fn push_clip_rect(&mut self, x: i32, y: i32, w: u32, h: u32) -> Result<()> {
-        let (tx, ty) = self.translate(x, y);
-        let new_clip = ClipRect { x: tx, y: ty, w, h };
-        match self.clip_stack.push(new_clip) {
-            ClipPush::Clip(c) => self.fb.set_clip(Some(c)),
-            ClipPush::Empty => {
-                self.fb.set_clip(Some(ClipRect {
-                    x: 0,
-                    y: 0,
-                    w: 0,
-                    h: 0,
-                }));
-            },
-        }
+        let applied = self
+            .clip_stack
+            .push_translated(&self.translate_stack, x, y, w, h);
+        self.fb.set_clip(Some(applied));
         Ok(())
     }
 
@@ -788,13 +735,15 @@ impl SdiBatch for Ue5Backend {
         if rects.is_empty() {
             return Ok(());
         }
-        let (dx, dy) = self.translate_stack.current();
         let mut wrote_any = false;
         for r in rects {
             if r.w == 0 || r.h == 0 || r.color.a == 0 {
                 continue;
             }
-            self.fb.fill_rect(r.x + dx, r.y + dy, r.w, r.h, r.color);
+            // Saturating, like every other draw path: a far off-screen
+            // rect must not wrap onto the screen.
+            let (x, y) = self.translate_stack.translate(r.x, r.y);
+            self.fb.fill_rect(x, y, r.w, r.h, r.color);
             wrote_any = true;
         }
         if wrote_any {
@@ -803,21 +752,8 @@ impl SdiBatch for Ue5Backend {
         Ok(())
     }
 
-    /// One styled pass per item, like SDL: bold is baked into the glyph
-    /// mask (the default double-strikes, blending translucent text twice)
-    /// and italic is honoured (the default drops it).
-    fn submit_text_batch(
-        &mut self,
-        texts: &[BatchText<'_>],
-        font_size: u16,
-        bold: bool,
-        italic: bool,
-    ) -> Result<()> {
-        for t in texts {
-            self.draw_text_styled(t.text, t.x, t.y, font_size, t.color, bold, italic)?;
-        }
-        Ok(())
-    }
+    // `submit_text_batch`: the default, one `draw_text_styled` per item
+    // (bold baked into the glyph mask, italic honoured).
 }
 
 // -------------------------------------------------------------------
@@ -964,6 +900,7 @@ impl SdiRenderTarget for Ue5Backend {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use oasis_types::backend::BatchText;
 
     #[test]
     fn new_creates_buffer() {
@@ -1326,20 +1263,22 @@ mod tests {
     }
 
     #[test]
-    fn blit_flipped_horizontal() {
+    fn rect_batch_far_off_screen_does_not_wrap() {
         let mut backend = Ue5Backend::new(10, 10);
         backend.clear(Color::BLACK).unwrap();
-        // 2x1 texture: left=red, right=blue.
-        let tex_data = vec![255, 0, 0, 255, 0, 0, 255, 255];
-        let tex_id = backend.load_texture(2, 1, &tex_data).unwrap();
-        backend
-            .blit_flipped(tex_id, 0, 0, 2, 1, true, false)
-            .unwrap();
-        // With horizontal flip: left should be blue, right should be red.
-        assert_eq!(backend.buffer()[0], 0); // B became left
-        assert_eq!(backend.buffer()[2], 255);
-        assert_eq!(backend.buffer()[4], 255); // R became right
-        assert_eq!(backend.buffer()[6], 0);
+        backend.push_translate(i32::MAX - 2, 0).unwrap();
+        let rect = BatchRect {
+            x: 5,
+            y: 0,
+            w: 4,
+            h: 4,
+            color: Color::WHITE,
+        };
+        backend.submit_rect_batch(&[rect]).unwrap();
+        assert!(
+            backend.buffer().chunks(4).all(|p| p[0] == 0),
+            "an off-screen rect wrapped onto the screen"
+        );
     }
 
     #[test]

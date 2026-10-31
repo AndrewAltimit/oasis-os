@@ -23,26 +23,28 @@ stacks, and audio subsystems. We need an abstraction that:
 We define **separate backend traits** in `oasis-types` (five main ones,
 plus `ClipboardBackend` and the `NetworkStream` connection trait):
 
-1. **`SdiCore`** -- Required rendering: 13 required methods (`init`,
+1. **`SdiCore`** -- Required rendering: 12 required methods (`init`,
    `clear`, `blit`, `fill_rect`, `draw_text`, `swap_buffers`, `load_texture`,
-   `destroy_texture`, `set_clip_rect`, `reset_clip_rect`, `measure_text`,
-   `read_pixels`, `shutdown`) plus one provided method, `viewport_size`
-   (the bound surface's size; defaults to 480x272, every real backend
+   `destroy_texture`, `set_clip_rect`, `reset_clip_rect`, `read_pixels`,
+   `shutdown`) plus two provided ones: `measure_text` (the bitmap font's
+   width; SDL overrides it for skin TTF fonts) and `viewport_size` (the
+   bound surface's size; defaults to 480x272, every real backend
    overrides it).
 2. **`SdiBackend`** -- A marker super-trait with no methods of its own. It
    bundles `SdiCore` plus eight extension traits via a blanket impl, so any
    type that satisfies `SdiCore` and all eight extensions automatically
    implements `SdiBackend`. The eight extensions are `SdiShapes`,
    `SdiGradients`, `SdiText`, `SdiTextures`, `SdiClipTransform`,
-   `SdiVector`, `SdiBatch`, and `SdiRenderTarget`, totalling 47
+   `SdiVector`, `SdiBatch`, and `SdiRenderTarget`, totalling 45
    default-implemented methods that fall back to `SdiCore` primitives
-   (shapes 8, gradients 2, text 7, textures 4, clip/transform 9,
+   (shapes 8, gradients 2, text 7, textures 2, clip/transform 9,
    vector 6, batch 2, render target 9). `SdiShapes` builds on
-   `SdiClipTransform` (for `draw_bounds`, below) and `SdiVector` on
-   `SdiShapes`; every other extension builds on `SdiCore` alone.
-   `SdiBatch` is `submit_rect_batch`/`submit_text_batch`, batched rect and
-   text geometry submission (used by the browser's display-list replay to
-   reduce draw call count). The former opt-in traits `SdiBlendMode` and
+   `SdiClipTransform` (for `draw_bounds`, below), `SdiVector` on
+   `SdiShapes` and `SdiBatch` on `SdiText`; every other extension builds
+   on `SdiCore` alone. `SdiBatch` is `submit_rect_batch`/`submit_text_batch`,
+   batched rect and text geometry submission (used by the browser's
+   display-list replay to reduce draw call count); a batch draws exactly
+   what its items drawn one by one (`fill_rect`, `draw_text_styled`) would. The former opt-in traits `SdiBlendMode` and
    `SdiGeometry` had no implementation or caller outside tests and were
    removed in 2026-10; blend modes are expressed through
    `SdiRenderTarget::composite_render_target`.
@@ -167,6 +169,17 @@ intersection, `TranslateStack`, `edge_x`, circle and rounded-rect radii)
 are computed in `i64` or saturate, so far off-screen or huge sizes clip
 instead of wrapping or panicking in debug builds.
 
+A second pass (overhaul 3) applied the same rule again:
+
+| Change | Why |
+|---|---|
+| `SdiTextures::blit_sub_tinted` / `blit_flipped` removed | No caller outside tests; SDL, UE5 and WASM each carried an implementation and a conformance scenario for them |
+| `SdiBatch` builds on `SdiText`; `submit_text_batch` defaults to one `draw_text_styled` per item | SDL and UE5 both overrode it with exactly that, and WASM double-struck bold where its single-span path drew a real bold glyph, so batched and unbatched text differed. `conformance::batch_matches_singles` pins it |
+| `SdiCore::measure_text` provided (bitmap font) | Every backend but SDL, and most test doubles, wrote the same `bitmap_measure_text` body |
+| `ClipStack::push` returns the applied `ClipRect` (`ClipRect::EMPTY` for no overlap); `ClipStack::push_translated`; `ClipPush` removed | Every backend mapped `ClipPush::Empty` to the same zero rectangle by hand |
+| `backend::unsupported(op)`; the `AudioBackend` streaming defaults return `BackendError::Unsupported` | They returned free-text strings, unlike the `SdiRenderTarget` defaults, so callers could not tell "fall back" from a failure |
+| `texture_not_found` takes a `TextureId` | It took a raw `u64` while `render_target_not_found` took the typed id |
+
 Positional `i32`/`u32` arguments were kept: the call sites (browser display
 list, chrome, apps) already hold loose coordinates, and a `Rect`-taking
 signature would churn hundreds of calls for no behavioural gain. The typed
@@ -183,8 +196,8 @@ clearly better, because callers compare and intersect the result.
 - **Single responsibility.** Each trait is focused. `SdiCore` is about
   required drawing. `SdiBackend` adds optional accelerated methods. `InputBackend`
   is about events. They can be implemented by different structs if needed.
-- **Two-tier rendering.** `SdiCore` has 13 required methods that every backend
-  must implement. `SdiBackend`'s eight extensions add 47 default-implemented
+- **Two-tier rendering.** `SdiCore` has 12 required methods that every backend
+  must implement. `SdiBackend`'s eight extensions add 45 default-implemented
   methods for shapes, gradients, text styling, textures, clip/transform
   stacks, vector graphics, batching, and render targets — all falling back
   to `SdiCore` calls. The shape defaults emit spans from the same generators
@@ -242,7 +255,9 @@ decision itself is unchanged):
   `set_volume` / `get_volume`, `is_playing`, `position_ms`, `duration_ms`,
   `unload_track` and `shutdown`, plus a provided streaming path
   (`load_streaming`, `feed_data`, `streaming_can_accept`,
-  `streaming_queued_ms`, `finalize_streaming`, `feed_pcm_f32`).
+  `streaming_queued_ms`, `finalize_streaming`, `feed_pcm_f32`);
+  `load_streaming`, `feed_data` and `feed_pcm_f32` default to
+  `BackendError::Unsupported`.
 - The PSP EBOOT does have networking: `PspNetworkBackend` implements
   `NetworkBackend` over `sceNetInet` (WiFi, infrastructure mode). The
   "PSP networking" examples under Rationale and Alternatives describe the

@@ -169,8 +169,8 @@ device scale.
 |-----------|--------------|
 | `mousemove` / `touchmove` | `CursorMove { x, y }` |
 | `mousedown` / `touchstart` | `PointerClick { x, y }` |
-| `mouseup` / `touchend` | `PointerRelease { x, y }` |
-| `wheel` | `MouseWheel { delta }` |
+| `mouseup` (on `window`, after a press on the canvas, so a drag released outside the canvas still ends) / `touchend` | `PointerRelease { x, y }` |
+| `wheel` | `MouseWheel { delta }`: the sign of the vertical motion (a purely sideways scroll emits nothing) |
 | window `focus` / `blur` | `FocusGained` / `FocusLost` |
 | `keydown` | `Key { key, mods }`, then its gamepad-style twin (if any), then `TextInput(ch)` |
 | `keyup` | the gamepad-style release twin (if any) |

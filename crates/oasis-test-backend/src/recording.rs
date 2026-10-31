@@ -9,9 +9,8 @@
 
 use crate::DrawCommand;
 use oasis_types::backend::{
-    BlendMode, Color, DEFAULT_VIEWPORT_HEIGHT, DEFAULT_VIEWPORT_WIDTH, RenderTargetId, SdiBatch,
-    SdiClipTransform, SdiCore, SdiGradients, SdiRenderTarget, SdiShapes, SdiText, SdiTextures,
-    SdiVector, TextureId, bitmap_measure_text,
+    BlendMode, Color, DEFAULT_VIEWPORT_HEIGHT, DEFAULT_VIEWPORT_WIDTH, RenderTargetId,
+    SdiClipTransform, SdiCore, SdiRenderTarget, TextureId, bitmap_measure_text,
     stacks::{ClipStack, DrawState, TranslateStack},
     texture_not_found,
 };
@@ -272,7 +271,7 @@ impl SdiCore for RecordingBackend {
         if self.live_textures.remove(&tex.0) {
             Ok(())
         } else {
-            Err(texture_not_found(tex.0))
+            Err(texture_not_found(tex))
         }
     }
 
@@ -463,12 +462,7 @@ impl SdiRenderTarget for RecordingBackend {
     }
 }
 
-impl SdiShapes for RecordingBackend {}
-impl SdiGradients for RecordingBackend {}
-impl SdiText for RecordingBackend {}
-impl SdiTextures for RecordingBackend {}
-impl SdiVector for RecordingBackend {}
-impl SdiBatch for RecordingBackend {}
+oasis_types::impl_sdi_defaults!(RecordingBackend; except SdiClipTransform, SdiRenderTarget);
 
 impl SdiClipTransform for RecordingBackend {
     fn push_clip_rect(&mut self, x: i32, y: i32, w: u32, h: u32) -> Result<()> {

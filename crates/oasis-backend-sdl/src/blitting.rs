@@ -1,6 +1,8 @@
-//! Texture blitting operations for the SDL3 backend.
+//! Texture blitting for the SDL3 backend.
 //!
-//! Contains sub-rect, tinted, and flipped blit methods.
+//! `blit`, `blit_sub` and `blit_tinted` are all one SDL `copy` with an
+//! optional source rectangle and a color modulation; [`SdlBackend::copy_texture`]
+//! is that one path.
 
 use std::collections::HashMap;
 
@@ -36,114 +38,34 @@ pub(crate) fn ensure_texture_mod(
     *cur = want;
 }
 
+/// A texture source rectangle `(x, y, w, h)` in texture pixels.
+pub(crate) type SrcRect = (u32, u32, u32, u32);
+
 impl SdlBackend {
-    #[allow(clippy::too_many_arguments)]
-    pub(crate) fn blit_sub_impl(
+    /// Copy texture `tex` (the `src` part of it, or all of it) to the
+    /// translated destination rect, modulated by `tint` (`Color::WHITE`
+    /// draws it unchanged).
+    pub(crate) fn copy_texture(
         &mut self,
         tex: TextureId,
-        src_x: u32,
-        src_y: u32,
-        src_w: u32,
-        src_h: u32,
-        dst_x: i32,
-        dst_y: i32,
-        dst_w: u32,
-        dst_h: u32,
-    ) -> Result<()> {
-        let (tx, ty) = self.translate(dst_x, dst_y);
-        let texture = self
-            .textures
-            .get_mut(&tex.0)
-            .ok_or_else(|| texture_not_found(tex.0))?;
-        ensure_texture_mod(&mut self.texture_mods, tex.0, texture, NEUTRAL_MOD);
-        let src_rect = frect(src_x as i32, src_y as i32, src_w, src_h);
-        let dst_rect = frect(tx, ty, dst_w, dst_h);
-        self.canvas
-            .copy(texture, src_rect, dst_rect)
-            .backend_err()?;
-        Ok(())
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    pub(crate) fn blit_tinted_impl(
-        &mut self,
-        tex: TextureId,
-        x: i32,
-        y: i32,
-        w: u32,
-        h: u32,
+        src: Option<SrcRect>,
+        (x, y, w, h): (i32, i32, u32, u32),
         tint: Color,
     ) -> Result<()> {
         let (tx, ty) = self.translate(x, y);
         let texture = self
             .textures
             .get_mut(&tex.0)
-            .ok_or_else(|| texture_not_found(tex.0))?;
+            .ok_or_else(|| texture_not_found(tex))?;
         ensure_texture_mod(
             &mut self.texture_mods,
             tex.0,
             texture,
             (tint.r, tint.g, tint.b, tint.a),
         );
-        let dst_rect = frect(tx, ty, w, h);
-        self.canvas.copy(texture, None, dst_rect).backend_err()?;
-        Ok(())
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    pub(crate) fn blit_sub_tinted_impl(
-        &mut self,
-        tex: TextureId,
-        src_x: u32,
-        src_y: u32,
-        src_w: u32,
-        src_h: u32,
-        dst_x: i32,
-        dst_y: i32,
-        dst_w: u32,
-        dst_h: u32,
-        tint: Color,
-    ) -> Result<()> {
-        let (tx, ty) = self.translate(dst_x, dst_y);
-        let texture = self
-            .textures
-            .get_mut(&tex.0)
-            .ok_or_else(|| texture_not_found(tex.0))?;
-        ensure_texture_mod(
-            &mut self.texture_mods,
-            tex.0,
-            texture,
-            (tint.r, tint.g, tint.b, tint.a),
-        );
-        let src_rect = frect(src_x as i32, src_y as i32, src_w, src_h);
-        let dst_rect = frect(tx, ty, dst_w, dst_h);
+        let src_rect = src.map(|(sx, sy, sw, sh)| frect(sx as i32, sy as i32, sw, sh));
         self.canvas
-            .copy(texture, src_rect, dst_rect)
-            .backend_err()?;
-        Ok(())
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    pub(crate) fn blit_flipped_impl(
-        &mut self,
-        tex: TextureId,
-        x: i32,
-        y: i32,
-        w: u32,
-        h: u32,
-        flip_h: bool,
-        flip_v: bool,
-    ) -> Result<()> {
-        let (tx, ty) = self.translate(x, y);
-        let texture = self
-            .textures
-            .get_mut(&tex.0)
-            .ok_or_else(|| texture_not_found(tex.0))?;
-        ensure_texture_mod(&mut self.texture_mods, tex.0, texture, NEUTRAL_MOD);
-        let dst_rect = frect(tx, ty, w, h);
-        self.canvas
-            .copy_ex(texture, None, dst_rect, 0.0, None, flip_h, flip_v)
-            .backend_err()?;
-        Ok(())
+            .copy(texture, src_rect, frect(tx, ty, w, h))
+            .backend_err()
     }
 }

@@ -1,8 +1,6 @@
 //! `SdiTextures` and `SdiClipTransform` implementations for the WASM backend.
 
-use oasis_types::backend::{
-    Color, SdiClipTransform, SdiCore, SdiTextures, TextureId, texture_not_found,
-};
+use oasis_types::backend::{Color, SdiClipTransform, SdiTextures, TextureId, texture_not_found};
 use oasis_types::error::Result;
 use oasis_types::geometry::ClipRect;
 
@@ -28,7 +26,7 @@ impl SdiTextures for WasmBackend {
         let td = self
             .textures
             .get(&tex.0)
-            .ok_or_else(|| texture_not_found(tex.0))?;
+            .ok_or_else(|| texture_not_found(tex))?;
         let (tx, ty) = self.translate(dst_x, dst_y);
         self.ctx
             .draw_image_with_html_canvas_element_and_sw_and_sh_and_dx_and_dy_and_dw_and_dh(
@@ -46,47 +44,6 @@ impl SdiTextures for WasmBackend {
         Ok(())
     }
 
-    fn blit_flipped(
-        &mut self,
-        tex: TextureId,
-        x: i32,
-        y: i32,
-        w: u32,
-        h: u32,
-        flip_h: bool,
-        flip_v: bool,
-    ) -> Result<()> {
-        if !flip_h && !flip_v {
-            return self.blit(tex, x, y, w, h);
-        }
-
-        let td = self
-            .textures
-            .get(&tex.0)
-            .ok_or_else(|| texture_not_found(tex.0))?;
-
-        let (tx, ty) = self.translate(x, y);
-        let fw = w as f64;
-        let fh = h as f64;
-
-        // Apply flip via scale transform.
-        self.ctx.save();
-        let sx = if flip_h { -1.0 } else { 1.0 };
-        let sy = if flip_v { -1.0 } else { 1.0 };
-        let dx = if flip_h { -(tx + fw) } else { tx };
-        let dy = if flip_v { -(ty + fh) } else { ty };
-        // Restore before propagating an error: an early return would leave
-        // the flip transform and an extra save level on the context, which
-        // the clip bookkeeping (one save level per applied clip) would then
-        // pop instead of its own.
-        let drawn = self.ctx.scale(sx, sy).and_then(|()| {
-            self.ctx
-                .draw_image_with_html_canvas_element_and_dw_and_dh(&td.canvas, dx, dy, fw, fh)
-        });
-        self.ctx.restore();
-        drawn.map_err(js_err)
-    }
-
     fn blit_tinted(
         &mut self,
         tex: TextureId,
@@ -97,23 +54,6 @@ impl SdiTextures for WasmBackend {
         tint: Color,
     ) -> Result<()> {
         self.blit_tinted_region(tex, None, (x, y, w, h), tint)
-    }
-
-    fn blit_sub_tinted(
-        &mut self,
-        tex: TextureId,
-        src_x: u32,
-        src_y: u32,
-        src_w: u32,
-        src_h: u32,
-        dst_x: i32,
-        dst_y: i32,
-        dst_w: u32,
-        dst_h: u32,
-        tint: Color,
-    ) -> Result<()> {
-        let src = Some((src_x, src_y, src_w, src_h));
-        self.blit_tinted_region(tex, src, (dst_x, dst_y, dst_w, dst_h), tint)
     }
 }
 
@@ -142,7 +82,7 @@ impl WasmBackend {
         let source = self
             .textures
             .get(&tex.0)
-            .ok_or_else(|| texture_not_found(tex.0))?
+            .ok_or_else(|| texture_not_found(tex))?
             .canvas
             .clone();
         let (sx, sy, sw, sh) = src.unwrap_or_else(|| (0, 0, source.width(), source.height()));

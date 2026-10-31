@@ -1,6 +1,7 @@
 //! Audio backend trait.
 
-use crate::error::{OasisError, Result};
+use super::unsupported;
+use crate::error::Result;
 
 /// Opaque handle to a loaded audio track in the backend.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -55,13 +56,13 @@ pub trait AudioBackend {
     /// Begin a streaming audio session. Returns a track handle for feeding
     /// data incrementally via `feed_data()`.
     fn load_streaming(&mut self) -> Result<AudioTrackId> {
-        Err(OasisError::Backend("streaming not supported".into()))
+        Err(unsupported("audio streaming"))
     }
 
     /// Feed a chunk of streaming audio data to an active streaming track.
     fn feed_data(&mut self, track: AudioTrackId, data: &[u8]) -> Result<()> {
         let _ = (track, data);
-        Err(OasisError::Backend("streaming not supported".into()))
+        Err(unsupported("audio streaming"))
     }
 
     /// Return `true` if the streaming track can accept more data without
@@ -110,8 +111,6 @@ pub trait AudioBackend {
         sample_rate: u32,
     ) -> Result<()> {
         let _ = (track, samples, channels, sample_rate);
-        Err(OasisError::Backend(
-            "pcm f32 streaming not supported".into(),
-        ))
+        Err(unsupported("pcm f32 streaming"))
     }
 }

@@ -24,9 +24,9 @@
 
 use crate::DrawCommand;
 use oasis_types::backend::{
-    BlendMode, Color, RenderTargetId, SdiBatch, SdiClipTransform, SdiCore, SdiGradients,
-    SdiRenderTarget, SdiShapes, SdiText, SdiTextures, SdiVector, TextureId, bitmap_measure_text,
-    stacks::{ClipPush, ClipStack, DrawState, TranslateStack},
+    BlendMode, Color, RenderTargetId, SdiClipTransform, SdiCore, SdiRenderTarget, SdiText,
+    TextureId,
+    stacks::{ClipStack, DrawState, TranslateStack},
     texture_not_found,
 };
 use oasis_types::error::{OasisError, Result};
@@ -447,7 +447,7 @@ impl SdiCore for ClipAuditBackend {
         if self.live_textures.remove(&tex.0) {
             Ok(())
         } else {
-            Err(texture_not_found(tex.0))
+            Err(texture_not_found(tex))
         }
     }
 
@@ -476,10 +476,6 @@ impl SdiCore for ClipAuditBackend {
         Ok(())
     }
 
-    fn measure_text(&self, text: &str, font_size: u16) -> u32 {
-        bitmap_measure_text(text, font_size)
-    }
-
     fn read_pixels(&self, _x: i32, _y: i32, w: u32, h: u32) -> Result<Vec<u8>> {
         Ok(vec![0u8; (w as usize) * (h as usize) * 4])
     }
@@ -496,16 +492,7 @@ impl SdiCore for ClipAuditBackend {
 impl SdiClipTransform for ClipAuditBackend {
     fn push_clip_rect(&mut self, x: i32, y: i32, w: u32, h: u32) -> Result<()> {
         let (tx, ty) = self.translate_stack.translate(x, y);
-        let pushed = self.clip_stack.push(ClipRect { x: tx, y: ty, w, h });
-        self.active_clip = Some(match pushed {
-            ClipPush::Clip(c) => c,
-            ClipPush::Empty => ClipRect {
-                x: 0,
-                y: 0,
-                w: 0,
-                h: 0,
-            },
-        });
+        self.active_clip = Some(self.clip_stack.push(ClipRect { x: tx, y: ty, w, h }));
         self.clip_depth += 1;
         self.commands
             .push(DrawCommand::PushClip { x: tx, y: ty, w, h });
@@ -670,12 +657,7 @@ impl SdiRenderTarget for ClipAuditBackend {
     }
 }
 
-impl SdiShapes for ClipAuditBackend {}
-impl SdiGradients for ClipAuditBackend {}
-impl SdiText for ClipAuditBackend {}
-impl SdiTextures for ClipAuditBackend {}
-impl SdiVector for ClipAuditBackend {}
-impl SdiBatch for ClipAuditBackend {}
+oasis_types::impl_sdi_defaults!(ClipAuditBackend; except SdiClipTransform, SdiRenderTarget);
 
 #[cfg(test)]
 mod tests {
