@@ -9,6 +9,22 @@ const NP_PAD_TOP: i32 = 6;
 const NP_MENU_H: u32 = 18;
 const NP_STATUS_H: u32 = 18;
 
+/// Left inset of the text from the text area's edge.
+pub(crate) const NP_PAD_LEFT: i32 = 8;
+/// Font size of the text area.
+pub(crate) const NP_FONT_SIZE: u16 = 12;
+/// Room the caret keeps from the text area's right edge.
+const H_SCROLL_MARGIN: u32 = 16;
+
+/// Horizontal scroll (px) of a text area `cw` wide whose caret sits
+/// `caret_px` from the text origin: 0 while the caret fits, otherwise just
+/// enough to keep it [`H_SCROLL_MARGIN`] from the right edge. Stateless, so
+/// drawing and click hit-testing always agree.
+pub(crate) fn h_scroll(caret_px: u32, cw: u32) -> u32 {
+    let room = cw.saturating_sub(NP_PAD_LEFT as u32 + H_SCROLL_MARGIN);
+    caret_px.saturating_sub(room)
+}
+
 /// `(text rows, row height)` of the windowed editor viewport in a content
 /// area `ch` tall: what `draw_notepad` draws and `App::layout` records.
 pub(crate) fn notepad_viewport(ch: u32, at: &ActiveTheme) -> (usize, i32) {
@@ -110,10 +126,7 @@ impl TextEditorApp {
 
     /// Right status-bar text: 1-based line and character column.
     pub(crate) fn status_position(&self) -> String {
-        let line = self.buffer.get_line(self.cursor_line).unwrap_or("");
-        let col = line[..line.floor_char_boundary(self.cursor_col)]
-            .chars()
-            .count();
+        let col = self.cursor_char_col();
         match self.selection() {
             Some((s, e)) => {
                 let n = self.buffer.text_range(s, e).chars().count();
@@ -156,7 +169,7 @@ impl TextEditorApp {
         // Status bar line at the end.
         let mode_str = self.mode_label().to_uppercase();
         let mod_str = if self.modified { " [Modified]" } else { "" };
-        let pos_str = format!("Ln {}, Col {}", self.cursor_line + 1, self.cursor_col + 1);
+        let pos_str = format!("Ln {}, Col {}", self.cursor_line + 1, self.cursor_char_col() + 1);
         let status = if let Some(ref msg) = self.status_message {
             format!("-- {mode_str} -- {pos_str}{mod_str}  {msg}")
         } else {
@@ -219,9 +232,17 @@ impl TextEditorApp {
         let area_h = (cy + ch as i32 - area_y - status_h as i32).max(0) as u32;
         backend.fill_rect(cx, area_y, cw, area_h, body_bg)?;
 
-        let font_size: u16 = 12;
-        let pad_left = 8i32;
+        let font_size = NP_FONT_SIZE;
         let pad_top = NP_PAD_TOP;
+        // Scroll horizontally so a caret past the right edge stays visible;
+        // the text area is clipped so scrolled text can't spill out.
+        let caret_line = self.buffer.get_line(self.cursor_line).unwrap_or("");
+        let caret_px = backend.measure_text(
+            &caret_line[..caret_line.floor_char_boundary(self.cursor_col)],
+            font_size,
+        );
+        let pad_left = NP_PAD_LEFT - h_scroll(caret_px, cw) as i32;
+        backend.push_clip_rect(cx, area_y, cw, area_h)?;
         // Same viewport `App::layout` recorded for scrolling and clicks.
         let (max_lines, line_h) = notepad_viewport(ch, at);
         let first = self.content.scroll;
@@ -237,7 +258,8 @@ impl TextEditorApp {
         let theme = &colors.syntax;
         let highlighted = self.file_type != FileType::Plain;
         let window = if highlighted { visible } else { 0 };
-        self.buffer
+        let drawn = self
+            .buffer
             .with_visible_spans(self.file_type, first, window, |spans| {
                 for i in 0..visible {
                     let line_idx = first + i;
@@ -311,7 +333,9 @@ impl TextEditorApp {
                     }
                 }
                 Ok::<(), oasis_types::error::OasisError>(())
-            })?;
+            });
+        backend.pop_clip_rect()?;
+        drawn?;
 
         // Status bar.
         let status_y = cy + ch as i32 - status_h as i32;
@@ -322,7 +346,14 @@ impl TextEditorApp {
         // The file name lives here now that there's no inner title bar.
         let position = self.status_position();
         let status_left = self.status_left(true);
-        backend.draw_text(&status_left, cx + 6, status_y + 4, 11, status_fg)?;
+        backend.draw_text_ellipsis(
+            &status_left,
+            cx + 6,
+            status_y + 4,
+            11,
+            status_fg,
+            cw.saturating_sub(12),
+        )?;
 
         let left_w = backend.measure_text(&status_left, 11);
         let pos_w = backend.measure_text(&position, 11);

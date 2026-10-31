@@ -142,6 +142,7 @@ impl TextEditorApp {
         let (line, col) = self.buffer.clamp_pos(pos);
         self.cursor_line = line;
         self.cursor_col = col;
+        self.goal_col = None;
         self.group_open = false;
         self.ensure_cursor_visible();
         self.rebuild_display_lines();
@@ -169,10 +170,24 @@ impl TextEditorApp {
         }
     }
 
+    /// Character (not byte) column of the cursor on its line.
+    pub(crate) fn cursor_char_col(&self) -> usize {
+        let text = self.buffer.get_line(self.cursor_line).unwrap_or("");
+        text[..text.floor_char_boundary(self.cursor_col)]
+            .chars()
+            .count()
+    }
+
+    /// The position `delta` lines up / down, at the goal character column
+    /// (the column the current run of vertical moves started from), so
+    /// `日本語` above `abcdef` lines up by characters, not bytes.
     fn pos_vertical(&self, delta: isize) -> Pos {
         let last = self.buffer.line_count().saturating_sub(1) as isize;
         let line = (self.cursor_line as isize + delta).clamp(0, last) as usize;
-        (line, self.cursor_col)
+        let goal = self.goal_col.unwrap_or_else(|| self.cursor_char_col());
+        let text = self.buffer.get_line(line).unwrap_or("");
+        let col = text.char_indices().nth(goal).map_or(text.len(), |(i, _)| i);
+        (line, col)
     }
 
     /// Start of the previous word (Ctrl+Left).
@@ -239,12 +254,12 @@ impl TextEditorApp {
 
     /// Move cursor up one line.
     pub fn cursor_up(&mut self) {
-        self.move_to(self.pos_vertical(-1), false);
+        self.motion(Motion::Up, false);
     }
 
     /// Move cursor down one line.
     pub fn cursor_down(&mut self) {
-        self.move_to(self.pos_vertical(1), false);
+        self.motion(Motion::Down, false);
     }
 
     /// Move cursor left one character (wraps to previous line end). With a
@@ -270,7 +285,6 @@ impl TextEditorApp {
     /// Move cursor to the beginning of the current line (smart Home).
     pub fn cursor_home(&mut self) {
         self.move_to(self.pos_home(), false);
-        self.scroll_x = 0;
     }
 
     /// Move cursor to the end of the current line.
@@ -288,6 +302,11 @@ impl TextEditorApp {
             }
         }
         let page = self.page_lines().max(1) as isize;
+        let vertical = matches!(
+            motion,
+            Motion::Up | Motion::Down | Motion::PageUp | Motion::PageDown
+        );
+        let goal = vertical.then(|| self.goal_col.unwrap_or_else(|| self.cursor_char_col()));
         let target = match motion {
             Motion::Left => self.pos_left(),
             Motion::Right => self.pos_right(),
@@ -307,14 +326,16 @@ impl TextEditorApp {
                 };
                 let target = self.pos_vertical(delta);
                 // Scroll the viewport by the same amount so the caret keeps
-                // its on-screen row (like every desktop editor).
-                let max_scroll = self.buffer.line_count().saturating_sub(1) as isize;
+                // its on-screen row (like every desktop editor), but never
+                // past the last full page (the wheel's limit too).
+                let max_scroll = self.buffer.line_count().saturating_sub(page as usize) as isize;
                 self.content.scroll =
                     (self.content.scroll as isize + delta).clamp(0, max_scroll) as usize;
                 target
             },
         };
         self.move_to(target, extend);
+        self.goal_col = goal;
     }
 
     /// Select the whole buffer.
@@ -323,6 +344,7 @@ impl TextEditorApp {
         self.anchor = Some((0, 0));
         self.cursor_line = last;
         self.cursor_col = self.buffer.line_len(last);
+        self.goal_col = None;
         self.group_open = false;
         self.ensure_cursor_visible();
         self.rebuild_display_lines();
@@ -387,6 +409,7 @@ impl TextEditorApp {
         self.anchor = None;
         self.cursor_line = cur.0;
         self.cursor_col = cur.1;
+        self.goal_col = None;
         match ops.len() {
             0 => return,
             1 => {
@@ -534,6 +557,7 @@ impl TextEditorApp {
         let (line, col) = self.buffer.clamp_pos(pos);
         self.cursor_line = line;
         self.cursor_col = col;
+        self.goal_col = None;
         self.anchor = None;
         self.group_open = false;
         self.modified = true;
@@ -653,6 +677,7 @@ impl TextEditorApp {
         };
         self.cursor_line = start.0;
         self.cursor_col = start.1;
+        self.goal_col = None;
         self.anchor = Some((start.0, start.1 + self.find_query.len()));
         self.group_open = false;
         self.ensure_cursor_visible();
@@ -714,6 +739,7 @@ impl TextEditorApp {
             let (line, col) = self.buffer.clamp_pos(before);
             self.cursor_line = line;
             self.cursor_col = col;
+            self.goal_col = None;
             self.redo_stack.clear();
             self.modified = true;
             self.push_group(UndoGroup {
@@ -938,6 +964,7 @@ impl TextEditorApp {
         self.buffer = EditorBuffer::new();
         self.cursor_line = 0;
         self.cursor_col = 0;
+        self.goal_col = None;
         self.anchor = None;
         self.content.scroll = 0;
         self.undo_stack.clear();
