@@ -3848,6 +3848,19 @@ fn reader_mode_toggle_then_hover_does_not_panic() {
     browser.toggle_reader_mode();
     assert!(!browser.reader_mode);
     assert!(!browser.nav.can_go_back(), "no history entry added");
+
+    // A page CSP (`style-src 'self'`, common) must not block the reader
+    // page's own stylesheet, and comes back with the original page.
+    browser.page_csp = Some(loader::csp::parse_csp("style-src 'self'"));
+    browser.toggle_reader_mode();
+    let link_blue = oasis_types::backend::Color::rgb(0x00, 0x66, 0xcc);
+    let root = browser.layout_root.as_ref().expect("reader layout");
+    assert!(
+        find_box(root, &|b| b.style.color == link_blue).is_some(),
+        "reader stylesheet applied under the page CSP"
+    );
+    browser.toggle_reader_mode();
+    assert!(browser.page_csp.is_some(), "page CSP restored");
 }
 
 // ---------------------------------------------------------------
@@ -3982,4 +3995,66 @@ fn inline_children_become_flex_items() {
     assert!(a.dimensions.content.width > 0.0 && a.dimensions.content.height > 0.0);
     assert!(b.dimensions.content.x >= a.dimensions.content.x + a.dimensions.content.width);
     assert_eq!(flex.dimensions.content.height, 12.0);
+}
+
+/// Regression: the anonymous items around inline children cloned the
+/// container's style, so a `position: fixed` nav made every link item
+/// fixed at the nav's offsets (all drawn on top of each other), and an
+/// `opacity` / `transform` / background image applied once per item.
+#[test]
+fn inline_flex_items_do_not_copy_the_container() {
+    use css::values::Position;
+    let root = layout_of(
+        "<body style='margin:0'><nav style='position:fixed;top:0;left:0;right:0;\
+         display:flex;opacity:0.5'><a href='a'>Home</a><a href='b'>About</a> text</nav></body>",
+    );
+    let flex = flex_box(&root);
+    assert_eq!(flex.children.len(), 3);
+    for item in &flex.children {
+        assert_eq!(item.style.position, Position::Static);
+        assert_eq!(item.style.opacity, 1.0);
+    }
+    let (a, b) = (&flex.children[0], &flex.children[1]);
+    assert!(b.dimensions.content.x >= a.dimensions.content.x + a.dimensions.content.width);
+}
+
+/// A blockified link item is as wide as its text: a two-word link with a
+/// right margin must not wrap.
+#[test]
+fn blockified_flex_item_text_does_not_wrap() {
+    let root = layout_of(
+        "<body style='margin:0'><nav style='display:flex;padding:8px 16px'>\
+         <a href='a' style='margin-right:16px'>Home Consoles</a><a href='b'>Deals</a>\
+         </nav></body>",
+    );
+    let flex = flex_box(&root);
+    let item = &flex.children[0];
+    assert_eq!(item.dimensions.content.height, 12.0, "one line");
+    let deals = &flex.children[1];
+    assert!(
+        deals.dimensions.content.x
+            >= item.dimensions.content.x + item.dimensions.content.width + 16.0 - 0.5
+    );
+}
+
+/// The inline element is blockified: its own box properties (here
+/// `margin-left: auto`, padding) apply to its flex item, once.
+#[test]
+fn inline_flex_items_are_blockified() {
+    let root = layout_of(
+        "<body style='margin:0'><div style='display:flex;width:400px'>\
+         <a href='a'>Home</a><a href='b' style='margin-left:auto;padding:10px'>Login</a>\
+         </div></body>",
+    );
+    let flex = flex_box(&root);
+    let login = &flex.children[1];
+    let right = login.dimensions.content.x
+        + login.dimensions.content.width
+        + login.dimensions.padding.right;
+    assert!(
+        (right - 400.0).abs() < 1.0,
+        "Login sits at the right edge: {right}"
+    );
+    assert_eq!(login.dimensions.padding.top, 10.0);
+    assert_eq!(flex.dimensions.content.height, 32.0);
 }

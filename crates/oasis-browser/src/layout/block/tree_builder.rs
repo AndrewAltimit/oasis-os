@@ -6,11 +6,10 @@
 //! insignificant whitespace elimination.
 
 use super::{TextMeasurer, layout_block_with_height, offset_descendant};
-use crate::css::values::{ComputedStyle, Dimension, Display, Float, ListStyleType};
+use crate::css::values::{ComputedStyle, Display, Float, ListStyleType};
 use crate::html::dom::{Document, ElementData, NodeId, NodeKind, TagName};
 use crate::layout::box_model::*;
 use crate::layout::positioning::apply_positioning;
-use oasis_types::backend::Color;
 
 use std::collections::HashMap;
 
@@ -712,7 +711,9 @@ pub(super) fn wrap_flex_items(
     let mut text_run: Vec<LayoutBox> = Vec::new();
     let flush = |run: &mut Vec<LayoutBox>, out: &mut Vec<LayoutBox>| {
         if !run.is_empty() && !run.iter().all(is_blank) {
-            out.push(anonymous_flex_item(std::mem::take(run), parent_style, None));
+            // A text run's item: initial flex properties, none of the
+            // container's box properties.
+            out.push(make_anonymous_block(std::mem::take(run), parent_style));
         }
         run.clear();
     };
@@ -724,67 +725,50 @@ pub(super) fn wrap_flex_items(
             text_run.push(child);
         } else {
             flush(&mut text_run, &mut out);
-            let item_style = child.style.clone();
-            out.push(anonymous_flex_item(
-                vec![child],
-                parent_style,
-                Some(&item_style),
-            ));
+            out.push(blockified_flex_item(child));
         }
     }
     flush(&mut text_run, &mut out);
     out
 }
 
-/// An anonymous block flex/grid item around `children`. Its flex
-/// properties are the blockified element's (`item`), or the initial
-/// values for a text run — never the container's own.
-fn anonymous_flex_item(
-    children: Vec<LayoutBox>,
-    parent_style: &ComputedStyle,
-    item: Option<&ComputedStyle>,
-) -> LayoutBox {
-    let mut lb = make_anonymous_block(children, parent_style);
-    let initial = ComputedStyle::default();
-    let src = item.unwrap_or(&initial);
-    lb.style.flex_grow = src.flex_grow;
-    lb.style.flex_shrink = src.flex_shrink;
-    lb.style.flex_basis = src.flex_basis;
-    lb.style.order = src.order;
-    lb.style.align_self = src.align_self;
-    lb.style.grid_column_start = src.grid_column_start.clone();
-    lb.style.grid_column_end = src.grid_column_end.clone();
-    lb.style.grid_row_start = src.grid_row_start.clone();
-    lb.style.grid_row_end = src.grid_row_end.clone();
-    lb
+/// Blockify an inline element child of a flex / grid container (CSS
+/// Display §2.7): the item box takes the element's whole style as a
+/// block (its `margin-left: auto`, padding, width, background, flex
+/// properties, `position`, ...), and the element's inline box inside
+/// it keeps only what its text inherits, so nothing is applied twice.
+fn blockified_flex_item(mut child: LayoutBox) -> LayoutBox {
+    let mut item_style = child.style.clone();
+    item_style.display = Display::Block;
+    let mut inner = ComputedStyle::inherit(&child.style);
+    copy_inline_formatting(&mut inner, &child.style);
+    child.style = inner;
+    let mut item = make_anonymous_block(vec![child], &item_style);
+    item.style = item_style;
+    item
+}
+
+/// The non-inherited properties an anonymous block needs from the box it
+/// stands in for to lay out its inline content the same way.
+fn copy_inline_formatting(style: &mut ComputedStyle, from: &ComputedStyle) {
+    style.overflow_wrap = from.overflow_wrap;
+    style.word_break = from.word_break;
+    style.tab_size = from.tab_size;
 }
 
 /// Create an anonymous block box wrapping the given inline children.
 ///
-/// Inherits text-related properties from the parent so that inline
+/// Starts from the parent's *inherited* properties so that inline
 /// content inside the anonymous block retains the correct font-size,
-/// color, line-height, text-align, etc.
+/// color, line-height, text-align, etc. Non-inherited ones keep their
+/// initial values: a clone of the parent would repeat its `position`,
+/// `opacity`, `transform`, `filter`, shadows, background image and
+/// overflow clip on every anonymous box (a `position: fixed` flex nav
+/// drew all its links on top of each other at 0,0).
 fn make_anonymous_block(children: Vec<LayoutBox>, parent_style: &ComputedStyle) -> LayoutBox {
-    let mut style = parent_style.clone();
-    // Override display to Block and reset non-inherited box properties.
+    let mut style = ComputedStyle::inherit(parent_style);
+    copy_inline_formatting(&mut style, parent_style);
     style.display = Display::Block;
-    style.margin_top = 0.0;
-    style.margin_right = 0.0;
-    style.margin_bottom = 0.0;
-    style.margin_left = 0.0;
-    style.margin_left_auto = false;
-    style.margin_right_auto = false;
-    style.padding_top = 0.0;
-    style.padding_right = 0.0;
-    style.padding_bottom = 0.0;
-    style.padding_left = 0.0;
-    style.border_top_width = 0.0;
-    style.border_right_width = 0.0;
-    style.border_bottom_width = 0.0;
-    style.border_left_width = 0.0;
-    style.background_color = Color::rgba(0, 0, 0, 0);
-    style.width = Dimension::Auto;
-    style.height = Dimension::Auto;
     LayoutBox {
         box_type: BoxType::Anonymous,
         dimensions: Dimensions::default(),
