@@ -20,7 +20,7 @@ use serde_json::{Value, json};
 
 use crate::app_state::AppState;
 use crate::launch::{self, BROWSER_TITLE, LaunchOpts};
-use crate::windows::{CloseHow, CloseOutcome, close_app_window};
+use crate::windows::{CloseHow, CloseOutcome, close_app_window, exit_kiosk};
 
 /// Rolling record of agent activity, surfaced by the in-UI assistant overlay.
 #[derive(Debug, Default)]
@@ -72,8 +72,15 @@ pub fn draw_agent_overlay(
     Ok(())
 }
 
+/// Frame capture for `screenshot`: draws a complete frame of `state` /
+/// `sdi` into the backend's back buffer and reads `w` x `h` RGBA pixels
+/// back before anything is presented (the shell's `draw_frame`; reading
+/// right after a present is undefined on SDL).
+pub type FrameCapture<'a> =
+    dyn FnMut(&mut AppState, &mut SdiRegistry, u32, u32) -> Result<Vec<u8>, String> + 'a;
+
 /// What a tool call can reach: the shell state (minus the MCP server,
-/// which is polling), the scene, the VFS and the framebuffer.
+/// which is polling), the scene, the VFS and a frame capture.
 ///
 /// Lives only for the duration of one
 /// [`McpServer::poll`](oasis_mcp::McpServer::poll).
@@ -81,8 +88,8 @@ pub struct AppDispatcher<'a> {
     pub state: &'a mut AppState,
     pub sdi: &'a mut SdiRegistry,
     pub vfs: &'a mut MemoryVfs,
-    /// Rendering backend, for `screenshot` (`read_pixels`).
-    pub screen: &'a mut dyn SdiCore,
+    /// Draws and reads back a frame, for `screenshot`.
+    pub capture: &'a mut FrameCapture<'a>,
 }
 
 fn arg_str(args: &Value, key: &str) -> Option<String> {
@@ -91,6 +98,29 @@ fn arg_str(args: &Value, key: &str) -> Option<String> {
 
 fn arg_i64(args: &Value, key: &str) -> Option<i64> {
     args.get(key).and_then(Value::as_i64)
+}
+
+/// Requested outer size `w` x `h` bounded to a usable minimum and to the
+/// `sw` x `sh` screen (a window larger than the screen cannot be moved
+/// back on screen).
+fn fit_size(w: i64, h: i64, sw: u32, sh: u32) -> (u32, u32) {
+    const MIN_W: u32 = 80;
+    const MIN_H: u32 = 60;
+    let w = w.clamp(i64::from(MIN_W), i64::from(sw.max(MIN_W))) as u32;
+    let h = h.clamp(i64::from(MIN_H), i64::from(sh.max(MIN_H))) as u32;
+    (w, h)
+}
+
+/// String argument `key` that is written into a line-based IPC request
+/// file: CR, LF or NUL would end the request line and inject further
+/// requests, so they are refused as a tool error.
+fn arg_line(args: &Value, key: &str) -> Result<Option<String>, ToolResult> {
+    match arg_str(args, key) {
+        Some(v) if v.contains(['\r', '\n', '\0']) => Err(ToolResult::error(format!(
+            "{key} must not contain line breaks or NUL"
+        ))),
+        v => Ok(v),
+    }
 }
 
 fn wm_result(res: oasis_core::error::Result<()>, ok_msg: String) -> ToolResult {
@@ -172,13 +202,22 @@ impl AppDispatcher<'_> {
         let Some(id) = arg_str(args, "id") else {
             return ToolResult::error("missing required argument: id");
         };
-        let wm = &mut self.state.wm;
-        if wm.get_window(&id).is_none() {
+        if self.state.wm.get_window(&id).is_none() {
             return ToolResult::error(format!("no window with id '{id}'"));
         }
+        if op == "close" {
+            return self.tool_close_window(&id, args);
+        }
+        if op == "focus" {
+            // Restores a minimized window first: focusing alone made the
+            // invisible window the keyboard target.
+            launch::raise_window(&mut self.state.wm, &id, self.sdi);
+            return ToolResult::text(format!("focused {id}"));
+        }
+        // Geometry changes leave kiosk fullscreen first (shell chrome back).
+        exit_kiosk(self.state, self.sdi, &id);
+        let wm = &mut self.state.wm;
         match op {
-            "focus" => wm_result(wm.focus_window(&id, self.sdi), format!("focused {id}")),
-            "close" => self.tool_close_window(&id, args),
             "minimize" => wm_result(wm.minimize_window(&id, self.sdi), format!("minimized {id}")),
             "maximize" => wm_result(wm.maximize_window(&id, self.sdi), format!("maximized {id}")),
             "restore" => wm_result(wm.restore_window(&id, self.sdi), format!("restored {id}")),
@@ -192,6 +231,10 @@ impl AppDispatcher<'_> {
         else {
             return ToolResult::error("requires: id (string), x (int), y (int)");
         };
+        if self.state.wm.get_window(&id).is_none() {
+            return ToolResult::error(format!("no window with id '{id}'"));
+        }
+        exit_kiosk(self.state, self.sdi, &id);
         let wm = &mut self.state.wm;
         let Some(win) = wm.get_window(&id) else {
             return ToolResult::error(format!("no window with id '{id}'"));
@@ -216,16 +259,31 @@ impl AppDispatcher<'_> {
         ) else {
             return ToolResult::error("requires: id (string), width (int), height (int)");
         };
-        let wm = &mut self.state.wm;
-        if wm.get_window(&id).is_none() {
+        if self.state.wm.get_window(&id).is_none() {
             return ToolResult::error(format!("no window with id '{id}'"));
         }
-        let w = w.clamp(80, 4096) as u32;
-        let h = h.clamp(60, 4096) as u32;
-        wm_result(
-            wm.resize_window(&id, w, h, self.sdi),
-            format!("resized {id} to {w}x{h}"),
-        )
+        exit_kiosk(self.state, self.sdi, &id);
+        let (sw, sh) = (
+            self.state.active_theme.screen_w,
+            self.state.active_theme.screen_h,
+        );
+        let (w, h) = fit_size(w, h, sw, sh);
+        let wm = &mut self.state.wm;
+        if let Err(e) = wm.resize_window(&id, w, h, self.sdi) {
+            return ToolResult::error(format!("{e}"));
+        }
+        // Keep the whole resized window on screen: shift it up / left by
+        // what now sticks out past the right / bottom edge.
+        if let Some(win) = wm.get_window(&id) {
+            let dx = (sw as i32 - w as i32 - win.x).min(0);
+            let dy = (sh as i32 - h as i32 - win.y).min(0);
+            if (dx, dy) != (0, 0)
+                && let Err(e) = wm.move_window(&id, dx, dy, self.sdi)
+            {
+                return ToolResult::error(format!("{e}"));
+            }
+        }
+        ToolResult::text(format!("resized {id} to {w}x{h}"))
     }
 
     fn tool_run_command(&mut self, args: &Value) -> ToolResult {
@@ -295,8 +353,10 @@ impl AppDispatcher<'_> {
     }
 
     fn tool_play_media(&mut self, args: &Value) -> ToolResult {
-        let Some(path) = arg_str(args, "path") else {
-            return ToolResult::error("missing required argument: path");
+        let path = match arg_line(args, "path") {
+            Ok(Some(path)) => path,
+            Ok(None) => return ToolResult::error("missing required argument: path"),
+            Err(e) => return e,
         };
         let request = format!("play_file {path}");
         match crate::media_controller::queue_request(self.vfs, &request) {
@@ -307,8 +367,10 @@ impl AppDispatcher<'_> {
 
     fn tool_tune(&mut self, args: &Value) -> ToolResult {
         let source = arg_str(args, "source").unwrap_or_default();
-        let Some(channel) = arg_str(args, "channel") else {
-            return ToolResult::error("missing required argument: channel");
+        let channel = match arg_line(args, "channel") {
+            Ok(Some(channel)) => channel,
+            Ok(None) => return ToolResult::error("missing required argument: channel"),
+            Err(e) => return e,
         };
         let (path, request) = match source.as_str() {
             "radio" => (oasis_audio::RADIO_REQUEST_PATH, format!("tune {channel}")),
@@ -369,9 +431,9 @@ impl AppDispatcher<'_> {
             self.state.active_theme.screen_w,
             self.state.active_theme.screen_h,
         );
-        let rgba = match self.screen.read_pixels(0, 0, w, h) {
+        let rgba = match (self.capture)(self.state, self.sdi, w, h) {
             Ok(px) => px,
-            Err(e) => return ToolResult::error(format!("read_pixels: {e}")),
+            Err(e) => return ToolResult::error(format!("capture: {e}")),
         };
         // Force alpha opaque (the framebuffer has no real transparency).
         let mut opaque = rgba;
@@ -395,146 +457,181 @@ impl AppDispatcher<'_> {
     }
 }
 
-impl ToolDispatcher for AppDispatcher<'_> {
-    fn list_tools(&self) -> Vec<ToolSpec> {
-        let no_args = || json!({ "type": "object", "properties": {} });
-        let id_only = || {
+/// Every tool the dispatcher serves (`tools/list`).
+fn tool_specs() -> Vec<ToolSpec> {
+    let no_args = || json!({ "type": "object", "properties": {} });
+    let id_only = || {
+        json!({
+            "type": "object",
+            "properties": { "id": { "type": "string", "description": "Window id" } },
+            "required": ["id"]
+        })
+    };
+    vec![
+        ToolSpec::new(
+            "list_apps",
+            "List the titles of all launchable apps.",
+            no_args(),
+        ),
+        ToolSpec::new(
+            "open_app",
+            "Open an app by title, optionally pre-loading a VFS file path.",
             json!({
                 "type": "object",
-                "properties": { "id": { "type": "string", "description": "Window id" } },
-                "required": ["id"]
-            })
-        };
-        vec![
-            ToolSpec::new(
-                "list_apps",
-                "List the titles of all launchable apps.",
-                no_args(),
-            ),
-            ToolSpec::new(
-                "open_app",
-                "Open an app by title, optionally pre-loading a VFS file path.",
-                json!({
-                    "type": "object",
-                    "properties": {
-                        "title": { "type": "string", "description": "App title, e.g. 'Terminal', 'Browser'" },
-                        "file": { "type": "string", "description": "Optional VFS file path to open in the app" }
-                    },
-                    "required": ["title"]
-                }),
-            ),
-            ToolSpec::new(
-                "list_windows",
-                "List all open windows with id, title, position, size, and focus.",
-                no_args(),
-            ),
-            ToolSpec::new("focus_window", "Bring a window to the front.", id_only()),
-            ToolSpec::new(
-                "close_window",
-                "Close a window. Like the titlebar close button, the app is asked first: an \
+                "properties": {
+                    "title": { "type": "string", "description": "App title, e.g. 'Terminal', 'Browser'" },
+                    "file": { "type": "string", "description": "Optional VFS file path to open in the app" }
+                },
+                "required": ["title"]
+            }),
+        ),
+        ToolSpec::new(
+            "list_windows",
+            "List all open windows with id, title, position, size, and focus.",
+            no_args(),
+        ),
+        ToolSpec::new("focus_window", "Bring a window to the front.", id_only()),
+        ToolSpec::new(
+            "close_window",
+            "Close a window. Like the titlebar close button, the app is asked first: an \
                  app with unsaved changes shows its confirmation prompt and the call fails \
                  with 'declined'. Pass force: true to close it anyway (unsaved changes are \
                  lost).",
-                json!({
-                    "type": "object",
-                    "properties": {
-                        "id": { "type": "string", "description": "Window id" },
-                        "force": {
-                            "type": "boolean",
-                            "description": "Close without asking the app (default false)"
-                        }
-                    },
-                    "required": ["id"]
-                }),
-            ),
-            ToolSpec::new("minimize_window", "Minimize a window.", id_only()),
-            ToolSpec::new("maximize_window", "Maximize a window.", id_only()),
-            ToolSpec::new(
-                "restore_window",
-                "Restore a minimized/maximized window.",
-                id_only(),
-            ),
-            ToolSpec::new(
-                "move_window",
-                "Move a window to an absolute (x, y) position.",
-                json!({
-                    "type": "object",
-                    "properties": {
-                        "id": { "type": "string" },
-                        "x": { "type": "integer" },
-                        "y": { "type": "integer" }
-                    },
-                    "required": ["id", "x", "y"]
-                }),
-            ),
-            ToolSpec::new(
-                "resize_window",
-                "Resize a window to width x height (outer pixels).",
-                json!({
-                    "type": "object",
-                    "properties": {
-                        "id": { "type": "string" },
-                        "width": { "type": "integer" },
-                        "height": { "type": "integer" }
-                    },
-                    "required": ["id", "width", "height"]
-                }),
-            ),
-            ToolSpec::new(
-                "run_command",
-                "Run a terminal command and return its output. Grants shell-level authority.",
-                json!({
-                    "type": "object",
-                    "properties": { "command": { "type": "string" } },
-                    "required": ["command"]
-                }),
-            ),
-            ToolSpec::new(
-                "browser_navigate",
-                "Open the Browser (if needed) and navigate to a URL or vfs:// path.",
-                json!({
-                    "type": "object",
-                    "properties": { "url": { "type": "string" } },
-                    "required": ["url"]
-                }),
-            ),
-            ToolSpec::new(
-                "play_media",
-                "Play an audio/media file by VFS path in the Music Player.",
-                json!({
-                    "type": "object",
-                    "properties": { "path": { "type": "string" } },
-                    "required": ["path"]
-                }),
-            ),
-            ToolSpec::new(
-                "tune",
-                "Tune the radio or TV to a channel/station.",
-                json!({
-                    "type": "object",
-                    "properties": {
-                        "source": { "type": "string", "enum": ["radio", "tv"] },
-                        "channel": { "type": "string", "description": "Station index/name (radio) or channel number (tv)" }
-                    },
-                    "required": ["source", "channel"]
-                }),
-            ),
-            ToolSpec::new(
-                "get_state",
-                "Return the current shell state: mode, skin, focused window, open windows, browser URL.",
-                no_args(),
-            ),
-            ToolSpec::new(
-                "screenshot",
-                "Capture the current screen as a PNG image so you can see the UI.",
-                no_args(),
-            ),
-        ]
+            json!({
+                "type": "object",
+                "properties": {
+                    "id": { "type": "string", "description": "Window id" },
+                    "force": {
+                        "type": "boolean",
+                        "description": "Close without asking the app (default false)"
+                    }
+                },
+                "required": ["id"]
+            }),
+        ),
+        ToolSpec::new("minimize_window", "Minimize a window.", id_only()),
+        ToolSpec::new("maximize_window", "Maximize a window.", id_only()),
+        ToolSpec::new(
+            "restore_window",
+            "Restore a minimized/maximized window.",
+            id_only(),
+        ),
+        ToolSpec::new(
+            "move_window",
+            "Move a window to an absolute (x, y) position.",
+            json!({
+                "type": "object",
+                "properties": {
+                    "id": { "type": "string" },
+                    "x": { "type": "integer" },
+                    "y": { "type": "integer" }
+                },
+                "required": ["id", "x", "y"]
+            }),
+        ),
+        ToolSpec::new(
+            "resize_window",
+            "Resize a window to width x height (outer pixels).",
+            json!({
+                "type": "object",
+                "properties": {
+                    "id": { "type": "string" },
+                    "width": { "type": "integer" },
+                    "height": { "type": "integer" }
+                },
+                "required": ["id", "width", "height"]
+            }),
+        ),
+        ToolSpec::new(
+            "run_command",
+            "Run a terminal command and return its output. Grants shell-level authority.",
+            json!({
+                "type": "object",
+                "properties": { "command": { "type": "string" } },
+                "required": ["command"]
+            }),
+        ),
+        ToolSpec::new(
+            "browser_navigate",
+            "Open the Browser (if needed) and navigate to a URL or vfs:// path.",
+            json!({
+                "type": "object",
+                "properties": { "url": { "type": "string" } },
+                "required": ["url"]
+            }),
+        ),
+        ToolSpec::new(
+            "play_media",
+            "Play an audio/media file by VFS path in the Music Player.",
+            json!({
+                "type": "object",
+                "properties": { "path": { "type": "string" } },
+                "required": ["path"]
+            }),
+        ),
+        ToolSpec::new(
+            "tune",
+            "Tune the radio or TV to a channel/station.",
+            json!({
+                "type": "object",
+                "properties": {
+                    "source": { "type": "string", "enum": ["radio", "tv"] },
+                    "channel": { "type": "string", "description": "Station index/name (radio) or channel number (tv)" }
+                },
+                "required": ["source", "channel"]
+            }),
+        ),
+        ToolSpec::new(
+            "get_state",
+            "Return the current shell state: mode, skin, focused window, open windows, browser URL.",
+            no_args(),
+        ),
+        ToolSpec::new(
+            "screenshot",
+            "Capture the current screen as a PNG image so you can see the UI.",
+            no_args(),
+        ),
+    ]
+}
+
+/// Names of [`tool_specs`], for recording a call without keeping the
+/// caller's string (an unknown name is arbitrary agent input, drawn in the
+/// activity overlay).
+const TOOL_NAMES: &[&str] = &[
+    "list_apps",
+    "open_app",
+    "list_windows",
+    "focus_window",
+    "close_window",
+    "minimize_window",
+    "maximize_window",
+    "restore_window",
+    "move_window",
+    "resize_window",
+    "run_command",
+    "browser_navigate",
+    "play_media",
+    "tune",
+    "get_state",
+    "screenshot",
+];
+
+impl ToolDispatcher for AppDispatcher<'_> {
+    fn list_tools(&self) -> Vec<ToolSpec> {
+        tool_specs()
     }
 
     fn call_tool(&mut self, name: &str, args: Value) -> ToolResult {
-        self.state.agent_activity.record(name);
-        log::info!("MCP tool call: {name}");
+        match TOOL_NAMES.iter().find(|known| **known == name) {
+            Some(known) => {
+                self.state.agent_activity.record(known);
+                log::info!("MCP tool call: {known}");
+            },
+            None => {
+                self.state.agent_activity.record("unknown tool");
+                log::info!("MCP call to an unknown tool ({} bytes)", name.len());
+            },
+        }
         match name {
             "list_apps" => self.tool_list_apps(),
             "open_app" => self.tool_open_app(&args),
@@ -552,7 +649,54 @@ impl ToolDispatcher for AppDispatcher<'_> {
             "tune" => self.tool_tune(&args),
             "get_state" => self.tool_get_state(),
             "screenshot" => self.tool_screenshot(),
-            other => ToolResult::error(format!("unknown tool: {other}")),
+            other => ToolResult::error(format!("unknown tool: {}", short_name(other))),
         }
+    }
+}
+
+/// `name` escaped and cut to 64 characters, for messages about a name the
+/// caller made up.
+fn short_name(name: &str) -> String {
+    name.escape_debug().take(64).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tool_names_match_the_specs() {
+        let specs: Vec<String> = tool_specs().into_iter().map(|t| t.name).collect();
+        assert_eq!(specs, TOOL_NAMES);
+    }
+
+    #[test]
+    fn unknown_tool_names_are_not_kept_whole() {
+        let long = format!("x\n{}", "y".repeat(10_000));
+        let short = short_name(&long);
+        assert_eq!(short.chars().count(), 64);
+        assert!(short.starts_with("x\\ny"), "{short}");
+    }
+
+    #[test]
+    fn ipc_line_arguments_refuse_line_breaks() {
+        let args = json!({ "ok": "/music/a b.mp3", "cr": "a\rb", "lf": "a\nstop", "nul": "a\0" });
+        assert_eq!(
+            arg_line(&args, "ok").ok().flatten().as_deref(),
+            Some("/music/a b.mp3")
+        );
+        assert!(matches!(arg_line(&args, "missing"), Ok(None)));
+        for key in ["cr", "lf", "nul"] {
+            assert!(arg_line(&args, key).is_err(), "{key}");
+        }
+    }
+
+    #[test]
+    fn resize_is_fitted_to_the_screen() {
+        assert_eq!(fit_size(-5, 1_000_000_000, 800, 600), (80, 600));
+        assert_eq!(fit_size(300, 200, 800, 600), (300, 200));
+        assert_eq!(fit_size(i64::MAX, i64::MIN, 1024, 768), (1024, 60));
+        // A screen smaller than the minimum keeps the minimum.
+        assert_eq!(fit_size(10, 10, 40, 30), (80, 60));
     }
 }

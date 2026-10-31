@@ -8,6 +8,7 @@ use oasis_types::backend::SdiBackend;
 use oasis_types::error::Result;
 
 use oasis_types::backend::Color;
+use oasis_types::rasterize::polygon_rows;
 
 use crate::op::{VectorOp, modulate_color, modulate_gradient};
 use crate::scene::VectorScene;
@@ -52,6 +53,34 @@ fn apply_alpha(color: Color, group_alpha: u8) -> Color {
     } else {
         color
     }
+}
+
+/// Fill a polygon (even-odd, the same rows as `SdiVector::fill_polygon`)
+/// with a vertical gradient: `top` on the polygon's first row, `bottom` on
+/// its last, one `fill_rect` per span.
+fn fill_polygon_vertical_gradient(
+    backend: &mut dyn SdiBackend,
+    points: &[(i32, i32)],
+    top: Color,
+    bottom: Color,
+) -> Result<()> {
+    if top == bottom {
+        return backend.fill_polygon(points, top);
+    }
+    let y_min = points.iter().map(|p| p.1).min().unwrap_or(0);
+    let y_max = points.iter().map(|p| p.1).max().unwrap_or(0);
+    let span = (y_max as i64 - y_min as i64).max(1) as f32;
+    let mut xs = Vec::new();
+    let mut result = Ok(());
+    let bounds = backend.draw_bounds();
+    polygon_rows(points, &mut xs, bounds, |y, x0, x1| {
+        if result.is_ok() {
+            let t = (y as i64 - y_min as i64) as f32 / span;
+            let color = top.lerp(bottom, t);
+            result = backend.fill_rect(x0, y, (x1 - x0) as u32, 1, color);
+        }
+    });
+    result
 }
 
 /// Dispatch a single `VectorOp` to backend calls.
@@ -191,7 +220,8 @@ fn render_op(backend: &mut dyn SdiBackend, op: &VectorOp, group_alpha: u8) -> Re
             points,
             color_start,
             color_end,
-        } => backend.fill_polygon_gradient(
+        } => fill_polygon_vertical_gradient(
+            backend,
             points,
             apply_alpha(*color_start, group_alpha),
             apply_alpha(*color_end, group_alpha),
@@ -385,6 +415,43 @@ mod tests {
     // Records the high-level shape calls themselves (not their default
     // decomposition), so it overrides three traits and defaults the rest.
     oasis_types::impl_sdi_defaults!(MockBackend; except SdiShapes, SdiVector, SdiClipTransform);
+
+    /// Regression: `PolygonGradient` went to `fill_polygon_gradient`,
+    /// whose only implementation drew the start colour and ignored the
+    /// end colour. It now fills each row with the interpolated colour.
+    #[test]
+    fn test_render_polygon_gradient_interpolates_rows() {
+        let mut backend = MockBackend::new();
+        let mut scene = VectorScene::new(100, 100);
+        scene.push(VectorOp::PolygonGradient {
+            points: vec![(0, 0), (10, 0), (10, 10), (0, 10)],
+            color_start: Color::rgba(0, 0, 0, 0),
+            color_end: Color::rgba(0, 0, 0, 200),
+        });
+        render_scene(&mut backend, &scene).ok();
+        assert_eq!(
+            backend.calls.first().map(String::as_str),
+            Some("fill_rect(0,0,11,1,a=0)")
+        );
+        assert!(
+            backend
+                .calls
+                .iter()
+                .any(|c| c == "fill_rect(0,5,11,1,a=100)")
+        );
+        assert!(backend.calls.iter().all(|c| c.starts_with("fill_rect(")));
+
+        // Equal colours keep the single polygon call.
+        let mut backend = MockBackend::new();
+        let mut scene = VectorScene::new(100, 100);
+        scene.push(VectorOp::PolygonGradient {
+            points: vec![(0, 0), (10, 0), (5, 10)],
+            color_start: Color::WHITE,
+            color_end: Color::WHITE,
+        });
+        render_scene(&mut backend, &scene).ok();
+        assert_eq!(backend.calls, vec!["fill_polygon(n=3,a=255)"]);
+    }
 
     #[test]
     fn test_render_empty_scene() {

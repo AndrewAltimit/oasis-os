@@ -35,24 +35,12 @@ pub struct BatchRect {
     pub color: Color,
 }
 
-/// Batch rendering operations (begin/flush command queues).
+/// Batched geometry submission.
+///
+/// Both methods take a slice of items that share one draw state, so a GPU
+/// backend can submit them as one geometry call. The defaults loop over
+/// [`SdiCore::fill_rect`] / [`SdiCore::draw_text`].
 pub trait SdiBatch: SdiCore {
-    /// Mark the start of a group of draw calls a backend may batch.
-    ///
-    /// Reserved hook: no backend overrides it today, so it is a no-op
-    /// everywhere. The browser's display-list replay brackets its draw
-    /// calls with `begin_batch` / `flush_batch` so a batching backend can
-    /// hook in without changing callers.
-    fn begin_batch(&mut self) -> Result<()> {
-        Ok(())
-    }
-
-    /// Mark the end of a group started by [`Self::begin_batch`]; a no-op
-    /// unless a backend overrides it.
-    fn flush_batch(&mut self) -> Result<()> {
-        Ok(())
-    }
-
     /// Submit a batch of solid colored rectangles in a single call.
     ///
     /// Backends can override this to submit all rectangles as GPU geometry

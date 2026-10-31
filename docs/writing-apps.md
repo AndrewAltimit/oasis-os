@@ -6,10 +6,11 @@ Calculator, ...) is a type implementing the `App` trait from
 `SdiBackend` / `Vfs` traits, never a platform API. Today the SDL desktop
 app and the WASM build host them through `oasis-core`'s `AppRunner`,
 launched from an `AppRegistry` that the `oasis-apps` bundle fills. Both
-hosts always draw apps in windows (a "fullscreen" app is a kiosk window,
-still drawn through `draw_windowed`); neither calls `update_sdi` any
-more (the SDI path stays in the trait for SDI-only hosts). The PSP EBOOT
-and the FFI library have their own app surfaces. This guide covers the
+hosts always draw apps in windows: a "fullscreen" app is a kiosk window
+that fills the screen, still drawn through `draw_windowed` and clicked
+through `handle_click` with the same geometry. There is no separate
+fullscreen / SDI render path for apps. The PSP EBOOT and the FFI library
+have their own app surfaces. This guide covers the
 trait, how hosts drive it, and a minimal working app.
 
 Source of truth: [`crates/oasis-app-core/src/app_trait.rs`](../crates/oasis-app-core/src/app_trait.rs)
@@ -29,7 +30,7 @@ elision).
   `AppRunner` (`src/apps/runner.rs`) wraps a `Box<dyn App>`, and an
   `AppRegistry` (`src/apps/registry.rs`) maps a title to an
   `AppRegistration` (factory, optional file factory, dashboard flag,
-  SDI cleanup, owned media). The host owns the registry and passes it
+  owned media). The host owns the registry and passes it
   to `AppRunner::launch(&apps, &entry, &vfs)`; titles it doesn't know
   launch a `SimpleApp` placeholder.
 - `crates/oasis-apps` is the bundle: it depends on every app crate and
@@ -63,11 +64,9 @@ blanket impl -- don't write it yourself; import
 | `handle_key(&mut self, &Key, Modifiers, &dyn Vfs) -> Option<AppAction>` | `None` | Every key-down on keyboard hosts, **before** the key's gamepad twin | Return `Some(action)` to consume the key; the host then drops its twin. Never called on PSP |
 | `accepts_text(&self) -> bool` | `false` | Before routing a typing key | While `true`, letters / digits / Space are treated purely as typing (Space no longer fires Triangle, Q/E no longer switch desktops) |
 | `handle_scroll(&mut self, delta, &dyn Vfs) -> bool` | repeats `Up` / `Down` through `handle_input` (max 16 per event) | Mouse wheel over the app's window (desktop and WASM) | `delta` < 0 = toward the top. Return `true` when the view changed. Override where Up / Down isn't list movement (Games, Paint's canvas, Calculator, Settings' Audio tab) |
-| `layout(&mut self, cw, ch, &ActiveTheme)` | no-op | Right before every `draw_windowed` and `handle_click`, with the same size | Record layout metrics (visible rows, hit-test geometry) in plain fields -- no `Cell`s in `draw_windowed`. Keys / buttons / wheel see the metrics of the last drawn frame |
-| `handle_click(&mut self, lx, ly, cw, ch, fullscreen, &dyn Vfs) -> AppAction` | `AppAction::None` | Click / tap in the content area | Content-local coordinates; discrete clicks only (no drag / move events). Read-only VFS follow-ups (re-list a folder, open the clicked file) happen right here |
-| `update_sdi(&mut self, &mut SdiRegistry, &ActiveTheme)` | required | Fullscreen SDI rendering (no current host) | Create / update named SDI objects |
-| `draw_windowed(&self, cx, cy, cw, ch, &mut dyn SdiBackend, &ActiveTheme) -> Result<()>` | required | Windowed rendering, inside the WM's clip rect | Draw directly to the backend |
-| `hide_sdi(&self, &mut SdiRegistry)` | required | Leaving fullscreen SDI rendering | Hide every SDI object you created. Objects outside the shared app pools also need an `AppRegistration::hide_sdi` cleanup, which hosts run every frame |
+| `layout(&mut self, cw, ch, &ActiveTheme)` | no-op | Right before every `draw_windowed` and `handle_click`, with the same size | Record the content size and layout metrics (visible rows, hit-test geometry) in plain fields -- no `Cell`s in `draw_windowed`. Keys / buttons / wheel see the metrics of the last drawn frame |
+| `handle_click(&mut self, lx, ly, &dyn Vfs) -> AppAction` | `AppAction::None` | Click / tap in the content area | Content-local coordinates; hit-test against the geometry `layout` just recorded, i.e. what `draw_windowed` draws (kiosk windows included). Discrete clicks only (no drag / move events). Read-only VFS follow-ups (re-list a folder, open the clicked file) happen right here. `ContentState::line_at(ly)` maps a click to a line for `ContentState` apps |
+| `draw_windowed(&self, cx, cy, cw, ch, &mut dyn SdiBackend, &ActiveTheme) -> Result<()>` | required | Every drawn frame, inside the WM's clip rect | The app's only render path: draw directly to the backend |
 | `drain_requests(&mut self, &mut Vec<AppRequest>)` | no-op | Once per frame for every open app | Move every queued VFS IPC request (`AppRequest { path, data }`) into the host's list; the host performs all of them, in order |
 | `apply_vfs_ops(&mut self, &mut dyn Vfs) -> bool` | `false` | Once per frame for every open app | The only hook with **mutable** VFS access: apply queued writes, deletes, renames, binary saves. Return `true` when something was applied |
 | `tick(&mut self, dt_ms: u32, &dyn Vfs) -> bool` | `false` | Once per frame for every open app, even on elided frames | Advance time-driven state by wall time, and poll VFS state you mirror (the Internet Radio's status, Video Embed's search results); return `true` when something you draw changed |
@@ -154,21 +153,19 @@ Rules of thumb:
 
 ## Rendering
 
-Two paths, both required:
+`draw_windowed` is the only render path: draw into `(cx, cy, cw, ch)`
+with the backend. Use `oasis-ui` widgets through a `DrawContext` (see
+[ui-widgets.md](ui-widgets.md)). Compute your layout in `layout` and
+keep it in a field that both drawing and `handle_click` use, so
+hit-testing matches what was drawn. A kiosk-fullscreen window is just a
+bigger content area: there is no fullscreen flag and no SDI path to
+keep in sync.
 
-- **Windowed** (`draw_windowed`): draw into `(cx, cy, cw, ch)` with the
-  backend. Use `oasis-ui` widgets through a `DrawContext` (see
-  [ui-widgets.md](ui-widgets.md)). Compute your layout in `layout` and
-  keep it in a field that both drawing and `handle_click` use, so
-  hit-testing matches what was drawn.
-- **Fullscreen SDI** (`update_sdi`, no current host): create or update
-  named SDI objects and hide them in `hide_sdi`.
-
-Line-oriented apps can skip both by embedding a `ContentState` and
+Line-oriented apps can skip it by embedding a `ContentState` and
 using `impl_content_app_methods!(field)`, which implements `title`,
-`path`, `lines`, `browse_dir`, `viewing_file`, `layout`, `update_sdi`,
-`draw_windowed`, `hide_sdi` and `drain_requests` with the shared
-renderers in `oasis_app_core::render`. `ContentState` also provides
+`path`, `lines`, `browse_dir`, `viewing_file`, `layout`,
+`draw_windowed` and `drain_requests` with the shared renderer in
+`oasis_app_core::render`. `ContentState` also provides
 cursor / scroll helpers (`navigate_up`, `navigate_down`, `handle_nav`
 for the standard Cancel / Up / Down), `post_request` to queue a VFS IPC
 request, and `update_layout_windowed` / `windowed_metrics` so a click
@@ -209,8 +206,8 @@ pub struct StopwatchApp {
 }
 
 impl App for StopwatchApp {
-    // title, path, lines, browse_dir, viewing_file, layout, update_sdi,
-    // draw_windowed, hide_sdi, drain_requests (as_any comes from AsAny).
+    // title, path, lines, browse_dir, viewing_file, layout, draw_windowed,
+    // drain_requests (as_any comes from AsAny).
     impl_content_app_methods!(content);
 
     fn handle_input(&mut self, button: &Button, _vfs: &dyn Vfs) -> AppAction {
@@ -312,8 +309,7 @@ way a host does: a `Confirm`, 90 ticks of 16 ms, a lap, `Ctrl+S` through
    Builder options: `.on_dashboard()` (a tile on hosts that seed tiles
    from the registry), `.open_file(|path, file, vfs| ...)` ("open this
    file with me": `AppAction::LaunchAppWithFile` hand-offs and
-   `open <app> <file>`), `.owns_media(OwnedMedia::Music | Radio)`,
-   `.hide_sdi(fn)` (cleanup for SDI objects outside the shared pools).
+   `open <app> <file>`), `.owns_media(OwnedMedia::Music | Radio)`.
 3. Make sure the title maps to its own dashboard icon category
    (`oasis_vector::icon_set::IconCategory::from_app_title`, a title
    keyword classifier). The `oasis-apps` tests run every registered
@@ -325,7 +321,8 @@ way a host does: a `Confirm`, 90 ticks of 16 ms, a lap, `Ctrl+S` through
 
 Apps are plain structs, so test them in-module (`#[cfg(test)] mod tests`)
 against `oasis_vfs::MemoryVfs`: feed `handle_input` / `handle_key` /
-`handle_click`, call `tick` with synthetic `dt_ms`, drain
+`handle_click` (after `layout`, or via `testing::click_at`), call `tick`
+with synthetic `dt_ms`, drain
 `apply_vfs_ops(&mut vfs)` and `drain_requests`, and assert on `lines()`,
 your own state or VFS contents. Drawing can be exercised with the mock
 backends in `oasis-test-backend`.

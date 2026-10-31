@@ -40,12 +40,17 @@ docker compose --profile ci run --rm rust-ci cargo clippy --workspace --all-targ
 # License/advisory audit
 cargo deny check
 
-# PSP backend / overlay PRX (not workspace members; nightly + cargo-psp)
+# PSP backend / overlay PRX (not workspace members; nightly + cargo-psp + pspdev)
 cd crates/oasis-backend-psp && RUST_PSP_BUILD_STD=1 cargo psp --release
 cd crates/oasis-plugin-psp && RUST_PSP_BUILD_STD=1 cargo psp --release
+# the shipped PRX is stripped (CI fails it above 192 KiB)
+prxmin target/mipsel-sony-psp-std/release/oasis-plugin-psp.prx oasis-overlay.prx
 # ... or in the psp-build container (pspdev + pinned nightly + cargo-psp), then boot-test
-docker compose --profile psp-build run --rm psp-build   bash -c 'cd crates/oasis-backend-psp && RUST_PSP_BUILD_STD=1 cargo psp --release'
+docker compose --profile psp-build run --rm psp-build \
+  bash -c 'cd crates/oasis-backend-psp && RUST_PSP_BUILD_STD=1 cargo psp --release'
 scripts/psp-smoke-test.sh
+# PSP tooling unit tests (scripts/test_*.py, run in CI)
+python3 -m unittest discover -s scripts -p "test_*.py"
 
 # UE5 FFI shared library
 cargo build --profile release-ffi -p oasis-ffi
@@ -81,7 +86,7 @@ Fork PRs are blocked from the self-hosted runners (fork guard).
 - **Max line width:** 100 characters
 - **Formatting:** `cargo fmt` with `rustfmt.toml` -- 4-space indent, Unix newlines, `fn_params_layout = "Tall"`, `match_block_trailing_comma = true`
 - **Linting:** Clippy warnings are CI errors (`-D warnings`, all targets). Workspace lints: `clone_on_ref_ptr`, `dbg_macro`, `todo`, `unimplemented` = warn; `unsafe_op_in_unsafe_fn` = warn; `unwrap_used` = **deny** (allowed in `#[test]` / `#[cfg(test)]` code via `clippy.toml`)
-- **Unsafe:** All unsafe blocks require `// SAFETY:` comments. Unsafe is limited to FFI boundaries, SDL texture handles, and PSP system calls.
+- **Unsafe:** All unsafe blocks require `// SAFETY:` comments. Unsafe is concentrated in FFI boundaries (the C ABI, ffmpeg, QuickJS and its PSP libc shim), SDL texture handles and PSP system calls; [docs/security.md](docs/security.md#thread-safety) lists the `unsafe impl Send/Sync` sites.
 - **Tests:** Unit tests live in-module (`#[cfg(test)] mod tests`); many crates also have `tests/` integration suites and some have criterion `benches/`. Desktop-shell user-flow changes get an e2e scenario in `crates/oasis-app/tests/e2e_*.rs` ([docs/testing.md](docs/testing.md)). About 9,000 `#[test]` functions across the repository.
 - **Docs:** Update the docs that describe the code you change (see the [docs index](docs/README.md)); CI's markdown link check fails on broken relative links.
 - **License:** Dual-licensed Unlicense + MIT
@@ -146,7 +151,7 @@ To re-enable at your own risk: set `CODEX_ENABLED=true` in your environment.
 ## Key Files
 
 - [`CLAUDE.md`](CLAUDE.md) -- architecture reference, build commands, conventions
-- [`docs/README.md`](docs/README.md) -- index of every document; [`docs/design.md`](docs/design.md) -- technical design (v3.0)
+- [`docs/README.md`](docs/README.md) -- index of every document; [`docs/design.md`](docs/design.md) -- technical design (v3.1)
 - `skins/` -- the 17 skin directories (every built-in skin; TOML reference in [`docs/skin-authoring.md`](docs/skin-authoring.md))
 - `clippy.toml` -- lint thresholds (cognitive complexity 25, too-many-lines 100, too-many-args 7) and MSRV
 - `rustfmt.toml` -- formatting rules; `deny.toml` -- license and advisory policy

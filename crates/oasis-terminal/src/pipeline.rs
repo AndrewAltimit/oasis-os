@@ -1,8 +1,74 @@
-use oasis_types::error::Result;
+use oasis_types::error::{OasisError, Result};
 use oasis_vfs::Vfs;
 
 use super::expander::resolve_path;
 use super::interpreter::CommandOutput;
+
+// ---------------------------------------------------------------------------
+// Lexical scan: which bytes are shell operators?
+// ---------------------------------------------------------------------------
+
+/// Result of [`scan`]: for every byte of the input, whether it sits at the
+/// top level of the command line, where an operator byte (`;`, `&`, `|`,
+/// `<`, `>`) acts as an operator.
+pub(crate) struct Scan {
+    /// `top[i]`: byte `i` is outside quotes, not escaped by a backslash,
+    /// and not inside `{ ... }` or `$( ... )`. Quote characters and
+    /// backslashes themselves are never top-level.
+    pub(crate) top: Vec<bool>,
+    /// Every quote was closed.
+    pub(crate) balanced: bool,
+}
+
+/// The one quoting / nesting scanner the chain, pipe, redirect and
+/// background splitters share (they used to carry three slightly different
+/// copies, none of which knew about `$( ... )`, so `echo $(ls | wc -l)` was
+/// split into two pipeline stages).
+///
+/// Rules: `'...'` is literal; inside `"..."` a backslash escapes the next
+/// character; outside quotes a backslash escapes the next character; `{`
+/// / `}` nest (function bodies, `${VAR}`); `$(` opens a substitution in
+/// which `(` / `)` nest. Operators are ASCII, so byte positions reported
+/// as top-level are always char boundaries.
+pub(crate) fn scan(input: &str) -> Scan {
+    let b = input.as_bytes();
+    let mut top = vec![false; b.len()];
+    let (mut in_single, mut in_double) = (false, false);
+    let (mut braces, mut parens) = (0usize, 0usize);
+    let mut i = 0;
+    while i < b.len() {
+        let c = b[i];
+        if in_single {
+            in_single = c != b'\'';
+        } else if in_double {
+            match c {
+                b'"' => in_double = false,
+                b'\\' => i += 1,
+                _ => {},
+            }
+        } else {
+            match c {
+                b'\'' => in_single = true,
+                b'"' => in_double = true,
+                b'\\' => i += 1,
+                b'$' if b.get(i + 1) == Some(&b'(') => {
+                    parens += 1;
+                    i += 1;
+                },
+                b'(' if parens > 0 => parens += 1,
+                b')' if parens > 0 => parens -= 1,
+                b'{' => braces += 1,
+                b'}' => braces = braces.saturating_sub(1),
+                _ => top[i] = braces == 0 && parens == 0,
+            }
+        }
+        i += 1;
+    }
+    Scan {
+        top,
+        balanced: !in_single && !in_double,
+    }
+}
 
 // ---------------------------------------------------------------------------
 // Chain splitting: ;, &&, ||
@@ -21,120 +87,104 @@ pub(crate) enum ChainOp {
 pub(crate) struct ChainSegment {
     pub(crate) command: String,
     pub(crate) chain_op: ChainOp,
+    /// The and-or list this pipeline belongs to ends in `&`: queue it as a
+    /// background job instead of running it.
+    pub(crate) background: bool,
 }
 
-/// Split a command line on `;`, `&&`, and `||` (respecting quotes).
+/// Whether the top-level `&` at byte `i` is the background operator (not
+/// half of `&&`, not part of a `>&` / `<&` / `&>` redirection).
+fn is_background_amp(b: &[u8], top: &[bool], i: usize) -> bool {
+    let next_amp = b.get(i + 1) == Some(&b'&') && top.get(i + 1) == Some(&true);
+    let prev_amp = i > 0 && b[i - 1] == b'&' && top[i - 1];
+    let redirect = (i > 0 && matches!(b[i - 1], b'>' | b'<')) || b.get(i + 1) == Some(&b'>');
+    !next_amp && !prev_amp && !redirect
+}
+
+/// Split a command line on top-level `;`, `&`, `&&` and `||` (see
+/// [`scan`]). Empty segments (`a ;; b`) are skipped. A `&` marks every
+/// pipeline of the and-or list it ends as [`ChainSegment::background`].
 pub(crate) fn split_chains(input: &str) -> Result<Vec<ChainSegment>> {
-    let mut segments = Vec::new();
-    let mut current = String::new();
-    let mut chain_op = ChainOp::Always;
-    let mut chars = input.chars().peekable();
-    let mut in_single = false;
-    let mut in_double = false;
-    let mut brace_depth: usize = 0;
-
-    while let Some(ch) = chars.next() {
-        if in_single {
-            current.push(ch);
-            if ch == '\'' {
-                in_single = false;
-            }
-            continue;
+    let Scan { top, .. } = scan(input);
+    let b = input.as_bytes();
+    let mut segments: Vec<ChainSegment> = Vec::new();
+    let push = |segments: &mut Vec<ChainSegment>, text: &str, chain_op: ChainOp| {
+        let command = text.trim();
+        if !command.is_empty() {
+            segments.push(ChainSegment {
+                command: command.to_string(),
+                chain_op,
+                background: false,
+            });
         }
-        if in_double {
-            current.push(ch);
-            if ch == '"' {
-                in_double = false;
-            } else if ch == '\\'
-                && let Some(next) = chars.next()
-            {
-                current.push(next);
+    };
+    let (mut start, mut op, mut i) = (0, ChainOp::Always, 0);
+    // Index of the first segment of the current and-or list.
+    let mut list_start = 0;
+    while i < b.len() {
+        let doubled = b.get(i + 1) == Some(&b[i]) && top.get(i + 1) == Some(&true);
+        let next_op = match b[i] {
+            _ if !top[i] => None,
+            b';' => Some((ChainOp::Always, 1)),
+            b'&' if doubled => Some((ChainOp::And, 2)),
+            b'|' if doubled => Some((ChainOp::Or, 2)),
+            b'&' if is_background_amp(b, &top, i) => {
+                push(&mut segments, &input[start..i], op);
+                for s in &mut segments[list_start..] {
+                    s.background = true;
+                }
+                list_start = segments.len();
+                op = ChainOp::Always;
+                i += 1;
+                start = i;
+                continue;
+            },
+            _ => None,
+        };
+        if let Some((next, len)) = next_op {
+            push(&mut segments, &input[start..i], op);
+            if next == ChainOp::Always {
+                list_start = segments.len();
             }
-            continue;
-        }
-
-        match ch {
-            '\'' => {
-                in_single = true;
-                current.push(ch);
-            },
-            '"' => {
-                in_double = true;
-                current.push(ch);
-            },
-            '\\' => {
-                current.push(ch);
-                if let Some(next) = chars.next() {
-                    current.push(next);
-                }
-            },
-            '{' => {
-                brace_depth += 1;
-                current.push(ch);
-            },
-            '}' => {
-                brace_depth = brace_depth.saturating_sub(1);
-                current.push(ch);
-            },
-            ';' if brace_depth > 0 => {
-                // Inside braces: don't split, keep as part of the body.
-                current.push(ch);
-            },
-            ';' => {
-                let cmd = current.trim().to_string();
-                if !cmd.is_empty() {
-                    segments.push(ChainSegment {
-                        command: cmd,
-                        chain_op,
-                    });
-                }
-                current.clear();
-                chain_op = ChainOp::Always;
-            },
-            '&' if brace_depth > 0 => current.push(ch),
-            '&' if chars.peek() == Some(&'&') => {
-                chars.next(); // consume second &
-                let cmd = current.trim().to_string();
-                if !cmd.is_empty() {
-                    segments.push(ChainSegment {
-                        command: cmd,
-                        chain_op,
-                    });
-                }
-                current.clear();
-                chain_op = ChainOp::And;
-            },
-            '|' if brace_depth > 0 && chars.peek() == Some(&'|') => {
-                current.push(ch);
-                if let Some(next_ch) = chars.next() {
-                    current.push(next_ch);
-                }
-            },
-            '|' if chars.peek() == Some(&'|') => {
-                chars.next(); // consume second |
-                let cmd = current.trim().to_string();
-                if !cmd.is_empty() {
-                    segments.push(ChainSegment {
-                        command: cmd,
-                        chain_op,
-                    });
-                }
-                current.clear();
-                chain_op = ChainOp::Or;
-            },
-            _ => current.push(ch),
+            op = next;
+            i += len;
+            start = i;
+        } else {
+            i += 1;
         }
     }
-
-    let cmd = current.trim().to_string();
-    if !cmd.is_empty() {
-        segments.push(ChainSegment {
-            command: cmd,
-            chain_op,
-        });
-    }
-
+    push(&mut segments, &input[start..], op);
     Ok(segments)
+}
+
+/// Remove `#` comments: an unquoted, top-level `#` at the start of a word
+/// comments out the rest of its line (`echo a#b` and `$#` are not
+/// comments; nor is a `#` inside `{ ... }` or `$( ... )`, whose text is
+/// executed, and stripped, later).
+pub(crate) fn strip_comments(input: &str) -> std::borrow::Cow<'_, str> {
+    if !input.contains('#') {
+        return std::borrow::Cow::Borrowed(input);
+    }
+    let Scan { top, .. } = scan(input);
+    let b = input.as_bytes();
+    let mut out = String::with_capacity(input.len());
+    let (mut i, mut copied, mut stripped) = (0, 0, false);
+    while i < b.len() {
+        if b[i] == b'#' && top[i] && (i == 0 || b[i - 1].is_ascii_whitespace()) {
+            out.push_str(&input[copied..i]);
+            // Skip to the end of the line (keep the newline).
+            i = input[i..].find('\n').map_or(b.len(), |n| i + n);
+            copied = i;
+            stripped = true;
+            continue;
+        }
+        i += 1;
+    }
+    if !stripped {
+        return std::borrow::Cow::Borrowed(input);
+    }
+    out.push_str(&input[copied..]);
+    std::borrow::Cow::Owned(out)
 }
 
 /// If `input` ends with an unquoted, unescaped single `&` (background
@@ -142,24 +192,11 @@ pub(crate) fn split_chains(input: &str) -> Result<Vec<ChainSegment>> {
 pub(crate) fn strip_background(input: &str) -> Option<&str> {
     let trimmed = input.trim_end();
     let body = trimmed.strip_suffix('&')?;
-    if body.ends_with(['&', '>', '<', '\\']) {
+    if body.ends_with(['&', '>', '<']) {
         return None;
     }
-    // The `&` must be outside quotes.
-    let mut in_single = false;
-    let mut in_double = false;
-    let mut chars = body.chars();
-    while let Some(c) = chars.next() {
-        match c {
-            '\\' if !in_single => {
-                chars.next();
-            },
-            '\'' if !in_double => in_single = !in_single,
-            '"' if !in_single => in_double = !in_double,
-            _ => {},
-        }
-    }
-    if in_single || in_double {
+    let scanned = scan(trimmed);
+    if !scanned.balanced || scanned.top.last() != Some(&true) {
         return None;
     }
     let cmd = body.trim_end();
@@ -170,71 +207,33 @@ pub(crate) fn strip_background(input: &str) -> Option<&str> {
 // Pipe splitting
 // ---------------------------------------------------------------------------
 
-/// Split on `|` (single pipe, not `||`), respecting quotes.
+/// Split on top-level `|` (single pipe, not `||`; see [`scan`]).
+///
+/// An empty stage (`a | | b`, `a |`, `| b`) is a syntax error.
 pub(crate) fn split_pipes(input: &str) -> Result<Vec<String>> {
+    let Scan { top, .. } = scan(input);
+    let b = input.as_bytes();
     let mut segments = Vec::new();
-    let mut current = String::new();
-    let mut chars = input.chars().peekable();
-    let mut in_single = false;
-    let mut in_double = false;
-    let mut brace_depth: usize = 0;
-
-    while let Some(ch) = chars.next() {
-        if in_single {
-            current.push(ch);
-            if ch == '\'' {
-                in_single = false;
+    let mut start = 0;
+    let mut i = 0;
+    while i < b.len() {
+        if top[i] && b[i] == b'|' {
+            if b.get(i + 1) == Some(&b'|') {
+                i += 2;
+                continue;
             }
-            continue;
+            segments.push(input[start..i].trim().to_string());
+            start = i + 1;
         }
-        if in_double {
-            current.push(ch);
-            if ch == '"' {
-                in_double = false;
-            } else if ch == '\\'
-                && let Some(next) = chars.next()
-            {
-                current.push(next);
-            }
-            continue;
-        }
-
-        match ch {
-            '\'' => {
-                in_single = true;
-                current.push(ch);
-            },
-            '"' => {
-                in_double = true;
-                current.push(ch);
-            },
-            '\\' => {
-                current.push(ch);
-                if let Some(next) = chars.next() {
-                    current.push(next);
-                }
-            },
-            '{' => {
-                brace_depth += 1;
-                current.push(ch);
-            },
-            '}' => {
-                brace_depth = brace_depth.saturating_sub(1);
-                current.push(ch);
-            },
-            '|' if brace_depth == 0 && chars.peek() != Some(&'|') => {
-                segments.push(current.trim().to_string());
-                current.clear();
-            },
-            _ => current.push(ch),
-        }
+        i += 1;
     }
-
-    let remaining = current.trim().to_string();
-    if !remaining.is_empty() {
-        segments.push(remaining);
+    segments.push(input[start..].trim().to_string());
+    if segments.len() > 1 && segments.iter().any(String::is_empty) {
+        return Err(OasisError::Command(
+            "syntax error: empty command in pipeline".into(),
+        ));
     }
-
+    segments.retain(|s| !s.is_empty());
     Ok(segments)
 }
 
@@ -249,6 +248,7 @@ pub(crate) struct Redirect<'a> {
 }
 
 /// Parsed redirections for a command.
+#[derive(Default)]
 pub(crate) struct Redirections<'a> {
     /// Stdout redirect (`>` / `>>`).
     pub(crate) stdout: Option<Redirect<'a>>,
@@ -260,156 +260,97 @@ pub(crate) struct Redirections<'a> {
     pub(crate) stderr_to_stdout: bool,
 }
 
+impl Redirections<'_> {
+    /// No redirection at all.
+    pub(crate) fn is_empty(&self) -> bool {
+        self.stdout.is_none()
+            && self.stderr.is_none()
+            && self.stdin.is_none()
+            && !self.stderr_to_stdout
+    }
+}
+
 /// Parse redirect operators from a command string.
 ///
 /// Supports:
 /// - `> file` / `>> file`   (stdout)
 /// - `2> file` / `2>> file` (stderr)
 /// - `2>&1`                 (merge stderr into stdout)
+/// - `< file`               (stdin)
+///
+/// Only top-level operators count (see [`scan`]): `\>`, `">"` and
+/// `$(cat < f)` are not redirections of this command.
 ///
 /// Returns `(command_part, redirections)`.
 pub(crate) fn parse_redirect(input: &str) -> (&str, Redirections<'_>) {
+    let Scan { top, .. } = scan(input);
     let bytes = input.as_bytes();
-    let mut in_single = false;
-    let mut in_double = false;
-    let mut brace_depth: usize = 0;
     let mut i = 0;
-    let mut first_redirect_pos: Option<usize> = None;
 
     // Collected redirect entries: (position, fd, append, merge_target).
-    // fd: 1 = stdout, 2 = stderr.
-    // merge_target: Some("1") for `2>&1`.
+    // fd: 0 = stdin, 1 = stdout, 2 = stderr; merge = `2>&1`.
     let mut redirects: Vec<(usize, u8, bool, bool)> = Vec::new();
 
     while i < bytes.len() {
-        let b = bytes[i];
-        if in_single {
-            if b == b'\'' {
-                in_single = false;
-            }
-        } else if in_double {
-            if b == b'"' {
-                in_double = false;
-            } else if b == b'\\' {
-                i += 1; // skip next
-            }
-        } else {
-            match b {
-                b'\'' => in_single = true,
-                b'"' => in_double = true,
-                b'{' => brace_depth += 1,
-                b'}' => brace_depth = brace_depth.saturating_sub(1),
-                b'2' if brace_depth == 0
-                    && i + 1 < bytes.len()
-                    && bytes[i + 1] == b'>'
-                    && (i == 0 || bytes[i - 1].is_ascii_whitespace()) =>
-                {
-                    if first_redirect_pos.is_none() {
-                        first_redirect_pos = Some(i);
-                    }
-                    // Check for 2>> or 2>&1.
-                    if i + 3 < bytes.len() && bytes[i + 2] == b'&' && bytes[i + 3] == b'1' {
-                        // 2>&1 -- merge stderr into stdout.
-                        redirects.push((i, 2, false, true));
-                        i += 3;
-                    } else if i + 2 < bytes.len() && bytes[i + 2] == b'>' {
-                        // 2>>
-                        redirects.push((i, 2, true, false));
-                        i += 2;
-                    } else {
-                        // 2>
-                        redirects.push((i, 2, false, false));
-                        i += 1;
-                    }
-                },
-                b'>' if brace_depth == 0 => {
-                    if first_redirect_pos.is_none() {
-                        first_redirect_pos = Some(i);
-                    }
-                    if i + 1 < bytes.len() && bytes[i + 1] == b'>' {
-                        redirects.push((i, 1, true, false));
-                        i += 1;
-                    } else {
-                        redirects.push((i, 1, false, false));
-                    }
-                },
-                // fd 0 = stdin redirect (`< file`).
-                b'<' if brace_depth == 0 => {
-                    if first_redirect_pos.is_none() {
-                        first_redirect_pos = Some(i);
-                    }
-                    redirects.push((i, 0, false, false));
-                },
-                _ => {},
-            }
+        if !top[i] {
+            i += 1;
+            continue;
+        }
+        match bytes[i] {
+            b'2' if bytes.get(i + 1) == Some(&b'>')
+                && (i == 0 || bytes[i - 1].is_ascii_whitespace()) =>
+            {
+                if bytes.get(i + 2) == Some(&b'&') && bytes.get(i + 3) == Some(&b'1') {
+                    redirects.push((i, 2, false, true));
+                    i += 3;
+                } else if bytes.get(i + 2) == Some(&b'>') {
+                    redirects.push((i, 2, true, false));
+                    i += 2;
+                } else {
+                    redirects.push((i, 2, false, false));
+                    i += 1;
+                }
+            },
+            b'>' => {
+                let append = bytes.get(i + 1) == Some(&b'>');
+                redirects.push((i, 1, append, false));
+                if append {
+                    i += 1;
+                }
+            },
+            b'<' => redirects.push((i, 0, false, false)),
+            _ => {},
         }
         i += 1;
     }
 
-    if redirects.is_empty() {
-        return (
-            input,
-            Redirections {
-                stdout: None,
-                stderr: None,
-                stdin: None,
-                stderr_to_stdout: false,
-            },
-        );
-    }
-
-    let cmd_part = &input[..first_redirect_pos.unwrap_or(input.len())];
-
-    let mut stdout_redirect: Option<Redirect<'_>> = None;
-    let mut stderr_redirect: Option<Redirect<'_>> = None;
-    let mut stdin_redirect: Option<&str> = None;
-    let mut stderr_to_stdout = false;
+    let mut parsed = Redirections::default();
+    let Some(&(first, ..)) = redirects.first() else {
+        return (input, parsed);
+    };
 
     for (idx, &(pos, fd, append, merge)) in redirects.iter().enumerate() {
         if merge {
-            stderr_to_stdout = true;
+            parsed.stderr_to_stdout = true;
             continue;
         }
-
-        // Path is everything from after the operator to the next redirect
-        // or end of string.
-        let op_len = if fd == 2 {
-            if append { 3 } else { 2 } // "2>>" = 3, "2>" = 2
-        } else if append {
-            2
-        } else {
-            1
-        }; // ">>" = 2, ">" = 1, "<" = 1
-
-        let path_start = pos + op_len;
-        let path_end = if idx + 1 < redirects.len() {
-            redirects[idx + 1].0
-        } else {
-            input.len()
+        // The path runs from after the operator to the next redirect or
+        // the end of the line.
+        let op_len = match (fd, append) {
+            (2, true) => 3,
+            (2, false) | (1, true) => 2,
+            _ => 1,
         };
-        let path = input[path_start..path_end].trim();
-
-        if fd == 0 {
-            stdin_redirect = Some(path);
-        } else {
-            let redir = Redirect { path, append };
-            if fd == 2 {
-                stderr_redirect = Some(redir);
-            } else {
-                stdout_redirect = Some(redir);
-            }
+        let path_end = redirects.get(idx + 1).map_or(input.len(), |r| r.0);
+        let path = input[pos + op_len..path_end].trim();
+        match fd {
+            0 => parsed.stdin = Some(path),
+            1 => parsed.stdout = Some(Redirect { path, append }),
+            _ => parsed.stderr = Some(Redirect { path, append }),
         }
     }
 
-    (
-        cmd_part,
-        Redirections {
-            stdout: stdout_redirect,
-            stderr: stderr_redirect,
-            stdin: stdin_redirect,
-            stderr_to_stdout,
-        },
-    )
+    (&input[..first], parsed)
 }
 
 /// Extract text content from a `CommandOutput`.

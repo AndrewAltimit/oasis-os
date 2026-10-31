@@ -233,6 +233,9 @@ pub fn poll_jobs(state: &mut AppState, sdi: &mut SdiRegistry, vfs: &mut MemoryVf
     let Some(output) = output else {
         return;
     };
+    // A job may have been queued over a remote channel: never let it
+    // toggle a server (see `commands::refuse_job_server_toggles`).
+    let output = commands::refuse_job_server_toggles(output);
     let output = terminal_sdi::resolve_sdi_inspect(output, sdi);
     if let Some(name) = commands::process_command_output(Ok(output), state) {
         commands::apply_skin_swap(&name, state, sdi, vfs);

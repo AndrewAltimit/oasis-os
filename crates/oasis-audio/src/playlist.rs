@@ -3,6 +3,15 @@
 //! An ordered list of tracks with current-index tracking, repeat mode,
 //! and shuffle support. The playlist is backend-agnostic -- it manages
 //! only metadata and ordering.
+//!
+//! # Shuffle
+//!
+//! Shuffle keeps a permutation of the track indices (`shuffle_order`) and a
+//! cursor into it.  Turning shuffle on (or wrapping around under
+//! [`RepeatMode::All`]) draws a fresh random order with the playing track
+//! first, so `next` visits every other track exactly once before anything
+//! repeats.  Adding or removing tracks edits the order in place instead of
+//! reshuffling, so the tracks already played stay played.
 
 use super::types::{RepeatMode, TrackInfo};
 
@@ -16,16 +25,28 @@ pub struct Playlist {
     /// Repeat mode.
     pub repeat: RepeatMode,
     /// Whether shuffle is enabled.
-    pub shuffle: bool,
-    /// Shuffle order indices (populated when shuffle is toggled on).
+    shuffle: bool,
+    /// Shuffle order: a permutation of `0..tracks.len()` while shuffling.
     shuffle_order: Vec<usize>,
-    /// Current position in the shuffle order.
+    /// Position of the current track in `shuffle_order`.
     shuffle_pos: usize,
+    /// xorshift64 state for shuffling (never 0).
+    rng: u64,
 }
 
 impl Playlist {
     /// Create an empty playlist.
     pub fn new() -> Self {
+        // Seed from the clock: every session gets its own shuffle order.
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_nanos() as u64);
+        Self::with_seed(nanos)
+    }
+
+    /// Create an empty playlist whose shuffle orders come from `seed`
+    /// (reproducible orders for tests).
+    pub fn with_seed(seed: u64) -> Self {
         Self {
             tracks: Vec::new(),
             current: None,
@@ -33,24 +54,53 @@ impl Playlist {
             shuffle: false,
             shuffle_order: Vec::new(),
             shuffle_pos: 0,
+            // splitmix64 finalizer: spreads small seeds, and `| 1` keeps
+            // xorshift off its all-zero fixed point.
+            rng: {
+                let mut z = seed.wrapping_add(0x9E37_79B9_7F4A_7C15);
+                z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+                z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+                (z ^ (z >> 31)) | 1
+            },
         }
     }
 
     /// Add a track to the end of the playlist.
+    ///
+    /// While shuffling, the track joins the shuffle order at a random
+    /// position among the tracks still to come.
     pub fn add(&mut self, info: TrackInfo) {
         self.tracks.push(info);
         if self.shuffle {
-            self.rebuild_shuffle();
-            self.sync_shuffle_pos();
+            let idx = self.tracks.len() - 1;
+            // Insert after the cursor (or anywhere, before playback starts).
+            let first = if self.current.is_some() {
+                self.shuffle_pos + 1
+            } else {
+                0
+            };
+            let first = first.min(self.shuffle_order.len());
+            let slots = (self.shuffle_order.len() - first + 1) as u64;
+            let at = first + (self.next_random() % slots) as usize;
+            self.shuffle_order.insert(at, idx);
         }
     }
 
     /// Remove a track by index. Adjusts current index if needed.
+    ///
+    /// Removing the current track moves `current` to the track that would
+    /// have played next (the following track, or the next one in shuffle
+    /// order), or to the new last track when there is none.
     pub fn remove(&mut self, index: usize) -> Option<TrackInfo> {
         if index >= self.tracks.len() {
             return None;
         }
         let removed = self.tracks.remove(index);
+
+        if self.shuffle {
+            self.remove_from_shuffle(index);
+            return Some(removed);
+        }
 
         // Adjust current index.
         if let Some(cur) = self.current {
@@ -65,12 +115,41 @@ impl Playlist {
                 }
             }
         }
-
-        if self.shuffle {
-            self.rebuild_shuffle();
-            self.sync_shuffle_pos();
-        }
         Some(removed)
+    }
+
+    /// Drop track `index` (already removed from `tracks`) from the shuffle
+    /// order, renumber the rest, and keep `current` / the cursor on the
+    /// same track (or its shuffle successor if it was the one removed).
+    fn remove_from_shuffle(&mut self, index: usize) {
+        let pos = self.shuffle_order.iter().position(|&i| i == index);
+        if let Some(pos) = pos {
+            self.shuffle_order.remove(pos);
+        }
+        for i in &mut self.shuffle_order {
+            if *i > index {
+                *i -= 1;
+            }
+        }
+        let Some(cur) = self.current else {
+            return;
+        };
+        if self.shuffle_order.is_empty() {
+            self.current = None;
+            self.shuffle_pos = 0;
+            return;
+        }
+        match pos {
+            Some(p) if p < self.shuffle_pos => self.shuffle_pos -= 1,
+            Some(p) if p == self.shuffle_pos => {
+                // The current track went: its successor takes its place.
+                self.shuffle_pos = self.shuffle_pos.min(self.shuffle_order.len() - 1);
+                self.current = Some(self.shuffle_order[self.shuffle_pos]);
+                return;
+            },
+            _ => {},
+        }
+        self.current = Some(if cur > index { cur - 1 } else { cur });
     }
 
     /// Clear all tracks.
@@ -102,17 +181,33 @@ impl Playlist {
     }
 
     /// Set the current track by index.
+    ///
+    /// While shuffling, a track not yet played this round is moved up to
+    /// play now, so the tracks still to come in the round are all kept
+    /// (jumping the cursor to its slot would skip the ones before it).
     pub fn set_current(&mut self, index: usize) -> bool {
-        if index < self.tracks.len() {
-            self.current = Some(index);
-            // `next` / `prev` in shuffle mode continue from this track.
-            if self.shuffle {
-                self.sync_shuffle_pos();
-            }
-            true
-        } else {
-            false
+        if index >= self.tracks.len() {
+            return false;
         }
+        if self.shuffle
+            && let Some(pos) = self.shuffle_order.iter().position(|&i| i == index)
+        {
+            let next = if self.current.is_some() {
+                self.shuffle_pos + 1
+            } else {
+                0
+            };
+            if pos >= next {
+                let track = self.shuffle_order.remove(pos);
+                self.shuffle_order.insert(next, track);
+                self.shuffle_pos = next;
+            } else {
+                // Already played this round: continue from its slot.
+                self.shuffle_pos = pos;
+            }
+        }
+        self.current = Some(index);
+        true
     }
 
     /// Index of the track with this VFS path.
@@ -120,23 +215,20 @@ impl Playlist {
         self.tracks.iter().position(|t| t.path == path)
     }
 
-    /// Turn shuffle on or off. Turning it on builds a fresh shuffle order
-    /// that continues from the current track.
+    /// Whether shuffle is on.
+    pub fn shuffle(&self) -> bool {
+        self.shuffle
+    }
+
+    /// Turn shuffle on or off. Turning it on draws a fresh shuffle order
+    /// that starts at the current track.
     pub fn set_shuffle(&mut self, on: bool) {
         self.shuffle = on;
         if on {
             self.rebuild_shuffle();
-            self.sync_shuffle_pos();
-        }
-    }
-
-    /// Point the shuffle cursor at the current track, so shuffle `next` /
-    /// `prev` step from the track that is actually playing.
-    fn sync_shuffle_pos(&mut self) {
-        if let Some(cur) = self.current
-            && let Some(pos) = self.shuffle_order.iter().position(|&i| i == cur)
-        {
-            self.shuffle_pos = pos;
+        } else {
+            self.shuffle_order.clear();
+            self.shuffle_pos = 0;
         }
     }
 
@@ -214,60 +306,66 @@ impl Playlist {
         &self.tracks
     }
 
-    /// Build a deterministic "shuffle" order.
-    /// Uses a simple Fisher-Yates-like reorder seeded by track count.
-    /// For a real implementation this would use a proper RNG.
+    /// Next value of the xorshift64 generator.
+    fn next_random(&mut self) -> u64 {
+        let mut x = self.rng;
+        x ^= x << 13;
+        x ^= x >> 7;
+        x ^= x << 17;
+        self.rng = x;
+        x
+    }
+
+    /// Draw a fresh random shuffle order (Fisher-Yates) with the current
+    /// track, if any, first, and put the cursor on it.
     fn rebuild_shuffle(&mut self) {
         let n = self.tracks.len();
-        self.shuffle_order = (0..n).collect();
-        // Simple deterministic shuffle: reverse halves and interleave.
-        // Not cryptographically random, but sufficient for playlist shuffling.
-        if n > 1 {
-            let mid = n / 2;
-            let mut new_order = Vec::with_capacity(n);
-            let (first, second) = self.shuffle_order.split_at(mid);
-            let mut a = first.iter();
-            let mut b = second.iter().rev();
-            loop {
-                match (a.next(), b.next()) {
-                    (Some(&x), Some(&y)) => {
-                        new_order.push(y);
-                        new_order.push(x);
-                    },
-                    (Some(&x), None) => new_order.push(x),
-                    (None, Some(&y)) => new_order.push(y),
-                    (None, None) => break,
-                }
-            }
-            self.shuffle_order = new_order;
+        let cur = self.current.filter(|&c| c < n);
+        let mut order: Vec<usize> = (0..n).filter(|&i| Some(i) != cur).collect();
+        for i in (1..order.len()).rev() {
+            let j = (self.next_random() % (i as u64 + 1)) as usize;
+            order.swap(i, j);
         }
+        if let Some(c) = cur {
+            order.insert(0, c);
+        }
+        self.shuffle_order = order;
         self.shuffle_pos = 0;
     }
 
     fn next_shuffle(&mut self) -> bool {
-        if self.shuffle_order.is_empty() {
+        if self.shuffle_order.len() != self.tracks.len() {
             self.rebuild_shuffle();
         }
-        if self.shuffle_order.is_empty() {
-            return false;
+        if self.current.is_none() {
+            // Not started: play the first track of the order.
+            self.shuffle_pos = 0;
+            self.current = self.shuffle_order.first().copied();
+            return self.current.is_some();
         }
 
-        self.shuffle_pos += 1;
-        if self.shuffle_pos >= self.shuffle_order.len() {
-            if self.repeat == RepeatMode::All {
-                self.shuffle_pos = 0;
-            } else {
-                self.shuffle_pos = self.shuffle_order.len() - 1;
+        if self.shuffle_pos + 1 >= self.shuffle_order.len() {
+            if self.repeat != RepeatMode::All {
                 return false;
             }
+            // Every track played: go round the same order again (so `next`
+            // and `prev` stay inverses across the wrap).
+            self.shuffle_pos = 0;
+        } else {
+            self.shuffle_pos += 1;
         }
         self.current = Some(self.shuffle_order[self.shuffle_pos]);
         true
     }
 
     fn prev_shuffle(&mut self) -> bool {
-        if self.shuffle_order.is_empty() {
-            return false;
+        if self.shuffle_order.len() != self.tracks.len() {
+            self.rebuild_shuffle();
+        }
+        if self.current.is_none() {
+            self.shuffle_pos = 0;
+            self.current = self.shuffle_order.first().copied();
+            return self.current.is_some();
         }
         if self.shuffle_pos > 0 {
             self.shuffle_pos -= 1;
@@ -499,7 +597,7 @@ mod tests {
         for t in make_tracks(4) {
             pl.add(t);
         }
-        pl.shuffle = true;
+        pl.set_shuffle(true);
         pl.set_current(0);
 
         // Should advance through shuffle order.
@@ -697,7 +795,7 @@ mod tests {
                 for t in &tracks {
                     pl.add(t.clone());
                 }
-                pl.shuffle = true;
+                pl.set_shuffle(true);
                 pl.repeat = RepeatMode::Off;
                 pl.set_current(0);
 
@@ -770,6 +868,208 @@ mod tests {
                 }
                 prop_assert_eq!(pl.current_index(), start);
             }
+
+            /// Any sequence of edits and moves keeps the playlist coherent:
+            /// `current` in range, and while shuffling the order is a
+            /// permutation whose cursor sits on `current`.
+            #[test]
+            fn random_operations_keep_invariants(
+                seed in any::<u64>(),
+                ops in proptest::collection::vec((0u8..8, 0usize..12), 0..60),
+            ) {
+                let mut pl = Playlist::with_seed(seed);
+                let mut next_id = 0;
+                for (op, arg) in ops {
+                    match op {
+                        0 | 1 => {
+                            pl.add(TrackInfo::from_path(&format!("/m/{next_id}.mp3")));
+                            next_id += 1;
+                        },
+                        2 => { pl.remove(arg); },
+                        3 => { pl.advance(); },
+                        4 => { pl.go_back(); },
+                        5 => { pl.set_current(arg); },
+                        6 => pl.set_shuffle(!pl.shuffle()),
+                        _ => pl.repeat = match arg % 3 {
+                            0 => RepeatMode::Off,
+                            1 => RepeatMode::All,
+                            _ => RepeatMode::One,
+                        },
+                    }
+                    if let Some(cur) = pl.current_index() {
+                        prop_assert!(cur < pl.len());
+                    }
+                    if pl.shuffle() && !pl.shuffle_order.is_empty() {
+                        let mut sorted = pl.shuffle_order.clone();
+                        sorted.sort_unstable();
+                        prop_assert_eq!(sorted, (0..pl.len()).collect::<Vec<_>>());
+                        if let Some(cur) = pl.current_index() {
+                            prop_assert_eq!(pl.shuffle_order[pl.shuffle_pos], cur);
+                        }
+                    }
+                }
+            }
         }
+    }
+
+    fn shuffled(n: usize, seed: u64) -> Playlist {
+        let mut pl = Playlist::with_seed(seed);
+        for t in make_tracks(n) {
+            pl.add(t);
+        }
+        pl.set_shuffle(true);
+        pl
+    }
+
+    /// Advance until `advance` returns false, collecting the tracks played.
+    fn play_round(pl: &mut Playlist) -> Vec<usize> {
+        let mut played: Vec<usize> = pl.current_index().into_iter().collect();
+        while pl.advance() {
+            played.push(pl.current_index().unwrap());
+            assert!(played.len() <= pl.len(), "round longer than the playlist");
+        }
+        played
+    }
+
+    fn assert_each_once(played: &[usize], n: usize) {
+        let mut sorted = played.to_vec();
+        sorted.sort_unstable();
+        assert_eq!(sorted, (0..n).collect::<Vec<_>>(), "played {played:?}");
+    }
+
+    #[test]
+    fn shuffle_from_not_started_plays_every_track_once() {
+        // Regression: the first `advance` stepped the cursor past
+        // shuffle_order[0], so that track was never played.
+        for seed in 0..20 {
+            let mut pl = shuffled(7, seed);
+            assert!(pl.advance());
+            assert_each_once(&play_round(&mut pl), 7);
+        }
+    }
+
+    #[test]
+    fn shuffle_on_mid_playlist_plays_every_other_track() {
+        // Regression: the order was fixed and the cursor jumped to the
+        // current track's slot in it, so every track ordered before that
+        // slot was skipped for the rest of the round.
+        for seed in 0..20 {
+            let mut pl = Playlist::with_seed(seed);
+            for t in make_tracks(8) {
+                pl.add(t);
+            }
+            pl.set_current(5);
+            pl.set_shuffle(true);
+            let played = play_round(&mut pl);
+            assert_eq!(played[0], 5);
+            assert_each_once(&played, 8);
+        }
+    }
+
+    #[test]
+    fn shuffle_orders_differ_between_seeds() {
+        // Regression: the "shuffle" was a fixed interleave, the same order
+        // every time.
+        let orders: std::collections::HashSet<Vec<usize>> = (0..10)
+            .map(|seed| {
+                let mut pl = shuffled(10, seed);
+                pl.advance();
+                play_round(&mut pl)
+            })
+            .collect();
+        assert!(orders.len() > 5, "{orders:?}");
+    }
+
+    #[test]
+    fn repeat_all_shuffle_cycles_every_track_without_repeats() {
+        let mut pl = shuffled(6, 3);
+        pl.repeat = RepeatMode::All;
+        let mut played = vec![];
+        for _ in 0..30 {
+            assert!(pl.advance());
+            played.push(pl.current_index().unwrap());
+        }
+        // Every 6 consecutive tracks are all six, never one twice in a row.
+        for window in played.windows(6) {
+            assert_each_once(window, 6);
+        }
+        // `prev` undoes `next` across the wrap.
+        let at = pl.current_index();
+        assert!(pl.advance());
+        assert!(pl.go_back());
+        assert_eq!(pl.current_index(), at);
+        // A single-track playlist repeats it.
+        let mut one = shuffled(1, 9);
+        one.repeat = RepeatMode::All;
+        assert!(one.advance());
+        assert!(one.advance());
+        assert_eq!(one.current_index(), Some(0));
+    }
+
+    #[test]
+    fn shuffle_add_joins_the_current_round() {
+        let mut pl = shuffled(4, 11);
+        assert!(pl.advance());
+        assert!(pl.advance());
+        pl.add(TrackInfo::from_path("/music/new.mp3"));
+        // The rest of the round includes the new track (index 4).
+        let mut played = vec![];
+        while pl.advance() {
+            played.push(pl.current_index().unwrap());
+        }
+        assert!(played.contains(&4), "{played:?}");
+    }
+
+    #[test]
+    fn shuffle_remove_current_moves_to_its_successor() {
+        let mut pl = shuffled(5, 5);
+        assert!(pl.advance());
+        assert!(pl.advance());
+        let cur = pl.current_index().unwrap();
+        let successor = pl.shuffle_order[pl.shuffle_pos + 1];
+        let removed_path = pl.current_track().unwrap().path.clone();
+        pl.remove(cur);
+        let expected = if successor > cur {
+            successor - 1
+        } else {
+            successor
+        };
+        assert_eq!(pl.current_index(), Some(expected));
+        assert_ne!(pl.current_track().unwrap().path, removed_path);
+        // Removing every track leaves nothing current.
+        while !pl.is_empty() {
+            pl.remove(0);
+        }
+        assert_eq!(pl.current_index(), None);
+        assert!(!pl.advance());
+        assert!(!pl.go_back());
+    }
+
+    #[test]
+    fn shuffle_pick_keeps_the_rest_of_the_round() {
+        // Regression: picking a track jumped the cursor to its slot in the
+        // order, skipping every unplayed track ordered before it (and a
+        // pick of the last-ordered track ended the round at once).
+        for seed in 0..20 {
+            let mut pl = shuffled(6, seed);
+            assert!(pl.advance());
+            let first = pl.current_index().unwrap();
+            let last_ordered = *pl.shuffle_order.last().unwrap();
+            assert!(pl.set_current(last_ordered));
+            let mut played = vec![first];
+            played.extend(play_round(&mut pl));
+            assert_each_once(&played, 6);
+        }
+    }
+
+    #[test]
+    fn shuffle_off_then_on_starts_from_current() {
+        let mut pl = shuffled(6, 1);
+        pl.advance();
+        pl.set_shuffle(false);
+        pl.set_current(3);
+        pl.set_shuffle(true);
+        assert_eq!(pl.current_index(), Some(3));
+        assert_each_once(&play_round(&mut pl), 6);
     }
 }

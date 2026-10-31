@@ -21,6 +21,7 @@ pub use puzzle::SlidingPuzzle;
 pub use snake::SnakeGame;
 
 use oasis_app_core::{App, AppAction, ContentState, impl_content_app_methods};
+use oasis_platform::TimeService;
 use oasis_types::input::Button;
 use oasis_vfs::Vfs;
 
@@ -50,7 +51,8 @@ pub struct GamesApp {
     snake: SnakeGame,
     memory: MemoryGame,
     puzzle: SlidingPuzzle,
-    frame_counter: u64,
+    /// Shuffle PRNG state: seeds every board reset.
+    rng: u64,
     /// Unsimulated wall time, in thirds of a millisecond (one 60 Hz
     /// simulation step = [`SIM_STEP_UNITS`]).
     sim_accum: u32,
@@ -101,24 +103,66 @@ fn format_high_scores(snake_high: u32) -> String {
     format!("# OASIS_OS games high scores\n\n[snake]\nhigh_score = {snake_high}\n")
 }
 
+/// Seed of [`GamesApp::new`]: the same boards every run, for tests and
+/// headless captures.
+pub const DEFAULT_SEED: u64 = 42;
+
+/// A shuffle seed from the platform clock: the wall-clock time when the
+/// platform has one (a frozen clock, e.g. `OASIS_FIXED_TIME`, therefore
+/// gives reproducible boards), else the uptime, else [`DEFAULT_SEED`].
+pub fn clock_seed(clock: &dyn TimeService) -> u64 {
+    let raw = match clock.now() {
+        Ok(t) => {
+            let date = (u64::from(t.year) * 12 + u64::from(t.month)) * 31 + u64::from(t.day);
+            ((date * 24 + u64::from(t.hour)) * 60 + u64::from(t.minute)) * 60 + u64::from(t.second)
+        },
+        Err(_) => match clock.uptime_secs() {
+            Ok(secs) => secs,
+            Err(_) => return DEFAULT_SEED,
+        },
+    };
+    // Spread nearby clock readings (one second apart) over the whole
+    // state space so consecutive launches shuffle unrelated boards.
+    let mut state = raw ^ 0x9E37_79B9_7F4A_7C15;
+    prng::next_random(&mut state);
+    prng::next_random(&mut state)
+}
+
 impl GamesApp {
-    /// Create a new games app with the given VFS path.
+    /// Create a new games app with the given VFS path and the fixed
+    /// [`DEFAULT_SEED`] (deterministic boards; see [`Self::with_clock`]).
     pub fn new(path: &str) -> Self {
-        let seed = 42u64;
+        Self::with_seed(path, DEFAULT_SEED)
+    }
+
+    /// Create a games app whose boards are shuffled from the platform
+    /// clock ([`clock_seed`]), so every session deals new ones.
+    pub fn with_clock(path: &str, clock: &dyn TimeService) -> Self {
+        Self::with_seed(path, clock_seed(clock))
+    }
+
+    /// Create a games app with an explicit shuffle seed (deterministic).
+    pub fn with_seed(path: &str, seed: u64) -> Self {
+        let mut rng = seed;
         let mut app = Self {
             content: ContentState::new("Games", path),
             active_game: ActiveGame::Menu,
             menu_cursor: 0,
-            snake: SnakeGame::new(20, 15, seed),
-            memory: MemoryGame::new(4, 4, seed.wrapping_add(1)),
-            puzzle: SlidingPuzzle::new(4, seed.wrapping_add(2)),
-            frame_counter: 0,
+            snake: SnakeGame::new(20, 15, prng::next_random(&mut rng)),
+            memory: MemoryGame::new(4, 4, prng::next_random(&mut rng)),
+            puzzle: SlidingPuzzle::new(4, prng::next_random(&mut rng)),
+            rng,
             sim_accum: 0,
             scores_loaded: false,
             persisted_snake_high: 0,
         };
         app.update_lines();
         app
+    }
+
+    /// Next seed for a board reset (Select in Memory / Puzzle).
+    fn next_seed(&mut self) -> u64 {
+        prng::next_random(&mut self.rng)
     }
 
     /// Get the currently active game.
@@ -306,8 +350,8 @@ impl GamesApp {
                 AppAction::None
             },
             Button::Select => {
-                self.frame_counter = self.frame_counter.wrapping_add(1);
-                self.memory.reset(self.frame_counter);
+                let seed = self.next_seed();
+                self.memory.reset(seed);
                 AppAction::None
             },
             Button::Cancel => {
@@ -338,8 +382,8 @@ impl GamesApp {
                 AppAction::None
             },
             Button::Select => {
-                self.frame_counter = self.frame_counter.wrapping_add(1);
-                self.puzzle.reset(self.frame_counter);
+                let seed = self.next_seed();
+                self.puzzle.reset(seed);
                 AppAction::None
             },
             Button::Cancel => {
@@ -381,7 +425,6 @@ impl App for GamesApp {
 
     fn tick(&mut self, dt_ms: u32, vfs: &dyn Vfs) -> bool {
         self.load_high_scores(vfs);
-        self.frame_counter = self.frame_counter.wrapping_add(1);
 
         if matches!(self.active_game, ActiveGame::Menu | ActiveGame::Puzzle) {
             // Turn-based screens: drop the backlog so resuming a real-time
@@ -432,10 +475,85 @@ impl App for GamesApp {
 mod tests {
     use super::*;
     use oasis_app_core::AsAny;
+    use oasis_app_core::testing::click_at;
     use oasis_vfs::MemoryVfs;
 
     fn make_vfs() -> MemoryVfs {
         MemoryVfs::new()
+    }
+
+    /// A clock frozen at `now` (or without wall time) with a fixed uptime.
+    struct TestClock(Option<oasis_platform::SystemTime>, u64);
+
+    impl TimeService for TestClock {
+        fn now(&self) -> oasis_types::error::Result<oasis_platform::SystemTime> {
+            self.0
+                .ok_or_else(|| oasis_types::error::OasisError::Platform("no clock".into()))
+        }
+        fn uptime_secs(&self) -> oasis_types::error::Result<u64> {
+            Ok(self.1)
+        }
+    }
+
+    fn at(second: u8) -> TestClock {
+        TestClock(
+            Some(oasis_platform::SystemTime {
+                year: 2026,
+                month: 10,
+                day: 30,
+                hour: 12,
+                minute: 0,
+                second,
+            }),
+            7,
+        )
+    }
+
+    fn memory_layout(app: &GamesApp) -> Vec<u8> {
+        app.memory.cards.iter().map(|c| c.symbol as u8).collect()
+    }
+
+    #[test]
+    fn clock_seed_follows_the_clock() {
+        // Same (frozen) time -> same seed; one second later -> different.
+        assert_eq!(clock_seed(&at(5)), clock_seed(&at(5)));
+        assert_ne!(clock_seed(&at(5)), clock_seed(&at(6)));
+        // No wall clock: the uptime still varies the seed.
+        assert_ne!(
+            clock_seed(&TestClock(None, 3)),
+            clock_seed(&TestClock(None, 4))
+        );
+        assert_ne!(clock_seed(&at(5)), DEFAULT_SEED);
+    }
+
+    #[test]
+    fn clock_seeded_boards_differ_between_sessions() {
+        let a = GamesApp::with_clock("/apps/games", &at(1));
+        let b = GamesApp::with_clock("/apps/games", &at(2));
+        assert_ne!(memory_layout(&a), memory_layout(&b));
+        // Reproducible for a frozen clock and for explicit seeds.
+        let a2 = GamesApp::with_clock("/apps/games", &at(1));
+        assert_eq!(memory_layout(&a), memory_layout(&a2));
+        assert_eq!(
+            memory_layout(&GamesApp::new("/apps/games")),
+            memory_layout(&GamesApp::with_seed("/apps/games", DEFAULT_SEED))
+        );
+    }
+
+    /// Board resets used to reseed from a per-session counter (1, 2, ...),
+    /// so the Nth reset dealt the same board in every session.
+    #[test]
+    fn resets_depend_on_the_session_seed() {
+        let vfs = make_vfs();
+        let reset_layout = |seed: u64| {
+            let mut app = GamesApp::with_seed("/apps/games", seed);
+            app.handle_input(&Button::Down, &vfs);
+            app.handle_input(&Button::Confirm, &vfs);
+            assert_eq!(app.active_game(), ActiveGame::Memory);
+            app.handle_input(&Button::Select, &vfs);
+            memory_layout(&app)
+        };
+        assert_ne!(reset_layout(1), reset_layout(2));
     }
 
     #[test]
@@ -647,7 +765,7 @@ mod tests {
         app.snake.speed = 1;
         let old_head = app.snake.snake[0];
         let old_dir = app.snake.next_direction;
-        app.handle_click(10, 10, 200, 200, false, &vfs);
+        click_at(&mut app, 10, 10, 200, 200, &vfs);
         assert!(!app.handle_scroll(3, &vfs), "wheel is ignored in a game");
         assert_eq!(
             app.snake.snake[0], old_head,

@@ -8,21 +8,25 @@ use crate::types::OasisAudioCallback;
 /// Register an audio event callback.
 ///
 /// The callback fires on play, pause, stop, volume changes, and track load/unload.
-/// This lets the UE5 host handle actual audio output.
+/// This lets the UE5 host handle actual audio output. Null unregisters it.
+/// It runs synchronously inside the `oasis_audio_*` / `oasis_destroy` call
+/// that fired it and must not call back into the API with the same handle.
 ///
 /// # Safety
 ///
-/// `handle` must be valid. `cb` must be a valid function pointer.
+/// `handle` must be null or valid. `cb` must be null or a valid function
+/// pointer.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn oasis_set_audio_callback(
     handle: *mut OasisInstance,
-    cb: OasisAudioCallback,
+    cb: Option<OasisAudioCallback>,
 ) {
     ffi_guard("oasis_set_audio_callback", (), || {
         // SAFETY: Caller guarantees `handle` is valid and non-null per function safety contract.
         unsafe {
-            with_instance(handle, (), |instance| {
-                instance.audio.set_callback(cb);
+            with_instance(handle, (), |instance| match cb {
+                Some(cb) => instance.audio.set_callback(cb),
+                None => instance.audio.clear_callback(),
             });
         }
     })

@@ -270,14 +270,21 @@ pub(crate) fn parse_tail_for_moov(
         ]);
         let atom_size = if size32 == 1 && atom_start + 16 <= tail_data.len() {
             let b = &tail_data[atom_start + 8..atom_start + 16];
-            u64::from_be_bytes([b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7]]) as usize
+            let size64 = u64::from_be_bytes([b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7]]);
+            usize::try_from(size64).unwrap_or(usize::MAX)
         } else if size32 == 0 {
             tail_data.len() - atom_start
         } else {
             size32 as usize
         };
         // Validate: atom must be >=8 bytes and fit within the tail data.
-        if atom_size >= 8 && atom_start + atom_size <= tail_data.len() {
+        // (Checked add: a false-positive `moov` in media bytes can carry a
+        // huge extended size, and `atom_start + atom_size` overflowed.)
+        if atom_size >= 8
+            && atom_start
+                .checked_add(atom_size)
+                .is_some_and(|end| end <= tail_data.len())
+        {
             break Some((atom_start, atom_size));
         }
         // False positive -- keep scanning past this occurrence.

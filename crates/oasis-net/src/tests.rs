@@ -306,7 +306,6 @@ fn listener_accept_no_auth() {
 }
 
 #[test]
-#[cfg(feature = "tls-rustls")]
 fn listener_psk_auth() {
     let mut backend = StdNetworkBackend::new();
     let (port, mut listener) = bind_listener_retry(
@@ -325,14 +324,19 @@ fn listener_psk_auth() {
     // Accept connection.
     listener.poll(&mut backend);
 
-    // Read auth prompt.
+    // Read the challenge.
     let mut buf = [0u8; 256];
     let n = client.read(&mut buf).unwrap();
-    let msg = String::from_utf8_lossy(&buf[..n]);
-    assert!(msg.contains("AUTH_REQUIRED"));
+    let msg = String::from_utf8_lossy(&buf[..n]).into_owned();
+    let nonce = msg
+        .strip_prefix("AUTH_REQUIRED ")
+        .and_then(|r| r.strip_suffix('\n'))
+        .unwrap();
+    assert!(!msg.contains("secret123"));
 
-    // Send correct PSK.
-    client.write_all(b"secret123\n").unwrap();
+    // A bare PSK is no longer an accepted answer; send the HMAC.
+    let answer = format!("AUTH {}\n", crate::psk_response("secret123", nonce));
+    client.write_all(answer.as_bytes()).unwrap();
     std::thread::sleep(std::time::Duration::from_millis(50));
 
     listener.poll(&mut backend);
@@ -348,36 +352,6 @@ fn listener_psk_auth() {
     let commands = listener.poll(&mut backend);
     assert_eq!(commands.len(), 1);
     assert_eq!(commands[0].0, "help");
-
-    listener.stop();
-}
-
-#[test]
-#[cfg(not(feature = "tls-rustls"))]
-fn listener_rejects_psk_without_tls() {
-    let mut backend = StdNetworkBackend::new();
-    let (port, mut listener) = bind_listener_retry(
-        |port| ListenerConfig {
-            port,
-            psk: "secret123".to_string(),
-            max_connections: 2,
-            ..ListenerConfig::default()
-        },
-        &mut backend,
-    );
-
-    let mut client = TcpStream::connect(format!("127.0.0.1:{port}")).unwrap();
-    std::thread::sleep(std::time::Duration::from_millis(50));
-
-    // Accept connection -- should be immediately rejected.
-    listener.poll(&mut backend);
-    assert_eq!(listener.connection_count(), 0);
-
-    // Client should receive rejection message.
-    let mut buf = [0u8; 256];
-    let n = client.read(&mut buf).unwrap();
-    let msg = String::from_utf8_lossy(&buf[..n]);
-    assert!(msg.contains("AUTH_FAIL"));
 
     listener.stop();
 }
@@ -1503,8 +1477,9 @@ fn mock_listener_exit_removes_connection() {
 
 #[test]
 fn mock_listener_psk_correct_authenticates() {
-    // Client sends the correct PSK.
-    let stream = MockStream::non_blocking(b"my-secret\n");
+    // Client answers the (pinned) challenge correctly.
+    let answer = format!("AUTH {}\n", crate::psk_response("my-secret", "n0nce"));
+    let stream = MockStream::non_blocking(answer.as_bytes());
     let mut backend = MockBackend::new().with_accept_stream(Box::new(stream));
     backend.listening = true;
 
@@ -1514,24 +1489,48 @@ fn mock_listener_psk_correct_authenticates() {
     };
     let mut listener = RemoteListener::new(config);
     listener.listening = true;
+    listener.test_nonce = Some("n0nce".into());
 
-    // On first poll: accept + auth check.
-    // Without tls-rustls, PSK connections are rejected at accept time.
-    // With tls-rustls, the PSK is verified.
-    // We test the logic path that exists regardless of feature flag.
+    // On first poll: accept, challenge, verify the answer.
     let _commands = listener.poll(&mut backend);
+    assert_eq!(listener.connection_count(), 1);
+    assert_eq!(listener.auth_failures.count, 0);
+}
 
-    // The behavior depends on whether tls-rustls is enabled:
-    // - With TLS: connection accepted, AUTH_REQUIRED sent, PSK verified.
-    // - Without TLS: connection rejected immediately with AUTH_FAIL.
-    #[cfg(feature = "tls-rustls")]
-    {
-        assert_eq!(listener.connection_count(), 1);
-    }
-    #[cfg(not(feature = "tls-rustls"))]
-    {
-        assert_eq!(listener.connection_count(), 0);
-    }
+#[test]
+fn mock_listener_bare_psk_is_rejected() {
+    // Sending the key itself (the old protocol) is a failed attempt.
+    let stream = MockStream::non_blocking(b"my-secret\n");
+    let mut backend = MockBackend::new().with_accept_stream(Box::new(stream));
+    backend.listening = true;
+    let mut listener = RemoteListener::new(ListenerConfig {
+        psk: "my-secret".to_string(),
+        ..ListenerConfig::default()
+    });
+    listener.listening = true;
+    listener.test_nonce = Some("n0nce".into());
+
+    assert!(listener.poll(&mut backend).is_empty());
+    assert_eq!(listener.connection_count(), 0);
+    assert_eq!(listener.auth_failures.count, 1);
+}
+
+#[test]
+fn mock_listener_answer_for_other_nonce_is_rejected() {
+    // A response captured from an earlier session does not replay.
+    let replay = format!("AUTH {}\n", crate::psk_response("my-secret", "old-nonce"));
+    let stream = MockStream::non_blocking(replay.as_bytes());
+    let mut backend = MockBackend::new().with_accept_stream(Box::new(stream));
+    backend.listening = true;
+    let mut listener = RemoteListener::new(ListenerConfig {
+        psk: "my-secret".to_string(),
+        ..ListenerConfig::default()
+    });
+    listener.listening = true;
+    listener.test_nonce = Some("n0nce".into());
+
+    assert!(listener.poll(&mut backend).is_empty());
+    assert_eq!(listener.connection_count(), 0);
 }
 
 #[test]
@@ -1555,8 +1554,9 @@ fn mock_listener_psk_wrong_disconnects() {
 
 #[test]
 fn mock_listener_psk_auth_then_command() {
-    // Client sends PSK on first line, then a command.
-    let stream = MockStream::non_blocking(b"secret\nhello\n");
+    // Client answers the challenge on the first line, then a command.
+    let input = format!("AUTH {}\nhello\n", crate::psk_response("secret", "n0nce"));
+    let stream = MockStream::non_blocking(input.as_bytes());
     let mut backend = MockBackend::new().with_accept_stream(Box::new(stream));
     backend.listening = true;
 
@@ -1566,20 +1566,11 @@ fn mock_listener_psk_auth_then_command() {
     };
     let mut listener = RemoteListener::new(config);
     listener.listening = true;
+    listener.test_nonce = Some("n0nce".into());
 
     let commands = listener.poll(&mut backend);
-
-    #[cfg(feature = "tls-rustls")]
-    {
-        // With TLS: PSK accepted, then "hello" is a command.
-        assert_eq!(commands.len(), 1);
-        assert_eq!(commands[0].0, "hello");
-    }
-    #[cfg(not(feature = "tls-rustls"))]
-    {
-        // Without TLS: connection rejected at accept time, no commands.
-        assert!(commands.is_empty());
-    }
+    assert_eq!(commands.len(), 1);
+    assert_eq!(commands[0].0, "hello");
 }
 
 #[test]
@@ -1871,21 +1862,6 @@ fn mock_client_auth_fail_clears_auth_started() {
 }
 
 #[test]
-#[cfg(not(feature = "tls-rustls"))]
-fn mock_client_connect_with_psk_without_tls_errors() {
-    let stream = Box::new(MockStream::non_blocking(b""));
-    let mut backend = MockBackend::new().with_connect_stream(stream);
-    let mut client = RemoteClient::new();
-
-    let result = client.connect(&mut backend, "10.0.0.1", 9000, Some("secret"));
-    assert!(result.is_err());
-    // Should mention TLS.
-    if let Err(OasisError::Backend(msg)) = result {
-        assert!(msg.to_string().contains("TLS"));
-    }
-}
-
-#[test]
 fn mock_listener_auth_failure_recorded() {
     // Wrong PSK should increment auth failure count.
     let stream = MockStream::non_blocking(b"wrong\n");
@@ -1902,17 +1878,7 @@ fn mock_listener_auth_failure_recorded() {
     assert_eq!(listener.auth_failures.count, 0);
     listener.poll(&mut backend);
 
-    // On non-TLS builds, the PSK rejection happens at accept time
-    // (AUTH_FAIL sent, connection closed), but the auth failure is still
-    // counted in the removal loop.
-    #[cfg(feature = "tls-rustls")]
-    {
-        assert_eq!(listener.auth_failures.count, 1);
-    }
-    // On non-TLS builds, the connection is rejected at accept (never added
-    // to connections vec), so the to_remove loop doesn't see it.
-    // The auth failure counter is only incremented for connections that
-    // were actually added and then removed in AwaitingAuth state.
+    assert_eq!(listener.auth_failures.count, 1);
 }
 
 #[test]

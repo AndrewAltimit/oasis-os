@@ -23,6 +23,8 @@ fn hex_u32(val: u32, out: &mut [u8]) {
 }
 
 fn devlog(msg: &[u8]) {
+    // SAFETY: LOG_FILE is NUL-terminated; writes pass live slices' ptr/len; the fd
+    // is used and closed only after a successful open.
     unsafe {
         let fd = psp::sys::sceIoOpen(
             LOG_FILE.as_ptr(),
@@ -46,6 +48,9 @@ fn devlog(msg: &[u8]) {
 fn take_screenshot() {
     const FB_SIZE: usize = 512 * 272 * 4;
     let fb_ptr = 0x44000000u32 as *const u8;
+    // SAFETY: 0x44000000 is the uncached VRAM mirror (2 MiB, always mapped in
+    // kernel mode) and FB_SIZE (one 512-stride 32bpp frame) stays inside it;
+    // sceIoWrite only reads from it.
     unsafe {
         let fd = psp::sys::sceIoOpen(
             b"ms0:/seplugins/.devloop_screenshot.raw\0".as_ptr(),
@@ -73,6 +78,7 @@ fn launch_eboot(path: &[u8]) {
         (b"SystemCtrlForKernel\0", b"SystemCtrlForKernel\0"),
     ];
     for &(m, l) in modules {
+        // SAFETY: NUL-terminated name literals; find_function only reads them.
         if let Some(fp) =
             unsafe { psp::hook::find_function(m.as_ptr(), l.as_ptr(), NID_LOAD_EXEC_VSH) }
         {
@@ -100,8 +106,12 @@ fn launch_eboot(path: &[u8]) {
                 unk5: 0,
             };
             type F = unsafe extern "C" fn(i32, *const u8, *mut Param) -> i32;
+            // SAFETY: `fp` is the non-null sctrlKernelLoadExecVSH export, C signature
+            // `int (int apitype, const char *file, SceKernelLoadExecVSHParam *)` = `F`.
             let f: F = unsafe { core::mem::transmute(fp) };
             devlog(b"[DEV] launching...");
+            // SAFETY: `path` is NUL-terminated (built by the caller); `param` is a
+            // correctly sized param block whose pointers outlive the call.
             unsafe { f(0x141, path.as_ptr(), &mut param) };
             return;
         }
@@ -114,6 +124,8 @@ fn launch_eboot(path: &[u8]) {
 // -----------------------------------------------------------------------
 
 pub fn start() {
+    // SAFETY: NUL-terminated thread name, `devloop_thread` has the thread-entry
+    // ABI, and it is started with an empty argument block.
     unsafe {
         let thid = psp::sys::sceKernelCreateThread(
             b"OasisDev\0".as_ptr(),
@@ -173,14 +185,24 @@ unsafe extern "C" fn devloop_thread(_: usize, _: *mut c_void) -> i32 {
         let p_send = resolve!(0x7AA671BC, inet);
         let p_close = resolve!(0x8D7284EA, inet);
 
-        let ok = !p_net_init.is_null()
-            && !p_inet_init.is_null()
-            && !p_apctl_init.is_null()
-            && !p_connect.is_null()
-            && !p_socket.is_null()
-            && !p_bind.is_null()
-            && !p_accept.is_null()
-            && !p_recv.is_null();
+        // Every pointer is transmuted to a non-nullable fn pointer below, so all
+        // of them must have resolved (a null fn pointer is UB, not a no-op).
+        let ok = [
+            p_net_init,
+            p_inet_init,
+            p_apctl_init,
+            p_connect,
+            p_get_state,
+            p_socket,
+            p_bind,
+            p_listen,
+            p_accept,
+            p_recv,
+            p_send,
+            p_close,
+        ]
+        .iter()
+        .all(|p| !p.is_null());
 
         if !ok {
             devlog(b"[DEV] net resolve FAILED");

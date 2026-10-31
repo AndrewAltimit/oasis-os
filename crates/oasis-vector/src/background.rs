@@ -227,7 +227,7 @@ impl BackgroundScene {
         let rotation = if reduced_motion || anim.rotate_speed == 0.0 {
             0.0
         } else {
-            clock.time_s * anim.rotate_speed + anim.phase_offset
+            clock.angle(anim.rotate_speed, anim.phase_offset)
         };
 
         let pulse_alpha = if reduced_motion || anim.pulse_speed == 0.0 {
@@ -268,12 +268,12 @@ impl BackgroundScene {
                 let drift_x = if reduced_motion {
                     0.0
                 } else {
-                    clock.time_s * anim.drift_x
+                    clock.time_s() * anim.drift_x
                 };
                 let drift_y = if reduced_motion {
                     0.0
                 } else {
-                    clock.time_s * anim.drift_y
+                    clock.time_s() * anim.drift_y
                 };
                 backgrounds::glass_shard(points, w, h, color, drift_x, drift_y)
             },

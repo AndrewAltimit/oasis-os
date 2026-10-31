@@ -11,7 +11,8 @@ use oasis_types::error::{OasisError, Result};
 
 use crate::jobs::JobManager;
 use crate::types::{
-    Command, CommandOutput, Environment, MAX_CALL_DEPTH, MAX_HISTORY, ShellFunction,
+    Command, CommandOutput, Environment, MAX_CALL_DEPTH, MAX_COMMANDS_PER_LINE, MAX_HISTORY,
+    MAX_VAR_LEN, MAX_VARIABLES, ShellFunction,
 };
 
 /// Registry of available commands with dispatch.
@@ -44,6 +45,9 @@ pub struct CommandRegistry {
     pub(crate) jobs: RefCell<JobManager>,
     /// Nesting depth of `run <script>` calls.
     pub(crate) script_depth: Cell<usize>,
+    /// Simple commands run since the current top-level line started (see
+    /// [`MAX_COMMANDS_PER_LINE`]).
+    pub(crate) commands_run: Cell<u64>,
 }
 
 impl CommandRegistry {
@@ -68,6 +72,7 @@ impl CommandRegistry {
             exec_depth: Cell::new(0),
             jobs: RefCell::new(JobManager::new()),
             script_depth: Cell::new(0),
+            commands_run: Cell::new(0),
         }
     }
 
@@ -96,6 +101,60 @@ impl CommandRegistry {
         self.variables
             .borrow_mut()
             .insert(name.to_string(), value.to_string());
+    }
+
+    /// Set a variable on behalf of the user (`set`, `local`, `for`):
+    /// like [`set_variable`](Self::set_variable) but refuses values over
+    /// 64 KiB and new names beyond 4096 variables, so a script cannot grow
+    /// the shell's memory without bound.
+    pub(crate) fn assign_variable(&self, name: &str, value: &str) -> Result<()> {
+        if value.len() > MAX_VAR_LEN {
+            return Err(OasisError::Command(
+                format!(
+                    "{name}: value too long ({} bytes, max {MAX_VAR_LEN})",
+                    value.len()
+                )
+                .into(),
+            ));
+        }
+        let vars = self.variables.borrow();
+        if vars.len() >= MAX_VARIABLES && !vars.contains_key(name) {
+            return Err(OasisError::Command(
+                format!("{name}: too many variables (max {MAX_VARIABLES})").into(),
+            ));
+        }
+        drop(vars);
+        self.set_variable(name, value);
+        Ok(())
+    }
+
+    /// Start a fresh per-line command budget if no command is running
+    /// (every host entry point -- `execute`, scripts, jobs, inline control
+    /// flow -- calls this, so the budget never carries over between lines).
+    pub(crate) fn begin_top_level(&self) {
+        if self.exec_depth.get() == 0 {
+            self.commands_run.set(0);
+        }
+    }
+
+    /// Count one simple command against the per-line budget; errors once
+    /// [`MAX_COMMANDS_PER_LINE`] is exceeded.
+    pub(crate) fn charge_command(&self) -> Result<()> {
+        let n = self.commands_run.get().saturating_add(1);
+        self.commands_run.set(n);
+        if n > MAX_COMMANDS_PER_LINE {
+            return Err(OasisError::Command(
+                format!("command limit exceeded ({MAX_COMMANDS_PER_LINE} commands in one line)")
+                    .into(),
+            ));
+        }
+        Ok(())
+    }
+
+    /// Whether the current line has used up its command budget (loops stop
+    /// iterating once it has).
+    pub(crate) fn over_budget(&self) -> bool {
+        self.commands_run.get() > MAX_COMMANDS_PER_LINE
     }
 
     /// Get a shell variable value.
@@ -212,7 +271,43 @@ impl CommandRegistry {
         }
         self.call_depth.set(depth + 1);
 
-        // Save current positional args and set new ones.
+        let result = self.with_positional_args(name, args, || {
+            // Push a new local variable scope.
+            self.local_scopes.borrow_mut().push(HashMap::new());
+
+            // Execute body as a chain of commands.
+            let result = self.execute(func.body.trim(), env);
+
+            // Clear the return flag so it doesn't propagate to the caller.
+            self.return_flag.set(false);
+
+            // Pop local variable scope and restore saved values.
+            if let Some(scope) = self.local_scopes.borrow_mut().pop() {
+                for (name, saved) in scope {
+                    match saved {
+                        Some(v) => self.set_variable(&name, &v),
+                        None => self.unset_variable(&name),
+                    }
+                }
+            }
+            result
+        });
+
+        // Restore call depth.
+        self.call_depth.set(depth);
+
+        result
+    }
+
+    /// Run `f` with the positional parameters `$0` = `name`, `$1`..`$n` =
+    /// `args` and `$#` = n, restoring the caller's parameters afterwards
+    /// (functions and `run <script> [args...]`).
+    pub(crate) fn with_positional_args<R>(
+        &self,
+        name: &str,
+        args: &[&str],
+        f: impl FnOnce() -> R,
+    ) -> R {
         // Determine prior arg count so we save/restore the full range.
         let saved_argc = self.get_variable("#");
         let prior_count: usize = saved_argc
@@ -228,7 +323,6 @@ impl CommandRegistry {
             })
             .collect();
 
-        // Set positional args: $0 = function name, $1..$n = args.
         // Unset any prior positional args beyond the new arg count.
         self.set_variable("0", name);
         for (i, arg) in args.iter().enumerate() {
@@ -239,26 +333,8 @@ impl CommandRegistry {
         }
         self.set_variable("#", &args.len().to_string());
 
-        // Push a new local variable scope.
-        self.local_scopes.borrow_mut().push(HashMap::new());
+        let result = f();
 
-        // Execute body as a chain of commands.
-        let result = self.execute(func.body.trim(), env);
-
-        // Clear the return flag so it doesn't propagate to the caller.
-        self.return_flag.set(false);
-
-        // Pop local variable scope and restore saved values.
-        if let Some(scope) = self.local_scopes.borrow_mut().pop() {
-            for (name, saved) in scope {
-                match saved {
-                    Some(v) => self.set_variable(&name, &v),
-                    None => self.unset_variable(&name),
-                }
-            }
-        }
-
-        // Restore previous positional args.
         for (key, old_val) in saved_args {
             match old_val {
                 Some(v) => self.set_variable(&key, &v),
@@ -269,10 +345,6 @@ impl CommandRegistry {
             Some(v) => self.set_variable("#", &v),
             None => self.unset_variable("#"),
         }
-
-        // Restore call depth.
-        self.call_depth.set(depth);
-
         result
     }
 
@@ -324,110 +396,6 @@ impl CommandRegistry {
                 hist.remove(0);
             }
         }
-    }
-
-    // -- History expansion --
-
-    pub(crate) fn expand_history(&self, input: &str) -> Result<String> {
-        if input == "!!" {
-            let hist = self.history.borrow();
-            return hist
-                .last()
-                .cloned()
-                .ok_or_else(|| OasisError::Command("!!: no previous command".into()));
-        }
-        if let Some(n_str) = input.strip_prefix('!')
-            && let Ok(n) = n_str.parse::<usize>()
-        {
-            let hist = self.history.borrow();
-            if n == 0 || n > hist.len() {
-                return Err(OasisError::Command(format!("!{n}: event not found").into()));
-            }
-            return Ok(hist[n - 1].clone());
-        }
-        Ok(input.to_string())
-    }
-
-    // -- Variable expansion --
-
-    pub(crate) fn expand_variables(&self, input: &str, cwd: &str) -> String {
-        let vars = self.variables.borrow();
-        let mut result = String::with_capacity(input.len());
-        let chars: Vec<char> = input.chars().collect();
-        let mut i = 0;
-
-        while i < chars.len() {
-            if chars[i] == '$' && i + 1 < chars.len() {
-                // Check for $? (last exit code) and $# (arg count).
-                if chars[i + 1] == '?' || chars[i + 1] == '#' {
-                    let name = chars[i + 1].to_string();
-                    let value = self.resolve_var(&name, &vars, cwd);
-                    result.push_str(&value);
-                    i += 2;
-                    continue;
-                }
-                // Check for ${VAR} syntax.
-                if chars[i + 1] == '{'
-                    && let Some(end) = chars[i + 2..].iter().position(|&c| c == '}')
-                {
-                    let name: String = chars[i + 2..i + 2 + end].iter().collect();
-                    let value = self.resolve_var(&name, &vars, cwd);
-                    result.push_str(&value);
-                    i += 3 + end;
-                    continue;
-                }
-                // Bare $VAR.
-                let start = i + 1;
-                let mut end = start;
-                while end < chars.len() && (chars[end].is_alphanumeric() || chars[end] == '_') {
-                    end += 1;
-                }
-                if end > start {
-                    let name: String = chars[start..end].iter().collect();
-                    let value = self.resolve_var(&name, &vars, cwd);
-                    result.push_str(&value);
-                    i = end;
-                    continue;
-                }
-                result.push('$');
-                i += 1;
-            } else {
-                result.push(chars[i]);
-                i += 1;
-            }
-        }
-        result
-    }
-
-    fn resolve_var(&self, name: &str, vars: &HashMap<String, String>, cwd: &str) -> String {
-        match name {
-            "CWD" => cwd.to_string(),
-            // The status of the previous command (the chain executor
-            // updates `?` once a pipeline finishes).
-            "?" => vars
-                .get("?")
-                .cloned()
-                .unwrap_or_else(|| self.last_exit_code.get().to_string()),
-            _ => vars.get(name).cloned().unwrap_or_default(),
-        }
-    }
-
-    // -- Alias expansion --
-
-    pub(crate) fn expand_alias(&self, mut tokens: Vec<String>) -> Vec<String> {
-        if tokens.is_empty() {
-            return tokens;
-        }
-        let aliases = self.aliases.borrow();
-        if let Some(expansion) = aliases.get(&tokens[0]) {
-            // Replace the first token with the alias expansion.
-            let expanded_tokens = match crate::expander::tokenize(expansion) {
-                Ok(t) => t,
-                Err(_) => return tokens,
-            };
-            tokens.splice(0..1, expanded_tokens);
-        }
-        tokens
     }
 }
 

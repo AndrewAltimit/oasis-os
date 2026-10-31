@@ -7,8 +7,8 @@ use web_sys::{CanvasRenderingContext2d, HtmlCanvasElement, ImageData};
 
 use oasis_rasterize::GlyphCacheKey;
 use oasis_types::backend::{
-    BlendMode, Color, RenderTargetId, SdiAlpha, SdiCore, SdiRenderTarget, SdiText, SdiVector,
-    TextureId, render_target_not_found, texture_not_found, validate_rgba_data,
+    BlendMode, Color, RenderTargetId, SdiCore, SdiRenderTarget, SdiText, SdiVector, TextureId,
+    clamp_sweep, render_target_not_found, texture_not_found, validate_rgba_data,
 };
 use oasis_types::error::{OasisError, Result};
 use oasis_types::geometry::ClipRect;
@@ -22,6 +22,14 @@ use crate::font;
 
 pub(crate) fn js_err<E: std::fmt::Debug>(e: E) -> OasisError {
     OasisError::Backend(format!("{e:?}").into())
+}
+
+/// Whether a thrown JS value is a `SecurityError` `DOMException`.
+fn is_security_error(e: &wasm_bindgen::JsValue) -> bool {
+    js_sys::Reflect::get(e, &wasm_bindgen::JsValue::from_str("name"))
+        .ok()
+        .and_then(|name| name.as_string())
+        .is_some_and(|name| name == "SecurityError")
 }
 
 fn get_2d_context(canvas: &HtmlCanvasElement) -> Result<CanvasRenderingContext2d> {
@@ -51,6 +59,14 @@ pub(crate) fn cached_css_color(cache: &mut HashMap<u32, String>, c: Color) -> &s
 
 pub(crate) struct TextureData {
     pub(crate) canvas: HtmlCanvasElement,
+}
+
+/// The reusable offscreen canvas tinted blits compose in (see
+/// `WasmBackend::blit_tinted_region`). It only grows, so steady-state
+/// tinting allocates nothing.
+pub(crate) struct TintScratch {
+    pub(crate) canvas: HtmlCanvasElement,
+    pub(crate) ctx: CanvasRenderingContext2d,
 }
 
 // ---------------------------------------------------------------------------
@@ -107,6 +123,8 @@ pub struct WasmBackend {
     pub(crate) current_render_target: Option<u64>,
     /// Monotonic counter for render-target ids.
     next_render_target_id: u64,
+    /// Scratch canvas for tinted blits, created on first use.
+    pub(crate) tint_scratch: Option<TintScratch>,
 }
 
 impl WasmBackend {
@@ -142,6 +160,7 @@ impl WasmBackend {
             render_target_bind_stack: Vec::new(),
             current_render_target: None,
             next_render_target_id: 1,
+            tint_scratch: None,
         })
     }
 
@@ -253,6 +272,27 @@ impl WasmBackend {
     }
 
     /// Pre-render RGBA data onto an offscreen canvas (used at load_texture time).
+    /// The tint scratch canvas, at least `w` x `h` pixels.
+    pub(crate) fn tint_scratch(&mut self, w: u32, h: u32) -> Result<&TintScratch> {
+        let fits = self
+            .tint_scratch
+            .as_ref()
+            .is_some_and(|s| s.canvas.width() >= w && s.canvas.height() >= h);
+        if !fits {
+            let (ow, oh) = self
+                .tint_scratch
+                .as_ref()
+                .map_or((0, 0), |s| (s.canvas.width(), s.canvas.height()));
+            let canvas = self.make_offscreen(w.max(ow), h.max(oh))?;
+            let ctx = get_2d_context(&canvas)?;
+            ctx.set_image_smoothing_enabled(false);
+            self.tint_scratch = Some(TintScratch { canvas, ctx });
+        }
+        self.tint_scratch
+            .as_ref()
+            .ok_or_else(|| OasisError::Backend("tint scratch canvas missing".into()))
+    }
+
     fn rgba_to_offscreen(&self, width: u32, height: u32, rgba: &[u8]) -> Result<HtmlCanvasElement> {
         let offscreen = self.make_offscreen(width, height)?;
         let off_ctx = get_2d_context(&offscreen)?;
@@ -343,6 +383,10 @@ impl WasmBackend {
 
 impl SdiCore for WasmBackend {
     fn init(&mut self, width: u32, height: u32) -> Result<()> {
+        // Resize the page canvas, not a bound render target.
+        while !self.render_target_bind_stack.is_empty() {
+            self.unbind_render_target()?;
+        }
         self.width = width;
         self.height = height;
         // Resizing a canvas resets its whole 2D context state (save stack
@@ -355,6 +399,7 @@ impl SdiCore for WasmBackend {
         self.glyph_access.clear();
         self.color_cache.clear();
         self.gradient_cache.clear();
+        self.tint_scratch = None;
         Ok(())
     }
 
@@ -429,8 +474,10 @@ impl SdiCore for WasmBackend {
     }
 
     fn destroy_texture(&mut self, tex: TextureId) -> Result<()> {
-        self.textures.remove(&tex.0);
-        Ok(())
+        self.textures
+            .remove(&tex.0)
+            .map(drop)
+            .ok_or_else(|| texture_not_found(tex.0))
     }
 
     /// Absolute and replacing (SdiCore contract). This used to translate
@@ -454,14 +501,21 @@ impl SdiCore for WasmBackend {
     }
 
     fn read_pixels(&self, x: i32, y: i32, w: u32, h: u32) -> Result<Vec<u8>> {
+        let pixels = w as usize * h as usize;
+        if pixels == 0 {
+            // getImageData throws IndexSizeError for an empty rect.
+            return Ok(Vec::new());
+        }
         // getImageData throws SecurityError if the canvas is tainted by a
-        // cross-origin video frame.  Return opaque black in that case.
+        // cross-origin video frame: return opaque black in that case. Any
+        // other failure is a real error.
         match self
             .ctx
             .get_image_data(x as f64, y as f64, w as f64, h as f64)
         {
             Ok(data) => Ok(data.data().to_vec()),
-            Err(_) => Ok([0, 0, 0, 255].repeat((w * h) as usize)),
+            Err(e) if is_security_error(&e) => Ok([0, 0, 0, 255].repeat(pixels)),
+            Err(e) => Err(js_err(e)),
         }
     }
 
@@ -479,13 +533,7 @@ impl SdiCore for WasmBackend {
         self.gradient_cache.clear();
         Ok(())
     }
-}
 
-// -------------------------------------------------------------------
-// SdiAlpha: Alpha and viewport
-// -------------------------------------------------------------------
-
-impl SdiAlpha for WasmBackend {
     /// The bound surface: the page canvas, or the bound render target.
     fn viewport_size(&self) -> (u32, u32) {
         (self.width, self.height)
@@ -549,13 +597,17 @@ impl SdiVector for WasmBackend {
         let (tcx, tcy) = self.translate(cx, cy);
         self.ctx.begin_path();
         self.ctx.move_to(tcx, tcy);
+        // One turn at most, like the trait defaults, and a negative sweep
+        // runs anticlockwise (Canvas `arc` would wrap it clockwise).
+        let end_angle = clamp_sweep(start_angle, end_angle);
         self.ctx
-            .arc(
+            .arc_with_anticlockwise(
                 tcx,
                 tcy,
                 f64::from(radius),
                 f64::from(start_angle),
                 f64::from(end_angle),
+                end_angle < start_angle,
             )
             .map_err(js_err)?;
         self.ctx.close_path();
@@ -580,13 +632,17 @@ impl SdiVector for WasmBackend {
         }
         let (tcx, tcy) = self.translate(cx, cy);
         self.ctx.begin_path();
+        // One turn at most, like the trait defaults, and a negative sweep
+        // runs anticlockwise (Canvas `arc` would wrap it clockwise).
+        let end_angle = clamp_sweep(start_angle, end_angle);
         self.ctx
-            .arc(
+            .arc_with_anticlockwise(
                 tcx,
                 tcy,
                 f64::from(radius),
                 f64::from(start_angle),
                 f64::from(end_angle),
+                end_angle < start_angle,
             )
             .map_err(js_err)?;
         let css = cached_css_color(&mut self.color_cache, color);

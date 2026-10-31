@@ -270,3 +270,69 @@ fn inexact_scenarios_document_why() {
         }
     }
 }
+
+/// Render-target misuse (re-binding the bound target, compositing or
+/// destroying it, stale ids) is rejected the same way on SDL and the
+/// software framebuffer.
+#[test]
+fn render_target_misuse_is_rejected() {
+    let sdl_bad = with_sdl(CANVAS_W, CANVAS_H, |sdl| {
+        conformance::render_target_misuse(sdl as &mut dyn SdiBackend)
+    });
+    let mut ue5 = Ue5Backend::new(CANVAS_W, CANVAS_H);
+    let ue5_bad = conformance::render_target_misuse(&mut ue5 as &mut dyn SdiBackend);
+    assert!(
+        sdl_bad.is_empty() && ue5_bad.is_empty(),
+        "sdl: {sdl_bad:?}\nue5: {ue5_bad:?}"
+    );
+}
+
+/// Destroying an unknown or already-destroyed texture is an error
+/// (`TextureNotFound`) on SDL and the software framebuffer, as destroying
+/// an unknown render target already was (it used to succeed silently).
+#[test]
+fn texture_misuse_is_rejected() {
+    let sdl_bad = with_sdl(CANVAS_W, CANVAS_H, |sdl| {
+        conformance::texture_misuse(sdl as &mut dyn SdiBackend)
+    });
+    let mut ue5 = Ue5Backend::new(CANVAS_W, CANVAS_H);
+    let ue5_bad = conformance::texture_misuse(&mut ue5 as &mut dyn SdiBackend);
+    assert!(
+        sdl_bad.is_empty() && ue5_bad.is_empty(),
+        "sdl: {sdl_bad:?}\nue5: {ue5_bad:?}"
+    );
+}
+
+/// `read_pixels` while a render target is bound reads the target in full,
+/// also past the window's width (it used to clip to the window size).
+#[test]
+fn read_pixels_reads_a_bound_target_wider_than_the_window() {
+    let px = with_sdl(64, 32, |sdl| {
+        use oasis_types::backend::SdiRenderTarget;
+        let rt = sdl.create_render_target(200, 20).expect("create");
+        sdl.bind_render_target(rt).expect("bind");
+        sdl.clear(Color::rgb(10, 200, 30)).expect("clear");
+        let px = sdl.read_pixels(150, 5, 1, 1).expect("read");
+        sdl.unbind_render_target().expect("unbind");
+        sdl.destroy_render_target(rt).expect("destroy");
+        px
+    });
+    assert_eq!(&px[..3], &[10, 200, 30]);
+}
+
+/// A window resize drops the clip on the SDL side too, not only in the
+/// clip stack (draws stayed clipped while `current_clip_rect` was `None`).
+#[test]
+fn window_resize_removes_the_applied_clip() {
+    let px = with_sdl(64, 32, |sdl| {
+        use oasis_types::backend::SdiClipTransform;
+        sdl.push_clip_rect(0, 0, 4, 4).expect("clip");
+        sdl.set_window_size(80, 40).expect("resize");
+        assert_eq!(sdl.current_clip_rect(), None);
+        sdl.clear(Color::BLACK).expect("clear");
+        sdl.fill_rect(10, 10, 4, 4, Color::rgb(250, 0, 0))
+            .expect("fill");
+        sdl.read_pixels(11, 11, 1, 1).expect("read")
+    });
+    assert_eq!(&px[..3], &[250, 0, 0]);
+}

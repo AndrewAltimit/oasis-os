@@ -1,4 +1,3 @@
-use oasis_sdi::SdiRegistry;
 use oasis_skin::active_theme::ActiveTheme;
 use oasis_types::backend::Color;
 
@@ -27,7 +26,7 @@ pub(crate) const VOLUME_BAR_WIDE_THRESHOLD: u32 = 140;
 ///
 /// Returns the long form ("VOLUME: X%", offset 75) when the bar is at
 /// least `VOLUME_BAR_WIDE_THRESHOLD` wide, otherwise the short form
-/// ("VOL X%", offset 45). Shared between SDI and windowed render paths.
+/// ("VOL X%", offset 45).
 pub(crate) fn volume_bar_label(bar_w: u32, volume: u8) -> (String, i32) {
     if bar_w >= VOLUME_BAR_WIDE_THRESHOLD {
         (format!("VOLUME: {volume}%"), 75)
@@ -136,35 +135,6 @@ impl TvGuideColors {
     }
 }
 
-/// Pre-computed SDI object name strings (avoids per-frame `format!()` calls).
-pub(crate) struct SdiNames {
-    pub(crate) time_cols: [String; VISIBLE_TIME_SLOTS],
-    pub(crate) time_bgs: [String; VISIBLE_TIME_SLOTS],
-    pub(crate) row_bgs: [String; VISIBLE_ROWS],
-    pub(crate) row_labels: [String; VISIBLE_ROWS],
-    pub(crate) row_lines: [String; VISIBLE_ROWS],
-    pub(crate) row_cells: [[String; MAX_CELLS]; VISIBLE_ROWS],
-    pub(crate) row_cell_bgs: [[String; MAX_CELLS]; VISIBLE_ROWS],
-}
-
-impl SdiNames {
-    pub(crate) fn new() -> Self {
-        Self {
-            time_cols: std::array::from_fn(|col| format!("tv_time_{col}")),
-            time_bgs: std::array::from_fn(|col| format!("tv_timebg_{col}")),
-            row_bgs: std::array::from_fn(|row| format!("tv_row_{row}_bg")),
-            row_labels: std::array::from_fn(|row| format!("tv_row_{row}_label")),
-            row_lines: std::array::from_fn(|row| format!("tv_row_{row}_line")),
-            row_cells: std::array::from_fn(|row| {
-                std::array::from_fn(|ci| format!("tv_row_{row}_cell_{ci}"))
-            }),
-            row_cell_bgs: std::array::from_fn(|row| {
-                std::array::from_fn(|ci| format!("tv_row_{row}_cbg_{ci}"))
-            }),
-        }
-    }
-}
-
 /// Volume bar layout rectangle (x, y, w, h) relative to content origin.
 pub(crate) struct VolumeBarRect {
     pub(crate) x: i32,
@@ -203,13 +173,6 @@ pub(crate) fn volume_bar_rect(cw: u32, ch: u32, expanded: bool) -> VolumeBarRect
             w: bar_w,
             h: bar_h,
         }
-    }
-}
-
-/// Ensure an SDI object exists.
-pub(crate) fn ensure_obj(sdi: &mut SdiRegistry, name: &str) {
-    if !sdi.contains(name) {
-        sdi.create(name);
     }
 }
 
@@ -457,50 +420,6 @@ mod tests {
     }
 
     // -- SdiNames --
-
-    #[test]
-    fn sdi_names_correct_format() {
-        let names = SdiNames::new();
-        assert_eq!(names.time_cols[0], "tv_time_0");
-        assert_eq!(
-            names.time_cols[VISIBLE_TIME_SLOTS - 1],
-            format!("tv_time_{}", VISIBLE_TIME_SLOTS - 1)
-        );
-        assert_eq!(names.row_bgs[0], "tv_row_0_bg");
-        assert_eq!(names.row_labels[2], "tv_row_2_label");
-        assert_eq!(names.row_cells[1][3], "tv_row_1_cell_3");
-        assert_eq!(names.row_cell_bgs[0][0], "tv_row_0_cbg_0");
-    }
-
-    #[test]
-    fn sdi_names_array_lengths() {
-        let names = SdiNames::new();
-        assert_eq!(names.time_cols.len(), VISIBLE_TIME_SLOTS);
-        assert_eq!(names.time_bgs.len(), VISIBLE_TIME_SLOTS);
-        assert_eq!(names.row_bgs.len(), VISIBLE_ROWS);
-        assert_eq!(names.row_labels.len(), VISIBLE_ROWS);
-        assert_eq!(names.row_lines.len(), VISIBLE_ROWS);
-        assert_eq!(names.row_cells.len(), VISIBLE_ROWS);
-        assert_eq!(names.row_cells[0].len(), MAX_CELLS);
-    }
-
-    // -- ensure_obj --
-
-    #[test]
-    fn ensure_obj_creates_if_missing() {
-        let mut sdi = SdiRegistry::new();
-        assert!(!sdi.contains("test_obj"));
-        ensure_obj(&mut sdi, "test_obj");
-        assert!(sdi.contains("test_obj"));
-    }
-
-    #[test]
-    fn ensure_obj_idempotent() {
-        let mut sdi = SdiRegistry::new();
-        ensure_obj(&mut sdi, "test_obj");
-        ensure_obj(&mut sdi, "test_obj"); // should not panic
-        assert!(sdi.contains("test_obj"));
-    }
 
     // -- constants --
 

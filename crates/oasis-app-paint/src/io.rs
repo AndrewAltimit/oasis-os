@@ -12,19 +12,6 @@ pub const PICTURES_DIR: &str = "/home/user/pictures";
 /// Largest image side Paint will open (matches `PaintApp::new_canvas`).
 pub(crate) const MAX_SIDE: u32 = 256;
 
-/// Create `dir` and all missing ancestors.
-pub(crate) fn ensure_dir(vfs: &mut dyn Vfs, dir: &str) -> Result<(), String> {
-    let mut cur = String::new();
-    for part in dir.split('/').filter(|p| !p.is_empty()) {
-        cur.push('/');
-        cur.push_str(part);
-        if !vfs.exists(&cur) {
-            vfs.mkdir(&cur).map_err(|e| e.to_string())?;
-        }
-    }
-    Ok(())
-}
-
 /// First free `PICTURES_DIR/paint_NNN.bmp` path (never overwrites).
 pub(crate) fn unique_save_path(vfs: &dyn Vfs) -> String {
     let mut n = 1u32;
@@ -163,7 +150,7 @@ mod tests {
     #[test]
     fn unique_paths_and_listing() {
         let mut vfs = MemoryVfs::new();
-        ensure_dir(&mut vfs, PICTURES_DIR).expect("mkdir");
+        oasis_app_core::vfs_util::ensure_dir(&mut vfs, PICTURES_DIR).expect("mkdir");
         let first = unique_save_path(&vfs);
         assert_eq!(first, format!("{PICTURES_DIR}/paint_001.bmp"));
         vfs.write(&first, b"x").expect("write");

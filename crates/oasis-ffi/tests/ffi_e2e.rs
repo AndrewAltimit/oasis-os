@@ -169,9 +169,9 @@ fn full_lifecycle_like_a_host() {
     let os = create_classic(W, H);
     // SAFETY: valid handle; callback functions live for the whole program.
     unsafe {
-        oasis_register_callback(os.0, OASIS_CB_COMMAND_EXEC, on_os_event);
-        oasis_register_callback(os.0, OASIS_CB_APP_LAUNCH, on_os_event);
-        oasis_set_audio_callback(os.0, on_audio_event);
+        oasis_register_callback(os.0, OASIS_CB_COMMAND_EXEC, Some(on_os_event));
+        oasis_register_callback(os.0, OASIS_CB_APP_LAUNCH, Some(on_os_event));
+        oasis_set_audio_callback(os.0, Some(on_audio_event));
     }
     take_os_events();
     take_audio_events();
@@ -283,7 +283,7 @@ fn default_instance_renders_and_honours_dirty_contract() {
 fn pointer_click_on_a_dashboard_icon_launches_it() {
     let os = create_classic(W, H);
     // SAFETY: valid handle.
-    unsafe { oasis_register_callback(os.0, OASIS_CB_APP_LAUNCH, on_os_event) };
+    unsafe { oasis_register_callback(os.0, OASIS_CB_APP_LAUNCH, Some(on_os_event)) };
     tick(&os, 0.016);
     // Which app is selected before clicking (Confirm launches it).
     take_os_events();
@@ -478,7 +478,7 @@ fn audio_edge_cases() {
     let os = create_default();
     // SAFETY: valid handle; callback lives forever.
     unsafe {
-        oasis_set_audio_callback(os.0, on_audio_event);
+        oasis_set_audio_callback(os.0, Some(on_audio_event));
         take_audio_events();
         // Nothing loaded: play of an unknown id and resume fail.
         assert!(!oasis_audio_play(os.0, 12345));
@@ -519,8 +519,8 @@ fn null_pointers_are_rejected_everywhere() {
         oasis_free_string(std::ptr::null_mut());
         oasis_set_vfs_root(null, std::ptr::null());
         oasis_add_vfs_file(null, s.as_ptr(), b"x".as_ptr(), 1);
-        oasis_register_callback(null, OASIS_CB_APP_LAUNCH, on_os_event);
-        oasis_set_audio_callback(null, on_audio_event);
+        oasis_register_callback(null, OASIS_CB_APP_LAUNCH, Some(on_os_event));
+        oasis_set_audio_callback(null, Some(on_audio_event));
         assert_eq!(oasis_audio_load(null, b"x".as_ptr(), 1), u64::MAX);
     }
     let os = create_default();
@@ -532,8 +532,8 @@ fn null_pointers_are_rejected_everywhere() {
         oasis_add_vfs_file(os.0, s.as_ptr(), std::ptr::null(), 5);
         assert!(!oasis_get_buffer(os.0, std::ptr::null_mut(), std::ptr::null_mut()).is_null());
         // Registering the same event twice replaces the callback (no double fire).
-        oasis_register_callback(os.0, OASIS_CB_COMMAND_EXEC, on_os_event);
-        oasis_register_callback(os.0, OASIS_CB_COMMAND_EXEC, on_os_event);
+        oasis_register_callback(os.0, OASIS_CB_COMMAND_EXEC, Some(on_os_event));
+        oasis_register_callback(os.0, OASIS_CB_COMMAND_EXEC, Some(on_os_event));
     }
     take_os_events();
     command(&os, "echo x");

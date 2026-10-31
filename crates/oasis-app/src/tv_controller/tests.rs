@@ -639,7 +639,10 @@ fn read_returns_error_on_cancel() {
     let mut buf = [0; 8];
     let result = sb.read(&mut buf);
     assert!(result.is_err(), "read after cancel should error");
-    assert_eq!(result.unwrap_err().kind(), std::io::ErrorKind::Interrupted);
+    assert_eq!(
+        result.unwrap_err().kind(),
+        std::io::ErrorKind::ConnectionAborted
+    );
 }
 
 #[test]
@@ -1969,4 +1972,137 @@ fn moov_at_start_restart_uses_exact_byte_not_linear() {
         atoms_scanned_to: 2275,
     };
     assert_eq!(check_moov_at_start_restart(&s, 1, 2267), None);
+}
+
+// ---------------------------------------------------------------
+// Regression: cancellation, stalled atom scan, header growth,
+// implausible atom sizes
+// ---------------------------------------------------------------
+
+#[test]
+fn read_exact_after_cancel_returns_instead_of_spinning() {
+    // `read_exact` (and symphonia's `read_buf_exact`) retry
+    // `ErrorKind::Interrupted` forever; the cancel error must end them.
+    let inner = std::sync::Arc::new(StreamingInner::new());
+    inner.disable_probe_mode();
+    let mut sb = StreamingBuffer::new(std::sync::Arc::clone(&inner));
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let mut buf = [0u8; 64];
+        let _ = tx.send(std::io::Read::read_exact(&mut sb, &mut buf).map_err(|e| e.kind()));
+    });
+    std::thread::sleep(std::time::Duration::from_millis(50));
+    inner.cancel();
+    let result = rx
+        .recv_timeout(std::time::Duration::from_secs(5))
+        .expect("read_exact must return after cancel");
+    assert_eq!(result, Err(std::io::ErrorKind::ConnectionAborted));
+}
+
+#[test]
+fn push_after_window_passes_stalled_scan_does_not_panic() {
+    // A size-0 `mdat` (extends to EOF) stops the atom scan at its header.
+    // Once the window moves past that point (seek restart / eviction),
+    // later pushes and `finish` must not underflow `scan_pos - base`.
+    let inner = std::sync::Arc::new(StreamingInner::new());
+    let mut data = build_atom(b"ftyp", &[0; 16]);
+    data.extend_from_slice(&0u32.to_be_bytes());
+    data.extend_from_slice(b"mdat");
+    data.extend_from_slice(&[0x11; 64]);
+    inner.push(&data);
+    {
+        // Same mutation as the download thread's seek restart.
+        let mut s = inner.state.lock().unwrap();
+        s.base_offset = 1_000_000;
+        s.buf.clear();
+    }
+    inner.push(&[0xAB; 4096]);
+    inner.push(&[0xCD; 4096]);
+    inner.finish();
+    inner.disable_probe_mode();
+
+    let mut sb = StreamingBuffer::new(std::sync::Arc::clone(&inner));
+    std::io::Seek::seek(&mut sb, std::io::SeekFrom::Start(1_000_000)).unwrap();
+    let mut buf = [0u8; 4];
+    std::io::Read::read_exact(&mut sb, &mut buf).unwrap();
+    assert_eq!(buf, [0xAB; 4]);
+}
+
+#[test]
+fn header_stops_at_incomplete_mdat_header() {
+    // While the `mdat` body streams in, the retained header must not grow
+    // with it (that re-copied the whole buffer on every push).
+    let inner = StreamingInner::new();
+    let mut data = build_atom(b"ftyp", &[0; 16]);
+    data.extend_from_slice(&build_atom(b"moov", &[0x22; 40]));
+    let mdat_off = data.len();
+    data.extend_from_slice(&(10u32 * 1024 * 1024).to_be_bytes());
+    data.extend_from_slice(b"mdat");
+    inner.push(&data);
+    for _ in 0..16 {
+        inner.push(&[0x33; 64 * 1024]);
+    }
+    let s = inner.state.lock().unwrap();
+    let hdr = s.header.as_ref().expect("header retained");
+    assert_eq!(hdr.len(), mdat_off + 16, "complete atoms + the mdat header");
+    assert_eq!(&hdr[mdat_off + 4..mdat_off + 8], b"mdat");
+    assert_eq!(&hdr[..data.len()], &data[..]);
+}
+
+#[test]
+fn reader_picks_up_header_replaced_by_seek_restart() {
+    // The reader cached the small header on its first read; a seek
+    // restart then retains a larger header and moves the window away.
+    // Reads inside the larger header must be served, not fail as evicted.
+    use std::io::{Read, Seek};
+    let inner = std::sync::Arc::new(StreamingInner::new());
+    let ftyp = build_atom(b"ftyp", &[0x11; 16]);
+    inner.push(&ftyp);
+    inner.disable_probe_mode();
+    let mut sb = StreamingBuffer::new(std::sync::Arc::clone(&inner));
+    let mut first = [0u8; 8];
+    sb.read_exact(&mut first).unwrap();
+    {
+        // Same mutation as the download thread's moov-at-start restart.
+        let mut s = inner.state.lock().unwrap();
+        s.buf.extend_from_slice(&[0x77; 4096]);
+        s.header = Some(s.buf.clone());
+        s.base_offset = 1_000_000;
+        s.buf.clear();
+    }
+    sb.seek(std::io::SeekFrom::Start(ftyp.len() as u64 + 100))
+        .unwrap();
+    let mut out = [0u8; 16];
+    sb.read_exact(&mut out).unwrap();
+    assert_eq!(out, [0x77; 16]);
+}
+
+#[test]
+fn finish_ignores_implausible_extended_size() {
+    let inner = StreamingInner::new();
+    let mut data = build_atom(b"ftyp", &[0; 16]);
+    data.extend_from_slice(&1u32.to_be_bytes());
+    data.extend_from_slice(b"free");
+    data.extend_from_slice(&u64::MAX.to_be_bytes());
+    data.extend_from_slice(&[0; 8]);
+    inner.push(&data);
+    inner.finish();
+    assert!(inner.is_done());
+    let s = inner.state.lock().unwrap();
+    assert_eq!(s.atoms.len(), 1, "only ftyp is a plausible atom");
+}
+
+#[test]
+fn parse_tail_rejects_moov_with_huge_extended_size() {
+    use super::seek::parse_tail_for_moov;
+    // A false-positive `moov` in media bytes whose extended size overflowed
+    // `atom_start + atom_size`.
+    let mut tail = vec![0u8; 8];
+    tail.extend_from_slice(&1u32.to_be_bytes());
+    tail.extend_from_slice(b"moov");
+    tail.extend_from_slice(&u64::MAX.to_be_bytes());
+    tail.extend_from_slice(&[0; 16]);
+    let inner = StreamingInner::new();
+    parse_tail_for_moov(&inner, &tail, 0, 1_000, 0);
+    assert!(inner.state.lock().unwrap().moov.is_none());
 }

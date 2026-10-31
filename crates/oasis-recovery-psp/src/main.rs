@@ -12,7 +12,7 @@
 //! 4. Host pushes fixed EBOOT/PRX files over WiFi
 //! 5. User reboots normally → fixed OASIS OS loads
 //!
-//! ## TCP Commands (same protocol as cmd_server.rs)
+//! ## TCP Commands (same protocol as oasis-backend-psp cmd_server)
 //!
 //!   ping                      → "pong\n"
 //!   upload <size> <path>      → receive file and write to ms0:
@@ -46,8 +46,11 @@ fn psp_main() {
 
     // Load network modules.
     print("Loading net modules...\n");
+    // SAFETY: sceUtilityLoadModule takes a module id enum and no pointers; a
+    // failure is reported through the (logged) return code.
     let ret = unsafe { psp::sys::sceUtilityLoadModule(psp::sys::Module::NetCommon) };
     print(&format!("  NetCommon: {ret:#x}\n"));
+    // SAFETY: as above.
     let ret = unsafe { psp::sys::sceUtilityLoadModule(psp::sys::Module::NetInet) };
     print(&format!("  NetInet: {ret:#x}\n"));
 
@@ -62,6 +65,7 @@ fn psp_main() {
     }
 
     // Check WLAN switch.
+    // SAFETY: argument-less query of the WLAN switch position.
     let wlan = unsafe { psp::sys::sceWlanGetSwitchState() };
     if wlan == 0 {
         print("\n** WLAN switch is OFF! **\n");
@@ -104,12 +108,13 @@ fn psp_main() {
 }
 
 // ---------------------------------------------------------------------------
-// WiFi auto-connect (same logic as cmd_server.rs)
+// WiFi auto-connect (same logic as oasis-backend-psp cmd_server)
 // ---------------------------------------------------------------------------
 
 fn auto_connect_wifi() -> bool {
     for profile in [1i32, 0] {
         print(&format!("  Trying profile {profile}... "));
+        // SAFETY: takes a profile index; an empty slot fails with a negative code.
         let ret = unsafe { psp::sys::sceNetApctlConnect(profile) };
         if ret < 0 {
             print(&format!("err {ret:#x}\n"));
@@ -118,6 +123,8 @@ fn auto_connect_wifi() -> bool {
 
         for _ in 0..40 {
             let mut state = psp::sys::ApctlState::Disconnected;
+            // SAFETY: `state` is a live, writable ApctlState (a 32-bit repr enum the
+            // firmware writes one of its states into).
             unsafe { psp::sys::sceNetApctlGetState(&mut state) };
             if matches!(state, psp::sys::ApctlState::GotIp) {
                 print("connected!\n");
@@ -127,6 +134,7 @@ fn auto_connect_wifi() -> bool {
         }
 
         print("timeout\n");
+        // SAFETY: argument-less; harmless when not connected.
         unsafe { psp::sys::sceNetApctlDisconnect() };
         psp::thread::sleep_ms(500);
     }
@@ -138,6 +146,7 @@ fn auto_connect_wifi() -> bool {
 // ---------------------------------------------------------------------------
 
 fn server_main() {
+    // SAFETY: plain integer arguments (AF_INET, SOCK_STREAM, default protocol).
     let fd = unsafe { psp::sys::sceNetInetSocket(2, 1, 0) };
     if fd < 0 {
         print("Socket creation failed!\n");
@@ -145,6 +154,7 @@ fn server_main() {
     }
 
     // Bind to 0.0.0.0:9293.
+    // SAFETY: sockaddr is a POD C struct of integers/bytes; all-zero is valid.
     let mut sa: psp::sys::sockaddr = unsafe { core::mem::zeroed() };
     sa.sa_family = 2; // AF_INET
     // Port at offset 2-3 (network byte order).
@@ -152,6 +162,7 @@ fn server_main() {
     sa.sa_data[1] = (PORT & 0xFF) as u8;
     // IP 0.0.0.0 at offset 4-7 (already zeroed).
 
+    // SAFETY: `sa` is a live sockaddr and the length passed is its exact size.
     let ret = unsafe {
         psp::sys::sceNetInetBind(
             fd,
@@ -164,6 +175,7 @@ fn server_main() {
         park();
     }
 
+    // SAFETY: integer arguments on the socket created above.
     let ret = unsafe { psp::sys::sceNetInetListen(fd, 2) };
     if ret < 0 {
         print(&format!("Listen failed: {ret:#x}\n"));
@@ -172,8 +184,11 @@ fn server_main() {
 
     // Accept loop.
     loop {
+        // SAFETY: sockaddr is a POD C struct; all-zero is valid.
         let mut client_addr: psp::sys::sockaddr = unsafe { core::mem::zeroed() };
         let mut addr_len: u32 = core::mem::size_of::<psp::sys::sockaddr>() as u32;
+        // SAFETY: `client_addr` is writable for `addr_len` bytes, and `addr_len`
+        // is a live in/out u32 as accept() requires.
         let cfd = unsafe { psp::sys::sceNetInetAccept(fd, &mut client_addr, &mut addr_len) };
         if cfd < 0 {
             psp::thread::sleep_ms(100);
@@ -186,8 +201,10 @@ fn server_main() {
 
 fn handle_client(cfd: i32) {
     let mut buf = [0u8; 512];
+    // SAFETY: `buf` is writable for the 512 bytes passed as the length.
     let n = unsafe { psp::sys::sceNetInetRecv(cfd, buf.as_mut_ptr() as *mut c_void, 512, 0) };
     if n <= 0 {
+        // SAFETY: closes the accepted socket once; it is not used afterwards.
         unsafe { psp::sys::sceNetInetClose(cfd) };
         return;
     }
@@ -204,14 +221,19 @@ fn handle_client(cfd: i32) {
     } else if cmd == b"reboot" {
         send(cfd, b"ok\n");
         print("[<] rebooting...\n");
+        // SAFETY: closes the accepted socket once; this path returns right after.
         unsafe { psp::sys::sceNetInetClose(cfd) };
         psp::thread::sleep_ms(500);
+        // SAFETY: integer argument (0 = reset immediately); no pointers.
         unsafe { psp::sys::scePowerRequestColdReset(0) };
         return;
     } else if cmd == b"status" {
+        // SAFETY: argument-less memory statistics queries.
         let free = unsafe { psp::sys::sceKernelTotalFreeMemSize() } / 1024;
+        // SAFETY: as above.
         let max_blk = unsafe { psp::sys::sceKernelMaxFreeMemSize() } / 1024;
         let mut state = psp::sys::ApctlState::Disconnected;
+        // SAFETY: `state` is a live, writable ApctlState.
         unsafe { psp::sys::sceNetApctlGetState(&mut state) };
         let wifi = matches!(state, psp::sys::ApctlState::GotIp);
         let resp = format!(
@@ -253,6 +275,7 @@ fn handle_client(cfd: i32) {
         send(cfd, b"err: unknown command\n");
     }
 
+    // SAFETY: closes the accepted socket exactly once, after its last use.
     unsafe { psp::sys::sceNetInetClose(cfd) };
 }
 
@@ -265,6 +288,7 @@ fn receive_file(cfd: i32, size: u32, path: &[u8], leftover: &[u8]) {
     path_buf.extend_from_slice(path);
     path_buf.push(0);
 
+    // SAFETY: `path_buf` is NUL-terminated and outlives the call.
     let fd = unsafe {
         psp::sys::sceIoOpen(
             path_buf.as_ptr(),
@@ -282,6 +306,7 @@ fn receive_file(cfd: i32, size: u32, path: &[u8], leftover: &[u8]) {
 
     let mut received = 0u32;
     if !leftover.is_empty() {
+        // SAFETY: pointer/length come from the live `leftover` slice; fd is open.
         unsafe {
             psp::sys::sceIoWrite(fd, leftover.as_ptr() as *const c_void, leftover.len());
         }
@@ -290,6 +315,8 @@ fn receive_file(cfd: i32, size: u32, path: &[u8], leftover: &[u8]) {
 
     let mut buf = [0u8; 4096];
     while received < size {
+        // SAFETY: the length passed is at most `buf.len()`, so the receive stays
+        // inside the writable local buffer.
         let n = unsafe {
             psp::sys::sceNetInetRecv(
                 cfd,
@@ -301,12 +328,15 @@ fn receive_file(cfd: i32, size: u32, path: &[u8], leftover: &[u8]) {
         if n <= 0 {
             break;
         }
+        // SAFETY: 0 < n <= buf.len() (recv never returns more than requested),
+        // so the first `n` bytes of `buf` are initialized and in bounds.
         unsafe {
             psp::sys::sceIoWrite(fd, buf.as_ptr() as *const c_void, n as usize);
         }
         received += n as u32;
     }
 
+    // SAFETY: closes the file opened above exactly once.
     unsafe { psp::sys::sceIoClose(fd) };
 
     if received == size {
@@ -333,16 +363,20 @@ fn read_file(cfd: i32, path: &[u8]) {
     path_buf.extend_from_slice(path);
     path_buf.push(0);
 
+    // SAFETY: `path_buf` is NUL-terminated and outlives the call.
     let fd = unsafe { psp::sys::sceIoOpen(path_buf.as_ptr(), psp::sys::IoOpenFlags::RD_ONLY, 0) };
     if fd < psp::sys::SceUid(0) {
         send(cfd, b"err: open failed\n");
         return;
     }
 
+    // SAFETY: integer arguments on the file opened above.
     let size = unsafe { psp::sys::sceIoLseek(fd, 0, psp::sys::IoWhence::End) };
+    // SAFETY: as above.
     let seek_ret = unsafe { psp::sys::sceIoLseek(fd, 0, psp::sys::IoWhence::Set) };
 
     if size < 0 || seek_ret < 0 {
+        // SAFETY: closes the file once; this path returns right after.
         unsafe { psp::sys::sceIoClose(fd) };
         send(cfd, b"err: bad size\n");
         return;
@@ -355,16 +389,19 @@ fn read_file(cfd: i32, path: &[u8]) {
     let mut buf = [0u8; 4096];
     while remaining > 0 {
         let chunk = buf.len().min(remaining as usize);
+        // SAFETY: `chunk <= buf.len()`, so the read stays inside `buf`.
         let n = unsafe { psp::sys::sceIoRead(fd, buf.as_mut_ptr() as *mut c_void, chunk as u32) };
         if n <= 0 {
             break;
         }
+        // SAFETY: 0 < n <= chunk, so the first `n` bytes of `buf` were just read.
         unsafe {
             psp::sys::sceNetInetSend(cfd, buf.as_ptr() as *const c_void, n as usize, 0);
         }
         remaining -= n as i64;
     }
 
+    // SAFETY: closes the file opened above exactly once.
     unsafe { psp::sys::sceIoClose(fd) };
     print(&format!("[<] readfile {} bytes\n", size));
 }
@@ -377,6 +414,7 @@ fn delete_file(cfd: i32, path: &[u8]) {
     path_buf.extend_from_slice(path);
     path_buf.push(0);
 
+    // SAFETY: `path_buf` is NUL-terminated and outlives the call.
     let ret = unsafe { psp::sys::sceIoRemove(path_buf.as_ptr()) };
     if ret < 0 {
         send(cfd, b"err: delete failed\n");
@@ -403,15 +441,18 @@ fn start_usb() {
 // ---------------------------------------------------------------------------
 
 fn send(cfd: i32, data: &[u8]) {
+    // SAFETY: pointer/length come from the live `data` slice; send only reads it.
     unsafe {
         psp::sys::sceNetInetSend(cfd, data.as_ptr() as *const c_void, data.len(), 0);
     }
 }
 
 fn parse_u32(data: &[u8]) -> u32 {
+    // Saturating: an over-long digit string must not wrap into a small "valid"
+    // size (it is rejected by the caller's upper bound instead).
     data.iter().fold(0u32, |acc, &b| {
-        if b >= b'0' && b <= b'9' {
-            acc * 10 + (b - b'0') as u32
+        if b.is_ascii_digit() {
+            acc.saturating_mul(10).saturating_add((b - b'0') as u32)
         } else {
             acc
         }

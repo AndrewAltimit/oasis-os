@@ -4,10 +4,12 @@
 #
 # Builds the EBOOT with the `autorun-script` cargo feature, drops an
 # AUTORUN.txt onto the emulated memstick, launches PPSSPP, and waits for the
-# script to write `autorun.done`. Screenshots are raw 480x272 ABGR dumps
-# converted to PNG host-side via Pillow.
+# script to write `autorun.done`. Each `screenshot` line makes the EBOOT
+# drop a `<path>.req` sentinel; this script captures the PPSSPP window with
+# scrot (PPSSPP never syncs GU output back to emulated VRAM, so a VRAM dump
+# would only show the boot screen) and deletes the sentinel to resume.
 #
-# Requires: cargo+nightly with rust-psp, docker, python3 + Pillow.
+# Requires: cargo+nightly with rust-psp, docker, xdotool, scrot.
 
 set -euo pipefail
 

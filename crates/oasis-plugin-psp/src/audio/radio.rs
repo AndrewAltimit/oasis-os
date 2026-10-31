@@ -200,7 +200,9 @@ pub(super) unsafe fn play_radio_stream(station_idx: u8, channel: i32) -> i32 {
     // Initialize codec (reuse user-memory buffers).
     // SAFETY: Volatile reads of UMEM_* pointers; set during init, read-only after.
     let codec = unsafe { core::ptr::read_volatile(&raw const UMEM_CODEC) };
+    // SAFETY: as above.
     let pcm_buf = unsafe { core::ptr::read_volatile(&raw const UMEM_PCM) };
+    // SAFETY: as above.
     let read_buf = unsafe { core::ptr::read_volatile(&raw const UMEM_READ) };
     if codec.is_null() || pcm_buf.is_null() || read_buf.is_null() {
         crate::debug_log(b"[OASIS] radio: codec bufs null");

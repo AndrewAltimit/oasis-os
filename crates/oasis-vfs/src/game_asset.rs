@@ -6,10 +6,11 @@
 
 use std::collections::{HashMap, HashSet};
 
-use oasis_types::error::{OasisError, Result};
+use oasis_types::error::{OasisError, Result, VfsError};
 
 use crate::{
     AccessMode, EntryKind, FilePermissions, RenamePlan, Vfs, VfsContext, VfsEntry, VfsMetadata,
+    normalize_path, parent_path as parent,
 };
 
 /// An entry in the game asset VFS.
@@ -57,18 +58,39 @@ impl GameAssetVfs {
 
     /// Add a file to the immutable base layer.
     ///
-    /// Parent directories are created automatically.
+    /// Parent directories are created automatically. A path that
+    /// [`normalize_path`] rejects (climbs above `/`, contains NUL), or that
+    /// would place the file beneath an existing base file, is ignored.
     pub fn add_base_file(&mut self, path: &str, data: &[u8]) {
-        let path = normalize(path);
-        ensure_parents(&mut self.base, &path);
-        self.base.insert(path, Node::File(data.to_vec()));
+        self.add_base(path, Node::File(data.to_vec()));
     }
 
-    /// Add a directory to the immutable base layer.
+    /// Add a directory to the immutable base layer (same rules as
+    /// [`add_base_file`](Self::add_base_file)).
     pub fn add_base_dir(&mut self, path: &str) {
-        let path = normalize(path);
-        ensure_parents(&mut self.base, &path);
-        self.base.insert(path, Node::Dir);
+        self.add_base(path, Node::Dir);
+    }
+
+    fn add_base(&mut self, path: &str, node: Node) {
+        let Ok(path) = normalize_path(path) else {
+            return;
+        };
+        if path == "/" || !ensure_parents(&mut self.base, &path) {
+            return;
+        }
+        self.base.insert(path.into_owned(), node);
+    }
+
+    /// Fail unless `path` is an existing directory (the parent check of
+    /// `write` / `mkdir`: nothing may be created beneath a file).
+    fn require_dir(&self, path: &str) -> Result<()> {
+        match self.effective_entry(path) {
+            Some(Node::Dir) => Ok(()),
+            Some(Node::File(_)) => Err(VfsError::NotADirectory { path: path.into() }.into()),
+            None => Err(OasisError::Vfs(
+                format!("parent directory does not exist: {path}").into(),
+            )),
+        }
     }
 
     /// Look up the effective entry at a path (overlay wins, deleted hides).
@@ -77,18 +99,6 @@ impl GameAssetVfs {
             return None;
         }
         self.overlay.get(path).or_else(|| self.base.get(path))
-    }
-
-    /// Check if an effective directory exists, checking both overlay and base
-    /// but also checking overlay directories that may have been added.
-    fn effective_dir_exists(&self, path: &str) -> bool {
-        if self.deleted.contains(path) {
-            return false;
-        }
-        matches!(
-            self.overlay.get(path).or_else(|| self.base.get(path)),
-            Some(Node::Dir)
-        )
     }
 }
 
@@ -104,7 +114,7 @@ impl Vfs for GameAssetVfs {
     }
 
     fn readdir(&self, path: &str) -> Result<Vec<VfsEntry>> {
-        let path = normalize(path);
+        let path = normalize_path(path)?;
         match self.effective_entry(&path) {
             Some(Node::Dir) => {
                 self.check_permission(&path, AccessMode::Read)?;
@@ -160,7 +170,7 @@ impl Vfs for GameAssetVfs {
     }
 
     fn read(&self, path: &str) -> Result<Vec<u8>> {
-        let path = normalize(path);
+        let path = normalize_path(path)?;
         match self.effective_entry(&path) {
             Some(Node::File(data)) => {
                 self.check_permission(&path, AccessMode::Read)?;
@@ -172,19 +182,23 @@ impl Vfs for GameAssetVfs {
     }
 
     fn write(&mut self, path: &str, data: &[u8]) -> Result<()> {
-        let path = normalize(path);
+        let path = normalize_path(path)?;
         let par = parent(&path);
-        if !self.effective_dir_exists(par) {
-            return Err(OasisError::Vfs(
-                format!("parent directory does not exist: {par}").into(),
-            ));
-        }
+        self.require_dir(par)?;
         // Check parent directory write permission.
         self.check_permission(par, AccessMode::Write)?;
         // Check target file write permission (if it already exists).
-        if self.effective_entry(&path).is_some() {
-            self.check_permission(&path, AccessMode::Write)?;
+        match self.effective_entry(&path) {
+            Some(Node::Dir) => {
+                return Err(VfsError::IsDirectory {
+                    path: path.into_owned(),
+                }
+                .into());
+            },
+            Some(Node::File(_)) => self.check_permission(&path, AccessMode::Write)?,
+            None => {},
         }
+        let path = path.into_owned();
         self.deleted.remove(&path);
         self.permissions
             .entry(path.clone())
@@ -194,7 +208,7 @@ impl Vfs for GameAssetVfs {
     }
 
     fn stat(&self, path: &str) -> Result<VfsMetadata> {
-        let path = normalize(path);
+        let path = normalize_path(path)?;
         match self.effective_entry(&path) {
             Some(Node::File(data)) => Ok(VfsMetadata {
                 kind: EntryKind::File,
@@ -209,17 +223,23 @@ impl Vfs for GameAssetVfs {
     }
 
     fn mkdir(&mut self, path: &str) -> Result<()> {
-        let path = normalize(path);
-        if self.effective_entry(&path).is_some() {
-            return Ok(());
+        let path = normalize_path(path)?;
+        match self.effective_entry(&path) {
+            Some(Node::Dir) => return Ok(()),
+            Some(Node::File(_)) => {
+                return Err(OasisError::Vfs(format!("file exists: {path}").into()));
+            },
+            None => {},
         }
         // Ensure parent exists.
         let par = parent(&path).to_string();
-        if par != path && !self.effective_dir_exists(&par) {
+        if self.effective_entry(&par).is_none() {
             self.mkdir(&par)?;
         }
+        self.require_dir(&par)?;
         // Check parent directory write permission.
         self.check_permission(&par, AccessMode::Write)?;
+        let path = path.into_owned();
         self.deleted.remove(&path);
         self.permissions
             .entry(path.clone())
@@ -229,7 +249,7 @@ impl Vfs for GameAssetVfs {
     }
 
     fn remove(&mut self, path: &str) -> Result<()> {
-        let path = normalize(path);
+        let path = normalize_path(path)?;
         if path == "/" {
             return Err(OasisError::Vfs("cannot remove root".into()));
         }
@@ -261,6 +281,7 @@ impl Vfs for GameAssetVfs {
                 return Err(OasisError::Vfs(format!("no such path: {path}").into()));
             },
         }
+        let path = path.into_owned();
         self.overlay.remove(&path);
         self.permissions.remove(&path);
         self.deleted.insert(path);
@@ -268,17 +289,18 @@ impl Vfs for GameAssetVfs {
     }
 
     fn rename(&mut self, from: &str, to: &str) -> Result<()> {
-        let from = normalize(from);
-        let to = normalize(to);
+        let from = normalize_path(from)?;
+        let to = normalize_path(to)?;
         if self.validate_rename(&from, &to)? == RenamePlan::NoOp {
             return Ok(());
         }
         // Only allow rename if the source exists in the overlay layer.
         // Base-layer-only entries cannot be renamed (they are immutable).
-        if !self.overlay.contains_key(&from) {
-            return Err(OasisError::Vfs(
-                format!("cannot rename base-layer entry not in overlay: {from}").into(),
-            ));
+        if !self.overlay.contains_key(from.as_ref()) {
+            return Err(OasisError::Vfs(VfsError::Unsupported {
+                path: from.into_owned(),
+                reason: "cannot rename base-layer entry not in overlay",
+            }));
         }
         let prefix = format!("{from}/");
         // A visible base-layer descendant cannot move with its directory.
@@ -287,9 +309,10 @@ impl Vfs for GameAssetVfs {
             .keys()
             .any(|k| k.starts_with(&prefix) && !self.deleted.contains(k))
         {
-            return Err(OasisError::Vfs(
-                format!("cannot rename directory containing base-layer entries: {from}").into(),
-            ));
+            return Err(OasisError::Vfs(VfsError::Unsupported {
+                path: from.into_owned(),
+                reason: "cannot rename directory containing base-layer entries",
+            }));
         }
         // Renaming rewrites an entry in both parent directories.
         self.check_permission(parent(&from), AccessMode::Write)?;
@@ -303,7 +326,7 @@ impl Vfs for GameAssetVfs {
             .collect();
         for old_key in keys_to_move {
             let new_key = if old_key == from {
-                to.clone()
+                to.to_string()
             } else {
                 format!("{to}{}", &old_key[from.len()..])
             };
@@ -325,29 +348,30 @@ impl Vfs for GameAssetVfs {
     }
 
     fn exists(&self, path: &str) -> bool {
-        let path = normalize(path);
-        self.effective_entry(&path).is_some()
+        normalize_path(path).is_ok_and(|path| self.effective_entry(&path).is_some())
     }
 
     fn get_permissions(&self, path: &str) -> Result<FilePermissions> {
-        let path = normalize(path);
+        let path = normalize_path(path)?;
         if self.effective_entry(&path).is_none() {
             return Err(OasisError::Vfs(format!("no such path: {path}").into()));
         }
-        Ok(self.permissions.get(&path).cloned().unwrap_or_else(|| {
-            match self.effective_entry(&path) {
+        Ok(self
+            .permissions
+            .get(path.as_ref())
+            .cloned()
+            .unwrap_or_else(|| match self.effective_entry(&path) {
                 Some(Node::Dir) => FilePermissions::default_dir(),
                 _ => FilePermissions::default_file(),
-            }
-        }))
+            }))
     }
 
     fn set_permissions(&mut self, path: &str, perms: FilePermissions) -> Result<()> {
-        let path = normalize(path);
+        let path = normalize_path(path)?;
         if self.effective_entry(&path).is_none() {
             return Err(OasisError::Vfs(format!("no such path: {path}").into()));
         }
-        self.permissions.insert(path, perms);
+        self.permissions.insert(path.into_owned(), perms);
         Ok(())
     }
 
@@ -360,44 +384,6 @@ impl Vfs for GameAssetVfs {
     }
 }
 
-/// Normalize a path: ensure leading `/`, collapse `//`, strip trailing `/`.
-fn normalize(path: &str) -> String {
-    let path = if path.starts_with('/') {
-        path.to_string()
-    } else {
-        format!("/{path}")
-    };
-    let mut result = String::with_capacity(path.len());
-    let mut prev_slash = false;
-    for ch in path.chars() {
-        if ch == '/' {
-            if !prev_slash {
-                result.push(ch);
-            }
-            prev_slash = true;
-        } else {
-            result.push(ch);
-            prev_slash = false;
-        }
-    }
-    if result.len() > 1 && result.ends_with('/') {
-        result.pop();
-    }
-    result
-}
-
-/// Return the parent of a normalized path.
-fn parent(path: &str) -> &str {
-    if path == "/" {
-        return "/";
-    }
-    match path.rfind('/') {
-        Some(0) => "/",
-        Some(i) => &path[..i],
-        None => "/",
-    }
-}
-
 /// Extract the direct child name from a full path given a parent prefix.
 fn direct_child(full_path: &str, prefix: &str) -> Option<String> {
     let rest = full_path.strip_prefix(prefix)?;
@@ -407,20 +393,24 @@ fn direct_child(full_path: &str, prefix: &str) -> Option<String> {
     Some(rest.to_string())
 }
 
-/// Ensure all ancestor directories exist in the given map.
-fn ensure_parents(map: &mut HashMap<String, Node>, path: &str) {
-    let mut current = String::new();
-    for component in path.split('/').filter(|c| !c.is_empty()) {
-        let segment = if current.is_empty() {
-            format!("/{component}")
-        } else {
-            format!("{current}/{component}")
-        };
-        if segment != *path {
-            map.entry(segment.clone()).or_insert(Node::Dir);
-        }
-        current = segment;
+/// Ensure all ancestor directories of `path` exist in the given map.
+/// Returns `false` (leaving the map untouched) when an ancestor is a file.
+fn ensure_parents(map: &mut HashMap<String, Node>, path: &str) -> bool {
+    let ancestors: Vec<&str> = path
+        .match_indices('/')
+        .skip(1)
+        .map(|(i, _)| &path[..i])
+        .collect();
+    if ancestors
+        .iter()
+        .any(|a| matches!(map.get(*a), Some(Node::File(_))))
+    {
+        return false;
     }
+    for ancestor in ancestors {
+        map.entry(ancestor.to_string()).or_insert(Node::Dir);
+    }
+    true
 }
 
 #[cfg(test)]
@@ -643,6 +633,27 @@ mod tests {
         vfs.mkdir("/src").unwrap();
         vfs.write("/src/file.txt", b"data").unwrap();
         assert!(vfs.rename("/src/file.txt", "/no/such/dir/file").is_err());
+    }
+
+    #[test]
+    fn add_base_ignores_invalid_paths() {
+        let mut vfs = GameAssetVfs::new();
+        vfs.add_base_file("/f", b"x");
+        vfs.add_base_file("/f/under_file", b"y");
+        vfs.add_base_file("/../escape", b"z");
+        vfs.add_base_dir("/");
+        assert!(!vfs.exists("/f/under_file"));
+        assert!(!vfs.exists("/escape"));
+        assert_eq!(vfs.stat("/").unwrap().kind, EntryKind::Directory);
+        assert_eq!(vfs.read("/f").unwrap(), b"x");
+    }
+
+    #[test]
+    fn write_onto_base_directory_fails() {
+        let mut vfs = GameAssetVfs::new();
+        vfs.add_base_file("/dir/child", b"x");
+        assert!(vfs.write("/dir", b"shadow").is_err());
+        assert_eq!(vfs.readdir("/dir").unwrap().len(), 1);
     }
 
     #[test]

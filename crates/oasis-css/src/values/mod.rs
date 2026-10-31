@@ -12,7 +12,7 @@ pub(crate) mod resolve;
 pub mod types;
 
 // Re-export everything so the public API is unchanged.
-pub use computed::ComputedStyle;
+pub use computed::{ComputedStyle, MAX_TAB_SIZE};
 #[allow(unused_imports)]
 pub use types::{
     AlignContent, AlignItems, AlignSelf, Animation, AnimationDirection, AnimationFillMode,

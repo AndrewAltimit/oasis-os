@@ -2,7 +2,7 @@
 
 **Status:** Accepted
 **Date:** 2026-02-09 (initial release; recorded 2026-02-19)
-**Last reviewed:** 2026-10-29 — still current. `MemoryVfs`, `RealVfs`, and `GameAssetVfs` ship today in `crates/oasis-vfs/`. Since the original decision the trait gained a shared `validate_rename` invariant check and a cross-implementation conformance suite (see "Shared invariants" below).
+**Last reviewed:** 2026-10-30 — still current (see "Update (2026-10-30)" for which host uses which implementation). `MemoryVfs`, `RealVfs`, and `GameAssetVfs` ship today in `crates/oasis-vfs/`. Since the original decision the trait gained one path normal form (`normalize_path`), a shared `validate_rename` invariant check, entry-type rules, and a cross-implementation conformance suite (see "Shared invariants" below).
 
 ## Context
 
@@ -29,14 +29,23 @@ Core code never calls `std::fs` directly. Three implementations exist:
 
 - **Platform independence.** Terminal commands work on PSP, desktop, and UE5
   without `#[cfg]` conditionals in business logic.
-- **Security.** Path traversal attacks are blocked at the trait boundary. The
-  `MemoryVfs` cannot escape its virtual root. `RealVfs` resolves `..`
-  lexically (a VFS path cannot climb above `/`), then canonicalizes the
-  deepest ancestor that exists on disk and requires it to lie inside the
-  root before appending the not-yet-existing tail. A symlink inside the root
-  that points outside is therefore rejected even when several path levels
-  below it do not exist yet (`mkdir /link/new/x`), instead of letting
-  `create_dir_all` follow it out of the sandbox.
+- **Security.** Path traversal attacks are blocked at the trait boundary.
+  Every implementation runs paths through `oasis_vfs::normalize_path`:
+  `//`, `.` and a trailing `/` are dropped, `..` is resolved lexically, and a
+  `..` that would climb above `/` (`/../x`, `/a/../../x`) or a NUL byte is
+  an error, not a clamp. `RealVfs` then appends the normalized segments to
+  its root one by one -- on Windows `\` also separates segments, and a
+  segment containing `:` (a drive prefix such as `C:`, which would replace
+  the whole path when joined, or an NTFS `name:stream`) or naming a
+  reserved device (`CON`, `NUL`, `COM1`, `LPT9`, ... with or without an
+  extension) is rejected. It canonicalizes the deepest ancestor that exists
+  on disk and requires it to lie inside the root before appending the
+  not-yet-existing tail. A symlink inside the root that points outside is
+  therefore rejected even when several path levels below it do not exist yet
+  (`mkdir /link/new/x`), instead of letting `create_dir_all` follow it out of
+  the sandbox. `remove` and `rename` resolve the *parent* that way but act
+  on the final entry itself, so they delete or move a symlink, never its
+  target (deleting `/link` used to delete the file it pointed to).
 - **Testability.** All file operations are testable with `MemoryVfs` -- no temp
   directories, no cleanup, deterministic behavior.
 - **Embedding.** FFI consumers populate `MemoryVfs` via `oasis_add_vfs_file()`
@@ -57,6 +66,11 @@ against every implementation:
   resolved on-disk paths so a symlink cannot smuggle a move into its own
   subtree, and treats a case-only rename on a case-insensitive filesystem as
   a rename rather than a collision.
+- **Entry types.** `write` never replaces a directory (it used to turn a
+  directory into a file in the in-memory backends, orphaning its subtree),
+  `mkdir` fails on an existing file, and nothing is created beneath a file
+  (`write /f/x`, `mkdir /f/sub` with `/f` a file). `GameAssetVfs::add_base_*`
+  ignores paths that `normalize_path` rejects or that lie under a base file.
 - **Permissions.** `MemoryVfs` and `GameAssetVfs` require write permission on
   both parent directories for `rename` (as for `write`, `mkdir` and
   `remove`). `RealVfs` leaves permission enforcement to the OS.
@@ -64,9 +78,11 @@ against every implementation:
   directory with visible base-layer descendants cannot move; a base entry
   shadowed by the moved overlay entry stays hidden at the old path.
 - **`crates/oasis-vfs/tests/vfs_conformance.rs`** runs one macro-generated
-  suite against `MemoryVfs`, `GameAssetVfs` and `RealVfs` (temp dir), plus
-  unix-only RealVfs symlink-escape tests (run them on Linux or in the CI
-  Docker image). New trait-level behaviour gets a test there.
+  suite against `MemoryVfs`, `GameAssetVfs` and `RealVfs` (temp dir) --
+  normalization, NUL bytes, entry types, rename -- plus unix-only RealVfs
+  symlink-escape tests (run them on Linux or in the CI Docker image) and
+  Windows-only drive / device tests in `real.rs`. New trait-level behaviour
+  gets a test there.
 
 Callers (`mv`, the file manager, the transfer service) still keep their own
 user-facing checks for nicer messages, but no longer need them for tree
@@ -85,3 +101,19 @@ integrity.
 - The `Environment` struct in the terminal carries `&mut dyn Vfs`.
 - The FFI layer wraps a `MemoryVfs` inside the opaque `OasisInstance`.
 - Path security is enforced in the `Vfs` implementations, not in callers.
+
+## Update (2026-10-30)
+
+The decision stands; which host uses which implementation has changed
+since it was written, so read the Decision and Consequences bullets with
+these corrections:
+
+- The desktop shell (`oasis-app`) and the WASM build boot a `MemoryVfs`
+  seeded at startup (`crates/oasis-app/src/vfs_setup.rs`); no shipped host
+  mounts `RealVfs`, which remains for tools and tests (and is jailed, see
+  "Shared invariants").
+- The UE5 / FFI library (`oasis-ffi`) owns a `GameAssetVfs`, not a
+  `MemoryVfs`: `oasis_set_vfs_root` resets it and `oasis_add_vfs_file`
+  writes into it.
+- Hosts also use well-known VFS paths as IPC; their constants and typed
+  requests live in one place, `oasis_types::ipc`.

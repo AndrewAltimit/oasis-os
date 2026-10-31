@@ -11,7 +11,6 @@ cargo-fuzz = true
 libfuzzer-sys = "0.4"
 oasis-terminal = { path = ".." }
 oasis-vfs = { path = "../../oasis-vfs" }
-oasis-types = { path = "../../oasis-types" }
 
 # Prevent this from interfering with workspaces
 [workspace]

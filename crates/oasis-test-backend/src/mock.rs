@@ -5,10 +5,11 @@
 //! [`SdiCore`](oasis_types::backend::SdiCore) and [`SdiBackend`](oasis_types::backend::SdiBackend) (with default implementations).
 
 use oasis_types::backend::{
-    Color, SdiAlpha, SdiBatch, SdiClipTransform, SdiCore, SdiGradients, SdiRenderTarget, SdiShapes,
-    SdiText, SdiTextures, SdiVector, TextureId, bitmap_measure_text,
+    Color, SdiBatch, SdiClipTransform, SdiCore, SdiGradients, SdiRenderTarget, SdiShapes, SdiText,
+    SdiTextures, SdiVector, TextureId, bitmap_measure_text, texture_not_found,
 };
 use oasis_types::error::Result;
+use std::collections::HashSet;
 
 /// A recorded method call: `(method_name, formatted_parameters)`.
 pub type CallRecord = (String, String);
@@ -36,6 +37,7 @@ pub struct MockSdiCore {
     height: u32,
     calls: Vec<CallRecord>,
     next_texture_id: u64,
+    live_textures: HashSet<u64>,
     measure_text_fn: Option<MeasureTextFn>,
 }
 
@@ -48,6 +50,7 @@ impl MockSdiCore {
             height,
             calls: Vec::new(),
             next_texture_id: 1,
+            live_textures: HashSet::new(),
             measure_text_fn: None,
         }
     }
@@ -125,6 +128,7 @@ impl SdiCore for MockSdiCore {
     fn load_texture(&mut self, width: u32, height: u32, rgba_data: &[u8]) -> Result<TextureId> {
         let id = self.next_texture_id;
         self.next_texture_id += 1;
+        self.live_textures.insert(id);
         self.record(
             "load_texture",
             format!("{width}, {height}, {} bytes", rgba_data.len()),
@@ -134,7 +138,11 @@ impl SdiCore for MockSdiCore {
 
     fn destroy_texture(&mut self, tex: TextureId) -> Result<()> {
         self.record("destroy_texture", format!("{tex:?}"));
-        Ok(())
+        if self.live_textures.remove(&tex.0) {
+            Ok(())
+        } else {
+            Err(texture_not_found(tex.0))
+        }
     }
 
     fn set_clip_rect(&mut self, x: i32, y: i32, w: u32, h: u32) -> Result<()> {
@@ -163,6 +171,10 @@ impl SdiCore for MockSdiCore {
         self.record("shutdown", String::new());
         Ok(())
     }
+
+    fn viewport_size(&self) -> (u32, u32) {
+        (self.width, self.height)
+    }
 }
 
 // Pick up all extension trait default implementations (fill_rounded_rect falls
@@ -170,11 +182,6 @@ impl SdiCore for MockSdiCore {
 // The blanket impl on SdiBackend gives us SdiBackend for free.
 impl SdiShapes for MockSdiCore {}
 impl SdiGradients for MockSdiCore {}
-impl SdiAlpha for MockSdiCore {
-    fn viewport_size(&self) -> (u32, u32) {
-        (self.width, self.height)
-    }
-}
 impl SdiText for MockSdiCore {}
 impl SdiTextures for MockSdiCore {}
 impl SdiClipTransform for MockSdiCore {}

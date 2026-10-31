@@ -1,4 +1,4 @@
-//! TV Guide grid state and SDI rendering.
+//! TV Guide grid state and rendering (re-exports + tests).
 //!
 //! Manages the retro cable-TV EPG layout: header bar with current channel
 //! info, time-slot column headers, channel rows with variable-width
@@ -13,14 +13,12 @@ mod tests {
     use crate::grid_layout::{VISIBLE_ROWS, truncate_title};
     use crate::grid_state::TvGuideState;
 
-    use oasis_skin::active_theme::ActiveTheme;
-
     use crate::channel::{ChannelConfig, DEFAULT_CHANNELS_TOML};
 
     #[test]
     fn new_guide_state() {
         let config = ChannelConfig::from_toml(DEFAULT_CHANNELS_TOML).unwrap();
-        let state = TvGuideState::new(&config, &ActiveTheme::default());
+        let state = TvGuideState::new(&config);
         assert_eq!(state.channels.len(), 5);
         assert_eq!(state.catalogs.len(), 5);
         assert_eq!(state.selected_channel, 0);
@@ -31,7 +29,7 @@ mod tests {
     #[test]
     fn navigation() {
         let config = ChannelConfig::from_toml(DEFAULT_CHANNELS_TOML).unwrap();
-        let mut state = TvGuideState::new(&config, &ActiveTheme::default());
+        let mut state = TvGuideState::new(&config);
 
         state.select_down();
         assert_eq!(state.selected_channel, 1);
@@ -48,7 +46,7 @@ mod tests {
     #[test]
     fn navigation_bounds() {
         let config = ChannelConfig::from_toml(DEFAULT_CHANNELS_TOML).unwrap();
-        let mut state = TvGuideState::new(&config, &ActiveTheme::default());
+        let mut state = TvGuideState::new(&config);
         for _ in 0..100 {
             state.select_down();
         }
@@ -58,7 +56,7 @@ mod tests {
     #[test]
     fn navigation_auto_scroll() {
         let config = ChannelConfig::from_toml(DEFAULT_CHANNELS_TOML).unwrap();
-        let mut state = TvGuideState::new(&config, &ActiveTheme::default());
+        let mut state = TvGuideState::new(&config);
         // 5 channels, VISIBLE_ROWS=5, so no scroll needed.
         for _ in 0..4 {
             state.select_down();
@@ -75,7 +73,7 @@ mod tests {
     #[test]
     fn paging_methods() {
         let config = ChannelConfig::from_toml(DEFAULT_CHANNELS_TOML).unwrap();
-        let state = TvGuideState::new(&config, &ActiveTheme::default());
+        let state = TvGuideState::new(&config);
         assert_eq!(state.current_page(), 1);
         assert_eq!(state.total_pages(), 1);
     }
@@ -83,7 +81,7 @@ mod tests {
     #[test]
     fn paging_empty_channels() {
         let config: ChannelConfig = toml::from_str("channel = []").unwrap();
-        let state = TvGuideState::new(&config, &ActiveTheme::default());
+        let state = TvGuideState::new(&config);
         assert_eq!(state.current_page(), 1);
         assert_eq!(state.total_pages(), 1);
     }
@@ -91,7 +89,7 @@ mod tests {
     #[test]
     fn time_scroll() {
         let config = ChannelConfig::from_toml(DEFAULT_CHANNELS_TOML).unwrap();
-        let mut state = TvGuideState::new(&config, &ActiveTheme::default());
+        let mut state = TvGuideState::new(&config);
         let start = state.grid_start_time();
         state.scroll_right();
         let after_right = state.grid_start_time();
@@ -104,7 +102,7 @@ mod tests {
     #[test]
     fn text_content_no_catalogs() {
         let config = ChannelConfig::from_toml(DEFAULT_CHANNELS_TOML).unwrap();
-        let state = TvGuideState::new(&config, &ActiveTheme::default());
+        let state = TvGuideState::new(&config);
         let lines = state.text_content();
         assert!(lines.iter().any(|l| l.contains("TV Guide")));
         assert!(lines.iter().any(|l| l.contains("Loading")));
@@ -113,7 +111,7 @@ mod tests {
     #[test]
     fn tune_without_catalog() {
         let config = ChannelConfig::from_toml(DEFAULT_CHANNELS_TOML).unwrap();
-        let mut state = TvGuideState::new(&config, &ActiveTheme::default());
+        let mut state = TvGuideState::new(&config);
         assert!(state.tune().is_none());
     }
 
@@ -145,7 +143,7 @@ mod tests {
     #[test]
     fn text_content_with_fetch_error() {
         let config = ChannelConfig::from_toml(DEFAULT_CHANNELS_TOML).unwrap();
-        let mut state = TvGuideState::new(&config, &ActiveTheme::default());
+        let mut state = TvGuideState::new(&config);
         state.fetch_attempted = true;
         state.fetch_error = Some("network timeout".to_string());
         let lines = state.text_content();
@@ -156,7 +154,7 @@ mod tests {
     #[test]
     fn text_content_after_partial_load() {
         let config = ChannelConfig::from_toml(DEFAULT_CHANNELS_TOML).unwrap();
-        let mut state = TvGuideState::new(&config, &ActiveTheme::default());
+        let mut state = TvGuideState::new(&config);
         state.fetch_attempted = true;
 
         // Inject a catalog for channel 0.
@@ -185,7 +183,7 @@ mod tests {
     #[test]
     fn fetch_attempted_prevents_refetch_text() {
         let config = ChannelConfig::from_toml(DEFAULT_CHANNELS_TOML).unwrap();
-        let mut state = TvGuideState::new(&config, &ActiveTheme::default());
+        let mut state = TvGuideState::new(&config);
         // Before fetch_attempted: shows loading.
         let lines = state.text_content();
         assert!(lines.iter().any(|l| l.contains("Loading")));
@@ -200,7 +198,7 @@ mod tests {
     #[test]
     fn rebuild_cached_schedule_after_catalog() {
         let config = ChannelConfig::from_toml(DEFAULT_CHANNELS_TOML).unwrap();
-        let mut state = TvGuideState::new(&config, &ActiveTheme::default());
+        let mut state = TvGuideState::new(&config);
 
         let mut catalog = crate::catalog::ChannelCatalog::new(state.channels[0].number);
         catalog.add_episodes(vec![crate::catalog::VideoEpisode {
@@ -225,39 +223,6 @@ mod tests {
     }
 
     #[test]
-    fn now_playing_detail_with_content() {
-        let config = ChannelConfig::from_toml(DEFAULT_CHANNELS_TOML).unwrap();
-        let mut state = TvGuideState::new(&config, &ActiveTheme::default());
-
-        let mut catalog = crate::catalog::ChannelCatalog::new(state.channels[0].number);
-        catalog.add_episodes(vec![crate::catalog::VideoEpisode {
-            item_id: "test".to_string(),
-            filename: "ep.mp4".to_string(),
-            title: "Test".to_string(),
-            duration_secs: 1800.0,
-            width: 640,
-            height: 480,
-            size_bytes: 1000,
-            format: "MPEG4".into(),
-            original: None,
-        }]);
-        state.catalogs[0] = Some(catalog);
-        state.rebuild_cached_schedule(0);
-
-        let detail = state.build_now_playing_detail();
-        assert!(detail.contains("640x480"));
-        assert!(detail.contains("remaining"));
-    }
-
-    #[test]
-    fn now_playing_detail_empty() {
-        let config = ChannelConfig::from_toml(DEFAULT_CHANNELS_TOML).unwrap();
-        let state = TvGuideState::new(&config, &ActiveTheme::default());
-        let detail = state.build_now_playing_detail();
-        assert!(detail.is_empty());
-    }
-
-    #[test]
     fn scroll_offset_with_many_channels() {
         // Build a config with 12 channels.
         let mut toml_str = String::new();
@@ -270,7 +235,7 @@ mod tests {
             ));
         }
         let config: ChannelConfig = toml::from_str(&toml_str).unwrap();
-        let mut state = TvGuideState::new(&config, &ActiveTheme::default());
+        let mut state = TvGuideState::new(&config);
         assert_eq!(state.channels.len(), 12);
 
         // Navigate down past VISIBLE_ROWS.
@@ -295,26 +260,26 @@ mod tests {
     /// Compute grid_y for a given content height (mirrors handle_click layout).
     fn grid_y_for(ch: u32) -> u32 {
         let usable_h = ch;
-        let header_h = (usable_h * 20 / 100).max(60);
-        let time_header_h = (usable_h * 4 / 100).max(20);
+        let header_h = (usable_h * 20 / 100).max(40);
+        let time_header_h = (usable_h * 4 / 100).max(16);
         header_h + time_header_h
     }
 
     /// Compute row height for a given content height and channel count.
     fn row_h_for(ch: u32, num_channels: usize) -> u32 {
         let usable_h = ch;
-        let header_h = (usable_h * 20 / 100).max(60);
-        let time_header_h = (usable_h * 4 / 100).max(20);
-        let footer_h = (usable_h * 5 / 100).max(18);
+        let header_h = (usable_h * 20 / 100).max(40);
+        let time_header_h = (usable_h * 4 / 100).max(16);
+        let footer_h = (usable_h * 5 / 100).max(14);
         let grid_h = usable_h.saturating_sub(header_h + time_header_h + footer_h);
         let row_count = num_channels.clamp(1, VISIBLE_ROWS) as u32;
-        (grid_h / row_count).max(20)
+        (grid_h / row_count).max(16)
     }
 
     #[test]
     fn click_selects_channel() {
         let config = ChannelConfig::from_toml(DEFAULT_CHANNELS_TOML).unwrap();
-        let mut state = TvGuideState::new(&config, &ActiveTheme::default());
+        let mut state = TvGuideState::new(&config);
         assert_eq!(state.selected_channel, 0);
 
         let ch = 600u32;
@@ -324,7 +289,7 @@ mod tests {
 
         // Click on row 2 (third channel).
         let ly = (gy + rh * 2 + rh / 2) as i32;
-        let result = state.handle_click(100, ly, cw, ch, true);
+        let result = state.handle_click(100, ly, cw, ch);
         assert!(result.is_none(), "first click should select, not tune");
         assert_eq!(state.selected_channel, 2);
     }
@@ -332,7 +297,7 @@ mod tests {
     #[test]
     fn click_already_selected_tunes() {
         let config = ChannelConfig::from_toml(DEFAULT_CHANNELS_TOML).unwrap();
-        let mut state = TvGuideState::new(&config, &ActiveTheme::default());
+        let mut state = TvGuideState::new(&config);
 
         // Inject a catalog so tune() can succeed.
         let mut catalog = crate::catalog::ChannelCatalog::new(state.channels[0].number);
@@ -357,7 +322,7 @@ mod tests {
 
         // Channel 0 is already selected. Click on row 0.
         let ly = (gy + rh / 2) as i32;
-        let result = state.handle_click(100, ly, cw, ch, true);
+        let result = state.handle_click(100, ly, cw, ch);
         assert!(result.is_some(), "second click on selected should tune");
         assert_eq!(result.unwrap().episode.title, "Click Test");
     }
@@ -365,18 +330,18 @@ mod tests {
     #[test]
     fn click_outside_grid_ignored() {
         let config = ChannelConfig::from_toml(DEFAULT_CHANNELS_TOML).unwrap();
-        let mut state = TvGuideState::new(&config, &ActiveTheme::default());
+        let mut state = TvGuideState::new(&config);
 
         let ch = 600u32;
         let cw = 800u32;
 
         // Click in header area (y=10, well above grid).
-        let result = state.handle_click(100, 10, cw, ch, true);
+        let result = state.handle_click(100, 10, cw, ch);
         assert!(result.is_none());
         assert_eq!(state.selected_channel, 0);
 
         // Click below grid area (y=ch-1, in footer).
-        let result = state.handle_click(100, ch as i32 - 1, cw, ch, true);
+        let result = state.handle_click(100, ch as i32 - 1, cw, ch);
         assert!(result.is_none());
         assert_eq!(state.selected_channel, 0);
     }
@@ -384,8 +349,8 @@ mod tests {
     #[test]
     fn click_negative_coords_ignored() {
         let config = ChannelConfig::from_toml(DEFAULT_CHANNELS_TOML).unwrap();
-        let mut state = TvGuideState::new(&config, &ActiveTheme::default());
-        let result = state.handle_click(-10, -5, 800, 600, true);
+        let mut state = TvGuideState::new(&config);
+        let result = state.handle_click(-10, -5, 800, 600);
         assert!(result.is_none());
         assert_eq!(state.selected_channel, 0);
     }
@@ -393,8 +358,8 @@ mod tests {
     #[test]
     fn click_empty_channels_ignored() {
         let config: ChannelConfig = toml::from_str("channel = []").unwrap();
-        let mut state = TvGuideState::new(&config, &ActiveTheme::default());
-        let result = state.handle_click(100, 200, 800, 600, true);
+        let mut state = TvGuideState::new(&config);
+        let result = state.handle_click(100, 200, 800, 600);
         assert!(result.is_none());
     }
 
@@ -410,7 +375,7 @@ mod tests {
             ));
         }
         let config: ChannelConfig = toml::from_str(&toml_str).unwrap();
-        let state = TvGuideState::new(&config, &ActiveTheme::default());
+        let state = TvGuideState::new(&config);
         assert_eq!(state.total_pages(), 3); // ceil(12/5) = 3
         assert_eq!(state.current_page(), 1);
     }

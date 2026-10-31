@@ -367,14 +367,11 @@ fn cmd_date() -> Vec<String> {
 }
 
 fn cmd_mem() -> Vec<String> {
-    let mut out = Vec::new();
-    // SAFETY: sceKernelTotalFreeMemSize returns available heap bytes.
-    let free = unsafe { psp::sys::sceKernelTotalFreeMemSize() };
-    // SAFETY: sceKernelMaxFreeMemSize returns the largest contiguous free block.
-    let max_block = unsafe { psp::sys::sceKernelMaxFreeMemSize() };
-    out.push(format!("Free RAM: {} KB", free / 1024));
-    out.push(format!("Largest block: {} KB", max_block / 1024));
-    out
+    let (free_kb, max_block_kb) = oasis_backend_psp::heap_kb();
+    vec![
+        format!("Free RAM: {free_kb} KB"),
+        format!("Largest block: {max_block_kb} KB"),
+    ]
 }
 
 fn cmd_umd() -> Vec<String> {

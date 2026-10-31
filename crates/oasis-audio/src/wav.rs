@@ -14,6 +14,11 @@ pub struct WavData {
     pub channels: u16,
 }
 
+/// `fmt ` format tag of uncompressed integer PCM.
+const WAVE_FORMAT_PCM: u16 = 1;
+/// `fmt ` format tag whose real format is in the SubFormat GUID.
+const WAVE_FORMAT_EXTENSIBLE: u16 = 0xFFFE;
+
 /// Check if `data` starts with a RIFF/WAVE header.
 pub fn is_wav(data: &[u8]) -> bool {
     data.len() >= 12 && &data[0..4] == b"RIFF" && &data[8..12] == b"WAVE"
@@ -28,15 +33,23 @@ pub fn decode_wav(data: &[u8]) -> Option<WavData> {
         return None;
     }
 
-    // Find the "fmt " sub-chunk.
-    let (fmt_offset, _fmt_size) = find_chunk(data, b"fmt ")?;
-    if fmt_offset + 16 > data.len() {
+    // Find the "fmt " sub-chunk; its 16 fixed bytes must be present and
+    // inside the chunk (not read from whatever follows a short one).
+    let (fmt_offset, fmt_size) = find_chunk(data, b"fmt ")?;
+    if fmt_size < 16 || fmt_offset + 16 > data.len() {
         return None;
     }
 
-    let audio_format = u16_le(data, fmt_offset);
-    if audio_format != 1 {
-        // Not PCM.
+    let audio_format = match u16_le(data, fmt_offset) {
+        WAVE_FORMAT_PCM => WAVE_FORMAT_PCM,
+        // WAVE_FORMAT_EXTENSIBLE: the real format is the first two bytes of
+        // the SubFormat GUID at offset 24 (written by many tools for PCM).
+        WAVE_FORMAT_EXTENSIBLE if fmt_size >= 40 && fmt_offset + 26 <= data.len() => {
+            u16_le(data, fmt_offset + 24)
+        },
+        other => other,
+    };
+    if audio_format != WAVE_FORMAT_PCM {
         return None;
     }
 
@@ -46,7 +59,8 @@ pub fn decode_wav(data: &[u8]) -> Option<WavData> {
     // bytes 12..13 = block align (skip)
     let bits_per_sample = u16_le(data, fmt_offset + 14);
 
-    if channels == 0 || channels > 2 {
+    // A 0 Hz rate would divide by zero in every player's position math.
+    if channels == 0 || channels > 2 || sample_rate == 0 {
         return None;
     }
     if bits_per_sample != 8 && bits_per_sample != 16 {
@@ -232,5 +246,59 @@ mod tests {
         buf.extend_from_slice(&4u32.to_le_bytes());
         buf.extend_from_slice(b"WAVE");
         assert!(decode_wav(&buf).is_none());
+    }
+
+    #[test]
+    fn decode_extensible_pcm() {
+        // WAVE_FORMAT_EXTENSIBLE with the PCM SubFormat GUID (as written by
+        // many editors for plain 16-bit PCM) used to be rejected.
+        let samples = [5i16, -5, 7, -7];
+        let mut wav = make_wav(&samples, 48000, 2);
+        let mut ext = Vec::new();
+        ext.extend_from_slice(&0xFFFEu16.to_le_bytes());
+        ext.extend_from_slice(&wav[22..36]); // channels..bits_per_sample
+        ext.extend_from_slice(&22u16.to_le_bytes()); // cbSize
+        ext.extend_from_slice(&16u16.to_le_bytes()); // valid bits
+        ext.extend_from_slice(&3u32.to_le_bytes()); // channel mask
+        ext.extend_from_slice(&1u16.to_le_bytes()); // SubFormat: PCM GUID
+        ext.extend_from_slice(&[0, 0, 0, 0, 0x10, 0, 0x80, 0, 0, 0xAA, 0, 0x38, 0x9B, 0x71]);
+        wav.splice(16..36, [40u32.to_le_bytes().as_slice(), &ext].concat());
+        let decoded = decode_wav(&wav).unwrap();
+        assert_eq!(decoded.samples, samples);
+        assert_eq!((decoded.sample_rate, decoded.channels), (48000, 2));
+        // Extensible with a non-PCM SubFormat (IEEE float = 3) is refused.
+        let float_at = 20 + 24;
+        wav[float_at] = 3;
+        assert!(decode_wav(&wav).is_none());
+    }
+
+    #[test]
+    fn short_fmt_chunk_and_zero_rate_are_rejected() {
+        // Regression: a fmt chunk shorter than 16 bytes was read past its
+        // end (into the next chunk), and a 0 Hz rate was accepted.
+        let mut wav = make_wav(&[1, 2], 44100, 1);
+        wav[16..20].copy_from_slice(&8u32.to_le_bytes());
+        assert!(decode_wav(&wav).is_none());
+        let mut wav = make_wav(&[1, 2], 0, 1);
+        assert!(decode_wav(&wav).is_none());
+        wav[24..28].copy_from_slice(&8000u32.to_le_bytes());
+        assert!(decode_wav(&wav).is_some());
+    }
+
+    #[test]
+    fn truncated_and_bit_flipped_wavs_never_panic() {
+        let wav = make_wav(&[0, 1000, -1000, 32767, -32768, 5, 6, 7], 22050, 2);
+        for len in 0..wav.len() {
+            let _ = decode_wav(&wav[..len]);
+        }
+        for byte in 0..wav.len() {
+            for bit in 0..8 {
+                let mut m = wav.clone();
+                m[byte] ^= 1 << bit;
+                if let Some(d) = decode_wav(&m) {
+                    assert!(d.channels > 0 && d.sample_rate > 0);
+                }
+            }
+        }
     }
 }

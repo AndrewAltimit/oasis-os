@@ -185,12 +185,41 @@ pub trait Command {
 /// persisted history file).
 pub(crate) const MAX_HISTORY: usize = 500;
 
-/// Maximum shell function call depth (prevents infinite recursion).
-pub(crate) const MAX_CALL_DEPTH: usize = 64;
+/// Maximum shell function call depth (prevents infinite recursion). Below
+/// [`MAX_EXEC_DEPTH`] so runaway recursion reports this, clearer, limit.
+pub(crate) const MAX_CALL_DEPTH: usize = 24;
 
 /// Maximum nesting of `run <script>` (a script running itself would
-/// otherwise recurse until the host's stack overflows).
-pub(crate) const MAX_SCRIPT_DEPTH: usize = 16;
+/// otherwise recurse until the host's stack overflows). Each level also
+/// takes two [`MAX_EXEC_DEPTH`] levels.
+pub(crate) const MAX_SCRIPT_DEPTH: usize = 8;
+
+/// Maximum shell nesting: [`CommandRegistry::execute`] calls (`$(...)`
+/// inside `$(...)`, function calls, scripts) plus the `if` / loop / `case`
+/// blocks they run, all counted together. Each level recurses on the host
+/// stack: about 2.5 KiB in an optimized build and 11 KiB in a debug one
+/// (measured by `tests/stack_depth.rs`), so 32 levels take ~80 KiB of the
+/// 256 KiB main-thread stack of a PSP EBOOT, and ~350 KiB of a debug
+/// desktop build's 1 MiB Windows main thread.
+///
+/// [`CommandRegistry::execute`]: crate::CommandRegistry::execute
+pub const MAX_EXEC_DEPTH: usize = 32;
+
+/// Maximum simple commands one top-level command line may run, across all
+/// loops, functions and scripts it starts. Bounds nested loops (the
+/// per-loop cap alone allows 1000^depth iterations) so a runaway line ends
+/// with an error instead of freezing the UI frame it runs in.
+pub(crate) const MAX_COMMANDS_PER_LINE: u64 = 100_000;
+
+/// Maximum length of one expanded command line (after `$VAR` and `$(...)`
+/// substitution), so `set x=$x$x` in a loop cannot double memory forever.
+pub(crate) const MAX_EXPANDED_LEN: usize = 256 * 1024;
+
+/// Maximum length of a shell variable value set by `set` / `local`.
+pub(crate) const MAX_VAR_LEN: usize = 64 * 1024;
+
+/// Maximum number of shell variables.
+pub(crate) const MAX_VARIABLES: usize = 4096;
 
 /// A user-defined shell function.
 #[derive(Clone, Debug)]

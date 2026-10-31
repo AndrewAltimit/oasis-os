@@ -2,11 +2,15 @@
 //!
 //! Connects to a remote OASIS_OS instance (or any TCP text service),
 //! sends commands, and receives output. Designed for non-blocking polling.
+//! With a PSK it answers the listener's `AUTH_REQUIRED <nonce>` challenge
+//! (see [`crate::auth`]); the key itself is never sent.
 
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use oasis_types::backend::{NetworkBackend, NetworkStream};
 use oasis_types::error::{OasisError, Result};
+
+use crate::auth::psk_response;
 
 /// Maximum time (in seconds) to wait for an authentication response.
 const AUTH_TIMEOUT_SECS: u64 = 30;
@@ -16,6 +20,31 @@ const MAX_LINE_LEN: usize = 16_384;
 
 /// Maximum bytes read from the socket in a single poll.
 const MAX_READ_PER_POLL: usize = 64 * 1024;
+
+/// How long [`write_all`] keeps retrying a socket that would block.
+const WRITE_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Write all of `data` to a (possibly non-blocking) stream: a short write
+/// or `WouldBlock` is retried until everything is sent or
+/// [`WRITE_TIMEOUT`] passes, so a command line is never silently cut.
+fn write_all(stream: &mut dyn NetworkStream, mut data: &[u8]) -> Result<()> {
+    let started = Instant::now();
+    while !data.is_empty() {
+        match stream.write(data) {
+            Ok(0) => return Err(OasisError::Backend("connection closed".into())),
+            Ok(n) => data = &data[n..],
+            Err(e) if e.is_would_block() => {
+                if started.elapsed() > WRITE_TIMEOUT {
+                    return Err(OasisError::Backend("write timed out".into()));
+                }
+                std::thread::yield_now();
+            },
+            Err(e) => return Err(e),
+        }
+    }
+    let _ = stream.flush();
+    Ok(())
+}
 
 /// State of the remote client connection.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -38,6 +67,8 @@ pub struct RemoteClient {
     pub(crate) received_lines: Vec<String>,
     /// When authentication was initiated (for timeout detection).
     pub(crate) auth_started: Option<Instant>,
+    /// Key used to answer the server's challenge while authenticating.
+    psk: Option<String>,
 }
 
 impl RemoteClient {
@@ -48,6 +79,7 @@ impl RemoteClient {
             read_buf: Vec::with_capacity(256),
             received_lines: Vec::new(),
             auth_started: None,
+            psk: None,
         }
     }
 
@@ -57,6 +89,9 @@ impl RemoteClient {
     }
 
     /// Connect to a remote host.
+    ///
+    /// With a `psk` the client waits in [`ClientState::Authenticating`] for
+    /// the server's challenge and answers it from [`poll`](Self::poll).
     pub fn connect(
         &mut self,
         backend: &mut dyn NetworkBackend,
@@ -67,39 +102,13 @@ impl RemoteClient {
         let stream = backend.connect(address, port)?;
         self.stream = Some(stream);
 
+        self.read_buf.clear();
         if let Some(key) = psk {
-            #[cfg(not(feature = "tls-rustls"))]
-            {
-                let _ = key; // suppress unused variable warning
-                // Refuse to send PSK in plaintext -- close the connection.
-                if let Some(ref mut s) = self.stream {
-                    let _ = s.close();
-                }
-                self.stream = None;
-                return Err(OasisError::Backend(
-                    "PSK authentication requires TLS \u{2014} enable the \
-                     `tls-rustls` feature"
-                        .into(),
-                ));
-            }
-            #[cfg(feature = "tls-rustls")]
-            {
-                // The TLS handshake has already completed at this point --
-                // `backend.connect()` returns a TLS-wrapped stream when the
-                // `tls-rustls` feature is enabled.  The PSK is only sent
-                // over the encrypted channel, never in plaintext.
-                //
-                // NOTE: The server's certificate is validated by rustls
-                // against the webpki root CA bundle.  Custom certificate
-                // pinning is not yet implemented.
-                if let Some(ref mut s) = self.stream {
-                    s.write(format!("{key}\n").as_bytes())
-                        .map_err(|e| OasisError::Backend(format!("auth send: {e}").into()))?;
-                }
-                self.state = ClientState::Authenticating;
-                self.auth_started = Some(Instant::now());
-            }
+            self.psk = Some(key.to_string());
+            self.state = ClientState::Authenticating;
+            self.auth_started = Some(Instant::now());
         } else {
+            self.psk = None;
             self.state = ClientState::Connected;
         }
 
@@ -112,10 +121,8 @@ impl RemoteClient {
             .stream
             .as_mut()
             .ok_or_else(|| OasisError::Backend("not connected".into()))?;
-        stream
-            .write(format!("{line}\n").as_bytes())
-            .map_err(|e| OasisError::Backend(format!("send: {e}").into()))?;
-        Ok(())
+        write_all(stream.as_mut(), format!("{line}\n").as_bytes())
+            .map_err(|e| OasisError::Backend(format!("send: {e}").into()))
     }
 
     /// Poll for received data from the remote host.
@@ -170,11 +177,28 @@ impl RemoteClient {
 
             // Handle auth responses.
             if self.state == ClientState::Authenticating {
+                if let Some(nonce) = line.strip_prefix("AUTH_REQUIRED ") {
+                    let answer = format!(
+                        "AUTH {}\n",
+                        psk_response(self.psk.as_deref().unwrap_or(""), nonce.trim())
+                    );
+                    let sent = self
+                        .stream
+                        .as_mut()
+                        .map(|s| write_all(s.as_mut(), answer.as_bytes()));
+                    if !matches!(sent, Some(Ok(()))) {
+                        self.disconnect();
+                        self.received_lines
+                            .push("Authentication failed: could not send.".to_string());
+                        return std::mem::take(&mut self.received_lines);
+                    }
+                    continue;
+                }
                 if line == "AUTH_OK" {
                     self.state = ClientState::Connected;
                     self.auth_started = None;
                     continue;
-                } else if line == "AUTH_FAIL" {
+                } else if line == "AUTH_FAIL" || line.starts_with("AUTH_FAIL ") {
                     self.auth_started = None;
                     self.disconnect();
                     self.received_lines
@@ -218,6 +242,7 @@ impl RemoteClient {
         }
         self.stream = None;
         self.state = ClientState::Disconnected;
+        self.psk = None;
     }
 
     /// Whether we are currently connected.
@@ -364,6 +389,40 @@ mod tests {
         assert_eq!(client.state(), ClientState::Disconnected);
         assert!(!client.is_connected());
         assert!(client.stream.is_none());
+    }
+
+    /// Accepts one byte per write and would-block on every other call.
+    struct Stingy {
+        written: Vec<u8>,
+        block_next: bool,
+    }
+
+    impl NetworkStream for Stingy {
+        fn read(&mut self, _buf: &mut [u8]) -> Result<usize> {
+            Err(OasisError::Io(std::io::ErrorKind::WouldBlock.into()))
+        }
+        fn write(&mut self, data: &[u8]) -> Result<usize> {
+            self.block_next = !self.block_next;
+            if !self.block_next {
+                return Err(OasisError::Io(std::io::ErrorKind::WouldBlock.into()));
+            }
+            self.written.push(data[0]);
+            Ok(1)
+        }
+        fn close(&mut self) -> Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn write_all_survives_short_writes_and_would_block() {
+        // `send` used to issue one `write` and drop whatever it did not take.
+        let mut s = Stingy {
+            written: Vec::new(),
+            block_next: false,
+        };
+        write_all(&mut s, b"ls -la /home\n").unwrap();
+        assert_eq!(s.written, b"ls -la /home\n");
     }
 
     #[test]

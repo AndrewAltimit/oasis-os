@@ -22,9 +22,9 @@ pub struct SettingsColors {
     pub text: Color,
     /// Text of the cursor/selected line.
     pub selected_text: Color,
-    /// Selection highlight row background (fullscreen SDI mode).
+    /// Selection highlight row background.
     pub selected_bg: Color,
-    /// Selection left-accent bar (fullscreen SDI mode).
+    /// Selection left-accent bar.
     pub selection_accent: Color,
     /// Dim/hint text (scroll indicator, "Cancel=back" footer).
     pub dim_text: Color,

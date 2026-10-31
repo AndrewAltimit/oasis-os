@@ -9,11 +9,13 @@ mod game_asset;
 mod memory;
 #[cfg(not(target_arch = "wasm32"))]
 mod real;
+mod subtree;
 
 pub use game_asset::GameAssetVfs;
 pub use memory::MemoryVfs;
 #[cfg(not(target_arch = "wasm32"))]
 pub use real::RealVfs;
+pub use subtree::SubtreeVfs;
 
 use oasis_types::error::{OasisError, Result, VfsError};
 
@@ -177,10 +179,72 @@ pub(crate) fn parent_path(path: &str) -> &str {
     }
 }
 
+/// Normalize a VFS path lexically, the one path form every backend uses.
+///
+/// The result starts with `/`, has no empty or `.` segments and no trailing
+/// `/` (except the root itself); each `..` removes the segment before it. A
+/// relative path is taken relative to `/`. Only `/` separates segments: a
+/// `\` is an ordinary file-name character here (`RealVfs` additionally
+/// treats it as a separator on Windows, where the host does).
+///
+/// Already-normal paths are returned borrowed, without allocating.
+///
+/// # Errors
+///
+/// - [`VfsError::PathTraversal`] when a `..` would climb above `/` -- the
+///   VFS root is the top of the tree, so `/../x` is rejected rather than
+///   silently clamped to `/x`;
+/// - [`VfsError::Other`] when the path contains a NUL byte (no backend can
+///   store one, and the host filesystem would truncate at it).
+pub fn normalize_path(path: &str) -> Result<std::borrow::Cow<'_, str>> {
+    use std::borrow::Cow;
+    if path.contains('\0') {
+        return Err(VfsError::Other(format!(
+            "invalid path (contains NUL byte): {}",
+            path.escape_debug()
+        ))
+        .into());
+    }
+    if is_normalized(path) {
+        return Ok(Cow::Borrowed(path));
+    }
+    let mut parts: Vec<&str> = Vec::new();
+    for seg in path.split('/') {
+        match seg {
+            "" | "." => {},
+            ".." => {
+                if parts.pop().is_none() {
+                    return Err(VfsError::PathTraversal { path: path.into() }.into());
+                }
+            },
+            s => parts.push(s),
+        }
+    }
+    Ok(Cow::Owned(format!("/{}", parts.join("/"))))
+}
+
+/// Whether `path` is already in the form [`normalize_path`] produces.
+fn is_normalized(path: &str) -> bool {
+    if path == "/" {
+        return true;
+    }
+    let Some(rest) = path.strip_prefix('/') else {
+        return false;
+    };
+    rest.split('/').all(|seg| !matches!(seg, "" | "." | ".."))
+}
+
 /// The virtual file system trait.
 ///
 /// All file operations in the command interpreter go through this trait.
-/// Paths are always forward-slash separated, absolute (starting with `/`).
+/// Paths are forward-slash separated and absolute (starting with `/`).
+///
+/// Every implementation runs incoming paths through [`normalize_path`]:
+/// `//`, `.` and a trailing `/` are ignored, `..` is resolved lexically, and
+/// a path that climbs above `/` or contains a NUL byte is an error. The
+/// shared conformance suite (`tests/vfs_conformance.rs`) pins this, along
+/// with the type rules: `write` never replaces a directory, `mkdir` never
+/// replaces a file, and nothing is created beneath a file.
 pub trait Vfs {
     /// List entries in a directory.
     fn readdir(&self, path: &str) -> Result<Vec<VfsEntry>>;
@@ -188,13 +252,16 @@ pub trait Vfs {
     /// Read entire file contents.
     fn read(&self, path: &str) -> Result<Vec<u8>>;
 
-    /// Write data to a file, creating or overwriting it.
+    /// Write data to a file, creating or overwriting it. The parent must be
+    /// an existing directory, and `path` itself must not be a directory.
     fn write(&mut self, path: &str, data: &[u8]) -> Result<()>;
 
     /// Get metadata for a path.
     fn stat(&self, path: &str) -> Result<VfsMetadata>;
 
-    /// Create a directory (and parents if needed).
+    /// Create a directory (and parents if needed). Succeeds when the
+    /// directory already exists; fails when the path, or one of its
+    /// ancestors, is a file.
     fn mkdir(&mut self, path: &str) -> Result<()>;
 
     /// Remove a file or empty directory.

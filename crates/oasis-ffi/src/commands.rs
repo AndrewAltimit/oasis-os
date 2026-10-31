@@ -3,7 +3,7 @@
 use std::ffi::CString;
 use std::os::raw::c_char;
 
-use oasis_core::terminal::{CommandOutput, Environment};
+use oasis_core::terminal::{CommandOutput, CommandSignal, Environment};
 
 use crate::handle::{OasisInstance, c_str_to_str, ffi_guard, with_instance};
 use crate::types::OASIS_CB_COMMAND_EXEC;
@@ -11,11 +11,13 @@ use crate::types::OASIS_CB_COMMAND_EXEC;
 /// Execute a terminal command and return the output as a C string.
 ///
 /// The caller must free the returned string with `oasis_free_string`.
-/// Returns null on error.
+/// Returns null for a null handle, a null / non-UTF-8 `cmd`, or a caught
+/// panic; a failing command returns its `error: ...` text instead.
 ///
 /// # Safety
 ///
-/// `handle` must be valid. `cmd` must be a valid null-terminated C string.
+/// `handle` must be null or valid. `cmd` must be null or a valid
+/// null-terminated C string.
 ///
 /// # Thread Safety
 ///
@@ -60,8 +62,22 @@ fn send_command_inner(instance: &mut OasisInstance, cmd_str: &str) -> *mut c_cha
     };
 
     let output = match instance.cmd_reg.execute(cmd_str, &mut env) {
-        Ok(CommandOutput::Text(text)) => text,
-        Ok(CommandOutput::Table { headers, rows }) => {
+        Ok(output) => output_text(output),
+        Err(e) => format!("error: {e}"),
+    };
+
+    instance.cwd = env.cwd;
+
+    output_to_c_string(output).into_raw()
+}
+
+/// Flatten a command's output to the text a C host sees: tables as
+/// `|`-separated rows, `Multi` parts joined by newlines, shell signals the
+/// embedded instance can't act on as a short notice.
+fn output_text(output: CommandOutput) -> String {
+    match output {
+        CommandOutput::Text(text) => text,
+        CommandOutput::Table { headers, rows } => {
             let mut out = headers.join(" | ");
             for row in &rows {
                 out.push('\n');
@@ -70,61 +86,29 @@ fn send_command_inner(instance: &mut OasisInstance, cmd_str: &str) -> *mut c_cha
             out
         },
         // `Status` is unwrapped by the executor and never reaches hosts.
-        Ok(CommandOutput::Clear | CommandOutput::None | CommandOutput::Status { .. }) => {
-            String::new()
+        CommandOutput::Clear | CommandOutput::None | CommandOutput::Status { .. } => String::new(),
+        CommandOutput::Signal(sig) => match sig {
+            CommandSignal::BrowserSandbox { enable } => {
+                let state = if enable { "on" } else { "off" };
+                format!("Browser sandbox: {state}")
+            },
+            CommandSignal::SkinSwap { name } => {
+                format!("Skin swap to '{name}' not available via FFI.")
+            },
+            _ => "Not available via FFI.".to_string(),
         },
-        Ok(CommandOutput::Signal(ref sig)) => {
-            use oasis_core::terminal::CommandSignal;
-            match sig {
-                CommandSignal::BrowserSandbox { enable } => {
-                    let state = if *enable { "on" } else { "off" };
-                    format!("Browser sandbox: {state}")
-                },
-                CommandSignal::SkinSwap { name } => {
-                    format!("Skin swap to '{name}' not available via FFI.")
-                },
-                _ => "Not available via FFI.".to_string(),
-            }
-        },
-        Ok(CommandOutput::Multi(outputs)) => {
-            let mut parts = Vec::new();
-            for output in outputs {
-                let text = match output {
-                    CommandOutput::Text(t) => t,
-                    CommandOutput::Table { headers, rows } => {
-                        let mut out = headers.join(" | ");
-                        for row in &rows {
-                            out.push('\n');
-                            out.push_str(&row.join(" | "));
-                        }
-                        out
-                    },
-                    CommandOutput::Clear | CommandOutput::None => continue,
-                    CommandOutput::Signal(ref sig) => {
-                        use oasis_core::terminal::CommandSignal;
-                        match sig {
-                            CommandSignal::BrowserSandbox { enable } => {
-                                let state = if *enable { "on" } else { "off" };
-                                format!("Browser sandbox: {state}")
-                            },
-                            CommandSignal::SkinSwap { name } => {
-                                format!("Skin swap to '{name}' not available via FFI.")
-                            },
-                            _ => "Not available via FFI.".to_string(),
-                        }
-                    },
-                    CommandOutput::Multi(_) | CommandOutput::Status { .. } => continue,
-                };
-                parts.push(text);
-            }
-            parts.join("\n")
-        },
-        Err(e) => format!("error: {e}"),
-    };
+        CommandOutput::Multi(outputs) => outputs
+            .into_iter()
+            .map(output_text)
+            .filter(|t| !t.is_empty())
+            .collect::<Vec<_>>()
+            .join("\n"),
+    }
+}
 
-    instance.cwd = env.cwd;
-
-    output_to_c_string(output).into_raw()
+#[cfg(test)]
+pub(crate) fn output_text_for_test(output: CommandOutput) -> String {
+    output_text(output)
 }
 
 /// Convert command output to a C string. Interior NUL bytes (e.g. `cat` of a

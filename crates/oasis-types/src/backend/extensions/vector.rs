@@ -2,7 +2,7 @@
 
 use super::spans::SpanFill;
 use crate::backend::SdiShapes;
-use crate::backend::{Color, arc_segments, cos_approx_f32, sin_approx_f32};
+use crate::backend::{Color, arc_segments, clamp_sweep, cos_approx_f32, sin_approx_f32};
 use crate::error::Result;
 use crate::rasterize::polygon_rows;
 
@@ -18,8 +18,9 @@ pub trait SdiVector: SdiShapes {
     /// backends.
     fn fill_polygon(&mut self, points: &[(i32, i32)], color: Color) -> Result<()> {
         let mut xs = Vec::new();
+        let bounds = self.draw_bounds();
         let mut fill = SpanFill::new(self, color);
-        polygon_rows(points, &mut xs, |y, x0, x1| fill.span(y, x0, x1));
+        polygon_rows(points, &mut xs, bounds, |y, x0, x1| fill.span(y, x0, x1));
         fill.finish()
     }
 
@@ -50,7 +51,16 @@ pub trait SdiVector: SdiShapes {
         Ok(())
     }
 
-    /// Draw a filled arc (pie wedge, approximated with triangles).
+    /// Draw a filled arc: the pie wedge from `start_angle` to `end_angle`
+    /// (radians, clockwise in screen space), approximated by a polygon of
+    /// the centre and [`arc_segments`] points along the arc.
+    ///
+    /// The wedge is filled as **one** polygon ([`fill_polygon`]), so every
+    /// pixel is covered once and a translucent wedge blends uniformly (a
+    /// fan of triangles covers each shared spoke twice). A sweep beyond a
+    /// full turn is clamped to one turn.
+    ///
+    /// [`fill_polygon`]: Self::fill_polygon
     fn fill_arc(
         &mut self,
         cx: i32,
@@ -60,23 +70,26 @@ pub trait SdiVector: SdiShapes {
         end_angle: f32,
         color: Color,
     ) -> Result<()> {
+        let end_angle = clamp_sweep(start_angle, end_angle);
         let segments = arc_segments(radius, start_angle, end_angle);
         let r = radius as f32;
         let step = (end_angle - start_angle) / segments as f32;
-        let mut prev_x = cx + (r * cos_approx_f32(start_angle)) as i32;
-        let mut prev_y = cy + (r * sin_approx_f32(start_angle)) as i32;
-        for i in 1..=segments {
+        let mut points = Vec::with_capacity(segments + 2);
+        points.push((cx, cy));
+        for i in 0..=segments {
             let angle = start_angle + step * i as f32;
-            let nx = cx + (r * cos_approx_f32(angle)) as i32;
-            let ny = cy + (r * sin_approx_f32(angle)) as i32;
-            self.fill_triangle(cx, cy, prev_x, prev_y, nx, ny, color)?;
-            prev_x = nx;
-            prev_y = ny;
+            points.push((
+                cx + (r * cos_approx_f32(angle)) as i32,
+                cy + (r * sin_approx_f32(angle)) as i32,
+            ));
         }
-        Ok(())
+        self.fill_polygon(&points, color)
     }
 
-    /// Draw an arc stroke (line segments along arc).
+    /// Draw an arc stroke: [`arc_segments`] line segments along the arc
+    /// from `start_angle` to `end_angle` (radians, clockwise in screen
+    /// space). A sweep beyond a full turn is clamped to one turn, as in
+    /// [`fill_arc`](Self::fill_arc).
     fn stroke_arc(
         &mut self,
         cx: i32,
@@ -87,6 +100,7 @@ pub trait SdiVector: SdiShapes {
         width: u16,
         color: Color,
     ) -> Result<()> {
+        let end_angle = clamp_sweep(start_angle, end_angle);
         let segments = arc_segments(radius, start_angle, end_angle);
         let r = radius as f32;
         let step = (end_angle - start_angle) / segments as f32;
@@ -103,7 +117,8 @@ pub trait SdiVector: SdiShapes {
         Ok(())
     }
 
-    /// Draw a dashed line between two points.
+    /// Draw a dashed line between two points: `dash` pixels drawn, `gap`
+    /// pixels skipped, repeating from `(x1, y1)`.
     fn stroke_line_dashed(
         &mut self,
         x1: i32,
@@ -115,8 +130,16 @@ pub trait SdiVector: SdiShapes {
         dash: u16,
         gap: u16,
     ) -> Result<()> {
-        let dx = (x2 - x1) as f32;
-        let dy = (y2 - y1) as f32;
+        // A zero gap is a solid line and a zero dash draws nothing, as
+        // with Canvas 2D `setLineDash`; it also keeps `t` advancing below.
+        if gap == 0 {
+            return self.draw_line(x1, y1, x2, y2, width, color);
+        }
+        if dash == 0 {
+            return Ok(());
+        }
+        let dx = x2 as f32 - x1 as f32;
+        let dy = y2 as f32 - y1 as f32;
         let total_len = (dx * dx + dy * dy).sqrt();
         if total_len < 1.0 {
             return Ok(());
@@ -135,15 +158,5 @@ pub trait SdiVector: SdiShapes {
             t += cycle;
         }
         Ok(())
-    }
-
-    /// Draw a filled polygon with a per-vertex linear gradient.
-    fn fill_polygon_gradient(
-        &mut self,
-        points: &[(i32, i32)],
-        color_start: Color,
-        _color_end: Color,
-    ) -> Result<()> {
-        self.fill_polygon(points, color_start)
     }
 }

@@ -447,12 +447,17 @@ mod tests {
     #[test]
     fn extract_stream_title_empty() {
         // Clear from previous test
+        // SAFETY: the RADIO_META tests share one static, so they must not run
+        // concurrently (`--test-threads=1`); writes go through a raw place, and
+        // no reference to it is live.
         unsafe {
             (*(&raw mut RADIO_META)) = [0u8; 48];
         }
         let meta = b"StreamTitle='';";
         extract_stream_title(meta);
         // Title is empty -- buffer should be all zeros
+        // SAFETY: read after extract_stream_title finished; see the note above on
+        // running these tests single-threaded.
         let title = unsafe { &(*(&raw const RADIO_META))[..] };
         assert!(title.iter().all(|&b| b == 0));
     }
@@ -460,12 +465,14 @@ mod tests {
     #[test]
     fn extract_stream_title_no_match() {
         // Set a known value first
+        // SAFETY: single-threaded test access to RADIO_META (see above).
         unsafe {
             (*(&raw mut RADIO_META))[0] = b'X';
         }
         let meta = b"SomeOtherField='value';";
         extract_stream_title(meta);
         // Should not have changed RADIO_META (no StreamTitle found)
+        // SAFETY: by-value read of one byte; single-threaded test access.
         let first = unsafe { (*(&raw const RADIO_META))[0] };
         assert_eq!(first, b'X');
     }
@@ -480,6 +487,7 @@ mod tests {
         meta.extend_from_slice(b"';");
         extract_stream_title(&meta);
         // RADIO_META is 48 bytes, max title is 47
+        // SAFETY: read after extract_stream_title finished; single-threaded tests.
         let title = unsafe { &(*(&raw const RADIO_META))[..] };
         // First 47 should be 'A'
         assert!(title[..47].iter().all(|&b| b == b'A'));

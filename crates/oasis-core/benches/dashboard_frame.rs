@@ -57,13 +57,11 @@ fn bench_dashboard_frame(c: &mut Criterion) {
 }
 
 /// The full per-frame Dashboard-mode SDI work the desktop main loop does:
-/// the hide passes for terminal/app objects (which run every frame while
-/// those modes are inactive), the dashboard sync, and the idle-frame
+/// the hide pass for terminal objects (which runs every frame while
+/// that mode is inactive), the dashboard sync, and the idle-frame
 /// elision dirty check. On an idle dashboard this should end with a clean
 /// scene and no signature hash.
 fn bench_dashboard_frame_full(c: &mut Criterion) {
-    use oasis_app_core::ContentState;
-    use oasis_core::apps::{AppRegistry, AppRunner};
     use oasis_core::terminal_sdi;
 
     let features = SkinFeatures::default();
@@ -73,18 +71,14 @@ fn bench_dashboard_frame_full(c: &mut Criterion) {
     let mut sdi = SdiRegistry::new();
     let mut backend = NullBackend::default();
 
-    // Populate the terminal and app object pools the hide passes walk.
+    // Populate the terminal object pool the hide pass walks.
     let lines: Vec<String> = (0..200).map(|i| format!("line {i}")).collect();
     terminal_sdi::setup_terminal_objects(&mut sdi, &lines, "/", "", 0, &at, true);
-    let mut content = ContentState::new("Files", "/apps/files");
-    content.lines = lines.clone();
-    oasis_app_core::render::render_content_sdi(&content, &mut sdi, &at);
 
     let mut last_sig = None;
     c.bench_function("dashboard_frame/steady_state_full", |b| {
         b.iter(|| {
             terminal_sdi::set_terminal_visible(&mut sdi, false);
-            AppRunner::hide_sdi(&AppRegistry::new(), &mut sdi);
             dash.tick_animation();
             dash.update_sdi(&mut sdi, &at);
             let changed = if sdi.take_scene_dirty() {

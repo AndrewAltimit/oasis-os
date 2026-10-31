@@ -55,8 +55,10 @@ to `<MemStickDir>/GAME/OASISOS/` (PPSSPP strips the leading `PSP/`).
 
 ## Why screenshots use sentinels (PPSSPP-specific)
 
-On real PSP hardware, dumping VRAM at `0x44000000` produces a valid
-framebuffer (see `cmd_server::take_screenshot`). PPSSPP's GU emulation
+On real PSP hardware, dumping the on-screen VRAM framebuffer produces a
+valid image (the TCP `screenshot` / `screencap` commands in
+`crates/oasis-backend-psp/src/cmd_server/screen.rs`, which also document
+the pixel byte order: R, G, B, then an ignored alpha). PPSSPP's GU emulation
 renders to internal textures and never syncs pixels back to the PSP
 RAM mirror, so VRAM reads in the emulator return only stale boot-time
 content. The sentinel approach delegates capture to the host (`scrot`

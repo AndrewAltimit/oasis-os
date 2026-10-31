@@ -1,6 +1,6 @@
 //! `SdiText` extension trait.
 
-use crate::backend::{Color, SdiCore, TextMetrics};
+use crate::backend::{Color, SdiCore};
 use crate::error::Result;
 
 // ---------------------------------------------------------------------------
@@ -36,19 +36,13 @@ pub trait SdiText: SdiCore {
         crate::bitmap_font::bitmap_ascent(font_size)
     }
 
-    /// Return full text metrics (width, height, ascent) for a string.
-    fn text_metrics(&self, text: &str, font_size: u16) -> TextMetrics {
-        TextMetrics {
-            width: self.measure_text(text, font_size),
-            height: self.measure_text_height(font_size),
-            ascent: self.font_ascent(font_size),
-        }
-    }
-
-    /// Measure both width and height of a text string.
+    /// Measure both width and height of a text string: `measure_text`
+    /// and [`measure_text_height`](Self::measure_text_height).
     fn measure_text_extents(&self, text: &str, font_size: u16) -> (u32, u32) {
-        let m = self.text_metrics(text, font_size);
-        (m.width, m.height)
+        (
+            self.measure_text(text, font_size),
+            self.measure_text_height(font_size),
+        )
     }
 
     /// Draw text truncated with "..." if it exceeds `max_width`.

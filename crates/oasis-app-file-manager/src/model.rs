@@ -3,10 +3,10 @@
 //! This module owns the per-panel state ([`FilePanel`]), the value enums
 //! ([`FileOp`], [`NavTarget`], [`ViewMode`]), the folder-tree row type
 //! ([`TreeEntry`]), and the side-effect-free helpers used by both the
-//! rendering layer and the input/command layer (`parse_entry`,
+//! rendering layer and the input/command layer (`list_panel`,
 //! `truncate_label`, `build_tree_entries`).
 
-use oasis_app_core::file_viewer::{join_path, list_directory, parent_dir};
+use oasis_app_core::file_viewer::{join_path, parent_dir};
 use oasis_vfs::Vfs;
 
 // ---------------------------------------------------------------
@@ -20,6 +20,11 @@ pub struct FilePanel {
     pub browse_dir: String,
     /// Display lines for the current directory.
     pub lines: Vec<String>,
+    /// The real entry behind each display line (same index), or `None`
+    /// for informational lines (`(empty directory)`, read errors). Names
+    /// are never recovered by parsing `lines`: a file may legitimately be
+    /// called `a  (old).txt`.
+    pub(crate) entries: Vec<Option<PanelEntry>>,
     /// Scroll offset.
     pub scroll: usize,
     /// Cursor position (relative to visible area).
@@ -33,11 +38,12 @@ pub struct FilePanel {
 impl FilePanel {
     /// Create a new panel rooted at the given directory.
     pub fn new(dir: &str, vfs: &dyn Vfs) -> Self {
-        let lines = list_directory(vfs, dir);
+        let (lines, entries) = list_panel(vfs, dir);
         let tree_entries = build_tree_entries(dir, vfs);
         Self {
             browse_dir: dir.to_string(),
             lines,
+            entries,
             scroll: 0,
             cursor: 0,
             tree_entries,
@@ -66,20 +72,30 @@ impl FilePanel {
         }
     }
 
+    /// The real entry behind display line `abs_idx`, if it is one.
+    pub(crate) fn entry(&self, abs_idx: usize) -> Option<&PanelEntry> {
+        self.entries.get(abs_idx).and_then(Option::as_ref)
+    }
+
+    /// The entry under the cursor, if any.
+    pub(crate) fn selected_entry(&self) -> Option<&PanelEntry> {
+        self.entry(self.scroll + self.cursor)
+    }
+
     pub(crate) fn enter_selected(&mut self, vfs: &dyn Vfs) {
-        let abs_idx = self.scroll + self.cursor;
-        let Some(line) = self.lines.get(abs_idx) else {
+        let Some(entry) = self.selected_entry() else {
             return;
         };
-        let line = line.trim().to_string();
-
-        if line == ".." {
-            let parent = parent_dir(&self.browse_dir);
-            self.navigate_to(&parent, vfs);
-        } else if line.ends_with('/') {
-            let name = &line[..line.len() - 1];
-            let new_dir = join_path(&self.browse_dir, name);
-            self.navigate_to(&new_dir, vfs);
+        match entry.kind {
+            EntryKind::ParentDir => {
+                let parent = parent_dir(&self.browse_dir);
+                self.navigate_to(&parent, vfs);
+            },
+            EntryKind::Dir => {
+                let new_dir = join_path(&self.browse_dir, &entry.name);
+                self.navigate_to(&new_dir, vfs);
+            },
+            EntryKind::File => {},
         }
     }
 
@@ -91,7 +107,7 @@ impl FilePanel {
     /// Navigate to `dir` and rebuild the cached listing + folder tree.
     pub fn navigate_to(&mut self, dir: &str, vfs: &dyn Vfs) {
         self.browse_dir = dir.to_string();
-        self.lines = list_directory(vfs, dir);
+        (self.lines, self.entries) = list_panel(vfs, dir);
         self.tree_entries = build_tree_entries(dir, vfs);
         self.scroll = 0;
         self.cursor = 0;
@@ -99,31 +115,103 @@ impl FilePanel {
 
     /// Return the full path of the currently selected entry (if any).
     pub(crate) fn selected_path(&self) -> Option<String> {
-        let abs_idx = self.scroll + self.cursor;
-        let line = self.lines.get(abs_idx)?;
-        let name = line.trim();
-        if name == ".." {
+        let entry = self.selected_entry()?;
+        if entry.kind == EntryKind::ParentDir {
             return None;
         }
-        // Strip trailing '/' for directories, and strip size suffix for files.
-        let name = name
-            .strip_suffix('/')
-            .unwrap_or_else(|| name.split("  (").next().unwrap_or(name));
-        Some(join_path(&self.browse_dir, name))
+        Some(join_path(&self.browse_dir, &entry.name))
+    }
+
+    /// Select absolute entry `idx`, scrolling (in multiples of `step`
+    /// entries) so it lies within the `page` entries shown from `scroll`.
+    pub(crate) fn reveal(&mut self, idx: usize, step: usize, page: usize) {
+        let step = step.max(1);
+        let page = page.max(step);
+        if idx < self.scroll {
+            self.scroll = idx / step * step;
+        } else if idx >= self.scroll + page {
+            self.scroll = (idx / step + 1).saturating_sub(page / step) * step;
+        }
+        self.cursor = idx - self.scroll;
     }
 
     /// Refresh the panel listing from VFS.
     pub fn refresh(&mut self, vfs: &dyn Vfs) {
-        self.lines = list_directory(vfs, &self.browse_dir);
+        (self.lines, self.entries) = list_panel(vfs, &self.browse_dir);
         self.tree_entries = build_tree_entries(&self.browse_dir, vfs);
-        // Clamp cursor to new list size.
+        // Clamp scroll first so it never points past the new list end
+        // (otherwise a shrink leaves the pane rendering empty), then the
+        // cursor so `scroll + cursor` stays a valid index.
         let max = self.lines.len().saturating_sub(1);
-        self.cursor = self.cursor.min(max);
-        // Clamp scroll so it never points past the new list end, otherwise
-        // a directory shrink leaves the main pane rendering empty until the
-        // user manually scrolls back up.
         self.scroll = self.scroll.min(max);
+        self.cursor = self.cursor.min(max - self.scroll);
     }
+}
+
+/// The real directory entry behind one display line of a [`FilePanel`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct PanelEntry {
+    /// Exact entry name (`..` for the parent row).
+    pub name: String,
+    /// What the entry is.
+    pub kind: EntryKind,
+}
+
+/// List `dir` for a panel: the display lines (same format and order as
+/// [`oasis_app_core::file_viewer::list_directory`]) plus, per line, the
+/// real entry it stands for.
+pub(crate) fn list_panel(vfs: &dyn Vfs, dir: &str) -> (Vec<String>, Vec<Option<PanelEntry>>) {
+    let mut lines = Vec::new();
+    let mut entries = Vec::new();
+    if dir != "/" {
+        lines.push("..".to_string());
+        entries.push(Some(PanelEntry {
+            name: "..".to_string(),
+            kind: EntryKind::ParentDir,
+        }));
+    }
+    match vfs.readdir(dir) {
+        Ok(listing) => {
+            let mut dirs: Vec<_> = listing
+                .iter()
+                .filter(|e| e.kind == oasis_vfs::EntryKind::Directory)
+                .collect();
+            let mut files: Vec<_> = listing
+                .iter()
+                .filter(|e| e.kind == oasis_vfs::EntryKind::File)
+                .collect();
+            dirs.sort_by(|a, b| a.name.cmp(&b.name));
+            files.sort_by(|a, b| a.name.cmp(&b.name));
+            for d in &dirs {
+                lines.push(format!("{}/", d.name));
+                entries.push(Some(PanelEntry {
+                    name: d.name.clone(),
+                    kind: EntryKind::Dir,
+                }));
+            }
+            for f in &files {
+                let size = f.size;
+                if size >= 1024 {
+                    lines.push(format!("{}  ({} KB)", f.name, size / 1024));
+                } else {
+                    lines.push(format!("{}  ({size} B)", f.name));
+                }
+                entries.push(Some(PanelEntry {
+                    name: f.name.clone(),
+                    kind: EntryKind::File,
+                }));
+            }
+            if dirs.is_empty() && files.is_empty() {
+                lines.push("(empty directory)".to_string());
+                entries.push(None);
+            }
+        },
+        Err(e) => {
+            lines.push(format!("Error reading directory: {e}"));
+            entries.push(None);
+        },
+    }
+    (lines, entries)
 }
 
 // ---------------------------------------------------------------
@@ -247,18 +335,6 @@ pub(crate) enum EntryKind {
     File,
     Dir,
     ParentDir,
-}
-
-pub(crate) fn parse_entry(line: &str) -> (String, EntryKind) {
-    let trimmed = line.trim();
-    if trimmed == ".." {
-        ("..".to_string(), EntryKind::ParentDir)
-    } else if let Some(name) = trimmed.strip_suffix('/') {
-        (name.to_string(), EntryKind::Dir)
-    } else {
-        let name = trimmed.split("  (").next().unwrap_or(trimmed).to_string();
-        (name, EntryKind::File)
-    }
 }
 
 pub(crate) fn truncate_label(s: &str, max_chars: usize) -> String {

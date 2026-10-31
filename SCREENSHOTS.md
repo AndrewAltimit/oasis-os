@@ -3,7 +3,8 @@
 Every skin is captured at its native virtual resolution (from `screen_width` /
 `screen_height` in `skins/<skin>/skin.toml`) by the `oasis-screenshot` binary.
 Each skin gets four images: the dashboard (or desktop), the AUDIO media tab, the
-MODS tab and the terminal.
+MODS tab and the terminal. Only skins with a top tab bar (PSIX HiFi, Corrupted)
+show a distinct MODS view; in the others `03_mods_tab.png` is the dashboard again.
 
 ## All skins
 
@@ -80,11 +81,11 @@ The other skins' tab views are linked from the [table above](#all-skins).
 The images are static captures: shader wallpapers render a single frame, and the
 corrupted skin's runtime glitch effect is not applied. Pin the clock, the shader
 frame and SDL's software renderer so a re-capture only changes what the code
-changed (the committed set uses `2026-07-18 12:00:00`):
+changed (the committed set shows `2026-10-30 22:03`):
 
 ```bash
 SDL_VIDEODRIVER=dummy SDL_RENDER_DRIVER=software \
-OASIS_FIXED_TIME="2026-07-18 12:00:00" OASIS_FIXED_FRAME=0 \
+OASIS_FIXED_TIME="2026-10-30 22:03:00" OASIS_FIXED_FRAME=0 \
   cargo run -p oasis-app --bin oasis-screenshot -- --all      # all 17 skins
 
 # ...or one skin

@@ -165,7 +165,6 @@ pub(crate) fn sync_registry(apps: &[PluginAppRegistration], registry: &mut AppRe
 mod tests {
     use super::*;
     use oasis_app_core::{App, AppAction};
-    use oasis_sdi::SdiRegistry;
     use oasis_skin::ActiveTheme;
     use oasis_types::backend::SdiBackend;
     use oasis_types::input::Button;
@@ -197,7 +196,6 @@ mod tests {
         fn handle_input(&mut self, _: &Button, _: &dyn Vfs) -> AppAction {
             AppAction::None
         }
-        fn update_sdi(&mut self, _: &mut SdiRegistry, _: &ActiveTheme) {}
         fn draw_windowed(
             &self,
             _cx: i32,
@@ -209,7 +207,6 @@ mod tests {
         ) -> oasis_types::error::Result<()> {
             Ok(())
         }
-        fn hide_sdi(&self, _: &mut SdiRegistry) {}
     }
 
     #[test]

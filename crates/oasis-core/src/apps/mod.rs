@@ -10,16 +10,13 @@
 //! application implements. `oasis-core` itself knows no concrete app
 //! except the Terminal delegate and the placeholder, both [`SimpleApp`].
 
-mod app_trait;
 mod input;
-pub mod layout_calc;
 mod registry;
 mod runner;
-mod runner_sdi;
 pub mod simple_app;
 
-pub use app_trait::{App, AppAction, AppRequest, AsAny, ContentState};
 pub use oasis_app_core::file_viewer::app_for_file;
+pub use oasis_app_core::{App, AppAction, AppRequest, AsAny, ContentState};
 pub use registry::{AppFactory, AppRegistration, AppRegistry, FileFactory, OwnedMedia};
 pub use runner::AppRunner;
 pub use simple_app::SimpleApp;

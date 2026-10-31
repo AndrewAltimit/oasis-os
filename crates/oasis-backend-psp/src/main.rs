@@ -9,7 +9,6 @@
 //! - `app_states` -- per-app mutable state structs
 //! - `dashboard` -- dashboard init and SDI helpers
 //! - `input_dispatch` -- unified input event routing
-//! - `getrandom` -- custom getrandom backends for PSP entropy
 //! - `io_poll` -- async I/O response polling
 //! - `render_classic` -- kiosk fullscreen view rendering
 //! - `render_desktop` -- windowed desktop mode rendering
@@ -37,9 +36,9 @@ mod chrome;
 mod commands;
 mod dashboard;
 mod desktop;
-mod getrandom;
 mod input_dispatch;
 mod io_poll;
+mod js_selftest;
 mod render_classic;
 mod render_desktop;
 mod skins;
@@ -65,35 +64,16 @@ psp::module!("OASIS_OS", 1, 0);
 fn psp_main() {
     let _ = psp::callback::setup_exit_callback();
 
-    // Debug log helper -- appends a line using raw PSP I/O.
-    fn dbg_log(msg: &str) {
-        // SAFETY: sceIo calls with valid path and buffer pointers.
-        unsafe {
-            let fd = psp::sys::sceIoOpen(
-                b"ms0:/PSP/GAME/OASISOS/eboot.log\0".as_ptr(),
-                psp::sys::IoOpenFlags::APPEND
-                    | psp::sys::IoOpenFlags::CREAT
-                    | psp::sys::IoOpenFlags::WR_ONLY,
-                0o777,
-            );
-            if fd >= psp::sys::SceUid(0) {
-                psp::sys::sceIoWrite(fd, msg.as_ptr() as *const _, msg.len());
-                psp::sys::sceIoWrite(fd, b"\n".as_ptr() as *const _, 1);
-                psp::sys::sceIoClose(fd);
-            }
-        }
-    }
-
     dbg_log("[EBOOT] psp_main entered");
 
     // Wire HTML tokenizer progress hook → on-disk eboot.log so a
     // synchronous `navigate_vfs` that hangs in tokenize is observable
     // from the remote test harness.
     oasis_browser::internals::set_tokenize_progress_hook(|iter, pos, len, tokens, state| {
-        let free_kb = unsafe { psp::sys::sceKernelTotalFreeMemSize() as i32 / 1024 };
-        let max_blk_kb = unsafe { psp::sys::sceKernelMaxFreeMemSize() as i32 / 1024 };
+        let (free_kb, max_blk_kb) = oasis_backend_psp::heap_kb();
         oasis_backend_psp::vlog_force(&format!(
-            "[BR/TOK] iter={iter} pos={pos}/{len} tokens={tokens} state={state} free={free_kb}KB blk={max_blk_kb}KB"
+            "[BR/TOK] iter={iter} pos={pos}/{len} tokens={tokens} state={state} \
+             free={free_kb}KB blk={max_blk_kb}KB"
         ));
     });
     // Cooperative yield: lets the cmd_server / audio / video threads
@@ -104,8 +84,7 @@ fn psp_main() {
         psp::thread::sleep_ms(1);
     });
     oasis_browser::internals::set_tree_builder_progress_hook(|idx, total, nodes| {
-        let free_kb = unsafe { psp::sys::sceKernelTotalFreeMemSize() as i32 / 1024 };
-        let max_blk_kb = unsafe { psp::sys::sceKernelMaxFreeMemSize() as i32 / 1024 };
+        let (free_kb, max_blk_kb) = oasis_backend_psp::heap_kb();
         oasis_backend_psp::vlog_force(&format!(
             "[BR/TREE] idx={idx}/{total} nodes={nodes} free={free_kb}KB blk={max_blk_kb}KB"
         ));
@@ -117,7 +96,7 @@ fn psp_main() {
         oasis_backend_psp::vlog_force(msg);
     });
     oasis_browser::internals::set_cascade_progress_hook(|idx, total| {
-        let free_kb = unsafe { psp::sys::sceKernelTotalFreeMemSize() as i32 / 1024 };
+        let (free_kb, _) = oasis_backend_psp::heap_kb();
         oasis_backend_psp::vlog_force(&format!("[BR/CASCADE] idx={idx}/{total} free={free_kb}KB"));
     });
     oasis_browser::internals::set_cascade_yield_hook(|| {
@@ -142,13 +121,14 @@ fn psp_main() {
     // Boot-time JS self-test: run BEFORE any other init so a crash
     // during the rest of the boot can't mask the JSTEST result.
     // Sentinel deleted on success; exits cleanly so the next launch
-    // from XMB boots normally. See `run_js_selftest` below.
+    // from XMB boots normally. See `js_selftest`.
     if psp::io::stat("ms0:/JSTEST").is_ok() {
         boot::show_boot_screen(&mut backend, "Running JS self-test...", 20);
         oasis_backend_psp::vlog_force("[JSTEST] sentinel found, running JS probes");
-        run_js_selftest();
+        js_selftest::run();
         let _ = psp::io::remove_file("ms0:/JSTEST");
         oasis_backend_psp::vlog_force("[JSTEST] done, exiting cleanly");
+        // SAFETY: terminates the application; nothing runs after it.
         unsafe { psp::sys::sceKernelExitGame() };
     }
 
@@ -534,7 +514,7 @@ fn psp_main() {
             let do_upload = latest.is_some();
             if let Some(frame) = latest {
                 if do_upload {
-                    let t0 = unsafe { psp::sys::sceKernelGetSystemTimeWide() } as u32;
+                    let t0 = now_us();
                     let pixels = oasis_backend_psp::video::frame_pixels_raw(&frame);
                     let old_tex = tv.preview_tex;
                     // Pass stride as width so texture buf_w matches CSC
@@ -543,8 +523,7 @@ fn psp_main() {
                         backend.update_video_texture(frame.stride, frame.height, pixels);
                     // Set actual content dimensions for correct UV mapping.
                     backend.set_video_content_size(frame.width, frame.height);
-                    let dt =
-                        (unsafe { psp::sys::sceKernelGetSystemTimeWide() } as u32).wrapping_sub(t0);
+                    let dt = now_us().wrapping_sub(t0);
                     oasis_backend_psp::video::record_upload_time(dt);
                     if old_tex.is_none() && tv.preview_tex.is_some() {
                         oasis_backend_psp::video::vlog_force(&format!(
@@ -708,19 +687,13 @@ fn psp_main() {
             if shader_active && viz_frame % 2 == 0 {
                 if let Some(ref info) = cached_shader {
                     let log_this_frame = viz_frame % 600 == 0;
-                    // SAFETY: scalar FFI returning microsecond timestamp.
-                    let t0 = if log_this_frame {
-                        unsafe { psp::sys::sceKernelGetSystemTimeLow() }
-                    } else {
-                        0
-                    };
+                    let t0 = if log_this_frame { now_us() } else { 0 };
                     let time = viz_frame as f32 / 60.0;
                     let pixels = shader_renderer.render_shader(&info.name, time, &info.params);
                     backend.update_texture_data(shader_tex, pixels);
                     // Log shader render time periodically (~every 10s).
                     if log_this_frame {
-                        let elapsed =
-                            unsafe { psp::sys::sceKernelGetSystemTimeLow() }.wrapping_sub(t0);
+                        let elapsed = now_us().wrapping_sub(t0);
                         dbg_log(&format!(
                             "[SHADER] render+upload: {}us (frame {})",
                             elapsed, viz_frame,
@@ -788,11 +761,7 @@ fn psp_main() {
 
             // Throttle kernel heap queries (~4Hz).
             if viz_frame % 15 == 0 {
-                // SAFETY: scalar FFI returning available memory stats.
-                unsafe {
-                    cached_free_kb = psp::sys::sceKernelTotalFreeMemSize() as i32 / 1024;
-                    cached_max_blk_kb = psp::sys::sceKernelMaxFreeMemSize() as i32 / 1024;
-                }
+                (cached_free_kb, cached_max_blk_kb) = oasis_backend_psp::heap_kb();
                 // Update TCP command server with current state.
                 oasis_backend_psp::cmd_server::update_status(
                     kiosk_app as u8,
@@ -893,160 +862,13 @@ fn psp_main() {
     }
 }
 
-// Remaining extracted modules: desktop, chrome, views, boot, theme, types.
-// Command interpreter and utilities are in commands.rs module.
+/// Append a line to `eboot.log`. Passed down as the `dbg_log` callback.
+fn dbg_log(msg: &str) {
+    oasis_backend_psp::vlog_force(msg);
+}
 
-/// Run a straight-line QuickJS bring-up probe from the sentinel
-/// handler above. Every step writes a log line to `eboot.log` before
-/// and after the call so a crash inside any of them leaves the name
-/// of the last-attempted call on disk. The rquickjs calls are done
-/// through the raw ffi (`oasis_js::rquickjs::qjs::*`) to keep the
-/// Rust glue out of the failure surface and to isolate where the
-/// crash really is.
-fn run_js_selftest() {
-    use oasis_js::rquickjs;
-
-    fn log(step: &str) {
-        oasis_backend_psp::vlog_force(&format!("[JSTEST] {step}"));
-    }
-
-    log("Runtime::new begin");
-    let runtime = match rquickjs::Runtime::new() {
-        Ok(r) => {
-            log("Runtime::new ok");
-            r
-        },
-        Err(e) => {
-            log(&format!("Runtime::new err: {e}"));
-            return;
-        },
-    };
-
-    log("Context::base begin");
-    let context = match rquickjs::Context::base(&runtime) {
-        Ok(c) => {
-            log("Context::base ok");
-            c
-        },
-        Err(e) => {
-            log(&format!("Context::base err: {e}"));
-            return;
-        },
-    };
-
-    log("context.with begin");
-    context.with(|ctx| {
-        let raw_ctx = ctx.as_raw().as_ptr();
-        log(&format!("raw ctx ptr = {raw_ctx:?}"));
-
-        log("JS_GetGlobalObject begin");
-        let gval = unsafe { rquickjs::qjs::JS_GetGlobalObject(raw_ctx) };
-        log("JS_GetGlobalObject ok");
-        unsafe { rquickjs::qjs::JS_FreeValue(raw_ctx, gval) };
-        log("JS_FreeValue(global) ok");
-
-        fn free_kb() -> i32 {
-            unsafe { psp::sys::sceKernelTotalFreeMemSize() as i32 / 1024 }
-        }
-
-        let fname = b"<jstest>\0".as_ptr() as *const core::ffi::c_char;
-        let global_flag = rquickjs::qjs::JS_EVAL_TYPE_GLOBAL as i32;
-        let compile_only = global_flag | rquickjs::qjs::JS_EVAL_FLAG_COMPILE_ONLY as i32;
-
-        // Probe A: call JS_Eval2 — which takes a JSEvalOptions
-        // pointer instead of the 5-arg-list form JS_Eval uses.
-        // Only 4 args, all fit in $a0-$a3, no stack-passed args.
-        // If this works and JS_Eval doesn't, the crash is the
-        // MIPS o32 shadow-space ABI mismatch between rustc and GCC
-        // for 5-arg calls.
-        log(&format!(
-            "A: free={}KB, JS_Eval2 \"0\" (4-arg form) begin",
-            free_kb()
-        ));
-        let mut opts = rquickjs::qjs::JSEvalOptions {
-            version: 1, // QuickJS rejects version != 1 with
-            // JS_ThrowInternalError, whose variadic
-            // error formatter path crashes under our
-            // stub `vsnprintf` on real hardware.
-            eval_flags: compile_only,
-            filename: fname,
-            line_num: 1,
-        };
-        let va = unsafe {
-            rquickjs::qjs::JS_Eval2(
-                raw_ctx,
-                b"0\0".as_ptr() as *const core::ffi::c_char,
-                1,
-                &mut opts as *mut _,
-            )
-        };
-        log("A: JS_Eval2 returned");
-        unsafe { rquickjs::qjs::JS_FreeValue(raw_ctx, va) };
-        log("A: freed");
-
-        // Probe B: compile-only "0". Exercises lexer + parser +
-        // codegen for a single literal. No bytecode execution. If
-        // this crashes but A does not, parse/codegen for integer
-        // literals is the issue.
-        log(&format!(
-            "B: free={}KB, JS_Eval \"0\" COMPILE_ONLY begin",
-            free_kb()
-        ));
-        let vb = unsafe {
-            rquickjs::qjs::JS_Eval(
-                raw_ctx,
-                b"0\0".as_ptr() as *const core::ffi::c_char,
-                1,
-                fname,
-                compile_only,
-            )
-        };
-        log("B: returned");
-        unsafe { rquickjs::qjs::JS_FreeValue(raw_ctx, vb) };
-        log("B: freed");
-
-        // Probe C: full eval of "0". Adds bytecode interpreter.
-        log(&format!(
-            "C: free={}KB, JS_Eval \"0\" FULL begin",
-            free_kb()
-        ));
-        let vc = unsafe {
-            rquickjs::qjs::JS_Eval(
-                raw_ctx,
-                b"0\0".as_ptr() as *const core::ffi::c_char,
-                1,
-                fname,
-                global_flag,
-            )
-        };
-        log("C: returned");
-        unsafe { rquickjs::qjs::JS_FreeValue(raw_ctx, vc) };
-        log("C: freed");
-
-        // Probes D-F: previously-passing PPSSPP cases, for
-        // reference once C starts returning.
-        for (label, src_bytes) in [
-            ("D=1+2+3", b"1+2+3\0".as_slice()),
-            ("E='hi'+'!'", b"'hi'+'!'\0".as_slice()),
-            (
-                "F=(fn(){return 42})()",
-                b"(function(){return 42})()\0".as_slice(),
-            ),
-        ] {
-            log(&format!("{label}: free={}KB, begin", free_kb()));
-            let val = unsafe {
-                rquickjs::qjs::JS_Eval(
-                    raw_ctx,
-                    src_bytes.as_ptr() as *const core::ffi::c_char,
-                    (src_bytes.len() - 1) as _,
-                    fname,
-                    global_flag,
-                )
-            };
-            log(&format!("{label}: returned"));
-            unsafe { rquickjs::qjs::JS_FreeValue(raw_ctx, val) };
-            log(&format!("{label}: freed"));
-        }
-    });
-    log("context.with ok");
+/// Low 32 bits of the microsecond system clock (for short interval timing).
+fn now_us() -> u32 {
+    // SAFETY: argument-less clock read.
+    unsafe { psp::sys::sceKernelGetSystemTimeLow() }
 }

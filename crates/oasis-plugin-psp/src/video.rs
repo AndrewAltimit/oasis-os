@@ -254,13 +254,15 @@ unsafe fn read_frame() -> bool {
 
     // Write to the back buffer (opposite of what display hook reads).
     let idx = FRAME_INDEX.load(Ordering::Relaxed);
-    // SAFETY: Volatile reads of PIP frame buffer pointers; they are set once
-    // during alloc_pip_buffers and remain valid while PIP is active.
-    let dst = if idx == 0 {
-        unsafe { core::ptr::read_volatile(&raw const PIP_FRAME_B) }
+    let slot = if idx == 0 {
+        &raw const PIP_FRAME_B
     } else {
-        unsafe { core::ptr::read_volatile(&raw const PIP_FRAME_A) }
+        &raw const PIP_FRAME_A
     };
+    // SAFETY: volatile read through a raw pointer to a pointer-sized static (no
+    // reference is formed); the buffers are set once by alloc_pip_buffers and
+    // remain valid while PIP is active.
+    let dst = unsafe { core::ptr::read_volatile(slot) };
     if dst.is_null() {
         return false;
     }
@@ -340,6 +342,8 @@ unsafe extern "C" fn video_thread_entry(_args: usize, _argp: *mut core::ffi::c_v
                         // Rescan if no videos found yet.
                         // SAFETY: VIDEO_COUNT and scan_video_dir accessed only from video thread.
                         if unsafe { VIDEO_COUNT } == 0 {
+                            // SAFETY: runs on the video thread, the only user of
+                            // the video list statics scan_video_dir rewrites.
                             unsafe { scan_video_dir() };
                         }
                         start_playback();
@@ -419,6 +423,7 @@ fn start_playback() {
 
     // SAFETY: CURRENT_VIDEO and VIDEO_COUNT accessed only from video thread.
     let idx = unsafe { CURRENT_VIDEO };
+    // SAFETY: as above -- a by-value read of a video-thread-only static.
     let count = unsafe { VIDEO_COUNT };
     if idx >= count || count == 0 {
         overlay::show_osd(b"No .rgb in ms0:/VIDEO/");
@@ -572,13 +577,15 @@ pub fn is_pip_active() -> bool {
 /// Returns (ptr, width, height). ptr may be null if buffers not allocated.
 pub fn pip_frame() -> (*const u8, u32, u32) {
     let idx = FRAME_INDEX.load(Ordering::Relaxed);
-    // SAFETY: PIP_FRAME_A/B are either null or valid allocated pointers.
-    // Volatile reads ensure we see the latest value from the video thread.
-    let ptr = if idx == 0 {
-        unsafe { core::ptr::read_volatile(&raw const PIP_FRAME_A) }
+    let slot = if idx == 0 {
+        &raw const PIP_FRAME_A
     } else {
-        unsafe { core::ptr::read_volatile(&raw const PIP_FRAME_B) }
+        &raw const PIP_FRAME_B
     };
+    // SAFETY: PIP_FRAME_A/B are either null or valid allocated pointers; the
+    // volatile read (through a raw pointer, no reference) sees the video
+    // thread's latest store of the pointer-sized value.
+    let ptr = unsafe { core::ptr::read_volatile(slot) };
     (ptr, PIP_W, PIP_H)
 }
 

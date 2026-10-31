@@ -293,12 +293,40 @@ function createOrbitControls(camera, renderer, camConfig){
   }
   update();
 
+  function reset(){
+    orbit.r=camConfig.r; orbit.phi=camConfig.phi; orbit.theta=camConfig.theta;
+    orbit.target.set(camConfig.target[0], camConfig.target[1], camConfig.target[2]);
+    update();
+  }
+
+  // Touch: one finger rotates (below), two fingers pinch-zoom.
+  var touches = {}, pinchDist = 0;
+  function pinchSpan(){
+    var p = Object.keys(touches).map(function(k){ return touches[k]; });
+    return p.length < 2 ? 0 : Math.hypot(p[0].x-p[1].x, p[0].y-p[1].y);
+  }
+
   var el = renderer.domElement;
   el.addEventListener('pointerdown',function(e){
+    if(e.pointerType==='touch'){
+      touches[e.pointerId] = {x:e.clientX, y:e.clientY};
+      if(Object.keys(touches).length===2){ pinchDist = pinchSpan(); orbit.drag=false; return; }
+    }
     orbit.px=e.clientX; orbit.py=e.clientY;
     if(e.button===0) orbit.mode='rotate';
     else if(e.button===1){orbit.mode='pan'; e.preventDefault();}
     orbit.drag=true;
+  });
+  var dropTouch = function(e){ delete touches[e.pointerId]; pinchDist = 0; };
+  el.addEventListener('pointerup', dropTouch);
+  el.addEventListener('pointercancel', dropTouch);
+  el.addEventListener('pointermove', function(e){
+    if(!touches[e.pointerId]) return;
+    touches[e.pointerId] = {x:e.clientX, y:e.clientY};
+    if(pinchDist){
+      var d = pinchSpan();
+      if(d){ orbit.r *= pinchDist / d; pinchDist = d; update(); }
+    }
   });
   el.addEventListener('contextmenu',function(e){e.preventDefault();});
   _windowPointerUp = function(){orbit.drag=false; orbit.mode=null;};
@@ -334,6 +362,7 @@ function createOrbitControls(camera, renderer, camConfig){
     else if(e.key==='ArrowDown') orbit.phi += step;
     else if(e.key==='+' || e.key==='=') orbit.r -= 2;
     else if(e.key==='-' || e.key==='_') orbit.r += 2;
+    else if(e.key==='r' || e.key==='R' || e.key==='0') reset();
     else handled = false;
     if(handled){ e.preventDefault(); update(); }
   });
@@ -342,7 +371,10 @@ function createOrbitControls(camera, renderer, camConfig){
   window.orbit = orbit;
   window.camUpdate = update;
 
-  return {orbit:orbit, update:update};
+  var resetBtn = document.getElementById('reset-view');
+  if(resetBtn) resetBtn.onclick = function(){ reset(); el.focus(); };
+
+  return {orbit:orbit, update:update, reset:reset};
 }
 
 // ── Explode Controller ───────────────────────────────────
@@ -534,6 +566,9 @@ function init(){
     return;
   }
 
+  // Static render shown if WebGL is unavailable (img/blueprint-<id>.png).
+  diagram.preview = diagram.preview || ('img/blueprint-' + id + '.png');
+
   // Preload PSP model, then build diagram
   preloadPSPModel().then(function(){
     document.getElementById('loading').style.display = 'none';
@@ -550,8 +585,28 @@ function initDiagram(diagram){
   scene.add(new THREE.GridHelper(50, 50, 0x152540, 0x0e1a2e));
 
   var cam = diagram.camera || {r:35, phi:Math.PI/3.5, theta:Math.PI/5, target:[0,5,0]};
+  // Diagrams are framed for landscape; pull the camera back on portrait
+  // screens so the whole rig fits the narrower horizontal field of view.
+  if(innerWidth < innerHeight){
+    var pull = Math.min(1.9, 0.9 * innerHeight / innerWidth);
+    cam = {r:cam.r*pull, phi:cam.phi, theta:cam.theta, target:cam.target};
+  }
   var camera = new THREE.PerspectiveCamera(40, innerWidth/innerHeight, 0.1, 500);
-  var renderer = new THREE.WebGLRenderer({antialias:true});
+  var renderer;
+  try {
+    renderer = new THREE.WebGLRenderer({antialias:true});
+  } catch(e) {
+    // No WebGL (disabled, blocklisted GPU, old browser): say so and offer
+    // the static drawing instead of leaving an empty page.
+    var msg = document.getElementById('loading');
+    msg.style.display = 'flex';
+    msg.classList.add('is-error');
+    msg.innerHTML = '<p>This viewer needs WebGL, which is unavailable in this browser.</p>' +
+      (diagram.preview ? '<img src="' + diagram.preview + '" alt="Static render of the ' +
+        diagram.title + ' blueprint">' : '') +
+      '<p><a href="blueprint.html">&larr; All blueprints</a></p>';
+    return;
+  }
   renderer.setSize(innerWidth, innerHeight);
   renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
   renderer.setClearColor(0x0a1628);

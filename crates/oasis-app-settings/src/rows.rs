@@ -2,8 +2,8 @@
 //!
 //! Every category builds a list of [`Row`]s. The windowed renderer draws
 //! them with oasis-ui widgets (sliders, toggles, highlighted list rows);
-//! [`Row::to_line`] gives the plain-text rendition used for the fullscreen
-//! SDI path and for [`oasis_app_core::App::lines`].
+//! [`Row::to_line`] gives the plain-text rendition behind
+//! [`oasis_app_core::App::lines`].
 
 /// One row of the Settings body.
 #[derive(Debug, Clone, PartialEq)]
@@ -48,7 +48,7 @@ impl Row {
         }
     }
 
-    /// Plain-text rendition (fullscreen SDI path, `lines()`).
+    /// Plain-text rendition (`lines()`).
     pub(crate) fn to_line(&self) -> String {
         match self {
             Row::Blank => String::new(),

@@ -22,11 +22,12 @@ use oasis_backend_sdl::shader_bridge::ShaderBlitTarget;
 pub use oasis_backend_ue5::DrawnText;
 use oasis_backend_ue5::Ue5Backend;
 use oasis_core::backend::{
-    BatchRect, BatchText, BlendMode, Color, GradientStyle, InputBackend, RenderTargetId, SdiAlpha,
-    SdiBatch, SdiClipTransform, SdiCore, SdiGradients, SdiRenderTarget, SdiShapes, SdiText,
-    SdiTextures, SdiVector, TextMetrics, TextureId,
+    BatchRect, BatchText, BlendMode, Color, GradientStyle, InputBackend, RenderTargetId, SdiBatch,
+    SdiClipTransform, SdiCore, SdiGradients, SdiRenderTarget, SdiShapes, SdiText, SdiTextures,
+    SdiVector, TextureId,
 };
 use oasis_core::error::Result;
+use oasis_core::geometry::ClipRect;
 use oasis_core::input::InputEvent;
 
 use crate::shell_backend::ShellBackend;
@@ -149,6 +150,7 @@ impl SdiCore for HeadlessBackend {
     forward_ref! {
         fn measure_text(&self, text: &str, font_size: u16) -> u32;
         fn read_pixels(&self, x: i32, y: i32, w: u32, h: u32) -> Result<Vec<u8>>;
+        fn viewport_size(&self) -> (u32, u32);
     }
 }
 
@@ -193,18 +195,6 @@ impl SdiGradients for HeadlessBackend {
     }
 }
 
-impl SdiAlpha for HeadlessBackend {
-    forward_mut! {
-        fn fill_rect_alpha(
-            &mut self, x: i32, y: i32, w: u32, h: u32, color: Color, alpha: u8
-        ) -> Result<()>;
-        fn dim_screen(&mut self, alpha: u8) -> Result<()>;
-    }
-    forward_ref! {
-        fn viewport_size(&self) -> (u32, u32);
-    }
-}
-
 #[allow(clippy::too_many_arguments)]
 impl SdiText for HeadlessBackend {
     forward_mut! {
@@ -224,7 +214,6 @@ impl SdiText for HeadlessBackend {
     forward_ref! {
         fn measure_text_height(&self, font_size: u16) -> u32;
         fn font_ascent(&self, font_size: u16) -> u32;
-        fn text_metrics(&self, text: &str, font_size: u16) -> TextMetrics;
         fn measure_text_extents(&self, text: &str, font_size: u16) -> (u32, u32);
     }
 }
@@ -260,7 +249,7 @@ impl SdiClipTransform for HeadlessBackend {
         fn pop_region(&mut self) -> Result<()>;
     }
     forward_ref! {
-        fn current_clip_rect(&self) -> Option<(i32, i32, u32, u32)>;
+        fn current_clip_rect(&self) -> Option<ClipRect>;
         fn current_translate(&self) -> (i32, i32);
     }
 }
@@ -285,16 +274,11 @@ impl SdiVector for HeadlessBackend {
             &mut self, x1: i32, y1: i32, x2: i32, y2: i32, width: u16, color: Color, dash: u16,
             gap: u16
         ) -> Result<()>;
-        fn fill_polygon_gradient(
-            &mut self, points: &[(i32, i32)], color_start: Color, color_end: Color
-        ) -> Result<()>;
     }
 }
 
 impl SdiBatch for HeadlessBackend {
     forward_mut! {
-        fn begin_batch(&mut self) -> Result<()>;
-        fn flush_batch(&mut self) -> Result<()>;
         fn submit_rect_batch(&mut self, rects: &[BatchRect]) -> Result<()>;
         fn submit_text_batch(
             &mut self, texts: &[BatchText<'_>], font_size: u16, bold: bool, italic: bool

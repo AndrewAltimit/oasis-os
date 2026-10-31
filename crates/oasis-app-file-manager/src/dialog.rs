@@ -2,10 +2,9 @@
 //! Manager.
 //!
 //! [`dialog_geom`] is the single source of truth for the prompt layout:
-//! the windowed renderer, the SDI renderer and the click hit-test all
-//! derive their rectangles from it so they can never drift apart.
+//! the windowed renderer and the click hit-test both derive their
+//! rectangles from it so they can never drift apart.
 
-use oasis_sdi::SdiRegistry;
 use oasis_skin::ActiveTheme;
 use oasis_types::backend::SdiBackend;
 
@@ -13,7 +12,7 @@ use crate::colors::FileManagerColors;
 use crate::model::{Dialog, NamePurpose};
 use crate::ops::file_name;
 use crate::state::FileManagerApp;
-use crate::view::{Box2d, TextStyle, draw_outline, ensure_rect, ensure_text, outline_rect};
+use crate::view::{Box2d, draw_outline};
 
 /// Dialog box height in pixels.
 const DLG_H: u32 = 86;
@@ -22,31 +21,6 @@ const DLG_TITLE_H: u32 = 16;
 /// Button width / height.
 const DLG_BTN_W: u32 = 60;
 const DLG_BTN_H: u32 = 16;
-/// Base z-order for SDI dialog objects (above menus and tiles).
-const DLG_Z: i32 = 220;
-
-/// Every SDI object name the dialog may create (hidden when closed).
-const DLG_SDI_NAMES: &[&str] = &[
-    "app_fm_dlg_bg",
-    "app_fm_dlg_o_t",
-    "app_fm_dlg_o_b",
-    "app_fm_dlg_o_l",
-    "app_fm_dlg_o_r",
-    "app_fm_dlg_title_bg",
-    "app_fm_dlg_title",
-    "app_fm_dlg_msg",
-    "app_fm_dlg_field",
-    "app_fm_dlg_field_o_t",
-    "app_fm_dlg_field_o_b",
-    "app_fm_dlg_field_o_l",
-    "app_fm_dlg_field_o_r",
-    "app_fm_dlg_field_text",
-    "app_fm_dlg_ok",
-    "app_fm_dlg_ok_lbl",
-    "app_fm_dlg_cancel",
-    "app_fm_dlg_cancel_lbl",
-];
-
 /// Rectangles making up the prompt, in the caller's coordinate space.
 pub(crate) struct DialogGeom {
     pub frame: Box2d,
@@ -214,89 +188,6 @@ impl FileManagerApp {
             backend.draw_text(label, b.x + 6, b.y + 3, at.font_hint, fg)?;
         }
         Ok(())
-    }
-
-    /// Mirror of [`Self::draw_dialog_windowed`] over pooled SDI objects.
-    pub(crate) fn update_dialog_sdi(&self, sdi: &mut SdiRegistry, at: &ActiveTheme) {
-        hide_dialog_sdi(sdi);
-        let Some(dialog) = &self.dialog else {
-            return;
-        };
-        let colors = FileManagerColors::from_theme(at);
-        let g = dialog_geom(0, 0, at.screen_w, at.screen_h);
-        let t = dialog_text(dialog, self.status.as_deref());
-        let f = g.frame;
-        ensure_rect(sdi, "app_fm_dlg_bg", f, colors.bg, DLG_Z);
-        outline_rect(sdi, "app_fm_dlg_o", f, colors.divider, DLG_Z + 1);
-        ensure_rect(
-            sdi,
-            "app_fm_dlg_title_bg",
-            g.title,
-            colors.status_bg,
-            DLG_Z + 1,
-        );
-        let style = |color, z| TextStyle {
-            font_size: at.font_hint,
-            color,
-            z,
-        };
-        ensure_text(
-            sdi,
-            "app_fm_dlg_title",
-            t.title,
-            g.title.x + 4,
-            g.title.y + 3,
-            style(colors.status_text, DLG_Z + 2),
-        );
-        ensure_text(
-            sdi,
-            "app_fm_dlg_msg",
-            &fit(&t.msg, f.w - 16),
-            f.x + 8,
-            g.msg_y,
-            style(colors.text, DLG_Z + 2),
-        );
-        if let Some(field) = &t.field {
-            let fb = g.field;
-            ensure_rect(sdi, "app_fm_dlg_field", fb, colors.pane_bg, DLG_Z + 1);
-            outline_rect(sdi, "app_fm_dlg_field_o", fb, colors.divider, DLG_Z + 2);
-            ensure_text(
-                sdi,
-                "app_fm_dlg_field_text",
-                &fit(field, fb.w - 8),
-                fb.x + 4,
-                fb.y + 3,
-                style(colors.pane_text, DLG_Z + 3),
-            );
-        }
-        for (b, name, label, primary) in [
-            (g.ok, "app_fm_dlg_ok", t.ok, true),
-            (g.cancel, "app_fm_dlg_cancel", t.cancel, false),
-        ] {
-            let (bg, fg) = if primary {
-                (colors.selected_bg, colors.selected_text)
-            } else {
-                (colors.status_bg, colors.status_text)
-            };
-            ensure_rect(sdi, name, b, bg, DLG_Z + 1);
-            ensure_text(
-                sdi,
-                &format!("{name}_lbl"),
-                label,
-                b.x + 6,
-                b.y + 3,
-                style(fg, DLG_Z + 2),
-            );
-        }
-    }
-}
-
-/// Hide every dialog SDI object.
-pub(crate) fn hide_dialog_sdi(sdi: &mut SdiRegistry) {
-    for name in DLG_SDI_NAMES {
-        if let Ok(obj) = sdi.get_mut(name) {
-            obj.visible = false;
-        }
     }
 }
 

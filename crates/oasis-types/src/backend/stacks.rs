@@ -98,8 +98,8 @@ impl TranslateStack {
     /// Save the current offset and add `(dx, dy)`.
     pub fn push(&mut self, dx: i32, dy: i32) {
         self.stack.push(self.cumulative);
-        self.cumulative.0 += dx;
-        self.cumulative.1 += dy;
+        self.cumulative.0 = self.cumulative.0.saturating_add(dx);
+        self.cumulative.1 = self.cumulative.1.saturating_add(dy);
     }
 
     /// Restore the previous offset.  Returns `true` if there was a frame to
@@ -120,17 +120,24 @@ impl TranslateStack {
     }
 
     /// Apply the current translation to a point.
+    ///
+    /// Saturates instead of overflowing, so a far off-screen point stays
+    /// off-screen on the same side (a wrapping add would move it to the
+    /// opposite edge, and a plain `+` panics in debug builds).
     #[must_use]
     pub fn translate(&self, x: i32, y: i32) -> (i32, i32) {
-        (x + self.cumulative.0, y + self.cumulative.1)
+        (
+            x.saturating_add(self.cumulative.0),
+            y.saturating_add(self.cumulative.1),
+        )
     }
 
     /// Apply the current translation returning `f64` (useful for WASM canvas).
     #[must_use]
     pub fn translate_f64(&self, x: i32, y: i32) -> (f64, f64) {
         (
-            (x + self.cumulative.0) as f64,
-            (y + self.cumulative.1) as f64,
+            x as f64 + self.cumulative.0 as f64,
+            y as f64 + self.cumulative.1 as f64,
         )
     }
 
@@ -218,12 +225,6 @@ impl ClipStack {
         self.current
     }
 
-    /// Current clip as an `(x, y, w, h)` tuple, or `None`.
-    #[must_use]
-    pub fn current_tuple(&self) -> Option<(i32, i32, u32, u32)> {
-        self.current.map(|c| (c.x, c.y, c.w, c.h))
-    }
-
     /// Reset to empty (no active clip).
     pub fn clear(&mut self) {
         self.stack.clear();
@@ -240,6 +241,21 @@ mod tests {
     use super::*;
 
     // -- TranslateStack --
+
+    #[test]
+    fn translate_saturates_instead_of_overflowing() {
+        let mut ts = TranslateStack::new();
+        ts.push(i32::MAX, i32::MIN);
+        ts.push(10, -10);
+        assert_eq!(ts.current(), (i32::MAX, i32::MIN));
+        assert_eq!(ts.translate(5, -5), (i32::MAX, i32::MIN));
+        assert_eq!(
+            ts.translate_f64(-5, 5),
+            (i32::MAX as f64 - 5.0, i32::MIN as f64 + 5.0)
+        );
+        assert!(ts.pop());
+        assert_eq!(ts.current(), (i32::MAX, i32::MIN));
+    }
 
     #[test]
     fn translate_push_pop() {

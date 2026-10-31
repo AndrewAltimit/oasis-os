@@ -117,7 +117,7 @@
   </p>
 
   <div class="diagram">
-    <pre><code><span class="hl-bright">Backend Trait Hierarchy</span>
+    <pre><code><span class="hl-bright">Backend Trait Hierarchy</span> <span class="hl-dim">(current API, Oct 2026)</span>
 
 <span class="hl-accent">SdiCore</span> <span class="hl-dim">(13 required methods — every backend must implement)</span>
 ├── init, shutdown
@@ -125,22 +125,24 @@
 ├── fill_rect, blit, load_texture, destroy_texture
 ├── draw_text, measure_text
 ├── set_clip_rect, reset_clip_rect
-└── read_pixels
+├── read_pixels
+└── <span class="hl-dim">provided:</span> viewport_size
 
-<span class="hl-purple">SdiBackend</span> <span class="hl-dim">(39 optional accelerated primitives)</span>
-├── <span class="hl-accent">SdiShapes</span>      rounded_rect, circle, line, triangle, polygon
-├── <span class="hl-accent">SdiGradients</span>    linear_gradient, radial_gradient
-├── <span class="hl-accent">SdiAlpha</span>        set_global_alpha, fill_rect_alpha
-├── <span class="hl-accent">SdiText</span>         draw_text_styled, measure_text_styled
-├── <span class="hl-accent">SdiTextures</span>     blit_rotated, blit_tinted, blit_region
-├── <span class="hl-accent">SdiClipTransform</span> push_clip, pop_clip, set_transform
-├── <span class="hl-accent">SdiVector</span>       begin_path, move_to, line_to, arc, bezier, fill, stroke
-└── <span class="hl-accent">SdiBatch</span>        begin_batch, end_batch
+<span class="hl-purple">SdiBackend</span> <span class="hl-dim">(marker: 8 extension traits, 46 default methods)</span>
+├── <span class="hl-accent">SdiShapes</span>        rounded rects, lines, circles, triangles, shadows
+├── <span class="hl-accent">SdiGradients</span>     fill_rect_gradient, fill_rounded_rect_gradient
+├── <span class="hl-accent">SdiText</span>          set_font, metrics, draw_text_styled / _wrapped
+├── <span class="hl-accent">SdiTextures</span>      blit_sub, blit_tinted, blit_sub_tinted, blit_flipped
+├── <span class="hl-accent">SdiClipTransform</span> push/pop clip, translate and region stacks
+├── <span class="hl-accent">SdiVector</span>        polygons, polylines, arcs, dashed lines
+├── <span class="hl-accent">SdiBatch</span>         submit_rect_batch, submit_text_batch
+└── <span class="hl-accent">SdiRenderTarget</span>  create / bind / composite / read offscreen targets
 
-<span class="hl-accent">InputBackend</span>     poll() → Vec&lt;InputEvent&gt;
-<span class="hl-accent">NetworkBackend</span>   TCP connect, read, write
-<span class="hl-accent">AudioBackend</span>     play, pause, set_volume, load_audio</code></pre>
+<span class="hl-accent">InputBackend</span>     poll_events() → Vec&lt;InputEvent&gt;
+<span class="hl-accent">NetworkBackend</span>   listen, accept, connect → NetworkStream; optional TLS
+<span class="hl-accent">AudioBackend</span>     load_track, play, pause, set_volume, streaming PCM</code></pre>
     <div class="diagram-caption">The five backend traits that define the entire platform abstraction boundary</div>
+  </div>
   </div>
 
   <p>
@@ -160,7 +162,7 @@
 
   <aside class="callout update" role="note">
     <div class="callout-title">Update (Oct 2026)</div>
-    <p>The trait definitions have since moved out of a single <code>backend.rs</code> into the <code>oasis-types/src/backend/</code> directory, one file per extension trait under <code>extensions/</code>. <code>SdiBackend</code> is now a marker over <strong>nine</strong> extension traits carrying <strong>53</strong> default methods: <code>SdiRenderTarget</code> (offscreen render targets) joined the eight above, and <code>SdiBatch</code> is <code>begin_batch</code> / <code>flush_batch</code> plus rect and text batch submission. The defaults are span-exact software implementations, so a backend still starts with the 13 core methods and overrides only what its hardware accelerates.</p>
+    <p>The diagram above shows the API as it is today; the paragraph above describes it as written in March. The trait definitions have since moved out of a single <code>backend.rs</code> into the <code>oasis-types/src/backend/</code> directory, one file per extension trait under <code>extensions/</code>. <code>SdiBackend</code> is now a marker over <strong>eight</strong> extension traits carrying <strong>46</strong> default methods: <code>SdiRenderTarget</code> (offscreen render targets) was added, and <code>SdiAlpha</code> was removed (<code>viewport_size</code> became a provided <code>SdiCore</code> method; translucent fills are <code>fill_rect</code> with an alpha color), as were the never-used <code>begin_batch</code> / <code>flush_batch</code> hooks. <code>current_clip_rect</code> returns <code>Option&lt;ClipRect&gt;</code>. The defaults are span-exact software implementations, so a backend still starts with the 13 core methods and overrides only what its hardware accelerates.</p>
   </aside>
 
 
@@ -212,6 +214,11 @@ graph TD
     &mdash; the full OS running in your browser.
   </p>
 
+  <aside class="callout update" role="note">
+    <div class="callout-title">Update (Oct 2026)</div>
+    <p>Sound goes through HTML <code>&lt;audio&gt;</code> elements rather than Web Audio: in-memory tracks become <code>Blob</code> URLs the browser decodes natively, and internet radio streams through an element (or Media Source Extensions), which keeps the synchronous <code>AudioBackend</code> API and gives real position and duration.</p>
+  </aside>
+
   <h3>PSP EBOOT (oasis-backend-psp)</h3>
   <p>
     Native PSP rendering via <code>sceGu</code> (the PSP's OpenGL-like 3D API) with
@@ -237,6 +244,11 @@ graph TD
     No dependency on oasis-core &mdash; direct framebuffer rendering with its own
     minimal widget set.
   </p>
+
+  <aside class="callout update" role="note">
+    <div class="callout-title">Update (Oct 2026)</div>
+    <p>The &ldquo;&lt;64KB&rdquo; was a target, not a measurement. Measured today, the overlay PRX is about 153&nbsp;KB on disk after rust-psp&rsquo;s <code>prxmin</code> stripping and about 212&nbsp;KB resident; CI fails the build if it grows past 192&nbsp;KiB. It still has no <code>oasis-core</code> dependency.</p>
+  </aside>
 
   <h2 id="the-crate-dependency-graph"><a class="anchor" href="#the-crate-dependency-graph" aria-hidden="true" tabindex="-1">#</a>The Crate Dependency Graph</h2>
 
@@ -312,6 +324,10 @@ graph TD
     identically everywhere &mdash; including on the PSP where the system font API
     (<code>psp::font</code>) supplements the bitmap glyphs with TrueType via a VRAM atlas.
   </p>
+  <aside class="callout update" role="note">
+    <div class="callout-title">Update (Oct 2026)</div>
+    <p>The per-backend copies are gone: there is now one bitmap glyph table, <code>oasis-types/src/bitmap_font.rs</code>, and one rasterizer for it, <code>oasis-rasterize::glyph_mask</code>, shared by SDL, UE5 and WASM; the PSP EBOOT builds its atlas from the same table. Only the standalone <code>oasis-plugin-psp/src/font.rs</code> keeps a copy, because the PRX must stay self-contained. The SDL backend can additionally draw skin TTF/OTF fonts through fontdue.</p>
+  </aside>
 
   <h2 id="what-20-crates-buys-you"><a class="anchor" href="#what-20-crates-buys-you" aria-hidden="true" tabindex="-1">#</a>What 20 Crates Buys You</h2>
 
@@ -337,7 +353,7 @@ graph TD
 
   <aside class="callout update" role="note">
     <div class="callout-title">Update (Oct 2026)</div>
-    <p>The video features have been reshuffled. <code>oasis-video</code> now offers <code>h264</code> (openh264 + symphonia), <code>ffmpeg</code> (mutually exclusive with <code>h264</code>) and <code>no-std-demux</code>; <code>video-decode</code> and <code>video-decode-ffmpeg</code> are features of <code>oasis-app</code> and <code>oasis-ffi</code> that pick one of the two, and ffmpeg is the desktop default.</p>
+    <p>The video features have been reshuffled. <code>oasis-video</code> now has four additive features, none on by default: <code>demux-lite</code> (the dependency-free parser the PSP builds with, formerly <code>no-std-demux</code>), <code>symphonia</code>, <code>h264</code> (openh264 on top of symphonia) and <code>ffmpeg</code> (which wins as the decoder when both it and <code>h264</code> are on); <code>video-decode</code> and <code>video-decode-ffmpeg</code> are features of <code>oasis-app</code> and <code>oasis-ffi</code> that pick one of the two, and ffmpeg is the desktop default.</p>
   </aside>
 
 
@@ -377,11 +393,11 @@ graph TD
       <thead><tr><th>Metric</th><th>Mar 2026</th><th>Oct 2026</th></tr></thead>
       <tbody>
         <tr><td>Crates</td><td>34 workspace</td><td>41 workspace + 10 PSP-target (51 dirs)</td></tr>
-        <tr><td>UI widgets</td><td>32</td><td>29 <code>Widget</code> impls, plus ListView, MenuBar, NinePatch</td></tr>
+        <tr><td>UI widgets</td><td>32</td><td>27 <code>Widget</code> impls, plus ListView, MenuBar, NinePatch</td></tr>
         <tr><td>Terminal</td><td>90+ commands</td><td>~95 commands + 20 shell builtins</td></tr>
         <tr><td>Skins</td><td>18</td><td>17, every one a TOML directory in <code>skins/</code></td></tr>
         <tr><td>Apps</td><td>16 (12 crates)</td><td>15 (10 <code>oasis-app-*</code> crates + Terminal + Browser)</td></tr>
-        <tr><td>SdiBackend default methods</td><td>39 (8 traits)</td><td>53 (9 traits)</td></tr>
+        <tr><td>SdiBackend default methods</td><td>39 (8 traits)</td><td>46 (8 traits)</td></tr>
       </tbody>
     </table></div>
   </aside>

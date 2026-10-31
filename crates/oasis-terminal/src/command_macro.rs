@@ -59,7 +59,7 @@ macro_rules! define_command {
                 &self,
                 $args: &[&str],
                 $env: &mut $crate::Environment<'_>,
-            ) -> oasis_types::error::Result<$crate::CommandOutput> {
+            ) -> $crate::CommandResult {
                 $body
             }
         }

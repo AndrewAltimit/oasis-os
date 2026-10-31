@@ -60,6 +60,21 @@ macro_rules! assert_none_output {
     }};
 }
 
+/// A bare environment over `vfs` (cwd `/`, no platform services).
+pub(crate) fn make_env(vfs: &mut dyn oasis_vfs::Vfs) -> crate::Environment<'_> {
+    crate::Environment {
+        cwd: "/".to_string(),
+        vfs,
+        power: None,
+        time: None,
+        usb: None,
+        network: None,
+        tls: None,
+        stdin: None,
+        stderr: String::new(),
+    }
+}
+
 #[allow(unused_imports)]
 pub(crate) use assert_clear;
 #[allow(unused_imports)]

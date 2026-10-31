@@ -442,9 +442,12 @@ impl VideoPlayer {
     /// callback runs after the decoder's initial scan completes (used to
     /// enable sliding-window eviction on streaming buffers).
     ///
-    /// If `moov_source` is provided, the decoder thread waits for moov data
-    /// from it, extracts avcC, and skips the expensive full-file
-    /// `read_to_end` scan.
+    /// The decoder thread first waits (up to 15 s) for the download thread
+    /// to retain the `moov` atom in `moov_source`.  With it the decoder opens
+    /// from the pre-fetched moov (avcC + keyframe index) and skips its own
+    /// moov lookup; without it `open_stream` locates moov itself by walking
+    /// the top-level box headers (seeking over `mdat`, reading only moov)
+    /// and then rewinds to the start.
     #[cfg(feature = "_video")]
     pub fn start_software_source(
         &mut self,

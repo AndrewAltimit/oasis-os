@@ -4,7 +4,7 @@ use crate::active_theme::ActiveTheme;
 use crate::input::{Button, Key, Modifiers};
 use crate::vfs::Vfs;
 
-use super::app_trait::AppAction;
+use super::AppAction;
 use super::runner::AppRunner;
 
 impl AppRunner {
@@ -58,20 +58,19 @@ impl AppRunner {
 
     /// Handle a click in the app's `cw` x `ch` content area at local
     /// `(lx, ly)`. Lays the app out for that size first (see
-    /// [`crate::apps::App::layout`]).
-    #[allow(clippy::too_many_arguments)]
+    /// [`crate::apps::App::layout`]), exactly as [`Self::draw_windowed`]
+    /// does, so the app hit-tests against what it drew.
     pub fn handle_click(
         &mut self,
         lx: i32,
         ly: i32,
         cw: u32,
         ch: u32,
-        fullscreen: bool,
         at: &ActiveTheme,
         vfs: &dyn Vfs,
     ) -> AppAction {
         self.delegate.layout(cw, ch, at);
-        let action = self.delegate.handle_click(lx, ly, cw, ch, fullscreen, vfs);
+        let action = self.delegate.handle_click(lx, ly, vfs);
         self.redraw_pending = true;
         action
     }

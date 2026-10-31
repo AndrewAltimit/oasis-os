@@ -31,5 +31,11 @@
         toggle.focus();
       }
     });
+    // Close the drawer when the viewport grows into the desktop layout,
+    // so it isn't left open (and aria-expanded stale) behind the inline nav.
+    var desktop = window.matchMedia("(min-width: 1100px)");
+    var onChange = function (e) { if (e.matches) setMenu(false); };
+    if (desktop.addEventListener) desktop.addEventListener("change", onChange);
+    else if (desktop.addListener) desktop.addListener(onChange);
   }
 })();

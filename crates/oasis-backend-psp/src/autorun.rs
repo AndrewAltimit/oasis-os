@@ -2,8 +2,8 @@
 //!
 //! Reads `ms0:/PSP/GAME/OASISOS/AUTORUN.txt` at boot. If present, parses one
 //! command per line and dispatches one command per frame from the main loop.
-//! Output (logs, raw screenshots) is written back to the memstick where a
-//! host test harness can pick it up.
+//! Output (the log, screenshot request sentinels, the done marker) is
+//! written back to the memstick where a host test harness can pick it up.
 //!
 //! # Grammar
 //!
@@ -22,7 +22,11 @@
 //!                               `balatro`, `retro-cga`, `solarized`,
 //!                               `highcontrast`, `altimit`).
 //! - `wait <frames>`          -- pause N frames before the next command.
-//! - `screenshot <ms0:/path>` -- raw 480x272 ABGR dump (one row = 512 px stride).
+//! - `screenshot <ms0:/path>` -- request a capture: writes the sentinel
+//!                               `<path>.req` and pauses until the host
+//!                               harness deletes it (see
+//!                               [`request_screenshot`]). Nothing is
+//!                               written to `<path>` itself.
 //! - `log <message>`          -- append a line to `autorun.log`.
 //! - `exit [code]`            -- write `autorun.done`, then `sceKernelExitGame`.
 //!
@@ -33,7 +37,7 @@ use core::ffi::c_void;
 
 use psp::sys::{IoOpenFlags, SceUid};
 
-use oasis_backend_psp::{Button, InputEvent, Trigger};
+use oasis_backend_psp::{Button, InputEvent};
 
 use oasis_backend_psp::cmd_server;
 
@@ -142,7 +146,7 @@ impl AutorunRunner {
             Cmd::Launch(app_id) => self.do_launch(&app_id),
             Cmd::Press(press) => {
                 cmd_server::inject_event(press.clone());
-                self.pending_release = Some(release_for(&press));
+                self.pending_release = Some(cmd_server::release_for(&press));
             },
             Cmd::Cursor(x, y) => {
                 cmd_server::inject_event(InputEvent::CursorMove { x, y });
@@ -157,7 +161,7 @@ impl AutorunRunner {
                 append_log(&format!("[autorun] wait {frames}"));
             },
             Cmd::Screenshot(path) => {
-                save_screenshot_raw(&path);
+                request_screenshot(&path);
                 // Block until the host harness deletes the sentinel.
                 self.waiting_for_sentinel = Some(format!("{path}.req"));
                 append_log(&format!("[autorun] screenshot {path} (await capture)"));
@@ -220,7 +224,8 @@ fn parse_one(verb: &str, rest: &str) -> Result<Cmd, String> {
             Ok(Cmd::Launch(rest.to_string()))
         },
         "press" => {
-            let ev = parse_button(rest).ok_or_else(|| format!("unknown button '{rest}'"))?;
+            let ev = cmd_server::parse_button(rest.as_bytes())
+                .ok_or_else(|| format!("unknown button '{rest}'"))?;
             Ok(Cmd::Press(ev))
         },
         "cursor" => {
@@ -268,32 +273,6 @@ fn parse_one(verb: &str, rest: &str) -> Result<Cmd, String> {
             Ok(Cmd::Exit(code))
         },
         other => Err(format!("unknown verb '{other}'")),
-    }
-}
-
-fn parse_button(name: &str) -> Option<InputEvent> {
-    match name {
-        "cross" | "x" | "confirm" => Some(InputEvent::ButtonPress(Button::Confirm)),
-        "circle" | "o" | "cancel" => Some(InputEvent::ButtonPress(Button::Cancel)),
-        "square" => Some(InputEvent::ButtonPress(Button::Square)),
-        "triangle" => Some(InputEvent::ButtonPress(Button::Triangle)),
-        "up" => Some(InputEvent::ButtonPress(Button::Up)),
-        "down" => Some(InputEvent::ButtonPress(Button::Down)),
-        "left" => Some(InputEvent::ButtonPress(Button::Left)),
-        "right" => Some(InputEvent::ButtonPress(Button::Right)),
-        "start" => Some(InputEvent::ButtonPress(Button::Start)),
-        "select" => Some(InputEvent::ButtonPress(Button::Select)),
-        "ltrigger" | "l" => Some(InputEvent::TriggerPress(Trigger::Left)),
-        "rtrigger" | "r" => Some(InputEvent::TriggerPress(Trigger::Right)),
-        _ => None,
-    }
-}
-
-fn release_for(press: &InputEvent) -> InputEvent {
-    match press {
-        InputEvent::ButtonPress(b) => InputEvent::ButtonRelease(*b),
-        InputEvent::TriggerPress(t) => InputEvent::TriggerRelease(*t),
-        _ => InputEvent::ButtonRelease(Button::Confirm),
     }
 }
 
@@ -360,19 +339,17 @@ fn touch_marker(path: &str, code: i32) {
     }
 }
 
-/// Request a screenshot at the given ms0: path.
+/// Request a screenshot for the given ms0: path.
 ///
-/// On PSP hardware we'd dump the live framebuffer here (see
-/// `cmd_server::take_screenshot`). In PPSSPP, however, the GU renders to
-/// internal textures and never syncs pixels back to the PSP RAM mirror,
-/// so reads from `0x04000000`/`0x04088000` return only the stale boot
-/// screen. As a working alternative, we drop a 0-byte sentinel
-/// `<path>.req` file. The host test harness watches for these and
-/// captures the PPSSPP window via `scrot`. This lets the same script
-/// drive both targets — real HW gets a separate VRAM-dump path; PPSSPP
-/// uses the host capture.
-fn save_screenshot_raw(path: &str) {
-    // Belt-and-braces: parse_line already rejects paths outside our
+/// Dumping VRAM (what the TCP `screenshot` / `screencap` commands do on
+/// real hardware) does not work in PPSSPP: the GU renders to host
+/// textures and never syncs pixels back to the emulated VRAM, so reads
+/// return only the stale boot screen. Instead we drop a 0-byte sentinel
+/// `<path>.req`; the host harness (`scripts/test-settings-ppsspp.sh`)
+/// watches for it, captures the PPSSPP window with `scrot`, and deletes
+/// it, which releases the script.
+fn request_screenshot(path: &str) {
+    // Belt-and-braces: parse_one already rejects paths outside our
     // dir, but reject again here so any future internal caller can't
     // bypass the prefix check and write to arbitrary ms0: paths.
     if !path.starts_with(SCREENSHOT_PREFIX) {

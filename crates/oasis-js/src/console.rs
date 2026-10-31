@@ -22,8 +22,50 @@ pub struct ConsoleEntry {
     pub message: String,
 }
 
+/// Most console entries kept; older ones are dropped first.
+pub const MAX_CONSOLE_ENTRIES: usize = 1_000;
+
+/// Longest console message kept, in bytes; longer ones are truncated.
+pub const MAX_CONSOLE_MESSAGE_BYTES: usize = 4_096;
+
+/// Bounded console log.
+///
+/// The buffer lives on the Rust side, outside the QuickJS heap limit, so
+/// without a bound a script logging megabyte strings in a loop could
+/// exhaust host memory within one watchdog slice.
+#[derive(Debug, Default)]
+pub(crate) struct ConsoleLog {
+    entries: std::collections::VecDeque<ConsoleEntry>,
+}
+
+impl ConsoleLog {
+    /// Append an entry, truncating its message and evicting the oldest
+    /// entry when full.
+    pub(crate) fn push(&mut self, mut entry: ConsoleEntry) {
+        if entry.message.len() > MAX_CONSOLE_MESSAGE_BYTES {
+            let cut = entry.message.floor_char_boundary(MAX_CONSOLE_MESSAGE_BYTES);
+            entry.message.truncate(cut);
+            entry.message.push('\u{2026}');
+        }
+        if self.entries.len() >= MAX_CONSOLE_ENTRIES {
+            self.entries.pop_front();
+        }
+        self.entries.push_back(entry);
+    }
+
+    /// Copy of the current entries, oldest first.
+    pub(crate) fn to_vec(&self) -> Vec<ConsoleEntry> {
+        self.entries.iter().cloned().collect()
+    }
+
+    /// Remove and return every entry, oldest first.
+    pub(crate) fn take(&mut self) -> Vec<ConsoleEntry> {
+        std::mem::take(&mut self.entries).into()
+    }
+}
+
 /// Shared buffer for console output, accessible from JS closures and Rust.
-pub(crate) type ConsoleBuffer = Rc<RefCell<Vec<ConsoleEntry>>>;
+pub(crate) type ConsoleBuffer = Rc<RefCell<ConsoleLog>>;
 
 /// Format a single JS value as a human-readable string.
 fn fmt_value(val: &Value<'_>) -> String {

@@ -51,9 +51,15 @@ plugin status
 ```bash
 cd crates/oasis-plugin-psp
 RUST_PSP_BUILD_STD=1 cargo psp --release
+# Strip it: keep only the loaded sections + relocations (prxmin ships with cargo-psp)
+prxmin target/mipsel-sony-psp-std/release/oasis-plugin-psp.prx oasis_plugin.prx
 ```
 
-Output: `target/mipsel-sony-psp-std/release/oasis_plugin.prx`
+`cargo psp` writes `target/mipsel-sony-psp-std/release/oasis-plugin-psp.prx`,
+which still carries the MIPS `.pdr` procedure descriptors, the symbol table
+and its strings (~135 KB the module loader never reads). `prxmin` drops
+them; the module it loads is byte-for-byte the same. CI does the same and
+ships the stripped file as `oasis-overlay.prx`.
 
 ## Controls
 
@@ -126,9 +132,31 @@ The overlay renders directly to the game's framebuffer using alpha-blended recta
 
 ### Memory Budget
 
-The PRX targets <64KB total binary size:
-- Code: ~32KB (optimized with `opt-level = "z"` + LTO)
-- Static data: ~32KB (font glyphs, playlist, decode buffers)
+Measured at plugin v1.4.0 (`opt-level = "z"`, fat LTO, one codegen unit):
+
+| | Size |
+|---|---|
+| `.text` (code) | ~82 KB, of which ~15 KB is `libunwind` (the `psp` crate links it for `panic = "unwind"`) |
+| `.rodata`, `.eh_frame`, stubs, `.data` | ~30 KB |
+| Relocations (needed: the loader relocates the PRX) | ~40 KB |
+| **Stripped PRX file** (`prxmin`) | **~153 KB** (156,426 B) |
+| `.bss` (zeroed at load, not in the file) | ~101 KB: 64 KB MP3 stream buffer, 18 KB PCM, playlist, network buffers |
+| **Resident footprint** (code + data + bss) | **~212 KB** |
+
+The original "<64 KB" target dates from the first version of the plugin
+(overlay + stub audio, ~1.5k lines); MP3/AAC playback, internet radio, PIP
+video, the ME diagnostics and the devloop server have since grown it to
+~5.8k lines (the ME dump diagnostics alone are ~11 KB of code, the devloop
+server ~3 KB). `main-ci.yml` fails if the stripped PRX exceeds 192 KiB
+(`PRX_SIZE_BUDGET`). PIP video buffers (~113 KB) are allocated on demand
+from user partition 2, not counted above.
+
+`panic = "unwind"` is kept on purpose: `panic = "abort"` was measured to
+save only ~10 KB of the stripped PRX (`.eh_frame`, landing pads;
+`libunwind` stays linked either way), while unwind lets `module_start`'s
+`catch_unwind` catch a panic in `psp_main`, and a panic on one of the raw
+kernel threads ends in the `psp` crate's print-and-exit-thread path rather
+than an abort trap under a running game.
 
 No heap allocator is used for the core overlay logic -- all state is in static buffers and atomics.
 

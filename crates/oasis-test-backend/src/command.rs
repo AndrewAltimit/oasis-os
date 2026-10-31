@@ -88,13 +88,26 @@ pub enum DrawCommand {
         h: u32,
         tint: Color,
     },
+    /// `push_clip_rect` (the arguments as passed: `RecordingBackend` logs
+    /// them untranslated, `ClipAuditBackend` translated).
     PushClip {
         x: i32,
         y: i32,
         w: u32,
         h: u32,
     },
+    /// `pop_clip_rect`.
     PopClip,
+    /// `set_clip_rect`: absolute, replaces the clip without touching the
+    /// clip stack (see the `SdiCore` drawing-state contract).
+    SetClip {
+        x: i32,
+        y: i32,
+        w: u32,
+        h: u32,
+    },
+    /// `reset_clip_rect`: removes the clip.
+    ResetClip,
     PushTranslate {
         dx: i32,
         dy: i32,

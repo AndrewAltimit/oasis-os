@@ -48,11 +48,15 @@ pub fn layout_inline(parent: &mut LayoutBox, measurer: &dyn TextMeasurer) {
     };
 
     // Break fragments into line boxes.
-    // Estimate ~1 line per 80px of content width as a rough heuristic
-    // to reduce Vec reallocations.
+    // Reserve roughly (content width / line width) lines to reduce Vec
+    // reallocations, but never more than one per fragment: a hostile
+    // `font-size` / `letter-spacing` makes the width ratio astronomical
+    // (it once asked for 69 GB up front).
     let estimated_lines = if available_width > 0.0 {
         let total_frag_width: f32 = fragments.iter().map(InlineFragment::width).sum();
-        ((total_frag_width / available_width) as usize + 1).max(1)
+        ((total_frag_width / available_width) as usize)
+            .saturating_add(1)
+            .min(fragments.len() + 1)
     } else {
         1
     };

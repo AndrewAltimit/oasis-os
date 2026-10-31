@@ -9,8 +9,8 @@ use oasis_browser::internals::{
     paint_page, style_tree,
 };
 use oasis_types::backend::{
-    Color, SdiAlpha, SdiBatch, SdiClipTransform, SdiCore, SdiGradients, SdiShapes, SdiText,
-    SdiTextures, SdiVector, TextureId,
+    Color, SdiBatch, SdiClipTransform, SdiCore, SdiGradients, SdiShapes, SdiText, SdiTextures,
+    SdiVector, TextureId,
 };
 use oasis_types::error::Result;
 
@@ -68,7 +68,6 @@ impl SdiCore for NullBackend {
 
 impl SdiShapes for NullBackend {}
 impl SdiGradients for NullBackend {}
-impl SdiAlpha for NullBackend {}
 impl SdiText for NullBackend {}
 impl SdiTextures for NullBackend {}
 impl SdiClipTransform for NullBackend {}

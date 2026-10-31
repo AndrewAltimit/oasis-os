@@ -4,8 +4,9 @@
 **Date:** 2026-02-09 (initial release; recorded 2026-02-19)
 **Last reviewed:** 2026-10-30. The decision is still current. Counts, the
 removed opt-in traits and the shared span rasterizer were updated to match
-the source, and the drawing-state contract every backend follows was added.
-See `crates/oasis-types/src/backend/`.
+the source, the drawing-state contract every backend follows was added,
+and the extension surface was trimmed (see "Surface trim" below). See
+`crates/oasis-types/src/backend/`.
 
 ## Context
 
@@ -22,24 +23,28 @@ stacks, and audio subsystems. We need an abstraction that:
 We define **separate backend traits** in `oasis-types` (five main ones,
 plus `ClipboardBackend` and the `NetworkStream` connection trait):
 
-1. **`SdiCore`** -- Required rendering: 13 methods (`init`, `clear`, `blit`,
-   `fill_rect`, `draw_text`, `swap_buffers`, `load_texture`, `destroy_texture`,
-   `set_clip_rect`, `reset_clip_rect`, `measure_text`, `read_pixels`, `shutdown`).
+1. **`SdiCore`** -- Required rendering: 13 required methods (`init`,
+   `clear`, `blit`, `fill_rect`, `draw_text`, `swap_buffers`, `load_texture`,
+   `destroy_texture`, `set_clip_rect`, `reset_clip_rect`, `measure_text`,
+   `read_pixels`, `shutdown`) plus one provided method, `viewport_size`
+   (the bound surface's size; defaults to 480x272, every real backend
+   overrides it).
 2. **`SdiBackend`** -- A marker super-trait with no methods of its own. It
-   bundles `SdiCore` plus nine extension traits via a blanket impl, so any
-   type that satisfies `SdiCore` and all nine extensions automatically
-   implements `SdiBackend`. The nine extensions are `SdiShapes`,
-   `SdiGradients`, `SdiAlpha`, `SdiText`, `SdiTextures`, `SdiClipTransform`,
-   `SdiVector`, `SdiBatch`, and `SdiRenderTarget`, totalling 53
+   bundles `SdiCore` plus eight extension traits via a blanket impl, so any
+   type that satisfies `SdiCore` and all eight extensions automatically
+   implements `SdiBackend`. The eight extensions are `SdiShapes`,
+   `SdiGradients`, `SdiText`, `SdiTextures`, `SdiClipTransform`,
+   `SdiVector`, `SdiBatch`, and `SdiRenderTarget`, totalling 47
    default-implemented methods that fall back to `SdiCore` primitives
-   (shapes 8, gradients 2, alpha 3, text 8, textures 4, clip/transform 8,
-   vector 7, batch 4, render target 9).
-   `SdiBatch` provides `begin_batch`/`flush_batch` (reserved hooks, no-ops
-   on every backend today) plus `submit_rect_batch`/`submit_text_batch` for
-   batched rect and text geometry submission (used by the browser's light
-   compositor to reduce draw call count). The former opt-in traits
-   `SdiBlendMode` and `SdiGeometry` had no implementation or caller outside
-   tests and were removed in 2026-10; blend modes are expressed through
+   (shapes 8, gradients 2, text 7, textures 4, clip/transform 9,
+   vector 6, batch 2, render target 9). `SdiShapes` builds on
+   `SdiClipTransform` (for `draw_bounds`, below) and `SdiVector` on
+   `SdiShapes`; every other extension builds on `SdiCore` alone.
+   `SdiBatch` is `submit_rect_batch`/`submit_text_batch`, batched rect and
+   text geometry submission (used by the browser's display-list replay to
+   reduce draw call count). The former opt-in traits `SdiBlendMode` and
+   `SdiGeometry` had no implementation or caller outside tests and were
+   removed in 2026-10; blend modes are expressed through
    `SdiRenderTarget::composite_render_target`.
 3. **`InputBackend`** -- Input: `poll_events() -> Vec<InputEvent>`.
 4. **`NetworkBackend`** -- Networking: `listen`, `accept`, `connect`,
@@ -62,13 +67,17 @@ wrapper) now implements the following, documented as rustdoc on the traits:
 | Draw calls | Coordinates are offset by the current translation (`push_translate`) on the bound surface |
 | `set_clip_rect` | Absolute: in surface pixels, **not** translated. **Replaces** the active clip; does not intersect. Zero area rejects every draw |
 | `reset_clip_rect` | Removes the clip; always safe, also with no clip set |
-| `push_clip_rect` / `pop_clip_rect` | Translated and intersected with the previously pushed clip; pop re-applies the previous one (or none). `current_clip_rect` reports the top of this stack |
+| `push_clip_rect` / `pop_clip_rect` | Translated and intersected with the previously pushed clip; pop re-applies the previous one (or none). `current_clip_rect` reports the top of this stack as an `Option<ClipRect>` in surface pixels |
 | Mixing the two | One active clip, last call wins: `set_clip_rect` does not touch the push stack, the next push/pop re-applies the stack's clip |
 | `clear` | Writes the color, alpha included, to every pixel of the bound surface, **ignoring the clip and without blending** |
 | `bind_render_target` | The target starts with no clip and no translation (its own coordinates); `viewport_size` reports its size |
 | `unbind_render_target` | Restores the parent's clip stack, translate stack and applied clip exactly as at the bind |
 | `composite_render_target[_premultiplied]` | Into the bound surface, under its clip; the destination is untranslated surface pixels; the target is **scaled** to `dst_w` x `dst_h` |
 | `read_render_target` | `dst.len()` must equal `w * h * 4` of the target; anything else is an error |
+| Using a bound target | Binding a target that is already on the bind chain, compositing it, reading it back or destroying it is an error, and leaves the bind state as it was (UE5 and WASM take a bound target out of storage; SDL checks the chain) |
+| Unknown ids | `destroy_texture` of an id that is not live (never loaded, or already destroyed) fails with `BackendError::TextureNotFound`, as `destroy_render_target` fails with `RenderTargetNotFound`; so does a blit of it |
+| Off-surface shapes | Shapes cost what their visible part costs: the span generators take the visible bounds (`SdiClipTransform::draw_bounds` for the defaults), so a line from `-1e9` to `1e9` draws as fast as one across the screen |
+| Arcs | A sweep beyond one full turn is clamped to one turn (`backend::clamp_sweep`), filled or stroked, default or override |
 
 Why these choices:
 
@@ -97,7 +106,11 @@ Why these choices:
 SDL scales render targets with its default linear filter and the software
 rasterizer samples nearest, so a scaled composite differs at colour seams.
 `oasis_test_backend::conformance` records that as a documented tolerance.
-The conformance scenarios `clip_set_is_absolute_and_replaces`,
+`conformance::render_target_misuse` checks the bound-target rule on SDL,
+UE5 and `RecordingBackend`; `conformance::texture_misuse` checks the
+unknown-texture rule on SDL and UE5 (and every test double has a unit test
+for it). The conformance scenarios
+`clip_set_is_absolute_and_replaces`,
 `clip_set_widens_again`, `clip_set_and_push_stack_are_independent`,
 `clear_ignores_clip_and_alpha`,
 `render_target_bind_resets_and_restores_state`,
@@ -111,6 +124,55 @@ automated pixel test yet. Its clip handling keeps exactly one canvas
 `save()` level per applied clip (`WasmBackend::apply_clip`), because Canvas
 2D can only intersect clips, never replace them.
 
+- **Unknown ids are errors.** `destroy_texture` used to accept any id
+  silently while `destroy_render_target` rejected unknown ones. One rule
+  for both, and the stricter one: a double destroy is a caller bug (with
+  UE5's slot reuse it can even free another owner's texture), and an error
+  surfaces it in tests where silence hid it. Callers that release
+  best-effort (`let _ = backend.destroy_texture(..)`) are unaffected. The
+  test doubles (`RecordingBackend`, `NullBackend`, `MockSdiCore`,
+  `ClipAuditBackend`) track live ids so they reject the same calls.
+- **Visible-only span generation.** `thick_line_rows`, `polygon_rows` and
+  `triangle_rows` take a `ClipRect` of bounds, visit only the rows inside
+  it and clip spans to its columns; the thick line computes each row's
+  extent from the closed form of the Bresenham walk instead of walking
+  every step. The trait defaults pass `draw_bounds()` (the bound surface
+  moved back by the current translation; deliberately not the clip, which
+  `set_clip_rect` can replace behind the stack's back), SDL and
+  `SoftwareBuffer` their surface. SDL draws thin lines through the same
+  spans: its own line walk visits every point of the segment.
+
+### Surface trim (2026-10)
+
+A review of every override and call site in the workspace (PSP included)
+removed what no backend implemented and no caller used, so the trait
+surface describes what backends actually do:
+
+| Removed | Why | Replacement |
+|---|---|---|
+| `SdiAlpha` (`fill_rect_alpha`, `dim_screen`, `viewport_size`) | The two drawing methods were one-line `fill_rect` wrappers with no production caller; the trait mixed alpha and viewport concerns | `fill_rect(.., color.with_alpha(a))`; `viewport_size` moved to `SdiCore` as a provided method |
+| `SdiBatch::begin_batch` / `flush_batch` | Reserved no-op hooks that no backend ever overrode | `submit_rect_batch` / `submit_text_batch` |
+| `SdiVector::fill_polygon_gradient` | The only implementation ignored the end colour | `oasis-vector` fills `VectorOp::PolygonGradient` row by row with the interpolated colour |
+| `SdiText::text_metrics` + `TextMetrics` | No caller | `measure_text_extents`, `font_ascent` |
+| `ArcParams`, `ClipStack::current_tuple` | Internal to one backend / replaced by a typed return | `current_clip_rect() -> Option<ClipRect>` |
+
+The trim also moved more shapes onto shared span generators, so the
+defaults and the desktop backends agree by construction:
+`rasterize::triangle_rows` (the `fill_triangle` default, SDL and
+`SoftwareBuffer`), `rasterize::stroke_rect_parts` (non-overlapping stroke
+bands for all three) and a `fill_arc` default that fills one polygon
+instead of a triangle fan (the fan double-blended every spoke of a
+translucent wedge). Coordinates in the shared helpers (`ClipRect`
+intersection, `TranslateStack`, `edge_x`, circle and rounded-rect radii)
+are computed in `i64` or saturate, so far off-screen or huge sizes clip
+instead of wrapping or panicking in debug builds.
+
+Positional `i32`/`u32` arguments were kept: the call sites (browser display
+list, chrome, apps) already hold loose coordinates, and a `Rect`-taking
+signature would churn hundreds of calls for no behavioural gain. The typed
+`ClipRect` return of `current_clip_rect` is the one place a struct was
+clearly better, because callers compare and intersect the result.
+
 ## Rationale
 
 - **Granularity.** Not all platforms support all subsystems (PSP user-mode
@@ -122,7 +184,7 @@ automated pixel test yet. Its clip handling keeps exactly one canvas
   required drawing. `SdiBackend` adds optional accelerated methods. `InputBackend`
   is about events. They can be implemented by different structs if needed.
 - **Two-tier rendering.** `SdiCore` has 13 required methods that every backend
-  must implement. `SdiBackend`'s nine extensions add 53 default-implemented
+  must implement. `SdiBackend`'s eight extensions add 46 default-implemented
   methods for shapes, gradients, text styling, textures, clip/transform
   stacks, vector graphics, batching, and render targets — all falling back
   to `SdiCore` calls. The shape defaults emit spans from the same generators
@@ -156,13 +218,34 @@ automated pixel test yet. Its clip handling keeps exactly one canvas
   `RecordingBackend` with its `DrawCommand` log, `ClipAuditBackend`, and the
   `conformance` scenarios).
 - `SdiBackend` cannot be implemented directly (blanket impl). A new backend
-  implements `SdiCore`, the nine extension traits (empty impls allowed;
+  implements `SdiCore`, the eight extension traits (empty impls allowed;
   `oasis_types::impl_sdi_defaults!(T)` writes them, `; except A, B` skips the
   ones it overrides) and `InputBackend`.
 - Four backends implemented: SDL3 (desktop), WASM (browser), UE5 (game engine), PSP (hardware).
 - A sixth trait, `ClipboardBackend`, handles copy/paste with an `InMemoryClipboard` fallback.
 - Shared rasterization in `oasis_types::rasterize`: the span generators for
-  circles, rings, rounded rects, thick lines and even-odd polygons (used by
-  the trait defaults, the SDL backend and `oasis-rasterize::SoftwareBuffer`,
-  which re-exports them) and `PixelSink` + `rasterize_triangle` (used by UE5
-  and `SoftwareBuffer`).
+  circles, rings, rounded rects, thick lines, triangles and even-odd
+  polygons plus `stroke_rect_parts` (used by the trait defaults, the SDL
+  backend and `oasis-rasterize::SoftwareBuffer`, which re-exports the
+  generators) and `PixelSink` + `rasterize_triangle` (used by UE5 and
+  `SoftwareBuffer`).
+
+## Update (2026-10-30)
+
+Corrections to statements above that predate the current code (the
+decision itself is unchanged):
+
+- `NetworkBackend` also has a provided `listen_loopback(port)`; the remote
+  terminal and the FTP-like transfer server use it unless they are given a
+  PSK / password, and the MCP server always does.
+- `AudioBackend` is `init`, `load_track`, `play`, `pause`, `resume`, `stop`,
+  `set_volume` / `get_volume`, `is_playing`, `position_ms`, `duration_ms`,
+  `unload_track` and `shutdown`, plus a provided streaming path
+  (`load_streaming`, `feed_data`, `streaming_can_accept`,
+  `streaming_queued_ms`, `finalize_streaming`, `feed_pcm_f32`).
+- The PSP EBOOT does have networking: `PspNetworkBackend` implements
+  `NetworkBackend` over `sceNetInet` (WiFi, infrastructure mode). The
+  "PSP networking" examples under Rationale and Alternatives describe the
+  early state; the platform that cannot open TCP sockets today is WASM
+  (`WasmNetworkBackend` returns errors; the browser's own `fetch` is used
+  instead).

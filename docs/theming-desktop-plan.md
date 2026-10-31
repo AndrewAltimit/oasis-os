@@ -1,6 +1,21 @@
 # Advanced Theming & Desktop Metaphor Plan
 
-Status: **in progress** — M0 (benchmarks + validation + `skin lint`),
+> **Historical plan record (all milestones M0–M7 landed).** This file is
+> kept as the design rationale for the theme engine and the desktop
+> metaphor. The `file.rs:line` references point at the code as it was
+> when each item was planned; several of those files have since been
+> split into module directories (e.g. `oasis-sdi/src/registry.rs` is now
+> `registry/mod.rs`, the shell's `main.rs` loop moved into
+> `oasis_app::Shell` in `shell.rs`), and the 2026-10 overhaul removed the
+> `oasis-ui` `IconAtlas` / `ToastStack` / `Avatar` widgets (the shell's
+> `oasis_core::toast` is the one toast system). The `update_sdi` named
+> below is the dashboard / bar scene update, not the removed `App`
+> render hook. For the
+> current behavior use [skin-authoring.md](skin-authoring.md),
+> [ui-widgets.md](ui-widgets.md), [design.md](design.md) §6 and
+> [ADR-005](adr/005-toml-skin-system.md).
+
+Status: **complete** — M0 (benchmarks + validation + `skin lint`),
 M1 (asset pipeline: skin `assets/`, `texture =` layout objects, image
 wallpapers, image decal layers, D1 shader texture reuse), M2
 (desktop icons: `icon_layout = "free"` with per-icon positions +
@@ -188,7 +203,7 @@ resolution, inheritance. But:
   chrome convention.
 - The software cursor exists but is disabled on SDL (`oasis-app/src/render.rs:170`);
   WM drag/resize/hit-test infrastructure is mature and reusable
-  (`oasis-wm/src/drag_resize.rs`, `hit_test.rs`).
+  (`oasis-wm/src/drag_resize/`, `hit_test.rs`).
 - **Silent schema drift**: skin TOMLs already set fields that don't exist
   (vaporwave/win95 phantom `wm_theme` keys) and nothing warns.
 - Underused hooks ready to exploit: `app_themes` (2 consumers),

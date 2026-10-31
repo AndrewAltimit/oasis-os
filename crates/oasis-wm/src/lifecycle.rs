@@ -8,7 +8,8 @@ use oasis_sdi::SdiRegistry;
 use oasis_types::error::{OasisError, Result, WmError};
 
 use super::manager::{CASCADE_OFFSET, WindowManager};
-use super::window::{Geometry, Window, WindowConfig, WindowId, WindowState};
+use super::sdi_objects::set_window_visible;
+use super::window::{Window, WindowConfig, WindowId, WindowState};
 
 impl WindowManager {
     /// Change a window's title (titlebar text and taskbar label).
@@ -117,24 +118,16 @@ impl WindowManager {
 
         let was_modal = self.windows[idx].modal;
         let window = self.windows.remove(idx);
+        let drawn = self.animating_geometry(id);
         self.anim_visual.retain(|(wid, _)| *wid != id);
         // With motion on, the SDI objects outlive the window until the
         // close animation ends (see `motion.rs`).
-        if !self.animate_close(&window) {
+        if !self.animate_close(&window, drawn) {
             self.anim.cancel(id);
             self.destroy_sdi_objects(&window, sdi);
         }
 
-        // Cancel any drag on this window.
-        if let Some(ref drag) = self.drag {
-            let drag_id = match drag {
-                super::drag_resize::DragState::Moving { window_id, .. } => window_id.clone(),
-                super::drag_resize::DragState::Resizing { window_id, .. } => window_id.clone(),
-            };
-            if drag_id == id {
-                self.drag = None;
-            }
-        }
+        self.cancel_drag_of(id);
 
         // Focus passes to the topmost *visible* window: a minimized one
         // must not become the (invisible) keyboard target.
@@ -161,6 +154,7 @@ impl WindowManager {
 
     /// Minimize a window (hide all SDI objects).
     pub fn minimize_window(&mut self, id: &str, sdi: &mut SdiRegistry) -> Result<()> {
+        self.cancel_drag_of(id);
         let window = self
             .windows
             .iter_mut()
@@ -173,13 +167,14 @@ impl WindowManager {
             ));
         }
 
-        if window.state == WindowState::Normal {
-            window.saved_geometry = Some(Geometry {
-                x: window.x,
-                y: window.y,
-                w: window.outer_w,
-                h: window.outer_h,
-            });
+        match window.state {
+            WindowState::Normal => {
+                window.saved_geometry = Some(window.geometry());
+                window.minimized_from_maximized = false;
+            },
+            // `saved_geometry` already holds the pre-maximize geometry.
+            WindowState::Maximized => window.minimized_from_maximized = true,
+            WindowState::Minimized => {},
         }
         window.state = WindowState::Minimized;
 
@@ -187,12 +182,7 @@ impl WindowManager {
         if !self.animate_minimize(id, sdi)
             && let Some(window) = self.windows.iter().find(|w| w.id == id)
         {
-            for suffix in window.sdi_suffixes() {
-                let name = window.sdi_name(suffix);
-                if let Ok(obj) = sdi.get_mut(&name) {
-                    obj.visible = false;
-                }
-            }
+            set_window_visible(window, false, sdi);
         }
 
         // Move focus to the next topmost visible window, unless another
@@ -217,6 +207,7 @@ impl WindowManager {
 
     /// Maximize a window to fill the screen.
     pub fn maximize_window(&mut self, id: &str, sdi: &mut SdiRegistry) -> Result<()> {
+        self.cancel_drag_of(id);
         // The screen minus the status/task bar insets (saturating, so
         // insets taller than a tiny screen give a 0-height window).
         let area = self.work_area();
@@ -232,23 +223,26 @@ impl WindowManager {
             ));
         }
 
-        // Save geometry for restore -- unless already maximized, where the
-        // current geometry *is* the maximized one and `saved_geometry`
-        // already holds the geometry to restore to.
-        if window.state != WindowState::Maximized || window.saved_geometry.is_none() {
-            window.saved_geometry = Some(Geometry {
-                x: window.x,
-                y: window.y,
-                w: window.outer_w,
-                h: window.outer_h,
-            });
+        // Save geometry for restore -- unless already maximized (or
+        // minimized from maximized), where the current geometry *is* the
+        // maximized one and `saved_geometry` already holds the geometry to
+        // restore to. A window minimized from the normal state saved its
+        // geometry on minimize, which is the one to keep.
+        let was_minimized = window.state == WindowState::Minimized;
+        if window.state == WindowState::Normal || window.saved_geometry.is_none() {
+            window.saved_geometry = Some(window.geometry());
         }
 
-        window.x = area.x;
-        window.y = area.y;
-        window.outer_w = area.w;
-        window.outer_h = area.h;
+        window.set_geometry(area);
         window.state = WindowState::Maximized;
+        window.minimized_from_maximized = false;
+
+        // Maximizing a minimized window shows it again (it used to stay
+        // hidden while claiming to be maximized, so the taskbar could no
+        // longer bring it back).
+        if was_minimized {
+            set_window_visible(window, true, sdi);
+        }
 
         self.update_sdi_positions(id, sdi);
 
@@ -256,7 +250,16 @@ impl WindowManager {
     }
 
     /// Restore a window from minimized or maximized state.
+    ///
+    /// A window minimized while maximized comes back maximized (re-fitted
+    /// to the current work area); restoring it again returns it to its
+    /// pre-maximize geometry.
     pub fn restore_window(&mut self, id: &str, sdi: &mut SdiRegistry) -> Result<()> {
+        self.cancel_drag_of(id);
+        let area = self.work_area();
+        // Where the window is drawn right now, if a minimize animation is
+        // still running: the restore animation continues from there.
+        let visual = self.animating_geometry(id);
         let window = self
             .windows
             .iter_mut()
@@ -265,27 +268,24 @@ impl WindowManager {
 
         let was_minimized = window.state == WindowState::Minimized;
 
-        if let Some(geom) = window.saved_geometry.take() {
-            window.x = geom.x;
-            window.y = geom.y;
-            window.outer_w = geom.w;
-            window.outer_h = geom.h;
+        if was_minimized && window.minimized_from_maximized {
+            window.set_geometry(area);
+            window.state = WindowState::Maximized;
+        } else {
+            if let Some(geom) = window.saved_geometry.take() {
+                window.set_geometry(geom);
+            }
+            window.state = WindowState::Normal;
         }
-        window.state = WindowState::Normal;
+        window.minimized_from_maximized = false;
 
         if was_minimized {
-            // Show all SDI objects.
-            for suffix in window.sdi_suffixes() {
-                let name = window.sdi_name(suffix);
-                if let Ok(obj) = sdi.get_mut(&name) {
-                    obj.visible = true;
-                }
-            }
+            set_window_visible(window, true, sdi);
         }
 
         self.update_sdi_positions(id, sdi);
         if was_minimized {
-            self.animate_unminimize(id, sdi);
+            self.animate_unminimize(id, visual, sdi);
         }
 
         Ok(())
@@ -296,6 +296,7 @@ impl WindowManager {
     /// Saves the current geometry, expands the window to fill the screen,
     /// sets the `fullscreen_kiosk` flag, and hides all decoration SDI objects.
     pub fn enter_fullscreen(&mut self, id: &str, sdi: &mut SdiRegistry) -> Result<()> {
+        self.cancel_drag_of(id);
         let (sw, sh) = (self.screen_w, self.screen_h);
         let window = self
             .windows
@@ -307,12 +308,7 @@ impl WindowManager {
         // saved_geometry so we don't clobber it). Re-entering kiosk mode
         // keeps the original: the current geometry is the fullscreen one.
         if !window.fullscreen_kiosk || window.kiosk_saved_geometry.is_none() {
-            window.kiosk_saved_geometry = Some(Geometry {
-                x: window.x,
-                y: window.y,
-                w: window.outer_w,
-                h: window.outer_h,
-            });
+            window.kiosk_saved_geometry = Some(window.geometry());
         }
 
         window.x = 0;
@@ -322,14 +318,9 @@ impl WindowManager {
         window.fullscreen_kiosk = true;
 
         // Hide all decoration SDI objects (everything except "content").
-        for &suffix in window.sdi_suffixes() {
-            if suffix != "content" {
-                let name = window.sdi_name(suffix);
-                if let Ok(obj) = sdi.get_mut(&name) {
-                    obj.visible = false;
-                }
-            }
-        }
+        // (`set_window_visible` keeps a kiosk window's chrome hidden; a
+        // minimized window stays hidden entirely.)
+        set_window_visible(window, window.state != WindowState::Minimized, sdi);
 
         self.update_sdi_positions(id, sdi);
         Ok(())
@@ -340,6 +331,7 @@ impl WindowManager {
     /// Restores the saved geometry, clears the `fullscreen_kiosk` flag,
     /// and re-shows all decoration SDI objects.
     pub fn exit_fullscreen(&mut self, id: &str, sdi: &mut SdiRegistry) -> Result<()> {
+        self.cancel_drag_of(id);
         let window = self
             .windows
             .iter_mut()
@@ -347,10 +339,7 @@ impl WindowManager {
             .ok_or_else(|| OasisError::Wm(WmError::WindowNotFound { id: id.to_string() }))?;
 
         if let Some(geom) = window.kiosk_saved_geometry.take() {
-            window.x = geom.x;
-            window.y = geom.y;
-            window.outer_w = geom.w;
-            window.outer_h = geom.h;
+            window.set_geometry(geom);
         }
 
         window.fullscreen_kiosk = false;
@@ -358,12 +347,7 @@ impl WindowManager {
         // Re-show all decoration SDI objects (a minimized window stays
         // hidden until it is restored).
         if window.state != WindowState::Minimized {
-            for suffix in window.sdi_suffixes() {
-                let name = window.sdi_name(suffix);
-                if let Ok(obj) = sdi.get_mut(&name) {
-                    obj.visible = true;
-                }
-            }
+            set_window_visible(window, true, sdi);
         }
 
         self.update_sdi_positions(id, sdi);
@@ -376,28 +360,20 @@ impl WindowManager {
     /// chrome doesn't bleed through.
     pub fn hide_all_window_sdi(&self, sdi: &mut SdiRegistry) {
         for window in &self.windows {
-            for suffix in window.sdi_suffixes() {
-                let name = window.sdi_name(suffix);
-                if let Ok(obj) = sdi.get_mut(&name) {
-                    obj.visible = false;
-                }
-            }
+            set_window_visible(window, false, sdi);
         }
     }
 
     /// Show SDI objects for all non-minimized windows.
     ///
     /// Call when returning from kiosk mode to restore window decorations.
+    /// A window still in fullscreen kiosk mode gets only its content back
+    /// (its decorations stay hidden, as [`Self::enter_fullscreen`] left
+    /// them).
     pub fn show_all_window_sdi(&self, sdi: &mut SdiRegistry) {
         for window in &self.windows {
-            if window.state == crate::window::WindowState::Minimized {
-                continue;
-            }
-            for suffix in window.sdi_suffixes() {
-                let name = window.sdi_name(suffix);
-                if let Ok(obj) = sdi.get_mut(&name) {
-                    obj.visible = true;
-                }
+            if window.state != WindowState::Minimized {
+                set_window_visible(window, true, sdi);
             }
         }
     }

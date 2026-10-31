@@ -467,6 +467,30 @@ pub static SCENARIOS: &[Scenario] = &[
         check = expect_blank
     ),
     scenario!(
+        "stroke_rect_degenerate",
+        |b| {
+            b.stroke_rect(10, 10, 0, 20, 2, RED)?;
+            b.stroke_rect(10, 10, 20, 0, 2, RED)?;
+            b.stroke_rect(10, 10, 20, 20, 0, RED)?;
+            // Thinner than the stroke: exactly the rect, never bands that
+            // reach outside it.
+            b.stroke_rect(40, 10, 20, 1, 3, GREEN)?;
+            // Narrower than two strokes, translucent: blended once.
+            b.stroke_rect(70, 10, 4, 30, 2, Color::rgba(255, 255, 255, 128))
+        },
+        check = |f| {
+            if f.count(rgb_of(RED)) != 0 {
+                return Err("an empty stroke_rect left pixels".into());
+            }
+            expect_rect_exact(f, (40, 10, 20, 1), rgb_of(GREEN))?;
+            let once = blend(Color::rgba(255, 255, 255, 128), rgb_of(BG));
+            expect_fill(f, (70, 10, 4, 30), once, 2)?;
+            expect_ring(f, (70, 10, 4, 30), rgb_of(BG))
+        },
+        Tolerance::BLEND,
+        "alpha-blend rounding"
+    ),
+    scenario!(
         "fill_rect_alpha_zero_is_noop",
         |b| b.fill_rect(10, 10, 40, 40, Color::rgba(255, 255, 255, 0)),
         check = expect_blank
@@ -490,11 +514,12 @@ pub static SCENARIOS: &[Scenario] = &[
         "alpha-blend rounding"
     ),
     scenario!(
-        "dim_screen_and_fill_rect_alpha",
+        "translucent_viewport_overlay",
         |b| {
             b.fill_rect(0, 0, 64, 96, WHITE)?;
-            b.fill_rect_alpha(70, 10, 40, 40, GREEN, 100)?;
-            b.dim_screen(128)
+            b.fill_rect(70, 10, 40, 40, GREEN.with_alpha(100))?;
+            let (w, h) = b.viewport_size();
+            b.fill_rect(0, 0, w, h, Color::rgba(0, 0, 0, 128))
         },
         Tolerance::BLEND,
         "alpha-blend rounding"
@@ -721,6 +746,60 @@ pub static SCENARIOS: &[Scenario] = &[
             check_ink_box(f, |x| x >= 70, (79, 39, 23, 43))?;
             if !(79..=81).any(|x| f.rgb(x, 60) == rgb_of(YELLOW)) {
                 return Err("stroke_arc misses the point at angle -pi".into());
+            }
+            Ok(())
+        }
+    ),
+    scenario!(
+        "arc_sweep_clamped_to_one_turn",
+        |b| {
+            // More than a full turn draws exactly one turn, filled or
+            // stroked (stroke_arc used to divide the whole sweep into
+            // segments, so a 4pi ring had different vertices).
+            let tau = core::f32::consts::TAU;
+            b.stroke_arc(30, 30, 20, 0.5, 0.5 + 2.0 * tau, 2, YELLOW)?;
+            b.stroke_arc(94, 30, 20, 0.5, 0.5 + tau, 2, YELLOW)?;
+            b.fill_arc(30, 72, 18, 1.0, 1.0 - 3.0 * tau, GREEN)?;
+            b.fill_arc(94, 72, 18, 1.0, 1.0 - tau, GREEN)
+        },
+        check = |f| {
+            for y in 0..CANVAS_H {
+                for x in 0..64 {
+                    if f.rgb(x, y) != f.rgb(x + 64, y) {
+                        return Err(format!("({x}, {y}) differs from the one-turn copy"));
+                    }
+                }
+            }
+            if f.count(rgb_of(YELLOW)) == 0 || f.count(rgb_of(GREEN)) == 0 {
+                return Err("nothing drawn".into());
+            }
+            Ok(())
+        }
+    ),
+    scenario!(
+        "shapes_far_offscreen",
+        |b| {
+            // Coordinates a billion pixels away: only the visible rows are
+            // generated (this used to walk, or allocate, every row), and
+            // the visible part lands where the line really crosses.
+            let g = 1_000_000_000;
+            b.draw_line(-g, -g, g, g, 1, WHITE)?;
+            b.draw_line(-g, 20, g, 20, 3, RED)?;
+            b.draw_line(-g, 40, g, 40, 1, RED)?;
+            b.draw_line(100, -g, 100, g, 4, GREEN)?;
+            b.fill_triangle(-g, 70, g, 70, 0, 2 * g, BLUE)?;
+            b.fill_polygon(&[(-2 * g, 90), (2 * g, 90), (0, 2 * g)], YELLOW)
+        },
+        check = |f| {
+            expect_fill(f, (0, 19, 98, 3), rgb_of(RED), 0)?;
+            expect_fill(f, (0, 40, 98, 1), rgb_of(RED), 0)?;
+            expect_fill(f, (98, 0, 4, 19), rgb_of(GREEN), 0)?;
+            expect_fill(f, (0, 72, CANVAS_W, 15), rgb_of(BLUE), 0)?;
+            expect_fill(f, (0, 91, CANVAS_W, 5), rgb_of(YELLOW), 0)?;
+            for i in [0u32, 10, 60] {
+                if f.rgb(i, i) != rgb_of(WHITE) {
+                    return Err(format!("diagonal misses ({i}, {i})"));
+                }
             }
             Ok(())
         }
@@ -1145,8 +1224,14 @@ pub static SCENARIOS: &[Scenario] = &[
             }
             b.destroy_texture(c)?;
             b.destroy_texture(d)?;
-            // Destroying twice is harmless.
-            b.destroy_texture(d)
+            // Destroying twice is reported (`TextureNotFound`), like a
+            // second `destroy_render_target`; see `texture_misuse`.
+            match b.destroy_texture(d) {
+                Err(OasisError::Backend(BackendError::TextureNotFound { .. })) => Ok(()),
+                other => Err(OasisError::Backend(
+                    format!("second destroy_texture returned {other:?}").into(),
+                )),
+            }
         },
         check = |f| {
             expect_rect_exact(f, (4, 4, 4, 4), rgb_of(GREEN))?;
@@ -1322,9 +1407,7 @@ pub static SCENARIOS: &[Scenario] = &[
                 color: Color::rgba(255, 255, 255, 0),
             });
             b.push_translate(1, 1)?;
-            b.begin_batch()?;
             b.submit_rect_batch(&rects)?;
-            b.flush_batch()?;
             b.pop_translate()
         },
         Tolerance::BLEND,
@@ -1731,6 +1814,123 @@ pub fn text_metrics(backend: &dyn SdiBackend) -> Vec<(String, u32)> {
         out.push((format!("font_ascent({fs})"), backend.font_ascent(fs)));
     }
     out
+}
+
+/// Render-target misuse every backend must reject the same way, as a list
+/// of violations (empty = conforming): binding a target that is already
+/// bound, compositing, reading back or destroying the bound target, and
+/// using an id that was destroyed. A rejected call must leave the bind
+/// state alone, so the final unbind still returns to the framebuffer.
+///
+/// Backends without render targets conform trivially.
+pub fn render_target_misuse(backend: &mut dyn SdiBackend) -> Vec<String> {
+    let mut bad = Vec::new();
+    if !backend.supports_render_targets() {
+        return bad;
+    }
+    let rt = match backend.create_render_target(8, 8) {
+        Ok(rt) => rt,
+        Err(e) => return vec![format!("create_render_target: {e}")],
+    };
+    fn expect_err(bad: &mut Vec<String>, what: &str, r: Result<()>) {
+        if r.is_ok() {
+            bad.push(format!("{what} succeeded"));
+        }
+    }
+    match backend.bind_render_target(rt) {
+        Ok(()) => {
+            expect_err(
+                &mut bad,
+                "re-binding the bound target",
+                backend.bind_render_target(rt),
+            );
+            expect_err(
+                &mut bad,
+                "compositing the bound target into itself",
+                backend.composite_render_target(rt, 0, 0, 8, 8, BlendMode::Normal, 1.0),
+            );
+            expect_err(
+                &mut bad,
+                "destroying the bound target",
+                backend.destroy_render_target(rt),
+            );
+            if backend.supports_render_target_readback() {
+                let mut buf = vec![0u8; 8 * 8 * 4];
+                expect_err(
+                    &mut bad,
+                    "reading back the bound target",
+                    backend.read_render_target(rt, &mut buf),
+                );
+            }
+            if backend.unbind_render_target().is_err() {
+                bad.push("unbind after rejected calls failed".into());
+            }
+            expect_err(
+                &mut bad,
+                "unbind with an empty bind stack",
+                backend.unbind_render_target(),
+            );
+        },
+        Err(e) => bad.push(format!("bind_render_target: {e}")),
+    }
+    if let Err(e) = backend.destroy_render_target(rt) {
+        bad.push(format!("destroy_render_target: {e}"));
+    }
+    expect_err(
+        &mut bad,
+        "binding a destroyed target",
+        backend.bind_render_target(rt),
+    );
+    expect_err(
+        &mut bad,
+        "compositing a destroyed target",
+        backend.composite_render_target(rt, 0, 0, 8, 8, BlendMode::Normal, 1.0),
+    );
+    expect_err(
+        &mut bad,
+        "destroying a destroyed target",
+        backend.destroy_render_target(rt),
+    );
+    bad
+}
+
+/// Texture-id misuse every backend must reject the same way, as a list of
+/// violations (empty = conforming): `destroy_texture` on an id the backend
+/// never handed out, a second `destroy_texture` of the same id, and a blit
+/// of a destroyed id all fail with [`BackendError::TextureNotFound`], the
+/// contract `destroy_render_target` already follows (ADR-003).
+pub fn texture_misuse(backend: &mut dyn SdiBackend) -> Vec<String> {
+    fn expect_not_found(bad: &mut Vec<String>, what: &str, r: Result<()>) {
+        match r {
+            Err(OasisError::Backend(BackendError::TextureNotFound { .. })) => {},
+            Err(e) => bad.push(format!("{what}: expected TextureNotFound, got {e}")),
+            Ok(()) => bad.push(format!("{what} succeeded")),
+        }
+    }
+    let mut bad = Vec::new();
+    expect_not_found(
+        &mut bad,
+        "destroying a never-loaded id",
+        backend.destroy_texture(TextureId(0xDEAD_BEEF)),
+    );
+    let tex = match backend.load_texture(2, 2, &[255; 16]) {
+        Ok(t) => t,
+        Err(e) => return vec![format!("load_texture: {e}")],
+    };
+    if let Err(e) = backend.destroy_texture(tex) {
+        bad.push(format!("destroying a live texture: {e}"));
+    }
+    expect_not_found(
+        &mut bad,
+        "destroying a texture twice",
+        backend.destroy_texture(tex),
+    );
+    expect_not_found(
+        &mut bad,
+        "blitting a destroyed texture",
+        backend.blit(tex, 0, 0, 2, 2),
+    );
+    bad
 }
 
 /// Scenario names must be unique (dump files and failure messages key on

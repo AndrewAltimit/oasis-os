@@ -362,15 +362,7 @@ fn window_content_click(
         && let Some(win) = state.wm.get_window(id)
     {
         let (_, _, cw, ch) = win.content_rect(state.wm.theme());
-        let action = runner.handle_click(
-            lx,
-            ly,
-            cw,
-            ch,
-            win.fullscreen_kiosk,
-            &state.active_theme,
-            vfs,
-        );
+        let action = runner.handle_click(lx, ly, cw, ch, &state.active_theme, vfs);
         // Clicks answer with the same actions as buttons: a double-clicked
         // file opens in its app, a File > Close menu item closes the window.
         apply_window_action(action, id.to_string(), state, sdi, vfs);
@@ -427,6 +419,31 @@ fn desktop_release(
     state
         .wm
         .handle_input(&InputEvent::PointerRelease { x, y }, sdi);
+}
+
+/// End the pointer drags when the mode changed since `seen` (and record
+/// the new mode): an icon drag and a WM window drag / resize are finished
+/// where they are. The release handlers only run in the mode the drag
+/// started in, so a drag interrupted by a mode switch (Start to the
+/// terminal, an app launch, a remote `open`) used to survive it and resume
+/// on the next pointer motion with no button held.
+pub fn end_drags_on_mode_change(
+    state: &mut AppState,
+    sdi: &mut SdiRegistry,
+    vfs: &mut MemoryVfs,
+    seen: &mut Mode,
+) {
+    if state.mode == *seen {
+        return;
+    }
+    *seen = state.mode;
+    icon_drag::end_in_place(state, vfs);
+    if state.wm.is_dragging() {
+        // The WM has no cancel: a release ends the drag in place.
+        state
+            .wm
+            .handle_input(&InputEvent::PointerRelease { x: 0, y: 0 }, sdi);
+    }
 }
 
 /// Toggle kiosk fullscreen for the active window (or leave it).

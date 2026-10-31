@@ -10,20 +10,6 @@ use super::block::TextMeasurer;
 use super::box_model::*;
 use crate::css::values::{BorderCollapse, ComputedStyle, Dimension, Display, VerticalAlign};
 
-/// Pixel multiplier used to encode a table cell's `colspan` /
-/// `rowspan` inside the computed-style `min_width` / `max_width`
-/// fields. The DOM-to-layout bridge writes
-/// `Dimension::Px(span * COLSPAN_ENCODING_SCALE)` and
-/// [`extract_explicit_width`] filters out any `Px` value at or above
-/// this threshold so a legitimate `width="1200"` is *not* legal — the
-/// encoding scale must stay larger than any plausible CSS pixel width.
-///
-/// Shared between [`make_cell_with_spans`], [`extract_span_attrs`],
-/// [`extract_explicit_width`], and the DOM-to-layout bridge in
-/// `crate::layout::block::tree_builder` so changing the scale in one
-/// place updates the sentinel everywhere.
-pub(crate) const COLSPAN_ENCODING_SCALE: f32 = 1000.0;
-
 // -------------------------------------------------------------------
 // Table cell representation
 // -------------------------------------------------------------------
@@ -188,26 +174,83 @@ pub fn layout_table(
 // Step 1 -- Parse table structure
 // -------------------------------------------------------------------
 
+/// Which grid slots earlier rows' `rowspan`s still cover.
+///
+/// Rows are parsed top to bottom, so a slot `(row, col)` is taken
+/// exactly when some earlier cell covering `col` spans past `row`: one
+/// "busy until row N" entry per column is enough. That keeps the
+/// bookkeeping `O(columns)` however tall the spans are (a full
+/// `rows x cols` occupancy grid let one `rowspan`/`colspan` pair
+/// allocate gigabytes).
+#[derive(Default)]
+struct SlotTracker {
+    /// `busy_until[c]`: first row index at which column `c` is free.
+    busy_until: Vec<usize>,
+}
+
+impl SlotTracker {
+    /// First column at or after `start` that is free in `row`.
+    fn next_free(&self, row: usize, start: usize) -> usize {
+        let mut col = start;
+        while self.busy_until.get(col).is_some_and(|&until| until > row) {
+            col += 1;
+        }
+        col
+    }
+
+    /// Mark `cols` columns from `col` as taken through `row + rows - 1`.
+    fn occupy(&mut self, row: usize, col: usize, rows: usize, cols: usize) {
+        let end = col + cols;
+        if self.busy_until.len() < end {
+            self.busy_until.resize(end, 0);
+        }
+        for until in &mut self.busy_until[col..end] {
+            *until = (*until).max(row + rows);
+        }
+    }
+}
+
+/// Number of rows [`parse_table_structure`] will find in `children`
+/// (rows, bare cells, and rows inside row groups).
+fn count_rows(children: &[LayoutBox]) -> usize {
+    children
+        .iter()
+        .map(|child| match child.box_type {
+            BoxType::TableRow | BoxType::TableCell => 1,
+            _ => child
+                .children
+                .iter()
+                .filter(|g| matches!(g.box_type, BoxType::TableRow))
+                .count(),
+        })
+        .sum()
+}
+
 /// Walk the child boxes of the table element and extract rows and
 /// cells. Handles implicit row/cell insertion for malformed tables:
 /// - A direct `TableCell` child of the table creates an implicit row.
 /// - A non-row, non-cell child of a row creates an implicit cell.
 fn parse_table_structure(children: &[LayoutBox], tl: &mut TableLayout) {
-    // Grid of which (row, col) slots are occupied (by rowspan).
-    let mut occupied: Vec<Vec<bool>> = Vec::new();
+    let total_rows = count_rows(children);
+    let mut slots = SlotTracker::default();
     let mut row_idx: usize = 0;
 
     for child in children {
         match child.box_type {
             BoxType::TableRow => {
-                parse_row(child, row_idx, tl, &mut occupied);
+                parse_row(&child.children, row_idx, total_rows, tl, &mut slots);
                 row_idx += 1;
             },
             BoxType::TableCell => {
-                // Implicit row: a bare cell directly under the table.
-                // We route the cell through parse_bare_cell which
-                // handles it as a single-cell row.
-                parse_bare_cell(child, row_idx, tl, &mut occupied);
+                // Implicit row: a bare cell directly under the table
+                // is a single-cell row.
+                parse_row(
+                    std::slice::from_ref(child),
+                    row_idx,
+                    total_rows,
+                    tl,
+                    &mut slots,
+                );
                 row_idx += 1;
             },
             _ => {
@@ -215,7 +258,7 @@ fn parse_table_structure(children: &[LayoutBox], tl: &mut TableLayout) {
                 // recurse into their children looking for rows.
                 for grandchild in &child.children {
                     if matches!(grandchild.box_type, BoxType::TableRow) {
-                        parse_row(grandchild, row_idx, tl, &mut occupied);
+                        parse_row(&grandchild.children, row_idx, total_rows, tl, &mut slots);
                         row_idx += 1;
                     }
                 }
@@ -228,33 +271,21 @@ fn parse_table_structure(children: &[LayoutBox], tl: &mut TableLayout) {
     tl.row_heights = vec![0.0; tl.num_rows];
 }
 
-/// Parse a single table row, extracting cells and handling colspans
-/// and rowspans.
-fn parse_row(row: &LayoutBox, row_idx: usize, tl: &mut TableLayout, occupied: &mut Vec<Vec<bool>>) {
-    // Ensure the occupied grid has enough rows.
-    while occupied.len() <= row_idx {
-        occupied.push(vec![false; tl.num_cols]);
-    }
-
+/// Place one row's cells, skipping slots taken by earlier rowspans.
+fn parse_row(
+    cells: &[LayoutBox],
+    row_idx: usize,
+    total_rows: usize,
+    tl: &mut TableLayout,
+    slots: &mut SlotTracker,
+) {
     let mut col_idx: usize = 0;
 
-    for cell_box in &row.children {
-        // Skip to the next unoccupied column.
-        col_idx = next_free_col(occupied, row_idx, col_idx, tl.num_cols);
-
-        let (colspan, rowspan) = extract_span_attrs(cell_box);
-
-        // Ensure occupied grid columns are wide enough.
-        let needed_cols = col_idx + colspan;
-        if needed_cols > tl.num_cols {
-            tl.num_cols = needed_cols;
-            for row_occ in occupied.iter_mut() {
-                row_occ.resize(tl.num_cols, false);
-            }
-        }
-
-        // Mark slots occupied by this cell's rowspan/colspan.
-        mark_occupied(occupied, row_idx, col_idx, rowspan, colspan, tl);
+    for cell_box in cells {
+        col_idx = slots.next_free(row_idx, col_idx);
+        let (colspan, rowspan) = resolve_span(cell_box.cell_span, row_idx, total_rows);
+        slots.occupy(row_idx, col_idx, rowspan, colspan);
+        tl.num_cols = tl.num_cols.max(col_idx + colspan);
 
         let (explicit_px, explicit_pct) = extract_explicit_width(cell_box);
         tl.cells.push(TableCell {
@@ -271,129 +302,30 @@ fn parse_row(row: &LayoutBox, row_idx: usize, tl: &mut TableLayout, occupied: &m
 
         col_idx += colspan;
     }
-
-    // Update num_cols if this row extended it.
-    if col_idx > tl.num_cols {
-        tl.num_cols = col_idx;
-    }
 }
 
-/// Parse a bare cell that appeared directly under the table element
-/// (no explicit row wrapper).
-fn parse_bare_cell(
-    cell_box: &LayoutBox,
-    row_idx: usize,
-    tl: &mut TableLayout,
-    occupied: &mut Vec<Vec<bool>>,
-) {
-    while occupied.len() <= row_idx {
-        occupied.push(vec![false; tl.num_cols]);
-    }
-
-    let col_idx = next_free_col(occupied, row_idx, 0, tl.num_cols);
-    let (colspan, rowspan) = extract_span_attrs(cell_box);
-
-    let needed_cols = col_idx + colspan;
-    if needed_cols > tl.num_cols {
-        tl.num_cols = needed_cols;
-        for row_occ in occupied.iter_mut() {
-            row_occ.resize(tl.num_cols, false);
-        }
-    }
-
-    mark_occupied(occupied, row_idx, col_idx, rowspan, colspan, tl);
-
-    let (explicit_px, explicit_pct) = extract_explicit_width(cell_box);
-    tl.cells.push(TableCell {
-        col: col_idx,
-        row: row_idx,
-        colspan,
-        rowspan,
-        min_width: 0.0,
-        pref_width: 0.0,
-        explicit_px,
-        explicit_pct,
-        layout_box: cell_box.clone(),
-    });
+/// A cell's `(colspan, rowspan)` in grid slots. The row span is clamped
+/// to the rows below it (`rowspan="0"` and oversized spans reach the last
+/// row, as in HTML's table model), and both are at least 1.
+fn resolve_span(span: CellSpan, row_idx: usize, total_rows: usize) -> (usize, usize) {
+    let remaining = total_rows.saturating_sub(row_idx).max(1);
+    let rows = match span.rows {
+        0 => remaining,
+        n => usize::from(n).min(remaining),
+    };
+    (usize::from(span.cols).max(1), rows)
 }
 
 /// Extract a cell's explicit CSS width as (px, percent).
 ///
 /// Multi-column cells propagate their width constraint across spanned
-/// columns during distribution. Values at or above
-/// [`COLSPAN_ENCODING_SCALE`] are the colspan sentinel set by the
-/// DOM-to-layout bridge and are ignored here.
+/// columns during distribution.
 fn extract_explicit_width(cell_box: &LayoutBox) -> (Option<f32>, Option<f32>) {
     match cell_box.style.width {
-        Dimension::Px(v) if v > 0.0 && v < COLSPAN_ENCODING_SCALE => (Some(v), None),
+        Dimension::Px(v) if v > 0.0 && v.is_finite() => (Some(v), None),
         Dimension::Percent(p) if p > 0.0 && p <= 100.0 => (None, Some(p)),
         _ => (None, None),
     }
-}
-
-/// Find the next column index at `row_idx` starting from `start` that
-/// is not occupied by a previous rowspan.
-fn next_free_col(occupied: &[Vec<bool>], row_idx: usize, start: usize, _num_cols: usize) -> usize {
-    if row_idx >= occupied.len() {
-        return start;
-    }
-    let row = &occupied[row_idx];
-    let mut col = start;
-    while col < row.len() && row[col] {
-        col += 1;
-    }
-    col
-}
-
-/// Mark grid slots as occupied for a cell spanning multiple rows and
-/// columns.
-fn mark_occupied(
-    occupied: &mut Vec<Vec<bool>>,
-    row: usize,
-    col: usize,
-    rowspan: usize,
-    colspan: usize,
-    tl: &TableLayout,
-) {
-    for r in row..row + rowspan {
-        while occupied.len() <= r {
-            occupied.push(vec![false; tl.num_cols]);
-        }
-        let row_occ = &mut occupied[r];
-        while row_occ.len() < col + colspan {
-            row_occ.push(false);
-        }
-        for slot in row_occ.iter_mut().skip(col).take(colspan) {
-            *slot = true;
-        }
-    }
-}
-
-/// Extract `colspan` and `rowspan` from a cell's computed style or
-/// layout box. Since our box model does not store HTML attributes
-/// directly, we use the style's width/height hints and default to 1.
-///
-/// In practice the DOM builder should encode span values; here we
-/// inspect the `LayoutBox` node to see if it carries span information
-/// in the style. As a fallback we always return (1, 1).
-fn extract_span_attrs(cell_box: &LayoutBox) -> (usize, usize) {
-    // Convention: cells with explicit integer widths in the
-    // `min_width` style field encode colspan, and similarly rowspan
-    // via another field. Since ComputedStyle does not have colspan
-    // fields, we default to 1 and expect callers to override via
-    // the builder helpers.
-    //
-    // The public API `make_cell_with_spans` allows tests and callers
-    // to embed span metadata.
-    let colspan = match cell_box.style.min_width {
-        Dimension::Px(v) if v >= COLSPAN_ENCODING_SCALE => (v / COLSPAN_ENCODING_SCALE) as usize,
-        _ => 1,
-    };
-    let rowspan = match cell_box.style.max_width {
-        Dimension::Px(v) if v >= COLSPAN_ENCODING_SCALE => (v / COLSPAN_ENCODING_SCALE) as usize,
-        _ => 1,
-    };
-    (colspan.max(1), rowspan.max(1))
 }
 
 // -------------------------------------------------------------------
@@ -1101,28 +1033,21 @@ fn make_empty_table(style: &ComputedStyle) -> LayoutBox {
     table_box
 }
 
-/// Create a table cell `LayoutBox` with colspan and rowspan encoded
-/// in the style for use in tests and the table layout algorithm.
-///
-/// `colspan` is encoded as
-/// `min_width: Px(colspan * COLSPAN_ENCODING_SCALE)`. `rowspan` is
-/// encoded as `max_width: Px(rowspan * COLSPAN_ENCODING_SCALE)`.
+/// Create a table cell `LayoutBox` spanning `colspan` x `rowspan` slots.
 #[cfg(test)]
 pub fn make_cell_with_spans(
     style: &ComputedStyle,
-    colspan: usize,
-    rowspan: usize,
+    colspan: u16,
+    rowspan: u16,
     children: Vec<LayoutBox>,
 ) -> LayoutBox {
     let mut cell_style = style.clone();
     cell_style.display = Display::TableCell;
-    if colspan > 1 {
-        cell_style.min_width = Dimension::Px(colspan as f32 * COLSPAN_ENCODING_SCALE);
-    }
-    if rowspan > 1 {
-        cell_style.max_width = Dimension::Px(rowspan as f32 * COLSPAN_ENCODING_SCALE);
-    }
     let mut lb = LayoutBox::new(BoxType::TableCell, cell_style, None);
+    lb.cell_span = CellSpan {
+        cols: colspan,
+        rows: rowspan,
+    };
     lb.children = children;
     lb
 }
@@ -1562,17 +1487,75 @@ mod tests {
     }
 
     // ---------------------------------------------------------------
-    // Test 11: make_cell_with_spans encodes correctly
+    // Test 11: span resolution and attribute parsing
     // ---------------------------------------------------------------
 
     #[test]
-    fn cell_spans_encoded_correctly() {
-        let s = ComputedStyle::default();
-        let cell = make_cell_with_spans(&s, 3, 2, Vec::new());
+    fn span_attrs_follow_html_parsing_and_limits() {
+        let span = |c: Option<&str>, r: Option<&str>| {
+            let s = CellSpan::from_attrs(c, r);
+            (s.cols, s.rows)
+        };
+        assert_eq!(span(None, None), (1, 1));
+        assert_eq!(span(Some("3"), Some("2")), (3, 2));
+        assert_eq!(span(Some(" 4px"), Some("+2x")), (4, 2));
+        assert_eq!(span(Some("0"), Some("0")), (1, 0));
+        assert_eq!(span(Some("-3"), Some("abc")), (1, 1));
+        assert_eq!(
+            span(Some("99999999999999999999999"), Some("4294967296")),
+            (MAX_COLSPAN, MAX_ROWSPAN)
+        );
+    }
 
-        let (cs, rs) = extract_span_attrs(&cell);
-        assert_eq!(cs, 3, "colspan should be 3");
-        assert_eq!(rs, 2, "rowspan should be 2");
+    #[test]
+    fn rowspan_is_clamped_to_remaining_rows() {
+        assert_eq!(resolve_span(CellSpan { cols: 2, rows: 9 }, 1, 3), (2, 2));
+        assert_eq!(resolve_span(CellSpan { cols: 1, rows: 0 }, 0, 4), (1, 4));
+        assert_eq!(resolve_span(CellSpan { cols: 1, rows: 0 }, 3, 4), (1, 1));
+    }
+
+    /// Regression: spans used to be smuggled through `min-width` /
+    /// `max-width` (`span * 1000px`), and slot occupancy was a dense
+    /// `rows x cols` grid. `colspan="65535" rowspan="65535"` allocated
+    /// gigabytes, and a cell styled `min-width: 2000px` became a
+    /// two-column cell.
+    #[test]
+    fn huge_spans_stay_bounded_and_min_width_is_not_a_span() {
+        let m = FixedMeasurer;
+        let style = table_style();
+        let huge =
+            make_cell_with_spans(&ComputedStyle::default(), MAX_COLSPAN, MAX_ROWSPAN, vec![]);
+        let rows = vec![
+            make_row(vec![huge, make_cell(10.0)]),
+            make_row(vec![make_cell(10.0)]),
+        ];
+        let result = layout_table(&rows, &style, 400.0, &m);
+        assert_eq!(result.children.len(), 2);
+
+        let wide_min = ComputedStyle {
+            display: Display::TableCell,
+            min_width: Dimension::Px(2000.0),
+            ..Default::default()
+        };
+        let cell = LayoutBox::new(BoxType::TableCell, wide_min, None);
+        let mut tl = TableLayout::new(0.0, false);
+        parse_table_structure(&[make_row(vec![cell, make_cell(10.0)])], &mut tl);
+        assert_eq!(tl.num_cols, 2, "min-width must not be read as a colspan");
+        assert_eq!(tl.cells[0].colspan, 1);
+    }
+
+    #[test]
+    fn rowspan_slots_push_later_cells_right() {
+        let mut tl = TableLayout::new(0.0, false);
+        let tall = make_cell_with_spans(&ComputedStyle::default(), 1, 2, vec![]);
+        let rows = vec![
+            make_row(vec![tall, make_cell(10.0)]),
+            make_row(vec![make_cell(10.0), make_cell(10.0)]),
+        ];
+        parse_table_structure(&rows, &mut tl);
+        let cols: Vec<(usize, usize)> = tl.cells.iter().map(|c| (c.row, c.col)).collect();
+        assert_eq!(cols, vec![(0, 0), (0, 1), (1, 1), (1, 2)]);
+        assert_eq!(tl.num_cols, 3);
     }
 
     // ---------------------------------------------------------------

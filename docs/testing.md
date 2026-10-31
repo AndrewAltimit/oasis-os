@@ -1,6 +1,6 @@
 # Testing
 
-OASIS_OS has three layers of automated tests:
+OASIS_OS has five layers of automated tests:
 
 | Layer | Where | What it catches |
 |-------|-------|-----------------|
@@ -41,20 +41,25 @@ crate can take it as a dev-dependency). Pick the narrowest one:
 | Backend | Use it when |
 |---------|-------------|
 | `NullBackend` | You need *a* backend but assert elsewhere (window-manager geometry, decoder state) or bench caller-side cost. Every draw is a no-op; `measure_text` uses the bitmap font (override with `set_measure_text_fn` / `with_measure_text_fn`); `viewport_size` is configurable (`NullBackend::new(w, h)`, `Default` = 480x272) |
-| `RecordingBackend` | You assert on what was drawn. It logs every primitive as a `DrawCommand` (the extension-trait defaults decompose first, so a rounded rect is several `FillRect`s), keeps real clip/translate stacks and render-target state (bind starts fresh, unbind restores; ADR-003), and has query helpers: `fill_rect_count`, `fill_colors`, `draw_text_count`, `texts`, `text_positions`, `text_colors`, `has_text` |
+| `RecordingBackend` | You assert on what was drawn. It logs every primitive as a `DrawCommand` (the extension-trait defaults decompose first, so a rounded rect is several `FillRect`s), keeps real clip/translate stacks and render-target state (bind starts fresh, unbind restores; ADR-003), and has query helpers. The clip stack logs as `PushClip` / `PopClip`, the absolute `set_clip_rect` / `reset_clip_rect` as `SetClip` / `ResetClip`. Query helpers: `fill_rect_count`, `fill_colors`, `draw_text_count`, `texts`, `text_positions`, `text_colors`, `has_text` |
 | `MockSdiCore` | You assert on raw `SdiCore` calls as `(method, params)` strings |
 | `ClipAuditBackend` | Code draws into a host-provided region (an app in a window) and must never put visible pixels outside it |
 | `conformance` | Not a backend: the shared pixel scenarios real backends run (see [Backend parity](#backend-parity)) |
 
+All four doubles follow the backends' texture contract: they track the ids
+`load_texture` handed out, and `destroy_texture` of any other id (or a
+second destroy) fails with `BackendError::TextureNotFound`. A test that
+destroys a made-up `TextureId` must load it first.
+
 Write a custom recorder only when the doubles cannot express the check
 (e.g. `oasis-vector` logs the high-level shape calls themselves, the TV
 e2e `FrameSink` hashes uploaded textures). Implement `SdiCore` and let
-`oasis_types::impl_sdi_defaults!` write the nine extension impls:
+`oasis_types::impl_sdi_defaults!` write the eight extension impls:
 
 ```rust,ignore
 struct MyRecorder { /* ... */ }
 impl SdiCore for MyRecorder { /* the 13 required methods */ }
-// All nine extension traits with their defaults ...
+// All eight extension traits with their defaults ...
 oasis_types::impl_sdi_defaults!(MyRecorder);
 // ... or all but the ones you override yourself.
 oasis_types::impl_sdi_defaults!(MyRecorder; except SdiShapes, SdiVector);
@@ -79,7 +84,11 @@ the shell:
   the drawn text, and `draw_all_sizes_and_themes` sweeps `SIZES` x `THEMES`;
 - `fuzz_app(make, vfs, seed, events)` is the generic property test:
   seeded random events at random sizes and themes, asserting no panic and
-  no clip escape.
+  no clip escape;
+- `click_at(&mut app, lx, ly, cw, ch, &vfs)` is the one-call version for
+  in-module unit tests: `layout(cw, ch, default theme)` then
+  `handle_click(lx, ly, &vfs)`, the host's click sequence
+  (`handle_click` itself takes no size).
 
 ```rust,ignore
 let mut h = AppHarness::new(Box::new(CalculatorApp::new("/apps/calc")));
@@ -89,7 +98,8 @@ h.key(Key::Enter);
 assert!(h.screen_text().contains("10"));
 ```
 
-Every app crate has a `tests/e2e.rs` built on it. Flows that cross the
+Every app crate except the TV Guide has a `tests/e2e.rs` built on it (the
+TV Guide's `tests/interaction.rs` drives its `App` API directly). Flows that cross the
 app boundary (window manager, taskbar, audio, host key handling) belong
 in the shell harness below.
 
@@ -112,7 +122,9 @@ headlessly:
   PCM sample, byte and track operation the shell sends.
 - **Time** is virtual: each frame advances exactly 1/60 s, and the
   platform clock is frozen at `2025-06-15 12:00:00` (the screenshot CI's
-  `OASIS_FIXED_TIME`).
+  `OASIS_FIXED_TIME`). The frozen clock also fixes the Games app's board
+  seed (it seeds from the clock), so any screenshot or e2e flow outside
+  the harness must pin `OASIS_FIXED_TIME` to get reproducible boards.
 - **Network** is off: `AppState::offline` stops TV catalog fetches, video
   downloads and radio streams. A TV tune starts an *injected* decode
   session instead of a download, so scenarios can feed decoded frames and
@@ -251,7 +263,10 @@ Observation
   changes), `e2e_soak.rs` (leak baselines over open/close, skin and
   resolution cycles; seeded random-input fuzz; idle-frame counts),
   `e2e_media.rs`, `e2e_apps.rs` (the app registry: `open <app> [file]`,
-  plugin apps, the Network app's live state). Heavy soak/fuzz variants
+  plugin apps, the Network app's live state), `e2e_plugins.rs` (plugin
+  lifecycle through the shell: scene objects, per-frame `update`,
+  `shutdown`, the `plugin` command), `e2e_remote.rs` and
+  `e2e_browser.rs` (loopback servers, above). Heavy soak/fuzz variants
   are `#[ignore]`d:
   `cargo test -p oasis-app --release --test e2e_soak -- --ignored`.
 - **Leak checks** compare `resource_counts()` after a warm-up round with
@@ -305,6 +320,10 @@ cargo test -p oasis-app --test sdl_parity
   rasterizer rounds: 1-3 levels) and SDL's linear filtering of *scaled*
   textures (the rasterizer samples nearest). Add a scenario whenever a
   backend grows a new primitive or a rendering bug is fixed.
+- **Misuse checks** (`conformance::render_target_misuse`,
+  `conformance::texture_misuse`) return a list of violations instead of
+  a frame: calls every backend must reject the same way (binding a bound
+  target, destroying an unknown texture, ...).
 - **Headless SDL**: `SdlBackend::new_headless` forces the `offscreen`
   video driver and the `software` renderer through in-process SDL hints,
   so the suites need no display and run in the CI container. SDL may only

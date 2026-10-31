@@ -13,7 +13,7 @@ use std::rc::Rc;
 use oasis_rasterize::SoftwareBuffer;
 use oasis_types::backend::stacks::{ClipPush, ClipStack, DrawState, TranslateStack};
 use oasis_types::backend::{
-    BatchRect, BatchText, BlendMode, Color, GradientStyle, RenderTargetId, SdiAlpha, SdiBatch,
+    BatchRect, BatchText, BlendMode, Color, GradientStyle, RenderTargetId, SdiBatch,
     SdiClipTransform, SdiCore, SdiGradients, SdiRenderTarget, SdiShapes, SdiText, SdiTextures,
     SdiVector, TextureId, render_target_not_found, texture_not_found, validate_rgba_data,
 };
@@ -384,11 +384,13 @@ impl SdiCore for Ue5Backend {
     }
 
     fn destroy_texture(&mut self, tex: TextureId) -> Result<()> {
-        let idx = tex.0 as usize;
-        if idx < self.textures.len() {
-            self.textures[idx] = None;
+        let slot = usize::try_from(tex.0)
+            .ok()
+            .and_then(|idx| self.textures.get_mut(idx));
+        match slot.and_then(Option::take) {
+            Some(_) => Ok(()),
+            None => Err(texture_not_found(tex.0)),
         }
-        Ok(())
     }
 
     fn set_clip_rect(&mut self, x: i32, y: i32, w: u32, h: u32) -> Result<()> {
@@ -426,6 +428,11 @@ impl SdiCore for Ue5Backend {
         }
         log::info!("UE5 backend shut down");
         Ok(())
+    }
+
+    /// The bound surface: the framebuffer, or the bound render target.
+    fn viewport_size(&self) -> (u32, u32) {
+        (self.fb.width(), self.fb.height())
     }
 }
 
@@ -551,7 +558,10 @@ impl SdiVector for Ue5Backend {
         if (dx, dy) == (0, 0) {
             self.fb.fill_polygon(points, color);
         } else {
-            let moved: Vec<(i32, i32)> = points.iter().map(|&(x, y)| (x + dx, y + dy)).collect();
+            let moved: Vec<(i32, i32)> = points
+                .iter()
+                .map(|&(x, y)| (x.saturating_add(dx), y.saturating_add(dy)))
+                .collect();
             self.fb.fill_polygon(&moved, color);
         }
         self.dirty = true;
@@ -592,17 +602,6 @@ impl SdiGradients for Ue5Backend {
             .fill_rounded_rect_gradient(tx, ty, w, h, radius, gradient);
         self.dirty = true;
         Ok(())
-    }
-}
-
-// -------------------------------------------------------------------
-// SdiAlpha: the defaults (`dim_screen` covers `viewport_size`)
-// -------------------------------------------------------------------
-
-impl SdiAlpha for Ue5Backend {
-    /// The bound surface: the framebuffer, or the bound render target.
-    fn viewport_size(&self) -> (u32, u32) {
-        (self.fb.width(), self.fb.height())
     }
 }
 
@@ -756,8 +755,8 @@ impl SdiClipTransform for Ue5Backend {
         Ok(())
     }
 
-    fn current_clip_rect(&self) -> Option<(i32, i32, u32, u32)> {
-        self.clip_stack.current_tuple()
+    fn current_clip_rect(&self) -> Option<ClipRect> {
+        self.clip_stack.current()
     }
 
     fn push_translate(&mut self, dx: i32, dy: i32) -> Result<()> {
@@ -1359,16 +1358,6 @@ mod tests {
     }
 
     #[test]
-    fn dim_screen_covers_viewport() {
-        let mut backend = Ue5Backend::new(10, 10);
-        backend.clear(Color::WHITE).unwrap();
-        backend.dim_screen(128).unwrap();
-        // All pixels should be dimmed (not fully white anymore).
-        assert!(backend.buffer()[0] < 255);
-        assert!(backend.buffer()[0] > 0);
-    }
-
-    #[test]
     fn text_measurement() {
         // Same line metrics as the SDL and WASM backends:
         // ceil(max(fs, 8) * 1.2) and ceil(max(fs, 8) * 0.85).
@@ -1661,10 +1650,10 @@ mod tests {
         b.unbind_render_target().unwrap();
 
         assert_eq!(b.current_translate(), (5, 5));
-        assert_eq!(b.current_clip_rect(), Some((7, 7, 4, 4)));
+        assert_eq!(b.current_clip_rect(), Some(ClipRect::new(7, 7, 4, 4)));
         assert_eq!(b.viewport_size(), (40, 40));
         b.pop_clip_rect().unwrap();
-        assert_eq!(b.current_clip_rect(), Some((5, 5, 10, 10)));
+        assert_eq!(b.current_clip_rect(), Some(ClipRect::new(5, 5, 10, 10)));
         b.fill_rect(-5, -5, 40, 40, Color::rgb(255, 0, 0)).unwrap();
         assert_eq!(px(&b, 5, 5), [255, 0, 0, 255]);
         assert_eq!(px(&b, 15, 15), [0, 0, 0, 255], "parent clip restored");

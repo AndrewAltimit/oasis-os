@@ -137,6 +137,70 @@ impl Dimensions {
     }
 }
 
+/// Largest coordinate or size (in CSS px) a laid-out box keeps; see
+/// [`LayoutBox::clamp_geometry`]. 2^25 px, about 33.5 million, matches
+/// Chrome's `LayoutUnit` range and leaves `i32` headroom for paint to
+/// add dozens of such values.
+pub const MAX_LAYOUT_PX: f32 = 33_554_432.0;
+
+/// Largest `colspan` honoured (HTML: values above 1000 are clamped).
+pub const MAX_COLSPAN: u16 = 1000;
+
+/// Largest `rowspan` honoured (HTML: values above 65534 are clamped).
+/// Table layout further clamps a span to the rows that actually exist.
+pub const MAX_ROWSPAN: u16 = 65534;
+
+/// The HTML `colspan` / `rowspan` of a table cell box.
+///
+/// Every other box carries the default `1 x 1`. `rows == 0` is HTML's
+/// "span to the end of the table" (`rowspan="0"`); table layout resolves
+/// it against the row count.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CellSpan {
+    /// Columns spanned, `1..=MAX_COLSPAN`.
+    pub cols: u16,
+    /// Rows spanned, `0..=MAX_ROWSPAN` (`0` = to the last row).
+    pub rows: u16,
+}
+
+impl Default for CellSpan {
+    fn default() -> Self {
+        Self { cols: 1, rows: 1 }
+    }
+}
+
+impl CellSpan {
+    /// Parse `colspan` / `rowspan` attribute values with HTML's rules
+    /// for non-negative integers (leading whitespace, optional `+`,
+    /// digits; trailing junk ignored), clamped to the HTML limits. A
+    /// missing, invalid or zero `colspan` is 1; a missing or invalid
+    /// `rowspan` is 1.
+    pub fn from_attrs(colspan: Option<&str>, rowspan: Option<&str>) -> Self {
+        let cols = colspan
+            .and_then(parse_non_negative)
+            .filter(|&n| n > 0)
+            .map_or(1, |n| n.min(u64::from(MAX_COLSPAN)) as u16);
+        let rows = rowspan
+            .and_then(parse_non_negative)
+            .map_or(1, |n| n.min(u64::from(MAX_ROWSPAN)) as u16);
+        Self { cols, rows }
+    }
+}
+
+/// HTML "rules for parsing non-negative integers", saturating instead of
+/// failing on overflow (so a 30-digit span clamps like a large one).
+fn parse_non_negative(s: &str) -> Option<u64> {
+    let s = s.trim_start_matches([' ', '\t', '\n', '\x0C', '\r']);
+    let s = s.strip_prefix('+').unwrap_or(s);
+    let mut any = false;
+    let mut n: u64 = 0;
+    for d in s.bytes().take_while(u8::is_ascii_digit) {
+        any = true;
+        n = n.saturating_mul(10).saturating_add(u64::from(d - b'0'));
+    }
+    any.then_some(n)
+}
+
 /// The type of a layout box.
 #[derive(Debug, Clone)]
 pub enum BoxType {
@@ -259,6 +323,8 @@ pub struct LayoutBox {
     /// `background_texture`. None when the style's `mask-image` is
     /// `none` / a gradient / an unresolved URL.
     pub mask_image_data: Option<Arc<DecodedImage>>,
+    /// `colspan` / `rowspan` of a table cell (`1 x 1` for other boxes).
+    pub cell_span: CellSpan,
 }
 
 impl LayoutBox {
@@ -275,6 +341,46 @@ impl LayoutBox {
             background_texture: None,
             background_texture_size: None,
             mask_image_data: None,
+            cell_span: CellSpan::default(),
+        }
+    }
+
+    /// Saturate every box's geometry to `±MAX_LAYOUT_PX` (and `NaN` to
+    /// 0) once layout is done.
+    ///
+    /// Layout runs in `f32` and tolerates `width: 1e30px`, but paint
+    /// converts to `i32` and adds a few coordinates together; without a
+    /// bound those sums overflow. This is the same saturation Chrome's
+    /// fixed-point `LayoutUnit` applies. Iterative, so DOM depth does not
+    /// grow the stack.
+    pub fn clamp_geometry(&mut self) {
+        fn c(v: &mut f32) {
+            *v = if v.is_nan() {
+                0.0
+            } else {
+                v.clamp(-MAX_LAYOUT_PX, MAX_LAYOUT_PX)
+            };
+        }
+        fn edges(e: &mut EdgeSizes) {
+            for v in [&mut e.top, &mut e.right, &mut e.bottom, &mut e.left] {
+                c(v);
+            }
+        }
+        let mut stack: Vec<&mut LayoutBox> = vec![self];
+        while let Some(b) = stack.pop() {
+            let d = &mut b.dimensions;
+            for v in [
+                &mut d.content.x,
+                &mut d.content.y,
+                &mut d.content.width,
+                &mut d.content.height,
+            ] {
+                c(v);
+            }
+            edges(&mut d.padding);
+            edges(&mut d.border);
+            edges(&mut d.margin);
+            stack.extend(b.children.iter_mut());
         }
     }
 

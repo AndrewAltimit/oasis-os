@@ -18,6 +18,48 @@ fn is_archive_host(host: &str) -> bool {
     h == "archive.org" || h.ends_with(".archive.org")
 }
 
+/// Largest Internet Archive API response read (headers + body). The
+/// search and files responses are a few hundred KB at most; a server that
+/// keeps sending must not grow the fetch thread's buffer without bound.
+const MAX_RESPONSE_BYTES: usize = 8 * 1024 * 1024;
+
+/// Whether `target` can go into an HTTP request line as is: a non-empty
+/// origin-form path with no whitespace or control characters. Anything
+/// else could end the request line early or inject header lines (CRLF).
+fn is_safe_request_target(target: &str) -> bool {
+    target.starts_with('/') && !target.bytes().any(|b| b <= b' ' || b == 0x7f)
+}
+
+/// Append `data` to `response`, failing once the response would exceed
+/// [`MAX_RESPONSE_BYTES`].
+fn append_capped(response: &mut Vec<u8>, data: &[u8]) -> std::result::Result<(), String> {
+    if response.len().saturating_add(data.len()) > MAX_RESPONSE_BYTES {
+        return Err(format!(
+            "response larger than {} MiB",
+            MAX_RESPONSE_BYTES / (1024 * 1024)
+        ));
+    }
+    response.extend_from_slice(data);
+    Ok(())
+}
+
+/// Percent-encode an Internet Archive identifier (collection or item id)
+/// for a URL path or query. Real identifiers (`[A-Za-z0-9._-]`) pass
+/// through unchanged; anything else (spaces, `&`, CR/LF from a crafted
+/// station entry or search response) is escaped.
+fn encode_ia_id(id: &str) -> String {
+    use std::fmt::Write as _;
+    let mut out = String::with_capacity(id.len());
+    for b in id.bytes() {
+        if b.is_ascii_alphanumeric() || matches!(b, b'-' | b'.' | b'_' | b'~') {
+            out.push(char::from(b));
+        } else {
+            let _ = write!(out, "%{b:02X}");
+        }
+    }
+    out
+}
+
 /// Perform a blocking HTTPS GET and return the response body as a string.
 ///
 /// Used for Internet Archive API calls (small JSON responses).
@@ -31,6 +73,9 @@ fn https_get_body(
     use oasis_core::net::TlsProvider;
 
     log::debug!("HTTPS GET https://{host}{path}");
+    if !is_safe_request_target(path) || !is_archive_host(host) {
+        return Err(format!("refusing request target {host:?} {path:?}"));
+    }
 
     let tcp = net_backend
         .connect(host, 443)
@@ -84,7 +129,7 @@ fn https_get_body(
         }
         match stream.read(&mut buf) {
             Ok(0) => break,
-            Ok(n) => response.extend_from_slice(&buf[..n]),
+            Ok(n) => append_capped(&mut response, &buf[..n])?,
             Err(e) if e.is_would_block() => {
                 std::thread::sleep(std::time::Duration::from_millis(1));
             },
@@ -165,8 +210,12 @@ fn decode_chunked(input: &[u8]) -> Vec<u8> {
         if pos < input.len() && input[pos] == b'\n' {
             pos += 1;
         }
-        // Extract chunk data.
-        let end = (pos + chunk_size).min(input.len());
+        // Extract chunk data. A crafted size near `usize::MAX` must not
+        // overflow (that panicked the fetch thread): malformed, stop.
+        let Some(end) = pos.checked_add(chunk_size) else {
+            break;
+        };
+        let end = end.min(input.len());
         result.extend_from_slice(&input[pos..end]);
         pos = end;
     }
@@ -196,6 +245,9 @@ pub(crate) fn connect_archive_source(
     let creator = track.creator.clone();
 
     log::info!("Connecting to archive source: {orig_host}{orig_path}");
+    if !is_safe_request_target(&orig_path) {
+        return Err(format!("refusing request target {orig_path:?}"));
+    }
 
     const CDN_RETRIES: usize = 3;
     let mut last_err = String::new();
@@ -224,6 +276,10 @@ pub(crate) fn connect_archive_source(
             // an internal address.
             if !is_archive_host(&target.host) {
                 last_err = format!("redirect to non-archive host rejected: {}", target.host);
+                continue 'attempt;
+            }
+            if !is_safe_request_target(&target.path) {
+                last_err = format!("redirect to unsafe path rejected: {:?}", target.path);
                 continue 'attempt;
             }
             let host = target.host.clone();
@@ -360,9 +416,10 @@ pub(crate) fn fetch_catalog_blocking(
 
     let search_path = format!(
         "/advancedsearch.php?\
-         q=collection:{collection}+AND+mediatype:audio\
+         q=collection:{}+AND+mediatype:audio\
          &fl=identifier,title,creator\
-         &sort=random&rows=50&output=json"
+         &sort=random&rows=50&output=json",
+        encode_ia_id(collection)
     );
     let body = https_get_body(&mut net, tls, "archive.org", &search_path)
         .map_err(|e| format!("search API: {e}"))?;
@@ -374,7 +431,7 @@ pub(crate) fn fetch_catalog_blocking(
 
     // Collection path: fetch files for up to 5 items returned by search.
     for (item_id, _title, creator) in items.iter().take(5) {
-        let fp = oasis_audio::radio::ArchiveCatalog::files_api_path(item_id);
+        let fp = oasis_audio::radio::ArchiveCatalog::files_api_path(&encode_ia_id(item_id));
         match https_get_body(&mut net, tls, "archive.org", &fp) {
             Ok(fb) => {
                 let tracks =
@@ -393,7 +450,7 @@ pub(crate) fn fetch_catalog_blocking(
     // collection) work.
     if catalog.tracks.is_empty() {
         log::info!("Collection search empty — trying '{collection}' as a single item");
-        let fp = oasis_audio::radio::ArchiveCatalog::files_api_path(collection);
+        let fp = oasis_audio::radio::ArchiveCatalog::files_api_path(&encode_ia_id(collection));
         match https_get_body(&mut net, tls, "archive.org", &fp) {
             Ok(fb) => {
                 let tracks = oasis_audio::radio::ArchiveCatalog::parse_files_response(
@@ -458,7 +515,7 @@ pub(crate) fn fetch_tv_catalogs_blocking(
         let mut catalog = ChannelCatalog::new(channel.number);
 
         for source in &channel.source {
-            let files_path = ChannelCatalog::files_api_path(&source.item_id);
+            let files_path = ChannelCatalog::files_api_path(&encode_ia_id(&source.item_id));
             match https_get_body(&mut net, tls, "archive.org", &files_path) {
                 Ok(body) => {
                     log::debug!(
@@ -514,4 +571,58 @@ pub(crate) fn connect_archive_track_sync(
 ) -> std::result::Result<app_state::TrackFetchResult, String> {
     let source = connect_archive_source(tls, track)?;
     Ok(app_state::TrackFetchResult { source })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn chunked_decodes_and_stops_on_malformed_sizes() {
+        assert_eq!(
+            decode_chunked(b"3\r\nabc\r\n2\r\nde\r\n0\r\n\r\n"),
+            b"abcde"
+        );
+        // A size that overflows `pos + size` used to panic the fetch
+        // thread; it is malformed now (what came before is kept).
+        assert_eq!(decode_chunked(b"1\r\nx\r\nffffffffffffffff\r\nyz"), b"x");
+        assert_eq!(decode_chunked(b"zz\r\nabc"), b"");
+    }
+
+    #[test]
+    fn response_size_is_capped() {
+        let mut response = vec![0u8; MAX_RESPONSE_BYTES - 4];
+        assert!(append_capped(&mut response, &[1; 4]).is_ok());
+        assert_eq!(response.len(), MAX_RESPONSE_BYTES);
+        let err = append_capped(&mut response, &[1]).unwrap_err();
+        assert!(err.contains("larger than"), "{err}");
+        assert_eq!(response.len(), MAX_RESPONSE_BYTES);
+    }
+
+    #[test]
+    fn identifiers_are_encoded_and_unsafe_targets_refused() {
+        assert_eq!(
+            encode_ia_id("OTRR_This-Is.Your_FBI"),
+            "OTRR_This-Is.Your_FBI"
+        );
+        assert_eq!(
+            encode_ia_id("x HTTP/1.1\r\nHost: evil"),
+            "x%20HTTP%2F1.1%0D%0AHost%3A%20evil"
+        );
+        assert!(is_safe_request_target("/metadata/item/files"));
+        assert!(is_safe_request_target(&format!(
+            "/advancedsearch.php?q=collection:{}",
+            encode_ia_id("a b\r\n")
+        )));
+        for bad in ["", "metadata", "/a b", "/a\r\nX: y", "/a\0", "/a\x7f"] {
+            assert!(!is_safe_request_target(bad), "{bad:?}");
+        }
+        // Refused before any connection is attempted.
+        let tls = oasis_core::net::RustlsTlsProvider::new();
+        let mut net = StdNetworkBackend::new();
+        let err = https_get_body(&mut net, &tls, "archive.org", "/x\r\nEvil: 1").unwrap_err();
+        assert!(err.contains("refusing"), "{err}");
+        let err = https_get_body(&mut net, &tls, "127.0.0.1", "/x").unwrap_err();
+        assert!(err.contains("refusing"), "{err}");
+    }
 }

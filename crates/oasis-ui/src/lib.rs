@@ -4,10 +4,8 @@
 //! primitives, and a widget toolkit. All rendering goes through `SdiBackend`
 //! trait methods -- no platform-specific code.
 
-pub mod accessibility;
 pub mod accordion;
 pub mod animation;
-pub mod avatar;
 pub mod badge;
 pub mod button;
 pub mod card;
@@ -21,7 +19,6 @@ pub mod divider;
 pub mod dropdown;
 pub mod flex;
 pub mod focus;
-pub mod icon;
 pub mod input_field;
 pub mod layout;
 pub mod list_view;
@@ -43,11 +40,13 @@ pub mod tab_bar;
 pub mod table;
 pub mod text_block;
 pub mod theme;
-pub mod toast;
 pub mod toggle;
 pub mod tooltip;
 pub mod tree_view;
 pub mod widget;
+
+#[cfg(test)]
+mod robustness_tests;
 
 #[cfg(test)]
 pub(crate) mod test_utils;

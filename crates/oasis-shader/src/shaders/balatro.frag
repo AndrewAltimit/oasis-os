@@ -1,6 +1,10 @@
 #version 300 es
 precision highp float;
 
+// Balatro swirl. GLSL twin of `software/swirl.rs` (the CPU port every
+// backend ships); keep the two in step. Uniform defaults come from
+// `BuiltinShader::{default_colors, float_params}`.
+
 // Standard uniforms.
 uniform float u_time;
 uniform vec2 u_resolution;
@@ -25,9 +29,12 @@ out vec4 fragColor;
 // Attempt to replicate https://www.shadertoy.com/view/XXtBRr
 // Original by localthunk (https://www.playbalatro.com)
 void main() {
+    // Top-left origin, y down (matches the CPU renderer).
+    vec2 fragCoord = vec2(gl_FragCoord.x, u_resolution.y - gl_FragCoord.y);
+
     // Pixel quantisation for retro look.
     float pixel_size = length(u_resolution.xy) / u_pixel_filter;
-    vec2 uv = (floor(gl_FragCoord.xy / pixel_size) * pixel_size
+    vec2 uv = (floor(fragCoord / pixel_size) * pixel_size
                - 0.5 * u_resolution.xy) / length(u_resolution.xy);
     float uv_len = length(uv);
 
@@ -41,9 +48,7 @@ void main() {
     float angle = atan(uv.y, uv.x) + rot
                   - u_spin_ease * 20.0
                     * (u_spin_amount * uv_len + (1.0 - u_spin_amount));
-    vec2 mid = (u_resolution.xy / length(u_resolution.xy)) * 0.5;
-    uv = vec2(uv_len * cos(angle) + mid.x,
-              uv_len * sin(angle) + mid.y) - mid;
+    uv = vec2(uv_len * cos(angle), uv_len * sin(angle));
 
     // Scale up for distortion detail.
     uv *= 30.0;
@@ -74,11 +79,10 @@ void main() {
 
     // Final colour: base tint + weighted blend + highlights.
     float base_w = 0.3 / u_contrast;
-    vec4 col = base_w * u_color1
+    vec3 col = base_w * u_color1.rgb
              + (1.0 - base_w)
-               * (u_color1 * c1p + u_color2 * c2p
-                  + vec4(c3p * u_color3.rgb, c3p * u_color1.a))
+               * (u_color1.rgb * c1p + u_color2.rgb * c2p + u_color3.rgb * c3p)
              + light;
 
-    fragColor = col;
+    fragColor = vec4(clamp(col, 0.0, 1.0), 1.0);
 }

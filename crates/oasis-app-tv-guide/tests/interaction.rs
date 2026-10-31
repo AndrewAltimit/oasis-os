@@ -3,6 +3,7 @@
 //! errors and retry, empty channels, and schedules that cross midnight or
 //! have fractional episode durations.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
+use oasis_app_core::testing::click_at;
 
 use std::time::Duration;
 
@@ -11,7 +12,6 @@ use oasis_app_tv_guide::schedule::{
     CachedSchedule, ScheduleSlot, format_time, schedule_at, schedule_range,
 };
 use oasis_app_tv_guide::{ChannelCatalog, TV_REQUEST_PATH, TvGuideApp, VideoEpisode};
-use oasis_skin::active_theme::ActiveTheme;
 use oasis_types::input::Button;
 use oasis_vfs::{MemoryVfs, Vfs};
 
@@ -42,7 +42,7 @@ fn catalog(channel_number: u32, episodes: Vec<VideoEpisode>) -> ChannelCatalog {
 /// `loaded` (by index), each with a single long episode.
 fn guide_with(loaded: &[usize]) -> (TvGuideApp, MemoryVfs) {
     let vfs = MemoryVfs::new();
-    let mut app = TvGuideApp::new("/apps/TV Guide", &vfs, &ActiveTheme::default());
+    let mut app = TvGuideApp::new("/apps/TV Guide", &vfs);
     app.guide.fetch_attempted = true;
     for &i in loaded {
         let number = app.guide.channels[i].number;
@@ -64,18 +64,18 @@ fn press(app: &mut TvGuideApp, vfs: &dyn Vfs, b: Button) -> AppAction {
     app.handle_input(&b, vfs)
 }
 
-/// Content-local y of the middle of visible grid row `row` (fullscreen
-/// layout, mirrors `TvGuideState::handle_click`).
+/// Content-local y of the middle of visible grid row `row` (the windowed
+/// layout at `CW` x `CH`, mirrors `TvGuideState::handle_click`).
 fn row_y(rows: usize, row: usize) -> i32 {
-    let header_h = (CH * 20 / 100).max(60);
-    let time_h = (CH * 4 / 100).max(20);
-    let footer_h = (CH * 5 / 100).max(18);
+    let header_h = (CH * 20 / 100).max(40);
+    let time_h = (CH * 4 / 100).max(16);
+    let footer_h = (CH * 5 / 100).max(14);
     let grid_h = CH - header_h - time_h - footer_h;
-    let row_h = (grid_h / rows.clamp(1, 5) as u32).max(20);
+    let row_h = (grid_h / rows.clamp(1, 5) as u32).max(16);
     (header_h + time_h + row_h * row as u32 + row_h / 2) as i32
 }
 
-/// The fullscreen volume bar, `(x, y, w)` (mirrors `volume_bar_rect`).
+/// The volume bar, `(x, y, w)` (mirrors `volume_bar_rect`).
 fn volume_bar(expanded: bool) -> (i32, i32, u32) {
     let w = (CW / 3).clamp(80, 220);
     let x = CW as i32 - w as i32 - 12;
@@ -189,7 +189,7 @@ fn many_channels_page_with_selection() {
     vfs.mkdir("/etc").unwrap();
     vfs.mkdir("/etc/tv").unwrap();
     vfs.write("/etc/tv/channels.toml", toml.as_bytes()).unwrap();
-    let mut app = TvGuideApp::new("/apps/TV Guide", &vfs, &ActiveTheme::default());
+    let mut app = TvGuideApp::new("/apps/TV Guide", &vfs);
     assert_eq!(app.guide.channels.len(), 12);
     for _ in 0..11 {
         press(&mut app, &vfs, Button::Down);
@@ -198,7 +198,7 @@ fn many_channels_page_with_selection() {
     assert_eq!(app.guide.current_page(), app.guide.total_pages());
     // Clicking the first visible row on the last page selects channel 7.
     let first_visible = app.guide.scroll_offset;
-    app.handle_click(100, row_y(12, 0), CW, CH, true, &vfs);
+    click_at(&mut app, 100, row_y(12, 0), CW, CH, &vfs);
     assert_eq!(app.guide.selected_channel, first_visible);
 }
 
@@ -206,13 +206,13 @@ fn many_channels_page_with_selection() {
 fn click_selects_then_second_click_tunes() {
     let (mut app, vfs) = guide_with(&[0, 1, 2, 3, 4]);
     assert_eq!(
-        app.handle_click(100, row_y(5, 3), CW, CH, true, &vfs),
+        click_at(&mut app, 100, row_y(5, 3), CW, CH, &vfs),
         AppAction::None
     );
     assert_eq!(app.guide.selected_channel, 3);
     assert!(app.guide.tuned_channel.is_none());
     assert_eq!(
-        app.handle_click(100, row_y(5, 3), CW, CH, true, &vfs),
+        click_at(&mut app, 100, row_y(5, 3), CW, CH, &vfs),
         AppAction::RequestFullscreen
     );
     assert_eq!(app.guide.tuned_channel, Some(3));
@@ -240,10 +240,7 @@ fn volume_bar_click_sets_volume_while_tuned() {
             (x + w as i32 - 1, 100),
         ] {
             app.guide.volume_changed = false;
-            assert_eq!(
-                app.handle_click(px, y + 6, CW, CH, true, &vfs),
-                AppAction::None
-            );
+            assert_eq!(click_at(&mut app, px, y + 6, CW, CH, &vfs), AppAction::None);
             assert!(app.guide.volume_changed);
             assert!(
                 app.guide.volume.abs_diff(want) <= 1,
@@ -261,7 +258,7 @@ fn volume_bar_click_sets_volume_while_tuned() {
 fn volume_bar_is_inert_when_not_tuned() {
     let (mut app, vfs) = guide_with(&[0]);
     let (x, y, w) = volume_bar(false);
-    app.handle_click(x + w as i32 / 2, y + 6, CW, CH, true, &vfs);
+    click_at(&mut app, x + w as i32 / 2, y + 6, CW, CH, &vfs);
     assert_eq!(app.guide.volume, 25);
     assert!(!app.guide.volume_changed);
 }
@@ -320,7 +317,7 @@ fn guide_without_channels_handles_all_input() {
     vfs.mkdir("/etc").unwrap();
     vfs.mkdir("/etc/tv").unwrap();
     vfs.write("/etc/tv/channels.toml", b"channel = []").unwrap();
-    let mut app = TvGuideApp::new("/apps/TV Guide", &vfs, &ActiveTheme::default());
+    let mut app = TvGuideApp::new("/apps/TV Guide", &vfs);
     assert!(app.guide.channels.is_empty());
     for b in [
         Button::Up,
@@ -332,10 +329,7 @@ fn guide_without_channels_handles_all_input() {
     ] {
         assert_eq!(press(&mut app, &vfs, b), AppAction::None);
     }
-    assert_eq!(
-        app.handle_click(100, 300, CW, CH, true, &vfs),
-        AppAction::None
-    );
+    assert_eq!(click_at(&mut app, 100, 300, CW, CH, &vfs), AppAction::None);
     assert!(app.lines().iter().any(|l| l.contains("No channels")));
     assert_eq!(press(&mut app, &vfs, Button::Cancel), AppAction::Exit);
 }
@@ -347,7 +341,7 @@ fn invalid_channel_config_falls_back_to_defaults() {
     vfs.mkdir("/etc/tv").unwrap();
     vfs.write("/etc/tv/channels.toml", b"this is [not toml")
         .unwrap();
-    let app = TvGuideApp::new("/apps/TV Guide", &vfs, &ActiveTheme::default());
+    let app = TvGuideApp::new("/apps/TV Guide", &vfs);
     assert_eq!(app.guide.channels.len(), 5);
 }
 

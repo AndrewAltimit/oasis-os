@@ -1,20 +1,12 @@
 //! List marker text: ordered-list formatting (decimal, alphabetic,
-//! roman, custom `@counter-style`). The recorder (`record.rs`) places
+//! roman, custom `@counter-style`). The recorder (`record/text.rs`) places
 //! and draws the marker.
 
 use crate::css::parser::CounterStyleRule;
 use crate::layout::box_model::ListMarkerStyle;
 
 /// Format an ordered list marker using the given style and counter value.
-pub(super) fn format_ordered_marker_public(
-    style: &ListMarkerStyle,
-    n: usize,
-    counter_styles: &[CounterStyleRule],
-) -> String {
-    format_ordered_marker(style, n, counter_styles)
-}
-
-fn format_ordered_marker(
+pub(super) fn format_ordered_marker(
     style: &ListMarkerStyle,
     n: usize,
     counter_styles: &[CounterStyleRule],

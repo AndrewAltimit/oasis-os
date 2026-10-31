@@ -6,35 +6,36 @@
 
 #[macro_use]
 mod command_macro;
-pub mod audio_commands;
+mod audio_commands;
 mod builtins;
 mod commands;
 pub mod completion;
 pub mod control_flow;
-pub mod core_commands;
-pub mod dev_commands;
-pub mod doc_commands;
+mod core_commands;
+mod dev_commands;
+mod doc_commands;
 mod executor;
 pub(crate) mod expander;
-pub mod file_commands;
-pub mod fun_commands;
+mod expansion;
+mod file_commands;
+mod fun_commands;
 pub mod highlight;
 mod interpreter;
 pub mod jobs;
 pub mod line_edit;
-pub mod network_commands;
+mod network_commands;
 pub(crate) mod pipeline;
-pub mod platform_commands;
-pub mod radio_commands;
+mod platform_commands;
+mod radio_commands;
 mod registry;
-pub mod remote_commands;
+mod remote_commands;
 mod script;
-pub mod security_commands;
+mod security_commands;
 pub mod session;
-pub mod system_commands;
-pub mod text_commands;
+mod system_commands;
+mod text_commands;
 mod types;
-pub mod ui_commands;
+mod ui_commands;
 
 #[cfg(test)]
 mod test_helpers;
@@ -90,6 +91,11 @@ pub use ui_commands::register_ui_commands;
 
 pub mod cmd_helpers;
 pub use cmd_helpers::{require_args, require_args_exact, time_seed};
+/// How deeply shell constructs may nest (`$(...)`, function calls, scripts,
+/// `if` / loop / `case` blocks, all together).
+pub use types::MAX_EXEC_DEPTH;
+/// What [`Command::execute`] returns (the alias `define_command!` expands to).
+pub type CommandResult = oasis_types::error::Result<CommandOutput>;
 /// Shell job (background or stopped command).
 pub use jobs::Job;
 /// Manages shell jobs (background and stopped commands).

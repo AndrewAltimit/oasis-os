@@ -111,13 +111,7 @@ pub(super) fn dispatch_dashboard_confirm(
                     // Check if WiFi is already connected (cmd_server auto-connect).
                     // If so, ensure_net_init won't show a dialog, so we must NOT
                     // call reinit_gu_frame (which is only safe after utility dialogs).
-                    // Use sceNetApctlGetState directly — psp::net::is_connected()
-                    // uses an internal flag that isn't set by raw sceNetApctlConnect.
-                    let was_connected = {
-                        let mut state = psp::sys::ApctlState::Disconnected;
-                        unsafe { psp::sys::sceNetApctlGetState(&mut state) };
-                        matches!(state, psp::sys::ApctlState::GotIp)
-                    };
+                    let was_connected = oasis_backend_psp::network::wifi_has_ip();
                     if let Err(e) = oasis_backend_psp::network::ensure_net_init_pub() {
                         dbg_log(&format!("[TV] net init failed: {e}"));
                         if !was_connected {
@@ -351,18 +345,6 @@ pub(super) fn dispatch_tv_confirm(
         tv.selected,
         tv.catalogs.len()
     ));
-    // Pre-allocate the GU video texture now, while ~7.5 MB of partition
-    // memory is still free. By the time the video thread reaches
-    // `AvcDecoder::new` it will have consumed ~6.5 MB on the persistent
-    // sceMpeg DDR workspace, leaving ~1 MB — too little for a 524 KB
-    // texture. The texture is reused for every subsequent stream (CSC
-    // stride is fixed at 512 for any ≤480p source), so this allocation
-    // happens at most once per session.
-    if backend.alloc_video_texture(512, 256).is_none() {
-        oasis_backend_psp::video::vlog_force(
-            "[TV] WARN: video texture pre-alloc failed; video will be audio-only",
-        );
-    }
     if tv.selected < tv.catalogs.len() {
         if let Some(catalog) = &tv.catalogs[tv.selected] {
             dbg_log(&format!(
@@ -380,6 +362,39 @@ pub(super) fn dispatch_tv_confirm(
                     "[TV] episode: {} ({}x{} {}B)",
                     ep.title, ep.width, ep.height, ep.size_bytes,
                 ));
+                // Allocate the GU video texture (the decoder's CSC target)
+                // now, while ~7.5 MB of partition memory is still free. By
+                // the time the video thread reaches `AvcDecoder::new` the
+                // persistent sceMpeg DDR workspace has taken ~6.5 MB,
+                // leaving ~1 MB. 512-px stride, sized by rows: at least
+                // 480x272 (PSP native, 557 KB) so the common case never
+                // reallocates, taller if the selected episode needs it
+                // (capped at 480: taller streams play audio-only). The
+                // buffer is reused by later tunes when big enough.
+                use oasis_backend_psp::video::{
+                    VIDEO_TEX_DEFAULT_ROWS, VIDEO_TEX_FALLBACK_ROWS, VIDEO_TEX_STRIDE, vlog_force,
+                };
+                let rows = ep.height.clamp(VIDEO_TEX_DEFAULT_ROWS, 480);
+                if backend
+                    .alloc_video_texture(VIDEO_TEX_STRIDE, rows)
+                    .is_some()
+                {
+                    vlog_force(&format!("[TV] video texture: {VIDEO_TEX_STRIDE}x{rows}"));
+                } else if backend
+                    .alloc_video_texture(VIDEO_TEX_STRIDE, VIDEO_TEX_FALLBACK_ROWS)
+                    .is_some()
+                {
+                    // Not enough room for the full size: keep the pre-272-row
+                    // 512x256 buffer so streams up to 256 rows still get
+                    // video (taller ones go audio-only instead of overrunning
+                    // it, see `NalDecoder::try_init`).
+                    vlog_force(&format!(
+                        "[TV] WARN: {VIDEO_TEX_STRIDE}x{rows} video texture alloc failed; \
+                         fell back to {VIDEO_TEX_STRIDE}x{VIDEO_TEX_FALLBACK_ROWS}"
+                    ));
+                } else {
+                    vlog_force("[TV] WARN: video texture alloc failed; video will be audio-only");
+                }
                 if !oasis_backend_psp::network::is_net_initialized() {
                     dbg_log("[TV] calling ensure_net_init_pub...");
                     if let Err(e) = oasis_backend_psp::network::ensure_net_init_pub() {

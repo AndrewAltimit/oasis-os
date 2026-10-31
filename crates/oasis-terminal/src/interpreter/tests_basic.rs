@@ -446,7 +446,9 @@ fn tokenize_unterminated_double() {
 fn variable_expansion() {
     let reg = CommandRegistry::new();
     reg.set_variable("NAME", "oasis");
-    let result = reg.expand_variables("hello $NAME", "/");
+    let result = reg
+        .expand_joined("hello $NAME", &mut make_env(&mut MemoryVfs::new()))
+        .unwrap();
     assert_eq!(result, "hello oasis");
 }
 
@@ -454,14 +456,19 @@ fn variable_expansion() {
 fn variable_expansion_braces() {
     let reg = CommandRegistry::new();
     reg.set_variable("NAME", "oasis");
-    let result = reg.expand_variables("hello ${NAME}!", "/");
+    let result = reg
+        .expand_joined("hello ${NAME}!", &mut make_env(&mut MemoryVfs::new()))
+        .unwrap();
     assert_eq!(result, "hello oasis!");
 }
 
 #[test]
 fn variable_cwd() {
     let reg = CommandRegistry::new();
-    let result = reg.expand_variables("pwd=$CWD", "/home/user");
+    let mut vfs = MemoryVfs::new();
+    let mut env = make_env(&mut vfs);
+    env.cwd = "/home/user".to_string();
+    let result = reg.expand_joined("pwd=$CWD", &mut env).unwrap();
     assert_eq!(result, "pwd=/home/user");
 }
 
@@ -469,14 +476,18 @@ fn variable_cwd() {
 fn variable_exit_code() {
     let reg = CommandRegistry::new();
     reg.last_exit_code.set(42);
-    let result = reg.expand_variables("exit=$?", "/");
+    let result = reg
+        .expand_joined("exit=$?", &mut make_env(&mut MemoryVfs::new()))
+        .unwrap();
     assert_eq!(result, "exit=42");
 }
 
 #[test]
 fn variable_undefined() {
     let reg = CommandRegistry::new();
-    let result = reg.expand_variables("$UNDEFINED_VAR", "/");
+    let result = reg
+        .expand_joined("$UNDEFINED_VAR", &mut make_env(&mut MemoryVfs::new()))
+        .unwrap();
     assert_eq!(result, "");
 }
 
@@ -820,7 +831,7 @@ fn command_substitution_trims_trailing_newlines() {
     reg.register(Box::new(EchoCmd));
     let mut vfs = MemoryVfs::new();
     let mut env = make_env(&mut vfs);
-    let result = reg.expand_substitutions("$(echo test)", &mut env);
+    let result = reg.expand_joined("$(echo test)", &mut env).unwrap();
     assert_eq!(result, "test");
 }
 
@@ -856,7 +867,7 @@ fn command_substitution_unmatched_paren_passthrough() {
     let mut vfs = MemoryVfs::new();
     let mut env = make_env(&mut vfs);
     // Unmatched $( should pass through as literal.
-    let result = reg.expand_substitutions("$(unclosed", &mut env);
+    let result = reg.expand_joined("$(unclosed", &mut env).unwrap();
     assert_eq!(result, "$(unclosed");
 }
 

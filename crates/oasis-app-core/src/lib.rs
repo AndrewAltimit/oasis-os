@@ -1,14 +1,19 @@
-//! Shared App trait, layout, and rendering helpers for OASIS_OS applications.
+//! The `App` trait and the helpers every OASIS_OS app shares.
 //!
-//! This crate provides the common interface and utilities that all extracted
-//! app crates depend on, avoiding a dependency on the full `oasis-core`.
+//! App crates depend on this crate (never on `oasis-core`): the [`App`]
+//! trait and its [`AppAction`] / [`AppRequest`] vocabulary, [`ContentState`]
+//! plus [`impl_content_app_methods!`] for line-list apps, the windowed
+//! line-list renderer ([`render`]), file viewers ([`file_viewer`]), VFS
+//! helpers ([`vfs_util`]) and, behind the `testing` feature, an end-to-end
+//! app harness.
 
 mod app_trait;
 pub mod file_viewer;
-pub mod layout;
+pub mod id3;
 pub mod render;
 #[cfg(feature = "testing")]
 pub mod testing;
+pub mod vfs_util;
 
 pub use app_trait::{App, AppRequest, AsAny, ContentState, MAX_WHEEL_STEPS};
 
@@ -35,14 +40,13 @@ pub enum AppAction {
 /// Generate the boilerplate `App` trait methods that delegate to a
 /// `ContentState` field.
 ///
-/// Apps that embed a `ContentState` field and use the standard
-/// `render_app_chrome` / `render_content_sdi` / `draw_content_windowed`
-/// / `hide_app_sdi` helpers all share identical implementations of:
+/// Apps that embed a `ContentState` field and draw it with
+/// [`render::draw_content_windowed`] share identical implementations of:
 ///
 /// - `title()`, `path()`, `lines()`, `browse_dir()`, `viewing_file()`
 /// - `layout()` ([`ContentState::update_layout_windowed`], so scrolling and
 ///   click-to-line mapping use the rows the window really shows)
-/// - `update_sdi()`, `draw_windowed()`, `hide_sdi()`
+/// - `draw_windowed()`
 /// - `drain_requests()` (hands over `ContentState::requests`; queue them
 ///   with [`ContentState::post_request`])
 ///
@@ -66,14 +70,8 @@ macro_rules! impl_content_app_methods {
         fn path(&self) -> &str {
             &self.$field.app_path
         }
-        fn layout(&mut self, _cw: u32, ch: u32, at: &oasis_skin::ActiveTheme) {
+        fn layout(&mut self, _cw: u32, ch: u32, at: &$crate::__macro_support::ActiveTheme) {
             self.$field.update_layout_windowed(ch, at);
-        }
-        fn update_sdi(&mut self, sdi: &mut oasis_sdi::SdiRegistry, at: &oasis_skin::ActiveTheme) {
-            self.$field.update_layout(at);
-            self.$field.animate_selection(0.3);
-            $crate::render::render_app_chrome(sdi, at);
-            $crate::render::render_content_sdi(&self.$field, sdi, at);
         }
         fn draw_windowed(
             &self,
@@ -81,13 +79,10 @@ macro_rules! impl_content_app_methods {
             cy: i32,
             cw: u32,
             ch: u32,
-            backend: &mut dyn oasis_types::backend::SdiBackend,
-            at: &oasis_skin::ActiveTheme,
-        ) -> oasis_types::error::Result<()> {
+            backend: &mut dyn $crate::__macro_support::SdiBackend,
+            at: &$crate::__macro_support::ActiveTheme,
+        ) -> $crate::__macro_support::Result<()> {
             $crate::render::draw_content_windowed(&self.$field, cx, cy, cw, ch, backend, at)
-        }
-        fn hide_sdi(&self, sdi: &mut oasis_sdi::SdiRegistry) {
-            $crate::render::hide_app_sdi(sdi);
         }
         fn drain_requests(&mut self, out: &mut Vec<$crate::AppRequest>) {
             out.append(&mut self.$field.requests);
@@ -102,4 +97,13 @@ macro_rules! impl_content_app_methods {
             self.$field.viewing_file.as_deref()
         }
     };
+}
+
+/// Paths [`impl_content_app_methods!`] expands to, so an app crate using
+/// the macro needs no direct `oasis-skin` / `oasis-types` dependency.
+#[doc(hidden)]
+pub mod __macro_support {
+    pub use oasis_skin::ActiveTheme;
+    pub use oasis_types::backend::SdiBackend;
+    pub use oasis_types::error::Result;
 }

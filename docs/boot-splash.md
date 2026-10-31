@@ -38,8 +38,11 @@ struct just owns the animation timeline.
 
 Stateful; the caller drives it frame by frame:
 
-- `BootSplash::start(backend, w, h)` — precompute GPU textures, return
-  a handle. Start time is captured here.
+- `BootSplash::start_themed(backend, w, h, SplashTheme)` — precompute
+  GPU textures (vignette, logo glow, horizon glow, mini logo), return a
+  handle. `SplashTheme` carries the skin-derived colors
+  (`SplashTheme::default()` is the classic PSIX purple). Start time is
+  captured here.
 - `run_until(backend, target_secs) -> Result<bool>` — render frames
   until `target_secs` elapses, the user presses any button to skip,
   or the splash ends. Returns `true` if skipped.
@@ -48,14 +51,17 @@ Stateful; the caller drives it frame by frame:
 - `set_status(text)` — set the live `> [spinner] {text}...` line below
   the BIOS block. Empty string hides the line. The spinner cycles
   `| / - \` at 10 Hz.
-- `run_to_end(backend)` — convenience wrapper for `run_until(.., 6.5)`.
-- `finish(backend)` — consume, fade to black (if not skipped), release
-  GPU textures.
+- `run_to_end(backend)` — convenience wrapper for
+  `run_until(.., SPLASH_DURATION_S)` (6.5 s).
+- `finish(self, backend)` — consume, fade to black (if not skipped),
+  release GPU textures.
+- `render_at(backend, elapsed)` — draw one frame at any point of the
+  timeline, deterministically (tests).
 
 ### Interleaving pattern
 
 ```rust
-let mut splash = BootSplash::start(&mut backend, w, h)?;
+let mut splash = BootSplash::start_themed(&mut backend, w, h, SplashTheme::default())?;
 
 // Do work, then advance the animation to the next BIOS reveal time.
 splash.set_bios_line(2, format!("SYSTEM RAM CHECK... {ram}K OK"));
@@ -71,9 +77,10 @@ splash.finish(&mut backend)?;
 ## What the visible banner is drawing
 
 - **Dark rounded-rect banner** spanning the top of the screen.
-- **Miniature `[OASIS]` logo** on the left, rendered via
-  `paint_mini_oasis_logo` using the same stroke coordinates as the
-  full-screen splash logo but at ~0.19× scale.
+- **Miniature `[OASIS]` logo** on the left: the full-screen logo's
+  strokes pre-rasterized once at ~0.19× scale
+  (`generate_mini_logo_texture`, part of `SplashTextures`) and blitted
+  every frame.
 - **Subtitle** on the right: `BIOS / RUNTIME SERVICES CORE v7.0.4`.
 - **Phase progress bar** below the banner — fills as
   `elapsed / 3.0s`, so the user sees continuous progress during the
@@ -146,5 +153,5 @@ fades directly to black without the 0.3s transition.
   animation deterministically (used by the e2e tests, see
   [testing.md](testing.md)).
 - **System probes:** `crates/oasis-app/src/sysinfo.rs`
-- **Warm-up helpers:** `shell::prewarm_glyph_cache`,
-  `shell::format_thousands`
+- **Warm-up helpers:** `prewarm_glyph_cache` and `format_thousands`
+  (private functions in `shell.rs`)

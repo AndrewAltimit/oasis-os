@@ -25,6 +25,7 @@ pub mod cascade;
 mod color;
 pub mod default;
 mod media;
+mod named_colors;
 pub mod parser;
 pub mod selectors;
 mod shorthand;
@@ -32,3 +33,5 @@ mod token_util;
 pub mod tokenizer;
 pub mod transition;
 pub mod values;
+
+pub use color::parse_color;

@@ -21,14 +21,14 @@ mod shapes;
 use std::collections::HashMap;
 
 use sdl3::EventPump;
-use sdl3::render::{Canvas, FPoint, FRect, Texture, TextureCreator};
+use sdl3::render::{Canvas, FRect, Texture, TextureCreator};
 use sdl3::video::{Window, WindowContext};
 
 use oasis_types::backend::stacks::{ClipPush, ClipStack, DrawState, TranslateStack};
 use oasis_types::backend::{
-    ArcParams, BackendErrExt, BatchRect, BatchText, BlendMode, Color, RenderTargetId, SdiAlpha,
-    SdiBatch, SdiClipTransform, SdiRenderTarget, SdiShapes, SdiText, SdiTextures, SdiVector,
-    StrokeStyle, TextureId, render_target_not_found,
+    BackendErrExt, BatchRect, BatchText, BlendMode, Color, RenderTargetId, SdiBatch,
+    SdiClipTransform, SdiRenderTarget, SdiShapes, SdiText, SdiTextures, SdiVector, StrokeStyle,
+    TextureId, render_target_not_found,
 };
 use oasis_types::error::{OasisError, Result};
 pub use oasis_types::geometry::ClipRect;
@@ -52,9 +52,10 @@ pub(crate) fn frect(x: i32, y: i32, w: u32, h: u32) -> FRect {
     FRect::new(x as f32, y as f32, w as f32, h as f32)
 }
 
-/// Convert integer coordinates to an `FPoint` for SDL3 renderer calls.
-pub(crate) fn fpoint(x: i32, y: i32) -> FPoint {
-    FPoint::new(x as f32, y as f32)
+/// The error for a render-target call on a target that is currently bound
+/// (on the bind chain).
+fn bound_target_error(op: &str, id: RenderTargetId) -> OasisError {
+    OasisError::Backend(format!("{op}: render target {} is bound", id.0).into())
 }
 
 /// The surface a render-target bind replaced, restored on unbind.
@@ -285,11 +286,30 @@ impl SdlBackend {
                     "SDL set_size failed: {e:?}"
                 )))
             })?;
-        self.viewport_w = width;
-        self.viewport_h = height;
-        self.clip_stack = ClipStack::default();
-        self.translate_stack = TranslateStack::new();
+        if let Some(window) = self.render_target_bind_stack.first_mut() {
+            // A render target is bound: it keeps its own size and stacks;
+            // the window's size takes effect when the bind chain unwinds.
+            window.viewport = (width, height);
+        } else {
+            self.viewport_w = width;
+            self.viewport_h = height;
+            self.clip_stack = ClipStack::default();
+            self.translate_stack = TranslateStack::new();
+            // The SDL-side clip goes with the stacks; leaving it applied
+            // would keep clipping while `current_clip_rect` says `None`.
+            self.apply_clip(None);
+        }
         Ok(())
+    }
+
+    /// Whether `id` is the bound render target or one of the targets the
+    /// current bind chain will return to.
+    fn is_bound(&self, id: RenderTargetId) -> bool {
+        self.current_render_target == Some(id.0)
+            || self
+                .render_target_bind_stack
+                .iter()
+                .any(|b| b.prev_id == Some(id.0))
     }
 
     /// Apply cumulative translation to coordinates.
@@ -482,26 +502,6 @@ impl SdiVector for SdlBackend {
         self.shape_fill_polygon(points, color)
     }
 
-    fn fill_arc(
-        &mut self,
-        cx: i32,
-        cy: i32,
-        radius: u16,
-        start_angle: f32,
-        end_angle: f32,
-        color: Color,
-    ) -> Result<()> {
-        self.shape_fill_arc(
-            ArcParams {
-                cx,
-                cy,
-                radius,
-                start_angle,
-                end_angle,
-            },
-            color,
-        )
-    }
     // `stroke_arc` and `stroke_line_dashed` use the trait defaults, which
     // decompose into `draw_line` -- the same pixels the software
     // rasterizer produces (the old overrides thickened with parallel
@@ -574,17 +574,6 @@ impl SdiTextures for SdlBackend {
 }
 
 // -------------------------------------------------------------------
-// SdiAlpha: Viewport and alpha utilities
-// -------------------------------------------------------------------
-
-impl SdiAlpha for SdlBackend {
-    /// The bound surface: the window, or the bound render target.
-    fn viewport_size(&self) -> (u32, u32) {
-        (self.viewport_w, self.viewport_h)
-    }
-}
-
-// -------------------------------------------------------------------
 // SdiClipTransform: Clip and transform stack
 // -------------------------------------------------------------------
 
@@ -611,8 +600,8 @@ impl SdiClipTransform for SdlBackend {
         Ok(())
     }
 
-    fn current_clip_rect(&self) -> Option<(i32, i32, u32, u32)> {
-        self.clip_stack.current_tuple()
+    fn current_clip_rect(&self) -> Option<ClipRect> {
+        self.clip_stack.current()
     }
 
     fn push_translate(&mut self, dx: i32, dy: i32) -> Result<()> {
@@ -776,6 +765,13 @@ impl SdiRenderTarget for SdlBackend {
     }
 
     fn bind_render_target(&mut self, id: RenderTargetId) -> Result<()> {
+        // A bound target is on the bind chain already: re-binding it would
+        // clear its SDL-side clip, which the unbind cannot restore. UE5
+        // and WASM take a bound target out of storage, so they reject it
+        // the same way.
+        if self.is_bound(id) {
+            return Err(bound_target_error("bind_render_target", id));
+        }
         let (raw_tex, size) = match self.render_targets.get(&id.0) {
             Some(tex) => (tex.raw(), (tex.width(), tex.height())),
             None => return Err(render_target_not_found(id)),
@@ -845,6 +841,9 @@ impl SdiRenderTarget for SdlBackend {
             (0.0..=1.0).contains(&opacity),
             "opacity must be in [0.0, 1.0], got {opacity}"
         );
+        if self.is_bound(id) {
+            return Err(bound_target_error("composite_render_target", id));
+        }
         let Self {
             canvas,
             render_targets,
@@ -886,6 +885,12 @@ impl SdiRenderTarget for SdlBackend {
         dst_w: u32,
         dst_h: u32,
     ) -> Result<()> {
+        if self.is_bound(id) {
+            return Err(bound_target_error(
+                "composite_render_target_premultiplied",
+                id,
+            ));
+        }
         let Self {
             canvas,
             render_targets,
@@ -929,17 +934,10 @@ impl SdiRenderTarget for SdlBackend {
     }
 
     fn destroy_render_target(&mut self, id: RenderTargetId) -> Result<()> {
-        // If the caller destroys a still-bound target, refuse — same
-        // contract the RecordingBackend tests enforce.
-        if self.current_render_target == Some(id.0)
-            || self
-                .render_target_bind_stack
-                .iter()
-                .any(|b| b.prev_id == Some(id.0))
-        {
-            return Err(OasisError::Backend(
-                format!("destroy_render_target: id {id:?} is still bound").into(),
-            ));
+        // Destroying a still-bound target would leave the bind chain
+        // pointing at a freed texture.
+        if self.is_bound(id) {
+            return Err(bound_target_error("destroy_render_target", id));
         }
         if self.render_targets.remove(&id.0).is_none() {
             return Err(render_target_not_found(id));
@@ -1280,13 +1278,6 @@ mod tests {
         let r = frect(0, 0, 0, 0);
         assert_eq!(r.x, 0.0);
         assert_eq!(r.w, 0.0);
-    }
-
-    #[test]
-    fn fpoint_conversion() {
-        let p = fpoint(42, -7);
-        assert_eq!(p.x, 42.0);
-        assert_eq!(p.y, -7.0);
     }
 
     // ---------------------------------------------------------------

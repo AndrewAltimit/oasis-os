@@ -11,334 +11,21 @@
 //! cursor and Confirm presses the key under it. History persists to
 //! [`history::HISTORY_PATH`].
 
-use oasis_app_core::render::{hide_app_sdi, render_app_chrome, render_content_sdi};
 use oasis_app_core::{App, AppAction, ContentState};
-use oasis_sdi::SdiRegistry;
 use oasis_skin::ActiveTheme;
 use oasis_types::backend::SdiBackend;
 use oasis_types::input::{Button, Key, Modifiers};
 use oasis_vfs::Vfs;
 
+mod eval;
 pub mod history;
 pub mod keypad;
 mod render;
 
+use eval::evaluate_after;
+pub use eval::{CalcError, evaluate};
 use keypad::{CalcKey, CalcLayout, Dir, KEYS};
 pub use render::CalcColors;
-
-// ---------------------------------------------------------------
-// CalcError
-// ---------------------------------------------------------------
-
-/// Errors that can occur during expression evaluation.
-#[derive(Debug, Clone, PartialEq, thiserror::Error)]
-pub enum CalcError {
-    /// Division or modulo by zero.
-    #[error("Division by zero")]
-    DivisionByZero,
-    /// Expression could not be parsed.
-    #[error("Invalid expression: {0}")]
-    InvalidExpression(String),
-    /// Mismatched parentheses.
-    #[error("Unmatched parentheses")]
-    UnmatchedParen,
-    /// Input was empty or whitespace-only.
-    #[error("Empty expression")]
-    EmptyExpression,
-    /// Expression nesting exceeds the maximum depth.
-    #[error("Expression too deeply nested (max {MAX_DEPTH} levels)")]
-    TooDeep,
-}
-
-/// Maximum recursion depth for the expression parser.
-const MAX_DEPTH: usize = 100;
-
-// ---------------------------------------------------------------
-// Tokenizer
-// ---------------------------------------------------------------
-
-/// Tokens produced by the lexer.
-#[derive(Debug, Clone, PartialEq)]
-enum Token {
-    Number(f64),
-    Plus,
-    Minus,
-    Star,
-    Slash,
-    Percent,
-    Power,
-    LeftParen,
-    RightParen,
-}
-
-/// Tokenize an expression string into a sequence of `Token`s.
-fn tokenize(expr: &str) -> Result<Vec<Token>, CalcError> {
-    let mut tokens = Vec::new();
-    let chars: Vec<char> = expr.chars().collect();
-    let len = chars.len();
-    let mut i = 0;
-
-    while i < len {
-        let ch = chars[i];
-
-        if ch.is_whitespace() {
-            i += 1;
-            continue;
-        }
-
-        match ch {
-            '+' => {
-                tokens.push(Token::Plus);
-                i += 1;
-            },
-            '-' => {
-                tokens.push(Token::Minus);
-                i += 1;
-            },
-            '*' => {
-                tokens.push(Token::Star);
-                i += 1;
-            },
-            '/' => {
-                tokens.push(Token::Slash);
-                i += 1;
-            },
-            '%' => {
-                tokens.push(Token::Percent);
-                i += 1;
-            },
-            '^' => {
-                tokens.push(Token::Power);
-                i += 1;
-            },
-            '(' => {
-                tokens.push(Token::LeftParen);
-                i += 1;
-            },
-            ')' => {
-                tokens.push(Token::RightParen);
-                i += 1;
-            },
-            c if c.is_ascii_digit() || c == '.' => {
-                let start = i;
-                let mut has_dot = c == '.';
-                i += 1;
-                while i < len && (chars[i].is_ascii_digit() || chars[i] == '.') {
-                    if chars[i] == '.' {
-                        if has_dot {
-                            break;
-                        }
-                        has_dot = true;
-                    }
-                    i += 1;
-                }
-                let num_str: String = chars[start..i].iter().collect();
-                let value = num_str.parse::<f64>().map_err(|_| {
-                    CalcError::InvalidExpression(format!("invalid number: {num_str}"))
-                })?;
-                tokens.push(Token::Number(value));
-            },
-            other => {
-                return Err(CalcError::InvalidExpression(format!(
-                    "unexpected character: '{other}'"
-                )));
-            },
-        }
-    }
-
-    Ok(tokens)
-}
-
-// ---------------------------------------------------------------
-// Parser (recursive descent)
-// ---------------------------------------------------------------
-
-/// Recursive-descent parser state.
-struct Parser {
-    tokens: Vec<Token>,
-    pos: usize,
-    depth: usize,
-}
-
-impl Parser {
-    fn new(tokens: Vec<Token>) -> Self {
-        Self {
-            tokens,
-            pos: 0,
-            depth: 0,
-        }
-    }
-
-    /// Increment depth and check the limit.
-    fn enter(&mut self) -> Result<(), CalcError> {
-        self.depth += 1;
-        if self.depth > MAX_DEPTH {
-            return Err(CalcError::TooDeep);
-        }
-        Ok(())
-    }
-
-    fn leave(&mut self) {
-        self.depth -= 1;
-    }
-
-    fn peek(&self) -> Option<&Token> {
-        self.tokens.get(self.pos)
-    }
-
-    fn advance(&mut self) -> Option<Token> {
-        if self.pos < self.tokens.len() {
-            let tok = self.tokens[self.pos].clone();
-            self.pos += 1;
-            Some(tok)
-        } else {
-            None
-        }
-    }
-
-    /// Top-level: parse additive expression.
-    fn parse_expr(&mut self) -> Result<f64, CalcError> {
-        let mut left = self.parse_term()?;
-
-        while let Some(tok) = self.peek() {
-            match tok {
-                Token::Plus => {
-                    self.advance();
-                    let right = self.parse_term()?;
-                    left += right;
-                },
-                Token::Minus => {
-                    self.advance();
-                    let right = self.parse_term()?;
-                    left -= right;
-                },
-                _ => break,
-            }
-        }
-
-        Ok(left)
-    }
-
-    /// Multiplicative: *, /, %
-    fn parse_term(&mut self) -> Result<f64, CalcError> {
-        let mut left = self.parse_power()?;
-
-        while let Some(tok) = self.peek() {
-            match tok {
-                Token::Star => {
-                    self.advance();
-                    let right = self.parse_power()?;
-                    left *= right;
-                },
-                Token::Slash => {
-                    self.advance();
-                    let right = self.parse_power()?;
-                    if right == 0.0 {
-                        return Err(CalcError::DivisionByZero);
-                    }
-                    left /= right;
-                },
-                Token::Percent => {
-                    self.advance();
-                    let right = self.parse_power()?;
-                    if right == 0.0 {
-                        return Err(CalcError::DivisionByZero);
-                    }
-                    left %= right;
-                },
-                _ => break,
-            }
-        }
-
-        Ok(left)
-    }
-
-    /// Power: ^ (right-associative)
-    fn parse_power(&mut self) -> Result<f64, CalcError> {
-        let base = self.parse_unary()?;
-
-        if let Some(Token::Power) = self.peek() {
-            self.advance();
-            // Right-associative: recurse into parse_power.
-            let exp = self.parse_power()?;
-            Ok(base.powf(exp))
-        } else {
-            Ok(base)
-        }
-    }
-
-    /// Unary minus.
-    fn parse_unary(&mut self) -> Result<f64, CalcError> {
-        if let Some(Token::Minus) = self.peek() {
-            self.advance();
-            let val = self.parse_unary()?;
-            Ok(-val)
-        } else {
-            self.parse_primary()
-        }
-    }
-
-    /// Primary: number or parenthesised expression.
-    fn parse_primary(&mut self) -> Result<f64, CalcError> {
-        match self.advance() {
-            Some(Token::Number(n)) => Ok(n),
-            Some(Token::LeftParen) => {
-                self.enter()?;
-                let val = self.parse_expr()?;
-                self.leave();
-                match self.advance() {
-                    Some(Token::RightParen) => Ok(val),
-                    _ => Err(CalcError::UnmatchedParen),
-                }
-            },
-            Some(tok) => Err(CalcError::InvalidExpression(format!(
-                "unexpected token: {tok:?}"
-            ))),
-            None => Err(CalcError::InvalidExpression(
-                "unexpected end of expression".to_string(),
-            )),
-        }
-    }
-}
-
-// ---------------------------------------------------------------
-// Public evaluate function
-// ---------------------------------------------------------------
-
-/// Evaluate a mathematical expression string and return the result.
-///
-/// Supports: `+`, `-`, `*`, `/`, `%` (modulo), `^` (power),
-/// parentheses, unary minus, integers, and decimals.
-///
-/// Operator precedence (lowest to highest):
-/// 1. Addition / subtraction
-/// 2. Multiplication / division / modulo
-/// 3. Exponentiation (right-associative)
-/// 4. Unary minus
-/// 5. Parentheses
-pub fn evaluate(expr: &str) -> Result<f64, CalcError> {
-    let trimmed = expr.trim();
-    if trimmed.is_empty() {
-        return Err(CalcError::EmptyExpression);
-    }
-
-    let tokens = tokenize(trimmed)?;
-    if tokens.is_empty() {
-        return Err(CalcError::EmptyExpression);
-    }
-
-    let mut parser = Parser::new(tokens);
-    let result = parser.parse_expr()?;
-
-    // Ensure all tokens were consumed.
-    if parser.pos < parser.tokens.len() {
-        return Err(CalcError::InvalidExpression(
-            "trailing tokens after expression".to_string(),
-        ));
-    }
-
-    Ok(result)
-}
 
 // ---------------------------------------------------------------
 // CalcHistoryEntry
@@ -364,6 +51,9 @@ const FLASH_MS: u32 = 100;
 #[derive(Debug)]
 pub struct CalculatorApp {
     content: ContentState,
+    /// Content-area size recorded by the last `App::layout` (click
+    /// hit-testing).
+    content_size: (u32, u32),
     /// Current display value (formatted result or input echo).
     display: String,
     /// Expression being typed by the user.
@@ -374,6 +64,11 @@ pub struct CalculatorApp {
     memory: f64,
     /// Result of the last successful evaluation.
     last_result: Option<f64>,
+    /// Set when an operator started the entry from `last_result`: the
+    /// exact value and the length of its display text at the start of
+    /// `input_buffer`. While that prefix is intact, evaluation uses the
+    /// exact value instead of re-parsing the rounded text.
+    chained: Option<(usize, f64)>,
     /// Current error message (cleared on next input).
     error_message: Option<String>,
     /// Keypad cursor: index into [`keypad::KEYS`] (d-pad navigation).
@@ -406,6 +101,7 @@ impl CalculatorApp {
             history: Vec::new(),
             memory: 0.0,
             last_result: None,
+            chained: None,
             error_message: None,
             cursor: keypad::index_of(CalcKey::Digit('5')).unwrap_or(0),
             cursor_visible: false,
@@ -413,6 +109,7 @@ impl CalculatorApp {
             flash: None,
             history_loaded: false,
             history_dirty: false,
+            content_size: (0, 0),
         };
         app.refresh_lines();
         app
@@ -460,6 +157,7 @@ impl CalculatorApp {
         if self.input_buffer.is_empty() {
             if let Some(result) = self.last_result {
                 self.input_buffer = format_number(result);
+                self.chained = Some((self.input_buffer.len(), result));
             } else {
                 self.input_buffer.push('0');
             }
@@ -516,7 +214,11 @@ impl CalculatorApp {
             return;
         }
 
-        match evaluate(&self.input_buffer) {
+        let outcome = match self.chained_operand() {
+            Some((len, value)) => evaluate_after(value, &self.input_buffer[len..]),
+            None => evaluate(&self.input_buffer),
+        };
+        match outcome {
             Ok(result) => {
                 let entry = CalcHistoryEntry {
                     expression: self.input_buffer.clone(),
@@ -528,6 +230,7 @@ impl CalculatorApp {
                 self.history_dirty = true;
                 self.display = format_number(result);
                 self.last_result = Some(result);
+                self.chained = None;
                 self.error_message = None;
                 self.input_buffer.clear();
             },
@@ -539,8 +242,21 @@ impl CalculatorApp {
         self.refresh_lines();
     }
 
+    /// The exact chained value and its prefix length, if the entry still
+    /// starts with that value's unedited display text.
+    fn chained_operand(&self) -> Option<(usize, f64)> {
+        let (len, value) = self.chained?;
+        let prefix = self.input_buffer.get(..len)?;
+        let extended = self.input_buffer[len..]
+            .chars()
+            .next()
+            .is_some_and(|c| c.is_ascii_digit() || c == '.');
+        (prefix == format_number(value) && !extended).then_some((len, value))
+    }
+
     /// Clear the current input (C).
     pub fn clear(&mut self) {
+        self.chained = None;
         self.input_buffer.clear();
         self.display = "0".to_string();
         self.error_message = None;
@@ -551,6 +267,7 @@ impl CalculatorApp {
     /// Clear input, last result and history (AC). The cleared history is
     /// persisted on the next [`App::apply_vfs_ops`].
     pub fn clear_all(&mut self) {
+        self.chained = None;
         self.input_buffer.clear();
         self.display = "0".to_string();
         if !self.history.is_empty() {
@@ -580,7 +297,12 @@ impl CalculatorApp {
     /// number, otherwise the last result.
     fn memory_operand(&self) -> Option<f64> {
         if !self.input_buffer.is_empty() {
-            return self.input_buffer.parse::<f64>().ok().or(self.last_result);
+            return self
+                .input_buffer
+                .parse::<f64>()
+                .ok()
+                .filter(|v| v.is_finite())
+                .or(self.last_result);
         }
         self.last_result
     }
@@ -619,8 +341,12 @@ impl CalculatorApp {
 
     /// Add the current value to memory (M+).
     pub fn memory_add(&mut self) {
-        if let Some(v) = self.memory_operand() {
-            self.memory += v;
+        // An overflowing sum would leave `inf` in memory, which MR can't
+        // insert as a typeable number: keep the old value instead.
+        if let Some(sum) = self.memory_operand().map(|v| self.memory + v)
+            && sum.is_finite()
+        {
+            self.memory = sum;
         }
         self.refresh_lines();
     }
@@ -645,12 +371,7 @@ impl CalculatorApp {
             return;
         }
 
-        // Toggle leading minus on the whole buffer.
-        if self.input_buffer.starts_with('-') {
-            self.input_buffer.remove(0);
-        } else {
-            self.input_buffer.insert(0, '-');
-        }
+        toggle_last_sign(&mut self.input_buffer);
 
         if self.input_buffer.is_empty() {
             self.display = "0".to_string();
@@ -673,6 +394,7 @@ impl CalculatorApp {
             (Some(i), false) => (i + 1 < self.history.len()).then_some(i + 1),
         };
         self.error_message = None;
+        self.chained = None;
         match next {
             Some(i) => {
                 self.input_buffer = self.history[i].expression.clone();
@@ -810,6 +532,50 @@ impl CalculatorApp {
     }
 }
 
+/// Toggle the sign of the last number in `buf` (`5+3` -> `5+-3`): remove
+/// the unary minus in front of it, or insert one. With no trailing number
+/// (`5*`), toggle a unary minus at the end; after `)` negate the group.
+fn toggle_last_sign(buf: &mut String) {
+    let mut start = buf
+        .rfind(|c: char| !(c.is_ascii_digit() || c == '.'))
+        .map_or(0, |p| p + 1);
+    if start == buf.len() && buf.ends_with(')') {
+        // Negate the whole trailing `( ... )` group.
+        let mut depth = 0usize;
+        let mut open = None;
+        for (i, c) in buf.char_indices().rev() {
+            match c {
+                ')' => depth += 1,
+                '(' => {
+                    depth = depth.saturating_sub(1);
+                    if depth == 0 {
+                        open = Some(i);
+                        break;
+                    }
+                },
+                _ => {},
+            }
+        }
+        let Some(open) = open else {
+            return;
+        };
+        start = open;
+    }
+    // A '-' right before `start` is unary when it opens the entry or
+    // follows an operator / '('.
+    let unary_minus_before = start > 0
+        && buf[..start].ends_with('-')
+        && buf[..start - 1]
+            .chars()
+            .last()
+            .is_none_or(|c| "+-*/%^(".contains(c));
+    if unary_minus_before {
+        buf.remove(start - 1);
+    } else {
+        buf.insert(start, '-');
+    }
+}
+
 /// Format a number for display, removing trailing zeros from decimals.
 fn format_number(n: f64) -> String {
     if n.is_infinite() {
@@ -930,16 +696,13 @@ impl App for CalculatorApp {
         false
     }
 
-    fn handle_click(
-        &mut self,
-        lx: i32,
-        ly: i32,
-        cw: u32,
-        ch: u32,
-        _fullscreen: bool,
-        vfs: &dyn Vfs,
-    ) -> AppAction {
+    fn layout(&mut self, cw: u32, ch: u32, _at: &ActiveTheme) {
+        self.content_size = (cw, ch);
+    }
+
+    fn handle_click(&mut self, lx: i32, ly: i32, vfs: &dyn Vfs) -> AppAction {
         self.ensure_history_loaded(vfs);
+        let (cw, ch) = self.content_size;
         let l = CalcLayout::compute(0, 0, cw, ch);
         if let Some(i) = l.key_at(lx, ly) {
             self.cursor = i;
@@ -980,13 +743,6 @@ impl App for CalculatorApp {
         changed
     }
 
-    fn update_sdi(&mut self, sdi: &mut SdiRegistry, at: &ActiveTheme) {
-        self.content.update_layout(at);
-        self.content.animate_selection(0.3);
-        render_app_chrome(sdi, at);
-        render_content_sdi(&self.content, sdi, at);
-    }
-
     fn draw_windowed(
         &self,
         cx: i32,
@@ -999,860 +755,10 @@ impl App for CalculatorApp {
         self.draw_calculator(cx, cy, cw, ch, backend, at)
     }
 
-    fn hide_sdi(&self, sdi: &mut SdiRegistry) {
-        hide_app_sdi(sdi);
-    }
-
     fn lines(&self) -> &[String] {
         &self.content.lines
     }
 }
 
-// ---------------------------------------------------------------
-// Tests
-// ---------------------------------------------------------------
-
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use oasis_vfs::MemoryVfs;
-
-    // -- Expression evaluator: basic operations --
-
-    #[test]
-    fn eval_addition() {
-        assert_eq!(evaluate("2 + 3").ok(), Some(5.0));
-    }
-
-    #[test]
-    fn eval_subtraction() {
-        assert_eq!(evaluate("10 - 4").ok(), Some(6.0));
-    }
-
-    #[test]
-    fn eval_multiplication() {
-        assert_eq!(evaluate("3 * 7").ok(), Some(21.0));
-    }
-
-    #[test]
-    fn eval_division() {
-        assert_eq!(evaluate("20 / 4").ok(), Some(5.0));
-    }
-
-    #[test]
-    fn eval_modulo() {
-        assert_eq!(evaluate("10 % 3").ok(), Some(1.0));
-    }
-
-    #[test]
-    fn eval_power() {
-        assert_eq!(evaluate("2 ^ 10").ok(), Some(1024.0));
-    }
-
-    // -- Precedence --
-
-    #[test]
-    fn eval_precedence_mul_before_add() {
-        assert_eq!(evaluate("2 + 3 * 4").ok(), Some(14.0));
-    }
-
-    #[test]
-    fn eval_precedence_complex() {
-        // 2 + 3 * (4 - 1) = 2 + 9 = 11
-        assert_eq!(evaluate("2 + 3 * (4 - 1)").ok(), Some(11.0));
-    }
-
-    #[test]
-    fn eval_precedence_power_before_mul() {
-        // 2 * 3 ^ 2 = 2 * 9 = 18
-        assert_eq!(evaluate("2 * 3 ^ 2").ok(), Some(18.0));
-    }
-
-    #[test]
-    fn eval_power_right_associative() {
-        // 2 ^ 3 ^ 2 = 2 ^ 9 = 512 (not (2^3)^2 = 64)
-        assert_eq!(evaluate("2 ^ 3 ^ 2").ok(), Some(512.0));
-    }
-
-    // -- Parentheses --
-
-    #[test]
-    fn eval_simple_parens() {
-        assert_eq!(evaluate("(2 + 3) * 4").ok(), Some(20.0));
-    }
-
-    #[test]
-    fn eval_nested_parens() {
-        // ((2 + 3) * (4 - 1)) = 5 * 3 = 15
-        assert_eq!(evaluate("((2 + 3) * (4 - 1))").ok(), Some(15.0));
-    }
-
-    #[test]
-    fn eval_deeply_nested() {
-        assert_eq!(evaluate("(((1 + 2)))").ok(), Some(3.0));
-    }
-
-    // -- Unary minus --
-
-    #[test]
-    fn eval_unary_minus() {
-        assert_eq!(evaluate("-5").ok(), Some(-5.0));
-    }
-
-    #[test]
-    fn eval_unary_minus_in_expr() {
-        assert_eq!(evaluate("3 + -2").ok(), Some(1.0));
-    }
-
-    #[test]
-    fn eval_double_unary_minus() {
-        assert_eq!(evaluate("--5").ok(), Some(5.0));
-    }
-
-    #[test]
-    fn eval_unary_minus_with_parens() {
-        assert_eq!(evaluate("-(3 + 2)").ok(), Some(-5.0));
-    }
-
-    // -- Decimal numbers --
-
-    #[test]
-    fn eval_decimal() {
-        let result = evaluate("1.5 + 2.5").ok();
-        assert_eq!(result, Some(4.0));
-    }
-
-    #[test]
-    fn eval_decimal_mul() {
-        let result = evaluate("0.1 * 10").ok();
-        assert!((result.unwrap_or(0.0) - 1.0).abs() < 1e-9);
-    }
-
-    // -- Error cases --
-
-    #[test]
-    fn eval_empty_expression() {
-        assert_eq!(evaluate(""), Err(CalcError::EmptyExpression));
-    }
-
-    #[test]
-    fn eval_whitespace_only() {
-        assert_eq!(evaluate("   "), Err(CalcError::EmptyExpression));
-    }
-
-    #[test]
-    fn eval_division_by_zero() {
-        assert_eq!(evaluate("1 / 0"), Err(CalcError::DivisionByZero));
-    }
-
-    #[test]
-    fn eval_modulo_by_zero() {
-        assert_eq!(evaluate("5 % 0"), Err(CalcError::DivisionByZero));
-    }
-
-    #[test]
-    fn eval_unmatched_left_paren() {
-        assert_eq!(evaluate("(2 + 3"), Err(CalcError::UnmatchedParen));
-    }
-
-    #[test]
-    fn eval_unmatched_right_paren() {
-        assert!(evaluate("2 + 3)").is_err());
-    }
-
-    #[test]
-    fn eval_invalid_char() {
-        assert!(matches!(
-            evaluate("2 & 3"),
-            Err(CalcError::InvalidExpression(_))
-        ));
-    }
-
-    #[test]
-    fn eval_trailing_operator() {
-        assert!(evaluate("2 +").is_err());
-    }
-
-    // -- Chained operations --
-
-    #[test]
-    fn eval_chained_add_sub() {
-        assert_eq!(evaluate("1 + 2 - 3 + 4").ok(), Some(4.0));
-    }
-
-    #[test]
-    fn eval_chained_mul_div() {
-        assert_eq!(evaluate("12 / 3 * 2").ok(), Some(8.0));
-    }
-
-    // -- format_number --
-
-    #[test]
-    fn format_integer() {
-        assert_eq!(format_number(42.0), "42");
-    }
-
-    #[test]
-    fn format_decimal() {
-        assert_eq!(format_number(2.75), "2.75");
-    }
-
-    #[test]
-    fn format_negative() {
-        assert_eq!(format_number(-7.0), "-7");
-    }
-
-    // -- CalculatorApp state tests --
-
-    fn make_vfs() -> MemoryVfs {
-        MemoryVfs::new()
-    }
-
-    #[test]
-    fn app_new_display() {
-        let app = CalculatorApp::new("/apps/calc");
-        assert_eq!(app.display, "0");
-        assert!(app.input_buffer.is_empty());
-        assert!(app.history.is_empty());
-    }
-
-    #[test]
-    fn app_title_and_path() {
-        let app = CalculatorApp::new("/apps/calc");
-        assert_eq!(app.title(), "Calculator");
-        assert_eq!(app.path(), "/apps/calc");
-    }
-
-    #[test]
-    fn app_push_digits() {
-        let mut app = CalculatorApp::new("/apps/calc");
-        app.push_digit('1');
-        app.push_digit('2');
-        app.push_digit('3');
-        assert_eq!(app.input_buffer, "123");
-        assert_eq!(app.display, "123");
-    }
-
-    #[test]
-    fn app_push_operator() {
-        let mut app = CalculatorApp::new("/apps/calc");
-        app.push_digit('5');
-        app.push_operator('+');
-        assert_eq!(app.input_buffer, "5+");
-    }
-
-    #[test]
-    fn app_evaluate() {
-        let mut app = CalculatorApp::new("/apps/calc");
-        app.push_digit('2');
-        app.push_operator('+');
-        app.push_digit('3');
-        app.evaluate_input();
-        assert_eq!(app.last_result, Some(5.0));
-        assert_eq!(app.history.len(), 1);
-        assert_eq!(app.history[0].expression, "2+3");
-        assert_eq!(app.history[0].result, 5.0);
-        assert!(app.input_buffer.is_empty());
-    }
-
-    #[test]
-    fn app_history_tracks_multiple() {
-        let mut app = CalculatorApp::new("/apps/calc");
-        app.push_digit('1');
-        app.push_operator('+');
-        app.push_digit('1');
-        app.evaluate_input();
-        app.push_digit('2');
-        app.push_operator('*');
-        app.push_digit('3');
-        app.evaluate_input();
-        assert_eq!(app.history.len(), 2);
-        assert_eq!(app.history[0].result, 2.0);
-        assert_eq!(app.history[1].result, 6.0);
-    }
-
-    #[test]
-    fn app_clear() {
-        let mut app = CalculatorApp::new("/apps/calc");
-        app.push_digit('5');
-        app.push_operator('+');
-        app.push_digit('3');
-        app.clear();
-        assert!(app.input_buffer.is_empty());
-        assert_eq!(app.display, "0");
-    }
-
-    #[test]
-    fn app_clear_all() {
-        let mut app = CalculatorApp::new("/apps/calc");
-        app.push_digit('1');
-        app.push_operator('+');
-        app.push_digit('1');
-        app.evaluate_input();
-        app.clear_all();
-        assert!(app.input_buffer.is_empty());
-        assert!(app.history.is_empty());
-        assert!(app.last_result.is_none());
-        assert_eq!(app.display, "0");
-    }
-
-    #[test]
-    fn app_backspace() {
-        let mut app = CalculatorApp::new("/apps/calc");
-        app.push_digit('1');
-        app.push_digit('2');
-        app.push_digit('3');
-        app.backspace();
-        assert_eq!(app.input_buffer, "12");
-        assert_eq!(app.display, "12");
-    }
-
-    #[test]
-    fn app_backspace_to_empty() {
-        let mut app = CalculatorApp::new("/apps/calc");
-        app.push_digit('5');
-        app.backspace();
-        assert!(app.input_buffer.is_empty());
-        assert_eq!(app.display, "0");
-    }
-
-    // -- Memory operations --
-
-    #[test]
-    fn app_memory_store_and_recall() {
-        let mut app = CalculatorApp::new("/apps/calc");
-        app.push_digit('4');
-        app.push_digit('2');
-        app.evaluate_input();
-        app.memory_store();
-        assert_eq!(app.memory, 42.0);
-        app.clear();
-        app.memory_recall();
-        assert_eq!(app.input_buffer, "42");
-    }
-
-    #[test]
-    fn app_memory_add() {
-        let mut app = CalculatorApp::new("/apps/calc");
-        app.push_digit('1');
-        app.push_digit('0');
-        app.evaluate_input();
-        app.memory_store();
-        app.push_digit('5');
-        app.evaluate_input();
-        app.memory_add();
-        assert_eq!(app.memory, 15.0);
-    }
-
-    #[test]
-    fn app_memory_clear() {
-        let mut app = CalculatorApp::new("/apps/calc");
-        app.push_digit('7');
-        app.evaluate_input();
-        app.memory_store();
-        assert_eq!(app.memory, 7.0);
-        app.memory_clear();
-        assert_eq!(app.memory, 0.0);
-    }
-
-    // -- Display formatting --
-
-    #[test]
-    fn display_lines_have_no_title_heading() {
-        // The app title shows in the WM / app-chrome title bar; the content
-        // must not repeat it (it read as a double title bar in windows).
-        let app = CalculatorApp::new("/apps/calc");
-        let lines = app.format_display_lines();
-        assert!(!lines.iter().any(|l| l.contains("Calculator")));
-        assert!(lines.iter().any(|l| l.contains("Result: 0")));
-    }
-
-    #[test]
-    fn display_lines_contain_memory() {
-        let app = CalculatorApp::new("/apps/calc");
-        let lines = app.format_display_lines();
-        assert!(lines.iter().any(|l| l.contains("Memory: 0")));
-    }
-
-    #[test]
-    fn display_lines_show_history() {
-        let mut app = CalculatorApp::new("/apps/calc");
-        app.push_digit('1');
-        app.push_operator('+');
-        app.push_digit('1');
-        app.evaluate_input();
-        let lines = app.format_display_lines();
-        assert!(lines.iter().any(|l| l.contains("1+1 = 2")));
-    }
-
-    #[test]
-    fn display_lines_show_input() {
-        let mut app = CalculatorApp::new("/apps/calc");
-        app.push_digit('3');
-        app.push_operator('*');
-        let lines = app.format_display_lines();
-        assert!(lines.iter().any(|l| l.contains("Input: 3*")));
-    }
-
-    // -- Edge cases --
-
-    #[test]
-    fn no_multiple_leading_zeros() {
-        let mut app = CalculatorApp::new("/apps/calc");
-        app.push_digit('0');
-        app.push_digit('0');
-        app.push_digit('0');
-        // Should remain "0" not "000".
-        assert!(app.input_buffer == "0" || app.input_buffer.is_empty());
-    }
-
-    #[test]
-    fn no_multiple_decimals_in_number() {
-        let mut app = CalculatorApp::new("/apps/calc");
-        app.push_digit('1');
-        app.push_digit('.');
-        app.push_digit('2');
-        app.push_digit('.');
-        app.push_digit('3');
-        // Second dot should be rejected.
-        assert_eq!(app.input_buffer, "1.23");
-    }
-
-    #[test]
-    fn consecutive_operator_replacement() {
-        let mut app = CalculatorApp::new("/apps/calc");
-        app.push_digit('5');
-        app.push_operator('+');
-        app.push_operator('-');
-        // Should replace + with -.
-        assert_eq!(app.input_buffer, "5-");
-    }
-
-    #[test]
-    fn negate_input() {
-        let mut app = CalculatorApp::new("/apps/calc");
-        app.push_digit('5');
-        app.negate();
-        assert_eq!(app.input_buffer, "-5");
-        app.negate();
-        assert_eq!(app.input_buffer, "5");
-    }
-
-    #[test]
-    fn evaluate_empty_is_noop() {
-        let mut app = CalculatorApp::new("/apps/calc");
-        app.evaluate_input();
-        assert!(app.history.is_empty());
-        assert!(app.last_result.is_none());
-    }
-
-    // -- App trait integration --
-
-    #[test]
-    fn cancel_exits() {
-        let vfs = make_vfs();
-        let mut app = CalculatorApp::new("/apps/calc");
-        assert_eq!(app.handle_input(&Button::Cancel, &vfs), AppAction::Exit);
-    }
-
-    #[test]
-    fn confirm_presses_key_under_cursor() {
-        let vfs = make_vfs();
-        let mut app = CalculatorApp::new("/apps/calc");
-        app.push_digit('7');
-        app.cursor = keypad::index_of(CalcKey::Equals).expect("=");
-        app.handle_input(&Button::Confirm, &vfs);
-        assert_eq!(app.last_result, Some(7.0));
-    }
-
-    #[test]
-    fn triangle_clears() {
-        let vfs = make_vfs();
-        let mut app = CalculatorApp::new("/apps/calc");
-        app.push_digit('9');
-        app.handle_input(&Button::Triangle, &vfs);
-        assert!(app.input_buffer.is_empty());
-    }
-
-    #[test]
-    fn square_backspaces() {
-        let vfs = make_vfs();
-        let mut app = CalculatorApp::new("/apps/calc");
-        app.push_digit('4');
-        app.push_digit('2');
-        app.handle_input(&Button::Square, &vfs);
-        assert_eq!(app.input_buffer, "4");
-    }
-
-    #[test]
-    fn start_clears_all() {
-        let vfs = make_vfs();
-        let mut app = CalculatorApp::new("/apps/calc");
-        app.push_digit('1');
-        app.push_operator('+');
-        app.push_digit('1');
-        app.evaluate_input();
-        app.handle_input(&Button::Start, &vfs);
-        assert!(app.history.is_empty());
-    }
-
-    #[test]
-    fn downcast_works() {
-        let app: Box<dyn App> = Box::new(CalculatorApp::new("/apps/calc"));
-        let any = app.as_any();
-        assert!(any.downcast_ref::<CalculatorApp>().is_some());
-    }
-
-    #[test]
-    fn lines_returns_content() {
-        let app = CalculatorApp::new("/apps/calc");
-        assert!(!app.lines().is_empty());
-    }
-
-    #[test]
-    fn eval_single_number() {
-        assert_eq!(evaluate("42").ok(), Some(42.0));
-    }
-
-    #[test]
-    fn eval_large_expression() {
-        // 1 + 2 + 3 + ... + 10 = 55
-        assert_eq!(evaluate("1+2+3+4+5+6+7+8+9+10").ok(), Some(55.0));
-    }
-
-    #[test]
-    fn decimal_point_allowed_in_new_number_after_operator() {
-        let mut app = CalculatorApp::new("/apps/calc");
-        app.push_digit('1');
-        app.push_digit('.');
-        app.push_digit('5');
-        app.push_operator('+');
-        app.push_digit('2');
-        app.push_digit('.');
-        app.push_digit('5');
-        assert_eq!(app.input_buffer, "1.5+2.5");
-    }
-
-    // -- Keypad cursor (gamepad) --
-
-    #[test]
-    fn dpad_moves_cursor_and_confirm_types_digits() {
-        let vfs = make_vfs();
-        let mut app = CalculatorApp::new("/apps/calc");
-        // Cursor starts on 5. Right -> 6, Up -> 9, Left -> 8.
-        app.handle_input(&Button::Confirm, &vfs);
-        app.handle_input(&Button::Right, &vfs);
-        app.handle_input(&Button::Confirm, &vfs);
-        app.handle_input(&Button::Up, &vfs);
-        app.handle_input(&Button::Confirm, &vfs);
-        app.handle_input(&Button::Left, &vfs);
-        app.handle_input(&Button::Confirm, &vfs);
-        assert_eq!(app.input_buffer, "5698");
-        assert!(app.cursor_visible);
-        // The d-pad no longer types digits by itself.
-        app.handle_input(&Button::Down, &vfs);
-        assert_eq!(app.input_buffer, "5698");
-    }
-
-    #[test]
-    fn every_key_reachable_with_dpad() {
-        let vfs = make_vfs();
-        let mut app = CalculatorApp::new("/apps/calc");
-        let mut seen = vec![false; KEYS.len()];
-        for _ in 0..keypad::ROWS {
-            for _ in 0..keypad::COLS {
-                seen[app.cursor] = true;
-                app.handle_input(&Button::Right, &vfs);
-            }
-            app.handle_input(&Button::Down, &vfs);
-        }
-        assert!(seen.iter().all(|s| *s), "unreachable keys: {seen:?}");
-    }
-
-    #[test]
-    fn memory_keys_via_keypad() {
-        let vfs = make_vfs();
-        let mut app = CalculatorApp::new("/apps/calc");
-        let press = |app: &mut CalculatorApp, key: CalcKey| {
-            app.cursor = keypad::index_of(key).expect("key on keypad");
-            app.handle_input(&Button::Confirm, &vfs);
-        };
-        type_str(&mut app, "12");
-        press(&mut app, CalcKey::MemStore);
-        assert_eq!(app.memory, 12.0);
-        press(&mut app, CalcKey::Clear);
-        app.handle_text_input('3');
-        press(&mut app, CalcKey::MemAdd);
-        assert_eq!(app.memory, 15.0);
-        press(&mut app, CalcKey::Clear);
-        press(&mut app, CalcKey::MemRecall);
-        assert_eq!(app.input_buffer, "15");
-        press(&mut app, CalcKey::MemClear);
-        assert_eq!(app.memory, 0.0);
-        // Parentheses and negate are reachable too.
-        press(&mut app, CalcKey::Clear);
-        press(&mut app, CalcKey::OpenParen);
-        app.handle_text_input('2');
-        press(&mut app, CalcKey::CloseParen);
-        press(&mut app, CalcKey::Negate);
-        press(&mut app, CalcKey::Equals);
-        assert_eq!(app.last_result, Some(-2.0));
-    }
-
-    // -- Keyboard typing --
-
-    fn type_str(app: &mut CalculatorApp, s: &str) {
-        for ch in s.chars() {
-            app.handle_text_input(ch);
-        }
-    }
-
-    #[test]
-    fn typed_expression_evaluates() {
-        let mut app = CalculatorApp::new("/apps/calc");
-        assert!(app.accepts_text());
-        type_str(&mut app, "(2+3)*4^2-10%4=");
-        assert_eq!(app.last_result, Some(78.0));
-        type_str(&mut app, "7/2");
-        let vfs = make_vfs();
-        assert_eq!(
-            app.handle_key(&Key::Enter, Modifiers::NONE, &vfs),
-            Some(AppAction::None)
-        );
-        assert_eq!(app.last_result, Some(3.5));
-        assert_eq!(app.history.len(), 2);
-    }
-
-    #[test]
-    fn typed_unary_minus() {
-        let mut app = CalculatorApp::new("/apps/calc");
-        type_str(&mut app, "-3*-2=");
-        assert_eq!(app.last_result, Some(6.0));
-        // After a result, '-' subtracts from it.
-        type_str(&mut app, "-1=");
-        assert_eq!(app.last_result, Some(5.0));
-    }
-
-    #[test]
-    fn typed_unknown_chars_ignored() {
-        let mut app = CalculatorApp::new("/apps/calc");
-        type_str(&mut app, "1a+ b2");
-        assert_eq!(app.input_buffer, "1+2");
-    }
-
-    #[test]
-    fn backspace_and_escape_keys() {
-        let vfs = make_vfs();
-        let mut app = CalculatorApp::new("/apps/calc");
-        type_str(&mut app, "123");
-        app.handle_key(&Key::Backspace, Modifiers::NONE, &vfs);
-        assert_eq!(app.input_buffer, "12");
-        app.handle_backspace();
-        assert_eq!(app.input_buffer, "1");
-        // Escape clears the entry...
-        assert_eq!(
-            app.handle_key(&Key::Escape, Modifiers::NONE, &vfs),
-            Some(AppAction::None)
-        );
-        assert!(app.input_buffer.is_empty());
-        // ...and on a clear calculator falls through (Cancel -> Exit).
-        assert_eq!(app.handle_key(&Key::Escape, Modifiers::NONE, &vfs), None);
-        // Command shortcuts are left to the host.
-        assert_eq!(app.handle_key(&Key::Char('c'), Modifiers::CTRL, &vfs), None);
-    }
-
-    #[test]
-    fn up_down_recall_history() {
-        let vfs = make_vfs();
-        let mut app = CalculatorApp::new("/apps/calc");
-        type_str(&mut app, "1+1=");
-        type_str(&mut app, "2*3=");
-        app.handle_key(&Key::Up, Modifiers::NONE, &vfs);
-        assert_eq!(app.input_buffer, "2*3");
-        app.handle_key(&Key::Up, Modifiers::NONE, &vfs);
-        assert_eq!(app.input_buffer, "1+1");
-        // Stays on the oldest entry.
-        app.handle_key(&Key::Up, Modifiers::NONE, &vfs);
-        assert_eq!(app.input_buffer, "1+1");
-        app.handle_key(&Key::Down, Modifiers::NONE, &vfs);
-        assert_eq!(app.input_buffer, "2*3");
-        app.handle_key(&Key::Down, Modifiers::NONE, &vfs);
-        assert!(app.input_buffer.is_empty());
-        // Gamepad Select recalls too.
-        app.handle_input(&Button::Select, &vfs);
-        assert_eq!(app.input_buffer, "2*3");
-        // Editing a recalled expression and evaluating adds a new entry.
-        type_str(&mut app, "+1=");
-        assert_eq!(app.last_result, Some(7.0));
-        assert_eq!(app.history.len(), 3);
-    }
-
-    // -- Clicks --
-
-    const CW: u32 = 300;
-    const CH: u32 = 220;
-
-    fn click_key(app: &mut CalculatorApp, key: CalcKey) {
-        let l = CalcLayout::compute(0, 0, CW, CH);
-        let r = l.key_rect(keypad::index_of(key).expect("key on keypad"));
-        app.handle_click(
-            r.x + r.w as i32 / 2,
-            r.y + r.h as i32 / 2,
-            CW,
-            CH,
-            false,
-            &make_vfs(),
-        );
-    }
-
-    #[test]
-    fn clicking_keys_builds_and_evaluates() {
-        let mut app = CalculatorApp::new("/apps/calc");
-        for key in [
-            CalcKey::Digit('9'),
-            CalcKey::Op('*'),
-            CalcKey::OpenParen,
-            CalcKey::Digit('1'),
-            CalcKey::Op('+'),
-            CalcKey::Digit('2'),
-            CalcKey::CloseParen,
-        ] {
-            click_key(&mut app, key);
-        }
-        assert_eq!(app.input_buffer, "9*(1+2)");
-        click_key(&mut app, CalcKey::Equals);
-        assert_eq!(app.last_result, Some(27.0));
-        // The clicked key flashes pressed.
-        let eq = keypad::index_of(CalcKey::Equals).expect("=");
-        assert_eq!(app.flash.map(|(k, _)| k), Some(eq));
-    }
-
-    #[test]
-    fn click_outside_keys_does_nothing() {
-        let mut app = CalculatorApp::new("/apps/calc");
-        let l = CalcLayout::compute(0, 0, CW, CH);
-        app.handle_click(l.display.x + 5, l.display.y + 5, CW, CH, false, &make_vfs());
-        assert!(app.input_buffer.is_empty());
-        assert!(app.flash.is_none());
-    }
-
-    #[test]
-    fn click_history_row_recalls_entry() {
-        let mut app = CalculatorApp::new("/apps/calc");
-        type_str(&mut app, "1+1=");
-        type_str(&mut app, "2+2=");
-        let (w, h) = (460, 240);
-        let l = CalcLayout::compute(0, 0, w, h);
-        let pane = l.history.expect("wide layout has history");
-        // Rows are newest first: the second row is the older entry.
-        let y = pane.y + (2 * keypad::HISTORY_ROW_H) as i32 + 2;
-        app.handle_click(pane.x + 4, y, w, h, false, &make_vfs());
-        assert_eq!(app.input_buffer, "1+1");
-    }
-
-    // -- Rendering --
-
-    #[test]
-    fn windowed_draw_shows_keys_and_display() {
-        use oasis_test_backend::{DrawCommand, RecordingBackend};
-        let mut app = CalculatorApp::new("/apps/calc");
-        type_str(&mut app, "12+3");
-        let mut backend = RecordingBackend::new(460, 240);
-        let at = ActiveTheme::default();
-        app.draw_windowed(0, 0, 460, 240, &mut backend, &at)
-            .expect("draw");
-        let texts: Vec<&str> = backend
-            .commands()
-            .iter()
-            .filter_map(|c| match c {
-                DrawCommand::DrawText { text, .. } => Some(text.as_str()),
-                _ => None,
-            })
-            .collect();
-        for label in ["MC", "MR", "MS", "M+", "7", "=", "DEL", "12+3", "History"] {
-            assert!(texts.contains(&label), "missing {label:?} in {texts:?}");
-        }
-    }
-
-    #[test]
-    fn flash_expires_after_a_short_time() {
-        let vfs = make_vfs();
-        let mut app = CalculatorApp::new("/apps/calc");
-        app.handle_text_input('4');
-        assert!(app.flash.is_some());
-        // Drawing doesn't age it (idle frames may never be drawn)...
-        let mut backend = oasis_test_backend::RecordingBackend::new(300, 220);
-        let at = ActiveTheme::default();
-        for _ in 0..10 {
-            app.draw_windowed(0, 0, 300, 220, &mut backend, &at)
-                .expect("draw");
-        }
-        assert!(app.flash.is_some());
-        // ...wall time does, and the expiry asks for the redraw.
-        assert!(!app.tick(FLASH_MS / 2, &vfs));
-        assert!(app.flash.is_some());
-        assert!(app.tick(FLASH_MS / 2, &vfs), "popping back up redraws");
-        assert!(app.flash.is_none());
-        assert!(!app.tick(16, &vfs), "idle afterwards");
-    }
-
-    #[test]
-    fn full_screen_lines_show_keypad_cursor() {
-        let vfs = make_vfs();
-        let mut app = CalculatorApp::new("/apps/calc");
-        assert!(app.lines().iter().any(|l| l.contains("Key: [5]")));
-        app.handle_input(&Button::Right, &vfs);
-        assert!(app.lines().iter().any(|l| l.contains("Key: [6]")));
-    }
-
-    // -- History persistence --
-
-    #[test]
-    fn history_persists_across_instances() {
-        let mut vfs = make_vfs();
-        let mut app = CalculatorApp::new("/apps/calc");
-        type_str(&mut app, "6*7=");
-        type_str(&mut app, "1/4=");
-        assert!(app.apply_vfs_ops(&mut vfs));
-        // Nothing left to write on the next frame.
-        assert!(!app.apply_vfs_ops(&mut vfs));
-        assert!(vfs.exists(history::HISTORY_PATH));
-
-        let mut reopened = CalculatorApp::new("/apps/calc");
-        reopened.apply_vfs_ops(&mut vfs);
-        assert_eq!(reopened.history.len(), 2);
-        assert_eq!(reopened.history[0].expression, "6*7");
-        assert_eq!(reopened.history[1].result, 0.25);
-        // Up recalls the persisted entries.
-        reopened.handle_key(&Key::Up, Modifiers::NONE, &vfs);
-        assert_eq!(reopened.input_buffer, "1/4");
-    }
-
-    #[test]
-    fn history_loaded_after_typing_keeps_new_entries() {
-        let mut vfs = make_vfs();
-        let seed = CalcHistoryEntry {
-            expression: "1+1".into(),
-            result: 2.0,
-        };
-        history::save(&mut vfs, &[seed]).expect("seed history");
-        let mut app = CalculatorApp::new("/apps/calc");
-        // Typed before the host's first per-frame hook ran.
-        type_str(&mut app, "3+3=");
-        app.apply_vfs_ops(&mut vfs);
-        let exprs: Vec<_> = app.history.iter().map(|e| e.expression.as_str()).collect();
-        assert_eq!(exprs, ["1+1", "3+3"]);
-        assert_eq!(history::load(&vfs).len(), 2);
-    }
-
-    #[test]
-    fn all_clear_persists_empty_history() {
-        let mut vfs = make_vfs();
-        let mut app = CalculatorApp::new("/apps/calc");
-        type_str(&mut app, "2+2=");
-        app.apply_vfs_ops(&mut vfs);
-        app.clear_all();
-        app.apply_vfs_ops(&mut vfs);
-        assert!(history::load(&vfs).is_empty());
-    }
-}
+mod tests;

@@ -64,19 +64,18 @@ impl SymphoniaDecoder {
     /// Accepts any `Read + Seek + Send` source (e.g. `File`, network stream)
     /// and initializes decoders for any H.264 video and AAC audio tracks.
     pub fn open_stream(source: Box<dyn VideoSource>) -> Result<Self, VideoError> {
-        let (demuxer, keyframes) = Mp4Demuxer::open_stream_scanned(source, |data| {
-            find_top_level_atom(data, b"moov").map(keyframes_from_moov)
-        })?;
+        let (demuxer, moov) = Mp4Demuxer::open_stream_and_moov(source)?;
         let mut dec = Self::from_demuxer(demuxer)?;
-        dec.keyframes = keyframes.unwrap_or_default();
+        dec.keyframes = keyframes_from_moov(&moov);
         Ok(dec)
     }
 
     /// Open from a streaming source with pre-extracted avcC config.
     ///
-    /// Skips the full-file `read_to_end()` scan that `open_stream` performs.
-    /// Use this when avcC has already been extracted from the moov atom
-    /// (e.g. fetched via HTTP Range request).
+    /// Skips the top-level atom walk that `open_stream` performs to read
+    /// the `moov` box (and the seek back to the start after it). Use this
+    /// when avcC has already been extracted from the moov atom (e.g.
+    /// fetched via HTTP Range request).
     pub fn open_stream_with_avcc(
         source: Box<dyn VideoSource>,
         avcc: Option<AvccConfig>,
@@ -89,7 +88,7 @@ impl SymphoniaDecoder {
     /// complete atom, header included).
     ///
     /// Like [`open_stream_with_avcc`](Self::open_stream_with_avcc) (no
-    /// full-file scan), and additionally indexes the video keyframes so
+    /// atom walk), and additionally indexes the video keyframes so
     /// [`seek`](Self::seek) lands on a keyframe.
     pub fn open_stream_with_moov(
         source: Box<dyn VideoSource>,
@@ -167,11 +166,38 @@ impl SymphoniaDecoder {
             if packet.kind == kind {
                 return Ok(Some(packet));
             }
-            // Buffer the other stream's packet.
-            match packet.kind {
-                TrackKind::Video => self.video_queue.push_back(packet),
-                TrackKind::Audio => self.audio_queue.push_back(packet),
+            self.buffer_packet(packet);
+        }
+    }
+
+    /// Queue a packet of the stream the caller is not reading right now.
+    ///
+    /// The queues are bounded: a caller that only ever reads one stream
+    /// (audio-only playback of a file with video) would otherwise buffer
+    /// the whole other track in memory.  Past [`MAX_QUEUED_PACKETS`] the
+    /// oldest packet is dropped; a dropped video packet breaks the
+    /// reference chain, so video restarts at the next IDR.
+    fn buffer_packet(&mut self, packet: DemuxedPacket) {
+        let queue = match packet.kind {
+            TrackKind::Video => &mut self.video_queue,
+            TrackKind::Audio => &mut self.audio_queue,
+        };
+        if queue.len() >= MAX_QUEUED_PACKETS {
+            queue.pop_front();
+            if packet.kind == TrackKind::Video {
+                #[cfg(feature = "h264")]
+                {
+                    self.awaiting_idr = true;
+                    self.pending_pts.clear();
+                }
+                log::debug!("video packet queue full; dropping oldest packet");
+            } else {
+                log::debug!("audio packet queue full; dropping oldest packet");
             }
+        }
+        match packet.kind {
+            TrackKind::Video => self.video_queue.push_back(packet),
+            TrackKind::Audio => self.audio_queue.push_back(packet),
         }
     }
 
@@ -471,6 +497,10 @@ impl SymphoniaDecoder {
     }
 }
 
+/// Packets buffered per stream while the other stream is being read (about
+/// 45 s of AAC or 70 s of 30 fps video).
+const MAX_QUEUED_PACKETS: usize = 2048;
+
 /// Most pictures an H.264 decoder may hold for reordering
 /// (`max_dec_frame_buffering` is at most 16).
 #[cfg(feature = "h264")]
@@ -494,35 +524,6 @@ const NAL_IDR: u8 = 5;
 #[cfg(feature = "h264")]
 const NAL_SPS: u8 = 7;
 
-/// Find a top-level MP4 atom (e.g. `moov`) in a complete file buffer and
-/// return it including its header.
-pub(crate) fn find_top_level_atom<'a>(data: &'a [u8], fourcc: &[u8; 4]) -> Option<&'a [u8]> {
-    let mut pos = 0usize;
-    while pos.checked_add(8)? <= data.len() {
-        let size32 = u32::from_be_bytes([data[pos], data[pos + 1], data[pos + 2], data[pos + 3]]);
-        let size = match size32 {
-            0 => data.len() - pos,
-            1 => {
-                let b = data.get(pos + 8..pos + 16)?;
-                usize::try_from(u64::from_be_bytes([
-                    b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7],
-                ]))
-                .ok()?
-            },
-            n => n as usize,
-        };
-        if size < 8 {
-            return None;
-        }
-        let end = pos.checked_add(size)?;
-        if &data[pos + 4..pos + 8] == fourcc {
-            return data.get(pos..end);
-        }
-        pos = end;
-    }
-    None
-}
-
 /// Video keyframe `(decode_secs, seek_secs)` pairs from raw moov bytes.
 fn keyframes_from_moov(moov: &[u8]) -> Vec<(f64, f64)> {
     demux_lite::parse_moov_tracks(moov)
@@ -535,6 +536,7 @@ fn keyframes_from_moov(moov: &[u8]) -> Vec<(f64, f64)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::demux::find_top_level_atom;
 
     fn fixture_bytes() -> Vec<u8> {
         let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
@@ -550,6 +552,39 @@ mod tests {
         assert_eq!(moov.len(), 2235);
         assert!(find_top_level_atom(&data, b"zzzz").is_none());
         assert!(find_top_level_atom(&[0, 0, 0, 3, b'b', b'a', b'd', b'!'], b"moov").is_none());
+    }
+
+    #[test]
+    fn other_stream_queue_is_bounded() {
+        // Regression: reading only audio from a file with video buffered
+        // every video packet of the file.
+        let mut dec =
+            SymphoniaDecoder::open_stream(Box::new(std::io::Cursor::new(fixture_bytes())))
+                .expect("open");
+        for i in 0..MAX_QUEUED_PACKETS + 100 {
+            for kind in [TrackKind::Video, TrackKind::Audio] {
+                dec.buffer_packet(DemuxedPacket {
+                    kind,
+                    data: vec![0; 4],
+                    timestamp_secs: i as f64,
+                });
+            }
+        }
+        assert_eq!(dec.video_queue.len(), MAX_QUEUED_PACKETS);
+        assert_eq!(dec.audio_queue.len(), MAX_QUEUED_PACKETS);
+        // The oldest packets went first.
+        assert_eq!(
+            dec.audio_queue.front().map(|p| p.timestamp_secs),
+            Some(100.0)
+        );
+    }
+
+    #[test]
+    fn open_stream_reads_keyframes_without_buffering_the_file() {
+        // `open_stream` walks top-level boxes and reads only `moov`.
+        let dec = SymphoniaDecoder::open_stream(Box::new(std::io::Cursor::new(fixture_bytes())))
+            .expect("open");
+        assert_eq!(dec.keyframes.len(), 2);
     }
 
     // ---------------------------------------------------------------

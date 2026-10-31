@@ -31,6 +31,21 @@ const DEMO_APPS: &[&str] = &[
     "Video Embed",
 ];
 
+/// A fresh instance VFS: empty `/home`, `/etc`, `/tmp` and the dashboard
+/// apps seeded under `/apps` (`discover_apps` scans `/apps` for one
+/// subdirectory per app; without them the dashboard renders empty).
+pub(crate) fn fresh_vfs() -> GameAssetVfs {
+    let mut vfs = GameAssetVfs::new();
+    vfs.add_base_dir("/home");
+    vfs.add_base_dir("/etc");
+    vfs.add_base_dir("/tmp");
+    let _ = vfs.mkdir("/apps");
+    for name in DEMO_APPS {
+        let _ = vfs.mkdir(&format!("/apps/{name}"));
+    }
+    vfs
+}
+
 /// Create a new OASIS_OS instance.
 ///
 /// `width` and `height` set the virtual screen resolution.
@@ -169,17 +184,7 @@ unsafe fn create_instance(
     let mut cmd_reg = CommandRegistry::new();
     register_builtins(&mut cmd_reg);
 
-    let mut vfs = GameAssetVfs::new();
-    vfs.add_base_dir("/home");
-    vfs.add_base_dir("/etc");
-    vfs.add_base_dir("/tmp");
-
-    // Seed dashboard apps so the desktop is populated. discover_apps scans /apps
-    // for one subdirectory per app; without this the dashboard renders empty.
-    let _ = vfs.mkdir("/apps");
-    for name in DEMO_APPS {
-        let _ = vfs.mkdir(&format!("/apps/{name}"));
-    }
+    let vfs = fresh_vfs();
 
     let platform = DesktopPlatform::new();
 

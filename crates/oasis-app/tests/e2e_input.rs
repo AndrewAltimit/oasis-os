@@ -995,6 +995,79 @@ fn icon_drag_reorder_persists() {
     assert!(h.find_window("Calculator").is_some(), "{:?}", h.windows());
 }
 
+/// A mode switch ends the pointer drags. The release handlers only run in
+/// the mode a drag started in, so an icon drag interrupted by Start (to
+/// the terminal) and a window drag interrupted by any mode change used to
+/// survive and resume on the next pointer motion with no button held.
+#[test]
+fn mode_switch_ends_icon_and_window_drags() {
+    // Icon drag (free-layout dashboard) -> Start -> terminal and back.
+    let mut h = boot("psix-tribute");
+    let rect = h.app_icon_rect("Calculator").unwrap();
+    let from = rect_center(rect);
+    h.step(&[
+        InputEvent::CursorMove {
+            x: from.0,
+            y: from.1,
+        },
+        InputEvent::PointerClick {
+            x: from.0,
+            y: from.1,
+        },
+    ]);
+    h.move_to(from.0 + 160, from.1 + 90);
+    assert!(h.state().icon_drag.is_some(), "drag armed");
+    h.button(Button::Start);
+    assert_eq!(h.mode(), Mode::Terminal);
+    assert!(h.state().icon_drag.is_none(), "drag ended by the switch");
+    assert!(h.state().ui.dashboard.drag_index.is_none());
+    h.button(Button::Start);
+    h.settle();
+    assert_eq!(h.mode(), Mode::Dashboard);
+    // Dropped where it was (not snapped back, not following the pointer).
+    let dropped = h.app_icon_rect("Calculator").unwrap();
+    assert_ne!(dropped, rect, "the moved icon was dropped in place");
+    h.move_to(from.0 + 40, from.1 + 10);
+    h.settle();
+    assert_eq!(
+        h.app_icon_rect("Calculator").unwrap(),
+        dropped,
+        "icon followed"
+    );
+    assert!(h.windows().is_empty(), "no launch: {:?}", h.windows());
+
+    // Window drag -> mode change (the terminal, as e.g. an app's
+    // "switch to terminal" action does) -> back to the desktop.
+    let mut h = boot("classic");
+    let w0 = open(&mut h, "Paint");
+    let grab = grab_point(&h, "Paint");
+    h.step(&[
+        InputEvent::CursorMove {
+            x: grab.0,
+            y: grab.1,
+        },
+        InputEvent::PointerClick {
+            x: grab.0,
+            y: grab.1,
+        },
+    ]);
+    h.move_to(grab.0 + 10, grab.1 + 10);
+    assert!(h.state().wm.is_dragging());
+    h.state_mut().mode = Mode::Terminal;
+    h.step(&[]);
+    assert!(!h.state().wm.is_dragging(), "drag ended by the switch");
+    h.state_mut().mode = Mode::Desktop;
+    h.step(&[]);
+    h.move_to(grab.0 + 80, grab.1 + 60);
+    h.settle();
+    let w1 = h.find_window("Paint").unwrap();
+    assert_eq!(
+        (w1.frame.0, w1.frame.1),
+        (w0.frame.0 + 10, w0.frame.1 + 10),
+        "window followed the pointer after the drag ended"
+    );
+}
+
 /// Page changes (slide or fade) finish and leave a stable scene, even
 /// when the user pages faster than the animation.
 #[test]

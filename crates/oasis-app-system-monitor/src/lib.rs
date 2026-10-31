@@ -13,9 +13,7 @@
 //! [`POLL_INTERVAL_MS`] of wall time (~2 Hz) and reports a change only
 //! when the file's bytes differ, so an idle monitor never forces redraws.
 
-use oasis_app_core::render::{hide_app_sdi, render_app_chrome, render_content_sdi};
 use oasis_app_core::{App, AppAction, ContentState};
-use oasis_sdi::SdiRegistry;
 use oasis_skin::ActiveTheme;
 use oasis_types::backend::SdiBackend;
 use oasis_types::input::Button;
@@ -35,7 +33,7 @@ pub use status::{Gauge, Level, STATUS_PATH, SysStatus};
 /// Status file re-read interval in milliseconds of wall time (2 Hz).
 pub const POLL_INTERVAL_MS: u32 = 500;
 
-/// Width of the text-mode gauge bars (full-screen SDI view).
+/// Width of the text-mode gauge bars (`App::lines`).
 const TEXT_BAR_W: usize = 16;
 
 /// System Monitor app.
@@ -159,7 +157,7 @@ impl SystemMonitorApp {
         }
     }
 
-    /// Rebuild the text lines (full-screen SDI view).
+    /// Rebuild the text lines (`App::lines`).
     fn rebuild_lines(&mut self) {
         let mut lines = Vec::new();
         for (label, value) in self.info_rows() {
@@ -225,13 +223,6 @@ impl App for SystemMonitorApp {
         self.poll(dt_ms, vfs)
     }
 
-    fn update_sdi(&mut self, sdi: &mut SdiRegistry, at: &ActiveTheme) {
-        self.content.update_layout(at);
-        self.content.animate_selection(0.3);
-        render_app_chrome(sdi, at);
-        render_content_sdi(&self.content, sdi, at);
-    }
-
     fn draw_windowed(
         &self,
         cx: i32,
@@ -242,10 +233,6 @@ impl App for SystemMonitorApp {
         at: &ActiveTheme,
     ) -> oasis_types::error::Result<()> {
         self.draw_monitor(cx, cy, cw, ch, backend, at)
-    }
-
-    fn hide_sdi(&self, sdi: &mut SdiRegistry) {
-        hide_app_sdi(sdi);
     }
 
     fn lines(&self) -> &[String] {

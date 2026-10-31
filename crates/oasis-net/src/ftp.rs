@@ -1,13 +1,25 @@
 //! FTP-like file transfer server over a [`NetworkBackend`], serving a
 //! [`Vfs`] (feature `vfs`).
 //!
-//! The protocol is line-based:
+//! The protocol is line-based (`\n`-terminated requests, at most 1024
+//! bytes; paths cannot contain spaces):
 //!
-//! - `LIST <path>` -- list directory contents
-//! - `GET <path>`  -- retrieve file (response: size + data)
-//! - `PUT <path> <size>` -- upload file
-//! - `RENAME <from> <to>` -- rename/move file or directory
-//! - `QUIT` -- close connection
+//! - `PASS <password>` -- authenticate (when the server has a password)
+//! - `LIST [path]` -- list a directory: `200 ` then one `<d|f> <size>
+//!   <name>` line per entry (`200 (empty)` for none)
+//! - `GET <path>` -- `200 <n> bytes\n` followed by exactly `n` raw bytes
+//! - `PUT <path> <text>` -- write the rest of the line (trimmed, UTF-8) as
+//!   the file content; one-line text payloads only
+//! - `MKDIR <path>`, `DELETE <path>`, `STAT <path>`
+//! - `RENAME <from> <to>` -- rename/move a file or directory
+//! - `QUIT` -- close the connection
+//!
+//! Errors are `400` (bad request), `500` (VFS error) or `530` (auth).
+//! Paths are resolved inside the served directory ([`FtpServer::with_root`];
+//! the whole VFS by default) and then by the [`Vfs`], which confines them
+//! (see `oasis_vfs::normalize_path`). The password travels in clear text:
+//! with one the server listens on all interfaces, so use it on trusted
+//! networks only. Failed logins are throttled server-wide.
 //!
 //! The `ftp`, `push` and `pull` terminal commands live in
 //! `oasis-core::transfer`; the desktop shell drives [`FtpServer::poll`].
@@ -17,15 +29,35 @@ use std::time::Instant;
 use oasis_types::backend::{NetworkBackend, NetworkStream};
 use oasis_types::error::Result;
 use oasis_types::util::ct_eq;
-use oasis_vfs::Vfs;
+use oasis_vfs::{SubtreeVfs, Vfs};
+
+use crate::auth::{AUTH_TIMEOUT, AuthThrottle};
 
 /// Default FTP server port.
 pub const DEFAULT_FTP_PORT: u16 = 2121;
 
 /// Process an FTP protocol request line against the VFS.
 ///
-/// Returns a response string to send back to the client.
-pub fn process_ftp_request(line: &str, vfs: &mut dyn Vfs) -> String {
+/// Returns the response bytes to send back to the client (raw file bytes
+/// for `GET`, so binary content arrives intact).
+pub fn process_ftp_request(line: &str, vfs: &mut dyn Vfs) -> Vec<u8> {
+    match line.trim().split_once(' ') {
+        Some((cmd, rest)) if cmd.eq_ignore_ascii_case("GET") && !rest.trim().is_empty() => {
+            match vfs.read(rest.trim()) {
+                Ok(data) => {
+                    let mut resp = format!("200 {} bytes\n", data.len()).into_bytes();
+                    resp.extend_from_slice(&data);
+                    resp
+                },
+                Err(e) => format!("500 {e}\n").into_bytes(),
+            }
+        },
+        _ => process_text_request(line, vfs).into_bytes(),
+    }
+}
+
+/// Every request except a well-formed `GET`.
+fn process_text_request(line: &str, vfs: &mut dyn Vfs) -> String {
     let parts: Vec<&str> = line.trim().splitn(3, ' ').collect();
     let cmd = parts.first().copied().unwrap_or("").to_uppercase();
 
@@ -55,14 +87,8 @@ pub fn process_ftp_request(line: &str, vfs: &mut dyn Vfs) -> String {
             if path.is_empty() {
                 return "400 missing path\n".to_string();
             }
-            match vfs.read(path) {
-                Ok(data) => {
-                    // For text mode: return content as text.
-                    let text = String::from_utf8_lossy(&data);
-                    format!("200 {} bytes\n{text}", data.len())
-                },
-                Err(e) => format!("500 {e}\n"),
-            }
+            // A path is present: `process_ftp_request` serves it.
+            format!("400 bad request: {path}\n")
         },
         "PUT" => {
             let path = parts.get(1).copied().unwrap_or("");
@@ -155,7 +181,8 @@ const CLOSE_DRAIN_TIMEOUT_SECS: u64 = 2;
 /// Idle connection timeout in seconds.
 const FTP_IDLE_TIMEOUT_SECS: u64 = 300;
 
-/// Maximum failed authentication attempts before disconnecting.
+/// Maximum failed authentication attempts on one connection before it is
+/// closed (the server-wide [`AuthThrottle`] bounds reconnect-and-retry).
 const MAX_AUTH_FAILURES: u8 = 3;
 
 /// A single FTP client connection.
@@ -167,6 +194,8 @@ struct FtpConnection {
     write_buf: Vec<u8>,
     write_pos: usize,
     last_activity: Instant,
+    /// When the connection was accepted (for the auth timeout).
+    accepted_at: Instant,
     /// Whether this connection has been authenticated.
     authenticated: bool,
     /// Number of failed authentication attempts.
@@ -187,6 +216,7 @@ impl FtpConnection {
             write_buf: Vec::new(),
             write_pos: 0,
             last_activity: Instant::now(),
+            accepted_at: Instant::now(),
             authenticated,
             failed_attempts: 0,
             eof: false,
@@ -260,7 +290,12 @@ impl FtpConnection {
     }
 
     /// Process up to [`MAX_CMDS_PER_POLL`] buffered lines.
-    fn process_lines(&mut self, password: Option<&str>, vfs: &mut dyn Vfs) {
+    fn process_lines(
+        &mut self,
+        password: Option<&str>,
+        throttle: &mut AuthThrottle,
+        vfs: &mut dyn Vfs,
+    ) {
         let mut cmds_processed = 0usize;
         while cmds_processed < MAX_CMDS_PER_POLL && self.pending() < MAX_PENDING_OUTPUT {
             let Some(pos) = self.read_buf.iter().position(|&b| b == b'\n') else {
@@ -301,7 +336,8 @@ impl FtpConnection {
                     },
                     Some(_) => {
                         self.failed_attempts += 1;
-                        if self.failed_attempts >= MAX_AUTH_FAILURES {
+                        throttle.record_failure("FTP server");
+                        if self.failed_attempts >= MAX_AUTH_FAILURES || throttle.is_locked() {
                             self.queue(b"530 Too many failures\r\n");
                             // No further guesses on this connection.
                             self.read_buf.clear();
@@ -317,7 +353,7 @@ impl FtpConnection {
 
             // Process command against VFS.
             let response = process_ftp_request(&line, vfs);
-            self.queue(response.as_bytes());
+            self.queue(&response);
         }
 
         // Guard against overlong (unterminated) lines.
@@ -349,16 +385,23 @@ pub struct FtpServer {
     /// Optional password for authentication. When `None`, all
     /// connections are immediately authenticated.
     password: Option<String>,
+    /// Server-wide throttle for failed `PASS` attempts.
+    auth_failures: AuthThrottle,
+    /// Directory of the VFS that clients see as `/` (normalized).
+    root: String,
 }
 
 impl FtpServer {
-    /// Create a new FTP server on the given port.
+    /// Create a new FTP server on the given port, serving the whole VFS
+    /// (narrow it with [`with_root`](Self::with_root)).
     pub fn new(port: u16) -> Self {
         Self {
             port,
             connections: Vec::new(),
             listening: false,
             password: None,
+            auth_failures: AuthThrottle::new(),
+            root: "/".to_string(),
         }
     }
 
@@ -366,6 +409,24 @@ impl FtpServer {
     pub fn with_password(mut self, password: String) -> Self {
         self.password = Some(password);
         self
+    }
+
+    /// Serve only the directory `root` of the VFS: clients see it as `/`
+    /// and cannot name anything outside it (a [`SubtreeVfs`] view). Hosts
+    /// whose VFS holds system state (`/system`, `/var` IPC files) should
+    /// serve a user directory such as `/home`.
+    ///
+    /// # Errors
+    ///
+    /// When `root` is not a valid VFS path (`..` above `/`, NUL byte).
+    pub fn with_root(mut self, root: &str) -> Result<Self> {
+        self.root = oasis_vfs::normalize_path(root)?.into_owned();
+        Ok(self)
+    }
+
+    /// The served directory (`/` = the whole VFS).
+    pub fn root(&self) -> &str {
+        &self.root
     }
 
     /// Start listening on the configured port.
@@ -415,6 +476,10 @@ impl FtpServer {
         let requires_auth = self.password.is_some();
         if self.connections.len() < MAX_FTP_CONNECTIONS {
             match backend.accept() {
+                Ok(Some(mut stream)) if requires_auth && self.auth_failures.is_locked() => {
+                    let _ = stream.write(b"421 Too many failed logins, try later\r\n");
+                    let _ = stream.close();
+                },
                 Ok(Some(stream)) => {
                     let mut conn = FtpConnection::new(stream, !requires_auth);
                     let greeting = if requires_auth {
@@ -432,9 +497,20 @@ impl FtpServer {
         }
 
         let password = self.password.as_deref();
+        // Clients see only the served subtree.
+        let mut view = SubtreeVfs::new(vfs, &self.root)?;
         for conn in &mut self.connections {
             conn.flush();
             if conn.dead || conn.closing_since.is_some() {
+                continue;
+            }
+
+            // Unauthenticated peers get a short deadline, so idle sockets
+            // cannot hold every slot for the whole idle timeout.
+            if !conn.authenticated && conn.accepted_at.elapsed() > AUTH_TIMEOUT {
+                conn.queue(b"530 Authentication timeout\r\n");
+                conn.close_after_flush();
+                conn.flush();
                 continue;
             }
 
@@ -447,8 +523,9 @@ impl FtpServer {
             }
 
             // Backpressure: leave input unread while the peer is not
-            // draining the responses already queued for it.
-            if conn.pending() < MAX_PENDING_OUTPUT {
+            // draining the responses already queued for it, or while lines
+            // from an earlier burst are still waiting (bounds `read_buf`).
+            if conn.pending() < MAX_PENDING_OUTPUT && conn.read_buf.len() <= MAX_FTP_LINE_LEN {
                 conn.read_available();
             }
             if conn.dead {
@@ -456,7 +533,7 @@ impl FtpServer {
             }
             // Buffered lines are processed every poll, not only when new
             // bytes arrive (a burst beyond MAX_CMDS_PER_POLL would stall).
-            conn.process_lines(password, vfs);
+            conn.process_lines(password, &mut self.auth_failures, &mut view);
 
             // Peer closed: once every complete line has been answered, drop
             // it (an unterminated trailing line is a partial transfer and is
@@ -495,6 +572,11 @@ impl FtpServer {
 
 #[cfg(test)]
 mod tests {
+    /// `process_ftp_request` as text.
+    fn req(line: &str, vfs: &mut dyn Vfs) -> String {
+        String::from_utf8(process_ftp_request(line, vfs)).unwrap()
+    }
+
     use super::*;
     use oasis_types::error::OasisError;
     use oasis_vfs::MemoryVfs;
@@ -508,7 +590,7 @@ mod tests {
         let mut vfs = MemoryVfs::new();
         vfs.mkdir("/home").unwrap();
         vfs.mkdir("/tmp").unwrap();
-        let resp = process_ftp_request("LIST /", &mut vfs);
+        let resp = req("LIST /", &mut vfs);
         assert!(resp.starts_with("200"));
         assert!(resp.contains("home"));
         assert!(resp.contains("tmp"));
@@ -518,7 +600,7 @@ mod tests {
     fn ftp_list_empty() {
         let mut vfs = MemoryVfs::new();
         vfs.mkdir("/empty").unwrap();
-        let resp = process_ftp_request("LIST /empty", &mut vfs);
+        let resp = req("LIST /empty", &mut vfs);
         assert!(resp.contains("200"));
         assert!(resp.contains("empty"));
     }
@@ -527,7 +609,7 @@ mod tests {
     fn ftp_get_file() {
         let mut vfs = MemoryVfs::new();
         vfs.write("/test.txt", b"hello").unwrap();
-        let resp = process_ftp_request("GET /test.txt", &mut vfs);
+        let resp = req("GET /test.txt", &mut vfs);
         assert!(resp.starts_with("200"));
         assert!(resp.contains("5 bytes"));
         assert!(resp.contains("hello"));
@@ -536,14 +618,14 @@ mod tests {
     #[test]
     fn ftp_get_missing() {
         let mut vfs = MemoryVfs::new();
-        let resp = process_ftp_request("GET /nope.txt", &mut vfs);
+        let resp = req("GET /nope.txt", &mut vfs);
         assert!(resp.starts_with("500"));
     }
 
     #[test]
     fn ftp_put_file() {
         let mut vfs = MemoryVfs::new();
-        let resp = process_ftp_request("PUT /new.txt hello world", &mut vfs);
+        let resp = req("PUT /new.txt hello world", &mut vfs);
         assert!(resp.starts_with("200"));
         let data = vfs.read("/new.txt").unwrap();
         assert_eq!(data, b"hello world");
@@ -552,7 +634,7 @@ mod tests {
     #[test]
     fn ftp_mkdir() {
         let mut vfs = MemoryVfs::new();
-        let resp = process_ftp_request("MKDIR /newdir", &mut vfs);
+        let resp = req("MKDIR /newdir", &mut vfs);
         assert!(resp.starts_with("200"));
         assert!(vfs.exists("/newdir"));
     }
@@ -561,7 +643,7 @@ mod tests {
     fn ftp_delete() {
         let mut vfs = MemoryVfs::new();
         vfs.write("/deleteme.txt", b"gone").unwrap();
-        let resp = process_ftp_request("DELETE /deleteme.txt", &mut vfs);
+        let resp = req("DELETE /deleteme.txt", &mut vfs);
         assert!(resp.starts_with("200"));
         assert!(!vfs.exists("/deleteme.txt"));
     }
@@ -570,7 +652,7 @@ mod tests {
     fn ftp_stat_file() {
         let mut vfs = MemoryVfs::new();
         vfs.write("/info.txt", b"data").unwrap();
-        let resp = process_ftp_request("STAT /info.txt", &mut vfs);
+        let resp = req("STAT /info.txt", &mut vfs);
         assert!(resp.starts_with("200"));
         assert!(resp.contains("file"));
         assert!(resp.contains("4 bytes"));
@@ -580,7 +662,7 @@ mod tests {
     fn ftp_stat_dir() {
         let mut vfs = MemoryVfs::new();
         vfs.mkdir("/mydir").unwrap();
-        let resp = process_ftp_request("STAT /mydir", &mut vfs);
+        let resp = req("STAT /mydir", &mut vfs);
         assert!(resp.contains("directory"));
     }
 
@@ -590,7 +672,7 @@ mod tests {
         vfs.mkdir("/src").unwrap();
         vfs.mkdir("/dst").unwrap();
         vfs.write("/src/file.txt", b"hello").unwrap();
-        let resp = process_ftp_request("RENAME /src/file.txt /dst/moved.txt", &mut vfs);
+        let resp = req("RENAME /src/file.txt /dst/moved.txt", &mut vfs);
         assert!(resp.starts_with("200"));
         assert!(!vfs.exists("/src/file.txt"));
         assert_eq!(vfs.read("/dst/moved.txt").unwrap(), b"hello");
@@ -599,44 +681,44 @@ mod tests {
     #[test]
     fn ftp_rename_missing_source() {
         let mut vfs = MemoryVfs::new();
-        let resp = process_ftp_request("RENAME /nope.txt /dest.txt", &mut vfs);
+        let resp = req("RENAME /nope.txt /dest.txt", &mut vfs);
         assert!(resp.starts_with("500"));
     }
 
     #[test]
     fn ftp_rename_missing_args() {
         let mut vfs = MemoryVfs::new();
-        let resp = process_ftp_request("RENAME", &mut vfs);
+        let resp = req("RENAME", &mut vfs);
         assert!(resp.starts_with("400"));
-        let resp = process_ftp_request("RENAME /only_one", &mut vfs);
+        let resp = req("RENAME /only_one", &mut vfs);
         assert!(resp.starts_with("400"));
     }
 
     #[test]
     fn ftp_quit() {
         let mut vfs = MemoryVfs::new();
-        let resp = process_ftp_request("QUIT", &mut vfs);
+        let resp = req("QUIT", &mut vfs);
         assert!(resp.contains("goodbye"));
     }
 
     #[test]
     fn ftp_unknown_command() {
         let mut vfs = MemoryVfs::new();
-        let resp = process_ftp_request("BADCMD", &mut vfs);
+        let resp = req("BADCMD", &mut vfs);
         assert!(resp.starts_with("400"));
     }
 
     #[test]
     fn ftp_empty_command() {
         let mut vfs = MemoryVfs::new();
-        let resp = process_ftp_request("", &mut vfs);
+        let resp = req("", &mut vfs);
         assert!(resp.starts_with("400"));
     }
 
     #[test]
     fn ftp_get_missing_path() {
         let mut vfs = MemoryVfs::new();
-        let resp = process_ftp_request("GET", &mut vfs);
+        let resp = req("GET", &mut vfs);
         assert!(resp.starts_with("400"));
     }
 
@@ -853,6 +935,98 @@ mod tests {
     }
 
     #[test]
+    fn ftp_failed_logins_are_throttled_across_connections() {
+        // Reconnecting used to reset the 3-strikes limit: unlimited guesses.
+        let mut backend = MockBackend::new();
+        let mut server = FtpServer::new(2121).with_password("correct".to_string());
+        server.start(&mut backend).unwrap();
+        let mut vfs = MemoryVfs::new();
+        for _ in 0..3 {
+            let output: WriteBuf = Arc::new(Mutex::new(Vec::new()));
+            backend.add_stream(Box::new(MockStream::new(
+                b"PASS a\nPASS b\n",
+                Arc::clone(&output),
+            )));
+            server.poll(&mut backend, &mut vfs).unwrap();
+        }
+        assert!(server.auth_failures.is_locked());
+        // Even the right password is refused while locked out.
+        let output: WriteBuf = Arc::new(Mutex::new(Vec::new()));
+        backend.add_stream(Box::new(MockStream::new(
+            b"PASS correct\n",
+            Arc::clone(&output),
+        )));
+        server.poll(&mut backend, &mut vfs).unwrap();
+        let written = read_output(&output);
+        assert!(written.starts_with("421 "), "{written:?}");
+        assert!(!written.contains("230"), "{written:?}");
+    }
+
+    #[test]
+    fn ftp_unauthenticated_connection_times_out() {
+        let output: WriteBuf = Arc::new(Mutex::new(Vec::new()));
+        let mut backend = MockBackend::new();
+        backend.add_stream(Box::new(MockStream::new(b"", Arc::clone(&output))));
+        let mut server = FtpServer::new(2121).with_password("pw".to_string());
+        server.start(&mut backend).unwrap();
+        let mut vfs = MemoryVfs::new();
+        server.poll(&mut backend, &mut vfs).unwrap();
+        assert_eq!(server.connection_count(), 1);
+        server.connections[0].accepted_at = Instant::now() - AUTH_TIMEOUT * 2;
+        server.poll(&mut backend, &mut vfs).unwrap();
+        assert_eq!(server.connection_count(), 0);
+        assert!(read_output(&output).contains("530 Authentication timeout"));
+    }
+
+    #[test]
+    fn ftp_empty_line_flood_keeps_read_buffer_bounded() {
+        // Empty lines count toward the per-poll cap but queue no output, so
+        // the buffer used to grow by 64 KiB per poll without bound.
+        let output: WriteBuf = Arc::new(Mutex::new(Vec::new()));
+        let flood = vec![b'\n'; 1024 * 1024];
+        let mut backend = MockBackend::new();
+        backend.add_stream(Box::new(MockStream::new(&flood, Arc::clone(&output))));
+        let mut server = FtpServer::new(2121).with_password("pw".to_string());
+        server.start(&mut backend).unwrap();
+        let mut vfs = MemoryVfs::new();
+        for _ in 0..50 {
+            server.poll(&mut backend, &mut vfs).unwrap();
+            let buffered = server.connections[0].read_buf.len();
+            assert!(
+                buffered <= MAX_FTP_LINE_LEN + MAX_READ_PER_POLL,
+                "read_buf grew to {buffered}"
+            );
+        }
+    }
+
+    #[test]
+    fn ftp_get_returns_binary_content_verbatim() {
+        let mut vfs = MemoryVfs::new();
+        let data = [0u8, 0xff, 0xfe, b'\n', 0x80, b'x'];
+        vfs.write("/bin", &data).unwrap();
+        let resp = process_ftp_request("GET /bin", &mut vfs);
+        let head = b"200 6 bytes\n";
+        assert_eq!(&resp[..head.len()], head);
+        assert_eq!(&resp[head.len()..], &data);
+    }
+
+    #[test]
+    fn ftp_command_before_auth_after_lockout_is_not_served() {
+        let mut server = FtpServer::new(2121).with_password("pw".to_string());
+        for _ in 0..crate::auth::MAX_AUTH_FAILURES {
+            server.auth_failures.record_failure("test");
+        }
+        let mut backend = MockBackend::new();
+        server.start(&mut backend).unwrap();
+        let output: WriteBuf = Arc::new(Mutex::new(Vec::new()));
+        backend.add_stream(Box::new(MockStream::new(b"LIST /\n", Arc::clone(&output))));
+        let mut vfs = MemoryVfs::new();
+        server.poll(&mut backend, &mut vfs).unwrap();
+        assert_eq!(server.connection_count(), 0);
+        assert!(!read_output(&output).contains("200"));
+    }
+
+    #[test]
     fn ftp_auth_command_before_auth() {
         let output: WriteBuf = Arc::new(Mutex::new(Vec::new()));
         let stream = MockStream::new(b"LIST /\n", Arc::clone(&output));
@@ -921,6 +1095,39 @@ mod tests {
             "should not mention auth"
         );
         assert!(written.contains("200"), "LIST should work without auth");
+    }
+
+    #[test]
+    fn ftp_root_confines_clients_to_the_served_directory() {
+        let output: WriteBuf = Arc::new(Mutex::new(Vec::new()));
+        let stream = MockStream::new(
+            b"LIST /\nGET /../system/secret\nGET /system/secret\nPUT /up.txt hi\n\
+              DELETE /\nGET /notes.txt\n",
+            Arc::clone(&output),
+        );
+        let mut backend = MockBackend::new();
+        backend.add_stream(Box::new(stream));
+
+        let mut server = FtpServer::new(2121).with_root("/home/").unwrap();
+        assert_eq!(server.root(), "/home");
+        assert!(FtpServer::new(1).with_root("/../etc").is_err());
+        server.start(&mut backend).unwrap();
+
+        let mut vfs = MemoryVfs::new();
+        vfs.mkdir("/home").unwrap();
+        vfs.write("/home/notes.txt", b"mine").unwrap();
+        vfs.mkdir("/system").unwrap();
+        vfs.write("/system/secret", b"s3cret").unwrap();
+        server.poll(&mut backend, &mut vfs).unwrap();
+
+        let written = read_output(&output);
+        assert!(written.contains("f 4 notes.txt"), "{written}");
+        assert!(written.contains("path traversal not allowed"), "{written}");
+        assert!(!written.contains("s3cret"), "{written}");
+        assert!(written.contains("200 4 bytes\nmine"), "{written}");
+        assert!(written.contains("cannot remove root"), "{written}");
+        assert_eq!(vfs.read("/home/up.txt").unwrap(), b"hi");
+        assert!(!vfs.exists("/up.txt"));
     }
 
     #[test]

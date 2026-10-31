@@ -593,10 +593,11 @@ mod tests {
         }
         type_str(&mut app, "/docs/new.c");
         key(&mut app, Key::Enter, NONE);
+        assert_eq!(app.viewing_file(), None, "path switches after the write");
+        assert!(app.apply_vfs_ops(&mut vfs));
         assert_eq!(app.viewing_file(), Some("/docs/new.c"));
         assert_eq!(app.file_type, FileType::C);
         assert!(app.title().contains("new.c"));
-        assert!(app.apply_vfs_ops(&mut vfs));
         assert_eq!(vfs.read("/docs/new.c").expect("saved"), b"int x;");
     }
 
@@ -605,8 +606,8 @@ mod tests {
         let mut vfs = vfs();
         let mut app = app("data");
         assert!(app.save_as("copy.txt"));
-        assert_eq!(app.viewing_file(), Some("/docs/copy.txt"));
         app.apply_vfs_ops(&mut vfs);
+        assert_eq!(app.viewing_file(), Some("/docs/copy.txt"));
         assert_eq!(vfs.read("/docs/copy.txt").expect("saved"), b"data");
     }
 
@@ -619,6 +620,62 @@ mod tests {
         assert!(app.is_modified());
         let status = app.status_message.clone().unwrap_or_default();
         assert!(status.contains("Save failed"), "{status}");
+    }
+
+    #[test]
+    fn failed_save_as_keeps_the_original_path() {
+        let mut vfs = vfs();
+        let mut app = TextEditorApp::open_file("/docs/a.c", "int x;");
+        app.save_as("/missing/dir/x.txt");
+        app.apply_vfs_ops(&mut vfs);
+        assert_eq!(app.viewing_file(), Some("/docs/a.c"));
+        assert_eq!(app.file_type, FileType::C);
+        assert_eq!(app.content.title, "Text Editor - a.c");
+    }
+
+    #[test]
+    fn untitled_relative_save_as_goes_to_home_user() {
+        let mut vfs = vfs();
+        vfs.mkdir("/home/user").expect("mkdir");
+        let mut app = TextEditorApp::new("/apps/editor");
+        app.insert_char('z');
+        assert!(app.save_as("notes.txt"));
+        app.apply_vfs_ops(&mut vfs);
+        assert_eq!(app.viewing_file(), Some("/home/user/notes.txt"));
+        assert_eq!(vfs.read("/home/user/notes.txt").expect("saved"), b"z");
+    }
+
+    #[test]
+    fn crlf_files_are_saved_as_crlf() {
+        let mut vfs = vfs();
+        vfs.write("/docs/w.txt", b"one\r\ntwo\r\n").expect("write");
+        let mut app = TextEditorApp::open_from_vfs("/docs/w.txt", &vfs);
+        app.insert_char('!');
+        app.save();
+        app.apply_vfs_ops(&mut vfs);
+        assert_eq!(vfs.read("/docs/w.txt").expect("read"), b"!one\r\ntwo\r\n");
+    }
+
+    #[test]
+    fn non_utf8_files_open_read_only() {
+        let mut vfs = vfs();
+        let original = b"caf\xe9\n".to_vec();
+        vfs.write("/docs/latin1.txt", &original).expect("write");
+        let mut app = TextEditorApp::open_from_vfs("/docs/latin1.txt", &vfs);
+        app.insert_char('x');
+        app.save();
+        assert!(!app.apply_vfs_ops(&mut vfs), "in-place save refused");
+        assert_eq!(vfs.read("/docs/latin1.txt").expect("read"), original);
+        let status = app.status_message.clone().unwrap_or_default();
+        assert!(status.contains("Read-only"), "{status}");
+        assert!(!app.save_as("/docs/latin1.txt"), "same path refused too");
+        // Save As to another path writes a copy and leaves read-only mode.
+        assert!(app.save_as("/docs/copy.txt"));
+        assert!(app.apply_vfs_ops(&mut vfs));
+        assert!(vfs.exists("/docs/copy.txt"));
+        app.save();
+        assert!(app.apply_vfs_ops(&mut vfs), "the copy is writable");
+        assert_eq!(vfs.read("/docs/latin1.txt").expect("read"), original);
     }
 
     // -- Selection + clipboard --

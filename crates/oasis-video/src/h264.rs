@@ -2,6 +2,7 @@
 
 use openh264::OpenH264API;
 use openh264::decoder::{Decoder, DecoderConfig, Flush};
+use openh264::formats::YUVSource;
 
 use crate::VideoError;
 
@@ -109,18 +110,18 @@ impl H264Decoder {
 
 /// Convert an openh264 YUV picture to an RGBA frame.
 fn yuv_to_frame(yuv: &openh264::decoder::DecodedYUV<'_>) -> DecodedFrame {
-    // dimensions_uv() returns (w/2, h/2); full frame is double.
-    let (uv_w, uv_h) = yuv.dimensions_uv();
-    let w = (uv_w * 2) as u32;
-    let h = (uv_h * 2) as u32;
+    // The luma dimensions: `write_rgba8` asserts the buffer is exactly
+    // w * h * 4 (doubling `dimensions_uv()`, as this used to, is off by one
+    // for an odd dimension).
+    let (w, h) = yuv.dimensions();
 
     // Use openh264's optimized YUV→RGBA converter (SIMD when width % 8 == 0).
-    let mut rgba = vec![0u8; (w * h * 4) as usize];
+    let mut rgba = vec![0u8; w * h * 4];
     yuv.write_rgba8(&mut rgba);
 
     DecodedFrame {
         rgba,
-        width: w,
-        height: h,
+        width: w as u32,
+        height: h as u32,
     }
 }

@@ -73,7 +73,7 @@ impl WidgetState {
 pub struct WidgetStateColors {
     /// Neutral (button-like) background fill.
     pub background: Color,
-    /// Foreground text / content color.
+    /// Label color on that fill ([`Theme::button_label`]).
     pub text: Color,
     /// Border / outline color.
     pub border: Color,
@@ -83,12 +83,11 @@ impl WidgetStateColors {
     /// Resolve the neutral-surface color trio for `state`.
     ///
     /// Equivalent to reading [`neutral_bg`](Self::neutral_bg),
-    /// [`content_text`](Self::content_text) and [`border`](Self::border)
-    /// individually.
+    /// [`Theme::button_label`] and [`border`](Self::border) individually.
     pub fn resolve(theme: &Theme, state: WidgetState) -> Self {
         Self {
             background: Self::neutral_bg(theme, state),
-            text: Self::content_text(theme, state),
+            text: theme.button_label(state.is_disabled()),
             border: Self::border(theme, state),
         }
     }
@@ -158,7 +157,7 @@ impl WidgetStateColors {
             WidgetState::Normal => base,
             WidgetState::Hover => base.lerp(theme.text_primary, HOVER_TINT),
             WidgetState::Pressed => base.lerp(theme.text_primary, PRESSED_TINT),
-            WidgetState::Disabled => Color::rgba(base.r, base.g, base.b, base.a / 2),
+            WidgetState::Disabled => base.with_alpha(base.a / 2),
         }
     }
 

@@ -31,9 +31,10 @@ const PROBE_WAIT_WINDOW: u64 = 64 * 1024;
 const PROBE_WAIT_LIMIT: std::time::Duration = std::time::Duration::from_secs(10);
 
 /// Maximum buffer size before a warning is logged (during init phase).
-/// The demuxer's `read_to_end()` + `seek(0)` pattern requires the full file
-/// in memory during init; eviction MUST NOT remove data before seek-back.
-/// Actual eviction only begins after the `on_init` callback enables it.
+/// While the decoder opens it seeks back to the start of the file (the
+/// container probe, and `open_stream`'s rewind after its moov lookup), so
+/// eviction MUST NOT remove data before then: it only begins once the
+/// `on_init` callback enables it, and until then the buffer can grow.
 #[cfg(feature = "_video")]
 const INIT_WARN_THRESHOLD: usize = 128 * 1024 * 1024; // 128 MB
 
@@ -89,8 +90,8 @@ pub struct StreamingInner {
     /// instead of blocking.  Used during symphonia's probe phase so
     /// ignore_bytes() can skip the mdat body without downloading it.
     pub(crate) probe_mode: std::sync::atomic::AtomicBool,
-    /// Whether sliding-window eviction is active. Starts `false` to allow
-    /// the demuxer to `read_to_end` + `seek(Start(0))` without data loss;
+    /// Whether sliding-window eviction is active. Starts `false` so the
+    /// decoder's open (probe, moov lookup, `seek(Start(0))`) loses no data;
     /// enabled via [`Self::enable_eviction`] after the decoder's probe.
     /// Eviction runs on the download thread inside [`Self::push`] so the
     /// decoder's read path never pays for the multi-MB `copy_within`.
@@ -172,7 +173,7 @@ impl StreamingInner {
         // Warn once when buffer is large (init phase holds entire file).
         if buf_len > INIT_WARN_THRESHOLD && (buf_len - chunk.len()) <= INIT_WARN_THRESHOLD {
             log::warn!(
-                "TV: buffer reached {:.0}MB during init (file held in memory until demuxer probes)",
+                "TV: buffer reached {:.0}MB during init (no eviction until the decoder opens)",
                 buf_len as f64 / (1024.0 * 1024.0),
             );
         }
@@ -220,6 +221,14 @@ impl StreamingInner {
             let scan_pos = s.atoms_scanned_to;
             // Need at least 8 bytes for the atom header.
             if scan_pos + 8 > total {
+                break;
+            }
+            // Scanning stalled before the window (a size-0 or invalid atom
+            // stops it) and eviction or a seek restart has since moved the
+            // window past that point: those bytes are gone, so there is
+            // nothing left to scan.  (`scan_pos - base_offset` underflowed
+            // here and panicked the download thread.)
+            if scan_pos < s.base_offset {
                 break;
             }
             let buf_off = (scan_pos - s.base_offset) as usize;
@@ -296,12 +305,20 @@ impl StreamingInner {
 
         // Update retained file header -- includes all scanned atom
         // headers so symphonia can discover the file structure after
-        // a seek restart.  We save up to atoms_scanned_to + 16
-        // (for the next atom's header), capped to avoid saving large
-        // moov bodies (moov is retained separately).
+        // a seek restart.  We save the complete atoms plus the next atom's
+        // header (16 bytes, room for an extended size).  When the last
+        // scanned atom is still arriving (the `mdat` body), stop at its
+        // header: `atoms_scanned_to` already points past its end, and
+        // keeping "up to there" re-copied the whole growing buffer on every
+        // push (quadratic) and pinned a duplicate of it as the header.
         if s.base_offset == 0 && s.atoms_scanned_to > 0 {
-            let scan_end = (s.atoms_scanned_to - s.base_offset) as usize;
-            let keep = (scan_end + 16).min(s.buf.len());
+            let header_end = match s.atoms.last() {
+                Some(&(off, size, _)) if off + size > total => off + 16,
+                _ => s.atoms_scanned_to + 16,
+            };
+            let keep = usize::try_from(header_end)
+                .unwrap_or(usize::MAX)
+                .min(s.buf.len());
             // Don't replace an existing larger header.
             let current_len = s.header.as_ref().map_or(0, |h| h.len());
             if keep > current_len {
@@ -316,7 +333,7 @@ impl StreamingInner {
             let mut s = self.state.lock().unwrap_or_else(|e| e.into_inner());
             // Final scan -- handle size==0 atoms (extends to EOF).
             let total = s.base_offset + s.buf.len() as u64;
-            if s.atoms_scanned_to < total {
+            if s.atoms_scanned_to < total && s.atoms_scanned_to >= s.base_offset {
                 let scan_pos = s.atoms_scanned_to;
                 let buf_off = (scan_pos - s.base_offset) as usize;
                 if buf_off + 8 <= s.buf.len() {
@@ -348,28 +365,31 @@ impl StreamingInner {
                     } else {
                         size32 as u64
                     };
+                    // Same plausibility bound as `scan_atoms`: a corrupt
+                    // extended size overflowed the offset math below.
+                    if (8..=MAX_ATOM_SIZE).contains(&atom_size) {
+                        s.atoms.push((scan_pos, atom_size, fourcc));
+                        s.atoms_scanned_to = scan_pos + atom_size;
 
-                    s.atoms.push((scan_pos, atom_size, fourcc));
-                    s.atoms_scanned_to = scan_pos + atom_size;
-
-                    // Retain moov if found at end of file (only if complete).
-                    if &fourcc == b"moov" && s.moov.is_none() {
-                        let expected_end = buf_off + atom_size as usize;
-                        if expected_end <= s.buf.len() {
-                            let moov_data = s.buf[buf_off..expected_end].to_vec();
-                            log::info!(
-                                "TV: retained moov atom ({} bytes) at offset \
-                                 {scan_pos} (end of file)",
-                                moov_data.len(),
-                            );
-                            s.moov = Some((scan_pos, std::sync::Arc::new(moov_data)));
-                        } else {
-                            log::warn!(
-                                "TV: moov at offset {scan_pos} truncated \
-                                 ({} of {} bytes available)",
-                                s.buf.len() - buf_off,
-                                atom_size,
-                            );
+                        // Retain moov if found at end of file (only if complete).
+                        if &fourcc == b"moov" && s.moov.is_none() {
+                            let expected_end = buf_off + atom_size as usize;
+                            if expected_end <= s.buf.len() {
+                                let moov_data = s.buf[buf_off..expected_end].to_vec();
+                                log::info!(
+                                    "TV: retained moov atom ({} bytes) at offset \
+                                     {scan_pos} (end of file)",
+                                    moov_data.len(),
+                                );
+                                s.moov = Some((scan_pos, std::sync::Arc::new(moov_data)));
+                            } else {
+                                log::warn!(
+                                    "TV: moov at offset {scan_pos} truncated \
+                                     ({} of {} bytes available)",
+                                    s.buf.len() - buf_off,
+                                    atom_size,
+                                );
+                            }
                         }
                     }
                 }
@@ -568,9 +588,9 @@ pub(crate) fn should_throttle_pure(
 /// separately and never evicted.
 ///
 /// Eviction is disabled by default and must be enabled via
-/// `StreamingInner::enable_eviction` after the demuxer has finished its
-/// initial full-file scan (avcC + probe). This prevents evicting data that
-/// the demuxer needs to seek back to during initialization.
+/// `StreamingInner::enable_eviction` after the decoder has opened (moov
+/// lookup + container probe). This prevents evicting data that the demuxer
+/// needs to seek back to during initialization.
 #[cfg(feature = "_video")]
 pub(crate) struct StreamingBuffer {
     inner: std::sync::Arc<StreamingInner>,
@@ -581,8 +601,8 @@ pub(crate) struct StreamingBuffer {
     last_notify_pos: u64,
     /// Last time a "waiting for data" message was logged (rate-limits spam).
     last_wait_log: Option<std::time::Instant>,
-    /// Cached header (ftyp) data — once set it never changes, so reads from
-    /// the header region can be served without acquiring the state mutex.
+    /// Copy of the retained file header (refreshed when the state's copy
+    /// grows); serves the file start once the window has moved past it.
     cached_header: Option<Vec<u8>>,
     /// Cached moov atom — once set it never changes. Reads from the moov
     /// region can be served without acquiring the state mutex.
@@ -610,10 +630,13 @@ impl StreamingBuffer {
 impl std::io::Read for StreamingBuffer {
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
         let n = loop {
-            // Check for cancellation first.
+            // Check for cancellation first.  Not `Interrupted`: std's
+            // `read_exact` and symphonia's `read_buf_exact` retry that kind
+            // forever, so a decoder thread inside one of them spun at 100%
+            // CPU after a channel change instead of ending.
             if self.inner.is_cancelled() {
                 return Err(std::io::Error::new(
-                    std::io::ErrorKind::Interrupted,
+                    std::io::ErrorKind::ConnectionAborted,
                     "streaming session cancelled",
                 ));
             }
@@ -622,17 +645,8 @@ impl std::io::Read for StreamingBuffer {
                 return Err(std::io::Error::other(e.clone()));
             }
 
-            // Try serving from cached header/moov without acquiring the lock.
-            // These are set once and never modified, so lock-free access is safe.
-            if let Some(ref hdr) = self.cached_header
-                && (self.pos as usize) < hdr.len()
-            {
-                let local = self.pos as usize;
-                let n = buf.len().min(hdr.len() - local);
-                buf[..n].copy_from_slice(&hdr[local..local + n]);
-                self.pos += n as u64;
-                break n;
-            }
+            // Try serving from the cached moov without acquiring the lock.
+            // It is set once and never modified, so lock-free access is safe.
             if let Some((moov_off, ref moov_data)) = self.cached_moov {
                 let moov_end = moov_off + moov_data.len() as u64;
                 if self.pos >= moov_off && self.pos < moov_end {
@@ -646,9 +660,14 @@ impl std::io::Read for StreamingBuffer {
 
             let s = self.inner.state.lock().unwrap_or_else(|e| e.into_inner());
 
-            // Populate caches from state if not yet set (one-time copy).
-            if self.cached_header.is_none()
-                && let Some(ref hdr) = s.header
+            // Populate caches from state.  The retained header can still
+            // grow (or be replaced by a seek restart's larger copy), so
+            // refresh the cache whenever the state's copy is longer.
+            if let Some(ref hdr) = s.header
+                && self
+                    .cached_header
+                    .as_ref()
+                    .is_none_or(|c| c.len() < hdr.len())
             {
                 self.cached_header = Some(hdr.clone());
             }
@@ -658,18 +677,9 @@ impl std::io::Read for StreamingBuffer {
                 self.cached_moov = Some((off, std::sync::Arc::clone(arc)));
             }
 
-            // Retry header/moov from newly-populated caches before hitting
-            // the sliding buffer.  This handles the first read after moov
+            // Retry moov from the newly-populated cache before hitting the
+            // sliding buffer.  This handles the first read after moov
             // becomes available.
-            if let Some(ref hdr) = self.cached_header
-                && (self.pos as usize) < hdr.len()
-            {
-                let local = self.pos as usize;
-                let n = buf.len().min(hdr.len() - local);
-                buf[..n].copy_from_slice(&hdr[local..local + n]);
-                self.pos += n as u64;
-                break n;
-            }
             if let Some((moov_off, ref moov_data)) = self.cached_moov {
                 let moov_end = moov_off + moov_data.len() as u64;
                 if self.pos >= moov_off && self.pos < moov_end {
@@ -687,6 +697,20 @@ impl std::io::Read for StreamingBuffer {
                 let local = (self.pos - s.base_offset) as usize;
                 let n = buf.len().min(s.buf.len() - local);
                 buf[..n].copy_from_slice(&s.buf[local..local + n]);
+                self.pos += n as u64;
+                break n;
+            }
+
+            // Then the retained header, for the file start once the window
+            // has moved on (eviction or a seek restart).  Checked after the
+            // window so a read the window covers is not cut short at the
+            // header's end.
+            if let Some(ref hdr) = self.cached_header
+                && self.pos < hdr.len() as u64
+            {
+                let local = self.pos as usize;
+                let n = buf.len().min(hdr.len() - local);
+                buf[..n].copy_from_slice(&hdr[local..local + n]);
                 self.pos += n as u64;
                 break n;
             }
@@ -914,9 +938,9 @@ impl std::io::Seek for StreamingBuffer {
 
 // StreamingBuffer is automatically Send + Sync because all fields are:
 // - Arc<StreamingInner> (Send + Sync, all inner fields are Mutex/Atomic)
-// - u64, bool (trivially Send + Sync)
-// - Arc<AtomicBool> (Send + Sync)
-// No manual unsafe impl needed.
+// - u64, Option<Instant>, Option<Vec<u8>> (trivially Send + Sync)
+// - Option<(u64, Arc<Vec<u8>>)> (Send + Sync)
+// No manual unsafe impl needed (`tests.rs` asserts it at compile time).
 
 // ---------------------------------------------------------------------------
 // Item 72: StreamingBuffer throttle logic tests

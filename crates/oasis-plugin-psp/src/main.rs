@@ -16,9 +16,10 @@
 //!
 //! ## Memory Budget
 //!
-//! Target: <72KB total (code + data). No heap allocator -- stack + static
-//! buffers only. PIP video buffers (~113KB) allocated on-demand from
-//! user-memory partition 2.
+//! ~153 KB PRX once stripped with `prxmin` (CI budget 192 KiB), ~212 KB
+//! resident including `.bss`; see docs/psp-plugin.md "Memory Budget". No
+//! heap allocator for the overlay itself -- stack + static buffers only. PIP
+//! video buffers (~113KB) allocated on-demand from user-memory partition 2.
 
 #![no_std]
 #![no_main]
@@ -610,6 +611,7 @@ fn psp_main() {
         devloop::start();
         // Park the main thread — devloop runs in its own thread.
         loop {
+            // SAFETY: plain microsecond delay.
             unsafe { psp::sys::sceKernelDelayThread(10_000_000) };
         }
     }
@@ -634,6 +636,8 @@ fn psp_main() {
         me_dump::start_dump_thread();
 
         // Boot ME and hook sceMpegAvcDecode to use sceMeVideo_driver.
+        // SAFETY: called exactly once, here in psp_main, before the hooked
+        // syscall can be reached by the overlay threads started above.
         unsafe { setup_me_decode_hook() };
 
         // If pip_enabled is set in config, send the initial toggle command

@@ -45,27 +45,27 @@ Key entry points (paths are `crates/oasis-js/src/engine.rs`):
 | `set_max_exec_ms(ms)` (engine.rs:109) | Execution budget per guarded entry (eval, timer tick, microtask drain, guarded event dispatch). Default `DEFAULT_MAX_EXEC_MS` = 5 s; `oasis-browser` sets it from `BrowserConfig::js_max_exec_ms` (2 s desktop, 500 ms PSP). See [Watchdog](#watchdog). |
 | `eval(script)` (engine.rs:124) | Evaluate a single script. Returns `Result<JsValue, JsError>`. Drains the promise microtask queue (bounded) afterwards. |
 | `eval_all(&[scripts])` (engine.rs:144) | Evaluate each script in document order and collect a `Vec<Result<JsValue, JsError>>` with one entry per input. A failed script does not halt the loop — subsequent scripts still run, and the returned vector preserves index alignment with the input slice. |
-| `tick_timers(dt_ms)` (engine.rs:187) | Advance the timer queue by `dt_ms` and fire due callbacks until the tick's `max_exec_ms` budget is spent; timers still due then are deferred to the next tick. Drains microtasks after each callback. Returns the number of callbacks that ran. Call once per host frame. |
-| `deferred_timer_count()` (engine.rs:227) | Timers that came due but were deferred by the per-tick budget. |
-| `drain_microtasks()` (engine.rs:258) | Run pending promise jobs, bounded by the deadline and `MAX_MICROTASKS_PER_DRAIN`. Returns the number of jobs run. |
-| `console_output()` / `take_console_output()` (engine.rs:149, 154) | Snapshot or drain the buffered console. |
-| `local_storage()` (engine.rs:160) | Borrow the in-memory `localStorage` area (`LocalStorage`, 5 MiB quota) for snapshot or restore. |
-| `install_fetch_handler(Box::new(handler))` (engine.rs:166) | Install an HTTP transport. Replaces any previous handler. See [Fetch](#fetch). |
-| `with_context_guarded(\|ctx\| ...)` (engine.rs:276) | Raw `Ctx` access with the watchdog armed. Use whenever the closure calls into page JS (event dispatch). |
-| `with_context(\|ctx\| ...)` (engine.rs:336) | Unguarded escape hatch for raw `rquickjs::Ctx<'_>` access. Used by `oasis-browser` to register DOM globals; do **not** call page JS through it. |
+| `tick_timers(dt_ms)` (engine.rs:189) | Advance the timer queue by `dt_ms` and fire due callbacks until the tick's `max_exec_ms` budget is spent; timers still due then are deferred to the next tick. Drains microtasks after each callback. Returns the number of callbacks that ran. Call once per host frame. |
+| `deferred_timer_count()` (engine.rs:229) | Timers that came due but were deferred by the per-tick budget. |
+| `drain_microtasks()` (engine.rs:260) | Run pending promise jobs, bounded by the deadline and `MAX_MICROTASKS_PER_DRAIN`. Returns the number of jobs run. |
+| `console_output()` / `take_console_output()` (engine.rs:151, 156) | Snapshot or drain the buffered console (bounded; see [Console buffer](#console-buffer)). |
+| `local_storage()` (engine.rs:162) | Borrow the in-memory `localStorage` area (`LocalStorage`, 5 MiB quota) for snapshot or restore. |
+| `install_fetch_handler(Box::new(handler))` (engine.rs:168) | Install an HTTP transport. Replaces any previous handler. See [Fetch](#fetch). |
+| `with_context_guarded(\|ctx\| ...)` (engine.rs:278) | Raw `Ctx` access with the watchdog armed. Use whenever the closure calls into page JS (event dispatch). |
+| `with_context(\|ctx\| ...)` (engine.rs:338) | Unguarded escape hatch for raw `rquickjs::Ctx<'_>` access. Used by `oasis-browser` to register DOM globals; do **not** call page JS through it. |
 
 There is no explicit shutdown; dropping the `JsEngine` runs the QuickJS
 finalizers and releases the runtime.
 
 ## Value bridge
 
-`JsValue` (`types.rs:16`) is the engine-agnostic surface that crosses the FFI
+`JsValue` (`types.rs:17`) is the engine-agnostic surface that crosses the FFI
 boundary. It collapses to one of `Undefined | Null | Bool | Int | Float |
 String`. Objects and arrays appear as `JsValue::String("[object]")`. Code that
 needs structured data should use `with_context` to operate on `rquickjs::Value`
 directly.
 
-`JsError` (`types.rs:104`) carries a message and an optional stack. Display
+`JsError` (`types.rs:106`) carries a message and an optional stack. Display
 formats as `"<message>\n<stack>"` when a stack is present; non-object throws
 (e.g. `throw "boom"`) coerce to a string message.
 
@@ -73,8 +73,12 @@ formats as `"<message>\n<stack>"` when a stack is present; non-object throws
 
 `JsEngine` installs a JS `console` global with `log` / `info` / `warn` /
 `error`. Each call appends a `ConsoleEntry { level, message }` to an internal
-ring (`console.rs:9`). Eval errors and unhandled exceptions are also pushed at
-`ConsoleLevel::Error`. The host owns drain semantics: call
+ring (`ConsoleLog` in `console.rs`). Eval errors and unhandled exceptions are
+also pushed at `ConsoleLevel::Error`. The ring lives on the Rust side, outside
+the QuickJS heap limit, so it is bounded on its own: it keeps the newest
+`MAX_CONSOLE_ENTRIES` (1000) entries and cuts each message to
+`MAX_CONSOLE_MESSAGE_BYTES` (4 KiB, marked with a trailing `…`). The host owns
+drain semantics: call
 `take_console_output()` per frame and forward to whatever surface is
 appropriate (terminal pane, browser devtools, log file).
 

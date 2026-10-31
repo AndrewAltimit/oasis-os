@@ -6,20 +6,20 @@ An embeddable operating system framework in Rust. One codebase renders a full de
 
 https://github.com/user-attachments/assets/8e12988e-fb1a-4a4e-a0e5-e1f04d8cd433
 
-| Altimit | Paper | XP | Win95 | Retro CGA |
+| PSIX HiFi | Altimit | XP | Win95 | Retro CGA |
 |:---:|:---:|:---:|:---:|:---:|
-| ![Altimit](screenshots/altimit/01_dashboard.png) | ![Paper](screenshots/paper/01_dashboard.png) | ![XP](screenshots/xp/01_dashboard.png) | ![Win95](screenshots/win95/01_dashboard.png) | ![Retro CGA](screenshots/retro-cga/01_dashboard.png) |
+| ![PSIX HiFi](screenshots/psix-hifi/01_dashboard.png) | ![Altimit](screenshots/altimit/01_dashboard.png) | ![XP](screenshots/xp/01_dashboard.png) | ![Win95](screenshots/win95/01_dashboard.png) | ![Retro CGA](screenshots/retro-cga/01_dashboard.png) |
 
-| macOS | GNOME | Balatro | Solarized | Vaporwave |
+| macOS | GNOME | Balatro | Paper | Vaporwave |
 |:---:|:---:|:---:|:---:|:---:|
-| ![macOS](screenshots/macos/01_dashboard.png) | ![GNOME](screenshots/gnome/01_dashboard.png) | ![Balatro](screenshots/balatro/01_dashboard.png) | ![Solarized](screenshots/solarized/01_dashboard.png) | ![Vaporwave](screenshots/vaporwave/01_dashboard.png) |
+| ![macOS](screenshots/macos/01_dashboard.png) | ![GNOME](screenshots/gnome/01_dashboard.png) | ![Balatro](screenshots/balatro/01_dashboard.png) | ![Paper](screenshots/paper/01_dashboard.png) | ![Vaporwave](screenshots/vaporwave/01_dashboard.png) |
 
 ## Platforms
 
 | Target | Backend | Build | Guide |
 |--------|---------|-------|-------|
-| Desktop (Linux, Windows; Raspberry Pi planned) | SDL3 | `cargo build --release -p oasis-app` | [Getting Started](docs/getting-started.md) |
-| Web | WASM + Canvas 2D | `./scripts/build-wasm.sh --release` | [WASM Backend](docs/wasm-backend.md) |
+| Desktop (Linux, macOS, Windows) and Raspberry Pi | SDL3 | `cargo build --release -p oasis-app` | [Getting Started](docs/getting-started.md) |
+| Web | WASM: Canvas 2D, DOM input, HTML `<audio>` | `./scripts/build-wasm.sh --release` | [WASM Backend](docs/wasm-backend.md) |
 | PSP / PPSSPP | sceGu hardware GPU, Media Engine video | `RUST_PSP_BUILD_STD=1 cargo psp --release` in `crates/oasis-backend-psp` | [PSP Architecture](docs/psp-architecture.md) |
 | Unreal Engine 5 (or any C host) | Software RGBA framebuffer over a C ABI | `cargo build --profile release-ffi -p oasis-ffi` | [FFI Integration](docs/ffi-integration.md) |
 
@@ -43,17 +43,18 @@ Per-platform dependencies, feature flags (`skin-dev`, `mcp`), environment variab
 **Shell and apps**
 - 15 apps: File Manager, Browser, TV Guide, Internet Radio, Music Player, Photo Viewer, Paint, Games, Calculator, Text Editor, Terminal, Settings, Network, Package Manager, System Monitor
 - Terminal with ~95 commands plus 20 shell builtins: piping, globs, aliases, `$(...)`, `if`/`while`/`for`/`case` scripting, background jobs, readline editing, tab completion, persistent history ([catalogue](docs/terminal-commands.md))
-- Window manager with drag/resize, snapping, Alt+Tab, tiling layouts, virtual desktops and animations ([API](docs/window-manager.md))
-- TV Guide streams Internet Archive video with hardware H.264 decode on PSP and software decode on desktop; Internet Radio streams curated Archive collections
+- Window manager with drag/resize, edge snapping with previews, Alt+Tab, five tiling layouts, virtual desktops and animations ([API](docs/window-manager.md))
+- TV Guide streams Internet Archive video (progressive download, CDN failover, an MP4 demuxer hardened against hostile files) with hardware H.264 decode on PSP and ffmpeg / openh264 on desktop; Internet Radio streams curated Archive collections; the Music Player shuffles, repeats and auto-advances
 
 **Browser engine** ([feature catalogue](docs/browser-engine.md))
 - HTML/CSS with the full cascade, flex, table and Grid layout, 2D + 3D transforms, `@media` / `@container` / `@layer` / `@supports`, `var()`, transitions, Canvas 2D, SVG, forms, web fonts, reader mode, Gemini
 - JavaScript via QuickJS-NG on the desktop shell (optional `javascript` feature, on by default) and on real PSP hardware: a broad DOM API, Promise-based `fetch()`, per-origin storage, and per-tick time and heap budgets so runaway scripts cannot freeze the shell
-- HTTP/1.1 + HTTP/2 over rustls with an RFC 6265 cookie jar, enforced CSP and per-hop redirect rules ([security model](docs/security.md))
+- HTTP/1.1 + HTTP/2 over rustls with an RFC 6265 cookie jar (`SameSite` included), enforced CSP (`script-src` / `style-src` / `connect-src`) and per-hop redirect rules ([security model](docs/security.md))
+- Built for hostile input: DOM depth and node caps, saturating layout and paint arithmetic, bounded HTTP/2 and HPACK, and a property-based fuzz test over the whole parse-style-layout-paint pipeline
 
 **Rendering and theming**
 - Scene graph (SDI) with z-order, gradients, rounded corners, shadows and exact dirty tracking so idle frames skip redraws
-- 29 widgets plus list, menu, nine-patch, icon atlas and flex/grid layout helpers ([catalogue](docs/ui-widgets.md))
+- 27 widgets plus list, menu, nine-patch, focus and flex/grid layout helpers ([catalogue](docs/ui-widgets.md))
 - 17 skins, each an editable TOML directory under [`skins/`](skins/) with theme derivation from 9 base colors ([authoring guide](docs/skin-authoring.md))
 - 8 animated shader wallpapers, each with a GPU and a CPU implementation ([shaders](docs/shaders.md)); resolution-independent vector icons and animations
 
@@ -86,12 +87,12 @@ PSP builds, PPSSPP testing and the devloop scripts: [Getting Started § PSP](doc
 
 ## Architecture: write once, render anywhere
 
-Core code never calls platform APIs. Rendering, input, networking and audio go through backend traits in `oasis-types`: implement the 13 required `SdiCore` methods and you have a working backend; the 53 methods of the nine extension traits have defaults that draw the same pixels as the native rasterizers, so overriding them is only for speed. Every backend follows one drawing-state contract, pinned by conformance tests ([design §5](docs/design.md#5-backend-abstraction-layer), [ADR-003](docs/adr/003-backend-trait-design.md)).
+Core code never calls platform APIs. Rendering, input, networking and audio go through backend traits in `oasis-types`: implement the 13 required `SdiCore` methods and you have a working backend; the 46 methods of the eight extension traits have defaults that draw the same pixels as the native rasterizers, so overriding them is only for speed. Every backend follows one drawing-state contract, pinned by conformance tests ([design §5](docs/design.md#5-backend-abstraction-layer), [ADR-003](docs/adr/003-backend-trait-design.md)).
 
 ```mermaid
 graph TD
-    APP["<b>OASIS_OS</b><br/>oasis-core + oasis-apps (10 app crates)<br/>29 widgets, browser, terminal<br/>17 skins, ~95 commands"]
-    TRAITS["<b>Backend Traits</b><br/>SdiCore (13 required) + 9 extension traits (53 defaults)<br/>InputBackend / NetworkBackend / AudioBackend"]
+    APP["<b>OASIS_OS</b><br/>oasis-core + oasis-apps (10 app crates)<br/>27 widgets, browser, terminal<br/>17 skins, ~95 commands"]
+    TRAITS["<b>Backend Traits</b><br/>SdiCore (13 required) + 8 extension traits (46 defaults)<br/>InputBackend / NetworkBackend / AudioBackend"]
 
     SDL["<b>SDL3</b><br/>Desktop + Pi"]
     WASM["<b>WASM</b><br/>Canvas 2D"]

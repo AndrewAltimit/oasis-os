@@ -133,10 +133,13 @@ pub extern "C" fn fmin(x: c_double, y: c_double) -> c_double {
     ::libm::fmin(x, y)
 }
 
+/// # Safety
+/// `exp_out` must be null or valid for a `c_int` write (C `frexp` contract).
 #[unsafe(no_mangle)]
-pub extern "C" fn frexp(x: c_double, exp_out: *mut c_int) -> c_double {
+pub unsafe extern "C" fn frexp(x: c_double, exp_out: *mut c_int) -> c_double {
     let (m, e) = ::libm::frexp(x);
     if !exp_out.is_null() {
+        // SAFETY: non-null and writable per the caller contract.
         unsafe { *exp_out = e as c_int };
     }
     m
@@ -163,6 +166,8 @@ unsafe fn cstr_bytes<'a>(s: *const c_char) -> &'a [u8] {
         return &[];
     }
     let mut len = 0usize;
+    // SAFETY: `s` is a NUL-terminated string (caller contract), so every
+    // byte up to and including the terminator is readable.
     unsafe {
         while *s.add(len) != 0 {
             len += 1;
@@ -178,6 +183,8 @@ pub unsafe extern "C" fn strchr(s: *const c_char, c: c_int) -> *mut c_char {
     }
     let target = c as u8;
     let mut p = s;
+    // SAFETY: `s` is NUL-terminated (C contract); the scan stops at the
+    // terminator.
     unsafe {
         loop {
             let byte = *p as u8;
@@ -198,14 +205,17 @@ pub unsafe extern "C" fn strrchr(s: *const c_char, c: c_int) -> *mut c_char {
         return ptr::null_mut();
     }
     let target = c as u8;
+    // SAFETY: `s` is non-null and NUL-terminated (C contract).
     let bytes = unsafe { cstr_bytes(s) };
     for (i, b) in bytes.iter().enumerate().rev() {
         if *b == target {
+            // SAFETY: i < bytes.len(), inside the string.
             return unsafe { s.add(i) as *mut c_char };
         }
     }
     if target == 0 {
         // `strrchr(s, 0)` returns a pointer to the terminator.
+        // SAFETY: the terminator is part of the allocation.
         return unsafe { s.add(bytes.len()) as *mut c_char };
     }
     ptr::null_mut()
@@ -214,6 +224,9 @@ pub unsafe extern "C" fn strrchr(s: *const c_char, c: c_int) -> *mut c_char {
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn strcmp(a: *const c_char, b: *const c_char) -> c_int {
     let mut i = 0usize;
+    // SAFETY: both strings are NUL-terminated (C contract); the loop stops
+    // at the first difference or the shared terminator, so it never reads
+    // past either one.
     unsafe {
         loop {
             let ca = *a.add(i) as u8;
@@ -234,8 +247,8 @@ pub unsafe extern "C" fn strstr(haystack: *const c_char, needle: *const c_char) 
     if haystack.is_null() || needle.is_null() {
         return ptr::null_mut();
     }
-    let hay = unsafe { cstr_bytes(haystack) };
-    let nee = unsafe { cstr_bytes(needle) };
+    // SAFETY: both non-null and NUL-terminated (C contract).
+    let (hay, nee) = unsafe { (cstr_bytes(haystack), cstr_bytes(needle)) };
     if nee.is_empty() {
         return haystack as *mut c_char;
     }
@@ -245,6 +258,7 @@ pub unsafe extern "C" fn strstr(haystack: *const c_char, needle: *const c_char) 
     let last = hay.len() - nee.len();
     for i in 0..=last {
         if &hay[i..i + nee.len()] == nee {
+            // SAFETY: i <= hay.len() - nee.len(), inside the string.
             return unsafe { haystack.add(i) as *mut c_char };
         }
     }
@@ -257,8 +271,10 @@ pub unsafe extern "C" fn memchr(s: *const c_void, c: c_int, n: usize) -> *mut c_
         return ptr::null_mut();
     }
     let target = c as u8;
+    // SAFETY: `s` is readable for `n` bytes (C `memchr` contract).
     let bytes = unsafe { slice::from_raw_parts(s as *const u8, n) };
     match bytes.iter().position(|b| *b == target) {
+        // SAFETY: i < n, inside the buffer.
         Some(i) => unsafe { (s as *const u8).add(i) as *mut c_void },
         None => ptr::null_mut(),
     }
@@ -268,10 +284,12 @@ pub unsafe extern "C" fn memchr(s: *const c_void, c: c_int, n: usize) -> *mut c_
 pub unsafe extern "C" fn strtod(nptr: *const c_char, endptr: *mut *mut c_char) -> c_double {
     if nptr.is_null() {
         if !endptr.is_null() {
+            // SAFETY: non-null `endptr` is writable (C `strtod` contract).
             unsafe { *endptr = ptr::null_mut() };
         }
         return 0.0;
     }
+    // SAFETY: `nptr` is non-null and NUL-terminated (C contract).
     let bytes = unsafe { cstr_bytes(nptr) };
     // Skip leading whitespace, then find the longest prefix that
     // parses as a decimal float. Rust's `f64::from_str` is stricter
@@ -319,6 +337,8 @@ pub unsafe extern "C" fn strtod(nptr: *const c_char, endptr: *mut *mut c_char) -
     };
     if !endptr.is_null() {
         let consumed = if saw_digit { end } else { 0 };
+        // SAFETY: `endptr` is writable; `consumed <= bytes.len()` stays
+        // inside the string.
         unsafe { *endptr = nptr.add(consumed) as *mut c_char };
     }
     value
@@ -369,6 +389,7 @@ pub unsafe extern "C" fn calloc(nmemb: usize, size: usize) -> *mut c_void {
     if total == 0 {
         return ptr::null_mut();
     }
+    // SAFETY: a non-null `malloc` result is writable for `total` bytes.
     unsafe {
         let p = malloc(total);
         if p.is_null() {
@@ -382,12 +403,17 @@ pub unsafe extern "C" fn calloc(nmemb: usize, size: usize) -> *mut c_void {
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn realloc(p: *mut c_void, new_size: usize) -> *mut c_void {
     if p.is_null() {
+        // SAFETY: plain allocation.
         return unsafe { malloc(new_size) };
     }
     if new_size == 0 {
+        // SAFETY: `p` came from libpsp's malloc (C `realloc` contract).
         unsafe { free(p) };
         return ptr::null_mut();
     }
+    // SAFETY: `p` came from libpsp's malloc, so its header gives its size;
+    // the copy is bounded by both block sizes, and `p` is freed only after
+    // the copy into the distinct new block.
     unsafe {
         let old_size = libpsp_user_size(p);
         let new_p = malloc(new_size);
@@ -438,6 +464,7 @@ pub unsafe extern "C" fn realloc(p: *mut c_void, new_size: usize) -> *mut c_void
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn snprintf(buf: *mut c_char, size: usize, _fmt: *const c_char) -> c_int {
     if !buf.is_null() && size > 0 {
+        // SAFETY: `buf` is writable for `size > 0` bytes (C contract).
         unsafe { buf.write(0) };
     }
     0
@@ -451,6 +478,7 @@ pub unsafe extern "C" fn vsnprintf(
     _ap: *const c_void,
 ) -> c_int {
     if !buf.is_null() && size > 0 {
+        // SAFETY: `buf` is writable for `size > 0` bytes (C contract).
         unsafe { buf.write(0) };
     }
     0
@@ -544,6 +572,8 @@ pub struct Tm {
 /// Read the PSP RTC and return (unix seconds, nanoseconds).
 fn rtc_now() -> (i64, i64) {
     use psp::sys;
+    // SAFETY: `tick` is a valid out-pointer; the resolution query takes no
+    // arguments.
     unsafe {
         let mut tick: u64 = 0;
         sys::sceRtcGetCurrentTick(&mut tick);
@@ -564,6 +594,7 @@ pub unsafe extern "C" fn clock_gettime(_clk_id: c_int, tp: *mut Timespec) -> c_i
         return -1;
     }
     let (s, n) = rtc_now();
+    // SAFETY: `tp` is non-null and writable (C contract).
     unsafe {
         (*tp).tv_sec = s as c_long;
         (*tp).tv_nsec = n as c_long;
@@ -577,6 +608,7 @@ pub unsafe extern "C" fn gettimeofday(tv: *mut Timeval, _tz: *mut c_void) -> c_i
         return -1;
     }
     let (s, n) = rtc_now();
+    // SAFETY: `tv` is non-null and writable (C contract).
     unsafe {
         (*tv).tv_sec = s as c_long;
         (*tv).tv_usec = (n / 1000) as c_long;
@@ -659,7 +691,10 @@ pub unsafe extern "C" fn gmtime_r(t: *const c_long, out: *mut Tm) -> *mut Tm {
     if t.is_null() || out.is_null() {
         return ptr::null_mut();
     }
+    // SAFETY: both pointers are non-null; `t` is readable and `out`
+    // writable (C `gmtime_r` contract).
     let secs = unsafe { *t } as i64;
+    // SAFETY: as above.
     unsafe {
         *out = Tm::default();
         unix_to_tm(secs, &mut *out);
@@ -670,6 +705,7 @@ pub unsafe extern "C" fn gmtime_r(t: *const c_long, out: *mut Tm) -> *mut Tm {
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn localtime_r(t: *const c_long, out: *mut Tm) -> *mut Tm {
     // PSP has no timezone database; "local" == UTC.
+    // SAFETY: same contract as `gmtime_r`.
     unsafe { gmtime_r(t, out) }
 }
 
@@ -678,8 +714,10 @@ pub unsafe extern "C" fn mktime(t: *mut Tm) -> c_long {
     if t.is_null() {
         return -1;
     }
+    // SAFETY: `t` is non-null and points to a valid `Tm` (C contract).
     let secs = unsafe { tm_to_unix(&*t) };
     // Re-normalise the struct so callers see the canonical fields.
+    // SAFETY: as above; `t` is also writable.
     unsafe {
         unix_to_tm(secs, &mut *t);
     }

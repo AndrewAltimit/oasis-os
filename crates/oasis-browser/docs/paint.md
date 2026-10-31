@@ -1,6 +1,6 @@
 # Paint & compositor
 
-There is one renderer. `record.rs` walks the `LayoutBox` tree and emits
+There is one renderer. `record/` walks the `LayoutBox` tree and emits
 a flat `DisplayList` of draw items; the list is compacted, optimized and
 replayed against the `SdiBackend`. There is no GPU-side scene graph, no
 tile cache and no threaded compositor: every frame is a list replay into
@@ -22,7 +22,12 @@ The same path serves everything that paints:
 ```text
 src/paint/
 ├── mod.rs              PaintViewport, LinkRegion, build_display_list(), paint()
-├── record.rs           layout tree → DisplayItems (paint order, transforms, clips, layers)
+├── record/             layout tree → DisplayItems
+│   ├── mod.rs          box walk: paint order, transforms, clips, layers, sticky
+│   ├── decorations.rs  backgrounds, gradients, borders, outlines, box shadows
+│   ├── text.rs         text runs, decoration lines, list markers
+│   ├── replaced.rs     images, SVG, canvas, video, iframes, <hr>
+│   └── controls.rs     form controls (inputs, checkbox, radio, textarea, select, button)
 ├── display_list/
 │   ├── mod.rs          DisplayItem enum + DisplayList container
 │   ├── optimize.rs     compact() / optimize(): zero-size removal, strip merging, occlusion

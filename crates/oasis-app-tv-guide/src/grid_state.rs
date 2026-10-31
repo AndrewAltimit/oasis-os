@@ -1,11 +1,9 @@
-use oasis_skin::active_theme::ActiveTheme;
 use oasis_types::backend::TextureId;
 
 use crate::catalog::{ChannelCatalog, VideoEpisode};
 use crate::channel::Channel;
 use crate::grid_layout::{
-    SLOT_DURATION, SdiNames, TvGuideColors, VISIBLE_ROWS, current_unix_time, truncate_title,
-    volume_bar_rect,
+    SLOT_DURATION, VISIBLE_ROWS, current_unix_time, truncate_title, volume_bar_rect,
 };
 use crate::schedule::{self, CachedSchedule};
 
@@ -22,18 +20,12 @@ pub struct TvGuideState {
     pub selected_channel: usize,
     /// Time offset in 30-min slot increments (0 = current time window).
     pub time_offset: i64,
-    /// Smooth selection lerp position.
-    pub(crate) visual_selected: f32,
     /// Whether the guide is in "tuned" mode (watching a channel).
     pub tuned_channel: Option<usize>,
     /// Current Unix timestamp (updated each frame from system time).
     pub current_time: u64,
     /// Pre-computed shuffled playlists (rebuilt when catalogs arrive).
     pub(crate) cached_schedules: Vec<Option<CachedSchedule>>,
-    /// Unix second of last schedule recompute (skip redundant updates).
-    pub(crate) last_schedule_time: u64,
-    /// Pre-computed SDI object name strings.
-    pub(crate) sdi_names: SdiNames,
     /// Whether a catalog fetch has been attempted (prevents infinite retry).
     pub fetch_attempted: bool,
     /// Whether a catalog fetch is currently in progress (background thread/future).
@@ -57,8 +49,6 @@ pub struct TvGuideState {
     pub volume: u8,
     /// Set to `true` whenever `volume` changes so the backend can sync.
     pub volume_changed: bool,
-    /// Theme-derived colors for the TV Guide UI.
-    pub colors: TvGuideColors,
 }
 
 impl std::fmt::Debug for TvGuideState {
@@ -68,7 +58,6 @@ impl std::fmt::Debug for TvGuideState {
             .field("catalogs", &self.catalogs)
             .field("selected_channel", &self.selected_channel)
             .field("time_offset", &self.time_offset)
-            .field("visual_selected", &self.visual_selected)
             .field("tuned_channel", &self.tuned_channel)
             .field("current_time", &self.current_time)
             .field("scroll_offset", &self.scroll_offset)
@@ -78,22 +67,16 @@ impl std::fmt::Debug for TvGuideState {
 
 impl TvGuideState {
     /// Create a new TV guide state from channel config.
-    ///
-    /// Colors are derived from the active theme. Skins can override
-    /// individual colors via `[app_themes.tv_guide]` in theme.toml.
-    pub fn new(config: &crate::channel::ChannelConfig, at: &ActiveTheme) -> Self {
+    pub fn new(config: &crate::channel::ChannelConfig) -> Self {
         let channel_count = config.channel.len();
         Self {
             channels: config.channel.clone(),
             catalogs: vec![None; channel_count],
             selected_channel: 0,
             time_offset: 0,
-            visual_selected: 0.0,
             tuned_channel: None,
             current_time: current_unix_time(),
             cached_schedules: (0..channel_count).map(|_| None).collect(),
-            last_schedule_time: 0,
-            sdi_names: SdiNames::new(),
             fetch_attempted: false,
             fetch_in_progress: false,
             fetch_error: None,
@@ -103,7 +86,6 @@ impl TvGuideState {
             video_expanded: false,
             volume: DEFAULT_VOLUME,
             volume_changed: false,
-            colors: TvGuideColors::from_theme(at),
         }
     }
 
@@ -329,50 +311,17 @@ impl TvGuideState {
         "No content available".to_string()
     }
 
-    /// Build detail line for now-playing (duration, resolution, remaining).
-    pub(crate) fn build_now_playing_detail(&self) -> String {
-        let idx = self.selected_channel;
-        if let Some(Some(cached)) = self.cached_schedules.get(idx)
-            && let Some(slot) = cached.at(self.current_time)
-        {
-            let dur = schedule::format_duration(slot.episode.duration_secs);
-            let remaining = schedule::format_duration(slot.remaining_secs as f64);
-            return format!(
-                "{dur} | {}x{}  ({remaining} remaining)",
-                slot.episode.width, slot.episode.height,
-            );
-        }
-        String::new()
-    }
-
-    /// Build location/genre line for the header.
-    pub(crate) fn build_channel_location(&self) -> String {
-        if let Some(ch) = self.channels.get(self.selected_channel) {
-            if let Some(ref loc) = ch.location {
-                return loc.to_uppercase();
-            }
-            return ch.genre.to_uppercase();
-        }
-        String::new()
-    }
-
     /// Handle a click at content-local coordinates.
     ///
-    /// `cw`/`ch` are the content area dimensions (needed to recompute layout).
+    /// `cw`/`ch` are the content area dimensions (needed to recompute the
+    /// layout `draw_windowed` draws with).
     /// Returns `Some(TuneRequest)` if the click tuned a channel (caller should
     /// enter fullscreen), `None` if it only selected a channel or missed.
     ///
     /// When the video is expanded (fullscreen), any click collapses back to
     /// PIP mode. When in PIP mode, clicking the video preview area expands
     /// it to fullscreen.
-    pub fn handle_click(
-        &mut self,
-        lx: i32,
-        ly: i32,
-        cw: u32,
-        ch: u32,
-        fullscreen: bool,
-    ) -> Option<TuneRequest> {
+    pub fn handle_click(&mut self, lx: i32, ly: i32, cw: u32, ch: u32) -> Option<TuneRequest> {
         // Volume bar click (available in both expanded and PIP modes).
         if self.tuned_channel.is_some() {
             let vr = volume_bar_rect(cw, ch, self.video_expanded);
@@ -395,12 +344,11 @@ impl TvGuideState {
         // Check if clicking the video preview area (PIP) to expand.
         if self.tuned_channel.is_some() && self.preview_texture.is_some() {
             let usable_h = ch;
-            let min_header = if fullscreen { 60 } else { 40 };
-            let header_h = (usable_h * 20 / 100).max(min_header);
-            let preview_w = (cw * 30 / 100).max(if fullscreen { 80 } else { 60 });
-            let preview_h = header_h.saturating_sub(if fullscreen { 16 } else { 8 });
-            let preview_x = cw as i32 - preview_w as i32 - if fullscreen { 10 } else { 4 };
-            let preview_y = if fullscreen { 8i32 } else { 4i32 };
+            let header_h = (usable_h * 20 / 100).max(40);
+            let preview_w = (cw * 30 / 100).max(60);
+            let preview_h = header_h.saturating_sub(8);
+            let preview_x = cw as i32 - preview_w as i32 - 4;
+            let preview_y = 4i32;
 
             if lx >= preview_x
                 && lx < preview_x + preview_w as i32
@@ -418,19 +366,14 @@ impl TvGuideState {
 
         // Recompute layout from content dimensions.
         let usable_h = ch;
-        let (min_header, min_time, min_footer) = if fullscreen {
-            (60, 20, 18) // matches update_sdi
-        } else {
-            (40, 16, 14) // matches draw_windowed
-        };
-        let header_h = (usable_h * 20 / 100).max(min_header);
-        let time_header_h = (usable_h * 4 / 100).max(min_time);
-        let footer_h = (usable_h * 5 / 100).max(min_footer);
+        // Same minimums as `draw_windowed`.
+        let header_h = (usable_h * 20 / 100).max(40);
+        let time_header_h = (usable_h * 4 / 100).max(16);
+        let footer_h = (usable_h * 5 / 100).max(14);
         let grid_h = usable_h.saturating_sub(header_h + time_header_h + footer_h);
 
         let row_count = self.channels.len().clamp(1, VISIBLE_ROWS) as u32;
-        let min_row = if fullscreen { 20 } else { 16 };
-        let row_h = (grid_h / row_count).max(min_row);
+        let row_h = (grid_h / row_count).max(16);
 
         let grid_y = header_h + time_header_h;
 
@@ -474,11 +417,10 @@ mod tests {
     use super::*;
     use crate::catalog::{ChannelCatalog, VideoEpisode};
     use crate::channel::{ChannelConfig, DEFAULT_CHANNELS_TOML};
-    use oasis_skin::active_theme::ActiveTheme;
 
     fn default_state() -> TvGuideState {
         let config = ChannelConfig::from_toml(DEFAULT_CHANNELS_TOML).unwrap();
-        TvGuideState::new(&config, &ActiveTheme::default())
+        TvGuideState::new(&config)
     }
 
     fn make_episode(title: &str, duration: f64) -> VideoEpisode {
@@ -497,7 +439,7 @@ mod tests {
 
     fn state_with_catalog() -> TvGuideState {
         let config = ChannelConfig::from_toml(DEFAULT_CHANNELS_TOML).unwrap();
-        let mut state = TvGuideState::new(&config, &ActiveTheme::default());
+        let mut state = TvGuideState::new(&config);
         let mut catalog = ChannelCatalog::new(state.channels[0].number);
         catalog.add_episodes(vec![
             make_episode("Alpha", 1800.0),
@@ -529,40 +471,8 @@ mod tests {
     #[test]
     fn build_channel_info_empty_channels() {
         let config: ChannelConfig = toml::from_str("channel = []").unwrap();
-        let state = TvGuideState::new(&config, &ActiveTheme::default());
+        let state = TvGuideState::new(&config);
         assert_eq!(state.build_channel_info(), "TV Guide");
-    }
-
-    // -- build_channel_location --
-
-    #[test]
-    fn build_channel_location_with_location() {
-        let state = default_state();
-        let loc = state.build_channel_location();
-        assert_eq!(loc, "LOS ANGELES, CA");
-    }
-
-    #[test]
-    fn build_channel_location_without_location() {
-        let toml = r#"
-            [[channel]]
-            number = 1
-            call_sign = "TEST"
-            name = "Test"
-            genre = "comedy"
-            [[channel.source]]
-            item_id = "test-item"
-        "#;
-        let config = ChannelConfig::from_toml(toml).unwrap();
-        let state = TvGuideState::new(&config, &ActiveTheme::default());
-        assert_eq!(state.build_channel_location(), "COMEDY");
-    }
-
-    #[test]
-    fn build_channel_location_empty() {
-        let config: ChannelConfig = toml::from_str("channel = []").unwrap();
-        let state = TvGuideState::new(&config, &ActiveTheme::default());
-        assert_eq!(state.build_channel_location(), "");
     }
 
     // -- build_now_playing_title --
@@ -599,23 +509,6 @@ mod tests {
         // Should be uppercase and non-empty.
         assert!(!title.is_empty());
         assert_eq!(title, title.to_uppercase());
-    }
-
-    // -- build_now_playing_detail --
-
-    #[test]
-    fn build_now_playing_detail_with_catalog() {
-        let state = state_with_catalog();
-        let detail = state.build_now_playing_detail();
-        assert!(detail.contains("640x480"));
-        assert!(detail.contains("remaining"));
-        assert!(detail.contains('|'));
-    }
-
-    #[test]
-    fn build_now_playing_detail_no_catalog() {
-        let state = default_state();
-        assert!(state.build_now_playing_detail().is_empty());
     }
 
     // -- reset_for_retry --
@@ -739,7 +632,7 @@ mod tests {
         let click_x = vr.x + (vr.w as i32 / 2);
         let click_y = vr.y + (vr.h as i32 / 2);
 
-        let result = state.handle_click(click_x, click_y, cw, ch, true);
+        let result = state.handle_click(click_x, click_y, cw, ch);
         assert!(result.is_none()); // volume click doesn't tune
         assert!(state.volume_changed);
         // Should be roughly 50%.
@@ -756,7 +649,7 @@ mod tests {
         let ch = 600u32;
         let vr = crate::grid_layout::volume_bar_rect(cw, ch, true);
         // Click at left edge of volume bar.
-        let result = state.handle_click(vr.x, vr.y, cw, ch, true);
+        let result = state.handle_click(vr.x, vr.y, cw, ch);
         assert!(result.is_none());
         assert!(state.volume_changed);
         assert!(state.volume <= 5); // should be near 0%
@@ -770,7 +663,7 @@ mod tests {
 
         let (cw, ch) = (800u32, 600u32);
         let vr = crate::grid_layout::volume_bar_rect(cw, ch, true);
-        state.handle_click(vr.x + vr.w as i32 - 1, vr.y, cw, ch, true);
+        state.handle_click(vr.x + vr.w as i32 - 1, vr.y, cw, ch);
         assert_eq!(state.volume, 100);
     }
 
@@ -783,7 +676,7 @@ mod tests {
         state.video_expanded = true;
 
         // Click outside volume bar should collapse.
-        let result = state.handle_click(10, 10, 800, 600, true);
+        let result = state.handle_click(10, 10, 800, 600);
         assert!(result.is_none());
         assert!(!state.video_expanded);
     }
@@ -820,7 +713,7 @@ mod tests {
     #[test]
     fn text_content_no_channels() {
         let config: ChannelConfig = toml::from_str("channel = []").unwrap();
-        let state = TvGuideState::new(&config, &ActiveTheme::default());
+        let state = TvGuideState::new(&config);
         let lines = state.text_content();
         assert!(lines.iter().any(|l| l.contains("No channels configured")));
     }
@@ -839,7 +732,7 @@ mod tests {
             item_id = "test"
         "#;
         let config = ChannelConfig::from_toml(toml).unwrap();
-        let mut state = TvGuideState::new(&config, &ActiveTheme::default());
+        let mut state = TvGuideState::new(&config);
         state.select_down();
         assert_eq!(state.selected_channel, 0);
     }

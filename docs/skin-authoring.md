@@ -175,9 +175,9 @@ The 9 base colors automatically derive ~30 UI element colors:
 | Status bar BG | `status_bar` | alpha 80 |
 | Bottom bar BG | `status_bar` | alpha 90 |
 | Separator | `secondary` | alpha 50 |
-| Battery text | `primary` | lighten 30% |
+| Battery text | `primary` | lighten 30% (readable on the status bar) |
 | Version/Clock | `text` | direct |
-| URL label | `dim_text` | direct |
+| URL label | `dim_text` | direct (readable on the bottom bar) |
 | USB indicator | `dim_text` | direct |
 | Tab active fill | `primary` | alpha 30 |
 | Media tab active | `text` | direct |
@@ -193,6 +193,16 @@ The 9 base colors automatically derive ~30 UI element colors:
 | Browser URL bar BG | `background` | darken 80% |
 | Browser link color | `primary` | direct |
 | WM titlebar active | via `[wm_theme]` overrides | |
+
+**Derived text stays readable.** A text color the skin does not set
+explicitly is checked against the surface it is drawn on and, only if it
+falls short, mixed toward black or white (keeping its hue as far as
+possible) until it clears the minimum: primary-button labels
+(`text` on the accent, 4.5:1), the bottom-bar URL label and status-bar
+battery text (3:1), app selection text (3:1) and app body text (4.5:1).
+Colors that already pass are untouched, and colors you set explicitly
+(`[bar_overrides] url_color`, `[app_overrides] selected_text`, ...) are
+always used as written -- `skin lint` reports them instead.
 
 #### Extended Visual Properties
 
@@ -575,8 +585,9 @@ alone — the other state keeps the pill fill.
 
 ### Asset guidelines
 
-- **Power-of-two dimensions** (64, 128, 256, …) — required on PSP,
-  flagged by `skin lint` otherwise.
+- **Power-of-two dimensions** (64, 128, 256, …) are preferred: the PSP
+  backend pads every texture up to the next power of two on upload, so a
+  160x80 image costs 256x128 of VRAM. Odd sizes still load everywhere.
 - Stay under the **2 MB decoded budget** per skin (`skin lint` warns).
   PNG on disk compresses far smaller; the budget is about RAM/VRAM.
 - `skin lint` also verifies every `texture =`, `nine_patch` image,
@@ -770,6 +781,7 @@ normal_bg = "#3A3A40"
 hover_bg = "#55555C"
 pressed_bg = "#2A2A2E"
 disabled_bg = "#26262A"
+text = "#F0F0E8"             # label on the button fill (see below)
 disabled_text = "#555555"
 
 [widget_states.input]
@@ -805,6 +817,16 @@ item_text = "#141414"                # drop-down item text
 disabled_text = "#969696"            # disabled item text
 separator = "#AAAAAA"                # drop-down separator line
 ```
+
+Button labels have their own colour, `Theme::button_text`, because the
+button fill is not the background the base `text` colour was picked for.
+Without `[widget_states.button] text` it is derived: the skin's `text`
+colour, kept as is when it reaches 4.5:1 (WCAG AA) against the resolved
+`normal_bg`, otherwise blended towards black or white just far enough to
+get there. Fixed-palette skins (retro-cga, solarized, corrupted) keep
+readable buttons this way without editing their palette; set `text`
+explicitly to pick the label colour yourself (it is used as given, and
+`skin lint` reports it if it falls below 4.5:1).
 
 The `menu` slots feed `MenuStyle::from_theme` in `oasis-ui`; their
 defaults are the classic Win95 grays the menu bar widget has always
@@ -972,15 +994,29 @@ silently do nothing:
 - `skin lint <name|path>` prints the full report: unknown keys, invalid
   hex colors, out-of-bounds layout coordinates, feature-flag
   inconsistencies (e.g. `icons_per_page` exceeding the grid capacity),
-  and asset problems (missing `texture`/`source` references,
-  non-power-of-two images, decoded size over the per-skin budget).
+  and asset problems (missing `texture`/`source` references, decoded
+  size over the per-skin budget).
+- Override colors are checked too: any `#...` string that is not
+  `#RRGGBB` / `#RRGGBBAA` anywhere in `theme.toml`, and any non-hex
+  value under a color-named key (`*color`, `*_bg`, `*_stops`,
+  `color_*`; named colors such as `"black"` are not supported). These
+  used to fall back to the derived default without a word.
+- Enumerated names that would otherwise fall back silently are
+  checked: layer `kind` (both layer tables), layer `anchor`,
+  `glass_shard` layers with fewer than 3 `points`, shader-param
+  `color_1..3`, `[wallpaper] style`, `[transition] entrance` /
+  `page_style` / `easing`, `[animations.*] easing`,
+  `[icon_overrides] entrance_style` and `density`.
+- A skin directory whose `inherits` parent is not a built-in loads
+  alone and reports it; TOML syntax errors name the skin directory,
+  the file and the line.
 - A `kind = "shader"` background layer whose `shader` is not a built-in
   shader name (`balatro`, `voronoi`, `city_lights`, `ocean_waves`,
   `calm_waves`, `starfield`, `plasma`, `matrix_rain`) is flagged: an
   unknown name draws no wallpaper.
 - The lint also runs WCAG AA contrast checks over the pairs that
-  actually render text: `text`/`dim_text`/`output`/`prompt`/`error` on
-  the background, button text on the button background, selected text
+  actually render text: `text`/`dim_text`/`error` on the background,
+  terminal output / prompt on the app surface they are drawn on, button text on the button background, selected text
   on the selection highlight, and status/bottom bar text on their bar
   backgrounds. The clock is checked against the bar it is actually
   drawn on — the bottom bar when `clock_in_bottombar` is set (the
@@ -989,7 +1025,11 @@ silently do nothing:
   midpoint. Body text is held to 4.5:1, secondary/large text to
   3:1; translucent colors are composited over their backdrop first.
   These are advisory — deliberately stylized palettes (`corrupted`,
-  `win95`) fail some of them by design and still load normally.
+  `retro-cga`, canonical `solarized`) fail some of them by design and
+  still load normally. The built-ins that do are listed, with the
+  reason, in `ACCEPTED_CONTRAST` (`oasis-skin/src/builtin/mod.rs`);
+  CI test `all_builtin_skins_lint_clean` fails on any other lint
+  warning on a shipped skin.
 - Built-in skins must additionally clear a hard **2:1 floor** on every
   one of those pairs (CI test `all_builtin_skins_meet_minimum_contrast`)
   — below that, text is effectively invisible. A dark bottom bar with a

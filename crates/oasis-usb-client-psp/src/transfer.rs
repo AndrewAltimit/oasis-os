@@ -34,11 +34,6 @@ static mut SEND_BUF: AlignedSendBuf = AlignedSendBuf([0u8; SEND_BUF_SIZE]);
 #[repr(C, align(64))]
 struct AlignedReq(UsbdDeviceReq);
 
-// SAFETY: Only accessed from USB interrupt context and init thread
-unsafe impl Sync for AlignedReq {}
-unsafe impl Sync for AlignedRecvBuf {}
-unsafe impl Sync for AlignedSendBuf {}
-
 static mut RECV_REQ: AlignedReq = AlignedReq(UsbdDeviceReq {
     endp: core::ptr::null_mut(),
     data: core::ptr::null_mut(),

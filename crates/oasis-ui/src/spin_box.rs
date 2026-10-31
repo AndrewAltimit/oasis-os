@@ -69,9 +69,10 @@ impl SpinBox {
     /// Which step button contains local offset `dx` (pixels from the
     /// widget's left edge) for a spin box drawn `w` pixels wide.
     pub fn part_at(dx: i32, w: u32) -> Option<SpinBoxPart> {
-        if dx >= 0 && dx < BUTTON_WIDTH as i32 {
+        let bw = button_width(w);
+        if dx >= 0 && dx < bw as i32 {
             Some(SpinBoxPart::Minus)
-        } else if dx >= w.saturating_sub(BUTTON_WIDTH) as i32 && dx < w as i32 {
+        } else if dx >= w.saturating_sub(bw) as i32 && dx < w as i32 {
             Some(SpinBoxPart::Plus)
         } else {
             None
@@ -107,6 +108,12 @@ impl SpinBox {
     }
 }
 
+/// Width of each step button in a control `w` pixels wide: the full
+/// [`BUTTON_WIDTH`], or half the control when it is narrower than two.
+fn button_width(w: u32) -> u32 {
+    BUTTON_WIDTH.min(w / 2)
+}
+
 impl Widget for SpinBox {
     fn measure(&self, ctx: &DrawContext<'_>, _available_w: u32, _available_h: u32) -> (u32, u32) {
         let fs = ctx.theme.font_size_md;
@@ -130,13 +137,16 @@ impl Widget for SpinBox {
         // Background.
         ctx.backend.fill_rect(x, y, w, h, bg)?;
 
-        // Hover / press fills for the step buttons (none at rest).
-        let plus_x = x + (w - BUTTON_WIDTH) as i32;
+        // Hover / press fills for the step buttons (none at rest). The
+        // buttons shrink to half the width each when the control is
+        // narrower than two full buttons.
+        let bw = button_width(w);
+        let plus_x = x + (w - bw) as i32;
         for (part, bx) in [(SpinBoxPart::Minus, x), (SpinBoxPart::Plus, plus_x)] {
             let st = self.part_state(part);
             if matches!(st, WidgetState::Hover | WidgetState::Pressed) {
                 let fill = WidgetStateColors::surface_bg(ctx.theme, st);
-                ctx.backend.fill_rect(bx, y, BUTTON_WIDTH, h, fill)?;
+                ctx.backend.fill_rect(bx, y, bw, h, fill)?;
             }
         }
         ctx.backend.stroke_rect(x, y, w, h, 1, border)?;
@@ -146,35 +156,21 @@ impl Widget for SpinBox {
         let minus_fg = ctx
             .theme
             .interactive_text(self.disabled || self.value <= self.min);
-        ctx.backend
-            .stroke_rect(x, y, BUTTON_WIDTH, btn_h, 1, border)?;
-        ctx.text_in(
-            (x, y, BUTTON_WIDTH, btn_h),
-            "-",
-            fs,
-            minus_fg,
-            HAlign::Center,
-        )?;
+        ctx.backend.stroke_rect(x, y, bw, btn_h, 1, border)?;
+        ctx.text_in((x, y, bw, btn_h), "-", fs, minus_fg, HAlign::Center)?;
 
         // Plus button.
         let plus_fg = ctx
             .theme
             .interactive_text(self.disabled || self.value >= self.max);
-        ctx.backend
-            .stroke_rect(plus_x, y, BUTTON_WIDTH, btn_h, 1, border)?;
-        ctx.text_in(
-            (plus_x, y, BUTTON_WIDTH, btn_h),
-            "+",
-            fs,
-            plus_fg,
-            HAlign::Center,
-        )?;
+        ctx.backend.stroke_rect(plus_x, y, bw, btn_h, 1, border)?;
+        ctx.text_in((plus_x, y, bw, btn_h), "+", fs, plus_fg, HAlign::Center)?;
 
         // Value text (centered in remaining area).
         let display = self.display_value();
-        let text_area_w = w.saturating_sub(BUTTON_WIDTH * 2);
+        let text_area_w = w.saturating_sub(bw * 2);
         ctx.text_in(
-            (x + BUTTON_WIDTH as i32, y, text_area_w, h),
+            (x + bw as i32, y, text_area_w, h),
             &display,
             fs,
             ctx.theme.interactive_text(self.disabled),

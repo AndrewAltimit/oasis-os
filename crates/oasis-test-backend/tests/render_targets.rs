@@ -323,3 +323,58 @@ fn all_blend_modes_recorded_distinctly() {
         .collect();
     assert_eq!(recorded, modes);
 }
+
+/// The recorder rejects render-target misuse exactly like the pixel
+/// backends (`conformance::render_target_misuse`), so a caller that
+/// re-binds or destroys a bound target fails in tests too, not only on
+/// SDL / UE5 / WASM.
+#[test]
+fn misuse_is_rejected_like_the_real_backends() {
+    let mut b = RecordingBackend::new(480, 272);
+    let bad = oasis_test_backend::conformance::render_target_misuse(&mut b);
+    assert!(bad.is_empty(), "{bad:?}");
+}
+
+/// Every test double follows the `destroy_texture` contract of the pixel
+/// backends: an id it never handed out, or one already destroyed, fails
+/// with `TextureNotFound` (the destroy half of
+/// `conformance::texture_misuse`; recorders do not validate blits).
+#[test]
+fn destroy_texture_rejects_unknown_ids_on_every_double() {
+    use oasis_test_backend::{ClipAuditBackend, MockSdiCore, NullBackend};
+    use oasis_types::backend::{SdiBackend, TextureId};
+    use oasis_types::error::{BackendError, OasisError};
+    let mut doubles: Vec<(&str, Box<dyn SdiBackend>)> = vec![
+        ("recording", Box::new(RecordingBackend::new(64, 64))),
+        ("null", Box::new(NullBackend::new(64, 64))),
+        ("mock", Box::new(MockSdiCore::new(64, 64))),
+        (
+            "audit",
+            Box::new(ClipAuditBackend::new(64, 64, (0, 0, 64, 64))),
+        ),
+    ];
+    let not_found = |r: oasis_types::error::Result<()>| {
+        matches!(
+            r,
+            Err(OasisError::Backend(BackendError::TextureNotFound { .. }))
+        )
+    };
+    for (name, b) in &mut doubles {
+        assert!(
+            not_found(b.destroy_texture(TextureId(999))),
+            "{name}: unknown id"
+        );
+        let tex = b.load_texture(1, 1, &[0; 4]).expect("load");
+        assert!(b.destroy_texture(tex).is_ok(), "{name}: live id");
+        assert!(not_found(b.destroy_texture(tex)), "{name}: double destroy");
+    }
+}
+
+/// `read_render_target` checks the destination length.
+#[test]
+fn read_render_target_checks_dst_len() {
+    let mut b = RecordingBackend::new(480, 272);
+    let id = b.create_render_target(4, 2).expect("create");
+    assert!(b.read_render_target(id, &mut [0u8; 31]).is_err());
+    assert!(b.read_render_target(id, &mut [0u8; 32]).is_ok());
+}

@@ -2,6 +2,7 @@
 
 use crate::backend::SdiCore;
 use crate::error::Result;
+use crate::geometry::ClipRect;
 
 // ---------------------------------------------------------------------------
 // SdiClipTransform
@@ -51,7 +52,7 @@ pub trait SdiClipTransform: SdiCore {
     }
 
     /// Query the top of the clip stack, in surface pixels.
-    fn current_clip_rect(&self) -> Option<(i32, i32, u32, u32)> {
+    fn current_clip_rect(&self) -> Option<ClipRect> {
         None
     }
 
@@ -69,6 +70,23 @@ pub trait SdiClipTransform: SdiCore {
     /// Query the current cumulative translation offset.
     fn current_translate(&self) -> (i32, i32) {
         (0, 0)
+    }
+
+    /// The rectangle of draw coordinates that lands on the bound surface:
+    /// the surface ([`viewport_size`](SdiCore::viewport_size)) moved back
+    /// by the current translation.
+    ///
+    /// A draw outside it is invisible whatever the clip, so the span-based
+    /// shape defaults ([`SdiShapes`](crate::backend::SdiShapes),
+    /// [`SdiVector`](crate::backend::SdiVector)) generate spans only
+    /// inside it: a line or polygon reaching far off-screen costs as much
+    /// as its visible part. The clip is deliberately not intersected in:
+    /// `set_clip_rect` can replace the stack's clip, so the stack top is
+    /// not a safe bound.
+    fn draw_bounds(&self) -> ClipRect {
+        let (w, h) = self.viewport_size();
+        let (tx, ty) = self.current_translate();
+        ClipRect::new(0i32.saturating_sub(tx), 0i32.saturating_sub(ty), w, h)
     }
 
     /// Push a rendering region (translate + clip).

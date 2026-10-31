@@ -53,6 +53,56 @@ fn escape_closes_an_unmodified_app_window() {
     assert_eq!(h.mode(), Mode::Dashboard);
 }
 
+/// Opening a file in an app that is already open replaces its runner. A
+/// Text Editor with unsaved changes must be asked first, like on the
+/// close button: it used to be swapped out on the spot, losing the edits.
+#[test]
+fn open_with_file_asks_a_modified_text_editor_first() {
+    let mut h = Harness::new("classic");
+    h.settle();
+    assert!(h.click_app_icon("Text Editor"));
+    h.settle();
+    h.type_text("do not lose me");
+    h.settle();
+
+    h.open_app_with_file("Text Editor", "/home/user/readme.txt");
+    h.settle();
+    assert_eq!(h.mode(), Mode::Desktop);
+    assert!(h.find_window("Text Editor").is_some(), "{:?}", h.windows());
+    h.render_now();
+    assert!(
+        h.text_drawn_contains("do not lose me"),
+        "{:?}",
+        h.frame_text()
+    );
+    let prompt = |h: &Harness| {
+        h.frame_text()
+            .iter()
+            .any(|t| t.starts_with("Unsaved changes"))
+    };
+    assert!(prompt(&h), "prompt shown: {:?}", h.frame_text());
+
+    // "Discard" closes the old document; opening the file again works.
+    h.key(Key::Char('d'));
+    h.settle();
+    h.open_app_with_file("Text Editor", "/home/user/readme.txt");
+    h.settle();
+    h.render_now();
+    assert!(h.text_drawn_contains("readme.txt"), "{:?}", h.frame_text());
+    assert!(
+        !h.text_drawn_contains("do not lose me"),
+        "{:?}",
+        h.frame_text()
+    );
+
+    // An unmodified editor is replaced without a prompt.
+    h.open_app_with_file("Text Editor", "/home/user/readme.txt");
+    h.settle();
+    h.render_now();
+    assert!(!prompt(&h), "{:?}", h.frame_text());
+    assert!(h.text_drawn_contains("readme.txt"), "{:?}", h.frame_text());
+}
+
 /// The titlebar close button on a Text Editor with unsaved changes must
 /// raise the unsaved-changes prompt like Escape does. The window manager
 /// used to drop the window (and the edits) on the spot.
@@ -390,6 +440,51 @@ fn wm_close_on_modified_text_editor_raises_the_prompt() {
     assert!(h.app_runner("Text Editor").is_none());
 }
 
+/// Queue one `wm` request line (what the `wm` command writes) and run it.
+fn wm_request(h: &mut Harness, line: &str) {
+    use oasis_core::vfs::Vfs;
+    h.vfs_mut()
+        .write(oasis_core::ipc::WM_REQUEST_PATH, line.as_bytes())
+        .unwrap();
+    h.settle();
+}
+
+/// `wm focus` on a minimized window restores it: it used to make the
+/// invisible window the keyboard target. `wm minimize` / `wm maximize` on
+/// the kiosk-fullscreen window leave kiosk mode first: the shell chrome
+/// used to stay hidden around a window that no longer filled the screen.
+#[test]
+fn wm_focus_restores_and_wm_ops_leave_kiosk() {
+    use oasis_core::input::InputEvent;
+    let mut h = Harness::new("classic");
+    h.settle();
+    assert!(h.open_app("Calculator"));
+    h.settle();
+    assert!(h.open_app("Paint"));
+    h.settle();
+
+    wm_request(&mut h, "minimize calculator");
+    assert!(h.find_window("Calculator").unwrap().minimized);
+    wm_request(&mut h, "focus calculator");
+    assert!(!h.find_window("Calculator").unwrap().minimized);
+    assert_eq!(h.active_window().as_deref(), Some("calculator"));
+
+    for op in ["minimize", "maximize"] {
+        h.send(&[InputEvent::ToggleFullscreen]);
+        h.settle();
+        assert_eq!(
+            h.state().content.fullscreen_app.as_deref(),
+            Some("calculator"),
+            "{op}"
+        );
+        wm_request(&mut h, &format!("{op} calculator"));
+        assert!(h.state().content.fullscreen_app.is_none(), "{op}");
+        assert!(!h.find_window("Calculator").unwrap().fullscreen, "{op}");
+        wm_request(&mut h, "focus calculator");
+    }
+    assert_eq!(h.active_window().as_deref(), Some("calculator"));
+}
+
 /// `wm close` on an app without unsaved state closes it and drops its
 /// runner, like the titlebar button.
 #[test]
@@ -497,6 +592,116 @@ fn plugin_app_survives_skin_switch_and_resolution_change() {
     h.settle();
     assert_eq!(h.size(), (800, 600));
     assert_plugin_app_launches(&mut h, "after resolution change");
+}
+
+mod closing_app {
+    use oasis_core::active_theme::ActiveTheme;
+    use oasis_core::apps::{App, AppAction, AppRequest};
+    use oasis_core::backend::SdiBackend;
+    use oasis_core::error::Result;
+    use oasis_core::input::Button;
+    use oasis_core::plugin::{AppCategory, Plugin, PluginAppRegistration, PluginHost, PluginInfo};
+    use oasis_core::vfs::Vfs;
+
+    pub const TITLE: &str = "Closing App";
+    /// Writing this file makes the app's next `tick` queue a request to
+    /// [`OUT`] and ask to close (like "Save & close" finishing).
+    pub const TRIGGER: &str = "/tmp/closing_app_trigger";
+    pub const OUT: &str = "/tmp/closing_app_last_words";
+
+    #[derive(Debug, Default)]
+    struct ClosingApp {
+        requests: Vec<AppRequest>,
+        close: bool,
+    }
+
+    impl App for ClosingApp {
+        fn title(&self) -> &str {
+            TITLE
+        }
+        fn path(&self) -> &str {
+            "/apps/closing"
+        }
+        fn handle_input(&mut self, _button: &Button, _vfs: &dyn Vfs) -> AppAction {
+            AppAction::None
+        }
+        fn draw_windowed(
+            &self,
+            _cx: i32,
+            _cy: i32,
+            _cw: u32,
+            _ch: u32,
+            _backend: &mut dyn SdiBackend,
+            _at: &ActiveTheme,
+        ) -> Result<()> {
+            Ok(())
+        }
+        fn drain_requests(&mut self, out: &mut Vec<AppRequest>) {
+            out.append(&mut self.requests);
+        }
+        fn tick(&mut self, _dt_ms: u32, vfs: &dyn Vfs) -> bool {
+            if !self.close && vfs.exists(TRIGGER) {
+                self.requests.push(AppRequest::new(OUT, "goodbye"));
+                self.close = true;
+            }
+            false
+        }
+        fn take_close_request(&mut self) -> bool {
+            std::mem::take(&mut self.close)
+        }
+    }
+
+    struct ClosingPlugin;
+
+    impl Plugin for ClosingPlugin {
+        fn info(&self) -> PluginInfo {
+            PluginInfo::new("closing-plugin", "1.0.0")
+        }
+        fn init(&mut self, host: &mut PluginHost<'_>) -> Result<()> {
+            host.register_app(PluginAppRegistration::new(
+                TITLE,
+                AppCategory::Utility,
+                |_path, _vfs| Box::new(ClosingApp::default()),
+            ))
+        }
+        fn update(&mut self, _host: &mut PluginHost<'_>) -> Result<()> {
+            Ok(())
+        }
+        fn shutdown(&mut self, _host: &mut PluginHost<'_>) -> Result<()> {
+            Ok(())
+        }
+    }
+
+    pub fn make() -> Box<dyn Plugin> {
+        Box::new(ClosingPlugin)
+    }
+}
+
+/// An app that queues a request in `tick` and asks to close in the same
+/// frame (the Text Editor's "Save & close" path) gets the request carried
+/// out: the runner used to be dropped right after the frame's request
+/// pass, losing it.
+#[test]
+fn requests_of_an_app_closing_itself_in_tick_are_carried_out() {
+    use oasis_app::harness::HarnessOptions;
+    use oasis_core::vfs::Vfs;
+
+    let mut opts = HarnessOptions::new("classic");
+    opts.plugins = vec![closing_app::make];
+    let mut h = Harness::with_options(opts).unwrap();
+    h.settle();
+    assert!(h.open_app(closing_app::TITLE));
+    h.settle();
+    assert!(h.find_window(closing_app::TITLE).is_some());
+
+    h.vfs_mut().write(closing_app::TRIGGER, b"1").unwrap();
+    h.step(&[]);
+    assert!(
+        h.find_window(closing_app::TITLE).is_none(),
+        "{:?}",
+        h.windows()
+    );
+    assert_eq!(h.vfs().read(closing_app::OUT).unwrap(), b"goodbye");
 }
 
 // ---------------------------------------------------------------------------
@@ -630,4 +835,53 @@ fn default_windows_fit_the_screen() {
             h.windows()
         );
     }
+}
+
+/// Clicks in a kiosk-fullscreen window hit the rows the window draws.
+/// Hosts passed the kiosk flag to `App::handle_click` as `fullscreen`,
+/// which the apps read as "the SDI fullscreen layout" -- a layout no host
+/// draws -- so the Music Player ignored every click in kiosk mode (and
+/// Settings / File Manager / TV Guide hit-tested against other rows).
+#[test]
+fn clicks_in_a_kiosk_window_hit_the_drawn_rows() {
+    use oasis_apps::media::BrowsingApp;
+    use oasis_core::input::InputEvent;
+
+    let mut h = Harness::new("classic");
+    h.settle();
+    assert!(h.open_app("Music Player"));
+    h.settle();
+    h.send(&[InputEvent::ToggleFullscreen]);
+    h.settle();
+    let win = h.find_window("Music Player").unwrap();
+    assert!(win.fullscreen, "{:?}", h.windows());
+    h.render_now();
+
+    let lines = h.app_runner("Music Player").unwrap().lines().to_vec();
+    let (cx, cy, cw, ch) = win.content;
+    let inside = |x: i32, y: i32| x >= cx && y >= cy && x < cx + cw as i32 && y < cy + ch as i32;
+    // The last list row drawn in the window (never the selected first one).
+    let (idx, (x, y)) = h
+        .frame_text_calls()
+        .iter()
+        .filter(|t| inside(t.x, t.y))
+        .filter_map(|t| {
+            let idx = lines
+                .iter()
+                .rposition(|l| !l.is_empty() && t.text.trim_start_matches(['>', ' ']) == l)?;
+            Some((idx, (t.x + 2, t.y + 2)))
+        })
+        .max_by_key(|(idx, _)| *idx)
+        .unwrap_or_else(|| panic!("{lines:?} {:?}", h.frame_text()));
+    assert!(idx > 0, "{lines:?}");
+
+    h.click(x, y);
+    h.settle();
+    let runner = h.app_runner("Music Player").unwrap();
+    let app = runner.delegate_as::<BrowsingApp>().unwrap();
+    assert_eq!(
+        app.content.scroll + app.content.cursor,
+        idx,
+        "the click selects the clicked row: {lines:?}"
+    );
 }

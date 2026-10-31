@@ -11,10 +11,9 @@ use std::sync::Arc;
 
 use crate::backend::Color;
 use crate::dashboard::AppEntry;
-use crate::sdi::SdiRegistry;
 use crate::vfs::Vfs;
 
-use super::app_trait::App;
+use super::App;
 
 /// Constructor of an app: `(vfs_path, vfs) -> app`.
 pub type AppFactory = Arc<dyn Fn(&str, &dyn Vfs) -> Box<dyn App> + Send + Sync>;
@@ -45,9 +44,6 @@ pub struct AppRegistration {
     pub color: Color,
     /// Whether the app gets a dashboard tile.
     pub on_dashboard: bool,
-    /// Hide the app's own global SDI objects (fullscreen `update_sdi`
-    /// render paths that create objects outside the shared app pools).
-    pub hide_sdi: Option<fn(&mut SdiRegistry)>,
     /// Media the host stops when the app's window closes.
     pub owned_media: Option<OwnedMedia>,
     /// Registered by a plugin (replaced by
@@ -84,7 +80,6 @@ impl AppRegistration {
             path: entry.path,
             color: entry.color,
             on_dashboard: false,
-            hide_sdi: None,
             owned_media: None,
             from_plugin: false,
             factory: Arc::new(factory),
@@ -104,12 +99,6 @@ impl AppRegistration {
         F: Fn(&str, &str, &dyn Vfs) -> Box<dyn App> + Send + Sync + 'static,
     {
         self.open_file = Some(Arc::new(factory));
-        self
-    }
-
-    /// Set the cleanup for the app's own global SDI objects.
-    pub fn hide_sdi(mut self, hide: fn(&mut SdiRegistry)) -> Self {
-        self.hide_sdi = Some(hide);
         self
     }
 
@@ -182,6 +171,11 @@ impl AppRegistry {
     /// shadow a built-in; [`Self::remove_plugin_apps`] brings the
     /// built-in back).
     pub fn register(&mut self, reg: AppRegistration) {
+        if !reg.from_plugin {
+            // A built-in (re-)registration supersedes any older built-in a
+            // plugin app shadows under this title.
+            self.shadowed.retain(|s| s.title != reg.title);
+        }
         match self.apps.iter_mut().find(|a| a.title == reg.title) {
             Some(slot) => {
                 let old = std::mem::replace(slot, reg);
@@ -193,8 +187,10 @@ impl AppRegistry {
         }
     }
 
-    /// Remove the app titled `title`. Returns whether it was registered.
+    /// Remove the app titled `title`, including a built-in a plugin app
+    /// shadows under it. Returns whether it was registered.
     pub fn unregister(&mut self, title: &str) -> bool {
+        self.shadowed.retain(|s| s.title != title);
         let before = self.apps.len();
         self.apps.retain(|a| a.title != title);
         self.apps.len() != before
@@ -274,13 +270,6 @@ impl AppRegistry {
     /// Media the app titled `title` owns (see [`OwnedMedia`]).
     pub fn owned_media(&self, title: &str) -> Option<OwnedMedia> {
         self.get(title).and_then(|a| a.owned_media)
-    }
-
-    /// Run every app's [`AppRegistration::hide_sdi`] cleanup.
-    pub fn hide_sdi(&self, sdi: &mut SdiRegistry) {
-        for hide in self.apps.iter().filter_map(|a| a.hide_sdi) {
-            hide(sdi);
-        }
     }
 }
 
@@ -394,19 +383,36 @@ mod tests {
         assert_eq!(apps.titles().count(), 3);
     }
 
+    fn plugin(title: &'static str) -> AppRegistration {
+        let mut reg = simple(title).with_path(format!("/plugins/{title}"));
+        reg.from_plugin = true;
+        reg
+    }
+
+    /// Unregistering a title also forgets the built-in a plugin shadowed
+    /// there: the next plugin re-sync used to resurrect it.
     #[test]
-    fn hide_sdi_runs_every_cleanup() {
-        fn hide(sdi: &mut SdiRegistry) {
-            if let Ok(obj) = sdi.get_mut("custom_obj") {
-                obj.visible = false;
-            }
-        }
+    fn unregister_forgets_the_shadowed_builtin() {
         let mut apps = AppRegistry::new();
-        apps.register(simple("Custom").hide_sdi(hide));
-        let mut sdi = SdiRegistry::new();
-        sdi.create("custom_obj").visible = true;
-        apps.hide_sdi(&mut sdi);
-        assert!(!sdi.get("custom_obj").unwrap().visible);
+        apps.register(simple("Calculator"));
+        apps.register(plugin("Calculator"));
+        assert!(apps.unregister("Calculator"));
+        apps.register(plugin("Calculator"));
+        apps.remove_plugin_apps();
+        assert!(apps.is_empty(), "{:?}", apps.titles().collect::<Vec<_>>());
+    }
+
+    /// A built-in registered over a plugin app supersedes the built-in the
+    /// plugin shadowed; removing a later plugin restores the newer one.
+    #[test]
+    fn builtin_reregistration_supersedes_the_shadowed_copy() {
+        let mut apps = AppRegistry::new();
+        apps.register(simple("Calculator"));
+        apps.register(plugin("Calculator"));
+        apps.register(simple("Calculator").with_path("/apps/calc-v2"));
+        apps.register(plugin("Calculator"));
+        apps.remove_plugin_apps();
+        assert_eq!(apps.get("Calculator").unwrap().path, "/apps/calc-v2");
     }
 
     #[test]

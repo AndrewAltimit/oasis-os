@@ -15,8 +15,25 @@ pub struct DecodedImage {
 }
 
 /// Maximum dimension (width or height) we keep in memory. Anything
-/// larger is bilinearly downscaled during decode.
+/// larger is downscaled after decode.
 pub const MAX_DIMENSION: u32 = 1024;
+
+/// Largest source image (in pixels) we agree to decode at all: the full
+/// frame is decoded before downscaling, so a file claiming e.g.
+/// 65535x65535 would otherwise ask for gigabytes (an allocation failure
+/// aborts, which no `catch_unwind` can stop). 40 MP covers phone photos.
+pub const MAX_SOURCE_PIXELS: u64 = 40_000_000;
+
+/// Whether a `w` x `h` source passes [`MAX_SOURCE_PIXELS`] (and isn't
+/// empty).
+fn source_size_ok(w: u32, h: u32) -> bool {
+    w > 0 && h > 0 && u64::from(w) * u64::from(h) <= MAX_SOURCE_PIXELS
+}
+
+/// RGBA byte length of a `w` x `h` image.
+fn rgba_len(w: u32, h: u32) -> usize {
+    (w as usize) * (h as usize) * 4
+}
 
 /// Decode a PNG or JPEG from bytes, returning `None` for unsupported
 /// formats or corrupt data (never panics — we catch decode panics from
@@ -33,6 +50,9 @@ pub fn decode(data: &[u8]) -> Option<DecodedImage> {
     }))
     .ok()
     .flatten()?;
+    if decoded.rgba.len() != rgba_len(decoded.width, decoded.height) {
+        return None;
+    }
 
     Some(fit_within(decoded, MAX_DIMENSION))
 }
@@ -46,7 +66,8 @@ fn decode_png(data: &[u8]) -> Option<DecodedImage> {
     let mut reader = decoder.read_info().ok()?;
     let info = reader.info();
     let (w, h) = (info.width, info.height);
-    if w == 0 || h == 0 {
+    // Checked before `output_buffer_size()` is allocated.
+    if !source_size_ok(w, h) {
         return None;
     }
     // Use the post-transformation color type so palette-indexed PNGs
@@ -58,21 +79,21 @@ fn decode_png(data: &[u8]) -> Option<DecodedImage> {
     let rgba = match color {
         png::ColorType::Rgba => buf,
         png::ColorType::Rgb => {
-            let mut out = Vec::with_capacity((w * h * 4) as usize);
+            let mut out = Vec::with_capacity(rgba_len(w, h));
             for px in buf.as_chunks::<3>().0.iter() {
                 out.extend_from_slice(&[px[0], px[1], px[2], 255]);
             }
             out
         },
         png::ColorType::Grayscale => {
-            let mut out = Vec::with_capacity((w * h * 4) as usize);
+            let mut out = Vec::with_capacity(rgba_len(w, h));
             for &v in &buf {
                 out.extend_from_slice(&[v, v, v, 255]);
             }
             out
         },
         png::ColorType::GrayscaleAlpha => {
-            let mut out = Vec::with_capacity((w * h * 4) as usize);
+            let mut out = Vec::with_capacity(rgba_len(w, h));
             for px in buf.as_chunks::<2>().0.iter() {
                 out.extend_from_slice(&[px[0], px[0], px[0], px[1]]);
             }
@@ -91,22 +112,26 @@ fn decode_png(data: &[u8]) -> Option<DecodedImage> {
 
 fn decode_jpeg(data: &[u8]) -> Option<DecodedImage> {
     let mut dec = jpeg_decoder::Decoder::new(data);
-    let pixels = dec.decode().ok()?;
+    // Read the header first and refuse oversized frames before the
+    // decoder allocates its buffers; the buffer cap backs that up.
+    dec.read_info().ok()?;
     let info = dec.info()?;
     let (w, h) = (u32::from(info.width), u32::from(info.height));
-    if w == 0 || h == 0 {
+    if !source_size_ok(w, h) {
         return None;
     }
+    dec.set_max_decoding_buffer_size(MAX_SOURCE_PIXELS as usize * 3);
+    let pixels = dec.decode().ok()?;
     let rgba = match info.pixel_format {
         jpeg_decoder::PixelFormat::RGB24 => {
-            let mut out = Vec::with_capacity((w * h * 4) as usize);
+            let mut out = Vec::with_capacity(rgba_len(w, h));
             for px in pixels.as_chunks::<3>().0.iter() {
                 out.extend_from_slice(&[px[0], px[1], px[2], 255]);
             }
             out
         },
         jpeg_decoder::PixelFormat::L8 => {
-            let mut out = Vec::with_capacity((w * h * 4) as usize);
+            let mut out = Vec::with_capacity(rgba_len(w, h));
             for &v in &pixels {
                 out.extend_from_slice(&[v, v, v, 255]);
             }
@@ -122,6 +147,25 @@ fn decode_jpeg(data: &[u8]) -> Option<DecodedImage> {
     })
 }
 
+/// Rotate `img` 90 degrees clockwise (width and height swap).
+pub fn rotate_cw(img: &DecodedImage) -> DecodedImage {
+    let (w, h) = (img.width as usize, img.height as usize);
+    let mut out = vec![0u8; img.rgba.len()];
+    for y in 0..h {
+        for x in 0..w {
+            // Source (x, y) lands at (h - 1 - y, x) in the h-wide output.
+            let src = (y * w + x) * 4;
+            let dst = (x * h + (h - 1 - y)) * 4;
+            out[dst..dst + 4].copy_from_slice(&img.rgba[src..src + 4]);
+        }
+    }
+    DecodedImage {
+        width: img.height,
+        height: img.width,
+        rgba: out,
+    }
+}
+
 /// Downscale so neither dimension exceeds `max`. Uses nearest-neighbour —
 /// good enough for a photo viewer and avoids the extra dependency on a
 /// filter crate.
@@ -133,7 +177,7 @@ fn fit_within(img: DecodedImage, max: u32) -> DecodedImage {
     let scale = (max as f32 / w.max(h) as f32).min(1.0);
     let nw = ((w as f32 * scale) as u32).max(1);
     let nh = ((h as f32 * scale) as u32).max(1);
-    let mut out = Vec::with_capacity((nw * nh * 4) as usize);
+    let mut out = Vec::with_capacity(rgba_len(nw, nh));
     // Use u64 for the intermediate product: `y * h` wraps u32 for
     // inputs above ~4 megapixels in a single dimension, which is well
     // inside the `MAX_DIMENSION` cap but still worth being correct.
@@ -170,6 +214,61 @@ mod tests {
                 .unwrap();
         }
         buf
+    }
+
+    /// A PNG whose IHDR claims `w` x `h` (no image data needed: the size
+    /// check runs right after the header).
+    fn png_header_only(w: u32, h: u32) -> Vec<u8> {
+        let mut buf = Vec::new();
+        {
+            let mut enc = png::Encoder::new(&mut buf, w, h);
+            enc.set_color(png::ColorType::Rgba);
+            enc.set_depth(png::BitDepth::Eight);
+            let _writer = enc.write_header().unwrap();
+        }
+        buf
+    }
+
+    #[test]
+    fn rotate_cw_moves_pixels_and_swaps_dims() {
+        // 2x1: red, green -> 1x2: red on top, green below.
+        let img = DecodedImage {
+            width: 2,
+            height: 1,
+            rgba: vec![255, 0, 0, 255, 0, 255, 0, 255],
+        };
+        let r = rotate_cw(&img);
+        assert_eq!((r.width, r.height), (1, 2));
+        assert_eq!(r.rgba, vec![255, 0, 0, 255, 0, 255, 0, 255]);
+        // Four turns are the identity.
+        let sq = DecodedImage {
+            width: 2,
+            height: 2,
+            rgba: (0..16).collect(),
+        };
+        let back = rotate_cw(&rotate_cw(&rotate_cw(&rotate_cw(&sq))));
+        assert_eq!(back.rgba, sq.rgba);
+        assert_ne!(rotate_cw(&sq).rgba, sq.rgba);
+    }
+
+    #[test]
+    fn oversized_png_is_rejected_before_allocating() {
+        assert!(decode(&png_header_only(65_535, 65_535)).is_none());
+        assert!(!source_size_ok(10_000, 10_000));
+        assert!(source_size_ok(4000, 3000));
+        assert!(!source_size_ok(0, 10));
+    }
+
+    #[test]
+    fn oversized_jpeg_header_is_rejected() {
+        // SOI + SOF0 claiming 65000x65000, 3 components; no scan data.
+        let mut jpg = vec![0xFF, 0xD8];
+        jpg.extend_from_slice(&[0xFF, 0xC0, 0x00, 0x11, 0x08]);
+        jpg.extend_from_slice(&65_000u16.to_be_bytes());
+        jpg.extend_from_slice(&65_000u16.to_be_bytes());
+        jpg.extend_from_slice(&[0x03, 1, 0x11, 0, 2, 0x11, 0, 3, 0x11, 0]);
+        jpg.extend_from_slice(&[0xFF, 0xD9]);
+        assert!(decode(&jpg).is_none());
     }
 
     #[test]

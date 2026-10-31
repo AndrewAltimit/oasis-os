@@ -5,6 +5,7 @@
 //! the same on `MemoryVfs`, `RealVfs` and `GameAssetVfs`.
 
 use oasis_app_core::file_viewer::{join_path, parent_dir};
+use oasis_types::error::{OasisError, VfsError};
 use oasis_vfs::{EntryKind, Vfs};
 
 use crate::model::FileOp;
@@ -113,6 +114,24 @@ pub(crate) fn remove_recursive(vfs: &mut dyn Vfs, path: &str) -> Result<(), Stri
     vfs.remove(path).map_err(|e| e.to_string())
 }
 
+/// Whether a failed `rename` means "this backend can't move it in place"
+/// (so copy + delete is the right fallback) rather than a real error
+/// such as a missing source, a bad destination or a permission denial.
+///
+/// Recognises a cross-device / unsupported OS rename (`RealVfs`) and a
+/// backend that can't move the entry in place (`VfsError::Unsupported`,
+/// e.g. an immutable `GameAssetVfs` base-layer entry).
+fn rename_unsupported(err: &OasisError) -> bool {
+    match err {
+        OasisError::Io(io) => matches!(
+            io.kind(),
+            std::io::ErrorKind::CrossesDevices | std::io::ErrorKind::Unsupported
+        ),
+        OasisError::Vfs(VfsError::Unsupported { .. }) => true,
+        _ => false,
+    }
+}
+
 /// Execute `op` against `vfs`.
 ///
 /// Returns a short human-readable status line on success, or an error
@@ -172,10 +191,24 @@ pub(crate) fn apply_file_op(vfs: &mut dyn Vfs, op: &FileOp) -> Result<String, St
                 return Err("Cannot move a folder into itself".to_string());
             }
             let target = unique_path(vfs, to_dir, file_name(from), src_is_dir);
-            if vfs.rename(from, &target).is_err() {
-                // Backends without cross-directory rename: copy + delete.
-                copy_recursive(vfs, from, &target)?;
-                remove_recursive(vfs, from)?;
+            match vfs.rename(from, &target) {
+                Ok(()) => {},
+                Err(e) if rename_unsupported(&e) => {
+                    // The backend can't move this entry in place: copy,
+                    // and only remove the source once the copy is whole.
+                    if let Err(copy_err) = copy_recursive(vfs, from, &target) {
+                        // Best effort: drop the partial copy, keep the source.
+                        let _ = remove_recursive(vfs, &target);
+                        return Err(copy_err);
+                    }
+                    remove_recursive(vfs, from).map_err(|rm_err| {
+                        format!(
+                            "Copied to {} but could not remove the original: {rm_err}",
+                            file_name(&target)
+                        )
+                    })?;
+                },
+                Err(e) => return Err(e.to_string()),
             }
             Ok(format!("Moved {}", file_name(&target)))
         },
@@ -260,5 +293,135 @@ mod tests {
         apply_file_op(&mut v, &op).expect("move");
         assert!(!v.exists("/a/sub"));
         assert_eq!(v.read("/b/sub/two.txt").expect("read"), b"22");
+    }
+
+    /// A `MemoryVfs` whose `rename` always fails with `rename_err`, and
+    /// whose `write` / `remove` can be made to fail for one path.
+    struct Flaky {
+        inner: MemoryVfs,
+        rename_err: fn() -> OasisError,
+        fail_write: Option<&'static str>,
+        fail_remove: Option<&'static str>,
+    }
+
+    impl Flaky {
+        fn new(rename_err: fn() -> OasisError) -> Self {
+            Self {
+                inner: vfs(),
+                rename_err,
+                fail_write: None,
+                fail_remove: None,
+            }
+        }
+    }
+
+    fn denied() -> OasisError {
+        VfsError::Other("permission denied".into()).into()
+    }
+
+    fn cross_device() -> OasisError {
+        std::io::Error::from(std::io::ErrorKind::CrossesDevices).into()
+    }
+
+    impl Vfs for Flaky {
+        fn readdir(&self, p: &str) -> oasis_types::error::Result<Vec<oasis_vfs::VfsEntry>> {
+            self.inner.readdir(p)
+        }
+        fn read(&self, p: &str) -> oasis_types::error::Result<Vec<u8>> {
+            self.inner.read(p)
+        }
+        fn write(&mut self, p: &str, data: &[u8]) -> oasis_types::error::Result<()> {
+            if self.fail_write == Some(p) {
+                return Err(denied());
+            }
+            self.inner.write(p, data)
+        }
+        fn stat(&self, p: &str) -> oasis_types::error::Result<oasis_vfs::VfsMetadata> {
+            self.inner.stat(p)
+        }
+        fn mkdir(&mut self, p: &str) -> oasis_types::error::Result<()> {
+            self.inner.mkdir(p)
+        }
+        fn remove(&mut self, p: &str) -> oasis_types::error::Result<()> {
+            if self.fail_remove == Some(p) {
+                return Err(denied());
+            }
+            self.inner.remove(p)
+        }
+        fn rename(&mut self, _from: &str, _to: &str) -> oasis_types::error::Result<()> {
+            Err((self.rename_err)())
+        }
+        fn exists(&self, p: &str) -> bool {
+            self.inner.exists(p)
+        }
+        fn get_permissions(
+            &self,
+            p: &str,
+        ) -> oasis_types::error::Result<oasis_vfs::FilePermissions> {
+            self.inner.get_permissions(p)
+        }
+        fn set_permissions(
+            &mut self,
+            p: &str,
+            perms: oasis_vfs::FilePermissions,
+        ) -> oasis_types::error::Result<()> {
+            self.inner.set_permissions(p, perms)
+        }
+    }
+
+    fn move_sub() -> FileOp {
+        FileOp::Move {
+            from: "/a/sub".into(),
+            to_dir: "/b".into(),
+        }
+    }
+
+    #[test]
+    fn move_does_not_fall_back_on_a_real_rename_error() {
+        let mut v = Flaky::new(denied);
+        assert!(apply_file_op(&mut v, &move_sub()).is_err());
+        assert!(v.exists("/a/sub/two.txt"), "source untouched");
+        assert!(!v.exists("/b/sub"), "no copy made");
+    }
+
+    #[test]
+    fn move_falls_back_to_copy_when_rename_is_unsupported() {
+        let mut v = Flaky::new(cross_device);
+        apply_file_op(&mut v, &move_sub()).expect("move via copy");
+        assert!(!v.exists("/a/sub"));
+        assert_eq!(v.read("/b/sub/two.txt").expect("read"), b"22");
+    }
+
+    #[test]
+    fn failed_fallback_copy_keeps_source_and_drops_partial_copy() {
+        let mut v = Flaky::new(cross_device);
+        v.fail_write = Some("/b/sub/two.txt");
+        assert!(apply_file_op(&mut v, &move_sub()).is_err());
+        assert_eq!(v.read("/a/sub/two.txt").expect("read"), b"22");
+        assert!(!v.exists("/b/sub"), "partial copy removed");
+    }
+
+    #[test]
+    fn failed_source_removal_after_copy_is_reported() {
+        let mut v = Flaky::new(cross_device);
+        v.fail_remove = Some("/a/sub/two.txt");
+        let err = apply_file_op(&mut v, &move_sub()).expect_err("remove fails");
+        assert!(err.contains("Copied"), "{err}");
+        assert_eq!(v.read("/b/sub/two.txt").expect("read"), b"22");
+    }
+
+    #[test]
+    fn move_base_layer_entry_falls_back_to_copy() {
+        let mut v = oasis_vfs::GameAssetVfs::new();
+        v.add_base_dir("/a");
+        v.add_base_dir("/b");
+        v.add_base_file("/a/f.txt", b"base");
+        let op = FileOp::Move {
+            from: "/a/f.txt".into(),
+            to_dir: "/b".into(),
+        };
+        apply_file_op(&mut v, &op).expect("move");
+        assert!(!v.exists("/a/f.txt"));
+        assert_eq!(v.read("/b/f.txt").expect("read"), b"base");
     }
 }

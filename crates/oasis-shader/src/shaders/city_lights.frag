@@ -2,7 +2,9 @@
 precision highp float;
 
 // Animated colour grid with cell shadows.
-// Port of https://www.shadertoy.com/view/wscGWl
+// Port of https://www.shadertoy.com/view/wscGWl. GLSL twin of
+// `software/cells.rs` (the CPU port every backend ships); keep the two
+// in step.
 
 uniform float u_time;
 uniform vec2 u_resolution;
@@ -20,20 +22,23 @@ float getCellBright(float time, vec2 id) {
 }
 
 void main() {
-    float speed = u_speed > 0.0 ? u_speed : 1.0;
-    float size  = u_size  > 0.0 ? u_size  : 30.0;
+    // Top-left origin, y down (matches the CPU renderer).
+    vec2 fragCoord = vec2(gl_FragCoord.x, u_resolution.y - gl_FragCoord.y);
+
+    // A non-positive size would divide by zero: use the default.
+    float size = u_size > 0.0 ? u_size : 30.0;
 
     float mx = max(u_resolution.x, u_resolution.y);
-    vec2 uv = gl_FragCoord.xy / mx;
+    vec2 uv = fragCoord / mx;
 
-    float time = u_time * 0.5 * speed;
+    float time = u_time * 0.5 * u_speed;
 
     uv *= size;
 
     vec2 id = floor(uv);
     vec2 gv = fract(uv) - 0.5;
 
-    float randBright = getCellBright(u_time * speed, id);
+    float bright = getCellBright(u_time * u_speed, id);
 
     vec3 colorShift = vec3(rand(id) * 0.1);
     vec3 color = 0.6 + 0.5 * cos(time + (id.xyx * 0.1)
@@ -41,14 +46,14 @@ void main() {
 
     float shadow = 0.0;
     shadow += smoothstep(0.0, 0.7,
-        gv.x * min(0.0, getCellBright(u_time * speed, vec2(id.x - 1.0, id.y))
-                       - getCellBright(u_time * speed, id)));
+        gv.x * min(0.0, getCellBright(u_time * u_speed, vec2(id.x - 1.0, id.y))
+                       - bright));
     shadow += smoothstep(0.0, 0.7,
-       -gv.y * min(0.0, getCellBright(u_time * speed, vec2(id.x, id.y + 1.0))
-                       - getCellBright(u_time * speed, id)));
+       -gv.y * min(0.0, getCellBright(u_time * u_speed, vec2(id.x, id.y + 1.0))
+                       - bright));
     color -= shadow * 0.4;
 
-    color *= 1.0 - (randBright * 0.2);
+    color *= 1.0 - (bright * 0.2);
 
-    fragColor = vec4(color, 1.0);
+    fragColor = vec4(clamp(color, 0.0, 1.0), 1.0);
 }

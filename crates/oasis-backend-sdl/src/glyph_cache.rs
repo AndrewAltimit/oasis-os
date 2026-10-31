@@ -332,11 +332,13 @@ impl SdiText for SdlBackend {
                     // the glyph's tracked tint actually changes.
                     texture.set_color_mod(color.r, color.g, color.b);
                 }
-                let _ = self.canvas.copy(
-                    texture,
-                    None,
-                    frect(cx + entry.off_x, ty + entry.off_y, entry.w, entry.h),
-                );
+                self.canvas
+                    .copy(
+                        texture,
+                        None,
+                        frect(cx + entry.off_x, ty + entry.off_y, entry.w, entry.h),
+                    )
+                    .backend_err()?;
             }
             // Bitmap entries carry `glyph_advance_scaled` here, so the
             // no-font path advances exactly as before.

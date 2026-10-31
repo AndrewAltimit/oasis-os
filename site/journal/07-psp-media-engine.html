@@ -488,7 +488,7 @@ sceMpegAvcDecodeMode(mpeg, {-1, Psm8888}) = 0x0</code></pre>
     (length-prefixed, directly from MP4 container) via
     <code>sceMpegGetAvcNalAu</code>, then decodes via
     <code>sceMpegAvcDecode</code>. The ME outputs YCbCr which is converted to
-    ABGR via <code>sceMpegBaseCscAvc</code> (hardware color space converter).
+    32-bit RGB via <code>sceMpegBaseCscAvc</code> (hardware color space converter).
     Everything initializes. Frames decode. Video appears on screen.
   </p>
 
@@ -792,7 +792,8 @@ Keyframe 2   --&gt; decode frames 0..50   --&gt; skip P/B until keyframe 3
   </p>
 
   <p>
-    The CSC output uses <code>Psm8888</code> pixel format (ABGR, 32 bits per pixel).
+    The CSC output uses <code>Psm8888</code> pixel format (32 bits per pixel: the
+    <code>u32</code> <code>0xAABBGGRR</code>, i.e. bytes R, G, B, A in memory).
     We discovered that the CSC output format is determined by the
     <code>sceMpegAvcDecodeMode</code> setting passed during initialization &mdash; not
     by any parameter to the CSC function itself. Setting the wrong decode mode
