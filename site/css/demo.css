@@ -58,6 +58,11 @@
 .demo-bar__icon.is-on { color: var(--accent); }
 #help-btn[aria-expanded="true"] { color: var(--text); background: rgba(255, 255, 255, 0.06); }
 
+/* Tablet widths: the "Live demo" label pushed GitHub past the edge. */
+@media (max-width: 1000px) {
+  .demo-bar__label { display: none; }
+}
+
 @media (max-width: 760px) {
   .demo-bar { flex-wrap: wrap; }
   .demo-bar__label { display: none; }
