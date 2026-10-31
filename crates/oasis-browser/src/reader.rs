@@ -301,15 +301,17 @@ fn build_reader_html(doc: &Document, node_id: NodeId, html: &mut String) {
                 html.push('<');
                 html.push_str(tag);
 
-                // Keep href, src, alt attributes.
-                if let Some(href) = elem.get_attribute("href") {
-                    html.push_str(&format!(" href=\"{}\"", href));
-                }
-                if let Some(src) = elem.get_attribute("src") {
-                    html.push_str(&format!(" src=\"{}\"", src));
-                }
-                if let Some(alt) = elem.get_attribute("alt") {
-                    html.push_str(&format!(" alt=\"{}\"", alt));
+                // Keep href, src, alt attributes, escaped: a `"` in a
+                // value must not close the attribute and start another
+                // (`alt='x" onerror="...'`).
+                for name in ["href", "src", "alt"] {
+                    if let Some(value) = elem.get_attribute(name) {
+                        html.push(' ');
+                        html.push_str(name);
+                        html.push_str("=\"");
+                        push_escaped(html, value);
+                        html.push('"');
+                    }
                 }
                 html.push('>');
 

@@ -42,11 +42,12 @@ fn css_uses_media_queries(css_text: &str) -> bool {
 
 /// HTML source to render for a text-like response body. HTML (and
 /// untyped bodies, which are sniffed as HTML) is used as-is; `text/plain`
-/// is escaped into a `<pre>` so markup in it is displayed verbatim rather
-/// than parsed — and any `<script>` in it never runs.
+/// and `text/css` are escaped into a `<pre>` so markup in them is
+/// displayed verbatim rather than parsed — and any `<script>` in them
+/// never runs.
 fn html_for_text_body(content_type: ContentType, body: &[u8]) -> String {
     let text = String::from_utf8_lossy(body);
-    if content_type != ContentType::PlainText {
+    if !matches!(content_type, ContentType::PlainText | ContentType::Css) {
         return text.into_owned();
     }
     let mut html = String::with_capacity(text.len() + 96);

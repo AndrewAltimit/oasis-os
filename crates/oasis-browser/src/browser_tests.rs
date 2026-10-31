@@ -3773,3 +3773,79 @@ mod tls_lifetime {
         assert!(b_dropped.load(Ordering::SeqCst));
     }
 }
+
+// ---------------------------------------------------------------
+// Injection / reader-mode regressions
+// ---------------------------------------------------------------
+
+/// Whether the loaded document holds a `<script>` element.
+fn has_script_element(browser: &BrowserWidget) -> bool {
+    let doc = browser.document.as_ref().expect("document");
+    (0..doc.nodes.len()).any(|id| {
+        doc.element(id)
+            .is_some_and(|e| e.tag == html::dom::TagName::Script)
+    })
+}
+
+/// Regression: the Gemini title went into `<title>` unescaped, so a
+/// `# </title><script>` heading became live markup.
+#[test]
+fn gemini_title_is_escaped() {
+    let mut browser = make_browser();
+    browser.load_gemini("# </title><script>x()</script>\nbody", "gemini://g/");
+    assert!(!has_script_element(&browser));
+}
+
+/// Regression: a stylesheet opened directly was wrapped in `<pre>`
+/// unescaped, so `</pre><script>` in it ran as page script.
+#[test]
+fn css_response_is_shown_escaped() {
+    let mut browser = make_browser();
+    browser.process_response(ResourceResponse {
+        url: "vfs://test/evil.css".to_string(),
+        content_type: ContentType::Css,
+        body: b"a{}</pre><script>x()</script>".to_vec(),
+        status: 200,
+    });
+    assert!(!has_script_element(&browser));
+}
+
+/// Regression: toggling reader mode swapped in the reader DOM but kept
+/// the original page's selector index, so the next hover restyle
+/// indexed author sheets that no longer existed (out-of-bounds panic),
+/// and the page stayed blank until something forced a relayout.
+#[test]
+fn reader_mode_toggle_then_hover_does_not_panic() {
+    let mut vfs = test_vfs();
+    vfs.write(
+        "/sites/home/styled.html",
+        b"<html><head><style>a{color:red} *:hover{color:blue}</style></head>\
+          <body><article>\
+          <p>This is a long enough paragraph to pass the minimum scoring \
+          threshold for reader mode extraction in the OASIS browser.</p>\
+          <p>And here is another paragraph with <a href=\"x\">a link</a> \
+          and plenty of text content for the scoring algorithm.</p>\
+          </article></body></html>",
+    )
+    .unwrap();
+    let mut browser = make_browser();
+    browser.set_window(0, 0, 480, 272);
+    browser.navigate_vfs("vfs://sites/home/styled.html", &vfs);
+    let mut backend = MockBackend::new();
+    browser.paint(&mut backend).unwrap();
+
+    browser.toggle_reader_mode();
+    assert!(browser.reader_mode);
+    assert!(browser.layout_root.is_some(), "reader page laid out");
+    assert_eq!(browser.current_url(), Some("vfs://sites/home/styled.html"));
+    browser.paint(&mut backend).unwrap();
+    for y in (40..200).step_by(8) {
+        browser.handle_input(&InputEvent::CursorMove { x: 40, y }, &vfs);
+    }
+    browser.paint(&mut backend).unwrap();
+
+    // Toggling back restores the page without a new history entry.
+    browser.toggle_reader_mode();
+    assert!(!browser.reader_mode);
+    assert!(!browser.nav.can_go_back(), "no history entry added");
+}
