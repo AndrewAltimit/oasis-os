@@ -238,6 +238,15 @@ opt-level = 3
 [profile.dev.package.symphonia-format-isomp4]
 opt-level = 3
 
+# The software rasterizer draws every headless / UE5 frame. Its span fills
+# and glyph-run blits are iterator code (`as_chunks_mut`, `zip`, `fill`)
+# that is fast optimized and very slow at opt-level 0: after the
+# vectorized-span rewrite the debug e2e fuzz soak went 14 s -> 100 s and
+# timed out under CI load. Optimized (debug assertions and overflow checks
+# stay on), the same test takes ~3 s.
+[profile.dev.package.oasis-rasterize]
+opt-level = 3
+
 [profile.asan]
 inherits = "dev"
 opt-level = 1
