@@ -323,7 +323,13 @@ impl ComputedStyle {
             "isolation" => self.isolation = Isolation::Auto,
             "resize" => self.resize = Resize::None,
             "touch-action" => self.touch_action = TouchAction::Auto,
-            _ => {},
+            // Everything else the `inherit` tables know: copy the
+            // default (initial) value (`border-top-width`, `opacity`, ...).
+            _ => {
+                if !self.inherit_non_inherited_from(property, &initial) {
+                    self.inherit_property_from(property, &initial);
+                }
+            },
         }
     }
 

@@ -58,11 +58,17 @@ pub enum SimpleSelector {
     /// enclosing rule's selector. Desugared into concrete selectors at
     /// parse time; should not appear in the final AST.
     Nest,
-    /// Attribute selector: `[attr]`, `[attr=val]`, etc.
+    /// Attribute selector: `[attr]`, `[attr=val]`, `[attr=val i]`, etc.
     Attribute {
         name: String,
         op: AttrOp,
+        /// The value to compare against; ASCII-lowercased when
+        /// `case_insensitive` is set.
         value: Option<String>,
+        /// Compare values ASCII-case-insensitively: the `i` flag, or
+        /// (without an `s` flag) one of the HTML attributes whose values
+        /// are case-insensitive (`type`, `lang`, `dir`, ...).
+        case_insensitive: bool,
     },
 }
 
@@ -776,8 +782,10 @@ pub enum FontFaceStyle {
 pub struct Stylesheet {
     pub rules: Vec<Rule>,
     pub keyframes: Vec<KeyframesRule>,
-    /// Cascade layers declared in this stylesheet, in declaration
-    /// order. Each `Rule`'s `layer` field is an index into this list.
+    /// Cascade layers declared in this stylesheet, by full dotted name,
+    /// in cascade order (lowest priority first: sublayers precede their
+    /// parent, siblings follow first declaration). Each `Rule`'s `layer`
+    /// field is an index into this list.
     /// Anonymous layers (from `@layer { ... }`) get a synthetic name
     /// of the form `"__anon_{n}"` so they stay distinct from any
     /// named layer. Empty for stylesheets without any `@layer` rules.

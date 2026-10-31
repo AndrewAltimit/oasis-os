@@ -40,6 +40,22 @@ pub(crate) fn expand_shorthands(decls: Vec<Declaration>) -> Vec<Declaration> {
         // passed through for direction-aware resolution at cascade
         // time in `ComputedStyle::apply_declaration`.
         for decl in rewrite_logical_property(decl) {
+            // `border: inherit` etc.: a CSS-wide keyword applies to every
+            // longhand (the per-shorthand parsers would misread it).
+            if let CssValue::Keyword(kw) = &decl.value
+                && is_css_wide_keyword(kw)
+                && let Some(longhands) = css_wide_longhands(&decl.property)
+            {
+                for longhand in longhands {
+                    out.push(Declaration {
+                        property: (*longhand).into(),
+                        value: decl.value.clone(),
+                        important: decl.important,
+                        property_id: PropertyId::from_name(longhand),
+                    });
+                }
+                continue;
+            }
             match decl.property.as_str() {
                 "margin" => {
                     out.extend(expand_box_shorthand("margin", &decl.value, decl.important));
@@ -217,6 +233,63 @@ pub(crate) fn expand_shorthands(decls: Vec<Declaration>) -> Vec<Declaration> {
         }
     }
     out
+}
+
+/// `inherit`, `initial`, `unset`, `revert`, `revert-layer`.
+fn is_css_wide_keyword(kw: &str) -> bool {
+    ["inherit", "initial", "unset", "revert", "revert-layer"]
+        .iter()
+        .any(|k| kw.eq_ignore_ascii_case(k))
+}
+
+/// The longhands a CSS-wide keyword on shorthand `property` expands to,
+/// for the shorthands whose value parsers cannot carry the keyword
+/// through themselves (`margin` / `padding` / `flex` / `border-width`
+/// and friends already copy it to each longhand).
+fn css_wide_longhands(property: &str) -> Option<&'static [&'static str]> {
+    macro_rules! side_props {
+        ($($side:literal),*) => {
+            &[$(
+                concat!("border-", $side, "-width"),
+                concat!("border-", $side, "-style"),
+                concat!("border-", $side, "-color"),
+            )*]
+        };
+    }
+    Some(match property {
+        "border" => side_props!("top", "right", "bottom", "left"),
+        "border-top" => side_props!("top"),
+        "border-right" => side_props!("right"),
+        "border-bottom" => side_props!("bottom"),
+        "border-left" => side_props!("left"),
+        "background" => &[
+            "background-color",
+            "background-image",
+            "background-position",
+            "background-size",
+            "background-repeat",
+            "background-clip",
+            "background-origin",
+        ],
+        "list-style" => &["list-style-type", "list-style-position"],
+        "font" => &[
+            "font-style",
+            "font-variant",
+            "font-weight",
+            "font-stretch",
+            "font-size",
+            "line-height",
+            "font-family",
+        ],
+        "outline" => &["outline-width", "outline-style", "outline-color"],
+        "border-radius" => &[
+            "border-top-left-radius",
+            "border-top-right-radius",
+            "border-bottom-right-radius",
+            "border-bottom-left-radius",
+        ],
+        _ => return None,
+    })
 }
 
 /// Expand CSS logical shorthands and rewrite direction-independent
@@ -929,19 +1002,82 @@ mod tests {
         assert_eq!(result[2], decl("flex-basis", px(0.0)));
     }
 
-    #[test]
-    fn flex_keyword_passthrough() {
-        let result = expand("flex", kw("auto"));
-        assert_eq!(result.len(), 1);
-        assert_eq!(result[0], decl("flex", kw("auto")));
+    /// `[grow, shrink, basis]` of an expanded `flex` declaration.
+    fn flex_triple(value: CssValue) -> Vec<CssValue> {
+        let result = expand("flex", value);
+        let props: Vec<&str> = result.iter().map(|d| d.property.as_str()).collect();
+        assert_eq!(props, ["flex-grow", "flex-shrink", "flex-basis"]);
+        result.into_iter().map(|d| d.value).collect()
     }
 
     #[test]
-    fn flex_multiple_passthrough() {
+    fn flex_auto_is_one_one_auto() {
+        assert_eq!(flex_triple(kw("auto")), [num(1.0), num(1.0), kw("auto")]);
+    }
+
+    #[test]
+    fn flex_initial_is_zero_one_auto() {
+        assert_eq!(flex_triple(kw("initial")), [num(0.0), num(1.0), kw("auto")]);
+    }
+
+    #[test]
+    fn flex_inherit_reaches_every_longhand() {
+        assert_eq!(
+            flex_triple(kw("inherit")),
+            [kw("inherit"), kw("inherit"), kw("inherit")]
+        );
+    }
+
+    #[test]
+    fn flex_grow_shrink_pair() {
         let val = CssValue::Multiple(vec![num(1.0), num(0.0)]);
-        let result = expand("flex", val.clone());
-        assert_eq!(result.len(), 1);
-        assert_eq!(result[0], decl("flex", val));
+        assert_eq!(flex_triple(val), [num(1.0), num(0.0), px(0.0)]);
+    }
+
+    #[test]
+    fn flex_three_values_with_unitless_zero_basis() {
+        let val = CssValue::Multiple(vec![num(2.0), num(1.0), num(0.0)]);
+        assert_eq!(flex_triple(val), [num(2.0), num(1.0), px(0.0)]);
+    }
+
+    #[test]
+    fn flex_three_values_with_length_basis() {
+        let val = CssValue::Multiple(vec![num(0.0), num(0.0), px(200.0)]);
+        assert_eq!(flex_triple(val), [num(0.0), num(0.0), px(200.0)]);
+    }
+
+    #[test]
+    fn flex_basis_only_defaults_grow_and_shrink_to_one() {
+        assert_eq!(flex_triple(px(120.0)), [num(1.0), num(1.0), px(120.0)]);
+        let pct = CssValue::Percentage(50.0);
+        assert_eq!(flex_triple(pct.clone()), [num(1.0), num(1.0), pct]);
+    }
+
+    #[test]
+    fn flex_basis_before_grow() {
+        let val = CssValue::Multiple(vec![px(100.0), num(2.0)]);
+        assert_eq!(flex_triple(val), [num(2.0), num(1.0), px(100.0)]);
+    }
+
+    #[test]
+    fn css_wide_keyword_reaches_every_border_longhand() {
+        let result = expand("border", kw("inherit"));
+        assert_eq!(result.len(), 12);
+        assert!(result.iter().all(|d| d.value == kw("inherit")));
+        assert!(result.iter().any(|d| d.property == "border-left-style"));
+        let result = expand("border-top", kw("initial"));
+        let props: Vec<&str> = result.iter().map(|d| d.property.as_str()).collect();
+        assert_eq!(
+            props,
+            ["border-top-width", "border-top-style", "border-top-color"]
+        );
+    }
+
+    #[test]
+    fn flex_invalid_value_is_dropped() {
+        assert!(expand("flex", kw("bogus")).is_empty());
+        let val = CssValue::Multiple(vec![num(1.0), num(1.0), num(1.0), num(1.0)]);
+        assert!(expand("flex", val).is_empty());
     }
 
     // -- font shorthand -------------------------------------------

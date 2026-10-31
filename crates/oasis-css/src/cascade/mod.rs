@@ -144,25 +144,48 @@ pub type GlobalLayerMap = FxHashMap<(u16, u16), u16>;
 
 /// Build a global layer ordering table from all stylesheets.
 ///
-/// Layer names are assigned global indices in the order they are first
-/// encountered across all stylesheets (which follows source order).
-/// Subsequent sheets that declare the same layer name reuse the index.
+/// The same layer name in different sheets is one layer. Global indices
+/// follow the cascade order of the merged layer tree (sublayers before
+/// their parent, siblings by first declaration across sheets in source
+/// order). Each sheet's `layers` is already in its own cascade order,
+/// which preserves the sibling order the merge needs. Anonymous layers
+/// are distinct per sheet.
 pub(crate) fn build_global_layer_map(stylesheets: &[&Stylesheet]) -> GlobalLayerMap {
-    let mut name_to_global: FxHashMap<&str, u16> = FxHashMap::default();
-    let mut next_global: u16 = 0;
-    let mut map = GlobalLayerMap::default();
-
+    let mut names: Vec<String> = Vec::new();
+    let mut seen: FxHashMap<String, usize> = FxHashMap::default();
+    // (sheet, local) -> index into `names`.
+    let mut slots: Vec<((u16, u16), usize)> = Vec::new();
     for (sheet_idx, sheet) in stylesheets.iter().enumerate() {
+        let sheet_key = u16::try_from(sheet_idx).unwrap_or(u16::MAX);
         for (local_idx, name) in sheet.layers.iter().enumerate() {
-            let global = *name_to_global.entry(name.as_str()).or_insert_with(|| {
-                let idx = next_global;
-                next_global = next_global.saturating_add(1);
-                idx
+            let key = if name.contains("__anon_") {
+                // `__anon_N` segments only mean something inside one sheet.
+                name.split('.')
+                    .map(|seg| {
+                        if seg.starts_with("__anon_") {
+                            format!("{seg}#{sheet_idx}")
+                        } else {
+                            seg.to_string()
+                        }
+                    })
+                    .collect::<Vec<_>>()
+                    .join(".")
+            } else {
+                name.clone()
+            };
+            let slot = *seen.entry(key.clone()).or_insert_with(|| {
+                names.push(key);
+                names.len() - 1
             });
-            map.insert((sheet_idx as u16, local_idx as u16), global);
+            let local = u16::try_from(local_idx).unwrap_or(u16::MAX);
+            slots.push(((sheet_key, local), slot));
         }
     }
-    map
+    let ranks = crate::parser::layer_cascade_ranks(&names);
+    slots
+        .into_iter()
+        .map(|(k, slot)| (k, u16::try_from(ranks[slot]).unwrap_or(u16::MAX)))
+        .collect()
 }
 
 /// Per-element container metadata feeding `@container` rule evaluation.
@@ -828,9 +851,12 @@ fn apply_value(
             apply_unset(style, parent, property);
             return;
         }
+        // `inherit` takes the parent's computed value for every property,
+        // inherited or not (`border: inherit`, `background-color: inherit`).
         if kw.eq_ignore_ascii_case("inherit")
             && let Some(p) = parent
-            && style.inherit_property_from(property, p)
+            && (style.inherit_property_from(property, p)
+                || style.inherit_non_inherited_from(property, p))
         {
             return;
         }
