@@ -156,7 +156,9 @@ fn in_flow(children: &mut [LayoutBox]) -> impl Iterator<Item = &mut LayoutBox> {
 /// Max-content of a table or grid: lay a copy out unconstrained and read
 /// back how wide its content came out.
 fn laid_out_fit_width(b: &LayoutBox, measurer: &dyn TextMeasurer) -> f32 {
-    let mut probe = b.clone();
+    // Boxed: a `LayoutBox` is ~1.7 KB, and this frame sits in a walk as
+    // deep as the DOM.
+    let mut probe = Box::new(b.clone());
     probe.sizing.forced_width = None;
     probe.sizing.forced_height = None;
     probe.dimensions.content.x = 0.0;

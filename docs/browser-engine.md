@@ -425,7 +425,9 @@ directly.
   `clearRect` covering the canvas drops everything before it (the usual
   clear-and-redraw animation loop stays constant-size), and commands
   (16 384), path points (65 536 per path, 2^20 in total) and `save()`
-  depth (1024) are capped.
+  depth (1024) are capped. A full list drops further commands and sets
+  `CanvasState::overflowed` until the next full clear, so what is on
+  screen stays put.
 - **SVG** (`svg/`) — `<rect>`, `<circle>`, `<ellipse>`, `<line>`,
   `<polygon>`, `<polyline>`, `<path>` (all commands, Bezier flattening)
   with fill-rule / linecap / linejoin; `<g>` transform composition and
