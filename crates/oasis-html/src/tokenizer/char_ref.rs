@@ -19,14 +19,17 @@ use super::types::{State, Token};
 /// With a `;` any known name matches. Without one only the legacy
 /// references do, as the longest such prefix (`&copy2024` is `©2024`,
 /// `&notin` without `;` is `¬in`); `&mdash` stays literal.
+///
+/// An unknown name *with* a `;` stays literal instead of matching a legacy
+/// prefix: the table covers only part of HTML5's names, so `&centerdot;`
+/// or `&parallel;` (real names it lacks) would otherwise come out as
+/// `¢erdot;` / `¶llel;`.
 pub(crate) fn match_named_ref(name: &str) -> Option<(&'static str, usize)> {
     use crate::entities::{is_legacy_entity, lookup_entity};
-    if let Some(base) = name.strip_suffix(';')
-        && let Some(replacement) = lookup_entity(base)
-    {
-        return Some((replacement, name.len()));
+    if let Some(base) = name.strip_suffix(';') {
+        return lookup_entity(base).map(|replacement| (replacement, name.len()));
     }
-    let base = name.strip_suffix(';').unwrap_or(name);
+    let base = name;
     // The longest legacy name is six characters.
     (1..=base.len().min(6)).rev().find_map(|n| {
         let prefix = base.get(..n)?;
@@ -44,6 +47,18 @@ pub(crate) fn resolve_named_ref_text(name: &str) -> String {
     match match_named_ref(name) {
         Some((replacement, used)) => format!("{replacement}{}", &name[used..]),
         None => format!("&{name}"),
+    }
+}
+
+/// The character a numeric reference `&#code;` stands for (§13.2.5.80):
+/// U+FFFD for NUL, surrogates and out-of-range values, and C1 controls
+/// as the Windows-1252 characters pages mean (`&#150;` is an en dash).
+pub(crate) fn numeric_ref_char(code: u32) -> char {
+    match code {
+        0 | 0xD800..=0xDFFF => '\u{FFFD}',
+        c if c > 0x10FFFF => '\u{FFFD}',
+        c @ 0x80..=0x9F => windows_1252_c1(c),
+        c => char::from_u32(c).unwrap_or('\u{FFFD}'),
     }
 }
 
@@ -225,15 +240,7 @@ impl Tokenizer {
 
     /// Convert accumulated numeric code point to character and emit.
     pub(crate) fn finish_numeric_char_ref(&mut self) {
-        let ch = match self.char_ref_code {
-            0 | 0xD800..=0xDFFF => '\u{FFFD}',
-            c if c > 0x10FFFF => '\u{FFFD}',
-            // C1 controls are the Windows-1252 characters pages mean
-            // (`&#150;` is an en dash, §13.2.5.80).
-            c @ 0x80..=0x9F => windows_1252_c1(c),
-            c => char::from_u32(c).unwrap_or('\u{FFFD}'),
-        };
-        let s = ch.to_string();
+        let s = numeric_ref_char(self.char_ref_code).to_string();
         self.emit_char_ref_text(&s);
     }
 

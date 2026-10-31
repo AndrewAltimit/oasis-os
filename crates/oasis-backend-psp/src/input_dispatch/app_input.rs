@@ -655,8 +655,13 @@ fn radio_input(event: &InputEvent, cx: AppInputCtx<'_>) {
                         // and hangs the next `sceGuSync` on real hardware.
                         match oasis_backend_psp::network::ensure_net_init_pub() {
                             Ok(()) => {
-                                // GotIp path is silent; no dialog ran, no
-                                // GU reinit needed.
+                                // The saved-profile path is silent, but a
+                                // successful WiFi dialog also lands here;
+                                // `reinit_gu_frame` is a no-op unless one
+                                // ran, and skipping it would leave the
+                                // dialog flag set for an unrelated later
+                                // reinit (a second `sceGuStart`).
+                                backend.reinit_gu_frame();
                             },
                             Err(e) => {
                                 radio.error_msg = format!("Net error: {e}");

@@ -144,6 +144,7 @@ impl BrowserWidget {
         self.reader_html = None;
         self.error_message = None;
         self.page_csp = None;
+        self.reader_saved_csp = None;
         self.page_errors.clear();
         self.document = None;
         self.layout_root = None;

@@ -209,7 +209,7 @@
    "features": [
     "video-embed"
    ],
-   "loc": 2898,
+   "loc": 2944,
    "files": 5,
    "deps": [
     {
@@ -286,7 +286,7 @@
     "skin-ttf",
     "tls-rustls"
    ],
-   "loc": 25645,
+   "loc": 25673,
    "files": 72,
    "deps": [
     {
@@ -524,7 +524,7 @@
    "crate_type": [],
    "bins": [],
    "features": [],
-   "loc": 4065,
+   "loc": 4066,
    "files": 10,
    "deps": [
     {
@@ -606,7 +606,7 @@
    "crate_type": [],
    "bins": [],
    "features": [],
-   "loc": 3735,
+   "loc": 3756,
    "files": 10,
    "deps": [
     {
@@ -818,7 +818,7 @@
     "web-fonts",
     "webp"
    ],
-   "loc": 61607,
+   "loc": 61679,
    "files": 109,
    "deps": [
     {
@@ -874,7 +874,7 @@
    "crate_type": [],
    "bins": [],
    "features": [],
-   "loc": 10934,
+   "loc": 10993,
    "files": 21,
    "deps": []
   },
@@ -894,7 +894,7 @@
     "scripting",
     "web-fonts"
    ],
-   "loc": 29581,
+   "loc": 29633,
    "files": 45,
    "deps": [
     {
@@ -921,7 +921,7 @@
    "features": [
     "psp"
    ],
-   "loc": 10699,
+   "loc": 10765,
    "files": 15,
    "deps": [
     {
@@ -968,7 +968,7 @@
    "crate_type": [],
    "bins": [],
    "features": [],
-   "loc": 22326,
+   "loc": 22397,
    "files": 68,
    "deps": [
     {
@@ -1248,7 +1248,7 @@
    "crate_type": [],
    "bins": [],
    "features": [],
-   "loc": 4444,
+   "loc": 4463,
    "files": 8,
    "deps": [
     {
@@ -1293,7 +1293,7 @@
     "tls-rustls",
     "vfs"
    ],
-   "loc": 7174,
+   "loc": 7242,
    "files": 11,
    "deps": [
     {
@@ -1554,7 +1554,7 @@
     "kernel-mode",
     "kernel-volatile"
    ],
-   "loc": 21688,
+   "loc": 21722,
    "files": 68,
    "deps": [
     {

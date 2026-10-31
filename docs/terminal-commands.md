@@ -50,8 +50,9 @@ The terminal in `oasis-terminal/src/` supports:
   `>&2`, `&> file`, `&>> file`); the target is the one word after the
   operator (`echo a > f b` writes `a b`), `/dev/null` discards, and
   operators inside quotes or `$( ... )` belong to the inner command.
-  Text that reaches a pipe, a redirect or `$(...)` has its ANSI colour
-  codes removed (`for d in $(ls)` sees plain names)
+  Text that reaches a pipe, a redirect or `$(...)` loses the shell's own
+  colour codes (`for d in $(ls)` sees plain names); escape sequences in
+  file contents pass through (`cat a.ans > b.ans` copies them)
 - command lists (`;`, `&&`, `||`, `&`) and pipeline negation (`! cmd`)
 - `#` comments, on typed lines as in scripts (`echo hi # note`; `a#b` and
   `$#` are not comments)

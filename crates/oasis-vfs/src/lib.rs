@@ -343,6 +343,15 @@ pub trait Vfs {
         "UnknownVfs"
     }
 
+    /// Whether `path` itself is a symbolic link (not followed). `readdir`
+    /// and `stat` report a link to a directory as a directory, so
+    /// recursive deletes check this to remove the link instead of
+    /// descending into (and emptying) its target. Defaults to `false`;
+    /// only `RealVfs` has links.
+    fn is_symlink(&self, _path: &str) -> bool {
+        false
+    }
+
     /// Check the invariants every `rename` implementation must enforce.
     ///
     /// `from` and `to` must already be in the implementation's normal form

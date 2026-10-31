@@ -756,9 +756,13 @@ fn malformed_named_entity_passthrough() {
     let tokens = tok("&foobar;");
     assert_eq!(tokens.len(), 1);
     assert_eq!(tokens[0], Token::Character("&foobar;".into()));
-    // ...unless it starts with a legacy name, which matches without `;`
-    // (the html5lib `&notit;` case).
-    assert_eq!(tok("&notareal;"), [Token::Character("\u{AC}areal;".into())]);
+    // ...even when it starts with a legacy name: the entity table lacks
+    // many HTML5 names, and a prefix match would garble real ones
+    // (`&centerdot;` became `¢erdot;`). Without the `;` the legacy
+    // prefix still matches.
+    assert_eq!(tok("&notareal;"), [Token::Character("&notareal;".into())]);
+    assert_eq!(tok("&centerdot;"), [Token::Character("&centerdot;".into())]);
+    assert_eq!(tok("&notareal"), [Token::Character("\u{AC}areal".into())]);
 }
 
 #[test]

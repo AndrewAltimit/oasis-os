@@ -49,7 +49,13 @@ const READ_TIMEOUT: Duration = Duration::from_secs(15);
 /// Upper bound on reading one response. The read timeout only bounds a
 /// single `read`, so without this a server trickling a byte every few
 /// seconds would hold the request (and the I/O thread) for hours.
+/// Extended by one second per [`DEADLINE_BYTES_PER_SEC`] received, so
+/// only transfers slower than that are cut off.
 const RESPONSE_DEADLINE: Duration = Duration::from_secs(60);
+
+/// Throughput above which [`RESPONSE_DEADLINE`] never ends a response
+/// (16 KiB/s: the 8 MB body cap then earns ~8.5 more minutes).
+const DEADLINE_BYTES_PER_SEC: usize = 16 * 1024;
 
 /// Maximum idle connections per host in the connection pool.
 const MAX_CONNS_PER_HOST: usize = 2;
@@ -670,12 +676,27 @@ fn send_request(
 /// pool: after a timeout or EOF the response may be truncated, and
 /// leftover bytes would be read as the next request's response.
 fn read_response_framed(stream: &mut impl Read, method: &str) -> Result<(Vec<u8>, bool)> {
+    read_response_framed_with(stream, method, Instant::now)
+}
+
+/// [`read_response_framed`] with an injectable clock (tests).
+///
+/// The deadline is [`RESPONSE_DEADLINE`] plus one second per
+/// [`DEADLINE_BYTES_PER_SEC`] received: a server trickling bytes still
+/// gets cut off after about a minute, while a large body on a slow but
+/// working link (a 6 MB image at 80 KB/s) is not.
+fn read_response_framed_with(
+    stream: &mut impl Read,
+    method: &str,
+    mut now: impl FnMut() -> Instant,
+) -> Result<(Vec<u8>, bool)> {
     let mut buf = Vec::with_capacity(8192);
     let mut chunk = [0u8; 8192];
     let mut tracker = ResponseTracker::for_method(method);
-    let deadline = Instant::now() + RESPONSE_DEADLINE;
+    let start = now();
     loop {
-        if Instant::now() > deadline {
+        let earned = Duration::from_secs((buf.len() / DEADLINE_BYTES_PER_SEC) as u64);
+        if now().duration_since(start) > RESPONSE_DEADLINE + earned {
             return Err(OasisError::Backend("HTTP response timed out".into()));
         }
         match stream.read(&mut chunk) {
@@ -1098,6 +1119,51 @@ mod tests {
         let full = b"HTTP/1.1 200 OK\r\nContent-Length: 3\r\n\r\nabc".to_vec();
         let (_, framed) = read_response_framed(&mut ThenTimeout(Some(full)), "GET").unwrap();
         assert!(framed);
+    }
+
+    /// Serves `body_len` body bytes in 8 KiB reads, each taking `step` on
+    /// a fake clock.
+    struct SlowBody {
+        head: Option<Vec<u8>>,
+        left: usize,
+    }
+
+    impl Read for SlowBody {
+        fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+            if let Some(h) = self.head.take() {
+                buf[..h.len()].copy_from_slice(&h);
+                return Ok(h.len());
+            }
+            let n = self.left.min(buf.len());
+            buf[..n].fill(b'x');
+            self.left -= n;
+            Ok(n)
+        }
+    }
+
+    fn read_with_rate(body_len: usize, bytes_per_sec: u64) -> Result<(Vec<u8>, bool)> {
+        let head = format!("HTTP/1.1 200 OK\r\nContent-Length: {body_len}\r\n\r\n");
+        let mut stream = SlowBody {
+            head: Some(head.into_bytes()),
+            left: body_len,
+        };
+        let t0 = Instant::now();
+        let mut calls = 0u64;
+        // Each clock reading follows one 8 KiB read.
+        read_response_framed_with(&mut stream, "GET", move || {
+            calls += 1;
+            t0 + Duration::from_millis(calls * 8192 * 1000 / bytes_per_sec)
+        })
+    }
+
+    #[test]
+    fn slow_but_steady_bodies_outlive_the_response_deadline() {
+        // A 6 MB image at 80 KB/s takes ~77 s: it must load.
+        let (raw, framed) = read_with_rate(6_000_000, 80_000).unwrap();
+        assert!(framed);
+        assert!(raw.len() > 6_000_000);
+        // A trickle (1 KB/s) is still cut off.
+        assert!(read_with_rate(1_000_000, 1_000).is_err());
     }
 
     #[test]

@@ -392,6 +392,32 @@ mod tests {
     }
 
     #[test]
+    fn cron_add_resolves_a_relative_script_against_the_cwd() {
+        // Jobs run from `/`, so `cd /home; cron add j 1s j.sh` must store
+        // `/home/j.sh` (it stored `j.sh` and failed every tick).
+        let (reg, mut vfs) = setup();
+        vfs.write("/home/j.sh", b"echo hi").unwrap();
+        let mut env = Environment {
+            cwd: "/home".to_string(),
+            vfs: &mut vfs,
+            power: None,
+            time: None,
+            usb: None,
+            network: None,
+            tls: None,
+            stdin: None,
+            stderr: String::new(),
+        };
+        reg.execute("cron add j 1s j.sh", &mut env).unwrap();
+        let mut sched = CronScheduler::new();
+        assert!(cron_tick(&mut sched, 0, &reg, &mut vfs).is_empty());
+        assert_eq!(
+            cron_tick(&mut sched, 1, &reg, &mut vfs),
+            vec!["[cron j] hi"]
+        );
+    }
+
+    #[test]
     fn cron_scheduler_follows_entry_changes() {
         let (reg, mut vfs) = setup();
         vfs.write("/tmp/job.sh", b"echo tick").unwrap();
