@@ -326,7 +326,7 @@ pub struct LayoutBox {
     /// `colspan` / `rowspan` of a table cell (`1 x 1` for other boxes).
     pub cell_span: CellSpan,
     /// Sizes a flex / grid container imposes on this box, and its
-    /// cached intrinsic width (see [`SizingState`]).
+    /// cached intrinsic width (see `SizingState`).
     pub sizing: SizingState,
     /// The inline content `children` were built from, for a box that
     /// established an inline formatting context: inline layout replaces

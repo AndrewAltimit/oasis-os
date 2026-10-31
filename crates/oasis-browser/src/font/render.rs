@@ -24,7 +24,7 @@ const GLYPH_EVICT_BATCH: usize = MAX_GLYPH_TEXTURES / 8;
 /// Textures are uploaded once and reused across frames until the cache
 /// is cleared (navigation, font registry rebuild). Keys include the
 /// colour, so an animated text colour mints a texture per glyph per
-/// step: at [`MAX_GLYPH_TEXTURES`] the least recently drawn eighth is
+/// step: at `MAX_GLYPH_TEXTURES` the least recently drawn eighth is
 /// destroyed. (Emptying the whole cache instead re-rasterized every
 /// glyph on the page, the ones drawn this frame included.)
 pub struct GlyphTextureCache {
