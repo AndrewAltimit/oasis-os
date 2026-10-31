@@ -474,7 +474,6 @@ impl DisplayList {
         base_clip: Option<(i32, i32, u32, u32)>,
     ) -> Result<()> {
         self.replay_inner(backend, None, scroll_dx, scroll_dy, base_clip, None)
-
     }
 
     /// Replay with a web font renderer for glyph-level rendering.
@@ -491,7 +490,14 @@ impl DisplayList {
         base_clip: Option<(i32, i32, u32, u32)>,
         renderer: &mut dyn WebFontRenderer,
     ) -> Result<()> {
-        self.replay_inner(backend, None, scroll_dx, scroll_dy, base_clip, Some(renderer))
+        self.replay_inner(
+            backend,
+            None,
+            scroll_dx,
+            scroll_dy,
+            base_clip,
+            Some(renderer),
+        )
     }
 
     /// Replay only items that intersect the given dirty rectangle.
@@ -509,7 +515,6 @@ impl DisplayList {
         base_clip: Option<(i32, i32, u32, u32)>,
     ) -> Result<()> {
         self.replay_inner(backend, Some(dirty), scroll_dx, scroll_dy, base_clip, None)
-
     }
 
     /// Replay dirty items with a web font renderer for glyph-level rendering.

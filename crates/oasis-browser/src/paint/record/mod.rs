@@ -181,37 +181,9 @@ fn record_box(
     ctx: &mut RecordContext,
     link_map: &HashMap<NodeId, String>,
 ) {
-    // `position: sticky`: pin against the visible viewport, and open a
-    // sticky group so replay can re-evaluate the offset for a scroll
-    // delta without re-recording.
     let is_sticky = layout_box.style.position == Position::Sticky;
     let sticky_dy = if is_sticky {
-        let natural_y = layout_box.dimensions.content.y + (offset_y - ctx.viewport_y) as f32;
-        let box_height = layout_box.dimensions.margin_box().height;
-        let top_px = match layout_box.style.top {
-            Dimension::Px(t) => Some(t),
-            _ => None,
-        };
-        let bottom_px = match layout_box.style.bottom {
-            Dimension::Px(b) => Some(b),
-            _ => None,
-        };
-        let visible_viewport_h = ctx.visible_viewport_height;
-        dl.push(DisplayItem::PushSticky {
-            natural_y,
-            box_height,
-            top_px,
-            bottom_px,
-            visible_viewport_h,
-        });
-        sticky_offset(
-            natural_y,
-            box_height,
-            top_px,
-            bottom_px,
-            visible_viewport_h,
-            ctx.scroll_y,
-        )
+        push_sticky_group(layout_box, dl, offset_y, ctx)
     } else {
         0
     };
@@ -403,77 +375,7 @@ fn record_box(
             Some(parent_ambient.multiply(&Matrix3d::from_2d_affine(child_matrix)));
     }
 
-    // Decide which kind of compositing layer (if any) this box needs:
-    //
-    // * Slow path (`PushCompositingLayer`) — required for
-    //   `mix-blend-mode`, `backdrop-filter`, box-level `filter`,
-    //   `isolation: isolate`, or `will-change: transform/opacity/filter`.
-    //   Carries the full set of parameters the future render-target
-    //   compositor needs. Backends without `SdiRenderTarget` support
-    //   fall back to plain opacity stacking (see display_list.rs).
-    //
-    // * Fast path (`PushLayer`) — the opacity-only common case.  No
-    //   offscreen surface needed.
-    let wants_compositing = super::creates_compositing_layer(layout_box);
-    let has_opacity = layout_box.style.opacity < 1.0;
-    let layer_kind = if wants_compositing {
-        Some(LayerKind::Compositing)
-    } else if has_opacity {
-        Some(LayerKind::Opacity)
-    } else {
-        None
-    };
-
-    match layer_kind {
-        Some(LayerKind::Compositing) => {
-            // Use the layout margin box as the layer bounds — covers
-            // box shadow, borders, and contents — in screen space like
-            // every other item (layout coords minus scroll plus offset).
-            let mb = layout_box.dimensions.margin_box();
-            let bounds = Rect {
-                x: mb.x - ctx.scroll_x + tx_offset_x as f32,
-                y: mb.y - ctx.scroll_y + tx_offset_y as f32,
-                width: mb.width,
-                height: mb.height,
-            };
-            let mix_blend = layout_box.style.mix_blend_mode;
-            let mask = match &layout_box.style.mask_image {
-                crate::css::values::BackgroundImage::None => None,
-                image => {
-                    // URL masks carry the decoded image bytes so the
-                    // replay path can sample without a GPU round-trip.
-                    // Gradient masks ignore the texture field.
-                    let texture = if matches!(image, crate::css::values::BackgroundImage::Url(_)) {
-                        layout_box.mask_image_data.clone()
-                    } else {
-                        None
-                    };
-                    Some(crate::paint::display_list::MaskParams {
-                        image: image.clone(),
-                        mode: layout_box.style.mask_mode,
-                        composite: layout_box.style.mask_composite,
-                        texture,
-                        size: layout_box.style.mask_size,
-                        position: layout_box.style.mask_position,
-                        repeat: layout_box.style.mask_repeat,
-                    })
-                },
-            };
-            dl.push(DisplayItem::PushCompositingLayer {
-                bounds,
-                opacity: layout_box.style.opacity,
-                blend: mix_blend,
-                filters: layout_box.style.filters.clone(),
-                mask,
-            });
-        },
-        Some(LayerKind::Opacity) => {
-            dl.push(DisplayItem::PushLayer {
-                opacity: layout_box.style.opacity,
-            });
-        },
-        None => {},
-    }
+    let layer_kind = push_layer(layout_box, dl, ctx, tx_offset_x, tx_offset_y);
     let needs_layer = layer_kind.is_some();
 
     // When opacity is handled by PushLayer, recording should use 1.0
@@ -521,8 +423,16 @@ fn record_box(
         layout_box.style.overflow,
         Overflow::Hidden | Overflow::Scroll | Overflow::Auto
     );
+    // `ctx.clip_rect` is in screen space (layout minus scroll plus the
+    // box offset) so clips from different nested scroll containers
+    // intersect, and cull children, in one coordinate space.
+    let to_screen = |r: Rect| Rect {
+        x: r.x - prev_scroll_x + tx_offset_x as f32,
+        y: r.y - prev_scroll_y + tx_offset_y as f32,
+        ..r
+    };
     if has_overflow_clip {
-        let new_clip = layout_box.dimensions.content;
+        let new_clip = to_screen(layout_box.dimensions.content);
         ctx.clip_rect = Some(match ctx.clip_rect {
             Some(existing) => intersect_rects(existing, new_clip),
             None => new_clip,
@@ -544,6 +454,7 @@ fn record_box(
         && let Some(shape_rect) =
             super::resolve_clip_path_rect(shape, &layout_box.dimensions.border_box())
     {
+        let shape_rect = to_screen(shape_rect);
         ctx.clip_rect = Some(match ctx.clip_rect {
             Some(existing) => intersect_rects(existing, shape_rect),
             None => shape_rect,
@@ -552,8 +463,8 @@ fn record_box(
     let pushed_clip = ctx.clip_rect != prev_clip;
     if pushed_clip && let Some(clipped) = ctx.clip_rect {
         dl.push(DisplayItem::PushClip {
-            x: (clipped.x - ctx.scroll_x + tx_offset_x as f32) as i32,
-            y: (clipped.y - ctx.scroll_y + tx_offset_y as f32) as i32,
+            x: clipped.x as i32,
+            y: clipped.y as i32,
             w: clipped.width.max(0.0) as u32,
             h: clipped.height.max(0.0) as u32,
         });
@@ -608,118 +519,15 @@ fn record_box(
         | BoxType::TableRow
         | BoxType::TableCell
         | BoxType::InlineBlock => {
-            // CSS 2.1 painting order (appendix E):
-            //   1. Background & borders (already recorded above)
-            //   2. Stacking-context children with negative z-index
-            //   3. Non-positioned children in tree order (normal flow)
-            //   4. Positioned children with z-index: auto (tree order)
-            //   5. Stacking-context children with z-index >= 0 (sorted)
-            let mut normal_children: Vec<&LayoutBox> = Vec::new();
-            let mut positioned_auto: Vec<(usize, &LayoutBox)> = Vec::new();
-            let mut stacking_neg: Vec<(i32, usize, &LayoutBox)> = Vec::new();
-            let mut stacking_pos: Vec<(i32, usize, &LayoutBox)> = Vec::new();
-
-            for (idx, child) in layout_box.children.iter().enumerate() {
-                // Inside a preserve-3d context paint order is decided by
-                // projected Z, so the children join one Z-sorted list —
-                // except those with an explicit z-index, which opt out of
-                // the 3D context (CSS Transforms 2 §6.1) and keep the CSS
-                // 2.1 stacking tiers.
-                let in_3d_sort = preserve3d_parent.is_some()
-                    && (child.style.z_index_auto || !super::creates_stacking_context(child));
-                if in_3d_sort {
-                    normal_children.push(child);
-                } else if super::creates_stacking_context(child) {
-                    if child.style.z_index < 0 {
-                        stacking_neg.push((child.style.z_index, idx, child));
-                    } else {
-                        stacking_pos.push((child.style.z_index, idx, child));
-                    }
-                } else if super::is_positioned(child) {
-                    positioned_auto.push((idx, child));
-                } else {
-                    normal_children.push(child);
-                }
-            }
-
-            // Back-to-front Z sort of the 3D context's children (stable,
-            // so ties keep DOM order).
-            if let Some(m_parent) = preserve3d_parent
-                && normal_children.len() > 1
-            {
-                let mut z_keys: Vec<(f32, usize)> = normal_children
-                    .iter()
-                    .enumerate()
-                    .map(|(i, c)| {
-                        let z = preserve3d_child_z(c, &m_parent, ctx, tx_offset_x, tx_offset_y);
-                        (z, i)
-                    })
-                    .collect();
-                z_keys.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
-                normal_children = z_keys.iter().map(|&(_, i)| normal_children[i]).collect();
-            }
-
-            // Step 2: negative z-index stacking contexts (ascending).
-            stacking_neg.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.cmp(&b.1)));
-            for (_, _, child) in &stacking_neg {
-                if let Some(clip) = &ctx.clip_rect {
-                    let cb = child.dimensions.border_box();
-                    if cb.y + cb.height < clip.y
-                        || cb.y > clip.y + clip.height
-                        || cb.x + cb.width < clip.x
-                        || cb.x > clip.x + clip.width
-                    {
-                        continue;
-                    }
-                }
-                record_box(child, dl, tx_offset_x, tx_offset_y, ctx, link_map);
-            }
-
-            // Step 3: non-positioned children in DOM order.
-            for child in &normal_children {
-                if let Some(clip) = &ctx.clip_rect {
-                    let cb = child.dimensions.border_box();
-                    if cb.y + cb.height < clip.y
-                        || cb.y > clip.y + clip.height
-                        || cb.x + cb.width < clip.x
-                        || cb.x > clip.x + clip.width
-                    {
-                        continue;
-                    }
-                }
-                record_box(child, dl, tx_offset_x, tx_offset_y, ctx, link_map);
-            }
-
-            // Step 4: positioned with z-index: auto in tree order.
-            for (_, child) in &positioned_auto {
-                if let Some(clip) = &ctx.clip_rect {
-                    let cb = child.dimensions.border_box();
-                    if cb.y + cb.height < clip.y
-                        || cb.y > clip.y + clip.height
-                        || cb.x + cb.width < clip.x
-                        || cb.x > clip.x + clip.width
-                    {
-                        continue;
-                    }
-                }
-                record_box(child, dl, tx_offset_x, tx_offset_y, ctx, link_map);
-            }
-
-            // Step 5: non-negative z-index stacking contexts (sorted).
-            stacking_pos.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.cmp(&b.1)));
-            for (_, _, child) in &stacking_pos {
-                if let Some(clip) = &ctx.clip_rect {
-                    let cb = child.dimensions.border_box();
-                    if cb.y + cb.height < clip.y
-                        || cb.y > clip.y + clip.height
-                        || cb.x + cb.width < clip.x
-                        || cb.x > clip.x + clip.width
-                    {
-                        continue;
-                    }
-                }
-                record_box(child, dl, tx_offset_x, tx_offset_y, ctx, link_map);
-            }
+            record_block_children(
+                layout_box,
+                preserve3d_parent,
+                dl,
+                tx_offset_x,
+                tx_offset_y,
+                ctx,
+                link_map,
+            );
         },
         BoxType::Inline => {
             if is_visible {
@@ -800,6 +608,193 @@ fn record_box(
                 ctx.current_link = None;
             }
         }
+    }
+}
+
+/// Open a `position: sticky` group for `layout_box` so replay can
+/// re-evaluate the pin offset for a scroll delta without re-recording,
+/// and return the offset at the recording scroll.
+fn push_sticky_group(
+    layout_box: &LayoutBox,
+    dl: &mut DisplayList,
+    offset_y: i32,
+    ctx: &RecordContext,
+) -> i32 {
+    let px = |d: &Dimension| match d {
+        Dimension::Px(v) => Some(*v),
+        _ => None,
+    };
+    let natural_y = layout_box.dimensions.content.y + (offset_y - ctx.viewport_y) as f32;
+    let box_height = layout_box.dimensions.margin_box().height;
+    let top_px = px(&layout_box.style.top);
+    let bottom_px = px(&layout_box.style.bottom);
+    let visible_viewport_h = ctx.visible_viewport_height;
+    dl.push(DisplayItem::PushSticky {
+        natural_y,
+        box_height,
+        top_px,
+        bottom_px,
+        visible_viewport_h,
+    });
+    sticky_offset(
+        natural_y,
+        box_height,
+        top_px,
+        bottom_px,
+        visible_viewport_h,
+        ctx.scroll_y,
+    )
+}
+
+/// Open the compositing layer (if any) `layout_box` needs and return
+/// its kind, so the caller can close it after the subtree:
+///
+/// * Slow path (`PushCompositingLayer`) — required for
+///   `mix-blend-mode`, `backdrop-filter`, box-level `filter`, masks,
+///   `isolation: isolate`, or `will-change: transform/opacity/filter`.
+///   Backends without `SdiRenderTarget` support fall back to plain
+///   opacity stacking at replay.
+/// * Fast path (`PushLayer`) — the opacity-only common case. No
+///   offscreen surface needed.
+fn push_layer(
+    layout_box: &LayoutBox,
+    dl: &mut DisplayList,
+    ctx: &RecordContext,
+    offset_x: i32,
+    offset_y: i32,
+) -> Option<LayerKind> {
+    let style = &layout_box.style;
+    if !super::creates_compositing_layer(layout_box) {
+        if style.opacity < 1.0 {
+            dl.push(DisplayItem::PushLayer {
+                opacity: style.opacity,
+            });
+            return Some(LayerKind::Opacity);
+        }
+        return None;
+    }
+    // The margin box covers box shadow, borders and contents; it is
+    // in screen space like every other item.
+    let mb = layout_box.dimensions.margin_box();
+    let bounds = Rect {
+        x: mb.x - ctx.scroll_x + offset_x as f32,
+        y: mb.y - ctx.scroll_y + offset_y as f32,
+        width: mb.width,
+        height: mb.height,
+    };
+    let mask = match &style.mask_image {
+        crate::css::values::BackgroundImage::None => None,
+        image => Some(crate::paint::display_list::MaskParams {
+            image: image.clone(),
+            mode: style.mask_mode,
+            composite: style.mask_composite,
+            // URL masks carry the decoded image bytes so replay can
+            // sample without a GPU round-trip; gradient masks have none.
+            texture: if matches!(image, crate::css::values::BackgroundImage::Url(_)) {
+                layout_box.mask_image_data.clone()
+            } else {
+                None
+            },
+            size: style.mask_size,
+            position: style.mask_position,
+            repeat: style.mask_repeat,
+        }),
+    };
+    dl.push(DisplayItem::PushCompositingLayer {
+        bounds,
+        opacity: style.opacity,
+        blend: style.mix_blend_mode,
+        filters: style.filters.clone(),
+        mask,
+    });
+    Some(LayerKind::Compositing)
+}
+
+/// Record the children of a block-level container in CSS 2.1 painting
+/// order (appendix E), after the box's own background and borders:
+///
+/// 1. stacking-context children with negative z-index (ascending),
+/// 2. non-positioned children in tree order,
+/// 3. positioned children with `z-index: auto` in tree order,
+/// 4. stacking-context children with z-index >= 0 (ascending).
+///
+/// Inside a `preserve-3d` context (`preserve3d_parent`) the children
+/// without an explicit z-index are instead Z-sorted back to front.
+/// Children entirely outside the active clip are skipped.
+fn record_block_children(
+    layout_box: &LayoutBox,
+    preserve3d_parent: Option<Matrix3d>,
+    dl: &mut DisplayList,
+    offset_x: i32,
+    offset_y: i32,
+    ctx: &mut RecordContext,
+    link_map: &HashMap<NodeId, String>,
+) {
+    let mut normal_children: Vec<&LayoutBox> = Vec::new();
+    let mut positioned_auto: Vec<&LayoutBox> = Vec::new();
+    let mut stacking_neg: Vec<(i32, usize, &LayoutBox)> = Vec::new();
+    let mut stacking_pos: Vec<(i32, usize, &LayoutBox)> = Vec::new();
+
+    for (idx, child) in layout_box.children.iter().enumerate() {
+        // Children with an explicit z-index opt out of the 3D context
+        // (CSS Transforms 2 §6.1) and keep the CSS 2.1 stacking tiers.
+        let stacking = super::creates_stacking_context(child);
+        let in_3d_sort = preserve3d_parent.is_some() && (child.style.z_index_auto || !stacking);
+        if in_3d_sort {
+            normal_children.push(child);
+        } else if stacking {
+            if child.style.z_index < 0 {
+                stacking_neg.push((child.style.z_index, idx, child));
+            } else {
+                stacking_pos.push((child.style.z_index, idx, child));
+            }
+        } else if super::is_positioned(child) {
+            positioned_auto.push(child);
+        } else {
+            normal_children.push(child);
+        }
+    }
+
+    // Back-to-front Z sort of the 3D context's children (stable, so
+    // ties keep DOM order).
+    if let Some(m_parent) = preserve3d_parent
+        && normal_children.len() > 1
+    {
+        let mut z_keys: Vec<(f32, &LayoutBox)> = normal_children
+            .iter()
+            .map(|c| {
+                (
+                    preserve3d_child_z(c, &m_parent, ctx, offset_x, offset_y),
+                    *c,
+                )
+            })
+            .collect();
+        z_keys.sort_by(|a, b| a.0.total_cmp(&b.0));
+        normal_children = z_keys.into_iter().map(|(_, c)| c).collect();
+    }
+    stacking_neg.sort_by_key(|&(z, idx, _)| (z, idx));
+    stacking_pos.sort_by_key(|&(z, idx, _)| (z, idx));
+
+    let ordered = stacking_neg
+        .iter()
+        .map(|&(_, _, c)| c)
+        .chain(normal_children)
+        .chain(positioned_auto)
+        .chain(stacking_pos.iter().map(|&(_, _, c)| c));
+    for child in ordered {
+        if let Some(clip) = &ctx.clip_rect {
+            let cb = child.dimensions.border_box();
+            let x = cb.x - ctx.scroll_x + offset_x as f32;
+            let y = cb.y - ctx.scroll_y + offset_y as f32;
+            if y + cb.height < clip.y
+                || y > clip.y + clip.height
+                || x + cb.width < clip.x
+                || x > clip.x + clip.width
+            {
+                continue;
+            }
+        }
+        record_box(child, dl, offset_x, offset_y, ctx, link_map);
     }
 }
 

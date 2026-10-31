@@ -66,7 +66,8 @@ pub(super) fn record_text(
     let display_text: std::borrow::Cow<'_, str>;
     if ctx.text_overflow_ellipsis {
         if let Some(clip) = &ctx.clip_rect {
-            let avail = (clip.x + clip.width - x).max(0.0) as u32;
+            // The clip is in screen space, like `sx`.
+            let avail = (clip.x + clip.width - sx as f32).max(0.0) as u32;
             let text_w = oasis_types::backend::bitmap_measure_text(text, font_size);
             if text_w > avail {
                 let ellipsis = "\u{2026}";

@@ -1595,7 +1595,8 @@ mod tests {
         dl.push(DisplayItem::PopCompositingLayer);
 
         let mut backend = RecordingBackend::new(480, 272);
-        dl.replay(&mut backend, 0, 0, Some((0, 30, 480, 242))).unwrap();
+        dl.replay(&mut backend, 0, 0, Some((0, 30, 480, 242)))
+            .unwrap();
 
         let cmds = backend.commands();
         let clip = cmds.iter().find_map(|c| match c {
