@@ -244,12 +244,25 @@ fn decode_bmp(data: &[u8]) -> Option<DecodedImage> {
 
     let w = width as u32;
     let abs_h = height.unsigned_abs();
+    // Bound the header-declared size before allocating: 54 bytes can
+    // claim 32767 x 32767 (4 GiB of RGBA).
+    if w > MAX_SOURCE_DIMENSION || abs_h > MAX_SOURCE_DIMENSION {
+        return None;
+    }
     let bottom_up = height > 0;
     let bytes_per_pixel = (bpp / 8) as usize;
     // Row size padded to 4-byte boundary.
     let row_size = (w as usize * bytes_per_pixel).div_ceil(4) * 4;
+    // The last row ends inside the file, or the image is truncated.
+    let last_row_end = (abs_h as usize - 1) * row_size + w as usize * bytes_per_pixel;
+    if pixel_offset
+        .checked_add(last_row_end)
+        .is_none_or(|end| end > data.len())
+    {
+        return None;
+    }
 
-    let mut pixels = vec![0u8; (w * abs_h * 4) as usize];
+    let mut pixels = vec![0u8; w as usize * abs_h as usize * 4];
 
     for row in 0..abs_h {
         let src_row = if bottom_up { abs_h - 1 - row } else { row };
@@ -290,8 +303,9 @@ fn decode_png(data: &[u8]) -> Option<DecodedImage> {
     // Expand indexed-palette images to RGB, sub-8-bit grayscale to 8-bit,
     // and tRNS chunks to alpha channels. Without this, any PNG using a
     // palette (the majority of small icons and sprites) would fall out
-    // the bottom of the color-type match as unsupported.
-    decoder.set_transformations(png::Transformations::EXPAND);
+    // the bottom of the color-type match as unsupported. 16-bit samples
+    // are stripped to 8 bits: the match below reads one byte per sample.
+    decoder.set_transformations(png::Transformations::normalize_to_color8());
     let mut reader = decoder.read_info().ok()?;
     let info_header = reader.info();
     if info_header.width > MAX_SOURCE_DIMENSION || info_header.height > MAX_SOURCE_DIMENSION {
@@ -438,8 +452,9 @@ fn decode_gif(data: &[u8]) -> Option<DecodedImage> {
     let mut decoder = gif::DecodeOptions::new();
     decoder.set_color_output(gif::ColorOutput::RGBA);
     let mut reader = decoder.read_info(data).ok()?;
-    let frame = reader.read_next_frame().ok()?.cloned()?;
-
+    // Check the frame size before its pixels are decoded (and the
+    // buffer allocated): a frame header can claim 65535 x 65535.
+    let frame = reader.next_frame_info().ok()??;
     let w = u32::from(frame.width);
     let h = u32::from(frame.height);
     if w == 0 || h == 0 || w > MAX_SOURCE_DIMENSION || h > MAX_SOURCE_DIMENSION {
@@ -447,15 +462,13 @@ fn decode_gif(data: &[u8]) -> Option<DecodedImage> {
     }
 
     let expected_len = (w as usize) * (h as usize) * 4;
-    if frame.buffer.len() < expected_len {
+    let mut buffer = vec![0u8; reader.buffer_size()];
+    if buffer.len() < expected_len {
         return None;
     }
-
-    Some(DecodedImage::new(
-        w,
-        h,
-        frame.buffer[..expected_len].to_vec(),
-    ))
+    reader.read_into_buffer(&mut buffer).ok()?;
+    buffer.truncate(expected_len);
+    Some(DecodedImage::new(w, h, buffer))
 }
 
 /// Decode a WebP image, catching panics from malformed data.
@@ -472,8 +485,17 @@ fn decode_webp_safe(data: &[u8]) -> Option<DecodedImage> {
 fn decode_webp(data: &[u8]) -> Option<DecodedImage> {
     #[cfg(feature = "webp")]
     {
-        let img = image::load_from_memory_with_format(data, image::ImageFormat::WebP).ok()?;
-        let rgba = img.to_rgba8();
+        // Bound the decode itself, not just its result: a small
+        // lossless WebP can declare a ~16k x 16k canvas.
+        let mut limits = image::Limits::default();
+        limits.max_image_width = Some(MAX_SOURCE_DIMENSION);
+        limits.max_image_height = Some(MAX_SOURCE_DIMENSION);
+        // Decoded RGBA plus the `to_rgba8` copy.
+        limits.max_alloc = Some(2 * 4 * u64::from(MAX_SOURCE_DIMENSION).pow(2));
+        let mut reader =
+            image::ImageReader::with_format(std::io::Cursor::new(data), image::ImageFormat::WebP);
+        reader.limits(limits);
+        let rgba = reader.decode().ok()?.to_rgba8();
         let w = rgba.width();
         let h = rgba.height();
         if w > MAX_SOURCE_DIMENSION || h > MAX_SOURCE_DIMENSION {
@@ -507,7 +529,13 @@ fn decode_webp(data: &[u8]) -> Option<DecodedImage> {
 /// placeholder) even though no visual SVG content is drawn.
 fn decode_svg_placeholder(data: &[u8]) -> Option<DecodedImage> {
     let header_len = data.len().min(4096);
-    let header = std::str::from_utf8(&data[..header_len]).ok()?;
+    // The 4 KiB cut may split a multi-byte character; keep the valid
+    // prefix rather than rejecting the whole document.
+    let head = &data[..header_len];
+    let header = match std::str::from_utf8(head) {
+        Ok(s) => s,
+        Err(e) => std::str::from_utf8(&head[..e.valid_up_to()]).ok()?,
+    };
     // Find the opening `<svg` tag.
     let svg_start = header.find("<svg")?;
     // Find the end of the opening tag so we don't pick up attrs from
@@ -886,6 +914,39 @@ mod tests {
         assert_eq!(img.pixels[13], 255); // G
         assert_eq!(img.pixels[14], 0); // B
         assert_eq!(img.pixels[15], 255); // A
+    }
+
+    /// Regression: a 54-byte BMP header declaring 30000 x 30000 made the
+    /// decoder allocate ~3.6 GB of RGBA before noticing the file holds
+    /// no pixel data (and `w * h * 4` overflowed `u32` in debug builds).
+    #[test]
+    fn bmp_with_huge_declared_size_is_rejected_without_allocating() {
+        let mut bmp = make_test_bmp_24bit();
+        bmp[18..22].copy_from_slice(&30_000i32.to_le_bytes());
+        bmp[22..26].copy_from_slice(&30_000i32.to_le_bytes());
+        assert!(decode_bmp(&bmp).is_none());
+        // Within the size cap but truncated: also rejected up front.
+        bmp[18..22].copy_from_slice(&64i32.to_le_bytes());
+        bmp[22..26].copy_from_slice(&64i32.to_le_bytes());
+        assert!(decode_bmp(&bmp).is_none());
+    }
+
+    /// Regression: 16-bit PNG samples were read as 8-bit ones, so a
+    /// 16-bit RGBA pixel decoded to two garbled pixels.
+    #[test]
+    fn decode_png_16bit_strips_to_8bit() {
+        let mut buf = Vec::new();
+        {
+            let mut encoder = png::Encoder::new(&mut buf, 1, 1);
+            encoder.set_color(png::ColorType::Rgba);
+            encoder.set_depth(png::BitDepth::Sixteen);
+            let mut writer = encoder.write_header().unwrap();
+            writer
+                .write_image_data(&[0xFF, 0xFF, 0, 0, 0x80, 0x00, 0xFF, 0xFF])
+                .unwrap();
+        }
+        let img = decode_image(&buf).expect("should decode 16-bit PNG");
+        assert_eq!(img.pixels, vec![255, 0, 128, 255]);
     }
 
     #[test]

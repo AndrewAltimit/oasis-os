@@ -1648,6 +1648,45 @@ fn svg_follows_nested_scroll_container_offset() {
     );
 }
 
+/// Regression: `repeating-linear-gradient(red 0%, blue 1e-9%)` asked
+/// for ~4e9 repetitions and `box-shadow: inset 0 0 2e9px` for ~2e9
+/// rings; both loops spun for minutes. They now record in bounded time.
+#[test]
+fn degenerate_gradient_and_inset_shadow_record_in_bounded_time() {
+    use crate::css::values::types::{BoxShadow, GradientDirection, GradientStop, LinearGradient};
+    let style = ComputedStyle {
+        background_image: crate::css::values::BackgroundImage::Gradient(LinearGradient {
+            direction: GradientDirection::ToBottom,
+            repeating: true,
+            stops: vec![
+                GradientStop {
+                    color: Color::rgb(255, 0, 0),
+                    position: 0.0,
+                },
+                GradientStop {
+                    color: Color::rgb(0, 0, 255),
+                    position: 1e-11,
+                },
+            ],
+        }),
+        box_shadow: vec![BoxShadow {
+            offset_x: 0.0,
+            offset_y: 0.0,
+            blur: 2e9,
+            spread: 0.0,
+            color: Color::rgb(0, 0, 0),
+            inset: true,
+        }],
+        ..Default::default()
+    };
+    let root = make_block(0.0, 0.0, 100.0, 100.0, style);
+    let start = std::time::Instant::now();
+    let mut dl = display_list::DisplayList::new();
+    build_display_list(&root, test_vp(), &HashMap::new(), &mut dl, &HashMap::new());
+    assert!(start.elapsed() < std::time::Duration::from_secs(5));
+    assert!(dl.len() < 10_000, "{} items", dl.len());
+}
+
 /// Regression: children of a scrolled `overflow: auto` box were culled
 /// against the container's clip in unscrolled layout coordinates, so
 /// content scrolled into view (layout y 150, container 100 px tall,

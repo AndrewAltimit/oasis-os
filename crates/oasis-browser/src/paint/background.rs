@@ -9,6 +9,12 @@ fn apply_opacity(color: Color, opacity: f32) -> Color {
     color.apply_opacity(opacity)
 }
 
+/// Most tiles one background (or mask) image emits for one box.
+const MAX_BG_TILES: u64 = 4096;
+/// Longest tile side, in px (the layout coordinate cap, well inside
+/// `i32`).
+const MAX_TILE_SIDE: u32 = 1 << 25;
+
 /// A single tile blit position computed by [`background_image_tiles`].
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct BgTile {
@@ -112,6 +118,34 @@ pub(crate) fn background_image_tiles(
         return tiles;
     }
 
+    // A tiny tile over a big box would emit millions of blits
+    // (`background-size: 1px` on 5000 x 5000 is 25M). Past
+    // `MAX_BG_TILES`, grow the tile by a common factor instead: the box
+    // stays covered and the item count stays bounded.
+    // Upper bound on the tiles a `k`-times-larger tile emits per axis.
+    let span = |container: u32, side: u32, repeat: bool, k: u64| {
+        if repeat {
+            u64::from(container) / (u64::from(side) * k) + 2
+        } else {
+            1
+        }
+    };
+    let count =
+        |k: u64| span(container_w, img_w, repeat_x, k) * span(container_h, img_h, repeat_y, k);
+    let (img_w, img_h) = if count(1) > MAX_BG_TILES {
+        let mut k = (count(1) as f64 / MAX_BG_TILES as f64).sqrt().ceil() as u64;
+        while count(k) > MAX_BG_TILES {
+            k += 1;
+        }
+        let k = u32::try_from(k).unwrap_or(u32::MAX);
+        (img_w.saturating_mul(k), img_h.saturating_mul(k))
+    } else {
+        (img_w, img_h)
+    };
+    // Keep tile sides positive as `i32`: `background-size: 3e9px` cast
+    // to a negative step and the tiling loop below never ended.
+    let (img_w, img_h) = (img_w.min(MAX_TILE_SIDE), img_h.min(MAX_TILE_SIDE));
+
     let start_x = if repeat_x {
         pos_x.rem_euclid(img_w as i32) - img_w as i32
     } else {
@@ -191,4 +225,58 @@ pub(crate) fn sample_gradient(
         }
     }
     apply_opacity(stops[last].color, opacity)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn top_left() -> BackgroundPosition {
+        BackgroundPosition {
+            x: 0.0,
+            y: 0.0,
+            x_is_px: true,
+            y_is_px: true,
+        }
+    }
+
+    /// Regression: `background-size: 1px 1px` on a 5000 x 5000 box
+    /// produced 25 million tiles (blits). The count is now bounded and
+    /// the box stays covered.
+    #[test]
+    fn tiny_repeating_tile_is_bounded() {
+        let size = BackgroundSize::Explicit(Some(1.0), Some(1.0));
+        let tiles = background_image_tiles(
+            0,
+            0,
+            5000,
+            5000,
+            (8, 8),
+            &size,
+            &top_left(),
+            BackgroundRepeat::Repeat,
+        );
+        assert!(tiles.len() as u64 <= MAX_BG_TILES, "{} tiles", tiles.len());
+        let right = tiles.iter().map(|t| t.x + t.w as i32).max().unwrap();
+        let bottom = tiles.iter().map(|t| t.y + t.h as i32).max().unwrap();
+        assert!(right >= 5000 && bottom >= 5000, "box covered");
+    }
+
+    /// Regression: a tile side past `i32::MAX` (`background-size: 3e9px`)
+    /// became a negative loop step and the tiling loop never ended.
+    #[test]
+    fn huge_tile_side_terminates() {
+        let size = BackgroundSize::Explicit(Some(3e9), Some(3e9));
+        let tiles = background_image_tiles(
+            0,
+            0,
+            100,
+            100,
+            (8, 8),
+            &size,
+            &top_left(),
+            BackgroundRepeat::Repeat,
+        );
+        assert!(!tiles.is_empty() && tiles.len() <= 4);
+    }
 }
