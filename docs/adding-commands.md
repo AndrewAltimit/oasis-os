@@ -199,14 +199,14 @@ Commands are organized into modules by category:
 | `doc_commands.rs` | doc | man, tutorial, motd |
 | `audio_commands.rs` | audio | music (play/pause/next/vol/repeat/shuffle via `/var/audio/request`) |
 | `network_commands.rs` | network | wifi, ping, http |
-| `ui_commands.rs` | ui | wm, sdi, theme, notify, screenshot |
+| `ui_commands.rs` | ui | wm, sdi, theme, notify, screenshot, open |
 | `radio_commands.rs` | audio | radio |
 | `platform_commands.rs` | system | power, clock, memory, usb |
 | `remote_commands.rs` | network | listen, remote, hosts |
 | `control_flow.rs` / `script/` | core | `if`/`while`/`until`/`for`/`case` parser + `run` (shell syntax, not commands) |
 | `builtins.rs` / `jobs/` / `script/` | - | the 21 shell builtins (help, which, history, set, unset, env, alias, unalias, run, xargs, function, return, local, break, continue, true, false, jobs, fg, bg, kill) |
 
-Additional commands (agent, browser, plugin, script, skin, transfer, tv, update) are registered by `oasis-core`; `oasis-terminal` must not depend on the UI / skin stack, so a command that needs `oasis-skin` (like `skin`, in `oasis-core/src/terminal/skin_commands.rs`) belongs there.
+Additional commands (agent, browser, plugin, script, skin, transfer, update) are registered by `oasis-core`, `tv` by `oasis-apps` and `mcp-server` (feature `mcp`) by `oasis-app`; `oasis-terminal` must not depend on the UI / skin stack, so a command that needs `oasis-skin` (like `skin`, in `oasis-core/src/terminal/skin_commands.rs`) belongs there.
 
 ### Shell builtins
 

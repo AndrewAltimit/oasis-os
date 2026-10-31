@@ -184,7 +184,7 @@ clearly better, because callers compare and intersect the result.
   required drawing. `SdiBackend` adds optional accelerated methods. `InputBackend`
   is about events. They can be implemented by different structs if needed.
 - **Two-tier rendering.** `SdiCore` has 13 required methods that every backend
-  must implement. `SdiBackend`'s eight extensions add 46 default-implemented
+  must implement. `SdiBackend`'s eight extensions add 47 default-implemented
   methods for shapes, gradients, text styling, textures, clip/transform
   stacks, vector graphics, batching, and render targets — all falling back
   to `SdiCore` calls. The shape defaults emit spans from the same generators

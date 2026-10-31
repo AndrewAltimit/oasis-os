@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Anatomy of the Backend Trait System — OASIS_OS Developer's Journal</title>
-  <meta name="description" content="A deep architectural walkthrough of OASIS_OS's five backend traits — how 13 required methods, 39 optional accelerated primitives, and 8 extension traits enable one codebase to render across SDL3, WebAssembly, PSP hardware, and Unreal Engine 5.">
+  <meta name="description" content="A deep architectural walkthrough of OASIS_OS's five backend traits — how 13 required methods and 8 extension traits with 47 default methods enable one codebase to render across SDL3, WebAssembly, PSP hardware, and Unreal Engine 5.">
   <link rel="canonical" href="https://andrewaltimit.github.io/oasis-os/journal/06-backend-trait-system.html">
   <meta name="theme-color" content="#08090d">
   <link rel="icon" href="../favicon.svg" type="image/svg+xml">
@@ -12,7 +12,7 @@
   <meta property="og:type" content="article">
   <meta property="og:site_name" content="OASIS_OS">
   <meta property="og:title" content="Anatomy of the Backend Trait System — OASIS_OS Developer's Journal">
-  <meta property="og:description" content="A deep architectural walkthrough of OASIS_OS's five backend traits — how 13 required methods, 39 optional accelerated primitives, and 8 extension traits enable one codebase to render across SDL3, WebAssembly, PSP hardware, and Unreal Engine 5.">
+  <meta property="og:description" content="A deep architectural walkthrough of OASIS_OS's five backend traits — how 13 required methods and 8 extension traits with 47 default methods enable one codebase to render across SDL3, WebAssembly, PSP hardware, and Unreal Engine 5.">
   <meta property="og:url" content="https://andrewaltimit.github.io/oasis-os/journal/06-backend-trait-system.html">
   <meta property="og:image" content="https://andrewaltimit.github.io/oasis-os/img/og-card.png">
   <meta property="og:image:width" content="1200">
@@ -67,8 +67,8 @@
       <a href="./">Developer&rsquo;s journal</a><span aria-hidden="true">/</span><span>Entry 06</span>
     </nav>
     <h1 class="article__title">Anatomy of the Backend Trait System</h1>
-    <p class="article__lede">How five traits, 13 required methods, 39 optional primitives, and 8 extension
-      traits let one Rust codebase draw to SDL3, Canvas&nbsp;2D, PSP hardware, and
+    <p class="article__lede">How five traits, 13 required methods, and 8 extension traits with 47 default
+      methods let one Rust codebase draw to SDL3, Canvas&nbsp;2D, PSP hardware, and
       a software framebuffer &mdash; without a single <code>#[cfg]</code> in
       application code.</p>
     <dl class="article__meta">
@@ -99,7 +99,7 @@
     <div class="prose">
 <aside class="callout update" role="note">
     <div class="callout-title">Update (Oct 2026)</div>
-    <p>The prose and counts in this entry are from March 2026; the trait overview, capability matrix and frame diagram below have been redrawn for the current code. <code>SdiBackend</code> is now a marker trait over <strong>eight</strong> extension traits with <strong>46</strong> default methods: <code>SdiRenderTarget</code> (offscreen render targets) was added; <code>SdiAlpha</code> was removed (<code>viewport_size</code> is a provided <code>SdiCore</code> method, and translucent fills are <code>fill_rect</code> with an alpha color), as were the never-used <code>begin_batch</code> / <code>flush_batch</code> hooks; <code>current_clip_rect</code> returns <code>Option&lt;ClipRect&gt;</code>. The defaults became span-exact &mdash; shapes emit <code>fill_rect</code> spans from shared generators, so they cover exactly the pixels the SDL and UE5 backends draw &mdash; and a mock gets all eight extensions from one <code>impl_sdi_defaults!</code> line. Apps draw only through <code>App::draw_windowed</code> (a kiosk-fullscreen app is a window that fills the screen). Elsewhere: 27 widgets, ~95 terminal commands plus 20 shell builtins, 17 skins and 15 apps.</p>
+    <p>The prose and counts in this entry are from March 2026; the trait overview, capability matrix and frame diagram below have been redrawn for the current code. <code>SdiBackend</code> is now a marker trait over <strong>eight</strong> extension traits with <strong>47</strong> default methods: <code>SdiRenderTarget</code> (offscreen render targets) was added; <code>SdiAlpha</code> was removed (<code>viewport_size</code> is a provided <code>SdiCore</code> method, and translucent fills are <code>fill_rect</code> with an alpha color), as were the never-used <code>begin_batch</code> / <code>flush_batch</code> hooks; <code>current_clip_rect</code> returns <code>Option&lt;ClipRect&gt;</code>. The defaults became span-exact &mdash; shapes emit <code>fill_rect</code> spans from shared generators, so they cover exactly the pixels the SDL and UE5 backends draw &mdash; and a mock gets all eight extensions from one <code>impl_sdi_defaults!</code> line. Apps draw only through <code>App::draw_windowed</code> (a kiosk-fullscreen app is a window that fills the screen). Elsewhere: 27 widgets, ~95 terminal commands plus 21 shell builtins, 17 skins and 15 apps.</p>
   </aside>
 
 
@@ -129,12 +129,12 @@
 <span class="hl-accent">SdiCore</span>            13 required methods &mdash; the minimum viable backend
                    (+ provided viewport_size)
   &uarr; extends
-<span class="hl-purple">SdiBackend</span>         marker over 8 extension traits, 46 default methods:
+<span class="hl-purple">SdiBackend</span>         marker over 8 extension traits, 47 default methods:
   &#9500;&#9472; <span class="hl-accent">SdiShapes</span>        8  rounded rects, stroke_rect, line, circles, triangle, shadow
   &#9500;&#9472; <span class="hl-accent">SdiGradients</span>     2  fill_rect_gradient, fill_rounded_rect_gradient
   &#9500;&#9472; <span class="hl-accent">SdiText</span>          7  set_font, metrics, draw_text_styled / _wrapped / _ellipsis
   &#9500;&#9472; <span class="hl-accent">SdiTextures</span>      4  blit_sub, blit_tinted, blit_sub_tinted, blit_flipped
-  &#9500;&#9472; <span class="hl-accent">SdiClipTransform</span> 8  push/pop clip, translate and region; current_clip_rect
+  &#9500;&#9472; <span class="hl-accent">SdiClipTransform</span> 9  push/pop clip, translate and region; current_clip_rect, draw_bounds
   &#9500;&#9472; <span class="hl-accent">SdiVector</span>        6  polygons, polyline, fill/stroke_arc, dashed line
   &#9500;&#9472; <span class="hl-accent">SdiBatch</span>         2  submit_rect_batch, submit_text_batch
   &#9492;&#9472; <span class="hl-accent">SdiRenderTarget</span>  9  create/bind/unbind/composite/read/destroy offscreen targets
@@ -217,7 +217,7 @@ SdiShapes        /8   7       7       7       3  GU
 SdiGradients     /2   2       2       2       1  GU
 SdiText          /7   4  TTF  1       1       &mdash;
 SdiTextures      /4   4       3       4       &mdash;
-SdiClipTransform /8   6       6       6       6
+SdiClipTransform /9   6       6       6       6
 SdiVector        /6   1       5       1       &mdash;
 SdiBatch         /2   2       2       2       &mdash;
 SdiRenderTarget  /9   8       9       9       opts out
@@ -483,7 +483,7 @@ flowchart TD
 
   <aside class="callout update" role="note">
     <div class="callout-title">Update (Oct 2026)</div>
-    <p>Today: 8 extension traits and 46 default methods, defined across <code>oasis-types/src/backend/</code> and <code>backend/extensions/</code> (one file per extension trait), plus <code>ClipboardBackend</code> with an in-memory fallback; a new backend running &ldquo;all 15 apps&rdquo; in step 4 above. WASM audio uses HTML <code>&lt;audio&gt;</code> elements rather than Web Audio, and the PSP backend&rsquo;s <code>SpscQueue</code> was removed as unsound.</p>
+    <p>Today: 8 extension traits and 47 default methods, defined across <code>oasis-types/src/backend/</code> and <code>backend/extensions/</code> (one file per extension trait), plus <code>ClipboardBackend</code> with an in-memory fallback; a new backend running &ldquo;all 15 apps&rdquo; in step 4 above. WASM audio uses HTML <code>&lt;audio&gt;</code> elements rather than Web Audio, and the PSP backend&rsquo;s <code>SpscQueue</code> was removed as unsound.</p>
   </aside>
 </div>
     </div>

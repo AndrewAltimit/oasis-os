@@ -88,6 +88,22 @@ larger changes by area. Breaking API changes are marked **(breaking)**.
   `oasis_html::entities` and `oasis_css::selectors` are crate-private,
   `cascade::build_global_layer_map` is crate-private **(breaking)**.
 
+### Documentation and site content
+
+- Counts re-verified against the source: the eight extension traits carry
+  47 default methods (`SdiClipTransform` has 9 since it gained
+  `draw_bounds`), was 46 / 8 across CLAUDE.md, README, design, ADR-003, the
+  landing page and journal entries 01 and 06; 21 shell builtins (was 20 in
+  the README and two journal entries).
+- CI descriptions follow the workflows: PRs run the same feature-set checks
+  as main (`scripts/ci-feature-clippy.sh`, also in getting-started), criterion
+  benchmarks run only on a manual `run_benchmarks` dispatch, and the
+  memory workflow's peak-RSS gates run natively, outside valgrind.
+- `tv` is registered by `oasis-apps`, not `oasis-core` (design, adding
+  commands); remote-terminal and MCP `run_command` refuse the server toggles
+  (networking, MCP server docs); a plugin whose `init` fails drops what it
+  registered (plugin guide).
+
 ## Unreleased -- overhaul (`overhaul/site-code-docs-2026-10`)
 
 A repository-wide cleanup: bug fixes from a full code review and an

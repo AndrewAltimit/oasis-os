@@ -107,7 +107,7 @@ If you set `OASIS_MCP_TOKEN`, add the header:
 | `close_window` | `id`, `force?` | Close a window the way its titlebar close button does (see below). |
 | `move_window` | `id`, `x`, `y` | Move a window to an absolute position. |
 | `resize_window` | `id`, `width`, `height` | Resize a window. |
-| `run_command` | `command` | Run a terminal command and return its output. |
+| `run_command` | `command` | Run a terminal command in the shell's registry and working directory and return its output (the remote-terminal path: `listen`, `remote`, `ftp` and `mcp-server` toggles answer `Not available via remote.`). |
 | `browser_navigate` | `url` | Open the Browser (if needed) and navigate. |
 | `play_media` | `path` | Play a media file by VFS path. |
 | `tune` | `source` (`radio`/`tv`), `channel` | Tune the radio (station index or name) or the TV (channel number; the TV Guide must be open, it owns the catalogs). |
