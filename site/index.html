@@ -154,7 +154,7 @@
     <header class="section__head section__head--split">
       <div>
         <p class="kicker">01 &mdash; What it is</p>
-        <h2 id="what-title">A whole operating environment behind thirteen methods.</h2>
+        <h2 id="what-title">A whole operating environment behind twelve methods.</h2>
       </div>
       <p class="section__lede">
         Not a UI toolkit: a complete shell &mdash; dashboard, windows, apps, a terminal, a browser &mdash;
@@ -176,8 +176,8 @@
           <span class="step__no" aria-hidden="true">2</span>
           <div>
             <h3>Implement the contract</h3>
-            <p><code>SdiCore</code>&rsquo;s 13 required methods plus <code>InputBackend::poll_events</code>.
-              One macro line fills in eight extension traits &mdash; 47 default methods for shapes,
+            <p><code>SdiCore</code>&rsquo;s 12 required methods plus <code>InputBackend::poll_events</code>.
+              One macro line fills in eight extension traits &mdash; 45 default methods for shapes,
               gradients, text, textures, clipping, vector paths, batching and render targets.</p>
           </div>
         </li>
@@ -215,15 +215,16 @@
     <span class="tk">fn</span> <span class="tf">destroy_texture</span>(&amp;<span class="tk">mut</span> self, tex: <span class="tt">TextureId</span>) -&gt; <span class="tt">Result</span>&lt;()&gt;;
     <span class="tk">fn</span> <span class="tf">set_clip_rect</span>(&amp;<span class="tk">mut</span> self, x: <span class="tt">i32</span>, y: <span class="tt">i32</span>, w: <span class="tt">u32</span>, h: <span class="tt">u32</span>) -&gt; <span class="tt">Result</span>&lt;()&gt;;
     <span class="tk">fn</span> <span class="tf">reset_clip_rect</span>(&amp;<span class="tk">mut</span> self) -&gt; <span class="tt">Result</span>&lt;()&gt;;
-    <span class="tk">fn</span> <span class="tf">measure_text</span>(&amp;self, text: &amp;<span class="tt">str</span>, font_size: <span class="tt">u16</span>) -&gt; <span class="tt">u32</span>;
     <span class="tk">fn</span> <span class="tf">read_pixels</span>(&amp;self, x: <span class="tt">i32</span>, y: <span class="tt">i32</span>, w: <span class="tt">u32</span>, h: <span class="tt">u32</span>) -&gt; <span class="tt">Result</span>&lt;<span class="tt">Vec</span>&lt;<span class="tt">u8</span>&gt;&gt;;
     <span class="tk">fn</span> <span class="tf">shutdown</span>(&amp;<span class="tk">mut</span> self) -&gt; <span class="tt">Result</span>&lt;()&gt;;
 
+    <span class="tc">// provided: the bitmap font's width (override for your own fonts)</span>
+    <span class="tk">fn</span> <span class="tf">measure_text</span>(&amp;self, text: &amp;<span class="tt">str</span>, font_size: <span class="tt">u16</span>) -&gt; <span class="tt">u32</span> { ... }
     <span class="tc">// provided: override to report a resized window or a bound render target</span>
     <span class="tk">fn</span> <span class="tf">viewport_size</span>(&amp;self) -&gt; (<span class="tt">u32</span>, <span class="tt">u32</span>) { ... }
 }
 
-<span class="tc">// Implement those 13 for your type, then one line buys all eight extension traits:</span>
+<span class="tc">// Implement those 12 for your type, then one line buys all eight extension traits:</span>
 <span class="tm">oasis_types::impl_sdi_defaults!</span>(<span class="tt">MyBackend</span>);</code></pre>
         </div>
         <div role="tabpanel" id="cpanel-ffi" aria-labelledby="ctab-ffi" tabindex="0" hidden>
@@ -845,12 +846,12 @@ nightfall_theme.mp3
           <g class="arch-trait arch-trait--core">
             <rect x="0.5" y="430.5" width="213.4" height="61" rx="10"/>
             <text class="arch-trait-name" x="16.0" y="456" fill="#ff8a3d">SdiCore</text>
-            <text class="arch-trait-sub" x="16.0" y="476">13 required methods</text>
+            <text class="arch-trait-sub" x="16.0" y="476">12 required methods</text>
           </g>
           <g class="arch-trait">
             <rect x="226.9" y="430.5" width="213.4" height="61" rx="10"/>
             <text class="arch-trait-name" x="242.4" y="456" fill="#7cc7ff">SdiBackend</text>
-            <text class="arch-trait-sub" x="242.4" y="476">8 extension traits · 47 defaults</text>
+            <text class="arch-trait-sub" x="242.4" y="476">8 extension traits · 45 defaults</text>
           </g>
           <g class="arch-trait">
             <rect x="453.3" y="430.5" width="213.4" height="61" rx="10"/>
@@ -939,8 +940,8 @@ nightfall_theme.mp3
         </ol>
         <p class="arch__boundary"><span>Trait boundary</span></p>
         <ul class="arch__traits" aria-label="Backend traits">
-          <li><code>SdiCore</code> 13 required rendering methods</li>
-          <li><code>SdiBackend</code> 8 extension traits, 47 default methods</li>
+          <li><code>SdiCore</code> 12 required rendering methods</li>
+          <li><code>SdiBackend</code> 8 extension traits, 45 default methods</li>
           <li><code>InputBackend</code> buttons, keys, pointer, text</li>
           <li><code>NetworkBackend</code> TCP with pluggable TLS</li>
           <li><code>AudioBackend</code> tracks and streaming PCM</li>
@@ -950,13 +951,13 @@ nightfall_theme.mp3
           <li><code>oasis-backend-wasm</code><span>Canvas 2D &middot; HTML audio &middot; browsers</span></li>
           <li><code>oasis-backend-ue5</code><span>RGBA framebuffer &rarr; oasis-ffi &rarr; UE5</span></li>
           <li><code>oasis-backend-psp</code><span>sceGu &middot; Media Engine &middot; PSP EBOOT</span></li>
-          <li class="is-dim"><code>oasis-plugin-psp</code><span>kernel PRX &middot; ~150&nbsp;KB, no oasis-core</span></li>
+          <li class="is-dim"><code>oasis-plugin-psp</code><span>kernel PRX &middot; ~160&nbsp;KB, no oasis-core</span></li>
         </ul>
       </div>
       <figcaption class="arch__caption" id="arch-caption">
         Crates depend downward; only the hosts also link a backend from below the line. Backends
         implement the <code>oasis-types</code> traits; the PSP
-        overlay PRX stays standalone, without <code>oasis-core</code>, so it stays small (about 150&nbsp;KB) beside a running game.
+        overlay PRX stays standalone, without <code>oasis-core</code>, so it stays small (about 160&nbsp;KB) beside a running game.
         Not drawn: eight more standalone PSP tools &mdash; the recovery EBOOT, the dev loop, ME boot,
         PRX decrypt and four USB client / debug / trace / VBUS crates.
       </figcaption>
@@ -1187,6 +1188,40 @@ OASIS_MCP=1 ./target/release/oasis-app
       <li><a href="https://github.com/AndrewAltimit/oasis-os/blob/main/docs/writing-apps.md"><strong>Writing apps</strong><span>The <code>App</code> trait lifecycle</span></a></li>
       <li><a href="https://github.com/AndrewAltimit/oasis-os/blob/main/docs/ffi-integration.md"><strong>FFI integration</strong><span>Embedding in UE5 or any C host</span></a></li>
       <li><a href="https://github.com/AndrewAltimit/oasis-os/blob/main/docs/mcp-server.md"><strong>MCP server</strong><span>Tools, transport &amp; security</span></a></li>
+    </ul>
+  </div>
+</section>
+
+<!-- ============================================================ -->
+<!-- What's new (numbers from CHANGELOG.md, overhaul 3)            -->
+<!-- ============================================================ -->
+<section class="section section--alt" id="whats-new" aria-labelledby="new-title">
+  <div class="wrap">
+    <header class="section__head section__head--split">
+      <div>
+        <p class="kicker">09 &mdash; What&rsquo;s new</p>
+        <h2 id="new-title">Faster, stricter, closer to the spec.</h2>
+      </div>
+      <p class="section__lede">
+        The latest overhaul, measured with the in-tree criterion benches. Output stayed
+        pixel-identical: rasterizer goldens, backend parity and frame hashes of every skin.
+      </p>
+    </header>
+
+    <dl class="numbers">
+      <div><dt>HTML parse</dt><dd>3&times;</dd><dd class="numbers__note">100&nbsp;KB page: 5.2 &rarr; 1.4&nbsp;ms</dd></div>
+      <div><dt>CSS cascade</dt><dd>3.2&times;</dd><dd class="numbers__note">1,210 rules: 15.8 &rarr; 4.9&nbsp;ms</dd></div>
+      <div><dt>Nested flex</dt><dd>25&times;</dd><dd class="numbers__note">16 rows: 3.2 &rarr; 0.13&nbsp;ms</dd></div>
+      <div><dt>Software frame</dt><dd>3&times;</dd><dd class="numbers__note">XP 1024&times;768: 1.8 &rarr; 0.59&nbsp;ms</dd></div>
+      <div><dt>Idle frames</dt><dd>&minus;45%</dd><dd class="numbers__note">20&ndash;45% cheaper: IPC files stat-polled</dd></div>
+      <div><dt>PSP dev servers</dt><dd>PSK</dd><dd class="numbers__note">HMAC challenge on 9293</dd></div>
+    </dl>
+
+    <ul class="docs-links">
+      <li><a href="https://github.com/AndrewAltimit/oasis-os/blob/main/docs/browser-engine.md"><strong>HTML &amp; CSS</strong><span>WHATWG table, form and template modes, quirks mode, a UA cascade origin, <code>revert-layer</code></span></a></li>
+      <li><a href="https://github.com/AndrewAltimit/oasis-os/blob/main/docs/terminal-commands.md"><strong>Shell</strong><span><code>NAME=value</code>, detached <code>&amp;</code> jobs, POSIX pipeline errors</span></a></li>
+      <li><a href="https://github.com/AndrewAltimit/oasis-os/blob/main/docs/ui-widgets.md"><strong>Keyboard menus</strong><span>F10 opens app menu bars; narrow bars fold into &raquo;</span></a></li>
+      <li><a href="https://github.com/AndrewAltimit/oasis-os/blob/main/CHANGELOG.md"><strong>Changelog</strong><span>Every change, with breaking ones marked</span></a></li>
     </ul>
   </div>
 </section>

@@ -360,6 +360,18 @@ larger changes by area. Breaking API changes are marked **(breaking)**.
   architecture diagram now accounts for all 51 crates (new Hosts row with `oasis-app`,
   `oasis-ffi`, `oasis-usb-host`; `oasis-test-backend` under Foundation; the eight
   undrawn standalone PSP tools named in the caption); code-comment color meets WCAG AA.
+- Backend trait counts match the code on the homepage and journal entries 01 / 06: 12
+  required `SdiCore` methods (`measure_text` and `viewport_size` provided) and 45 extension
+  defaults (was 13 / 47); `SdiTextures` lists its two methods, the capability matrix's
+  `SdiTextures` / `SdiBatch` rows are recounted, and entry 06 no longer says the PSP's
+  `SpscQueue` was removed. The overlay PRX size reads ~160 KB (was ~150 KB).
+- New homepage "What's new" section with this overhaul's measured speedups (HTML parse,
+  CSS cascade, nested flex, software frame, idle frames) and the PSP dev-server PSK auth;
+  journal entry 08 gains update notes that the port-9293 servers now need the PSK
+  challenge.
+- Journal 01 / 03 / 06: tables close their scroll wrapper before the update note, and a
+  stray `</div>` that pushed most of entry 01 out of its prose column is gone. The crate
+  map's "web page" walk names `TreeBuilder::parse_with` / `parse_reuse`.
 
 ### Browser parsers (oasis-html, oasis-css)
 

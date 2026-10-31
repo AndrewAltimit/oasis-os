@@ -192,6 +192,20 @@
   <pre><code>$ echo "ping" | nc -w 3 192.168.0.249 9293
 pong</code></pre>
 
+  <aside class="callout update" role="note">
+    <div class="callout-title">Update (Oct 2026)</div>
+    <p>The servers on port 9293 are no longer open. The EBOOT command server, the recovery EBOOT
+      and the overlay PRX&rsquo;s devloop now answer a connection with the remote terminal&rsquo;s
+      pre-shared-key HMAC challenge, and none of them runs without a key: the EBOOT reads
+      <code>ms0:/PSP/GAME/OASISOS/cmdserver.key</code> (8+ bytes), the recovery EBOOT its own
+      <code>oasis-recovery.key</code> beside <code>RECOVERY.PBP</code> (falling back to the same
+      file), and the PRX a <code>devloop_psk</code> next to <code>devloop = true</code> in
+      <code>oasis.ini</code>. The bare <code>nc</code> sessions in this entry are how the protocol
+      looked when it was written; today <code>scripts/psp_remote.py</code> answers the challenge from
+      <code>PSP_PSK</code> and then sends the same one-line commands. See
+      <a href="https://github.com/AndrewAltimit/oasis-os/blob/main/docs/networking.md#psp-dev-servers">networking.md &sect; PSP dev servers</a>.</p>
+  </aside>
+
   <p>The full command set:</p>
 
   <div class="table-wrap"><table>
@@ -644,6 +658,13 @@ $ python3 scripts/psp_remote.py hard-reboot</code></pre>
       <code>nc</code> &mdash; tools it already knows how to use.
     </li>
   </ul>
+
+  <aside class="callout update" role="note">
+    <div class="callout-title">Update (Oct 2026)</div>
+    <p>&ldquo;No authentication&rdquo; is no longer true: it let anyone on the same WiFi
+      deploy an EBOOT. The protocol is still one command per connection, now behind a one-line
+      HMAC handshake that <code>psp_remote.py</code> performs for the agent.</p>
+  </aside>
     </div>
   </div>
 
