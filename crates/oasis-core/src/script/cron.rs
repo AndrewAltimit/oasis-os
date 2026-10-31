@@ -270,14 +270,16 @@ impl Command for CronCmd {
                 let entry_path = cron_entry_path(name)?;
                 let entry = CronEntry {
                     interval: parse_interval(interval)?,
-                    script: (*script).to_string(),
+                    // Jobs run from `/`: store the path the user meant.
+                    script: oasis_terminal::resolve_path(&env.cwd, script),
                 };
                 if !env.vfs.exists(CRON_DIR) {
                     env.vfs.mkdir(CRON_DIR)?;
                 }
                 env.vfs.write(&entry_path, entry.serialize().as_bytes())?;
                 Ok(CommandOutput::Text(format!(
-                    "Cron job '{name}' added: {script} every {}",
+                    "Cron job '{name}' added: {} every {}",
+                    entry.script,
                     format_interval(entry.interval)
                 )))
             },
