@@ -34,19 +34,61 @@ impl Rollback {
 
     /// The entry of `matched[..i]` for `matched[i]`'s property that this
     /// rollback falls back to: the cascade winner among the entries from
-    /// an earlier origin (`revert`) or layer (`revert-layer`).
+    /// an earlier origin (`revert`) or layer (`revert-layer`). That entry
+    /// may be a shorthand still holding `var()` (`background: var(--bg)`
+    /// is expanded only at computed-value time) that sets the property.
     fn fallback(self, matched: &[MatchedDeclaration], i: usize) -> Option<usize> {
         let this = &matched[i];
         (0..i).rev().find(|&j| {
             let cand = &matched[j];
-            cand.property == this.property
-                && match self {
-                    Rollback::Origin => cand.below_origin_of(this),
-                    Rollback::Layer => cand.below_layer_of(this),
-                }
+            let below = match self {
+                Rollback::Origin => cand.below_origin_of(this),
+                Rollback::Layer => cand.below_layer_of(this),
+            };
+            below
+                && (cand.property == this.property
+                    || (matches!(&*cand.value, CssValue::Unresolved(_))
+                        && shorthand_sets(&cand.property, &this.property)))
         })
     }
 }
+
+/// Whether the shorthand `shorthand` expands to (among others) the
+/// longhand `longhand`.
+fn shorthand_sets(shorthand: &str, longhand: &str) -> bool {
+    !shorthand.starts_with("--")
+        && parse_substituted_cached(shorthand, "unset")
+            .iter()
+            .any(|d| d.property == longhand)
+}
+
+/// Apply only the `longhand` part of the `var()`-holding `shorthand`
+/// declaration `value` (a `revert` / `revert-layer` fallback): the other
+/// longhands it sets keep their cascaded values.
+fn apply_longhand_of(
+    style: &mut ComputedStyle,
+    parent: Option<&ComputedStyle>,
+    shorthand: &str,
+    value: &CssValue,
+    longhand: &str,
+    font_size: f32,
+) {
+    let CssValue::Unresolved(text) = value else {
+        return;
+    };
+    // Invalid at computed-value time: the longhand stays `unset`, which
+    // the caller already applied.
+    let Some(substituted) = var_resolve::substitute_vars(text, &style.custom_properties) else {
+        return;
+    };
+    for decl in parse_substituted_cached(shorthand, &substituted).iter() {
+        if decl.property == longhand {
+            apply_value(style, parent, &decl.property, &decl.value, font_size);
+        }
+    }
+}
+
+impl Rollback {}
 
 /// Apply `matched[i]` (sorted in cascade order) to `style`.
 ///
@@ -72,7 +114,13 @@ pub(super) fn apply_matched(
     };
     apply_unset(style, parent, &entry.property);
     if let Some(j) = rollback.fallback(matched, i) {
-        apply_matched(style, parent, matched, j, font_size);
+        let cand = &matched[j];
+        if cand.property == entry.property {
+            apply_matched(style, parent, matched, j, font_size);
+        } else {
+            let (shorthand, value) = (&cand.property, &cand.value);
+            apply_longhand_of(style, parent, shorthand, value, &entry.property, font_size);
+        }
     }
 }
 

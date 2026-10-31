@@ -93,13 +93,14 @@ impl MatchedDeclaration<'_> {
     }
 
     /// True if `self` comes from a lower origin than `other` (what
-    /// `revert` rolls back to). Presentational hints count as author.
+    /// `revert` rolls back to). Presentational hints and inline styles
+    /// count as author, and importance is not an origin: an author
+    /// `revert !important` rolls back past every author declaration,
+    /// normal ones included, to the user-agent origin.
     pub(super) fn below_origin_of(&self, other: &Self) -> bool {
-        let origin_rank = |d: &Self| match (d.important, d.origin) {
-            (false, Origin::UserAgent) => 0,
-            (false, _) => 1,
-            (true, Origin::UserAgent) => 3,
-            (true, _) => 2,
+        let origin_rank = |d: &Self| match d.origin {
+            Origin::UserAgent => 0,
+            Origin::Presentational | Origin::Stylesheet | Origin::Inline => 1,
         };
         origin_rank(self) < origin_rank(other)
     }
