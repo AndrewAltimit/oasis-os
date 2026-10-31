@@ -2,9 +2,9 @@
 //!
 //! Implements `AudioBackend` using SDL3's audio stream API and minimp3 (via
 //! the [`crate::mp3`] wrapper over `rmp3::ffi`).  Incoming MP3 data (from
-//! `feed_data` or `load_track`) is decoded to PCM i16 samples, volume-scaled,
-//! and pushed to an `sdl3::audio::AudioStream` bound to the default playback
-//! device.
+//! `feed_data` or `load_track`) is decoded to PCM i16 samples and pushed to
+//! an `sdl3::audio::AudioStream` bound to the default playback device; the
+//! volume is the stream's gain, so changes apply to audio already queued.
 //!
 //! The SDL3 audio device and stream are opened lazily on the first decoded
 //! frame so that the sample rate and channel count come from the actual stream.
@@ -161,8 +161,6 @@ pub struct SdlAudioBackend {
     /// the music stream at the device level, so short samples play over
     /// whatever is queued without touching the music pipeline.
     sfx_stream: Option<sdl3::audio::AudioStreamOwner>,
-    /// Reusable staging buffer for volume-scaled SFX PCM.
-    sfx_scratch: Vec<i16>,
     /// Set once opening the SFX device fails (e.g. the audio subsystem
     /// initialized but no playback device exists, as on CI runners), so
     /// UI sounds degrade to silence instead of retrying every frame.
@@ -207,7 +205,6 @@ impl SdlAudioBackend {
             pcm_resampled: Vec::new(),
             resampler: LinearResampler::new(OUTPUT_SAMPLE_RATE),
             sfx_stream: None,
-            sfx_scratch: Vec::new(),
             sfx_unavailable: false,
             tracks: HashMap::new(),
             next_id: 0,
@@ -246,10 +243,45 @@ impl SdlAudioBackend {
         let stream = device
             .open_device_stream(Some(&spec))
             .map_err(|e| OasisError::Backend(e.to_string().into()))?;
+        // Volume is the stream's gain, never baked into the queued PCM, so
+        // a change applies at once instead of after the queue drains.
+        stream
+            .set_gain(self.gain())
+            .map_err(|e| OasisError::Backend(e.to_string().into()))?;
         stream
             .resume()
             .map_err(|e| OasisError::Backend(e.to_string().into()))?;
         Ok(stream)
+    }
+
+    /// The SDL stream gain for the current volume (0-100).
+    fn gain(&self) -> f32 {
+        f32::from(self.volume) / 100.0
+    }
+
+    /// Make the music stream play `sample_rate` Hz x `channels`: open it,
+    /// or reopen it when it is open for another format (dropping what it
+    /// still has queued). Every music path goes through this, so PCM is
+    /// never queued into a stream of another format (a mono 44.1 kHz WAV
+    /// into the 48 kHz stereo MP3 stream played at double speed).
+    fn ensure_stream(&mut self, sample_rate: i32, channels: u8) -> Result<()> {
+        if self.stream_owner.is_some()
+            && (self.sample_rate != sample_rate || self.channels != channels as usize)
+        {
+            log::info!(
+                "SDL audio: format change {}Hz/{}ch -> {sample_rate}Hz/{channels}ch, \
+                 reopening device",
+                self.sample_rate,
+                self.channels,
+            );
+            self.stream_owner = None;
+        }
+        if self.stream_owner.is_none() && self.audio_subsystem.is_some() {
+            self.open_device(sample_rate, channels)?;
+        }
+        self.sample_rate = sample_rate;
+        self.channels = channels as usize;
+        Ok(())
     }
 
     /// Open an SDL3 audio device and stream with the given sample rate and
@@ -290,9 +322,9 @@ impl SdlAudioBackend {
     /// the mix `oasis_audio::sfx::SfxPlayer::render` produces).
     ///
     /// Opens a dedicated SFX stream lazily; SDL mixes it with the music
-    /// stream at the device level. The global volume (0-100) is applied
-    /// here, matching the music paths, so a muted system stays silent.
-    /// No-op in headless environments (no audio subsystem, or no
+    /// stream at the device level. The global volume (0-100) is the
+    /// stream's gain, as on the music stream, so a muted system stays
+    /// silent. No-op in headless environments (no audio subsystem, or no
     /// playback device to open) — UI sounds are best-effort.
     pub fn queue_sfx(&mut self, pcm: &[i16]) -> Result<()> {
         if pcm.is_empty() || self.audio_subsystem.is_none() || self.sfx_unavailable {
@@ -311,13 +343,9 @@ impl SdlAudioBackend {
                 },
             }
         }
-        let vol = self.volume as i32;
-        self.sfx_scratch.clear();
-        self.sfx_scratch
-            .extend(pcm.iter().map(|&s| ((s as i32 * vol) / 100) as i16));
         if let Some(ref stream) = self.sfx_stream {
             stream
-                .put_data_i16(&self.sfx_scratch)
+                .put_data_i16(pcm)
                 .map_err(|e| OasisError::Backend(e.to_string().into()))?;
         }
         Ok(())
@@ -411,18 +439,12 @@ impl SdlAudioBackend {
             self.resampler.set_input_rate(detected_rate);
         }
 
-        // Open device once, at the fixed output format.
-        if self.stream_owner.is_none() && detected_rate > 0 && self.audio_subsystem.is_some() {
-            self.open_device(OUTPUT_SAMPLE_RATE as i32, 2)?;
+        // The fixed output format (also recorded for `position_ms`).
+        if detected_rate > 0 {
+            self.ensure_stream(OUTPUT_SAMPLE_RATE as i32, 2)?;
         }
 
         if !self.pcm_staging.is_empty() {
-            // Record the output format for `position_ms` / status.
-            if detected_rate > 0 {
-                self.sample_rate = OUTPUT_SAMPLE_RATE as i32;
-                self.channels = 2;
-            }
-
             // Upmix mono → stereo in-place via a quick rewrite so we
             // feed the resampler a stereo-interleaved buffer.
             if detected_channels == 1 {
@@ -435,14 +457,6 @@ impl SdlAudioBackend {
                     self.pcm_staging[2 * i] = s;
                     self.pcm_staging[2 * i + 1] = s;
                 }
-            }
-
-            // Apply volume scaling before resampling so the interpolator
-            // sees the already-scaled signal (avoids tiny quantisation
-            // differences versus scaling after).
-            let vol = self.volume as i32;
-            for s in &mut self.pcm_staging {
-                *s = ((*s as i32 * vol) / 100) as i16;
             }
 
             // Resample to OUTPUT_SAMPLE_RATE stereo and queue.
@@ -477,42 +491,16 @@ impl SdlAudioBackend {
         let ogg = oasis_audio::ogg::decode_ogg(ogg_data)
             .ok_or_else(|| OasisError::Backend("invalid Ogg Vorbis data".into()))?;
 
-        if self.stream_owner.is_none() && self.audio_subsystem.is_some() {
-            self.open_device(ogg.sample_rate as i32, ogg.channels as u8)?;
-        }
-
-        self.sample_rate = ogg.sample_rate as i32;
-        self.channels = ogg.channels as usize;
-
-        let mut pending_pcm = ogg.samples;
-        let vol = self.volume as i32;
-        for s in &mut pending_pcm {
-            *s = ((*s as i32 * vol) / 100) as i16;
-        }
-
-        self.queue_pcm(&pending_pcm)?;
-        Ok(())
+        self.ensure_stream(ogg.sample_rate as i32, ogg.channels as u8)?;
+        self.queue_pcm(&ogg.samples)
     }
 
     fn decode_wav_and_queue(&mut self, wav_data: &[u8]) -> Result<()> {
         let wav = oasis_audio::wav::decode_wav(wav_data)
             .ok_or_else(|| OasisError::Backend("invalid WAV data".into()))?;
 
-        if self.stream_owner.is_none() && self.audio_subsystem.is_some() {
-            self.open_device(wav.sample_rate as i32, wav.channels as u8)?;
-        }
-
-        self.sample_rate = wav.sample_rate as i32;
-        self.channels = wav.channels as usize;
-
-        let mut pending_pcm = wav.samples;
-        let vol = self.volume as i32;
-        for s in &mut pending_pcm {
-            *s = ((*s as i32 * vol) / 100) as i16;
-        }
-
-        self.queue_pcm(&pending_pcm)?;
-        Ok(())
+        self.ensure_stream(wav.sample_rate as i32, wav.channels as u8)?;
+        self.queue_pcm(&wav.samples)
     }
 
     fn decode_mp3_and_queue(&mut self, mp3_data: &[u8]) -> Result<()> {
@@ -563,18 +551,8 @@ impl SdlAudioBackend {
             }
         }
 
-        // Apply volume scaling.
-        let vol = self.volume as i32;
-        for s in &mut decoded {
-            *s = ((*s as i32 * vol) / 100) as i16;
-        }
-
-        // Open device at the fixed output format if it isn't already.
-        if self.stream_owner.is_none() && self.audio_subsystem.is_some() {
-            self.open_device(OUTPUT_SAMPLE_RATE as i32, 2)?;
-        }
-        self.sample_rate = OUTPUT_SAMPLE_RATE as i32;
-        self.channels = 2;
+        // The fixed output format (volume is the stream's gain).
+        self.ensure_stream(OUTPUT_SAMPLE_RATE as i32, 2)?;
 
         // Route through the streaming resampler so the static path and
         // streaming path produce bit-identical output for the same
@@ -717,8 +695,18 @@ impl AudioBackend for SdlAudioBackend {
         Ok(())
     }
 
+    /// Applies at once, to the music and the SFX stream alike: volume is
+    /// the streams' gain, not baked into PCM already queued (which used to
+    /// keep the old level for the seconds of radio in the queue, or for
+    /// the rest of a fully queued track).
     fn set_volume(&mut self, volume: u8) -> Result<()> {
         self.volume = volume.min(100);
+        let gain = self.gain();
+        for stream in [&self.stream_owner, &self.sfx_stream].into_iter().flatten() {
+            if let Err(e) = stream.set_gain(gain) {
+                log::warn!("SDL audio: set_gain({gain}) failed: {e}");
+            }
+        }
         Ok(())
     }
 
@@ -785,7 +773,6 @@ impl AudioBackend for SdlAudioBackend {
         self.stop()?;
         self.stream_owner = None;
         self.sfx_stream = None;
-        self.sfx_scratch.clear();
         self.sfx_unavailable = false;
         self.audio_subsystem = None;
         self.tracks.clear();
@@ -918,38 +905,16 @@ impl AudioBackend for SdlAudioBackend {
             return Ok(());
         }
 
-        // Open device lazily with the stream's format, or reopen if format changed.
-        let format_changed = self.stream_owner.is_some()
-            && (self.sample_rate != sample_rate as i32 || self.channels != channels as usize);
-        if format_changed {
-            log::info!(
-                "SDL audio: format change {}Hz/{}ch -> {}Hz/{}ch, reopening device",
-                self.sample_rate,
-                self.channels,
-                sample_rate,
-                channels,
-            );
-            self.stream_owner = None;
-        }
-        if self.stream_owner.is_none() && self.audio_subsystem.is_some() {
-            self.open_device(sample_rate as i32, channels as u8)?;
-            // Resume immediately — play() was called before the device existed.
-            if self.playing
-                && let Some(ref stream) = self.stream_owner
-            {
-                let _ = stream.resume();
-            }
-        }
+        // Open the stream lazily with this format, or reopen it if the
+        // format changed (the new stream starts playing, `create_stream`
+        // resumes it).
+        self.ensure_stream(sample_rate as i32, channels as u8)?;
 
-        self.sample_rate = sample_rate as i32;
-        self.channels = channels as usize;
-
-        // Convert f32 → i16 with volume scaling.
-        let vol = self.volume as f32 / 100.0;
+        // Convert f32 → i16 (volume is the stream's gain).
         self.pcm_staging.clear();
         self.pcm_staging.reserve(samples.len());
         for &s in samples {
-            let scaled = s * vol * 32767.0;
+            let scaled = s * 32767.0;
             self.pcm_staging
                 .push(scaled.clamp(-32768.0, 32767.0) as i16);
         }

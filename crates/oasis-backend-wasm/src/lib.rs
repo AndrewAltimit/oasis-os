@@ -786,7 +786,7 @@ impl OasisWasm {
                         if !url.is_empty() {
                             console_log!(
                                 "TV tune: {} seek={}s",
-                                &url[..url.len().min(80)],
+                                &url[..url.floor_char_boundary(80)],
                                 seek_secs,
                             );
                             let (_, _, pw, ph) = vfs_content::tv_preview_rect(&self.active_theme);

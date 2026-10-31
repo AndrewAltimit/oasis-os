@@ -112,7 +112,7 @@ impl VideoPlayer {
 
         vlog!(
             "Starting video: {}...  seek={}s  capture={}x{}",
-            &url[..url.len().min(80)],
+            &url[..url.floor_char_boundary(80)],
             seek_secs,
             w,
             h
@@ -134,6 +134,19 @@ impl VideoPlayer {
         let window = web_sys::window()?;
         let document = window.document()?;
 
+        // --- Offscreen capture canvas ---
+        // Created first: every fallible step runs before the <video> is
+        // appended and starts loading, so a failure leaves nothing behind
+        // (no orphaned element whose listeners outlive their closures).
+        let capture: HtmlCanvasElement = document.create_element("canvas").ok()?.dyn_into().ok()?;
+        capture.set_width(w);
+        capture.set_height(h);
+        let ctx: CanvasRenderingContext2d = capture
+            .get_context("2d")
+            .ok()?
+            .and_then(|c| c.dyn_into().ok())?;
+        let body = document.body()?;
+
         // --- Hidden <video> element ---
         let video: HtmlVideoElement = document.create_element("video").ok()?.dyn_into().ok()?;
         // Do NOT set crossOrigin — archive.org redirects to a CDN that does
@@ -145,16 +158,11 @@ impl VideoPlayer {
         // Start muted — muted autoplay is universally allowed without user
         // gesture, avoiding AbortError that kills the network fetch.
         video.set_muted(true);
-        video.set_src(url);
-        if seek_secs > 0 {
-            video.set_current_time(seek_secs as f64);
-        }
         // Hide from viewport.
         video.style().set_property("display", "none").ok()?;
-        document.body()?.append_child(&video).ok()?;
 
         // --- Error event listener ---
-        let url_for_err = url[..url.len().min(80)].to_string();
+        let url_for_err = url[..url.floor_char_boundary(80)].to_string();
         let error_handler = Closure::wrap(Box::new(move |_: web_sys::Event| {
             verr!("Video error for: {}", url_for_err);
             verr!("The video failed to load or decode. Check:");
@@ -178,15 +186,16 @@ impl VideoPlayer {
             .ok();
         self.ended = ended_flag;
 
-        // --- Offscreen capture canvas ---
-        let capture: HtmlCanvasElement = document.create_element("canvas").ok()?.dyn_into().ok()?;
-        capture.set_width(w);
-        capture.set_height(h);
-
-        let ctx: CanvasRenderingContext2d = capture
-            .get_context("2d")
-            .ok()?
-            .and_then(|c| c.dyn_into().ok())?;
+        // Only now start loading: the listeners are attached and nothing
+        // below can fail.
+        video.set_src(url);
+        if seek_secs > 0 {
+            video.set_current_time(seek_secs as f64);
+        }
+        if body.append_child(&video).is_err() {
+            teardown(&video, &error_handler, &ended_handler);
+            return None;
+        }
 
         // Register the capture canvas as a texture (zero-copy path).
         let tex_id = backend.register_canvas_as_texture(capture.clone());
@@ -280,15 +289,7 @@ impl VideoPlayer {
 
     /// Stop playback, destroy DOM elements and the backend texture.
     pub fn stop(&mut self, backend: &mut WasmBackend) {
-        if let Some(video) = self.video.take() {
-            video.pause().ok();
-            video.set_src("");
-            if let Some(parent) = video.parent_node() {
-                let _ = parent.remove_child(&video);
-            }
-        }
-        self._error_handler = None;
-        self._ended_handler = None;
+        self.release_video();
         self.ended.set(false);
         self.capture_canvas = None;
         self.capture_ctx = None;
@@ -321,15 +322,47 @@ impl VideoPlayer {
     }
 }
 
+impl VideoPlayer {
+    /// Tear the `<video>` element down and drop its listener closures.
+    fn release_video(&mut self) {
+        if let (Some(video), Some(error), Some(ended)) = (
+            self.video.take(),
+            self._error_handler.as_ref(),
+            self._ended_handler.as_ref(),
+        ) {
+            teardown(&video, error, ended);
+        }
+        self._error_handler = None;
+        self._ended_handler = None;
+    }
+}
+
+/// Stop `video` loading and playing and take it out of the DOM, removing
+/// its `error` / `ended` listeners first.
+///
+/// The listeners must go before the closures are dropped: clearing the
+/// source queues an `error` event, which would otherwise call a dropped
+/// wasm-bindgen closure and throw. The source is removed with
+/// `removeAttribute("src")` + `load()` (`src = ""` is itself an error, and
+/// without `load()` the element keeps its media resource and fetch).
+fn teardown(
+    video: &HtmlVideoElement,
+    error: &Closure<dyn FnMut(web_sys::Event)>,
+    ended: &Closure<dyn FnMut(web_sys::Event)>,
+) {
+    let _ = video.remove_event_listener_with_callback("error", error.as_ref().unchecked_ref());
+    let _ = video.remove_event_listener_with_callback("ended", ended.as_ref().unchecked_ref());
+    video.pause().ok();
+    let _ = video.remove_attribute("src");
+    video.load();
+    if let Some(parent) = video.parent_node() {
+        let _ = parent.remove_child(video);
+    }
+}
+
 impl Drop for VideoPlayer {
     fn drop(&mut self) {
         // Best-effort DOM cleanup (no backend reference available here).
-        if let Some(video) = self.video.take() {
-            video.pause().ok();
-            video.set_src("");
-            if let Some(parent) = video.parent_node() {
-                let _ = parent.remove_child(&video);
-            }
-        }
+        self.release_video();
     }
 }
