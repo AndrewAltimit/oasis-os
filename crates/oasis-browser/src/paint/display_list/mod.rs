@@ -473,10 +473,8 @@ impl DisplayList {
         scroll_dy: i32,
         base_clip: Option<(i32, i32, u32, u32)>,
     ) -> Result<()> {
-        #[cfg(feature = "web-fonts")]
-        return self.replay_inner(backend, scroll_dx, scroll_dy, base_clip, None);
-        #[cfg(not(feature = "web-fonts"))]
-        return self.replay_inner(backend, scroll_dx, scroll_dy, base_clip);
+        self.replay_inner(backend, None, scroll_dx, scroll_dy, base_clip, None)
+
     }
 
     /// Replay with a web font renderer for glyph-level rendering.
@@ -493,7 +491,7 @@ impl DisplayList {
         base_clip: Option<(i32, i32, u32, u32)>,
         renderer: &mut dyn WebFontRenderer,
     ) -> Result<()> {
-        self.replay_inner(backend, scroll_dx, scroll_dy, base_clip, Some(renderer))
+        self.replay_inner(backend, None, scroll_dx, scroll_dy, base_clip, Some(renderer))
     }
 
     /// Replay only items that intersect the given dirty rectangle.
@@ -510,10 +508,8 @@ impl DisplayList {
         scroll_dy: i32,
         base_clip: Option<(i32, i32, u32, u32)>,
     ) -> Result<()> {
-        #[cfg(feature = "web-fonts")]
-        return self.replay_dirty_inner(backend, dirty, scroll_dx, scroll_dy, base_clip, None);
-        #[cfg(not(feature = "web-fonts"))]
-        return self.replay_dirty_inner(backend, dirty, scroll_dx, scroll_dy, base_clip);
+        self.replay_inner(backend, Some(dirty), scroll_dx, scroll_dy, base_clip, None)
+
     }
 
     /// Replay dirty items with a web font renderer for glyph-level rendering.
@@ -527,9 +523,9 @@ impl DisplayList {
         base_clip: Option<(i32, i32, u32, u32)>,
         renderer: &mut dyn WebFontRenderer,
     ) -> Result<()> {
-        self.replay_dirty_inner(
+        self.replay_inner(
             backend,
-            dirty,
+            Some(dirty),
             scroll_dx,
             scroll_dy,
             base_clip,

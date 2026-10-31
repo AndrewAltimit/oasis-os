@@ -1,18 +1,23 @@
 //! Display-list replay against an `SdiBackend`.
 //!
-//! Two replay paths share the same machinery:
+//! One walk serves both entry points:
 //!
-//! - [`DisplayList::replay`] walks every item in order, applying scroll
+//! - [`DisplayList::replay`] draws every item in order, applying scroll
 //!   translation, opacity stacks, clip stacks, sticky offset
 //!   re-computation, and compositing-layer offscreen render-target
 //!   management.
-//! - [`DisplayList::replay_dirty`] additionally culls items whose
-//!   bounds don't intersect a supplied dirty rectangle.
+//! - [`DisplayList::replay_dirty`] additionally culls drawables whose
+//!   bounds don't intersect a supplied dirty rectangle, and composites
+//!   layers by opacity stacking plus the per-color filter approximation
+//!   (no offscreen targets: a partial redraw can't rebuild a whole layer).
 //!
 //! Both batch consecutive `FillRect` items into [`SdiBatch::submit_rect_batch`]
 //! and consecutive same-style `DrawText` items into
 //! [`SdiBatch::submit_text_batch`] so backends can emit a single GPU
 //! draw call per batch.
+//!
+//! [`SdiBatch::submit_rect_batch`]: oasis_types::backend::SdiBatch::submit_rect_batch
+//! [`SdiBatch::submit_text_batch`]: oasis_types::backend::SdiBatch::submit_text_batch
 
 use oasis_types::backend::{
     BatchRect, BatchText, BlendMode as BackendBlendMode, Color, GradientStyle, RenderTargetId,
@@ -36,6 +41,17 @@ const LAYER_SURFACE_SPAN: i32 = 4096;
 const LAYER_PAD: i32 = 128;
 /// Longest layer side allocated as-is; longer sides are clipped.
 const MAX_LAYER_SIDE: u32 = (LAYER_SURFACE_SPAN + 2 * LAYER_PAD) as u32;
+
+/// A clip rectangle `(x, y, w, h)`.
+type ClipBox = (i32, i32, u32, u32);
+
+/// The glyph renderer handed to a replay (`None` = backend bitmap text).
+#[cfg(feature = "web-fonts")]
+pub(super) type Fonts<'r> = Option<&'r mut dyn WebFontRenderer>;
+/// The glyph renderer handed to a replay; without `web-fonts` there is
+/// none, so this is always `None`.
+#[cfg(not(feature = "web-fonts"))]
+pub(super) type Fonts<'r> = Option<std::marker::PhantomData<&'r ()>>;
 
 /// Bound one axis (`pos`, `len` in the current surface's coordinates)
 /// of an offscreen layer.
@@ -81,11 +97,11 @@ fn css_blend_to_backend(m: CssBlendMode) -> BackendBlendMode {
     }
 }
 
-/// Entry in the compositor layer stack kept during `replay()`.
-struct ActiveLayer {
-    /// Allocated render target id. `None` when the backend reported
-    /// `supports_render_targets() == false` and we fell through to
-    /// the opacity-only fast path.
+/// Entry in the compositor layer stack kept during a replay.
+struct ActiveLayer<'a> {
+    /// Allocated render target id. `None` when the backend has no
+    /// render targets (or this is a dirty replay) and the layer fell
+    /// through to the opacity-only fast path.
     id: Option<RenderTargetId>,
     /// Destination rect on the parent surface.
     dst_x: i32,
@@ -98,71 +114,81 @@ struct ActiveLayer {
     /// Filter chain applied to the layer pixels between unbind and
     /// composite. Empty = no filter pass, fast composite_render_target
     /// path. Non-empty triggers a CPU readback + filter + re-upload.
-    filters: Vec<FilterFunction>,
+    filters: &'a [FilterFunction],
     /// Optional `mask-*` parameters. When present, the pop path
     /// rasterizes the mask source over the layer bounds and applies
     /// it to the layer's alpha channel before the final composite.
-    mask: Option<MaskParams>,
-    /// Saved `(compositor_dx, compositor_dy)` from before this layer
-    /// was pushed. Restored on `PopCompositingLayer` so that nested
-    /// layers don't accumulate translation incorrectly. (Without
-    /// save/restore, an inner layer's screen-space origin would be
-    /// subtracted on top of the outer layer's translation, leaving
-    /// items off-target after the inner pop.)
-    saved_compositor_dx: i32,
-    saved_compositor_dy: i32,
+    mask: Option<&'a MaskParams>,
+    /// `(compositor_dx, compositor_dy)` from before this layer was
+    /// pushed, restored on `PopCompositingLayer` so nested layers don't
+    /// accumulate translation (an inner layer's origin subtracted on top
+    /// of the outer layer's would leave items off-target after the pop).
+    saved_compositor: (i32, i32),
+}
+
+/// Mutable state of one replay walk.
+struct ReplayState<'a> {
+    /// Outer clip (browser window content area, screen space) restored
+    /// when the clip stack empties.
+    base_clip: Option<ClipBox>,
+    opacity_stack: Vec<f32>,
+    /// One entry per active compositing layer: the box-level filter
+    /// chain to approximate per color on the items inside it. Empty
+    /// when the layer's pixels get the real per-pixel chain on readback
+    /// (render target + readback support), so a filter is never applied
+    /// twice.
+    filter_stack: Vec<&'a [FilterFunction]>,
+    /// The *intersected* clip for each level, in screen space (scroll
+    /// and sticky applied, compositor offset not): clips pushed inside
+    /// and outside an offscreen layer intersect in one coordinate space,
+    /// and are translated into the bound surface only when applied.
+    clip_stack: Vec<ClipBox>,
+    /// Sticky correction stack: Y offset adjustment for sticky elements
+    /// when replaying with a scroll delta different from recording time.
+    sticky_dy_stack: Vec<i32>,
+    layer_stack: Vec<ActiveLayer<'a>>,
+    /// Translation from screen space into the bound offscreen layer
+    /// (`-origin` of the innermost layer with a render target; zero on
+    /// the framebuffer).
+    compositor_dx: i32,
+    compositor_dy: i32,
+    /// Consecutive `FillRect` items awaiting batched submission.
+    rect_batch: Vec<BatchRect>,
+    /// Consecutive same-style `DrawText` items, keyed by
+    /// `(font_size, bold, italic)`.
+    text_batch: Vec<BatchText<'a>>,
+    text_batch_key: (u16, bool, bool),
 }
 
 impl DisplayList {
+    /// The one replay walk behind [`replay`](Self::replay),
+    /// [`replay_dirty`](Self::replay_dirty) and their `_with_fonts`
+    /// variants. `dirty = Some(rect)` culls drawables outside `rect`
+    /// and never allocates offscreen layers.
     pub(super) fn replay_inner(
         &self,
         backend: &mut dyn SdiBackend,
+        dirty: Option<&Rect>,
         scroll_dx: i32,
         scroll_dy: i32,
-        base_clip: Option<(i32, i32, u32, u32)>,
-        #[cfg(feature = "web-fonts")] mut web_font_renderer: Option<&mut dyn WebFontRenderer>,
+        base_clip: Option<ClipBox>,
+        mut fonts: Fonts<'_>,
     ) -> Result<()> {
-        let mut opacity_stack: Vec<f32> = Vec::new();
-        // Clip stack stores the *intersected* clip rect for each level.
-        let mut clip_stack: Vec<(i32, i32, u32, u32)> = Vec::new();
-        // Sticky correction stack: Y offset adjustment for sticky elements
-        // when replaying with a scroll delta different from recording time.
-        let mut sticky_dy_stack: Vec<i32> = Vec::new();
-        // Active compositor layer stack. Each entry carries the
-        // render-target id (if the backend supports it) and composite
-        // parameters for the matching `PopCompositingLayer`. An
-        // additional translation (`-bounds.x`, `-bounds.y`) is applied
-        // to every drawable inside the layer so contents land at
-        // target-local coordinates.
-        let mut layer_stack: Vec<ActiveLayer> = Vec::new();
-        // One entry per active compositing layer: the box-level filter
-        // chain to approximate per color on the items inside it. Empty
-        // when the layer's pixels get the real per-pixel chain on
-        // readback (render target + readback support), so a filter is
-        // never applied twice.
-        let mut filter_stack: Vec<&[FilterFunction]> = Vec::new();
-        let mut compositor_dx: i32 = 0;
-        let mut compositor_dy: i32 = 0;
-        // Batch of consecutive FillRect items for batched submission.
-        let mut rect_batch: Vec<BatchRect> = Vec::new();
-        // Batch of consecutive same-style DrawText items.
-        let mut text_batch: Vec<BatchText<'_>> = Vec::new();
-        let mut text_batch_key: (u16, bool, bool) = (0, false, false);
-
-        let supports_rt = backend.supports_render_targets();
+        let supports_rt = dirty.is_none() && backend.supports_render_targets();
+        let mut st = ReplayState::new(base_clip);
 
         for item in &self.items {
+            // State items: always replayed (dirty culling included), and
+            // each one ends the current batches.
             match item {
                 DisplayItem::PushLayer { opacity } => {
-                    flush_rect_batch(backend, &mut rect_batch)?;
-                    flush_text_batch(backend, &mut text_batch, text_batch_key)?;
-                    opacity_stack.push(*opacity);
+                    st.flush(backend)?;
+                    st.opacity_stack.push(*opacity);
                     continue;
                 },
                 DisplayItem::PopLayer => {
-                    flush_rect_batch(backend, &mut rect_batch)?;
-                    flush_text_batch(backend, &mut text_batch, text_batch_key)?;
-                    opacity_stack.pop();
+                    st.flush(backend)?;
+                    st.opacity_stack.pop();
                     continue;
                 },
                 DisplayItem::PushCompositingLayer {
@@ -171,244 +197,29 @@ impl DisplayList {
                     blend,
                     filters,
                     mask,
-                    ..
                 } => {
-                    flush_rect_batch(backend, &mut rect_batch)?;
-                    flush_text_batch(backend, &mut text_batch, text_batch_key)?;
-                    // `bounds` is screen space at recording time. Where
-                    // the layer lands now: shifted by the replay scroll
-                    // delta and any enclosing sticky correction, then
-                    // expressed in the currently bound surface (the
-                    // framebuffer, or an enclosing layer's target).
-                    let sticky = sticky_dy_stack.last().copied().unwrap_or(0);
-                    let (dx, dw) = bound_layer_axis(
-                        bounds.x as i32 + scroll_dx + compositor_dx,
-                        bounds.width.max(1.0) as u32,
-                    );
-                    let (dy, dh) = bound_layer_axis(
-                        bounds.y as i32 + scroll_dy + sticky + compositor_dy,
-                        bounds.height.max(1.0) as u32,
-                    );
-                    let screen_x = dx - compositor_dx;
-                    let screen_y = dy - compositor_dy;
-                    let blend_backend = css_blend_to_backend(*blend);
-                    let layer_id = if supports_rt {
-                        match backend.create_render_target(dw, dh) {
-                            Ok(id) => {
-                                if backend.bind_render_target(id).is_ok() {
-                                    Some(id)
-                                } else {
-                                    let _ = backend.destroy_render_target(id);
-                                    None
-                                }
-                            },
-                            Err(_) => None,
-                        }
-                    } else {
-                        None
-                    };
-                    // Snapshot the current compositor offset BEFORE
-                    // we mutate it for the new layer. The pop path
-                    // restores from this snapshot, which is correct
-                    // even when layers are nested (the inner pop
-                    // restores the outer layer's offset, not zero).
-                    let saved_dx = compositor_dx;
-                    let saved_dy = compositor_dy;
-                    if layer_id.is_some() {
-                        // Contents draw at target-local coordinates,
-                        // i.e. the screen-space origin of the layer
-                        // becomes (0, 0) inside the offscreen target.
-                        // For nested layers this absolute reset is
-                        // correct because each render target has its
-                        // own coordinate space starting at (0, 0).
-                        // Items add `scroll_dx + compositor_dx` (and the
-                        // sticky correction), so this maps the layer's
-                        // current screen origin to (0, 0).
-                        compositor_dx = -screen_x;
-                        compositor_dy = -screen_y;
-                    } else {
-                        // Fallback: plain opacity stacking. Blend mode
-                        // is dropped and filters degrade to the
-                        // per-color approximation — documented as the
-                        // accepted degradation in
-                        // `docs/archive/compositor-overhaul-plan.md` §3.4 step 4.
-                        opacity_stack.push(*opacity);
-                    }
-                    let per_pixel_filter =
-                        layer_id.is_some() && backend.supports_render_target_readback();
-                    filter_stack.push(if per_pixel_filter {
-                        &[]
-                    } else {
-                        filters.as_slice()
-                    });
-                    layer_stack.push(ActiveLayer {
-                        id: layer_id,
-                        dst_x: dx,
-                        dst_y: dy,
-                        dst_w: dw,
-                        dst_h: dh,
+                    st.flush(backend)?;
+                    // `bounds` is screen space at recording time; where
+                    // the layer lands now is shifted by the replay
+                    // scroll delta and any enclosing sticky correction.
+                    let x = bounds.x as i32 + scroll_dx;
+                    let y = bounds.y as i32 + scroll_dy + st.sticky();
+                    let layer = PendingLayer {
+                        x,
+                        y,
+                        w: bounds.width.max(1.0) as u32,
+                        h: bounds.height.max(1.0) as u32,
                         opacity: *opacity,
-                        blend: blend_backend,
-                        filters: filters.clone(),
-                        mask: mask.clone(),
-                        saved_compositor_dx: saved_dx,
-                        saved_compositor_dy: saved_dy,
-                    });
+                        blend: css_blend_to_backend(*blend),
+                        filters,
+                        mask: mask.as_ref(),
+                    };
+                    st.push_compositing_layer(backend, supports_rt, layer);
                     continue;
                 },
                 DisplayItem::PopCompositingLayer => {
-                    flush_rect_batch(backend, &mut rect_batch)?;
-                    flush_text_batch(backend, &mut text_batch, text_batch_key)?;
-                    if let Some(layer) = layer_stack.pop() {
-                        filter_stack.pop();
-                        if let Some(id) = layer.id {
-                            // Restore the parent layer's compositor
-                            // offset (or zero if this was the
-                            // outermost layer) instead of trying to
-                            // back out the inner layer's translation
-                            // by addition.
-                            compositor_dx = layer.saved_compositor_dx;
-                            compositor_dy = layer.saved_compositor_dy;
-                            let unbind_res = backend.unbind_render_target();
-                            // Filter/mask CPU pass: if the layer has
-                            // filters or masks AND the backend supports
-                            // pixel readback, read the layer target,
-                            // apply the chain on CPU, then composite
-                            // back with proper blend mode support.
-                            //
-                            // Non-Normal blend modes are composited on
-                            // CPU by reading the destination pixels and
-                            // applying the W3C blend formula before
-                            // upload — no longer silently dropped.
-                            let has_filter = !layer.filters.is_empty();
-                            let has_mask = layer.mask.is_some();
-                            let run_cpu_pass = (has_filter || has_mask)
-                                && backend.supports_render_target_readback();
-                            let composite_res = if unbind_res.is_ok() {
-                                if run_cpu_pass {
-                                    let byte_count = (layer.dst_w * layer.dst_h * 4) as usize;
-                                    let mut buf = vec![0u8; byte_count];
-                                    if backend.read_render_target(id, &mut buf).is_ok() {
-                                        if has_filter {
-                                            crate::paint::filter_chain::apply_filter_chain(
-                                                &mut buf,
-                                                layer.dst_w,
-                                                layer.dst_h,
-                                                &layer.filters,
-                                            );
-                                        }
-                                        if let Some(mask) = layer.mask.as_ref() {
-                                            apply_mask(&mut buf, layer.dst_w, layer.dst_h, mask);
-                                        }
-                                        // Pre-multiply opacity into alpha.
-                                        if (layer.opacity - 1.0).abs() > f32::EPSILON {
-                                            let f = layer.opacity.clamp(0.0, 1.0);
-                                            for chunk in buf.as_chunks_mut::<4>().0.iter_mut() {
-                                                chunk[3] = ((chunk[3] as f32) * f).round() as u8;
-                                            }
-                                        }
-                                        // Non-Normal blend: read destination
-                                        // pixels and composite on CPU so the
-                                        // blend mode is preserved through the
-                                        // filter/mask path.
-                                        if !layer.blend.is_normal() {
-                                            if let Ok(dst_pixels) = backend.read_pixels(
-                                                layer.dst_x,
-                                                layer.dst_y,
-                                                layer.dst_w,
-                                                layer.dst_h,
-                                            ) {
-                                                let mut blended = dst_pixels;
-                                                crate::paint::filter_chain::cpu_blend_composite(
-                                                    &buf,
-                                                    &mut blended,
-                                                    layer.dst_w,
-                                                    layer.dst_h,
-                                                    layer.blend,
-                                                );
-                                                if let Ok(tex) = backend.load_texture(
-                                                    layer.dst_w,
-                                                    layer.dst_h,
-                                                    &blended,
-                                                ) {
-                                                    let _ = backend.blit(
-                                                        tex,
-                                                        layer.dst_x,
-                                                        layer.dst_y,
-                                                        layer.dst_w,
-                                                        layer.dst_h,
-                                                    );
-                                                    let _ = backend.destroy_texture(tex);
-                                                }
-                                                Ok(())
-                                            } else {
-                                                // read_pixels failed — fall
-                                                // back to Normal blit.
-                                                if let Ok(tex) = backend.load_texture(
-                                                    layer.dst_w,
-                                                    layer.dst_h,
-                                                    &buf,
-                                                ) {
-                                                    let _ = backend.blit(
-                                                        tex,
-                                                        layer.dst_x,
-                                                        layer.dst_y,
-                                                        layer.dst_w,
-                                                        layer.dst_h,
-                                                    );
-                                                    let _ = backend.destroy_texture(tex);
-                                                }
-                                                Ok(())
-                                            }
-                                        } else {
-                                            // Normal blend — plain blit.
-                                            if let Ok(tex) =
-                                                backend.load_texture(layer.dst_w, layer.dst_h, &buf)
-                                            {
-                                                let _ = backend.blit(
-                                                    tex,
-                                                    layer.dst_x,
-                                                    layer.dst_y,
-                                                    layer.dst_w,
-                                                    layer.dst_h,
-                                                );
-                                                let _ = backend.destroy_texture(tex);
-                                            }
-                                            Ok(())
-                                        }
-                                    } else {
-                                        backend.composite_render_target(
-                                            id,
-                                            layer.dst_x,
-                                            layer.dst_y,
-                                            layer.dst_w,
-                                            layer.dst_h,
-                                            layer.blend,
-                                            layer.opacity,
-                                        )
-                                    }
-                                } else {
-                                    backend.composite_render_target(
-                                        id,
-                                        layer.dst_x,
-                                        layer.dst_y,
-                                        layer.dst_w,
-                                        layer.dst_h,
-                                        layer.blend,
-                                        layer.opacity,
-                                    )
-                                }
-                            } else {
-                                Ok(())
-                            };
-                            // Always destroy the render target even
-                            // if unbind/composite failed.
-                            let destroy_res = backend.destroy_render_target(id);
-                            unbind_res.and(composite_res).and(destroy_res)?;
-                        } else {
-                            opacity_stack.pop();
-                        }
-                    }
+                    st.flush(backend)?;
+                    st.pop_compositing_layer(backend)?;
                     continue;
                 },
                 DisplayItem::PushSticky {
@@ -418,406 +229,53 @@ impl DisplayList {
                     bottom_px,
                     visible_viewport_h,
                 } => {
-                    flush_rect_batch(backend, &mut rect_batch)?;
-                    flush_text_batch(backend, &mut text_batch, text_batch_key)?;
-                    // Compute the sticky offset difference between replay
-                    // scroll and recording scroll.
+                    st.flush(backend)?;
+                    // Sticky offset at the replay scroll minus the one
+                    // baked in at recording time.
+                    let at = |scroll: f32| {
+                        sticky_offset(
+                            *natural_y,
+                            *box_height,
+                            *top_px,
+                            *bottom_px,
+                            *visible_viewport_h,
+                            scroll,
+                        )
+                    };
                     let eff_scroll = self.recording_scroll_y - scroll_dy as f32;
-                    let new_dy = sticky_offset(
-                        *natural_y,
-                        *box_height,
-                        *top_px,
-                        *bottom_px,
-                        *visible_viewport_h,
-                        eff_scroll,
-                    );
-                    let rec_dy = sticky_offset(
-                        *natural_y,
-                        *box_height,
-                        *top_px,
-                        *bottom_px,
-                        *visible_viewport_h,
-                        self.recording_scroll_y,
-                    );
-                    sticky_dy_stack.push(new_dy - rec_dy);
+                    st.sticky_dy_stack
+                        .push(at(eff_scroll) - at(self.recording_scroll_y));
                     continue;
                 },
                 DisplayItem::PopSticky => {
-                    flush_rect_batch(backend, &mut rect_batch)?;
-                    flush_text_batch(backend, &mut text_batch, text_batch_key)?;
-                    sticky_dy_stack.pop();
+                    st.flush(backend)?;
+                    st.sticky_dy_stack.pop();
+                    continue;
+                },
+                DisplayItem::PushClip { x, y, w, h } => {
+                    st.flush(backend)?;
+                    let raw = (x + scroll_dx, y + scroll_dy + st.sticky(), *w, *h);
+                    st.push_clip(backend, raw)?;
+                    continue;
+                },
+                DisplayItem::PopClip => {
+                    st.flush(backend)?;
+                    st.pop_clip(backend)?;
                     continue;
                 },
                 _ => {},
             }
 
-            let layer_opacity = layer_opacity_product(&opacity_stack);
-            let sticky_correction = sticky_dy_stack.last().copied().unwrap_or(0);
-            // When a compositing layer is active, items are drawn at
-            // target-local coordinates — `compositor_dx`/`compositor_dy`
-            // translate screen-space recordings into that space. When
-            // no layer is active both values are zero. Shadow the
-            // outer `scroll_dx` so the existing per-item drawing
-            // branches below pick up the layer offset automatically.
-            #[allow(clippy::shadow_unrelated)]
-            let scroll_dx = scroll_dx + compositor_dx;
-            let eff_dy = scroll_dy + compositor_dy + sticky_correction;
-
-            match item {
-                DisplayItem::FillRect {
-                    x, y, w, h, color, ..
-                } => {
-                    flush_text_batch(backend, &mut text_batch, text_batch_key)?;
-                    let c = layer_color(*color, layer_opacity, &filter_stack);
-                    rect_batch.push(BatchRect {
-                        x: x + scroll_dx,
-                        y: y + eff_dy,
-                        w: *w,
-                        h: *h,
-                        color: c,
-                    });
-                    continue;
-                },
-                DisplayItem::DrawText {
-                    text,
-                    x,
-                    y,
-                    font_size,
-                    color,
-                    bold,
-                    italic,
-                    #[cfg(feature = "web-fonts")]
-                    web_font_id,
-                    ..
-                } => {
-                    flush_rect_batch(backend, &mut rect_batch)?;
-
-                    // Web font path: render glyphs via the font
-                    // registry when a renderer is attached.
-                    #[cfg(feature = "web-fonts")]
-                    if let Some(font_id) = web_font_id {
-                        flush_text_batch(backend, &mut text_batch, text_batch_key)?;
-                        let c = layer_color(*color, layer_opacity, &filter_stack);
-                        if let Some(ref mut renderer) = web_font_renderer {
-                            renderer.render(
-                                backend,
-                                text,
-                                x + scroll_dx,
-                                y + eff_dy,
-                                *font_size,
-                                c,
-                                *font_id,
-                            )?;
-                        } else {
-                            // No renderer attached — bitmap fallback.
-                            backend.draw_text_styled(
-                                text,
-                                x + scroll_dx,
-                                y + eff_dy,
-                                *font_size,
-                                c,
-                                *bold,
-                                *italic,
-                            )?;
-                        }
-                        continue;
-                    }
-
-                    let c = layer_color(*color, layer_opacity, &filter_stack);
-                    let key = (*font_size, *bold, *italic);
-                    if !text_batch.is_empty() && text_batch_key != key {
-                        flush_text_batch(backend, &mut text_batch, text_batch_key)?;
-                    }
-                    text_batch_key = key;
-                    text_batch.push(BatchText {
-                        text,
-                        x: x + scroll_dx,
-                        y: y + eff_dy,
-                        color: c,
-                    });
-                    continue;
-                },
-                _ => {
-                    // Non-FillRect/DrawText item breaks both batches.
-                    flush_rect_batch(backend, &mut rect_batch)?;
-                    flush_text_batch(backend, &mut text_batch, text_batch_key)?;
-                },
-            }
-
-            match item {
-                DisplayItem::FillRoundedRect {
-                    x,
-                    y,
-                    w,
-                    h,
-                    radius,
-                    color,
-                    ..
-                } => {
-                    let c = layer_color(*color, layer_opacity, &filter_stack);
-                    backend.fill_rounded_rect(x + scroll_dx, y + eff_dy, *w, *h, *radius, c)?;
-                },
-                DisplayItem::FillPolygon { points, color, .. } => {
-                    let c = layer_color(*color, layer_opacity, &filter_stack);
-                    let shifted = [
-                        (points[0].0 + scroll_dx, points[0].1 + eff_dy),
-                        (points[1].0 + scroll_dx, points[1].1 + eff_dy),
-                        (points[2].0 + scroll_dx, points[2].1 + eff_dy),
-                        (points[3].0 + scroll_dx, points[3].1 + eff_dy),
-                    ];
-                    backend.fill_polygon(&shifted, c)?;
-                },
-                DisplayItem::Blit {
-                    texture,
-                    x,
-                    y,
-                    w,
-                    h,
-                } => {
-                    backend.blit(*texture, x + scroll_dx, y + eff_dy, *w, *h)?;
-                },
-                DisplayItem::BlitSub {
-                    texture,
-                    src_x,
-                    src_y,
-                    src_w,
-                    src_h,
-                    dst_x,
-                    dst_y,
-                    dst_w,
-                    dst_h,
-                } => {
-                    backend.blit_sub(
-                        *texture,
-                        *src_x,
-                        *src_y,
-                        *src_w,
-                        *src_h,
-                        dst_x + scroll_dx,
-                        dst_y + eff_dy,
-                        *dst_w,
-                        *dst_h,
-                    )?;
-                },
-                DisplayItem::Gradient { x, y, w, h, style } => {
-                    let g = layer_gradient(style, layer_opacity, &filter_stack);
-                    backend.fill_rect_gradient(x + scroll_dx, y + eff_dy, *w, *h, &g)?;
-                },
-                DisplayItem::BorderEdge {
-                    x,
-                    y,
-                    w,
-                    h,
-                    color,
-                    style,
-                    horizontal,
-                } => {
-                    let c = layer_color(*color, layer_opacity, &filter_stack);
-                    replay_border_edge(
-                        backend,
-                        x + scroll_dx,
-                        y + eff_dy,
-                        *w,
-                        *h,
-                        c,
-                        *style,
-                        *horizontal,
-                    )?;
-                },
-                DisplayItem::Shadow {
-                    x,
-                    y,
-                    w,
-                    h,
-                    blur,
-                    spread,
-                    offset_x,
-                    offset_y,
-                    color,
-                    radius,
-                } => {
-                    let c = layer_color(*color, layer_opacity, &filter_stack);
-                    backend.fill_shadow(
-                        x + scroll_dx,
-                        y + eff_dy,
-                        *w,
-                        *h,
-                        *blur,
-                        *spread,
-                        *offset_x,
-                        *offset_y,
-                        c,
-                        *radius,
-                    )?;
-                },
-                DisplayItem::PushClip { x, y, w, h } => {
-                    let raw = (x + scroll_dx, y + eff_dy, *w, *h);
-                    // Intersect with parent clip for tighter bounds.
-                    let effective = if let Some(&parent) = clip_stack.last() {
-                        intersect_clip(parent, raw)
-                    } else if let Some(base) = base_clip {
-                        intersect_clip(base, raw)
-                    } else {
-                        raw
-                    };
-                    clip_stack.push(effective);
-                    backend.set_clip_rect(effective.0, effective.1, effective.2, effective.3)?;
-                },
-                DisplayItem::PopClip => {
-                    clip_stack.pop();
-                    // Restore to parent clip or base clip (browser window).
-                    if let Some(&(cx, cy, cw, ch)) = clip_stack.last() {
-                        backend.set_clip_rect(cx, cy, cw, ch)?;
-                    } else if let Some((bx, by, bw, bh)) = base_clip {
-                        backend.set_clip_rect(bx, by, bw, bh)?;
-                    } else {
-                        backend.reset_clip_rect()?;
-                    }
-                },
-                DisplayItem::Svg { .. } | DisplayItem::Canvas { .. } => {
-                    replay_embedded(backend, item, scroll_dx, eff_dy, layer_opacity)?;
-                },
-                // Already handled above the match.
-                DisplayItem::FillRect { .. }
-                | DisplayItem::DrawText { .. }
-                | DisplayItem::PushLayer { .. }
-                | DisplayItem::PopLayer
-                | DisplayItem::PushCompositingLayer { .. }
-                | DisplayItem::PopCompositingLayer
-                | DisplayItem::PushSticky { .. }
-                | DisplayItem::PopSticky => {},
-            }
-        }
-
-        flush_rect_batch(backend, &mut rect_batch)?;
-        flush_text_batch(backend, &mut text_batch, text_batch_key)?;
-        Ok(())
-    }
-
-    pub(super) fn replay_dirty_inner(
-        &self,
-        backend: &mut dyn SdiBackend,
-        dirty: &Rect,
-        scroll_dx: i32,
-        scroll_dy: i32,
-        base_clip: Option<(i32, i32, u32, u32)>,
-        #[cfg(feature = "web-fonts")] mut web_font_renderer: Option<&mut dyn WebFontRenderer>,
-    ) -> Result<()> {
-        let mut opacity_stack: Vec<f32> = Vec::new();
-        let mut filter_stack: Vec<&[FilterFunction]> = Vec::new();
-        let mut clip_stack: Vec<(i32, i32, u32, u32)> = Vec::new();
-        let mut sticky_dy_stack: Vec<i32> = Vec::new();
-        let mut rect_batch: Vec<BatchRect> = Vec::new();
-        let mut text_batch: Vec<BatchText<'_>> = Vec::new();
-        let mut text_batch_key: (u16, bool, bool) = (0, false, false);
-
-        for item in &self.items {
-            // Clip, layer, and sticky items must always be replayed.
-            match item {
-                DisplayItem::PushClip { x, y, w, h } => {
-                    flush_rect_batch(backend, &mut rect_batch)?;
-                    flush_text_batch(backend, &mut text_batch, text_batch_key)?;
-                    let sticky_corr = sticky_dy_stack.last().copied().unwrap_or(0);
-                    let raw = (x + scroll_dx, y + scroll_dy + sticky_corr, *w, *h);
-                    let effective = if let Some(&parent) = clip_stack.last() {
-                        intersect_clip(parent, raw)
-                    } else if let Some(base) = base_clip {
-                        intersect_clip(base, raw)
-                    } else {
-                        raw
-                    };
-                    clip_stack.push(effective);
-                    backend.set_clip_rect(effective.0, effective.1, effective.2, effective.3)?;
-                    continue;
-                },
-                DisplayItem::PopClip => {
-                    flush_rect_batch(backend, &mut rect_batch)?;
-                    flush_text_batch(backend, &mut text_batch, text_batch_key)?;
-                    clip_stack.pop();
-                    if let Some(&(cx, cy, cw, ch)) = clip_stack.last() {
-                        backend.set_clip_rect(cx, cy, cw, ch)?;
-                    } else if let Some((bx, by, bw, bh)) = base_clip {
-                        backend.set_clip_rect(bx, by, bw, bh)?;
-                    } else {
-                        backend.reset_clip_rect()?;
-                    }
-                    continue;
-                },
-                DisplayItem::PushLayer { opacity } => {
-                    flush_rect_batch(backend, &mut rect_batch)?;
-                    flush_text_batch(backend, &mut text_batch, text_batch_key)?;
-                    opacity_stack.push(*opacity);
-                    continue;
-                },
-                DisplayItem::PopLayer => {
-                    flush_rect_batch(backend, &mut rect_batch)?;
-                    flush_text_batch(backend, &mut text_batch, text_batch_key)?;
-                    opacity_stack.pop();
-                    continue;
-                },
-                DisplayItem::PushCompositingLayer {
-                    opacity, filters, ..
-                } => {
-                    // No render targets on the dirty path: opacity
-                    // stacking plus the per-color filter approximation.
-                    flush_rect_batch(backend, &mut rect_batch)?;
-                    flush_text_batch(backend, &mut text_batch, text_batch_key)?;
-                    opacity_stack.push(*opacity);
-                    filter_stack.push(filters.as_slice());
-                    continue;
-                },
-                DisplayItem::PopCompositingLayer => {
-                    flush_rect_batch(backend, &mut rect_batch)?;
-                    flush_text_batch(backend, &mut text_batch, text_batch_key)?;
-                    opacity_stack.pop();
-                    filter_stack.pop();
-                    continue;
-                },
-                DisplayItem::PushSticky {
-                    natural_y,
-                    box_height,
-                    top_px,
-                    bottom_px,
-                    visible_viewport_h,
-                } => {
-                    flush_rect_batch(backend, &mut rect_batch)?;
-                    flush_text_batch(backend, &mut text_batch, text_batch_key)?;
-                    let eff_scroll = self.recording_scroll_y - scroll_dy as f32;
-                    let new_dy = sticky_offset(
-                        *natural_y,
-                        *box_height,
-                        *top_px,
-                        *bottom_px,
-                        *visible_viewport_h,
-                        eff_scroll,
-                    );
-                    let rec_dy = sticky_offset(
-                        *natural_y,
-                        *box_height,
-                        *top_px,
-                        *bottom_px,
-                        *visible_viewport_h,
-                        self.recording_scroll_y,
-                    );
-                    sticky_dy_stack.push(new_dy - rec_dy);
-                    continue;
-                },
-                DisplayItem::PopSticky => {
-                    flush_rect_batch(backend, &mut rect_batch)?;
-                    flush_text_batch(backend, &mut text_batch, text_batch_key)?;
-                    sticky_dy_stack.pop();
-                    continue;
-                },
-                _ => {},
-            }
-
-            // Cull items outside the dirty rect.
-            let sticky_correction = sticky_dy_stack.last().copied().unwrap_or(0);
-            let eff_dy = scroll_dy + sticky_correction;
-            if let Some(bounds) = item.bounds() {
+            // Inside an offscreen layer items draw at target-local
+            // coordinates: the compositor offset maps screen space there.
+            let dx = scroll_dx + st.compositor_dx;
+            let dy = scroll_dy + st.compositor_dy + st.sticky();
+            if let Some(dirty) = dirty
+                && let Some(bounds) = item.bounds()
+            {
                 let shifted = Rect {
-                    x: bounds.x + scroll_dx as f32,
-                    y: bounds.y + eff_dy as f32,
+                    x: bounds.x + dx as f32,
+                    y: bounds.y + dy as f32,
                     width: bounds.width,
                     height: bounds.height,
                 };
@@ -825,213 +283,389 @@ impl DisplayList {
                     continue;
                 }
             }
-
-            let layer_opacity = layer_opacity_product(&opacity_stack);
-
-            // Replay the item — batch consecutive FillRects and DrawTexts.
-            match item {
-                DisplayItem::FillRect {
-                    x, y, w, h, color, ..
-                } => {
-                    flush_text_batch(backend, &mut text_batch, text_batch_key)?;
-                    let c = layer_color(*color, layer_opacity, &filter_stack);
-                    rect_batch.push(BatchRect {
-                        x: x + scroll_dx,
-                        y: y + eff_dy,
-                        w: *w,
-                        h: *h,
-                        color: c,
-                    });
-                    continue;
-                },
-                DisplayItem::DrawText {
-                    text,
-                    x,
-                    y,
-                    font_size,
-                    color,
-                    bold,
-                    italic,
-                    #[cfg(feature = "web-fonts")]
-                    web_font_id,
-                    ..
-                } => {
-                    flush_rect_batch(backend, &mut rect_batch)?;
-
-                    #[cfg(feature = "web-fonts")]
-                    if let Some(font_id) = web_font_id {
-                        flush_text_batch(backend, &mut text_batch, text_batch_key)?;
-                        let c = layer_color(*color, layer_opacity, &filter_stack);
-                        if let Some(ref mut renderer) = web_font_renderer {
-                            renderer.render(
-                                backend,
-                                text,
-                                x + scroll_dx,
-                                y + eff_dy,
-                                *font_size,
-                                c,
-                                *font_id,
-                            )?;
-                        } else {
-                            backend.draw_text_styled(
-                                text,
-                                x + scroll_dx,
-                                y + eff_dy,
-                                *font_size,
-                                c,
-                                *bold,
-                                *italic,
-                            )?;
-                        }
-                        continue;
-                    }
-
-                    let c = layer_color(*color, layer_opacity, &filter_stack);
-                    let key = (*font_size, *bold, *italic);
-                    if !text_batch.is_empty() && text_batch_key != key {
-                        flush_text_batch(backend, &mut text_batch, text_batch_key)?;
-                    }
-                    text_batch_key = key;
-                    text_batch.push(BatchText {
-                        text,
-                        x: x + scroll_dx,
-                        y: y + eff_dy,
-                        color: c,
-                    });
-                    continue;
-                },
-                _ => {
-                    flush_rect_batch(backend, &mut rect_batch)?;
-                    flush_text_batch(backend, &mut text_batch, text_batch_key)?;
-                },
-            }
-
-            match item {
-                DisplayItem::FillRoundedRect {
-                    x,
-                    y,
-                    w,
-                    h,
-                    radius,
-                    color,
-                    ..
-                } => {
-                    let c = layer_color(*color, layer_opacity, &filter_stack);
-                    backend.fill_rounded_rect(x + scroll_dx, y + eff_dy, *w, *h, *radius, c)?;
-                },
-                DisplayItem::FillPolygon { points, color, .. } => {
-                    let c = layer_color(*color, layer_opacity, &filter_stack);
-                    let shifted = [
-                        (points[0].0 + scroll_dx, points[0].1 + eff_dy),
-                        (points[1].0 + scroll_dx, points[1].1 + eff_dy),
-                        (points[2].0 + scroll_dx, points[2].1 + eff_dy),
-                        (points[3].0 + scroll_dx, points[3].1 + eff_dy),
-                    ];
-                    backend.fill_polygon(&shifted, c)?;
-                },
-                DisplayItem::Blit {
-                    texture,
-                    x,
-                    y,
-                    w,
-                    h,
-                } => {
-                    backend.blit(*texture, x + scroll_dx, y + eff_dy, *w, *h)?;
-                },
-                DisplayItem::BlitSub {
-                    texture,
-                    src_x,
-                    src_y,
-                    src_w,
-                    src_h,
-                    dst_x,
-                    dst_y,
-                    dst_w,
-                    dst_h,
-                } => {
-                    backend.blit_sub(
-                        *texture,
-                        *src_x,
-                        *src_y,
-                        *src_w,
-                        *src_h,
-                        dst_x + scroll_dx,
-                        dst_y + eff_dy,
-                        *dst_w,
-                        *dst_h,
-                    )?;
-                },
-                DisplayItem::Gradient { x, y, w, h, style } => {
-                    let g = layer_gradient(style, layer_opacity, &filter_stack);
-                    backend.fill_rect_gradient(x + scroll_dx, y + eff_dy, *w, *h, &g)?;
-                },
-                DisplayItem::BorderEdge {
-                    x,
-                    y,
-                    w,
-                    h,
-                    color,
-                    style,
-                    horizontal,
-                } => {
-                    let c = layer_color(*color, layer_opacity, &filter_stack);
-                    replay_border_edge(
-                        backend,
-                        x + scroll_dx,
-                        y + eff_dy,
-                        *w,
-                        *h,
-                        c,
-                        *style,
-                        *horizontal,
-                    )?;
-                },
-                DisplayItem::Shadow {
-                    x,
-                    y,
-                    w,
-                    h,
-                    blur,
-                    spread,
-                    offset_x,
-                    offset_y,
-                    color,
-                    radius,
-                } => {
-                    let c = layer_color(*color, layer_opacity, &filter_stack);
-                    backend.fill_shadow(
-                        x + scroll_dx,
-                        y + eff_dy,
-                        *w,
-                        *h,
-                        *blur,
-                        *spread,
-                        *offset_x,
-                        *offset_y,
-                        c,
-                        *radius,
-                    )?;
-                },
-                DisplayItem::Svg { .. } | DisplayItem::Canvas { .. } => {
-                    replay_embedded(backend, item, scroll_dx, eff_dy, layer_opacity)?;
-                },
-                DisplayItem::FillRect { .. }
-                | DisplayItem::DrawText { .. }
-                | DisplayItem::PushClip { .. }
-                | DisplayItem::PopClip
-                | DisplayItem::PushLayer { .. }
-                | DisplayItem::PopLayer
-                | DisplayItem::PushCompositingLayer { .. }
-                | DisplayItem::PopCompositingLayer
-                | DisplayItem::PushSticky { .. }
-                | DisplayItem::PopSticky => {},
-            }
+            st.draw(backend, item, dx, dy, &mut fonts)?;
         }
 
-        flush_rect_batch(backend, &mut rect_batch)?;
-        flush_text_batch(backend, &mut text_batch, text_batch_key)?;
-        Ok(())
+        st.flush(backend)
     }
+}
+
+/// A `PushCompositingLayer` resolved to the replay's screen space.
+struct PendingLayer<'a> {
+    x: i32,
+    y: i32,
+    w: u32,
+    h: u32,
+    opacity: f32,
+    blend: BackendBlendMode,
+    filters: &'a [FilterFunction],
+    mask: Option<&'a MaskParams>,
+}
+
+impl<'a> ReplayState<'a> {
+    fn new(base_clip: Option<ClipBox>) -> Self {
+        Self {
+            base_clip,
+            opacity_stack: Vec::new(),
+            filter_stack: Vec::new(),
+            clip_stack: Vec::new(),
+            sticky_dy_stack: Vec::new(),
+            layer_stack: Vec::new(),
+            compositor_dx: 0,
+            compositor_dy: 0,
+            rect_batch: Vec::new(),
+            text_batch: Vec::new(),
+            text_batch_key: (0, false, false),
+        }
+    }
+
+    /// The innermost sticky correction (0 outside sticky boxes).
+    fn sticky(&self) -> i32 {
+        self.sticky_dy_stack.last().copied().unwrap_or(0)
+    }
+
+    /// Submit both pending batches.
+    fn flush(&mut self, backend: &mut dyn SdiBackend) -> Result<()> {
+        flush_rect_batch(backend, &mut self.rect_batch)?;
+        flush_text_batch(backend, &mut self.text_batch, self.text_batch_key)
+    }
+
+    /// Apply a screen-space clip to the bound surface.
+    fn apply_clip(&self, backend: &mut dyn SdiBackend, clip: ClipBox) -> Result<()> {
+        backend.set_clip_rect(
+            clip.0 + self.compositor_dx,
+            clip.1 + self.compositor_dy,
+            clip.2,
+            clip.3,
+        )
+    }
+
+    /// Push a screen-space clip, intersected with the parent clip (or
+    /// the base clip) for tighter bounds.
+    fn push_clip(&mut self, backend: &mut dyn SdiBackend, raw: ClipBox) -> Result<()> {
+        let effective = match self.clip_stack.last().copied().or(self.base_clip) {
+            Some(parent) => intersect_clip(parent, raw),
+            None => raw,
+        };
+        self.clip_stack.push(effective);
+        self.apply_clip(backend, effective)
+    }
+
+    /// Pop a clip, restoring the parent clip, the base clip (browser
+    /// window), or no clip.
+    fn pop_clip(&mut self, backend: &mut dyn SdiBackend) -> Result<()> {
+        self.clip_stack.pop();
+        match self.clip_stack.last().copied().or(self.base_clip) {
+            Some(clip) => self.apply_clip(backend, clip),
+            None => backend.reset_clip_rect(),
+        }
+    }
+
+    /// Open a compositing layer: an offscreen render target when
+    /// `supports_rt` and the backend can allocate one, otherwise plain
+    /// opacity stacking (blend mode dropped, filters degraded to the
+    /// per-color approximation — the accepted degradation in
+    /// `docs/archive/compositor-overhaul-plan.md` §3.4 step 4).
+    fn push_compositing_layer(
+        &mut self,
+        backend: &mut dyn SdiBackend,
+        supports_rt: bool,
+        layer: PendingLayer<'a>,
+    ) {
+        // Express the layer in the currently bound surface (the
+        // framebuffer, or an enclosing layer's target), clipped to the
+        // part that can reach it.
+        let (dst_x, dst_w) = bound_layer_axis(layer.x + self.compositor_dx, layer.w);
+        let (dst_y, dst_h) = bound_layer_axis(layer.y + self.compositor_dy, layer.h);
+        let id = if supports_rt {
+            match backend.create_render_target(dst_w, dst_h) {
+                Ok(id) if backend.bind_render_target(id).is_ok() => Some(id),
+                Ok(id) => {
+                    let _ = backend.destroy_render_target(id);
+                    None
+                },
+                Err(_) => None,
+            }
+        } else {
+            None
+        };
+        let saved_compositor = (self.compositor_dx, self.compositor_dy);
+        if id.is_some() {
+            // Contents draw at target-local coordinates: the layer's
+            // current screen origin becomes (0, 0). Each render target
+            // has its own space, so this absolute reset is right for
+            // nested layers too.
+            self.compositor_dx = -(dst_x - saved_compositor.0);
+            self.compositor_dy = -(dst_y - saved_compositor.1);
+        } else {
+            self.opacity_stack.push(layer.opacity);
+        }
+        let per_pixel_filter = id.is_some() && backend.supports_render_target_readback();
+        self.filter_stack
+            .push(if per_pixel_filter { &[] } else { layer.filters });
+        self.layer_stack.push(ActiveLayer {
+            id,
+            dst_x,
+            dst_y,
+            dst_w,
+            dst_h,
+            opacity: layer.opacity,
+            blend: layer.blend,
+            filters: layer.filters,
+            mask: layer.mask,
+            saved_compositor,
+        });
+    }
+
+    /// Close the innermost compositing layer, compositing its target
+    /// onto the parent surface. The target is destroyed even when
+    /// unbinding or compositing fails.
+    fn pop_compositing_layer(&mut self, backend: &mut dyn SdiBackend) -> Result<()> {
+        let Some(layer) = self.layer_stack.pop() else {
+            return Ok(());
+        };
+        self.filter_stack.pop();
+        let Some(id) = layer.id else {
+            self.opacity_stack.pop();
+            return Ok(());
+        };
+        (self.compositor_dx, self.compositor_dy) = layer.saved_compositor;
+        let unbound = backend.unbind_render_target();
+        let composited = if unbound.is_ok() {
+            composite_layer(backend, id, &layer)
+        } else {
+            Ok(())
+        };
+        let destroyed = backend.destroy_render_target(id);
+        unbound.and(composited).and(destroyed)
+    }
+
+    /// Draw one drawable item at offset `(dx, dy)`, batching
+    /// consecutive `FillRect`s and same-style `DrawText`s.
+    fn draw(
+        &mut self,
+        backend: &mut dyn SdiBackend,
+        item: &'a DisplayItem,
+        dx: i32,
+        dy: i32,
+        fonts: &mut Fonts<'_>,
+    ) -> Result<()> {
+        #[cfg(not(feature = "web-fonts"))]
+        let _ = fonts;
+        let opacity = layer_opacity_product(&self.opacity_stack);
+        match item {
+            DisplayItem::FillRect {
+                x, y, w, h, color, ..
+            } => {
+                flush_text_batch(backend, &mut self.text_batch, self.text_batch_key)?;
+                self.rect_batch.push(BatchRect {
+                    x: x + dx,
+                    y: y + dy,
+                    w: *w,
+                    h: *h,
+                    color: layer_color(*color, opacity, &self.filter_stack),
+                });
+                return Ok(());
+            },
+            DisplayItem::DrawText {
+                text,
+                x,
+                y,
+                font_size,
+                color,
+                bold,
+                italic,
+                #[cfg(feature = "web-fonts")]
+                web_font_id,
+                ..
+            } => {
+                flush_rect_batch(backend, &mut self.rect_batch)?;
+                let c = layer_color(*color, opacity, &self.filter_stack);
+
+                // Web font path: render glyphs via the font registry
+                // when a renderer is attached, else bitmap fallback.
+                #[cfg(feature = "web-fonts")]
+                if let Some(font_id) = web_font_id {
+                    flush_text_batch(backend, &mut self.text_batch, self.text_batch_key)?;
+                    let (tx, ty, size) = (x + dx, y + dy, *font_size);
+                    return match fonts {
+                        Some(renderer) => renderer.render(backend, text, tx, ty, size, c, *font_id),
+                        None => backend.draw_text_styled(text, tx, ty, size, c, *bold, *italic),
+                    };
+                }
+
+                let key = (*font_size, *bold, *italic);
+                if !self.text_batch.is_empty() && self.text_batch_key != key {
+                    flush_text_batch(backend, &mut self.text_batch, self.text_batch_key)?;
+                }
+                self.text_batch_key = key;
+                self.text_batch.push(BatchText {
+                    text,
+                    x: x + dx,
+                    y: y + dy,
+                    color: c,
+                });
+                return Ok(());
+            },
+            // Any other item breaks both batches.
+            _ => self.flush(backend)?,
+        }
+
+        let color = |c: Color| layer_color(c, opacity, &self.filter_stack);
+        match item {
+            DisplayItem::FillRoundedRect {
+                x,
+                y,
+                w,
+                h,
+                radius,
+                color: c,
+                ..
+            } => backend.fill_rounded_rect(x + dx, y + dy, *w, *h, *radius, color(*c)),
+            DisplayItem::FillPolygon {
+                points, color: c, ..
+            } => {
+                let shifted = points.map(|(px, py)| (px + dx, py + dy));
+                backend.fill_polygon(&shifted, color(*c))
+            },
+            DisplayItem::Blit {
+                texture,
+                x,
+                y,
+                w,
+                h,
+            } => backend.blit(*texture, x + dx, y + dy, *w, *h),
+            DisplayItem::BlitSub {
+                texture,
+                src_x,
+                src_y,
+                src_w,
+                src_h,
+                dst_x,
+                dst_y,
+                dst_w,
+                dst_h,
+            } => backend.blit_sub(
+                *texture,
+                *src_x,
+                *src_y,
+                *src_w,
+                *src_h,
+                dst_x + dx,
+                dst_y + dy,
+                *dst_w,
+                *dst_h,
+            ),
+            DisplayItem::Gradient { x, y, w, h, style } => {
+                let g = layer_gradient(style, opacity, &self.filter_stack);
+                backend.fill_rect_gradient(x + dx, y + dy, *w, *h, &g)
+            },
+            DisplayItem::BorderEdge {
+                x,
+                y,
+                w,
+                h,
+                color: c,
+                style,
+                horizontal,
+            } => replay_border_edge(
+                backend,
+                x + dx,
+                y + dy,
+                *w,
+                *h,
+                color(*c),
+                *style,
+                *horizontal,
+            ),
+            DisplayItem::Shadow {
+                x,
+                y,
+                w,
+                h,
+                blur,
+                spread,
+                offset_x,
+                offset_y,
+                color: c,
+                radius,
+            } => backend.fill_shadow(
+                x + dx,
+                y + dy,
+                *w,
+                *h,
+                *blur,
+                *spread,
+                *offset_x,
+                *offset_y,
+                color(*c),
+                *radius,
+            ),
+            DisplayItem::Svg { .. } | DisplayItem::Canvas { .. } => {
+                replay_embedded(backend, item, dx, dy, opacity)
+            },
+            // Batched above, or state items handled by the walk.
+            DisplayItem::FillRect { .. }
+            | DisplayItem::DrawText { .. }
+            | DisplayItem::PushClip { .. }
+            | DisplayItem::PopClip
+            | DisplayItem::PushLayer { .. }
+            | DisplayItem::PopLayer
+            | DisplayItem::PushCompositingLayer { .. }
+            | DisplayItem::PopCompositingLayer
+            | DisplayItem::PushSticky { .. }
+            | DisplayItem::PopSticky => Ok(()),
+        }
+    }
+}
+
+/// Composite an unbound layer target onto the parent surface.
+///
+/// With a filter or mask and a backend that can read the target back,
+/// the pixels run through the CPU chain (filters, mask, opacity, then a
+/// CPU blend against the destination for non-`Normal` blend modes) and
+/// are re-uploaded; otherwise the backend composites the target itself.
+fn composite_layer(
+    backend: &mut dyn SdiBackend,
+    id: RenderTargetId,
+    layer: &ActiveLayer<'_>,
+) -> Result<()> {
+    let (x, y, w, h) = (layer.dst_x, layer.dst_y, layer.dst_w, layer.dst_h);
+    let cpu_pass = (!layer.filters.is_empty() || layer.mask.is_some())
+        && backend.supports_render_target_readback();
+    if cpu_pass {
+        let mut buf = vec![0u8; w as usize * h as usize * 4];
+        if backend.read_render_target(id, &mut buf).is_ok() {
+            if !layer.filters.is_empty() {
+                crate::paint::filter_chain::apply_filter_chain(&mut buf, w, h, layer.filters);
+            }
+            if let Some(mask) = layer.mask {
+                apply_mask(&mut buf, w, h, mask);
+            }
+            // Pre-multiply opacity into alpha.
+            if (layer.opacity - 1.0).abs() > f32::EPSILON {
+                let f = layer.opacity.clamp(0.0, 1.0);
+                for px in buf.as_chunks_mut::<4>().0.iter_mut() {
+                    px[3] = ((px[3] as f32) * f).round() as u8;
+                }
+            }
+            // Non-Normal blend: composite against the destination on
+            // the CPU so the blend mode survives the filter/mask path
+            // (falling back to a Normal blit if it can't be read).
+            if !layer.blend.is_normal()
+                && let Ok(mut dst) = backend.read_pixels(x, y, w, h)
+            {
+                crate::paint::filter_chain::cpu_blend_composite(&buf, &mut dst, w, h, layer.blend);
+                buf = dst;
+            }
+            if let Ok(tex) = backend.load_texture(w, h, &buf) {
+                let _ = backend.blit(tex, x, y, w, h);
+                let _ = backend.destroy_texture(tex);
+            }
+            return Ok(());
+        }
+    }
+    backend.composite_render_target(id, x, y, w, h, layer.blend, layer.opacity)
 }
 
 // ---------------------------------------------------------------------------
@@ -1928,5 +1562,82 @@ mod tests {
             Some((10, 70)),
             "layer composited at its scrolled position"
         );
+    }
+
+    /// Regression: a clip pushed inside an offscreen layer was
+    /// intersected, in layer-local coordinates, with the screen-space
+    /// base clip, so an `overflow: hidden` child of a translucent box
+    /// lost its top rows (here: everything above screen y = 30 mapped
+    /// to layer-local y = 30). Clips now intersect in screen space and
+    /// are translated into the bound target when applied.
+    #[test]
+    fn clip_inside_offscreen_layer_intersects_in_screen_space() {
+        use oasis_test_backend::DrawCommand;
+        use oasis_test_backend::RecordingBackend;
+
+        let mut dl = DisplayList::new();
+        dl.push(push_cl(layer_rect(100.0, 100.0, 100.0, 100.0), 0.5));
+        dl.push(DisplayItem::PushClip {
+            x: 110,
+            y: 110,
+            w: 50,
+            h: 50,
+        });
+        dl.push(DisplayItem::FillRect {
+            x: 110,
+            y: 110,
+            w: 50,
+            h: 50,
+            color: Color::rgba(0, 0, 0, 255),
+            node_id: None,
+        });
+        dl.push(DisplayItem::PopClip);
+        dl.push(DisplayItem::PopCompositingLayer);
+
+        let mut backend = RecordingBackend::new(480, 272);
+        dl.replay(&mut backend, 0, 0, Some((0, 30, 480, 242))).unwrap();
+
+        let cmds = backend.commands();
+        let clip = cmds.iter().find_map(|c| match c {
+            DrawCommand::SetClip { x, y, w, h } => Some((*x, *y, *w, *h)),
+            _ => None,
+        });
+        assert_eq!(clip, Some((10, 10, 50, 50)), "clip in layer-local space");
+    }
+
+    /// The dirty path shares the full walk: clips, sticky offsets and
+    /// culling agree with `replay` for items inside the dirty rect.
+    #[test]
+    fn replay_dirty_draws_what_replay_draws_inside_the_rect() {
+        let mut dl = DisplayList::new();
+        dl.push(DisplayItem::PushClip {
+            x: 0,
+            y: 0,
+            w: 40,
+            h: 40,
+        });
+        for i in 0..4 {
+            dl.push(DisplayItem::FillRect {
+                x: i * 30,
+                y: 0,
+                w: 10,
+                h: 10,
+                color: Color::rgb(255, 0, 0),
+                node_id: None,
+            });
+        }
+        dl.push(DisplayItem::PopClip);
+        let dirty = Rect {
+            x: 0.0,
+            y: 0.0,
+            width: 45.0,
+            height: 45.0,
+        };
+        let mut full = MockBackend::new();
+        dl.replay(&mut full, 0, 0, None).unwrap();
+        let mut part = MockBackend::new();
+        dl.replay_dirty(&mut part, &dirty, 0, 0, None).unwrap();
+        assert_eq!(full.fill_rect_count(), 4);
+        assert_eq!(part.fill_rect_count(), 2, "items at x=60/90 culled");
     }
 }
