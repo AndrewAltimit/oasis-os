@@ -43,6 +43,7 @@ mod tests;
 // Token::Doctype(DoctypeToken), StartTagToken { attributes: Vec<Attribute> }).
 pub use types::{Attribute, DoctypeToken, EndTagToken, StartTagToken, Token};
 
+pub(crate) use types::MAX_ATTRIBUTES_PER_TAG;
 use types::{DoctypeBuilder, State, TagBuilder};
 
 // ---------------------------------------------------------------------------
