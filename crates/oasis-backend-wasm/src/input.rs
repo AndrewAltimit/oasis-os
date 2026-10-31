@@ -445,14 +445,15 @@ pub(crate) fn mods_from_dom(shift: bool, ctrl: bool, alt: bool, meta: bool) -> M
 
 /// Whether the browser's default action for this key press should be
 /// suppressed: keys with a gamepad-style twin (arrows, Space, Tab, ...),
-/// page-scrolling navigation keys, and Ctrl/Cmd+letter shortcuts (except
+/// page-scrolling navigation keys, F10 (opens app menu bars; the browser
+/// would focus its own menu), and Ctrl/Cmd+letter shortcuts (except
 /// Ctrl+R so page reload keeps working).
 pub(crate) fn should_prevent_default(key: Key, mods: Modifiers) -> bool {
     if key.legacy_press(mods).is_some() {
         return true;
     }
     match key {
-        Key::Delete | Key::Home | Key::End | Key::PageUp | Key::PageDown => true,
+        Key::Delete | Key::Home | Key::End | Key::PageUp | Key::PageDown | Key::F(10) => true,
         Key::Char(c) => (mods.ctrl() || mods.super_key()) && c.is_alphabetic() && c != 'r',
         _ => false,
     }
@@ -1068,5 +1069,6 @@ mod tests {
         assert!(!should_prevent_default(Key::Char('r'), Modifiers::CTRL));
         assert!(!should_prevent_default(Key::Char('a'), Modifiers::NONE));
         assert!(!should_prevent_default(Key::F(5), Modifiers::NONE));
+        assert!(should_prevent_default(Key::F(10), Modifiers::NONE));
     }
 }

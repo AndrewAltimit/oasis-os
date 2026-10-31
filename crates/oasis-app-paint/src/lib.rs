@@ -24,7 +24,7 @@ use oasis_app_core::{App, AppAction, ContentState};
 use oasis_skin::ActiveTheme;
 use oasis_types::backend::{Color, SdiBackend};
 use oasis_types::input::{Button, Key, Modifiers};
-use oasis_ui::menu_bar::{Menu, MenuBar, MenuEntry, MenuHit};
+use oasis_ui::menu_bar::{Menu, MenuBar, MenuEntry, MenuHit, MenuKey};
 use oasis_vfs::Vfs;
 
 pub use canvas::{Canvas, Layer, UndoEntry};
@@ -658,6 +658,18 @@ impl App for PaintApp {
         if self.picker.is_some() {
             // Arrows / Enter / Esc reach the picker via their d-pad twins.
             return None;
+        }
+        // F10 opens the menu bar; an open menu takes every key.
+        let (cw, ch) = self.content_size;
+        let bar_w = self.layout_at(0, 0, cw, ch).menu.w;
+        match self.menu.handle_key(*key, bar_w) {
+            MenuKey::Ignored => {},
+            MenuKey::Handled => return Some(AppAction::None),
+            MenuKey::Activate(id) => {
+                let action = self.run_menu_action(&id);
+                self.service_picker(vfs);
+                return Some(action);
+            },
         }
         match key {
             Key::Char('[') if !mods.has_command() => {

@@ -6,6 +6,7 @@
 
 use oasis_app_core::AppAction;
 use oasis_types::input::{Button, Key, Modifiers};
+use oasis_ui::menu_bar::MenuKey;
 
 use crate::editor::Motion;
 use crate::{EditorMode, PendingClose, TextEditorApp};
@@ -20,9 +21,13 @@ impl TextEditorApp {
         if self.close_requested {
             return Some(AppAction::Exit);
         }
-        // An open drop-down is closed by the legacy path (any button).
-        if self.menu.is_open() {
-            return None;
+        // F10 opens the menu bar; an open menu takes every key.
+        if !matches!(self.mode, EditorMode::ConfirmDiscard | EditorMode::Saving) {
+            match self.menu.handle_key(*key, self.content_size.0) {
+                MenuKey::Ignored => {},
+                MenuKey::Handled => return Some(AppAction::None),
+                MenuKey::Activate(id) => return Some(self.run_menu_action(&id)),
+            }
         }
         match self.mode {
             EditorMode::Normal | EditorMode::Insert => self.key_editing(key, mods),
