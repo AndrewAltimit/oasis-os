@@ -198,6 +198,21 @@ impl RadioLayer {
             last_status_publish: None,
         }
     }
+
+    /// Drop everything behind the current playback: the archive catalog,
+    /// pending catalog / track fetches and the stream source (its
+    /// connection closed). The manager's own state is left to the caller.
+    /// A source left behind kept its pump thread connected and the shell
+    /// redrawing every frame (`Shell::needs_redraw` treats a live source as
+    /// playing media).
+    pub fn release_playback(&mut self) {
+        self.archive_catalog = None;
+        self.pending_catalog_fetch = None;
+        self.pending_source_fetch = None;
+        if let Some(mut src) = self.source.take() {
+            src.disconnect();
+        }
+    }
 }
 
 impl Default for RadioLayer {

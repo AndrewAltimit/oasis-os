@@ -37,31 +37,22 @@ pub fn tick(state: &mut AppState, vfs: &mut dyn Vfs, now: Instant) {
 fn process_vfs_requests(state: &mut AppState, vfs: &mut dyn Vfs) {
     use oasis_audio::RADIO_REQUEST_PATH;
 
-    if !vfs.exists(RADIO_REQUEST_PATH) {
-        return;
-    }
-    let Ok(data) = vfs.read(RADIO_REQUEST_PATH) else {
+    // Trimmed: a request written with a trailing newline (`tune 2\n`)
+    // must still resolve the station index.
+    let Some(request) = crate::commands::take_request(vfs, RADIO_REQUEST_PATH) else {
         return;
     };
-    let request = String::from_utf8_lossy(&data).to_string();
-    if request.is_empty() {
-        return;
-    }
-    // Clear the request immediately.
-    let _ = vfs.write(RADIO_REQUEST_PATH, b"");
 
     if let Some(target) = request.strip_prefix("tune ") {
-        process_tune_request(state, target);
+        process_tune_request(state, target.trim());
     } else {
         let _ = state
             .radio
             .manager
             .process_request(&request, state.audio_backend.as_mut());
-        // Clear catalog on stop.
+        // A stop releases the catalog, the pending fetches and the stream.
         if state.radio.manager.state() == oasis_audio::radio::RadioState::Stopped {
-            state.radio.archive_catalog = None;
-            state.radio.pending_catalog_fetch = None;
-            state.radio.pending_source_fetch = None;
+            state.radio.release_playback();
         }
     }
 }
@@ -103,12 +94,7 @@ fn process_tune_request(state: &mut AppState, target: &str) {
         .tune(&station.name, station.bitrate, state.audio_backend.as_mut());
 
     // Clear stale catalog/pending fetches on station change.
-    state.radio.archive_catalog = None;
-    state.radio.pending_catalog_fetch = None;
-    state.radio.pending_source_fetch = None;
-    if let Some(mut old) = state.radio.source.take() {
-        old.disconnect();
-    }
+    state.radio.release_playback();
 
     state
         .radio
@@ -249,5 +235,76 @@ fn auto_advance_track(state: &mut AppState) {
         });
         state.radio.pending_source_fetch = Some(rx);
         state.radio.manager.continue_playing();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::cell::Cell;
+    use std::rc::Rc;
+
+    use oasis_audio::RADIO_REQUEST_PATH;
+    use oasis_audio::radio::{AudioChunk, RadioSource, SourceState, StationRegistry};
+    use oasis_core::vfs::MemoryVfs;
+
+    use super::*;
+
+    /// A stream that records whether it was disconnected.
+    struct FakeSource(Rc<Cell<bool>>);
+
+    impl RadioSource for FakeSource {
+        fn poll(&mut self) -> oasis_core::error::Result<Option<AudioChunk>> {
+            Ok(None)
+        }
+        fn disconnect(&mut self) {
+            self.0.set(true);
+        }
+        fn state(&self) -> SourceState {
+            SourceState::Active
+        }
+        fn source_type(&self) -> &str {
+            "fake"
+        }
+    }
+
+    fn post(vfs: &mut MemoryVfs, request: &str) {
+        if !vfs.exists("/var/radio") {
+            vfs.mkdir("/var").ok();
+            vfs.mkdir("/var/radio").expect("radio dir");
+        }
+        vfs.write(RADIO_REQUEST_PATH, request.as_bytes())
+            .expect("request");
+    }
+
+    /// The app's `stop` request closes the stream: a source left behind
+    /// kept its connection open and the shell redrawing every frame.
+    #[test]
+    fn stop_request_releases_the_stream_source() {
+        let mut state = AppState::new_for_test();
+        let mut vfs = MemoryVfs::new();
+        let closed = Rc::new(Cell::new(false));
+        state.radio.source = Some(Box::new(FakeSource(Rc::clone(&closed))));
+        post(&mut vfs, "stop");
+        process_vfs_requests(&mut state, &mut vfs);
+        assert!(state.radio.source.is_none(), "source dropped");
+        assert!(closed.get(), "source disconnected");
+    }
+
+    /// `tune 0` written with a trailing newline still tunes station 0.
+    #[test]
+    fn tune_request_is_trimmed() {
+        let mut state = AppState::new_for_test();
+        state.radio.manager.registry = StationRegistry::from_toml(
+            "[[station]]\nname = \"Test FM\"\nurl = \"http://example.invalid/s\"\n\
+             genre = \"test\"\n",
+        )
+        .expect("registry");
+        let mut vfs = MemoryVfs::new();
+        post(&mut vfs, "tune 0\n");
+        process_vfs_requests(&mut state, &mut vfs);
+        // Offline fixture: the tune resolved the station, then stopped
+        // short of the network.
+        let err = state.radio.manager.error_msg();
+        assert!(err.contains("offline"), "{err}");
     }
 }

@@ -45,7 +45,7 @@ use crate::app_state::AppState;
 /// payload. `None` when the file is missing, empty or only whitespace (an
 /// empty file is not rewritten, so idle frames do no VFS writes). The file
 /// is always cleared once read, so a malformed request cannot loop.
-pub(crate) fn take_request(vfs: &mut MemoryVfs, path: &str) -> Option<String> {
+pub(crate) fn take_request(vfs: &mut dyn Vfs, path: &str) -> Option<String> {
     let data = vfs.read(path).ok().filter(|d| !d.is_empty())?;
     let _ = vfs.write(path, b"");
     let text = String::from_utf8_lossy(&data).trim().to_string();
@@ -54,7 +54,7 @@ pub(crate) fn take_request(vfs: &mut MemoryVfs, path: &str) -> Option<String> {
 
 /// Write the status file `path` only when its contents differ from `text`
 /// (status files are republished every frame).
-pub(crate) fn publish_if_changed(vfs: &mut MemoryVfs, path: &str, text: &str) {
+pub(crate) fn publish_if_changed(vfs: &mut dyn Vfs, path: &str, text: &str) {
     if vfs.read(path).ok().as_deref() != Some(text.as_bytes()) {
         let _ = vfs.write(path, text.as_bytes());
     }

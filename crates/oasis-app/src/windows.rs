@@ -140,12 +140,7 @@ pub(crate) fn stop_radio(state: &mut AppState) {
         .radio
         .manager
         .process_request("stop", state.audio_backend.as_mut());
-    state.radio.archive_catalog = None;
-    state.radio.pending_catalog_fetch = None;
-    state.radio.pending_source_fetch = None;
-    if let Some(mut src) = state.radio.source.take() {
-        src.disconnect();
-    }
+    state.radio.release_playback();
 }
 
 /// Remove the runner of window `id`, parking it until the shell releases
