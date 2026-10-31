@@ -930,7 +930,10 @@ fn hidden_start_button_does_not_open_the_start_menu() {
     let (x, y) = hit.expect("the start button keeps a hit box");
     h.click(x, y);
     h.settle();
-    assert!(!h.state().ui.start_menu.open, "an undrawn start menu opened");
+    assert!(
+        !h.state().ui.start_menu.open,
+        "an undrawn start menu opened"
+    );
 }
 
 /// Escape in a terminal-only skin (corrupted: no dashboard, no window
@@ -941,9 +944,15 @@ fn escape_in_terminal_only_skin_keeps_the_terminal() {
     let mut h = Harness::new("corrupted");
     h.settle();
     assert_eq!(h.mode(), Mode::Terminal);
-    assert!(h.sdi_rect("terminal_bg").is_some(), "terminal drawn at boot");
+    assert!(
+        h.sdi_rect("terminal_bg").is_some(),
+        "terminal drawn at boot"
+    );
     h.key(Key::Escape);
     h.settle();
     assert_eq!(h.mode(), Mode::Terminal);
-    assert!(h.sdi_rect("terminal_bg").is_some(), "terminal hidden by Escape");
+    assert!(
+        h.sdi_rect("terminal_bg").is_some(),
+        "terminal hidden by Escape"
+    );
 }
