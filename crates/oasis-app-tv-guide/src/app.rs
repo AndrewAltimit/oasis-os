@@ -32,7 +32,13 @@ pub struct TvGuideApp {
     /// Queued VFS IPC requests (tune requests), handed to the host by
     /// `drain_requests`.
     pub requests: Vec<AppRequest>,
+    /// Wall time since the guide clock was last re-read (`App::tick`).
+    clock_ms: u32,
 }
+
+/// How often the open guide re-reads the clock, so the header time, the
+/// "now" highlight and the grid window follow the wall clock.
+const CLOCK_POLL_MS: u32 = 1000;
 
 impl TvGuideApp {
     /// Create a new TV Guide app from VFS channel config.
@@ -60,6 +66,7 @@ impl TvGuideApp {
             path: path.to_string(),
             lines,
             requests: Vec::new(),
+            clock_ms: 0,
         }
     }
 
@@ -95,6 +102,7 @@ impl App for TvGuideApp {
             Button::Cancel => {
                 if self.guide.tuned_channel.is_some() {
                     self.guide.untune();
+                    self.lines = self.guide.text_content();
                     AppAction::None
                 } else {
                     AppAction::Exit
@@ -139,6 +147,23 @@ impl App for TvGuideApp {
             },
             _ => AppAction::None,
         }
+    }
+
+    /// Re-read the clock once a second; only a new minute (what the guide
+    /// shows) asks for a redraw.
+    fn tick(&mut self, dt_ms: u32, _vfs: &dyn Vfs) -> bool {
+        self.clock_ms = self.clock_ms.saturating_add(dt_ms);
+        if self.clock_ms < CLOCK_POLL_MS {
+            return false;
+        }
+        self.clock_ms = 0;
+        let minute = self.guide.current_time / 60;
+        self.guide.update_time();
+        if self.guide.current_time / 60 == minute {
+            return false;
+        }
+        self.lines = self.guide.text_content();
+        true
     }
 
     fn layout(&mut self, cw: u32, ch: u32, _at: &ActiveTheme) {
@@ -189,6 +214,20 @@ mod tests {
         assert_eq!(app.title(), "TV Guide");
         assert_eq!(app.path(), "/apps/TV Guide");
         assert!(!app.lines().is_empty());
+    }
+
+    #[test]
+    fn open_guide_follows_the_wall_clock() {
+        // The clock used to be read only when tuning, so an open guide's
+        // header time and "now" column froze.
+        let vfs = MemoryVfs::new();
+        let mut app = TvGuideApp::new("/apps/TV Guide", &vfs);
+        let now = app.guide.current_time;
+        app.guide.current_time = now - 3600;
+        assert!(!app.tick(500, &vfs), "polled at most once a second");
+        assert!(app.tick(500, &vfs), "a new minute redraws");
+        assert!(app.guide.current_time >= now);
+        assert!(!app.tick(1000, &vfs), "same minute: no redraw");
     }
 
     #[test]

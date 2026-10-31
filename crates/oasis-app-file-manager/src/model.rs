@@ -151,69 +151,13 @@ impl FilePanel {
 }
 
 /// The real directory entry behind one display line of a [`FilePanel`].
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct PanelEntry {
-    /// Exact entry name (`..` for the parent row).
-    pub name: String,
-    /// What the entry is.
-    pub kind: EntryKind,
-}
+pub(crate) use oasis_app_core::file_viewer::ListingEntry as PanelEntry;
 
-/// List `dir` for a panel: the display lines (same format and order as
-/// [`oasis_app_core::file_viewer::list_directory`]) plus, per line, the
-/// real entry it stands for.
+/// List `dir` for a panel: the display lines plus, per line, the real
+/// entry it stands for.
 pub(crate) fn list_panel(vfs: &dyn Vfs, dir: &str) -> (Vec<String>, Vec<Option<PanelEntry>>) {
-    let mut lines = Vec::new();
-    let mut entries = Vec::new();
-    if dir != "/" {
-        lines.push("..".to_string());
-        entries.push(Some(PanelEntry {
-            name: "..".to_string(),
-            kind: EntryKind::ParentDir,
-        }));
-    }
-    match vfs.readdir(dir) {
-        Ok(listing) => {
-            let mut dirs: Vec<_> = listing
-                .iter()
-                .filter(|e| e.kind == oasis_vfs::EntryKind::Directory)
-                .collect();
-            let mut files: Vec<_> = listing
-                .iter()
-                .filter(|e| e.kind == oasis_vfs::EntryKind::File)
-                .collect();
-            dirs.sort_by(|a, b| a.name.cmp(&b.name));
-            files.sort_by(|a, b| a.name.cmp(&b.name));
-            for d in &dirs {
-                lines.push(format!("{}/", d.name));
-                entries.push(Some(PanelEntry {
-                    name: d.name.clone(),
-                    kind: EntryKind::Dir,
-                }));
-            }
-            for f in &files {
-                let size = f.size;
-                if size >= 1024 {
-                    lines.push(format!("{}  ({} KB)", f.name, size / 1024));
-                } else {
-                    lines.push(format!("{}  ({size} B)", f.name));
-                }
-                entries.push(Some(PanelEntry {
-                    name: f.name.clone(),
-                    kind: EntryKind::File,
-                }));
-            }
-            if dirs.is_empty() && files.is_empty() {
-                lines.push("(empty directory)".to_string());
-                entries.push(None);
-            }
-        },
-        Err(e) => {
-            lines.push(format!("Error reading directory: {e}"));
-            entries.push(None);
-        },
-    }
-    (lines, entries)
+    let listing = oasis_app_core::file_viewer::list_directory_entries(vfs, dir);
+    (listing.lines, listing.entries)
 }
 
 // ---------------------------------------------------------------
@@ -332,12 +276,7 @@ pub struct TreeEntry {
 }
 
 /// Kind of entry shown in the Explorer view.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum EntryKind {
-    File,
-    Dir,
-    ParentDir,
-}
+pub(crate) use oasis_app_core::file_viewer::ListingKind as EntryKind;
 
 pub(crate) fn truncate_label(s: &str, max_chars: usize) -> String {
     if s.chars().count() <= max_chars || max_chars < 2 {
