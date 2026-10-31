@@ -118,9 +118,26 @@ pub struct Tokenizer {
 
 impl Tokenizer {
     /// Create a new tokenizer over the given UTF-8 input.
+    ///
+    /// The input stream is preprocessed as the spec does (§13.2.3.5):
+    /// CR LF and lone CR become LF (they used to reach `<pre>` text and
+    /// attribute values verbatim), and U+0000 becomes U+FFFD, which is
+    /// what every state that keeps a NUL turns it into.
     pub fn new(input: &str) -> Self {
+        let mut chars = Vec::with_capacity(input.len());
+        let mut iter = input.chars().peekable();
+        while let Some(ch) = iter.next() {
+            match ch {
+                '\r' => {
+                    iter.next_if_eq(&'\n');
+                    chars.push('\n');
+                },
+                '\0' => chars.push('\u{FFFD}'),
+                c => chars.push(c),
+            }
+        }
         Self {
-            input: input.chars().collect(),
+            input: chars,
             pos: 0,
             state: State::Data,
             return_state: State::Data,

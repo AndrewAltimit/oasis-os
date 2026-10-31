@@ -8,6 +8,8 @@
 mod foreign;
 mod formatting;
 mod helpers;
+#[cfg(test)]
+mod hostile_tests;
 mod insertion_modes;
 #[cfg(test)]
 mod tests;
@@ -121,6 +123,11 @@ pub const MAX_DOM_DEPTH: usize = MAX_NESTING_DEPTH + 1;
 /// exhaustion from pathologically large documents.
 const MAX_DOM_NODES: usize = 100_000;
 
+/// Attributes the tree builder may copy onto formatting-element clones
+/// (adoption agency, reconstruction) per document; see
+/// `TreeBuilder::clone_element`.
+const MAX_CLONED_ATTRIBUTES: usize = 200_000;
+
 /// Builds a DOM tree from a token stream.
 pub struct TreeBuilder {
     pub(crate) doc: Document,
@@ -154,6 +161,11 @@ pub struct TreeBuilder {
     /// without mis-auto-closing their children or triggering HTML
     /// block-level auto-close rules.
     pub(crate) foreign_depth: u32,
+    /// The raw-text / RCDATA element the `Text` insertion mode fills.
+    pub(crate) text_element: Option<NodeId>,
+    /// Attributes copied onto formatting-element clones so far (see
+    /// `TreeBuilder::clone_element`).
+    pub(crate) cloned_attributes: usize,
 }
 
 impl TreeBuilder {
@@ -170,29 +182,15 @@ impl TreeBuilder {
             original_mode: InsertionMode::InBody,
             template_form_stack: Vec::new(),
             foreign_depth: 0,
+            text_element: None,
+            cloned_attributes: 0,
         }
     }
 
     /// Build a DOM tree from a token stream.
     pub fn build(tokens: Vec<Token>) -> Document {
         tree_raw_log("[BR/TREE] build enter");
-        let mut builder = TreeBuilder::new();
-        let total = tokens.len();
-        for (idx, token) in tokens.into_iter().enumerate() {
-            // Enforce DOM node limit to prevent memory exhaustion.
-            if builder.doc.nodes.len() >= MAX_DOM_NODES {
-                break;
-            }
-            if idx.is_multiple_of(256) {
-                tree_progress_log(idx as u64, total, builder.doc.nodes.len());
-            }
-            if idx.is_multiple_of(128) {
-                tree_yield();
-            }
-            builder.process_token(token);
-        }
-        tree_raw_log("[BR/TREE] tokens consumed, finishing");
-        builder.finish()
+        TreeBuilder::new().run(tokens)
     }
 
     /// Build a DOM tree, reusing a previous document's arena allocation.
@@ -202,34 +200,32 @@ impl TreeBuilder {
     /// pages of similar size.
     pub fn build_reuse(tokens: Vec<Token>, mut old_doc: Document) -> Document {
         old_doc.clear();
-        let mut builder = Self {
-            doc: old_doc,
-            mode: InsertionMode::Initial,
-            open_elements: Vec::new(),
-            active_formatting: Vec::new(),
-            head_element: None,
-            form_element: None,
-            frameset_ok: true,
-            original_mode: InsertionMode::InBody,
-            template_form_stack: Vec::new(),
-            foreign_depth: 0,
-        };
         tree_raw_log("[BR/TREE] build_reuse enter");
+        Self {
+            doc: old_doc,
+            ..Self::new()
+        }
+        .run(tokens)
+    }
+
+    /// Feed every token (up to the DOM node cap) and finish the tree.
+    fn run(mut self, tokens: Vec<Token>) -> Document {
         let total = tokens.len();
         for (idx, token) in tokens.into_iter().enumerate() {
-            if builder.doc.nodes.len() >= MAX_DOM_NODES {
+            // Enforce DOM node limit to prevent memory exhaustion.
+            if self.doc.nodes.len() >= MAX_DOM_NODES {
                 break;
             }
             if idx.is_multiple_of(256) {
-                tree_progress_log(idx as u64, total, builder.doc.nodes.len());
+                tree_progress_log(idx as u64, total, self.doc.nodes.len());
             }
             if idx.is_multiple_of(128) {
                 tree_yield();
             }
-            builder.process_token(token);
+            self.process_token(token);
         }
         tree_raw_log("[BR/TREE] tokens consumed, finishing");
-        builder.finish()
+        self.finish()
     }
 
     // =============================================================
@@ -239,6 +235,15 @@ impl TreeBuilder {
     pub(crate) fn process_token(&mut self, token: Token) {
         if self.foreign_depth > 0 {
             self.handle_foreign_content(token);
+            return;
+        }
+        // `</template>` is handled the same in every HTML mode (the
+        // spec's "in template" rules); `Text` mode closes its own element.
+        if let Token::EndTag(ref t) = token
+            && t.name == "template"
+            && self.mode != InsertionMode::Text
+        {
+            self.close_template();
             return;
         }
         match self.mode {

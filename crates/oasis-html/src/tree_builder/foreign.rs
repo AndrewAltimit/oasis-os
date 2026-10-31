@@ -68,8 +68,7 @@ impl TreeBuilder {
                 self.doc.append_child(parent, id);
                 // Past the open-elements cap the element is appended but
                 // not pushed, exactly like `insert_element`.
-                if !tag.self_closing && self.open_elements.len() < super::MAX_NESTING_DEPTH {
-                    self.open_elements.push(id);
+                if !tag.self_closing && self.push_open(id) {
                     self.foreign_depth += 1;
                 }
             },
@@ -172,8 +171,7 @@ impl TreeBuilder {
         let id = self.doc.add_node(NodeKind::Element(data));
         let parent = self.current_node();
         self.doc.append_child(parent, id);
-        if !tag.self_closing && self.open_elements.len() < super::MAX_NESTING_DEPTH {
-            self.open_elements.push(id);
+        if !tag.self_closing && self.push_open(id) {
             self.foreign_depth += 1;
         }
     }

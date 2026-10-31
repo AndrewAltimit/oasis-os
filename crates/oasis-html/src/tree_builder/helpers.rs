@@ -39,18 +39,50 @@ impl TreeBuilder {
     pub(crate) fn insert_element(&mut self, id: NodeId) {
         let parent = self.current_node();
         self.doc.append_child(parent, id);
-        if self.open_elements.len() < MAX_NESTING_DEPTH {
-            self.open_elements.push(id);
+        self.push_open(id);
+    }
+
+    /// Push an already-inserted element onto the open elements stack if
+    /// that stays within [`MAX_NESTING_DEPTH`]; returns whether it did.
+    ///
+    /// Both the stack size and the element's real DOM depth are checked:
+    /// the stack can be shorter than the DOM is deep (`<a>` is pulled out
+    /// of the middle of the stack when a new `<a>` opens, foster parenting
+    /// inserts beside the table), and `<a><div>` repeated used to build a
+    /// DOM twice as deep as the recursive passes are sized for.
+    pub(crate) fn push_open(&mut self, id: NodeId) -> bool {
+        if self.open_elements.len() >= MAX_NESTING_DEPTH || self.node_depth(id) > MAX_NESTING_DEPTH
+        {
+            return false;
         }
+        self.open_elements.push(id);
+        true
+    }
+
+    /// Depth of `id` below the document root (the root is 0).
+    fn node_depth(&self, id: NodeId) -> usize {
+        let mut depth = 0;
+        let mut cur = self.doc.nodes[id].parent;
+        while let Some(p) = cur {
+            depth += 1;
+            cur = self.doc.nodes[p].parent;
+        }
+        depth
     }
 
     /// Insert text, coalescing into an existing trailing text node
     /// when possible.
     pub(crate) fn insert_text(&mut self, text: &str) {
+        let parent = self.current_node();
+        self.append_text_to(parent, text);
+    }
+
+    /// Append text as the last child of `parent`, coalescing into an
+    /// existing trailing text node.
+    pub(crate) fn append_text_to(&mut self, parent: NodeId, text: &str) {
         if text.is_empty() {
             return;
         }
-        let parent = self.current_node();
         let children = &self.doc.nodes[parent].children;
         if let Some(&last_child) = children.last()
             && let NodeKind::Text(ref mut existing) = self.doc.nodes[last_child].kind
@@ -225,13 +257,20 @@ impl TreeBuilder {
         }
     }
 
-    /// Pop elements from the stack until we pop one with the given
-    /// tag.
+    /// Pop elements from the stack through the topmost one with the
+    /// given tag. Does nothing if no such element is open.
+    ///
+    /// Regression: this popped until it found the tag, so when it was
+    /// not there (an implied `<p>` that hit the nesting cap, `</table>`
+    /// with no table) the whole stack went and later content landed
+    /// outside `<html>`.
     pub(crate) fn close_to_tag(&mut self, tag: &TagName) {
-        while let Some(id) = self.open_elements.pop() {
-            if self.tag_of(id) == Some(tag) {
-                return;
-            }
+        if let Some(idx) = self
+            .open_elements
+            .iter()
+            .rposition(|&id| self.tag_of(id) == Some(tag))
+        {
+            self.open_elements.truncate(idx);
         }
     }
 
@@ -254,14 +293,31 @@ impl TreeBuilder {
         }
     }
 
-    /// Pop elements looking for a match (without scope boundaries).
-    pub(crate) fn close_to_tag_any_scope(&mut self, tag: &TagName) {
-        let idx = self
-            .open_elements
-            .iter()
-            .rposition(|&id| self.tag_of(id) == Some(tag));
-        if let Some(idx) = idx {
-            self.open_elements.truncate(idx);
+    /// Close an end tag with no dedicated rule (WHATWG §13.2.6.4.7).
+    ///
+    /// A *special* tag (`</div>`, `</section>`, ...) closes its element
+    /// only if it is in scope, so it cannot reach across a table cell.
+    /// Any other tag walks the stack from the current node: the first
+    /// element with the tag is popped with everything above it, but a
+    /// special element met first means the end tag is ignored. Without
+    /// these stops a stray `</div>` or `</span>` inside a table cell
+    /// closed the cell, row and table around it.
+    pub(crate) fn close_any_other_end_tag(&mut self, tag: &TagName) {
+        if tag.is_special() {
+            if self.has_in_scope(tag) {
+                self.close_to_tag(tag);
+            }
+            return;
+        }
+        for idx in (0..self.open_elements.len()).rev() {
+            match self.tag_of(self.open_elements[idx]) {
+                Some(t) if t == tag => {
+                    self.open_elements.truncate(idx);
+                    return;
+                },
+                Some(t) if t.is_special() => return,
+                _ => {},
+            }
         }
     }
 
