@@ -827,6 +827,23 @@ fn background_jobs_lifecycle() {
     assert!(out.contains("Exit") || out.contains("error"), "{out}");
 }
 
+/// A background job is a subshell: its exit status and `cd` don't reach
+/// the interactive session's `$?`, cwd or `$OLDPWD`.
+#[test]
+fn background_jobs_leave_the_session_status_and_dirs_alone() {
+    let mut sh = Shell::memory();
+    sh.ok("cd /home/user");
+    sh.ok("cd /tmp");
+    sh.ok("cd / && false &");
+    sh.ok("true");
+    let out = sh.tick().unwrap();
+    assert!(out.contains("Exit 1"), "{out}");
+    assert_eq!(sh.ok("echo $? $OLDPWD $CWD"), "0 /home/user /tmp");
+    assert_eq!(sh.cwd, "/tmp");
+    // `cd -` still goes back to where the user was, not the job's dir.
+    assert_eq!(sh.ok("cd -"), "/home/user");
+}
+
 #[test]
 fn many_background_jobs_drain_in_order() {
     let mut sh = Shell::memory();
@@ -1416,6 +1433,21 @@ fn parameter_expansion_forms() {
     assert_eq!(sh.ok("echo ${NOPE:-$V}"), "val");
     let err = sh.run("echo ${V%x}").unwrap_err();
     assert!(err.contains("bad substitution"), "{err}");
+}
+
+/// The `}` closing `${...}` is found past quoted or escaped braces in the
+/// word, and inside double quotes a `'` in the word is a plain character.
+#[test]
+fn parameter_expansion_braces_respect_quotes() {
+    let mut sh = Shell::memory();
+    assert_eq!(sh.ok("echo ${NOPE:-\"}\"}"), "}");
+    assert_eq!(sh.ok("echo ${NOPE:-'a}b'}x"), "a}bx");
+    assert_eq!(sh.ok("echo ${NOPE:-\\}}"), "}");
+    assert_eq!(sh.ok("echo \"${NOPE:-it's}\""), "it's");
+    assert_eq!(sh.ok("echo \"[${NOPE:-a  b}]\""), "[a  b]");
+    sh.ok("set V=val");
+    assert_eq!(sh.ok("echo \"${V:-it's}\" ${V:-'}'}"), "val val");
+    assert_eq!(sh.ok("echo ${NEW:='x}y'} $NEW"), "x}y x}y");
 }
 
 #[test]
