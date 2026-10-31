@@ -6,6 +6,23 @@ larger changes by area. Breaking API changes are marked **(breaking)**.
 
 ## Unreleased -- overhaul 3
 
+### Final review fixes
+
+- Inline `style=""` attributes expand shorthands like stylesheet rules do: `style="flex: 1"`
+  (and other shorthands the value applier has no case for) now takes effect.
+- Shell redirections apply left to right, as in a POSIX shell: `cmd 2>&1 > f` leaves stderr
+  on the terminal and writes only stdout to `f` (it behaved like `cmd > f 2>&1`),
+  `cmd >&2 2> f` keeps stdout on the terminal, and an overridden `> a` (`> a > b`) is still
+  truncated. `cmd <<< word` feeds the expanded word as stdin; `<<` here-documents report
+  that they are unsupported instead of a "missing file name" error. `cat` with no file
+  argument passes its stdin through (`echo x | cat`, `cat < f`).
+- `X=1 cmd $X` expands the command's words before the prefix assignment applies (it saw
+  the new value).
+- The UE5 FFI video decode thread no longer panics on a frame timestamp beyond
+  `Duration::MAX`, and a NaN timestamp no longer stalls the video on a busy loop.
+- `MemoryVfs` reads and writes check ancestor permissions without cloning the context and
+  permissions or formatting a discarded error per missing ancestor.
+
 ### Browser (HTML)
 
 - The HTML parser is about 3x faster on typical pages (full parse of a 100 KB page 5.2 ms to
