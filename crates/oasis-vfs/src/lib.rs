@@ -189,11 +189,8 @@ pub(crate) fn check_ancestors_searchable(vfs: &(impl Vfs + ?Sized), path: &str) 
     if ctx.is_root {
         return Ok(());
     }
-    let ancestors = std::iter::once("/").chain(
-        path.match_indices('/')
-            .skip(1)
-            .map(|(i, _)| &path[..i]),
-    );
+    let ancestors =
+        std::iter::once("/").chain(path.match_indices('/').skip(1).map(|(i, _)| &path[..i]));
     for dir in ancestors.filter(|d| *d != path) {
         if let Ok(perms) = vfs.get_permissions(dir)
             && !perms.allows(&ctx, AccessMode::Execute)

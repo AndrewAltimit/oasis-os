@@ -391,13 +391,23 @@ macro_rules! rename_permissions {
                 vfs.write("/mine", b"m").unwrap();
                 vfs.write("/locked", b"secret").unwrap();
                 vfs.set_context(VfsContext::root());
-                vfs.set_permissions("/locked", perms("root", 0o600)).unwrap();
+                vfs.set_permissions("/locked", perms("root", 0o600))
+                    .unwrap();
                 vfs.set_context(VfsContext::default_user());
                 assert!(vfs.read("/locked").is_err());
                 // Not the owner: no chmod, no chown back.
-                assert!(vfs.set_permissions("/locked", perms("oasis", 0o777)).is_err());
-                assert!(vfs.set_permissions("/locked", perms("root", 0o666)).is_err());
-                assert_eq!(vfs.get_permissions("/locked").unwrap(), perms("root", 0o600));
+                assert!(
+                    vfs.set_permissions("/locked", perms("oasis", 0o777))
+                        .is_err()
+                );
+                assert!(
+                    vfs.set_permissions("/locked", perms("root", 0o666))
+                        .is_err()
+                );
+                assert_eq!(
+                    vfs.get_permissions("/locked").unwrap(),
+                    perms("root", 0o600)
+                );
                 assert!(vfs.read("/locked").is_err());
                 // The owner may chmod, and give the entry away.
                 vfs.set_permissions("/mine", perms("oasis", 0o600)).unwrap();
@@ -562,10 +572,19 @@ mod real_symlinks {
         let mut vfs = RealVfs::new(root.path()).unwrap();
         vfs.rename("/esc", "/esc2").unwrap();
         vfs.rename("/dangling", "/dangling2").unwrap();
-        let names: Vec<_> = vfs.readdir("/").unwrap().into_iter().map(|e| e.name).collect();
+        let names: Vec<_> = vfs
+            .readdir("/")
+            .unwrap()
+            .into_iter()
+            .map(|e| e.name)
+            .collect();
         assert_eq!(names, ["dangling2", "esc2"]);
         // The link moved, its target did not.
         assert!(outside.path().exists());
-        assert!(std::fs::symlink_metadata(root.path().join("esc2")).unwrap().is_symlink());
+        assert!(
+            std::fs::symlink_metadata(root.path().join("esc2"))
+                .unwrap()
+                .is_symlink()
+        );
     }
 }

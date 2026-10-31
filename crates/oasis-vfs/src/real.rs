@@ -295,7 +295,10 @@ impl Vfs for RealVfs {
             if from_norm == to_norm {
                 return Ok(());
             }
-            if self.stat(&to_norm).is_ok_and(|m| m.kind == EntryKind::Directory) {
+            if self
+                .stat(&to_norm)
+                .is_ok_and(|m| m.kind == EntryKind::Directory)
+            {
                 return Err(VfsError::Other(format!(
                     "destination exists and is a directory: {to}"
                 ))

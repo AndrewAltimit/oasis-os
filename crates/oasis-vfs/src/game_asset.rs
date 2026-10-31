@@ -106,9 +106,7 @@ impl GameAssetVfs {
         }
         for ancestor in ancestors {
             self.deleted.remove(ancestor);
-            self.base
-                .entry(ancestor.to_string())
-                .or_insert(Node::Dir);
+            self.base.entry(ancestor.to_string()).or_insert(Node::Dir);
         }
         self.deleted.remove(path.as_ref());
         self.base.insert(path.into_owned(), node);
