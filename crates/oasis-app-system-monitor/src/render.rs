@@ -104,7 +104,14 @@ impl SystemMonitorApp {
             let ry = y + 3 + i as i32 * INFO_ROW_H;
             backend.draw_text(label, x + 6, ry, font, colors.label)?;
             let value_w = (inner_w as i32 - 12 - INFO_LABEL_W).max(0) as u32;
-            backend.draw_text_ellipsis(value, x + 6 + INFO_LABEL_W, ry, font, colors.text, value_w)?;
+            backend.draw_text_ellipsis(
+                value,
+                x + 6 + INFO_LABEL_W,
+                ry,
+                font,
+                colors.text,
+                value_w,
+            )?;
         }
         y += card_h as i32 + GAUGE_GAP + 2;
 

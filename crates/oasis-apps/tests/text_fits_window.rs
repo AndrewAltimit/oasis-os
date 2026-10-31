@@ -16,11 +16,16 @@ const SIZES: &[(u32, u32)] = &[(320, 200), (480, 272), (800, 600), (1024, 768)];
 
 fn vfs() -> MemoryVfs {
     let mut vfs = MemoryVfs::new();
-    for d in ["/home", "/home/user", "/home/user/music", "/home/user/photos"] {
-        vfs.mkdir(d).unwrap();
+    for d in [
+        "/home",
+        "/home/user",
+        "/home/user/music",
+        "/home/user/photos",
+    ] {
+        vfs.mkdir(d).expect("mkdir");
     }
     let long = "/home/user/a_really_long_file_name_to_overflow_narrow_panes.txt";
-    vfs.write(long, b"hello").unwrap();
+    vfs.write(long, b"hello").expect("write");
     vfs
 }
 
@@ -44,9 +49,8 @@ fn app_text_stays_inside_the_window_at_every_size_and_theme() {
                     if !t.visible || t.text.trim().is_empty() {
                         continue;
                     }
-                    let inside = t.x >= x0
-                        && t.x + t.w as i32 <= x1 + 1
-                        && t.y + t.h as i32 <= y1 + 1;
+                    let inside =
+                        t.x >= x0 && t.x + t.w as i32 <= x1 + 1 && t.y + t.h as i32 <= y1 + 1;
                     if !inside {
                         overflows.push(format!("{} {w}x{h} {theme}: {:?}", r.title, t.text));
                     }
@@ -54,5 +58,9 @@ fn app_text_stays_inside_the_window_at_every_size_and_theme() {
             }
         }
     }
-    assert!(overflows.is_empty(), "text past the window edge:\n{}", overflows.join("\n"));
+    assert!(
+        overflows.is_empty(),
+        "text past the window edge:\n{}",
+        overflows.join("\n")
+    );
 }

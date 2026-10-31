@@ -169,7 +169,11 @@ impl TextEditorApp {
         // Status bar line at the end.
         let mode_str = self.mode_label().to_uppercase();
         let mod_str = if self.modified { " [Modified]" } else { "" };
-        let pos_str = format!("Ln {}, Col {}", self.cursor_line + 1, self.cursor_char_col() + 1);
+        let pos_str = format!(
+            "Ln {}, Col {}",
+            self.cursor_line + 1,
+            self.cursor_char_col() + 1
+        );
         let status = if let Some(ref msg) = self.status_message {
             format!("-- {mode_str} -- {pos_str}{mod_str}  {msg}")
         } else {

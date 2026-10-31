@@ -942,7 +942,11 @@ fn vertical_moves_remember_the_goal_column_across_short_lines() {
     app.cursor_down();
     assert_eq!((app.cursor_line, app.cursor_col), (1, 0));
     app.cursor_down();
-    assert_eq!((app.cursor_line, app.cursor_col), (2, 10), "goal column kept");
+    assert_eq!(
+        (app.cursor_line, app.cursor_col),
+        (2, 10),
+        "goal column kept"
+    );
     // Any horizontal move resets the goal.
     app.cursor_left();
     app.cursor_up();
@@ -960,7 +964,11 @@ fn page_down_never_scrolls_past_the_last_page() {
         app.motion(crate::editor::Motion::PageDown, false);
     }
     assert_eq!(app.cursor_line, 49);
-    assert_eq!(app.content.scroll, 50 - page, "last page fills the viewport");
+    assert_eq!(
+        app.content.scroll,
+        50 - page,
+        "last page fills the viewport"
+    );
 }
 
 #[test]
@@ -991,11 +999,17 @@ fn long_lines_scroll_horizontally_to_keep_the_caret_visible() {
     let b = h.draw();
     let (x0, w) = (8, 300);
     let caret_visible = b.rects().iter().any(|r| {
-        r.w == 2 && r.visible.is_some_and(|(vx, _, vw, _)| vx >= x0 && vx + vw as i32 <= x0 + w)
+        r.w == 2
+            && r.visible
+                .is_some_and(|(vx, _, vw, _)| vx >= x0 && vx + vw as i32 <= x0 + w)
     });
     assert!(caret_visible, "caret drawn inside the window after End");
     // Clicking near the right edge now lands near the end of the line.
     h.click(w - 20, 26);
     let app = h.app_as::<TextEditorApp>();
-    assert!(app.cursor_col > 280, "click mapped through the scroll: {}", app.cursor_col);
+    assert!(
+        app.cursor_col > 280,
+        "click mapped through the scroll: {}",
+        app.cursor_col
+    );
 }

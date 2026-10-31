@@ -142,7 +142,11 @@ impl FileManagerApp {
         for panel in &mut self.panels {
             let selected = panel.scroll + panel.cursor;
             panel.scroll = 0;
-            panel.reveal(selected.min(panel.lines.len().saturating_sub(1)), step, page);
+            panel.reveal(
+                selected.min(panel.lines.len().saturating_sub(1)),
+                step,
+                page,
+            );
         }
     }
 

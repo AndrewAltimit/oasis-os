@@ -85,7 +85,7 @@ fn small_window_can_scroll_to_the_last_line() {
     }
     let text = h.screen_text();
     // The last line, ellipsized to the narrow window.
-    assert!(text.contains("> " ) && text.contains("'remote'"), "{text}");
+    assert!(text.contains("> ") && text.contains("'remote'"), "{text}");
 }
 
 #[test]

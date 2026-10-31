@@ -4,7 +4,7 @@
 //! ([`FileOp`], [`NavTarget`], [`ViewMode`]), the folder-tree row type
 //! ([`TreeEntry`]), and the side-effect-free helpers used by both the
 //! rendering layer and the input/command layer (`list_panel`,
-//! `truncate_label`, `build_tree_entries`).
+//! `build_tree_entries`).
 
 use oasis_app_core::file_viewer::{join_path, parent_dir};
 use oasis_vfs::Vfs;
@@ -278,6 +278,7 @@ pub struct TreeEntry {
 /// Kind of entry shown in the Explorer view.
 pub(crate) use oasis_app_core::file_viewer::ListingKind as EntryKind;
 
+/// Cut an Explorer tile label to `max_chars` characters (`…` when cut).
 pub(crate) fn truncate_label(s: &str, max_chars: usize) -> String {
     if s.chars().count() <= max_chars || max_chars < 2 {
         return s.to_string();

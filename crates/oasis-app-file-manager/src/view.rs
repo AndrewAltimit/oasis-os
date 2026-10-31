@@ -319,7 +319,14 @@ impl FileManagerApp {
             "[L: {}]  [R: {}]",
             self.panels[0].browse_dir, self.panels[1].browse_dir,
         );
-        backend.draw_text_ellipsis(&header, cx + 4, cy + 2, 12, colors.dim_text, cw.saturating_sub(8))?;
+        backend.draw_text_ellipsis(
+            &header,
+            cx + 4,
+            cy + 2,
+            12,
+            colors.dim_text,
+            cw.saturating_sub(8),
+        )?;
         backend.fill_rect(
             cx,
             cy + at.app.title_bar_height as i32 - 4,
@@ -376,7 +383,14 @@ impl FileManagerApp {
                     colors.text
                 };
                 let y = content_y + 2 + i as i32 * line_h;
-                backend.draw_text_ellipsis(&text, px + 2, y, 12, text_color, pw.saturating_sub(4))?;
+                backend.draw_text_ellipsis(
+                    &text,
+                    px + 2,
+                    y,
+                    12,
+                    text_color,
+                    pw.saturating_sub(4),
+                )?;
             }
         }
 
@@ -545,6 +559,8 @@ impl FileManagerApp {
                 kind,
                 &colors,
             );
+            // Tile labels keep a character-count cut: a pixel cut at the tile
+            // width would hide most names (`notes.txt`) behind an ellipsis.
             let max_chars = (g.tile_w as usize / 7).max(4);
             let label = truncate_label(&name, max_chars);
             let label_color = if is_selected {

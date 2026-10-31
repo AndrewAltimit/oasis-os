@@ -104,9 +104,16 @@ fn dialog_text(dialog: &Dialog, status: Option<&str>) -> DialogText {
     }
 }
 
-/// Clip `s` to roughly fit `w` pixels at ~7px per glyph.
-fn fit(s: &str, w: u32) -> String {
-    crate::model::truncate_label(s, (w as usize / 7).max(4))
+/// `s` cut from the front to fit `max_w` pixels (`...tail`): a name being
+/// typed keeps its end, where the `_` cursor is, in view.
+fn fit_tail(backend: &dyn SdiBackend, s: &str, font: u16, max_w: u32) -> String {
+    if backend.measure_text(s, font) <= max_w {
+        return s.to_string();
+    }
+    s.char_indices()
+        .map(|(i, _)| format!("...{}", &s[i..]))
+        .find(|t| backend.measure_text(t, font) <= max_w)
+        .unwrap_or_default()
 }
 
 /// Result of clicking while a dialog is open.
@@ -158,19 +165,20 @@ impl FileManagerApp {
             at.font_hint,
             colors.status_text,
         )?;
-        backend.draw_text(
-            &fit(&t.msg, f.w - 16),
+        backend.draw_text_ellipsis(
+            &t.msg,
             f.x + 8,
             g.msg_y,
             at.font_hint,
             colors.text,
+            f.w.saturating_sub(16),
         )?;
         if let Some(field) = &t.field {
             let fb = g.field;
             backend.fill_rect(fb.x, fb.y, fb.w, fb.h, colors.pane_bg)?;
             draw_outline(backend, fb.x, fb.y, fb.w, fb.h, colors.divider)?;
             backend.draw_text(
-                &fit(field, fb.w - 8),
+                &fit_tail(backend, field, at.font_hint, fb.w.saturating_sub(8)),
                 fb.x + 4,
                 fb.y + 3,
                 at.font_hint,
