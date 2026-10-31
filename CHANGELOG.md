@@ -6,6 +6,25 @@ larger changes by area. Breaking API changes are marked **(breaking)**.
 
 ## Unreleased -- overhaul 3
 
+### Test coverage (bugs the new tests found)
+
+- Text Editor: opening a stylesheet with a `/` outside a comment (`font: 12px/1.5`,
+  `grid-area: 1 / 2`) froze the editor (the CSS highlighter stopped advancing); the HTML
+  highlighter panicked on non-ASCII text near a `<!--` check and split characters inside tags.
+- Browser SVG: `transform` (on `<g>` or a shape) now scales sizes, not just positions:
+  under `scale(0.5)` circles, rects, stroke widths and text drew at full size. A non-uniform
+  scale makes a circle an ellipse; a rotated / skewed rect becomes a polygon.
+- CSS: a negative `font-size` (`-1`, `-5px`) or an overflowing one (`1e400px`) is dropped
+  as invalid instead of computing a negative / infinite size.
+- Video Embed (WASM YouTube app): its search hints and footer are ellipsized to the window
+  (they ran past a 320 px window, failing `cargo test --workspace`).
+- ID3 titles / artists made only of NULs and spaces read as no title (were a NUL).
+- New tests: CSS keyword tables through the real parser, SVG from real markup (groups,
+  `<defs>` gradients, `url(#id)` paint, polygons, `<tspan>`), TV Guide catalog fetch
+  outcomes (error, empty, dead thread, timeout, success) and a rejected-resolution and a
+  chained `skin xp; skin @variant:dark` e2e flow; `docs/testing.md` gains coverage, hang-guard
+  and sweep guidance.
+
 ### Skins, vector graphics & shaders
 
 - Skin inheritance (`inherits = "<parent>"`) now fills *every* field the child omits: the nine
