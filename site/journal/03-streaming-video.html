@@ -411,13 +411,12 @@ flowchart TD
         <td>TLS fallback on 301 redirect</td>
       </tr>
     </tbody>
-  </table>
+  </table></div>
 
   <aside class="callout update" role="note">
     <div class="callout-title">Update (Oct 2026)</div>
     <p>PSP video is no longer skipped: <a href="07-psp-media-engine.html">entry 07</a> describes how H.264 now decodes on the Media Engine (the <code>sceMpeg</code> NAL path, streams up to 480p) next to <code>sceAudiocodec</code> AAC. On desktop the decode row now reads &ldquo;ffmpeg by default, openh264 as fallback&rdquo;.</p>
   </aside>
-</div>
 
   <p>
     The same <code>oasis-video</code> crate handles both paths via feature flags:

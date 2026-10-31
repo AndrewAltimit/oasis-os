@@ -1888,10 +1888,10 @@
      "crates": [
       "oasis-html"
      ],
-     "text": "load_html runs the tokenizer and the tree builder into an arena DOM (reusing the previous document's allocation when it can).",
+     "text": "load_html hands the source to TreeBuilder::parse_with, which drives the tokenizer itself, as the spec's tree construction does, and builds an arena DOM (parse_reuse keeps the previous document's allocation when it can).",
      "code": [
       "crates/oasis-browser/src/widget/pipeline/document.rs: load_html",
-      "crates/oasis-html/src/tree_builder/mod.rs: TreeBuilder::build"
+      "crates/oasis-html/src/tree_builder/mod.rs: TreeBuilder::parse_with, TreeBuilder::parse_reuse"
      ]
     },
     {
