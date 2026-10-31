@@ -44,16 +44,17 @@ tokenizer output. It produces a `Stylesheet` consisting of:
 ```rust
 pub struct Stylesheet {
     pub rules: Vec<Rule>,
-    pub keyframes: Vec<KeyframesAtRule>,
-    pub media_blocks: Vec<MediaBlock>,
-    pub supports_blocks: Vec<SupportsBlock>,
-    // ...
+    pub keyframes: Vec<KeyframesRule>,
+    pub layers: Vec<String>, // cascade layers, in cascade order
+    // ... @counter-style, @property, @font-face, ...
 }
 
 pub struct Rule {
-    pub selectors: Vec<Selector>,
+    pub selectors: SelectorList,
     pub declarations: Vec<Declaration>,
-    pub origin: Origin, // UA, User, Author, Inline
+    pub layer: Option<u16>,                   // index into `layers`
+    pub container: Option<ContainerCondition>, // enclosing `@container`
+    pub scope: Option<ScopeCondition>,         // enclosing `@scope`
 }
 
 pub struct Declaration {
@@ -94,19 +95,32 @@ inputs are:
 The algorithm:
 
 1. **Index selectors.** `SelectorIndex` (in `oasis-css/src/cascade/index.rs`)
-   buckets rules by their rightmost simple selector (id, class, tag, or
-   universal). When matching against a node, only the relevant buckets
-   are tested. This is the single biggest perf win in the cascade.
-2. **Match.** For each candidate rule, walk the selector right-to-left
+   files each rule under one key of its rightmost (subject) compound
+   selector, the most specific one (id > class > tag, else universal).
+   When matching against a node, only the relevant buckets are tested.
+   This is the single biggest perf win in the cascade.
+2. **Filter.** An ancestor Bloom filter (`cascade/ancestor_filter.rs`)
+   holds the ids, classes and tags of the current element's ancestors;
+   a descendant / child selector whose required ancestor parts are
+   missing is rejected without walking the ancestor chain.
+3. **Match.** For each remaining rule, walk the selector right-to-left
    against the DOM, honoring combinators (`>`, `+`, `~`, descendant)
-   and pseudo-classes (`:hover`, `:focus`, `:nth-child`, `:not`, ...).
-3. **Sort.** Matched declarations are sorted by `(Origin, !important,
-   Specificity, source order)`. The classic CSS cascade order.
-4. **Apply.** Each declaration is fed to
+   and pseudo-classes (`:hover`, `:focus`, `:nth-child`, `:has()`, and
+   `:is()` / `:where()` / `:not()` with complex selectors).
+4. **Sort.** Matched declarations (borrowed from the stylesheet, not
+   cloned) are sorted by origin-and-importance tier, cascade layer,
+   specificity and source order. The tiers, lowest first: normal
+   user-agent < presentational hints < normal author < normal inline <
+   important author < important inline < important user-agent. The
+   built-in UA sheet is its own origin, so any author rule, layered or
+   not, beats it; within the author origin unlayered rules beat layered
+   ones (reversed for `!important`). `revert` rolls back to the UA
+   value, `revert-layer` to the previous layer.
+5. **Apply.** Each declaration is fed to
    `ComputedStyle::apply_declaration(property, value, parent_font_size)`,
    which resolves units (`em`, `rem`, `%`, `vw`, `vh`, `calc()`),
    normalises colors, and writes to the corresponding field.
-5. **Inherit.** After applying, any inheritable property that was not
+6. **Inherit.** After applying, any inheritable property that was not
    explicitly set falls through to the parent's value via
    `ComputedStyle::inherit(parent)`.
 
@@ -138,19 +152,22 @@ beats stylesheet rules unless the stylesheet uses `!important`.
   resolved (so `calc(100% - 16px)` knows the containing-block width at
   resolve time).
 
-## `@media` and `@supports`
+## `@media`, `@supports`, `@container`
 
-`@media` blocks live in their own `Vec<MediaBlock>` on the
-`Stylesheet`. The cascade evaluates each block's condition against the
-current `MediaViewport` (width, height, color-scheme, hover, pointer,
-prefers-reduced-motion) and folds matching blocks into the rule list
-before specificity sorting.
+`@media` is evaluated while parsing: `Stylesheet::parse_with_viewport`
+checks each block's condition against a `MediaViewport` (width, height,
+color-scheme, hover, pointer, prefers-reduced-motion) and keeps only
+the rules of matching blocks. The browser re-parses and re-cascades
+when a resize flips a condition.
 
-`@supports` is evaluated similarly, but the condition checks against
-the `PropertyId::from_name(...)` table — anything that maps to `Other`
-or fails parsing is treated as unsupported.
+`@supports` is also decided at parse time, against the list of
+properties `apply_declaration` knows (`parser/supports.rs`); any other
+property, or a condition that fails to parse, is treated as unsupported.
 
-`@container` queries are **not** implemented yet.
+`@container` rules keep their condition on `Rule::container`; the
+cascade evaluates it against the nearest matching container ancestor in
+the layout snapshot of the previous pass (no snapshot: the rule does
+not apply).
 
 ## Animations and transitions
 
@@ -159,19 +176,21 @@ or fails parsing is treated as unsupported.
   (typically `:hover`), `crates/oasis-css/src/transition.rs` interpolates the old →
   new value over `duration_ms` using the configured `TimingFunction`.
   27 numeric properties are auto-interpolated.
-- `@keyframes` rules are parsed into `KeyframesAtRule` and linked to
+- `@keyframes` rules are parsed into `KeyframesRule` and linked to
   elements via the `animation-name` property. `crates/oasis-css/src/animation.rs`
   drives the per-frame value updates from `BrowserWidget::tick`.
 
-## Caching
+## Caching and threading
 
-- `MatchedRules` (the per-node list of matched declarations) is cached
-  on each DOM node. Cache invalidation happens when:
-  - A subtree is marked dirty by mutation.
-  - A pseudo-class state flip (`:hover`, `:focus`) affects a node whose
-    selectors include that pseudo-class.
-  - A `var(--…)` referenced by the node changes.
-- The cascade itself is single-threaded.
+- The browser widget keeps the parsed author sheets and the
+  `SelectorIndex` between cascades. A `:hover` / `:focus` flip
+  re-cascades only the affected nodes (the old and new target's
+  ancestors and their descendants, parents first) and repaints without
+  relayout when only visual properties changed.
+- `var()` substitutions are memoised per thread by property +
+  substituted text (see above).
+- The cascade is single-threaded unless the `parallel-style` feature
+  (rayon) is on.
 
 ## Tests
 

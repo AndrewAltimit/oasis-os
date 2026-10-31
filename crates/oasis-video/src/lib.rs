@@ -9,17 +9,19 @@
 //!
 //! - `demux-lite`: `demux_lite`, a dependency-free MP4 parser (PSP,
 //!   seek-point lookup, fuzzing).
-//! - `symphonia`: `demux` + `aac` (symphonia MP4 demux and AAC-LC) and an
-//!   audio-only `SoftwareVideoDecoder`. Implies `demux-lite`.
-//! - `h264`: `h264` (openh264, compiled from C source), so the symphonia
-//!   backend decodes video too. Implies `symphonia`.
+//! - `symphonia`: symphonia MP4 demux and AAC-LC, and an audio-only
+//!   `SoftwareVideoDecoder`. Implies `demux-lite`.
+//! - `h264`: openh264 (compiled from C source), so the symphonia backend
+//!   decodes video too. Implies `symphonia`.
 //! - `ffmpeg`: statically-linked ffmpeg for demux, H.264 and AAC
 //!   (Main/High profile, SIMD-optimized).
 //!
 //! `SoftwareVideoDecoder` exists when `symphonia` or `ffmpeg` is on. When
 //! both backends are compiled in (e.g. `--all-features`, or one binary
 //! enabling `h264` through one crate and `ffmpeg` through another), the
-//! ffmpeg backend wins; the symphonia modules stay available as libraries.
+//! ffmpeg backend wins. Either way `SoftwareVideoDecoder` forwards to the
+//! selected backend through a crate-private `DecoderBackend` trait; the
+//! demux / AAC / H.264 modules themselves are private.
 //! The [`yuv`] converters and the error/frame types are always available.
 
 #![warn(missing_docs)]

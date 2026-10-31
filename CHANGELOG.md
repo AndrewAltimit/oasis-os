@@ -6,23 +6,204 @@ larger changes by area. Breaking API changes are marked **(breaking)**.
 
 ## Unreleased -- overhaul 3
 
-### Browser (HTML)
+### Breaking changes at a glance
 
-- The HTML parser is about 3x faster on typical pages (full parse of a 100 KB page 5.2 ms to
+Each item is described, with its migration, in its area below.
+
+- **PSP:** the dev servers on TCP 9293 (EBOOT command server, overlay devloop, recovery file
+  server) require the remote terminal's PSK challenge and serve no one without a key.
+- **Terminal / scripting:** one option parser, so `-x` is an option (use `--` for operands
+  starting with `-`); `cron add <name> <interval> <script>` replaces the two-argument form;
+  `Completer` is stateless.
+- **VFS:** chmod / chown need root or the owner, and every ancestor needs search permission.
+- **Crate APIs made private or removed:** most `oasis-audio` / `oasis-video` modules,
+  `oasis_net::ftp::process_ftp_request`, `oasis_html::entities`, `oasis_css::selectors`,
+  `cascade::build_global_layer_map`, `oasis_http`'s `response_find_header`,
+  `SoftwareShaderRenderer::render_balatro`, the uncalled `oasis-ui` `DrawContext` helpers.
+- **oasis-browser:** `layout_block_incremental` / `StyleCache` replaced by `relayout_tree`;
+  `FontAwareTextMeasurer::set_font_id`, `gemini::renderer`, `reader::reader_stylesheet`,
+  `scroll::SCROLL_ACCELERATION` and `SvgPaint::PatternRef` removed.
+- **oasis-html / oasis-css types:** `DoctypeToken` gains `public_id` / `system_id`;
+  `TagName::is_formatting` is the spec set; `SimpleSelector::{Is, Where, Not}` hold
+  `Vec<Selector>`; `SimpleSelector::Attribute` gains `case_insensitive`;
+  `Stylesheet::layers` is in cascade order.
+- **Backend traits:** `SdiTextures::blit_sub_tinted` / `blit_flipped` and `ClipPush` removed;
+  `SdiBatch` builds on `SdiText`; `texture_not_found` takes a `TextureId`;
+  `SdlShaderBridge` takes `f64` seconds.
+- **oasis-ui:** `MenuBar::draw_dropdown` / `pointer_move` take the bar rect;
+  `ListView::index_at` takes the viewport height; `MenuBar::dropdown_dimensions`,
+  `InputField::selection`, `layout::center_text_y` removed.
+- **Moves and features:** `oasis_core::settings` / `ui_sound` moved to `oasis_app::settings`;
+  `AppAction::SwitchToTerminal` removed; features `oasis-js/rquickjs-engine`,
+  `oasis-core/test-data`, `oasis-app-tv-guide/test-data` removed.
+
+### Browser: HTML parser (oasis-html)
+
+- The parser is about 3x faster on typical pages (full parse of a 100 KB page 5.2 ms to
   1.4 ms; table-heavy pages 7.3 ms to 3.5 ms): text runs are one token instead of one per
   character, and the tree builder no longer allocates per tag. The tree builder alone is back
   below its pre-overhaul time.
+- Tree construction follows WHATWG for tables and forms: new "in caption", "in column
+  group", "in select", "in select in table" and "in head noscript" modes (rows after a
+  `<caption>` or `<colgroup>` used to nest inside it), formatting-list markers so bold /
+  italic no longer leak into or out of table cells, spec foster parenting, and the full
+  in-body start / end tag tables (`<button>`, `<li>`, `<option>`, `<wbr>`, `<embed>`, leading
+  newline after `<pre>` / `<textarea>`, late `<body>` attributes merged, `<base>` and
+  post-`</head>` scripts stay in the head). Misnested formatting around a table
+  (`<table><a>1<p>2</a>3`) lands before the table instead of inside it.
 - `<template>` contents parse with the spec's "in template" mode: `<template><tr><td>`
   (the usual row template for scripts) keeps its rows and cells instead of dropping the tags.
 - Quirks mode: the DOCTYPE's public / system identifiers pick quirks, limited-quirks or
   standards mode (new `Document::quirks_mode`); in quirks mode (no DOCTYPE, or a legacy one)
   `<table>` no longer closes an open `<p>`, as in browsers. `DoctypeToken` gains `public_id`
   and `system_id` **(breaking)**.
+- Inline SVG / MathML: `<foreignObject>`, `<desc>`, `<title>` and HTML `annotation-xml`
+  content stays inside the SVG / MathML instead of breaking out of it; CDATA sections work
+  in SVG. Script-data escape states keep `<!-- document.write("<script>…</script>") -->`
+  in one script.
+- `<noscript>` content renders as markup in builds without JavaScript (it was raw text).
 - `--!>` ends a comment; text in `<textarea>`, `<xmp>`, `<iframe>`, `<noembed>` no longer
-  gets bold / italic reopened inside it; misnested formatting around a table
-  (`<table><a>1<p>2</a>3`) lands before the table instead of inside it.
+  gets bold / italic reopened inside it.
+- Named character references cover all of HTML 4 plus common HTML5 names (`&check;`,
+  `&lang;`, `&lpar;`, ...); without a `;` only the legacy Latin-1 names match, as the longest
+  prefix (`&copy2024` is `©2024`; `&mdash` without `;` now stays literal, as in browsers).
+  An unknown name with a `;` stays literal (`&centerdot;` is not `¢erdot;`). `&copy=` style
+  query strings in attributes stay literal; `&#150;`-style references map through
+  Windows-1252, in `<title>` / `<textarea>` too.
+- Input hygiene: CR LF normalised to LF and NUL to U+FFFD; duplicate attributes dropped
+  (first wins) and at most 256 per tag, merged late `<body>` / `<html>` attributes included.
+  Stray end tags no longer close enclosing table cells or push content outside `<html>`;
+  `<script>` text at the nesting cap stays in the script. Quadratic / multiplicative cases
+  (huge attribute lists, adoption agency, foster parenting, DOM depth) are bounded.
+- New `TreeBuilder::parse` / `parse_with` / `parse_reuse` and `ParseOptions { scripting }`:
+  the tree builder drives the tokenizer, as the spec does; `Tokenizer::with_scripting`,
+  `TreeBuilder::build_with` for the pre-tokenized path.
+- **(breaking)** `TagName::is_formatting` is the spec set (adds `code`, `big`, `font`,
+  `nobr`, `strike`, `tt`; drops `mark`, `sub`, `sup`, which no longer reopen in the next
+  paragraph); `is_void` / `is_special` cover the obsolete and unnamed void / special tags.
+  `oasis_html::entities` is crate-private.
 
-### Shell chrome / skins
+### Browser: CSS (oasis-css)
+
+- The user-agent sheet is its own cascade origin: author rules in any `@layer` now beat it
+  (layered pages such as Tailwind v4 lost to UA `margin` / `font-size` / `display`
+  defaults), presentational hints beat it (`cellpadding="0"` now removes the UA cell
+  padding), and important UA declarations beat important author ones.
+- Cascade layers order as a tree (sublayers before their parent, late sublayers in their
+  parent's slot) **(breaking: `Stylesheet::layers` is now in cascade order)**; nested
+  `@layer` names are qualified. `revert-layer` rolls back to the previous cascade layer (it
+  was ignored), or acts as `unset` when there is none; `revert` rolls a property back to the
+  user-agent value (`* { all: unset; display: revert }` keeps blocks blocks).
+- `inherit` works for non-inherited properties and on shorthands; `all: unset` (the common
+  button reset) is supported; the `flex` shorthand handles every form (`flex: auto`,
+  `flex: 2 1 0`, `flex: 100px`); `::before` / `::after` see their own custom properties.
+- Custom properties honour CSS-wide keywords: `--x: initial` is the guaranteed-invalid
+  value (the "space toggle": `var(--x, fallback)` uses the fallback), `inherit` / `unset`
+  take the parent's value (they used to be stored as the literal text).
+- `:is()` / `:where()` / `:not()` accept complex selectors (`:where(.prose > p)`,
+  `:not(.a .b)`, Tailwind Typography's `:not(:where([class~=not-prose] *))`); they took only
+  compound selectors and misparsed the rest of the selector. `:is()` / `:where()` drop
+  invalid entries, an invalid `:not()` entry matches nothing, and `&` inside them works in
+  nested rules. `SimpleSelector::{Is, Where, Not}` now hold `Vec<Selector>` **(breaking)**.
+- Attribute selectors accept the `i` / `s` flags (the flag used to drop the rule) and match
+  HTML's enumerated attributes case-insensitively **(breaking: `SimpleSelector::Attribute`
+  gains `case_insensitive`)**; malformed attribute selectors match nothing.
+- Parsing: unquoted `url(a/b.png)` and `url(data:...)` parse correctly; string escapes
+  (`"\f101"` icon fonts) and escaped / non-ASCII idents (`.md\:flex`) work; nested rules
+  using `:not()` etc. and declarations inside nested `@media` apply; at-rules nest inside
+  `@media` / `@supports`; `em` media-query breakpoints work.
+- Invalid values are dropped: four-side shorthands (`margin`, `padding`, `border-width` /
+  `-style` / `-color`) with more than four values, a negative `font-size` (`-1`, `-5px`) or an
+  overflowing one (`1e400px`).
+- Deep nesting, `calc()` / `not` chains, nesting selector explosion, `var()` expansion,
+  `:has()` with structural pseudo-classes, and `:nth-child(2n-2147483648)` no longer crash or
+  hang.
+- `oasis_css::selectors` and `cascade::build_global_layer_map` are crate-private
+  **(breaking)**.
+
+### Browser: loader (oasis-http)
+
+- HTTP/1.1: `304` / `204` / `1xx` responses and `HEAD` answers no longer wait 15 s for a body
+  their `Content-Length` promises; `103 Early Hints` heads are skipped instead of becoming
+  the response; a response slower than 16 KiB/s is cut off after about 60 s; every resolved
+  address is tried. A guarded (`fetch()`) request refuses to connect if *any* resolved
+  address is disallowed.
+- HTTP/2: POST bodies over 16 KiB are split into frames (they failed on servers with default
+  settings); padded DATA no longer drains the flow-control window; control-frame floods end
+  the connection; faster HPACK Huffman decoding; non-UTF-8 header values decode lossily.
+- `data:` URLs percent-decode to bytes (`%C3%A9` is `é`, `+` stays `+`). Gemini status lines
+  with non-ASCII bytes no longer panic.
+- `oasis_http::http::response_find_header` and `http_psp::response_find_header` removed (use
+  `http1::find_header`) **(breaking)**.
+
+### Browser engine (oasis-browser)
+
+- Flex layout is linear in nesting depth: content-sized items take their max-content width
+  from the box tree (cached per layout pass) instead of a measuring layout, and each row item
+  is laid out once (nested flex containers used to cost 2^depth layouts; sixteen nested
+  `flex-grow` rows went from 3.2 ms to 0.13 ms).
+- Flex sizing: container padding is no longer counted twice; `width: auto` row items and
+  items with block children size to their content (they measured as 0 px or the full
+  container width, so `justify-content` and siblings had no room); a definite `flex-basis`
+  is the item's size, not its containing width (a 40 px avatar with a 12 px margin drew
+  37 px wide with no margin); column containers are as tall as their items, explicit
+  flex-container heights apply (they were 0 px), `align-items` centres against them, and
+  column containers with a definite height honour `flex-basis`. Flex and grid no longer
+  rewrite the item's `width` / `height` style.
+- Inline children (a nav bar of links, bare text) become flex / grid items instead of
+  rendering at 0 x 0; their anonymous items no longer copy the container's `position`,
+  `opacity`, `transform`, background image, ..., and an inline child is blockified, so its
+  own `margin-left: auto`, padding and width apply to its item.
+- Relaying a page out (after images decode) gives exactly the layout of a fresh load, checked
+  over the whole corpus: inline layout keeps its source content, so words of a wrapped line
+  no longer glue together and `<pre>` lines no longer merge on a second layout. The partial
+  dirty-subtree relayout, which skipped floats and left clean subtrees in place, is gone:
+  `layout_block_incremental` and `StyleCache` are replaced by `relayout_tree` **(breaking)**.
+- Table cells lay their content out as a block flow (multiple block children stacked on top
+  of each other, and the cell padding was counted twice); whitespace between table tags no
+  longer draws as spaces when a table sits in inline content.
+- Painting: content scrolled into a nested `overflow: auto` box is painted (it was culled
+  against the unscrolled clip), `overflow: hidden` children of translucent / filtered boxes
+  are clipped in the right place, and the display-list optimizer no longer deletes a rect
+  because an opaque rect in a *sibling* clip box covers its coordinates.
+- SVG: `transform` (on `<g>` or a shape) scales sizes, not just positions (under
+  `scale(0.5)` circles, rects, stroke widths and text drew at full size); a non-uniform scale
+  makes a circle an ellipse, and a rotated / skewed rect becomes a polygon.
+- Fonts: web-font glyphs no longer carry over to the next page (font ids are reused per
+  page), text in an `@font-face` font is laid out with that font's widths, and the glyph
+  texture cache evicts least recently used instead of all at once.
+  `FontAwareTextMeasurer::set_font_id` is removed (layout passes the run's font)
+  **(breaking)**.
+- Canvas: past the command cap new commands are dropped (`CanvasState::overflowed`), instead
+  of the oldest half of the drawing.
+- Security: Gemini page titles and directly-opened stylesheets are escaped (both could
+  inject live script); `fetch()` judges the page's own network class by its least private
+  address, so a page whose name also resolves to a LAN / loopback address cannot reach
+  those; on PSP `fetch()` resolves DNS names for the private-network check and checks the
+  address it dials (`TlsProvider::resolve_host` / `connect_tcp_checked`). A wrapper a script
+  holds for a freed node can no longer reach the node that reuses its slot, and
+  script-written DOM text / attributes are capped (64 MiB, 4 MiB on PSP). Reader mode keeps
+  its stylesheet on pages with a `style-src` CSP.
+- Hostile-page bounds: BMP / GIF / WebP decodes check sizes before allocating;
+  self-referencing SVG `<pattern>`s, huge path coordinates and far off-screen strokes,
+  `blur()` radii, sub-pixel repeating gradients, tiny `background-size` tiles,
+  million-column tables, dense grid auto-placement, thousands of floats and long
+  unbreakable words are bounded, as are the image atlas (smaller pages on PSP) and back
+  history (100 entries).
+- `:hover` / `:focus` restyle descendants and cascade parents first.
+- Forms: Enter submits only after validation (as a click does), Enter in a `<textarea>`
+  inserts a newline, and GET submission replaces the action URL's query instead of
+  appending to it.
+- Reader mode rebuilds the page through the normal pipeline (toggling it could panic on the
+  next hover) and keeps no extra history entry; single-column multicol boxes render;
+  `hue-rotate()` on filtered layers uses degrees; 16-bit PNGs decode correctly; `innerHTML`
+  keeps `<style>` / `<script>` text verbatim.
+- Removed the unused `gemini::renderer` module (`render_gemini`, `GeminiTheme`),
+  `reader::reader_stylesheet` (now internal), `scroll::SCROLL_ACCELERATION` and
+  `SvgPaint::PatternRef` (pattern fills are `GradientRef`s that resolve to a `<pattern>`)
+  **(breaking)**.
+
+### Desktop shell, chrome and oasis-core
 
 - Skins with `dashboard = false` (`desktop`, `corrupted`) no longer draw the dashboard icon
   grid (it showed in Dashboard mode and behind windows), and its hidden icons no longer
@@ -33,231 +214,198 @@ larger changes by area. Breaking API changes are marked **(breaking)**.
   bottom bar heights (`oasis_core::apps::chrome_insets`) to the new
   `WindowManager::set_placement_insets`, so psix-hifi's windows no longer cover its top tab
   row. A cascaded window taller than the screen below the top chrome is shortened to fit.
+- Taskbar buttons no longer cover the bottom bar's URL plate / USB label or the media dock's
+  transport pills, on the desktop shell, the PSP EBOOT and WASM alike: the bar reports the
+  span it leaves free (`BottomBar::taskbar_span`, `reserve_taskbar`) and
+  `Taskbar::update_sdi_in` lays the buttons out in it. The `USB` label keeps a gap from the
+  URL plate's bezel.
 - The start button is centred vertically in the bottom bar (it was pinned 3 px below the
-  bar's top: macOS's 52 px dock showed it at the top, and on retro-cga / paper it hung
-  past the bar's bottom edge).
-- `[icon_overrides] label_shadow_color` sets the icon-label drop shadow; retro-cga,
-  balatro and solarized use it so labels read on their bright wallpapers / shader.
-- Screenshots: the `desktop` skin's Terminal window shows its text (a later window's
-  focus buried it under the content background) and the media-tab captures keep the start
-  button, as the shell does.
-
-### Performance
-
-- Software rendering (the UE5 framebuffer, the headless harness and every
-  `SoftwareBuffer` user) draws a full shell frame 2.6-3.1x faster (480x272 dashboard
-  149 -> 57 us, XP 1024x768 with two windows 1.8 -> 0.59 ms): opaque spans fill as one
-  vectorized store, translucent spans over the opaque framebuffer blend branch-free,
-  bitmap glyph ink runs are cached per text style, text lines outside the clip are
-  skipped, and horizontal rounded-rect gradients interpolate once per column. Output is
-  pixel-identical (rasterizer goldens, backend parity, and frame hashes of every skin).
-- Idle (elided) shell frames cost 20-45% less: the ~15 IPC request files polled every frame are
-  settled with an existence / size check instead of a permission-checked read whose
-  missing-file error formatted a message.
-- CSS cascade: an ancestor Bloom filter rejects descendant / child selectors whose
-  ancestor ids, classes or tags are absent without walking the ancestor chain, rules are
-  indexed under one subject key (id > class > tag) instead of all of them, and matched
-  declarations borrow from the stylesheet instead of cloning: a 1,210-rule page styles
-  3.2x faster (15.8 -> 4.9 ms).
-- New criterion benches: `oasis-app` `shell_frame` (whole-shell render / idle step at
-  480x272 and 1024x768), more rasterizer shapes, and a large-page cascade.
-
-### Browser (CSS)
-
-- The user-agent sheet is its own cascade origin: author rules in any `@layer` now beat it
-  (layered pages such as Tailwind v4 lost to UA `margin` / `font-size` / `display`
-  defaults), presentational hints beat it (`cellpadding="0"` now removes the UA cell
-  padding), and important UA declarations beat important author ones.
-- `revert-layer` rolls back to the previous cascade layer (it was ignored), or acts as
-  `unset` when there is none.
-- Custom properties honour CSS-wide keywords: `--x: initial` is the guaranteed-invalid
-  value (the "space toggle": `var(--x, fallback)` uses the fallback), `inherit` / `unset`
-  take the parent's value (they used to be stored as the literal text).
-- `:is()` / `:where()` / `:not()` accept complex selectors (`:where(.prose > p)`,
-  `:not(.a .b)`, Tailwind Typography's `:not(:where([class~=not-prose] *))`); they took only
-  compound selectors and misparsed the rest of the selector. `:is()` / `:where()` drop
-  invalid entries, an invalid `:not()` entry matches nothing, and `&` inside them works in
-  nested rules. `SimpleSelector::{Is, Where, Not}` now hold `Vec<Selector>` **(breaking)**.
-- Four-side shorthands (`margin`, `padding`, `border-width` / `-style` / `-color`) with
-  more than four values are dropped as invalid instead of using the first four.
-
-### Browser (layout)
-
-- Flex layout is linear in nesting depth: content-sized items take their max-content width
-  from the box tree (cached per layout pass) instead of a measuring layout, and each row item
-  is laid out once. Sixteen nested `flex-grow` rows went from 3.2 ms to 0.13 ms.
-- Flex sizing fixes: an item with block children sizes to its content (it measured as the
-  full container width, so `justify-content` and siblings had no room); a definite
-  `flex-basis` is the item's size, not its containing width (margins and padding were taken
-  out of it, a 40 px avatar with a 12 px margin drew 37 px wide with no margin); column
-  containers with a definite height honour `flex-basis`. Flex and grid no longer rewrite the
-  item's `width` / `height` style.
-- Relaying a page out (after images decode) gives exactly the layout of a fresh load, checked
-  over the whole corpus: inline layout keeps its source content, so words of a wrapped line
-  no longer glue together and `<pre>` lines no longer merge on a second layout. The partial
-  dirty-subtree relayout, which skipped floats and left clean subtrees in place, is gone:
-  `layout_block_incremental` and `StyleCache` are replaced by `relayout_tree` **(breaking)**.
-- Table cells lay their content out as a block flow (multiple block children stacked on top
-  of each other, and the cell padding was counted twice); whitespace between table tags no
-  longer draws as spaces when a table sits in inline content.
-- Canvas: past the command cap new commands are dropped (`CanvasState::overflowed`), instead
-  of the oldest half of the drawing. Web-font glyph textures are evicted least recently used
-  instead of all at once when the cache fills. `FontAwareTextMeasurer::set_font_id` is
-  removed (layout passes the run's font) **(breaking)**.
-
-### Apps
-
-- Text Editor: undoing (or redoing) back to the text as last opened or saved clears the
-  `[Modified]` marker, so closing no longer asks to save an unchanged file. Reopening Find /
-  Replace shows the previous query selected (`Find: [query]`): typing replaces it and
-  Backspace clears it, instead of appending to the old search.
-- `tv tune <ch>` reports "the TV Guide is not open" instead of "Tuning to ..." when no guide
-  can act on it: the shell publishes the guide's state to `/var/tv/status`
-  (`oasis_types::ipc::TvStatus`).
-- System Monitor says "Stale - the host stopped updating" once the host's snapshot stops
-  advancing for 5 s, instead of "Live" over frozen values (`SystemMonitorApp::is_stale`).
-- Settings shows the shell-published volume / font scale / reduced motion once its request
-  was consumed, so a change the shell rejected or clamped no longer stays on screen.
-- Labels fit what the font draws at small window sizes and large-font skins: File Manager
-  tile names (shrunk to 8 px, then ellipsized) and its address bar (keeps the path's tail),
-  System Monitor's info column, Internet Radio's favourite mark, Video Embed result cells.
-  `oasis-apps/tests/text_fits_window.rs` now also fails on overlapping text runs.
-
-### Crate APIs (oasis-audio, oasis-video, oasis-net, oasis-mcp)
-
-- Remote terminal client: `RemoteClient` answers exactly one `AUTH_REQUIRED` challenge per
-  connection, and only a nonce of the documented form (32 lowercase hex digits; new
-  `oasis_net::is_valid_nonce` / `NONCE_HEX_LEN`), so a hostile server can no longer use it
-  as an HMAC oracle over chosen text. The nonce is not bound to the server's identity; that
-  relay limitation is now documented in `docs/networking.md` and `docs/security.md`.
-- `oasis-audio`: only the crate-root re-exports are public. `oasis_audio::{sfx, wav, ogg}::X`
-  is `oasis_audio::X` (`SfxPlayer`, `decode_wav`, `WavData`, `decode_ogg`, `OggData`, ...),
-  `oasis_audio::radio::{archive, source, station, icy, threaded, connect, buffer}::X` is
-  `oasis_audio::radio::X`, and `mixer` / `playlist` / `manager` / `controller` / `types` /
-  `null_backend` are no longer public modules **(breaking)**.
-- `oasis-video`: `SoftwareVideoDecoder` forwards to a crate-private `DecoderBackend` trait
-  that both backends implement. The `aac`, `demux`, `h264` and `ffmpeg_decoder` modules and
-  `demux_lite::avcc` are private; removed the `AvccConfig` / `find_avcc_in_mp4` re-export
-  (symphonia's, distinct from `demux_lite::AvccConfig`),
-  `SoftwareVideoDecoder::open_stream_with_avcc` and `demux_lite::seek_byte_from_moov`
-  (use `seek_point_from_moov(..).map(|p| p.min_byte)`) **(breaking)**.
-- `oasis-net`: `ftp::process_ftp_request` is crate-private **(breaking)**.
-- `oasis-audio`, `oasis-video`, `oasis-net` and `oasis-mcp` warn on undocumented public items.
-
-### UI
-
-- `MenuBar` lays labels and drop-downs out with the backend's `measure_text` (recorded at
-  draw) instead of 7 px per character, and fits narrow bars: label padding shrinks, then
-  trailing menus fold into a `»` overflow menu (`MenuHit::Label(menus.len())`); drop-downs
-  stay inside the bar, dropping shortcut hints and ellipsizing labels.
-  `draw_dropdown` and `pointer_move` take the bar rect `(x, y, w, h)` **(breaking)**.
-- `TreeView` connector lines run through the rows of a node's children when the node has a
-  later sibling (the guide used to break across the subtree).
-
-### Terminal / shell
-
-- Background jobs (`cmd &`) and cron jobs run detached from the session, like a POSIX
-  subshell: their exit status and `cd`s no longer overwrite the interactive `$?`, working
-  directory, `$OLDPWD` or `$CWD` (`CommandRegistry::run_detached`).
-- `cron` keeps each job on its first schedule however coarsely the host ticks (an FFI host
-  ticking with > 1 s deltas ran jobs slowly, rescheduling from each tick); after a long
-  sleep an overdue job still runs once and resumes at its next slot, with no burst.
-- `${...}` finds its closing `}` past quoted or escaped braces (`${X:-"}"}`), and inside
-  double quotes the word is double-quoted text (`"${X:-it's}"` used to be a literal `$`).
-- `NAME=value` assigns a shell variable (no field splitting: `C=$B` keeps the spaces), and
-  before a command (`P=temp myfunc`) holds only while it runs; it used to be "unknown
-  command".
-- A failing pipeline stage before the last no longer aborts the pipeline: its error is
-  shown and the next stage reads empty input (`cat missing | wc -l` prints `0` and
-  succeeds), as in a POSIX shell.
-
-### Input & widgets
-
-- App menu bars open from the keyboard: F10 opens the first menu, Left / Right switch
-  menus (the `»` overflow included), Up / Down / Home / End pick an item, Enter / Space run
-  it, Esc / F10 close (`MenuBar::handle_key` -> `MenuKey`). Text Editor, Paint and File
-  Manager route keys through it (Alt belongs to the window manager); WASM keeps the
-  browser from taking F10.
-- The SDL backend honours the OS "natural scrolling" setting: SDL3 already reports wheel
-  motion in the user's direction, and negating `Flipped` events undid it.
-- Text Editor clicks land on the glyph drawn under the pointer under a TTF skin: hit-testing
-  uses the advances the backend measured while drawing instead of the bitmap font's.
-- `RichText` aligns mixed-size spans on a common baseline (they were top-aligned).
-
-### Build, features & dependencies
-
-- Feature cleanup: `oasis-js` drops `rquickjs-engine` (rquickjs is always linked; the
-  feature could not be turned off), `oasis-core` drops the unused `test-data`, and
-  `oasis-app-tv-guide` drops `test-data` (its fixtures are now test-only) **(breaking)**.
-  `oasis-shader/gl-native` no longer also exposes an implicit `glow` feature.
-- `oasis-app` now enables `oasis-core/skin-ttf`, so `skin lint` in the desktop shell parses
-  skin fonts as documented (the workspace dependency entry had turned it off).
-- Every crate with features documents them under `# Feature flags` in its crate docs.
-- Releases: a `v*` tag whose version differs from the Cargo workspace version (or the shipped
-  PSP crates') now fails `create-release` (`scripts/check-release-version.py`).
-
-### Shell chrome polish
-
+  bar's top: macOS's 52 px dock showed it at the top, and on retro-cga / paper it hung past
+  the bar's bottom edge), and its label is centred by its real (proportional) width. New
+  `button_shape = "bevel"` (Win9x raised 3D edges, sunken while open), used by `win95`.
 - Chip-style dashboard icons (`icon_container = "chip"`: macOS, GNOME, Modern, Paper,
   Solarized, Vaporwave, Retro CGA, Balatro) fit the glyph inside the chip body below the
-  accent band; tall glyphs (Radio's and TV Guide's antennas) used to cover the band and
-  poke out of the chip, and labels now start below the chip instead of on its edge.
-- The bottom bar's `USB` label keeps a gap from the URL plate's bezel instead of touching it.
-- Desktop-mode taskbar buttons no longer cover the bottom bar's URL plate / USB label or the
-  media dock's transport pills: the bar reports the span it leaves free
-  (`BottomBar::taskbar_span`, `reserve_taskbar`) and `Taskbar::update_sdi_in` lays the
-  buttons out in it (`update_sdi` keeps the old placement for the PSP / WASM hosts).
-- Start-button labels are centred by their real (proportional) width; new
-  `button_shape = "bevel"` (Win9x raised 3D edges, sunken while open), used by `win95`.
+  accent band; tall glyphs (Radio's and TV Guide's antennas) used to cover the band and poke
+  out of the chip, and labels now start below the chip instead of on its edge.
+- `[icon_overrides] label_shadow_color` sets the icon-label drop shadow; retro-cga, balatro
+  and solarized use it so labels read on their bright wallpapers / shader.
+- Start menu: "Games" opens Games (it opened the File Manager) and "Video" opens the TV Guide
+  (it opened the Photo Viewer); items launch any registered app, with or without a dashboard
+  tile.
+- `skin xp; skin @variant:dark` in the terminal derives the dark variant of xp, not of the
+  skin active before the line ran.
+- The Internet Radio app's Stop closes the stream connection (the shell kept it open and
+  redrew every frame until the station changed).
+- A plugin whose `init` fails no longer leaves the commands it registered in the shell's
+  command registry.
 - `oasis-screenshot`: window-manager-only skins (`desktop`) show the bottom bar, start
-  button, clock and taskbar window buttons like the shell does; the windowed terminal shot
-  of desktop skins keeps the bars up and fits the window between them.
+  button, clock and taskbar window buttons like the shell does; the windowed terminal shot of
+  desktop skins keeps the bars up and fits the window between them, and its Terminal window
+  shows its text (a later window's focus buried it under the content background); the
+  media-tab captures keep the start button.
 - SDL shader wallpaper: `SdlShaderBridge::render_and_blit` / `would_shade` take the clock
   time as unwrapped `f64` seconds and wrap it in `f64` before the shader sees it
   (`shader_bridge::shader_time`), so the 30 Hz throttle and the animation stay smooth after
   days of uptime **(breaking)**.
-- Site: the demo page's top bar no longer overflows at tablet widths, and the 404 page has
-  a meta description and social card. Regenerated skin screenshots.
+- **(breaking)** `oasis_core::settings` (`SettingsStore`, `UserPrefs`, `pref_keys`) and
+  `oasis_core::ui_sound` moved into the desktop shell (`oasis_app::settings`); no other host
+  used them.
 
-### Cross-lane review fixes
+### Apps
 
-- `rm -r` (and the File Manager's delete) removes a symlink to a directory as a link; it
-  used to empty the link's target on `RealVfs`. New provided `Vfs::is_symlink`.
-- Browser: the anonymous flex / grid items around inline children no longer copy the
-  container's `position`, `opacity`, `transform`, background image, ...; an inline child
-  is blockified, so its own `margin-left: auto`, padding and width apply to its item.
-  Reader mode keeps its stylesheet on pages with a `style-src` CSP.
-- `<title>` / `<textarea>` map `&#150;`-style references through Windows-1252 too; merged
-  late `<body>` / `<html>` attributes are capped like a tag's.
-- TLS `close` drains ciphertext a full socket held back (a write right before close could
-  lose its tail).
-- Paint: a canvas wider than the window starts at the view's edge (its first columns were
-  unreachable). `set X = 5` works again; `tail -n +N` is an error instead of "last N";
-  `head -- -5` reads the file `-5`.
-- PSP: clip rects are clamped to the screen before `sceGuScissor` (an empty clip drew
-  everywhere, a clip left of / above the screen hid everything); the WiFi dialog's
-  success path re-opens the GU frame.
-
-### Test coverage (bugs the new tests found)
-
-- Text Editor: opening a stylesheet with a `/` outside a comment (`font: 12px/1.5`,
-  `grid-area: 1 / 2`) froze the editor (the CSS highlighter stopped advancing); the HTML
-  highlighter panicked on non-ASCII text near a `<!--` check and split characters inside tags.
-- Browser SVG: `transform` (on `<g>` or a shape) now scales sizes, not just positions:
-  under `scale(0.5)` circles, rects, stroke widths and text drew at full size. A non-uniform
-  scale makes a circle an ellipse; a rotated / skewed rect becomes a polygon.
-- CSS: a negative `font-size` (`-1`, `-5px`) or an overflowing one (`1e400px`) is dropped
-  as invalid instead of computing a negative / infinite size.
-- Video Embed (WASM YouTube app): its search hints and footer are ellipsized to the window
-  (they ran past a 320 px window, failing `cargo test --workspace`).
+- Text Editor: long lines scroll horizontally to keep the caret visible; clicks place the
+  caret on the glyph drawn under the pointer (proportional font, and under a TTF skin the
+  advances the backend measured while drawing); Up / Down keep a character goal column
+  across short lines and multi-byte text; PageDown stops at the last full page. Undoing (or
+  redoing) back to the text as last opened or saved clears the `[Modified]` marker, so
+  closing no longer asks to save an unchanged file. Reopening Find / Replace shows the
+  previous query selected (`Find: [query]`): typing replaces it and Backspace clears it,
+  instead of appending to the old search. Opening a stylesheet with a `/` outside a comment
+  (`font: 12px/1.5`, `grid-area: 1 / 2`) froze the editor (the CSS highlighter stopped
+  advancing); the HTML highlighter panicked on non-ASCII text near a `<!--` check and split
+  characters inside tags.
+- App menu bars open from the keyboard: F10 opens the first menu, Left / Right switch menus
+  (the `»` overflow included), Up / Down / Home / End pick an item, Enter / Space run it,
+  Esc / F10 close (`MenuBar::handle_key` -> `MenuKey`). Text Editor, Paint and File Manager
+  route keys through it (Alt belongs to the window manager); WASM keeps the browser from
+  taking F10.
+- Calculator: tiny and huge results show in scientific notation (`0-0.00000000004` read
+  `-0`), which the evaluator now accepts; a new operator replaces the whole trailing
+  operator run (`5*-` then `+` is `5+`); Ans / MR replace the number being typed (`2` then
+  Ans gave `24`); history entries the evaluator rejects are skipped on load.
+- File Manager: switching Dual -> Explorer after scrolling no longer underflows the cursor;
+  Dual-view Down keeps the selection on a drawn row; an empty folder says `0 object(s)`.
+- Music Player / Photo Viewer: files whose names contain `  (` open (the name was parsed back
+  out of the row text); a track opened by hand sets the playlist position; leaving the viewer
+  re-selects the file instead of jumping to the top.
+- Paint: Confirm lifts the Pencil / Eraser again (a gamepad could not stop painting);
+  canvases bigger than the window are clipped and pan with the cursor instead of running
+  under the palette, and one wider than the window starts at the view's edge (its first
+  columns were unreachable); a fill with the colour already there is not an undo step.
+- Snake: two turns within one move no longer reverse the snake into itself; restarting
+  mid-game keeps a new high score.
+- TV Guide: the open guide follows the wall clock. `tv tune <ch>` reports "the TV Guide is
+  not open" instead of "Tuning to ..." when no guide can act on it: the shell publishes the
+  guide's state to `/var/tv/status` (`oasis_types::ipc::TvStatus`).
+- System Monitor says "Stale - the host stopped updating" once the host's snapshot stops
+  advancing for 5 s, instead of "Live" over frozen values (`SystemMonitorApp::is_stale`).
+- Settings shows the shell-published volume / font scale / reduced motion once its request
+  was consumed, so a change the shell rejected or clamped no longer stays on screen. A
+  rejected resolution no longer pins the current one for later skins, and high-contrast
+  "off" on a non-high-contrast skin is a no-op.
+- Every app's text stays inside its window from 320x200 to 1024x768 under large-font skins:
+  footers, status strips, list rows and headers are ellipsized by pixel width, File Manager
+  tile names shrink to 8 px and then ellipsize, its address bar keeps the path's tail, and
+  System Monitor's info column, Internet Radio's favourite mark and the Video Embed (WASM
+  YouTube) search hints, footer and result cells fit. `oasis-apps/tests/text_fits_window.rs`
+  also fails on overlapping text runs.
 - ID3 titles / artists made only of NULs and spaces read as no title (were a NUL).
-- New tests: CSS keyword tables through the real parser, SVG from real markup (groups,
-  `<defs>` gradients, `url(#id)` paint, polygons, `<tspan>`), TV Guide catalog fetch
-  outcomes (error, empty, dead thread, timeout, success) and a rejected-resolution and a
-  chained `skin xp; skin @variant:dark` e2e flow; `docs/testing.md` gains coverage, hang-guard
-  and sweep guidance.
+- `oasis-app-core`: `file_viewer::list_directory_entries` (rows plus the entry behind each),
+  `ContentState::select` / `selected`, `render::ellipsize`, `render::draw_status_strip`.
+  **(breaking)** `AppAction::SwitchToTerminal` is removed (no app returned it).
 
-### Skins, vector graphics & shaders
+### Terminal and scripting (oasis-terminal, cron)
+
+- One option parser (`oasis_terminal::parse_flags` / `FlagSpec`) for `ls`, `rm`, `mkdir`,
+  `grep`, `sort`, `uniq`, `wc`, `head`, `tail`, `tee`, `tr`, `cut`, `base64` and `xxd`:
+  combined short options (`-la`, `grep -in`), `-n5` / `-n 5`, `--`, options after operands,
+  and an error with the usage line for an unknown option **(breaking: `-x` used to be taken
+  as a file name or pattern; use `--` for operands that start with `-`)**. New options:
+  `ls -a` / `-l` (plain `ls` now hides dotfiles), `rm -r` / `-f`, `mkdir -p`, `grep -q`,
+  `sort -u`, `head -N` / `tail -N`. `tail -n +N` is an error instead of "last N";
+  `head -- -5` reads the file `-5`.
+- `rm -r` (and the File Manager's delete) removes a symlink to a directory as a link; it
+  used to empty the link's target on `RealVfs` (new provided `Vfs::is_symlink`).
+- `grep` with no match, `ls` of an empty directory and `find` with no hit print nothing
+  (they printed `(no matches)` / `(empty)`, which pipes and `$(...)` then saw). The shell's own
+  colour codes (`ls` / `tree` directories) are stripped from text reaching a pipe, redirect
+  or `$(...)`; other escape sequences pass through (`cat a.ans > b.ans` copies the bytes).
+- Pipelines: a failing stage before the last no longer aborts the pipeline: its error is
+  shown and the next stage reads empty input (`cat missing | wc -l` prints `0` and
+  succeeds), as in a POSIX shell. Compound commands take a trailing pipe, redirect or
+  `&&` / `||` list (`for ...; done | sort > out`, `fi >> log`; the output used to escape to the
+  terminal and `> out` created an empty file).
+- Redirection: `>/dev/null` and `2>/dev/null` discard (they failed the command), `>&2`,
+  `&>` / `&>>` and `1>` are understood, and a target is one word (`echo a > f b` writes
+  `a b`).
+- Expansion: `$@` / `$*` and `"$@"` (one word per argument), `for VAR; do` over the
+  arguments, single-digit positionals (`$1x` is `${1}x`), `${V:-def}`, `${V-def}`,
+  `${V:=def}`, `${#V}`, `bad substitution` for other `${...}` forms, and `~` / `~/path`
+  tilde expansion. `${...}` finds its closing `}` past quoted or escaped braces
+  (`${X:-"}"}`), and inside double quotes the word is double-quoted text (`"${X:-it's}"`
+  used to be a literal `$`). Globs no longer match dotfiles unless the pattern starts with `.`.
+- Variables: `NAME=value` assigns a shell variable (no field splitting: `C=$B` keeps the
+  spaces), and before a command (`P=temp myfunc`) holds only while it runs; it used to be
+  "unknown command". `set A=1 B=2` sets both and keeps a quoted value's spaces, and
+  `set X = 5` works; variable names are validated (`set 1=x` is an error); `local X` without
+  a value shadows the caller's `X`.
+- `case`: quoted patterns, `$VAR` patterns and quoted `|` work (`case "$X" in "hello")`
+  never matched); the case word is not split or globbed; `case foo.in in` finds the right
+  `in`. A `case` with no matching arm and a `for` over nothing exit 0.
+- `cd` with no argument goes to `$HOME` (was `/`), `cd -` to `$OLDPWD`; extra arguments are an
+  error. Aliases whose text has `|`, `;`, `&`, `<` or `>` work (`alias ll='ls | sort'`).
+- `tr` sets take ranges (`tr a-z A-Z`); `find` patterns are globs (`find / '*.txt'`; a
+  pattern without glob characters still matches as a substring).
+- Tab completion no longer panics on non-ASCII names, escapes spaces / metacharacters in
+  completed paths, and completes inside quotes (`cat "my f<Tab>`); an operator inside quotes
+  no longer starts a new command.
+- Multi-line history entries survive a save / reload (`\` and newlines are escaped in
+  `.oasis_history`; an old file's literal `\n` now reads as a newline).
+- `cron` jobs actually run (they used to be stored "scheduled scripts" that nothing ran):
+  `cron add <name> <interval> <script>` (`30s`, `5m`, `2h`, `1d`, bare number = seconds; 1 s
+  to 30 d; a relative script path is resolved against the current directory), and
+  `cron list` shows each job's interval. The old two-argument `cron add <name> <script>` is
+  rejected, and existing interval-less entries are listed as invalid until re-added
+  **(breaking)**.
+- `oasis_core::script::CronScheduler` (moved to `oasis_core::script::cron`) runs due jobs
+  when a host calls `tick(now, ...)`: the desktop shell does about once a second (output in
+  the terminal, prefixed `[cron <name>]`), `oasis-ffi` on every `oasis_tick`. A job starts
+  in `/`, first runs one interval after the host first sees it and keeps that schedule
+  however coarsely the host ticks (an FFI host ticking with > 1 s deltas ran jobs slowly);
+  after a long sleep an overdue job runs once and resumes at its next slot, with no burst.
+- Background jobs (`cmd &`) and cron jobs run detached from the session, like a POSIX
+  subshell: their exit status and `cd`s no longer overwrite the interactive `$?`, working
+  directory, `$OLDPWD` or `$CWD` (`CommandRegistry::run_detached`).
+- **(breaking)** `Completer` is stateless: the unused cycling API (`cycle_next`, `reset`,
+  `is_cycling`), the always-empty `aliases` / `functions` parameters of `complete` and
+  `CompletionContext::Subcommand` are gone. The test-only `control_flow` module and
+  `CommandRegistry::completions` are no longer public.
+
+### UI toolkit and window manager (oasis-ui, oasis-wm)
+
+- `MenuBar` lays labels and drop-downs out with the backend's `measure_text` (recorded at
+  draw) instead of 7 px per character, and fits narrow bars: label padding shrinks, then
+  trailing menus fold into a `»` overflow menu (`MenuHit::Label(menus.len())`); drop-downs
+  stay inside the bar, dropping shortcut hints and ellipsizing labels. Keyboard driving is
+  `MenuBar::handle_key` (see Apps). `draw_dropdown` and `pointer_move` take the bar rect
+  `(x, y, w, h)` **(breaking)**.
+- Window manager: dragging a window that was snapped and then maximized now un-maximizes it
+  (it slid around still marked maximized); titlebar buttons under a modal no longer show
+  hover feedback; geometry, drag, resize, snapping and animation maths no longer overflow
+  (debug panic) or lose precision for windows and pointers far out in the `i32` range;
+  tiling survives huge gaps and margins. Placement insets: see the desktop shell section.
+- Widgets tolerate stale state in their pub fields: Accordion, ContextMenu, Modal,
+  RadioGroup and Dropdown share one wrapping navigation rule (`focus::step_wrapping`),
+  fixing an out-of-bounds panic and an infinite loop in Accordion and a highlighted
+  unselectable ContextMenu item; TreeView focus no longer gets stuck on a collapsed-away
+  node; ListView / Table clamp stale scroll and selection; DatePicker, Slider, SpinBox and
+  SplitPane no longer panic on out-of-range months or swapped / NaN ranges; TabBar Filled /
+  Pill no longer underflow on short rects.
+- Drawing and layout: `FlexLayout` cross-axis alignment works (children get an optional
+  `FlexChild::cross_size`; it was dead code); `MeasureCache` evicts entries unused for a
+  generation; `Slider::measure` stays within the available width and `Spinner::measure`
+  matches what it draws; `TextBlock` draws with its `max_lines` and `align`; `Modal` fits
+  its wrapped body; `ContextMenu` draws and hit-tests the open submenu; `RichText` lines grow
+  with their largest span and mixed-size spans share a baseline (they were top-aligned);
+  TreeView connector lines run through the rows of a node's children when the node has a
+  later sibling; focused empty `InputField`s show a caret.
+- `ListView::index_at` takes the viewport height; removed the uncalled `DrawContext` helpers
+  (`panel`, `heading`, `label_styled`, `divider_h` / `divider_v`, `button_bg`,
+  `accent_button_bg`, `blit`, `measure_text`, `measure_text_sized`, `padded_rect`),
+  `layout::center_text_y`, `InputField::selection` and `MenuBar::dropdown_dimensions`
+  **(breaking)**.
+
+### Skins, vector graphics and shaders
 
 - Skin inheritance (`inherits = "<parent>"`) now fills *every* field the child omits: the nine
   base colors, `text_scale` and each `strings.toml` entry came from the built-in defaults
@@ -286,465 +434,115 @@ larger changes by area. Breaking API changes are marked **(breaking)**.
   whole rows. `SoftwareShaderRenderer::render_balatro` is no longer public; use
   `render_builtin(BuiltinShader::Balatro, ..)` **(breaking)**.
 
-### Built-in apps
+### Backend traits and backends (oasis-types, SDL, UE5, WASM)
 
-- Text Editor: long lines scroll horizontally to keep the caret visible; clicks place the
-  caret at the nearest character (proportional font); Up / Down keep a character goal
-  column across short lines and multi-byte text; PageDown stops at the last full page.
-- Calculator: tiny and huge results show in scientific notation (`0-0.00000000004` read
-  `-0`), which the evaluator now accepts; a new operator replaces the whole trailing
-  operator run (`5*-` then `+` is `5+`); Ans / MR replace the number being typed (`2` then
-  Ans gave `24`); history entries the evaluator rejects are skipped on load.
-- File Manager: switching Dual -> Explorer after scrolling no longer underflows the cursor;
-  Dual-view Down keeps the selection on a drawn row; an empty folder says `0 object(s)`.
-- Music Player / Photo Viewer: files whose names contain `  (` open (the name was parsed
-  back out of the row text); a track opened by hand sets the playlist position; leaving
-  the viewer re-selects the file instead of jumping to the top.
-- Paint: Confirm lifts the Pencil / Eraser again (a gamepad could not stop painting);
-  canvases bigger than the window are clipped and pan with the cursor instead of running
-  under the palette; a fill with the colour already there is not an undo step.
-- Snake: two turns within one move no longer reverse the snake into itself; restarting
-  mid-game keeps a new high score. TV Guide: the open guide follows the wall clock.
-- Every app's text stays inside its window from 320x200 to 1024x768 under large-font skins
-  (footers, status strips, list rows and headers are ellipsized by pixel width).
-- `oasis-app-core`: `file_viewer::list_directory_entries` (rows plus the entry behind
-  each), `ContentState::select` / `selected`, `render::ellipsize`,
-  `render::draw_status_strip`. **(breaking)** `AppAction::SwitchToTerminal` is removed
-  (no app returned it).
-
-### Follow-up fixes (security, browser, media, UI)
-
-- **(breaking)** The PSP dev servers on TCP 9293 now require the remote terminal's PSK
-  HMAC challenge and are off unless a key is configured: the EBOOT command server needs
-  `ms0:/PSP/GAME/OASISOS/cmdserver.key` (8+ bytes; `scripts/psp_remote.py` answers from
-  `PSP_PSK`), the overlay PRX devloop needs `devloop_psk` next to `devloop = true` in
-  `oasis.ini`. See [networking.md § PSP dev servers](docs/networking.md#psp-dev-servers).
-  `oasis_net::verify_auth_line` is the shared check.
-- Browser: `fetch()` on PSP now resolves DNS names for the private-network check and
-  checks the address it dials (`TlsProvider::resolve_host` / `connect_tcp_checked`); a
-  wrapper a script holds for a freed node can no longer reach the node that reuses its
-  slot; script-written DOM text / attributes are capped (64 MiB, 4 MiB on PSP); text in
-  an `@font-face` font is laid out with that font's widths; `:hover` / `:focus` restyle
-  descendants and cascade parents first.
-- Media: `demux_lite` sample offsets no longer sum a whole chunk per lookup (hostile
-  files made playback quadratic); the oasis-video fuzz targets run nightly; SDL
-  `feed_pcm_f32` queues past the high-water mark instead of dropping whole chunks; the UE5
-  backend buffers streamed radio bytes for the host (`STREAM_*` audio events,
-  `Ue5AudioBackend::drain_stream`); the WASM YouTube grid no longer leaks a callback per
-  thumbnail and its glyph cache evicts in O(log n).
-- `oasis_types::ipc` gains typed `RadioRequest` / `TvRequest` (wire format unchanged).
-- UI / WM: tiling survives huge gaps and margins; `Modal` fits its wrapped body;
-  `ContextMenu` draws and hit-tests the open submenu; `RichText` lines grow with their
-  largest span; `Spinner::measure` matches what it draws. The overlay PRX keeps its menu
-  open when a status message arrives.
-
-### Crate map
-
-- New interactive site page, `site/crates.html`: all 51 crates in their layers; hover / focus
-  lights what a crate uses and what uses it, click pins a detail card (description, Rust lines,
-  dependencies by kind, reach, source link); filters for optional / dev edges, the PSP crates and
-  a search box; three guided walks (a frame, a web page, a video stream) that trace onto the map.
-  Linked from the nav, the homepage architecture section and the sitemap.
-- `scripts/gen-crate-map.py` writes its data, `site/data/crates.json`, from every
-  `crates/*/Cargo.toml` (the excluded and standalone PSP crates included). Its unit test
-  (`scripts/test_gen_crate_map.py`, run by CI's python step) fails when the JSON is stale:
-  after adding a crate or changing an internal dependency, run `python3 scripts/gen-crate-map.py`.
-
-### Website
-
-- Landing page polish (hero video kept): the contract section puts the three steps beside
-  the `SdiCore` code on wide screens; feature stats gain one-line notes; the features
-  section gets a lede; platform tabs fit one row on tablets; pillar / stat / trait grids
-  no longer leave orphan cells; journal feature cards align.
-- Landing page facts re-checked against the repo: 21 shell builtins (was 20); the
-  architecture diagram now accounts for all 51 crates (new Hosts row with `oasis-app`,
-  `oasis-ffi`, `oasis-usb-host`; `oasis-test-backend` under Foundation; the eight
-  undrawn standalone PSP tools named in the caption); code-comment color meets WCAG AA.
-
-### Browser parsers (oasis-html, oasis-css)
-
-- HTML tree construction follows WHATWG for tables and forms: new "in caption", "in column
-  group", "in select", "in select in table" and "in head noscript" modes (rows after a
-  `<caption>` or `<colgroup>` used to nest inside it), formatting-list markers so bold /
-  italic no longer leak into or out of table cells, spec foster parenting, and the full
-  in-body start / end tag tables (`<button>`, `<li>`, `<option>`, `<wbr>`, `<embed>`, leading
-  newline after `<pre>` / `<textarea>`, late `<body>` attributes merged, `<base>` and
-  post-`</head>` scripts stay in the head).
-- Inline SVG / MathML: `<foreignObject>`, `<desc>`, `<title>` and HTML `annotation-xml`
-  content stays inside the SVG / MathML instead of breaking out of it; CDATA sections work
-  in SVG. Script-data escape states keep `<!-- document.write("<script>…</script>") -->`
-  in one script.
-- `<noscript>` content renders as markup in builds without JavaScript (it was raw text).
-- Named character references cover all of HTML 4 plus common HTML5 names (`&check;`,
-  `&lang;`, `&lpar;`, ...); without a `;` only the legacy Latin-1 names match, as the longest
-  prefix (`&copy2024` is `©2024`; `&mdash` without `;` now stays literal, as in browsers).
-  An unknown name with a `;` stays literal (`&centerdot;` is not `¢erdot;`).
-- New `TreeBuilder::parse` / `parse_with` / `parse_reuse` and `ParseOptions { scripting }`:
-  the tree builder drives the tokenizer, as the spec does; `Tokenizer::with_scripting`,
-  `TreeBuilder::build_with` for the pre-tokenized path.
-- **(breaking)** `TagName::is_formatting` is the spec set (adds `code`, `big`, `font`,
-  `nobr`, `strike`, `tt`; drops `mark`, `sub`, `sup`, which no longer reopen in the next
-  paragraph); `is_void` / `is_special` cover the obsolete and unnamed void / special tags.
-- CSS cascade layers order as a tree (sublayers before their parent, late sublayers in their
-  parent's slot) **(breaking: `Stylesheet::layers` is now in cascade order)**; `inherit`
-  works for non-inherited properties and on shorthands; `all: unset` (the common button
-  reset) is supported, and `revert` rolls a property back to the user-agent value
-  (`* { all: unset; display: revert }` keeps blocks blocks); the `flex` shorthand handles every
-  form (`flex: auto`, `flex: 2 1 0`, `flex: 100px`); `::before` / `::after` see their own
-  custom properties.
-- Attribute selectors accept the `i` / `s` flags (the flag used to drop the rule) and match
-  HTML's enumerated attributes case-insensitively **(breaking: `SimpleSelector::Attribute`
-  gains `case_insensitive`)**; malformed attribute selectors match nothing.
-
-### CI and tooling
-
-- PR validation now runs the feature-set checks main runs (the `oasis-app`
-  feature combinations and clippy over the non-default feature sets of
-  `oasis-browser`, `oasis-core`, `oasis-video`, `oasis-app`, `oasis-ffi`),
-  from one shared `scripts/ci-feature-clippy.sh`, so a PR can no longer
-  pass and then break main. The script runs every line and reports all
-  failures at once; `--list` prints the commands.
-
-### Desktop shell and oasis-core
-
-- Start menu: "Games" opens Games (it opened the File Manager) and
-  "Video" opens the TV Guide (it opened the Photo Viewer); items launch
-  any registered app, with or without a dashboard tile.
-- `skin xp; skin @variant:dark` in the terminal derives the dark variant
-  of xp, not of the skin active before the line ran.
-- The Internet Radio app's Stop closes the stream connection (the shell
-  kept it open and redrew every frame until the station changed).
-- Settings: a rejected resolution no longer pins the current one for later
-  skins, and high-contrast "off" on a non-high-contrast skin is a no-op.
-- A plugin whose `init` fails no longer leaves the commands it registered
-  in the shell's command registry.
-- **(breaking)** `oasis_core::settings` (`SettingsStore`, `UserPrefs`,
-  `pref_keys`) and `oasis_core::ui_sound` moved into the desktop shell
-  (`oasis_app::settings`); no other host used them.
-
-### Browser parsers and loader (oasis-html, oasis-css, oasis-http)
-
-- HTTP/1.1: `304` / `204` / `1xx` responses and `HEAD` answers no longer
-  wait 15 s for a body their `Content-Length` promises; `103 Early Hints`
-  heads are skipped instead of becoming the response; a response slower
-  than 16 KiB/s is cut off after about 60 s; every resolved address is tried. A guarded (`fetch()`)
-  request now refuses to connect if *any* resolved address is disallowed.
-- HTTP/2: POST bodies over 16 KiB are split into frames (they failed on
-  servers with default settings); padded DATA no longer drains the
-  flow-control window; control-frame floods end the connection; faster
-  HPACK Huffman decoding; non-UTF-8 header values decode lossily.
-- `data:` URLs percent-decode to bytes (`%C3%A9` is `é`, `+` stays `+`).
-  Gemini status lines with non-ASCII bytes no longer panic.
-- HTML: CR LF normalised to LF and NUL to U+FFFD; duplicate attributes
-  dropped (first wins) and at most 256 per tag; `&copy=` style query
-  strings in attributes stay literal; `&#150;` maps through
-  Windows-1252. Stray end tags no longer close enclosing table cells or
-  push content outside `<html>`; `<script>` text at the nesting cap stays
-  in the script. Quadratic / multiplicative cases (huge attribute lists,
-  adoption agency, foster parenting, DOM depth) are bounded.
-- CSS: unquoted `url(a/b.png)` and `url(data:...)` parse correctly;
-  string escapes (`"\f101"` icon fonts) and escaped / non-ASCII idents
-  (`.md\:flex`) work; nested rules using `:not()` etc. and declarations
-  inside nested `@media` apply; at-rules nest inside `@media` /
-  `@supports`; `em` media-query breakpoints work; nested `@layer` names
-  are qualified. Deep nesting, `calc()` / `not` chains, nesting selector
-  explosion, `var()` expansion, `:has()` with structural pseudo-classes,
-  and `:nth-child(2n-2147483648)` no longer crash or hang.
-- `oasis_http::http::response_find_header` and
-  `http_psp::response_find_header` removed (use `http1::find_header`),
-  `oasis_html::entities` and `oasis_css::selectors` are crate-private,
-  `cascade::build_global_layer_map` is crate-private **(breaking)**.
-
-### Documentation and site content
-
-- Counts re-verified against the source: `SdiCore` has 12 required methods
-  and the eight extension traits carry 45 default methods (`SdiClipTransform`
-  has 9 since it gained `draw_bounds`; `SdiTextures` lost two, see the backend
-  section) across CLAUDE.md, README, design and ADR-003; 21 shell builtins (was 20 in
-  the README and two journal entries).
-- CI descriptions follow the workflows: PRs run the same feature-set checks
-  as main (`scripts/ci-feature-clippy.sh`, also in getting-started), criterion
-  benchmarks run only on a manual `run_benchmarks` dispatch, and the
-  memory workflow's peak-RSS gates run natively, outside valgrind.
-- `tv` is registered by `oasis-apps`, not `oasis-core` (design, adding
-  commands); remote-terminal and MCP `run_command` refuse the server toggles
-  (networking, MCP server docs); a plugin whose `init` fails drops what it
-  registered (plugin guide).
-
-### Browser engine
-
-- Flexbox layout fixes: container padding is no longer counted twice;
-  `width: auto` row items size to their content instead of 0 px; column
-  containers are as tall as their items, explicit flex-container heights
-  apply (they were 0 px) and `align-items` centres against them; inline
-  children (a nav bar of links, bare text) become flex / grid items
-  instead of rendering at 0 x 0; nested flex containers no longer cost
-  2^depth layouts.
-- Content scrolled into a nested `overflow: auto` box is painted (it was
-  culled against the unscrolled clip), `overflow: hidden` children of
-  translucent / filtered boxes are clipped in the right place, and the
-  display-list optimizer no longer deletes a rect because an opaque rect
-  in a *sibling* clip box covers its coordinates.
-- Web-font glyphs no longer carry over to the next page (font ids are
-  reused per page); the glyph texture cache, image atlas (smaller pages
-  on PSP) and back history (100 entries) are bounded.
-- Security: Gemini page titles and directly-opened stylesheets are
-  escaped (both could inject live script); `fetch()` judges the page's
-  own network class by its least private address, so a page whose name
-  also resolves to a LAN / loopback address cannot reach those.
-- Hostile-page bounds: BMP / GIF / WebP decodes check sizes before
-  allocating; self-referencing SVG `<pattern>`s, huge path coordinates
-  and far off-screen strokes, `blur()` radii, sub-pixel repeating
-  gradients, tiny `background-size` tiles, million-column tables, dense
-  grid auto-placement, thousands of floats, long unbreakable words and
-  animated `<canvas>` command lists are all bounded.
-- Forms: Enter submits only after validation (as a click does), Enter in
-  a `<textarea>` inserts a newline, and GET submission replaces the
-  action URL's query instead of appending to it.
-- Reader mode rebuilds the page through the normal pipeline (toggling it
-  could panic on the next hover) and keeps no extra history entry;
-  single-column multicol boxes render; `hue-rotate()` on filtered
-  layers uses degrees; 16-bit PNGs decode correctly; `innerHTML` keeps
-  `<style>` / `<script>` text verbatim.
-- Removed the unused `gemini::renderer` module (`render_gemini`,
-  `GeminiTheme`), `reader::reader_stylesheet` (now internal),
-  `scroll::SCROLL_ACCELERATION` and `SvgPaint::PatternRef` (pattern
-  fills are `GradientRef`s that resolve to a `<pattern>`) **(breaking)**.
-
-### Website: journal, demo, blueprints, shared chrome
-
-- Journal index is a card grid: newest first with the latest entry featured, generated
-  per-topic covers, topic filters plus a newest / oldest sort, and "Read the latest" /
-  "Start at entry 01" calls to action.
-- Journal articles: running text held to ~70 characters at 18px while code, tables and
-  figures break out on wide screens; an "Updated" field on entries with Oct 2026 notes;
-  BlogPosting JSON-LD; an end-of-article row (tags, back to top, all entries); wide
-  tables scroll with edge shadows and keyboard focus; the table of contents tracks
-  jumps as well as scrolling.
-- Live demo: a boot panel naming the skin being loaded, a two-column controls card
-  (keyboard / mouse and touch) that no longer covers the screen on portrait phones, a
-  full-screen button, and an immediate error card when the WebAssembly boot fails
-  (`www/index.js` now sets `window.__oasisBootError` and fires `oasis:boot-error`).
-- Blueprints: the gallery no longer downloads three.js (~700 KB, now fetched only for a
-  `?diagram=` view); viewer hints and "Open the 3D model" cues; on phones the legend
-  folds behind a dock button and the dock fits.
-- Every page shares a new footer: Explore / Read / Project link columns (adding the crate
-  map, changelog, releases and contributing guide) and a back-to-top row.
+- `SdiTextures::blit_sub_tinted` and `blit_flipped` are removed: nothing called them (45
+  extension defaults remain) **(breaking)**.
+- `SdiBatch` now builds on `SdiText`, and `submit_text_batch` defaults to one
+  `draw_text_styled` per item; SDL and UE5 drop their identical overrides. WASM text batches
+  draw real bold / italic glyphs instead of double-striking bold, so batched and unbatched
+  text look the same (`conformance::batch_matches_singles` pins this) **(breaking for
+  implementors that bound `SdiBatch` without `SdiText`)**.
+- `SdiCore::measure_text` is a provided method (the bitmap font); 12 methods are required
+  now.
+- `ClipStack::push` returns the `ClipRect` to apply (`ClipRect::EMPTY` when nested clips do
+  not overlap) and `ClipStack::push_translated` does the translate-then-push every backend
+  repeated; `ClipPush` is removed **(breaking)**.
+- `backend::unsupported(op)` builds `BackendError::Unsupported`; the `AudioBackend` streaming
+  defaults now return it instead of a free-text error. `texture_not_found` takes a
+  `TextureId` **(breaking)**.
+- Typed IPC in `oasis_types::ipc` (wire formats unchanged): `BrowserRequest` (`browse` -> the
+  shell) and `Notification` / `NotifyLevel` (`notify` -> toasts) replace the hand-rolled
+  string parsing on both sides (an unknown browse request no longer opens the browser);
+  new `RadioRequest`, `TvRequest` and `TvStatus`.
+- SDL: volume is the audio stream's gain, so a change applies at once (it was baked into
+  queued PCM: seconds late on radio, never on a fully queued track); WAV / Ogg tracks no
+  longer play into a stream opened for another format (a mono 44.1 kHz WAV after an MP3
+  played at double speed); `feed_pcm_f32` queues past the high-water mark instead of
+  dropping whole chunks; a multi-character `TextInput` (IME commit) delivers every
+  character, not the first; touchpad wheel fractions accumulate into steps; the OS "natural
+  scrolling" setting is honoured (SDL3 already reports wheel motion in the user's
+  direction, and negating `Flipped` events undid it); a window resize while a render target
+  is bound resets the window's clip and translation; `fill_rect_gradient` generates only the
+  visible rows and columns. `lib.rs` is split (`render_target.rs`, `tests.rs`).
+- UE5: rect batches translate with saturation like every other draw, so a far off-screen
+  rect no longer wraps onto the screen; streamed radio bytes are buffered for the host
+  (`STREAM_*` audio events, `Ue5AudioBackend::drain_stream`).
+- WASM: releasing a drag outside the canvas ends it; a sideways scroll no longer scrolls up;
+  zero / oversized stroke widths match the trait defaults (Canvas reused the previous width,
+  or `arcTo` threw); reading a render target tainted by a TV frame returns black instead of
+  failing; stopping the TV video or a radio stream removes the element's listeners first and
+  ends its fetch (late events used to call dropped closures and throw); a failed TV start no
+  longer leaves a `<video>` in the page; URL log truncation is char-boundary safe; the
+  YouTube grid no longer leaks a callback per thumbnail and its glyph cache evicts in
+  O(log n).
 
 ### Media and networking (oasis-audio, oasis-video, oasis-net, oasis-mcp)
 
-- Internet radio refuses stream URLs, redirect `Location`s, hosts and paths
-  containing whitespace or control bytes (a CR / LF could inject request
-  headers); archive.org item identifiers outside `[A-Za-z0-9._-]` are
-  dropped; remote stream titles lose control characters before reaching
-  the status file. An archive 3xx without `Location` is an error, not audio.
-- A radio track shorter than the 32 KiB start buffer now plays instead of
-  being skipped silently.
-- WAV files with a sample rate outside 1-768 kHz are rejected, and the SFX
-  resampler caps its output, so a 1 Hz header can no longer exhaust memory.
-- MCP server: a `401` closes the connection (one token guess per connection;
-  pipelined guessing on a keep-alive connection is gone).
-- FTP server: `with_password("")` / `ftp start --password ""` means no
-  authentication on loopback (it used to lock every client out); `LIST`
-  shows control characters in file names as `?`.
-- TLS (rustls) streams no longer fail a `write` when the non-blocking
-  socket is momentarily full: the plaintext was already taken, so a caller
-  retrying used to send it twice. The queued ciphertext goes out on the next
-  read, write or `flush` (which TLS streams now implement).
-- oasis-video: one shared `avcC` parser for both demuxers, and the `moov`
-  read no longer allocates the header-declared size before reading.
+- `oasis-audio`: only the crate-root re-exports are public. `oasis_audio::{sfx, wav, ogg}::X`
+  is `oasis_audio::X` (`SfxPlayer`, `decode_wav`, `WavData`, `decode_ogg`, `OggData`, ...),
+  `oasis_audio::radio::{archive, source, station, icy, threaded, connect, buffer}::X` is
+  `oasis_audio::radio::X`, and `mixer` / `playlist` / `manager` / `controller` / `types` /
+  `null_backend` are no longer public modules **(breaking)**.
+- `oasis-video`: `SoftwareVideoDecoder` forwards to a crate-private `DecoderBackend` trait
+  that both backends implement. The `aac`, `demux`, `h264` and `ffmpeg_decoder` modules and
+  `demux_lite::avcc` are private; removed the `AvccConfig` / `find_avcc_in_mp4` re-export
+  (symphonia's, distinct from `demux_lite::AvccConfig`),
+  `SoftwareVideoDecoder::open_stream_with_avcc` and `demux_lite::seek_byte_from_moov`
+  (use `seek_point_from_moov(..).map(|p| p.min_byte)`) **(breaking)**.
+- `oasis-net`: `ftp::process_ftp_request` is crate-private **(breaking)**.
+- `oasis-audio`, `oasis-video`, `oasis-net` and `oasis-mcp` warn on undocumented public items.
+- Remote terminal client: `RemoteClient` answers exactly one `AUTH_REQUIRED` challenge per
+  connection, and only a nonce of the documented form (32 lowercase hex digits; new
+  `oasis_net::is_valid_nonce` / `NONCE_HEX_LEN`), so a hostile server can no longer use it as
+  an HMAC oracle over chosen text. The nonce is not bound to the server's identity; that
+  relay limitation is documented in `docs/networking.md` and `docs/security.md`.
+  `oasis_net::verify_auth_line` is the shared server-side check (see PSP).
+- Internet radio refuses stream URLs, redirect `Location`s, hosts and paths containing
+  whitespace or control bytes (a CR / LF could inject request headers); archive.org item
+  identifiers outside `[A-Za-z0-9._-]` are dropped; remote stream titles lose control
+  characters before reaching the status file. An archive 3xx without `Location` is an error,
+  not audio. A radio track shorter than the 32 KiB start buffer now plays instead of being
+  skipped silently.
+- WAV files with a sample rate outside 1-768 kHz are rejected, and the SFX resampler caps its
+  output, so a 1 Hz header can no longer exhaust memory.
+- MCP server: a `401` closes the connection (one token guess per connection; pipelined
+  guessing on a keep-alive connection is gone).
+- FTP server: `with_password("")` / `ftp start --password ""` means no authentication on
+  loopback (it used to lock every client out); `LIST` shows control characters in file names
+  as `?`.
+- TLS (rustls) streams no longer fail a `write` when the non-blocking socket is momentarily
+  full: the plaintext was already taken, so a caller retrying used to send it twice. The
+  queued ciphertext goes out on the next read, write or `flush` (which TLS streams now
+  implement), and `close` drains ciphertext a full socket held back (a write right before
+  close could lose its tail).
+- oasis-video: one shared `avcC` parser for both demuxers; the `moov` read no longer
+  allocates the header-declared size before reading; `demux_lite` sample offsets no longer
+  sum a whole chunk per lookup (hostile files made playback quadratic); the fuzz targets run
+  nightly.
 
-### UI toolkit and window manager (oasis-ui, oasis-wm)
+### FFI (oasis-ffi)
 
-- Window manager: dragging a window that was snapped and then maximized
-  now un-maximizes it (it slid around still marked maximized); titlebar
-  buttons under a modal no longer show hover feedback; geometry, drag,
-  resize, snapping and animation maths no longer overflow (debug panic)
-  or lose precision for windows and pointers far out in the `i32` range.
-- oasis-ui widgets tolerate stale state in their pub fields: Accordion,
-  ContextMenu, Modal, RadioGroup and Dropdown share one wrapping
-  navigation rule (`focus::step_wrapping`), fixing an out-of-bounds panic
-  and an infinite loop in Accordion and a highlighted unselectable
-  ContextMenu item; TreeView focus no longer gets stuck on a collapsed-away
-  node; ListView / Table clamp stale scroll and selection; DatePicker,
-  Slider, SpinBox and SplitPane no longer panic on out-of-range months or
-  swapped / NaN ranges; TabBar Filled / Pill no longer underflow on short
-  rects.
-- Layout fixes: `FlexLayout` cross-axis alignment works (children get an
-  optional `FlexChild::cross_size`; it was dead code); `MeasureCache`
-  evicts entries unused for a generation; `Slider::measure` stays within
-  the available width; `TextBlock` draws with its `max_lines` and
-  `align`; TreeView connector lines no longer break between siblings;
-  focused empty `InputField`s show a caret.
-- `ListView::index_at` takes the viewport height; removed the uncalled
-  `DrawContext` helpers (`panel`, `heading`, `label_styled`,
-  `divider_h` / `divider_v`, `button_bg`, `accent_button_bg`, `blit`,
-  `measure_text`, `measure_text_sized`, `padded_rect`),
-  `layout::center_text_y`, `InputField::selection` and
-  `MenuBar::dropdown_dimensions` **(breaking)**.
-
-### PSP
-
-- EBOOT: a frame whose GU commands outgrow the 1 MB display list now drops the excess draws
-  (logged once as `[GU] display list full` in `eboot.log`) instead of writing past the buffer;
-  rust-psp's `sceGuGetMemory` never fails, so the old null checks never fired. Tall rounded
-  boxes and long text lines no longer emit off-screen geometry.
-- EBOOT: textures and the font atlas are written back from the data cache before the GE samples
-  them (small textures could show stale texels on hardware); `reinit_gu_frame` only re-opens the
-  display list after a utility dialog really ran, so Radio / Browser / TV Confirm with WLAN off
-  no longer issues a second `sceGuStart` (hang on hardware).
-- EBOOT: JavaScript `Date` / `performance.now()` use pspdev newlib's real layouts (64-bit
-  `time_t`, 36-byte `struct tm`); the shim's wider `struct tm` overwrote the caller's stack.
-  Audio commands from the main, video and I/O threads no longer race on the single-producer
-  queue. Malformed MP4 boxes, non-ASCII HTTP headers and Range-ignoring servers no longer hang
-  or panic the I/O thread or corrupt a resumed stream; interlaced H.264 reports its full height.
-- Overlay PRX: one bad MP3 frame after the first ~100 no longer ends the track / radio stream;
-  a closed radio connection reconnects instead of stalling; "toggle radio" takes effect
-  mid-track; `music_dir` / `video_dir` without a trailing `/` work; ME buffers are 64-byte
-  aligned; framebuffers with a stride under 480 are skipped. Stripped PRX: 156,546 B.
-- CI builds the seven standalone PSP crates (`oasis-me-boot`, `oasis-devloop-psp`,
-  `oasis-prx-decrypt-psp`, the four `oasis-usb-*-psp`) with warnings denied; all build at the
-  pinned rust-psp revision. Releases ship `oasis-me-boot.prx` (the EBOOT loads it from its GAME
-  directory for hardware H.264 decode), and the release notes install the overlay as
-  `ms0:/seplugins/oasis_plugin.prx`, the name `plugin status` / `plugin remove` expect.
-- **(breaking)** Recovery EBOOT: the WiFi file server on TCP 9293 (upload / readfile / delete /
-  reboot) now requires the same PSK challenge as the EBOOT command server
-  (`oasis_net::verify_auth_line`; `scripts/psp_remote.py` with `PSP_PSK`). The key comes from
-  `ms0:/PSP/SAVEDATA/ARK_01234/oasis-recovery.key` (beside `RECOVERY.PBP`, so a wiped or broken
-  shell install does not lock recovery out), else the shell's `cmdserver.key` read as a plain
-  file; with neither, every connection gets `AUTH_FAIL no key`.
-- EBOOT radio: the body bytes that arrive with the HTTP headers go through the ICY demuxer, so
-  stream-title metadata no longer desyncs (decoded as audio, audio swallowed as metadata) on
-  stations that send metadata.
-- EBOOT and WASM: the taskbar is laid out in the bottom bar's free span
-  (`BottomBar::taskbar_span` + `Taskbar::update_sdi_in`), as on the desktop shell, so window
-  buttons no longer overlap the URL plate, USB label or media dock.
-
-### FFI (oasis-ffi, oasis-backend-ue5)
-
-All additions are new symbols; existing exports keep their signatures.
+New exports are additions; existing exports keep their signatures.
 
 - `oasis_audio_drain_stream` / `oasis_audio_stream_buffered`: C exports for streamed (internet
   radio) audio bytes, which were only reachable through the Rust-side `drain_stream`.
 - `oasis_register_callback_ex` / `oasis_set_audio_callback_ex`: callbacks that also receive a
   host `void* user_data` (passed back unchanged), so a C++ host can route events to its object.
-- `oasis_video_audio_format`: the sample rate and channel count of `oasis_video_get_audio`'s PCM.
+- `oasis_video_audio_format`: the sample rate and channel count of `oasis_video_get_audio`'s
+  PCM.
 - The video decode thread is paced to the wall clock: frames become available at their
   presentation time and audio is decoded ~0.5 s ahead, instead of decoding flat out (which
   overflowed the audio ring and dropped chunks before a per-frame poll could take them).
-
-### Backend traits and desktop / web / UE5 backends
-
-- `SdiTextures::blit_sub_tinted` and `blit_flipped` are removed: nothing
-  called them (45 extension defaults remain) **(breaking)**.
-- `SdiBatch` now builds on `SdiText`, and `submit_text_batch` defaults to
-  one `draw_text_styled` per item; SDL and UE5 drop their identical
-  overrides. WASM text batches draw real bold / italic glyphs instead of
-  double-striking bold, so batched and unbatched text look the same
-  (`conformance::batch_matches_singles` pins this) **(breaking for
-  implementors that bound `SdiBatch` without `SdiText`)**.
-- `SdiCore::measure_text` is a provided method (the bitmap font); 12
-  methods are required now.
-- `ClipStack::push` returns the `ClipRect` to apply (`ClipRect::EMPTY`
-  when nested clips do not overlap) and `ClipStack::push_translated` does
-  the translate-then-push every backend repeated; `ClipPush` is removed
-  **(breaking)**.
-- `backend::unsupported(op)` builds `BackendError::Unsupported`; the
-  `AudioBackend` streaming defaults now return it instead of a free-text
-  error. `texture_not_found` takes a `TextureId` **(breaking)**.
-- Typed IPC: `ipc::BrowserRequest` (`browse` -> the shell) and
-  `ipc::Notification` / `NotifyLevel` (`notify` -> toasts) replace the
-  hand-rolled string parsing on both sides; an unknown browse request no
-  longer opens the browser.
-- SDL: volume is the audio stream's gain, so a change applies at once
-  (it was baked into queued PCM: seconds late on radio, never on a fully
-  queued track); WAV / Ogg tracks no longer play into a stream opened
-  for another format (a mono 44.1 kHz WAV after an MP3 played at double
-  speed); a multi-character `TextInput` (IME commit) delivers every
-  character, not the first; touchpad wheel fractions accumulate into
-  steps and "natural scrolling" devices scroll the right way; a window
-  resize while a render target is bound resets the window's clip and
-  translation; `fill_rect_gradient` generates only the visible rows and
-  columns. `lib.rs` is split (`render_target.rs`, `tests.rs`).
-- UE5: rect batches translate with saturation like every other draw, so
-  a far off-screen rect no longer wraps onto the screen.
-- WASM: releasing a drag outside the canvas ends it; a sideways scroll
-  no longer scrolls up; zero / oversized stroke widths match the trait
-  defaults (Canvas reused the previous width, or `arcTo` threw); reading
-  a render target tainted by a TV frame returns black instead of failing;
-  stopping the TV video or a radio stream removes the element's listeners
-  first and ends its fetch (late events used to call dropped closures and
-  throw); a failed TV start no longer leaves a `<video>` in the page; URL
-  log truncation is char-boundary safe.
-
-### Terminal (oasis-terminal)
-
-- One option parser (`oasis_terminal::parse_flags` / `FlagSpec`) for `ls`, `rm`, `mkdir`,
-  `grep`, `sort`, `uniq`, `wc`, `head`, `tail`, `tee`, `tr`, `cut`, `base64` and `xxd`:
-  combined short options (`-la`, `grep -in`), `-n5` / `-n 5`, `--`, options after operands,
-  and an error with the usage line for an unknown option **(breaking: `-x` used to be taken
-  as a file name or pattern; use `--` for operands that start with `-`)**. New options:
-  `ls -a` / `-l` (plain `ls` now hides dotfiles), `rm -r` / `-f`, `mkdir -p`, `grep -q`,
-  `sort -u`, `head -N` / `tail -N`.
-- `grep` with no match, `ls` of an empty directory and `find` with no hit print nothing
-  (they printed `(no matches)` / `(empty)`, which pipes and `$(...)` then saw). The shell's own
-  colour codes (`ls` / `tree` directories) are stripped from text reaching a pipe, redirect
-  or `$(...)`; other escape sequences pass through (`cat a.ans > b.ans` copies the bytes).
-- `case`: quoted patterns, `$VAR` patterns and quoted `|` work (`case "$X" in "hello")`
-  never matched); the case word is not split or globbed; `case foo.in in` finds the right
-  `in`. A `case` with no matching arm and a `for` over nothing exit 0.
-- Compound commands take a trailing pipe, redirect or `&&` / `||` list
-  (`for ...; done | sort > out`, `fi >> log`; the output used to escape to the terminal and
-  `> out` created an empty file).
-- Redirection: `>/dev/null` and `2>/dev/null` discard (they failed the command), `>&2`,
-  `&>` / `&>>` and `1>` are understood, and a target is one word (`echo a > f b` writes
-  `a b`).
-- Expansion: `$@` / `$*` and `"$@"` (one word per argument), `for VAR; do` over the
-  arguments, single-digit positionals (`$1x` is `${1}x`), `${V:-def}`, `${V-def}`,
-  `${V:=def}`, `${#V}`, `bad substitution` for other `${...}` forms, and `~` / `~/path`
-  tilde expansion. Globs no longer match dotfiles unless the pattern starts with `.`.
-- `cd` with no argument goes to `$HOME` (was `/`), `cd -` to `$OLDPWD`; extra arguments
-  are an error.
-- Aliases whose text has `|`, `;`, `&`, `<` or `>` work (`alias ll='ls | sort'`).
-- `set A=1 B=2` sets both and keeps a quoted value's spaces; variable names are validated
-  (`set 1=x` is an error); `local X` without a value shadows the caller's `X`.
-- `tr` sets take ranges (`tr a-z A-Z`); `find` patterns are globs (`find / '*.txt'`; a
-  pattern without glob characters still matches as a substring).
-- Tab completion no longer panics on non-ASCII names, escapes spaces / metacharacters in
-  completed paths, and completes inside quotes (`cat "my f<Tab>`); an operator inside
-  quotes no longer starts a new command.
-- Multi-line history entries survive a save / reload (`\` and newlines are escaped in
-  `.oasis_history`; an old file's literal `\n` now reads as a newline).
-- **(breaking)** `Completer` is stateless: the unused cycling API (`cycle_next`, `reset`,
-  `is_cycling`), the always-empty `aliases` / `functions` parameters of `complete` and
-  `CompletionContext::Subcommand` are gone. The test-only `control_flow` module and
-  `CommandRegistry::completions` are no longer public.
-
-### Scripting: cron jobs actually run
-
-- `cron` used to store "scheduled scripts" that nothing ever ran. Jobs now have an interval
-  and run: `cron add <name> <interval> <script>` (`30s`, `5m`, `2h`, `1d`, bare number =
-  seconds; 1 s to 30 d; a relative script path is resolved against the current directory),
-  `cron list` shows each job's interval. The old two-argument
-  `cron add <name> <script>` is rejected, and existing interval-less entries are listed as
-  invalid until re-added **(breaking)**.
-- `oasis_core::script::CronScheduler` runs due jobs when a host calls `tick(now, ...)`: the
-  desktop shell does about once a second (output in the terminal, prefixed
-  `[cron <name>]`), `oasis-ffi` on every `oasis_tick`. A job first runs one interval after
-  the host first sees it, starts in `/` without moving the shell's cwd, and an overdue job
-  runs once. The cron code moved to `oasis_core::script::cron`.
-
-### FFI (oasis-ffi)
-
-- A callback that calls back into the API with the handle that fired it is now refused (the
-  call returns its default and logs an error) instead of aliasing the instance; that
-  includes `oasis_destroy` from a callback.
-- `oasis_tick` sanitizes `delta_seconds` (NaN / infinite / negative count as 0, at most
-  1 s per tick) and keeps its clock in `f64`: a single NaN frame time, or about six days
-  of uptime, used to freeze the idle render and animations for good.
 - `oasis_tick` runs queued `cmd &` jobs (they never ran under FFI) and due `cron` jobs, and
   reports their output through the new `OASIS_CB_SHELL_OUTPUT` (7) callback; `cron` /
   `startup` are now registered in FFI instances.
+- `oasis_tick` sanitizes `delta_seconds` (NaN / infinite / negative count as 0, at most 1 s
+  per tick) and keeps its clock in `f64`: a single NaN frame time, or about six days of
+  uptime, used to freeze the idle render and animations for good.
+- A callback that calls back into the API with the handle that fired it is now refused (the
+  call returns its default and logs an error) instead of aliasing the instance; that
+  includes `oasis_destroy` from a callback.
 - `oasis_send_command` appends unredirected stderr to its result; callback details with
   interior NULs fire with U+FFFD instead of being dropped; a rejected or partial skin is
   logged at `error`; the WASM-only "Video Embed" dashboard entry is gone; a failing
@@ -757,15 +555,160 @@ All additions are new symbols; existing exports keep their signatures.
 - `MemoryVfs` / `GameAssetVfs`: only root or an entry's owner may chmod / chown it (anyone
   could before), and reaching an entry needs search permission on every ancestor directory,
   so a `0o700` directory owned by someone else hides its contents **(breaking)**.
-- `GameAssetVfs::add_base_*` keeps the tree well formed (no file under a file, no kind
-  change of a visible entry; content added below a removed directory brings it back).
+- `GameAssetVfs::add_base_*` keeps the tree well formed (no file under a file, no kind change
+  of a visible entry; content added below a removed directory brings it back).
 - `RealVfs`: chmod works on Windows (it rejected the owner its own `get_permissions`
   reported); `readdir` follows symlinks like `stat`; dangling or escaping symlinks can be
   renamed; Windows names ending in `.` / space and `COM¹`-style device names are rejected;
-  writing onto a directory is a typed `IsDirectory` error.
+  writing onto a directory is a typed `IsDirectory` error. New provided `Vfs::is_symlink`
+  (see Terminal).
 - `oasis-i18n`: interpolation is single-pass (a value containing `{other}` is no longer
   expanded); `Locale::from_code` is case-insensitive and accepts `ja_JP.UTF-8`-style codes.
 - `oasis-platform`: `OASIS_FIXED_TIME` rejects impossible dates such as `2025-02-29`.
+
+### PSP
+
+- **(breaking)** The dev servers on TCP 9293 require the remote terminal's PSK HMAC
+  challenge (`oasis_net::verify_auth_line`; `scripts/psp_remote.py` answers from `PSP_PSK`):
+  - the EBOOT command server is off unless `ms0:/PSP/GAME/OASISOS/cmdserver.key` (8+ bytes)
+    exists;
+  - the overlay PRX devloop needs `devloop_psk` next to `devloop = true` in `oasis.ini`;
+  - the recovery EBOOT's WiFi file server (upload / readfile / delete / reboot) takes its key
+    from `ms0:/PSP/SAVEDATA/ARK_01234/oasis-recovery.key` (beside `RECOVERY.PBP`, so a wiped
+    or broken shell install does not lock recovery out), else the shell's `cmdserver.key`
+    read as a plain file; with neither, every connection gets `AUTH_FAIL no key`.
+
+  See [networking.md § PSP dev servers](docs/networking.md#psp-dev-servers).
+- EBOOT: a frame whose GU commands outgrow the 1 MB display list now drops the excess draws
+  (logged once as `[GU] display list full` in `eboot.log`) instead of writing past the buffer;
+  rust-psp's `sceGuGetMemory` never fails, so the old null checks never fired. Tall rounded
+  boxes and long text lines no longer emit off-screen geometry. Clip rects are clamped to the
+  screen before `sceGuScissor` (an empty clip drew everywhere, a clip left of / above the
+  screen hid everything).
+- EBOOT: textures and the font atlas are written back from the data cache before the GE
+  samples them (small textures could show stale texels on hardware); `reinit_gu_frame` only
+  re-opens the display list after a utility dialog really ran, so Radio / Browser / TV
+  Confirm with WLAN off no longer issues a second `sceGuStart` (hang on hardware), and the
+  WiFi dialog's success path re-opens the GU frame.
+- EBOOT: JavaScript `Date` / `performance.now()` use pspdev newlib's real layouts (64-bit
+  `time_t`, 36-byte `struct tm`); the shim's wider `struct tm` overwrote the caller's stack.
+  Audio commands from the main, video and I/O threads no longer race on the single-producer
+  queue. Malformed MP4 boxes, non-ASCII HTTP headers and Range-ignoring servers no longer hang
+  or panic the I/O thread or corrupt a resumed stream; interlaced H.264 reports its full
+  height.
+- EBOOT radio: the body bytes that arrive with the HTTP headers go through the ICY demuxer, so
+  stream-title metadata no longer desyncs (decoded as audio, audio swallowed as metadata) on
+  stations that send metadata.
+- Overlay PRX: one bad MP3 frame after the first ~100 no longer ends the track / radio stream;
+  a closed radio connection reconnects instead of stalling; "toggle radio" takes effect
+  mid-track; `music_dir` / `video_dir` without a trailing `/` work; ME buffers are 64-byte
+  aligned; framebuffers with a stride under 480 are skipped; the menu stays open when a
+  status message arrives. Stripped PRX: 163,146 B (with the devloop PSK check).
+- CI builds the seven other standalone PSP crates (`oasis-me-boot`, `oasis-devloop-psp`,
+  `oasis-prx-decrypt-psp`, the four `oasis-usb-*-psp`) with warnings denied; all build at the
+  pinned rust-psp revision. Releases ship `oasis-me-boot.prx` (the EBOOT loads it from its GAME
+  directory for hardware H.264 decode), and the release notes install the overlay as
+  `ms0:/seplugins/oasis_plugin.prx`, the name `plugin status` / `plugin remove` expect.
+
+### Performance
+
+- Software rendering (the UE5 framebuffer, the headless harness and every `SoftwareBuffer`
+  user) draws a full shell frame 2.6-3.1x faster (480x272 dashboard 149 -> 57 us, XP
+  1024x768 with two windows 1.8 -> 0.59 ms): opaque spans fill as one vectorized store,
+  translucent spans over the opaque framebuffer blend branch-free, bitmap glyph ink runs are
+  cached per text style, text lines outside the clip are skipped, and horizontal
+  rounded-rect gradients interpolate once per column. Output is pixel-identical (rasterizer
+  goldens, backend parity, and frame hashes of every skin).
+- Idle (elided) shell frames cost 20-45% less: the ~15 IPC request files polled every frame
+  are settled with an existence / size check instead of a permission-checked read whose
+  missing-file error formatted a message.
+- CSS cascade: an ancestor Bloom filter rejects descendant / child selectors whose ancestor
+  ids, classes or tags are absent without walking the ancestor chain, rules are indexed under
+  one subject key (id > class > tag) instead of all of them, and matched declarations borrow
+  from the stylesheet instead of cloning: a 1,210-rule page styles 3.2x faster (15.8 ->
+  4.9 ms). The HTML parser and nested flex speedups are under their browser sections.
+- New criterion benches: `oasis-app` `shell_frame` (whole-shell render / idle step at 480x272
+  and 1024x768), more rasterizer shapes, and a large-page cascade.
+
+### Build, CI and tooling
+
+- PR validation runs the feature-set checks main runs, from one shared
+  `scripts/ci-feature-clippy.sh` (17 checks: the `oasis-app` feature combinations, clippy
+  over the non-default feature sets of `oasis-browser`, `oasis-core`, `oasis-video`,
+  `oasis-app`, `oasis-ffi`, `oasis-shader` and `oasis-backend-wasm`, and the `oasis-browser`
+  tests with `psp,javascript`), so a PR can no longer pass and then break main. The script
+  runs every line and reports all failures at once; `--list` prints the commands.
+- Feature cleanup: `oasis-js` drops `rquickjs-engine` (rquickjs is always linked; the feature
+  could not be turned off), `oasis-core` drops the unused `test-data`, and
+  `oasis-app-tv-guide` drops `test-data` (its fixtures are now test-only) **(breaking)**.
+  `oasis-shader/gl-native` no longer also exposes an implicit `glow` feature.
+- `oasis-app` now enables `oasis-core/skin-ttf`, so `skin lint` in the desktop shell parses
+  skin fonts as documented (the workspace dependency entry had turned it off).
+- Every crate with features documents them under `# Feature flags` in its crate docs.
+- Releases: a `v*` tag whose version differs from the Cargo workspace version (or the shipped
+  PSP crates') now fails `create-release` (`scripts/check-release-version.py`).
+- Tests: CSS keyword tables through the real parser, SVG from real markup (groups, `<defs>`
+  gradients, `url(#id)` paint, polygons, `<tspan>`), TV Guide catalog fetch outcomes (error,
+  empty, dead thread, timeout, success), a rejected-resolution and a chained
+  `skin xp; skin @variant:dark` e2e flow; `docs/testing.md` gains coverage, hang-guard and
+  sweep guidance.
+
+### Documentation
+
+- Counts re-verified against the source across CLAUDE.md, README, design, ADR-003 and the
+  guides: 51 crate directories (41 workspace members), 17 skins, 75 + 19 + 1 commands on the
+  default desktop build (95) plus 21 shell builtins, 12 required `SdiCore` methods and 45
+  extension defaults (`SdiClipTransform` has 9 since it gained `draw_bounds`), 8 shaders,
+  7 locales, 31 FFI exports, 17 CI feature-set checks.
+- CI descriptions follow the workflows: PRs run the same feature-set checks as main,
+  criterion benchmarks run only on a manual `run_benchmarks` dispatch, and the memory
+  workflow's peak-RSS gates run natively, outside valgrind.
+- `tv` is registered by `oasis-apps`, not `oasis-core` (design, adding commands);
+  remote-terminal and MCP `run_command` refuse the server toggles (networking, MCP server
+  docs); a plugin whose `init` fails drops what it registered (plugin guide).
+- Browser engine docs describe the cascade origins, the ancestor filter, parse-time `@media`
+  / `@supports`, `@container`, the "in template" mode, quirks mode and the full relayout
+  (no partial subtree relayout).
+
+### Website
+
+- New interactive crate map, `site/crates.html`: all 51 crates in their layers; hover / focus
+  lights what a crate uses and what uses it, click pins a detail card (description, Rust
+  lines, dependencies by kind, reach, source link); filters for optional / dev edges, the
+  PSP crates and a search box; three guided walks (a frame, a web page, a video stream) that
+  trace onto the map. Linked from the nav, the homepage architecture section and the
+  sitemap. `scripts/gen-crate-map.py` writes its data, `site/data/crates.json`, from every
+  `crates/*/Cargo.toml` (the excluded and standalone PSP crates included). Its unit test
+  (`scripts/test_gen_crate_map.py`, run by CI's python step) fails when the JSON is stale:
+  after adding a crate or changing an internal dependency, run
+  `python3 scripts/gen-crate-map.py`.
+- Landing page polish (hero video kept): the contract section puts the three steps beside
+  the `SdiCore` code on wide screens; feature stats gain one-line notes; the features
+  section gets a lede; platform tabs fit one row on tablets; pillar / stat / trait grids no
+  longer leave orphan cells; journal feature cards align. Facts re-checked against the repo:
+  21 shell builtins (was 20); the architecture diagram accounts for all 51 crates (new Hosts
+  row with `oasis-app`, `oasis-ffi`, `oasis-usb-host`; `oasis-test-backend` under
+  Foundation; the eight undrawn standalone PSP tools named in the caption); code-comment
+  color meets WCAG AA.
+- Journal index is a card grid: newest first with the latest entry featured, generated
+  per-topic covers, topic filters plus a newest / oldest sort, and "Read the latest" /
+  "Start at entry 01" calls to action.
+- Journal articles: running text held to ~70 characters at 18px while code, tables and
+  figures break out on wide screens; an "Updated" field on entries with Oct 2026 notes;
+  BlogPosting JSON-LD; an end-of-article row (tags, back to top, all entries); wide tables
+  scroll with edge shadows and keyboard focus; the table of contents tracks jumps as well as
+  scrolling.
+- Live demo: a boot panel naming the skin being loaded, a two-column controls card (keyboard
+  / mouse and touch) that no longer covers the screen on portrait phones, a full-screen
+  button, and an immediate error card when the WebAssembly boot fails (`www/index.js` now
+  sets `window.__oasisBootError` and fires `oasis:boot-error`). Its top bar no longer
+  overflows at tablet widths.
+- Blueprints: the gallery no longer downloads three.js (~700 KB, now fetched only for a
+  `?diagram=` view); viewer hints and "Open the 3D model" cues; on phones the legend folds
+  behind a dock button and the dock fits.
+- Every page shares a new footer: Explore / Read / Project link columns (adding the crate
+  map, changelog, releases and contributing guide) and a back-to-top row. The 404 page has a
+  meta description and social card. Regenerated skin screenshots.
 
 ## Unreleased -- overhaul (`overhaul/site-code-docs-2026-10`)
 

@@ -151,7 +151,7 @@ section rows below are from the review:
 | `.text` (code) | ~82 KB, of which ~15 KB is `libunwind` (the `psp` crate links it for `panic = "unwind"`) |
 | `.rodata`, `.eh_frame`, stubs, `.data` | ~30 KB |
 | Relocations (needed: the loader relocates the PRX) | ~40 KB |
-| **Stripped PRX file** (`prxmin`) | **~159 KB** (163,146 B; 156,426 B at the review) |
+| **Stripped PRX file** (`prxmin`) | **~159 KB** (163,146 B; 156,546 B at the review) |
 | `.bss` (zeroed at load, not in the file) | ~101 KB: 64 KB MP3 stream buffer, 18 KB PCM, playlist, network buffers |
 | **Resident footprint** (code + data + bss) | **~212 KB** |
 

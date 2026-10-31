@@ -18,11 +18,13 @@ The two stages live in:
 - `crates/oasis-html/src/tree_builder/` — token-level tree construction
 - `crates/oasis-html/src/dom.rs` — the arena-backed DOM data model
 
-The tree builder is loosely modelled on the WHATWG HTML5 parser
-algorithm: insertion modes, the active formatting elements list, foster
-parenting for malformed table content, and implicit `<html>` / `<head>`
-/ `<body>` insertion. It is *not* a literal spec implementation — we
-trade some completeness for code size and binary footprint.
+The tree builder follows the WHATWG HTML parser algorithm: insertion
+modes (including "in template" with its stack of template modes), the
+active formatting elements list with markers, foster parenting for
+malformed table content, implicit `<html>` / `<head>` / `<body>`
+insertion and quirks-mode selection from the DOCTYPE. The gaps (no
+DocumentFragment for `<template>` contents, among others) are listed in
+[`docs/browser-engine.md`](../../../docs/browser-engine.md).
 
 ## DOM representation
 
@@ -61,7 +63,7 @@ pub struct ElementData {
 }
 ```
 
-`TagName` is an enum with about 50 known HTML tags plus an
+`TagName` is an enum with about 80 known HTML tags plus an
 `Unknown(String)` fallback. Comparing tags by enum variant is much
 faster than string comparison and lets the cascade build dense lookup
 tables.
@@ -71,6 +73,7 @@ tables.
 - The tokenizer is fully byte-driven; it never allocates a `String` for
   tag names — it slices into the input buffer and interns into
   `TagName` once per tag.
+- A run of text is one `Character` token (not one per character).
 - Numeric and named character references (`&#x2014;`, `&mdash;`) are
   resolved here, not in the tree builder.
 - Script and style content uses raw text mode — the tokenizer does not
@@ -86,8 +89,13 @@ tables.
   tags (e.g. opening a `<div>` inside a `<p>`).
 - **Optional `<head>` / `<body>`** — both tags are inserted on demand if
   the document jumps straight into content.
-- **`<template>`** is parsed but its contents are not currently exposed
-  to layout (open issue).
+- **`<template>`** contents parse in the "in template" mode
+  (`<template><tr><td>` keeps its row and cell); they are the
+  `<template>`'s children rather than a separate DocumentFragment.
+- **Quirks mode** — the DOCTYPE's public / system identifiers pick
+  quirks, limited-quirks or no-quirks mode (`Document::quirks_mode`; no
+  DOCTYPE is quirks). In quirks mode `<table>` does not close an open
+  `<p>`.
 
 ## Mutation
 
@@ -99,9 +107,9 @@ The DOM is mutated in two situations:
    and `ElementData::set_attribute` (freed slots are tracked with
    `is_freed` / `is_live`, so stale ids from JS are rejected).
 
-After any mutation the affected subtree is marked dirty. The next call
-to `relayout_if_dirty()` rebuilds layout for those subtrees only — the
-DOM itself is not rebuilt.
+After a mutation the layout is marked dirty. The next call to
+`relayout_if_dirty()` builds the layout tree again (there is no partial
+subtree relayout) — the DOM itself is not rebuilt.
 
 ## Why an arena?
 

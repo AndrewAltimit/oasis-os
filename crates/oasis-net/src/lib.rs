@@ -2,6 +2,11 @@
 //! TLS provider abstraction, and (feature `vfs`) the FTP-like file
 //! transfer server.
 //!
+//! The remote terminal's PSK challenge lives in [`auth`]: servers check an
+//! answer with [`verify_auth_line`] (the PSP EBOOT command server and the
+//! recovery EBOOT use it too), and [`RemoteClient`] answers one challenge
+//! per connection, only for a nonce that passes [`is_valid_nonce`].
+//!
 //! # Feature flags
 //!
 //! - `tls-rustls` — `tls_rustls::RustlsTlsProvider`: TLS
