@@ -109,10 +109,8 @@ pub struct WasmBackend {
     /// on `ctx` (one `save()` level; see [`crate::clip`]).
     pub(crate) clip: SurfaceClip,
     pub(crate) color_cache: HashMap<u32, String>,
-    glyph_cache: HashMap<GlyphCacheKey, HtmlCanvasElement>,
-    /// Access timestamps for LRU eviction of glyph cache entries.
-    glyph_access: HashMap<GlyphCacheKey, u64>,
-    glyph_access_counter: u64,
+    /// Rendered glyph canvases, least recently used evicted first.
+    glyph_cache: crate::lru::LruMap<GlyphCacheKey, HtmlCanvasElement>,
     pub(crate) gradient_cache: HashMap<crate::gradients::GradientCacheKey, web_sys::CanvasGradient>,
     /// Offscreen render targets (compositor PR4). Each is a
     /// separate `<canvas>` element plus cached context.
@@ -152,9 +150,7 @@ impl WasmBackend {
             next_texture_id: 1,
             clip: SurfaceClip::default(),
             color_cache: HashMap::new(),
-            glyph_cache: HashMap::new(),
-            glyph_access: HashMap::new(),
-            glyph_access_counter: 0,
+            glyph_cache: crate::lru::LruMap::new(MAX_GLYPH_CACHE_SIZE),
             gradient_cache: HashMap::new(),
             render_targets: HashMap::new(),
             render_target_bind_stack: Vec::new(),
@@ -221,7 +217,7 @@ impl WasmBackend {
     /// submission to walk pre-resolved glyphs without re-running the
     /// LRU bookkeeping on the second pass.
     pub(crate) fn glyph_canvas(&self, key: &GlyphCacheKey) -> Option<&HtmlCanvasElement> {
-        self.glyph_cache.get(key)
+        self.glyph_cache.peek(key)
     }
 
     /// Ensure the glyph for `(ch, font_size, color, bold, italic)` is in
@@ -237,24 +233,11 @@ impl WasmBackend {
         italic: bool,
     ) -> Result<()> {
         let key = GlyphCacheKey::new(ch, font_size, color, bold, italic);
-        if self.glyph_cache.contains_key(&key) {
-            self.glyph_access_counter += 1;
-            self.glyph_access.insert(key, self.glyph_access_counter);
+        if self.glyph_cache.touch(&key) {
             return Ok(());
-        }
-        // Evict LRU entries while at capacity.
-        while self.glyph_cache.len() >= MAX_GLYPH_CACHE_SIZE {
-            if let Some((&oldest_key, _)) = self.glyph_access.iter().min_by_key(|&(_, &ts)| ts) {
-                self.glyph_cache.remove(&oldest_key);
-                self.glyph_access.remove(&oldest_key);
-            } else {
-                break;
-            }
         }
         let canvas = self.render_glyph_to_canvas(ch, font_size, color, bold, italic)?;
         self.glyph_cache.insert(key, canvas);
-        self.glyph_access_counter += 1;
-        self.glyph_access.insert(key, self.glyph_access_counter);
         Ok(())
     }
 
@@ -367,7 +350,9 @@ impl WasmBackend {
         for ch in text.chars() {
             self.ensure_glyph(ch, font_size, color, bold, italic)?;
             let key = GlyphCacheKey::new(ch, font_size, color, bold, italic);
-            let glyph_canvas = &self.glyph_cache[&key];
+            let Some(glyph_canvas) = self.glyph_cache.peek(&key) else {
+                continue;
+            };
             self.ctx
                 .draw_image_with_html_canvas_element(glyph_canvas, cx as f64, ty)
                 .map_err(js_err)?;
@@ -396,7 +381,6 @@ impl SdiCore for WasmBackend {
         self.ctx.set_image_smoothing_enabled(false);
         self.clip.forget();
         self.glyph_cache.clear();
-        self.glyph_access.clear();
         self.color_cache.clear();
         self.gradient_cache.clear();
         self.tint_scratch = None;
@@ -524,7 +508,6 @@ impl SdiCore for WasmBackend {
         self.render_targets.clear();
         self.textures.clear();
         self.glyph_cache.clear();
-        self.glyph_access.clear();
         self.color_cache.clear();
         self.gradient_cache.clear();
         Ok(())
