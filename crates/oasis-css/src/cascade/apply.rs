@@ -62,7 +62,7 @@ pub(super) fn apply_matched(
     font_size: f32,
 ) {
     let entry = &matched[i];
-    let rollback = match &entry.value {
+    let rollback = match &*entry.value {
         CssValue::Keyword(kw) => Rollback::of_keyword(kw),
         _ => None,
     };
@@ -89,7 +89,7 @@ pub(super) fn apply_matched_custom(
     i: usize,
 ) {
     let entry = &matched[i];
-    let CssValue::String(raw) = &entry.value else {
+    let CssValue::String(raw) = &*entry.value else {
         return;
     };
     let kw = raw.trim();
@@ -102,17 +102,17 @@ pub(super) fn apply_matched_custom(
         return;
     }
     let inherited = if inherit {
-        parent.and_then(|p| p.custom_properties.get(&entry.property).cloned())
+        parent.and_then(|p| p.custom_properties.get(&*entry.property).cloned())
     } else {
         None
     };
     let props = std::sync::Arc::make_mut(&mut style.custom_properties);
     match inherited {
         Some(v) => {
-            props.insert(entry.property.clone(), v);
+            props.insert(entry.property.to_string(), v);
         },
         None => {
-            props.remove(&entry.property);
+            props.remove(&*entry.property);
         },
     }
     if let Some(j) = rollback.and_then(|r| r.fallback(matched, i)) {
