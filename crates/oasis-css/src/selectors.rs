@@ -113,7 +113,7 @@ struct SiblingPosition {
 
 impl SiblingPosition {
     /// 1-based index from the last sibling.
-    fn from_end(self) -> usize {
+    fn index_from_end(self) -> usize {
         self.count - self.index + 1
     }
 }
@@ -282,7 +282,11 @@ fn matches_nth(nodes: &[Node], node: usize, expr: &str, same_type: bool, from_en
         return false;
     };
     sibling_position(nodes, node, same_type).is_some_and(|p| {
-        let index = if from_end { p.from_end() } else { p.index };
+        let index = if from_end {
+            p.index_from_end()
+        } else {
+            p.index
+        };
         i32::try_from(index).is_ok_and(|i| anb.matches(i))
     })
 }
@@ -1191,7 +1195,7 @@ mod tests {
             Some(SiblingPosition { index: 2, count: 3 })
         );
         assert_eq!(
-            sibling_position(&nodes, 4, false).map(|p| p.from_end()),
+            sibling_position(&nodes, 4, false).map(|p| p.index_from_end()),
             Some(2)
         );
     }

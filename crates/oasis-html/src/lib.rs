@@ -11,7 +11,7 @@
 //! API is shaped for the browser engine and may change without notice.
 
 pub mod dom;
-pub mod entities;
+pub(crate) mod entities;
 pub mod escape;
 pub mod hooks;
 pub mod tokenizer;

@@ -431,11 +431,6 @@ fn http_request_inner(
     Err(OasisError::Backend("too many redirects".into()))
 }
 
-/// Case-insensitive header lookup (public for use by other loader modules).
-pub fn response_find_header<'a>(headers: &'a [(String, String)], name: &str) -> Option<&'a str> {
-    find_header(headers, name)
-}
-
 // -------------------------------------------------------------------
 // Internals
 // -------------------------------------------------------------------

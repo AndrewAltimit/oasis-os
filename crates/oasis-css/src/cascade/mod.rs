@@ -147,7 +147,7 @@ pub type GlobalLayerMap = FxHashMap<(u16, u16), u16>;
 /// Layer names are assigned global indices in the order they are first
 /// encountered across all stylesheets (which follows source order).
 /// Subsequent sheets that declare the same layer name reuse the index.
-pub fn build_global_layer_map(stylesheets: &[&Stylesheet]) -> GlobalLayerMap {
+pub(crate) fn build_global_layer_map(stylesheets: &[&Stylesheet]) -> GlobalLayerMap {
     let mut name_to_global: FxHashMap<&str, u16> = FxHashMap::default();
     let mut next_global: u16 = 0;
     let mut map = GlobalLayerMap::default();

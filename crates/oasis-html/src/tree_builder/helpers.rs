@@ -115,118 +115,73 @@ impl TreeBuilder {
     }
 
     pub(crate) fn current_node_is_heading(&self) -> bool {
-        self.tag_of(self.current_node())
-            .map(|t| {
-                matches!(
-                    t,
-                    TagName::H1
-                        | TagName::H2
-                        | TagName::H3
-                        | TagName::H4
-                        | TagName::H5
-                        | TagName::H6
-                )
-            })
-            .unwrap_or(false)
+        self.tag_of(self.current_node()).is_some_and(is_heading)
     }
 
     // =============================================================
     // Scope helpers
     // =============================================================
 
-    /// Check if an element with the given tag is in scope.
-    ///
-    /// Per WHATWG §13.2.4.2 the default scope-boundary set includes
-    /// `template` so that scope queries cannot walk across a template
-    /// boundary into its enclosing tree.
+    /// Walk the open elements from the current node: `true` at the
+    /// first element `target` accepts, `false` at the first scope
+    /// boundary `boundary` accepts (WHATWG §13.2.4.2 "has an element in
+    /// the specific scope").
+    fn in_specific_scope(
+        &self,
+        target: impl Fn(&TagName) -> bool,
+        boundary: impl Fn(&TagName) -> bool,
+    ) -> bool {
+        for &id in self.open_elements.iter().rev() {
+            if let Some(t) = self.tag_of(id) {
+                if target(t) {
+                    return true;
+                }
+                if boundary(t) {
+                    return false;
+                }
+            }
+        }
+        false
+    }
+
+    /// The default scope boundaries. They include `template`, so scope
+    /// queries cannot walk across a template into its enclosing tree.
+    fn is_default_scope_boundary(t: &TagName) -> bool {
+        matches!(
+            t,
+            TagName::Html
+                | TagName::Table
+                | TagName::Td
+                | TagName::Th
+                | TagName::Caption
+                | TagName::Template
+        )
+    }
+
+    /// Check if an element with the given tag is in (default) scope.
     pub(crate) fn has_in_scope(&self, tag: &TagName) -> bool {
-        for &id in self.open_elements.iter().rev() {
-            if let Some(t) = self.tag_of(id) {
-                if t == tag {
-                    return true;
-                }
-                if matches!(
-                    t,
-                    TagName::Html
-                        | TagName::Table
-                        | TagName::Td
-                        | TagName::Th
-                        | TagName::Caption
-                        | TagName::Template
-                ) {
-                    return false;
-                }
-            }
-        }
-        false
+        self.in_specific_scope(|t| t == tag, Self::is_default_scope_boundary)
     }
 
+    /// List-item scope: the default boundaries plus `ol` / `ul`.
     pub(crate) fn has_in_list_scope(&self, tag: &TagName) -> bool {
-        for &id in self.open_elements.iter().rev() {
-            if let Some(t) = self.tag_of(id) {
-                if t == tag {
-                    return true;
-                }
-                if matches!(
-                    t,
-                    TagName::Html
-                        | TagName::Table
-                        | TagName::Td
-                        | TagName::Th
-                        | TagName::Caption
-                        | TagName::Ol
-                        | TagName::Ul
-                        | TagName::Template
-                ) {
-                    return false;
-                }
-            }
-        }
-        false
+        self.in_specific_scope(
+            |t| t == tag,
+            |t| Self::is_default_scope_boundary(t) || matches!(t, TagName::Ol | TagName::Ul),
+        )
     }
 
+    /// Table scope: only `html`, `table` and `template` bound it.
     pub(crate) fn has_in_table_scope(&self, tag: &TagName) -> bool {
-        for &id in self.open_elements.iter().rev() {
-            if let Some(t) = self.tag_of(id) {
-                if t == tag {
-                    return true;
-                }
-                if matches!(t, TagName::Html | TagName::Table | TagName::Template) {
-                    return false;
-                }
-            }
-        }
-        false
+        self.in_specific_scope(
+            |t| t == tag,
+            |t| matches!(t, TagName::Html | TagName::Table | TagName::Template),
+        )
     }
 
+    /// Whether any heading (`h1`..`h6`) is in default scope.
     pub(crate) fn has_heading_in_scope(&self) -> bool {
-        for &id in self.open_elements.iter().rev() {
-            if let Some(t) = self.tag_of(id) {
-                if matches!(
-                    t,
-                    TagName::H1
-                        | TagName::H2
-                        | TagName::H3
-                        | TagName::H4
-                        | TagName::H5
-                        | TagName::H6
-                ) {
-                    return true;
-                }
-                if matches!(
-                    t,
-                    TagName::Html
-                        | TagName::Table
-                        | TagName::Td
-                        | TagName::Th
-                        | TagName::Caption
-                        | TagName::Template
-                ) {
-                    return false;
-                }
-            }
-        }
-        false
+        self.in_specific_scope(is_heading, Self::is_default_scope_boundary)
     }
 
     // =============================================================
@@ -277,17 +232,7 @@ impl TreeBuilder {
     /// Pop elements until we pop the first heading element.
     pub(crate) fn close_to_first_heading(&mut self) {
         while let Some(id) = self.open_elements.pop() {
-            if let Some(t) = self.tag_of(id)
-                && matches!(
-                    t,
-                    TagName::H1
-                        | TagName::H2
-                        | TagName::H3
-                        | TagName::H4
-                        | TagName::H5
-                        | TagName::H6
-                )
-            {
+            if self.tag_of(id).is_some_and(is_heading) {
                 return;
             }
         }
@@ -362,4 +307,12 @@ impl TreeBuilder {
         }
         self.mode = InsertionMode::InBody;
     }
+}
+
+/// Whether `t` is a heading element (`h1`..`h6`).
+fn is_heading(t: &TagName) -> bool {
+    matches!(
+        t,
+        TagName::H1 | TagName::H2 | TagName::H3 | TagName::H4 | TagName::H5 | TagName::H6
+    )
 }

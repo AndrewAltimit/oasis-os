@@ -27,7 +27,7 @@ pub mod default;
 mod media;
 mod named_colors;
 pub mod parser;
-pub mod selectors;
+pub(crate) mod selectors;
 mod shorthand;
 mod token_util;
 pub mod tokenizer;

@@ -39,10 +39,8 @@ mod types;
 #[cfg(test)]
 mod tests;
 
-// Re-export public types so the module API is unchanged.
-// These types are part of Token's public API (e.g. Token::Doctype(DoctypeToken),
-// StartTagToken { attributes: Vec<Attribute> }) and are used by tree_builder tests.
-#[allow(unused_imports)]
+// The token types are part of Token's public API (e.g.
+// Token::Doctype(DoctypeToken), StartTagToken { attributes: Vec<Attribute> }).
 pub use types::{Attribute, DoctypeToken, EndTagToken, StartTagToken, Token};
 
 use types::{DoctypeBuilder, State, TagBuilder};

@@ -147,11 +147,6 @@ pub fn http_request_guarded(
     Err(OasisError::Backend("too many redirects".into()))
 }
 
-/// Case-insensitive header lookup.
-pub fn response_find_header<'a>(headers: &'a [(String, String)], name: &str) -> Option<&'a str> {
-    find_header(headers, name)
-}
-
 // -------------------------------------------------------------------
 // Core request logic
 // -------------------------------------------------------------------

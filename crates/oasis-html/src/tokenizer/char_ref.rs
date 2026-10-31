@@ -14,26 +14,7 @@ use super::types::{State, Token};
 /// Resolve a named character reference (without the leading `&`).
 /// `name` may include a trailing semicolon.
 pub(crate) fn resolve_named_ref(name: &str) -> Option<&'static str> {
-    let key = name.strip_suffix(';').unwrap_or(name);
-    // Delegate to the central entity table first.
-    if let Some(s) = crate::entities::lookup_entity(key) {
-        return Some(s);
-    }
-    // Extra entities used in the tokenizer but not in the main table.
-    match key {
-        "zwnj" => Some("\u{200C}"),
-        "zwj" => Some("\u{200D}"),
-        "lrm" => Some("\u{200E}"),
-        "rlm" => Some("\u{200F}"),
-        "iexcl" => Some("\u{00A1}"),
-        "iquest" => Some("\u{00BF}"),
-        "dagger" => Some("\u{2020}"),
-        "Dagger" => Some("\u{2021}"),
-        "permil" => Some("\u{2030}"),
-        "prime" => Some("\u{2032}"),
-        "Prime" => Some("\u{2033}"),
-        _ => None,
-    }
+    crate::entities::lookup_entity(name.strip_suffix(';').unwrap_or(name))
 }
 
 /// The numeric-reference replacement for a C1 control code point
