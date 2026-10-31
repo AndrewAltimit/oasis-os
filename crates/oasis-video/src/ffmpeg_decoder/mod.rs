@@ -136,11 +136,13 @@ impl FfmpegDecoder {
     }
 
     /// Whether a video track was found.
+    #[cfg(test)]
     pub fn has_video(&self) -> bool {
         self.video_stream_idx.is_some()
     }
 
     /// Whether an audio track was found.
+    #[cfg(test)]
     pub fn has_audio(&self) -> bool {
         self.audio_stream_idx.is_some()
     }
