@@ -162,6 +162,13 @@ Plaintext bytes between reads are buffered in a `VecDeque<u8>`
 (`tls_rustls.rs`); `drain_deque` uses `as_slices` to copy out without an
 intermediate allocation (`tls_rustls.rs`).
 
+Writes: `write` returns the plaintext bytes rustls accepted even when the
+non-blocking socket refuses (part of) the resulting ciphertext; what the
+socket cannot take stays queued in rustls and goes out on the next `read`,
+`write` or `flush` (the stream implements `NetworkStream::flush`). A write
+only fails with `WouldBlock` when rustls's own buffer is full and nothing
+could be accepted, so a caller that retries never sends bytes twice.
+
 Pinning custom certificates is not implemented. TLS is used by outbound
 clients only (HTTP, Gemini); no server in this crate accepts TLS.
 
@@ -237,8 +244,8 @@ contain spaces. Verbs:
 > `AuthThrottle` as the remote terminal: 5 failures lock logins for 30 s,
 > doubling), during which new connections get `421 Too many failed logins`
 > and are closed. A connection that has not authenticated within 20 s gets
-> `530 Authentication timeout`. `--password ""` arms an empty password,
-> which a bare `PASS ` matches -- pass a real password, or omit the flag.
+> `530 Authentication timeout`. An empty password (`--password ""`) is the
+> same as none: no `PASS` is required and the server binds loopback only.
 > Treat the service as trusted-LAN-only and never reuse a remote-terminal
 > PSK as the FTP password.
 

@@ -123,7 +123,9 @@ The crate does ship two format helpers used by tests and a few backends:
 
 - `wav.rs` — PCM WAV reader. Integer PCM only (format tag 1, or
   `WAVE_FORMAT_EXTENSIBLE` with the PCM SubFormat), 8-bit unsigned or
-  16-bit little-endian signed, mono or stereo, non-zero sample rate. The
+  16-bit little-endian signed, mono or stereo, a sample rate within
+  `wav::SAMPLE_RATES` (1 kHz - 768 kHz: a 1 Hz header would make the SFX
+  resampler ask for 44100 output samples per input sample). The
   reader returns `Option<WavData>`; any unsupported format, bit depth, or
   channel count (and any malformed RIFF / `fmt ` / `data` chunk, including
   a `fmt ` chunk shorter than its 16 fixed bytes) yields `None` rather than
@@ -205,7 +207,7 @@ hand the URL to a native streaming player (HTML5 `<audio>` for WASM) instead
 of pumping bytes through `feed_data`.
 
 Both network sources parse the response head with the shared
-`parse_http_head` (`source.rs`): it waits for `\r\n\r\n` in the raw bytes
+`parse_http_head` (`radio/source/http.rs`): it waits for `\r\n\r\n` in the raw bytes
 (so partial reads and non-UTF-8 bodies are fine) and returns the status code
 (from `HTTP/1.x NNN` or Shoutcast's `ICY NNN`), case-insensitive header
 lookup, and the body offset.
@@ -213,6 +215,11 @@ lookup, and the body offset.
 ### IcecastSource
 
 - HTTP/1.0 GET with `Icy-MetaData: 1` so the server interleaves stream titles.
+- Both sources build their request with one `get_request` helper that refuses
+  a host or path containing whitespace or control bytes, and
+  `StreamUrl::parse` / `resolve_redirect` refuse such URLs and `Location`s
+  up front: a CR / LF in a station URL or a redirect would otherwise end the
+  request line and inject headers.
 - Only a 2xx status starts playback. A 3xx with `Location` fails with
   `redirect:<url>` (same convention as `ArchiveSource`; the location is also
   available as `IcecastSource::redirect_location()`), any other status
@@ -227,7 +234,10 @@ lookup, and the body offset.
   arrived with the head are kept for the first `poll()`.
 - Parses `icy-metaint` from response headers (`icy::parse_icy_metaint`).
 - `IcyDemuxer` (`icy.rs`) splits audio from metadata blocks and surfaces
-  `StreamTitle='Artist - Song'` updates.
+  `StreamTitle='Artist - Song'` updates. Control characters are stripped
+  from titles (here and again in `RadioManager::feed_audio`, which also
+  covers archive.org titles), so a remote title cannot forge lines of the
+  line-based status file.
 
 ### ArchiveSource
 
@@ -239,7 +249,11 @@ lookup, and the body offset.
   `Location` is upgraded) and resolving relative `Location`s against the
   current host. `RadioManager::resume_from_redirect` just clears the error;
   anything else that drives it must cap the hop count itself.
-- 4xx and 5xx responses kill the source.
+- 4xx and 5xx responses kill the source, and so does a 3xx without a
+  `Location` (its body is an HTML stub, not audio).
+- `ArchiveCatalog::parse_search_response` drops item identifiers outside
+  `[A-Za-z0-9._-]` (they go into request paths unencoded), and
+  `percent_encode` encodes control bytes in file names.
 - Tracks `Content-Length` and ends the source once that many body bytes
   arrived.
 - Emits metadata once on the first chunk, populated from a creator/title
@@ -250,6 +264,14 @@ lookup, and the body offset.
 In-memory byte buffer, configurable chunk size (default 4 KiB). Used by tests
 and by UE5 asset streaming.
 
+### Buffering and track end
+
+`RadioManager` buffers `BUFFER_THRESHOLD` (32 KiB) before it starts the
+streaming track. A source that ends before that much arrived (a very short
+archive clip) is started with what it delivered and then finalized, rather
+than discarded; either way the manager moves to `TrackEnded` for the caller
+to auto-advance.
+
 ### Reconnection
 
 There is **no automatic reconnect.** When `RadioSource::poll` returns an error
@@ -259,7 +281,9 @@ source to retry.
 
 ## Sample rate and channel assumptions
 
-- WAV: whatever the file says.
+- WAV: whatever the file says, within `wav::SAMPLE_RATES` (1-768 kHz).
+  `mixer::resample_nearest_i16` (the SFX resampler) also caps its output at
+  `MAX_RESAMPLED_SAMPLES` (2^27) whatever the input rate.
 - OGG: whatever symphonia reports; defaults to 44.1 kHz / stereo if missing.
 - Radio: feed raw bytes to the backend; the backend's decoder picks rate and
   channels.
@@ -287,7 +311,7 @@ the backend level, not here.
 
 | Symptom | Root cause | What to check |
 | --- | --- | --- |
-| Stream cuts out periodically | `streaming_can_accept` returns false too aggressively. | Backend's mixer buffer threshold; `BUFFER_THRESHOLD` in `source.rs`. |
+| Stream cuts out periodically | `streaming_can_accept` returns false too aggressively. | Backend's mixer buffer threshold; `BUFFER_THRESHOLD` in `radio/mod.rs`. |
 | Track plays as silence | Backend rejected the byte slice (unsupported format). | Backend's `load_track` log; codec features. |
 | ICY title never updates | `icy-metaint` header missing on the server. | Confirm server actually sends it via `curl -I -H "Icy-MetaData: 1"`. |
 | Archive stream stops on every track | Source disconnects on EOF; no auto-reconnect. | Caller must build a new `ArchiveSource`. |

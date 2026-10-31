@@ -201,8 +201,11 @@ misbehaving local client can hold):
   connection until the backlog drains (backpressure, not data loss). A peer
   that half-closes meanwhile still gets an answer to every complete request it
   sent.
-- `401` and the `404` / `405` / `415` answers to a complete request keep the
-  connection alive; `403` always closes it.
+- The `404` / `405` / `415` answers to a complete request keep the
+  connection alive; `403` and `401` always close it, so a client guessing
+  the token gets one attempt per connection instead of pipelining hundreds
+  into one keep-alive connection (and the server accepts one connection per
+  poll).
 - The app records at most 64 characters of a tool name for the activity pill
   and the log, and `play_media` refuses paths containing line breaks (the
   media request file is line-based).
