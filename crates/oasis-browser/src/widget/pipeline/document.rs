@@ -43,112 +43,8 @@ impl BrowserWidget {
         self.clear_node_references();
 
         // 1b. Execute inline <script> blocks (if JS enabled).
-        //
-        // The document is wrapped in Rc<RefCell<>> so JS closures can
-        // mutate it. After the engine is dropped (freeing all JS-side
-        // Rc clones), we unwrap the Rc to recover an owned Document.
         #[cfg(feature = "javascript")]
-        {
-            self.console_output.clear();
-            // Drop any previously retained engine before loading a new page.
-            self.js_engine = None;
-            self.js_doc = None;
-        }
-        #[cfg(feature = "javascript")]
-        let doc = {
-            let (scripts, deferred) = Self::collect_scripts(&doc, self.page_csp.as_ref());
-            self.deferred_scripts = deferred;
-            let shared: js_dom::SharedDoc = std::rc::Rc::new(std::cell::RefCell::new(doc));
-            match oasis_js::JsEngine::new(self.config.js_memory_limit_bytes) {
-                Ok(mut engine) => {
-                    engine.set_max_exec_ms(self.config.js_max_exec_ms);
-                    let s = std::rc::Rc::clone(&shared);
-                    let nav = std::rc::Rc::clone(&self.js_nav_actions);
-                    let js_sty = std::rc::Rc::clone(&self.js_styles);
-                    let ls = std::rc::Rc::clone(&self.js_local_storage);
-                    let dirty = std::rc::Rc::clone(&self.js_dom_dirty);
-                    // Reset between page loads so a previous page's
-                    // mutation doesn't force an extra relayout here.
-                    dirty.set(false);
-                    if let Err(e) = engine.with_context(|ctx| {
-                        js_dom::install_document_global_with_csp(
-                            &ctx,
-                            &s,
-                            url,
-                            &nav,
-                            &js_sty,
-                            self.page_csp.as_ref(),
-                            self.tls.clone(),
-                            Some(&ls),
-                            Some(&dirty),
-                        )
-                    }) {
-                        log::warn!("JS DOM install failed: {}", e.message);
-                        self.record_error(
-                            crate::BrowserErrorKind::Script,
-                            format!("JS DOM install: {}", e.message),
-                        );
-                    }
-                    // Install canvas 2D context bindings.
-                    #[cfg(feature = "canvas")]
-                    {
-                        let cm = std::rc::Rc::clone(&self.canvas_states);
-                        if let Err(e) =
-                            engine.with_context(|ctx| js_dom::install_canvas_bindings(&ctx, &cm))
-                        {
-                            log::warn!("Canvas bindings install failed: {}", e.message);
-                        }
-                    }
-                    if !scripts.is_empty() {
-                        let script_refs: Vec<&str> = scripts.iter().map(String::as_str).collect();
-                        engine.eval_all(&script_refs);
-                    }
-                    // Install site-compat shims (togglecomment, etc.)
-                    // before wiring inline handlers, so onclick bodies
-                    // that reference them find defined globals. User
-                    // scripts already ran and can override if they
-                    // defined their own versions.
-                    js_dom::install_site_compat_shims(&engine);
-                    // Register inline event handlers (onclick, etc.)
-                    // after scripts so Element class is available. CSP
-                    // `script-src-attr` judges each handler's own text.
-                    {
-                        let csp = self.page_csp.as_ref();
-                        let allowed = |body: &str| {
-                            csp.is_none_or(|p| {
-                                p.allows_inline(InlineKind::ScriptAttribute, None, body)
-                            })
-                        };
-                        let doc_borrow = shared.borrow();
-                        js_dom::register_inline_handlers(&engine, &doc_borrow, &allowed);
-                    }
-                    // readystatechange -> DOMContentLoaded -> window load.
-                    js_dom::fire_document_lifecycle(&engine);
-                    self.console_output = engine.console_output();
-                    // Retain engine + shared doc for event dispatch.
-                    self.js_engine = Some(engine);
-                    self.js_doc = Some(std::rc::Rc::clone(&shared));
-                },
-                Err(e) => {
-                    log::warn!("JS engine init failed: {}", e.message);
-                    self.record_error(
-                        crate::BrowserErrorKind::Script,
-                        format!("JS engine init: {}", e.message),
-                    );
-                },
-            }
-            // Mutations made while the page loaded are already in the
-            // document we are about to lay out; don't replay them on the
-            // first tick.
-            self.js_dom_dirty.set(false);
-            // Try to take ownership without cloning. This succeeds when
-            // no JS engine was retained (init failure or no scripts).
-            // When the engine holds a clone via js_doc, fall back to clone.
-            match std::rc::Rc::try_unwrap(shared) {
-                Ok(cell) => cell.into_inner(),
-                Err(shared) => shared.borrow().clone(),
-            }
-        };
+        let doc = self.run_page_scripts(doc, url);
 
         // 2. Extract page title.
         let title = doc.title().unwrap_or_else(|| url.to_string());
@@ -308,27 +204,7 @@ impl BrowserWidget {
 
         // 4b. Register CSS animations with the animation engine using
         //     the final styles (after any container-query restyle).
-        {
-            let mut all_keyframes: Vec<&css::parser::KeyframesRule> = Vec::new();
-            all_keyframes.extend(ua_sheet.keyframes.iter());
-            for sheet in &author_sheets {
-                all_keyframes.extend(sheet.keyframes.iter());
-            }
-            self.animation_engine = css::animation::AnimationEngine::new();
-            for (node_id, maybe_style) in styles.iter().enumerate() {
-                if let Some(computed) = maybe_style
-                    && !computed.animations.is_empty()
-                {
-                    let kf_owned: Vec<css::parser::KeyframesRule> =
-                        all_keyframes.iter().copied().cloned().collect();
-                    self.animation_engine.start_animations(
-                        node_id,
-                        &computed.animations,
-                        &kf_owned,
-                    );
-                }
-            }
-        }
+        self.start_page_animations(ua_sheet, &author_sheets, &styles);
         drop(all_sheets);
 
         // Cache parsed sheets and selector index for hover restyles.
@@ -390,6 +266,135 @@ impl BrowserWidget {
             self.scroll_to_fragment(&fragment);
         }
         self.diag("[BR] load_html done");
+    }
+
+    /// Run the page's inline scripts against `doc` and keep the engine
+    /// (and its shared document) for event dispatch; returns the
+    /// document as the scripts left it.
+    ///
+    /// The document is wrapped in `Rc<RefCell<>>` so JS closures can
+    /// mutate it. After the engine is dropped (freeing all JS-side `Rc`
+    /// clones), the `Rc` unwraps to an owned `Document` again.
+    #[cfg(feature = "javascript")]
+    fn run_page_scripts(&mut self, doc: html::dom::Document, url: &str) -> html::dom::Document {
+        self.console_output.clear();
+        // Drop any previously retained engine before loading a new page.
+        self.js_engine = None;
+        self.js_doc = None;
+        let (scripts, deferred) = Self::collect_scripts(&doc, self.page_csp.as_ref());
+        self.deferred_scripts = deferred;
+        let shared: js_dom::SharedDoc = std::rc::Rc::new(std::cell::RefCell::new(doc));
+        match oasis_js::JsEngine::new(self.config.js_memory_limit_bytes) {
+            Ok(mut engine) => {
+                engine.set_max_exec_ms(self.config.js_max_exec_ms);
+                let s = std::rc::Rc::clone(&shared);
+                let nav = std::rc::Rc::clone(&self.js_nav_actions);
+                let js_sty = std::rc::Rc::clone(&self.js_styles);
+                let ls = std::rc::Rc::clone(&self.js_local_storage);
+                let dirty = std::rc::Rc::clone(&self.js_dom_dirty);
+                // Reset between page loads so a previous page's
+                // mutation doesn't force an extra relayout here.
+                dirty.set(false);
+                if let Err(e) = engine.with_context(|ctx| {
+                    js_dom::install_document_global_with_csp(
+                        &ctx,
+                        &s,
+                        url,
+                        &nav,
+                        &js_sty,
+                        self.page_csp.as_ref(),
+                        self.tls.clone(),
+                        Some(&ls),
+                        Some(&dirty),
+                    )
+                }) {
+                    log::warn!("JS DOM install failed: {}", e.message);
+                    self.record_error(
+                        crate::BrowserErrorKind::Script,
+                        format!("JS DOM install: {}", e.message),
+                    );
+                }
+                // Install canvas 2D context bindings.
+                #[cfg(feature = "canvas")]
+                {
+                    let cm = std::rc::Rc::clone(&self.canvas_states);
+                    if let Err(e) =
+                        engine.with_context(|ctx| js_dom::install_canvas_bindings(&ctx, &cm))
+                    {
+                        log::warn!("Canvas bindings install failed: {}", e.message);
+                    }
+                }
+                if !scripts.is_empty() {
+                    let script_refs: Vec<&str> = scripts.iter().map(String::as_str).collect();
+                    engine.eval_all(&script_refs);
+                }
+                // Install site-compat shims (togglecomment, etc.)
+                // before wiring inline handlers, so onclick bodies
+                // that reference them find defined globals. User
+                // scripts already ran and can override if they
+                // defined their own versions.
+                js_dom::install_site_compat_shims(&engine);
+                // Register inline event handlers (onclick, etc.)
+                // after scripts so Element class is available. CSP
+                // `script-src-attr` judges each handler's own text.
+                {
+                    let csp = self.page_csp.as_ref();
+                    let allowed = |body: &str| {
+                        csp.is_none_or(|p| p.allows_inline(InlineKind::ScriptAttribute, None, body))
+                    };
+                    let doc_borrow = shared.borrow();
+                    js_dom::register_inline_handlers(&engine, &doc_borrow, &allowed);
+                }
+                // readystatechange -> DOMContentLoaded -> window load.
+                js_dom::fire_document_lifecycle(&engine);
+                self.console_output = engine.console_output();
+                // Retain engine + shared doc for event dispatch.
+                self.js_engine = Some(engine);
+                self.js_doc = Some(std::rc::Rc::clone(&shared));
+            },
+            Err(e) => {
+                log::warn!("JS engine init failed: {}", e.message);
+                self.record_error(
+                    crate::BrowserErrorKind::Script,
+                    format!("JS engine init: {}", e.message),
+                );
+            },
+        }
+        // Mutations made while the page loaded are already in the
+        // document we are about to lay out; don't replay them on the
+        // first tick.
+        self.js_dom_dirty.set(false);
+        // Try to take ownership without cloning. This succeeds when
+        // no JS engine was retained (init failure or no scripts).
+        // When the engine holds a clone via js_doc, fall back to clone.
+        match std::rc::Rc::try_unwrap(shared) {
+            Ok(cell) => cell.into_inner(),
+            Err(shared) => shared.borrow().clone(),
+        }
+    }
+
+    /// Restart the animation engine with every `animation` the final
+    /// styles declare, resolved against the UA and author `@keyframes`.
+    fn start_page_animations(
+        &mut self,
+        ua_sheet: &css::parser::Stylesheet,
+        author_sheets: &[css::parser::Stylesheet],
+        styles: &[Option<css::values::ComputedStyle>],
+    ) {
+        self.animation_engine = css::animation::AnimationEngine::new();
+        // Cloned once per page, not once per animated node.
+        let mut keyframes: Vec<css::parser::KeyframesRule> = Vec::new();
+        for sheet in std::iter::once(ua_sheet).chain(author_sheets) {
+            keyframes.extend(sheet.keyframes.iter().cloned());
+        }
+        for (node_id, maybe_style) in styles.iter().enumerate() {
+            if let Some(computed) = maybe_style
+                && !computed.animations.is_empty()
+            {
+                self.animation_engine
+                    .start_animations(node_id, &computed.animations, &keyframes);
+            }
+        }
     }
 
     /// Walk the DOM and register every `<form>` (plus its descendant

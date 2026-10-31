@@ -330,6 +330,16 @@ pub(super) fn install_node_bindings(
     dirty: &Option<SharedDirty>,
     freed: &FreedLog,
 ) -> JsResult<()> {
+    install_traversal_bindings(ctx, doc)?;
+    install_node_data_bindings(ctx, doc, dirty)?;
+    install_fragment_bindings(ctx, doc, freed)?;
+    install_query_bindings(ctx, doc)?;
+    install_freed_log_binding(ctx, freed)?;
+    Ok(())
+}
+
+/// Install the root / head / node type / parent, child and sibling traversal helpers.
+fn install_traversal_bindings(ctx: &Ctx<'_>, doc: &SharedDoc) -> JsResult<()> {
     let globals = ctx.globals();
 
     // -- __oasis_root() -> i32 ----------------------------------------
@@ -436,6 +446,16 @@ pub(super) fn install_node_bindings(
             })?,
         )?;
     }
+    Ok(())
+}
+
+/// Install the node value and attribute list helpers.
+fn install_node_data_bindings(
+    ctx: &Ctx<'_>,
+    doc: &SharedDoc,
+    dirty: &Option<SharedDirty>,
+) -> JsResult<()> {
+    let globals = ctx.globals();
 
     // -- __oasis_node_value(nid) -> String|undefined ------------------
     {
@@ -490,6 +510,12 @@ pub(super) fn install_node_bindings(
             })?,
         )?;
     }
+    Ok(())
+}
+
+/// Install the comment / fragment creation, fragment parsing and cloning helpers.
+fn install_fragment_bindings(ctx: &Ctx<'_>, doc: &SharedDoc, freed: &FreedLog) -> JsResult<()> {
+    let globals = ctx.globals();
 
     // -- __oasis_create_comment(text) / __oasis_create_fragment() -----
     {
@@ -577,6 +603,12 @@ pub(super) fn install_node_bindings(
             })?,
         )?;
     }
+    Ok(())
+}
+
+/// Install the outerHTML, matches and element-list helpers.
+fn install_query_bindings(ctx: &Ctx<'_>, doc: &SharedDoc) -> JsResult<()> {
+    let globals = ctx.globals();
 
     // -- __oasis_outer_html(nid) -> String ----------------------------
     {
@@ -659,6 +691,12 @@ pub(super) fn install_node_bindings(
             })?,
         )?;
     }
+    Ok(())
+}
+
+/// Install the freed-node log drain.
+fn install_freed_log_binding(ctx: &Ctx<'_>, freed: &FreedLog) -> JsResult<()> {
+    let globals = ctx.globals();
 
     // -- __oasis_take_freed() -> Vec<i32> ------------------------------
     {
@@ -673,7 +711,6 @@ pub(super) fn install_node_bindings(
             })?,
         )?;
     }
-
     Ok(())
 }
 

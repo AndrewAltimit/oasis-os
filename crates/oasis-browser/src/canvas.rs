@@ -94,7 +94,7 @@ pub const MAX_CANVAS_COMMANDS: usize = 16_384;
 /// Most path points one canvas's commands hold in total.
 pub const MAX_CANVAS_POINTS: usize = 1 << 20;
 /// Deepest `save()` stack kept.
-const MAX_SAVE_DEPTH: usize = 1024;
+pub const MAX_SAVE_DEPTH: usize = 1024;
 
 /// Saved canvas drawing state for save()/restore().
 #[derive(Debug, Clone)]

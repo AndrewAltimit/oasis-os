@@ -15,6 +15,19 @@ pub fn install_canvas_bindings(
     ctx: &Ctx<'_>,
     canvas_map: &crate::canvas::SharedCanvasMap,
 ) -> JsResult<()> {
+    install_canvas_rect_text_bindings(ctx, canvas_map)?;
+    install_canvas_shape_bindings(ctx, canvas_map)?;
+    install_canvas_path_bindings(ctx, canvas_map)?;
+    install_canvas_state_bindings(ctx, canvas_map)?;
+    install_canvas_class(ctx)?;
+    Ok(())
+}
+
+/// Install the rectangle, text and drawing-style helpers.
+fn install_canvas_rect_text_bindings(
+    ctx: &Ctx<'_>,
+    canvas_map: &crate::canvas::SharedCanvasMap,
+) -> JsResult<()> {
     let globals = ctx.globals();
 
     // -- __oasis_canvas_fill_rect(nid, x, y, w, h) -------------------
@@ -185,6 +198,15 @@ pub fn install_canvas_bindings(
             })?,
         )?;
     }
+    Ok(())
+}
+
+/// Install the line and arc helpers.
+fn install_canvas_shape_bindings(
+    ctx: &Ctx<'_>,
+    canvas_map: &crate::canvas::SharedCanvasMap,
+) -> JsResult<()> {
+    let globals = ctx.globals();
 
     // -- __oasis_canvas_line(nid, x1, y1, x2, y2, is_fill) -----------
     {
@@ -241,6 +263,15 @@ pub fn install_canvas_bindings(
             )?,
         )?;
     }
+    Ok(())
+}
+
+/// Install the path-building and path fill / stroke helpers.
+fn install_canvas_path_bindings(
+    ctx: &Ctx<'_>,
+    canvas_map: &crate::canvas::SharedCanvasMap,
+) -> JsResult<()> {
+    let globals = ctx.globals();
 
     // -- __oasis_canvas_begin_path(nid) ---------------------------------
     {
@@ -408,6 +439,15 @@ pub fn install_canvas_bindings(
             })?,
         )?;
     }
+    Ok(())
+}
+
+/// Install the save / restore helpers.
+fn install_canvas_state_bindings(
+    ctx: &Ctx<'_>,
+    canvas_map: &crate::canvas::SharedCanvasMap,
+) -> JsResult<()> {
+    let globals = ctx.globals();
 
     // -- __oasis_canvas_save(nid) / __oasis_canvas_restore(nid) -------
     {
@@ -434,13 +474,16 @@ pub fn install_canvas_bindings(
             })?,
         )?;
     }
+    Ok(())
+}
 
+/// Install the JS CanvasRenderingContext2D class (wrapping the helpers).
+fn install_canvas_class(ctx: &Ctx<'_>) -> JsResult<()> {
     // -- JavaScript CanvasRenderingContext2D class ---------------------
     #[cfg(feature = "canvas")]
     {
         let _: () = ctx.eval(JS_CANVAS_BOOTSTRAP)?;
     }
-
     Ok(())
 }
 
