@@ -47,12 +47,15 @@ pub fn parse_icy_metadata(block: &[u8]) -> StreamMetadata {
     // Look for StreamTitle='...';
     if let Some(start) = text.find("StreamTitle='") {
         let after = &text[start + "StreamTitle='".len()..];
-        if let Some(end) = after.find("';") {
-            meta.title = after[..end].to_string();
-        } else {
+        let title = match after.find("';") {
+            Some(end) => &after[..end],
             // No closing delimiter -- take rest of string.
-            meta.title = after.trim_end_matches('\'').to_string();
-        }
+            None => after.trim_end_matches('\''),
+        };
+        // The title is remote-controlled text shown in the UI and written
+        // to the status file line by line: drop control characters (a
+        // newline would forge extra status lines).
+        meta.title = title.chars().filter(|c| !c.is_control()).collect();
     }
 
     meta
@@ -74,9 +77,12 @@ pub struct IcyDemuxer {
 
 impl IcyDemuxer {
     /// Create a new demuxer with the given metadata interval.
+    ///
+    /// An interval of 0 (which [`parse_icy_metaint`] never returns) is
+    /// treated as 1 so the demuxer always makes progress.
     pub fn new(metaint: usize) -> Self {
         Self {
-            metaint,
+            metaint: metaint.max(1),
             audio_count: 0,
             in_meta: false,
             meta_remaining: 0,
@@ -198,6 +204,24 @@ mod tests {
         let block = "StreamTitle='Café Müsik';".as_bytes();
         let meta = parse_icy_metadata(block);
         assert_eq!(meta.title, "Café Müsik");
+    }
+
+    #[test]
+    fn title_control_characters_are_dropped() {
+        let meta = parse_icy_metadata(b"StreamTitle='A\nState: Playing\r\x1b[2J - B';");
+        assert_eq!(meta.title, "AState: Playing[2J - B");
+    }
+
+    #[test]
+    fn demuxer_survives_arbitrary_input() {
+        // Every metadata length byte (up to 255 * 16) and split point.
+        let mut demux = IcyDemuxer::new(3);
+        let data: Vec<u8> = (0..=255u8).cycle().take(64 * 1024).collect();
+        for chunk in data.chunks(7) {
+            let _ = demux.process(chunk);
+        }
+        let (audio, _) = IcyDemuxer::new(0).process(&[1, 0, 2]);
+        assert_eq!(audio, [1, 2]);
     }
 
     #[test]

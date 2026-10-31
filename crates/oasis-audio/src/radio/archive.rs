@@ -19,7 +19,8 @@ pub struct ArchiveTrack {
 /// Percent-encode a filename for use in HTTP paths/URLs.
 ///
 /// Encodes characters that are unsafe in URL path segments: space, `#`, `?`,
-/// `&`, `%`, `+`, and bytes >127.
+/// `&`, `%`, `+`, control bytes (CR / LF in a filename would otherwise end
+/// the request line) and bytes >= 127.
 pub fn percent_encode(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     for b in s.bytes() {
@@ -30,7 +31,7 @@ pub fn percent_encode(s: &str) -> String {
             b'&' => out.push_str("%26"),
             b'%' => out.push_str("%25"),
             b'+' => out.push_str("%2B"),
-            0x80.. => {
+            ..b' ' | 0x7F.. => {
                 out.push('%');
                 out.push(char::from(HEX[b as usize >> 4]));
                 out.push(char::from(HEX[b as usize & 0xF]));
@@ -42,6 +43,16 @@ pub fn percent_encode(s: &str) -> String {
 }
 
 const HEX: [u8; 16] = *b"0123456789ABCDEF";
+
+/// Whether `id` is a well-formed Internet Archive item identifier: ASCII
+/// letters, digits, `.`, `_` and `-`, not starting with `.` (so never `..`).
+fn is_item_identifier(id: &str) -> bool {
+    !id.is_empty()
+        && !id.starts_with('.')
+        && id
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-'))
+}
 
 /// A browsable catalog of tracks from an IA collection.
 pub struct ArchiveCatalog {
@@ -92,7 +103,9 @@ impl ArchiveCatalog {
                 .and_then(|v| v.as_str())
                 .unwrap_or("Unknown")
                 .to_string();
-            if !identifier.is_empty() {
+            // The identifier is spliced into request paths unencoded, so
+            // anything but an IA identifier (`[A-Za-z0-9._-]`) is dropped.
+            if is_item_identifier(&identifier) {
                 results.push((identifier, title, creator));
             }
         }
@@ -615,6 +628,23 @@ mod tests {
         let order1: Vec<&str> = cat1.tracks.iter().map(|t| t.title.as_str()).collect();
         let order2: Vec<&str> = cat2.tracks.iter().map(|t| t.title.as_str()).collect();
         assert_ne!(order1, order2);
+    }
+
+    #[test]
+    fn hostile_identifiers_and_filenames_cannot_inject_into_requests() {
+        let json = r#"{"response": {"docs": [
+            {"identifier": "ok-item_1.2"},
+            {"identifier": "../etc"},
+            {"identifier": "a b"},
+            {"identifier": "x\r\nHost: evil"},
+            {"identifier": "a/b"}
+        ]}}"#;
+        let ids: Vec<String> = ArchiveCatalog::parse_search_response(json)
+            .into_iter()
+            .map(|(id, _, _)| id)
+            .collect();
+        assert_eq!(ids, ["ok-item_1.2"]);
+        assert_eq!(percent_encode("a\r\nb\t\x7f"), "a%0D%0Ab%09%7F");
     }
 
     #[test]

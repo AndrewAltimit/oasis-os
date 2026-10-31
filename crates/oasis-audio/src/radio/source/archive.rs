@@ -3,7 +3,9 @@
 use oasis_types::backend::NetworkStream;
 use oasis_types::error::{OasisError, Result};
 
-use super::http::{MAX_HEADER_BYTES, headers_too_large, parse_http_head, read_some, write_request};
+use super::http::{
+    MAX_HEADER_BYTES, get_request, headers_too_large, parse_http_head, read_some, write_request,
+};
 use super::{AudioChunk, RadioSource, SourceState};
 use crate::radio::icy::StreamMetadata;
 
@@ -59,13 +61,14 @@ impl ArchiveSource {
 
     /// Send the HTTP GET request.
     fn send_request(&mut self) -> Result<()> {
-        let request = format!(
-            "GET {} HTTP/1.1\r\nHost: {}\r\nUser-Agent: OASIS_OS/0.1\r\n\
-             Connection: close\r\nAccept: */*\r\n\r\n",
-            self.path, self.host
-        );
-        write_request(&mut *self.stream, request.as_bytes())
-            .inspect_err(|_| self.state = SourceState::Error)
+        get_request(
+            &self.path,
+            &self.host,
+            "1.1",
+            "User-Agent: OASIS_OS/0.1\r\nConnection: close\r\nAccept: */*\r\n",
+        )
+        .and_then(|request| write_request(&mut *self.stream, request.as_bytes()))
+        .inspect_err(|_| self.state = SourceState::Error)
     }
 
     /// Push back a chunk so it is returned by the next `poll()` call.
@@ -133,7 +136,8 @@ impl ArchiveSource {
         self.headers_parsed = true;
         match (head.status, head.header("location")) {
             (Some(300..=399), Some(url)) => return self.fail(format!("redirect:{url}")),
-            (Some(code), _) if code >= 400 => return self.fail(format!("HTTP {code}")),
+            // A 3xx without a `Location` has no audio body to play either.
+            (Some(code), _) if code >= 300 => return self.fail(format!("HTTP {code}")),
             _ => {},
         }
         self.content_length = head.header("content-length").and_then(|v| v.parse().ok());
