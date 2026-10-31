@@ -6,6 +6,25 @@ larger changes by area. Breaking API changes are marked **(breaking)**.
 
 ## Unreleased -- overhaul 3
 
+### Cross-lane review fixes
+
+- `rm -r` (and the File Manager's delete) removes a symlink to a directory as a link; it
+  used to empty the link's target on `RealVfs`. New provided `Vfs::is_symlink`.
+- Browser: the anonymous flex / grid items around inline children no longer copy the
+  container's `position`, `opacity`, `transform`, background image, ...; an inline child
+  is blockified, so its own `margin-left: auto`, padding and width apply to its item.
+  Reader mode keeps its stylesheet on pages with a `style-src` CSP.
+- `<title>` / `<textarea>` map `&#150;`-style references through Windows-1252 too; merged
+  late `<body>` / `<html>` attributes are capped like a tag's.
+- TLS `close` drains ciphertext a full socket held back (a write right before close could
+  lose its tail).
+- Paint: a canvas wider than the window starts at the view's edge (its first columns were
+  unreachable). `set X = 5` works again; `tail -n +N` is an error instead of "last N";
+  `head -- -5` reads the file `-5`.
+- PSP: clip rects are clamped to the screen before `sceGuScissor` (an empty clip drew
+  everywhere, a clip left of / above the screen hid everything); the WiFi dialog's
+  success path re-opens the GU frame.
+
 ### Skins, vector graphics & shaders
 
 - Skin inheritance (`inherits = "<parent>"`) now fills *every* field the child omits: the nine
@@ -101,6 +120,7 @@ larger changes by area. Breaking API changes are marked **(breaking)**.
 - Named character references cover all of HTML 4 plus common HTML5 names (`&check;`,
   `&lang;`, `&lpar;`, ...); without a `;` only the legacy Latin-1 names match, as the longest
   prefix (`&copy2024` is `©2024`; `&mdash` without `;` now stays literal, as in browsers).
+  An unknown name with a `;` stays literal (`&centerdot;` is not `¢erdot;`).
 - New `TreeBuilder::parse` / `parse_with` / `parse_reuse` and `ParseOptions { scripting }`:
   the tree builder drives the tokenizer, as the spec does; `Tokenizer::with_scripting`,
   `TreeBuilder::build_with` for the pre-tokenized path.
@@ -110,7 +130,8 @@ larger changes by area. Breaking API changes are marked **(breaking)**.
 - CSS cascade layers order as a tree (sublayers before their parent, late sublayers in their
   parent's slot) **(breaking: `Stylesheet::layers` is now in cascade order)**; `inherit`
   works for non-inherited properties and on shorthands; `all: unset` (the common button
-  reset) is supported; the `flex` shorthand handles every
+  reset) is supported, and `revert` rolls a property back to the user-agent value
+  (`* { all: unset; display: revert }` keeps blocks blocks); the `flex` shorthand handles every
   form (`flex: auto`, `flex: 2 1 0`, `flex: 100px`); `::before` / `::after` see their own
   custom properties.
 - Attribute selectors accept the `i` / `s` flags (the flag used to drop the rule) and match
@@ -147,8 +168,8 @@ larger changes by area. Breaking API changes are marked **(breaking)**.
 
 - HTTP/1.1: `304` / `204` / `1xx` responses and `HEAD` answers no longer
   wait 15 s for a body their `Content-Length` promises; `103 Early Hints`
-  heads are skipped instead of becoming the response; one response gets
-  at most 60 s; every resolved address is tried. A guarded (`fetch()`)
+  heads are skipped instead of becoming the response; a response slower
+  than 16 KiB/s is cut off after about 60 s; every resolved address is tried. A guarded (`fetch()`)
   request now refuses to connect if *any* resolved address is disallowed.
 - HTTP/2: POST bodies over 16 KiB are split into frames (they failed on
   servers with default settings); padded DATA no longer drains the
@@ -178,10 +199,10 @@ larger changes by area. Breaking API changes are marked **(breaking)**.
 
 ### Documentation and site content
 
-- Counts re-verified against the source: the eight extension traits carry
-  47 default methods (`SdiClipTransform` has 9 since it gained
-  `draw_bounds`), was 46 / 8 across CLAUDE.md, README, design, ADR-003, the
-  landing page and journal entries 01 and 06; 21 shell builtins (was 20 in
+- Counts re-verified against the source: `SdiCore` has 12 required methods
+  and the eight extension traits carry 45 default methods (`SdiClipTransform`
+  has 9 since it gained `draw_bounds`; `SdiTextures` lost two, see the backend
+  section) across CLAUDE.md, README, design and ADR-003; 21 shell builtins (was 20 in
   the README and two journal entries).
 - CI descriptions follow the workflows: PRs run the same feature-set checks
   as main (`scripts/ci-feature-clippy.sh`, also in getting-started), criterion
@@ -383,8 +404,9 @@ larger changes by area. Breaking API changes are marked **(breaking)**.
   `ls -a` / `-l` (plain `ls` now hides dotfiles), `rm -r` / `-f`, `mkdir -p`, `grep -q`,
   `sort -u`, `head -N` / `tail -N`.
 - `grep` with no match, `ls` of an empty directory and `find` with no hit print nothing
-  (they printed `(no matches)` / `(empty)`, which pipes and `$(...)` then saw). ANSI colour
-  codes (`ls` directories) are stripped from text reaching a pipe, redirect or `$(...)`.
+  (they printed `(no matches)` / `(empty)`, which pipes and `$(...)` then saw). The shell's own
+  colour codes (`ls` / `tree` directories) are stripped from text reaching a pipe, redirect
+  or `$(...)`; other escape sequences pass through (`cat a.ans > b.ans` copies the bytes).
 - `case`: quoted patterns, `$VAR` patterns and quoted `|` work (`case "$X" in "hello")`
   never matched); the case word is not split or globbed; `case foo.in in` finds the right
   `in`. A `case` with no matching arm and a `for` over nothing exit 0.
@@ -419,7 +441,8 @@ larger changes by area. Breaking API changes are marked **(breaking)**.
 
 - `cron` used to store "scheduled scripts" that nothing ever ran. Jobs now have an interval
   and run: `cron add <name> <interval> <script>` (`30s`, `5m`, `2h`, `1d`, bare number =
-  seconds; 1 s to 30 d), `cron list` shows each job's interval. The old two-argument
+  seconds; 1 s to 30 d; a relative script path is resolved against the current directory),
+  `cron list` shows each job's interval. The old two-argument
   `cron add <name> <script>` is rejected, and existing interval-less entries are listed as
   invalid until re-added **(breaking)**.
 - `oasis_core::script::CronScheduler` runs due jobs when a host calls `tick(now, ...)`: the
