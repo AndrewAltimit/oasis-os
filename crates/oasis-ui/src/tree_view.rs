@@ -88,13 +88,10 @@ impl TreeView {
     /// or `None` if the parent was not found.
     pub fn add_child(&mut self, parent_id: usize, label: impl Into<String>) -> Option<usize> {
         let id = self.next_id;
-        let child = TreeNode::new(label, id);
-        if Self::insert_child(&mut self.roots, parent_id, child) {
-            self.next_id += 1;
-            Some(id)
-        } else {
-            None
-        }
+        let parent = Self::find_node_mut(&mut self.roots, parent_id)?;
+        parent.children.push(TreeNode::new(label, id));
+        self.next_id += 1;
+        Some(id)
     }
 
     /// Toggle the expanded state of the node with the given id.
@@ -294,20 +291,6 @@ impl TreeView {
         None
     }
 
-    /// Insert a child under the node with the given parent id.
-    fn insert_child(nodes: &mut [TreeNode], parent_id: usize, child: TreeNode) -> bool {
-        for node in nodes {
-            if node.id == parent_id {
-                node.children.push(child);
-                return true;
-            }
-            if Self::insert_child(&mut node.children, parent_id, child.clone()) {
-                return true;
-            }
-        }
-        false
-    }
-
     /// Set expanded state recursively on all nodes.
     fn set_expanded_recursive(nodes: &mut [TreeNode], expanded: bool) {
         for node in nodes {
@@ -355,6 +338,23 @@ impl TreeView {
     }
 }
 
+/// For each row of a flattened tree (given by depth), whether it is the
+/// last of its siblings (its connector stops at mid-row): no later row at
+/// the same depth before the list climbs above it. (Testing only the next
+/// row's depth marked every node followed by a sibling as "last",
+/// breaking the line between siblings.)
+fn last_sibling_flags(depths: &[usize]) -> Vec<bool> {
+    (0..depths.len())
+        .map(|i| {
+            let depth = depths[i];
+            !depths[i + 1..]
+                .iter()
+                .take_while(|&&d| d >= depth)
+                .any(|&d| d == depth)
+        })
+        .collect()
+}
+
 impl Default for TreeView {
     fn default() -> Self {
         Self::new()
@@ -394,21 +394,8 @@ impl Widget for TreeView {
             ctx.theme.text_primary
         };
 
-        // Precompute which nodes are last among their visible siblings.
-        // For connecting-line drawing, we need to know if a node is the
-        // last child at its depth. We approximate this from the flattened
-        // visible list: a node is "last" if the next node has the same or
-        // lesser depth.
-        let is_last_at_depth: Vec<bool> = visible
-            .iter()
-            .enumerate()
-            .map(|(i, (_, _, depth))| {
-                if i + 1 >= visible.len() {
-                    return true;
-                }
-                visible[i + 1].2 <= *depth
-            })
-            .collect();
+        let depths: Vec<usize> = visible.iter().map(|n| n.2).collect();
+        let is_last_at_depth = last_sibling_flags(&depths);
 
         for (row_idx, (id, node, depth)) in visible.iter().enumerate() {
             let row_y = y + row_idx as i32 * row_h as i32;
@@ -647,6 +634,20 @@ mod tests {
         tv.focused_id = Some(9_999);
         tv.navigate_up();
         assert_eq!(tv.focused(), Some(root));
+    }
+
+    /// Every node followed by a sibling was treated as "last", so its
+    /// connector stopped at mid-row and the line between siblings broke.
+    #[test]
+    fn connector_runs_through_non_last_siblings() {
+        // Root, A (with child A1), B: A is not last although its next row
+        // (A1) is deeper; A1 and B are last of their sibling groups.
+        assert_eq!(last_sibling_flags(&[0, 1, 2, 1]), [true, false, true, true]);
+        // Two plain siblings: only the second one ends the line.
+        assert_eq!(last_sibling_flags(&[0, 1, 1]), [true, false, true]);
+        // Two roots: the first continues to the second.
+        assert_eq!(last_sibling_flags(&[0, 1, 0]), [false, true, true]);
+        assert!(last_sibling_flags(&[]).is_empty());
     }
 
     #[test]

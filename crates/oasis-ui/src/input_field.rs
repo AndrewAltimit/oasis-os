@@ -14,8 +14,6 @@ pub struct InputField {
     pub placeholder: String,
     /// Cursor position as character index.
     pub cursor_pos: usize,
-    /// Optional text selection range (start, end).
-    pub selection: Option<(usize, usize)>,
     /// Whether the field has focus.
     pub focused: bool,
     /// If true, display text as asterisks.
@@ -35,7 +33,6 @@ impl InputField {
             text: String::new(),
             placeholder: String::new(),
             cursor_pos: 0,
-            selection: None,
             focused: false,
             password_mode: false,
             disabled: false,
@@ -233,7 +230,6 @@ mod tests {
         assert!(f.text.is_empty());
         assert!(f.placeholder.is_empty());
         assert_eq!(f.cursor_pos, 0);
-        assert!(f.selection.is_none());
         assert!(!f.focused);
         assert!(!f.password_mode);
     }
