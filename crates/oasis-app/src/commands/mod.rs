@@ -46,6 +46,13 @@ use crate::app_state::AppState;
 /// empty file is not rewritten, so idle frames do no VFS writes). The file
 /// is always cleared once read, so a malformed request cannot loop.
 pub(crate) fn take_request(vfs: &mut dyn Vfs, path: &str) -> Option<String> {
+    // Every frame polls ~15 request files that are almost always missing
+    // or empty: settle that with a cheap existence + size check instead of
+    // a permission-checked read (whose missing-file error formats a
+    // message). A file that has content is read exactly as before.
+    if !vfs.exists(path) || vfs.stat(path).is_ok_and(|m| m.size == 0) {
+        return None;
+    }
     let data = vfs.read(path).ok().filter(|d| !d.is_empty())?;
     let _ = vfs.write(path, b"");
     let text = String::from_utf8_lossy(&data).trim().to_string();
