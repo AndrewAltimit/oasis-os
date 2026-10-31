@@ -64,17 +64,16 @@ pub struct SoftwareShaderRenderer {
 impl SoftwareShaderRenderer {
     /// Create a new software renderer at the given output resolution.
     pub fn new(width: u32, height: u32) -> Self {
-        let scale = render_scale_for(width, height);
-        let iw = width.div_ceil(scale);
-        let ih = height.div_ceil(scale);
-        Self {
-            width,
-            height,
-            scale,
-            pixel_buf: vec![0u8; (width * height * 4) as usize],
-            lo_buf: vec![[0u8; 4]; (iw * ih) as usize],
+        let mut r = Self {
+            width: 0,
+            height: 0,
+            scale: RENDER_SCALE,
+            pixel_buf: Vec::new(),
+            lo_buf: Vec::new(),
             warned_unknown: false,
-        }
+        };
+        r.resize(width, height);
+        r
     }
 
     /// Resize the output buffer.
@@ -82,10 +81,11 @@ impl SoftwareShaderRenderer {
         self.width = width;
         self.height = height;
         self.scale = render_scale_for(width, height);
-        self.pixel_buf.resize((width * height * 4) as usize, 0);
-        let iw = width.div_ceil(self.scale);
-        let ih = height.div_ceil(self.scale);
-        self.lo_buf.resize((iw * ih) as usize, [0u8; 4]);
+        // usize math: width * height * 4 overflows u32 above ~32k x 32k.
+        self.pixel_buf
+            .resize(width as usize * height as usize * 4, 0);
+        let (iw, ih, _) = self.lo_dims();
+        self.lo_buf.resize(iw as usize * ih as usize, [0u8; 4]);
     }
 
     /// Render a shader by skin name. Returns the RGBA output buffer.
@@ -112,6 +112,12 @@ impl SoftwareShaderRenderer {
         time: f32,
         params: &ShaderParams,
     ) -> &[u8] {
+        // A zero-sized output has nothing to shade (and the kernels index
+        // the last low-res row / column).
+        if self.width == 0 || self.height == 0 {
+            return &self.pixel_buf;
+        }
+        let time = crate::wrap_time(time);
         match shader {
             BuiltinShader::Balatro => self.render_balatro(time, params),
             BuiltinShader::Voronoi => self.render_voronoi(time, params),
@@ -197,18 +203,24 @@ fn upscale_nn(
     ih: u32,
     scale: u32,
 ) {
-    for y in 0..height {
-        let sy = (y / scale).min(ih - 1);
-        let src_row = (sy * iw) as usize;
-        let dst_row = (y * width * 4) as usize;
-        for x in 0..width {
-            let sx = (x / scale).min(iw - 1) as usize;
-            let rgba = lo_buf[src_row + sx];
-            let idx = dst_row + (x * 4) as usize;
-            pixel_buf[idx] = rgba[0];
-            pixel_buf[idx + 1] = rgba[1];
-            pixel_buf[idx + 2] = rgba[2];
-            pixel_buf[idx + 3] = rgba[3];
+    if width == 0 || height == 0 || iw == 0 || ih == 0 {
+        return;
+    }
+    let (width, iw, ih, scale) = (width as usize, iw as usize, ih as usize, scale as usize);
+    let row_bytes = width * 4;
+    // Every output row of one low-res row is identical: expand the first
+    // with whole-pixel chunk writes, then memcpy it down the band.
+    for (band, rows) in pixel_buf[..row_bytes * height as usize]
+        .chunks_mut(row_bytes * scale)
+        .enumerate()
+    {
+        let src = &lo_buf[band.min(ih - 1) * iw..][..iw];
+        let (first, rest) = rows.split_at_mut(row_bytes);
+        for (x, px) in first.as_chunks_mut::<4>().0.iter_mut().enumerate() {
+            *px = src[(x / scale).min(iw - 1)];
+        }
+        for row in rest.chunks_exact_mut(row_bytes) {
+            row.copy_from_slice(first);
         }
     }
 }

@@ -590,3 +590,59 @@ fn every_declared_parameter_affects_cpu_output() {
         }
     }
 }
+
+#[test]
+fn zero_sized_outputs_render_nothing() {
+    for (w, h) in [(0, 0), (0, 9), (9, 0)] {
+        let mut r = SoftwareShaderRenderer::new(w, h);
+        for shader in BuiltinShader::ALL {
+            let px = r.render_builtin(shader, 1.0, &ShaderParams::default());
+            assert!(px.is_empty(), "{w}x{h} {}", shader.name());
+        }
+    }
+}
+
+#[test]
+fn time_wraps_at_the_period_and_ignores_non_finite() {
+    use crate::{TIME_WRAP_S, wrap_time};
+    assert_eq!(wrap_time(12.5), 12.5);
+    assert_eq!(wrap_time(TIME_WRAP_S + 2.0), 2.0);
+    assert!((0.0..TIME_WRAP_S).contains(&wrap_time(-1.0)));
+    assert_eq!(wrap_time(f32::NAN), 0.0);
+    assert_eq!(wrap_time(f32::INFINITY), 0.0);
+    // A day in, the frame matches the wrapped one (not a frozen image).
+    let mut a = SoftwareShaderRenderer::new(32, 32);
+    let mut b = SoftwareShaderRenderer::new(32, 32);
+    let p = ShaderParams::default();
+    for shader in BuiltinShader::ALL {
+        let day = 24.0 * TIME_WRAP_S + 7.25;
+        let wrapped = a.render_builtin(shader, 7.25, &p).to_vec();
+        assert_eq!(b.render_builtin(shader, day, &p), wrapped.as_slice());
+    }
+}
+
+#[test]
+fn upscale_matches_per_pixel_nearest_neighbour() {
+    // Reference: the straightforward per-pixel loop the fast path replaced.
+    fn reference(lo: &[[u8; 4]], w: u32, h: u32, iw: u32, ih: u32, scale: u32) -> Vec<u8> {
+        let mut out = vec![0u8; (w * h * 4) as usize];
+        for y in 0..h {
+            for x in 0..w {
+                let sx = (x / scale).min(iw - 1);
+                let sy = (y / scale).min(ih - 1);
+                let i = ((y * w + x) * 4) as usize;
+                out[i..i + 4].copy_from_slice(&lo[(sy * iw + sx) as usize]);
+            }
+        }
+        out
+    }
+    for (w, h, scale) in [(16, 16, 3), (17, 5, 3), (8, 31, 4), (1, 1, 3), (10, 7, 8)] {
+        let (iw, ih) = (u32::div_ceil(w, scale), u32::div_ceil(h, scale));
+        let lo: Vec<[u8; 4]> = (0..iw * ih)
+            .map(|i| [i as u8, (i * 7) as u8, (i * 13) as u8, 255])
+            .collect();
+        let mut out = vec![0u8; (w * h * 4) as usize];
+        upscale_nn(&lo, &mut out, w, h, iw, ih, scale);
+        assert_eq!(out, reference(&lo, w, h, iw, ih, scale), "{w}x{h}/{scale}");
+    }
+}

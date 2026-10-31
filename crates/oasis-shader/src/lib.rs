@@ -29,6 +29,26 @@ pub mod uniforms;
 pub use registry::BuiltinShader;
 pub use uniforms::ShaderParams;
 
+/// Period, in seconds, at which shader time wraps (one hour).
+///
+/// The shaders take time as `f32` and feed it (scaled) into `sin`, `fract`
+/// and uv offsets. Left unbounded, the arguments grow until `f32` can no
+/// longer resolve a frame step -- after a few days of uptime the wallpaper
+/// stutters, then freezes into blocks. Wrapping costs one visible jump per
+/// hour instead; both renderers apply it, so CPU and GPU output still match.
+pub const TIME_WRAP_S: f32 = 3600.0;
+
+/// Shader time as both renderers use it: `time` modulo [`TIME_WRAP_S`],
+/// with a non-finite time treated as 0.
+pub fn wrap_time(time: f32) -> f32 {
+    if !time.is_finite() {
+        return 0.0;
+    }
+    let t = time.rem_euclid(TIME_WRAP_S);
+    // `rem_euclid` can round up to the period for tiny negative inputs.
+    if t >= TIME_WRAP_S { 0.0 } else { t }
+}
+
 #[cfg(feature = "glow")]
 use std::collections::HashMap;
 
@@ -299,7 +319,7 @@ unsafe fn gl_render(
 
         // Standard uniforms.
         if let Some(loc) = gl.get_uniform_location(program, "u_time") {
-            gl.uniform_1_f32(Some(&loc), time);
+            gl.uniform_1_f32(Some(&loc), wrap_time(time));
         }
         if let Some(loc) = gl.get_uniform_location(program, "u_resolution") {
             gl.uniform_2_f32(Some(&loc), width as f32, height as f32);
