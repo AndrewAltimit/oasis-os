@@ -27,7 +27,9 @@ Environment:
     PSP_IP   (default: 192.168.0.249)
     PSP_PORT (default: 9293)
     PSP_PSK  pre-shared key; must match ms0:/PSP/GAME/OASISOS/cmdserver.key
-             (the EBOOT's command server only listens when that file exists)
+             (the EBOOT's command server only listens when that file exists).
+             The recovery EBOOT uses ms0:/PSP/SAVEDATA/ARK_01234/
+             oasis-recovery.key, else that same cmdserver.key
 """
 
 import hashlib
@@ -91,6 +93,11 @@ def authenticate(sock, psk):
     `AUTH <psk_response>` and expect `AUTH_OK` before any command.
     """
     line = _recv_line(sock)
+    if line == "AUTH_FAIL no key":
+        raise AuthError(
+            "PSP recovery server has no key: put one in "
+            "ms0:/PSP/SAVEDATA/ARK_01234/oasis-recovery.key (or cmdserver.key)"
+        )
     if not line.startswith("AUTH_REQUIRED "):
         raise AuthError(f"unexpected greeting from PSP: {line!r}")
     if not psk:

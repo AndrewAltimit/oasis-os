@@ -237,6 +237,79 @@ fn null_callback_unregisters() {
 }
 
 #[test]
+fn callbacks_ex_pass_user_data_back() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    static CMD_DATA: AtomicUsize = AtomicUsize::new(0);
+    static AUDIO_DATA: AtomicUsize = AtomicUsize::new(0);
+    extern "C" fn cb(_event: u32, _detail: *const c_char, user_data: *mut std::ffi::c_void) {
+        CMD_DATA.store(user_data as usize, Ordering::SeqCst);
+    }
+    extern "C" fn audio_cb(_e: u32, _t: u64, _v: u32, user_data: *mut std::ffi::c_void) {
+        AUDIO_DATA.store(user_data as usize, Ordering::SeqCst);
+    }
+
+    let mut context = [0u8; 2];
+    let cmd_ptr = (&raw mut context[0]).cast::<std::ffi::c_void>();
+    let audio_ptr = (&raw mut context[1]).cast::<std::ffi::c_void>();
+    let handle = create_instance();
+    unsafe { oasis_register_callback_ex(handle, OASIS_CB_COMMAND_EXEC, Some(cb), cmd_ptr) };
+    unsafe { oasis_set_audio_callback_ex(handle, Some(audio_cb), audio_ptr) };
+
+    let cmd = CString::new("help").unwrap();
+    let out = unsafe { oasis_send_command(handle, cmd.as_ptr()) };
+    unsafe { oasis_free_string(out) };
+    assert!(unsafe { oasis_audio_set_volume(handle, 10) });
+    assert_eq!(CMD_DATA.load(Ordering::SeqCst), cmd_ptr as usize);
+    assert_eq!(AUDIO_DATA.load(Ordering::SeqCst), audio_ptr as usize);
+
+    // Null unregisters, as with the plain exports.
+    unsafe { oasis_register_callback_ex(handle, OASIS_CB_COMMAND_EXEC, None, cmd_ptr) };
+    let empty = unsafe {
+        crate::handle::with_instance_ref(handle, false, |inst| inst.callbacks.is_empty())
+    };
+    assert!(empty);
+    unsafe { oasis_destroy(handle) };
+}
+
+#[test]
+fn audio_drain_stream_copies_streamed_bytes() {
+    use oasis_core::backend::AudioBackend;
+
+    let handle = create_instance();
+    unsafe {
+        crate::handle::with_instance(handle, (), |inst| {
+            let track = inst.audio.load_streaming().unwrap();
+            inst.audio.feed_data(track, b"radio-bytes").unwrap();
+        });
+    }
+    assert_eq!(unsafe { oasis_audio_stream_buffered(handle) }, 11);
+    let mut buf = [0u8; 5];
+    assert_eq!(
+        unsafe { oasis_audio_drain_stream(handle, buf.as_mut_ptr(), 5) },
+        5
+    );
+    assert_eq!(&buf, b"radio");
+    let mut rest = [0u8; 64];
+    assert_eq!(
+        unsafe { oasis_audio_drain_stream(handle, rest.as_mut_ptr(), 64) },
+        6
+    );
+    assert_eq!(&rest[..6], b"-bytes");
+    assert_eq!(unsafe { oasis_audio_stream_buffered(handle) }, 0);
+    assert_eq!(
+        unsafe { oasis_audio_drain_stream(handle, std::ptr::null_mut(), 64) },
+        0
+    );
+    unsafe { oasis_destroy(handle) };
+    let null = std::ptr::null_mut();
+    assert_eq!(
+        unsafe { oasis_audio_drain_stream(null, rest.as_mut_ptr(), 64) },
+        0
+    );
+    assert_eq!(unsafe { oasis_audio_stream_buffered(null) }, 0);
+}
+
+#[test]
 fn add_vfs_file_null_data_with_zero_len_creates_empty_file() {
     let handle = create_instance();
     let path = CString::new("/tmp/zero.txt").unwrap();

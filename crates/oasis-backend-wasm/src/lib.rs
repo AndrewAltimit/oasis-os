@@ -790,17 +790,20 @@ impl OasisWasm {
                         &self.active_theme,
                         &self.skin.features,
                     );
+                    // The bar lays out first and leaves the taskbar its
+                    // free span, as on the desktop shell.
+                    self.bottom_bar.reserve_taskbar = !self.wm.windows().is_empty();
                     self.bottom_bar.update_sdi(
                         &mut self.sdi,
                         &self.active_theme,
                         &self.skin.features,
                     );
-                    self.taskbar.update_sdi(
+                    self.taskbar.update_sdi_in(
                         &mut self.sdi,
                         &self.active_theme,
                         self.wm.windows(),
                         self.wm.active_window(),
-                        self.skin.features.start_menu,
+                        self.bottom_bar.taskbar_span(),
                     );
                     self.taskbar.update_desktop_indicator(
                         &mut self.sdi,

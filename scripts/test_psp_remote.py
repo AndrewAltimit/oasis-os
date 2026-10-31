@@ -142,6 +142,24 @@ class AuthTest(unittest.TestCase):
             conn.ping()
         thread.join(5)
 
+    def test_keyless_recovery_server_is_reported(self):
+        listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        listener.bind(("127.0.0.1", 0))
+        listener.listen(1)
+        port = listener.getsockname()[1]
+
+        def serve():
+            conn, _ = listener.accept()
+            with conn, listener:
+                conn.sendall(b"AUTH_FAIL no key\n")
+
+        thread = threading.Thread(target=serve, daemon=True)
+        thread.start()
+        conn = PspConnection("127.0.0.1", port, timeout=5, psk="correct horse")
+        with self.assertRaisesRegex(AuthError, "oasis-recovery.key"):
+            conn.ping()
+        thread.join(5)
+
 
 if __name__ == "__main__":
     unittest.main()

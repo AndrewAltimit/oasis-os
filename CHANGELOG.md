@@ -448,6 +448,31 @@ larger changes by area. Breaking API changes are marked **(breaking)**.
   pinned rust-psp revision. Releases ship `oasis-me-boot.prx` (the EBOOT loads it from its GAME
   directory for hardware H.264 decode), and the release notes install the overlay as
   `ms0:/seplugins/oasis_plugin.prx`, the name `plugin status` / `plugin remove` expect.
+- **(breaking)** Recovery EBOOT: the WiFi file server on TCP 9293 (upload / readfile / delete /
+  reboot) now requires the same PSK challenge as the EBOOT command server
+  (`oasis_net::verify_auth_line`; `scripts/psp_remote.py` with `PSP_PSK`). The key comes from
+  `ms0:/PSP/SAVEDATA/ARK_01234/oasis-recovery.key` (beside `RECOVERY.PBP`, so a wiped or broken
+  shell install does not lock recovery out), else the shell's `cmdserver.key` read as a plain
+  file; with neither, every connection gets `AUTH_FAIL no key`.
+- EBOOT radio: the body bytes that arrive with the HTTP headers go through the ICY demuxer, so
+  stream-title metadata no longer desyncs (decoded as audio, audio swallowed as metadata) on
+  stations that send metadata.
+- EBOOT and WASM: the taskbar is laid out in the bottom bar's free span
+  (`BottomBar::taskbar_span` + `Taskbar::update_sdi_in`), as on the desktop shell, so window
+  buttons no longer overlap the URL plate, USB label or media dock.
+
+### FFI (oasis-ffi, oasis-backend-ue5)
+
+All additions are new symbols; existing exports keep their signatures.
+
+- `oasis_audio_drain_stream` / `oasis_audio_stream_buffered`: C exports for streamed (internet
+  radio) audio bytes, which were only reachable through the Rust-side `drain_stream`.
+- `oasis_register_callback_ex` / `oasis_set_audio_callback_ex`: callbacks that also receive a
+  host `void* user_data` (passed back unchanged), so a C++ host can route events to its object.
+- `oasis_video_audio_format`: the sample rate and channel count of `oasis_video_get_audio`'s PCM.
+- The video decode thread is paced to the wall clock: frames become available at their
+  presentation time and audio is decoded ~0.5 s ahead, instead of decoding flat out (which
+  overflowed the audio ring and dropped chunks before a per-frame poll could take them).
 
 ### Backend traits and desktop / web / UE5 backends
 

@@ -362,7 +362,10 @@ Run `python3 scripts/psp_remote.py` without arguments for the full command
 list (status, log, hold, cursor, hard-reboot, skins, build-cycle, ...).
 
 The network recovery EBOOT (`crates/oasis-recovery-psp`, built the same way)
-starts a WiFi file server when R is held at boot.
+starts a WiFi file server when R is held at boot. It speaks the same PSK
+handshake, keyed by `ms0:/PSP/SAVEDATA/ARK_01234/oasis-recovery.key` (kept
+next to `RECOVERY.PBP`, so it survives a wiped shell directory) or, failing
+that, the shell's `cmdserver.key`; with neither it refuses every connection.
 
 ## Tests, lint and formatting
 
