@@ -42,12 +42,77 @@ const MAX_STRUCTURAL_SCAN: usize = 128 * 1024;
 /// The origin of a declaration for cascade ordering.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub(super) enum Origin {
+    /// From the built-in user-agent sheet
+    /// ([`default_stylesheet`](crate::default::default_stylesheet)).
+    UserAgent,
     /// From an HTML presentational attribute (lowest priority author style).
     Presentational,
     /// From a `<link>` or `<style>` stylesheet.
     Stylesheet,
     /// From the element's `style=""` attribute.
     Inline,
+}
+
+impl Origin {
+    /// The origin of rules from `sheet`: the user-agent origin for the
+    /// built-in UA sheet (recognised by identity), author otherwise.
+    pub(super) fn of_sheet(sheet: &Stylesheet) -> Self {
+        if std::ptr::eq(sheet, crate::default::default_stylesheet()) {
+            Origin::UserAgent
+        } else {
+            Origin::Stylesheet
+        }
+    }
+}
+
+impl MatchedDeclaration {
+    /// Origin-and-importance tier (CSS Cascade 5 §6.1), lowest first:
+    /// normal UA < presentational hints < normal author < normal inline
+    /// < important author < important inline < important UA.
+    fn cascade_tier(&self) -> u8 {
+        match (self.important, self.origin) {
+            (false, Origin::UserAgent) => 0,
+            (_, Origin::Presentational) => 1,
+            (false, Origin::Stylesheet) => 2,
+            (false, Origin::Inline) => 3,
+            (true, Origin::Stylesheet) => 4,
+            (true, Origin::Inline) => 5,
+            (true, Origin::UserAgent) => 6,
+        }
+    }
+
+    /// True if `self` sorts in a lower cascade layer than `other` of the
+    /// same tier (what `revert-layer` rolls back to), or in a lower tier.
+    pub(super) fn below_layer_of(&self, other: &Self) -> bool {
+        match self.cascade_tier().cmp(&other.cascade_tier()) {
+            std::cmp::Ordering::Less => true,
+            std::cmp::Ordering::Greater => false,
+            std::cmp::Ordering::Equal => compare_layers(self, other).is_lt(),
+        }
+    }
+
+    /// True if `self` comes from a lower origin than `other` (what
+    /// `revert` rolls back to). Presentational hints count as author.
+    pub(super) fn below_origin_of(&self, other: &Self) -> bool {
+        let origin_rank = |d: &Self| match (d.important, d.origin) {
+            (false, Origin::UserAgent) => 0,
+            (false, _) => 1,
+            (true, Origin::UserAgent) => 3,
+            (true, _) => 2,
+        };
+        origin_rank(self) < origin_rank(other)
+    }
+}
+
+/// Cascade order of two declarations (ascending: for one property the
+/// last one wins): origin and importance, then layer, specificity and
+/// source order.
+pub(super) fn cascade_order(a: &MatchedDeclaration, b: &MatchedDeclaration) -> std::cmp::Ordering {
+    a.cascade_tier()
+        .cmp(&b.cascade_tier())
+        .then_with(|| compare_layers(a, b))
+        .then_with(|| a.specificity.cmp(&b.specificity))
+        .then_with(|| a.source_order.cmp(&b.source_order))
 }
 
 /// A single declaration together with its cascade metadata.
@@ -62,14 +127,6 @@ pub(super) struct MatchedDeclaration {
     /// Cascade-layer index inside the source stylesheet, or `None`
     /// for unlayered rules / non-stylesheet origins.
     pub(super) layer: Option<u16>,
-    /// From the user-agent stylesheet ([`crate::default::default_stylesheet`]):
-    /// the values an author `revert` rolls back to.
-    pub(super) user_agent: bool,
-}
-
-/// Whether `sheet` is the user-agent stylesheet.
-fn is_user_agent_sheet(sheet: &Stylesheet) -> bool {
-    std::ptr::eq(sheet, crate::default::default_stylesheet())
 }
 
 /// Test whether `node_id`'s nearest matching container ancestor
@@ -190,7 +247,7 @@ fn eval_feature(f: &ContainerFeature, entry: &super::ContainerEntry) -> bool {
 ///   declarations; `!important` reverses again (earlier layers win).
 /// - Layer indices are global across stylesheets when
 ///   `GlobalLayerMap` is populated.
-pub(super) fn compare_layers(a: &MatchedDeclaration, b: &MatchedDeclaration) -> std::cmp::Ordering {
+fn compare_layers(a: &MatchedDeclaration, b: &MatchedDeclaration) -> std::cmp::Ordering {
     use std::cmp::Ordering;
 
     // Only style-origin declarations participate in layering.
@@ -329,17 +386,15 @@ pub(super) fn resolve_pseudo_style_indexed(
                     Some(local)
                 }
             });
-            let user_agent = is_user_agent_sheet(stylesheets[sheet_idx]);
             for (i, decl) in rule.declarations.iter().enumerate() {
                 matched.push(MatchedDeclaration {
                     property: decl.property.clone(),
                     value: decl.value.clone(),
                     important: decl.important,
-                    origin: Origin::Stylesheet,
+                    origin: Origin::of_sheet(stylesheets[sheet_idx]),
                     specificity,
                     source_order: decl_base + i,
                     layer: global_layer,
-                    user_agent,
                 });
             }
         }
@@ -350,14 +405,7 @@ pub(super) fn resolve_pseudo_style_indexed(
     }
 
     // Sort by cascade order.
-    matched.sort_by(|a, b| {
-        a.important
-            .cmp(&b.important)
-            .then_with(|| a.origin.cmp(&b.origin))
-            .then_with(|| compare_layers(a, b))
-            .then_with(|| a.specificity.cmp(&b.specificity))
-            .then_with(|| a.source_order.cmp(&b.source_order))
-    });
+    matched.sort_by(cascade_order);
 
     // The winning `content` value; none (or `content: none | normal`)
     // means no pseudo-element box.
@@ -380,9 +428,9 @@ pub(super) fn resolve_pseudo_style_indexed(
     // `--*` values, even when the custom property sorts later in
     // cascade order.
     let mut declared_custom: Vec<&str> = Vec::new();
-    for entry in &matched {
+    for (i, entry) in matched.iter().enumerate() {
         if entry.property.starts_with("--") {
-            style.apply_declaration(&entry.property, &entry.value, parent_font_size);
+            super::apply::apply_matched_custom(&mut style, Some(element_style), &matched, i);
             declared_custom.push(&entry.property);
         }
     }
@@ -409,15 +457,10 @@ pub(super) fn resolve_pseudo_style_indexed(
     };
 
     // Apply font-size first (for em-unit resolution in other properties).
+    let parent = Some(element_style);
     for (i, entry) in matched.iter().enumerate() {
         if entry.property == "font-size" {
-            super::apply_matched(
-                &mut style,
-                Some(element_style),
-                &matched,
-                i,
-                parent_font_size,
-            );
+            super::apply::apply_matched(&mut style, parent, &matched, i, parent_font_size);
         }
     }
     let pseudo_font_size = style.font_size;
@@ -430,13 +473,7 @@ pub(super) fn resolve_pseudo_style_indexed(
         {
             continue;
         }
-        super::apply_matched(
-            &mut style,
-            Some(element_style),
-            &matched,
-            i,
-            pseudo_font_size,
-        );
+        super::apply::apply_matched(&mut style, parent, &matched, i, pseudo_font_size);
     }
 
     style.content = Some(content_text);
@@ -571,17 +608,16 @@ pub(super) fn collect_matched_declarations(
                     Some(local)
                 }
             });
-            let user_agent = is_user_agent_sheet(stylesheets[candidate.sheet_idx]);
+            let origin = Origin::of_sheet(stylesheets[candidate.sheet_idx]);
             for (decl_idx, decl) in rule.declarations.iter().enumerate() {
                 result.push(MatchedDeclaration {
                     property: decl.property.clone(),
                     value: decl.value.clone(),
                     important: decl.important,
-                    origin: Origin::Stylesheet,
+                    origin,
                     specificity,
                     source_order: candidate.source_order_base + decl_idx,
                     layer: global_layer,
-                    user_agent,
                 });
             }
         }
@@ -615,7 +651,6 @@ pub(super) fn collect_matched_declarations(
                 specificity: inline_spec,
                 source_order: inline_base + i,
                 layer: None,
-                user_agent: false,
             });
         }
     }
@@ -652,7 +687,6 @@ fn collect_presentational_attrs(
             specificity: zero_spec,
             source_order: 0,
             layer: None,
-            user_agent: false,
         });
     };
 
@@ -1248,15 +1282,17 @@ fn matches_simple(
         },
         // An inner result cut short by the budget is "unknown", not
         // "no match": it must not turn into a `:not()` match.
+        // The argument selectors are complex and unscoped: in
+        // `:is(.a .b)` the `.a` may be any ancestor of the element.
         SimpleSelector::Not(inner_list) => {
             !inner_list
                 .iter()
-                .any(|compound| matches_compound(doc, node_id, compound, ctx, budget))
+                .any(|sel| matches_selector_scoped(doc, node_id, sel, ctx, None, None, budget))
                 && !budget.exhausted()
         },
         SimpleSelector::Is(inner_list) | SimpleSelector::Where(inner_list) => inner_list
             .iter()
-            .any(|compound| matches_compound(doc, node_id, compound, ctx, budget)),
+            .any(|sel| matches_selector_scoped(doc, node_id, sel, ctx, None, None, budget)),
         SimpleSelector::Has(relative_list) => matches_has(doc, node_id, relative_list, ctx, budget),
         SimpleSelector::Attribute {
             name,

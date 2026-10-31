@@ -588,9 +588,7 @@ fn not_selector() {
     let sel = Selector {
         parts: vec![(
             CompoundSelector {
-                parts: vec![SimpleSelector::Not(vec![CompoundSelector {
-                    parts: vec![SimpleSelector::Type("div".to_string())],
-                }])],
+                parts: vec![SimpleSelector::Not(vec![simple_type_selector("div")])],
             },
             None,
         )],
@@ -3756,5 +3754,218 @@ mod spec_followups {
         let before = s.before_style.expect("::before box");
         assert_eq!(before.color, RED);
         assert_eq!(s.before_content.as_deref(), Some("hi"));
+    }
+}
+
+/// Origins and importance (UA vs. presentational hints vs. author),
+/// `revert-layer`, and CSS-wide keywords on custom properties.
+mod origins {
+    use super::*;
+    use crate::parser::Specificity;
+    use matching::{MatchedDeclaration, Origin, cascade_order};
+    use oasis_html::tokenizer::Tokenizer;
+    use oasis_html::tree_builder::TreeBuilder;
+
+    const RED: Color = Color::rgb(255, 0, 0);
+    const BLUE: Color = Color::rgb(0, 0, 255);
+
+    /// Style `id` with the UA sheet followed by `css`.
+    fn ua_styled(html: &str, css: &str, id: &str) -> ComputedStyle {
+        let doc = TreeBuilder::build(Tokenizer::new(html).tokenize());
+        let author = Stylesheet::parse(css);
+        let refs = [default_stylesheet(), &author];
+        let styles = style_tree(&doc, &refs, &[], &ctx());
+        let node = doc.get_element_by_id(id).expect("element with id");
+        styles[node].clone().expect("element style")
+    }
+
+    #[test]
+    fn layered_author_rules_beat_the_user_agent_sheet() {
+        // Unlayered beats layered only *within* the author origin; a UA
+        // `div { display: block }` must lose to any author layer
+        // (Tailwind v4 puts everything in layers).
+        let s = ua_styled(
+            r#"<div id="t">x</div>"#,
+            "@layer base { div { display: inline } }",
+            "t",
+        );
+        assert_eq!(s.display, Display::Inline);
+    }
+
+    #[test]
+    fn presentational_hints_beat_the_user_agent_sheet() {
+        // UA `td { padding: 2px 4px }` must not override `cellpadding`.
+        let html = r#"<table cellpadding="0"><tr><td id="t">x</td></tr></table>"#;
+        let s = ua_styled(html, "", "t");
+        assert_eq!((s.padding_top, s.padding_left), (0.0, 0.0));
+        // ... but author rules still beat the hint.
+        let s = ua_styled(html, "td { padding-left: 3px }", "t");
+        assert_eq!(s.padding_left, 3.0);
+    }
+
+    fn entry(origin: Origin, important: bool, layer: Option<u16>) -> MatchedDeclaration {
+        MatchedDeclaration {
+            property: "color".into(),
+            value: CssValue::Keyword("red".into()),
+            important,
+            origin,
+            specificity: Specificity {
+                inline: 0,
+                ids: 0,
+                classes: 0,
+                types: 0,
+            },
+            source_order: 0,
+            layer,
+        }
+    }
+
+    #[test]
+    fn important_reverses_origin_order() {
+        let ua_important = entry(Origin::UserAgent, true, None);
+        let author_important = entry(Origin::Stylesheet, true, None);
+        let inline_important = entry(Origin::Inline, true, None);
+        let inline = entry(Origin::Inline, false, None);
+        assert!(cascade_order(&author_important, &ua_important).is_lt());
+        assert!(cascade_order(&inline_important, &ua_important).is_lt());
+        assert!(cascade_order(&inline, &author_important).is_lt());
+        // Layered `!important` beats unlayered `!important`; earlier
+        // layers win.
+        let layer0 = entry(Origin::Stylesheet, true, Some(0));
+        let layer1 = entry(Origin::Stylesheet, true, Some(1));
+        assert!(cascade_order(&author_important, &layer0).is_lt());
+        assert!(cascade_order(&layer1, &layer0).is_lt());
+    }
+
+    #[test]
+    fn revert_layer_rolls_back_to_the_previous_layer() {
+        let p = r#"<p id="t">x</p>"#;
+        let css = "@layer a { p { color: red } } @layer b { p { color: blue } \
+                   p { color: revert-layer } }";
+        assert_eq!(ua_styled(p, css, "t").color, RED);
+        // Unlayered `revert-layer` falls back to the layered value.
+        let css = "@layer a { p { color: blue } } p { color: red } p { color: revert-layer }";
+        assert_eq!(ua_styled(p, css, "t").color, BLUE);
+        // Nothing below: behaves as `unset` (inherits the parent's color).
+        let html = r#"<div><p id="t">x</p></div>"#;
+        let css = "div { color: blue } p { color: red; color: revert-layer }";
+        assert_eq!(ua_styled(html, css, "t").color, BLUE);
+    }
+
+    #[test]
+    fn revert_skips_every_author_layer() {
+        let css = "@layer a { div { display: inline } } div { display: revert }";
+        let s = ua_styled(r#"<div id="t">x</div>"#, css, "t");
+        assert_eq!(s.display, Display::Block);
+    }
+
+    #[test]
+    fn custom_property_initial_is_guaranteed_invalid() {
+        // The "space toggle": `--x: initial` makes `var()` use its fallback.
+        let css = "p { --x: blue; --x: initial; color: var(--x, red) }";
+        assert_eq!(ua_styled(r#"<p id="t">x</p>"#, css, "t").color, RED);
+    }
+
+    #[test]
+    fn custom_property_inherit_and_unset_take_the_parent_value() {
+        let html = r#"<div class="d"><p id="t">x</p></div>"#;
+        for kw in ["inherit", "unset"] {
+            let css = format!(".d {{ --x: red }} p {{ --x: blue; --x: {kw}; color: var(--x) }}");
+            assert_eq!(ua_styled(html, &css, "t").color, RED, "{kw}");
+        }
+    }
+
+    #[test]
+    fn custom_property_revert_layer() {
+        let css = "@layer a { p { --x: red } } p { --x: blue } p { --x: revert-layer } \
+                   p { color: var(--x, green) }";
+        assert_eq!(ua_styled(r#"<p id="t">x</p>"#, css, "t").color, RED);
+    }
+}
+
+/// Complex selectors inside `:is()` / `:where()` / `:not()`.
+mod complex_functional_pseudo {
+    use super::*;
+    use oasis_html::tokenizer::Tokenizer;
+    use oasis_html::tree_builder::TreeBuilder;
+
+    const RED: Color = Color::rgb(255, 0, 0);
+
+    /// Ids (in `ids`) whose color is red under `css`.
+    fn red_ids(html: &str, css: &str, ids: &[&'static str]) -> Vec<&'static str> {
+        let doc = TreeBuilder::build(Tokenizer::new(html).tokenize());
+        let sheet = Stylesheet::parse(css);
+        let styles = style_tree(&doc, &[&sheet], &[], &ctx());
+        ids.iter()
+            .copied()
+            .filter(|id| {
+                let node = doc.get_element_by_id(id).expect("element with id");
+                styles[node].as_ref().is_some_and(|s| s.color == RED)
+            })
+            .collect()
+    }
+
+    const HTML: &str = r#"<div class="x"><p id="a">a</p><span><p id="b">b</p></span></div>
+        <p id="c">c</p>"#;
+    const IDS: &[&str] = &["a", "b", "c"];
+
+    #[test]
+    fn is_and_where_accept_complex_selectors() {
+        assert_eq!(red_ids(HTML, ":is(.x p) { color: red }", IDS), ["a", "b"]);
+        assert_eq!(red_ids(HTML, ":where(.x > p) { color: red }", IDS), ["a"]);
+        // The rest of the outer selector still parses.
+        assert_eq!(red_ids(HTML, ":is(div span) p { color: red }", IDS), ["b"]);
+    }
+
+    #[test]
+    fn not_accepts_complex_selectors() {
+        assert_eq!(red_ids(HTML, "p:not(.x p) { color: red }", IDS), ["c"]);
+        // Tailwind Typography's opt-out pattern.
+        let html = r#"<div class="prose"><p id="a">a</p>
+            <div class="not-prose"><p id="b">b</p></div></div>"#;
+        let css = r#".prose :where(p):not(:where([class~="not-prose"] *)) { color: red }"#;
+        assert_eq!(red_ids(html, css, &["a", "b"]), ["a"]);
+    }
+
+    #[test]
+    fn invalid_entries() {
+        // `:is()` is forgiving; `:not()` with an invalid entry matches
+        // nothing (instead of everything).
+        assert_eq!(red_ids(HTML, "p:is(%%, .x > p) { color: red }", IDS), ["a"]);
+        assert!(red_ids(HTML, "p:not(%%) { color: red }", IDS).is_empty());
+    }
+
+    #[test]
+    fn specificity_is_the_most_specific_complex_argument() {
+        let sheet = Stylesheet::parse(":is(#a .b, p) { color: red }");
+        let s = sheet.rules[0].selectors.selectors[0].specificity();
+        assert_eq!((s.ids, s.classes, s.types), (1, 1, 0));
+        let sheet = Stylesheet::parse("p:not(div.k span) :where(#z .y) { color: red }");
+        let s = sheet.rules[0].selectors.selectors[0].specificity();
+        assert_eq!((s.ids, s.classes, s.types), (0, 1, 3));
+        // `:is(.x p)` and `p.y` are both (0,1,1): source order decides.
+        let html = r#"<div class="x"><p id="t" class="y">t</p></div>"#;
+        let css = "p.y { color: blue } :is(.x p) { color: red }";
+        assert_eq!(red_ids(html, css, &["t"]), ["t"]);
+    }
+
+    #[test]
+    fn nesting_selector_inside_functional_pseudo_classes() {
+        let css = ".x { :where(& > p) { color: red } }";
+        assert_eq!(red_ids(HTML, css, IDS), ["a"]);
+        let css = "p { &:not(.x &) { color: red } }";
+        assert_eq!(red_ids(HTML, css, IDS), ["c"]);
+    }
+
+    #[test]
+    fn nested_is_of_nesting_selector_is_bounded() {
+        let mut css = String::from(".a, .b, .c, .d");
+        for _ in 0..30 {
+            css.push_str(" { :is(&, &, &) ");
+        }
+        css.push_str("{ color: red }");
+        css.push_str(&"}".repeat(30));
+        // Parses (and drops what grows too large) without blowing up.
+        let _ = Stylesheet::parse(&css);
     }
 }

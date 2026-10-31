@@ -30,6 +30,7 @@
 //! selector (ID > class > tag > universal) so that only a small subset of
 //! rules is tested against each element.
 
+mod apply;
 mod index;
 pub mod matching;
 mod var_resolve;
@@ -37,9 +38,7 @@ mod var_resolve;
 #[cfg(test)]
 mod tests;
 
-use std::cell::RefCell;
 use std::collections::HashSet;
-use std::rc::Rc;
 
 #[cfg(feature = "parallel-style")]
 use std::cell::UnsafeCell;
@@ -49,8 +48,9 @@ use rustc_hash::FxHashMap;
 #[cfg(feature = "parallel-style")]
 use rayon::prelude::*;
 
-use super::parser::{CssValue, Declaration, Stylesheet, parse_substituted_declaration};
+use super::parser::{Declaration, Stylesheet};
 use super::values::ComputedStyle;
+use apply::{apply_matched, apply_matched_custom};
 use oasis_html::dom::{Document, NodeId, NodeKind};
 
 pub use index::SelectorIndex;
@@ -602,14 +602,7 @@ pub fn compute_style(
 
     // Sort by cascade order: origin, layer, specificity, source order.
     // `!important` declarations come after normal ones.
-    matched.sort_by(|a, b| {
-        a.important
-            .cmp(&b.important)
-            .then_with(|| a.origin.cmp(&b.origin))
-            .then_with(|| matching::compare_layers(a, b))
-            .then_with(|| a.specificity.cmp(&b.specificity))
-            .then_with(|| a.source_order.cmp(&b.source_order))
-    });
+    matched.sort_by(matching::cascade_order);
 
     // Pass 0: `@property` registrations.
     //   * Strip non-inheriting registered properties that we picked up
@@ -646,9 +639,9 @@ pub fn compute_style(
     // Pass 1: Apply custom property declarations (--*) to build the
     // properties map before resolving any var() references.
     let mut declared_custom: Vec<&str> = Vec::new();
-    for entry in &matched {
+    for (i, entry) in matched.iter().enumerate() {
         if entry.property.starts_with("--") {
-            style.apply_declaration(&entry.property, &entry.value, parent_font_size);
+            apply_matched_custom(&mut style, parent_style, &matched, i);
             declared_custom.push(&entry.property);
         }
     }
@@ -738,156 +731,4 @@ pub fn compute_style(
     }
 
     style
-}
-
-/// Apply one cascaded declaration to `style`.
-///
-/// [`CssValue::Unresolved`] values have their `var()` references
-/// substituted from `style`'s custom properties and are re-parsed with
-/// the property's normal parser (which may expand a shorthand into
-/// several longhands). A declaration that is invalid at computed-value
-/// time behaves as `unset` (CSS Variables §3.1). The CSS-wide `unset`
-/// and (for inherited properties) `inherit` keywords take their value
-/// from `parent`.
-pub(super) fn apply_cascaded(
-    style: &mut ComputedStyle,
-    parent: Option<&ComputedStyle>,
-    property: &str,
-    value: &CssValue,
-    font_size: f32,
-) {
-    let CssValue::Unresolved(text) = value else {
-        apply_value(style, parent, property, value, font_size);
-        return;
-    };
-    match var_resolve::substitute_vars(text, &style.custom_properties) {
-        Some(substituted) => {
-            for decl in parse_substituted_cached(property, &substituted).iter() {
-                apply_value(style, parent, &decl.property, &decl.value, font_size);
-            }
-        },
-        None => {
-            for decl in parse_substituted_cached(property, "unset").iter() {
-                apply_unset(style, parent, &decl.property);
-            }
-        },
-    }
-}
-
-/// Apply `matched[i]` (sorted in cascade order) via [`apply_cascaded`],
-/// resolving the CSS-wide `revert` keyword first.
-///
-/// An author `revert` rolls the property back to the user-agent value:
-/// the last user-agent declaration of the property earlier in the
-/// cascade, or `unset` when the UA sheet sets none (`all: unset;
-/// display: revert` keeps a `<div>` a block). `revert-layer` is left to
-/// the declaration parser, which keeps the earlier cascaded value.
-fn apply_matched(
-    style: &mut ComputedStyle,
-    parent: Option<&ComputedStyle>,
-    matched: &[matching::MatchedDeclaration],
-    i: usize,
-    font_size: f32,
-) {
-    let entry = &matched[i];
-    let is_revert =
-        matches!(&entry.value, CssValue::Keyword(k) if k.eq_ignore_ascii_case("revert"));
-    if !is_revert {
-        apply_cascaded(style, parent, &entry.property, &entry.value, font_size);
-        return;
-    }
-    let ua_value = (!entry.user_agent)
-        .then(|| {
-            matched[..i]
-                .iter()
-                .rfind(|e| e.user_agent && e.property == entry.property)
-        })
-        .flatten();
-    match ua_value {
-        Some(ua) => apply_cascaded(style, parent, &ua.property, &ua.value, font_size),
-        None => apply_unset(style, parent, &entry.property),
-    }
-}
-
-/// Bound on [`SUBSTITUTED_CACHE`] entries before it is cleared.
-const SUBSTITUTED_CACHE_MAX: usize = 4096;
-
-/// Longest substituted value text [`SUBSTITUTED_CACHE`] keeps.
-const SUBSTITUTED_CACHE_MAX_KEY: usize = 1024;
-
-/// Parsed declarations keyed by property, then by substituted value text.
-#[derive(Default)]
-struct SubstitutedCache {
-    entries: usize,
-    map: FxHashMap<String, FxHashMap<String, Rc<[Declaration]>>>,
-}
-
-thread_local! {
-    /// Parsed (and shorthand-expanded) substituted declarations. Design-
-    /// token CSS resolves the same handful of values for thousands of
-    /// elements, and parsing is pure, so each distinct value is tokenized
-    /// and parsed once per thread.
-    static SUBSTITUTED_CACHE: RefCell<SubstitutedCache> = RefCell::default();
-}
-
-fn parse_substituted_cached(property: &str, text: &str) -> Rc<[Declaration]> {
-    SUBSTITUTED_CACHE.with(|cache| {
-        let mut cache = cache.borrow_mut();
-        if let Some(hit) = cache.map.get(property).and_then(|m| m.get(text)) {
-            return Rc::clone(hit);
-        }
-        let parsed: Rc<[Declaration]> = parse_substituted_declaration(property, text).into();
-        // Long values are not worth keeping: design tokens are short, and
-        // 4096 hostile 64 KiB keys would pin 256 MiB per thread.
-        if text.len() > SUBSTITUTED_CACHE_MAX_KEY {
-            return parsed;
-        }
-        if cache.entries >= SUBSTITUTED_CACHE_MAX {
-            cache.map.clear();
-            cache.entries = 0;
-        }
-        cache
-            .map
-            .entry(property.to_string())
-            .or_default()
-            .insert(text.to_string(), Rc::clone(&parsed));
-        cache.entries += 1;
-        parsed
-    })
-}
-
-fn apply_value(
-    style: &mut ComputedStyle,
-    parent: Option<&ComputedStyle>,
-    property: &str,
-    value: &CssValue,
-    font_size: f32,
-) {
-    if let CssValue::Keyword(kw) = value {
-        if kw.eq_ignore_ascii_case("unset") {
-            apply_unset(style, parent, property);
-            return;
-        }
-        // `inherit` takes the parent's computed value for every property,
-        // inherited or not (`border: inherit`, `background-color: inherit`).
-        if kw.eq_ignore_ascii_case("inherit")
-            && let Some(p) = parent
-            && (style.inherit_property_from(property, p)
-                || style.inherit_non_inherited_from(property, p))
-        {
-            return;
-        }
-    }
-    style.apply_declaration(property, value, font_size);
-}
-
-/// `unset`: inherit for inherited properties, `initial` otherwise.
-fn apply_unset(style: &mut ComputedStyle, parent: Option<&ComputedStyle>, property: &str) {
-    let inherited = match parent {
-        Some(p) => style.inherit_property_from(property, p),
-        None => style.inherit_property_from(property, &ComputedStyle::default()),
-    };
-    if !inherited {
-        style.apply_declaration(property, &CssValue::Keyword("initial".into()), 0.0);
-    }
 }

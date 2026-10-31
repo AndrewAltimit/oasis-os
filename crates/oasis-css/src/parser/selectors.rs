@@ -202,27 +202,21 @@ impl CssParser {
     /// Parse the argument of a functional pseudo-class (after its name
     /// token) and push the resulting simple selector.
     fn parse_selector_function(&mut self, lc: &str, parts: &mut Vec<SimpleSelector>) {
-        if lc == "not" {
-            // Parse :not(selector-list). Selectors Level 4 allows a
-            // comma-separated list of compound selectors here.
-            let inner_list = self.parse_compound_selector_list();
-            self.skip_whitespace();
+        if lc == "not" || lc == "is" || lc == "where" {
+            // Selectors Level 4: a comma-separated list of complex
+            // selectors. `:is()` / `:where()` take a forgiving list
+            // (invalid entries are dropped); an invalid entry makes
+            // `:not()` match nothing rather than widen the selector.
+            let (inner_list, any_invalid) = self.parse_complex_selector_list();
             if self.peek() == &CssToken::CloseParen {
                 self.advance();
             }
-            parts.push(SimpleSelector::Not(inner_list));
-        } else if lc == "is" || lc == "where" {
-            // Parse :is(selector-list) / :where(selector-list)
-            let inner_list = self.parse_compound_selector_list();
-            self.skip_whitespace();
-            if self.peek() == &CssToken::CloseParen {
-                self.advance();
-            }
-            if lc == "is" {
-                parts.push(SimpleSelector::Is(inner_list));
-            } else {
-                parts.push(SimpleSelector::Where(inner_list));
-            }
+            parts.push(match lc {
+                "not" if any_invalid => SimpleSelector::Is(Vec::new()),
+                "not" => SimpleSelector::Not(inner_list),
+                "is" => SimpleSelector::Is(inner_list),
+                _ => SimpleSelector::Where(inner_list),
+            });
         } else if lc == "has" {
             // Parse :has(relative-selector-list).
             let inner_list = self.parse_relative_selector_list();
@@ -283,27 +277,50 @@ impl CssParser {
         list
     }
 
-    /// Parse a comma-separated list of compound selectors inside `:is()` / `:where()`.
-    ///
-    /// Stops at `)` (does not consume it).
-    fn parse_compound_selector_list(&mut self) -> Vec<CompoundSelector> {
+    /// Parse the comma-separated complex selector list inside `:is()` /
+    /// `:where()` / `:not()`, and whether any entry was invalid (and
+    /// skipped). Stops at the closing `)` (does not consume it).
+    fn parse_complex_selector_list(&mut self) -> (Vec<Selector>, bool) {
         let mut list = Vec::new();
+        let mut any_invalid = false;
         loop {
             self.skip_whitespace();
-            if self.peek() == &CssToken::CloseParen || self.peek() == &CssToken::Eof {
+            if matches!(self.peek(), CssToken::CloseParen | CssToken::Eof) {
                 break;
             }
-            if let Some(compound) = self.parse_compound_selector() {
-                list.push(compound);
-            }
+            let sel = self.parse_selector();
             self.skip_whitespace();
+            match (sel, self.peek()) {
+                (Some(sel), CssToken::Comma | CssToken::CloseParen | CssToken::Eof) => {
+                    list.push(sel);
+                },
+                _ => {
+                    any_invalid = true;
+                    self.skip_to_list_separator();
+                },
+            }
             if self.peek() == &CssToken::Comma {
                 self.advance();
             } else {
                 break;
             }
         }
-        list
+        (list, any_invalid)
+    }
+
+    /// Skip to the next `,` or `)` at this nesting level (not consumed).
+    fn skip_to_list_separator(&mut self) {
+        let mut depth = 0usize;
+        loop {
+            match self.peek() {
+                CssToken::Eof => break,
+                CssToken::Comma | CssToken::CloseParen if depth == 0 => break,
+                CssToken::OpenParen | CssToken::Function(_) => depth += 1,
+                CssToken::CloseParen => depth -= 1,
+                _ => {},
+            }
+            self.advance();
+        }
     }
 
     // -- attribute selector / pseudo-class helpers ---------------------
