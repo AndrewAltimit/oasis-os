@@ -972,6 +972,7 @@ name = "oasis-app"
 version = "1.4.0"
 dependencies = [
  "anyhow",
+ "criterion",
  "env_logger",
  "log",
  "oasis-app-core",

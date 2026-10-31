@@ -14,6 +14,7 @@ use super::CascadeContext;
 use oasis_html::dom::{Document, ElementData, NodeId, NodeKind};
 
 use rustc_hash::FxHashMap;
+use std::borrow::Cow;
 
 // -----------------------------------------------------------------------
 // Robustness limits
@@ -65,7 +66,7 @@ impl Origin {
     }
 }
 
-impl MatchedDeclaration {
+impl MatchedDeclaration<'_> {
     /// Origin-and-importance tier (CSS Cascade 5 §6.1), lowest first:
     /// normal UA < presentational hints < normal author < normal inline
     /// < important author < important inline < important UA.
@@ -116,10 +117,14 @@ pub(super) fn cascade_order(a: &MatchedDeclaration, b: &MatchedDeclaration) -> s
 }
 
 /// A single declaration together with its cascade metadata.
+///
+/// Property and value borrow from the stylesheet (or inline style) they
+/// came from: every element matches many declarations, and copying each
+/// one's strings and values per element dominated the cascade.
 #[derive(Debug, Clone)]
-pub(super) struct MatchedDeclaration {
-    pub(super) property: String,
-    pub(super) value: CssValue,
+pub(super) struct MatchedDeclaration<'a> {
+    pub(super) property: Cow<'a, str>,
+    pub(super) value: Cow<'a, CssValue>,
     pub(super) important: bool,
     pub(super) origin: Origin,
     pub(super) specificity: Specificity,
@@ -388,8 +393,8 @@ pub(super) fn resolve_pseudo_style_indexed(
             });
             for (i, decl) in rule.declarations.iter().enumerate() {
                 matched.push(MatchedDeclaration {
-                    property: decl.property.clone(),
-                    value: decl.value.clone(),
+                    property: Cow::Borrowed(&decl.property),
+                    value: Cow::Borrowed(&decl.value),
                     important: decl.important,
                     origin: Origin::of_sheet(stylesheets[sheet_idx]),
                     specificity,
@@ -413,7 +418,7 @@ pub(super) fn resolve_pseudo_style_indexed(
         .iter()
         .rev()
         .find(|d| d.property == "content")
-        .map(|d| &d.value)
+        .map(|d| &*d.value)
         .filter(|v| matches!(v, CssValue::String(_) | CssValue::Unresolved(_)))?;
 
     // Pseudo-elements inherit from the originating element.
@@ -550,15 +555,15 @@ fn matches_selector_ignoring_pseudo(
 ///
 /// Uses the `SelectorIndex` to test only candidate rules whose subject
 /// selector matches the element's tag/id/classes, instead of all rules.
-pub(super) fn collect_matched_declarations(
+pub(super) fn collect_matched_declarations<'a>(
     doc: &Document,
     node_id: NodeId,
-    stylesheets: &[&Stylesheet],
+    stylesheets: &[&'a Stylesheet],
     index: &super::index::SelectorIndex,
-    inline_map: &FxHashMap<NodeId, &[super::super::parser::Declaration]>,
+    inline_map: &FxHashMap<NodeId, &'a [super::super::parser::Declaration]>,
     ctx: &CascadeContext<'_>,
     tag_cache: &mut FxHashMap<String, String>,
-) -> Vec<MatchedDeclaration> {
+) -> Vec<MatchedDeclaration<'a>> {
     let mut result = Vec::new();
 
     // Extract element info for index lookup.
@@ -580,6 +585,8 @@ pub(super) fn collect_matched_declarations(
 
     // Get candidate rules from the index.
     let candidates = index.candidates_with_lower(tag, tag_lower, id, &classes);
+    // The element's ancestor filter, built on first use.
+    let mut ancestors = None;
 
     for candidate in &candidates {
         let rule = &stylesheets[candidate.sheet_idx].rules[candidate.rule_idx];
@@ -597,7 +604,9 @@ pub(super) fn collect_matched_declarations(
         {
             continue;
         }
-        let best_specificity = matching_specificity(doc, node_id, rule, ctx);
+        let masks = index.selector_masks(candidate.sheet_idx, candidate.rule_idx);
+        let best_specificity =
+            matching_specificity_filtered(doc, node_id, rule, ctx, masks, &mut ancestors);
         if let Some(specificity) = best_specificity {
             // Convert sheet-local layer index to global if the global
             // map is available (cross-stylesheet @layer merging).
@@ -611,8 +620,8 @@ pub(super) fn collect_matched_declarations(
             let origin = Origin::of_sheet(stylesheets[candidate.sheet_idx]);
             for (decl_idx, decl) in rule.declarations.iter().enumerate() {
                 result.push(MatchedDeclaration {
-                    property: decl.property.clone(),
-                    value: decl.value.clone(),
+                    property: Cow::Borrowed(&decl.property),
+                    value: Cow::Borrowed(&decl.value),
                     important: decl.important,
                     origin,
                     specificity,
@@ -637,15 +646,11 @@ pub(super) fn collect_matched_declarations(
             types: 0,
         };
         // Inline source_order is after all stylesheet declarations.
-        let inline_base = stylesheets
-            .iter()
-            .flat_map(|s| &s.rules)
-            .map(|r| r.declarations.len())
-            .sum::<usize>();
+        let inline_base = index.declaration_count();
         for (i, decl) in decls.iter().enumerate() {
             result.push(MatchedDeclaration {
-                property: decl.property.clone(),
-                value: decl.value.clone(),
+                property: Cow::Borrowed(&decl.property),
+                value: Cow::Borrowed(&decl.value),
                 important: decl.important,
                 origin: Origin::Inline,
                 specificity: inline_spec,
@@ -667,7 +672,7 @@ fn collect_presentational_attrs(
     doc: &Document,
     node_id: NodeId,
     elem: &ElementData,
-    result: &mut Vec<MatchedDeclaration>,
+    result: &mut Vec<MatchedDeclaration<'_>>,
 ) {
     use oasis_html::dom::TagName;
 
@@ -678,10 +683,10 @@ fn collect_presentational_attrs(
         types: 0,
     };
 
-    let mut push = |property: &str, value: CssValue| {
+    let mut push = |property: &'static str, value: CssValue| {
         result.push(MatchedDeclaration {
-            property: property.to_string(),
-            value,
+            property: Cow::Borrowed(property),
+            value: Cow::Owned(value),
             important: false,
             origin: Origin::Presentational,
             specificity: zero_spec,
@@ -866,18 +871,32 @@ fn parse_html_dimension(s: &str) -> Option<CssValue> {
 }
 
 /// Return the highest specificity among the rule's selectors that match
-/// `node_id`, or `None` if no selector matches.
-/// Skips selectors that target pseudo-elements (::before, ::after).
-pub(super) fn matching_specificity(
+/// `node_id`, or `None` if no selector matches. Skips selectors that
+/// target pseudo-elements (::before, ::after), and every selector whose
+/// ancestor `masks` (the rule's [`SelectorIndex::selector_masks`]) the
+/// element's ancestor filter (built into `ancestors` on first use) does
+/// not cover: such a selector cannot match, so the result is the same.
+///
+/// [`SelectorIndex::selector_masks`]: super::index::SelectorIndex::selector_masks
+fn matching_specificity_filtered(
     doc: &Document,
     node_id: NodeId,
     rule: &Rule,
     ctx: &CascadeContext<'_>,
+    masks: &[Option<super::ancestor_filter::AncestorMask>],
+    ancestors: &mut Option<super::ancestor_filter::AncestorMask>,
 ) -> Option<Specificity> {
     let mut best: Option<Specificity> = None;
-    for selector in &rule.selectors.selectors {
+    for (i, selector) in rule.selectors.selectors.iter().enumerate() {
         if selector_pseudo_element(selector).is_some() {
             continue; // Skip pseudo-element selectors in normal matching.
+        }
+        if let Some(Some(mask)) = masks.get(i)
+            && !ancestors
+                .get_or_insert_with(|| super::ancestor_filter::ancestor_filter(doc, node_id))
+                .covers(mask)
+        {
+            continue;
         }
         if matches_selector(doc, node_id, selector, ctx) {
             let spec = selector.specificity();

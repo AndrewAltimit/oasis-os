@@ -30,6 +30,7 @@
 //! selector (ID > class > tag > universal) so that only a small subset of
 //! rules is tested against each element.
 
+mod ancestor_filter;
 mod apply;
 mod index;
 pub mod matching;

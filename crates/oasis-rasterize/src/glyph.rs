@@ -117,9 +117,118 @@ pub fn mask_runs(mask: &[bool], w: u32, mut f: impl FnMut(i32, i32, i32)) {
     }
 }
 
+/// One horizontal ink run of a glyph cell: row `y`, columns `x0..x1`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct GlyphRun {
+    pub(crate) y: i32,
+    pub(crate) x0: i32,
+    pub(crate) x1: i32,
+}
+
+/// Text styles a [`GlyphRunCache`] keeps at once (UI text uses a handful
+/// of sizes; a new style past this evicts the oldest).
+const RUN_CACHE_STYLES: usize = 8;
+
+/// Largest font size whose glyph runs are cached (bigger glyphs are rare
+/// and would make each entry large).
+const RUN_CACHE_MAX_SIZE: u16 = 64;
+
+/// Not-yet-rasterized marker in [`StyleRuns::spans`].
+const UNBUILT: (u32, u32) = (u32::MAX, u32::MAX);
+
+/// The [`mask_runs`] of every ASCII glyph drawn so far in one style.
+struct StyleRuns {
+    key: (u16, bool, bool),
+    /// `runs[start..end]` per ASCII code ([`UNBUILT`] until first drawn).
+    spans: [(u32, u32); 128],
+    runs: Vec<GlyphRun>,
+}
+
+/// Cache of bitmap-glyph ink runs, so drawing the same characters again
+/// skips [`glyph_mask`] and the run scan. The runs are exactly those of
+/// [`mask_runs`] over [`glyph_mask`], so cached text draws the same pixels.
+/// Only ASCII up to [`RUN_CACHE_MAX_SIZE`] px is cached.
+#[derive(Default)]
+pub(crate) struct GlyphRunCache {
+    styles: Vec<StyleRuns>,
+    /// Next slot to evict once `styles` is full (round robin).
+    next_evict: usize,
+    mask: Vec<bool>,
+}
+
+impl GlyphRunCache {
+    /// The ink runs of `ch` in the given style, or `None` when the glyph
+    /// is not cacheable (non-ASCII or too large).
+    pub(crate) fn runs(
+        &mut self,
+        ch: char,
+        font_size: u16,
+        bold: bool,
+        italic: bool,
+    ) -> Option<&[GlyphRun]> {
+        if !ch.is_ascii() || font_size > RUN_CACHE_MAX_SIZE {
+            return None;
+        }
+        let key = (font_size, bold, italic);
+        let si = match self.styles.iter().position(|s| s.key == key) {
+            Some(i) => i,
+            None => {
+                let fresh = StyleRuns {
+                    key,
+                    spans: [UNBUILT; 128],
+                    runs: Vec::new(),
+                };
+                if self.styles.len() < RUN_CACHE_STYLES {
+                    self.styles.push(fresh);
+                    self.styles.len() - 1
+                } else {
+                    let i = self.next_evict;
+                    self.next_evict = (i + 1) % RUN_CACHE_STYLES;
+                    self.styles[i] = fresh;
+                    i
+                }
+            },
+        };
+        let style = &mut self.styles[si];
+        let code = ch as usize;
+        if style.spans[code] == UNBUILT {
+            let (gw, _) = glyph_mask(ch, font_size, bold, italic, &mut self.mask);
+            let start = style.runs.len() as u32;
+            mask_runs(&self.mask, gw, |y, x0, x1| {
+                style.runs.push(GlyphRun { y, x0, x1 });
+            });
+            style.spans[code] = (start, style.runs.len() as u32);
+        }
+        let (start, end) = style.spans[code];
+        Some(&style.runs[start as usize..end as usize])
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn run_cache_matches_mask_runs() {
+        let mut cache = GlyphRunCache::default();
+        let mut mask = Vec::new();
+        // More styles than the cache holds, twice, so eviction is hit.
+        for _ in 0..2 {
+            for fs in [6u16, 8, 10, 12, 13, 16, 20, 24, 32, 64] {
+                for (bold, italic) in [(false, false), (true, false), (false, true), (true, true)] {
+                    for ch in [' ', 'A', 'g', 'W', '~', '\u{7f}'] {
+                        let (gw, _) = glyph_mask(ch, fs, bold, italic, &mut mask);
+                        let mut want = Vec::new();
+                        mask_runs(&mask, gw, |y, x0, x1| want.push(GlyphRun { y, x0, x1 }));
+                        let got = cache.runs(ch, fs, bold, italic).unwrap();
+                        assert_eq!(got, &want[..], "{ch:?} {fs}px b={bold} i={italic}");
+                    }
+                }
+            }
+        }
+        assert!(cache.runs('\u{25B2}', 8, false, false).is_none());
+        assert!(cache.runs('A', 65, false, false).is_none());
+    }
 
     #[test]
     fn cell_matches_advance() {

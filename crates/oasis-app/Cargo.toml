@@ -72,6 +72,11 @@ png = { workspace = true }
 [dev-dependencies]
 oasis-test-backend = { workspace = true }
 oasis-types = { workspace = true }
+criterion = { workspace = true }
+
+[[bench]]
+name = "shell_frame"
+harness = false
 
 [lints]
 workspace = true

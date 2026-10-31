@@ -79,8 +79,8 @@
     "video-decode",
     "video-decode-ffmpeg"
    ],
-   "loc": 36122,
-   "files": 65,
+   "loc": 36193,
+   "files": 66,
    "deps": [
     {
      "name": "oasis-app-core",
@@ -898,8 +898,8 @@
     "scripting",
     "web-fonts"
    ],
-   "loc": 30292,
-   "files": 46,
+   "loc": 30585,
+   "files": 47,
    "deps": [
     {
      "name": "oasis-html",
@@ -1231,7 +1231,7 @@
    "features": [
     "ttf"
    ],
-   "loc": 2518,
+   "loc": 2756,
    "files": 4,
    "deps": [
     {

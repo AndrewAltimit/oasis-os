@@ -3803,10 +3803,10 @@ mod origins {
         assert_eq!(s.padding_left, 3.0);
     }
 
-    fn entry(origin: Origin, important: bool, layer: Option<u16>) -> MatchedDeclaration {
+    fn entry(origin: Origin, important: bool, layer: Option<u16>) -> MatchedDeclaration<'static> {
         MatchedDeclaration {
             property: "color".into(),
-            value: CssValue::Keyword("red".into()),
+            value: std::borrow::Cow::Owned(CssValue::Keyword("red".into())),
             important,
             origin,
             specificity: Specificity {

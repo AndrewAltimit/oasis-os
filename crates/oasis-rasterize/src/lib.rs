@@ -19,6 +19,7 @@
 //!   Off by default so PSP-adjacent builds never pull fontdue in.
 
 mod glyph;
+use glyph::GlyphRunCache;
 pub use glyph::{bitmap_ascent, bitmap_line_height, glyph_cell, glyph_mask, mask_runs};
 pub use oasis_types::rasterize::{
     midpoint_row_extents, polygon_rows, rounded_rect_rows, stroke_circle_rows,
@@ -102,6 +103,10 @@ pub struct SoftwareBuffer {
     col_map: Vec<usize>,
     /// Reused glyph coverage mask for [`Self::draw_text`].
     glyph_scratch: Vec<bool>,
+    /// Reused per-column colors for gradient fills.
+    color_scratch: Vec<Color>,
+    /// Ink runs of recently drawn bitmap glyphs, per text style.
+    glyph_runs: GlyphRunCache,
 }
 
 /// Byte length of a `w` x `h` RGBA8 image, computed in `usize` (the `u32`
@@ -122,6 +127,8 @@ impl SoftwareBuffer {
             clip: None,
             col_map: Vec::new(),
             glyph_scratch: Vec::new(),
+            color_scratch: Vec::new(),
+            glyph_runs: GlyphRunCache::default(),
         }
     }
 
@@ -229,6 +236,13 @@ impl SoftwareBuffer {
             return;
         }
         let b = self.visible_bounds();
+        self.fill_span_in(b, y, x_start, x_end, color);
+    }
+
+    /// [`Self::fill_span`] against precomputed visible bounds `b` (callers
+    /// drawing many spans compute them once).
+    #[inline]
+    fn fill_span_in(&mut self, b: Bounds, y: i32, x_start: i32, x_end: i32, color: Color) {
         if y < b.y0 || y >= b.y1 {
             return;
         }
@@ -237,29 +251,11 @@ impl SoftwareBuffer {
         if xs >= xe {
             return;
         }
-        let row = self.row_mut(y, xs, xe);
+        let row = self.row_mut(y, xs, xe).as_chunks_mut::<4>().0;
         if color.a == 255 {
-            let px = [color.r, color.g, color.b, 255];
-            for dst in row.as_chunks_mut::<4>().0 {
-                *dst = px;
-            }
+            row.fill([color.r, color.g, color.b, 255]);
         } else {
-            let sa = color.a as u16;
-            let da = 255 - sa;
-            let (r, g, bl) = (
-                color.r as u16 * sa,
-                color.g as u16 * sa,
-                color.b as u16 * sa,
-            );
-            for dst in row.as_chunks_mut::<4>().0 {
-                if dst[3] != 255 {
-                    blend_over_translucent(dst, color);
-                    continue;
-                }
-                dst[0] = ((r + dst[0] as u16 * da + 127) / 255) as u8;
-                dst[1] = ((g + dst[1] as u16 * da + 127) / 255) as u8;
-                dst[2] = ((bl + dst[2] as u16 * da + 127) / 255) as u8;
-            }
+            blend_span(row, color);
         }
     }
 
@@ -273,12 +269,10 @@ impl SoftwareBuffer {
 
     /// Clear the entire buffer to the given color (no alpha blending).
     pub fn clear(&mut self, color: Color) {
-        for pixel in self.buffer.as_chunks_mut::<4>().0.iter_mut() {
-            pixel[0] = color.r;
-            pixel[1] = color.g;
-            pixel[2] = color.b;
-            pixel[3] = color.a;
-        }
+        self.buffer
+            .as_chunks_mut::<4>()
+            .0
+            .fill([color.r, color.g, color.b, color.a]);
     }
 
     /// Fill a rectangle.
@@ -291,8 +285,9 @@ impl SoftwareBuffer {
         let Some((xs, xe, ys, ye)) = self.clip_rect_to_visible(x, y, w, h) else {
             return;
         };
+        let b = self.visible_bounds();
         for row in ys..ye {
-            self.fill_span(row, xs, xe, color);
+            self.fill_span_in(b, row, xs, xe, color);
         }
     }
 
@@ -704,16 +699,25 @@ impl SoftwareBuffer {
         let r = (radius as u32).min(w / 2).min(h / 2) as i32;
         let h_max = h.saturating_sub(1).max(1);
         let w_max = w.saturating_sub(1).max(1);
+        let b = self.visible_bounds();
+        // Horizontal colors depend only on the column: interpolate each
+        // visible column once instead of once per pixel.
+        let mut cols = std::mem::take(&mut self.color_scratch);
+        cols.clear();
+        if let GradientStyle::Horizontal { left, right } = *gradient {
+            let (cs, ce) = (x.max(b.x0), (x as i64 + w as i64).min(b.x1 as i64) as i32);
+            cols.extend((cs..ce).map(|px| lerp_color_ratio(left, right, (px - x) as u32, w_max)));
+        }
         rounded_rect_rows(w as i32, h as i32, r, |dy, x0, x1| match *gradient {
             GradientStyle::Vertical { top, bottom } => {
                 let c = lerp_color_ratio(top, bottom, dy as u32, h_max);
-                self.fill_span(y + dy, x + x0, x + x1, c);
+                self.fill_span_in(b, y + dy, x + x0, x + x1, c);
             },
-            GradientStyle::Horizontal { left, right } => {
-                for dx in x0..x1 {
-                    let c = lerp_color_ratio(left, right, dx as u32, w_max);
-                    self.set_pixel(x + dx, y + dy, c);
-                }
+            GradientStyle::Horizontal { .. } => {
+                // `cols[0]` is column `max(x, b.x0)`, the first a span
+                // can start at after clipping.
+                let base = x.max(b.x0);
+                self.shade_span(b, y + dy, x + x0, x + x1, |px| cols[(px - base) as usize]);
             },
             GradientStyle::FourCorner {
                 top_left,
@@ -723,12 +727,36 @@ impl SoftwareBuffer {
             } => {
                 let l = lerp_color_ratio(top_left, bottom_left, dy as u32, h_max);
                 let rt = lerp_color_ratio(top_right, bottom_right, dy as u32, h_max);
-                for dx in x0..x1 {
-                    let c = lerp_color_ratio(l, rt, dx as u32, w_max);
-                    self.set_pixel(x + dx, y + dy, c);
-                }
+                self.shade_span(b, y + dy, x + x0, x + x1, |px| {
+                    lerp_color_ratio(l, rt, (px - x) as u32, w_max)
+                });
             },
         });
+        self.color_scratch = cols;
+    }
+
+    /// Blend `color_at(px)` into every visible pixel `px` of the span
+    /// `x0..x1` of row `y` (clipped to `b`), like a `set_pixel` per pixel.
+    #[inline]
+    fn shade_span(
+        &mut self,
+        b: Bounds,
+        y: i32,
+        x0: i32,
+        x1: i32,
+        mut color_at: impl FnMut(i32) -> Color,
+    ) {
+        if y < b.y0 || y >= b.y1 {
+            return;
+        }
+        let (xs, xe) = (x0.max(b.x0), x1.min(b.x1));
+        if xs >= xe {
+            return;
+        }
+        let row = self.row_mut(y, xs, xe).as_chunks_mut::<4>().0;
+        for (px, col) in row.iter_mut().zip(xs..) {
+            blend_px(px, color_at(col));
+        }
     }
 
     // -----------------------------------------------------------------------
@@ -753,16 +781,36 @@ impl SoftwareBuffer {
         if text.is_empty() || color.a == 0 || font_size == 0 {
             return;
         }
+        let b = self.visible_bounds();
+        // Glyph cells are `font_size` rows tall from `y`; a line wholly
+        // above or below the visible rows draws nothing.
+        if y as i64 >= b.y1 as i64 || y as i64 + font_size as i64 <= b.y0 as i64 {
+            return;
+        }
         let mut mask = std::mem::take(&mut self.glyph_scratch);
+        let mut runs = std::mem::take(&mut self.glyph_runs);
         let mut cx = x;
         for ch in text.chars() {
-            let (gw, _) = glyph_mask(ch, font_size, bold, italic, &mut mask);
-            mask_runs(&mask, gw, |gy, x0, x1| {
-                self.fill_span(y + gy, cx + x0, cx + x1, color);
-            });
-            cx += oasis_types::bitmap_font::glyph_advance_scaled(ch, font_size) as i32;
+            // Ink never lies left of a glyph's origin and origins only move
+            // right, so the rest of the line is past the visible columns.
+            if cx >= b.x1 {
+                break;
+            }
+            if let Some(glyph) = runs.runs(ch, font_size, bold, italic) {
+                for r in glyph {
+                    self.fill_span_in(b, y + r.y, cx + r.x0, cx + r.x1, color);
+                }
+            } else {
+                let (gw, _) = glyph_mask(ch, font_size, bold, italic, &mut mask);
+                mask_runs(&mask, gw, |gy, x0, x1| {
+                    self.fill_span_in(b, y + gy, cx + x0, cx + x1, color);
+                });
+            }
+            let advance = oasis_types::bitmap_font::glyph_advance_scaled(ch, font_size);
+            cx = cx.saturating_add(advance as i32);
         }
         self.glyph_scratch = mask;
+        self.glyph_runs = runs;
     }
 
     // -----------------------------------------------------------------------
@@ -1077,6 +1125,41 @@ fn blend_px(px: &mut [u8; 4], color: Color) {
         px[0] = ((color.r as u16 * sa + px[0] as u16 * da + 127) / 255) as u8;
         px[1] = ((color.g as u16 * sa + px[1] as u16 * da + 127) / 255) as u8;
         px[2] = ((color.b as u16 * sa + px[2] as u16 * da + 127) / 255) as u8;
+    }
+}
+
+/// Source-over blend of one translucent `color` (alpha below 255) into
+/// every pixel of `row`, exactly as [`blend_px`] would one by one.
+///
+/// A row of opaque destination pixels (the framebuffer case) takes a
+/// branch-free path that vectorizes: the same `(s * sa + d * (255 - sa) +
+/// 127) / 255` per channel, applied to the alpha byte too with source 255,
+/// which leaves an opaque alpha at exactly 255.
+#[inline]
+fn blend_span(row: &mut [[u8; 4]], color: Color) {
+    let opaque = row
+        .iter()
+        .fold(u32::MAX, |acc, p| acc & u32::from_le_bytes(*p))
+        >> 24
+        == 255;
+    if !opaque {
+        for px in row {
+            blend_px(px, color);
+        }
+        return;
+    }
+    let sa = color.a as u16;
+    let da = 255 - sa;
+    let src = [
+        color.r as u16 * sa,
+        color.g as u16 * sa,
+        color.b as u16 * sa,
+        255 * sa,
+    ];
+    for px in row {
+        for (d, s) in px.iter_mut().zip(src) {
+            *d = ((s + *d as u16 * da + 127) / 255) as u8;
+        }
     }
 }
 
