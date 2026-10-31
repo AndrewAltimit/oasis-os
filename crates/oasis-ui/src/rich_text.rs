@@ -83,15 +83,28 @@ impl RichText {
         self.lines.len()
     }
 
-    /// Height of one line: its tallest span (the theme size when it has
-    /// no spans). It used to be the theme size for every line, so a line
-    /// with a larger span overlapped the next one.
-    fn line_height(ctx: &DrawContext<'_>, line: &[Span]) -> u32 {
+    /// `(ascent, height)` of one line: its spans share a baseline
+    /// `ascent` px below the line top (the largest span ascent), and the
+    /// line reaches down to the lowest span descent. A line with no spans
+    /// has the theme size's metrics. Lines used to be one theme size tall
+    /// (so a larger span overlapped the next line) and their spans
+    /// top-aligned (so mixed sizes sat on different baselines).
+    fn line_metrics(ctx: &DrawContext<'_>, line: &[Span]) -> (u32, u32) {
         let fs = ctx.theme.font_size_md;
-        line.iter()
-            .map(|s| ctx.backend.measure_text_height(s.font_size.unwrap_or(fs)))
-            .max()
-            .unwrap_or_else(|| ctx.backend.measure_text_height(fs))
+        let metrics = |size: u16| {
+            let height = ctx.backend.measure_text_height(size);
+            (ctx.backend.font_ascent(size).min(height), height)
+        };
+        if line.is_empty() {
+            return metrics(fs);
+        }
+        let (mut ascent, mut descent) = (0, 0);
+        for span in line {
+            let (a, h) = metrics(span.font_size.unwrap_or(fs));
+            ascent = ascent.max(a);
+            descent = descent.max(h - a);
+        }
+        (ascent, ascent + descent)
     }
 }
 
@@ -115,7 +128,7 @@ impl Widget for RichText {
         let h = self
             .lines
             .iter()
-            .map(|line| Self::line_height(ctx, line))
+            .map(|line| Self::line_metrics(ctx, line).1)
             .sum::<u32>()
             + LINE_GAP * self.lines.len().saturating_sub(1) as u32;
 
@@ -128,18 +141,24 @@ impl Widget for RichText {
 
         let mut ly = y;
         for line in &self.lines {
-            let line_h = Self::line_height(ctx, line);
+            let (baseline, line_h) = Self::line_metrics(ctx, line);
             let mut lx = x;
 
             for span in line {
                 let sfs = span.font_size.unwrap_or(fs);
                 let color = span.color.unwrap_or(default_color);
+                // Drop smaller spans so every span sits on the baseline.
+                let ascent = ctx
+                    .backend
+                    .font_ascent(sfs)
+                    .min(ctx.backend.measure_text_height(sfs));
+                let sy = ly + (baseline - ascent) as i32;
 
-                ctx.backend.draw_text(&span.text, lx, ly, sfs, color)?;
+                ctx.backend.draw_text(&span.text, lx, sy, sfs, color)?;
 
                 // Faux bold: draw again offset by 1 pixel.
                 if span.bold {
-                    ctx.backend.draw_text(&span.text, lx + 1, ly, sfs, color)?;
+                    ctx.backend.draw_text(&span.text, lx + 1, sy, sfs, color)?;
                 }
 
                 lx += ctx.backend.measure_text(&span.text, sfs) as i32;
@@ -183,6 +202,38 @@ mod tests {
             "next line at {next_y} overlaps the {big_h}px span"
         );
         assert!(h_measured >= big_h + LINE_GAP);
+    }
+
+    #[test]
+    fn mixed_size_spans_share_a_baseline() {
+        let theme = Theme::dark();
+        let mut backend = RecordingBackend::default();
+        let mut rt = RichText::new();
+        let mut big = Span::plain("BIG");
+        big.font_size = Some(theme.font_size_md * 2);
+        rt.add_line(vec![Span::plain("small"), big]);
+        let (small_asc, big_asc, line_h, measured_h);
+        {
+            let mut ctx = DrawContext::new(&mut backend, &theme);
+            small_asc = ctx.backend.font_ascent(theme.font_size_md) as i32;
+            big_asc = ctx.backend.font_ascent(theme.font_size_md * 2) as i32;
+            line_h = RichText::line_metrics(&ctx, &rt.lines[0]).1;
+            measured_h = rt.measure(&ctx, 480, 272).1;
+            rt.draw(&mut ctx, 0, 10, 480, 272).unwrap();
+        }
+        assert!(big_asc > small_asc, "sizes differ in ascent");
+        let y_of = |label: &str| {
+            backend
+                .text_positions()
+                .into_iter()
+                .find(|t| t.0 == label)
+                .unwrap()
+                .2
+        };
+        let (small_y, big_y) = (y_of("small"), y_of("BIG"));
+        assert_eq!(small_y + small_asc, big_y + big_asc, "baselines differ");
+        assert_eq!(big_y, 10, "the tallest span starts at the line top");
+        assert_eq!(measured_h, line_h);
     }
 
     #[test]
